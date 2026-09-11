@@ -4,7 +4,6 @@
 //! `struct` and one line in [`all`] — deliberately the same shape as
 //! `egui_demo_lib`'s `Demo` trait, so the gallery grows without tooling.
 
-use eframe::egui;
 use mui_core::dsl::{column, row};
 use mui_core::{CornerProfile, CornerRule, FrameRadius, SceneSpec, Spacing, SurfaceSpec, Theme};
 use mui_geometry::Path;
@@ -18,12 +17,6 @@ pub trait PreviewScene {
     /// One line describing what this scene is supposed to prove.
     fn about(&self) -> &'static str;
     fn spec(&self) -> SceneSpec;
-
-    /// Live controls for the scene. Return `true` when the geometry has to be
-    /// rebuilt, so a scene pays for retessellation only when it moves.
-    fn controls(&mut self, _ui: &mut egui::Ui) -> bool {
-        false
-    }
 
     /// Geometry that is not a resolved surface — a glyph outline, an imported
     /// path — in the same coordinate space as the scene's own surfaces.
@@ -159,6 +152,9 @@ impl PreviewScene for SegmentedRow {
 /// nothing because the design space is a single point.
 pub struct GlyphAxes {
     font: std::sync::Arc<Vec<u8>>,
+    /// Which face actually loaded. Read by the sidebar, which is why it is
+    /// carried rather than logged.
+    #[allow(dead_code)]
     source: String,
     glyph: char,
     size: f32,
@@ -212,7 +208,7 @@ impl PreviewScene for GlyphAxes {
     }
     fn about(&self) -> &'static str {
         "A variable-font outline rebuilt as MUI geometry at every axis position. \
-         Drag an axis: the triangle count in the status bar moves with it, because \
+         Drag an axis: the segment count in the status bar moves with it, because \
          the shape is re-solved rather than re-rasterised."
     }
 
@@ -226,32 +222,6 @@ impl PreviewScene for GlyphAxes {
             ..Theme::default()
         })
         .surface(SurfaceSpec::frame("card", "card-frame").radius(FrameRadius::Global))
-    }
-
-    fn controls(&mut self, ui: &mut egui::Ui) -> bool {
-        let mut changed = false;
-        ui.label(egui::RichText::new(&self.source).small().weak());
-
-        let mut text = self.glyph.to_string();
-        if ui.text_edit_singleline(&mut text).changed() {
-            if let Some(c) = text.chars().next() {
-                self.glyph = c;
-                changed = true;
-            }
-        }
-        changed |= ui
-            .add(egui::Slider::new(&mut self.size, 24.0..=400.0).text("size"))
-            .changed();
-
-        if self.axes.is_empty() {
-            ui.label(egui::RichText::new("no variation axes").small().weak());
-        }
-        for (tag, min, max, value) in &mut self.axes {
-            changed |= ui
-                .add(egui::Slider::new(value, *min..=*max).text(tag.as_str()))
-                .changed();
-        }
-        changed
     }
 
     fn overlay(&self) -> Vec<(String, Path)> {

@@ -7,17 +7,24 @@ publish = false
 
 [dependencies]
 mui-core = { path = "../mui-core" }
-mui-egui = { path = "../mui-egui" }
 mui-geometry = { path = "../mui-geometry" }
+mui-input = { path = "../mui-input" }
 mui-layout = { path = "../mui-layout" }
-mui-tessellate = { path = "../mui-tessellate" }
 mui-text = { path = "../mui-text" }
-eframe = { version = "=0.36.2", default-features = false, features = [
-  "default_fonts",
-  "glow",
-  "x11",
-  "wayland",
+mui-vello = { path = "../mui-vello" }
+# The gallery owns the window and the device, which is exactly the split a
+# plugin wrapper has. The library crates above pick no backend of their own.
+vello_common = { version = "0.2", default-features = false }
+vello_hybrid = { version = "0.2", features = ["wgpu_default"] }
+wgpu = { version = "29", default-features = false, features = [
+  "wgsl",
+  "vulkan",
+  "gles",
+  "metal",
+  "dx12",
 ] }
-egui.workspace = true
+winit = "0.30"
+pollster = "0.4"
 # Fallback face so the glyph scene has something to draw without a system font.
+# Zero dependencies of its own -- no egui reaches the graph through it.
 epaint_default_fonts = "0.36"
