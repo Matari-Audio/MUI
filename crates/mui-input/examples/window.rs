@@ -79,6 +79,7 @@ const WELL: Rgba = AlphaColor::new([0.09, 0.10, 0.12, 1.0]);
 const IDLE: Rgba = AlphaColor::new([0.27, 0.29, 0.34, 1.0]);
 const HOVER: Rgba = AlphaColor::new([0.40, 0.43, 0.50, 1.0]);
 const ACCENT: Rgba = AlphaColor::new([0.35, 0.72, 0.98, 1.0]);
+const ACCENT_LIT: Rgba = AlphaColor::new([0.56, 0.83, 1.0, 1.0]);
 
 struct App {
     scene: ResolvedScene,
@@ -158,7 +159,17 @@ impl App {
             "outer" => PANEL,
             "pill-shell" => WELL,
             _ if r.held => ACCENT,
-            _ if self.latched.contains(id) => ACCENT,
+            // A latched control still has to answer the pointer, so it gets
+            // its own hover step rather than falling through to the flat
+            // accent -- otherwise everything you have already switched on
+            // stops reacting.
+            _ if self.latched.contains(id) => {
+                if r.hovered {
+                    ACCENT_LIT
+                } else {
+                    ACCENT
+                }
+            }
             _ if r.hovered => HOVER,
             _ => IDLE,
         }
