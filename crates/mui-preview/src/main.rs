@@ -166,6 +166,14 @@ struct App {
     /// The origin as of the press that started the gesture in flight.
     drag_from: Option<Point>,
     pointer: PointerInput,
+    /// Ownership of a gesture is decided at the press and held until release.
+    /// Recomputing it per frame lets a press that began in the sidebar grab the
+    /// specimen the instant the pointer crosses into the stage.
+    sidebar_gesture: bool,
+    /// Button transitions since the last frame. winit dispatches every queued
+    /// event and *then* one coalesced redraw, so a tap whose press and release
+    /// land in the same batch has no edge left if we only keep the final level.
+    buttons: Vec<bool>,
     /// One character, consumed by whichever field has focus. Dropped if none
     /// does -- a keystroke with nowhere to go is not an error.
     typed: Option<char>,
@@ -195,6 +203,8 @@ impl App {
             pan: None,
             drag_from: None,
             pointer: PointerInput::default(),
+            sidebar_gesture: false,
+            buttons: Vec::new(),
             typed: None,
             chrome: Chrome::new(font.clone()),
             font,
@@ -249,8 +259,14 @@ impl App {
         // A gesture already on the specimen keeps it, wherever the pointer
         // goes; otherwise the sidebar gets first refusal on its own column.
         let dragging = self.input.held().is_some();
+        if !self.pointer.primary_down {
+            self.sidebar_gesture = false;
+        }
         let claimed = !dragging
-            && (self.chrome.busy() || self.pointer.pos.is_some_and(|p| p.x < SIDEBAR * scale));
+            && (self.sidebar_gesture
+                || self.chrome.busy()
+                || self.pointer.pos.is_some_and(|p| p.x < SIDEBAR * scale));
+        self.sidebar_gesture |= claimed && self.pointer.primary_down;
 
         // The frame the pointer is reported in must hold still for as long as a
         // gesture does. Reporting against the live origin while panning by the
@@ -430,20 +446,29 @@ impl ApplicationHandler for App {
                 state,
                 button: MouseButton::Left,
                 ..
-            } => self.pointer.primary_down = state == ElementState::Pressed,
-            WindowEvent::KeyboardInput { event, .. } if event.state.is_pressed() => {
-                match event.logical_key {
+            } => self.buttons.push(state == ElementState::Pressed),
+            WindowEvent::KeyboardInput { ref event, .. } if event.state.is_pressed() => {
+                if event.logical_key == Key::Named(NamedKey::Escape) {
+                    event_loop.exit();
+                } else {
                     // Typed characters belong to whatever field has focus. The
-                    // sidebar decides; this only carries.
-                    Key::Character(ref c) => self.typed = c.chars().next(),
-                    Key::Named(NamedKey::Space) => self.typed = Some(' '),
-                    Key::Named(NamedKey::Escape) => event_loop.exit(),
-                    _ => {}
+                    // sidebar decides; this only carries. `text` is what the
+                    // keypress actually produced -- `logical_key` would hand a
+                    // plain "v" to Ctrl+V and would drop a composed dead key.
+                    self.typed = event.text.as_ref().and_then(|t| t.chars().next());
                 }
             }
             WindowEvent::RedrawRequested => {
                 if let Some(gpu) = &self.gpu {
-                    self.tick(gpu.size(), gpu.window().scale_factor());
+                    let (size, scale) = (gpu.size(), gpu.window().scale_factor());
+                    let buttons: Vec<bool> = self.buttons.drain(..).collect();
+                    if buttons.is_empty() {
+                        self.tick(size, scale);
+                    }
+                    for down in buttons {
+                        self.pointer.primary_down = down;
+                        self.tick(size, scale);
+                    }
                 }
                 self.draw();
                 return; // Drawing must not ask for another frame, or Wait spins.
@@ -631,12 +656,42 @@ mod tests {
         let size = (800, 600);
         app.pan = Some(Point::new(-40., 40.)); // Overlap the column deliberately.
         let start = app.origin(size, 1.);
-        for i in 0..4 {
-            app.pointer.pos = Some(Point::new(40. + 20. * i as f64, 200.));
+        // Past the column's own edge, because the interesting failure is the
+        // crossing: if ownership is recomputed per frame instead of latched at
+        // the press, the stage sees a fresh press the moment x clears SIDEBAR.
+        for i in 0..10 {
+            app.pointer.pos = Some(Point::new(40. + 40. * i as f64, 200.));
             app.pointer.primary_down = i > 0;
             app.tick(size, 1.);
         }
         assert_eq!(app.origin(size, 1.), start, "the sidebar moved the stage");
+    }
+
+    /// A tap whose press and release arrive in the same winit batch is still a
+    /// click. The event loop keeps the transitions, not the final level, so no
+    /// edge can be coalesced away while the loop is behind.
+    #[test]
+    fn a_tap_inside_one_event_batch_still_clicks() {
+        let mut app = App::new();
+        let size = (800, 600);
+        app.tick(size, 1.);
+        let at = (0..500)
+            .map(|i| Point::new(40., i as f64 * 2.))
+            .find(|p| {
+                app.chrome
+                    .at(*p)
+                    .is_some_and(|id| id.ends_with(app.scenes[1].name()))
+            })
+            .unwrap();
+        app.pointer.pos = Some(at);
+        // Both transitions queued before a single redraw ever runs.
+        app.buttons.extend([true, false]);
+        let buttons: Vec<bool> = app.buttons.drain(..).collect();
+        for down in buttons {
+            app.pointer.primary_down = down;
+            app.tick(size, 1.);
+        }
+        assert_eq!(app.selected, 1, "the tap was swallowed");
     }
 
     /// Clicking a scene in the sidebar is the same thing the number row used
