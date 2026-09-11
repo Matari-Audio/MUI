@@ -170,6 +170,36 @@ This is not a complete application framework yet. In particular:
 
 The public authoring model is owned by MUI, so Taffy or another solver can still be added as an optional backend later without changing plugin code.
 
+## Preview and live iteration
+
+`mui-preview` is a native gallery binary. It resolves every scene in
+`crates/mui-preview/src/scenes.rs` through the same `resolve_scene` +
+`Tessellator` path the real runtime uses, then paints the triangles, so what
+you see is the actual mesh rather than a mock.
+
+```
+cargo run -p mui-preview
+```
+
+For the edit-and-watch loop, [bacon](https://dystroy.org/bacon/) rebuilds and
+relaunches the window on every save:
+
+```
+bacon
+```
+
+`bacon check` and `bacon test` are the cheaper jobs when you do not need the
+window. Editing a scene and seeing the new window costs about half a second
+of build time on a warm target directory. The preview is a dev host, so no
+file watching, scripting, or reload machinery lives in the library crates.
+
+Adding a scene means adding one `impl PreviewScene` and one line in
+`scenes::all()`. `every_scene_bakes` then covers it — a scene that fails to
+resolve or tessellates to nothing fails the test suite.
+
+`mui-preview` is excluded from the wasm gate: `eframe::run_native` is
+native-only. The library crates still check clean on `wasm32-unknown-unknown`.
+
 ## Verify
 
 With Rust/cargo, the WASM target, Node and TypeScript available:

@@ -1,0 +1,20 @@
+[package]
+name = "mui-preview"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+mui-core = { path = "../mui-core" }
+mui-egui = { path = "../mui-egui" }
+mui-geometry = { path = "../mui-geometry" }
+mui-layout = { path = "../mui-layout" }
+mui-tessellate = { path = "../mui-tessellate" }
+eframe = { version = "=0.36.2", default-features = false, features = [
+  "default_fonts",
+  "glow",
+  "x11",
+  "wayland",
+] }
+egui.workspace = true
