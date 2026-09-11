@@ -20,9 +20,13 @@ The whole workspace, including the egui adapter, compiles to `wasm32-unknown-unk
 - `mui-geometry`: Boolean union/intersection/difference/XOR, adaptive convex/concave fillets, exact rounded-rectangle inset/outset, general parallel path offsets, holes, topology cleanup and validation.
 - `mui-core`: layout + surface dependency resolver. A surface can be a layout frame, a Boolean merge, or a parallel inset/outset of another resolved surface.
 - `mui-tessellate`: renderer-independent path -> triangle mesh adapter using Lyon.
+- `mui-text`: glyph and string outlines from a variable font, as paths in the same space as every other surface. Nothing reorders or substitutes; there is no atlas.
+- `mui-input`: pointer hit testing over paths, with press capture, hover, click and drag.
+- `mui-vello`: path -> `vello_hybrid` scene, on wgpu.
 - `mui-egui`: thin egui paint adapter plus a path/tessellation cache.
 - `@matari/mui`: a build-time TypeScript authoring frontend. TypeScript generates typed Rust builder code; there is no JavaScript runtime in the plugin.
 - `mui-demo`: end-to-end TypeScript-authored pill/tab scene compiled into Rust and resolved by the Rust core.
+- `mui-preview`: a windowed gallery that resolves a scene live and drives it with the widgets in `mui-input`.
 
 All reusable Rust library crates use `#![forbid(unsafe_code)]`.
 
@@ -165,7 +169,7 @@ This is not a complete application framework yet. In particular:
 
 - text shaping/wrapping is an external leaf-measurement concern;
 - scroll/virtualization/grid are not implemented yet;
-- input/focus/accessibility and plugin parameter gestures are future layers;
+- accessibility and plugin parameter gestures are future layers; pointer input and focus exist only as `mui-preview`'s own widgets, not as a library;
 - the general parallel offset uses a bounded polygon approximation for circular paths; rounded rectangles use exact analytic offsets;
 - `mui-vello` renders on wgpu through `vello_hybrid`; `mui-egui` remains only as a debug adapter.
 

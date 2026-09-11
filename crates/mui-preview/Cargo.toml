@@ -16,13 +16,10 @@ mui-vello = { path = "../mui-vello" }
 # plugin wrapper has. The library crates above pick no backend of their own.
 vello_common = { version = "0.2", default-features = false }
 vello_hybrid = { version = "0.2", features = ["wgpu_default"] }
-wgpu = { version = "29", default-features = false, features = [
-  "wgsl",
-  "vulkan",
-  "gles",
-  "metal",
-  "dx12",
-] }
+# No feature list here: `vello_hybrid/wgpu_default` turns on `wgpu/default`,
+# which already carries every backend, so naming them looks like a policy the
+# build does not actually honour. Pick backends by dropping `wgpu_default`.
+wgpu = "29"
 winit = "0.30"
 pollster = "0.4"
 # Fallback face so the glyph scene has something to draw without a system font.

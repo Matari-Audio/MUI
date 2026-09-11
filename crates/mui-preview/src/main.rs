@@ -32,7 +32,7 @@ use ui::{Chrome, Rgba};
 use vello_common::kurbo::{Affine, BezPath, Stroke};
 use vello_common::peniko::color::AlphaColor;
 use winit::application::ApplicationHandler;
-use winit::event::{ElementState, MouseButton, WindowEvent};
+use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, NamedKey};
 use winit::window::{Window, WindowId};
@@ -44,10 +44,14 @@ const FRAME: Rgba = AlphaColor::new([0.95, 0.45, 0.75, 0.60]);
 /// The sidebar's width in logical points. The stage centres in what is left.
 const SIDEBAR: f64 = 232.0;
 
+/// Logical points per wheel notch, for the mice that report notches.
+const ROW_SCROLL: f64 = 48.0;
+
 /// A resolved scene plus the Bézier paths it paints and the hit geometry that
 /// answers for them. Re-solving is the expensive half, so it happens when the
 /// scene changes, never per frame -- the same boundary a file-watching backend
 /// would commit on.
+#[derive(Default)]
 struct Baked {
     scene: Option<ResolvedScene>,
     /// `(id, path)` in paint order: back to front.
@@ -70,12 +74,8 @@ impl Baked {
             Ok(scene) => scene,
             Err(e) => {
                 return Self {
-                    scene: None,
-                    paths: Vec::new(),
-                    hit: Hit::default(),
-                    frame_rects: Vec::new(),
-                    frame_labels: Vec::new(),
                     error: Some(format!("resolve failed: {e}")),
+                    ..Self::default()
                 }
             }
         };
@@ -343,6 +343,9 @@ impl App {
         ui.separator();
         // The selected scene's own knobs, last, so adding one never moves the
         // gallery's controls out from under the pointer.
+        // Scene ids live in their own namespace, so switching scenes can never
+        // resolve a stale press onto the new scene's controls.
+        ui.scope(scenes[*selected].name());
         let retune = scenes[*selected].controls(&mut ui);
 
         *chrome_paint = ui
@@ -436,6 +439,16 @@ impl ApplicationHandler for App {
                 self.pointer.pos = Some(Point::new(position.x, position.y));
             }
             WindowEvent::CursorLeft { .. } => self.pointer.pos = None,
+            // The column is the only thing that scrolls; the stage is dragged.
+            WindowEvent::MouseWheel { delta, .. } => {
+                let scale = self.gpu.as_ref().map_or(1., |g| g.window().scale_factor());
+                if self.pointer.pos.is_some_and(|p| p.x < SIDEBAR * scale) {
+                    self.chrome.scroll_by(match delta {
+                        MouseScrollDelta::LineDelta(_, y) => f64::from(y) * ROW_SCROLL * scale,
+                        MouseScrollDelta::PixelDelta(p) => p.y,
+                    });
+                }
+            }
             WindowEvent::MouseInput {
                 state,
                 button: MouseButton::Left,
@@ -592,9 +605,10 @@ mod tests {
         for scene in scenes::all() {
             let baked = bake(scene.as_ref());
             let resolved = baked.scene.as_ref().expect("resolved");
+            let grid = grid(&baked);
             for (id, surface) in resolved.surfaces() {
                 let bez = mui_vello::bez_path(&surface.path, ARC_TOLERANCE).expect("path");
-                for p in grid(&baked) {
+                for p in grid.iter().copied() {
                     let w = bez.winding(KPoint::new(p.x, p.y));
                     assert_eq!(
                         w != 0,

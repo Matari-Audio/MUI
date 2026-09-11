@@ -60,11 +60,6 @@ impl Hit {
         Ok(())
     }
 
-    /// Reuse the allocation across frames; the scene usually keeps its shape.
-    pub fn clear(&mut self) {
-        self.targets.clear();
-    }
-
     pub fn is_empty(&self) -> bool {
         self.targets.is_empty()
     }

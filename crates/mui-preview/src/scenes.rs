@@ -5,7 +5,7 @@
 //! `egui_demo_lib`'s `Demo` trait, so the gallery grows without tooling.
 
 use mui_core::dsl::{column, row};
-use mui_core::{CornerProfile, CornerRule, FrameRadius, SceneSpec, Spacing, SurfaceSpec, Theme};
+use mui_core::{CornerProfile, SceneSpec, Spacing, SurfaceSpec, Theme};
 use mui_geometry::Path;
 use mui_layout::{Align, Node, Size};
 
@@ -84,9 +84,9 @@ impl PreviewScene for PillTab {
                 corners: CornerProfile::new(28.0, 32.0),
                 ..Theme::default()
             })
-            .surface(SurfaceSpec::frame("panel", "panel-frame").radius(FrameRadius::Global))
-            .surface(SurfaceSpec::frame("tab", "tab-frame").radius(FrameRadius::Global))
-            .surface(SurfaceSpec::merge("outer", ["panel", "tab"]).corners(CornerRule::Global))
+            .surface(SurfaceSpec::frame("panel", "panel-frame"))
+            .surface(SurfaceSpec::frame("tab", "tab-frame"))
+            .surface(SurfaceSpec::merge("outer", ["panel", "tab"]))
             .surface(SurfaceSpec::inset("pill-shell", "tab", Spacing::px(12.0)))
     }
 }
@@ -108,7 +108,7 @@ impl PreviewScene for ConstantThickness {
                 corners: CornerProfile::new(28.0, 28.0),
                 ..Theme::default()
             })
-            .surface(SurfaceSpec::frame("card", "card-frame").radius(FrameRadius::Global))
+            .surface(SurfaceSpec::frame("card", "card-frame"))
             .surface(SurfaceSpec::inset("ring-1", "card", Spacing::px(12.0)))
             .surface(SurfaceSpec::inset("ring-2", "ring-1", Spacing::px(12.0)))
             .surface(SurfaceSpec::inset("ring-3", "ring-2", Spacing::px(12.0)))
@@ -136,15 +136,12 @@ impl PreviewScene for SegmentedRow {
             ..Theme::default()
         });
         for i in 0..4 {
-            spec = spec.surface(
-                SurfaceSpec::frame(format!("cell-{i}"), format!("cell-{i}"))
-                    .radius(FrameRadius::Global),
-            );
+            spec = spec.surface(SurfaceSpec::frame(format!("cell-{i}"), format!("cell-{i}")));
         }
-        spec.surface(
-            SurfaceSpec::merge("strip", ["cell-0", "cell-1", "cell-2", "cell-3"])
-                .corners(CornerRule::Global),
-        )
+        spec.surface(SurfaceSpec::merge(
+            "strip",
+            ["cell-0", "cell-1", "cell-2", "cell-3"],
+        ))
         .surface(SurfaceSpec::inset("strip-shell", "strip", Spacing::px(8.0)))
     }
 }
@@ -230,7 +227,7 @@ impl PreviewScene for GlyphAxes {
             corners: CornerProfile::new(24.0, 24.0),
             ..Theme::default()
         })
-        .surface(SurfaceSpec::frame("card", "card-frame").radius(FrameRadius::Global))
+        .surface(SurfaceSpec::frame("card", "card-frame"))
     }
 
     fn controls(&mut self, ui: &mut crate::ui::Ui<'_>) -> bool {

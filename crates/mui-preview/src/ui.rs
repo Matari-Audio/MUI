@@ -95,6 +95,13 @@ pub struct Chrome {
     hit: Hit,
     focus: Option<String>,
     font: Arc<Vec<u8>>,
+    /// How far the column is scrolled, in physical pixels, and how tall it was
+    /// the last time it was laid out. A scene with more axes than the window
+    /// has room for -- Roboto Flex has thirteen -- is otherwise not merely
+    /// clipped but unreachable: the sliders lay out past the bottom edge and
+    /// the pointer can never get to them.
+    scroll: f64,
+    content: f64,
 }
 
 impl Chrome {
@@ -104,12 +111,20 @@ impl Chrome {
             hit: Hit::default(),
             focus: None,
             font,
+            scroll: 0.0,
+            content: 0.0,
         }
     }
 
     /// Whether a gesture is in flight on a widget. The stage asks so that a
     /// slider drag that wanders off the column keeps the slider, not the
     /// specimen underneath it.
+    /// Scroll the column by `delta` physical pixels. Clamped at the next
+    /// layout, when the content height is known again.
+    pub fn scroll_by(&mut self, delta: f64) {
+        self.scroll -= delta;
+    }
+
     pub fn busy(&self) -> bool {
         self.interaction.held().is_some()
     }
@@ -143,11 +158,16 @@ impl Chrome {
         if pointer.primary_down && self.interaction.held().is_none() {
             self.focus = None;
         }
+        // Clamped against what the *previous* frame measured, the same
+        // one-frame-late bargain the hit geometry already makes.
+        self.scroll = self
+            .scroll
+            .clamp(0.0, (self.content - bounds.height()).max(0.0));
         let mut paint = Vec::new();
         if let Ok(rect) = RoundedRect::new(bounds, 0.0) {
             paint.push((rect.path(), PANEL));
         }
-        let cursor = bounds.min.y + PAD * scale;
+        let cursor = bounds.min.y + PAD * scale - self.scroll;
         Ui {
             chrome: self,
             bounds,
@@ -156,6 +176,7 @@ impl Chrome {
             typed,
             cursor,
             ordinal: 0,
+            scope: String::new(),
             paint,
             next_hit: Hit::default(),
         }
@@ -174,6 +195,8 @@ pub struct Ui<'a> {
     /// Interactive widgets only, so a conditional [`Ui::note`] cannot shift the
     /// id of everything after it.
     ordinal: usize,
+    /// Prefixed onto every id, so two scenes cannot collide on one.
+    scope: String,
     paint: Vec<(Path, Rgba)>,
     next_hit: Hit,
 }
@@ -237,7 +260,7 @@ impl Ui<'_> {
     /// shape is built: a row that fails to shape must still consume its
     /// ordinal, or it renumbers every widget below it on the frame it fails.
     fn claim(&mut self, label: &str) -> String {
-        let id = format!("{}:{}", self.ordinal, label);
+        let id = format!("{}{}:{}", self.scope, self.ordinal, label);
         self.ordinal += 1;
         id
     }
@@ -256,6 +279,17 @@ impl Ui<'_> {
             eprintln!("{id}: unclickable: {e}");
         }
         response
+    }
+
+    /// Namespace every id claimed from here on.
+    ///
+    /// Scene controls all start at the same ordinal, so two scenes whose first
+    /// slider happened to share a label would share an id -- and on the frame
+    /// after a switch, a press resolved against the old geometry would land on
+    /// the new scene's slider and fling it to the pointer. One prefix closes
+    /// the class before a second scene grows a control.
+    pub fn scope(&mut self, name: &str) {
+        self.scope = format!("{name}/");
     }
 
     /// The preamble every full-width widget shares: claim an id, shape the
@@ -528,6 +562,7 @@ impl Ui<'_> {
     /// geometry is committed for the next one. Consuming `self` is the whole
     /// enforcement: a widget added after the commit could never be hit.
     pub fn finish(self) -> Vec<(Path, Rgba)> {
+        self.chrome.content = self.cursor - self.bounds.min.y + self.chrome.scroll + self.px(PAD);
         self.chrome.hit = self.next_hit;
         self.paint
     }
@@ -773,6 +808,52 @@ mod tests {
         );
         assert_eq!(held, ACCENT, "a press on the button did not light it");
         assert_ne!(away, ACCENT, "the button still looks pressed off-target");
+    }
+
+    /// A column taller than its window is not merely clipped -- the widgets
+    /// past the bottom edge cannot be clicked at all. Scrolling has to make
+    /// them reachable, not just visible, so this asks the hit geometry.
+    #[test]
+    fn scrolling_reaches_a_widget_past_the_bottom() {
+        // Short enough that the last of thirteen axes is well off the end.
+        let short = Bounds::new(0., 0., 240., 200.);
+        let mut chrome = chrome();
+        let mut axes = [0.0_f32; 13];
+        let frame = |chrome: &mut Chrome, axes: &mut [f32; 13]| {
+            let mut ui = chrome.column(short, PointerInput::default(), None, 1.0);
+            for (i, a) in axes.iter_mut().enumerate() {
+                ui.slider(a, 0.0..=100.0, &format!("axis{i}"));
+            }
+            ui.finish();
+        };
+        let reachable = |chrome: &Chrome| {
+            (0..200).any(|y| {
+                chrome
+                    .at(Point::new(120., y as f64))
+                    .is_some_and(|id| id.ends_with("axis12"))
+            })
+        };
+        frame(&mut chrome, &mut axes);
+        assert!(
+            !reachable(&chrome),
+            "the fixture is not tall enough to test"
+        );
+
+        // Far more than the overflow, to prove the clamp stops at the bottom.
+        chrome.scroll_by(-10_000.0);
+        frame(&mut chrome, &mut axes);
+        assert!(reachable(&chrome), "the last axis is still out of reach");
+
+        // And back: scrolling up past the top must not lift the first widget
+        // off the panel.
+        chrome.scroll_by(10_000.0);
+        frame(&mut chrome, &mut axes);
+        assert!(
+            (0..200).any(|y| chrome
+                .at(Point::new(120., y as f64))
+                .is_some_and(|id| id.ends_with("axis0"))),
+            "scrolling back up overshot the top"
+        );
     }
 
     /// `budget` never returns zero, but `wrap` is called straight from tests
