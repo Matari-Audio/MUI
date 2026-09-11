@@ -1,0 +1,28 @@
+[workspace]
+members = [
+  "crates/mui-geometry",
+  "crates/mui-layout",
+  "crates/mui-tessellate",
+  "crates/mui-egui",
+  "crates/mui-core",
+  "crates/mui",
+  "crates/mui-demo",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.3.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+i_overlay = "=8.1.0"
+egui = { version = "=0.36.2", default-features = false }
+lyon_tessellation = "=1.0.20"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = "symbols"

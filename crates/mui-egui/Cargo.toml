@@ -1,0 +1,10 @@
+[package]
+name = "mui-egui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+mui-geometry = { path = "../mui-geometry" }
+mui-tessellate = { path = "../mui-tessellate" }
+egui.workspace = true

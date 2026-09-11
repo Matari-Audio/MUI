@@ -1,0 +1,266 @@
+use crate::{Error, Point};
+use std::f64::consts::{FRAC_PI_2, PI, TAU};
+use std::fmt::Write;
+
+/// An exact circular arc. Renderers may flatten it or approximate with cubics.
+/// `to` preserves the original tangent point instead of accumulating trig error.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Arc {
+    pub center: Point,
+    pub radius: f64,
+    pub start_angle: f64,
+    pub sweep: f64,
+    pub to: Point,
+}
+impl Arc {
+    pub fn point_at(self, t: f64) -> Point {
+        let a = self.start_angle + self.sweep * t;
+        self.center + Point::new(a.cos(), a.sin()) * self.radius
+    }
+    fn validate(self, current: Point) -> Result<(), Error> {
+        if !self.center.finite()
+            || !self.to.finite()
+            || ![self.radius, self.start_angle, self.sweep]
+                .iter()
+                .all(|v| v.is_finite())
+        {
+            return Err(Error::NonFinite);
+        }
+        if self.radius <= 0. || self.sweep.abs() > TAU + 1e-9 {
+            return Err(Error::InvalidPath);
+        }
+        let eps = 1e-7 * self.radius.max(1.);
+        if current.distance(self.point_at(0.)) > eps || self.to.distance(self.point_at(1.)) > eps {
+            return Err(Error::InvalidPath);
+        }
+        Ok(())
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PathCommand {
+    MoveTo(Point),
+    LineTo(Point),
+    ArcTo(Arc),
+    Close,
+}
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct Path {
+    pub commands: Vec<PathCommand>,
+}
+impl Path {
+    /// Validate command state and arc consistency without allocating polygons.
+    pub fn validate(&self, max_commands: usize) -> Result<(), Error> {
+        if self.commands.len() > max_commands {
+            return Err(Error::TooManySegments);
+        }
+        let mut current = None;
+        for command in &self.commands {
+            match *command {
+                PathCommand::MoveTo(p) => {
+                    if current.is_some() {
+                        return Err(Error::InvalidPath);
+                    }
+                    if !p.finite() {
+                        return Err(Error::NonFinite);
+                    }
+                    current = Some(p);
+                }
+                PathCommand::LineTo(p) => {
+                    if current.is_none() {
+                        return Err(Error::InvalidPath);
+                    }
+                    if !p.finite() {
+                        return Err(Error::NonFinite);
+                    }
+                    current = Some(p);
+                }
+                PathCommand::ArcTo(a) => {
+                    a.validate(current.ok_or(Error::InvalidPath)?)?;
+                    current = Some(a.to);
+                }
+                PathCommand::Close => {
+                    if current.take().is_none() {
+                        return Err(Error::InvalidPath);
+                    }
+                }
+            }
+        }
+        if current.is_some() {
+            return Err(Error::InvalidPath);
+        }
+        Ok(())
+    }
+
+    /// Flatten at a maximum arc chord error measured in logical units. Use
+    /// 0.2 / pixels_per_point for the egui adapter. Budget is for the WHOLE path.
+    pub fn flatten(&self, tolerance: f64, max_points: usize) -> Result<Vec<Vec<Point>>, Error> {
+        if !tolerance.is_finite() || tolerance <= 0. {
+            return Err(Error::InvalidOptions("flatten tolerance"));
+        }
+        let mut contours = Vec::new();
+        let mut active: Option<Vec<Point>> = None;
+        let mut count = 0;
+        for command in &self.commands {
+            match *command {
+                PathCommand::MoveTo(p) => {
+                    if active.is_some() {
+                        return Err(Error::InvalidPath);
+                    }
+                    if !p.finite() {
+                        return Err(Error::NonFinite);
+                    }
+                    count += 1;
+                    active = Some(vec![p]);
+                }
+                PathCommand::LineTo(p) => {
+                    if !p.finite() {
+                        return Err(Error::NonFinite);
+                    }
+                    let ring = active.as_mut().ok_or(Error::InvalidPath)?;
+                    if ring.last() != Some(&p) {
+                        ring.push(p);
+                        count += 1;
+                    }
+                }
+                PathCommand::ArcTo(arc) => {
+                    let ring = active.as_mut().ok_or(Error::InvalidPath)?;
+                    arc.validate(*ring.last().ok_or(Error::InvalidPath)?)?;
+                    // Stable inverse sagitta formula; 1 - tolerance/r loses
+                    // precision for very small tolerance/r ratios.
+                    let step =
+                        (4. * (tolerance / (2. * arc.radius)).min(1.).sqrt().asin()).min(FRAC_PI_2);
+                    let needed = (arc.sweep.abs() / step).ceil().max(1.);
+                    if !needed.is_finite() || needed > max_points.saturating_sub(count) as f64 {
+                        return Err(Error::TooManySegments);
+                    }
+                    let n = needed as usize;
+                    for i in 1..=n {
+                        ring.push(if i == n {
+                            arc.to
+                        } else {
+                            arc.point_at(i as f64 / n as f64)
+                        });
+                    }
+                    count += n;
+                }
+                PathCommand::Close => {
+                    let mut ring = active.take().ok_or(Error::InvalidPath)?;
+                    if ring.len() > 1 && ring.first() == ring.last() {
+                        ring.pop();
+                    }
+                    if ring.len() < 3 {
+                        return Err(Error::InvalidPath);
+                    }
+                    contours.push(ring);
+                }
+            }
+            if count > max_points {
+                return Err(Error::TooManySegments);
+            }
+        }
+        if active.is_some() {
+            return Err(Error::InvalidPath);
+        }
+        Ok(contours)
+    }
+    /// Only a rigid transform is offered here. Non-uniform scaling would turn
+    /// circular arcs into ellipses; never pretend the radius is still circular.
+    pub fn rigid_transform(&self, translation: Point, radians: f64) -> Result<Self, Error> {
+        if !translation.finite() || !radians.is_finite() {
+            return Err(Error::NonFinite);
+        }
+        self.validate(100_000)?;
+        let map = |p: Point| p.rotated(radians) + translation;
+        let commands = self
+            .commands
+            .iter()
+            .map(|c| match *c {
+                PathCommand::MoveTo(p) => PathCommand::MoveTo(map(p)),
+                PathCommand::LineTo(p) => PathCommand::LineTo(map(p)),
+                PathCommand::ArcTo(a) => PathCommand::ArcTo(Arc {
+                    center: map(a.center),
+                    start_angle: a.start_angle + radians,
+                    to: map(a.to),
+                    ..a
+                }),
+                PathCommand::Close => PathCommand::Close,
+            })
+            .collect();
+        let result = Self { commands };
+        result.validate(100_000)?;
+        Ok(result)
+    }
+    /// A centered, exact vertical capsule. This is a widget shape, not an
+    /// automatically merged tab; its radius is exactly width/2.
+    pub fn capsule(width: f64, height: f64) -> Result<Self, Error> {
+        if !width.is_finite() || !height.is_finite() {
+            return Err(Error::NonFinite);
+        }
+        if width <= 0. || height < width {
+            return Err(Error::InvalidOptions("capsule height must be >= width > 0"));
+        }
+        let r = width * 0.5;
+        let top = -height * 0.5 + r;
+        let bottom = height * 0.5 - r;
+        Ok(Self {
+            commands: vec![
+                PathCommand::MoveTo(Point::new(-r, top)),
+                PathCommand::ArcTo(Arc {
+                    center: Point::new(0., top),
+                    radius: r,
+                    start_angle: PI,
+                    sweep: PI,
+                    to: Point::new(r, top),
+                }),
+                PathCommand::LineTo(Point::new(r, bottom)),
+                PathCommand::ArcTo(Arc {
+                    center: Point::new(0., bottom),
+                    radius: r,
+                    start_angle: 0.,
+                    sweep: PI,
+                    to: Point::new(-r, bottom),
+                }),
+                PathCommand::Close,
+            ],
+        })
+    }
+    /// Standalone SVG path data; circular arcs remain exact SVG arcs.
+    /// Caller wraps in <path fill-rule="evenodd" d="..."/>.
+    pub fn to_svg_data(&self) -> Result<String, Error> {
+        self.validate(100_000)?;
+        let mut out = String::new();
+        for command in &self.commands {
+            match *command {
+                PathCommand::MoveTo(p) => {
+                    let _ = write!(out, "M {:0.9} {:0.9} ", p.x, p.y);
+                }
+                PathCommand::LineTo(p) => {
+                    let _ = write!(out, "L {:0.9} {:0.9} ", p.x, p.y);
+                }
+                PathCommand::ArcTo(a) => {
+                    // Splitting also supports a full 360-degree circle: SVG cannot
+                    // encode one when the start/end points are identical.
+                    let n = (a.sweep.abs() / PI).ceil().max(1.) as usize;
+                    for i in 1..=n {
+                        let end = if i == n {
+                            a.to
+                        } else {
+                            a.point_at(i as f64 / n as f64)
+                        };
+                        let _ = write!(
+                            out,
+                            "A {:0.9} {:0.9} 0 0 {} {:0.9} {:0.9} ",
+                            a.radius,
+                            a.radius,
+                            u8::from(a.sweep > 0.),
+                            end.x,
+                            end.y
+                        );
+                    }
+                }
+                PathCommand::Close => out.push_str("Z "),
+            }
+        }
+        Ok(out)
+    }
+}

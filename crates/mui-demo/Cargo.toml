@@ -1,0 +1,10 @@
+[package]
+name = "mui-demo"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+mui-core = { path = "../mui-core" }
+mui-geometry = { path = "../mui-geometry" }
+mui-layout = { path = "../mui-layout" }
