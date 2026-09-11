@@ -16,6 +16,7 @@ use mui_layout::{Align, Node, Size};
 use vello_common::kurbo::Affine;
 use vello_common::peniko::color::palette::css;
 use vello_common::peniko::color::AlphaColor;
+use vello_common::peniko::Fill;
 use vello_hybrid::{RenderSize, RenderTargetConfig, Renderer, Scene, TextureBindings};
 
 const WIDTH: u16 = 640;
@@ -64,6 +65,7 @@ fn ink(id: &str) -> AlphaColor<vello_common::peniko::color::Srgb> {
     match id {
         "outer" => AlphaColor::new([0.13, 0.14, 0.17, 1.0]),
         "pill-shell" => AlphaColor::new([0.35, 0.72, 0.98, 1.0]),
+        "glyph" => AlphaColor::new([0.96, 0.96, 0.97, 1.0]),
         _ => css::TRANSPARENT,
     }
 }
@@ -73,6 +75,12 @@ fn main() {
     let resolved = resolve_scene(&spec()).expect("scene resolves");
 
     let mut scene = Scene::new(WIDTH, HEIGHT);
+    // Match `mui-tessellate`, which fills even-odd. Measured on this scene the
+    // two rules are pixel-identical, because both `i_overlay` and skrifa emit
+    // counters wound against their outer contour -- but they diverge the moment
+    // something produces two same-direction overlapping rings, and a hit test
+    // that disagreed with the fill would be a very quiet bug.
+    scene.set_fill_rule(Fill::EvenOdd);
     scene.set_transform(Affine::translate((32.0, 32.0)));
     for (id, surface) in resolved.surfaces() {
         let paint = ink(id);
@@ -84,6 +92,20 @@ fn main() {
         scene.set_paint(paint);
         scene.fill_path(&path);
     }
+
+    // A glyph is geometry here, not an atlas texture: same path pipeline, same
+    // fill rule, and its counter must come out as a hole.
+    let glyph = mui_text::glyph_path(
+        epaint_default_fonts::HACK_REGULAR,
+        'a',
+        170.0,
+        &[],
+        mui_vello::ARC_TOLERANCE,
+    )
+    .expect("glyph outline");
+    scene.set_transform(Affine::translate((470.0, 230.0)));
+    scene.set_paint(ink("glyph"));
+    scene.fill_path(&mui_vello::bez_path(&glyph, mui_vello::ARC_TOLERANCE).expect("glyph path"));
 
     let pixels = pollster::block_on(rasterise(&scene));
     let file = std::fs::File::create(&out).expect("create png");

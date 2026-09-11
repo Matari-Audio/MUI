@@ -10,6 +10,7 @@ members = [
   "crates/mui-preview",
   "crates/mui-text",
   "crates/mui-vello",
+  "crates/mui-input",
 ]
 resolver = "2"
 

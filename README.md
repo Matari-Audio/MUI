@@ -248,12 +248,31 @@ That example is the stack end to end with no window, no egui and no tessellator:
 intrinsic layout, boolean union, fillets, then analytic antialiasing from
 `vello_hybrid`. `vello_hybrid` is a CPU-preprocess / GPU-raster renderer on
 wgpu 29 — the version KURV already ships — with a WebGL2 backend, so it needs no
-compute shaders and the wasm claim survives. `mui-tessellate` stays for hit tests
-and debug display; it is no longer on the path to pixels.
+compute shaders and the wasm claim survives. `mui-tessellate` stays for debug
+display; it is no longer on the path to pixels.
+
+## Interaction
+
+`mui-input` is the other half of dropping egui: hit testing and pointer
+gestures. It hit-tests the *same* `BezPath` the renderer fills, through the same
+`mui_vello::bez_path`, so what responds and what you can see cannot drift apart —
+the corner of a rounded shape is correctly outside its own bounding-box corner.
+A press captures its target until release wherever the pointer then goes, which
+is the single most common thing a hand-rolled UI gets wrong.
+
+```
+cargo run -p mui-input --example window
+```
+
+A real window with zero egui in the dependency graph: winit for events, wgpu for
+the device, `vello_hybrid` for pixels, and `mui-input` deciding what the pointer
+means. Hover lightens a control, press takes the accent, a click latches it, and
+dragging the panel body moves the scene. `MUI_TRACE=1` prints what the pointer
+resolves to each frame.
 
 Not yet: gradients, strokes, clips and blend modes are all things `vello_hybrid`
-supports and MUI does not surface. Nor is there a windowed host — that is
-`mui-preview`, still on egui.
+supports and MUI does not surface. Keyboard focus, scroll and text editing are
+not in `mui-input` at all. `mui-preview` is still on egui.
 
 ## Verify
 

@@ -16,6 +16,8 @@ vello_common = { version = "0.2", default-features = false }
 [dev-dependencies]
 mui-core = { path = "../mui-core" }
 mui-layout = { path = "../mui-layout" }
+epaint_default_fonts = "0.36"
+mui-text = { path = "../mui-text" }
 png = "0.17"
 # The example builds its own headless device; the library never touches wgpu directly.
 wgpu = { version = "29", default-features = false, features = ["wgsl", "vulkan", "gles", "metal", "dx12"] }
