@@ -1,9 +1,10 @@
 //! Glyph outlines as MUI geometry.
 //!
-//! A glyph here is not a texture and not a text run — it is a
-//! [`mui_geometry::Path`] in the same coordinate space as every other surface,
-//! so it flattens, tessellates and (once contour winding is classified)
-//! composes with the Boolean surface system like any other shape.
+//! A glyph here is not a texture — it is a [`mui_geometry::Path`] in the same
+//! coordinate space as every other surface, so it flattens, tessellates and
+//! (once contour winding is classified) composes with the Boolean surface
+//! system like any other shape. [`text_run`] lays a whole string out the same
+//! way, as one path; there is still no atlas anywhere.
 //!
 //! Variable-font axes are an argument rather than a font variant: the outline
 //! is re-derived at whatever axis position is asked for. Animating Material
@@ -13,7 +14,7 @@
 use mui_geometry::{Path, PathCommand, Point};
 use skrifa::outline::{DrawSettings, OutlinePen};
 use skrifa::prelude::{LocationRef, Size};
-use skrifa::{FontRef, MetadataProvider as _};
+use skrifa::{FontRef, GlyphId, MetadataProvider as _};
 
 #[derive(Debug)]
 pub enum Error {
@@ -103,10 +104,9 @@ pub fn glyph_path(
     }
     let font = FontRef::new(font).map_err(|e| Error::Font(format!("{e}")))?;
     let glyph_id = font.charmap().map(ch).ok_or(Error::MissingGlyph(ch))?;
-    let outline = font
-        .outline_glyphs()
-        .get(glyph_id)
-        .ok_or(Error::NoOutline(ch))?;
+    if font.outline_glyphs().get(glyph_id).is_none() {
+        return Err(Error::NoOutline(ch));
+    }
 
     let location = font.axes().location(axes.iter().copied());
     let mut pen = PathPen {
@@ -114,14 +114,121 @@ pub fn glyph_path(
         cursor: Point::new(0., 0.),
         open: false,
         tolerance,
+        dx: 0.,
+    };
+    draw_glyph(&font, glyph_id, size_px, &location, &mut pen)?;
+    Ok(pen.finish())
+}
+
+/// One string laid out as a single [`Path`], plus the numbers a caller needs to
+/// put a box around it.
+///
+/// The metrics travel with the path because they cost one lookup at the point
+/// where the face is already open, and a caller that has to reopen the font to
+/// find out how tall its own label is will get it wrong once and then cache it
+/// wrong forever.
+///
+/// Every field is in the same y-down pixel space as `path`: the baseline is
+/// `y = 0`, `ascent` is a positive distance *above* it and `descent` a positive
+/// distance *below*. skrifa reports descent as a negative number in a y-up
+/// space; flipping it here is why this is a struct and not a tuple.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextRun {
+    /// Every glyph's contours, each already translated to its pen position.
+    /// Fill this **non-zero** -- see [`text_run`].
+    pub path: Path,
+    /// Total pen advance: where the next run would start, not the ink extent.
+    /// A trailing space advances and draws nothing.
+    pub advance: f64,
+    pub ascent: f64,
+    pub descent: f64,
+    /// The face's own idea of a line pitch, leading included.
+    pub line_height: f64,
+}
+
+/// Lay `text` out as one path, glyphs appended at successive pen positions.
+///
+/// Advance-only positioning: skrifa exposes no shaper, so pairs like `AV` sit
+/// at their nominal advances and nothing reorders or substitutes. For the UI
+/// labels this exists to draw that is invisible; for display type it is not,
+/// and the fix is a real shaper rather than a correction here.
+///
+/// **Fill the result non-zero.** Two glyphs whose ink overlaps -- an italic
+/// `f`, a negative sidebearing -- would XOR each other's overlap away under
+/// even-odd, while counters stay empty under both rules because a typeface
+/// reverses them. Non-zero is also what [`mui_input::Hit`] tests with, so what
+/// you can click is what you can see.
+///
+/// A character the face has no glyph for draws `.notdef` rather than failing:
+/// one missing codepoint must not blank a whole label. A character with no
+/// outline -- a space -- contributes its advance and no contours.
+///
+/// [`mui_input::Hit`]: https://docs.rs/mui-input
+pub fn text_run(
+    font: &[u8],
+    text: &str,
+    size_px: f64,
+    axes: &[Axis<'_>],
+    tolerance: f64,
+) -> Result<TextRun, Error> {
+    if !size_px.is_finite() || size_px <= 0. {
+        return Err(Error::InvalidOptions("size_px"));
+    }
+    if !tolerance.is_finite() || tolerance <= 0. {
+        return Err(Error::InvalidOptions("tolerance"));
+    }
+    let font = FontRef::new(font).map_err(|e| Error::Font(format!("{e}")))?;
+    let size = Size::new(size_px as f32);
+    let location = font.axes().location(axes.iter().copied());
+    let charmap = font.charmap();
+    let outlines = font.outline_glyphs();
+    let glyph_metrics = font.glyph_metrics(size, LocationRef::from(&location));
+
+    let mut pen = PathPen {
+        commands: Vec::new(),
+        cursor: Point::new(0., 0.),
+        open: false,
+        tolerance,
+        dx: 0.,
+    };
+    for ch in text.chars() {
+        let glyph_id = charmap.map(ch).unwrap_or(GlyphId::NOTDEF);
+        if outlines.get(glyph_id).is_some() {
+            draw_glyph(&font, glyph_id, size_px, &location, &mut pen)?;
+        }
+        pen.close_open_contour();
+        pen.dx += glyph_metrics.advance_width(glyph_id).unwrap_or(0.) as f64;
+    }
+    let advance = pen.dx;
+
+    let metrics = font.metrics(size, LocationRef::from(&location));
+    Ok(TextRun {
+        path: pen.finish(),
+        advance,
+        ascent: metrics.ascent as f64,
+        // Negative in font space, positive below the baseline here.
+        descent: -metrics.descent as f64,
+        line_height: (metrics.ascent - metrics.descent + metrics.leading) as f64,
+    })
+}
+
+fn draw_glyph(
+    font: &FontRef<'_>,
+    glyph_id: GlyphId,
+    size_px: f64,
+    location: &skrifa::instance::Location,
+    pen: &mut PathPen,
+) -> Result<(), Error> {
+    let Some(outline) = font.outline_glyphs().get(glyph_id) else {
+        return Ok(());
     };
     outline
         .draw(
-            DrawSettings::unhinted(Size::new(size_px as f32), LocationRef::from(&location)),
-            &mut pen,
+            DrawSettings::unhinted(Size::new(size_px as f32), LocationRef::from(location)),
+            pen,
         )
         .map_err(|e| Error::Draw(format!("{e}")))?;
-    Ok(pen.finish())
+    Ok(())
 }
 
 /// Collects `skrifa` pen calls into MUI path commands, flattening as it goes.
@@ -130,12 +237,15 @@ struct PathPen {
     cursor: Point,
     open: bool,
     tolerance: f64,
+    /// Where this glyph's origin sits. Carried on the pen rather than applied
+    /// afterwards so a run never pays for a second pass over its own points.
+    dx: f64,
 }
 
 impl PathPen {
     /// Font space is y-up, the scene is y-down.
-    fn point(x: f32, y: f32) -> Point {
-        Point::new(x as f64, -(y as f64))
+    fn point(&self, x: f32, y: f32) -> Point {
+        Point::new(self.dx + x as f64, -(y as f64))
     }
     fn line(&mut self, p: Point) {
         self.commands.push(PathCommand::LineTo(p));
@@ -168,19 +278,19 @@ impl OutlinePen for PathPen {
     fn move_to(&mut self, x: f32, y: f32) {
         // Some faces run contours together without an explicit close.
         self.close_open_contour();
-        let p = Self::point(x, y);
+        let p = self.point(x, y);
         self.commands.push(PathCommand::MoveTo(p));
         self.cursor = p;
         self.open = true;
     }
 
     fn line_to(&mut self, x: f32, y: f32) {
-        let p = Self::point(x, y);
+        let p = self.point(x, y);
         self.line(p);
     }
 
     fn quad_to(&mut self, cx: f32, cy: f32, x: f32, y: f32) {
-        let (p0, c, p1) = (self.cursor, Self::point(cx, cy), Self::point(x, y));
+        let (p0, c, p1) = (self.cursor, self.point(cx, cy), self.point(x, y));
         let n = self.steps((p0 - c * 2. + p1).length(), 0.125);
         for i in 1..=n {
             let t = i as f64 / n as f64;
@@ -191,9 +301,9 @@ impl OutlinePen for PathPen {
 
     fn curve_to(&mut self, cx0: f32, cy0: f32, cx1: f32, cy1: f32, x: f32, y: f32) {
         let p0 = self.cursor;
-        let c0 = Self::point(cx0, cy0);
-        let c1 = Self::point(cx1, cy1);
-        let p1 = Self::point(x, y);
+        let c0 = self.point(cx0, cy0);
+        let c1 = self.point(cx1, cy1);
+        let p1 = self.point(x, y);
         let bow = (p0 - c0 * 2. + c1)
             .length()
             .max((c0 - c1 * 2. + p1).length());
@@ -319,6 +429,112 @@ mod tests {
             .sum();
         assert!(filled < outer * 0.9, "the counter is a hole, not fill");
         assert!(filled > outer * 0.3, "but the ring itself is filled");
+    }
+
+    /// Crossing number at `p`, cast along +x. The whole point of the non-zero
+    /// switch is that this is not the same as its parity.
+    fn winding(path: &Path, p: Point) -> i32 {
+        let mut w = 0;
+        for ring in path.flatten(0.05, 250_000).unwrap() {
+            for (a, b) in ring.iter().zip(ring.iter().cycle().skip(1)) {
+                // Half-open in y so a vertex on the ray is counted once.
+                if (a.y <= p.y) == (b.y <= p.y) {
+                    continue;
+                }
+                let t = (p.y - a.y) / (b.y - a.y);
+                if a.x + t * (b.x - a.x) > p.x {
+                    w += if b.y > a.y { 1 } else { -1 };
+                }
+            }
+        }
+        w
+    }
+
+    #[test]
+    fn overlapping_glyphs_fill_rather_than_cancel() {
+        // Two `O`s a pixel apart: the outer contours overlap almost entirely.
+        // Even-odd would XOR that overlap away and leave a crescent.
+        let a = glyph_path(HACK_REGULAR, 'O', 96., &[], 0.05).unwrap();
+        let b = a.rigid_transform(Point::new(1., 0.), 0.).unwrap();
+        let both = Path {
+            commands: a
+                .commands
+                .iter()
+                .chain(b.commands.iter())
+                .copied()
+                .collect(),
+        };
+        // On the left stroke of the ring, where both glyphs have ink.
+        let bounds =
+            mui_geometry::Bounds::from_points(a.flatten(0.05, 250_000).unwrap().concat()).unwrap();
+        let p = Point::new(bounds.min.x + 4., (bounds.min.y + bounds.max.y) / 2.);
+        assert_eq!(winding(&a, p).abs(), 1, "one glyph covers the probe once");
+        assert_eq!(
+            winding(&both, p).abs(),
+            2,
+            "non-zero: covered twice, inside"
+        );
+        assert_eq!(winding(&both, p) % 2, 0, "even-odd would have erased it");
+    }
+
+    #[test]
+    fn a_space_advances_without_ink() {
+        let one = text_run(HACK_REGULAR, "a", 96., &[], 0.05).unwrap();
+        let two = text_run(HACK_REGULAR, "a a", 96., &[], 0.05).unwrap();
+        assert_eq!(
+            two.path.flatten(0.05, 250_000).unwrap().len(),
+            2 * one.path.flatten(0.05, 250_000).unwrap().len(),
+            "the space contributes no contours"
+        );
+        // Hack is monospaced, so every advance is the same one.
+        assert!((two.advance - 3. * one.advance).abs() < 1e-6, "{two:?}");
+    }
+
+    #[test]
+    fn a_run_is_its_glyphs_side_by_side() {
+        let run = text_run(HACK_REGULAR, "ab", 96., &[], 0.05).unwrap();
+        let a = glyph_path(HACK_REGULAR, 'a', 96., &[], 0.05).unwrap();
+        let b = glyph_path(HACK_REGULAR, 'b', 96., &[], 0.05).unwrap();
+        let advance = text_run(HACK_REGULAR, "a", 96., &[], 0.05).unwrap().advance;
+        let shifted = b.rigid_transform(Point::new(advance, 0.), 0.).unwrap();
+        let expected: Vec<PathCommand> =
+            a.commands.iter().copied().chain(shifted.commands).collect();
+        assert_eq!(run.path.commands.len(), expected.len());
+        // Not `assert_eq!` on the paths: `rigid_transform` rotates by zero,
+        // which is a multiply by cos/sin and lands a few ulp away from the
+        // pen's plain addition. Same geometry, different last bits.
+        for (got, want) in run.path.commands.iter().zip(&expected) {
+            let (g, w) = match (got, want) {
+                (PathCommand::MoveTo(g), PathCommand::MoveTo(w))
+                | (PathCommand::LineTo(g), PathCommand::LineTo(w)) => (*g, *w),
+                (PathCommand::Close, PathCommand::Close) => continue,
+                _ => panic!("command kinds diverge: {got:?} vs {want:?}"),
+            };
+            assert!((g - w).length() < 1e-9, "{g:?} vs {w:?}");
+        }
+    }
+
+    #[test]
+    fn metrics_are_y_down_and_positive_both_ways() {
+        let run = text_run(HACK_REGULAR, "Hg", 96., &[], 0.05).unwrap();
+        assert!(run.ascent > 0., "{run:?}");
+        assert!(run.descent > 0., "descent is below the baseline: {run:?}");
+        assert!(run.line_height >= run.ascent + run.descent, "{run:?}");
+        let bounds =
+            mui_geometry::Bounds::from_points(run.path.flatten(0.05, 250_000).unwrap().concat())
+                .unwrap();
+        assert!(-bounds.min.y <= run.ascent, "ink fits above the baseline");
+        assert!(bounds.max.y <= run.descent, "and below it");
+    }
+
+    #[test]
+    fn a_glyph_the_face_lacks_does_not_blank_the_label() {
+        // `glyph_path` reports it; a run must not, or one stray codepoint
+        // silently erases a whole line of UI text.
+        assert!(glyph_path(HACK_REGULAR, '\u{10FFFF}', 96., &[], 0.05).is_err());
+        let run = text_run(HACK_REGULAR, "a\u{10FFFF}a", 96., &[], 0.05).unwrap();
+        assert!(!run.path.commands.is_empty());
+        assert!(run.advance > 0.);
     }
 
     #[test]
