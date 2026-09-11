@@ -1292,11 +1292,13 @@ version = "0.3.0"
 dependencies = [
  "eframe",
  "egui",
+ "epaint_default_fonts",
  "mui-core",
  "mui-egui",
  "mui-geometry",
  "mui-layout",
  "mui-tessellate",
+ "mui-text",
 ]
 
 [[package]]
@@ -1305,6 +1307,16 @@ version = "0.3.0"
 dependencies = [
  "lyon_tessellation",
  "mui-geometry",
+]
+
+[[package]]
+name = "mui-text"
+version = "0.3.0"
+dependencies = [
+ "epaint_default_fonts",
+ "mui-geometry",
+ "mui-tessellate",
+ "skrifa",
 ]
 
 [[package]]

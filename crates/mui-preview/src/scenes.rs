@@ -4,8 +4,10 @@
 //! `struct` and one line in [`all`] — deliberately the same shape as
 //! `egui_demo_lib`'s `Demo` trait, so the gallery grows without tooling.
 
+use eframe::egui;
 use mui_core::dsl::{column, row};
 use mui_core::{CornerProfile, CornerRule, FrameRadius, SceneSpec, Spacing, SurfaceSpec, Theme};
+use mui_geometry::Path;
 use mui_layout::{Align, Node, Size};
 
 /// Something the gallery can draw. The scene is rebuilt on demand rather than
@@ -16,6 +18,18 @@ pub trait PreviewScene {
     /// One line describing what this scene is supposed to prove.
     fn about(&self) -> &'static str;
     fn spec(&self) -> SceneSpec;
+
+    /// Live controls for the scene. Return `true` when the geometry has to be
+    /// rebuilt, so a scene pays for retessellation only when it moves.
+    fn controls(&mut self, _ui: &mut egui::Ui) -> bool {
+        false
+    }
+
+    /// Geometry that is not a resolved surface — a glyph outline, an imported
+    /// path — in the same coordinate space as the scene's own surfaces.
+    fn overlay(&self) -> Vec<(String, Path)> {
+        Vec::new()
+    }
 }
 
 pub fn all() -> Vec<Box<dyn PreviewScene>> {
@@ -23,6 +37,7 @@ pub fn all() -> Vec<Box<dyn PreviewScene>> {
         Box::new(PillTab),
         Box::new(ConstantThickness),
         Box::new(SegmentedRow),
+        Box::new(GlyphAxes::new()),
     ]
 }
 
@@ -128,5 +143,142 @@ impl PreviewScene for SegmentedRow {
                 .corners(CornerRule::Global),
         )
         .surface(SurfaceSpec::inset("strip-shell", "strip", Spacing::px(8.0)))
+    }
+}
+
+/// A glyph as geometry, not as a texture.
+///
+/// The outline is re-derived from the font at whatever axis position the
+/// sliders are at, then flattened and tessellated by the same code that draws
+/// every other surface. This is what makes an icon animation — Material
+/// Symbols going from `FILL` 0 to 1, say — a geometry change rather than a
+/// stream of new glyph atlas entries.
+///
+/// Point `MUI_PREVIEW_FONT` at a variable font to get its axes as sliders.
+/// Without one it falls back to a static face, where the sliders correctly do
+/// nothing because the design space is a single point.
+pub struct GlyphAxes {
+    font: std::sync::Arc<Vec<u8>>,
+    source: String,
+    glyph: char,
+    size: f32,
+    /// `(tag, min, max, value)` for every axis the loaded face declares.
+    axes: Vec<(String, f32, f32, f32)>,
+}
+
+impl GlyphAxes {
+    /// The canvas the glyph is centred on, and the reason the scene has a
+    /// `spec` at all: the glyph lands inside a real MUI surface.
+    const CARD: f64 = 320.0;
+
+    pub fn new() -> Self {
+        let (font, source) = match std::env::var_os("MUI_PREVIEW_FONT")
+            .map(|p| (std::fs::read(&p), p.to_string_lossy().into_owned()))
+        {
+            Some((Ok(bytes), path)) => (bytes, path),
+            Some((Err(e), path)) => (
+                epaint_default_fonts::HACK_REGULAR.to_vec(),
+                format!("{path}: {e} — using Hack"),
+            ),
+            None => (
+                epaint_default_fonts::HACK_REGULAR.to_vec(),
+                "Hack (static) — set MUI_PREVIEW_FONT to a variable font".to_owned(),
+            ),
+        };
+        let axes = mui_text::axes(&font)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|a| (a.tag, a.min, a.max, a.default))
+            .collect();
+        Self {
+            font: std::sync::Arc::new(font),
+            source,
+            glyph: 'a',
+            size: 220.0,
+            axes,
+        }
+    }
+}
+
+impl Default for GlyphAxes {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PreviewScene for GlyphAxes {
+    fn name(&self) -> &'static str {
+        "Glyph axes"
+    }
+    fn about(&self) -> &'static str {
+        "A variable-font outline rebuilt as MUI geometry at every axis position. \
+         Drag an axis: the triangle count in the status bar moves with it, because \
+         the shape is re-solved rather than re-rasterised."
+    }
+
+    fn spec(&self) -> SceneSpec {
+        SceneSpec::new(column(
+            "root",
+            [Node::leaf("card-frame", Size::new(Self::CARD, Self::CARD))],
+        ))
+        .theme(Theme {
+            corners: CornerProfile::new(24.0, 24.0),
+            ..Theme::default()
+        })
+        .surface(SurfaceSpec::frame("card", "card-frame").radius(FrameRadius::Global))
+    }
+
+    fn controls(&mut self, ui: &mut egui::Ui) -> bool {
+        let mut changed = false;
+        ui.label(egui::RichText::new(&self.source).small().weak());
+
+        let mut text = self.glyph.to_string();
+        if ui.text_edit_singleline(&mut text).changed() {
+            if let Some(c) = text.chars().next() {
+                self.glyph = c;
+                changed = true;
+            }
+        }
+        changed |= ui
+            .add(egui::Slider::new(&mut self.size, 24.0..=400.0).text("size"))
+            .changed();
+
+        if self.axes.is_empty() {
+            ui.label(egui::RichText::new("no variation axes").small().weak());
+        }
+        for (tag, min, max, value) in &mut self.axes {
+            changed |= ui
+                .add(egui::Slider::new(value, *min..=*max).text(tag.as_str()))
+                .changed();
+        }
+        changed
+    }
+
+    fn overlay(&self) -> Vec<(String, Path)> {
+        let settings: Vec<(&str, f32)> = self
+            .axes
+            .iter()
+            .map(|(tag, _, _, value)| (tag.as_str(), *value))
+            .collect();
+        // Centred on the card, sitting on a baseline three quarters down —
+        // close enough to optically centred for a glyph with a descender.
+        let Ok(path) =
+            mui_text::glyph_path(&self.font, self.glyph, self.size as f64, &settings, 0.05)
+        else {
+            return Vec::new();
+        };
+        let Some(bounds) = mui_geometry::Bounds::from_points(
+            path.flatten(0.05, 250_000).unwrap_or_default().concat(),
+        ) else {
+            return Vec::new();
+        };
+        let centre = mui_geometry::Point::new(
+            Self::CARD / 2.0 - (bounds.min.x + bounds.max.x) / 2.0,
+            Self::CARD / 2.0 - (bounds.min.y + bounds.max.y) / 2.0,
+        );
+        match path.rigid_transform(centre, 0.0) {
+            Ok(path) => vec![(format!("glyph {:?}", self.glyph), path)],
+            Err(_) => Vec::new(),
+        }
     }
 }

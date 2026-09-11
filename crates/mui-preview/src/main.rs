@@ -7,7 +7,7 @@
 //! Not a dependency of `mui`, so nothing here reaches a plugin build.
 //!
 //! Run:   `cargo run -p mui-preview`
-//! Watch: `watchexec -e rs -r -- cargo run -p mui-preview`
+//! Watch: `bacon` (see bacon.toml)
 #![forbid(unsafe_code)]
 
 mod scenes;
@@ -58,9 +58,13 @@ impl Baked {
         let mut tess = Tessellator::default();
         let mut meshes = Vec::new();
         let mut error = None;
-        for (id, surface) in scene.surfaces() {
-            match tess.tessellate(&surface.path, FLATTEN_TOLERANCE) {
-                Ok(mesh) => meshes.push((id.to_owned(), mesh)),
+        let surfaces = scene
+            .surfaces()
+            .map(|(id, surface)| (id.to_owned(), surface.path.clone()))
+            .chain(source.overlay());
+        for (id, path) in surfaces {
+            match tess.tessellate(&path, FLATTEN_TOLERANCE) {
+                Ok(mesh) => meshes.push((id.clone(), mesh)),
                 Err(e) => error = Some(format!("tessellate {id}: {e}")),
             }
         }
@@ -113,6 +117,11 @@ impl App {
         }
         if pick != self.selected {
             self.selected = pick;
+            self.rebake();
+        }
+
+        ui.separator();
+        if self.scenes[self.selected].controls(ui) {
             self.rebake();
         }
 

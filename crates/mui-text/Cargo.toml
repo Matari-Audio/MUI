@@ -1,0 +1,15 @@
+[package]
+name = "mui-text"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+mui-geometry = { path = "../mui-geometry" }
+skrifa = "0.44"
+
+[dev-dependencies]
+mui-tessellate = { path = "../mui-tessellate" }
+# Font bytes for the tests only. Nothing in the crate reads a file or a system
+# font; callers hand it bytes, which is what keeps it usable on wasm.
+epaint_default_fonts = "0.36"

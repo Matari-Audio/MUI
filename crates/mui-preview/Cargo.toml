@@ -11,6 +11,7 @@ mui-egui = { path = "../mui-egui" }
 mui-geometry = { path = "../mui-geometry" }
 mui-layout = { path = "../mui-layout" }
 mui-tessellate = { path = "../mui-tessellate" }
+mui-text = { path = "../mui-text" }
 eframe = { version = "=0.36.2", default-features = false, features = [
   "default_fonts",
   "glow",
@@ -18,3 +19,5 @@ eframe = { version = "=0.36.2", default-features = false, features = [
   "wayland",
 ] }
 egui.workspace = true
+# Fallback face so the glyph scene has something to draw without a system font.
+epaint_default_fonts = "0.36"

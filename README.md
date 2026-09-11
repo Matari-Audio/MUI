@@ -170,6 +170,35 @@ This is not a complete application framework yet. In particular:
 
 The public authoring model is owned by MUI, so Taffy or another solver can still be added as an optional backend later without changing plugin code.
 
+## Glyphs as geometry
+
+`mui-text` turns a glyph into a `mui_geometry::Path` — the same type every
+surface is made of — rather than into a texture:
+
+```rust
+let path = mui_text::glyph_path(font_bytes, 'a', 220.0, &[("wght", 700.0)], 0.05)?;
+```
+
+Variable-font axes are an argument, not a font variant, so the outline is
+re-derived at whatever axis position is asked for. That is what makes a
+Material Symbols icon animating from unfilled to filled (`FILL` 0 → 1) a
+geometry change: no glyph atlas is being refilled with an entry per
+intermediate value.
+
+`mui_text::axes` reports what a face actually declares, with its real ranges,
+so a control cannot leave the design space. A static font declares none, and
+axis settings it lacks are ignored rather than rejected.
+
+Curves are flattened on the way in, because `PathCommand` carries lines and
+exact circular arcs only. That vocabulary is right for the corner system and
+wrong for a typeface — no bezier in a font is a circular arc — so the
+tolerance is a property of the call and the path should be re-derived if the
+display scale changes.
+
+Not yet: shaping, line breaking, bidi, fallback chains, colour glyphs, or
+contour winding classification (which is what a glyph needs before it can
+Boolean-merge with a surface instead of being drawn over one).
+
 ## Preview and live iteration
 
 `mui-preview` is a native gallery binary. It resolves every scene in
@@ -192,6 +221,10 @@ bacon
 window. Editing a scene and seeing the new window costs about half a second
 of build time on a warm target directory. The preview is a dev host, so no
 file watching, scripting, or reload machinery lives in the library crates.
+
+The **Glyph axes** scene is the live version of the section above: point
+`MUI_PREVIEW_FONT` at a variable font and its axes become sliders, with the
+triangle count in the status bar moving as you drag one.
 
 Adding a scene means adding one `impl PreviewScene` and one line in
 `scenes::all()`. `every_scene_bakes` then covers it — a scene that fails to
