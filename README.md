@@ -233,6 +233,28 @@ resolve or tessellates to nothing fails the test suite.
 `mui-preview` is excluded from the wasm gate: `eframe::run_native` is
 native-only. The library crates still check clean on `wasm32-unknown-unknown`.
 
+## Rendering
+
+MUI decides *what the shape is*; Vello decides *what it looks like*. `mui-vello`
+is the whole of the seam: one function that turns a resolved `mui_geometry::Path`
+into a `kurbo::BezPath`, arcs kept as arcs and handed over as cubics rather than
+flattened to a polyline.
+
+```
+cargo run -p mui-vello --example headless -- /tmp/pill.png
+```
+
+That example is the stack end to end with no window, no egui and no tessellator:
+intrinsic layout, boolean union, fillets, then analytic antialiasing from
+`vello_hybrid`. `vello_hybrid` is a CPU-preprocess / GPU-raster renderer on
+wgpu 29 — the version KURV already ships — with a WebGL2 backend, so it needs no
+compute shaders and the wasm claim survives. `mui-tessellate` stays for hit tests
+and debug display; it is no longer on the path to pixels.
+
+Not yet: gradients, strokes, clips and blend modes are all things `vello_hybrid`
+supports and MUI does not surface. Nor is there a windowed host — that is
+`mui-preview`, still on egui.
+
 ## Verify
 
 With Rust/cargo, the WASM target, Node and TypeScript available:
