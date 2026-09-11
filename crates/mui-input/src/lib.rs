@@ -71,14 +71,17 @@ impl Hit {
 
     /// The topmost target containing `p`, or `None`.
     ///
-    /// Even-odd, matching `mui-tessellate` and the renderer: a point in a
-    /// counter -- the hole in an `a`, the well inside a ring -- is outside.
+    /// Non-zero, matching the renderer: `vello_common` fills non-zero by
+    /// default, and `mui-geometry` normalises every ring it emits -- exteriors
+    /// wound positive, holes negative -- so a point in a counter is outside
+    /// under either rule. Non-zero is the one that also survives geometry
+    /// nobody normalised, which is what a run of glyph outlines is.
     pub fn at(&self, p: Point) -> Option<&str> {
         let q = vello_common::kurbo::Point::new(p.x, p.y);
         self.targets
             .iter()
             .rev()
-            .find(|t| t.bounds.contains(q) && t.path.winding(q) % 2 != 0)
+            .find(|t| t.bounds.contains(q) && t.path.winding(q) != 0)
             .map(|t| t.id.as_str())
     }
 }

@@ -288,8 +288,9 @@ mod tests {
             .unwrap();
         assert_eq!(mesh.indices.len() % 3, 0);
         assert!(!mesh.indices.is_empty());
-        // Even-odd leaves the counter empty: the filled area is the ring, not
-        // the disc. Compare against the outer contour's own area.
+        // The counter comes out empty because a typeface reverses it, not
+        // because of the fill rule: the filled area is the ring, not the disc.
+        // Compare against the outer contour's own area.
         let rings = path.flatten(0.05, 250_000).unwrap();
         let outer = rings
             .iter()

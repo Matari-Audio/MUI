@@ -16,7 +16,6 @@ use mui_layout::{Align, Node, Size};
 use vello_common::kurbo::Affine;
 use vello_common::peniko::color::palette::css;
 use vello_common::peniko::color::AlphaColor;
-use vello_common::peniko::Fill;
 use vello_hybrid::{RenderSize, RenderTargetConfig, Renderer, Scene, TextureBindings};
 
 const WIDTH: u16 = 640;
@@ -75,12 +74,6 @@ fn main() {
     let resolved = resolve_scene(&spec()).expect("scene resolves");
 
     let mut scene = Scene::new(WIDTH, HEIGHT);
-    // Match `mui-tessellate`, which fills even-odd. Measured on this scene the
-    // two rules are pixel-identical, because both `i_overlay` and skrifa emit
-    // counters wound against their outer contour -- but they diverge the moment
-    // something produces two same-direction overlapping rings, and a hit test
-    // that disagreed with the fill would be a very quiet bug.
-    scene.set_fill_rule(Fill::EvenOdd);
     scene.set_transform(Affine::translate((32.0, 32.0)));
     for (id, surface) in resolved.surfaces() {
         let paint = ink(id);

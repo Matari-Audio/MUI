@@ -15,12 +15,41 @@ fn path(commands: Vec<PathCommand>) -> Path {
     Path { commands }
 }
 
-/// An outer ring with a second ring inside it, wound the *same* way. This is
-/// the case where even-odd and non-zero disagree: even-odd sees a hole.
+/// An outer ring with a counter inside it, wound the *other* way -- which is
+/// how `mui-geometry` emits a hole and how a typeface draws one.
 fn ring() -> Path {
     let mut c = square(0., 0., 100., 100.);
-    c.extend(square(30., 30., 40., 40.));
+    c.extend(reversed(square(30., 30., 40., 40.)));
     path(c)
+}
+
+/// Same points, opposite direction. `Close` has no direction, so only the
+/// interior vertices move.
+fn reversed(mut c: Vec<PathCommand>) -> Vec<PathCommand> {
+    let close = matches!(c.last(), Some(PathCommand::Close));
+    if close {
+        c.pop();
+    }
+    c.reverse();
+    let mut out: Vec<PathCommand> = c
+        .into_iter()
+        .enumerate()
+        .map(|(i, cmd)| {
+            let p = match cmd {
+                PathCommand::MoveTo(p) | PathCommand::LineTo(p) => p,
+                other => return other,
+            };
+            if i == 0 {
+                PathCommand::MoveTo(p)
+            } else {
+                PathCommand::LineTo(p)
+            }
+        })
+        .collect();
+    if close {
+        out.push(PathCommand::Close);
+    }
+    out
 }
 
 fn at(x: f64, y: f64) -> PointerInput {
@@ -46,6 +75,19 @@ fn a_point_inside_a_counter_is_not_a_hit() {
     assert_eq!(hit.at(Point::new(10., 50.)), Some("ring"), "on the band");
     assert_eq!(hit.at(Point::new(50., 50.)), None, "inside the hole");
     assert_eq!(hit.at(Point::new(150., 50.)), None, "outside entirely");
+}
+
+#[test]
+fn same_wound_rings_stack_rather_than_cancel() {
+    // Two contours wound the same way -- what you get by concatenating glyph
+    // outlines. Even-odd erased the overlap; non-zero fills it, which is the
+    // whole reason `Hit::at` counts winding instead of parity.
+    let mut c = square(0., 0., 100., 100.);
+    c.extend(square(30., 30., 40., 40.));
+    let mut hit = Hit::default();
+    hit.push("stacked", &path(c)).unwrap();
+    assert_eq!(hit.at(Point::new(50., 50.)), Some("stacked"), "the overlap");
+    assert_eq!(hit.at(Point::new(10., 50.)), Some("stacked"), "outer only");
 }
 
 #[test]

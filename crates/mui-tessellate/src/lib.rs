@@ -76,7 +76,11 @@ impl Tessellator {
         self.fill
             .tessellate_path(
                 &path,
-                &FillOptions::even_odd(),
+                // Non-zero, matching the renderer. `boolean::topology` winds
+                // every exterior ring positive and every hole negative, so the
+                // two rules agree on anything this crate is handed -- and
+                // non-zero also survives geometry nobody normalised.
+                &FillOptions::non_zero(),
                 &mut BuffersBuilder::new(&mut buffers, |v: FillVertex<'_>| {
                     [v.position().x, v.position().y]
                 }),

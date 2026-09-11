@@ -42,7 +42,8 @@ pub struct PreparedSurface {
 }
 
 /// Prepare all topology, fillets, offsets, and meshes before exposing any result.
-/// Band uses EVEN-ODD outer minus inset, so translucent borders do not double-fill.
+/// The band is the outer outline with the inset one as a hole, so a translucent
+/// border does not double-fill.
 pub fn prepare(
     inputs: &[PlacedShape],
     corners: CornerStyle,
@@ -52,15 +53,7 @@ pub fn prepare(
     let raw = mui_geometry::union(inputs, GeometryOptions::default())?;
     let rounded = mui_geometry::fillet(&raw, corners)?;
     let inner = mui_geometry::inset_path(&rounded.path, inset, quality)?;
-    let band = Path {
-        commands: rounded
-            .path
-            .commands
-            .iter()
-            .chain(inner.path.commands.iter())
-            .copied()
-            .collect(),
-    };
+    let band = band(&rounded.path, &inner.path, quality.flatten_tolerance)?;
     let mut tess = Tessellator::default();
     Ok(PreparedSurface {
         outer: tess.tessellate(&rounded.path, quality.flatten_tolerance)?,
@@ -69,6 +62,39 @@ pub fn prepare(
         inner_topology: inner.topology,
         counts_changed: inner.counts_changed,
     })
+}
+
+/// The ring between two outlines, as one path.
+///
+/// Both outlines arrive wound positive -- each is the exterior of its own
+/// shape -- so the inner one has to be reversed to read as a hole under the
+/// non-zero rule the tessellator and the renderer share. Reversing is done on
+/// the flattened points because an arc reversed is not an arc negated, and the
+/// tessellator was going to flatten at this tolerance anyway.
+fn band(outer: &Path, inner: &Path, tolerance: f64) -> Result<Path, Error> {
+    let mut commands = Vec::new();
+    let rings = outer
+        .flatten(tolerance, 250_000)?
+        .into_iter()
+        .map(|r| (r, false))
+        .chain(
+            inner
+                .flatten(tolerance, 250_000)?
+                .into_iter()
+                .map(|r| (r, true)),
+        );
+    for (mut ring, reverse) in rings {
+        if reverse {
+            ring.reverse();
+        }
+        let Some((first, rest)) = ring.split_first() else {
+            continue;
+        };
+        commands.push(mui_geometry::PathCommand::MoveTo(*first));
+        commands.extend(rest.iter().map(|p| mui_geometry::PathCommand::LineTo(*p)));
+        commands.push(mui_geometry::PathCommand::Close);
+    }
+    Ok(Path { commands })
 }
 
 /// UI-thread transactional snapshot. No mutex, unsafe global, or audio ownership.
