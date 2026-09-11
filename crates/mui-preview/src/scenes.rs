@@ -23,6 +23,16 @@ pub trait PreviewScene {
     fn overlay(&self) -> Vec<(String, Path)> {
         Vec::new()
     }
+
+    /// The scene's own sidebar controls. Return `true` when something moved
+    /// that changes the geometry, and the gallery re-solves the scene.
+    ///
+    /// Most scenes are fixed specimens with nothing to tune, so the default
+    /// draws nothing and rebuilds nothing.
+    fn controls(&mut self, ui: &mut crate::ui::Ui<'_>) -> bool {
+        let _ = ui;
+        false
+    }
 }
 
 pub fn all() -> Vec<Box<dyn PreviewScene>> {
@@ -152,9 +162,8 @@ impl PreviewScene for SegmentedRow {
 /// nothing because the design space is a single point.
 pub struct GlyphAxes {
     font: std::sync::Arc<Vec<u8>>,
-    /// Which face actually loaded. Read by the sidebar, which is why it is
-    /// carried rather than logged.
-    #[allow(dead_code)]
+    /// Which face actually loaded. Named in the sidebar, because a slider
+    /// that does nothing is only explicable once you know the face is static.
     source: String,
     glyph: char,
     size: f32,
@@ -222,6 +231,19 @@ impl PreviewScene for GlyphAxes {
             ..Theme::default()
         })
         .surface(SurfaceSpec::frame("card", "card-frame").radius(FrameRadius::Global))
+    }
+
+    fn controls(&mut self, ui: &mut crate::ui::Ui<'_>) -> bool {
+        ui.note(&self.source);
+        let mut changed = ui.char_field(&mut self.glyph, "glyph");
+        changed |= ui.slider(&mut self.size, 24.0..=400.0, "size");
+        if self.axes.is_empty() {
+            ui.note("no variation axes");
+        }
+        for (tag, min, max, value) in &mut self.axes {
+            changed |= ui.slider(value, *min..=*max, tag);
+        }
+        changed
     }
 
     fn overlay(&self) -> Vec<(String, Path)> {
