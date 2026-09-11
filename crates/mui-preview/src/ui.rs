@@ -52,6 +52,9 @@ fn budget(width: f64, size: f64) -> usize {
 /// run off the panel -- an id or a file path is still readable clipped, and a
 /// line that overruns the column reads as a rendering bug.
 fn wrap(text: &str, budget: usize) -> Vec<String> {
+    // Zero would drain nothing and spin: `budget()` never returns it, but this
+    // is called directly from tests.
+    let budget = budget.max(1);
     let mut lines = Vec::new();
     let mut line = String::new();
     for word in text.split_whitespace() {
@@ -134,6 +137,12 @@ impl Chrome {
         scale: f64,
     ) -> Ui<'_> {
         self.interaction.update(&self.hit, pointer);
+        // A press that landed on no widget at all -- the panel background, or
+        // the stage -- drops keyboard focus. `Ui::register` covers a press that
+        // landed on some *other* widget; between them that is the whole model.
+        if pointer.primary_down && self.interaction.held().is_none() {
+            self.focus = None;
+        }
         let mut paint = Vec::new();
         if let Ok(rect) = RoundedRect::new(bounds, 0.0) {
             paint.push((rect.path(), PANEL));
@@ -188,10 +197,10 @@ impl Ui<'_> {
         self.cursor += height + self.px(GAP);
     }
 
-    fn rect(&mut self, bounds: Bounds, radius: f64, ink: Rgba) -> Option<Path> {
-        let path = RoundedRect::new(bounds, radius).ok()?.path();
-        self.paint.push((path.clone(), ink));
-        Some(path)
+    fn rect(&mut self, bounds: Bounds, radius: f64, ink: Rgba) {
+        if let Ok(shape) = RoundedRect::new(bounds, radius) {
+            self.paint.push((shape.path(), ink));
+        }
     }
 
     /// Lay out `text`, truncated to what `max_width` can hold.
@@ -222,18 +231,48 @@ impl Ui<'_> {
         }
     }
 
-    /// Claim an id for an interactive widget and read what the pointer did to
-    /// it last frame. A click anywhere else drops keyboard focus, which is the
-    /// whole of the focus model.
-    fn target(&mut self, label: &str, path: &Path) -> (String, Response) {
+    /// Claim the next interactive widget's id.
+    ///
+    /// Separate from [`Ui::register`] so it can happen *before* the widget's
+    /// shape is built: a row that fails to shape must still consume its
+    /// ordinal, or it renumbers every widget below it on the frame it fails.
+    fn claim(&mut self, label: &str) -> String {
         let id = format!("{}:{}", self.ordinal, label);
         self.ordinal += 1;
-        let response = self.chrome.interaction.get(&id);
-        if response.clicked && self.chrome.focus.as_deref() != Some(id.as_str()) {
+        id
+    }
+
+    /// Read what the pointer did to `id` last frame, and register `path` as
+    /// its target for the next one. A click on any other widget drops keyboard
+    /// focus; a click on nothing at all is handled in [`Chrome::column`].
+    fn register(&mut self, id: &str, path: &Path) -> Response {
+        let response = self.chrome.interaction.get(id);
+        if response.clicked && self.chrome.focus.as_deref() != Some(id) {
             self.chrome.focus = None;
         }
-        let _ = self.next_hit.push(id.clone(), path);
-        (id, response)
+        if let Err(e) = self.next_hit.push(id.to_string(), path) {
+            // A widget that paints but cannot be clicked is invisible to
+            // everyone but the person wondering why it does nothing.
+            eprintln!("{id}: unclickable: {e}");
+        }
+        response
+    }
+
+    /// The preamble every full-width widget shares: claim an id, shape the
+    /// row, register it. Returns `None` when the row cannot be shaped, having
+    /// already advanced the cursor -- the caller cannot forget to, and both
+    /// exit paths stay in one place.
+    fn row(&mut self, label: &str, height: f64, radius: f64) -> Option<(Bounds, Path, Response)> {
+        let (x0, x1) = self.span();
+        let bounds = Bounds::new(x0, self.cursor, x1, self.cursor + height);
+        let id = self.claim(label);
+        let Ok(shape) = RoundedRect::new(bounds, radius) else {
+            self.advance(height);
+            return None;
+        };
+        let path = shape.path();
+        let response = self.register(&id, &path);
+        Some((bounds, path, response))
     }
 
     pub fn label(&mut self, text: &str) {
@@ -271,31 +310,21 @@ impl Ui<'_> {
         let (x0, x1) = self.span();
         let y = self.cursor;
         let thickness = self.px(1.0).max(1.0);
-        self.rect(
-            Bounds {
-                min: Point::new(x0, y),
-                max: Point::new(x1, y + thickness),
-            },
-            0.0,
-            IDLE,
-        );
+        self.rect(Bounds::new(x0, y, x1, y + thickness), 0.0, IDLE);
         self.advance(thickness);
     }
 
     pub fn button(&mut self, text: &str) -> bool {
-        let (x0, x1) = self.span();
-        let (y, height) = (self.cursor, self.px(ROW));
-        let bounds = Bounds {
-            min: Point::new(x0, y),
-            max: Point::new(x1, y + height),
-        };
-        let Ok(shape) = RoundedRect::new(bounds, self.px(RADIUS)) else {
-            self.advance(height);
+        let height = self.px(ROW);
+        let Some((b, path, r)) = self.row(text, height, self.px(RADIUS)) else {
             return false;
         };
-        let path = shape.path();
-        let (_, r) = self.target(text, &path);
-        let ink = if r.held {
+        let (x0, x1, y) = (b.min.x, b.max.x, b.min.y);
+        // A press keeps its target even when the pointer wanders off it, but a
+        // release out there is not a click -- so the pressed look belongs to
+        // the pointer still being over the widget, not to the button merely
+        // being held.
+        let ink = if r.held && r.hovered {
             ACCENT
         } else if r.hovered {
             HOVER
@@ -314,21 +343,17 @@ impl Ui<'_> {
     /// One row of a mutually exclusive list. Returns whether it was clicked, so
     /// the caller keeps the "which one" state and this keeps none of it.
     pub fn option(&mut self, selected: bool, text: &str) -> bool {
-        let (x0, x1) = self.span();
-        let (y, height) = (self.cursor, self.px(ROW));
-        let bounds = Bounds {
-            min: Point::new(x0, y),
-            max: Point::new(x1, y + height),
-        };
-        let Ok(shape) = RoundedRect::new(bounds, self.px(RADIUS)) else {
-            self.advance(height);
+        let height = self.px(ROW);
+        let Some((b, path, r)) = self.row(text, height, self.px(RADIUS)) else {
             return false;
         };
-        let path = shape.path();
-        let (_, r) = self.target(text, &path);
+        let (x0, x1, y) = (b.min.x, b.max.x, b.min.y);
         // A selected row still has to answer the pointer, so it gets its own
-        // hover step rather than falling through to the flat accent.
-        let ink = match (r.held, selected, r.hovered) {
+        // hover step rather than falling through to the flat accent. `held`
+        // only counts while the pointer is still over the row: otherwise an
+        // unselected row that is pressed and dragged off would sit there
+        // wearing the selected ink until release.
+        let ink = match (r.held && r.hovered, selected, r.hovered) {
             (true, _, _) => ACCENT,
             (_, true, true) => ACCENT_LIT,
             (_, true, false) => ACCENT,
@@ -344,33 +369,24 @@ impl Ui<'_> {
     }
 
     pub fn checkbox(&mut self, on: &mut bool, text: &str) -> bool {
-        let (x0, x1) = self.span();
-        let (y, height) = (self.cursor, self.px(ROW));
-        let row = Bounds {
-            min: Point::new(x0, y),
-            max: Point::new(x1, y + height),
-        };
-        let Ok(shape) = RoundedRect::new(row, self.px(RADIUS)) else {
-            self.advance(height);
+        let height = self.px(ROW);
+        let Some((b, _, r)) = self.row(text, height, self.px(RADIUS)) else {
             return false;
         };
-        let (_, r) = self.target(text, &shape.path());
+        let (x0, x1, y) = (b.min.x, b.max.x, b.min.y);
         if r.clicked {
             *on = !*on;
         }
         let side = height * 0.62;
         let box_top = y + (height - side) / 2.0;
-        let ink = match (*on, r.hovered || r.held) {
+        let ink = match (*on, r.hovered) {
             (true, true) => ACCENT_LIT,
             (true, false) => ACCENT,
             (false, true) => HOVER,
             (false, false) => WELL,
         };
         self.rect(
-            Bounds {
-                min: Point::new(x0, box_top),
-                max: Point::new(x0 + side, box_top + side),
-            },
+            Bounds::new(x0, box_top, x0 + side, box_top + side),
             self.px(3.0),
             ink,
         );
@@ -384,22 +400,15 @@ impl Ui<'_> {
     /// Returns whether `value` moved this frame -- the signal a caller needs to
     /// know whether anything downstream has to be rebuilt.
     pub fn slider(&mut self, value: &mut f32, range: RangeInclusive<f32>, text: &str) -> bool {
-        let (x0, x1) = self.span();
-        let y = self.cursor;
         let label_h = self.px(TEXT_SIZE) * 1.4;
         let track_h = self.px(6.0);
         let knob = self.px(14.0);
         let height = label_h + knob;
 
-        let row = Bounds {
-            min: Point::new(x0, y),
-            max: Point::new(x1, y + height),
-        };
-        let Ok(shape) = RoundedRect::new(row, 0.0) else {
-            self.advance(height);
+        let Some((b, _, r)) = self.row(text, height, 0.0) else {
             return false;
         };
-        let (_, r) = self.target(text, &shape.path());
+        let (x0, x1, y) = (b.min.x, b.max.x, b.min.y);
 
         // The track is inset by half a knob so the knob's centre can reach both
         // ends without any part of it leaving the row.
@@ -407,8 +416,19 @@ impl Ui<'_> {
         let before = *value;
         if r.held {
             if let Some(p) = self.pointer.pos {
-                let t = ((p.x - t0) / (t1 - t0)).clamp(0.0, 1.0) as f32;
-                *value = range.start() + (range.end() - range.start()) * t;
+                // A row narrower than a knob would divide by zero, and NaN is
+                // the worst possible value to hand back: it compares unequal to
+                // itself, so `changed` would be true on every idle frame and
+                // the caller would re-solve forever.
+                let t = if t1 > t0 {
+                    ((p.x - t0) / (t1 - t0)).clamp(0.0, 1.0) as f32
+                } else {
+                    0.0
+                };
+                let next = range.start() + (range.end() - range.start()) * t;
+                if next.is_finite() {
+                    *value = next;
+                }
             }
         }
         let span = range.end() - range.start();
@@ -420,10 +440,7 @@ impl Ui<'_> {
 
         let track_y = y + label_h + (knob - track_h) / 2.0;
         self.rect(
-            Bounds {
-                min: Point::new(x0, track_y),
-                max: Point::new(x1, track_y + track_h),
-            },
+            Bounds::new(x0, track_y, x1, track_y + track_h),
             track_h / 2.0,
             WELL,
         );
@@ -435,19 +452,18 @@ impl Ui<'_> {
         };
         if filled > x0 {
             self.rect(
-                Bounds {
-                    min: Point::new(x0, track_y),
-                    max: Point::new(filled, track_y + track_h),
-                },
+                Bounds::new(x0, track_y, filled, track_y + track_h),
                 track_h / 2.0,
                 lit,
             );
         }
         self.rect(
-            Bounds {
-                min: Point::new(filled - knob / 2.0, y + label_h),
-                max: Point::new(filled + knob / 2.0, y + label_h + knob),
-            },
+            Bounds::new(
+                filled - knob / 2.0,
+                y + label_h,
+                filled + knob / 2.0,
+                y + label_h + knob,
+            ),
             knob / 2.0,
             lit,
         );
@@ -465,16 +481,16 @@ impl Ui<'_> {
         let (x0, x1) = self.span();
         let (y, height) = (self.cursor, self.px(ROW + 8.0));
         let side = height;
-        let field = Bounds {
-            min: Point::new(x0, y),
-            max: Point::new(x0 + side, y + height),
-        };
+        let field = Bounds::new(x0, y, x0 + side, y + height);
+        // Claimed before the shape can fail: the ordinal has to be consumed
+        // either way or every widget below this one is renumbered.
+        let id = self.claim(text);
         let Ok(shape) = RoundedRect::new(field, self.px(RADIUS)) else {
             self.advance(height);
             return false;
         };
         let path = shape.path();
-        let (id, r) = self.target(text, &path);
+        let r = self.register(&id, &path);
         if r.clicked {
             self.chrome.focus = Some(id.clone());
         }
@@ -526,10 +542,7 @@ mod tests {
     }
 
     fn bounds() -> Bounds {
-        Bounds {
-            min: Point::new(0., 0.),
-            max: Point::new(240., 600.),
-        }
+        Bounds::new(0., 0., 240., 600.)
     }
 
     /// Prose fills the column and never overruns it, and a word too long for
@@ -554,10 +567,41 @@ mod tests {
     /// ever appears, one of them is wrong.
     #[test]
     fn scale_enters_once() {
-        let mut chrome = chrome();
-        let ui = chrome.column(bounds(), PointerInput::default(), None, 1.25);
-        assert_eq!(ui.px(10.0), 12.5);
-        assert_eq!(ui.px(0.0), 0.0);
+        // The same column at two scales, in bounds scaled to match, must land
+        // on exactly proportional rows. Asserting that `px` multiplies could
+        // never see a *second* multiplication somewhere else in the layout,
+        // which is the thing the module comment actually promises.
+        fn rows(scale: f64) -> Vec<f64> {
+            let mut chrome = chrome();
+            let (mut flag, mut value) = (false, 50.0_f32);
+            let mut ui = chrome.column(
+                Bounds::new(0., 0., 240. * scale, 600. * scale),
+                PointerInput::default(),
+                None,
+                scale,
+            );
+            let mut out = vec![ui.cursor];
+            ui.label("heading");
+            out.push(ui.cursor);
+            ui.button("press me");
+            out.push(ui.cursor);
+            ui.checkbox(&mut flag, "flag");
+            out.push(ui.cursor);
+            ui.slider(&mut value, 0.0..=100.0, "size");
+            out.push(ui.cursor);
+            ui.separator();
+            out.push(ui.cursor);
+            ui.finish();
+            out
+        }
+        let (one, two) = (rows(1.0), rows(2.0));
+        assert!(
+            one.windows(2).all(|w| w[1] > w[0]),
+            "the column never moved"
+        );
+        for (i, (a, b)) in one.iter().zip(&two).enumerate() {
+            assert_eq!(*b, a * 2.0, "row {i} is not proportional to the scale");
+        }
     }
 
     /// An idle frame reports nothing changed, whatever the widgets are.
@@ -584,31 +628,60 @@ mod tests {
     fn a_pressed_slider_takes_the_value_under_the_pointer() {
         /// One frame of a column holding one slider. Returns the row the track
         /// was laid out on, and whether the value moved.
-        fn frame(chrome: &mut Chrome, value: &mut f32, pointer: PointerInput) -> (f64, bool) {
+        fn frame(chrome: &mut Chrome, value: &mut f32, pointer: PointerInput) -> bool {
             let mut ui = chrome.column(bounds(), pointer, None, 1.0);
             ui.label("heading");
-            let track = ui.cursor + ui.px(TEXT_SIZE) * 1.4 + ui.px(7.0);
             let changed = ui.slider(value, 0.0..=100.0, "size");
             ui.finish();
-            (track, changed)
+            changed
+        }
+        // Where the row actually is, asked of the committed hit geometry rather
+        // than recomputed from the slider's own internals -- a test that
+        // duplicates the layout cannot notice the layout changing.
+        fn row_y(chrome: &Chrome) -> f64 {
+            (0..600)
+                .map(|i| i as f64)
+                .find(|y| {
+                    chrome
+                        .at(Point::new(120., *y))
+                        .is_some_and(|id| id.ends_with("size"))
+                })
+                .expect("no slider in the column")
         }
 
         let mut chrome = chrome();
         let mut size = 24.0_f32;
         // Frame one lays the slider out; nothing exists to press yet.
-        let (track, changed) = frame(&mut chrome, &mut size, PointerInput::default());
-        assert!(!changed);
-        // Frame two presses the middle of the track.
-        let press = PointerInput {
-            pos: Some(Point::new(120., track)),
-            primary_down: true,
-        };
-        let (_, changed) = frame(&mut chrome, &mut size, press);
-        assert!(changed, "the press did not reach the track");
-        assert!(
-            (size - 50.0).abs() < 6.0,
-            "pressing the middle gave {size}, not about 50"
-        );
+        assert!(!frame(&mut chrome, &mut size, PointerInput::default()));
+        let y = row_y(&chrome);
+
+        // The track is inset by half a knob at each end, so those two x values
+        // are the exact ends of the range -- and asserting exactness is what
+        // makes the inset visible. The midpoint would map to 50 with or
+        // without it.
+        let (x0, x1) = (12.0, 228.0);
+        let knob = 14.0;
+        for (x, want) in [(x0 + knob / 2.0, 0.0), (x1 - knob / 2.0, 100.0)] {
+            let press = PointerInput {
+                pos: Some(Point::new(x, y)),
+                primary_down: true,
+            };
+            assert!(frame(&mut chrome, &mut size, press), "the press missed");
+            assert_eq!(size, want, "pressing x={x} gave {size}, not {want}");
+            // Release, so the next press is a fresh one.
+            frame(&mut chrome, &mut size, PointerInput::default());
+        }
+
+        // A press captures the slider, so dragging far past the left edge keeps
+        // feeding it -- clamped at the bottom of the range, never negative.
+        for x in [120.0, x0 - 100.0] {
+            let held = PointerInput {
+                pos: Some(Point::new(x, y)),
+                primary_down: true,
+            };
+            frame(&mut chrome, &mut size, held);
+        }
+        assert_eq!(size, 0.0, "a drag left of the track was not clamped");
     }
 
     /// Typing reaches the field that was clicked, and only that one.
@@ -645,5 +718,67 @@ mod tests {
         assert!(ui.char_field(&mut glyph, "glyph"), "typing was dropped");
         ui.finish();
         assert_eq!(glyph, 'W');
+
+        // Press the empty panel below the field. Nothing is there to take
+        // focus, so nothing would clear it if only `register` did the clearing
+        // -- and the field would go on eating every keystroke in the gallery.
+        for down in [true, false] {
+            let mut ui = chrome.column(
+                bounds(),
+                PointerInput {
+                    pos: Some(Point::new(120., 500.)),
+                    primary_down: down,
+                },
+                None,
+                1.0,
+            );
+            ui.char_field(&mut glyph, "glyph");
+            ui.finish();
+        }
+        let mut ui = chrome.column(bounds(), PointerInput::default(), Some('Z'), 1.0);
+        assert!(
+            !ui.char_field(&mut glyph, "glyph"),
+            "the field kept focus after a click on nothing"
+        );
+        ui.finish();
+        assert_eq!(glyph, 'W');
+    }
+
+    /// A press keeps its target when the pointer wanders off, but a release out
+    /// there is not a click -- so the widget must not go on looking pressed.
+    #[test]
+    fn a_press_dragged_off_a_button_stops_looking_pressed() {
+        let mut chrome = chrome();
+        let ink = |chrome: &mut Chrome, pointer: PointerInput| {
+            let mut ui = chrome.column(bounds(), pointer, None, 1.0);
+            ui.button("press me");
+            // The row's own fill is the first thing the button paints.
+            ui.finish()[1].1
+        };
+        let on = Point::new(120., 20.);
+        ink(&mut chrome, PointerInput::default());
+        let held = ink(
+            &mut chrome,
+            PointerInput {
+                pos: Some(on),
+                primary_down: true,
+            },
+        );
+        let away = ink(
+            &mut chrome,
+            PointerInput {
+                pos: Some(Point::new(120., 500.)),
+                primary_down: true,
+            },
+        );
+        assert_eq!(held, ACCENT, "a press on the button did not light it");
+        assert_ne!(away, ACCENT, "the button still looks pressed off-target");
+    }
+
+    /// `budget` never returns zero, but `wrap` is called straight from tests
+    /// and a zero budget used to drain nothing and spin forever.
+    #[test]
+    fn a_zero_budget_terminates() {
+        assert_eq!(wrap("abc", 0), vec!["a", "b", "c"]);
     }
 }

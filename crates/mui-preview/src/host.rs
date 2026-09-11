@@ -151,13 +151,30 @@ impl Gpu {
         use wgpu::CurrentSurfaceTexture as Acquired;
         let frame = match self.surface.get_current_texture() {
             Acquired::Success(f) | Acquired::Suboptimal(f) => f,
-            // Outdated and Lost both want the swapchain rebuilt; the size has
-            // not changed, so reconfigure with what we already have.
-            Acquired::Outdated | Acquired::Lost => {
+            // Outdated means the swapchain needs rebuilding; the size has not
+            // changed, so reconfigure with what we already have. Under
+            // ControlFlow::Wait nothing else will ask for the frame we just
+            // dropped, so ask here or the window stays stale until the next
+            // input -- which is how a keyboard-driven resize left it blank.
+            Acquired::Outdated => {
                 self.surface.configure(&self.device, &self.config);
+                self.window.request_redraw();
                 return;
             }
-            // Timeout, Occluded, Validation: skip the frame and try again.
+            Acquired::Timeout => {
+                self.window.request_redraw();
+                return;
+            }
+            // Lost is not recoverable by reconfiguring -- wgpu wants the
+            // surface, and possibly the device, rebuilt. A gallery is not worth
+            // that machinery, but silence would look like a hang.
+            Acquired::Lost => {
+                eprintln!("surface lost; restart the gallery");
+                return;
+            }
+            // Occluded (minimised) and Validation: skip the frame. Asking for a
+            // redraw here would spin at 100% while minimised; `Occluded(false)`
+            // re-arms the loop on its own.
             _ => return,
         };
         let view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
@@ -167,26 +184,27 @@ impl Gpu {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-        if self
-            .renderer
-            .render(
-                &self.vello,
-                &mut self.resources,
-                &self.device,
-                &self.queue,
-                &mut encoder,
-                &RenderSize {
-                    width: self.config.width,
-                    height: self.config.height,
-                },
-                &view,
-                &TextureBindings::new(),
-            )
-            .is_ok()
-        {
-            self.queue.submit([encoder.finish()]);
-            self.window.pre_present_notify();
-            frame.present();
+        match self.renderer.render(
+            &self.vello,
+            &mut self.resources,
+            &self.device,
+            &self.queue,
+            &mut encoder,
+            &RenderSize {
+                width: self.config.width,
+                height: self.config.height,
+            },
+            &view,
+            &TextureBindings::new(),
+        ) {
+            Ok(()) => {
+                self.queue.submit([encoder.finish()]);
+                self.window.pre_present_notify();
+                frame.present();
+            }
+            // A black window in the binary whose whole job is showing you what
+            // broke is the one failure that must not be silent.
+            Err(e) => eprintln!("vello: {e}"),
         }
     }
 }

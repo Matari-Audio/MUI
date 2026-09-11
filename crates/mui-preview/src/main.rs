@@ -129,10 +129,7 @@ fn frame_overlay(scene: &ResolvedScene, font: &[u8]) -> (Vec<BezPath>, Vec<BezPa
     let mut rects = Vec::new();
     let mut labels = Vec::new();
     for (key, frame) in scene.layout.frames() {
-        let bounds = Bounds {
-            min: Point::new(frame.x, frame.y),
-            max: Point::new(frame.right(), frame.bottom()),
-        };
+        let bounds = Bounds::new(frame.x, frame.y, frame.right(), frame.bottom());
         if let Ok(rect) = RoundedRect::new(bounds, 0.) {
             if let Ok(bez) = mui_vello::bez_path(&rect.path(), ARC_TOLERANCE) {
                 rects.push(bez);
@@ -316,10 +313,7 @@ impl App {
             chrome_paint,
             ..
         } = self;
-        let bounds = Bounds {
-            min: Point::new(0., 0.),
-            max: Point::new(SIDEBAR * scale, size.1 as f64),
-        };
+        let bounds = Bounds::new(0., 0., SIDEBAR * scale, size.1 as f64);
         let mut ui = chrome.column(bounds, *pointer, typed.take(), scale);
         ui.label("MUI preview");
         ui.note("mui-layout places, mui-core merges, vello draws");
@@ -461,7 +455,7 @@ impl ApplicationHandler for App {
             WindowEvent::RedrawRequested => {
                 if let Some(gpu) = &self.gpu {
                     let (size, scale) = (gpu.size(), gpu.window().scale_factor());
-                    let buttons: Vec<bool> = self.buttons.drain(..).collect();
+                    let buttons = std::mem::take(&mut self.buttons);
                     if buttons.is_empty() {
                         self.tick(size, scale);
                     }
@@ -686,7 +680,7 @@ mod tests {
         app.pointer.pos = Some(at);
         // Both transitions queued before a single redraw ever runs.
         app.buttons.extend([true, false]);
-        let buttons: Vec<bool> = app.buttons.drain(..).collect();
+        let buttons = std::mem::take(&mut app.buttons);
         for down in buttons {
             app.pointer.primary_down = down;
             app.tick(size, 1.);
@@ -773,12 +767,25 @@ mod tests {
     /// The stage is a translation and nothing else, so a pointer taken into
     /// scene space and back lands where it started.
     #[test]
-    fn the_stage_round_trips() {
-        let mut app = App::new();
-        app.pan = Some(Point::new(37.5, -11.25));
-        let origin = app.origin((800, 600), 1.);
-        let p = Point::new(123.75, 44.5);
-        assert_eq!(origin + (p - origin), p);
-        assert_eq!(origin - origin, Point::new(0., 0.));
+    fn the_stage_centres_in_what_the_sidebar_leaves() {
+        let app = App::new();
+        let size = (1000_u32, 700_u32);
+        let o = app.origin(size, 1.);
+        let specimen = app
+            .baked
+            .scene
+            .as_ref()
+            .expect("the first scene baked")
+            .layout
+            .size;
+        // Equal margins inside the stage, not inside the window: forgetting the
+        // sidebar would hide the specimen's left edge under the column.
+        assert_eq!(
+            o.x - SIDEBAR,
+            size.0 as f64 - specimen.width - o.x,
+            "not centred beside the sidebar"
+        );
+        assert_eq!(o.y, size.1 as f64 - specimen.height - o.y, "not centred");
+        assert!(o.x >= SIDEBAR, "the specimen starts under the column");
     }
 }
