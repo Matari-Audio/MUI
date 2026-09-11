@@ -11,7 +11,7 @@ The whole workspace, including the egui adapter, compiles to `wasm32-unknown-unk
 > **Status: foundation, not a framework.** There is no text shaping, no widget library and no
 > retained state. Pointer hit testing, glyph outlines and a Vello renderer are here; everything
 > built on top of them is not. See *Current intentional scope* below for the full
-> list of what is deliberately absent. Everything that *is* here is tested and measured rather than
+> list of what is deliberately absent, and `ROADMAP.md` for the full ticked/unticked inventory. Everything that *is* here is tested and measured rather than
 > asserted; run `tools/verify.sh` to reproduce.
 
 ## What is implemented
