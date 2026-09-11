@@ -1473,11 +1473,7 @@ dependencies = [
  "mui-geometry",
  "mui-layout",
  "mui-vello",
- "pollster",
  "vello_common 0.2.0",
- "vello_hybrid",
- "wgpu",
- "winit",
 ]
 
 [[package]]

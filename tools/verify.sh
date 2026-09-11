@@ -6,9 +6,10 @@ cd "$ROOT"
 cargo fmt --all -- --check
 cargo test --workspace --offline
 cargo clippy --workspace --all-targets --offline -- -D warnings
-# mui-preview is a native dev host (eframe::run_native does not exist on wasm).
-# The wasm claim is about the library crates; drop the --exclude once the
-# preview grows a WebRunner entry point and is served with trunk.
+# mui-preview is a native dev host: it owns a winit event loop and a wgpu
+# surface, neither of which this gate can build for wasm. The wasm claim is
+# about the library crates; drop the --exclude once the preview grows a
+# `spawn_app` entry point and is served from a canvas.
 cargo check --workspace --exclude mui-preview --target wasm32-unknown-unknown --offline
 
 pushd packages/mui-ts >/dev/null

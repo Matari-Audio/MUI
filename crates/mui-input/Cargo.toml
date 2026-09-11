@@ -14,15 +14,3 @@ vello_common = { version = "0.2", default-features = false }
 [dev-dependencies]
 mui-core = { path = "../mui-core" }
 mui-layout = { path = "../mui-layout" }
-pollster = "0.4"
-vello_hybrid = { version = "0.2", features = ["wgpu_default"] }
-# The example owns the window and the device, which is exactly the split a
-# plugin wrapper has. The libraries above pick no backend of their own.
-wgpu = { version = "29", default-features = false, features = [
-  "wgsl",
-  "vulkan",
-  "gles",
-  "metal",
-  "dx12",
-] }
-winit = "0.30"

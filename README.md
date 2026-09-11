@@ -8,8 +8,9 @@ outline rather than from guessed radii.
 The core is renderer-independent and does **not** use Taffy. `mui-layout` has no dependencies at all.
 The whole workspace, including the egui adapter, compiles to `wasm32-unknown-unknown`.
 
-> **Status: foundation, not a framework.** There is no input handling, no text shaping, no widgets,
-> no retained state and no native renderer yet. See *Current intentional scope* below for the full
+> **Status: foundation, not a framework.** There is no text shaping, no widget library and no
+> retained state. Pointer hit testing, glyph outlines and a Vello renderer are here; everything
+> built on top of them is not. See *Current intentional scope* below for the full
 > list of what is deliberately absent. Everything that *is* here is tested and measured rather than
 > asserted; run `tools/verify.sh` to reproduce.
 
@@ -166,7 +167,7 @@ This is not a complete application framework yet. In particular:
 - scroll/virtualization/grid are not implemented yet;
 - input/focus/accessibility and plugin parameter gestures are future layers;
 - the general parallel offset uses a bounded polygon approximation for circular paths; rounded rectangles use exact analytic offsets;
-- wgpu rendering is not implemented here; egui is the current adapter.
+- `mui-vello` renders on wgpu through `vello_hybrid`; `mui-egui` remains only as a debug adapter.
 
 The public authoring model is owned by MUI, so Taffy or another solver can still be added as an optional backend later without changing plugin code.
 
@@ -201,10 +202,16 @@ Boolean-merge with a surface instead of being drawn over one).
 
 ## Preview and live iteration
 
-`mui-preview` is a native gallery binary. It resolves every scene in
+`mui-preview` is a native gallery binary: winit for the window, wgpu for the
+device, `vello_hybrid` for pixels. It resolves every scene in
 `crates/mui-preview/src/scenes.rs` through the same `resolve_scene` +
-`Tessellator` path the real runtime uses, then paints the triangles, so what
-you see is the actual mesh rather than a mock.
+`mui_vello::bez_path` path the real runtime uses, so what you see is the actual
+outline rather than a mock.
+
+Its sidebar is built out of MUI itself — hand-built `mui_geometry::Path`
+widgets routed by `mui-input`, deliberately *not* a `SceneSpec`, so a resolver
+regression cannot take the chrome down with it. Hover lightens a control, press
+takes the accent, and dragging the stage moves the specimen.
 
 ```
 cargo run -p mui-preview
@@ -223,15 +230,18 @@ of build time on a warm target directory. The preview is a dev host, so no
 file watching, scripting, or reload machinery lives in the library crates.
 
 The **Glyph axes** scene is the live version of the section above: point
-`MUI_PREVIEW_FONT` at a variable font and its axes become sliders, with the
-triangle count in the status bar moving as you drag one.
+`MUI_PREVIEW_FONT` at a variable font and its axes become sliders in the
+sidebar. The segment count moves as you drag one, which is the proof the
+outline was re-solved rather than re-scaled.
 
 Adding a scene means adding one `impl PreviewScene` and one line in
 `scenes::all()`. `every_scene_bakes` then covers it — a scene that fails to
-resolve or tessellates to nothing fails the test suite.
+resolve or converts to nothing fails the test suite. `hit_is_what_was_painted`
+then covers the other half: a 64x64 grid per scene, asserting the topmost
+painted path and the hit geometry agree at every point.
 
-`mui-preview` is excluded from the wasm gate: `eframe::run_native` is
-native-only. The library crates still check clean on `wasm32-unknown-unknown`.
+`mui-preview` is excluded from the wasm gate: it owns a winit event loop and a
+wgpu surface. The library crates still check clean on `wasm32-unknown-unknown`.
 
 ## Rendering
 
@@ -244,7 +254,7 @@ flattened to a polyline.
 cargo run -p mui-vello --example headless -- /tmp/pill.png
 ```
 
-That example is the stack end to end with no window, no egui and no tessellator:
+That example is the stack end to end with no window and no tessellator:
 intrinsic layout, boolean union, fillets, then analytic antialiasing from
 `vello_hybrid`. `vello_hybrid` is a CPU-preprocess / GPU-raster renderer on
 wgpu 29 — the version KURV already ships — with a WebGL2 backend, so it needs no
@@ -260,19 +270,13 @@ the corner of a rounded shape is correctly outside its own bounding-box corner.
 A press captures its target until release wherever the pointer then goes, which
 is the single most common thing a hand-rolled UI gets wrong.
 
-```
-cargo run -p mui-input --example window
-```
-
-A real window with zero egui in the dependency graph: winit for events, wgpu for
-the device, `vello_hybrid` for pixels, and `mui-input` deciding what the pointer
-means. Hover lightens a control, press takes the accent, a click latches it, and
-dragging the panel body moves the scene. `MUI_TRACE=1` prints what the pointer
-resolves to each frame.
+`mui-preview` above is the working demonstration: every widget in its sidebar
+is a path and a `Hit` entry, and nothing else.
 
 Not yet: gradients, strokes, clips and blend modes are all things `vello_hybrid`
-supports and MUI does not surface. Keyboard focus, scroll and text editing are
-not in `mui-input` at all. `mui-preview` is still on egui.
+supports and MUI does not surface. Scroll and text editing are not in
+`mui-input` at all; the gallery's own click-to-focus is a dozen lines in the
+binary, which is where it belongs until a second caller wants it.
 
 ## Verify
 
