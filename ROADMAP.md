@@ -87,19 +87,34 @@ section exists to fix.
 
 ### Layout
 
-- [ ] Asymmetric three-slot alignment. `SpaceBetween` on children of 50, 30 and
-      20 px spreads them edge to edge, which does not put the middle child's
-      centre on the container's centre; three `grow(1)` cells do, but then each
-      side child is confined to a third. What is missing is a mode where the
-      outer children hug their content at the edges and the middle child is
-      centred on the *container*.
-- [ ] Fractional and percentage sizing. `Size` is absolute pixels; weighted
-      growth is the only relative mechanism.
+- [ ] **A basis, so a child can claim a share of the axis rather than a share
+      of the surplus.** `grow` distributes only what is left over after every
+      child's intrinsic size, which is CSS `flex-grow` with `flex-basis: auto`.
+      There is no way to say `flex: 1 1 0` -- the thing CSS Grid spells `1fr`
+      and Taffy's own helper spells `minmax(0, 1fr)` -- and that is what
+      "exactly evenly sized tracks" requires. It is also the missing piece
+      under the left/centre/right bar: with children of 50, 30 and 20 px in a
+      400 px row, both `SpaceBetween` and `grow(1)` side cells put the middle
+      child's centre at 215 rather than 200, out by half the asymmetry between
+      the outer two. Equal *shares* put it at 200.
+- [ ] **Shrink.** There is no negative free space. `distribute_growth` clamps
+      surplus at zero and `arrange` returns `InsufficientSpace` instead, so a
+      window dragged narrower than its content fails the whole layout rather
+      than compressing. Flexbox distributes the deficit by `flex-shrink`
+      scaled by basis, with an automatic content-based minimum.
+- [ ] **Per-child alignment.** `align` and `justify` live on the parent and
+      apply uniformly, so one child cannot be top-aligned while its sibling
+      hangs from the bottom. CSS calls the override `align-self`.
+- [ ] Fractional and percentage sizing. `Size` is absolute pixels.
+- [ ] Per-child margins, and the auto-margin idiom that goes with them. Note
+      that auto margins do *not* solve the centred bar either: they split free
+      space equally, which lands the middle child in the same wrong place.
+- [ ] `SpaceAround` and `SpaceEvenly`. Same match arm as `SpaceBetween`.
+- [ ] `order`, so visual order can differ from document order.
 - [ ] Aspect-ratio constraints.
 - [ ] Baseline alignment, so text sits on a shared baseline instead of being
       centred as a box.
 - [ ] Wrapping rows, grid, spans.
-- [ ] `SpaceAround` and `SpaceEvenly`.
 - [ ] Anchored positioning inside `Overlay`. It centres; a child cannot be
       pinned to a corner with an offset.
 - [ ] Text as a first-class leaf. Nothing calls `mui-text` to measure a node,
