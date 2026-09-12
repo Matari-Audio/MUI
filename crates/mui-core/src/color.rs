@@ -109,6 +109,65 @@ impl Color {
         AlphaColor::new([r, g, b, a.clamp(0.0, 1.0)])
     }
 
+    /// WCAG 2.1 relative luminance of the colour as it will actually be
+    /// painted -- gamut-mapped sRGB, not the unclamped Oklch request.
+    pub fn luminance(self) -> f32 {
+        self.to_srgb().discard_alpha().relative_luminance()
+    }
+
+    /// WCAG 2.1 contrast ratio, 1.0 (identical) to 21.0 (black on white).
+    ///
+    /// Alpha is ignored: a translucent colour's real contrast depends on what
+    /// is behind it, which a pair of colours cannot know. Compose first, then
+    /// measure.
+    pub fn contrast(self, other: Color) -> f32 {
+        let (a, b) = (self.luminance(), other.luminance());
+        let (hi, lo) = if a > b { (a, b) } else { (b, a) };
+        (hi + 0.05) / (lo + 0.05)
+    }
+
+    /// The least-changed version of `self` that clears `ratio` against `bg`.
+    ///
+    /// Hue and chroma are held; only lightness moves, and only away from `bg`,
+    /// so a colour keeps its identity while becoming legible. Black or white is
+    /// as far as it can go: if even that falls short -- a mid grey on a mid grey
+    /// cannot reach 4.5 in either direction -- the extreme comes back rather
+    /// than an error, because a slightly-illegal label still beats no label.
+    pub fn readable_on(self, bg: Color, ratio: f32) -> Color {
+        let fg = self;
+        if !ratio.is_finite() || fg.contrast(bg) >= ratio {
+            return fg;
+        }
+        let away = if fg.lightness() >= bg.lightness() {
+            1.0
+        } else {
+            0.0
+        };
+        if fg.with_lightness(away).contrast(bg) < ratio {
+            return fg.with_lightness(away);
+        }
+        // `fail` never clears the ratio and `ok` always does, so bisecting
+        // toward `fail` lands on the smallest move that still works.
+        let (mut fail, mut ok) = (fg.lightness(), away);
+        while (ok - fail).abs() > 1e-3 {
+            let mid = 0.5 * (fail + ok);
+            if fg.with_lightness(mid).contrast(bg) >= ratio {
+                ok = mid;
+            } else {
+                fail = mid;
+            }
+        }
+        let out = fg.with_lightness(ok);
+        // Gamut mapping pulls chroma as lightness moves, so contrast is not
+        // perfectly monotonic; fall back to the extreme if the bisection
+        // landed a hair short.
+        if out.contrast(bg) >= ratio {
+            out
+        } else {
+            fg.with_lightness(away)
+        }
+    }
+
     /// Whether every component is finite and in range. Hue is free to wrap.
     pub fn valid(self) -> bool {
         let [l, c, h, a] = self.0.components;
@@ -211,6 +270,15 @@ impl Palette {
     };
 }
 
+impl Palette {
+    /// WCAG 2.1 AA for body text.
+    pub const AA_TEXT: f32 = 4.5;
+    /// WCAG 2.1 AA for large text and for the boundary of a UI component.
+    pub const AA_LARGE: f32 = 3.0;
+    /// WCAG 2.1 AAA for body text.
+    pub const AAA_TEXT: f32 = 7.0;
+}
+
 impl Default for Palette {
     fn default() -> Self {
         Self::DARK
@@ -244,22 +312,27 @@ impl Palette {
     }
 
     /// Ink that reads on `bg`: whichever of `ink` and `surface` sits further
-    /// from it in perceptual lightness. This is what makes a label legible on
-    /// the accent without a second ink colour being declared.
+    /// from it in perceptual lightness, pushed further if that alone does not
+    /// clear [`Palette::AA_TEXT`]. This is what makes a label legible on the
+    /// accent without a second ink colour being declared.
     pub fn on(&self, bg: Color) -> Color {
         let d = |c: Color| (c.lightness() - bg.lightness()).abs();
-        if d(self.ink) >= d(self.surface) {
+        let fg = if d(self.ink) >= d(self.surface) {
             self.ink
         } else {
             self.surface
-        }
+        };
+        fg.readable_on(bg, Self::AA_TEXT)
     }
 
     /// Ink for provenance, counts, the line under a heading: pulled back
-    /// toward the ground rather than made transparent, so it stays legible
-    /// over whatever it lands on.
-    pub fn ink_dim(&self) -> Color {
-        self.ink.mix(self.surface, 0.4).with_alpha(self.ink.alpha())
+    /// toward `bg` rather than made transparent, then pushed back out if the
+    /// dimming cost it legibility. Dimmed text is still text, so it is held to
+    /// the same [`Palette::AA_TEXT`] as [`Palette::on`] -- on a light-enough
+    /// ground the contrast floor is what decides how dim it actually gets.
+    pub fn dim(&self, bg: Color) -> Color {
+        let fg = self.on(bg).mix(bg, 0.4).with_alpha(self.ink.alpha());
+        fg.readable_on(bg, Self::AA_TEXT)
     }
 
     /// Whether every colour and the step are usable.
@@ -286,6 +359,18 @@ mod tests {
     /// `Palette::DARK` uses a slightly larger lift than this, because it has
     /// to serve greys as well, so it is set here rather than taken from the
     /// default.
+    /// A light theme is the dark one with two colours swapped and both steps
+    /// negated. Nothing else is restated, which is the claim these tests check.
+    fn light() -> Palette {
+        Palette {
+            surface: Color::oklch(0.97, 0.005, 264.0),
+            ink: Color::oklch(0.20, 0.010, 264.0),
+            step: -0.045,
+            hover: -0.11,
+            ..Palette::DARK
+        }
+    }
+
     #[test]
     fn hover_reproduces_the_hand_tuned_lit_accent() {
         let p = Palette {
@@ -354,15 +439,79 @@ mod tests {
         assert!(dark.layer(-1).lightness() < dark.layer(0).lightness());
         assert!(dark.layer(0).lightness() < dark.layer(3).lightness());
 
-        let light = Palette {
-            surface: Color::oklch(0.97, 0.005, 264.0),
-            ink: Color::oklch(0.20, 0.010, 264.0),
-            step: -0.045,
-            hover: -0.11,
-            ..Palette::default()
-        };
+        let light = light();
         assert!(light.layer(-1).lightness() > light.layer(0).lightness());
         assert!(light.hover(light.layer(3)).lightness() < light.layer(3).lightness());
+    }
+
+    /// The regression this whole section exists for. `ink_dim` used to be a
+    /// fixed 40% mix toward the base surface, which measured 2.99:1 on a
+    /// raised control -- under even the 3.0 large-text floor, on a widget that
+    /// paints notes.
+    #[test]
+    fn every_ink_role_clears_aa_on_every_layer() {
+        for p in [Palette::DARK, light()] {
+            for level in -2..=4 {
+                let bg = p.layer(level);
+                for (role, fg) in [("on", p.on(bg)), ("dim", p.dim(bg))] {
+                    let r = fg.contrast(bg);
+                    assert!(
+                        r >= Palette::AA_TEXT - 0.01,
+                        "{role} on layer({level}) is {r:.2}:1"
+                    );
+                }
+            }
+            // The accent is a background too -- a selected row, a pressed knob.
+            for bg in [p.accent, p.hover(p.accent), p.error] {
+                assert!(p.on(bg).contrast(bg) >= Palette::AA_TEXT - 0.01);
+            }
+        }
+    }
+
+    /// Dimming is still dimming. If the floor were doing all the work, `dim`
+    /// would just return `on` and the distinction would be a lie.
+    #[test]
+    fn dim_is_visibly_dimmer_where_there_is_room_for_it() {
+        let p = Palette::DARK;
+        let bg = p.layer(0);
+        assert!(p.dim(bg).lightness() < p.on(bg).lightness() - 0.05);
+    }
+
+    #[test]
+    fn readable_moves_lightness_and_leaves_hue_alone() {
+        let p = Palette::DARK;
+        let bg = p.layer(0);
+        // Deliberately illegible: the error red measures 4.16:1 on the ground.
+        let fixed = p.error.readable_on(bg, Palette::AA_TEXT);
+        assert!(p.error.contrast(bg) < Palette::AA_TEXT, "premise");
+        assert!(fixed.contrast(bg) >= Palette::AA_TEXT);
+        assert!(
+            (fixed.hue() - p.error.hue()).abs() < 1.0,
+            "{} vs {}",
+            fixed.hue(),
+            p.error.hue()
+        );
+        // And no further than it had to go.
+        assert!(fixed.lightness() < p.error.lightness() + 0.1);
+    }
+
+    #[test]
+    fn an_impossible_ratio_saturates_instead_of_looping() {
+        let bg = Color::oklch(0.5, 0.0, 264.0);
+        let fg = Color::oklch(0.52, 0.0, 264.0);
+        // 21:1 against a mid grey is unreachable in either direction.
+        let out = fg.readable_on(bg, 21.0);
+        assert_eq!(out.lightness(), 1.0);
+        assert!(out.contrast(bg) > fg.contrast(bg));
+    }
+
+    #[test]
+    fn contrast_is_symmetric_and_bounded() {
+        let black = Color::oklch(0.0, 0.0, 0.0);
+        let white = Color::oklch(1.0, 0.0, 0.0);
+        assert!((black.contrast(white) - 21.0).abs() < 0.05);
+        assert!((white.contrast(black) - black.contrast(white)).abs() < 1e-4);
+        assert!((white.contrast(white) - 1.0).abs() < 1e-4);
     }
 
     /// One `on` rule has to serve both a dark ground and a light accent.

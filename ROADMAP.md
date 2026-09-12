@@ -97,8 +97,16 @@ bisection.
 - [x] Light/dark pairing by construction. `step` and `hover` carry the sign,
       and `on(bg)` picks whichever of ink and surface sits further from `bg`
       in perceptual lightness, so legibility survives the flip.
-- [ ] Contrast guarantees -- `on` picks the further of two, which is not the
-      same as clearing a WCAG or APCA ratio.
+- [x] Contrast guarantees. `Color::contrast` is the WCAG 2.1 ratio and
+      `readable_on` returns the least-changed version of a colour that clears
+      a given ratio -- hue and chroma held, lightness pushed away from the
+      background until it does, saturating at black or white. `on` and `dim`
+      go through it at `AA_TEXT`, so every ink role clears 4.5:1 on every
+      layer of both themes, and a test sweeps that rather than trusting it.
+- [ ] APCA. WCAG 2.1 is the standard an audit measures against, so it is what
+      ships, but it is known to be poorly calibrated on dark grounds -- it
+      over-credits dark-on-dark. APCA is the WCAG 3 draft replacement and is
+      the right second opinion once `readable_on` has a ratio model to swap.
 - [ ] A palette on the wire is only the four colours and two steps; a theme
       that wants an off-palette colour (the preview's debug frame overlay) has
       nowhere to put it.

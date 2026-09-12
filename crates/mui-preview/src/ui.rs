@@ -29,6 +29,10 @@ pub const SKIN: Palette = Palette::DARK;
 /// Where a control rests when nothing is happening to it. Raised things sit
 /// above the panel; recessed things -- list rows, a slider track, a field --
 /// sit below it, so the panel reads as the ground between them.
+/// What every text row in this gallery paints on: the panel's own fill. The
+/// ink roles need it, because legibility is a property of a pair.
+const GROUND: Color = SKIN.surface;
+
 const RAISED: i32 = 3;
 const RECESSED: i32 = -1;
 
@@ -38,7 +42,7 @@ const RECESSED: i32 = -1;
 ///
 /// A press only counts while the pointer is still over the widget: a press
 /// dragged off is no longer a click, so it must stop looking like one.
-fn lift(base: Color, r: &Response) -> Rgba {
+fn fill_for(base: Color, r: &Response) -> Color {
     if r.held && r.hovered {
         SKIN.pressed(base)
     } else if r.hovered {
@@ -46,7 +50,6 @@ fn lift(base: Color, r: &Response) -> Rgba {
     } else {
         base
     }
-    .to_srgb()
 }
 
 /// Logical points. Physical pixels are these times the device scale.
@@ -329,18 +332,22 @@ impl Ui<'_> {
     }
 
     pub fn label(&mut self, text: &str) {
-        self.text_row(text, TEXT_SIZE, SKIN.ink.to_srgb());
+        self.text_row(text, TEXT_SIZE, SKIN.on(GROUND).to_srgb());
     }
 
     /// Small and dimmed: provenance, counts, the line under a heading.
     pub fn note(&mut self, text: &str) {
-        self.text_row(text, NOTE_SIZE, SKIN.ink_dim().to_srgb());
+        self.text_row(text, NOTE_SIZE, SKIN.dim(GROUND).to_srgb());
     }
 
     /// A note in the error ink. Same row, so a failure never moves the layout
     /// around underneath the pointer.
     pub fn error(&mut self, text: &str) {
-        self.text_row(text, NOTE_SIZE, SKIN.error.to_srgb());
+        self.text_row(
+            text,
+            NOTE_SIZE,
+            SKIN.error.readable_on(GROUND, Palette::AA_TEXT).to_srgb(),
+        );
     }
 
     /// Prose, wrapped across as many rows as it needs. The gap goes after the
@@ -377,11 +384,11 @@ impl Ui<'_> {
             return false;
         };
         let (x0, x1, y) = (b.min.x, b.max.x, b.min.y);
-        let ink = lift(SKIN.layer(RAISED), &r);
-        self.paint.push((path, ink));
+        let fill = fill_for(SKIN.layer(RAISED), &r);
+        self.paint.push((path, fill.to_srgb()));
         if let Some(run) = self.run(text, self.px(TEXT_SIZE), x1 - x0) {
             let x = x0 + ((x1 - x0) - run.advance) / 2.0;
-            self.place(&run, x.max(x0), y, height, SKIN.ink.to_srgb());
+            self.place(&run, x.max(x0), y, height, SKIN.on(fill).to_srgb());
         }
         self.advance(height);
         r.clicked
@@ -398,7 +405,7 @@ impl Ui<'_> {
         // Selection picks the resting colour; the pointer lifts whichever one
         // that is. A selected row therefore still answers a hover instead of
         // sitting flat at the accent.
-        let ink = lift(
+        let fill = fill_for(
             if selected {
                 SKIN.accent
             } else {
@@ -406,9 +413,9 @@ impl Ui<'_> {
             },
             &r,
         );
-        self.paint.push((path, ink));
+        self.paint.push((path, fill.to_srgb()));
         if let Some(run) = self.run(text, self.px(TEXT_SIZE), x1 - x0 - self.px(PAD)) {
-            self.place(&run, x0 + self.px(GAP), y, height, SKIN.ink.to_srgb());
+            self.place(&run, x0 + self.px(GAP), y, height, SKIN.on(fill).to_srgb());
         }
         self.advance(height);
         r.clicked
@@ -425,7 +432,7 @@ impl Ui<'_> {
         }
         let side = height * 0.62;
         let box_top = y + (height - side) / 2.0;
-        let ink = lift(
+        let fill = fill_for(
             if *on {
                 SKIN.accent
             } else {
@@ -436,7 +443,7 @@ impl Ui<'_> {
         self.rect(
             Bounds::new(x0, box_top, x0 + side, box_top + side),
             self.px(3.0),
-            ink,
+            fill.to_srgb(),
         );
         if let Some(run) = self.run(text, self.px(TEXT_SIZE), x1 - x0 - side) {
             self.place(
@@ -444,7 +451,7 @@ impl Ui<'_> {
                 x0 + side + self.px(GAP),
                 y,
                 height,
-                SKIN.ink.to_srgb(),
+                SKIN.on(GROUND).to_srgb(),
             );
         }
         self.advance(height);
@@ -528,7 +535,7 @@ impl Ui<'_> {
             lit,
         );
         if let Some(run) = self.run(&format!("{text}  {value:.2}"), self.px(TEXT_SIZE), x1 - x0) {
-            self.place(&run, x0, y, label_h, SKIN.ink.to_srgb());
+            self.place(&run, x0, y, label_h, SKIN.on(GROUND).to_srgb());
         }
         self.advance(height);
         *value != before
@@ -566,7 +573,7 @@ impl Ui<'_> {
             }
         }
 
-        let ink = lift(
+        let fill = fill_for(
             if focused {
                 SKIN.accent
             } else {
@@ -574,11 +581,11 @@ impl Ui<'_> {
             },
             &r,
         );
-        self.paint.push((path, ink));
+        self.paint.push((path, fill.to_srgb()));
         let glyph = value.to_string();
         if let Some(run) = self.run(&glyph, self.px(TEXT_SIZE + 3.0), side) {
             let x = x0 + (side - run.advance) / 2.0;
-            self.place(&run, x.max(x0), y, height, SKIN.ink.to_srgb());
+            self.place(&run, x.max(x0), y, height, SKIN.on(fill).to_srgb());
         }
         if let Some(run) = self.run(text, self.px(TEXT_SIZE), x1 - x0 - side) {
             self.place(
@@ -586,7 +593,7 @@ impl Ui<'_> {
                 x0 + side + self.px(GAP),
                 y,
                 height,
-                SKIN.ink_dim().to_srgb(),
+                SKIN.dim(GROUND).to_srgb(),
             );
         }
         self.advance(height);
@@ -812,6 +819,29 @@ mod tests {
         );
         ui.finish();
         assert_eq!(glyph, 'W');
+    }
+
+    /// A selected row's fill is the accent, which is lighter than the panel.
+    /// The label on it therefore has to flip dark -- painting the light ink on
+    /// it measured 1.7:1, which is not text, it is a watermark.
+    #[test]
+    fn a_selected_rows_label_flips_to_stay_on_the_accent() {
+        let mut chrome = chrome();
+        let label = |chrome: &mut Chrome, selected: bool| {
+            let mut ui = chrome.column(bounds(), PointerInput::default(), None, 1.0);
+            ui.option(selected, "a row");
+            // The row paints its fill, then every glyph of its label in one ink.
+            let paint = ui.finish();
+            paint[2].1
+        };
+        let unselected = label(&mut chrome, false);
+        let selected = label(&mut chrome, true);
+        assert_eq!(unselected, SKIN.on(SKIN.layer(RECESSED)).to_srgb());
+        assert_eq!(selected, SKIN.on(SKIN.accent).to_srgb());
+        assert_ne!(
+            selected, unselected,
+            "the label did not flip when the ground under it did"
+        );
     }
 
     /// A press keeps its target when the pointer wanders off, but a release out

@@ -160,8 +160,8 @@ skin.layer(-1);           // a recessed well: a list row, a slider track, a fiel
 skin.hover(skin.accent);  // what the pointer does to it
 skin.pressed(skin.accent);
 skin.disabled(skin.accent);
-skin.on(skin.layer(3));   // ink that reads on that fill
-skin.ink_dim();           // a secondary label
+skin.on(skin.layer(3));   // ink that reads on that fill, guaranteed 4.5:1
+skin.dim(skin.layer(3));  // a secondary label, dimmed only as far as 4.5:1 allows
 
 Color::oklch(0.752, 0.131, 242.0).to_srgb();  // gamut-mapped, ready to paint
 ```
@@ -173,6 +173,17 @@ theme is `step` and `hover` negated and two colours swapped -- not a second
 table of literals to keep in step with the first. `on` picks whichever of ink
 and surface sits further from the background in perceptual lightness, so the
 flip stays legible.
+
+Legibility is checked, not assumed. `Color::contrast` is the WCAG 2.1 ratio,
+and `readable_on(bg, ratio)` returns the least-changed version of a colour that
+clears it: hue and chroma held, lightness pushed away from `bg` until the ratio
+is met, saturating at black or white if even that falls short. `on` and `dim`
+both go through it at `Palette::AA_TEXT`, so a label cannot be illegible by
+construction -- including on the accent, where the ink flips dark on its own.
+
+WCAG 2.1 is what an audit measures against, so it is what ships. It is also
+known to over-credit dark-on-dark, which APCA (the WCAG 3 draft) exists to fix;
+that is a roadmap item, not a claim made here.
 
 `to_srgb` gamut-maps by CSS Color 4 13.2: hold lightness and hue, bisect chroma
 down until the clipped result is within a just-noticeable difference. The
