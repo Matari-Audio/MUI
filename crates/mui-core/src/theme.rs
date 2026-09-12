@@ -31,6 +31,34 @@ impl Default for CornerProfile {
 
 pub use mui_layout::{Spacing, SpacingScale, SpacingToken};
 
+/// Minimum contrast policy. All text uses the normal-text threshold; the host
+/// need not classify font sizes. Stronger thresholds may reject impossible pairs.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Contrast {
+    pub text: f64,
+    pub graphics: f64,
+}
+impl Contrast {
+    pub const AA: Self = Self {
+        text: 4.5,
+        graphics: 3.,
+    };
+    pub const AAA: Self = Self {
+        text: 7.,
+        graphics: 3.,
+    };
+    pub fn valid(self) -> bool {
+        self.text.is_finite()
+            && (4.5..=21.).contains(&self.text)
+            && self.graphics.is_finite()
+            && (3.0..=21.).contains(&self.graphics)
+    }
+}
+impl Default for Contrast {
+    fn default() -> Self {
+        Self::AA
+    }
+}
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Theme {
     pub palette: crate::Palette,
@@ -38,6 +66,8 @@ pub struct Theme {
     pub corners: CornerProfile,
     pub spacing: SpacingScale,
     pub stroke_width: f64,
+    pub contrast: Contrast,
+    pub hover_shift: f64,
 }
 impl Default for Theme {
     fn default() -> Self {
@@ -47,6 +77,8 @@ impl Default for Theme {
             corners: CornerProfile::default(),
             spacing: SpacingScale::default(),
             stroke_width: 1.5,
+            contrast: Contrast::AA,
+            hover_shift: 0.06,
         }
     }
 }
@@ -55,7 +87,11 @@ impl Theme {
         self.palette.resolve(self.mode)
     }
     pub fn valid(self) -> bool {
-        self.corners.valid()
+        self.contrast.valid()
+            && self.hover_shift.is_finite()
+            && self.hover_shift > 0.
+            && self.hover_shift <= 0.5
+            && self.corners.valid()
             && self.spacing.valid()
             && self.stroke_width.is_finite()
             && self.stroke_width >= 0.0

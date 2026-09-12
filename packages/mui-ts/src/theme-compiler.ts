@@ -13,5 +13,7 @@ export function compileTheme(t: import("./index.js").Theme = {}): string {
   const spacingFields = (["xs","s","m","l","xl"] as const).filter(key => t.spacing?.[key] !== undefined).map(key => `${key}: ${n(t.spacing![key]!)}`);
   if (spacingFields.length) fields.push(`spacing: mui_core::SpacingScale { ${spacingFields.join(", ")}, ${spacingFields.length < 5 ? "..Default::default()" : ""} }`);
   if (t.strokeWidth !== undefined) fields.push(`stroke_width: ${n(t.strokeWidth)}`);
-  return `    let theme = mui_core::Theme { ${fields.join(", ")}${fields.length ? ", " : ""}${fields.length < 5 ? "..Default::default()" : ""} };\n`;
+  if (t.contrast) fields.push(`contrast: mui_core::Contrast { text: ${n(t.contrast.text)}, graphics: ${n(t.contrast.graphics)} }`);
+  if (t.hoverShift !== undefined) fields.push(`hover_shift: ${n(t.hoverShift)}`);
+  return `    let theme = mui_core::Theme { ${fields.join(", ")}${fields.length ? ", " : ""}${fields.length < 7 ? "..Default::default()" : ""} };\n`;
 }

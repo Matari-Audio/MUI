@@ -65,10 +65,13 @@ impl Rgb {
     /// Theme-aware hover tone in OKLab. At an endpoint, move inward instead
     /// of clamping to an unchanged color. Contrast is checked by the style resolver.
     pub fn hovered(self, mode: Mode) -> Self {
+        self.hovered_with(mode, 0.06)
+    }
+    pub(crate) fn hovered_with(self, mode: Mode, amount: f64) -> Self {
         let mut lab = to_lab(self);
-        let delta = if mode == Mode::Dark { 0.06 } else { -0.06 };
+        let delta = if mode == Mode::Dark { amount } else { -amount };
         let next = (lab[0] + delta).clamp(0., 1.);
-        lab[0] = if (next - lab[0]).abs() < 0.02 {
+        lab[0] = if (next - lab[0]).abs() < amount / 3. {
             (lab[0] - delta).clamp(0., 1.)
         } else {
             next

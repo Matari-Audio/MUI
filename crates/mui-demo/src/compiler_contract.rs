@@ -54,6 +54,7 @@ pub fn generated_scene() -> mui_core::SceneSpec {
             xl: 28f64,
         },
         stroke_width: -0f64,
+        ..Default::default()
     };
     mui_core::SceneSpec::new(root)
         .theme(theme)

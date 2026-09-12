@@ -278,6 +278,7 @@ impl Item {
         let mut compiler = Compiler {
             theme,
             surfaces: Vec::new(),
+            roundings: BTreeMap::new(),
             items: BTreeMap::new(),
             order: Vec::new(),
             groups: Vec::new(),
@@ -319,6 +320,8 @@ impl Item {
             items: compiler.items,
             order: compiler.order,
             groups: compiler.groups,
+            roundings: compiler.roundings,
+            colors: theme.colors().map_err(|_| SceneError::InvalidTheme)?,
         })
     }
 }
@@ -342,12 +345,55 @@ pub(crate) struct Group {
 #[derive(Clone, Debug)]
 pub struct Ui {
     spec: SceneSpec,
+    roundings: BTreeMap<String, Rounding>,
+    colors: Colors,
     pub(crate) items: BTreeMap<String, ItemInfo>,
     pub(crate) order: Vec<String>,
     pub(crate) groups: Vec<Group>,
 }
 impl Ui {
-    /// Read-only low-level form for integrations. Rebuild with build_with to change theme.
+    pub fn colors(&self) -> &Colors {
+        &self.colors
+    }
+    /// Apply colors, spacing and rounding together; a failed update changes nothing.
+    pub fn set_theme(&mut self, theme: Theme) -> Result<ResolvedScene, crate::StyleError> {
+        self.set_theme_with(theme, |id, _, _| {
+            Err(mui_layout::Error::MissingMeasurement(id.into()))
+        })
+    }
+    pub fn set_theme_with(
+        &mut self,
+        theme: Theme,
+        measure: impl FnMut(&str, &str, MeasureInput) -> Result<Size, mui_layout::Error>,
+    ) -> Result<ResolvedScene, crate::StyleError> {
+        if !theme.valid() {
+            return Err(SceneError::InvalidTheme.into());
+        }
+        let mut next = self.clone();
+        next.spec.theme = theme;
+        next.colors = theme.colors()?;
+        for surface in &mut next.spec.surfaces {
+            let profile = next.roundings[&surface.id].profile(&theme)?;
+            match &mut surface.source {
+                SurfaceSource::Frame { radius, .. } => {
+                    *radius = FrameRadius::Absolute(profile.convex)
+                }
+                SurfaceSource::Merge { corners, .. } => *corners = CornerRule::Absolute(profile),
+                _ => {}
+            }
+        }
+        let scene = next.resolve_with(measure)?;
+        next.resolved_styles(None)?;
+        // Validate every hover state before publishing a stronger contrast policy.
+        for (id, info) in &next.items {
+            if info.hoverable {
+                next.resolved_styles(Some(id))?;
+            }
+        }
+        *self = next;
+        Ok(scene)
+    }
+    /// Read-only low-level form for integrations. Use set_theme for live updates.
     pub fn scene_spec(&self) -> &SceneSpec {
         &self.spec
     }
@@ -422,6 +468,7 @@ impl Ui {
 struct Compiler {
     theme: Theme,
     surfaces: Vec<SurfaceSpec>,
+    roundings: BTreeMap<String, Rounding>,
     items: BTreeMap<String, ItemInfo>,
     order: Vec<String>,
     groups: Vec<Group>,
@@ -488,6 +535,7 @@ impl Compiler {
         if let Some((edge, target)) = item.extension {
             surface = surface.extend_to(edge, reference(&scope, &target));
         }
+        self.roundings.insert(key.clone(), item.rounding);
         self.surfaces.push(surface);
         self.order.push(key.clone());
         self.items.insert(
@@ -506,6 +554,7 @@ impl Compiler {
         for (i, members) in item.merges.into_iter().enumerate() {
             let members: Vec<_> = members.iter().map(|m| reference(&scope, m)).collect();
             let id = format!("@merge:{key}:{i}");
+            self.roundings.insert(id.clone(), item.rounding);
             self.surfaces.push(
                 SurfaceSpec::merge(&id, members.clone()).corners(CornerRule::Absolute(profile)),
             );

@@ -33,8 +33,8 @@ A scene commit publishes only after successful layout and geometry resolution. N
 geometry or text measurement belongs on the real-time audio callback. The current
 foundation has no event system or retained widget state.
 
-`Ui` keeps its compiled scene immutable apart from available parent dimensions. Rebuild
-with a different theme so spacing and rounding token values change together. Tap metadata
+`Ui::set_theme` stages a new theme, re-resolves stored rounding rules and spacing tokens,
+validates geometry and contrast, and publishes the update transactionally. Tap metadata
 is declarative: the host recognizes gestures and calls `tap_at` on the matching resolved
 scene. Outlines and hit rectangles are intentionally independent. `outlines` replaces
 merged member paint paths with one union while leaving content metadata intact.

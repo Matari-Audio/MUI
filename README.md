@@ -161,10 +161,28 @@ in the **original layout rectangle**. The host handles clipping, pointer capture
 cancellation, focus, keyboard activation, accessibility and action dispatch. This is not
 a complete widget/event runtime. A decorative extension is not automatically clickable.
 
-Build with `.build_with(theme)` to select a theme, and rebuild to change it. The compiled
-`Ui` exposes its low-level scene read-only via `scene_spec()` for integrations, including
-`SceneState` transactional commits. This prevents changing theme spacing while leaving
-compiled rounding tokens stale.
+Build with `.build_with(theme)` to select the initial theme. Change it at runtime with
+`ui.set_theme(theme)` or `ui.set_theme_with(theme, measure_text)` for measured content.
+The update returns a newly resolved scene and publishes only after geometry, colors,
+normal styles and all hover styles validate. On failure, the previous UI is unchanged.
+IDs, tap actions and available dimensions are preserved; explicit pixel overrides stay
+fixed while theme defaults and tokens update. `scene_spec()` remains read-only.
+
+```rust
+let mut next = *ui.theme();
+next.mode = Mode::Light;
+next.corners = mui::core::CornerProfile::new(12., 8.);
+next.spacing.m = 16.;
+next.hover_shift = 0.10;
+next.contrast = Contrast::AA; // AAA requests 7:1 text.
+let scene = ui.set_theme_with(next, measure_text)?;
+let styles = ui.resolved_styles(None)?;
+```
+
+`ui.colors()` caches the current palette, and `resolved_styles` always uses that palette.
+Retain the returned scene and refresh renderer caches after a successful theme update.
+Theme updates validate every hover state and belong on the UI thread, not every frame.
+An impossible contrast request is rejected rather than silently weakening the threshold.
 
 Use `.scope("instance")` for reusable components: local `knob` becomes `instance/knob`.
 References resolve in the current scope; a leading `/` explicitly addresses the root
@@ -196,7 +214,7 @@ let styles = ui.styles(&colors, hovered)?; // Cache until the hover target chang
 
 The renderer must consume these styles; raw `ItemInfo.color` is only the authored seed.
 Text is corrected to at least 4.5:1 against its effective background in both states;
-strokes are corrected to 3:1. Descendants of a hovered fill inherit the changed background.
+strokes are corrected to 3:1 against both the inside fill and outside backdrop. Descendants of a hovered fill inherit the changed background.
 Merged members share one hover color, even when the hovered member is not the first member.
 Declare merges on a common ancestor of their members. Hover uses the same original bounds
 as tapping, and hovering alone never dispatches an action. A hover-only item blocks taps
@@ -291,7 +309,7 @@ npm --prefix packages/mui-ts ci
 
 Verification checks formatting, native tests, Clippy with warnings denied, WASM compilation,
 TypeScript tests, deterministic Rust generation, the runtime demo and deterministic SVG
-export. The suite replaces numerous isolated assertions with 32 Rust contract tests and
+export. The suite replaces numerous isolated assertions with 34 Rust contract tests and
 4 TypeScript tests covering concrete geometry, layout, failure and frontend behavior.
 
 API migration: `Spacing::resolve` now takes `&SpacingScale`; Theme literals need
@@ -302,3 +320,13 @@ The facade prelude now contains item authoring rather than `SurfaceSpec`/`Node` 
 Low-level APIs and older constructors remain available through `mui::core` and `mui::layout`
 for compatibility. Rust has no variable-arity methods: separate rounding values use the
 named `Rounding::separate(outer, inner)` constructor rather than a fictitious overloaded call.
+
+Contrast policy follows WCAG 2.1/2.2 AA color criteria: 4.5:1 normal text, 3:1 large text,
+and 3:1 for required non-text information against adjacent colors. MUI conservatively
+uses 4.5:1 for all text because font-size classification belongs to the host. `Contrast::AAA`
+requests 7:1 text, without claiming complete AAA compliance. Text and graphic thresholds
+can be strengthened but not lowered below the AA floors. Hover's old and new fills do
+not themselves require a 3:1 ratio. A stroke's presence, its thickness, focus indicators,
+keyboard access, hit-target size and accessibility semantics remain separate concerns.
+See [W3C text contrast](https://www.w3.org/WAI/WCAG22/Understanding/contrast-minimum.html)
+and [non-text contrast](https://www.w3.org/WAI/WCAG22/Understanding/non-text-contrast.html).

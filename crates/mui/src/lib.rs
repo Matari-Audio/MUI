@@ -10,8 +10,8 @@ pub use mui_tessellate as tessellate;
 
 pub mod prelude {
     pub use mui_core::{
-        container, item, Color, Colors, Direction, Item, ItemInfo, ItemStyle, Mode, Palette, Rgb,
-        Rounding, Seeds, Spacing, SpacingScale, SpacingToken, StyleError, Theme, Ui,
+        container, item, Color, Colors, Contrast, Direction, Item, ItemInfo, ItemStyle, Mode,
+        Palette, Rgb, Rounding, Seeds, Spacing, SpacingScale, SpacingToken, StyleError, Theme, Ui,
     };
     pub use mui_layout::Flow::{Auto, Column, Grid, Overlay, Row};
     pub use mui_layout::Horizontal::{Center, Left, Right};

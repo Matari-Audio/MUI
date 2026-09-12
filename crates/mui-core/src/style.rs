@@ -42,6 +42,12 @@ impl From<SceneError> for StyleError {
     }
 }
 impl Ui {
+    pub fn resolved_styles(
+        &self,
+        hovered: Option<&str>,
+    ) -> Result<BTreeMap<&str, ItemStyle>, StyleError> {
+        self.styles(self.colors(), hovered)
+    }
     /// Use colors from this UI's theme. Cache until theme or hover target changes.
     /// Entries include item IDs and merged-outline IDs, ready for the renderer.
     /// Hover on any merged member changes the shared outline consistently.
@@ -91,15 +97,23 @@ impl Ui {
                     .or(paint.hover_color);
                 fill = Some(match override_color {
                     Some(c) => c.resolve(colors)?,
-                    None => normal.unwrap_or(backdrop).hovered(self.theme().mode),
+                    None => normal
+                        .unwrap_or(backdrop)
+                        .hovered_with(self.theme().mode, self.theme().hover_shift),
                 });
             }
             let background = fill.unwrap_or(backdrop);
-            let text = colors.text.contrast_on(&[background], 4.5)?;
+            let text = colors
+                .text
+                .contrast_on(&[background], self.theme().contrast.text)?;
             let stroke = paint
                 .stroke
                 .map(|(c, w)| {
-                    Ok::<_, StyleError>((c.resolve(colors)?.contrast_on(&[background], 3.)?, w))
+                    Ok::<_, StyleError>((
+                        c.resolve(colors)?
+                            .contrast_on(&[background, backdrop], self.theme().contrast.graphics)?,
+                        w,
+                    ))
                 })
                 .transpose()?;
             let style = ItemStyle {

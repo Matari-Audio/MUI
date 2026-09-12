@@ -20,4 +20,4 @@ pub use scene::{
     resolve_scene, resolve_scene_measured, CornerRule, Edge, Extension, FrameRadius, ResolvedScene,
     ResolvedSurface, SceneError, SceneSpec, SceneState, SurfaceSource, SurfaceSpec,
 };
-pub use theme::{CornerProfile, Spacing, SpacingScale, SpacingToken, Theme};
+pub use theme::{Contrast, CornerProfile, Spacing, SpacingScale, SpacingToken, Theme};

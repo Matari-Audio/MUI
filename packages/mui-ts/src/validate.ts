@@ -79,6 +79,8 @@ export function validateScene(scene: Scene): void {
     active.delete(id);if(d>128) fail("surface depth exceeded");done.set(id,d);return d;
   };
   for(const id of surfaces.keys()) depth(id);
+  if(scene.theme?.hoverShift !== undefined && (!Number.isFinite(scene.theme.hoverShift) || scene.theme.hoverShift<=0 || scene.theme.hoverShift>0.5)) fail("hoverShift must be in (0, 0.5]");
+  if(scene.theme?.contrast) { const c=scene.theme.contrast; if(!Number.isFinite(c.text)||c.text<4.5||c.text>21||!Number.isFinite(c.graphics)||c.graphics<3||c.graphics>21) fail("contrast must meet AA minimums"); }
   if(scene.theme?.mode && !["light","dark"].includes(scene.theme.mode)) fail("invalid theme mode");
   for(const colors of [scene.theme?.colors,scene.theme?.darkColors]) if(colors) {
     if(colors.primary.length!==3 || (colors.status && colors.status.length!==4)) fail("invalid palette size");

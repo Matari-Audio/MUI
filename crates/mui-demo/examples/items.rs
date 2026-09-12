@@ -100,6 +100,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 );
             }
         }
+        println!(
+            r#"<rect data-hover-target="filter" x="{}" y="{}" width="{}" height="{}" fill="none"/>"#,
+            f.x, f.y, f.size.width, f.size.height
+        );
         for (id, label, color_index) in [
             ("cutoff", "Cutoff", 0),
             ("resonance", "Resonance", 1),

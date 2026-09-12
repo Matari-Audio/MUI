@@ -71,6 +71,8 @@ export const outsetSurface = (id: string, parent: string, distance: Spacing): Su
 
 export interface ColorSeeds { primary: [number, number, number]; neutral: number; status?: [number, number, number, number] }
 export interface Theme {
+  contrast?: { text: number; graphics: number };
+  hoverShift?: number;
   mode?: "light" | "dark";
   colors?: ColorSeeds;
   darkColors?: ColorSeeds;
