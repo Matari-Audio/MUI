@@ -135,7 +135,10 @@ pub struct Node {
     minimum: Size,
     maximum: Option<Size>,
     grow: f64,
+    basis: Option<f64>,
+    shrink: f64,
     align: Align,
+    align_self: Option<Align>,
     justify: Justify,
 }
 impl Node {
@@ -148,7 +151,10 @@ impl Node {
             minimum: Size::default(),
             maximum: None,
             grow: 0.0,
+            basis: None,
+            shrink: 1.0,
             align: Align::Center,
+            align_self: None,
             justify: Justify::Start,
         }
     }
@@ -211,6 +217,32 @@ impl Node {
     }
     pub fn fill(mut self) -> Self {
         self.grow = 1.0;
+        self
+    }
+    /// Start from this main-axis size instead of the measured one, before any
+    /// growth or shrink. `basis(0.0)` is the only way to get equal *shares* of
+    /// an axis rather than equal shares of the surplus, which is what a
+    /// left/centre/right bar with differently sized ends needs: CSS
+    /// `flex-basis: 0`, and what `1fr` means.
+    pub fn basis(mut self, basis: f64) -> Self {
+        self.basis = Some(basis);
+        self
+    }
+    /// Weight for absorbing a deficit, scaled by basis the way flexbox scales
+    /// it. Defaults to 1, so a child compresses rather than overflowing;
+    /// `shrink(0.0)` opts out, and `minimum` is the floor either way.
+    pub fn shrink(mut self, weight: f64) -> Self {
+        self.shrink = weight;
+        self
+    }
+    /// `grow(weight).basis(0.0)`: an equal share of the axis per unit of
+    /// weight, regardless of what the child measured. CSS `flex: <weight>`.
+    pub fn flex(self, weight: f64) -> Self {
+        self.grow(weight).basis(0.0)
+    }
+    /// Override the parent's `align` for this child alone. CSS `align-self`.
+    pub fn align_self(mut self, align: Align) -> Self {
+        self.align_self = Some(align);
         self
     }
     pub fn align(mut self, align: Align) -> Self {
@@ -301,14 +333,35 @@ struct Measured<'a> {
     children: Vec<Measured<'a>>,
 }
 
+impl Measured<'_> {
+    /// Where this child starts before growth or shrink.
+    ///
+    /// `definite` is whether the parent was handed a main-axis length rather
+    /// than hugging its content. A `basis` claims a share of that length, so
+    /// it only means anything when there is one: a hugging row has no surplus
+    /// to share out, and honouring `basis(0.0)` there would collapse the row
+    /// to its non-flexible children and then squash the rest. Only the root of
+    /// a `resolve(.., None, ..)` is ever indefinite -- every other node has
+    /// been allocated a length by the time it is arranged.
+    fn base(&self, vertical: bool, definite: bool) -> f64 {
+        match self.node.basis {
+            Some(b) if definite => b,
+            _ => self.size.main(vertical),
+        }
+    }
+}
+
 fn validate_node(node: &Node, l: Limits) -> Result<(), Error> {
     if node.key.is_empty()
         || !node.minimum.valid(l.extent)
         || node.maximum.is_some_and(|s| !s.valid(l.extent))
         || !node.padding.valid(l.extent)
-        || ![node.gap, node.grow]
+        || ![node.gap, node.grow, node.shrink]
             .iter()
             .all(|v| v.is_finite() && *v >= 0.0 && *v <= l.extent)
+        || node
+            .basis
+            .is_some_and(|b| !(b.is_finite() && (0.0..=l.extent).contains(&b)))
     {
         return Err(Error::InvalidValue);
     }
@@ -387,32 +440,56 @@ fn measure<'a>(
     })
 }
 
-fn distribute_growth(m: &Measured<'_>, vertical: bool, inner_main: f64, base_gap: f64) -> Vec<f64> {
-    let mut allocated: Vec<f64> = m.children.iter().map(|c| c.size.main(vertical)).collect();
-    let used = allocated.iter().sum::<f64>() + base_gap * m.children.len().saturating_sub(1) as f64;
-    let mut free = (inner_main - used).max(0.0);
+/// Hand every child its main-axis size. Surplus goes out by `grow`; a deficit
+/// comes back by `shrink` scaled by basis, which is how flexbox weights it, and
+/// never takes a child below its declared `minimum`. Either way a child that
+/// can absorb no more is dropped from the pool and the remainder redistributes
+/// over the rest, which is what the outer loop is for.
+///
+/// Only one direction runs. A row that overflows never grew.
+fn distribute(
+    m: &Measured<'_>,
+    vertical: bool,
+    inner_main: f64,
+    base_gap: f64,
+    definite: bool,
+) -> Vec<f64> {
+    let base: Vec<f64> = m.children.iter().map(|c| c.base(vertical, definite)).collect();
+    let mut allocated = base.clone();
+    let gaps = base_gap * m.children.len().saturating_sub(1) as f64;
+    let mut free = inner_main - base.iter().sum::<f64>() - gaps;
+    let growing = free > 0.0;
+    let room = |i: usize, allocated: &[f64]| {
+        let c = &m.children[i];
+        let edge = if growing {
+            c.node.maximum.map_or(1e6, |s| s.main(vertical)) - allocated[i]
+        } else {
+            allocated[i] - c.node.minimum.main(vertical)
+        };
+        edge.max(0.0)
+    };
+    let weight = |i: usize| {
+        let c = &m.children[i];
+        if growing {
+            c.node.grow
+        } else {
+            c.node.shrink * base[i]
+        }
+    };
     for _ in 0..=m.children.len() {
-        let active: Vec<usize> = m
-            .children
-            .iter()
-            .enumerate()
-            .filter(|(i, c)| {
-                c.node.grow > 0.0
-                    && allocated[*i] + 1e-8 < c.node.maximum.map_or(1e6, |s| s.main(vertical))
-            })
-            .map(|(i, _)| i)
+        let active: Vec<usize> = (0..m.children.len())
+            .filter(|i| weight(*i) > 0.0 && room(*i, &allocated) > 1e-8)
             .collect();
-        let total = active.iter().map(|i| m.children[*i].node.grow).sum::<f64>();
-        if free < 1e-8 || total == 0.0 {
+        let total = active.iter().map(|i| weight(*i)).sum::<f64>();
+        if free.abs() < 1e-8 || total <= 0.0 {
             break;
         }
         let budget = free;
         for i in active {
-            let c = &m.children[i];
-            let cap = c.node.maximum.map_or(1e6, |s| s.main(vertical));
-            let extra = (budget * c.node.grow / total).min(cap - allocated[i]);
-            allocated[i] += extra;
-            free -= extra;
+            let limit = room(i, &allocated);
+            let delta = (budget * weight(i) / total).clamp(-limit, limit);
+            allocated[i] += delta;
+            free -= delta;
         }
     }
     allocated
@@ -422,10 +499,14 @@ fn arrange(
     m: &Measured<'_>,
     origin: [f64; 2],
     size: Size,
+    definite: bool,
     out: &mut BTreeMap<String, Frame>,
 ) -> Result<(), Error> {
     let n = m.node;
-    if size.width + 1e-8 < m.size.width || size.height + 1e-8 < m.size.height {
+    // The floor is what the node *declared*, not what it measured: a child is
+    // allowed to be squeezed below its content, that being the whole point of
+    // shrink, but never below the minimum its author asked for.
+    if size.width + 1e-8 < n.minimum.width || size.height + 1e-8 < n.minimum.height {
         return Err(Error::InsufficientSpace(n.key.clone()));
     }
     out.insert(
@@ -440,23 +521,24 @@ fn arrange(
         Kind::Leaf(_) => Ok(()),
         Kind::Overlay { .. } => {
             let inner = Size::new(
-                size.width - n.padding.horizontal(),
-                size.height - n.padding.vertical(),
+                (size.width - n.padding.horizontal()).max(0.0),
+                (size.height - n.padding.vertical()).max(0.0),
             );
             for c in &m.children {
                 let max = c.node.maximum.unwrap_or(Size::new(1e6, 1e6));
-                let w = if n.align == Align::Stretch {
+                let align = c.node.align_self.unwrap_or(n.align);
+                let w = if align == Align::Stretch {
                     inner.width.min(max.width)
                 } else {
                     c.size.width
                 };
-                let h = if n.align == Align::Stretch {
+                let h = if align == Align::Stretch {
                     inner.height.min(max.height)
                 } else {
                     c.size.height
                 };
                 let x = n.padding.left
-                    + match n.align {
+                    + match align {
                         Align::Center => (inner.width - w) * 0.5,
                         Align::End => inner.width - w,
                         _ => 0.0,
@@ -467,16 +549,16 @@ fn arrange(
                         Justify::End => inner.height - h,
                         _ => 0.0,
                     };
-                arrange(c, [origin[0] + x, origin[1] + y], Size::new(w, h), out)?;
+                arrange(c, [origin[0] + x, origin[1] + y], Size::new(w, h), true, out)?;
             }
             Ok(())
         }
         Kind::Stack { vertical, .. } => {
             let inner = Size::new(
-                size.width - n.padding.horizontal(),
-                size.height - n.padding.vertical(),
+                (size.width - n.padding.horizontal()).max(0.0),
+                (size.height - n.padding.vertical()).max(0.0),
             );
-            let allocated = distribute_growth(m, *vertical, inner.main(*vertical), n.gap);
+            let allocated = distribute(m, *vertical, inner.main(*vertical), n.gap, definite);
             let children_main = allocated.iter().sum::<f64>();
             let count = m.children.len();
             let nominal_gap = n.gap * count.saturating_sub(1) as f64;
@@ -494,14 +576,15 @@ fn arrange(
             for (i, c) in m.children.iter().enumerate() {
                 let available = inner.cross(*vertical);
                 let natural = c.size.cross(*vertical);
-                let cross = if n.align == Align::Stretch {
+                let align = c.node.align_self.unwrap_or(n.align);
+                let cross = if align == Align::Stretch {
                     available.min(c.node.maximum.map_or(available, |s| s.cross(*vertical)))
                 } else {
                     natural
                 };
                 let slack = (available - cross).max(0.0);
                 let cross_pos = n.padding.cross_start(*vertical)
-                    + match n.align {
+                    + match align {
                         Align::Center => slack * 0.5,
                         Align::End => slack,
                         _ => 0.0,
@@ -511,7 +594,7 @@ fn arrange(
                 } else {
                     [origin[0] + cursor, origin[1] + cross_pos]
                 };
-                arrange(c, pos, Size::axes(allocated[i], cross, *vertical), out)?;
+                arrange(c, pos, Size::axes(allocated[i], cross, *vertical), true, out)?;
                 cursor += allocated[i] + n.gap + extra_gap;
             }
             Ok(())
@@ -539,7 +622,7 @@ pub fn resolve(root: &Node, offered: Option<Size>, limits: Limits) -> Result<Lay
         return Err(Error::InsufficientSpace(root.key.clone()));
     }
     let mut frames = BTreeMap::new();
-    arrange(&m, [0.0, 0.0], size, &mut frames)?;
+    arrange(&m, [0.0, 0.0], size, offered.is_some(), &mut frames)?;
     Ok(Layout { size, frames })
 }
 
@@ -665,14 +748,108 @@ mod tests {
         ));
     }
     #[test]
-    fn insufficient_space() {
+    fn a_declared_minimum_is_the_floor_and_content_alone_is_not() {
+        // Content is squeezable; that is what shrink means.
+        let l = resolve(
+            &leaf("x", 100., 100.),
+            Some(Size::new(50., 50.)),
+            Default::default(),
+        )
+        .unwrap();
+        assert_eq!(l.frame("x").unwrap().size, Size::new(50., 50.));
+        // A minimum the author asked for is not.
         assert!(matches!(
             resolve(
-                &leaf("x", 100., 100.),
+                &leaf("x", 100., 100.).min_size(Size::new(100., 100.)),
                 Some(Size::new(50., 50.)),
                 Default::default()
             ),
             Err(Error::InsufficientSpace(_))
         ));
+    }
+
+    /// The left/centre/right bar. Ends of different widths -- 50 and 20 -- must
+    /// still leave the middle child centred on the *container*, which neither
+    /// `SpaceBetween` nor `grow` can do, because both hand out the surplus left
+    /// after intrinsic sizing and so inherit the ends' asymmetry.
+    #[test]
+    fn basis_zero_shares_the_axis_rather_than_the_surplus() {
+        let bar = |ends: Node| {
+            let l = resolve(&ends, Some(Size::new(400., 20.)), Default::default()).unwrap();
+            let m = l.frame("m").unwrap();
+            m.x + m.size.width / 2.
+        };
+        let slots = |shape: fn(Node) -> Node| {
+            Node::row(
+                "bar",
+                [
+                    shape(Node::row("l", [leaf("li", 50., 20.)])),
+                    leaf("m", 30., 20.),
+                    shape(Node::row("r", [leaf("ri", 20., 20.)]).justify(Justify::End)),
+                ],
+            )
+        };
+        assert_eq!(bar(slots(|n| n).justify(Justify::SpaceBetween)), 215.);
+        assert_eq!(bar(slots(|n| n.grow(1.))), 215.);
+        assert_eq!(bar(slots(|n| n.flex(1.))), 200.);
+
+        // ...and the ends still sit against the edges they belong to.
+        let l = resolve(
+            &slots(|n| n.flex(1.)),
+            Some(Size::new(400., 20.)),
+            Default::default(),
+        )
+        .unwrap();
+        assert_eq!(l.frame("li").unwrap().x, 0.);
+        assert_eq!(l.frame("ri").unwrap().right(), 400.);
+
+        // Hugging, there is no axis to take a share of, so `basis` stands down
+        // and every slot keeps its content. Honouring it here would collapse
+        // the row to the 30 px middle and squash both ends.
+        let hug = resolve(&slots(|n| n.flex(1.)), None, Default::default()).unwrap();
+        assert_eq!(hug.size.width, 100.);
+        assert_eq!(hug.frame("li").unwrap().size.width, 50.);
+        assert_eq!(hug.frame("ri").unwrap().size.width, 20.);
+    }
+
+    #[test]
+    fn a_deficit_comes_back_by_shrink_and_stops_at_each_minimum() {
+        let row = |a: Node, b: Node| {
+            let l = resolve(
+                &Node::row("r", [a, b]),
+                Some(Size::new(150., 20.)),
+                Default::default(),
+            )
+            .unwrap();
+            (l.frame("a").unwrap().size.width, l.frame("b").unwrap().size.width)
+        };
+        // Equal basis, equal shrink: the 50 px deficit splits evenly.
+        assert_eq!(row(leaf("a", 100., 20.), leaf("b", 100., 20.)), (75., 75.));
+        // `a` freezes at its minimum after giving up 10, and `b` absorbs the rest.
+        assert_eq!(
+            row(
+                leaf("a", 100., 20.).min_size(Size::new(90., 0.)),
+                leaf("b", 100., 20.)
+            ),
+            (90., 60.)
+        );
+        // `shrink(0.0)` opts out entirely.
+        assert_eq!(
+            row(leaf("a", 100., 20.).shrink(0.), leaf("b", 100., 20.)),
+            (100., 50.)
+        );
+    }
+
+    #[test]
+    fn align_self_overrides_the_parent_for_one_child() {
+        let l = resolve(
+            &Node::column("c", [leaf("a", 20., 10.), leaf("b", 20., 10.).align_self(Align::End)])
+                .align(Align::Start),
+            Some(Size::new(100., 20.)),
+            Default::default(),
+        )
+        .unwrap();
+        assert_eq!(l.frame("a").unwrap().x, 0.);
+        assert_eq!(l.frame("b").unwrap().x, 80.);
     }
 }

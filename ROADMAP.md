@@ -87,28 +87,35 @@ section exists to fix.
 
 ### Layout
 
-- [ ] **A basis, so a child can claim a share of the axis rather than a share
-      of the surplus.** `grow` distributes only what is left over after every
-      child's intrinsic size, which is CSS `flex-grow` with `flex-basis: auto`.
-      There is no way to say `flex: 1 1 0` -- the thing CSS Grid spells `1fr`
-      and Taffy's own helper spells `minmax(0, 1fr)` -- and that is what
-      "exactly evenly sized tracks" requires. It is also the missing piece
-      under the left/centre/right bar: with children of 50, 30 and 20 px in a
-      400 px row, both `SpaceBetween` and `grow(1)` side cells put the middle
-      child's centre at 215 rather than 200, out by half the asymmetry between
-      the outer two. Equal *shares* put it at 200.
-- [ ] **Shrink.** There is no negative free space. `distribute_growth` clamps
-      surplus at zero and `arrange` returns `InsufficientSpace` instead, so a
-      window dragged narrower than its content fails the whole layout rather
-      than compressing. Flexbox distributes the deficit by `flex-shrink`
-      scaled by basis, with an automatic content-based minimum.
-- [ ] **Per-child alignment.** `align` and `justify` live on the parent and
-      apply uniformly, so one child cannot be top-aligned while its sibling
-      hangs from the bottom. CSS calls the override `align-self`.
+- [x] `basis`, so a child can claim a share of the axis rather than a share of
+      the surplus -- CSS `flex-basis`, with `Node::flex(w)` as the
+      `grow(w).basis(0.0)` shorthand. This is what the left/centre/right bar
+      needed: with children of 50, 30 and 20 px in a 400 px row, both
+      `SpaceBetween` and `grow(1)` side cells put the middle child's centre at
+      215 rather than 200, out by exactly half the asymmetry between the outer
+      two. Equal shares put it at 200.
+- [x] `shrink`. A deficit now comes back weighted by `shrink` scaled by basis,
+      the way flexbox weights it, floored at each child's declared `minimum`;
+      a child that freezes at its floor drops out and the rest redistributes.
+      Previously surplus was clamped at zero and `arrange` returned
+      `InsufficientSpace`, so a window dragged narrower than its content failed
+      the whole layout rather than compressing. Default is 1, as in CSS.
+- [x] `align_self`, overriding the parent's `align` for one child.
+- [ ] The flex-fraction part of intrinsic sizing. `basis` stands down when a
+      node hugs its content, because a share of an axis means nothing until
+      there is an axis length to share, and honouring it there would collapse a
+      row to its non-flexible children. CSS instead sizes the container so
+      every flexible child still clears its content; that is a real algorithm
+      and this is the honest stopgap. Only the root of a `resolve(.., None, ..)`
+      is affected -- every other node has a length by the time it is arranged.
+- [ ] An automatic content-based minimum. CSS stops a flex item shrinking below
+      its min-content size; here `minimum` is the only floor, so a child that
+      does not declare one can be squeezed to nothing.
 - [ ] Fractional and percentage sizing. `Size` is absolute pixels.
 - [ ] Per-child margins, and the auto-margin idiom that goes with them. Note
-      that auto margins do *not* solve the centred bar either: they split free
-      space equally, which lands the middle child in the same wrong place.
+      that auto margins would not have solved the centred bar either: they
+      split free space equally, which lands the middle child in the same wrong
+      place that `SpaceBetween` does.
 - [ ] `SpaceAround` and `SpaceEvenly`. Same match arm as `SpaceBetween`.
 - [ ] `order`, so visual order can differ from document order.
 - [ ] Aspect-ratio constraints.
@@ -149,9 +156,9 @@ section exists to fix.
 
 ## Order
 
-Colour and derived roles first: it unblocks everything visual and deletes the
-constant block in the preview. Then text as a layout leaf, which is what makes
-the layout solver usable for real content. Then the `vello_cpu` adapter, since
-headless snapshot tests are what every later feature wants to be checked by.
-Then SVG import and a clock, which together are the Material Symbols goal that
-started this.
+`basis`, `shrink` and `align_self` are done. Next: colour and derived roles,
+which unblocks everything visual and deletes the constant block in the preview.
+Then text as a layout leaf, which is what makes the solver usable for real
+content. Then the `vello_cpu` adapter, since headless snapshot tests are what
+every later feature wants to be checked by. Then SVG import and a clock, which
+together are the Material Symbols goal that started this.
