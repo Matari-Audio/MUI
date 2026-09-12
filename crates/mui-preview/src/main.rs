@@ -18,6 +18,7 @@
 
 mod host;
 mod scenes;
+mod skin;
 mod ui;
 
 use std::sync::Arc;
@@ -320,7 +321,7 @@ impl App {
             ..
         } = self;
         let bounds = Bounds::new(0., 0., SIDEBAR * scale, size.1 as f64);
-        chrome.set_skin(ui::skin(*light));
+        chrome.set_skin(skin::skin(*light));
         let mut ui = chrome.column(bounds, *pointer, typed.take(), scale);
         ui.label("MUI preview");
         ui.note("mui-layout places, mui-core merges, vello draws");
@@ -381,7 +382,7 @@ impl App {
         let origin = self.origin(size, scale);
         let gpu = self.gpu.as_mut().expect("checked just above");
         let scene = gpu.begin();
-        let skin = ui::skin(self.light);
+        let skin = skin::skin(self.light);
         scene.set_paint(skin.layer(-2).to_srgb());
         scene.fill_rect(&vello_common::kurbo::Rect::new(
             0.,

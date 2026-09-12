@@ -37,7 +37,7 @@ There are two different semantics:
 
 ### Styling relationship
 
-```rust
+```rust,ignore
 Radius::ParentNormalized {
     parent: "card".into(),
     scale: 1.0,
@@ -48,7 +48,7 @@ This gives a child the same dimensionless visual roundness (`radius / short_side
 
 ### Geometric relationship
 
-```rust
+```rust,ignore
 SurfaceSpec::inset("pill-shell", "tab", Spacing::px(12.0))
 ```
 
@@ -96,7 +96,7 @@ let scene = SceneSpec::new(root)
     .surface(SurfaceSpec::merge("outer", ["panel", "tab"]))
     .surface(SurfaceSpec::inset("pill-shell", "tab", Spacing::px(12.0)));
 
-let resolved = mui_core::resolve_scene(&scene)?;
+let resolved = mui_core::resolve_scene(&scene).expect("the scene resolves");
 ```
 
 No pixel Y positions are needed for the controls. Their column sizes the pill content, the pill sizes the tab, and the tab/parent geometry resolves afterward.
@@ -195,6 +195,55 @@ skin.with_mode(Mode::Light);    // the whole theme switch
 skin.primary().to_srgb();       // gamut-mapped, ready to paint
 ```
 
+### Where a theme lives
+
+One file, one `const`. `Theme::DEFAULT` exists so it can be a `const` -- state
+what differs, spread the rest, and the fields you did not mention keep tracking
+the crate instead of drifting from it silently.
+
+```rust
+// src/skin.rs -- the only place in the application where a colour is chosen.
+use mui_core::{CornerProfile, Mode, Palette, Pigment, Theme};
+
+pub const SKIN: Theme = Theme {
+    palette: Palette {
+        neutral: Pigment::new(264.0, 0.015),  // a faintly cool grey
+        primary: Pigment::new(242.0, 0.131),
+        secondary: Pigment::new(310.0, 0.120),
+        tertiary: Pigment::new(190.0, 0.110),
+        step: 0.045,   // one layer's depth
+        hover: 0.11,   // what the pointer adds
+        ..Palette::NEUTRAL
+    },
+    corners: CornerProfile::new(28.0, 32.0),
+    ..Theme::DEFAULT
+};
+
+pub fn skin(light: bool) -> Palette {
+    SKIN.palette.with_mode(if light { Mode::Light } else { Mode::Dark })
+}
+```
+
+There is no light-theme half to that file, because there is nothing in it a
+mode could contradict. `crates/mui-preview/src/skin.rs` is exactly this file,
+and the gallery's "light theme" checkbox is the only other thing involved.
+
+If you author scenes in TypeScript, the same file is an object and the compiler
+emits the `const` for you:
+
+```ts
+// examples/skin.ts
+import type { Theme } from "@matari/mui";
+
+export const skin: Theme = {
+  corners: { convex: 28, concave: 32 },
+  palette: { primary: [242, 0.131], step: 0.045, hover: 0.11 },
+};
+```
+
+Which of the two you author in is a build decision, not a design one -- the
+shape is deliberately the same.
+
 ### What the neutrals are allowed to do
 
 `layer(n)` is `ground + n * step`, walking toward the ink for positive levels
@@ -220,6 +269,9 @@ One step is a **depth cue, not an accessibility boundary** -- adjacent layers
 land near 1.15:1. The palette says so rather than implying otherwise:
 
 ```rust
+use mui_core::Palette;
+let skin = Palette::NEUTRAL;
+
 skin.separation(0, 2);                     // what "raised" is actually worth
 skin.levels_for(Palette::UI_NONTEXT);      // where 1.4.11's 3:1 really is
 ```
@@ -292,7 +344,7 @@ The public authoring model is owned by MUI, so Taffy or another solver can still
 `mui-text` turns a glyph into a `mui_geometry::Path` — the same type every
 surface is made of — rather than into a texture:
 
-```rust
+```rust,ignore
 let path = mui_text::glyph_path(font_bytes, 'a', 220.0, &[("wght", 700.0)], 0.05)?;
 ```
 
@@ -329,14 +381,14 @@ widgets routed by `mui-input`, deliberately *not* a `SceneSpec`, so a resolver
 regression cannot take the chrome down with it. Hover lightens a control, press
 takes the accent, and dragging the stage moves the specimen.
 
-```
+```bash
 cargo run -p mui-preview
 ```
 
 For the edit-and-watch loop, [bacon](https://dystroy.org/bacon/) rebuilds and
 relaunches the window on every save:
 
-```
+```bash
 bacon
 ```
 
@@ -366,7 +418,7 @@ is the whole of the seam: one function that turns a resolved `mui_geometry::Path
 into a `kurbo::BezPath`, arcs kept as arcs and handed over as cubics rather than
 flattened to a polyline.
 
-```
+```bash
 cargo run -p mui-vello --example headless -- /tmp/pill.png
 ```
 

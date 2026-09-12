@@ -12,7 +12,8 @@
 use std::ops::RangeInclusive;
 use std::sync::Arc;
 
-use mui_core::{Color, Mode, Palette, Pigment};
+use crate::skin::SKIN;
+use mui_core::{Color, Palette};
 use mui_geometry::{Bounds, Path, Point, RoundedRect};
 use mui_input::{Hit, Interaction, PointerInput, Response};
 use mui_text::TextRun;
@@ -21,37 +22,6 @@ use vello_common::peniko::color::AlphaColor;
 
 pub type Rgba = AlphaColor<vello_common::peniko::color::Srgb>;
 
-/// Two hues. Every other colour this file paints -- every surface, every ink,
-/// every hover, and the whole light theme -- is derived from them, so there is
-/// no second table of literals to keep in step with this one.
-///
-/// A [`Pigment`] carries no lightness on purpose: lightness is what [`Mode`]
-/// assigns, which is why the same declaration serves both themes.
-pub const SKIN: Palette = Palette {
-    neutral: Pigment::new(264.0, 0.015),
-    primary: Pigment::new(242.0, 0.131),
-    secondary: Pigment::new(310.0, 0.120),
-    tertiary: Pigment::new(190.0, 0.110),
-    ..Palette::NEUTRAL
-};
-
-/// The gallery's skin, lit whichever way the sidebar checkbox says.
-pub fn skin(light: bool) -> Palette {
-    SKIN.with_mode(if light { Mode::Light } else { Mode::Dark })
-}
-
-/// Where a control rests when nothing is happening to it. Raised things sit
-/// above the panel; recessed things -- list rows, a slider track, a field --
-/// sit below it, so the panel reads as the ground between them.
-const RAISED: i32 = 3;
-const RECESSED: i32 = -1;
-
-/// What the pointer is doing to a control, applied to whatever colour its own
-/// state says it rests at. Every widget below uses this instead of its own
-/// table of state combinations.
-///
-/// A press only counts while the pointer is still over the widget: a press
-/// dragged off is no longer a click, so it must stop looking like one.
 /// Logical points. Physical pixels are these times the device scale.
 const PAD: f64 = 12.0;
 const ROW: f64 = 24.0;
@@ -138,7 +108,7 @@ impl Chrome {
             font,
             scroll: 0.0,
             content: 0.0,
-            skin: SKIN,
+            skin: SKIN.palette,
         }
     }
 
@@ -451,7 +421,7 @@ impl Ui<'_> {
         self.rect(
             Bounds::new(x0, y, x1, y + thickness),
             0.0,
-            self.skin.layer(RAISED).to_srgb(),
+            self.skin.raised().to_srgb(),
         );
         self.advance(thickness);
     }
@@ -462,7 +432,7 @@ impl Ui<'_> {
             return false;
         };
         let (x0, x1, y) = (b.min.x, b.max.x, b.min.y);
-        let fill = self.fill_for(self.skin.layer(RAISED), &r);
+        let fill = self.fill_for(self.skin.raised(), &r);
         self.paint.push((path, fill.to_srgb()));
         if let Some(run) = self.run(text, self.px(TEXT_SIZE), x1 - x0) {
             let x = x0 + ((x1 - x0) - run.advance) / 2.0;
@@ -487,7 +457,7 @@ impl Ui<'_> {
             if selected {
                 self.skin.primary()
             } else {
-                self.skin.layer(RECESSED)
+                self.skin.field()
             },
             &r,
         );
@@ -520,7 +490,7 @@ impl Ui<'_> {
             if *on {
                 self.skin.primary()
             } else {
-                self.skin.layer(RECESSED)
+                self.skin.field()
             },
             &r,
         );
@@ -587,7 +557,7 @@ impl Ui<'_> {
         self.rect(
             Bounds::new(x0, track_y, x1, track_y + track_h),
             track_h / 2.0,
-            self.skin.layer(RECESSED).to_srgb(),
+            self.skin.field().to_srgb(),
         );
         let filled = t0 + (t1 - t0) * t;
         // The knob and the filled track are one control, so they share a
@@ -667,7 +637,7 @@ impl Ui<'_> {
             if focused {
                 self.skin.primary()
             } else {
-                self.skin.layer(RECESSED)
+                self.skin.field()
             },
             &r,
         );
@@ -703,6 +673,7 @@ impl Ui<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::skin::skin;
 
     fn chrome() -> Chrome {
         Chrome::new(Arc::new(epaint_default_fonts::HACK_REGULAR.to_vec()))
@@ -969,8 +940,8 @@ mod tests {
         };
         let unselected = label(&mut chrome, false);
         let selected = label(&mut chrome, true);
-        assert_eq!(unselected, SKIN.on(SKIN.layer(RECESSED)).to_srgb());
-        assert_eq!(selected, SKIN.on(SKIN.primary()).to_srgb());
+        assert_eq!(unselected, skin(false).on(skin(false).field()).to_srgb());
+        assert_eq!(selected, skin(false).on(skin(false).primary()).to_srgb());
         assert_ne!(
             selected, unselected,
             "the label did not flip when the ground under it did"
@@ -1004,10 +975,10 @@ mod tests {
                 primary_down: true,
             },
         );
-        let rest = SKIN.layer(RAISED);
+        let rest = skin(false).raised();
         assert_eq!(
             held,
-            SKIN.pressed(rest).to_srgb(),
+            skin(false).pressed(rest).to_srgb(),
             "a press on the button did not light it"
         );
         assert_eq!(

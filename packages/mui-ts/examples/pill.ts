@@ -2,16 +2,10 @@ import {
   column, corners, defineScene, frameSurface, insetSurface, leaf,
   mergeSurface, px,
 } from "../src/index.js";
+import { skin } from "./skin.js";
 
 export default defineScene({
-  theme: {
-    corners: { convex: 28, concave: 32 },
-    spacing: { xs: 4, s: 8, m: 12, l: 18, xl: 28 },
-    // Only what differs from the default: everything else -- hover, pressed,
-    // dimmed ink, every surface layer -- is derived from these.
-    palette: { primary: [242, 0.131], step: 0.045, hover: 0.11 },
-    strokeWidth: 1.5,
-  },
+  theme: skin,
 
   root: column([
     column([

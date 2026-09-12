@@ -132,6 +132,24 @@ bisection.
       background until it does, saturating at black or white. `on` and `dim`
       go through it at `AA_TEXT`, so every ink role clears 4.5:1 on every
       layer of both themes, and a test sweeps that rather than trusting it.
+- [x] One file, one `const`. `Theme::DEFAULT` -- and the same on
+      `CornerProfile` and `SpacingScale` -- exists so an application can write
+      `Theme { ..what differs.., ..Theme::DEFAULT }` in a `const`, which
+      `Default::default()` cannot be. An application's theme is then one
+      module that states only its taste: `crates/mui-preview/src/skin.rs` in
+      Rust, `packages/mui-ts/examples/skin.ts` in TypeScript, deliberately the
+      same shape, so which one you author in is a build decision rather than a
+      design one. The preview's skin used to sit halfway down `ui.rs` next to
+      widget code; it does not any more, and a test there checks the brand
+      roles were actually declared.
+- [x] The README's Rust blocks are compiled. `#[cfg(doctest)] #[doc =
+      include_str!]` on the `mui` facade runs every one under `cargo test
+      --doc`, so a colour claim in prose fails the build when it stops being
+      true.
+- [ ] A theme loaded at runtime. `Palette` and `Theme` are plain data and
+      would take `serde` in a line, but nothing reads a file yet; a plugin
+      that wants to re-skin without a rebuild -- and the hot-reload goal
+      generally -- needs that and a watcher.
 - [ ] APCA. WCAG 2.1 is the standard an audit measures against, so it is what
       ships, but it is known to be poorly calibrated on dark grounds -- it
       over-credits dark-on-dark. APCA is the WCAG 3 draft replacement and is
