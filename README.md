@@ -19,7 +19,7 @@ The whole workspace, including the egui adapter, compiles to `wasm32-unknown-unk
 
 - `mui-layout`: small intrinsic row/column/overlay solver with hug-content sizing, padding, gaps, alignment, justification, min/max, weighted growth, validation and transactional state.
 - `mui-geometry`: Boolean union/intersection/difference/XOR, adaptive convex/concave fillets, exact rounded-rectangle inset/outset, general parallel path offsets, holes, topology cleanup and validation.
-- `mui-core`: layout + surface dependency resolver. A surface can be a layout frame, a Boolean merge, or a parallel inset/outset of another resolved surface.
+- `mui-core`: layout + surface dependency resolver, plus the theme and its Oklch palette. A surface can be a layout frame, a Boolean merge, or a parallel inset/outset of another resolved surface.
 - `mui-tessellate`: renderer-independent path -> triangle mesh adapter using Lyon.
 - `mui-text`: glyph and string outlines from a variable font, as paths in the same space as every other surface. Nothing reorders or substitutes; there is no atlas.
 - `mui-input`: pointer hit testing over paths, with press capture, hover, click and drag.
@@ -107,7 +107,10 @@ No pixel Y positions are needed for the controls. Their column sizes the pill co
 
 ```ts
 export default defineScene({
-  theme: { corners: { convex: 28, concave: 32 } },
+  theme: {
+    corners: { convex: 28, concave: 32 },
+    palette: { accent: [0.752, 0.131, 242], step: 0.045, hover: 0.11 },
+  },
 
   root: column([
     column([
@@ -141,6 +144,41 @@ ui.ts
   -> generated Rust builders / future compact IR
   -> MUI Rust core
 ```
+
+## Colour
+
+A theme carries a `Palette`: four colours -- surface, accent, ink, error -- and
+two steps. Everything else is derived.
+
+```rust
+use mui_core::{Color, Palette};
+
+let skin = Palette::DARK;
+
+skin.layer(3);            // a raised control: three perceptual steps off the ground
+skin.layer(-1);           // a recessed well: a list row, a slider track, a field
+skin.hover(skin.accent);  // what the pointer does to it
+skin.pressed(skin.accent);
+skin.disabled(skin.accent);
+skin.on(skin.layer(3));   // ink that reads on that fill
+skin.ink_dim();           // a secondary label
+
+Color::oklch(0.752, 0.131, 242.0).to_srgb();  // gamut-mapped, ready to paint
+```
+
+Colours are Oklch because every derivation above is a move in lightness or
+chroma, and only a perceptual space makes the same move look the same on every
+hue: nudging sRGB channels lightens a yellow and barely touches a blue. A light
+theme is `step` and `hover` negated and two colours swapped -- not a second
+table of literals to keep in step with the first. `on` picks whichever of ink
+and surface sits further from the background in perceptual lightness, so the
+flip stays legible.
+
+`to_srgb` gamut-maps by CSS Color 4 13.2: hold lightness and hue, bisect chroma
+down until the clipped result is within a just-noticeable difference. The
+`color` crate deliberately ships only per-component clipping, which its own docs
+call perceptually poor -- lifting the accent by 0.15 L and clipping swings its
+hue 27.5 degrees toward cyan, where bisection holds it to 7.3.
 
 ## Scene geometry rules
 

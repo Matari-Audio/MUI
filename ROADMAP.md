@@ -72,18 +72,36 @@ two ever disagree, this one is wrong and should be corrected from the code.
 
 ### Colour and derived styling
 
-The largest gap. `Theme` today is corners, spacing and one stroke width; there
-is no colour type anywhere in the library. Every colour in the gallery is a
-hardcoded constant in `crates/mui-preview/src/ui.rs`, and the fact that
-`ACCENT` and `ACCENT_LIT` are both written out by hand is the symptom this
-section exists to fix.
+`Theme` carries a `Palette`: four colours -- surface, accent, ink, error --
+and two steps. Everything else is derived from them, so a light theme is
+`step` and `hover` negated and two colours swapped, not a second table of
+literals to keep in step with the first.
 
-- [ ] A colour type and named roles (surface, on-surface, accent, error) in
-      `Theme`.
-- [ ] Derived states: hover, pressed and disabled computed from a base colour
-      instead of enumerated. `peniko`'s `color` already ships Oklch, so the
-      perceptual step costs a dependency we have.
-- [ ] Elevation tint, light/dark pairing, contrast guarantees.
+Colour is Oklch because every derivation here is a move in lightness or
+chroma, and only a perceptual space makes the same move look the same on
+every hue. The `color` crate supplies the space; it adds no crates to the
+graph, since vello already pulls it in through peniko. It has no gamut
+mapping -- only per-component clipping, which its own docs call perceptually
+poor -- so CSS Color 4 13.2 bisection lives in `mui-core`. Measured: a +0.15 L
+lift on the accent swings hue -27.5 degrees under clipping and -7.3 under
+bisection.
+
+- [x] A colour type and named roles (surface, accent, ink, error) in `Theme`.
+- [x] Derived states: `hover`, `pressed`, `disabled` and `on` computed from a
+      base colour instead of enumerated. The nine hand-typed constants in
+      `crates/mui-preview/src/ui.rs` became one `Palette::DARK`, and each
+      widget's state table became one `lift(base, &response)` call.
+- [x] Elevation as `layer(level)`: one perceptual step per layer off the
+      surface, so a raised control and a recessed well are a number rather
+      than two more constants.
+- [x] Light/dark pairing by construction. `step` and `hover` carry the sign,
+      and `on(bg)` picks whichever of ink and surface sits further from `bg`
+      in perceptual lightness, so legibility survives the flip.
+- [ ] Contrast guarantees -- `on` picks the further of two, which is not the
+      same as clearing a WCAG or APCA ratio.
+- [ ] A palette on the wire is only the four colours and two steps; a theme
+      that wants an off-palette colour (the preview's debug frame overlay) has
+      nowhere to put it.
 - [ ] A `Style` binding a surface to its fill, stroke and radius rule, so a
       scene is styled once rather than at every draw call.
 - [ ] Per-surface stroke width. There is currently one global number.
@@ -172,9 +190,7 @@ section exists to fix.
 
 ## Order
 
-`basis`, `shrink` and `align_self` are done. Next: colour and derived roles,
-which unblocks everything visual and deletes the constant block in the preview.
-Then text as a layout leaf, which is what makes the solver usable for real
-content. Then the `vello_cpu` adapter, since headless snapshot tests are what
+`basis`, `shrink`, `align_self` and colour are done. Next: text as a layout
+leaf, which is what makes the solver usable for real content. Then the `vello_cpu` adapter, since headless snapshot tests are what
 every later feature wants to be checked by. Then SVG import and a clock, which
 together are the Material Symbols goal that started this.
