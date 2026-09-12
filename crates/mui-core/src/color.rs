@@ -258,12 +258,18 @@ pub struct Palette {
 }
 
 impl Palette {
-    /// The preview gallery's palette, measured off the hand-picked sRGB
-    /// constants it used to carry.
-    pub const DARK: Self = Self {
-        surface: Color::oklch(0.260, 0.015, 264.0),
-        accent: Color::oklch(0.752, 0.131, 242.0),
-        ink: Color::oklch(0.922, 0.015, 264.0),
+    /// A working palette with no taste in it: greys, and the one red that
+    /// "error" means everywhere. It exists so `Theme::default()` produces
+    /// something legible and usable, not so anyone ships it.
+    ///
+    /// The accent is grey on purpose. Which colour is *yours* is the one
+    /// decision a layout library has no business making, so selection and
+    /// focus read here by lightness alone until an application says
+    /// otherwise -- `Palette { accent: .., ..Palette::NEUTRAL }`.
+    pub const NEUTRAL: Self = Self {
+        surface: Color::oklch(0.260, 0.0, 0.0),
+        accent: Color::oklch(0.650, 0.0, 0.0),
+        ink: Color::oklch(0.922, 0.0, 0.0),
         error: Color::oklch(0.633, 0.164, 23.0),
         step: 0.045,
         hover: 0.11,
@@ -281,7 +287,7 @@ impl Palette {
 
 impl Default for Palette {
     fn default() -> Self {
-        Self::DARK
+        Self::NEUTRAL
     }
 }
 
@@ -350,15 +356,21 @@ impl Palette {
 mod tests {
     use super::*;
 
-    /// The palette this replaced was hand-tuned by eye, and its "lit accent"
-    /// was a separate sRGB literal. Lightening the accent by the lift the
-    /// designer actually used lands on that literal to within a rounding step
-    /// of 8-bit sRGB -- which is the evidence that a lightness move in Oklch
-    /// plus gamut mapping is what they were doing by hand.
-    ///
-    /// `Palette::DARK` uses a slightly larger lift than this, because it has
-    /// to serve greys as well, so it is set here rather than taken from the
-    /// default.
+    /// The preview gallery's palette, measured off the hand-picked sRGB
+    /// constants it used to carry. Tests need real chroma -- a greyscale
+    /// palette cannot show that a hue survived a lightness move -- so the
+    /// taste lives here rather than in the crate's default.
+    fn designed() -> Palette {
+        Palette {
+            surface: Color::oklch(0.260, 0.015, 264.0),
+            accent: Color::oklch(0.752, 0.131, 242.0),
+            ink: Color::oklch(0.922, 0.015, 264.0),
+            error: Color::oklch(0.633, 0.164, 23.0),
+            step: 0.045,
+            hover: 0.11,
+        }
+    }
+
     /// A light theme is the dark one with two colours swapped and both steps
     /// negated. Nothing else is restated, which is the claim these tests check.
     fn light() -> Palette {
@@ -367,15 +379,24 @@ mod tests {
             ink: Color::oklch(0.20, 0.010, 264.0),
             step: -0.045,
             hover: -0.11,
-            ..Palette::DARK
+            ..designed()
         }
     }
 
+    /// The palette this replaced was hand-tuned by eye, and its "lit accent"
+    /// was a separate sRGB literal. Lightening the accent by the lift the
+    /// designer actually used lands on that literal to within a rounding step
+    /// of 8-bit sRGB -- which is the evidence that a lightness move in Oklch
+    /// plus gamut mapping is what they were doing by hand.
+    ///
+    /// `designed()` uses a slightly larger lift than this, because it has
+    /// to serve greys as well, so it is set here rather than taken from the
+    /// default.
     #[test]
     fn hover_reproduces_the_hand_tuned_lit_accent() {
         let p = Palette {
             hover: 0.087,
-            ..Palette::DARK
+            ..designed()
         };
         let got = p.hover(p.accent).to_srgb().components;
         let want = [0.56, 0.83, 1.00];
@@ -391,7 +412,7 @@ mod tests {
     /// accent toward cyan; holding hue costs chroma instead.
     #[test]
     fn gamut_mapping_holds_hue_where_clipping_does_not() {
-        let accent = Palette::default().accent;
+        let accent = designed().accent;
         let want = accent.lighten(0.15);
         let naive = Srgb::clip(Oklch::convert::<Srgb>([
             want.lightness(),
@@ -423,7 +444,7 @@ mod tests {
 
     #[test]
     fn alpha_survives_every_derivation() {
-        let p = Palette::default();
+        let p = designed();
         let c = p.accent.with_alpha(0.4);
         for got in [p.hover(c), p.pressed(c), p.disabled(c)] {
             assert!((got.alpha() - 0.4).abs() < 1e-6, "alpha lost: {got:?}");
@@ -435,7 +456,7 @@ mod tests {
 
     #[test]
     fn layers_climb_on_a_dark_theme_and_sink_on_a_light_one() {
-        let dark = Palette::default();
+        let dark = designed();
         assert!(dark.layer(-1).lightness() < dark.layer(0).lightness());
         assert!(dark.layer(0).lightness() < dark.layer(3).lightness());
 
@@ -450,7 +471,7 @@ mod tests {
     /// paints notes.
     #[test]
     fn every_ink_role_clears_aa_on_every_layer() {
-        for p in [Palette::DARK, light()] {
+        for p in [Palette::NEUTRAL, designed(), light()] {
             for level in -2..=4 {
                 let bg = p.layer(level);
                 for (role, fg) in [("on", p.on(bg)), ("dim", p.dim(bg))] {
@@ -472,14 +493,14 @@ mod tests {
     /// would just return `on` and the distinction would be a lie.
     #[test]
     fn dim_is_visibly_dimmer_where_there_is_room_for_it() {
-        let p = Palette::DARK;
+        let p = designed();
         let bg = p.layer(0);
         assert!(p.dim(bg).lightness() < p.on(bg).lightness() - 0.05);
     }
 
     #[test]
     fn readable_moves_lightness_and_leaves_hue_alone() {
-        let p = Palette::DARK;
+        let p = designed();
         let bg = p.layer(0);
         // Deliberately illegible: the error red measures 4.16:1 on the ground.
         let fixed = p.error.readable_on(bg, Palette::AA_TEXT);
@@ -517,7 +538,7 @@ mod tests {
     /// One `on` rule has to serve both a dark ground and a light accent.
     #[test]
     fn ink_flips_to_stay_legible() {
-        let p = Palette::default();
+        let p = designed();
         assert_eq!(p.on(p.surface), p.ink, "dark ground wants the light ink");
         assert_eq!(
             p.on(p.accent),
@@ -528,7 +549,7 @@ mod tests {
 
     #[test]
     fn a_disabled_control_is_duller_and_closer_to_the_ground() {
-        let p = Palette::default();
+        let p = designed();
         let off = p.disabled(p.accent);
         assert!(off.chroma() < p.accent.chroma() * 0.3);
         let toward_ground = (off.lightness() - p.surface.lightness()).abs();

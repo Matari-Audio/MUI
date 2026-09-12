@@ -150,10 +150,19 @@ ui.ts
 A theme carries a `Palette`: four colours -- surface, accent, ink, error -- and
 two steps. Everything else is derived.
 
+`Palette::NEUTRAL` is the default and is deliberately tasteless: greys, plus the
+one red that "error" means everywhere. Its accent is grey too, because which
+colour is *yours* is the one decision a layout library has no business making.
+An application declares what differs and inherits the rest.
+
 ```rust
 use mui_core::{Color, Palette};
 
-let skin = Palette::DARK;
+// The crate ships greys and one red; which colour is yours is your decision.
+let skin = Palette {
+    accent: Color::oklch(0.752, 0.131, 242.0),
+    ..Palette::NEUTRAL
+};
 
 skin.layer(3);            // a raised control: three perceptual steps off the ground
 skin.layer(-1);           // a recessed well: a list row, a slider track, a field

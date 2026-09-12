@@ -33,7 +33,7 @@ pub fn generated_scene() -> mui_core::SceneSpec {
             accent: mui_core::Color::oklch(0.752, 0.131, 242.0),
             step: 0.045,
             hover: 0.11,
-            ..mui_core::Palette::DARK
+            ..mui_core::Palette::NEUTRAL
         },
         stroke_width: 1.5,
     };

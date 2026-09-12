@@ -62,7 +62,7 @@ function surface(v: Surface): string {
     case "outset": return `mui_core::SurfaceSpec::outset(${q(v.id)}, ${q(v.parent)}, ${spacing(v.distance)})`;
   }
 }
-/// Unstated fields fall through to `Palette::DARK` rather than being restated
+/// Unstated fields fall through to `Palette::NEUTRAL` rather than being restated
 /// here, so the two sides cannot drift.
 function palette(p: Palette): string {
   const c = (v: Oklch) => v.length === 4
@@ -77,7 +77,7 @@ function palette(p: Palette): string {
     const v = p[k];
     if (v !== undefined) fields.push(`${k}: ${n(v)}`);
   }
-  return `mui_core::Palette { ${fields.join(", ")}${fields.length ? ", " : ""}..mui_core::Palette::DARK }`;
+  return `mui_core::Palette { ${fields.join(", ")}${fields.length ? ", " : ""}..mui_core::Palette::NEUTRAL }`;
 }
 
 function compile(scene: Scene): string {

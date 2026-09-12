@@ -24,15 +24,22 @@ pub type Rgba = AlphaColor<vello_common::peniko::color::Srgb>;
 /// Four colours and two steps. Every other colour this file paints is derived
 /// from them, so a light theme is `step` and `hover` negated and two colours
 /// swapped -- not a second table of literals to keep in step with this one.
-pub const SKIN: Palette = Palette::DARK;
+pub const SKIN: Palette = Palette {
+    surface: Color::oklch(0.260, 0.015, 264.0),
+    accent: Color::oklch(0.752, 0.131, 242.0),
+    ink: Color::oklch(0.922, 0.015, 264.0),
+    error: Color::oklch(0.633, 0.164, 23.0),
+    step: 0.045,
+    hover: 0.11,
+};
 
-/// Where a control rests when nothing is happening to it. Raised things sit
-/// above the panel; recessed things -- list rows, a slider track, a field --
-/// sit below it, so the panel reads as the ground between them.
 /// What every text row in this gallery paints on: the panel's own fill. The
 /// ink roles need it, because legibility is a property of a pair.
 const GROUND: Color = SKIN.surface;
 
+/// Where a control rests when nothing is happening to it. Raised things sit
+/// above the panel; recessed things -- list rows, a slider track, a field --
+/// sit below it, so the panel reads as the ground between them.
 const RAISED: i32 = 3;
 const RECESSED: i32 = -1;
 

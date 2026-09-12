@@ -87,6 +87,10 @@ lift on the accent swings hue -27.5 degrees under clipping and -7.3 under
 bisection.
 
 - [x] A colour type and named roles (surface, accent, ink, error) in `Theme`.
+      The crate ships the mechanism and one tasteless default,
+      `Palette::NEUTRAL` -- greys and the one red that "error" means
+      everywhere. Specific colours belong to the application; the preview
+      gallery carries its own.
 - [x] Derived states: `hover`, `pressed`, `disabled` and `on` computed from a
       base colour instead of enumerated. The nine hand-typed constants in
       `crates/mui-preview/src/ui.rs` became one `Palette::DARK`, and each
