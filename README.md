@@ -171,6 +171,43 @@ References resolve in the current scope; a leading `/` explicitly addresses the 
 (e.g. `.extend_to("/panel")`). Anonymous container identities depend on tree position;
 explicitly name dynamic lists. User IDs cannot contain `/` or begin with `@`.
 
+## Automatic hover colors
+
+```rust
+item("filter").text("Filter").on_tap("select-filter")
+```
+
+Clickable items are automatically hoverable. Use `.hoverable()` for hover feedback
+without a click action. No hover color or event handler is required on each item.
+By default, hover darkens in light mode and brightens in dark mode using an OKLab tone
+shift. Near black/white endpoints the shift reverses if necessary to remain visible.
+Transparent items inherit their parent's effective fill (canvas at the root) and get
+an opaque hover fill. `.hover_color(Color::PrimarySoft(0))` provides an explicit override.
+
+The host supplies the pointer in scene coordinates and draws resolved styles:
+
+```rust
+let colors = ui.theme().colors()?; // Cache for this theme.
+let hovered = ui.hover_at(&scene, pointer_x, pointer_y);
+let styles = ui.styles(&colors, hovered)?; // Cache until the hover target changes.
+// For each outline: styles[outline.id.as_str()].fill / stroke.
+// For each text item: styles[item_id].text.
+```
+
+The renderer must consume these styles; raw `ItemInfo.color` is only the authored seed.
+Text is corrected to at least 4.5:1 against its effective background in both states;
+strokes are corrected to 3:1. Descendants of a hovered fill inherit the changed background.
+Merged members share one hover color, even when the hovered member is not the first member.
+Declare merges on a common ancestor of their members. Hover uses the same original bounds
+as tapping, and hovering alone never dispatches an action. A hover-only item blocks taps
+through to a clickable ancestor. The host still applies clipping and gesture recognition.
+
+Normal and hover previews are generated from the same Rust example:
+[normal](docs/items.svg), [hover on Filter](docs/items-hover.svg).
+`cargo run -p mui-demo --example items -- --hover > docs/items-hover.svg` reproduces hover.
+Opaque fills are assumed; images, transparency, overlapping unrelated layers and renderer
+composition require the host to supply an appropriate contrast policy.
+
 ## Themes and contrast
 
 `Theme` shares one spacing scale between layout and geometry, plus a `Palette` with
@@ -254,7 +291,7 @@ npm --prefix packages/mui-ts ci
 
 Verification checks formatting, native tests, Clippy with warnings denied, WASM compilation,
 TypeScript tests, deterministic Rust generation, the runtime demo and deterministic SVG
-export. The suite replaces numerous isolated assertions with 30 Rust contract tests and
+export. The suite replaces numerous isolated assertions with 32 Rust contract tests and
 4 TypeScript tests covering concrete geometry, layout, failure and frontend behavior.
 
 API migration: `Spacing::resolve` now takes `&SpacingScale`; Theme literals need

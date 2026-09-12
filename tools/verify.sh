@@ -31,3 +31,6 @@ rustfmt --edition 2021 "$GENERATED"
 diff -u crates/mui-demo/src/generated_items.rs "$GENERATED"
 cargo run -p mui-demo --example items --offline > "$GENERATED"
 diff -u docs/items.svg "$GENERATED"
+
+cargo run -p mui-demo --example items --offline -- --hover > "$GENERATED"
+diff -u docs/items-hover.svg "$GENERATED"

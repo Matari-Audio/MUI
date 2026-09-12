@@ -7,6 +7,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!(
         r#"<svg xmlns="http://www.w3.org/2000/svg" width="860" height="360" viewBox="0 0 860 360"><title>MUI items: row, inferred join and grid controls</title>"#
     );
+    let hovering = std::env::args().any(|arg| arg == "--hover");
     for (i, mode) in [Mode::Light, Mode::Dark].into_iter().enumerate() {
         let theme = Theme {
             mode,
@@ -59,29 +60,42 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .available_width(380.);
         // Deliberate schematic text metrics for this SVG example only.
         let resolved = ui.resolve_with(|_, text, _| Ok(Size::new(text.len() as f64 * 8., 20.)))?;
+        let f = resolved.layout.frame("filter").unwrap();
+        let hovered = if hovering {
+            ui.hover_at(&resolved, f.x + 1., f.y + 1.)
+        } else {
+            None
+        };
+        let styles = ui.styles(&colors, hovered)?;
         println!(
-            r#"<rect x="{}" width="430" height="360" fill="{}"/><g transform="translate({},30)" font-family="sans-serif" font-size="14" fill="{}"><text x="0" y="0">{:?} · items, row and grid</text><g transform="translate(0,22)">"#,
+            r#"<rect x="{}" width="430" height="360" fill="{}"/><g transform="translate({},30)" font-family="sans-serif" font-size="14" fill="{}"><text x="0" y="0">{:?} · {}</text><g transform="translate(0,22)">"#,
             i * 430,
             hex(colors.canvas),
             25 + i * 430,
             hex(colors.text),
-            mode
+            mode,
+            if hovering {
+                "hover on Filter"
+            } else {
+                "normal"
+            }
         );
-        for (surface, info) in ui.outlines(&resolved) {
-            if let Some(color) = info.color {
+        for (surface, _) in ui.outlines(&resolved) {
+            if let Some(color) = styles[surface.id.as_str()].fill {
                 println!(
                     r#"<path d="{}" fill="{}"/>"#,
                     surface.path.to_svg_data()?,
-                    hex(color.resolve(&colors)?)
+                    hex(color)
                 );
             }
         }
         for (id, f) in resolved.layout.frames() {
             if let Some(text) = ui.info(id).and_then(|info| info.text.as_deref()) {
                 println!(
-                    r#"<text x="{}" y="{}" text-anchor="middle">{}</text>"#,
+                    r#"<text x="{}" y="{}" text-anchor="middle" fill="{}">{}</text>"#,
                     f.x + f.size.width / 2.,
                     f.y + f.size.height / 2. + 5.,
+                    hex(styles[id].text),
                     text
                 );
             }

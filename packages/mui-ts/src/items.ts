@@ -16,6 +16,8 @@ export interface ItemProps {
   scope?: string;
   text?: string;
   tap?: string;
+  hoverable?: boolean;
+  hoverColor?: Color;
   extend?: { target: string; direction?: "up" | "right" | "down" | "left" };
   round?: Round;
   color?: Color;
@@ -48,6 +50,8 @@ export class Item {
   scope(v: string): Item { return this.with({ scope: v }); }
   text(v: string): Item { return this.with({ text: v }); }
   onTap(v: string): Item { return this.with({ tap: v }); }
+  hoverable(): Item { return this.with({ hoverable: true }); }
+  hoverColor(color: Color): Item { return this.with({ hoverable: true, hoverColor: color }); }
   extendTo(target: string): Item { return this.with({ extend: { target } }); }
   extendToward(direction: "up" | "right" | "down" | "left", target: string): Item { return this.with({ extend: { target, direction } }); }
   merge(ids: string[]): Item { return new Item(this.id, this.props, this.contents, [...this.merges, ids]); }
@@ -125,10 +129,12 @@ export function compileItems(doc: ItemDocument): string {
   validateScene({root:{kind:"leaf",id:"theme-validation",size:[0,0],props:{}},surfaces:[],theme:doc.theme});
   const keys = new Set<string>();
   const references: string[] = [];
+  const parents = new Map<string, string | undefined>();
+  const groups: {owner: string; members: string[]}[] = [];
   const merged = new Set<string>();
   let count = 0;
   const qualify = (scope: string, id: string) => id.startsWith("/") ? id.slice(1) : scope + id;
-  const emit = (item: Item, scope = "", path = "0", depth = 0, parentGrid = false): string => {
+  const emit = (item: Item, scope = "", path = "0", depth = 0, parentGrid = false, parent?: string): string => {
     if (++count > 2048 || depth > 64) fail("item budget exceeded");
     const p = item.props;
     if (item.id.includes("/") || item.id.startsWith("@")) fail("invalid item ID");
@@ -139,6 +145,7 @@ export function compileItems(doc: ItemDocument): string {
     const id = scope + (item.id || "@" + path);
     if (keys.has(id)) fail(`duplicate item: ${id}`);
     keys.add(id);
+    parents.set(id,parent);
     const isGrid = typeof p.layout === "object";
     if ((p.columns || p.rows) && !isGrid) fail("tracks require grid");
     if ((p.cell || p.span || p.place) && !parentGrid) fail("cell, span and place require a grid parent");
@@ -154,6 +161,8 @@ export function compileItems(doc: ItemDocument): string {
     if (p.scope !== undefined) out += `.scope(${q(p.scope)})`;
     if (p.text !== undefined) out += `.text(${q(p.text)})`;
     if (p.tap !== undefined) { if (!p.tap) fail("empty action ID"); out += `.on_tap(${q(p.tap)})`; }
+    if (p.hoverable) out += ".hoverable()";
+    if (p.hoverColor !== undefined) out += `.hover_color(${color(p.hoverColor)})`;
     if (p.extend) {
       references.push(qualify(scope, p.extend.target));
       if (p.extend.direction && !["up", "right", "down", "left"].includes(p.extend.direction)) fail("invalid direction");
@@ -187,6 +196,7 @@ export function compileItems(doc: ItemDocument): string {
     for (const key of ["cell", "span"] as const) if (p[key]) out += `.${key}(${p[key]!.map(v => integer(v)).join(", ")})`;
     if (p.place) out += `.place(${position(p.place)})`;
     for (const group of item.merges) {
+      groups.push({owner:id,members:group.map(m=>qualify(scope,m))});
       if (!group.length) fail("empty merge");
       for (const member of group) {
         const key = qualify(scope, member);
@@ -195,11 +205,16 @@ export function compileItems(doc: ItemDocument): string {
       }
       out += `.merge([${group.map(q).join(", ")}])`;
     }
-    if (item.contents.length) out += `.children([\n${item.contents.map((child, i) => emit(child, scope, `${path}.${i}`, depth + 1, isGrid)).join(",\n")}\n])`;
+    if (item.contents.length) out += `.children([\n${item.contents.map((child, i) => emit(child, scope, `${path}.${i}`, depth + 1, isGrid, id)).join(",\n")}\n])`;
     return out;
   };
   const root = emit(doc.root);
   for (const key of references) if (!keys.has(key)) fail(`missing item: ${key}`);
+  for (const group of groups) for (const member of group.members) {
+    let ancestor: string | undefined = member;
+    while (ancestor !== undefined && ancestor !== group.owner) ancestor = parents.get(ancestor);
+    if (ancestor === undefined) fail("merge needs a common ancestor");
+  }
   if (doc.offered && doc.availableWidth !== undefined) fail("use offered or availableWidth, not both");
   let result = root + ".build_with(theme)?";
   if (doc.availableWidth !== undefined) result += `.available_width(${number(doc.availableWidth)})`;

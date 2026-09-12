@@ -98,6 +98,8 @@ pub struct Item {
     scope: Option<String>,
     text: Option<String>,
     tap: Option<String>,
+    hoverable: bool,
+    hover_color: Option<Color>,
     extension: Option<(Edge, String)>,
     rounding: Rounding,
     color: Option<Color>,
@@ -111,6 +113,8 @@ pub fn item(id: impl Into<String>) -> Item {
         scope: None,
         text: None,
         tap: None,
+        hoverable: false,
+        hover_color: None,
         extension: None,
         rounding: Rounding::Theme,
         color: None,
@@ -148,6 +152,16 @@ impl Item {
     /// Host action ID. The host recognizes a tap and dispatches this ID.
     pub fn on_tap(mut self, action: impl Into<String>) -> Self {
         self.tap = Some(action.into());
+        self
+    }
+    /// Enable hover feedback without a click action. Clickable items imply this.
+    pub fn hoverable(mut self) -> Self {
+        self.hoverable = true;
+        self
+    }
+    pub fn hover_color(mut self, color: Color) -> Self {
+        self.hoverable = true;
+        self.hover_color = Some(color);
         self
     }
     pub fn extend_to(mut self, target: impl Into<String>) -> Self {
@@ -269,12 +283,23 @@ impl Item {
             groups: Vec::new(),
             count: 0,
         };
-        let root = compiler.visit(self, "", "0", 0)?;
+        let root = compiler.visit(self, "", "0", 0, None)?;
         for group in &compiler.groups {
             if group.members.is_empty() {
                 return Err(SceneError::InvalidModifier("merge needs at least one item"));
             }
             for member in &group.members {
+                let mut ancestor = Some(member.as_str());
+                while ancestor.is_some_and(|id| id != group.owner) {
+                    ancestor = ancestor
+                        .and_then(|id| compiler.items.get(id))
+                        .and_then(|i| i.parent.as_deref());
+                }
+                if ancestor.is_none() {
+                    return Err(SceneError::InvalidModifier(
+                        "merge must be declared on a common ancestor of its members",
+                    ));
+                }
                 let m = compiler
                     .items
                     .get_mut(member)
@@ -301,22 +326,25 @@ impl Item {
 pub struct ItemInfo {
     pub text: Option<String>,
     pub tap: Option<String>,
+    pub hoverable: bool,
+    pub hover_color: Option<Color>,
+    pub(crate) parent: Option<String>,
     pub color: Option<Color>,
     pub stroke: Option<(Color, f64)>,
     merged: bool,
 }
 #[derive(Clone, Debug)]
-struct Group {
-    id: String,
-    owner: String,
-    members: Vec<String>,
+pub(crate) struct Group {
+    pub(crate) id: String,
+    pub(crate) owner: String,
+    pub(crate) members: Vec<String>,
 }
 #[derive(Clone, Debug)]
 pub struct Ui {
     spec: SceneSpec,
-    items: BTreeMap<String, ItemInfo>,
-    order: Vec<String>,
-    groups: Vec<Group>,
+    pub(crate) items: BTreeMap<String, ItemInfo>,
+    pub(crate) order: Vec<String>,
+    pub(crate) groups: Vec<Group>,
 }
 impl Ui {
     /// Read-only low-level form for integrations. Rebuild with build_with to change theme.
@@ -357,13 +385,15 @@ impl Ui {
     /// Find the deepest, last-authored action under a point in the original layout.
     /// Call after the host recognizes a completed tap; decorative bridges are not targets.
     pub fn tap_at<'a>(&'a self, scene: &ResolvedScene, x: f64, y: f64) -> Option<&'a str> {
+        self.hover_at(scene, x, y)
+            .and_then(|id| self.items[id].tap.as_deref())
+    }
+    /// Shared hover/tap target resolution using original content bounds.
+    pub fn hover_at<'a>(&'a self, scene: &ResolvedScene, x: f64, y: f64) -> Option<&'a str> {
         self.order.iter().rev().find_map(|id| {
             let f = scene.layout.frame(id)?;
-            if x >= f.x && x < f.right() && y >= f.y && y < f.bottom() {
-                self.items[id].tap.as_deref()
-            } else {
-                None
-            }
+            (self.items[id].hoverable && x >= f.x && x < f.right() && y >= f.y && y < f.bottom())
+                .then_some(id.as_str())
         })
     }
     /// Draw fills/strokes in order; draw text separately using original layout frames.
@@ -408,6 +438,7 @@ impl Compiler {
         parent_scope: &str,
         path: &str,
         depth: usize,
+        parent: Option<String>,
     ) -> Result<Node, SceneError> {
         self.count += 1;
         if self.count > 2048 || depth > 64 {
@@ -441,7 +472,10 @@ impl Compiler {
                 "stroke width must be finite and nonnegative",
             ));
         }
-        for color in [item.color, item.stroke.map(|s| s.0)].into_iter().flatten() {
+        for color in [item.color, item.hover_color, item.stroke.map(|s| s.0)]
+            .into_iter()
+            .flatten()
+        {
             if matches!(color,Color::Primary(i)|Color::PrimarySoft(i) if i>=3)
                 || matches!(color,Color::Status(i) if i>=4)
             {
@@ -460,6 +494,9 @@ impl Compiler {
             key.clone(),
             ItemInfo {
                 text: item.text.clone(),
+                hoverable: item.hoverable || item.tap.is_some(),
+                hover_color: item.hover_color,
+                parent,
                 tap: item.tap,
                 color: item.color,
                 stroke: item.stroke,
@@ -482,7 +519,15 @@ impl Compiler {
             .children
             .into_iter()
             .enumerate()
-            .map(|(i, c)| self.visit(c, &scope, &format!("{path}.{i}"), depth + 1))
+            .map(|(i, c)| {
+                self.visit(
+                    c,
+                    &scope,
+                    &format!("{path}.{i}"),
+                    depth + 1,
+                    Some(key.clone()),
+                )
+            })
             .collect::<Result<Vec<_>, _>>()?;
         Ok(if item.text.is_some() {
             item.node.measured_content()

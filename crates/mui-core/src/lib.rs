@@ -7,7 +7,9 @@
 
 mod color;
 mod item;
+mod style;
 pub use item::{container, item, Color, Direction, Item, ItemInfo, Rounding, Ui};
+pub use style::{ItemStyle, StyleError};
 pub mod dsl;
 mod scene;
 mod theme;
