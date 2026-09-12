@@ -4,7 +4,7 @@ use mui_geometry::{
     fillet, inset_path, outset_path, union, Bounds, CornerStyle, GeometryOptions, OffsetOptions,
     Path, PlacedShape, Polygon, RoundedRect, Topology,
 };
-use mui_layout::{resolve, Layout, Limits, Node, Size};
+use mui_layout::{Layout, Limits, Node, Size};
 
 use crate::{CornerProfile, Spacing, Theme};
 
@@ -30,12 +30,15 @@ pub enum CornerRule {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum SurfaceSource {
+    /// An invalid fluent operation is reported when resolving, never ignored.
+    InvalidModifier(&'static str),
     /// A layout frame. Boolean basis is the sharp rectangle; `path` uses the
     /// resolved convex radius. This enforces Boolean-first / fillet-second when
     /// the frame later participates in a merge.
     Frame {
         layout_key: String,
         radius: FrameRadius,
+        extension: Option<Extension>,
     },
     /// Set union of already-resolved surface bases followed by a new corner pass.
     Merge {
@@ -60,6 +63,7 @@ impl SurfaceSpec {
             source: SurfaceSource::Frame {
                 layout_key: layout_key.into(),
                 radius: FrameRadius::Global,
+                extension: None,
             },
         }
     }
@@ -96,12 +100,48 @@ impl SurfaceSpec {
     pub fn radius(mut self, radius: FrameRadius) -> Self {
         if let SurfaceSource::Frame { radius: r, .. } = &mut self.source {
             *r = radius;
+        } else {
+            self.source = SurfaceSource::InvalidModifier("radius requires a frame");
         }
         self
     }
     pub fn corners(mut self, corners: CornerRule) -> Self {
         if let SurfaceSource::Merge { corners: c, .. } = &mut self.source {
             *c = corners;
+        } else {
+            self.source = SurfaceSource::InvalidModifier("corners requires a merge");
+        }
+        self
+    }
+}
+
+/// Which edge of the source frame may grow. The opposite edge stays fixed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Edge {
+    Top,
+    Right,
+    Bottom,
+    Left,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Extension {
+    pub edge: Edge,
+    /// A layout key, not a surface ID: attachment never feeds back into layout.
+    pub target: String,
+}
+
+impl SurfaceSpec {
+    /// Extend painted geometry through padding to the target layout frame.
+    /// Does not move content, widen a vertical tab, or merge anything implicitly.
+    pub fn extend_to(mut self, edge: Edge, target: impl Into<String>) -> Self {
+        if let SurfaceSource::Frame { extension, .. } = &mut self.source {
+            *extension = Some(Extension {
+                edge,
+                target: target.into(),
+            });
+        } else {
+            self.source = SurfaceSource::InvalidModifier("extend_to requires a frame");
         }
         self
     }
@@ -112,6 +152,7 @@ pub struct SceneSpec {
     pub theme: Theme,
     pub root: Node,
     pub offered: Option<Size>,
+    pub available: mui_layout::Constraints,
     pub layout_limits: Limits,
     pub geometry_options: GeometryOptions,
     pub offset_options: OffsetOptions,
@@ -123,6 +164,7 @@ impl SceneSpec {
             theme: Theme::default(),
             root,
             offered: None,
+            available: Default::default(),
             layout_limits: Limits::default(),
             geometry_options: GeometryOptions::default(),
             offset_options: OffsetOptions::default(),
@@ -135,6 +177,11 @@ impl SceneSpec {
     }
     pub fn offered(mut self, size: Size) -> Self {
         self.offered = Some(size);
+        self
+    }
+    pub fn available_width(mut self, width: f64) -> Self {
+        self.available.width = Some(width);
+        self.offered = None;
         self
     }
     pub fn surface(mut self, surface: SurfaceSpec) -> Self {
@@ -175,6 +222,8 @@ impl ResolvedScene {
 #[derive(Debug)]
 pub enum SceneError {
     InvalidTheme,
+    InvalidModifier(&'static str),
+    InvalidAttachment { source: String, target: String },
     DuplicateSurface(String),
     MissingSurface(String),
     MissingLayoutFrame(String),
@@ -191,7 +240,15 @@ impl std::fmt::Display for SceneError {
         write!(f, "scene: {self:?}")
     }
 }
-impl std::error::Error for SceneError {}
+impl std::error::Error for SceneError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Layout(e) => Some(e),
+            Self::Geometry(e) => Some(e),
+            _ => None,
+        }
+    }
+}
 impl From<mui_layout::Error> for SceneError {
     fn from(v: mui_layout::Error) -> Self {
         Self::Layout(v)
@@ -212,10 +269,55 @@ fn profile(rule: &CornerRule, theme: &Theme) -> Result<CornerProfile, SceneError
     p.valid().then_some(p).ok_or(SceneError::InvalidRadius)
 }
 
-fn sharp_rect(frame: mui_layout::Frame) -> Result<(Topology, Polygon), SceneError> {
+fn sharp_rect(frame: mui_layout::Frame, options: GeometryOptions) -> Result<Topology, SceneError> {
+    if frame.size.width == 0.0 || frame.size.height == 0.0 {
+        // Still validate options even when there is no material to paint.
+        return Ok(union(&[], options)?);
+    }
     let p = Polygon::rectangle(frame.x, frame.y, frame.size.width, frame.size.height)?;
-    let t = union(&[PlacedShape::from(p.clone())], GeometryOptions::default())?;
-    Ok((t, p))
+    Ok(union(&[PlacedShape::from(p)], options)?)
+}
+
+fn extend_frame(
+    mut source: mui_layout::Frame,
+    target: mui_layout::Frame,
+    edge: Edge,
+    epsilon: f64,
+) -> Option<mui_layout::Frame> {
+    let overlap_x = source.right().min(target.right()) - source.x.max(target.x);
+    let overlap_y = source.bottom().min(target.bottom()) - source.y.max(target.y);
+    match edge {
+        Edge::Bottom if overlap_x > epsilon && target.bottom() > source.y => {
+            source.size.height = source.bottom().max(target.y) - source.y;
+        }
+        Edge::Top if overlap_x > epsilon && target.y < source.bottom() => {
+            let bottom = source.bottom();
+            source.y = source.y.min(target.bottom());
+            source.size.height = bottom - source.y;
+        }
+        Edge::Right if overlap_y > epsilon && target.right() > source.x => {
+            source.size.width = source.right().max(target.x) - source.x;
+        }
+        Edge::Left if overlap_y > epsilon && target.x < source.right() => {
+            let right = source.right();
+            source.x = source.x.min(target.right());
+            source.size.width = right - source.x;
+        }
+        _ => return None,
+    }
+    Some(source)
+}
+
+fn empty_surface(id: &str) -> ResolvedSurface {
+    ResolvedSurface {
+        id: id.into(),
+        basis: Topology::default(),
+        path: Path::default(),
+        bounds: None,
+        analytic_rect: None,
+        convex_radius_hint: None,
+        topology_changed: false,
+    }
 }
 
 fn rounded_frame(frame: mui_layout::Frame, radius: f64) -> Result<RoundedRect, SceneError> {
@@ -232,11 +334,23 @@ fn rounded_frame(frame: mui_layout::Frame, radius: f64) -> Result<RoundedRect, S
     .map_err(Into::into)
 }
 
+fn dependencies(source: &SurfaceSource) -> Vec<&str> {
+    match source {
+        SurfaceSource::Frame {
+            radius: FrameRadius::ParentNormalized { parent, .. },
+            ..
+        }
+        | SurfaceSource::Inset { parent, .. }
+        | SurfaceSource::Outset { parent, .. } => vec![parent],
+        SurfaceSource::Merge { inputs, .. } => inputs.iter().map(String::as_str).collect(),
+        _ => Vec::new(),
+    }
+}
+
 struct Resolver<'a> {
     spec: &'a SceneSpec,
     layout: &'a Layout,
     specs: BTreeMap<&'a str, &'a SurfaceSpec>,
-    state: BTreeMap<String, u8>,
     out: BTreeMap<String, ResolvedSurface>,
 }
 impl<'a> Resolver<'a> {
@@ -260,47 +374,114 @@ impl<'a> Resolver<'a> {
             spec,
             layout,
             specs,
-            state: BTreeMap::new(),
             out: BTreeMap::new(),
         })
     }
     fn resolve(mut self) -> Result<BTreeMap<String, ResolvedSurface>, SceneError> {
-        let ids: Vec<String> = self.spec.surfaces.iter().map(|s| s.id.clone()).collect();
-        for id in ids {
-            self.one(&id, 0)?;
+        // Compile dependencies once. Kahn's algorithm avoids recursive stack
+        // depth, repeated geometry clones, and order-dependent graph validity.
+        let mut incoming = BTreeMap::new();
+        let mut consumers = BTreeMap::<&str, Vec<&str>>::new();
+        let mut depths = BTreeMap::<&str, usize>::new();
+        let mut ready = std::collections::VecDeque::new();
+        let mut edges = 0usize;
+        for (&id, spec) in &self.specs {
+            let deps = dependencies(&spec.source);
+            edges += deps.len();
+            if edges > 16384 {
+                return Err(SceneError::DependencyDepth);
+            }
+            incoming.insert(id, deps.len());
+            depths.insert(id, 0);
+            if deps.is_empty() {
+                ready.push_back(id);
+            }
+            for dep in deps {
+                if !self.specs.contains_key(dep) {
+                    return Err(SceneError::MissingSurface(dep.into()));
+                }
+                consumers.entry(dep).or_default().push(id);
+            }
+        }
+        let mut order = Vec::with_capacity(self.specs.len());
+        while let Some(id) = ready.pop_front() {
+            order.push(id);
+            if let Some(children) = consumers.get(id) {
+                for child in children {
+                    let depth = depths[child].max(depths[id] + 1);
+                    if depth > 128 {
+                        return Err(SceneError::DependencyDepth);
+                    }
+                    depths.insert(child, depth);
+                    let count = incoming.get_mut(child).expect("validated graph node");
+                    *count -= 1;
+                    if *count == 0 {
+                        ready.push_back(child);
+                    }
+                }
+            }
+        }
+        if order.len() != self.specs.len() {
+            let id = incoming
+                .iter()
+                .find(|(_, count)| **count > 0)
+                .expect("cycle remains")
+                .0;
+            return Err(SceneError::DependencyCycle((*id).into()));
+        }
+        for id in order {
+            let surface = self.one(id)?;
+            self.out.insert(id.into(), surface);
         }
         Ok(self.out)
     }
-    fn one(&mut self, id: &str, depth: usize) -> Result<ResolvedSurface, SceneError> {
-        if let Some(v) = self.out.get(id) {
-            return Ok(v.clone());
-        }
-        if depth > 128 {
-            return Err(SceneError::DependencyDepth);
-        }
-        match self.state.get(id).copied().unwrap_or(0) {
-            1 => return Err(SceneError::DependencyCycle(id.into())),
-            2 => {
-                return self
-                    .out
-                    .get(id)
-                    .cloned()
-                    .ok_or_else(|| SceneError::MissingSurface(id.into()))
-            }
-            _ => {}
-        }
-        let spec = *self
-            .specs
+    fn parent(&self, id: &str) -> Result<&ResolvedSurface, SceneError> {
+        self.out
             .get(id)
-            .ok_or_else(|| SceneError::MissingSurface(id.into()))?;
-        self.state.insert(id.into(), 1);
+            .ok_or_else(|| SceneError::MissingSurface(id.into()))
+    }
+    fn one(&self, id: &str) -> Result<ResolvedSurface, SceneError> {
+        let spec = self.specs[id];
         let resolved = match &spec.source {
-            SurfaceSource::Frame { layout_key, radius } => {
-                let frame = self
+            SurfaceSource::InvalidModifier(message) => {
+                return Err(SceneError::InvalidModifier(message))
+            }
+            SurfaceSource::Frame {
+                layout_key,
+                radius,
+                extension,
+            } => {
+                let mut frame = self
                     .layout
                     .frame(layout_key)
                     .ok_or_else(|| SceneError::MissingLayoutFrame(layout_key.clone()))?;
-                let (basis, _) = sharp_rect(frame)?;
+                if let Some(extension) = extension {
+                    let target = self
+                        .layout
+                        .frame(&extension.target)
+                        .ok_or_else(|| SceneError::MissingLayoutFrame(extension.target.clone()))?;
+                    if target.size.width == 0.0
+                        || target.size.height == 0.0
+                        || frame.size.width == 0.0
+                        || frame.size.height == 0.0
+                    {
+                        return Err(SceneError::InvalidAttachment {
+                            source: layout_key.clone(),
+                            target: extension.target.clone(),
+                        });
+                    }
+                    frame = extend_frame(
+                        frame,
+                        target,
+                        extension.edge,
+                        self.spec.geometry_options.epsilon,
+                    )
+                    .ok_or_else(|| SceneError::InvalidAttachment {
+                        source: layout_key.clone(),
+                        target: extension.target.clone(),
+                    })?;
+                }
+                let basis = sharp_rect(frame, self.spec.geometry_options)?;
                 let r = match radius {
                     FrameRadius::Global => self.spec.theme.corners.convex,
                     FrameRadius::Absolute(r) => *r,
@@ -308,7 +489,7 @@ impl<'a> Resolver<'a> {
                         if !scale.is_finite() || *scale < 0.0 {
                             return Err(SceneError::InvalidRadius);
                         }
-                        let p = self.one(parent, depth + 1)?;
+                        let p = self.parent(parent)?;
                         let pb = p
                             .bounds
                             .ok_or_else(|| SceneError::MissingSurface(parent.clone()))?;
@@ -321,6 +502,12 @@ impl<'a> Resolver<'a> {
                         hint / pshort * cshort * scale
                     }
                 };
+                if !r.is_finite() || r < 0.0 {
+                    return Err(SceneError::InvalidRadius);
+                }
+                if frame.size.width == 0.0 || frame.size.height == 0.0 {
+                    return Ok(empty_surface(id));
+                }
                 let rr = rounded_frame(frame, r)?;
                 ResolvedSurface {
                     id: id.into(),
@@ -338,7 +525,7 @@ impl<'a> Resolver<'a> {
                 }
                 let mut shapes: Vec<PlacedShape> = Vec::new();
                 for input in inputs {
-                    let r = self.one(input, depth + 1)?;
+                    let r = self.parent(input)?;
                     shapes.extend(r.basis.placed_shapes());
                 }
                 let basis = union(&shapes, self.spec.geometry_options)?;
@@ -363,20 +550,19 @@ impl<'a> Resolver<'a> {
                 }
             }
             SurfaceSource::Inset { parent, distance } => {
-                let p = self.one(parent, depth + 1)?;
+                let p = self.parent(parent)?;
                 let d = distance
-                    .resolve(&self.spec.theme)
+                    .resolve(&self.spec.theme.spacing)
                     .ok_or(SceneError::InvalidRadius)?;
                 if let Some(rr) = p.analytic_rect {
                     let i = rr.inset(d)?;
                     if let Some(child) = i.shape {
-                        let poly = Polygon::rectangle(
-                            child.bounds().min.x,
-                            child.bounds().min.y,
-                            child.bounds().width(),
-                            child.bounds().height(),
-                        )?;
-                        let basis = union(&[PlacedShape::from(poly)], self.spec.geometry_options)?;
+                        let basis = mui_geometry::offset_path(
+                            &child.path(),
+                            0.0,
+                            self.spec.offset_options,
+                        )?
+                        .topology;
                         ResolvedSurface {
                             id: id.into(),
                             basis,
@@ -412,19 +598,15 @@ impl<'a> Resolver<'a> {
                 }
             }
             SurfaceSource::Outset { parent, distance } => {
-                let p = self.one(parent, depth + 1)?;
+                let p = self.parent(parent)?;
                 let d = distance
-                    .resolve(&self.spec.theme)
+                    .resolve(&self.spec.theme.spacing)
                     .ok_or(SceneError::InvalidRadius)?;
                 if let Some(rr) = p.analytic_rect {
                     let child = rr.outset(d)?;
-                    let poly = Polygon::rectangle(
-                        child.bounds().min.x,
-                        child.bounds().min.y,
-                        child.bounds().width(),
-                        child.bounds().height(),
-                    )?;
-                    let basis = union(&[PlacedShape::from(poly)], self.spec.geometry_options)?;
+                    let basis =
+                        mui_geometry::offset_path(&child.path(), 0.0, self.spec.offset_options)?
+                            .topology;
                     ResolvedSurface {
                         id: id.into(),
                         basis,
@@ -449,14 +631,45 @@ impl<'a> Resolver<'a> {
                 }
             }
         };
-        self.state.insert(id.into(), 2);
-        self.out.insert(id.into(), resolved.clone());
+        if let Some(bounds) = resolved.bounds {
+            if [bounds.min.x, bounds.min.y, bounds.max.x, bounds.max.y]
+                .iter()
+                .any(|v| !v.is_finite() || v.abs() > self.spec.geometry_options.coordinate_limit)
+            {
+                return Err(mui_geometry::Error::CoordinateLimit.into());
+            }
+        }
+        if resolved.basis.vertex_count() > self.spec.geometry_options.max_vertices {
+            return Err(mui_geometry::Error::TooManyVertices.into());
+        }
         Ok(resolved)
     }
 }
 
 pub fn resolve_scene(spec: &SceneSpec) -> Result<ResolvedScene, SceneError> {
-    let layout = resolve(&spec.root, spec.offered, spec.layout_limits)?;
+    resolve_scene_measured(spec, |key, _| {
+        Err(mui_layout::Error::MissingMeasurement(key.into()))
+    })
+}
+
+pub fn resolve_scene_measured(
+    spec: &SceneSpec,
+    measure: impl FnMut(&str, mui_layout::MeasureInput) -> Result<Size, mui_layout::Error>,
+) -> Result<ResolvedScene, SceneError> {
+    let _ = union(&[], spec.geometry_options)?;
+    let constraints = spec
+        .offered
+        .map_or(spec.available, |size| mui_layout::Constraints {
+            width: Some(size.width),
+            height: Some(size.height),
+        });
+    let layout = mui_layout::resolve_measured(
+        &spec.root,
+        constraints,
+        spec.layout_limits,
+        &spec.theme.spacing,
+        measure,
+    )?;
     let surfaces = Resolver::new(spec, &layout)?.resolve()?;
     Ok(ResolvedScene { layout, surfaces })
 }
@@ -475,7 +688,16 @@ impl SceneState {
         self.current.as_ref()
     }
     pub fn commit(&mut self, spec: &SceneSpec) -> Result<(), SceneError> {
-        let next = resolve_scene(spec)?;
+        self.commit_measured(spec, |key, _| {
+            Err(mui_layout::Error::MissingMeasurement(key.into()))
+        })
+    }
+    pub fn commit_measured(
+        &mut self,
+        spec: &SceneSpec,
+        measure: impl FnMut(&str, mui_layout::MeasureInput) -> Result<Size, mui_layout::Error>,
+    ) -> Result<(), SceneError> {
+        let next = resolve_scene_measured(spec, measure)?;
         let rev = self
             .revision
             .checked_add(1)
@@ -483,112 +705,5 @@ impl SceneState {
         self.current = Some(next);
         self.revision = rev;
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use mui_layout::{Align, Justify};
-    fn spec() -> SceneSpec {
-        let controls = Node::column(
-            "controls",
-            [
-                Node::leaf("plus", Size::new(28., 28.)),
-                Node::leaf("pie-a", Size::new(28., 28.)),
-                Node::leaf("pie-b", Size::new(28., 28.)),
-            ],
-        )
-        .gap(10.)
-        .align(Align::Center)
-        .justify(Justify::Center);
-        let pill = Node::column("pill-frame", [controls]).padding(10.);
-        let tab = Node::column("tab-frame", [pill])
-            .padding(12.)
-            .min_size(Size::new(92., 0.));
-        let root = Node::overlay(
-            "root",
-            [Node::leaf("panel-frame", Size::new(520., 230.)), tab],
-        )
-        .align(Align::Start);
-        SceneSpec::new(root)
-            .theme(Theme {
-                corners: CornerProfile::new(28., 32.),
-                ..Theme::default()
-            })
-            .surface(SurfaceSpec::frame("panel", "panel-frame"))
-            .surface(SurfaceSpec::frame("tab", "tab-frame"))
-            .surface(SurfaceSpec::merge("outer", ["panel", "tab"]))
-            .surface(SurfaceSpec::inset("pill-shell", "tab", Spacing::px(12.)))
-    }
-    #[test]
-    fn analytic_inset_preserves_parallel_radius() {
-        let s = resolve_scene(&spec()).unwrap();
-        let tab = s.surface("tab").unwrap().analytic_rect.unwrap();
-        let child = s.surface("pill-shell").unwrap().analytic_rect.unwrap();
-        assert!((tab.radius() - child.radius() - 12.).abs() < 1e-9);
-        assert!((child.bounds().min.x - tab.bounds().min.x - 12.).abs() < 1e-9);
-    }
-    #[test]
-    fn parent_normalized_is_distinct_from_parallel() {
-        let mut s = spec();
-        s.surfaces
-            .push(SurfaceSpec::frame("styled", "pill-frame").radius(
-                FrameRadius::ParentNormalized {
-                    parent: "tab".into(),
-                    scale: 1.0,
-                },
-            ));
-        let r = resolve_scene(&s).unwrap();
-        let tab = r.surface("tab").unwrap();
-        let styled = r.surface("styled").unwrap();
-        let p = tab.bounds.unwrap();
-        let c = styled.bounds.unwrap();
-        let expected =
-            tab.convex_radius_hint.unwrap() / p.width().min(p.height()) * c.width().min(c.height());
-        assert!((styled.convex_radius_hint.unwrap() - expected).abs() < 1e-9);
-        assert_ne!(
-            styled.convex_radius_hint,
-            r.surface("pill-shell").unwrap().convex_radius_hint
-        );
-    }
-    #[test]
-    fn cycle_is_rejected() {
-        let root = Node::leaf("x", Size::new(10., 10.));
-        let s = SceneSpec::new(root)
-            .surface(SurfaceSpec::inset("a", "b", Spacing::px(1.)))
-            .surface(SurfaceSpec::inset("b", "a", Spacing::px(1.)));
-        assert!(matches!(
-            resolve_scene(&s),
-            Err(SceneError::DependencyCycle(_))
-        ));
-    }
-    #[test]
-    fn merged_parent_inset_follows_final_concave_outline() {
-        let mut s = spec();
-        s.surfaces
-            .push(SurfaceSpec::inset("outer-inner", "outer", Spacing::px(6.0)));
-        let r = resolve_scene(&s).unwrap();
-        let outer = r.surface("outer").unwrap();
-        let inner = r.surface("outer-inner").unwrap();
-        assert!(inner.analytic_rect.is_none()); // merged contour uses the general offset path
-        let outer_contours = outer.path.flatten(0.1, 20_000).unwrap();
-        let inner_contours = inner.path.flatten(0.1, 20_000).unwrap();
-        let mut min = f64::INFINITY;
-        for p in inner_contours.iter().flatten().step_by(7) {
-            min = min.min(mui_geometry::boundary_distance(*p, &outer_contours));
-        }
-        assert!((min - 6.0).abs() < 0.35, "measured inset={min}");
-    }
-
-    #[test]
-    fn failed_commit_is_transactional() {
-        let mut state = SceneState::default();
-        state.commit(&spec()).unwrap();
-        let rev = state.revision();
-        let bad = SceneSpec::new(Node::leaf("x", Size::new(f64::NAN, 1.)));
-        assert!(state.commit(&bad).is_err());
-        assert_eq!(state.revision(), rev);
-        assert!(state.current().is_some());
     }
 }

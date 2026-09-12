@@ -9,10 +9,11 @@ pub use mui_layout as layout;
 pub use mui_tessellate as tessellate;
 
 pub mod prelude {
-    pub use mui_core::dsl::{column, leaf, row, stack, NodeExt};
+    pub use mui_core::dsl::{column, flow, leaf, row, stack, NodeExt};
     pub use mui_core::{
-        resolve_scene, CornerProfile, CornerRule, FrameRadius, SceneSpec, SceneState, Spacing,
-        SpacingScale, SpacingToken, SurfaceSource, SurfaceSpec, Theme,
+        resolve_scene, resolve_scene_measured, Colors, CornerProfile, CornerRule, Edge,
+        FrameRadius, Mode, Palette, Rgb, SceneSpec, SceneState, Seeds, Spacing, SpacingScale,
+        SpacingToken, SurfaceSource, SurfaceSpec, Theme,
     };
-    pub use mui_layout::{Align, Insets, Justify, Node, Size};
+    pub use mui_layout::{Align, Axis, Fill, Gap, Hug, Insets, Justify, Node, Pad, Size, Sizing};
 }

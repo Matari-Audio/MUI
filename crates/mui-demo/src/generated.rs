@@ -10,36 +10,37 @@ pub fn generated_scene() -> mui_core::SceneSpec {
                     vec![mui_layout::Node::column(
                         "controls",
                         vec![
-                            mui_layout::Node::leaf("plus", mui_layout::Size::new(28.0, 28.0)),
-                            mui_layout::Node::leaf("pie-a", mui_layout::Size::new(28.0, 28.0)),
-                            mui_layout::Node::leaf("pie-b", mui_layout::Size::new(28.0, 28.0)),
+                            mui_layout::Node::leaf("plus", mui_layout::Size::new(28f64, 28f64)),
+                            mui_layout::Node::leaf("pie-a", mui_layout::Size::new(28f64, 28f64)),
+                            mui_layout::Node::leaf("pie-b", mui_layout::Size::new(28f64, 28f64)),
                         ],
                     )
-                    .gap(10.0)
+                    .gap(10f64)
                     .align(mui_layout::Align::Center)],
                 )
-                .padding(10.0)
+                .padding(10f64)
                 .align(mui_layout::Align::Center)],
             )
-            .padding(12.0)
-            .min_size(mui_layout::Size::new(92.0, 0.0))
+            .padding(12f64)
+            .min_size(mui_layout::Size::new(92f64, 0f64))
             .align(mui_layout::Align::Center),
-            mui_layout::Node::leaf("panel-frame", mui_layout::Size::new(520.0, 230.0)),
+            mui_layout::Node::leaf("panel-frame", mui_layout::Size::new(520f64, 230f64)),
         ],
     )
-    .gap(0.0)
+    .gap(0f64)
     .align(mui_layout::Align::Start)
     .justify(mui_layout::Justify::Start);
     let theme = mui_core::Theme {
-        corners: mui_core::CornerProfile::new(28.0, 32.0),
+        corners: mui_core::CornerProfile::new(28f64, 32f64),
         spacing: mui_core::SpacingScale {
-            xs: 4.0,
-            s: 8.0,
-            m: 12.0,
-            l: 18.0,
-            xl: 28.0,
+            xs: 4f64,
+            s: 8f64,
+            m: 12f64,
+            l: 18f64,
+            xl: 28f64,
         },
-        stroke_width: 1.5,
+        stroke_width: 1.5f64,
+        ..Default::default()
     };
     mui_core::SceneSpec::new(root)
         .theme(theme)
@@ -57,6 +58,6 @@ pub fn generated_scene() -> mui_core::SceneSpec {
         .surface(mui_core::SurfaceSpec::inset(
             "pill-shell",
             "tab",
-            mui_core::Spacing::px(12.0),
+            mui_core::Spacing::px(12f64),
         ))
 }

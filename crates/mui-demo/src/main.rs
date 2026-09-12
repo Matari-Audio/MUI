@@ -1,3 +1,5 @@
+#[cfg(test)]
+mod compiler_contract;
 mod generated;
 
 fn main() {
@@ -37,6 +39,13 @@ mod tests {
     use super::*;
     #[test]
     fn generated_typescript_scene_resolves() {
+        let contract = mui_core::resolve_scene(&compiler_contract::generated_scene()).unwrap();
+        assert!(contract
+            .layout
+            .frame("tab\u{1}\u{8}\u{c}\\\"שלום🎹")
+            .is_some());
+        assert_eq!(contract.surface("shell").unwrap().basis.components(), 1);
+        assert!(compiler_contract::generated_scene().theme.colors().is_ok());
         let scene = mui_core::resolve_scene(&generated::generated_scene()).unwrap();
         let tab = scene.surface("tab").unwrap().analytic_rect.unwrap();
         let pill = scene.surface("pill-shell").unwrap().analytic_rect.unwrap();
