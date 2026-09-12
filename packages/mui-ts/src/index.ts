@@ -3,6 +3,8 @@ export type Justify = "start" | "center" | "end" | "space-between";
 
 export type Insets = number | { left: number; right: number; top: number; bottom: number };
 export interface LayoutProps {
+  /// Only a node you intend to look up, or take a surface from, needs a name.
+  id?: string;
   gap?: number;
   padding?: Insets;
   min?: [number, number];
@@ -13,14 +15,14 @@ export interface LayoutProps {
 }
 
 export type Node =
-  | { kind: "leaf"; id: string; size: [number, number]; props: LayoutProps }
-  | { kind: "row" | "column" | "stack"; id: string; children: Node[]; props: LayoutProps };
+  | { kind: "leaf"; size: [number, number]; props: LayoutProps }
+  | { kind: "row" | "column" | "overlay"; children: Node[]; props: LayoutProps };
 
 const props = (p?: LayoutProps): LayoutProps => p ?? {};
-export const leaf = (id: string, size: [number, number], p?: LayoutProps): Node => ({ kind: "leaf", id, size, props: props(p) });
-export const row = (id: string, children: Node[], p?: LayoutProps): Node => ({ kind: "row", id, children, props: props(p) });
-export const column = (id: string, children: Node[], p?: LayoutProps): Node => ({ kind: "column", id, children, props: props(p) });
-export const stack = (id: string, children: Node[], p?: LayoutProps): Node => ({ kind: "stack", id, children, props: props(p) });
+export const leaf = (size: [number, number], p?: LayoutProps): Node => ({ kind: "leaf", size, props: props(p) });
+export const row = (children: Node[], p?: LayoutProps): Node => ({ kind: "row", children, props: props(p) });
+export const column = (children: Node[], p?: LayoutProps): Node => ({ kind: "column", children, props: props(p) });
+export const overlay = (children: Node[], p?: LayoutProps): Node => ({ kind: "overlay", children, props: props(p) });
 
 export type Spacing = { kind: "px"; value: number } | { kind: "token"; value: "xs" | "s" | "m" | "l" | "xl" };
 export const px = (value: number): Spacing => ({ kind: "px", value });
@@ -32,14 +34,14 @@ export const space = {
   xl: { kind: "token", value: "xl" } as const,
 };
 
-export type FrameRadius =
+export type Radius =
   | { kind: "global" }
   | { kind: "absolute"; value: number }
   | { kind: "parent-normalized"; parent: string; scale: number };
 export const radius = {
   global: { kind: "global" } as const,
-  absolute: (value: number): FrameRadius => ({ kind: "absolute", value }),
-  parentNormalized: (parent: string, scale = 1): FrameRadius => ({ kind: "parent-normalized", parent, scale }),
+  absolute: (value: number): Radius => ({ kind: "absolute", value }),
+  parentNormalized: (parent: string, scale = 1): Radius => ({ kind: "parent-normalized", parent, scale }),
 };
 
 export type CornerRule =
@@ -53,11 +55,12 @@ export const corners = {
 };
 
 export type Surface =
-  | { kind: "frame"; id: string; layout: string; radius: FrameRadius }
+  | { kind: "frame"; id: string; radius: Radius }
   | { kind: "merge"; id: string; inputs: string[]; corners: CornerRule }
   | { kind: "inset" | "outset"; id: string; parent: string; distance: Spacing };
 
-export const frameSurface = (id: string, layout: string, r: FrameRadius = radius.global): Surface => ({ kind: "frame", id, layout, radius: r });
+/// The layout node's id is the surface id -- one name per box.
+export const frameSurface = (id: string, r: Radius = radius.global): Surface => ({ kind: "frame", id, radius: r });
 export const mergeSurface = (id: string, inputs: string[], c: CornerRule = corners.global): Surface => ({ kind: "merge", id, inputs, corners: c });
 export const insetSurface = (id: string, parent: string, distance: Spacing): Surface => ({ kind: "inset", id, parent, distance });
 export const outsetSurface = (id: string, parent: string, distance: Spacing): Surface => ({ kind: "outset", id, parent, distance });

@@ -5,13 +5,12 @@
 //! a Boolean merge, or a true parallel inset/outset of another surface.
 #![forbid(unsafe_code)]
 
-pub mod dsl;
 mod scene;
 mod theme;
 
 pub use mui_layout::{Align, Frame, Insets, Justify, Layout, Limits, Node, Size};
 pub use scene::{
-    resolve_scene, CornerRule, FrameRadius, ResolvedScene, ResolvedSurface, SceneError, SceneSpec,
+    resolve_scene, CornerRule, Radius, ResolvedScene, ResolvedSurface, SceneError, SceneSpec,
     SceneState, SurfaceSource, SurfaceSpec,
 };
 pub use theme::{CornerProfile, Spacing, SpacingScale, SpacingToken, Theme};

@@ -4,9 +4,9 @@
 //! `struct` and one line in [`all`] — deliberately the same shape as
 //! `egui_demo_lib`'s `Demo` trait, so the gallery grows without tooling.
 
-use mui_core::dsl::{column, row};
 use mui_core::{CornerProfile, SceneSpec, Spacing, SurfaceSpec, Theme};
 use mui_geometry::Path;
+use mui_layout::{column, leaf, row};
 use mui_layout::{Align, Node, Size};
 
 /// Something the gallery can draw. The scene is rebuilt on demand rather than
@@ -55,37 +55,31 @@ impl PreviewScene for PillTab {
         "Boolean union first, fillets second. The inner shell is a parallel offset of the merged outline, not an independently guessed radius."
     }
     fn spec(&self) -> SceneSpec {
-        let controls = column(
-            "controls",
-            [
-                Node::leaf("plus", Size::new(28.0, 28.0)),
-                Node::leaf("phase", Size::new(28.0, 28.0)),
-                Node::leaf("warp", Size::new(28.0, 28.0)),
-            ],
-        )
+        let controls = column([
+            leaf(28.0, 28.0).id("plus"),
+            leaf(28.0, 28.0).id("phase"),
+            leaf(28.0, 28.0).id("warp"),
+        ])
+        .id("controls")
         .gap(10.0)
         .align(Align::Center);
 
-        let tab = column(
-            "tab-frame",
-            [column("pill-frame", [controls]).padding(10.0)],
-        )
-        .padding(12.0)
-        .min_size(Size::new(92.0, 0.0));
+        let tab = column([column([controls]).padding(10.0)])
+            .id("tab")
+            .padding(12.0)
+            .min_size(Size::new(92.0, 0.0));
 
-        let root = column(
-            "root",
-            [tab, Node::leaf("panel-frame", Size::new(520.0, 230.0))],
-        )
-        .align(Align::Start);
+        let root = column([tab, leaf(520.0, 230.0).id("panel")])
+            .id("root")
+            .align(Align::Start);
 
         SceneSpec::new(root)
             .theme(Theme {
                 corners: CornerProfile::new(28.0, 32.0),
                 ..Theme::default()
             })
-            .surface(SurfaceSpec::frame("panel", "panel-frame"))
-            .surface(SurfaceSpec::frame("tab", "tab-frame"))
+            .surface(SurfaceSpec::frame("panel"))
+            .surface(SurfaceSpec::frame("tab"))
             .surface(SurfaceSpec::merge("outer", ["panel", "tab"]))
             .surface(SurfaceSpec::inset("pill-shell", "tab", Spacing::px(12.0)))
     }
@@ -102,13 +96,13 @@ impl PreviewScene for ConstantThickness {
         "Each ring is a parallel offset of the ring outside it. Parent radius 28 - inset 12 = child radius 16, exactly."
     }
     fn spec(&self) -> SceneSpec {
-        let root = column("root", [Node::leaf("card-frame", Size::new(320.0, 220.0))]);
+        let root = column([leaf(320.0, 220.0).id("card")]).id("root");
         SceneSpec::new(root)
             .theme(Theme {
                 corners: CornerProfile::new(28.0, 28.0),
                 ..Theme::default()
             })
-            .surface(SurfaceSpec::frame("card", "card-frame"))
+            .surface(SurfaceSpec::frame("card"))
             .surface(SurfaceSpec::inset("ring-1", "card", Spacing::px(12.0)))
             .surface(SurfaceSpec::inset("ring-2", "ring-1", Spacing::px(12.0)))
             .surface(SurfaceSpec::inset("ring-3", "ring-2", Spacing::px(12.0)))
@@ -127,16 +121,16 @@ impl PreviewScene for SegmentedRow {
     }
     fn spec(&self) -> SceneSpec {
         let cells: Vec<Node> = (0..4)
-            .map(|i| Node::leaf(format!("cell-{i}"), Size::new(70.0, 44.0)))
+            .map(|i| leaf(70.0, 44.0).id(format!("cell-{i}")))
             .collect();
-        let root = row("segment-frame", cells).gap(0.0);
+        let root = row(cells).gap(0.0);
 
         let mut spec = SceneSpec::new(root).theme(Theme {
             corners: CornerProfile::new(22.0, 10.0),
             ..Theme::default()
         });
         for i in 0..4 {
-            spec = spec.surface(SurfaceSpec::frame(format!("cell-{i}"), format!("cell-{i}")));
+            spec = spec.surface(SurfaceSpec::frame(format!("cell-{i}")));
         }
         spec.surface(SurfaceSpec::merge(
             "strip",
@@ -219,15 +213,12 @@ impl PreviewScene for GlyphAxes {
     }
 
     fn spec(&self) -> SceneSpec {
-        SceneSpec::new(column(
-            "root",
-            [Node::leaf("card-frame", Size::new(Self::CARD, Self::CARD))],
-        ))
-        .theme(Theme {
-            corners: CornerProfile::new(24.0, 24.0),
-            ..Theme::default()
-        })
-        .surface(SurfaceSpec::frame("card", "card-frame"))
+        SceneSpec::new(column([leaf(Self::CARD, Self::CARD).id("card")]).id("root"))
+            .theme(Theme {
+                corners: CornerProfile::new(24.0, 24.0),
+                ..Theme::default()
+            })
+            .surface(SurfaceSpec::frame("card"))
     }
 
     fn controls(&mut self, ui: &mut crate::ui::Ui<'_>) -> bool {

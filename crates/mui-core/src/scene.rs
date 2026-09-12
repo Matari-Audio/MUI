@@ -4,12 +4,14 @@ use mui_geometry::{
     fillet, inset_path, outset_path, union, Bounds, CornerStyle, GeometryOptions, OffsetOptions,
     Path, PlacedShape, Polygon, RoundedRect, Topology,
 };
+#[cfg(test)]
+use mui_layout::{column, leaf, overlay};
 use mui_layout::{resolve, Layout, Limits, Node, Size};
 
 use crate::{CornerProfile, Spacing, Theme};
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum FrameRadius {
+pub enum Radius {
     /// Use the global convex radius from the theme.
     Global,
     Absolute(f64),
@@ -33,10 +35,7 @@ pub enum SurfaceSource {
     /// A layout frame. Boolean basis is the sharp rectangle; `path` uses the
     /// resolved convex radius. This enforces Boolean-first / fillet-second when
     /// the frame later participates in a merge.
-    Frame {
-        layout_key: String,
-        radius: FrameRadius,
-    },
+    Frame { layout_id: String, radius: Radius },
     /// Set union of already-resolved surface bases followed by a new corner pass.
     Merge {
         inputs: Vec<String>,
@@ -54,13 +53,16 @@ pub struct SurfaceSpec {
     pub source: SurfaceSource,
 }
 impl SurfaceSpec {
-    pub fn frame(id: impl Into<String>, layout_key: impl Into<String>) -> Self {
+    /// A surface taken straight from a named layout node. The node's id is the
+    /// surface id -- one name per box, so there is nothing to keep in step.
+    pub fn frame(id: impl Into<String>) -> Self {
+        let id = id.into();
         Self {
-            id: id.into(),
             source: SurfaceSource::Frame {
-                layout_key: layout_key.into(),
-                radius: FrameRadius::Global,
+                layout_id: id.clone(),
+                radius: Radius::Global,
             },
+            id,
         }
     }
     pub fn merge(
@@ -93,7 +95,7 @@ impl SurfaceSpec {
             },
         }
     }
-    pub fn radius(mut self, radius: FrameRadius) -> Self {
+    pub fn radius(mut self, radius: Radius) -> Self {
         if let SurfaceSource::Frame { radius: r, .. } = &mut self.source {
             *r = radius;
         }
@@ -295,16 +297,16 @@ impl<'a> Resolver<'a> {
             .ok_or_else(|| SceneError::MissingSurface(id.into()))?;
         self.state.insert(id.into(), 1);
         let resolved = match &spec.source {
-            SurfaceSource::Frame { layout_key, radius } => {
+            SurfaceSource::Frame { layout_id, radius } => {
                 let frame = self
                     .layout
-                    .frame(layout_key)
-                    .ok_or_else(|| SceneError::MissingLayoutFrame(layout_key.clone()))?;
+                    .frame(layout_id)
+                    .ok_or_else(|| SceneError::MissingLayoutFrame(layout_id.clone()))?;
                 let (basis, _) = sharp_rect(frame)?;
                 let r = match radius {
-                    FrameRadius::Global => self.spec.theme.corners.convex,
-                    FrameRadius::Absolute(r) => *r,
-                    FrameRadius::ParentNormalized { parent, scale } => {
+                    Radius::Global => self.spec.theme.corners.convex,
+                    Radius::Absolute(r) => *r,
+                    Radius::ParentNormalized { parent, scale } => {
                         if !scale.is_finite() || *scale < 0.0 {
                             return Err(SceneError::InvalidRadius);
                         }
@@ -491,33 +493,30 @@ mod tests {
     use super::*;
     use mui_layout::{Align, Justify};
     fn spec() -> SceneSpec {
-        let controls = Node::column(
-            "controls",
-            [
-                Node::leaf("plus", Size::new(28., 28.)),
-                Node::leaf("pie-a", Size::new(28., 28.)),
-                Node::leaf("pie-b", Size::new(28., 28.)),
-            ],
-        )
+        let controls = column([
+            leaf(28., 28.).id("plus"),
+            leaf(28., 28.).id("pie-a"),
+            leaf(28., 28.).id("pie-b"),
+        ])
+        .id("controls")
         .gap(10.)
         .align(Align::Center)
         .justify(Justify::Center);
-        let pill = Node::column("pill-frame", [controls]).padding(10.);
-        let tab = Node::column("tab-frame", [pill])
+        let pill = column([controls]).id("pill-frame").padding(10.);
+        let tab = column([pill])
+            .id("tab")
             .padding(12.)
             .min_size(Size::new(92., 0.));
-        let root = Node::overlay(
-            "root",
-            [Node::leaf("panel-frame", Size::new(520., 230.)), tab],
-        )
-        .align(Align::Start);
+        let root = overlay([leaf(520., 230.).id("panel"), tab])
+            .id("root")
+            .align(Align::Start);
         SceneSpec::new(root)
             .theme(Theme {
                 corners: CornerProfile::new(28., 32.),
                 ..Theme::default()
             })
-            .surface(SurfaceSpec::frame("panel", "panel-frame"))
-            .surface(SurfaceSpec::frame("tab", "tab-frame"))
+            .surface(SurfaceSpec::frame("panel"))
+            .surface(SurfaceSpec::frame("tab"))
             .surface(SurfaceSpec::merge("outer", ["panel", "tab"]))
             .surface(SurfaceSpec::inset("pill-shell", "tab", Spacing::px(12.)))
     }
@@ -532,16 +531,15 @@ mod tests {
     #[test]
     fn parent_normalized_is_distinct_from_parallel() {
         let mut s = spec();
-        s.surfaces
-            .push(SurfaceSpec::frame("styled", "pill-frame").radius(
-                FrameRadius::ParentNormalized {
-                    parent: "tab".into(),
-                    scale: 1.0,
-                },
-            ));
+        s.surfaces.push(
+            SurfaceSpec::frame("pill-frame").radius(Radius::ParentNormalized {
+                parent: "tab".into(),
+                scale: 1.0,
+            }),
+        );
         let r = resolve_scene(&s).unwrap();
         let tab = r.surface("tab").unwrap();
-        let styled = r.surface("styled").unwrap();
+        let styled = r.surface("pill-frame").unwrap();
         let p = tab.bounds.unwrap();
         let c = styled.bounds.unwrap();
         let expected =
@@ -554,7 +552,7 @@ mod tests {
     }
     #[test]
     fn cycle_is_rejected() {
-        let root = Node::leaf("x", Size::new(10., 10.));
+        let root = leaf(10., 10.).id("x");
         let s = SceneSpec::new(root)
             .surface(SurfaceSpec::inset("a", "b", Spacing::px(1.)))
             .surface(SurfaceSpec::inset("b", "a", Spacing::px(1.)));
@@ -586,7 +584,7 @@ mod tests {
         let mut state = SceneState::default();
         state.commit(&spec()).unwrap();
         let rev = state.revision();
-        let bad = SceneSpec::new(Node::leaf("x", Size::new(f64::NAN, 1.)));
+        let bad = SceneSpec::new(leaf(f64::NAN, 1.).id("x"));
         assert!(state.commit(&bad).is_err());
         assert_eq!(state.revision(), rev);
         assert!(state.current().is_some());

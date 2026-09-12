@@ -3,7 +3,7 @@
 import { writeFile } from "node:fs/promises";
 // @ts-ignore
 import { pathToFileURL } from "node:url";
-import type { Align, CornerRule, FrameRadius, Insets, Justify, Node, Scene, Spacing, Surface } from "./index.js";
+import type { Align, CornerRule, Radius, Insets, Justify, Node, Scene, Spacing, Surface } from "./index.js";
 
 declare const process: { argv: string[] };
 
@@ -21,6 +21,7 @@ function insets(v: Insets): string {
 }
 function decorate(base: string, p: Node["props"]): string {
   let s = base;
+  if (p.id !== undefined) s += `.id(${q(p.id)})`;
   if (p.gap !== undefined) s += `.gap(${n(p.gap)})`;
   if (p.padding !== undefined) s += insets(p.padding);
   if (p.min) s += `.min_size(mui_layout::Size::new(${n(p.min[0])}, ${n(p.min[1])}))`;
@@ -32,19 +33,18 @@ function decorate(base: string, p: Node["props"]): string {
 }
 function node(v: Node, depth = 1): string {
   const pad = "    ".repeat(depth);
-  if (v.kind === "leaf") return decorate(`mui_layout::Node::leaf(${q(v.id)}, mui_layout::Size::new(${n(v.size[0])}, ${n(v.size[1])}))`, v.props);
-  const ctor = v.kind === "row" ? "row" : v.kind === "column" ? "column" : "overlay";
+  if (v.kind === "leaf") return decorate(`mui_layout::leaf(${n(v.size[0])}, ${n(v.size[1])})`, v.props);
   const children = v.children.map(c => `${pad}    ${node(c, depth + 1)}`).join(",\n");
-  return decorate(`mui_layout::Node::${ctor}(${q(v.id)}, vec![\n${children}\n${pad}])`, v.props);
+  return decorate(`mui_layout::${v.kind}(vec![\n${children}\n${pad}])`, v.props);
 }
 function spacing(v: Spacing): string {
   return v.kind === "px" ? `mui_core::Spacing::px(${n(v.value)})` : `mui_core::Spacing::${v.value}()`;
 }
-function radius(v: FrameRadius): string {
+function radius(v: Radius): string {
   switch (v.kind) {
-    case "global": return `mui_core::FrameRadius::Global`;
-    case "absolute": return `mui_core::FrameRadius::Absolute(${n(v.value)})`;
-    case "parent-normalized": return `mui_core::FrameRadius::ParentNormalized { parent: ${q(v.parent)}.into(), scale: ${n(v.scale)} }`;
+    case "global": return `mui_core::Radius::Global`;
+    case "absolute": return `mui_core::Radius::Absolute(${n(v.value)})`;
+    case "parent-normalized": return `mui_core::Radius::ParentNormalized { parent: ${q(v.parent)}.into(), scale: ${n(v.scale)} }`;
   }
 }
 function cornerRule(v: CornerRule): string {
@@ -56,7 +56,7 @@ function cornerRule(v: CornerRule): string {
 }
 function surface(v: Surface): string {
   switch (v.kind) {
-    case "frame": return `mui_core::SurfaceSpec::frame(${q(v.id)}, ${q(v.layout)}).radius(${radius(v.radius)})`;
+    case "frame": return `mui_core::SurfaceSpec::frame(${q(v.id)}).radius(${radius(v.radius)})`;
     case "merge": return `mui_core::SurfaceSpec::merge(${q(v.id)}, [${v.inputs.map(q).join(", ")}]).corners(${cornerRule(v.corners)})`;
     case "inset": return `mui_core::SurfaceSpec::inset(${q(v.id)}, ${q(v.parent)}, ${spacing(v.distance)})`;
     case "outset": return `mui_core::SurfaceSpec::outset(${q(v.id)}, ${q(v.parent)}, ${spacing(v.distance)})`;

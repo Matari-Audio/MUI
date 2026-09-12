@@ -8,11 +8,10 @@
 //! writes a file instead of opening a window is that a window is a separate
 //! problem -- the pixels above are the same pixels a surface would get.
 
-use mui_core::dsl::column;
 use mui_core::{
-    resolve_scene, CornerProfile, CornerRule, FrameRadius, SceneSpec, Spacing, SurfaceSpec, Theme,
+    resolve_scene, CornerProfile, CornerRule, Radius, SceneSpec, Spacing, SurfaceSpec, Theme,
 };
-use mui_layout::{Align, Node, Size};
+use mui_layout::{column, leaf, Align, Size};
 use vello_common::kurbo::Affine;
 use vello_common::peniko::color::palette::css;
 use vello_common::peniko::color::AlphaColor;
@@ -24,36 +23,27 @@ const HEIGHT: u16 = 360;
 /// The gallery's canonical scene: a tab welded to a panel, unioned sharp and
 /// filleted after, with an inner shell offset from the *merged* outline.
 fn spec() -> SceneSpec {
-    let controls = column(
-        "controls",
-        [
-            Node::leaf("plus", Size::new(28.0, 28.0)),
-            Node::leaf("phase", Size::new(28.0, 28.0)),
-        ],
-    )
-    .gap(10.0)
-    .align(Align::Center);
+    let controls = column([leaf(28.0, 28.0).id("plus"), leaf(28.0, 28.0).id("phase")])
+        .id("controls")
+        .gap(10.0)
+        .align(Align::Center);
 
-    let tab = column(
-        "tab-frame",
-        [column("pill-frame", [controls]).padding(10.0)],
-    )
-    .padding(12.0)
-    .min_size(Size::new(92.0, 0.0));
+    let tab = column([column([controls]).padding(10.0)])
+        .id("tab")
+        .padding(12.0)
+        .min_size(Size::new(92.0, 0.0));
 
-    let root = column(
-        "root",
-        [tab, Node::leaf("panel-frame", Size::new(420.0, 180.0))],
-    )
-    .align(Align::Start);
+    let root = column([tab, leaf(420.0, 180.0).id("panel")])
+        .id("root")
+        .align(Align::Start);
 
     SceneSpec::new(root)
         .theme(Theme {
             corners: CornerProfile::new(28.0, 32.0),
             ..Theme::default()
         })
-        .surface(SurfaceSpec::frame("panel", "panel-frame").radius(FrameRadius::Global))
-        .surface(SurfaceSpec::frame("tab", "tab-frame").radius(FrameRadius::Global))
+        .surface(SurfaceSpec::frame("panel").radius(Radius::Global))
+        .surface(SurfaceSpec::frame("tab").radius(Radius::Global))
         .surface(SurfaceSpec::merge("outer", ["panel", "tab"]).corners(CornerRule::Global))
         .surface(SurfaceSpec::inset("pill-shell", "tab", Spacing::px(12.0)))
 }
