@@ -101,16 +101,24 @@ section exists to fix.
       `InsufficientSpace`, so a window dragged narrower than its content failed
       the whole layout rather than compressing. Default is 1, as in CSS.
 - [x] `align_self`, overriding the parent's `align` for one child.
-- [ ] The flex-fraction part of intrinsic sizing. `basis` stands down when a
-      node hugs its content, because a share of an axis means nothing until
-      there is an axis length to share, and honouring it there would collapse a
-      row to its non-flexible children. CSS instead sizes the container so
-      every flexible child still clears its content; that is a real algorithm
-      and this is the honest stopgap. Only the root of a `resolve(.., None, ..)`
-      is affected -- every other node has a length by the time it is arranged.
-- [ ] An automatic content-based minimum. CSS stops a flex item shrinking below
-      its min-content size; here `minimum` is the only floor, so a child that
-      does not declare one can be squeezed to nothing.
+- [x] The flex fraction in intrinsic sizing. A hugging row is sized so that the
+      hungriest flexible child's *share* still clears its content, rather than
+      by summing children: the left/centre/right bar hugs to 130, not the 100 a
+      sum would give, which would have squashed a 50 px end to 35. It is
+      therefore centred at its hugging size too, and `basis` needs no
+      special case for indefinite axes.
+- [x] Floors that derive from children. A node's floor is every `minimum` in
+      its subtree, summed along the axis they sit on, rather than only what the
+      node declared itself. It binds while the deficit is being shared out and
+      not merely as a check afterwards, so a squeezable sibling absorbs what a
+      frozen child will not give up. Before this, a parent could be shrunk to a
+      width its own contents then overflowed, silently.
+- [ ] An automatic content-based minimum for *leaves*. A leaf is opaque here --
+      it is the content measurement, so there is no smaller version of it to
+      discover -- and its floor is whatever `min_size` it declares, defaulting
+      to zero. CSS derives one from min-content instead. In practice this wants
+      a real min-content pass, which wants text measurement, which is the text
+      leaf below.
 - [ ] Fractional and percentage sizing. `Size` is absolute pixels.
 - [ ] Per-child margins, and the auto-margin idiom that goes with them. Note
       that auto margins would not have solved the centred bar either: they
