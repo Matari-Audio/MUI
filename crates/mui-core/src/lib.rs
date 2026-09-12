@@ -6,6 +6,8 @@
 #![forbid(unsafe_code)]
 
 mod color;
+mod item;
+pub use item::{container, item, Color, Direction, Item, ItemInfo, Rounding, Ui};
 pub mod dsl;
 mod scene;
 mod theme;

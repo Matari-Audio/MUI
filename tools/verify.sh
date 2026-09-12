@@ -25,3 +25,9 @@ diff -u crates/mui-demo/src/compiler_contract.rs "$GENERATED"
 cargo run -p mui-demo --offline
 cargo run -p mui-demo --example chrome_tabs --offline > "$GENERATED"
 diff -u docs/chrome-tabs.svg "$GENERATED"
+
+node packages/mui-ts/dist/src/compiler.js packages/mui-ts/dist/examples/items.js "$GENERATED"
+rustfmt --edition 2021 "$GENERATED"
+diff -u crates/mui-demo/src/generated_items.rs "$GENERATED"
+cargo run -p mui-demo --example items --offline > "$GENERATED"
+diff -u docs/items.svg "$GENERATED"

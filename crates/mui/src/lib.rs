@@ -9,11 +9,15 @@ pub use mui_layout as layout;
 pub use mui_tessellate as tessellate;
 
 pub mod prelude {
-    pub use mui_core::dsl::{column, flow, leaf, row, stack, NodeExt};
     pub use mui_core::{
-        resolve_scene, resolve_scene_measured, Colors, CornerProfile, CornerRule, Edge,
-        FrameRadius, Mode, Palette, Rgb, SceneSpec, SceneState, Seeds, Spacing, SpacingScale,
-        SpacingToken, SurfaceSource, SurfaceSpec, Theme,
+        container, item, Color, Colors, Direction, Item, ItemInfo, Mode, Palette, Rgb, Rounding,
+        Seeds, Spacing, SpacingScale, SpacingToken, Theme, Ui,
     };
-    pub use mui_layout::{Align, Axis, Fill, Gap, Hug, Insets, Justify, Node, Pad, Size, Sizing};
+    pub use mui_layout::Flow::{Auto, Column, Grid, Overlay, Row};
+    pub use mui_layout::Horizontal::{Center, Left, Right};
+    pub use mui_layout::Justify::{End, SpaceAround, SpaceBetween, SpaceEvenly, Start};
+    pub use mui_layout::SpacingToken::{Xl, Xs, L, M, S};
+    pub use mui_layout::Vertical::{Bottom, Middle, Top};
+    pub use mui_layout::{Align, Fill, Gap, Hug, Insets, Justify, Pad, Size, Sizing};
+    pub use mui_layout::{Flow, Horizontal, Track, Vertical};
 }

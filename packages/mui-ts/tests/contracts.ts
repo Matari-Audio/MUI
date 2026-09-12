@@ -23,3 +23,19 @@ test("compact responsive scenes emit tokens, extensions and palettes determinist
   const code=compile(scene);assert.equal(code,compile(scene));
   for(const token of [".extend_to(mui_core::Edge::Bottom", "mui_core::Spacing::m()", "Sizing::Fill", "Mode::Dark", "Rgb::new(170, 34, 204)"]) assert.ok(code.includes(token),token);
 });
+
+test("item API emits real builders and rejects ambiguous identities and grid misuse", async () => {
+  const { item, container, grid, compileItems } = await import("../src/items.js");
+  const { default: doc } = await import("../examples/items.js");
+  const code = compileItems(doc);
+  assert.equal(code, compileItems(doc));
+  for (const token of ['.extend_to("panel")', 'Flow::Grid(3)', 'Rounding::separate', '.on_tap("select-filter")', 'generated_ui()']) assert.ok(code.includes(token), token);
+  for (const root of [
+    container([item("x"), item("x")]),
+    container([item("x").extendTo("missing")]),
+    container([]).layout(grid(0)),
+    container([item("x").cell(1, 1)]).layout("row"),
+    item("x").text("label").children([item("y")]),
+    container([item("x")]).merge(["x"]).merge(["x"]),
+  ]) assert.throws(() => compileItems({ root }), /MUI:/);
+});

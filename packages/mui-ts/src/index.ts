@@ -82,3 +82,6 @@ export interface Scene { root: Node; surfaces: Surface[]; theme?: Theme; offered
 export const defineScene = <T extends Scene>(scene: T): T => scene;
 
 export const extendTo = (frame: Extract<Surface, {kind:"frame"}>, edge: "top" | "right" | "bottom" | "left", target: string): Extract<Surface, {kind:"frame"}> => ({...frame, extension:{edge,target}});
+
+export { Item, item, container, grid, defineUi } from "./items.js";
+export type { ItemDocument, ItemProps, Flow, Track, Horizontal, Vertical, Pack, Color, Round } from "./items.js";

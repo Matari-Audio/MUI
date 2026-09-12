@@ -81,6 +81,8 @@ pub enum Justify {
     Center,
     End,
     SpaceBetween,
+    SpaceEvenly,
+    SpaceAround,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -89,6 +91,37 @@ pub enum Axis {
     Row,
     Column,
     Auto,
+}
+/// Layout policy for a container. Grid(n) creates n equal-width tracks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Flow {
+    #[default]
+    Row,
+    Column,
+    Auto,
+    Grid(usize),
+    Overlay,
+}
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Track {
+    Hug,
+    Fixed(f64),
+    Fraction(f64),
+}
+/// Physical alignment, independent of the current flow direction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Horizontal {
+    Left,
+    Center,
+    Right,
+    Stretch,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Vertical {
+    Top,
+    Middle,
+    Bottom,
+    Stretch,
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Sizing {
@@ -127,6 +160,15 @@ pub struct Node {
     width: Option<Sizing>,
     height: Option<Sizing>,
     wrap: bool,
+    grid: Option<usize>,
+    columns: Option<Vec<Track>>,
+    rows: Option<Vec<Track>>,
+    cell: Option<(usize, usize)>,
+    span: (usize, usize),
+    align_self: Option<Align>,
+    physical: Option<(Horizontal, Vertical)>,
+    place: Option<(Horizontal, Vertical)>,
+    pack_override: Option<Justify>,
 }
 impl Node {
     fn new(key: impl Into<String>, kind: Kind) -> Self {
@@ -146,6 +188,15 @@ impl Node {
             width: None,
             height: None,
             wrap: false,
+            grid: None,
+            columns: None,
+            rows: None,
+            cell: None,
+            span: (1, 1),
+            align_self: None,
+            physical: None,
+            place: None,
+            pack_override: None,
         }
     }
     pub fn leaf(key: impl Into<String>, size: Size) -> Self {
@@ -167,6 +218,76 @@ impl Node {
     /// Anonymous container, with a deterministic structural key. Explicitly key dynamic lists.
     pub fn flow(children: impl IntoIterator<Item = Node>) -> Self {
         Self::row("", children)
+    }
+    pub fn container(key: impl Into<String>) -> Self {
+        Self::row(key, [])
+    }
+    pub fn with_children(mut self, children: impl IntoIterator<Item = Node>) -> Self {
+        self.kind = if matches!(self.kind, Kind::Overlay(_)) {
+            Kind::Overlay(children.into_iter().collect())
+        } else {
+            Kind::Stack(children.into_iter().collect())
+        };
+        self
+    }
+    pub fn measured_content(mut self) -> Self {
+        self.kind = Kind::Measured;
+        self.shrink = 1.;
+        self
+    }
+    pub fn layout(mut self, flow: Flow) -> Self {
+        let children = self.children().to_vec();
+        self.grid = None;
+        self.kind = Kind::Stack(children);
+        match flow {
+            Flow::Row => self.axis = Axis::Row,
+            Flow::Column => self.axis = Axis::Column,
+            Flow::Auto => self.axis = Axis::Auto,
+            Flow::Grid(n) => {
+                self.grid = Some(n);
+                self.axis = Axis::Row;
+            }
+            Flow::Overlay => {
+                self.kind = Kind::Overlay(self.children().to_vec());
+                self.axis = Axis::Row;
+            }
+        }
+        self
+    }
+    pub fn columns(mut self, tracks: impl IntoIterator<Item = Track>) -> Self {
+        self.columns = Some(tracks.into_iter().collect());
+        self
+    }
+    pub fn rows(mut self, tracks: impl IntoIterator<Item = Track>) -> Self {
+        self.rows = Some(tracks.into_iter().collect());
+        self
+    }
+    /// One-based grid cell coordinates: column, row.
+    pub fn cell(mut self, column: usize, row: usize) -> Self {
+        self.cell = Some((column, row));
+        self
+    }
+    pub fn span(mut self, columns: usize, rows: usize) -> Self {
+        self.span = (columns, rows);
+        self
+    }
+    pub fn align_self(mut self, value: Align) -> Self {
+        self.align_self = Some(value);
+        self
+    }
+    pub fn position(mut self, x: Horizontal, y: Vertical) -> Self {
+        self.physical = Some((x, y));
+        self
+    }
+    /// Override alignment inside this item's grid cell.
+    pub fn place(mut self, x: Horizontal, y: Vertical) -> Self {
+        self.place = Some((x, y));
+        self
+    }
+    /// Main-axis distribution. Grid uses the horizontal track axis.
+    pub fn pack(mut self, value: Justify) -> Self {
+        self.pack_override = Some(value);
+        self
     }
     pub fn id(mut self, key: impl Into<String>) -> Self {
         self.key = key.into();

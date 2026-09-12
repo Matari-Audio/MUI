@@ -2,7 +2,7 @@ use super::*;
 use taffy::prelude::TaffyMaxContent;
 use taffy::{
     prelude as t,
-    style_helpers::{auto, length, line, percent},
+    style_helpers::{auto, fr, length, line, percent, span},
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -56,6 +56,8 @@ fn justification(j: Justify) -> t::JustifyContent {
         Justify::Center => t::JustifyContent::CENTER,
         Justify::End => t::JustifyContent::END,
         Justify::SpaceBetween => t::JustifyContent::SPACE_BETWEEN,
+        Justify::SpaceEvenly => t::JustifyContent::SPACE_EVENLY,
+        Justify::SpaceAround => t::JustifyContent::SPACE_AROUND,
     }
 }
 fn dimension(v: Option<Sizing>) -> t::Dimension {
@@ -63,6 +65,50 @@ fn dimension(v: Option<Sizing>) -> t::Dimension {
         Some(Sizing::Fill) => percent(1.),
         Some(Sizing::Fixed(v)) => length(v as f32),
         _ => auto(),
+    }
+}
+fn horizontal(v: Horizontal) -> Align {
+    match v {
+        Horizontal::Left => Align::Start,
+        Horizontal::Center => Align::Center,
+        Horizontal::Right => Align::End,
+        Horizontal::Stretch => Align::Stretch,
+    }
+}
+fn vertical(v: Vertical) -> Align {
+    match v {
+        Vertical::Top => Align::Start,
+        Vertical::Middle => Align::Center,
+        Vertical::Bottom => Align::End,
+        Vertical::Stretch => Align::Stretch,
+    }
+}
+fn aligned_distribution(v: Align) -> t::JustifyContent {
+    match v {
+        Align::Start => t::JustifyContent::START,
+        Align::Center => t::JustifyContent::CENTER,
+        Align::End => t::JustifyContent::END,
+        Align::Stretch => t::JustifyContent::STRETCH,
+    }
+}
+fn apply_position(style: &mut t::Style, node: &Node, column: bool) {
+    if let Some((x, y)) = node.physical {
+        style.justify_content = Some(aligned_distribution(if column {
+            vertical(y)
+        } else {
+            horizontal(x)
+        }));
+        style.align_items = Some(alignment(if column { horizontal(x) } else { vertical(y) }));
+    }
+    if let Some(pack) = node.pack_override {
+        style.justify_content = Some(justification(pack));
+    }
+}
+fn track(v: Track) -> taffy::style::GridTemplateComponent<String> {
+    match v {
+        Track::Hug => auto(),
+        Track::Fixed(v) => length(v as f32),
+        Track::Fraction(v) => fr(v as f32),
     }
 }
 impl<'a> Builder<'a> {
@@ -121,7 +167,42 @@ impl<'a> Builder<'a> {
                 return Err(Error::InvalidValue);
             }
         }
-        if node.wrap && node.axis == Axis::Auto {
+        if node.grid.is_some_and(|n| n == 0 || n > 256)
+            || (node.grid.is_some() && node.axis != Axis::Row)
+            || (node.grid.is_none() && (node.columns.is_some() || node.rows.is_some()))
+            || node
+                .cell
+                .is_some_and(|(c, r)| c == 0 || r == 0 || c > 256 || r > 256)
+            || [node.span.0, node.span.1]
+                .into_iter()
+                .any(|v| v == 0 || v > 256)
+        {
+            return Err(Error::InvalidValue);
+        }
+        for tracks in [&node.columns, &node.rows].into_iter().flatten() {
+            if tracks.is_empty()
+                || tracks.len() > 256
+                || tracks.iter().any(|v| match v {
+                    Track::Hug => false,
+                    Track::Fixed(v) => !v.is_finite() || *v < 0. || *v > extent,
+                    Track::Fraction(v) => !v.is_finite() || *v <= 0. || *v > extent,
+                })
+            {
+                return Err(Error::InvalidValue);
+            }
+        }
+        if matches!(node.kind, Kind::Overlay(_)) && node.pack_override.is_some() {
+            return Err(Error::InvalidValue);
+        }
+        if depth == 0 && (node.cell.is_some() || node.span != (1, 1) || node.place.is_some()) {
+            return Err(Error::InvalidValue);
+        }
+        if node.wrap
+            && (!matches!(node.kind, Kind::Stack(_))
+                || node.axis == Axis::Auto
+                || node.grid.is_some()
+                || matches!(node.kind, Kind::Overlay(_)))
+        {
             return Err(Error::InvalidValue);
         }
         let mut padding = [0.; 4];
@@ -199,6 +280,50 @@ impl<'a> Builder<'a> {
             justify_content: Some(justification(node.justify)),
             ..Default::default()
         };
+        apply_position(&mut style, node, node.axis == Axis::Column);
+        style.align_self = node.align_self.map(alignment);
+        if let Some((x, y)) = node.place {
+            style.justify_self = Some(alignment(horizontal(x)));
+            style.align_self = Some(alignment(vertical(y)));
+        }
+        if let Some((c, r)) = node.cell {
+            style.grid_column = t::Line {
+                start: line(c as i16),
+                end: span(node.span.0 as u16),
+            };
+            style.grid_row = t::Line {
+                start: line(r as i16),
+                end: span(node.span.1 as u16),
+            };
+        } else {
+            style.grid_column = t::Line {
+                start: auto(),
+                end: span(node.span.0 as u16),
+            };
+            style.grid_row = t::Line {
+                start: auto(),
+                end: span(node.span.1 as u16),
+            };
+        }
+        if let Some(n) = node.grid {
+            style.display = t::Display::Grid;
+            style.grid_template_columns = node.columns.as_ref().map_or_else(
+                || vec![fr(1.); n],
+                |v| v.iter().copied().map(track).collect(),
+            );
+            if let Some(rows) = &node.rows {
+                style.grid_template_rows = rows.iter().copied().map(track).collect();
+            }
+            style.justify_items = Some(alignment(
+                node.physical.map_or(node.align, |(x, _)| horizontal(x)),
+            ));
+            style.align_items = Some(alignment(
+                node.physical.map_or(node.align, |(_, y)| vertical(y)),
+            ));
+            style.align_content = Some(node.physical.map_or(t::AlignContent::START, |(_, y)| {
+                aligned_distribution(vertical(y))
+            }));
+        }
         let overlay = matches!(node.kind, Kind::Overlay(_));
         if overlay {
             style.display = t::Display::Grid;
@@ -212,11 +337,20 @@ impl<'a> Builder<'a> {
                     _ => Align::Start,
                 })
             });
+            if let Some((x, y)) = node.physical {
+                style.justify_items = Some(alignment(horizontal(x)));
+                style.align_items = Some(alignment(vertical(y)));
+            }
             style.justify_content = Some(t::JustifyContent::STRETCH);
             style.align_content = Some(t::AlignContent::STRETCH);
         }
         let mut children = Vec::new();
         for (i, child) in node.children().iter().enumerate() {
+            if node.grid.is_none()
+                && (child.cell.is_some() || child.span != (1, 1) || child.place.is_some())
+            {
+                return Err(Error::InvalidValue);
+            }
             children.push(self.add(child, &scope, &format!("{path}.{i}"), depth + 1)?);
         }
         let ids: Vec<_> = children.iter().map(|i| self.entries[*i].id).collect();
@@ -470,6 +604,8 @@ pub fn resolve_measured(
             {
                 let mut style = builder.tree.style(id)?.clone();
                 style.flex_direction = t::FlexDirection::Column;
+                let node = builder.entries.iter().find(|e| e.id == id).unwrap().node;
+                apply_position(&mut style, node, true);
                 builder.tree.set_style(id, style)?;
                 changed = true;
                 break;

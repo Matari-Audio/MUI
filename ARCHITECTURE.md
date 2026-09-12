@@ -1,10 +1,15 @@
 # Architecture
 
-Rust builders and the build-time TypeScript frontend construct the same `SceneSpec`.
+Rust and TypeScript authors use `Item`. Its compiler creates the validated `SceneSpec`,
+scoped content/action metadata, and an ordered set of merged outlines. The same item key
+identifies logical layout, initial geometry, text and actions. Internal merge IDs never
+need to appear in authored code. The older surface/node builders remain the lower layer.
 Resolution proceeds through independent stages:
 
 1. `mui-layout` validates keys, spacing and budgets, then asks Taffy for intrinsic and
    constrained layouts. An intrinsic prepass is only needed for adaptive flows.
+   Grid adds equal fractional tracks, explicit tracks, auto placement and cell/span overrides.
+   Physical positioning is remapped when a flex container changes direction.
    Ancestor auto-direction decisions precede descendant decisions; each flow switches
    at most once. Measurement callbacks supply real width-sensitive content sizes.
 2. `mui-core` compiles surface dependencies into an iterative topological traversal.
@@ -27,3 +32,9 @@ Contrast guarantees concern the final opaque sRGB colors and named background pa
 A scene commit publishes only after successful layout and geometry resolution. No
 geometry or text measurement belongs on the real-time audio callback. The current
 foundation has no event system or retained widget state.
+
+`Ui` keeps its compiled scene immutable apart from available parent dimensions. Rebuild
+with a different theme so spacing and rounding token values change together. Tap metadata
+is declarative: the host recognizes gestures and calls `tap_at` on the matching resolved
+scene. Outlines and hit rectangles are intentionally independent. `outlines` replaces
+merged member paint paths with one union while leaving content metadata intact.

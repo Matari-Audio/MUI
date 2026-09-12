@@ -118,6 +118,7 @@ impl SurfaceSpec {
 /// Which edge of the source frame may grow. The opposite edge stays fixed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Edge {
+    Auto,
     Top,
     Right,
     Bottom,
@@ -286,6 +287,32 @@ fn extend_frame(
 ) -> Option<mui_layout::Frame> {
     let overlap_x = source.right().min(target.right()) - source.x.max(target.x);
     let overlap_y = source.bottom().min(target.bottom()) - source.y.max(target.y);
+    let edge = if edge == Edge::Auto {
+        if overlap_x > epsilon && overlap_y > epsilon {
+            return Some(source);
+        }
+        if overlap_x > epsilon {
+            if target.y >= source.bottom() - epsilon {
+                Edge::Bottom
+            } else if target.bottom() <= source.y + epsilon {
+                Edge::Top
+            } else {
+                return None;
+            }
+        } else if overlap_y > epsilon {
+            if target.x >= source.right() - epsilon {
+                Edge::Right
+            } else if target.right() <= source.x + epsilon {
+                Edge::Left
+            } else {
+                return None;
+            }
+        } else {
+            return None;
+        }
+    } else {
+        edge
+    };
     match edge {
         Edge::Bottom if overlap_x > epsilon && target.bottom() > source.y => {
             source.size.height = source.bottom().max(target.y) - source.y;

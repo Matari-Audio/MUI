@@ -89,6 +89,7 @@ fn attachments_work_in_every_direction_across_layout_branches() {
             Edge::Top => assert_eq!(a.min.y, b.max.y),
             Edge::Bottom => assert_eq!(a.max.y, b.min.y),
             Edge::Left => assert_eq!(a.min.x, b.max.x),
+            Edge::Auto => unreachable!(),
             Edge::Right => assert_eq!(a.max.x, b.min.x),
         }
         assert_eq!(scene.surface("m").unwrap().basis.components(), 1);
