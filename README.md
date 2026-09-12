@@ -355,3 +355,10 @@ Taffy remains an internal flex/grid solver; it does not define MUI's authoring s
 merged geometry. Our wrapper currently rebuilds its tree per resolve, so cross-frame cache
 reuse is not implemented. Retaining that tree (or using Taffy's custom-tree API once the
 runtime tree is stable) is preferable to writing another flex/grid algorithm without evidence.
+
+### Renderer comparison prototype
+
+The isolated [render lab](experiments/render-lab/README.md) executes GPUI and Vello against
+shared MUI geometry, with gradient/AA checks, seeded geometry cases, shader probes and
+presentation-inclusive timing. See [measured results and limitations](docs/render-lab/RESULTS.md).
+The recorded runs use software Vulkan; this experiment does not change the production backend.

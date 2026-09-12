@@ -4,3 +4,7 @@
 __pycache__/
 
 /playground/pkg
+
+/experiments/upstream/
+/experiments/*/target/
+/experiments/render-lab/output/

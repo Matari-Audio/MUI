@@ -1,0 +1,876 @@
+{
+  "gpui-1.5.png": {
+    "scale": 1.5,
+    "reference": "Cairo 4x supersampling + box downsample, shared cubic paths; not ground truth",
+    "rgb_mae": 1.3522677951388888,
+    "rgb_p99": 60.0,
+    "pixels_over_16": 0.030832926432291668,
+    "regions": {
+      "patches": {
+        "mae": 6.03559639084507,
+        "p99": 73.0,
+        "pixels_over_16": 0.1331426056338028
+      },
+      "merged": {
+        "mae": 0.24246341579674913,
+        "p99": 0.0,
+        "pixels_over_16": 0.006171886171886172
+      },
+      "hole_star": {
+        "mae": 0.07712806291570076,
+        "p99": 0.0,
+        "pixels_over_16": 0.003087289035249258
+      },
+      "thin_strokes": {
+        "mae": 1.1093117042824074,
+        "p99": 36.0,
+        "pixels_over_16": 0.028130425347222224
+      },
+      "rotated_clip": {
+        "mae": 0.28586412863756616,
+        "p99": 7.0,
+        "pixels_over_16": 0.007936507936507936
+      }
+    },
+    "solid_patch_max_errors": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "srgb_ramp_mae": 49.962184873949575,
+    "quarter_pixel_circle_centerline_min": 0.0,
+    "quarter_pixel_circle_weak_arc_fraction": 0.0126953125,
+    "thin_stroke_coverage_ratio": 1.0054266487122545
+  },
+  "gpui-1.png": {
+    "scale": 1.0,
+    "reference": "Cairo 4x supersampling + box downsample, shared cubic paths; not ground truth",
+    "rgb_mae": 1.4467536078559027,
+    "rgb_p99": 61.0,
+    "pixels_over_16": 0.032511393229166664,
+    "regions": {
+      "patches": {
+        "mae": 6.004166666666666,
+        "p99": 73.0,
+        "pixels_over_16": 0.13207236842105263
+      },
+      "merged": {
+        "mae": 0.4462076362076362,
+        "p99": 0.0,
+        "pixels_over_16": 0.007323037323037323
+      },
+      "hole_star": {
+        "mae": 0.1276259866423801,
+        "p99": 2.0,
+        "pixels_over_16": 0.0056344869459623555
+      },
+      "thin_strokes": {
+        "mae": 1.45587158203125,
+        "p99": 42.0,
+        "pixels_over_16": 0.03564453125
+      },
+      "rotated_clip": {
+        "mae": 0.3357349537037037,
+        "p99": 10.0,
+        "pixels_over_16": 0.01032986111111111
+      }
+    },
+    "solid_patch_max_errors": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "srgb_ramp_mae": 50.692307692307686,
+    "quarter_pixel_circle_centerline_min": 0.0,
+    "quarter_pixel_circle_weak_arc_fraction": 0.23974609375,
+    "thin_stroke_coverage_ratio": 0.9747783313519298
+  },
+  "gpui-2.png": {
+    "scale": 2.0,
+    "reference": "Cairo 4x supersampling + box downsample, shared cubic paths; not ground truth",
+    "rgb_mae": 1.30296876695421,
+    "rgb_p99": 61.0,
+    "pixels_over_16": 0.02867889404296875,
+    "regions": {
+      "patches": {
+        "mae": 6.004468201754386,
+        "p99": 73.0,
+        "pixels_over_16": 0.1307154605263158
+      },
+      "merged": {
+        "mae": 0.13625268125268125,
+        "p99": 0.0,
+        "pixels_over_16": 0.0021846846846846845
+      },
+      "hole_star": {
+        "mae": 0.05961141469338191,
+        "p99": 0.0,
+        "pixels_over_16": 0.002398299939283546
+      },
+      "thin_strokes": {
+        "mae": 0.9922688802083334,
+        "p99": 37.0,
+        "pixels_over_16": 0.022984822591145832
+      },
+      "rotated_clip": {
+        "mae": 0.2161255787037037,
+        "p99": 4.0,
+        "pixels_over_16": 0.0059331597222222225
+      }
+    },
+    "solid_patch_max_errors": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "srgb_ramp_mae": 49.5375,
+    "quarter_pixel_circle_centerline_min": 0.14828949767902402,
+    "quarter_pixel_circle_weak_arc_fraction": 0.0,
+    "thin_stroke_coverage_ratio": 0.9947466116280528
+  },
+  "gpui-tight-1.5.png": {
+    "scale": 1.5,
+    "reference": "Cairo 4x supersampling + box downsample, shared cubic paths; not ground truth",
+    "rgb_mae": 1.323985912181713,
+    "rgb_p99": 60.0,
+    "pixels_over_16": 0.030105025679976853,
+    "regions": {
+      "patches": {
+        "mae": 6.03559639084507,
+        "p99": 73.0,
+        "pixels_over_16": 0.1331426056338028
+      },
+      "merged": {
+        "mae": 0.2331226464559798,
+        "p99": 0.0,
+        "pixels_over_16": 0.005885885885885886
+      },
+      "hole_star": {
+        "mae": 0.07712806291570076,
+        "p99": 0.0,
+        "pixels_over_16": 0.003087289035249258
+      },
+      "thin_strokes": {
+        "mae": 0.9227882667824074,
+        "p99": 27.0,
+        "pixels_over_16": 0.023763020833333332
+      },
+      "rotated_clip": {
+        "mae": 0.26446500909391535,
+        "p99": 7.0,
+        "pixels_over_16": 0.007076202876984127
+      }
+    },
+    "solid_patch_max_errors": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "srgb_ramp_mae": 49.962184873949575,
+    "quarter_pixel_circle_centerline_min": 0.00016746584223594147,
+    "quarter_pixel_circle_weak_arc_fraction": 0.0078125,
+    "thin_stroke_coverage_ratio": 0.9838607532944544
+  },
+  "gpui-tight-1.png": {
+    "scale": 1.0,
+    "reference": "Cairo 4x supersampling + box downsample, shared cubic paths; not ground truth",
+    "rgb_mae": 1.4428973727756076,
+    "rgb_p99": 63.0,
+    "pixels_over_16": 0.032196044921875,
+    "regions": {
+      "patches": {
+        "mae": 6.004166666666666,
+        "p99": 73.0,
+        "pixels_over_16": 0.13207236842105263
+      },
+      "merged": {
+        "mae": 0.48363792363792363,
+        "p99": 0.0,
+        "pixels_over_16": 0.007516087516087516
+      },
+      "hole_star": {
+        "mae": 0.1276259866423801,
+        "p99": 2.0,
+        "pixels_over_16": 0.0056344869459623555
+      },
+      "thin_strokes": {
+        "mae": 1.3680419921875,
+        "p99": 38.0,
+        "pixels_over_16": 0.03302001953125
+      },
+      "rotated_clip": {
+        "mae": 0.33386574074074077,
+        "p99": 10.0,
+        "pixels_over_16": 0.01015625
+      }
+    },
+    "solid_patch_max_errors": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "srgb_ramp_mae": 50.692307692307686,
+    "quarter_pixel_circle_centerline_min": 0.0,
+    "quarter_pixel_circle_weak_arc_fraction": 0.251953125,
+    "thin_stroke_coverage_ratio": 0.9651504024310288
+  },
+  "gpui-tight-2.png": {
+    "scale": 2.0,
+    "reference": "Cairo 4x supersampling + box downsample, shared cubic paths; not ground truth",
+    "rgb_mae": 1.2580926683213975,
+    "rgb_p99": 60.0,
+    "pixels_over_16": 0.02767626444498698,
+    "regions": {
+      "patches": {
+        "mae": 6.004468201754386,
+        "p99": 73.0,
+        "pixels_over_16": 0.1307154605263158
+      },
+      "merged": {
+        "mae": 0.12615401115401115,
+        "p99": 0.0,
+        "pixels_over_16": 0.001924066924066924
+      },
+      "hole_star": {
+        "mae": 0.05961141469338191,
+        "p99": 0.0,
+        "pixels_over_16": 0.002398299939283546
+      },
+      "thin_strokes": {
+        "mae": 0.6768256293402778,
+        "p99": 24.0,
+        "pixels_over_16": 0.016398111979166668
+      },
+      "rotated_clip": {
+        "mae": 0.19257233796296297,
+        "p99": 4.0,
+        "pixels_over_16": 0.005060763888888889
+      }
+    },
+    "solid_patch_max_errors": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "srgb_ramp_mae": 49.5375,
+    "quarter_pixel_circle_centerline_min": 0.23383570667360964,
+    "quarter_pixel_circle_weak_arc_fraction": 0.0,
+    "thin_stroke_coverage_ratio": 0.9986201931667353
+  },
+  "vello-1.5.png": {
+    "scale": 1.5,
+    "reference": "Cairo 4x supersampling + box downsample, shared cubic paths; not ground truth",
+    "rgb_mae": 0.20265216591917437,
+    "rgb_p99": 2.0,
+    "pixels_over_16": 0.004366274233217593,
+    "regions": {
+      "patches": {
+        "mae": 0.14706205985915494,
+        "p99": 2.0,
+        "pixels_over_16": 0.0
+      },
+      "merged": {
+        "mae": 0.03285571285571286,
+        "p99": 0.0,
+        "pixels_over_16": 0.001166881166881167
+      },
+      "hole_star": {
+        "mae": 0.030699568862794374,
+        "p99": 0.0,
+        "pixels_over_16": 0.0002816474207595814
+      },
+      "thin_strokes": {
+        "mae": 1.1417462384259258,
+        "p99": 36.0,
+        "pixels_over_16": 0.029947916666666668
+      },
+      "rotated_clip": {
+        "mae": 0.15803778108465608,
+        "p99": 3.0,
+        "pixels_over_16": 0.002487909226190476
+      }
+    },
+    "solid_patch_max_errors": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "srgb_ramp_mae": 1.0378151260504196,
+    "quarter_pixel_circle_centerline_min": 0.0841277285495161,
+    "quarter_pixel_circle_weak_arc_fraction": 0.0,
+    "thin_stroke_coverage_ratio": 0.9916694773521709
+  },
+  "vello-1.png": {
+    "scale": 1.0,
+    "reference": "Cairo 4x supersampling + box downsample, shared cubic paths; not ground truth",
+    "rgb_mae": 0.27523888481987846,
+    "rgb_p99": 5.0,
+    "pixels_over_16": 0.005643208821614583,
+    "regions": {
+      "patches": {
+        "mae": 0.20413925438596492,
+        "p99": 2.0,
+        "pixels_over_16": 0.0
+      },
+      "merged": {
+        "mae": 0.05294723294723295,
+        "p99": 0.0,
+        "pixels_over_16": 0.001866151866151866
+      },
+      "hole_star": {
+        "mae": 0.046338797814207654,
+        "p99": 1.0,
+        "pixels_over_16": 0.00034001214329083183
+      },
+      "thin_strokes": {
+        "mae": 1.5686238606770833,
+        "p99": 39.0,
+        "pixels_over_16": 0.039794921875
+      },
+      "rotated_clip": {
+        "mae": 0.1772800925925926,
+        "p99": 5.0,
+        "pixels_over_16": 0.0018055555555555555
+      }
+    },
+    "solid_patch_max_errors": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "srgb_ramp_mae": 1.551282051282051,
+    "quarter_pixel_circle_centerline_min": 0.08156192421822894,
+    "quarter_pixel_circle_weak_arc_fraction": 0.0,
+    "thin_stroke_coverage_ratio": 0.9853794678205041
+  },
+  "vello-2.png": {
+    "scale": 2.0,
+    "reference": "Cairo 4x supersampling + box downsample, shared cubic paths; not ground truth",
+    "rgb_mae": 0.1564782460530599,
+    "rgb_p99": 1.0,
+    "pixels_over_16": 0.0035146077473958335,
+    "regions": {
+      "patches": {
+        "mae": 0.11036184210526316,
+        "p99": 1.0,
+        "pixels_over_16": 0.0
+      },
+      "merged": {
+        "mae": 0.032896825396825397,
+        "p99": 0.0,
+        "pixels_over_16": 0.001151866151866152
+      },
+      "hole_star": {
+        "mae": 0.022973082371989476,
+        "p99": 0.0,
+        "pixels_over_16": 0.00019429265330904674
+      },
+      "thin_strokes": {
+        "mae": 0.8451351589626737,
+        "p99": 31.0,
+        "pixels_over_16": 0.022984822591145832
+      },
+      "rotated_clip": {
+        "mae": 0.1464525462962963,
+        "p99": 2.0,
+        "pixels_over_16": 0.0026866319444444446
+      }
+    },
+    "solid_patch_max_errors": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "srgb_ramp_mae": 0.775,
+    "quarter_pixel_circle_centerline_min": 0.18263721837478505,
+    "quarter_pixel_circle_weak_arc_fraction": 0.0,
+    "thin_stroke_coverage_ratio": 0.9955899759830464
+  },
+  "vello-area-1.5.png": {
+    "scale": 1.5,
+    "reference": "Cairo 4x supersampling + box downsample, shared cubic paths; not ground truth",
+    "rgb_mae": 0.18932276596257716,
+    "rgb_p99": 2.0,
+    "pixels_over_16": 0.00438209816261574,
+    "regions": {
+      "patches": {
+        "mae": 0.14706205985915494,
+        "p99": 2.0,
+        "pixels_over_16": 0.0
+      },
+      "merged": {
+        "mae": 0.034558367891701226,
+        "p99": 0.0,
+        "pixels_over_16": 0.001184041184041184
+      },
+      "hole_star": {
+        "mae": 0.0036361404192935703,
+        "p99": 0.0,
+        "pixels_over_16": 0.0
+      },
+      "thin_strokes": {
+        "mae": 1.1021623022762346,
+        "p99": 35.0,
+        "pixels_over_16": 0.030246310763888888
+      },
+      "rotated_clip": {
+        "mae": 0.11762152777777778,
+        "p99": 1.0,
+        "pixels_over_16": 0.0025189112103174605
+      }
+    },
+    "solid_patch_max_errors": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "srgb_ramp_mae": 1.0378151260504196,
+    "quarter_pixel_circle_centerline_min": 0.16929326602556555,
+    "quarter_pixel_circle_weak_arc_fraction": 0.0,
+    "thin_stroke_coverage_ratio": 0.9909034006771199
+  },
+  "vello-area-1.png": {
+    "scale": 1.0,
+    "reference": "Cairo 4x supersampling + box downsample, shared cubic paths; not ground truth",
+    "rgb_mae": 0.25057220458984375,
+    "rgb_p99": 3.0,
+    "pixels_over_16": 0.005147298177083333,
+    "regions": {
+      "patches": {
+        "mae": 0.20413925438596492,
+        "p99": 2.0,
+        "pixels_over_16": 0.0
+      },
+      "merged": {
+        "mae": 0.05308880308880309,
+        "p99": 0.0,
+        "pixels_over_16": 0.001879021879021879
+      },
+      "hole_star": {
+        "mae": 0.005521149564865412,
+        "p99": 0.0,
+        "pixels_over_16": 0.0
+      },
+      "thin_strokes": {
+        "mae": 1.4758504231770833,
+        "p99": 39.0,
+        "pixels_over_16": 0.03802490234375
+      },
+      "rotated_clip": {
+        "mae": 0.11704282407407407,
+        "p99": 1.0,
+        "pixels_over_16": 0.00015625
+      }
+    },
+    "solid_patch_max_errors": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "srgb_ramp_mae": 1.551282051282051,
+    "quarter_pixel_circle_centerline_min": 0.10733679016926757,
+    "quarter_pixel_circle_weak_arc_fraction": 0.0,
+    "thin_stroke_coverage_ratio": 0.9873915622905617
+  },
+  "vello-area-2.png": {
+    "scale": 2.0,
+    "reference": "Cairo 4x supersampling + box downsample, shared cubic paths; not ground truth",
+    "rgb_mae": 0.14657274881998697,
+    "rgb_p99": 1.0,
+    "pixels_over_16": 0.003441492716471354,
+    "regions": {
+      "patches": {
+        "mae": 0.11036184210526316,
+        "p99": 1.0,
+        "pixels_over_16": 0.0
+      },
+      "merged": {
+        "mae": 0.031933719433719435,
+        "p99": 0.0,
+        "pixels_over_16": 0.0010842985842985844
+      },
+      "hole_star": {
+        "mae": 0.0027261687917425623,
+        "p99": 0.0,
+        "pixels_over_16": 0.0
+      },
+      "thin_strokes": {
+        "mae": 0.8192121717664931,
+        "p99": 31.0,
+        "pixels_over_16": 0.0228424072265625
+      },
+      "rotated_clip": {
+        "mae": 0.11672453703703704,
+        "p99": 1.0,
+        "pixels_over_16": 0.0025390625
+      }
+    },
+    "solid_patch_max_errors": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "srgb_ramp_mae": 0.775,
+    "quarter_pixel_circle_centerline_min": 0.24074314418881015,
+    "quarter_pixel_circle_weak_arc_fraction": 0.0,
+    "thin_stroke_coverage_ratio": 0.9937340018460682
+  },
+  "vello-area-present-1.png": {
+    "scale": 1.0,
+    "reference": "Cairo 4x supersampling + box downsample, shared cubic paths; not ground truth",
+    "rgb_mae": 0.25057220458984375,
+    "rgb_p99": 3.0,
+    "pixels_over_16": 0.005147298177083333,
+    "regions": {
+      "patches": {
+        "mae": 0.20413925438596492,
+        "p99": 2.0,
+        "pixels_over_16": 0.0
+      },
+      "merged": {
+        "mae": 0.05308880308880309,
+        "p99": 0.0,
+        "pixels_over_16": 0.001879021879021879
+      },
+      "hole_star": {
+        "mae": 0.005521149564865412,
+        "p99": 0.0,
+        "pixels_over_16": 0.0
+      },
+      "thin_strokes": {
+        "mae": 1.4758504231770833,
+        "p99": 39.0,
+        "pixels_over_16": 0.03802490234375
+      },
+      "rotated_clip": {
+        "mae": 0.11704282407407407,
+        "p99": 1.0,
+        "pixels_over_16": 0.00015625
+      }
+    },
+    "solid_patch_max_errors": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "srgb_ramp_mae": 1.551282051282051,
+    "quarter_pixel_circle_centerline_min": 0.10733679016926757,
+    "quarter_pixel_circle_weak_arc_fraction": 0.0,
+    "thin_stroke_coverage_ratio": 0.9873915622905617
+  },
+  "vello-area-present-2.png": {
+    "scale": 2.0,
+    "reference": "Cairo 4x supersampling + box downsample, shared cubic paths; not ground truth",
+    "rgb_mae": 0.14657274881998697,
+    "rgb_p99": 1.0,
+    "pixels_over_16": 0.003441492716471354,
+    "regions": {
+      "patches": {
+        "mae": 0.11036184210526316,
+        "p99": 1.0,
+        "pixels_over_16": 0.0
+      },
+      "merged": {
+        "mae": 0.031933719433719435,
+        "p99": 0.0,
+        "pixels_over_16": 0.0010842985842985844
+      },
+      "hole_star": {
+        "mae": 0.0027261687917425623,
+        "p99": 0.0,
+        "pixels_over_16": 0.0
+      },
+      "thin_strokes": {
+        "mae": 0.8192121717664931,
+        "p99": 31.0,
+        "pixels_over_16": 0.0228424072265625
+      },
+      "rotated_clip": {
+        "mae": 0.11672453703703704,
+        "p99": 1.0,
+        "pixels_over_16": 0.0025390625
+      }
+    },
+    "solid_patch_max_errors": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "srgb_ramp_mae": 0.775,
+    "quarter_pixel_circle_centerline_min": 0.24074314418881015,
+    "quarter_pixel_circle_weak_arc_fraction": 0.0,
+    "thin_stroke_coverage_ratio": 0.9937340018460682
+  },
+  "vello-msaa8-1.5.png": {
+    "scale": 1.5,
+    "reference": "Cairo 4x supersampling + box downsample, shared cubic paths; not ground truth",
+    "rgb_mae": 0.2223729263117284,
+    "rgb_p99": 2.0,
+    "pixels_over_16": 0.005095305266203704,
+    "regions": {
+      "patches": {
+        "mae": 0.14706205985915494,
+        "p99": 2.0,
+        "pixels_over_16": 0.0
+      },
+      "merged": {
+        "mae": 0.03555364888698222,
+        "p99": 0.0,
+        "pixels_over_16": 0.0012240812240812242
+      },
+      "hole_star": {
+        "mae": 0.0486997277408266,
+        "p99": 0.0,
+        "pixels_over_16": 0.0015273956279654225
+      },
+      "thin_strokes": {
+        "mae": 1.2429560908564814,
+        "p99": 40.0,
+        "pixels_over_16": 0.03245261863425926
+      },
+      "rotated_clip": {
+        "mae": 0.18998015873015872,
+        "p99": 5.0,
+        "pixels_over_16": 0.004371279761904762
+      }
+    },
+    "solid_patch_max_errors": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "srgb_ramp_mae": 1.0378151260504196,
+    "quarter_pixel_circle_centerline_min": 0.09689274822230066,
+    "quarter_pixel_circle_weak_arc_fraction": 0.0,
+    "thin_stroke_coverage_ratio": 0.9912786126424893
+  },
+  "vello-msaa8-1.png": {
+    "scale": 1.0,
+    "reference": "Cairo 4x supersampling + box downsample, shared cubic paths; not ground truth",
+    "rgb_mae": 0.30242835150824654,
+    "rgb_p99": 6.0,
+    "pixels_over_16": 0.0069580078125,
+    "regions": {
+      "patches": {
+        "mae": 0.20413925438596492,
+        "p99": 2.0,
+        "pixels_over_16": 0.0
+      },
+      "merged": {
+        "mae": 0.0546975546975547,
+        "p99": 0.0,
+        "pixels_over_16": 0.0020205920205920206
+      },
+      "hole_star": {
+        "mae": 0.06750050597045132,
+        "p99": 1.0,
+        "pixels_over_16": 0.00172434729811779
+      },
+      "thin_strokes": {
+        "mae": 1.7023518880208333,
+        "p99": 46.0,
+        "pixels_over_16": 0.0452880859375
+      },
+      "rotated_clip": {
+        "mae": 0.23129050925925926,
+        "p99": 7.0,
+        "pixels_over_16": 0.004895833333333334
+      }
+    },
+    "solid_patch_max_errors": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "srgb_ramp_mae": 1.551282051282051,
+    "quarter_pixel_circle_centerline_min": 4.009788493729869e-05,
+    "quarter_pixel_circle_weak_arc_fraction": 0.013916015625,
+    "thin_stroke_coverage_ratio": 0.9841812515327716
+  },
+  "vello-msaa8-2.png": {
+    "scale": 2.0,
+    "reference": "Cairo 4x supersampling + box downsample, shared cubic paths; not ground truth",
+    "rgb_mae": 0.16971333821614584,
+    "rgb_p99": 1.0,
+    "pixels_over_16": 0.0038928985595703125,
+    "regions": {
+      "patches": {
+        "mae": 0.11036184210526316,
+        "p99": 1.0,
+        "pixels_over_16": 0.0
+      },
+      "merged": {
+        "mae": 0.03327863577863578,
+        "p99": 0.0,
+        "pixels_over_16": 0.0011647361647361648
+      },
+      "hole_star": {
+        "mae": 0.036067597652297105,
+        "p99": 0.0,
+        "pixels_over_16": 0.0010625379477838493
+      },
+      "thin_strokes": {
+        "mae": 0.9164106580946181,
+        "p99": 34.0,
+        "pixels_over_16": 0.0240020751953125
+      },
+      "rotated_clip": {
+        "mae": 0.16610677083333333,
+        "p99": 3.0,
+        "pixels_over_16": 0.0037630208333333335
+      }
+    },
+    "solid_patch_max_errors": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "srgb_ramp_mae": 0.775,
+    "quarter_pixel_circle_centerline_min": 0.1387691167137007,
+    "quarter_pixel_circle_weak_arc_fraction": 0.0,
+    "thin_stroke_coverage_ratio": 0.9951089935441328
+  },
+  "vello-present-1.png": {
+    "scale": 1.0,
+    "reference": "Cairo 4x supersampling + box downsample, shared cubic paths; not ground truth",
+    "rgb_mae": 0.27523888481987846,
+    "rgb_p99": 5.0,
+    "pixels_over_16": 0.005643208821614583,
+    "regions": {
+      "patches": {
+        "mae": 0.20413925438596492,
+        "p99": 2.0,
+        "pixels_over_16": 0.0
+      },
+      "merged": {
+        "mae": 0.05294723294723295,
+        "p99": 0.0,
+        "pixels_over_16": 0.001866151866151866
+      },
+      "hole_star": {
+        "mae": 0.046338797814207654,
+        "p99": 1.0,
+        "pixels_over_16": 0.00034001214329083183
+      },
+      "thin_strokes": {
+        "mae": 1.5686238606770833,
+        "p99": 39.0,
+        "pixels_over_16": 0.039794921875
+      },
+      "rotated_clip": {
+        "mae": 0.1772800925925926,
+        "p99": 5.0,
+        "pixels_over_16": 0.0018055555555555555
+      }
+    },
+    "solid_patch_max_errors": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "srgb_ramp_mae": 1.551282051282051,
+    "quarter_pixel_circle_centerline_min": 0.08156192421822894,
+    "quarter_pixel_circle_weak_arc_fraction": 0.0,
+    "thin_stroke_coverage_ratio": 0.9853794678205041
+  },
+  "vello-present-2.png": {
+    "scale": 2.0,
+    "reference": "Cairo 4x supersampling + box downsample, shared cubic paths; not ground truth",
+    "rgb_mae": 0.1564782460530599,
+    "rgb_p99": 1.0,
+    "pixels_over_16": 0.0035146077473958335,
+    "regions": {
+      "patches": {
+        "mae": 0.11036184210526316,
+        "p99": 1.0,
+        "pixels_over_16": 0.0
+      },
+      "merged": {
+        "mae": 0.032896825396825397,
+        "p99": 0.0,
+        "pixels_over_16": 0.001151866151866152
+      },
+      "hole_star": {
+        "mae": 0.022973082371989476,
+        "p99": 0.0,
+        "pixels_over_16": 0.00019429265330904674
+      },
+      "thin_strokes": {
+        "mae": 0.8451351589626737,
+        "p99": 31.0,
+        "pixels_over_16": 0.022984822591145832
+      },
+      "rotated_clip": {
+        "mae": 0.1464525462962963,
+        "p99": 2.0,
+        "pixels_over_16": 0.0026866319444444446
+      }
+    },
+    "solid_patch_max_errors": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "srgb_ramp_mae": 0.775,
+    "quarter_pixel_circle_centerline_min": 0.18263721837478505,
+    "quarter_pixel_circle_weak_arc_fraction": 0.0,
+    "thin_stroke_coverage_ratio": 0.9955899759830464
+  }
+}

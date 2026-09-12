@@ -1,0 +1,29 @@
+{
+  "backend": "vello-area",
+  "scale": 2.0,
+  "width": 1536,
+  "height": 1024,
+  "adapter": "AdapterInfo { name: \"llvmpipe (LLVM 20.1.2, 256 bits)\", vendor: 65541, device: 0, device_type: Cpu, device_pci_bus_id: \"\", driver: \"llvmpipe\", driver_info: \"Mesa 25.2.8-0ubuntu0.24.04.2 (LLVM 20.1.2)\", backend: Vulkan, subgroup_min_size: 8, subgroup_max_size: 8, transient_saves_memory: false }",
+  "initialization_ms": 115.720684,
+  "first_draw_ms": 107.689784,
+  "scene_encoding": {
+    "samples": 60,
+    "median_ms": 0.057896,
+    "p95_ms": 0.077415,
+    "min_ms": 0.056815,
+    "max_ms": 0.105587
+  },
+  "steady_draw_wait": {
+    "samples": 60,
+    "median_ms": 14.528701,
+    "p95_ms": 16.48064,
+    "min_ms": 14.067977,
+    "max_ms": 17.701064
+  },
+  "timing_scope": "offscreen draw + device wait",
+  "capture_excluded": true,
+  "shared_geometry": true,
+  "marks": 40,
+  "tile_side": 1,
+  "warmup_frames": 5
+}
