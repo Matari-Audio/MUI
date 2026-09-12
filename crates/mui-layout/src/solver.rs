@@ -449,6 +449,7 @@ impl<'a> Builder<'a> {
         i: usize,
         origin: [f64; 2],
         frames: &mut BTreeMap<String, Frame>,
+        content_frames: &mut BTreeMap<String, Frame>,
     ) -> Result<(), Error> {
         let e = &self.entries[i];
         let l = self.tree.layout(e.id)?;
@@ -477,8 +478,17 @@ impl<'a> Builder<'a> {
             {
                 return Err(Error::InsufficientSpace(e.key.clone()));
             }
-            self.collect(child, [frame.x, frame.y], frames)?;
+            self.collect(child, [frame.x, frame.y], frames, content_frames)?;
         }
+        let content = Frame {
+            x: frame.x + e.padding.left,
+            y: frame.y + e.padding.top,
+            size: Size::new(
+                (frame.size.width - e.padding.horizontal()).max(0.),
+                (frame.size.height - e.padding.vertical()).max(0.),
+            ),
+        };
+        content_frames.insert(e.key.clone(), content);
         frames.insert(e.key.clone(), frame);
         Ok(())
     }
@@ -616,7 +626,8 @@ pub fn resolve_measured(
         }
     }
     let mut frames = BTreeMap::new();
-    builder.collect(root_index, [0., 0.], &mut frames)?;
+    let mut content_frames = BTreeMap::new();
+    builder.collect(root_index, [0., 0.], &mut frames, &mut content_frames)?;
     let size = frames[&builder.entries[root_index].key].size;
     // Hard minimums may cause Taffy to exceed the offered size; surface that conflict.
     if constraints
@@ -628,5 +639,9 @@ pub fn resolve_measured(
     {
         return Err(Error::InsufficientSpace(root.key.clone()));
     }
-    Ok(Layout { size, frames })
+    Ok(Layout {
+        size,
+        frames,
+        content_frames,
+    })
 }

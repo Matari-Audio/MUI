@@ -400,8 +400,13 @@ impl Frame {
 pub struct Layout {
     pub size: Size,
     frames: BTreeMap<String, Frame>,
+    content_frames: BTreeMap<String, Frame>,
 }
 impl Layout {
+    /// Content bounds in scene coordinates, excluding resolved padding.
+    pub fn content_frame(&self, key: &str) -> Option<Frame> {
+        self.content_frames.get(key).copied()
+    }
     pub fn frame(&self, key: &str) -> Option<Frame> {
         self.frames.get(key).copied()
     }

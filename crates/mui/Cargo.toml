@@ -6,9 +6,12 @@ license.workspace = true
 
 [features]
 default = []
+text = ["dep:mui-text"]
+system-fonts = ["text", "mui-text/system-fonts"]
 egui = ["dep:mui-egui"]
 
 [dependencies]
+mui-text = { path = "../mui-text", optional = true }
 mui-core = { path = "../mui-core" }
 mui-layout = { path = "../mui-layout" }
 mui-geometry = { path = "../mui-geometry" }

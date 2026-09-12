@@ -7,6 +7,8 @@ pub use mui_egui as egui;
 pub use mui_geometry as geometry;
 pub use mui_layout as layout;
 pub use mui_tessellate as tessellate;
+#[cfg(feature = "text")]
+pub use mui_text as text;
 
 pub mod prelude {
     pub use mui_core::{

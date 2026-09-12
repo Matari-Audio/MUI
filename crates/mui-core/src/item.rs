@@ -352,6 +352,10 @@ pub struct Ui {
     pub(crate) groups: Vec<Group>,
 }
 impl Ui {
+    /// Logical items in authoring order, including structural containers.
+    pub fn items(&self) -> impl Iterator<Item = (&str, &ItemInfo)> {
+        self.order.iter().map(|id| (id.as_str(), &self.items[id]))
+    }
     pub fn colors(&self) -> &Colors {
         &self.colors
     }

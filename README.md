@@ -309,7 +309,7 @@ npm --prefix packages/mui-ts ci
 
 Verification checks formatting, native tests, Clippy with warnings denied, WASM compilation,
 TypeScript tests, deterministic Rust generation, the runtime demo and deterministic SVG
-export. The suite replaces numerous isolated assertions with 35 Rust contract tests and
+export. The suite replaces numerous isolated assertions with 36 Rust contract tests and
 4 TypeScript tests covering concrete geometry, layout, failure and frontend behavior.
 
 API migration: `Spacing::resolve` now takes `&SpacingScale`; Theme literals need
@@ -342,3 +342,16 @@ available. No hosted URL is implied by the presence of the workflow.
 See [the reuse roadmap](docs/ROADMAP.md) for the remaining layout, alignment, text, color,
 interaction, rendering, plugin-binding and publication work. The most important next step
 is a complete reference host integration, not more syntax aliases.
+
+### Parley text
+
+Enable `mui`'s `text` feature for `TextSystem`: bundled-font registration, intrinsic text
+measurement, wrapping and final glyph layouts paired with the resolved scene. See
+[the text integration](crates/mui-text/README.md). `system-fonts` separately enables native
+font discovery. Renderers can now read `Layout::content_frame(id)` to place text inside
+resolved padding, and `Ui::items()` to inspect logical items in authoring order.
+
+Taffy remains an internal flex/grid solver; it does not define MUI's authoring syntax or
+merged geometry. Our wrapper currently rebuilds its tree per resolve, so cross-frame cache
+reuse is not implemented. Retaining that tree (or using Taffy's custom-tree API once the
+runtime tree is stable) is preferable to writing another flex/grid algorithm without evidence.
