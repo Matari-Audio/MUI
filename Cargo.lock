@@ -1436,6 +1436,7 @@ dependencies = [
 name = "mui-core"
 version = "0.3.0"
 dependencies = [
+ "color",
  "mui-geometry",
  "mui-layout",
 ]

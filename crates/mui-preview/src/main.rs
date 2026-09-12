@@ -37,8 +37,9 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, NamedKey};
 use winit::window::{Window, WindowId};
 
-const BACKDROP: Rgba = AlphaColor::new([0.07, 0.08, 0.10, 1.0]);
-const OUTLINE: Rgba = AlphaColor::new([0.47, 0.75, 1.0, 1.0]);
+/// Deliberately off-palette: the layout-frame overlay is a debug aid and has
+/// to be findable against any theme, which is the one job a derived role
+/// cannot do.
 const FRAME: Rgba = AlphaColor::new([0.95, 0.45, 0.75, 0.60]);
 
 /// The sidebar's width in logical points. The stage centres in what is left.
@@ -372,7 +373,7 @@ impl App {
         let origin = self.origin(size, scale);
         let gpu = self.gpu.as_mut().expect("checked just above");
         let scene = gpu.begin();
-        scene.set_paint(BACKDROP);
+        scene.set_paint(ui::SKIN.layer(-2).to_srgb());
         scene.fill_rect(&vello_common::kurbo::Rect::new(
             0.,
             0.,
@@ -384,11 +385,13 @@ impl App {
         scene.set_stroke(Stroke::new(1.));
         for (i, (_, path)) in self.baked.paths.iter().enumerate() {
             if self.show_fill {
-                let shade = 0.16 + (i % 5) as f32 * 0.06;
-                scene.set_paint(Rgba::new([shade, shade + 0.02, shade + 0.05, 1.0]));
+                // Cycling layers rather than sRGB channels: the steps between
+                // these fills are meant to look even, and only a perceptual
+                // ramp makes them so.
+                scene.set_paint(ui::SKIN.layer(i as i32 % 5).to_srgb());
                 scene.fill_path(path);
             }
-            scene.set_paint(OUTLINE);
+            scene.set_paint(ui::SKIN.hover(ui::SKIN.accent).to_srgb());
             scene.stroke_path(path);
         }
         if self.show_frames {

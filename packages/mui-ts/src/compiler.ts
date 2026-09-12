@@ -3,7 +3,7 @@
 import { writeFile } from "node:fs/promises";
 // @ts-ignore
 import { pathToFileURL } from "node:url";
-import type { Align, CornerRule, Radius, Insets, Justify, Node, Scene, Spacing, Surface } from "./index.js";
+import type { Align, CornerRule, Radius, Insets, Justify, Node, Oklch, Palette, Scene, Spacing, Surface } from "./index.js";
 
 declare const process: { argv: string[] };
 
@@ -62,6 +62,24 @@ function surface(v: Surface): string {
     case "outset": return `mui_core::SurfaceSpec::outset(${q(v.id)}, ${q(v.parent)}, ${spacing(v.distance)})`;
   }
 }
+/// Unstated fields fall through to `Palette::DARK` rather than being restated
+/// here, so the two sides cannot drift.
+function palette(p: Palette): string {
+  const c = (v: Oklch) => v.length === 4
+    ? `mui_core::Color::oklcha(${v.map(n).join(", ")})`
+    : `mui_core::Color::oklch(${v.map(n).join(", ")})`;
+  const fields: string[] = [];
+  for (const k of ["surface", "accent", "ink", "error"] as const) {
+    const v = p[k];
+    if (v) fields.push(`${k}: ${c(v)}`);
+  }
+  for (const k of ["step", "hover"] as const) {
+    const v = p[k];
+    if (v !== undefined) fields.push(`${k}: ${n(v)}`);
+  }
+  return `mui_core::Palette { ${fields.join(", ")}${fields.length ? ", " : ""}..mui_core::Palette::DARK }`;
+}
+
 function compile(scene: Scene): string {
   const t = scene.theme ?? {};
   const c = t.corners ?? { convex: 18, concave: 14 };
@@ -72,6 +90,7 @@ function compile(scene: Scene): string {
   out += `    let theme = mui_core::Theme {\n`;
   out += `        corners: mui_core::CornerProfile::new(${n(c.convex)}, ${n(c.concave)}),\n`;
   out += `        spacing: mui_core::SpacingScale { xs: ${n(sp.xs)}, s: ${n(sp.s)}, m: ${n(sp.m)}, l: ${n(sp.l)}, xl: ${n(sp.xl)} },\n`;
+  if (t.palette) out += `        palette: ${palette(t.palette)},\n`;
   out += `        stroke_width: ${n(t.strokeWidth ?? 1.5)},\n    };\n`;
   out += `    mui_core::SceneSpec::new(root).theme(theme)`;
   if (scene.offered) out += `.offered(mui_layout::Size::new(${n(scene.offered[0])}, ${n(scene.offered[1])}))`;

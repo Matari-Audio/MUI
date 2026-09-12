@@ -65,9 +65,30 @@ export const mergeSurface = (id: string, inputs: string[], c: CornerRule = corne
 export const insetSurface = (id: string, parent: string, distance: Spacing): Surface => ({ kind: "inset", id, parent, distance });
 export const outsetSurface = (id: string, parent: string, distance: Spacing): Surface => ({ kind: "outset", id, parent, distance });
 
+/// An Oklch colour: perceptual lightness 0..1, chroma 0..~0.4, hue in degrees,
+/// and optional straight alpha. Lightness, not an sRGB channel, because every
+/// derived colour is a lightness move and only a perceptual space makes the
+/// same move look the same on every hue.
+export type Oklch = [l: number, c: number, h: number] | [l: number, c: number, h: number, alpha: number];
+
+/// The colours declared by hand. Hover, pressed, disabled, dimmed ink and the
+/// surface layers are derived from these, so anything left out keeps the
+/// Rust-side default rather than being restated here.
+export interface Palette {
+  surface?: Oklch;
+  accent?: Oklch;
+  ink?: Oklch;
+  error?: Oklch;
+  /// Lightness between surface layers. Negative for a light theme.
+  step?: number;
+  /// Lightness a control gains under the pointer. Negative for a light theme.
+  hover?: number;
+}
+
 export interface Theme {
   corners?: { convex: number; concave: number };
   spacing?: Partial<Record<"xs" | "s" | "m" | "l" | "xl", number>>;
+  palette?: Palette;
   strokeWidth?: number;
 }
 export interface Scene { root: Node; surfaces: Surface[]; theme?: Theme; offered?: [number, number] }

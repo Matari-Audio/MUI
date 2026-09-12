@@ -12,6 +12,7 @@
 use std::ops::RangeInclusive;
 use std::sync::Arc;
 
+use mui_core::{Color, Palette};
 use mui_geometry::{Bounds, Path, Point, RoundedRect};
 use mui_input::{Hit, Interaction, PointerInput, Response};
 use mui_text::TextRun;
@@ -20,15 +21,33 @@ use vello_common::peniko::color::AlphaColor;
 
 pub type Rgba = AlphaColor<vello_common::peniko::color::Srgb>;
 
-pub const PANEL: Rgba = AlphaColor::new([0.13, 0.14, 0.17, 1.0]);
-pub const WELL: Rgba = AlphaColor::new([0.09, 0.10, 0.12, 1.0]);
-pub const IDLE: Rgba = AlphaColor::new([0.27, 0.29, 0.34, 1.0]);
-pub const HOVER: Rgba = AlphaColor::new([0.40, 0.43, 0.50, 1.0]);
-pub const ACCENT: Rgba = AlphaColor::new([0.35, 0.72, 0.98, 1.0]);
-pub const ACCENT_LIT: Rgba = AlphaColor::new([0.56, 0.83, 1.0, 1.0]);
-pub const TEXT: Rgba = AlphaColor::new([0.88, 0.90, 0.94, 1.0]);
-pub const TEXT_DIM: Rgba = AlphaColor::new([0.55, 0.58, 0.64, 1.0]);
-pub const ERROR: Rgba = AlphaColor::new([0.86, 0.35, 0.35, 1.0]);
+/// Four colours and two steps. Every other colour this file paints is derived
+/// from them, so a light theme is `step` and `hover` negated and two colours
+/// swapped -- not a second table of literals to keep in step with this one.
+pub const SKIN: Palette = Palette::DARK;
+
+/// Where a control rests when nothing is happening to it. Raised things sit
+/// above the panel; recessed things -- list rows, a slider track, a field --
+/// sit below it, so the panel reads as the ground between them.
+const RAISED: i32 = 3;
+const RECESSED: i32 = -1;
+
+/// What the pointer is doing to a control, applied to whatever colour its own
+/// state says it rests at. Every widget below uses this instead of its own
+/// table of state combinations.
+///
+/// A press only counts while the pointer is still over the widget: a press
+/// dragged off is no longer a click, so it must stop looking like one.
+fn lift(base: Color, r: &Response) -> Rgba {
+    if r.held && r.hovered {
+        SKIN.pressed(base)
+    } else if r.hovered {
+        SKIN.hover(base)
+    } else {
+        base
+    }
+    .to_srgb()
+}
 
 /// Logical points. Physical pixels are these times the device scale.
 const PAD: f64 = 12.0;
@@ -165,7 +184,7 @@ impl Chrome {
             .clamp(0.0, (self.content - bounds.height()).max(0.0));
         let mut paint = Vec::new();
         if let Ok(rect) = RoundedRect::new(bounds, 0.0) {
-            paint.push((rect.path(), PANEL));
+            paint.push((rect.path(), SKIN.layer(0).to_srgb()));
         }
         let cursor = bounds.min.y + PAD * scale - self.scroll;
         Ui {
@@ -310,18 +329,18 @@ impl Ui<'_> {
     }
 
     pub fn label(&mut self, text: &str) {
-        self.text_row(text, TEXT_SIZE, TEXT);
+        self.text_row(text, TEXT_SIZE, SKIN.ink.to_srgb());
     }
 
     /// Small and dimmed: provenance, counts, the line under a heading.
     pub fn note(&mut self, text: &str) {
-        self.text_row(text, NOTE_SIZE, TEXT_DIM);
+        self.text_row(text, NOTE_SIZE, SKIN.ink_dim().to_srgb());
     }
 
     /// A note in the error ink. Same row, so a failure never moves the layout
     /// around underneath the pointer.
     pub fn error(&mut self, text: &str) {
-        self.text_row(text, NOTE_SIZE, ERROR);
+        self.text_row(text, NOTE_SIZE, SKIN.error.to_srgb());
     }
 
     /// Prose, wrapped across as many rows as it needs. The gap goes after the
@@ -344,7 +363,11 @@ impl Ui<'_> {
         let (x0, x1) = self.span();
         let y = self.cursor;
         let thickness = self.px(1.0).max(1.0);
-        self.rect(Bounds::new(x0, y, x1, y + thickness), 0.0, IDLE);
+        self.rect(
+            Bounds::new(x0, y, x1, y + thickness),
+            0.0,
+            SKIN.layer(RAISED).to_srgb(),
+        );
         self.advance(thickness);
     }
 
@@ -354,21 +377,11 @@ impl Ui<'_> {
             return false;
         };
         let (x0, x1, y) = (b.min.x, b.max.x, b.min.y);
-        // A press keeps its target even when the pointer wanders off it, but a
-        // release out there is not a click -- so the pressed look belongs to
-        // the pointer still being over the widget, not to the button merely
-        // being held.
-        let ink = if r.held && r.hovered {
-            ACCENT
-        } else if r.hovered {
-            HOVER
-        } else {
-            IDLE
-        };
+        let ink = lift(SKIN.layer(RAISED), &r);
         self.paint.push((path, ink));
         if let Some(run) = self.run(text, self.px(TEXT_SIZE), x1 - x0) {
             let x = x0 + ((x1 - x0) - run.advance) / 2.0;
-            self.place(&run, x.max(x0), y, height, TEXT);
+            self.place(&run, x.max(x0), y, height, SKIN.ink.to_srgb());
         }
         self.advance(height);
         r.clicked
@@ -382,21 +395,20 @@ impl Ui<'_> {
             return false;
         };
         let (x0, x1, y) = (b.min.x, b.max.x, b.min.y);
-        // A selected row still has to answer the pointer, so it gets its own
-        // hover step rather than falling through to the flat accent. `held`
-        // only counts while the pointer is still over the row: otherwise an
-        // unselected row that is pressed and dragged off would sit there
-        // wearing the selected ink until release.
-        let ink = match (r.held && r.hovered, selected, r.hovered) {
-            (true, _, _) => ACCENT,
-            (_, true, true) => ACCENT_LIT,
-            (_, true, false) => ACCENT,
-            (_, false, true) => HOVER,
-            (_, false, false) => WELL,
-        };
+        // Selection picks the resting colour; the pointer lifts whichever one
+        // that is. A selected row therefore still answers a hover instead of
+        // sitting flat at the accent.
+        let ink = lift(
+            if selected {
+                SKIN.accent
+            } else {
+                SKIN.layer(RECESSED)
+            },
+            &r,
+        );
         self.paint.push((path, ink));
         if let Some(run) = self.run(text, self.px(TEXT_SIZE), x1 - x0 - self.px(PAD)) {
-            self.place(&run, x0 + self.px(GAP), y, height, TEXT);
+            self.place(&run, x0 + self.px(GAP), y, height, SKIN.ink.to_srgb());
         }
         self.advance(height);
         r.clicked
@@ -413,19 +425,27 @@ impl Ui<'_> {
         }
         let side = height * 0.62;
         let box_top = y + (height - side) / 2.0;
-        let ink = match (*on, r.hovered) {
-            (true, true) => ACCENT_LIT,
-            (true, false) => ACCENT,
-            (false, true) => HOVER,
-            (false, false) => WELL,
-        };
+        let ink = lift(
+            if *on {
+                SKIN.accent
+            } else {
+                SKIN.layer(RECESSED)
+            },
+            &r,
+        );
         self.rect(
             Bounds::new(x0, box_top, x0 + side, box_top + side),
             self.px(3.0),
             ink,
         );
         if let Some(run) = self.run(text, self.px(TEXT_SIZE), x1 - x0 - side) {
-            self.place(&run, x0 + side + self.px(GAP), y, height, TEXT);
+            self.place(
+                &run,
+                x0 + side + self.px(GAP),
+                y,
+                height,
+                SKIN.ink.to_srgb(),
+            );
         }
         self.advance(height);
         r.clicked
@@ -476,14 +496,20 @@ impl Ui<'_> {
         self.rect(
             Bounds::new(x0, track_y, x1, track_y + track_h),
             track_h / 2.0,
-            WELL,
+            SKIN.layer(RECESSED).to_srgb(),
         );
         let filled = t0 + (t1 - t0) * t;
-        let lit = if r.held || r.hovered {
-            ACCENT_LIT
+        // The knob and the filled track are one control, so they share a
+        // colour -- and a drag that leaves the row keeps it, because a slider
+        // being dragged is still being dragged out there.
+        let lit = if r.held {
+            SKIN.pressed(SKIN.accent)
+        } else if r.hovered {
+            SKIN.hover(SKIN.accent)
         } else {
-            ACCENT
-        };
+            SKIN.accent
+        }
+        .to_srgb();
         if filled > x0 {
             self.rect(
                 Bounds::new(x0, track_y, filled, track_y + track_h),
@@ -502,7 +528,7 @@ impl Ui<'_> {
             lit,
         );
         if let Some(run) = self.run(&format!("{text}  {value:.2}"), self.px(TEXT_SIZE), x1 - x0) {
-            self.place(&run, x0, y, label_h, TEXT);
+            self.place(&run, x0, y, label_h, SKIN.ink.to_srgb());
         }
         self.advance(height);
         *value != before
@@ -540,19 +566,28 @@ impl Ui<'_> {
             }
         }
 
-        let ink = match (focused, r.hovered) {
-            (true, _) => ACCENT,
-            (false, true) => HOVER,
-            (false, false) => WELL,
-        };
+        let ink = lift(
+            if focused {
+                SKIN.accent
+            } else {
+                SKIN.layer(RECESSED)
+            },
+            &r,
+        );
         self.paint.push((path, ink));
         let glyph = value.to_string();
         if let Some(run) = self.run(&glyph, self.px(TEXT_SIZE + 3.0), side) {
             let x = x0 + (side - run.advance) / 2.0;
-            self.place(&run, x.max(x0), y, height, TEXT);
+            self.place(&run, x.max(x0), y, height, SKIN.ink.to_srgb());
         }
         if let Some(run) = self.run(text, self.px(TEXT_SIZE), x1 - x0 - side) {
-            self.place(&run, x0 + side + self.px(GAP), y, height, TEXT_DIM);
+            self.place(
+                &run,
+                x0 + side + self.px(GAP),
+                y,
+                height,
+                SKIN.ink_dim().to_srgb(),
+            );
         }
         self.advance(height);
         changed
@@ -806,8 +841,17 @@ mod tests {
                 primary_down: true,
             },
         );
-        assert_eq!(held, ACCENT, "a press on the button did not light it");
-        assert_ne!(away, ACCENT, "the button still looks pressed off-target");
+        let rest = SKIN.layer(RAISED);
+        assert_eq!(
+            held,
+            SKIN.pressed(rest).to_srgb(),
+            "a press on the button did not light it"
+        );
+        assert_eq!(
+            away,
+            rest.to_srgb(),
+            "the button still looks pressed off-target"
+        );
     }
 
     /// A column taller than its window is not merely clipped -- the widgets

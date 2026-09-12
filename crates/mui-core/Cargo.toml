@@ -5,5 +5,8 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+# The renderer reaches us through the same crate, so colour types cannot
+# version-skew with what vello paints. No transitive dependencies of its own.
+color = "0.3"
 mui-geometry = { path = "../mui-geometry" }
 mui-layout = { path = "../mui-layout" }

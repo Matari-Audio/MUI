@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+use crate::color::Palette;
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CornerProfile {
     pub convex: f64,
@@ -110,6 +112,7 @@ impl Spacing {
 pub struct Theme {
     pub corners: CornerProfile,
     pub spacing: SpacingScale,
+    pub palette: Palette,
     pub stroke_width: f64,
 }
 impl Default for Theme {
@@ -117,6 +120,7 @@ impl Default for Theme {
         Self {
             corners: CornerProfile::default(),
             spacing: SpacingScale::default(),
+            palette: Palette::default(),
             stroke_width: 1.5,
         }
     }
@@ -125,6 +129,7 @@ impl Theme {
     pub fn valid(self) -> bool {
         self.corners.valid()
             && self.spacing.valid()
+            && self.palette.valid()
             && self.stroke_width.is_finite()
             && self.stroke_width >= 0.0
     }
