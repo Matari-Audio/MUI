@@ -195,6 +195,40 @@ skin.with_mode(Mode::Light);    // the whole theme switch
 skin.primary().to_srgb();       // gamut-mapped, ready to paint
 ```
 
+### What the neutrals are allowed to do
+
+`layer(n)` is `ground + n * step`, walking toward the ink for positive levels
+and away for negative ones. Both ends are stated, not left to chance:
+
+| | dark | light |
+|---|---|---|
+| `ground` -- `layer(0)` | 0.22 | 0.93 |
+| `limit` -- as far as a surface may go | 0.50 | 0.60 |
+| `ink` -- full-strength type | 0.93 | 0.18 |
+| `accent` -- where a saturated role sits | 0.75 | 0.55 |
+
+`Mode::limit` is where full-strength `ink()` stops clearing 4.5:1, so **every
+colour `layer(n)` can return takes full-strength ink at AA**, for any `n`.
+Levels past either end saturate; a test sweeps to level 1000 and back. The
+ground is deliberately not at black or white either, because `field()` sits on
+the far side of it and needs somewhere to be.
+
+The four names are fixed levels: `field()` is -1, `background()` 0, `surface()`
+1, `raised()` 2.
+
+One step is a **depth cue, not an accessibility boundary** -- adjacent layers
+land near 1.15:1. The palette says so rather than implying otherwise:
+
+```rust
+skin.separation(0, 2);                     // what "raised" is actually worth
+skin.levels_for(Palette::UI_NONTEXT);      // where 1.4.11's 3:1 really is
+```
+
+On a light ground that is level 7. On a dark ground it is `None`: the whole
+band from black to `limit` tops out near 2.3:1 against the ground, so a dark
+theme cannot make a control visible by fill alone -- which is why dark
+interfaces draw borders. Better to return `None` than a level that lies.
+
 Colours are Oklch because every derivation above is a move in lightness or
 chroma, and only a perceptual space makes the same move look the same on every
 hue: nudging sRGB channels lightens a yellow and barely touches a blue. A light

@@ -248,10 +248,28 @@ pub enum Mode {
 
 impl Mode {
     /// The window behind everything.
+    ///
+    /// Not at the extreme: a ground pinned to black or white has no room on
+    /// the far side of it, and a recessed thing -- a field, a list well -- has
+    /// to go somewhere.
     pub const fn ground(self) -> f32 {
         match self {
             Self::Dark => 0.22,
-            Self::Light => 0.97,
+            Self::Light => 0.93,
+        }
+    }
+
+    /// How far a surface may get from the ground on the ink's side of it.
+    ///
+    /// Past this, full-strength [`Palette::ink`] stops clearing
+    /// [`Palette::AA_TEXT`] and the theme stops being the theme it said it
+    /// was: a "dark" surface at 0.6 lightness is not dark. [`Palette::layer`]
+    /// stops here, so no level -- however absurd -- can produce a surface the
+    /// palette's own typography cannot sit on.
+    pub const fn limit(self) -> f32 {
+        match self {
+            Self::Dark => 0.50,
+            Self::Light => 0.60,
         }
     }
 
@@ -393,6 +411,9 @@ impl Palette {
     pub const AA_LARGE: f32 = 3.0;
     /// WCAG 2.1 AAA for body text.
     pub const AAA_TEXT: f32 = 7.0;
+    /// WCAG 2.1 1.4.11: a control identified only by its fill, or a state
+    /// shown only by a colour change, needs this against what is next to it.
+    pub const UI_NONTEXT: f32 = 3.0;
 
     /// The same palette, lit the other way. This is the entire theme switch.
     pub const fn with_mode(self, mode: Mode) -> Self {
@@ -417,10 +438,63 @@ impl Palette {
     /// A surface `level` steps off the ground, in whichever direction depth
     /// goes in this mode. The named surfaces below are the levels worth a
     /// name; anything else is this.
+    /// The neutral at `level` steps off the ground, confined to the band.
+    ///
+    /// The rule, in full: a layer is `ground + level * step`, walking toward
+    /// the ink for positive levels and away for negative ones, stopping at
+    /// [`Mode::limit`] on the ink's side and at black or white on the other.
+    /// Levels past either end saturate rather than wrapping or escaping, so
+    /// every colour this can return takes [`Self::ink`] at [`Self::AA_TEXT`].
     pub fn layer(&self, level: i32) -> Color {
-        self.neutral
-            .at(self.mode.ground())
-            .lighten(self.step * level as f32 * self.mode.sign())
+        let want = self.mode.ground() + self.step * level as f32 * self.mode.sign();
+        // `sign` already says which side the ink is on, so one comparison
+        // serves both modes.
+        let held = if self.mode.sign() > 0.0 {
+            want.min(self.mode.limit())
+        } else {
+            want.max(self.mode.limit())
+        };
+        self.neutral.at(held.clamp(0.0, 1.0))
+    }
+
+    /// The WCAG ratio between two layers.
+    ///
+    /// This is what 1.4.11 measures when a control is identified by its fill
+    /// and nothing else. One step is a depth cue, not a boundary: at a typical
+    /// `step` adjacent layers sit near 1.15:1, nowhere near
+    /// [`Self::UI_NONTEXT`]. Ask [`Self::levels_for`] how far 3:1 actually is
+    /// rather than assuming a step buys it.
+    pub fn separation(&self, a: i32, b: i32) -> f32 {
+        self.layer(a).contrast(self.layer(b))
+    }
+
+    /// How many levels off the ground a fill must sit to clear `ratio`
+    /// against it, or `None` if the band does not reach that far.
+    ///
+    /// For a control whose edge is its only affordance -- no border, no label
+    /// -- that level is where it has to be, and on a shallow `step` it is
+    /// further than anyone guesses.
+    pub fn levels_for(&self, ratio: f32) -> Option<i32> {
+        let bg = self.background();
+        let (mut up, mut down) = (bg, bg);
+        for level in 1.. {
+            // Raised and recessed both count: a well can be the affordance as
+            // readily as a bump, and on a dark ground the room is not
+            // symmetric, so which side reaches first is not obvious.
+            let (a, b) = (self.layer(level), self.layer(-level));
+            if a.contrast(bg) >= ratio {
+                return Some(level);
+            }
+            if b.contrast(bg) >= ratio {
+                return Some(-level);
+            }
+            // Both ends of the band saturated: no further level is a new colour.
+            if a == up && b == down {
+                return None;
+            }
+            (up, down) = (a, b);
+        }
+        None
     }
 
     /// The window. Everything else is measured from here.
@@ -610,12 +684,100 @@ mod tests {
     /// The regression the contrast work exists for. `dim` used to be a fixed
     /// 40% mix toward the base surface, which measured 2.99:1 on a raised
     /// control -- under even the 3.0 large-text floor, on a widget that paints
+    /// The band is the rule that makes every other surface guarantee hold:
+    /// whatever level is asked for, the neutral it comes back with is one
+    /// full-strength ink still reads on. Sweeping absurd levels is the point
+    /// -- a caller computing a level arithmetically is exactly who finds the
+    /// end of a ramp, and saturating there must stay legal rather than merely
+    /// stop moving.
+    #[test]
+    fn no_level_escapes_the_band() {
+        for base in [Palette::NEUTRAL, designed()] {
+            for p in [base, base.flipped()] {
+                for level in [-1000, -50, -8, -1, 0, 1, 8, 50, 1000] {
+                    let bg = p.layer(level);
+                    let r = p.ink().contrast(bg);
+                    assert!(
+                        r >= Palette::AA_TEXT,
+                        "{:?}: full ink on layer({level}) is {r:.2}:1",
+                        p.mode
+                    );
+                    let l = bg.lightness();
+                    assert!((0.0..=1.0).contains(&l), "layer({level}) escaped to {l}");
+                }
+                // Saturating, not wrapping: past the end the ramp stops dead.
+                assert_eq!(p.layer(50), p.layer(1000));
+                assert_eq!(p.layer(-50), p.layer(-1000));
+            }
+        }
+    }
+
+    /// A light ground sits near white and a dark one near black, so the side
+    /// with less room is where two named surfaces collapse into one colour.
+    /// They are the four names anyone reaches for; if any two are the same
+    /// fill, one of them is a lie.
+    #[test]
+    fn the_named_surfaces_stay_four_distinct_colours() {
+        for base in [Palette::NEUTRAL, designed()] {
+            for p in [base, base.flipped()] {
+                let named = [
+                    ("field", p.field()),
+                    ("background", p.background()),
+                    ("surface", p.surface()),
+                    ("raised", p.raised()),
+                ];
+                for (i, (an, a)) in named.iter().enumerate() {
+                    for (bn, b) in &named[i + 1..] {
+                        assert_ne!(a, b, "{:?}: {an} and {bn} are one colour", p.mode);
+                    }
+                }
+                // And they are ordered: each name is further from the ground
+                // than the last, on the side the mode says depth goes.
+                let d = |c: Color| (c.lightness() - p.background().lightness()).abs();
+                assert!(d(p.surface()) < d(p.raised()), "{:?}", p.mode);
+            }
+        }
+    }
+
+    /// One step is a depth cue, not an accessibility boundary. The palette has
+    /// to be honest about that: `levels_for` either names a level that really
+    /// clears the ratio, or admits the band does not reach it. A dark ground
+    /// at this depth cannot reach 3:1 at all, which is a fact about dark
+    /// themes -- it is why they draw borders -- not a bug to paper over.
+    #[test]
+    fn levels_for_never_promises_a_ratio_the_band_cannot_reach() {
+        for base in [Palette::NEUTRAL, designed()] {
+            for p in [base, base.flipped()] {
+                assert!(
+                    p.separation(0, 1) < 1.3,
+                    "{:?}: one step should be a hint, not a wall",
+                    p.mode
+                );
+                for ratio in [1.2, 1.5, 2.0, Palette::UI_NONTEXT, 4.5] {
+                    match p.levels_for(ratio) {
+                        Some(level) => {
+                            let got = p.separation(0, level);
+                            assert!(got >= ratio, "{:?}: level {level} is {got:.2}:1", p.mode);
+                        }
+                        None => {
+                            // Nothing in the band reaches it, in either direction.
+                            for level in -60..=60 {
+                                let got = p.separation(0, level);
+                                assert!(got < ratio, "{:?}: level {level} did reach", p.mode);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// notes.
     #[test]
     fn every_ink_role_clears_aa_everywhere_in_both_modes() {
         for base in [Palette::NEUTRAL, designed()] {
             for p in [base, base.flipped()] {
-                for level in -2..=4 {
+                for level in -50..=50 {
                     let bg = p.layer(level);
                     for (role, fg) in [("on", p.on(bg)), ("dim", p.dim(bg))] {
                         let r = fg.contrast(bg);

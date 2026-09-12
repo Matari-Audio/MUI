@@ -106,9 +106,21 @@ bisection.
 - [x] Named surfaces: `background`, `surface`, `raised` and `field`, all
       `layer(n)` at a fixed level, so the common four read as names and
       anything further is still a number rather than another constant.
-- [x] Elevation as `layer(level)`: one perceptual step per layer off the
-      ground, so a raised control and a recessed well are a number rather
-      than two more constants.
+- [x] Elevation as `layer(level)`, confined to a stated band: `ground +
+      level * step`, stopping at `Mode::limit` on the ink's side and at black
+      or white on the other. `limit` is where full-strength `ink()` stops
+      clearing 4.5:1, so every colour `layer` can return -- at any level,
+      including absurd ones -- takes full ink at AA. A test sweeps to level
+      1000 and back. The four names anyone reaches for are fixed levels:
+      `field` -1, `background` 0, `surface` 1, `raised` 2, and a test keeps
+      them four distinct colours in both modes.
+- [x] Honest non-text contrast. One step is a depth cue, not a boundary:
+      adjacent layers land near 1.15:1. `separation(a, b)` reports what a
+      layer is worth and `levels_for(ratio)` says where 1.4.11's 3:1 actually
+      is -- level 7 on a light ground, and `None` on a dark one, because the
+      whole band tops out near 2.3:1 against the ground. A dark theme cannot
+      make a control visible by fill alone; returning `None` says so instead
+      of naming a level that lies.
 - [x] Light/dark pairing by construction. `Mode` owns the ground, ink and
       accent lightnesses and the sign of depth; `with_mode` flips a whole
       interface in one field. `on(bg)` picks whichever of ink and ground sits
