@@ -12,7 +12,7 @@
 use std::ops::RangeInclusive;
 use std::sync::Arc;
 
-use mui_core::{Color, Palette};
+use mui_core::{Color, Mode, Palette, Pigment};
 use mui_geometry::{Bounds, Path, Point, RoundedRect};
 use mui_input::{Hit, Interaction, PointerInput, Response};
 use mui_text::TextRun;
@@ -21,21 +21,24 @@ use vello_common::peniko::color::AlphaColor;
 
 pub type Rgba = AlphaColor<vello_common::peniko::color::Srgb>;
 
-/// Four colours and two steps. Every other colour this file paints is derived
-/// from them, so a light theme is `step` and `hover` negated and two colours
-/// swapped -- not a second table of literals to keep in step with this one.
+/// Two hues. Every other colour this file paints -- every surface, every ink,
+/// every hover, and the whole light theme -- is derived from them, so there is
+/// no second table of literals to keep in step with this one.
+///
+/// A [`Pigment`] carries no lightness on purpose: lightness is what [`Mode`]
+/// assigns, which is why the same declaration serves both themes.
 pub const SKIN: Palette = Palette {
-    surface: Color::oklch(0.260, 0.015, 264.0),
-    accent: Color::oklch(0.752, 0.131, 242.0),
-    ink: Color::oklch(0.922, 0.015, 264.0),
-    error: Color::oklch(0.633, 0.164, 23.0),
-    step: 0.045,
-    hover: 0.11,
+    neutral: Pigment::new(264.0, 0.015),
+    primary: Pigment::new(242.0, 0.131),
+    secondary: Pigment::new(310.0, 0.120),
+    tertiary: Pigment::new(190.0, 0.110),
+    ..Palette::NEUTRAL
 };
 
-/// What every text row in this gallery paints on: the panel's own fill. The
-/// ink roles need it, because legibility is a property of a pair.
-const GROUND: Color = SKIN.surface;
+/// The gallery's skin, lit whichever way the sidebar checkbox says.
+pub fn skin(light: bool) -> Palette {
+    SKIN.with_mode(if light { Mode::Light } else { Mode::Dark })
+}
 
 /// Where a control rests when nothing is happening to it. Raised things sit
 /// above the panel; recessed things -- list rows, a slider track, a field --
@@ -49,16 +52,6 @@ const RECESSED: i32 = -1;
 ///
 /// A press only counts while the pointer is still over the widget: a press
 /// dragged off is no longer a click, so it must stop looking like one.
-fn fill_for(base: Color, r: &Response) -> Color {
-    if r.held && r.hovered {
-        SKIN.pressed(base)
-    } else if r.hovered {
-        SKIN.hover(base)
-    } else {
-        base
-    }
-}
-
 /// Logical points. Physical pixels are these times the device scale.
 const PAD: f64 = 12.0;
 const ROW: f64 = 24.0;
@@ -131,6 +124,9 @@ pub struct Chrome {
     /// the pointer can never get to them.
     scroll: f64,
     content: f64,
+    /// Which way the gallery is lit. One field, because that is the whole
+    /// theme switch -- see [`Palette::with_mode`].
+    skin: Palette,
 }
 
 impl Chrome {
@@ -142,6 +138,7 @@ impl Chrome {
             font,
             scroll: 0.0,
             content: 0.0,
+            skin: SKIN,
         }
     }
 
@@ -150,6 +147,11 @@ impl Chrome {
     /// specimen underneath it.
     /// Scroll the column by `delta` physical pixels. Clamped at the next
     /// layout, when the content height is known again.
+    /// Repaint everything from here on in a different light.
+    pub fn set_skin(&mut self, skin: Palette) {
+        self.skin = skin;
+    }
+
     pub fn scroll_by(&mut self, delta: f64) {
         self.scroll -= delta;
     }
@@ -194,10 +196,11 @@ impl Chrome {
             .clamp(0.0, (self.content - bounds.height()).max(0.0));
         let mut paint = Vec::new();
         if let Ok(rect) = RoundedRect::new(bounds, 0.0) {
-            paint.push((rect.path(), SKIN.layer(0).to_srgb()));
+            paint.push((rect.path(), self.skin.layer(0).to_srgb()));
         }
         let cursor = bounds.min.y + PAD * scale - self.scroll;
         Ui {
+            skin: self.skin,
             chrome: self,
             bounds,
             scale,
@@ -215,6 +218,9 @@ impl Chrome {
 /// One frame of one column of widgets.
 pub struct Ui<'a> {
     chrome: &'a mut Chrome,
+    /// Copied out of [`Chrome`] for the frame, so a widget can read a colour
+    /// while it is holding a mutable borrow of everything else.
+    skin: Palette,
     bounds: Bounds,
     scale: f64,
     pointer: PointerInput,
@@ -235,6 +241,22 @@ impl Ui<'_> {
     /// program.
     pub fn px(&self, logical: f64) -> f64 {
         logical * self.scale
+    }
+
+    /// What the pointer is doing to a control, applied to whatever colour its
+    /// own state says it rests at. Every widget below uses this instead of its
+    /// own table of state combinations.
+    ///
+    /// A press only counts while the pointer is still over the widget: a press
+    /// dragged off is no longer a click, so it must stop looking like one.
+    fn fill_for(&self, base: Color, r: &Response) -> Color {
+        if r.held && r.hovered {
+            self.skin.pressed(base)
+        } else if r.hovered {
+            self.skin.hover(base)
+        } else {
+            base
+        }
     }
 
     /// The left and right edges of a widget row.
@@ -339,12 +361,20 @@ impl Ui<'_> {
     }
 
     pub fn label(&mut self, text: &str) {
-        self.text_row(text, TEXT_SIZE, SKIN.on(GROUND).to_srgb());
+        self.text_row(
+            text,
+            TEXT_SIZE,
+            self.skin.on(self.skin.background()).to_srgb(),
+        );
     }
 
     /// Small and dimmed: provenance, counts, the line under a heading.
     pub fn note(&mut self, text: &str) {
-        self.text_row(text, NOTE_SIZE, SKIN.dim(GROUND).to_srgb());
+        self.text_row(
+            text,
+            NOTE_SIZE,
+            self.skin.dim(self.skin.background()).to_srgb(),
+        );
     }
 
     /// A note in the error ink. Same row, so a failure never moves the layout
@@ -353,7 +383,10 @@ impl Ui<'_> {
         self.text_row(
             text,
             NOTE_SIZE,
-            SKIN.error.readable_on(GROUND, Palette::AA_TEXT).to_srgb(),
+            self.skin
+                .danger()
+                .readable_on(self.skin.background(), Palette::AA_TEXT)
+                .to_srgb(),
         );
     }
 
@@ -373,6 +406,44 @@ impl Ui<'_> {
         self.cursor += self.px(GAP);
     }
 
+    /// Every token the palette exposes, in two rows: the surfaces it derives
+    /// from one ground, then the roles it places at one accent lightness.
+    ///
+    /// This is here to be looked at. Ticking "light theme" flips one field and
+    /// both rows have to stay legible and stay in the same order -- if a theme
+    /// switch were two tables of literals, this is where they would drift.
+    pub fn swatches(&mut self) {
+        let surfaces = [
+            self.skin.field(),
+            self.skin.background(),
+            self.skin.surface(),
+            self.skin.raised(),
+        ];
+        let roles = [
+            self.skin.primary(),
+            self.skin.secondary(),
+            self.skin.tertiary(),
+            self.skin.success(),
+            self.skin.warning(),
+            self.skin.danger(),
+        ];
+        for row in [&surfaces[..], &roles[..]] {
+            let (x0, x1) = self.span();
+            let y = self.cursor;
+            let height = self.px(ROW * 0.6);
+            let width = (x1 - x0) / row.len() as f64;
+            for (i, colour) in row.iter().enumerate() {
+                let x = x0 + width * i as f64;
+                self.rect(
+                    Bounds::new(x, y, x + width, y + height),
+                    self.px(2.0),
+                    colour.to_srgb(),
+                );
+            }
+            self.advance(height);
+        }
+    }
+
     pub fn separator(&mut self) {
         let (x0, x1) = self.span();
         let y = self.cursor;
@@ -380,7 +451,7 @@ impl Ui<'_> {
         self.rect(
             Bounds::new(x0, y, x1, y + thickness),
             0.0,
-            SKIN.layer(RAISED).to_srgb(),
+            self.skin.layer(RAISED).to_srgb(),
         );
         self.advance(thickness);
     }
@@ -391,11 +462,11 @@ impl Ui<'_> {
             return false;
         };
         let (x0, x1, y) = (b.min.x, b.max.x, b.min.y);
-        let fill = fill_for(SKIN.layer(RAISED), &r);
+        let fill = self.fill_for(self.skin.layer(RAISED), &r);
         self.paint.push((path, fill.to_srgb()));
         if let Some(run) = self.run(text, self.px(TEXT_SIZE), x1 - x0) {
             let x = x0 + ((x1 - x0) - run.advance) / 2.0;
-            self.place(&run, x.max(x0), y, height, SKIN.on(fill).to_srgb());
+            self.place(&run, x.max(x0), y, height, self.skin.on(fill).to_srgb());
         }
         self.advance(height);
         r.clicked
@@ -412,17 +483,23 @@ impl Ui<'_> {
         // Selection picks the resting colour; the pointer lifts whichever one
         // that is. A selected row therefore still answers a hover instead of
         // sitting flat at the accent.
-        let fill = fill_for(
+        let fill = self.fill_for(
             if selected {
-                SKIN.accent
+                self.skin.primary()
             } else {
-                SKIN.layer(RECESSED)
+                self.skin.layer(RECESSED)
             },
             &r,
         );
         self.paint.push((path, fill.to_srgb()));
         if let Some(run) = self.run(text, self.px(TEXT_SIZE), x1 - x0 - self.px(PAD)) {
-            self.place(&run, x0 + self.px(GAP), y, height, SKIN.on(fill).to_srgb());
+            self.place(
+                &run,
+                x0 + self.px(GAP),
+                y,
+                height,
+                self.skin.on(fill).to_srgb(),
+            );
         }
         self.advance(height);
         r.clicked
@@ -439,11 +516,11 @@ impl Ui<'_> {
         }
         let side = height * 0.62;
         let box_top = y + (height - side) / 2.0;
-        let fill = fill_for(
+        let fill = self.fill_for(
             if *on {
-                SKIN.accent
+                self.skin.primary()
             } else {
-                SKIN.layer(RECESSED)
+                self.skin.layer(RECESSED)
             },
             &r,
         );
@@ -458,7 +535,7 @@ impl Ui<'_> {
                 x0 + side + self.px(GAP),
                 y,
                 height,
-                SKIN.on(GROUND).to_srgb(),
+                self.skin.on(self.skin.background()).to_srgb(),
             );
         }
         self.advance(height);
@@ -510,18 +587,18 @@ impl Ui<'_> {
         self.rect(
             Bounds::new(x0, track_y, x1, track_y + track_h),
             track_h / 2.0,
-            SKIN.layer(RECESSED).to_srgb(),
+            self.skin.layer(RECESSED).to_srgb(),
         );
         let filled = t0 + (t1 - t0) * t;
         // The knob and the filled track are one control, so they share a
         // colour -- and a drag that leaves the row keeps it, because a slider
         // being dragged is still being dragged out there.
         let lit = if r.held {
-            SKIN.pressed(SKIN.accent)
+            self.skin.pressed(self.skin.primary())
         } else if r.hovered {
-            SKIN.hover(SKIN.accent)
+            self.skin.hover(self.skin.primary())
         } else {
-            SKIN.accent
+            self.skin.primary()
         }
         .to_srgb();
         if filled > x0 {
@@ -542,7 +619,13 @@ impl Ui<'_> {
             lit,
         );
         if let Some(run) = self.run(&format!("{text}  {value:.2}"), self.px(TEXT_SIZE), x1 - x0) {
-            self.place(&run, x0, y, label_h, SKIN.on(GROUND).to_srgb());
+            self.place(
+                &run,
+                x0,
+                y,
+                label_h,
+                self.skin.on(self.skin.background()).to_srgb(),
+            );
         }
         self.advance(height);
         *value != before
@@ -580,11 +663,11 @@ impl Ui<'_> {
             }
         }
 
-        let fill = fill_for(
+        let fill = self.fill_for(
             if focused {
-                SKIN.accent
+                self.skin.primary()
             } else {
-                SKIN.layer(RECESSED)
+                self.skin.layer(RECESSED)
             },
             &r,
         );
@@ -592,7 +675,7 @@ impl Ui<'_> {
         let glyph = value.to_string();
         if let Some(run) = self.run(&glyph, self.px(TEXT_SIZE + 3.0), side) {
             let x = x0 + (side - run.advance) / 2.0;
-            self.place(&run, x.max(x0), y, height, SKIN.on(fill).to_srgb());
+            self.place(&run, x.max(x0), y, height, self.skin.on(fill).to_srgb());
         }
         if let Some(run) = self.run(text, self.px(TEXT_SIZE), x1 - x0 - side) {
             self.place(
@@ -600,7 +683,7 @@ impl Ui<'_> {
                 x0 + side + self.px(GAP),
                 y,
                 height,
-                SKIN.dim(GROUND).to_srgb(),
+                self.skin.dim(self.skin.background()).to_srgb(),
             );
         }
         self.advance(height);
@@ -627,6 +710,49 @@ mod tests {
 
     fn bounds() -> Bounds {
         Bounds::new(0., 0., 240., 600.)
+    }
+
+    /// Ticking "light theme" is one field, and it has to reach everything: the
+    /// panel, every swatch, and the ink on top of them. Repainting the same
+    /// frame in both modes must produce no colour twice in the same slot --
+    /// anything that came out identical is a literal the flip did not reach.
+    #[test]
+    fn the_theme_flip_reaches_every_painted_colour() {
+        fn frame(light: bool) -> Vec<Rgba> {
+            let mut chrome = chrome();
+            chrome.set_skin(skin(light));
+            let mut ui = chrome.column(bounds(), PointerInput::default(), None, 1.0);
+            ui.label("heading");
+            ui.note("provenance");
+            ui.swatches();
+            ui.button("press me");
+            ui.separator();
+            ui.finish().iter().map(|(_, ink)| *ink).collect()
+        }
+        let (dark, light) = (frame(false), frame(true));
+        assert_eq!(dark.len(), light.len(), "the flip changed the geometry");
+        assert!(!dark.is_empty());
+        for (i, (d, l)) in dark.iter().zip(&light).enumerate() {
+            assert_ne!(d, l, "paint {i} is the same colour in both themes");
+        }
+    }
+
+    /// Whatever the mode, a label has to clear AA against the panel it sits on.
+    /// `mui-core` proves this for the palette; this proves the gallery asks for
+    /// the right pair, which is the half a colour crate cannot check.
+    #[test]
+    fn both_themes_are_legible() {
+        for light in [false, true] {
+            let s = skin(light);
+            let ground = s.background();
+            for (name, ink) in [("on", s.on(ground)), ("dim", s.dim(ground))] {
+                let got = ink.contrast(ground);
+                assert!(
+                    got >= Palette::AA_TEXT,
+                    "{name} ink is {got:.2}:1 on the panel (light: {light})"
+                );
+            }
+        }
     }
 
     /// Prose fills the column and never overruns it, and a word too long for
@@ -844,7 +970,7 @@ mod tests {
         let unselected = label(&mut chrome, false);
         let selected = label(&mut chrome, true);
         assert_eq!(unselected, SKIN.on(SKIN.layer(RECESSED)).to_srgb());
-        assert_eq!(selected, SKIN.on(SKIN.accent).to_srgb());
+        assert_eq!(selected, SKIN.on(SKIN.primary()).to_srgb());
         assert_ne!(
             selected, unselected,
             "the label did not flip when the ground under it did"

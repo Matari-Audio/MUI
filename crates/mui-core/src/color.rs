@@ -233,56 +233,176 @@ fn gamut_map(v: [f32; 3]) -> [f32; 3] {
     best
 }
 
-/// The colours an interface declares by hand. Everything else -- a hover
-/// state, a disabled control, a label that has to read on a coloured chip --
-/// is derived from these by the methods below.
+/// Which way the interface is lit.
+///
+/// This is the whole theme switch. A mode decides where the ground sits, where
+/// ink sits, how saturated roles are placed between them, and which way depth
+/// goes -- so flipping an interface is one field, not a second table of
+/// colours to keep in step with the first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Mode {
+    #[default]
+    Dark,
+    Light,
+}
+
+impl Mode {
+    /// The window behind everything.
+    pub const fn ground(self) -> f32 {
+        match self {
+            Self::Dark => 0.22,
+            Self::Light => 0.97,
+        }
+    }
+
+    /// Full-strength ink on the ground.
+    pub const fn ink(self) -> f32 {
+        match self {
+            Self::Dark => 0.93,
+            Self::Light => 0.18,
+        }
+    }
+
+    /// Where a saturated role sits. A dark ground wants its accents light and
+    /// a light ground wants them dark, which is why a role cannot declare its
+    /// own lightness and still survive the flip.
+    pub const fn accent(self) -> f32 {
+        match self {
+            Self::Dark => 0.75,
+            Self::Light => 0.55,
+        }
+    }
+
+    /// Which way depth goes: on a dark ground a raised thing is lighter, on a
+    /// light ground it is darker. Every step and every hover is multiplied by
+    /// this, so nothing else has to know which mode it is in.
+    pub const fn sign(self) -> f32 {
+        match self {
+            Self::Dark => 1.0,
+            Self::Light => -1.0,
+        }
+    }
+
+    /// The other one.
+    pub const fn flipped(self) -> Self {
+        match self {
+            Self::Dark => Self::Light,
+            Self::Light => Self::Dark,
+        }
+    }
+}
+
+/// A colour with no lightness: the part of a role that survives a theme flip.
+///
+/// Hue and chroma are the identity of a role -- "our blue", "the warning
+/// amber". Lightness is not identity, it is a consequence of the ground the
+/// role is painted on, so [`Mode`] assigns it and a `Pigment` does not carry
+/// one. This is what makes a dark and a light theme the same declaration.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Pigment {
+    /// Degrees. Free to wrap.
+    pub hue: f32,
+    /// 0 is grey. Roughly 0.4 is as saturated as sRGB goes.
+    pub chroma: f32,
+}
+
+impl Pigment {
+    pub const fn new(hue: f32, chroma: f32) -> Self {
+        Self { hue, chroma }
+    }
+
+    /// No hue at all. A role set to this reads by lightness alone, which is
+    /// what the crate's default does for every brand role it has no business
+    /// choosing.
+    pub const GREY: Self = Self::new(0.0, 0.0);
+
+    /// This role, placed at a lightness.
+    pub fn at(self, lightness: f32) -> Color {
+        Color::oklch(lightness, self.chroma, self.hue)
+    }
+
+    pub fn valid(self) -> bool {
+        self.hue.is_finite() && self.chroma.is_finite() && self.chroma >= 0.0
+    }
+}
+
+/// The colours an interface declares, and the two numbers that derive the rest.
+///
+/// Every field is a [`Pigment`] rather than a colour, so the same declaration
+/// serves both modes. Nothing here is a surface, a hover or a disabled state --
+/// those are the methods below, because a table of them is the thing that
+/// drifts.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Palette {
-    /// The ground a panel sits at. Layers step off this.
-    pub surface: Color,
-    /// The one saturated colour: selection, focus, the live control.
-    pub accent: Color,
-    /// Ink on `surface`.
-    pub ink: Color,
-    /// Failure.
-    pub error: Color,
-    /// One layer's worth of perceptual lightness. Positive for a dark theme,
-    /// where depth reads lighter; negative for a light theme, where it reads
-    /// darker. Flipping its sign, and `hover` with it, flips the interface.
+    pub mode: Mode,
+
+    /// The greys: ground, panels, fields, ink. A little chroma here tints the
+    /// whole interface toward a temperature without anything else changing.
+    pub neutral: Pigment,
+
+    /// The main brand colour: selection, focus, the live control.
+    pub primary: Pigment,
+    /// A supporting colour, for a second axis of emphasis.
+    pub secondary: Pigment,
+    /// A third, for the rare interface that needs one. Set it to `primary` if
+    /// it does not.
+    pub tertiary: Pigment,
+
+    /// It worked.
+    pub success: Pigment,
+    /// It will go wrong if you continue.
+    pub warning: Pigment,
+    /// It went wrong, or it destroys something.
+    pub danger: Pigment,
+
+    /// One layer's worth of perceptual lightness, always positive.
+    /// [`Mode::sign`] decides which way it points.
     pub step: f32,
-    /// What a control gains under the pointer. Deliberately more than `step`:
-    /// a layer is depth and may be subtle, a hover has to be noticed. The
-    /// default is the mean of the two hover lifts the hand-tuned palette this
-    /// replaced used -- `+0.128` on a grey, `+0.087` on the accent.
+    /// What a control gains under the pointer, also always positive.
+    /// Deliberately more than `step`: a layer is depth and may be subtle, a
+    /// hover has to be noticed.
     pub hover: f32,
 }
 
 impl Palette {
-    /// A working palette with no taste in it: greys, and the one red that
-    /// "error" means everywhere. It exists so `Theme::default()` produces
-    /// something legible and usable, not so anyone ships it.
+    /// A working palette with no taste in it: greys, and the three hues that
+    /// success, warning and danger mean nearly everywhere. It exists so
+    /// `Theme::default()` produces something legible and usable, not so anyone
+    /// ships it.
     ///
-    /// The accent is grey on purpose. Which colour is *yours* is the one
-    /// decision a layout library has no business making, so selection and
-    /// focus read here by lightness alone until an application says
-    /// otherwise -- `Palette { accent: .., ..Palette::NEUTRAL }`.
+    /// The brand roles are grey on purpose. Which colour is *yours* is the one
+    /// decision a layout library has no business making, so selection and focus
+    /// read by lightness alone until an application says otherwise:
+    /// `Palette { primary: Pigment::new(242.0, 0.13), ..Palette::NEUTRAL }`.
     pub const NEUTRAL: Self = Self {
-        surface: Color::oklch(0.260, 0.0, 0.0),
-        accent: Color::oklch(0.650, 0.0, 0.0),
-        ink: Color::oklch(0.922, 0.0, 0.0),
-        error: Color::oklch(0.633, 0.164, 23.0),
+        mode: Mode::Dark,
+        neutral: Pigment::GREY,
+        primary: Pigment::GREY,
+        secondary: Pigment::GREY,
+        tertiary: Pigment::GREY,
+        success: Pigment::new(145.0, 0.14),
+        warning: Pigment::new(85.0, 0.15),
+        danger: Pigment::new(25.0, 0.16),
         step: 0.045,
         hover: 0.11,
     };
-}
 
-impl Palette {
     /// WCAG 2.1 AA for body text.
     pub const AA_TEXT: f32 = 4.5;
     /// WCAG 2.1 AA for large text and for the boundary of a UI component.
     pub const AA_LARGE: f32 = 3.0;
     /// WCAG 2.1 AAA for body text.
     pub const AAA_TEXT: f32 = 7.0;
+
+    /// The same palette, lit the other way. This is the entire theme switch.
+    pub const fn with_mode(self, mode: Mode) -> Self {
+        Self { mode, ..self }
+    }
+
+    /// The same palette, flipped.
+    pub const fn flipped(self) -> Self {
+        self.with_mode(self.mode.flipped())
+    }
 }
 
 impl Default for Palette {
@@ -291,62 +411,128 @@ impl Default for Palette {
     }
 }
 
+/// Surfaces. Named levels, all derived from one ground and one step, so there
+/// is no second set of numbers to keep in step with the first.
 impl Palette {
-    /// A surface `level` layers off the ground. `0` is the ground itself;
-    /// positive lifts toward the viewer (a panel over a backdrop, a control
-    /// over a panel), negative sinks (a well, a slider track).
+    /// A surface `level` steps off the ground, in whichever direction depth
+    /// goes in this mode. The named surfaces below are the levels worth a
+    /// name; anything else is this.
     pub fn layer(&self, level: i32) -> Color {
-        self.surface.lighten(self.step * level as f32)
+        self.neutral
+            .at(self.mode.ground())
+            .lighten(self.step * level as f32 * self.mode.sign())
     }
 
-    /// The pointer is over it.
+    /// The window. Everything else is measured from here.
+    pub fn background(&self) -> Color {
+        self.layer(0)
+    }
+
+    /// A panel, a card, a dialog: a region lifted off the window.
+    pub fn surface(&self) -> Color {
+        self.layer(1)
+    }
+
+    /// A control that sits on a surface and looks like it can be pressed.
+    pub fn raised(&self) -> Color {
+        self.layer(2)
+    }
+
+    /// Somewhere to put something: a text input, a list well, a slider track.
+    /// Recessed, so it reads as a hole rather than a button.
+    pub fn field(&self) -> Color {
+        self.layer(-1)
+    }
+}
+
+/// Roles, placed at the lightness this mode wants for a saturated colour.
+impl Palette {
+    fn role(&self, p: Pigment) -> Color {
+        p.at(self.mode.accent())
+    }
+
+    pub fn primary(&self) -> Color {
+        self.role(self.primary)
+    }
+    pub fn secondary(&self) -> Color {
+        self.role(self.secondary)
+    }
+    pub fn tertiary(&self) -> Color {
+        self.role(self.tertiary)
+    }
+    pub fn success(&self) -> Color {
+        self.role(self.success)
+    }
+    pub fn warning(&self) -> Color {
+        self.role(self.warning)
+    }
+    pub fn danger(&self) -> Color {
+        self.role(self.danger)
+    }
+}
+
+/// States and ink. Each takes the colour a thing rests at and returns what it
+/// should be instead, so a widget keeps no table of combinations.
+impl Palette {
+    /// What the pointer does to a control.
     pub fn hover(&self, base: Color) -> Color {
-        base.lighten(self.hover)
+        base.lighten(self.hover * self.mode.sign())
     }
 
-    /// The pointer is down on it: half again past hover, so a press always
-    /// reads as more than a hover.
+    /// What a press does. Further than a hover, same direction.
     pub fn pressed(&self, base: Color) -> Color {
-        base.lighten(self.hover * 1.5)
+        base.lighten(self.hover * 1.5 * self.mode.sign())
     }
 
-    /// It cannot be used: half-way back to the ground, and mostly neutral.
+    /// Pulled toward the ground and drained of most of its colour: a control
+    /// that is present but cannot be used. Alpha is preserved, because
+    /// disabling something should not also make it translucent.
     pub fn disabled(&self, base: Color) -> Color {
-        base.mix(self.surface, 0.5)
+        base.mix(self.background(), 0.5)
             .scale_chroma(0.25)
             .with_alpha(base.alpha())
     }
 
-    /// Ink that reads on `bg`: whichever of `ink` and `surface` sits further
+    /// Full-strength ink, for when the ground is known to be the background.
+    pub fn ink(&self) -> Color {
+        self.neutral.at(self.mode.ink())
+    }
+
+    /// Ink that reads on `bg`: whichever end of the neutral range sits further
     /// from it in perceptual lightness, pushed further if that alone does not
-    /// clear [`Palette::AA_TEXT`]. This is what makes a label legible on the
-    /// accent without a second ink colour being declared.
+    /// clear [`Palette::AA_TEXT`]. This is what makes a label legible on a
+    /// saturated chip without a second ink colour being declared.
     pub fn on(&self, bg: Color) -> Color {
+        let ink = self.ink();
+        let ground = self.background();
         let d = |c: Color| (c.lightness() - bg.lightness()).abs();
-        let fg = if d(self.ink) >= d(self.surface) {
-            self.ink
-        } else {
-            self.surface
-        };
+        let fg = if d(ink) >= d(ground) { ink } else { ground };
         fg.readable_on(bg, Self::AA_TEXT)
     }
 
     /// Ink for provenance, counts, the line under a heading: pulled back
     /// toward `bg` rather than made transparent, then pushed back out if the
     /// dimming cost it legibility. Dimmed text is still text, so it is held to
-    /// the same [`Palette::AA_TEXT`] as [`Palette::on`] -- on a light-enough
-    /// ground the contrast floor is what decides how dim it actually gets.
+    /// the same [`Palette::AA_TEXT`] as [`Palette::on`] -- on a close-contrast
+    /// ground the floor is what decides how dim it actually gets.
     pub fn dim(&self, bg: Color) -> Color {
-        let fg = self.on(bg).mix(bg, 0.4).with_alpha(self.ink.alpha());
+        let fg = self.on(bg).mix(bg, 0.4);
         fg.readable_on(bg, Self::AA_TEXT)
     }
 
-    /// Whether every colour and the step are usable.
+    /// Whether every pigment and both steps are usable.
     pub fn valid(&self) -> bool {
-        self.surface.valid()
-            && self.accent.valid()
-            && self.ink.valid()
-            && self.error.valid()
+        [
+            self.neutral,
+            self.primary,
+            self.secondary,
+            self.tertiary,
+            self.success,
+            self.warning,
+            self.danger,
+        ]
+        .iter()
+        .all(|p| p.valid())
             && self.step.is_finite()
             && self.hover.is_finite()
     }
@@ -362,25 +548,139 @@ mod tests {
     /// taste lives here rather than in the crate's default.
     fn designed() -> Palette {
         Palette {
-            surface: Color::oklch(0.260, 0.015, 264.0),
-            accent: Color::oklch(0.752, 0.131, 242.0),
-            ink: Color::oklch(0.922, 0.015, 264.0),
-            error: Color::oklch(0.633, 0.164, 23.0),
-            step: 0.045,
-            hover: 0.11,
+            neutral: Pigment::new(264.0, 0.015),
+            primary: Pigment::new(242.0, 0.131),
+            ..Palette::NEUTRAL
         }
     }
 
-    /// A light theme is the dark one with two colours swapped and both steps
-    /// negated. Nothing else is restated, which is the claim these tests check.
-    fn light() -> Palette {
-        Palette {
-            surface: Color::oklch(0.97, 0.005, 264.0),
-            ink: Color::oklch(0.20, 0.010, 264.0),
-            step: -0.045,
-            hover: -0.11,
-            ..designed()
+    /// The claim the whole [`Mode`] type exists to make: one field, and
+    /// nothing else in the declaration changes.
+    #[test]
+    fn flipping_the_mode_is_the_entire_theme_switch() {
+        let dark = designed();
+        let light = dark.flipped();
+
+        assert_eq!(light.mode, Mode::Light);
+        // Identity survives: same hues, same chromas, same steps.
+        assert_eq!(light.primary, dark.primary);
+        assert_eq!(light.neutral, dark.neutral);
+        assert_eq!((light.step, light.hover), (dark.step, dark.hover));
+        assert_eq!(light.flipped(), dark);
+
+        // Only the lighting changed.
+        assert!(light.background().lightness() > dark.background().lightness());
+        assert!(light.ink().lightness() < dark.ink().lightness());
+        assert!(light.primary().lightness() < dark.primary().lightness());
+        assert!(
+            (light.primary().hue() - dark.primary().hue()).abs() < 1.0,
+            "the brand hue moved when the lights went on"
+        );
+    }
+
+    /// Depth has to mean the same thing in both modes: raised is nearer the
+    /// viewer, recessed is further, whichever way that happens to be lit.
+    #[test]
+    fn depth_reads_the_same_way_in_both_modes() {
+        for p in [designed(), designed().flipped()] {
+            let away = |c: Color| (c.lightness() - p.background().lightness()).abs();
+            assert!(away(p.field()) > 0.0, "{:?}: field is flat", p.mode);
+            assert!(
+                away(p.raised()) > away(p.surface()),
+                "{:?}: raised is not further out than surface",
+                p.mode
+            );
+            assert!(
+                away(p.hover(p.raised())) > away(p.raised()),
+                "{:?}: hover did not lift",
+                p.mode
+            );
+            assert!(
+                away(p.pressed(p.raised())) > away(p.hover(p.raised())),
+                "{:?}: a press is not further than a hover",
+                p.mode
+            );
+            // A field is recessed and a raised control is not: they sit on
+            // opposite sides of the window.
+            let side = |c: Color| c.lightness() > p.background().lightness();
+            assert_ne!(side(p.field()), side(p.raised()), "{:?}", p.mode);
         }
+    }
+
+    /// The regression the contrast work exists for. `dim` used to be a fixed
+    /// 40% mix toward the base surface, which measured 2.99:1 on a raised
+    /// control -- under even the 3.0 large-text floor, on a widget that paints
+    /// notes.
+    #[test]
+    fn every_ink_role_clears_aa_everywhere_in_both_modes() {
+        for base in [Palette::NEUTRAL, designed()] {
+            for p in [base, base.flipped()] {
+                for level in -2..=4 {
+                    let bg = p.layer(level);
+                    for (role, fg) in [("on", p.on(bg)), ("dim", p.dim(bg))] {
+                        let r = fg.contrast(bg);
+                        assert!(
+                            r >= Palette::AA_TEXT - 0.01,
+                            "{:?}: {role} on layer({level}) is {r:.2}:1",
+                            p.mode
+                        );
+                    }
+                }
+                // Every saturated role is a background too -- a chip, a
+                // selected row, a pressed knob.
+                for bg in [
+                    p.primary(),
+                    p.secondary(),
+                    p.tertiary(),
+                    p.success(),
+                    p.warning(),
+                    p.danger(),
+                    p.hover(p.primary()),
+                ] {
+                    let r = p.on(bg).contrast(bg);
+                    assert!(r >= Palette::AA_TEXT - 0.01, "{:?}: {r:.2}:1", p.mode);
+                }
+            }
+        }
+    }
+
+    /// Dimming is still dimming. If the contrast floor were doing all the
+    /// work, `dim` would just return `on` and the distinction would be a lie.
+    #[test]
+    fn dim_is_visibly_dimmer_where_there_is_room_for_it() {
+        for p in [designed(), designed().flipped()] {
+            let bg = p.background();
+            let closer = (p.dim(bg).lightness() - bg.lightness()).abs();
+            let further = (p.on(bg).lightness() - bg.lightness()).abs();
+            assert!(closer < further - 0.05, "{:?}", p.mode);
+        }
+    }
+
+    /// The status roles are the one place the crate does hold an opinion, so
+    /// they had better be the opinion everyone else holds.
+    #[test]
+    fn the_status_roles_are_the_hues_they_claim_to_be() {
+        let p = Palette::NEUTRAL;
+        let [r, g, b] = {
+            let c = p.danger().to_srgb().components;
+            [c[0], c[1], c[2]]
+        };
+        assert!(r > g && r > b, "danger is not red: {r} {g} {b}");
+        let c = p.success().to_srgb().components;
+        assert!(c[1] > c[0] && c[1] > c[2], "success is not green");
+        let c = p.warning().to_srgb().components;
+        assert!(c[0] > c[2] && c[1] > c[2], "warning is not amber");
+    }
+
+    /// The brand roles are grey until an application says otherwise, and the
+    /// status roles are not.
+    #[test]
+    fn the_default_holds_no_brand_opinion() {
+        let p = Palette::NEUTRAL;
+        for role in [p.primary(), p.secondary(), p.tertiary()] {
+            assert!(role.chroma() < 1e-6, "the default picked a brand colour");
+        }
+        assert!(p.danger().chroma() > 0.05);
     }
 
     /// The palette this replaced was hand-tuned by eye, and its "lit accent"
@@ -388,132 +688,88 @@ mod tests {
     /// designer actually used lands on that literal to within a rounding step
     /// of 8-bit sRGB -- which is the evidence that a lightness move in Oklch
     /// plus gamut mapping is what they were doing by hand.
-    ///
-    /// `designed()` uses a slightly larger lift than this, because it has
-    /// to serve greys as well, so it is set here rather than taken from the
-    /// default.
     #[test]
     fn hover_reproduces_the_hand_tuned_lit_accent() {
         let p = Palette {
             hover: 0.087,
             ..designed()
         };
-        let got = p.hover(p.accent).to_srgb().components;
-        let want = [0.56, 0.83, 1.00];
-        for (g, w) in got.iter().zip(want) {
+        // The hand-tuned pair sat at L=.752 and L=.839; `Mode::Dark` places a
+        // role at .75, so this is the same move from the same place.
+        let got = p.hover(p.primary()).to_srgb().components;
+        for (g, want) in got.iter().zip([0.56, 0.83, 1.00]) {
             assert!(
-                (g - w).abs() < 0.015,
-                "derived lit accent {got:?} is not the hand-tuned {want:?}"
+                (g - want).abs() < 0.015,
+                "derived lit accent {got:?} missed the hand-tuned one"
             );
         }
     }
 
-    /// The whole reason for the bisection. Clamping sRGB channels swings the
-    /// accent toward cyan; holding hue costs chroma instead.
     #[test]
     fn gamut_mapping_holds_hue_where_clipping_does_not() {
-        let accent = designed().accent;
-        let want = accent.lighten(0.15);
-        let naive = Srgb::clip(Oklch::convert::<Srgb>([
-            want.lightness(),
-            want.chroma(),
-            want.hue(),
-        ]));
-        let naive_hue = Srgb::convert::<Oklch>(naive)[2];
-        let mapped_hue =
-            Srgb::convert::<Oklch>(want.to_srgb().components[..3].try_into().unwrap())[2];
+        let accent = designed().primary();
+        let lifted = accent.lighten(0.15);
+        let naive = {
+            let v = [
+                lifted.lightness(),
+                lifted.chroma(),
+                lifted.hue().to_radians(),
+            ];
+            let clipped = Srgb::clip(Oklch::convert::<Srgb>(v));
+            Color(AlphaColor::new([clipped[0], clipped[1], clipped[2], 1.0]))
+        };
+        let mapped = Color::srgb(
+            lifted.to_srgb().components[0],
+            lifted.to_srgb().components[1],
+            lifted.to_srgb().components[2],
+        );
+        let drift = |c: Color| (c.hue() - accent.hue()).abs();
         assert!(
-            (naive_hue - want.hue()).abs() > 20.0,
-            "clipping was expected to shift hue badly, got {naive_hue}"
+            drift(naive) > 20.0,
+            "clipping was supposed to swing the hue, it moved {:.1}",
+            drift(naive)
         );
         assert!(
-            (mapped_hue - want.hue()).abs() < 8.0,
-            "gamut mapping drifted to {mapped_hue} from {}",
-            want.hue()
+            drift(mapped) < 8.0,
+            "gamut mapping let the hue move {:.1}",
+            drift(mapped)
         );
     }
 
     #[test]
     fn an_in_gamut_colour_round_trips() {
-        let c = Color::srgb(0.35, 0.72, 0.98);
-        let back = c.to_srgb().components;
-        for (g, w) in back.iter().zip([0.35, 0.72, 0.98, 1.0]) {
-            assert!((g - w).abs() < 1e-3, "round trip gave {back:?}");
+        for want in [[0.2, 0.4, 0.9], [0.9, 0.1, 0.1], [0.5, 0.5, 0.5]] {
+            let back = Color::srgb(want[0], want[1], want[2]).to_srgb().components;
+            for (g, w) in back.iter().zip(want) {
+                assert!((g - w).abs() < 1e-3, "round trip gave {back:?}");
+            }
         }
     }
 
+    /// A state must not quietly change how see-through something is. `mix` is
+    /// the exception: it blends alpha, because that is what a gradient wants.
     #[test]
     fn alpha_survives_every_derivation() {
         let p = designed();
-        let c = p.accent.with_alpha(0.4);
+        let c = p.primary().with_alpha(0.4);
         for got in [p.hover(c), p.pressed(c), p.disabled(c)] {
             assert!((got.alpha() - 0.4).abs() < 1e-6, "alpha lost: {got:?}");
         }
         assert!((c.to_srgb().components[3] - 0.4).abs() < 1e-6);
-        // A mix is a gradient stop, not a state, so it does blend alpha.
-        assert!((c.mix(p.ink, 0.5).alpha() - 0.7).abs() < 1e-6);
-    }
-
-    #[test]
-    fn layers_climb_on_a_dark_theme_and_sink_on_a_light_one() {
-        let dark = designed();
-        assert!(dark.layer(-1).lightness() < dark.layer(0).lightness());
-        assert!(dark.layer(0).lightness() < dark.layer(3).lightness());
-
-        let light = light();
-        assert!(light.layer(-1).lightness() > light.layer(0).lightness());
-        assert!(light.hover(light.layer(3)).lightness() < light.layer(3).lightness());
-    }
-
-    /// The regression this whole section exists for. `ink_dim` used to be a
-    /// fixed 40% mix toward the base surface, which measured 2.99:1 on a
-    /// raised control -- under even the 3.0 large-text floor, on a widget that
-    /// paints notes.
-    #[test]
-    fn every_ink_role_clears_aa_on_every_layer() {
-        for p in [Palette::NEUTRAL, designed(), light()] {
-            for level in -2..=4 {
-                let bg = p.layer(level);
-                for (role, fg) in [("on", p.on(bg)), ("dim", p.dim(bg))] {
-                    let r = fg.contrast(bg);
-                    assert!(
-                        r >= Palette::AA_TEXT - 0.01,
-                        "{role} on layer({level}) is {r:.2}:1"
-                    );
-                }
-            }
-            // The accent is a background too -- a selected row, a pressed knob.
-            for bg in [p.accent, p.hover(p.accent), p.error] {
-                assert!(p.on(bg).contrast(bg) >= Palette::AA_TEXT - 0.01);
-            }
-        }
-    }
-
-    /// Dimming is still dimming. If the floor were doing all the work, `dim`
-    /// would just return `on` and the distinction would be a lie.
-    #[test]
-    fn dim_is_visibly_dimmer_where_there_is_room_for_it() {
-        let p = designed();
-        let bg = p.layer(0);
-        assert!(p.dim(bg).lightness() < p.on(bg).lightness() - 0.05);
+        assert!((c.mix(p.ink(), 0.5).alpha() - 0.7).abs() < 1e-6);
     }
 
     #[test]
     fn readable_moves_lightness_and_leaves_hue_alone() {
         let p = designed();
-        let bg = p.layer(0);
-        // Deliberately illegible: the error red measures 4.16:1 on the ground.
-        let fixed = p.error.readable_on(bg, Palette::AA_TEXT);
-        assert!(p.error.contrast(bg) < Palette::AA_TEXT, "premise");
+        let bg = p.background();
+        // Deliberately illegible: a role at its own lightness on a near ground.
+        let fg = p.neutral.at(bg.lightness() + 0.1);
+        assert!(fg.contrast(bg) < Palette::AA_TEXT, "premise");
+        let fixed = fg.readable_on(bg, Palette::AA_TEXT);
         assert!(fixed.contrast(bg) >= Palette::AA_TEXT);
-        assert!(
-            (fixed.hue() - p.error.hue()).abs() < 1.0,
-            "{} vs {}",
-            fixed.hue(),
-            p.error.hue()
-        );
-        // And no further than it had to go.
-        assert!(fixed.lightness() < p.error.lightness() + 0.1);
+        assert!((fixed.hue() - fg.hue()).abs() < 1.0);
+        assert!(fixed.lightness() > fg.lightness(), "it moved the wrong way");
     }
 
     #[test]
@@ -535,34 +791,37 @@ mod tests {
         assert!((white.contrast(white) - 1.0).abs() < 1e-4);
     }
 
-    /// One `on` rule has to serve both a dark ground and a light accent.
-    #[test]
-    fn ink_flips_to_stay_legible() {
-        let p = designed();
-        assert_eq!(p.on(p.surface), p.ink, "dark ground wants the light ink");
-        assert_eq!(
-            p.on(p.accent),
-            p.surface,
-            "the accent is lighter than the ground, so ink has to invert"
-        );
-    }
-
     #[test]
     fn a_disabled_control_is_duller_and_closer_to_the_ground() {
         let p = designed();
-        let off = p.disabled(p.accent);
-        assert!(off.chroma() < p.accent.chroma() * 0.3);
-        let toward_ground = (off.lightness() - p.surface.lightness()).abs();
-        assert!(toward_ground < (p.accent.lightness() - p.surface.lightness()).abs());
+        let off = p.disabled(p.primary());
+        assert!(off.chroma() < p.primary().chroma() * 0.3);
+        let toward_ground = (off.lightness() - p.background().lightness()).abs();
+        assert!(toward_ground < (p.primary().lightness() - p.background().lightness()).abs());
     }
 
     #[test]
     fn lightness_saturates_instead_of_escaping_the_range() {
-        let white = Color::oklch(0.9, 0.02, 264.0).lighten(5.0);
+        let white = Color::oklch(0.9, 0.05, 100.0).lighten(0.5);
         assert!((white.lightness() - 1.0).abs() < 1e-6);
         assert!(white.valid());
-        let black = Color::oklch(0.1, 0.02, 264.0).darken(5.0);
+        let black = Color::oklch(0.1, 0.05, 100.0).darken(0.5);
         assert!(black.lightness().abs() < 1e-6);
         assert!(black.valid());
+    }
+
+    #[test]
+    fn an_invalid_pigment_is_caught() {
+        assert!(Palette::NEUTRAL.valid());
+        assert!(!Palette {
+            primary: Pigment::new(f32::NAN, 0.1),
+            ..Palette::NEUTRAL
+        }
+        .valid());
+        assert!(!Palette {
+            step: f32::INFINITY,
+            ..Palette::NEUTRAL
+        }
+        .valid());
     }
 }

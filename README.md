@@ -147,32 +147,52 @@ ui.ts
 
 ## Colour
 
-A theme carries a `Palette`: four colours -- surface, accent, ink, error -- and
-two steps. Everything else is derived.
+A theme carries a `Palette`: a `Mode`, seven `Pigment`s, and two steps.
+Everything else -- every surface, every ink, every state, and the other theme --
+is derived.
 
-`Palette::NEUTRAL` is the default and is deliberately tasteless: greys, plus the
-one red that "error" means everywhere. Its accent is grey too, because which
-colour is *yours* is the one decision a layout library has no business making.
-An application declares what differs and inherits the rest.
+A `Pigment` is a hue and a chroma with no lightness, because lightness is not a
+role's identity. "Our blue" stays our blue on a white ground; what changes is
+where it sits between the ground and the ink, and that is what `Mode` decides.
+So a light theme is one field, not a second table to keep in step with the first.
+
+`Palette::NEUTRAL` is the default and is deliberately tasteless: greys for the
+brand roles, plus the three hues that "success", "warning" and "danger" already
+mean everywhere. Which colour is *yours* is the one decision a layout library
+has no business making. An application declares what differs and inherits the
+rest.
 
 ```rust
-use mui_core::{Color, Palette};
+use mui_core::{Mode, Palette, Pigment};
 
-// The crate ships greys and one red; which colour is yours is your decision.
+// The crate ships greys and three status hues; the brand is your decision.
 let skin = Palette {
-    accent: Color::oklch(0.752, 0.131, 242.0),
+    neutral: Pigment::new(264.0, 0.015),  // a faintly cool grey for everything
+    primary: Pigment::new(242.0, 0.131),
     ..Palette::NEUTRAL
 };
 
-skin.layer(3);            // a raised control: three perceptual steps off the ground
-skin.layer(-1);           // a recessed well: a list row, a slider track, a field
-skin.hover(skin.accent);  // what the pointer does to it
-skin.pressed(skin.accent);
-skin.disabled(skin.accent);
-skin.on(skin.layer(3));   // ink that reads on that fill, guaranteed 4.5:1
-skin.dim(skin.layer(3));  // a secondary label, dimmed only as far as 4.5:1 allows
+skin.background();        // the window
+skin.surface();           // a panel lifted off it
+skin.raised();            // a control that looks pressable
+skin.field();             // a well: a text input, a list row, a slider track
+skin.layer(4);            // anything further, in the same perceptual step
 
-Color::oklch(0.752, 0.131, 242.0).to_srgb();  // gamut-mapped, ready to paint
+skin.primary();           // the brand roles, placed at this mode's accent lightness
+skin.secondary();
+skin.tertiary();
+skin.success();
+skin.warning();
+skin.danger();
+
+skin.hover(skin.primary());     // what the pointer does to it
+skin.pressed(skin.primary());
+skin.disabled(skin.primary());
+skin.on(skin.raised());   // ink that reads on that fill, guaranteed 4.5:1
+skin.dim(skin.raised());  // a secondary label, dimmed only as far as 4.5:1 allows
+
+skin.with_mode(Mode::Light);    // the whole theme switch
+skin.primary().to_srgb();       // gamut-mapped, ready to paint
 ```
 
 Colours are Oklch because every derivation above is a move in lightness or

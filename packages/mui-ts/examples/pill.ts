@@ -9,7 +9,7 @@ export default defineScene({
     spacing: { xs: 4, s: 8, m: 12, l: 18, xl: 28 },
     // Only what differs from the default: everything else -- hover, pressed,
     // dimmed ink, every surface layer -- is derived from these.
-    palette: { accent: [0.752, 0.131, 242], step: 0.045, hover: 0.11 },
+    palette: { primary: [242, 0.131], step: 0.045, hover: 0.11 },
     strokeWidth: 1.5,
   },
 

@@ -9,7 +9,7 @@ mod color;
 mod scene;
 mod theme;
 
-pub use color::{Color, Palette};
+pub use color::{Color, Mode, Palette, Pigment};
 pub use mui_layout::{Align, Frame, Insets, Justify, Layout, Limits, Node, Size};
 pub use scene::{
     resolve_scene, CornerRule, Radius, ResolvedScene, ResolvedSurface, SceneError, SceneSpec,

@@ -3,7 +3,7 @@
 import { writeFile } from "node:fs/promises";
 // @ts-ignore
 import { pathToFileURL } from "node:url";
-import type { Align, CornerRule, Radius, Insets, Justify, Node, Oklch, Palette, Scene, Spacing, Surface } from "./index.js";
+import type { Align, CornerRule, Radius, Insets, Justify, Node, Palette, Scene, Spacing, Surface } from "./index.js";
 
 declare const process: { argv: string[] };
 
@@ -65,13 +65,11 @@ function surface(v: Surface): string {
 /// Unstated fields fall through to `Palette::NEUTRAL` rather than being restated
 /// here, so the two sides cannot drift.
 function palette(p: Palette): string {
-  const c = (v: Oklch) => v.length === 4
-    ? `mui_core::Color::oklcha(${v.map(n).join(", ")})`
-    : `mui_core::Color::oklch(${v.map(n).join(", ")})`;
   const fields: string[] = [];
-  for (const k of ["surface", "accent", "ink", "error"] as const) {
+  if (p.mode) fields.push(`mode: mui_core::Mode::${p.mode === "light" ? "Light" : "Dark"}`);
+  for (const k of ["neutral", "primary", "secondary", "tertiary", "success", "warning", "danger"] as const) {
     const v = p[k];
-    if (v) fields.push(`${k}: ${c(v)}`);
+    if (v) fields.push(`${k}: mui_core::Pigment::new(${v.map(n).join(", ")})`);
   }
   for (const k of ["step", "hover"] as const) {
     const v = p[k];

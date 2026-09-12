@@ -30,7 +30,7 @@ pub fn generated_scene() -> mui_core::SceneSpec {
             xl: 28.0,
         },
         palette: mui_core::Palette {
-            accent: mui_core::Color::oklch(0.752, 0.131, 242.0),
+            primary: mui_core::Pigment::new(242.0, 0.131),
             step: 0.045,
             hover: 0.11,
             ..mui_core::Palette::NEUTRAL

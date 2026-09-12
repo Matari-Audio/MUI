@@ -72,10 +72,16 @@ two ever disagree, this one is wrong and should be corrected from the code.
 
 ### Colour and derived styling
 
-`Theme` carries a `Palette`: four colours -- surface, accent, ink, error --
-and two steps. Everything else is derived from them, so a light theme is
-`step` and `hover` negated and two colours swapped, not a second table of
-literals to keep in step with the first.
+`Theme` carries a `Palette`: a `Mode`, seven `Pigment`s -- neutral, primary,
+secondary, tertiary, success, warning, danger -- and two steps. Everything
+else is derived from them.
+
+A `Pigment` is a hue and a chroma with no lightness. That omission is the
+design: lightness is not a role's identity, it is a consequence of the ground
+the role is painted on, so `Mode` assigns it. A light theme is therefore one
+field, not a second table of literals to keep in step with the first, and
+nothing downstream has to know which mode it is in -- `Mode::sign` carries the
+direction of depth, so one `layer(n)` and one `hover` serve both.
 
 Colour is Oklch because every derivation here is a move in lightness or
 chroma, and only a perceptual space makes the same move look the same on
@@ -86,21 +92,28 @@ poor -- so CSS Color 4 13.2 bisection lives in `mui-core`. Measured: a +0.15 L
 lift on the accent swings hue -27.5 degrees under clipping and -7.3 under
 bisection.
 
-- [x] A colour type and named roles (surface, accent, ink, error) in `Theme`.
-      The crate ships the mechanism and one tasteless default,
-      `Palette::NEUTRAL` -- greys and the one red that "error" means
-      everywhere. Specific colours belong to the application; the preview
-      gallery carries its own.
+- [x] A colour type and named roles in `Theme`. Three brand roles (primary,
+      secondary, tertiary), three status roles (success, warning, danger) and
+      a neutral that tints every grey. The crate ships the mechanism and one
+      tasteless default, `Palette::NEUTRAL` -- grey brand roles, plus the
+      three hues that success, warning and danger already mean everywhere.
+      Specific colours belong to the application; the preview gallery carries
+      its own.
 - [x] Derived states: `hover`, `pressed`, `disabled` and `on` computed from a
       base colour instead of enumerated. The nine hand-typed constants in
-      `crates/mui-preview/src/ui.rs` became one `Palette::DARK`, and each
-      widget's state table became one `lift(base, &response)` call.
+      `crates/mui-preview/src/ui.rs` became one `Palette`, and each widget's
+      state table became one `fill_for(base, &response)` call.
+- [x] Named surfaces: `background`, `surface`, `raised` and `field`, all
+      `layer(n)` at a fixed level, so the common four read as names and
+      anything further is still a number rather than another constant.
 - [x] Elevation as `layer(level)`: one perceptual step per layer off the
-      surface, so a raised control and a recessed well are a number rather
+      ground, so a raised control and a recessed well are a number rather
       than two more constants.
-- [x] Light/dark pairing by construction. `step` and `hover` carry the sign,
-      and `on(bg)` picks whichever of ink and surface sits further from `bg`
-      in perceptual lightness, so legibility survives the flip.
+- [x] Light/dark pairing by construction. `Mode` owns the ground, ink and
+      accent lightnesses and the sign of depth; `with_mode` flips a whole
+      interface in one field. `on(bg)` picks whichever of ink and ground sits
+      further from `bg` in perceptual lightness, so legibility survives the
+      flip, and the preview gallery has a checkbox that proves it.
 - [x] Contrast guarantees. `Color::contrast` is the WCAG 2.1 ratio and
       `readable_on` returns the least-changed version of a colour that clears
       a given ratio -- hue and chroma held, lightness pushed away from the
@@ -111,8 +124,8 @@ bisection.
       ships, but it is known to be poorly calibrated on dark grounds -- it
       over-credits dark-on-dark. APCA is the WCAG 3 draft replacement and is
       the right second opinion once `readable_on` has a ratio model to swap.
-- [ ] A palette on the wire is only the four colours and two steps; a theme
-      that wants an off-palette colour (the preview's debug frame overlay) has
+- [ ] A palette on the wire is only the pigments and two steps; a theme that
+      wants an off-palette colour (the preview's debug frame overlay) has
       nowhere to put it.
 - [ ] A `Style` binding a surface to its fill, stroke and radius rule, so a
       scene is styled once rather than at every draw call.

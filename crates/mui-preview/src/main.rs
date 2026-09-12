@@ -179,6 +179,9 @@ struct App {
     font: Arc<Vec<u8>>,
     show_fill: bool,
     show_frames: bool,
+    /// Which way the whole gallery is lit. One bool, because the palette
+    /// derives both themes from one declaration.
+    light: bool,
     /// How many times the geometry has been re-solved. Named in the sidebar
     /// because it is the claim the gallery makes: a moved axis re-solves the
     /// shape, and an idle frame does not.
@@ -209,6 +212,7 @@ impl App {
             rebakes: 0,
             show_fill: true,
             show_frames: false,
+            light: false,
             chrome_paint: Vec::new(),
             gpu: None,
         }
@@ -311,10 +315,12 @@ impl App {
             typed,
             show_fill,
             show_frames,
+            light,
             chrome_paint,
             ..
         } = self;
         let bounds = Bounds::new(0., 0., SIDEBAR * scale, size.1 as f64);
+        chrome.set_skin(ui::skin(*light));
         let mut ui = chrome.column(bounds, *pointer, typed.take(), scale);
         ui.label("MUI preview");
         ui.note("mui-layout places, mui-core merges, vello draws");
@@ -329,6 +335,8 @@ impl App {
         ui.separator();
         ui.checkbox(show_fill, "fill surfaces");
         ui.checkbox(show_frames, "layout frames");
+        ui.checkbox(light, "light theme");
+        ui.swatches();
         let rebuild = ui.button("Rebuild");
         ui.separator();
 
@@ -373,7 +381,8 @@ impl App {
         let origin = self.origin(size, scale);
         let gpu = self.gpu.as_mut().expect("checked just above");
         let scene = gpu.begin();
-        scene.set_paint(ui::SKIN.layer(-2).to_srgb());
+        let skin = ui::skin(self.light);
+        scene.set_paint(skin.layer(-2).to_srgb());
         scene.fill_rect(&vello_common::kurbo::Rect::new(
             0.,
             0.,
@@ -388,10 +397,10 @@ impl App {
                 // Cycling layers rather than sRGB channels: the steps between
                 // these fills are meant to look even, and only a perceptual
                 // ramp makes them so.
-                scene.set_paint(ui::SKIN.layer(i as i32 % 5).to_srgb());
+                scene.set_paint(skin.layer(i as i32 % 5).to_srgb());
                 scene.fill_path(path);
             }
-            scene.set_paint(ui::SKIN.hover(ui::SKIN.accent).to_srgb());
+            scene.set_paint(skin.hover(skin.primary()).to_srgb());
             scene.stroke_path(path);
         }
         if self.show_frames {
