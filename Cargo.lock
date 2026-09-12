@@ -444,6 +444,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "mui-playground"
+version = "0.3.0"
+dependencies = [
+ "mui",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "mui-tessellate"
 version = "0.3.0"
 dependencies = [

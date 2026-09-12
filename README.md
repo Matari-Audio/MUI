@@ -309,7 +309,7 @@ npm --prefix packages/mui-ts ci
 
 Verification checks formatting, native tests, Clippy with warnings denied, WASM compilation,
 TypeScript tests, deterministic Rust generation, the runtime demo and deterministic SVG
-export. The suite replaces numerous isolated assertions with 34 Rust contract tests and
+export. The suite replaces numerous isolated assertions with 35 Rust contract tests and
 4 TypeScript tests covering concrete geometry, layout, failure and frontend behavior.
 
 API migration: `Spacing::resolve` now takes `&SpacingScale`; Theme literals need
@@ -330,3 +330,15 @@ not themselves require a 3:1 ratio. A stroke's presence, its thickness, focus in
 keyboard access, hit-target size and accessibility semantics remain separate concerns.
 See [W3C text contrast](https://www.w3.org/WAI/WCAG22/Understanding/contrast-minimum.html)
 and [non-text contrast](https://www.w3.org/WAI/WCAG22/Understanding/non-text-contrast.html).
+
+## Browser playground and remaining work
+
+The [playground](playground/README.md) runs the real Rust engine in WebAssembly, with an
+editable item DSL, numeric parameter sliders, pointer hover, theme controls and local
+browser drafts. Build with `tools/build-playground.sh` and serve the `playground` folder.
+The GitHub Pages workflow is prepared for explicit deployment once repository access is
+available. No hosted URL is implied by the presence of the workflow.
+
+See [the reuse roadmap](docs/ROADMAP.md) for the remaining layout, alignment, text, color,
+interaction, rendering, plugin-binding and publication work. The most important next step
+is a complete reference host integration, not more syntax aliases.
