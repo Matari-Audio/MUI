@@ -37,6 +37,11 @@ two ever disagree, this one is wrong and should be corrected from the code.
 - [x] Transactional commit behind a revision counter, so a rejected layout
       never half-replaces the previous one.
 - [x] No dependencies at all. `#![forbid(unsafe_code)]`, as everywhere else.
+- [x] Naming a node is optional. `leaf`/`row`/`column`/`overlay` build the
+      tree and `.id()` names only the nodes you look up or hang a surface
+      off; the same id is the surface id, so there is nothing to keep in
+      step. `Kind::Branch` replaces `Kind::Stack`, which used to mean
+      row-or-column while `dsl::stack` meant overlay.
 
 ### Scene derivation — `mui-core`
 
@@ -134,6 +139,9 @@ section exists to fix.
       pinned to a corner with an offset.
 - [ ] Text as a first-class leaf. Nothing calls `mui-text` to measure a node,
       so every text node is hand-sized today.
+- [ ] `gap` and `padding` take raw `f64`, so a themed `.gap(M)` is
+      impossible. They need `impl Into<Spacing>` and the theme threaded into
+      `resolve`, which is the same plumbing the colour work needs.
 
 ### Rendering
 

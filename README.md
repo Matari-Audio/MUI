@@ -38,7 +38,7 @@ There are two different semantics:
 ### Styling relationship
 
 ```rust
-FrameRadius::ParentNormalized {
+Radius::ParentNormalized {
     parent: "card".into(),
     scale: 1.0,
 }
@@ -65,42 +65,41 @@ so the two arcs are concentric and the gap is exactly `d`. For a merged shape, M
 
 ```rust
 use mui_core::{CornerProfile, SceneSpec, Spacing, SurfaceSpec, Theme};
-use mui_layout::{Align, Node, Size};
+use mui_layout::{column, leaf, Align};
 
-let controls = Node::column("controls", [
-    Node::leaf("plus",  Size::new(28.0, 28.0)),
-    Node::leaf("pie-a", Size::new(28.0, 28.0)),
-    Node::leaf("pie-b", Size::new(28.0, 28.0)),
+let controls = column([
+    leaf(28.0, 28.0).id("plus"),
+    leaf(28.0, 28.0).id("pie-a"),
+    leaf(28.0, 28.0).id("pie-b"),
 ])
 .gap(10.0)
 .align(Align::Center);
 
-let tab = Node::column("tab-frame", [
-    Node::column("pill-frame", [controls]).padding(10.0),
-])
-.padding(12.0)
-.min_size(Size::new(92.0, 0.0));
+// Only a node you look up, or take a surface from, needs a name. The
+// wrapper below is structural, so it stays anonymous.
+let tab = column([column([controls]).padding(10.0)])
+    .id("tab")
+    .padding(12.0)
+    .min_width(92.0);
 
-let root = Node::column("root", [
-    tab,
-    Node::leaf("panel-frame", Size::new(520.0, 230.0)),
-])
-.align(Align::Start);
+let root = column([tab, leaf(520.0, 230.0).id("panel")])
+    .id("root")
+    .align(Align::Start);
 
 let scene = SceneSpec::new(root)
     .theme(Theme {
         corners: CornerProfile::new(28.0, 32.0),
         ..Theme::default()
     })
-    .surface(SurfaceSpec::frame("panel", "panel-frame"))
-    .surface(SurfaceSpec::frame("tab", "tab-frame"))
+    .surface(SurfaceSpec::frame("panel"))
+    .surface(SurfaceSpec::frame("tab"))
     .surface(SurfaceSpec::merge("outer", ["panel", "tab"]))
     .surface(SurfaceSpec::inset("pill-shell", "tab", Spacing::px(12.0)));
 
 let resolved = mui_core::resolve_scene(&scene)?;
 ```
 
-No pixel Y positions are needed for the controls. Their stack sizes the pill content, the pill sizes the tab, and the tab/parent geometry resolves afterward.
+No pixel Y positions are needed for the controls. Their column sizes the pill content, the pill sizes the tab, and the tab/parent geometry resolves afterward.
 
 ## TypeScript authoring, Rust runtime
 
@@ -110,23 +109,23 @@ No pixel Y positions are needed for the controls. Their stack sizes the pill con
 export default defineScene({
   theme: { corners: { convex: 28, concave: 32 } },
 
-  root: column("root", [
-    column("tab-frame", [
-      column("pill-frame", [
-        column("controls", [
-          leaf("plus", [28, 28]),
-          leaf("pie-a", [28, 28]),
-          leaf("pie-b", [28, 28]),
+  root: column([
+    column([
+      column([
+        column([
+          leaf([28, 28], { id: "plus" }),
+          leaf([28, 28], { id: "pie-a" }),
+          leaf([28, 28], { id: "pie-b" }),
         ], { gap: 10, align: "center" }),
       ], { padding: 10 }),
-    ], { padding: 12, min: [92, 0] }),
+    ], { id: "tab", padding: 12, min: [92, 0] }),
 
-    leaf("panel-frame", [520, 230]),
-  ], { align: "start" }),
+    leaf([520, 230], { id: "panel" }),
+  ], { id: "root", align: "start" }),
 
   surfaces: [
-    frameSurface("panel", "panel-frame"),
-    frameSurface("tab", "tab-frame"),
+    frameSurface("panel"),
+    frameSurface("tab"),
     mergeSurface("outer", ["panel", "tab"]),
     insetSurface("pill-shell", "tab", px(12)),
   ],
@@ -162,7 +161,7 @@ Dependency resolution is recursive, order-independent and cycle-checked.
 - A failed `SceneState::commit` leaves the previously-published scene and revision untouched.
 - `PathMeshCache` avoids retessellation when neither the path nor tolerance changed.
 - No global mutable UI state is required; state is per plugin instance.
-- NaN/infinite/negative invalid inputs, dependency cycles, duplicate keys and budget violations are rejected explicitly.
+- NaN/infinite/negative invalid inputs, dependency cycles, duplicate node ids and budget violations are rejected explicitly.
 
 ## Current intentional scope
 
