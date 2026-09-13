@@ -47,6 +47,11 @@ truce::plugin! { logic: ProbePlugin, params: ProbeParams }
 pub struct PanelSnapshot {
     pub preset_name: String,
     pub scroll_y: f32,
+    pub inner_scroll_y: f32,
+    pub painted_scroll: (f32, f32),
+    pub baseline_error: f32,
+    pub nested_y: f32,
+    pub render_error: Option<String>,
 }
 enum Edit {
     Begin,
@@ -204,10 +209,10 @@ impl Editor for GpuiEditor {
         if !(320..=1920).contains(&w) || !(180..=1080).contains(&h) {
             return false;
         }
-        if let Some(session) = &self.session {
-            if session.commands.try_send(Command::Resize(w, h)).is_err() {
-                return false;
-            }
+        if let Some(session) = &self.session
+            && session.commands.try_send(Command::Resize(w, h)).is_err()
+        {
+            return false;
         }
         self.dimensions = (w, h);
         true
@@ -230,6 +235,11 @@ struct ProbeView {
     edits: mpsc::Sender<Edit>,
     name: gpui::Entity<text_input::TextInput>,
     scroll: gpui::ScrollHandle,
+    inner_scroll: gpui::ScrollHandle,
+    painted_scroll: std::rc::Rc<std::cell::Cell<(f32, f32)>>,
+    baseline_error: f32,
+    nested_y: f32,
+    render_error: Option<String>,
     gain_focus: gpui::FocusHandle,
     drag: Option<(gpui::Point<gpui::Pixels>, f64, bool)>,
     click_armed: bool,
@@ -278,6 +288,11 @@ fn run_editor(
                     edits,
                     name: cx.new(text_input::TextInput::new),
                     scroll: gpui::ScrollHandle::new(),
+                    inner_scroll: gpui::ScrollHandle::new(),
+                    painted_scroll: Default::default(),
+                    baseline_error: 0.,
+                    nested_y: 0.,
+                    render_error: None,
                     gain_focus: cx.focus_handle().tab_index(0).tab_stop(true),
                     drag: None,
                     click_armed: false,
@@ -328,6 +343,11 @@ fn run_editor(
                         let _ = reply.send(PanelSnapshot {
                             preset_name: view.name.read(cx).value().to_owned(),
                             scroll_y: view.scroll.offset().y.into(),
+                            inner_scroll_y: view.inner_scroll.offset().y.into(),
+                            painted_scroll: view.painted_scroll.get(),
+                            baseline_error: view.baseline_error,
+                            nested_y: view.nested_y,
+                            render_error: view.render_error.clone(),
                         });
                     })
                 })?,

@@ -18,12 +18,14 @@ it does not complete them universally. Rich spans and platform IME validation re
 
 The [layout/view contract](LAYOUT-VIEW.md) now adds first-baseline font measurements,
 explicit nested clip/scroll policies and affine view state shared by renderers and picking.
-The SVG example exercises that contract; the GPUI probe has not yet adopted it.
+The SVG example exercises general affine views; the GPUI probe now adopts the contract
+for baseline-aligned text, translated nested scroll views, clip masks and gain picking.
+See [reuse decisions](GPUI-REUSE.md) before implementing controls already available in GPUI.
 The capability table below describes the renderer-independent core unless noted.
 
 | Area | Present | Missing / priority |
 | --- | --- | --- |
-| Layout | Intrinsic sizing, flex row/column, adaptive direction, wrapping, grid tracks/placement/spans, measured leaves, explicit clip/scroll policies and nested viewport limits | **P0:** adopt the core view contract in the GPUI renderer. **P1:** virtualization, aspect ratios, per-axis gaps, richer min/max-content/percentage sizing, grid auto-fit/auto-fill |
+| Layout | Intrinsic sizing, flex row/column, adaptive direction, wrapping, grid tracks/placement/spans, measured leaves, explicit clip/scroll policies and nested viewport limits | **P1:** extend the GPUI adapter beyond translated rectangular viewports. **P1:** virtualization, aspect ratios, per-axis gaps, richer min/max-content/percentage sizing, grid auto-fit/auto-fill |
 | Alignment | Physical x/y alignment, main-axis distribution, cross-axis alignment, grid cell overrides, first text baselines | **P1:** RTL/writing-direction semantics, per-item main-axis placement policy; broader nested flex/grid interoperability tests |
 | Content | Host measurement callback, optional Parley shaping/wrapping with final glyph layouts, single-line playground text | **P0:** documented host font/image measurement contract and reference adapter. **P1:** rich spans, images and SVG content; connect Parley output to the renderer and playground |
 | Geometry | Inferred joining, concave/convex rounding, Boolean operations, offsets, affine view transforms and clipped path picking | **P1:** arbitrary path clips, broader rounding/degeneracy fuzzing. Explicit radius overrides must remain distinct from theme defaults |
@@ -39,7 +41,7 @@ The capability table below describes the renderer-independent core unless noted.
 
 1. One complete reference backend and plugin integration: measurement, painting, pointer/focus
    state, accessibility and parameter gestures. This reveals missing core contracts quickly.
-2. Adopt the new core view and baseline APIs in the reference backend; validate nested scrolling with native input.
+2. Evaluate compatible GPUI Base controls before implementing a new control toolkit; expand native viewport and text coverage.
 3. Stateful semantic appearance: focus, pressed, selected, disabled; compositing-aware contrast.
 4. Profile large real plugin layouts and optimize incremental work before promising performance.
 5. Package/version/publish the crates after those integration contracts stabilize.

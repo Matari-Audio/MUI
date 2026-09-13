@@ -134,6 +134,14 @@ fn main() -> anyhow::Result<()> {
         }
     };
     tick(&mut first);
+    assert!(first.set_size(320, 180));
+    tick(&mut first);
+    let snapshot = first.snapshot()?;
+    assert!(
+        snapshot.render_error.is_none(),
+        "minimum-size panel failed: {:?}",
+        snapshot.render_error
+    );
     let child = first.child.unwrap();
     assert_eq!(connection.query_tree(child)?.reply()?.parent, parent);
     assert!(first.set_size(800, 450));
@@ -302,7 +310,7 @@ fn main() -> anyhow::Result<()> {
     events.lock().unwrap().clear();
     type_key(0xff09)?; // Tab from gain to the text field.
     tick(&mut first);
-    for symbol in [b'm', b'u', b'i'] {
+    for symbol in *b"mui" {
         type_key(u32::from(symbol))?;
     }
     tick(&mut first);
@@ -330,6 +338,64 @@ fn main() -> anyhow::Result<()> {
         events.lock().unwrap().is_empty(),
         "typing changed the gain parameter"
     );
+    let snapshot = first.snapshot()?;
+    assert!(
+        snapshot.baseline_error < 0.01,
+        "GPUI font baselines differ: {}",
+        snapshot.baseline_error
+    );
+    move_to(100, (snapshot.nested_y + 25.) as i16)?;
+    button(BUTTON_PRESS_EVENT, 5)?;
+    button(BUTTON_RELEASE_EVENT, 5)?;
+    tick(&mut first);
+    let snapshot = first.snapshot()?;
+    assert!(
+        snapshot.inner_scroll_y < -30.,
+        "nested viewport did not scroll"
+    );
+    assert_eq!(
+        snapshot.scroll_y, 0.,
+        "nested wheel moved the outer viewport"
+    );
+    assert_eq!(
+        snapshot.painted_scroll,
+        (snapshot.scroll_y, snapshot.inner_scroll_y),
+        "paint/native scroll disagreement"
+    );
+    let wheel_step = -snapshot.inner_scroll_y;
+    // More input exhausts the inner range; only the remainder reaches the outer scroller.
+    for _ in 0..5 {
+        button(BUTTON_PRESS_EVENT, 5)?;
+        button(BUTTON_RELEASE_EVENT, 5)?;
+    }
+    tick(&mut first);
+    let chained = first.snapshot()?;
+    assert!(
+        (chained.scroll_y + chained.inner_scroll_y + wheel_step * 6.).abs() < 1.,
+        "wheel movement was duplicated or lost"
+    );
+    assert!(
+        chained.scroll_y < 0.,
+        "nested scroll did not chain at its boundary"
+    );
+    assert_eq!(
+        chained.painted_scroll,
+        (chained.scroll_y, chained.inner_scroll_y)
+    );
+    move_to(700, 400)?;
+    for _ in 0..10 {
+        button(BUTTON_PRESS_EVENT, 4)?;
+        button(BUTTON_RELEASE_EVENT, 4)?;
+    }
+    tick(&mut first);
+    assert_eq!(first.snapshot()?.scroll_y, 0.);
+    move_to(100, (first.snapshot()?.nested_y + 25.) as i16)?;
+    for _ in 0..10 {
+        button(BUTTON_PRESS_EVENT, 4)?;
+        button(BUTTON_RELEASE_EVENT, 4)?;
+    }
+    tick(&mut first);
+    assert_eq!(first.snapshot()?.inner_scroll_y, 0.);
     move_to(700, 400)?;
     for _ in 0..10 {
         button(BUTTON_PRESS_EVENT, 5)?;
@@ -339,6 +405,12 @@ fn main() -> anyhow::Result<()> {
     assert!(
         first.snapshot()?.scroll_y < -120.,
         "wheel did not scroll content"
+    );
+    let snapshot = first.snapshot()?;
+    assert_eq!(
+        snapshot.painted_scroll,
+        (snapshot.scroll_y, snapshot.inner_scroll_y),
+        "scrolled painting is stale"
     );
     click(100, 85)?;
     tick(&mut first);
@@ -382,7 +454,7 @@ fn main() -> anyhow::Result<()> {
     );
     connection.destroy_window(parent)?.check()?;
     println!(
-        "PASS: real GPUI views, X11 parenting, resize validation, MUI layout/path hits, pointer + keyboard, drag/cancel automation, Tab traversal, text selection/editing/clipboard, scroll clipping, close during drag, two instances, close/reopen"
+        "PASS: real GPUI views, X11 parenting, resize validation, MUI layout/path hits, pointer + keyboard, drag/cancel automation, Tab traversal, text selection/editing/clipboard, GPUI baselines + nested native scroll/MUI clips, close during drag, two instances, close/reopen"
     );
     Ok(())
 }

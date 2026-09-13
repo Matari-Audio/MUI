@@ -62,8 +62,9 @@ Resolve a fresh `View` after changing layout or state. For each surface returned
 
 A rotated clip is a transformed rectangle, **not** its axis-aligned bounding box. Rectangular
 content-box clips are currently supported; arbitrary clip paths are not. A backend must
-implement this contract explicitly: the existing GPUI probe still uses GPUI's own scrolling
-and is not yet wired to this new core view API.
+implement this contract explicitly. The GPUI probe now shares core view snapshots with
+its native scroll containers and masks; that adapter currently supports scroll translations
+and rectangular clips. See [GPUI reuse](GPUI-REUSE.md).
 
 `view.tap_at(screen_point)` and `view.hover_at(screen_point)` inverse-transform the pointer,
 apply all clips and test the nonzero-filled path within the original layout frame. Painted

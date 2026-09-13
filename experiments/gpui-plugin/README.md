@@ -83,11 +83,10 @@ This is an editor-contract harness plus a CLAP binary, **not a real DAW GUI test
 The harness bypasses CLAP's GUI extension. The three state-validation failures above
 remain a migration blocker. KURV and its vendored Truce patches are untouched.
 
-Still needed within the first four framework areas: baseline alignment between text
-and adjacent controls, nested MUI scrolling/clip policies, generalized transformed and
-occluding-item hit testing, rich text, and real IME/bidirectional-text validation. The
-sample viewport's clipping does not establish a general core overflow contract. Screen
-reader behavior, host-negotiated DPI changes, VST3 and other OSes remain unverified.
+Still needed within the first four framework areas: arbitrary affine painting of native
+text/widgets, rich text, and real IME/bidirectional-text validation. Baselines and nested
+MUI clip/scroll policies now drive the reference panel. Screen-reader behavior,
+host-negotiated DPI changes, VST3 and other OSes remain unverified.
 Parley is still available for other renderers; this backend uses GPUI text consistently
 instead of mixing Parley measurements with GPUI glyph placement. No combined
 GPUI/Vello compositor or duplicate widget runtime has been introduced.
@@ -99,5 +98,14 @@ close its window. The title is **MUI - interactive GPUI panel**; resizing update
 editor, and the automated XTest sequence is skipped in this mode.
 
 MUI now also provides [baseline and viewport APIs](../../docs/LAYOUT-VIEW.md), with a
-rendered nested-scroll/transform example. This probe still uses GPUI's own scroll container;
-adopting the new core view snapshot in its painter and input dispatch is a separate step.
+rendered nested-scroll/transform example. This probe now connects the core view snapshot to GPUI native scroll containers, masks,
+font baselines and gain picking. The wheel bridge reuses core propagation and GPUI event
+normalization/scroll handles. See [GPUI reuse decisions](../../docs/GPUI-REUSE.md).
+
+The current panel adds a larger **GPUI** header label to demonstrate mixed-font baselines,
+and a nested scroll area below the text field. Scroll over that area to move it independently;
+after its range is exhausted, remaining wheel movement reaches the outer panel. The runtime
+check also compares painted and native scroll offsets to catch stale frames.
+
+[GPU-readback panel preview](results/panel.png). The smoke test also renders the 320×180
+minimum editor size and rejects any panel-layout error.
