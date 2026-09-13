@@ -1,0 +1,745 @@
+{
+  "results": [
+    {
+      "test": {
+        "plugin-library": {
+          "test": "query-nonexistent-factory",
+          "path": "experiments/gpui-plugin/output/mui-gpui-probe.clap"
+        }
+      },
+      "status": {
+        "code": "success",
+        "details": null
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 2657511
+      }
+    },
+    {
+      "test": {
+        "plugin-library": {
+          "test": "create-id-with-trailing-garbage",
+          "path": "experiments/gpui-plugin/output/mui-gpui-probe.clap"
+        }
+      },
+      "status": {
+        "code": "success",
+        "details": null
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 3810943
+      }
+    },
+    {
+      "test": {
+        "plugin-library": {
+          "test": "scan-rtld-now",
+          "path": "experiments/gpui-plugin/output/mui-gpui-probe.clap"
+        }
+      },
+      "status": {
+        "code": "success",
+        "details": null
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 3852053
+      }
+    },
+    {
+      "test": {
+        "plugin-library": {
+          "test": "scan-time",
+          "path": "experiments/gpui-plugin/output/mui-gpui-probe.clap"
+        }
+      },
+      "status": {
+        "code": "success",
+        "details": "The plugin can be scanned in 4 milliseconds."
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 4065817
+      }
+    },
+    {
+      "test": {
+        "plugin-library": {
+          "test": "preset-discovery-crawl",
+          "path": "experiments/gpui-plugin/output/mui-gpui-probe.clap"
+        }
+      },
+      "status": {
+        "code": "success",
+        "details": null
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 5603656
+      }
+    },
+    {
+      "test": {
+        "plugin-library": {
+          "test": "preset-discovery-descriptor-consistency",
+          "path": "experiments/gpui-plugin/output/mui-gpui-probe.clap"
+        }
+      },
+      "status": {
+        "code": "success",
+        "details": null
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 4213990
+      }
+    },
+    {
+      "test": {
+        "plugin-library": {
+          "test": "preset-discovery-load",
+          "path": "experiments/gpui-plugin/output/mui-gpui-probe.clap"
+        }
+      },
+      "status": {
+        "code": "success",
+        "details": null
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 5028066
+      }
+    },
+    {
+      "test": {
+        "plugin-instance": {
+          "test": "descriptor-consistency",
+          "path": "experiments/gpui-plugin/output/mui-gpui-probe.clap",
+          "plugin_id": "dev.mui.gpui-probe"
+        }
+      },
+      "status": {
+        "code": "success",
+        "details": null
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 4246791
+      }
+    },
+    {
+      "test": {
+        "plugin-instance": {
+          "test": "features-categories",
+          "path": "experiments/gpui-plugin/output/mui-gpui-probe.clap",
+          "plugin_id": "dev.mui.gpui-probe"
+        }
+      },
+      "status": {
+        "code": "success",
+        "details": null
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 6164937
+      }
+    },
+    {
+      "test": {
+        "plugin-instance": {
+          "test": "features-duplicates",
+          "path": "experiments/gpui-plugin/output/mui-gpui-probe.clap",
+          "plugin_id": "dev.mui.gpui-probe"
+        }
+      },
+      "status": {
+        "code": "success",
+        "details": null
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 7640514
+      }
+    },
+    {
+      "test": {
+        "plugin-instance": {
+          "test": "process-audio-basic-out-of-place",
+          "path": "experiments/gpui-plugin/output/mui-gpui-probe.clap",
+          "plugin_id": "dev.mui.gpui-probe"
+        }
+      },
+      "status": {
+        "code": "success",
+        "details": null
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 7755927
+      }
+    },
+    {
+      "test": {
+        "plugin-instance": {
+          "test": "process-audio-basic-in-place",
+          "path": "experiments/gpui-plugin/output/mui-gpui-probe.clap",
+          "plugin_id": "dev.mui.gpui-probe"
+        }
+      },
+      "status": {
+        "code": "success",
+        "details": null
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 6949072
+      }
+    },
+    {
+      "test": {
+        "plugin-instance": {
+          "test": "process-audio-double-out-of-place",
+          "path": "experiments/gpui-plugin/output/mui-gpui-probe.clap",
+          "plugin_id": "dev.mui.gpui-probe"
+        }
+      },
+      "status": {
+        "code": "skipped",
+        "details": "The plugin does not support 64-bit floating point audio."
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 5497493
+      }
+    },
+    {
+      "test": {
+        "plugin-instance": {
+          "test": "process-audio-double-in-place",
+          "path": "experiments/gpui-plugin/output/mui-gpui-probe.clap",
+          "plugin_id": "dev.mui.gpui-probe"
+        }
+      },
+      "status": {
+        "code": "skipped",
+        "details": "The plugin does not support 64-bit floating point audio."
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 7381800
+      }
+    },
+    {
+      "test": {
+        "plugin-instance": {
+          "test": "process-audio-denormals",
+          "path": "experiments/gpui-plugin/output/mui-gpui-probe.clap",
+          "plugin_id": "dev.mui.gpui-probe"
+        }
+      },
+      "status": {
+        "code": "success",
+        "details": null
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 14056426
+      }
+    },
+    {
+      "test": {
+        "plugin-instance": {
+          "test": "process-sleep-constant-mask",
+          "path": "experiments/gpui-plugin/output/mui-gpui-probe.clap",
+          "plugin_id": "dev.mui.gpui-probe"
+        }
+      },
+      "status": {
+        "code": "success",
+        "details": "The plugin never set the constant flag on any output"
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 9531270
+      }
+    },
+    {
+      "test": {
+        "plugin-instance": {
+          "test": "process-sleep-process-status",
+          "path": "experiments/gpui-plugin/output/mui-gpui-probe.clap",
+          "plugin_id": "dev.mui.gpui-probe"
+        }
+      },
+      "status": {
+        "code": "success",
+        "details": "The plugin never went to sleep during the test."
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 10199503
+      }
+    },
+    {
+      "test": {
+        "plugin-instance": {
+          "test": "process-note-out-of-place-basic",
+          "path": "experiments/gpui-plugin/output/mui-gpui-probe.clap",
+          "plugin_id": "dev.mui.gpui-probe"
+        }
+      },
+      "status": {
+        "code": "skipped",
+        "details": "The plugin implements the 'note-ports' extension but it does not have any input note ports."
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 4110367
+      }
+    },
+    {
+      "test": {
+        "plugin-instance": {
+          "test": "process-note-inconsistent",
+          "path": "experiments/gpui-plugin/output/mui-gpui-probe.clap",
+          "plugin_id": "dev.mui.gpui-probe"
+        }
+      },
+      "status": {
+        "code": "skipped",
+        "details": "The plugin implements the 'note-ports' extension but it does not have any input note ports."
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 4605037
+      }
+    },
+    {
+      "test": {
+        "plugin-instance": {
+          "test": "process-note-wildcard",
+          "path": "experiments/gpui-plugin/output/mui-gpui-probe.clap",
+          "plugin_id": "dev.mui.gpui-probe"
+        }
+      },
+      "status": {
+        "code": "skipped",
+        "details": "The plugin implements the 'note-ports' extension but it does not have any input note ports."
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 4565907
+      }
+    },
+    {
+      "test": {
+        "plugin-instance": {
+          "test": "process-varying-sample-rates",
+          "path": "experiments/gpui-plugin/output/mui-gpui-probe.clap",
+          "plugin_id": "dev.mui.gpui-probe"
+        }
+      },
+      "status": {
+        "code": "success",
+        "details": null
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 12910634
+      }
+    },
+    {
+      "test": {
+        "plugin-instance": {
+          "test": "process-varying-block-sizes",
+          "path": "experiments/gpui-plugin/output/mui-gpui-probe.clap",
+          "plugin_id": "dev.mui.gpui-probe"
+        }
+      },
+      "status": {
+        "code": "success",
+        "details": null
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 14097077
+      }
+    },
+    {
+      "test": {
+        "plugin-instance": {
+          "test": "process-random-block-sizes",
+          "path": "experiments/gpui-plugin/output/mui-gpui-probe.clap",
+          "plugin_id": "dev.mui.gpui-probe"
+        }
+      },
+      "status": {
+        "code": "success",
+        "details": null
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 8706075
+      }
+    },
+    {
+      "test": {
+        "plugin-instance": {
+          "test": "process-reset-reactivate",
+          "path": "experiments/gpui-plugin/output/mui-gpui-probe.clap",
+          "plugin_id": "dev.mui.gpui-probe"
+        }
+      },
+      "status": {
+        "code": "success",
+        "details": null
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 4384793
+      }
+    },
+    {
+      "test": {
+        "plugin-instance": {
+          "test": "layout-audio-ports-activation",
+          "path": "experiments/gpui-plugin/output/mui-gpui-probe.clap",
+          "plugin_id": "dev.mui.gpui-probe"
+        }
+      },
+      "status": {
+        "code": "skipped",
+        "details": "The plugin does not implement the 'audio-ports-activation' extension."
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 3862783
+      }
+    },
+    {
+      "test": {
+        "plugin-instance": {
+          "test": "layout-audio-ports-config",
+          "path": "experiments/gpui-plugin/output/mui-gpui-probe.clap",
+          "plugin_id": "dev.mui.gpui-probe"
+        }
+      },
+      "status": {
+        "code": "success",
+        "details": null
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 5236889
+      }
+    },
+    {
+      "test": {
+        "plugin-instance": {
+          "test": "layout-configurable-audio-ports",
+          "path": "experiments/gpui-plugin/output/mui-gpui-probe.clap",
+          "plugin_id": "dev.mui.gpui-probe"
+        }
+      },
+      "status": {
+        "code": "skipped",
+        "details": "The plugin does not implement the 'configurable-audio-ports' extension."
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 2300354
+      }
+    },
+    {
+      "test": {
+        "plugin-instance": {
+          "test": "param-set-events",
+          "path": "experiments/gpui-plugin/output/mui-gpui-probe.clap",
+          "plugin_id": "dev.mui.gpui-probe"
+        }
+      },
+      "status": {
+        "code": "success",
+        "details": null
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 3606579
+      }
+    },
+    {
+      "test": {
+        "plugin-instance": {
+          "test": "param-set-no-cookies",
+          "path": "experiments/gpui-plugin/output/mui-gpui-probe.clap",
+          "plugin_id": "dev.mui.gpui-probe"
+        }
+      },
+      "status": {
+        "code": "success",
+        "details": null
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 3326743
+      }
+    },
+    {
+      "test": {
+        "plugin-instance": {
+          "test": "param-set-wrong-namespace",
+          "path": "experiments/gpui-plugin/output/mui-gpui-probe.clap",
+          "plugin_id": "dev.mui.gpui-probe"
+        }
+      },
+      "status": {
+        "code": "success",
+        "details": null
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 3640899
+      }
+    },
+    {
+      "test": {
+        "plugin-instance": {
+          "test": "param-fuzz-basic",
+          "path": "experiments/gpui-plugin/output/mui-gpui-probe.clap",
+          "plugin_id": "dev.mui.gpui-probe"
+        }
+      },
+      "status": {
+        "code": "success",
+        "details": null
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 19835745
+      }
+    },
+    {
+      "test": {
+        "plugin-instance": {
+          "test": "param-fuzz-bounds",
+          "path": "experiments/gpui-plugin/output/mui-gpui-probe.clap",
+          "plugin_id": "dev.mui.gpui-probe"
+        }
+      },
+      "status": {
+        "code": "success",
+        "details": null
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 20123420
+      }
+    },
+    {
+      "test": {
+        "plugin-instance": {
+          "test": "param-fuzz-sample-accurate",
+          "path": "experiments/gpui-plugin/output/mui-gpui-probe.clap",
+          "plugin_id": "dev.mui.gpui-probe"
+        }
+      },
+      "status": {
+        "code": "success",
+        "details": null
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 4713839
+      }
+    },
+    {
+      "test": {
+        "plugin-instance": {
+          "test": "param-fuzz-modulation",
+          "path": "experiments/gpui-plugin/output/mui-gpui-probe.clap",
+          "plugin_id": "dev.mui.gpui-probe"
+        }
+      },
+      "status": {
+        "code": "success",
+        "details": null
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 3286632
+      }
+    },
+    {
+      "test": {
+        "plugin-instance": {
+          "test": "param-conversions",
+          "path": "experiments/gpui-plugin/output/mui-gpui-probe.clap",
+          "plugin_id": "dev.mui.gpui-probe"
+        }
+      },
+      "status": {
+        "code": "success",
+        "details": "The plugin does not support text-to-value and value-to-text parameter conversions"
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 2545178
+      }
+    },
+    {
+      "test": {
+        "plugin-instance": {
+          "test": "param-default-values",
+          "path": "experiments/gpui-plugin/output/mui-gpui-probe.clap",
+          "plugin_id": "dev.mui.gpui-probe"
+        }
+      },
+      "status": {
+        "code": "success",
+        "details": null
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 2743622
+      }
+    },
+    {
+      "test": {
+        "plugin-instance": {
+          "test": "state-invalid-empty",
+          "path": "experiments/gpui-plugin/output/mui-gpui-probe.clap",
+          "plugin_id": "dev.mui.gpui-probe"
+        }
+      },
+      "status": {
+        "code": "success",
+        "details": null
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 2309364
+      }
+    },
+    {
+      "test": {
+        "plugin-instance": {
+          "test": "state-invalid-random",
+          "path": "experiments/gpui-plugin/output/mui-gpui-probe.clap",
+          "plugin_id": "dev.mui.gpui-probe"
+        }
+      },
+      "status": {
+        "code": "success",
+        "details": null
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 5694448
+      }
+    },
+    {
+      "test": {
+        "plugin-instance": {
+          "test": "state-reproducibility-basic",
+          "path": "experiments/gpui-plugin/output/mui-gpui-probe.clap",
+          "plugin_id": "dev.mui.gpui-probe"
+        }
+      },
+      "status": {
+        "code": "failed",
+        "details": "After reloading the state, these parameter values changed without a rescan request: \n - Gain (5515006) - 0.00 (0.0000) vs 0.06 (0.0556)"
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 2284023
+      }
+    },
+    {
+      "test": {
+        "plugin-instance": {
+          "test": "state-reproducibility-binary",
+          "path": "experiments/gpui-plugin/output/mui-gpui-probe.clap",
+          "plugin_id": "dev.mui.gpui-probe"
+        }
+      },
+      "status": {
+        "code": "failed",
+        "details": "After reloading the state, these parameter values changed without a rescan request: \n - Gain (5515006) - 0.00 (0.0000) vs 0.06 (0.0556)"
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 3057328
+      }
+    },
+    {
+      "test": {
+        "plugin-instance": {
+          "test": "state-reproducibility-buffered",
+          "path": "experiments/gpui-plugin/output/mui-gpui-probe.clap",
+          "plugin_id": "dev.mui.gpui-probe"
+        }
+      },
+      "status": {
+        "code": "failed",
+        "details": "After reloading the state, these parameter values changed without a rescan request: \n - Gain (5515006) - 0.00 (0.0000) vs 0.06 (0.0556)"
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 2671821
+      }
+    },
+    {
+      "test": {
+        "plugin-instance": {
+          "test": "transport-null",
+          "path": "experiments/gpui-plugin/output/mui-gpui-probe.clap",
+          "plugin_id": "dev.mui.gpui-probe"
+        }
+      },
+      "status": {
+        "code": "success",
+        "details": null
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 2695631
+      }
+    },
+    {
+      "test": {
+        "plugin-instance": {
+          "test": "transport-fuzz",
+          "path": "experiments/gpui-plugin/output/mui-gpui-probe.clap",
+          "plugin_id": "dev.mui.gpui-probe"
+        }
+      },
+      "status": {
+        "code": "success",
+        "details": null
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 3441115
+      }
+    },
+    {
+      "test": {
+        "plugin-instance": {
+          "test": "transport-fuzz-sample-accurate",
+          "path": "experiments/gpui-plugin/output/mui-gpui-probe.clap",
+          "plugin_id": "dev.mui.gpui-probe"
+        }
+      },
+      "status": {
+        "code": "success",
+        "details": null
+      },
+      "duration": {
+        "secs": 0,
+        "nanos": 3779411
+      }
+    }
+  ]
+}

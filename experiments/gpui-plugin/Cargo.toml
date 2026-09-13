@@ -1,0 +1,26 @@
+[package]
+name = "mui-gpui-plugin-probe"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+anyhow = "1"
+gpui = { path = "../upstream/crates/gpui", default-features = false }
+gpui_linux = { path = "../upstream/crates/gpui_linux", default-features = false, features = ["x11"] }
+raw-window-handle = "0.6"
+x11rb = { version = "0.13", features = ["xtest"] }
+truce = "=6.3.0"
+truce-core = "=6.3.0"
+truce-params = "=6.3.0"
+truce-clap = { version = "=6.3.0", optional = true }
+clap-sys = { version = "0.5", optional = true }
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["clap"]
+clap = ["dep:truce-clap", "dep:clap-sys"]
