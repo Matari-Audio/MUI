@@ -1,5 +1,8 @@
 # GPUI / Vello prototype results
 
+**Hardware follow-up:** [RX 6600 results, 2026-09-13](rx6600-2026-09-13/RESULTS.md).
+The results below remain the original software-Vulkan baseline.
+
 Both renderers were built and executed against the same MUI geometry. **Vello area AA is
 our strongest rendering candidate in this experiment.** Do not switch the whole framework
 to GPUI based on rendering performance alone: its tested wgpu path has a reproducible

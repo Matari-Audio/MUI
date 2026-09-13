@@ -1,0 +1,14 @@
+{
+  "adapter": "AdapterInfo { name: \"AMD Radeon RX 6600 (RADV NAVI23)\", vendor: 4098, device: 29695, device_type: DiscreteGpu, device_pci_bus_id: \"0000:03:00.0\", driver: \"radv\", driver_info: \"Mesa 26.2.2-arch3.2\", backend: Vulkan, subgroup_min_size: 32, subgroup_max_size: 64, transient_saves_memory: false }",
+  "input": "output/rx6600-2026-09-13/vello-1.png",
+  "width": 768,
+  "height": 512,
+  "glass_compute_and_wait": {
+    "samples": 10,
+    "median_ms": 0.119682,
+    "p95_ms": 2.401484,
+    "min_ms": 0.111053,
+    "max_ms": 2.401484
+  },
+  "scope": "same WGSL on captured backend image; excludes upload/readback and does not prove GPUI runtime shader integration"
+}

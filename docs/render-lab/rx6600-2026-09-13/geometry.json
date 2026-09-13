@@ -1,0 +1,15 @@
+{
+  "seed": "0x5eed",
+  "cases": 1200,
+  "validated_commands": 33600,
+  "validated_arcs": 14400,
+  "max_extension_error": 0.0,
+  "build_resolve_validate_flatten_ms": {
+    "samples": 1200,
+    "median_ms": 0.490209,
+    "p95_ms": 0.502289,
+    "min_ms": 0.481298,
+    "max_ms": 0.802895
+  },
+  "scope": "MUI geometry/layout correctness and cost; not renderer or GPUI runtime performance"
+}
