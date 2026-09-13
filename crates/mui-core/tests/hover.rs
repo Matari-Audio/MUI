@@ -99,3 +99,25 @@ fn merged_hover_preserves_shared_color_inheritance_and_supports_overrides() {
     assert!(s.text.contrast(s.background) >= 4.5);
     assert!(s.stroke.unwrap().0.contrast(s.background) >= 3.);
 }
+
+#[test]
+fn disabled_state_inherits_and_does_not_click_through() {
+    let ui = container([
+        item("under").width(80.).height(40.).on_tap("under"),
+        item("disabled").disabled(true).children([item("child")
+            .width(80.)
+            .height(40.)
+            .on_tap("child")
+            .disabled(false)]),
+    ])
+    .layout(Flow::Overlay)
+    .build()
+    .unwrap();
+    let scene = ui.resolve().unwrap();
+    assert!(ui.info("child").unwrap().disabled);
+    assert_eq!(ui.tap_at(&scene, 20., 20.), None);
+    assert_eq!(
+        ui.resolved_styles(Some("child")).unwrap(),
+        ui.resolved_styles(None).unwrap()
+    );
+}

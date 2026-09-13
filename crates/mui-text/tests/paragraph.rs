@@ -58,3 +58,30 @@ fn real_font_wrapping_padding_fixed_leaves_and_invalid_styles() {
     // A failed resolution cannot mutate the previously returned drawable paragraph.
     assert_eq!(p.frame().size.width, 130.);
 }
+
+#[test]
+fn mixed_font_sizes_align_actual_first_baselines() {
+    let mut text = TextSystem::default();
+    text.register_font(include_bytes!("fonts/DejaVuSans.ttf").to_vec())
+        .unwrap();
+    let ui = container([
+        item("small").text("Gain").pad(7.),
+        item("large").text("80%").pad(2.),
+    ])
+    .align(mui_layout::Align::Baseline)
+    .build()
+    .unwrap();
+    let resolved = text
+        .resolve_with(&ui, |id, _| TextStyle {
+            family: "DejaVu Sans".into(),
+            size: if id == "small" { 14. } else { 32. },
+            line_height: if id == "small" { 20. } else { 42. },
+            ..Default::default()
+        })
+        .unwrap();
+    let baseline = |id| {
+        let p = resolved.paragraph(id).unwrap();
+        p.frame().y + f64::from(p.layout().lines().next().unwrap().metrics().baseline)
+    };
+    assert!((baseline("small") - baseline("large")).abs() < 0.001);
+}

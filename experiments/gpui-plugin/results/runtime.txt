@@ -1,4 +1,4 @@
 GPUI device: AMD Radeon RX 6600 (RADV NAVI23) (Mesa 26.2.2-arch3.2; software=false)
 GPUI device: AMD Radeon RX 6600 (RADV NAVI23) (Mesa 26.2.2-arch3.2; software=false)
 GPUI device: AMD Radeon RX 6600 (RADV NAVI23) (Mesa 26.2.2-arch3.2; software=false)
-PASS: real GPUI views, X11 parenting, resize validation, pointer + keyboard → host-thread begin/set/end, two instances, close/reopen
+PASS: real GPUI views, X11 parenting, resize validation, MUI layout/path hits, pointer + keyboard, drag/cancel automation, Tab traversal, text selection/editing/clipboard, scroll clipping, close during drag, two instances, close/reopen

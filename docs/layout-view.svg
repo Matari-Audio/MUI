@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="780" height="370" viewBox="0 0 780 370"><title>MUI baselines and transformed nested viewports</title><rect width="780" height="370" fill="#181c22"/>
+<text x="40" y="35" fill="#f0f2f5" font-family="DejaVu Sans" font-size="18">Inner scroll: 0 px</text>
+<g transform="matrix(0.9982005399352042 -0.059964006479444595 0.059964006479444595 0.9982005399352042 40 75)">
+</g>
+<defs><clipPath id="c0-1-0" clipPathUnits="userSpaceOnUse"><rect x="12" y="12" width="240" height="206" transform="matrix(0.9982005399352042 -0.059964006479444595 0.059964006479444595 0.9982005399352042 40 75)"/></clipPath></defs><g clip-path="url(#c0-1-0)">
+<g transform="matrix(0.9982005399352042 -0.059964006479444595 0.059964006479444595 0.9982005399352042 40 75)">
+</g></g>
+<defs><clipPath id="c0-2-0" clipPathUnits="userSpaceOnUse"><rect x="12" y="12" width="240" height="206" transform="matrix(0.9982005399352042 -0.059964006479444595 0.059964006479444595 0.9982005399352042 40 75)"/></clipPath></defs><g clip-path="url(#c0-2-0)">
+<g transform="matrix(0.9982005399352042 -0.059964006479444595 0.059964006479444595 0.9982005399352042 40 75)">
+<text x="17" y="46" font-size="16" font-family="DejaVu Sans" fill="#f0f2f5">Gain</text>
+<path d="M17 46 h36.7890625" stroke="#56d9b1" stroke-dasharray="3 3"/>
+</g></g>
+<defs><clipPath id="c0-3-0" clipPathUnits="userSpaceOnUse"><rect x="12" y="12" width="240" height="206" transform="matrix(0.9982005399352042 -0.059964006479444595 0.059964006479444595 0.9982005399352042 40 75)"/></clipPath></defs><g clip-path="url(#c0-3-0)">
+<g transform="matrix(0.9982005399352042 -0.059964006479444595 0.059964006479444595 0.9982005399352042 40 75)">
+<text x="70.7890625" y="46" font-size="32" font-family="DejaVu Sans" fill="#f0f2f5">80%</text>
+<path d="M70.7890625 46 h71.125" stroke="#56d9b1" stroke-dasharray="3 3"/>
+</g></g>
+<defs><clipPath id="c0-4-0" clipPathUnits="userSpaceOnUse"><rect x="12" y="12" width="240" height="206" transform="matrix(0.9982005399352042 -0.059964006479444595 0.059964006479444595 0.9982005399352042 40 75)"/></clipPath></defs><g clip-path="url(#c0-4-0)">
+<g transform="matrix(0.9982005399352042 -0.059964006479444595 0.059964006479444595 0.9982005399352042 40 75)">
+</g></g>
+<defs><clipPath id="c0-5-0" clipPathUnits="userSpaceOnUse"><rect x="12" y="12" width="240" height="206" transform="matrix(0.9982005399352042 -0.059964006479444595 0.059964006479444595 0.9982005399352042 40 75)"/></clipPath></defs><g clip-path="url(#c0-5-0)">
+<defs><clipPath id="c0-5-1" clipPathUnits="userSpaceOnUse"><rect x="12" y="70" width="240" height="110" transform="matrix(0.9982005399352042 -0.059964006479444595 0.059964006479444595 0.9982005399352042 40 75)"/></clipPath></defs><g clip-path="url(#c0-5-1)">
+<g transform="matrix(0.9982005399352042 -0.059964006479444595 0.059964006479444595 0.9982005399352042 40 75)">
+<text x="20" y="95" font-size="16" font-family="DejaVu Sans" fill="#f0f2f5">Scroll past this</text>
+</g></g></g>
+<defs><clipPath id="c0-6-0" clipPathUnits="userSpaceOnUse"><rect x="12" y="12" width="240" height="206" transform="matrix(0.9982005399352042 -0.059964006479444595 0.059964006479444595 0.9982005399352042 40 75)"/></clipPath></defs><g clip-path="url(#c0-6-0)">
+<defs><clipPath id="c0-6-1" clipPathUnits="userSpaceOnUse"><rect x="12" y="70" width="240" height="110" transform="matrix(0.9982005399352042 -0.059964006479444595 0.059964006479444595 0.9982005399352042 40 75)"/></clipPath></defs><g clip-path="url(#c0-6-1)">
+<g transform="matrix(0.9395770317240483 -0.02819577019034592 0.02999550020249566 0.9995500337489875 44.44954538315249 74.45009443780789)">
+<path d="M 26.000000000 125.000000000 L 238.000000000 125.000000000 A 14.000000000 14.000000000 0 0 1 252.000000000 139.000000000 L 252.000000000 161.000000000 A 14.000000000 14.000000000 0 0 1 238.000000000 175.000000000 L 26.000000000 175.000000000 A 14.000000000 14.000000000 0 0 1 12.000000000 161.000000000 L 12.000000000 139.000000000 A 14.000000000 14.000000000 0 0 1 26.000000000 125.000000000 Z " fill="rgb(44,38,83)"/>
+<text x="20" y="150" font-size="16" font-family="DejaVu Sans" fill="#f0f2f5">Transformed target</text>
+</g></g></g>
+<defs><clipPath id="c0-7-0" clipPathUnits="userSpaceOnUse"><rect x="12" y="12" width="240" height="206" transform="matrix(0.9982005399352042 -0.059964006479444595 0.059964006479444595 0.9982005399352042 40 75)"/></clipPath></defs><g clip-path="url(#c0-7-0)">
+<defs><clipPath id="c0-7-1" clipPathUnits="userSpaceOnUse"><rect x="12" y="70" width="240" height="110" transform="matrix(0.9982005399352042 -0.059964006479444595 0.059964006479444595 0.9982005399352042 40 75)"/></clipPath></defs><g clip-path="url(#c0-7-1)">
+<g transform="matrix(0.9982005399352042 -0.059964006479444595 0.059964006479444595 0.9982005399352042 40 75)">
+<path d="M 30.000000000 175.000000000 L 234.000000000 175.000000000 A 18.000000000 18.000000000 0 0 1 252.000000000 193.000000000 L 252.000000000 277.000000000 A 18.000000000 18.000000000 0 0 1 234.000000000 295.000000000 L 30.000000000 295.000000000 A 18.000000000 18.000000000 0 0 1 12.000000000 277.000000000 L 12.000000000 193.000000000 A 18.000000000 18.000000000 0 0 1 30.000000000 175.000000000 Z " fill="rgb(18,18,18)"/>
+<text x="20" y="200" font-size="16" font-family="DejaVu Sans" fill="#f0f2f5">Nested content</text>
+</g></g></g>
+<defs><clipPath id="c0-8-0" clipPathUnits="userSpaceOnUse"><rect x="12" y="12" width="240" height="206" transform="matrix(0.9982005399352042 -0.059964006479444595 0.059964006479444595 0.9982005399352042 40 75)"/></clipPath></defs><g clip-path="url(#c0-8-0)">
+<g transform="matrix(0.9982005399352042 -0.059964006479444595 0.059964006479444595 0.9982005399352042 40 75)">
+<path d="M 30.000000000 192.000000000 L 234.000000000 192.000000000 A 18.000000000 18.000000000 0 0 1 252.000000000 210.000000000 L 252.000000000 314.000000000 A 18.000000000 18.000000000 0 0 1 234.000000000 332.000000000 L 30.000000000 332.000000000 A 18.000000000 18.000000000 0 0 1 12.000000000 314.000000000 L 12.000000000 210.000000000 A 18.000000000 18.000000000 0 0 1 30.000000000 192.000000000 Z " fill="rgb(31,31,31)"/>
+<text x="20" y="217" font-size="16" font-family="DejaVu Sans" fill="#f0f2f5">Outer content</text>
+</g></g>
+<circle cx="154.18149796662024" cy="221.22467323883728" r="4" fill="#ffda66"/><text x="40" y="345" fill="#b8c0cc" font-family="DejaVu Sans" font-size="14">Yellow point: verified target hit</text>
+<text x="430" y="35" fill="#f0f2f5" font-family="DejaVu Sans" font-size="18">Inner scroll: 55 px</text>
+<g transform="matrix(0.9982005399352042 -0.059964006479444595 0.059964006479444595 0.9982005399352042 430 75)">
+</g>
+<defs><clipPath id="c1-1-0" clipPathUnits="userSpaceOnUse"><rect x="12" y="12" width="240" height="206" transform="matrix(0.9982005399352042 -0.059964006479444595 0.059964006479444595 0.9982005399352042 430 75)"/></clipPath></defs><g clip-path="url(#c1-1-0)">
+<g transform="matrix(0.9982005399352042 -0.059964006479444595 0.059964006479444595 0.9982005399352042 430 75)">
+</g></g>
+<defs><clipPath id="c1-2-0" clipPathUnits="userSpaceOnUse"><rect x="12" y="12" width="240" height="206" transform="matrix(0.9982005399352042 -0.059964006479444595 0.059964006479444595 0.9982005399352042 430 75)"/></clipPath></defs><g clip-path="url(#c1-2-0)">
+<g transform="matrix(0.9982005399352042 -0.059964006479444595 0.059964006479444595 0.9982005399352042 430 75)">
+<text x="17" y="46" font-size="16" font-family="DejaVu Sans" fill="#f0f2f5">Gain</text>
+<path d="M17 46 h36.7890625" stroke="#56d9b1" stroke-dasharray="3 3"/>
+</g></g>
+<defs><clipPath id="c1-3-0" clipPathUnits="userSpaceOnUse"><rect x="12" y="12" width="240" height="206" transform="matrix(0.9982005399352042 -0.059964006479444595 0.059964006479444595 0.9982005399352042 430 75)"/></clipPath></defs><g clip-path="url(#c1-3-0)">
+<g transform="matrix(0.9982005399352042 -0.059964006479444595 0.059964006479444595 0.9982005399352042 430 75)">
+<text x="70.7890625" y="46" font-size="32" font-family="DejaVu Sans" fill="#f0f2f5">80%</text>
+<path d="M70.7890625 46 h71.125" stroke="#56d9b1" stroke-dasharray="3 3"/>
+</g></g>
+<defs><clipPath id="c1-4-0" clipPathUnits="userSpaceOnUse"><rect x="12" y="12" width="240" height="206" transform="matrix(0.9982005399352042 -0.059964006479444595 0.059964006479444595 0.9982005399352042 430 75)"/></clipPath></defs><g clip-path="url(#c1-4-0)">
+<g transform="matrix(0.9982005399352042 -0.059964006479444595 0.059964006479444595 0.9982005399352042 430 75)">
+</g></g>
+<defs><clipPath id="c1-5-0" clipPathUnits="userSpaceOnUse"><rect x="12" y="12" width="240" height="206" transform="matrix(0.9982005399352042 -0.059964006479444595 0.059964006479444595 0.9982005399352042 430 75)"/></clipPath></defs><g clip-path="url(#c1-5-0)">
+<defs><clipPath id="c1-5-1" clipPathUnits="userSpaceOnUse"><rect x="12" y="70" width="240" height="110" transform="matrix(0.9982005399352042 -0.059964006479444595 0.059964006479444595 0.9982005399352042 430 75)"/></clipPath></defs><g clip-path="url(#c1-5-1)">
+<g transform="matrix(0.9982005399352042 -0.059964006479444595 0.059964006479444595 0.9982005399352042 426.7019796436305 20.098970303563767)">
+<text x="20" y="95" font-size="16" font-family="DejaVu Sans" fill="#f0f2f5">Scroll past this</text>
+</g></g></g>
+<defs><clipPath id="c1-6-0" clipPathUnits="userSpaceOnUse"><rect x="12" y="12" width="240" height="206" transform="matrix(0.9982005399352042 -0.059964006479444595 0.059964006479444595 0.9982005399352042 430 75)"/></clipPath></defs><g clip-path="url(#c1-6-0)">
+<defs><clipPath id="c1-6-1" clipPathUnits="userSpaceOnUse"><rect x="12" y="70" width="240" height="110" transform="matrix(0.9982005399352042 -0.059964006479444595 0.059964006479444595 0.9982005399352042 430 75)"/></clipPath></defs><g clip-path="url(#c1-6-1)">
+<g transform="matrix(0.9395770317240483 -0.02819577019034592 0.02999550020249566 0.9995500337489875 431.151525026783 19.549064741371662)">
+<path d="M 26.000000000 125.000000000 L 238.000000000 125.000000000 A 14.000000000 14.000000000 0 0 1 252.000000000 139.000000000 L 252.000000000 161.000000000 A 14.000000000 14.000000000 0 0 1 238.000000000 175.000000000 L 26.000000000 175.000000000 A 14.000000000 14.000000000 0 0 1 12.000000000 161.000000000 L 12.000000000 139.000000000 A 14.000000000 14.000000000 0 0 1 26.000000000 125.000000000 Z " fill="rgb(44,38,83)"/>
+<text x="20" y="150" font-size="16" font-family="DejaVu Sans" fill="#f0f2f5">Transformed target</text>
+</g></g></g>
+<defs><clipPath id="c1-7-0" clipPathUnits="userSpaceOnUse"><rect x="12" y="12" width="240" height="206" transform="matrix(0.9982005399352042 -0.059964006479444595 0.059964006479444595 0.9982005399352042 430 75)"/></clipPath></defs><g clip-path="url(#c1-7-0)">
+<defs><clipPath id="c1-7-1" clipPathUnits="userSpaceOnUse"><rect x="12" y="70" width="240" height="110" transform="matrix(0.9982005399352042 -0.059964006479444595 0.059964006479444595 0.9982005399352042 430 75)"/></clipPath></defs><g clip-path="url(#c1-7-1)">
+<g transform="matrix(0.9982005399352042 -0.059964006479444595 0.059964006479444595 0.9982005399352042 426.7019796436305 20.098970303563767)">
+<path d="M 30.000000000 175.000000000 L 234.000000000 175.000000000 A 18.000000000 18.000000000 0 0 1 252.000000000 193.000000000 L 252.000000000 277.000000000 A 18.000000000 18.000000000 0 0 1 234.000000000 295.000000000 L 30.000000000 295.000000000 A 18.000000000 18.000000000 0 0 1 12.000000000 277.000000000 L 12.000000000 193.000000000 A 18.000000000 18.000000000 0 0 1 30.000000000 175.000000000 Z " fill="rgb(18,18,18)"/>
+<text x="20" y="200" font-size="16" font-family="DejaVu Sans" fill="#f0f2f5">Nested content</text>
+</g></g></g>
+<defs><clipPath id="c1-8-0" clipPathUnits="userSpaceOnUse"><rect x="12" y="12" width="240" height="206" transform="matrix(0.9982005399352042 -0.059964006479444595 0.059964006479444595 0.9982005399352042 430 75)"/></clipPath></defs><g clip-path="url(#c1-8-0)">
+<g transform="matrix(0.9982005399352042 -0.059964006479444595 0.059964006479444595 0.9982005399352042 430 75)">
+<path d="M 30.000000000 192.000000000 L 234.000000000 192.000000000 A 18.000000000 18.000000000 0 0 1 252.000000000 210.000000000 L 252.000000000 314.000000000 A 18.000000000 18.000000000 0 0 1 234.000000000 332.000000000 L 30.000000000 332.000000000 A 18.000000000 18.000000000 0 0 1 12.000000000 314.000000000 L 12.000000000 210.000000000 A 18.000000000 18.000000000 0 0 1 30.000000000 192.000000000 Z " fill="rgb(31,31,31)"/>
+<text x="20" y="217" font-size="16" font-family="DejaVu Sans" fill="#f0f2f5">Outer content</text>
+</g></g>
+<circle cx="540.8834776102508" cy="166.32364354240104" r="4" fill="#ffda66"/><text x="430" y="345" fill="#b8c0cc" font-family="DejaVu Sans" font-size="14">Yellow point: verified target hit</text>
+</svg>

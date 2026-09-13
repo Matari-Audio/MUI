@@ -620,6 +620,7 @@ dependencies = [
  "mui-core",
  "mui-geometry",
  "mui-layout",
+ "mui-text",
 ]
 
 [[package]]

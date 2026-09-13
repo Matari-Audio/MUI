@@ -13,7 +13,7 @@
       },
       "duration": {
         "secs": 0,
-        "nanos": 2657511
+        "nanos": 6417038
       }
     },
     {
@@ -29,7 +29,7 @@
       },
       "duration": {
         "secs": 0,
-        "nanos": 3810943
+        "nanos": 2323233
       }
     },
     {
@@ -45,7 +45,7 @@
       },
       "duration": {
         "secs": 0,
-        "nanos": 3852053
+        "nanos": 2309832
       }
     },
     {
@@ -57,11 +57,11 @@
       },
       "status": {
         "code": "success",
-        "details": "The plugin can be scanned in 4 milliseconds."
+        "details": "The plugin can be scanned in 5 milliseconds."
       },
       "duration": {
         "secs": 0,
-        "nanos": 4065817
+        "nanos": 5203015
       }
     },
     {
@@ -77,7 +77,7 @@
       },
       "duration": {
         "secs": 0,
-        "nanos": 5603656
+        "nanos": 3191339
       }
     },
     {
@@ -93,7 +93,7 @@
       },
       "duration": {
         "secs": 0,
-        "nanos": 4213990
+        "nanos": 4928500
       }
     },
     {
@@ -109,7 +109,7 @@
       },
       "duration": {
         "secs": 0,
-        "nanos": 5028066
+        "nanos": 3608686
       }
     },
     {
@@ -126,7 +126,7 @@
       },
       "duration": {
         "secs": 0,
-        "nanos": 4246791
+        "nanos": 2697979
       }
     },
     {
@@ -143,7 +143,7 @@
       },
       "duration": {
         "secs": 0,
-        "nanos": 6164937
+        "nanos": 4933860
       }
     },
     {
@@ -160,7 +160,7 @@
       },
       "duration": {
         "secs": 0,
-        "nanos": 7640514
+        "nanos": 3453253
       }
     },
     {
@@ -177,7 +177,7 @@
       },
       "duration": {
         "secs": 0,
-        "nanos": 7755927
+        "nanos": 6733653
       }
     },
     {
@@ -194,7 +194,7 @@
       },
       "duration": {
         "secs": 0,
-        "nanos": 6949072
+        "nanos": 4989661
       }
     },
     {
@@ -211,7 +211,7 @@
       },
       "duration": {
         "secs": 0,
-        "nanos": 5497493
+        "nanos": 5440810
       }
     },
     {
@@ -228,7 +228,7 @@
       },
       "duration": {
         "secs": 0,
-        "nanos": 7381800
+        "nanos": 4597404
       }
     },
     {
@@ -245,7 +245,7 @@
       },
       "duration": {
         "secs": 0,
-        "nanos": 14056426
+        "nanos": 13605318
       }
     },
     {
@@ -262,7 +262,7 @@
       },
       "duration": {
         "secs": 0,
-        "nanos": 9531270
+        "nanos": 8285641
       }
     },
     {
@@ -279,7 +279,7 @@
       },
       "duration": {
         "secs": 0,
-        "nanos": 10199503
+        "nanos": 8249770
       }
     },
     {
@@ -296,7 +296,7 @@
       },
       "duration": {
         "secs": 0,
-        "nanos": 4110367
+        "nanos": 2696279
       }
     },
     {
@@ -313,7 +313,7 @@
       },
       "duration": {
         "secs": 0,
-        "nanos": 4605037
+        "nanos": 2989974
       }
     },
     {
@@ -330,7 +330,7 @@
       },
       "duration": {
         "secs": 0,
-        "nanos": 4565907
+        "nanos": 3744368
       }
     },
     {
@@ -347,7 +347,7 @@
       },
       "duration": {
         "secs": 0,
-        "nanos": 12910634
+        "nanos": 12917996
       }
     },
     {
@@ -364,7 +364,7 @@
       },
       "duration": {
         "secs": 0,
-        "nanos": 14097077
+        "nanos": 12260404
       }
     },
     {
@@ -381,7 +381,7 @@
       },
       "duration": {
         "secs": 0,
-        "nanos": 8706075
+        "nanos": 6483088
       }
     },
     {
@@ -398,7 +398,7 @@
       },
       "duration": {
         "secs": 0,
-        "nanos": 4384793
+        "nanos": 4269677
       }
     },
     {
@@ -415,7 +415,7 @@
       },
       "duration": {
         "secs": 0,
-        "nanos": 3862783
+        "nanos": 3086336
       }
     },
     {
@@ -432,7 +432,7 @@
       },
       "duration": {
         "secs": 0,
-        "nanos": 5236889
+        "nanos": 5366548
       }
     },
     {
@@ -449,7 +449,7 @@
       },
       "duration": {
         "secs": 0,
-        "nanos": 2300354
+        "nanos": 3287190
       }
     },
     {
@@ -466,7 +466,7 @@
       },
       "duration": {
         "secs": 0,
-        "nanos": 3606579
+        "nanos": 3246619
       }
     },
     {
@@ -483,7 +483,7 @@
       },
       "duration": {
         "secs": 0,
-        "nanos": 3326743
+        "nanos": 3303300
       }
     },
     {
@@ -500,7 +500,7 @@
       },
       "duration": {
         "secs": 0,
-        "nanos": 3640899
+        "nanos": 3147777
       }
     },
     {
@@ -517,7 +517,7 @@
       },
       "duration": {
         "secs": 0,
-        "nanos": 19835745
+        "nanos": 20609646
       }
     },
     {
@@ -534,7 +534,7 @@
       },
       "duration": {
         "secs": 0,
-        "nanos": 20123420
+        "nanos": 19700529
       }
     },
     {
@@ -551,7 +551,7 @@
       },
       "duration": {
         "secs": 0,
-        "nanos": 4713839
+        "nanos": 4480812
       }
     },
     {
@@ -568,7 +568,7 @@
       },
       "duration": {
         "secs": 0,
-        "nanos": 3286632
+        "nanos": 3076906
       }
     },
     {
@@ -585,7 +585,7 @@
       },
       "duration": {
         "secs": 0,
-        "nanos": 2545178
+        "nanos": 3084416
       }
     },
     {
@@ -602,7 +602,7 @@
       },
       "duration": {
         "secs": 0,
-        "nanos": 2743622
+        "nanos": 2420114
       }
     },
     {
@@ -619,7 +619,7 @@
       },
       "duration": {
         "secs": 0,
-        "nanos": 2309364
+        "nanos": 2743030
       }
     },
     {
@@ -636,7 +636,7 @@
       },
       "duration": {
         "secs": 0,
-        "nanos": 5694448
+        "nanos": 5435500
       }
     },
     {
@@ -653,7 +653,7 @@
       },
       "duration": {
         "secs": 0,
-        "nanos": 2284023
+        "nanos": 3885111
       }
     },
     {
@@ -670,7 +670,7 @@
       },
       "duration": {
         "secs": 0,
-        "nanos": 3057328
+        "nanos": 2406844
       }
     },
     {
@@ -687,7 +687,7 @@
       },
       "duration": {
         "secs": 0,
-        "nanos": 2671821
+        "nanos": 3409412
       }
     },
     {
@@ -704,7 +704,7 @@
       },
       "duration": {
         "secs": 0,
-        "nanos": 2695631
+        "nanos": 3967163
       }
     },
     {
@@ -721,7 +721,7 @@
       },
       "duration": {
         "secs": 0,
-        "nanos": 3441115
+        "nanos": 5571552
       }
     },
     {
@@ -738,7 +738,7 @@
       },
       "duration": {
         "secs": 0,
-        "nanos": 3779411
+        "nanos": 4997271
       }
     }
   ]

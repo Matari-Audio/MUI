@@ -681,7 +681,16 @@ pub fn resolve_scene(spec: &SceneSpec) -> Result<ResolvedScene, SceneError> {
 
 pub fn resolve_scene_measured(
     spec: &SceneSpec,
-    measure: impl FnMut(&str, mui_layout::MeasureInput) -> Result<Size, mui_layout::Error>,
+    mut measure: impl FnMut(&str, mui_layout::MeasureInput) -> Result<Size, mui_layout::Error>,
+) -> Result<ResolvedScene, SceneError> {
+    resolve_scene_measured_with_baseline(spec, |id, input| measure(id, input).map(Into::into))
+}
+pub fn resolve_scene_measured_with_baseline(
+    spec: &SceneSpec,
+    measure: impl FnMut(
+        &str,
+        mui_layout::MeasureInput,
+    ) -> Result<mui_layout::Measurement, mui_layout::Error>,
 ) -> Result<ResolvedScene, SceneError> {
     let _ = union(&[], spec.geometry_options)?;
     let constraints = spec
@@ -690,7 +699,7 @@ pub fn resolve_scene_measured(
             width: Some(size.width),
             height: Some(size.height),
         });
-    let layout = mui_layout::resolve_measured(
+    let layout = mui_layout::resolve_measured_with_baseline(
         &spec.root,
         constraints,
         spec.layout_limits,

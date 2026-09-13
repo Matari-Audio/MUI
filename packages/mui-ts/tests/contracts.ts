@@ -42,3 +42,17 @@ test("item API emits real builders and rejects ambiguous identities and grid mis
     container([item("x")]).merge(["x"]).merge(["x"]),
   ]) assert.throws(() => compileItems({ root }), /MUI:/);
 });
+
+
+test("baseline and overflow survive both authoring frontends", async () => {
+  const { item, compileItems } = await import("../src/items.js");
+  for (const code of [
+    compile({root: row("viewport", [leaf("child", [100, 200])], {align: "baseline", overflow: "scroll"}), surfaces: []}),
+    compileItems({root: item("viewport").align("baseline").overflow("scroll")}),
+  ]) {
+    assert.ok(code.includes("Align::Baseline"));
+    assert.ok(code.includes("Overflow::Scroll"));
+  }
+  assert.throws(() => compileItems({root: item("bad").overflow("invalid" as never)}), /overflow/);
+  assert.throws(() => compile({root: leaf("bad", [1, 1], {overflow: "invalid" as never}), surfaces: []}), /overflow/);
+});

@@ -1931,7 +1931,7 @@ dependencies = [
  "spin 0.10.1",
  "strum",
  "sum_tree",
- "taffy",
+ "taffy 0.13.0",
  "thiserror 2.0.20",
  "tracing",
  "ttf-parser",
@@ -2191,6 +2191,48 @@ dependencies = [
  "serde_urlencoded",
  "url",
 ]
+
+[[package]]
+name = "i_float"
+version = "4.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c614c2cfc06cfe8809ccc48cd445864502478e673721ca2a05931fc057ec33a0"
+dependencies = [
+ "libm",
+]
+
+[[package]]
+name = "i_key_sort"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7c6c58d0c60705e66264ce0f788a69a2f21472aeb8188559e7c8c619dbdc10fa"
+
+[[package]]
+name = "i_overlay"
+version = "8.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ca5d3f41731d03eafa48213609113563099a479f593cc7c635b7e836fc52a3c8"
+dependencies = [
+ "i_float",
+ "i_key_sort",
+ "i_shape",
+ "i_tree",
+]
+
+[[package]]
+name = "i_shape"
+version = "4.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "67ec1fc3ad980a24e4761b763bf5bfbf58c1d88be1bffb14654d369d7f420258"
+dependencies = [
+ "i_float",
+]
+
+[[package]]
+name = "i_tree"
+version = "0.19.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e9d4a992a9fe83130f41ceacceac3bb116a4355dfc9c8d6ecea4f1e4b4c6caf"
 
 [[package]]
 name = "iana-time-zone"
@@ -2721,9 +2763,9 @@ dependencies = [
 
 [[package]]
 name = "lyon_tessellation"
-version = "1.0.22"
+version = "1.0.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "43b8dcf906637ecef61b3c0740c7a4e7f27caeb31257cfac0cc579ce15be6005"
+checksum = "8e43b7e44161571868f5c931d12583592c223c5583eef86b08aa02b7048a3552"
 dependencies = [
  "float_next_after",
  "lyon_path",
@@ -2849,6 +2891,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "mui"
+version = "0.3.0"
+dependencies = [
+ "mui-core",
+ "mui-geometry",
+ "mui-layout",
+ "mui-tessellate",
+]
+
+[[package]]
+name = "mui-core"
+version = "0.3.0"
+dependencies = [
+ "mui-geometry",
+ "mui-layout",
+]
+
+[[package]]
+name = "mui-geometry"
+version = "0.3.0"
+dependencies = [
+ "i_overlay",
+]
+
+[[package]]
 name = "mui-gpui-plugin-probe"
 version = "0.1.0"
 dependencies = [
@@ -2856,12 +2923,29 @@ dependencies = [
  "clap-sys",
  "gpui",
  "gpui_linux",
+ "mui",
  "raw-window-handle",
  "truce",
  "truce-clap",
  "truce-core",
  "truce-params",
+ "unicode-segmentation",
  "x11rb",
+]
+
+[[package]]
+name = "mui-layout"
+version = "0.3.0"
+dependencies = [
+ "taffy 0.14.0",
+]
+
+[[package]]
+name = "mui-tessellate"
+version = "0.3.0"
+dependencies = [
+ "lyon_tessellation",
+ "mui-geometry",
 ]
 
 [[package]]
@@ -4721,6 +4805,18 @@ name = "taffy"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c034e05f6ee85a12daa63863c2245797715075c70649947aa0da54f3f2ab1d0f"
+dependencies = [
+ "arrayvec",
+ "serde",
+ "slotmap",
+ "smallvec",
+]
+
+[[package]]
+name = "taffy"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "639627c87f43b9181c811f40a6296409e093a17bc761214cba3c15df74f86b99"
 dependencies = [
  "arrayvec",
  "serde",

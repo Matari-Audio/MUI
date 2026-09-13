@@ -345,3 +345,31 @@ fn transforms_and_capsules_preserve_area_and_valid_arcs() {
         near(signed_area(&rings[0]), expected, 0.3);
     }
 }
+
+#[test]
+fn path_hits_respect_rounding_holes_transforms_and_invalid_input() {
+    let path = rr(100., 100., 30.).path();
+    assert!(!path.contains(Point::new(1., 1.), 0.1, 1000).unwrap());
+    assert!(path.contains(Point::new(50., 50.), 0.1, 1000).unwrap());
+    assert!(path.contains(Point::new(50., 0.), 0.1, 1000).unwrap());
+    assert!(path
+        .rigid_transform(Point::new(150., 100.), 0.)
+        .unwrap()
+        .contains(Point::new(200., 150.), 0.1, 1000)
+        .unwrap());
+    let mut hole = Path {
+        commands: vec![
+            PathCommand::MoveTo(Point::new(40., 40.)),
+            PathCommand::LineTo(Point::new(40., 60.)),
+            PathCommand::LineTo(Point::new(60., 60.)),
+            PathCommand::LineTo(Point::new(60., 40.)),
+            PathCommand::Close,
+        ],
+    };
+    let mut donut = path.clone();
+    donut.commands.append(&mut hole.commands);
+    assert!(!donut.contains(Point::new(50., 50.), 0.1, 1000).unwrap());
+    assert!(donut.contains(Point::new(20., 50.), 0.1, 1000).unwrap());
+    assert!(path.contains(Point::new(f64::NAN, 1.), 0.1, 1000).is_err());
+    assert!(path.contains(Point::ZERO, 0.1, 2).is_err());
+}

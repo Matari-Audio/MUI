@@ -8,16 +8,19 @@
 mod color;
 mod item;
 mod style;
+mod view;
 pub use item::{container, item, Color, Direction, Item, ItemInfo, Rounding, Ui};
 pub use style::{ItemStyle, StyleError};
+pub use view::{Clip, View, ViewItem, ViewState};
 pub mod dsl;
 mod scene;
 mod theme;
 pub use color::{Accent, ColorError, Colors, Mode, Palette, Rgb, Seeds};
 
-pub use mui_layout::{Align, Frame, Insets, Justify, Layout, Limits, Node, Size};
+pub use mui_layout::{Align, Frame, Insets, Justify, Layout, Limits, Node, Overflow, Size};
 pub use scene::{
-    resolve_scene, resolve_scene_measured, CornerRule, Edge, Extension, FrameRadius, ResolvedScene,
-    ResolvedSurface, SceneError, SceneSpec, SceneState, SurfaceSource, SurfaceSpec,
+    resolve_scene, resolve_scene_measured, resolve_scene_measured_with_baseline, CornerRule, Edge,
+    Extension, FrameRadius, ResolvedScene, ResolvedSurface, SceneError, SceneSpec, SceneState,
+    SurfaceSource, SurfaceSpec,
 };
 pub use theme::{Contrast, CornerProfile, Spacing, SpacingScale, SpacingToken, Theme};

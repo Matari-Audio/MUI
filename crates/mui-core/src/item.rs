@@ -99,12 +99,14 @@ pub struct Item {
     text: Option<String>,
     tap: Option<String>,
     hoverable: bool,
+    disabled: bool,
     hover_color: Option<Color>,
     extension: Option<(Edge, String)>,
     rounding: Rounding,
     color: Option<Color>,
     stroke: Option<(Color, f64)>,
     merges: Vec<Vec<String>>,
+    overflow: Overflow,
 }
 pub fn item(id: impl Into<String>) -> Item {
     Item {
@@ -114,12 +116,14 @@ pub fn item(id: impl Into<String>) -> Item {
         text: None,
         tap: None,
         hoverable: false,
+        disabled: false,
         hover_color: None,
         extension: None,
         rounding: Rounding::Theme,
         color: None,
         stroke: None,
         merges: Vec::new(),
+        overflow: Overflow::Fit,
     }
 }
 /// Anonymous structural container; the default flow is a row.
@@ -155,6 +159,11 @@ impl Item {
         self
     }
     /// Enable hover feedback without a click action. Clickable items imply this.
+    /// Disable this item and its descendants without changing layout or action IDs.
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.disabled = disabled;
+        self
+    }
     pub fn hoverable(mut self) -> Self {
         self.hoverable = true;
         self
@@ -223,6 +232,11 @@ impl Item {
     }
     pub fn shrink(mut self, value: f64) -> Self {
         self.node = self.node.shrink(value);
+        self
+    }
+    pub fn overflow(mut self, value: Overflow) -> Self {
+        self.node = self.node.overflow(value);
+        self.overflow = value;
         self
     }
     pub fn wrap(mut self) -> Self {
@@ -327,9 +341,12 @@ impl Item {
 }
 #[derive(Clone, Debug)]
 pub struct ItemInfo {
+    pub overflow: Overflow,
     pub text: Option<String>,
     pub tap: Option<String>,
     pub hoverable: bool,
+    /// Effective disabled state, inherited from ancestors.
+    pub disabled: bool,
     pub hover_color: Option<Color>,
     pub(crate) parent: Option<String>,
     pub color: Option<Color>,
@@ -423,7 +440,18 @@ impl Ui {
         &self,
         mut measure: impl FnMut(&str, &str, MeasureInput) -> Result<Size, mui_layout::Error>,
     ) -> Result<ResolvedScene, SceneError> {
-        resolve_scene_measured(&self.spec, |id, input| {
+        self.resolve_with_baseline(|id, text, input| measure(id, text, input).map(Into::into))
+    }
+    /// Measure text size and its first baseline using the renderer's font metrics.
+    pub fn resolve_with_baseline(
+        &self,
+        mut measure: impl FnMut(
+            &str,
+            &str,
+            MeasureInput,
+        ) -> Result<mui_layout::Measurement, mui_layout::Error>,
+    ) -> Result<ResolvedScene, SceneError> {
+        resolve_scene_measured_with_baseline(&self.spec, |id, input| {
             let text = self
                 .items
                 .get(id)
@@ -438,13 +466,22 @@ impl Ui {
         self.hover_at(scene, x, y)
             .and_then(|id| self.items[id].tap.as_deref())
     }
-    /// Shared hover/tap target resolution using original content bounds.
+    /// Legacy rectangle picking in untransformed layout coordinates.
+    /// Use `ViewState::resolve` and `View::hover_at` for shape, clip, scroll and occlusion semantics.
     pub fn hover_at<'a>(&'a self, scene: &ResolvedScene, x: f64, y: f64) -> Option<&'a str> {
-        self.order.iter().rev().find_map(|id| {
-            let f = scene.layout.frame(id)?;
-            (self.items[id].hoverable && x >= f.x && x < f.right() && y >= f.y && y < f.bottom())
+        self.order
+            .iter()
+            .rev()
+            .find_map(|id| {
+                let f = scene.layout.frame(id)?;
+                (self.items[id].hoverable
+                    && x >= f.x
+                    && x < f.right()
+                    && y >= f.y
+                    && y < f.bottom())
                 .then_some(id.as_str())
-        })
+            })
+            .filter(|id| !self.items[*id].disabled)
     }
     /// Draw fills/strokes in order; draw text separately using original layout frames.
     /// A merged outline replaces its members' individual outlines.
@@ -542,12 +579,15 @@ impl Compiler {
         self.roundings.insert(key.clone(), item.rounding);
         self.surfaces.push(surface);
         self.order.push(key.clone());
+        let disabled = item.disabled || parent.as_ref().is_some_and(|id| self.items[id].disabled);
         self.items.insert(
             key.clone(),
             ItemInfo {
+                overflow: item.overflow,
                 text: item.text.clone(),
                 hoverable: item.hoverable || item.tap.is_some(),
                 hover_color: item.hover_color,
+                disabled,
                 parent,
                 tap: item.tap,
                 color: item.color,

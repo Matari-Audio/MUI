@@ -1,9 +1,13 @@
-use gpui::{
-    div, prelude::*, px, rgb, size, App, Application, Bounds, Context, Window, WindowBounds,
-    WindowOptions,
-};
+mod panel;
+#[path = "../../upstream/mui_text_input.rs"]
+mod text_input;
+use gpui::{App, Application, Bounds, Context, WindowBounds, WindowOptions, prelude::*, px, size};
 use raw_window_handle::HasWindowHandle;
-use std::sync::{mpsc, Arc};
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+    mpsc,
+};
 use truce::prelude::*;
 use truce_core::editor::{PluginContext, RawWindowHandle};
 use x11rb::{
@@ -40,16 +44,47 @@ impl PurePluginLogic for ProbePlugin {
 }
 truce::plugin! { logic: ProbePlugin, params: ProbeParams }
 
-enum Command {
+pub struct PanelSnapshot {
+    pub preset_name: String,
+    pub scroll_y: f32,
+}
+enum Edit {
+    Begin,
     Value(f64),
+    End,
+}
+enum Command {
+    Inspect(mpsc::SyncSender<PanelSnapshot>),
     Resize(u32, u32),
     Close,
 }
 struct Session {
     commands: mpsc::SyncSender<Command>,
-    edits: mpsc::Receiver<f64>,
+    edits: mpsc::Receiver<Edit>,
     worker: std::thread::JoinHandle<anyhow::Result<()>>,
     context: PluginContext,
+    host_value: Arc<AtomicU64>,
+    edit_open: bool,
+}
+impl Session {
+    fn drain_edits(context: &PluginContext, edits: &mpsc::Receiver<Edit>, edit_open: &mut bool) {
+        for event in edits.try_iter() {
+            match event {
+                Edit::Begin if !*edit_open => {
+                    context.begin_edit(ProbeParamsParamId::Gain);
+                    *edit_open = true;
+                }
+                Edit::Value(value) if *edit_open => {
+                    context.set_param(ProbeParamsParamId::Gain, value)
+                }
+                Edit::End if *edit_open => {
+                    context.end_edit(ProbeParamsParamId::Gain);
+                    *edit_open = false;
+                }
+                _ => {}
+            }
+        }
+    }
 }
 /// Linux/X11 compatibility probe, deliberately outside MUI's stable API.
 /// GPUI's Rc objects stay on one worker; host callbacks stay in Editor::idle.
@@ -67,6 +102,18 @@ impl Default for GpuiEditor {
             last_error: None,
             child: None,
         }
+    }
+}
+impl GpuiEditor {
+    /// Read-only diagnostics for the runnable editor-contract check.
+    pub fn snapshot(&self) -> anyhow::Result<PanelSnapshot> {
+        let (send, receive) = mpsc::sync_channel(1);
+        self.session
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Editor is closed"))?
+            .commands
+            .try_send(Command::Inspect(send))?;
+        Ok(receive.recv_timeout(std::time::Duration::from_secs(5))?)
     }
 }
 impl Editor for GpuiEditor {
@@ -94,8 +141,10 @@ impl Editor for GpuiEditor {
         let (ready, started) = mpsc::sync_channel(1);
         let dimensions = self.dimensions;
         let value = context.bridge().get_param(ProbeParamsParamId::Gain.into());
+        let host_value = Arc::new(AtomicU64::new(value.to_bits()));
+        let worker_value = host_value.clone();
         let worker = std::thread::spawn(move || {
-            run_editor(parent, dimensions, value, receive, edits, ready)
+            run_editor(parent, dimensions, worker_value, receive, edits, ready)
         });
         match started.recv() {
             Ok(child) => {
@@ -105,6 +154,8 @@ impl Editor for GpuiEditor {
                     edits: events,
                     worker,
                     context,
+                    host_value,
+                    edit_open: false,
                 });
             }
             Err(_) => {
@@ -113,30 +164,28 @@ impl Editor for GpuiEditor {
         }
     }
     fn idle(&mut self) {
-        if let Some(session) = &self.session {
-            for value in session.edits.try_iter() {
-                session.context.begin_edit(ProbeParamsParamId::Gain);
-                session.context.set_param(ProbeParamsParamId::Gain, value);
-                session.context.end_edit(ProbeParamsParamId::Gain);
-            }
-            let _ = session.commands.try_send(Command::Value(
+        if let Some(session) = &mut self.session {
+            Session::drain_edits(&session.context, &session.edits, &mut session.edit_open);
+            session.host_value.store(
                 session
                     .context
                     .bridge()
-                    .get_param(ProbeParamsParamId::Gain.into()),
-            ));
+                    .get_param(ProbeParamsParamId::Gain.into())
+                    .to_bits(),
+                Ordering::Relaxed,
+            );
         }
     }
     fn close(&mut self) {
-        if let Some(session) = self.session.take() {
+        if let Some(mut session) = self.session.take() {
             let _ = session.commands.send(Command::Close);
             let error = worker_result(session.worker);
             if !error.is_empty() {
                 self.last_error = Some(error);
             }
-            for value in session.edits.try_iter() {
-                session.context.begin_edit(ProbeParamsParamId::Gain);
-                session.context.set_param(ProbeParamsParamId::Gain, value);
+            Session::drain_edits(&session.context, &session.edits, &mut session.edit_open);
+            // Balance host automation even if the UI worker failed before sending End.
+            if session.edit_open {
                 session.context.end_edit(ProbeParamsParamId::Gain);
             }
         }
@@ -178,58 +227,42 @@ fn worker_result(worker: std::thread::JoinHandle<anyhow::Result<()>>) -> String 
 }
 struct ProbeView {
     value: f64,
-    edits: mpsc::Sender<f64>,
+    edits: mpsc::Sender<Edit>,
+    name: gpui::Entity<text_input::TextInput>,
+    scroll: gpui::ScrollHandle,
+    gain_focus: gpui::FocusHandle,
+    drag: Option<(gpui::Point<gpui::Pixels>, f64, bool)>,
+    click_armed: bool,
 }
 impl ProbeView {
     fn toggle(&mut self, cx: &mut Context<Self>) {
+        if self.drag.is_some() {
+            self.end_drag();
+            self.click_armed = false;
+        }
         self.value = if self.value < 0.5 { 1.0 } else { 0.0 };
-        let _ = self.edits.send(self.value);
+        let _ = self.edits.send(Edit::Begin);
+        let _ = self.edits.send(Edit::Value(self.value));
+        let _ = self.edits.send(Edit::End);
         cx.notify();
-    }
-}
-impl Render for ProbeView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .size_full()
-            .p_4()
-            .bg(rgb(0x181c24))
-            .text_color(rgb(0xffffff))
-            .child("MUI • GPUI plugin runtime")
-            .child(
-                div()
-                    .id("gain")
-                    .role(gpui::Role::Button)
-                    .aria_label("Toggle gain between zero and full")
-                    .focusable()
-                    .focus(|style| style.border_2().border_color(rgb(0xffffff)))
-                    .mt_4()
-                    .p_4()
-                    .bg(rgb(0x375b85))
-                    .cursor_pointer()
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.toggle(cx);
-                    }))
-                    .child(format!(
-                        "Gain: {:.0}% — click to toggle",
-                        self.value * 100.0
-                    )),
-            )
     }
 }
 fn run_editor(
     parent: u32,
     dimensions: (u32, u32),
-    value: f64,
+    host_value: Arc<AtomicU64>,
     commands: mpsc::Receiver<Command>,
-    edits: mpsc::Sender<f64>,
+    edits: mpsc::Sender<Edit>,
     ready: mpsc::SyncSender<u32>,
 ) -> anyhow::Result<()> {
+    let value = f64::from_bits(host_value.load(Ordering::Relaxed));
     let (connection, _) = x11rb::connect(None)?;
     connection.get_window_attributes(parent)?.reply()?;
     let runtime = gpui_linux::EmbeddedX11::new()?;
     let window_slot = std::rc::Rc::new(std::cell::RefCell::new(None));
     let slot = window_slot.clone();
     let app = Application::with_platform(runtime.platform()).run_embedded(move |cx: &mut App| {
+        text_input::bind_keys(cx);
         *slot.borrow_mut() = Some(cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(Bounds::new(
@@ -239,7 +272,17 @@ fn run_editor(
                 titlebar: None,
                 ..Default::default()
             },
-            |_, cx| cx.new(|_| ProbeView { value, edits }),
+            |_, cx| {
+                cx.new(|cx| ProbeView {
+                    value,
+                    edits,
+                    name: cx.new(text_input::TextInput::new),
+                    scroll: gpui::ScrollHandle::new(),
+                    gain_focus: cx.focus_handle().tab_index(0).tab_stop(true),
+                    drag: None,
+                    click_armed: false,
+                })
+            },
         ));
     });
     let window = window_slot
@@ -275,30 +318,48 @@ fn run_editor(
     connection.map_window(child)?.check()?;
     connection.flush()?;
     ready.send(child)?;
+    let mut observed_host_value = value;
     let result = (|| -> anyhow::Result<()> {
         loop {
             match commands.recv_timeout(std::time::Duration::from_millis(8)) {
                 Ok(Command::Close) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                Ok(Command::Inspect(reply)) => app.update(|cx| {
+                    window.update(cx, |view, _, cx| {
+                        let _ = reply.send(PanelSnapshot {
+                            preset_name: view.name.read(cx).value().to_owned(),
+                            scroll_y: view.scroll.offset().y.into(),
+                        });
+                    })
+                })?,
                 Ok(Command::Resize(w, h)) => {
                     connection
                         .configure_window(child, &ConfigureWindowAux::new().width(w).height(h))?
                         .check()?;
                 }
-                Ok(Command::Value(value)) => app.update(|cx| {
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+            }
+            let value = f64::from_bits(host_value.load(Ordering::Relaxed));
+            if value != observed_host_value {
+                observed_host_value = value;
+                app.update(|cx| {
                     window.update(cx, |view, _, cx| {
-                        if view.value != value {
+                        if view.drag.is_none() && view.value != value {
                             view.value = value;
                             cx.notify();
                         }
                     })
-                })?,
-                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                })?;
             }
             runtime.pump()?;
         }
         Ok(())
     })();
-    app.update(|cx| window.update(cx, |_, window, _| window.remove_window()))?;
+    app.update(|cx| {
+        window.update(cx, |view, window, _| {
+            view.end_drag();
+            window.remove_window();
+        })
+    })?;
     runtime.pump()?;
     result
 }

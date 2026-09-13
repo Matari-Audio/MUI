@@ -1,12 +1,14 @@
 [package]
 name = "mui-gpui-plugin-probe"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 publish = false
 
 [workspace]
 
 [dependencies]
+mui = { path = "../../crates/mui" }
+unicode-segmentation = "1"
 anyhow = "1"
 gpui = { path = "../upstream/crates/gpui", default-features = false }
 gpui_linux = { path = "../upstream/crates/gpui_linux", default-features = false, features = ["x11"] }

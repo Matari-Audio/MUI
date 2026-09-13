@@ -1,4 +1,4 @@
-import type { Theme, Spacing, Align } from "./index.js";
+import type { Theme, Spacing, Align, Overflow } from "./index.js";
 import { q, n } from "./literals.js";
 import { validateScene } from "./validate.js";
 import { compileTheme } from "./theme-compiler.js";
@@ -31,6 +31,7 @@ export interface ItemProps {
   grow?: number;
   shrink?: number;
   wrap?: boolean;
+  overflow?: Overflow;
   pack?: Pack;
   position?: [Horizontal, Vertical];
   align?: Align;
@@ -66,6 +67,7 @@ export class Item {
   max(w: number, h: number): Item { return this.with({ max: [w, h] }); }
   grow(v: number): Item { return this.with({ grow: v }); }
   shrink(v: number): Item { return this.with({ shrink: v }); }
+  overflow(v: Overflow): Item { return this.with({ overflow: v }); }
   wrap(): Item { return this.with({ wrap: true }); }
   pack(v: Pack): Item { return this.with({ pack: v }); }
   position(x: Horizontal, y: Vertical): Item { return this.with({ position: [x, y] }); }
@@ -180,6 +182,10 @@ export function compileItems(doc: ItemDocument): string {
     for (const key of ["min", "max"] as const) if (p[key]) out += `.${key}(${p[key]!.map(number).join(", ")})`;
     for (const key of ["grow", "shrink"] as const) if (p[key] !== undefined) out += `.${key}(${number(p[key]!)})`;
     if (p.wrap) out += ".wrap()";
+    if (p.overflow !== undefined) {
+      if (!["fit", "clip", "scroll"].includes(p.overflow)) fail("invalid overflow policy");
+      out += `.overflow(mui_layout::Overflow::${title(p.overflow)})`;
+    }
     if (p.pack) {
       const name = ({ start: "Start", center: "Center", end: "End", between: "SpaceBetween", evenly: "SpaceEvenly", around: "SpaceAround" } as Record<string, string>)[p.pack];
       if (!name) fail("invalid distribution");
@@ -187,7 +193,7 @@ export function compileItems(doc: ItemDocument): string {
     }
     if (p.position) out += `.position(${position(p.position)})`;
     for (const key of ["align", "alignSelf"] as const) if (p[key]) {
-      if (!["start", "center", "end", "stretch"].includes(p[key]!)) fail("invalid alignment");
+      if (!["start", "center", "end", "stretch", "baseline"].includes(p[key]!)) fail("invalid alignment");
       out += `.${key === "alignSelf" ? "align_self" : key}(mui_layout::Align::${title(p[key]!)})`;
     }
     for (const key of ["columns", "rows"] as const) if (p[key]) {

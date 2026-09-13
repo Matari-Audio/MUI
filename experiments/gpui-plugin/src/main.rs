@@ -6,7 +6,11 @@ use std::{
 };
 use truce::prelude::Editor;
 use truce_core::editor::{ClosureBridge, PluginContext, RawWindowHandle};
-use x11rb::{connection::Connection, protocol::xproto::*};
+use x11rb::{
+    connection::Connection,
+    protocol::{Event, xproto::*},
+    wrapper::ConnectionExt as _,
+};
 
 fn main() -> anyhow::Result<()> {
     let (connection, screen) = x11rb::connect(None)?;
@@ -24,7 +28,7 @@ fn main() -> anyhow::Result<()> {
             0,
             WindowClass::INPUT_OUTPUT,
             0,
-            &CreateWindowAux::new(),
+            &CreateWindowAux::new().event_mask(EventMask::STRUCTURE_NOTIFY),
         )?
         .check()?;
     connection.map_window(parent)?.check()?;
@@ -72,6 +76,55 @@ fn main() -> anyhow::Result<()> {
     let mut second = GpuiEditor::default();
     first.open(RawWindowHandle::X11(parent.into()), context.clone());
     anyhow::ensure!(first.last_error.is_none(), "{:?}", first.last_error);
+    if std::env::args().any(|arg| arg == "--manual") {
+        let protocols = connection
+            .intern_atom(false, b"WM_PROTOCOLS")?
+            .reply()?
+            .atom;
+        let delete = connection
+            .intern_atom(false, b"WM_DELETE_WINDOW")?
+            .reply()?
+            .atom;
+        connection.change_property32(
+            PropMode::REPLACE,
+            parent,
+            protocols,
+            AtomEnum::ATOM,
+            &[delete],
+        )?;
+        connection.change_property8(
+            PropMode::REPLACE,
+            parent,
+            AtomEnum::WM_NAME,
+            AtomEnum::STRING,
+            b"MUI - interactive GPUI panel",
+        )?;
+        connection.configure_window(parent, &ConfigureWindowAux::new().width(800).height(450))?;
+        anyhow::ensure!(first.set_size(800, 450), "initial resize failed");
+        connection.flush()?;
+        println!("Manual panel open; close the window to exit.");
+        'running: loop {
+            while let Some(event) = connection.poll_for_event()? {
+                match event {
+                    Event::ClientMessage(event)
+                        if event.type_ == protocols && event.data.as_data32()[0] == delete =>
+                    {
+                        break 'running;
+                    }
+                    Event::DestroyNotify(event) if event.window == parent => break 'running,
+                    Event::ConfigureNotify(event) if event.window == parent => {
+                        first.set_size(event.width.into(), event.height.into());
+                    }
+                    _ => {}
+                }
+            }
+            first.idle();
+            events.lock().unwrap().clear();
+            std::thread::sleep(Duration::from_millis(8));
+        }
+        first.close();
+        return Ok(());
+    }
     second.open(RawWindowHandle::X11(parent.into()), context.clone());
     anyhow::ensure!(second.last_error.is_none(), "{:?}", second.last_error);
     let tick = |editor: &mut GpuiEditor| {
@@ -159,13 +212,163 @@ fn main() -> anyhow::Result<()> {
         &["begin", "set", "end", "begin", "set", "end"]
     );
     assert_eq!(*value.lock().unwrap(), 0.0);
+    let button = |kind, detail| -> anyhow::Result<()> {
+        x11rb::protocol::xtest::fake_input(
+            &connection,
+            kind,
+            detail,
+            x11rb::CURRENT_TIME,
+            root,
+            0,
+            0,
+            0,
+        )?
+        .check()?;
+        connection.flush()?;
+        Ok(())
+    };
+    let move_to = |x, y| -> anyhow::Result<()> {
+        connection
+            .warp_pointer(0u32, child, 0, 0, 0, 0, x, y)?
+            .check()?;
+        connection.flush()?;
+        Ok(())
+    };
+    let click = |x, y| -> anyhow::Result<()> {
+        move_to(x, y)?;
+        button(BUTTON_PRESS_EVENT, 1)?;
+        button(BUTTON_RELEASE_EVENT, 1)
+    };
+    let key = |kind, symbol| -> anyhow::Result<()> {
+        let code = mapping
+            .keysyms
+            .chunks(mapping.keysyms_per_keycode as usize)
+            .position(|keys| keys.contains(&symbol))
+            .expect("test key in X11 map") as u8
+            + setup.min_keycode;
+        button(kind, code)
+    };
+    let type_key = |symbol| -> anyhow::Result<()> {
+        key(KEY_PRESS_EVENT, symbol)?;
+        key(KEY_RELEASE_EVENT, symbol)
+    };
+    let assert_gesture = |closed: bool| {
+        let events = events.lock().unwrap();
+        assert_eq!(events.first(), Some(&"begin"));
+        let end = if closed {
+            assert_eq!(events.last(), Some(&"end"));
+            events.len() - 1
+        } else {
+            events.len()
+        };
+        assert!(
+            events[1..end].iter().all(|event| *event == "set"),
+            "nested or unbalanced gesture: {events:?}"
+        );
+    };
+    events.lock().unwrap().clear();
+    // Inside the layout rectangle, outside the rounded painted shape.
+    click(17, 57)?;
+    tick(&mut first);
+    assert!(
+        events.lock().unwrap().is_empty(),
+        "rounded cutout accepted a click"
+    );
+    // Drag out of the control and release: capture must end exactly one gesture.
+    move_to(100, 85)?;
+    button(BUTTON_PRESS_EVENT, 1)?;
+    tick(&mut first);
+    move_to(250, 150)?;
+    tick(&mut first);
+    button(BUTTON_RELEASE_EVENT, 1)?;
+    tick(&mut first);
+    assert_gesture(true);
+    assert!(
+        (0.01..=1.0).contains(&*value.lock().unwrap()),
+        "drag must update normalized gain"
+    );
+    events.lock().unwrap().clear();
+    // Escape cancels capture. The following mouse-up must not activate the button.
+    move_to(100, 85)?;
+    button(BUTTON_PRESS_EVENT, 1)?;
+    tick(&mut first);
+    move_to(160, 85)?;
+    tick(&mut first);
+    type_key(0xff1b)?;
+    tick(&mut first);
+    button(BUTTON_RELEASE_EVENT, 1)?;
+    tick(&mut first);
+    assert_gesture(true);
+    events.lock().unwrap().clear();
+    type_key(0xff09)?; // Tab from gain to the text field.
+    tick(&mut first);
+    for symbol in [b'm', b'u', b'i'] {
+        type_key(u32::from(symbol))?;
+    }
+    tick(&mut first);
+    assert_eq!(first.snapshot()?.preset_name, "mui");
+    key(KEY_PRESS_EVENT, 0xffe3)?;
+    type_key(u32::from(b'a'))?;
+    type_key(u32::from(b'c'))?;
+    key(KEY_RELEASE_EVENT, 0xffe3)?;
+    type_key(u32::from(b'x'))?;
+    tick(&mut first);
+    assert_eq!(first.snapshot()?.preset_name, "x", "selection replacement");
+    key(KEY_PRESS_EVENT, 0xffe3)?;
+    type_key(u32::from(b'a'))?;
+    type_key(u32::from(b'v'))?;
+    key(KEY_RELEASE_EVENT, 0xffe3)?;
+    tick(&mut first);
+    assert_eq!(first.snapshot()?.preset_name, "mui", "clipboard paste");
+    key(KEY_PRESS_EVENT, 0xffe3)?;
+    type_key(u32::from(b'a'))?;
+    key(KEY_RELEASE_EVENT, 0xffe3)?;
+    type_key(0xff08)?;
+    tick(&mut first);
+    assert_eq!(first.snapshot()?.preset_name, "", "backspace");
+    assert!(
+        events.lock().unwrap().is_empty(),
+        "typing changed the gain parameter"
+    );
+    move_to(700, 400)?;
+    for _ in 0..10 {
+        button(BUTTON_PRESS_EVENT, 5)?;
+        button(BUTTON_RELEASE_EVENT, 5)?;
+    }
+    tick(&mut first);
+    assert!(
+        first.snapshot()?.scroll_y < -120.,
+        "wheel did not scroll content"
+    );
+    click(100, 85)?;
+    tick(&mut first);
+    assert!(
+        events.lock().unwrap().is_empty(),
+        "clipped gain control received a click"
+    );
+    for _ in 0..10 {
+        button(BUTTON_PRESS_EVENT, 4)?;
+        button(BUTTON_RELEASE_EVENT, 4)?;
+    }
+    tick(&mut first);
+    assert_eq!(first.snapshot()?.scroll_y, 0.);
+    move_to(100, 85)?;
+    button(BUTTON_PRESS_EVENT, 1)?;
+    tick(&mut first);
+    move_to(130, 85)?;
+    tick(&mut first);
+    assert_gesture(false);
     first.close();
+    button(BUTTON_RELEASE_EVENT, 1)?;
+    assert_gesture(true);
     anyhow::ensure!(first.last_error.is_none(), "{:?}", first.last_error);
     tick(&mut second);
-    assert!(connection
-        .get_geometry(second.child.unwrap())?
-        .reply()
-        .is_ok());
+    assert!(
+        connection
+            .get_geometry(second.child.unwrap())?
+            .reply()
+            .is_ok()
+    );
     first.open(RawWindowHandle::X11(parent.into()), context);
     anyhow::ensure!(first.last_error.is_none(), "{:?}", first.last_error);
     tick(&mut first);
@@ -178,6 +381,8 @@ fn main() -> anyhow::Result<()> {
         second.last_error
     );
     connection.destroy_window(parent)?.check()?;
-    println!("PASS: real GPUI views, X11 parenting, resize validation, pointer + keyboard → host-thread begin/set/end, two instances, close/reopen");
+    println!(
+        "PASS: real GPUI views, X11 parenting, resize validation, MUI layout/path hits, pointer + keyboard, drag/cancel automation, Tab traversal, text selection/editing/clipboard, scroll clipping, close during drag, two instances, close/reopen"
+    );
     Ok(())
 }

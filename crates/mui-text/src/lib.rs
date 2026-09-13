@@ -2,7 +2,7 @@
 #![forbid(unsafe_code)]
 
 use mui_core::{ResolvedScene, SceneError, Ui};
-use mui_layout::{Available, Error, Frame, MeasureInput, Size};
+use mui_layout::{Available, Error, Frame, MeasureInput, Measurement, Size};
 pub use parley;
 use parley::{Alignment, AlignmentOptions, FontContext, Layout, LayoutContext, StyleProperty};
 use std::collections::BTreeMap;
@@ -122,7 +122,7 @@ impl TextSystem {
                 },
             );
         }
-        let scene = ui.resolve_with(|id, _, input| {
+        let scene = ui.resolve_with_baseline(|id, _, input| {
             paragraphs
                 .get_mut(id)
                 .ok_or_else(|| Error::MissingMeasurement(id.into()))?
@@ -173,7 +173,7 @@ impl Paragraph {
     pub fn layout(&self) -> &Layout<()> {
         &self.layout
     }
-    fn measure(&mut self, input: MeasureInput) -> Result<Size, Error> {
+    fn measure(&mut self, input: MeasureInput) -> Result<Measurement, Error> {
         let widths = self.layout.calculate_content_widths();
         let width = input.known.width.unwrap_or_else(|| match input.width {
             Available::MinContent => f64::from(widths.min),
@@ -186,12 +186,19 @@ impl Paragraph {
             return Err(Error::InvalidValue);
         }
         self.layout.break_all_lines(Some(width as f32));
-        Ok(Size::new(
-            width,
-            input
-                .known
-                .height
-                .unwrap_or(f64::from(self.layout.height())),
-        ))
+        Ok(Measurement {
+            baseline: self
+                .layout
+                .lines()
+                .next()
+                .map(|line| f64::from(line.metrics().baseline)),
+            size: Size::new(
+                width,
+                input
+                    .known
+                    .height
+                    .unwrap_or(f64::from(self.layout.height())),
+            ),
+        })
     }
 }
