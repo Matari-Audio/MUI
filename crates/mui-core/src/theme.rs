@@ -19,7 +19,8 @@ impl CornerProfile {
         if !scale.is_finite() || scale < 0.0 {
             return None;
         }
-        Some(Self::new(self.convex * scale, self.concave * scale))
+        let next = Self::new(self.convex * scale, self.concave * scale);
+        next.valid().then_some(next)
     }
 }
 impl Default for CornerProfile {
@@ -28,102 +29,69 @@ impl Default for CornerProfile {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SpacingToken {
-    Xs,
-    S,
-    M,
-    L,
-    Xl,
-}
+pub use mui_layout::{Spacing, SpacingScale, SpacingToken};
 
+/// Minimum contrast policy. All text uses the normal-text threshold; the host
+/// need not classify font sizes. Stronger thresholds may reject impossible pairs.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct SpacingScale {
-    pub xs: f64,
-    pub s: f64,
-    pub m: f64,
-    pub l: f64,
-    pub xl: f64,
+pub struct Contrast {
+    pub text: f64,
+    pub graphics: f64,
 }
-impl Default for SpacingScale {
-    fn default() -> Self {
-        Self {
-            xs: 4.0,
-            s: 8.0,
-            m: 12.0,
-            l: 18.0,
-            xl: 28.0,
-        }
-    }
-}
-impl SpacingScale {
-    pub fn get(self, t: SpacingToken) -> f64 {
-        match t {
-            SpacingToken::Xs => self.xs,
-            SpacingToken::S => self.s,
-            SpacingToken::M => self.m,
-            SpacingToken::L => self.l,
-            SpacingToken::Xl => self.xl,
-        }
-    }
+impl Contrast {
+    pub const AA: Self = Self {
+        text: 4.5,
+        graphics: 3.,
+    };
+    pub const AAA: Self = Self {
+        text: 7.,
+        graphics: 3.,
+    };
     pub fn valid(self) -> bool {
-        [self.xs, self.s, self.m, self.l, self.xl]
-            .iter()
-            .all(|v| v.is_finite() && *v >= 0.0)
+        self.text.is_finite()
+            && (4.5..=21.).contains(&self.text)
+            && self.graphics.is_finite()
+            && (3.0..=21.).contains(&self.graphics)
     }
 }
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Spacing {
-    Px(f64),
-    Token(SpacingToken),
-}
-impl Spacing {
-    pub const fn px(v: f64) -> Self {
-        Self::Px(v)
-    }
-    pub const fn xs() -> Self {
-        Self::Token(SpacingToken::Xs)
-    }
-    pub const fn s() -> Self {
-        Self::Token(SpacingToken::S)
-    }
-    pub const fn m() -> Self {
-        Self::Token(SpacingToken::M)
-    }
-    pub const fn l() -> Self {
-        Self::Token(SpacingToken::L)
-    }
-    pub const fn xl() -> Self {
-        Self::Token(SpacingToken::Xl)
-    }
-    pub fn resolve(self, theme: &Theme) -> Option<f64> {
-        let v = match self {
-            Self::Px(v) => v,
-            Self::Token(t) => theme.spacing.get(t),
-        };
-        (v.is_finite() && v >= 0.0).then_some(v)
+impl Default for Contrast {
+    fn default() -> Self {
+        Self::AA
     }
 }
-
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Theme {
+    pub palette: crate::Palette,
+    pub mode: crate::Mode,
     pub corners: CornerProfile,
     pub spacing: SpacingScale,
     pub stroke_width: f64,
+    pub contrast: Contrast,
+    pub hover_shift: f64,
 }
 impl Default for Theme {
     fn default() -> Self {
         Self {
+            palette: crate::Palette::default(),
+            mode: crate::Mode::default(),
             corners: CornerProfile::default(),
             spacing: SpacingScale::default(),
             stroke_width: 1.5,
+            contrast: Contrast::AA,
+            hover_shift: 0.06,
         }
     }
 }
 impl Theme {
+    pub fn colors(self) -> Result<crate::Colors, crate::ColorError> {
+        self.palette.resolve(self.mode)
+    }
     pub fn valid(self) -> bool {
-        self.corners.valid()
+        self.contrast.valid()
+            && self.hover_shift.is_finite()
+            && self.hover_shift > 0.
+            && self.hover_shift <= 0.5
+            && self.corners.valid()
             && self.spacing.valid()
             && self.stroke_width.is_finite()
             && self.stroke_width >= 0.0

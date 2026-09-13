@@ -8,3 +8,5 @@ license.workspace = true
 mui-core = { path = "../mui-core" }
 mui-geometry = { path = "../mui-geometry" }
 mui-layout = { path = "../mui-layout" }
+
+mui = { path = "../mui" }

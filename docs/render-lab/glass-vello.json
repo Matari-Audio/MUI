@@ -1,0 +1,14 @@
+{
+  "adapter": "AdapterInfo { name: \"llvmpipe (LLVM 20.1.2, 256 bits)\", vendor: 65541, device: 0, device_type: Cpu, device_pci_bus_id: \"\", driver: \"llvmpipe\", driver_info: \"Mesa 25.2.8-0ubuntu0.24.04.2 (LLVM 20.1.2)\", backend: Vulkan, subgroup_min_size: 8, subgroup_max_size: 8, transient_saves_memory: false }",
+  "input": "output/vello-1.png",
+  "width": 768,
+  "height": 512,
+  "glass_compute_and_wait": {
+    "samples": 10,
+    "median_ms": 4.333977999999999,
+    "p95_ms": 5.413301,
+    "min_ms": 4.153419,
+    "max_ms": 5.413301
+  },
+  "scope": "same WGSL on captured backend image; excludes upload/readback and does not prove GPUI runtime shader integration"
+}

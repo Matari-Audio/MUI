@@ -1,4 +1,8 @@
+#[cfg(test)]
+mod compiler_contract;
 mod generated;
+#[cfg(test)]
+mod generated_items;
 
 fn main() {
     let scene = mui_core::resolve_scene(&generated::generated_scene())
@@ -37,6 +41,25 @@ mod tests {
     use super::*;
     #[test]
     fn generated_typescript_scene_resolves() {
+        let ui = generated_items::generated_ui().unwrap();
+        let items = ui
+            .resolve_with(|_, text, _| Ok(mui_layout::Size::new(text.len() as f64 * 8., 20.)))
+            .unwrap();
+        assert_eq!(
+            items.surface("filter").unwrap().bounds.unwrap().max.y,
+            items.layout.frame("panel").unwrap().y
+        );
+        assert_eq!(
+            ui.info("filter").unwrap().tap.as_deref(),
+            Some("select-filter")
+        );
+        let contract = mui_core::resolve_scene(&compiler_contract::generated_scene()).unwrap();
+        assert!(contract
+            .layout
+            .frame("tab\u{1}\u{8}\u{c}\\\"שלום🎹")
+            .is_some());
+        assert_eq!(contract.surface("shell").unwrap().basis.components(), 1);
+        assert!(compiler_contract::generated_scene().theme.colors().is_ok());
         let scene = mui_core::resolve_scene(&generated::generated_scene()).unwrap();
         let tab = scene.surface("tab").unwrap().analytic_rect.unwrap();
         let pill = scene.surface("pill-shell").unwrap().analytic_rect.unwrap();

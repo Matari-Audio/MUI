@@ -7,6 +7,8 @@ members = [
   "crates/mui-core",
   "crates/mui",
   "crates/mui-demo",
+  "crates/mui-playground",
+  "crates/mui-text",
 ]
 resolver = "2"
 

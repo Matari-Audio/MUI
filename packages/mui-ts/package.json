@@ -5,6 +5,11 @@
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "generate:example": "node dist/src/compiler.js dist/examples/pill.js ../../crates/mui-demo/src/generated.rs"
+    "generate:example": "node dist/src/compiler.js dist/examples/pill.js ../../crates/mui-demo/src/generated.rs",
+    "test": "node --test dist/tests/*.js"
+  },
+  "devDependencies": {
+    "typescript": "7.0.2",
+    "@types/node": "22.20.2"
   }
 }

@@ -2,3 +2,9 @@
 /packages/mui-ts/dist
 /packages/mui-ts/node_modules
 __pycache__/
+
+/playground/pkg
+
+/experiments/upstream/
+/experiments/*/target/
+/experiments/render-lab/output/

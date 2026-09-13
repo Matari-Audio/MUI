@@ -58,3 +58,8 @@ impl NodeExt for Node {
         self.grow(w)
     }
 }
+
+/// Compact container; `.axis(Axis::Auto)` chooses row or column.
+pub fn flow(children: impl IntoIterator<Item = Node>) -> Node {
+    Node::flow(children)
+}
