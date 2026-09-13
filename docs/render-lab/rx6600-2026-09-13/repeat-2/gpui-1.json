@@ -1,0 +1,29 @@
+{
+  "backend": "gpui",
+  "scale": 1.0,
+  "width": 768,
+  "height": 512,
+  "adapter": "AdapterInfo { name: \"AMD Radeon RX 6600 (RADV NAVI23)\", vendor: 4098, device: 29695, device_type: DiscreteGpu, device_pci_bus_id: \"0000:03:00.0\", driver: \"radv\", driver_info: \"Mesa 26.2.2-arch3.2\", backend: Vulkan, subgroup_min_size: 32, subgroup_max_size: 64, transient_saves_memory: false }",
+  "initialization_ms": 88.76900499999999,
+  "first_draw_ms": 2.233762,
+  "scene_encoding": {
+    "samples": 60,
+    "median_ms": 0.141053,
+    "p95_ms": 0.17782299999999998,
+    "min_ms": 0.133113,
+    "max_ms": 0.24675499999999997
+  },
+  "steady_draw_wait": {
+    "samples": 60,
+    "median_ms": 0.421268,
+    "p95_ms": 1.7930629999999999,
+    "min_ms": 0.325936,
+    "max_ms": 1.8247840000000002
+  },
+  "timing_scope": "surface acquire + draw + present + device wait",
+  "capture_excluded": true,
+  "shared_geometry": true,
+  "marks": 40,
+  "tile_side": 1,
+  "warmup_frames": 5
+}
