@@ -2,7 +2,7 @@
 use mui_core::{container, item, Color, Overflow, ViewState};
 use mui_geometry::{Affine, Point};
 use mui_layout::{Align, Flow};
-use mui_text::{TextStyle, TextSystem};
+use mui_core::{TextStyle, TextSystem};
 fn matrix(t: Affine) -> String {
     format!(
         "matrix({} {} {} {} {} {})",

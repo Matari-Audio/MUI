@@ -7,6 +7,22 @@ Plugin authors use [Truce with the MUI control/document adapter](crates/mui-truc
 Truce owns host formats, parameters and persistence; MUI supplies UI contracts.
 The [roadmap](docs/ROADMAP.md) distinguishes this foundation from pending composition migration.
 
+MUI is intended to stay a general, compact authoring layer for measured and
+reactive audio-plugin interfaces. Its layout vocabulary is CSS-like in the
+useful sense—hug or fill, gap, padding, alignment, growth, grids and named
+layers—while Rust remains the runtime authority. `Item` is the stable content
+API; the lower-level generic layout helpers provide short row, column and
+overlay trees that lower into the same layout and geometry path. Text is
+measured through a host callback, and a successful resolve or theme update
+publishes one snapshot for layout, paint and interaction.
+
+The perceptual colour direction is also available without changing the runtime
+contract. `mui_core::color::Palette` stores hue/chroma pigments and derives
+light/dark roles; `mui_core::theme::SourceTheme` converts that declaration into
+the runtime `Theme`, whose RGB palette is what existing hosts consume. The
+TypeScript compiler keeps its established RGB-seed schema for compatibility;
+source-palette emission can be added once that authoring contract is needed.
+
 ## One item API
 
 `item("name")` is content with layout and appearance. `container([...])` is an unnamed

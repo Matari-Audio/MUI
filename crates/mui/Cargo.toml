@@ -7,7 +7,7 @@ license.workspace = true
 [features]
 default = []
 text = ["dep:mui-text"]
-system-fonts = ["text", "mui-text/system-fonts"]
+system-fonts = ["text", "mui-core/system-fonts"]
 egui = ["dep:mui-egui"]
 
 [dependencies]

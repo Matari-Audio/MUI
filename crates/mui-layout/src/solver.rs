@@ -43,6 +43,7 @@ struct Entry<'a> {
     children: Vec<usize>,
     padding: Insets,
     gap: f64,
+    minimum: Size,
 }
 struct Builder<'a> {
     tree: t::TaffyTree<usize>,
@@ -78,6 +79,7 @@ fn justification(j: Justify) -> t::JustifyContent {
 fn dimension(v: Option<Sizing>) -> t::Dimension {
     match v {
         Some(Sizing::Fill) => percent(1.),
+        Some(Sizing::Percent(v)) => percent(v as f32 / 100.),
         Some(Sizing::Fixed(v)) => length(v as f32),
         _ => auto(),
     }
@@ -171,7 +173,18 @@ impl<'a> Builder<'a> {
             } else {
                 0.
             });
-        let values = [node.grow, shrink];
+        let values = [node.grow, shrink, node.basis.unwrap_or(0.)];
+        if node.aspect.is_some_and(|v| !v.is_finite() || v <= 0.)
+            || node
+                .offset
+                .iter()
+                .any(|v| !v.is_finite() || v.abs() > extent)
+            || [node.width, node.height].into_iter().flatten().any(
+                |v| matches!(v, Sizing::Percent(p) if !p.is_finite() || !(0. ..=100.).contains(&p)),
+            )
+        {
+            return Err(Error::InvalidValue);
+        }
         if !node.minimum.valid(extent)
             || node.maximum.is_some_and(|s| !s.valid(extent))
             || values
@@ -303,6 +316,14 @@ impl<'a> Builder<'a> {
                     taffy::style::Overflow::Hidden
                 },
             },
+            aspect_ratio: node.aspect.map(|v| v as f32),
+            flex_basis: node.basis.map_or_else(auto, |v| length(v as f32)),
+            inset: t::Rect {
+                left: length(node.offset[0] as f32),
+                top: length(node.offset[1] as f32),
+                right: auto(),
+                bottom: auto(),
+            },
             flex_grow: node.grow as f32,
             flex_shrink: shrink as f32,
             flex_wrap: if node.wrap {
@@ -396,11 +417,37 @@ impl<'a> Builder<'a> {
         let mut children = Vec::new();
         for (i, child) in node.children().iter().enumerate() {
             if node.grid.is_none()
+                && !overlay
                 && (child.cell.is_some() || child.span != (1, 1) || child.place.is_some())
             {
                 return Err(Error::InvalidValue);
             }
             children.push(self.add(child, &scope, &format!("{path}.{i}"), depth + 1)?);
+        }
+        if node.content_floor {
+            let floors = children
+                .iter()
+                .map(|i| self.entries[*i].minimum)
+                .collect::<Vec<_>>();
+            let max_w = floors.iter().map(|s| s.width).fold(0., f64::max);
+            let max_h = floors.iter().map(|s| s.height).fold(0., f64::max);
+            let gaps = gap * floors.len().saturating_sub(1) as f64;
+            let floor = match &node.kind {
+                Kind::Stack(_) if node.grid.is_none() && node.axis == Axis::Column => {
+                    Size::new(max_w, floors.iter().map(|s| s.height).sum::<f64>() + gaps)
+                }
+                Kind::Stack(_) if node.grid.is_none() => {
+                    Size::new(floors.iter().map(|s| s.width).sum::<f64>() + gaps, max_h)
+                }
+                Kind::Overlay(_) => Size::new(max_w, max_h),
+                _ => Size::ZERO,
+            };
+            min.width = min.width.max(floor.width + padding.horizontal());
+            min.height = min.height.max(floor.height + padding.vertical());
+            style.min_size = t::Size {
+                width: length(min.width as f32),
+                height: length(min.height as f32),
+            };
         }
         let ids: Vec<_> = children.iter().map(|i| self.entries[*i].id).collect();
         if node.overflow == Overflow::Scroll {
@@ -442,6 +489,7 @@ impl<'a> Builder<'a> {
             children,
             padding,
             gap,
+            minimum: min,
         });
         Ok(index)
     }
@@ -544,6 +592,7 @@ impl<'a> Builder<'a> {
         origin: [f64; 2],
         frames: &mut BTreeMap<String, Frame>,
         content_frames: &mut BTreeMap<String, Frame>,
+        order: &mut Vec<Frame>,
     ) -> Result<(), Error> {
         let e = &self.entries[i];
         let l = self.tree.layout(e.id)?;
@@ -561,6 +610,7 @@ impl<'a> Builder<'a> {
         }) {
             return Err(Error::InsufficientSpace(e.key.clone()));
         }
+        order.push(frame);
         for &child in &e.children {
             let c = self.tree.layout(self.entries[child].id)?;
             if e.node.overflow == Overflow::Fit
@@ -573,7 +623,7 @@ impl<'a> Builder<'a> {
             {
                 return Err(Error::InsufficientSpace(e.key.clone()));
             }
-            self.collect(child, [frame.x, frame.y], frames, content_frames)?;
+            self.collect(child, [frame.x, frame.y], frames, content_frames, order)?;
         }
         let content = Frame {
             x: frame.x + e.padding.left,
@@ -716,7 +766,12 @@ pub fn resolve_measured_with_baseline(
                 t::AvailableSpace::Definite(v as f32)
             }),
     };
+    let mut passes_left = builder.entries.len().saturating_mul(2) + 2;
     loop {
+        if passes_left == 0 {
+            return Err(Error::BudgetExceeded);
+        }
+        passes_left -= 1;
         builder.compute(root_index, available, &mut measure)?;
         let mut changed = false;
         // Entries are postorder: settle ancestors before measuring descendants again.
@@ -733,13 +788,35 @@ pub fn resolve_measured_with_baseline(
                 break;
             }
         }
+        // Flex allocation can settle width after the intrinsic aspect pass.
+        // Feed that width back as a definite height before publishing frames.
+        for entry in &builder.entries {
+            if let Some(ratio) = entry.node.aspect.filter(|_| entry.node.height.is_none()) {
+                let layout = builder.tree.layout(entry.id)?;
+                let height = layout.size.width / ratio as f32;
+                let mut style = builder.tree.style(entry.id)?.clone();
+                let expected = length(height);
+                if style.size.height != expected {
+                    style.size.height = expected;
+                    builder.tree.set_style(entry.id, style)?;
+                    changed = true;
+                }
+            }
+        }
         if !changed {
             break;
         }
     }
     let mut frames = BTreeMap::new();
     let mut content_frames = BTreeMap::new();
-    builder.collect(root_index, [0., 0.], &mut frames, &mut content_frames)?;
+    let mut order = Vec::with_capacity(builder.entries.len());
+    builder.collect(
+        root_index,
+        [0., 0.],
+        &mut frames,
+        &mut content_frames,
+        &mut order,
+    )?;
     let size = frames[&builder.entries[root_index].key].size;
     // Hard minimums may cause Taffy to exceed the offered size; surface that conflict.
     if constraints
@@ -769,5 +846,6 @@ pub fn resolve_measured_with_baseline(
         frames,
         content_frames,
         scroll_limits,
+        order,
     })
 }

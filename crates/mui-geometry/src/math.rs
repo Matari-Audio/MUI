@@ -173,6 +173,15 @@ pub struct Bounds {
     pub max: Point,
 }
 impl Bounds {
+    /// The rectangle from one corner to the other, in the caller's order. No
+    /// normalising: a caller that hands them over backwards has a bug, and
+    /// quietly swapping them hides it.
+    pub fn new(x0: f64, y0: f64, x1: f64, y1: f64) -> Self {
+        Self {
+            min: Point::new(x0, y0),
+            max: Point::new(x1, y1),
+        }
+    }
     pub fn from_points(points: impl IntoIterator<Item = Point>) -> Option<Self> {
         let mut it = points.into_iter();
         let first = it.next()?;

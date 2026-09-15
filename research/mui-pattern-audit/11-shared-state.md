@@ -1,0 +1,26 @@
+# MUI shared-state audit
+
+## Coverage
+
+The graft index covers 37 source files, 731 symbols, and 1,174 edges. Exhaustive graft searches found 38 `Arc` hits across 11 files, but no `Rc`, `Cell`, `RefCell`, `Mutex`, `RwLock`, or atomic type hits. The only `Send`/`Sync` occurrence is a compile-time geometry check at `crates/mui-geometry/src/tests.rs:522-527`. Thread-related hits are documentation and that test; there is no `spawn`, channel, lock, or cross-thread executor path. The `unsafe` search found only crate `forbid(unsafe_code)` directives and documentation. The audit therefore found no shared-mutable-state race, lock-order bug, poisoning path, or deadlock in the indexed code.
+
+## Findings
+
+| Severity | Location and trigger | Impact | Minimal fix | Confidence |
+| --- | --- | --- | --- | --- |
+| None / good pattern | `crates/mui-preview/src/main.rs:157-193`, `443-504`; `main.rs:374-425` | `App` owns mutable UI, scene, input, cache, and GPU state. Winit callbacks mutate it through `&mut self`; drawing obtains `&mut Gpu`, resets the scene, paints, and presents sequentially. There is no aliasing mutable state for a second thread to race. | None. Preserve the event-loop ownership model. | High |
+| None / good pattern | `crates/mui-preview/src/host.rs:27-36,46-55,98-112` | `Arc<Window>` keeps the window alive while `wgpu::Surface<'static>` exists. The clone passed to surface creation is ownership/lifetime plumbing, not a shared mutable window protocol; no lock or callback thread is involved. | None. Replacing it with a weaker pointer would risk the surface lifetime contract. | High |
+| Informational | `crates/mui-preview/src/main.rs:180,197-199,211-212`; `crates/mui-preview/src/ui.rs:81-113`; `crates/mui-preview/src/scenes.rs:154-195` | Font bytes use `Arc<Vec<u8>>` and are shared immutably by `App`/`Chrome`; `GlyphAxes` owns another immutable `Arc`. This is thread-safe and harmless, but all current use is on the UI thread, so atomic reference counting is not needed for correctness. | None required. If the preview is permanently single-threaded, a future small cleanup could use `Rc<Vec<u8>>`; defer it unless the thread-affinity contract becomes explicit. | High for no bug; medium for the optional simplification |
+| Informational | `crates/mui-core/src/scene.rs:466-488`; `crates/mui-layout/src/lib.rs:686-713`; `crates/mui-egui/src/lib.rs:100-129,238-273` | `SceneState`, `LayoutState`, `SurfaceState`, and `PathMeshCache` are plain structs with transactional `&mut` commits/prepares. Their comments explicitly say UI-thread, and tests verify failed commits preserve the prior snapshot and separate instances do not share state. The types do not internally enforce thread affinity; a host that moves one across threads must provide its own ownership or synchronization. | None for current call sites. If background work is added, produce owned snapshots and send them back, or put the state behind a deliberately chosen lock; do not add a lock preemptively. | High |
+| Informational | `crates/mui-preview/src/host.rs:46-108`; `crates/mui-preview/src/main.rs:429-440` | GPU setup is `async` because adapter/device requests are asynchronous, but `resumed` calls it with `pollster::block_on` on the event-loop thread. There is no spawned task or `Send` future. Startup/resume can block while the device is created, but this is a responsiveness concern, not a shared-state race. | None for the dev preview. A production host could initialize before entering the interactive loop or show a loading state, but that is outside shared-state scope. | High |
+| Good coverage | `crates/mui-geometry/src/tests.rs:522-527` | Compile-time assertions require `Topology`, `RoundedShape`, and `InsetShape` to implement `Send + Sync`, documenting that immutable/owned geometry can cross threads. This supports background geometry production without claiming that UI caches are concurrently mutable. | None. Extend the assertion only when a new public geometry type is intended for cross-thread ownership. | High |
+
+## Pattern assessment
+
+The good pattern is ownership plus explicit phase boundaries: `App` receives events, mutates state, `draw` borrows the GPU mutably, and `Gpu::begin` returns a scene borrow that is consumed before `present`. `SceneState` and the adapter caches build a new value first, then publish it through `&mut self`, so a failed computation leaves the previous value intact. The geometry `Send + Sync` test is also correctly scoped: it proves transferability of values, not concurrent mutation.
+
+The risky pattern is currently absent. There is no `Arc<Mutex<_>>` to hide ownership, no `Arc<RefCell<_>>`, no lock guard crossing an external callback, no atomics used as a substitute for a multi-field invariant, and no unsafe manual `Send`/`Sync` implementation. The `Arc<Vec<u8>>` handles should not be treated as evidence of concurrency: `Arc` supplies atomic reference counting, while all font access here is through immutable borrows on the event-loop thread.
+
+## Graft tally
+
+Graft searches and source packs saved approximately 530,823 tokens this turn. The audit used the map, exhaustive type/keyword searches, a focused shared-state `ask --source`, and caller walks for `begin`, `present`, `new`, and `commit`; no source edits were made.

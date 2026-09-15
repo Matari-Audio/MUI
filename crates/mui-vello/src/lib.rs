@@ -1,0 +1,126 @@
+//! The seam between MUI geometry and the Vello renderer.
+//!
+//! MUI owns *what* the shape is: intrinsic layout, boolean merging, fillets,
+//! constant-thickness nesting, exact arcs. Vello owns *what it looks like*:
+//! analytic antialiasing, gradients, blends, clips, filters. Those are separate
+//! jobs, and this crate is the whole of the connection between them — one
+//! function that hands a resolved path to the rasteriser.
+//!
+//! Arcs stay arcs until this point. MUI's tessellation path flattens them to
+//! line segments; here they become cubics instead, which is what Vello wants
+//! and what keeps a 24 px corner smooth when the scene is scaled up.
+#![forbid(unsafe_code)]
+
+use mui_geometry::{Error, Path, PathCommand};
+use vello_common::kurbo::{self, BezPath};
+
+/// Curve error, in scene units, allowed when an arc becomes cubics. Vello
+/// re-flattens per frame at device resolution, so this only has to be finer
+/// than anything a later transform can magnify into view.
+pub const ARC_TOLERANCE: f64 = 0.01;
+
+/// Convert a resolved MUI path into a Bézier path Vello can fill or stroke.
+///
+/// The path is validated first: a malformed arc here would silently render as
+/// a wrong shape rather than fail, and geometry bugs are much cheaper to find
+/// at the seam than in a screenshot.
+pub fn bez_path(path: &Path, tolerance: f64) -> Result<BezPath, Error> {
+    if !(tolerance.is_finite() && tolerance > 0.) {
+        return Err(Error::InvalidPath);
+    }
+    path.validate(250_000)?;
+
+    let mut out = BezPath::new();
+    for command in &path.commands {
+        match *command {
+            PathCommand::MoveTo(p) => out.move_to((p.x, p.y)),
+            PathCommand::LineTo(p) => out.line_to((p.x, p.y)),
+            PathCommand::ArcTo(arc) => {
+                // `append_iter` emits curves only, continuing from the current
+                // point -- exactly the shape of an `ArcTo`.
+                let k = kurbo::Arc::new(
+                    (arc.center.x, arc.center.y),
+                    (arc.radius, arc.radius),
+                    arc.start_angle,
+                    arc.sweep,
+                    0.,
+                );
+                out.extend(k.append_iter(tolerance));
+                // Land on the tangent point MUI recorded rather than on the
+                // one trig reconstructed, so consecutive arcs cannot drift.
+                out.line_to((arc.to.x, arc.to.y));
+            }
+            PathCommand::Close => out.close_path(),
+        }
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kurbo::{ParamCurve as _, PathEl, Shape as _};
+
+    fn capsule() -> Path {
+        Path::capsule(48., 120.).unwrap()
+    }
+
+    #[test]
+    fn a_capsule_keeps_its_extent_through_the_conversion() {
+        let path = capsule();
+        let flat = path.flatten(0.01, 250_000).unwrap();
+        let (mut lo, mut hi) = ((f64::MAX, f64::MAX), (f64::MIN, f64::MIN));
+        for p in flat.iter().flatten() {
+            lo = (lo.0.min(p.x), lo.1.min(p.y));
+            hi = (hi.0.max(p.x), hi.1.max(p.y));
+        }
+        let b = bez_path(&path, ARC_TOLERANCE).unwrap().bounding_box();
+        for (a, b) in [(lo.0, b.x0), (lo.1, b.y0), (hi.0, b.x1), (hi.1, b.y1)] {
+            assert!((a - b).abs() < 0.05, "extent drifted: {a} vs {b}");
+        }
+    }
+
+    #[test]
+    fn an_arc_lands_on_the_tangent_point_mui_recorded() {
+        let path = capsule();
+        let bez = bez_path(&path, ARC_TOLERANCE).unwrap();
+        for command in &path.commands {
+            let PathCommand::ArcTo(arc) = *command else {
+                continue;
+            };
+            let hit = bez.segments().any(|s| {
+                let e = s.eval(1.);
+                (e.x - arc.to.x).hypot(e.y - arc.to.y) < 1e-9
+            });
+            assert!(hit, "no segment ends at {:?}", arc.to);
+        }
+    }
+
+    #[test]
+    fn arcs_become_curves_not_a_polyline() {
+        let bez = bez_path(&capsule(), ARC_TOLERANCE).unwrap();
+        assert!(
+            bez.elements()
+                .iter()
+                .any(|e| matches!(e, PathEl::CurveTo(..))),
+            "a rounded shape flattened to line segments"
+        );
+    }
+
+    #[test]
+    fn a_nonsense_tolerance_is_refused_rather_than_hung_on() {
+        for t in [0., -1., f64::NAN, f64::INFINITY] {
+            assert!(bez_path(&capsule(), t).is_err(), "accepted tolerance {t}");
+        }
+    }
+
+    #[test]
+    fn a_malformed_arc_is_caught_at_the_seam() {
+        let mut path = capsule();
+        let PathCommand::ArcTo(arc) = &mut path.commands[1] else {
+            panic!("expected the capsule's first arc at index 1");
+        };
+        arc.radius *= 2.;
+        assert!(bez_path(&path, ARC_TOLERANCE).is_err());
+    }
+}

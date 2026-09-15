@@ -11,7 +11,11 @@ members = [
   "crates/mui-text",
   "crates/mui-truce",
   "crates/mui-gpui",
+  "crates/mui-preview",
+  "crates/mui-vello",
+  "crates/mui-input",
 ]
+exclude = ["experiments/upstream", "experiments/upstream/**", "experiments/gpui-plugin"]
 resolver = "2"
 
 [workspace.package]
@@ -30,3 +34,15 @@ lto = true
 codegen-units = 1
 panic = "abort"
 strip = "symbols"
+
+# A dev build of this workspace is a GUI that has to hold 60 fps while you drag a
+# slider. Unoptimised dependencies cost ~25x: measured 8.4 ms per frame just to
+# re-shape the preview sidebar's labels, against 0.34 ms optimised. Dependencies
+# are compiled once, so this buys frame rate without costing incremental builds.
+[profile.dev.package."*"]
+opt-level = 3
+
+# Our own crates keep debug codegen but at -O1: still fast to rebuild, and the
+# geometry inner loops stop being a slideshow.
+[profile.dev]
+opt-level = 1

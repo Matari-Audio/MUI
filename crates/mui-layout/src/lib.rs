@@ -12,6 +12,7 @@ pub struct Size {
     pub height: f64,
 }
 impl Size {
+    pub const ZERO: Self = Self::new(0.0, 0.0);
     pub const fn new(width: f64, height: f64) -> Self {
         Self { width, height }
     }
@@ -139,6 +140,7 @@ pub enum Sizing {
     Hug,
     Fill,
     Fixed(f64),
+    Percent(f64),
 }
 pub use Sizing::{Fill, Hug};
 impl From<f64> for Sizing {
@@ -181,6 +183,10 @@ pub struct Node {
     physical: Option<(Horizontal, Vertical)>,
     place: Option<(Horizontal, Vertical)>,
     pack_override: Option<Justify>,
+    aspect: Option<f64>,
+    basis: Option<f64>,
+    offset: [f64; 2],
+    content_floor: bool,
 }
 impl Node {
     fn new(key: impl Into<String>, kind: Kind) -> Self {
@@ -210,6 +216,10 @@ impl Node {
             physical: None,
             place: None,
             pack_override: None,
+            aspect: None,
+            basis: None,
+            offset: [0.; 2],
+            content_floor: false,
         }
     }
     pub fn leaf(key: impl Into<String>, size: Size) -> Self {
@@ -418,8 +428,12 @@ pub struct Layout {
     frames: BTreeMap<String, Frame>,
     content_frames: BTreeMap<String, Frame>,
     scroll_limits: BTreeMap<String, Size>,
+    order: Vec<Frame>,
 }
 impl Layout {
+    pub fn all(&self) -> &[Frame] {
+        &self.order
+    }
     /// Maximum positive content offset; zero for non-scroll containers.
     pub fn scroll_limit(&self, key: &str) -> Option<Size> {
         self.scroll_limits.get(key).copied()
@@ -506,3 +520,6 @@ impl LayoutState {
         Ok(())
     }
 }
+
+/// Generic authoring trees lowered to the shared Taffy solver.
+pub mod generic;

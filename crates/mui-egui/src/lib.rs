@@ -20,7 +20,14 @@ impl std::fmt::Display for Error {
         }
     }
 }
-impl std::error::Error for Error {}
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Geometry(error) => Some(error),
+            Self::Tessellation(error) => Some(error),
+        }
+    }
+}
 impl From<mui_geometry::Error> for Error {
     fn from(e: mui_geometry::Error) -> Self {
         Self::Geometry(e)
@@ -42,7 +49,8 @@ pub struct PreparedSurface {
 }
 
 /// Prepare all topology, fillets, offsets, and meshes before exposing any result.
-/// Band uses EVEN-ODD outer minus inset, so translucent borders do not double-fill.
+/// The band is the outer outline with the inset one as a hole, so a translucent
+/// border does not double-fill.
 pub fn prepare(
     inputs: &[PlacedShape],
     corners: CornerStyle,
@@ -52,15 +60,7 @@ pub fn prepare(
     let raw = mui_geometry::union(inputs, GeometryOptions::default())?;
     let rounded = mui_geometry::fillet(&raw, corners)?;
     let inner = mui_geometry::inset_path(&rounded.path, inset, quality)?;
-    let band = Path {
-        commands: rounded
-            .path
-            .commands
-            .iter()
-            .chain(inner.path.commands.iter())
-            .copied()
-            .collect(),
-    };
+    let band = band(&rounded.path, &inner.path, quality.flatten_tolerance)?;
     let mut tess = Tessellator::default();
     Ok(PreparedSurface {
         outer: tess.tessellate(&rounded.path, quality.flatten_tolerance)?,
@@ -69,6 +69,39 @@ pub fn prepare(
         inner_topology: inner.topology,
         counts_changed: inner.counts_changed,
     })
+}
+
+/// The ring between two outlines, as one path.
+///
+/// Both outlines arrive wound positive -- each is the exterior of its own
+/// shape -- so the inner one has to be reversed to read as a hole under the
+/// non-zero rule the tessellator and the renderer share. Reversing is done on
+/// the flattened points because an arc reversed is not an arc negated, and the
+/// tessellator was going to flatten at this tolerance anyway.
+fn band(outer: &Path, inner: &Path, tolerance: f64) -> Result<Path, Error> {
+    let mut commands = Vec::new();
+    let rings = outer
+        .flatten(tolerance, 250_000)?
+        .into_iter()
+        .map(|r| (r, false))
+        .chain(
+            inner
+                .flatten(tolerance, 250_000)?
+                .into_iter()
+                .map(|r| (r, true)),
+        );
+    for (mut ring, reverse) in rings {
+        if reverse {
+            ring.reverse();
+        }
+        let Some((first, rest)) = ring.split_first() else {
+            continue;
+        };
+        commands.push(mui_geometry::PathCommand::MoveTo(*first));
+        commands.extend(rest.iter().map(|p| mui_geometry::PathCommand::LineTo(*p)));
+        commands.push(mui_geometry::PathCommand::Close);
+    }
+    Ok(Path { commands })
 }
 
 /// UI-thread transactional snapshot. No mutex, unsafe global, or audio ownership.
@@ -268,5 +301,24 @@ mod cache_tests {
         assert_eq!(c.revision(), r);
         c.prepare(&path, 0.1).unwrap();
         assert_eq!(c.revision(), r + 1);
+    }
+}
+
+#[cfg(test)]
+mod error_tests {
+    use super::*;
+
+    #[test]
+    fn nested_sources_are_traversable() {
+        let error = Error::Tessellation(mui_tessellate::Error::Geometry(
+            mui_geometry::Error::NonFinite,
+        ));
+        let tessellation = std::error::Error::source(&error).expect("tessellation source");
+        assert!(tessellation
+            .downcast_ref::<mui_tessellate::Error>()
+            .is_some());
+        let geometry = std::error::Error::source(tessellation).expect("geometry source");
+        assert!(geometry.downcast_ref::<mui_geometry::Error>().is_some());
+        assert!(std::error::Error::source(geometry).is_none());
     }
 }

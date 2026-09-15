@@ -21,6 +21,9 @@ pub enum FrameRadius {
     },
 }
 
+/// Concise spelling retained for generic scene authoring.
+pub type Radius = FrameRadius;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum CornerRule {
     Global,
@@ -57,6 +60,11 @@ pub struct SurfaceSpec {
     pub source: SurfaceSource,
 }
 impl SurfaceSpec {
+    /// Use one identity for a layout node and its painted surface.
+    pub fn named_frame(id: impl Into<String>) -> Self {
+        let id = id.into();
+        Self::frame(id.clone(), id)
+    }
     pub fn frame(id: impl Into<String>, layout_key: impl Into<String>) -> Self {
         Self {
             id: id.into(),
@@ -160,10 +168,10 @@ pub struct SceneSpec {
     pub surfaces: Vec<SurfaceSpec>,
 }
 impl SceneSpec {
-    pub fn new(root: Node) -> Self {
+    pub fn new(root: impl Into<Node>) -> Self {
         Self {
             theme: Theme::default(),
-            root,
+            root: root.into(),
             offered: None,
             available: Default::default(),
             layout_limits: Limits::default(),
@@ -172,8 +180,8 @@ impl SceneSpec {
             surfaces: Vec::new(),
         }
     }
-    pub fn theme(mut self, theme: Theme) -> Self {
-        self.theme = theme;
+    pub fn theme(mut self, theme: impl Into<Theme>) -> Self {
+        self.theme = theme.into();
         self
     }
     pub fn offered(mut self, size: Size) -> Self {

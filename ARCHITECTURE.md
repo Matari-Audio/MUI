@@ -1,5 +1,34 @@
 # Architecture
 
+The authoring direction is deliberately compact:
+
+```text
+Rust Item / generic DSL ─┐
+TypeScript build input ──┼─> validated layout + item metadata
+                         v
+                    mui-layout
+                 measured frames
+                         v
+                    mui-core
+              layer and surface graph
+                 /          \
+             sharp basis   final path
+                 \          /
+                  renderer adapters
+```
+
+`mui_layout::generic` supplies short row, column and overlay trees for
+CSS-like layout authoring. Those trees lower into the maintained keyed layout
+engine; `Item` adds text, actions, semantic colour and merge metadata. A host
+measures content through the resolve callback and reacts by resolving a new
+snapshot. This keeps the API useful for general interfaces without making the
+core a widget framework or claiming full CSS coverage.
+
+The perceptual source theme (`mui_core::theme::SourceTheme`) owns pigment-based
+light/dark derivation. It resolves to the existing runtime `Theme` and RGB
+palette at the host boundary, so GPUI, egui and other adapters share one
+style contract.
+
 Rust and TypeScript authors use `Item`. Its compiler creates the validated `SceneSpec`,
 scoped content/action metadata, and an ordered set of merged outlines. The same item key
 identifies logical layout, initial geometry, text and actions. Internal merge IDs never

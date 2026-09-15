@@ -1,12 +1,12 @@
 use mui_core::{container, item};
 use mui_layout::{Flow, Hug};
-use mui_text::{TextStyle, TextSystem};
+use mui_core::{TextStyle, TextSystem};
 
 #[test]
 fn real_font_wrapping_padding_fixed_leaves_and_invalid_styles() {
     let mut text = TextSystem::default();
     assert!(text.register_font(vec![0, 1, 2]).is_err());
-    text.register_font(include_bytes!("fonts/DejaVuSans.ttf").to_vec())
+    text.register_font(include_bytes!("../../mui-text/tests/fonts/DejaVuSans.ttf").to_vec())
         .unwrap();
     let style = TextStyle {
         family: "DejaVu Sans".into(),
@@ -62,7 +62,7 @@ fn real_font_wrapping_padding_fixed_leaves_and_invalid_styles() {
 #[test]
 fn mixed_font_sizes_align_actual_first_baselines() {
     let mut text = TextSystem::default();
-    text.register_font(include_bytes!("fonts/DejaVuSans.ttf").to_vec())
+    text.register_font(include_bytes!("../../mui-text/tests/fonts/DejaVuSans.ttf").to_vec())
         .unwrap();
     let ui = container([
         item("small").text("Gain").pad(7.),
