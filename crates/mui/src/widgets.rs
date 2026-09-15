@@ -9,7 +9,14 @@ use mui_input::Key;
 use crate::Ui;
 
 fn unit(value: f64, range: &RangeInclusive<f64>) -> f64 {
-    ((value - range.start()) / (range.end() - range.start())).clamp(0.0, 1.0)
+    // A fixed parameter reports min == max; without this the divide is NaN,
+    // `clamp` passes NaN through, and the flex weight fails validation.
+    // An inverted range still divides correctly, so only zero bails.
+    let span = range.end() - range.start();
+    if span == 0.0 {
+        return 0.0;
+    }
+    ((value - range.start()) / span).clamp(0.0, 1.0)
 }
 
 /// Label, readout, and a track whose fill and thumb are flex shares.

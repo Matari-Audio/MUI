@@ -495,3 +495,90 @@ fn push_appends_a_child_and_keeps_pre_order_frames() {
     // a leaf has nowhere to put one.
     assert_eq!(leaf(1., 1.).push(leaf(1., 1.)).children().len(), 0);
 }
+
+#[test]
+fn a_content_leaf_never_keeps_a_cross_extent_wider_than_its_parent() {
+    // Both columns take half the row; the text measured at the row's width
+    // must be clamped to its own column, not centred half outside it.
+    let t = Node::<&str>::row([
+        Node::<&str>::column([Node::content().with("p").id("a")]).id("ca"),
+        Node::<&str>::column([Node::content().with("p")]).id("cb"),
+    ]);
+    let l = resolve_with(
+        &t,
+        Some(Size::new(400., 300.)),
+        Default::default(),
+        SpacingScale::DEFAULT,
+        |_: &&str, room: Option<f64>| Size::new(room.unwrap_or(400.), 12.),
+    )
+    .unwrap();
+    let a = l.frame("a").unwrap();
+    assert_eq!(a.x, 0.);
+    assert!(a.size.width <= l.frame("ca").unwrap().size.width + 1e-9);
+}
+
+#[test]
+fn a_percentage_below_the_childs_own_floor_squeezes_instead_of_erroring() {
+    let t = row([leaf(0., 0.).pad(5.4).height(Len::Pct(84.6))]);
+    assert!(resolve(&t, None, Default::default()).is_ok());
+}
+
+#[test]
+fn a_declared_size_smaller_than_its_own_padding_is_not_a_squeeze() {
+    assert!(resolve(&leaf(10., 10.).pad(6.), None, Default::default()).is_ok());
+    assert!(resolve(
+        &row([leaf(0., 0.).pad(5.9)]),
+        Some(Size::new(354., 231.6)),
+        Default::default()
+    )
+    .is_ok());
+}
+
+#[test]
+fn grid_columns_never_go_negative_when_the_gaps_outgrow_the_grid() {
+    // 21 wide less 15.4 of padding leaves 5.6 for two columns and an 8.4
+    // gap. The column is zero-wide, not -1.4, so the percentage child is
+    // offered a valid width and the grid reports the squeeze it really is.
+    let t = column([grid(2, [Node::leaf(0., 0.).width(Len::Pct(98.8))]).gap(8.4)]).pad(7.7);
+    assert!(matches!(
+        resolve(&t, Some(Size::new(21., 174.4)), Default::default()),
+        Err(Error::InsufficientSpace(_))
+    ));
+}
+
+#[test]
+fn room_handed_to_the_measurer_leaves_out_the_nodes_own_padding() {
+    let t = Node::<&str>::overlay([Node::content().with("t").id("t").pad(4.6)]);
+    let l = resolve_with(
+        &t,
+        Some(Size::new(170., 340.)),
+        Default::default(),
+        SpacingScale::DEFAULT,
+        |_: &&str, room: Option<f64>| Size::new(room.unwrap_or(170.), 12.),
+    )
+    .unwrap();
+    let f = l.frame("t").unwrap();
+    assert!(f.x >= 0. && f.size.width <= 170. + 1e-9);
+}
+
+#[test]
+fn a_grid_cell_wider_than_its_column_overhangs_the_far_edge() {
+    let t = grid(3, [column([]).width(Len::Px(108.5)).id("c")]).id("g");
+    let l = resolve(&t, Some(Size::new(135.5, 62.4)), Default::default()).unwrap();
+    assert_eq!(l.frame("c").unwrap().x, 0.);
+}
+
+#[test]
+fn growth_without_a_declared_maximum_is_not_capped_at_a_magic_number() {
+    let t = row([leaf(1., 1.).id("a").grow(1.)]).id("r");
+    let l = resolve(
+        &t,
+        Some(Size::new(3e6, 1.)),
+        Limits {
+            extent: 5e6,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(l.frame("a").unwrap().size.width, 3e6);
+}

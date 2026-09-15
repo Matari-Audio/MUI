@@ -47,7 +47,7 @@ pub enum Edit {
 /// runtime remembers what is hovered, held, and mid-animation.
 pub struct Ui {
     pub theme: Theme,
-    pub font: Option<Arc<Vec<u8>>>,
+    pub font: Option<Arc<[u8]>>,
     interaction: Interaction,
     hit: Hit,
     scene: Option<ResolvedScene>,
@@ -57,7 +57,7 @@ pub struct Ui {
     /// under a `~` prefix so a widget id cannot collide with one.
     // ponytail: never pruned -- bounded by the ids an app ever uses; retain
     // against the keys a frame touched if a generated-id list grows.
-    motion: BTreeMap<String, Vec<Spring>>,
+    motion: BTreeMap<String, Vec<Option<Spring>>>,
     text_cache: TextCache,
     /// Per scroll node: how far its children are slid.
     scrolls: BTreeMap<String, [f64; 2]>,
@@ -72,7 +72,11 @@ pub struct Ui {
     double: Option<String>,
     last_press: Option<(String, f64)>,
     focus: Option<String>,
+    /// Gesture edges waiting for a frame that resolves. A frame that errors
+    /// leaves them queued rather than dropping a host's `End`.
     edits: Vec<(String, Edit)>,
+    /// The edges the last successful frame handed out, for [`Ui::edit`].
+    delivered: Vec<(String, Edit)>,
     /// An `End` owed because the gesture was cancelled, not released.
     cancelled: Option<String>,
     keys: Vec<KeyPress>,
@@ -101,6 +105,7 @@ impl Ui {
             last_press: None,
             focus: None,
             edits: Vec::new(),
+            delivered: Vec::new(),
             cancelled: None,
             keys: Vec::new(),
             typed: String::new(),
@@ -109,8 +114,11 @@ impl Ui {
             time: 0.0,
         }
     }
-    pub fn font(mut self, font: impl Into<Arc<Vec<u8>>>) -> Self {
-        self.font = Some(font.into());
+    /// Set the font blob. Bytes no font parser accepts are dropped: the
+    /// fontless path is measured and drawn, a bad blob is not.
+    pub fn font(mut self, font: impl Into<Arc<[u8]>>) -> Self {
+        let bytes = font.into();
+        self.font = mui_text::axes(&bytes).is_ok().then_some(bytes);
         self
     }
     /// What the last frame resolved to, for anything drawn on top of it.
@@ -140,7 +148,10 @@ impl Ui {
     /// let el = slider(&mut ui, "cutoff", "Cutoff", &mut cutoff, 0.0..=1.0);
     /// ```
     pub fn edit(&self, id: &str) -> Option<Edit> {
-        self.edits.iter().find(|(k, _)| k == id).map(|(_, e)| *e)
+        self.delivered
+            .iter()
+            .find(|(k, _)| k == id)
+            .map(|(_, e)| *e)
     }
 
     /// A keyed spring anyone can read while building the tree: pass the value
@@ -157,8 +168,8 @@ impl Ui {
         let s = self
             .motion
             .entry(format!("~{id}"))
-            .or_insert_with(|| vec![seed(spring, target)]);
-        let s = &mut s[0];
+            .or_insert_with(|| vec![Some(seed(spring, target))]);
+        let s = s[0].get_or_insert_with(|| seed(spring, target));
         s.to(target);
         s.value
     }
@@ -269,7 +280,7 @@ impl Ui {
             .keys
             .iter()
             .filter(|k| scene.surface(k).is_some_and(|s| s.focusable))
-            .cloned()
+            .map(|k| k.to_string())
             .collect();
         if stops.is_empty() {
             return;
@@ -306,8 +317,13 @@ impl Ui {
         } else {
             r.drag_delta.x
         };
-        let next =
-            (*value + d / px * (range.end() - range.start())).clamp(*range.start(), *range.end());
+        // An inverted range (`1.0..=0.0`) is a legitimate downward control and
+        // the delta math already reverses for it; only `clamp` needs the
+        // bounds in order, since it panics on `min > max`.
+        let next = (*value + d / px * (range.end() - range.start())).clamp(
+            range.start().min(*range.end()),
+            range.start().max(*range.end()),
+        );
         let changed = next != *value;
         *value = next;
         changed
@@ -334,12 +350,10 @@ impl Ui {
         // A gesture is exactly the span a target is captured for, so the two
         // edges are the two ends of that capture -- plus the one a `cancel`
         // stole before this frame could see it.
-        self.edits = self
-            .cancelled
-            .take()
-            .map(|k| (k, Edit::End))
-            .into_iter()
-            .collect();
+        // Extend rather than assign: an edge computed for a frame that then
+        // failed to resolve stays queued for the next one that does.
+        self.edits
+            .extend(self.cancelled.take().map(|k| (k, Edit::End)));
         if prev_held != held {
             self.edits.extend(prev_held.clone().map(|k| (k, Edit::End)));
             self.edits.extend(held.clone().map(|k| (k, Edit::Begin)));
@@ -435,7 +449,9 @@ impl Ui {
         let pal = self.theme.palette;
         animating |= transitions(&mut root, &pal, &mut self.motion, dt);
         for (_, s) in self.motion.iter_mut().filter(|(k, _)| k.starts_with('~')) {
-            animating |= s[0].step(dt);
+            if let Some(s) = s[0].as_mut() {
+                animating |= s.step(dt);
+            }
         }
         let springs = &self.springs;
         let scrolls = &self.scrolls;
@@ -455,7 +471,7 @@ impl Ui {
         let mut hit = Hit::default();
         for k in scene.keys.iter().filter(|k| !k.starts_with('/')) {
             if let Some(s) = scene.surface(k) {
-                hit.push_clipped(k.clone(), &s.path, s.clip)?;
+                hit.push_clipped(k.to_string(), &s.path, s.clip)?;
             }
         }
         self.hit = hit;
@@ -472,13 +488,14 @@ impl Ui {
             c => c,
         };
 
+        self.delivered = std::mem::take(&mut self.edits);
         self.scene = Some(scene);
         Ok(Frame {
             scene: self.scene.as_ref().expect("just set"),
             animating,
             tip,
             cursor,
-            edits: self.edits.clone(),
+            edits: self.delivered.clone(),
             clipboard: self.copied.take(),
         })
     }
@@ -486,7 +503,10 @@ impl Ui {
     /// Send the wheel to the innermost scrollable surface under the pointer.
     /// It lands on the next frame's tree, the same frame late a release is.
     fn wheel(&mut self, scene: &ResolvedScene, wheel: Point) {
-        if wheel.x == 0.0 && wheel.y == 0.0 {
+        // A non-finite delta would land in `self.scrolls` for good: `clamp`
+        // returns a NaN receiver unchanged, and every later frame would fail
+        // validation on the offset.
+        if !(wheel.x.is_finite() && wheel.y.is_finite()) || (wheel.x == 0.0 && wheel.y == 0.0) {
             return;
         }
         let Some(p) = self.pointer.pos else { return };
@@ -505,7 +525,7 @@ impl Ui {
             if max[0] <= 0.0 && max[1] <= 0.0 {
                 continue;
             }
-            let at = self.scrolls.entry(k.clone()).or_insert([0.0, 0.0]);
+            let at = self.scrolls.entry(k.to_string()).or_insert([0.0, 0.0]);
             at[0] = (at[0] + wheel.x).clamp(0.0, max[0]);
             at[1] = (at[1] + wheel.y).clamp(0.0, max[1]);
             return;
@@ -532,20 +552,20 @@ fn channels(e: &mut Element, pal: &Palette, ch: &mut impl FnMut(usize, f64) -> f
         e.style.fill = Fill::Color(Color::oklcha(o[0], o[1], o[2], o[3]));
     }
     if let Some(w) = e.style.stroke.as_mut().and_then(|s| s.width.as_mut()) {
-        *w = ch(4, *w);
+        *w = ch(4, *w).max(0.0);
     }
     if let Radius::Px(r) = &mut e.style.radius {
-        *r = ch(5, *r);
+        *r = ch(5, *r).max(0.0);
     }
     if let Some(t) = e.text_size.as_mut() {
-        *t = ch(6, *t);
+        *t = ch(6, *t).max(0.0);
     }
     if let Some(s) = e.style.shadow.as_mut() {
-        s.blur = ch(7, s.blur);
+        s.blur = ch(7, s.blur).max(0.0);
     }
     for (i, (d, _)) in e.style.shells.iter_mut().enumerate() {
         if let Spacing::Px(v) = d {
-            *v = ch(8 + i, *v);
+            *v = ch(8 + i, *v).max(0.0);
         }
     }
 }
@@ -556,17 +576,20 @@ fn channels(e: &mut Element, pal: &Palette, ch: &mut impl FnMut(usize, f64) -> f
 fn transitions(
     n: &mut El,
     pal: &Palette,
-    motion: &mut BTreeMap<String, Vec<Spring>>,
+    motion: &mut BTreeMap<String, Vec<Option<Spring>>>,
     dt: f64,
 ) -> bool {
     let mut animating = false;
     if let (Some(k), Some(spring)) = (n.key().map(str::to_owned), n.payload().transition) {
         let list = motion.entry(k).or_default();
         channels(n.payload_mut(), pal, &mut |i, declared| {
+            // Each slot is seeded from its own declared value the first time
+            // it is touched: `channels` skips channels a node has no paint
+            // for, so a blanket resize would seed them from another channel.
             if list.len() <= i {
-                list.resize(i + 1, seed(spring, declared));
+                list.resize(i + 1, None);
             }
-            let s = &mut list[i];
+            let s = list[i].get_or_insert_with(|| seed(spring, declared));
             // Hue is an angle: take the short way round rather than
             // sweeping 350 degrees back to 10.
             if i == 2 {
@@ -912,5 +935,119 @@ mod tests {
         assert_ne!(f.scene.paint[0].paint, base);
         let _ = ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
         assert!(ui.get("b").released);
+    }
+
+    #[test]
+    fn a_bouncy_transition_never_undershoots_a_channel_below_zero() {
+        let mut ui = Ui::new(Theme::DEFAULT);
+        let tree = |r: f64| {
+            leaf(40., 40.)
+                .fill(Role::Raised)
+                .radius(r)
+                .stroke(Role::Primary)
+                .stroke_width(r / 4.)
+                .transition(Spring::new(0.3, 0.6))
+                .id("card")
+        };
+        ui.frame(tree(24.), None, PointerInput::default(), 0.016)
+            .unwrap();
+        for i in 0..120 {
+            ui.frame(tree(0.), None, PointerInput::default(), 0.016)
+                .unwrap_or_else(|e| panic!("frame {i} failed: {e:?}"));
+        }
+    }
+
+    #[test]
+    fn a_font_no_parser_accepts_is_dropped_rather_than_bricking_every_frame() {
+        let mut ui = Ui::new(Theme::DEFAULT).font(vec![0u8; 64]);
+        ui.frame(
+            column([text("hello")]),
+            None,
+            PointerInput::default(),
+            0.016,
+        )
+        .expect("the fontless path, not an error");
+    }
+
+    #[test]
+    fn a_transitioning_node_seeds_each_channel_from_its_own_declaration() {
+        let mut ui = Ui::new(Theme::DEFAULT);
+        let stroked = || {
+            leaf(40., 40.)
+                .stroke(Role::Primary)
+                .stroke_width(12.)
+                .transition(Spring::DEFAULT)
+                .id("n")
+        };
+        ui.frame(stroked(), None, PointerInput::default(), 0.016)
+            .unwrap();
+        let f = ui
+            .frame(
+                stroked().fill(Role::Primary),
+                None,
+                PointerInput::default(),
+                0.016,
+            )
+            .unwrap();
+        let Some(Paint::Solid(c)) = f.scene.paint.iter().find_map(|p| match &p.paint {
+            Paint::Solid(c) => Some(Paint::Solid(*c)),
+            _ => None,
+        }) else {
+            panic!("expected a solid fill");
+        };
+        assert!(
+            c.lightness() <= 1.0 && c.alpha() <= 1.0,
+            "fill sprang in from the stroke width: {c:?}"
+        );
+    }
+
+    #[test]
+    fn a_gesture_edge_survives_a_frame_that_failed_to_resolve() {
+        let mut ui = Ui::new(Theme::DEFAULT);
+        let good = || leaf(40., 40.).fill(Role::Raised).id("b");
+        let bad = || good().radius(-1.);
+        ui.frame(good(), None, at(10., 10., false), 0.016).unwrap();
+        assert!(
+            ui.frame(bad(), None, at(10., 10., true), 0.016).is_err(),
+            "a negative radius does not resolve"
+        );
+        let f = ui.frame(good(), None, at(10., 10., true), 0.016).unwrap();
+        assert_eq!(f.edits, vec![("b".to_owned(), Edit::Begin)]);
+    }
+
+    #[test]
+    fn a_non_finite_wheel_delta_is_ignored() {
+        let mut ui = Ui::new(Theme::DEFAULT);
+        let tree = || {
+            column([leaf(20., 100.), leaf(20., 100.)])
+                .height(50.)
+                .scroll()
+                .id("list")
+        };
+        let wheel = |y: f64| Input {
+            pointer: at(10., 10., false),
+            wheel: Point::new(0., y),
+            ..Input::default()
+        };
+        ui.frame(tree(), None, PointerInput::default(), 0.016)
+            .unwrap();
+        ui.frame(tree(), None, wheel(f64::NAN), 0.016).unwrap();
+        assert_eq!(ui.scroll("list"), [0., 0.]);
+        ui.frame(tree(), None, wheel(30.), 0.016)
+            .expect("and the surface still scrolls afterwards");
+        assert_eq!(ui.scroll("list"), [0., 30.]);
+    }
+
+    #[test]
+    fn a_degenerate_or_inverted_range_resolves_and_clamps() {
+        let mut ui = Ui::new(Theme::DEFAULT);
+        let mut v = 1.0;
+        let el = crate::widgets::slider(&mut ui, "fixed", "Fixed", &mut v, 1.0..=1.0);
+        ui.frame(el, None, PointerInput::default(), 0.016)
+            .expect("a fixed parameter is still a tree");
+        let mut down = 0.5;
+        let el = crate::widgets::slider(&mut ui, "down", "Down", &mut down, 1.0..=0.0);
+        ui.frame(el, None, PointerInput::default(), 0.016)
+            .expect("and so is a downward one");
     }
 }

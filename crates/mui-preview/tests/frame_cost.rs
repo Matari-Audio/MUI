@@ -29,7 +29,7 @@ impl mui::vello::Canvas for Sink {
     fn fill_blurred_rounded_rect(&mut self, _: &mui::vello::kurbo::Rect, _: f32, _: f32) {}
     fn push_clip(&mut self, _: &mui::vello::kurbo::BezPath) {}
     fn pop_clip(&mut self) {}
-    fn glyphs(&mut self, _: &std::sync::Arc<Vec<u8>>, _: f32, _: (f64, f64), _: &[(u32, f32)]) {}
+    fn glyphs(&mut self, _: &mui::core::Text) {}
 }
 
 fn ms(mut f: impl FnMut()) -> f64 {

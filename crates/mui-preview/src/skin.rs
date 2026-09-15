@@ -54,10 +54,10 @@ mod tests {
     /// the failure shows up as an unreadable label three crates away.
     #[test]
     fn the_skin_is_a_valid_theme_in_both_modes() {
-        assert!(SKIN.valid());
+        assert!(SKIN.is_valid());
         for light in [false, true] {
             let p = skin(light);
-            assert!(p.valid());
+            assert!(p.is_valid());
             // The brand roles were actually declared. `Palette::NEUTRAL`
             // leaves them grey, and a grey primary is the shape of a theme
             // file that was half filled in.

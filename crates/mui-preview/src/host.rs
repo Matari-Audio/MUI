@@ -140,8 +140,8 @@ impl Gpu {
 
     /// Clear the scene and hand it over as a `Canvas`. Returning it rather
     /// than exposing it as a field is what makes forgetting the reset
-    /// impossible; the `Resources` ride along so text draws as glyph runs
-    /// out of Vello's atlas rather than as filled outlines.
+    /// impossible; the `Resources` ride along so a glyph run reuses Vello's
+    /// hinted-outline cache rather than re-hinting every frame.
     pub fn begin(&mut self) -> mui::vello::Gpu<'_> {
         self.vello.reset();
         mui::vello::Gpu {

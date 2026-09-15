@@ -27,7 +27,7 @@ pub struct SceneSpec {
     pub offsets: OffsetOptions,
     /// Font bytes for `text(..)` leaves. Without one, text is boxed at an
     /// estimate and draws nothing, so a layout test needs no font file.
-    pub font: Option<Arc<Vec<u8>>>,
+    pub font: Option<Arc<[u8]>>,
     /// Curve tolerance for glyph outlines.
     pub tolerance: f64,
 }
@@ -52,7 +52,7 @@ impl SceneSpec {
         self.offered = Some(size);
         self
     }
-    pub fn font(mut self, font: impl Into<Arc<Vec<u8>>>) -> Self {
+    pub fn font(mut self, font: impl Into<Arc<[u8]>>) -> Self {
         self.font = Some(font.into());
         self
     }
@@ -77,7 +77,7 @@ pub enum Layer {
 /// A text layer's glyphs, for a renderer that hints and caches its own.
 #[derive(Clone, Debug)]
 pub struct Text {
-    pub font: Arc<Vec<u8>>,
+    pub font: Arc<[u8]>,
     pub size: f32,
     /// Baseline origin.
     pub origin: Point,
@@ -97,7 +97,7 @@ impl PartialEq for Text {
 /// when it has none: hit-testing and state keep working without names.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Painted {
-    pub key: String,
+    pub key: Arc<str>,
     pub layer: Layer,
     pub path: Path,
     pub paint: Paint,
@@ -108,14 +108,17 @@ pub struct Painted {
     pub width: f64,
     /// Gaussian blur radius, shadows only.
     pub blur: f64,
-    /// Present on `Layer::Text`: the same ink as `path`, as glyphs.
+    /// Present on `Layer::Text` whenever [`SceneSpec::font`] is set: the
+    /// layer's ink, as glyphs. `path` is then empty -- a renderer that draws
+    /// glyphs never looks at it, and translating every run's outline into a
+    /// fresh path is the most expensive thing the walk can do.
     pub text: Option<Text>,
 }
 
 /// A node's outline, for hit-testing and for anything that derives from it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ResolvedSurface {
-    pub key: String,
+    pub key: Arc<str>,
     pub frame: Frame,
     pub path: Path,
     pub bounds: Option<Bounds>,
@@ -139,8 +142,8 @@ pub struct ResolvedScene {
     pub layout: Layout,
     pub paint: Vec<Painted>,
     /// Every surface key in tree order, which is also z-order.
-    pub keys: Vec<String>,
-    surfaces: BTreeMap<String, ResolvedSurface>,
+    pub keys: Vec<Arc<str>>,
+    surfaces: BTreeMap<Arc<str>, ResolvedSurface>,
 }
 impl ResolvedScene {
     pub fn surface(&self, key: &str) -> Option<&ResolvedSurface> {
@@ -162,7 +165,18 @@ pub enum SceneError {
 }
 impl std::fmt::Display for SceneError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "scene: {self:?}")
+        match self {
+            Self::InvalidTheme => {
+                f.write_str("the theme's corners, spacing or palette are unusable")
+            }
+            Self::InvalidRadius => f.write_str(
+                "a corner radius, shell inset or stroke width is negative or not finite",
+            ),
+            Self::Layout(e) => write!(f, "{e}"),
+            Self::Geometry(e) => write!(f, "{e}"),
+            Self::Text(e) => write!(f, "{e}"),
+            Self::RevisionExhausted => f.write_str("the scene revision counter overflowed"),
+        }
     }
 }
 impl std::error::Error for SceneError {
@@ -210,11 +224,11 @@ fn count(n: &El) -> usize {
 #[derive(Debug, Default)]
 pub struct TextCache {
     font: usize,
-    runs: HashMap<(String, u64), TextRun>,
+    runs: HashMap<String, HashMap<u64, TextRun>>,
 }
 impl TextCache {
     pub fn len(&self) -> usize {
-        self.runs.len()
+        self.runs.values().map(HashMap::len).sum()
     }
     pub fn is_empty(&self) -> bool {
         self.runs.is_empty()
@@ -224,19 +238,30 @@ impl TextCache {
 struct Runs<'a> {
     font: Option<&'a [u8]>,
     tolerance: f64,
-    cache: &'a mut HashMap<(String, u64), TextRun>,
+    cache: &'a mut HashMap<String, HashMap<u64, TextRun>>,
 }
 impl Runs<'_> {
     fn run(&mut self, text: &str, size: f64) -> Result<Option<&TextRun>, mui_text::Error> {
         let Some(font) = self.font else {
             return Ok(None);
         };
-        let key = (text.to_owned(), size.to_bits());
-        if !self.cache.contains_key(&key) {
+        // Nested so a hit borrows `text` instead of allocating a key for it:
+        // `run` is called several times per line, per frame.
+        let bits = size.to_bits();
+        if self.cache.get(text).is_none_or(|m| !m.contains_key(&bits)) {
             let run = mui_text::text_run(font, text, size, &[], self.tolerance)?;
-            self.cache.insert(key.clone(), run);
+            // ponytail: an unbounded cache holds every string ever shown, so
+            // flush the lot at a ceiling -- one cold frame. Per-entry frame
+            // stamping is the upgrade if that ever shows.
+            if self.cache.len() > 4096 {
+                self.cache.clear();
+            }
+            self.cache
+                .entry(text.to_owned())
+                .or_default()
+                .insert(bits, run);
         }
-        Ok(self.cache.get(&key))
+        Ok(self.cache.get(text).and_then(|m| m.get(&bits)))
     }
     /// The lines `text` breaks into at `max` width, capped at `cap` of them
     /// with an ellipsis on the last. One line when it fits, or when there is
@@ -314,10 +339,10 @@ struct Walk<'a> {
     frames: &'a [Frame],
     runs: Runs<'a>,
     i: usize,
-    key: String,
+    key: Arc<str>,
     paint: Vec<Painted>,
-    keys: Vec<String>,
-    surfaces: BTreeMap<String, ResolvedSurface>,
+    keys: Vec<Arc<str>>,
+    surfaces: BTreeMap<Arc<str>, ResolvedSurface>,
     deferred: Vec<Deferred<'a>>,
     /// The baseline a `.baseline()` parent asks its text children to sit on.
     base_y: Option<f64>,
@@ -405,7 +430,9 @@ impl<'a> Walk<'a> {
         let frame = self.frames[self.i];
         let at = self.i;
         self.i += 1;
-        let key = n.key().map_or_else(|| path.to_owned(), str::to_owned);
+        // ponytail: one `Arc<str>` per node per frame, cloned four times
+        // instead of four heap copies; interning across frames is the upgrade.
+        let key: Arc<str> = n.key().map_or_else(|| Arc::from(path), Arc::from);
         let th = self.spec.theme;
         let e = n.payload();
         let s = &e.style;
@@ -483,8 +510,15 @@ impl<'a> Walk<'a> {
                 } else {
                     s.fill.clone()
                 };
-                self.paint
-                    .retain(|p| !(p.key == key && p.layer == Layer::Fill));
+                // The Fill this node pushed a few lines up, not a scan of
+                // every node painted so far.
+                if let Some(i) = self
+                    .paint
+                    .iter()
+                    .rposition(|p| p.key == key && p.layer == Layer::Fill)
+                {
+                    self.paint.remove(i);
+                }
                 bg = under;
                 let lines = self.runs.lines(t, size, frame.size.width, e.lines);
                 let n = lines.len();
@@ -510,7 +544,6 @@ impl<'a> Walk<'a> {
                         }
                     };
                     let origin = Point::new(frame.x, dy);
-                    let glyphs = run.path.rigid_transform(origin, 0.0)?;
                     let ids: Arc<[(u32, f32)]> =
                         run.glyphs.iter().map(|&(g, x)| (g, x as f32)).collect();
                     let text = self.spec.font.clone().map(|font| Text {
@@ -519,7 +552,12 @@ impl<'a> Walk<'a> {
                         origin,
                         glyphs: ids,
                     });
-                    if let Some(p) = self.push(Layer::Text, glyphs, None, &ink, under) {
+                    let ink_path = if text.is_some() {
+                        Path::default()
+                    } else {
+                        run.path.rigid_transform(origin, 0.0)?
+                    };
+                    if let Some(p) = self.push(Layer::Text, ink_path, None, &ink, under) {
                         p.text = text;
                     }
                 }
@@ -558,7 +596,12 @@ impl<'a> Walk<'a> {
             ResolvedSurface {
                 key: key.clone(),
                 frame,
-                bounds: Bounds::from_points(outline.flatten(0.5, 100_000)?.concat()),
+                bounds: match rect {
+                    // A rounded rectangle already knows its bounds; only a
+                    // welded outline has to be flattened to find them.
+                    Some(r) => Some(r.bounds()),
+                    None => Bounds::from_points(outline.flatten(0.5, 100_000)?.concat()),
+                },
                 path: outline.clone(),
                 rect,
                 topology_changed: changed,
@@ -652,9 +695,10 @@ fn fit(
     s
 }
 
-/// Every text node a row squeezed narrower than the width it measured at:
-/// the solver already wrapped each paragraph to its room in the first pass,
-/// so only a flex share that came out narrower than that is left to fix.
+/// Every text node a row squeezed narrower than the width it measured at.
+/// This keys on the text node's *own* frame, so a squeeze that lands on an
+/// ancestor is invisible here: mui-layout has to clamp a container's children
+/// to its cross size for that case to show up at all.
 fn wrap_hints(
     n: &El,
     frames: &[Frame],
@@ -682,16 +726,16 @@ pub fn resolve_scene_with(
     spec: &SceneSpec,
     text: &mut TextCache,
 ) -> Result<ResolvedScene, SceneError> {
-    if !spec.theme.valid() {
+    if !spec.theme.is_valid() {
         return Err(SceneError::InvalidTheme);
     }
-    let font_id = spec.font.as_ref().map_or(0, |f| Arc::as_ptr(f) as usize);
+    let font_id = spec.font.as_ref().map_or(0, |f| f.as_ptr() as usize);
     if text.font != font_id {
         text.runs.clear();
         text.font = font_id;
     }
     let mut runs = Runs {
-        font: spec.font.as_deref().map(Vec::as_slice),
+        font: spec.font.as_deref(),
         tolerance: spec.tolerance,
         cache: &mut text.runs,
     };
@@ -734,7 +778,7 @@ pub fn resolve_scene_with(
         frames: layout.all(),
         runs,
         i: 0,
-        key: String::new(),
+        key: Arc::from(""),
         paint: Vec::new(),
         keys: Vec::new(),
         surfaces: BTreeMap::new(),
@@ -823,7 +867,7 @@ mod tests {
         let r = shell.rect.unwrap();
         assert!((tab.radius() - r.radius() - 12.).abs() < 1e-9);
         assert!((r.bounds().min.x - tab.bounds().min.x - 12.).abs() < 1e-9);
-        let layers: Vec<_> = s.paint.iter().map(|p| (p.key.as_str(), p.layer)).collect();
+        let layers: Vec<_> = s.paint.iter().map(|p| (&*p.key, p.layer)).collect();
         assert_eq!(layers, [("root", Layer::Fill), ("tab", Layer::Shell(0))]);
         assert!(
             s.surface("/0/1").is_some(),
@@ -855,7 +899,7 @@ mod tests {
     fn roles_resolve_against_the_palette_and_ink_reads_on_its_ground() {
         let root = column([text("hi").id("t")]).fill(Role::Primary).id("card");
         let mut sp = SceneSpec::new(root);
-        sp.font = Some(Arc::new(epaint_default_fonts::HACK_REGULAR.to_vec()));
+        sp.font = Some(Arc::from(epaint_default_fonts::HACK_REGULAR));
         let s = resolve_scene(&sp).unwrap();
         let th = Theme::default();
         let card = &s.paint[0];
@@ -933,14 +977,14 @@ mod feature_tests {
         .id("curve");
         let root = column([list, tip, draw]).id("root");
         let s = resolve_scene(&SceneSpec::new(root)).unwrap();
-        let layers: Vec<_> = s.paint.iter().map(|p| (p.key.as_str(), p.layer)).collect();
+        let layers: Vec<_> = s.paint.iter().map(|p| (&*p.key, p.layer)).collect();
         let at = |k: &str, l: Layer| layers.iter().position(|x| *x == (k, l)).unwrap();
         assert!(at("list", Layer::Clip) < at("list", Layer::Unclip));
         assert_eq!(*layers.last().unwrap(), ("tip", Layer::Fill), "{layers:?}");
         assert!(s
             .paint
             .iter()
-            .any(|p| p.key == "curve" && p.layer == Layer::Draw(0) && p.width == 2.));
+            .any(|p| &*p.key == "curve" && p.layer == Layer::Draw(0) && p.width == 2.));
         let list = s.surface("list").unwrap();
         assert_eq!(
             list.content,
@@ -951,11 +995,11 @@ mod feature_tests {
         assert_eq!(s.surface("a").unwrap().clip, Some(list.bounds.unwrap()));
         assert_eq!(s.surface("a").unwrap().cursor, Some(Cursor::Hand));
         assert_eq!(s.layout.frame("a").unwrap().y, -25.);
-        assert_eq!(s.keys.last().map(String::as_str), Some("tip"));
+        assert_eq!(s.keys.last().map(|k| &**k), Some("tip"));
     }
 
-    fn font() -> Arc<Vec<u8>> {
-        Arc::new(epaint_default_fonts::HACK_REGULAR.to_vec())
+    fn font() -> Arc<[u8]> {
+        Arc::from(epaint_default_fonts::HACK_REGULAR)
     }
 
     #[test]
@@ -971,7 +1015,7 @@ mod feature_tests {
         let y = |k: &str| {
             s.paint
                 .iter()
-                .find(|p| p.key == k && p.layer == Layer::Text)
+                .find(|p| &*p.key == k && p.layer == Layer::Text)
                 .unwrap()
                 .text
                 .as_ref()
@@ -989,7 +1033,7 @@ mod feature_tests {
         let py = |k: &str| {
             p.paint
                 .iter()
-                .find(|x| x.key == k && x.layer == Layer::Text)
+                .find(|x| &*x.key == k && x.layer == Layer::Text)
                 .unwrap()
                 .text
                 .as_ref()
@@ -1039,7 +1083,7 @@ mod feature_tests {
         let lines = |k| {
             s.paint
                 .iter()
-                .filter(|p| p.key == k && p.layer == Layer::Text)
+                .filter(|p| &*p.key == k && p.layer == Layer::Text)
                 .count()
         };
         assert!(
@@ -1065,7 +1109,7 @@ mod feature_tests {
         let lines = s
             .paint
             .iter()
-            .filter(|p| p.key == "t" && p.layer == Layer::Text)
+            .filter(|p| &*p.key == "t" && p.layer == Layer::Text)
             .count();
         assert!(lines > 3, "wrapped into {lines} lines");
         let f = s.layout.frame("t").unwrap().size;
@@ -1076,7 +1120,7 @@ mod feature_tests {
         assert_eq!(
             c.paint
                 .iter()
-                .filter(|p| p.key == "t" && p.layer == Layer::Text)
+                .filter(|p| &*p.key == "t" && p.layer == Layer::Text)
                 .count(),
             2,
             "capped at two lines"
@@ -1084,10 +1128,73 @@ mod feature_tests {
     }
 
     #[test]
+    fn a_rect_surface_reads_its_bounds_off_the_rect() {
+        let s = resolve_scene(&SceneSpec::new(column([leaf(40., 20.).id("k")]))).unwrap();
+        let k = s.surface("k").unwrap();
+        assert_eq!(k.bounds.unwrap(), k.rect.unwrap().bounds());
+    }
+
+    #[test]
+    fn a_text_node_keeps_no_fill_layer_and_no_glyph_path() {
+        let root = column([text("hi").fill(Role::Primary).id("t")]);
+        let mut sp = SceneSpec::new(root);
+        sp.font = Some(font());
+        let s = resolve_scene(&sp).unwrap();
+        assert!(
+            !s.paint
+                .iter()
+                .any(|p| &*p.key == "t" && p.layer == Layer::Fill),
+            "a label's fill is its ink, not a box: {:?}",
+            s.paint.iter().map(|p| p.layer).collect::<Vec<_>>()
+        );
+        let ink = s.paint.iter().find(|p| p.layer == Layer::Text).unwrap();
+        assert_eq!(ink.paint, Paint::Solid(Theme::default().palette.primary()));
+        assert!(ink.text.is_some(), "the glyphs are the ink");
+        assert!(
+            ink.path.commands.is_empty(),
+            "and the outline is not built twice"
+        );
+    }
+
+    #[test]
+    fn a_canvas_closure_may_capture_a_non_send_handle() {
+        let seen = std::rc::Rc::new(std::cell::Cell::new(0));
+        let c = seen.clone();
+        let root = canvas(move |_| {
+            c.set(c.get() + 1);
+            Vec::new()
+        })
+        .size(10., 10.);
+        resolve_scene(&SceneSpec::new(root)).unwrap();
+        assert_eq!(seen.get(), 1);
+    }
+
+    #[test]
+    fn text_cache_keys_on_size_as_well_as_string() {
+        let mut cache = TextCache::default();
+        let mut sp = SceneSpec::new(row([
+            text("hi").text_size(12.).id("a"),
+            text("hi").text_size(24.).id("b"),
+        ]));
+        sp.font = Some(font());
+        resolve_scene_with(&sp, &mut cache).unwrap();
+        assert_eq!(cache.len(), 2, "one string, two sizes");
+    }
+
+    #[test]
+    fn errors_read_as_sentences_not_as_debug() {
+        let e = resolve_scene(&SceneSpec::new(leaf(f64::NAN, 1.))).unwrap_err();
+        let s = e.to_string();
+        assert!(!s.contains("Layout("), "{s}");
+        assert_eq!(s, mui_layout::Error::InvalidValue.to_string());
+        assert!(SceneError::InvalidTheme.to_string().contains("theme"));
+    }
+
+    #[test]
     fn text_cache_survives_frames_and_carries_glyphs() {
         let mut cache = TextCache::default();
         let mut sp = SceneSpec::new(row([text("hi").id("t")]));
-        sp.font = Some(Arc::new(epaint_default_fonts::HACK_REGULAR.to_vec()));
+        sp.font = Some(Arc::from(epaint_default_fonts::HACK_REGULAR));
         let s = resolve_scene_with(&sp, &mut cache).unwrap();
         assert_eq!(cache.len(), 1);
         let t = s

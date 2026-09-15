@@ -33,8 +33,8 @@ El tree  (row! / col! / stack! / grid!, Styled fills, roles, shells, welds,
    |     roles  -> Palette                            ink resolves on its ground
    |     image  -> Fill::Image                        straight RGBA, fitted to
    |                                                  the node's own outline
-   |                                                  (vello_cpu only; Gpu
-   |                                                  flattens to a grey)
+   |                                                  (vello_cpu: pixmap; vello_hybrid: atlas id,
+   |                                                  no Atlas -> a grey stand-in)
    |
    v  ResolvedScene         paint: Vec<Painted>  (shadow, fill, shells, stroke,
    |                        text, draws, clip/unclip); floats are appended after
@@ -50,9 +50,9 @@ El tree  (row! / col! / stack! / grid!, Styled fills, roles, shells, welds,
    v  mui-vello paint       Canvas: Gpu { scene, resources } over vello_hybrid,
                             Cpu { ctx, resources } over vello_cpu.
                             Fill / stroke / blurred rect / push_clip / pop_clip,
-                            and text as a hinted glyph run through Vello's atlas
-                            (a font blob is interned by Arc pointer so the
-                            atlas is not rebuilt every frame). paint_cached
+                            and text as a hinted glyph run (a font blob is
+                            interned by Arc pointer, so Vello's hinted-outline
+                            cache survives the frame). paint_cached
                             keeps each Painted's arc-to-cubic conversion in a
                             PathCache keyed on a fingerprint of the path
                             itself, so a still frame re-encodes without

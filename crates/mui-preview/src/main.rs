@@ -115,7 +115,7 @@ fn parse_theme(src: &str) -> (Theme, Vec<String>) {
     }
     // A theme that cannot derive a legible surface would fail every frame from
     // inside `Ui::frame`, three crates from the file that caused it.
-    if !t.valid() {
+    if !t.is_valid() {
         bad.push("not a usable theme; keeping the compiled-in skin".into());
         t = skin::SKIN;
     }
@@ -132,7 +132,7 @@ fn inspect(
     scene: &mui::core::ResolvedScene,
     xf: Affine,
     palette: &Palette,
-    font: &Arc<Vec<u8>>,
+    font: &Arc<[u8]>,
     pointer: Option<Point>,
     height: f64,
 ) {
@@ -173,15 +173,19 @@ fn inspect(
     let Ok(run) = mui_text::text_run(font, &label, LABEL, &[], mui::vello::ARC_TOLERANCE) else {
         return;
     };
-    let glyphs: Vec<(u32, f32)> = run.glyphs.iter().map(|&(id, x)| (id, x as f32)).collect();
-    canvas.glyphs(font, LABEL as f32, (SIDEBAR + 12.0, height - 12.0), &glyphs);
+    canvas.glyphs(&mui::core::Text {
+        font: font.clone(),
+        size: LABEL as f32,
+        origin: Point::new(SIDEBAR + 12.0, height - 12.0),
+        glyphs: run.glyphs.iter().map(|&(id, x)| (id, x as f32)).collect(),
+    });
 }
 
 struct App {
     ui: Ui,
     /// The gallery's own font, kept so the inspector can set its own labels
     /// without going through the scene.
-    font: Arc<Vec<u8>>,
+    font: Arc<[u8]>,
     scenes: Vec<Box<dyn PreviewScene>>,
     selected: usize,
     /// Where the specimen was dragged to, relative to centred.
@@ -226,7 +230,7 @@ struct App {
 
 impl App {
     fn new() -> Self {
-        let font = Arc::new(epaint_default_fonts::HACK_REGULAR.to_vec());
+        let font: Arc<[u8]> = Arc::from(epaint_default_fonts::HACK_REGULAR);
         Self {
             ui: Ui::new(skin::SKIN).font(font.clone()),
             font,
@@ -680,7 +684,7 @@ mod tests {
             let scene = app.ui.scene().unwrap();
             assert!(scene.paint.len() > 3, "scene {i} paints nothing");
             let stage = scene.surface("stage").unwrap().frame;
-            let stage_at = scene.keys.iter().position(|k| k == "stage").unwrap();
+            let stage_at = scene.keys.iter().position(|k| &**k == "stage").unwrap();
             let f = scene.surface(&scene.keys[stage_at + 1]).unwrap().frame;
             assert!(
                 f.x >= stage.x && f.right() <= stage.right(),

@@ -119,7 +119,7 @@ impl SpacingScale {
             SpacingToken::Xl => self.xl,
         }
     }
-    pub fn valid(self) -> bool {
+    pub fn is_valid(self) -> bool {
         [self.xs, self.s, self.m, self.l, self.xl]
             .iter()
             .all(|v| v.is_finite() && *v >= 0.0)
@@ -672,7 +672,15 @@ pub enum Error {
 }
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "layout: {self:?}")
+        match self {
+            Self::InvalidValue => {
+                f.write_str("a size, spacing or limit is negative, not finite or out of range")
+            }
+            Self::DuplicateKey(k) => write!(f, "two nodes share the id {k}"),
+            Self::BudgetExceeded => f.write_str("the tree exceeds its node or depth limit"),
+            Self::InsufficientSpace(k) => write!(f, "node {k} does not fit in the space offered"),
+            Self::RevisionExhausted => f.write_str("the layout revision counter overflowed"),
+        }
     }
 }
 impl std::error::Error for Error {}
@@ -771,11 +779,19 @@ impl<'a, P> Measured<'a, P> {
     /// Size on one axis inside `avail`, given how it is aligned there.
     fn extent(&self, vertical: bool, avail: f64, align: Align) -> f64 {
         let n = self.node;
-        let cap = |v: f64| n.maximum.map_or(v, |m| v.min(m.cross(!vertical)));
+        // A share of the parent is still never less than this subtree's floor:
+        // `height: 50%` on a padded node is a squeeze, not an error.
+        let cap = |v: f64| {
+            n.maximum
+                .map_or(v, |m| v.min(m.cross(!vertical)))
+                .max(self.floor.main(vertical))
+        };
         match n.len(vertical).fixed(avail) {
             Some(v) => cap(v),
             None if align == Align::Stretch && n.is_container() => cap(avail),
-            None => self.size.main(vertical),
+            // Content never keeps a cross extent wider than the room it was
+            // given: it would be centred half outside its own parent.
+            None => cap(self.size.main(vertical).min(avail)),
         }
     }
 }
@@ -922,7 +938,10 @@ fn measure<'a, P>(
         definite[0].map(|w| (w - padding.horizontal()).max(0.0)),
         definite[1].map(|h| (h - padding.vertical()).max(0.0)),
     ];
-    let room = [room, inner[0]].into_iter().flatten().reduce(f64::min);
+    let room = [room.map(|r| (r - padding.horizontal()).max(0.0)), inner[0]]
+        .into_iter()
+        .flatten()
+        .reduce(f64::min);
     let mut children = Vec::with_capacity(node.children().len());
     for (index, c) in node.children().iter().enumerate() {
         let align = c.align_self.unwrap_or(node.align);
@@ -956,7 +975,8 @@ fn measure<'a, P>(
                 let (ax, _) = c.anchor.unwrap_or(cell_default(node));
                 let span = c.span.clamp(1, *cols) as f64;
                 let col = inner[0].map(|w| {
-                    ((w - gap * (*cols - 1) as f64) / *cols as f64) * span + gap * (span - 1.0)
+                    ((w - gap * (*cols - 1) as f64).max(0.0) / *cols as f64) * span
+                        + gap * (span - 1.0)
                 });
                 child_room = [child_room, col].into_iter().flatten().reduce(f64::min);
                 [offer(c, false, col, ax == Align::Stretch), None]
@@ -1038,7 +1058,7 @@ fn measure<'a, P>(
             Size::new(max_of(&|c| c.floor.width), max_of(&|c| c.floor.height)),
         ),
         Kind::Grid { cols, .. } => {
-            let rows = grid_rows(&flow, *cols).len() as f64;
+            let rows = grid_rows(&flow, *cols);
             let gaps = |n: f64| (n - 1.0).max(0.0) * gap;
             let hug = |g: fn(&Measured<'_, P>) -> Size| {
                 // A spanning cell pays for its span, so its share of one
@@ -1047,13 +1067,13 @@ fn measure<'a, P>(
                     .iter()
                     .map(|c| g(c).width / c.node.span.clamp(1, *cols) as f64)
                     .fold(0.0, f64::max);
-                let tall: f64 = grid_rows(&flow, *cols)
+                let tall: f64 = rows
                     .iter()
                     .map(|r| r.iter().map(|c| g(c).height).fold(0.0, f64::max))
                     .sum();
                 Size::new(
                     widest * *cols as f64 + gaps(*cols as f64),
-                    tall + gaps(rows),
+                    tall + gaps(rows.len() as f64),
                 )
             };
             (hug(|c| c.size), hug(|c| c.floor))
@@ -1083,6 +1103,10 @@ fn measure<'a, P>(
         ),
         _ => pad(sunk),
     };
+    // A size the node declares itself is also its floor: `.size(10., 10.).pad(6.)`
+    // is a 10x10 box with no room inside, not a layout error.
+    let cap = |f: f64, l: Len| l.px().map_or(f, |v| f.min(v));
+    let floor = Size::new(cap(floor.width, node.width), cap(floor.height, node.height));
     if !size.valid(l.extent) {
         return Err(Error::BudgetExceeded);
     }
@@ -1123,7 +1147,7 @@ fn distribute<P>(children: &[&Measured<'_, P>], gap: f64, vertical: bool, inner:
     let room = |i: usize, allocated: &[f64]| {
         let c = children[i];
         let edge = if growing {
-            c.node.maximum.map_or(1e6, |s| s.main(vertical)) - allocated[i]
+            c.node.maximum.map_or(f64::INFINITY, |s| s.main(vertical)) - allocated[i]
         } else {
             allocated[i] - c.floor.main(vertical)
         };
@@ -1227,7 +1251,8 @@ fn arrange<P>(
         Kind::Grid { cols, .. } => {
             let cols = *cols;
             let grid = grid_rows(&flow, cols);
-            let col_w = (inner.width - m.gap * cols.saturating_sub(1) as f64) / cols as f64;
+            let col_w =
+                (inner.width - m.gap * cols.saturating_sub(1) as f64).max(0.0) / cols as f64;
             let heights: Vec<f64> = grid
                 .iter()
                 .map(|r| r.iter().map(|c| c.size.height).fold(0.0, f64::max))
@@ -1245,7 +1270,16 @@ fn arrange<P>(
                     let cell_size =
                         Size::new(col_w * span as f64 + m.gap * (span - 1) as f64, h + surplus);
                     let (p, s) = cell(c, cell_size, default);
-                    placed[c.index] = Some((at(col as f64 * (col_w + m.gap) + p[0], y + p[1]), s));
+                    // A cell wider than its column overhangs the far edge,
+                    // like CSS safe alignment: the start stays visible.
+                    let safe = |v: f64, o: f64| (v - o).max(0.0) + o;
+                    placed[c.index] = Some((
+                        at(
+                            col as f64 * (col_w + m.gap) + safe(p[0], c.node.offset[0]),
+                            y + safe(p[1], c.node.offset[1]),
+                        ),
+                        s,
+                    ));
                     col += span;
                 }
                 y += h + surplus + m.gap;
@@ -1354,7 +1388,7 @@ pub fn resolve_with<P>(
         || limits.extent <= 0.0
         || limits.nodes == 0
         || limits.depth > 256
-        || !scale.valid()
+        || !scale.is_valid()
     {
         return Err(Error::InvalidValue);
     }

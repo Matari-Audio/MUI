@@ -42,7 +42,7 @@ impl Draw {
 
 /// Custom drawing: called with the node's size every frame, in the walk.
 #[derive(Clone)]
-pub struct Canvas(pub Arc<dyn Fn(Size) -> Vec<Draw> + Send + Sync>);
+pub struct Canvas(pub Arc<dyn Fn(Size) -> Vec<Draw>>);
 impl std::fmt::Debug for Canvas {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("Canvas(..)")
@@ -114,7 +114,7 @@ pub fn text(s: impl Into<String>) -> El {
 }
 /// Your own paths, painted inside the node's frame. Sized like any
 /// container: give it `.size(..)`, `.aspect(..)` or let it stretch.
-pub fn canvas(f: impl Fn(Size) -> Vec<Draw> + Send + Sync + 'static) -> El {
+pub fn canvas(f: impl Fn(Size) -> Vec<Draw> + 'static) -> El {
     Node::overlay([]).with(Element {
         content: Content::Canvas(Canvas(Arc::new(f))),
         ..Element::default()

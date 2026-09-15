@@ -22,7 +22,7 @@ public function and a test behind it.
 - [x] `mui::Ui`: the per-frame runtime with spring-smoothed hover and press;
       `slider`, `knob`, `toggle`, `button` as compositions of flex shares.
 - [x] Preview: the gallery is one `mui` tree, sidebar included, its text
-      renders through the glyph atlas, and winit's wheel, keys, modifiers and
+      renders as hinted glyph runs, and winit's wheel, keys, modifiers and
       cursor icon ride through `Input` / `Frame`.
 - [x] Core DSL sugar: `row!`/`col!`/`stack!`/`grid!` taking anything
       `IntoEl`, `.w`/`.h`/`.square` on bare integers, `.center`/`.start`/
@@ -31,8 +31,8 @@ public function and a test behind it.
       paint list, honoured by the renderer and by hit testing.
 - [x] Floats: `.float()` keeps its layout slot and is painted after the root.
 - [x] Text-run cache across frames (`resolve_scene_with`, owned by `Ui`).
-- [x] Glyph runs: text reaches Vello as a hinted run through its own atlas,
-      not a filled outline; the font blob is interned so the atlas survives.
+- [x] Glyph runs: text reaches Vello as a hinted run, not a filled outline;
+      the font blob is interned so Vello's hinted-outline cache survives.
 - [x] Input: `Input` carries wheel, key presses and typed text; hits are
       rejected outside their clip; drag-and-drop reports source and target.
 - [x] Runtime: keyboard focus (press, Tab/Shift+Tab, Escape), wheel scrolling
@@ -57,6 +57,9 @@ public function and a test behind it.
       into a `TreeUpdate`.
 - [x] `mui_vello::PathCache` / `paint_cached`: a still frame re-encodes
       without reconverting a path.
+- [x] Image eviction: both image caches key on the buffer's `Arc` and drop
+      the entries the app has let go of, `Renderer::destroy_image` included,
+      and an image too big for an atlas tile falls back to a solid.
 - [x] Preview: an F12 inspector, `MUI_PREVIEW_THEME` hot reload, a frame-cost
       title bar, and a scene per feature above.
 
@@ -74,15 +77,12 @@ public function and a test behind it.
 - [ ] `vello_hybrid` against classic `vello`, re-measured on Windows — the
       hybrid choice was made on Linux numbers only.
 - [ ] Blurred shadows on welded shapes (still drawn sharp) and blend modes.
-- [ ] Image eviction: `ImageIds` never forgets a buffer, so a plugin that
-      streams images through the atlas grows it until `upload_image` panics.
-      `Renderer::destroy_image` is the other half.
 - [ ] Wrap in one pass everywhere: a paragraph squeezed by a flex row still
       needs a hint and a second solve, because the measurer only learns a
       column's or a grid cell's room. The flex pass re-measuring its items at
-      their final main size retires `wrap_hints`. Then cache line breaks
-      across frames: BENCHMARKS.md puts warm resolve at 2.2 ms, nearly all
-      of it re-breaking text that did not change.
+      their final main size retires `wrap_hints`. Caching line breaks across
+      frames is not the follow-up it looked like: BENCHMARKS.md measures
+      `break_lines` at 0.051 ms of a 1.23 ms resolve.
 
 ## Order
 

@@ -95,7 +95,7 @@ assert_eq!(scene.surface("tab").unwrap().frame.size.width, 92.0);
 | `.span(2)`, `.order(-1)` | a grid cell two columns wide; placed before its declaration slot |
 | `.push(child)`, `.baseline()`, `.lines(2)` | append to a container, sit text children on one baseline, cap a wrapped label |
 | `.fill(Primary)`, `.fill(Color::..)`, `.fill(Gradient::vertical(a, b))` | a palette role, a literal, a gradient |
-| `.fill(Fill::Image(img, Fit::Cover))` | an RGBA buffer as a fill: `Cover`, `Contain` or `Fill` (rasterises on `vello_cpu` only) |
+| `.fill(Fill::Image(img, Fit::Cover))` | an RGBA buffer as a fill: `Cover`, `Contain` or `Fill` (`vello_cpu` paints the pixmap, `vello_hybrid` uploads it once into its atlas) |
 | `.stroke(Ink)`, `.radius(8.0)`, `.pill()`, `.shadow(Shadow::soft(12.0))` | outline, corners, shadow |
 | `.animate()`, `.transition(Spring::new(0.3, 1.0))` | this node's fill, stroke, radius, text size and shadow spring to their new values |
 | `.shell(d, fill)` | a parallel inset of the outline before it, cumulative |
@@ -215,7 +215,10 @@ panics on a pixmap, so `mui_vello::Gpu` carries an optional `Atlas` -- the
 renderer, device, queue and a host-owned `ImageIds` -- and uploads each image
 buffer once through `Renderer::upload_image`, then paints by id. A `Gpu` built
 without an `Atlas` flattens an image fill to the mid grey `Paint::solid`
-already uses for contrast rather than crashing.
+already uses for contrast rather than crashing, and so does an image no
+atlas tile could hold. Both caches key on the buffer's `Arc` and sweep the
+entries the app has dropped on the next upload, so a panel handing over a
+fresh frame buffer every frame does not grow either one.
 
 ## Accessibility
 
@@ -248,7 +251,7 @@ pub const SKIN: Theme = Theme {
     ..Theme::DEFAULT
 };
 let light = SKIN.palette.with_mode(Mode::Light);
-assert!(light.valid());
+assert!(light.is_valid());
 ```
 
 `crates/mui-preview/src/skin.rs` is exactly this file. There is no
@@ -276,7 +279,7 @@ light-theme half because there is nothing in it a mode could contradict.
 | `mui-text` | glyph and string outlines from a (variable) font |
 | `mui-core` | `El` + `Styled` DSL and the `row!`/`col!`/`stack!`/`grid!` sugar, roles and palette, `canvas` draws, clip and float layers, the walk from tree to `ResolvedScene` paint list, the frame-to-frame `TextCache`, `Spring` |
 | `mui-input` | `Input` (pointer, wheel, keys, text), hit testing against real paths and their clips, press capture, hover, click, drag and drop |
-| `mui-vello` | the `Canvas` trait and its `Gpu` / `Cpu` wrappers over `vello_hybrid` and `vello_cpu`: fills, strokes, image fills (`Cpu` paints the pixmap, `Gpu` uploads once through its `Atlas`, see Images), clip push/pop, and hinted glyph runs through Vello's own atlas; `paint(canvas, scene, transform)`, and `paint_cached` with a `PathCache` that keeps a still frame's arc-to-cubic conversions |
+| `mui-vello` | the `Canvas` trait and its `Gpu` / `Cpu` wrappers over `vello_hybrid` and `vello_cpu`: fills, strokes, image fills (`Cpu` paints the pixmap, `Gpu` uploads once through its `Atlas`, see Images), clip push/pop, and hinted glyph runs (Vello hints and caches the outlines per font blob); `paint(canvas, scene, transform)`, and `paint_cached` with a `PathCache` that keeps a still frame's arc-to-cubic conversions |
 | `mui-access` | a `ResolvedScene` plus a `Semantics` map as an `accesskit::TreeUpdate` |
 | `mui-truce` | the non-real-time document and parameter contract a Truce plugin shares with its editor |
 | `mui` | `Ui` runtime, focus and wheel scrolling, tooltips, transitions, tweens, gesture edits, and widgets (`slider`, `knob`, `toggle`, `button`, `text_input`); the `prelude` |
@@ -291,8 +294,8 @@ cargo run -p mui-preview
 
 The whole window is one tree: the sidebar's scene list, toggles and sliders
 are `mui` widgets, the specimen is an anchored child of the stage, and a drag
-on the stage pans it through an offset. Text goes through Vello's glyph
-atlas, not filled outlines: the host hands `paint` a `mui_vello::Gpu`.
+on the stage pans it through an offset. Text reaches the pixels as a hinted glyph
+run, not a filled outline: the host hands `paint` a `mui_vello::Gpu`.
 `bacon` rebuilds and relaunches on save. Point `MUI_PREVIEW_FONT` at a
 variable font and the Glyph scene grows a slider per axis; point
 `MUI_PREVIEW_THEME` at a `key = value` file and the palette reloads while the
@@ -324,7 +327,10 @@ cargo run -p mui --features cpu --example snapshot -- /tmp/widgets.png
 
 runs two `Ui::frame`s of the widget card and rasterises them on the CPU:
 no GPU, no window. With `--features cpu`, `mui-vello` renders through
-`vello_cpu` and its snapshot test asserts actual pixels.
+`vello_cpu` and its snapshot test asserts actual pixels. `--features
+cpu-threads` rasterises on a rayon pool instead of one core; it is off by
+default because a snapshot-sized pixmap loses more to thread hand-off than
+it gains (BENCHMARKS.md measures both).
 
 ## Verify
 

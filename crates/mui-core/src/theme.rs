@@ -14,7 +14,7 @@ impl CornerProfile {
     pub const fn new(convex: f64, concave: f64) -> Self {
         Self { convex, concave }
     }
-    pub fn valid(self) -> bool {
+    pub fn is_valid(self) -> bool {
         self.convex.is_finite()
             && self.concave.is_finite()
             && self.convex >= 0.0
@@ -73,10 +73,10 @@ impl Theme {
         text: 14.0,
     };
 
-    pub fn valid(self) -> bool {
-        self.corners.valid()
-            && self.spacing.valid()
-            && self.palette.valid()
+    pub fn is_valid(self) -> bool {
+        self.corners.is_valid()
+            && self.spacing.is_valid()
+            && self.palette.is_valid()
             && self.stroke_width.is_finite()
             && self.stroke_width >= 0.0
             && self.text.is_finite()

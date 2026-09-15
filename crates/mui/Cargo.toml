@@ -8,6 +8,7 @@ license.workspace = true
 default = []
 egui = ["dep:mui-egui"]
 cpu = ["mui-vello/cpu"]
+cpu-threads = ["mui-vello/cpu-threads"]
 
 [dependencies]
 mui-core = { path = "../mui-core" }

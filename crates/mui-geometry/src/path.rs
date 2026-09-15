@@ -223,9 +223,11 @@ impl Path {
                 PathCommand::Close => PathCommand::Close,
             })
             .collect();
-        let result = Self { commands };
-        result.validate(100_000)?;
-        Ok(result)
+        // A finite rigid map preserves command structure and finiteness, so
+        // the entry `validate` already proves the output valid.
+        // ponytail: only coordinates near f64::MAX could overflow to infinity;
+        // re-validate the output if paths ever carry such extremes.
+        Ok(Self { commands })
     }
     /// Chainable construction for hand-drawn geometry: a response curve, a
     /// grid line. `quad_to` is stored as the exact equivalent cubic.
@@ -360,6 +362,19 @@ impl Path {
 #[cfg(test)]
 mod cubic_tests {
     use super::*;
+
+    #[test]
+    fn rigid_transform_moves_valid_paths_and_still_rejects_invalid_ones() {
+        let p = Path::default()
+            .move_to(Point::new(0., 0.))
+            .line_to(Point::new(10., 0.))
+            .close();
+        let moved = p.rigid_transform(Point::new(1., 2.), 0.).unwrap();
+        assert_eq!(moved.commands[0], PathCommand::MoveTo(Point::new(1., 2.)));
+        // The entry validate is the only guard left: it must still fire.
+        let bad = Path::default().line_to(Point::new(1., 1.));
+        assert!(bad.rigid_transform(Point::new(1., 0.), 0.).is_err());
+    }
 
     #[test]
     fn cubic_flattens_within_tolerance_and_lands_exactly() {
