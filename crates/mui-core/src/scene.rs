@@ -14,7 +14,7 @@ use mui_geometry::{
 use mui_layout::{resolve_with, Frame, Layout, Limits, Size};
 use mui_text::TextRun;
 
-use crate::{Color, Content, El, Fill, Paint, Radius, Theme};
+use crate::{Color, Content, Cursor, El, Fill, Paint, Radius, Theme};
 
 #[derive(Debug, Clone)]
 pub struct SceneSpec {
@@ -65,6 +65,31 @@ pub enum Layer {
     Shell(usize),
     Stroke,
     Text,
+    /// A canvas's `k`th draw.
+    Draw(usize),
+    /// Everything up to the matching `Unclip` is clipped to `path`; the
+    /// paint is meaningless.
+    Clip,
+    Unclip,
+}
+
+/// A text layer's glyphs, for a renderer that hints and caches its own.
+#[derive(Clone, Debug)]
+pub struct Text {
+    pub font: Arc<Vec<u8>>,
+    pub size: f32,
+    /// Baseline origin.
+    pub origin: Point,
+    /// Glyph id and pen x from the origin.
+    pub glyphs: Arc<[(u32, f32)]>,
+}
+impl PartialEq for Text {
+    fn eq(&self, o: &Self) -> bool {
+        Arc::ptr_eq(&self.font, &o.font)
+            && self.size == o.size
+            && self.origin == o.origin
+            && self.glyphs == o.glyphs
+    }
 }
 
 /// One thing to draw. `key` is the node's id, or its tree path (`/0/2`)
@@ -82,6 +107,8 @@ pub struct Painted {
     pub width: f64,
     /// Gaussian blur radius, shadows only.
     pub blur: f64,
+    /// Present on `Layer::Text`: the same ink as `path`, as glyphs.
+    pub text: Option<Text>,
 }
 
 /// A node's outline, for hit-testing and for anything that derives from it.
@@ -95,6 +122,15 @@ pub struct ResolvedSurface {
     pub rect: Option<RoundedRect>,
     /// A shell collapsed or a merge changed ring counts.
     pub topology_changed: bool,
+    pub cursor: Option<Cursor>,
+    pub tip: Option<String>,
+    pub focusable: bool,
+    /// The nearest clipping ancestor's frame, for hit-testing.
+    /// ponytail: a rect, not the ancestor's rounded path.
+    pub clip: Option<Bounds>,
+    /// A scroll node's children extent inside its padding, unscrolled;
+    /// the frame size otherwise.
+    pub content: Size,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -167,12 +203,27 @@ fn count(n: &El) -> usize {
     1 + n.children().iter().map(count).sum::<usize>()
 }
 
-/// Text runs keyed by (text, size bits): measured once for layout, reused
-/// for paint.
+/// Text runs keyed by (text, size bits): shaped once, reused across frames
+/// while the font stays the same. Own one in your runtime and pass it to
+/// [`resolve_scene_with`].
+#[derive(Debug, Default)]
+pub struct TextCache {
+    font: usize,
+    runs: HashMap<(String, u64), TextRun>,
+}
+impl TextCache {
+    pub fn len(&self) -> usize {
+        self.runs.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.runs.is_empty()
+    }
+}
+
 struct Runs<'a> {
     font: Option<&'a [u8]>,
     tolerance: f64,
-    cache: HashMap<(String, u64), TextRun>,
+    cache: &'a mut HashMap<(String, u64), TextRun>,
 }
 impl Runs<'_> {
     fn run(&mut self, text: &str, size: f64) -> Result<Option<&TextRun>, mui_text::Error> {
@@ -196,6 +247,17 @@ impl Runs<'_> {
     }
 }
 
+/// A float, painted after the whole tree so it sits on top and escapes
+/// every clip.
+#[derive(Clone)]
+struct Deferred<'a> {
+    at: usize,
+    node: &'a El,
+    path: String,
+    under: Color,
+    cursor: Option<Cursor>,
+}
+
 struct Walk<'a> {
     spec: &'a SceneSpec,
     frames: &'a [Frame],
@@ -205,8 +267,9 @@ struct Walk<'a> {
     paint: Vec<Painted>,
     keys: Vec<String>,
     surfaces: BTreeMap<String, ResolvedSurface>,
+    deferred: Vec<Deferred<'a>>,
 }
-impl Walk<'_> {
+impl<'a> Walk<'a> {
     fn outline(
         &self,
         n: &El,
@@ -273,17 +336,27 @@ impl Walk<'_> {
             rect,
             width: 0.0,
             blur: 0.0,
+            text: None,
         });
         self.paint.last_mut()
     }
 
-    fn node(&mut self, n: &El, path: &str, under: Color) -> Result<(), SceneError> {
+    fn node<'n: 'a>(
+        &mut self,
+        n: &'n El,
+        path: &str,
+        under: Color,
+        cursor: Option<Cursor>,
+        clip: Option<Bounds>,
+    ) -> Result<(), SceneError> {
         let frame = self.frames[self.i];
+        let at = self.i;
         self.i += 1;
         let key = n.key().map_or_else(|| path.to_owned(), str::to_owned);
         let th = self.spec.theme;
         let e = n.payload();
         let s = &e.style;
+        let cursor = s.cursor.or(cursor);
         if frame.size.width <= 0.0 || frame.size.height <= 0.0 {
             // A flex share that collapsed to nothing: invisible, and so are
             // its children.
@@ -348,26 +421,63 @@ impl Walk<'_> {
             }
         }
 
-        if let Content::Text(t) = &e.content {
-            let size = e.text_size.unwrap_or(th.text);
-            if let Some(run) = self.runs.run(t, size)? {
-                // Baseline placed so ascent+descent sits centred in the frame.
-                let dy =
-                    frame.y + (frame.size.height - run.ascent - run.descent) / 2.0 + run.ascent;
-                let glyphs = run.path.rigid_transform(Point::new(frame.x, dy), 0.0)?;
+        match &e.content {
+            Content::Text(t) => {
+                let size = e.text_size.unwrap_or(th.text);
+                // Text's own fill is its ink, not a box behind it.
                 let ink = if s.fill.is_none() {
                     Fill::Role(crate::Role::Ink)
                 } else {
                     s.fill.clone()
                 };
-                // Text's own fill is its ink, not a box behind it.
                 self.paint
                     .retain(|p| !(p.key == key && p.layer == Layer::Fill));
                 bg = under;
-                self.push(Layer::Text, glyphs, None, &ink, under);
+                if let Some(run) = self.runs.run(t, size)? {
+                    // Baseline placed so ascent+descent sits centred in the frame.
+                    let dy =
+                        frame.y + (frame.size.height - run.ascent - run.descent) / 2.0 + run.ascent;
+                    let origin = Point::new(frame.x, dy);
+                    let glyphs = run.path.rigid_transform(origin, 0.0)?;
+                    let text = self.spec.font.clone().map(|font| Text {
+                        font,
+                        size: size as f32,
+                        origin,
+                        glyphs: run.glyphs.iter().map(|&(g, x)| (g, x as f32)).collect(),
+                    });
+                    if let Some(p) = self.push(Layer::Text, glyphs, None, &ink, under) {
+                        p.text = text;
+                    }
+                }
             }
+            Content::Canvas(c) => {
+                let origin = Point::new(frame.x, frame.y);
+                for (k, d) in (c.0)(frame.size).into_iter().enumerate() {
+                    let moved = d.path.rigid_transform(origin, 0.0)?;
+                    if let Some(p) = self.push(Layer::Draw(k), moved, None, &d.fill, bg) {
+                        p.width = d.width;
+                    }
+                }
+            }
+            Content::None => {}
         }
 
+        let scrolled = n.scroll_offset();
+        let mut content = frame.size;
+        if n.is_scroll() {
+            // The children's extent, read back from their frames.
+            let pad = n.padding(th.spacing);
+            let sub = &self.frames[at + 1..at + count(n)];
+            let (mut right, mut bottom) = (frame.x, frame.y);
+            for f in sub {
+                right = right.max(f.right());
+                bottom = bottom.max(f.bottom());
+            }
+            content = Size::new(
+                (right - frame.x + scrolled[0] + pad.right - pad.left).max(0.0),
+                (bottom - frame.y + scrolled[1] + pad.bottom - pad.top).max(0.0),
+            );
+        }
         self.keys.push(key.clone());
         self.surfaces.insert(
             key.clone(),
@@ -375,26 +485,82 @@ impl Walk<'_> {
                 key: key.clone(),
                 frame,
                 bounds: Bounds::from_points(outline.flatten(0.5, 100_000)?.concat()),
-                path: outline,
+                path: outline.clone(),
                 rect,
                 topology_changed: changed,
+                cursor,
+                tip: e.tip.clone(),
+                focusable: e.focusable,
+                clip,
+                content,
             },
         );
+        let inner = if n.is_clip() {
+            let b = bounds(frame);
+            let b = clip.map_or(b, |c| {
+                Bounds::new(
+                    b.min.x.max(c.min.x),
+                    b.min.y.max(c.min.y),
+                    b.max.x.min(c.max.x),
+                    b.max.y.min(c.max.y),
+                )
+            });
+            self.push(
+                Layer::Clip,
+                outline,
+                rect,
+                &Fill::Color(Color::oklcha(0.0, 0.0, 0.0, 0.0)),
+                bg,
+            );
+            Some(b)
+        } else {
+            clip
+        };
         for (j, c) in n.children().iter().enumerate() {
-            self.node(c, &format!("{path}/{j}"), bg)?;
+            let path = format!("{path}/{j}");
+            if c.is_float() {
+                self.deferred.push(Deferred {
+                    at: self.i,
+                    node: c,
+                    path,
+                    under: bg,
+                    cursor,
+                });
+                self.i += count(c);
+            } else {
+                self.node(c, &path, bg, cursor, inner)?;
+            }
+        }
+        if n.is_clip() {
+            self.key = key;
+            let clear = Fill::Color(Color::oklcha(0.0, 0.0, 0.0, 0.0));
+            self.push(Layer::Unclip, Path::default(), None, &clear, bg);
         }
         Ok(())
     }
 }
 
 pub fn resolve_scene(spec: &SceneSpec) -> Result<ResolvedScene, SceneError> {
+    resolve_scene_with(spec, &mut TextCache::default())
+}
+
+/// [`resolve_scene`] with text shaped once per (string, size) across calls.
+pub fn resolve_scene_with(
+    spec: &SceneSpec,
+    text: &mut TextCache,
+) -> Result<ResolvedScene, SceneError> {
     if !spec.theme.valid() {
         return Err(SceneError::InvalidTheme);
+    }
+    let font_id = spec.font.as_ref().map_or(0, |f| Arc::as_ptr(f) as usize);
+    if text.font != font_id {
+        text.runs.clear();
+        text.font = font_id;
     }
     let mut runs = Runs {
         font: spec.font.as_deref().map(Vec::as_slice),
         tolerance: spec.tolerance,
-        cache: HashMap::new(),
+        cache: &mut text.runs,
     };
     let th = spec.theme;
     let layout = resolve_with(
@@ -404,7 +570,7 @@ pub fn resolve_scene(spec: &SceneSpec) -> Result<ResolvedScene, SceneError> {
         th.spacing,
         |e| match &e.content {
             Content::Text(t) => runs.measure(t, e.text_size.unwrap_or(th.text)),
-            Content::None => Size::ZERO,
+            Content::None | Content::Canvas(_) => Size::ZERO,
         },
     )?;
     let mut w = Walk {
@@ -416,8 +582,24 @@ pub fn resolve_scene(spec: &SceneSpec) -> Result<ResolvedScene, SceneError> {
         paint: Vec::new(),
         keys: Vec::new(),
         surfaces: BTreeMap::new(),
+        deferred: Vec::new(),
     };
-    w.node(&spec.root, "", th.palette.background())?;
+    w.node(&spec.root, "", th.palette.background(), None, None)?;
+    // Floats paint last, in the order they were met; a float inside a float
+    // lands on the end of the same queue.
+    let mut k = 0;
+    while k < w.deferred.len() {
+        let Deferred {
+            at,
+            node,
+            path,
+            under,
+            cursor,
+        } = w.deferred[k].clone();
+        w.i = at;
+        w.node(node, &path, under, cursor, None)?;
+        k += 1;
+    }
     let (paint, keys, surfaces) = (w.paint, w.keys, w.surfaces);
     Ok(ResolvedScene {
         layout,
@@ -560,5 +742,78 @@ mod tests {
             .unwrap()
             .is::<mui_geometry::Error>());
         let _ = Spacing::px(1.);
+    }
+}
+
+#[cfg(test)]
+mod feature_tests {
+    use super::*;
+    use crate::prelude::*;
+
+    #[test]
+    fn clip_floats_canvas_cursor_and_content() {
+        let list = column([leaf(50., 30.).id("a"), leaf(50., 30.), leaf(50., 30.)])
+            .gap(10.)
+            .scroll()
+            .scrolled(0., 25.)
+            .size(60., 60.)
+            .cursor(Cursor::Hand)
+            .id("list");
+        let tip = leaf(10., 10.).fill(Primary).float().id("tip");
+        let draw = canvas(|s| {
+            vec![Draw::stroke(
+                Path::default().move_to(Point::new(0., s.height)).cubic_to(
+                    Point::new(s.width / 2., 0.),
+                    Point::new(s.width / 2., 0.),
+                    Point::new(s.width, s.height),
+                ),
+                Primary,
+                2.,
+            )]
+        })
+        .size(40., 40.)
+        .id("curve");
+        let root = column([list, tip, draw]).id("root");
+        let s = resolve_scene(&SceneSpec::new(root)).unwrap();
+        let layers: Vec<_> = s.paint.iter().map(|p| (p.key.as_str(), p.layer)).collect();
+        let at = |k: &str, l: Layer| layers.iter().position(|x| *x == (k, l)).unwrap();
+        assert!(at("list", Layer::Clip) < at("list", Layer::Unclip));
+        assert_eq!(*layers.last().unwrap(), ("tip", Layer::Fill), "{layers:?}");
+        assert!(s
+            .paint
+            .iter()
+            .any(|p| p.key == "curve" && p.layer == Layer::Draw(0) && p.width == 2.));
+        let list = s.surface("list").unwrap();
+        assert_eq!(
+            list.content,
+            Size::new(55., 110.),
+            "rows centred at x=5, three rows and two gaps tall"
+        );
+        assert_eq!(list.clip, None);
+        assert_eq!(s.surface("a").unwrap().clip, Some(list.bounds.unwrap()));
+        assert_eq!(s.surface("a").unwrap().cursor, Some(Cursor::Hand));
+        assert_eq!(s.layout.frame("a").unwrap().y, -25.);
+        assert_eq!(s.keys.last().map(String::as_str), Some("tip"));
+    }
+
+    #[test]
+    fn text_cache_survives_frames_and_carries_glyphs() {
+        let mut cache = TextCache::default();
+        let mut sp = SceneSpec::new(row([text("hi").id("t")]));
+        sp.font = Some(Arc::new(epaint_default_fonts::HACK_REGULAR.to_vec()));
+        let s = resolve_scene_with(&sp, &mut cache).unwrap();
+        assert_eq!(cache.len(), 1);
+        let t = s
+            .paint
+            .iter()
+            .find(|p| p.layer == Layer::Text)
+            .unwrap()
+            .text
+            .as_ref()
+            .unwrap();
+        assert_eq!(t.glyphs.len(), 2);
+        assert!(t.glyphs[1].1 > 0.);
+        resolve_scene_with(&sp, &mut cache).unwrap();
+        assert_eq!(cache.len(), 1);
     }
 }

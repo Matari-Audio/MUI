@@ -6,6 +6,21 @@
 use crate::{Color, Palette};
 use mui_layout::Spacing;
 
+/// The pointer's shape over a node.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Cursor {
+    #[default]
+    Arrow,
+    Hand,
+    Grab,
+    Grabbing,
+    Text,
+    ResizeH,
+    ResizeV,
+    Crosshair,
+    Forbidden,
+}
+
 /// A colour named by its job.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Role {
@@ -13,7 +28,8 @@ pub enum Role {
     Surface,
     Raised,
     Field,
-    Layer(i32),
+    /// An elevation step above `Surface`; negative sinks.
+    Level(i32),
     Primary,
     Secondary,
     Tertiary,
@@ -32,7 +48,7 @@ impl Role {
             Self::Surface => p.surface(),
             Self::Raised => p.raised(),
             Self::Field => p.field(),
-            Self::Layer(n) => p.layer(n),
+            Self::Level(n) => p.layer(n),
             Self::Primary => p.primary(),
             Self::Secondary => p.secondary(),
             Self::Tertiary => p.tertiary(),
@@ -200,4 +216,6 @@ pub struct Style {
     /// Outline is the union of the children's frames, filleted, instead of
     /// this node's own rectangle: a tab welded to its panel.
     pub weld: bool,
+    /// Pointer shape over the node; inherited by children that set none.
+    pub cursor: Option<Cursor>,
 }

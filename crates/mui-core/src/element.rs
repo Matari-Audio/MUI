@@ -9,14 +9,56 @@
 //!     .shell(4.0, Role::Field);
 //! assert_eq!(card.children().len(), 2);
 //! ```
-use crate::style::{Fill, Radius, Shadow, Stroke, Style};
-use mui_layout::{Node, Spacing};
+use crate::style::{Cursor, Fill, Radius, Shadow, Stroke, Style};
+use mui_geometry::Path;
+use mui_layout::{Node, Size, Spacing};
+use std::sync::Arc;
+
+/// One stroke or fill a canvas hands back, in the canvas's own pixels.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Draw {
+    pub path: Path,
+    pub fill: Fill,
+    /// Stroke width; `0` fills.
+    pub width: f64,
+}
+impl Draw {
+    pub fn fill(path: Path, fill: impl Into<Fill>) -> Self {
+        Self {
+            path,
+            fill: fill.into(),
+            width: 0.0,
+        }
+    }
+    pub fn stroke(path: Path, fill: impl Into<Fill>, width: f64) -> Self {
+        Self {
+            path,
+            fill: fill.into(),
+            width,
+        }
+    }
+}
+
+/// Custom drawing: called with the node's size every frame, in the walk.
+#[derive(Clone)]
+pub struct Canvas(pub Arc<dyn Fn(Size) -> Vec<Draw> + Send + Sync>);
+impl std::fmt::Debug for Canvas {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Canvas(..)")
+    }
+}
+impl PartialEq for Canvas {
+    fn eq(&self, o: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &o.0)
+    }
+}
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub enum Content {
     #[default]
     None,
     Text(String),
+    Canvas(Canvas),
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -25,6 +67,10 @@ pub struct Element {
     pub content: Content,
     /// Text size in pixels; `None` is the theme's.
     pub text_size: Option<f64>,
+    /// Shown after the pointer rests on the node.
+    pub tip: Option<String>,
+    /// Takes keyboard focus on click and on Tab.
+    pub focusable: bool,
 }
 
 /// A styled layout node: the type every constructor here returns.
@@ -56,6 +102,33 @@ pub fn text(s: impl Into<String>) -> El {
         content: Content::Text(s.into()),
         ..Element::default()
     })
+}
+/// Your own paths, painted inside the node's frame. Sized like any
+/// container: give it `.size(..)`, `.aspect(..)` or let it stretch.
+pub fn canvas(f: impl Fn(Size) -> Vec<Draw> + Send + Sync + 'static) -> El {
+    Node::overlay([]).with(Element {
+        content: Content::Canvas(Canvas(Arc::new(f))),
+        ..Element::default()
+    })
+}
+/// What the `row!`/`col!` macros accept: an `El`, or a string for a label.
+pub trait IntoEl {
+    fn into_el(self) -> El;
+}
+impl IntoEl for El {
+    fn into_el(self) -> El {
+        self
+    }
+}
+impl IntoEl for &str {
+    fn into_el(self) -> El {
+        text(self)
+    }
+}
+impl IntoEl for String {
+    fn into_el(self) -> El {
+        text(self)
+    }
 }
 
 /// Paint builders on any `El`. One trait, so `.fill(..)` chains after
@@ -115,6 +188,33 @@ pub trait Styled: Sized {
     fn text_size(mut self, px: f64) -> Self {
         self.element_mut().text_size = Some(px);
         self
+    }
+    /// Copy a prepared style: `.styled(&CARD)`.
+    fn styled(mut self, s: &Style) -> Self {
+        *self.style_mut() = s.clone();
+        self
+    }
+    /// Pointer shape over this node and, unless they say otherwise, its
+    /// children.
+    fn cursor(mut self, c: Cursor) -> Self {
+        self.style_mut().cursor = Some(c);
+        self
+    }
+    fn tip(mut self, s: impl Into<String>) -> Self {
+        self.element_mut().tip = Some(s.into());
+        self
+    }
+    fn focusable(mut self) -> Self {
+        self.element_mut().focusable = true;
+        self
+    }
+    /// Apply `f` only when `cond`: `.when(selected, |e| e.fill(Primary))`.
+    fn when(self, cond: bool, f: impl FnOnce(Self) -> Self) -> Self {
+        if cond {
+            f(self)
+        } else {
+            self
+        }
     }
 }
 impl Styled for El {

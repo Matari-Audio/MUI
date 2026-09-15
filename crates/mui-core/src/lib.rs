@@ -15,25 +15,35 @@ mod style;
 mod theme;
 
 pub use color::{Color, Mode, Palette, Pigment};
-pub use element::{column, grid, leaf, overlay, row, spacer, text, Content, El, Element, Styled};
+pub use element::{
+    canvas, column, grid, leaf, overlay, row, spacer, text, Canvas, Content, Draw, El, Element,
+    IntoEl, Styled,
+};
 pub use motion::Spring;
 pub use mui_layout::{
     Align, Frame, Insets, Justify, Layout, Len, Limits, Node, Size, Spacing, SpacingScale,
     SpacingToken,
 };
 pub use scene::{
-    resolve_scene, Layer, Painted, ResolvedScene, ResolvedSurface, SceneError, SceneSpec,
-    SceneState,
+    resolve_scene, resolve_scene_with, Layer, Painted, ResolvedScene, ResolvedSurface, SceneError,
+    SceneSpec, SceneState, Text, TextCache,
 };
-pub use style::{Fill, Gradient, Paint, Radius, Role, Shadow, Stroke, Style};
+pub use style::{Cursor, Fill, Gradient, Paint, Radius, Role, Shadow, Stroke, Style};
 pub use theme::{CornerProfile, Theme};
 
 /// Everything a scene file needs, including the spacing tokens as bare
 /// names: `.gap(M).pad(L)`.
 pub mod prelude {
+    pub use crate::Role::*;
     pub use crate::{
-        column, grid, leaf, overlay, resolve_scene, row, spacer, text, Align, Color, El, Fill,
-        Gradient, Justify, Len, Radius, Role, SceneSpec, Shadow, Size, Styled, Theme,
+        canvas, column, grid, leaf, overlay, resolve_scene, row, spacer, text, Align, Color,
+        Cursor, Draw, El, Fill, Gradient, IntoEl, Justify, Len, Radius, Role, SceneSpec, Shadow,
+        Size, Style, Styled, Theme,
     };
+    pub use mui_geometry::{Path, Point};
     pub use mui_layout::SpacingToken::{Xl, Xs, L, M, S};
+    /// A percentage length: `.width(pct(50.))`.
+    pub fn pct(p: f64) -> Len {
+        Len::Pct(p)
+    }
 }

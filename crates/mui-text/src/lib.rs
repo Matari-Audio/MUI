@@ -174,6 +174,9 @@ pub struct TextRun {
     pub descent: f64,
     /// The face's own idea of a line pitch, leading included.
     pub line_height: f64,
+    /// Every glyph id with its pen x, for a renderer with its own glyph
+    /// cache and hinting; `path` is the same ink as plain geometry.
+    pub glyphs: Vec<(u32, f64)>,
 }
 
 /// Lay `text` out as one path, glyphs appended at successive pen positions.
@@ -219,8 +222,10 @@ pub fn text_run(
         tolerance,
         dx: 0.,
     };
+    let mut glyphs = Vec::with_capacity(text.len());
     for ch in text.chars() {
         let glyph_id = charmap.map(ch).unwrap_or(GlyphId::NOTDEF);
+        glyphs.push((glyph_id.to_u32(), pen.dx));
         if outlines.get(glyph_id).is_some() {
             draw_glyph(&font, glyph_id, size, &location, &mut pen)?;
         }
@@ -245,6 +250,7 @@ pub fn text_run(
         // Negative in font space, positive below the baseline here.
         descent,
         line_height,
+        glyphs,
     })
 }
 
