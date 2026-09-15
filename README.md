@@ -1,398 +1,183 @@
-# MUI — Matari UI foundation
+# MUI — a styled tree in, pixels and gestures out
 
-Renderer-independent Rust layout, connected surfaces, and derived themes for Matari Audio.
-Rust owns the runtime. The TypeScript frontend remains as a frozen build-time reference;
-it is not a plugin runtime or a maintained authoring path.
+**MUI** (Matari-UI) is the UI foundation for [Matari Audio](https://github.com/Matari-Audio)
+plugins. You write a tree the way you would write CSS flexbox with tokens; MUI
+lays it out intrinsically, turns every welded group into one filleted outline,
+derives every shell as a true parallel inset of the outline before it, colours
+every surface from a role palette, and hands a z-ordered paint list to Vello.
+Nothing is placed absolutely: the only coordinates in the system are an
+anchor and an offset, and a slider thumb sits where two flex weights put it.
 
-Plugin authors use [Truce with the MUI control/document adapter](crates/mui-truce/README.md).
-Truce owns host formats, parameters and persistence; MUI supplies UI contracts.
-The [roadmap](docs/ROADMAP.md) distinguishes this foundation from pending composition migration.
+Every library crate is `#![forbid(unsafe_code)]`, dependency-light, and
+compiles to `wasm32-unknown-unknown`. The native preview host is the one
+exception.
 
-MUI is intended to stay a general, compact authoring layer for measured and
-reactive audio-plugin interfaces. Its layout vocabulary is CSS-like in the
-useful sense—hug or fill, gap, padding, alignment, growth, grids and named
-layers—while Rust remains the runtime authority. `Item` is the stable content
-API; the lower-level generic layout helpers provide short row, column and
-overlay trees that lower into the same layout and geometry path. Text is
-measured through a host callback, and a successful resolve or theme update
-publishes one snapshot for layout, paint and interaction.
-
-The perceptual colour direction is also available without changing the runtime
-contract. `mui_core::color::Palette` stores hue/chroma pigments and derives
-light/dark roles; `mui_core::theme::SourceTheme` converts that declaration into
-the runtime `Theme`, whose RGB palette is what existing hosts consume. The
-TypeScript compiler keeps its established RGB-seed schema for compatibility;
-source-palette emission can be added once that authoring contract is needed.
-
-## One item API
-
-`item("name")` is content with layout and appearance. `container([...])` is an unnamed
-structural item. Both have the same methods. Choose a layout on the item instead of
-switching between separate row, column and box types.
+## One frame
 
 ```rust
 use mui::prelude::*;
 
-let ui = container([
-    container([
-        item("osc").text("Oscillator").pad(S).on_tap("select-osc"),
-        item("filter").text("Filter").pad(S)
-            .extend_to("panel").color(Color::Raised)
-            .on_tap("select-filter"),
-        item("fx").text("Effects").pad(S).on_tap("select-fx"),
-    ])
-    .layout(Row).center().gap(S).pad(M).width(Fill),
+let mut ui = Ui::new(Theme::DEFAULT);
+let mut cutoff = 0.5;
+let mut bypass = false;
 
-    item("panel")
-        .layout(Grid(3)).pad(L).gap(M).width(Fill)
-        .children([
-            item("cutoff").width(64.).height(64.),
-            item("resonance").width(64.).height(64.),
-            item("drive").width(64.).height(64.),
-        ]),
+// Built every frame, like an immediate-mode tree. Widgets read last frame's
+// gesture on their id, so state lives in your own variables.
+let root = column([
+    row([text("Filter").text_size(18.0), spacer(), toggle(&mut ui, "bypass", &mut bypass)])
+        .align(Align::Center),
+    slider(&mut ui, "cutoff", "Cutoff", &mut cutoff, 0.0..=1.0),
 ])
-.layout(Column).width(Fill).height(Hug).gap(M)
-.merge(["filter", "panel"])
-.build()?
-.available_width(360.);
+.gap(M)
+.pad(L)
+.radius(20.0)
+.fill(Role::Surface)
+.shadow(Shadow::soft(12.0));
+
+let frame = ui
+    .frame(root, Some(Size::new(280.0, 120.0)), PointerInput::default(), 1.0 / 60.0)
+    .unwrap();
+assert!(frame.scene.paint.len() > 5);
+// mui::vello::paint(&mut vello_scene, frame.scene, Affine::IDENTITY)?;
 ```
 
-This is implemented Rust. The complete runnable example also colors its controls.
+`Ui::frame` advances gestures and springs, styles the tree by state (hover
+and press are mixed into a named node's fill through a spring), resolves
+layout and geometry, and rebuilds the hit regions from the paths it painted,
+so what responds and what you see cannot drift apart. `frame.animating` says
+whether to schedule another frame.
 
-![Resolved item example, light and dark](docs/items.svg)
-
-Reproduce with `cargo run -p mui-demo --example items > docs/items.svg`.
-The example uses schematic text metrics for SVG export; a real UI supplies font metrics.
-
-## Layout and manual overrides
-
-| Method | Meaning |
-| --- | --- |
-| `.layout(Row)` | Arrange children horizontally; default layout |
-| `.layout(Column)` | Arrange children vertically |
-| `.layout(Auto)` | Prefer a row; switch to a column when preferred content does not fit |
-| `.layout(Grid(3))` | Three equal-width columns; place children left-to-right, then on new rows |
-| `.layout(Overlay)` | Place children in the same area |
-| `.gap(S)` | Minimum spacing between children or grid tracks |
-| `.pad(M)` | Space inside this item around its content |
-| `.width(Hug)` / `.height(Hug)` | Size from content |
-| `.width(Fill)` / `.height(Fill)` | Use the containing dimension |
-| `.width(120.)` / `.height(32.)` | Explicit dimension |
-| `.position(Left, Middle)` | Physical horizontal/vertical alignment, independent of flow direction |
-| `.center()` | `.position(Center, Middle)` |
-| `.pack(SpaceBetween)` | Distribute remaining main-axis space between children |
-| `.pack(SpaceEvenly)` | Equal space before, between and after children, in addition to gap |
-| `.pack(SpaceAround)` | Half as much outer space as inter-item space, in addition to gap |
-| `.align(Align::Stretch)` | Stretch children across the flex cross-axis, or in grid cells |
-| `.align_self(Align::End)` | Override this child's cross-axis alignment |
-| `.grow(1.)` / `.shrink(1.)` | Weighted flex allocation |
-| `.min(w,h)` / `.max(w,h)` | Bounds on item size |
-| `.wrap()` | Wrap a fixed row/column; separate from Auto direction |
-
-`pack` follows the actual direction: horizontal in a row and vertical in a column,
-including after Auto switches. `position` always refers to screen directions. An explicit
-`pack` overrides main-axis positioning, irrespective of builder call order. With no
-position override, children start on the main axis and center on the cross axis.
-Distribution needs spare space; a content-sized container cannot spread into space it
-has not been allocated.
-
-Grid defaults to equal fractional columns and content-sized rows. Manual overrides:
+## The DSL
 
 ```rust
-container([
-    item("wide").cell(1, 1).span(2, 1).height(40.),
-    item("control").cell(2, 2).place(Right, Bottom),
-])
-.layout(Grid(2))
-.columns([Track::Fixed(80.), Track::Fraction(1.)])
-.rows([Track::Fixed(60.), Track::Hug])
-.width(Fill)
-.gap(S)
+use mui::prelude::*;
+
+let control = |id: &str| leaf(28.0, 28.0).pill().fill(Role::Primary).id(id);
+
+// A tab whose shell is a parallel inset of its own rounded outline.
+let tab = column([control("plus"), control("phase"), control("warp")])
+    .gap(10.0)
+    .pad(22.0)
+    .min_width(92.0)
+    .align(Align::Center)
+    .id("tab")
+    .shell(12.0, Role::Raised);
+
+// The tab and the panel welded into one filleted shape.
+let root = column([tab, leaf(520.0, 230.0).id("panel")])
+    .align(Align::Start)
+    .weld(Role::Surface);
+
+let scene = resolve_scene(&SceneSpec::new(root)).unwrap();
+assert_eq!(scene.surface("tab").unwrap().frame.size.width, 92.0);
 ```
 
-Cells are **one-based (column, row)**. Unplaced items use automatic placement.
-`columns` replaces the default column tracks; `rows` specifies row tracks. `Track::Hug`
-uses content size and `Fraction` shares remaining space. On grid, `pack` distributes
-horizontal tracks, so it mainly matters for fixed/content tracks that leave spare space.
-`position` aligns both the track group and contents inside cells; `place` overrides a
-single cell's contents. Overlay supports positioning but rejects distribution.
+| you write | it means |
+|---|---|
+| `row([..])`, `column([..])`, `overlay([..])`, `grid(3, [..])` | flex axis, stack, cells |
+| `leaf(w, h)`, `spacer()`, `text("..")` | a sized box, a `grow(1)` gap, a measured text run |
+| `.gap(M)`, `.pad(S)`, `.pad(12.0)` | spacing tokens `Xs S M L Xl` from the theme, or pixels |
+| `.grow(w)`, `.shrink(w)`, `.basis(px)`, `.expand()` | flexbox weights |
+| `.width(Len::Pct(50.0))`, `.aspect(16.0 / 9.0)` | percentage and ratio sizes |
+| `.align(..)`, `.justify(..)`, `.anchor(x, y)`, `.offset(dx, dy)` | cross axis, main axis, overlay placement, nudge |
+| `.fill(Role::Primary)`, `.fill(Color::..)`, `.fill(Gradient::vertical(a, b))` | a palette role, a literal, a gradient |
+| `.stroke(Role::Ink)`, `.radius(8.0)`, `.pill()`, `.shadow(Shadow::soft(12.0))` | outline, corners, shadow |
+| `.shell(d, fill)` | a parallel inset of the outline before it, cumulative |
+| `.weld(fill)` | paint the union of the children's frames as one filleted shape |
+| `.id("name")` | a gesture target and a lookup key; unnamed nodes are decoration |
 
-Auto settles ancestors before descendants and changes each flow at most once per
-resolution. It does not retain a direction from the previous frame. Grid is explicit
-column-count layout; CSS auto-fit/auto-fill and named grid areas are not exposed.
-Physical alignment and per-child overrides do not create absolute coordinates.
+Alignment is inherited: a child without `.anchor` sits where its parent's
+`align` and `justify` say, and `Stretch` is the default cross-axis value so
+a row of controls fills its column unless told otherwise.
 
-Centering a row centers the whole group. For an exactly centered middle item with unequal
-side content, use `Grid(3)` with centered cell contents.
+## Colour
 
-## Automatic joining and rounding
+A theme carries a `Palette`: a `Mode`, seven `Pigment`s (hue and chroma, no
+lightness), and two steps. Every surface, every ink, every state and the
+other theme are derived. Ink is not a colour you pick: `Role::Ink` and
+`Role::Dim` resolve against the fill they sit on, and `Palette::on` is
+checked at 4.5:1.
 
 ```rust
-item("filter").extend_to("panel")
-// On the containing item:
-.merge(["filter", "panel"])
+use mui::prelude::*;
+
+pub const SKIN: Theme = Theme {
+    palette: Palette {
+        neutral: Pigment::new(264.0, 0.015),
+        primary: Pigment::new(242.0, 0.131),
+        step: 0.045,
+        hover: 0.11,
+        ..Palette::NEUTRAL
+    },
+    corners: CornerProfile::new(28.0, 32.0),
+    ..Theme::DEFAULT
+};
+let light = SKIN.palette.with_mode(Mode::Light);
+assert!(light.valid());
 ```
 
-One name identifies the item for layout, geometry and interaction. `extend_to` finds the
-facing boundaries and grows only the relevant painted edge through padding and gaps.
-It never moves text, controls, siblings or original tap bounds. Already overlapping or
-touching items need no extra growth. Diagonal separation without perpendicular overlap
-is rejected; a direction override cannot invent a sideways bridge. An explicit constraint
-is available as `.extend_toward(Direction::Down, "panel")`.
+`crates/mui-preview/src/skin.rs` is exactly this file. There is no
+light-theme half because there is nothing in it a mode could contradict.
 
-Merge unions the outlines' sharp bases, then rounds the resulting boundary. Both outer
-(convex) corners and inner (concave) shoulders inherit the theme automatically.
+## Geometry rules
 
-```rust
-.round(S)                              // Same token for both corner types
-.round(Rounding::separate(M, S))        // Outer M, inner S
-.round(Rounding::separate(M, 0.))       // Outer M, sharp inner corners
-```
+- A plain node's outline is its frame rounded by `Radius::{Theme, Px, Scale, Pill}`.
+- A welded node unions the children's **sharp** frames first and fillets the
+  result second, with the theme's convex and concave radii, so old rounded
+  corners never leak into a new junction.
+- A shell is an inset of the **final** outline before it: analytic for a
+  rounded rectangle (`radius − d`, concentric arcs), a parallel offset of the
+  filleted path for a weld. A shell that would collapse simply stops.
+- Text is a glyph outline from `mui-text`, in the same space as every other
+  path, so a variable-font axis change is a geometry change.
+- Zero-area frames are invisible, not errors: a flex share may collapse.
 
-Tokens use the shared scale; numeric values are pixels. The item hosting `merge` controls
-the merged outline's rounding. A merged outline inherits fill/stroke from its first
-listed member. Its individual member outlines are omitted from `Ui::outlines`; their
-text and interactions remain. Each item may participate in one merge group. Use the
-low-level surface API for more involved Boolean compositions.
+## Crates
 
-Paint connected outlines under a shared ancestor clip that includes the entire shape.
-MUI does not change a renderer's clipping policy when an outline crosses parent padding.
+| crate | what it owns |
+|---|---|
+| `mui-layout` | the dependency-free flex solver: tokens, pct, aspect, grid, anchors, frames in tree order |
+| `mui-geometry` | Booleans, fillets, exact rounded-rect insets, general parallel offsets |
+| `mui-text` | glyph and string outlines from a (variable) font |
+| `mui-core` | `El` + `Styled` DSL, roles and palette, the walk from tree to `ResolvedScene` paint list, `Spring` |
+| `mui-input` | hit testing against real paths, press capture, hover, click, drag |
+| `mui-vello` | `Canvas` over `vello_hybrid::Scene` and `vello_cpu::RenderContext`; `paint(canvas, scene, transform)` |
+| `mui` | `Ui` runtime and widgets (`slider`, `knob`, `toggle`, `button`); the `prelude` |
+| `mui-tessellate`, `mui-egui` | triangle meshes and the egui debug adapter |
+| `mui-preview` | the winit + wgpu gallery, itself one `mui` tree |
 
-## Content, appearance and host integration
-
-`text` stores content for real host measurement. Text must be its own child if an item
-also contains other children. Resolve with actual font metrics:
-
-```rust
-let scene = ui.resolve_with(|id, text, input| {
-    // Delegate to your font system, respecting known/available dimensions.
-    measure_text(id, text, input)
-})?;
-```
-
-Use `ui.resolve()` when no text needs external measurement. Render outlines from
-`ui.outlines(&scene)`, and text using the original `scene.layout` bounds and `ui.info(id)`.
-Items are transparent by default; `.color(Color::Panel)` sets a semantic fill and
-`.stroke(Color::Outline, 1.)` adds a stroke. These are renderer-independent descriptions;
-the host uses `Color::resolve(&colors)` through its adapter. The GPUI reference
-integration supplies native text/interaction and a shared MUI path conversion;
-the egui/tessellation adapter remains available separately.
-
-`on_tap("select-filter")` stores a host action ID. After your input system recognizes a
-completed tap, `ui.tap_at(&scene, x, y)` finds the deepest, last-authored matching action
-in the **original layout rectangle**. The host handles clipping, pointer capture, drag
-cancellation, focus, keyboard activation, accessibility and action dispatch. This is not
-a complete widget/event runtime. A decorative extension is not automatically clickable.
-For transformed, clipped, path-aware picking and inherited disabled state, use
-`View::tap_at` / `View::hover_at`; see [the view contract](docs/LAYOUT-VIEW.md).
-The GPUI experiment uses native focus/actions and gestures around this core contract.
-
-Build with `.build_with(theme)` to select the initial theme. Change it at runtime with
-`ui.set_theme(theme)` or `ui.set_theme_with(theme, measure_text)` for measured content.
-The update returns a newly resolved scene and publishes only after geometry, colors,
-normal styles and all hover styles validate. On failure, the previous UI is unchanged.
-IDs, tap actions and available dimensions are preserved; explicit pixel overrides stay
-fixed while theme defaults and tokens update. `scene_spec()` remains read-only.
-
-```rust
-let mut next = *ui.theme();
-next.mode = Mode::Light;
-next.corners = mui::core::CornerProfile::new(12., 8.);
-next.spacing.m = 16.;
-next.hover_shift = 0.10;
-next.contrast = Contrast::AA; // AAA requests 7:1 text.
-let scene = ui.set_theme_with(next, measure_text)?;
-let styles = ui.resolved_styles(None)?;
-```
-
-`ui.colors()` caches the current palette, and `resolved_styles` always uses that palette.
-Retain the returned scene and refresh renderer caches after a successful theme update.
-Theme updates validate every hover state and belong on the UI thread, not every frame.
-An impossible contrast request is rejected rather than silently weakening the threshold.
-
-Use `.scope("instance")` for reusable components: local `knob` becomes `instance/knob`.
-References resolve in the current scope; a leading `/` explicitly addresses the root
-(e.g. `.extend_to("/panel")`). Anonymous container identities depend on tree position;
-explicitly name dynamic lists. User IDs cannot contain `/` or begin with `@`.
-
-## Automatic hover colors
-
-```rust
-item("filter").text("Filter").on_tap("select-filter")
-```
-
-Clickable items are automatically hoverable. Use `.hoverable()` for hover feedback
-without a click action. No hover color or event handler is required on each item.
-By default, hover darkens in light mode and brightens in dark mode using an OKLab tone
-shift. Near black/white endpoints the shift reverses if necessary to remain visible.
-Transparent items inherit their parent's effective fill (canvas at the root) and get
-an opaque hover fill. `.hover_color(Color::PrimarySoft(0))` provides an explicit override.
-
-The host supplies the pointer in scene coordinates and draws resolved styles:
-
-```rust
-let colors = ui.theme().colors()?; // Cache for this theme.
-let hovered = ui.hover_at(&scene, pointer_x, pointer_y);
-let styles = ui.styles(&colors, hovered)?; // Cache until the hover target changes.
-// For each outline: styles[outline.id.as_str()].fill / stroke.
-// For each text item: styles[item_id].text.
-```
-
-The renderer must consume these styles; raw `ItemInfo.color` is only the authored seed.
-Text is corrected to at least 4.5:1 against its effective background in both states;
-strokes are corrected to 3:1 against both the inside fill and outside backdrop. Descendants of a hovered fill inherit the changed background.
-Merged members share one hover color, even when the hovered member is not the first member.
-Declare merges on a common ancestor of their members. Hover uses the same original bounds
-as tapping, and hovering alone never dispatches an action. A hover-only item blocks taps
-through to a clickable ancestor. The host still applies clipping and gesture recognition.
-
-Normal and hover previews are generated from the same Rust example:
-[normal](docs/items.svg), [hover on Filter](docs/items-hover.svg).
-`cargo run -p mui-demo --example items -- --hover > docs/items-hover.svg` reproduces hover.
-Opaque fills are assumed; images, transparency, overlapping unrelated layers and renderer
-composition require the host to supply an appropriate contrast policy.
-
-## Themes and contrast
-
-`Theme` shares one spacing scale between layout and geometry, plus a `Palette` with
-three primary seeds, one neutral seed and four status seeds (success, warning, error, info).
-Optional dark seeds override the light seeds. `Theme::colors()` resolves semantic roles:
-canvas, panel, raised, text, muted, outline, and primary/status fill/soft/on-color pairs.
-
-```rust
-let theme = Theme { mode: Mode::Dark, ..Theme::default() };
-let colors = theme.colors()?; // Cache until the theme or mode changes.
-let label = Rgb::new(140, 110, 160).contrast_on(&[colors.panel], 4.5)?;
-```
-
-Light and dark use separate OKLab lightness curves, with neutral chroma capped.
-Dark elevated surfaces become lighter; this is not a simple RGB inversion. Text and
-muted roles meet 4.5:1 against all three neutral surfaces, outlines meet 3:1, and each
-accent's on-color meets 4.5:1 against its fill. These are explicit role contracts,
-not a promise that every arbitrary pair of palette colors contrasts sufficiently.
-
-`contrast_on` preserves an already-passing color. Otherwise it searches 513 lightness
-tones, reduces chroma to fit sRGB, and checks contrast **after 8-bit quantization**.
-It returns an error if no sampled candidate meets the requested ratio against every
-provided background; it never silently returns a failing color. The search is bounded,
-not a proof of the closest possible color or of mathematical infeasibility.
-
-The implementation uses [WCAG relative luminance](https://www.w3.org/WAI/WCAG22/Understanding/contrast-minimum.html)
-and [OKLab](https://bottosson.github.io/posts/oklab/). Colors are opaque sRGB; alpha,
-gradients and image backdrops need composition-aware handling by the host. Color contrast
-alone does not establish complete WCAG accessibility. Derive roles on theme changes,
-not in an audio callback or for every painted element.
-
-## Geometry contracts
-
-- Frame surfaces keep a sharp Boolean basis and a rounded render path.
-- Merge unions bases before applying the corner profile, so old frame radii do not
-  create seams at new junctions.
-- Inset/outset offsets the parent's final path. Rounded rectangles use exact analytic
-  offsets; general paths use a bounded polygon approximation.
-- Derived offset surfaces retain their final material as their Boolean basis when
-  merged again. `ParentNormalized` radius matches proportional styling, not shell thickness.
-- Surface dependencies are resolved iteratively, once each, independently of declaration
-  order. Missing references, cycles, excessive depth, invalid modifiers and budget
-  violations are explicit errors. Zero-area unextended frames produce empty surfaces.
-- A failed scene/layout commit preserves the previous snapshot and revision.
-
-## Crates and boundaries
-
-| Crate | Responsibility |
-| --- | --- |
-| `mui-layout` | MUI API, validation, tokens, scoped keys, measurement and adaptive policy over Taffy 0.14 flexbox/grid layout |
-| `mui-geometry` | Boolean topology, fillets, paths and offsets |
-| `mui-core` | Item authoring, scene graph, automatic extensions and theme derivation |
-| `mui-tessellate` | Lyon path-to-mesh adapter |
-| `mui-egui` | Painting adapter and tessellation cache |
-| `mui` | Facade and prelude |
-| `mui-demo` | Hand-authored measured/reactive examples and reproducible SVG fixtures |
-| `mui-text` | Optional Parley font measurement, wrapping and final glyph layouts |
-
-All reusable Rust crates forbid unsafe code. Layout uses Taffy's f32 calculations
-behind MUI's f64 API; geometry uses f64. Layout is rebuilt per resolve, not incrementally
-cached. Overflow defaults to rejecting insufficient space; explicit clip/scroll
-policies and `ViewState` support nested viewports and transformed picking.
-Virtualization is not implemented in the core. The separate GPUI experiment
-provides native focus/input and plugin gesture examples; the reusable core does
-not own a widget runtime or a complete accessibility tree.
-
-## TypeScript and verification
-
-`packages/mui-ts` is frozen for compatibility. Its examples show the historical fluent
-item and scene schemas, and its compiler still has no plugin runtime role. New layout,
-theme and measured-content work belongs in the Rust `Item`/generic DSL, where Rust stays
-the runtime authority. The generated demo crate was retired; the hand-authored examples
-under `crates/mui-demo/examples` remain the maintained runnable fixtures.
-
-Prerequisites: Rust 1.98.1 with rustfmt, Clippy and `wasm32-unknown-unknown`.
-Node and TypeScript are only needed if you inspect the frozen package.
+## Preview
 
 ```bash
-cargo fetch --locked
+cargo run -p mui-preview
+```
+
+The whole window is one tree: the sidebar's scene list, toggles and sliders
+are `mui` widgets, the specimen is an anchored child of the stage, and a drag
+on the stage pans it through an offset. `bacon` rebuilds and relaunches on
+save. Point `MUI_PREVIEW_FONT` at a variable font and the Glyph scene grows a
+slider per axis.
+
+```bash
+cargo run -p mui-vello --example headless -- /tmp/pill.png
+```
+
+is the stack end to end with no window, and
+
+```bash
+cargo run -p mui --features cpu --example snapshot -- /tmp/widgets.png
+```
+
+runs two `Ui::frame`s of the widget card and rasterises them on the CPU:
+no GPU, no window. With `--features cpu`, `mui-vello` renders through
+`vello_cpu` and its snapshot test asserts actual pixels.
+
+## Verify
+
+```bash
 ./tools/verify.sh
 ```
 
-Verification checks formatting, native tests, Clippy with warnings denied, WASM compilation,
-and the hand-authored demo examples. It does not build the frozen TypeScript package or
-generate Rust from it. GPUI/plugin and render-lab experiments are separate Cargo
-workspaces with their own checks; this command does not validate physical-GPU rendering
-or a DAW editor.
-
-API migration: `Spacing::resolve` now takes `&SpacingScale`; Theme literals need
-`..Theme::default()` for new palette/mode fields. Direct matches on `SurfaceSource::Frame`
-must account for `extension`. Layout key separators and adaptive/wrap policies are validated.
-
-The facade prelude now contains item authoring rather than `SurfaceSpec`/`Node` internals.
-Low-level APIs and older constructors remain available through `mui::core` and `mui::layout`
-for compatibility. Rust has no variable-arity methods: separate rounding values use the
-named `Rounding::separate(outer, inner)` constructor rather than a fictitious overloaded call.
-
-Contrast policy follows WCAG 2.1/2.2 AA color criteria: 4.5:1 normal text, 3:1 large text,
-and 3:1 for required non-text information against adjacent colors. MUI conservatively
-uses 4.5:1 for all text because font-size classification belongs to the host. `Contrast::AAA`
-requests 7:1 text, without claiming complete AAA compliance. Text and graphic thresholds
-can be strengthened but not lowered below the AA floors. Hover's old and new fills do
-not themselves require a 3:1 ratio. A stroke's presence, its thickness, focus indicators,
-keyboard access, hit-target size and accessibility semantics remain separate concerns.
-See [W3C text contrast](https://www.w3.org/WAI/WCAG22/Understanding/contrast-minimum.html)
-and [non-text contrast](https://www.w3.org/WAI/WCAG22/Understanding/non-text-contrast.html).
-
-## Browser playground and remaining work
-
-The [playground](playground/README.md) runs the real Rust engine in WebAssembly, with an
-editable item DSL, numeric parameter sliders, pointer hover, theme controls and local
-browser drafts. Build with `tools/build-playground.sh` and serve the `playground` folder.
-The GitHub Pages workflow is prepared for explicit deployment once repository access is
-available. No hosted URL is implied by the presence of the workflow.
-
-See [the reuse roadmap](docs/ROADMAP.md) for the remaining layout, alignment, text, color,
-interaction, rendering, plugin-binding and publication work. The next step is to close known rendering/input failures in the existing GPUI
-integration, then consolidate reusable components and per-instance state before
-connecting an audible KURV plugin slice.
-
-### Parley text
-
-Enable `mui`'s `text` feature for `TextSystem`: bundled-font registration, intrinsic text
-measurement, wrapping and final glyph layouts paired with the resolved scene. See
-[the text integration](crates/mui-text/README.md). `system-fonts` separately enables native
-font discovery. Renderers can now read `Layout::content_frame(id)` to place text inside
-resolved padding, and `Ui::items()` to inspect logical items in authoring order.
-
-Taffy remains an internal flex/grid solver; it does not define MUI's authoring syntax or
-merged geometry. Our wrapper currently rebuilds its tree per resolve, so cross-frame cache
-reuse is not implemented. Retaining that tree (or using Taffy's custom-tree API once the
-runtime tree is stable) is preferable to writing another flex/grid algorithm without evidence.
-
-### Renderer comparison prototype
-
-The isolated [render lab](experiments/render-lab/README.md) executes GPUI and Vello against
-shared MUI geometry, with gradient/AA checks, seeded geometry cases, shader probes and
-presentation-inclusive timing. See [measured results and limitations](docs/render-lab/RESULTS.md).
-The original report used software Vulkan. Subsequent
-[RX 6600 comparisons](docs/render-lab/rx6600-2026-09-13/RESULTS.md) and the
-[shared gradient correction](docs/render-lab/rx6600-gradient-fix-2026-09-13/RESULTS.md)
-provide physical-GPU evidence. The plugin experiment uses GPUI; Vello remains a
-comparison, not an adopted hybrid renderer. See the [current roadmap](docs/ROADMAP.md)
-for remaining AA, typography, component and host-validation work.
+Formatting, tests, clippy with warnings denied, and a wasm check of the
+library crates. The TypeScript frontend under `packages/mui-ts` is frozen;
+see `packages/mui-ts/FROZEN.md`.

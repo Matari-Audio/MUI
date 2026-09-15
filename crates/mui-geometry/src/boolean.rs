@@ -258,11 +258,7 @@ fn prepare_all(shapes: &[PlacedShape], o: GeometryOptions) -> Result<BackendMult
 pub(crate) fn topology(raw: BackendMulti, o: GeometryOptions) -> Result<Topology, Error> {
     let mut rings = Vec::new();
     let mut count = 0;
-    let mut component = 0;
-    'polygons: for poly in raw {
-        if poly.is_empty() {
-            continue;
-        }
+    'polygons: for (component, poly) in raw.into_iter().enumerate() {
         for (index, ring) in poly.into_iter().enumerate() {
             let points: Vec<_> = ring.into_iter().map(|p| Point::new(p[0], p[1])).collect();
             let mut points = match clean_ring(&points, o.epsilon) {
@@ -290,7 +286,6 @@ pub(crate) fn topology(raw: BackendMulti, o: GeometryOptions) -> Result<Topology
                 component,
             });
         }
-        component += 1;
     }
     Ok(Topology { rings })
 }

@@ -12,12 +12,16 @@
 //! and what keeps a 24 px corner smooth when the scene is scaled up.
 #![forbid(unsafe_code)]
 
-use mui_core::styled::{Paint, Painted, ResolvedScene};
+use kurbo::{Affine, BezPath, Rect, Shape as _, Stroke};
+use mui_core::{Paint, Painted, ResolvedScene};
 use mui_geometry::{Error, Path, PathCommand};
-use vello_common::kurbo::{self, Affine, BezPath, Rect, Shape as _, Stroke};
 use vello_common::paint::PaintType;
 use vello_common::peniko::color::{AlphaColor, DynamicColor, Srgb};
 use vello_common::peniko::{ColorStop, Gradient};
+pub use vello_common::{kurbo, peniko};
+#[cfg(feature = "cpu")]
+pub use vello_cpu;
+pub use vello_hybrid;
 
 /// Curve error, in scene units, allowed when an arc becomes cubics. Vello
 /// re-flattens per frame at device resolution, so this only has to be finer
@@ -140,7 +144,6 @@ pub trait Canvas {
     fn stroke_path(&mut self, p: &BezPath);
     fn fill_blurred_rounded_rect(&mut self, r: &Rect, radius: f32, std_dev: f32);
 }
-#[cfg(any(feature = "gpu", feature = "cpu"))]
 macro_rules! canvas {
     ($t:ty) => {
         impl Canvas for $t {
@@ -165,12 +168,11 @@ macro_rules! canvas {
         }
     };
 }
-#[cfg(feature = "gpu")]
 canvas!(vello_hybrid::Scene);
 #[cfg(feature = "cpu")]
 canvas!(vello_cpu::RenderContext);
 
-fn srgb(c: mui_core::color::Color) -> AlphaColor<Srgb> {
+fn srgb(c: mui_core::Color) -> AlphaColor<Srgb> {
     c.to_srgb()
 }
 
@@ -245,7 +247,7 @@ fn one(canvas: &mut impl Canvas, p: &Painted) -> Result<(), Error> {
 #[cfg(all(test, feature = "cpu"))]
 mod snapshot {
     use super::*;
-    use mui_core::styled::prelude::*;
+    use mui_core::prelude::*;
     use vello_common::pixmap::Pixmap;
 
     /// The whole stack on the CPU: a filled card reaches the pixels, its ink
@@ -262,10 +264,7 @@ mod snapshot {
             epaint_default_fonts::HACK_REGULAR.to_vec(),
         ));
         let scene = resolve_scene(&spec).unwrap();
-        assert!(scene
-            .paint
-            .iter()
-            .any(|p| p.layer == mui_core::styled::Layer::Text));
+        assert!(scene.paint.iter().any(|p| p.layer == mui_core::Layer::Text));
 
         let mut ctx = vello_cpu::RenderContext::new(120, 60);
         paint(&mut ctx, &scene, Affine::IDENTITY).unwrap();

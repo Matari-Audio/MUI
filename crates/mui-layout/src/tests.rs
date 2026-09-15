@@ -140,12 +140,18 @@ fn basis_zero_shares_the_axis_rather_than_the_surplus() {
     assert_eq!(l.frame("li").unwrap().x, 0.);
     assert_eq!(l.frame("ri").unwrap().right(), 400.);
 
-    // Taffy follows browser flexbox intrinsic sizing: hugging sums content,
-    // while an offered axis uses basis for equal flexible shares.
+    // Hugging, the row is sized by the flex fraction: wide enough that the
+    // hungriest flexible child's *share* still clears its content. The left
+    // slot needs 50, so at one unit of grow each both slots are 50 and the
+    // row is 130 -- not the 100 that summing the children would give, which
+    // would have squashed that slot to 35.
     let hug = resolve(&slots(|n| n.flex(1.)), None, Default::default()).unwrap();
-    assert_eq!(hug.size.width, 100.);
-    assert_eq!(hug.frame("li").unwrap().size.width, 35.);
+    assert_eq!(hug.size.width, 130.);
+    assert_eq!(hug.frame("li").unwrap().size.width, 50.);
     assert_eq!(hug.frame("ri").unwrap().size.width, 20.);
+    // ...so the middle child is centred at its hugging size too.
+    let m = hug.frame("m").unwrap();
+    assert_eq!(m.x + m.size.width / 2., 65.);
 }
 
 #[test]
@@ -326,7 +332,7 @@ fn space_around_and_evenly() {
     };
     assert_eq!(r(Justify::SpaceAround), (20., 70.));
     let (a, b) = r(Justify::SpaceEvenly);
-    assert!((a - 80. / 3.).abs() < 1e-5 && (b - 190. / 3.).abs() < 1e-5);
+    assert!((a - 80. / 3.).abs() < 1e-9 && (b - 190. / 3.).abs() < 1e-9);
 }
 
 #[test]
@@ -349,39 +355,4 @@ fn tokens_resolve_against_the_scale_and_frames_come_out_in_tree_order() {
     assert_eq!(l.all().len(), 3);
     assert_eq!(l.all()[1], l.frame("a").unwrap());
     assert_eq!(l.all()[2].y, 30.);
-}
-
-#[test]
-fn converted_tree_keeps_theme_tokens_and_runtime_frame_order() {
-    let tree: crate::Node = column([leaf(10., 10.).id("child")])
-        .id("root")
-        .pad(SpacingToken::M)
-        .into();
-    let layout = crate::resolve_with_spacing(
-        &tree,
-        None,
-        Limits::default(),
-        &SpacingScale {
-            m: 2.,
-            ..SpacingScale::DEFAULT
-        },
-    )
-    .unwrap();
-    assert_eq!(layout.size, Size::new(14., 14.));
-    assert_eq!(
-        layout.all(),
-        &[
-            layout.frame("root").unwrap(),
-            layout.frame("child").unwrap()
-        ]
-    );
-}
-
-#[test]
-fn expand_is_the_layout_growth_alias() {
-    assert_eq!(leaf(10., 10.).expand(), leaf(10., 10.).grow(1.));
-    assert_eq!(
-        crate::Node::leaf("x", Size::new(10., 10.)).expand(),
-        crate::Node::leaf("x", Size::new(10., 10.)).grow(1.)
-    );
 }

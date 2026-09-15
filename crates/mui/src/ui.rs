@@ -2,8 +2,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use mui_core::styled::{El, Palette, ResolvedScene, SceneError, SceneSpec, Theme};
-use mui_core::{Size, Spring};
+use mui_core::{El, Palette, ResolvedScene, SceneError, SceneSpec, Size, Spring, Theme};
 use mui_input::{Hit, Interaction, PointerInput, Response};
 
 /// What one call to [`Ui::frame`] produced.
@@ -38,6 +37,14 @@ impl Ui {
     pub fn font(mut self, font: impl Into<Arc<Vec<u8>>>) -> Self {
         self.font = Some(font.into());
         self
+    }
+    /// What the last frame resolved to, for anything drawn on top of it.
+    pub fn scene(&self) -> Option<&ResolvedScene> {
+        self.scene.as_ref()
+    }
+    /// Drop the gesture in flight, for focus loss.
+    pub fn cancel(&mut self) {
+        self.interaction.cancel();
     }
     /// Last frame's gesture on `id`. Widgets read this while building the
     /// next tree, so a drag lands one frame late and nobody notices.
@@ -84,6 +91,7 @@ impl Ui {
         pointer: PointerInput,
         dt: f64,
     ) -> Result<Frame<'_>, SceneError> {
+        let was_held = self.interaction.held().is_some();
         self.interaction.update(&self.hit, pointer);
         let (hovered, held) = (
             self.interaction.hovered().map(str::to_owned),
@@ -102,7 +110,9 @@ impl Ui {
                 .iter_mut()
                 .for_each(|s| s.to(1.0));
         }
-        let mut animating = false;
+        // A release is read by the *next* tree, so that frame must come even
+        // when nothing is moving.
+        let mut animating = was_held;
         for s in self.springs.values_mut().flatten() {
             animating |= s.step(dt);
         }
@@ -118,7 +128,7 @@ impl Ui {
         let mut spec = SceneSpec::new(root).theme(self.theme);
         spec.offered = offered;
         spec.font = self.font.clone();
-        let scene = mui_core::styled::resolve_scene(&spec)?;
+        let scene = mui_core::resolve_scene(&spec)?;
         // Named nodes are the gesture targets, in z-order. Unnamed ones are
         // decoration.
         let mut hit = Hit::default();
@@ -162,7 +172,7 @@ impl std::fmt::Debug for Ui {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mui_core::styled::prelude::*;
+    use mui_core::prelude::*;
     use mui_geometry::Point;
 
     fn at(x: f64, y: f64, down: bool) -> PointerInput {
@@ -189,14 +199,4 @@ mod tests {
         let _ = ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
         assert!(ui.get("b").released);
     }
-}
-
-/// Styled authoring and widget helpers for pointer-driven frames.
-pub mod prelude {
-    pub use super::{Frame, Ui};
-    pub use crate::widgets::{button, knob, slider, toggle};
-    pub use mui_core::styled::prelude::*;
-    pub use mui_core::styled::{CornerProfile, Palette, Pigment};
-    pub use mui_core::Spring;
-    pub use mui_input::{PointerInput, Response};
 }

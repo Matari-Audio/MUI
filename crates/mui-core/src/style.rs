@@ -1,140 +1,203 @@
-//! Resolve opaque paint colors on theme/hover changes, separately from layout.
-use crate::{ColorError, Colors, Rgb, SceneError, Ui};
-use std::collections::BTreeMap;
+//! What a box looks like, said in terms of the theme.
+//!
+//! Nothing here is a pixel colour until [`Fill::paint`] is asked, with a
+//! palette and the colour underneath. A tree written once against roles reads
+//! correctly in light and dark, on a chip and on the ground.
+use crate::{Color, Palette};
+use mui_layout::Spacing;
+
+/// A colour named by its job.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct ItemStyle {
-    pub fill: Option<Rgb>,
-    /// Effective opaque background, including inherited parent color.
-    pub background: Rgb,
-    pub text: Rgb,
-    pub stroke: Option<(Rgb, f64)>,
-    pub hovered: bool,
+pub enum Role {
+    Background,
+    Surface,
+    Raised,
+    Field,
+    Layer(i32),
+    Primary,
+    Secondary,
+    Tertiary,
+    Success,
+    Warning,
+    Danger,
+    /// Full-strength ink that reads on whatever it sits on.
+    Ink,
+    /// Quieter ink, still legible.
+    Dim,
 }
-#[derive(Debug)]
-pub enum StyleError {
-    Color(ColorError),
-    Scene(SceneError),
-}
-impl std::fmt::Display for StyleError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Role {
+    pub fn color(self, p: &Palette, under: Color) -> Color {
         match self {
-            Self::Color(e) => e.fmt(f),
-            Self::Scene(e) => e.fmt(f),
+            Self::Background => p.background(),
+            Self::Surface => p.surface(),
+            Self::Raised => p.raised(),
+            Self::Field => p.field(),
+            Self::Layer(n) => p.layer(n),
+            Self::Primary => p.primary(),
+            Self::Secondary => p.secondary(),
+            Self::Tertiary => p.tertiary(),
+            Self::Success => p.success(),
+            Self::Warning => p.warning(),
+            Self::Danger => p.danger(),
+            Self::Ink => p.on(under),
+            Self::Dim => p.dim(under),
         }
     }
 }
-impl std::error::Error for StyleError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+
+/// A linear gradient, CSS-style: `angle` 180 runs top to bottom.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Gradient {
+    pub angle: f64,
+    pub stops: Vec<(f32, Fill)>,
+}
+impl Gradient {
+    pub fn linear<F: Into<Fill>>(angle: f64, stops: impl IntoIterator<Item = (f32, F)>) -> Self {
+        Self {
+            angle,
+            stops: stops.into_iter().map(|(t, f)| (t, f.into())).collect(),
+        }
+    }
+    pub fn vertical<F: Into<Fill>>(top: F, bottom: F) -> Self {
+        Self::linear(180.0, [(0.0, top), (1.0, bottom)])
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub enum Fill {
+    #[default]
+    None,
+    Role(Role),
+    Color(Color),
+    Gradient(Gradient),
+}
+impl From<Role> for Fill {
+    fn from(r: Role) -> Self {
+        Self::Role(r)
+    }
+}
+impl From<Color> for Fill {
+    fn from(c: Color) -> Self {
+        Self::Color(c)
+    }
+}
+impl From<Gradient> for Fill {
+    fn from(g: Gradient) -> Self {
+        Self::Gradient(g)
+    }
+}
+
+/// A fill with every role looked up: what a renderer is handed.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Paint {
+    Solid(Color),
+    Linear {
+        angle: f64,
+        stops: Vec<(f32, Color)>,
+    },
+}
+impl Paint {
+    /// The one colour a thing on top of this paint is judged against.
+    pub fn solid(&self) -> Color {
+        match self {
+            Self::Solid(c) => *c,
+            Self::Linear { stops, .. } => {
+                stops.first().map_or(Color::oklch(0.5, 0.0, 0.0), |s| s.1)
+            }
+        }
+    }
+}
+
+impl Fill {
+    pub fn is_none(&self) -> bool {
+        matches!(self, Self::None)
+    }
+    pub fn paint(&self, p: &Palette, under: Color) -> Option<Paint> {
         Some(match self {
-            Self::Color(e) => e,
-            Self::Scene(e) => e,
+            Self::None => return None,
+            Self::Role(r) => Paint::Solid(r.color(p, under)),
+            Self::Color(c) => Paint::Solid(*c),
+            Self::Gradient(g) => Paint::Linear {
+                angle: g.angle,
+                stops: g
+                    .stops
+                    .iter()
+                    .map(|(t, f)| (*t, f.paint(p, under).map_or(under, |p| p.solid())))
+                    .collect(),
+            },
         })
     }
-}
-impl From<ColorError> for StyleError {
-    fn from(e: ColorError) -> Self {
-        Self::Color(e)
-    }
-}
-impl From<SceneError> for StyleError {
-    fn from(e: SceneError) -> Self {
-        Self::Scene(e)
-    }
-}
-impl Ui {
-    pub fn resolved_styles(
-        &self,
-        hovered: Option<&str>,
-    ) -> Result<BTreeMap<&str, ItemStyle>, StyleError> {
-        self.styles(self.colors(), hovered)
-    }
-    /// Use colors from this UI's theme. Cache until theme or hover target changes.
-    /// Entries include item IDs and merged-outline IDs, ready for the renderer.
-    /// Hover on any merged member changes the shared outline consistently.
-    pub fn styles<'a>(
-        &'a self,
-        colors: &Colors,
-        hovered: Option<&str>,
-    ) -> Result<BTreeMap<&'a str, ItemStyle>, StyleError> {
-        let hovered = hovered.filter(|id| {
-            self.items
-                .get(*id)
-                .is_some_and(|i| i.hoverable && !i.disabled)
-        });
-        let mut result: BTreeMap<&str, ItemStyle> = BTreeMap::new();
-        let mut membership = BTreeMap::new();
-        for group in &self.groups {
-            for id in &group.members {
-                membership.insert(id.as_str(), group);
-            }
+    /// Resolve, then push every colour through `f`: hover and press states
+    /// without a second table of colours.
+    pub fn map(&self, p: &Palette, under: Color, f: impl Fn(Color) -> Color) -> Fill {
+        match self.paint(p, under) {
+            None => Fill::None,
+            Some(Paint::Solid(c)) => Fill::Color(f(c)),
+            Some(Paint::Linear { angle, stops }) => Fill::Gradient(Gradient {
+                angle,
+                stops: stops
+                    .into_iter()
+                    .map(|(t, c)| (t, Fill::Color(f(c))))
+                    .collect(),
+            }),
         }
-        for id in &self.order {
-            let info = &self.items[id];
-            let inherited = info
-                .parent
-                .as_ref()
-                .and_then(|p| result.get(p.as_str()))
-                .map_or(colors.canvas, |s| s.background);
-            let group = membership.get(id.as_str());
-            if let Some(style) = group.and_then(|g| result.get(g.id.as_str())).copied() {
-                result.insert(id.as_str(), style);
-                continue;
-            }
-            let (paint, backdrop, active) = if let Some(group) = group {
-                let backdrop = if &group.owner == id {
-                    inherited
-                } else {
-                    result
-                        .get(group.owner.as_str())
-                        .map_or(colors.canvas, |s| s.background)
-                };
-                let active = hovered.is_some_and(|h| group.members.iter().any(|m| m == h));
-                (&self.items[&group.members[0]], backdrop, active)
-            } else {
-                (info, inherited, hovered == Some(id.as_str()))
-            };
-            let normal = paint.color.map(|c| c.resolve(colors)).transpose()?;
-            let mut fill = normal;
-            if active {
-                let override_color = hovered
-                    .and_then(|h| self.items[h].hover_color)
-                    .or(paint.hover_color);
-                fill = Some(match override_color {
-                    Some(c) => c.resolve(colors)?,
-                    None => normal
-                        .unwrap_or(backdrop)
-                        .hovered_with(self.theme().mode, self.theme().hover_shift),
-                });
-            }
-            let background = fill.unwrap_or(backdrop);
-            let text = info
-                .foreground
-                .map(|c| c.resolve(colors))
-                .transpose()?
-                .unwrap_or(colors.text)
-                .contrast_on(&[background], self.theme().contrast.text)?;
-            let stroke = paint
-                .stroke
-                .map(|(c, w)| {
-                    Ok::<_, StyleError>((
-                        c.resolve(colors)?
-                            .contrast_on(&[background, backdrop], self.theme().contrast.graphics)?,
-                        w,
-                    ))
-                })
-                .transpose()?;
-            let style = ItemStyle {
-                fill,
-                background,
-                text,
-                stroke,
-                hovered: active,
-            };
-            result.insert(id.as_str(), style);
-            if let Some(group) = group {
-                result.insert(group.id.as_str(), style);
-            }
-        }
-        Ok(result)
     }
+}
+
+/// Convex corner radius of a box.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum Radius {
+    #[default]
+    Theme,
+    Px(f64),
+    /// Multiple of the theme radius.
+    Scale(f64),
+    /// Half the short side, whatever that turns out to be.
+    Pill,
+}
+impl From<f64> for Radius {
+    fn from(v: f64) -> Self {
+        Self::Px(v)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Stroke {
+    pub fill: Fill,
+    /// `None` takes the theme's stroke width.
+    pub width: Option<f64>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Shadow {
+    pub blur: f64,
+    pub dx: f64,
+    pub dy: f64,
+    pub fill: Fill,
+}
+impl Shadow {
+    /// A soft drop below the box, a quarter-strength black.
+    pub fn soft(blur: f64) -> Self {
+        Self {
+            blur,
+            dx: 0.0,
+            dy: blur / 2.0,
+            fill: Fill::Color(Color::oklcha(0.0, 0.0, 0.0, 0.25)),
+        }
+    }
+}
+
+/// Everything a node says about its own paint. Layers, back to front:
+/// shadow, fill, shells (each a constant-thickness inset of the last),
+/// stroke, then the node's text.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Style {
+    pub fill: Fill,
+    pub stroke: Option<Stroke>,
+    pub radius: Radius,
+    pub shadow: Option<Shadow>,
+    pub shells: Vec<(Spacing, Fill)>,
+    /// Outline is the union of the children's frames, filleted, instead of
+    /// this node's own rectangle: a tab welded to its panel.
+    pub weld: bool,
 }

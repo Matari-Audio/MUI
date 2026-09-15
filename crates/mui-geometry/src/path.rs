@@ -48,43 +48,6 @@ pub struct Path {
     pub commands: Vec<PathCommand>,
 }
 impl Path {
-    /// Nonzero-fill hit test in path coordinates; boundary points count as inside.
-    /// Circular arcs use the same flattening tolerance/budget as mesh adapters.
-    pub fn contains(&self, point: Point, tolerance: f64, max_points: usize) -> Result<bool, Error> {
-        if !point.finite() {
-            return Err(Error::NonFinite);
-        }
-        let contours = self.flatten(tolerance, max_points)?;
-        let mut winding = 0i64;
-        for ring in contours {
-            for (a, b) in ring
-                .iter()
-                .zip(ring.iter().cycle().skip(1))
-                .take(ring.len())
-            {
-                let side = (b.x - a.x) * (point.y - a.y) - (point.x - a.x) * (b.y - a.y);
-                if !side.is_finite() {
-                    return Err(Error::CoordinateLimit);
-                }
-                if side == 0.0
-                    && point.x >= a.x.min(b.x)
-                    && point.x <= a.x.max(b.x)
-                    && point.y >= a.y.min(b.y)
-                    && point.y <= a.y.max(b.y)
-                {
-                    return Ok(true);
-                }
-                if a.y <= point.y && b.y > point.y && side > 0.0 {
-                    winding += 1;
-                }
-                if a.y > point.y && b.y <= point.y && side < 0.0 {
-                    winding -= 1;
-                }
-            }
-        }
-        Ok(winding != 0)
-    }
-
     /// Validate command state and arc consistency without allocating polygons.
     pub fn validate(&self, max_commands: usize) -> Result<(), Error> {
         if self.commands.len() > max_commands {

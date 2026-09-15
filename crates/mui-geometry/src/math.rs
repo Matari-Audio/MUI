@@ -139,27 +139,6 @@ impl Affine {
             self.yx * p.x + self.yy * p.y + self.ty,
         )
     }
-    /// Invert a transform; fail if its determinant is zero/nonfinite or its inverse is nonfinite.
-    pub fn inverse(self) -> Option<Self> {
-        if !self.finite() {
-            return None;
-        }
-        let d = self.xx * self.yy - self.xy * self.yx;
-        if !d.is_finite() || d == 0. {
-            return None;
-        }
-        let mut inverse = Self {
-            xx: self.yy / d,
-            xy: -self.xy / d,
-            yx: -self.yx / d,
-            yy: self.xx / d,
-            tx: 0.,
-            ty: 0.,
-        };
-        inverse.tx = -(inverse.xx * self.tx + inverse.xy * self.ty);
-        inverse.ty = -(inverse.yx * self.tx + inverse.yy * self.ty);
-        inverse.finite().then_some(inverse)
-    }
     pub fn finite(self) -> bool {
         [self.xx, self.xy, self.yx, self.yy, self.tx, self.ty]
             .iter()

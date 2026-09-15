@@ -2,9 +2,9 @@
 //! where two flex weights put it, a knob's pointer is an anchored offset.
 use std::ops::RangeInclusive;
 
-use mui_core::styled::prelude::*;
+use mui_core::prelude::*;
 
-use crate::ui::Ui;
+use crate::Ui;
 
 fn unit(value: f64, range: &RangeInclusive<f64>) -> f64 {
     ((value - range.start()) / (range.end() - range.start())).clamp(0.0, 1.0)

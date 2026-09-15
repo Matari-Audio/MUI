@@ -8,7 +8,7 @@
 //! file instead of opening a window only because a window is a separate
 //! problem: a surface would get the same pixels.
 
-use mui_core::styled::prelude::*;
+use mui_core::prelude::*;
 use mui_core::CornerProfile;
 use vello_common::kurbo::Affine;
 use vello_hybrid::{RenderSize, RenderTargetConfig, Renderer, Scene, TextureBindings};
