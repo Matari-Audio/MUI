@@ -13,6 +13,8 @@ use mui_layout::SpacingToken::S;
 
 /// How long the pointer must rest on a surface before its tip is due.
 pub const TIP_DELAY: f64 = 0.5;
+/// Two presses on one target within this are a double click.
+pub const DOUBLE_CLICK: f64 = 0.4;
 
 /// What one call to [`Ui::frame`] produced.
 pub struct Frame<'a> {
@@ -28,6 +30,8 @@ pub struct Frame<'a> {
     /// Every gesture that began or ended this frame, for a host that brackets
     /// automation. [`Ui::edit`] asks about one id.
     pub edits: Vec<(String, Edit)>,
+    /// A copy or cut asked for this: put it on the host's clipboard.
+    pub clipboard: Option<String>,
 }
 
 /// A parameter gesture's two edges. A slider or knob drag is one `Begin`, a
@@ -57,8 +61,16 @@ pub struct Ui {
     text_cache: TextCache,
     /// Per scroll node: how far its children are slid.
     scrolls: BTreeMap<String, [f64; 2]>,
-    /// Per text field: the caret's character index.
-    carets: BTreeMap<String, usize>,
+    /// Per text field: the selection's anchor and caret, in characters. They
+    /// are equal when nothing is selected.
+    sel: BTreeMap<String, (usize, usize)>,
+    /// The host's clipboard, handed in with a paste key; and what a copy or
+    /// cut asked to put back on it.
+    pasted: Option<String>,
+    copied: Option<String>,
+    /// A press that landed on the same target within [`DOUBLE_CLICK`].
+    double: Option<String>,
+    last_press: Option<(String, f64)>,
     focus: Option<String>,
     edits: Vec<(String, Edit)>,
     /// An `End` owed because the gesture was cancelled, not released.
@@ -82,7 +94,11 @@ impl Ui {
             motion: BTreeMap::new(),
             text_cache: TextCache::default(),
             scrolls: BTreeMap::new(),
-            carets: BTreeMap::new(),
+            sel: BTreeMap::new(),
+            pasted: None,
+            copied: None,
+            double: None,
+            last_press: None,
             focus: None,
             edits: Vec::new(),
             cancelled: None,
@@ -198,11 +214,33 @@ impl Ui {
         self.scrolls.get(id).copied().unwrap_or([0.0, 0.0])
     }
 
-    pub(crate) fn caret(&self, id: &str) -> usize {
-        self.carets.get(id).copied().unwrap_or(0)
+    pub(crate) fn sel(&self, id: &str) -> (usize, usize) {
+        self.sel.get(id).copied().unwrap_or((0, 0))
     }
-    pub(crate) fn set_caret(&mut self, id: &str, i: usize) {
-        self.carets.insert(id.to_owned(), i);
+    pub(crate) fn set_sel(&mut self, id: &str, anchor: usize, caret: usize) {
+        self.sel.insert(id.to_owned(), (anchor, caret));
+    }
+    /// The clipboard the host handed in because a paste key arrived.
+    pub(crate) fn pasted(&self) -> Option<&str> {
+        self.pasted.as_deref()
+    }
+    /// Whether the last press on `id` was the second of a double click.
+    pub(crate) fn double_click(&self, id: &str) -> bool {
+        self.double.as_deref() == Some(id)
+    }
+    /// Ask the host to put `s` on the clipboard: it comes back on the next
+    /// frame's [`Frame::clipboard`].
+    pub fn set_clipboard(&mut self, s: impl Into<String>) {
+        self.copied = Some(s.into());
+    }
+    /// The character index in `s` nearest `x`, measured in the scene's font.
+    pub(crate) fn hit(&self, s: &str, size: f64, x: f64) -> usize {
+        match self.font.as_deref() {
+            Some(f) => mui_text::hit_index(f, s, size, x)
+                .map_or(0, |b| s[..b.min(s.len())].chars().count()),
+            // ponytail: the same 0.6em guess `advance` falls back to.
+            None => ((x / (size * 0.6)).round().max(0.0) as usize).min(s.chars().count()),
+        }
     }
     /// Pen advance of `s`, for placing a caret.
     pub(crate) fn advance(&self, s: &str, size: f64) -> f64 {
@@ -282,6 +320,7 @@ impl Ui {
     ) -> Result<Frame<'_>, SceneError> {
         let input = input.into();
         self.pointer = input.pointer;
+        self.pasted = input.clipboard;
         self.time += dt;
         let prev_held = self.interaction.held().map(str::to_owned);
         self.interaction.update(&self.hit, input.pointer);
@@ -326,7 +365,14 @@ impl Ui {
 
         // Focus follows a press on a focusable surface, and a press on
         // anything else drops it.
+        self.double = None;
         if let Some(id) = self.interaction.pressed().map(str::to_owned) {
+            if let Some((prev, t)) = self.last_press.take() {
+                if prev == id && self.time - t < DOUBLE_CLICK {
+                    self.double = Some(id.clone());
+                }
+            }
+            self.last_press = Some((id.clone(), self.time));
             let keeps = self
                 .scene
                 .as_ref()
@@ -364,18 +410,22 @@ impl Ui {
                     Point::new(s.frame.x, s.frame.bottom() + 4.0),
                 ))
             });
-        // ponytail: the tip rides an overlay wrapper because a built tree has
-        // no "append a child"; give `Node` one and push into the root instead.
         let mut root = match &tip {
-            Some((t, at)) => overlay([
-                root,
-                text(t.clone())
+            Some((t, at)) => {
+                let float = text(t.clone())
                     .pad(S)
                     .fill(Role::Raised)
                     .radius(6.0)
                     .float()
-                    .offset(at.x, at.y),
-            ]),
+                    .offset(at.x, at.y);
+                // A leaf root has nowhere to push, so that one case still
+                // rides a wrapper.
+                if root.is_container() {
+                    root.push(float)
+                } else {
+                    overlay([root, float])
+                }
+            }
             None => root,
         };
 
@@ -426,6 +476,7 @@ impl Ui {
             tip,
             cursor,
             edits: self.edits.clone(),
+            clipboard: self.copied.take(),
         })
     }
 
@@ -652,6 +703,66 @@ mod tests {
         ui.frame(root, None, PointerInput::default(), 0.016)
             .unwrap();
         assert_eq!(value, "h");
+    }
+
+    #[test]
+    fn a_selection_is_extended_by_shift_and_deleted_as_one() {
+        let mut ui = Ui::new(Theme::DEFAULT);
+        let mut value = String::from("hello");
+        let run = |ui: &mut Ui, v: &mut String, input: Input| {
+            let root = crate::widgets::text_input(ui, "f", v);
+            ui.frame(root, None, input, 0.016).unwrap();
+        };
+        run(&mut ui, &mut value, Input::default());
+        ui.focus("f");
+        let shift = |k| Input {
+            keys: vec![KeyPress {
+                key: k,
+                mods: Mods {
+                    shift: true,
+                    ..Mods::default()
+                },
+            }],
+            ..Input::default()
+        };
+        run(&mut ui, &mut value, shift(Key::Right));
+        run(&mut ui, &mut value, shift(Key::Right));
+        run(&mut ui, &mut value, key(Key::Backspace));
+        run(&mut ui, &mut value, Input::default());
+        assert_eq!(value, "llo", "two characters selected, one Backspace");
+    }
+
+    #[test]
+    fn copy_asks_the_host_for_the_clipboard_and_paste_takes_it_back() {
+        let mut ui = Ui::new(Theme::DEFAULT);
+        let mut value = String::from("hi");
+        let run = |ui: &mut Ui, v: &mut String, input: Input| {
+            let root = crate::widgets::text_input(ui, "f", v);
+            ui.frame(root, None, input, 0.016)
+                .unwrap()
+                .clipboard
+                .clone()
+        };
+        run(&mut ui, &mut value, Input::default());
+        ui.focus("f");
+        let ctrl = |c: char, clipboard: Option<String>| Input {
+            keys: vec![KeyPress {
+                key: Key::Char(c),
+                mods: Mods {
+                    ctrl: true,
+                    ..Mods::default()
+                },
+            }],
+            clipboard,
+            ..Input::default()
+        };
+        run(&mut ui, &mut value, ctrl('a', None));
+        run(&mut ui, &mut value, ctrl('c', None));
+        let out = run(&mut ui, &mut value, Input::default());
+        assert_eq!(out.as_deref(), Some("hi"), "the copy reached the frame");
+        run(&mut ui, &mut value, ctrl('v', Some("yo".into())));
+        run(&mut ui, &mut value, Input::default());
+        assert_eq!(value, "yo", "and a paste replaced the selection");
     }
 
     #[test]
