@@ -564,22 +564,6 @@ impl<P> Node<P> {
         }
         self
     }
-    /// [`push`](Self::push) for many; a leaf stays a leaf.
-    pub fn extend(mut self, children: impl IntoIterator<Item = Self>) -> Self {
-        for c in children {
-            self = self.push(c);
-        }
-        self
-    }
-    pub fn wraps(&self) -> bool {
-        self.wrap
-    }
-    pub fn span_of(&self) -> usize {
-        self.span
-    }
-    pub fn order_of(&self) -> i32 {
-        self.order
-    }
     pub fn is_scroll(&self) -> bool {
         self.scroll
     }

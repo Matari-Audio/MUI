@@ -215,6 +215,9 @@ struct App {
     typed: Option<char>,
     last: Instant,
     gpu: Option<Gpu>,
+    /// Arc-to-cubic conversions reused across frames; a still gallery
+    /// re-encodes without reconverting a single path.
+    paths: mui::vello::PathCache,
 }
 
 impl App {
@@ -246,6 +249,7 @@ impl App {
             typed: None,
             last: Instant::now(),
             gpu: None,
+            paths: mui::vello::PathCache::new(),
         }
     }
 
@@ -451,7 +455,7 @@ impl App {
         let Some(scene) = self.ui.scene() else { return };
         let mut canvas = gpu.begin();
         let xf = Affine::scale(scale);
-        if let Err(e) = mui::vello::paint(&mut canvas, scene, xf) {
+        if let Err(e) = mui::vello::paint_cached(&mut canvas, scene, xf, &mut self.paths) {
             eprintln!("paint: {e}");
         }
         if let Some((key, path)) = self.scenes[self.selected].overlay() {

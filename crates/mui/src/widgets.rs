@@ -199,8 +199,12 @@ pub fn text_input(ui: &mut Ui, id: &str, value: &mut String) -> El {
             match k.key {
                 Key::Char(c) if cmd => match c.to_ascii_lowercase() {
                     'a' => (anchor, caret) = (0, value.chars().count()),
-                    'c' => ui.set_clipboard(selected(value, anchor, caret)),
-                    'x' => {
+                    // An empty selection copies nothing: handing the host
+                    // "" would wipe whatever is already on the clipboard.
+                    'c' if anchor != caret => {
+                        ui.set_clipboard(selected(value, anchor, caret));
+                    }
+                    'x' if anchor != caret => {
                         ui.set_clipboard(selected(value, anchor, caret));
                         (caret, _) = take(value, anchor, caret);
                         anchor = caret;

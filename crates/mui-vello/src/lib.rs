@@ -763,15 +763,21 @@ mod snapshot {
         };
 
         draw(&scene, &mut cache);
-        let (n, first) = (cache.misses(), cache.bez(&scene.paint[0]).unwrap());
-        assert_eq!(cache.hits(), 1, "the first frame converted everything");
+        let n = cache.misses();
         assert!(n >= 3, "only {n} paths for three leaves");
+        let first = cache.bez(&scene.paint[0]).unwrap();
 
+        let hits = cache.hits();
         draw(&scene, &mut cache);
         assert_eq!(
             cache.misses(),
             n,
             "a byte-identical frame reconverted a path"
+        );
+        assert_eq!(
+            cache.hits(),
+            hits + n,
+            "the second frame came entirely from the cache"
         );
         assert!(Arc::ptr_eq(&first, &cache.bez(&scene.paint[0]).unwrap()));
 

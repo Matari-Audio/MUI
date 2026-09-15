@@ -246,10 +246,6 @@ pub trait Styled: Sized {
         self.element_mut().lines = Some(n.max(1));
         self
     }
-    /// Children spaced with equal gaps around each: `Justify::SpaceAround`.
-    fn around(self) -> Self;
-    /// Children spaced with equal gaps everywhere: `Justify::SpaceEvenly`.
-    fn evenly(self) -> Self;
     /// [`Styled::transition`] with the default spring.
     fn animate(self) -> Self {
         self.transition(Spring::DEFAULT)
@@ -264,12 +260,6 @@ pub trait Styled: Sized {
     }
 }
 impl Styled for El {
-    fn around(self) -> Self {
-        self.justify(mui_layout::Justify::SpaceAround)
-    }
-    fn evenly(self) -> Self {
-        self.justify(mui_layout::Justify::SpaceEvenly)
-    }
     fn style_mut(&mut self) -> &mut Style {
         &mut self.payload_mut().style
     }

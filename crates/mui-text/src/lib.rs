@@ -431,7 +431,7 @@ pub struct Line {
 /// forces a break; a word wider than `max_width` breaks at the glyph that
 /// overflows rather than hanging off the edge.
 ///
-/// // ponytail: no UAX#14, add unicode-linebreak if CJK matters
+/// ponytail: no UAX#14 -- no CJK, no Thai; add `unicode-linebreak` if that matters.
 pub fn break_lines(
     font: &[u8],
     text: &str,

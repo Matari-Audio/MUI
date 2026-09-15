@@ -5,8 +5,7 @@
 //! ships no taste: `Palette::NEUTRAL` leaves every brand role grey, because
 //! which colour is *yours* is not a layout library's decision. This is where
 //! that decision is made, and the only place in this program where a colour is
-//! chosen -- with one deliberate exception, `main.rs`'s debug frame overlay,
-//! which is off-palette precisely so it cannot be mistaken for design.
+//! chosen.
 //!
 //! The test at the bottom is what keeps that true.
 
