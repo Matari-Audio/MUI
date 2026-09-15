@@ -75,6 +75,12 @@ public function and a test behind it.
 - [ ] Image eviction: `ImageIds` never forgets a buffer, so a plugin that
       streams images through the atlas grows it until `upload_image` panics.
       `Renderer::destroy_image` is the other half.
+- [ ] Wrap in one pass everywhere: a paragraph squeezed by a flex row still
+      needs a hint and a second solve, because the measurer only learns a
+      column's or a grid cell's room. The flex pass re-measuring its items at
+      their final main size retires `wrap_hints`. Then cache line breaks
+      across frames: BENCHMARKS.md puts warm resolve at 2.2 ms, nearly all
+      of it re-breaking text that did not change.
 
 ## Order
 
