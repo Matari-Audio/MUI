@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use mui_core::prelude::{overlay, text, Role, Styled as _};
 use mui_core::{
-    Color, Cursor, El, Element, Fill, Paint, Palette, Radius, ResolvedScene, SceneError, SceneSpec,
-    Size, Spacing, Spring, TextCache, Theme,
+    Align, Color, Cursor, El, Element, Fill, Paint, Palette, Radius, ResolvedScene, SceneError,
+    SceneSpec, Size, Spacing, Spring, TextCache, Theme,
 };
 use mui_geometry::Point;
 use mui_input::{Hit, Input, Interaction, Key, KeyPress, PointerInput, Response};
@@ -438,14 +438,13 @@ impl Ui {
                     .fill(Role::Raised)
                     .radius(6.0)
                     .float()
+                    .anchor(Align::Start, Align::Start)
                     .offset(at.x, at.y);
-                // A leaf root has nowhere to push, so that one case still
-                // rides a wrapper.
-                if root.is_container() {
-                    root.push(float)
-                } else {
-                    overlay([root, float])
-                }
+                // `at` is scene-absolute, and a float is placed at its
+                // parent's padding box, so the tip rides a wrapper with no
+                // padding at 0,0 -- pushing it into the root would displace
+                // every tip by the root's own padding.
+                overlay([root, float])
             }
             None => root,
         };
@@ -737,6 +736,32 @@ mod tests {
     }
 
     #[test]
+    fn a_long_value_scrolls_under_the_clip_instead_of_wrapping() {
+        let mut ui = Ui::new(Theme::DEFAULT);
+        let mut value = "x".repeat(60);
+        let win = Some(Size::new(200., 60.));
+        let tree = |ui: &mut Ui, v: &mut String| crate::widgets::text_input(ui, "f", v);
+        let root = tree(&mut ui, &mut value);
+        ui.frame(root, win, PointerInput::default(), 0.016).unwrap();
+        ui.set_sel("f", 60, 60);
+        let root = tree(&mut ui, &mut value);
+        let f = ui.frame(root, win, PointerInput::default(), 0.016).unwrap();
+        // The value, the caret and the field: unnamed children are keyed by
+        // their slot under the root.
+        let field = f.scene.surface("f").expect("field").frame;
+        let text = f.scene.surface("/1").expect("value").frame;
+        let caret = f.scene.surface("/2").expect("caret").frame;
+        assert!(
+            text.size.height < 2. * ui.theme.text,
+            "one line, not wrapped: {text:?}"
+        );
+        assert!(
+            caret.right() <= field.right() && caret.x >= field.x,
+            "the caret stayed in the field: {caret:?} in {field:?}"
+        );
+    }
+
+    #[test]
     fn a_selection_is_extended_by_shift_and_deleted_as_one() {
         let mut ui = Ui::new(Theme::DEFAULT);
         let mut value = String::from("hello");
@@ -818,6 +843,24 @@ mod tests {
             .frame(tree(), win(), PointerInput::default(), 0.016)
             .unwrap();
         assert!(f.tip.is_none(), "gone when the pointer leaves");
+    }
+
+    #[test]
+    fn a_tip_lands_where_it_was_measured_even_under_a_padded_root() {
+        let mut ui = Ui::new(Theme::DEFAULT);
+        let tree = || column([leaf(40., 40.).fill(Role::Raised).tip("why").id("b")]).pad(L);
+        let win = || Some(Size::new(240., 300.));
+        let p = at(110., 30., false);
+        ui.frame(tree(), win(), p, 0.016).unwrap();
+        ui.frame(tree(), win(), p, 0.016).unwrap();
+        let f = ui.frame(tree(), win(), p, 0.6).unwrap();
+        let (_, at) = f.tip.clone().expect("due");
+        let tip = f
+            .scene
+            .surfaces()
+            .find(|s| s.frame.y == at.y)
+            .expect("the tip sits where it was measured, not padded away");
+        assert_eq!((tip.frame.x, tip.frame.y), (at.x, at.y));
     }
 
     fn solid(f: &Frame) -> mui_core::Paint {
