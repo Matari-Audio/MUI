@@ -1,5 +1,10 @@
 # GPUI / Vello prototype results
 
+**Historical baseline, before the shared gradient patch.** The reproduced gradient
+defect is fixed in the [later RX 6600 report](rx6600-gradient-fix-2026-09-13/RESULTS.md). AA remains open.
+Renderer rankings below describe their measured fixtures, not the current framework
+decision: the plugin experiment uses GPUI and has not adopted a Vello compositor.
+
 **Hardware follow-up:** [RX 6600 results, 2026-09-13](rx6600-2026-09-13/RESULTS.md).
 The results below remain the original software-Vulkan baseline.
 

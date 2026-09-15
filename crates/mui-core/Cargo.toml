@@ -4,6 +4,18 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+default = []
+system-fonts = ["parley/system"]
+
 [dependencies]
+parley = { version = "=0.11.1", default-features = false, features = ["std"] }
+# The renderer reaches us through the same crate, so colour types cannot
+# version-skew with what vello paints. No transitive dependencies of its own.
+color = "0.3"
 mui-geometry = { path = "../mui-geometry" }
 mui-layout = { path = "../mui-layout" }
+mui-text = { path = "../mui-text" }
+
+[dev-dependencies]
+epaint_default_fonts = "0.36"

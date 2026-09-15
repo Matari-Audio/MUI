@@ -1,0 +1,16 @@
+[package]
+name = "mui-input"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+mui-geometry = { path = "../mui-geometry" }
+# Hit testing goes through the same Bezier path the renderer fills, so what
+# responds and what you can see can never drift apart.
+mui-vello = { path = "../mui-vello", default-features = false }
+vello_common = { version = "0.2", default-features = false, features = ["std"] }
+
+[dev-dependencies]
+mui-core = { path = "../mui-core" }
+mui-layout = { path = "../mui-layout" }

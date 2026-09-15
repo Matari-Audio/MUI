@@ -1,0 +1,19 @@
+default_job = "preview"
+
+# `bacon` — rebuild and relaunch the gallery on every save.
+[jobs.preview]
+command = ["cargo", "run", "-p", "mui-preview", "--color", "always"]
+need_stdout = true
+allow_warnings = true
+background = false
+on_change_strategy = "kill_then_restart"
+
+# `bacon check` — the fast loop when you only want the compiler.
+[jobs.check]
+command = ["cargo", "check", "--workspace", "--all-targets", "--color", "always"]
+need_stdout = false
+
+# `bacon test` — the scene bake assertions plus the geometry suite.
+[jobs.test]
+command = ["cargo", "test", "--workspace", "--color", "always"]
+need_stdout = true

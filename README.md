@@ -1,7 +1,28 @@
 # MUI — Matari UI foundation
 
 Renderer-independent Rust layout, connected surfaces, and derived themes for Matari Audio.
-Rust owns the runtime. The optional TypeScript frontend generates Rust builders at build time.
+Rust owns the runtime. The TypeScript frontend remains as a frozen build-time reference;
+it is not a plugin runtime or a maintained authoring path.
+
+Plugin authors use [Truce with the MUI control/document adapter](crates/mui-truce/README.md).
+Truce owns host formats, parameters and persistence; MUI supplies UI contracts.
+The [roadmap](docs/ROADMAP.md) distinguishes this foundation from pending composition migration.
+
+MUI is intended to stay a general, compact authoring layer for measured and
+reactive audio-plugin interfaces. Its layout vocabulary is CSS-like in the
+useful sense—hug or fill, gap, padding, alignment, growth, grids and named
+layers—while Rust remains the runtime authority. `Item` is the stable content
+API; the lower-level generic layout helpers provide short row, column and
+overlay trees that lower into the same layout and geometry path. Text is
+measured through a host callback, and a successful resolve or theme update
+publishes one snapshot for layout, paint and interaction.
+
+The perceptual colour direction is also available without changing the runtime
+contract. `mui_core::color::Palette` stores hue/chroma pigments and derives
+light/dark roles; `mui_core::theme::SourceTheme` converts that declaration into
+the runtime `Theme`, whose RGB palette is what existing hosts consume. The
+TypeScript compiler keeps its established RGB-seed schema for compatibility;
+source-palette emission can be added once that authoring contract is needed.
 
 ## One item API
 
@@ -153,13 +174,18 @@ Use `ui.resolve()` when no text needs external measurement. Render outlines from
 `ui.outlines(&scene)`, and text using the original `scene.layout` bounds and `ui.info(id)`.
 Items are transparent by default; `.color(Color::Panel)` sets a semantic fill and
 `.stroke(Color::Outline, 1.)` adds a stroke. These are renderer-independent descriptions;
-the host uses `Color::resolve(&colors)` and the existing egui/tessellation adapter.
+the host uses `Color::resolve(&colors)` through its adapter. The GPUI reference
+integration supplies native text/interaction and a shared MUI path conversion;
+the egui/tessellation adapter remains available separately.
 
 `on_tap("select-filter")` stores a host action ID. After your input system recognizes a
 completed tap, `ui.tap_at(&scene, x, y)` finds the deepest, last-authored matching action
 in the **original layout rectangle**. The host handles clipping, pointer capture, drag
 cancellation, focus, keyboard activation, accessibility and action dispatch. This is not
 a complete widget/event runtime. A decorative extension is not automatically clickable.
+For transformed, clipped, path-aware picking and inherited disabled state, use
+`View::tap_at` / `View::hover_at`; see [the view contract](docs/LAYOUT-VIEW.md).
+The GPUI experiment uses native focus/actions and gestures around this core contract.
 
 Build with `.build_with(theme)` to select the initial theme. Change it at runtime with
 `ui.set_theme(theme)` or `ui.set_theme_with(theme, measure_text)` for measured content.
@@ -281,36 +307,38 @@ not in an audio callback or for every painted element.
 | `mui-tessellate` | Lyon path-to-mesh adapter |
 | `mui-egui` | Painting adapter and tessellation cache |
 | `mui` | Facade and prelude |
-| `mui-demo` | Compiled TypeScript scenes and reproducible tab SVG |
+| `mui-demo` | Hand-authored measured/reactive examples and reproducible SVG fixtures |
+| `mui-text` | Optional Parley font measurement, wrapping and final glyph layouts |
 
 All reusable Rust crates forbid unsafe code. Layout uses Taffy's f32 calculations
 behind MUI's f64 API; geometry uses f64. Layout is rebuilt per resolve, not incrementally
-cached. Oversized content is reported as insufficient space; scroll, clipping,
-and virtualization are not implemented. Input, focus,
-accessibility trees, plugin gestures and native widgets remain future layers.
+cached. Overflow defaults to rejecting insufficient space; explicit clip/scroll
+policies and `ViewState` support nested viewports and transformed picking.
+Virtualization is not implemented in the core. The separate GPUI experiment
+provides native focus/input and plugin gesture examples; the reusable core does
+not own a widget runtime or a complete accessibility tree.
 
 ## TypeScript and verification
 
-`packages/mui-ts/examples/items.ts` uses the same fluent item model, with `.layout("row")`,
-`.layout(grid(3))`, `.extendTo("panel")`, `.onTap("select-filter")`, and shared tokens.
-The compiler emits a `generated_ui()` builder that is compiled and resolved by Rust tests.
-`pill.ts` and `compiler-contract.ts` retain compatibility coverage for the older frontend.
-Frontend validation rejects invalid references and values before emission; Rust remains
-the runtime authority. There is no JavaScript runtime in the plugin.
+`packages/mui-ts` is frozen for compatibility. Its examples show the historical fluent
+item and scene schemas, and its compiler still has no plugin runtime role. New layout,
+theme and measured-content work belongs in the Rust `Item`/generic DSL, where Rust stays
+the runtime authority. The generated demo crate was retired; the hand-authored examples
+under `crates/mui-demo/examples` remain the maintained runnable fixtures.
 
-Prerequisites: Rust 1.98.1 with rustfmt, Clippy and `wasm32-unknown-unknown`, and Node 24.
-TypeScript and Node declarations are project-local, locked dependencies.
+Prerequisites: Rust 1.98.1 with rustfmt, Clippy and `wasm32-unknown-unknown`.
+Node and TypeScript are only needed if you inspect the frozen package.
 
 ```bash
 cargo fetch --locked
-npm --prefix packages/mui-ts ci
 ./tools/verify.sh
 ```
 
 Verification checks formatting, native tests, Clippy with warnings denied, WASM compilation,
-TypeScript tests, deterministic Rust generation, the runtime demo and deterministic SVG
-export. The suite replaces numerous isolated assertions with 36 Rust contract tests and
-4 TypeScript tests covering concrete geometry, layout, failure and frontend behavior.
+and the hand-authored demo examples. It does not build the frozen TypeScript package or
+generate Rust from it. GPUI/plugin and render-lab experiments are separate Cargo
+workspaces with their own checks; this command does not validate physical-GPU rendering
+or a DAW editor.
 
 API migration: `Spacing::resolve` now takes `&SpacingScale`; Theme literals need
 `..Theme::default()` for new palette/mode fields. Direct matches on `SurfaceSource::Frame`
@@ -340,8 +368,9 @@ The GitHub Pages workflow is prepared for explicit deployment once repository ac
 available. No hosted URL is implied by the presence of the workflow.
 
 See [the reuse roadmap](docs/ROADMAP.md) for the remaining layout, alignment, text, color,
-interaction, rendering, plugin-binding and publication work. The most important next step
-is a complete reference host integration, not more syntax aliases.
+interaction, rendering, plugin-binding and publication work. The next step is to close known rendering/input failures in the existing GPUI
+integration, then consolidate reusable components and per-instance state before
+connecting an audible KURV plugin slice.
 
 ### Parley text
 
@@ -361,4 +390,9 @@ runtime tree is stable) is preferable to writing another flex/grid algorithm wit
 The isolated [render lab](experiments/render-lab/README.md) executes GPUI and Vello against
 shared MUI geometry, with gradient/AA checks, seeded geometry cases, shader probes and
 presentation-inclusive timing. See [measured results and limitations](docs/render-lab/RESULTS.md).
-The recorded runs use software Vulkan; this experiment does not change the production backend.
+The original report used software Vulkan. Subsequent
+[RX 6600 comparisons](docs/render-lab/rx6600-2026-09-13/RESULTS.md) and the
+[shared gradient correction](docs/render-lab/rx6600-gradient-fix-2026-09-13/RESULTS.md)
+provide physical-GPU evidence. The plugin experiment uses GPUI; Vello remains a
+comparison, not an adopted hybrid renderer. See the [current roadmap](docs/ROADMAP.md)
+for remaining AA, typography, component and host-validation work.

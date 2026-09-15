@@ -1,0 +1,11 @@
+[package]
+name = "mui-truce"
+version.workspace = true
+edition = "2024"
+license.workspace = true
+
+[dependencies]
+truce = { version = "=6.3.0", default-features = false }
+truce-core = "=6.3.0"
+truce-params = "=6.3.0"
+truce-derive = "=6.3.0"

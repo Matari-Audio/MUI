@@ -27,6 +27,13 @@ impl Default for SpacingScale {
     }
 }
 impl SpacingScale {
+    pub const DEFAULT: Self = Self {
+        xs: 4.,
+        s: 8.,
+        m: 12.,
+        l: 18.,
+        xl: 28.,
+    };
     pub fn get(self, t: SpacingToken) -> f64 {
         match t {
             SpacingToken::Xs => self.xs,

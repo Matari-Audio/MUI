@@ -1,5 +1,10 @@
 # RX 6600 hardware comparison — 2026-09-13
 
+**Historical baseline, before the shared gradient patch.** The reproduced gradient
+defect is fixed in the [later RX 6600 report](../rx6600-gradient-fix-2026-09-13/RESULTS.md). AA remains open.
+Renderer rankings below describe their measured fixtures, not the current framework
+decision: the plugin experiment uses GPUI and has not adopted a Vello compositor.
+
 **Vello area AA remains the stronger candidate for MUI's custom vector surfaces.**
 GPUI is slightly faster drawing the small prebuilt scene, but Vello area is about
 4.5–6.3 times faster in the path-heavy stress fixture and avoids the reproduced

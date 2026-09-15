@@ -4,6 +4,31 @@ use std::f64::consts::PI;
 fn rect(x: f64, y: f64, w: f64, h: f64) -> PlacedShape {
     Polygon::rectangle(x, y, w, h).unwrap().into()
 }
+#[test]
+fn rectangle_rejects_nonfinite_derived_endpoints() {
+    assert_eq!(
+        Polygon::rectangle(1e308, 0., 1e308, 1.),
+        Err(Error::NonFinite)
+    );
+    assert_eq!(
+        Polygon::rectangle(0., 1e308, 1., 1e308),
+        Err(Error::NonFinite)
+    );
+}
+#[test]
+fn rectangle_rejects_rounded_away_extent_but_accepts_next_ulp() {
+    let base = 1e16;
+    assert_eq!(
+        Polygon::rectangle(base, 0., 1., 1.),
+        Err(Error::DegenerateRing)
+    );
+    assert!(Polygon::rectangle(base, 0., 2., 1.).is_ok());
+    assert_eq!(
+        Polygon::rectangle(0., base, 1., 1.),
+        Err(Error::DegenerateRing)
+    );
+    assert!(Polygon::rectangle(0., base, 1., 2.).is_ok());
+}
 fn merged(shapes: &[PlacedShape]) -> Topology {
     union(shapes, GeometryOptions::default()).unwrap()
 }
@@ -344,4 +369,32 @@ fn transforms_and_capsules_preserve_area_and_valid_arcs() {
         let rings = p.flatten(0.002, 10000).unwrap();
         near(signed_area(&rings[0]), expected, 0.3);
     }
+}
+
+#[test]
+fn path_hits_respect_rounding_holes_transforms_and_invalid_input() {
+    let path = rr(100., 100., 30.).path();
+    assert!(!path.contains(Point::new(1., 1.), 0.1, 1000).unwrap());
+    assert!(path.contains(Point::new(50., 50.), 0.1, 1000).unwrap());
+    assert!(path.contains(Point::new(50., 0.), 0.1, 1000).unwrap());
+    assert!(path
+        .rigid_transform(Point::new(150., 100.), 0.)
+        .unwrap()
+        .contains(Point::new(200., 150.), 0.1, 1000)
+        .unwrap());
+    let mut hole = Path {
+        commands: vec![
+            PathCommand::MoveTo(Point::new(40., 40.)),
+            PathCommand::LineTo(Point::new(40., 60.)),
+            PathCommand::LineTo(Point::new(60., 60.)),
+            PathCommand::LineTo(Point::new(60., 40.)),
+            PathCommand::Close,
+        ],
+    };
+    let mut donut = path.clone();
+    donut.commands.append(&mut hole.commands);
+    assert!(!donut.contains(Point::new(50., 50.), 0.1, 1000).unwrap());
+    assert!(donut.contains(Point::new(20., 50.), 0.1, 1000).unwrap());
+    assert!(path.contains(Point::new(f64::NAN, 1.), 0.1, 1000).is_err());
+    assert!(path.contains(Point::ZERO, 0.1, 2).is_err());
 }

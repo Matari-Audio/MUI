@@ -21,6 +21,9 @@ pub enum FrameRadius {
     },
 }
 
+/// Concise spelling retained for generic scene authoring.
+pub type Radius = FrameRadius;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum CornerRule {
     Global,
@@ -57,6 +60,11 @@ pub struct SurfaceSpec {
     pub source: SurfaceSource,
 }
 impl SurfaceSpec {
+    /// Use one identity for a layout node and its painted surface.
+    pub fn named_frame(id: impl Into<String>) -> Self {
+        let id = id.into();
+        Self::frame(id.clone(), id)
+    }
     pub fn frame(id: impl Into<String>, layout_key: impl Into<String>) -> Self {
         Self {
             id: id.into(),
@@ -160,10 +168,10 @@ pub struct SceneSpec {
     pub surfaces: Vec<SurfaceSpec>,
 }
 impl SceneSpec {
-    pub fn new(root: Node) -> Self {
+    pub fn new(root: impl Into<Node>) -> Self {
         Self {
             theme: Theme::default(),
-            root,
+            root: root.into(),
             offered: None,
             available: Default::default(),
             layout_limits: Limits::default(),
@@ -172,8 +180,8 @@ impl SceneSpec {
             surfaces: Vec::new(),
         }
     }
-    pub fn theme(mut self, theme: Theme) -> Self {
-        self.theme = theme;
+    pub fn theme(mut self, theme: impl Into<Theme>) -> Self {
+        self.theme = theme.into();
         self
     }
     pub fn offered(mut self, size: Size) -> Self {
@@ -681,7 +689,16 @@ pub fn resolve_scene(spec: &SceneSpec) -> Result<ResolvedScene, SceneError> {
 
 pub fn resolve_scene_measured(
     spec: &SceneSpec,
-    measure: impl FnMut(&str, mui_layout::MeasureInput) -> Result<Size, mui_layout::Error>,
+    mut measure: impl FnMut(&str, mui_layout::MeasureInput) -> Result<Size, mui_layout::Error>,
+) -> Result<ResolvedScene, SceneError> {
+    resolve_scene_measured_with_baseline(spec, |id, input| measure(id, input).map(Into::into))
+}
+pub fn resolve_scene_measured_with_baseline(
+    spec: &SceneSpec,
+    measure: impl FnMut(
+        &str,
+        mui_layout::MeasureInput,
+    ) -> Result<mui_layout::Measurement, mui_layout::Error>,
 ) -> Result<ResolvedScene, SceneError> {
     let _ = union(&[], spec.geometry_options)?;
     let constraints = spec
@@ -690,7 +707,7 @@ pub fn resolve_scene_measured(
             width: Some(size.width),
             height: Some(size.height),
         });
-    let layout = mui_layout::resolve_measured(
+    let layout = mui_layout::resolve_measured_with_baseline(
         &spec.root,
         constraints,
         spec.layout_limits,

@@ -12,6 +12,7 @@ pub struct Size {
     pub height: f64,
 }
 impl Size {
+    pub const ZERO: Self = Self::new(0.0, 0.0);
     pub const fn new(width: f64, height: f64) -> Self {
         Self { width, height }
     }
@@ -72,6 +73,17 @@ pub enum Align {
     Center,
     End,
     Stretch,
+    /// Align the first text baselines (non-text leaves use their bottom edge).
+    Baseline,
+}
+
+/// Overflow policy on both axes. Fit retains strict containment validation.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Overflow {
+    #[default]
+    Fit,
+    Clip,
+    Scroll,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -128,6 +140,7 @@ pub enum Sizing {
     Hug,
     Fill,
     Fixed(f64),
+    Percent(f64),
 }
 pub use Sizing::{Fill, Hug};
 impl From<f64> for Sizing {
@@ -154,12 +167,13 @@ pub struct Node {
     minimum: Size,
     maximum: Option<Size>,
     grow: f64,
-    shrink: f64,
+    shrink: Option<f64>,
     align: Align,
     justify: Justify,
     width: Option<Sizing>,
     height: Option<Sizing>,
     wrap: bool,
+    overflow: Overflow,
     grid: Option<usize>,
     columns: Option<Vec<Track>>,
     rows: Option<Vec<Track>>,
@@ -169,6 +183,10 @@ pub struct Node {
     physical: Option<(Horizontal, Vertical)>,
     place: Option<(Horizontal, Vertical)>,
     pack_override: Option<Justify>,
+    aspect: Option<f64>,
+    basis: Option<f64>,
+    offset: [f64; 2],
+    content_floor: bool,
 }
 impl Node {
     fn new(key: impl Into<String>, kind: Kind) -> Self {
@@ -182,12 +200,13 @@ impl Node {
             minimum: Size::default(),
             maximum: None,
             grow: 0.0,
-            shrink: 0.0,
+            shrink: None,
             align: Align::Center,
             justify: Justify::Start,
             width: None,
             height: None,
             wrap: false,
+            overflow: Overflow::Fit,
             grid: None,
             columns: None,
             rows: None,
@@ -197,6 +216,10 @@ impl Node {
             physical: None,
             place: None,
             pack_override: None,
+            aspect: None,
+            basis: None,
+            offset: [0.; 2],
+            content_floor: false,
         }
     }
     pub fn leaf(key: impl Into<String>, size: Size) -> Self {
@@ -204,7 +227,7 @@ impl Node {
     }
     /// A leaf measured through `resolve_measured`; returning cached font metrics is encouraged.
     pub fn measured(key: impl Into<String>) -> Self {
-        Self::new(key, Kind::Measured).shrink(1.0)
+        Self::new(key, Kind::Measured)
     }
     pub fn row(key: impl Into<String>, children: impl IntoIterator<Item = Node>) -> Self {
         Self::new(key, Kind::Stack(children.into_iter().collect()))
@@ -232,7 +255,6 @@ impl Node {
     }
     pub fn measured_content(mut self) -> Self {
         self.kind = Kind::Measured;
-        self.shrink = 1.;
         self
     }
     pub fn layout(mut self, flow: Flow) -> Self {
@@ -334,11 +356,15 @@ impl Node {
         self
     }
     pub fn shrink(mut self, weight: f64) -> Self {
-        self.shrink = weight;
+        self.shrink = Some(weight);
         self
     }
     /// Grow on the parent's main axis. For per-axis sizing use width/height(Fill).
     pub fn fill(self) -> Self {
+        self.grow(1.0)
+    }
+    /// Take a share of the surplus on the parent’s main axis.
+    pub fn expand(self) -> Self {
         self.grow(1.0)
     }
     pub fn align(mut self, value: Align) -> Self {
@@ -355,6 +381,10 @@ impl Node {
     }
     pub fn height(mut self, value: impl Into<Sizing>) -> Self {
         self.height = Some(value.into());
+        self
+    }
+    pub fn overflow(mut self, value: Overflow) -> Self {
+        self.overflow = value;
         self
     }
     pub fn wrap(mut self) -> Self {
@@ -401,8 +431,17 @@ pub struct Layout {
     pub size: Size,
     frames: BTreeMap<String, Frame>,
     content_frames: BTreeMap<String, Frame>,
+    scroll_limits: BTreeMap<String, Size>,
+    order: Vec<Frame>,
 }
 impl Layout {
+    pub fn all(&self) -> &[Frame] {
+        &self.order
+    }
+    /// Maximum positive content offset; zero for non-scroll containers.
+    pub fn scroll_limit(&self, key: &str) -> Option<Size> {
+        self.scroll_limits.get(key).copied()
+    }
     /// Content bounds in scene coordinates, excluding resolved padding.
     pub fn content_frame(&self, key: &str) -> Option<Frame> {
         self.content_frames.get(key).copied()
@@ -451,7 +490,8 @@ impl Default for Limits {
 mod solver;
 mod spacing;
 pub use solver::{
-    resolve, resolve_measured, resolve_with_spacing, Available, Constraints, MeasureInput,
+    resolve, resolve_measured, resolve_measured_with_baseline, resolve_with_spacing, Available,
+    Constraints, MeasureInput, Measurement,
 };
 pub use spacing::{Gap, Pad, Spacing, SpacingScale, SpacingToken};
 
@@ -484,3 +524,6 @@ impl LayoutState {
         Ok(())
     }
 }
+
+/// Generic authoring trees lowered to the shared Taffy solver.
+pub mod generic;

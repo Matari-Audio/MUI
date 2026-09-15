@@ -30,8 +30,9 @@ export function validateScene(scene: Scene): void {
     for(const n of [p.grow,p.shrink]) if(n!==undefined) finite(n);
     for(const v of [p.width,p.height]) if(v!==undefined) {if(typeof v==="number") finite(v);else if(v!=="hug"&&v!=="fill") fail("invalid sizing");}
     if(p.axis && !["row","column","auto"].includes(p.axis)) fail("invalid axis");
-    if(p.align && !["start","center","end","stretch"].includes(p.align)) fail("invalid alignment");
+    if(p.align && !["start","center","end","stretch","baseline"].includes(p.align)) fail("invalid alignment");
     if(p.justify && !["start","center","end","space-between"].includes(p.justify)) fail("invalid justification");
+    if(p.overflow !== undefined && !["fit", "clip", "scroll"].includes(p.overflow)) fail("invalid overflow policy");
     if(p.wrap && p.axis==="auto") fail("wrap and auto axis are distinct policies");
     if(node.kind==="leaf") node.size.forEach(finite);
     else node.children.forEach((c,i)=>visit(c,scope,`${path}.${i}`,depth+1));

@@ -18,3 +18,5 @@ script=Path(__file__).with_name('instrument_gpui.py')
 source=target/'crates/gpui_wgpu/src/wgpu_renderer.rs'
 if '// MUI LAB READBACK' not in source.read_text():subprocess.run([sys.executable,str(script)],check=True)
 print('Prepared GPUI',REV)
+
+subprocess.run([sys.executable, str(Path(__file__).with_name("fix_gpui_gradients.py"))], check=True)

@@ -22,6 +22,20 @@ pub struct MeasureInput {
     pub width: Available,
     pub height: Available,
 }
+/// Content size and first baseline, measured from the top of the content box.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Measurement {
+    pub size: Size,
+    pub baseline: Option<f64>,
+}
+impl From<Size> for Measurement {
+    fn from(size: Size) -> Self {
+        Self {
+            size,
+            baseline: None,
+        }
+    }
+}
 struct Entry<'a> {
     node: &'a Node,
     key: String,
@@ -29,6 +43,7 @@ struct Entry<'a> {
     children: Vec<usize>,
     padding: Insets,
     gap: f64,
+    minimum: Size,
 }
 struct Builder<'a> {
     tree: t::TaffyTree<usize>,
@@ -48,6 +63,7 @@ fn alignment(a: Align) -> t::AlignItems {
         Align::Center => t::AlignItems::CENTER,
         Align::End => t::AlignItems::END,
         Align::Stretch => t::AlignItems::STRETCH,
+        Align::Baseline => t::AlignItems::BASELINE,
     }
 }
 fn justification(j: Justify) -> t::JustifyContent {
@@ -63,6 +79,7 @@ fn justification(j: Justify) -> t::JustifyContent {
 fn dimension(v: Option<Sizing>) -> t::Dimension {
     match v {
         Some(Sizing::Fill) => percent(1.),
+        Some(Sizing::Percent(v)) => percent(v as f32 / 100.),
         Some(Sizing::Fixed(v)) => length(v as f32),
         _ => auto(),
     }
@@ -85,7 +102,7 @@ fn vertical(v: Vertical) -> Align {
 }
 fn aligned_distribution(v: Align) -> t::JustifyContent {
     match v {
-        Align::Start => t::JustifyContent::START,
+        Align::Start | Align::Baseline => t::JustifyContent::START,
         Align::Center => t::JustifyContent::CENTER,
         Align::End => t::JustifyContent::END,
         Align::Stretch => t::JustifyContent::STRETCH,
@@ -149,7 +166,25 @@ impl<'a> Builder<'a> {
             return Err(Error::DuplicateKey(key));
         }
         let extent = self.limits.extent;
-        let values = [node.grow, node.shrink];
+        let shrink = node
+            .shrink
+            .unwrap_or(if matches!(node.kind, Kind::Measured) {
+                1.
+            } else {
+                0.
+            });
+        let values = [node.grow, shrink, node.basis.unwrap_or(0.)];
+        if node.aspect.is_some_and(|v| !v.is_finite() || v <= 0.)
+            || node
+                .offset
+                .iter()
+                .any(|v| !v.is_finite() || v.abs() > extent)
+            || [node.width, node.height].into_iter().flatten().any(
+                |v| matches!(v, Sizing::Percent(p) if !p.is_finite() || !(0. ..=100.).contains(&p)),
+            )
+        {
+            return Err(Error::InvalidValue);
+        }
         if !node.minimum.valid(extent)
             || node.maximum.is_some_and(|s| !s.valid(extent))
             || values
@@ -224,7 +259,7 @@ impl<'a> Builder<'a> {
             if !size.valid(extent) {
                 return Err(Error::InvalidValue);
             }
-            if node.shrink == 0. {
+            if shrink == 0. {
                 min.width = min.width.max(size.width + padding.horizontal());
                 min.height = min.height.max(size.height + padding.vertical());
             }
@@ -269,8 +304,28 @@ impl<'a> Builder<'a> {
             } else {
                 t::FlexDirection::Row
             },
+            overflow: taffy::geometry::Point {
+                x: if node.overflow == Overflow::Fit {
+                    taffy::style::Overflow::Visible
+                } else {
+                    taffy::style::Overflow::Hidden
+                },
+                y: if node.overflow == Overflow::Fit {
+                    taffy::style::Overflow::Visible
+                } else {
+                    taffy::style::Overflow::Hidden
+                },
+            },
+            aspect_ratio: node.aspect.map(|v| v as f32),
+            flex_basis: node.basis.map_or_else(auto, |v| length(v as f32)),
+            inset: t::Rect {
+                left: length(node.offset[0] as f32),
+                top: length(node.offset[1] as f32),
+                right: auto(),
+                bottom: auto(),
+            },
             flex_grow: node.grow as f32,
-            flex_shrink: node.shrink as f32,
+            flex_shrink: shrink as f32,
             flex_wrap: if node.wrap {
                 t::FlexWrap::Wrap
             } else {
@@ -328,8 +383,8 @@ impl<'a> Builder<'a> {
         if overlay {
             style.display = t::Display::Grid;
             style.justify_items = Some(alignment(node.align));
-            style.align_items = Some(if node.align == Align::Stretch {
-                t::AlignItems::STRETCH
+            style.align_items = Some(if matches!(node.align, Align::Stretch | Align::Baseline) {
+                alignment(node.align)
             } else {
                 alignment(match node.justify {
                     Justify::Center => Align::Center,
@@ -344,16 +399,69 @@ impl<'a> Builder<'a> {
             style.justify_content = Some(t::JustifyContent::STRETCH);
             style.align_content = Some(t::AlignContent::STRETCH);
         }
+        if node.overflow == Overflow::Scroll {
+            // Oversized centered/end-aligned content must remain reachable from offset zero.
+            for align in [&mut style.align_items, &mut style.justify_items]
+                .into_iter()
+                .flatten()
+            {
+                align.safety = taffy::style::AlignmentSafety::Safe;
+            }
+            for align in [&mut style.justify_content, &mut style.align_content]
+                .into_iter()
+                .flatten()
+            {
+                align.safety = taffy::style::AlignmentSafety::Safe;
+            }
+        }
         let mut children = Vec::new();
         for (i, child) in node.children().iter().enumerate() {
             if node.grid.is_none()
+                && !overlay
                 && (child.cell.is_some() || child.span != (1, 1) || child.place.is_some())
             {
                 return Err(Error::InvalidValue);
             }
             children.push(self.add(child, &scope, &format!("{path}.{i}"), depth + 1)?);
         }
+        if node.content_floor {
+            let floors = children
+                .iter()
+                .map(|i| self.entries[*i].minimum)
+                .collect::<Vec<_>>();
+            let max_w = floors.iter().map(|s| s.width).fold(0., f64::max);
+            let max_h = floors.iter().map(|s| s.height).fold(0., f64::max);
+            let gaps = gap * floors.len().saturating_sub(1) as f64;
+            let floor = match &node.kind {
+                Kind::Stack(_) if node.grid.is_none() && node.axis == Axis::Column => {
+                    Size::new(max_w, floors.iter().map(|s| s.height).sum::<f64>() + gaps)
+                }
+                Kind::Stack(_) if node.grid.is_none() => {
+                    Size::new(floors.iter().map(|s| s.width).sum::<f64>() + gaps, max_h)
+                }
+                Kind::Overlay(_) => Size::new(max_w, max_h),
+                _ => Size::ZERO,
+            };
+            min.width = min.width.max(floor.width + padding.horizontal());
+            min.height = min.height.max(floor.height + padding.vertical());
+            style.min_size = t::Size {
+                width: length(min.width as f32),
+                height: length(min.height as f32),
+            };
+        }
         let ids: Vec<_> = children.iter().map(|i| self.entries[*i].id).collect();
+        if node.overflow == Overflow::Scroll {
+            for id in &ids {
+                let mut child_style = self.tree.style(*id)?.clone();
+                for align in [&mut child_style.align_self, &mut child_style.justify_self]
+                    .into_iter()
+                    .flatten()
+                {
+                    align.safety = taffy::style::AlignmentSafety::Safe;
+                }
+                self.tree.set_style(*id, child_style)?;
+            }
+        }
         if overlay {
             for id in &ids {
                 let mut child_style = self.tree.style(*id)?.clone();
@@ -381,6 +489,7 @@ impl<'a> Builder<'a> {
             children,
             padding,
             gap,
+            minimum: min,
         });
         Ok(index)
     }
@@ -388,16 +497,19 @@ impl<'a> Builder<'a> {
         &mut self,
         root: usize,
         available: t::Size<t::AvailableSpace>,
-        measure: &mut impl FnMut(&str, MeasureInput) -> Result<Size, Error>,
+        measure: &mut impl FnMut(&str, MeasureInput) -> Result<Measurement, Error>,
     ) -> Result<(), Error> {
         let mut failure = None;
         let entries = &self.entries;
         let extent = self.limits.extent;
+        let needs_baseline = entries
+            .iter()
+            .any(|e| e.node.align == Align::Baseline || e.node.align_self == Some(Align::Baseline));
         self.tree.compute_layout_with_measure(
             entries[root].id,
             available,
             |inputs, _, context, style| {
-                taffy::compute_leaf_layout(
+                let mut output = taffy::compute_leaf_layout(
                     inputs,
                     style,
                     |_, _| 0.,
@@ -407,7 +519,7 @@ impl<'a> Builder<'a> {
                         };
                         let entry = &entries[*index];
                         let result = match entry.node.kind {
-                            Kind::Leaf(s) => Ok(s),
+                            Kind::Leaf(s) => Ok(s.into()),
                             Kind::Measured => measure(
                                 &entry.key,
                                 MeasureInput {
@@ -419,12 +531,12 @@ impl<'a> Builder<'a> {
                                     height: convert_available(available.height),
                                 },
                             ),
-                            _ => Ok(Size::default()),
+                            _ => Ok(Size::default().into()),
                         };
                         match result {
-                            Ok(s) if s.valid(extent) => t::Size {
-                                width: s.width as f32,
-                                height: s.height as f32,
+                            Ok(s) if valid_measurement(s, extent) => t::Size {
+                                width: s.size.width as f32,
+                                height: s.size.height as f32,
                             },
                             Ok(_) => {
                                 failure = Some(Error::InvalidValue);
@@ -436,7 +548,37 @@ impl<'a> Builder<'a> {
                             }
                         }
                     },
-                )
+                );
+                // Fixed-size leaves may skip intrinsic measurement. Obtain font metrics
+                // at the actual content size before Taffy aligns this leaf with siblings.
+                if let Some(index) = context.as_deref() {
+                    let entry = &entries[*index];
+                    if needs_baseline && matches!(entry.node.kind, Kind::Measured) {
+                        let width =
+                            (f64::from(output.size.width) - entry.padding.horizontal()).max(0.);
+                        let height =
+                            (f64::from(output.size.height) - entry.padding.vertical()).max(0.);
+                        match measure(
+                            &entry.key,
+                            MeasureInput {
+                                known: Constraints {
+                                    width: Some(width),
+                                    height: Some(height),
+                                },
+                                width: Available::Definite(width),
+                                height: Available::Definite(height),
+                            },
+                        ) {
+                            Ok(m) if valid_measurement(m, extent) => {
+                                output.baselines.first =
+                                    m.baseline.map(|b| (b + entry.padding.top) as f32);
+                            }
+                            Ok(_) => failure = Some(Error::InvalidValue),
+                            Err(e) => failure = Some(e),
+                        }
+                    }
+                }
+                output
             },
         )?;
         if let Some(e) = failure {
@@ -450,6 +592,7 @@ impl<'a> Builder<'a> {
         origin: [f64; 2],
         frames: &mut BTreeMap<String, Frame>,
         content_frames: &mut BTreeMap<String, Frame>,
+        order: &mut Vec<Frame>,
     ) -> Result<(), Error> {
         let e = &self.entries[i];
         let l = self.tree.layout(e.id)?;
@@ -467,18 +610,20 @@ impl<'a> Builder<'a> {
         }) {
             return Err(Error::InsufficientSpace(e.key.clone()));
         }
+        order.push(frame);
         for &child in &e.children {
             let c = self.tree.layout(self.entries[child].id)?;
-            if f64::from(c.location.x) < e.padding.left - slack
-                || f64::from(c.location.y) < e.padding.top - slack
-                || f64::from(c.location.x + c.size.width)
-                    > frame.size.width - e.padding.right + slack
-                || f64::from(c.location.y + c.size.height)
-                    > frame.size.height - e.padding.bottom + slack
+            if e.node.overflow == Overflow::Fit
+                && (f64::from(c.location.x) < e.padding.left - slack
+                    || f64::from(c.location.y) < e.padding.top - slack
+                    || f64::from(c.location.x + c.size.width)
+                        > frame.size.width - e.padding.right + slack
+                    || f64::from(c.location.y + c.size.height)
+                        > frame.size.height - e.padding.bottom + slack)
             {
                 return Err(Error::InsufficientSpace(e.key.clone()));
             }
-            self.collect(child, [frame.x, frame.y], frames, content_frames)?;
+            self.collect(child, [frame.x, frame.y], frames, content_frames, order)?;
         }
         let content = Frame {
             x: frame.x + e.padding.left,
@@ -527,6 +672,23 @@ pub fn resolve_measured(
     limits: Limits,
     spacing: &SpacingScale,
     mut measure: impl FnMut(&str, MeasureInput) -> Result<Size, Error>,
+) -> Result<Layout, Error> {
+    resolve_measured_with_baseline(root, constraints, limits, spacing, |id, input| {
+        measure(id, input).map(Into::into)
+    })
+}
+fn valid_measurement(m: Measurement, extent: f64) -> bool {
+    m.size.valid(extent)
+        && m.baseline
+            .is_none_or(|b| b.is_finite() && b >= 0. && b <= extent)
+}
+/// Resolve with first-baseline font metrics. The size-only API remains supported.
+pub fn resolve_measured_with_baseline(
+    root: &Node,
+    constraints: Constraints,
+    limits: Limits,
+    spacing: &SpacingScale,
+    mut measure: impl FnMut(&str, MeasureInput) -> Result<Measurement, Error>,
 ) -> Result<Layout, Error> {
     if !limits.extent.is_finite()
         || limits.extent <= 0.
@@ -604,7 +766,12 @@ pub fn resolve_measured(
                 t::AvailableSpace::Definite(v as f32)
             }),
     };
+    let mut passes_left = builder.entries.len().saturating_mul(2) + 2;
     loop {
+        if passes_left == 0 {
+            return Err(Error::BudgetExceeded);
+        }
+        passes_left -= 1;
         builder.compute(root_index, available, &mut measure)?;
         let mut changed = false;
         // Entries are postorder: settle ancestors before measuring descendants again.
@@ -621,13 +788,35 @@ pub fn resolve_measured(
                 break;
             }
         }
+        // Flex allocation can settle width after the intrinsic aspect pass.
+        // Feed that width back as a definite height before publishing frames.
+        for entry in &builder.entries {
+            if let Some(ratio) = entry.node.aspect.filter(|_| entry.node.height.is_none()) {
+                let layout = builder.tree.layout(entry.id)?;
+                let height = layout.size.width / ratio as f32;
+                let mut style = builder.tree.style(entry.id)?.clone();
+                let expected = length(height);
+                if style.size.height != expected {
+                    style.size.height = expected;
+                    builder.tree.set_style(entry.id, style)?;
+                    changed = true;
+                }
+            }
+        }
         if !changed {
             break;
         }
     }
     let mut frames = BTreeMap::new();
     let mut content_frames = BTreeMap::new();
-    builder.collect(root_index, [0., 0.], &mut frames, &mut content_frames)?;
+    let mut order = Vec::with_capacity(builder.entries.len());
+    builder.collect(
+        root_index,
+        [0., 0.],
+        &mut frames,
+        &mut content_frames,
+        &mut order,
+    )?;
     let size = frames[&builder.entries[root_index].key].size;
     // Hard minimums may cause Taffy to exceed the offered size; surface that conflict.
     if constraints
@@ -639,9 +828,24 @@ pub fn resolve_measured(
     {
         return Err(Error::InsufficientSpace(root.key.clone()));
     }
+    let mut scroll_limits = BTreeMap::new();
+    for entry in &builder.entries {
+        let viewport = content_frames[&entry.key];
+        let mut limit = Size::default();
+        if entry.node.overflow == Overflow::Scroll {
+            for child in &entry.children {
+                let frame = frames[&builder.entries[*child].key];
+                limit.width = limit.width.max(frame.right() - viewport.right());
+                limit.height = limit.height.max(frame.bottom() - viewport.bottom());
+            }
+        }
+        scroll_limits.insert(entry.key.clone(), limit);
+    }
     Ok(Layout {
         size,
         frames,
         content_frames,
+        scroll_limits,
+        order,
     })
 }

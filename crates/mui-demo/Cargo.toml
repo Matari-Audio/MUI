@@ -10,3 +10,6 @@ mui-geometry = { path = "../mui-geometry" }
 mui-layout = { path = "../mui-layout" }
 
 mui = { path = "../mui" }
+
+[dev-dependencies]
+mui-text = { path = "../mui-text" }

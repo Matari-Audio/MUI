@@ -1,4 +1,5 @@
-export type Align = "start" | "center" | "end" | "stretch";
+export type Align = "start" | "center" | "end" | "stretch" | "baseline";
+export type Overflow = "fit" | "clip" | "scroll";
 export type Justify = "start" | "center" | "end" | "space-between";
 
 export type Insets = number | Spacing | { left: number; right: number; top: number; bottom: number };
@@ -13,6 +14,7 @@ export interface LayoutProps {
   width?: number | "hug" | "fill";
   height?: number | "hug" | "fill";
   wrap?: boolean;
+  overflow?: Overflow;
   scope?: string;
   align?: Align;
   justify?: Justify;

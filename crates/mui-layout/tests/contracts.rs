@@ -166,3 +166,117 @@ fn invalid_layouts_never_replace_the_committed_snapshot() {
     )
     .is_err());
 }
+
+#[test]
+fn first_baselines_include_padding_fixed_sizes_wrapping_and_nested_rows() {
+    let make = |id, h| Node::measured(id).width(40.).height(h).pad(2.);
+    let root = Node::row(
+        "row",
+        [
+            Node::row("nested", [make("small", 24.)]).pad(3.),
+            make("large", 36.),
+            make("next", 24.),
+        ],
+    )
+    .align(Align::Baseline)
+    .wrap()
+    .width(100.);
+    let layout = resolve_measured_with_baseline(
+        &root,
+        Constraints::default(),
+        Limits::default(),
+        &SpacingScale::default(),
+        |id, input| {
+            Ok(Measurement {
+                size: Size::new(
+                    input.known.width.unwrap_or(36.),
+                    input
+                        .known
+                        .height
+                        .unwrap_or(if id == "large" { 32. } else { 20. }),
+                ),
+                baseline: Some(if id == "large" { 26. } else { 14. }),
+            })
+        },
+    )
+    .unwrap();
+    close(
+        layout.content_frame("small").unwrap().y + 14.,
+        layout.content_frame("large").unwrap().y + 26.,
+    );
+    assert!(layout.frame("next").unwrap().y >= layout.frame("large").unwrap().bottom());
+    for flow in [Flow::Grid(2), Flow::Overlay] {
+        let root = Node::container("baseline-container")
+            .layout(flow)
+            .with_children([make("small", 24.), make("large", 36.)])
+            .align(Align::Baseline);
+        let layout = resolve_measured_with_baseline(
+            &root,
+            Constraints::default(),
+            Limits::default(),
+            &SpacingScale::default(),
+            |id, input| {
+                Ok(Measurement {
+                    size: Size::new(
+                        input.known.width.unwrap_or(36.),
+                        input.known.height.unwrap_or(32.),
+                    ),
+                    baseline: Some(if id == "large" { 26. } else { 14. }),
+                })
+            },
+        )
+        .unwrap();
+        close(
+            layout.content_frame("small").unwrap().y + 14.,
+            layout.content_frame("large").unwrap().y + 26.,
+        );
+    }
+    for baseline in [f64::NAN, f64::INFINITY, -1.] {
+        assert!(resolve_measured_with_baseline(
+            &root,
+            Constraints::default(),
+            Limits::default(),
+            &SpacingScale::default(),
+            |_, _| Ok(Measurement {
+                size: Size::new(40., 30.),
+                baseline: Some(baseline)
+            })
+        )
+        .is_err());
+    }
+}
+
+#[test]
+fn overflow_is_explicit_and_nested_viewports_bound_parent_scroll_ranges() {
+    let make = |overflow| {
+        Node::column(
+            "outer",
+            [
+                Node::column("inner", [leaf("wide", 300., 200.)])
+                    .width(100.)
+                    .height(80.)
+                    .align(Align::Start)
+                    .overflow(Overflow::Scroll),
+                leaf("tail", 100., 120.),
+            ],
+        )
+        .width(100.)
+        .height(100.)
+        .align(Align::Start)
+        .overflow(overflow)
+    };
+    assert!(resolve(&make(Overflow::Fit), None, Limits::default()).is_err());
+    let layout = resolve(&make(Overflow::Scroll), None, Limits::default()).unwrap();
+    assert_eq!(layout.scroll_limit("outer"), Some(Size::new(0., 100.)));
+    assert_eq!(layout.scroll_limit("inner"), Some(Size::new(200., 120.)));
+    let clipped = resolve(&make(Overflow::Clip), None, Limits::default()).unwrap();
+    assert_eq!(clipped.scroll_limit("outer"), Some(Size::default()));
+    let centered = Node::column("viewport", [leaf("big", 300., 200.).align_self(Align::End)])
+        .width(100.)
+        .height(100.)
+        .justify(Justify::End)
+        .overflow(Overflow::Scroll);
+    let layout = resolve(&centered, None, Limits::default()).unwrap();
+    close(layout.frame("big").unwrap().x, 0.);
+    close(layout.frame("big").unwrap().y, 0.);
+}

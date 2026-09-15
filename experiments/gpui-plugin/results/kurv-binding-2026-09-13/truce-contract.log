@@ -1,0 +1,21 @@
+   Compiling mui-truce v0.3.0 (/home/derpcat/projects/MUI/crates/mui-truce)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.55s
+     Running unittests src/lib.rs (/mnt/Windows11/DEV_WORKSPACE/Toolchains/User/cargo-target/debug/deps/mui_truce-e891fa1acdfd1693)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/contract.rs (/mnt/Windows11/DEV_WORKSPACE/Toolchains/User/cargo-target/debug/deps/contract-0b2be97ffcbeffa6)
+
+running 1 test
+test truce_parameters_and_documents_survive_reorder_recall_and_instances ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests mui_truce
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

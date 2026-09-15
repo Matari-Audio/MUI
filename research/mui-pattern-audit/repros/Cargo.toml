@@ -1,0 +1,15 @@
+[package]
+name = "mui-audit-repros"
+version = "0.0.0"
+edition = "2021"
+default-run = "mui-audit-repros"
+
+[workspace]
+
+[dependencies]
+mui-core = { path = "../../../crates/mui-core" }
+mui-input = { path = "../../../crates/mui-input" }
+mui-geometry = { path = "../../../crates/mui-geometry" }
+mui-layout = { path = "../../../crates/mui-layout" }
+mui-text = { path = "../../../crates/mui-text" }
+mui-tessellate = { path = "../../../crates/mui-tessellate" }

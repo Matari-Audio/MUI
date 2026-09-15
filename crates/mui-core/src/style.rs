@@ -56,7 +56,11 @@ impl Ui {
         colors: &Colors,
         hovered: Option<&str>,
     ) -> Result<BTreeMap<&'a str, ItemStyle>, StyleError> {
-        let hovered = hovered.filter(|id| self.items.get(*id).is_some_and(|i| i.hoverable));
+        let hovered = hovered.filter(|id| {
+            self.items
+                .get(*id)
+                .is_some_and(|i| i.hoverable && !i.disabled)
+        });
         let mut result: BTreeMap<&str, ItemStyle> = BTreeMap::new();
         let mut membership = BTreeMap::new();
         for group in &self.groups {
@@ -103,8 +107,11 @@ impl Ui {
                 });
             }
             let background = fill.unwrap_or(backdrop);
-            let text = colors
-                .text
+            let text = info
+                .foreground
+                .map(|c| c.resolve(colors))
+                .transpose()?
+                .unwrap_or(colors.text)
                 .contrast_on(&[background], self.theme().contrast.text)?;
             let stroke = paint
                 .stroke

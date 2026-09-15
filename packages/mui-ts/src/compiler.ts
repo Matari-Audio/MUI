@@ -8,7 +8,7 @@ import type { Align, CornerRule, FrameRadius, Insets, Justify, Node, Scene, Spac
 
 
 import { q, n } from "./literals.js";
-const align = (a?: Align) => a ? `mui_layout::Align::${({start:"Start",center:"Center",end:"End",stretch:"Stretch"} as const)[a]}` : null;
+const align = (a?: Align) => a ? `mui_layout::Align::${({start:"Start",center:"Center",end:"End",stretch:"Stretch",baseline:"Baseline"} as const)[a]}` : null;
 const justify = (j?: Justify) => j ? `mui_layout::Justify::${({start:"Start",center:"Center",end:"End","space-between":"SpaceBetween"} as const)[j]}` : null;
 
 function insets(v: Insets): string {
@@ -29,6 +29,7 @@ function decorate(base: string, p: Node["props"] = {}): string {
     if (v !== undefined) s += `.${axis}(${typeof v === "number" ? n(v) : `mui_layout::Sizing::${v === "fill" ? "Fill" : "Hug"}`})`;
   }
   if (p.wrap) s += `.wrap()`;
+  if (p.overflow) s += `.overflow(mui_layout::Overflow::${p.overflow[0].toUpperCase() + p.overflow.slice(1)})`;
   if (p.grow !== undefined) s += `.grow(${n(p.grow)})`;
   const a = align(p.align); if (a) s += `.align(${a})`;
   const j = justify(p.justify); if (j) s += `.justify(${j})`;

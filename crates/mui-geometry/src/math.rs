@@ -139,6 +139,27 @@ impl Affine {
             self.yx * p.x + self.yy * p.y + self.ty,
         )
     }
+    /// Invert a transform; fail if its determinant is zero/nonfinite or its inverse is nonfinite.
+    pub fn inverse(self) -> Option<Self> {
+        if !self.finite() {
+            return None;
+        }
+        let d = self.xx * self.yy - self.xy * self.yx;
+        if !d.is_finite() || d == 0. {
+            return None;
+        }
+        let mut inverse = Self {
+            xx: self.yy / d,
+            xy: -self.xy / d,
+            yx: -self.yx / d,
+            yy: self.xx / d,
+            tx: 0.,
+            ty: 0.,
+        };
+        inverse.tx = -(inverse.xx * self.tx + inverse.xy * self.ty);
+        inverse.ty = -(inverse.yx * self.tx + inverse.yy * self.ty);
+        inverse.finite().then_some(inverse)
+    }
     pub fn finite(self) -> bool {
         [self.xx, self.xy, self.yx, self.yy, self.tx, self.ty]
             .iter()
@@ -152,6 +173,15 @@ pub struct Bounds {
     pub max: Point,
 }
 impl Bounds {
+    /// The rectangle from one corner to the other, in the caller's order. No
+    /// normalising: a caller that hands them over backwards has a bug, and
+    /// quietly swapping them hides it.
+    pub fn new(x0: f64, y0: f64, x1: f64, y1: f64) -> Self {
+        Self {
+            min: Point::new(x0, y0),
+            max: Point::new(x1, y1),
+        }
+    }
     pub fn from_points(points: impl IntoIterator<Item = Point>) -> Option<Self> {
         let mut it = points.into_iter();
         let first = it.next()?;
