@@ -88,6 +88,7 @@ assert_eq!(scene.surface("tab").unwrap().frame.size.width, 92.0);
 | `.grow(w)`, `.shrink(w)`, `.basis(px)`, `.expand()` | flexbox weights |
 | `.width(Len::Pct(50.0))`, `.aspect(16.0 / 9.0)` | percentage and ratio sizes |
 | `.w(clamp(64.0, 30.0, 220.0))` | CSS `clamp(min, pct%, max)`: fluid between two pixel stops |
+| `SceneSpec::new(root).scale(2.0)`, `Ui::scale` | the host's device pixels per unit: every edge and baseline the walk paints lands on the device grid, so abutting fills have no seam |
 | `.w(120)`, `.h(40)`, `.square(28)` | the same sizes taking a bare integer |
 | `.align(..)`, `.justify(..)`, `.anchor(x, y)`, `.offset(dx, dy)` | cross axis, main axis, overlay placement, nudge |
 | `.center()`, `.start()`, `.end()`, `.between()` | the four alignments worth a word |

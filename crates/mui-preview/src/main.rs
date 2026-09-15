@@ -361,6 +361,7 @@ impl App {
         let dt = now.duration_since(self.last).as_secs_f64().min(0.1);
         self.last = now;
         input.clipboard = Some(self.clipboard.clone());
+        self.ui.scale = Some(scale);
         let root = self.tree(w, h);
         let (animating, cursor) = match self.ui.frame(root, Some(Size::new(w, h)), input, dt) {
             // Destructured first: `f` borrows `self.ui`, and handing the

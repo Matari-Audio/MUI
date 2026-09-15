@@ -48,6 +48,9 @@ pub enum Edit {
 pub struct Ui {
     pub theme: Theme,
     pub font: Option<Arc<[u8]>>,
+    /// The window's device pixels per logical unit. Set it and every painted
+    /// edge lands on a device pixel; `None` paints on layout's raw f64.
+    pub scale: Option<f64>,
     interaction: Interaction,
     hit: Hit,
     scene: Option<ResolvedScene>,
@@ -91,6 +94,7 @@ impl Ui {
         Self {
             theme,
             font: None,
+            scale: None,
             interaction: Interaction::new(),
             hit: Hit::default(),
             scene: None,
@@ -465,6 +469,7 @@ impl Ui {
         let mut spec = SceneSpec::new(root).theme(self.theme);
         spec.offered = offered;
         spec.font = self.font.clone();
+        spec.device_scale = self.scale;
         let scene = mui_core::resolve_scene_with(&spec, &mut self.text_cache)?;
         // Named nodes are the gesture targets, in z-order. Unnamed ones are
         // decoration. A target clipped away does not respond.

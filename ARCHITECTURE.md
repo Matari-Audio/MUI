@@ -59,6 +59,10 @@ El tree  (row! / col! / stack! / grid!, Styled fills, roles, shells, welds,
                             reconverting anything.
 ```
 
+Every outline, weld rect and clip comes from one `bounds(frame, scale)`, and
+every baseline from one `snap`, so `SceneSpec::device_scale` puts paint, hit
+paths and clips on the same device grid or none of them.
+
 Layout answers **where content gets space**. Geometry answers **what shape
 gets painted**. Input answers **what the pointer and the keyboard mean**, and
 it answers it against the paths that were actually painted last frame, which
