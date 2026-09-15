@@ -5,7 +5,17 @@ Input (pointer, wheel, keys, text)
    |
    v  mui::Ui::frame        gestures + springs -> state mixed into fills
    |                        focus (press, Tab, Escape), wheel -> scroll offsets,
-   |                        hover clock -> the tip that comes due
+   |                        hover clock -> the tip that comes due,
+   |                        capture edges -> Frame::edits (begin/end edit),
+   |                        clipboard in and out
+   |
+   v  transitions           before anything is resolved: a node marked
+   |                        .animate() has its declared fill, stroke width,
+   |                        radius, text size, shadow blur and shell depths
+   |                        pulled through springs keyed on its id, so the
+   |                        tree the walk sees is already the interpolated
+   |                        one. A new target retargets; nothing restarts.
+   |                        ui.tween does the same for a number MUI cannot see.
    v
 El tree  (row! / col! / stack! / grid!, Styled fills, roles, shells, welds,
    |      canvas draws, .scroll() / .clip() / .float())
@@ -17,9 +27,12 @@ El tree  (row! / col! / stack! / grid!, Styled fills, roles, shells, welds,
    |     weld   -> union(children's sharp frames) then fillet(convex, concave)
    |     shell  -> inset(previous outline, d)        exact or parallel offset
    |     text   -> shaped run from the TextCache      mui-text, kept across frames
+   |               wrapped to the room its parent has, one Painted a line
    |     canvas -> the closure's own paths, in the node's space
    |     clip   -> Clip(outline) ... children ... Unclip
    |     roles  -> Palette                            ink resolves on its ground
+   |     image  -> Fill::Image                        straight RGBA, fitted to
+   |                                                  the node's own outline
    |
    v  ResolvedScene         paint: Vec<Painted>  (shadow, fill, shells, stroke,
    |                        text, draws, clip/unclip); floats are appended after
@@ -29,12 +42,19 @@ El tree  (row! / col! / stack! / grid!, Styled fills, roles, shells, welds,
    +--> mui-input Hit       the same paths, pushed in paint order with their
    |                        clip rect, so nothing responds where nothing is drawn
    |
+   +--> mui-access          the same surfaces plus a Semantics map as an
+   |                        accesskit::TreeUpdate, for the host's adapter
+   |
    v  mui-vello paint       Canvas: Gpu { scene, resources } over vello_hybrid,
                             Cpu { ctx, resources } over vello_cpu.
                             Fill / stroke / blurred rect / push_clip / pop_clip,
                             and text as a hinted glyph run through Vello's atlas
                             (a font blob is interned by Arc pointer so the
-                            atlas is not rebuilt every frame).
+                            atlas is not rebuilt every frame). paint_cached
+                            keeps each Painted's arc-to-cubic conversion in a
+                            PathCache keyed on a fingerprint of the path
+                            itself, so a still frame re-encodes without
+                            reconverting anything.
 ```
 
 Layout answers **where content gets space**. Geometry answers **what shape

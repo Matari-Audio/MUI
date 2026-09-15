@@ -15,7 +15,9 @@
 //! let frame = ui.frame(root, Some(Size::new(240.0, 96.0)), Input::default(), 1.0 / 60.0).unwrap();
 //! assert!(frame.scene.paint.len() > 3);
 //! // frame.cursor is what to set; frame.tip is the tooltip that came due;
-//! // frame.animating says whether to schedule another frame.
+//! // frame.animating says whether to schedule another frame; frame.edits is
+//! // every gesture that began or ended, and frame.clipboard is what a copy
+//! // wants put on the system clipboard.
 //! ```
 #![forbid(unsafe_code)]
 

@@ -39,25 +39,42 @@ public function and a test behind it.
       clamped to content, tooltips after half a second, `Cursor` per surface,
       and a `text_input` widget.
 - [x] `canvas(|size| ..)`: your own `Draw` paths in a node's own space.
+- [x] Wrapping rows and columns, grid spans, `order`, `SpaceAround`/
+      `SpaceEvenly`, and `Node::push` (the tooltip no longer wraps the root).
+- [x] Multi-line text: measured line breaking, `.lines(n)`, `.baseline()`
+      rows, and text metrics (`ascent`, `x_height`, caret hit testing).
+- [x] Selection, copy, cut and paste in `text_input`, through
+      `Frame::clipboard` / `Input::clipboard`.
+- [x] Motion: springs by response and damping, `.animate()`/`.transition()`
+      transitions that retarget mid-flight, and `Ui::tween`.
+- [x] Plugin parameter gestures: `Ui::edit` / `Frame::edits` bracket every
+      capture, cancelled ones included.
+- [x] Images: `Image::rgba` + `Fill::Image` with `Cover`/`Contain`/`Fill`,
+      and `Path::from_svg_data` for an icon's `d` attribute.
+- [x] AccessKit: `mui-access` turns a `ResolvedScene` plus a `Semantics` map
+      into a `TreeUpdate`.
+- [x] `mui_vello::PathCache` / `paint_cached`: a still frame re-encodes
+      without reconverting a path.
+- [x] Preview: an F12 inspector, `MUI_PREVIEW_THEME` hot reload, a frame-cost
+      title bar, and a scene per feature above.
 
 ## Missing
 
 - [ ] Kurv rewritten on MUI: the first real plugin editor on this stack, and
       the only honest test of whether the DSL survives a product.
-- [ ] Selection and clipboard in `text_input` (today: caret and insert only);
-      IME.
-- [ ] Baseline alignment for text rows; multi-line text and wrapping.
-- [ ] Wrapping rows and grid spans; `SpaceAround`/`SpaceEvenly`; `order`.
-- [ ] Blurred shadows on welded shapes (still drawn sharp) and blend modes.
-- [ ] `Node::push`, so the tooltip overlay stops wrapping the root and
-      shifting unnamed decoration keys on tip frames.
+- [ ] IME.
+- [ ] UAX#14 line breaking: today a break is ASCII whitespace or a hyphen,
+      which is wrong for CJK.
+- [ ] Real semantic roles in `mui-core`, so a widget describes itself and
+      `mui-access` stops reporting every surface as a group.
 - [ ] `vello_hybrid` against classic `vello`, re-measured on Windows — the
       hybrid choice was made on Linux numbers only.
-- [ ] AccessKit; SVG symbol import; keyframed animation beyond springs.
-- [ ] Plugin parameter gestures (begin/end edit) surfaced from `Ui`.
+- [ ] Blurred shadows on welded shapes (still drawn sharp) and blend modes.
 
 ## Order
 
-Kurv first: everything above is guesswork until a shipping editor uses it.
-Text selection and baselines next, since every real panel is labels, then
-wrap, then the Windows re-measure before any renderer decision is locked in.
+Kurv first: everything above is guesswork until a shipping editor uses it,
+and it is the only item left that can change the DSL. Then semantic roles,
+since `mui-access` is a crate nobody can use until widgets describe
+themselves, then the Windows re-measure before any renderer decision is
+locked in.
