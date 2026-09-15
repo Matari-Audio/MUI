@@ -3436,7 +3436,7 @@ dependencies = [
 
 [[package]]
 name = "mui"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "mui-core",
  "mui-egui",
@@ -3448,17 +3448,19 @@ dependencies = [
 
 [[package]]
 name = "mui-core"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "color",
+ "epaint_default_fonts",
  "mui-geometry",
  "mui-layout",
+ "mui-text",
  "parley",
 ]
 
 [[package]]
 name = "mui-demo"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "mui",
  "mui-core",
@@ -3469,7 +3471,7 @@ dependencies = [
 
 [[package]]
 name = "mui-egui"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "egui",
  "mui-geometry",
@@ -3478,14 +3480,14 @@ dependencies = [
 
 [[package]]
 name = "mui-geometry"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "i_overlay",
 ]
 
 [[package]]
 name = "mui-gpui"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "gpui",
@@ -3498,7 +3500,7 @@ dependencies = [
 
 [[package]]
 name = "mui-input"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "mui-core",
  "mui-geometry",
@@ -3509,14 +3511,14 @@ dependencies = [
 
 [[package]]
 name = "mui-layout"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "taffy 0.14.0",
 ]
 
 [[package]]
 name = "mui-playground"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "mui",
  "wasm-bindgen",
@@ -3524,7 +3526,7 @@ dependencies = [
 
 [[package]]
 name = "mui-preview"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "epaint_default_fonts",
  "mui-core",
@@ -3542,7 +3544,7 @@ dependencies = [
 
 [[package]]
 name = "mui-tessellate"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "lyon_tessellation",
  "mui-geometry",
@@ -3550,7 +3552,7 @@ dependencies = [
 
 [[package]]
 name = "mui-text"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "epaint_default_fonts",
  "mui-geometry",
@@ -3560,7 +3562,7 @@ dependencies = [
 
 [[package]]
 name = "mui-truce"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "truce",
  "truce-core",
@@ -3570,7 +3572,7 @@ dependencies = [
 
 [[package]]
 name = "mui-vello"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "epaint_default_fonts",
  "mui-core",

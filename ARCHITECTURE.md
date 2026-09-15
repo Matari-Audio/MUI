@@ -4,7 +4,7 @@ The authoring direction is deliberately compact:
 
 ```text
 Rust Item / generic DSL ─┐
-TypeScript build input ──┼─> validated layout + item metadata
+Frozen TypeScript input ─┼─> validated layout + item metadata
                          v
                     mui-layout
                  measured frames
@@ -29,10 +29,13 @@ light/dark derivation. It resolves to the existing runtime `Theme` and RGB
 palette at the host boundary, so GPUI, egui and other adapters share one
 style contract.
 
-Rust and TypeScript authors use `Item`. Its compiler creates the validated `SceneSpec`,
-scoped content/action metadata, and an ordered set of merged outlines. The same item key
-identifies logical layout, initial geometry, text and actions. Internal merge IDs never
-need to appear in authored code. The older surface/node builders remain the lower layer.
+Rust authors use `Item` and the generic layout DSL. The frozen TypeScript compiler
+remains a build-time compatibility reference for the same older `SceneSpec` and
+item schemas; it is not a runtime dependency. The maintained compiler creates the
+validated scene, scoped content/action metadata, and an ordered set of merged
+outlines. The same item key identifies logical layout, initial geometry, text and
+actions. Internal merge IDs never need to appear in authored code. The older
+surface/node builders remain the lower layer.
 Resolution proceeds through independent stages:
 
 1. `mui-layout` validates keys, spacing and budgets, then asks Taffy for intrinsic and

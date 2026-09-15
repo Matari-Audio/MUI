@@ -7,8 +7,38 @@
 //! ```
 use std::time::Instant;
 
-#[path = "../../mui-demo/src/generated.rs"]
-mod generated;
+// Keep the benchmark specimen independent of the retired TypeScript demo.
+fn pill_scene() -> mui_core::SceneSpec {
+    use mui_core::{CornerProfile, SceneSpec, Spacing, SurfaceSpec, Theme};
+    use mui_layout::{Align, Node, Size};
+    let controls = Node::column(
+        "controls",
+        ["plus", "pie-a", "pie-b"].map(|id| Node::leaf(id, Size::new(28., 28.))),
+    )
+    .gap(10.)
+    .align(Align::Center);
+    let pill = Node::column("pill-frame", [controls])
+        .padding(10.)
+        .align(Align::Center);
+    let tab = Node::column("tab-frame", [pill])
+        .padding(12.)
+        .min_size(Size::new(92., 0.))
+        .align(Align::Center);
+    let root = Node::column(
+        "root",
+        [tab, Node::leaf("panel-frame", Size::new(520., 230.))],
+    )
+    .align(Align::Start);
+    SceneSpec::new(root)
+        .theme(Theme {
+            corners: CornerProfile::new(28., 32.),
+            ..Theme::default()
+        })
+        .surface(SurfaceSpec::frame("panel", "panel-frame"))
+        .surface(SurfaceSpec::frame("tab", "tab-frame"))
+        .surface(SurfaceSpec::merge("outer", ["panel", "tab"]))
+        .surface(SurfaceSpec::inset("pill-shell", "tab", Spacing::px(12.)))
+}
 
 fn ms(f: impl Fn()) -> f64 {
     let n = 20;
@@ -109,7 +139,7 @@ fn scene_resolution_costs() {
     use mui_core::{resolve_scene, Spacing, SurfaceSpec};
     use std::hint::black_box;
 
-    let basic = generated::generated_scene();
+    let basic = pill_scene();
     let offset =
         basic
             .clone()

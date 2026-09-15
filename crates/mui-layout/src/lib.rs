@@ -363,6 +363,10 @@ impl Node {
     pub fn fill(self) -> Self {
         self.grow(1.0)
     }
+    /// Take a share of the surplus on the parent’s main axis.
+    pub fn expand(self) -> Self {
+        self.grow(1.0)
+    }
     pub fn align(mut self, value: Align) -> Self {
         self.align = value;
         self

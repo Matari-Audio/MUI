@@ -1,7 +1,8 @@
 # MUI — Matari UI foundation
 
 Renderer-independent Rust layout, connected surfaces, and derived themes for Matari Audio.
-Rust owns the runtime. The optional TypeScript frontend generates Rust builders at build time.
+Rust owns the runtime. The TypeScript frontend remains as a frozen build-time reference;
+it is not a plugin runtime or a maintained authoring path.
 
 Plugin authors use [Truce with the MUI control/document adapter](crates/mui-truce/README.md).
 Truce owns host formats, parameters and persistence; MUI supplies UI contracts.
@@ -306,7 +307,7 @@ not in an audio callback or for every painted element.
 | `mui-tessellate` | Lyon path-to-mesh adapter |
 | `mui-egui` | Painting adapter and tessellation cache |
 | `mui` | Facade and prelude |
-| `mui-demo` | Compiled TypeScript scenes and reproducible tab SVG |
+| `mui-demo` | Hand-authored measured/reactive examples and reproducible SVG fixtures |
 | `mui-text` | Optional Parley font measurement, wrapping and final glyph layouts |
 
 All reusable Rust crates forbid unsafe code. Layout uses Taffy's f32 calculations
@@ -319,27 +320,25 @@ not own a widget runtime or a complete accessibility tree.
 
 ## TypeScript and verification
 
-`packages/mui-ts/examples/items.ts` uses the same fluent item model, with `.layout("row")`,
-`.layout(grid(3))`, `.extendTo("panel")`, `.onTap("select-filter")`, and shared tokens.
-The compiler emits a `generated_ui()` builder that is compiled and resolved by Rust tests.
-`pill.ts` and `compiler-contract.ts` retain compatibility coverage for the older frontend.
-Frontend validation rejects invalid references and values before emission; Rust remains
-the runtime authority. There is no JavaScript runtime in the plugin.
+`packages/mui-ts` is frozen for compatibility. Its examples show the historical fluent
+item and scene schemas, and its compiler still has no plugin runtime role. New layout,
+theme and measured-content work belongs in the Rust `Item`/generic DSL, where Rust stays
+the runtime authority. The generated demo crate was retired; the hand-authored examples
+under `crates/mui-demo/examples` remain the maintained runnable fixtures.
 
-Prerequisites: Rust 1.98.1 with rustfmt, Clippy and `wasm32-unknown-unknown`, and Node 24.
-TypeScript and Node declarations are project-local, locked dependencies.
+Prerequisites: Rust 1.98.1 with rustfmt, Clippy and `wasm32-unknown-unknown`.
+Node and TypeScript are only needed if you inspect the frozen package.
 
 ```bash
 cargo fetch --locked
-npm --prefix packages/mui-ts ci
 ./tools/verify.sh
 ```
 
 Verification checks formatting, native tests, Clippy with warnings denied, WASM compilation,
-TypeScript tests, deterministic Rust generation, the runtime demo and deterministic SVG
-export. The suite covers geometry, layout, failure and frontend contracts. GPUI/plugin and
-render-lab experiments are separate Cargo workspaces with their own checks; this
-command does not validate physical-GPU rendering or a DAW editor.
+and the hand-authored demo examples. It does not build the frozen TypeScript package or
+generate Rust from it. GPUI/plugin and render-lab experiments are separate Cargo
+workspaces with their own checks; this command does not validate physical-GPU rendering
+or a DAW editor.
 
 API migration: `Spacing::resolve` now takes `&SpacingScale`; Theme literals need
 `..Theme::default()` for new palette/mode fields. Direct matches on `SurfaceSource::Frame`

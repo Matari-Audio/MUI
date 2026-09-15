@@ -124,6 +124,8 @@ pub struct SourceTheme {
     pub spacing: SpacingScale,
     pub palette: crate::color::Palette,
     pub stroke_width: f64,
+    /// Default text size in pixels for styled text leaves.
+    pub text: f64,
 }
 impl SourceTheme {
     pub const DEFAULT: Self = Self {
@@ -131,6 +133,7 @@ impl SourceTheme {
         spacing: SpacingScale::DEFAULT,
         palette: crate::color::Palette::NEUTRAL,
         stroke_width: 1.5,
+        text: 14.0,
     };
     pub const fn resolve(self) -> Theme {
         Theme {
@@ -141,7 +144,7 @@ impl SourceTheme {
         }
     }
     pub fn valid(self) -> bool {
-        self.resolve().valid()
+        self.resolve().valid() && self.text.is_finite() && self.text > 0.0
     }
 }
 impl Default for SourceTheme {
@@ -196,5 +199,15 @@ mod source_tests {
         assert!(!bad.valid());
         assert!(bad.colors().is_err());
         assert_eq!(Theme::DEFAULT, Theme::default());
+        assert!(!SourceTheme {
+            text: f64::NAN,
+            ..SOURCE
+        }
+        .valid());
+        assert!(!SourceTheme {
+            text: 0.0,
+            ..SOURCE
+        }
+        .valid());
     }
 }

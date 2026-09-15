@@ -376,3 +376,12 @@ fn converted_tree_keeps_theme_tokens_and_runtime_frame_order() {
         ]
     );
 }
+
+#[test]
+fn expand_is_the_layout_growth_alias() {
+    assert_eq!(leaf(10., 10.).expand(), leaf(10., 10.).grow(1.));
+    assert_eq!(
+        crate::Node::leaf("x", Size::new(10., 10.)).expand(),
+        crate::Node::leaf("x", Size::new(10., 10.)).grow(1.)
+    );
+}

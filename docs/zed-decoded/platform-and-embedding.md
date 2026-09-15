@@ -55,12 +55,13 @@ second UI/runtime model to the CLAP editor.
 ## Current MUI facts
 
 The current architecture is documented in [`ARCHITECTURE.md`](../../ARCHITECTURE.md):
-Rust and TypeScript authors produce validated `Item`/`SceneSpec` data; MUI
-resolves intrinsic layout, compiles surface dependencies, unions sharp bases,
-rounds the final boundary, and derives offsets from that final path. The host
-then paints resolved outlines and applies its own clip and hit policy. Scene
-commit is transactional, and no geometry or text measurement belongs on the
-real-time audio callback.
+Rust authors produce validated `Item`/generic DSL data; MUI resolves intrinsic
+layout, compiles surface dependencies, unions sharp bases, rounds the final
+boundary, and derives offsets from that final path. The frozen TypeScript
+package remains a build-time compatibility reference. The host then paints
+resolved outlines and applies its own clip and hit policy. Scene commit is
+transactional, and no geometry or text measurement belongs on the real-time
+audio callback.
 
 The current GPUI choice is documented in [`GPUI-REUSE.md`](../GPUI-REUSE.md):
 the plugin experiment uses GPUI as both renderer and native UI runtime. Vello is

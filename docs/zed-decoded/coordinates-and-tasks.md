@@ -172,9 +172,10 @@ bindings are tested at their integration seam ([template tests](https://github.c
 
 MUI already has the right testing shape:
 
-- The demo contract resolves generated UI, checks frame alignment and tap action
-  identity, and includes a deliberately unusual Unicode ID. It also verifies
-  merged custom geometry ([mui-demo main](../../crates/mui-demo/src/main.rs#L40-L70)).
+- The hand-authored `mui-demo` examples resolve measured item layouts, verify
+  frame alignment and transformed picking, and export merged custom geometry.
+  TypeScript-generated demo fixtures are frozen reference material rather than
+  part of the runtime validation gate.
 - `View::hit_item` exercises the real transformed path, frame, clip, and reverse
   order; retain this as the single picking seam. Geometry tests separately check
   transformed area and valid arcs ([geometry tests](../../crates/mui-geometry/src/tests.rs#L324-L347)).

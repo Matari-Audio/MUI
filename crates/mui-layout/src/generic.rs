@@ -238,7 +238,8 @@ impl<P> Node<P> {
         self.grow = weight;
         self
     }
-    pub fn fill(self) -> Self {
+    /// `grow(1.0)`: take a share of the surplus.
+    pub fn expand(self) -> Self {
         self.grow(1.0)
     }
     /// Taffy uses browser flexbox intrinsic sizing when hugging.

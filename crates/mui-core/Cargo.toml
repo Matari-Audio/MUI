@@ -15,3 +15,7 @@ parley = { version = "=0.11.1", default-features = false, features = ["std"] }
 color = "0.3"
 mui-geometry = { path = "../mui-geometry" }
 mui-layout = { path = "../mui-layout" }
+mui-text = { path = "../mui-text" }
+
+[dev-dependencies]
+epaint_default_fonts = "0.36"

@@ -2,7 +2,7 @@
 #![forbid(unsafe_code)]
 
 pub use mui_core as core;
-pub use mui_core::{color, curve, theme};
+pub use mui_core::{color, curve, styled, theme, Spring};
 #[cfg(feature = "egui")]
 pub use mui_egui as egui;
 pub use mui_geometry as geometry;

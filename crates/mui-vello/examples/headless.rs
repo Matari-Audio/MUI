@@ -29,9 +29,9 @@ fn spec() -> SceneSpec {
         .gap(10.0)
         .align(Align::Center);
 
-    let tab = column([column([controls]).padding(10.0)])
+    let tab = column([column([controls]).pad(10.0)])
         .id("tab")
-        .padding(12.0)
+        .pad(12.0)
         .min_size(Size::new(92.0, 0.0));
 
     let root = column([tab, leaf(420.0, 180.0).id("panel")])

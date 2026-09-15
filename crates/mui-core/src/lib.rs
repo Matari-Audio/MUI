@@ -6,9 +6,9 @@
 #![forbid(unsafe_code)]
 
 pub mod color;
-mod rgb;
 pub mod curve;
 mod item;
+mod rgb;
 mod style;
 mod view;
 pub use item::{container, item, Color, Direction, Item, ItemInfo, Rounding, Ui};
@@ -23,10 +23,14 @@ pub use rgb::{Accent, ColorError, Colors, Palette, Rgb, Seeds};
 pub use mui_layout::{Align, Frame, Insets, Justify, Layout, Limits, Node, Overflow, Size};
 pub use scene::{
     resolve_scene, resolve_scene_measured, resolve_scene_measured_with_baseline, CornerRule, Edge,
-    Extension, FrameRadius, Radius, ResolvedScene, ResolvedSurface, SceneError, SceneSpec, SceneState,
-    SurfaceSource, SurfaceSpec,
+    Extension, FrameRadius, Radius, ResolvedScene, ResolvedSurface, SceneError, SceneSpec,
+    SceneState, SurfaceSource, SurfaceSpec,
 };
 pub use theme::{Contrast, CornerProfile, Spacing, SpacingScale, SpacingToken, Theme};
 
 pub mod paragraph;
 pub use paragraph::{Paragraph, TextScene, TextStyle, TextSystem};
+
+mod motion;
+pub mod styled;
+pub use motion::Spring;
