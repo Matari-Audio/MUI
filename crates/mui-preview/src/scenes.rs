@@ -340,47 +340,45 @@ impl PreviewScene for Fields {
 }
 
 /// Tips come due after half a second of rest; the third button holds a float
-/// open instead, which is the same overlay a menu would use.
+/// open instead: an ordinary child of the card, so it reflows with it.
 pub struct Tips;
 impl PreviewScene for Tips {
     fn name(&self) -> &'static str {
         "Tooltip"
     }
     fn about(&self) -> &'static str {
-        "Rest on a button for a tip. Hold the last one for a float anchored under it."
+        "Rest on a button for a tip. Hold the last one and the menu drops in under it -- nothing is placed."
     }
     fn specimen(&mut self, ui: &mut Ui) -> El {
         let (save, _) = button(ui, "tip-save", "Save");
         let (revert, _) = button(ui, "tip-revert", "Revert");
         let (more, _) = button(ui, "tip-more", "Hold for more");
         let held = ui.get("tip-more").held;
+        // The menu is an ordinary child under the button that opened it, not a
+        // float at a hand-measured offset: .gap(M) supplies the distance, so a
+        // fourth button or a different spacing scale reflows it.
         let card = column([
             save.tip("Write the preset to disk"),
             revert.tip("Throw away every edit since the last save"),
             more,
         ])
+        .when(held, |c| {
+            c.push(
+                column([text("Rename"), text("Duplicate"), text("Delete")])
+                    .gap(S)
+                    .pad(M)
+                    .radius(12.0)
+                    .fill(Role::Raised)
+                    .id("tips-menu"),
+            )
+        })
         .gap(M)
         .pad(L)
         .width(260.0)
         .radius(16.0)
         .fill(Role::Surface)
         .id("tips-card");
-        let mut layers = vec![card];
-        if held {
-            layers.push(
-                column([text("Rename"), text("Duplicate"), text("Delete")])
-                    .gap(S)
-                    .pad(M)
-                    .width(160.0)
-                    .radius(12.0)
-                    .fill(Role::Raised)
-                    .anchor(Align::Center, Align::End)
-                    .offset(0.0, 96.0)
-                    .float()
-                    .id("tips-menu"),
-            );
-        }
-        overlay(layers).id("tips")
+        overlay([card]).id("tips")
     }
 }
 
@@ -713,7 +711,9 @@ impl PreviewScene for Cells {
             cell("e", Role::Raised),
         ];
         column([
-            grid(3, cells).gap(S).id("grid"),
+            // min_col makes the declared 3 a ceiling: the same tree is three
+            // columns on a wide window and one at 240.
+            grid(3, cells).gap(S).min_col(120.0).id("grid"),
             row((0..3).map(|i| {
                 leaf(44.0, 24.0)
                     .pill()

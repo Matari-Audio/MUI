@@ -341,8 +341,12 @@ impl App {
             .specimen(ui)
             .anchor(Align::Center, Align::Center)
             .offset(self.pan.x, self.pan.y);
+        // Panning is unbounded by design -- drag the specimen wherever -- so
+        // the stage clips it instead; without this it paints over the sidebar,
+        // which is drawn first.
         let stage = overlay([specimen])
             .grow(1.0)
+            .clip()
             .fill(Role::Background)
             .id("stage");
         row([sidebar, stage]).size(w, h)

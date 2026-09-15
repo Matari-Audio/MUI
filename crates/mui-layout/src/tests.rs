@@ -657,3 +657,37 @@ fn growth_without_a_declared_maximum_is_not_capped_at_a_magic_number() {
     .unwrap();
     assert_eq!(l.frame("a").unwrap().size.width, 3e6);
 }
+
+#[test]
+fn the_gallery_grid_reflows_from_240_to_2000_without_leaving_the_window() {
+    // The shape the preview's Grid scene ships: a fixed-size cell in a
+    // min_col grid, resolved at the three window shapes a plugin editor is
+    // actually dragged to.
+    let tree = || {
+        column([grid(3, (0..6).map(|i| leaf(90., 54.).id(format!("c{i}"))))
+            .gap(10.)
+            .min_col(120.)
+            .id("grid")])
+        .pad(16.)
+    };
+    let cols = |w: f64, h: f64| {
+        let l = resolve(&tree(), Some(Size::new(w, h)), Default::default()).unwrap();
+        let top = l.frame("c0").unwrap().y;
+        let n = (0..6)
+            .filter(|i| l.frame(&format!("c{i}")).unwrap().y == top)
+            .count();
+        // Nothing the solver placed may leave the window, at any width.
+        assert!(
+            l.all().iter().all(|f| f.x >= -1e-9
+                && f.y >= -1e-9
+                && f.right() <= l.size.width + 1e-9
+                && f.bottom() <= l.size.height + 1e-9),
+            "a frame escaped the {w}x{h} root"
+        );
+        n
+    };
+    assert_eq!(
+        (cols(240., 600.), cols(800., 500.), cols(2000., 300.)),
+        (1, 3, 3)
+    );
+}
