@@ -136,11 +136,16 @@ impl Gpu {
         self.vello.reset_and_resize(width as u16, height as u16);
     }
 
-    /// Clear the scene and hand it over. Returning the `Scene` rather than
-    /// exposing it as a field is what makes forgetting the reset impossible.
-    pub fn begin(&mut self) -> &mut Scene {
+    /// Clear the scene and hand it over as a `Canvas`. Returning it rather
+    /// than exposing it as a field is what makes forgetting the reset
+    /// impossible; the `Resources` ride along so text draws as glyph runs
+    /// out of Vello's atlas rather than as filled outlines.
+    pub fn begin(&mut self) -> mui::vello::Gpu<'_> {
         self.vello.reset();
-        &mut self.vello
+        mui::vello::Gpu {
+            scene: &mut self.vello,
+            resources: &mut self.resources,
+        }
     }
 
     /// Render and present what [`Gpu::begin`] handed out.

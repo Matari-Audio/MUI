@@ -116,7 +116,6 @@ fn byte(s: &str, chars: usize) -> usize {
 
 /// A single-line field: the text, a blinking caret, and the edits the focused
 /// keys imply. Click it to focus, Tab to walk to it.
-///
 // ponytail: no selection, no clipboard.
 pub fn text_input(ui: &mut Ui, id: &str, value: &mut String) -> El {
     let focused = ui.focused(id);

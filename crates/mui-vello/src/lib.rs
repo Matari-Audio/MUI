@@ -16,7 +16,9 @@ use kurbo::{Affine, BezPath, Rect, Shape as _, Stroke};
 use mui_core::{Layer, Paint, Painted, ResolvedScene};
 use mui_geometry::{Error, Path, PathCommand};
 use std::sync::{Arc, Mutex};
-use vello_common::paint::PaintType;
+/// The brush type [`Canvas::set_paint`] takes, so the trait can be
+/// implemented outside this crate.
+pub use vello_common::paint::PaintType;
 use vello_common::peniko::color::{AlphaColor, DynamicColor, Srgb};
 use vello_common::peniko::{Blob, ColorStop, FontData, Gradient};
 pub use vello_common::{kurbo, peniko};
@@ -148,16 +150,9 @@ pub trait Canvas {
     /// Everything drawn until the matching [`Canvas::pop_clip`] is clipped to `p`.
     fn push_clip(&mut self, p: &BezPath);
     fn pop_clip(&mut self);
-    /// Draw a hinted glyph run in the current paint, `x` measured from `origin`
-    /// along the baseline. `false` means this canvas has no glyph cache at hand
-    /// and drew nothing, and the caller should fill the text outline instead.
-    fn glyphs(
-        &mut self,
-        font: &Arc<Vec<u8>>,
-        size: f32,
-        origin: (f64, f64),
-        glyphs: &[(u32, f32)],
-    ) -> bool;
+    /// Draw a hinted glyph run in the current paint, `x` measured from
+    /// `origin` along the baseline.
+    fn glyphs(&mut self, font: &Arc<Vec<u8>>, size: f32, origin: (f64, f64), glyphs: &[(u32, f32)]);
 }
 
 /// One [`FontData`] per distinct font. Vello's hinted-glyph and atlas caches
@@ -240,13 +235,12 @@ macro_rules! wrapper {
                 size: f32,
                 origin: (f64, f64),
                 glyphs: &[(u32, f32)],
-            ) -> bool {
+            ) {
                 self.$inner
                     .glyph_run(self.resources, &font_data(font))
                     .font_size(size)
                     .hint(true)
                     .fill_glyphs(run(origin, glyphs));
-                true
             }
         }
     };
@@ -254,51 +248,6 @@ macro_rules! wrapper {
 wrapper!(Gpu<'_>, scene);
 #[cfg(feature = "cpu")]
 wrapper!(Cpu<'_>, ctx);
-macro_rules! canvas {
-    ($t:ty) => {
-        impl Canvas for $t {
-            fn set_transform(&mut self, t: Affine) {
-                <$t>::set_transform(self, t)
-            }
-            fn set_paint(&mut self, p: PaintType) {
-                <$t>::set_paint(self, p)
-            }
-            fn set_stroke(&mut self, s: Stroke) {
-                <$t>::set_stroke(self, s)
-            }
-            fn fill_path(&mut self, p: &BezPath) {
-                <$t>::fill_path(self, p)
-            }
-            fn stroke_path(&mut self, p: &BezPath) {
-                <$t>::stroke_path(self, p)
-            }
-            fn fill_blurred_rounded_rect(&mut self, r: &Rect, radius: f32, std_dev: f32) {
-                <$t>::fill_blurred_rounded_rect(self, r, radius, std_dev, false)
-            }
-            fn push_clip(&mut self, p: &BezPath) {
-                <$t>::push_clip_layer(self, p)
-            }
-            fn pop_clip(&mut self) {
-                <$t>::pop_layer(self)
-            }
-            // ponytail: a bare scene has no `Resources` to cache glyphs in, so
-            // it declines and the caller fills the text outline -- the same
-            // pixels, no atlas. Wrap it in `Gpu`/`Cpu` to get real glyph runs.
-            fn glyphs(
-                &mut self,
-                _: &Arc<Vec<u8>>,
-                _: f32,
-                _: (f64, f64),
-                _: &[(u32, f32)],
-            ) -> bool {
-                false
-            }
-        }
-    };
-}
-canvas!(vello_hybrid::Scene);
-#[cfg(feature = "cpu")]
-canvas!(vello_cpu::RenderContext);
 
 fn srgb(c: mui_core::Color) -> AlphaColor<Srgb> {
     c.to_srgb()
@@ -361,9 +310,8 @@ fn one(canvas: &mut impl Canvas, p: &Painted) -> Result<(), Error> {
     }
     canvas.set_paint(brush(&p.paint, path.bounding_box()));
     if let Some(t) = &p.text {
-        if canvas.glyphs(&t.font, t.size, (t.origin.x, t.origin.y), &t.glyphs) {
-            return Ok(());
-        }
+        canvas.glyphs(&t.font, t.size, (t.origin.x, t.origin.y), &t.glyphs);
+        return Ok(());
     }
     match (p.blur > 0.0, p.rect, p.width > 0.0) {
         (true, Some(rr), _) => {
@@ -451,8 +399,8 @@ mod snapshot {
         pix
     }
 
-    /// The glyph path, not the outline fallback: with `Cpu` the run goes
-    /// through Vello's atlas, so ink on the pixmap means it drew.
+    /// Text reaches the pixels as a glyph run: it goes through Vello's
+    /// atlas, so ink on the pixmap means the run drew.
     #[test]
     fn a_glyph_run_lands_pixels() {
         let mut spec =

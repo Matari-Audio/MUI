@@ -148,7 +148,7 @@ impl Ui {
             None => s.chars().count() as f64 * size * 0.6,
         }
     }
-    /// A caret is on for half of every 0.625 s.
+    /// A caret is on for 0.625 s of every 1.25 s.
     pub(crate) fn blink(&self) -> bool {
         (self.time * 1.6) as i64 % 2 == 0
     }
@@ -359,6 +359,8 @@ impl Ui {
             if p.x < f.x || p.x > f.right() || p.y < f.y || p.y > f.bottom() {
                 continue;
             }
+            // `content` is the frame size for everything but a scroll node,
+            // so an overflow here *is* the "is this scrollable" test.
             let max = [
                 (s.content.width - f.size.width).max(0.0),
                 (s.content.height - f.size.height).max(0.0),

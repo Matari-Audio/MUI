@@ -9,6 +9,27 @@ use std::time::Instant;
 
 use mui::prelude::*;
 
+/// A canvas that draws nothing, so the number below is MUI's half of painting
+/// -- the paint-list walk and the arc-to-cubic conversion -- with Vello's
+/// rasteriser left out. A real `Gpu` canvas needs a device, and this test runs
+/// without one.
+struct Sink;
+impl mui::vello::Canvas for Sink {
+    fn set_transform(&mut self, _: mui::vello::kurbo::Affine) {}
+    fn set_paint(&mut self, _: mui::vello::PaintType) {}
+    fn set_stroke(&mut self, _: mui::vello::kurbo::Stroke) {}
+    fn fill_path(&mut self, p: &mui::vello::kurbo::BezPath) {
+        black_box(p);
+    }
+    fn stroke_path(&mut self, p: &mui::vello::kurbo::BezPath) {
+        black_box(p);
+    }
+    fn fill_blurred_rounded_rect(&mut self, _: &mui::vello::kurbo::Rect, _: f32, _: f32) {}
+    fn push_clip(&mut self, _: &mui::vello::kurbo::BezPath) {}
+    fn pop_clip(&mut self) {}
+    fn glyphs(&mut self, _: &std::sync::Arc<Vec<u8>>, _: f32, _: (f64, f64), _: &[(u32, f32)]) {}
+}
+
 fn ms(mut f: impl FnMut()) -> f64 {
     let n = 50;
     let t = Instant::now();
@@ -71,10 +92,9 @@ fn what_a_frame_costs() {
     );
     let resolved = resolve_scene(&spec).unwrap();
     println!(
-        "vello paint 1600x1000             {:8.3} ms",
+        "mui paint walk 1600x1000          {:8.3} ms",
         ms(|| {
-            let mut scene = mui::vello::vello_hybrid::Scene::new(1600, 1000);
-            mui::vello::paint(&mut scene, &resolved, mui::vello::kurbo::Affine::IDENTITY).unwrap();
+            mui::vello::paint(&mut Sink, &resolved, mui::vello::kurbo::Affine::IDENTITY).unwrap();
         })
     );
 }

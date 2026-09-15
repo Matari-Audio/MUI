@@ -20,6 +20,7 @@ use mui::geometry::Point;
 use mui::prelude::*;
 use mui::vello::kurbo::{Affine, Rect, Shape as _, Stroke};
 use mui::vello::peniko::color::AlphaColor;
+use mui::vello::Canvas as _;
 use scenes::PreviewScene;
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, MouseButton, WindowEvent};
@@ -170,9 +171,9 @@ impl App {
         let Some(gpu) = &mut self.gpu else { return };
         let scale = gpu.window().scale_factor();
         let Some(scene) = self.ui.scene() else { return };
-        let canvas = gpu.begin();
+        let mut canvas = gpu.begin();
         let xf = Affine::scale(scale);
-        if let Err(e) = mui::vello::paint(canvas, scene, xf) {
+        if let Err(e) = mui::vello::paint(&mut canvas, scene, xf) {
             eprintln!("paint: {e}");
         }
         if let Some((key, path)) = self.scenes[self.selected].overlay() {
@@ -186,14 +187,15 @@ impl App {
                         .theme
                         .palette
                         .on(self.ui.theme.palette.raised())
-                        .to_srgb(),
+                        .to_srgb()
+                        .into(),
                 );
                 canvas.fill_path(&bez);
             }
         }
         if self.frames {
             canvas.set_transform(xf);
-            canvas.set_paint(FRAME);
+            canvas.set_paint(FRAME.into());
             canvas.set_stroke(Stroke::new(1.0));
             for f in scene.layout.all() {
                 canvas.stroke_path(&Rect::new(f.x, f.y, f.right(), f.bottom()).to_path(0.1));
