@@ -40,11 +40,41 @@ impl std::fmt::Display for Error {
         }
     }
 }
-impl std::error::Error for Error {}
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Geometry(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 impl From<mui_geometry::Error> for Error {
     fn from(e: mui_geometry::Error) -> Self {
         Self::Geometry(e)
     }
+}
+
+fn checked_size(size_px: f64) -> Result<f32, Error> {
+    if !size_px.is_finite() || size_px <= 0. || size_px > f64::from(f32::MAX) {
+        return Err(Error::InvalidOptions("size_px"));
+    }
+    let size = size_px as f32;
+    if !size.is_finite() || size == 0. {
+        return Err(Error::InvalidOptions("size_px"));
+    }
+    Ok(size)
+}
+
+fn checked_finite(value: f64, name: &'static str) -> Result<f64, Error> {
+    if value.is_finite() {
+        Ok(value)
+    } else {
+        Err(Error::InvalidOptions(name))
+    }
+}
+
+fn checked_metric(value: f32, name: &'static str) -> Result<f64, Error> {
+    checked_finite(f64::from(value), name)
 }
 
 /// One variable-font axis position, e.g. `("FILL", 1.0)` or `("wght", 500.0)`.
@@ -96,9 +126,7 @@ pub fn glyph_path(
     axes: &[Axis<'_>],
     tolerance: f64,
 ) -> Result<Path, Error> {
-    if !size_px.is_finite() || size_px <= 0. {
-        return Err(Error::InvalidOptions("size_px"));
-    }
+    let size = checked_size(size_px)?;
     if !tolerance.is_finite() || tolerance <= 0. {
         return Err(Error::InvalidOptions("tolerance"));
     }
@@ -116,8 +144,10 @@ pub fn glyph_path(
         tolerance,
         dx: 0.,
     };
-    draw_glyph(&font, glyph_id, size_px, &location, &mut pen)?;
-    Ok(pen.finish())
+    draw_glyph(&font, glyph_id, size, &location, &mut pen)?;
+    let path = pen.finish();
+    path.validate(usize::MAX)?;
+    Ok(path)
 }
 
 /// One string laid out as a single [`Path`], plus the numbers a caller needs to
@@ -171,18 +201,16 @@ pub fn text_run(
     axes: &[Axis<'_>],
     tolerance: f64,
 ) -> Result<TextRun, Error> {
-    if !size_px.is_finite() || size_px <= 0. {
-        return Err(Error::InvalidOptions("size_px"));
-    }
+    let size = checked_size(size_px)?;
     if !tolerance.is_finite() || tolerance <= 0. {
         return Err(Error::InvalidOptions("tolerance"));
     }
     let font = FontRef::new(font).map_err(|e| Error::Font(format!("{e}")))?;
-    let size = Size::new(size_px as f32);
+    let font_size = Size::new(size);
     let location = font.axes().location(axes.iter().copied());
     let charmap = font.charmap();
     let outlines = font.outline_glyphs();
-    let glyph_metrics = font.glyph_metrics(size, LocationRef::from(&location));
+    let glyph_metrics = font.glyph_metrics(font_size, LocationRef::from(&location));
 
     let mut pen = PathPen {
         commands: Vec::new(),
@@ -194,28 +222,36 @@ pub fn text_run(
     for ch in text.chars() {
         let glyph_id = charmap.map(ch).unwrap_or(GlyphId::NOTDEF);
         if outlines.get(glyph_id).is_some() {
-            draw_glyph(&font, glyph_id, size_px, &location, &mut pen)?;
+            draw_glyph(&font, glyph_id, size, &location, &mut pen)?;
         }
         pen.close_open_contour();
         pen.dx += glyph_metrics.advance_width(glyph_id).unwrap_or(0.) as f64;
     }
-    let advance = pen.dx;
+    let advance = checked_finite(pen.dx, "font metrics")?;
 
-    let metrics = font.metrics(size, LocationRef::from(&location));
+    let metrics = font.metrics(font_size, LocationRef::from(&location));
+    let ascent = checked_metric(metrics.ascent, "font metrics")?;
+    let descent = checked_metric(-metrics.descent, "font metrics")?;
+    let line_height = checked_metric(
+        metrics.ascent - metrics.descent + metrics.leading,
+        "font metrics",
+    )?;
+    let path = pen.finish();
+    path.validate(usize::MAX)?;
     Ok(TextRun {
-        path: pen.finish(),
+        path,
         advance,
-        ascent: metrics.ascent as f64,
+        ascent,
         // Negative in font space, positive below the baseline here.
-        descent: -metrics.descent as f64,
-        line_height: (metrics.ascent - metrics.descent + metrics.leading) as f64,
+        descent,
+        line_height,
     })
 }
 
 fn draw_glyph(
     font: &FontRef<'_>,
     glyph_id: GlyphId,
-    size_px: f64,
+    size: f32,
     location: &skrifa::instance::Location,
     pen: &mut PathPen,
 ) -> Result<(), Error> {
@@ -224,7 +260,7 @@ fn draw_glyph(
     };
     outline
         .draw(
-            DrawSettings::unhinted(Size::new(size_px as f32), LocationRef::from(location)),
+            DrawSettings::unhinted(Size::new(size), LocationRef::from(location)),
             pen,
         )
         .map_err(|e| Error::Draw(format!("{e}")))?;
@@ -525,6 +561,42 @@ mod tests {
                 .unwrap();
         assert!(-bounds.min.y <= run.ascent, "ink fits above the baseline");
         assert!(bounds.max.y <= run.descent, "and below it");
+    }
+
+    #[test]
+    fn size_conversion_rejects_underflow_overflow_and_invalid_derived_values() {
+        let ordinary = text_run(HACK_REGULAR, "A", 96., &[], 0.05).unwrap();
+        assert!(ordinary.advance.is_finite());
+        assert!(ordinary.ascent.is_finite());
+        assert!(ordinary.descent.is_finite());
+        assert!(ordinary.line_height.is_finite());
+        assert!(glyph_path(HACK_REGULAR, 'A', 96., &[], 0.05).is_ok());
+
+        let max_glyph = glyph_path(HACK_REGULAR, 'A', f64::from(f32::MAX), &[], 0.05)
+            .expect("f32::MAX is representable and must keep finite path commands");
+        assert!(max_glyph.validate(usize::MAX).is_ok());
+        assert!(
+            text_run(HACK_REGULAR, "A", f64::from(f32::MAX), &[], 0.05).is_err(),
+            "text_run must reject non-finite metrics derived at f32::MAX"
+        );
+
+        for result in [
+            glyph_path(HACK_REGULAR, 'A', f64::MAX, &[], 0.05).map(|_| ()),
+            text_run(HACK_REGULAR, "A", f64::MAX, &[], 0.05).map(|_| ()),
+        ] {
+            assert!(result.is_err(), "f64::MAX must not cross the f32 boundary");
+        }
+
+        let smallest_positive = f64::from_bits(1);
+        assert!(glyph_path(HACK_REGULAR, 'A', smallest_positive, &[], 0.05).is_err());
+        assert!(text_run(HACK_REGULAR, "A", smallest_positive, &[], 0.05).is_err());
+    }
+
+    #[test]
+    fn geometry_errors_preserve_their_source_chain() {
+        let error = Error::Geometry(mui_geometry::Error::InvalidPath);
+        assert!(std::error::Error::source(&error).is_some());
+        assert!(std::error::Error::source(&Error::InvalidOptions("size_px")).is_none());
     }
 
     #[test]

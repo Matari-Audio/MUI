@@ -4,6 +4,31 @@ use std::f64::consts::PI;
 fn r(x: f64, y: f64, w: f64, h: f64) -> PlacedShape {
     Polygon::rectangle(x, y, w, h).unwrap().into()
 }
+#[test]
+fn rectangle_rejects_nonfinite_derived_endpoints() {
+    assert_eq!(
+        Polygon::rectangle(1e308, 0., 1e308, 1.),
+        Err(Error::NonFinite)
+    );
+    assert_eq!(
+        Polygon::rectangle(0., 1e308, 1., 1e308),
+        Err(Error::NonFinite)
+    );
+}
+#[test]
+fn rectangle_rejects_rounded_away_extent_but_accepts_next_ulp() {
+    let base = 1e16;
+    assert_eq!(
+        Polygon::rectangle(base, 0., 1., 1.),
+        Err(Error::DegenerateRing)
+    );
+    assert!(Polygon::rectangle(base, 0., 2., 1.).is_ok());
+    assert_eq!(
+        Polygon::rectangle(0., base, 1., 1.),
+        Err(Error::DegenerateRing)
+    );
+    assert!(Polygon::rectangle(0., base, 1., 2.).is_ok());
+}
 fn u(p: &[PlacedShape]) -> Topology {
     union(p, GeometryOptions::default()).unwrap()
 }

@@ -169,10 +169,12 @@ struct App {
     /// Recomputing it per frame lets a press that began in the sidebar grab the
     /// specimen the instant the pointer crosses into the stage.
     sidebar_gesture: bool,
-    /// Button transitions since the last frame. winit dispatches every queued
-    /// event and *then* one coalesced redraw, so a tap whose press and release
-    /// land in the same batch has no edge left if we only keep the final level.
-    buttons: Vec<bool>,
+    /// Pointer samples since the last frame. winit dispatches every queued
+    /// event and *then* one coalesced redraw, so keeping only button levels (or
+    /// only the final pointer position) loses the event order that gives a
+    /// gesture its meaning. Cursor motion is queued too: a drag that leaves a
+    /// target and returns to it must still cross the threshold before release.
+    pointer_events: Vec<PointerInput>,
     /// One character, consumed by whichever field has focus. Dropped if none
     /// does -- a keystroke with nowhere to go is not an error.
     typed: Option<char>,
@@ -206,7 +208,7 @@ impl App {
             drag_from: None,
             pointer: PointerInput::default(),
             sidebar_gesture: false,
-            buttons: Vec::new(),
+            pointer_events: Vec::new(),
             typed: None,
             chrome: Chrome::new(font.clone()),
             font,
@@ -231,6 +233,52 @@ impl App {
         self.selected = index;
         self.pan = None;
         self.rebake();
+    }
+
+    /// Record one physical pointer sample for the next redraw. The live
+    /// pointer is also updated immediately because wheel and focus events can
+    /// arrive before the queued samples are replayed.
+    fn queue_pointer(&mut self, input: PointerInput) {
+        self.pointer = input;
+        self.pointer_events.push(input);
+    }
+
+    fn queue_cursor(&mut self, pos: Option<Point>) {
+        self.queue_pointer(PointerInput {
+            pos,
+            primary_down: self.pointer.primary_down,
+        });
+    }
+
+    fn queue_button(&mut self, primary_down: bool) {
+        self.queue_pointer(PointerInput {
+            pos: self.pointer.pos,
+            primary_down,
+        });
+    }
+
+    /// Cancel the in-flight pointer gesture when the window loses focus.
+    /// Clearing the samples is essential: replaying a queued press after the
+    /// cancellation would synthesize a click on the next redraw.
+    fn cancel_pointer(&mut self) {
+        self.pointer_events.clear();
+        self.pointer = PointerInput::default();
+        self.sidebar_gesture = false;
+        self.drag_from = None;
+        self.input.cancel();
+        self.chrome.cancel();
+    }
+
+    fn replay_pointer_events(&mut self, size: (u32, u32), scale: f64) {
+        let events = std::mem::take(&mut self.pointer_events);
+        if events.is_empty() {
+            self.tick(size, scale);
+        } else {
+            for pointer in events {
+                self.pointer = pointer;
+                self.tick(size, scale);
+            }
+        }
     }
 
     /// The specimen's top-left in physical pixels: wherever it was dragged to,
@@ -449,9 +497,10 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
-                self.pointer.pos = Some(Point::new(position.x, position.y));
+                self.queue_cursor(Some(Point::new(position.x, position.y)));
             }
-            WindowEvent::CursorLeft { .. } => self.pointer.pos = None,
+            WindowEvent::CursorLeft { .. } => self.queue_cursor(None),
+            WindowEvent::Focused(false) => self.cancel_pointer(),
             // The column is the only thing that scrolls; the stage is dragged.
             WindowEvent::MouseWheel { delta, .. } => {
                 let scale = self.gpu.as_ref().map_or(1., |g| g.window().scale_factor());
@@ -466,7 +515,7 @@ impl ApplicationHandler for App {
                 state,
                 button: MouseButton::Left,
                 ..
-            } => self.buttons.push(state == ElementState::Pressed),
+            } => self.queue_button(state == ElementState::Pressed),
             WindowEvent::KeyboardInput { ref event, .. } if event.state.is_pressed() => {
                 if event.logical_key == Key::Named(NamedKey::Escape) {
                     event_loop.exit();
@@ -481,14 +530,7 @@ impl ApplicationHandler for App {
             WindowEvent::RedrawRequested => {
                 if let Some(gpu) = &self.gpu {
                     let (size, scale) = (gpu.size(), gpu.window().scale_factor());
-                    let buttons = std::mem::take(&mut self.buttons);
-                    if buttons.is_empty() {
-                        self.tick(size, scale);
-                    }
-                    for down in buttons {
-                        self.pointer.primary_down = down;
-                        self.tick(size, scale);
-                    }
+                    self.replay_pointer_events(size, scale);
                 }
                 self.draw();
                 return; // Drawing must not ask for another frame, or Wait spins.
@@ -689,8 +731,9 @@ mod tests {
     }
 
     /// A tap whose press and release arrive in the same winit batch is still a
-    /// click. The event loop keeps the transitions, not the final level, so no
-    /// edge can be coalesced away while the loop is behind.
+    /// click. The event loop keeps the complete pointer samples, not just the
+    /// final level or position, so no edge can be coalesced away while the loop
+    /// is behind.
     #[test]
     fn a_tap_inside_one_event_batch_still_clicks() {
         let mut app = App::new();
@@ -704,15 +747,96 @@ mod tests {
                     .is_some_and(|id| id.ends_with(app.scenes[1].name()))
             })
             .unwrap();
-        app.pointer.pos = Some(at);
-        // Both transitions queued before a single redraw ever runs.
-        app.buttons.extend([true, false]);
-        let buttons = std::mem::take(&mut app.buttons);
-        for down in buttons {
-            app.pointer.primary_down = down;
-            app.tick(size, 1.);
-        }
+        // CursorMoved, press, and release all arrive before one redraw.
+        app.queue_cursor(Some(at));
+        app.queue_button(true);
+        app.queue_button(false);
+        app.replay_pointer_events(size, 1.);
         assert_eq!(app.selected, 1, "the tap was swallowed");
+    }
+
+    fn sidebar_point(app: &App, suffix: &str) -> Point {
+        (0..500)
+            .map(|i| Point::new(40., i as f64 * 2.))
+            .find(|p| app.chrome.at(*p).is_some_and(|id| id.ends_with(suffix)))
+            .unwrap_or_else(|| panic!("no widget ending in {suffix:?} in the column"))
+    }
+
+    /// A press on A, motion to B, and release on B must not become a click on
+    /// B merely because all four events were replayed by one redraw.
+    #[test]
+    fn a_batched_press_move_release_keeps_the_original_capture() {
+        let mut app = App::new();
+        let size = (800, 600);
+        app.tick(size, 1.);
+        assert!(app.scenes.len() > 2, "two scene rows are needed");
+        let a_name = app.scenes[1].name().to_owned();
+        let b_name = app.scenes[2].name().to_owned();
+        let a = sidebar_point(&app, &a_name);
+        let b = sidebar_point(&app, &b_name);
+
+        app.queue_cursor(Some(a));
+        app.queue_button(true);
+        app.queue_cursor(Some(b));
+        app.queue_button(false);
+        app.replay_pointer_events(size, 1.);
+
+        assert_eq!(app.selected, 0, "release on B clicked a different row");
+    }
+
+    /// Motion that leaves a target and returns before release still crosses the
+    /// drag threshold. Replaying only the final A position would incorrectly
+    /// turn this into a click.
+    #[test]
+    fn a_batched_away_and_return_is_not_a_click() {
+        let mut app = App::new();
+        let size = (800, 600);
+        app.tick(size, 1.);
+        let name = app.scenes[1].name().to_owned();
+        let on = sidebar_point(&app, &name);
+        let away = Point::new(400., 400.);
+
+        app.queue_cursor(Some(on));
+        app.queue_button(true);
+        app.queue_cursor(Some(away));
+        app.queue_cursor(Some(on));
+        app.queue_button(false);
+        app.replay_pointer_events(size, 1.);
+
+        assert_eq!(app.selected, 0, "away-and-return was reported as a click");
+    }
+
+    /// Focus loss cancels both input state and queued samples. A press waiting
+    /// for redraw must not click after cancellation, and a later ordinary tap
+    /// must still work.
+    #[test]
+    fn focus_loss_cancels_queued_pointer_gesture() {
+        let mut app = App::new();
+        let size = (800, 600);
+        app.tick(size, 1.);
+        let name = app.scenes[1].name().to_owned();
+        let on = sidebar_point(&app, &name);
+
+        app.queue_cursor(Some(on));
+        app.queue_button(true);
+        app.cancel_pointer();
+        assert!(
+            app.pointer_events.is_empty(),
+            "focus loss left stale events"
+        );
+        app.replay_pointer_events(size, 1.);
+        assert_eq!(app.selected, 0, "focus loss synthesized a click");
+        assert!(
+            app.input.held().is_none(),
+            "stage capture survived focus loss"
+        );
+        assert!(!app.chrome.busy(), "sidebar capture survived focus loss");
+
+        app.queue_cursor(Some(on));
+        app.queue_button(true);
+        app.queue_button(false);
+        app.replay_pointer_events(size, 1.);
+        assert_eq!(app.selected, 1, "a later tap did not recover after cancel");
     }
 
     /// Clicking a scene in the sidebar is the same thing the number row used

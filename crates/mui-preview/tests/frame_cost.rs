@@ -7,6 +7,9 @@
 //! ```
 use std::time::Instant;
 
+#[path = "../../mui-demo/src/generated.rs"]
+mod generated;
+
 fn ms(f: impl Fn()) -> f64 {
     let n = 20;
     let t = Instant::now();
@@ -98,4 +101,34 @@ fn what_a_frame_costs() {
             scene.stroke_path(&bez);
         })
     );
+}
+
+#[test]
+#[ignore = "a measurement"]
+fn scene_resolution_costs() {
+    use mui_core::{resolve_scene, Spacing, SurfaceSpec};
+    use std::hint::black_box;
+
+    let basic = generated::generated_scene();
+    let offset =
+        basic
+            .clone()
+            .surface(SurfaceSpec::inset("merged-inset", "outer", Spacing::px(4.)));
+    for (name, spec) in [("pill resolve", basic), ("merged parallel inset", offset)] {
+        for _ in 0..20 {
+            black_box(resolve_scene(black_box(&spec)).unwrap());
+        }
+        let mut samples = Vec::with_capacity(200);
+        for _ in 0..200 {
+            let start = Instant::now();
+            let scene = black_box(resolve_scene(black_box(&spec)).unwrap());
+            samples.push(start.elapsed().as_secs_f64() * 1000.);
+            assert!(scene.surface("outer").unwrap().basis.vertex_count() >= 6);
+        }
+        samples.sort_by(f64::total_cmp);
+        println!(
+            "{name}: median {:.3} ms, p95 {:.3} ms (200 samples)",
+            samples[100], samples[189]
+        );
+    }
 }

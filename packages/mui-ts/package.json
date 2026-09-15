@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test test/compiler.test.mjs",
     "generate:example": "node dist/src/compiler.js dist/examples/pill.js ../../crates/mui-demo/src/generated.rs"
   },
   "devDependencies": {

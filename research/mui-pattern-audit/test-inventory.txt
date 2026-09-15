@@ -1,0 +1,192 @@
+0 tests, 0 benchmarks
+color::tests::a_disabled_control_is_duller_and_closer_to_the_ground: test
+color::tests::alpha_survives_every_derivation: test
+color::tests::an_impossible_ratio_saturates_instead_of_looping: test
+color::tests::an_in_gamut_colour_round_trips: test
+color::tests::an_invalid_pigment_is_caught: test
+color::tests::contrast_is_symmetric_and_bounded: test
+color::tests::depth_reads_the_same_way_in_both_modes: test
+color::tests::dim_is_visibly_dimmer_where_there_is_room_for_it: test
+color::tests::every_ink_role_clears_aa_everywhere_in_both_modes: test
+color::tests::flipping_the_mode_is_the_entire_theme_switch: test
+color::tests::gamut_mapping_holds_hue_where_clipping_does_not: test
+color::tests::hover_reproduces_the_hand_tuned_lit_accent: test
+color::tests::levels_for_never_promises_a_ratio_the_band_cannot_reach: test
+color::tests::lightness_saturates_instead_of_escaping_the_range: test
+color::tests::no_level_escapes_the_band: test
+color::tests::readable_moves_lightness_and_leaves_hue_alone: test
+color::tests::the_default_holds_no_brand_opinion: test
+color::tests::the_named_surfaces_stay_four_distinct_colours: test
+color::tests::the_status_roles_are_the_hues_they_claim_to_be: test
+scene::tests::analytic_inset_preserves_parallel_radius: test
+scene::tests::cycle_is_rejected: test
+scene::tests::failed_commit_is_transactional: test
+scene::tests::merged_parent_inset_follows_final_concave_outline: test
+scene::tests::parent_normalized_is_distinct_from_parallel: test
+
+24 tests, 0 benchmarks
+tests::generated_typescript_scene_resolves: test
+
+1 test, 0 benchmarks
+cache_tests::unchanged_path_does_not_retessellate: test
+tests::border_mesh_has_no_double_fill: test
+tests::failed_surface_commit_keeps_previous: test
+tests::instances_do_not_share_state: test
+
+4 tests, 0 benchmarks
+tests::a_shape_can_fill_another_shapes_hole: test
+tests::arbitrary_rotation: test
+tests::arcs_are_tangent: test
+tests::capsule_is_closed_and_has_area: test
+tests::centered_shoulders_are_two: test
+tests::collapsed_inset_is_none: test
+tests::concave_arc_grows_while_convex_shrinks: test
+tests::concentric_inset_preserves_arc_centers: test
+tests::containment: test
+tests::core_geometry_can_be_owned_across_threads: test
+tests::empty_is_valid: test
+tests::erosion_can_empty_a_shape: test
+tests::erosion_can_split_a_narrow_neck: test
+tests::flatten_budget_is_respected: test
+tests::full_shared_edge: test
+tests::general_offset_distance_is_measured: test
+tests::hole_classification_uses_material: test
+tests::holes_expand_on_inset: test
+tests::identical_shapes: test
+tests::intersection_and_difference: test
+tests::invalid_offset_inputs_rejected: test
+tests::invalid_values_fail: test
+tests::left_shoulder_is_one: test
+tests::negative_inset_is_error: test
+tests::negative_options_fail: test
+tests::nonincident_boundary_limits_radius: test
+tests::offset_is_repeatable: test
+tests::only_concave: test
+tests::overlapping_holes_are_subtractions_not_xor: test
+tests::proportional_is_not_concentric: test
+tests::radius_shrinks_at_tiny_step: test
+tests::randomized_analytic_insets: test
+tests::randomized_inset_boundary_clearance: test
+tests::randomized_rectangles_have_finite_safe_arcs: test
+tests::rectangle_offset_matches_analytic: test
+tests::reflection_does_not_cancel_union: test
+tests::self_intersection_rejected: test
+tests::separate: test
+tests::shared_edge_budget: test
+tests::stroked_gap_counts_both_half_strokes: test
+tests::svg_serialization_rejects_invalid_arc: test
+tests::tight_offset_quality_is_rejected_not_faked: test
+tests::vanished_convex_arc_is_reported: test
+tests::zero_radius_returns_lines: test
+
+44 tests, 0 benchmarks
+tests::a_larger_threshold_is_honoured: test
+tests::a_point_inside_a_counter_is_not_a_hit: test
+tests::a_press_captures_its_target_even_when_the_pointer_leaves: test
+tests::a_press_on_empty_space_captures_nothing: test
+tests::a_wobble_that_returns_home_is_still_a_click: test
+tests::an_unknown_id_is_inert_rather_than_a_panic: test
+tests::drag_delta_is_per_frame_and_zero_when_not_dragging: test
+tests::losing_the_pointer_mid_gesture_keeps_the_capture: test
+tests::malformed_geometry_fails_at_registration_not_silently: test
+tests::moving_past_the_threshold_turns_a_click_into_a_drag: test
+tests::press_and_release_on_the_same_target_is_a_click: test
+tests::releasing_away_from_the_target_releases_but_does_not_click: test
+tests::same_wound_rings_stack_rather_than_cancel: test
+tests::the_corner_of_a_rounded_shape_is_outside_its_bounding_box_corner: test
+tests::the_last_target_pushed_is_on_top: test
+
+15 tests, 0 benchmarks
+tests::a_declared_minimum_is_the_floor_and_content_alone_is_not: test
+tests::a_deficit_comes_back_by_shrink_and_stops_at_each_minimum: test
+tests::a_parent_cannot_be_squeezed_past_what_its_children_refuse: test
+tests::align_self_overrides_the_parent_for_one_child: test
+tests::asymmetric_padding: test
+tests::basis_zero_shares_the_axis_rather_than_the_surplus: test
+tests::duplicate_ids: test
+tests::failed_commit_preserves: test
+tests::growth_caps: test
+tests::intrinsic_chain: test
+tests::overlay_centers: test
+tests::space_between: test
+
+12 tests, 0 benchmarks
+host::tests::a_target_size_never_wraps: test
+skin::tests::the_skin_is_a_valid_theme_in_both_modes: test
+tests::a_drag_tracks_the_hand_one_to_one: test
+tests::a_dragged_axis_rebakes: test
+tests::a_tap_inside_one_event_batch_still_clicks: test
+tests::an_idle_frame_never_rebakes: test
+tests::both_fill_rules_agree_on_every_surface: test
+tests::every_frame_is_drawn_and_labelled: test
+tests::every_scene_bakes: test
+tests::hit_is_what_was_painted: test
+tests::paint_order_is_authored_order: test
+tests::the_scene_list_selects: test
+tests::the_sidebar_does_not_drag_the_stage: test
+tests::the_stage_centres_in_what_the_sidebar_leaves: test
+ui::tests::a_click_focuses_the_field_and_typing_follows_it: test
+ui::tests::a_press_dragged_off_a_button_stops_looking_pressed: test
+ui::tests::a_pressed_slider_takes_the_value_under_the_pointer: test
+ui::tests::a_selected_rows_label_flips_to_stay_on_the_accent: test
+ui::tests::a_zero_budget_terminates: test
+ui::tests::an_idle_frame_moves_nothing: test
+ui::tests::both_themes_are_legible: test
+ui::tests::notes_wrap_inside_the_column: test
+ui::tests::scale_enters_once: test
+ui::tests::scrolling_reaches_a_widget_past_the_bottom: test
+ui::tests::the_theme_flip_reaches_every_painted_colour: test
+
+25 tests, 0 benchmarks
+scene_resolution_costs: test
+what_a_frame_costs: test
+
+2 tests, 0 benchmarks
+a_scene_clips_to_its_own_size_until_it_is_resized: test
+
+1 test, 0 benchmarks
+tests::concave_union_tessellates: test
+tests::hole_is_not_filled: test
+
+2 tests, 0 benchmarks
+axis_tests::a_static_font_declares_no_axes: test
+tests::a_counter_is_its_own_contour: test
+tests::a_glyph_tessellates_like_any_other_surface: test
+tests::a_glyph_the_face_lacks_does_not_blank_the_label: test
+tests::a_missing_glyph_is_reported_not_drawn_blank: test
+tests::a_run_is_its_glyphs_side_by_side: test
+tests::a_space_advances_without_ink: test
+tests::an_axis_a_static_font_lacks_is_ignored_not_an_error: test
+tests::baseline_sits_at_zero_and_the_glyph_grows_upward: test
+tests::metrics_are_y_down_and_positive_both_ways: test
+tests::outline_scales_with_em_size: test
+tests::overlapping_glyphs_fill_rather_than_cancel: test
+tests::tolerance_buys_vertices: test
+
+13 tests, 0 benchmarks
+tests::a_capsule_keeps_its_extent_through_the_conversion: test
+tests::a_malformed_arc_is_caught_at_the_seam: test
+tests::a_nonsense_tolerance_is_refused_rather_than_hung_on: test
+tests::an_arc_lands_on_the_tangent_point_mui_recorded: test
+tests::arcs_become_curves_not_a_polyline: test
+
+5 tests, 0 benchmarks
+crates/mui/src/lib.rs - ReadmeDoctests (line 189): test
+crates/mui/src/lib.rs - ReadmeDoctests (line 228): test
+crates/mui/src/lib.rs - ReadmeDoctests (line 295): test
+crates/mui/src/lib.rs - ReadmeDoctests (line 371): test
+crates/mui/src/lib.rs - ReadmeDoctests (line 64): test
+crates/mui/src/lib.rs - ReadmeDoctests (line 75): test
+crates/mui/src/lib.rs - ReadmeDoctests (line 90): test
+
+7 tests, 0 benchmarks
+crates/mui-core/src/theme.rs - theme::Theme::DEFAULT (line 131): test
+
+1 test, 0 benchmarks
+0 tests, 0 benchmarks
+0 tests, 0 benchmarks
+0 tests, 0 benchmarks
+0 tests, 0 benchmarks
+0 tests, 0 benchmarks
+0 tests, 0 benchmarks
+0 tests, 0 benchmarks

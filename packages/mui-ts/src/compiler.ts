@@ -1,16 +1,54 @@
 // Build-time TS -> typed Rust builders. No JavaScript runtime is required in the plugin.
 // @ts-ignore - keep this package dependency-free; Node provides these modules.
-import { writeFile } from "node:fs/promises";
+import { rename, unlink, writeFile } from "node:fs/promises";
+// @ts-ignore
+import { randomUUID } from "node:crypto";
 // @ts-ignore
 import { pathToFileURL } from "node:url";
 import type { Align, CornerRule, Radius, Insets, Justify, Node, Palette, Scene, Spacing, Surface } from "./index.js";
 
 declare const process: { argv: string[] };
 
-const q = (s: string) => JSON.stringify(s);
+// JSON's \uXXXX escapes are not Rust string escapes. Keep valid Unicode in the
+// source, use Rust's short escapes where they exist, and reject lone UTF-16
+// surrogates before they can become invalid UTF-8 output.
+function q(s: string): string {
+  let out = '"';
+  for (let i = 0; i < s.length; i += 1) {
+    const unit = s.charCodeAt(i);
+    let codePoint = unit;
+    if (unit >= 0xd800 && unit <= 0xdbff) {
+      const next = s.charCodeAt(i + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) {
+        throw new Error(`unpaired high surrogate at string index ${i}`);
+      }
+      codePoint = 0x10000 + ((unit - 0xd800) << 10) + next - 0xdc00;
+      i += 1;
+    } else if (unit >= 0xdc00 && unit <= 0xdfff) {
+      throw new Error(`unpaired low surrogate at string index ${i}`);
+    }
+
+    switch (codePoint) {
+      case 0x08: out += "\\u{8}"; break;
+      case 0x09: out += "\\t"; break;
+      case 0x0a: out += "\\n"; break;
+      case 0x0c: out += "\\u{c}"; break;
+      case 0x0d: out += "\\r"; break;
+      case 0x22: out += '\\"'; break;
+      case 0x5c: out += "\\\\"; break;
+      default:
+        out += codePoint <= 0x1f || codePoint === 0x7f
+          ? `\\u{${codePoint.toString(16)}}`
+          : String.fromCodePoint(codePoint);
+    }
+  }
+  return `${out}"`;
+}
+
 const n = (v: number) => {
   if (!Number.isFinite(v)) throw new Error(`non-finite number: ${v}`);
-  return Number.isInteger(v) ? `${v}.0` : String(v);
+  const text = String(v);
+  return /e/i.test(text) ? text : Number.isInteger(v) ? `${text}.0` : text;
 };
 const align = (a?: Align) => a ? `mui_layout::Align::${({start:"Start",center:"Center",end:"End",stretch:"Stretch"} as const)[a]}` : null;
 const justify = (j?: Justify) => j ? `mui_layout::Justify::${({start:"Start",center:"Center",end:"End","space-between":"SpaceBetween"} as const)[j]}` : null;
@@ -88,7 +126,7 @@ function compile(scene: Scene): string {
   out += `    let theme = mui_core::Theme {\n`;
   out += `        corners: mui_core::CornerProfile::new(${n(c.convex)}, ${n(c.concave)}),\n`;
   out += `        spacing: mui_core::SpacingScale { xs: ${n(sp.xs)}, s: ${n(sp.s)}, m: ${n(sp.m)}, l: ${n(sp.l)}, xl: ${n(sp.xl)} },\n`;
-  if (t.palette) out += `        palette: ${palette(t.palette)},\n`;
+  out += `        palette: ${palette(t.palette ?? {})},\n`;
   out += `        stroke_width: ${n(t.strokeWidth ?? 1.5)},\n    };\n`;
   out += `    mui_core::SceneSpec::new(root).theme(theme)`;
   if (scene.offered) out += `.offered(mui_layout::Size::new(${n(scene.offered[0])}, ${n(scene.offered[1])}))`;
@@ -101,4 +139,13 @@ const [, , input, output] = process.argv;
 if (!input || !output) throw new Error("usage: compiler.js <scene.js> <output.rs>");
 const mod = await import(pathToFileURL(input).href);
 const scene = mod.default as Scene;
-await writeFile(output, compile(scene), "utf8");
+// Keep the temporary beside the destination so rename is atomic on one file
+// system and an interrupted generation cannot leave a truncated fixture.
+const temporary = `${output}.${randomUUID()}.tmp`;
+try {
+  await writeFile(temporary, compile(scene), "utf8");
+  await rename(temporary, output);
+} catch (error) {
+  try { await unlink(temporary); } catch { /* preserve the original error */ }
+  throw error;
+}

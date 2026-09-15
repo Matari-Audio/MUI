@@ -6,7 +6,9 @@ frames into single Boolean surfaces, and deriving correctly nested children from
 outline rather than from guessed radii.
 
 The core is renderer-independent and does **not** use Taffy. `mui-layout` has no dependencies at all.
-The whole workspace, including the egui adapter, compiles to `wasm32-unknown-unknown`.
+All reusable library crates, including the egui adapter, compile to
+`wasm32-unknown-unknown`; the native `mui-preview` host is intentionally
+excluded from that gate.
 
 > **Status: foundation, not a framework.** There is no text shaping, no widget library and no
 > retained state. Pointer hit testing, glyph outlines and a Vello renderer are here; everything
@@ -103,37 +105,10 @@ No pixel Y positions are needed for the controls. Their column sizes the pill co
 
 ## TypeScript authoring, Rust runtime
 
-`packages/mui-ts/examples/pill.ts` is real TypeScript:
-
-```ts
-export default defineScene({
-  theme: {
-    corners: { convex: 28, concave: 32 },
-    palette: { accent: [0.752, 0.131, 242], step: 0.045, hover: 0.11 },
-  },
-
-  root: column([
-    column([
-      column([
-        column([
-          leaf([28, 28], { id: "plus" }),
-          leaf([28, 28], { id: "pie-a" }),
-          leaf([28, 28], { id: "pie-b" }),
-        ], { gap: 10, align: "center" }),
-      ], { padding: 10 }),
-    ], { id: "tab", padding: 12, min: [92, 0] }),
-
-    leaf([520, 230], { id: "panel" }),
-  ], { id: "root", align: "start" }),
-
-  surfaces: [
-    frameSurface("panel"),
-    frameSurface("tab"),
-    mergeSurface("outer", ["panel", "tab"]),
-    insetSurface("pill-shell", "tab", px(12)),
-  ],
-});
-```
+`packages/mui-ts/examples/pill.ts` is the checked TypeScript example; its
+imports, shared `skin` palette and complete scene are kept in the
+[example source](packages/mui-ts/examples/pill.ts), with the palette declared
+in [`skin.ts`](packages/mui-ts/examples/skin.ts).
 
 The compiler emits `crates/mui-demo/src/generated.rs`. The final Rust binary contains normal Rust structures; it does not embed V8, QuickJS, Node or TypeScript.
 
@@ -454,4 +429,8 @@ With Rust/cargo, the WASM target, Node and TypeScript available:
 ./tools/verify.sh
 ```
 
-The script checks formatting, native tests, clippy with warnings denied, full-workspace WASM compilation, TypeScript compilation, deterministic TS -> Rust generation, and the end-to-end demo.
+The script checks formatting, native tests, clippy with warnings denied, WASM
+compilation of the library crates (excluding the native preview host),
+TypeScript compilation and generator regressions, deterministic TS -> Rust
+generation, and the end-to-end demo. Cargo checks use the lockfile and include
+the optional `egui` facade feature.

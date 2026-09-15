@@ -116,7 +116,7 @@ pub struct Response {
 /// and nothing else hovers. Without capture a slider stops tracking the instant
 /// your hand drifts past its edge, which is the single most common way a
 /// hand-rolled UI feels broken.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct Interaction {
     hovered: Option<String>,
     active: Option<String>,
@@ -131,18 +131,53 @@ pub struct Interaction {
     threshold: f64,
 }
 
+impl Default for Interaction {
+    fn default() -> Self {
+        Self {
+            hovered: None,
+            active: None,
+            pressed: None,
+            released: None,
+            clicked: None,
+            press_pos: None,
+            last_pos: None,
+            drag_delta: Point::new(0., 0.),
+            dragging: false,
+            was_down: false,
+            threshold: DRAG_THRESHOLD,
+        }
+    }
+}
+
 impl Interaction {
     pub fn new() -> Self {
-        Self {
-            threshold: DRAG_THRESHOLD,
-            ..Default::default()
-        }
+        Self::default()
     }
 
     /// Override [`DRAG_THRESHOLD`] -- a touch screen wants a larger one.
+    ///
+    /// The threshold must be finite and non-negative. Zero is valid and makes
+    /// any non-zero movement a drag; invalid values indicate a programmer
+    /// configuration error and panic immediately.
     pub fn with_drag_threshold(mut self, px: f64) -> Self {
+        assert!(
+            px.is_finite() && px >= 0.0,
+            "drag threshold must be finite and non-negative"
+        );
         self.threshold = px;
         self
+    }
+
+    /// Cancel the current gesture and all one-frame edge state.
+    ///
+    /// The configured drag threshold is preserved so focus loss can cancel a
+    /// capture without changing the interaction policy.
+    pub fn cancel(&mut self) {
+        let threshold = self.threshold;
+        *self = Self {
+            threshold,
+            ..Self::default()
+        };
     }
 
     /// Advance one frame. Call once, before reading any [`Response`].

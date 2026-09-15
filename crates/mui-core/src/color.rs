@@ -594,7 +594,7 @@ impl Palette {
         fg.readable_on(bg, Self::AA_TEXT)
     }
 
-    /// Whether every pigment and both steps are usable.
+    /// Whether every pigment and both positive steps are usable.
     pub fn valid(&self) -> bool {
         [
             self.neutral,
@@ -608,7 +608,9 @@ impl Palette {
         .iter()
         .all(|p| p.valid())
             && self.step.is_finite()
+            && self.step > 0.0
             && self.hover.is_finite()
+            && self.hover > 0.0
     }
 }
 
@@ -672,6 +674,16 @@ mod tests {
             assert!(
                 away(p.pressed(p.raised())) > away(p.hover(p.raised())),
                 "{:?}: a press is not further than a hover",
+                p.mode
+            );
+            assert!(
+                (p.surface().lightness() - p.background().lightness()) * p.mode.sign() > 0.0,
+                "{:?}: a positive layer moved away from the mode's depth direction",
+                p.mode
+            );
+            assert!(
+                (p.hover(p.raised()).lightness() - p.raised().lightness()) * p.mode.sign() > 0.0,
+                "{:?}: hover moved opposite to the mode's depth direction",
                 p.mode
             );
             // A field is recessed and a raised control is not: they sit on
@@ -982,6 +994,26 @@ mod tests {
         .valid());
         assert!(!Palette {
             step: f32::INFINITY,
+            ..Palette::NEUTRAL
+        }
+        .valid());
+        assert!(!Palette {
+            step: 0.0,
+            ..Palette::NEUTRAL
+        }
+        .valid());
+        assert!(!Palette {
+            hover: 0.0,
+            ..Palette::NEUTRAL
+        }
+        .valid());
+        assert!(!Palette {
+            step: -0.045,
+            ..Palette::NEUTRAL
+        }
+        .valid());
+        assert!(!Palette {
+            hover: -0.11,
             ..Palette::NEUTRAL
         }
         .valid());

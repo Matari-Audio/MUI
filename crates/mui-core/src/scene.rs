@@ -95,15 +95,27 @@ impl SurfaceSpec {
             },
         }
     }
+    /// Set the radius used when this surface is taken from a layout frame.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this surface is not a [`SurfaceSource::Frame`].
     pub fn radius(mut self, radius: Radius) -> Self {
-        if let SurfaceSource::Frame { radius: r, .. } = &mut self.source {
-            *r = radius;
+        match &mut self.source {
+            SurfaceSource::Frame { radius: r, .. } => *r = radius,
+            _ => panic!("SurfaceSpec::radius requires a frame surface"),
         }
         self
     }
+    /// Set the corner rule applied after merging input surfaces.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this surface is not a [`SurfaceSource::Merge`].
     pub fn corners(mut self, corners: CornerRule) -> Self {
-        if let SurfaceSource::Merge { corners: c, .. } = &mut self.source {
-            *c = corners;
+        match &mut self.source {
+            SurfaceSource::Merge { corners: c, .. } => *c = corners,
+            _ => panic!("SurfaceSpec::corners requires a merge surface"),
         }
         self
     }
@@ -193,7 +205,15 @@ impl std::fmt::Display for SceneError {
         write!(f, "scene: {self:?}")
     }
 }
-impl std::error::Error for SceneError {}
+impl std::error::Error for SceneError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Layout(error) => Some(error),
+            Self::Geometry(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 impl From<mui_layout::Error> for SceneError {
     fn from(v: mui_layout::Error) -> Self {
         Self::Layout(v)
@@ -529,6 +549,36 @@ mod tests {
         assert!((child.bounds().min.x - tab.bounds().min.x - 12.).abs() < 1e-9);
     }
     #[test]
+    fn surface_modifiers_apply_to_matching_variants() {
+        let framed = SurfaceSpec::frame("frame").radius(Radius::Absolute(4.));
+        assert!(matches!(
+            framed.source,
+            SurfaceSource::Frame {
+                radius: Radius::Absolute(r),
+                ..
+            } if (r - 4.).abs() < f64::EPSILON
+        ));
+
+        let merged = SurfaceSpec::merge("merge", ["frame"]).corners(CornerRule::GlobalScaled(0.8));
+        assert!(matches!(
+            merged.source,
+            SurfaceSource::Merge {
+                corners: CornerRule::GlobalScaled(scale),
+                ..
+            } if (scale - 0.8).abs() < f64::EPSILON
+        ));
+    }
+    #[test]
+    #[should_panic(expected = "SurfaceSpec::radius requires a frame surface")]
+    fn radius_on_non_frame_surface_fails_fast() {
+        SurfaceSpec::inset("inner", "root", Spacing::px(1.)).radius(Radius::Global);
+    }
+    #[test]
+    #[should_panic(expected = "SurfaceSpec::corners requires a merge surface")]
+    fn corners_on_non_merge_surface_fails_fast() {
+        SurfaceSpec::frame("frame").corners(CornerRule::Global);
+    }
+    #[test]
     fn parent_normalized_is_distinct_from_parallel() {
         let mut s = spec();
         s.surfaces.push(
@@ -588,5 +638,20 @@ mod tests {
         assert!(state.commit(&bad).is_err());
         assert_eq!(state.revision(), rev);
         assert!(state.current().is_some());
+    }
+    #[test]
+    fn layout_error_is_exposed_as_scene_error_source() {
+        let bad = SceneSpec::new(leaf(f64::NAN, 1.).id("x"));
+        let error = resolve_scene(&bad).unwrap_err();
+        let source = std::error::Error::source(&error).expect("layout source");
+        assert!(source.is::<mui_layout::Error>());
+    }
+    #[test]
+    fn geometry_error_is_exposed_as_scene_error_source() {
+        let mut bad = spec();
+        bad.geometry_options.epsilon = f64::NAN;
+        let error = resolve_scene(&bad).unwrap_err();
+        let source = std::error::Error::source(&error).expect("geometry source");
+        assert!(source.is::<mui_geometry::Error>());
     }
 }

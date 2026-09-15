@@ -20,7 +20,14 @@ impl std::fmt::Display for Error {
         }
     }
 }
-impl std::error::Error for Error {}
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Geometry(error) => Some(error),
+            Self::Tessellation(error) => Some(error),
+        }
+    }
+}
 impl From<mui_geometry::Error> for Error {
     fn from(e: mui_geometry::Error) -> Self {
         Self::Geometry(e)
@@ -294,5 +301,24 @@ mod cache_tests {
         assert_eq!(c.revision(), r);
         c.prepare(&path, 0.1).unwrap();
         assert_eq!(c.revision(), r + 1);
+    }
+}
+
+#[cfg(test)]
+mod error_tests {
+    use super::*;
+
+    #[test]
+    fn nested_sources_are_traversable() {
+        let error = Error::Tessellation(mui_tessellate::Error::Geometry(
+            mui_geometry::Error::NonFinite,
+        ));
+        let tessellation = std::error::Error::source(&error).expect("tessellation source");
+        assert!(tessellation
+            .downcast_ref::<mui_tessellate::Error>()
+            .is_some());
+        let geometry = std::error::Error::source(tessellation).expect("geometry source");
+        assert!(geometry.downcast_ref::<mui_geometry::Error>().is_some());
+        assert!(std::error::Error::source(geometry).is_none());
     }
 }

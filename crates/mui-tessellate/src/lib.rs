@@ -25,7 +25,14 @@ impl std::fmt::Display for Error {
         }
     }
 }
-impl std::error::Error for Error {}
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Geometry(error) => Some(error),
+            Self::Tessellation(_) | Self::CoordinateOverflow => None,
+        }
+    }
+}
 impl From<mui_geometry::Error> for Error {
     fn from(e: mui_geometry::Error) -> Self {
         Self::Geometry(e)
@@ -141,5 +148,13 @@ mod tests {
             })
             .sum();
         assert!((area - 7500.).abs() < 0.1);
+    }
+
+    #[test]
+    fn geometry_source_is_exposed() {
+        let error = Error::Geometry(mui_geometry::Error::NonFinite);
+        let source = std::error::Error::source(&error).expect("geometry source");
+        assert!(source.downcast_ref::<mui_geometry::Error>().is_some());
+        assert!(std::error::Error::source(source).is_none());
     }
 }

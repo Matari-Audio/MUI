@@ -28,11 +28,19 @@ impl Polygon {
         if w <= 0. || h <= 0. {
             return Err(Error::DegenerateRing);
         }
+        let x1 = x + w;
+        let y1 = y + h;
+        if !x1.is_finite() || !y1.is_finite() {
+            return Err(Error::NonFinite);
+        }
+        if x1 <= x || y1 <= y {
+            return Err(Error::DegenerateRing);
+        }
         Ok(Self::new(vec![
             Point::new(x, y),
-            Point::new(x + w, y),
-            Point::new(x + w, y + h),
-            Point::new(x, y + h),
+            Point::new(x1, y),
+            Point::new(x1, y1),
+            Point::new(x, y1),
         ]))
     }
     pub fn with_hole(mut self, hole: Vec<Point>) -> Self {

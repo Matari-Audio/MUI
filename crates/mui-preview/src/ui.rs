@@ -112,6 +112,14 @@ impl Chrome {
         }
     }
 
+    /// Cancel a gesture and keyboard focus when the host loses pointer focus.
+    /// Persistent presentation state (font, scroll, content, and skin) stays
+    /// with the chrome so the next frame can resume from the same layout.
+    pub fn cancel(&mut self) {
+        self.interaction.cancel();
+        self.focus = None;
+    }
+
     /// Whether a gesture is in flight on a widget. The stage asks so that a
     /// slider drag that wanders off the column keeps the slider, not the
     /// specimen underneath it.
@@ -923,6 +931,63 @@ mod tests {
         );
         ui.finish();
         assert_eq!(glyph, 'W');
+    }
+
+    #[test]
+    fn cancel_drops_capture_and_focus_but_preserves_ui_state() {
+        let mut chrome = chrome();
+        let font = Arc::clone(&chrome.font);
+        let mut glyph = 'a';
+        let field_y = {
+            let mut ui = chrome.column(bounds(), PointerInput::default(), None, 1.0);
+            let y = ui.cursor;
+            ui.char_field(&mut glyph, "glyph");
+            ui.finish();
+            y + 10.0
+        };
+        let on_field = Point::new(20., field_y);
+
+        for down in [true, false] {
+            let mut ui = chrome.column(
+                bounds(),
+                PointerInput {
+                    pos: Some(on_field),
+                    primary_down: down,
+                },
+                None,
+                1.0,
+            );
+            ui.char_field(&mut glyph, "glyph");
+            ui.finish();
+        }
+        assert!(chrome.focus.is_some());
+
+        let mut ui = chrome.column(
+            bounds(),
+            PointerInput {
+                pos: Some(on_field),
+                primary_down: true,
+            },
+            None,
+            1.0,
+        );
+        ui.char_field(&mut glyph, "glyph");
+        ui.finish();
+        assert!(chrome.interaction.held().is_some());
+
+        chrome.content = 2_000.0;
+        chrome.scroll = 42.0;
+        chrome.cancel();
+
+        assert!(chrome.interaction.held().is_none());
+        assert!(chrome.focus.is_none());
+        assert_eq!(chrome.scroll, 42.0);
+        assert!(Arc::ptr_eq(&font, &chrome.font));
+
+        let mut ui = chrome.column(bounds(), PointerInput::default(), Some('Z'), 1.0);
+        assert!(!ui.char_field(&mut glyph, "glyph"));
+        ui.finish();
+        assert_eq!(glyph, 'a');
     }
 
     /// A selected row's fill is the accent, which is lighter than the panel.

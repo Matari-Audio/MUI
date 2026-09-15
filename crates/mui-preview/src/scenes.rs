@@ -151,6 +151,8 @@ impl PreviewScene for SegmentedRow {
 /// Point `MUI_PREVIEW_FONT` at a variable font to get its axes as sliders.
 /// Without one it falls back to a static face, where the sliders correctly do
 /// nothing because the design space is a single point.
+type AxisSetting = (String, f32, f32, f32);
+
 pub struct GlyphAxes {
     font: std::sync::Arc<Vec<u8>>,
     /// Which face actually loaded. Named in the sidebar, because a slider
@@ -159,7 +161,7 @@ pub struct GlyphAxes {
     glyph: char,
     size: f32,
     /// `(tag, min, max, value)` for every axis the loaded face declares.
-    axes: Vec<(String, f32, f32, f32)>,
+    axes: Vec<AxisSetting>,
 }
 
 impl GlyphAxes {
@@ -167,25 +169,39 @@ impl GlyphAxes {
     /// `spec` at all: the glyph lands inside a real MUI surface.
     const CARD: f64 = 320.0;
 
-    pub fn new() -> Self {
-        let (font, source) = match std::env::var_os("MUI_PREVIEW_FONT")
-            .map(|p| (std::fs::read(&p), p.to_string_lossy().into_owned()))
-        {
-            Some((Ok(bytes), path)) => (bytes, path),
-            Some((Err(e), path)) => (
-                epaint_default_fonts::HACK_REGULAR.to_vec(),
-                format!("{path}: {e} — using Hack"),
-            ),
-            None => (
-                epaint_default_fonts::HACK_REGULAR.to_vec(),
-                "Hack (static) — set MUI_PREVIEW_FONT to a variable font".to_owned(),
-            ),
+    fn axes(font: &[u8]) -> Result<Vec<AxisSetting>, mui_text::Error> {
+        mui_text::axes(font).map(|axes| {
+            axes.into_iter()
+                .map(|a| (a.tag, a.min, a.max, a.default))
+                .collect()
+        })
+    }
+
+    fn load_font(
+        requested: Option<(String, Result<Vec<u8>, std::io::Error>)>,
+    ) -> (Vec<u8>, String, Vec<AxisSetting>) {
+        let fallback = |source| {
+            let font = epaint_default_fonts::HACK_REGULAR.to_vec();
+            let axes = Self::axes(&font).expect("bundled Hack font must be valid");
+            (font, source, axes)
         };
-        let axes = mui_text::axes(&font)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|a| (a.tag, a.min, a.max, a.default))
-            .collect();
+
+        match requested {
+            Some((path, Ok(font))) => match Self::axes(&font) {
+                Ok(axes) => (font, path, axes),
+                Err(e) => fallback(format!("{path}: {e} — using Hack")),
+            },
+            Some((path, Err(e))) => fallback(format!("{path}: {e} — using Hack")),
+            None => fallback("Hack (static) — set MUI_PREVIEW_FONT to a variable font".to_owned()),
+        }
+    }
+
+    pub fn new() -> Self {
+        let requested = std::env::var_os("MUI_PREVIEW_FONT").map(|p| {
+            let path = p.to_string_lossy().into_owned();
+            (path, std::fs::read(&p))
+        });
+        let (font, source, axes) = Self::load_font(requested);
         Self {
             font: std::sync::Arc::new(font),
             source,
@@ -260,5 +276,20 @@ impl PreviewScene for GlyphAxes {
             Ok(path) => vec![(format!("glyph {:?}", self.glyph), path)],
             Err(_) => Vec::new(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::GlyphAxes;
+
+    #[test]
+    fn malformed_readable_font_falls_back_with_parse_diagnostic() {
+        let (font, source, _) =
+            GlyphAxes::load_font(Some(("broken.ttf".to_owned(), Ok(Vec::new()))));
+
+        assert_eq!(font.as_slice(), epaint_default_fonts::HACK_REGULAR);
+        assert!(source.starts_with("broken.ttf: "));
+        assert!(source.ends_with(" — using Hack"));
     }
 }

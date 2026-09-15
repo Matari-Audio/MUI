@@ -279,3 +279,56 @@ fn a_larger_threshold_is_honoured() {
     ui.update(&hit, down(75., 50.));
     assert!(ui.get("a").dragged);
 }
+
+#[test]
+fn default_and_new_use_the_normal_drag_threshold() {
+    assert_eq!(Interaction::default().threshold, DRAG_THRESHOLD);
+    assert_eq!(Interaction::new().threshold, DRAG_THRESHOLD);
+}
+
+#[test]
+fn invalid_drag_thresholds_are_rejected() {
+    for threshold in [-1.0, f64::NEG_INFINITY, f64::INFINITY, f64::NAN] {
+        assert!(
+            std::panic::catch_unwind(|| Interaction::new().with_drag_threshold(threshold)).is_err(),
+            "invalid threshold {threshold:?} was accepted"
+        );
+    }
+}
+
+#[test]
+fn zero_threshold_turns_any_nonzero_move_into_a_drag() {
+    let (hit, mut ui) = (one_square(), Interaction::new().with_drag_threshold(0.));
+    ui.update(&hit, down(50., 50.));
+    assert!(!ui.get("a").dragged, "a stationary press is not a drag");
+
+    ui.update(&hit, down(50.1, 50.));
+    assert!(ui.get("a").dragged);
+}
+
+#[test]
+fn cancel_clears_capture_and_edges_but_preserves_threshold() {
+    let (hit, mut ui) = (one_square(), Interaction::new().with_drag_threshold(20.));
+    ui.update(&hit, down(50., 50.));
+    assert!(ui.get("a").pressed && ui.get("a").held);
+
+    ui.cancel();
+    assert_eq!(ui.threshold, 20.);
+    assert_eq!(ui.get("a"), Response::default());
+    assert_eq!(ui.held(), None);
+    assert_eq!(ui.hovered(), None);
+
+    ui.update(&hit, at(50., 50.));
+    let response = ui.get("a");
+    assert!(response.hovered);
+    assert!(!response.pressed && !response.released && !response.clicked);
+    assert!(!response.held && !response.dragged);
+    assert_eq!(response.drag_delta, Point::new(0., 0.));
+
+    ui.update(&hit, down(50., 50.));
+    ui.update(&hit, down(60., 50.));
+    assert!(
+        !ui.get("a").dragged,
+        "cancel changed the configured threshold"
+    );
+}

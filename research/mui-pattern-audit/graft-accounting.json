@@ -1,0 +1,23 @@
+{
+  "note": "Sum of reported per-query estimates across root and topic audits; repeated-query baselines overlap. Domain-type subtotal is a reported lower bound. This is not a measured token bill or runtime speedup.",
+  "reported_saved_tokens_lower_bound": 10386518,
+  "subtotals": {
+    "root": 121355,
+    "ownership": 513643,
+    "strings": 407277,
+    "errors": 967974,
+    "panic_validation": 255704,
+    "domain_types_lower_bound": 673151,
+    "traits": 407815,
+    "conversions": 1601352,
+    "iterators": 1007534,
+    "api_design": 634739,
+    "state_patterns": 1045058,
+    "shared_state": 530823,
+    "async": 420018,
+    "collections_perf": 608643,
+    "unsafe_ffi": 668341,
+    "testing_docs": 131387,
+    "architecture": 391704
+  }
+}

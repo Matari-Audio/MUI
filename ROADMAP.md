@@ -57,8 +57,9 @@ two ever disagree, this one is wrong and should be corrected from the code.
 ### Rendering and input
 
 - [x] GPU: `mui-vello` -> `vello_hybrid` -> wgpu, in a windowed live preview.
-- [x] `mui-tessellate` -> Lyon triangle meshes, renderer-independent, so a
-      second backend does not start from paths again.
+- [x] `mui-tessellate` -> Lyon triangle meshes, renderer-independent, for the
+      egui/debug adapter and other mesh consumers; the live preview uses the
+      `mui-vello` path-to-pixels seam above.
 - [x] `mui-text`: variable-font glyph and string outlines as MUI paths in the
       same coordinate space as every other surface. No atlas, which is what
       makes animating Material Symbols `FILL` 0 -> 1 an axis value rather than
@@ -142,10 +143,11 @@ bisection.
       design one. The preview's skin used to sit halfway down `ui.rs` next to
       widget code; it does not any more, and a test there checks the brand
       roles were actually declared.
-- [x] The README's Rust blocks are compiled. `#[cfg(doctest)] #[doc =
-      include_str!]` on the `mui` facade runs every one under `cargo test
-      --doc`, so a colour claim in prose fails the build when it stops being
-      true.
+- [x] The README's runnable Rust blocks are compiled. `rust,ignore` snippets
+      remain explicitly illustrative and are intentionally skipped. The
+      `#[cfg(doctest)] #[doc = include_str!]` block on the `mui` facade runs
+      every executable example under `cargo test --doc`, so a colour claim in
+      prose fails the build when it stops being true.
 - [ ] A theme loaded at runtime. `Palette` and `Theme` are plain data and
       would take `serde` in a line, but nothing reads a file yet; a plugin
       that wants to re-skin without a rebuild -- and the hot-reload goal
