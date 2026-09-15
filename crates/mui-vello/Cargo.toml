@@ -4,17 +4,24 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+default = ["gpu"]
+gpu = ["dep:vello_hybrid"]
+# A CPU rasteriser: snapshot tests, thumbnails, hosts with no GPU.
+cpu = ["dep:vello_cpu"]
+
 [dependencies]
+mui-core = { path = "../mui-core" }
 mui-geometry = { path = "../mui-geometry" }
 # No wgpu backend features: a plugin renders into the device its host wrapper
 # already created, so this crate must not choose the backend. Hosts turn on
 # `wgpu_default` (desktop) or `webgl` (browser) themselves.
-vello_hybrid = { version = "0.2", default-features = false, features = ["wgpu"] }
+vello_hybrid = { version = "0.2", optional = true, default-features = false, features = ["wgpu"] }
 # kurbo and peniko reach us through vello_common so the types cannot version-skew.
 vello_common = { version = "0.2", default-features = false }
+vello_cpu = { version = "0.2", optional = true, default-features = false, features = ["std", "u8_pipeline"] }
 
 [dev-dependencies]
-mui-core = { path = "../mui-core" }
 mui-layout = { path = "../mui-layout" }
 epaint_default_fonts = "0.36"
 mui-text = { path = "../mui-text" }
@@ -23,3 +30,7 @@ png = "0.17"
 wgpu = { version = "29", default-features = false, features = ["wgsl", "vulkan", "gles", "metal", "dx12"] }
 pollster = "0.4"
 vello_hybrid = { version = "0.2", features = ["wgpu_default"] }
+
+[[example]]
+name = "headless"
+required-features = ["gpu"]

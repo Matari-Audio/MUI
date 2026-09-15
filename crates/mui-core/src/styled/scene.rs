@@ -102,6 +102,8 @@ pub struct ResolvedSurface {
 pub struct ResolvedScene {
     pub layout: Layout,
     pub paint: Vec<Painted>,
+    /// Surface keys in tree/z-order.
+    pub keys: Vec<String>,
     surfaces: BTreeMap<String, ResolvedSurface>,
 }
 impl ResolvedScene {
@@ -202,6 +204,7 @@ struct Walk<'a> {
     i: usize,
     key: String,
     paint: Vec<Painted>,
+    keys: Vec<String>,
     surfaces: BTreeMap<String, ResolvedSurface>,
 }
 impl Walk<'_> {
@@ -282,6 +285,11 @@ impl Walk<'_> {
         let th = self.spec.theme;
         let e = n.payload();
         let s = &e.style;
+        if frame.size.width <= 0.0 || frame.size.height <= 0.0 {
+            // Collapsed flex shares and their descendants are invisible.
+            self.i += n.children().iter().map(count).sum::<usize>();
+            return Ok(());
+        }
         let (outline, rect, mut changed) = self.outline(n, frame)?;
 
         self.key = key.clone();
@@ -360,6 +368,7 @@ impl Walk<'_> {
             }
         }
 
+        self.keys.push(key.clone());
         self.surfaces.insert(
             key.clone(),
             ResolvedSurface {
@@ -405,13 +414,15 @@ pub fn resolve_scene(spec: &SceneSpec) -> Result<ResolvedScene, SceneError> {
         i: 0,
         key: String::new(),
         paint: Vec::new(),
+        keys: Vec::new(),
         surfaces: BTreeMap::new(),
     };
     w.node(&spec.root, "", th.palette.background())?;
-    let (paint, surfaces) = (w.paint, w.surfaces);
+    let (paint, keys, surfaces) = (w.paint, w.keys, w.surfaces);
     Ok(ResolvedScene {
         layout,
         paint,
+        keys,
         surfaces,
     })
 }
@@ -444,6 +455,25 @@ mod tests {
     use super::*;
     use crate::styled::prelude::*;
     use crate::{CornerProfile, Spacing};
+
+    #[test]
+    fn collapsed_subtrees_skip_paint_without_losing_later_frames() {
+        let root = row([
+            column([leaf(0., 10.).id("hidden")])
+                .width(0.)
+                .id("collapsed"),
+            leaf(20., 10.).fill(Role::Primary).id("visible"),
+        ])
+        .id("root");
+        let scene = resolve_scene(&SceneSpec::new(root)).unwrap();
+        assert_eq!(scene.keys, ["root", "visible"]);
+        assert!(scene.surface("hidden").is_none());
+        assert_eq!(
+            scene.surface("visible").unwrap().frame.size,
+            Size::new(20., 10.)
+        );
+        assert_eq!(scene.paint.len(), 1);
+    }
 
     /// The canonical case: a tab welded to its panel, with a pill shell
     /// inside the tab.

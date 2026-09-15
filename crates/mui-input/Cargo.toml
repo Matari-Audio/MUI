@@ -8,7 +8,7 @@ license.workspace = true
 mui-geometry = { path = "../mui-geometry" }
 # Hit testing goes through the same Bezier path the renderer fills, so what
 # responds and what you can see can never drift apart.
-mui-vello = { path = "../mui-vello" }
+mui-vello = { path = "../mui-vello", default-features = false }
 vello_common = { version = "0.2", default-features = false }
 
 [dev-dependencies]

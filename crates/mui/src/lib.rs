@@ -21,7 +21,6 @@ pub mod prelude {
         SceneSpec, SceneState, Seeds, Spacing, SpacingScale, SpacingToken, StyleError,
         SurfaceSource, SurfaceSpec, Theme, Ui, View, ViewState,
     };
-    pub use mui_layout::generic::{column, leaf, overlay, row};
     pub use mui_layout::Flow::{Auto, Column, Grid, Overlay, Row};
     pub use mui_layout::Horizontal::{Center, Left, Right};
     pub use mui_layout::Justify::{End, SpaceAround, SpaceBetween, SpaceEvenly, Start};
@@ -30,3 +29,10 @@ pub mod prelude {
     pub use mui_layout::{Align, Fill, Gap, Hug, Insets, Justify, Overflow, Pad, Size, Sizing};
     pub use mui_layout::{Flow, Horizontal, Track, Vertical};
 }
+
+/// Pointer-driven styled widgets. The compact Item prelude remains independent.
+pub mod ui;
+pub mod widgets;
+pub use mui_input as input;
+#[cfg(feature = "vello")]
+pub use mui_vello as vello;

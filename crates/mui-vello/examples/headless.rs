@@ -2,108 +2,64 @@
 //!
 //!     cargo run -p mui-vello --example headless -- /tmp/pill.png
 //!
-//! This is the whole stack end to end: intrinsic layout resolves the frames,
-//! the surface graph unions and fillets them, [`mui_vello::bez_path`] hands the
-//! result to Vello, and Vello antialiases it analytically. The only reason it
-//! writes a file instead of opening a window is that a window is a separate
-//! problem -- the pixels above are the same pixels a surface would get.
+//! The whole stack end to end: a styled tree resolves to frames, welds and
+//! shells become filleted outlines, [`mui_vello::paint`] hands the z-ordered
+//! paint list to Vello, and Vello antialiases it analytically. It writes a
+//! file instead of opening a window only because a window is a separate
+//! problem: a surface would get the same pixels.
 
-use mui_core::{
-    resolve_scene, CornerProfile, CornerRule, Radius, SceneSpec, Spacing, SurfaceSpec, Theme,
-};
-use mui_layout::generic::{column, leaf};
-use mui_layout::{Align, Size};
+use mui_core::styled::prelude::*;
+use mui_core::CornerProfile;
 use vello_common::kurbo::Affine;
-use vello_common::peniko::color::palette::css;
-use vello_common::peniko::color::AlphaColor;
 use vello_hybrid::{RenderSize, RenderTargetConfig, Renderer, Scene, TextureBindings};
 
 const WIDTH: u16 = 640;
 const HEIGHT: u16 = 360;
 
-/// The gallery's canonical scene: a tab welded to a panel, unioned sharp and
-/// filleted after, with an inner shell offset from the *merged* outline.
 fn spec() -> SceneSpec {
-    let controls = column([leaf(28.0, 28.0).id("plus"), leaf(28.0, 28.0).id("phase")])
-        .id("controls")
+    let control = |id: &str| leaf(28.0, 28.0).pill().fill(Role::Primary).id(id);
+    let tab = column([control("plus"), control("phase"), control("warp")])
         .gap(10.0)
-        .align(Align::Center);
-
-    let tab = column([column([controls]).pad(10.0)])
+        .pad(22.0)
+        .min_width(92.0)
+        .align(Align::Center)
         .id("tab")
-        .pad(12.0)
-        .min_size(Size::new(92.0, 0.0));
-
-    let root = column([tab, leaf(420.0, 180.0).id("panel")])
+        .shell(12.0, Role::Raised);
+    let panel = row([text("welded").text_size(22.0)])
+        .size(520.0, 230.0)
+        .pad(L)
+        .id("panel");
+    let root = column([tab, panel])
+        .align(Align::Start)
         .id("root")
-        .align(Align::Start);
-
+        .weld(Role::Surface);
     SceneSpec::new(root)
         .theme(Theme {
             corners: CornerProfile::new(28.0, 32.0),
-            ..Theme::default()
+            ..Theme::DEFAULT
         })
-        .surface(SurfaceSpec::named_frame("panel").radius(Radius::Global))
-        .surface(SurfaceSpec::named_frame("tab").radius(Radius::Global))
-        .surface(SurfaceSpec::merge("outer", ["panel", "tab"]).corners(CornerRule::Global))
-        .surface(SurfaceSpec::inset("pill-shell", "tab", Spacing::px(12.0)))
-}
-
-/// Later surfaces sit on top, so the merged outline paints first and the shell
-/// cut out of it paints last.
-fn ink(id: &str) -> AlphaColor<vello_common::peniko::color::Srgb> {
-    match id {
-        "outer" => AlphaColor::new([0.13, 0.14, 0.17, 1.0]),
-        "pill-shell" => AlphaColor::new([0.35, 0.72, 0.98, 1.0]),
-        "glyph" => AlphaColor::new([0.96, 0.96, 0.97, 1.0]),
-        _ => css::TRANSPARENT,
-    }
+        .font(epaint_default_fonts::HACK_REGULAR.to_vec())
 }
 
 fn main() {
     let out = std::env::args().nth(1).unwrap_or("mui-vello.png".into());
     let resolved = resolve_scene(&spec()).expect("scene resolves");
-
     let mut scene = Scene::new(WIDTH, HEIGHT);
-    scene.set_transform(Affine::translate((32.0, 32.0)));
-    for (id, surface) in resolved.surfaces() {
-        let paint = ink(id);
-        if paint.components[3] == 0.0 {
-            continue; // An intermediate surface: real geometry, not meant to be seen.
-        }
-        let path = mui_vello::bez_path(&surface.path, mui_vello::ARC_TOLERANCE)
-            .unwrap_or_else(|e| panic!("{id}: {e}"));
-        scene.set_paint(paint);
-        scene.fill_path(&path);
-    }
-
-    // A glyph is geometry here, not an atlas texture: same path pipeline, same
-    // fill rule, and its counter must come out as a hole.
-    let glyph = mui_text::glyph_path(
-        epaint_default_fonts::HACK_REGULAR,
-        'a',
-        170.0,
-        &[],
-        mui_vello::ARC_TOLERANCE,
-    )
-    .expect("glyph outline");
-    scene.set_transform(Affine::translate((470.0, 230.0)));
-    scene.set_paint(ink("glyph"));
-    scene.fill_path(&mui_vello::bez_path(&glyph, mui_vello::ARC_TOLERANCE).expect("glyph path"));
-
-    let pixels = pollster::block_on(rasterise(&scene));
-    let file = std::fs::File::create(&out).expect("create png");
+    mui_vello::paint(&mut scene, &resolved, Affine::translate((32.0, 32.0))).expect("paints");
+    let rgba = pollster::block_on(rasterise(&scene));
+    let file = std::fs::File::create(&out).expect("create output");
     let mut enc = png::Encoder::new(std::io::BufWriter::new(file), WIDTH.into(), HEIGHT.into());
     enc.set_color(png::ColorType::Rgba);
     enc.write_header()
-        .expect("png header")
-        .write_image_data(&pixels)
-        .expect("png data");
-    println!("wrote {out} ({WIDTH}x{HEIGHT})");
+        .and_then(|mut w| w.write_image_data(&rgba))
+        .expect("write png");
+    println!(
+        "wrote {out}: {} surfaces, {} paint ops",
+        resolved.keys.len(),
+        resolved.paint.len()
+    );
 }
 
-/// Straight out of `vello_hybrid`'s own `render_to_file` example: headless
-/// device, render to a texture, copy back. Nothing MUI-specific happens here.
 async fn rasterise(scene: &Scene) -> Vec<u8> {
     let instance = wgpu::Instance::default();
     let adapter = instance
