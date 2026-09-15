@@ -59,6 +59,7 @@ pub fn bez_path(path: &Path, tolerance: f64) -> Result<BezPath, Error> {
                 // one trig reconstructed, so consecutive arcs cannot drift.
                 out.line_to((arc.to.x, arc.to.y));
             }
+            PathCommand::CubicTo(a, b, p) => out.curve_to((a.x, a.y), (b.x, b.y), (p.x, p.y)),
             PathCommand::Close => out.close_path(),
         }
     }
