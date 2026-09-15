@@ -332,3 +332,34 @@ fn cancel_clears_capture_and_edges_but_preserves_threshold() {
         "cancel changed the configured threshold"
     );
 }
+
+#[test]
+fn a_clip_rejects_a_hit_the_renderer_would_not_draw() {
+    let mut hit = Hit::default();
+    hit.push_clipped(
+        "row",
+        &path(square(0., 0., 100., 100.)),
+        Some(mui_geometry::Bounds::new(0., 0., 100., 50.)),
+    )
+    .unwrap();
+    assert_eq!(hit.at(Point::new(50., 25.)), Some("row"), "inside the clip");
+    assert_eq!(hit.at(Point::new(50., 75.)), None, "clipped away");
+}
+
+#[test]
+fn a_drag_released_over_another_target_is_a_drop() {
+    let mut hit = Hit::default();
+    hit.push("a", &path(square(0., 0., 40., 40.))).unwrap();
+    hit.push("b", &path(square(60., 0., 40., 40.))).unwrap();
+    let mut i = Interaction::new();
+    i.update(&hit, down(20., 20.));
+    i.update(&hit, down(80., 20.));
+    assert!(i.get("b").drop_target, "b is under the dragged pointer");
+    assert!(!i.get("a").drop_target, "the source is not its own target");
+    i.update(&hit, at(80., 20.));
+    assert_eq!(i.dropped(), Some(("a", "b")));
+    assert!(i.get("b").dropped_on);
+    assert!(!i.get("a").clicked, "a drag is never a click");
+    i.update(&hit, at(80., 20.));
+    assert_eq!(i.dropped(), None, "one frame only");
+}

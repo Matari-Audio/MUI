@@ -1,37 +1,27 @@
-//! The gallery contents.
-//!
-//! One `PreviewScene` per thing worth looking at. Adding a scene is adding a
-//! `struct` and one line in [`all`] — deliberately the same shape as
-//! `egui_demo_lib`'s `Demo` trait, so the gallery grows without tooling.
+//! The gallery contents: one `PreviewScene` per thing worth looking at.
+//! Adding one is a struct and a line in [`all`].
 
-use mui_core::{CornerProfile, SceneSpec, Spacing, SurfaceSpec, Theme};
-use mui_geometry::Path;
-use mui_layout::generic::{column, leaf, row, Node};
-use mui_layout::{Align, Size};
+use mui::geometry::Path;
+use mui::prelude::*;
 
-/// Something the gallery can draw. The scene is rebuilt on demand rather than
-/// stored, so a future file-watching backend can swap the implementation
-/// without the app caring.
 pub trait PreviewScene {
     fn name(&self) -> &'static str;
-    /// One line describing what this scene is supposed to prove.
+    /// One line on what the scene is supposed to prove.
     fn about(&self) -> &'static str;
-    fn spec(&self) -> SceneSpec;
-
-    /// Geometry that is not a resolved surface — a glyph outline, an imported
-    /// path — in the same coordinate space as the scene's own surfaces.
-    fn overlay(&self) -> Vec<(String, Path)> {
+    /// The specimen. Built every frame like everything else, so a control
+    /// that moved is simply visible next frame.
+    fn specimen(&mut self, ui: &mut Ui) -> El;
+    /// Sidebar rows under the description.
+    fn controls(&mut self, _ui: &mut Ui) -> Vec<El> {
         Vec::new()
     }
-
-    /// The scene's own sidebar controls. Return `true` when something moved
-    /// that changes the geometry, and the gallery re-solves the scene.
-    ///
-    /// Most scenes are fixed specimens with nothing to tune, so the default
-    /// draws nothing and rebuilds nothing.
-    fn controls(&mut self, ui: &mut crate::ui::Ui<'_>) -> bool {
-        let _ = ui;
+    /// A typed character; `true` if the scene used it.
+    fn key(&mut self, _c: char) -> bool {
         false
+    }
+    /// Geometry drawn over the surface named `key`, in its local space.
+    fn overlay(&self) -> Option<(&'static str, Path)> {
+        None
     }
 }
 
@@ -40,170 +30,173 @@ pub fn all() -> Vec<Box<dyn PreviewScene>> {
         Box::new(PillTab),
         Box::new(ConstantThickness),
         Box::new(SegmentedRow),
+        Box::new(Widgets::default()),
         Box::new(GlyphAxes::new()),
+        Box::new(Scrolling::default()),
+        Box::new(Fields::default()),
+        Box::new(Tips),
+        Box::new(Curve::default()),
+        Box::new(Swap::default()),
     ]
 }
 
-/// The canonical case: a tab welded to a panel, unioned sharp, filleted after,
-/// with an inner shell derived from the *merged* outline.
+/// A tab welded to a panel: unioned sharp, filleted after, with a shell
+/// derived from the merged outline.
 pub struct PillTab;
 impl PreviewScene for PillTab {
     fn name(&self) -> &'static str {
         "Pill tab + panel"
     }
     fn about(&self) -> &'static str {
-        "Boolean union first, fillets second. The inner shell is a parallel offset of the merged outline, not an independently guessed radius."
+        "Boolean union first, fillets second. The inner shell is a parallel offset of the merged outline."
     }
-    fn spec(&self) -> SceneSpec {
-        let controls = column([
-            leaf(28.0, 28.0).id("plus"),
-            leaf(28.0, 28.0).id("phase"),
-            leaf(28.0, 28.0).id("warp"),
-        ])
-        .id("controls")
-        .gap(10.0)
-        .align(Align::Center);
-
-        let tab = column([column([controls]).pad(10.0)])
+    fn specimen(&mut self, _: &mut Ui) -> El {
+        let control = |id: &str| leaf(28.0, 28.0).pill().fill(Role::Primary).id(id);
+        let tab = column([control("plus"), control("phase"), control("warp")])
+            .gap(10.0)
+            .pad(22.0)
+            .min_width(92.0)
+            .align(Align::Center)
             .id("tab")
-            .pad(12.0)
-            .min_size(Size::new(92.0, 0.0));
-
-        let root = column([tab, leaf(520.0, 230.0).id("panel")])
-            .id("root")
-            .align(Align::Start);
-
-        SceneSpec::new(root)
-            .theme(Theme {
-                corners: CornerProfile::new(28.0, 32.0),
-                ..Theme::default()
-            })
-            .surface(SurfaceSpec::named_frame("panel"))
-            .surface(SurfaceSpec::named_frame("tab"))
-            .surface(SurfaceSpec::merge("outer", ["panel", "tab"]))
-            .surface(SurfaceSpec::inset("pill-shell", "tab", Spacing::px(12.0)))
+            .shell(12.0, Role::Raised);
+        column([tab, leaf(520.0, 230.0).id("panel")])
+            .align(Align::Start)
+            .id("pill")
+            .weld(Role::Surface)
     }
 }
 
-/// Three nested insets off one parent. Every gap should measure the same all
-/// the way around; a naive "child radius = parent radius" would pinch.
+/// Three shells off one card. Every gap measures the same all the way round:
+/// radius 28 − 12 = 16, exactly, not "child radius = parent radius".
 pub struct ConstantThickness;
 impl PreviewScene for ConstantThickness {
     fn name(&self) -> &'static str {
-        "Constant thickness nesting"
+        "Constant thickness"
     }
     fn about(&self) -> &'static str {
-        "Each ring is a parallel offset of the ring outside it. Parent radius 28 - inset 12 = child radius 16, exactly."
+        "Each ring is a parallel offset of the ring outside it."
     }
-    fn spec(&self) -> SceneSpec {
-        let root = column([leaf(320.0, 220.0).id("card")]).id("root");
-        SceneSpec::new(root)
-            .theme(Theme {
-                corners: CornerProfile::new(28.0, 28.0),
-                ..Theme::default()
-            })
-            .surface(SurfaceSpec::named_frame("card"))
-            .surface(SurfaceSpec::inset("ring-1", "card", Spacing::px(12.0)))
-            .surface(SurfaceSpec::inset("ring-2", "ring-1", Spacing::px(12.0)))
-            .surface(SurfaceSpec::inset("ring-3", "ring-2", Spacing::px(12.0)))
+    fn specimen(&mut self, _: &mut Ui) -> El {
+        leaf(320.0, 220.0)
+            .radius(28.0)
+            .fill(Role::Raised)
+            .shell(12.0, Role::Field)
+            .shell(12.0, Role::Raised)
+            .shell(12.0, Role::Field)
+            .id("card")
     }
 }
 
-/// A row of flush cells merged into one ring: the interior borders must
-/// vanish and the junctions must go concave rather than pinching.
+/// Four flush cells welded into one outline: interior edges vanish, the
+/// junctions go concave instead of pinching.
 pub struct SegmentedRow;
 impl PreviewScene for SegmentedRow {
     fn name(&self) -> &'static str {
         "Segmented row"
     }
     fn about(&self) -> &'static str {
-        "Four flush cells unioned into a single outline. Shared interior edges are emitted zero times."
+        "Four flush cells unioned into one strip; shared edges are emitted zero times."
     }
-    fn spec(&self) -> SceneSpec {
-        let cells: Vec<Node> = (0..4)
-            .map(|i| leaf(70.0, 44.0).id(format!("cell-{i}")))
-            .collect();
-        let root = row(cells).gap(0.0);
-
-        let mut spec = SceneSpec::new(root).theme(Theme {
-            corners: CornerProfile::new(22.0, 10.0),
-            ..Theme::default()
-        });
-        for i in 0..4 {
-            spec = spec.surface(SurfaceSpec::named_frame(format!("cell-{i}")));
-        }
-        spec.surface(SurfaceSpec::merge(
-            "strip",
-            ["cell-0", "cell-1", "cell-2", "cell-3"],
-        ))
-        .surface(SurfaceSpec::inset("strip-shell", "strip", Spacing::px(8.0)))
+    fn specimen(&mut self, _: &mut Ui) -> El {
+        row((0..4).map(|i| leaf(70.0, 44.0 + 12.0 * f64::from(i % 2)).id(format!("cell-{i}"))))
+            .radius(22.0)
+            .id("strip")
+            .weld(Role::Raised)
+            .shell(8.0, Role::Field)
     }
 }
 
-/// A glyph as geometry, not as a texture.
-///
-/// The outline is re-derived from the font at whatever axis position the
-/// sliders are at, then flattened and tessellated by the same code that draws
-/// every other surface. This is what makes an icon animation — Material
-/// Symbols going from `FILL` 0 to 1, say — a geometry change rather than a
-/// stream of new glyph atlas entries.
-///
-/// Point `MUI_PREVIEW_FONT` at a variable font to get its axes as sliders.
-/// Without one it falls back to a static face, where the sliders correctly do
-/// nothing because the design space is a single point.
-type AxisSetting = (String, f32, f32, f32);
+/// The controls a plugin is made of, each a composition of flex shares.
+#[derive(Default)]
+pub struct Widgets {
+    cutoff: f64,
+    res: f64,
+    gain: f64,
+    bypass: bool,
+    clicks: usize,
+}
+impl PreviewScene for Widgets {
+    fn name(&self) -> &'static str {
+        "Widgets"
+    }
+    fn about(&self) -> &'static str {
+        "Knob, slider, toggle, button. No thumb is placed: it sits where two flex weights put it."
+    }
+    fn specimen(&mut self, ui: &mut Ui) -> El {
+        let (go, clicked) = button(ui, "go", "Trigger");
+        self.clicks += usize::from(clicked);
+        column([
+            row([
+                knob(ui, "cutoff", "Cutoff", &mut self.cutoff, 0.0..=1.0, 72.0),
+                knob(ui, "res", "Res", &mut self.res, 0.0..=1.0, 72.0),
+            ])
+            .gap(L)
+            .justify(Justify::Center),
+            slider(ui, "gain", "Gain", &mut self.gain, -24.0..=6.0),
+            row([
+                text("Bypass").fill(Role::Dim),
+                toggle(ui, "bypass", &mut self.bypass),
+                spacer(),
+                text(format!("{}×", self.clicks)).fill(Role::Dim),
+                go,
+            ])
+            .gap(S)
+            .align(Align::Center),
+        ])
+        .gap(M)
+        .pad(L)
+        .width(300.0)
+        .radius(20.0)
+        .fill(Role::Surface)
+        .id("widgets")
+    }
+}
+
+/// A glyph as geometry, re-derived from the font at whatever axis position
+/// the sliders are at. Point `MUI_PREVIEW_FONT` at a variable font for axes.
+type Axis = (String, f64, f64, f64);
 
 pub struct GlyphAxes {
-    font: std::sync::Arc<Vec<u8>>,
-    /// Which face actually loaded. Named in the sidebar, because a slider
-    /// that does nothing is only explicable once you know the face is static.
+    font: Vec<u8>,
     source: String,
     glyph: char,
-    size: f32,
-    /// `(tag, min, max, value)` for every axis the loaded face declares.
-    axes: Vec<AxisSetting>,
+    size: f64,
+    /// `(tag, min, max, value)` per axis the face declares.
+    axes: Vec<Axis>,
 }
-
 impl GlyphAxes {
-    /// The canvas the glyph is centred on, and the reason the scene has a
-    /// `spec` at all: the glyph lands inside a real MUI surface.
     const CARD: f64 = 320.0;
 
-    fn axes(font: &[u8]) -> Result<Vec<AxisSetting>, mui_text::Error> {
-        mui_text::axes(font).map(|axes| {
-            axes.into_iter()
-                .map(|a| (a.tag, a.min, a.max, a.default))
+    fn axes(font: &[u8]) -> Result<Vec<Axis>, mui_text::Error> {
+        mui_text::axes(font).map(|a| {
+            a.into_iter()
+                .map(|a| (a.tag, a.min.into(), a.max.into(), a.default.into()))
                 .collect()
         })
     }
-
     fn load_font(
-        requested: Option<(String, Result<Vec<u8>, std::io::Error>)>,
-    ) -> (Vec<u8>, String, Vec<AxisSetting>) {
+        requested: Option<(String, std::io::Result<Vec<u8>>)>,
+    ) -> (Vec<u8>, String, Vec<Axis>) {
         let fallback = |source| {
             let font = epaint_default_fonts::HACK_REGULAR.to_vec();
             let axes = Self::axes(&font).expect("bundled Hack font must be valid");
             (font, source, axes)
         };
-
         match requested {
             Some((path, Ok(font))) => match Self::axes(&font) {
                 Ok(axes) => (font, path, axes),
                 Err(e) => fallback(format!("{path}: {e} — using Hack")),
             },
             Some((path, Err(e))) => fallback(format!("{path}: {e} — using Hack")),
-            None => fallback("Hack (static) — set MUI_PREVIEW_FONT to a variable font".to_owned()),
+            None => fallback("Hack (static) — set MUI_PREVIEW_FONT for axes".to_owned()),
         }
     }
-
     pub fn new() -> Self {
-        let requested = std::env::var_os("MUI_PREVIEW_FONT").map(|p| {
-            let path = p.to_string_lossy().into_owned();
-            (path, std::fs::read(&p))
-        });
+        let requested = std::env::var_os("MUI_PREVIEW_FONT")
+            .map(|p| (p.to_string_lossy().into_owned(), std::fs::read(&p)));
         let (font, source, axes) = Self::load_font(requested);
         Self {
-            font: std::sync::Arc::new(font),
+            font,
             source,
             glyph: 'a',
             size: 220.0,
@@ -211,71 +204,274 @@ impl GlyphAxes {
         }
     }
 }
-
-impl Default for GlyphAxes {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl PreviewScene for GlyphAxes {
     fn name(&self) -> &'static str {
         "Glyph axes"
     }
     fn about(&self) -> &'static str {
-        "A variable-font outline rebuilt as MUI geometry at every axis position. \
-         Drag an axis: the segment count in the status bar moves with it, because \
-         the shape is re-solved rather than re-rasterised."
+        "A variable-font outline rebuilt as geometry at every axis position. Type to change the glyph."
     }
-
-    fn spec(&self) -> SceneSpec {
-        SceneSpec::new(column([leaf(Self::CARD, Self::CARD).id("card")]).id("root"))
-            .theme(Theme {
-                corners: CornerProfile::new(24.0, 24.0),
-                ..Theme::default()
-            })
-            .surface(SurfaceSpec::named_frame("card"))
+    fn specimen(&mut self, _: &mut Ui) -> El {
+        leaf(Self::CARD, Self::CARD)
+            .radius(24.0)
+            .fill(Role::Raised)
+            .id("glyph-card")
     }
-
-    fn controls(&mut self, ui: &mut crate::ui::Ui<'_>) -> bool {
-        ui.note(&self.source);
-        let mut changed = ui.char_field(&mut self.glyph, "glyph");
-        changed |= ui.slider(&mut self.size, 24.0..=400.0, "size");
+    fn controls(&mut self, ui: &mut Ui) -> Vec<El> {
+        let mut rows = vec![
+            text(self.source.clone()).fill(Role::Dim),
+            slider(ui, "size", "size", &mut self.size, 24.0..=400.0),
+        ];
         if self.axes.is_empty() {
-            ui.note("no variation axes");
+            rows.push(text("no variation axes").fill(Role::Dim));
         }
         for (tag, min, max, value) in &mut self.axes {
-            changed |= ui.slider(value, *min..=*max, tag);
+            rows.push(slider(ui, tag, tag, value, *min..=*max));
         }
-        changed
+        rows
     }
-
-    fn overlay(&self) -> Vec<(String, Path)> {
+    fn key(&mut self, c: char) -> bool {
+        let printable = !c.is_control();
+        if printable {
+            self.glyph = c;
+        }
+        printable
+    }
+    fn overlay(&self) -> Option<(&'static str, Path)> {
         let settings: Vec<(&str, f32)> = self
             .axes
             .iter()
-            .map(|(tag, _, _, value)| (tag.as_str(), *value))
+            .map(|(t, _, _, v)| (t.as_str(), *v as f32))
             .collect();
-        // Centred on the card, sitting on a baseline three quarters down —
-        // close enough to optically centred for a glyph with a descender.
-        let Ok(path) =
-            mui_text::glyph_path(&self.font, self.glyph, self.size as f64, &settings, 0.05)
-        else {
-            return Vec::new();
-        };
-        let Some(bounds) = mui_geometry::Bounds::from_points(
-            path.flatten(0.05, 250_000).unwrap_or_default().concat(),
-        ) else {
-            return Vec::new();
-        };
-        let centre = mui_geometry::Point::new(
-            Self::CARD / 2.0 - (bounds.min.x + bounds.max.x) / 2.0,
-            Self::CARD / 2.0 - (bounds.min.y + bounds.max.y) / 2.0,
+        let path = mui_text::glyph_path(&self.font, self.glyph, self.size, &settings, 0.05).ok()?;
+        let b = mui::geometry::Bounds::from_points(path.flatten(0.05, 250_000).ok()?.concat())?;
+        let centre = mui::geometry::Point::new(
+            Self::CARD / 2.0 - (b.min.x + b.max.x) / 2.0,
+            Self::CARD / 2.0 - (b.min.y + b.max.y) / 2.0,
         );
-        match path.rigid_transform(centre, 0.0) {
-            Ok(path) => vec![(format!("glyph {:?}", self.glyph), path)],
-            Err(_) => Vec::new(),
+        Some(("glyph-card", path.rigid_transform(centre, 0.0).ok()?))
+    }
+}
+
+/// Forty rows in a fixed box: the wheel moves the innermost surface whose
+/// content overflows, and the clip keeps hits off the rows it hides.
+pub struct Scrolling {
+    gains: Vec<f64>,
+}
+impl Default for Scrolling {
+    fn default() -> Self {
+        Self {
+            gains: vec![0.0; 40],
         }
+    }
+}
+impl PreviewScene for Scrolling {
+    fn name(&self) -> &'static str {
+        "Scroll"
+    }
+    fn about(&self) -> &'static str {
+        "A .scroll() column taller than its box. The wheel picks the surface under the pointer; a hit outside the clip is not a hit."
+    }
+    fn specimen(&mut self, ui: &mut Ui) -> El {
+        let rows: Vec<El> = self
+            .gains
+            .iter_mut()
+            .enumerate()
+            .map(|(i, g)| {
+                slider(
+                    ui,
+                    &format!("band-{i}"),
+                    &format!("band {i}"),
+                    g,
+                    -24.0..=6.0,
+                )
+            })
+            .collect();
+        column(rows)
+            .gap(S)
+            .pad(M)
+            .scroll()
+            .size(320.0, 340.0)
+            .radius(16.0)
+            .fill(Role::Surface)
+            .id("scroll")
+    }
+}
+
+/// Two fields and a label reading the first one back.
+#[derive(Default)]
+pub struct Fields {
+    name: String,
+    note: String,
+}
+impl PreviewScene for Fields {
+    fn name(&self) -> &'static str {
+        "Text"
+    }
+    fn about(&self) -> &'static str {
+        "Click or Tab to focus, type, arrows and Backspace edit. The label mirrors the first field."
+    }
+    fn specimen(&mut self, ui: &mut Ui) -> El {
+        let name = text_input(ui, "field-name", &mut self.name);
+        let note = text_input(ui, "field-note", &mut self.note);
+        column([
+            label("name"),
+            name,
+            label("note"),
+            note,
+            text(format!("name = {}", self.name)).fill(Role::Dim),
+        ])
+        .gap(S)
+        .pad(L)
+        .width(320.0)
+        .radius(16.0)
+        .fill(Role::Surface)
+        .id("fields")
+    }
+}
+
+/// Tips come due after half a second of rest; the third button holds a float
+/// open instead, which is the same overlay a menu would use.
+pub struct Tips;
+impl PreviewScene for Tips {
+    fn name(&self) -> &'static str {
+        "Tooltip"
+    }
+    fn about(&self) -> &'static str {
+        "Rest on a button for a tip. Hold the last one for a float anchored under it."
+    }
+    fn specimen(&mut self, ui: &mut Ui) -> El {
+        let (save, _) = button(ui, "tip-save", "Save");
+        let (revert, _) = button(ui, "tip-revert", "Revert");
+        let (more, _) = button(ui, "tip-more", "Hold for more");
+        let held = ui.get("tip-more").held;
+        let card = column([
+            save.tip("Write the preset to disk"),
+            revert.tip("Throw away every edit since the last save"),
+            more,
+        ])
+        .gap(M)
+        .pad(L)
+        .width(260.0)
+        .radius(16.0)
+        .fill(Role::Surface)
+        .id("tips-card");
+        let mut layers = vec![card];
+        if held {
+            layers.push(
+                column([text("Rename"), text("Duplicate"), text("Delete")])
+                    .gap(S)
+                    .pad(M)
+                    .width(160.0)
+                    .radius(12.0)
+                    .fill(Role::Raised)
+                    .anchor(Align::Center, Align::End)
+                    .offset(0.0, 96.0)
+                    .float()
+                    .id("tips-menu"),
+            );
+        }
+        overlay(layers).id("tips")
+    }
+}
+
+/// A response curve drawn as cubics inside a canvas, re-derived every frame
+/// from the cutoff below it.
+pub struct Curve {
+    cutoff: f64,
+}
+impl Default for Curve {
+    fn default() -> Self {
+        Self { cutoff: 0.45 }
+    }
+}
+impl PreviewScene for Curve {
+    fn name(&self) -> &'static str {
+        "Canvas"
+    }
+    fn about(&self) -> &'static str {
+        "canvas(|size| ..) hands the renderer raw Draws. The knee follows the slider; nothing is cached."
+    }
+    fn specimen(&mut self, ui: &mut Ui) -> El {
+        let t = self.cutoff.clamp(0.08, 0.92);
+        let plot = canvas(move |size| {
+            let (w, h) = (size.width, size.height);
+            let x = w * t;
+            let path = Path::default()
+                .move_to(Point::new(0.0, h * 0.55))
+                .cubic_to(
+                    Point::new(x * 0.5, h * 0.55),
+                    Point::new(x * 0.7, h * 0.14),
+                    Point::new(x, h * 0.22),
+                )
+                .cubic_to(
+                    Point::new(x + (w - x) * 0.18, h * 0.30),
+                    Point::new(x + (w - x) * 0.35, h * 0.96),
+                    Point::new(w, h * 0.98),
+                );
+            vec![Draw::stroke(path, Role::Primary, 2.5)]
+        })
+        .size(320.0, 160.0)
+        .radius(12.0)
+        .fill(Role::Field);
+        column([
+            plot,
+            slider(ui, "knee", "Cutoff", &mut self.cutoff, 0.0..=1.0),
+        ])
+        .gap(M)
+        .pad(L)
+        .radius(16.0)
+        .fill(Role::Surface)
+        .id("curve")
+    }
+}
+
+/// Three pills. Drag one onto another and they trade labels.
+pub struct Swap {
+    labels: [String; 3],
+}
+impl Default for Swap {
+    fn default() -> Self {
+        Self {
+            labels: ["Osc".into(), "Filter".into(), "Amp".into()],
+        }
+    }
+}
+impl Swap {
+    fn slot(id: &str) -> Option<usize> {
+        id.strip_prefix("pill-")?.parse().ok()
+    }
+}
+impl PreviewScene for Swap {
+    fn name(&self) -> &'static str {
+        "Drag"
+    }
+    fn about(&self) -> &'static str {
+        "A press captures, a release over another target is a drop. The pill under the drag lights up."
+    }
+    fn specimen(&mut self, ui: &mut Ui) -> El {
+        let swap = ui
+            .dropped()
+            .and_then(|(a, b)| Some((Self::slot(a)?, Self::slot(b)?)));
+        if let Some((a, b)) = swap {
+            self.labels.swap(a, b);
+        }
+        let pills = (0..3).map(|i| {
+            let id = format!("pill-{i}");
+            let target = ui.get(&id).drop_target;
+            row([text(self.labels[i].clone())])
+                .pad_xy(18.0, 12.0)
+                .pill()
+                .fill(if target { Role::Primary } else { Role::Raised })
+                .cursor(Cursor::Grab)
+                .id(id)
+        });
+        row(pills)
+            .gap(M)
+            .pad(L)
+            .radius(16.0)
+            .fill(Role::Surface)
+            .id("swap")
     }
 }
 
@@ -287,9 +483,7 @@ mod tests {
     fn malformed_readable_font_falls_back_with_parse_diagnostic() {
         let (font, source, _) =
             GlyphAxes::load_font(Some(("broken.ttf".to_owned(), Ok(Vec::new()))));
-
         assert_eq!(font.as_slice(), epaint_default_fonts::HACK_REGULAR);
-        assert!(source.starts_with("broken.ttf: "));
-        assert!(source.ends_with(" — using Hack"));
+        assert!(source.starts_with("broken.ttf: ") && source.ends_with(" — using Hack"));
     }
 }

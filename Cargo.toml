@@ -6,20 +6,16 @@ members = [
   "crates/mui-egui",
   "crates/mui-core",
   "crates/mui",
-  "crates/mui-demo",
-  "crates/mui-playground",
-  "crates/mui-text",
-  "crates/mui-truce",
-  "crates/mui-gpui",
   "crates/mui-preview",
+  "crates/mui-text",
   "crates/mui-vello",
+  "crates/mui-truce",
   "crates/mui-input",
 ]
-exclude = ["experiments/upstream", "experiments/upstream/**", "experiments/gpui-plugin"]
 resolver = "2"
 
 [workspace.package]
-version = "0.3.1"
+version = "0.3.0"
 edition = "2021"
 license = "MIT"
 

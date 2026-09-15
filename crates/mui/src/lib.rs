@@ -1,38 +1,48 @@
-//! Facade crate for plugin/application authors.
+//! MUI: a styled tree in, pixels and gestures out.
+//!
+//! ```
+//! use mui::prelude::*;
+//! let mut ui = Ui::new(Theme::DEFAULT);
+//! let mut cutoff = 0.5;
+//! // One frame: build the tree, hand it in with the input, draw what comes back.
+//! let root = col![
+//!     label("Filter"),
+//!     slider(&mut ui, "cutoff", "Cutoff", &mut cutoff, 0.0..=1.0),
+//! ]
+//! .gap(S)
+//! .pad(M)
+//! .fill(Surface);
+//! let frame = ui.frame(root, Some(Size::new(240.0, 96.0)), Input::default(), 1.0 / 60.0).unwrap();
+//! assert!(frame.scene.paint.len() > 3);
+//! // frame.cursor is what to set; frame.tip is the tooltip that came due;
+//! // frame.animating says whether to schedule another frame.
+//! ```
 #![forbid(unsafe_code)]
 
 pub use mui_core as core;
-pub use mui_core::{color, curve, styled, theme, Spring};
 #[cfg(feature = "egui")]
 pub use mui_egui as egui;
 pub use mui_geometry as geometry;
+pub use mui_input as input;
 pub use mui_layout as layout;
 pub use mui_tessellate as tessellate;
-#[cfg(feature = "text")]
-pub mod text {
-    pub use mui_core::paragraph::{parley, Paragraph, TextScene, TextStyle, TextSystem};
-    pub use mui_text::*;
-}
+pub use mui_vello as vello;
+
+mod ui;
+pub mod widgets;
+
+pub use ui::{Frame, Ui};
 
 pub mod prelude {
-    pub use mui_core::{
-        container, item, resolve_scene, Color, Colors, Contrast, CornerProfile, CornerRule,
-        Direction, FrameRadius, Item, ItemInfo, ItemStyle, Mode, Palette, Radius, Rgb, Rounding,
-        SceneSpec, SceneState, Seeds, Spacing, SpacingScale, SpacingToken, StyleError,
-        SurfaceSource, SurfaceSpec, Theme, Ui, View, ViewState,
-    };
-    pub use mui_layout::Flow::{Auto, Column, Grid, Overlay, Row};
-    pub use mui_layout::Horizontal::{Center, Left, Right};
-    pub use mui_layout::Justify::{End, SpaceAround, SpaceBetween, SpaceEvenly, Start};
-    pub use mui_layout::SpacingToken::{Xl, Xs, L, M, S};
-    pub use mui_layout::Vertical::{Bottom, Middle, Top};
-    pub use mui_layout::{Align, Fill, Gap, Hug, Insets, Justify, Overflow, Pad, Size, Sizing};
-    pub use mui_layout::{Flow, Horizontal, Track, Vertical};
+    pub use crate::widgets::{button, knob, slider, text_input, toggle};
+    pub use crate::{Frame, Ui};
+    pub use mui_core::prelude::*;
+    pub use mui_core::{CornerProfile, Mode, Palette, Pigment, Spring};
+    pub use mui_input::{Input, Key, KeyPress, Mods, PointerInput, Response};
 }
 
-/// Pointer-driven styled widgets. The compact Item prelude remains independent.
-pub mod ui;
-pub mod widgets;
-pub use mui_input as input;
-#[cfg(feature = "vello")]
-pub use mui_vello as vello;
+/// Every runnable `rust` block in the README, compiled and run by
+/// `cargo test --doc`; `rust,ignore` blocks remain illustrative by design.
+#[cfg(doctest)]
+#[doc = include_str!("../../../README.md")]
+struct ReadmeDoctests;

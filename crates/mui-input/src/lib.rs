@@ -20,7 +20,7 @@
 //! purpose, because only the caller knows which of several scenes was clicked.
 #![forbid(unsafe_code)]
 
-use mui_geometry::{Error, Path, Point};
+use mui_geometry::{Bounds, Error, Path, Point};
 use vello_common::kurbo::{BezPath, Rect, Shape as _};
 
 /// How far the pointer may travel between press and release and still count as
@@ -35,6 +35,9 @@ struct Target {
     /// Cheap reject. Most pointer positions miss most targets, and a winding
     /// number costs a walk over every segment.
     bounds: Rect,
+    /// The nearest clipping ancestor's rect: outside it, the target is not
+    /// drawn, so it must not respond either.
+    clip: Option<Bounds>,
 }
 
 /// The targets under the pointer, in paint order.
@@ -51,11 +54,24 @@ impl Hit {
     /// Returns the same error the renderer would: if geometry is malformed it
     /// is better to fail at registration than to leave a region silently dead.
     pub fn push(&mut self, id: impl Into<String>, path: &Path) -> Result<(), Error> {
+        self.push_clipped(id, path, None)
+    }
+
+    /// Add a target clipped to `clip`: a point outside that rectangle misses,
+    /// however the path winds. This is what makes a scrolled row stop
+    /// responding once it has slid out of its viewport.
+    pub fn push_clipped(
+        &mut self,
+        id: impl Into<String>,
+        path: &Path,
+        clip: Option<Bounds>,
+    ) -> Result<(), Error> {
         let path = mui_vello::bez_path(path, mui_vello::ARC_TOLERANCE)?;
         self.targets.push(Target {
             id: id.into(),
             bounds: path.bounding_box(),
             path,
+            clip,
         });
         Ok(())
     }
@@ -73,10 +89,13 @@ impl Hit {
     /// nobody normalised, which is what a run of glyph outlines is.
     pub fn at(&self, p: Point) -> Option<&str> {
         let q = vello_common::kurbo::Point::new(p.x, p.y);
+        let inside = |c: &Option<Bounds>| {
+            c.is_none_or(|b| p.x >= b.min.x && p.x <= b.max.x && p.y >= b.min.y && p.y <= b.max.y)
+        };
         self.targets
             .iter()
             .rev()
-            .find(|t| t.bounds.contains(q) && t.path.winding(q) != 0)
+            .find(|t| inside(&t.clip) && t.bounds.contains(q) && t.path.winding(q) != 0)
             .map(|t| t.id.as_str())
     }
 }
@@ -87,6 +106,60 @@ pub struct PointerInput {
     /// `None` when the pointer left the surface entirely.
     pub pos: Option<Point>,
     pub primary_down: bool,
+}
+
+/// A key the host reports, already interpreted: a printable character or one
+/// of the editing keys a text field has to handle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Key {
+    Char(char),
+    Enter,
+    Escape,
+    Tab,
+    Backspace,
+    Delete,
+    Left,
+    Right,
+    Up,
+    Down,
+    Home,
+    End,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Mods {
+    pub shift: bool,
+    pub ctrl: bool,
+    pub alt: bool,
+    pub cmd: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KeyPress {
+    pub key: Key,
+    pub mods: Mods,
+}
+
+/// One frame of everything the host saw: pointer, wheel, keys, and the text
+/// the platform's input method produced. `PointerInput` converts into one, so
+/// a caller with no keyboard passes the pointer alone.
+#[derive(Default, Clone, Debug, PartialEq)]
+pub struct Input {
+    pub pointer: PointerInput,
+    /// Scroll delta in scene units, positive right and down.
+    pub wheel: Point,
+    pub keys: Vec<KeyPress>,
+    /// Composed text this frame -- not derivable from `keys`, which is why
+    /// both exist.
+    pub text: String,
+}
+impl From<PointerInput> for Input {
+    fn from(pointer: PointerInput) -> Self {
+        Self {
+            pointer,
+            ..Self::default()
+        }
+    }
 }
 
 /// What happened to one target this frame.
@@ -107,6 +180,11 @@ pub struct Response {
     /// Pointer movement since the previous frame while dragging. Zero
     /// otherwise, so a caller may add it unconditionally.
     pub drag_delta: Point,
+    /// A drag started elsewhere is in flight and the pointer is over this
+    /// target: highlight yourself, something is about to land.
+    pub drop_target: bool,
+    /// A drag was released over this target this frame.
+    pub dropped_on: bool,
 }
 
 /// Interaction state carried between frames.
@@ -119,6 +197,8 @@ pub struct Response {
 #[derive(Debug, Clone)]
 pub struct Interaction {
     hovered: Option<String>,
+    over: Option<String>,
+    dropped: Option<(String, String)>,
     active: Option<String>,
     pressed: Option<String>,
     released: Option<String>,
@@ -135,6 +215,8 @@ impl Default for Interaction {
     fn default() -> Self {
         Self {
             hovered: None,
+            over: None,
+            dropped: None,
             active: None,
             pressed: None,
             released: None,
@@ -186,6 +268,7 @@ impl Interaction {
         self.pressed = None;
         self.released = None;
         self.clicked = None;
+        self.dropped = None;
         self.drag_delta = Point::new(0., 0.);
 
         let over = input.pos.and_then(|p| hit.at(p)).map(str::to_owned);
@@ -199,7 +282,12 @@ impl Interaction {
             }
         } else if !input.primary_down && self.was_down {
             if let Some(id) = self.active.take() {
-                if !self.dragging && over.as_deref() == Some(id.as_str()) {
+                if self.dragging {
+                    // The pointer may have left every target; a drag that
+                    // lands nowhere is a drop back onto its source.
+                    let target = over.clone().unwrap_or_else(|| id.clone());
+                    self.dropped = Some((id.clone(), target));
+                } else if over.as_deref() == Some(id.as_str()) {
                     self.clicked = Some(id.clone());
                 }
                 self.released = Some(id);
@@ -224,11 +312,12 @@ impl Interaction {
         // A captured target hovers only while the pointer is actually on it;
         // everything else stops hovering for the duration of the gesture.
         self.hovered = match &self.active {
-            Some(a) if over.as_deref() == Some(a.as_str()) => over,
+            Some(a) if over.as_deref() == Some(a.as_str()) => over.clone(),
             Some(_) => None,
-            None => over,
+            None => over.clone(),
         };
 
+        self.over = over;
         self.last_pos = input.pos;
         self.was_down = input.primary_down;
     }
@@ -251,7 +340,20 @@ impl Interaction {
             } else {
                 Point::new(0., 0.)
             },
+            drop_target: self.dragging && !held && is(&self.over),
+            dropped_on: self.dropped.as_ref().is_some_and(|(_, t)| t == id),
         }
+    }
+
+    /// The press that landed this frame, before any capture moved.
+    pub fn pressed(&self) -> Option<&str> {
+        self.pressed.as_deref()
+    }
+
+    /// Source and target of a drag released this frame, for one frame. The
+    /// target may be the source, when the drag ended where it began.
+    pub fn dropped(&self) -> Option<(&str, &str)> {
+        self.dropped.as_ref().map(|(a, b)| (a.as_str(), b.as_str()))
     }
 
     /// The target under the pointer, capture rules applied.

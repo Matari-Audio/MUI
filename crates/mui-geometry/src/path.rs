@@ -41,6 +41,10 @@ pub enum PathCommand {
     MoveTo(Point),
     LineTo(Point),
     ArcTo(Arc),
+    /// A cubic Bézier: two control points and the end. Custom drawing --
+    /// response curves, envelopes -- needs it; nothing derived (welds,
+    /// shells) ever produces one.
+    CubicTo(Point, Point, Point),
     Close,
 }
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -48,43 +52,6 @@ pub struct Path {
     pub commands: Vec<PathCommand>,
 }
 impl Path {
-    /// Nonzero-fill hit test in path coordinates; boundary points count as inside.
-    /// Circular arcs use the same flattening tolerance/budget as mesh adapters.
-    pub fn contains(&self, point: Point, tolerance: f64, max_points: usize) -> Result<bool, Error> {
-        if !point.finite() {
-            return Err(Error::NonFinite);
-        }
-        let contours = self.flatten(tolerance, max_points)?;
-        let mut winding = 0i64;
-        for ring in contours {
-            for (a, b) in ring
-                .iter()
-                .zip(ring.iter().cycle().skip(1))
-                .take(ring.len())
-            {
-                let side = (b.x - a.x) * (point.y - a.y) - (point.x - a.x) * (b.y - a.y);
-                if !side.is_finite() {
-                    return Err(Error::CoordinateLimit);
-                }
-                if side == 0.0
-                    && point.x >= a.x.min(b.x)
-                    && point.x <= a.x.max(b.x)
-                    && point.y >= a.y.min(b.y)
-                    && point.y <= a.y.max(b.y)
-                {
-                    return Ok(true);
-                }
-                if a.y <= point.y && b.y > point.y && side > 0.0 {
-                    winding += 1;
-                }
-                if a.y > point.y && b.y <= point.y && side < 0.0 {
-                    winding -= 1;
-                }
-            }
-        }
-        Ok(winding != 0)
-    }
-
     /// Validate command state and arc consistency without allocating polygons.
     pub fn validate(&self, max_commands: usize) -> Result<(), Error> {
         if self.commands.len() > max_commands {
@@ -94,9 +61,7 @@ impl Path {
         for command in &self.commands {
             match *command {
                 PathCommand::MoveTo(p) => {
-                    if current.is_some() {
-                        return Err(Error::InvalidPath);
-                    }
+                    // An open contour (a stroked curve) simply ends here.
                     if !p.finite() {
                         return Err(Error::NonFinite);
                     }
@@ -115,15 +80,21 @@ impl Path {
                     a.validate(current.ok_or(Error::InvalidPath)?)?;
                     current = Some(a.to);
                 }
+                PathCommand::CubicTo(a, b, p) => {
+                    if current.is_none() {
+                        return Err(Error::InvalidPath);
+                    }
+                    if !(a.finite() && b.finite() && p.finite()) {
+                        return Err(Error::NonFinite);
+                    }
+                    current = Some(p);
+                }
                 PathCommand::Close => {
                     if current.take().is_none() {
                         return Err(Error::InvalidPath);
                     }
                 }
             }
-        }
-        if current.is_some() {
-            return Err(Error::InvalidPath);
         }
         Ok(())
     }
@@ -140,11 +111,11 @@ impl Path {
         for command in &self.commands {
             match *command {
                 PathCommand::MoveTo(p) => {
-                    if active.is_some() {
-                        return Err(Error::InvalidPath);
-                    }
                     if !p.finite() {
                         return Err(Error::NonFinite);
+                    }
+                    if let Some(ring) = active.take() {
+                        contours.push(ring);
                     }
                     count += 1;
                     active = Some(vec![p]);
@@ -180,6 +151,33 @@ impl Path {
                     }
                     count += n;
                 }
+                PathCommand::CubicTo(a, b, p) => {
+                    if !(a.finite() && b.finite() && p.finite()) {
+                        return Err(Error::NonFinite);
+                    }
+                    let ring = active.as_mut().ok_or(Error::InvalidPath)?;
+                    let p0 = *ring.last().ok_or(Error::InvalidPath)?;
+                    // Standard flatness bound: an n-piece polyline errs by at
+                    // most the largest second difference times 3/4 over n².
+                    let bow = (p0 - a * 2. + b).length().max((a - b * 2. + p).length());
+                    let n = ((bow * 0.75 / tolerance).sqrt().ceil().max(1.) as usize).min(256);
+                    if n > max_points.saturating_sub(count) {
+                        return Err(Error::TooManySegments);
+                    }
+                    for i in 1..=n {
+                        let t = i as f64 / n as f64;
+                        let u = 1. - t;
+                        ring.push(if i == n {
+                            p
+                        } else {
+                            p0 * (u * u * u)
+                                + a * (3. * u * u * t)
+                                + b * (3. * u * t * t)
+                                + p * (t * t * t)
+                        });
+                    }
+                    count += n;
+                }
                 PathCommand::Close => {
                     let mut ring = active.take().ok_or(Error::InvalidPath)?;
                     if ring.len() > 1 && ring.first() == ring.last() {
@@ -195,8 +193,9 @@ impl Path {
                 return Err(Error::TooManySegments);
             }
         }
-        if active.is_some() {
-            return Err(Error::InvalidPath);
+        if let Some(ring) = active {
+            // Open contour: a stroked curve. Booleans close it implicitly.
+            contours.push(ring);
         }
         Ok(contours)
     }
@@ -220,12 +219,61 @@ impl Path {
                     to: map(a.to),
                     ..a
                 }),
+                PathCommand::CubicTo(a, b, p) => PathCommand::CubicTo(map(a), map(b), map(p)),
                 PathCommand::Close => PathCommand::Close,
             })
             .collect();
         let result = Self { commands };
         result.validate(100_000)?;
         Ok(result)
+    }
+    /// Chainable construction for hand-drawn geometry: a response curve, a
+    /// grid line. `quad_to` is stored as the exact equivalent cubic.
+    pub fn move_to(mut self, p: Point) -> Self {
+        self.commands.push(PathCommand::MoveTo(p));
+        self
+    }
+    pub fn line_to(mut self, p: Point) -> Self {
+        self.commands.push(PathCommand::LineTo(p));
+        self
+    }
+    pub fn cubic_to(mut self, a: Point, b: Point, p: Point) -> Self {
+        self.commands.push(PathCommand::CubicTo(a, b, p));
+        self
+    }
+    pub fn quad_to(self, c: Point, p: Point) -> Self {
+        let from = self.current().unwrap_or(c);
+        self.cubic_to(from + (c - from) * (2. / 3.), p + (c - p) * (2. / 3.), p)
+    }
+    pub fn close(mut self) -> Self {
+        self.commands.push(PathCommand::Close);
+        self
+    }
+    /// The pen position after the last command, if any.
+    pub fn current(&self) -> Option<Point> {
+        self.commands.iter().rev().find_map(|c| match *c {
+            PathCommand::MoveTo(p) | PathCommand::LineTo(p) | PathCommand::CubicTo(_, _, p) => {
+                Some(p)
+            }
+            PathCommand::ArcTo(a) => Some(a.to),
+            PathCommand::Close => None,
+        })
+    }
+    /// A polyline through `points`, open (a stroke) or closed (a fill).
+    pub fn polyline(points: impl IntoIterator<Item = Point>, closed: bool) -> Self {
+        let mut it = points.into_iter();
+        let mut p = match it.next() {
+            Some(first) => Self::default().move_to(first),
+            None => return Self::default(),
+        };
+        for q in it {
+            p = p.line_to(q);
+        }
+        if closed {
+            p.close()
+        } else {
+            p
+        }
     }
     /// A centered, exact vertical capsule. This is a widget shape, not an
     /// automatically merged tab; its radius is exactly width/2.
@@ -295,9 +343,47 @@ impl Path {
                         );
                     }
                 }
+                PathCommand::CubicTo(a, b, p) => {
+                    let _ = write!(
+                        out,
+                        "C {:0.9} {:0.9} {:0.9} {:0.9} {:0.9} {:0.9} ",
+                        a.x, a.y, b.x, b.y, p.x, p.y
+                    );
+                }
                 PathCommand::Close => out.push_str("Z "),
             }
         }
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod cubic_tests {
+    use super::*;
+
+    #[test]
+    fn cubic_flattens_within_tolerance_and_lands_exactly() {
+        let p = Path::default().move_to(Point::new(0., 0.)).cubic_to(
+            Point::new(0., 100.),
+            Point::new(100., 100.),
+            Point::new(100., 0.),
+        );
+        let rings = p.flatten(0.05, 10_000).unwrap();
+        let ring = &rings[0];
+        assert_eq!(*ring.last().unwrap(), Point::new(100., 0.));
+        assert!(ring.len() > 20);
+        // Symmetric curve: the midpoint of the curve is (50, 75).
+        let mid = ring
+            .iter()
+            .min_by(|a, b| (a.x - 50.).abs().partial_cmp(&(b.x - 50.).abs()).unwrap())
+            .unwrap();
+        assert!((mid.y - 75.).abs() < 0.5, "{mid:?}");
+        let svg = p.to_svg_data().unwrap();
+        assert!(svg.starts_with("M 0"), "{svg}");
+        assert!(svg.contains(" C "), "{svg}");
+        assert!(Path::default()
+            .cubic_to(Point::new(0., 0.), Point::new(0., 0.), Point::new(0., 0.))
+            .validate(10)
+            .is_err());
     }
 }

@@ -6,22 +6,23 @@ license.workspace = true
 
 [features]
 default = []
-text = ["dep:mui-text"]
-system-fonts = ["text", "mui-core/system-fonts"]
 egui = ["dep:mui-egui"]
-vello = ["dep:mui-vello"]
-cpu = ["vello", "mui-vello/cpu"]
-gpu = ["vello", "mui-vello/gpu"]
+cpu = ["mui-vello/cpu"]
 
 [dependencies]
-mui-text = { path = "../mui-text", optional = true }
 mui-core = { path = "../mui-core" }
 mui-layout = { path = "../mui-layout" }
 mui-geometry = { path = "../mui-geometry" }
 mui-tessellate = { path = "../mui-tessellate" }
 mui-input = { path = "../mui-input" }
-mui-vello = { path = "../mui-vello", optional = true, default-features = false }
+mui-text = { path = "../mui-text" }
+mui-vello = { path = "../mui-vello" }
 mui-egui = { path = "../mui-egui", optional = true }
 
 [dev-dependencies]
 epaint_default_fonts = "0.36"
+png = "0.17"
+
+[[example]]
+name = "snapshot"
+required-features = ["cpu"]

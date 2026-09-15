@@ -12,12 +12,19 @@
 //! and what keeps a 24 px corner smooth when the scene is scaled up.
 #![forbid(unsafe_code)]
 
-use mui_core::styled::{Paint, Painted, ResolvedScene};
+use kurbo::{Affine, BezPath, Rect, Shape as _, Stroke};
+use mui_core::{Layer, Paint, Painted, ResolvedScene};
 use mui_geometry::{Error, Path, PathCommand};
-use vello_common::kurbo::{self, Affine, BezPath, Rect, Shape as _, Stroke};
-use vello_common::paint::PaintType;
+use std::sync::{Arc, Mutex};
+/// The brush type [`Canvas::set_paint`] takes, so the trait can be
+/// implemented outside this crate.
+pub use vello_common::paint::PaintType;
 use vello_common::peniko::color::{AlphaColor, DynamicColor, Srgb};
-use vello_common::peniko::{ColorStop, Gradient};
+use vello_common::peniko::{Blob, ColorStop, FontData, Gradient};
+pub use vello_common::{kurbo, peniko};
+#[cfg(feature = "cpu")]
+pub use vello_cpu;
+pub use vello_hybrid;
 
 /// Curve error, in scene units, allowed when an arc becomes cubics. Vello
 /// re-flattens per frame at device resolution, so this only has to be finer
@@ -55,6 +62,7 @@ pub fn bez_path(path: &Path, tolerance: f64) -> Result<BezPath, Error> {
                 // one trig reconstructed, so consecutive arcs cannot drift.
                 out.line_to((arc.to.x, arc.to.y));
             }
+            PathCommand::CubicTo(a, b, p) => out.curve_to((a.x, a.y), (b.x, b.y), (p.x, p.y)),
             PathCommand::Close => out.close_path(),
         }
     }
@@ -139,38 +147,109 @@ pub trait Canvas {
     fn fill_path(&mut self, p: &BezPath);
     fn stroke_path(&mut self, p: &BezPath);
     fn fill_blurred_rounded_rect(&mut self, r: &Rect, radius: f32, std_dev: f32);
+    /// Everything drawn until the matching [`Canvas::pop_clip`] is clipped to `p`.
+    fn push_clip(&mut self, p: &BezPath);
+    fn pop_clip(&mut self);
+    /// Draw a hinted glyph run in the current paint, `x` measured from
+    /// `origin` along the baseline.
+    fn glyphs(&mut self, font: &Arc<Vec<u8>>, size: f32, origin: (f64, f64), glyphs: &[(u32, f32)]);
 }
-#[cfg(any(feature = "gpu", feature = "cpu"))]
-macro_rules! canvas {
-    ($t:ty) => {
-        impl Canvas for $t {
+
+/// One [`FontData`] per distinct font. Vello's hinted-glyph and atlas caches
+/// key on the blob id, and `Blob::new` mints a fresh one per call, so building
+/// the font per run would throw those caches away every frame.
+// ponytail: global and never evicted -- an entry is one `Arc` clone and a font
+// outlives the process anyway; a host-owned cache is the upgrade if a plugin
+// ever unloads one.
+static FONTS: Mutex<Vec<(usize, FontData)>> = Mutex::new(Vec::new());
+
+fn font_data(font: &Arc<Vec<u8>>) -> FontData {
+    // Holding the `Arc` is what makes the pointer a sound key: the allocation
+    // cannot be freed and its address reused under a stale entry.
+    let key = Arc::as_ptr(font) as usize;
+    let mut fonts = FONTS.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((_, f)) = fonts.iter().find(|(k, _)| *k == key) {
+        return f.clone();
+    }
+    let f = FontData::new(Blob::new(font.clone()), 0);
+    fonts.push((key, f.clone()));
+    f
+}
+
+fn run(
+    origin: (f64, f64),
+    glyphs: &[(u32, f32)],
+) -> impl Iterator<Item = glifo::Glyph> + Clone + '_ {
+    let (ox, oy) = (origin.0 as f32, origin.1 as f32);
+    glyphs.iter().map(move |&(id, x)| glifo::Glyph {
+        id,
+        x: ox + x,
+        y: oy,
+    })
+}
+
+/// A `vello_hybrid` scene together with the resources its glyph cache lives in.
+pub struct Gpu<'a> {
+    pub scene: &'a mut vello_hybrid::Scene,
+    pub resources: &'a mut vello_hybrid::Resources,
+}
+
+/// A `vello_cpu` context together with the resources its glyph cache lives in.
+#[cfg(feature = "cpu")]
+pub struct Cpu<'a> {
+    pub ctx: &'a mut vello_cpu::RenderContext,
+    pub resources: &'a mut vello_cpu::Resources,
+}
+
+macro_rules! wrapper {
+    ($w:ty, $inner:ident) => {
+        impl Canvas for $w {
             fn set_transform(&mut self, t: Affine) {
-                <$t>::set_transform(self, t)
+                self.$inner.set_transform(t)
             }
             fn set_paint(&mut self, p: PaintType) {
-                <$t>::set_paint(self, p)
+                self.$inner.set_paint(p)
             }
             fn set_stroke(&mut self, s: Stroke) {
-                <$t>::set_stroke(self, s)
+                self.$inner.set_stroke(s)
             }
             fn fill_path(&mut self, p: &BezPath) {
-                <$t>::fill_path(self, p)
+                self.$inner.fill_path(p)
             }
             fn stroke_path(&mut self, p: &BezPath) {
-                <$t>::stroke_path(self, p)
+                self.$inner.stroke_path(p)
             }
             fn fill_blurred_rounded_rect(&mut self, r: &Rect, radius: f32, std_dev: f32) {
-                <$t>::fill_blurred_rounded_rect(self, r, radius, std_dev, false)
+                self.$inner
+                    .fill_blurred_rounded_rect(r, radius, std_dev, false)
+            }
+            fn push_clip(&mut self, p: &BezPath) {
+                self.$inner.push_clip_layer(p)
+            }
+            fn pop_clip(&mut self) {
+                self.$inner.pop_layer()
+            }
+            fn glyphs(
+                &mut self,
+                font: &Arc<Vec<u8>>,
+                size: f32,
+                origin: (f64, f64),
+                glyphs: &[(u32, f32)],
+            ) {
+                self.$inner
+                    .glyph_run(self.resources, &font_data(font))
+                    .font_size(size)
+                    .hint(true)
+                    .fill_glyphs(run(origin, glyphs));
             }
         }
     };
 }
-#[cfg(feature = "gpu")]
-canvas!(vello_hybrid::Scene);
+wrapper!(Gpu<'_>, scene);
 #[cfg(feature = "cpu")]
-canvas!(vello_cpu::RenderContext);
+wrapper!(Cpu<'_>, ctx);
 
-fn srgb(c: mui_core::color::Color) -> AlphaColor<Srgb> {
+fn srgb(c: mui_core::Color) -> AlphaColor<Srgb> {
     c.to_srgb()
 }
 
@@ -220,8 +299,20 @@ pub fn paint(
 }
 
 fn one(canvas: &mut impl Canvas, p: &Painted) -> Result<(), Error> {
+    if p.layer == Layer::Unclip {
+        canvas.pop_clip();
+        return Ok(());
+    }
     let path = bez_path(&p.path, ARC_TOLERANCE)?;
+    if p.layer == Layer::Clip {
+        canvas.push_clip(&path);
+        return Ok(());
+    }
     canvas.set_paint(brush(&p.paint, path.bounding_box()));
+    if let Some(t) = &p.text {
+        canvas.glyphs(&t.font, t.size, (t.origin.x, t.origin.y), &t.glyphs);
+        return Ok(());
+    }
     match (p.blur > 0.0, p.rect, p.width > 0.0) {
         (true, Some(rr), _) => {
             let b = rr.bounds();
@@ -245,7 +336,7 @@ fn one(canvas: &mut impl Canvas, p: &Painted) -> Result<(), Error> {
 #[cfg(all(test, feature = "cpu"))]
 mod snapshot {
     use super::*;
-    use mui_core::styled::prelude::*;
+    use mui_core::prelude::*;
     use vello_common::pixmap::Pixmap;
 
     /// The whole stack on the CPU: a filled card reaches the pixels, its ink
@@ -262,15 +353,22 @@ mod snapshot {
             epaint_default_fonts::HACK_REGULAR.to_vec(),
         ));
         let scene = resolve_scene(&spec).unwrap();
-        assert!(scene
-            .paint
-            .iter()
-            .any(|p| p.layer == mui_core::styled::Layer::Text));
+        assert!(scene.paint.iter().any(|p| p.layer == mui_core::Layer::Text));
 
         let mut ctx = vello_cpu::RenderContext::new(120, 60);
-        paint(&mut ctx, &scene, Affine::IDENTITY).unwrap();
+        let mut res = vello_cpu::Resources::default();
+        paint(
+            &mut Cpu {
+                ctx: &mut ctx,
+                resources: &mut res,
+            },
+            &scene,
+            Affine::IDENTITY,
+        )
+        .unwrap();
+        ctx.flush();
         let mut pix = Pixmap::new(120, 60);
-        ctx.render(&mut pix, &mut vello_cpu::Resources::default());
+        ctx.render(&mut pix, &mut res);
         let at = |x: usize, y: usize| pix.data()[y * 120 + x];
         let want = Theme::default().palette.primary().to_srgb().to_rgba8();
         let got = at(60, 8);
@@ -279,5 +377,65 @@ mod snapshot {
             "{got:?} vs {want:?}"
         );
         assert_eq!(at(0, 0).a, 0, "corner is rounded away");
+    }
+
+    /// Render `spec` on the CPU and hand back the pixels.
+    fn pixels(spec: &SceneSpec, w: u16, h: u16) -> Pixmap {
+        let scene = resolve_scene(spec).unwrap();
+        let mut ctx = vello_cpu::RenderContext::new(w, h);
+        let mut res = vello_cpu::Resources::default();
+        paint(
+            &mut Cpu {
+                ctx: &mut ctx,
+                resources: &mut res,
+            },
+            &scene,
+            Affine::IDENTITY,
+        )
+        .unwrap();
+        ctx.flush();
+        let mut pix = Pixmap::new(w, h);
+        ctx.render(&mut pix, &mut res);
+        pix
+    }
+
+    /// Text reaches the pixels as a glyph run: it goes through Vello's
+    /// atlas, so ink on the pixmap means the run drew.
+    #[test]
+    fn a_glyph_run_lands_pixels() {
+        let mut spec =
+            SceneSpec::new(text("HI").fill(Role::Ink).id("t")).offered(Size::new(80., 40.));
+        spec.font = Some(std::sync::Arc::new(
+            epaint_default_fonts::HACK_REGULAR.to_vec(),
+        ));
+        let scene = resolve_scene(&spec).unwrap();
+        assert!(
+            scene.paint.iter().any(|p| p.text.is_some()),
+            "no glyphs to draw"
+        );
+        let pix = pixels(&spec, 80, 40);
+        assert!(pix.data().iter().any(|p| p.a > 0), "the run drew nothing");
+    }
+
+    /// A clip layer actually clips: the oversized child stops at its parent.
+    #[test]
+    fn a_clipped_child_stays_inside_its_parent() {
+        let child = leaf(200., 200.).fill(Role::Ink).id("child");
+        let boxed = column([child])
+            .size(40., 40.)
+            .clip()
+            .fill(Role::Surface)
+            .anchor(Align::Start, Align::Start)
+            .id("box");
+        let spec = SceneSpec::new(overlay([boxed])).offered(Size::new(80., 80.));
+        let scene = resolve_scene(&spec).unwrap();
+        let c = scene.surface("child").expect("child").frame;
+        assert!(c.x < 0. && c.right() > 40., "no overflow to clip: {c:?}");
+        let pix = pixels(&spec, 80, 80);
+        let at = |x: usize, y: usize| pix.data()[y * 80 + x];
+        assert!(at(20, 20).a > 0, "nothing drew inside the clip");
+        for (x, y) in [(60, 20), (20, 60), (60, 60)] {
+            assert_eq!(at(x, y).a, 0, "painted outside the clip at {x},{y}");
+        }
     }
 }

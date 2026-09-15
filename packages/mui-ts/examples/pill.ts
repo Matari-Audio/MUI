@@ -2,30 +2,27 @@ import {
   column, corners, defineScene, frameSurface, insetSurface, leaf,
   mergeSurface, px,
 } from "../src/index.js";
+import { skin } from "./skin.js";
 
 export default defineScene({
-  theme: {
-    corners: { convex: 28, concave: 32 },
-    spacing: { xs: 4, s: 8, m: 12, l: 18, xl: 28 },
-    strokeWidth: 1.5,
-  },
+  theme: skin,
 
-  root: column("root", [
-    column("tab-frame", [
-      column("pill-frame", [
-        column("controls", [
-          leaf("plus", [28, 28]),
-          leaf("pie-a", [28, 28]),
-          leaf("pie-b", [28, 28]),
+  root: column([
+    column([
+      column([
+        column([
+          leaf([28, 28], { id: "plus" }),
+          leaf([28, 28], { id: "pie-a" }),
+          leaf([28, 28], { id: "pie-b" }),
         ], { gap: 10, align: "center" }),
       ], { padding: 10, align: "center" }),
-    ], { padding: 12, min: [92, 0], align: "center" }),
-    leaf("panel-frame", [520, 230]),
-  ], { gap: 0, align: "start", justify: "start" }),
+    ], { id: "tab", padding: 12, min: [92, 0], align: "center" }),
+    leaf([520, 230], { id: "panel" }),
+  ], { id: "root", gap: 0, align: "start", justify: "start" }),
 
   surfaces: [
-    frameSurface("panel", "panel-frame"),
-    frameSurface("tab", "tab-frame"),
+    frameSurface("panel"),
+    frameSurface("tab"),
     mergeSurface("outer", ["panel", "tab"], corners.global),
     // Exact parallel shell: this derives bounds AND radius from the tab.
     insetSurface("pill-shell", "tab", px(12)),

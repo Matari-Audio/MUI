@@ -1,36 +1,65 @@
-//! MUI core: small intrinsic layout + topology-aware surface composition.
+//! MUI core: a styled layout tree in, a z-ordered paint list out.
 //!
-//! The core is renderer-independent and forbids unsafe code. It deliberately
-//! separates layout frames from painted geometry: a surface may be a frame,
-//! a Boolean merge, or a true parallel inset/outset of another surface.
+//! Renderer-independent, `forbid(unsafe_code)`. Layout frames and painted
+//! geometry stay separate: a node's outline may be its own rounded frame or
+//! the filleted union of its children, and every shell is a true parallel
+//! inset of the outline before it.
+//!
+//! The compact spelling, which says the same thing:
+//!
+//! ```
+//! use mui_core::prelude::*;
+//! # let _before =
+//! column([row([text("Filter"), spacer(), text("on")])
+//!     .align(Align::Center)
+//!     .justify(Justify::SpaceBetween)
+//!     .width(Len::Px(240.))])
+//! # ; let _after =
+//! col![row!["Filter", spacer(), "on"].between().w(240)]
+//! # ;
+//! ```
 #![forbid(unsafe_code)]
 
-pub mod color;
+mod color;
 pub mod curve;
-mod item;
-mod rgb;
-mod style;
-mod view;
-pub use item::{container, item, Color, Direction, Item, ItemInfo, Rounding, Ui};
-pub use style::{ItemStyle, StyleError};
-pub use view::{Clip, View, ViewItem, ViewState};
-pub mod dsl;
-mod scene;
-pub mod theme;
-pub use color::{Mode, Pigment};
-pub use rgb::{Accent, ColorError, Colors, Palette, Rgb, Seeds};
-
-pub use mui_layout::{Align, Frame, Insets, Justify, Layout, Limits, Node, Overflow, Size};
-pub use scene::{
-    resolve_scene, resolve_scene_measured, resolve_scene_measured_with_baseline, CornerRule, Edge,
-    Extension, FrameRadius, Radius, ResolvedScene, ResolvedSurface, SceneError, SceneSpec,
-    SceneState, SurfaceSource, SurfaceSpec,
-};
-pub use theme::{Contrast, CornerProfile, Spacing, SpacingScale, SpacingToken, Theme};
-
-pub mod paragraph;
-pub use paragraph::{Paragraph, TextScene, TextStyle, TextSystem};
-
+mod dsl;
+mod element;
 mod motion;
-pub mod styled;
+mod scene;
+mod style;
+mod theme;
+
+pub use color::{Color, Mode, Palette, Pigment};
+pub use dsl::{caption, label, title, IntoLen, Sugar};
+pub use element::{
+    canvas, column, grid, leaf, overlay, row, spacer, text, Canvas, Content, Draw, El, Element,
+    IntoEl, Styled,
+};
 pub use motion::Spring;
+pub use mui_layout::{
+    Align, Frame, Insets, Justify, Layout, Len, Limits, Node, Size, Spacing, SpacingScale,
+    SpacingToken,
+};
+pub use scene::{
+    resolve_scene, resolve_scene_with, Layer, Painted, ResolvedScene, ResolvedSurface, SceneError,
+    SceneSpec, SceneState, Text, TextCache,
+};
+pub use style::{Cursor, Fill, Gradient, Paint, Radius, Role, Shadow, Stroke, Style};
+pub use theme::{CornerProfile, Theme};
+
+/// Everything a scene file needs, including the spacing tokens as bare
+/// names: `.gap(M).pad(L)`.
+pub mod prelude {
+    pub use crate::Role::*;
+    pub use crate::{
+        canvas, caption, col, column, grid, label, leaf, overlay, resolve_scene, row, spacer,
+        stack, text, title, Align, Color, Cursor, Draw, El, Fill, Gradient, IntoEl, IntoLen,
+        Justify, Len, Radius, Role, SceneSpec, Shadow, Size, Style, Styled, Sugar, Theme,
+    };
+    pub use mui_geometry::{Path, Point};
+    pub use mui_layout::SpacingToken::{Xl, Xs, L, M, S};
+    /// A percentage length: `.width(pct(50.))`.
+    pub fn pct(p: f64) -> Len {
+        Len::Pct(p)
+    }
+}

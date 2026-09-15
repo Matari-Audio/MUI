@@ -140,12 +140,18 @@ fn basis_zero_shares_the_axis_rather_than_the_surplus() {
     assert_eq!(l.frame("li").unwrap().x, 0.);
     assert_eq!(l.frame("ri").unwrap().right(), 400.);
 
-    // Taffy follows browser flexbox intrinsic sizing: hugging sums content,
-    // while an offered axis uses basis for equal flexible shares.
+    // Hugging, the row is sized by the flex fraction: wide enough that the
+    // hungriest flexible child's *share* still clears its content. The left
+    // slot needs 50, so at one unit of grow each both slots are 50 and the
+    // row is 130 -- not the 100 that summing the children would give, which
+    // would have squashed that slot to 35.
     let hug = resolve(&slots(|n| n.flex(1.)), None, Default::default()).unwrap();
-    assert_eq!(hug.size.width, 100.);
-    assert_eq!(hug.frame("li").unwrap().size.width, 35.);
+    assert_eq!(hug.size.width, 130.);
+    assert_eq!(hug.frame("li").unwrap().size.width, 50.);
     assert_eq!(hug.frame("ri").unwrap().size.width, 20.);
+    // ...so the middle child is centred at its hugging size too.
+    let m = hug.frame("m").unwrap();
+    assert_eq!(m.x + m.size.width / 2., 65.);
 }
 
 #[test]
@@ -326,7 +332,7 @@ fn space_around_and_evenly() {
     };
     assert_eq!(r(Justify::SpaceAround), (20., 70.));
     let (a, b) = r(Justify::SpaceEvenly);
-    assert!((a - 80. / 3.).abs() < 1e-5 && (b - 190. / 3.).abs() < 1e-5);
+    assert!((a - 80. / 3.).abs() < 1e-9 && (b - 190. / 3.).abs() < 1e-9);
 }
 
 #[test]
@@ -352,36 +358,58 @@ fn tokens_resolve_against_the_scale_and_frames_come_out_in_tree_order() {
 }
 
 #[test]
-fn converted_tree_keeps_theme_tokens_and_runtime_frame_order() {
-    let tree: crate::Node = column([leaf(10., 10.).id("child")])
-        .id("root")
-        .pad(SpacingToken::M)
-        .into();
-    let layout = crate::resolve_with_spacing(
-        &tree,
+fn a_scroll_column_overflows_and_slides_and_a_float_takes_no_space() {
+    let list = |dy: f64| {
+        column([
+            leaf(50., 30.).id("a"),
+            leaf(50., 30.).id("b"),
+            leaf(50., 30.).id("c"),
+        ])
+        .gap(10.)
+        .pad(5.)
+        .scroll()
+        .scrolled(0., dy)
+        .grow(1.)
+        .id("list")
+    };
+    // The window is 60 tall: three 30px rows plus gaps do not fit, and the
+    // scroll floor lets the column be squeezed instead of erroring.
+    let head = || leaf(60., 20.).shrink(0.);
+    let t = column([head(), list(0.)]).size(60., 80.).id("root");
+    let l = resolve(&t, None, Default::default()).unwrap();
+    assert_eq!(l.frame("list").unwrap().size, Size::new(60., 60.));
+    assert_eq!(l.frame("a").unwrap().size, Size::new(50., 30.));
+    assert_eq!(l.frame("c").unwrap().y, 20. + 5. + 80.);
+    // Scrolled by 40: everything slides up, the frame stays put.
+    let t = column([head(), list(40.)]).size(60., 80.);
+    let l = resolve(&t, None, Default::default()).unwrap();
+    assert_eq!(l.frame("list").unwrap().y, 20.);
+    assert_eq!(l.frame("a").unwrap().y, 25. - 40.);
+    // Without scroll the rows themselves get squeezed.
+    let plain = column([leaf(50., 30.).id("p"), leaf(50., 30.)])
+        .gap(10.)
+        .pad(5.);
+    let l = resolve(
+        &column([head(), plain]).size(60., 70.),
         None,
-        Limits::default(),
-        &SpacingScale {
-            m: 2.,
-            ..SpacingScale::DEFAULT
-        },
+        Default::default(),
     )
     .unwrap();
-    assert_eq!(layout.size, Size::new(14., 14.));
-    assert_eq!(
-        layout.all(),
-        &[
-            layout.frame("root").unwrap(),
-            layout.frame("child").unwrap()
-        ]
-    );
-}
-
-#[test]
-fn expand_is_the_layout_growth_alias() {
-    assert_eq!(leaf(10., 10.).expand(), leaf(10., 10.).grow(1.));
-    assert_eq!(
-        crate::Node::leaf("x", Size::new(10., 10.)).expand(),
-        crate::Node::leaf("x", Size::new(10., 10.)).grow(1.)
-    );
+    assert!(l.frame("p").unwrap().size.height < 30.);
+    // A float sits in the parent's padding box and does not widen the row.
+    let t = row([
+        leaf(10., 10.).id("x"),
+        leaf(80., 80.)
+            .float()
+            .anchor(Align::End, Align::Start)
+            .offset(0., 4.)
+            .id("tip"),
+    ])
+    .pad(2.)
+    .id("r");
+    let l = resolve(&t, None, Default::default()).unwrap();
+    assert_eq!(l.frame("r").unwrap().size, Size::new(14., 14.));
+    let tip = l.frame("tip").unwrap();
+    assert_eq!((tip.x, tip.y), (2. + 10. - 80., 2. + 4.));
+    assert_eq!(l.all()[2], tip, "frames stay in declaration order");
 }

@@ -12,8 +12,8 @@ No reachable iterator or `Option`/`Result` correctness defect was demonstrated f
 
 ### MUI-ITER-01 — Chrome paint has an unobservable conversion-failure path
 
-**Severity:** Informational (observability gap; no reachable trigger demonstrated)\
-**Confidence:** High\
+**Severity:** Informational (observability gap; no reachable trigger demonstrated)  
+**Confidence:** High  
 **Evidence:** [`crates/mui-preview/src/main.rs:364`](/mnt/Windows11/DEV_PROJECTS/Repos/MUI/crates/mui-preview/src/main.rs:364), [`crates/mui-vello/src/lib.rs:27`](/mnt/Windows11/DEV_PROJECTS/Repos/MUI/crates/mui-vello/src/lib.rs:27)
 
 `chrome_frame` turns every `(Path, ink)` from `ui.finish()` into a Bézier path with:
@@ -30,8 +30,8 @@ The current paths are constructed from validated rounded rectangles or successfu
 
 ### MUI-ITER-02 — Frame overlay errors are intentionally best-effort and unreported
 
-**Severity:** Informational (diagnostic overlay only; no reachable trigger demonstrated)\
-**Confidence:** High\
+**Severity:** Informational (diagnostic overlay only; no reachable trigger demonstrated)  
+**Confidence:** High  
 **Evidence:** [`crates/mui-preview/src/main.rs:130`](/mnt/Windows11/DEV_PROJECTS/Repos/MUI/crates/mui-preview/src/main.rs:130)
 
 `frame_overlay` loops over every layout frame, but intentionally skips failures from `RoundedRect::new`, `bez_path`, `text_run`, `rigid_transform`, and the final `bez_path` through nested `if let Ok`, `.ok()`, and `if let Some`. A frame rectangle or label could therefore vanish while the resolved scene still paints. The current layout and embedded font provide no demonstrated failing input, and best-effort behavior is reasonable for an optional overlay.
@@ -40,8 +40,8 @@ Keep the loop: it preserves frame order and makes the best-effort nature clear. 
 
 ### MUI-ITER-03 — Text rendering has an unreported fallback path
 
-**Severity:** Informational (fallback behavior; no reachable trigger demonstrated)\
-**Confidence:** High\
+**Severity:** Informational (fallback behavior; no reachable trigger demonstrated)  
+**Confidence:** High  
 **Evidence:** [`crates/mui-preview/src/ui.rs:254`](/mnt/Windows11/DEV_PROJECTS/Repos/MUI/crates/mui-preview/src/ui.rs:254), callers at [`crates/mui-preview/src/ui.rs:365`](/mnt/Windows11/DEV_PROJECTS/Repos/MUI/crates/mui-preview/src/ui.rs:365) and [`crates/mui-preview/src/ui.rs:429`](/mnt/Windows11/DEV_PROJECTS/Repos/MUI/crates/mui-preview/src/ui.rs:429)
 
 `Ui::run` returns `Option<TextRun>` by calling `mui_text::text_run(...).ok()`. `text_row` still advances the cursor when `run` is `None`, and `button` still paints/registers the button row but skips its label. A future bad font, invalid text option, or geometry failure would be presented as an empty label. The fixed embedded font and validated sizes provide no demonstrated failing input in the current preview.
@@ -50,8 +50,8 @@ If text inputs or fonts become dynamic, give `run` an error-aware mode for devel
 
 ### MUI-ITER-04 — Preview baking retains only the latest conversion error
 
-**Severity:** Informational (diagnostic fidelity; no reachable failing path demonstrated)\
-**Confidence:** High\
+**Severity:** Informational (diagnostic fidelity; no reachable failing path demonstrated)  
+**Confidence:** High  
 **Evidence:** [`crates/mui-preview/src/main.rs:73`](/mnt/Windows11/DEV_PROJECTS/Repos/MUI/crates/mui-preview/src/main.rs:73) and [`crates/mui-preview/src/main.rs:95`](/mnt/Windows11/DEV_PROJECTS/Repos/MUI/crates/mui-preview/src/main.rs:95)
 
 `Baked::build` correctly preserves authored surface order by iterating `spec.surfaces` and chaining `source.overlay()`. For each path, however, a `bez_path` error only assigns `error = Some(...)`; the loop would continue, so `paths` and `hit` would contain only successful surfaces. If multiple paths failed, a later failure would overwrite the earlier message. This gives a useful partial-preview policy, but the single `Option<String>` would not describe how incomplete the result is or retain all failed IDs.
@@ -60,8 +60,8 @@ The partial behavior is defensible for a gallery preview, and no failing path wa
 
 ### MUI-ITER-05 — Defensive `filter_map` relies on a resolver invariant
 
-**Severity:** Informational (optional invariant assertion; unreachable through the normal resolver)\
-**Confidence:** High behavior, medium reachability\
+**Severity:** Informational (optional invariant assertion; unreachable through the normal resolver)  
+**Confidence:** High behavior, medium reachability  
 **Evidence:** [`crates/mui-preview/src/main.rs:91`](/mnt/Windows11/DEV_PROJECTS/Repos/MUI/crates/mui-preview/src/main.rs:91), [`crates/mui-core/src/scene.rs:269`](/mnt/Windows11/DEV_PROJECTS/Repos/MUI/crates/mui-core/src/scene.rs:269), [`crates/mui-core/src/scene.rs:290`](/mnt/Windows11/DEV_PROJECTS/Repos/MUI/crates/mui-core/src/scene.rs:290)
 
 The preview pipeline uses `spec.surfaces.iter().filter_map(|s| scene.surface(&s.id)...)`. `Resolver::resolve` first collects every declared ID and calls `one` for each, while `one` returns `MissingSurface` when its lookup fails, so a successful `resolve_scene` should contain every declared surface. If that invariant changed or a future `ResolvedScene` were assembled another way, this `filter_map` would silently remove the missing surface and let the preview report a smaller scene.

@@ -1,11 +1,7 @@
 # Frozen
 
-The TypeScript authoring layer is frozen as of 2026-09-15. It remains a
-build-time reference for the existing `Item` and `SceneSpec` schemas; it has no
-runtime JavaScript role and is not part of the shipped plugin.
-
-New UI work belongs in the maintained Rust DSL (`mui::prelude`) and its generic
-layout helpers. The package stays in the repository so existing examples and
-downstream experiments have a readable migration reference. `tools/verify.sh`
-does not build, test, or generate Rust from it. Remove the package after its
-last consumer has migrated.
+The TypeScript authoring layer is frozen as of 2026-09-15. It targets the
+`SurfaceSpec` list API that `mui-core` no longer has; the Rust DSL
+(`mui::prelude`) is the single source of truth, and it is shorter than the
+TS it replaced. The package stays for reference and is not built, tested, or
+shipped by `tools/verify.sh`. Delete it when nothing references it.

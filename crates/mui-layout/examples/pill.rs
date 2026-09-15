@@ -1,4 +1,4 @@
-use mui_layout::generic::{column, leaf, resolve, Align, Limits, Size};
+use mui_layout::{column, leaf, resolve, Align, Limits, Size};
 fn main() -> Result<(), mui_layout::Error> {
     let d = 28.;
     let gap = 10.;

@@ -3,6 +3,3 @@ name = "mui-layout"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-
-[dependencies]
-taffy = { version = "=0.14.0", default-features = false, features = ["std", "taffy_tree", "flexbox", "grid"] }
