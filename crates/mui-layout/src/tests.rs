@@ -411,9 +411,5 @@ fn a_scroll_column_overflows_and_slides_and_a_float_takes_no_space() {
     assert_eq!(l.frame("r").unwrap().size, Size::new(14., 14.));
     let tip = l.frame("tip").unwrap();
     assert_eq!((tip.x, tip.y), (2. + 10. - 80., 2. + 4.));
-    assert_eq!(
-        l.all()[1],
-        tip,
-        "floats come first in tree order, so the walk can defer them"
-    );
+    assert_eq!(l.all()[2], tip, "frames stay in declaration order");
 }

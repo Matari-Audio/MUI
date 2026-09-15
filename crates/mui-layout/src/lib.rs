@@ -1076,21 +1076,18 @@ fn arrange<P>(
     };
     let default = cell_default(n);
     let flow = m.flow();
-    // Floats sit in the padding box like overlay children, unscrolled.
-    for c in m.children.iter().filter(|c| c.node.float) {
-        let (p, s) = cell(c, inner, default);
-        let pos = [
-            origin[0] + m.padding.left + p[0],
-            origin[1] + m.padding.top + p[1],
-        ];
-        arrange(c, here, pos, s, out)?;
-    }
+    // Where each in-flow child goes, then every child in declaration order
+    // so frames stay in tree order; a float sits in the padding box like an
+    // overlay child, unscrolled.
+    let mut placed: Vec<([f64; 2], Size)> = Vec::with_capacity(flow.len());
     match &n.kind {
-        Kind::Leaf | Kind::Content => Ok(()),
-        Kind::Overlay(_) => flow.iter().try_for_each(|c| {
-            let (p, s) = cell(c, inner, default);
-            arrange(c, here, at(p[0], p[1]), s, out)
-        }),
+        Kind::Leaf | Kind::Content => {}
+        Kind::Overlay(_) => {
+            for c in &flow {
+                let (p, s) = cell(c, inner, default);
+                placed.push((at(p[0], p[1]), s));
+            }
+        }
         Kind::Grid { cols, .. } => {
             let cols = *cols;
             let rows = flow.len().div_ceil(cols);
@@ -1108,17 +1105,10 @@ fn arrange<P>(
                 let cell_size = Size::new(col_w, h + surplus);
                 for (k, c) in row.iter().enumerate() {
                     let (p, s) = cell(c, cell_size, default);
-                    arrange(
-                        c,
-                        here,
-                        at(k as f64 * (col_w + m.gap) + p[0], y + p[1]),
-                        s,
-                        out,
-                    )?;
+                    placed.push((at(k as f64 * (col_w + m.gap) + p[0], y + p[1]), s));
                 }
                 y += cell_size.height + m.gap;
             }
-            Ok(())
         }
         Kind::Branch { vertical, .. } => {
             let v = *vertical;
@@ -1157,12 +1147,28 @@ fn arrange<P>(
                 } else {
                     at(cursor, cross_pos)
                 };
-                arrange(c, here, pos, Size::axes(main, cross, v), out)?;
+                placed.push((pos, Size::axes(main, cross, v)));
                 cursor += main + m.gap + extra;
             }
-            Ok(())
         }
     }
+    let mut placed = placed.into_iter();
+    for c in &m.children {
+        let (pos, s) = if c.node.float {
+            let (p, s) = cell(c, inner, default);
+            (
+                [
+                    origin[0] + m.padding.left + p[0],
+                    origin[1] + m.padding.top + p[1],
+                ],
+                s,
+            )
+        } else {
+            placed.next().ok_or(Error::BudgetExceeded)?
+        };
+        arrange(c, here, pos, s, out)?;
+    }
+    Ok(())
 }
 
 /// `None` means hug intrinsic content. `Some` is an exact offered parent size.
