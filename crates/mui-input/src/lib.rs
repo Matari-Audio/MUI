@@ -124,6 +124,8 @@ pub enum Key {
     Down,
     Home,
     End,
+    PageUp,
+    PageDown,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -152,6 +154,18 @@ pub struct Input {
     /// Composed text this frame -- not derivable from `keys`, which is why
     /// both exist.
     pub text: String,
+    /// The host's clipboard contents, read *because* a paste key arrived this
+    /// frame. `None` otherwise: nothing here reads the clipboard speculatively,
+    /// and a field must not paste stale bytes it was handed last frame.
+    pub clipboard: Option<String>,
+}
+
+/// What a frame asks the host to do on its way out. Nothing returns one yet --
+/// the toolkit layer surfaces it.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct Output {
+    /// Put this on the host's clipboard.
+    pub clipboard: Option<String>,
 }
 impl From<PointerInput> for Input {
     fn from(pointer: PointerInput) -> Self {

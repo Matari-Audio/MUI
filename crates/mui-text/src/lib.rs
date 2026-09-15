@@ -364,6 +364,178 @@ impl OutlinePen for PathPen {
     }
 }
 
+/// The face's own vertical metrics at one em size, y-down: every field is a
+/// positive distance from the baseline, so a caller can align two faces on it.
+///
+/// `cap_height` and `x_height` are zero when the face declares neither -- the
+/// honest reading of "this font has no OS/2 table", not an error.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Metrics {
+    pub ascent: f64,
+    pub descent: f64,
+    pub line_gap: f64,
+    pub cap_height: f64,
+    pub x_height: f64,
+}
+
+/// Vertical metrics without laying anything out, at the face's default
+/// variation position.
+pub fn metrics(font: &[u8], size_px: f64) -> Result<Metrics, Error> {
+    let size = checked_size(size_px)?;
+    let font = FontRef::new(font).map_err(|e| Error::Font(format!("{e}")))?;
+    let location = font.axes().location(std::iter::empty::<Axis<'_>>());
+    let m = font.metrics(Size::new(size), LocationRef::from(&location));
+    Ok(Metrics {
+        ascent: checked_metric(m.ascent, "font metrics")?,
+        // Negative in font space, positive below the baseline here.
+        descent: checked_metric(-m.descent, "font metrics")?,
+        line_gap: checked_metric(m.leading, "font metrics")?,
+        cap_height: checked_metric(m.cap_height.unwrap_or(0.), "font metrics")?,
+        x_height: checked_metric(m.x_height.unwrap_or(0.), "font metrics")?,
+    })
+}
+
+/// One advance per `char` of `text`, at the default variation position. The
+/// only allocation the measuring functions make.
+fn advances(font: &[u8], text: &str, size_px: f64) -> Result<Vec<f64>, Error> {
+    let size = checked_size(size_px)?;
+    let font = FontRef::new(font).map_err(|e| Error::Font(format!("{e}")))?;
+    let location = font.axes().location(std::iter::empty::<Axis<'_>>());
+    let charmap = font.charmap();
+    let glyph_metrics = font.glyph_metrics(Size::new(size), LocationRef::from(&location));
+    text.chars()
+        .map(|ch| {
+            let glyph_id = charmap.map(ch).unwrap_or(GlyphId::NOTDEF);
+            checked_finite(
+                f64::from(glyph_metrics.advance_width(glyph_id).unwrap_or(0.)),
+                "font metrics",
+            )
+        })
+        .collect()
+}
+
+/// One laid-out line: the slice of the source it covers and how wide that is.
+///
+/// `text_range` keeps any whitespace the break consumed -- it is a slice of the
+/// original string, not a trimmed copy -- while `advance` does not count
+/// trailing spaces, so a right-aligned line does not hang.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Line {
+    pub text_range: std::ops::Range<usize>,
+    pub advance: f64,
+}
+
+/// Greedy line breaking on advances alone.
+///
+/// Break opportunities are ASCII whitespace and just after a `'-'`; `'\n'`
+/// forces a break; a word wider than `max_width` breaks at the glyph that
+/// overflows rather than hanging off the edge.
+///
+/// // ponytail: no UAX#14, add unicode-linebreak if CJK matters
+pub fn break_lines(
+    font: &[u8],
+    text: &str,
+    size_px: f64,
+    max_width: f64,
+) -> Result<Vec<Line>, Error> {
+    if !(max_width.is_finite() && max_width > 0.) {
+        return Err(Error::InvalidOptions("max_width"));
+    }
+    let advances = advances(font, text, size_px)?;
+    let mut lines = Vec::new();
+    let mut start = 0;
+    // Advance since `start`, trailing-whitespace part of it, and the width of
+    // the word since the last break opportunity.
+    let (mut x, mut trim, mut word) = (0., 0., 0.);
+    let mut brk: Option<(usize, f64)> = None;
+
+    for ((i, ch), &a) in text.char_indices().zip(&advances) {
+        if ch == '\n' {
+            lines.push(Line {
+                text_range: start..i,
+                advance: x - trim,
+            });
+            start = i + 1;
+            (x, trim, word, brk) = (0., 0., 0., None);
+            continue;
+        }
+        if ch.is_ascii_whitespace() {
+            // Trailing space always fits: it costs nothing at the line end.
+            x += a;
+            trim += a;
+            continue;
+        }
+        if trim > 0. {
+            // Ink after spaces: the word starts here, and so may a line.
+            brk = Some((i, x - trim));
+            trim = 0.;
+            word = 0.;
+        }
+        if x + a > max_width && i > start {
+            match brk.filter(|&(bi, _)| bi > start) {
+                Some((bi, advance)) => {
+                    lines.push(Line {
+                        text_range: start..bi,
+                        advance,
+                    });
+                    start = bi;
+                    x = word;
+                }
+                // The word itself does not fit: break at the overflowing glyph.
+                None => {
+                    lines.push(Line {
+                        text_range: start..i,
+                        advance: x,
+                    });
+                    start = i;
+                    (x, word) = (0., 0.);
+                }
+            }
+            brk = None;
+        }
+        x += a;
+        word += a;
+        if ch == '-' {
+            brk = Some((i + 1, x));
+            word = 0.;
+        }
+    }
+    lines.push(Line {
+        text_range: start..text.len(),
+        advance: x - trim,
+    });
+    Ok(lines)
+}
+
+/// Pen x of the caret sitting *before* the char at `byte_index`, which must be
+/// a char boundary. `text.len()` is the caret at the end.
+pub fn caret_x(font: &[u8], text: &str, size_px: f64, byte_index: usize) -> Result<f64, Error> {
+    if byte_index > text.len() || !text.is_char_boundary(byte_index) {
+        return Err(Error::InvalidOptions("byte_index"));
+    }
+    Ok(advances(font, text, size_px)?
+        .iter()
+        .zip(text.char_indices())
+        .take_while(|(_, (i, _))| *i < byte_index)
+        .map(|(a, _)| a)
+        .sum())
+}
+
+/// The char boundary whose caret is nearest `x`. The inverse of [`caret_x`],
+/// which is what a click in a text field needs.
+pub fn hit_index(font: &[u8], text: &str, size_px: f64, x: f64) -> Result<usize, Error> {
+    let advances = advances(font, text, size_px)?;
+    let (mut pen, mut best, mut best_d) = (0., 0, x.abs());
+    for ((i, ch), a) in text.char_indices().zip(&advances) {
+        pen += a;
+        let d = (pen - x).abs();
+        if d < best_d {
+            (best, best_d) = (i + ch.len_utf8(), d);
+        }
+    }
+    Ok(best)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -631,5 +803,67 @@ mod axis_tests {
     #[test]
     fn a_static_font_declares_no_axes() {
         assert!(axes(epaint_default_fonts::HACK_REGULAR).unwrap().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod measure_tests {
+    use super::*;
+    use epaint_default_fonts::HACK_REGULAR;
+
+    const SIZE: f64 = 16.;
+
+    fn lines(text: &str, width: f64) -> Vec<&str> {
+        break_lines(HACK_REGULAR, text, SIZE, width)
+            .unwrap()
+            .into_iter()
+            .map(|l| &text[l.text_range])
+            .collect()
+    }
+
+    #[test]
+    fn metrics_straddle_the_baseline() {
+        let m = metrics(HACK_REGULAR, SIZE).unwrap();
+        assert!(m.ascent > 0., "{m:?}");
+        assert!(m.descent > 0., "positive below the baseline: {m:?}");
+        assert!(m.line_gap >= 0.);
+        assert!(m.x_height > 0. && m.x_height < m.cap_height, "{m:?}");
+    }
+
+    #[test]
+    fn a_line_breaks_at_the_last_space_that_fits() {
+        let text = "hello world foo";
+        let width = caret_x(HACK_REGULAR, text, SIZE, 11).unwrap();
+        assert_eq!(lines(text, width), ["hello world ", "foo"]);
+        let first = &break_lines(HACK_REGULAR, text, SIZE, width).unwrap()[0];
+        assert!(
+            (first.advance - width).abs() < 1e-9,
+            "the trailing space does not count: {first:?}"
+        );
+    }
+
+    #[test]
+    fn a_word_wider_than_the_line_breaks_mid_word() {
+        let word = "x".repeat(40);
+        let out = lines(&word, caret_x(HACK_REGULAR, &word, SIZE, 10).unwrap());
+        assert_eq!(out.len(), 4, "{out:?}");
+        assert!(out.iter().all(|l| l.len() == 10), "{out:?}");
+    }
+
+    #[test]
+    fn a_newline_breaks_whatever_fits() {
+        assert_eq!(lines("a\nb", 1e6), ["a", "b"]);
+    }
+
+    #[test]
+    fn a_caret_round_trips_through_its_x() {
+        let text = "the quick brown fox";
+        for (i, _) in text
+            .char_indices()
+            .chain(std::iter::once((text.len(), ' ')))
+        {
+            let x = caret_x(HACK_REGULAR, text, SIZE, i).unwrap();
+            assert_eq!(hit_index(HACK_REGULAR, text, SIZE, x).unwrap(), i, "at {i}");
+        }
     }
 }
