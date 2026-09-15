@@ -150,11 +150,18 @@ pub trait Canvas {
     /// a canvas that never paints an image may leave both of these alone.
     fn set_paint_transform(&mut self, _t: Affine) {}
     fn reset_paint_transform(&mut self) {}
-    /// Whether this backend can take a pixmap image source. `vello_hybrid`
-    /// cannot -- it wants an atlas id and *panics* on a pixmap -- so it says
-    /// no here and gets [`mui_core::Paint::solid`]'s stand-in instead.
-    fn images(&self) -> bool {
-        true
+    /// This image as a brush, or `None` for [`mui_core::Paint::solid`]'s
+    /// stand-in. `vello_cpu` takes the pixmap itself; `vello_hybrid` wants
+    /// an atlas id and *panics* on a pixmap, so [`Gpu`] uploads through its
+    /// [`Atlas`] and says `None` without one.
+    fn image(&mut self, img: &mui_core::Image) -> Option<PaintType> {
+        pixmap(img).map(|p| {
+            vello_common::paint::Image {
+                image: vello_common::paint::ImageSource::Pixmap(p),
+                sampler: ImageSampler::default(),
+            }
+            .into()
+        })
     }
     fn set_stroke(&mut self, s: Stroke);
     fn fill_path(&mut self, p: &BezPath);
@@ -201,10 +208,125 @@ fn run(
     })
 }
 
-/// A `vello_hybrid` scene together with the resources its glyph cache lives in.
+/// A `vello_hybrid` scene together with the resources its glyph cache lives
+/// in, and optionally the [`Atlas`] that lets image fills reach the GPU.
 pub struct Gpu<'a> {
     pub scene: &'a mut vello_hybrid::Scene,
     pub resources: &'a mut vello_hybrid::Resources,
+    pub atlas: Option<Atlas<'a>>,
+}
+
+/// What uploading an image into `vello_hybrid`'s atlas takes: the renderer
+/// that owns the texture, the device and queue to write it with, and the
+/// host-owned [`ImageIds`] that remember what has been uploaded already.
+pub struct Atlas<'a> {
+    pub renderer: &'a mut vello_hybrid::Renderer,
+    pub device: &'a wgpu::Device,
+    pub queue: &'a wgpu::Queue,
+    pub ids: &'a mut ImageIds,
+}
+
+/// One atlas id per image buffer a renderer has seen. Keep it next to the
+/// `Renderer` it belongs to: an id means nothing to any other one.
+// ponytail: never evicted, like `FONTS`; an entry holds its buffer so the
+// address stays a sound key. `Renderer::destroy_image` is the upgrade if a
+// plugin ever streams images through.
+#[derive(Default)]
+pub struct ImageIds(Vec<(Arc<[u8]>, vello_common::paint::ImageId, bool)>);
+
+macro_rules! wrapper {
+    ($inner:ident) => {
+        fn set_transform(&mut self, t: Affine) {
+            self.$inner.set_transform(t)
+        }
+        fn set_paint(&mut self, p: PaintType) {
+            self.$inner.set_paint(p)
+        }
+        fn set_paint_transform(&mut self, t: Affine) {
+            self.$inner.set_paint_transform(t)
+        }
+        fn reset_paint_transform(&mut self) {
+            self.$inner.reset_paint_transform()
+        }
+        fn set_stroke(&mut self, s: Stroke) {
+            self.$inner.set_stroke(s)
+        }
+        fn fill_path(&mut self, p: &BezPath) {
+            self.$inner.fill_path(p)
+        }
+        fn stroke_path(&mut self, p: &BezPath) {
+            self.$inner.stroke_path(p)
+        }
+        fn fill_blurred_rounded_rect(&mut self, r: &Rect, radius: f32, std_dev: f32) {
+            self.$inner
+                .fill_blurred_rounded_rect(r, radius, std_dev, false)
+        }
+        fn push_clip(&mut self, p: &BezPath) {
+            self.$inner.push_clip_layer(p)
+        }
+        fn pop_clip(&mut self) {
+            self.$inner.pop_layer()
+        }
+        fn glyphs(
+            &mut self,
+            font: &Arc<Vec<u8>>,
+            size: f32,
+            origin: (f64, f64),
+            glyphs: &[(u32, f32)],
+        ) {
+            self.$inner
+                .glyph_run(self.resources, &font_data(font))
+                .font_size(size)
+                .hint(true)
+                .fill_glyphs(run(origin, glyphs));
+        }
+    };
+}
+
+impl Canvas for Gpu<'_> {
+    fn image(&mut self, img: &mui_core::Image) -> Option<PaintType> {
+        let atlas = self.atlas.as_mut()?;
+        let (id, clear) = match atlas.ids.0.iter().find(|(k, ..)| Arc::ptr_eq(k, &img.rgba)) {
+            Some(&(_, id, clear)) => (id, clear),
+            None => {
+                // Own encoder, submitted now: the queue keeps it ahead of the
+                // frame that paints with the id. An upload is once per image.
+                // ponytail: an image wider than the atlas panics inside
+                // `upload_image`; `pixmap` only guards the u16 ceiling.
+                let p = pixmap(img)?;
+                let mut enc = atlas.device.create_command_encoder(&Default::default());
+                let id = atlas.renderer.upload_image(
+                    self.resources,
+                    atlas.device,
+                    atlas.queue,
+                    &mut enc,
+                    &p,
+                );
+                atlas.queue.submit([enc.finish()]);
+                atlas
+                    .ids
+                    .0
+                    .push((img.rgba.clone(), id, p.may_have_transparency()));
+                (id, p.may_have_transparency())
+            }
+        };
+        Some(
+            vello_common::paint::Image {
+                image: vello_common::paint::ImageSource::OpaqueId {
+                    id,
+                    may_have_transparency: clear,
+                },
+                sampler: ImageSampler::default(),
+            }
+            .into(),
+        )
+    }
+    wrapper!(scene);
+}
+
+#[cfg(feature = "cpu")]
+impl Canvas for Cpu<'_> {
+    wrapper!(ctx);
 }
 
 /// A `vello_cpu` context together with the resources its glyph cache lives in.
@@ -214,64 +336,6 @@ pub struct Cpu<'a> {
     pub resources: &'a mut vello_cpu::Resources,
 }
 
-macro_rules! wrapper {
-    ($w:ty, $inner:ident, $images:literal) => {
-        impl Canvas for $w {
-            fn images(&self) -> bool {
-                $images
-            }
-            fn set_transform(&mut self, t: Affine) {
-                self.$inner.set_transform(t)
-            }
-            fn set_paint(&mut self, p: PaintType) {
-                self.$inner.set_paint(p)
-            }
-            fn set_paint_transform(&mut self, t: Affine) {
-                self.$inner.set_paint_transform(t)
-            }
-            fn reset_paint_transform(&mut self) {
-                self.$inner.reset_paint_transform()
-            }
-            fn set_stroke(&mut self, s: Stroke) {
-                self.$inner.set_stroke(s)
-            }
-            fn fill_path(&mut self, p: &BezPath) {
-                self.$inner.fill_path(p)
-            }
-            fn stroke_path(&mut self, p: &BezPath) {
-                self.$inner.stroke_path(p)
-            }
-            fn fill_blurred_rounded_rect(&mut self, r: &Rect, radius: f32, std_dev: f32) {
-                self.$inner
-                    .fill_blurred_rounded_rect(r, radius, std_dev, false)
-            }
-            fn push_clip(&mut self, p: &BezPath) {
-                self.$inner.push_clip_layer(p)
-            }
-            fn pop_clip(&mut self) {
-                self.$inner.pop_layer()
-            }
-            fn glyphs(
-                &mut self,
-                font: &Arc<Vec<u8>>,
-                size: f32,
-                origin: (f64, f64),
-                glyphs: &[(u32, f32)],
-            ) {
-                self.$inner
-                    .glyph_run(self.resources, &font_data(font))
-                    .font_size(size)
-                    .hint(true)
-                    .fill_glyphs(run(origin, glyphs));
-            }
-        }
-    };
-}
-// `vello_hybrid` panics outright on a pixmap image source; `vello_cpu` takes one.
-wrapper!(Gpu<'_>, scene, false);
-#[cfg(feature = "cpu")]
-wrapper!(Cpu<'_>, ctx, true);
-
 fn srgb(c: mui_core::Color) -> AlphaColor<Srgb> {
     c.to_srgb()
 }
@@ -279,12 +343,8 @@ fn srgb(c: mui_core::Color) -> AlphaColor<Srgb> {
 /// One premultiplied [`Pixmap`] per distinct image buffer. MUI hands over
 /// straight RGBA -- what a decoder produces -- and premultiplying a photo is
 /// far too much work to redo every frame.
-// ponytail: same never-evicted interning as `FONTS`, and a pixmap only ever
-// reaches `vello_cpu` -- `vello_hybrid` panics on one and so declares
-// `Canvas::images() == false`, which flattens an image to a grey stand-in.
-// `Renderer::upload_image` is the upgrade that makes images real on the GPU,
-// but it wants a `&mut Renderer`, a device, a queue and a live encoder, none
-// of which this crate sees; wiring it means `Gpu` carrying an atlas id map.
+// ponytail: same never-evicted interning as `FONTS`. `vello_cpu` paints the
+// pixmap itself; `Gpu` uploads it once through its `Atlas` and keeps the id.
 #[allow(clippy::type_complexity)]
 static IMAGES: Mutex<Vec<(Arc<[u8]>, Arc<Pixmap>)>> = Mutex::new(Vec::new());
 
@@ -340,8 +400,8 @@ fn image_transform(img: &mui_core::Image, fit: Fit, bounds: Rect) -> Affine {
 pub fn brush(p: &Paint, bounds: Rect) -> PaintType {
     match p {
         Paint::Solid(c) => PaintType::Solid(srgb(*c)),
-        // An image too big for the atlas draws nothing rather than panicking
-        // inside the renderer.
+        // The pixmap form; a `Canvas` decides for itself in `Canvas::image`.
+        // An image too big for the atlas draws nothing rather than panicking.
         Paint::Image { image, .. } => {
             pixmap(image).map_or(PaintType::Solid(AlphaColor::TRANSPARENT), |p| {
                 vello_common::paint::Image {
@@ -563,14 +623,18 @@ fn one(canvas: &mut impl Canvas, p: &Painted, path: &BezPath) -> Result<(), Erro
         return Ok(());
     }
     let bounds = path.bounding_box();
-    // A backend that cannot take a pixmap gets the image's solid stand-in
-    // rather than a panic, and none of the paint-transform dance below.
-    let img = match &p.paint {
-        Paint::Image { image, fit } if canvas.images() => Some((image, *fit)),
-        _ => None,
+    // A canvas that cannot take this image gets its solid stand-in rather
+    // than a panic, and none of the paint-transform dance below.
+    let (img, b) = match &p.paint {
+        Paint::Image { image, fit } => match canvas.image(image) {
+            Some(b) => (Some((image, *fit)), Some(b)),
+            None => (None, None),
+        },
+        _ => (None, None),
     };
-    canvas.set_paint(match (&p.paint, img.is_some()) {
-        (Paint::Image { .. }, false) => PaintType::Solid(srgb(p.paint.solid())),
+    canvas.set_paint(match (&p.paint, b) {
+        (_, Some(b)) => b,
+        (Paint::Image { .. }, None) => PaintType::Solid(srgb(p.paint.solid())),
         _ => brush(&p.paint, bounds),
     });
     if let Some(t) = &p.text {

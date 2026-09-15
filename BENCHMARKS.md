@@ -35,14 +35,13 @@ cargo run -p mui-vello --release --features cpu --example bench
 cargo run -p mui-vello --release --features cpu,bench-classic --example bench
 ```
 
-**The pills are images only on `vello_cpu`.** `vello_hybrid` wants an atlas id
-from `Renderer::upload_image` and used to *panic* on a pixmap source
-(`pixmap image sources are not supported by Vello Hybrid`); `mui_vello::Gpu`
-now answers `Canvas::images() == false` and paints an image as its flat grey
-stand-in, so the crash is gone but the pixels are not there either. Classic
-takes a `peniko::Image`, not a pixmap. The bench therefore keeps those two
-backends on plain `Raised` fills, so every row is the same 632 ops and the
-same geometry; only the paint type of four of them differs.
+**The pills are images on `vello_cpu` and `vello_hybrid`.** Hybrid wants an
+atlas id, so `mui_vello::Gpu` uploads each buffer once through its `Atlas`
+(`Renderer::upload_image`) and paints by id from then on; the four pills share
+one buffer, so that is one upload per renderer, outside the timed frames.
+Classic takes a `peniko::Image`, not a pixmap, and this bench does not build
+one, so the classic row keeps plain `Raised` fills: the same 632 ops and the
+same geometry, only the paint type of four of them differs.
 
 ## What is being timed
 

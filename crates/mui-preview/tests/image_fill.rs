@@ -10,8 +10,10 @@
 //! ("pixmap image sources are not supported by Vello Hybrid"), so the host's
 //! `Err(e) => eprintln!` arm never sees it and the window dies. That is
 //! exactly what clicking the gallery's Image scene used to do. `mui_vello`'s
-//! `Canvas::images()` is what keeps the pixmap away from this backend; this
-//! renders an image fill through the real renderer to prove it.
+//! `Gpu` now uploads the pixmap into the renderer's atlas through its
+//! `Atlas` and paints by id; this renders an image fill through the real
+//! renderer and reads a pixel back to prove the image, not its grey stand-in,
+//! is what lands. Without an `Atlas` the stand-in must still land, not a panic.
 
 use std::sync::Arc;
 
@@ -20,9 +22,7 @@ use vello_hybrid::{RenderSize, RenderTargetConfig, Renderer, Scene, TextureBindi
 
 const N: u32 = 200;
 
-#[test]
-#[ignore = "needs a GPU"]
-fn an_image_fill_reaches_the_hybrid_renderer_without_panicking() {
+fn render(with_atlas: bool) -> [u8; 4] {
     let instance = wgpu::Instance::default();
     let adapter =
         pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
@@ -65,10 +65,17 @@ fn an_image_fill_reaches_the_hybrid_renderer_without_panicking() {
         },
     );
     scene.reset();
+    let mut ids = mui::vello::ImageIds::default();
     mui::vello::paint(
         &mut mui::vello::Gpu {
             scene: &mut scene,
             resources: &mut resources,
+            atlas: with_atlas.then_some(mui::vello::Atlas {
+                renderer: &mut renderer,
+                device: &device,
+                queue: &queue,
+                ids: &mut ids,
+            }),
         },
         frame.scene,
         mui::vello::kurbo::Affine::IDENTITY,
@@ -86,7 +93,7 @@ fn an_image_fill_reaches_the_hybrid_renderer_without_panicking() {
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format: wgpu::TextureFormat::Rgba8Unorm,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
         view_formats: &[],
     });
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -106,5 +113,71 @@ fn an_image_fill_reaches_the_hybrid_renderer_without_panicking() {
             &TextureBindings::new(),
         )
         .expect("render");
+
+    let row = (N * 4).next_multiple_of(256);
+    let readback = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("readback"),
+        size: u64::from(row) * u64::from(N),
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    encoder.copy_texture_to_buffer(
+        wgpu::TexelCopyTextureInfo {
+            texture: &texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyBufferInfo {
+            buffer: &readback,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(row),
+                rows_per_image: None,
+            },
+        },
+        wgpu::Extent3d {
+            width: N,
+            height: N,
+            depth_or_array_layers: 1,
+        },
+    );
     queue.submit([encoder.finish()]);
+    readback
+        .slice(..)
+        .map_async(wgpu::MapMode::Read, |r| r.expect("map"));
+    device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .expect("poll");
+    let mapped = readback.slice(..).get_mapped_range();
+    // Just inside the first (Cover) pill's top-left cap. Bilinear sampling
+    // blends a 2x2 image into a gradient everywhere but the corners, so this
+    // is where the red texel is still red -- or where the stand-in is.
+    let at = (6 * row + 74 * 4) as usize;
+    let px = [mapped[at], mapped[at + 1], mapped[at + 2], mapped[at + 3]];
+    drop(mapped);
+    readback.unmap();
+    px
+}
+
+#[test]
+#[ignore = "needs a GPU"]
+fn an_image_fill_lands_in_the_atlas_and_on_the_pixel() {
+    let [r, g, b, a] = render(true);
+    assert!(
+        r > 200 && g < 60 && b < 60 && a == 255,
+        "expected red, got {:?}",
+        [r, g, b, a]
+    );
+}
+
+#[test]
+#[ignore = "needs a GPU"]
+fn an_image_fill_without_an_atlas_is_the_stand_in_not_a_panic() {
+    let [r, g, b, a] = render(false);
+    assert!(
+        a == 255 && r.abs_diff(g) < 8 && g.abs_diff(b) < 8,
+        "expected grey, got {:?}",
+        [r, g, b, a]
+    );
 }

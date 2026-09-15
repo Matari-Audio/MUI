@@ -210,11 +210,12 @@ stretched (`Fill`). Decoding is the host's job: no library crate takes an
 image dependency. `Path::from_svg_data` turns an icon's `d` attribute into a
 `Path` (arcs included), so a symbol is geometry like everything else.
 
-**An image only rasterises on `vello_cpu` today.** `vello_hybrid` takes an
-atlas id, not a pixmap, and panics on one, so `mui_vello`'s `Gpu` reports
-`Canvas::images() == false` and flattens an image fill to the mid grey
-`Paint::solid` already uses for contrast. The upgrade is `Renderer::upload_image`
-and an atlas id map on `Gpu`; until then an icon path is the portable symbol.
+`vello_cpu` paints the pixmap itself. `vello_hybrid` wants an atlas id and
+panics on a pixmap, so `mui_vello::Gpu` carries an optional `Atlas` -- the
+renderer, device, queue and a host-owned `ImageIds` -- and uploads each image
+buffer once through `Renderer::upload_image`, then paints by id. A `Gpu` built
+without an `Atlas` flattens an image fill to the mid grey `Paint::solid`
+already uses for contrast rather than crashing.
 
 ## Accessibility
 

@@ -50,8 +50,9 @@ public function and a test behind it.
 - [x] Plugin parameter gestures: `Ui::edit` / `Frame::edits` bracket every
       capture, cancelled ones included.
 - [x] Images: `Image::rgba` + `Fill::Image` with `Cover`/`Contain`/`Fill`,
-      and `Path::from_svg_data` for an icon's `d` attribute. Rasterises on
-      `vello_cpu`; `vello_hybrid` needs the atlas upload below.
+      and `Path::from_svg_data` for an icon's `d` attribute. `vello_cpu`
+      paints the pixmap; `vello_hybrid` uploads it once through `Gpu`'s
+      `Atlas` and paints by id.
 - [x] AccessKit: `mui-access` turns a `ResolvedScene` plus a `Semantics` map
       into a `TreeUpdate`.
 - [x] `mui_vello::PathCache` / `paint_cached`: a still frame re-encodes
@@ -71,10 +72,9 @@ public function and a test behind it.
 - [ ] `vello_hybrid` against classic `vello`, re-measured on Windows — the
       hybrid choice was made on Linux numbers only.
 - [ ] Blurred shadows on welded shapes (still drawn sharp) and blend modes.
-- [ ] Image fills on `vello_hybrid`: `Renderer::upload_image` wants a
-      `&mut Renderer`, a device, a queue and a live encoder, so `mui_vello::Gpu`
-      has to carry an atlas id map and the host has to open its encoder before
-      painting, not after. Until then `Gpu` paints an image as a flat grey.
+- [ ] Image eviction: `ImageIds` never forgets a buffer, so a plugin that
+      streams images through the atlas grows it until `upload_image` panics.
+      `Renderer::destroy_image` is the other half.
 
 ## Order
 

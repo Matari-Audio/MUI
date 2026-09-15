@@ -517,7 +517,7 @@ impl PreviewScene for Images {
         "Image"
     }
     fn about(&self) -> &'static str {
-        "The icon is a parsed SVG path. The two pills are Fill::Image -- flat grey here, because this gallery draws through vello_hybrid, which needs an atlas id."
+        "The icon is a parsed SVG path. The two pills are Fill::Image, uploaded once into vello_hybrid's atlas and painted by id."
     }
     fn specimen(&mut self, _: &mut Ui) -> El {
         let icon = Path::from_svg_data(Self::ICON).ok();
@@ -540,7 +540,7 @@ impl PreviewScene for Images {
                 .radius(16.0)
                 .fill(Fill::Image(self.image.clone(), Fit::Contain))
                 .id("img-card"),
-            caption("images rasterise on vello_cpu; see the snapshot test").fill(Role::Dim),
+            caption("Cover crops, Contain letterboxes; the same buffer on vello_cpu is the snapshot test").fill(Role::Dim),
         ])
         .gap(M)
         .pad(L)

@@ -102,6 +102,7 @@ async fn rasterise(resolved: &mui_core::ResolvedScene) -> Vec<u8> {
         &mut Gpu {
             scene: &mut scene,
             resources: &mut resources,
+            atlas: None,
         },
         resolved,
         Affine::translate((32.0, 32.0)),

@@ -32,6 +32,7 @@ pub struct Gpu {
     config: wgpu::SurfaceConfiguration,
     renderer: Renderer,
     resources: Resources,
+    ids: mui::vello::ImageIds,
     vello: Scene,
 }
 
@@ -104,6 +105,7 @@ impl Gpu {
             config,
             renderer,
             resources,
+            ids: Default::default(),
         }
     }
 
@@ -145,6 +147,12 @@ impl Gpu {
         mui::vello::Gpu {
             scene: &mut self.vello,
             resources: &mut self.resources,
+            atlas: Some(mui::vello::Atlas {
+                renderer: &mut self.renderer,
+                device: &self.device,
+                queue: &self.queue,
+                ids: &mut self.ids,
+            }),
         }
     }
 

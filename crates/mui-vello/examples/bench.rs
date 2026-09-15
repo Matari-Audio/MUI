@@ -82,8 +82,8 @@ which is what the second knob is for when the resonance is high";
 /// 40 knobs, 8 sliders, 200 labels, a clipped 60-row list, two curves, three
 /// floats, 20 wrapped paragraphs, 4 image-filled pills and 6 cards whose fill
 /// is spring-driven -- roughly what a synth editor puts on screen at once.
-/// `images` is false for the backends that cannot take a pixmap image source
-/// (see `run`); the four pills are then plain fills.
+/// `images` is false for classic vello (see `run`); the four pills are then
+/// plain fills.
 fn editor(ui: &mut Ui, app: &mut App, images: bool) -> El {
     let knobs: Vec<El> = (0..40)
         .map(|i| {
@@ -229,9 +229,8 @@ impl Case {
 
 /// Drive `WARM + N` frames of `case` and hand each resolved scene to `draw`,
 /// which returns (encode ms, render ms).
-/// `vello_hybrid` rejects a pixmap image source outright and classic vello
-/// wants a `peniko::Image`; only `vello_cpu` paints the pills as images, so
-/// the others get the same scene with four solid fills instead.
+/// Classic vello wants a `peniko::Image` this bench does not build, so it
+/// alone gets the same scene with four solid fills instead.
 fn run(
     backend: &'static str,
     case: Case,
@@ -471,6 +470,7 @@ async fn gpu() -> Option<(wgpu::AdapterInfo, Vec<Row>)> {
             },
         );
         let mut scene = vello_hybrid::Scene::new(W, H);
+        let mut ids = mui_vello::ImageIds::default();
         let mut draw = |resolved: &ResolvedScene| {
             scene.reset();
             let t = Instant::now();
@@ -478,6 +478,12 @@ async fn gpu() -> Option<(wgpu::AdapterInfo, Vec<Row>)> {
                 &mut Gpu {
                     scene: &mut scene,
                     resources: &mut resources,
+                    atlas: Some(mui_vello::Atlas {
+                        renderer: &mut renderer,
+                        device: &device,
+                        queue: &queue,
+                        ids: &mut ids,
+                    }),
                 },
                 resolved,
                 Affine::IDENTITY,
@@ -508,7 +514,7 @@ async fn gpu() -> Option<(wgpu::AdapterInfo, Vec<Row>)> {
             (encode, since(t))
         };
         for c in CASES {
-            rows.push(run("vello_hybrid", c, font, false, &mut draw));
+            rows.push(run("vello_hybrid", c, font, true, &mut draw));
         }
     }
 
@@ -526,6 +532,7 @@ async fn gpu() -> Option<(wgpu::AdapterInfo, Vec<Row>)> {
         );
         let mut scene = vello_hybrid::Scene::new(W, H);
         let mut cache = PathCache::new();
+        let mut ids = mui_vello::ImageIds::default();
         let mut draw = |resolved: &ResolvedScene| {
             scene.reset();
             let t = Instant::now();
@@ -533,6 +540,12 @@ async fn gpu() -> Option<(wgpu::AdapterInfo, Vec<Row>)> {
                 &mut Gpu {
                     scene: &mut scene,
                     resources: &mut resources,
+                    atlas: Some(mui_vello::Atlas {
+                        renderer: &mut renderer,
+                        device: &device,
+                        queue: &queue,
+                        ids: &mut ids,
+                    }),
                 },
                 resolved,
                 Affine::IDENTITY,
@@ -564,7 +577,7 @@ async fn gpu() -> Option<(wgpu::AdapterInfo, Vec<Row>)> {
             (encode, since(t))
         };
         for c in CASES {
-            rows.push(run("vello_hybrid cached", c, font, false, &mut draw));
+            rows.push(run("vello_hybrid cached", c, font, true, &mut draw));
         }
     }
 
