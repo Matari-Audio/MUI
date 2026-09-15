@@ -367,6 +367,9 @@ pub fn brush(p: &Paint, bounds: Rect) -> PaintType {
 ///
 /// Shadows take Vello's analytic blurred rectangle when the outline is one;
 /// a blurred *welded* outline has no fast path and draws unblurred.
+///
+/// Every path is converted afresh. [`paint_cached`] is the same walk with the
+/// conversion remembered between frames.
 pub fn paint(
     canvas: &mut impl Canvas,
     scene: &ResolvedScene,
@@ -374,19 +377,177 @@ pub fn paint(
 ) -> Result<(), Error> {
     canvas.set_transform(transform);
     for p in &scene.paint {
-        one(canvas, p)?;
+        if p.layer == Layer::Unclip {
+            canvas.pop_clip();
+            continue;
+        }
+        one(canvas, p, &bez_path(&p.path, ARC_TOLERANCE)?)?;
     }
     Ok(())
 }
 
-fn one(canvas: &mut impl Canvas, p: &Painted) -> Result<(), Error> {
-    if p.layer == Layer::Unclip {
-        canvas.pop_clip();
-        return Ok(());
+/// One converted path, and the frame it was last wanted on.
+struct Entry {
+    bez: Arc<BezPath>,
+    frame: u64,
+}
+
+/// Remembers [`bez_path`] between frames, so a surface that did not change
+/// is not validated, re-flattened and re-allocated every time it is drawn.
+///
+/// A static frame is the common case in a plugin UI: one knob moves and six
+/// hundred other outlines are byte-identical to the last frame. The cache
+/// keys on a fingerprint of everything the conversion reads -- the node key,
+/// the layer, every coordinate, the stroke width and the blur -- so a changed
+/// path simply misses. Entries not wanted during a [`paint_cached`] call are
+/// dropped at the end of it, which is what keeps a scrolling list bounded.
+// ponytail: a 64-bit fingerprint, not a stored copy of the path -- a
+// collision would draw the wrong outline. At ~1e3 live entries that is a
+// 1e-13 chance; compare `Painted::path` on a hit if that is ever too much.
+#[derive(Default)]
+pub struct PathCache {
+    entries: std::collections::HashMap<u64, Entry>,
+    frame: u64,
+    hits: u64,
+    misses: u64,
+}
+
+impl PathCache {
+    pub fn new() -> Self {
+        Self::default()
     }
-    let path = bez_path(&p.path, ARC_TOLERANCE)?;
+    /// Live entries.
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+    /// Conversions served from the cache, and conversions actually run,
+    /// since it was built.
+    pub fn hits(&self) -> u64 {
+        self.hits
+    }
+    pub fn misses(&self) -> u64 {
+        self.misses
+    }
+
+    /// The Bézier form of `p`, converted only if it is new or changed.
+    pub fn bez(&mut self, p: &Painted) -> Result<Arc<BezPath>, Error> {
+        let (key, frame) = (fingerprint(p), self.frame);
+        if let Some(e) = self.entries.get_mut(&key) {
+            e.frame = frame;
+            self.hits += 1;
+            return Ok(e.bez.clone());
+        }
+        self.misses += 1;
+        let bez = Arc::new(bez_path(&p.path, ARC_TOLERANCE)?);
+        self.entries.insert(
+            key,
+            Entry {
+                bez: bez.clone(),
+                frame,
+            },
+        );
+        Ok(bez)
+    }
+}
+
+/// FNV-1a over everything [`PathCache`] must notice a change in.
+///
+/// Folded eight bytes at a time rather than one: this runs over every
+/// coordinate of every path on screen, and byte-at-a-time FNV over that is
+/// slower than the conversion it is trying to avoid.
+fn fingerprint(p: &Painted) -> u64 {
+    let mut h = 0xcbf2_9ce4_8422_2325_u64;
+    let mut eat = |w: u64| h = (h ^ w).wrapping_mul(0x100_0000_01b3);
+    for c in p.key.as_bytes().chunks(8) {
+        let mut w = [0u8; 8];
+        w[..c.len()].copy_from_slice(c);
+        eat(u64::from_ne_bytes(w));
+    }
+    let (tag, n) = match p.layer {
+        Layer::Shadow => (0, 0),
+        Layer::Fill => (1, 0),
+        Layer::Shell(i) => (2, i),
+        Layer::Stroke => (3, 0),
+        Layer::Text => (4, 0),
+        Layer::Draw(i) => (5, i),
+        Layer::Clip => (6, 0),
+        Layer::Unclip => (7, 0),
+    };
+    eat(tag);
+    eat(n as u64);
+    eat(p.width.to_bits());
+    eat(p.blur.to_bits());
+    for command in &p.path.commands {
+        match *command {
+            PathCommand::MoveTo(a) => {
+                eat(0);
+                eat(a.x.to_bits() ^ a.y.rotate());
+            }
+            PathCommand::LineTo(a) => {
+                eat(1);
+                eat(a.x.to_bits() ^ a.y.rotate());
+            }
+            PathCommand::ArcTo(a) => {
+                eat(2);
+                eat(a.center.x.to_bits() ^ a.center.y.rotate());
+                eat(a.radius.to_bits() ^ a.start_angle.rotate());
+                eat(a.sweep.to_bits() ^ a.to.x.rotate());
+                eat(a.to.y.to_bits());
+            }
+            PathCommand::CubicTo(a, b, c) => {
+                eat(3);
+                eat(a.x.to_bits() ^ a.y.rotate());
+                eat(b.x.to_bits() ^ b.y.rotate());
+                eat(c.x.to_bits() ^ c.y.rotate());
+            }
+            PathCommand::Close => eat(4),
+        }
+    }
+    h
+}
+
+/// Pack two coordinates into one FNV round without letting a swap of the
+/// pair go unnoticed.
+trait Rotate {
+    fn rotate(self) -> u64;
+}
+impl Rotate for f64 {
+    fn rotate(self) -> u64 {
+        self.to_bits().rotate_left(32)
+    }
+}
+
+/// [`paint`], with the path conversion remembered in `cache` between frames.
+///
+/// Entries untouched by this call are dropped, so the cache tracks whatever
+/// is on screen rather than everything that ever was.
+pub fn paint_cached(
+    canvas: &mut impl Canvas,
+    scene: &ResolvedScene,
+    transform: Affine,
+    cache: &mut PathCache,
+) -> Result<(), Error> {
+    canvas.set_transform(transform);
+    cache.frame += 1;
+    let frame = cache.frame;
+    for p in &scene.paint {
+        if p.layer == Layer::Unclip {
+            canvas.pop_clip();
+            continue;
+        }
+        let bez = cache.bez(p)?;
+        one(canvas, p, &bez)?;
+    }
+    cache.entries.retain(|_, e| e.frame == frame);
+    Ok(())
+}
+
+fn one(canvas: &mut impl Canvas, p: &Painted, path: &BezPath) -> Result<(), Error> {
     if p.layer == Layer::Clip {
-        canvas.push_clip(&path);
+        canvas.push_clip(path);
         return Ok(());
     }
     let bounds = path.bounding_box();
@@ -425,10 +586,10 @@ fn one(canvas: &mut impl Canvas, p: &Painted) -> Result<(), Error> {
         }
         // ponytail: blur on a welded outline is drawn sharp; a blur filter
         // layer is the upgrade if a merged shadow ever needs it.
-        (_, _, false) => canvas.fill_path(&path),
+        (_, _, false) => canvas.fill_path(path),
         (_, _, true) => {
             canvas.set_stroke(Stroke::new(p.width));
-            canvas.stroke_path(&path);
+            canvas.stroke_path(path);
         }
     }
     if image.is_some() {
@@ -566,6 +727,57 @@ mod snapshot {
             "the image itself is missing: {:?}",
             at(14, 5)
         );
+    }
+
+    /// Second frame, same tree: every conversion is a hit and hands back the
+    /// very same `BezPath`. A surface that goes away takes its entry with it.
+    #[test]
+    fn a_static_frame_reuses_its_paths_and_a_gone_one_is_dropped() {
+        let tree = |n: usize| {
+            let kids: Vec<El> = (0..n)
+                .map(|i| {
+                    leaf(20., 20.)
+                        .fill(Role::Primary)
+                        .radius(6.)
+                        .id(format!("l{i}"))
+                })
+                .collect();
+            SceneSpec::new(column(kids).pad(4.)).offered(Size::new(60., 200.))
+        };
+        let scene = resolve_scene(&tree(3)).unwrap();
+        let mut cache = PathCache::new();
+        let mut ctx = vello_cpu::RenderContext::new(60, 200);
+        let mut res = vello_cpu::Resources::default();
+        let mut draw = |scene: &ResolvedScene, cache: &mut PathCache| {
+            ctx.reset();
+            paint_cached(
+                &mut Cpu {
+                    ctx: &mut ctx,
+                    resources: &mut res,
+                },
+                scene,
+                Affine::IDENTITY,
+                cache,
+            )
+            .unwrap();
+        };
+
+        draw(&scene, &mut cache);
+        let (n, first) = (cache.misses(), cache.bez(&scene.paint[0]).unwrap());
+        assert_eq!(cache.hits(), 1, "the first frame converted everything");
+        assert!(n >= 3, "only {n} paths for three leaves");
+
+        draw(&scene, &mut cache);
+        assert_eq!(
+            cache.misses(),
+            n,
+            "a byte-identical frame reconverted a path"
+        );
+        assert!(Arc::ptr_eq(&first, &cache.bez(&scene.paint[0]).unwrap()));
+
+        let full = cache.len();
+        draw(&resolve_scene(&tree(2)).unwrap(), &mut cache);
+        assert!(cache.len() < full, "the gone leaf kept its entry: {full}");
     }
 
     /// A clip layer actually clips: the oversized child stops at its parent.
