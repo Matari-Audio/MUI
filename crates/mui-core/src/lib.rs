@@ -4,10 +4,25 @@
 //! geometry stay separate: a node's outline may be its own rounded frame or
 //! the filleted union of its children, and every shell is a true parallel
 //! inset of the outline before it.
+//!
+//! The compact spelling, which says the same thing:
+//!
+//! ```
+//! use mui_core::prelude::*;
+//! # let _before =
+//! column([row([text("Filter"), spacer(), text("on")])
+//!     .align(Align::Center)
+//!     .justify(Justify::SpaceBetween)
+//!     .width(Len::Px(240.))])
+//! # ; let _after =
+//! col![row!["Filter", spacer(), "on"].between().w(240)]
+//! # ;
+//! ```
 #![forbid(unsafe_code)]
 
 mod color;
 pub mod curve;
+mod dsl;
 mod element;
 mod motion;
 mod scene;
@@ -15,6 +30,7 @@ mod style;
 mod theme;
 
 pub use color::{Color, Mode, Palette, Pigment};
+pub use dsl::{caption, label, title, IntoLen, Sugar};
 pub use element::{
     canvas, column, grid, leaf, overlay, row, spacer, text, Canvas, Content, Draw, El, Element,
     IntoEl, Styled,
@@ -36,9 +52,9 @@ pub use theme::{CornerProfile, Theme};
 pub mod prelude {
     pub use crate::Role::*;
     pub use crate::{
-        canvas, column, grid, leaf, overlay, resolve_scene, row, spacer, text, Align, Color,
-        Cursor, Draw, El, Fill, Gradient, IntoEl, Justify, Len, Radius, Role, SceneSpec, Shadow,
-        Size, Style, Styled, Theme,
+        canvas, caption, col, column, grid, label, leaf, overlay, resolve_scene, row, spacer,
+        stack, text, title, Align, Color, Cursor, Draw, El, Fill, Gradient, IntoEl, IntoLen,
+        Justify, Len, Radius, Role, SceneSpec, Shadow, Size, Style, Styled, Sugar, Theme,
     };
     pub use mui_geometry::{Path, Point};
     pub use mui_layout::SpacingToken::{Xl, Xs, L, M, S};
