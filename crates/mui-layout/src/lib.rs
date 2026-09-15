@@ -440,7 +440,8 @@ impl<P> Node<P> {
         self.grow = weight;
         self
     }
-    pub fn fill(self) -> Self {
+    /// `grow(1.0)`: take a share of the surplus.
+    pub fn expand(self) -> Self {
         self.grow(1.0)
     }
     /// Start from this main-axis size instead of the measured one, before any

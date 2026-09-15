@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 use crate::color::Palette;
+use mui_layout::SpacingScale;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CornerProfile {
@@ -32,92 +33,14 @@ impl Default for CornerProfile {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SpacingToken {
-    Xs,
-    S,
-    M,
-    L,
-    Xl,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct SpacingScale {
-    pub xs: f64,
-    pub s: f64,
-    pub m: f64,
-    pub l: f64,
-    pub xl: f64,
-}
-impl Default for SpacingScale {
-    fn default() -> Self {
-        Self::DEFAULT
-    }
-}
-impl SpacingScale {
-    pub const DEFAULT: Self = Self {
-        xs: 4.0,
-        s: 8.0,
-        m: 12.0,
-        l: 18.0,
-        xl: 28.0,
-    };
-
-    pub fn get(self, t: SpacingToken) -> f64 {
-        match t {
-            SpacingToken::Xs => self.xs,
-            SpacingToken::S => self.s,
-            SpacingToken::M => self.m,
-            SpacingToken::L => self.l,
-            SpacingToken::Xl => self.xl,
-        }
-    }
-    pub fn valid(self) -> bool {
-        [self.xs, self.s, self.m, self.l, self.xl]
-            .iter()
-            .all(|v| v.is_finite() && *v >= 0.0)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Spacing {
-    Px(f64),
-    Token(SpacingToken),
-}
-impl Spacing {
-    pub const fn px(v: f64) -> Self {
-        Self::Px(v)
-    }
-    pub const fn xs() -> Self {
-        Self::Token(SpacingToken::Xs)
-    }
-    pub const fn s() -> Self {
-        Self::Token(SpacingToken::S)
-    }
-    pub const fn m() -> Self {
-        Self::Token(SpacingToken::M)
-    }
-    pub const fn l() -> Self {
-        Self::Token(SpacingToken::L)
-    }
-    pub const fn xl() -> Self {
-        Self::Token(SpacingToken::Xl)
-    }
-    pub fn resolve(self, theme: &Theme) -> Option<f64> {
-        let v = match self {
-            Self::Px(v) => v,
-            Self::Token(t) => theme.spacing.get(t),
-        };
-        (v.is_finite() && v >= 0.0).then_some(v)
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Theme {
     pub corners: CornerProfile,
     pub spacing: SpacingScale,
     pub palette: Palette,
     pub stroke_width: f64,
+    /// Default text size in pixels.
+    pub text: f64,
 }
 impl Default for Theme {
     fn default() -> Self {
@@ -147,6 +70,7 @@ impl Theme {
         spacing: SpacingScale::DEFAULT,
         palette: Palette::NEUTRAL,
         stroke_width: 1.5,
+        text: 14.0,
     };
 
     pub fn valid(self) -> bool {
@@ -155,5 +79,7 @@ impl Theme {
             && self.palette.valid()
             && self.stroke_width.is_finite()
             && self.stroke_width >= 0.0
+            && self.text.is_finite()
+            && self.text > 0.0
     }
 }

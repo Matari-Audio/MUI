@@ -10,3 +10,7 @@ license.workspace = true
 color = "0.3"
 mui-geometry = { path = "../mui-geometry" }
 mui-layout = { path = "../mui-layout" }
+mui-text = { path = "../mui-text" }
+
+[dev-dependencies]
+epaint_default_fonts = "0.36"
