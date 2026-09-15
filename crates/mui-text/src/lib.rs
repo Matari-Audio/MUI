@@ -364,37 +364,6 @@ impl OutlinePen for PathPen {
     }
 }
 
-/// The face's own vertical metrics at one em size, y-down: every field is a
-/// positive distance from the baseline, so a caller can align two faces on it.
-///
-/// `cap_height` and `x_height` are zero when the face declares neither -- the
-/// honest reading of "this font has no OS/2 table", not an error.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Metrics {
-    pub ascent: f64,
-    pub descent: f64,
-    pub line_gap: f64,
-    pub cap_height: f64,
-    pub x_height: f64,
-}
-
-/// Vertical metrics without laying anything out, at the face's default
-/// variation position.
-pub fn metrics(font: &[u8], size_px: f64) -> Result<Metrics, Error> {
-    let size = checked_size(size_px)?;
-    let font = FontRef::new(font).map_err(|e| Error::Font(format!("{e}")))?;
-    let location = font.axes().location(std::iter::empty::<Axis<'_>>());
-    let m = font.metrics(Size::new(size), LocationRef::from(&location));
-    Ok(Metrics {
-        ascent: checked_metric(m.ascent, "font metrics")?,
-        // Negative in font space, positive below the baseline here.
-        descent: checked_metric(-m.descent, "font metrics")?,
-        line_gap: checked_metric(m.leading, "font metrics")?,
-        cap_height: checked_metric(m.cap_height.unwrap_or(0.), "font metrics")?,
-        x_height: checked_metric(m.x_height.unwrap_or(0.), "font metrics")?,
-    })
-}
-
 /// One advance per `char` of `text`, at the default variation position. The
 /// only allocation the measuring functions make.
 fn advances(font: &[u8], text: &str, size_px: f64) -> Result<Vec<f64>, Error> {
@@ -819,15 +788,6 @@ mod measure_tests {
             .into_iter()
             .map(|l| &text[l.text_range])
             .collect()
-    }
-
-    #[test]
-    fn metrics_straddle_the_baseline() {
-        let m = metrics(HACK_REGULAR, SIZE).unwrap();
-        assert!(m.ascent > 0., "{m:?}");
-        assert!(m.descent > 0., "positive below the baseline: {m:?}");
-        assert!(m.line_gap >= 0.);
-        assert!(m.x_height > 0. && m.x_height < m.cap_height, "{m:?}");
     }
 
     #[test]

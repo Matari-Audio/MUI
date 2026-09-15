@@ -259,7 +259,7 @@ pub fn text_input(ui: &mut Ui, id: &str, value: &mut String) -> El {
     }
     ui.set_sel(id, anchor, caret);
 
-    let x = |at: usize| ui.advance(&value[..byte(value, at)], size);
+    let x = |at: usize| ui.caret_x(value, size, byte(value, at));
     let (lo, hi) = (x(anchor.min(caret)), x(anchor.max(caret)));
     let on = focused && ui.blink();
     overlay([

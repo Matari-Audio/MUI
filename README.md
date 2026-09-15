@@ -95,7 +95,7 @@ assert_eq!(scene.surface("tab").unwrap().frame.size.width, 92.0);
 | `.span(2)`, `.order(-1)` | a grid cell two columns wide; placed before its declaration slot |
 | `.push(child)`, `.baseline()`, `.lines(2)` | append to a container, sit text children on one baseline, cap a wrapped label |
 | `.fill(Primary)`, `.fill(Color::..)`, `.fill(Gradient::vertical(a, b))` | a palette role, a literal, a gradient |
-| `.fill(Fill::Image(img, Fit::Cover))` | an RGBA buffer as a fill: `Cover`, `Contain` or `Fill` |
+| `.fill(Fill::Image(img, Fit::Cover))` | an RGBA buffer as a fill: `Cover`, `Contain` or `Fill` (rasterises on `vello_cpu` only) |
 | `.stroke(Ink)`, `.radius(8.0)`, `.pill()`, `.shadow(Shadow::soft(12.0))` | outline, corners, shadow |
 | `.animate()`, `.transition(Spring::new(0.3, 1.0))` | this node's fill, stroke, radius, text size and shadow spring to their new values |
 | `.shell(d, fill)` | a parallel inset of the outline before it, cumulative |
@@ -210,6 +210,12 @@ stretched (`Fill`). Decoding is the host's job: no library crate takes an
 image dependency. `Path::from_svg_data` turns an icon's `d` attribute into a
 `Path` (arcs included), so a symbol is geometry like everything else.
 
+**An image only rasterises on `vello_cpu` today.** `vello_hybrid` takes an
+atlas id, not a pixmap, and panics on one, so `mui_vello`'s `Gpu` reports
+`Canvas::images() == false` and flattens an image fill to the mid grey
+`Paint::solid` already uses for contrast. The upgrade is `Renderer::upload_image`
+and an atlas id map on `Gpu`; until then an icon path is the portable symbol.
+
 ## Accessibility
 
 `mui-access` turns a `ResolvedScene` into an `accesskit::TreeUpdate`:
@@ -269,7 +275,7 @@ light-theme half because there is nothing in it a mode could contradict.
 | `mui-text` | glyph and string outlines from a (variable) font |
 | `mui-core` | `El` + `Styled` DSL and the `row!`/`col!`/`stack!`/`grid!` sugar, roles and palette, `canvas` draws, clip and float layers, the walk from tree to `ResolvedScene` paint list, the frame-to-frame `TextCache`, `Spring` |
 | `mui-input` | `Input` (pointer, wheel, keys, text), hit testing against real paths and their clips, press capture, hover, click, drag and drop |
-| `mui-vello` | the `Canvas` trait and its `Gpu` / `Cpu` wrappers over `vello_hybrid` and `vello_cpu`: fills, strokes, image fills, blurred shadows, clip push/pop, and hinted glyph runs through Vello's own atlas; `paint(canvas, scene, transform)`, and `paint_cached` with a `PathCache` that keeps a still frame's arc-to-cubic conversions |
+| `mui-vello` | the `Canvas` trait and its `Gpu` / `Cpu` wrappers over `vello_hybrid` and `vello_cpu`: fills, strokes, image fills (`Cpu` only -- `Gpu` flattens them, see Images), clip push/pop, and hinted glyph runs through Vello's own atlas; `paint(canvas, scene, transform)`, and `paint_cached` with a `PathCache` that keeps a still frame's arc-to-cubic conversions |
 | `mui-access` | a `ResolvedScene` plus a `Semantics` map as an `accesskit::TreeUpdate` |
 | `mui` | `Ui` runtime, focus and wheel scrolling, tooltips, transitions, tweens, gesture edits, and widgets (`slider`, `knob`, `toggle`, `button`, `text_input`); the `prelude` |
 | `mui-tessellate`, `mui-egui` | triangle meshes and the egui debug adapter |

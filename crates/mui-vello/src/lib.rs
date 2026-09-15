@@ -150,6 +150,12 @@ pub trait Canvas {
     /// a canvas that never paints an image may leave both of these alone.
     fn set_paint_transform(&mut self, _t: Affine) {}
     fn reset_paint_transform(&mut self) {}
+    /// Whether this backend can take a pixmap image source. `vello_hybrid`
+    /// cannot -- it wants an atlas id and *panics* on a pixmap -- so it says
+    /// no here and gets [`mui_core::Paint::solid`]'s stand-in instead.
+    fn images(&self) -> bool {
+        true
+    }
     fn set_stroke(&mut self, s: Stroke);
     fn fill_path(&mut self, p: &BezPath);
     fn stroke_path(&mut self, p: &BezPath);
@@ -209,8 +215,11 @@ pub struct Cpu<'a> {
 }
 
 macro_rules! wrapper {
-    ($w:ty, $inner:ident) => {
+    ($w:ty, $inner:ident, $images:literal) => {
         impl Canvas for $w {
+            fn images(&self) -> bool {
+                $images
+            }
             fn set_transform(&mut self, t: Affine) {
                 self.$inner.set_transform(t)
             }
@@ -258,9 +267,10 @@ macro_rules! wrapper {
         }
     };
 }
-wrapper!(Gpu<'_>, scene);
+// `vello_hybrid` panics outright on a pixmap image source; `vello_cpu` takes one.
+wrapper!(Gpu<'_>, scene, false);
 #[cfg(feature = "cpu")]
-wrapper!(Cpu<'_>, ctx);
+wrapper!(Cpu<'_>, ctx, true);
 
 fn srgb(c: mui_core::Color) -> AlphaColor<Srgb> {
     c.to_srgb()
@@ -269,10 +279,12 @@ fn srgb(c: mui_core::Color) -> AlphaColor<Srgb> {
 /// One premultiplied [`Pixmap`] per distinct image buffer. MUI hands over
 /// straight RGBA -- what a decoder produces -- and premultiplying a photo is
 /// far too much work to redo every frame.
-// ponytail: same never-evicted interning as `FONTS`, and the pixmap travels
-// with the scene packet each frame rather than living in the GPU atlas;
-// `Renderer::upload_image` is the upgrade, but it needs a device and queue
-// that this crate deliberately never sees.
+// ponytail: same never-evicted interning as `FONTS`, and a pixmap only ever
+// reaches `vello_cpu` -- `vello_hybrid` panics on one and so declares
+// `Canvas::images() == false`, which flattens an image to a grey stand-in.
+// `Renderer::upload_image` is the upgrade that makes images real on the GPU,
+// but it wants a `&mut Renderer`, a device, a queue and a live encoder, none
+// of which this crate sees; wiring it means `Gpu` carrying an atlas id map.
 #[allow(clippy::type_complexity)]
 static IMAGES: Mutex<Vec<(Arc<[u8]>, Arc<Pixmap>)>> = Mutex::new(Vec::new());
 
@@ -551,7 +563,16 @@ fn one(canvas: &mut impl Canvas, p: &Painted, path: &BezPath) -> Result<(), Erro
         return Ok(());
     }
     let bounds = path.bounding_box();
-    canvas.set_paint(brush(&p.paint, bounds));
+    // A backend that cannot take a pixmap gets the image's solid stand-in
+    // rather than a panic, and none of the paint-transform dance below.
+    let img = match &p.paint {
+        Paint::Image { image, fit } if canvas.images() => Some((image, *fit)),
+        _ => None,
+    };
+    canvas.set_paint(match (&p.paint, img.is_some()) {
+        (Paint::Image { .. }, false) => PaintType::Solid(srgb(p.paint.solid())),
+        _ => brush(&p.paint, bounds),
+    });
     if let Some(t) = &p.text {
         canvas.glyphs(&t.font, t.size, (t.origin.x, t.origin.y), &t.glyphs);
         return Ok(());
@@ -559,22 +580,19 @@ fn one(canvas: &mut impl Canvas, p: &Painted, path: &BezPath) -> Result<(), Erro
     // An image paint lives in pixel space; this is what puts it on the box.
     // `Extend::Pad` would smear the edge pixels across a letterbox, so
     // `Contain` also clips to the rectangle the image actually occupies.
-    let image = match &p.paint {
-        Paint::Image { image, fit } => {
-            let t = image_transform(image, *fit, bounds);
-            canvas.set_paint_transform(t);
-            (*fit == Fit::Contain).then(|| {
-                let r = t.transform_rect_bbox(Rect::new(
-                    0.,
-                    0.,
-                    f64::from(image.width),
-                    f64::from(image.height),
-                ));
-                canvas.push_clip(&r.to_path(0.1));
-            })
-        }
-        _ => None,
-    };
+    let clipped = img.and_then(|(image, fit)| {
+        let t = image_transform(image, fit, bounds);
+        canvas.set_paint_transform(t);
+        (fit == Fit::Contain).then(|| {
+            let r = t.transform_rect_bbox(Rect::new(
+                0.,
+                0.,
+                f64::from(image.width),
+                f64::from(image.height),
+            ));
+            canvas.push_clip(&r.to_path(0.1));
+        })
+    });
     match (p.blur > 0.0, p.rect, p.width > 0.0) {
         (true, Some(rr), _) => {
             let b = rr.bounds();
@@ -592,10 +610,10 @@ fn one(canvas: &mut impl Canvas, p: &Painted, path: &BezPath) -> Result<(), Erro
             canvas.stroke_path(path);
         }
     }
-    if image.is_some() {
+    if clipped.is_some() {
         canvas.pop_clip();
     }
-    if matches!(p.paint, Paint::Image { .. }) {
+    if img.is_some() {
         canvas.reset_paint_transform();
     }
     Ok(())

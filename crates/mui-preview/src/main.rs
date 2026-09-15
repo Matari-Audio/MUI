@@ -359,14 +359,15 @@ impl App {
         input.clipboard = Some(self.clipboard.clone());
         let root = self.tree(w, h);
         let (animating, cursor) = match self.ui.frame(root, Some(Size::new(w, h)), input, dt) {
+            // Destructured first: `f` borrows `self.ui`, and handing the
+            // copy to the scene needs `self` back.
             Ok(f) => {
-                let copied = f.clipboard.clone();
-                let (a, c) = (f.animating, f.cursor);
+                let (animating, cursor, copied) = (f.animating, f.cursor, f.clipboard.clone());
                 if let Some(s) = copied {
                     self.scenes[self.selected].clipboard(&s);
                     self.clipboard = s;
                 }
-                (a, c)
+                (animating, cursor)
             }
             Err(e) => {
                 eprintln!("frame: {e}");

@@ -35,13 +35,14 @@ cargo run -p mui-vello --release --features cpu --example bench
 cargo run -p mui-vello --release --features cpu,bench-classic --example bench
 ```
 
-**The pills are images only on `vello_cpu`.** `vello_hybrid` panics on a
-pixmap image source outright (`pixmap image sources are not supported by Vello
-Hybrid`) — it wants an atlas id from `Renderer::upload_image`, which is the
-GPU registration `mui-vello` has not done — and classic takes a
-`peniko::Image`, not a pixmap. On those backends the same four pills are plain
-`Raised` fills, so every row is the same 632 ops and the same geometry; only
-the paint type of four of them differs.
+**The pills are images only on `vello_cpu`.** `vello_hybrid` wants an atlas id
+from `Renderer::upload_image` and used to *panic* on a pixmap source
+(`pixmap image sources are not supported by Vello Hybrid`); `mui_vello::Gpu`
+now answers `Canvas::images() == false` and paints an image as its flat grey
+stand-in, so the crash is gone but the pixels are not there either. Classic
+takes a `peniko::Image`, not a pixmap. The bench therefore keeps those two
+backends on plain `Raised` fills, so every row is the same 632 ops and the
+same geometry; only the paint type of four of them differs.
 
 ## What is being timed
 

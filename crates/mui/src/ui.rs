@@ -242,13 +242,16 @@ impl Ui {
             None => ((x / (size * 0.6)).round().max(0.0) as usize).min(s.chars().count()),
         }
     }
-    /// Pen advance of `s`, for placing a caret.
-    pub(crate) fn advance(&self, s: &str, size: f64) -> f64 {
+    /// Where the caret sits when it is `byte` bytes into `s`: the inverse of
+    /// [`Ui::hit`], and the advance of the whole string when `byte == s.len()`.
+    /// Measured, not shaped -- `mui_text::caret_x` reads advances only, where
+    /// `text_run` would build every outline to throw them away.
+    pub(crate) fn caret_x(&self, s: &str, size: f64, byte: usize) -> f64 {
         match self.font.as_deref() {
-            Some(f) => mui_text::text_run(f, s, size, &[], 0.05).map_or(0.0, |r| r.advance),
+            Some(f) => mui_text::caret_x(f, s, size, byte).unwrap_or(0.0),
             // ponytail: the 0.6em guess the scene itself falls back to
             // without a font; set a font and both agree.
-            None => s.chars().count() as f64 * size * 0.6,
+            None => s[..byte.min(s.len())].chars().count() as f64 * size * 0.6,
         }
     }
     /// A caret is on for 0.625 s of every 1.25 s.

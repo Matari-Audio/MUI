@@ -4,6 +4,7 @@
 //! solver produced in the same order. Every node gets an outline; every layer
 //! of its [`Style`](crate::Style) becomes one [`Painted`] entry. Children
 //! paint after their parent, so a list index is a z-order.
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
@@ -240,30 +241,40 @@ impl Runs<'_> {
     /// The lines `text` breaks into at `max` width, capped at `cap` of them
     /// with an ellipsis on the last. One line when it fits, or when there is
     /// no font to break against.
-    fn lines(&mut self, text: &str, size: f64, max: f64, cap: Option<usize>) -> Vec<String> {
+    ///
+    /// Every line is a slice of `text`, so the overwhelmingly common case --
+    /// a label that fits -- allocates the `Vec` and nothing else. Only an
+    /// ellipsised last line owns its bytes.
+    fn lines<'t>(
+        &mut self,
+        text: &'t str,
+        size: f64,
+        max: f64,
+        cap: Option<usize>,
+    ) -> Vec<Cow<'t, str>> {
         let fits = self.measure(text, size).width <= max + 0.5;
         let Some(font) = self.font.filter(|_| !fits && max > 0.0) else {
-            return vec![text.to_owned()];
+            return vec![Cow::Borrowed(text)];
         };
         let Ok(lines) = mui_text::break_lines(font, text, size, max) else {
-            return vec![text.to_owned()];
+            return vec![Cow::Borrowed(text)];
         };
         let n = cap.unwrap_or(usize::MAX).max(1);
-        let mut out: Vec<String> = lines
+        let mut out: Vec<Cow<'t, str>> = lines
             .iter()
             .take(n)
-            .map(|l| text[l.text_range.clone()].trim_end().to_owned())
+            .map(|l| Cow::Borrowed(text[l.text_range.clone()].trim_end()))
             .collect();
         if lines.len() > n {
             // ponytail: the ellipsis is appended, not measured -- a capped
             // line can overhang by one glyph. Re-break the last line against
             // `max - advance('…')` if that shows.
             if let Some(last) = out.last_mut() {
-                last.push('\u{2026}');
+                last.to_mut().push('\u{2026}');
             }
         }
         if out.is_empty() {
-            out.push(String::new());
+            out.push(Cow::Borrowed(""));
         }
         out
     }
