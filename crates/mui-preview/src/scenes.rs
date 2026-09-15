@@ -32,6 +32,11 @@ pub fn all() -> Vec<Box<dyn PreviewScene>> {
         Box::new(SegmentedRow),
         Box::new(Widgets::default()),
         Box::new(GlyphAxes::new()),
+        Box::new(Scrolling::default()),
+        Box::new(Fields::default()),
+        Box::new(Tips),
+        Box::new(Curve::default()),
+        Box::new(Swap::default()),
     ]
 }
 
@@ -245,6 +250,228 @@ impl PreviewScene for GlyphAxes {
             Self::CARD / 2.0 - (b.min.y + b.max.y) / 2.0,
         );
         Some(("glyph-card", path.rigid_transform(centre, 0.0).ok()?))
+    }
+}
+
+/// Forty rows in a fixed box: the wheel moves the innermost surface whose
+/// content overflows, and the clip keeps hits off the rows it hides.
+pub struct Scrolling {
+    gains: Vec<f64>,
+}
+impl Default for Scrolling {
+    fn default() -> Self {
+        Self {
+            gains: vec![0.0; 40],
+        }
+    }
+}
+impl PreviewScene for Scrolling {
+    fn name(&self) -> &'static str {
+        "Scroll"
+    }
+    fn about(&self) -> &'static str {
+        "A .scroll() column taller than its box. The wheel picks the surface under the pointer; a hit outside the clip is not a hit."
+    }
+    fn specimen(&mut self, ui: &mut Ui) -> El {
+        let rows: Vec<El> = self
+            .gains
+            .iter_mut()
+            .enumerate()
+            .map(|(i, g)| {
+                slider(
+                    ui,
+                    &format!("band-{i}"),
+                    &format!("band {i}"),
+                    g,
+                    -24.0..=6.0,
+                )
+            })
+            .collect();
+        column(rows)
+            .gap(S)
+            .pad(M)
+            .scroll()
+            .size(320.0, 340.0)
+            .radius(16.0)
+            .fill(Role::Surface)
+            .id("scroll")
+    }
+}
+
+/// Two fields and a label reading the first one back.
+#[derive(Default)]
+pub struct Fields {
+    name: String,
+    note: String,
+}
+impl PreviewScene for Fields {
+    fn name(&self) -> &'static str {
+        "Text"
+    }
+    fn about(&self) -> &'static str {
+        "Click or Tab to focus, type, arrows and Backspace edit. The label mirrors the first field."
+    }
+    fn specimen(&mut self, ui: &mut Ui) -> El {
+        let name = text_input(ui, "field-name", &mut self.name);
+        let note = text_input(ui, "field-note", &mut self.note);
+        column([
+            label("name"),
+            name,
+            label("note"),
+            note,
+            text(format!("name = {}", self.name)).fill(Role::Dim),
+        ])
+        .gap(S)
+        .pad(L)
+        .width(320.0)
+        .radius(16.0)
+        .fill(Role::Surface)
+        .id("fields")
+    }
+}
+
+/// Tips come due after half a second of rest; the third button holds a float
+/// open instead, which is the same overlay a menu would use.
+pub struct Tips;
+impl PreviewScene for Tips {
+    fn name(&self) -> &'static str {
+        "Tooltip"
+    }
+    fn about(&self) -> &'static str {
+        "Rest on a button for a tip. Hold the last one for a float anchored under it."
+    }
+    fn specimen(&mut self, ui: &mut Ui) -> El {
+        let (save, _) = button(ui, "tip-save", "Save");
+        let (revert, _) = button(ui, "tip-revert", "Revert");
+        let (more, _) = button(ui, "tip-more", "Hold for more");
+        let held = ui.get("tip-more").held;
+        let card = column([
+            save.tip("Write the preset to disk"),
+            revert.tip("Throw away every edit since the last save"),
+            more,
+        ])
+        .gap(M)
+        .pad(L)
+        .width(260.0)
+        .radius(16.0)
+        .fill(Role::Surface)
+        .id("tips-card");
+        let mut layers = vec![card];
+        if held {
+            layers.push(
+                column([text("Rename"), text("Duplicate"), text("Delete")])
+                    .gap(S)
+                    .pad(M)
+                    .width(160.0)
+                    .radius(12.0)
+                    .fill(Role::Raised)
+                    .anchor(Align::Center, Align::End)
+                    .offset(0.0, 96.0)
+                    .float()
+                    .id("tips-menu"),
+            );
+        }
+        overlay(layers).id("tips")
+    }
+}
+
+/// A response curve drawn as cubics inside a canvas, re-derived every frame
+/// from the cutoff below it.
+pub struct Curve {
+    cutoff: f64,
+}
+impl Default for Curve {
+    fn default() -> Self {
+        Self { cutoff: 0.45 }
+    }
+}
+impl PreviewScene for Curve {
+    fn name(&self) -> &'static str {
+        "Canvas"
+    }
+    fn about(&self) -> &'static str {
+        "canvas(|size| ..) hands the renderer raw Draws. The knee follows the slider; nothing is cached."
+    }
+    fn specimen(&mut self, ui: &mut Ui) -> El {
+        let t = self.cutoff.clamp(0.08, 0.92);
+        let plot = canvas(move |size| {
+            let (w, h) = (size.width, size.height);
+            let x = w * t;
+            let path = Path::default()
+                .move_to(Point::new(0.0, h * 0.55))
+                .cubic_to(
+                    Point::new(x * 0.5, h * 0.55),
+                    Point::new(x * 0.7, h * 0.14),
+                    Point::new(x, h * 0.22),
+                )
+                .cubic_to(
+                    Point::new(x + (w - x) * 0.18, h * 0.30),
+                    Point::new(x + (w - x) * 0.35, h * 0.96),
+                    Point::new(w, h * 0.98),
+                );
+            vec![Draw::stroke(path, Role::Primary, 2.5)]
+        })
+        .size(320.0, 160.0)
+        .radius(12.0)
+        .fill(Role::Field);
+        column([
+            plot,
+            slider(ui, "knee", "Cutoff", &mut self.cutoff, 0.0..=1.0),
+        ])
+        .gap(M)
+        .pad(L)
+        .radius(16.0)
+        .fill(Role::Surface)
+        .id("curve")
+    }
+}
+
+/// Three pills. Drag one onto another and they trade labels.
+pub struct Swap {
+    labels: [String; 3],
+}
+impl Default for Swap {
+    fn default() -> Self {
+        Self {
+            labels: ["Osc".into(), "Filter".into(), "Amp".into()],
+        }
+    }
+}
+impl Swap {
+    fn slot(id: &str) -> Option<usize> {
+        id.strip_prefix("pill-")?.parse().ok()
+    }
+}
+impl PreviewScene for Swap {
+    fn name(&self) -> &'static str {
+        "Drag"
+    }
+    fn about(&self) -> &'static str {
+        "A press captures, a release over another target is a drop. The pill under the drag lights up."
+    }
+    fn specimen(&mut self, ui: &mut Ui) -> El {
+        let swap = ui
+            .dropped()
+            .and_then(|(a, b)| Some((Self::slot(a)?, Self::slot(b)?)));
+        if let Some((a, b)) = swap {
+            self.labels.swap(a, b);
+        }
+        let pills = (0..3).map(|i| {
+            let id = format!("pill-{i}");
+            let target = ui.get(&id).drop_target;
+            row([text(self.labels[i].clone())])
+                .pad_xy(18.0, 12.0)
+                .pill()
+                .fill(if target { Role::Primary } else { Role::Raised })
+                .cursor(Cursor::Grab)
+                .id(id)
+        });
+        row(pills)
+            .gap(M)
+            .pad(L)
+            .radius(16.0)
+            .fill(Role::Surface)
+            .id("swap")
     }
 }
 

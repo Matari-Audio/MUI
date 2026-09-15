@@ -23,16 +23,52 @@ use mui::vello::peniko::color::AlphaColor;
 use mui::vello::Canvas as _;
 use scenes::PreviewScene;
 use winit::application::ApplicationHandler;
-use winit::event::{ElementState, MouseButton, WindowEvent};
+use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
-use winit::keyboard::{Key, NamedKey};
-use winit::window::{Window, WindowId};
+use winit::keyboard::{Key as WinitKey, NamedKey};
+use winit::window::{CursorIcon, Window, WindowId};
 
 /// The layout-frame overlay is a debug aid: off-palette so it reads against
 /// any theme.
 const FRAME: AlphaColor<mui::vello::peniko::color::Srgb> =
     AlphaColor::new([0.95, 0.45, 0.75, 0.60]);
 const SIDEBAR: f64 = 240.0;
+/// One wheel line in logical pixels. winit reports lines, MUI scrolls pixels.
+const LINE: f64 = 40.0;
+
+/// What the hovered surface asks for, in winit's vocabulary.
+fn icon(c: Cursor) -> CursorIcon {
+    match c {
+        Cursor::Arrow => CursorIcon::Default,
+        Cursor::Hand => CursorIcon::Pointer,
+        Cursor::Grab => CursorIcon::Grab,
+        Cursor::Grabbing => CursorIcon::Grabbing,
+        Cursor::Text => CursorIcon::Text,
+        Cursor::ResizeH => CursorIcon::EwResize,
+        Cursor::ResizeV => CursorIcon::NsResize,
+        Cursor::Crosshair => CursorIcon::Crosshair,
+        Cursor::Forbidden => CursorIcon::NotAllowed,
+    }
+}
+
+/// The named keys MUI has a word for; everything else is the host's business.
+fn named(k: NamedKey) -> Option<mui::prelude::Key> {
+    use mui::prelude::Key as K;
+    Some(match k {
+        NamedKey::Enter => K::Enter,
+        NamedKey::Escape => K::Escape,
+        NamedKey::Tab => K::Tab,
+        NamedKey::Backspace => K::Backspace,
+        NamedKey::Delete => K::Delete,
+        NamedKey::ArrowLeft => K::Left,
+        NamedKey::ArrowRight => K::Right,
+        NamedKey::ArrowUp => K::Up,
+        NamedKey::ArrowDown => K::Down,
+        NamedKey::Home => K::Home,
+        NamedKey::End => K::End,
+        _ => return None,
+    })
+}
 
 struct App {
     ui: Ui,
@@ -47,6 +83,13 @@ struct App {
     /// release in one batch must both be seen to make a click.
     events: Vec<PointerInput>,
     pointer: PointerInput,
+    /// Everything non-pointer collected since the last frame: it rides on the
+    /// last pointer sample of the batch.
+    wheel: Point,
+    keys: Vec<KeyPress>,
+    text: String,
+    mods: Mods,
+    cursor: Cursor,
     typed: Option<char>,
     last: Instant,
     gpu: Option<Gpu>,
@@ -64,6 +107,11 @@ impl App {
             frames: false,
             events: Vec::new(),
             pointer: PointerInput::default(),
+            wheel: Point::new(0.0, 0.0),
+            keys: Vec::new(),
+            text: String::new(),
+            mods: Mods::default(),
+            cursor: Cursor::Arrow,
             typed: None,
             last: Instant::now(),
             gpu: None,
@@ -78,8 +126,17 @@ impl App {
         self.events.push(self.pointer);
     }
 
+    /// Is any focusable surface focused? Escape belongs to the UI when one is.
+    fn any_focus(&self) -> bool {
+        self.ui
+            .scene()
+            .is_some_and(|s| s.keys.iter().any(|k| self.ui.focused(k)))
+    }
+
     fn cancel(&mut self) {
         self.events.clear();
+        self.keys.clear();
+        self.text.clear();
         self.pointer = PointerInput::default();
         self.ui.cancel();
     }
@@ -138,33 +195,57 @@ impl App {
 
     /// One interaction frame at the window's logical size. Returns whether a
     /// spring is still moving.
-    fn tick(&mut self, (pw, ph): (u32, u32), scale: f64, pointer: PointerInput) -> bool {
+    fn tick(&mut self, (pw, ph): (u32, u32), scale: f64, input: impl Into<Input>) -> bool {
         let (w, h) = (f64::from(pw) / scale, f64::from(ph) / scale);
-        let pointer = PointerInput {
-            pos: pointer.pos.map(|p| Point::new(p.x / scale, p.y / scale)),
-            ..pointer
-        };
+        let mut input = input.into();
+        input.pointer.pos = input
+            .pointer
+            .pos
+            .map(|p| Point::new(p.x / scale, p.y / scale));
         let now = Instant::now();
         let dt = now.duration_since(self.last).as_secs_f64().min(0.1);
         self.last = now;
         let root = self.tree(w, h);
-        match self.ui.frame(root, Some(Size::new(w, h)), pointer, dt) {
-            Ok(f) => f.animating,
+        let (animating, cursor) = match self.ui.frame(root, Some(Size::new(w, h)), input, dt) {
+            Ok(f) => (f.animating, f.cursor),
             Err(e) => {
                 eprintln!("frame: {e}");
-                false
+                (false, Cursor::Arrow)
             }
-        }
+        };
+        self.cursor = cursor;
+        animating
     }
 
     fn replay(&mut self, size: (u32, u32), scale: f64) -> bool {
+        let rest = Input {
+            wheel: std::mem::take(&mut self.wheel),
+            keys: std::mem::take(&mut self.keys),
+            text: std::mem::take(&mut self.text),
+            ..Input::default()
+        };
         let events = std::mem::take(&mut self.events);
-        if events.is_empty() {
-            return self.tick(size, scale, self.pointer);
-        }
-        events
-            .into_iter()
-            .fold(false, |a, p| self.tick(size, scale, p) | a)
+        let Some(last) = events.len().checked_sub(1) else {
+            return self.tick(
+                size,
+                scale,
+                Input {
+                    pointer: self.pointer,
+                    ..rest
+                },
+            );
+        };
+        events.into_iter().enumerate().fold(false, |a, (i, p)| {
+            let input = if i == last {
+                Input {
+                    pointer: p,
+                    ..rest.clone()
+                }
+            } else {
+                Input::from(p)
+            };
+            self.tick(size, scale, input) | a
+        })
     }
 
     fn draw(&mut self) {
@@ -238,11 +319,56 @@ impl ApplicationHandler for App {
             } => {
                 self.queue(None, Some(state == ElementState::Pressed));
             }
+            WindowEvent::ModifiersChanged(m) => {
+                let s = m.state();
+                self.mods = Mods {
+                    shift: s.shift_key(),
+                    ctrl: s.control_key(),
+                    alt: s.alt_key(),
+                    cmd: s.super_key(),
+                };
+            }
+            WindowEvent::MouseWheel { delta, .. } => {
+                // winit points the wheel at the viewer; a scroll offset points
+                // at the content, so both axes flip.
+                let d = match delta {
+                    MouseScrollDelta::LineDelta(x, y) => {
+                        Point::new(f64::from(x) * -LINE, f64::from(y) * -LINE)
+                    }
+                    MouseScrollDelta::PixelDelta(p) => Point::new(-p.x, -p.y),
+                };
+                self.wheel = Point::new(self.wheel.x + d.x, self.wheel.y + d.y);
+            }
             WindowEvent::KeyboardInput { ref event, .. } if event.state.is_pressed() => {
-                if event.logical_key == Key::Named(NamedKey::Escape) {
-                    event_loop.exit();
-                } else {
-                    self.typed = event.text.as_ref().and_then(|t| t.chars().next());
+                let mods = self.mods;
+                match &event.logical_key {
+                    WinitKey::Named(n) => {
+                        if let Some(key) = named(*n) {
+                            // Escape is the UI's while it has a focus to drop;
+                            // only an idle Escape closes the gallery.
+                            if key == mui::prelude::Key::Escape && !self.any_focus() {
+                                event_loop.exit();
+                                return;
+                            }
+                            self.keys.push(KeyPress { key, mods });
+                        }
+                    }
+                    // A shortcut reaches widgets as keys; plain typing reaches
+                    // them as text below. Sending both would type every
+                    // character twice.
+                    WinitKey::Character(s) if mods.ctrl || mods.cmd => {
+                        self.keys.extend(s.chars().map(|c| KeyPress {
+                            key: mui::prelude::Key::Char(c),
+                            mods,
+                        }))
+                    }
+                    _ => {}
+                }
+                if !mods.ctrl && !mods.cmd {
+                    if let Some(t) = event.text.as_ref() {
+                        self.text.extend(t.chars().filter(|c| !c.is_control()));
+                        self.typed = t.chars().find(|c| !c.is_control());
+                    }
                 }
             }
             WindowEvent::RedrawRequested => {
@@ -250,6 +376,9 @@ impl ApplicationHandler for App {
                 let (size, scale) = (gpu.size(), gpu.window().scale_factor());
                 let animating = self.replay(size, scale);
                 self.draw();
+                if let Some(gpu) = &self.gpu {
+                    gpu.window().set_cursor(icon(self.cursor));
+                }
                 if animating {
                     if let Some(gpu) = &self.gpu {
                         gpu.window().request_redraw();
@@ -365,6 +494,50 @@ mod tests {
         assert!(
             centre(&app, "gain").x > g.x + 30.0,
             "thumb did not follow the hand"
+        );
+    }
+
+    /// The whole new input path in one go: a wheel event reaching the scroll
+    /// scene through `Input`, and a press-drag-release reaching the drag scene
+    /// as a drop.
+    #[test]
+    fn the_wheel_scrolls_and_a_drag_between_pills_swaps_them() {
+        let mut app = App::new();
+        app.selected = 5;
+        app.tick(SIZE, 1.0, PointerInput::default());
+        let c = centre(&app, "scroll");
+        app.tick(
+            SIZE,
+            1.0,
+            Input {
+                pointer: at(c.x, c.y, false),
+                wheel: Point::new(0.0, 120.0),
+                ..Input::default()
+            },
+        );
+        assert!(app.ui.scroll("scroll")[1] > 0.0, "the wheel moved nothing");
+
+        app.selected = 9;
+        app.tick(SIZE, 1.0, PointerInput::default());
+        let width = |app: &App, key| {
+            app.ui
+                .scene()
+                .unwrap()
+                .surface(key)
+                .unwrap()
+                .frame
+                .size
+                .width
+        };
+        // "Osc" against "Filter": the short pill grows when the labels trade.
+        let before = width(&app, "pill-0");
+        let (a, b) = (centre(&app, "pill-0"), centre(&app, "pill-1"));
+        for (p, down) in [(a, false), (a, true), (b, true), (b, false), (b, false)] {
+            app.tick(SIZE, 1.0, at(p.x, p.y, down));
+        }
+        assert!(
+            width(&app, "pill-0") > before + 10.0,
+            "the drop did not swap the labels"
         );
     }
 
