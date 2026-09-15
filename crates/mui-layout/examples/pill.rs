@@ -10,10 +10,10 @@ fn main() -> Result<(), mui_layout::Error> {
     ])
     .id("controls")
     .gap(gap);
-    let pill = column([controls]).id("pill").padding(10.);
+    let pill = column([controls]).id("pill").pad(10.);
     let tab = column([pill])
         .id("tab")
-        .padding(inset)
+        .pad(inset)
         .min_size(Size::new(92., 0.))
         .align(Align::Stretch);
     let result = resolve(&tab, None, Limits::default())?;

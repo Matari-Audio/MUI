@@ -8,9 +8,9 @@ fn intrinsic_chain() {
     ])
     .id("controls")
     .gap(10.);
-    let tree = column([column([controls]).id("pill").padding(10.)])
+    let tree = column([column([controls]).id("pill").pad(10.)])
         .id("tab")
-        .padding(12.);
+        .pad(12.);
     let l = resolve(&tree, None, Default::default()).unwrap();
     assert_eq!(l.size, Size::new(72., 148.));
     assert_eq!(l.frame("pill").unwrap().size, Size::new(48., 124.));
@@ -41,7 +41,7 @@ fn space_between() {
 fn overlay_centers() {
     let t = overlay([leaf(10., 10.).id("a")])
         .id("o")
-        .padding(5.)
+        .pad(5.)
         .align(Align::Center)
         .justify(Justify::Center);
     let l = resolve(&t, Some(Size::new(40., 50.)), Default::default()).unwrap();
@@ -338,9 +338,21 @@ fn space_around_and_evenly() {
 #[test]
 fn content_leaves_are_measured_by_the_caller() {
     let t = Node::<&str>::column([Node::content().with("hello").id("t")]).id("c");
-    let l = resolve_with(&t, None, Default::default(), |s| {
+    let l = resolve_with(&t, None, Default::default(), SpacingScale::DEFAULT, |s| {
         Size::new(s.len() as f64 * 7., 12.)
     })
     .unwrap();
     assert_eq!(l.frame("t").unwrap().size, Size::new(35., 12.));
+}
+
+#[test]
+fn tokens_resolve_against_the_scale_and_frames_come_out_in_tree_order() {
+    let t = column([leaf(10., 10.).id("a"), leaf(10., 10.)])
+        .gap(SpacingToken::M)
+        .pad(SpacingToken::S);
+    let l = resolve(&t, None, Default::default()).unwrap();
+    assert_eq!(l.size, Size::new(26., 48.));
+    assert_eq!(l.all().len(), 3);
+    assert_eq!(l.all()[1], l.frame("a").unwrap());
+    assert_eq!(l.all()[2].y, 30.);
 }

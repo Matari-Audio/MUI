@@ -83,6 +83,83 @@ impl Insets {
     }
 }
 
+/// A step on the theme's spacing scale. `.gap(M)` reads like the CSS it
+/// replaces and re-tunes with the theme instead of with a search-and-replace.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpacingToken {
+    Xs,
+    S,
+    M,
+    L,
+    Xl,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SpacingScale {
+    pub xs: f64,
+    pub s: f64,
+    pub m: f64,
+    pub l: f64,
+    pub xl: f64,
+}
+impl SpacingScale {
+    pub const DEFAULT: Self = Self {
+        xs: 4.0,
+        s: 8.0,
+        m: 12.0,
+        l: 18.0,
+        xl: 28.0,
+    };
+    pub fn get(self, t: SpacingToken) -> f64 {
+        match t {
+            SpacingToken::Xs => self.xs,
+            SpacingToken::S => self.s,
+            SpacingToken::M => self.m,
+            SpacingToken::L => self.l,
+            SpacingToken::Xl => self.xl,
+        }
+    }
+    pub fn valid(self) -> bool {
+        [self.xs, self.s, self.m, self.l, self.xl]
+            .iter()
+            .all(|v| v.is_finite() && *v >= 0.0)
+    }
+}
+impl Default for SpacingScale {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
+/// A gap or padding: pixels, or a token resolved against the scale handed to
+/// [`resolve_with`]. Plain `f64` converts, so `.gap(10.0)` still works.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Spacing {
+    Px(f64),
+    Token(SpacingToken),
+}
+impl Spacing {
+    pub const fn px(v: f64) -> Self {
+        Self::Px(v)
+    }
+    pub fn resolve(self, scale: SpacingScale) -> f64 {
+        match self {
+            Self::Px(v) => v,
+            Self::Token(t) => scale.get(t),
+        }
+    }
+}
+impl From<f64> for Spacing {
+    fn from(v: f64) -> Self {
+        Self::Px(v)
+    }
+}
+impl From<SpacingToken> for Spacing {
+    fn from(t: SpacingToken) -> Self {
+        Self::Token(t)
+    }
+}
+
 /// Cross-axis placement. `Stretch` is the default and means "fill if you are a
 /// container, centre if you are content": a column of rows fills its width,
 /// a column of labels lines them up down the middle, and neither needs saying.
@@ -176,8 +253,10 @@ pub struct Node<P = ()> {
     id: Option<String>,
     kind: Kind<P>,
     payload: P,
-    gap: f64,
+    gap: Spacing,
+    /// Pixel insets, unless `pad` names a token for all four sides.
     padding: Insets,
+    pad: Option<SpacingToken>,
     minimum: Size,
     maximum: Option<Size>,
     width: Len,
@@ -199,8 +278,9 @@ impl<P: Default> Node<P> {
             id: None,
             kind,
             payload: P::default(),
-            gap: 0.0,
+            gap: Spacing::Px(0.0),
             padding: Insets::ZERO,
+            pad: None,
             minimum: Size::ZERO,
             maximum: None,
             width: Len::Auto,
@@ -293,27 +373,31 @@ impl<P> Node<P> {
     pub fn is_container(&self) -> bool {
         !matches!(self.kind, Kind::Leaf | Kind::Content)
     }
-    pub fn gap(mut self, gap: f64) -> Self {
-        self.gap = gap;
+    pub fn gap(mut self, gap: impl Into<Spacing>) -> Self {
+        self.gap = gap.into();
         self
     }
-    pub fn gap_mut(&mut self) -> &mut f64 {
-        &mut self.gap
-    }
-    pub fn padding(mut self, padding: f64) -> Self {
-        self.padding = Insets::all(padding);
+    /// The same on all four sides: `.pad(12.0)` or `.pad(M)`.
+    pub fn pad(mut self, padding: impl Into<Spacing>) -> Self {
+        match padding.into() {
+            Spacing::Px(v) => self.padding = Insets::all(v),
+            Spacing::Token(t) => self.pad = Some(t),
+        }
         self
     }
-    pub fn padding_xy(mut self, horizontal: f64, vertical: f64) -> Self {
+    pub fn pad_xy(mut self, horizontal: f64, vertical: f64) -> Self {
         self.padding = Insets::symmetric(horizontal, vertical);
+        self.pad = None;
         self
     }
     pub fn insets(mut self, insets: Insets) -> Self {
         self.padding = insets;
+        self.pad = None;
         self
     }
-    pub fn insets_mut(&mut self) -> &mut Insets {
-        &mut self.padding
+    /// What the padding comes to under `scale`.
+    pub fn padding(&self, scale: SpacingScale) -> Insets {
+        self.pad.map_or(self.padding, |t| Insets::all(scale.get(t)))
     }
     /// Declared outer size on both axes. `Auto` measures, `Px` fixes, `Pct`
     /// takes a share of the parent: `.size(Len::Pct(50.0), 24.0)`.
@@ -467,10 +551,17 @@ impl Frame {
 pub struct Layout {
     pub size: Size,
     frames: BTreeMap<String, Frame>,
+    /// Every node's frame, in tree order (parent first, then children in
+    /// declaration order). A walk of the same tree indexes straight into it,
+    /// so nothing needs a name to be found.
+    order: Vec<Frame>,
 }
 impl Layout {
     pub fn frame(&self, key: &str) -> Option<Frame> {
         self.frames.get(key).copied()
+    }
+    pub fn all(&self) -> &[Frame] {
+        &self.order
     }
     pub fn frames(&self) -> impl Iterator<Item = (&str, Frame)> {
         self.frames.iter().map(|(k, v)| (k.as_str(), *v))
@@ -510,6 +601,8 @@ impl Default for Limits {
 
 struct Measured<'a, P> {
     node: &'a Node<P>,
+    gap: f64,
+    padding: Insets,
     size: Size,
     /// The smallest this subtree may be squeezed to: every minimum in it,
     /// summed along the axis they sit on.
@@ -577,9 +670,7 @@ fn validate_node<P>(node: &Node<P>, l: Limits) -> Result<(), Error> {
         || !node.minimum.valid(l.extent)
         || node.maximum.is_some_and(|s| !s.valid(l.extent))
         || !node.padding.valid(l.extent)
-        || ![node.gap, node.grow, node.shrink]
-            .iter()
-            .all(|v| finite(*v))
+        || ![node.grow, node.shrink].iter().all(|v| finite(*v))
         || node.basis.is_some_and(|b| !finite(b))
         || !node.width.valid(l.extent)
         || !node.height.valid(l.extent)
@@ -631,6 +722,7 @@ fn offer<P>(c: &Node<P>, vertical: bool, inner: Option<f64>, stretch: bool) -> O
 struct Pass<'a, 'f, P> {
     left: usize,
     limits: Limits,
+    scale: SpacingScale,
     keys: BTreeMap<&'a str, ()>,
     measurer: &'f mut dyn FnMut(&P) -> Size,
 }
@@ -648,6 +740,10 @@ fn measure<'a, P>(
     }
     pass.left -= 1;
     validate_node(node, l)?;
+    let (gap, padding) = (node.gap.resolve(pass.scale), node.padding(pass.scale));
+    if !(gap.is_finite() && (0.0..=l.extent).contains(&gap) && padding.valid(l.extent)) {
+        return Err(Error::InvalidValue);
+    }
     if let Some(id) = node.id.as_deref() {
         if pass.keys.insert(id, ()).is_some() {
             return Err(Error::DuplicateKey(id.to_string()));
@@ -668,8 +764,8 @@ fn measure<'a, P>(
         }
     }
     let inner = [
-        definite[0].map(|w| (w - node.padding.horizontal()).max(0.0)),
-        definite[1].map(|h| (h - node.padding.vertical()).max(0.0)),
+        definite[0].map(|w| (w - padding.horizontal()).max(0.0)),
+        definite[1].map(|h| (h - padding.vertical()).max(0.0)),
     ];
     let mut children = Vec::with_capacity(node.children().len());
     for c in node.children() {
@@ -694,7 +790,7 @@ fn measure<'a, P>(
             }
             Kind::Grid { cols, .. } => {
                 let (ax, _) = c.anchor.unwrap_or(cell_default(node));
-                let col = inner[0].map(|w| (w - node.gap * (*cols - 1) as f64) / *cols as f64);
+                let col = inner[0].map(|w| (w - gap * (*cols - 1) as f64) / *cols as f64);
                 [offer(c, false, col, ax == Align::Stretch), None]
             }
             _ => [None; 2],
@@ -713,7 +809,7 @@ fn measure<'a, P>(
         }
         Kind::Branch { vertical: v, .. } => {
             let v = *v;
-            let gaps = children.len().saturating_sub(1) as f64 * node.gap;
+            let gaps = children.len().saturating_sub(1) as f64 * gap;
             // Intrinsic main is not the sum of the children: a child with a
             // `basis` contributes that instead, and then the row has to be
             // wide enough that its *share* of the surplus still clears its
@@ -738,7 +834,7 @@ fn measure<'a, P>(
         ),
         Kind::Grid { cols, .. } => {
             let rows = children.len().div_ceil(*cols) as f64;
-            let gaps = |n: f64| (n - 1.0).max(0.0) * node.gap;
+            let gaps = |n: f64| (n - 1.0).max(0.0) * gap;
             let hug = |g: fn(&Measured<'_, P>) -> Size| {
                 let widest = children.iter().map(|c| g(c).width).fold(0.0, f64::max);
                 let tall: f64 = grid_rows(&children, *cols)
@@ -754,8 +850,8 @@ fn measure<'a, P>(
     };
     let pad = |s: Size| {
         Size::new(
-            (s.width + node.padding.horizontal()).max(node.minimum.width),
-            (s.height + node.padding.vertical()).max(node.minimum.height),
+            (s.width + padding.horizontal()).max(node.minimum.width),
+            (s.height + padding.vertical()).max(node.minimum.height),
         )
     };
     let hug = pad(content);
@@ -774,6 +870,8 @@ fn measure<'a, P>(
     }
     Ok(Measured {
         node,
+        gap,
+        padding,
         size,
         floor,
         children,
@@ -795,7 +893,7 @@ fn distribute<P>(m: &Measured<'_, P>, vertical: bool, inner: Size) -> Vec<f64> {
         .map(|c| c.base(vertical, Some(inner)))
         .collect();
     let mut allocated = base.clone();
-    let gaps = m.node.gap * m.children.len().saturating_sub(1) as f64;
+    let gaps = m.gap * m.children.len().saturating_sub(1) as f64;
     let mut free = inner_main - base.iter().sum::<f64>() - gaps;
     let growing = free > 0.0;
     let room = |i: usize, allocated: &[f64]| {
@@ -860,7 +958,7 @@ fn arrange<P>(
     ancestor: &str,
     origin: [f64; 2],
     size: Size,
-    out: &mut BTreeMap<String, Frame>,
+    out: &mut (BTreeMap<String, Frame>, Vec<Frame>),
 ) -> Result<(), Error> {
     let n = m.node;
     // Content is squeezable -- that is the whole point of shrink -- but the
@@ -869,24 +967,23 @@ fn arrange<P>(
         return Err(Error::InsufficientSpace(label(n, ancestor)));
     }
     let here = n.id.as_deref().unwrap_or(ancestor);
+    let frame = Frame {
+        x: origin[0],
+        y: origin[1],
+        size,
+    };
+    out.1.push(frame);
     if let Some(id) = n.id.clone() {
-        out.insert(
-            id,
-            Frame {
-                x: origin[0],
-                y: origin[1],
-                size,
-            },
-        );
+        out.0.insert(id, frame);
     }
     let inner = Size::new(
-        (size.width - n.padding.horizontal()).max(0.0),
-        (size.height - n.padding.vertical()).max(0.0),
+        (size.width - m.padding.horizontal()).max(0.0),
+        (size.height - m.padding.vertical()).max(0.0),
     );
     let at = |x: f64, y: f64| {
         [
-            origin[0] + n.padding.left + x,
-            origin[1] + n.padding.top + y,
+            origin[0] + m.padding.left + x,
+            origin[1] + m.padding.top + y,
         ]
     };
     let default = cell_default(n);
@@ -899,13 +996,13 @@ fn arrange<P>(
         Kind::Grid { cols, .. } => {
             let cols = *cols;
             let rows = m.children.len().div_ceil(cols);
-            let col_w = (inner.width - n.gap * cols.saturating_sub(1) as f64) / cols as f64;
+            let col_w = (inner.width - m.gap * cols.saturating_sub(1) as f64) / cols as f64;
             let heights: Vec<f64> = grid_rows(&m.children, cols)
                 .map(|r| r.iter().map(|c| c.size.height).fold(0.0, f64::max))
                 .collect();
             let surplus = (inner.height
                 - heights.iter().sum::<f64>()
-                - n.gap * rows.saturating_sub(1) as f64)
+                - m.gap * rows.saturating_sub(1) as f64)
                 .max(0.0)
                 / rows.max(1) as f64;
             let mut y = 0.0;
@@ -916,12 +1013,12 @@ fn arrange<P>(
                     arrange(
                         c,
                         here,
-                        at(k as f64 * (col_w + n.gap) + p[0], y + p[1]),
+                        at(k as f64 * (col_w + m.gap) + p[0], y + p[1]),
                         s,
                         out,
                     )?;
                 }
-                y += cell_size.height + n.gap;
+                y += cell_size.height + m.gap;
             }
             Ok(())
         }
@@ -930,7 +1027,7 @@ fn arrange<P>(
             let allocated = distribute(m, v, inner);
             let count = m.children.len() as f64;
             let residual =
-                (inner.main(v) - allocated.iter().sum::<f64>() - n.gap * (count - 1.0).max(0.0))
+                (inner.main(v) - allocated.iter().sum::<f64>() - m.gap * (count - 1.0).max(0.0))
                     .max(0.0);
             let (mut cursor, extra) = match n.justify {
                 Justify::Start => (0.0, 0.0),
@@ -956,7 +1053,7 @@ fn arrange<P>(
                     at(cursor, cross_pos)
                 };
                 arrange(c, here, pos, Size::axes(main, cross, v), out)?;
-                cursor += main + n.gap + extra;
+                cursor += main + m.gap + extra;
             }
             Ok(())
         }
@@ -966,20 +1063,25 @@ fn arrange<P>(
 /// `None` means hug intrinsic content. `Some` is an exact offered parent size.
 /// Content leaves measure as empty; use [`resolve_with`] to size them.
 pub fn resolve<P>(root: &Node<P>, offered: Option<Size>, limits: Limits) -> Result<Layout, Error> {
-    resolve_with(root, offered, limits, |_| Size::ZERO)
+    resolve_with(root, offered, limits, SpacingScale::DEFAULT, |_| Size::ZERO)
 }
 
-/// [`resolve`] with a measurer for `Node::content` leaves, called once per
-/// leaf with its payload. Text shaping lives outside this crate on purpose.
+/// [`resolve`] with a spacing scale for tokens and a measurer for
+/// `Node::content` leaves, called once per leaf with its payload. Text shaping lives outside this crate on purpose.
 // ponytail: intrinsic width only, no wrap; give the measurer an available
 // width when a wrapping text leaf is actually needed.
 pub fn resolve_with<P>(
     root: &Node<P>,
     offered: Option<Size>,
     limits: Limits,
+    scale: SpacingScale,
     mut measurer: impl FnMut(&P) -> Size,
 ) -> Result<Layout, Error> {
-    if !limits.extent.is_finite() || limits.extent <= 0.0 || limits.nodes == 0 || limits.depth > 256
+    if !limits.extent.is_finite()
+        || limits.extent <= 0.0
+        || limits.nodes == 0
+        || limits.depth > 256
+        || !scale.valid()
     {
         return Err(Error::InvalidValue);
     }
@@ -987,6 +1089,7 @@ pub fn resolve_with<P>(
     let mut pass = Pass {
         left: limits.nodes,
         limits,
+        scale,
         keys: BTreeMap::new(),
         measurer: &mut measurer,
     };
@@ -1001,9 +1104,16 @@ pub fn resolve_with<P>(
     {
         return Err(Error::InsufficientSpace(label(root, "root")));
     }
-    let mut frames = BTreeMap::new();
-    arrange(&m, "root", [0.0, 0.0], size, &mut frames)?;
-    Ok(Layout { size, frames })
+    let mut out = (
+        BTreeMap::new(),
+        Vec::with_capacity(limits.nodes - pass.left),
+    );
+    arrange(&m, "root", [0.0, 0.0], size, &mut out)?;
+    Ok(Layout {
+        size,
+        frames: out.0,
+        order: out.1,
+    })
 }
 
 /// UI-thread transactional commit. This is not a CPU atomic and not an audio-thread data structure.
