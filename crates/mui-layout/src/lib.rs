@@ -1,8 +1,13 @@
 //! Small, renderer-independent intrinsic layout for plugin UIs.
 //!
-//! This is intentionally not CSS. Children are measured from intrinsic sizes,
-//! containers hug content by default, parents may offer an exact size, and
-//! growth/align/justify determine how surplus is distributed.
+//! Not CSS, but it reads like the good half of it. Containers hug content by
+//! default, a parent may offer an exact size, and surplus goes out by `grow`
+//! and comes back by `shrink`. Alignment is automatic: containers stretch to
+//! fill their cross axis, content centres in it, and nothing is ever placed by
+//! coordinate -- an `offset` on an overlay child is the only nudge there is.
+//!
+//! A node carries a payload `P` so a styling layer can ride the same tree
+//! instead of mirroring it by id.
 #![forbid(unsafe_code)]
 
 use std::collections::BTreeMap;
@@ -13,6 +18,7 @@ pub struct Size {
     pub height: f64,
 }
 impl Size {
+    pub const ZERO: Self = Self::new(0.0, 0.0);
     pub const fn new(width: f64, height: f64) -> Self {
         Self { width, height }
     }
@@ -52,19 +58,9 @@ pub struct Insets {
     pub bottom: f64,
 }
 impl Insets {
-    pub const ZERO: Self = Self {
-        left: 0.0,
-        right: 0.0,
-        top: 0.0,
-        bottom: 0.0,
-    };
+    pub const ZERO: Self = Self::all(0.0);
     pub const fn all(v: f64) -> Self {
-        Self {
-            left: v,
-            right: v,
-            top: v,
-            bottom: v,
-        }
+        Self::symmetric(v, v)
     }
     pub const fn symmetric(horizontal: f64, vertical: f64) -> Self {
         Self {
@@ -74,25 +70,11 @@ impl Insets {
             bottom: vertical,
         }
     }
-    fn horizontal(self) -> f64 {
+    pub fn horizontal(self) -> f64 {
         self.left + self.right
     }
-    fn vertical(self) -> f64 {
+    pub fn vertical(self) -> f64 {
         self.top + self.bottom
-    }
-    fn main_start(self, vertical: bool) -> f64 {
-        if vertical {
-            self.top
-        } else {
-            self.left
-        }
-    }
-    fn cross_start(self, vertical: bool) -> f64 {
-        if vertical {
-            self.left
-        } else {
-            self.top
-        }
     }
     fn valid(self, limit: f64) -> bool {
         [self.left, self.right, self.top, self.bottom]
@@ -101,12 +83,15 @@ impl Insets {
     }
 }
 
+/// Cross-axis placement. `Stretch` is the default and means "fill if you are a
+/// container, centre if you are content": a column of rows fills its width,
+/// a column of labels lines them up down the middle, and neither needs saying.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Align {
     Start,
-    #[default]
     Center,
     End,
+    #[default]
     Stretch,
 }
 
@@ -117,58 +102,203 @@ pub enum Justify {
     Center,
     End,
     SpaceBetween,
+    SpaceAround,
+    SpaceEvenly,
+}
+impl Justify {
+    fn as_align(self) -> Align {
+        match self {
+            Self::Start => Align::Start,
+            Self::End => Align::End,
+            _ => Align::Center,
+        }
+    }
+}
+
+/// A length on one axis. `Auto` is measured, `Px` is fixed, `Pct` is a share
+/// of the parent's inner extent -- and counts as `Auto` while the parent is
+/// still hugging, since there is nothing to take a share of yet.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum Len {
+    #[default]
+    Auto,
+    Px(f64),
+    Pct(f64),
+}
+impl From<f64> for Len {
+    fn from(v: f64) -> Self {
+        Self::Px(v)
+    }
+}
+impl Len {
+    fn px(self) -> Option<f64> {
+        match self {
+            Self::Px(v) => Some(v),
+            _ => None,
+        }
+    }
+    fn fixed(self, parent: f64) -> Option<f64> {
+        match self {
+            Self::Auto => None,
+            Self::Px(v) => Some(v),
+            Self::Pct(p) => Some(parent * p / 100.0),
+        }
+    }
+    fn valid(self, limit: f64) -> bool {
+        match self {
+            Self::Auto => true,
+            Self::Px(v) => v.is_finite() && (0.0..=limit).contains(&v),
+            Self::Pct(p) => p.is_finite() && (0.0..=100.0).contains(&p),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
-/// A node is a leaf -- content of a size already known -- or a branch: children
-/// laid out along one axis, or stacked into a single rect.
-enum Kind {
-    Leaf(Size),
-    Branch { vertical: bool, children: Vec<Node> },
-    Overlay { children: Vec<Node> },
+enum Kind<P> {
+    /// Opaque content of a declared size.
+    Leaf,
+    /// Content the solver cannot size itself -- text, mostly. Measured by the
+    /// callback handed to [`resolve_with`].
+    Content,
+    Branch {
+        vertical: bool,
+        children: Vec<Node<P>>,
+    },
+    Overlay(Vec<Node<P>>),
+    Grid {
+        cols: usize,
+        children: Vec<Node<P>>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct Node {
+pub struct Node<P = ()> {
     id: Option<String>,
-    kind: Kind,
+    kind: Kind<P>,
+    payload: P,
     gap: f64,
     padding: Insets,
     minimum: Size,
     maximum: Option<Size>,
+    width: Len,
+    height: Len,
+    aspect: Option<f64>,
     grow: f64,
     basis: Option<f64>,
     shrink: f64,
     align: Align,
     align_self: Option<Align>,
     justify: Justify,
+    anchor: Option<(Align, Align)>,
+    offset: [f64; 2],
 }
-impl Node {
-    fn new(kind: Kind) -> Self {
+
+impl<P: Default> Node<P> {
+    fn new(kind: Kind<P>) -> Self {
         Self {
             id: None,
             kind,
+            payload: P::default(),
             gap: 0.0,
             padding: Insets::ZERO,
-            minimum: Size::default(),
+            minimum: Size::ZERO,
             maximum: None,
+            width: Len::Auto,
+            height: Len::Auto,
+            aspect: None,
             grow: 0.0,
             basis: None,
             shrink: 1.0,
-            align: Align::Center,
+            align: Align::Stretch,
             align_self: None,
             justify: Justify::Start,
+            anchor: None,
+            offset: [0.0; 2],
         }
     }
-    /// Name this node, so `Layout::frame` can find it and a surface can be
-    /// taken from it. Structural nodes need no name and cost nothing unnamed.
+    /// Content whose size is already known: an icon cell, a spacer.
+    pub fn leaf(width: f64, height: f64) -> Self {
+        Self::new(Kind::Leaf).size(width, height)
+    }
+    /// Content measured by the callback given to [`resolve_with`].
+    pub fn content() -> Self {
+        Self::new(Kind::Content)
+    }
+    /// Children laid out left to right.
+    pub fn row(children: impl IntoIterator<Item = Self>) -> Self {
+        Self::new(Kind::Branch {
+            vertical: false,
+            children: children.into_iter().collect(),
+        })
+    }
+    /// Children laid out top to bottom.
+    pub fn column(children: impl IntoIterator<Item = Self>) -> Self {
+        Self::new(Kind::Branch {
+            vertical: true,
+            children: children.into_iter().collect(),
+        })
+    }
+    /// Children sharing one rect, back to front. Each may `anchor` itself.
+    pub fn overlay(children: impl IntoIterator<Item = Self>) -> Self {
+        Self::new(Kind::Overlay(children.into_iter().collect()))
+    }
+    /// Children flowed into `cols` equal columns, row by row. Rows take the
+    /// height of their tallest child and share any surplus equally.
+    pub fn grid(cols: usize, children: impl IntoIterator<Item = Self>) -> Self {
+        Self::new(Kind::Grid {
+            cols,
+            children: children.into_iter().collect(),
+        })
+    }
+}
+
+impl<P> Node<P> {
+    /// Name this node, so `Layout::frame` can find it. Structural nodes need no
+    /// name and cost nothing unnamed.
     pub fn id(mut self, id: impl Into<String>) -> Self {
         self.id = Some(id.into());
         self
     }
+    pub fn key(&self) -> Option<&str> {
+        self.id.as_deref()
+    }
+    pub fn with(mut self, payload: P) -> Self {
+        self.payload = payload;
+        self
+    }
+    pub fn payload(&self) -> &P {
+        &self.payload
+    }
+    pub fn payload_mut(&mut self) -> &mut P {
+        &mut self.payload
+    }
+    pub fn children(&self) -> &[Self] {
+        match &self.kind {
+            Kind::Branch { children, .. }
+            | Kind::Overlay(children)
+            | Kind::Grid { children, .. } => children,
+            _ => &[],
+        }
+    }
+    pub fn children_mut(&mut self) -> &mut [Self] {
+        match &mut self.kind {
+            Kind::Branch { children, .. }
+            | Kind::Overlay(children)
+            | Kind::Grid { children, .. } => children,
+            _ => &mut [],
+        }
+    }
+    /// Containers stretch; content centres. This is what `Align::Stretch`
+    /// consults.
+    pub fn is_container(&self) -> bool {
+        !matches!(self.kind, Kind::Leaf | Kind::Content)
+    }
     pub fn gap(mut self, gap: f64) -> Self {
         self.gap = gap;
         self
+    }
+    pub fn gap_mut(&mut self) -> &mut f64 {
+        &mut self.gap
     }
     pub fn padding(mut self, padding: f64) -> Self {
         self.padding = Insets::all(padding);
@@ -180,6 +310,30 @@ impl Node {
     }
     pub fn insets(mut self, insets: Insets) -> Self {
         self.padding = insets;
+        self
+    }
+    pub fn insets_mut(&mut self) -> &mut Insets {
+        &mut self.padding
+    }
+    /// Declared outer size on both axes. `Auto` measures, `Px` fixes, `Pct`
+    /// takes a share of the parent: `.size(Len::Pct(50.0), 24.0)`.
+    pub fn size(mut self, width: impl Into<Len>, height: impl Into<Len>) -> Self {
+        self.width = width.into();
+        self.height = height.into();
+        self
+    }
+    pub fn width(mut self, width: impl Into<Len>) -> Self {
+        self.width = width.into();
+        self
+    }
+    pub fn height(mut self, height: impl Into<Len>) -> Self {
+        self.height = height.into();
+        self
+    }
+    /// `width / height`. Fills in whichever axis was left `Auto` -- at measure
+    /// from a fixed sibling axis, at arrange from the allocated one.
+    pub fn aspect(mut self, ratio: f64) -> Self {
+        self.aspect = Some(ratio);
         self
     }
     pub fn min_width(mut self, width: f64) -> Self {
@@ -202,22 +356,20 @@ impl Node {
         self.grow = weight;
         self
     }
-    pub fn fill(mut self) -> Self {
-        self.grow = 1.0;
-        self
+    pub fn fill(self) -> Self {
+        self.grow(1.0)
     }
     /// Start from this main-axis size instead of the measured one, before any
     /// growth or shrink. `basis(0.0)` is the only way to get equal *shares* of
-    /// an axis rather than equal shares of the surplus, which is what a
-    /// left/centre/right bar with differently sized ends needs: CSS
-    /// `flex-basis: 0`, and what `1fr` means.
+    /// an axis rather than equal shares of the surplus: CSS `flex-basis: 0`,
+    /// what `1fr` means.
     pub fn basis(mut self, basis: f64) -> Self {
         self.basis = Some(basis);
         self
     }
     /// Weight for absorbing a deficit, scaled by basis the way flexbox scales
-    /// it. Defaults to 1, so a child compresses rather than overflowing;
-    /// `shrink(0.0)` opts out, and `minimum` is the floor either way.
+    /// it. Defaults to 1; `shrink(0.0)` opts out, and `minimum` is the floor
+    /// either way.
     pub fn shrink(mut self, weight: f64) -> Self {
         self.shrink = weight;
         self
@@ -240,32 +392,42 @@ impl Node {
         self.justify = justify;
         self
     }
+    /// Where this child sits inside an overlay or grid cell, per axis. Defaults
+    /// to the parent's `align` on both axes, or `justify` for y once that is
+    /// set.
+    pub fn anchor(mut self, x: Align, y: Align) -> Self {
+        self.anchor = Some((x, y));
+        self
+    }
+    /// A nudge from the anchored position. The only coordinates in the system,
+    /// and relative ones at that.
+    pub fn offset(mut self, dx: f64, dy: f64) -> Self {
+        self.offset = [dx, dy];
+        self
+    }
+    fn len(&self, vertical: bool) -> Len {
+        if vertical {
+            self.height
+        } else {
+            self.width
+        }
+    }
 }
 
-/// Content whose size is already known: an icon cell, a measured string, a
-/// spacer. The tree's leaves.
 pub fn leaf(width: f64, height: f64) -> Node {
-    Node::new(Kind::Leaf(Size::new(width, height)))
+    Node::leaf(width, height)
 }
-/// A branch laid out left to right.
 pub fn row(children: impl IntoIterator<Item = Node>) -> Node {
-    Node::new(Kind::Branch {
-        vertical: false,
-        children: children.into_iter().collect(),
-    })
+    Node::row(children)
 }
-/// A branch laid out top to bottom.
 pub fn column(children: impl IntoIterator<Item = Node>) -> Node {
-    Node::new(Kind::Branch {
-        vertical: true,
-        children: children.into_iter().collect(),
-    })
+    Node::column(children)
 }
-/// A branch whose children all share one rect, back to front.
 pub fn overlay(children: impl IntoIterator<Item = Node>) -> Node {
-    Node::new(Kind::Overlay {
-        children: children.into_iter().collect(),
-    })
+    Node::overlay(children)
+}
+pub fn grid(cols: usize, children: impl IntoIterator<Item = Node>) -> Node {
+    Node::grid(cols, children)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -280,6 +442,15 @@ impl Frame {
     }
     pub fn bottom(self) -> f64 {
         self.y + self.size.height
+    }
+    pub fn center(self) -> (f64, f64) {
+        (
+            self.x + self.size.width / 2.0,
+            self.y + self.size.height / 2.0,
+        )
+    }
+    pub fn contains(self, x: f64, y: f64) -> bool {
+        x >= self.x && y >= self.y && x <= self.right() && y <= self.bottom()
     }
     pub fn inset(self, i: Insets) -> Option<Self> {
         let w = self.size.width - i.horizontal();
@@ -337,36 +508,87 @@ impl Default for Limits {
     }
 }
 
-struct Measured<'a> {
-    node: &'a Node,
+struct Measured<'a, P> {
+    node: &'a Node<P>,
     size: Size,
-    /// The smallest this subtree may be squeezed to. A node's own `minimum` is
-    /// only the start of it: a row cannot go below the sum of what its children
-    /// refuse to go below, or it would be shrunk to a width its own contents
-    /// then overflow.
+    /// The smallest this subtree may be squeezed to: every minimum in it,
+    /// summed along the axis they sit on.
     floor: Size,
-    children: Vec<Measured<'a>>,
+    children: Vec<Measured<'a, P>>,
 }
 
-impl Measured<'_> {
-    /// Where this child starts before growth or shrink: its declared `basis`,
-    /// or what it measured.
-    fn base(&self, vertical: bool) -> f64 {
-        self.node.basis.unwrap_or(self.size.main(vertical))
+impl<P> Measured<'_, P> {
+    /// Where this child starts before growth or shrink: a percentage of the
+    /// parent, a height derived from its aspect, its declared `basis`, or what
+    /// it measured. `inner` is `None` while the parent is still hugging.
+    fn base(&self, vertical: bool, inner: Option<Size>) -> f64 {
+        let fallback = || self.node.basis.unwrap_or(self.size.main(vertical));
+        let Some(inner) = inner else {
+            return fallback();
+        };
+        match (self.node.len(vertical), self.aspect_width(inner)) {
+            (Len::Pct(p), _) => inner.main(vertical) * p / 100.0,
+            (_, Some((w, a))) if vertical => w / a,
+            _ => fallback(),
+        }
+    }
+    /// Aspect is width-first, like CSS: when the height is `Auto`, the width
+    /// is whatever the node would have -- fixed, a share, or the parent's inner
+    /// width -- and the height follows.
+    fn aspect_width(&self, inner: Size) -> Option<(f64, f64)> {
+        let n = self.node;
+        let a = n.aspect.filter(|_| matches!(n.height, Len::Auto))?;
+        let cap = |v: f64| n.maximum.map_or(v, |m| v.min(m.width));
+        Some((cap(n.width.fixed(inner.width).unwrap_or(inner.width)), a))
+    }
+    /// Size on one axis inside `avail`, given how it is aligned there.
+    fn extent(&self, vertical: bool, avail: f64, align: Align) -> f64 {
+        let n = self.node;
+        let cap = |v: f64| n.maximum.map_or(v, |m| v.min(m.cross(!vertical)));
+        match n.len(vertical).fixed(avail) {
+            Some(v) => cap(v),
+            None if align == Align::Stretch && n.is_container() => cap(avail),
+            None => self.size.main(vertical),
+        }
     }
 }
 
-fn validate_node(node: &Node, l: Limits) -> Result<(), Error> {
+/// In a cell, `align` governs both axes until `justify` is actually set.
+fn cell_default<P>(n: &Node<P>) -> (Align, Align) {
+    let y = if n.justify == Justify::Start {
+        n.align
+    } else {
+        n.justify.as_align()
+    };
+    (n.align, y)
+}
+
+fn place(avail: f64, extent: f64, align: Align) -> f64 {
+    match align {
+        Align::Start => 0.0,
+        Align::End => avail - extent,
+        _ => (avail - extent) * 0.5,
+    }
+}
+
+fn validate_node<P>(node: &Node<P>, l: Limits) -> Result<(), Error> {
+    let finite = |v: f64| v.is_finite() && (0.0..=l.extent).contains(&v);
     if node.id.as_deref().is_some_and(str::is_empty)
         || !node.minimum.valid(l.extent)
         || node.maximum.is_some_and(|s| !s.valid(l.extent))
         || !node.padding.valid(l.extent)
         || ![node.gap, node.grow, node.shrink]
             .iter()
-            .all(|v| v.is_finite() && *v >= 0.0 && *v <= l.extent)
-        || node
-            .basis
-            .is_some_and(|b| !(b.is_finite() && (0.0..=l.extent).contains(&b)))
+            .all(|v| finite(*v))
+        || node.basis.is_some_and(|b| !finite(b))
+        || !node.width.valid(l.extent)
+        || !node.height.valid(l.extent)
+        || node.aspect.is_some_and(|a| !(a.is_finite() && a > 0.0))
+        || !node
+            .offset
+            .iter()
+            .all(|v| v.is_finite() && v.abs() <= l.extent)
+        || matches!(node.kind, Kind::Grid { cols: 0, .. })
     {
         return Err(Error::InvalidValue);
     }
@@ -380,89 +602,154 @@ fn validate_node(node: &Node, l: Limits) -> Result<(), Error> {
 
 /// What to call a node in an error. Unnamed nodes are structural, so the
 /// nearest named ancestor is the useful thing to point at.
-fn label(node: &Node, ancestor: &str) -> String {
+fn label<P>(node: &Node<P>, ancestor: &str) -> String {
     node.id
         .clone()
         .unwrap_or_else(|| format!("{ancestor} > unnamed"))
 }
 
-fn measure<'a>(
-    node: &'a Node,
+fn grid_rows<'a, P>(
+    children: &'a [Measured<'a, P>],
+    cols: usize,
+) -> impl Iterator<Item = &'a [Measured<'a, P>]> {
+    children.chunks(cols.max(1))
+}
+
+/// What a parent can promise a child about its outer size before layout runs:
+/// a fixed length, a share of a definite inner extent, or -- for a container
+/// (or an aspect-ratio node) that will be stretched -- that extent itself.
+/// `None` is "measure yourself".
+fn offer<P>(c: &Node<P>, vertical: bool, inner: Option<f64>, stretch: bool) -> Option<f64> {
+    match c.len(vertical) {
+        Len::Px(v) => Some(v),
+        Len::Pct(p) => inner.map(|i| i * p / 100.0),
+        Len::Auto => inner.filter(|_| stretch && (c.is_container() || c.aspect.is_some())),
+    }
+}
+
+/// One measure pass: the budget, the id set and the content measurer.
+struct Pass<'a, 'f, P> {
+    left: usize,
+    limits: Limits,
+    keys: BTreeMap<&'a str, ()>,
+    measurer: &'f mut dyn FnMut(&P) -> Size,
+}
+
+fn measure<'a, P>(
+    node: &'a Node<P>,
     ancestor: &str,
+    definite: [Option<f64>; 2],
     depth: usize,
-    left: &mut usize,
-    l: Limits,
-    keys: &mut BTreeMap<&'a str, ()>,
-) -> Result<Measured<'a>, Error> {
-    if depth > l.depth || *left == 0 {
+    pass: &mut Pass<'a, '_, P>,
+) -> Result<Measured<'a, P>, Error> {
+    let l = pass.limits;
+    if depth > l.depth || pass.left == 0 {
         return Err(Error::BudgetExceeded);
     }
-    *left -= 1;
+    pass.left -= 1;
     validate_node(node, l)?;
     if let Some(id) = node.id.as_deref() {
-        if keys.insert(id, ()).is_some() {
+        if pass.keys.insert(id, ()).is_some() {
             return Err(Error::DuplicateKey(id.to_string()));
         }
     }
     let here = node.id.as_deref().unwrap_or(ancestor);
-    let mut children = Vec::new();
+    // Aspect is width-first, like CSS: a definite width settles the height,
+    // and only a definite height with no width settles the width.
+    let mut definite = [
+        node.width.px().or(definite[0]),
+        node.height.px().or(definite[1]),
+    ];
+    if let Some(a) = node.aspect {
+        match (definite, node.height, node.width) {
+            ([Some(w), _], Len::Auto, _) => definite[1] = Some(w / a),
+            ([None, Some(h)], _, Len::Auto) => definite[0] = Some(h * a),
+            _ => {}
+        }
+    }
+    let inner = [
+        definite[0].map(|w| (w - node.padding.horizontal()).max(0.0)),
+        definite[1].map(|h| (h - node.padding.vertical()).max(0.0)),
+    ];
+    let mut children = Vec::with_capacity(node.children().len());
+    for c in node.children() {
+        let align = c.align_self.unwrap_or(node.align);
+        let promise = match &node.kind {
+            Kind::Branch { vertical, .. } => {
+                let v = *vertical;
+                let cross = offer(c, !v, inner[!v as usize], align == Align::Stretch);
+                let main = offer(c, v, inner[v as usize], false);
+                if v {
+                    [cross, main]
+                } else {
+                    [main, cross]
+                }
+            }
+            Kind::Overlay(_) => {
+                let (ax, ay) = c.anchor.unwrap_or(cell_default(node));
+                [
+                    offer(c, false, inner[0], ax == Align::Stretch),
+                    offer(c, true, inner[1], ay == Align::Stretch),
+                ]
+            }
+            Kind::Grid { cols, .. } => {
+                let (ax, _) = c.anchor.unwrap_or(cell_default(node));
+                let col = inner[0].map(|w| (w - node.gap * (*cols - 1) as f64) / *cols as f64);
+                [offer(c, false, col, ax == Align::Stretch), None]
+            }
+            _ => [None; 2],
+        };
+        children.push(measure(c, here, promise, depth + 1, pass)?);
+    }
+    let max_of = |g: &dyn Fn(&Measured<'_, P>) -> f64| children.iter().map(g).fold(0.0, f64::max);
     let (content, sunk) = match &node.kind {
-        Kind::Leaf(s) => {
+        Kind::Leaf => (Size::ZERO, Size::ZERO),
+        Kind::Content => {
+            let s = (pass.measurer)(&node.payload);
             if !s.valid(l.extent) {
                 return Err(Error::InvalidValue);
             }
-            // A leaf is opaque -- it *is* the content measurement, so there is
-            // no smaller version of it to discover. Declare `min_size` on one
-            // that must not be squeezed.
-            (*s, Size::default())
+            (s, Size::ZERO)
         }
-        Kind::Branch {
-            vertical,
-            children: source,
-        } => {
-            for child in source {
-                children.push(measure(child, here, depth + 1, left, l, keys)?);
-            }
-            let gaps = source.len().saturating_sub(1) as f64 * node.gap;
+        Kind::Branch { vertical: v, .. } => {
+            let v = *v;
+            let gaps = children.len().saturating_sub(1) as f64 * node.gap;
             // Intrinsic main is not the sum of the children: a child with a
-            // `basis` contributes that instead, and then the row has to be wide
-            // enough that its *share* of the surplus still clears its content.
-            // This is the flex fraction. Without it a hugging row collapses to
-            // its non-flexible children and squashes the rest.
-            let base = children.iter().map(|c| c.base(*vertical)).sum::<f64>();
+            // `basis` contributes that instead, and then the row has to be
+            // wide enough that its *share* of the surplus still clears its
+            // content. This is the flex fraction. Without it a hugging row
+            // collapses to its non-flexible children and squashes the rest.
+            let base = children.iter().map(|c| c.base(v, None)).sum::<f64>();
             let total_grow = children.iter().map(|c| c.node.grow).sum::<f64>();
             let surplus = children
                 .iter()
                 .filter(|c| c.node.grow > 0.0)
-                .map(|c| (c.size.main(*vertical) - c.base(*vertical)) * total_grow / c.node.grow)
+                .map(|c| (c.size.main(v) - c.base(v, None)) * total_grow / c.node.grow)
                 .fold(0.0, f64::max);
-            let cross = |f: fn(&Measured<'_>) -> Size| {
-                children
-                    .iter()
-                    .map(|c| f(c).cross(*vertical))
-                    .fold(0.0, f64::max)
-            };
-            let floor_main = children
-                .iter()
-                .map(|c| c.floor.main(*vertical))
-                .sum::<f64>()
-                + gaps;
+            let floor_main = children.iter().map(|c| c.floor.main(v)).sum::<f64>() + gaps;
             (
-                Size::axes(base + surplus + gaps, cross(|c| c.size), *vertical),
-                Size::axes(floor_main, cross(|c| c.floor), *vertical),
+                Size::axes(base + surplus + gaps, max_of(&|c| c.size.cross(v)), v),
+                Size::axes(floor_main, max_of(&|c| c.floor.cross(v)), v),
             )
         }
-        Kind::Overlay { children: source } => {
-            for child in source {
-                children.push(measure(child, here, depth + 1, left, l, keys)?);
-            }
-            let envelope = |f: fn(&Measured<'_>) -> Size| {
+        Kind::Overlay(_) => (
+            Size::new(max_of(&|c| c.size.width), max_of(&|c| c.size.height)),
+            Size::new(max_of(&|c| c.floor.width), max_of(&|c| c.floor.height)),
+        ),
+        Kind::Grid { cols, .. } => {
+            let rows = children.len().div_ceil(*cols) as f64;
+            let gaps = |n: f64| (n - 1.0).max(0.0) * node.gap;
+            let hug = |g: fn(&Measured<'_, P>) -> Size| {
+                let widest = children.iter().map(|c| g(c).width).fold(0.0, f64::max);
+                let tall: f64 = grid_rows(&children, *cols)
+                    .map(|r| r.iter().map(|c| g(c).height).fold(0.0, f64::max))
+                    .sum();
                 Size::new(
-                    children.iter().map(|c| f(c).width).fold(0.0, f64::max),
-                    children.iter().map(|c| f(c).height).fold(0.0, f64::max),
+                    widest * *cols as f64 + gaps(*cols as f64),
+                    tall + gaps(rows),
                 )
             };
-            (envelope(|c| c.size), envelope(|c| c.floor))
+            (hug(|c| c.size), hug(|c| c.floor))
         }
     };
     let pad = |s: Size| {
@@ -471,7 +758,12 @@ fn measure<'a>(
             (s.height + node.padding.vertical()).max(node.minimum.height),
         )
     };
-    let (size, floor) = (pad(content), pad(sunk));
+    let hug = pad(content);
+    let size = Size::new(
+        definite[0].unwrap_or(hug.width),
+        definite[1].unwrap_or(hug.height),
+    );
+    let floor = pad(sunk);
     if !size.valid(l.extent) {
         return Err(Error::BudgetExceeded);
     }
@@ -495,10 +787,15 @@ fn measure<'a>(
 /// over the rest, which is what the outer loop is for.
 ///
 /// Only one direction runs. A row that overflows never grew.
-fn distribute(m: &Measured<'_>, vertical: bool, inner_main: f64, base_gap: f64) -> Vec<f64> {
-    let base: Vec<f64> = m.children.iter().map(|c| c.base(vertical)).collect();
+fn distribute<P>(m: &Measured<'_, P>, vertical: bool, inner: Size) -> Vec<f64> {
+    let inner_main = inner.main(vertical);
+    let base: Vec<f64> = m
+        .children
+        .iter()
+        .map(|c| c.base(vertical, Some(inner)))
+        .collect();
     let mut allocated = base.clone();
-    let gaps = base_gap * m.children.len().saturating_sub(1) as f64;
+    let gaps = m.node.gap * m.children.len().saturating_sub(1) as f64;
     let mut free = inner_main - base.iter().sum::<f64>() - gaps;
     let growing = free > 0.0;
     let room = |i: usize, allocated: &[f64]| {
@@ -506,7 +803,7 @@ fn distribute(m: &Measured<'_>, vertical: bool, inner_main: f64, base_gap: f64) 
         let edge = if growing {
             c.node.maximum.map_or(1e6, |s| s.main(vertical)) - allocated[i]
         } else {
-            allocated[i] - m.children[i].floor.main(vertical)
+            allocated[i] - c.floor.main(vertical)
         };
         edge.max(0.0)
     };
@@ -537,8 +834,29 @@ fn distribute(m: &Measured<'_>, vertical: bool, inner_main: f64, base_gap: f64) 
     allocated
 }
 
-fn arrange(
-    m: &Measured<'_>,
+/// A child in a rect of its own: an overlay layer or a grid cell. Returns the
+/// child's origin within the cell and its size.
+fn cell<P>(c: &Measured<'_, P>, cell: Size, default: (Align, Align)) -> ([f64; 2], Size) {
+    let n = c.node;
+    let (ax, ay) = n.anchor.unwrap_or(default);
+    let (w, h) = match c.aspect_width(cell) {
+        Some((w, a)) => (w, w / a),
+        None => (
+            c.extent(false, cell.width, ax),
+            c.extent(true, cell.height, ay),
+        ),
+    };
+    (
+        [
+            place(cell.width, w, ax) + n.offset[0],
+            place(cell.height, h, ay) + n.offset[1],
+        ],
+        Size::new(w, h),
+    )
+}
+
+fn arrange<P>(
+    m: &Measured<'_, P>,
     ancestor: &str,
     origin: [f64; 2],
     size: Size,
@@ -546,8 +864,7 @@ fn arrange(
 ) -> Result<(), Error> {
     let n = m.node;
     // Content is squeezable -- that is the whole point of shrink -- but the
-    // floor is not: it is every minimum in this subtree, summed along the axis
-    // they sit on.
+    // floor is not.
     if size.width + 1e-8 < m.floor.width || size.height + 1e-8 < m.floor.height {
         return Err(Error::InsufficientSpace(label(n, ancestor)));
     }
@@ -562,97 +879,84 @@ fn arrange(
             },
         );
     }
+    let inner = Size::new(
+        (size.width - n.padding.horizontal()).max(0.0),
+        (size.height - n.padding.vertical()).max(0.0),
+    );
+    let at = |x: f64, y: f64| {
+        [
+            origin[0] + n.padding.left + x,
+            origin[1] + n.padding.top + y,
+        ]
+    };
+    let default = cell_default(n);
     match &n.kind {
-        Kind::Leaf(_) => Ok(()),
-        Kind::Overlay { .. } => {
-            let inner = Size::new(
-                (size.width - n.padding.horizontal()).max(0.0),
-                (size.height - n.padding.vertical()).max(0.0),
-            );
-            for c in &m.children {
-                let max = c.node.maximum.unwrap_or(Size::new(1e6, 1e6));
-                let align = c.node.align_self.unwrap_or(n.align);
-                let w = if align == Align::Stretch {
-                    inner.width.min(max.width)
-                } else {
-                    c.size.width
-                };
-                let h = if align == Align::Stretch {
-                    inner.height.min(max.height)
-                } else {
-                    c.size.height
-                };
-                let x = n.padding.left
-                    + match align {
-                        Align::Center => (inner.width - w) * 0.5,
-                        Align::End => inner.width - w,
-                        _ => 0.0,
-                    };
-                let y = n.padding.top
-                    + match n.justify {
-                        Justify::Center => (inner.height - h) * 0.5,
-                        Justify::End => inner.height - h,
-                        _ => 0.0,
-                    };
-                arrange(
-                    c,
-                    here,
-                    [origin[0] + x, origin[1] + y],
-                    Size::new(w, h),
-                    out,
-                )?;
+        Kind::Leaf | Kind::Content => Ok(()),
+        Kind::Overlay(_) => m.children.iter().try_for_each(|c| {
+            let (p, s) = cell(c, inner, default);
+            arrange(c, here, at(p[0], p[1]), s, out)
+        }),
+        Kind::Grid { cols, .. } => {
+            let cols = *cols;
+            let rows = m.children.len().div_ceil(cols);
+            let col_w = (inner.width - n.gap * cols.saturating_sub(1) as f64) / cols as f64;
+            let heights: Vec<f64> = grid_rows(&m.children, cols)
+                .map(|r| r.iter().map(|c| c.size.height).fold(0.0, f64::max))
+                .collect();
+            let surplus = (inner.height
+                - heights.iter().sum::<f64>()
+                - n.gap * rows.saturating_sub(1) as f64)
+                .max(0.0)
+                / rows.max(1) as f64;
+            let mut y = 0.0;
+            for (row, h) in grid_rows(&m.children, cols).zip(heights) {
+                let cell_size = Size::new(col_w, h + surplus);
+                for (k, c) in row.iter().enumerate() {
+                    let (p, s) = cell(c, cell_size, default);
+                    arrange(
+                        c,
+                        here,
+                        at(k as f64 * (col_w + n.gap) + p[0], y + p[1]),
+                        s,
+                        out,
+                    )?;
+                }
+                y += cell_size.height + n.gap;
             }
             Ok(())
         }
         Kind::Branch { vertical, .. } => {
-            let inner = Size::new(
-                (size.width - n.padding.horizontal()).max(0.0),
-                (size.height - n.padding.vertical()).max(0.0),
-            );
-            let allocated = distribute(m, *vertical, inner.main(*vertical), n.gap);
-            let children_main = allocated.iter().sum::<f64>();
-            let count = m.children.len();
-            let nominal_gap = n.gap * count.saturating_sub(1) as f64;
-            let residual = (inner.main(*vertical) - children_main - nominal_gap).max(0.0);
-            let (mut cursor, extra_gap) = match n.justify {
-                Justify::Start => (n.padding.main_start(*vertical), 0.0),
-                Justify::Center => (n.padding.main_start(*vertical) + residual * 0.5, 0.0),
-                Justify::End => (n.padding.main_start(*vertical) + residual, 0.0),
-                Justify::SpaceBetween if count > 1 => (
-                    n.padding.main_start(*vertical),
-                    residual / (count - 1) as f64,
-                ),
-                Justify::SpaceBetween => (n.padding.main_start(*vertical) + residual * 0.5, 0.0),
+            let v = *vertical;
+            let allocated = distribute(m, v, inner);
+            let count = m.children.len() as f64;
+            let residual =
+                (inner.main(v) - allocated.iter().sum::<f64>() - n.gap * (count - 1.0).max(0.0))
+                    .max(0.0);
+            let (mut cursor, extra) = match n.justify {
+                Justify::Start => (0.0, 0.0),
+                Justify::Center => (residual * 0.5, 0.0),
+                Justify::End => (residual, 0.0),
+                Justify::SpaceBetween if count > 1.0 => (0.0, residual / (count - 1.0)),
+                Justify::SpaceBetween => (residual * 0.5, 0.0),
+                Justify::SpaceAround => (residual / count * 0.5, residual / count),
+                Justify::SpaceEvenly => (residual / (count + 1.0), residual / (count + 1.0)),
             };
-            for (i, c) in m.children.iter().enumerate() {
-                let available = inner.cross(*vertical);
-                let natural = c.size.cross(*vertical);
+            for (c, main) in m.children.iter().zip(allocated) {
                 let align = c.node.align_self.unwrap_or(n.align);
-                let cross = if align == Align::Stretch {
-                    available.min(c.node.maximum.map_or(available, |s| s.cross(*vertical)))
-                } else {
-                    natural
+                let avail = inner.cross(v);
+                let cross = match c.aspect_width(inner) {
+                    Some((w, _)) if v => w,
+                    Some((_, a)) => main / a,
+                    None => c.extent(!v, avail, align),
                 };
-                let slack = (available - cross).max(0.0);
-                let cross_pos = n.padding.cross_start(*vertical)
-                    + match align {
-                        Align::Center => slack * 0.5,
-                        Align::End => slack,
-                        _ => 0.0,
-                    };
-                let pos = if *vertical {
-                    [origin[0] + cross_pos, origin[1] + cursor]
+                let cross_pos = place(avail, cross, align);
+                let pos = if v {
+                    at(cross_pos, cursor)
                 } else {
-                    [origin[0] + cursor, origin[1] + cross_pos]
+                    at(cursor, cross_pos)
                 };
-                arrange(
-                    c,
-                    here,
-                    pos,
-                    Size::axes(allocated[i], cross, *vertical),
-                    out,
-                )?;
-                cursor += allocated[i] + n.gap + extra_gap;
+                arrange(c, here, pos, Size::axes(main, cross, v), out)?;
+                cursor += main + n.gap + extra;
             }
             Ok(())
         }
@@ -660,14 +964,33 @@ fn arrange(
 }
 
 /// `None` means hug intrinsic content. `Some` is an exact offered parent size.
-/// Text shaping/wrapping is deliberately an external leaf-measurement concern.
-pub fn resolve(root: &Node, offered: Option<Size>, limits: Limits) -> Result<Layout, Error> {
+/// Content leaves measure as empty; use [`resolve_with`] to size them.
+pub fn resolve<P>(root: &Node<P>, offered: Option<Size>, limits: Limits) -> Result<Layout, Error> {
+    resolve_with(root, offered, limits, |_| Size::ZERO)
+}
+
+/// [`resolve`] with a measurer for `Node::content` leaves, called once per
+/// leaf with its payload. Text shaping lives outside this crate on purpose.
+// ponytail: intrinsic width only, no wrap; give the measurer an available
+// width when a wrapping text leaf is actually needed.
+pub fn resolve_with<P>(
+    root: &Node<P>,
+    offered: Option<Size>,
+    limits: Limits,
+    mut measurer: impl FnMut(&P) -> Size,
+) -> Result<Layout, Error> {
     if !limits.extent.is_finite() || limits.extent <= 0.0 || limits.nodes == 0 || limits.depth > 256
     {
         return Err(Error::InvalidValue);
     }
-    let mut left = limits.nodes;
-    let m = measure(root, "root", 0, &mut left, limits, &mut BTreeMap::new())?;
+    let definite = offered.map_or([None; 2], |s| [Some(s.width), Some(s.height)]);
+    let mut pass = Pass {
+        left: limits.nodes,
+        limits,
+        keys: BTreeMap::new(),
+        measurer: &mut measurer,
+    };
+    let m = measure(root, "root", definite, 0, &mut pass)?;
     let size = offered.unwrap_or(m.size);
     if !size.valid(limits.extent) {
         return Err(Error::InvalidValue);
@@ -696,9 +1019,9 @@ impl LayoutState {
     pub fn current(&self) -> Option<&Layout> {
         self.current.as_ref()
     }
-    pub fn commit(
+    pub fn commit<P>(
         &mut self,
-        root: &Node,
+        root: &Node<P>,
         offered: Option<Size>,
         limits: Limits,
     ) -> Result<(), Error> {
@@ -714,242 +1037,4 @@ impl LayoutState {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn intrinsic_chain() {
-        let controls = column([
-            leaf(28., 28.).id("add"),
-            leaf(28., 28.).id("a"),
-            leaf(28., 28.).id("b"),
-        ])
-        .id("controls")
-        .gap(10.);
-        let tree = column([column([controls]).id("pill").padding(10.)])
-            .id("tab")
-            .padding(12.);
-        let l = resolve(&tree, None, Default::default()).unwrap();
-        assert_eq!(l.size, Size::new(72., 148.));
-        assert_eq!(l.frame("pill").unwrap().size, Size::new(48., 124.));
-    }
-    #[test]
-    fn asymmetric_padding() {
-        let t = column([leaf(10., 20.).id("c")]).id("p").insets(Insets {
-            left: 1.,
-            right: 2.,
-            top: 3.,
-            bottom: 4.,
-        });
-        let l = resolve(&t, None, Default::default()).unwrap();
-        assert_eq!(l.size, Size::new(13., 27.));
-        assert_eq!(l.frame("c").unwrap().x, 1.0);
-        assert_eq!(l.frame("c").unwrap().y, 3.);
-    }
-    #[test]
-    fn space_between() {
-        let t = row([leaf(10., 10.).id("a"), leaf(10., 10.).id("b")])
-            .id("r")
-            .justify(Justify::SpaceBetween);
-        let l = resolve(&t, Some(Size::new(100., 10.)), Default::default()).unwrap();
-        assert_eq!(l.frame("a").unwrap().x, 0.);
-        assert_eq!(l.frame("b").unwrap().x, 90.);
-    }
-    #[test]
-    fn overlay_centers() {
-        let t = overlay([leaf(10., 10.).id("a")])
-            .id("o")
-            .padding(5.)
-            .align(Align::Center)
-            .justify(Justify::Center);
-        let l = resolve(&t, Some(Size::new(40., 50.)), Default::default()).unwrap();
-        let f = l.frame("a").unwrap();
-        assert_eq!(f.x, 15.);
-        assert_eq!(f.y, 20.);
-    }
-    #[test]
-    fn growth_caps() {
-        let t = row([
-            leaf(10., 10.)
-                .id("a")
-                .grow(1.)
-                .max_size(Size::new(20., 20.)),
-            leaf(10., 10.).id("b").grow(1.),
-        ])
-        .id("r");
-        let l = resolve(&t, Some(Size::new(100., 10.)), Default::default()).unwrap();
-        assert_eq!(l.frame("a").unwrap().size.width, 20.);
-        assert_eq!(l.frame("b").unwrap().size.width, 80.);
-    }
-    #[test]
-    fn failed_commit_preserves() {
-        let mut s = LayoutState::default();
-        s.commit(&leaf(1., 1.).id("x"), None, Default::default())
-            .unwrap();
-        let old = s.current.clone();
-        assert!(s
-            .commit(&leaf(f64::NAN, 1.).id("bad"), None, Default::default())
-            .is_err());
-        assert_eq!(s.current, old);
-        assert_eq!(s.revision, 1);
-    }
-    #[test]
-    fn duplicate_ids() {
-        assert!(matches!(
-            resolve(
-                &row([leaf(1., 1.).id("x"), leaf(1., 1.).id("x")]).id("r"),
-                None,
-                Default::default()
-            ),
-            Err(Error::DuplicateKey(_))
-        ));
-    }
-    #[test]
-    fn a_declared_minimum_is_the_floor_and_content_alone_is_not() {
-        // Content is squeezable; that is what shrink means.
-        let l = resolve(
-            &leaf(100., 100.).id("x"),
-            Some(Size::new(50., 50.)),
-            Default::default(),
-        )
-        .unwrap();
-        assert_eq!(l.frame("x").unwrap().size, Size::new(50., 50.));
-        // A minimum the author asked for is not.
-        assert!(matches!(
-            resolve(
-                &leaf(100., 100.).id("x").min_size(Size::new(100., 100.)),
-                Some(Size::new(50., 50.)),
-                Default::default()
-            ),
-            Err(Error::InsufficientSpace(_))
-        ));
-    }
-
-    /// The left/centre/right bar. Ends of different widths -- 50 and 20 -- must
-    /// still leave the middle child centred on the *container*, which neither
-    /// `SpaceBetween` nor `grow` can do, because both hand out the surplus left
-    /// after intrinsic sizing and so inherit the ends' asymmetry.
-    #[test]
-    fn basis_zero_shares_the_axis_rather_than_the_surplus() {
-        let bar = |ends: Node| {
-            let l = resolve(&ends, Some(Size::new(400., 20.)), Default::default()).unwrap();
-            let m = l.frame("m").unwrap();
-            m.x + m.size.width / 2.
-        };
-        let slots = |shape: fn(Node) -> Node| {
-            row([
-                shape(row([leaf(50., 20.).id("li")]).id("l")),
-                leaf(30., 20.).id("m"),
-                shape(row([leaf(20., 20.).id("ri")]).id("r").justify(Justify::End)),
-            ])
-            .id("bar")
-        };
-        assert_eq!(bar(slots(|n| n).justify(Justify::SpaceBetween)), 215.);
-        assert_eq!(bar(slots(|n| n.grow(1.))), 215.);
-        assert_eq!(bar(slots(|n| n.flex(1.))), 200.);
-
-        // ...and the ends still sit against the edges they belong to.
-        let l = resolve(
-            &slots(|n| n.flex(1.)),
-            Some(Size::new(400., 20.)),
-            Default::default(),
-        )
-        .unwrap();
-        assert_eq!(l.frame("li").unwrap().x, 0.);
-        assert_eq!(l.frame("ri").unwrap().right(), 400.);
-
-        // Hugging, the row is sized by the flex fraction: wide enough that the
-        // hungriest flexible child's *share* still clears its content. The left
-        // slot needs 50, so at one unit of grow each both slots are 50 and the
-        // row is 130 -- not the 100 that summing the children would give, which
-        // would have squashed that slot to 35.
-        let hug = resolve(&slots(|n| n.flex(1.)), None, Default::default()).unwrap();
-        assert_eq!(hug.size.width, 130.);
-        assert_eq!(hug.frame("li").unwrap().size.width, 50.);
-        assert_eq!(hug.frame("ri").unwrap().size.width, 20.);
-        // ...so the middle child is centred at its hugging size too.
-        let m = hug.frame("m").unwrap();
-        assert_eq!(m.x + m.size.width / 2., 65.);
-    }
-
-    #[test]
-    fn a_deficit_comes_back_by_shrink_and_stops_at_each_minimum() {
-        let row = |a: Node, b: Node| {
-            let l = resolve(
-                &row([a, b]).id("r"),
-                Some(Size::new(150., 20.)),
-                Default::default(),
-            )
-            .unwrap();
-            (
-                l.frame("a").unwrap().size.width,
-                l.frame("b").unwrap().size.width,
-            )
-        };
-        // Equal basis, equal shrink: the 50 px deficit splits evenly.
-        assert_eq!(
-            row(leaf(100., 20.).id("a"), leaf(100., 20.).id("b")),
-            (75., 75.)
-        );
-        // `a` freezes at its minimum after giving up 10, and `b` absorbs the rest.
-        assert_eq!(
-            row(
-                leaf(100., 20.).id("a").min_size(Size::new(90., 0.)),
-                leaf(100., 20.).id("b")
-            ),
-            (90., 60.)
-        );
-        // `shrink(0.0)` opts out entirely.
-        assert_eq!(
-            row(leaf(100., 20.).id("a").shrink(0.), leaf(100., 20.).id("b")),
-            (100., 50.)
-        );
-    }
-
-    /// A node's floor is not just its own `min_size`. Without the children's
-    /// minimums summing upward, a parent is shrunk to a width its own contents
-    /// then overflow, and nothing anywhere reports it.
-    #[test]
-    fn a_parent_cannot_be_squeezed_past_what_its_children_refuse() {
-        let root = row([row([
-            leaf(100., 20.).id("a").min_size(Size::new(40., 0.)),
-            leaf(100., 20.).id("b").min_size(Size::new(30., 0.)),
-        ])
-        .id("in")])
-        .id("out");
-        // 70 is exactly the two floors, and both children land on theirs.
-        let l = resolve(&root, Some(Size::new(70., 20.)), Default::default()).unwrap();
-        assert_eq!(l.frame("a").unwrap().size.width, 40.);
-        assert_eq!(l.frame("b").unwrap().size.width, 30.);
-        // A pixel under, and it is refused rather than silently overflowing.
-        assert!(matches!(
-            resolve(&root, Some(Size::new(69., 20.)), Default::default()),
-            Err(Error::InsufficientSpace(_))
-        ));
-
-        // The floor also has to bind while the deficit is being shared out, not
-        // only as a check afterwards. Given a squeezable sibling, `in` freezes
-        // at 70 and the rest of the deficit goes to `c` -- an even split would
-        // have put `in` at 50, under a floor it never declared itself.
-        let pair = row([root, leaf(200., 20.).id("c")]).id("pair");
-        let l = resolve(&pair, Some(Size::new(100., 20.)), Default::default()).unwrap();
-        assert_eq!(l.frame("out").unwrap().size.width, 70.);
-        assert_eq!(l.frame("c").unwrap().size.width, 30.);
-    }
-
-    #[test]
-    fn align_self_overrides_the_parent_for_one_child() {
-        let l = resolve(
-            &column([
-                leaf(20., 10.).id("a"),
-                leaf(20., 10.).id("b").align_self(Align::End),
-            ])
-            .id("c")
-            .align(Align::Start),
-            Some(Size::new(100., 20.)),
-            Default::default(),
-        )
-        .unwrap();
-        assert_eq!(l.frame("a").unwrap().x, 0.);
-        assert_eq!(l.frame("b").unwrap().x, 80.);
-    }
-}
+mod tests;
