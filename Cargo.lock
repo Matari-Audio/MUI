@@ -12,6 +12,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "adler2"
+version = "2.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
+
+[[package]]
 name = "ahash"
 version = "0.8.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -34,6 +40,12 @@ name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
+
+[[package]]
+name = "base64"
+version = "0.22.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
 name = "bitflags"
@@ -81,6 +93,30 @@ checksum = "2ec7c5eb7a16992b1904d76c517d170ab353b0e0b3d5a0c81a8a0cd1037893cf"
 dependencies = [
  "bytemuck",
 ]
+
+[[package]]
+name = "crc32fast"
+version = "1.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "01a7799fd6b852db0e61728dde9a204c423b44d689dbd432522543614b490e78"
+dependencies = [
+ "cfg-if",
+]
+
+[[package]]
+name = "crossbeam-queue"
+version = "0.3.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "03e8bd762f7479489c70ed6c768ddca99d7296857de437a68dcb2a94365b3fae"
+dependencies = [
+ "crossbeam-utils",
+]
+
+[[package]]
+name = "crossbeam-utils"
+version = "0.8.23"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a31eee39dddec8330830986fcd7625edb5a24ec90ea038215273bbc3adb08ac6"
 
 [[package]]
 name = "displaydoc"
@@ -167,6 +203,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "equivalent"
+version = "1.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
+
+[[package]]
 name = "euclid"
 version = "0.22.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -176,10 +218,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "fdeflate"
+version = "0.3.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e6853b52649d4ac5c0bd02320cddc5ba956bdb407c4b75a2c6b75bf51500f8c"
+dependencies = [
+ "simd-adler32",
+]
+
+[[package]]
 name = "fearless_simd"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b97b65636e5b9ef369943878ac74335ba1c55c1cb6adbf1e2c293c624248d693"
+
+[[package]]
+name = "flate2"
+version = "1.1.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6e634e2e0ebac1ee034020da1ca582e17ffe4e0f5e985823721e168928136dcb"
+dependencies = [
+ "crc32fast",
+ "miniz_oxide 0.9.1",
+ "zlib-rs",
+]
 
 [[package]]
 name = "float_next_after"
@@ -465,6 +527,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ae293c039020f9ec10710af98d29ce6aa2051486638b49c9a6409f3b4a9e98ad"
 
 [[package]]
+name = "indexmap"
+version = "2.14.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cc4e190f5d26ca7051642629da2c52fc03bde85a03197c99408dcd291734c855"
+dependencies = [
+ "equivalent",
+ "hashbrown",
+]
+
+[[package]]
 name = "itertools"
 version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -593,6 +665,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "miniz_oxide"
+version = "0.8.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1fa76a2c86f704bdb222d66965fb3d63269ce38518b83cb0575fca855ebb6316"
+dependencies = [
+ "adler2",
+ "simd-adler32",
+]
+
+[[package]]
+name = "miniz_oxide"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b63fbc4a50860e98e7b2aa7804ded1db5cbc3aff9193adaff57a6931bf7c4b4c"
+dependencies = [
+ "adler2",
+ "simd-adler32",
+]
+
+[[package]]
 name = "mui"
 version = "0.3.0"
 dependencies = [
@@ -669,6 +761,16 @@ dependencies = [
  "mui-core",
  "mui-layout",
  "parley",
+]
+
+[[package]]
+name = "mui-truce"
+version = "0.3.0"
+dependencies = [
+ "truce",
+ "truce-core",
+ "truce-derive",
+ "truce-params",
 ]
 
 [[package]]
@@ -819,6 +921,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
 
 [[package]]
+name = "png"
+version = "0.18.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "60769b8b31b2a9f263dae2776c37b1b28ae246943cf719eb6946a1db05128a61"
+dependencies = [
+ "bitflags",
+ "crc32fast",
+ "fdeflate",
+ "flate2",
+ "miniz_oxide 0.8.9",
+]
+
+[[package]]
 name = "polycool"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -940,6 +1055,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_spanned"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6662b5879511e06e8999a8a235d848113e942c9124f211511b16466ee2995f26"
+dependencies = [
+ "serde_core",
+]
+
+[[package]]
+name = "simd-adler32"
+version = "0.3.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3a219298ac11a56ea9a6d2120044824d6f01aeb034955e7af7bc16858527deea"
+
+[[package]]
 name = "skrifa"
 version = "0.44.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1051,6 +1181,149 @@ dependencies = [
  "serde_core",
  "zerovec",
 ]
+
+[[package]]
+name = "toml"
+version = "1.1.6+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "920602543f0911ab71da12c50d59701da54c196d1a2bf5cb4b75667f137a406a"
+dependencies = [
+ "indexmap",
+ "serde_core",
+ "serde_spanned",
+ "toml_datetime",
+ "toml_parser",
+ "toml_writer",
+ "winnow",
+]
+
+[[package]]
+name = "toml_datetime"
+version = "1.1.1+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3165f65f62e28e0115a00b2ebdd37eb6f3b641855f9d636d3cd4103767159ad7"
+dependencies = [
+ "serde_core",
+]
+
+[[package]]
+name = "toml_parser"
+version = "1.1.3+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1d38ac1cf9b95face32296c0a3ede1fdc270627c9d9c02a7274dd6d960dc4d56"
+dependencies = [
+ "winnow",
+]
+
+[[package]]
+name = "toml_writer"
+version = "1.1.2+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d56353a2a665ad0f41a421187180aab746c8c325620617ad883a99a1cbe66d2"
+
+[[package]]
+name = "truce"
+version = "6.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "487e318553a5b064b8538d0db29d758f49381c40e78aa4862766bca276219ef5"
+dependencies = [
+ "truce-core",
+ "truce-derive",
+ "truce-gui-types",
+ "truce-loader",
+ "truce-params",
+ "truce-plugin",
+]
+
+[[package]]
+name = "truce-build"
+version = "6.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3e366bf85ae85548d710dd3e58d802daf1a8363efc78c0037cdc160fe3b6f987"
+dependencies = [
+ "base64",
+ "serde",
+ "toml",
+ "truce-utils",
+]
+
+[[package]]
+name = "truce-core"
+version = "6.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5ecd892fb0f82fdfbf801b4aab7f443f3c51deac572366b8bebfbda49117f1df"
+dependencies = [
+ "crossbeam-queue",
+ "crossbeam-utils",
+ "png",
+ "truce-params",
+ "truce-utils",
+]
+
+[[package]]
+name = "truce-derive"
+version = "6.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b68393cabbfd1b9d8cbb28d99e93172a8074c422422e5e999403c108673fe848"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+ "toml",
+ "truce-build",
+ "truce-params",
+ "truce-utils",
+]
+
+[[package]]
+name = "truce-gui-types"
+version = "6.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f8417497c62104ff9737ff59e15d5f3a1ba415e2b8ec88c74f04f88436144586"
+dependencies = [
+ "objc2",
+ "truce-core",
+]
+
+[[package]]
+name = "truce-loader"
+version = "6.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4ae4060004de3078a884160e8c8328e881893e731900911cd43a495ba0b7dc1c"
+dependencies = [
+ "crc32fast",
+ "log",
+ "truce-core",
+ "truce-gui-types",
+ "truce-params",
+ "truce-plugin",
+]
+
+[[package]]
+name = "truce-params"
+version = "6.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bee6182c88d6f844a169c9f6ad84461071df15f325da1b954649b6b407260484"
+dependencies = [
+ "bitflags",
+]
+
+[[package]]
+name = "truce-plugin"
+version = "6.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7860aff3a9914ae2cbd8c812f36b8cf664b3cf223ed7f1110c842c8e0b086e3d"
+dependencies = [
+ "truce-core",
+ "truce-gui-types",
+ "truce-params",
+]
+
+[[package]]
+name = "truce-utils"
+version = "6.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c16c39b3d4b34d50004d7e0e752344bb0c048207528adc72ca7118391eb3140e"
 
 [[package]]
 name = "unicode-general-category"
@@ -1281,6 +1554,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "winnow"
+version = "1.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "23b97319f7b8343df12cc98938e5c3eb436064524c8d2b4e30a1d3a36eecdf81"
+
+[[package]]
 name = "writeable"
 version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1395,3 +1674,9 @@ dependencies = [
  "quote",
  "syn 3.0.5",
 ]
+
+[[package]]
+name = "zlib-rs"
+version = "0.6.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "34b31d188d9d685a4f9c7b46d6e36631b07058d2cfe190267adce54dc230bf12"

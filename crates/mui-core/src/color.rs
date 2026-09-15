@@ -10,6 +10,20 @@ impl Rgb {
     pub const fn new(r: u8, g: u8, b: u8) -> Self {
         Self(r, g, b)
     }
+    /// OKLCH lightness in 0..=1, nonnegative chroma, and hue in degrees.
+    /// Out-of-gamut colors preserve lightness/hue while reducing chroma.
+    pub fn from_oklch(l: f64, c: f64, h: f64) -> Result<Self, ColorError> {
+        if !l.is_finite()
+            || !c.is_finite()
+            || !h.is_finite()
+            || !(0.0..=1.0).contains(&l)
+            || c < 0.0
+        {
+            return Err(ColorError::InvalidOklch);
+        }
+        let h = h.rem_euclid(360.0).to_radians();
+        Ok(from_lab([l, c * h.cos(), c * h.sin()]))
+    }
     pub fn channels(self) -> [u8; 3] {
         [self.0, self.1, self.2]
     }
@@ -92,12 +106,16 @@ impl Rgb {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ColorError {
     InvalidRatio,
+    InvalidOklch,
     NoBackground,
     Unsatisfied { minimum: f64, best: f64 },
 }
 impl fmt::Display for ColorError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InvalidOklch => {
+                f.write_str("OKLCH requires finite L in 0..1, C >= 0, and hue in degrees")
+            }
             Self::InvalidRatio => f.write_str("contrast ratio must be finite and between 1 and 21"),
             Self::NoBackground => f.write_str("contrast needs at least one opaque background"),
             Self::Unsatisfied { minimum, best } => write!(

@@ -9,6 +9,8 @@ members = [
   "crates/mui-demo",
   "crates/mui-playground",
   "crates/mui-text",
+  "crates/mui-truce",
+  "crates/mui-gpui",
 ]
 resolver = "2"
 

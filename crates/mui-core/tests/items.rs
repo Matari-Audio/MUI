@@ -2,13 +2,13 @@ use mui_core::SpacingToken::{L, M, S};
 use mui_core::*;
 use mui_layout::{Fill, Flow::*, Horizontal::*, Hug, Justify::SpaceEvenly, Track, Vertical::*};
 fn box_item(id: &str, w: f64, h: f64) -> Item {
-    item(id).width(w).height(h)
+    item(id).size(w, h)
 }
 #[test]
 fn tabs_use_one_identity_and_infer_extension_without_changing_tap_targets() {
     for x in [Left, Center, Right] {
-        let ui = container([
-            container([
+        let ui = Item::column([
+            Item::row([
                 box_item("left", 60., 32.),
                 box_item("tab", 80., 32.)
                     .extend_to("panel")
@@ -16,18 +16,16 @@ fn tabs_use_one_identity_and_infer_extension_without_changing_tap_targets() {
                     .color(Color::Raised),
                 box_item("right", 60., 32.),
             ])
-            .layout(Row)
             .position(x, Middle)
             .width(Fill)
             .pad(M)
             .gap(S),
             box_item("panel", 360., 100.).color(Color::Panel),
         ])
-        .layout(Column)
         .gap(L)
         .width(Fill)
         .height(Hug)
-        .round(Rounding::separate(12., 8.))
+        .round((12., S))
         .merge(["tab", "panel"])
         .build()
         .unwrap()
@@ -215,4 +213,45 @@ fn scoped_text_measurement_and_invalid_item_policies_are_explicit() {
     .build()
     .unwrap();
     assert!(diagonal.resolve().is_err());
+}
+
+#[test]
+fn compact_flex_preserves_distribution_and_rejects_invalid_rounding() {
+    for horizontal in [true, false] {
+        let cells = [item("a").size(20., 20.), item("b").size(20., 20.)];
+        let ui = if horizontal { Item::row(cells) } else { Item::column(cells) }
+            .size(100., 100.).pack(SpaceEvenly).build().unwrap();
+        let scene = ui.resolve().unwrap();
+        let a = scene.layout.frame("a").unwrap();
+        let b = scene.layout.frame("b").unwrap();
+        assert_eq!(if horizontal { (a.x, b.x) } else { (a.y, b.y) }, (20., 60.));
+    }
+    for radii in [(-1., 8.), (12., f64::NAN)] {
+        assert!(item("bad").size(40., 40.).round(radii).build().is_err());
+    }
+}
+
+#[test]
+fn recoloring_changes_only_the_requested_role_and_preserves_neutral_children() {
+    let ui = Item::row([
+        item("value").text("50%").foreground(Color::Primary(0)),
+        item("label").text("LEVEL").foreground(Color::Text),
+    ]).replace_color(Color::Primary(0), Color::Primary(1)).build().unwrap();
+    assert_eq!(ui.info("value").unwrap().foreground, Some(Color::Primary(1)));
+    assert_eq!(ui.info("label").unwrap().foreground, Some(Color::Text));
+}
+
+#[test]
+fn responsive_columns_keep_controls_and_hits_inside_viewport() {
+    for width in [1280., 1840.] {
+        let ui = Item::row([
+            item("warps").width(260.).min(180.,0.).shrink(1.),
+            item("synth").width(930.).min(600.,0.).grow(1.).shrink(1.),
+            item("modulators").width(260.).height(400.).min(180.,0.).shrink(1.).on_tap("select"),
+        ]).width(Fill).height(400.).build().unwrap().offered(width,400.);
+        let scene=ui.resolve().unwrap();
+        let right=scene.layout.frame("modulators").unwrap();
+        assert!((right.x+right.size.width-width).abs()<0.01);
+        assert_eq!(ui.tap_at(&scene,right.x+right.size.width/2.,200.),Some("select"));
+    }
 }

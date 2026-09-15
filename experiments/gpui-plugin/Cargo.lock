@@ -1902,6 +1902,7 @@ dependencies = [
  "gpui_macros",
  "gpui_shared_string",
  "gpui_util",
+ "hdrhistogram",
  "heapless",
  "http_client",
  "image",
@@ -1942,6 +1943,7 @@ dependencies = [
  "waker-fn",
  "web-time",
  "windows 0.62.2",
+ "zed-scap",
  "ztracing",
 ]
 
@@ -2100,6 +2102,16 @@ name = "hashbrown"
 version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
+
+[[package]]
+name = "hdrhistogram"
+version = "7.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f49d1053f4708f0af3cf9fc5bffc7e68a914a3c45becb231c80068c9c3f78bea"
+dependencies = [
+ "byteorder",
+ "num-traits",
+]
 
 [[package]]
 name = "heapless"
@@ -2916,6 +2928,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "mui-gpui"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+ "gpui",
+ "gpui_linux",
+ "mui-truce",
+ "raw-window-handle",
+ "truce-core",
+ "x11rb",
+]
+
+[[package]]
 name = "mui-gpui-plugin-probe"
 version = "0.1.0"
 dependencies = [
@@ -2924,11 +2949,14 @@ dependencies = [
  "gpui",
  "gpui_linux",
  "mui",
+ "mui-gpui",
+ "mui-truce",
  "raw-window-handle",
  "truce",
  "truce-clap",
  "truce-core",
  "truce-params",
+ "ttf-parser",
  "unicode-segmentation",
  "x11rb",
 ]
@@ -2946,6 +2974,16 @@ version = "0.3.0"
 dependencies = [
  "lyon_tessellation",
  "mui-geometry",
+]
+
+[[package]]
+name = "mui-truce"
+version = "0.3.0"
+dependencies = [
+ "truce",
+ "truce-core",
+ "truce-derive",
+ "truce-params",
 ]
 
 [[package]]
@@ -5150,8 +5188,6 @@ dependencies = [
 [[package]]
 name = "truce-clap"
 version = "6.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b0bda9bd8173818a46b34ba72fe03be0e1dcc17df1d6a21447a712c311d7809f"
 dependencies = [
  "clap-sys",
  "crossbeam-queue",

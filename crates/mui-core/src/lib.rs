@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 
 mod color;
+pub mod curve;
 mod item;
 mod style;
 mod view;

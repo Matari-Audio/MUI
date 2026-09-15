@@ -7,10 +7,13 @@ publish = false
 [workspace]
 
 [dependencies]
+mui-gpui = { path = "../../crates/mui-gpui" }
+mui-truce = { path = "../../crates/mui-truce" }
 mui = { path = "../../crates/mui" }
 unicode-segmentation = "1"
+ttf-parser = "0.25.1"
 anyhow = "1"
-gpui = { path = "../upstream/crates/gpui", default-features = false }
+gpui = { path = "../upstream/crates/gpui", default-features = false, features = ["x11"] }
 gpui_linux = { path = "../upstream/crates/gpui_linux", default-features = false, features = ["x11"] }
 raw-window-handle = "0.6"
 x11rb = { version = "0.13", features = ["xtest"] }
@@ -21,8 +24,21 @@ truce-clap = { version = "=6.3.0", optional = true }
 clap-sys = { version = "0.5", optional = true }
 
 [lib]
-crate-type = ["cdylib", "rlib"]
+# Dependents need a normal, fingerprinted Rust library. Build the probe's CLAP
+# shared library explicitly with cargo rustc --lib --crate-type cdylib.
+crate-type = ["rlib"]
 
 [features]
 default = ["clap"]
+profile = ["gpui/profiler"]
 clap = ["dep:truce-clap", "dep:clap-sys"]
+
+# GPUI scene replay and layout are hot paths even when the application is debug-built.
+[profile.dev.package.gpui]
+opt-level = 2
+
+[profile.dev.package.taffy]
+opt-level = 3
+
+[patch.crates-io]
+truce-clap = { path = "../../vendor/truce-clap" }

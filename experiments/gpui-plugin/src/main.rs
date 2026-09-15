@@ -4,7 +4,7 @@ use std::{
     sync::{Arc, Mutex},
     time::Duration,
 };
-use truce::prelude::Editor;
+use truce::prelude::{Editor, Params};
 use truce_core::editor::{ClosureBridge, PluginContext, RawWindowHandle};
 use x11rb::{
     connection::Connection,
@@ -35,6 +35,7 @@ fn main() -> anyhow::Result<()> {
     let host_thread = std::thread::current().id();
     let value = Arc::new(Mutex::new(0.0));
     let events = Arc::new(Mutex::new(Vec::new()));
+    let params = Arc::new(ProbeParams::default());
     let bridge = Arc::new(ClosureBridge {
         begin_edit: {
             let events = events.clone();
@@ -46,8 +47,10 @@ fn main() -> anyhow::Result<()> {
         set_param: {
             let events = events.clone();
             let value = value.clone();
-            Box::new(move |_, v| {
+            let params = params.clone();
+            Box::new(move |id, v| {
                 assert_eq!(std::thread::current().id(), host_thread);
+                params.set_normalized(id, v);
                 *value.lock().unwrap() = v;
                 events.lock().unwrap().push("set");
             })
@@ -71,9 +74,10 @@ fn main() -> anyhow::Result<()> {
         set_state: Box::new(|_| {}),
         transport: Box::new(|| None),
     });
-    let context = PluginContext::new(bridge, Arc::new(ProbeParams::default())).dyn_erase();
-    let mut first = GpuiEditor::default();
-    let mut second = GpuiEditor::default();
+    let second_params = Arc::new(ProbeParams::default());
+    let context = PluginContext::new(bridge, params.clone()).dyn_erase();
+    let mut first = GpuiEditor::new(params.clone());
+    let mut second = GpuiEditor::new(second_params.clone());
     first.open(RawWindowHandle::X11(parent.into()), context.clone());
     anyhow::ensure!(first.last_error.is_none(), "{:?}", first.last_error);
     if std::env::args().any(|arg| arg == "--manual") {
@@ -125,7 +129,10 @@ fn main() -> anyhow::Result<()> {
         first.close();
         return Ok(());
     }
-    second.open(RawWindowHandle::X11(parent.into()), context.clone());
+    second.open(
+        RawWindowHandle::X11(parent.into()),
+        truce_core::editor::for_test_params(second_params.clone()),
+    );
     anyhow::ensure!(second.last_error.is_none(), "{:?}", second.last_error);
     let tick = |editor: &mut GpuiEditor| {
         for _ in 0..30 {
@@ -261,7 +268,7 @@ fn main() -> anyhow::Result<()> {
         key(KEY_RELEASE_EVENT, symbol)
     };
     let assert_gesture = |closed: bool| {
-        let events = events.lock().unwrap();
+        let events = events.lock().unwrap().clone();
         assert_eq!(events.first(), Some(&"begin"));
         let end = if closed {
             assert_eq!(events.last(), Some(&"end"));
@@ -275,6 +282,22 @@ fn main() -> anyhow::Result<()> {
         );
     };
     events.lock().unwrap().clear();
+    // Host/audio updates are read from Truce atomics, never echoed as GUI edits.
+    let gain_id = params
+        .param_infos()
+        .into_iter()
+        .find(|p| p.name == "Gain")
+        .unwrap()
+        .id;
+    params.set_normalized(gain_id, 0.37);
+    tick(&mut first);
+    assert!((first.snapshot()?.normalized_gain - 0.37).abs() < 1e-6);
+    assert!(
+        events.lock().unwrap().is_empty(),
+        "host update echoed as a GUI edit"
+    );
+    params.set_normalized(gain_id, 0.);
+    tick(&mut first);
     // Inside the layout rectangle, outside the rounded painted shape.
     click(17, 57)?;
     tick(&mut first);
@@ -296,7 +319,8 @@ fn main() -> anyhow::Result<()> {
         "drag must update normalized gain"
     );
     events.lock().unwrap().clear();
-    // Escape cancels capture. The following mouse-up must not activate the button.
+    let before_escape = *value.lock().unwrap();
+    // Escape restores the initial value. The following mouse-up must not activate the button.
     move_to(100, 85)?;
     button(BUTTON_PRESS_EVENT, 1)?;
     tick(&mut first);
@@ -307,6 +331,39 @@ fn main() -> anyhow::Result<()> {
     button(BUTTON_RELEASE_EVENT, 1)?;
     tick(&mut first);
     assert_gesture(true);
+    events.lock().unwrap().clear();
+    assert!(
+        (*value.lock().unwrap() - before_escape).abs() < 1e-6,
+        "Escape did not restore the initial parameter value"
+    );
+    // Switching to another editor must close automation before mouse-up arrives.
+    move_to(100, 85)?;
+    button(BUTTON_PRESS_EVENT, 1)?;
+    tick(&mut first);
+    move_to(130, 85)?;
+    tick(&mut first);
+    assert_gesture(false);
+    connection
+        .set_input_focus(
+            InputFocus::PARENT,
+            second.child.unwrap(),
+            x11rb::CURRENT_TIME,
+        )?
+        .check()?;
+    tick(&mut first);
+    assert_gesture(true);
+    let after_blur = events.lock().unwrap().clone();
+    button(BUTTON_RELEASE_EVENT, 1)?;
+    connection
+        .set_input_focus(InputFocus::PARENT, child, x11rb::CURRENT_TIME)?
+        .check()?;
+    move_to(160, 85)?;
+    tick(&mut first);
+    assert_eq!(
+        *events.lock().unwrap(),
+        after_blur,
+        "returning pointer resumed a cancelled drag"
+    );
     events.lock().unwrap().clear();
     type_key(0xff09)?; // Tab from gain to the text field.
     tick(&mut first);
@@ -328,6 +385,33 @@ fn main() -> anyhow::Result<()> {
     key(KEY_RELEASE_EVENT, 0xffe3)?;
     tick(&mut first);
     assert_eq!(first.snapshot()?.preset_name, "mui", "clipboard paste");
+    assert_eq!(
+        params.document.snapshot().name,
+        "mui",
+        "text edits reach Truce persistence"
+    );
+    assert!(
+        second_params.document.snapshot().name.is_empty(),
+        "editor instances share state"
+    );
+    let saved_editor = params.serialize_persist();
+    params
+        .document
+        .edit(|state| {
+            state.name = "Changed externally".into();
+            Ok(())
+        })
+        .unwrap();
+    tick(&mut first);
+    assert_eq!(first.snapshot()?.preset_name, "Changed externally");
+    params.load_persist(&saved_editor);
+    tick(&mut first);
+    assert_eq!(
+        first.snapshot()?.preset_name,
+        "mui",
+        "Truce recall reaches the open editor"
+    );
+
     key(KEY_PRESS_EVENT, 0xffe3)?;
     type_key(u32::from(b'a'))?;
     key(KEY_RELEASE_EVENT, 0xffe3)?;
@@ -441,9 +525,15 @@ fn main() -> anyhow::Result<()> {
             .reply()
             .is_ok()
     );
+    params.load_persist(&saved_editor);
     first.open(RawWindowHandle::X11(parent.into()), context);
     anyhow::ensure!(first.last_error.is_none(), "{:?}", first.last_error);
     tick(&mut first);
+    assert_eq!(
+        first.snapshot()?.preset_name,
+        "mui",
+        "state survives editor destruction"
+    );
     first.close();
     second.close();
     anyhow::ensure!(

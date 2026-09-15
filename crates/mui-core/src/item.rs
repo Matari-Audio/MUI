@@ -49,6 +49,11 @@ impl From<f64> for Rounding {
         Self::Both(v.into())
     }
 }
+impl<A: Into<Spacing>, B: Into<Spacing>> From<(A, B)> for Rounding {
+    fn from((outer, inner): (A, B)) -> Self {
+        Self::separate(outer, inner)
+    }
+}
 impl Rounding {
     pub fn separate(outer: impl Into<Spacing>, inner: impl Into<Spacing>) -> Self {
         Self::Separate {
@@ -97,6 +102,11 @@ pub struct Item {
     children: Vec<Item>,
     scope: Option<String>,
     text: Option<String>,
+    text_style: (f32, f32, Horizontal, bool),
+    text_reserve: Option<String>,
+    foreground: Option<Color>,
+    opacity: f32,
+    hover_only: bool,
     tap: Option<String>,
     hoverable: bool,
     disabled: bool,
@@ -114,6 +124,11 @@ pub fn item(id: impl Into<String>) -> Item {
         children: Vec::new(),
         scope: None,
         text: None,
+        text_reserve: None,
+        text_style: (13., 400., Horizontal::Left, false),
+        foreground: None,
+        opacity: 1.,
+        hover_only: false,
         tap: None,
         hoverable: false,
         disabled: false,
@@ -131,6 +146,18 @@ pub fn container(children: impl IntoIterator<Item = Item>) -> Item {
     item("").children(children)
 }
 impl Item {
+    /// Horizontal flex container; all existing spacing, alignment and distribution methods apply.
+    pub fn row(children: impl IntoIterator<Item = Item>) -> Self {
+        container(children).layout(Flow::Row)
+    }
+    /// Vertical flex container, using the same layout and geometry pipeline as rows.
+    pub fn column(children: impl IntoIterator<Item = Item>) -> Self {
+        container(children).layout(Flow::Column)
+    }
+    /// Independent dimensions: fixed pixels, intrinsic `Hug`, or available `Fill`.
+    pub fn size(self, width: impl Into<Sizing>, height: impl Into<Sizing>) -> Self {
+        self.width(width).height(height)
+    }
     pub fn children(mut self, children: impl IntoIterator<Item = Item>) -> Self {
         self.children = children.into_iter().collect();
         self
@@ -151,6 +178,51 @@ impl Item {
     }
     pub fn text(mut self, value: impl Into<String>) -> Self {
         self.text = Some(value.into());
+        self
+    }
+    /// Measure a stable representative value while painting the current text.
+    pub fn reserve_text(mut self, value: impl Into<String>) -> Self {
+        self.text_reserve = Some(value.into());
+        self
+    }
+    /// Recolor the existing outlines of a complete component subtree.
+    pub fn outline_color(mut self, color: Color) -> Self {
+        if let Some((ink, _)) = &mut self.stroke { *ink = color; }
+        self.children = self.children.into_iter().map(|child| child.outline_color(color)).collect();
+        self
+    }
+    /// Typography is measured and painted by the presentation backend.
+    /// Replace one exact semantic/custom color throughout a subtree; neutral colors stay intact.
+    pub fn replace_color(mut self, from: Color, to: Color) -> Self {
+        for color in [&mut self.color, &mut self.foreground, &mut self.hover_color] {
+            if *color == Some(from) { *color = Some(to); }
+        }
+        if let Some((color, _)) = &mut self.stroke { if *color == from { *color = to; } }
+        self.children = self.children.into_iter().map(|child| child.replace_color(from, to)).collect();
+        self
+    }
+    pub fn foreground(mut self, color: Color) -> Self { self.foreground = Some(color); self }
+    pub fn typography(mut self, size: f32, weight: f32) -> Self {
+        self.text_style.0 = size;
+        self.text_style.1 = weight;
+        self
+    }
+    pub fn text_align(mut self, alignment: Horizontal) -> Self {
+        self.text_style.2 = alignment;
+        self
+    }
+    /// Rotate text counterclockwise; its measured width and height swap.
+    pub fn vertical_text(mut self) -> Self {
+        self.text_style.3 = true;
+        self
+    }
+    /// Visual opacity inherited by descendants, including native presentation slots.
+    pub fn opacity(mut self, opacity: f32) -> Self {
+        self.opacity = opacity;
+        self
+    }
+    pub fn hover_only(mut self) -> Self {
+        self.hover_only = true;
         self
     }
     /// Host action ID. The host recognizes a tap and dispatches this ID.
@@ -343,12 +415,17 @@ impl Item {
 pub struct ItemInfo {
     pub overflow: Overflow,
     pub text: Option<String>,
+    pub text_style: (f32, f32, Horizontal, bool),
+    pub text_reserve: Option<String>,
+    pub foreground: Option<Color>,
+    pub opacity: f32,
+    pub hover_only: bool,
     pub tap: Option<String>,
     pub hoverable: bool,
     /// Effective disabled state, inherited from ancestors.
     pub disabled: bool,
     pub hover_color: Option<Color>,
-    pub(crate) parent: Option<String>,
+    pub parent: Option<String>,
     pub color: Option<Color>,
     pub stroke: Option<(Color, f64)>,
     merged: bool,
@@ -455,7 +532,7 @@ impl Ui {
             let text = self
                 .items
                 .get(id)
-                .and_then(|i| i.text.as_deref())
+                .and_then(|i| i.text_reserve.as_deref().or(i.text.as_deref()))
                 .ok_or_else(|| mui_layout::Error::MissingMeasurement(id.into()))?;
             measure(id, text, input)
         })
@@ -570,6 +647,12 @@ impl Compiler {
                 return Err(SceneError::InvalidTheme);
             }
         }
+        if !item.opacity.is_finite() || !(0. ..=1.).contains(&item.opacity)
+            || !item.text_style.0.is_finite() || item.text_style.0 <= 0.
+            || !item.text_style.1.is_finite() || !(1. ..=1000.).contains(&item.text_style.1) {
+            return Err(SceneError::InvalidModifier("invalid typography or opacity"));
+        }
+        let opacity = item.opacity * parent.as_ref().map_or(1., |id| self.items[id].opacity);
         let profile = item.rounding.profile(&self.theme)?;
         let mut surface =
             SurfaceSpec::frame(&key, &key).radius(FrameRadius::Absolute(profile.convex));
@@ -585,6 +668,11 @@ impl Compiler {
             ItemInfo {
                 overflow: item.overflow,
                 text: item.text.clone(),
+                text_reserve: item.text_reserve,
+                text_style: item.text_style,
+                foreground: item.foreground,
+                opacity,
+                hover_only: item.hover_only,
                 hoverable: item.hoverable || item.tap.is_some(),
                 hover_color: item.hover_color,
                 disabled,

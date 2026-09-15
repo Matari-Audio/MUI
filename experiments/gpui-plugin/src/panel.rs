@@ -1,5 +1,5 @@
 //! MUI owns layout, geometry and viewport policy; GPUI supplies rendering and native UI primitives.
-use super::{Edit, ProbeView};
+use super::ProbeView;
 use gpui::{prelude::*, *};
 use mui::{
     core::{Color, ResolvedScene, Ui, ViewItem, ViewState},
@@ -196,7 +196,7 @@ fn measure(
 }
 impl ProbeView {
     fn drag_move(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
-        let Some((start, value, active)) = self.drag.as_mut() else {
+        let Some((start, _, active)) = self.drag.as_mut() else {
             return;
         };
         let distance = f64::from(event.position.x - start.x);
@@ -206,12 +206,12 @@ impl ProbeView {
         if !*active {
             *active = true;
             self.click_armed = false;
-            let _ = self.edits.send(Edit::Begin);
+            self.gain.begin();
         }
-        let next = (*value + distance / 300.).clamp(0., 1.);
+        self.gain.drag(distance / 300., event.modifiers.shift);
+        let next = self.gain.value();
         if self.value != next {
             self.value = next;
-            let _ = self.edits.send(Edit::Value(next));
             cx.notify();
         }
         cx.stop_propagation();
@@ -219,7 +219,7 @@ impl ProbeView {
     pub(super) fn end_drag(&mut self) {
         if let Some((_, _, true)) = self.drag.take() {
             self.click_armed = false;
-            let _ = self.edits.send(Edit::End);
+            self.gain.end();
         }
     }
 
@@ -452,6 +452,11 @@ impl ProbeView {
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
                 if event.keystroke.key == "escape" {
                     this.click_armed = false;
+                    if let Some((_, initial, _)) = this.drag {
+                        this.gain.cancel();
+                        this.value = initial;
+                        cx.notify();
+                    }
                     this.end_drag();
                     cx.stop_propagation();
                 }

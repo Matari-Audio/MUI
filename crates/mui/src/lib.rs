@@ -2,6 +2,7 @@
 #![forbid(unsafe_code)]
 
 pub use mui_core as core;
+pub use mui_core::curve;
 #[cfg(feature = "egui")]
 pub use mui_egui as egui;
 pub use mui_geometry as geometry;
