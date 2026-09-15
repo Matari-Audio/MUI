@@ -213,6 +213,10 @@ struct App {
     mods: Mods,
     cursor: Cursor,
     typed: Option<char>,
+    /// The preview is its own clipboard: a copy comes back on
+    /// `Frame::clipboard` and rides back in on the next `Input`. ponytail:
+    /// no OS clipboard, add `arboard` here if cross-app paste matters.
+    clipboard: String,
     last: Instant,
     gpu: Option<Gpu>,
     /// Arc-to-cubic conversions reused across frames; a still gallery
@@ -247,6 +251,7 @@ impl App {
             mods: Mods::default(),
             cursor: Cursor::Arrow,
             typed: None,
+            clipboard: String::new(),
             last: Instant::now(),
             gpu: None,
             paths: mui::vello::PathCache::new(),
@@ -351,9 +356,18 @@ impl App {
         let now = Instant::now();
         let dt = now.duration_since(self.last).as_secs_f64().min(0.1);
         self.last = now;
+        input.clipboard = Some(self.clipboard.clone());
         let root = self.tree(w, h);
         let (animating, cursor) = match self.ui.frame(root, Some(Size::new(w, h)), input, dt) {
-            Ok(f) => (f.animating, f.cursor),
+            Ok(f) => {
+                let copied = f.clipboard.clone();
+                let (a, c) = (f.animating, f.cursor);
+                if let Some(s) = copied {
+                    self.scenes[self.selected].clipboard(&s);
+                    self.clipboard = s;
+                }
+                (a, c)
+            }
             Err(e) => {
                 eprintln!("frame: {e}");
                 (false, Cursor::Arrow)
@@ -672,6 +686,28 @@ mod tests {
                 "scene {i} leaves the stage"
             );
         }
+    }
+
+    /// The preview is the clipboard: a copy inside the window has to come
+    /// back out of `Frame::clipboard` or paste has nothing to paste.
+    #[test]
+    fn a_copy_in_the_select_scene_lands_in_the_preview_clipboard() {
+        let mut app = App::new();
+        app.selected = app.scenes.len() - 1;
+        app.tick(SIZE, 1.0, PointerInput::default());
+        click(&mut app, "sel-field");
+        let ctrl = |c: char| KeyPress {
+            key: mui::prelude::Key::Char(c),
+            mods: Mods {
+                ctrl: true,
+                ..Mods::default()
+            },
+        };
+        app.keys = vec![ctrl('a'), ctrl('c')];
+        app.replay(SIZE, 1.0);
+        // `set_clipboard` is answered by the frame after the one that asked.
+        app.tick(SIZE, 1.0, PointerInput::default());
+        assert_eq!(app.clipboard, "select me");
     }
 
     #[test]
