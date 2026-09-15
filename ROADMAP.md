@@ -69,6 +69,8 @@ public function and a test behind it.
       which is wrong for CJK.
 - [ ] Real semantic roles in `mui-core`, so a widget describes itself and
       `mui-access` stops reporting every surface as a group.
+- [ ] `mui-access` wired into a window: nothing calls it yet. `accesskit_winit`
+      0.33 matches the preview's winit 0.30, so the preview is the first host.
 - [ ] `vello_hybrid` against classic `vello`, re-measured on Windows — the
       hybrid choice was made on Linux numbers only.
 - [ ] Blurred shadows on welded shapes (still drawn sharp) and blend modes.
