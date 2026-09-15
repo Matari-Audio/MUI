@@ -15,10 +15,13 @@ mui-geometry = { path = "../mui-geometry" }
 # No wgpu backend features: a plugin renders into the device its host wrapper
 # already created, so this crate must not choose the backend. Hosts turn on
 # `wgpu_default` (desktop) or `webgl` (browser) themselves.
-vello_hybrid = { version = "0.2", default-features = false, features = ["wgpu"] }
+vello_hybrid = { version = "0.2", default-features = false, features = ["wgpu", "text"] }
+# `Glyph` is the one glyph type neither renderer re-exports, so it comes
+# straight from the crate both of them already build on.
+glifo = { version = "0.3", default-features = false }
 # kurbo and peniko reach us through vello_common so the types cannot version-skew.
 vello_common = { version = "0.2", default-features = false }
-vello_cpu = { version = "0.2", optional = true, default-features = false, features = ["std", "u8_pipeline"] }
+vello_cpu = { version = "0.2", optional = true, default-features = false, features = ["std", "u8_pipeline", "text"] }
 
 [dev-dependencies]
 mui-layout = { path = "../mui-layout" }

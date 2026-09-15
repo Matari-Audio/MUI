@@ -47,11 +47,19 @@ fn main() {
             )
             .expect("frame");
         let mut ctx = RenderContext::new(w, h);
-        mui::vello::paint(&mut ctx, frame.scene, mui::vello::kurbo::Affine::IDENTITY)
-            .expect("paint");
+        let mut res = Resources::default();
+        mui::vello::paint(
+            &mut mui::vello::Cpu {
+                ctx: &mut ctx,
+                resources: &mut res,
+            },
+            frame.scene,
+            mui::vello::kurbo::Affine::IDENTITY,
+        )
+        .expect("paint");
         ctx.flush();
         let mut pix = Pixmap::new(w, h);
-        ctx.render(&mut pix, &mut Resources::default());
+        ctx.render(&mut pix, &mut res);
         let rgba = pix.take_unpremultiplied();
         let bytes: Vec<u8> = rgba.iter().flat_map(|p| [p.r, p.g, p.b, p.a]).collect();
         let file = std::fs::File::create(&out).expect("create");

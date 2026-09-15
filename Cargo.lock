@@ -1447,6 +1447,7 @@ dependencies = [
  "mui-input",
  "mui-layout",
  "mui-tessellate",
+ "mui-text",
  "mui-vello",
  "png 0.17.16",
 ]
@@ -1540,6 +1541,7 @@ name = "mui-vello"
 version = "0.3.0"
 dependencies = [
  "epaint_default_fonts",
+ "glifo 0.3.0",
  "mui-core",
  "mui-geometry",
  "mui-layout",
