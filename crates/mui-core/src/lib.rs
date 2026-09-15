@@ -44,7 +44,9 @@ pub use scene::{
     resolve_scene, resolve_scene_with, Layer, Painted, ResolvedScene, ResolvedSurface, SceneError,
     SceneSpec, SceneState, Text, TextCache,
 };
-pub use style::{Cursor, Fill, Fit, Gradient, Image, Paint, Radius, Role, Shadow, Stroke, Style};
+pub use style::{
+    Cursor, Fill, Fit, Gradient, Image, Mix, Paint, Radius, Role, Shadow, Stroke, Style,
+};
 pub use theme::{CornerProfile, Theme};
 
 /// Everything a scene file needs, including the spacing tokens as bare
@@ -54,7 +56,8 @@ pub mod prelude {
     pub use crate::{
         canvas, caption, col, column, grid, label, leaf, overlay, resolve_scene, row, spacer,
         stack, text, title, Align, Color, Cursor, Draw, El, Fill, Fit, Gradient, Image, IntoEl,
-        IntoLen, Justify, Len, Radius, Role, SceneSpec, Shadow, Size, Style, Styled, Sugar, Theme,
+        IntoLen, Justify, Len, Mix, Radius, Role, SceneSpec, Shadow, Size, Style, Styled, Sugar,
+        Theme,
     };
     pub use mui_geometry::{Path, Point};
     pub use mui_layout::SpacingToken::{Xl, Xs, L, M, S};

@@ -16,7 +16,7 @@ use mui_geometry::{
 use mui_layout::{resolve_with, Frame, Layout, Limits, Size};
 use mui_text::TextRun;
 
-use crate::{Color, Content, Cursor, El, Fill, Paint, Radius, Theme};
+use crate::{Color, Content, Cursor, El, Fill, Mix, Paint, Radius, Theme};
 
 #[derive(Debug, Clone)]
 pub struct SceneSpec {
@@ -82,7 +82,7 @@ impl SceneSpec {
 }
 
 /// Which layer of a node's style a [`Painted`] entry is.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Layer {
     Shadow,
     Fill,
@@ -95,6 +95,15 @@ pub enum Layer {
     /// paint is meaningless.
     Clip,
     Unclip,
+    /// Everything up to the matching `Unblend` composites as one layer; the
+    /// path and paint are meaningless. Wraps the node's own `Clip`, so a
+    /// blended subtree's clip is inside its layer -- but a float declared in
+    /// that subtree paints after the root, hence outside it.
+    Blend {
+        mix: Mix,
+        opacity: f32,
+    },
+    Unblend,
 }
 
 /// A text layer's glyphs, for a renderer that hints and caches its own.
@@ -383,7 +392,7 @@ impl<'a> Walk<'a> {
         &self,
         n: &El,
         frame: Frame,
-    ) -> Result<(Path, Option<RoundedRect>, bool), SceneError> {
+    ) -> Result<(Path, Option<RoundedRect>, bool, Vec<RoundedRect>), SceneError> {
         let th = &self.spec.theme;
         let s = &n.payload().style;
         let (convex, concave) = match s.radius {
@@ -403,13 +412,15 @@ impl<'a> Walk<'a> {
         }
         if !s.weld || n.children().is_empty() {
             let rr = RoundedRect::new(bounds(frame, self.spec.device_scale), convex)?;
-            return Ok((rr.path(), Some(rr), false));
+            return Ok((rr.path(), Some(rr), false, Vec::new()));
         }
         // Children's frames sit right after this node in pre-order, each
         // subtree `count` long.
-        let (mut at, mut shapes) = (self.i, Vec::new());
+        let (mut at, mut shapes, mut rects) = (self.i, Vec::new(), Vec::new());
         for c in n.children() {
-            shapes.push(rect_poly(bounds(self.frames[at], self.spec.device_scale))?);
+            let b = bounds(self.frames[at], self.spec.device_scale);
+            shapes.push(rect_poly(b)?);
+            rects.push(RoundedRect::new(b, convex)?);
             at += count(c);
         }
         let merged = union(&shapes, self.spec.geometry)?;
@@ -425,6 +436,7 @@ impl<'a> Walk<'a> {
             rounded.path,
             None,
             merged.components() != n.children().len(),
+            rects,
         ))
     }
 
@@ -474,9 +486,23 @@ impl<'a> Walk<'a> {
             self.i += n.children().iter().map(count).sum::<usize>();
             return Ok(());
         }
-        let (outline, rect, mut changed) = self.outline(n, frame)?;
+        let (outline, rect, mut changed, welds) = self.outline(n, frame)?;
 
         self.key = key.clone();
+        let clear = Fill::Color(Color::oklcha(0.0, 0.0, 0.0, 0.0));
+        let blended = match s.layer {
+            Some((mix, opacity)) if !(mix == Mix::Normal && opacity == 1.0) => {
+                self.push(
+                    Layer::Blend { mix, opacity },
+                    Path::default(),
+                    None,
+                    &clear,
+                    under,
+                );
+                true
+            }
+            _ => false,
+        };
         if let Some(sh) = &s.shadow {
             let d = Point::new(sh.dx, sh.dy);
             let moved = outline.rigid_transform(d, 0.0)?;
@@ -489,7 +515,25 @@ impl<'a> Walk<'a> {
                     )
                 })
                 .transpose()?;
-            if let Some(p) = self.push(Layer::Shadow, moved, moved_rect, &sh.fill, under) {
+            // ponytail: a welded shadow is the union of the children's
+            // blurs, not the blur of the union -- each child rect keeps the
+            // convex radius, so the seams are rounded where the welded
+            // outline is straight or concave, and overlapping children
+            // over-composite there. A blur filter layer is the upgrade.
+            if rect.is_none() && !welds.is_empty() {
+                for w in &welds {
+                    let b = w.bounds();
+                    let moved = RoundedRect::new(
+                        Bounds::new(b.min.x + d.x, b.min.y + d.y, b.max.x + d.x, b.max.y + d.y),
+                        w.radius(),
+                    )?;
+                    if let Some(p) =
+                        self.push(Layer::Shadow, moved.path(), Some(moved), &sh.fill, under)
+                    {
+                        p.blur = sh.blur;
+                    }
+                }
+            } else if let Some(p) = self.push(Layer::Shadow, moved, moved_rect, &sh.fill, under) {
                 p.blur = sh.blur;
             }
         }
@@ -669,13 +713,7 @@ impl<'a> Walk<'a> {
                     b.max.y.min(c.max.y),
                 )
             });
-            self.push(
-                Layer::Clip,
-                outline,
-                rect,
-                &Fill::Color(Color::oklcha(0.0, 0.0, 0.0, 0.0)),
-                bg,
-            );
+            self.push(Layer::Clip, outline, rect, &clear, bg);
             Some(b)
         } else {
             clip
@@ -736,9 +774,12 @@ impl<'a> Walk<'a> {
         path.truncate(mark);
         self.base_y = outer_base;
         if n.is_clip() {
-            self.key = key;
-            let clear = Fill::Color(Color::oklcha(0.0, 0.0, 0.0, 0.0));
+            self.key = key.clone();
             self.push(Layer::Unclip, Path::default(), None, &clear, bg);
+        }
+        if blended {
+            self.key = key;
+            self.push(Layer::Unblend, Path::default(), None, &clear, bg);
         }
         Ok(())
     }
@@ -887,6 +928,59 @@ mod tests {
             ..Theme::default()
         })
     }
+    /// A welded outline has no analytic rounded rect, so its shadow is one
+    /// blurred rect per welded child instead of a single dropped entry.
+    #[test]
+    fn a_welded_shadow_is_one_blurred_rect_per_child() {
+        let root = row([leaf(20., 20.).id("a"), leaf(20., 40.).id("b")])
+            .weld(Role::Surface)
+            .shadow(Shadow::soft(12.))
+            .id("weld");
+        let s = resolve_scene(&SceneSpec::new(root).offered(Size::new(40., 40.))).unwrap();
+        let sh: Vec<_> = s
+            .paint
+            .iter()
+            .filter(|p| p.layer == Layer::Shadow)
+            .collect();
+        assert_eq!(sh.len(), 2, "one blurred rect per welded child");
+        for (p, k) in sh.iter().zip(["a", "b"]) {
+            assert_eq!(p.blur, 12.);
+            let r = p.rect.expect("a rect the renderer can blur").bounds();
+            let child = s.surface(k).unwrap().rect.unwrap().bounds();
+            assert!((r.min.x - child.min.x).abs() < 1e-9);
+            assert!((r.min.y - child.min.y - Shadow::soft(12.).dy).abs() < 1e-9);
+        }
+    }
+
+    /// A blended node's whole subtree, clip included, sits between the pair.
+    #[test]
+    fn a_blended_node_is_wrapped_in_a_layer_pair() {
+        let dim = column([leaf(10., 10.).fill(Role::Ink).id("kid")])
+            .fill(Role::Surface)
+            .blend(Mix::Multiply)
+            .opacity(0.5)
+            .id("dim");
+        let root = row([dim, leaf(10., 10.).fill(Role::Surface).id("plain")]).id("root");
+        let s = resolve_scene(&SceneSpec::new(root).offered(Size::new(60., 20.))).unwrap();
+        let layers: Vec<_> = s.paint.iter().map(|p| (&*p.key, p.layer)).collect();
+        let at = |k, l| layers.iter().position(|x| *x == (k, l)).unwrap();
+        let open = at(
+            "dim",
+            Layer::Blend {
+                mix: Mix::Multiply,
+                opacity: 0.5,
+            },
+        );
+        assert!(open < at("dim", Layer::Fill));
+        assert!(at("kid", Layer::Fill) < at("dim", Layer::Unblend));
+        assert!(
+            !layers
+                .iter()
+                .any(|(k, l)| *k == "plain" && matches!(l, Layer::Blend { .. } | Layer::Unblend)),
+            "{layers:?}"
+        );
+    }
+
     #[test]
     fn shells_are_parallel_and_paint_in_z_order() {
         let s = resolve_scene(&spec()).unwrap();

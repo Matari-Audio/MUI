@@ -84,6 +84,11 @@ public function and a test behind it.
       the one solve that sizes the row, `.min_col` works inside a share, and
       `wrap_hints` and the second solve are gone. Caching line breaks across
       frames stays unbuilt: `break_lines` is 0.051 ms of a 1.23 ms resolve.
+- [x] A welded shadow blurs: the walk emits one analytic blurred rect per
+      welded child instead of a rect-less entry the renderer dropped. Blend
+      modes and opacity too -- `.blend(Mix::Multiply)` / `.opacity(0.5)`
+      become a `Layer::Blend`/`Unblend` pair the renderer pushes as a Vello
+      compositing layer.
 - [x] UAX#14 line breaking: `break_lines` takes its opportunities from
       `unicode-linebreak`, so CJK breaks between ideographs and a no-break
       space or an emoji ZWJ sequence holds together. A word wider than the
@@ -100,9 +105,11 @@ public function and a test behind it.
       0.33 matches the preview's winit 0.30, so the preview is the first host.
 - [ ] `vello_hybrid` against classic `vello`, re-measured on Windows — the
       hybrid choice was made on Linux numbers only.
-- [ ] Blurred shadows on welded shapes: the sharp fallback read as a second
-      misaligned panel, so it is now dropped rather than drawn. A blur filter
-      layer is the fix. Blend modes too.
+- [ ] A welded shadow is the union of the children's blurred rects, not the
+      blur of the welded outline: the seams are rounded where the outline is
+      straight or concave-filleted. A blur filter layer
+      (`vello_common::filter_effects`) is the exact fix, once `vello_cpu`
+      stops panicking on a filter in a multi-threaded context.
 - [ ] `.min_col` on a grid that hugs: with no width offered at all there is
       nothing to drop columns against, so it keeps its declared count. A flex
       share now counts as a width; a hugging grid still needs one.

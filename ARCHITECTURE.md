@@ -30,6 +30,8 @@ El tree  (row! / col! / stack! / grid!, Styled fills, roles, shells, welds,
    |               wrapped to the room its parent has, one Painted a line
    |     canvas -> the closure's own paths, in the node's space
    |     clip   -> Clip(outline) ... children ... Unclip
+   |     blend  -> Blend(mix, opacity) ... subtree ... Unblend, outside the clip
+   |     weld   -> the shadow is one blurred rect per welded child
    |     roles  -> Palette                            ink resolves on its ground
    |     image  -> Fill::Image                        straight RGBA, fitted to
    |                                                  the node's own outline
@@ -50,7 +52,8 @@ El tree  (row! / col! / stack! / grid!, Styled fills, roles, shells, welds,
    |
    v  mui-vello paint       Canvas: Gpu { scene, resources } over vello_hybrid,
                             Cpu { ctx, resources } over vello_cpu.
-                            Fill / stroke / blurred rect / push_clip / pop_clip,
+                            Fill / stroke / blurred rect / push_clip / pop_clip
+                            / push_layer / pop_layer (blend mode + opacity),
                             and text as a hinted glyph run (a font blob is
                             interned by Arc pointer, so Vello's hinted-outline
                             cache survives the frame). paint_cached

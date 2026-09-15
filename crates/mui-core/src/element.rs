@@ -10,7 +10,7 @@
 //! assert_eq!(card.children().len(), 2);
 //! ```
 use crate::motion::Spring;
-use crate::style::{Cursor, Fill, Radius, Shadow, Stroke, Style};
+use crate::style::{Cursor, Fill, Mix, Radius, Shadow, Stroke, Style};
 use mui_geometry::Path;
 use mui_layout::{Node, Size, Spacing};
 use std::sync::Arc;
@@ -185,6 +185,27 @@ pub trait Styled: Sized {
     /// constant-thickness nesting.
     fn shell(mut self, d: impl Into<Spacing>, f: impl Into<Fill>) -> Self {
         self.style_mut().shells.push((d.into(), f.into()));
+        self
+    }
+    /// Composite this node's whole subtree through `m`.
+    ///
+    /// Keeps whatever opacity was set; see [`Styled::opacity`].
+    fn blend(mut self, m: Mix) -> Self {
+        let l = self.style_mut().layer.get_or_insert((Mix::Normal, 1.0));
+        l.0 = m;
+        self
+    }
+    /// Composite this node's whole subtree at `o` alpha, keeping whatever
+    /// blend mode was set.
+    ///
+    /// ```
+    /// use mui_core::prelude::*;
+    /// let mut el = leaf(10., 10.).blend(Mix::Multiply).opacity(0.5);
+    /// assert_eq!(el.style_mut().layer, Some((Mix::Multiply, 0.5)));
+    /// ```
+    fn opacity(mut self, o: f32) -> Self {
+        let l = self.style_mut().layer.get_or_insert((Mix::Normal, 1.0));
+        l.1 = o;
         self
     }
     /// Paint the union of the children's frames as one filleted shape.
