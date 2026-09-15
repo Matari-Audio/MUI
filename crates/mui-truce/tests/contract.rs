@@ -1,4 +1,4 @@
-use mui_truce::{Automation, Document, Edit, Parameter, Target};
+use mui_truce::{Automation, Document, Edit, Error, Parameter, Target};
 use std::sync::{Arc, Mutex, mpsc};
 use truce::prelude::*;
 use truce_core::{
@@ -218,5 +218,40 @@ fn truce_parameters_and_documents_survive_reorder_recall_and_instances() {
             Edit::End(10),
             Edit::End(20)
         ]
+    );
+}
+
+#[test]
+fn read_sees_the_committed_edit_and_its_revision() {
+    let document = Document::default();
+    let before = document.revision();
+    let id = document
+        .edit(|doc| {
+            doc.name = "session".into();
+            doc.add_module("oscillator", vec![7])
+        })
+        .unwrap();
+    let (name, modules, revision) =
+        document.read(|state, revision| (state.name.clone(), state.modules.len(), revision));
+    assert_eq!((name.as_str(), modules), ("session", 1));
+    assert_eq!(revision, before + 1);
+    assert_eq!(document.revision(), revision);
+    assert_eq!(document.read(|state, _| state.clone()), document.snapshot());
+    // A closure error is the caller's, and leaves the document untouched.
+    assert_eq!(
+        document.edit(|_| Err::<(), _>(Error::Other("caller said no"))),
+        Err(Error::Other("caller said no"))
+    );
+    assert_eq!(
+        document.edit(|doc| {
+            doc.version = 99;
+            Ok(())
+        }),
+        Err(Error::UnsupportedVersion(99))
+    );
+    assert_eq!(document.restore(b"bad"), Err(Error::Malformed));
+    assert_eq!(
+        document.read(|state, r| (state.modules[0].id, r)),
+        (id, revision)
     );
 }
