@@ -4,12 +4,18 @@
 //! use mui::prelude::*;
 //! let mut ui = Ui::new(Theme::DEFAULT);
 //! let mut cutoff = 0.5;
-//! // One frame: build the tree, hand it in with the pointer, draw what comes back.
-//! let root = column([slider(&mut ui, "cutoff", "Cutoff", &mut cutoff, 0.0..=1.0)])
-//!     .pad(M)
-//!     .fill(Role::Surface);
-//! let frame = ui.frame(root, Some(Size::new(240.0, 80.0)), PointerInput::default(), 1.0 / 60.0).unwrap();
+//! // One frame: build the tree, hand it in with the input, draw what comes back.
+//! let root = col![
+//!     label("Filter"),
+//!     slider(&mut ui, "cutoff", "Cutoff", &mut cutoff, 0.0..=1.0),
+//! ]
+//! .gap(S)
+//! .pad(M)
+//! .fill(Surface);
+//! let frame = ui.frame(root, Some(Size::new(240.0, 96.0)), Input::default(), 1.0 / 60.0).unwrap();
 //! assert!(frame.scene.paint.len() > 3);
+//! // frame.cursor is what to set; frame.tip is the tooltip that came due;
+//! // frame.animating says whether to schedule another frame.
 //! ```
 #![forbid(unsafe_code)]
 
