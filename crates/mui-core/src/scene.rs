@@ -745,19 +745,12 @@ impl<'a> Walk<'a> {
 }
 
 /// A content leaf's size: a paragraph wrapped to its room when it needs it.
-/// `want` remembers the width it settled on, keyed by the element's address.
-fn fit(
-    runs: &mut Runs,
-    th: Theme,
-    e: &crate::Element,
-    room: Option<f64>,
-    want: &mut HashMap<usize, f64>,
-) -> Size {
+fn fit(runs: &mut Runs, th: Theme, e: &crate::Element, room: Option<f64>) -> Size {
     let Content::Text(t) = &e.content else {
         return Size::ZERO;
     };
     let (t, size) = (t.as_str(), e.text_size.unwrap_or(th.text));
-    let s = match room {
+    match room {
         // The room it wrapped into, not its longest line: a paragraph that
         // reported the ragged width would then be centred inside its own
         // column, aligned with nothing above it.
@@ -765,30 +758,6 @@ fn fit(
             Size::new(w, runs.wrapped(t, size, w, e.lines).height)
         }
         _ => runs.measure(t, size),
-    };
-    want.insert(std::ptr::from_ref(e) as usize, s.width);
-    s
-}
-
-/// Every text node a row squeezed narrower than the width it measured at.
-/// This keys on the text node's *own* frame, so a squeeze that lands on an
-/// ancestor is invisible here: mui-layout has to clamp a container's children
-/// to its cross size for that case to show up at all.
-fn wrap_hints(
-    n: &El,
-    frames: &[Frame],
-    i: &mut usize,
-    want: &HashMap<usize, f64>,
-    out: &mut HashMap<usize, f64>,
-) {
-    let f = frames[*i];
-    *i += 1;
-    let k = std::ptr::from_ref(n.payload()) as usize;
-    if f.size.width > 0.0 && want.get(&k).is_some_and(|w| *w > f.size.width + 0.5) {
-        out.insert(k, f.size.width);
-    }
-    for c in n.children() {
-        wrap_hints(c, frames, i, want, out);
     }
 }
 
@@ -815,41 +784,16 @@ pub fn resolve_scene_with(
         cache: &mut text.runs,
     };
     let th = spec.theme;
-    // A paragraph wraps to its room in this one pass. The element address
-    // `want` keys on is stable for as long as `spec` is borrowed.
-    let mut want = HashMap::new();
+    // Every paragraph wraps in this one pass: mui-layout hands a flex item's
+    // final main size back to the measurer, so there is no share left to learn
+    // afterwards.
     let layout = resolve_with(
         &spec.root,
         spec.offered,
         spec.limits,
         th.spacing,
-        |e, room| fit(&mut runs, th, e, room, &mut want),
+        |e, room| fit(&mut runs, th, e, room),
     )?;
-    // A row hands its content a share, not the room, so a paragraph beside
-    // another can still come out narrower than it measured. Only then is the
-    // tree solved again, with that share as the width to wrap to.
-    // ponytail: a second solve for side-by-side paragraphs; the flex pass
-    // re-measuring its items at their final main size is the upgrade.
-    let mut hints = HashMap::new();
-    wrap_hints(&spec.root, layout.all(), &mut 0, &want, &mut hints);
-    let layout = if hints.is_empty() {
-        layout
-    } else {
-        resolve_with(
-            &spec.root,
-            spec.offered,
-            spec.limits,
-            th.spacing,
-            |e, room| match (&e.content, hints.get(&(std::ptr::from_ref(e) as usize))) {
-                (Content::Text(t), Some(&w)) => Size::new(
-                    w,
-                    runs.wrapped(t, e.text_size.unwrap_or(th.text), w, e.lines)
-                        .height,
-                ),
-                _ => fit(&mut runs, th, e, room, &mut want),
-            },
-        )?
-    };
     let nodes = count(&spec.root);
     let mut w = Walk {
         spec,

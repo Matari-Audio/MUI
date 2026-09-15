@@ -79,6 +79,11 @@ public function and a test behind it.
 - [x] A gradient shadow keeps its paint instead of going black; a tooltip
       lands where it was measured under a padded root; a long `text_input`
       value scrolls under a clip instead of wrapping.
+- [x] Wrap in one pass everywhere: the flex pass re-measures a squeezed item
+      at the main size it was dealt, so a paragraph beside another wraps in
+      the one solve that sizes the row, `.min_col` works inside a share, and
+      `wrap_hints` and the second solve are gone. Caching line breaks across
+      frames stays unbuilt: `break_lines` is 0.051 ms of a 1.23 ms resolve.
 - [x] UAX#14 line breaking: `break_lines` takes its opportunities from
       `unicode-linebreak`, so CJK breaks between ideographs and a no-break
       space or an emoji ZWJ sequence holds together. A word wider than the
@@ -98,11 +103,9 @@ public function and a test behind it.
 - [ ] Blurred shadows on welded shapes: the sharp fallback read as a second
       misaligned panel, so it is now dropped rather than drawn. A blur filter
       layer is the fix. Blend modes too.
-- [ ] `.min_col` against a width nobody offered: a grid that hugs, or one
-      whose width is a flex share, keeps its declared column count, because
-      the share is not dealt until `arrange`. Same fix as the wrap item
-      below -- the flex pass re-measuring its items -- and until then a knob
-      bank goes where its width is definite.
+- [ ] `.min_col` on a grid that hugs: with no width offered at all there is
+      nothing to drop columns against, so it keeps its declared count. A flex
+      share now counts as a width; a hugging grid still needs one.
 - [ ] The first frame of a freshly-populated over-long `text_input` shows the
       head of the value: the widget has no inner width before its first
       layout. It catches up on the next frame.
@@ -110,12 +113,6 @@ public function and a test behind it.
       order and every surface carries its key), but focus rings, scroll
       offsets and `mui-access` still key on `String` paths, so renaming a
       node silently resets its state.
-- [ ] Wrap in one pass everywhere: a paragraph squeezed by a flex row still
-      needs a hint and a second solve, because the measurer only learns a
-      column's or a grid cell's room. The flex pass re-measuring its items at
-      their final main size retires `wrap_hints`. Caching line breaks across
-      frames is not the follow-up it looked like: BENCHMARKS.md measures
-      `break_lines` at 0.051 ms of a 1.23 ms resolve.
 
 ## Order
 

@@ -169,7 +169,8 @@ warm resolve is 0.64–0.65 ms at all three of 1280x800, 240x2400 and 2000x300
 **The paint walk was the finding, and it has been cut.** The previous run of
 this file read 2.21 ms of resolve and a 7.75 ms hybrid frame, and blamed the
 line breaking. Instrumenting `resolve_scene_with` said otherwise: the first
-solve was 0.27 ms, the hint pass and second solve 0.013 ms, and the paint walk
+solve was 0.27 ms, the hint pass and second solve (both since retired) 0.013 ms,
+and the paint walk
 1.82 ms — 86% of resolve. `break_lines` over all 20 paragraphs costs 0.051 ms
 a pass, so caching line breaks across frames was never worth 0.1 ms. Four
 things in the walk were:
@@ -213,14 +214,11 @@ and it is shared geometry, not a redundant copy. The next real win is on
 Vello's side of the seam: 3.6 ms of strip generation against classic's 0.28 ms
 of buffer appends.
 
-What is left of the two-pass wrap is one case: a paragraph squeezed by a flex
-row (`shrink` sharing a width with siblings) does not know its final main size
-until the flex pass runs, so `resolve_scene_with` still records a hint and
-solves again for those nodes only. `wrap_hints` keys on the text node's own
-frame, so a squeeze that lands on an intermediate container is invisible to it
-until mui-layout clamps a container's children to its cross size. The upgrade
-is the flex pass re-measuring its items at their final main size, in
-`mui-layout`, and it is listed in ROADMAP.md.
+The two-pass wrap is gone. A paragraph squeezed by a flex row (`shrink`
+sharing a width with siblings) learns its final main size inside the measure
+pass now: `mui-layout` deals the shares, then measures a fluid item again at
+the one it got. `resolve_scene_with` solves once, and the hint pass it used to
+need went with it.
 
 Glyph runs still need nothing. `vello_cpu` and `vello_hybrid` both hold a
 `GlyphPrepCache` in the `Resources` MUI already threads through every frame
