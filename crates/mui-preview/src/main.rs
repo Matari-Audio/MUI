@@ -12,14 +12,14 @@ mod host;
 mod scenes;
 mod skin;
 
+use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant, SystemTime};
 
 use host::Gpu;
 use mui::geometry::Point;
 use mui::prelude::*;
 use mui::vello::kurbo::{Affine, Rect, Shape as _, Stroke};
-use mui::vello::peniko::color::AlphaColor;
 use mui::vello::Canvas as _;
 use scenes::PreviewScene;
 use winit::application::ApplicationHandler;
@@ -28,11 +28,14 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key as WinitKey, NamedKey};
 use winit::window::{CursorIcon, Window, WindowId};
 
-/// The layout-frame overlay is a debug aid: off-palette so it reads against
-/// any theme.
-const FRAME: AlphaColor<mui::vello::peniko::color::Srgb> =
-    AlphaColor::new([0.95, 0.45, 0.75, 0.60]);
 const SIDEBAR: f64 = 240.0;
+/// How often `MUI_PREVIEW_THEME` is stat'd, and how many frames the title bar
+/// averages before it says anything.
+const POLL: Duration = Duration::from_millis(500);
+const TITLE_EVERY: u32 = 30;
+/// The inspector's own label, in pixels. Not the theme's text size: this is
+/// developer chrome and must not move when the theme does.
+const LABEL: f64 = 12.0;
 /// One wheel line in logical pixels. winit reports lines, MUI scrolls pixels.
 const LINE: f64 = 40.0;
 
@@ -70,14 +73,133 @@ fn named(k: NamedKey) -> Option<mui::prelude::Key> {
     })
 }
 
+/// A theme file: `key = value` a line, `#` starts a comment, everything
+/// unstated stays [`skin::SKIN`]'s. Returns what failed to parse so the caller
+/// can say so once per reload rather than once per frame.
+///
+/// Eight numbers is the whole surface -- two hues, two chromas, the layer and
+/// hover deltas, and the two corner radii -- because those are the knobs you
+/// actually turn while looking at the window. Anything else is a recompile.
+fn parse_theme(src: &str) -> (Theme, Vec<String>) {
+    let mut t = skin::SKIN;
+    let mut bad = Vec::new();
+    for (n, line) in src.lines().enumerate() {
+        let line = line.split('#').next().unwrap_or("").trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            bad.push(format!("line {}: not `key = value`", n + 1));
+            continue;
+        };
+        let Ok(v) = value.trim().parse::<f64>() else {
+            bad.push(format!(
+                "line {}: `{}` is not a number",
+                n + 1,
+                value.trim()
+            ));
+            continue;
+        };
+        let f = v as f32;
+        match key.trim() {
+            "neutral_hue" => t.palette.neutral.hue = f,
+            "neutral_chroma" => t.palette.neutral.chroma = f,
+            "primary_hue" => t.palette.primary.hue = f,
+            "primary_chroma" => t.palette.primary.chroma = f,
+            "step" => t.palette.step = f,
+            "hover" => t.palette.hover = f,
+            "corners_convex" => t.corners.convex = v,
+            "corners_concave" => t.corners.concave = v,
+            k => bad.push(format!("line {}: unknown key `{k}`", n + 1)),
+        }
+    }
+    // A theme that cannot derive a legible surface would fail every frame from
+    // inside `Ui::frame`, three crates from the file that caused it.
+    if !t.valid() {
+        bad.push("not a usable theme; keeping the compiled-in skin".into());
+        t = skin::SKIN;
+    }
+    (t, bad)
+}
+
+/// The F12 overlay: every surface frame outlined in translucent primary, and
+/// the one under the pointer picked out solid with its key and frame.
+///
+/// Keys a scene actually wrote draw at 1 px and the tree-path keys (`/0/2`)
+/// nobody named draw at 0.5, so a scene's ids stand out of its scaffolding.
+fn inspect(
+    canvas: &mut impl mui::vello::Canvas,
+    scene: &mui::core::ResolvedScene,
+    xf: Affine,
+    palette: &Palette,
+    font: &Arc<Vec<u8>>,
+    pointer: Option<Point>,
+    height: f64,
+) {
+    fn outline(f: mui::layout::Frame) -> mui::vello::kurbo::BezPath {
+        Rect::new(f.x, f.y, f.right(), f.bottom()).to_path(0.1)
+    }
+    let primary = palette.primary().to_srgb();
+    canvas.set_transform(xf);
+    canvas.set_paint(primary.with_alpha(0.45).into());
+    for s in scene.surfaces() {
+        canvas.set_stroke(Stroke::new(if s.key.starts_with('/') { 0.5 } else { 1.0 }));
+        canvas.stroke_path(&outline(s.frame));
+    }
+    // `keys` is tree order, which is z-order, so the last frame containing the
+    // pointer is the one on top. ponytail: rectangles, not the rounded
+    // outlines `mui_input::Hit` tests -- close enough to point at a widget.
+    let Some(s) = pointer.and_then(|p| {
+        scene
+            .keys
+            .iter()
+            .rev()
+            .filter_map(|k| scene.surface(k))
+            .find(|s| {
+                let f = s.frame;
+                (f.x..=f.right()).contains(&p.x) && (f.y..=f.bottom()).contains(&p.y)
+            })
+    }) else {
+        return;
+    };
+    canvas.set_paint(primary.into());
+    canvas.set_stroke(Stroke::new(2.0));
+    canvas.stroke_path(&outline(s.frame));
+    let f = s.frame;
+    let label = format!(
+        "{}  {:.0} {:.0} {:.0} {:.0}",
+        s.key, f.x, f.y, f.size.width, f.size.height
+    );
+    let Ok(run) = mui_text::text_run(font, &label, LABEL, &[], mui::vello::ARC_TOLERANCE) else {
+        return;
+    };
+    let glyphs: Vec<(u32, f32)> = run.glyphs.iter().map(|&(id, x)| (id, x as f32)).collect();
+    canvas.glyphs(font, LABEL as f32, (SIDEBAR + 12.0, height - 12.0), &glyphs);
+}
+
 struct App {
     ui: Ui,
+    /// The gallery's own font, kept so the inspector can set its own labels
+    /// without going through the scene.
+    font: Arc<Vec<u8>>,
     scenes: Vec<Box<dyn PreviewScene>>,
     selected: usize,
     /// Where the specimen was dragged to, relative to centred.
     pan: Point,
     light: bool,
+    /// The F12 inspector, which the sidebar switch also flips.
     frames: bool,
+    /// `MUI_PREVIEW_THEME`, the mtime of the last read, and what parsed. The
+    /// outer `Option` means never read, so a missing file still reports once.
+    theme_path: Option<PathBuf>,
+    theme_mtime: Option<Option<SystemTime>>,
+    theme_at: Instant,
+    theme: Option<Theme>,
+    /// Frame cost since the last title update.
+    resolve_s: f64,
+    paint_s: f64,
+    counted: u32,
+    counted_at: Instant,
     /// Pointer samples since the last frame, in physical pixels. winit
     /// dispatches every queued event and then one redraw, so a press and
     /// release in one batch must both be seen to make a click.
@@ -99,12 +221,21 @@ impl App {
     fn new() -> Self {
         let font = Arc::new(epaint_default_fonts::HACK_REGULAR.to_vec());
         Self {
-            ui: Ui::new(skin::SKIN).font(font),
+            ui: Ui::new(skin::SKIN).font(font.clone()),
+            font,
             scenes: scenes::all(),
             selected: 0,
             pan: Point::new(0.0, 0.0),
             light: false,
             frames: false,
+            theme_path: std::env::var_os("MUI_PREVIEW_THEME").map(PathBuf::from),
+            theme_mtime: None,
+            theme_at: Instant::now(),
+            theme: None,
+            resolve_s: 0.0,
+            paint_s: 0.0,
+            counted: 0,
+            counted_at: Instant::now(),
             events: Vec::new(),
             pointer: PointerInput::default(),
             wheel: Point::new(0.0, 0.0),
@@ -144,7 +275,18 @@ impl App {
     /// The window as one tree: sidebar, then a stage the specimen centres in.
     fn tree(&mut self, w: f64, h: f64) -> El {
         let ui = &mut self.ui;
-        ui.theme.palette = skin::skin(self.light);
+        // A theme file, once one has parsed, replaces the compiled-in skin
+        // wholesale; the mode is still the sidebar's to say.
+        let theme = self.theme.unwrap_or(skin::SKIN);
+        ui.theme = Theme {
+            palette: match self.theme {
+                Some(t) => t
+                    .palette
+                    .with_mode(if self.light { Mode::Light } else { Mode::Dark }),
+                None => skin::skin(self.light),
+            },
+            ..theme
+        };
         if let Some(c) = self.typed.take() {
             self.scenes[self.selected].key(c);
         }
@@ -248,9 +390,64 @@ impl App {
         })
     }
 
+    /// Re-read the theme file when its mtime moved; `true` when the theme
+    /// changed. `std::fs` and `std::time` are the preview's privilege: it is
+    /// the native binary, and this is a dev aid, not something a plugin ships.
+    fn reload(&mut self) -> bool {
+        let Some(path) = self.theme_path.clone() else {
+            return false;
+        };
+        if self.theme_at.elapsed() < POLL {
+            return false;
+        }
+        self.theme_at = Instant::now();
+        let mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+        if self.theme_mtime == Some(mtime) {
+            return false;
+        }
+        self.theme_mtime = Some(mtime);
+        match std::fs::read_to_string(&path) {
+            Ok(src) => {
+                let (theme, bad) = parse_theme(&src);
+                for b in bad {
+                    eprintln!("{}: {b}", path.display());
+                }
+                self.theme = Some(theme);
+                true
+            }
+            Err(e) => {
+                eprintln!("{}: {e}", path.display());
+                false
+            }
+        }
+    }
+
+    /// The frame cost, averaged over [`TITLE_EVERY`] frames, in the title bar:
+    /// the one readout that costs no pixels and no scene.
+    fn title(&mut self, resolve: f64, paint: f64) {
+        self.resolve_s += resolve;
+        self.paint_s += paint;
+        self.counted += 1;
+        if self.counted < TITLE_EVERY {
+            return;
+        }
+        let n = f64::from(self.counted);
+        let fps = n / self.counted_at.elapsed().as_secs_f64().max(1e-9);
+        if let Some(gpu) = &self.gpu {
+            gpu.window().set_title(&format!(
+                "mui preview \u{2014} {:.1} ms resolve, {:.1} ms paint, {fps:.0} fps",
+                self.resolve_s / n * 1e3,
+                self.paint_s / n * 1e3
+            ));
+        }
+        (self.resolve_s, self.paint_s, self.counted) = (0.0, 0.0, 0);
+        self.counted_at = Instant::now();
+    }
+
     fn draw(&mut self) {
         let Some(gpu) = &mut self.gpu else { return };
         let scale = gpu.window().scale_factor();
+        let height = f64::from(gpu.size().1) / scale;
         let Some(scene) = self.ui.scene() else { return };
         let mut canvas = gpu.begin();
         let xf = Affine::scale(scale);
@@ -275,12 +472,19 @@ impl App {
             }
         }
         if self.frames {
-            canvas.set_transform(xf);
-            canvas.set_paint(FRAME.into());
-            canvas.set_stroke(Stroke::new(1.0));
-            for f in scene.layout.all() {
-                canvas.stroke_path(&Rect::new(f.x, f.y, f.right(), f.bottom()).to_path(0.1));
-            }
+            let pointer = self
+                .pointer
+                .pos
+                .map(|p| Point::new(p.x / scale, p.y / scale));
+            inspect(
+                &mut canvas,
+                scene,
+                xf,
+                &self.ui.theme.palette,
+                &self.font,
+                pointer,
+                height,
+            );
         }
         gpu.present();
     }
@@ -297,6 +501,20 @@ impl ApplicationHandler for App {
         let window = Arc::new(event_loop.create_window(attrs).expect("window"));
         let display = Box::new(event_loop.owned_display_handle());
         self.gpu = Some(pollster::block_on(Gpu::new(window, display)));
+    }
+
+    /// The theme file is the only thing that changes with no event behind it,
+    /// so it is the only reason this loop ever wakes on a timer.
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if self.theme_path.is_none() {
+            return;
+        }
+        if self.reload() {
+            if let Some(gpu) = &self.gpu {
+                gpu.window().request_redraw();
+            }
+        }
+        event_loop.set_control_flow(ControlFlow::WaitUntil(Instant::now() + POLL));
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
@@ -342,6 +560,9 @@ impl ApplicationHandler for App {
             WindowEvent::KeyboardInput { ref event, .. } if event.state.is_pressed() => {
                 let mods = self.mods;
                 match &event.logical_key {
+                    // The inspector is the host's, not the UI's: it never
+                    // reaches a widget.
+                    WinitKey::Named(NamedKey::F12) => self.frames = !self.frames,
                     WinitKey::Named(n) => {
                         if let Some(key) = named(*n) {
                             // Escape is the UI's while it has a focus to drop;
@@ -374,8 +595,14 @@ impl ApplicationHandler for App {
             WindowEvent::RedrawRequested => {
                 let Some(gpu) = &self.gpu else { return };
                 let (size, scale) = (gpu.size(), gpu.window().scale_factor());
+                let start = Instant::now();
                 let animating = self.replay(size, scale);
+                let resolved = Instant::now();
                 self.draw();
+                self.title(
+                    resolved.duration_since(start).as_secs_f64(),
+                    resolved.elapsed().as_secs_f64(),
+                );
                 if let Some(gpu) = &self.gpu {
                     gpu.window().set_cursor(icon(self.cursor));
                 }
@@ -539,6 +766,16 @@ mod tests {
             width(&app, "pill-0") > before + 10.0,
             "the drop did not swap the labels"
         );
+    }
+
+    #[test]
+    fn a_theme_file_is_a_few_numbers_and_says_what_it_could_not_read() {
+        let (t, bad) = parse_theme("primary_hue = 12.5\nnonsense\nstep=0.08 # a comment\n");
+        assert_eq!(t.palette.primary.hue, 12.5);
+        assert_eq!(t.palette.step, 0.08);
+        // Everything unstated is still the compiled-in skin.
+        assert_eq!(t.palette.neutral.hue, skin::SKIN.palette.neutral.hue);
+        assert_eq!(bad.len(), 1, "{bad:?}");
     }
 
     #[test]
