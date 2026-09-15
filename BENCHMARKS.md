@@ -90,6 +90,25 @@ buffer — the new ops are rectangles and glyphs, which cost it nothing. Neither
 sparse-strip backend exposes an equivalent; peak RSS of the whole process was
 149 MiB, dominated by the font and the wgpu device, so it separates nothing.
 
+### `cpu-threads`, measured
+
+`vello_cpu` builds a `SingleThreadedDispatcher` unless the `multithreading`
+feature is on, so every row above rasterises on one core. `mui-vello`'s
+`cpu-threads` feature turns it on (`cargo run -p mui-vello --release --features
+cpu-threads --example bench`), and on this machine it moves both CPU columns —
+strip generation is dispatched to the pool too, so `encode` drops as well as
+`render`:
+
+| backend | case | resolve | encode | render | total | fps |
+|---|---|---:|---:|---:|---:|---:|
+| vello_cpu | static | 1.306 | 2.906 | 0.266 | 4.478 | 223 |
+| vello_cpu cached | static | 1.317 | 2.750 | 0.267 | 4.333 | 231 |
+| vello_cpu cached | cold | 5.243 | 5.150 | 0.260 | 10.653 | 94 |
+
+Against 5.725 / 11.756 single-threaded: a warm CPU frame goes 175 → 231 fps.
+It stays off by default — a 120x60 snapshot pixmap loses more to thread
+hand-off than it gains, and a plugin host may not want MUI spawning a pool.
+
 ### Before the features, for reference
 
 The same bench on the same machine at commit `19a59b5`, when the scene was

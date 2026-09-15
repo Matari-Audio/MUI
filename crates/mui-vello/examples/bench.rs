@@ -679,18 +679,13 @@ mod classic {
         // ponytail: one font per process, because `Blob::new` mints a fresh id
         // per call and classic's glyph cache keys on it. The library keeps a
         // real map; this bench only ever draws one font.
-        fn glyphs(
-            &mut self,
-            font: &Arc<[u8]>,
-            size: f32,
-            origin: (f64, f64),
-            glyphs: &[(u32, f32)],
-        ) {
+        fn glyphs(&mut self, text: &mui_core::Text) {
+            let (size, glyphs) = (text.size, &text.glyphs);
             let f = self
                 .font
-                .get_or_insert_with(|| FontData::new(Blob::new(Arc::new(font.clone())), 0))
+                .get_or_insert_with(|| FontData::new(Blob::new(Arc::new(text.font.clone())), 0))
                 .clone();
-            let (ox, oy) = (origin.0 as f32, origin.1 as f32);
+            let (ox, oy) = (text.origin.x as f32, text.origin.y as f32);
             self.scene
                 .draw_glyphs(&f)
                 .font_size(size)

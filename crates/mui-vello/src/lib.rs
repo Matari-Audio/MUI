@@ -21,7 +21,7 @@ use std::sync::{Arc, Mutex};
 pub use vello_common::paint::PaintType;
 use vello_common::peniko::color::PremulRgba8;
 use vello_common::peniko::color::{AlphaColor, DynamicColor, Srgb};
-use vello_common::peniko::{Blob, ColorStop, FontData, Gradient, ImageSampler};
+use vello_common::peniko::{Blob, ColorStop, ColorStops, FontData, Gradient, ImageSampler};
 use vello_common::pixmap::Pixmap;
 pub use vello_common::{kurbo, peniko};
 #[cfg(feature = "cpu")]
@@ -167,12 +167,14 @@ pub trait Canvas {
     fn fill_path(&mut self, p: &BezPath);
     fn stroke_path(&mut self, p: &BezPath);
     fn fill_blurred_rounded_rect(&mut self, r: &Rect, radius: f32, std_dev: f32);
-    /// Everything drawn until the matching [`Canvas::pop_clip`] is clipped to `p`.
+    /// Everything drawn until the matching [`Canvas::pop_clip`] is clipped to
+    /// `p`. This is Vello's clip *stack*, not a compositing layer: no
+    /// intermediate texture, and an unpopped clip is not a panic.
     fn push_clip(&mut self, p: &BezPath);
     fn pop_clip(&mut self);
-    /// Draw a hinted glyph run in the current paint, `x` measured from
-    /// `origin` along the baseline.
-    fn glyphs(&mut self, font: &Arc<[u8]>, size: f32, origin: (f64, f64), glyphs: &[(u32, f32)]);
+    /// Draw a hinted glyph run in the current paint, each glyph's `x`
+    /// measured from the run's origin along the baseline.
+    fn glyphs(&mut self, text: &mui_core::Text);
 }
 
 /// One [`FontData`] per distinct font. Vello's hinted-glyph and atlas caches
@@ -199,10 +201,10 @@ fn font_data(font: &Arc<[u8]>) -> FontData {
 }
 
 fn run(
-    origin: (f64, f64),
+    origin: mui_geometry::Point,
     glyphs: &[(u32, f32)],
 ) -> impl Iterator<Item = glifo::Glyph> + Clone + '_ {
-    let (ox, oy) = (origin.0 as f32, origin.1 as f32);
+    let (ox, oy) = (origin.x as f32, origin.y as f32);
     glyphs.iter().map(move |&(id, x)| glifo::Glyph {
         id,
         x: ox + x,
@@ -230,9 +232,8 @@ pub struct Atlas<'a> {
 
 /// One atlas id per image buffer a renderer has seen. Keep it next to the
 /// `Renderer` it belongs to: an id means nothing to any other one.
-// ponytail: never evicted, like `FONTS`; an entry holds its buffer so the
-// address stays a sound key. `Renderer::destroy_image` is the upgrade if a
-// plugin ever streams images through.
+// An entry holds its buffer, so the address stays a sound key; entries whose
+// buffer the app has dropped are destroyed on the next upload.
 #[derive(Default)]
 pub struct ImageIds(Vec<(Arc<[u8]>, vello_common::paint::ImageId, bool)>);
 
@@ -264,23 +265,18 @@ macro_rules! wrapper {
                 .fill_blurred_rounded_rect(r, radius, std_dev, false)
         }
         fn push_clip(&mut self, p: &BezPath) {
-            self.$inner.push_clip_layer(p)
+            self.$inner.push_clip_path(p)
         }
         fn pop_clip(&mut self) {
-            self.$inner.pop_layer()
+            self.$inner.pop_clip_path()
         }
-        fn glyphs(
-            &mut self,
-            font: &Arc<[u8]>,
-            size: f32,
-            origin: (f64, f64),
-            glyphs: &[(u32, f32)],
-        ) {
+        fn glyphs(&mut self, text: &mui_core::Text) {
             self.$inner
-                .glyph_run(self.resources, &font_data(font))
-                .font_size(size)
+                .glyph_run(self.resources, &font_data(&text.font))
+                .font_size(text.size)
+                // glifo's current default, not a promise it will stay one.
                 .hint(true)
-                .fill_glyphs(run(origin, glyphs));
+                .fill_glyphs(run(text.origin, &text.glyphs));
         }
     };
 }
@@ -291,12 +287,27 @@ impl Canvas for Gpu<'_> {
         let (id, clear) = match atlas.ids.0.iter().find(|(k, ..)| Arc::ptr_eq(k, &img.rgba)) {
             Some(&(_, id, clear)) => (id, clear),
             None => {
+                // `Renderer::upload_image` allocates with an `unwrap`, so an
+                // image the atlas cannot hold would abort the host -- and in a
+                // plugin that takes the DAW with it. Fall back to the solid.
+                if !fits_atlas(img) {
+                    return None;
+                }
                 // Own encoder, submitted now: the queue keeps it ahead of the
                 // frame that paints with the id. An upload is once per image.
-                // ponytail: an image wider than the atlas panics inside
-                // `upload_image`; `pixmap` only guards the u16 ceiling.
                 let p = pixmap(img)?;
                 let mut enc = atlas.device.create_command_encoder(&Default::default());
+                // Free the slots of buffers the app has dropped; the cache's
+                // own clone is the last strong reference once it has.
+                for (_, id, _) in atlas
+                    .ids
+                    .0
+                    .iter()
+                    .filter(|(k, ..)| Arc::strong_count(k) == 1)
+                {
+                    atlas.renderer.destroy_image(self.resources, &mut enc, *id);
+                }
+                atlas.ids.0.retain(|(k, ..)| Arc::strong_count(k) > 1);
                 let id = atlas.renderer.upload_image(
                     self.resources,
                     atlas.device,
@@ -345,10 +356,21 @@ fn srgb(c: mui_core::Color) -> AlphaColor<Srgb> {
 /// One premultiplied [`Pixmap`] per distinct image buffer. MUI hands over
 /// straight RGBA -- what a decoder produces -- and premultiplying a photo is
 /// far too much work to redo every frame.
-// ponytail: same never-evicted interning as `FONTS`. `vello_cpu` paints the
-// pixmap itself; `Gpu` uploads it once through its `Atlas` and keeps the id.
+/// Entries whose buffer the app has dropped go on the next miss, so a panel
+/// that hands over a fresh frame buffer every frame does not grow the cache.
+// ponytail: the lookup is a linear scan, bounded by the live image count.
 #[allow(clippy::type_complexity)]
 static IMAGES: Mutex<Vec<(Arc<[u8]>, Arc<Pixmap>)>> = Mutex::new(Vec::new());
+
+/// Whether `vello_hybrid`'s image atlas could hold this image at all.
+/// Growing the atlas adds tiles, never a bigger one, so nothing over the tile
+/// size ever fits.
+// ponytail: 4096 is the default tile; `MemorySettings::normalize` can clamp it
+// further down to a device limit, so this is a guard, not a guarantee.
+fn fits_atlas(img: &mui_core::Image) -> bool {
+    let (w, h) = vello_common::multi_atlas::AtlasConfig::default().atlas_size;
+    img.width <= w && img.height <= h
+}
 
 fn pixmap(img: &mui_core::Image) -> Option<Arc<Pixmap>> {
     // A single image has to fit one atlas tile; u16 is the hard ceiling.
@@ -382,6 +404,9 @@ fn pixmap(img: &mui_core::Image) -> Option<Arc<Pixmap>> {
         })
         .collect();
     let p = Arc::new(Pixmap::from_parts_with_opacity(data, w, h, clear));
+    // The cache's own clone is the last strong reference once the app has let
+    // its buffer go, so this is exact rather than a heuristic.
+    images.retain(|(k, _)| Arc::strong_count(k) > 1);
     images.push((img.rgba.clone(), p.clone()));
     Some(p)
 }
@@ -424,19 +449,23 @@ pub fn brush(p: &Paint, bounds: Rect) -> PaintType {
             let len = (bounds.width() * s).abs() + (bounds.height() * c).abs();
             let mid = bounds.center();
             let half = (s * len / 2.0, c * len / 2.0);
-            let stops: Vec<ColorStop> = stops
-                .iter()
-                .map(|(t, col)| ColorStop {
-                    offset: *t,
-                    color: DynamicColor::from_alpha_color(srgb(*col)),
-                })
-                .collect();
+            // `ColorStops` holds four stops inline, so the common gradient
+            // does not allocate; a longer one allocates once, as before.
+            let stops = ColorStops(
+                stops
+                    .iter()
+                    .map(|(t, col)| ColorStop {
+                        offset: *t,
+                        color: DynamicColor::from_alpha_color(srgb(*col)),
+                    })
+                    .collect(),
+            );
             PaintType::Gradient(
                 Gradient::new_linear(
                     (mid.x - half.0, mid.y - half.1),
                     (mid.x + half.0, mid.y + half.1),
                 )
-                .with_stops(&stops[..]),
+                .with_stops(stops),
             )
         }
     }
@@ -661,7 +690,7 @@ fn one(canvas: &mut impl Canvas, p: &Painted, path: &BezPath) -> Result<(), Erro
         _ => brush(&p.paint, bounds),
     });
     if let Some(t) = &p.text {
-        canvas.glyphs(&t.font, t.size, (t.origin.x, t.origin.y), &t.glyphs);
+        canvas.glyphs(t);
         return Ok(());
     }
     // An image paint lives in pixel space; this is what puts it on the box.
@@ -729,6 +758,38 @@ mod seam {
             Rect::new(0., 0., 10., 10.),
         );
         assert!(matches!(p, PaintType::Solid(_)), "fell back to a solid");
+    }
+
+    /// The pixmap cache lets go of a buffer the app has dropped, so a panel
+    /// handing over a fresh frame every frame does not leak one per frame.
+    #[test]
+    fn the_pixmap_cache_drops_a_buffer_the_app_let_go_of() {
+        let img = |v: u8| Image {
+            width: 1,
+            height: 1,
+            rgba: Arc::from(&[v, v, v, 255][..]),
+        };
+        let (a, b) = (img(1), img(2));
+        let gone = Arc::downgrade(&a.rgba);
+        assert!(pixmap(&a).is_some());
+        drop(a);
+        // The next miss is what sweeps.
+        assert!(pixmap(&b).is_some());
+        assert!(gone.upgrade().is_none(), "the dropped buffer is still held");
+    }
+
+    /// An image no atlas tile can hold is refused here rather than inside
+    /// `upload_image`, which unwraps.
+    #[test]
+    fn an_image_too_big_for_the_atlas_is_refused() {
+        let img = |w, h| Image {
+            width: w,
+            height: h,
+            rgba: Arc::from(&[][..]),
+        };
+        assert!(fits_atlas(&img(4096, 4096)));
+        assert!(!fits_atlas(&img(5000, 3000)));
+        assert!(!fits_atlas(&img(100, 4097)));
     }
 
     /// A gradient-filled label still gets a box to fit the gradient to,
@@ -824,8 +885,8 @@ mod snapshot {
         pix
     }
 
-    /// Text reaches the pixels as a glyph run: it goes through Vello's
-    /// atlas, so ink on the pixmap means the run drew.
+    /// Text reaches the pixels as a glyph run: Vello hints and caches the
+    /// outlines per font blob, so ink on the pixmap means the run drew.
     #[test]
     fn a_glyph_run_lands_pixels() {
         let mut spec =

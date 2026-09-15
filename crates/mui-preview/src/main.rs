@@ -173,8 +173,12 @@ fn inspect(
     let Ok(run) = mui_text::text_run(font, &label, LABEL, &[], mui::vello::ARC_TOLERANCE) else {
         return;
     };
-    let glyphs: Vec<(u32, f32)> = run.glyphs.iter().map(|&(id, x)| (id, x as f32)).collect();
-    canvas.glyphs(font, LABEL as f32, (SIDEBAR + 12.0, height - 12.0), &glyphs);
+    canvas.glyphs(&mui::core::Text {
+        font: font.clone(),
+        size: LABEL as f32,
+        origin: Point::new(SIDEBAR + 12.0, height - 12.0),
+        glyphs: run.glyphs.iter().map(|&(id, x)| (id, x as f32)).collect(),
+    });
 }
 
 struct App {

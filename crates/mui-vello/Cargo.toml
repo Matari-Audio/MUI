@@ -8,6 +8,9 @@ license.workspace = true
 default = []
 # A CPU rasteriser: snapshot tests, thumbnails, hosts with no GPU.
 cpu = ["dep:vello_cpu"]
+# Rasterise on a rayon pool instead of one core. Off by default: a snapshot-
+# sized pixmap loses more to thread hand-off than it gains.
+cpu-threads = ["cpu", "vello_cpu/multithreading"]
 # Compile classic vello into `examples/bench.rs` so the comparison has a third
 # column. Off by default: it drags in the whole compute pipeline for a number.
 bench-classic = []
