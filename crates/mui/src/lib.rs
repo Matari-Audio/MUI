@@ -31,11 +31,11 @@ pub use mui_vello as vello;
 mod ui;
 pub mod widgets;
 
-pub use ui::{Frame, Ui};
+pub use ui::{Edit, Frame, Ui};
 
 pub mod prelude {
     pub use crate::widgets::{button, knob, slider, text_input, toggle};
-    pub use crate::{Frame, Ui};
+    pub use crate::{Edit, Frame, Ui};
     pub use mui_core::prelude::*;
     pub use mui_core::{CornerProfile, Mode, Palette, Pigment, Spring};
     pub use mui_input::{Input, Key, KeyPress, Mods, PointerInput, Response};

@@ -3,6 +3,7 @@
 use std::ops::RangeInclusive;
 
 use mui_core::prelude::*;
+use mui_core::Spring;
 use mui_input::Key;
 
 use crate::Ui;
@@ -12,6 +13,9 @@ fn unit(value: f64, range: &RangeInclusive<f64>) -> f64 {
 }
 
 /// Label, readout, and a track whose fill and thumb are flex shares.
+///
+/// Call [`Ui::edit`](crate::Ui::edit) with the same id to bracket the drag
+/// for a host's automation: `Begin` on the press, `End` on the release.
 pub fn slider(
     ui: &mut Ui,
     id: &str,
@@ -49,7 +53,11 @@ pub fn slider(
     .gap(Xs)
 }
 
-/// A dial: vertical drag, pointer on a 270° sweep.
+/// A dial: vertical drag, pointer on a 270° sweep. The pointer follows a
+/// tween, so a value set from outside -- a preset, a host automation curve --
+/// glides instead of jumping, while a drag still tracks the pointer.
+///
+/// Bracket it with [`Ui::edit`](crate::Ui::edit), as for [`slider`].
 pub fn knob(
     ui: &mut Ui,
     id: &str,
@@ -59,7 +67,9 @@ pub fn knob(
     size: f64,
 ) -> El {
     ui.drag(id, value, range.clone(), 120.0, true);
-    let t = unit(*value, &range);
+    // Fast enough that a drag still feels direct, slow enough that a
+    // preset change is a glide.
+    let t = ui.tween_with(id, unit(*value, &range), Spring::new(0.12, 1.0));
     let a = (135.0 + 270.0 * t).to_radians();
     let r = size / 2.0 - 6.0;
     let (h, _) = ui.state(id);
@@ -88,6 +98,7 @@ pub fn button(ui: &Ui, id: &str, label: &str) -> (El, bool) {
         .pad_xy(14.0, 8.0)
         .pill()
         .fill(Role::Primary)
+        .animate()
         .id(id);
     (el, ui.get(id).clicked)
 }
@@ -107,6 +118,7 @@ pub fn toggle(ui: &Ui, id: &str, on: &mut bool) -> El {
     .pad(3.0)
     .pill()
     .fill(if *on { Role::Primary } else { Role::Field })
+    .animate()
     .id(id)
 }
 

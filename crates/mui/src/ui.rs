@@ -4,7 +4,8 @@ use std::sync::Arc;
 
 use mui_core::prelude::{overlay, text, Role, Styled as _};
 use mui_core::{
-    Cursor, El, Palette, ResolvedScene, SceneError, SceneSpec, Size, Spring, TextCache, Theme,
+    Color, Cursor, El, Element, Fill, Paint, Palette, Radius, ResolvedScene, SceneError, SceneSpec,
+    Size, Spacing, Spring, TextCache, Theme,
 };
 use mui_geometry::Point;
 use mui_input::{Hit, Input, Interaction, Key, KeyPress, PointerInput, Response};
@@ -24,6 +25,18 @@ pub struct Frame<'a> {
     pub tip: Option<(String, Point)>,
     /// The cursor the hovered surface asks for.
     pub cursor: Cursor,
+    /// Every gesture that began or ended this frame, for a host that brackets
+    /// automation. [`Ui::edit`] asks about one id.
+    pub edits: Vec<(String, Edit)>,
+}
+
+/// A parameter gesture's two edges. A slider or knob drag is one `Begin`, a
+/// run of value changes, and one `End`: exactly the bracket a plugin host
+/// wants around touched automation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Edit {
+    Begin,
+    End,
 }
 
 /// Retained state for an immediate tree. Build the tree every frame; the
@@ -36,12 +49,20 @@ pub struct Ui {
     scene: Option<ResolvedScene>,
     /// Per key: hover and press springs, 0..1.
     springs: BTreeMap<String, [Spring; 2]>,
+    /// Transition springs per node id, one per paint channel, and tweens
+    /// under a `~` prefix so a widget id cannot collide with one.
+    // ponytail: never pruned -- bounded by the ids an app ever uses; retain
+    // against the keys a frame touched if a generated-id list grows.
+    motion: BTreeMap<String, Vec<Spring>>,
     text_cache: TextCache,
     /// Per scroll node: how far its children are slid.
     scrolls: BTreeMap<String, [f64; 2]>,
     /// Per text field: the caret's character index.
     carets: BTreeMap<String, usize>,
     focus: Option<String>,
+    edits: Vec<(String, Edit)>,
+    /// An `End` owed because the gesture was cancelled, not released.
+    cancelled: Option<String>,
     keys: Vec<KeyPress>,
     typed: String,
     pointer: PointerInput,
@@ -58,10 +79,13 @@ impl Ui {
             hit: Hit::default(),
             scene: None,
             springs: BTreeMap::new(),
+            motion: BTreeMap::new(),
             text_cache: TextCache::default(),
             scrolls: BTreeMap::new(),
             carets: BTreeMap::new(),
             focus: None,
+            edits: Vec::new(),
+            cancelled: None,
             keys: Vec::new(),
             typed: String::new(),
             pointer: PointerInput::default(),
@@ -77,9 +101,50 @@ impl Ui {
     pub fn scene(&self) -> Option<&ResolvedScene> {
         self.scene.as_ref()
     }
-    /// Drop the gesture in flight, for focus loss.
+    /// Drop the gesture in flight, for focus loss. The held target still
+    /// gets its [`Edit::End`] on the next frame: a host that was told a
+    /// gesture began must be told it ended.
     pub fn cancel(&mut self) {
+        self.cancelled = self.interaction.held().map(str::to_owned);
         self.interaction.cancel();
+    }
+
+    /// Whether a parameter gesture on `id` began or ended, on the same frame
+    /// boundary as [`Ui::get`]. Bracket automation with it:
+    ///
+    /// ```
+    /// # use mui::{Edit, Ui}; use mui::prelude::*;
+    /// # let mut ui = Ui::new(Theme::DEFAULT);
+    /// # let mut cutoff = 0.5;
+    /// match ui.edit("cutoff") {
+    ///     Some(Edit::Begin) => { /* host.begin_gesture(CUTOFF) */ }
+    ///     Some(Edit::End) => { /* host.end_gesture(CUTOFF) */ }
+    ///     None => {}
+    /// }
+    /// let el = slider(&mut ui, "cutoff", "Cutoff", &mut cutoff, 0.0..=1.0);
+    /// ```
+    pub fn edit(&self, id: &str) -> Option<Edit> {
+        self.edits.iter().find(|(k, _)| k == id).map(|(_, e)| *e)
+    }
+
+    /// A keyed spring anyone can read while building the tree: pass the value
+    /// you want, get the value to draw. A knob's sweep drawn from
+    /// `ui.tween("cutoff", v)` glides when a preset changes it and still
+    /// tracks a drag, because the spring is retargeted, never restarted.
+    /// First call returns `target`, so nothing flies in from zero.
+    pub fn tween(&mut self, id: &str, target: f64) -> f64 {
+        self.tween_with(id, target, Spring::DEFAULT)
+    }
+    /// [`Ui::tween`] with your own spring. The spring's shape is taken on
+    /// the first call for `id`.
+    pub fn tween_with(&mut self, id: &str, target: f64, spring: Spring) -> f64 {
+        let s = self
+            .motion
+            .entry(format!("~{id}"))
+            .or_insert_with(|| vec![seed(spring, target)]);
+        let s = &mut s[0];
+        s.to(target);
+        s.value
     }
     /// Last frame's gesture on `id`. Widgets read this while building the
     /// next tree, so a drag lands one frame late and nobody notices.
@@ -218,12 +283,25 @@ impl Ui {
         let input = input.into();
         self.pointer = input.pointer;
         self.time += dt;
-        let was_held = self.interaction.held().is_some();
+        let prev_held = self.interaction.held().map(str::to_owned);
         self.interaction.update(&self.hit, input.pointer);
         let (hovered, held) = (
             self.interaction.hovered().map(str::to_owned),
             self.interaction.held().map(str::to_owned),
         );
+        // A gesture is exactly the span a target is captured for, so the two
+        // edges are the two ends of that capture -- plus the one a `cancel`
+        // stole before this frame could see it.
+        self.edits = self
+            .cancelled
+            .take()
+            .map(|k| (k, Edit::End))
+            .into_iter()
+            .collect();
+        if prev_held != held {
+            self.edits.extend(prev_held.clone().map(|k| (k, Edit::End)));
+            self.edits.extend(held.clone().map(|k| (k, Edit::Begin)));
+        }
         for (k, [h, p]) in &mut self.springs {
             h.to(f64::from(
                 hovered.as_deref() == Some(k) || held.as_deref() == Some(k),
@@ -239,7 +317,7 @@ impl Ui {
         }
         // A release is read by the *next* tree, so that frame must come even
         // when nothing is moving.
-        let mut animating = was_held;
+        let mut animating = prev_held.is_some();
         for s in self.springs.values_mut().flatten() {
             animating |= s.step(dt);
         }
@@ -302,6 +380,10 @@ impl Ui {
         };
 
         let pal = self.theme.palette;
+        animating |= transitions(&mut root, &pal, &mut self.motion, dt);
+        for (_, s) in self.motion.iter_mut().filter(|(k, _)| k.starts_with('~')) {
+            animating |= s[0].step(dt);
+        }
         let springs = &self.springs;
         let scrolls = &self.scrolls;
         state(
@@ -343,6 +425,7 @@ impl Ui {
             animating,
             tip,
             cursor,
+            edits: self.edits.clone(),
         })
     }
 
@@ -374,6 +457,76 @@ impl Ui {
             return;
         }
     }
+}
+
+/// A spring shaped like `s`, resting at `value`.
+fn seed(s: Spring, value: f64) -> Spring {
+    Spring {
+        value,
+        velocity: 0.0,
+        target: value,
+        ..s
+    }
+}
+
+/// Every numeric paint channel of `e`, in a fixed order, replaced by
+/// `ch(index, declared)`. Sizes and layout are deliberately absent.
+fn channels(e: &mut Element, pal: &Palette, ch: &mut impl FnMut(usize, f64) -> f64) {
+    if let Some(Paint::Solid(c)) = e.style.fill.paint(pal, pal.background()) {
+        let v = [c.lightness(), c.chroma(), c.hue(), c.alpha()];
+        let o = std::array::from_fn::<f32, 4, _>(|i| ch(i, f64::from(v[i])) as f32);
+        e.style.fill = Fill::Color(Color::oklcha(o[0], o[1], o[2], o[3]));
+    }
+    if let Some(w) = e.style.stroke.as_mut().and_then(|s| s.width.as_mut()) {
+        *w = ch(4, *w);
+    }
+    if let Radius::Px(r) = &mut e.style.radius {
+        *r = ch(5, *r);
+    }
+    if let Some(t) = e.text_size.as_mut() {
+        *t = ch(6, *t);
+    }
+    if let Some(s) = e.style.shadow.as_mut() {
+        s.blur = ch(7, s.blur);
+    }
+    for (i, (d, _)) in e.style.shells.iter_mut().enumerate() {
+        if let Spacing::Px(v) = d {
+            *v = ch(8 + i, *v);
+        }
+    }
+}
+
+/// Spring every transitioning node's paint toward what it declared this
+/// frame. The springs hold last frame's declaration as their target, so a new
+/// target mid-flight retargets the live spring instead of restarting it.
+fn transitions(
+    n: &mut El,
+    pal: &Palette,
+    motion: &mut BTreeMap<String, Vec<Spring>>,
+    dt: f64,
+) -> bool {
+    let mut animating = false;
+    if let (Some(k), Some(spring)) = (n.key().map(str::to_owned), n.payload().transition) {
+        let list = motion.entry(k).or_default();
+        channels(n.payload_mut(), pal, &mut |i, declared| {
+            if list.len() <= i {
+                list.resize(i + 1, seed(spring, declared));
+            }
+            let s = &mut list[i];
+            // Hue is an angle: take the short way round rather than
+            // sweeping 350 degrees back to 10.
+            if i == 2 {
+                s.value += ((declared - s.value) / 360.0).round() * 360.0;
+            }
+            s.to(declared);
+            animating |= s.step(dt);
+            s.value
+        });
+    }
+    for c in n.children_mut() {
+        animating |= transitions(c, pal, motion, dt);
+    }
+    animating
 }
 
 /// Push hover and press into every named node's fill, proportionally, and
@@ -520,6 +673,112 @@ mod tests {
             .frame(tree(), None, PointerInput::default(), 0.016)
             .unwrap();
         assert!(f.tip.is_none(), "gone when the pointer leaves");
+    }
+
+    fn solid(f: &Frame) -> mui_core::Paint {
+        f.scene.paint[0].paint.clone()
+    }
+
+    #[test]
+    fn a_transition_lands_between_the_two_fills_and_settles() {
+        let mut ui = Ui::new(Theme::DEFAULT);
+        let tree = |on: bool| {
+            leaf(40., 40.)
+                .fill(if on { Role::Primary } else { Role::Field })
+                .animate()
+                .id("b")
+        };
+        let from = solid(
+            &ui.frame(tree(false), None, Input::default(), 0.016)
+                .unwrap(),
+        );
+        let mid = solid(&ui.frame(tree(true), None, Input::default(), 0.016).unwrap());
+        assert_ne!(mid, from, "it left the old fill");
+        let mut t = 0.0;
+        let to = loop {
+            let f = ui.frame(tree(true), None, Input::default(), 0.016).unwrap();
+            t += 0.016;
+            let paint = solid(&f);
+            assert!(t < 2.0, "never settled");
+            if !f.animating {
+                break paint;
+            }
+        };
+        assert_ne!(mid, to, "and the middle was not the end");
+        let mut fresh = Ui::new(Theme::DEFAULT);
+        let want = solid(
+            &fresh
+                .frame(tree(true), None, Input::default(), 0.016)
+                .unwrap(),
+        );
+        assert_eq!(to, want, "it settles on the declared fill");
+    }
+
+    #[test]
+    fn retargeting_mid_flight_does_not_jump() {
+        let mut ui = Ui::new(Theme::DEFAULT);
+        let tree = |on: bool| {
+            leaf(40., 40.)
+                .fill(if on { Role::Primary } else { Role::Field })
+                .animate()
+                .id("b")
+        };
+        let home = solid(
+            &ui.frame(tree(false), None, Input::default(), 0.016)
+                .unwrap(),
+        );
+        for _ in 0..3 {
+            ui.frame(tree(true), None, Input::default(), 0.016).unwrap();
+        }
+        let before = solid(&ui.frame(tree(true), None, Input::default(), 0.016).unwrap());
+        let after = solid(
+            &ui.frame(tree(false), None, Input::default(), 0.016)
+                .unwrap(),
+        );
+        assert_ne!(after, home, "a retarget carries velocity, it does not snap");
+        assert_ne!(after, before, "and it keeps moving");
+    }
+
+    #[test]
+    fn a_tween_walks_to_its_target_and_never_back() {
+        let mut ui = Ui::new(Theme::DEFAULT);
+        assert_eq!(ui.tween("cutoff", 0.0), 0.0, "it starts where it is told");
+        let mut prev = 0.0;
+        for _ in 0..180 {
+            ui.frame(leaf(1., 1.), None, Input::default(), 0.016)
+                .unwrap();
+            let v = ui.tween("cutoff", 1.0);
+            assert!(v >= prev, "went backwards: {v} after {prev}");
+            assert!(v <= 1.0 + 1e-9, "overshot to {v}");
+            prev = v;
+        }
+        assert!(prev > 0.99, "arrived: {prev}");
+    }
+
+    #[test]
+    fn a_press_and_its_release_bracket_the_gesture() {
+        let mut ui = Ui::new(Theme::DEFAULT);
+        let tree = || leaf(40., 40.).fill(Role::Raised).id("b");
+        ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
+        let f = ui.frame(tree(), None, at(10., 10., true), 0.016).unwrap();
+        assert_eq!(f.edits, vec![("b".to_owned(), Edit::Begin)]);
+        assert_eq!(ui.edit("b"), Some(Edit::Begin));
+        let f = ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
+        assert_eq!(f.edits, vec![("b".to_owned(), Edit::End)]);
+        assert_eq!(ui.edit("b"), Some(Edit::End));
+        let f = ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
+        assert!(f.edits.is_empty());
+    }
+
+    #[test]
+    fn a_cancelled_gesture_still_ends() {
+        let mut ui = Ui::new(Theme::DEFAULT);
+        let tree = || leaf(40., 40.).fill(Role::Raised).id("b");
+        ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
+        ui.frame(tree(), None, at(10., 10., true), 0.016).unwrap();
+        ui.cancel();
+        let f = ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
+        assert_eq!(f.edits, vec![("b".to_owned(), Edit::End)]);
     }
 
     #[test]
