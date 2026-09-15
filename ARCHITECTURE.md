@@ -33,8 +33,8 @@ El tree  (row! / col! / stack! / grid!, Styled fills, roles, shells, welds,
    |     roles  -> Palette                            ink resolves on its ground
    |     image  -> Fill::Image                        straight RGBA, fitted to
    |                                                  the node's own outline
-   |                                                  (vello_cpu only; Gpu
-   |                                                  flattens to a grey)
+   |                                                  (vello_cpu: pixmap; vello_hybrid: atlas id,
+   |                                                  no Atlas -> a grey stand-in)
    |
    v  ResolvedScene         paint: Vec<Painted>  (shadow, fill, shells, stroke,
    |                        text, draws, clip/unclip); floats are appended after
