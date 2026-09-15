@@ -79,14 +79,16 @@ public function and a test behind it.
 - [x] A gradient shadow keeps its paint instead of going black; a tooltip
       lands where it was measured under a padded root; a long `text_input`
       value scrolls under a clip instead of wrapping.
+- [x] UAX#14 line breaking: `break_lines` takes its opportunities from
+      `unicode-linebreak`, so CJK breaks between ideographs and a no-break
+      space or an emoji ZWJ sequence holds together. A word wider than the
+      line still overflows at a char, not a grapheme cluster.
 
 ## Missing
 
 - [ ] Kurv rewritten on MUI: the first real plugin editor on this stack, and
       the only honest test of whether the DSL survives a product.
 - [ ] IME.
-- [ ] UAX#14 line breaking: today a break is ASCII whitespace or a hyphen,
-      which is wrong for CJK.
 - [ ] Real semantic roles in `mui-core`, so a widget describes itself and
       `mui-access` stops reporting every surface as a group.
 - [ ] `mui-access` wired into a window: nothing calls it yet. `accesskit_winit`
