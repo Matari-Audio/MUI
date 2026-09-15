@@ -356,3 +356,64 @@ fn tokens_resolve_against_the_scale_and_frames_come_out_in_tree_order() {
     assert_eq!(l.all()[1], l.frame("a").unwrap());
     assert_eq!(l.all()[2].y, 30.);
 }
+
+#[test]
+fn a_scroll_column_overflows_and_slides_and_a_float_takes_no_space() {
+    let list = |dy: f64| {
+        column([
+            leaf(50., 30.).id("a"),
+            leaf(50., 30.).id("b"),
+            leaf(50., 30.).id("c"),
+        ])
+        .gap(10.)
+        .pad(5.)
+        .scroll()
+        .scrolled(0., dy)
+        .grow(1.)
+        .id("list")
+    };
+    // The window is 60 tall: three 30px rows plus gaps do not fit, and the
+    // scroll floor lets the column be squeezed instead of erroring.
+    let head = || leaf(60., 20.).shrink(0.);
+    let t = column([head(), list(0.)]).size(60., 80.).id("root");
+    let l = resolve(&t, None, Default::default()).unwrap();
+    assert_eq!(l.frame("list").unwrap().size, Size::new(60., 60.));
+    assert_eq!(l.frame("a").unwrap().size, Size::new(50., 30.));
+    assert_eq!(l.frame("c").unwrap().y, 20. + 5. + 80.);
+    // Scrolled by 40: everything slides up, the frame stays put.
+    let t = column([head(), list(40.)]).size(60., 80.);
+    let l = resolve(&t, None, Default::default()).unwrap();
+    assert_eq!(l.frame("list").unwrap().y, 20.);
+    assert_eq!(l.frame("a").unwrap().y, 25. - 40.);
+    // Without scroll the rows themselves get squeezed.
+    let plain = column([leaf(50., 30.).id("p"), leaf(50., 30.)])
+        .gap(10.)
+        .pad(5.);
+    let l = resolve(
+        &column([head(), plain]).size(60., 70.),
+        None,
+        Default::default(),
+    )
+    .unwrap();
+    assert!(l.frame("p").unwrap().size.height < 30.);
+    // A float sits in the parent's padding box and does not widen the row.
+    let t = row([
+        leaf(10., 10.).id("x"),
+        leaf(80., 80.)
+            .float()
+            .anchor(Align::End, Align::Start)
+            .offset(0., 4.)
+            .id("tip"),
+    ])
+    .pad(2.)
+    .id("r");
+    let l = resolve(&t, None, Default::default()).unwrap();
+    assert_eq!(l.frame("r").unwrap().size, Size::new(14., 14.));
+    let tip = l.frame("tip").unwrap();
+    assert_eq!((tip.x, tip.y), (2. + 10. - 80., 2. + 4.));
+    assert_eq!(
+        l.all()[1],
+        tip,
+        "floats come first in tree order, so the walk can defer them"
+    );
+}

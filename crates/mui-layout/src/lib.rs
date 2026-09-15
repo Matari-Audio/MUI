@@ -270,6 +270,15 @@ pub struct Node<P = ()> {
     justify: Justify,
     anchor: Option<(Align, Align)>,
     offset: [f64; 2],
+    /// Children may overflow the main axis; the frame clips them and
+    /// `scrolled` slides them. Implies `clip`.
+    scroll: bool,
+    clip: bool,
+    scrolled: [f64; 2],
+    /// Out of flow: takes no space in its parent and sits like an overlay
+    /// child, anchored and offset within the parent's padding box. Tooltips,
+    /// popups, drag ghosts.
+    float: bool,
 }
 
 impl<P: Default> Node<P> {
@@ -294,6 +303,10 @@ impl<P: Default> Node<P> {
             justify: Justify::Start,
             anchor: None,
             offset: [0.0; 2],
+            scroll: false,
+            clip: false,
+            scrolled: [0.0; 2],
+            float: false,
         }
     }
     /// Content whose size is already known: an icon cell, a spacer.
@@ -490,6 +503,47 @@ impl<P> Node<P> {
         self.offset = [dx, dy];
         self
     }
+    /// Let the children overflow the main axis behind a clip. The node's
+    /// floor on that axis drops to its padding, so it can be squeezed.
+    pub fn scroll(mut self) -> Self {
+        self.scroll = true;
+        self.clip = true;
+        self
+    }
+    /// Clip the children to this node's outline.
+    pub fn clip(mut self) -> Self {
+        self.clip = true;
+        self
+    }
+    /// How far the children are slid, in pixels; the runtime sets this.
+    pub fn scrolled(mut self, x: f64, y: f64) -> Self {
+        self.scrolled = [x, y];
+        self
+    }
+    /// Take this node out of flow: see the `float` field.
+    pub fn float(mut self) -> Self {
+        self.float = true;
+        self
+    }
+    pub fn is_scroll(&self) -> bool {
+        self.scroll
+    }
+    pub fn is_clip(&self) -> bool {
+        self.clip
+    }
+    pub fn is_float(&self) -> bool {
+        self.float
+    }
+    pub fn scroll_offset(&self) -> [f64; 2] {
+        self.scrolled
+    }
+    /// The main axis of a branch, if any: `true` for a column.
+    pub fn vertical(&self) -> Option<bool> {
+        match self.kind {
+            Kind::Branch { vertical, .. } => Some(vertical),
+            _ => None,
+        }
+    }
     fn len(&self, vertical: bool) -> Len {
         if vertical {
             self.height
@@ -608,10 +662,17 @@ struct Measured<'a, P> {
     /// The smallest this subtree may be squeezed to: every minimum in it,
     /// summed along the axis they sit on.
     floor: Size,
+    /// The children's extent inside the padding, before any definite size
+    /// overrides it: what a scroll node lays its children into.
+    content: Size,
     children: Vec<Measured<'a, P>>,
 }
 
-impl<P> Measured<'_, P> {
+impl<'a, P> Measured<'a, P> {
+    /// The in-flow children: everything but the floats.
+    fn flow(&self) -> Vec<&Measured<'a, P>> {
+        self.children.iter().filter(|c| !c.node.float).collect()
+    }
     /// Where this child starts before growth or shrink: a percentage of the
     /// parent, a height derived from its aspect, its declared `basis`, or what
     /// it measured. `inner` is `None` while the parent is still hugging.
@@ -700,10 +761,10 @@ fn label<P>(node: &Node<P>, ancestor: &str) -> String {
         .unwrap_or_else(|| format!("{ancestor} > unnamed"))
 }
 
-fn grid_rows<'a, P>(
-    children: &'a [Measured<'a, P>],
+fn grid_rows<'a, 'm, P>(
+    children: &'m [&'m Measured<'a, P>],
     cols: usize,
-) -> impl Iterator<Item = &'a [Measured<'a, P>]> {
+) -> impl Iterator<Item = &'m [&'m Measured<'a, P>]> {
     children.chunks(cols.max(1))
 }
 
@@ -772,6 +833,13 @@ fn measure<'a, P>(
     for c in node.children() {
         let align = c.align_self.unwrap_or(node.align);
         let promise = match &node.kind {
+            _ if c.float => {
+                let (ax, ay) = c.anchor.unwrap_or(cell_default(node));
+                [
+                    offer(c, false, inner[0], ax == Align::Stretch),
+                    offer(c, true, inner[1], ay == Align::Stretch),
+                ]
+            }
             Kind::Branch { vertical, .. } => {
                 let v = *vertical;
                 let cross = offer(c, !v, inner[!v as usize], align == Align::Stretch);
@@ -798,7 +866,9 @@ fn measure<'a, P>(
         };
         children.push(measure(c, here, promise, depth + 1, pass)?);
     }
-    let max_of = |g: &dyn Fn(&Measured<'_, P>) -> f64| children.iter().map(g).fold(0.0, f64::max);
+    let flow: Vec<&Measured<'_, P>> = children.iter().filter(|c| !c.node.float).collect();
+    let max_of =
+        |g: &dyn Fn(&Measured<'_, P>) -> f64| flow.iter().map(|c| g(c)).fold(0.0, f64::max);
     let (content, sunk) = match &node.kind {
         Kind::Leaf => (Size::ZERO, Size::ZERO),
         Kind::Content => {
@@ -810,23 +880,28 @@ fn measure<'a, P>(
         }
         Kind::Branch { vertical: v, .. } => {
             let v = *v;
-            let gaps = children.len().saturating_sub(1) as f64 * gap;
+            let gaps = flow.len().saturating_sub(1) as f64 * gap;
             // Intrinsic main is not the sum of the children: a child with a
             // `basis` contributes that instead, and then the row has to be
             // wide enough that its *share* of the surplus still clears its
             // content. This is the flex fraction. Without it a hugging row
             // collapses to its non-flexible children and squashes the rest.
-            let base = children.iter().map(|c| c.base(v, None)).sum::<f64>();
-            let total_grow = children.iter().map(|c| c.node.grow).sum::<f64>();
-            let surplus = children
+            let base = flow.iter().map(|c| c.base(v, None)).sum::<f64>();
+            let total_grow = flow.iter().map(|c| c.node.grow).sum::<f64>();
+            let surplus = flow
                 .iter()
                 .filter(|c| c.node.grow > 0.0)
                 .map(|c| (c.size.main(v) - c.base(v, None)) * total_grow / c.node.grow)
                 .fold(0.0, f64::max);
-            let floor_main = children.iter().map(|c| c.floor.main(v)).sum::<f64>() + gaps;
+            let floor_main = flow.iter().map(|c| c.floor.main(v)).sum::<f64>() + gaps;
             (
                 Size::axes(base + surplus + gaps, max_of(&|c| c.size.cross(v)), v),
-                Size::axes(floor_main, max_of(&|c| c.floor.cross(v)), v),
+                // A scroll node can always be squeezed on its main axis.
+                Size::axes(
+                    if node.scroll { 0.0 } else { floor_main },
+                    max_of(&|c| c.floor.cross(v)),
+                    v,
+                ),
             )
         }
         Kind::Overlay(_) => (
@@ -834,11 +909,11 @@ fn measure<'a, P>(
             Size::new(max_of(&|c| c.floor.width), max_of(&|c| c.floor.height)),
         ),
         Kind::Grid { cols, .. } => {
-            let rows = children.len().div_ceil(*cols) as f64;
+            let rows = flow.len().div_ceil(*cols) as f64;
             let gaps = |n: f64| (n - 1.0).max(0.0) * gap;
             let hug = |g: fn(&Measured<'_, P>) -> Size| {
-                let widest = children.iter().map(|c| g(c).width).fold(0.0, f64::max);
-                let tall: f64 = grid_rows(&children, *cols)
+                let widest = flow.iter().map(|c| g(c).width).fold(0.0, f64::max);
+                let tall: f64 = grid_rows(&flow, *cols)
                     .map(|r| r.iter().map(|c| g(c).height).fold(0.0, f64::max))
                     .sum();
                 Size::new(
@@ -860,7 +935,19 @@ fn measure<'a, P>(
         definite[0].unwrap_or(hug.width),
         definite[1].unwrap_or(hug.height),
     );
-    let floor = pad(sunk);
+    let floor = match node.vertical() {
+        Some(v) if node.scroll => Size::axes(
+            if v {
+                padding.vertical()
+            } else {
+                padding.horizontal()
+            }
+            .max(node.minimum.main(v)),
+            pad(sunk).cross(v),
+            v,
+        ),
+        _ => pad(sunk),
+    };
     if !size.valid(l.extent) {
         return Err(Error::BudgetExceeded);
     }
@@ -875,6 +962,7 @@ fn measure<'a, P>(
         padding,
         size,
         floor,
+        content,
         children,
     })
 }
@@ -886,19 +974,18 @@ fn measure<'a, P>(
 /// over the rest, which is what the outer loop is for.
 ///
 /// Only one direction runs. A row that overflows never grew.
-fn distribute<P>(m: &Measured<'_, P>, vertical: bool, inner: Size) -> Vec<f64> {
+fn distribute<P>(children: &[&Measured<'_, P>], gap: f64, vertical: bool, inner: Size) -> Vec<f64> {
     let inner_main = inner.main(vertical);
-    let base: Vec<f64> = m
-        .children
+    let base: Vec<f64> = children
         .iter()
         .map(|c| c.base(vertical, Some(inner)))
         .collect();
     let mut allocated = base.clone();
-    let gaps = m.gap * m.children.len().saturating_sub(1) as f64;
+    let gaps = gap * children.len().saturating_sub(1) as f64;
     let mut free = inner_main - base.iter().sum::<f64>() - gaps;
     let growing = free > 0.0;
     let room = |i: usize, allocated: &[f64]| {
-        let c = &m.children[i];
+        let c = children[i];
         let edge = if growing {
             c.node.maximum.map_or(1e6, |s| s.main(vertical)) - allocated[i]
         } else {
@@ -907,15 +994,15 @@ fn distribute<P>(m: &Measured<'_, P>, vertical: bool, inner: Size) -> Vec<f64> {
         edge.max(0.0)
     };
     let weight = |i: usize| {
-        let c = &m.children[i];
+        let c = children[i];
         if growing {
             c.node.grow
         } else {
             c.node.shrink * base[i]
         }
     };
-    for _ in 0..=m.children.len() {
-        let active: Vec<usize> = (0..m.children.len())
+    for _ in 0..=children.len() {
+        let active: Vec<usize> = (0..children.len())
             .filter(|i| weight(*i) > 0.0 && room(*i, &allocated) > 1e-8)
             .collect();
         let total = active.iter().map(|i| weight(*i)).sum::<f64>();
@@ -983,22 +1070,32 @@ fn arrange<P>(
     );
     let at = |x: f64, y: f64| {
         [
-            origin[0] + m.padding.left + x,
-            origin[1] + m.padding.top + y,
+            origin[0] + m.padding.left + x - n.scrolled[0],
+            origin[1] + m.padding.top + y - n.scrolled[1],
         ]
     };
     let default = cell_default(n);
+    let flow = m.flow();
+    // Floats sit in the padding box like overlay children, unscrolled.
+    for c in m.children.iter().filter(|c| c.node.float) {
+        let (p, s) = cell(c, inner, default);
+        let pos = [
+            origin[0] + m.padding.left + p[0],
+            origin[1] + m.padding.top + p[1],
+        ];
+        arrange(c, here, pos, s, out)?;
+    }
     match &n.kind {
         Kind::Leaf | Kind::Content => Ok(()),
-        Kind::Overlay(_) => m.children.iter().try_for_each(|c| {
+        Kind::Overlay(_) => flow.iter().try_for_each(|c| {
             let (p, s) = cell(c, inner, default);
             arrange(c, here, at(p[0], p[1]), s, out)
         }),
         Kind::Grid { cols, .. } => {
             let cols = *cols;
-            let rows = m.children.len().div_ceil(cols);
+            let rows = flow.len().div_ceil(cols);
             let col_w = (inner.width - m.gap * cols.saturating_sub(1) as f64) / cols as f64;
-            let heights: Vec<f64> = grid_rows(&m.children, cols)
+            let heights: Vec<f64> = grid_rows(&flow, cols)
                 .map(|r| r.iter().map(|c| c.size.height).fold(0.0, f64::max))
                 .collect();
             let surplus = (inner.height
@@ -1007,7 +1104,7 @@ fn arrange<P>(
                 .max(0.0)
                 / rows.max(1) as f64;
             let mut y = 0.0;
-            for (row, h) in grid_rows(&m.children, cols).zip(heights) {
+            for (row, h) in grid_rows(&flow, cols).zip(heights) {
                 let cell_size = Size::new(col_w, h + surplus);
                 for (k, c) in row.iter().enumerate() {
                     let (p, s) = cell(c, cell_size, default);
@@ -1025,8 +1122,15 @@ fn arrange<P>(
         }
         Kind::Branch { vertical, .. } => {
             let v = *vertical;
-            let allocated = distribute(m, v, inner);
-            let count = m.children.len() as f64;
+            // A scroll node lays its children into their own extent when
+            // that is larger than the frame: nothing shrinks, it overflows.
+            let inner = if n.scroll {
+                Size::axes(inner.main(v).max(m.content.main(v)), inner.cross(v), v)
+            } else {
+                inner
+            };
+            let allocated = distribute(&flow, m.gap, v, inner);
+            let count = flow.len() as f64;
             let residual =
                 (inner.main(v) - allocated.iter().sum::<f64>() - m.gap * (count - 1.0).max(0.0))
                     .max(0.0);
@@ -1039,7 +1143,7 @@ fn arrange<P>(
                 Justify::SpaceAround => (residual / count * 0.5, residual / count),
                 Justify::SpaceEvenly => (residual / (count + 1.0), residual / (count + 1.0)),
             };
-            for (c, main) in m.children.iter().zip(allocated) {
+            for (c, main) in flow.iter().zip(allocated) {
                 let align = c.node.align_self.unwrap_or(n.align);
                 let avail = inner.cross(v);
                 let cross = match c.aspect_width(inner) {

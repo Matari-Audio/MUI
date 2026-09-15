@@ -243,11 +243,7 @@ impl Path {
     }
     pub fn quad_to(self, c: Point, p: Point) -> Self {
         let from = self.current().unwrap_or(c);
-        self.cubic_to(
-            from + (c - from) * (2. / 3.),
-            p + (c - p) * (2. / 3.),
-            p,
-        )
+        self.cubic_to(from + (c - from) * (2. / 3.), p + (c - p) * (2. / 3.), p)
     }
     pub fn close(mut self) -> Self {
         self.commands.push(PathCommand::Close);
@@ -367,19 +363,27 @@ mod cubic_tests {
 
     #[test]
     fn cubic_flattens_within_tolerance_and_lands_exactly() {
-        let p = Path::default()
-            .move_to(Point::new(0., 0.))
-            .cubic_to(Point::new(0., 100.), Point::new(100., 100.), Point::new(100., 0.));
+        let p = Path::default().move_to(Point::new(0., 0.)).cubic_to(
+            Point::new(0., 100.),
+            Point::new(100., 100.),
+            Point::new(100., 0.),
+        );
         let rings = p.flatten(0.05, 10_000).unwrap();
         let ring = &rings[0];
         assert_eq!(*ring.last().unwrap(), Point::new(100., 0.));
         assert!(ring.len() > 20);
         // Symmetric curve: the midpoint of the curve is (50, 75).
-        let mid = ring.iter().min_by(|a, b| (a.x - 50.).abs().partial_cmp(&(b.x - 50.).abs()).unwrap()).unwrap();
+        let mid = ring
+            .iter()
+            .min_by(|a, b| (a.x - 50.).abs().partial_cmp(&(b.x - 50.).abs()).unwrap())
+            .unwrap();
         assert!((mid.y - 75.).abs() < 0.5, "{mid:?}");
         let svg = p.to_svg_data().unwrap();
         assert!(svg.starts_with("M 0"), "{svg}");
         assert!(svg.contains(" C "), "{svg}");
-        assert!(Path::default().cubic_to(Point::new(0., 0.), Point::new(0., 0.), Point::new(0., 0.)).validate(10).is_err());
+        assert!(Path::default()
+            .cubic_to(Point::new(0., 0.), Point::new(0., 0.), Point::new(0., 0.))
+            .validate(10)
+            .is_err());
     }
 }
