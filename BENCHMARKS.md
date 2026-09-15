@@ -62,34 +62,34 @@ Median of 50 frames after 5 warm-ups. Milliseconds.
 
 | backend | case | resolve | encode | render | total | fps |
 |---|---|---:|---:|---:|---:|---:|
-| mui (resolve only) | static | 2.388 | — | — | 2.388 | 419 |
-| vello_cpu | cold | 6.476 | 7.109 | 0.798 | 14.383 | 70 |
-| vello_cpu | static | 2.491 | 4.855 | 0.789 | 8.135 | 123 |
-| vello_cpu | one knob turning | 2.497 | 4.919 | 0.776 | 8.191 | 122 |
-| vello_cpu cached | cold | 6.621 | 6.925 | 0.834 | 14.380 | 70 |
-| vello_cpu cached | static | 2.562 | 4.557 | 0.815 | 7.934 | 126 |
-| vello_cpu cached | one knob turning | 2.552 | 4.472 | 0.796 | 7.821 | 128 |
-| vello_hybrid | cold | 6.448 | 7.115 | 0.690 | 14.253 | 70 |
-| vello_hybrid | static | 2.582 | 4.974 | 0.721 | 8.278 | 121 |
-| vello_hybrid | one knob turning | 2.659 | 5.012 | 0.677 | 8.348 | 120 |
-| vello_hybrid cached | cold | 6.512 | 6.824 | 0.716 | 14.052 | 71 |
-| vello_hybrid cached | static | 2.588 | 4.550 | 0.703 | 7.841 | 128 |
-| vello_hybrid cached | one knob turning | 2.631 | 4.572 | 0.696 | 7.900 | 127 |
-| vello (classic) | cold | 6.643 | 1.315 | 5.241 | 13.199 | 76 |
-| vello (classic) | static | 2.564 | 1.351 | 4.449 | 8.363 | 120 |
-| vello (classic) | one knob turning | 2.657 | 1.450 | 4.531 | 8.638 | 116 |
+| mui (resolve only) | static | 2.429 | — | — | 2.429 | 412 |
+| vello_cpu | cold | 6.578 | 7.100 | 0.801 | 14.479 | 69 |
+| vello_cpu | static | 2.564 | 4.953 | 0.804 | 8.321 | 120 |
+| vello_cpu | one knob turning | 2.532 | 4.949 | 0.772 | 8.252 | 121 |
+| vello_cpu cached | cold | 6.591 | 6.856 | 0.798 | 14.246 | 70 |
+| vello_cpu cached | static | 2.559 | 4.547 | 0.812 | 7.918 | 126 |
+| vello_cpu cached | one knob turning | 2.535 | 4.570 | 0.783 | 7.888 | 127 |
+| vello_hybrid | cold | 6.565 | 7.236 | 0.740 | 14.541 | 69 |
+| vello_hybrid | static | 2.509 | 4.944 | 0.676 | 8.129 | 123 |
+| vello_hybrid | one knob turning | 2.562 | 5.000 | 0.739 | 8.301 | 120 |
+| vello_hybrid cached | cold | 6.522 | 6.854 | 0.695 | 14.071 | 71 |
+| vello_hybrid cached | static | 2.643 | 4.598 | 0.725 | 7.966 | 126 |
+| vello_hybrid cached | one knob turning | 2.647 | 4.591 | 0.699 | 7.937 | 126 |
+| vello (classic) | cold | 6.643 | 1.357 | 4.870 | 12.870 | 78 |
+| vello (classic) | static | 2.626 | 1.393 | 4.455 | 8.474 | 118 |
+| vello (classic) | one knob turning | 2.823 | 1.504 | 4.963 | 9.290 | 108 |
 
 The bench also times the arc-to-cubic conversion on its own, outside any
 backend:
 
 ```
-bez conversion: 0.475 ms uncached, 0.192 ms from a warm PathCache (631 entries)
+bez conversion: 0.517 ms uncached, 0.192 ms from a warm PathCache (631 entries)
 ```
 
 Memory: classic's `Scene::bump_estimate` still reports **0.5 MiB peak** of GPU
 buffer — the new ops are rectangles and glyphs, which cost it nothing. Neither
 sparse-strip backend exposes an equivalent; peak RSS of the whole process was
-175 MiB, dominated by the font and the wgpu device, so it separates nothing.
+174 MiB, dominated by the font and the wgpu device, so it separates nothing.
 
 ### Before the features, for reference
 
@@ -111,24 +111,24 @@ the story.** Resolve is MUI's and is identical across all three backends —
 backends is the same architectural trade as before, now at larger absolute
 numbers:
 
-- classic encode 1.35 ms, render 4.45 ms
-- hybrid encode 4.97 ms, render 0.72 ms
+- classic encode 1.39 ms, render 4.46 ms
+- hybrid encode 4.94 ms, render 0.68 ms
 
 Classic's `Scene::fill` appends to an encoding buffer and the GPU flattens,
 bins and tiles in compute. Hybrid flattens and builds sparse strips on the CPU
 during the paint walk, then the GPU does one ordinary render pass. Totals are
-still a wash — 8.28 ms hybrid against 8.36 ms classic — so the choice is still
+still a wash — 8.13 ms hybrid against 8.47 ms classic — so the choice is still
 made on what the numbers don't measure: classic needs compute shaders and MUI
 has to render inside a plugin host's device, classic's render floor grew from
 3.4 to 4.5 ms for 100 more ops while hybrid's render did not move at all, and
 `vello_cpu` shares hybrid's pipeline so the no-GPU path is a reference rather
-than a fallback (8.13 ms with no GPU, still the fastest total in the table).
+than a fallback (8.32 ms with no GPU, within noise of the GPU rows).
 
 **What the new features cost is the finding.** Adding 20 wrapped paragraphs,
 4 image pills and 6 spring-driven cards — 102 paint ops, 27% more — moved a
-static frame from 5.9 ms to 8.3 ms and a cold frame from 8.7 to 14.4. Split:
+static frame from 5.9 ms to 8.1 ms and a cold frame from 8.7 to 14.5. Split:
 
-- **Warm resolve went 1.67 → 2.49 ms (+0.82).** Wrapping is most of it. When
+- **Warm resolve went 1.67 → 2.56 ms (+0.89).** Wrapping is most of it. When
   any label wraps, `resolve_scene_with` solves the whole layout twice: pass
   one measures every label unwrapped, a hint pass records how much room each
   wrapping label's parent really has, and pass two re-measures those labels
@@ -136,10 +136,10 @@ static frame from 5.9 ms to 8.3 ms and a cold frame from 8.7 to 14.4. Split:
   second solve. The springs are cheap by comparison — 6 cards is 6 channel
   walks per frame and the `static`/`one knob turning` rows are within noise of
   each other, which is what a settled spring should cost.
-- **Cold resolve went 3.20 → 6.48 ms (+3.28).** Line breaking measures glyph
+- **Cold resolve went 3.20 → 6.57 ms (+3.37).** Line breaking measures glyph
   advances one at a time over ~1400 characters with nothing cached, then the
   second solve does it again. This is the one number that genuinely doubled.
-- **Encode went 3.29 → 4.86 ms (+1.57) for 102 more ops**, which is Vello's
+- **Encode went 3.29 → 4.95 ms (+1.66) for 102 more ops**, which is Vello's
   strip generation over more glyph runs, on Vello's side of the seam.
 
 The fix for both resolve numbers is the same one-line change, and it is not in
@@ -149,18 +149,18 @@ exists. Hand the measurer its offered size and the hint pass, the second solve
 and the `(String, f64)` hint-collision bug go together.
 
 **The path cache is worth what it was worth, slightly more.** Static encode
-drops 4.855 → 4.557 ms on `vello_cpu` and 4.974 → 4.550 on hybrid — about
+drops 4.953 → 4.547 ms on `vello_cpu` and 4.944 → 4.598 on hybrid — about
 0.3 to 0.4 ms, 7% of encode, 4% of the frame. The standalone number says why
-it cannot be more: converting all 631 paths costs 0.475 ms and the cache
+it cannot be more: converting all 631 paths costs 0.517 ms and the cache
 brings it to 0.192 ms. Everything else in the encode column is Vello's, and
-the `vello (classic)` rows — encode 1.35 ms because the GPU flattens — are the
-same paint walk with that work removed. The cold rows improve too (7.11 →
-6.93), because "cold" throws away the `Ui` but rebuilds an identical tree, so
+the `vello (classic)` rows — encode 1.39 ms because the GPU flattens — are the
+same paint walk with that work removed. The cold rows improve too (7.10 →
+6.86), because "cold" throws away the `Ui` but rebuilds an identical tree, so
 the paths still hit.
 
 So MUI's own share of a static 7.9 ms frame is 2.56 ms of resolve plus 0.19 ms
 of cached conversion. The **`mui (resolve only)`** row makes the floor explicit
-at 2.39 ms with nothing painted at all. Resolve is now 32% of the frame and
+at 2.43 ms with nothing painted at all. Resolve is now 32% of the frame and
 95% of MUI's part of it; after this measurement the wrapping double-solve is
 the single largest thing MUI can fix, ahead of anything in the renderer.
 
@@ -171,7 +171,7 @@ keyed on font blob id, glyph id, size, hinting and subpixel bucket
 (`glifo-0.3.0/src/atlas/key.rs:50`). 474 runs instead of 382 cost only the
 strip generation, not re-shaping.
 
-Render on `vello_hybrid` is the quiet column (0.68 to 0.72 ms across every row
+Render on `vello_hybrid` is the quiet column (0.68 to 0.74 ms across every row
 in this run, where an earlier run of the same binary wandered to 1.6 ms); it is
 GPU submit plus `poll(wait)` and it moves between runs for reasons unrelated to
 the paint list.

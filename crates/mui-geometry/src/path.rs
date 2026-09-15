@@ -1,4 +1,4 @@
-use crate::{Bounds, Error, Point};
+use crate::{Error, Point};
 use std::f64::consts::{FRAC_PI_2, PI, TAU};
 use std::fmt::Write;
 
@@ -649,14 +649,6 @@ impl Path {
         path.validate(100_000)?;
         Ok(path)
     }
-
-    /// The extent of the drawn path, arcs and cubics flattened at `tolerance`.
-    /// `None` when there is nothing to bound.
-    pub fn bounds(&self, tolerance: f64) -> Result<Option<Bounds>, Error> {
-        Ok(Bounds::from_points(
-            self.flatten(tolerance, 250_000)?.into_iter().flatten(),
-        ))
-    }
 }
 
 #[cfg(test)]
@@ -686,7 +678,7 @@ mod svg_tests {
 
         // The arc really bows: the half-circle from (130,20) to (150,130)
         // bulges past both endpoints' x.
-        let bounds = a.bounds(0.01).unwrap().unwrap();
+        let bounds = crate::Bounds::from_points(fa.iter().flatten().copied()).unwrap();
         assert!(bounds.max.x > 155., "arc did not bow: {bounds:?}");
         // A relative lineto is relative, and `h40` lands at x=50.
         assert_eq!(a.commands[1], PathCommand::LineTo(Point::new(50., 80.)));

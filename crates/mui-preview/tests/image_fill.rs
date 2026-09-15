@@ -70,7 +70,7 @@ fn an_image_fill_reaches_the_hybrid_renderer_without_panicking() {
             scene: &mut scene,
             resources: &mut resources,
         },
-        &frame.scene,
+        frame.scene,
         mui::vello::kurbo::Affine::IDENTITY,
     )
     .expect("paint");
