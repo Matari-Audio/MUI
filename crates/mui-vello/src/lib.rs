@@ -172,7 +172,7 @@ pub trait Canvas {
     fn pop_clip(&mut self);
     /// Draw a hinted glyph run in the current paint, `x` measured from
     /// `origin` along the baseline.
-    fn glyphs(&mut self, font: &Arc<Vec<u8>>, size: f32, origin: (f64, f64), glyphs: &[(u32, f32)]);
+    fn glyphs(&mut self, font: &Arc<[u8]>, size: f32, origin: (f64, f64), glyphs: &[(u32, f32)]);
 }
 
 /// One [`FontData`] per distinct font. Vello's hinted-glyph and atlas caches
@@ -183,15 +183,17 @@ pub trait Canvas {
 // ever unloads one.
 static FONTS: Mutex<Vec<(usize, FontData)>> = Mutex::new(Vec::new());
 
-fn font_data(font: &Arc<Vec<u8>>) -> FontData {
+fn font_data(font: &Arc<[u8]>) -> FontData {
     // Holding the `Arc` is what makes the pointer a sound key: the allocation
     // cannot be freed and its address reused under a stale entry.
-    let key = Arc::as_ptr(font) as usize;
+    let key = font.as_ptr() as usize;
     let mut fonts = FONTS.lock().unwrap_or_else(|e| e.into_inner());
     if let Some((_, f)) = fonts.iter().find(|(k, _)| *k == key) {
         return f.clone();
     }
-    let f = FontData::new(Blob::new(font.clone()), 0);
+    // `Arc<[u8]>` cannot unsize into `Arc<dyn AsRef<[u8]>>`; the extra
+    // `Arc` is built once per font, not per run.
+    let f = FontData::new(Blob::new(Arc::new(font.clone())), 0);
     fonts.push((key, f.clone()));
     f
 }
@@ -269,7 +271,7 @@ macro_rules! wrapper {
         }
         fn glyphs(
             &mut self,
-            font: &Arc<Vec<u8>>,
+            font: &Arc<[u8]>,
             size: f32,
             origin: (f64, f64),
             glyphs: &[(u32, f32)],
@@ -361,6 +363,11 @@ fn pixmap(img: &mui_core::Image) -> Option<Arc<Pixmap>> {
     }
     let mut clear = false;
     let (pixels, _) = img.rgba.as_chunks::<4>();
+    // `Image`'s fields are public, so the buffer need not match the size;
+    // `Pixmap::from_parts_with_opacity` asserts that it does.
+    if pixels.len() != usize::from(w) * usize::from(h) {
+        return None;
+    }
     let data = pixels
         .iter()
         .map(|p| {
@@ -617,12 +624,28 @@ pub fn paint_cached(
     Ok(())
 }
 
+/// The box a gradient or image paint is fitted to. A text layer carries its
+/// ink as glyphs and leaves `path` empty, so its box comes from the run.
+// ponytail: the last glyph's own advance is estimated at the em size.
+fn paint_box(p: &Painted, path: &BezPath) -> Rect {
+    let Some(t) = &p.text else {
+        return path.bounding_box();
+    };
+    let w = t.glyphs.last().map_or(0.0, |&(_, x)| f64::from(x)) + f64::from(t.size);
+    Rect::new(
+        t.origin.x,
+        t.origin.y - f64::from(t.size),
+        t.origin.x + w,
+        t.origin.y,
+    )
+}
+
 fn one(canvas: &mut impl Canvas, p: &Painted, path: &BezPath) -> Result<(), Error> {
     if p.layer == Layer::Clip {
         canvas.push_clip(path);
         return Ok(());
     }
-    let bounds = path.bounding_box();
+    let bounds = paint_box(p, path);
     // A canvas that cannot take this image gets its solid stand-in rather
     // than a panic, and none of the paint-transform dance below.
     let (img, b) = match &p.paint {
@@ -683,6 +706,58 @@ fn one(canvas: &mut impl Canvas, p: &Painted, path: &BezPath) -> Result<(), Erro
     Ok(())
 }
 
+#[cfg(test)]
+mod seam {
+    use super::*;
+    use mui_core::{Image, Text};
+
+    /// `Image`'s fields are public, so a caller can skip `Image::rgba` and
+    /// hand over a buffer that does not match the size. Vello's `Pixmap`
+    /// asserts on that; the paint falls back instead.
+    #[test]
+    fn an_image_whose_buffer_does_not_match_its_size_falls_back() {
+        let image = Image {
+            width: 4,
+            height: 4,
+            rgba: Arc::from(&[0u8, 0, 0, 255][..]),
+        };
+        let p = brush(
+            &Paint::Image {
+                image: Arc::new(image),
+                fit: Fit::Fill,
+            },
+            Rect::new(0., 0., 10., 10.),
+        );
+        assert!(matches!(p, PaintType::Solid(_)), "fell back to a solid");
+    }
+
+    /// A gradient-filled label still gets a box to fit the gradient to,
+    /// although its path is empty.
+    #[test]
+    fn a_text_layer_takes_its_brush_box_from_the_run() {
+        let mut p = Painted {
+            key: "t".into(),
+            layer: Layer::Text,
+            path: Path::default(),
+            paint: Paint::Solid(mui_core::Color::oklch(0.5, 0., 0.)),
+            rect: None,
+            width: 0.,
+            blur: 0.,
+            text: Some(Text {
+                font: Arc::from(&[][..]),
+                size: 16.,
+                origin: mui_geometry::Point::new(10., 30.),
+                glyphs: Arc::from(&[(1u32, 0.0f32), (2, 12.0)][..]),
+            }),
+        };
+        let b = paint_box(&p, &BezPath::new());
+        assert!(b.width() > 0. && b.height() > 0., "{b:?}");
+        assert_eq!((b.x0, b.y1), (10., 30.));
+        p.text = None;
+        assert_eq!(paint_box(&p, &BezPath::new()), Rect::ZERO);
+    }
+}
+
 #[cfg(all(test, feature = "cpu"))]
 mod snapshot {
     use super::*;
@@ -699,7 +774,7 @@ mod snapshot {
             .stroke(Role::Ink)
             .id("card");
         let mut spec = SceneSpec::new(root).offered(Size::new(120., 60.));
-        spec.font = Some(std::sync::Arc::new(
+        spec.font = Some(std::sync::Arc::from(
             epaint_default_fonts::HACK_REGULAR.to_vec(),
         ));
         let scene = resolve_scene(&spec).unwrap();
@@ -755,7 +830,7 @@ mod snapshot {
     fn a_glyph_run_lands_pixels() {
         let mut spec =
             SceneSpec::new(text("HI").fill(Role::Ink).id("t")).offered(Size::new(80., 40.));
-        spec.font = Some(std::sync::Arc::new(
+        spec.font = Some(std::sync::Arc::from(
             epaint_default_fonts::HACK_REGULAR.to_vec(),
         ));
         let scene = resolve_scene(&spec).unwrap();

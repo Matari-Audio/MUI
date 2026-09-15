@@ -681,14 +681,14 @@ mod classic {
         // real map; this bench only ever draws one font.
         fn glyphs(
             &mut self,
-            font: &Arc<Vec<u8>>,
+            font: &Arc<[u8]>,
             size: f32,
             origin: (f64, f64),
             glyphs: &[(u32, f32)],
         ) {
             let f = self
                 .font
-                .get_or_insert_with(|| FontData::new(Blob::new(font.clone()), 0))
+                .get_or_insert_with(|| FontData::new(Blob::new(Arc::new(font.clone())), 0))
                 .clone();
             let (ox, oy) = (origin.0 as f32, origin.1 as f32);
             self.scene

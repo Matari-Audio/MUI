@@ -248,7 +248,7 @@ pub const SKIN: Theme = Theme {
     ..Theme::DEFAULT
 };
 let light = SKIN.palette.with_mode(Mode::Light);
-assert!(light.valid());
+assert!(light.is_valid());
 ```
 
 `crates/mui-preview/src/skin.rs` is exactly this file. There is no

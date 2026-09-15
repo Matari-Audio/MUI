@@ -119,7 +119,7 @@ impl SpacingScale {
             SpacingToken::Xl => self.xl,
         }
     }
-    pub fn valid(self) -> bool {
+    pub fn is_valid(self) -> bool {
         [self.xs, self.s, self.m, self.l, self.xl]
             .iter()
             .all(|v| v.is_finite() && *v >= 0.0)
@@ -672,7 +672,15 @@ pub enum Error {
 }
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "layout: {self:?}")
+        match self {
+            Self::InvalidValue => {
+                f.write_str("a size, spacing or limit is negative, not finite or out of range")
+            }
+            Self::DuplicateKey(k) => write!(f, "two nodes share the id {k}"),
+            Self::BudgetExceeded => f.write_str("the tree exceeds its node or depth limit"),
+            Self::InsufficientSpace(k) => write!(f, "node {k} does not fit in the space offered"),
+            Self::RevisionExhausted => f.write_str("the layout revision counter overflowed"),
+        }
     }
 }
 impl std::error::Error for Error {}
@@ -1380,7 +1388,7 @@ pub fn resolve_with<P>(
         || limits.extent <= 0.0
         || limits.nodes == 0
         || limits.depth > 256
-        || !scale.valid()
+        || !scale.is_valid()
     {
         return Err(Error::InvalidValue);
     }

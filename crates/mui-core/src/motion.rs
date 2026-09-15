@@ -72,6 +72,10 @@ impl Spring {
         if !(dt.is_finite() && dt > 0.0) {
             return !self.settled();
         }
+        // The substep count is capped at 64, so past this the step size would
+        // grow and explicit Euler would diverge. Clamp the frame instead: a
+        // resumed laptop resumes a settling spring, not a NaN.
+        let dt = dt.min(64.0 / 240.0);
         let n = (dt * 240.0).ceil().clamp(1.0, 64.0);
         let h = dt / n;
         for _ in 0..n as usize {
@@ -100,6 +104,17 @@ mod tests {
         i.to(3.0);
         assert!(!i.step(1.0 / 60.0));
         assert_eq!(i.value, 3.0);
+    }
+
+    #[test]
+    fn a_stalled_frame_does_not_blow_the_integrator_up() {
+        let mut s = Spring::at(20.0);
+        s.to(0.0);
+        for _ in 0..20 {
+            s.step(5.0);
+            assert!(s.value.is_finite() && s.velocity.is_finite(), "{s:?}");
+        }
+        assert!(s.settled(), "{s:?}");
     }
 
     #[test]

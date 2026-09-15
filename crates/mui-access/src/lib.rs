@@ -115,7 +115,7 @@ fn node(s: &ResolvedSurface, sem: Option<&Semantics>) -> Node {
         Kind::TextInput { value } => n.set_value(value.clone()),
         _ => {}
     }
-    n.set_label(sem.label.clone().unwrap_or_else(|| s.key.clone()));
+    n.set_label(sem.label.clone().unwrap_or_else(|| s.key.to_string()));
     let f = s.frame;
     n.set_bounds(Rect::new(f.x, f.y, f.right(), f.bottom()));
     if s.focusable {

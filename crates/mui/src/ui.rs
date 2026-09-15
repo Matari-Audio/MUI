@@ -47,7 +47,7 @@ pub enum Edit {
 /// runtime remembers what is hovered, held, and mid-animation.
 pub struct Ui {
     pub theme: Theme,
-    pub font: Option<Arc<Vec<u8>>>,
+    pub font: Option<Arc<[u8]>>,
     interaction: Interaction,
     hit: Hit,
     scene: Option<ResolvedScene>,
@@ -109,7 +109,7 @@ impl Ui {
             time: 0.0,
         }
     }
-    pub fn font(mut self, font: impl Into<Arc<Vec<u8>>>) -> Self {
+    pub fn font(mut self, font: impl Into<Arc<[u8]>>) -> Self {
         self.font = Some(font.into());
         self
     }
@@ -269,7 +269,7 @@ impl Ui {
             .keys
             .iter()
             .filter(|k| scene.surface(k).is_some_and(|s| s.focusable))
-            .cloned()
+            .map(|k| k.to_string())
             .collect();
         if stops.is_empty() {
             return;
@@ -455,7 +455,7 @@ impl Ui {
         let mut hit = Hit::default();
         for k in scene.keys.iter().filter(|k| !k.starts_with('/')) {
             if let Some(s) = scene.surface(k) {
-                hit.push_clipped(k.clone(), &s.path, s.clip)?;
+                hit.push_clipped(k.to_string(), &s.path, s.clip)?;
             }
         }
         self.hit = hit;
@@ -505,7 +505,7 @@ impl Ui {
             if max[0] <= 0.0 && max[1] <= 0.0 {
                 continue;
             }
-            let at = self.scrolls.entry(k.clone()).or_insert([0.0, 0.0]);
+            let at = self.scrolls.entry(k.to_string()).or_insert([0.0, 0.0]);
             at[0] = (at[0] + wheel.x).clamp(0.0, max[0]);
             at[1] = (at[1] + wheel.y).clamp(0.0, max[1]);
             return;

@@ -169,7 +169,7 @@ impl Color {
     }
 
     /// Whether every component is finite and in range. Hue is free to wrap.
-    pub fn valid(self) -> bool {
+    pub fn is_valid(self) -> bool {
         let [l, c, h, a] = self.0.components;
         h.is_finite()
             && (0.0..=1.0).contains(&l)
@@ -339,7 +339,7 @@ impl Pigment {
         Color::oklch(lightness, self.chroma, self.hue)
     }
 
-    pub fn valid(self) -> bool {
+    pub fn is_valid(self) -> bool {
         self.hue.is_finite() && self.chroma.is_finite() && self.chroma >= 0.0
     }
 }
@@ -595,7 +595,7 @@ impl Palette {
     }
 
     /// Whether every pigment and both positive steps are usable.
-    pub fn valid(&self) -> bool {
+    pub fn is_valid(&self) -> bool {
         [
             self.neutral,
             self.primary,
@@ -606,7 +606,7 @@ impl Palette {
             self.danger,
         ]
         .iter()
-        .all(|p| p.valid())
+        .all(|p| p.is_valid())
             && self.step.is_finite()
             && self.step > 0.0
             && self.hover.is_finite()
@@ -978,44 +978,44 @@ mod tests {
     fn lightness_saturates_instead_of_escaping_the_range() {
         let white = Color::oklch(0.9, 0.05, 100.0).lighten(0.5);
         assert!((white.lightness() - 1.0).abs() < 1e-6);
-        assert!(white.valid());
+        assert!(white.is_valid());
         let black = Color::oklch(0.1, 0.05, 100.0).darken(0.5);
         assert!(black.lightness().abs() < 1e-6);
-        assert!(black.valid());
+        assert!(black.is_valid());
     }
 
     #[test]
     fn an_invalid_pigment_is_caught() {
-        assert!(Palette::NEUTRAL.valid());
+        assert!(Palette::NEUTRAL.is_valid());
         assert!(!Palette {
             primary: Pigment::new(f32::NAN, 0.1),
             ..Palette::NEUTRAL
         }
-        .valid());
+        .is_valid());
         assert!(!Palette {
             step: f32::INFINITY,
             ..Palette::NEUTRAL
         }
-        .valid());
+        .is_valid());
         assert!(!Palette {
             step: 0.0,
             ..Palette::NEUTRAL
         }
-        .valid());
+        .is_valid());
         assert!(!Palette {
             hover: 0.0,
             ..Palette::NEUTRAL
         }
-        .valid());
+        .is_valid());
         assert!(!Palette {
             step: -0.045,
             ..Palette::NEUTRAL
         }
-        .valid());
+        .is_valid());
         assert!(!Palette {
             hover: -0.11,
             ..Palette::NEUTRAL
         }
-        .valid());
+        .is_valid());
     }
 }
