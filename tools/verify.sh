@@ -14,13 +14,5 @@ cargo clippy --workspace --all-features --all-targets --locked --offline -- -D w
 # `spawn_app` entry point and is served from a canvas.
 cargo check --workspace --all-features --exclude mui-preview --target wasm32-unknown-unknown --locked --offline
 
-pushd packages/mui-ts >/dev/null
-npm ci --silent
-rm -rf dist
-npm test --silent
-node dist/src/compiler.js dist/examples/pill.js /tmp/mui-generated.rs
-popd >/dev/null
-rustfmt --edition 2021 /tmp/mui-generated.rs
-
-diff -u crates/mui-demo/src/generated.rs /tmp/mui-generated.rs
-cargo run -p mui-demo --locked --offline
+# packages/mui-ts is frozen (see packages/mui-ts/FROZEN.md): the Rust DSL is
+# the source of truth and the TS compiler is no longer part of the gate.

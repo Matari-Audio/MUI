@@ -6,7 +6,6 @@ members = [
   "crates/mui-egui",
   "crates/mui-core",
   "crates/mui",
-  "crates/mui-demo",
   "crates/mui-preview",
   "crates/mui-text",
   "crates/mui-vello",
