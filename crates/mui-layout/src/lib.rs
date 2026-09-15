@@ -201,6 +201,29 @@ pub enum Len {
     Auto,
     Px(f64),
     Pct(f64),
+    /// CSS `clamp(min, pct%, max)`: a share of the parent that stops at two
+    /// pixel bounds. The one length a sidebar wants on a window that is
+    /// sometimes 240 px wide and sometimes 2000.
+    ///
+    /// ```
+    /// use mui_layout::{leaf, resolve, row, Len, Size};
+    /// let rail = Len::Clamp { min: 64.0, pct: 30.0, max: 220.0 };
+    /// let tree = || row([leaf(0., 0.).width(rail).id("rail"), leaf(0., 0.).grow(1.)]);
+    /// let at = |w: f64| {
+    ///     resolve(&tree(), Some(Size::new(w, 40.)), Default::default())
+    ///         .unwrap()
+    ///         .frame("rail")
+    ///         .unwrap()
+    ///         .size
+    ///         .width
+    /// };
+    /// assert_eq!((at(240.), at(200.), at(2000.)), (72., 64., 220.));
+    /// ```
+    Clamp {
+        min: f64,
+        pct: f64,
+        max: f64,
+    },
 }
 impl From<f64> for Len {
     fn from(v: f64) -> Self {
@@ -219,6 +242,7 @@ impl Len {
             Self::Auto => None,
             Self::Px(v) => Some(v),
             Self::Pct(p) => Some(parent * p / 100.0),
+            Self::Clamp { min, pct, max } => Some((parent * pct / 100.0).clamp(min, max)),
         }
     }
     fn valid(self, limit: f64) -> bool {
@@ -226,6 +250,12 @@ impl Len {
             Self::Auto => true,
             Self::Px(v) => v.is_finite() && (0.0..=limit).contains(&v),
             Self::Pct(p) => p.is_finite() && (0.0..=100.0).contains(&p),
+            Self::Clamp { min, pct, max } => {
+                Self::Pct(pct).valid(limit)
+                    && Self::Px(min).valid(limit)
+                    && Self::Px(max).valid(limit)
+                    && min <= max
+            }
         }
     }
 }
@@ -284,6 +314,8 @@ pub struct Node<P = ()> {
     wrap: bool,
     /// Grid cells only: how many columns this cell occupies.
     span: usize,
+    /// Grids only: the narrowest a column may get before the grid drops one.
+    min_col: Option<f64>,
     /// Placement order among siblings; ties keep declaration order. Frames
     /// stay in declaration order regardless.
     order: i32,
@@ -317,6 +349,7 @@ impl<P: Default> Node<P> {
             float: false,
             wrap: false,
             span: 1,
+            min_col: None,
             order: 0,
         }
     }
@@ -547,6 +580,25 @@ impl<P> Node<P> {
         self.span = cols.max(1);
         self
     }
+    /// Grids only: CSS `repeat(auto-fit, minmax(px, 1fr))`. The declared
+    /// column count becomes a ceiling, and the grid drops columns until each
+    /// one is at least `px` wide. One primitive covers most reflow: the same
+    /// tree is three columns in a wide window and one in a thin one.
+    ///
+    /// ```
+    /// use mui_layout::{grid, leaf, resolve, Size};
+    /// let cells = (0..6).map(|i| leaf(20., 20.).id(format!("c{i}")));
+    /// let g = grid(3, cells).gap(10.).min_col(120.).id("g");
+    /// let cols = |w: f64| {
+    ///     let l = resolve(&g, Some(Size::new(w, 300.)), Default::default()).unwrap();
+    ///     (0..6).filter(|i| l.frame(&format!("c{i}")).unwrap().y == l.frame("c0").unwrap().y).count()
+    /// };
+    /// assert_eq!((cols(800.), cols(260.), cols(240.)), (3, 2, 1));
+    /// ```
+    pub fn min_col(mut self, px: f64) -> Self {
+        self.min_col = Some(px);
+        self
+    }
     /// Place this child as if it were declared at `order`; its frame keeps
     /// its declaration slot, so a tree walk still lines up.
     pub fn order(mut self, order: i32) -> Self {
@@ -667,7 +719,14 @@ pub enum Error {
     InvalidValue,
     DuplicateKey(String),
     BudgetExceeded,
-    InsufficientSpace(String),
+    /// `needs` is the whole tree's floor, so a host can work out the uniform
+    /// scale that would make it fit: `min(offered / needs)`. A node refused by
+    /// its own `maximum` carries what that node asked for instead -- the
+    /// tree's floor is not known until the measure pass it failed in ends.
+    InsufficientSpace {
+        node: String,
+        needs: Size,
+    },
     RevisionExhausted,
 }
 impl std::fmt::Display for Error {
@@ -678,7 +737,11 @@ impl std::fmt::Display for Error {
             }
             Self::DuplicateKey(k) => write!(f, "two nodes share the id {k}"),
             Self::BudgetExceeded => f.write_str("the tree exceeds its node or depth limit"),
-            Self::InsufficientSpace(k) => write!(f, "node {k} does not fit in the space offered"),
+            Self::InsufficientSpace { node, needs } => write!(
+                f,
+                "node {node} does not fit in the space offered; the tree needs {}x{}",
+                needs.width, needs.height
+            ),
             Self::RevisionExhausted => f.write_str("the layout revision counter overflowed"),
         }
     }
@@ -715,6 +778,9 @@ struct Measured<'a, P> {
     /// The children's extent inside the padding, before any definite size
     /// overrides it: what a scroll node lays its children into.
     content: Size,
+    /// A grid's resolved column count, after `min_col`; 0 for anything else.
+    /// Measured once so arrange cannot re-derive a different one.
+    cols: usize,
     children: Vec<Measured<'a, P>>,
 }
 
@@ -762,7 +828,9 @@ impl<'a, P> Measured<'a, P> {
             return fallback();
         };
         match (self.node.len(vertical), self.aspect_width(inner)) {
-            (Len::Pct(p), _) => inner.main(vertical) * p / 100.0,
+            (l @ (Len::Pct(_) | Len::Clamp { .. }), _) => {
+                l.fixed(inner.main(vertical)).unwrap_or_else(fallback)
+            }
             (_, Some((w, a))) if vertical => w / a,
             _ => fallback(),
         }
@@ -830,6 +898,7 @@ fn validate_node<P>(node: &Node<P>, l: Limits) -> Result<(), Error> {
             .iter()
             .all(|v| v.is_finite() && v.abs() <= l.extent)
         || matches!(node.kind, Kind::Grid { cols: 0, .. })
+        || node.min_col.is_some_and(|v| !finite(v))
     {
         return Err(Error::InvalidValue);
     }
@@ -879,8 +948,8 @@ fn grid_rows<'a, 'm, P>(
 fn offer<P>(c: &Node<P>, vertical: bool, inner: Option<f64>, stretch: bool) -> Option<f64> {
     match c.len(vertical) {
         Len::Px(v) => Some(v),
-        Len::Pct(p) => inner.map(|i| i * p / 100.0),
         Len::Auto => inner.filter(|_| stretch && (c.is_container() || c.aspect.is_some())),
+        l => inner.and_then(|i| l.fixed(i)),
     }
 }
 
@@ -942,6 +1011,24 @@ fn measure<'a, P>(
         .into_iter()
         .flatten()
         .reduce(f64::min);
+    // A grid's column count is settled once, before anything is offered a
+    // column's worth of room: `min_col` makes the declared count a ceiling and
+    // drops columns until each one clears it. Everything downstream reads
+    // `Measured::cols`.
+    // ponytail: a grid with no offered width keeps its declared count -- a
+    // hugging one, or one whose width is a flex share, since the share is not
+    // dealt until arrange. Put a knob bank where its width is definite (the
+    // preview's Responsive editor does) until the flex pass re-measures its
+    // items, which is the same upgrade `wrap_hints` is waiting on.
+    let cols = match node.kind {
+        Kind::Grid { cols, .. } => match (node.min_col, inner[0]) {
+            (Some(min), Some(w)) if min > 0.0 => {
+                (((w + gap) / (min + gap)).floor() as usize).clamp(1, cols)
+            }
+            _ => cols,
+        },
+        _ => 0,
+    };
     let mut children = Vec::with_capacity(node.children().len());
     for (index, c) in node.children().iter().enumerate() {
         let align = c.align_self.unwrap_or(node.align);
@@ -971,11 +1058,11 @@ fn measure<'a, P>(
                     offer(c, true, inner[1], ay == Align::Stretch),
                 ]
             }
-            Kind::Grid { cols, .. } => {
+            Kind::Grid { .. } => {
                 let (ax, _) = c.anchor.unwrap_or(cell_default(node));
-                let span = c.span.clamp(1, *cols) as f64;
+                let span = c.span.clamp(1, cols) as f64;
                 let col = inner[0].map(|w| {
-                    ((w - gap * (*cols - 1) as f64).max(0.0) / *cols as f64) * span
+                    ((w - gap * (cols - 1) as f64).max(0.0) / cols as f64) * span
                         + gap * (span - 1.0)
                 });
                 child_room = [child_room, col].into_iter().flatten().reduce(f64::min);
@@ -1057,22 +1144,22 @@ fn measure<'a, P>(
             Size::new(max_of(&|c| c.size.width), max_of(&|c| c.size.height)),
             Size::new(max_of(&|c| c.floor.width), max_of(&|c| c.floor.height)),
         ),
-        Kind::Grid { cols, .. } => {
-            let rows = grid_rows(&flow, *cols);
+        Kind::Grid { .. } => {
+            let rows = grid_rows(&flow, cols);
             let gaps = |n: f64| (n - 1.0).max(0.0) * gap;
             let hug = |g: fn(&Measured<'_, P>) -> Size| {
                 // A spanning cell pays for its span, so its share of one
                 // column is what sets the column width.
                 let widest = flow
                     .iter()
-                    .map(|c| g(c).width / c.node.span.clamp(1, *cols) as f64)
+                    .map(|c| g(c).width / c.node.span.clamp(1, cols) as f64)
                     .fold(0.0, f64::max);
                 let tall: f64 = rows
                     .iter()
                     .map(|r| r.iter().map(|c| g(c).height).fold(0.0, f64::max))
                     .sum();
                 Size::new(
-                    widest * *cols as f64 + gaps(*cols as f64),
+                    widest * cols as f64 + gaps(cols as f64),
                     tall + gaps(rows.len() as f64),
                 )
             };
@@ -1112,7 +1199,10 @@ fn measure<'a, P>(
     }
     if let Some(max) = node.maximum {
         if size.width > max.width + 1e-9 || size.height > max.height + 1e-9 {
-            return Err(Error::InsufficientSpace(label(node, ancestor)));
+            return Err(Error::InsufficientSpace {
+                node: label(node, ancestor),
+                needs: size,
+            });
         }
     }
     Ok(Measured {
@@ -1123,6 +1213,7 @@ fn measure<'a, P>(
         size,
         floor,
         content,
+        cols,
         children,
     })
 }
@@ -1212,7 +1303,10 @@ fn arrange<P>(
     // Content is squeezable -- that is the whole point of shrink -- but the
     // floor is not.
     if size.width + 1e-8 < m.floor.width || size.height + 1e-8 < m.floor.height {
-        return Err(Error::InsufficientSpace(label(n, ancestor)));
+        return Err(Error::InsufficientSpace {
+            node: label(n, ancestor),
+            needs: Size::ZERO,
+        });
     }
     let here = n.id.as_deref().unwrap_or(ancestor);
     let frame = Frame {
@@ -1248,8 +1342,8 @@ fn arrange<P>(
                 placed[c.index] = Some((at(p[0], p[1]), s));
             }
         }
-        Kind::Grid { cols, .. } => {
-            let cols = *cols;
+        Kind::Grid { .. } => {
+            let cols = m.cols;
             let grid = grid_rows(&flow, cols);
             let col_w =
                 (inner.width - m.gap * cols.saturating_sub(1) as f64).max(0.0) / cols as f64;
@@ -1269,9 +1363,16 @@ fn arrange<P>(
                     let span = c.node.span.clamp(1, cols.max(1));
                     let cell_size =
                         Size::new(col_w * span as f64 + m.gap * (span - 1) as f64, h + surplus);
-                    let (p, s) = cell(c, cell_size, default);
-                    // A cell wider than its column overhangs the far edge,
-                    // like CSS safe alignment: the start stays visible.
+                    let (p, mut s) = cell(c, cell_size, default);
+                    // A cell never outgrows its track: a fixed size larger than
+                    // the column would otherwise paint straight through the
+                    // neighbour, since nothing here shrinks it. The clamp stays
+                    // in the grid, not in `cell`, so a deliberately oversized
+                    // overlay or float keeps its size.
+                    s = Size::new(s.width.min(cell_size.width), s.height.min(cell_size.height));
+                    // Placement was computed from the unclamped extent, so a
+                    // centred cell starts left of its column; pull it back,
+                    // like CSS safe alignment.
                     let safe = |v: f64, o: f64| (v - o).max(0.0) + o;
                     placed[c.index] = Some((
                         at(
@@ -1299,6 +1400,26 @@ fn arrange<P>(
             } else {
                 vec![(0, flow.len())]
             };
+            let line_cross = |(a, b): (usize, usize)| {
+                flow[a..b]
+                    .iter()
+                    .map(|c| c.size.cross(v))
+                    .fold(0.0, f64::max)
+            };
+            // Measure broke the lines against the width it was offered; a flex
+            // ancestor that squeezed the row since then can force one more, and
+            // the cross floor is still the one it measured. Nothing clips a row,
+            // so say it does not fit rather than paint over the next widget.
+            if lines.len() > 1 {
+                let needed = lines.iter().copied().map(line_cross).sum::<f64>()
+                    + m.gap * (lines.len() - 1) as f64;
+                if needed > inner.cross(v) + 1e-8 {
+                    return Err(Error::InsufficientSpace {
+                        node: label(n, ancestor),
+                        needs: Size::axes(inner.main(v), needed, v),
+                    });
+                }
+            }
             // One line keeps the whole cross axis, so an unwrapped row is
             // exactly what it was; several share it by their own heights.
             let single = lines.len() == 1;
@@ -1308,7 +1429,7 @@ fn arrange<P>(
                 let line_cross = if single {
                     inner.cross(v)
                 } else {
-                    line.iter().map(|c| c.size.cross(v)).fold(0.0, f64::max)
+                    line_cross((a, b))
                 };
                 let line_inner = Size::axes(inner.main(v), line_cross, v);
                 let allocated = distribute(line, m.gap, v, line_inner);
@@ -1322,7 +1443,9 @@ fn arrange<P>(
                     Justify::Center => (residual * 0.5, 0.0),
                     Justify::End => (residual, 0.0),
                     Justify::SpaceBetween if count > 1.0 => (0.0, residual / (count - 1.0)),
-                    Justify::SpaceBetween => (residual * 0.5, 0.0),
+                    // CSS: `space-between` on one item is `flex-start`, so a
+                    // header row does not jump when its second child is gone.
+                    Justify::SpaceBetween => (0.0, 0.0),
                     Justify::SpaceAround => (residual / count * 0.5, residual / count),
                     Justify::SpaceEvenly => (residual / (count + 1.0), residual / (count + 1.0)),
                 };
@@ -1349,10 +1472,21 @@ fn arrange<P>(
     for (i, c) in m.children.iter().enumerate() {
         let (pos, s) = if c.node.float {
             let (p, s) = cell(c, inner, default);
+            // A tooltip or menu offset past the edge is pulled back inside the
+            // box it floats in -- floats are painted after the root and clipped
+            // by nothing, so off the box is off the window. One too big to fit
+            // keeps its place: there is no inside to pull it to.
+            let inside = |v: f64, extent: f64, avail: f64| {
+                if extent <= avail {
+                    v.clamp(0.0, avail - extent)
+                } else {
+                    v
+                }
+            };
             (
                 [
-                    origin[0] + m.padding.left + p[0],
-                    origin[1] + m.padding.top + p[1],
+                    origin[0] + m.padding.left + inside(p[0], s.width, inner.width),
+                    origin[1] + m.padding.top + inside(p[1], s.height, inner.height),
                 ],
                 s,
             )
@@ -1409,13 +1543,24 @@ pub fn resolve_with<P>(
         .maximum
         .is_some_and(|max| size.width > max.width || size.height > max.height)
     {
-        return Err(Error::InsufficientSpace(label(root, "root")));
+        return Err(Error::InsufficientSpace {
+            node: label(root, "root"),
+            needs: m.floor,
+        });
     }
     let mut out = (
         BTreeMap::new(),
         Vec::with_capacity(limits.nodes - pass.left),
     );
-    arrange(&m, "root", [0.0, 0.0], size, &mut out)?;
+    // Only `resolve` knows the whole tree's floor, and that is the number a
+    // host scales by; the sites that raise the error only know their own node.
+    arrange(&m, "root", [0.0, 0.0], size, &mut out).map_err(|e| match e {
+        Error::InsufficientSpace { node, .. } => Error::InsufficientSpace {
+            node,
+            needs: m.floor,
+        },
+        e => e,
+    })?;
     Ok(Layout {
         size,
         frames: out.0,

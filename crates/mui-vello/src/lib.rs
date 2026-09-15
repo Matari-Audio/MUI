@@ -684,11 +684,13 @@ fn one(canvas: &mut impl Canvas, p: &Painted, path: &BezPath) -> Result<(), Erro
         },
         _ => (None, None),
     };
-    canvas.set_paint(match (&p.paint, b) {
+    let fill = match (&p.paint, b) {
         (_, Some(b)) => b,
         (Paint::Image { .. }, None) => PaintType::Solid(srgb(p.paint.solid())),
         _ => brush(&p.paint, bounds),
-    });
+    };
+    let solid = matches!(fill, PaintType::Solid(_));
+    canvas.set_paint(fill);
     if let Some(t) = &p.text {
         canvas.glyphs(t);
         return Ok(());
@@ -711,6 +713,12 @@ fn one(canvas: &mut impl Canvas, p: &Painted, path: &BezPath) -> Result<(), Erro
     });
     match (p.blur > 0.0, p.rect, p.width > 0.0) {
         (true, Some(rr), _) => {
+            // Both backends substitute opaque black for a non-solid brush
+            // when they blur a rect, so a gradient shadow would paint as a
+            // black blob. Its solid stand-in is what the author asked for.
+            if !solid {
+                canvas.set_paint(PaintType::Solid(srgb(p.paint.solid())));
+            }
             let b = rr.bounds();
             canvas.fill_blurred_rounded_rect(
                 &Rect::new(b.min.x, b.min.y, b.max.x, b.max.y),
@@ -718,8 +726,10 @@ fn one(canvas: &mut impl Canvas, p: &Painted, path: &BezPath) -> Result<(), Erro
                 p.blur as f32,
             );
         }
-        // ponytail: blur on a welded outline is drawn sharp; a blur filter
-        // layer is the upgrade if a merged shadow ever needs it.
+        // ponytail: blur on a welded outline is dropped, because the sharp
+        // fallback reads as a second, misaligned panel; a blur filter layer
+        // is the upgrade if a merged shadow ever needs it.
+        (true, None, _) => {}
         (_, _, false) => canvas.fill_path(path),
         (_, _, true) => {
             canvas.set_stroke(Stroke::new(p.width));
@@ -901,6 +911,48 @@ mod snapshot {
         );
         let pix = pixels(&spec, 80, 40);
         assert!(pix.data().iter().any(|p| p.a > 0), "the run drew nothing");
+    }
+
+    /// A gradient shadow keeps its alpha. Both backends paint opaque black
+    /// for a non-solid brush on a blurred rect, so the brush is collapsed to
+    /// its solid stand-in first.
+    #[test]
+    fn a_gradient_shadow_does_not_paint_black() {
+        let faint = mui_core::Color::oklcha(0.0, 0.0, 0.0, 0.1);
+        let root = leaf(20., 20.)
+            .fill(Role::Primary)
+            .shadow(Shadow {
+                blur: 4.,
+                dx: 0.,
+                dy: 8.,
+                fill: Fill::Gradient(mui_core::Gradient::vertical(faint, faint.with_alpha(0.0))),
+            })
+            .id("card");
+        let pix = pixels(&SceneSpec::new(root).offered(Size::new(20., 20.)), 40, 40);
+        let below = pix.data()[30 * 40 + 10];
+        assert!(below.a < 40, "the shadow went opaque black: {below:?}");
+    }
+
+    /// A shadow on a welded outline is dropped rather than drawn sharp: a
+    /// hard silhouette offset by `dy` reads as a second panel.
+    #[test]
+    fn a_welded_shadow_is_not_a_sharp_copy() {
+        let root = row([leaf(20., 20.).id("a"), leaf(20., 40.).id("b")])
+            .weld(Role::Surface)
+            .shadow(Shadow::soft(12.))
+            .id("weld");
+        let spec = SceneSpec::new(root).offered(Size::new(40., 40.));
+        let scene = resolve_scene(&spec).unwrap();
+        assert!(
+            scene.paint.iter().any(|p| p.blur > 0. && p.rect.is_none()),
+            "no welded shadow entry to drop"
+        );
+        let pix = pixels(&spec, 60, 80);
+        // The outline's own fill ends at y=30 here; the sharp copy would be
+        // that silhouette again, offset by dy=6.
+        assert!(pix.data()[29 * 60 + 10].a > 0, "the outline itself is gone");
+        let under = pix.data()[32 * 60 + 10];
+        assert_eq!(under.a, 0, "the sharp copy still drew: {under:?}");
     }
 
     /// A 2x2 image stretched over a leaf: each source pixel owns a quadrant,

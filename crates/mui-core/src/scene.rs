@@ -5,7 +5,8 @@
 //! of its [`Style`](crate::Style) becomes one [`Painted`] entry. Children
 //! paint after their parent, so a list index is a z-order.
 use std::borrow::Cow;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::sync::Arc;
 
 use mui_geometry::{
@@ -30,6 +31,11 @@ pub struct SceneSpec {
     pub font: Option<Arc<[u8]>>,
     /// Curve tolerance for glyph outlines.
     pub tolerance: f64,
+    /// The host's device pixels per layout unit. Set it and every edge the
+    /// walk derives -- outlines, welds, clips, baselines -- lands on a device
+    /// pixel, so abutting fills composite opaque and hinted glyphs keep an
+    /// even leading. `None` leaves layout's raw f64 alone.
+    pub device_scale: Option<f64>,
 }
 impl SceneSpec {
     pub fn new(root: El) -> Self {
@@ -42,6 +48,7 @@ impl SceneSpec {
             offsets: OffsetOptions::default(),
             font: None,
             tolerance: 0.05,
+            device_scale: None,
         }
     }
     pub fn theme(mut self, theme: Theme) -> Self {
@@ -54,6 +61,22 @@ impl SceneSpec {
     }
     pub fn font(mut self, font: impl Into<Arc<[u8]>>) -> Self {
         self.font = Some(font.into());
+        self
+    }
+    /// Snap every painted edge to the device grid. Three equal shares of 41
+    /// px land on thirds, and two of the three seams between them composite
+    /// translucent; at scale 1 they land on whole pixels instead:
+    ///
+    /// ```
+    /// use mui_core::prelude::*;
+    /// let row = row![leaf(0., 20.).grow(1.).id("a"), leaf(0., 20.).grow(1.)];
+    /// let spec = SceneSpec::new(row).offered(Size::new(41., 20.)).scale(1.);
+    /// let a = resolve_scene(&spec).unwrap();
+    /// let edge = a.surface("a").unwrap().rect.unwrap().bounds().max.x;
+    /// assert_eq!(edge, edge.round());
+    /// ```
+    pub fn scale(mut self, device_scale: f64) -> Self {
+        self.device_scale = Some(device_scale);
         self
     }
 }
@@ -141,16 +164,18 @@ pub struct ResolvedSurface {
 pub struct ResolvedScene {
     pub layout: Layout,
     pub paint: Vec<Painted>,
-    /// Every surface key in tree order, which is also z-order.
-    pub keys: Vec<Arc<str>>,
-    surfaces: BTreeMap<Arc<str>, ResolvedSurface>,
+    /// Every surface in paint order, which is also z-order.
+    surfaces: Vec<ResolvedSurface>,
+    at: HashMap<Arc<str>, usize>,
 }
 impl ResolvedScene {
     pub fn surface(&self, key: &str) -> Option<&ResolvedSurface> {
-        self.surfaces.get(key)
+        self.at.get(key).map(|&i| &self.surfaces[i])
     }
-    pub fn surfaces(&self) -> impl Iterator<Item = &ResolvedSurface> {
-        self.surfaces.values()
+    /// Every surface in paint order, which is also z-order. A key is
+    /// `ResolvedSurface::key`, so nothing has to look one up to walk them.
+    pub fn surfaces(&self) -> impl DoubleEndedIterator<Item = &ResolvedSurface> {
+        self.surfaces.iter()
     }
 }
 
@@ -205,10 +230,16 @@ impl From<mui_text::Error> for SceneError {
     }
 }
 
-fn bounds(f: Frame) -> Bounds {
+/// A length on the device grid, or untouched when the host gave no scale.
+fn snap(v: f64, scale: Option<f64>) -> f64 {
+    scale.map_or(v, |s| (v * s).round() / s)
+}
+/// The one place every outline, weld rect and clip path comes from, so
+/// snapping here cannot leave paint, hits and clips disagreeing.
+fn bounds(f: Frame, scale: Option<f64>) -> Bounds {
     Bounds {
-        min: Point::new(f.x, f.y),
-        max: Point::new(f.right(), f.bottom()),
+        min: Point::new(snap(f.x, scale), snap(f.y, scale)),
+        max: Point::new(snap(f.right(), scale), snap(f.bottom(), scale)),
     }
 }
 fn rect_poly(b: Bounds) -> Result<PlacedShape, SceneError> {
@@ -341,8 +372,8 @@ struct Walk<'a> {
     i: usize,
     key: Arc<str>,
     paint: Vec<Painted>,
-    keys: Vec<Arc<str>>,
-    surfaces: BTreeMap<Arc<str>, ResolvedSurface>,
+    surfaces: Vec<ResolvedSurface>,
+    at: HashMap<Arc<str>, usize>,
     deferred: Vec<Deferred<'a>>,
     /// The baseline a `.baseline()` parent asks its text children to sit on.
     base_y: Option<f64>,
@@ -371,14 +402,14 @@ impl<'a> Walk<'a> {
             return Err(SceneError::InvalidRadius);
         }
         if !s.weld || n.children().is_empty() {
-            let rr = RoundedRect::new(bounds(frame), convex)?;
+            let rr = RoundedRect::new(bounds(frame, self.spec.device_scale), convex)?;
             return Ok((rr.path(), Some(rr), false));
         }
         // Children's frames sit right after this node in pre-order, each
         // subtree `count` long.
         let (mut at, mut shapes) = (self.i, Vec::new());
         for c in n.children() {
-            shapes.push(rect_poly(bounds(self.frames[at]))?);
+            shapes.push(rect_poly(bounds(self.frames[at], self.spec.device_scale))?);
             at += count(c);
         }
         let merged = union(&shapes, self.spec.geometry)?;
@@ -422,7 +453,7 @@ impl<'a> Walk<'a> {
     fn node<'n: 'a>(
         &mut self,
         n: &'n El,
-        path: &str,
+        path: &mut String,
         under: Color,
         cursor: Option<Cursor>,
         clip: Option<Bounds>,
@@ -432,7 +463,7 @@ impl<'a> Walk<'a> {
         self.i += 1;
         // ponytail: one `Arc<str>` per node per frame, cloned four times
         // instead of four heap copies; interning across frames is the upgrade.
-        let key: Arc<str> = n.key().map_or_else(|| Arc::from(path), Arc::from);
+        let key: Arc<str> = n.key().map_or_else(|| Arc::from(path.as_str()), Arc::from);
         let th = self.spec.theme;
         let e = n.payload();
         let s = &e.style;
@@ -496,8 +527,17 @@ impl<'a> Walk<'a> {
             if !(w.is_finite() && w >= 0.0) {
                 return Err(SceneError::InvalidRadius);
             }
-            if let Some(p) = self.push(Layer::Stroke, outline.clone(), rect, &st.fill, bg) {
-                p.width = w;
+            // Inside the frame, not straddling it: a centred stroke leaves
+            // half its width outside the box layout gave the node, where a
+            // window edge or a gapless neighbour eats it.
+            let stroked = match rect {
+                Some(rr) => rr.inset(w / 2.0)?.shape.map(|r| (r.path(), Some(r))),
+                None => Some((inset_path(&outline, w / 2.0, self.spec.offsets)?.path, None)),
+            };
+            if let Some((path, srect)) = stroked {
+                if let Some(p) = self.push(Layer::Stroke, path, srect, &st.fill, bg) {
+                    p.width = w;
+                }
             }
         }
 
@@ -537,13 +577,23 @@ impl<'a> Walk<'a> {
                                 + run.ascent
                         }
                         _ => {
+                            // A snapped line height, so the stack of
+                            // baselines is even once the renderer hints each
+                            // one to a whole device pixel.
+                            let lh = snap(run.line_height, self.spec.device_scale);
                             frame.y
-                                + (frame.size.height - n as f64 * run.line_height) / 2.0
+                                + (frame.size.height - n as f64 * lh) / 2.0
                                 + run.ascent
-                                + li as f64 * run.line_height
+                                + li as f64 * lh
                         }
                     };
-                    let origin = Point::new(frame.x, dy);
+                    // glifo hints by rounding the device-space baseline per
+                    // glyph, so an unsnapped stack of fractional line heights
+                    // rounds to uneven leading. Snap the line, not the glyph.
+                    let origin = Point::new(
+                        snap(frame.x, self.spec.device_scale),
+                        snap(dy, self.spec.device_scale),
+                    );
                     let ids: Arc<[(u32, f32)]> =
                         run.glyphs.iter().map(|&(g, x)| (g, x as f32)).collect();
                     let text = self.spec.font.clone().map(|font| Text {
@@ -590,30 +640,27 @@ impl<'a> Walk<'a> {
                 (bottom - frame.y + scrolled[1] + pad.bottom - pad.top).max(0.0),
             );
         }
-        self.keys.push(key.clone());
-        self.surfaces.insert(
-            key.clone(),
-            ResolvedSurface {
-                key: key.clone(),
-                frame,
-                bounds: match rect {
-                    // A rounded rectangle already knows its bounds; only a
-                    // welded outline has to be flattened to find them.
-                    Some(r) => Some(r.bounds()),
-                    None => Bounds::from_points(outline.flatten(0.5, 100_000)?.concat()),
-                },
-                path: outline.clone(),
-                rect,
-                topology_changed: changed,
-                cursor,
-                tip: e.tip.clone(),
-                focusable: e.focusable,
-                clip,
-                content,
+        self.at.insert(key.clone(), self.surfaces.len());
+        self.surfaces.push(ResolvedSurface {
+            key: key.clone(),
+            frame,
+            bounds: match rect {
+                // A rounded rectangle already knows its bounds; only a
+                // welded outline has to be flattened to find them.
+                Some(r) => Some(r.bounds()),
+                None => Bounds::from_points(outline.flatten(0.5, 100_000)?.concat()),
             },
-        );
+            path: outline.clone(),
+            rect,
+            topology_changed: changed,
+            cursor,
+            tip: e.tip.clone(),
+            focusable: e.focusable,
+            clip,
+            content,
+        });
         let inner = if n.is_clip() {
-            let b = bounds(frame);
+            let b = bounds(frame, self.spec.device_scale);
             let b = clip.map_or(b, |c| {
                 Bounds::new(
                     b.min.x.max(c.min.x),
@@ -635,33 +682,58 @@ impl<'a> Walk<'a> {
         };
         let outer_base = self.base_y;
         self.base_y = None;
+        // Each direct text child's own centred baseline, then every child
+        // takes the lowest of the ones it shares a line with: a row taller
+        // than its text keeps its labels inside their frames, and a wrapping
+        // row gets one baseline per line instead of one per box.
+        // ponytail: O(n^2) over direct children, which is a handful.
+        let mut bases: Vec<Option<(f64, Frame)>> = Vec::new();
         if e.baseline {
-            let mut asc: Option<f64> = None;
+            let mut at2 = at + 1;
             for c in n.children() {
-                if let Content::Text(t) = &c.payload().content {
-                    let s = c.payload().text_size.unwrap_or(th.text);
-                    if let Some(r) = self.runs.run(t, s)? {
-                        asc = Some(asc.unwrap_or(0.0).max(r.ascent));
+                let f = self.frames[at2];
+                at2 += count(c);
+                let own = match &c.payload().content {
+                    Content::Text(t) => {
+                        let s = c.payload().text_size.unwrap_or(th.text);
+                        self.runs
+                            .run(t, s)?
+                            .map(|r| f.y + (f.size.height - r.ascent - r.descent) / 2.0 + r.ascent)
                     }
-                }
+                    _ => None,
+                };
+                bases.push(own.map(|b| (b, f)));
             }
-            self.base_y = asc.map(|a| frame.y + n.padding(th.spacing).top + a);
+            let lines = bases.clone();
+            for (b, f) in bases.iter_mut().flatten() {
+                *b = lines
+                    .iter()
+                    .flatten()
+                    .filter(|(_, g)| g.y < f.bottom() && f.y < g.bottom())
+                    .fold(*b, |m, (o, _)| m.max(*o));
+            }
         }
+        // One scratch string for the whole walk: a path is O(depth) bytes and
+        // formatting a fresh one per node was the walk's largest single cost.
+        let mark = path.len();
         for (j, c) in n.children().iter().enumerate() {
-            let path = format!("{path}/{j}");
+            self.base_y = bases.get(j).and_then(|b| b.map(|(y, _)| y));
+            path.truncate(mark);
+            let _ = write!(path, "/{j}");
             if c.is_float() {
                 self.deferred.push(Deferred {
                     at: self.i,
                     node: c,
-                    path,
+                    path: path.clone(),
                     under: bg,
                     cursor,
                 });
                 self.i += count(c);
             } else {
-                self.node(c, &path, bg, cursor, inner)?;
+                self.node(c, path, bg, cursor, inner)?;
             }
         }
+        path.truncate(mark);
         self.base_y = outer_base;
         if n.is_clip() {
             self.key = key;
@@ -686,8 +758,11 @@ fn fit(
     };
     let (t, size) = (t.as_str(), e.text_size.unwrap_or(th.text));
     let s = match room {
+        // The room it wrapped into, not its longest line: a paragraph that
+        // reported the ragged width would then be centred inside its own
+        // column, aligned with nothing above it.
         Some(w) if w > 0.0 && runs.measure(t, size).width > w + 0.5 => {
-            runs.wrapped(t, size, w, e.lines)
+            Size::new(w, runs.wrapped(t, size, w, e.lines).height)
         }
         _ => runs.measure(t, size),
     };
@@ -766,13 +841,16 @@ pub fn resolve_scene_with(
             spec.limits,
             th.spacing,
             |e, room| match (&e.content, hints.get(&(std::ptr::from_ref(e) as usize))) {
-                (Content::Text(t), Some(&w)) => {
+                (Content::Text(t), Some(&w)) => Size::new(
+                    w,
                     runs.wrapped(t, e.text_size.unwrap_or(th.text), w, e.lines)
-                }
+                        .height,
+                ),
                 _ => fit(&mut runs, th, e, room, &mut want),
             },
         )?
     };
+    let nodes = count(&spec.root);
     let mut w = Walk {
         spec,
         frames: layout.all(),
@@ -780,12 +858,18 @@ pub fn resolve_scene_with(
         i: 0,
         key: Arc::from(""),
         paint: Vec::new(),
-        keys: Vec::new(),
-        surfaces: BTreeMap::new(),
+        surfaces: Vec::with_capacity(nodes),
+        at: HashMap::with_capacity(nodes),
         deferred: Vec::new(),
         base_y: None,
     };
-    w.node(&spec.root, "", th.palette.background(), None, None)?;
+    w.node(
+        &spec.root,
+        &mut String::new(),
+        th.palette.background(),
+        None,
+        None,
+    )?;
     // Floats paint last, in the order they were met; a float inside a float
     // lands on the end of the same queue.
     let mut k = 0;
@@ -793,21 +877,21 @@ pub fn resolve_scene_with(
         let Deferred {
             at,
             node,
-            path,
+            mut path,
             under,
             cursor,
         } = w.deferred[k].clone();
         w.i = at;
         w.base_y = None;
-        w.node(node, &path, under, cursor, None)?;
+        w.node(node, &mut path, under, cursor, None)?;
         k += 1;
     }
-    let (paint, keys, surfaces) = (w.paint, w.keys, w.surfaces);
+    let (paint, surfaces, at) = (w.paint, w.surfaces, w.at);
     Ok(ResolvedScene {
         layout,
         paint,
-        keys,
         surfaces,
+        at,
     })
 }
 
@@ -995,7 +1079,7 @@ mod feature_tests {
         assert_eq!(s.surface("a").unwrap().clip, Some(list.bounds.unwrap()));
         assert_eq!(s.surface("a").unwrap().cursor, Some(Cursor::Hand));
         assert_eq!(s.layout.frame("a").unwrap().y, -25.);
-        assert_eq!(s.keys.last().map(|k| &**k), Some("tip"));
+        assert_eq!(s.surfaces().last().map(|s| &*s.key), Some("tip"));
     }
 
     fn font() -> Arc<[u8]> {
@@ -1042,6 +1126,125 @@ mod feature_tests {
                 .y
         };
         assert_ne!(py("small"), py("big"), "and centring alone does not");
+    }
+
+    /// Every text layer's baseline for a key, in paint order.
+    fn baselines(s: &ResolvedScene, k: &str) -> Vec<f64> {
+        s.paint
+            .iter()
+            .filter(|p| &*p.key == k && p.layer == Layer::Text)
+            .map(|p| p.text.as_ref().unwrap().origin.y)
+            .collect()
+    }
+
+    #[test]
+    fn a_baseline_row_taller_than_its_text_keeps_the_letters_in_their_frames() {
+        let root = row([
+            text("Kurv").text_size(22.).id("title"),
+            text("v1.0").text_size(11.).id("ver"),
+            leaf(80., 40.).id("btn"),
+        ])
+        .baseline()
+        .gap(10.);
+        let mut sp = SceneSpec::new(root).offered(Size::new(400., 60.));
+        sp.font = Some(font());
+        let s = resolve_scene(&sp).unwrap();
+        let t = s.layout.frame("title").unwrap();
+        let b = baselines(&s, "title")[0];
+        assert_eq!(b, baselines(&s, "ver")[0], "one baseline, two sizes");
+        assert!(
+            b > t.y && b < t.bottom(),
+            "baseline {b} outside the title's frame {t:?}"
+        );
+    }
+
+    #[test]
+    fn a_wrapping_baseline_row_gives_every_line_its_own_baseline() {
+        let root = row([
+            text("alpha").text_size(20.).id("a"),
+            text("beta").text_size(11.).id("b"),
+            text("gamma").text_size(20.).id("c"),
+        ])
+        .wrap()
+        .baseline()
+        .gap(8.);
+        let mut sp = SceneSpec::new(root).offered(Size::new(120., 200.));
+        sp.font = Some(font());
+        let s = resolve_scene(&sp).unwrap();
+        let (a, c) = (baselines(&s, "a")[0], baselines(&s, "c")[0]);
+        assert_eq!(a, baselines(&s, "b")[0], "line one shares a baseline");
+        assert!(a < c, "line two sits below line one: {a} {c}");
+        let f = s.layout.frame("c").unwrap();
+        assert!(c > f.y && c < f.bottom(), "baseline {c} outside {f:?}");
+    }
+
+    #[test]
+    fn a_wrapped_paragraph_fills_its_column_instead_of_its_longest_line() {
+        let long = "wrap ".repeat(40);
+        let root = row([
+            column([text("About").text_size(18.).id("h"), text(long).id("p")])
+                .gap(6.)
+                .flex(1.)
+                .id("col"),
+            leaf(90., 40.).shrink(0.),
+        ])
+        .gap(10.);
+        let mut sp = SceneSpec::new(root).offered(Size::new(320., 200.));
+        sp.font = Some(font());
+        let s = resolve_scene(&sp).unwrap();
+        let (col, p) = (s.layout.frame("col").unwrap(), s.layout.frame("p").unwrap());
+        assert_eq!(
+            (p.x, p.size.width),
+            (col.x, col.size.width),
+            "{p:?} {col:?}"
+        );
+    }
+
+    #[test]
+    fn a_stroke_paints_inside_the_frame_it_was_given() {
+        let root = overlay([leaf(20., 20.).radius(0.).stroke(Role::Ink).id("k")]);
+        let s = resolve_scene(&SceneSpec::new(root).offered(Size::new(20., 20.))).unwrap();
+        let st = s.paint.iter().find(|p| p.layer == Layer::Stroke).unwrap();
+        let b = Bounds::from_points(st.path.flatten(0.01, 100_000).unwrap().concat()).unwrap();
+        let w = st.width / 2.0;
+        let f = s.layout.frame("k").unwrap();
+        // The painted band is the path grown by half the width; inside means
+        // that band is exactly the frame.
+        assert!((b.min.x - w - f.x).abs() < 1e-9, "{b:?} {f:?} {w}");
+        assert!((b.max.y + w - f.bottom()).abs() < 1e-9, "{b:?} {f:?} {w}");
+    }
+
+    #[test]
+    fn a_device_scale_puts_every_edge_and_every_baseline_on_the_grid() {
+        let long = "wrap ".repeat(40);
+        let row = row![
+            leaf(0., 20.).grow(1.).id("a"),
+            leaf(0., 20.).grow(1.).id("b"),
+            leaf(0., 20.).grow(1.).id("c"),
+        ];
+        let root = column([row, column([text(long).id("p")]).w(120)]);
+        let mut sp = SceneSpec::new(root).offered(Size::new(41., 300.)).scale(1.);
+        sp.font = Some(font());
+        let s = resolve_scene(&sp).unwrap();
+        let edges: Vec<[f64; 2]> = ["a", "b", "c"]
+            .iter()
+            .map(|k| {
+                let b = s.surface(k).unwrap().rect.unwrap().bounds();
+                [b.min.x, b.max.x]
+            })
+            .collect();
+        for e in edges.iter().flatten() {
+            assert_eq!(*e, e.round(), "{edges:?}");
+        }
+        assert_eq!(edges[0][1], edges[1][0], "no seam between shares");
+        assert_eq!(edges[1][1], edges[2][0], "no seam between shares");
+        let ys = baselines(&s, "p");
+        assert!(ys.len() > 3, "wrapped into {} lines", ys.len());
+        let gaps: Vec<f64> = ys.windows(2).map(|w| w[1] - w[0]).collect();
+        assert!(
+            gaps.windows(2).all(|g| g[0] == g[1]) && ys[0] == ys[0].round(),
+            "uneven leading {gaps:?} from {ys:?}"
+        );
     }
 
     #[test]

@@ -269,18 +269,37 @@ pub fn text_input(ui: &mut Ui, id: &str, value: &mut String) -> El {
     let x = |at: usize| ui.caret_x(value, size, byte(value, at));
     let (lo, hi) = (x(anchor.min(caret)), x(anchor.max(caret)));
     let on = focused && ui.blink();
+    // The value keeps its whole measured advance so the field stays one line
+    // -- a plain `text()` would wrap to the frame and grow the field -- and
+    // the frame clips it. Room comes from last frame's field, the only inner
+    // width the widget can see, and the caret scrolls the three layers
+    // together so it never leaves the box.
+    // ponytail: the first frame of an over-long value shows its head; it
+    // catches up on the next one.
+    const PAD: f64 = 8.0;
+    let run = x(value.len());
+    let room = ui
+        .scene()
+        .and_then(|s| s.surface(id))
+        .map_or(run, |s| s.frame.size.width - 2.0 * PAD);
+    let shift = (x(caret) - room).max(0.0);
     overlay([
         leaf(hi - lo, size)
             .anchor(Align::Start, Align::Center)
-            .offset(lo, 0.0)
+            .offset(lo - shift, 0.0)
             .when(hi > lo, |e| e.fill(Role::Primary)),
-        text(value.clone()).anchor(Align::Start, Align::Center),
+        text(value.clone())
+            .width(run)
+            .lines(1)
+            .anchor(Align::Start, Align::Center)
+            .offset(-shift, 0.0),
         leaf(2.0, size)
             .anchor(Align::Start, Align::Center)
-            .offset(x(caret), 0.0)
+            .offset(x(caret) - shift, 0.0)
             .when(on, |e| e.fill(Role::Ink)),
     ])
-    .pad_xy(8.0, 6.0)
+    .clip()
+    .pad_xy(PAD, 6.0)
     .radius(6.0)
     .fill(Role::Field)
     .cursor(Cursor::Text)

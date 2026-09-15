@@ -36,6 +36,11 @@ fn space_between() {
     let l = resolve(&t, Some(Size::new(100., 10.)), Default::default()).unwrap();
     assert_eq!(l.frame("a").unwrap().x, 0.);
     assert_eq!(l.frame("b").unwrap().x, 90.);
+    // One child is `flex-start`, like CSS: a header row whose second child is
+    // conditionally rendered must not jump to the middle when it goes.
+    let one = row([leaf(40., 20.).id("a")]).justify(Justify::SpaceBetween);
+    let l = resolve(&one, Some(Size::new(300., 40.)), Default::default()).unwrap();
+    assert_eq!(l.frame("a").unwrap().x, 0.);
 }
 #[test]
 fn overlay_centers() {
@@ -103,7 +108,7 @@ fn a_declared_minimum_is_the_floor_and_content_alone_is_not() {
             Some(Size::new(50., 50.)),
             Default::default()
         ),
-        Err(Error::InsufficientSpace(_))
+        Err(Error::InsufficientSpace { .. })
     ));
 }
 
@@ -206,7 +211,7 @@ fn a_parent_cannot_be_squeezed_past_what_its_children_refuse() {
     // A pixel under, and it is refused rather than silently overflowing.
     assert!(matches!(
         resolve(&root, Some(Size::new(69., 20.)), Default::default()),
-        Err(Error::InsufficientSpace(_))
+        Err(Error::InsufficientSpace { .. })
     ));
 
     // The floor also has to bind while the deficit is being shared out, not
@@ -542,7 +547,7 @@ fn grid_columns_never_go_negative_when_the_gaps_outgrow_the_grid() {
     let t = column([grid(2, [Node::leaf(0., 0.).width(Len::Pct(98.8))]).gap(8.4)]).pad(7.7);
     assert!(matches!(
         resolve(&t, Some(Size::new(21., 174.4)), Default::default()),
-        Err(Error::InsufficientSpace(_))
+        Err(Error::InsufficientSpace { .. })
     ));
 }
 
@@ -562,10 +567,80 @@ fn room_handed_to_the_measurer_leaves_out_the_nodes_own_padding() {
 }
 
 #[test]
-fn a_grid_cell_wider_than_its_column_overhangs_the_far_edge() {
+fn a_grid_cell_never_outgrows_its_column() {
     let t = grid(3, [column([]).width(Len::Px(108.5)).id("c")]).id("g");
     let l = resolve(&t, Some(Size::new(135.5, 62.4)), Default::default()).unwrap();
-    assert_eq!(l.frame("c").unwrap().x, 0.);
+    let c = l.frame("c").unwrap();
+    // The declared width is wider than the track: it starts at the track and
+    // is cut to it, rather than painting through the next cell.
+    assert_eq!(c.x, 0.);
+    assert!((c.size.width - 135.5 / 3.).abs() < 1e-9);
+    // Two cells, the first declared three times its column.
+    let t = grid(2, [leaf(300., 10.).id("a"), leaf(10., 10.).id("b")]).gap(8.);
+    let l = resolve(&t, Some(Size::new(200., 40.)), Default::default()).unwrap();
+    let (a, b) = (l.frame("a").unwrap(), l.frame("b").unwrap());
+    assert_eq!(a.size.width, 96.);
+    assert!(b.x >= a.right() && b.right() <= 200.);
+}
+
+#[test]
+fn a_float_is_pulled_back_inside_a_thin_window() {
+    let menu = || {
+        leaf(120., 40.)
+            .float()
+            .anchor(Align::Start, Align::Start)
+            .offset(200., 120.)
+            .id("menu")
+    };
+    let t = column([leaf(10., 10.)]).push(menu()).id("root");
+    let l = resolve(&t, Some(Size::new(240., 300.)), Default::default()).unwrap();
+    let f = l.frame("menu").unwrap();
+    assert_eq!((f.x, f.y), (120., 120.));
+    assert!(f.right() <= 240. && f.bottom() <= 300.);
+    // One too big to fit has no inside to be pulled to: it keeps its offset.
+    let t = column([leaf(10., 10.)])
+        .push(menu().size(400., 40.))
+        .id("root");
+    let l = resolve(&t, Some(Size::new(240., 300.)), Default::default()).unwrap();
+    assert_eq!(l.frame("menu").unwrap().x, 200.);
+}
+
+#[test]
+fn a_squeezed_wrapping_row_says_so_instead_of_overflowing() {
+    let bar = || {
+        column([row([leaf(250., 40.), leaf(250., 40.)])
+            .gap(10.)
+            .wrap()
+            .id("bar")])
+    };
+    // 510 wide: one line, and the row is one child tall.
+    let l = resolve(&bar(), Some(Size::new(510., 40.)), Default::default()).unwrap();
+    assert_eq!(l.frame("bar").unwrap().size, Size::new(510., 40.));
+    // Squeezed to 420 the row needs a second line, and the 40 px it was given
+    // on the cross axis is a line short. Nothing clips a row, so this errors.
+    assert!(matches!(
+        resolve(&bar(), Some(Size::new(420., 40.)), Default::default()),
+        Err(Error::InsufficientSpace { .. })
+    ));
+    // Given the stacked height it fits, both children inside the frame.
+    let l = resolve(&bar(), Some(Size::new(420., 90.)), Default::default()).unwrap();
+    let f = l.frame("bar").unwrap();
+    assert!(l.all()[2..].iter().all(|c| c.bottom() <= f.bottom() + 1e-9));
+}
+
+#[test]
+fn the_error_carries_what_the_whole_tree_needed() {
+    let panel = || column([]).min_width(120.).min_height(30.);
+    let t = row([panel(), panel()]).gap(10.).id("bar");
+    assert!(resolve(&t, Some(Size::new(250., 40.)), Default::default()).is_ok());
+    let Err(Error::InsufficientSpace { needs, .. }) =
+        resolve(&t, Some(Size::new(240., 40.)), Default::default())
+    else {
+        panic!("240 is ten short of the two panels and their gap");
+    };
+    assert_eq!(needs, Size::new(250., 30.));
+    // Which is the whole point: the host can scale by it.
+    assert!((240. / needs.width - 0.96).abs() < 1e-9);
 }
 
 #[test]
@@ -581,4 +656,38 @@ fn growth_without_a_declared_maximum_is_not_capped_at_a_magic_number() {
     )
     .unwrap();
     assert_eq!(l.frame("a").unwrap().size.width, 3e6);
+}
+
+#[test]
+fn the_gallery_grid_reflows_from_240_to_2000_without_leaving_the_window() {
+    // The shape the preview's Grid scene ships: a fixed-size cell in a
+    // min_col grid, resolved at the three window shapes a plugin editor is
+    // actually dragged to.
+    let tree = || {
+        column([grid(3, (0..6).map(|i| leaf(90., 54.).id(format!("c{i}"))))
+            .gap(10.)
+            .min_col(120.)
+            .id("grid")])
+        .pad(16.)
+    };
+    let cols = |w: f64, h: f64| {
+        let l = resolve(&tree(), Some(Size::new(w, h)), Default::default()).unwrap();
+        let top = l.frame("c0").unwrap().y;
+        let n = (0..6)
+            .filter(|i| l.frame(&format!("c{i}")).unwrap().y == top)
+            .count();
+        // Nothing the solver placed may leave the window, at any width.
+        assert!(
+            l.all().iter().all(|f| f.x >= -1e-9
+                && f.y >= -1e-9
+                && f.right() <= l.size.width + 1e-9
+                && f.bottom() <= l.size.height + 1e-9),
+            "a frame escaped the {w}x{h} root"
+        );
+        n
+    };
+    assert_eq!(
+        (cols(240., 600.), cols(800., 500.), cols(2000., 300.)),
+        (1, 3, 3)
+    );
 }

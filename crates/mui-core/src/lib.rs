@@ -62,4 +62,19 @@ pub mod prelude {
     pub fn pct(p: f64) -> Len {
         Len::Pct(p)
     }
+    /// A fluid length with two stops -- CSS `clamp(min, pct%, max)`. The rail
+    /// tracks the window between 64 and 220 px and neither collapses at 240
+    /// nor sprawls at 2000:
+    ///
+    /// ```
+    /// use mui_core::prelude::*;
+    /// let rail = col![text("Filters")].w(clamp(64., 30., 220.)).id("rail");
+    /// let row = row![rail, leaf(0., 0.).grow(1.)];
+    /// let scene =
+    ///     resolve_scene(&SceneSpec::new(row).offered(Size::new(240., 80.))).unwrap();
+    /// assert_eq!(scene.surface("rail").unwrap().frame.size.width, 72.);
+    /// ```
+    pub fn clamp(min: f64, pct: f64, max: f64) -> Len {
+        Len::Clamp { min, pct, max }
+    }
 }
