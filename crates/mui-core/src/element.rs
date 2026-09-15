@@ -85,10 +85,6 @@ impl Semantics {
     pub fn new(role: Kind) -> Self {
         Self { role, label: None }
     }
-    pub fn label(mut self, label: impl Into<String>) -> Self {
-        self.label = Some(label.into());
-        self
-    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

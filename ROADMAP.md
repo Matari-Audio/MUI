@@ -93,16 +93,20 @@ public function and a test behind it.
       `unicode-linebreak`, so CJK breaks between ideographs and a no-break
       space or an emoji ZWJ sequence holds together. A word wider than the
       line still overflows at a char, not a grapheme cluster.
+- [x] Real semantic roles: `.role(Kind::..)` / `.label(..)` on any node, set
+      by every widget, so `mui-access` reports a named button and a slider
+      with its range instead of a pile of groups, and the preview keeps an
+      `accesskit_winit::Adapter` that publishes after each frame and serves
+      Focus and Click action requests.
+- [x] IME: `Input::ime` carries the platform's four events, a preedit paints
+      under the caret without ever joining the value, a commit inserts like
+      typed text, and `Frame::ime` puts the host's candidate window under the
+      field. No selection highlight while a composition is up.
 
 ## Missing
 
 - [ ] Kurv rewritten on MUI: the first real plugin editor on this stack, and
       the only honest test of whether the DSL survives a product.
-- [x] Real semantic roles in `mui-core`: `.role(Kind::..)` / `.label(..)` on
-      any node, set by every widget, so `mui-access` reports roles not groups.
-- [x] `mui-access` wired into a window: the preview keeps an
-      `accesskit_winit::Adapter`, publishes after each frame, and serves
-      Focus and Click action requests.
 - [ ] `vello_hybrid` against classic `vello`, re-measured on Windows — the
       hybrid choice was made on Linux numbers only.
 - [ ] A welded shadow is the union of the children's blurred rects, not the
@@ -113,6 +117,10 @@ public function and a test behind it.
 - [ ] `.min_col` on a grid that hugs: with no width offered at all there is
       nothing to drop columns against, so it keeps its declared count. A flex
       share now counts as a width; a hugging grid still needs one.
+- [ ] No selection highlight while an input method is composing: the ends
+      were measured against the value and the preedit sits between them, so
+      the highlight is dropped for those frames. The commit still replaces
+      the selection. Measuring the two runs separately is the fix.
 - [ ] The first frame of a freshly-populated over-long `text_input` shows the
       head of the value: the widget has no inner width before its first
       layout. It catches up on the next frame.

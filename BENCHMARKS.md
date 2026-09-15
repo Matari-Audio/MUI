@@ -12,7 +12,7 @@ file is the number that answers "why". A second question rides along: what the
 | CPU | AMD Ryzen 7 7800X3D (16 logical) |
 | GPU | AMD Radeon RX 6600 (RADV NAVI23), Vulkan, discrete |
 | OS | Linux x86-64 |
-| Commit | this one (`feat/layout-quality`): every row re-measured in one run, with `--features cpu,bench-classic`, after the responsive-layout and scene-walk changes |
+| Commit | this one (`feat/issues`): every row re-measured in one run, with `--features cpu,bench-classic`, after the one-pass wrap, the welded-shadow blur, UAX#14 breaking and the accessibility walk |
 | Profile | workspace `release`: `opt-level = "s"`, LTO, 1 codegen unit |
 
 `opt-level = "s"` is the repository's choice for binary size and it costs the
@@ -61,34 +61,34 @@ Median of 50 frames after 5 warm-ups. Milliseconds.
 
 | backend | case | resolve | encode | render | total | fps |
 |---|---|---:|---:|---:|---:|---:|
-| mui (resolve only) | static | 1.126 | — | — | 1.126 | 888 |
-| vello_cpu | cold | 4.986 | 5.801 | 0.634 | 11.421 | 88 |
-| vello_cpu | static | 1.164 | 3.573 | 0.676 | 5.413 | 185 |
-| vello_cpu | one knob turning | 1.167 | 3.566 | 0.658 | 5.391 | 185 |
-| vello_cpu cached | cold | 5.001 | 5.761 | 0.655 | 11.417 | 88 |
-| vello_cpu cached | static | 1.160 | 3.491 | 0.659 | 5.310 | 188 |
-| vello_cpu cached | one knob turning | 1.143 | 3.524 | 0.623 | 5.290 | 189 |
-| vello_hybrid | cold | 5.008 | 5.950 | 0.608 | 11.566 | 86 |
-| vello_hybrid | static | 1.168 | 3.614 | 0.624 | 5.406 | 185 |
-| vello_hybrid | one knob turning | 1.168 | 3.631 | 0.628 | 5.427 | 184 |
-| vello_hybrid cached | cold | 4.973 | 5.866 | 0.605 | 11.444 | 87 |
-| vello_hybrid cached | static | 1.181 | 3.616 | 0.629 | 5.425 | 184 |
-| vello_hybrid cached | one knob turning | 1.179 | 3.624 | 0.626 | 5.430 | 184 |
-| vello (classic) | cold | 5.121 | 0.274 | 4.354 | 9.749 | 103 |
-| vello (classic) | static | 1.178 | 0.277 | 4.386 | 5.840 | 171 |
-| vello (classic) | one knob turning | 1.186 | 0.277 | 4.371 | 5.834 | 171 |
+| mui (resolve only) | static | 1.151 | — | — | 1.151 | 869 |
+| vello_cpu | cold | 5.051 | 5.748 | 0.649 | 11.448 | 87 |
+| vello_cpu | static | 1.177 | 3.524 | 0.645 | 5.346 | 187 |
+| vello_cpu | one knob turning | 1.177 | 3.519 | 0.664 | 5.360 | 187 |
+| vello_cpu cached | cold | 5.065 | 5.803 | 0.634 | 11.501 | 87 |
+| vello_cpu cached | static | 1.188 | 3.474 | 0.653 | 5.314 | 188 |
+| vello_cpu cached | one knob turning | 1.172 | 3.469 | 0.652 | 5.293 | 189 |
+| vello_hybrid | cold | 5.021 | 5.929 | 0.606 | 11.557 | 87 |
+| vello_hybrid | static | 1.208 | 3.680 | 0.622 | 5.510 | 181 |
+| vello_hybrid | one knob turning | 1.208 | 3.687 | 0.623 | 5.518 | 181 |
+| vello_hybrid cached | cold | 5.060 | 5.886 | 0.620 | 11.566 | 86 |
+| vello_hybrid cached | static | 1.207 | 3.640 | 0.624 | 5.470 | 183 |
+| vello_hybrid cached | one knob turning | 1.208 | 3.648 | 0.627 | 5.483 | 182 |
+| vello (classic) | cold | 5.082 | 0.277 | 4.363 | 9.722 | 103 |
+| vello (classic) | static | 1.209 | 0.276 | 4.384 | 5.869 | 170 |
+| vello (classic) | one knob turning | 1.193 | 0.277 | 4.406 | 5.876 | 170 |
 
 The bench also times the arc-to-cubic conversion on its own, outside any
 backend:
 
 ```
-bez conversion: 0.089 ms uncached, 0.023 ms from a warm PathCache (571 entries)
+bez conversion: 0.088 ms uncached, 0.023 ms from a warm PathCache (571 entries)
 ```
 
 Memory: classic's `Scene::bump_estimate` still reports **0.5 MiB peak** of GPU
 buffer — the new ops are rectangles and glyphs, which cost it nothing. Neither
 sparse-strip backend exposes an equivalent; peak RSS of the whole process was
-149 MiB, dominated by the font and the wgpu device, so it separates nothing.
+162 MiB, dominated by the font and the wgpu device, so it separates nothing.
 
 ### `cpu-threads`, measured
 
@@ -126,12 +126,12 @@ The same bench on the same machine at commit `19a59b5`, when the scene was
 ## Verdict
 
 **The renderer comparison is unchanged, and it is now the larger half of the
-story.** Resolve is MUI's and is identical across all four rows — 1.17 ms warm,
+story.** Resolve is MUI's and is identical across all four rows — 1.18-1.21 ms warm,
 5.0 ms cold. The split between classic and the sparse-strip backends is the
 same architectural trade as before:
 
-- classic encode 0.28 ms, render 4.39 ms
-- hybrid encode 3.61 ms, render 0.62 ms
+- classic encode 0.28 ms, render 4.38 ms
+- hybrid encode 3.68 ms, render 0.62 ms
 
 Classic's `Scene::fill` appends to an encoding buffer and the GPU flattens,
 bins and tiles in compute. Hybrid flattens and builds sparse strips on the CPU
@@ -206,9 +206,9 @@ remaining 571 paths costs 0.089 ms and the cache brings it to 0.023. The
 same paint walk with that work removed, and it is the ceiling the cache is
 chasing.
 
-So MUI's own share of a static 5.41 ms frame is 1.17 ms of resolve plus
+So MUI's own share of a static 5.35 ms frame is 1.18 ms of resolve plus
 0.02 ms of cached conversion: 22% of the frame, and the **`mui (resolve only)`**
-row puts the floor at 1.13 ms with nothing painted. What is left in the walk is
+row puts the floor at 1.15 ms with nothing painted. What is left in the walk is
 the outline work itself — `RoundedRect::path` per node, per shell, per stroke —
 and it is shared geometry, not a redundant copy. The next real win is on
 Vello's side of the seam: 3.6 ms of strip generation against classic's 0.28 ms
@@ -218,7 +218,9 @@ The two-pass wrap is gone. A paragraph squeezed by a flex row (`shrink`
 sharing a width with siblings) learns its final main size inside the measure
 pass now: `mui-layout` deals the shares, then measures a fluid item again at
 the one it got. `resolve_scene_with` solves once, and the hint pass it used to
-need went with it.
+need went with it. It did not move warm resolve: the second solve it replaced
+was 0.013 ms, and the re-measure costs the squeezed paragraphs one extra
+`break_lines` each. The win is correctness, not speed.
 
 Glyph runs still need nothing. `vello_cpu` and `vello_hybrid` both hold a
 `GlyphPrepCache` in the `Resources` MUI already threads through every frame
