@@ -72,6 +72,10 @@ pub struct Element {
     pub tip: Option<String>,
     /// Takes keyboard focus on click and on Tab.
     pub focusable: bool,
+    /// A row whose text children share one baseline. See [`Styled::baseline`].
+    pub baseline: bool,
+    /// Cap a wrapped label at this many lines. See [`Styled::lines`].
+    pub lines: Option<usize>,
     /// The spring this node's paint chases when its declared style changes.
     /// Only meaningful on a node with an id: the runtime has nothing to
     /// compare an anonymous node against. See [`Styled::transition`].
@@ -226,6 +230,26 @@ pub trait Styled: Sized {
         self.element_mut().transition = Some(s);
         self
     }
+    /// Sit this container's text children on one baseline instead of
+    /// centring each in its own frame, so a 12 px label and a 24 px readout
+    /// line up on the letters rather than on the boxes.
+    ///
+    /// ponytail: the row's height is still the tallest child's, so a big
+    /// ascent can push a shifted line past the frame; give the row a height
+    /// if that shows.
+    fn baseline(mut self) -> Self {
+        self.element_mut().baseline = true;
+        self
+    }
+    /// Cap a wrapping label at `n` lines; the last one ends in an ellipsis.
+    fn lines(mut self, n: usize) -> Self {
+        self.element_mut().lines = Some(n.max(1));
+        self
+    }
+    /// Children spaced with equal gaps around each: `Justify::SpaceAround`.
+    fn around(self) -> Self;
+    /// Children spaced with equal gaps everywhere: `Justify::SpaceEvenly`.
+    fn evenly(self) -> Self;
     /// [`Styled::transition`] with the default spring.
     fn animate(self) -> Self {
         self.transition(Spring::DEFAULT)
@@ -240,6 +264,12 @@ pub trait Styled: Sized {
     }
 }
 impl Styled for El {
+    fn around(self) -> Self {
+        self.justify(mui_layout::Justify::SpaceAround)
+    }
+    fn evenly(self) -> Self {
+        self.justify(mui_layout::Justify::SpaceEvenly)
+    }
     fn style_mut(&mut self) -> &mut Style {
         &mut self.payload_mut().style
     }
