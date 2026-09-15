@@ -90,9 +90,7 @@ impl Hit {
     pub fn at(&self, p: Point) -> Option<&str> {
         let q = vello_common::kurbo::Point::new(p.x, p.y);
         let inside = |c: &Option<Bounds>| {
-            c.is_none_or(|b| {
-                p.x >= b.min.x && p.x <= b.max.x && p.y >= b.min.y && p.y <= b.max.y
-            })
+            c.is_none_or(|b| p.x >= b.min.x && p.x <= b.max.x && p.y >= b.min.y && p.y <= b.max.y)
         };
         self.targets
             .iter()

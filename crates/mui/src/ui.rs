@@ -2,14 +2,28 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use mui_core::{El, Palette, ResolvedScene, SceneError, SceneSpec, Size, Spring, Theme};
-use mui_input::{Hit, Interaction, PointerInput, Response};
+use mui_core::prelude::{overlay, text, Role, Styled as _};
+use mui_core::{
+    Cursor, El, Palette, ResolvedScene, SceneError, SceneSpec, Size, Spring, TextCache, Theme,
+};
+use mui_geometry::Point;
+use mui_input::{Hit, Input, Interaction, Key, KeyPress, PointerInput, Response};
+use mui_layout::SpacingToken::S;
+
+/// How long the pointer must rest on a surface before its tip is due.
+pub const TIP_DELAY: f64 = 0.5;
 
 /// What one call to [`Ui::frame`] produced.
 pub struct Frame<'a> {
     pub scene: &'a ResolvedScene,
     /// A spring is still moving: schedule another frame.
     pub animating: bool,
+    /// A tip that came due this frame, and where to put it. It is already
+    /// floated into the scene; this is for a host that would rather place its
+    /// own (a native tooltip window, say).
+    pub tip: Option<(String, Point)>,
+    /// The cursor the hovered surface asks for.
+    pub cursor: Cursor,
 }
 
 /// Retained state for an immediate tree. Build the tree every frame; the
@@ -22,6 +36,18 @@ pub struct Ui {
     scene: Option<ResolvedScene>,
     /// Per key: hover and press springs, 0..1.
     springs: BTreeMap<String, [Spring; 2]>,
+    text_cache: TextCache,
+    /// Per scroll node: how far its children are slid.
+    scrolls: BTreeMap<String, [f64; 2]>,
+    /// Per text field: the caret's character index.
+    carets: BTreeMap<String, usize>,
+    focus: Option<String>,
+    keys: Vec<KeyPress>,
+    typed: String,
+    pointer: PointerInput,
+    /// The hovered key and how long it has been hovered.
+    hover: Option<(String, f64)>,
+    time: f64,
 }
 impl Ui {
     pub fn new(theme: Theme) -> Self {
@@ -32,6 +58,15 @@ impl Ui {
             hit: Hit::default(),
             scene: None,
             springs: BTreeMap::new(),
+            text_cache: TextCache::default(),
+            scrolls: BTreeMap::new(),
+            carets: BTreeMap::new(),
+            focus: None,
+            keys: Vec::new(),
+            typed: String::new(),
+            pointer: PointerInput::default(),
+            hover: None,
+            time: 0.0,
         }
     }
     pub fn font(mut self, font: impl Into<Arc<Vec<u8>>>) -> Self {
@@ -57,6 +92,95 @@ impl Ui {
             .get(id)
             .map_or((0.0, 0.0), |[h, p]| (h.value, p.value))
     }
+    /// Whether `id` holds the keyboard focus.
+    pub fn focused(&self, id: &str) -> bool {
+        self.focus.as_deref() == Some(id)
+    }
+    /// Focus `id` from code. No check that it exists: it may not have been
+    /// built yet.
+    pub fn focus(&mut self, id: impl Into<String>) {
+        self.focus = Some(id.into());
+    }
+    /// The keys this frame, if `id` is focused. Empty otherwise, so a widget
+    /// may loop over it unconditionally.
+    pub fn keys(&self, id: &str) -> &[KeyPress] {
+        if self.focused(id) {
+            &self.keys
+        } else {
+            &[]
+        }
+    }
+    /// The text typed this frame, if `id` is focused.
+    pub fn text(&self, id: &str) -> &str {
+        if self.focused(id) {
+            &self.typed
+        } else {
+            ""
+        }
+    }
+    /// The pointer relative to `id`'s frame origin, if both exist.
+    pub fn local(&self, id: &str) -> Option<Point> {
+        let p = self.pointer.pos?;
+        let s = self.scene.as_ref()?.surface(id)?;
+        Some(Point::new(p.x - s.frame.x, p.y - s.frame.y))
+    }
+    /// Source and target of a drag released this frame.
+    pub fn dropped(&self) -> Option<(&str, &str)> {
+        self.interaction.dropped()
+    }
+    /// How far `id`'s children are scrolled.
+    pub fn scroll(&self, id: &str) -> [f64; 2] {
+        self.scrolls.get(id).copied().unwrap_or([0.0, 0.0])
+    }
+
+    pub(crate) fn caret(&self, id: &str) -> usize {
+        self.carets.get(id).copied().unwrap_or(0)
+    }
+    pub(crate) fn set_caret(&mut self, id: &str, i: usize) {
+        self.carets.insert(id.to_owned(), i);
+    }
+    /// Pen advance of `s`, for placing a caret.
+    pub(crate) fn advance(&self, s: &str, size: f64) -> f64 {
+        match self.font.as_deref() {
+            Some(f) => mui_text::text_run(f, s, size, &[], 0.05).map_or(0.0, |r| r.advance),
+            // ponytail: the 0.6em guess the scene itself falls back to
+            // without a font; set a font and both agree.
+            None => s.chars().count() as f64 * size * 0.6,
+        }
+    }
+    /// A caret is on for half of every 0.625 s.
+    pub(crate) fn blink(&self) -> bool {
+        (self.time * 1.6) as i64 % 2 == 0
+    }
+
+    /// Move the focus to the next (or previous) focusable surface in z-order,
+    /// wrapping. Nothing focused yet starts at either end.
+    fn cycle_focus(&mut self, back: bool) {
+        let Some(scene) = self.scene.as_ref() else {
+            return;
+        };
+        let stops: Vec<String> = scene
+            .keys
+            .iter()
+            .filter(|k| scene.surface(k).is_some_and(|s| s.focusable))
+            .cloned()
+            .collect();
+        if stops.is_empty() {
+            return;
+        }
+        let at = self
+            .focus
+            .as_ref()
+            .and_then(|c| stops.iter().position(|k| k == c));
+        let next = match (at, back) {
+            (Some(i), false) => (i + 1) % stops.len(),
+            (Some(i), true) => (i + stops.len() - 1) % stops.len(),
+            (None, false) => 0,
+            (None, true) => stops.len() - 1,
+        };
+        self.focus = Some(stops[next].clone());
+    }
+
     /// Apply a horizontal or vertical drag on `id` to `value` across `range`,
     /// `px` pixels for the full span. Returns whether it changed.
     pub fn drag(
@@ -86,13 +210,16 @@ impl Ui {
     /// Advance gestures and springs, style the tree by state, resolve it.
     pub fn frame(
         &mut self,
-        mut root: El,
+        root: El,
         offered: Option<Size>,
-        pointer: PointerInput,
+        input: impl Into<Input>,
         dt: f64,
     ) -> Result<Frame<'_>, SceneError> {
+        let input = input.into();
+        self.pointer = input.pointer;
+        self.time += dt;
         let was_held = self.interaction.held().is_some();
-        self.interaction.update(&self.hit, pointer);
+        self.interaction.update(&self.hit, input.pointer);
         let (hovered, held) = (
             self.interaction.hovered().map(str::to_owned),
             self.interaction.held().map(str::to_owned),
@@ -119,35 +246,147 @@ impl Ui {
         self.springs
             .retain(|_, [h, p]| h.value > 0.0 || p.value > 0.0 || !h.settled() || !p.settled());
 
+        // Focus follows a press on a focusable surface, and a press on
+        // anything else drops it.
+        if let Some(id) = self.interaction.pressed().map(str::to_owned) {
+            let keeps = self
+                .scene
+                .as_ref()
+                .and_then(|s| s.surface(&id))
+                .is_some_and(|s| s.focusable);
+            self.focus = keeps.then_some(id);
+        }
+        for k in &input.keys {
+            match k.key {
+                Key::Escape => self.focus = None,
+                Key::Tab => self.cycle_focus(k.mods.shift),
+                _ => {}
+            }
+        }
+        self.keys = input.keys;
+        self.typed = input.text;
+
+        // A tip is due after the pointer has rested. Both the hover and the
+        // surface come from last frame's scene, which is the one the pointer
+        // was actually over.
+        let hovered = self.interaction.hovered().map(str::to_owned);
+        match (&mut self.hover, &hovered) {
+            (Some((id, t)), Some(h)) if id == h => *t += dt,
+            (_, Some(h)) => self.hover = Some((h.clone(), 0.0)),
+            (_, None) => self.hover = None,
+        }
+        let tip = self
+            .hover
+            .as_ref()
+            .filter(|(_, t)| *t >= TIP_DELAY)
+            .and_then(|(id, _)| {
+                let s = self.scene.as_ref()?.surface(id)?;
+                Some((
+                    s.tip.clone()?,
+                    Point::new(s.frame.x, s.frame.bottom() + 4.0),
+                ))
+            });
+        // ponytail: the tip rides an overlay wrapper because a built tree has
+        // no "append a child"; give `Node` one and push into the root instead.
+        let mut root = match &tip {
+            Some((t, at)) => overlay([
+                root,
+                text(t.clone())
+                    .pad(S)
+                    .fill(Role::Raised)
+                    .radius(6.0)
+                    .float()
+                    .offset(at.x, at.y),
+            ]),
+            None => root,
+        };
+
         let pal = self.theme.palette;
         let springs = &self.springs;
-        state(&mut root, &pal, &|k| {
-            springs.get(k).map(|[h, p]| (h.value, p.value))
-        });
+        let scrolls = &self.scrolls;
+        state(
+            &mut root,
+            &pal,
+            &|k| springs.get(k).map(|[h, p]| (h.value, p.value)),
+            scrolls,
+        );
 
         let mut spec = SceneSpec::new(root).theme(self.theme);
         spec.offered = offered;
         spec.font = self.font.clone();
-        let scene = mui_core::resolve_scene(&spec)?;
+        let scene = mui_core::resolve_scene_with(&spec, &mut self.text_cache)?;
         // Named nodes are the gesture targets, in z-order. Unnamed ones are
-        // decoration.
+        // decoration. A target clipped away does not respond.
         let mut hit = Hit::default();
         for k in scene.keys.iter().filter(|k| !k.starts_with('/')) {
             if let Some(s) = scene.surface(k) {
-                hit.push(k.clone(), &s.path)?;
+                hit.push_clipped(k.clone(), &s.path, s.clip)?;
             }
         }
         self.hit = hit;
+        self.wheel(&scene, input.wheel);
+
+        let held = self.interaction.held().map(str::to_owned);
+        let cursor = held
+            .clone()
+            .or(hovered)
+            .and_then(|k| scene.surface(&k).and_then(|s| s.cursor))
+            .unwrap_or(Cursor::Arrow);
+        let cursor = match cursor {
+            Cursor::Grab if held.is_some() => Cursor::Grabbing,
+            c => c,
+        };
+
         self.scene = Some(scene);
         Ok(Frame {
             scene: self.scene.as_ref().expect("just set"),
             animating,
+            tip,
+            cursor,
         })
+    }
+
+    /// Send the wheel to the innermost scrollable surface under the pointer.
+    /// It lands on the next frame's tree, the same frame late a release is.
+    fn wheel(&mut self, scene: &ResolvedScene, wheel: Point) {
+        if wheel.x == 0.0 && wheel.y == 0.0 {
+            return;
+        }
+        let Some(p) = self.pointer.pos else { return };
+        for k in scene.keys.iter().rev() {
+            let Some(s) = scene.surface(k) else { continue };
+            let f = s.frame;
+            if p.x < f.x || p.x > f.right() || p.y < f.y || p.y > f.bottom() {
+                continue;
+            }
+            let max = [
+                (s.content.width - f.size.width).max(0.0),
+                (s.content.height - f.size.height).max(0.0),
+            ];
+            if max[0] <= 0.0 && max[1] <= 0.0 {
+                continue;
+            }
+            let at = self.scrolls.entry(k.clone()).or_insert([0.0, 0.0]);
+            at[0] = (at[0] + wheel.x).clamp(0.0, max[0]);
+            at[1] = (at[1] + wheel.y).clamp(0.0, max[1]);
+            return;
+        }
     }
 }
 
-/// Push hover and press into every named node's fill, proportionally.
-fn state(n: &mut El, pal: &Palette, of: &dyn Fn(&str) -> Option<(f64, f64)>) {
+/// Push hover and press into every named node's fill, proportionally, and
+/// slide the ones the wheel has scrolled.
+fn state(
+    n: &mut El,
+    pal: &Palette,
+    of: &dyn Fn(&str) -> Option<(f64, f64)>,
+    scrolls: &BTreeMap<String, [f64; 2]>,
+) {
+    if let Some([x, y]) = n.key().and_then(|k| scrolls.get(k)).copied() {
+        // `scrolled` is a builder and a built node cannot be reopened.
+        let node = std::mem::replace(n, mui_core::leaf(0.0, 0.0));
+        *n = node.scrolled(x, y);
+    }
     if let Some((h, p)) = n.key().and_then(of) {
         let bg = pal.background();
         let e = n.payload_mut();
@@ -158,7 +397,7 @@ fn state(n: &mut El, pal: &Palette, of: &dyn Fn(&str) -> Option<(f64, f64)>) {
         }
     }
     for c in n.children_mut() {
-        state(c, pal, of);
+        state(c, pal, of, scrolls);
     }
 }
 impl std::fmt::Debug for Ui {
@@ -174,6 +413,7 @@ mod tests {
     use super::*;
     use mui_core::prelude::*;
     use mui_geometry::Point;
+    use mui_input::Mods;
 
     fn at(x: f64, y: f64, down: bool) -> PointerInput {
         PointerInput {
@@ -181,6 +421,105 @@ mod tests {
             primary_down: down,
         }
     }
+    fn key(k: Key) -> Input {
+        Input {
+            keys: vec![KeyPress {
+                key: k,
+                mods: Mods::default(),
+            }],
+            ..Input::default()
+        }
+    }
+
+    #[test]
+    fn tab_walks_the_focusable_surfaces_in_scene_order() {
+        let mut ui = Ui::new(Theme::DEFAULT);
+        let tree = || {
+            column([
+                leaf(20., 20.).focusable().id("a"),
+                leaf(20., 20.).id("plain"),
+                leaf(20., 20.).focusable().id("b"),
+            ])
+        };
+        ui.frame(tree(), None, PointerInput::default(), 0.016)
+            .unwrap();
+        for want in ["a", "b", "a"] {
+            ui.frame(tree(), None, key(Key::Tab), 0.016).unwrap();
+            assert!(ui.focused(want), "expected {want}");
+        }
+        ui.frame(tree(), None, key(Key::Escape), 0.016).unwrap();
+        assert!(!ui.focused("a") && !ui.focused("b"));
+    }
+
+    #[test]
+    fn the_wheel_scrolls_a_column_and_stops_at_its_end() {
+        let mut ui = Ui::new(Theme::DEFAULT);
+        let tree = || {
+            column([leaf(20., 100.), leaf(20., 100.)])
+                .height(50.)
+                .scroll()
+                .id("list")
+        };
+        let wheel = |y: f64| Input {
+            pointer: at(10., 10., false),
+            wheel: Point::new(0., y),
+            ..Input::default()
+        };
+        ui.frame(tree(), None, PointerInput::default(), 0.016)
+            .unwrap();
+        ui.frame(tree(), None, wheel(30.), 0.016).unwrap();
+        assert_eq!(ui.scroll("list"), [0., 30.]);
+        ui.frame(tree(), None, wheel(1000.), 0.016).unwrap();
+        let [_, y] = ui.scroll("list");
+        assert!(y > 30. && y <= 200., "clamped to the overflow, got {y}");
+        ui.frame(tree(), None, wheel(-1e6), 0.016).unwrap();
+        assert_eq!(ui.scroll("list"), [0., 0.], "and not past the top");
+    }
+
+    #[test]
+    fn typing_reaches_the_focused_field() {
+        let mut ui = Ui::new(Theme::DEFAULT);
+        let mut value = String::new();
+        let tree = |ui: &mut Ui, v: &mut String| crate::widgets::text_input(ui, "f", v);
+        let root = tree(&mut ui, &mut value);
+        ui.frame(root, None, PointerInput::default(), 0.016)
+            .unwrap();
+        ui.focus("f");
+        let typed = Input {
+            text: "hi".into(),
+            ..Input::default()
+        };
+        let root = tree(&mut ui, &mut value);
+        ui.frame(root, None, typed, 0.016).unwrap();
+        let root = tree(&mut ui, &mut value);
+        ui.frame(root, None, key(Key::Backspace), 0.016).unwrap();
+        let root = tree(&mut ui, &mut value);
+        ui.frame(root, None, PointerInput::default(), 0.016)
+            .unwrap();
+        assert_eq!(value, "h");
+    }
+
+    #[test]
+    fn a_tip_comes_due_after_half_a_second_of_hover() {
+        let mut ui = Ui::new(Theme::DEFAULT);
+        let tree = || leaf(40., 40.).fill(Role::Raised).tip("why").id("b");
+        ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
+        let f = ui.frame(tree(), None, at(10., 10., false), 0.4).unwrap();
+        assert!(f.tip.is_none(), "the pointer has not rested long enough");
+        let f = ui.frame(tree(), None, at(10., 10., false), 0.6).unwrap();
+        let (t, at) = f.tip.clone().expect("due");
+        assert_eq!(t, "why");
+        assert!(at.y > 40., "below the surface");
+        assert!(
+            f.scene.surfaces().any(|s| s.frame.y > 40.),
+            "and floated into the scene"
+        );
+        let f = ui
+            .frame(tree(), None, PointerInput::default(), 0.016)
+            .unwrap();
+        assert!(f.tip.is_none(), "gone when the pointer leaves");
+    }
+
     #[test]
     fn hover_warms_the_fill_and_a_press_is_reported_next_frame() {
         let mut ui = Ui::new(Theme::DEFAULT);

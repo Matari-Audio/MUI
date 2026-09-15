@@ -3,6 +3,7 @@
 use std::ops::RangeInclusive;
 
 use mui_core::prelude::*;
+use mui_input::Key;
 
 use crate::Ui;
 
@@ -106,5 +107,61 @@ pub fn toggle(ui: &Ui, id: &str, on: &mut bool) -> El {
     .pad(3.0)
     .pill()
     .fill(if *on { Role::Primary } else { Role::Field })
+    .id(id)
+}
+
+fn byte(s: &str, chars: usize) -> usize {
+    s.char_indices().nth(chars).map_or(s.len(), |(b, _)| b)
+}
+
+/// A single-line field: the text, a blinking caret, and the edits the focused
+/// keys imply. Click it to focus, Tab to walk to it.
+///
+// ponytail: no selection, no clipboard.
+pub fn text_input(ui: &mut Ui, id: &str, value: &mut String) -> El {
+    let focused = ui.focused(id);
+    let mut caret = ui.caret(id).min(value.chars().count());
+    if focused {
+        for c in ui.text(id).to_owned().chars().filter(|c| !c.is_control()) {
+            value.insert(byte(value, caret), c);
+            caret += 1;
+        }
+        for k in ui.keys(id).to_vec() {
+            match k.key {
+                Key::Char(c) if !c.is_control() => {
+                    value.insert(byte(value, caret), c);
+                    caret += 1;
+                }
+                Key::Backspace if caret > 0 => {
+                    value.remove(byte(value, caret - 1));
+                    caret -= 1;
+                }
+                Key::Delete if caret < value.chars().count() => {
+                    value.remove(byte(value, caret));
+                }
+                Key::Left => caret = caret.saturating_sub(1),
+                Key::Right => caret = (caret + 1).min(value.chars().count()),
+                Key::Home => caret = 0,
+                Key::End => caret = value.chars().count(),
+                _ => {}
+            }
+        }
+        ui.set_caret(id, caret);
+    }
+    let size = ui.theme.text;
+    let x = ui.advance(&value[..byte(value, caret)], size);
+    let on = focused && ui.blink();
+    overlay([
+        text(value.clone()).anchor(Align::Start, Align::Center),
+        leaf(2.0, size)
+            .anchor(Align::Start, Align::Center)
+            .offset(x, 0.0)
+            .when(on, |e| e.fill(Role::Ink)),
+    ])
+    .pad_xy(8.0, 6.0)
+    .radius(6.0)
+    .fill(Role::Field)
+    .cursor(Cursor::Text)
+    .focusable()
     .id(id)
 }

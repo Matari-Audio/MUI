@@ -28,11 +28,11 @@ pub mod widgets;
 pub use ui::{Frame, Ui};
 
 pub mod prelude {
-    pub use crate::widgets::{button, knob, slider, toggle};
+    pub use crate::widgets::{button, knob, slider, text_input, toggle};
     pub use crate::{Frame, Ui};
     pub use mui_core::prelude::*;
     pub use mui_core::{CornerProfile, Mode, Palette, Pigment, Spring};
-    pub use mui_input::{PointerInput, Response};
+    pub use mui_input::{Input, Key, KeyPress, Mods, PointerInput, Response};
 }
 
 /// Every runnable `rust` block in the README, compiled and run by
