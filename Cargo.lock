@@ -1433,6 +1433,7 @@ dependencies = [
  "mui-layout",
  "mui-tessellate",
  "mui-vello",
+ "png",
 ]
 
 [[package]]

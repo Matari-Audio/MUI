@@ -19,6 +19,8 @@ use vello_common::paint::PaintType;
 use vello_common::peniko::color::{AlphaColor, DynamicColor, Srgb};
 use vello_common::peniko::{ColorStop, Gradient};
 pub use vello_common::{kurbo, peniko};
+#[cfg(feature = "cpu")]
+pub use vello_cpu;
 pub use vello_hybrid;
 
 /// Curve error, in scene units, allowed when an arc becomes cubics. Vello

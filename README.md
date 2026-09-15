@@ -162,8 +162,15 @@ slider per axis.
 cargo run -p mui-vello --example headless -- /tmp/pill.png
 ```
 
-is the stack end to end with no window. With `--features cpu`, `mui-vello`
-renders through `vello_cpu` and its snapshot test asserts actual pixels.
+is the stack end to end with no window, and
+
+```bash
+cargo run -p mui --features cpu --example snapshot -- /tmp/widgets.png
+```
+
+runs two `Ui::frame`s of the widget card and rasterises them on the CPU:
+no GPU, no window. With `--features cpu`, `mui-vello` renders through
+`vello_cpu` and its snapshot test asserts actual pixels.
 
 ## Verify
 
