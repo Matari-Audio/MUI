@@ -1,38 +1,30 @@
 # Architecture
 
 ```text
-Rust DSL ------------------┐
-                          v
-TypeScript -> generated -> SceneSpec
-                          |
-                          v
-                    mui-layout
-                 intrinsic frames
-                          |
-                          v
-                    mui-core
-             surface dependency graph
-            /             |             \
-        frame           merge          inset/outset
-   sharp basis +      boolean first     final-path offset
-   render radius      fillet second
-            \             |             /
-                          v
-                         Path
-                       /      \
-                      /        \
-             mui-vello       mui-tessellate
-                 |                  |
-          vello_hybrid        TriangleMesh
-                 |                  |
-                wgpu          egui/debug meshes
+El tree  (column / row / overlay / grid, Styled fills, roles, shells, welds)
+   |
+   v  mui::Ui::frame        gestures + springs -> state mixed into fills
+   |
+   v  mui-layout            intrinsic flex solve, frames in tree order
+   |
+   v  mui-core walk         per node, in z-order:
+   |     plain  -> RoundedRect(frame, radius)
+   |     weld   -> union(children's sharp frames) then fillet(convex, concave)
+   |     shell  -> inset(previous outline, d)        exact or parallel offset
+   |     text   -> glyph outline at the baseline     mui-text
+   |     roles  -> Palette                            ink resolves on its ground
+   |
+   v  ResolvedScene         paint: Vec<Painted>  (shadow, fill, shells, stroke, text)
+   |                        surfaces: key -> frame + path;  keys in z-order
+   |
+   +--> mui-input Hit       the same paths, pushed in paint order
+   |
+   v  mui-vello paint       Canvas: vello_hybrid (wgpu) or vello_cpu (pixmap)
 ```
 
-Layout answers **where content gets space**. Geometry answers **what shape gets painted**. Interaction should remain attached to logical nodes even when multiple surfaces are visually merged.
-
-`mui-vello` is the current path-to-pixels seam used by the preview and headless
-examples. `mui-tessellate` is the renderer-independent mesh branch used by the
-egui/debug adapter and other mesh consumers. The `mui-egui` low-level `prepare` helper
-starts from `PlacedShape` inputs rather than consuming a resolved `SceneSpec`.
-
-The most important invariant is that a parallel child is generated from the parent's final outline. It never independently guesses a child radius.
+Layout answers **where content gets space**. Geometry answers **what shape
+gets painted**. The invariant that matters: a shell is derived from the
+outline before it, never from a guessed child radius; a weld unions sharp
+frames before it fillets. Everything above the paint list is
+renderer-independent and wasm-clean; `mui-preview` is the only crate that
+owns a window.
