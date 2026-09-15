@@ -13,14 +13,16 @@
 #![forbid(unsafe_code)]
 
 use kurbo::{Affine, BezPath, Rect, Shape as _, Stroke};
-use mui_core::{Layer, Paint, Painted, ResolvedScene};
+use mui_core::{Fit, Layer, Paint, Painted, ResolvedScene};
 use mui_geometry::{Error, Path, PathCommand};
 use std::sync::{Arc, Mutex};
 /// The brush type [`Canvas::set_paint`] takes, so the trait can be
 /// implemented outside this crate.
 pub use vello_common::paint::PaintType;
+use vello_common::peniko::color::PremulRgba8;
 use vello_common::peniko::color::{AlphaColor, DynamicColor, Srgb};
-use vello_common::peniko::{Blob, ColorStop, FontData, Gradient};
+use vello_common::peniko::{Blob, ColorStop, FontData, Gradient, ImageSampler};
+use vello_common::pixmap::Pixmap;
 pub use vello_common::{kurbo, peniko};
 #[cfg(feature = "cpu")]
 pub use vello_cpu;
@@ -143,6 +145,11 @@ mod tests {
 pub trait Canvas {
     fn set_transform(&mut self, t: Affine);
     fn set_paint(&mut self, p: PaintType);
+    /// Where the current paint's own space lands, composed after the scene
+    /// transform. Image space is pixels; gradients and solids ignore it, so
+    /// a canvas that never paints an image may leave both of these alone.
+    fn set_paint_transform(&mut self, _t: Affine) {}
+    fn reset_paint_transform(&mut self) {}
     fn set_stroke(&mut self, s: Stroke);
     fn fill_path(&mut self, p: &BezPath);
     fn stroke_path(&mut self, p: &BezPath);
@@ -210,6 +217,12 @@ macro_rules! wrapper {
             fn set_paint(&mut self, p: PaintType) {
                 self.$inner.set_paint(p)
             }
+            fn set_paint_transform(&mut self, t: Affine) {
+                self.$inner.set_paint_transform(t)
+            }
+            fn reset_paint_transform(&mut self) {
+                self.$inner.reset_paint_transform()
+            }
             fn set_stroke(&mut self, s: Stroke) {
                 self.$inner.set_stroke(s)
             }
@@ -253,11 +266,79 @@ fn srgb(c: mui_core::Color) -> AlphaColor<Srgb> {
     c.to_srgb()
 }
 
+/// One premultiplied [`Pixmap`] per distinct image buffer. MUI hands over
+/// straight RGBA -- what a decoder produces -- and premultiplying a photo is
+/// far too much work to redo every frame.
+// ponytail: same never-evicted interning as `FONTS`, and the pixmap travels
+// with the scene packet each frame rather than living in the GPU atlas;
+// `Renderer::upload_image` is the upgrade, but it needs a device and queue
+// that this crate deliberately never sees.
+#[allow(clippy::type_complexity)]
+static IMAGES: Mutex<Vec<(Arc<[u8]>, Arc<Pixmap>)>> = Mutex::new(Vec::new());
+
+fn pixmap(img: &mui_core::Image) -> Option<Arc<Pixmap>> {
+    // A single image has to fit one atlas tile; u16 is the hard ceiling.
+    let (w, h) = (
+        u16::try_from(img.width).ok()?,
+        u16::try_from(img.height).ok()?,
+    );
+    let mut images = IMAGES.lock().unwrap_or_else(|e| e.into_inner());
+    // Holding the buffer is what makes its address a sound key.
+    if let Some((_, p)) = images.iter().find(|(k, _)| Arc::ptr_eq(k, &img.rgba)) {
+        return Some(p.clone());
+    }
+    let mut clear = false;
+    let (pixels, _) = img.rgba.as_chunks::<4>();
+    let data = pixels
+        .iter()
+        .map(|p| {
+            clear |= p[3] != 255;
+            let m = |c: u8| ((u16::from(p[3]) * u16::from(c)) / 255) as u8;
+            PremulRgba8 {
+                r: m(p[0]),
+                g: m(p[1]),
+                b: m(p[2]),
+                a: p[3],
+            }
+        })
+        .collect();
+    let p = Arc::new(Pixmap::from_parts_with_opacity(data, w, h, clear));
+    images.push((img.rgba.clone(), p.clone()));
+    Some(p)
+}
+
+/// Where the image's pixels land so that it fills `bounds` per `fit`.
+fn image_transform(img: &mui_core::Image, fit: Fit, bounds: Rect) -> Affine {
+    let (iw, ih) = (f64::from(img.width), f64::from(img.height));
+    let (sx, sy) = (bounds.width() / iw, bounds.height() / ih);
+    let (sx, sy) = match fit {
+        Fit::Fill => (sx, sy),
+        Fit::Cover => (sx.max(sy), sx.max(sy)),
+        Fit::Contain => (sx.min(sy), sx.min(sy)),
+    };
+    // Centred: what cover crops and what contain letterboxes is symmetric.
+    Affine::translate((
+        bounds.center().x - iw * sx / 2.,
+        bounds.center().y - ih * sy / 2.,
+    )) * Affine::scale_non_uniform(sx, sy)
+}
+
 /// A resolved MUI paint as a Vello brush. Gradient angles follow CSS: 180
 /// runs top to bottom across `bounds`.
 pub fn brush(p: &Paint, bounds: Rect) -> PaintType {
     match p {
         Paint::Solid(c) => PaintType::Solid(srgb(*c)),
+        // An image too big for the atlas draws nothing rather than panicking
+        // inside the renderer.
+        Paint::Image { image, .. } => {
+            pixmap(image).map_or(PaintType::Solid(AlphaColor::TRANSPARENT), |p| {
+                vello_common::paint::Image {
+                    image: vello_common::paint::ImageSource::Pixmap(p),
+                    sampler: ImageSampler::default(),
+                }
+                .into()
+            })
+        }
         Paint::Linear { angle, stops } => {
             let a = angle.to_radians();
             let (s, c) = (a.sin(), -a.cos());
@@ -308,11 +389,31 @@ fn one(canvas: &mut impl Canvas, p: &Painted) -> Result<(), Error> {
         canvas.push_clip(&path);
         return Ok(());
     }
-    canvas.set_paint(brush(&p.paint, path.bounding_box()));
+    let bounds = path.bounding_box();
+    canvas.set_paint(brush(&p.paint, bounds));
     if let Some(t) = &p.text {
         canvas.glyphs(&t.font, t.size, (t.origin.x, t.origin.y), &t.glyphs);
         return Ok(());
     }
+    // An image paint lives in pixel space; this is what puts it on the box.
+    // `Extend::Pad` would smear the edge pixels across a letterbox, so
+    // `Contain` also clips to the rectangle the image actually occupies.
+    let image = match &p.paint {
+        Paint::Image { image, fit } => {
+            let t = image_transform(image, *fit, bounds);
+            canvas.set_paint_transform(t);
+            (*fit == Fit::Contain).then(|| {
+                let r = t.transform_rect_bbox(Rect::new(
+                    0.,
+                    0.,
+                    f64::from(image.width),
+                    f64::from(image.height),
+                ));
+                canvas.push_clip(&r.to_path(0.1));
+            })
+        }
+        _ => None,
+    };
     match (p.blur > 0.0, p.rect, p.width > 0.0) {
         (true, Some(rr), _) => {
             let b = rr.bounds();
@@ -329,6 +430,12 @@ fn one(canvas: &mut impl Canvas, p: &Painted) -> Result<(), Error> {
             canvas.set_stroke(Stroke::new(p.width));
             canvas.stroke_path(&path);
         }
+    }
+    if image.is_some() {
+        canvas.pop_clip();
+    }
+    if matches!(p.paint, Paint::Image { .. }) {
+        canvas.reset_paint_transform();
     }
     Ok(())
 }
@@ -415,6 +522,50 @@ mod snapshot {
         );
         let pix = pixels(&spec, 80, 40);
         assert!(pix.data().iter().any(|p| p.a > 0), "the run drew nothing");
+    }
+
+    /// A 2x2 image stretched over a leaf: each source pixel owns a quadrant,
+    /// and the leaf's rounded corner still cuts the image away.
+    #[test]
+    fn an_image_fill_lands_the_right_pixel_in_each_quadrant() {
+        #[rustfmt::skip]
+        let px: Vec<u8> = vec![
+            255, 0, 0, 255,  0, 255, 0, 255,
+            0, 0, 255, 255,  255, 255, 255, 255,
+        ];
+        let img = std::sync::Arc::new(mui_core::Image::rgba(2, 2, px).unwrap());
+        let root = leaf(20., 20.)
+            .fill(Fill::Image(img.clone(), Fit::Fill))
+            .radius(6.)
+            .id("img");
+        let pix = pixels(&SceneSpec::new(root).offered(Size::new(20., 20.)), 20, 20);
+        let at = |x: usize, y: usize| pix.data()[y * 20 + x];
+        // Nearest neighbour is not promised, so sample well inside a quadrant.
+        for ((x, y), want) in [
+            ((4, 4), [255, 0, 0]),
+            ((15, 4), [0, 255, 0]),
+            ((4, 15), [0, 0, 255]),
+            ((15, 15), [255, 255, 255]),
+        ] {
+            let got = at(x, y);
+            assert_eq!([got.r, got.g, got.b], want, "at {x},{y}: {got:?}");
+        }
+        assert_eq!(at(0, 0).a, 0, "the image spilled past the rounded corner");
+
+        // Contain letterboxes rather than smearing the edge pixels: a 2x2
+        // image in a 40x20 box leaves the sides clear.
+        let wide = leaf(40., 20.)
+            .fill(Fill::Image(img, Fit::Contain))
+            .radius(0.)
+            .id("wide");
+        let pix = pixels(&SceneSpec::new(wide).offered(Size::new(40., 20.)), 40, 20);
+        let at = |x: usize, y: usize| pix.data()[y * 40 + x];
+        assert_eq!(at(1, 10).a, 0, "contain smeared into the letterbox");
+        assert!(
+            at(14, 5).r > 200,
+            "the image itself is missing: {:?}",
+            at(14, 5)
+        );
     }
 
     /// A clip layer actually clips: the oversized child stops at its parent.
