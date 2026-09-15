@@ -1,4 +1,4 @@
-# hybrid vs cpu vs classic — 2026-09-15
+# hybrid vs cpu vs classic — 2026-09-16
 
 One scene, three backends, three cases. The question is narrow: MUI renders
 through `vello_hybrid`, and classic `vello` is the obvious alternative. This
@@ -12,7 +12,7 @@ file is the number that answers "why". A second question rides along: what the
 | CPU | AMD Ryzen 7 7800X3D (16 logical) |
 | GPU | AMD Radeon RX 6600 (RADV NAVI23), Vulkan, discrete |
 | OS | Linux x86-64 |
-| Commit | this one (`feat/idiomatic`): every row re-measured in one run after the mui-core walk changes |
+| Commit | this one (`feat/layout-quality`): every row re-measured in one run, with `--features cpu,bench-classic`, after the responsive-layout and scene-walk changes |
 | Profile | workspace `release`: `opt-level = "s"`, LTO, 1 codegen unit |
 
 `opt-level = "s"` is the repository's choice for binary size and it costs the
@@ -61,22 +61,22 @@ Median of 50 frames after 5 warm-ups. Milliseconds.
 
 | backend | case | resolve | encode | render | total | fps |
 |---|---|---:|---:|---:|---:|---:|
-| mui (resolve only) | static | 1.234 | — | — | 1.234 | 810 |
-| vello_cpu | cold | 5.111 | 5.852 | 0.777 | 11.740 | 85 |
-| vello_cpu | static | 1.269 | 3.635 | 0.792 | 5.696 | 176 |
-| vello_cpu | one knob turning | 1.250 | 3.621 | 0.770 | 5.641 | 177 |
-| vello_cpu cached | cold | 5.130 | 5.814 | 0.788 | 11.732 | 85 |
-| vello_cpu cached | static | 1.266 | 3.585 | 0.799 | 5.650 | 177 |
-| vello_cpu cached | one knob turning | 1.254 | 3.581 | 0.774 | 5.608 | 178 |
-| vello_hybrid | cold | 5.188 | 5.986 | 0.644 | 11.818 | 85 |
-| vello_hybrid | static | 1.258 | 3.712 | 0.654 | 5.623 | 178 |
-| vello_hybrid | one knob turning | 1.270 | 3.709 | 0.654 | 5.632 | 178 |
-| vello_hybrid cached | cold | 5.160 | 5.885 | 0.631 | 11.676 | 86 |
-| vello_hybrid cached | static | 1.268 | 3.685 | 0.656 | 5.609 | 178 |
-| vello_hybrid cached | one knob turning | 1.263 | 3.645 | 0.657 | 5.565 | 180 |
-| vello (classic) | cold | 5.168 | 0.280 | 4.285 | 9.733 | 103 |
-| vello (classic) | static | 1.274 | 0.277 | 4.307 | 5.858 | 171 |
-| vello (classic) | one knob turning | 1.270 | 0.279 | 4.318 | 5.867 | 170 |
+| mui (resolve only) | static | 1.126 | — | — | 1.126 | 888 |
+| vello_cpu | cold | 4.986 | 5.801 | 0.634 | 11.421 | 88 |
+| vello_cpu | static | 1.164 | 3.573 | 0.676 | 5.413 | 185 |
+| vello_cpu | one knob turning | 1.167 | 3.566 | 0.658 | 5.391 | 185 |
+| vello_cpu cached | cold | 5.001 | 5.761 | 0.655 | 11.417 | 88 |
+| vello_cpu cached | static | 1.160 | 3.491 | 0.659 | 5.310 | 188 |
+| vello_cpu cached | one knob turning | 1.143 | 3.524 | 0.623 | 5.290 | 189 |
+| vello_hybrid | cold | 5.008 | 5.950 | 0.608 | 11.566 | 86 |
+| vello_hybrid | static | 1.168 | 3.614 | 0.624 | 5.406 | 185 |
+| vello_hybrid | one knob turning | 1.168 | 3.631 | 0.628 | 5.427 | 184 |
+| vello_hybrid cached | cold | 4.973 | 5.866 | 0.605 | 11.444 | 87 |
+| vello_hybrid cached | static | 1.181 | 3.616 | 0.629 | 5.425 | 184 |
+| vello_hybrid cached | one knob turning | 1.179 | 3.624 | 0.626 | 5.430 | 184 |
+| vello (classic) | cold | 5.121 | 0.274 | 4.354 | 9.749 | 103 |
+| vello (classic) | static | 1.178 | 0.277 | 4.386 | 5.840 | 171 |
+| vello (classic) | one knob turning | 1.186 | 0.277 | 4.371 | 5.834 | 171 |
 
 The bench also times the arc-to-cubic conversion on its own, outside any
 backend:
@@ -105,7 +105,9 @@ strip generation is dispatched to the pool too, so `encode` drops as well as
 | vello_cpu cached | static | 1.317 | 2.750 | 0.267 | 4.333 | 231 |
 | vello_cpu cached | cold | 5.243 | 5.150 | 0.260 | 10.653 | 94 |
 
-Against 5.725 / 11.756 single-threaded: a warm CPU frame goes 175 → 231 fps.
+Against 5.725 / 11.756 single-threaded, measured in the run before this one: a
+warm CPU frame goes 175 → 231 fps. The threaded rows were not re-measured for
+this commit; nothing in the diff touches rasterisation.
 It stays off by default — a 120x60 snapshot pixmap loses more to thread
 hand-off than it gains, and a plugin host may not want MUI spawning a pool.
 
@@ -124,21 +126,45 @@ The same bench on the same machine at commit `19a59b5`, when the scene was
 ## Verdict
 
 **The renderer comparison is unchanged, and it is now the larger half of the
-story.** Resolve is MUI's and is identical across all four rows — 1.27 ms warm,
-5.1 ms cold. The split between classic and the sparse-strip backends is the
+story.** Resolve is MUI's and is identical across all four rows — 1.17 ms warm,
+5.0 ms cold. The split between classic and the sparse-strip backends is the
 same architectural trade as before:
 
-- classic encode 0.28 ms, render 4.31 ms
-- hybrid encode 3.71 ms, render 0.65 ms
+- classic encode 0.28 ms, render 4.39 ms
+- hybrid encode 3.61 ms, render 0.62 ms
 
 Classic's `Scene::fill` appends to an encoding buffer and the GPU flattens,
 bins and tiles in compute. Hybrid flattens and builds sparse strips on the CPU
 during the paint walk, then the GPU does one ordinary render pass. Totals are
-still a wash — 5.62 ms hybrid against 5.86 ms classic — so the choice is still
+still a wash — 5.41 ms hybrid against 5.84 ms classic — so the choice is still
 made on what the numbers don't measure: classic needs compute shaders and MUI
 has to render inside a plugin host's device, and `vello_cpu` shares hybrid's
-pipeline so the no-GPU path is a reference rather than a fallback (5.70 ms with
+pipeline so the no-GPU path is a reference rather than a fallback (5.41 ms with
 no GPU, within noise of the GPU rows).
+
+**The responsive pass took another 5% off resolve.** Warm resolve 1.23 →
+1.17 ms, a static hybrid frame 5.62 → 5.41 ms, in the same three places the
+walk was already the cost:
+
+- **One scratch `String` for the whole walk.** A node's fallback key was
+  `format!("{path}/{j}")` per child per frame — one allocation per unnamed
+  node. `write!` into a truncated buffer leaves the allocation to the
+  `Arc<str>` the surface actually keeps.
+- **`surfaces` is a `Vec` in paint order with a `HashMap` index beside it**,
+  both sized from the node count, instead of a `BTreeMap` rebalanced 719
+  times a frame.
+- **`ResolvedScene::keys` is gone.** It was the same `Arc<str>` a second
+  time, and every caller that walked it — hit testing, the focus ring, wheel
+  targeting, `mui-access`, the preview's inspector — paid a hash lookup per
+  surface to get back the record it was standing next to. `surfaces()` yields
+  them in paint order with their keys attached.
+
+The stroke fix pulls the other way: a stroked node now insets its outline
+rather than reusing the fill's, which is a rounded-rect inset per stroke. The
+net is the 5%. Allocations per resolve on the `stress` example (873 nodes,
+`cargo run -p mui-core --release --example stress`): 12066 → 10702, and its
+warm resolve is 0.64–0.65 ms at all three of 1280x800, 240x2400 and 2000x300
+— the thin window costs nothing extra.
 
 **The paint walk was the finding, and it has been cut.** The previous run of
 this file read 2.21 ms of resolve and a 7.75 ms hybrid frame, and blamed the
@@ -179,9 +205,9 @@ remaining 571 paths costs 0.089 ms and the cache brings it to 0.023. The
 same paint walk with that work removed, and it is the ceiling the cache is
 chasing.
 
-So MUI's own share of a static 5.62 ms frame is 1.27 ms of resolve plus
-0.02 ms of cached conversion: 23% of the frame, and the **`mui (resolve only)`**
-row puts the floor at 1.23 ms with nothing painted. What is left in the walk is
+So MUI's own share of a static 5.41 ms frame is 1.17 ms of resolve plus
+0.02 ms of cached conversion: 22% of the frame, and the **`mui (resolve only)`**
+row puts the floor at 1.13 ms with nothing painted. What is left in the walk is
 the outline work itself — `RoundedRect::path` per node, per shell, per stroke —
 and it is shared geometry, not a redundant copy. The next real win is on
 Vello's side of the seam: 3.6 ms of strip generation against classic's 0.28 ms

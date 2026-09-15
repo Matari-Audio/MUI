@@ -117,7 +117,7 @@ fn main() {
         let first = resolve_scene_with(&spec, &mut cache);
         let cold = t.elapsed().as_secs_f64() * 1e3;
         match &first {
-            Ok(s) => println!("  paint {} keys {}", s.paint.len(), s.keys.len()),
+            Ok(s) => println!("  paint {} keys {}", s.paint.len(), s.surfaces().count()),
             Err(e) => println!("  error: {e}"),
         }
         for _ in 0..5 {

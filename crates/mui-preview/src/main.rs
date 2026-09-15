@@ -150,15 +150,10 @@ fn inspect(
     // pointer is the one on top. ponytail: rectangles, not the rounded
     // outlines `mui_input::Hit` tests -- close enough to point at a widget.
     let Some(s) = pointer.and_then(|p| {
-        scene
-            .keys
-            .iter()
-            .rev()
-            .filter_map(|k| scene.surface(k))
-            .find(|s| {
-                let f = s.frame;
-                (f.x..=f.right()).contains(&p.x) && (f.y..=f.bottom()).contains(&p.y)
-            })
+        scene.surfaces().rev().find(|s| {
+            let f = s.frame;
+            (f.x..=f.right()).contains(&p.x) && (f.y..=f.bottom()).contains(&p.y)
+        })
     }) else {
         return;
     };
@@ -274,7 +269,7 @@ impl App {
     fn any_focus(&self) -> bool {
         self.ui
             .scene()
-            .is_some_and(|s| s.keys.iter().any(|k| self.ui.focused(k)))
+            .is_some_and(|s| s.surfaces().any(|s| self.ui.focused(&s.key)))
     }
 
     fn cancel(&mut self) {
@@ -689,8 +684,8 @@ mod tests {
             let scene = app.ui.scene().unwrap();
             assert!(scene.paint.len() > 3, "scene {i} paints nothing");
             let stage = scene.surface("stage").unwrap().frame;
-            let stage_at = scene.keys.iter().position(|k| &**k == "stage").unwrap();
-            let f = scene.surface(&scene.keys[stage_at + 1]).unwrap().frame;
+            let stage_at = scene.surfaces().position(|s| &*s.key == "stage").unwrap();
+            let f = scene.surfaces().nth(stage_at + 1).unwrap().frame;
             assert!(
                 f.x >= stage.x && f.right() <= stage.right(),
                 "scene {i} leaves the stage"
@@ -703,7 +698,11 @@ mod tests {
     #[test]
     fn a_copy_in_the_select_scene_lands_in_the_preview_clipboard() {
         let mut app = App::new();
-        app.selected = app.scenes.len() - 1;
+        app.selected = app
+            .scenes
+            .iter()
+            .position(|s| s.name() == "Select")
+            .expect("the Select scene");
         app.tick(SIZE, 1.0, PointerInput::default());
         click(&mut app, "sel-field");
         let ctrl = |c: char| KeyPress {

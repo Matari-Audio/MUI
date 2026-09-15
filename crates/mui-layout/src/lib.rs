@@ -720,7 +720,9 @@ pub enum Error {
     DuplicateKey(String),
     BudgetExceeded,
     /// `needs` is the whole tree's floor, so a host can work out the uniform
-    /// scale that would make it fit: `min(offered / needs)`.
+    /// scale that would make it fit: `min(offered / needs)`. A node refused by
+    /// its own `maximum` carries what that node asked for instead -- the
+    /// tree's floor is not known until the measure pass it failed in ends.
     InsufficientSpace {
         node: String,
         needs: Size,
@@ -1013,9 +1015,11 @@ fn measure<'a, P>(
     // column's worth of room: `min_col` makes the declared count a ceiling and
     // drops columns until each one clears it. Everything downstream reads
     // `Measured::cols`.
-    // ponytail: a hugging grid keeps its declared count -- there is no offered
-    // width to fit against; give `measure` an intrinsic width pass if that
-    // ever matters.
+    // ponytail: a grid with no offered width keeps its declared count -- a
+    // hugging one, or one whose width is a flex share, since the share is not
+    // dealt until arrange. Put a knob bank where its width is definite (the
+    // preview's Responsive editor does) until the flex pass re-measures its
+    // items, which is the same upgrade `wrap_hints` is waiting on.
     let cols = match node.kind {
         Kind::Grid { cols, .. } => match (node.min_col, inner[0]) {
             (Some(min), Some(w)) if min > 0.0 => {
@@ -1197,7 +1201,7 @@ fn measure<'a, P>(
         if size.width > max.width + 1e-9 || size.height > max.height + 1e-9 {
             return Err(Error::InsufficientSpace {
                 node: label(node, ancestor),
-                needs: Size::ZERO,
+                needs: size,
             });
         }
     }

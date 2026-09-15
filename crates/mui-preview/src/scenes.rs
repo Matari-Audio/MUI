@@ -46,6 +46,7 @@ pub fn all() -> Vec<Box<dyn PreviewScene>> {
         Box::new(Motion::default()),
         Box::new(Cells),
         Box::new(Select::default()),
+        Box::new(Editor),
     ]
 }
 
@@ -774,9 +775,86 @@ impl PreviewScene for Select {
     }
 }
 
+/// A plugin editor that survives every window shape a host can drag it to.
+/// Nothing in it is placed: the rail is one `clamp()`, the knob bank is one
+/// `min_col` grid, the chips wrap, and the root is `pct(100)` of the stage.
+pub struct Editor;
+impl PreviewScene for Editor {
+    fn name(&self) -> &'static str {
+        "Responsive editor"
+    }
+    fn about(&self) -> &'static str {
+        "Resize the window thin and wide: clamp() sizes the rail, min_col drops grid columns, the chips wrap. No breakpoints."
+    }
+    fn specimen(&mut self, _: &mut Ui) -> El {
+        editor()
+    }
+}
+
+/// The tree [`Editor`] shows, built by a free function so the test below can
+/// resolve the same one at the shapes a plugin window is dragged to.
+pub fn editor() -> El {
+    // A section tab is fluid between two stops: three of them fill a 240 px
+    // window and stop growing at 120 in a 2000 px one.
+    let tabs = row(["Osc", "Filter", "Env"].map(|n| {
+        row([caption(n)])
+            .justify(Justify::Center)
+            .w(clamp(64.0, 18.0, 120.0))
+            .pad_xy(0.0, 8.0)
+            .radius(8.0)
+            .fill(Role::Field)
+            .id(format!("tab-{n}"))
+    }))
+    .gap(S)
+    .wrap()
+    .id("tabs");
+    let knob = |i: usize| {
+        column([
+            leaf(40.0, 40.0)
+                .pill()
+                .fill(Role::Primary)
+                .id(format!("k{i}")),
+            caption(["cut", "res", "drv", "mix"][i]),
+        ])
+        .gap(Xs)
+        .align(Align::Center)
+        .pad(S)
+        .radius(10.0)
+        .fill(Role::Raised)
+    };
+    let chips = row(["A", "B", "C", "D"].map(|n| {
+        row([caption(n)])
+            .pad_xy(10.0, 4.0)
+            .pill()
+            .fill(Role::Field)
+            .id(format!("chip-{n}"))
+    }))
+    .gap(S)
+    .wrap()
+    .id("chips");
+    column([
+        row([title("Kurv"), spacer(), caption("v1.0")])
+            .baseline()
+            .id("head"),
+        tabs,
+        grid(4, (0..4).map(knob)).gap(S).min_col(120.0).id("bank"),
+        chips,
+    ])
+    .gap(M)
+    .pad(M)
+    .w(pct(100.0))
+    .h(pct(100.0))
+    .radius(16.0)
+    .fill(Role::Surface)
+    .clip()
+    .id("editor")
+}
+
 #[cfg(test)]
 mod tests {
-    use super::GlyphAxes;
+    use super::{editor, GlyphAxes};
+    use mui::core::Frame as LayoutFrame;
+    use mui::prelude::*;
 
     #[test]
     fn malformed_readable_font_falls_back_with_parse_diagnostic() {
@@ -784,5 +862,51 @@ mod tests {
             GlyphAxes::load_font(Some(("broken.ttf".to_owned(), Ok(Vec::new()))));
         assert_eq!(font.as_slice(), epaint_default_fonts::HACK_REGULAR);
         assert!(source.starts_with("broken.ttf: ") && source.ends_with(" — using Hack"));
+    }
+
+    /// The three window shapes a plugin editor is actually dragged to. No
+    /// child may leave the box its parent gave it, at any of them.
+    #[test]
+    fn the_editor_reflows_from_240x600_to_2000x300_without_overflowing() {
+        fn walk(n: &El, frames: &[LayoutFrame], i: &mut usize, parent: Option<LayoutFrame>) {
+            let f = frames[*i];
+            *i += 1;
+            assert!(
+                [f.x, f.y, f.size.width, f.size.height]
+                    .iter()
+                    .all(|v| v.is_finite()),
+                "non-finite frame {f:?}"
+            );
+            if let Some(p) = parent {
+                assert!(
+                    f.x >= p.x - 1e-6
+                        && f.y >= p.y - 1e-6
+                        && f.right() <= p.right() + 1e-6
+                        && f.bottom() <= p.bottom() + 1e-6,
+                    "{f:?} leaves its parent {p:?}"
+                );
+            }
+            for c in n.children() {
+                walk(c, frames, i, Some(f));
+            }
+        }
+        let cols = |w: f64, h: f64| {
+            let tree = editor();
+            let mut spec = SceneSpec::new(editor()).offered(Size::new(w, h));
+            spec.font = Some(std::sync::Arc::from(epaint_default_fonts::HACK_REGULAR));
+            let scene = resolve_scene(&spec).unwrap();
+            let frames = scene.layout.all();
+            walk(&tree, frames, &mut 0, None);
+            let top = scene.layout.frame("k0").unwrap().y;
+            (0..4)
+                .filter(|i| scene.layout.frame(&format!("k{i}")).unwrap().y == top)
+                .count()
+        };
+        // One clamp and one min_col are the whole reflow: four knobs across a
+        // wide window, stacked in a thin one.
+        assert_eq!(
+            (cols(240., 600.), cols(800., 500.), cols(2000., 300.)),
+            (1, 4, 4)
+        );
     }
 }

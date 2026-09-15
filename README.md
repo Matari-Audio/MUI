@@ -170,6 +170,50 @@ let frame = ui
 assert!(frame.scene.surface("Drive").is_some());
 ```
 
+### The same tree at 240x600 and at 2000x300
+
+A plugin window gets dragged to shapes nobody designed for. Reflow is three
+declarations and no breakpoint: `clamp(min, pct, max)` is a length with two
+stops, `.min_col(px)` makes a grid's declared column count a ceiling it drops
+from, and `.wrap()` breaks a line.
+
+```rust
+use mui::prelude::*;
+
+let editor = || {
+    col![
+        row![title("Kurv"), spacer(), caption("v1.0")].baseline(),
+        // Three tabs, fluid between 64 and 120 px, wrapping when they run out.
+        row(["Osc", "Filter", "Env"].map(|n| {
+            row![caption(n)].w(clamp(64.0, 18.0, 120.0)).pad_xy(0.0, 8.0)
+        }))
+        .gap(S)
+        .wrap(),
+        // Four knobs, as many across as fit at 120 px a column.
+        grid(4, ["a", "b", "c", "d"].map(|k| leaf(40.0, 40.0).id(k)))
+            .gap(S)
+            .min_col(120.0),
+    ]
+    .gap(M)
+    .pad(M)
+    .w(pct(100.0))
+    .h(pct(100.0))
+};
+
+let stacked = |w: f64, h: f64| {
+    let spec = SceneSpec::new(editor()).offered(Size::new(w, h));
+    let scene = resolve_scene(&spec).unwrap();
+    let y = |k: &str| scene.surface(k).unwrap().frame.y;
+    y("a") != y("b")
+};
+// One column in a thin window, four in a wide one. Same tree.
+assert_eq!((stacked(240.0, 600.0), stacked(2000.0, 300.0)), (true, false));
+```
+
+The gallery's **Responsive editor** scene is this tree with knobs on it, and
+`scenes::tests` resolves it at 240x600, 800x500 and 2000x300 asserting that
+no child ever leaves its parent.
+
 ## Motion
 
 Nothing is keyframed. `.animate()` puts a spring on a node's own visual
@@ -309,8 +353,10 @@ thirty frames.
 winit's wheel, keys and modifiers ride into `Input` with the last pointer
 sample of each batch, so `Ui::scroll`, `Ui::focus` and `text_input` work in
 the window: the Scroll, Text, Tooltip, Canvas, Drag, Image, Wrap, Motion,
-Grid and Select scenes are there to prove it -- one per thing the library
-claims to do. `Frame.cursor` is applied with `window.set_cursor`; `Frame.tip` is
+Grid, Select and Responsive editor scenes are there to prove it -- one per
+thing the library claims to do. Drag the window narrow and the last one
+reflows: it is `pct(100)` of the stage, so it is measured against whatever
+the host gives it. `Frame.cursor` is applied with `window.set_cursor`; `Frame.tip` is
 not, because the tooltip is already floated into the scene. Printable
 characters go to `Input.text` only -- `Key::Char` is emitted just for
 ctrl/cmd shortcuts, or `text_input` would insert every character twice.
@@ -334,6 +380,14 @@ no GPU, no window. With `--features cpu`, `mui-vello` renders through
 cpu-threads` rasterises on a rayon pool instead of one core; it is off by
 default because a snapshot-sized pixmap loses more to thread hand-off than
 it gains (BENCHMARKS.md measures both).
+
+```bash
+cargo run -p mui-core --release --example stress
+```
+
+resolves a ~1000-node tree at three window shapes and counts the allocations
+each resolve makes. It lives in `examples` because it installs a counting
+global allocator, which the library itself forbids.
 
 ## Verify
 

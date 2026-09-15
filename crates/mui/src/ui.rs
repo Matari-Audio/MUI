@@ -281,10 +281,9 @@ impl Ui {
             return;
         };
         let stops: Vec<String> = scene
-            .keys
-            .iter()
-            .filter(|k| scene.surface(k).is_some_and(|s| s.focusable))
-            .map(|k| k.to_string())
+            .surfaces()
+            .filter(|s| s.focusable)
+            .map(|s| s.key.to_string())
             .collect();
         if stops.is_empty() {
             return;
@@ -473,10 +472,8 @@ impl Ui {
         // Named nodes are the gesture targets, in z-order. Unnamed ones are
         // decoration. A target clipped away does not respond.
         let mut hit = Hit::default();
-        for k in scene.keys.iter().filter(|k| !k.starts_with('/')) {
-            if let Some(s) = scene.surface(k) {
-                hit.push_clipped(k.to_string(), &s.path, s.clip)?;
-            }
+        for s in scene.surfaces().filter(|s| !s.key.starts_with('/')) {
+            hit.push_clipped(s.key.to_string(), &s.path, s.clip)?;
         }
         self.hit = hit;
         self.wheel(&scene, input.wheel);
@@ -514,8 +511,7 @@ impl Ui {
             return;
         }
         let Some(p) = self.pointer.pos else { return };
-        for k in scene.keys.iter().rev() {
-            let Some(s) = scene.surface(k) else { continue };
+        for s in scene.surfaces().rev() {
             let f = s.frame;
             if p.x < f.x || p.x > f.right() || p.y < f.y || p.y > f.bottom() {
                 continue;
@@ -529,7 +525,7 @@ impl Ui {
             if max[0] <= 0.0 && max[1] <= 0.0 {
                 continue;
             }
-            let at = self.scrolls.entry(k.to_string()).or_insert([0.0, 0.0]);
+            let at = self.scrolls.entry(s.key.to_string()).or_insert([0.0, 0.0]);
             at[0] = (at[0] + wheel.x).clamp(0.0, max[0]);
             at[1] = (at[1] + wheel.y).clamp(0.0, max[1]);
             return;

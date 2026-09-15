@@ -132,10 +132,8 @@ fn node(s: &ResolvedSurface, sem: Option<&Semantics>) -> Node {
 /// scene exposes a surface's ancestors.
 pub fn tree_update(scene: &ResolvedScene, sem: &Access, focus: Option<&str>) -> TreeUpdate {
     let named: Vec<&ResolvedSurface> = scene
-        .keys
-        .iter()
-        .filter(|k| !k.starts_with('/'))
-        .filter_map(|k| scene.surface(k))
+        .surfaces()
+        .filter(|s| !s.key.starts_with('/'))
         .collect();
 
     let mut nodes: Vec<(NodeId, Node)> = named

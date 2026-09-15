@@ -164,9 +164,7 @@ pub struct ResolvedSurface {
 pub struct ResolvedScene {
     pub layout: Layout,
     pub paint: Vec<Painted>,
-    /// Every surface key in tree order, which is also z-order.
-    pub keys: Vec<Arc<str>>,
-    /// In paint order, like `keys`.
+    /// Every surface in paint order, which is also z-order.
     surfaces: Vec<ResolvedSurface>,
     at: HashMap<Arc<str>, usize>,
 }
@@ -174,8 +172,9 @@ impl ResolvedScene {
     pub fn surface(&self, key: &str) -> Option<&ResolvedSurface> {
         self.at.get(key).map(|&i| &self.surfaces[i])
     }
-    /// Every surface in paint order.
-    pub fn surfaces(&self) -> impl Iterator<Item = &ResolvedSurface> {
+    /// Every surface in paint order, which is also z-order. A key is
+    /// `ResolvedSurface::key`, so nothing has to look one up to walk them.
+    pub fn surfaces(&self) -> impl DoubleEndedIterator<Item = &ResolvedSurface> {
         self.surfaces.iter()
     }
 }
@@ -373,7 +372,6 @@ struct Walk<'a> {
     i: usize,
     key: Arc<str>,
     paint: Vec<Painted>,
-    keys: Vec<Arc<str>>,
     surfaces: Vec<ResolvedSurface>,
     at: HashMap<Arc<str>, usize>,
     deferred: Vec<Deferred<'a>>,
@@ -642,7 +640,6 @@ impl<'a> Walk<'a> {
                 (bottom - frame.y + scrolled[1] + pad.bottom - pad.top).max(0.0),
             );
         }
-        self.keys.push(key.clone());
         self.at.insert(key.clone(), self.surfaces.len());
         self.surfaces.push(ResolvedSurface {
             key: key.clone(),
@@ -861,7 +858,6 @@ pub fn resolve_scene_with(
         i: 0,
         key: Arc::from(""),
         paint: Vec::new(),
-        keys: Vec::new(),
         surfaces: Vec::with_capacity(nodes),
         at: HashMap::with_capacity(nodes),
         deferred: Vec::new(),
@@ -890,11 +886,10 @@ pub fn resolve_scene_with(
         w.node(node, &mut path, under, cursor, None)?;
         k += 1;
     }
-    let (paint, keys, surfaces, at) = (w.paint, w.keys, w.surfaces, w.at);
+    let (paint, surfaces, at) = (w.paint, w.surfaces, w.at);
     Ok(ResolvedScene {
         layout,
         paint,
-        keys,
         surfaces,
         at,
     })
@@ -1084,7 +1079,7 @@ mod feature_tests {
         assert_eq!(s.surface("a").unwrap().clip, Some(list.bounds.unwrap()));
         assert_eq!(s.surface("a").unwrap().cursor, Some(Cursor::Hand));
         assert_eq!(s.layout.frame("a").unwrap().y, -25.);
-        assert_eq!(s.keys.last().map(|k| &**k), Some("tip"));
+        assert_eq!(s.surfaces().last().map(|s| &*s.key), Some("tip"));
     }
 
     fn font() -> Arc<[u8]> {

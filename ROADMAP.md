@@ -62,6 +62,23 @@ public function and a test behind it.
       and an image too big for an atlas tile falls back to a solid.
 - [x] Preview: an F12 inspector, `MUI_PREVIEW_THEME` hot reload, a frame-cost
       title bar, and a scene per feature above.
+- [x] Responsive without breakpoints: `clamp(min, pct, max)` lengths,
+      `.min_col(px)` auto-fit grids, a grid cell clamped to its track, a float
+      pulled back inside the box it floats in, `SpaceBetween` on one child as
+      `flex-start`, and `Error::InsufficientSpace` carrying the tree's floor
+      so a host can scale by `offered / needs`. The preview's Responsive
+      editor is the same tree at 240x600, 800x500 and 2000x300.
+- [x] A squeezed wrapping row raises `InsufficientSpace` instead of painting
+      over its neighbour: `arrange` sums the lines it just broke.
+- [x] Device-grid paint: `SceneSpec::scale` / `Ui::scale` snap every edge,
+      clip and baseline through one `bounds` and one `snap`, so abutting
+      fills have no seam and a hinted paragraph has even leading.
+- [x] Per-line baselines (a `.baseline()` row taller than its text keeps its
+      letters in their frames), a wrapped paragraph reporting its column
+      rather than its longest line, and a stroke painted inside its frame.
+- [x] A gradient shadow keeps its paint instead of going black; a tooltip
+      lands where it was measured under a padded root; a long `text_input`
+      value scrolls under a clip instead of wrapping.
 
 ## Missing
 
@@ -76,7 +93,21 @@ public function and a test behind it.
       0.33 matches the preview's winit 0.30, so the preview is the first host.
 - [ ] `vello_hybrid` against classic `vello`, re-measured on Windows — the
       hybrid choice was made on Linux numbers only.
-- [ ] Blurred shadows on welded shapes (still drawn sharp) and blend modes.
+- [ ] Blurred shadows on welded shapes: the sharp fallback read as a second
+      misaligned panel, so it is now dropped rather than drawn. A blur filter
+      layer is the fix. Blend modes too.
+- [ ] `.min_col` against a width nobody offered: a grid that hugs, or one
+      whose width is a flex share, keeps its declared column count, because
+      the share is not dealt until `arrange`. Same fix as the wrap item
+      below -- the flex pass re-measuring its items -- and until then a knob
+      bank goes where its width is definite.
+- [ ] The first frame of a freshly-populated over-long `text_input` shows the
+      head of the value: the widget has no inner width before its first
+      layout. It catches up on the next frame.
+- [ ] Node identity: `ResolvedScene::keys` is gone (`surfaces()` yields paint
+      order and every surface carries its key), but focus rings, scroll
+      offsets and `mui-access` still key on `String` paths, so renaming a
+      node silently resets its state.
 - [ ] Wrap in one pass everywhere: a paragraph squeezed by a flex row still
       needs a hint and a second solve, because the measurer only learns a
       column's or a grid cell's room. The flex pass re-measuring its items at

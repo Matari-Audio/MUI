@@ -39,7 +39,8 @@ El tree  (row! / col! / stack! / grid!, Styled fills, roles, shells, welds,
    v  ResolvedScene         paint: Vec<Painted>  (shadow, fill, shells, stroke,
    |                        text, draws, clip/unclip); floats are appended after
    |                        the root, so a tooltip or menu lands on top
-   |                        surfaces: key -> frame + path + clip + cursor + tip
+   |                        surfaces: frame + path + clip + cursor + tip, in
+   |                        paint order, with a key index beside them
    |
    +--> mui-input Hit       the same paths, pushed in paint order with their
    |                        clip rect, so nothing responds where nothing is drawn
@@ -62,6 +63,14 @@ El tree  (row! / col! / stack! / grid!, Styled fills, roles, shells, welds,
 Every outline, weld rect and clip comes from one `bounds(frame, scale)`, and
 every baseline from one `snap`, so `SceneSpec::device_scale` puts paint, hit
 paths and clips on the same device grid or none of them.
+
+Reflow is three declarations, not a breakpoint: `clamp(min, pct, max)` is a
+length with two stops, `.min_col(px)` makes a grid's declared column count a
+ceiling it drops from, and `.wrap()` breaks a line. They resolve in the same
+single pass as everything else, so a 240x600 window and a 2000x300 one are the
+same tree measured twice. A grid only auto-fits against a width it was
+offered: inside a flex item, along the main axis, the share is not dealt until
+`arrange` and the grid keeps its declared count.
 
 Layout answers **where content gets space**. Geometry answers **what shape
 gets painted**. Input answers **what the pointer and the keyboard mean**, and

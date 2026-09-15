@@ -310,7 +310,7 @@ fn main() {
             .expect("scene resolves");
         println!(
             "scene: {} surfaces, {} paint ops, {} glyph runs",
-            f.scene.keys.len(),
+            f.scene.surfaces().count(),
             f.scene.paint.len(),
             f.scene.paint.iter().filter(|p| p.text.is_some()).count()
         );

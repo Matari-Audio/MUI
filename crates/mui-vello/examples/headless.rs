@@ -54,7 +54,7 @@ fn main() {
         .expect("write png");
     println!(
         "wrote {out}: {} surfaces, {} paint ops",
-        resolved.keys.len(),
+        resolved.surfaces().count(),
         resolved.paint.len()
     );
 }
