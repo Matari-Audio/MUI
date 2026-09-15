@@ -172,6 +172,12 @@ pub trait Canvas {
     /// intermediate texture, and an unpopped clip is not a panic.
     fn push_clip(&mut self, p: &BezPath);
     fn pop_clip(&mut self);
+    /// Everything drawn until the matching [`Canvas::pop_layer`] composites
+    /// as one layer, through `blend` at `opacity`. Unlike a clip this costs
+    /// an intermediate target on the GPU, so it is worth one per subtree
+    /// that asks for it, not one per node.
+    fn push_layer(&mut self, blend: peniko::BlendMode, opacity: f32);
+    fn pop_layer(&mut self);
     /// Draw a hinted glyph run in the current paint, each glyph's `x`
     /// measured from the run's origin along the baseline.
     fn glyphs(&mut self, text: &mui_core::Text);
@@ -269,6 +275,13 @@ macro_rules! wrapper {
         }
         fn pop_clip(&mut self) {
             self.$inner.pop_clip_path()
+        }
+        fn push_layer(&mut self, blend: peniko::BlendMode, opacity: f32) {
+            self.$inner
+                .push_layer(None, Some(blend), Some(opacity), None, None)
+        }
+        fn pop_layer(&mut self) {
+            self.$inner.pop_layer()
         }
         fn glyphs(&mut self, text: &mui_core::Text) {
             self.$inner
@@ -473,8 +486,8 @@ pub fn brush(p: &Paint, bounds: Rect) -> PaintType {
 
 /// Draw every entry of the scene's paint list, in order, under `transform`.
 ///
-/// Shadows take Vello's analytic blurred rectangle when the outline is one;
-/// a blurred *welded* outline has no fast path and draws unblurred.
+/// Shadows take Vello's analytic blurred rectangle; a welded outline arrives
+/// as one such rect per welded child.
 ///
 /// Every path is converted afresh. [`paint_cached`] is the same walk with the
 /// conversion remembered between frames.
@@ -485,8 +498,7 @@ pub fn paint(
 ) -> Result<(), Error> {
     canvas.set_transform(transform);
     for p in &scene.paint {
-        if p.layer == Layer::Unclip {
-            canvas.pop_clip();
+        if layered(canvas, p) {
             continue;
         }
         one(canvas, p, &bez_path(&p.path, ARC_TOLERANCE)?)?;
@@ -583,6 +595,8 @@ fn fingerprint(p: &Painted) -> u64 {
         Layer::Draw(i) => (5, i),
         Layer::Clip => (6, 0),
         Layer::Unclip => (7, 0),
+        Layer::Blend { .. } => (8, 0),
+        Layer::Unblend => (9, 0),
     };
     eat(tag);
     eat(n as u64);
@@ -642,8 +656,7 @@ pub fn paint_cached(
     cache.frame += 1;
     let frame = cache.frame;
     for p in &scene.paint {
-        if p.layer == Layer::Unclip {
-            canvas.pop_clip();
+        if layered(canvas, p) {
             continue;
         }
         let bez = cache.bez(p)?;
@@ -667,6 +680,45 @@ fn paint_box(p: &Painted, path: &BezPath) -> Rect {
         t.origin.x + w,
         t.origin.y,
     )
+}
+
+/// The entries that carry no geometry: clip and layer bookkeeping. Handled
+/// before any path conversion, so the cache never fingerprints them.
+fn layered(canvas: &mut impl Canvas, p: &Painted) -> bool {
+    match p.layer {
+        Layer::Unclip => canvas.pop_clip(),
+        Layer::Blend { mix: m, opacity } => canvas.push_layer(
+            peniko::BlendMode::new(mix(m), peniko::Compose::SrcOver),
+            opacity,
+        ),
+        Layer::Unblend => canvas.pop_layer(),
+        _ => return false,
+    }
+    true
+}
+
+/// `mui-core` mirrors `peniko::Mix` rather than depend on it; this match is
+/// exhaustive, so a rename on either side fails the build.
+fn mix(m: mui_core::Mix) -> peniko::Mix {
+    use mui_core::Mix as M;
+    match m {
+        M::Normal => peniko::Mix::Normal,
+        M::Multiply => peniko::Mix::Multiply,
+        M::Screen => peniko::Mix::Screen,
+        M::Overlay => peniko::Mix::Overlay,
+        M::Darken => peniko::Mix::Darken,
+        M::Lighten => peniko::Mix::Lighten,
+        M::ColorDodge => peniko::Mix::ColorDodge,
+        M::ColorBurn => peniko::Mix::ColorBurn,
+        M::HardLight => peniko::Mix::HardLight,
+        M::SoftLight => peniko::Mix::SoftLight,
+        M::Difference => peniko::Mix::Difference,
+        M::Exclusion => peniko::Mix::Exclusion,
+        M::Hue => peniko::Mix::Hue,
+        M::Saturation => peniko::Mix::Saturation,
+        M::Color => peniko::Mix::Color,
+        M::Luminosity => peniko::Mix::Luminosity,
+    }
 }
 
 fn one(canvas: &mut impl Canvas, p: &Painted, path: &BezPath) -> Result<(), Error> {
@@ -726,9 +778,9 @@ fn one(canvas: &mut impl Canvas, p: &Painted, path: &BezPath) -> Result<(), Erro
                 p.blur as f32,
             );
         }
-        // ponytail: blur on a welded outline is dropped, because the sharp
-        // fallback reads as a second, misaligned panel; a blur filter layer
-        // is the upgrade if a merged shadow ever needs it.
+        // The walk emits a welded shadow as one blurred rect per child, so
+        // this only catches a rect-less blur built by hand: dropped, because
+        // the sharp fallback reads as a second, misaligned panel.
         (true, None, _) => {}
         (_, _, false) => canvas.fill_path(path),
         (_, _, true) => {
@@ -933,26 +985,49 @@ mod snapshot {
         assert!(below.a < 40, "the shadow went opaque black: {below:?}");
     }
 
-    /// A shadow on a welded outline is dropped rather than drawn sharp: a
-    /// hard silhouette offset by `dy` reads as a second panel.
+    /// A welded outline's shadow is the union of its children's blurs: soft
+    /// under the weld, falling off with distance, and nowhere near the
+    /// outline's own alpha -- which is what a sharp copy would have given.
     #[test]
-    fn a_welded_shadow_is_not_a_sharp_copy() {
+    fn a_welded_shadow_blurs() {
         let root = row([leaf(20., 20.).id("a"), leaf(20., 40.).id("b")])
             .weld(Role::Surface)
             .shadow(Shadow::soft(12.))
             .id("weld");
         let spec = SceneSpec::new(root).offered(Size::new(40., 40.));
-        let scene = resolve_scene(&spec).unwrap();
-        assert!(
-            scene.paint.iter().any(|p| p.blur > 0. && p.rect.is_none()),
-            "no welded shadow entry to drop"
-        );
         let pix = pixels(&spec, 60, 80);
-        // The outline's own fill ends at y=30 here; the sharp copy would be
-        // that silhouette again, offset by dy=6.
-        assert!(pix.data()[29 * 60 + 10].a > 0, "the outline itself is gone");
-        let under = pix.data()[32 * 60 + 10];
-        assert_eq!(under.a, 0, "the sharp copy still drew: {under:?}");
+        let a = |y: usize| pix.data()[y * 60 + 10].a;
+        assert!(a(29) > 0, "the outline itself is gone");
+        let (near, far) = (a(34), a(46));
+        assert!(near > 0, "the welded shadow is still dropped");
+        assert!(far < near, "it does not fall off: {near} then {far}");
+        assert!(near < a(29) / 2, "that is a sharp copy, not a blur: {near}");
+    }
+
+    /// A multiply layer darkens what is under it. The child is the same grey
+    /// as the ground, so painting it straight would leave the pixel alone:
+    /// only the blend can make it darker.
+    #[test]
+    fn a_multiply_layer_darkens_what_is_under_it() {
+        let grey = Color::oklcha(0.7, 0., 0., 1.);
+        let root = overlay([
+            leaf(40., 40.).fill(grey).radius(0.).id("ground"),
+            leaf(20., 20.)
+                .fill(grey)
+                .radius(0.)
+                .blend(Mix::Multiply)
+                .id("dim"),
+        ])
+        .id("root");
+        let pix = pixels(&SceneSpec::new(root).offered(Size::new(40., 40.)), 40, 40);
+        let at = |x: usize, y: usize| pix.data()[y * 40 + x];
+        let (ground, inside) = (at(2, 2), at(20, 20));
+        assert!(ground.r > 100, "no ground to darken: {ground:?}");
+        assert!(
+            inside.r < ground.r - 20,
+            "the same grey did not multiply: {inside:?} vs {ground:?}"
+        );
+        assert_eq!(at(38, 38), ground, "the layer leaked outside its node");
     }
 
     /// A 2x2 image stretched over a leaf: each source pixel owns a quadrant,

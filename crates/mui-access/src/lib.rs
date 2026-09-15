@@ -1,77 +1,34 @@
 //! A [`ResolvedScene`] becomes an AccessKit tree.
 //!
 //! The scene knows where every named surface is and whether it takes focus;
-//! it does not know that one of them is a slider. So semantics are supplied
-//! by the caller — a host or a widget registers what it built:
+//! it does not know that one of them is a slider. So a node says what it is
+//! with `.role(..)` and `.label(..)`, and the surface carries it here:
 //!
 //! ```
-//! use mui_access::{Access, Kind, Semantics, tree_update};
+//! use mui_access::tree_update;
 //! use mui_core::prelude::*;
 //!
-//! let scene = resolve_scene(&SceneSpec::new(leaf(40., 20.).id("ok").focusable())).unwrap();
-//! let sem = Access::new().with("ok", Semantics::new(Kind::Button).label("OK"));
-//! let update = tree_update(&scene, &sem, Some("ok"));
+//! let ok = leaf(40., 20.).role(Kind::Button).label("OK").id("ok").focusable();
+//! let scene = resolve_scene(&SceneSpec::new(ok)).unwrap();
+//! let update = tree_update(&scene, Some("ok"));
 //! assert_eq!(update.nodes.len(), 2); // window + button
 //! ```
 //!
 //! Host side: on winit, keep an `accesskit_winit::Adapter` and build the
 //! update lazily, so a frame costs nothing when no screen reader listens —
-//! `adapter.update_if_active(|| tree_update(&scene, &sem, focus))`. A plugin
+//! `adapter.update_if_active(|| tree_update(&scene, focus))`. A plugin
 //! with no window of its own hands the same `TreeUpdate` to whatever wrapper
 //! owns the host's platform adapter.
 #![forbid(unsafe_code)]
 
-use std::collections::HashMap;
+pub use accesskit;
 
 use accesskit::{Action, Node, NodeId, Rect, Role, Tree, TreeId, TreeUpdate};
+pub use mui_core::{Kind, Semantics};
 use mui_core::{ResolvedScene, ResolvedSurface};
 
-/// What a surface means, beyond where it is.
-#[derive(Clone, Debug, PartialEq)]
-pub enum Kind {
-    Button,
-    Slider { value: f64, min: f64, max: f64 },
-    Toggle { on: bool },
-    TextInput { value: String },
-    Label,
-    Group,
-    Scroll,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct Semantics {
-    pub role: Kind,
-    pub label: Option<String>,
-}
-impl Semantics {
-    pub fn new(role: Kind) -> Self {
-        Self { role, label: None }
-    }
-    pub fn label(mut self, label: impl Into<String>) -> Self {
-        self.label = Some(label.into());
-        self
-    }
-}
-
-/// Semantics by surface id. A surface with no entry is a group labelled by
-/// its own id.
-#[derive(Clone, Debug, Default)]
-pub struct Access(HashMap<String, Semantics>);
-impl Access {
-    pub fn new() -> Self {
-        Self::default()
-    }
-    pub fn with(mut self, id: impl Into<String>, sem: Semantics) -> Self {
-        self.0.insert(id.into(), sem);
-        self
-    }
-    pub fn get(&self, id: &str) -> Option<&Semantics> {
-        self.0.get(id)
-    }
-}
-
 /// FNV-1a: a node id that is the same on every frame for the same surface id.
-fn id_of(key: &str) -> NodeId {
+pub fn node_id(key: &str) -> NodeId {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for b in key.as_bytes() {
         h ^= *b as u64;
@@ -130,7 +87,7 @@ fn node(s: &ResolvedSurface, sem: Option<&Semantics>) -> Node {
 /// ponytail: containment nesting — the nearest preceding surface whose frame
 /// encloses this one is its parent. Replace with real tree paths when the
 /// scene exposes a surface's ancestors.
-pub fn tree_update(scene: &ResolvedScene, sem: &Access, focus: Option<&str>) -> TreeUpdate {
+pub fn tree_update(scene: &ResolvedScene, focus: Option<&str>) -> TreeUpdate {
     let named: Vec<&ResolvedSurface> = scene
         .surfaces()
         .filter(|s| !s.key.starts_with('/'))
@@ -138,15 +95,15 @@ pub fn tree_update(scene: &ResolvedScene, sem: &Access, focus: Option<&str>) -> 
 
     let mut nodes: Vec<(NodeId, Node)> = named
         .iter()
-        .map(|s| (id_of(&s.key), node(s, sem.get(&s.key))))
+        .map(|s| (node_id(&s.key), node(s, s.semantics.as_ref())))
         .collect();
 
     let mut root_kids = Vec::new();
     for (i, s) in named.iter().enumerate() {
         let parent = named[..i].iter().rposition(|p| contains(p, s));
         match parent {
-            Some(p) => nodes[p].1.push_child(id_of(&s.key)),
-            None => root_kids.push(id_of(&s.key)),
+            Some(p) => nodes[p].1.push_child(node_id(&s.key)),
+            None => root_kids.push(node_id(&s.key)),
         }
     }
 
@@ -160,7 +117,7 @@ pub fn tree_update(scene: &ResolvedScene, sem: &Access, focus: Option<&str>) -> 
         tree_id: TreeId::ROOT,
         focus: focus
             .filter(|k| scene.surface(k).is_some())
-            .map(id_of)
+            .map(node_id)
             .unwrap_or(WINDOW),
     }
 }
@@ -177,20 +134,19 @@ mod tests {
             row![leaf(30., 10.).id("b")].id("r"),
         ];
         let scene = resolve_scene(&SceneSpec::new(root)).unwrap();
-        let sem = Access::new();
-        let u = tree_update(&scene, &sem, Some("a"));
+        let u = tree_update(&scene, Some("a"));
         let by = |k: &str| {
             u.nodes
                 .iter()
-                .find(|(id, _)| *id == id_of(k))
+                .find(|(id, _)| *id == node_id(k))
                 .map(|(_, n)| n)
                 .unwrap()
         };
-        assert_eq!(by("r").children(), [id_of("b")]);
+        assert_eq!(by("r").children(), [node_id("b")]);
         assert!(by("b").children().is_empty());
         assert!(by("a").supports_action(Action::Focus));
-        assert_eq!(u.focus, id_of("a"));
+        assert_eq!(u.focus, node_id("a"));
         assert_eq!(by("a").label().unwrap(), "a");
-        assert_eq!(tree_update(&scene, &sem, None).nodes[0].0, u.nodes[0].0);
+        assert_eq!(tree_update(&scene, None).nodes[0].0, u.nodes[0].0);
     }
 }

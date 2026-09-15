@@ -10,7 +10,7 @@
 //! assert_eq!(card.children().len(), 2);
 //! ```
 use crate::motion::Spring;
-use crate::style::{Cursor, Fill, Radius, Shadow, Stroke, Style};
+use crate::style::{Cursor, Fill, Mix, Radius, Shadow, Stroke, Style};
 use mui_geometry::Path;
 use mui_layout::{Node, Size, Spacing};
 use std::sync::Arc;
@@ -62,6 +62,31 @@ pub enum Content {
     Canvas(Canvas),
 }
 
+/// What a surface means to a screen reader, beyond where it is.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Kind {
+    Button,
+    Slider { value: f64, min: f64, max: f64 },
+    Toggle { on: bool },
+    TextInput { value: String },
+    Label,
+    Group,
+    Scroll,
+}
+
+/// A role and the name read out with it. A node with none is a group named
+/// by its own id.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Semantics {
+    pub role: Kind,
+    pub label: Option<String>,
+}
+impl Semantics {
+    pub fn new(role: Kind) -> Self {
+        Self { role, label: None }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Element {
     pub style: Style,
@@ -76,6 +101,8 @@ pub struct Element {
     pub baseline: bool,
     /// Cap a wrapped label at this many lines. See [`Styled::lines`].
     pub lines: Option<usize>,
+    /// What this node means: the role and name mui-access reports.
+    pub semantics: Option<Semantics>,
     /// The spring this node's paint chases when its declared style changes.
     /// Only meaningful on a node with an id: the runtime has nothing to
     /// compare an anonymous node against. See [`Styled::transition`].
@@ -187,6 +214,27 @@ pub trait Styled: Sized {
         self.style_mut().shells.push((d.into(), f.into()));
         self
     }
+    /// Composite this node's whole subtree through `m`.
+    ///
+    /// Keeps whatever opacity was set; see [`Styled::opacity`].
+    fn blend(mut self, m: Mix) -> Self {
+        let l = self.style_mut().layer.get_or_insert((Mix::Normal, 1.0));
+        l.0 = m;
+        self
+    }
+    /// Composite this node's whole subtree at `o` alpha, keeping whatever
+    /// blend mode was set.
+    ///
+    /// ```
+    /// use mui_core::prelude::*;
+    /// let mut el = leaf(10., 10.).blend(Mix::Multiply).opacity(0.5);
+    /// assert_eq!(el.style_mut().layer, Some((Mix::Multiply, 0.5)));
+    /// ```
+    fn opacity(mut self, o: f32) -> Self {
+        let l = self.style_mut().layer.get_or_insert((Mix::Normal, 1.0));
+        l.1 = o;
+        self
+    }
     /// Paint the union of the children's frames as one filleted shape.
     fn weld(mut self, f: impl Into<Fill>) -> Self {
         let s = self.style_mut();
@@ -211,6 +259,25 @@ pub trait Styled: Sized {
     }
     fn tip(mut self, s: impl Into<String>) -> Self {
         self.element_mut().tip = Some(s.into());
+        self
+    }
+    /// What this node is, for accessibility: `.role(Kind::Button)`. Only a
+    /// node with an id becomes a surface, so only one is ever reported.
+    fn role(mut self, k: Kind) -> Self {
+        let e = self.element_mut();
+        match &mut e.semantics {
+            Some(s) => s.role = k,
+            none => *none = Some(Semantics::new(k)),
+        }
+        self
+    }
+    /// The name read out with the role; the id otherwise.
+    fn label(mut self, name: impl Into<String>) -> Self {
+        let e = self.element_mut();
+        let s = e
+            .semantics
+            .get_or_insert_with(|| Semantics::new(Kind::Group));
+        s.label = Some(name.into());
         self
     }
     fn focusable(mut self) -> Self {

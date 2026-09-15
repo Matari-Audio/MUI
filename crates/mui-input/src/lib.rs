@@ -140,6 +140,24 @@ pub struct KeyPress {
     pub mods: Mods,
 }
 
+/// What the platform's input method reported. Mirrors winit's `Ime`: a
+/// preedit is the text being composed and is *not* part of the field's value;
+/// only `Commit` inserts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Ime {
+    Enabled,
+    /// The composing text and, in bytes into it, the cursor range the IME
+    /// wants shown. `None` hides the cursor; an empty string clears. The
+    /// range comes straight off the platform: it is not trusted to fall on
+    /// char boundaries, and whoever consumes it must check.
+    Preedit {
+        text: String,
+        cursor: Option<(usize, usize)>,
+    },
+    Commit(String),
+    Disabled,
+}
+
 /// One frame of everything the host saw: pointer, wheel, keys, and the text
 /// the platform's input method produced. `PointerInput` converts into one, so
 /// a caller with no keyboard passes the pointer alone.
@@ -156,6 +174,8 @@ pub struct Input {
     /// frame. `None` otherwise: nothing here reads the clipboard speculatively,
     /// and a field must not paste stale bytes it was handed last frame.
     pub clipboard: Option<String>,
+    /// Input-method events since the last frame, in order.
+    pub ime: Vec<Ime>,
 }
 impl From<PointerInput> for Input {
     fn from(pointer: PointerInput) -> Self {

@@ -20,7 +20,8 @@ Input (pointer, wheel, keys, text)
 El tree  (row! / col! / stack! / grid!, Styled fills, roles, shells, welds,
    |      canvas draws, .scroll() / .clip() / .float())
    |
-   v  mui-layout            intrinsic flex solve, frames in tree order
+   v  mui-layout            intrinsic flex solve, frames in tree order; a
+   |                        squeezed item is re-measured at its dealt share
    |
    v  mui-core walk         per node, in z-order:
    |     plain  -> RoundedRect(frame, radius)
@@ -30,6 +31,8 @@ El tree  (row! / col! / stack! / grid!, Styled fills, roles, shells, welds,
    |               wrapped to the room its parent has, one Painted a line
    |     canvas -> the closure's own paths, in the node's space
    |     clip   -> Clip(outline) ... children ... Unclip
+   |     blend  -> Blend(mix, opacity) ... subtree ... Unblend, outside the clip
+   |     weld   -> the shadow is one blurred rect per welded child
    |     roles  -> Palette                            ink resolves on its ground
    |     image  -> Fill::Image                        straight RGBA, fitted to
    |                                                  the node's own outline
@@ -39,18 +42,20 @@ El tree  (row! / col! / stack! / grid!, Styled fills, roles, shells, welds,
    v  ResolvedScene         paint: Vec<Painted>  (shadow, fill, shells, stroke,
    |                        text, draws, clip/unclip); floats are appended after
    |                        the root, so a tooltip or menu lands on top
-   |                        surfaces: frame + path + clip + cursor + tip, in
-   |                        paint order, with a key index beside them
+   |                        surfaces: frame + path + clip + cursor + tip +
+   |                        semantics, in paint order, with their keys
    |
    +--> mui-input Hit       the same paths, pushed in paint order with their
    |                        clip rect, so nothing responds where nothing is drawn
    |
-   +--> mui-access          the same surfaces plus a Semantics map as an
-   |                        accesskit::TreeUpdate, for the host's adapter
+   +--> mui-access          the same surfaces, each with the role and label it
+   |                        declared, as an accesskit::TreeUpdate for the
+   |                        host's adapter
    |
    v  mui-vello paint       Canvas: Gpu { scene, resources } over vello_hybrid,
                             Cpu { ctx, resources } over vello_cpu.
-                            Fill / stroke / blurred rect / push_clip / pop_clip,
+                            Fill / stroke / blurred rect / push_clip / pop_clip
+                            / push_layer / pop_layer (blend mode + opacity),
                             and text as a hinted glyph run (a font blob is
                             interned by Arc pointer, so Vello's hinted-outline
                             cache survives the frame). paint_cached
@@ -68,9 +73,11 @@ Reflow is three declarations, not a breakpoint: `clamp(min, pct, max)` is a
 length with two stops, `.min_col(px)` makes a grid's declared column count a
 ceiling it drops from, and `.wrap()` breaks a line. They resolve in the same
 single pass as everything else, so a 240x600 window and a 2000x300 one are the
-same tree measured twice. A grid only auto-fits against a width it was
-offered: inside a flex item, along the main axis, the share is not dealt until
-`arrange` and the grid keeps its declared count.
+same tree measured twice. A grid, or a paragraph, only fits against a width it
+was offered -- but a flex share counts as one: a row deals its shares inside
+the measure pass and measures a squeezed item again at the size it got, so
+height-for-width resolves in the one solve. Only a hugging container, offered
+no width at all, has nothing to fit against.
 
 Layout answers **where content gets space**. Geometry answers **what shape
 gets painted**. Input answers **what the pointer and the keyboard mean**, and

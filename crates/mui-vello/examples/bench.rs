@@ -676,6 +676,19 @@ mod classic {
         fn pop_clip(&mut self) {
             self.scene.pop_layer();
         }
+        fn push_layer(&mut self, blend: mui_vello::peniko::BlendMode, opacity: f32) {
+            // Classic has no unbounded layer, so the clip is the whole canvas.
+            self.scene.push_layer(
+                Fill::NonZero,
+                blend,
+                opacity,
+                self.transform,
+                &Rect::new(-1e6, -1e6, 1e6, 1e6),
+            );
+        }
+        fn pop_layer(&mut self) {
+            self.scene.pop_layer();
+        }
         // ponytail: one font per process, because `Blob::new` mints a fresh id
         // per call and classic's glyph cache keys on it. The library keeps a
         // real map; this bench only ever draws one font.

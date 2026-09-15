@@ -778,6 +778,9 @@ struct Measured<'a, P> {
     /// The children's extent inside the padding, before any definite size
     /// overrides it: what a scroll node lays its children into.
     content: Size,
+    /// This subtree's measured size can still change if its main extent does:
+    /// a content leaf that wraps, or a `min_col` grid with no width yet.
+    fluid: bool,
     /// A grid's resolved column count, after `min_col`; 0 for anything else.
     /// Measured once so arrange cannot re-derive a different one.
     cols: usize,
@@ -959,6 +962,9 @@ struct Pass<'a, 'f, P> {
     limits: Limits,
     scale: SpacingScale,
     keys: BTreeMap<&'a str, ()>,
+    /// Inside a re-measure: ids are already checked and the subtree is being
+    /// measured a second time at its final main size.
+    redo: bool,
     measurer: &'f mut dyn FnMut(&P, Option<f64>) -> Size,
 }
 
@@ -984,7 +990,7 @@ fn measure<'a, P>(
     if !(gap.is_finite() && (0.0..=l.extent).contains(&gap) && padding.valid(l.extent)) {
         return Err(Error::InvalidValue);
     }
-    if let Some(id) = node.id.as_deref() {
+    if let Some(id) = node.id.as_deref().filter(|_| !pass.redo) {
         if pass.keys.insert(id, ()).is_some() {
             return Err(Error::DuplicateKey(id.to_string()));
         }
@@ -1015,11 +1021,10 @@ fn measure<'a, P>(
     // column's worth of room: `min_col` makes the declared count a ceiling and
     // drops columns until each one clears it. Everything downstream reads
     // `Measured::cols`.
-    // ponytail: a grid with no offered width keeps its declared count -- a
-    // hugging one, or one whose width is a flex share, since the share is not
-    // dealt until arrange. Put a knob bank where its width is definite (the
-    // preview's Responsive editor does) until the flex pass re-measures its
-    // items, which is the same upgrade `wrap_hints` is waiting on.
+    // ponytail: a hugging grid, with no offered width at all, keeps its
+    // declared count. Put a knob bank where its width is definite (a flex
+    // share now counts: the flex pass re-measures its items) until a hugging
+    // grid learns a width to drop columns against.
     let cols = match node.kind {
         Kind::Grid { cols, .. } => match (node.min_col, inner[0]) {
             (Some(min), Some(w)) if min > 0.0 => {
@@ -1073,6 +1078,44 @@ fn measure<'a, P>(
         let mut m = measure(c, here, promise, child_room, depth + 1, pass)?;
         m.index = index;
         children.push(m);
+    }
+    // A flex item only learns its final main size once the row's surplus (or
+    // deficit) is dealt, so anything whose measured cross depends on its main
+    // -- a paragraph, a `min_col` grid -- is measured again at the share it
+    // actually got. Doing it here, inside the one measure pass, is what makes
+    // the row's own cross size right; a second solve outside cannot.
+    if let (
+        Kind::Branch {
+            vertical: false, ..
+        },
+        Some(avail),
+        false,
+    ) = (&node.kind, inner[0], node.wrap)
+    {
+        let shares: Vec<(usize, f64)> = {
+            let flow = flow_of(&children);
+            if flow.iter().any(|c| c.fluid) {
+                let inner = Size::new(avail, inner[1].unwrap_or(0.0));
+                let main = distribute(&flow, gap, false, inner);
+                flow.iter().map(|c| c.index).zip(main).collect()
+            } else {
+                Vec::new()
+            }
+        };
+        for (index, main) in shares {
+            let c = &node.children()[index];
+            let main = c.maximum.map_or(main, |m| main.min(m.width));
+            if !children[index].fluid || (children[index].size.width - main).abs() <= 0.5 {
+                continue;
+            }
+            let align = c.align_self.unwrap_or(node.align);
+            let cross = offer(c, true, inner[1], align == Align::Stretch);
+            let was = std::mem::replace(&mut pass.redo, true);
+            let m = measure(c, here, [Some(main), cross], Some(main), depth + 1, pass);
+            pass.redo = was;
+            children[index] = m?;
+            children[index].index = index;
+        }
     }
     let flow = flow_of(&children);
     let max_of =
@@ -1205,9 +1248,13 @@ fn measure<'a, P>(
             });
         }
     }
+    let fluid = matches!(node.kind, Kind::Content)
+        || (node.min_col.is_some() && inner[0].is_none() && matches!(node.kind, Kind::Grid { .. }))
+        || children.iter().any(|c| c.fluid && !c.node.float);
     Ok(Measured {
         node,
         index: 0,
+        fluid,
         gap,
         padding,
         size,
@@ -1507,10 +1554,11 @@ pub fn resolve<P>(root: &Node<P>, offered: Option<Size>, limits: Limits) -> Resu
 }
 
 /// [`resolve`] with a spacing scale for tokens and a measurer for
-/// `Node::content` leaves, called once per leaf with its payload and the
-/// room it has: the narrowest definite inner width above it, `None` under a
-/// hugging parent or inside a scroll. Text shaping lives outside this crate
-/// on purpose.
+/// `Node::content` leaves, called with its payload and the room it has: the
+/// narrowest definite inner width above it, `None` under a hugging parent or
+/// inside a scroll. A leaf in a squeezed, non-wrapping row is measured a
+/// second time at the main size the row deals it; that last call is the
+/// authoritative one. Text shaping lives outside this crate on purpose.
 pub fn resolve_with<P>(
     root: &Node<P>,
     offered: Option<Size>,
@@ -1532,6 +1580,7 @@ pub fn resolve_with<P>(
         limits,
         scale,
         keys: BTreeMap::new(),
+        redo: false,
         measurer: &mut measurer,
     };
     let m = measure(root, "root", definite, None, 0, &mut pass)?;
@@ -1548,6 +1597,8 @@ pub fn resolve_with<P>(
             needs: m.floor,
         });
     }
+    // An upper bound, not a node count: a re-measured item spends budget
+    // twice and produces one frame.
     let mut out = (
         BTreeMap::new(),
         Vec::with_capacity(limits.nodes - pass.left),

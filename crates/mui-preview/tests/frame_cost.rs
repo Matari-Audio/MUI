@@ -29,6 +29,8 @@ impl mui::vello::Canvas for Sink {
     fn fill_blurred_rounded_rect(&mut self, _: &mui::vello::kurbo::Rect, _: f32, _: f32) {}
     fn push_clip(&mut self, _: &mui::vello::kurbo::BezPath) {}
     fn pop_clip(&mut self) {}
+    fn push_layer(&mut self, _: mui::vello::peniko::BlendMode, _: f32) {}
+    fn pop_layer(&mut self) {}
     fn glyphs(&mut self, _: &mui::core::Text) {}
 }
 

@@ -8,7 +8,7 @@ use mui_core::{
     SceneSpec, Size, Spacing, Spring, TextCache, Theme,
 };
 use mui_geometry::Point;
-use mui_input::{Hit, Input, Interaction, Key, KeyPress, PointerInput, Response};
+use mui_input::{Hit, Ime, Input, Interaction, Key, KeyPress, PointerInput, Response};
 use mui_layout::SpacingToken::S;
 
 /// How long the pointer must rest on a surface before its tip is due.
@@ -32,6 +32,10 @@ pub struct Frame<'a> {
     pub edits: Vec<(String, Edit)>,
     /// A copy or cut asked for this: put it on the host's clipboard.
     pub clipboard: Option<String>,
+    /// The caret of the field that wants an input method, in scene units.
+    /// `Some` means "allow IME and put the candidate window here"; `None`
+    /// means no field is composing-capable, so switch IME off.
+    pub ime: Option<(Point, Size)>,
 }
 
 /// A parameter gesture's two edges. A slider or knob drag is one `Begin`, a
@@ -71,6 +75,12 @@ pub struct Ui {
     /// cut asked to put back on it.
     pasted: Option<String>,
     copied: Option<String>,
+    /// The text the input method is composing, and its cursor in bytes. It
+    /// belongs to whatever holds the focus; only a `Commit` touches a value.
+    preedit: Option<(String, Option<(usize, usize)>)>,
+    /// What a field asked for as its caret area this frame: its id and the
+    /// caret rect in the field's own space.
+    ime_caret: Option<(String, Point, f64)>,
     /// A press that landed on the same target within [`DOUBLE_CLICK`].
     double: Option<String>,
     last_press: Option<(String, f64)>,
@@ -105,6 +115,8 @@ impl Ui {
             sel: BTreeMap::new(),
             pasted: None,
             copied: None,
+            preedit: None,
+            ime_caret: None,
             double: None,
             last_press: None,
             focus: None,
@@ -134,6 +146,7 @@ impl Ui {
     /// gesture began must be told it ended.
     pub fn cancel(&mut self) {
         self.cancelled = self.interaction.held().map(str::to_owned);
+        self.preedit = None;
         self.interaction.cancel();
     }
 
@@ -188,6 +201,10 @@ impl Ui {
             .get(id)
             .map_or((0.0, 0.0), |[h, p]| (h.value, p.value))
     }
+    /// The id that holds the keyboard focus, for a host reporting it.
+    pub fn focus_key(&self) -> Option<&str> {
+        self.focus.as_deref()
+    }
     /// Whether `id` holds the keyboard focus.
     pub fn focused(&self, id: &str) -> bool {
         self.focus.as_deref() == Some(id)
@@ -195,6 +212,8 @@ impl Ui {
     /// Focus `id` from code. No check that it exists: it may not have been
     /// built yet.
     pub fn focus(&mut self, id: impl Into<String>) {
+        // A composition belongs to the field that started it.
+        self.preedit = None;
         self.focus = Some(id.into());
     }
     /// The keys this frame, if `id` is focused. Empty otherwise, so a widget
@@ -242,6 +261,17 @@ impl Ui {
     /// Whether the last press on `id` was the second of a double click.
     pub(crate) fn double_click(&self, id: &str) -> bool {
         self.double.as_deref() == Some(id)
+    }
+    /// The text the input method is composing, for the focused field to
+    /// paint. It is never part of a value.
+    pub fn preedit(&self) -> Option<(&str, Option<(usize, usize)>)> {
+        self.preedit.as_ref().map(|(t, c)| (t.as_str(), *c))
+    }
+    /// Tell the host where this field's caret is, in the field's own space,
+    /// so the IME candidate window lands under it. Comes back on
+    /// [`Frame::ime`].
+    pub fn set_ime_caret(&mut self, id: &str, at: Point, height: f64) {
+        self.ime_caret = Some((id.to_owned(), at, height));
     }
     /// Ask the host to put `s` on the clipboard: it comes back on the next
     /// frame's [`Frame::clipboard`].
@@ -409,6 +439,27 @@ impl Ui {
         }
         self.keys = input.keys;
         self.typed = input.text;
+        for e in input.ime {
+            match e {
+                // A commit is typed text: it inserts at the caret and
+                // replaces the selection exactly as a keystroke would.
+                Ime::Commit(s) => {
+                    self.preedit = None;
+                    self.typed.push_str(&s);
+                }
+                Ime::Preedit { text, cursor } => {
+                    // The platform's byte range is checked here, at the edge,
+                    // rather than in every widget that slices by it.
+                    let cursor = cursor
+                        .filter(|(s, e)| text.is_char_boundary(*s) && text.is_char_boundary(*e));
+                    self.preedit = (!text.is_empty()).then_some((text, cursor));
+                }
+                Ime::Enabled | Ime::Disabled => self.preedit = None,
+            }
+        }
+        if self.focus.is_none() {
+            self.preedit = None;
+        }
 
         // A tip is due after the pointer has rested. Both the hover and the
         // surface come from last frame's scene, which is the one the pointer
@@ -489,6 +540,11 @@ impl Ui {
             c => c,
         };
 
+        // The caret area a field asked for, moved into the scene's space.
+        let ime = self.ime_caret.take().and_then(|(id, at, h)| {
+            let f = scene.surface(&id)?.frame;
+            Some((Point::new(f.x + at.x, f.y + at.y), Size::new(1.0, h)))
+        });
         self.delivered = std::mem::take(&mut self.edits);
         self.scene = Some(scene);
         Ok(Frame {
@@ -498,6 +554,7 @@ impl Ui {
             cursor,
             edits: self.delivered.clone(),
             clipboard: self.copied.take(),
+            ime,
         })
     }
 
@@ -729,6 +786,61 @@ mod tests {
         ui.frame(root, None, PointerInput::default(), 0.016)
             .unwrap();
         assert_eq!(value, "h");
+    }
+
+    #[test]
+    fn a_composition_paints_without_editing_the_value_and_the_commit_inserts() {
+        let mut ui = Ui::new(Theme::DEFAULT);
+        let mut value = "ab".to_owned();
+        let tree = |ui: &mut Ui, v: &mut String| crate::widgets::text_input(ui, "f", v);
+        let ime = |e: mui_input::Ime| Input {
+            ime: vec![e],
+            ..Input::default()
+        };
+        let root = tree(&mut ui, &mut value);
+        ui.frame(root, None, PointerInput::default(), 0.016)
+            .unwrap();
+        ui.focus("f");
+        ui.set_sel("f", 1, 1);
+
+        let root = tree(&mut ui, &mut value);
+        let f = ui
+            .frame(
+                root,
+                None,
+                ime(mui_input::Ime::Preedit {
+                    text: "xy".into(),
+                    cursor: Some((1, 1)),
+                }),
+                0.016,
+            )
+            .unwrap();
+        let (at, _) = f.ime.expect("the host is told where the caret is");
+        assert!(
+            at.x > 0.0,
+            "and the caret is in the scene's space, not the field's"
+        );
+        // The preedit reaches the *next* tree, as every input does here.
+        let root = tree(&mut ui, &mut value);
+        let f = ui
+            .frame(root, None, PointerInput::default(), 0.016)
+            .unwrap();
+        assert_eq!(value, "ab", "a preedit never touches the value");
+        let under = f.scene.surface("/3").expect("underline").frame;
+        assert!(under.size.width > 0., "the composing span is underlined");
+
+        let root = tree(&mut ui, &mut value);
+        ui.frame(root, None, ime(mui_input::Ime::Commit("xy".into())), 0.016)
+            .unwrap();
+        let root = tree(&mut ui, &mut value);
+        let f = ui
+            .frame(root, None, PointerInput::default(), 0.016)
+            .unwrap();
+        assert_eq!(value, "axyb", "the commit landed at the caret");
+        assert!(
+            f.scene.surface("/3").is_none(),
+            "and the composition, with it the underline, is gone"
+        );
     }
 
     #[test]

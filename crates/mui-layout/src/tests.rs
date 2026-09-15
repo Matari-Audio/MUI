@@ -691,3 +691,56 @@ fn the_gallery_grid_reflows_from_240_to_2000_without_leaving_the_window() {
         (1, 3, 3)
     );
 }
+
+#[test]
+fn a_min_col_grid_inside_a_flex_share_drops_columns() {
+    // The grid's width is a row share, not a declared length: it is only
+    // known once the flex pass deals it.
+    let tree = |_w: f64| {
+        row([
+            leaf(100., 20.).id("side"),
+            grid(3, (0..6).map(|i| leaf(90., 54.).id(format!("c{i}"))))
+                .gap(10.)
+                .min_col(120.)
+                .grow(1.0)
+                .id("grid"),
+        ])
+    };
+    let cols = |w: f64| {
+        let l = resolve(&tree(w), Some(Size::new(w, 600.)), Default::default()).unwrap();
+        let top = l.frame("c0").unwrap().y;
+        (0..6)
+            .filter(|i| l.frame(&format!("c{i}")).unwrap().y == top)
+            .count()
+    };
+    assert_eq!((cols(240.), cols(600.)), (1, 3));
+}
+
+#[test]
+fn a_squeezed_flex_item_is_measured_again_at_its_share() {
+    // Height-for-width in one pass: the paragraph's last measure is at the
+    // width the row actually deals it, and the row is as tall as that.
+    let calls = std::cell::RefCell::new(Vec::new());
+    let root = row([
+        Node::content().id("p").shrink(1.0),
+        leaf(200., 20.).id("side").shrink(0.0),
+    ]);
+    let l = resolve_with(
+        &root,
+        Some(Size::new(300., 400.)),
+        Default::default(),
+        SpacingScale::DEFAULT,
+        |_, room| {
+            calls.borrow_mut().push(room);
+            // 1000 px of text on one line, or as many lines as it takes.
+            room.map_or(Size::new(1000., 10.), |w| {
+                Size::new(w, (1000.0 / w).ceil() * 10.0)
+            })
+        },
+    )
+    .unwrap();
+    let p = l.frame("p").unwrap();
+    assert_eq!(*calls.borrow().last().unwrap(), Some(p.size.width));
+    assert_eq!((p.size.width, p.size.height), (100., 100.));
+    assert_eq!(l.frame("root").map(|f| f.size.height), None);
+}
