@@ -874,13 +874,18 @@ struct Pass<'a, 'f, P> {
     limits: Limits,
     scale: SpacingScale,
     keys: BTreeMap<&'a str, ()>,
-    measurer: &'f mut dyn FnMut(&P) -> Size,
+    measurer: &'f mut dyn FnMut(&P, Option<f64>) -> Size,
 }
 
+/// `room` is the narrowest definite inner width above this node (a grid
+/// column counts; a scroll node stops it), handed to content so a paragraph
+/// can wrap in the first and only pass. It is the room, not the flex share:
+/// a row still squeezes its content after measuring.
 fn measure<'a, P>(
     node: &'a Node<P>,
     ancestor: &str,
     definite: [Option<f64>; 2],
+    room: Option<f64>,
     depth: usize,
     pass: &mut Pass<'a, '_, P>,
 ) -> Result<Measured<'a, P>, Error> {
@@ -917,9 +922,11 @@ fn measure<'a, P>(
         definite[0].map(|w| (w - padding.horizontal()).max(0.0)),
         definite[1].map(|h| (h - padding.vertical()).max(0.0)),
     ];
+    let room = [room, inner[0]].into_iter().flatten().reduce(f64::min);
     let mut children = Vec::with_capacity(node.children().len());
     for (index, c) in node.children().iter().enumerate() {
         let align = c.align_self.unwrap_or(node.align);
+        let mut child_room = room.filter(|_| !node.scroll);
         let promise = match &node.kind {
             _ if c.float => {
                 let (ax, ay) = c.anchor.unwrap_or(cell_default(node));
@@ -951,11 +958,12 @@ fn measure<'a, P>(
                 let col = inner[0].map(|w| {
                     ((w - gap * (*cols - 1) as f64) / *cols as f64) * span + gap * (span - 1.0)
                 });
+                child_room = [child_room, col].into_iter().flatten().reduce(f64::min);
                 [offer(c, false, col, ax == Align::Stretch), None]
             }
             _ => [None; 2],
         };
-        let mut m = measure(c, here, promise, depth + 1, pass)?;
+        let mut m = measure(c, here, promise, child_room, depth + 1, pass)?;
         m.index = index;
         children.push(m);
     }
@@ -965,7 +973,7 @@ fn measure<'a, P>(
     let (content, sunk) = match &node.kind {
         Kind::Leaf => (Size::ZERO, Size::ZERO),
         Kind::Content => {
-            let s = (pass.measurer)(&node.payload);
+            let s = (pass.measurer)(&node.payload, room);
             if !s.valid(l.extent) {
                 return Err(Error::InvalidValue);
             }
@@ -1325,19 +1333,22 @@ fn arrange<P>(
 /// `None` means hug intrinsic content. `Some` is an exact offered parent size.
 /// Content leaves measure as empty; use [`resolve_with`] to size them.
 pub fn resolve<P>(root: &Node<P>, offered: Option<Size>, limits: Limits) -> Result<Layout, Error> {
-    resolve_with(root, offered, limits, SpacingScale::DEFAULT, |_| Size::ZERO)
+    resolve_with(root, offered, limits, SpacingScale::DEFAULT, |_, _| {
+        Size::ZERO
+    })
 }
 
 /// [`resolve`] with a spacing scale for tokens and a measurer for
-/// `Node::content` leaves, called once per leaf with its payload. Text shaping lives outside this crate on purpose.
-// ponytail: intrinsic width only, no wrap; give the measurer an available
-// width when a wrapping text leaf is actually needed.
+/// `Node::content` leaves, called once per leaf with its payload and the
+/// room it has: the narrowest definite inner width above it, `None` under a
+/// hugging parent or inside a scroll. Text shaping lives outside this crate
+/// on purpose.
 pub fn resolve_with<P>(
     root: &Node<P>,
     offered: Option<Size>,
     limits: Limits,
     scale: SpacingScale,
-    mut measurer: impl FnMut(&P) -> Size,
+    mut measurer: impl FnMut(&P, Option<f64>) -> Size,
 ) -> Result<Layout, Error> {
     if !limits.extent.is_finite()
         || limits.extent <= 0.0
@@ -1355,7 +1366,7 @@ pub fn resolve_with<P>(
         keys: BTreeMap::new(),
         measurer: &mut measurer,
     };
-    let m = measure(root, "root", definite, 0, &mut pass)?;
+    let m = measure(root, "root", definite, None, 0, &mut pass)?;
     let size = offered.unwrap_or(m.size);
     if !size.valid(limits.extent) {
         return Err(Error::InvalidValue);

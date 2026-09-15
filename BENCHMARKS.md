@@ -12,7 +12,7 @@ file is the number that answers "why". A second question rides along: what the
 | CPU | AMD Ryzen 7 7800X3D (16 logical) |
 | GPU | AMD Radeon RX 6600 (RADV NAVI23), Vulkan, discrete |
 | OS | Linux x86-64 |
-| Commit | `d385f22` plus this one |
+| Commit | `0d523b1` (sparse-strip rows); `d385f22` for the classic rows, whose scene has not changed since |
 | Profile | workspace `release`: `opt-level = "s"`, LTO, 1 codegen unit |
 
 `opt-level = "s"` is the repository's choice for binary size and it costs the
@@ -61,19 +61,19 @@ Median of 50 frames after 5 warm-ups. Milliseconds.
 
 | backend | case | resolve | encode | render | total | fps |
 |---|---|---:|---:|---:|---:|---:|
-| mui (resolve only) | static | 2.429 | — | — | 2.429 | 412 |
-| vello_cpu | cold | 6.578 | 7.100 | 0.801 | 14.479 | 69 |
-| vello_cpu | static | 2.564 | 4.953 | 0.804 | 8.321 | 120 |
-| vello_cpu | one knob turning | 2.532 | 4.949 | 0.772 | 8.252 | 121 |
-| vello_cpu cached | cold | 6.591 | 6.856 | 0.798 | 14.246 | 70 |
-| vello_cpu cached | static | 2.559 | 4.547 | 0.812 | 7.918 | 126 |
-| vello_cpu cached | one knob turning | 2.535 | 4.570 | 0.783 | 7.888 | 127 |
-| vello_hybrid | cold | 6.565 | 7.236 | 0.740 | 14.541 | 69 |
-| vello_hybrid | static | 2.509 | 4.944 | 0.676 | 8.129 | 123 |
-| vello_hybrid | one knob turning | 2.562 | 5.000 | 0.739 | 8.301 | 120 |
-| vello_hybrid cached | cold | 6.522 | 6.854 | 0.695 | 14.071 | 71 |
-| vello_hybrid cached | static | 2.643 | 4.598 | 0.725 | 7.966 | 126 |
-| vello_hybrid cached | one knob turning | 2.647 | 4.591 | 0.699 | 7.937 | 126 |
+| mui (resolve only) | static | 2.389 | — | — | 2.389 | 419 |
+| vello_cpu | cold | 6.240 | 6.944 | 0.815 | 13.998 | 71 |
+| vello_cpu | static | 2.338 | 4.828 | 0.812 | 7.979 | 125 |
+| vello_cpu | one knob turning | 2.335 | 4.799 | 0.772 | 7.906 | 126 |
+| vello_cpu cached | cold | 6.167 | 6.540 | 0.808 | 13.515 | 74 |
+| vello_cpu cached | static | 2.343 | 4.338 | 0.830 | 7.510 | 133 |
+| vello_cpu cached | one knob turning | 2.339 | 4.320 | 0.808 | 7.466 | 134 |
+| vello_hybrid | cold | 6.140 | 6.963 | 0.644 | 13.748 | 73 |
+| vello_hybrid | static | 2.360 | 4.864 | 0.669 | 7.892 | 127 |
+| vello_hybrid | one knob turning | 2.369 | 4.953 | 0.675 | 7.998 | 125 |
+| vello_hybrid cached | cold | 6.210 | 6.678 | 0.655 | 13.543 | 74 |
+| vello_hybrid cached | static | 2.359 | 4.444 | 0.657 | 7.460 | 134 |
+| vello_hybrid cached | one knob turning | 2.447 | 4.512 | 0.666 | 7.626 | 131 |
 | vello (classic) | cold | 6.643 | 1.357 | 4.870 | 12.870 | 78 |
 | vello (classic) | static | 2.626 | 1.393 | 4.455 | 8.474 | 118 |
 | vello (classic) | one knob turning | 2.823 | 1.504 | 4.963 | 9.290 | 108 |
@@ -82,13 +82,13 @@ The bench also times the arc-to-cubic conversion on its own, outside any
 backend:
 
 ```
-bez conversion: 0.517 ms uncached, 0.192 ms from a warm PathCache (631 entries)
+bez conversion: 0.485 ms uncached, 0.187 ms from a warm PathCache (631 entries)
 ```
 
 Memory: classic's `Scene::bump_estimate` still reports **0.5 MiB peak** of GPU
 buffer — the new ops are rectangles and glyphs, which cost it nothing. Neither
 sparse-strip backend exposes an equivalent; peak RSS of the whole process was
-174 MiB, dominated by the font and the wgpu device, so it separates nothing.
+166 MiB, dominated by the font and the wgpu device, so it separates nothing.
 
 ### Before the features, for reference
 

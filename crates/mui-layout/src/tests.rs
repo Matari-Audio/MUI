@@ -338,11 +338,41 @@ fn space_around_and_evenly() {
 #[test]
 fn content_leaves_are_measured_by_the_caller() {
     let t = Node::<&str>::column([Node::content().with("hello").id("t")]).id("c");
-    let l = resolve_with(&t, None, Default::default(), SpacingScale::DEFAULT, |s| {
-        Size::new(s.len() as f64 * 7., 12.)
-    })
+    let l = resolve_with(
+        &t,
+        None,
+        Default::default(),
+        SpacingScale::DEFAULT,
+        |s, room| {
+            assert_eq!(room, None);
+            Size::new(s.len() as f64 * 7., 12.)
+        },
+    )
     .unwrap();
     assert_eq!(l.frame("t").unwrap().size, Size::new(35., 12.));
+}
+
+#[test]
+fn content_is_told_the_room_it_has_and_a_scroll_withholds_it() {
+    // A definite column pads 10 a side: 80 of room. The grid splits that
+    // into two 35 columns. The scroll's child gets none.
+    let t = Node::<&str>::column([
+        Node::content().with("a").id("a"),
+        Node::<&str>::grid(2, [Node::content().with("g").id("g")]).gap(10.),
+        Node::<&str>::column([Node::content().with("s").id("s")]).scroll(),
+    ])
+    .width(Len::Px(100.))
+    .pad(10.);
+    let mut seen = std::collections::BTreeMap::new();
+    let wrap = |s: &&str, room: Option<f64>| {
+        seen.insert(s.to_string(), room);
+        Size::new(room.map_or(200., |r| r.min(200.)), 12.)
+    };
+    let l = resolve_with(&t, None, Default::default(), SpacingScale::DEFAULT, wrap).unwrap();
+    assert_eq!(seen["a"], Some(80.));
+    assert_eq!(seen["g"], Some(35.));
+    assert_eq!(seen["s"], None);
+    assert_eq!(l.frame("a").unwrap().size.width, 80.);
 }
 
 #[test]

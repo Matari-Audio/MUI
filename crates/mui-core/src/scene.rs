@@ -629,37 +629,47 @@ impl<'a> Walk<'a> {
     }
 }
 
-/// Every text node whose line is wider than the room its parent has, with
-/// the width to wrap it to. A node that overflows keeps its own wide frame,
-/// so the parent's inner width is what the hint is taken from.
+/// A content leaf's size: a paragraph wrapped to its room when it needs it.
+/// `want` remembers the width it settled on, keyed by the element's address.
+fn fit(
+    runs: &mut Runs,
+    th: Theme,
+    e: &crate::Element,
+    room: Option<f64>,
+    want: &mut HashMap<usize, f64>,
+) -> Size {
+    let Content::Text(t) = &e.content else {
+        return Size::ZERO;
+    };
+    let (t, size) = (t.as_str(), e.text_size.unwrap_or(th.text));
+    let s = match room {
+        Some(w) if w > 0.0 && runs.measure(t, size).width > w + 0.5 => {
+            runs.wrapped(t, size, w, e.lines)
+        }
+        _ => runs.measure(t, size),
+    };
+    want.insert(std::ptr::from_ref(e) as usize, s.width);
+    s
+}
+
+/// Every text node a row squeezed narrower than the width it measured at:
+/// the solver already wrapped each paragraph to its room in the first pass,
+/// so only a flex share that came out narrower than that is left to fix.
 fn wrap_hints(
     n: &El,
     frames: &[Frame],
     i: &mut usize,
-    runs: &mut Runs,
-    th: Theme,
-    avail: Option<f64>,
-    out: &mut HashMap<(String, u64), f64>,
+    want: &HashMap<usize, f64>,
+    out: &mut HashMap<usize, f64>,
 ) {
     let f = frames[*i];
     *i += 1;
-    if let Content::Text(t) = &n.payload().content {
-        let size = n.payload().text_size.unwrap_or(th.text);
-        let w = avail.unwrap_or(f.size.width).min(f.size.width);
-        if w > 0.0 && runs.measure(t, size).width > w + 0.5 {
-            out.insert((t.clone(), size.to_bits()), w);
-        }
+    let k = std::ptr::from_ref(n.payload()) as usize;
+    if f.size.width > 0.0 && want.get(&k).is_some_and(|w| *w > f.size.width + 0.5) {
+        out.insert(k, f.size.width);
     }
-    // A scroll node overflows on purpose: nothing inside it wraps.
-    let pad = n.padding(th.spacing);
-    let inner = (f.size.width - pad.horizontal()).max(0.0);
-    let child = if n.is_scroll() {
-        None
-    } else {
-        Some(avail.map_or(inner, |a| a.min(inner)))
-    };
     for c in n.children() {
-        wrap_hints(c, frames, i, runs, th, child, out);
+        wrap_hints(c, frames, i, want, out);
     }
 }
 
@@ -686,32 +696,23 @@ pub fn resolve_scene_with(
         cache: &mut text.runs,
     };
     let th = spec.theme;
+    // A paragraph wraps to its room in this one pass. The element address
+    // `want` keys on is stable for as long as `spec` is borrowed.
+    let mut want = HashMap::new();
     let layout = resolve_with(
         &spec.root,
         spec.offered,
         spec.limits,
         th.spacing,
-        |e| match &e.content {
-            Content::Text(t) => runs.measure(t, e.text_size.unwrap_or(th.text)),
-            Content::None | Content::Canvas(_) => Size::ZERO,
-        },
+        |e, room| fit(&mut runs, th, e, room, &mut want),
     )?;
-    // The measure callback is handed a payload, not an offered width, so the
-    // width a label must wrap to is read back off the first pass's frames and
-    // the tree is solved once more.
-    // ponytail: two solves whenever anything wraps, and the hint is keyed by
-    // (string, size) so the same string in two widths takes the last one.
-    // Give `resolve_with`'s measurer the offered size and both go away.
+    // A row hands its content a share, not the room, so a paragraph beside
+    // another can still come out narrower than it measured. Only then is the
+    // tree solved again, with that share as the width to wrap to.
+    // ponytail: a second solve for side-by-side paragraphs; the flex pass
+    // re-measuring its items at their final main size is the upgrade.
     let mut hints = HashMap::new();
-    wrap_hints(
-        &spec.root,
-        layout.all(),
-        &mut 0,
-        &mut runs,
-        th,
-        spec.offered.map(|s| s.width),
-        &mut hints,
-    );
+    wrap_hints(&spec.root, layout.all(), &mut 0, &want, &mut hints);
     let layout = if hints.is_empty() {
         layout
     } else {
@@ -720,15 +721,11 @@ pub fn resolve_scene_with(
             spec.offered,
             spec.limits,
             th.spacing,
-            |e| match &e.content {
-                Content::Text(t) => {
-                    let size = e.text_size.unwrap_or(th.text);
-                    match hints.get(&(t.clone(), size.to_bits())) {
-                        Some(&w) => runs.wrapped(t, size, w, e.lines),
-                        None => runs.measure(t, size),
-                    }
+            |e, room| match (&e.content, hints.get(&(std::ptr::from_ref(e) as usize))) {
+                (Content::Text(t), Some(&w)) => {
+                    runs.wrapped(t, e.text_size.unwrap_or(th.text), w, e.lines)
                 }
-                Content::None | Content::Canvas(_) => Size::ZERO,
+                _ => fit(&mut runs, th, e, room, &mut want),
             },
         )?
     };
@@ -1001,6 +998,57 @@ mod feature_tests {
                 .y
         };
         assert_ne!(py("small"), py("big"), "and centring alone does not");
+    }
+
+    #[test]
+    fn the_same_paragraph_wraps_to_each_width_it_is_given_and_a_row_share_too() {
+        let long = "wrap ".repeat(40);
+        // Two copies of one string in two widths: each wraps to its own,
+        // so the wider one is shorter. A third beside a sibling in a
+        // definite row gets its flex share, narrower than the row.
+        let root = column([
+            column([text(long.clone()).id("a")]).w(120),
+            column([text(long.clone()).id("b")]).w(240),
+            row([
+                text(long.clone()).id("c").shrink(1.0),
+                text(long).id("d").shrink(1.0),
+            ])
+            .w(300),
+        ]);
+        let mut sp = SceneSpec::new(root);
+        sp.font = Some(font());
+        let s = resolve_scene(&sp).unwrap();
+        let f = |k| s.layout.frame(k).unwrap().size;
+        assert!(
+            f("a").width <= 120.1 && f("b").width <= 240.1,
+            "{:?} {:?}",
+            f("a"),
+            f("b")
+        );
+        assert!(
+            f("a").height > f("b").height * 1.5,
+            "{:?} {:?}",
+            f("a"),
+            f("b")
+        );
+        assert!(
+            f("c").width <= 150.1 && f("c").height > f("b").height,
+            "{:?}",
+            f("c")
+        );
+        let lines = |k| {
+            s.paint
+                .iter()
+                .filter(|p| p.key == k && p.layer == Layer::Text)
+                .count()
+        };
+        assert!(
+            lines("a") > lines("b") && lines("c") > lines("b"),
+            "{} {} {}",
+            lines("a"),
+            lines("b"),
+            lines("c")
+        );
     }
 
     #[test]
