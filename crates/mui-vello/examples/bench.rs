@@ -11,6 +11,8 @@
 
 use std::time::Instant;
 
+use std::sync::Arc;
+
 use mui::prelude::*;
 use mui::Ui;
 use mui_core::{Layer, ResolvedScene};
@@ -41,6 +43,20 @@ impl App {
     }
 }
 
+/// A four-pixel texture, standing in for whatever a host decodes. One buffer,
+/// shared by every pill: `PathCache` and the pixmap intern both key on the
+/// `Arc`, so four pills cost one upload.
+fn swatch() -> Arc<Image> {
+    let px: Vec<u8> = [
+        [220, 60, 60, 255],
+        [60, 200, 120, 255],
+        [70, 110, 240, 255],
+        [240, 210, 80, 255],
+    ]
+    .concat();
+    Arc::new(Image::rgba(2, 2, px).expect("2x2 rgba"))
+}
+
 /// A response curve: 50 cubics through the node's own frame.
 fn curve(seed: f64) -> El {
     canvas(move |size: Size| {
@@ -60,9 +76,15 @@ fn curve(seed: f64) -> El {
     .height(90.0)
 }
 
-/// 40 knobs, 8 sliders, 200 labels, a clipped 60-row list, two curves and
-/// three floats -- roughly what a synth editor puts on screen at once.
-fn editor(ui: &mut Ui, app: &mut App) -> El {
+const BLURB: &str = "the filter tracks the key and the envelope follows it, \
+which is what the second knob is for when the resonance is high";
+
+/// 40 knobs, 8 sliders, 200 labels, a clipped 60-row list, two curves, three
+/// floats, 20 wrapped paragraphs, 4 image-filled pills and 6 cards whose fill
+/// is spring-driven -- roughly what a synth editor puts on screen at once.
+/// `images` is false for the backends that cannot take a pixmap image source
+/// (see `run`); the four pills are then plain fills.
+fn editor(ui: &mut Ui, app: &mut App, images: bool) -> El {
     let knobs: Vec<El> = (0..40)
         .map(|i| {
             knob(
@@ -95,6 +117,37 @@ fn editor(ui: &mut Ui, app: &mut App) -> El {
         })
         .collect();
 
+    // 20 wrapped paragraphs: each is narrower than its text, so the scene
+    // resolver breaks lines and solves the layout a second time.
+    let blurbs: Vec<El> = (0..20)
+        .map(|i| label(format!("{i}. {BLURB}")).w(150.0).lines(4))
+        .collect();
+    // 4 image-filled pills, all sharing one 2x2 buffer.
+    let img = swatch();
+    let pills: Vec<El> = [Fit::Cover, Fit::Contain, Fit::Fill, Fit::Cover]
+        .into_iter()
+        .map(|fit| {
+            let l = leaf(120.0, 40.0).pill();
+            if images {
+                l.fill(Fill::Image(img.clone(), fit))
+            } else {
+                l.fill(Role::Raised)
+            }
+        })
+        .collect();
+    // 6 cards carrying a transition, so every frame walks their spring
+    // channels whether or not the colour moved.
+    let cards: Vec<El> = (0..6)
+        .map(|i| {
+            col![title(format!("card {i}")), caption("ready")]
+                .gap(Xs)
+                .pad(M)
+                .shell(8.0, Role::Raised)
+                .animate()
+                .id(format!("card{i}"))
+        })
+        .collect();
+
     let body = col![
         row![title("Kurv"), spacer(), caption("48 kHz")].pad(S),
         grid(8, knobs).gap(M).pad(M).shell(10.0, Role::Raised),
@@ -102,6 +155,9 @@ fn editor(ui: &mut Ui, app: &mut App) -> El {
         grid(20, labels).gap(Xs).pad(S),
         column(list).gap(2.0).scroll().height(240.0).pad(Xs),
         row![curve(0.0), curve(1.3)].gap(M).pad(M),
+        grid(5, blurbs).gap(S).pad(S),
+        row(pills).gap(S).pad(S),
+        grid(6, cards).gap(S).pad(S),
     ]
     .weld(Role::Surface);
 
@@ -173,10 +229,14 @@ impl Case {
 
 /// Drive `WARM + N` frames of `case` and hand each resolved scene to `draw`,
 /// which returns (encode ms, render ms).
+/// `vello_hybrid` rejects a pixmap image source outright and classic vello
+/// wants a `peniko::Image`; only `vello_cpu` paints the pills as images, so
+/// the others get the same scene with four solid fills instead.
 fn run(
     backend: &'static str,
     case: Case,
     font: &[u8],
+    images: bool,
     mut draw: impl FnMut(&ResolvedScene) -> (f64, f64),
 ) -> Row {
     let mut ui = Ui::new(Theme::DEFAULT).font(font.to_vec());
@@ -189,7 +249,7 @@ fn run(
         if case == Case::Knob {
             app.knobs[7] = f64::from(i as u32 % 100) / 100.0;
         }
-        let root = editor(&mut ui, &mut app);
+        let root = editor(&mut ui, &mut app, images);
         let t = Instant::now();
         let frame = ui
             .frame(
@@ -240,7 +300,7 @@ fn main() {
     {
         let mut ui = Ui::new(Theme::DEFAULT).font(font.to_vec());
         let mut app = App::new();
-        let root = editor(&mut ui, &mut app);
+        let root = editor(&mut ui, &mut app, true);
         let f = ui
             .frame(
                 root,
@@ -287,7 +347,7 @@ fn main() {
     }
 
     // Resolve with nothing painted at all: MUI's own floor.
-    rows.push(run("mui (resolve only)", Case::Static, font, |_| {
+    rows.push(run("mui (resolve only)", Case::Static, font, true, |_| {
         (0.0, 0.0)
     }));
 
@@ -315,7 +375,7 @@ fn main() {
             (encode, since(t))
         };
         for c in CASES {
-            rows.push(run("vello_cpu", c, font, &mut draw));
+            rows.push(run("vello_cpu", c, font, true, &mut draw));
         }
     }
 
@@ -345,7 +405,7 @@ fn main() {
             (encode, since(t))
         };
         for c in CASES {
-            rows.push(run("vello_cpu cached", c, font, &mut draw));
+            rows.push(run("vello_cpu cached", c, font, true, &mut draw));
         }
     }
 
@@ -448,7 +508,7 @@ async fn gpu() -> Option<(wgpu::AdapterInfo, Vec<Row>)> {
             (encode, since(t))
         };
         for c in CASES {
-            rows.push(run("vello_hybrid", c, font, &mut draw));
+            rows.push(run("vello_hybrid", c, font, false, &mut draw));
         }
     }
 
@@ -504,7 +564,7 @@ async fn gpu() -> Option<(wgpu::AdapterInfo, Vec<Row>)> {
             (encode, since(t))
         };
         for c in CASES {
-            rows.push(run("vello_hybrid cached", c, font, &mut draw));
+            rows.push(run("vello_hybrid cached", c, font, false, &mut draw));
         }
     }
 
@@ -572,7 +632,7 @@ mod classic {
             self.brush = match p {
                 PaintType::Solid(c) => Brush::Solid(c),
                 PaintType::Gradient(g) => Brush::Gradient(g),
-                // MUI never resolves an image paint.
+                // Classic runs with `images: false`, so this never fires.
                 PaintType::Image(_) => Brush::Solid(AlphaColor::TRANSPARENT),
             };
         }
@@ -682,7 +742,7 @@ mod classic {
                 .expect("poll");
             (encode, since(t))
         };
-        let rows = CASES.map(|c| run("vello (classic)", c, font, &mut draw));
+        let rows = CASES.map(|c| run("vello (classic)", c, font, false, &mut draw));
         println!(
             "classic GPU buffer estimate: {:.1} MiB peak",
             f64::from(peak) / (1024.0 * 1024.0)

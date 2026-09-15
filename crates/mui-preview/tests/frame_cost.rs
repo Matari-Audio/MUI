@@ -92,10 +92,19 @@ fn what_a_frame_costs() {
     });
     println!("Ui::frame, sliders + knob         {frame:8.3} ms");
     let resolved = resolve_scene(&spec).unwrap();
+    // `paint_cached` is what mui-preview calls, so it is what is timed: the
+    // first pass converts, the rest reuse.
+    let mut cache = mui::vello::PathCache::new();
     let walk = ms(|| {
-        mui::vello::paint(&mut Sink, &resolved, mui::vello::kurbo::Affine::IDENTITY).unwrap();
+        mui::vello::paint_cached(
+            &mut Sink,
+            &resolved,
+            mui::vello::kurbo::Affine::IDENTITY,
+            &mut cache,
+        )
+        .unwrap();
     });
-    println!("mui paint walk                    {walk:8.3} ms");
+    println!("mui paint walk (cached)           {walk:8.3} ms");
     for (what, got) in [("resolve", resolve), ("frame", frame), ("paint walk", walk)] {
         assert!(
             got < BUDGET_MS,
