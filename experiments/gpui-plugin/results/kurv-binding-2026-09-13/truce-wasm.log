@@ -1,0 +1,3 @@
+    Blocking waiting for file lock on build directory
+    Checking mui-truce v0.3.0 (/home/derpcat/projects/MUI/crates/mui-truce)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 54s

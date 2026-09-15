@@ -1,5 +1,10 @@
 # GPUI reuse decisions
 
+See [GPUI rendering map](GPUI-RENDERING-MAP.md) for the article-to-source audit,
+AA/gradient diagnostics, native shadows and the rendering work order.
+The [Zed Decoded review](zed-decoded/README.md) covers all eight series posts and
+consolidates their runtime, coordinate, ownership and performance lessons.
+
 The plugin reference uses **GPUI as its renderer and native UI runtime**. Vello stays in
 `experiments/render-lab` for comparisons; it is not part of this plugin's rendering path.
 We are not composing two renderers for the same panel.
@@ -47,7 +52,9 @@ translations and rectangular clips**, not arbitrary rotated/scaled text or nativ
 
 The X11 check asserts first-baseline equality, nested scroll isolation, boundary propagation,
 matching native/painted offsets, clipped gain rejection and the existing input/lifecycle
-contract. It runs on the RX 6600, including with GPU readback enabled.
+contract. Recorded RX 6600 runs include GPU readback. Later OS/XTest wheel
+failures remain unresolved; the existence of these assertions is not a claim that
+all current input checks pass. See [validation status](ROADMAP.md).
 
 ## Reuse for full controls before building our own
 
@@ -57,7 +64,7 @@ Zed's `theme`, `icons`, `menu` and component crates. Its manifest declares GPL-3
 GPUI's manifest declares Apache-2.0. Treat them as different packages rather than assuming
 all Zed widgets are part of GPUI. [Pinned ui manifest](https://github.com/zed-industries/zed/blob/7960b2a7c9568e90fbe0727332149e5b2a5fd57a/crates/ui/Cargo.toml).
 
-**Evaluate `gpui-base` before writing a MUI control toolkit.** GPUI Kit (formerly GPUI
+**Evaluate `gpui-base` before expanding generic controls that it already supplies.** GPUI Kit (formerly GPUI
 Component) separates unstyled behavior from its styled component layer. Its base catalog
 includes buttons, toggles, sliders, inputs, selection controls and popovers, while allowing
 an application to supply its presentation. This fits MUI's ownership of appearance and
@@ -71,8 +78,39 @@ No GPUI Kit dependency or upgrade was added in this change.
 [Base manifest](https://raw.githubusercontent.com/longbridge/gpui-component/main/crates/base/Cargo.toml),
 [workspace dependency versions](https://raw.githubusercontent.com/longbridge/gpui-component/main/Cargo.toml).
 
-The next bounded experiment is one `gpui-base` input and slider against an aligned GPUI
+After the [current rendering/input gate](ROADMAP.md), a bounded compatibility
+experiment can test one `gpui-base` input and slider against an aligned GPUI
 revision, preserving the embedded-editor smoke test and the parameter gesture contract.
 Adopt compatible behavior before building general buttons, dropdowns, text editors or list
 virtualization. Custom audio knobs, parameter mappings, MUI geometry and host integration
 remain the parts specific to this framework.
+
+## Composition mock: quality and robustness follow-through
+
+Integrated from the same pinned checkout in this pass:
+
+- `shape_line`/`ShapedLine::paint` and native text elements for horizontal readouts,
+  reusing GPUI's shaping, font lookup, glyph atlas and DPI rasterization.
+- `anchored` + `deferred` for group picker/MIDI menus, including window fitting.
+- `App::reduce_motion` for custom pie animations.
+- `Window::on_next_frame` for resize updates after cached prepaint.
+- Native rounded quads for solid modulation dots; MUI retains merged host geometry.
+
+The composition now uses scoped GPUI actions for parameter adjustments, route
+creation/depth edits/removal, Tab traversal and cancellation. Native focus handles
+and focus-visible styling cover controls and ports; the workspace restores focus
+when a focused child disappears. GPUI owns source click/drag recognition and the
+typed `Source` drag payload, `on_drag_move`, `on_drop` and drag-view lifetime.
+MUI retains clipped soft snapping, parent-route legality, cable painting and
+begin/value/end parameter events. Empty drops and cancellation create no routes.
+The existing text-input entity/IME/clipboard path remains in use. Use native virtual lists when a real
+preset browser or large rack needs them. Do not introduce another event system,
+text shaper or generic menu-placement algorithm. GPUI Base compatibility remains
+an explicit separate experiment; no dependency migration was performed here.
+
+The pinned `Font` API exposes family, weight, style, features and fallbacks, but no
+custom width-axis field. Rotated variable-width labels therefore remain outlines.
+The native horizontal path is not a claim of complete variable-axis support.
+The X11 standalone refresh loop follows the display mode; GPUI additionally caps
+inactive animated windows near 30 fps. Preserve this idle behavior and measure
+focused interaction separately before changing scheduling or polling intervals.

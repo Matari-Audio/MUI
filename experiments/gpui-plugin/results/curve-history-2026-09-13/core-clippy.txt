@@ -1,0 +1,2 @@
+    Checking mui-core v0.3.0 (/home/derpcat/projects/MUI/crates/mui-core)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.30s

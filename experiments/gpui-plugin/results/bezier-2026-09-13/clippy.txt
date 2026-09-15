@@ -1,0 +1,18 @@
+    Blocking waiting for file lock on build directory
+warning: constant `PIPE_READ_TIMEOUT` is never used
+   --> /home/derpcat/projects/MUI/experiments/upstream/crates/gpui_linux/src/linux/platform.rs:945:18
+    |
+945 | pub(super) const PIPE_READ_TIMEOUT: Duration = Duration::from_secs(4);
+    |                  ^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `read_fd_with_timeout` is never used
+   --> /home/derpcat/projects/MUI/experiments/upstream/crates/gpui_linux/src/linux/platform.rs:948:15
+    |
+948 | pub(super) fn read_fd_with_timeout(
+    |               ^^^^^^^^^^^^^^^^^^^^
+
+warning: `gpui_linux` (lib) generated 2 warnings
+    Checking mui-gpui-plugin-probe v0.1.0 (/home/derpcat/projects/MUI/experiments/gpui-plugin)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 11.16s

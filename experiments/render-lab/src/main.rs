@@ -34,8 +34,17 @@ fn vscene(marks: &[Mark], scale: f64) -> Result<vello::Scene> {
             );
         } else if let Some(end) = m.gradient {
             let r = p.bounding_box();
-            let g = Gradient::new_linear((r.x0, r.y0), (r.x1, r.y0))
-                .with_interpolation_cs(vello::peniko::color::ColorSpaceTag::Srgb)
+            let endpoint = if m.vertical_gradient {
+                (r.x0, r.y1)
+            } else {
+                (r.x1, r.y0)
+            };
+            let g = Gradient::new_linear((r.x0, r.y0), endpoint)
+                .with_interpolation_cs(if m.oklab {
+                    vello::peniko::color::ColorSpaceTag::Oklab
+                } else {
+                    vello::peniko::color::ColorSpaceTag::Srgb
+                })
                 .with_stops([color(m.color), color(end)]);
             scene.fill(Fill::NonZero, Affine::scale(scale), &g, None, &p);
         } else {
@@ -66,11 +75,15 @@ fn gscene(marks: &[Mark], scale: f32, tight: bool) -> Result<gpui::Scene> {
         };
         let bg = if let Some(end) = m.gradient {
             gpui::linear_gradient(
-                90.,
+                if m.vertical_gradient { 180. } else { 90. },
                 gpui::linear_color_stop(c(m.color), 0.),
                 gpui::linear_color_stop(c(end), 1.),
             )
-            .color_space(gpui::ColorSpace::Srgb)
+            .color_space(if m.oklab {
+                gpui::ColorSpace::Oklab
+            } else {
+                gpui::ColorSpace::Srgb
+            })
         } else {
             c(m.color).into()
         };
@@ -81,7 +94,10 @@ fn gscene(marks: &[Mark], scale: f32, tight: bool) -> Result<gpui::Scene> {
                 size: size(px((r[2] - r[0]) as f32), px((r[3] - r[1]) as f32)),
             },
         };
-        if let Some(r) = m.native_rect {
+        if let Some(mut r) = m.native_rect {
+            let stroke = m.stroke.unwrap_or(0.) as f32;
+            let half = f64::from(stroke) / 2.;
+            r = [r[0] - half, r[1] - half, r[2] + half, r[3] + half];
             scene.insert_primitive(gpui::Quad {
                 bounds: gpui::Bounds {
                     origin: point(px(r[0] as f32), px(r[1] as f32)),
@@ -89,7 +105,14 @@ fn gscene(marks: &[Mark], scale: f32, tight: bool) -> Result<gpui::Scene> {
                 }
                 .scale(scale),
                 content_mask: mask.scale(scale),
-                background: bg,
+                background: if m.stroke.is_some() {
+                    gpui::transparent_black().into()
+                } else {
+                    bg
+                },
+                corner_radii: gpui::Corners::all(px(m.radius as f32 + stroke / 2.)).scale(scale),
+                border_widths: gpui::Edges::all(px(stroke)).scale(scale),
+                border_color: c(m.color).into(),
                 ..Default::default()
             });
             continue;
@@ -206,7 +229,15 @@ fn main() -> Result<()> {
         return geometry::run(&out);
     }
     let side: usize = args.get(5).map(String::as_str).unwrap_or("1").parse()?;
-    let marks = tiled(&fixture()?, side)?;
+    let component_fixture = std::env::var_os("MUI_LAB_COMPONENTS").is_some();
+    let marks = tiled(
+        &if component_fixture {
+            components()?
+        } else {
+            fixture()?
+        },
+        side,
+    )?;
     fs::write(out.join("fixture.json"), serde_json::to_vec_pretty(&marks)?)?;
     let (w, h) = (
         (WIDTH as f64 * scale) as u32,

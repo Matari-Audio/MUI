@@ -7,8 +7,9 @@ not switch MUI's backend or claim a complete GPUI/Vello plugin framework integra
 - Vello: `0.10.0`; shared wgpu dependency `29.0.4`.
 - Rust toolchain: repository pin `1.98.1`; optimized release builds.
 - Dependencies locked in this directory's Cargo.lock; upstream source downloaded separately.
-- No physical GPU was available in the recorded environment. Captures and shaders executed on
-  Mesa llvmpipe software Vulkan, LLVM 20.1.2, Mesa 25.2.8, `LP_NUM_THREADS=4`.
+- The original report used llvmpipe. Follow-ups use the physical RX 6600; see
+  [hardware results](../../docs/render-lab/rx6600-2026-09-13/RESULTS.md) and
+  [gradient correction](../../docs/render-lab/rx6600-gradient-fix-2026-09-13/RESULTS.md).
 
 ## Run
 
@@ -20,9 +21,10 @@ cd experiments/render-lab
 ```
 
 `prepare.py` fetches the pinned Zed archive into ignored `experiments/upstream`, preserving
-upstream licensing. It adds a diagnostic GPUI surface readback hook. GPUI's drawing code,
-shader code, blend state and sample-count selection are unchanged. The only surface change
-is adding COPY_SRC usage. Captures execute outside timing samples. The script and its exact
+upstream licensing. It adds a diagnostic GPUI surface readback hook. The surface change is adding COPY_SRC usage. `fix_gpui_gradients.py` also applies
+a guarded, idempotent correction to the pinned wgpu gradient color transfer. The plugin
+prepare script invokes this same preparation path. Blend state and sample-count selection
+are unchanged. Captures execute outside timing samples. The script and its exact
 instrumentation are checked in for review.
 
 The `image` dependency uses one release codegen unit to work around recurring zero-length
@@ -96,3 +98,27 @@ are approximated at 0.001 logical units before either backend receives them.
   The combined benchmark binary size does not establish either backend's production size.
 
 See [recorded findings](../../docs/render-lab/RESULTS.md) and the checked-in metrics/captures.
+
+## Component rendering regression
+
+The optional fixture imports the composition's `PieContainer` source directly and uses
+its multi-lane outer union and padded inner well. Four copies translate by 0/.25/.5/.75
+logical pixels. It includes an ADSR curve snapshot, native/path circles with four border
+widths, and sRGB/Oklab gradient ramps. Native border bounds account for centered path strokes.
+The original 40-mark fixture remains available unchanged by default.
+
+```sh
+python3 tools/prepare.py
+cargo build --release --locked
+# Use the configured Cargo target-dir binary; select your physical GPU explicitly.
+MUI_LAB_COMPONENTS=1 mui-render-lab gpui 1 60 output/components
+MUI_LAB_COMPONENTS=1 mui-render-lab gpui 1.5 60 output/components
+MUI_LAB_COMPONENTS=1 mui-render-lab gpui 2 60 output/components
+python3 tools/quality.py output/components
+python3 tools/check_gradients.py output/components
+```
+
+Use an X11 surface large enough for 1536×1024 without compositor resizing. The gradient
+check fails above 2/255 maximum channel error against analytic sRGB/Oklab interpolation.
+Cairo comparisons exclude the Oklab strip, which Cairo does not implement. Circle coverage
+is diagnostic, not a passing claim: subpixel border gaps remain at some scales/translations.
