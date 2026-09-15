@@ -1465,6 +1465,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "mui-access"
+version = "0.3.0"
+dependencies = [
+ "accesskit",
+ "mui-core",
+]
+
+[[package]]
 name = "mui-core"
 version = "0.3.0"
 dependencies = [

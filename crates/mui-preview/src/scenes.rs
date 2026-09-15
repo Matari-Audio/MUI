@@ -1,6 +1,8 @@
 //! The gallery contents: one `PreviewScene` per thing worth looking at.
 //! Adding one is a struct and a line in [`all`].
 
+use std::sync::Arc;
+
 use mui::geometry::Path;
 use mui::prelude::*;
 
@@ -15,6 +17,8 @@ pub trait PreviewScene {
     fn controls(&mut self, _ui: &mut Ui) -> Vec<El> {
         Vec::new()
     }
+    /// What the host just put on the clipboard, for a scene that shows it.
+    fn clipboard(&mut self, _s: &str) {}
     /// A typed character; `true` if the scene used it.
     fn key(&mut self, _c: char) -> bool {
         false
@@ -37,6 +41,11 @@ pub fn all() -> Vec<Box<dyn PreviewScene>> {
         Box::new(Tips),
         Box::new(Curve::default()),
         Box::new(Swap::default()),
+        Box::new(Images::new()),
+        Box::new(Wrapping::default()),
+        Box::new(Motion::default()),
+        Box::new(Cells),
+        Box::new(Select::default()),
     ]
 }
 
@@ -472,6 +481,296 @@ impl PreviewScene for Swap {
             .radius(16.0)
             .fill(Role::Surface)
             .id("swap")
+    }
+}
+
+/// A generated image as a fill, twice, and an icon that arrived as a `d`
+/// string. Nothing here decodes a file: `Image::rgba` takes the bytes a
+/// decoder would have produced, which is the seam a plugin actually has.
+pub struct Images {
+    image: Arc<Image>,
+}
+impl Images {
+    /// 64x64 straight RGBA, red across, green down, a blue diagonal.
+    fn gradient() -> Arc<Image> {
+        const N: u32 = 64;
+        let mut rgba = Vec::with_capacity((N * N * 4) as usize);
+        for y in 0..N {
+            for x in 0..N {
+                let (x, y) = (x * 255 / (N - 1), y * 255 / (N - 1));
+                rgba.extend([x as u8, y as u8, 255 - (x / 2 + y / 2) as u8, 255]);
+            }
+        }
+        Arc::new(Image::rgba(N, N, rgba).expect("64x64x4 bytes"))
+    }
+    /// An icon exactly as it arrives in an icon set's `d` attribute, drawn
+    /// in the 72 px box it is sized for: arcs, relative commands, a close.
+    const ICON: &'static str = "M12 12 h48 v40 a8 8 0 0 1 -8 8 h-32 a8 8 0 0 1 -8 -8 Z";
+    pub fn new() -> Self {
+        Self {
+            image: Self::gradient(),
+        }
+    }
+}
+impl PreviewScene for Images {
+    fn name(&self) -> &'static str {
+        "Image"
+    }
+    fn about(&self) -> &'static str {
+        "The icon is a parsed SVG path. The two pills are Fill::Image, uploaded once into vello_hybrid's atlas and painted by id."
+    }
+    fn specimen(&mut self, _: &mut Ui) -> El {
+        let icon = Path::from_svg_data(Self::ICON).ok();
+        let glyph = canvas(move |_| match &icon {
+            Some(p) => vec![Draw::fill(p.clone(), Role::Ink)],
+            None => Vec::new(),
+        })
+        .square(72)
+        .radius(16.0)
+        .fill(Role::Field);
+        column([
+            row([text("from_svg_data").fill(Role::Dim), spacer(), glyph])
+                .gap(M)
+                .align(Align::Center),
+            leaf(260.0, 64.0)
+                .pill()
+                .fill(Fill::Image(self.image.clone(), Fit::Cover))
+                .id("img-pill"),
+            leaf(260.0, 120.0)
+                .radius(16.0)
+                .fill(Fill::Image(self.image.clone(), Fit::Contain))
+                .id("img-card"),
+            caption("Cover crops, Contain letterboxes; the same buffer on vello_cpu is the snapshot test").fill(Role::Dim),
+        ])
+        .gap(M)
+        .pad(L)
+        .radius(20.0)
+        .fill(Role::Surface)
+        .id("images")
+    }
+}
+
+/// A paragraph re-wrapped at whatever width the slider says, and a row that
+/// breaks into lines instead of overflowing.
+pub struct Wrapping {
+    width: f64,
+    lines: f64,
+}
+impl Default for Wrapping {
+    fn default() -> Self {
+        Self {
+            width: 320.0,
+            lines: 0.0,
+        }
+    }
+}
+impl PreviewScene for Wrapping {
+    fn name(&self) -> &'static str {
+        "Wrap"
+    }
+    fn about(&self) -> &'static str {
+        "Text wraps to the room its parent has; .lines(n) caps it. A .wrap() row breaks into lines."
+    }
+    fn specimen(&mut self, _: &mut Ui) -> El {
+        const PARA: &str = "A shell is a parallel inset of the outline before it, so every ring \
+            measures the same all the way round, and a weld unions sharp frames before it fillets \
+            them. Nothing here is placed absolutely.";
+        let cap = self.lines.round() as usize;
+        let para = text(PARA).when(cap > 0, |t| t.lines(cap));
+        let pills = (0..12).map(|i| {
+            row([text(format!("band {i}"))])
+                .pad_xy(12.0, 6.0)
+                .pill()
+                .fill(Role::Raised)
+        });
+        column([
+            para,
+            row(pills).gap(S).wrap().id("wrap-row"),
+            row([caption("12 px").fill(Role::Dim), title("24 px")])
+                .gap(S)
+                .baseline()
+                .id("wrap-baseline"),
+        ])
+        .gap(M)
+        .pad(L)
+        .width(self.width)
+        .radius(20.0)
+        .fill(Role::Surface)
+        .id("wrap")
+    }
+    fn controls(&mut self, ui: &mut Ui) -> Vec<El> {
+        vec![
+            slider(ui, "wrap-w", "width", &mut self.width, 160.0..=520.0),
+            slider(ui, "wrap-n", "lines (0 = all)", &mut self.lines, 0.0..=6.0),
+        ]
+    }
+}
+
+/// Everything that moves without being told a frame number: a fill that
+/// springs to its new role, a value that springs to the slider, and the two
+/// edges of a gesture.
+#[derive(Default)]
+pub struct Motion {
+    on: [bool; 4],
+    sweep: f64,
+    gain: f64,
+    last: String,
+}
+impl PreviewScene for Motion {
+    fn name(&self) -> &'static str {
+        "Motion"
+    }
+    fn about(&self) -> &'static str {
+        "Click a card: .animate() springs the fill to its new role. The pie follows ui.tween; the knob reports Begin/End."
+    }
+    fn specimen(&mut self, ui: &mut Ui) -> El {
+        let cards: Vec<El> = (0..4)
+            .map(|i| {
+                let id = format!("card-{i}");
+                self.on[i] ^= ui.get(&id).clicked;
+                leaf(64.0, 64.0)
+                    .radius(14.0)
+                    .fill(if self.on[i] {
+                        Role::Primary
+                    } else {
+                        Role::Raised
+                    })
+                    .animate()
+                    .cursor(Cursor::Hand)
+                    .id(id)
+            })
+            .collect();
+        // The tween is the whole point: the slider jumps, the sweep glides.
+        let t = ui.tween("sweep", self.sweep);
+        let pie = canvas(move |size| {
+            let r = size.width.min(size.height) / 2.0 - 4.0;
+            let c = Point::new(size.width / 2.0, size.height / 2.0);
+            let arc = (0..=64).map(|i| {
+                let a =
+                    -std::f64::consts::FRAC_PI_2 + t * std::f64::consts::TAU * f64::from(i) / 64.0;
+                Point::new(c.x + r * a.cos(), c.y + r * a.sin())
+            });
+            let pts: Vec<Point> = std::iter::once(c).chain(arc).collect();
+            vec![Draw::fill(Path::polyline(pts, true), Role::Primary)]
+        })
+        .square(140)
+        .radius(70.0)
+        .fill(Role::Field);
+        if let Some(e) = ui.edit("mot-gain") {
+            self.last = match e {
+                Edit::Begin => "begin edit",
+                Edit::End => "end edit",
+            }
+            .to_owned();
+        }
+        column([
+            row(cards).gap(M).justify(Justify::Center),
+            pie.anchor(Align::Center, Align::Center),
+            knob(ui, "mot-gain", "Gain", &mut self.gain, 0.0..=1.0, 72.0),
+            text(if self.last.is_empty() {
+                "drag the knob".to_owned()
+            } else {
+                self.last.clone()
+            })
+            .fill(Role::Dim),
+        ])
+        .gap(M)
+        .pad(L)
+        .align(Align::Center)
+        .radius(20.0)
+        .fill(Role::Surface)
+        .id("motion")
+    }
+    fn controls(&mut self, ui: &mut Ui) -> Vec<El> {
+        vec![slider(ui, "sweep", "sweep", &mut self.sweep, 0.0..=1.0)]
+    }
+}
+
+/// The three things a grid gained: a cell wider than one column, a cell that
+/// jumps the queue, and a row that spaces itself.
+pub struct Cells;
+impl PreviewScene for Cells {
+    fn name(&self) -> &'static str {
+        "Grid"
+    }
+    fn about(&self) -> &'static str {
+        ".span(n) makes a cell n columns wide, .order(n) moves it without moving its declaration, SpaceEvenly splits the slack."
+    }
+    fn specimen(&mut self, _: &mut Ui) -> El {
+        let cell = |n: &str, fill: Role| {
+            row([text(n.to_owned())])
+                .size(90.0, 54.0)
+                .align(Align::Center)
+                .justify(Justify::Center)
+                .radius(12.0)
+                .fill(fill)
+        };
+        let cells = vec![
+            cell("wide", Role::Primary).span(2),
+            cell("b", Role::Raised),
+            cell("c", Role::Raised),
+            cell("first", Role::Field).order(-1),
+            cell("e", Role::Raised),
+        ];
+        column([
+            grid(3, cells).gap(S).id("grid"),
+            row((0..3).map(|i| {
+                leaf(44.0, 24.0)
+                    .pill()
+                    .fill(Role::Raised)
+                    .id(format!("ev-{i}"))
+            }))
+            .justify(Justify::SpaceEvenly)
+            .width(320.0)
+            .id("evenly"),
+        ])
+        .gap(M)
+        .pad(L)
+        .radius(20.0)
+        .fill(Role::Surface)
+        .id("cells")
+    }
+}
+
+/// Selection, copy and paste. The preview is its own clipboard: what a copy
+/// hands back on `Frame::clipboard` is what the next paste gets.
+pub struct Select {
+    value: String,
+    clipboard: String,
+}
+impl Default for Select {
+    // Seeded here, not in `specimen`: seeding per frame means emptying the
+    // field silently refills it, and the field is the thing under test.
+    fn default() -> Self {
+        Self {
+            value: "select me".to_owned(),
+            clipboard: String::new(),
+        }
+    }
+}
+impl PreviewScene for Select {
+    fn name(&self) -> &'static str {
+        "Select"
+    }
+    fn about(&self) -> &'static str {
+        "Shift+arrows or a double click selects, ctrl+C/X/V move it through Frame.clipboard. The label is that clipboard."
+    }
+    fn clipboard(&mut self, s: &str) {
+        self.clipboard = s.to_owned();
+    }
+    fn specimen(&mut self, ui: &mut Ui) -> El {
+        let field = text_input(ui, "sel-field", &mut self.value);
+        column([
+            label("field"),
+            field,
+            text(format!("clipboard = {}", self.clipboard)).fill(Role::Dim),
+        ])
+        .gap(S)
+        .pad(L)
+        .width(320.0)
+        .radius(16.0)
+        .fill(Role::Surface)
+        .id("select")
     }
 }
 

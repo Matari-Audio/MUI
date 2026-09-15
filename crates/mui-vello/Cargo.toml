@@ -24,6 +24,8 @@ vello_hybrid = { version = "0.2", default-features = false, features = ["wgpu", 
 glifo = { version = "0.3", default-features = false }
 # kurbo and peniko reach us through vello_common so the types cannot version-skew.
 vello_common = { version = "0.2", default-features = false }
+# Types only (`Device`, `Queue`) for the image atlas upload; still no backend.
+wgpu = { version = "29", default-features = false }
 vello_cpu = { version = "0.2", optional = true, default-features = false, features = ["std", "u8_pipeline", "text"] }
 
 [dev-dependencies]
@@ -31,7 +33,7 @@ mui-layout = { path = "../mui-layout" }
 epaint_default_fonts = "0.36"
 mui-text = { path = "../mui-text" }
 png = "0.17"
-# The example builds its own headless device; the library never touches wgpu directly.
+# The example builds its own headless device.
 wgpu = { version = "29", default-features = false, features = ["wgsl", "vulkan", "gles", "metal", "dx12"] }
 pollster = "0.4"
 vello_hybrid = { version = "0.2", features = ["wgpu_default"] }

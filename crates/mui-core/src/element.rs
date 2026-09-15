@@ -9,6 +9,7 @@
 //!     .shell(4.0, Role::Field);
 //! assert_eq!(card.children().len(), 2);
 //! ```
+use crate::motion::Spring;
 use crate::style::{Cursor, Fill, Radius, Shadow, Stroke, Style};
 use mui_geometry::Path;
 use mui_layout::{Node, Size, Spacing};
@@ -71,6 +72,14 @@ pub struct Element {
     pub tip: Option<String>,
     /// Takes keyboard focus on click and on Tab.
     pub focusable: bool,
+    /// A row whose text children share one baseline. See [`Styled::baseline`].
+    pub baseline: bool,
+    /// Cap a wrapped label at this many lines. See [`Styled::lines`].
+    pub lines: Option<usize>,
+    /// The spring this node's paint chases when its declared style changes.
+    /// Only meaningful on a node with an id: the runtime has nothing to
+    /// compare an anonymous node against. See [`Styled::transition`].
+    pub transition: Option<Spring>,
 }
 
 /// A styled layout node: the type every constructor here returns.
@@ -207,6 +216,39 @@ pub trait Styled: Sized {
     fn focusable(mut self) -> Self {
         self.element_mut().focusable = true;
         self
+    }
+    /// Spring this node's paint toward whatever it is next declared to be,
+    /// instead of cutting. Needs an id: the runtime keys the springs by it.
+    ///
+    /// Paint only -- fill colour, stroke width, `Px` radius, text size,
+    /// shadow blur, `Px` shell depths. Sizes, gaps, padding and layout
+    /// frames are **not** transitioned: they are solved fresh every frame,
+    /// and springing them would fight the layout rather than decorate it.
+    /// Animate a position by springing the value you feed the tree instead
+    /// (see `Ui::tween`).
+    fn transition(mut self, s: Spring) -> Self {
+        self.element_mut().transition = Some(s);
+        self
+    }
+    /// Sit this container's text children on one baseline instead of
+    /// centring each in its own frame, so a 12 px label and a 24 px readout
+    /// line up on the letters rather than on the boxes.
+    ///
+    /// ponytail: the row's height is still the tallest child's, so a big
+    /// ascent can push a shifted line past the frame; give the row a height
+    /// if that shows.
+    fn baseline(mut self) -> Self {
+        self.element_mut().baseline = true;
+        self
+    }
+    /// Cap a wrapping label at `n` lines; the last one ends in an ellipsis.
+    fn lines(mut self, n: usize) -> Self {
+        self.element_mut().lines = Some(n.max(1));
+        self
+    }
+    /// [`Styled::transition`] with the default spring.
+    fn animate(self) -> Self {
+        self.transition(Spring::DEFAULT)
     }
     /// Apply `f` only when `cond`: `.when(selected, |e| e.fill(Primary))`.
     fn when(self, cond: bool, f: impl FnOnce(Self) -> Self) -> Self {

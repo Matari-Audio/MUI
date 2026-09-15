@@ -387,3 +387,307 @@ mod cubic_tests {
             .is_err());
     }
 }
+
+/// A cursor over SVG path data: numbers, flags and command letters, with
+/// commas and whitespace treated alike as separators.
+struct Scan<'a> {
+    b: &'a [u8],
+    i: usize,
+}
+impl Scan<'_> {
+    fn skip(&mut self) {
+        while matches!(self.b.get(self.i), Some(c) if c.is_ascii_whitespace() || *c == b',') {
+            self.i += 1;
+        }
+    }
+    fn done(&mut self) -> bool {
+        self.skip();
+        self.i >= self.b.len()
+    }
+    fn num(&mut self) -> Option<f64> {
+        self.skip();
+        let (b, start) = (self.b, self.i);
+        let mut i = start;
+        if matches!(b.get(i), Some(b'+' | b'-')) {
+            i += 1;
+        }
+        while matches!(b.get(i), Some(c) if c.is_ascii_digit()) {
+            i += 1;
+        }
+        if b.get(i) == Some(&b'.') {
+            i += 1;
+            while matches!(b.get(i), Some(c) if c.is_ascii_digit()) {
+                i += 1;
+            }
+        }
+        if i > start && matches!(b.get(i), Some(b'e' | b'E')) {
+            let mut j = i + 1;
+            if matches!(b.get(j), Some(b'+' | b'-')) {
+                j += 1;
+            }
+            if matches!(b.get(j), Some(c) if c.is_ascii_digit()) {
+                while matches!(b.get(j), Some(c) if c.is_ascii_digit()) {
+                    j += 1;
+                }
+                i = j;
+            }
+        }
+        let v = std::str::from_utf8(&b[start..i]).ok()?.parse().ok()?;
+        self.i = i;
+        Some(v)
+    }
+    /// An arc flag is a single character, and `11` is two flags, not eleven.
+    fn flag(&mut self) -> Option<bool> {
+        self.skip();
+        let f = match self.b.get(self.i)? {
+            b'0' => false,
+            b'1' => true,
+            _ => return None,
+        };
+        self.i += 1;
+        Some(f)
+    }
+    fn letter(&mut self) -> Option<u8> {
+        self.skip();
+        let c = *self.b.get(self.i)?;
+        c.is_ascii_alphabetic().then(|| {
+            self.i += 1;
+            c
+        })
+    }
+}
+
+/// An SVG elliptical arc as cubics: endpoint parametrisation to centre
+/// parametrisation (SVG 1.1 F.6.5), then one cubic per <=90 degrees, which
+/// is under a thousandth of the radius in error.
+fn arc_cubics(
+    from: Point,
+    (rx, ry): (f64, f64),
+    phi: f64,
+    (large, sweep): (bool, bool),
+    to: Point,
+    out: &mut Vec<PathCommand>,
+) {
+    let (rx, ry) = (rx.abs(), ry.abs());
+    // Out-of-range radii degrade to a line, as the spec requires.
+    if rx == 0. || ry == 0. || from == to {
+        out.push(PathCommand::LineTo(to));
+        return;
+    }
+    let (cp, sp) = (phi.cos(), phi.sin());
+    let d = (from - to) * 0.5;
+    let (x1, y1) = (cp * d.x + sp * d.y, -sp * d.x + cp * d.y);
+    // Scale the radii up until they can span the chord.
+    let lambda = x1 * x1 / (rx * rx) + y1 * y1 / (ry * ry);
+    let (rx, ry) = if lambda > 1. {
+        (rx * lambda.sqrt(), ry * lambda.sqrt())
+    } else {
+        (rx, ry)
+    };
+    let (rx2, ry2) = (rx * rx, ry * ry);
+    let den = rx2 * y1 * y1 + ry2 * x1 * x1;
+    let mut k = ((rx2 * ry2 - den) / den).max(0.).sqrt();
+    if large == sweep {
+        k = -k;
+    }
+    let (cx1, cy1) = (k * rx * y1 / ry, -k * ry * x1 / rx);
+    let center = Point::new(cp * cx1 - sp * cy1, sp * cx1 + cp * cy1) + (from + to) * 0.5;
+    let angle = |u: Point, v: Point| {
+        let c = u.dot(v) / (u.length() * v.length());
+        u.cross(v).signum() * c.clamp(-1., 1.).acos()
+    };
+    let u = Point::new((x1 - cx1) / rx, (y1 - cy1) / ry);
+    let v = Point::new((-x1 - cx1) / rx, (-y1 - cy1) / ry);
+    let theta = angle(Point::new(1., 0.), u);
+    let mut sweep_angle = angle(u, v) % TAU;
+    if !sweep && sweep_angle > 0. {
+        sweep_angle -= TAU;
+    } else if sweep && sweep_angle < 0. {
+        sweep_angle += TAU;
+    }
+    let n = (sweep_angle.abs() / FRAC_PI_2).ceil().max(1.);
+    let (n, step) = (n as usize, sweep_angle / n);
+    // 4/3 tan(step/4) is the classic cubic-through-an-arc control length.
+    let hand = 4. / 3. * (step / 4.).tan();
+    let at = |t: f64| {
+        let (c, s) = (t.cos(), t.sin());
+        center + Point::new(cp * rx * c - sp * ry * s, sp * rx * c + cp * ry * s)
+    };
+    let tangent = |t: f64| {
+        let (c, s) = (t.cos(), t.sin());
+        Point::new(-cp * rx * s - sp * ry * c, -sp * rx * s + cp * ry * c)
+    };
+    for i in 0..n {
+        let (t0, t1) = (theta + step * i as f64, theta + step * (i + 1) as f64);
+        let (p0, p1) = (at(t0), at(t1));
+        out.push(PathCommand::CubicTo(
+            p0 + tangent(t0) * hand,
+            p1 - tangent(t1) * hand,
+            // End on the coordinate the data gave, not on reconstructed trig.
+            if i + 1 == n { to } else { p1 },
+        ));
+    }
+}
+
+fn quad(from: Point, c: Point, p: Point) -> PathCommand {
+    PathCommand::CubicTo(from + (c - from) * (2. / 3.), p + (c - p) * (2. / 3.), p)
+}
+
+impl Path {
+    /// Parse SVG path data (the `d` attribute): every command, relative and
+    /// absolute, implicit repeats, and both separators.
+    ///
+    /// Elliptical arcs become cubics -- MUI's own [`Arc`] is circular, and an
+    /// imported icon is drawn, never inset or welded, so exactness buys
+    /// nothing. Quadratics become their exact cubic equivalent, as
+    /// [`Path::quad_to`] does.
+    pub fn from_svg_data(data: &str) -> Result<Self, Error> {
+        let mut s = Scan {
+            b: data.as_bytes(),
+            i: 0,
+        };
+        let mut out: Vec<PathCommand> = Vec::new();
+        let (mut cur, mut start) = (Point::new(0., 0.), Point::new(0., 0.));
+        let mut last: Option<u8> = None;
+        // The control point a following S or T reflects, if the last command
+        // was of the matching kind.
+        let (mut cubic_ctrl, mut quad_ctrl) = (None, None);
+        while !s.done() {
+            let cmd = match s.letter() {
+                Some(c) => {
+                    last = Some(c);
+                    c
+                }
+                // An implicit repeat: another coordinate set for the last
+                // command, except a moveto, which repeats as a lineto.
+                None => match last {
+                    Some(b'M') => b'L',
+                    Some(b'm') => b'l',
+                    Some(b'Z' | b'z') | None => return Err(Error::InvalidPath),
+                    Some(c) => c,
+                },
+            };
+            if out.is_empty() && !matches!(cmd, b'M' | b'm') {
+                return Err(Error::InvalidPath);
+            }
+            let o = if cmd.is_ascii_lowercase() {
+                cur
+            } else {
+                Point::new(0., 0.)
+            };
+            macro_rules! num {
+                () => {
+                    s.num().ok_or(Error::InvalidPath)?
+                };
+            }
+            macro_rules! pt {
+                () => {{
+                    let x = num!();
+                    o + Point::new(x, num!())
+                }};
+            }
+            let (mut next_cubic, mut next_quad) = (None, None);
+            match cmd.to_ascii_uppercase() {
+                b'M' => {
+                    cur = pt!();
+                    start = cur;
+                    out.push(PathCommand::MoveTo(cur));
+                }
+                b'L' => {
+                    cur = pt!();
+                    out.push(PathCommand::LineTo(cur));
+                }
+                b'H' => {
+                    cur = Point::new(o.x + num!(), cur.y);
+                    out.push(PathCommand::LineTo(cur));
+                }
+                b'V' => {
+                    cur = Point::new(cur.x, o.y + num!());
+                    out.push(PathCommand::LineTo(cur));
+                }
+                b'C' | b'S' => {
+                    let a = if cmd.eq_ignore_ascii_case(&b'C') {
+                        pt!()
+                    } else {
+                        cubic_ctrl.map_or(cur, |c: Point| cur * 2. - c)
+                    };
+                    let b = pt!();
+                    let p = pt!();
+                    out.push(PathCommand::CubicTo(a, b, p));
+                    (cur, next_cubic) = (p, Some(b));
+                }
+                b'Q' | b'T' => {
+                    let c = if cmd.eq_ignore_ascii_case(&b'Q') {
+                        pt!()
+                    } else {
+                        quad_ctrl.map_or(cur, |q: Point| cur * 2. - q)
+                    };
+                    let p = pt!();
+                    out.push(quad(cur, c, p));
+                    (cur, next_quad) = (p, Some(c));
+                }
+                b'A' => {
+                    let radii = (num!(), num!());
+                    let rotation: f64 = num!();
+                    let flags = (
+                        s.flag().ok_or(Error::InvalidPath)?,
+                        s.flag().ok_or(Error::InvalidPath)?,
+                    );
+                    let p = pt!();
+                    arc_cubics(cur, radii, rotation.to_radians(), flags, p, &mut out);
+                    cur = p;
+                }
+                b'Z' => {
+                    out.push(PathCommand::Close);
+                    cur = start;
+                }
+                _ => return Err(Error::InvalidPath),
+            }
+            (cubic_ctrl, quad_ctrl) = (next_cubic, next_quad);
+        }
+        let path = Self { commands: out };
+        path.validate(100_000)?;
+        Ok(path)
+    }
+}
+
+#[cfg(test)]
+mod svg_tests {
+    use super::*;
+
+    /// Data in, the same drawing out: an arc's cubics survive a round trip
+    /// through `to_svg_data` and back.
+    #[test]
+    fn svg_data_round_trips_including_an_arc() {
+        let d = "M10,80 h40 V20 q20-20 40 0 t40 0 A30 30 0 0 1 150 130 \
+                 c-10 10-30 10-40 0 s-30-10-40 0 Z";
+        let a = Path::from_svg_data(d).unwrap();
+        let b = Path::from_svg_data(&a.to_svg_data().unwrap()).unwrap();
+        let (fa, fb) = (
+            a.flatten(0.01, 100_000).unwrap(),
+            b.flatten(0.01, 100_000).unwrap(),
+        );
+        assert_eq!(fa.len(), fb.len());
+        for (x, y) in fa.iter().flatten().zip(fb.iter().flatten()) {
+            assert!(x.distance(*y) < 1e-6, "{x:?} vs {y:?}");
+        }
+        assert!(a
+            .commands
+            .iter()
+            .any(|c| matches!(c, PathCommand::CubicTo(..))));
+
+        // The arc really bows: the half-circle from (130,20) to (150,130)
+        // bulges past both endpoints' x.
+        let bounds = crate::Bounds::from_points(fa.iter().flatten().copied()).unwrap();
+        assert!(bounds.max.x > 155., "arc did not bow: {bounds:?}");
+        // A relative lineto is relative, and `h40` lands at x=50.
+        assert_eq!(a.commands[1], PathCommand::LineTo(Point::new(50., 80.)));
+        // Implicit repeats and flag packing.
+        let two = Path::from_svg_data("M0 0L1 1 2 2").unwrap();
+        assert_eq!(two.commands.len(), 3);
+        assert!(Path::from_svg_data("M0 0A5 5 0 11 10 0").is_ok());
+        for bad in ["L0 0", "M0", "M0 0A5 5 0 5 1 10 0"] {
+            assert!(Path::from_svg_data(bad).is_err(), "accepted {bad:?}");
+        }
+    }
+}

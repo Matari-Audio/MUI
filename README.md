@@ -90,14 +90,23 @@ assert_eq!(scene.surface("tab").unwrap().frame.size.width, 92.0);
 | `.w(120)`, `.h(40)`, `.square(28)` | the same sizes taking a bare integer |
 | `.align(..)`, `.justify(..)`, `.anchor(x, y)`, `.offset(dx, dy)` | cross axis, main axis, overlay placement, nudge |
 | `.center()`, `.start()`, `.end()`, `.between()` | the four alignments worth a word |
+| `.justify(Justify::SpaceAround)`, `.justify(Justify::SpaceEvenly)` | the other two CSS distributions |
+| `.wrap()` | a row or column that breaks into lines instead of overflowing |
+| `.span(2)`, `.order(-1)` | a grid cell two columns wide; placed before its declaration slot |
+| `.push(child)`, `.baseline()`, `.lines(2)` | append to a container, sit text children on one baseline, cap a wrapped label |
 | `.fill(Primary)`, `.fill(Color::..)`, `.fill(Gradient::vertical(a, b))` | a palette role, a literal, a gradient |
+| `.fill(Fill::Image(img, Fit::Cover))` | an RGBA buffer as a fill: `Cover`, `Contain` or `Fill` (rasterises on `vello_cpu` only) |
 | `.stroke(Ink)`, `.radius(8.0)`, `.pill()`, `.shadow(Shadow::soft(12.0))` | outline, corners, shadow |
+| `.animate()`, `.transition(Spring::new(0.3, 1.0))` | this node's fill, stroke, radius, text size and shadow spring to their new values |
 | `.shell(d, fill)` | a parallel inset of the outline before it, cumulative |
 | `.weld(fill)` | paint the union of the children's frames as one filleted shape |
 | `.scroll()`, `.clip()`, `.float()` | overflow the wheel slides, overflow cut off, a child painted over everything |
 | `canvas(\|size\| vec![Draw::fill(path, Ink)])` | your own paths, in the node's own space |
 | `.cursor(Cursor::Hand)`, `.tip("..")`, `.focusable()` | the pointer, a tooltip after half a second, Tab stops here |
 | `.id("name")` | a gesture target and a lookup key; unnamed nodes are decoration |
+| `Path::from_svg_data("M0 0 h10 a5 5 0 0 1 0 10 z")` | an icon's `d` attribute as a `Path`, arcs and all |
+| `ui.tween(id, target)`, `ui.edit(id)` | a spring-smoothed number; `Begin`/`End` of a gesture |
+| `frame.clipboard`, `frame.edits` | what a copy wants put on the clipboard, and every gesture edge this frame |
 
 Alignment is inherited: a child without `.anchor` sits where its parent's
 `align` and `justify` say, and `Stretch` is the default cross-axis value so
@@ -158,6 +167,64 @@ let frame = ui
 assert!(frame.scene.surface("Drive").is_some());
 ```
 
+## Motion
+
+Nothing is keyframed. `.animate()` puts a spring on a node's own visual
+channels -- fill (in Oklch, hue the short way round), stroke width, radius,
+text size, shadow blur, shell depths -- and a new declared value **retargets**
+the live spring instead of restarting it, so a colour changed mid-flight
+keeps its velocity. `.transition(s)` is the same with your own spring;
+`Spring::new(response_s, damping)` is the tuning you want (`1.0` is critical,
+below that overshoots), `Spring::instant()` turns one off.
+
+`ui.tween(id, target)` is the escape hatch for a number MUI cannot see --
+a canvas sweep, a pan -- and `ui.tween_with` takes a spring. `frame.animating`
+is true while any of them still moves, which is the only thing a host needs
+to decide whether to schedule another frame.
+
+Gestures have edges: `ui.edit(id)` reports `Edit::Begin` when a press
+captures a target and `Edit::End` when it lets go (including a cancelled
+one), which is exactly a plugin parameter's begin/end-edit bracket.
+`frame.edits` is the whole list.
+
+```rust
+use mui::prelude::*;
+
+let mut ui = Ui::new(Theme::DEFAULT);
+let mut gain = 0.5;
+let sweep = ui.tween("sweep", gain);
+let root = col![
+    leaf(60.0, 60.0).fill(Primary).animate().id("lamp"),
+    knob(&mut ui, "gain", "Gain", &mut gain, 0.0..=1.0, 72.0),
+];
+let frame = ui.frame(root, Some(Size::new(200.0, 200.0)), Input::default(), 1.0 / 60.0).unwrap();
+assert!(sweep <= gain && frame.edits.is_empty());
+```
+
+## Images and icons
+
+`Image::rgba(w, h, bytes)` takes straight (non-premultiplied) RGBA8 -- what a
+decoder hands back -- and `Fill::Image(img, fit)` paints it into whatever
+outline the node already has, cropped (`Cover`), letterboxed (`Contain`) or
+stretched (`Fill`). Decoding is the host's job: no library crate takes an
+image dependency. `Path::from_svg_data` turns an icon's `d` attribute into a
+`Path` (arcs included), so a symbol is geometry like everything else.
+
+`vello_cpu` paints the pixmap itself. `vello_hybrid` wants an atlas id and
+panics on a pixmap, so `mui_vello::Gpu` carries an optional `Atlas` -- the
+renderer, device, queue and a host-owned `ImageIds` -- and uploads each image
+buffer once through `Renderer::upload_image`, then paints by id. A `Gpu` built
+without an `Atlas` flattens an image fill to the mid grey `Paint::solid`
+already uses for contrast rather than crashing.
+
+## Accessibility
+
+`mui-access` turns a `ResolvedScene` into an `accesskit::TreeUpdate`:
+`tree_update(&scene, &access, focus)`, where `Access` maps an id to a
+`Semantics { role, label }`. Roles are not inferred -- a surface nobody
+described reports as a labelled group -- so a host registers the widgets it
+cares about and hands the update to its platform adapter.
+
 ## Colour
 
 A theme carries a `Palette`: a `Mode`, seven `Pigment`s (hue and chroma, no
@@ -209,8 +276,9 @@ light-theme half because there is nothing in it a mode could contradict.
 | `mui-text` | glyph and string outlines from a (variable) font |
 | `mui-core` | `El` + `Styled` DSL and the `row!`/`col!`/`stack!`/`grid!` sugar, roles and palette, `canvas` draws, clip and float layers, the walk from tree to `ResolvedScene` paint list, the frame-to-frame `TextCache`, `Spring` |
 | `mui-input` | `Input` (pointer, wheel, keys, text), hit testing against real paths and their clips, press capture, hover, click, drag and drop |
-| `mui-vello` | the `Canvas` trait and its `Gpu` / `Cpu` wrappers over `vello_hybrid` and `vello_cpu`: fills, strokes, blurred shadows, clip push/pop, and hinted glyph runs through Vello's own atlas; `paint(canvas, scene, transform)` |
-| `mui` | `Ui` runtime, focus and wheel scrolling, tooltips, and widgets (`slider`, `knob`, `toggle`, `button`, `text_input`); the `prelude` |
+| `mui-vello` | the `Canvas` trait and its `Gpu` / `Cpu` wrappers over `vello_hybrid` and `vello_cpu`: fills, strokes, image fills (`Cpu` only -- `Gpu` flattens them, see Images), clip push/pop, and hinted glyph runs through Vello's own atlas; `paint(canvas, scene, transform)`, and `paint_cached` with a `PathCache` that keeps a still frame's arc-to-cubic conversions |
+| `mui-access` | a `ResolvedScene` plus a `Semantics` map as an `accesskit::TreeUpdate` |
+| `mui` | `Ui` runtime, focus and wheel scrolling, tooltips, transitions, tweens, gesture edits, and widgets (`slider`, `knob`, `toggle`, `button`, `text_input`); the `prelude` |
 | `mui-tessellate`, `mui-egui` | triangle meshes and the egui debug adapter |
 | `mui-preview` | the winit + wgpu gallery, itself one `mui` tree |
 
@@ -225,16 +293,23 @@ are `mui` widgets, the specimen is an anchored child of the stage, and a drag
 on the stage pans it through an offset. Text goes through Vello's glyph
 atlas, not filled outlines: the host hands `paint` a `mui_vello::Gpu`.
 `bacon` rebuilds and relaunches on save. Point `MUI_PREVIEW_FONT` at a
-variable font and the Glyph scene grows a slider per axis.
+variable font and the Glyph scene grows a slider per axis; point
+`MUI_PREVIEW_THEME` at a `key = value` file and the palette reloads while the
+window is open. F12 outlines every surface and names the one under the
+pointer, and the title bar reads the resolve and paint cost of the last
+thirty frames.
 
 winit's wheel, keys and modifiers ride into `Input` with the last pointer
 sample of each batch, so `Ui::scroll`, `Ui::focus` and `text_input` work in
-the window: the Scroll, Text, Tooltip, Canvas and Drag scenes are there to
-prove it. `Frame.cursor` is applied with `window.set_cursor`; `Frame.tip` is
+the window: the Scroll, Text, Tooltip, Canvas, Drag, Image, Wrap, Motion,
+Grid and Select scenes are there to prove it -- one per thing the library
+claims to do. `Frame.cursor` is applied with `window.set_cursor`; `Frame.tip` is
 not, because the tooltip is already floated into the scene. Printable
 characters go to `Input.text` only -- `Key::Char` is emitted just for
 ctrl/cmd shortcuts, or `text_input` would insert every character twice.
-IME and clipboard are still missing.
+Copy, cut and paste leave and re-enter through `Frame::clipboard` and
+`Input::clipboard`; the preview loops them back to itself, so it is its own
+clipboard and never touches the OS one. IME is still missing.
 
 ```bash
 cargo run -p mui-vello --example headless -- /tmp/pill.png

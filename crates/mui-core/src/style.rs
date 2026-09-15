@@ -5,6 +5,7 @@
 //! correctly in light and dark, on a chip and on the ground.
 use crate::{Color, Palette};
 use mui_layout::Spacing;
+use std::sync::Arc;
 
 /// The pointer's shape over a node.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -79,6 +80,51 @@ impl Gradient {
     }
 }
 
+/// Straight (not premultiplied) 8-bit RGBA, row-major, no padding: what
+/// every decoder hands back. Decoding is the host's job -- this crate takes
+/// no image dependency -- so hand `Image::rgba` the bytes a PNG, JPEG or
+/// texture readback produced. The renderer premultiplies once and keeps the
+/// result keyed on the `Arc`, so cloning an `Image` around is free.
+#[derive(Clone, Debug)]
+pub struct Image {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Arc<[u8]>,
+}
+impl Image {
+    /// `None` unless `rgba` is exactly `width * height * 4` bytes.
+    pub fn rgba(width: u32, height: u32, rgba: impl Into<Arc<[u8]>>) -> Option<Self> {
+        let rgba = rgba.into();
+        let want = (width as usize)
+            .checked_mul(height as usize)?
+            .checked_mul(4)?;
+        (want > 0 && rgba.len() == want).then_some(Self {
+            width,
+            height,
+            rgba,
+        })
+    }
+}
+/// Comparing pixels would make an equality check cost a frame; two images
+/// are the same image when they are the same buffer.
+impl PartialEq for Image {
+    fn eq(&self, o: &Self) -> bool {
+        self.width == o.width && self.height == o.height && Arc::ptr_eq(&self.rgba, &o.rgba)
+    }
+}
+
+/// How an image is mapped onto the box it fills.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Fit {
+    /// Fill the box, crop the overflowing side. The photo default.
+    #[default]
+    Cover,
+    /// Fit inside the box, letterboxed: the whole image is visible.
+    Contain,
+    /// Stretch to the box, aspect ratio be damned.
+    Fill,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub enum Fill {
     #[default]
@@ -86,6 +132,7 @@ pub enum Fill {
     Role(Role),
     Color(Color),
     Gradient(Gradient),
+    Image(Arc<Image>, Fit),
 }
 impl From<Role> for Fill {
     fn from(r: Role) -> Self {
@@ -95,6 +142,12 @@ impl From<Role> for Fill {
 impl From<Color> for Fill {
     fn from(c: Color) -> Self {
         Self::Color(c)
+    }
+}
+/// An image fills its box by covering it, like a CSS background.
+impl From<Arc<Image>> for Fill {
+    fn from(i: Arc<Image>) -> Self {
+        Self::Image(i, Fit::Cover)
     }
 }
 impl From<Gradient> for Fill {
@@ -111,6 +164,12 @@ pub enum Paint {
         angle: f64,
         stops: Vec<(f32, Color)>,
     },
+    /// The image fills the `Painted`'s outline; its extent is the outline's
+    /// own bounds, so no extra geometry travels with the paint.
+    Image {
+        image: Arc<Image>,
+        fit: Fit,
+    },
 }
 impl Paint {
     /// The one colour a thing on top of this paint is judged against.
@@ -120,6 +179,9 @@ impl Paint {
             Self::Linear { stops, .. } => {
                 stops.first().map_or(Color::oklch(0.5, 0.0, 0.0), |s| s.1)
             }
+            // Ink over a photo is a designer's problem, not a palette's; mid
+            // grey is the honest guess and keeps contrast checks running.
+            Self::Image { .. } => Color::oklch(0.5, 0.0, 0.0),
         }
     }
 }
@@ -133,6 +195,10 @@ impl Fill {
             Self::None => return None,
             Self::Role(r) => Paint::Solid(r.color(p, under)),
             Self::Color(c) => Paint::Solid(*c),
+            Self::Image(image, fit) => Paint::Image {
+                image: image.clone(),
+                fit: *fit,
+            },
             Self::Gradient(g) => Paint::Linear {
                 angle: g.angle,
                 stops: g
@@ -149,6 +215,8 @@ impl Fill {
         match self.paint(p, under) {
             None => Fill::None,
             Some(Paint::Solid(c)) => Fill::Color(f(c)),
+            // Pixels are not a role: a hover tint has nothing to map here.
+            Some(Paint::Image { image, fit }) => Fill::Image(image, fit),
             Some(Paint::Linear { angle, stops }) => Fill::Gradient(Gradient {
                 angle,
                 stops: stops

@@ -1,0 +1,198 @@
+//! A [`ResolvedScene`] becomes an AccessKit tree.
+//!
+//! The scene knows where every named surface is and whether it takes focus;
+//! it does not know that one of them is a slider. So semantics are supplied
+//! by the caller — a host or a widget registers what it built:
+//!
+//! ```
+//! use mui_access::{Access, Kind, Semantics, tree_update};
+//! use mui_core::prelude::*;
+//!
+//! let scene = resolve_scene(&SceneSpec::new(leaf(40., 20.).id("ok").focusable())).unwrap();
+//! let sem = Access::new().with("ok", Semantics::new(Kind::Button).label("OK"));
+//! let update = tree_update(&scene, &sem, Some("ok"));
+//! assert_eq!(update.nodes.len(), 2); // window + button
+//! ```
+//!
+//! Host side: on winit, keep an `accesskit_winit::Adapter` and build the
+//! update lazily, so a frame costs nothing when no screen reader listens —
+//! `adapter.update_if_active(|| tree_update(&scene, &sem, focus))`. A plugin
+//! with no window of its own hands the same `TreeUpdate` to whatever wrapper
+//! owns the host's platform adapter.
+#![forbid(unsafe_code)]
+
+use std::collections::HashMap;
+
+use accesskit::{Action, Node, NodeId, Rect, Role, Tree, TreeId, TreeUpdate};
+use mui_core::{ResolvedScene, ResolvedSurface};
+
+/// What a surface means, beyond where it is.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Kind {
+    Button,
+    Slider { value: f64, min: f64, max: f64 },
+    Toggle { on: bool },
+    TextInput { value: String },
+    Label,
+    Group,
+    Scroll,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Semantics {
+    pub role: Kind,
+    pub label: Option<String>,
+}
+impl Semantics {
+    pub fn new(role: Kind) -> Self {
+        Self { role, label: None }
+    }
+    pub fn label(mut self, label: impl Into<String>) -> Self {
+        self.label = Some(label.into());
+        self
+    }
+}
+
+/// Semantics by surface id. A surface with no entry is a group labelled by
+/// its own id.
+#[derive(Clone, Debug, Default)]
+pub struct Access(HashMap<String, Semantics>);
+impl Access {
+    pub fn new() -> Self {
+        Self::default()
+    }
+    pub fn with(mut self, id: impl Into<String>, sem: Semantics) -> Self {
+        self.0.insert(id.into(), sem);
+        self
+    }
+    pub fn get(&self, id: &str) -> Option<&Semantics> {
+        self.0.get(id)
+    }
+}
+
+/// FNV-1a: a node id that is the same on every frame for the same surface id.
+fn id_of(key: &str) -> NodeId {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in key.as_bytes() {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x1000_0000_01b3);
+    }
+    // 0 is the window.
+    NodeId(h | 1)
+}
+
+const WINDOW: NodeId = NodeId(0);
+
+fn contains(a: &ResolvedSurface, b: &ResolvedSurface) -> bool {
+    let (a, b) = (a.frame, b.frame);
+    a.x <= b.x && a.y <= b.y && a.right() >= b.right() && a.bottom() >= b.bottom()
+}
+
+fn node(s: &ResolvedSurface, sem: Option<&Semantics>) -> Node {
+    let default = Semantics::new(Kind::Group);
+    let sem = sem.unwrap_or(&default);
+    let mut n = Node::new(match &sem.role {
+        Kind::Button => Role::Button,
+        Kind::Slider { .. } => Role::Slider,
+        Kind::Toggle { .. } => Role::Switch,
+        Kind::TextInput { .. } => Role::TextInput,
+        Kind::Label => Role::Label,
+        Kind::Group => Role::Group,
+        Kind::Scroll => Role::ScrollView,
+    });
+    match &sem.role {
+        Kind::Button => n.add_action(Action::Click),
+        Kind::Slider { value, min, max } => {
+            n.set_numeric_value(*value);
+            n.set_min_numeric_value(*min);
+            n.set_max_numeric_value(*max);
+            n.add_action(Action::SetValue);
+        }
+        Kind::Toggle { on } => {
+            n.set_toggled((*on).into());
+            n.add_action(Action::Click);
+        }
+        Kind::TextInput { value } => n.set_value(value.clone()),
+        _ => {}
+    }
+    n.set_label(sem.label.clone().unwrap_or_else(|| s.key.clone()));
+    let f = s.frame;
+    n.set_bounds(Rect::new(f.x, f.y, f.right(), f.bottom()));
+    if s.focusable {
+        n.add_action(Action::Focus);
+    }
+    n
+}
+
+/// Every named surface (an id, not a `/0/2` tree path) becomes a node under
+/// a window root.
+///
+/// ponytail: containment nesting — the nearest preceding surface whose frame
+/// encloses this one is its parent. Replace with real tree paths when the
+/// scene exposes a surface's ancestors.
+pub fn tree_update(scene: &ResolvedScene, sem: &Access, focus: Option<&str>) -> TreeUpdate {
+    let named: Vec<&ResolvedSurface> = scene
+        .keys
+        .iter()
+        .filter(|k| !k.starts_with('/'))
+        .filter_map(|k| scene.surface(k))
+        .collect();
+
+    let mut nodes: Vec<(NodeId, Node)> = named
+        .iter()
+        .map(|s| (id_of(&s.key), node(s, sem.get(&s.key))))
+        .collect();
+
+    let mut root_kids = Vec::new();
+    for (i, s) in named.iter().enumerate() {
+        let parent = named[..i].iter().rposition(|p| contains(p, s));
+        match parent {
+            Some(p) => nodes[p].1.push_child(id_of(&s.key)),
+            None => root_kids.push(id_of(&s.key)),
+        }
+    }
+
+    let mut window = Node::new(Role::Window);
+    window.set_children(root_kids);
+    nodes.push((WINDOW, window));
+
+    TreeUpdate {
+        nodes,
+        tree: Some(Tree::new(WINDOW)),
+        tree_id: TreeId::ROOT,
+        focus: focus
+            .filter(|k| scene.surface(k).is_some())
+            .map(id_of)
+            .unwrap_or(WINDOW),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mui_core::prelude::*;
+
+    #[test]
+    fn nests_by_containment_and_ids_are_stable() {
+        let root = col![
+            leaf(40., 20.).id("a").focusable(),
+            row![leaf(30., 10.).id("b")].id("r"),
+        ];
+        let scene = resolve_scene(&SceneSpec::new(root)).unwrap();
+        let sem = Access::new();
+        let u = tree_update(&scene, &sem, Some("a"));
+        let by = |k: &str| {
+            u.nodes
+                .iter()
+                .find(|(id, _)| *id == id_of(k))
+                .map(|(_, n)| n)
+                .unwrap()
+        };
+        assert_eq!(by("r").children(), [id_of("b")]);
+        assert!(by("b").children().is_empty());
+        assert!(by("a").supports_action(Action::Focus));
+        assert_eq!(u.focus, id_of("a"));
+        assert_eq!(by("a").label().unwrap(), "a");
+        assert_eq!(tree_update(&scene, &sem, None).nodes[0].0, u.nodes[0].0);
+    }
+}

@@ -4,6 +4,7 @@
 //! solver produced in the same order. Every node gets an outline; every layer
 //! of its [`Style`](crate::Style) becomes one [`Painted`] entry. Children
 //! paint after their parent, so a list index is a z-order.
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
@@ -237,6 +238,56 @@ impl Runs<'_> {
         }
         Ok(self.cache.get(&key))
     }
+    /// The lines `text` breaks into at `max` width, capped at `cap` of them
+    /// with an ellipsis on the last. One line when it fits, or when there is
+    /// no font to break against.
+    ///
+    /// Every line is a slice of `text`, so the overwhelmingly common case --
+    /// a label that fits -- allocates the `Vec` and nothing else. Only an
+    /// ellipsised last line owns its bytes.
+    fn lines<'t>(
+        &mut self,
+        text: &'t str,
+        size: f64,
+        max: f64,
+        cap: Option<usize>,
+    ) -> Vec<Cow<'t, str>> {
+        let fits = self.measure(text, size).width <= max + 0.5;
+        let Some(font) = self.font.filter(|_| !fits && max > 0.0) else {
+            return vec![Cow::Borrowed(text)];
+        };
+        let Ok(lines) = mui_text::break_lines(font, text, size, max) else {
+            return vec![Cow::Borrowed(text)];
+        };
+        let n = cap.unwrap_or(usize::MAX).max(1);
+        let mut out: Vec<Cow<'t, str>> = lines
+            .iter()
+            .take(n)
+            .map(|l| Cow::Borrowed(text[l.text_range.clone()].trim_end()))
+            .collect();
+        if lines.len() > n {
+            // ponytail: the ellipsis is appended, not measured -- a capped
+            // line can overhang by one glyph. Re-break the last line against
+            // `max - advance('…')` if that shows.
+            if let Some(last) = out.last_mut() {
+                last.to_mut().push('\u{2026}');
+            }
+        }
+        if out.is_empty() {
+            out.push(Cow::Borrowed(""));
+        }
+        out
+    }
+    /// A wrapped label's box: the widest line by the stack of line heights.
+    fn wrapped(&mut self, text: &str, size: f64, max: f64, cap: Option<usize>) -> Size {
+        let (mut w, mut h) = (0.0f64, 0.0);
+        for l in self.lines(text, size, max, cap) {
+            let s = self.measure(&l, size);
+            w = w.max(s.width);
+            h += s.height;
+        }
+        Size::new(w, h)
+    }
     fn measure(&mut self, text: &str, size: f64) -> Size {
         match self.run(text, size) {
             // ponytail: no font → a monospace guess, so layout tests stay
@@ -268,6 +319,8 @@ struct Walk<'a> {
     keys: Vec<String>,
     surfaces: BTreeMap<String, ResolvedSurface>,
     deferred: Vec<Deferred<'a>>,
+    /// The baseline a `.baseline()` parent asks its text children to sit on.
+    base_y: Option<f64>,
 }
 impl<'a> Walk<'a> {
     fn outline(
@@ -433,17 +486,38 @@ impl<'a> Walk<'a> {
                 self.paint
                     .retain(|p| !(p.key == key && p.layer == Layer::Fill));
                 bg = under;
-                if let Some(run) = self.runs.run(t, size)? {
-                    // Baseline placed so ascent+descent sits centred in the frame.
-                    let dy =
-                        frame.y + (frame.size.height - run.ascent - run.descent) / 2.0 + run.ascent;
+                let lines = self.runs.lines(t, size, frame.size.width, e.lines);
+                let n = lines.len();
+                let base = self.base_y;
+                for (li, line) in lines.iter().enumerate() {
+                    let Some(run) = self.runs.run(line, size)? else {
+                        break;
+                    };
+                    // One line sits centred on ascent+descent, or on the
+                    // baseline its parent chose; a stack centres the block.
+                    let dy = match (base, n) {
+                        (Some(b), 1) => b,
+                        (_, 1) => {
+                            frame.y
+                                + (frame.size.height - run.ascent - run.descent) / 2.0
+                                + run.ascent
+                        }
+                        _ => {
+                            frame.y
+                                + (frame.size.height - n as f64 * run.line_height) / 2.0
+                                + run.ascent
+                                + li as f64 * run.line_height
+                        }
+                    };
                     let origin = Point::new(frame.x, dy);
                     let glyphs = run.path.rigid_transform(origin, 0.0)?;
+                    let ids: Arc<[(u32, f32)]> =
+                        run.glyphs.iter().map(|&(g, x)| (g, x as f32)).collect();
                     let text = self.spec.font.clone().map(|font| Text {
                         font,
                         size: size as f32,
                         origin,
-                        glyphs: run.glyphs.iter().map(|&(g, x)| (g, x as f32)).collect(),
+                        glyphs: ids,
                     });
                     if let Some(p) = self.push(Layer::Text, glyphs, None, &ink, under) {
                         p.text = text;
@@ -516,6 +590,20 @@ impl<'a> Walk<'a> {
         } else {
             clip
         };
+        let outer_base = self.base_y;
+        self.base_y = None;
+        if e.baseline {
+            let mut asc: Option<f64> = None;
+            for c in n.children() {
+                if let Content::Text(t) = &c.payload().content {
+                    let s = c.payload().text_size.unwrap_or(th.text);
+                    if let Some(r) = self.runs.run(t, s)? {
+                        asc = Some(asc.unwrap_or(0.0).max(r.ascent));
+                    }
+                }
+            }
+            self.base_y = asc.map(|a| frame.y + n.padding(th.spacing).top + a);
+        }
         for (j, c) in n.children().iter().enumerate() {
             let path = format!("{path}/{j}");
             if c.is_float() {
@@ -531,12 +619,57 @@ impl<'a> Walk<'a> {
                 self.node(c, &path, bg, cursor, inner)?;
             }
         }
+        self.base_y = outer_base;
         if n.is_clip() {
             self.key = key;
             let clear = Fill::Color(Color::oklcha(0.0, 0.0, 0.0, 0.0));
             self.push(Layer::Unclip, Path::default(), None, &clear, bg);
         }
         Ok(())
+    }
+}
+
+/// A content leaf's size: a paragraph wrapped to its room when it needs it.
+/// `want` remembers the width it settled on, keyed by the element's address.
+fn fit(
+    runs: &mut Runs,
+    th: Theme,
+    e: &crate::Element,
+    room: Option<f64>,
+    want: &mut HashMap<usize, f64>,
+) -> Size {
+    let Content::Text(t) = &e.content else {
+        return Size::ZERO;
+    };
+    let (t, size) = (t.as_str(), e.text_size.unwrap_or(th.text));
+    let s = match room {
+        Some(w) if w > 0.0 && runs.measure(t, size).width > w + 0.5 => {
+            runs.wrapped(t, size, w, e.lines)
+        }
+        _ => runs.measure(t, size),
+    };
+    want.insert(std::ptr::from_ref(e) as usize, s.width);
+    s
+}
+
+/// Every text node a row squeezed narrower than the width it measured at:
+/// the solver already wrapped each paragraph to its room in the first pass,
+/// so only a flex share that came out narrower than that is left to fix.
+fn wrap_hints(
+    n: &El,
+    frames: &[Frame],
+    i: &mut usize,
+    want: &HashMap<usize, f64>,
+    out: &mut HashMap<usize, f64>,
+) {
+    let f = frames[*i];
+    *i += 1;
+    let k = std::ptr::from_ref(n.payload()) as usize;
+    if f.size.width > 0.0 && want.get(&k).is_some_and(|w| *w > f.size.width + 0.5) {
+        out.insert(k, f.size.width);
+    }
+    for c in n.children() {
+        wrap_hints(c, frames, i, want, out);
     }
 }
 
@@ -563,16 +696,39 @@ pub fn resolve_scene_with(
         cache: &mut text.runs,
     };
     let th = spec.theme;
+    // A paragraph wraps to its room in this one pass. The element address
+    // `want` keys on is stable for as long as `spec` is borrowed.
+    let mut want = HashMap::new();
     let layout = resolve_with(
         &spec.root,
         spec.offered,
         spec.limits,
         th.spacing,
-        |e| match &e.content {
-            Content::Text(t) => runs.measure(t, e.text_size.unwrap_or(th.text)),
-            Content::None | Content::Canvas(_) => Size::ZERO,
-        },
+        |e, room| fit(&mut runs, th, e, room, &mut want),
     )?;
+    // A row hands its content a share, not the room, so a paragraph beside
+    // another can still come out narrower than it measured. Only then is the
+    // tree solved again, with that share as the width to wrap to.
+    // ponytail: a second solve for side-by-side paragraphs; the flex pass
+    // re-measuring its items at their final main size is the upgrade.
+    let mut hints = HashMap::new();
+    wrap_hints(&spec.root, layout.all(), &mut 0, &want, &mut hints);
+    let layout = if hints.is_empty() {
+        layout
+    } else {
+        resolve_with(
+            &spec.root,
+            spec.offered,
+            spec.limits,
+            th.spacing,
+            |e, room| match (&e.content, hints.get(&(std::ptr::from_ref(e) as usize))) {
+                (Content::Text(t), Some(&w)) => {
+                    runs.wrapped(t, e.text_size.unwrap_or(th.text), w, e.lines)
+                }
+                _ => fit(&mut runs, th, e, room, &mut want),
+            },
+        )?
+    };
     let mut w = Walk {
         spec,
         frames: layout.all(),
@@ -583,6 +739,7 @@ pub fn resolve_scene_with(
         keys: Vec::new(),
         surfaces: BTreeMap::new(),
         deferred: Vec::new(),
+        base_y: None,
     };
     w.node(&spec.root, "", th.palette.background(), None, None)?;
     // Floats paint last, in the order they were met; a float inside a float
@@ -597,6 +754,7 @@ pub fn resolve_scene_with(
             cursor,
         } = w.deferred[k].clone();
         w.i = at;
+        w.base_y = None;
         w.node(node, &path, under, cursor, None)?;
         k += 1;
     }
@@ -794,6 +952,135 @@ mod feature_tests {
         assert_eq!(s.surface("a").unwrap().cursor, Some(Cursor::Hand));
         assert_eq!(s.layout.frame("a").unwrap().y, -25.);
         assert_eq!(s.keys.last().map(String::as_str), Some("tip"));
+    }
+
+    fn font() -> Arc<Vec<u8>> {
+        Arc::new(epaint_default_fonts::HACK_REGULAR.to_vec())
+    }
+
+    #[test]
+    fn a_baseline_row_lines_two_sizes_up_on_the_letters() {
+        let root = row([
+            text("a").text_size(12.).id("small"),
+            text("b").text_size(24.).id("big"),
+        ])
+        .baseline();
+        let mut sp = SceneSpec::new(root);
+        sp.font = Some(font());
+        let s = resolve_scene(&sp).unwrap();
+        let y = |k: &str| {
+            s.paint
+                .iter()
+                .find(|p| p.key == k && p.layer == Layer::Text)
+                .unwrap()
+                .text
+                .as_ref()
+                .unwrap()
+                .origin
+                .y
+        };
+        assert_eq!(y("small"), y("big"), "one baseline, two sizes");
+        let mut plain = sp.clone();
+        plain.root = row([
+            text("a").text_size(12.).id("small"),
+            text("b").text_size(24.).id("big"),
+        ]);
+        let p = resolve_scene(&plain).unwrap();
+        let py = |k: &str| {
+            p.paint
+                .iter()
+                .find(|x| x.key == k && x.layer == Layer::Text)
+                .unwrap()
+                .text
+                .as_ref()
+                .unwrap()
+                .origin
+                .y
+        };
+        assert_ne!(py("small"), py("big"), "and centring alone does not");
+    }
+
+    #[test]
+    fn the_same_paragraph_wraps_to_each_width_it_is_given_and_a_row_share_too() {
+        let long = "wrap ".repeat(40);
+        // Two copies of one string in two widths: each wraps to its own,
+        // so the wider one is shorter. A third beside a sibling in a
+        // definite row gets its flex share, narrower than the row.
+        let root = column([
+            column([text(long.clone()).id("a")]).w(120),
+            column([text(long.clone()).id("b")]).w(240),
+            row([
+                text(long.clone()).id("c").shrink(1.0),
+                text(long).id("d").shrink(1.0),
+            ])
+            .w(300),
+        ]);
+        let mut sp = SceneSpec::new(root);
+        sp.font = Some(font());
+        let s = resolve_scene(&sp).unwrap();
+        let f = |k| s.layout.frame(k).unwrap().size;
+        assert!(
+            f("a").width <= 120.1 && f("b").width <= 240.1,
+            "{:?} {:?}",
+            f("a"),
+            f("b")
+        );
+        assert!(
+            f("a").height > f("b").height * 1.5,
+            "{:?} {:?}",
+            f("a"),
+            f("b")
+        );
+        assert!(
+            f("c").width <= 150.1 && f("c").height > f("b").height,
+            "{:?}",
+            f("c")
+        );
+        let lines = |k| {
+            s.paint
+                .iter()
+                .filter(|p| p.key == k && p.layer == Layer::Text)
+                .count()
+        };
+        assert!(
+            lines("a") > lines("b") && lines("c") > lines("b"),
+            "{} {} {}",
+            lines("a"),
+            lines("b"),
+            lines("c")
+        );
+    }
+
+    #[test]
+    fn a_narrow_column_wraps_a_paragraph_and_grows_taller() {
+        let long = "wrap ".repeat(40);
+        let one = {
+            let mut sp = SceneSpec::new(column([text(long.clone()).id("t")]));
+            sp.font = Some(font());
+            resolve_scene(&sp).unwrap().layout.frame("t").unwrap().size
+        };
+        let mut sp = SceneSpec::new(column([text(long.clone()).id("t")]).w(120));
+        sp.font = Some(font());
+        let s = resolve_scene(&sp).unwrap();
+        let lines = s
+            .paint
+            .iter()
+            .filter(|p| p.key == "t" && p.layer == Layer::Text)
+            .count();
+        assert!(lines > 3, "wrapped into {lines} lines");
+        let f = s.layout.frame("t").unwrap().size;
+        assert!(f.width <= 120.1 && f.height > one.height * 3., "{f:?}");
+        let mut capped = sp.clone();
+        capped.root = column([text(long).id("t").lines(2)]).w(120);
+        let c = resolve_scene(&capped).unwrap();
+        assert_eq!(
+            c.paint
+                .iter()
+                .filter(|p| p.key == "t" && p.layer == Layer::Text)
+                .count(),
+            2,
+            "capped at two lines"
+        );
     }
 
     #[test]

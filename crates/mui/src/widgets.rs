@@ -3,6 +3,7 @@
 use std::ops::RangeInclusive;
 
 use mui_core::prelude::*;
+use mui_core::Spring;
 use mui_input::Key;
 
 use crate::Ui;
@@ -12,6 +13,9 @@ fn unit(value: f64, range: &RangeInclusive<f64>) -> f64 {
 }
 
 /// Label, readout, and a track whose fill and thumb are flex shares.
+///
+/// Call [`Ui::edit`](crate::Ui::edit) with the same id to bracket the drag
+/// for a host's automation: `Begin` on the press, `End` on the release.
 pub fn slider(
     ui: &mut Ui,
     id: &str,
@@ -49,7 +53,11 @@ pub fn slider(
     .gap(Xs)
 }
 
-/// A dial: vertical drag, pointer on a 270° sweep.
+/// A dial: vertical drag, pointer on a 270° sweep. The pointer follows a
+/// tween, so a value set from outside -- a preset, a host automation curve --
+/// glides instead of jumping, while a drag still tracks the pointer.
+///
+/// Bracket it with [`Ui::edit`](crate::Ui::edit), as for [`slider`].
 pub fn knob(
     ui: &mut Ui,
     id: &str,
@@ -59,7 +67,9 @@ pub fn knob(
     size: f64,
 ) -> El {
     ui.drag(id, value, range.clone(), 120.0, true);
-    let t = unit(*value, &range);
+    // Fast enough that a drag still feels direct, slow enough that a
+    // preset change is a glide.
+    let t = ui.tween_with(id, unit(*value, &range), Spring::new(0.12, 1.0));
     let a = (135.0 + 270.0 * t).to_radians();
     let r = size / 2.0 - 6.0;
     let (h, _) = ui.state(id);
@@ -88,6 +98,7 @@ pub fn button(ui: &Ui, id: &str, label: &str) -> (El, bool) {
         .pad_xy(14.0, 8.0)
         .pill()
         .fill(Role::Primary)
+        .animate()
         .id(id);
     (el, ui.get(id).clicked)
 }
@@ -107,6 +118,7 @@ pub fn toggle(ui: &Ui, id: &str, on: &mut bool) -> El {
     .pad(3.0)
     .pill()
     .fill(if *on { Role::Primary } else { Role::Field })
+    .animate()
     .id(id)
 }
 
@@ -114,47 +126,151 @@ fn byte(s: &str, chars: usize) -> usize {
     s.char_indices().nth(chars).map_or(s.len(), |(b, _)| b)
 }
 
-/// A single-line field: the text, a blinking caret, and the edits the focused
-/// keys imply. Click it to focus, Tab to walk to it.
-// ponytail: no selection, no clipboard.
+/// The selection as a string, and the two helpers that edit it. Indices are
+/// characters; `byte` turns them into slice offsets.
+fn selected(value: &str, a: usize, c: usize) -> String {
+    value[byte(value, a.min(c))..byte(value, a.max(c))].to_owned()
+}
+/// Remove the selection: the caret afterwards, and whether there was one.
+fn take(value: &mut String, a: usize, c: usize) -> (usize, bool) {
+    let (lo, hi) = (a.min(c), a.max(c));
+    if lo == hi {
+        return (c, false);
+    }
+    let (x, y) = (byte(value, lo), byte(value, hi));
+    value.replace_range(x..y, "");
+    (lo, true)
+}
+/// The run of alphanumerics around `at`, for a double click.
+fn word(value: &str, at: usize) -> (usize, usize) {
+    let ch: Vec<char> = value.chars().collect();
+    let (mut lo, mut hi) = (at.min(ch.len()), at.min(ch.len()));
+    while lo > 0 && ch[lo - 1].is_alphanumeric() {
+        lo -= 1;
+    }
+    while hi < ch.len() && ch[hi].is_alphanumeric() {
+        hi += 1;
+    }
+    (lo, hi)
+}
+fn insert(value: &mut String, caret: &mut usize, c: char) {
+    value.insert(byte(value, *caret), c);
+    *caret += 1;
+}
+
+/// A single-line field: the text, a selection, a blinking caret, and the
+/// edits the focused keys imply. Click to focus and set the caret, drag to
+/// select, double click for a word, shift+arrows to extend. ctrl/cmd+A, C, X
+/// and V select all, copy, cut and paste -- a copy leaves the text in
+/// [`Frame::clipboard`](crate::Frame) for the host to hand to the OS, and a
+/// paste reads `Input::clipboard`, which the host fills on the paste key.
+// ponytail: single line. A multi-line field wants the caret on a line index,
+// not a byte, and `mui_text::break_lines` to place it.
 pub fn text_input(ui: &mut Ui, id: &str, value: &mut String) -> El {
+    let size = ui.theme.text;
     let focused = ui.focused(id);
-    let mut caret = ui.caret(id).min(value.chars().count());
+    let n = value.chars().count();
+    let (anchor, caret) = ui.sel(id);
+    let (mut anchor, mut caret) = (anchor.min(n), caret.min(n));
+
+    // The pointer, against last frame's frame: pad_xy's 8 px is where the
+    // text starts.
+    let r = ui.get(id);
+    if r.pressed || r.dragged {
+        if let Some(p) = ui.local(id) {
+            caret = ui.hit(value, size, p.x - 8.0);
+            if r.pressed {
+                anchor = caret;
+            }
+        }
+    }
+    if ui.double_click(id) {
+        (anchor, caret) = word(value, caret);
+    }
+
     if focused {
         for c in ui.text(id).to_owned().chars().filter(|c| !c.is_control()) {
-            value.insert(byte(value, caret), c);
-            caret += 1;
+            (caret, _) = take(value, anchor, caret);
+            insert(value, &mut caret, c);
+            anchor = caret;
         }
         for k in ui.keys(id).to_vec() {
+            let cmd = k.mods.ctrl || k.mods.cmd;
             match k.key {
+                Key::Char(c) if cmd => match c.to_ascii_lowercase() {
+                    'a' => (anchor, caret) = (0, value.chars().count()),
+                    // An empty selection copies nothing: handing the host
+                    // "" would wipe whatever is already on the clipboard.
+                    'c' if anchor != caret => {
+                        ui.set_clipboard(selected(value, anchor, caret));
+                    }
+                    'x' if anchor != caret => {
+                        ui.set_clipboard(selected(value, anchor, caret));
+                        (caret, _) = take(value, anchor, caret);
+                        anchor = caret;
+                    }
+                    'v' => {
+                        if let Some(s) = ui.pasted().map(str::to_owned) {
+                            (caret, _) = take(value, anchor, caret);
+                            for c in s.chars().filter(|c| !c.is_control()) {
+                                insert(value, &mut caret, c);
+                            }
+                            anchor = caret;
+                        }
+                    }
+                    _ => {}
+                },
                 Key::Char(c) if !c.is_control() => {
-                    value.insert(byte(value, caret), c);
-                    caret += 1;
+                    (caret, _) = take(value, anchor, caret);
+                    insert(value, &mut caret, c);
+                    anchor = caret;
                 }
-                Key::Backspace if caret > 0 => {
-                    value.remove(byte(value, caret - 1));
-                    caret -= 1;
+                Key::Backspace => {
+                    let (at, had) = take(value, anchor, caret);
+                    caret = at;
+                    if !had && caret > 0 {
+                        value.remove(byte(value, caret - 1));
+                        caret -= 1;
+                    }
+                    anchor = caret;
                 }
-                Key::Delete if caret < value.chars().count() => {
-                    value.remove(byte(value, caret));
+                Key::Delete => {
+                    let (at, had) = take(value, anchor, caret);
+                    caret = at;
+                    if !had && caret < value.chars().count() {
+                        value.remove(byte(value, caret));
+                    }
+                    anchor = caret;
                 }
-                Key::Left => caret = caret.saturating_sub(1),
-                Key::Right => caret = (caret + 1).min(value.chars().count()),
-                Key::Home => caret = 0,
-                Key::End => caret = value.chars().count(),
+                Key::Left | Key::Right | Key::Home | Key::End => {
+                    caret = match k.key {
+                        Key::Left => caret.saturating_sub(1),
+                        Key::Right => (caret + 1).min(value.chars().count()),
+                        Key::Home => 0,
+                        _ => value.chars().count(),
+                    };
+                    if !k.mods.shift {
+                        anchor = caret;
+                    }
+                }
                 _ => {}
             }
         }
-        ui.set_caret(id, caret);
     }
-    let size = ui.theme.text;
-    let x = ui.advance(&value[..byte(value, caret)], size);
+    ui.set_sel(id, anchor, caret);
+
+    let x = |at: usize| ui.caret_x(value, size, byte(value, at));
+    let (lo, hi) = (x(anchor.min(caret)), x(anchor.max(caret)));
     let on = focused && ui.blink();
     overlay([
+        leaf(hi - lo, size)
+            .anchor(Align::Start, Align::Center)
+            .offset(lo, 0.0)
+            .when(hi > lo, |e| e.fill(Role::Primary)),
         text(value.clone()).anchor(Align::Start, Align::Center),
         leaf(2.0, size)
             .anchor(Align::Start, Align::Center)
-            .offset(x, 0.0)
+            .offset(x(caret), 0.0)
             .when(on, |e| e.fill(Role::Ink)),
     ])
     .pad_xy(8.0, 6.0)

@@ -279,6 +279,14 @@ pub struct Node<P = ()> {
     /// child, anchored and offset within the parent's padding box. Tooltips,
     /// popups, drag ghosts.
     float: bool,
+    /// Break the flow into lines when the children no longer fit the main
+    /// axis. Branches only.
+    wrap: bool,
+    /// Grid cells only: how many columns this cell occupies.
+    span: usize,
+    /// Placement order among siblings; ties keep declaration order. Frames
+    /// stay in declaration order regardless.
+    order: i32,
 }
 
 impl<P: Default> Node<P> {
@@ -307,6 +315,9 @@ impl<P: Default> Node<P> {
             clip: false,
             scrolled: [0.0; 2],
             float: false,
+            wrap: false,
+            span: 1,
+            order: 0,
         }
     }
     /// Content whose size is already known: an icon cell, a spacer.
@@ -525,6 +536,34 @@ impl<P> Node<P> {
         self.float = true;
         self
     }
+    /// Let a row or column break into lines when its children overflow the
+    /// main axis. Lines stack on the cross axis with the same `gap`.
+    pub fn wrap(mut self) -> Self {
+        self.wrap = true;
+        self
+    }
+    /// How many grid columns this cell takes, clamped to the column count.
+    pub fn span(mut self, cols: usize) -> Self {
+        self.span = cols.max(1);
+        self
+    }
+    /// Place this child as if it were declared at `order`; its frame keeps
+    /// its declaration slot, so a tree walk still lines up.
+    pub fn order(mut self, order: i32) -> Self {
+        self.order = order;
+        self
+    }
+    /// Append a child to a container. A leaf or content node has no children
+    /// and is returned unchanged.
+    pub fn push(mut self, child: Self) -> Self {
+        match &mut self.kind {
+            Kind::Branch { children, .. }
+            | Kind::Overlay(children)
+            | Kind::Grid { children, .. } => children.push(child),
+            Kind::Leaf | Kind::Content => {}
+        }
+        self
+    }
     pub fn is_scroll(&self) -> bool {
         self.scroll
     }
@@ -656,6 +695,9 @@ impl Default for Limits {
 
 struct Measured<'a, P> {
     node: &'a Node<P>,
+    /// Slot among the parent's children, so a reordered placement can be
+    /// written back to the declaration order the frames keep.
+    index: usize,
     gap: f64,
     padding: Insets,
     size: Size,
@@ -668,10 +710,40 @@ struct Measured<'a, P> {
     children: Vec<Measured<'a, P>>,
 }
 
+/// The in-flow children -- everything but the floats -- in placement order.
+/// The sort is stable, so `order` only moves what asked to be moved.
+fn flow_of<'a, 'm, P>(children: &'m [Measured<'a, P>]) -> Vec<&'m Measured<'a, P>> {
+    let mut flow: Vec<_> = children.iter().filter(|c| !c.node.float).collect();
+    flow.sort_by_key(|c| c.node.order);
+    flow
+}
+
+/// Greedy line breaking: ranges into `flow`, each as long as it fits `avail`.
+/// A child wider than the line gets a line of its own.
+fn wrap_lines<P>(
+    flow: &[&Measured<'_, P>],
+    gap: f64,
+    vertical: bool,
+    avail: f64,
+) -> Vec<(usize, usize)> {
+    let mut lines = Vec::new();
+    let (mut start, mut used) = (0, 0.0);
+    for (i, c) in flow.iter().enumerate() {
+        let w = c.base(vertical, None);
+        if i > start && used + gap + w > avail + 1e-9 {
+            lines.push((start, i));
+            (start, used) = (i, w);
+        } else {
+            used += if i > start { gap + w } else { w };
+        }
+    }
+    lines.push((start, flow.len()));
+    lines
+}
+
 impl<'a, P> Measured<'a, P> {
-    /// The in-flow children: everything but the floats.
     fn flow(&self) -> Vec<&Measured<'a, P>> {
-        self.children.iter().filter(|c| !c.node.float).collect()
+        flow_of(&self.children)
     }
     /// Where this child starts before growth or shrink: a percentage of the
     /// parent, a height derived from its aspect, its declared `basis`, or what
@@ -761,11 +833,27 @@ fn label<P>(node: &Node<P>, ancestor: &str) -> String {
         .unwrap_or_else(|| format!("{ancestor} > unnamed"))
 }
 
+/// Rows of a grid, splitting where the spans fill the column count. A cell
+/// wider than the grid takes a row alone.
 fn grid_rows<'a, 'm, P>(
     children: &'m [&'m Measured<'a, P>],
     cols: usize,
-) -> impl Iterator<Item = &'m [&'m Measured<'a, P>]> {
-    children.chunks(cols.max(1))
+) -> Vec<&'m [&'m Measured<'a, P>]> {
+    let mut rows = Vec::new();
+    let (mut start, mut used) = (0, 0);
+    for (i, c) in children.iter().enumerate() {
+        let span = c.node.span.clamp(1, cols.max(1));
+        if i > start && used + span > cols.max(1) {
+            rows.push(&children[start..i]);
+            (start, used) = (i, span);
+        } else {
+            used += span;
+        }
+    }
+    if start < children.len() {
+        rows.push(&children[start..]);
+    }
+    rows
 }
 
 /// What a parent can promise a child about its outer size before layout runs:
@@ -786,13 +874,18 @@ struct Pass<'a, 'f, P> {
     limits: Limits,
     scale: SpacingScale,
     keys: BTreeMap<&'a str, ()>,
-    measurer: &'f mut dyn FnMut(&P) -> Size,
+    measurer: &'f mut dyn FnMut(&P, Option<f64>) -> Size,
 }
 
+/// `room` is the narrowest definite inner width above this node (a grid
+/// column counts; a scroll node stops it), handed to content so a paragraph
+/// can wrap in the first and only pass. It is the room, not the flex share:
+/// a row still squeezes its content after measuring.
 fn measure<'a, P>(
     node: &'a Node<P>,
     ancestor: &str,
     definite: [Option<f64>; 2],
+    room: Option<f64>,
     depth: usize,
     pass: &mut Pass<'a, '_, P>,
 ) -> Result<Measured<'a, P>, Error> {
@@ -829,9 +922,11 @@ fn measure<'a, P>(
         definite[0].map(|w| (w - padding.horizontal()).max(0.0)),
         definite[1].map(|h| (h - padding.vertical()).max(0.0)),
     ];
+    let room = [room, inner[0]].into_iter().flatten().reduce(f64::min);
     let mut children = Vec::with_capacity(node.children().len());
-    for c in node.children() {
+    for (index, c) in node.children().iter().enumerate() {
         let align = c.align_self.unwrap_or(node.align);
+        let mut child_room = room.filter(|_| !node.scroll);
         let promise = match &node.kind {
             _ if c.float => {
                 let (ax, ay) = c.anchor.unwrap_or(cell_default(node));
@@ -859,20 +954,26 @@ fn measure<'a, P>(
             }
             Kind::Grid { cols, .. } => {
                 let (ax, _) = c.anchor.unwrap_or(cell_default(node));
-                let col = inner[0].map(|w| (w - gap * (*cols - 1) as f64) / *cols as f64);
+                let span = c.span.clamp(1, *cols) as f64;
+                let col = inner[0].map(|w| {
+                    ((w - gap * (*cols - 1) as f64) / *cols as f64) * span + gap * (span - 1.0)
+                });
+                child_room = [child_room, col].into_iter().flatten().reduce(f64::min);
                 [offer(c, false, col, ax == Align::Stretch), None]
             }
             _ => [None; 2],
         };
-        children.push(measure(c, here, promise, depth + 1, pass)?);
+        let mut m = measure(c, here, promise, child_room, depth + 1, pass)?;
+        m.index = index;
+        children.push(m);
     }
-    let flow: Vec<&Measured<'_, P>> = children.iter().filter(|c| !c.node.float).collect();
+    let flow = flow_of(&children);
     let max_of =
         |g: &dyn Fn(&Measured<'_, P>) -> f64| flow.iter().map(|c| g(c)).fold(0.0, f64::max);
     let (content, sunk) = match &node.kind {
         Kind::Leaf => (Size::ZERO, Size::ZERO),
         Kind::Content => {
-            let s = (pass.measurer)(&node.payload);
+            let s = (pass.measurer)(&node.payload, room);
             if !s.valid(l.extent) {
                 return Err(Error::InvalidValue);
             }
@@ -894,26 +995,60 @@ fn measure<'a, P>(
                 .map(|c| (c.size.main(v) - c.base(v, None)) * total_grow / c.node.grow)
                 .fold(0.0, f64::max);
             let floor_main = flow.iter().map(|c| c.floor.main(v)).sum::<f64>() + gaps;
-            (
-                Size::axes(base + surplus + gaps, max_of(&|c| c.size.cross(v)), v),
-                // A scroll node can always be squeezed on its main axis.
-                Size::axes(
-                    if node.scroll { 0.0 } else { floor_main },
-                    max_of(&|c| c.floor.cross(v)),
-                    v,
-                ),
-            )
+            // A wrapping row measured under an offered main axis is as tall as
+            // its lines. With nothing offered there is nothing to break
+            // against, so it stays one line.
+            // ponytail: the cross floor stays the single-line one, so a squeeze
+            // past the measured width overflows instead of erroring.
+            if let Some(avail) = node.wrap.then(|| inner[v as usize]).flatten() {
+                let lines = wrap_lines(&flow, gap, v, avail);
+                let cross = lines
+                    .iter()
+                    .map(|(a, b)| {
+                        flow[*a..*b]
+                            .iter()
+                            .map(|c| c.size.cross(v))
+                            .fold(0.0, f64::max)
+                    })
+                    .sum::<f64>()
+                    + gap * lines.len().saturating_sub(1) as f64;
+                let sunk_main = if node.scroll {
+                    0.0
+                } else {
+                    max_of(&|c| c.floor.main(v))
+                };
+                (
+                    Size::axes(avail, cross, v),
+                    Size::axes(sunk_main, max_of(&|c| c.floor.cross(v)), v),
+                )
+            } else {
+                (
+                    Size::axes(base + surplus + gaps, max_of(&|c| c.size.cross(v)), v),
+                    // A scroll node can always be squeezed on its main axis.
+                    Size::axes(
+                        if node.scroll { 0.0 } else { floor_main },
+                        max_of(&|c| c.floor.cross(v)),
+                        v,
+                    ),
+                )
+            }
         }
         Kind::Overlay(_) => (
             Size::new(max_of(&|c| c.size.width), max_of(&|c| c.size.height)),
             Size::new(max_of(&|c| c.floor.width), max_of(&|c| c.floor.height)),
         ),
         Kind::Grid { cols, .. } => {
-            let rows = flow.len().div_ceil(*cols) as f64;
+            let rows = grid_rows(&flow, *cols).len() as f64;
             let gaps = |n: f64| (n - 1.0).max(0.0) * gap;
             let hug = |g: fn(&Measured<'_, P>) -> Size| {
-                let widest = flow.iter().map(|c| g(c).width).fold(0.0, f64::max);
+                // A spanning cell pays for its span, so its share of one
+                // column is what sets the column width.
+                let widest = flow
+                    .iter()
+                    .map(|c| g(c).width / c.node.span.clamp(1, *cols) as f64)
+                    .fold(0.0, f64::max);
                 let tall: f64 = grid_rows(&flow, *cols)
+                    .iter()
                     .map(|r| r.iter().map(|c| g(c).height).fold(0.0, f64::max))
                     .sum();
                 Size::new(
@@ -958,6 +1093,7 @@ fn measure<'a, P>(
     }
     Ok(Measured {
         node,
+        index: 0,
         gap,
         padding,
         size,
@@ -1079,35 +1215,40 @@ fn arrange<P>(
     // Where each in-flow child goes, then every child in declaration order
     // so frames stay in tree order; a float sits in the padding box like an
     // overlay child, unscrolled.
-    let mut placed: Vec<([f64; 2], Size)> = Vec::with_capacity(flow.len());
+    let mut placed: Vec<Option<([f64; 2], Size)>> = vec![None; m.children.len()];
     match &n.kind {
         Kind::Leaf | Kind::Content => {}
         Kind::Overlay(_) => {
             for c in &flow {
                 let (p, s) = cell(c, inner, default);
-                placed.push((at(p[0], p[1]), s));
+                placed[c.index] = Some((at(p[0], p[1]), s));
             }
         }
         Kind::Grid { cols, .. } => {
             let cols = *cols;
-            let rows = flow.len().div_ceil(cols);
+            let grid = grid_rows(&flow, cols);
             let col_w = (inner.width - m.gap * cols.saturating_sub(1) as f64) / cols as f64;
-            let heights: Vec<f64> = grid_rows(&flow, cols)
+            let heights: Vec<f64> = grid
+                .iter()
                 .map(|r| r.iter().map(|c| c.size.height).fold(0.0, f64::max))
                 .collect();
             let surplus = (inner.height
                 - heights.iter().sum::<f64>()
-                - m.gap * rows.saturating_sub(1) as f64)
+                - m.gap * grid.len().saturating_sub(1) as f64)
                 .max(0.0)
-                / rows.max(1) as f64;
+                / grid.len().max(1) as f64;
             let mut y = 0.0;
-            for (row, h) in grid_rows(&flow, cols).zip(heights) {
-                let cell_size = Size::new(col_w, h + surplus);
-                for (k, c) in row.iter().enumerate() {
+            for (row, h) in grid.iter().zip(heights) {
+                let mut col = 0;
+                for c in row.iter() {
+                    let span = c.node.span.clamp(1, cols.max(1));
+                    let cell_size =
+                        Size::new(col_w * span as f64 + m.gap * (span - 1) as f64, h + surplus);
                     let (p, s) = cell(c, cell_size, default);
-                    placed.push((at(k as f64 * (col_w + m.gap) + p[0], y + p[1]), s));
+                    placed[c.index] = Some((at(col as f64 * (col_w + m.gap) + p[0], y + p[1]), s));
+                    col += span;
                 }
-                y += cell_size.height + m.gap;
+                y += h + surplus + m.gap;
             }
         }
         Kind::Branch { vertical, .. } => {
@@ -1119,41 +1260,59 @@ fn arrange<P>(
             } else {
                 inner
             };
-            let allocated = distribute(&flow, m.gap, v, inner);
-            let count = flow.len() as f64;
-            let residual =
-                (inner.main(v) - allocated.iter().sum::<f64>() - m.gap * (count - 1.0).max(0.0))
-                    .max(0.0);
-            let (mut cursor, extra) = match n.justify {
-                Justify::Start => (0.0, 0.0),
-                Justify::Center => (residual * 0.5, 0.0),
-                Justify::End => (residual, 0.0),
-                Justify::SpaceBetween if count > 1.0 => (0.0, residual / (count - 1.0)),
-                Justify::SpaceBetween => (residual * 0.5, 0.0),
-                Justify::SpaceAround => (residual / count * 0.5, residual / count),
-                Justify::SpaceEvenly => (residual / (count + 1.0), residual / (count + 1.0)),
+            let lines = if n.wrap {
+                wrap_lines(&flow, m.gap, v, inner.main(v))
+            } else {
+                vec![(0, flow.len())]
             };
-            for (c, main) in flow.iter().zip(allocated) {
-                let align = c.node.align_self.unwrap_or(n.align);
-                let avail = inner.cross(v);
-                let cross = match c.aspect_width(inner) {
-                    Some((w, _)) if v => w,
-                    Some((_, a)) => main / a,
-                    None => c.extent(!v, avail, align),
-                };
-                let cross_pos = place(avail, cross, align);
-                let pos = if v {
-                    at(cross_pos, cursor)
+            // One line keeps the whole cross axis, so an unwrapped row is
+            // exactly what it was; several share it by their own heights.
+            let single = lines.len() == 1;
+            let mut line_start = 0.0;
+            for (a, b) in lines {
+                let line = &flow[a..b];
+                let line_cross = if single {
+                    inner.cross(v)
                 } else {
-                    at(cursor, cross_pos)
+                    line.iter().map(|c| c.size.cross(v)).fold(0.0, f64::max)
                 };
-                placed.push((pos, Size::axes(main, cross, v)));
-                cursor += main + m.gap + extra;
+                let line_inner = Size::axes(inner.main(v), line_cross, v);
+                let allocated = distribute(line, m.gap, v, line_inner);
+                let count = line.len() as f64;
+                let residual = (inner.main(v)
+                    - allocated.iter().sum::<f64>()
+                    - m.gap * (count - 1.0).max(0.0))
+                .max(0.0);
+                let (mut cursor, extra) = match n.justify {
+                    Justify::Start => (0.0, 0.0),
+                    Justify::Center => (residual * 0.5, 0.0),
+                    Justify::End => (residual, 0.0),
+                    Justify::SpaceBetween if count > 1.0 => (0.0, residual / (count - 1.0)),
+                    Justify::SpaceBetween => (residual * 0.5, 0.0),
+                    Justify::SpaceAround => (residual / count * 0.5, residual / count),
+                    Justify::SpaceEvenly => (residual / (count + 1.0), residual / (count + 1.0)),
+                };
+                for (c, main) in line.iter().zip(allocated) {
+                    let align = c.node.align_self.unwrap_or(n.align);
+                    let cross = match c.aspect_width(line_inner) {
+                        Some((w, _)) if v => w,
+                        Some((_, a)) => main / a,
+                        None => c.extent(!v, line_cross, align),
+                    };
+                    let cross_pos = line_start + place(line_cross, cross, align);
+                    let pos = if v {
+                        at(cross_pos, cursor)
+                    } else {
+                        at(cursor, cross_pos)
+                    };
+                    placed[c.index] = Some((pos, Size::axes(main, cross, v)));
+                    cursor += main + m.gap + extra;
+                }
+                line_start += line_cross + m.gap;
             }
         }
     }
-    let mut placed = placed.into_iter();
-    for c in &m.children {
+    for (i, c) in m.children.iter().enumerate() {
         let (pos, s) = if c.node.float {
             let (p, s) = cell(c, inner, default);
             (
@@ -1164,7 +1323,7 @@ fn arrange<P>(
                 s,
             )
         } else {
-            placed.next().ok_or(Error::BudgetExceeded)?
+            placed[i].take().ok_or(Error::BudgetExceeded)?
         };
         arrange(c, here, pos, s, out)?;
     }
@@ -1174,19 +1333,22 @@ fn arrange<P>(
 /// `None` means hug intrinsic content. `Some` is an exact offered parent size.
 /// Content leaves measure as empty; use [`resolve_with`] to size them.
 pub fn resolve<P>(root: &Node<P>, offered: Option<Size>, limits: Limits) -> Result<Layout, Error> {
-    resolve_with(root, offered, limits, SpacingScale::DEFAULT, |_| Size::ZERO)
+    resolve_with(root, offered, limits, SpacingScale::DEFAULT, |_, _| {
+        Size::ZERO
+    })
 }
 
 /// [`resolve`] with a spacing scale for tokens and a measurer for
-/// `Node::content` leaves, called once per leaf with its payload. Text shaping lives outside this crate on purpose.
-// ponytail: intrinsic width only, no wrap; give the measurer an available
-// width when a wrapping text leaf is actually needed.
+/// `Node::content` leaves, called once per leaf with its payload and the
+/// room it has: the narrowest definite inner width above it, `None` under a
+/// hugging parent or inside a scroll. Text shaping lives outside this crate
+/// on purpose.
 pub fn resolve_with<P>(
     root: &Node<P>,
     offered: Option<Size>,
     limits: Limits,
     scale: SpacingScale,
-    mut measurer: impl FnMut(&P) -> Size,
+    mut measurer: impl FnMut(&P, Option<f64>) -> Size,
 ) -> Result<Layout, Error> {
     if !limits.extent.is_finite()
         || limits.extent <= 0.0
@@ -1204,7 +1366,7 @@ pub fn resolve_with<P>(
         keys: BTreeMap::new(),
         measurer: &mut measurer,
     };
-    let m = measure(root, "root", definite, 0, &mut pass)?;
+    let m = measure(root, "root", definite, None, 0, &mut pass)?;
     let size = offered.unwrap_or(m.size);
     if !size.valid(limits.extent) {
         return Err(Error::InvalidValue);

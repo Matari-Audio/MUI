@@ -11,6 +11,7 @@ members = [
   "crates/mui-vello",
   "crates/mui-truce",
   "crates/mui-input",
+  "crates/mui-access",
 ]
 resolver = "2"
 

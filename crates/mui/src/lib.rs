@@ -15,7 +15,9 @@
 //! let frame = ui.frame(root, Some(Size::new(240.0, 96.0)), Input::default(), 1.0 / 60.0).unwrap();
 //! assert!(frame.scene.paint.len() > 3);
 //! // frame.cursor is what to set; frame.tip is the tooltip that came due;
-//! // frame.animating says whether to schedule another frame.
+//! // frame.animating says whether to schedule another frame; frame.edits is
+//! // every gesture that began or ended, and frame.clipboard is what a copy
+//! // wants put on the system clipboard.
 //! ```
 #![forbid(unsafe_code)]
 
@@ -31,11 +33,11 @@ pub use mui_vello as vello;
 mod ui;
 pub mod widgets;
 
-pub use ui::{Frame, Ui};
+pub use ui::{Edit, Frame, Ui};
 
 pub mod prelude {
     pub use crate::widgets::{button, knob, slider, text_input, toggle};
-    pub use crate::{Frame, Ui};
+    pub use crate::{Edit, Frame, Ui};
     pub use mui_core::prelude::*;
     pub use mui_core::{CornerProfile, Mode, Palette, Pigment, Spring};
     pub use mui_input::{Input, Key, KeyPress, Mods, PointerInput, Response};

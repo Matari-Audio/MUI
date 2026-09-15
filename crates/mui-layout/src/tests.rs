@@ -338,11 +338,41 @@ fn space_around_and_evenly() {
 #[test]
 fn content_leaves_are_measured_by_the_caller() {
     let t = Node::<&str>::column([Node::content().with("hello").id("t")]).id("c");
-    let l = resolve_with(&t, None, Default::default(), SpacingScale::DEFAULT, |s| {
-        Size::new(s.len() as f64 * 7., 12.)
-    })
+    let l = resolve_with(
+        &t,
+        None,
+        Default::default(),
+        SpacingScale::DEFAULT,
+        |s, room| {
+            assert_eq!(room, None);
+            Size::new(s.len() as f64 * 7., 12.)
+        },
+    )
     .unwrap();
     assert_eq!(l.frame("t").unwrap().size, Size::new(35., 12.));
+}
+
+#[test]
+fn content_is_told_the_room_it_has_and_a_scroll_withholds_it() {
+    // A definite column pads 10 a side: 80 of room. The grid splits that
+    // into two 35 columns. The scroll's child gets none.
+    let t = Node::<&str>::column([
+        Node::content().with("a").id("a"),
+        Node::<&str>::grid(2, [Node::content().with("g").id("g")]).gap(10.),
+        Node::<&str>::column([Node::content().with("s").id("s")]).scroll(),
+    ])
+    .width(Len::Px(100.))
+    .pad(10.);
+    let mut seen = std::collections::BTreeMap::new();
+    let wrap = |s: &&str, room: Option<f64>| {
+        seen.insert(s.to_string(), room);
+        Size::new(room.map_or(200., |r| r.min(200.)), 12.)
+    };
+    let l = resolve_with(&t, None, Default::default(), SpacingScale::DEFAULT, wrap).unwrap();
+    assert_eq!(seen["a"], Some(80.));
+    assert_eq!(seen["g"], Some(35.));
+    assert_eq!(seen["s"], None);
+    assert_eq!(l.frame("a").unwrap().size.width, 80.);
 }
 
 #[test]
@@ -412,4 +442,56 @@ fn a_scroll_column_overflows_and_slides_and_a_float_takes_no_space() {
     let tip = l.frame("tip").unwrap();
     assert_eq!((tip.x, tip.y), (2. + 10. - 80., 2. + 4.));
     assert_eq!(l.all()[2], tip, "frames stay in declaration order");
+}
+
+#[test]
+fn a_wrapping_row_breaks_into_lines_and_grows_its_cross_size() {
+    let cells = (0..5).map(|_| leaf(30., 10.));
+    let t = column([row(cells).id("r").wrap()]);
+    let l = resolve(&t, Some(Size::new(100., 200.)), Default::default()).unwrap();
+    // three per line of 100, so two lines, and the row is two cells tall.
+    assert_eq!(l.frame("r").unwrap().size, Size::new(100., 20.));
+    let cells = &l.all()[2..];
+    assert_eq!((cells[2].x, cells[2].y), (60., 0.));
+    assert_eq!((cells[3].x, cells[3].y), (0., 10.));
+}
+
+#[test]
+fn a_span_fills_the_row_and_pushes_the_next_cell_down() {
+    let t = grid(
+        3,
+        [
+            leaf(10., 10.).id("a"),
+            leaf(10., 10.).id("b").span(2),
+            leaf(10., 10.).id("c"),
+        ],
+    );
+    let l = resolve(&t, Some(Size::new(30., 20.)), Default::default()).unwrap();
+    // b owns columns 1 and 2 -- 20 px wide -- and centres its 10 px in them.
+    assert_eq!(l.frame("b").unwrap().center().0, 20.);
+    assert_eq!(l.frame("c").unwrap().center().0, 5.);
+    assert!(l.frame("c").unwrap().y > l.frame("a").unwrap().y);
+}
+
+#[test]
+fn order_moves_the_placement_but_not_the_frame() {
+    let t = row([leaf(10., 10.).id("a").order(1), leaf(20., 10.).id("b")]);
+    let l = resolve(&t, None, Default::default()).unwrap();
+    assert_eq!(l.frame("b").unwrap().x, 0.);
+    assert_eq!(l.frame("a").unwrap().x, 20.);
+    // frames stay in declaration order: root, a, b.
+    assert_eq!(l.all()[1], l.frame("a").unwrap());
+}
+
+#[test]
+fn push_appends_a_child_and_keeps_pre_order_frames() {
+    let t = column([leaf(10., 10.).id("a")])
+        .id("c")
+        .push(leaf(10., 10.).id("b").float());
+    let l = resolve(&t, None, Default::default()).unwrap();
+    assert_eq!(l.all().len(), 3);
+    assert_eq!(l.all()[0], l.frame("c").unwrap());
+    assert_eq!(l.all()[2], l.frame("b").unwrap());
+    // a leaf has nowhere to put one.
+    assert_eq!(leaf(1., 1.).push(leaf(1., 1.)).children().len(), 0);
 }
