@@ -18,7 +18,7 @@ mui-geometry = { path = "../mui-geometry" }
 # `wgpu_default` (desktop) or `webgl` (browser) themselves.
 vello_hybrid = { version = "0.2", optional = true, default-features = false, features = ["wgpu"] }
 # kurbo and peniko reach us through vello_common so the types cannot version-skew.
-vello_common = { version = "0.2", default-features = false }
+vello_common = { version = "0.2", default-features = false, features = ["std"] }
 vello_cpu = { version = "0.2", optional = true, default-features = false, features = ["std", "u8_pipeline"] }
 
 [dev-dependencies]

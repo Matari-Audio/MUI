@@ -187,21 +187,40 @@ impl Item {
     }
     /// Recolor the existing outlines of a complete component subtree.
     pub fn outline_color(mut self, color: Color) -> Self {
-        if let Some((ink, _)) = &mut self.stroke { *ink = color; }
-        self.children = self.children.into_iter().map(|child| child.outline_color(color)).collect();
+        if let Some((ink, _)) = &mut self.stroke {
+            *ink = color;
+        }
+        self.children = self
+            .children
+            .into_iter()
+            .map(|child| child.outline_color(color))
+            .collect();
         self
     }
     /// Typography is measured and painted by the presentation backend.
     /// Replace one exact semantic/custom color throughout a subtree; neutral colors stay intact.
     pub fn replace_color(mut self, from: Color, to: Color) -> Self {
         for color in [&mut self.color, &mut self.foreground, &mut self.hover_color] {
-            if *color == Some(from) { *color = Some(to); }
+            if *color == Some(from) {
+                *color = Some(to);
+            }
         }
-        if let Some((color, _)) = &mut self.stroke { if *color == from { *color = to; } }
-        self.children = self.children.into_iter().map(|child| child.replace_color(from, to)).collect();
+        if let Some((color, _)) = &mut self.stroke {
+            if *color == from {
+                *color = to;
+            }
+        }
+        self.children = self
+            .children
+            .into_iter()
+            .map(|child| child.replace_color(from, to))
+            .collect();
         self
     }
-    pub fn foreground(mut self, color: Color) -> Self { self.foreground = Some(color); self }
+    pub fn foreground(mut self, color: Color) -> Self {
+        self.foreground = Some(color);
+        self
+    }
     pub fn typography(mut self, size: f32, weight: f32) -> Self {
         self.text_style.0 = size;
         self.text_style.1 = weight;
@@ -647,9 +666,13 @@ impl Compiler {
                 return Err(SceneError::InvalidTheme);
             }
         }
-        if !item.opacity.is_finite() || !(0. ..=1.).contains(&item.opacity)
-            || !item.text_style.0.is_finite() || item.text_style.0 <= 0.
-            || !item.text_style.1.is_finite() || !(1. ..=1000.).contains(&item.text_style.1) {
+        if !item.opacity.is_finite()
+            || !(0. ..=1.).contains(&item.opacity)
+            || !item.text_style.0.is_finite()
+            || item.text_style.0 <= 0.
+            || !item.text_style.1.is_finite()
+            || !(1. ..=1000.).contains(&item.text_style.1)
+        {
             return Err(SceneError::InvalidModifier("invalid typography or opacity"));
         }
         let opacity = item.opacity * parent.as_ref().map_or(1., |id| self.items[id].opacity);

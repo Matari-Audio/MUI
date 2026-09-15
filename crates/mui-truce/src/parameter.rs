@@ -73,7 +73,7 @@ impl Parameter {
         let infos = params.param_infos();
         ids.iter()
             .map(|&(id, modulatable)| {
-                let info = infos.iter().find(|info| info.id == id)?.clone();
+                let info = *infos.iter().find(|info| info.id == id)?;
                 let preview = params.get_normalized(id)?;
                 Some(Self {
                     info,

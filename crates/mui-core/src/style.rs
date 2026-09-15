@@ -107,8 +107,12 @@ impl Ui {
                 });
             }
             let background = fill.unwrap_or(backdrop);
-            let text = info.foreground.map(|c| c.resolve(colors)).transpose()?
-                .unwrap_or(colors.text).contrast_on(&[background], self.theme().contrast.text)?;
+            let text = info
+                .foreground
+                .map(|c| c.resolve(colors))
+                .transpose()?
+                .unwrap_or(colors.text)
+                .contrast_on(&[background], self.theme().contrast.text)?;
             let stroke = paint
                 .stroke
                 .map(|(c, w)| {

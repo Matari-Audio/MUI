@@ -140,6 +140,7 @@ pub trait Canvas {
     fn stroke_path(&mut self, p: &BezPath);
     fn fill_blurred_rounded_rect(&mut self, r: &Rect, radius: f32, std_dev: f32);
 }
+#[cfg(any(feature = "gpu", feature = "cpu"))]
 macro_rules! canvas {
     ($t:ty) => {
         impl Canvas for $t {

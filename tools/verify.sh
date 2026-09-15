@@ -3,7 +3,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-cargo fmt --all -- --check
+# Format first-party workspace packages, excluding prepared upstream sources.
+format_package_list=$(cargo metadata --no-deps --format-version=1 --offline |
+  python3 -c 'import json,sys; data=json.load(sys.stdin); members=set(data["workspace_members"]); [print("-p\n" + p["name"]) for p in data["packages"] if p["id"] in members]')
+mapfile -t format_packages <<< "$format_package_list"
+cargo fmt "${format_packages[@]}" -- --check
 # Keep the full native workspace gate locked and feature-complete.
 cargo test --workspace --all-features --locked --offline
 cargo clippy --workspace --all-features --all-targets --locked --offline -- -D warnings

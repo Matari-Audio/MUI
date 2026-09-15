@@ -1,6 +1,6 @@
 use mui_core::{container, item};
-use mui_layout::{Flow, Hug};
 use mui_core::{TextStyle, TextSystem};
+use mui_layout::{Flow, Hug};
 
 #[test]
 fn real_font_wrapping_padding_fixed_leaves_and_invalid_styles() {

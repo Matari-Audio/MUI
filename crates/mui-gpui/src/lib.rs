@@ -133,7 +133,9 @@ impl<V: EmbeddedView> Editor for GpuiEditor<V> {
         if let Some(session) = &mut self.session {
             for edit in session.edits.try_iter() {
                 session.automation.dispatch(&session.context, edit);
-                session.pending.fetch_sub(1, std::sync::atomic::Ordering::Release);
+                session
+                    .pending
+                    .fetch_sub(1, std::sync::atomic::Ordering::Release);
             }
         }
     }
@@ -142,9 +144,14 @@ impl<V: EmbeddedView> Editor for GpuiEditor<V> {
             let _ = session.commands.send(Command::Close);
             // Keep host-thread dispatch alive while the worker completes its closing hook.
             while !session.worker.is_finished() {
-                if let Ok(edit) = session.edits.recv_timeout(std::time::Duration::from_millis(1)) {
+                if let Ok(edit) = session
+                    .edits
+                    .recv_timeout(std::time::Duration::from_millis(1))
+                {
                     session.automation.dispatch(&session.context, edit);
-                    session.pending.fetch_sub(1, std::sync::atomic::Ordering::Release);
+                    session
+                        .pending
+                        .fetch_sub(1, std::sync::atomic::Ordering::Release);
                 }
             }
             let error = worker_result(session.worker);
@@ -153,7 +160,9 @@ impl<V: EmbeddedView> Editor for GpuiEditor<V> {
             }
             for edit in session.edits.try_iter() {
                 session.automation.dispatch(&session.context, edit);
-                session.pending.fetch_sub(1, std::sync::atomic::Ordering::Release);
+                session
+                    .pending
+                    .fetch_sub(1, std::sync::atomic::Ordering::Release);
             }
             // Balance host automation even if the UI worker failed before sending End.
             session.automation.close(&session.context);
@@ -198,6 +207,10 @@ fn worker_result(worker: std::thread::JoinHandle<anyhow::Result<()>>) -> String 
         Err(_) => "GPUI worker panicked".into(),
     }
 }
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the worker owns distinct host window, parameter and lifecycle channel handles"
+)]
 fn run_editor<V: EmbeddedView>(
     parent: u32,
     dimensions: (u32, u32),
@@ -286,10 +299,14 @@ fn run_editor<V: EmbeddedView>(
                 connection.flush()?;
             }
             forward()?;
-            app.update(|cx| window.update(cx, |view, _, cx| {
-                view.host_edits_pending(pending.load(std::sync::atomic::Ordering::Acquire) != 0);
-                view.synchronize(cx);
-            }))?;
+            app.update(|cx| {
+                window.update(cx, |view, _, cx| {
+                    view.host_edits_pending(
+                        pending.load(std::sync::atomic::Ordering::Acquire) != 0,
+                    );
+                    view.synchronize(cx);
+                })
+            })?;
             runtime.pump()?;
         }
         Ok(())
@@ -311,7 +328,11 @@ fn run_editor<V: EmbeddedView>(
 }
 
 // Publish the pending count before the host can observe the corresponding event.
-fn forward_edits(queue: &mpsc::Receiver<Edit>, host: &mpsc::Sender<Edit>, pending: &std::sync::atomic::AtomicUsize) -> anyhow::Result<()> {
+fn forward_edits(
+    queue: &mpsc::Receiver<Edit>,
+    host: &mpsc::Sender<Edit>,
+    pending: &std::sync::atomic::AtomicUsize,
+) -> anyhow::Result<()> {
     use std::sync::atomic::Ordering;
     for edit in queue.try_iter() {
         pending.fetch_add(1, Ordering::Release);
@@ -326,28 +347,45 @@ fn forward_edits(queue: &mpsc::Receiver<Edit>, host: &mpsc::Sender<Edit>, pendin
 #[cfg(test)]
 mod acknowledgement_tests {
     use super::{Edit, forward_edits};
-    use std::sync::{mpsc, atomic::{AtomicUsize, Ordering}};
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        mpsc,
+    };
     #[test]
     fn history_barrier_stays_pending_until_last_host_dispatch() {
         let (ui, queued) = mpsc::channel();
         let (host, received) = mpsc::channel();
         let pending = AtomicUsize::new(0);
-        for edit in [Edit::Begin(1), Edit::Value(1, 0.75), Edit::End(1)] { ui.send(edit).unwrap(); }
+        for edit in [Edit::Begin(1), Edit::Value(1, 0.75), Edit::End(1)] {
+            ui.send(edit).unwrap();
+        }
         forward_edits(&queued, &host, &pending).unwrap();
         let mut live = 0.;
         for expected in [3, 2, 1] {
             assert_eq!(pending.load(Ordering::Acquire), expected);
-            if let Edit::Value(_, value) = received.recv().unwrap() { live = value; }
+            if let Edit::Value(_, value) = received.recv().unwrap() {
+                live = value;
+            }
             pending.fetch_sub(1, Ordering::Release);
         }
         assert_eq!(pending.load(Ordering::Acquire), 0);
         assert_eq!(live, 0.75);
         ui.send(Edit::Begin(1)).unwrap();
         forward_edits(&queued, &host, &pending).unwrap();
-        assert_eq!(pending.load(Ordering::Acquire), 1, "a later gesture reopens the barrier");
-        received.recv().unwrap(); pending.fetch_sub(1, Ordering::Release);
-        drop(received); ui.send(Edit::End(1)).unwrap();
+        assert_eq!(
+            pending.load(Ordering::Acquire),
+            1,
+            "a later gesture reopens the barrier"
+        );
+        received.recv().unwrap();
+        pending.fetch_sub(1, Ordering::Release);
+        drop(received);
+        ui.send(Edit::End(1)).unwrap();
         assert!(forward_edits(&queued, &host, &pending).is_err());
-        assert_eq!(pending.load(Ordering::Acquire), 0, "failed sends cannot strand the barrier");
+        assert_eq!(
+            pending.load(Ordering::Acquire),
+            0,
+            "failed sends cannot strand the barrier"
+        );
     }
 }

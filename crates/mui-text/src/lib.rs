@@ -11,7 +11,6 @@
 //! Symbols from unfilled to filled is `FILL` 0 -> 1 with no atlas in the way.
 #![forbid(unsafe_code)]
 
-
 use mui_geometry::{Path, PathCommand, Point};
 use skrifa::outline::{DrawSettings, OutlinePen};
 use skrifa::prelude::{LocationRef, Size};

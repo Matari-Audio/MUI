@@ -219,8 +219,15 @@ fn scoped_text_measurement_and_invalid_item_policies_are_explicit() {
 fn compact_flex_preserves_distribution_and_rejects_invalid_rounding() {
     for horizontal in [true, false] {
         let cells = [item("a").size(20., 20.), item("b").size(20., 20.)];
-        let ui = if horizontal { Item::row(cells) } else { Item::column(cells) }
-            .size(100., 100.).pack(SpaceEvenly).build().unwrap();
+        let ui = if horizontal {
+            Item::row(cells)
+        } else {
+            Item::column(cells)
+        }
+        .size(100., 100.)
+        .pack(SpaceEvenly)
+        .build()
+        .unwrap();
         let scene = ui.resolve().unwrap();
         let a = scene.layout.frame("a").unwrap();
         let b = scene.layout.frame("b").unwrap();
@@ -236,8 +243,14 @@ fn recoloring_changes_only_the_requested_role_and_preserves_neutral_children() {
     let ui = Item::row([
         item("value").text("50%").foreground(Color::Primary(0)),
         item("label").text("LEVEL").foreground(Color::Text),
-    ]).replace_color(Color::Primary(0), Color::Primary(1)).build().unwrap();
-    assert_eq!(ui.info("value").unwrap().foreground, Some(Color::Primary(1)));
+    ])
+    .replace_color(Color::Primary(0), Color::Primary(1))
+    .build()
+    .unwrap();
+    assert_eq!(
+        ui.info("value").unwrap().foreground,
+        Some(Color::Primary(1))
+    );
     assert_eq!(ui.info("label").unwrap().foreground, Some(Color::Text));
 }
 
@@ -245,13 +258,26 @@ fn recoloring_changes_only_the_requested_role_and_preserves_neutral_children() {
 fn responsive_columns_keep_controls_and_hits_inside_viewport() {
     for width in [1280., 1840.] {
         let ui = Item::row([
-            item("warps").width(260.).min(180.,0.).shrink(1.),
-            item("synth").width(930.).min(600.,0.).grow(1.).shrink(1.),
-            item("modulators").width(260.).height(400.).min(180.,0.).shrink(1.).on_tap("select"),
-        ]).width(Fill).height(400.).build().unwrap().offered(width,400.);
-        let scene=ui.resolve().unwrap();
-        let right=scene.layout.frame("modulators").unwrap();
-        assert!((right.x+right.size.width-width).abs()<0.01);
-        assert_eq!(ui.tap_at(&scene,right.x+right.size.width/2.,200.),Some("select"));
+            item("warps").width(260.).min(180., 0.).shrink(1.),
+            item("synth").width(930.).min(600., 0.).grow(1.).shrink(1.),
+            item("modulators")
+                .width(260.)
+                .height(400.)
+                .min(180., 0.)
+                .shrink(1.)
+                .on_tap("select"),
+        ])
+        .width(Fill)
+        .height(400.)
+        .build()
+        .unwrap()
+        .offered(width, 400.);
+        let scene = ui.resolve().unwrap();
+        let right = scene.layout.frame("modulators").unwrap();
+        assert!((right.x + right.size.width - width).abs() < 0.01);
+        assert_eq!(
+            ui.tap_at(&scene, right.x + right.size.width / 2., 200.),
+            Some("select")
+        );
     }
 }
