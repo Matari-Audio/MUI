@@ -363,7 +363,10 @@ characters go to `Input.text` only -- `Key::Char` is emitted just for
 ctrl/cmd shortcuts, or `text_input` would insert every character twice.
 Copy, cut and paste leave and re-enter through `Frame::clipboard` and
 `Input::clipboard`; the preview loops them back to itself, so it is its own
-clipboard and never touches the OS one. IME is still missing.
+clipboard and never touches the OS one. An input method reaches a field
+through `Input::ime`: a `Preedit` is painted under the caret and never joins
+the value, a `Commit` inserts like typed text, and `Frame::ime` tells the host
+where to put the candidate window.
 
 ```bash
 cargo run -p mui-vello --example headless -- /tmp/pill.png

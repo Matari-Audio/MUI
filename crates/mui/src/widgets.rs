@@ -4,6 +4,7 @@ use std::ops::RangeInclusive;
 
 use mui_core::prelude::*;
 use mui_core::Spring;
+use mui_geometry::Point;
 use mui_input::Key;
 
 use crate::Ui;
@@ -266,8 +267,40 @@ pub fn text_input(ui: &mut Ui, id: &str, value: &mut String) -> El {
     }
     ui.set_sel(id, anchor, caret);
 
-    let x = |at: usize| ui.caret_x(value, size, byte(value, at));
-    let (lo, hi) = (x(anchor.min(caret)), x(anchor.max(caret)));
+    // The input method's composing text is shown at the caret and measured
+    // with the value, but never joins it: only a commit, which arrives as
+    // typed text above, edits `value`.
+    let pre = focused
+        .then(|| ui.preedit())
+        .flatten()
+        .map(|(t, c)| (t.to_owned(), c));
+    let base = byte(value, caret);
+    let mut shown = value.clone();
+    if let Some((t, _)) = &pre {
+        shown.insert_str(base, t);
+    }
+    let x = |b: usize| ui.caret_x(&shown, size, b);
+    // The caret sits inside the preedit, where the IME put its cursor.
+    let at = match &pre {
+        Some((t, c)) => base + c.map_or(t.len(), |(s, _)| s.min(t.len())),
+        None => base,
+    };
+    // ponytail: a selection is not painted under a composition -- its ends
+    // were measured against the value and the preedit sits between them, so
+    // the highlight is dropped for the frames the composition lasts. The
+    // commit still replaces the selection. Measure the two runs separately if
+    // composing over a selection ever needs to look right.
+    let (lo, hi) = match &pre {
+        Some(_) => (0.0, 0.0),
+        None => (
+            x(byte(value, anchor.min(caret))),
+            x(byte(value, anchor.max(caret))),
+        ),
+    };
+    let (plo, phi) = match &pre {
+        Some((t, _)) => (x(base), x(base + t.len())),
+        None => (0.0, 0.0),
+    };
     let on = focused && ui.blink();
     // The value keeps its whole measured advance so the field stays one line
     // -- a plain `text()` would wrap to the frame and grow the field -- and
@@ -277,26 +310,32 @@ pub fn text_input(ui: &mut Ui, id: &str, value: &mut String) -> El {
     // ponytail: the first frame of an over-long value shows its head; it
     // catches up on the next one.
     const PAD: f64 = 8.0;
-    let run = x(value.len());
+    let run = x(shown.len());
     let room = ui
         .scene()
         .and_then(|s| s.surface(id))
         .map_or(run, |s| s.frame.size.width - 2.0 * PAD);
-    let shift = (x(caret) - room).max(0.0);
-    overlay([
+    let caret_x = x(at);
+    let shift = (caret_x - room).max(0.0);
+    let el = overlay([
         leaf(hi - lo, size)
             .anchor(Align::Start, Align::Center)
             .offset(lo - shift, 0.0)
             .when(hi > lo, |e| e.fill(Role::Primary)),
-        text(value.clone())
+        text(shown.clone())
             .width(run)
             .lines(1)
             .anchor(Align::Start, Align::Center)
             .offset(-shift, 0.0),
         leaf(2.0, size)
             .anchor(Align::Start, Align::Center)
-            .offset(x(caret) - shift, 0.0)
+            .offset(caret_x - shift, 0.0)
             .when(on, |e| e.fill(Role::Ink)),
+        // Underline, last so the earlier children keep their keys.
+        leaf(phi - plo, 2.0)
+            .anchor(Align::Start, Align::End)
+            .offset(plo - shift, 0.0)
+            .when(phi > plo, |e| e.fill(Role::Ink)),
     ])
     .clip()
     .pad_xy(PAD, 6.0)
@@ -304,5 +343,9 @@ pub fn text_input(ui: &mut Ui, id: &str, value: &mut String) -> El {
     .fill(Role::Field)
     .cursor(Cursor::Text)
     .focusable()
-    .id(id)
+    .id(id);
+    if focused {
+        ui.set_ime_caret(id, Point::new(PAD + caret_x - shift, 6.0), size);
+    }
+    el
 }

@@ -23,7 +23,7 @@ use mui::vello::kurbo::{Affine, Rect, Shape as _, Stroke};
 use mui::vello::Canvas as _;
 use scenes::PreviewScene;
 use winit::application::ApplicationHandler;
-use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
+use winit::event::{ElementState, Ime as WinitIme, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key as WinitKey, NamedKey};
 use winit::window::{CursorIcon, Window, WindowId};
@@ -209,6 +209,13 @@ struct App {
     wheel: Point,
     keys: Vec<KeyPress>,
     text: String,
+    ime: Vec<Ime>,
+    /// Where the focused field wants the candidate window, and whether the
+    /// window has been told to allow an input method at all. Toggling
+    /// `set_ime_allowed` on an unchanged state can drop a composition, so it
+    /// is only called on the edge.
+    ime_area: Option<(Point, mui::core::Size)>,
+    ime_on: bool,
     mods: Mods,
     cursor: Cursor,
     typed: Option<char>,
@@ -247,6 +254,9 @@ impl App {
             wheel: Point::new(0.0, 0.0),
             keys: Vec::new(),
             text: String::new(),
+            ime: Vec::new(),
+            ime_area: None,
+            ime_on: false,
             mods: Mods::default(),
             cursor: Cursor::Arrow,
             typed: None,
@@ -276,6 +286,7 @@ impl App {
         self.events.clear();
         self.keys.clear();
         self.text.clear();
+        self.ime.clear();
         self.pointer = PointerInput::default();
         self.ui.cancel();
     }
@@ -367,6 +378,7 @@ impl App {
             // copy to the scene needs `self` back.
             Ok(f) => {
                 let (animating, cursor, copied) = (f.animating, f.cursor, f.clipboard.clone());
+                self.ime_area = f.ime;
                 if let Some(s) = copied {
                     self.scenes[self.selected].clipboard(&s);
                     self.clipboard = s;
@@ -382,11 +394,34 @@ impl App {
         animating
     }
 
+    /// Allow an input method while a field is focused, and keep the
+    /// candidate window under its caret.
+    fn apply_ime(&mut self, scale: f64) {
+        if self.gpu.is_none() {
+            // No window, so no edge is burned: the state is untouched and the
+            // next frame with a window still makes the call.
+            return;
+        }
+        let (area, on) = (self.ime_area, self.ime_area.is_some());
+        let edge = std::mem::replace(&mut self.ime_on, on) != on;
+        let window = self.gpu.as_ref().expect("checked above").window();
+        if edge {
+            window.set_ime_allowed(on);
+        }
+        if let Some((at, size)) = area {
+            window.set_ime_cursor_area(
+                winit::dpi::PhysicalPosition::new(at.x * scale, at.y * scale),
+                winit::dpi::PhysicalSize::new(size.width * scale, size.height * scale),
+            );
+        }
+    }
+
     fn replay(&mut self, size: (u32, u32), scale: f64) -> bool {
         let rest = Input {
             wheel: std::mem::take(&mut self.wheel),
             keys: std::mem::take(&mut self.keys),
             text: std::mem::take(&mut self.text),
+            ime: std::mem::take(&mut self.ime),
             ..Input::default()
         };
         let events = std::mem::take(&mut self.events);
@@ -560,6 +595,14 @@ impl ApplicationHandler for App {
             } => {
                 self.queue(None, Some(state == ElementState::Pressed));
             }
+            WindowEvent::Ime(e) => {
+                self.ime.push(match e {
+                    WinitIme::Enabled => Ime::Enabled,
+                    WinitIme::Preedit(text, cursor) => Ime::Preedit { text, cursor },
+                    WinitIme::Commit(s) => Ime::Commit(s),
+                    WinitIme::Disabled => Ime::Disabled,
+                });
+            }
             WindowEvent::ModifiersChanged(m) => {
                 let s = m.state();
                 self.mods = Mods {
@@ -629,6 +672,7 @@ impl ApplicationHandler for App {
                 if let Some(gpu) = &self.gpu {
                     gpu.window().set_cursor(icon(self.cursor));
                 }
+                self.apply_ime(scale);
                 if animating {
                     if let Some(gpu) = &self.gpu {
                         gpu.window().request_redraw();

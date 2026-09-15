@@ -98,7 +98,6 @@ public function and a test behind it.
 
 - [ ] Kurv rewritten on MUI: the first real plugin editor on this stack, and
       the only honest test of whether the DSL survives a product.
-- [ ] IME.
 - [ ] Real semantic roles in `mui-core`, so a widget describes itself and
       `mui-access` stops reporting every surface as a group.
 - [ ] `mui-access` wired into a window: nothing calls it yet. `accesskit_winit`
