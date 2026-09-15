@@ -101,6 +101,8 @@ pub struct ResolvedSurface {
 pub struct ResolvedScene {
     pub layout: Layout,
     pub paint: Vec<Painted>,
+    /// Every surface key in tree order, which is also z-order.
+    pub keys: Vec<String>,
     surfaces: BTreeMap<String, ResolvedSurface>,
 }
 impl ResolvedScene {
@@ -201,6 +203,7 @@ struct Walk<'a> {
     i: usize,
     key: String,
     paint: Vec<Painted>,
+    keys: Vec<String>,
     surfaces: BTreeMap<String, ResolvedSurface>,
 }
 impl Walk<'_> {
@@ -281,6 +284,12 @@ impl Walk<'_> {
         let th = self.spec.theme;
         let e = n.payload();
         let s = &e.style;
+        if frame.size.width <= 0.0 || frame.size.height <= 0.0 {
+            // A flex share that collapsed to nothing: invisible, and so are
+            // its children.
+            self.i += n.children().iter().map(count).sum::<usize>();
+            return Ok(());
+        }
         let (outline, rect, mut changed) = self.outline(n, frame)?;
 
         self.key = key.clone();
@@ -359,6 +368,7 @@ impl Walk<'_> {
             }
         }
 
+        self.keys.push(key.clone());
         self.surfaces.insert(
             key.clone(),
             ResolvedSurface {
@@ -404,13 +414,15 @@ pub fn resolve_scene(spec: &SceneSpec) -> Result<ResolvedScene, SceneError> {
         i: 0,
         key: String::new(),
         paint: Vec::new(),
+        keys: Vec::new(),
         surfaces: BTreeMap::new(),
     };
     w.node(&spec.root, "", th.palette.background())?;
-    let (paint, surfaces) = (w.paint, w.surfaces);
+    let (paint, keys, surfaces) = (w.paint, w.keys, w.surfaces);
     Ok(ResolvedScene {
         layout,
         paint,
+        keys,
         surfaces,
     })
 }
