@@ -34,9 +34,18 @@ pub fn slider(
     ui.drag(id, value, range.clone(), 160.0, false);
     let t = unit(*value, &range);
     let (h, _) = ui.state(id);
+    // ponytail: the thumb holds the id, so a screen reader hears the slider at
+    // the thumb's 14x14 bounds, not the track's. Move it to the column when a
+    // surface can carry one id for input and another for reporting.
     let thumb = leaf(14.0 + 2.0 * h, 14.0 + 2.0 * h)
         .pill()
         .fill(Role::Primary)
+        .role(Kind::Slider {
+            value: *value,
+            min: *range.start(),
+            max: *range.end(),
+        })
+        .label(label)
         .id(id);
     column([
         row([
@@ -87,6 +96,12 @@ pub fn knob(
                 .pill()
                 .fill(Role::Raised)
                 .shell(3.0 + 1.0 * h, Role::Field)
+                .role(Kind::Slider {
+                    value: *value,
+                    min: *range.start(),
+                    max: *range.end(),
+                })
+                .label(label)
                 .id(id),
             leaf(6.0, 6.0)
                 .pill()
@@ -107,6 +122,8 @@ pub fn button(ui: &Ui, id: &str, label: &str) -> (El, bool) {
         .pill()
         .fill(Role::Primary)
         .animate()
+        .role(Kind::Button)
+        .label(label)
         .id(id);
     (el, ui.get(id).clicked)
 }
@@ -127,6 +144,7 @@ pub fn toggle(ui: &Ui, id: &str, on: &mut bool) -> El {
     .pill()
     .fill(if *on { Role::Primary } else { Role::Field })
     .animate()
+    .role(Kind::Toggle { on: *on })
     .id(id)
 }
 
@@ -343,6 +361,9 @@ pub fn text_input(ui: &mut Ui, id: &str, value: &mut String) -> El {
     .fill(Role::Field)
     .cursor(Cursor::Text)
     .focusable()
+    .role(Kind::TextInput {
+        value: value.clone(),
+    })
     .id(id);
     if focused {
         ui.set_ime_caret(id, Point::new(PAD + caret_x - shift, 6.0), size);

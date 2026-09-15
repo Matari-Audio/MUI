@@ -47,8 +47,9 @@ El tree  (row! / col! / stack! / grid!, Styled fills, roles, shells, welds,
    +--> mui-input Hit       the same paths, pushed in paint order with their
    |                        clip rect, so nothing responds where nothing is drawn
    |
-   +--> mui-access          the same surfaces plus a Semantics map as an
-   |                        accesskit::TreeUpdate, for the host's adapter
+   +--> mui-access          the same surfaces, each with the role and label it
+   |                        declared, as an accesskit::TreeUpdate for the
+   |                        host's adapter
    |
    v  mui-vello paint       Canvas: Gpu { scene, resources } over vello_hybrid,
                             Cpu { ctx, resources } over vello_cpu.

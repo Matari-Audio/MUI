@@ -53,8 +53,8 @@ public function and a test behind it.
       and `Path::from_svg_data` for an icon's `d` attribute. `vello_cpu`
       paints the pixmap; `vello_hybrid` uploads it once through `Gpu`'s
       `Atlas` and paints by id.
-- [x] AccessKit: `mui-access` turns a `ResolvedScene` plus a `Semantics` map
-      into a `TreeUpdate`.
+- [x] AccessKit: `mui-access` turns a `ResolvedScene` into a `TreeUpdate`,
+      and the preview feeds it to an `accesskit_winit::Adapter`.
 - [x] `mui_vello::PathCache` / `paint_cached`: a still frame re-encodes
       without reconverting a path.
 - [x] Image eviction: both image caches key on the buffer's `Arc` and drop
@@ -98,10 +98,11 @@ public function and a test behind it.
 
 - [ ] Kurv rewritten on MUI: the first real plugin editor on this stack, and
       the only honest test of whether the DSL survives a product.
-- [ ] Real semantic roles in `mui-core`, so a widget describes itself and
-      `mui-access` stops reporting every surface as a group.
-- [ ] `mui-access` wired into a window: nothing calls it yet. `accesskit_winit`
-      0.33 matches the preview's winit 0.30, so the preview is the first host.
+- [x] Real semantic roles in `mui-core`: `.role(Kind::..)` / `.label(..)` on
+      any node, set by every widget, so `mui-access` reports roles not groups.
+- [x] `mui-access` wired into a window: the preview keeps an
+      `accesskit_winit::Adapter`, publishes after each frame, and serves
+      Focus and Click action requests.
 - [ ] `vello_hybrid` against classic `vello`, re-measured on Windows — the
       hybrid choice was made on Linux numbers only.
 - [ ] A welded shadow is the union of the children's blurred rects, not the
@@ -123,7 +124,5 @@ public function and a test behind it.
 ## Order
 
 Kurv first: everything above is guesswork until a shipping editor uses it,
-and it is the only item left that can change the DSL. Then semantic roles,
-since `mui-access` is a crate nobody can use until widgets describe
-themselves, then the Windows re-measure before any renderer decision is
-locked in.
+and it is the only item left that can change the DSL. Then the Windows
+re-measure, before any renderer decision is locked in.

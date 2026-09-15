@@ -33,7 +33,7 @@ pub use color::{Color, Mode, Palette, Pigment};
 pub use dsl::{caption, label, title, IntoLen, Sugar};
 pub use element::{
     canvas, column, grid, leaf, overlay, row, spacer, text, Canvas, Content, Draw, El, Element,
-    IntoEl, Styled,
+    IntoEl, Kind, Semantics, Styled,
 };
 pub use motion::Spring;
 pub use mui_layout::{
@@ -56,8 +56,8 @@ pub mod prelude {
     pub use crate::{
         canvas, caption, col, column, grid, label, leaf, overlay, resolve_scene, row, spacer,
         stack, text, title, Align, Color, Cursor, Draw, El, Fill, Fit, Gradient, Image, IntoEl,
-        IntoLen, Justify, Len, Mix, Radius, Role, SceneSpec, Shadow, Size, Style, Styled, Sugar,
-        Theme,
+        IntoLen, Justify, Kind, Len, Mix, Radius, Role, SceneSpec, Shadow, Size, Style, Styled,
+        Sugar, Theme,
     };
     pub use mui_geometry::{Path, Point};
     pub use mui_layout::SpacingToken::{Xl, Xs, L, M, S};

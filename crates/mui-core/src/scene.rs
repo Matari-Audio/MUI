@@ -16,7 +16,7 @@ use mui_geometry::{
 use mui_layout::{resolve_with, Frame, Layout, Limits, Size};
 use mui_text::TextRun;
 
-use crate::{Color, Content, Cursor, El, Fill, Mix, Paint, Radius, Theme};
+use crate::{Color, Content, Cursor, El, Fill, Mix, Paint, Radius, Semantics, Theme};
 
 #[derive(Debug, Clone)]
 pub struct SceneSpec {
@@ -161,6 +161,8 @@ pub struct ResolvedSurface {
     pub cursor: Option<Cursor>,
     pub tip: Option<String>,
     pub focusable: bool,
+    /// The role and name this surface reports to a screen reader.
+    pub semantics: Option<Semantics>,
     /// The nearest clipping ancestor's frame, for hit-testing.
     /// ponytail: a rect, not the ancestor's rounded path.
     pub clip: Option<Bounds>,
@@ -700,6 +702,7 @@ impl<'a> Walk<'a> {
             cursor,
             tip: e.tip.clone(),
             focusable: e.focusable,
+            semantics: e.semantics.clone(),
             clip,
             content,
         });

@@ -271,10 +271,11 @@ fresh frame buffer every frame does not grow either one.
 ## Accessibility
 
 `mui-access` turns a `ResolvedScene` into an `accesskit::TreeUpdate`:
-`tree_update(&scene, &access, focus)`, where `Access` maps an id to a
-`Semantics { role, label }`. Roles are not inferred -- a surface nobody
-described reports as a labelled group -- so a host registers the widgets it
-cares about and hands the update to its platform adapter.
+`tree_update(&scene, focus)`. A node says what it is in the tree itself --
+`.role(Kind::Button).label("OK")` -- and the walk carries that onto the
+surface; a node with no role reports as a group labelled by its id. The
+widgets in `mui` already describe themselves, so the preview just hands the
+update to its `accesskit_winit::Adapter` after each frame.
 
 ## Colour
 
@@ -328,7 +329,7 @@ light-theme half because there is nothing in it a mode could contradict.
 | `mui-core` | `El` + `Styled` DSL and the `row!`/`col!`/`stack!`/`grid!` sugar, roles and palette, `canvas` draws, clip and float layers, the walk from tree to `ResolvedScene` paint list, the frame-to-frame `TextCache`, `Spring` |
 | `mui-input` | `Input` (pointer, wheel, keys, text), hit testing against real paths and their clips, press capture, hover, click, drag and drop |
 | `mui-vello` | the `Canvas` trait and its `Gpu` / `Cpu` wrappers over `vello_hybrid` and `vello_cpu`: fills, strokes, image fills (`Cpu` paints the pixmap, `Gpu` uploads once through its `Atlas`, see Images), clip push/pop, and hinted glyph runs (Vello hints and caches the outlines per font blob); `paint(canvas, scene, transform)`, and `paint_cached` with a `PathCache` that keeps a still frame's arc-to-cubic conversions |
-| `mui-access` | a `ResolvedScene` plus a `Semantics` map as an `accesskit::TreeUpdate` |
+| `mui-access` | a `ResolvedScene`'s roles and labels as an `accesskit::TreeUpdate` |
 | `mui-truce` | the non-real-time document and parameter contract a Truce plugin shares with its editor |
 | `mui` | `Ui` runtime, focus and wheel scrolling, tooltips, transitions, tweens, gesture edits, and widgets (`slider`, `knob`, `toggle`, `button`, `text_input`); the `prelude` |
 | `mui-tessellate`, `mui-egui` | triangle meshes and the egui debug adapter |

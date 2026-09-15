@@ -62,6 +62,35 @@ pub enum Content {
     Canvas(Canvas),
 }
 
+/// What a surface means to a screen reader, beyond where it is.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Kind {
+    Button,
+    Slider { value: f64, min: f64, max: f64 },
+    Toggle { on: bool },
+    TextInput { value: String },
+    Label,
+    Group,
+    Scroll,
+}
+
+/// A role and the name read out with it. A node with none is a group named
+/// by its own id.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Semantics {
+    pub role: Kind,
+    pub label: Option<String>,
+}
+impl Semantics {
+    pub fn new(role: Kind) -> Self {
+        Self { role, label: None }
+    }
+    pub fn label(mut self, label: impl Into<String>) -> Self {
+        self.label = Some(label.into());
+        self
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Element {
     pub style: Style,
@@ -76,6 +105,8 @@ pub struct Element {
     pub baseline: bool,
     /// Cap a wrapped label at this many lines. See [`Styled::lines`].
     pub lines: Option<usize>,
+    /// What this node means: the role and name mui-access reports.
+    pub semantics: Option<Semantics>,
     /// The spring this node's paint chases when its declared style changes.
     /// Only meaningful on a node with an id: the runtime has nothing to
     /// compare an anonymous node against. See [`Styled::transition`].
@@ -232,6 +263,25 @@ pub trait Styled: Sized {
     }
     fn tip(mut self, s: impl Into<String>) -> Self {
         self.element_mut().tip = Some(s.into());
+        self
+    }
+    /// What this node is, for accessibility: `.role(Kind::Button)`. Only a
+    /// node with an id becomes a surface, so only one is ever reported.
+    fn role(mut self, k: Kind) -> Self {
+        let e = self.element_mut();
+        match &mut e.semantics {
+            Some(s) => s.role = k,
+            none => *none = Some(Semantics::new(k)),
+        }
+        self
+    }
+    /// The name read out with the role; the id otherwise.
+    fn label(mut self, name: impl Into<String>) -> Self {
+        let e = self.element_mut();
+        let s = e
+            .semantics
+            .get_or_insert_with(|| Semantics::new(Kind::Group));
+        s.label = Some(name.into());
         self
     }
     fn focusable(mut self) -> Self {

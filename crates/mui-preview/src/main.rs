@@ -16,15 +16,17 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
+use accesskit_winit::{Adapter, Event as AccessEvent, WindowEvent as AccessWindowEvent};
 use host::Gpu;
 use mui::geometry::Point;
 use mui::prelude::*;
 use mui::vello::kurbo::{Affine, Rect, Shape as _, Stroke};
 use mui::vello::Canvas as _;
+use mui_access::accesskit::{Action as AccessAction, NodeId};
 use scenes::PreviewScene;
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, Ime as WinitIme, MouseButton, MouseScrollDelta, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key as WinitKey, NamedKey};
 use winit::window::{CursorIcon, Window, WindowId};
 
@@ -225,6 +227,10 @@ struct App {
     clipboard: String,
     last: Instant,
     gpu: Option<Gpu>,
+    /// The screen reader's adapter, and the proxy it posts requests through.
+    /// Both are `None` in a test: no event loop, no window, no adapter.
+    proxy: Option<EventLoopProxy<AccessEvent>>,
+    access: Option<Adapter>,
     /// Arc-to-cubic conversions reused across frames; a still gallery
     /// re-encodes without reconverting a single path.
     paths: mui::vello::PathCache,
@@ -263,6 +269,8 @@ impl App {
             clipboard: String::new(),
             last: Instant::now(),
             gpu: None,
+            proxy: None,
+            access: None,
             paths: mui::vello::PathCache::new(),
         }
     }
@@ -502,6 +510,41 @@ impl App {
         self.counted_at = Instant::now();
     }
 
+    /// Hand the screen reader this frame's tree. Nothing is built when
+    /// nothing is listening.
+    fn publish(&mut self) {
+        let (Some(a), Some(scene)) = (&mut self.access, self.ui.scene()) else {
+            return;
+        };
+        let focus = self.ui.focus_key();
+        a.update_if_active(|| mui_access::tree_update(scene, focus));
+    }
+
+    /// The surface behind an accesskit node id.
+    fn key_of(&self, target: NodeId) -> Option<String> {
+        let scene = self.ui.scene()?;
+        scene
+            .surfaces()
+            .find(|s| mui_access::node_id(&s.key) == target)
+            .map(|s| s.key.to_string())
+    }
+
+    /// A click from a screen reader: a press and a release at the surface's
+    /// centre, in the same queue the pointer uses, so a widget sees one
+    /// ordinary click.
+    fn press(&mut self, key: &str) {
+        let Some(s) = self.ui.scene().and_then(|s| s.surface(key)) else {
+            return;
+        };
+        let (f, scale) = (s.frame, self.ui.scale.unwrap_or(1.0));
+        let c = Point::new(
+            (f.x + f.size.width / 2.0) * scale,
+            (f.y + f.size.height / 2.0) * scale,
+        );
+        self.queue(Some(Some(c)), Some(true));
+        self.queue(None, Some(false));
+    }
+
     fn draw(&mut self) {
         let Some(gpu) = &mut self.gpu else { return };
         let scale = gpu.window().scale_factor();
@@ -548,15 +591,43 @@ impl App {
     }
 }
 
-impl ApplicationHandler for App {
+impl ApplicationHandler<AccessEvent> for App {
+    /// A screen reader asked for the tree, or asked to act on a node.
+    fn user_event(&mut self, _: &ActiveEventLoop, event: AccessEvent) {
+        match event.window_event {
+            // Activation can land before the first frame, when `publish` has
+            // no scene yet; the redraw is what gets the reader a real tree.
+            AccessWindowEvent::InitialTreeRequested => self.publish(),
+            AccessWindowEvent::ActionRequested(r) => {
+                if let Some(key) = self.key_of(r.target_node) {
+                    match r.action {
+                        AccessAction::Focus => self.ui.focus(key),
+                        AccessAction::Click => self.press(&key),
+                        _ => {}
+                    }
+                }
+            }
+            AccessWindowEvent::AccessibilityDeactivated => return,
+        }
+        if let Some(gpu) = &self.gpu {
+            gpu.window().request_redraw();
+        }
+    }
+
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.gpu.is_some() {
             return;
         }
+        // The adapter has to exist before the window is first shown.
         let attrs = Window::default_attributes()
             .with_title("MUI preview")
+            .with_visible(false)
             .with_inner_size(winit::dpi::LogicalSize::new(1000, 680));
         let window = Arc::new(event_loop.create_window(attrs).expect("window"));
+        if let Some(proxy) = self.proxy.clone() {
+            self.access = Some(Adapter::with_event_loop_proxy(event_loop, &window, proxy));
+        }
+        window.set_visible(true);
         let display = Box::new(event_loop.owned_display_handle());
         self.gpu = Some(pollster::block_on(Gpu::new(window, display)));
     }
@@ -576,6 +647,9 @@ impl ApplicationHandler for App {
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
+        if let (Some(a), Some(gpu)) = (&mut self.access, &self.gpu) {
+            a.process_event(gpu.window(), &event);
+        }
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => {
@@ -669,6 +743,7 @@ impl ApplicationHandler for App {
                     resolved.duration_since(start).as_secs_f64(),
                     resolved.elapsed().as_secs_f64(),
                 );
+                self.publish();
                 if let Some(gpu) = &self.gpu {
                     gpu.window().set_cursor(icon(self.cursor));
                 }
@@ -689,9 +764,13 @@ impl ApplicationHandler for App {
 }
 
 fn main() {
-    let event_loop = EventLoop::new().expect("event loop");
+    let event_loop = EventLoop::<AccessEvent>::with_user_event()
+        .build()
+        .expect("event loop");
     event_loop.set_control_flow(ControlFlow::Wait);
-    event_loop.run_app(&mut App::new()).expect("run");
+    let mut app = App::new();
+    app.proxy = Some(event_loop.create_proxy());
+    event_loop.run_app(&mut app).expect("run");
 }
 
 #[cfg(test)]
@@ -717,6 +796,28 @@ mod tests {
         for down in [false, true, false, false] {
             app.tick(SIZE, 1.0, at(c.x, c.y, down));
         }
+    }
+
+    /// The widgets describe themselves, so the tree a screen reader gets has
+    /// real roles with names, not a pile of groups.
+    #[test]
+    fn the_gallery_reports_a_named_button_and_slider() {
+        use mui_access::accesskit::Role;
+        let mut app = App::new();
+        app.selected = app
+            .scenes
+            .iter()
+            .position(|s| s.name() == "Widgets")
+            .unwrap();
+        app.tick(SIZE, 1.0, PointerInput::default());
+        let u = mui_access::tree_update(app.ui.scene().unwrap(), None);
+        let named = |role| {
+            u.nodes
+                .iter()
+                .any(|(_, n)| n.role() == role && n.label().is_some_and(|l| !l.is_empty()))
+        };
+        assert!(named(Role::Button), "no named button");
+        assert!(named(Role::Slider), "no named slider");
     }
 
     #[test]

@@ -201,6 +201,10 @@ impl Ui {
             .get(id)
             .map_or((0.0, 0.0), |[h, p]| (h.value, p.value))
     }
+    /// The id that holds the keyboard focus, for a host reporting it.
+    pub fn focus_key(&self) -> Option<&str> {
+        self.focus.as_deref()
+    }
     /// Whether `id` holds the keyboard focus.
     pub fn focused(&self, id: &str) -> bool {
         self.focus.as_deref() == Some(id)
