@@ -795,10 +795,13 @@ mod tests {
     fn a_tip_comes_due_after_half_a_second_of_hover() {
         let mut ui = Ui::new(Theme::DEFAULT);
         let tree = || leaf(40., 40.).fill(Role::Raised).tip("why").id("b");
-        ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
-        let f = ui.frame(tree(), None, at(10., 10., false), 0.4).unwrap();
+        // In a window, not hugging: a float is kept inside the box it floats
+        // in, so the room under the surface has to exist.
+        let win = || Some(Size::new(240., 300.));
+        ui.frame(tree(), win(), at(10., 10., false), 0.016).unwrap();
+        let f = ui.frame(tree(), win(), at(10., 10., false), 0.4).unwrap();
         assert!(f.tip.is_none(), "the pointer has not rested long enough");
-        let f = ui.frame(tree(), None, at(10., 10., false), 0.6).unwrap();
+        let f = ui.frame(tree(), win(), at(10., 10., false), 0.6).unwrap();
         let (t, at) = f.tip.clone().expect("due");
         assert_eq!(t, "why");
         assert!(at.y > 40., "below the surface");
@@ -807,7 +810,7 @@ mod tests {
             "and floated into the scene"
         );
         let f = ui
-            .frame(tree(), None, PointerInput::default(), 0.016)
+            .frame(tree(), win(), PointerInput::default(), 0.016)
             .unwrap();
         assert!(f.tip.is_none(), "gone when the pointer leaves");
     }

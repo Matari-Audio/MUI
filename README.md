@@ -87,12 +87,14 @@ assert_eq!(scene.surface("tab").unwrap().frame.size.width, 92.0);
 | `.gap(M)`, `.pad(S)`, `.pad(12.0)` | spacing tokens `Xs S M L Xl` from the theme, or pixels |
 | `.grow(w)`, `.shrink(w)`, `.basis(px)`, `.expand()` | flexbox weights |
 | `.width(Len::Pct(50.0))`, `.aspect(16.0 / 9.0)` | percentage and ratio sizes |
+| `.w(clamp(64.0, 30.0, 220.0))` | CSS `clamp(min, pct%, max)`: fluid between two pixel stops |
 | `.w(120)`, `.h(40)`, `.square(28)` | the same sizes taking a bare integer |
 | `.align(..)`, `.justify(..)`, `.anchor(x, y)`, `.offset(dx, dy)` | cross axis, main axis, overlay placement, nudge |
 | `.center()`, `.start()`, `.end()`, `.between()` | the four alignments worth a word |
 | `.justify(Justify::SpaceAround)`, `.justify(Justify::SpaceEvenly)` | the other two CSS distributions |
 | `.wrap()` | a row or column that breaks into lines instead of overflowing |
 | `.span(2)`, `.order(-1)` | a grid cell two columns wide; placed before its declaration slot |
+| `.min_col(120.0)` | `repeat(auto-fit, minmax(120px, 1fr))`: the grid drops columns until each clears 120 px |
 | `.push(child)`, `.baseline()`, `.lines(2)` | append to a container, sit text children on one baseline, cap a wrapped label |
 | `.fill(Primary)`, `.fill(Color::..)`, `.fill(Gradient::vertical(a, b))` | a palette role, a literal, a gradient |
 | `.fill(Fill::Image(img, Fit::Cover))` | an RGBA buffer as a fill: `Cover`, `Contain` or `Fill` (`vello_cpu` paints the pixmap, `vello_hybrid` uploads it once into its atlas) |
