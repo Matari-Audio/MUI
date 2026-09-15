@@ -10,7 +10,7 @@
 //!
 //! The test at the bottom is what keeps that true.
 
-use mui_core::{CornerProfile, Mode, Palette, Pigment, Theme};
+use mui::prelude::{CornerProfile, Mode, Palette, Pigment, Theme};
 
 /// Two hues and a corner profile. Every other colour the gallery paints --
 /// every surface, every ink, every hover, and the entire light theme -- is

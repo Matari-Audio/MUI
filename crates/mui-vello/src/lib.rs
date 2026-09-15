@@ -12,12 +12,14 @@
 //! and what keeps a 24 px corner smooth when the scene is scaled up.
 #![forbid(unsafe_code)]
 
+use kurbo::{Affine, BezPath, Rect, Shape as _, Stroke};
 use mui_core::{Paint, Painted, ResolvedScene};
 use mui_geometry::{Error, Path, PathCommand};
-use vello_common::kurbo::{self, Affine, BezPath, Rect, Shape as _, Stroke};
 use vello_common::paint::PaintType;
 use vello_common::peniko::color::{AlphaColor, DynamicColor, Srgb};
 use vello_common::peniko::{ColorStop, Gradient};
+pub use vello_common::{kurbo, peniko};
+pub use vello_hybrid;
 
 /// Curve error, in scene units, allowed when an arc becomes cubics. Vello
 /// re-flattens per frame at device resolution, so this only has to be finer

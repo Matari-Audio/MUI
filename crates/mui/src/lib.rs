@@ -31,7 +31,7 @@ pub mod prelude {
     pub use crate::widgets::{button, knob, slider, toggle};
     pub use crate::{Frame, Ui};
     pub use mui_core::prelude::*;
-    pub use mui_core::{CornerProfile, Palette, Pigment, Spring};
+    pub use mui_core::{CornerProfile, Mode, Palette, Pigment, Spring};
     pub use mui_input::{PointerInput, Response};
 }
 

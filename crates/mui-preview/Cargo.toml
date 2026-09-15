@@ -6,12 +6,8 @@ license.workspace = true
 publish = false
 
 [dependencies]
-mui-core = { path = "../mui-core" }
-mui-geometry = { path = "../mui-geometry" }
-mui-input = { path = "../mui-input" }
-mui-layout = { path = "../mui-layout" }
+mui = { path = "../mui" }
 mui-text = { path = "../mui-text" }
-mui-vello = { path = "../mui-vello" }
 # The gallery owns the window and the device, which is exactly the split a
 # plugin wrapper has. The library crates above pick no backend of their own.
 vello_common = { version = "0.2", default-features = false }

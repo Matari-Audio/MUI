@@ -38,6 +38,14 @@ impl Ui {
         self.font = Some(font.into());
         self
     }
+    /// What the last frame resolved to, for anything drawn on top of it.
+    pub fn scene(&self) -> Option<&ResolvedScene> {
+        self.scene.as_ref()
+    }
+    /// Drop the gesture in flight, for focus loss.
+    pub fn cancel(&mut self) {
+        self.interaction.cancel();
+    }
     /// Last frame's gesture on `id`. Widgets read this while building the
     /// next tree, so a drag lands one frame late and nobody notices.
     pub fn get(&self, id: &str) -> Response {
@@ -83,6 +91,7 @@ impl Ui {
         pointer: PointerInput,
         dt: f64,
     ) -> Result<Frame<'_>, SceneError> {
+        let was_held = self.interaction.held().is_some();
         self.interaction.update(&self.hit, pointer);
         let (hovered, held) = (
             self.interaction.hovered().map(str::to_owned),
@@ -101,7 +110,9 @@ impl Ui {
                 .iter_mut()
                 .for_each(|s| s.to(1.0));
         }
-        let mut animating = false;
+        // A release is read by the *next* tree, so that frame must come even
+        // when nothing is moving.
+        let mut animating = was_held;
         for s in self.springs.values_mut().flatten() {
             animating |= s.step(dt);
         }
