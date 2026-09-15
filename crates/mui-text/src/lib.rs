@@ -19,12 +19,12 @@ use skrifa::{FontRef, GlyphId, MetadataProvider as _};
 #[derive(Debug)]
 pub enum Error {
     /// The bytes are not a font this build can read.
-    Font(String),
+    Font(skrifa::raw::ReadError),
     /// The character has no glyph in this face. Fallback is the caller's job.
     MissingGlyph(char),
     /// The face has no scalable outline for that glyph (bitmap-only, say).
     NoOutline(char),
-    Draw(String),
+    Draw(skrifa::outline::DrawError),
     Geometry(mui_geometry::Error),
     InvalidOptions(&'static str),
 }
@@ -43,6 +43,8 @@ impl std::fmt::Display for Error {
 impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::Font(e) => Some(e),
+            Self::Draw(e) => Some(e),
             Self::Geometry(error) => Some(error),
             _ => None,
         }
@@ -95,7 +97,7 @@ pub struct AxisInfo {
 /// The variation axes of a face, in the font's own order. Empty for a static
 /// font — which is the honest answer, not an error.
 pub fn axes(font: &[u8]) -> Result<Vec<AxisInfo>, Error> {
-    let font = FontRef::new(font).map_err(|e| Error::Font(format!("{e}")))?;
+    let font = FontRef::new(font).map_err(Error::Font)?;
     Ok(font
         .axes()
         .iter()
@@ -130,7 +132,7 @@ pub fn glyph_path(
     if !tolerance.is_finite() || tolerance <= 0. {
         return Err(Error::InvalidOptions("tolerance"));
     }
-    let font = FontRef::new(font).map_err(|e| Error::Font(format!("{e}")))?;
+    let font = FontRef::new(font).map_err(Error::Font)?;
     let glyph_id = font.charmap().map(ch).ok_or(Error::MissingGlyph(ch))?;
     if font.outline_glyphs().get(glyph_id).is_none() {
         return Err(Error::NoOutline(ch));
@@ -208,7 +210,7 @@ pub fn text_run(
     if !tolerance.is_finite() || tolerance <= 0. {
         return Err(Error::InvalidOptions("tolerance"));
     }
-    let font = FontRef::new(font).map_err(|e| Error::Font(format!("{e}")))?;
+    let font = FontRef::new(font).map_err(Error::Font)?;
     let font_size = Size::new(size);
     let location = font.axes().location(axes.iter().copied());
     let charmap = font.charmap();
@@ -269,7 +271,7 @@ fn draw_glyph(
             DrawSettings::unhinted(Size::new(size), LocationRef::from(location)),
             pen,
         )
-        .map_err(|e| Error::Draw(format!("{e}")))?;
+        .map_err(Error::Draw)?;
     Ok(())
 }
 
@@ -368,7 +370,7 @@ impl OutlinePen for PathPen {
 /// only allocation the measuring functions make.
 fn advances(font: &[u8], text: &str, size_px: f64) -> Result<Vec<f64>, Error> {
     let size = checked_size(size_px)?;
-    let font = FontRef::new(font).map_err(|e| Error::Font(format!("{e}")))?;
+    let font = FontRef::new(font).map_err(Error::Font)?;
     let location = font.axes().location(std::iter::empty::<Axis<'_>>());
     let charmap = font.charmap();
     let glyph_metrics = font.glyph_metrics(Size::new(size), LocationRef::from(&location));
@@ -493,6 +495,7 @@ pub fn caret_x(font: &[u8], text: &str, size_px: f64, byte_index: usize) -> Resu
 /// The char boundary whose caret is nearest `x`. The inverse of [`caret_x`],
 /// which is what a click in a text field needs.
 pub fn hit_index(font: &[u8], text: &str, size_px: f64, x: f64) -> Result<usize, Error> {
+    let x = checked_finite(x, "x")?;
     let advances = advances(font, text, size_px)?;
     let (mut pen, mut best, mut best_d) = (0., 0, x.abs());
     for ((i, ch), a) in text.char_indices().zip(&advances) {
@@ -825,5 +828,22 @@ mod measure_tests {
             let x = caret_x(HACK_REGULAR, text, SIZE, i).unwrap();
             assert_eq!(hit_index(HACK_REGULAR, text, SIZE, x).unwrap(), i, "at {i}");
         }
+    }
+
+    #[test]
+    fn a_bad_font_keeps_its_skrifa_cause() {
+        let Err(e) = axes(b"not a font") else {
+            panic!("bad bytes must not parse");
+        };
+        assert!(matches!(e, Error::Font(_)));
+        assert!(std::error::Error::source(&e).is_some());
+    }
+
+    #[test]
+    fn a_non_finite_click_does_not_snap_to_the_start() {
+        for x in [f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
+            assert!(hit_index(HACK_REGULAR, "abc", SIZE, x).is_err(), "{x}");
+        }
+        assert_eq!(hit_index(HACK_REGULAR, "abc", SIZE, 1e6).unwrap(), 3);
     }
 }
