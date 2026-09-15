@@ -21,8 +21,9 @@ public function and a test behind it.
       gradients, analytic blurred shadows, a CPU pixel snapshot test.
 - [x] `mui::Ui`: the per-frame runtime with spring-smoothed hover and press;
       `slider`, `knob`, `toggle`, `button` as compositions of flex shares.
-- [x] Preview: the gallery is one `mui` tree, sidebar included, and its text
-      renders through the glyph atlas.
+- [x] Preview: the gallery is one `mui` tree, sidebar included, its text
+      renders through the glyph atlas, and winit's wheel, keys, modifiers and
+      cursor icon ride through `Input` / `Frame`.
 - [x] Core DSL sugar: `row!`/`col!`/`stack!`/`grid!` taking anything
       `IntoEl`, `.w`/`.h`/`.square` on bare integers, `.center`/`.start`/
       `.end`/`.between`, `title`/`label`/`caption`.
@@ -50,8 +51,6 @@ public function and a test behind it.
 - [ ] Blurred shadows on welded shapes (still drawn sharp) and blend modes.
 - [ ] `Node::push`, so the tooltip overlay stops wrapping the root and
       shifting unnamed decoration keys on tip frames.
-- [ ] Preview host: feed winit's keyboard and wheel events into `Input`
-      instead of routing keys to the selected scene by hand.
 - [ ] `vello_hybrid` against classic `vello`, re-measured on Windows — the
       hybrid choice was made on Linux numbers only.
 - [ ] AccessKit; SVG symbol import; keyframed animation beyond springs.

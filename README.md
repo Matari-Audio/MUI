@@ -227,10 +227,14 @@ atlas, not filled outlines: the host hands `paint` a `mui_vello::Gpu`.
 `bacon` rebuilds and relaunches on save. Point `MUI_PREVIEW_FONT` at a
 variable font and the Glyph scene grows a slider per axis.
 
-Keys and the wheel are library concepts now (`Input`, `Ui::scroll`,
-`Ui::focus`), but the preview host still feeds `Ui` a pointer only and
-routes its own keystrokes to the selected scene. Wiring winit's keyboard
-and scroll events into `Input` is the next thing it wants.
+winit's wheel, keys and modifiers ride into `Input` with the last pointer
+sample of each batch, so `Ui::scroll`, `Ui::focus` and `text_input` work in
+the window: the Scroll, Text, Tooltip, Canvas and Drag scenes are there to
+prove it. `Frame.cursor` is applied with `window.set_cursor`; `Frame.tip` is
+not, because the tooltip is already floated into the scene. Printable
+characters go to `Input.text` only -- `Key::Char` is emitted just for
+ctrl/cmd shortcuts, or `text_input` would insert every character twice.
+IME and clipboard are still missing.
 
 ```bash
 cargo run -p mui-vello --example headless -- /tmp/pill.png
@@ -253,6 +257,8 @@ no GPU, no window. With `--features cpu`, `mui-vello` renders through
 ```
 
 Formatting, tests, clippy with warnings denied, and a wasm check of the
-library crates. `BENCHMARKS.md` carries the subsystem timings — scene
-resolve, fillets, offsets, glyph runs — measured the same way each time. The TypeScript frontend under `packages/mui-ts` is frozen;
-see `packages/mui-ts/FROZEN.md`.
+library crates. `BENCHMARKS.md` is the frame budget of a Kurv-sized scene
+across `vello_hybrid`, `vello_cpu` and classic `vello`, reproduced by
+`cargo run -p mui-vello --release --features cpu --example bench`. The
+TypeScript frontend under `packages/mui-ts` is frozen; see
+`packages/mui-ts/FROZEN.md`.
