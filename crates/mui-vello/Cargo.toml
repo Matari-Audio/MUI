@@ -8,6 +8,9 @@ license.workspace = true
 default = []
 # A CPU rasteriser: snapshot tests, thumbnails, hosts with no GPU.
 cpu = ["dep:vello_cpu"]
+# Compile classic vello into `examples/bench.rs` so the comparison has a third
+# column. Off by default: it drags in the whole compute pipeline for a number.
+bench-classic = []
 
 [dependencies]
 mui-core = { path = "../mui-core" }
@@ -32,3 +35,11 @@ png = "0.17"
 wgpu = { version = "29", default-features = false, features = ["wgsl", "vulkan", "gles", "metal", "dx12"] }
 pollster = "0.4"
 vello_hybrid = { version = "0.2", features = ["wgpu_default"] }
+mui = { path = "../mui" }
+# Classic vello, for `--features bench-classic`. `bump_estimate` is the only
+# way either renderer will tell us what it asks the GPU for.
+vello = { version = "0.10", default-features = false, features = ["wgpu", "bump_estimate"] }
+
+[[example]]
+name = "bench"
+required-features = ["cpu"]

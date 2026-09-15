@@ -1,8 +1,10 @@
-//! Where a frame's time goes, measured rather than guessed. `#[ignore]`
-//! because it is a measurement, not an assertion.
+//! A frame stays inside a generous budget. The budget is a tripwire, not a
+//! benchmark: it catches the accidental O(n^2), not a 10% regression. Real
+//! numbers, and the hybrid/cpu/classic comparison, live in BENCHMARKS.md and
+//! `cargo run -p mui-vello --release --features cpu --example bench`.
 //!
 //! ```text
-//! cargo test -p mui-preview --release --test frame_cost -- --ignored --nocapture
+//! cargo test -p mui-preview --test frame_cost -- --nocapture
 //! ```
 use std::hint::black_box;
 use std::time::Instant;
@@ -55,46 +57,49 @@ fn pill() -> El {
     .weld(Role::Surface)
 }
 
+/// Generous enough that a debug build on a slow machine passes, tight enough
+/// that a quadratic walk over 500 paint ops does not.
+const BUDGET_MS: f64 = 50.0;
+
 #[test]
-#[ignore = "a measurement"]
 fn what_a_frame_costs() {
     let font = epaint_default_fonts::HACK_REGULAR;
     let spec = SceneSpec::new(pill()).font(font.to_vec());
-    println!(
-        "pill resolve (weld + shell + text) {:8.3} ms",
-        ms(|| {
-            black_box(resolve_scene(black_box(&spec)).unwrap());
-        })
-    );
+    let resolve = ms(|| {
+        black_box(resolve_scene(black_box(&spec)).unwrap());
+    });
+    println!("pill resolve (weld + shell + text) {resolve:8.3} ms");
     let mut ui = Ui::new(Theme::DEFAULT).font(font.to_vec());
     let mut v = 0.3;
-    println!(
-        "Ui::frame, sliders + knob         {:8.3} ms",
-        ms(|| {
-            let root = column([
-                slider(&mut ui, "a", "A", &mut v, 0.0..=1.0),
-                knob(&mut ui, "k", "K", &mut v, 0.0..=1.0, 64.0),
-            ])
-            .pad(M);
-            black_box(
-                ui.frame(
-                    root,
-                    Some(Size::new(300.0, 300.0)),
-                    PointerInput::default(),
-                    0.016,
-                )
-                .unwrap()
-                .scene
-                .paint
-                .len(),
-            );
-        })
-    );
+    let frame = ms(|| {
+        let root = column([
+            slider(&mut ui, "a", "A", &mut v, 0.0..=1.0),
+            knob(&mut ui, "k", "K", &mut v, 0.0..=1.0, 64.0),
+        ])
+        .pad(M);
+        black_box(
+            ui.frame(
+                root,
+                Some(Size::new(300.0, 300.0)),
+                PointerInput::default(),
+                0.016,
+            )
+            .unwrap()
+            .scene
+            .paint
+            .len(),
+        );
+    });
+    println!("Ui::frame, sliders + knob         {frame:8.3} ms");
     let resolved = resolve_scene(&spec).unwrap();
-    println!(
-        "mui paint walk 1600x1000          {:8.3} ms",
-        ms(|| {
-            mui::vello::paint(&mut Sink, &resolved, mui::vello::kurbo::Affine::IDENTITY).unwrap();
-        })
-    );
+    let walk = ms(|| {
+        mui::vello::paint(&mut Sink, &resolved, mui::vello::kurbo::Affine::IDENTITY).unwrap();
+    });
+    println!("mui paint walk                    {walk:8.3} ms");
+    for (what, got) in [("resolve", resolve), ("frame", frame), ("paint walk", walk)] {
+        assert!(
+            got < BUDGET_MS,
+            "{what} took {got:.3} ms, budget {BUDGET_MS}"
+        );
+    }
 }

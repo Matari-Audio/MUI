@@ -1,78 +1,120 @@
-# Subsystem audit — 2026-09-13
+# hybrid vs cpu vs classic — 2026-09-15
 
-Baseline: `ba0617e`. Linux x86-64, Ryzen 7 7800X3D, 16 logical CPUs.
-Release uses the repository's size optimization (`opt-level = "s"`), LTO,
-and one codegen unit. These are local microbenchmarks, not end-to-end FPS.
+One scene, three backends, three cases. The question is narrow: MUI renders
+through `vello_hybrid`, and classic `vello` is the obvious alternative. This
+file is the number that answers "why".
 
-## Current state
+## Machine
 
-Intrinsic flex layout, Boolean surfaces, fillets, parallel offsets, glyph
-outlines, pointer interaction, Vello rendering, and TypeScript-to-Rust
-authoring are implemented. Recent commits added derived light/dark palettes,
-contrast checks, bounded neutral layers, and one-file constant themes.
+| | |
+|---|---|
+| CPU | AMD Ryzen 7 7800X3D (16 logical) |
+| GPU | AMD Radeon RX 6600 (RADV NAVI23), Vulkan, discrete |
+| OS | Linux x86-64 |
+| Commit | `19a59b5` plus this one |
+| Profile | workspace `release`: `opt-level = "s"`, LTO, 1 codegen unit |
 
-## Measurements
+`opt-level = "s"` is the repository's choice for binary size and it costs the
+CPU-side numbers something. Every column here pays it equally.
 
-Final run after compilation completed, tests run serially:
+## Scene
 
-| Work | Time |
-|---|---:|
-| Resolve canonical pill scene | median 0.008 ms; p95 0.010 ms |
-| Resolve scene plus inset of merged outline | median 0.093 ms; p95 0.107 ms |
-| Rebuild 18 sidebar labels at 13 px | mean 0.314 ms |
-| One 13 px label | mean 0.027 ms |
-| Convert 40 rounded paths to Beziers | mean 0.020 ms |
-| Extract one 280 px glyph | mean 0.002 ms |
-| Vello CPU fill/stroke preparation, 1600×1000 scene | mean 0.008 ms |
+A Kurv-sized editor: 40 knobs, 8 sliders, 200 labels, a clipped 60-row
+scrolling list, two 50-cubic response curves and three floats. Resolved at
+1280x800, it is **674 surfaces, 530 paint ops, 382 glyph runs**.
 
-Scene measurements use 20 warmups and 200 samples with `black_box`.
-The existing text/render-preparation benchmark averages 20 iterations;
-it has no percentile statistics and uses Hack Regular. These small workloads
-do not establish scaling, GPU execution time, presentation latency, or memory use.
-Label rebuilding is the largest measured CPU item; merged offsets cost about
-12 times the basic scene resolve on this specimen.
+Reproduce:
 
-## Quality and correctness
-
-- Verification passed: formatting, workspace tests/doc tests, Clippy with
-  warnings denied, library WASM check, TypeScript compilation, deterministic
-  generated Rust, and the demo. The extended benchmark also passed Clippy.
-- Geometry: 44 tests passed, including randomized shapes/insets, hole topology,
-  tangency, collapse/split behavior, budgets, and invalid inputs. The existing
-  general-offset distance test bounds error below 0.08 units for an 8-unit
-  inset at 0.02 flattening tolerance; this is a fixture bound, not a universal
-  error measurement.
-- Typography: 13 tests passed. Baseline metrics, counters, overlapping glyphs,
-  advance positioning, missing glyphs, and tolerance-dependent detail are covered.
-  Text remains advance-only and unhinted: no kerning/shaping, bidi, fallback
-  chain, or first-class measured layout leaf. The curve subdivision cap of 64
-  means arbitrarily small requested tolerances are not guaranteed.
-- Anti-aliasing: headless rendering succeeded and the 640×360 image was visually
-  inspected. Curved edges and the glyph counter look intact. The transparent
-  render contains 956 partially covered pixels across 223 intermediate alpha
-  levels, confirming fractional coverage. This is a smoke check, not comparison
-  with a ground-truth raster or a small-text/high-DPI quality benchmark.
-- GPU resize: the explicit readback regression passed. The test does not report
-  adapter identity, so it does not establish hardware-versus-software execution.
-- Palette: existing contrast tests passed. Their guarantees concern generated
-  colors, not a complete UI accessibility audit. Adjacent neutral fills are
-  intentionally subtle; the documented dark palette cannot provide a 3:1
-  boundary against its ground through neutral fill alone.
-- Interaction and layout tests passed, including painted-path/hit agreement.
-  Keyboard traversal, IME, and accessibility integration remain incomplete.
-
-## Reproduce
-
-```sh
-./tools/verify.sh
-cargo test -p mui-preview --release --test frame_cost --offline -- --ignored --nocapture --test-threads=1
-cargo test -p mui-preview --test render_resize --offline -- --ignored --nocapture
-cargo run -p mui-vello --example headless --offline -- /tmp/mui-audit.png
+```
+cargo run -p mui-vello --release --features cpu --example bench
+cargo run -p mui-vello --release --features cpu,bench-classic --example bench
 ```
 
-Session logs: `/tmp/mui-audit-verify.log`, `/tmp/mui-audit-bench-final.log`,
-`/tmp/mui-audit-gpu.log`. Image: `/tmp/mui-audit.png`.
+## What is being timed
 
-The next useful measurements are sustained frame latency with the actual GPU
-identified, layout/geometry scaling, and small text at multiple display scales.
-The current results do not justify a broad performance rewrite.
+| Phase | What runs |
+|---|---|
+| resolve | `Ui::frame`: style, layout, text shaping, the z-ordered paint list |
+| encode | `mui_vello::paint` onto a `Canvas` — arcs to cubics, plus whatever the backend does eagerly |
+| render | rasterise and wait: GPU submit + `poll(wait)`, or `RenderContext::render` into a pixmap |
+
+Cases: **cold** is a fresh `Ui` every frame, so nothing is shaped and no text
+cache is warm. **static** is the same tree again, unchanged. **one knob
+turning** changes one `f64` per frame.
+
+Median of 50 frames after 5 warm-ups. Milliseconds.
+
+## Results
+
+| backend | case | resolve | encode | render | total | fps |
+|---|---|---:|---:|---:|---:|---:|
+| vello_cpu | cold | 3.204 | 4.804 | 0.672 | 8.679 | 115 |
+| vello_cpu | static | 1.670 | 3.294 | 0.669 | 5.633 | 178 |
+| vello_cpu | one knob turning | 1.671 | 3.298 | 0.651 | 5.620 | 178 |
+| vello_hybrid | cold | 3.238 | 4.889 | 0.623 | 8.751 | 114 |
+| vello_hybrid | static | 1.664 | 3.302 | 0.933 | 5.899 | 170 |
+| vello_hybrid | one knob turning | 1.648 | 3.324 | 0.986 | 5.959 | 168 |
+| vello (classic) | cold | 3.183 | 0.927 | 3.483 | 7.593 | 132 |
+| vello (classic) | static | 1.632 | 0.961 | 3.402 | 5.995 | 167 |
+| vello (classic) | one knob turning | 1.650 | 0.981 | 3.419 | 6.050 | 165 |
+
+Memory: classic's `Scene::bump_estimate` reports **0.5 MiB peak** of GPU
+buffer for this scene. Neither sparse-strip backend exposes an equivalent;
+peak RSS of the whole process was 120 MiB in every configuration, which is
+dominated by the font and the wgpu device, so it separates nothing.
+
+## Verdict
+
+**The resolve column is MUI's, and it is identical across all three.** 1.65 ms
+warm, 3.2 ms cold. Whichever renderer wins, half the frame is MUI's own
+layout and shaping, and the text cache is worth ~1.6 ms on this scene. That is
+where optimisation effort belongs, not in the renderer choice.
+
+**Classic moves work to the GPU; hybrid keeps it on the CPU.** The split is
+stark and it is the whole architectural story:
+
+- classic encode 0.96 ms, render 3.40 ms
+- hybrid encode 3.30 ms, render 0.93 ms
+
+Classic's `Scene::fill` appends to an encoding buffer and the GPU does
+flattening, binning and tiling in compute. Hybrid flattens and builds sparse
+strips on the CPU during the paint walk, then the GPU does one ordinary render
+pass. The ~2.4 ms difference in encode is exactly that strip generation, and
+the ~2.5 ms difference in render is exactly the compute pipeline it replaces.
+
+**On totals they are a wash here: 5.90 ms hybrid against 6.00 ms classic.**
+Neither is a reason to pick the other. On this machine — a discrete RX 6600 —
+you could pick either and hold 165 fps.
+
+So the choice is made on what the numbers *don't* measure:
+
+- Classic needs compute shaders. No WebGL2, no GLES2, no old or embedded GPU.
+  Hybrid's render pass runs anywhere a triangle runs. MUI is a plugin UI that
+  has to render inside a host's existing device, and that device is not always
+  a 2026 discrete card.
+- Classic's render cost is a fixed multi-pass price. 3.4 ms of it appeared for
+  a scene of 530 paint ops, and it barely moved between the cold and static
+  cases — that floor is paid whatever is on screen. Hybrid's render was 0.6 to
+  1.0 ms.
+- `vello_hybrid` and `vello_cpu` share the sparse-strip pipeline, so the
+  headless CPU path renders the same scene the same way. The `vello_cpu` rows
+  above are within noise of the hybrid rows on resolve and encode, which is the
+  evidence: snapshot tests, thumbnails and no-GPU hosts get real pixels from the
+  same code, with no second renderer to keep honest.
+- Linebender note that hybrid can trail classic on vector-heavy dynamic
+  scenes, and the mechanism is visible above: hybrid's per-frame cost scales
+  with CPU strip generation over the paint list. A UI is not that workload —
+  530 ops of rectangles, pills and glyph runs, redrawn identically — but a
+  scene of thousands of moving paths would push hybrid's encode up while
+  classic's stayed flat.
+
+**vello_cpu is not a fallback, it is the reference.** 5.6 ms total with no GPU
+at all, marginally *faster* than hybrid here because the GPU round-trip and
+`poll(wait)` cost more than rasterising 1280x800 in SIMD. A no-GPU host is not
+a degraded host on a scene this size.
+
+### What would change the answer
+
+A scene an order of magnitude denser, or a machine whose CPU is much weaker
+relative to its GPU. Both push toward classic. Neither describes a plugin UI on
+a host's device, which is what MUI is.
