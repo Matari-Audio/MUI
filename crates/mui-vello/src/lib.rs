@@ -3,16 +3,21 @@
 //! MUI owns *what* the shape is: intrinsic layout, boolean merging, fillets,
 //! constant-thickness nesting, exact arcs. Vello owns *what it looks like*:
 //! analytic antialiasing, gradients, blends, clips, filters. Those are separate
-//! jobs, and this crate is the whole of the connection between them — one
-//! function that hands a resolved path to the rasteriser.
+//! jobs, and this crate is the whole of the connection between them: [`paint`]
+//! walks a resolved scene's paint list onto any [`Canvas`], and [`bez_path`]
+//! is the one conversion underneath it.
 //!
 //! Arcs stay arcs until this point. MUI's tessellation path flattens them to
 //! line segments; here they become cubics instead, which is what Vello wants
 //! and what keeps a 24 px corner smooth when the scene is scaled up.
 #![forbid(unsafe_code)]
 
+use mui_core::{Paint, Painted, ResolvedScene};
 use mui_geometry::{Error, Path, PathCommand};
-use vello_common::kurbo::{self, BezPath};
+use vello_common::kurbo::{self, Affine, BezPath, Rect, Shape as _, Stroke};
+use vello_common::paint::PaintType;
+use vello_common::peniko::color::{AlphaColor, DynamicColor, Srgb};
+use vello_common::peniko::{ColorStop, Gradient};
 
 /// Curve error, in scene units, allowed when an arc becomes cubics. Vello
 /// re-flattens per frame at device resolution, so this only has to be finer
@@ -59,7 +64,7 @@ pub fn bez_path(path: &Path, tolerance: f64) -> Result<BezPath, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kurbo::{ParamCurve as _, PathEl, Shape as _};
+    use kurbo::{ParamCurve as _, PathEl};
 
     fn capsule() -> Path {
         Path::capsule(48., 120.).unwrap()
@@ -122,5 +127,152 @@ mod tests {
         };
         arc.radius *= 2.;
         assert!(bez_path(&path, ARC_TOLERANCE).is_err());
+    }
+}
+
+/// The handful of calls painting needs, so one walk serves the GPU scene and
+/// the CPU context alike.
+pub trait Canvas {
+    fn set_transform(&mut self, t: Affine);
+    fn set_paint(&mut self, p: PaintType);
+    fn set_stroke(&mut self, s: Stroke);
+    fn fill_path(&mut self, p: &BezPath);
+    fn stroke_path(&mut self, p: &BezPath);
+    fn fill_blurred_rounded_rect(&mut self, r: &Rect, radius: f32, std_dev: f32);
+}
+macro_rules! canvas {
+    ($t:ty) => {
+        impl Canvas for $t {
+            fn set_transform(&mut self, t: Affine) {
+                <$t>::set_transform(self, t)
+            }
+            fn set_paint(&mut self, p: PaintType) {
+                <$t>::set_paint(self, p)
+            }
+            fn set_stroke(&mut self, s: Stroke) {
+                <$t>::set_stroke(self, s)
+            }
+            fn fill_path(&mut self, p: &BezPath) {
+                <$t>::fill_path(self, p)
+            }
+            fn stroke_path(&mut self, p: &BezPath) {
+                <$t>::stroke_path(self, p)
+            }
+            fn fill_blurred_rounded_rect(&mut self, r: &Rect, radius: f32, std_dev: f32) {
+                <$t>::fill_blurred_rounded_rect(self, r, radius, std_dev, false)
+            }
+        }
+    };
+}
+canvas!(vello_hybrid::Scene);
+#[cfg(feature = "cpu")]
+canvas!(vello_cpu::RenderContext);
+
+fn srgb(c: mui_core::Color) -> AlphaColor<Srgb> {
+    c.to_srgb()
+}
+
+/// A resolved MUI paint as a Vello brush. Gradient angles follow CSS: 180
+/// runs top to bottom across `bounds`.
+pub fn brush(p: &Paint, bounds: Rect) -> PaintType {
+    match p {
+        Paint::Solid(c) => PaintType::Solid(srgb(*c)),
+        Paint::Linear { angle, stops } => {
+            let a = angle.to_radians();
+            let (s, c) = (a.sin(), -a.cos());
+            let len = (bounds.width() * s).abs() + (bounds.height() * c).abs();
+            let mid = bounds.center();
+            let half = (s * len / 2.0, c * len / 2.0);
+            let stops: Vec<ColorStop> = stops
+                .iter()
+                .map(|(t, col)| ColorStop {
+                    offset: *t,
+                    color: DynamicColor::from_alpha_color(srgb(*col)),
+                })
+                .collect();
+            PaintType::Gradient(
+                Gradient::new_linear(
+                    (mid.x - half.0, mid.y - half.1),
+                    (mid.x + half.0, mid.y + half.1),
+                )
+                .with_stops(&stops[..]),
+            )
+        }
+    }
+}
+
+/// Draw every entry of the scene's paint list, in order, under `transform`.
+///
+/// Shadows take Vello's analytic blurred rectangle when the outline is one;
+/// a blurred *welded* outline has no fast path and draws unblurred.
+pub fn paint(
+    canvas: &mut impl Canvas,
+    scene: &ResolvedScene,
+    transform: Affine,
+) -> Result<(), Error> {
+    canvas.set_transform(transform);
+    for p in &scene.paint {
+        one(canvas, p)?;
+    }
+    Ok(())
+}
+
+fn one(canvas: &mut impl Canvas, p: &Painted) -> Result<(), Error> {
+    let path = bez_path(&p.path, ARC_TOLERANCE)?;
+    canvas.set_paint(brush(&p.paint, path.bounding_box()));
+    match (p.blur > 0.0, p.rect, p.width > 0.0) {
+        (true, Some(rr), _) => {
+            let b = rr.bounds();
+            canvas.fill_blurred_rounded_rect(
+                &Rect::new(b.min.x, b.min.y, b.max.x, b.max.y),
+                rr.radius() as f32,
+                p.blur as f32,
+            );
+        }
+        // ponytail: blur on a welded outline is drawn sharp; a blur filter
+        // layer is the upgrade if a merged shadow ever needs it.
+        (_, _, false) => canvas.fill_path(&path),
+        (_, _, true) => {
+            canvas.set_stroke(Stroke::new(p.width));
+            canvas.stroke_path(&path);
+        }
+    }
+    Ok(())
+}
+
+#[cfg(all(test, feature = "cpu"))]
+mod snapshot {
+    use super::*;
+    use mui_core::prelude::*;
+    use vello_common::pixmap::Pixmap;
+
+    /// The whole stack on the CPU: a filled card reaches the pixels, its ink
+    /// reads against it, and the rounded corner stays clear.
+    #[test]
+    fn a_card_lands_on_the_pixmap() {
+        let root = column([text("hi").id("t")])
+            .pad(20.)
+            .fill(Role::Primary)
+            .stroke(Role::Ink)
+            .id("card");
+        let mut spec = SceneSpec::new(root).offered(Size::new(120., 60.));
+        spec.font = Some(std::sync::Arc::new(
+            epaint_default_fonts::HACK_REGULAR.to_vec(),
+        ));
+        let scene = resolve_scene(&spec).unwrap();
+        assert!(scene.paint.iter().any(|p| p.layer == mui_core::Layer::Text));
+
+        let mut ctx = vello_cpu::RenderContext::new(120, 60);
+        paint(&mut ctx, &scene, Affine::IDENTITY).unwrap();
+        let mut pix = Pixmap::new(120, 60);
+        ctx.render(&mut pix, &mut vello_cpu::Resources::default());
+        let at = |x: usize, y: usize| pix.data()[y * 120 + x];
+        let want = Theme::default().palette.primary().to_srgb().to_rgba8();
+        let got = at(60, 8);
+        assert!(
+            (got.r as i32 - want.r as i32).abs() <= 1,
+            "{got:?} vs {want:?}"
+        );
+        assert_eq!(at(0, 0).a, 0, "corner is rounded away");
     }
 }
