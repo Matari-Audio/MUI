@@ -32,13 +32,15 @@ pub enum Variant {
     Ghost,
 }
 
-/// A control's look, resolved: the pixel height it was sized to, and the
-/// palette the variant does its arithmetic with.
+/// A control's look, resolved: the pixel height it was sized to, the
+/// palette the variant does its arithmetic with, and what the readout was
+/// told to say.
 struct Look {
     px: f64,
     variant: Variant,
     role: Role,
     palette: Palette,
+    text: Option<String>,
 }
 impl Look {
     /// What the control's own box is painted with, where the role is the
@@ -116,6 +118,7 @@ impl Control {
                 variant: Variant::Solid,
                 role: Role::Primary,
                 palette: ui.theme().palette,
+                text: None,
             },
             size: SpacingToken::M,
             px: None,
@@ -160,6 +163,22 @@ impl Control {
     /// ```
     pub fn size(mut self, s: SpacingToken) -> Self {
         self.size = s;
+        self
+    }
+    /// What the readout says, instead of the default two decimals: the
+    /// value in the units the parameter actually has. A knob has no header,
+    /// so it says this under the dial in place of its label.
+    ///
+    /// ```
+    /// use mui::prelude::*;
+    /// let mut ui = Ui::new(Theme::DEFAULT);
+    /// let mut cutoff = 440.0;
+    /// let dial = knob(&mut ui, "cut", "Cutoff", &mut cutoff, 20.0..=20_000.0)
+    ///     .value_text(format!("{cutoff:.0} Hz"));
+    /// assert_eq!(dial.el().children().len(), 2);
+    /// ```
+    pub fn value_text(mut self, s: impl Into<String>) -> Self {
+        self.look.text = Some(s.into());
         self
     }
     /// The control's height in pixels, for the knob that has to match a
@@ -220,6 +239,22 @@ fn unit(value: f64, range: &RangeInclusive<f64>) -> f64 {
     ((value - range.start()) / span).clamp(0.0, 1.0)
 }
 
+/// What the header says: the text the caller gave, or the value at two
+/// decimals. Either way it is measured for the widest string it can say, so
+/// digits coming and going never shuffle the label beside it.
+///
+/// ponytail: a caller's own text is its own reserve -- one string is all the
+/// widget is told -- so pad it to its widest form if the units change width.
+fn readout(given: Option<String>, value: f64, min: f64, max: f64) -> El {
+    match given {
+        Some(t) => text(t.clone()).reserve(t),
+        None => {
+            let (lo, hi) = (format!("{min:.2}"), format!("{max:.2}"));
+            text(format!("{value:.2}")).reserve(if hi.len() > lo.len() { hi } else { lo })
+        }
+    }
+}
+
 /// Label, readout, and a track whose fill and thumb are flex shares.
 ///
 /// Call `Ui::edit` with the same id to bracket the drag
@@ -261,7 +296,7 @@ pub fn slider(
             row([
                 text(label),
                 spacer(),
-                text(format!("{value:.2}")).fill(Role::Dim),
+                readout(look.text.clone(), value, min, max).fill(Role::Dim),
             ])
             .gap(S),
             overlay([
@@ -333,7 +368,7 @@ pub fn knob(
                     .anchor(Align::Center, Align::Center)
                     .offset(r * a.cos(), r * a.sin()),
             ]),
-            text(label).fill(Role::Dim),
+            text(look.text.clone().unwrap_or(label)).fill(Role::Dim),
         ])
         .gap(Xs)
         .align(Align::Center)
