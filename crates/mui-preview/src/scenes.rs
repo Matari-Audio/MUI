@@ -40,6 +40,7 @@ pub fn all() -> Vec<Box<dyn PreviewScene>> {
         Box::new(Fields::default()),
         Box::new(Tips),
         Box::new(Curve::default()),
+        Box::new(Hits::default()),
         Box::new(Swap::default()),
         Box::new(Images::new()),
         Box::new(Wrapping::default()),
@@ -454,6 +455,93 @@ impl PreviewScene for Curve {
         .radius(16.0)
         .fill(Role::Surface)
         .id("curve")
+    }
+}
+
+/// A canvas whose drawn geometry is its hit geometry: the ring responds
+/// inside the ring, and the hole it leaves does not.
+#[derive(Default)]
+pub struct Hits {
+    held: Option<usize>,
+}
+fn circle(c: Point, r: f64, rev: bool) -> impl Iterator<Item = Point> {
+    (0..64).map(move |i| {
+        let k = if rev { 64 - i } else { i };
+        let a = std::f64::consts::TAU * f64::from(k) / 64.0;
+        Point::new(c.x + r * a.cos(), c.y + r * a.sin())
+    })
+}
+/// Outer circle one way round, inner the other, so the hole is outside
+/// under the non-zero rule the renderer fills by -- and the hit test that
+/// reads the same path agrees with what you can see.
+fn ring(c: Point, outer: f64, inner: f64) -> Path {
+    let mut p = Path::polyline(circle(c, outer, false), true);
+    for (i, q) in circle(c, inner, true).enumerate() {
+        p = if i == 0 { p.move_to(q) } else { p.line_to(q) };
+    }
+    p.close()
+}
+impl PreviewScene for Hits {
+    fn name(&self) -> &'static str {
+        "Canvas hits"
+    }
+    fn about(&self) -> &'static str {
+        "Draw::tag makes a drawn shape a hit shape. The ring lights only inside the ring; each knot answers for itself; the hole is not the dial."
+    }
+    fn specimen(&mut self, ui: &mut Ui) -> El {
+        let tag = ui.tag("dial").map(str::to_owned);
+        if ui.get("dial").pressed {
+            self.held = tag
+                .as_deref()
+                .and_then(|t| t.strip_prefix("knot-"))
+                .and_then(|n| n.parse().ok());
+        }
+        let (lit, held) = (tag.clone(), self.held);
+        let dial = canvas(move |size| {
+            let c = Point::new(size.width / 2.0, size.height / 2.0);
+            let band = ring(c, 70.0, 44.0);
+            let mut draws = vec![Draw::fill(
+                band,
+                if lit.as_deref() == Some("band") {
+                    Role::Primary
+                } else {
+                    Role::Field
+                },
+            )
+            .tag("band")];
+            for i in 0..3usize {
+                let a = std::f64::consts::TAU * i as f64 / 3.0;
+                let at = Point::new(c.x + 57.0 * a.cos(), c.y + 57.0 * a.sin());
+                let knot = format!("knot-{i}");
+                let on = held == Some(i) || lit.as_deref() == Some(&*knot);
+                draws.push(
+                    Draw::fill(
+                        Path::polyline(circle(at, 9.0, false), true),
+                        if on { Role::Ink } else { Role::Dim },
+                    )
+                    .tag(knot),
+                );
+            }
+            draws
+        })
+        .square(200.0)
+        .radius(100.0)
+        .id("dial");
+        column([
+            dial,
+            text(match (&tag, self.held) {
+                (Some(t), _) => format!("over {t}"),
+                (None, Some(i)) => format!("last grabbed knot-{i}"),
+                (None, None) => "over nothing".to_owned(),
+            })
+            .fill(Role::Dim),
+        ])
+        .gap(M)
+        .pad(L)
+        .align(Align::Center)
+        .radius(20.0)
+        .fill(Role::Surface)
+        .id("hits")
     }
 }
 

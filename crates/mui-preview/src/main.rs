@@ -946,7 +946,13 @@ mod tests {
     #[test]
     fn the_wheel_scrolls_and_a_drag_between_pills_swaps_them() {
         let mut app = App::new();
-        app.selected = 5;
+        let pick = |app: &App, name| {
+            app.scenes
+                .iter()
+                .position(|s| s.name() == name)
+                .expect(name)
+        };
+        app.selected = pick(&app, "Scroll");
         app.tick(SIZE, 1.0, PointerInput::default());
         let c = centre(&app, "scroll");
         app.tick(
@@ -960,7 +966,7 @@ mod tests {
         );
         assert!(app.ui.scroll("scroll")[1] > 0.0, "the wheel moved nothing");
 
-        app.selected = 9;
+        app.selected = pick(&app, "Drag");
         app.tick(SIZE, 1.0, PointerInput::default());
         let width = |app: &App, key| {
             app.ui

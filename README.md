@@ -125,6 +125,7 @@ assert_eq!(scene.surface("tab").unwrap().frame.size.width, 92.0);
 | `.scroll()`, `.clip()`, `.float()` | overflow the wheel slides, overflow cut off, a child painted over everything |
 | `.pin(Pin::to("field").area(Area::Bottom).gap(Xs).match_width().fallback(Area::Top))` | a float placed against another node by name: one of nine named regions around it, a gap, a size taken from it, and areas tried in order until one fits the window. `.tip("..")` is this. Keep `.offset(dx, dy)` for the nudge no region can name |
 | `canvas(\|size\| vec![Draw::fill(path, Ink)])` | your own paths, in the node's own space |
+| `Draw::fill(path, Ink).tag("band")`, `Draw::hit(path, "knot-0")` | a drawn shape that is also the node's hit shape, by name, and hit geometry that paints nothing. Tag one draw and the node responds inside its tagged paths only: `ui.tag("dial")` says which, latched for the length of a drag |
 | `.cursor(Cursor::Hand)`, `.tip("..")`, `.focusable()` | the pointer, a tooltip after half a second, Tab stops here |
 | `button(&ui, "save", "Save").0.variant(Variant::Soft).size(S)` | a control's look and size: `Solid`, `Soft`, `Outline`, `Ghost`, and the same five sizes everywhere. `.role(Danger)` recolours it, `.px(72.0)` is the hatch, `.el()` finishes it |
 | `.role(Kind::Button)`, `.label("OK")` | what a screen reader hears: `mui-access` reads both off the surface |

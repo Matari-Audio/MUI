@@ -178,6 +178,10 @@ pub struct ResolvedSurface {
     /// A scroll node's children extent inside its padding, unscrolled;
     /// the frame size otherwise.
     pub content: Size,
+    /// The tagged shapes a `canvas` drew, in scene space. Non-empty means
+    /// *these* are the surface's hit geometry, not its outline: the pointer
+    /// outside all of them is outside the node. See [`Draw::tag`].
+    pub hits: Vec<(Arc<str>, Path)>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -712,6 +716,8 @@ impl<'a> Walk<'a> {
             }
         }
 
+        // A canvas's tagged draws, collected as the surface's hit shapes.
+        let mut hits = Vec::new();
         match &e.content {
             Content::Text(t) => {
                 let size = e.text_size.unwrap_or(th.text);
@@ -787,6 +793,9 @@ impl<'a> Walk<'a> {
                 let origin = Point::new(frame.x, frame.y);
                 for (k, d) in (c.0)(frame.size).into_iter().enumerate() {
                     let moved = d.path.rigid_transform(origin, 0.0)?;
+                    if let Some(tag) = d.tag {
+                        hits.push((tag, moved.clone()));
+                    }
                     if let Some(p) = self.push(Layer::Draw(k), moved, None, &d.fill, bg) {
                         p.width = d.width;
                     }
@@ -830,6 +839,7 @@ impl<'a> Walk<'a> {
             semantics: e.semantics.clone(),
             clip,
             content,
+            hits,
         });
         let mask_path = if masked {
             outline.clone()
@@ -1357,6 +1367,42 @@ mod feature_tests {
         assert_eq!(s.surface("a").unwrap().cursor, Some(Cursor::Hand));
         assert_eq!(s.layout.frame("a").unwrap().y, -25.);
         assert_eq!(s.surfaces().last().map(|s| &*s.key), Some("tip"));
+    }
+
+    /// A tagged draw is hit geometry in scene space; an untagged one is
+    /// paint and nothing else.
+    #[test]
+    fn a_tagged_draw_becomes_the_surfaces_hit_shape() {
+        let box_ = |w: f64, h: f64| {
+            Path::polyline(
+                [(0., 0.), (w, 0.), (w, h), (0., h)].map(|(x, y)| Point::new(x, y)),
+                true,
+            )
+        };
+        let plot = canvas(move |s| {
+            vec![
+                Draw::fill(box_(s.width, s.height), Primary),
+                Draw::hit(box_(s.width / 2., s.height), "left"),
+            ]
+        })
+        .size(40., 20.)
+        .id("plot");
+        let root = column([leaf(40., 30.), plot]);
+        let s = resolve_scene(&SceneSpec::new(root)).unwrap();
+        let surface = s.surface("plot").unwrap();
+        let [(tag, path)] = &surface.hits[..] else {
+            panic!("one tagged draw, got {:?}", surface.hits.len())
+        };
+        assert_eq!(&**tag, "left");
+        let pts = path.flatten(0.1, 1000).unwrap().concat();
+        let top = pts.iter().map(|p| p.y).fold(f64::MAX, f64::min);
+        assert_eq!(top, 30., "moved into the node's frame");
+        assert!(
+            !s.paint
+                .iter()
+                .any(|p| &*p.key == "plot" && p.layer == Layer::Draw(1)),
+            "a hit-only draw paints nothing"
+        );
     }
 
     fn font() -> Arc<[u8]> {

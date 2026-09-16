@@ -102,6 +102,10 @@ pub struct Ui {
     pointer: PointerInput,
     /// The hovered key and how long it has been hovered.
     hover: Option<(String, f64)>,
+    /// The canvas shape the pointer is on: its node's key and the draw's
+    /// tag. Latched while a gesture is held, so a drag that leaves the knot
+    /// still reports the knot it grabbed.
+    tagged: Option<(String, String)>,
     time: f64,
 }
 impl Ui {
@@ -132,6 +136,7 @@ impl Ui {
             typed: String::new(),
             pointer: PointerInput::default(),
             hover: None,
+            tagged: None,
             time: 0.0,
         }
     }
@@ -199,6 +204,31 @@ impl Ui {
     /// next tree, so a drag lands one frame late and nobody notices.
     pub fn get(&self, id: &str) -> Response {
         self.interaction.get(id)
+    }
+    /// Which shape of the canvas `id` the pointer is on, by the tag its
+    /// [`Draw`](mui_scene::Draw) carried. `None` when the pointer is over no
+    /// tagged shape of that node -- including inside its frame but outside
+    /// every drawn path.
+    ///
+    /// Latched at the press: through a drag it stays the shape the gesture
+    /// grabbed, so a knot dragged past its neighbours is still that knot.
+    ///
+    /// ```
+    /// # use mui::Ui; use mui::prelude::*;
+    /// # let mut ui = Ui::new(Theme::DEFAULT);
+    /// let plot = canvas(|size| {
+    ///     let box_ = [(0., 0.), (size.width, 0.), (size.width, size.height)];
+    ///     vec![Draw::fill(Path::polyline(box_.map(|(x, y)| Point::new(x, y)), true), Primary)
+    ///         .tag("wedge")]
+    /// })
+    /// .square(80.)
+    /// .id("plot");
+    /// ui.frame(plot, None, PointerInput::default(), 0.016).unwrap();
+    /// assert_eq!(ui.tag("plot"), None, "the pointer is nowhere");
+    /// ```
+    pub fn tag(&self, id: &str) -> Option<&str> {
+        let (k, t) = self.tagged.as_ref()?;
+        (k == id).then_some(t.as_str())
     }
     /// Hover and press amounts for `id`, 0..1 and spring-smoothed.
     pub fn state(&self, id: &str) -> (f64, f64) {
@@ -405,6 +435,14 @@ impl Ui {
             self.edits.extend(prev_held.clone().map(|k| (k, Edit::End)));
             self.edits.extend(held.clone().map(|k| (k, Edit::Begin)));
         }
+        // Last frame's hit map and this frame's pointer, exactly as the
+        // interaction above: a new capture latches the shape under the press.
+        if held.is_none() || prev_held != held {
+            self.tagged = input.pointer.pos.and_then(|p| {
+                let (id, tag) = self.hit.at_tagged(p)?;
+                Some((id.to_owned(), tag?.to_owned()))
+            });
+        }
         for (k, [h, p]) in &mut self.springs {
             h.to(f64::from(
                 hovered.as_deref() == Some(k) || held.as_deref() == Some(k),
@@ -548,7 +586,14 @@ impl Ui {
         // decoration. A target clipped away does not respond.
         let mut hit = Hit::default();
         for s in scene.surfaces().filter(|s| !s.key.starts_with('/')) {
-            hit.push_clipped(s.key.to_string(), &s.path, s.clip)?;
+            if s.hits.is_empty() {
+                hit.push_clipped(s.key.to_string(), &s.path, s.clip)?;
+            }
+            // A canvas that named its draws is hit by those shapes instead of
+            // by its frame, so a ring responds in the ring and not in its hole.
+            for (tag, path) in &s.hits {
+                hit.push_tagged(s.key.to_string(), tag.to_string(), path, s.clip)?;
+            }
         }
         self.hit = hit;
         self.wheel(&scene, input.wheel);
@@ -829,6 +874,75 @@ mod tests {
             }],
             ..Input::default()
         }
+    }
+
+    /// A ring: the outer circle one way round, the inner the other, so the
+    /// hole is outside under the non-zero rule the renderer fills by.
+    fn ring(c: Point, outer: f64, inner: f64) -> mui_geometry::Path {
+        let arc = move |r: f64, rev: bool| {
+            (0..64).map(move |i| {
+                let k = if rev { 64 - i } else { i };
+                let a = std::f64::consts::TAU * f64::from(k) / 64.0;
+                Point::new(c.x + r * a.cos(), c.y + r * a.sin())
+            })
+        };
+        let mut p = mui_geometry::Path::polyline(arc(outer, false), true);
+        for (i, q) in arc(inner, true).enumerate() {
+            p = if i == 0 { p.move_to(q) } else { p.line_to(q) };
+        }
+        p.close()
+    }
+
+    /// The drawn shape is the hit shape: the ring responds, the hole it
+    /// leaves does not, and the tag says which draw was hit.
+    #[test]
+    fn a_tagged_canvas_responds_in_its_drawn_ring_only() {
+        let mut ui = Ui::new(Theme::DEFAULT);
+        let tree = || {
+            canvas(|s| {
+                let c = Point::new(s.width / 2., s.height / 2.);
+                vec![Draw::fill(ring(c, 50., 25.), Role::Primary).tag("band")]
+            })
+            .size(100., 100.)
+            .id("dial")
+        };
+        // Two frames per move: the hit map a gesture reads is the last built.
+        let hover = |ui: &mut Ui, x: f64, y: f64| {
+            for _ in 0..2 {
+                ui.frame(tree(), None, at(x, y, false), 0.016).unwrap();
+            }
+        };
+        hover(&mut ui, 50., 50.);
+        assert!(!ui.get("dial").hovered, "the hole is not the dial");
+        assert_eq!(ui.tag("dial"), None);
+        hover(&mut ui, 50., 12.);
+        assert!(ui.get("dial").hovered, "the band is");
+        assert_eq!(ui.tag("dial"), Some("band"));
+        hover(&mut ui, 2., 2.);
+        assert!(!ui.get("dial").hovered, "and the frame's corner is not");
+    }
+
+    /// The tag a press grabbed survives a drag that leaves the shape.
+    #[test]
+    fn the_tag_is_latched_for_the_length_of_the_gesture() {
+        let mut ui = Ui::new(Theme::DEFAULT);
+        let tree = || {
+            canvas(|s| {
+                let c = Point::new(s.width / 2., s.height / 2.);
+                vec![Draw::fill(ring(c, 50., 25.), Role::Primary).tag("band")]
+            })
+            .size(100., 100.)
+            .id("dial")
+        };
+        for _ in 0..2 {
+            ui.frame(tree(), None, at(50., 12., false), 0.016).unwrap();
+        }
+        ui.frame(tree(), None, at(50., 12., true), 0.016).unwrap();
+        ui.frame(tree(), None, at(50., 50., true), 0.016).unwrap();
+        assert_eq!(ui.tag("dial"), Some("band"), "still the shape it grabbed");
+        ui.frame(tree(), None, at(50., 50., false), 0.016).unwrap();
+        ui.frame(tree(), None, at(50., 50., false), 0.016).unwrap();
+        assert_eq!(ui.tag("dial"), None, "released over the hole");
     }
 
     #[test]

@@ -33,6 +33,9 @@ pub const DRAG_THRESHOLD: f64 = 4.0;
 
 struct Target {
     id: String,
+    /// Which of the target's own shapes this is, for a canvas that named
+    /// its draws. `None` for an ordinary surface.
+    tag: Option<String>,
     path: BezPath,
     /// Cheap reject. Most pointer positions miss most targets, and a winding
     /// number costs a walk over every segment.
@@ -68,9 +71,44 @@ impl Hit {
         path: &Path,
         clip: Option<Bounds>,
     ) -> Result<(), Error> {
+        self.add(id.into(), None, path, clip)
+    }
+
+    /// Add one named shape of a target: a canvas's drawn ring, a knot, a
+    /// cable. The gesture is still the node's -- `id` is what
+    /// [`Hit::at`] reports -- and `tag` says which shape it landed on.
+    ///
+    /// ```
+    /// # use mui_geometry::{Path, Point};
+    /// # use mui_input::Hit;
+    /// let square = [(0., 0.), (10., 0.), (10., 10.), (0., 10.)];
+    /// let path = Path::polyline(square.map(|(x, y)| Point::new(x, y)), true);
+    /// let mut hit = Hit::default();
+    /// hit.push_tagged("plot", "knot-0", &path, None).unwrap();
+    /// assert_eq!(hit.at_tagged(Point::new(5., 5.)), Some(("plot", Some("knot-0"))));
+    /// assert_eq!(hit.at(Point::new(50., 5.)), None);
+    /// ```
+    pub fn push_tagged(
+        &mut self,
+        id: impl Into<String>,
+        tag: impl Into<String>,
+        path: &Path,
+        clip: Option<Bounds>,
+    ) -> Result<(), Error> {
+        self.add(id.into(), Some(tag.into()), path, clip)
+    }
+
+    fn add(
+        &mut self,
+        id: String,
+        tag: Option<String>,
+        path: &Path,
+        clip: Option<Bounds>,
+    ) -> Result<(), Error> {
         let path = mui_vello::bez_path(path, mui_vello::ARC_TOLERANCE)?;
         self.targets.push(Target {
-            id: id.into(),
+            id,
+            tag,
             bounds: path.bounding_box(),
             path,
             clip,
@@ -90,6 +128,21 @@ impl Hit {
     /// under either rule. Non-zero is the one that also survives geometry
     /// nobody normalised, which is what a run of glyph outlines is.
     pub fn at(&self, p: Point) -> Option<&str> {
+        self.at_tagged(p).map(|(id, _)| id)
+    }
+
+    /// [`Hit::at`], plus which of that target's shapes was hit when it was
+    /// pushed with [`Hit::push_tagged`].
+    ///
+    /// ```
+    /// # use mui_geometry::{Path, Point};
+    /// # use mui_input::Hit;
+    /// let mut hit = Hit::default();
+    /// let square = [(0., 0.), (10., 0.), (10., 10.), (0., 10.)];
+    /// hit.push("plain", &Path::polyline(square.map(|(x, y)| Point::new(x, y)), true)).unwrap();
+    /// assert_eq!(hit.at_tagged(Point::new(5., 5.)), Some(("plain", None)));
+    /// ```
+    pub fn at_tagged(&self, p: Point) -> Option<(&str, Option<&str>)> {
         let q = vello_common::kurbo::Point::new(p.x, p.y);
         let inside = |c: &Option<Bounds>| {
             c.is_none_or(|b| p.x >= b.min.x && p.x <= b.max.x && p.y >= b.min.y && p.y <= b.max.y)
@@ -98,7 +151,7 @@ impl Hit {
             .iter()
             .rev()
             .find(|t| inside(&t.clip) && t.bounds.contains(q) && t.path.winding(q) != 0)
-            .map(|t| t.id.as_str())
+            .map(|t| (t.id.as_str(), t.tag.as_deref()))
     }
 }
 

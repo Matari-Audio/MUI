@@ -140,6 +140,14 @@ public function and a test behind it.
       feeds winit's three buttons and its modifiers; the Pointer gestures
       scene is the proof.
 
+- [x] Canvas hit shapes: a `Draw` carries a `tag`, and a tagged draw is the
+      canvas node's hit geometry instead of its frame -- `Draw::hit` is the
+      shape that responds without painting. The pointer outside every tagged
+      path is outside the node, so a drawn ring answers in the ring and not
+      in its hole, and `Ui::tag(id)` names the shape under the pointer,
+      latched at the press so a drag keeps the knot it grabbed. The Canvas
+      hits scene is the proof.
+
 - [x] The crate split: theme data, motion and the scalar/spacing vocabulary
       sit under the element tree (`mui-style`, `mui-motion`, `mui-geometry`),
       `mui-core` is `mui-scene`, the controls are `mui-widgets` behind a

@@ -17,12 +17,18 @@ use mui_motion::Spring;
 use std::sync::Arc;
 
 /// One stroke or fill a canvas hands back, in the canvas's own pixels.
+///
+/// A draw with a [`tag`](Draw::tag) is also the canvas node's hit shape:
+/// see [`Draw::hit`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct Draw {
     pub path: Path,
     pub fill: Fill,
     /// Stroke width; `0` fills.
     pub width: f64,
+    /// Names this shape as a hit target of the canvas node. The runtime
+    /// reports it as the node's own gesture, tagged with this name.
+    pub tag: Option<Arc<str>>,
 }
 impl Draw {
     pub fn fill(path: Path, fill: impl Into<Fill>) -> Self {
@@ -30,6 +36,7 @@ impl Draw {
             path,
             fill: fill.into(),
             width: 0.0,
+            tag: None,
         }
     }
     pub fn stroke(path: Path, fill: impl Into<Fill>, width: f64) -> Self {
@@ -37,7 +44,44 @@ impl Draw {
             path,
             fill: fill.into(),
             width,
+            tag: None,
         }
+    }
+    /// Geometry that responds but paints nothing: the fat target around a
+    /// hairline, or a knot's grab radius.
+    ///
+    /// ```
+    /// use mui_scene::prelude::*;
+    /// # use mui_scene::Draw;
+    /// let square = [(12., 12.), (28., 12.), (28., 28.), (12., 28.)];
+    /// let grab = Draw::hit(Path::polyline(square.map(|(x, y)| Point::new(x, y)), true), "knot-0");
+    /// assert!(grab.fill.is_none());
+    /// ```
+    pub fn hit(path: Path, tag: impl Into<Arc<str>>) -> Self {
+        Self {
+            path,
+            fill: Fill::None,
+            width: 0.0,
+            tag: Some(tag.into()),
+        }
+    }
+    /// Name this drawn shape, so the pointer inside it -- and nowhere else
+    /// in the node's frame -- is a gesture on the canvas. Read the name back
+    /// with `Ui::tag`.
+    ///
+    /// A stroke is hit-tested by its path's *fill*, not its outline: tag a
+    /// closed shape, or add a [`Draw::hit`] beside the stroke.
+    ///
+    /// ```
+    /// use mui_scene::prelude::*;
+    /// # use mui_scene::Draw;
+    /// let tri = [(0., 0.), (20., 0.), (10., 16.)].map(|(x, y)| Point::new(x, y));
+    /// let ring = Draw::fill(Path::polyline(tri, true), Primary).tag("ring");
+    /// assert_eq!(ring.tag.as_deref(), Some("ring"));
+    /// ```
+    pub fn tag(mut self, tag: impl Into<Arc<str>>) -> Self {
+        self.tag = Some(tag.into());
+        self
     }
 }
 
