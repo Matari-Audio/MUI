@@ -1,8 +1,9 @@
 //! The controls MUI ships with, and the presets they sit on.
 //!
 //! Every widget here is an ordinary styled tree: [`button`], [`knob`],
-//! [`toggle`], [`slider`] and [`text_input`] return a [`Control`] or an `El`
-//! that the caller finishes and drops into a `row![..]`, and
+//! [`toggle`], [`slider`], [`text_input`], [`curve`] and [`bins`] return a
+//! [`Control`] or an `El` that the caller finishes and drops into a
+//! `row![..]`, and
 //! [`presets`] holds the four shapes a panel is made of.
 //!
 //! What this crate is not: it is not the runtime. A widget reads last frame's
@@ -17,10 +18,12 @@ use mui_geometry::Point;
 use mui_input::{KeyPress, Response};
 use mui_scene::{ResolvedScene, Spring, Theme};
 
+mod bins;
 mod curve;
 pub mod presets;
 mod widgets;
 
+pub use bins::{bins, bins_hover, BinAxis, BinEdit, Bins};
 pub use curve::{curve, CurveEdit};
 pub use presets::{card, chip, glass, panel, tile};
 pub use widgets::{button, knob, slider, text_input, toggle, Control, Variant};

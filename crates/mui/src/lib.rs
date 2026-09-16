@@ -48,7 +48,8 @@ pub mod prelude {
     pub use mui_scene::{Corners, Mode, Palette, Pigment, SpacingToken, Spring};
     pub use mui_widgets::presets::{card, chip, glass, panel, tile};
     pub use mui_widgets::{
-        button, curve, knob, slider, text_input, toggle, Control, CurveEdit, Host, Variant,
+        bins, bins_hover, button, curve, knob, slider, text_input, toggle, BinAxis, BinEdit, Bins,
+        Control, CurveEdit, Host, Variant,
     };
 }
 

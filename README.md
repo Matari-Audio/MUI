@@ -135,6 +135,7 @@ assert_eq!(scene.surface("tab").unwrap().frame.size.width, 92.0);
 | `.cursor(Cursor::Hand)`, `.tip("..")`, `.focusable()` | the pointer, a tooltip after half a second, Tab stops here |
 | `button(&ui, "save", "Save").0.variant(Variant::Soft).size(S)` | a control's look and size: `Solid`, `Soft`, `Outline`, `Ghost`, and the same five sizes everywhere. `.role(Danger)` recolours it, `.px(72.0)` is the hatch, `.el()` finishes it |
 | `curve(&ui, "env", &mut env)` | an envelope over `mui::scene::curve::Curve`: the model's own cubics as one stroked path, a knot per point and two tension handles per segment, each its own hit shape. Returns the tree and a `CurveEdit` saying what the drag moved -- Shift drags fine, Alt at the press locks an axis, `ui.tag("env")` names the shape under the pointer |
+| `bins(&ui, "spectrum", &Bins { authored, .. })` | an additive spectrum: a bar per partial in the accent, the engine's live levels as a cap line over them, and a faint level grid. One canvas and one hit shape -- pointer x becomes a bin index, so a drag paints every bin it crossed with no gaps, Shift refines from the press level, a secondary click resets one, and the arrows select and nudge. Over ~one bar a pixel the bins coalesce per column at their maximum, so 1024 partials still draw 200 bars. `bins_hover` is the index under the pointer, for a readout in your own units |
 | `.role(Kind::Button)`, `.label("OK")` | what a screen reader hears: `mui-access` reads both off the surface |
 | `.reserve("-88.8 dB")`, `ui.set_text("gain", v)` | measure a readout for the widest value it can show, then swap what it says without resolving the tree again: the frame stands, one glyph run re-shapes |
 | `.text_weight(Weight::BOLD)` | the run's `wght` axis. A variable face moves; a static one has one weight and draws it |
@@ -371,7 +372,7 @@ light-theme half because there is nothing in it a mode could contradict.
 | `mui-vello` | the `Canvas` trait and its `Gpu` / `Cpu` wrappers over `vello_hybrid` and `vello_cpu`: fills, strokes, image fills (`Cpu` paints the pixmap, `Gpu` uploads once through its `Atlas`, see Images), clip push/pop, and hinted glyph runs (Vello hints and caches the outlines per font blob); `paint(canvas, scene, transform)`, and `paint_cached` with a `PathCache` that keeps a still frame's arc-to-cubic conversions |
 | `mui-access` | a `ResolvedScene`'s roles and labels as an `accesskit::TreeUpdate` |
 | `mui-truce` | the non-real-time document and parameter contract a Truce plugin shares with its editor |
-| `mui-widgets` | the controls and presets as plain styled trees: `slider`, `knob`, `toggle`, `button`, `text_input`, `curve`, `panel`/`card`/`glass`/`chip`/`tile`, and the `Host` trait they read state through |
+| `mui-widgets` | the controls and presets as plain styled trees: `slider`, `knob`, `toggle`, `button`, `text_input`, `curve`, `bins`, `panel`/`card`/`glass`/`chip`/`tile`, and the `Host` trait they read state through |
 | `mui` | `Ui` runtime, focus and wheel scrolling, tooltips, transitions, tweens, gesture edits; implements `Host`, so the widgets above keep their `button(ui, ..)` call; the `prelude` |
 | `mui-tessellate`, `mui-egui` | triangle meshes and the egui debug adapter |
 | `mui-preview` | the winit + wgpu gallery, itself one `mui` tree |
