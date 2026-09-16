@@ -202,6 +202,8 @@ fn inspect(
         size: LABEL as f32,
         origin: Point::new(SIDEBAR + 12.0, height - 12.0),
         glyphs: run.glyphs.iter().map(|&(id, x)| (id, x as f32)).collect(),
+        weight: Default::default(),
+        coords: Arc::from(&[][..]),
     });
 }
 

@@ -171,7 +171,23 @@ public function and a test behind it.
       prelude. The graph is acyclic and every public path is unchanged;
       `mui::core` stays as a deprecated alias of `mui::scene` for one release.
 
+- [x] Live readouts and one-seed palettes: `.reserve("-88.8 dB")` measures a
+      text node for the widest value it will ever show, `Ui::set_text(id, s)`
+      then swaps what it says while the resolved frame stands -- one glyph run
+      re-shapes, the tree is not walked again, which is the whole point at 60
+      Hz. `.text_weight(Weight::BOLD)` drives the run's `wght` axis and the
+      position reaches the renderer as `Text::coords`, so a bold run is drawn
+      at the instance it was measured at. `Palette::from_seed(accent, mode)`
+      derives every role from one colour, hue-swept in both modes against
+      `UI_NONTEXT` and `AA_TEXT` instead of trusting a hex table.
+
 ## Missing
+
+- [ ] `Ui::set_text` swaps one line: a wrapped label re-shapes to a single
+      run rather than breaking again, because the swap deliberately does no
+      layout. Re-breaking needs the measure pass it is avoiding.
+- [ ] `Ui::set_text` does not touch what `mui-access` reports; a screen
+      reader hears the value the last resolved tree carried.
 
 - [ ] A pin whose anchor is itself inside another pinned float reads that
       float's first-pass position; a dependency-ordered pin pass is the fix.

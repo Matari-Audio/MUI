@@ -14,7 +14,7 @@ use mui_geometry::{
     OffsetOptions, Path, PlacedShape, Point, Polygon, RoundedRect, Topology,
 };
 use mui_layout::{resolve_with, Frame, Layout, Limits, Size};
-use mui_text::TextRun;
+use mui_text::{TextRun, Weight};
 
 use crate::{
     Carve, Color, Content, Cursor, El, Fill, Mix, Paint, Radius, Semantics, Shadow, ShadowKind,
@@ -124,6 +124,15 @@ pub struct Text {
     pub origin: Point,
     /// Glyph id and pen x from the origin.
     pub glyphs: Arc<[(u32, f32)]>,
+    /// The weight the run was shaped at; `coords` is the same thing in the
+    /// form a glyph cache wants, and [`ResolvedScene::set_text`] re-shapes
+    /// from this one.
+    pub weight: Weight,
+    /// The face's normalized axis coordinates this run was measured at, from
+    /// [`mui_text::normalized_coords`]. Empty for a static face. A renderer
+    /// with its own glyph cache has to pass these on, or it paints the
+    /// default instance under a bold run's advances.
+    pub coords: Arc<[i16]>,
 }
 impl PartialEq for Text {
     fn eq(&self, o: &Self) -> bool {
@@ -131,6 +140,8 @@ impl PartialEq for Text {
             && self.size == o.size
             && self.origin == o.origin
             && self.glyphs == o.glyphs
+            && self.weight == o.weight
+            && self.coords == o.coords
     }
 }
 
@@ -195,8 +206,69 @@ pub struct ResolvedScene {
     /// Every surface in paint order, which is also z-order.
     surfaces: Vec<ResolvedSurface>,
     at: HashMap<Arc<str>, usize>,
+    /// What the scene was shaped with, so a live readout can re-shape one
+    /// run without the spec that produced it. See [`Self::set_text`].
+    font: Option<Arc<[u8]>>,
+    tolerance: f64,
 }
 impl ResolvedScene {
+    /// Swap what one text node says, keeping every frame this scene already
+    /// solved: only that node's glyph run is shaped again.
+    ///
+    /// This is the 60 Hz readout -- a modulated value, a meter, a clock --
+    /// where re-resolving the tree to move six digits is the whole frame
+    /// budget. Pair it with [`Styled::reserve`](crate::Styled::reserve): the
+    /// box was measured for the widest string the node can show, so the
+    /// shorter ones sit inside it and nothing reflows.
+    ///
+    /// ponytail: one line, painted from the old run's origin. A string wider
+    /// than the frame overhangs instead of wrapping, the node's accessibility
+    /// label is unchanged, and the next resolve paints whatever the tree
+    /// says -- so keep feeding the tree the same value.
+    ///
+    /// ```
+    /// use mui_scene::prelude::*;
+    /// # use mui_scene::{Layer, SceneSpec};
+    /// let root = row![text("0.0 dB").reserve("-88.8 dB").id("gain")];
+    /// let spec = SceneSpec::new(root).font(epaint_default_fonts::HACK_REGULAR.to_vec());
+    /// let mut scene = resolve_scene(&spec).unwrap();
+    /// let before = scene.surface("gain").unwrap().frame;
+    /// scene.set_text("gain", "-12.4 dB").unwrap();
+    /// assert_eq!(scene.surface("gain").unwrap().frame, before, "the frame is kept");
+    /// let run = scene.paint.iter().find(|p| p.layer == Layer::Text).unwrap();
+    /// assert_eq!(run.text.as_ref().unwrap().glyphs.len(), "-12.4 dB".len());
+    /// ```
+    pub fn set_text(&mut self, key: &str, s: &str) -> Result<(), SceneError> {
+        let font = self.font.clone().ok_or(SceneError::NoTextLayer)?;
+        let mut at = self
+            .paint
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| &*p.key == key && p.layer == Layer::Text)
+            .map(|(i, _)| i);
+        let first = at.next().ok_or(SceneError::NoTextLayer)?;
+        // A wrapped label's later lines have no string to re-break against,
+        // so the swap collapses it to the one run it now says.
+        let rest: Vec<usize> = at.collect();
+        let old = self.paint[first]
+            .text
+            .as_ref()
+            .ok_or(SceneError::NoTextLayer)?;
+        let (size, origin, weight, coords) = (old.size, old.origin, old.weight, old.coords.clone());
+        let run = mui_text::text_run(&font, s, f64::from(size), &[weight.axis()], self.tolerance)?;
+        self.paint[first].text = Some(Text {
+            font,
+            size,
+            origin,
+            glyphs: run.glyphs.iter().map(|&(g, x)| (g, x as f32)).collect(),
+            weight,
+            coords,
+        });
+        for i in rest.into_iter().rev() {
+            self.paint.remove(i);
+        }
+        Ok(())
+    }
     pub fn surface(&self, key: &str) -> Option<&ResolvedSurface> {
         self.at.get(key).map(|&i| &self.surfaces[i])
     }
@@ -214,6 +286,9 @@ pub enum SceneError {
     Layout(mui_layout::Error),
     Geometry(mui_geometry::Error),
     Text(mui_text::Error),
+    /// [`ResolvedScene::set_text`] was asked for a key that resolved no text
+    /// layer: no such node, not a text node, or no font was set.
+    NoTextLayer,
     RevisionExhausted,
 }
 impl std::fmt::Display for SceneError {
@@ -228,6 +303,7 @@ impl std::fmt::Display for SceneError {
             Self::Layout(e) => write!(f, "{e}"),
             Self::Geometry(e) => write!(f, "{e}"),
             Self::Text(e) => write!(f, "{e}"),
+            Self::NoTextLayer => f.write_str("that key resolved no text layer"),
             Self::RevisionExhausted => f.write_str("the scene revision counter overflowed"),
         }
     }
@@ -289,13 +365,13 @@ fn count(n: &El) -> usize {
     1 + n.children().iter().map(count).sum::<usize>()
 }
 
-/// Text runs keyed by (text, size bits): shaped once, reused across frames
-/// while the font stays the same. Own one in your runtime and pass it to
-/// [`resolve_scene_with`].
+/// Text runs keyed by (text, size bits, weight): shaped once, reused across
+/// frames while the font stays the same. Own one in your runtime and pass it
+/// to [`resolve_scene_with`].
 #[derive(Debug, Default)]
 pub struct TextCache {
     font: usize,
-    runs: HashMap<String, HashMap<u64, TextRun>>,
+    runs: HashMap<String, HashMap<(u64, u16), TextRun>>,
 }
 impl TextCache {
     pub fn len(&self) -> usize {
@@ -309,18 +385,23 @@ impl TextCache {
 struct Runs<'a> {
     font: Option<&'a [u8]>,
     tolerance: f64,
-    cache: &'a mut HashMap<String, HashMap<u64, TextRun>>,
+    cache: &'a mut HashMap<String, HashMap<(u64, u16), TextRun>>,
 }
 impl Runs<'_> {
-    fn run(&mut self, text: &str, size: f64) -> Result<Option<&TextRun>, mui_text::Error> {
+    fn run(
+        &mut self,
+        text: &str,
+        size: f64,
+        w: Weight,
+    ) -> Result<Option<&TextRun>, mui_text::Error> {
         let Some(font) = self.font else {
             return Ok(None);
         };
         // Nested so a hit borrows `text` instead of allocating a key for it:
         // `run` is called several times per line, per frame.
-        let bits = size.to_bits();
+        let bits = (size.to_bits(), w.value());
         if self.cache.get(text).is_none_or(|m| !m.contains_key(&bits)) {
-            let run = mui_text::text_run(font, text, size, &[], self.tolerance)?;
+            let run = mui_text::text_run(font, text, size, &[w.axis()], self.tolerance)?;
             // ponytail: an unbounded cache holds every string ever shown, so
             // flush the lot at a ceiling -- one cold frame. Per-entry frame
             // stamping is the upgrade if that ever shows.
@@ -345,13 +426,16 @@ impl Runs<'_> {
         &mut self,
         text: &'t str,
         size: f64,
+        w: Weight,
         max: f64,
         cap: Option<usize>,
     ) -> Vec<Cow<'t, str>> {
-        let fits = self.measure(text, size).width <= max + 0.5;
+        let fits = self.measure(text, size, w).width <= max + 0.5;
         let Some(font) = self.font.filter(|_| !fits && max > 0.0) else {
             return vec![Cow::Borrowed(text)];
         };
+        // ponytail: broken at the default instance's advances -- a bold
+        // paragraph wraps a hair early. `break_lines` would need the axes.
         let Ok(lines) = mui_text::break_lines(font, text, size, max) else {
             return vec![Cow::Borrowed(text)];
         };
@@ -375,17 +459,17 @@ impl Runs<'_> {
         out
     }
     /// A wrapped label's box: the widest line by the stack of line heights.
-    fn wrapped(&mut self, text: &str, size: f64, max: f64, cap: Option<usize>) -> Size {
+    fn wrapped(&mut self, text: &str, size: f64, wt: Weight, max: f64, cap: Option<usize>) -> Size {
         let (mut w, mut h) = (0.0f64, 0.0);
-        for l in self.lines(text, size, max, cap) {
-            let s = self.measure(&l, size);
+        for l in self.lines(text, size, wt, max, cap) {
+            let s = self.measure(&l, size, wt);
             w = w.max(s.width);
             h += s.height;
         }
         Size::new(w, h)
     }
-    fn measure(&mut self, text: &str, size: f64) -> Size {
-        match self.run(text, size) {
+    fn measure(&mut self, text: &str, size: f64, w: Weight) -> Size {
+        match self.run(text, size, w) {
             // ponytail: no font → a monospace guess, so layout tests stay
             // font-free. Wrong widths are visible the moment a font is set.
             Ok(None) | Err(_) => Size::new(text.chars().count() as f64 * size * 0.6, size * 1.25),
@@ -746,11 +830,14 @@ impl<'a> Walk<'a> {
                     self.paint.remove(i);
                 }
                 bg = under;
-                let lines = self.runs.lines(t, size, frame.size.width, e.lines);
+                let lines = self
+                    .runs
+                    .lines(t, size, e.weight, frame.size.width, e.lines);
+                let coords = coords_for(self.spec.font.as_deref(), e.weight);
                 let n = lines.len();
                 let base = self.base_y;
                 for (li, line) in lines.iter().enumerate() {
-                    let Some(run) = self.runs.run(line, size)? else {
+                    let Some(run) = self.runs.run(line, size, e.weight)? else {
                         break;
                     };
                     // One line sits centred on ascent+descent, or on the
@@ -787,6 +874,8 @@ impl<'a> Walk<'a> {
                         size: size as f32,
                         origin,
                         glyphs: ids,
+                        weight: e.weight,
+                        coords: coords.clone(),
                     });
                     let ink_path = if text.is_some() {
                         Path::default()
@@ -888,7 +977,7 @@ impl<'a> Walk<'a> {
                     Content::Text(t) => {
                         let s = c.payload().text_size.unwrap_or(th.text);
                         self.runs
-                            .run(t, s)?
+                            .run(t, s, c.payload().weight)?
                             .map(|r| f.y + (f.size.height - r.ascent - r.descent) / 2.0 + r.ascent)
                     }
                     _ => None,
@@ -968,16 +1057,29 @@ fn fit(runs: &mut Runs, th: Theme, e: &crate::Element, room: Option<f64>) -> Siz
     let Content::Text(t) = &e.content else {
         return Size::ZERO;
     };
-    let (t, size) = (t.as_str(), e.text_size.unwrap_or(th.text));
-    match room {
+    let (t, size, w) = (t.as_str(), e.text_size.unwrap_or(th.text), e.weight);
+    let mut fit = match room {
         // The room it wrapped into, not its longest line: a paragraph that
         // reported the ragged width would then be centred inside its own
         // column, aligned with nothing above it.
-        Some(w) if w > 0.0 && runs.measure(t, size).width > w + 0.5 => {
-            Size::new(w, runs.wrapped(t, size, w, e.lines).height)
+        Some(room) if room > 0.0 && runs.measure(t, size, w).width > room + 0.5 => {
+            Size::new(room, runs.wrapped(t, size, w, room, e.lines).height)
         }
-        _ => runs.measure(t, size),
+        _ => runs.measure(t, size, w),
+    };
+    // The reserved string widens the box and nothing else: its own height is
+    // the same line at the same size, and a longer value still measures long.
+    if let Some(r) = &e.reserve {
+        fit.width = fit.width.max(runs.measure(r, size, w).width);
     }
+    fit
+}
+
+/// The axis coordinates a run at `w` is drawn at, for a renderer with its own
+/// glyph cache. Empty for a static face, which is most of them.
+fn coords_for(font: Option<&[u8]>, w: Weight) -> Arc<[i16]> {
+    font.and_then(|f| mui_text::normalized_coords(f, &[w.axis()]).ok())
+        .map_or_else(|| Arc::from(&[][..]), Arc::from)
 }
 
 pub fn resolve_scene(spec: &SceneSpec) -> Result<ResolvedScene, SceneError> {
@@ -1057,6 +1159,8 @@ pub fn resolve_scene_with(
         paint,
         surfaces,
         at,
+        font: spec.font.clone(),
+        tolerance: spec.tolerance,
     })
 }
 
@@ -1763,6 +1867,51 @@ mod feature_tests {
         assert!(!s.contains("Layout("), "{s}");
         assert_eq!(s, mui_layout::Error::InvalidValue.to_string());
         assert!(SceneError::InvalidTheme.to_string().contains("theme"));
+    }
+
+    #[test]
+    fn weight_reaches_the_run_and_keys_the_cache() {
+        let mut cache = TextCache::default();
+        let mut sp = SceneSpec::new(row![
+            text("hi").id("a"),
+            text("hi").text_weight(Weight::BOLD).id("b")
+        ]);
+        sp.font = Some(Arc::from(epaint_default_fonts::HACK_REGULAR));
+        let s = resolve_scene_with(&sp, &mut cache).unwrap();
+        // Same string, two weights: two shaped runs, not one reused at the
+        // wrong instance.
+        assert_eq!(cache.len(), 2);
+        let w: Vec<Weight> = s
+            .paint
+            .iter()
+            .filter(|p| p.layer == Layer::Text)
+            .filter_map(|p| p.text.as_ref().map(|t| t.weight))
+            .collect();
+        assert_eq!(w, [Weight::REGULAR, Weight::BOLD]);
+    }
+
+    #[test]
+    fn a_swapped_readout_keeps_the_reserved_box() {
+        let mut sp = SceneSpec::new(row![text("0.0").reserve("-88.8").id("gain")]);
+        sp.font = Some(Arc::from(epaint_default_fonts::HACK_REGULAR));
+        let mut s = resolve_scene(&sp).unwrap();
+        let frame = s.surface("gain").unwrap().frame;
+        s.set_text("gain", "-88.8").unwrap();
+        assert_eq!(s.surface("gain").unwrap().frame, frame);
+        let t = s
+            .paint
+            .iter()
+            .find(|p| p.layer == Layer::Text)
+            .and_then(|p| p.text.clone())
+            .unwrap();
+        assert_eq!(t.glyphs.len(), 5);
+        // The reserved string is exactly the frame's content, so the run
+        // ends inside the box it was measured for.
+        let last = t.origin.x + f64::from(t.glyphs[4].1);
+        assert!(
+            last <= frame.x + frame.size.width + 0.5,
+            "{last} in {frame:?}"
+        );
     }
 
     #[test]

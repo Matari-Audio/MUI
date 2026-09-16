@@ -151,6 +151,32 @@ impl Ui {
     pub fn scene(&self) -> Option<&ResolvedScene> {
         self.scene.as_ref()
     }
+    /// Swap what one text node says without resolving the tree again: the
+    /// last frame's layout stands and only that node's glyphs are shaped.
+    ///
+    /// For readouts that change every frame -- a meter, a value under a
+    /// knob -- where the tree is otherwise identical. Give the node a
+    /// [`reserve`](mui_scene::Styled::reserve) string so the box was
+    /// measured for the widest value it will ever hold.
+    ///
+    /// ponytail: takes `AsRef<str>`, not `Into<Arc<str>>` -- the string is
+    /// shaped and dropped, never stored, so an `Arc` would only allocate.
+    /// See [`ResolvedScene::set_text`] for the rest of the ceiling: one
+    /// line, and the accessibility label still says what the tree said.
+    ///
+    /// ```
+    /// # use mui::prelude::*;
+    /// let mut ui = Ui::new(Theme::DEFAULT).font(epaint_default_fonts::HACK_REGULAR.to_vec());
+    /// let tree = row![text("0.0").reserve("-88.8").id("gain")];
+    /// ui.frame(tree, Some(Size::new(200., 40.)), PointerInput::default(), 0.016).unwrap();
+    /// ui.set_text("gain", "-12.4").unwrap();
+    /// ```
+    pub fn set_text(&mut self, id: &str, s: impl AsRef<str>) -> Result<(), mui_scene::SceneError> {
+        self.scene
+            .as_mut()
+            .ok_or(mui_scene::SceneError::NoTextLayer)?
+            .set_text(id, s.as_ref())
+    }
     /// Drop the gesture in flight, for focus loss. The held target still
     /// gets its [`Edit::End`] on the next frame: a host that was told a
     /// gesture began must be told it ended.
@@ -1708,5 +1734,69 @@ mod tests {
         let el = mui_widgets::slider(&mut ui, "down", "Down", &mut down, 1.0..=0.0).el();
         ui.frame(el, None, PointerInput::default(), 0.016)
             .expect("and so is a downward one");
+    }
+
+    #[test]
+    fn a_live_readout_swaps_its_glyphs_without_resolving_again() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        let walks = Rc::new(Cell::new(0));
+        let (w, seen) = (walks.clone(), walks.clone());
+        let tree = move || {
+            let w = w.clone();
+            row![
+                text("0.0").reserve("-88.8").id("gain"),
+                canvas(move |_| {
+                    w.set(w.get() + 1);
+                    Vec::new()
+                })
+                .size(10., 10.)
+            ]
+        };
+        let mut ui = Ui::new(Theme::DEFAULT).font(epaint_default_fonts::HACK_REGULAR.to_vec());
+        ui.frame(tree(), Some(Size::new(300., 40.)), Input::default(), 0.016)
+            .unwrap();
+        assert_eq!(seen.get(), 1, "the one resolve");
+
+        let glyphs = |ui: &Ui| {
+            let t = ui
+                .scene()
+                .unwrap()
+                .paint
+                .iter()
+                .find(|p| p.layer == mui_scene::Layer::Text);
+            t.unwrap().text.clone().unwrap().glyphs
+        };
+        let (before, frame) = (
+            glyphs(&ui),
+            ui.scene().unwrap().surface("gain").unwrap().frame,
+        );
+        for i in 0..32 {
+            ui.set_text("gain", format!("-{i}.5")).unwrap();
+        }
+        assert_eq!(seen.get(), 1, "32 readouts, still one layout resolve");
+        assert_ne!(glyphs(&ui), before, "and the glyphs did change");
+        assert_eq!(ui.scene().unwrap().surface("gain").unwrap().frame, frame);
+    }
+
+    #[test]
+    fn set_text_says_so_when_there_is_nothing_to_set() {
+        let mut ui = Ui::new(Theme::DEFAULT).font(epaint_default_fonts::HACK_REGULAR.to_vec());
+        assert!(matches!(
+            ui.set_text("gain", "1"),
+            Err(SceneError::NoTextLayer)
+        ));
+        let tree = row![leaf(20., 20.).id("box")];
+        ui.frame(tree, Some(Size::new(80., 40.)), Input::default(), 0.016)
+            .unwrap();
+        assert!(matches!(
+            ui.set_text("box", "1"),
+            Err(SceneError::NoTextLayer)
+        ));
+        assert!(matches!(
+            ui.set_text("nope", "1"),
+            Err(SceneError::NoTextLayer)
+        ));
     }
 }

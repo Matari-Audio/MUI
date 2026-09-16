@@ -292,6 +292,9 @@ macro_rules! wrapper {
                 .font_size(text.size)
                 // glifo's current default, not a promise it will stay one.
                 .hint(true)
+                // The run was measured at this instance; drawing the default
+                // one under its advances is how a bold readout goes ragged.
+                .normalized_coords(&text.coords)
                 .fill_glyphs(run(text.origin, &text.glyphs));
         }
     };
@@ -912,6 +915,8 @@ mod seam {
                 size: 16.,
                 origin: mui_geometry::Point::new(10., 30.),
                 glyphs: Arc::from(&[(1u32, 0.0f32), (2, 12.0)][..]),
+                weight: Default::default(),
+                coords: Arc::from(&[][..]),
             }),
         };
         let b = paint_box(&p, &BezPath::new());

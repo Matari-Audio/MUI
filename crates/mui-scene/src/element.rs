@@ -14,6 +14,7 @@ use mui_geometry::CornerStyle;
 use mui_geometry::Path;
 use mui_layout::{Node, Size, Spacing};
 use mui_motion::Spring;
+use mui_text::Weight;
 use std::sync::Arc;
 
 /// One stroke or fill a canvas hands back, in the canvas's own pixels.
@@ -199,6 +200,11 @@ pub struct Element {
     pub content: Content,
     /// Text size in pixels; `None` is the theme's.
     pub text_size: Option<f64>,
+    /// How heavy the glyphs are drawn. See [`Styled::text_weight`].
+    pub weight: Weight,
+    /// A string this text node is at least as wide as, whatever it currently
+    /// says. See [`Styled::reserve`].
+    pub reserve: Option<String>,
     /// Shown after the pointer rests on the node.
     pub tip: Option<String>,
     /// Takes keyboard focus on click and on Tab.
@@ -519,6 +525,39 @@ pub trait Styled: Paints {
 
     fn text_size(mut self, px: f64) -> Self {
         self.element_mut().text_size = Some(px);
+        self
+    }
+    /// How heavy this label's glyphs are, as a position on the font's `wght`
+    /// axis. Inherited by nothing: a weight is a property of the run, so a
+    /// row of labels states it per label.
+    ///
+    /// ```
+    /// use mui_scene::prelude::*;
+    /// let heading = text("Oscillator").text_weight(Weight::BOLD);
+    /// assert_eq!(heading.payload().weight, Weight::BOLD);
+    /// ```
+    fn text_weight(mut self, w: Weight) -> Self {
+        self.element_mut().weight = w;
+        self
+    }
+    /// Measure this text node as if it said `s`, whenever `s` is the wider
+    /// of the two: a readout keeps its box while its value changes, so the
+    /// row beside it does not shuffle every frame.
+    ///
+    /// Give it the widest string the node can ever show -- `"-88.8 dB"`, not
+    /// the value now. It sets a floor, never a ceiling: a longer string than
+    /// reserved still measures at its own width.
+    ///
+    /// ```
+    /// use mui_scene::prelude::*;
+    /// let spec = SceneSpec::new(row![text("0.0 dB").reserve("-88.8 dB").id("gain")]);
+    /// let wide = resolve_scene(&spec).unwrap().surface("gain").unwrap().frame.size.width;
+    /// let bare = SceneSpec::new(row![text("0.0 dB").id("gain")]);
+    /// let bare = resolve_scene(&bare).unwrap().surface("gain").unwrap().frame.size.width;
+    /// assert!(wide > bare);
+    /// ```
+    fn reserve(mut self, s: impl Into<String>) -> Self {
+        self.element_mut().reserve = Some(s.into());
         self
     }
     /// Declare what this node looks like while hovered, pressed or focused,

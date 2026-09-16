@@ -84,6 +84,54 @@ fn checked_metric(value: f32, name: &'static str) -> Result<f64, Error> {
 /// axis bounds, so a caller cannot produce an outline the font does not define.
 pub type Axis<'a> = (&'a str, f32);
 
+/// How heavy a run is drawn, as the `wght` axis position every variable font
+/// names the same way: 400 regular, 700 bold.
+///
+/// A newtype rather than an enum because the axis is continuous -- a display
+/// face that looks right at 520 should be able to say so -- and the four
+/// constants cover what a UI usually asks for.
+///
+/// ponytail: a static face has no `wght` axis, so it draws at its one
+/// weight; nothing here synthesises a bold by smearing outlines. Ship a
+/// variable face, or a second blob for the bold, if the difference matters.
+///
+/// ```
+/// use mui_text::Weight;
+/// assert_eq!(Weight::BOLD.axis(), ("wght", 700.0));
+/// assert_eq!(Weight::default(), Weight::REGULAR);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Weight(u16);
+impl Weight {
+    pub const REGULAR: Self = Self(400);
+    pub const MEDIUM: Self = Self(500);
+    pub const SEMIBOLD: Self = Self(600);
+    pub const BOLD: Self = Self(700);
+
+    /// Any position on the axis. The face clamps it to the range it declares.
+    ///
+    /// ```
+    /// use mui_text::Weight;
+    /// assert_eq!(Weight::new(520).value(), 520);
+    /// ```
+    pub const fn new(wght: u16) -> Self {
+        Self(wght)
+    }
+    /// The number, for a caller that stores or shows it.
+    pub const fn value(self) -> u16 {
+        self.0
+    }
+    /// This weight as the axis setting [`text_run`] takes.
+    pub fn axis(self) -> Axis<'static> {
+        ("wght", f32::from(self.0))
+    }
+}
+impl Default for Weight {
+    fn default() -> Self {
+        Self::REGULAR
+    }
+}
+
 /// One variation axis the face actually declares, with the range it accepts.
 /// A UI needs this to offer a slider that cannot leave the design space.
 #[derive(Debug, Clone, PartialEq)]
@@ -107,6 +155,32 @@ pub fn axes(font: &[u8]) -> Result<Vec<AxisInfo>, Error> {
             default: a.default_value(),
             max: a.max_value(),
         })
+        .collect())
+}
+
+/// The face's normalized coordinates for an axis setting, one per axis it
+/// declares, in the font's own order.
+///
+/// A renderer that draws cached glyph outlines instead of the path
+/// [`text_run`] hands back needs these, or it paints the default instance
+/// while layout measured the varied one. The numbers are F2Dot14 bits --
+/// what every glyph cache keys its variations on.
+///
+/// ```
+/// # let font = epaint_default_fonts::HACK_REGULAR;
+/// // A static face declares no axes, so there is nothing to vary.
+/// assert!(mui_text::normalized_coords(font, &[mui_text::Weight::BOLD.axis()])
+///     .unwrap()
+///     .is_empty());
+/// ```
+pub fn normalized_coords(font: &[u8], axes: &[Axis<'_>]) -> Result<Vec<i16>, Error> {
+    let font = FontRef::new(font).map_err(Error::Font)?;
+    Ok(font
+        .axes()
+        .location(axes.iter().copied())
+        .coords()
+        .iter()
+        .map(|c| c.to_bits())
         .collect())
 }
 

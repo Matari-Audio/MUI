@@ -46,6 +46,7 @@ pub use mui_style::{
     Color, Corner, Corners, Cursor, Elevation, Fill, Fit, Gradient, GradientKind, Image, Mix, Mode,
     Paint, Palette, Pigment, Radius, Role, Shadow, ShadowKind, Stroke, Style, Theme,
 };
+pub use mui_text::Weight;
 pub use scene::{
     resolve_scene, resolve_scene_with, Layer, Painted, ResolvedScene, ResolvedSurface, SceneError,
     SceneSpec, SceneState, Text, TextCache,
@@ -59,7 +60,7 @@ pub mod prelude {
         canvas, caption, col, column, fits, grid, label, leaf, overlay, resolve_scene, row, spacer,
         stack, text, title, Align, Area, Color, Corner, Cursor, Draw, El, Elevation, Fill, Fit,
         Gradient, Image, IntoEl, IntoLen, Justify, Kind, Len, Match, Mix, Paints, Pin, Radius,
-        Role, SceneSpec, Shadow, Size, State, Style, Styled, Sugar, Theme,
+        Role, SceneSpec, Shadow, Size, State, Style, Styled, Sugar, Theme, Weight,
     };
     pub use mui_geometry::{CornerStyle, Path, Point};
     pub use mui_layout::Spacing;
