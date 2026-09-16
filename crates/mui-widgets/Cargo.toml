@@ -1,0 +1,17 @@
+[package]
+name = "mui-widgets"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "MUI's controls and presets: button, knob, toggle, slider and text field, built as ordinary styled trees."
+
+[dependencies]
+mui-scene = { path = "../mui-scene" }
+mui-geometry = { path = "../mui-geometry" }
+mui-input = { path = "../mui-input" }
+
+# The doctests here show a widget being called with the runtime that hosts it,
+# which is the facade. Cargo allows a cycle through dev-dependencies, and the
+# library build stays one-way: widgets never depend on `mui`.
+[dev-dependencies]
+mui = { path = "../mui" }

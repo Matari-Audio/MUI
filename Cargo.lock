@@ -1869,6 +1869,7 @@ dependencies = [
  "mui-tessellate",
  "mui-text",
  "mui-vello",
+ "mui-widgets",
  "png 0.17.16",
 ]
 
@@ -1999,6 +2000,16 @@ dependencies = [
  "vello_cpu 0.2.0",
  "vello_hybrid",
  "wgpu",
+]
+
+[[package]]
+name = "mui-widgets"
+version = "0.3.0"
+dependencies = [
+ "mui",
+ "mui-geometry",
+ "mui-input",
+ "mui-scene",
 ]
 
 [[package]]

@@ -356,7 +356,8 @@ light-theme half because there is nothing in it a mode could contradict.
 | `mui-vello` | the `Canvas` trait and its `Gpu` / `Cpu` wrappers over `vello_hybrid` and `vello_cpu`: fills, strokes, image fills (`Cpu` paints the pixmap, `Gpu` uploads once through its `Atlas`, see Images), clip push/pop, and hinted glyph runs (Vello hints and caches the outlines per font blob); `paint(canvas, scene, transform)`, and `paint_cached` with a `PathCache` that keeps a still frame's arc-to-cubic conversions |
 | `mui-access` | a `ResolvedScene`'s roles and labels as an `accesskit::TreeUpdate` |
 | `mui-truce` | the non-real-time document and parameter contract a Truce plugin shares with its editor |
-| `mui` | `Ui` runtime, focus and wheel scrolling, tooltips, transitions, tweens, gesture edits, and widgets (`slider`, `knob`, `toggle`, `button`, `text_input`); the `prelude` |
+| `mui-widgets` | the controls and presets as plain styled trees: `slider`, `knob`, `toggle`, `button`, `text_input`, `panel`/`card`/`glass`/`chip`/`tile`, and the `Host` trait they read state through |
+| `mui` | `Ui` runtime, focus and wheel scrolling, tooltips, transitions, tweens, gesture edits; implements `Host`, so the widgets above keep their `button(ui, ..)` call; the `prelude` |
 | `mui-tessellate`, `mui-egui` | triangle meshes and the egui debug adapter |
 | `mui-preview` | the winit + wgpu gallery, itself one `mui` tree |
 

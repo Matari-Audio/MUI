@@ -10,6 +10,7 @@ use mui_scene::{
     Area, Color, Cursor, El, Element, Fill, Paint, Palette, Pin, Radius, ResolvedScene, SceneError,
     SceneSpec, Size, Spacing, Spring, State, TextCache, Theme,
 };
+use mui_widgets::Host;
 
 /// The id the floated tip carries. A leading `/` keeps it out of hit
 /// testing, like every other key the runtime owns.
@@ -725,6 +726,78 @@ impl std::fmt::Debug for Ui {
     }
 }
 
+/// The runtime, seen from a widget: every method forwards to the inherent one
+/// of the same name, so `mui-widgets` can stay ignorant of the event loop.
+impl Host for Ui {
+    fn theme(&self) -> &Theme {
+        &self.theme
+    }
+    fn scene(&self) -> Option<&ResolvedScene> {
+        Ui::scene(self)
+    }
+    fn get(&self, id: &str) -> Response {
+        Ui::get(self, id)
+    }
+    fn state(&self, id: &str) -> (f64, f64) {
+        Ui::state(self, id)
+    }
+    fn drag(
+        &self,
+        id: &str,
+        value: &mut f64,
+        range: std::ops::RangeInclusive<f64>,
+        px: f64,
+        vertical: bool,
+    ) -> bool {
+        Ui::drag(self, id, value, range, px, vertical)
+    }
+    fn tween_with(&mut self, id: &str, target: f64, spring: Spring) -> f64 {
+        Ui::tween_with(self, id, target, spring)
+    }
+    fn focused(&self, id: &str) -> bool {
+        Ui::focused(self, id)
+    }
+    fn double_click(&self, id: &str) -> bool {
+        Ui::double_click(self, id)
+    }
+    fn local(&self, id: &str) -> Option<Point> {
+        Ui::local(self, id)
+    }
+    fn keys(&self, id: &str) -> &[KeyPress] {
+        Ui::keys(self, id)
+    }
+    fn text(&self, id: &str) -> &str {
+        Ui::text(self, id)
+    }
+    fn sel(&self, id: &str) -> (usize, usize) {
+        Ui::sel(self, id)
+    }
+    fn set_sel(&mut self, id: &str, anchor: usize, caret: usize) {
+        Ui::set_sel(self, id, anchor, caret);
+    }
+    fn pasted(&self) -> Option<&str> {
+        Ui::pasted(self)
+    }
+    fn set_clipboard(&mut self, s: String) {
+        Ui::set_clipboard(self, s);
+    }
+    fn preedit(&self) -> Option<(&str, Option<(usize, usize)>)> {
+        Ui::preedit(self)
+    }
+    fn set_ime_caret(&mut self, id: &str, at: Point, height: f64) {
+        Ui::set_ime_caret(self, id, at, height);
+    }
+    fn hit(&self, s: &str, size: f64, x: f64) -> usize {
+        Ui::hit(self, s, size, x)
+    }
+    fn caret_x(&self, s: &str, size: f64, byte: usize) -> f64 {
+        Ui::caret_x(self, s, size, byte)
+    }
+    fn blink(&self) -> bool {
+        Ui::blink(self)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -797,7 +870,7 @@ mod tests {
     fn typing_reaches_the_focused_field() {
         let mut ui = Ui::new(Theme::DEFAULT);
         let mut value = String::new();
-        let tree = |ui: &mut Ui, v: &mut String| crate::widgets::text_input(ui, "f", v);
+        let tree = |ui: &mut Ui, v: &mut String| mui_widgets::text_input(ui, "f", v);
         let root = tree(&mut ui, &mut value);
         ui.frame(root, None, PointerInput::default(), 0.016)
             .unwrap();
@@ -820,7 +893,7 @@ mod tests {
     fn a_composition_paints_without_editing_the_value_and_the_commit_inserts() {
         let mut ui = Ui::new(Theme::DEFAULT);
         let mut value = "ab".to_owned();
-        let tree = |ui: &mut Ui, v: &mut String| crate::widgets::text_input(ui, "f", v);
+        let tree = |ui: &mut Ui, v: &mut String| mui_widgets::text_input(ui, "f", v);
         let ime = |e: mui_input::Ime| Input {
             ime: vec![e],
             ..Input::default()
@@ -876,7 +949,7 @@ mod tests {
         let mut ui = Ui::new(Theme::DEFAULT);
         let mut value = "x".repeat(60);
         let win = Some(Size::new(200., 60.));
-        let tree = |ui: &mut Ui, v: &mut String| crate::widgets::text_input(ui, "f", v);
+        let tree = |ui: &mut Ui, v: &mut String| mui_widgets::text_input(ui, "f", v);
         let root = tree(&mut ui, &mut value);
         ui.frame(root, win, PointerInput::default(), 0.016).unwrap();
         ui.set_sel("f", 60, 60);
@@ -902,7 +975,7 @@ mod tests {
         let mut ui = Ui::new(Theme::DEFAULT);
         let mut value = String::from("hello");
         let run = |ui: &mut Ui, v: &mut String, input: Input| {
-            let root = crate::widgets::text_input(ui, "f", v);
+            let root = mui_widgets::text_input(ui, "f", v);
             ui.frame(root, None, input, 0.016).unwrap();
         };
         run(&mut ui, &mut value, Input::default());
@@ -929,7 +1002,7 @@ mod tests {
         let mut ui = Ui::new(Theme::DEFAULT);
         let mut value = String::from("hi");
         let run = |ui: &mut Ui, v: &mut String, input: Input| {
-            let root = crate::widgets::text_input(ui, "f", v);
+            let root = mui_widgets::text_input(ui, "f", v);
             ui.frame(root, None, input, 0.016)
                 .unwrap()
                 .clipboard
@@ -1262,11 +1335,11 @@ mod tests {
     fn a_degenerate_or_inverted_range_resolves_and_clamps() {
         let mut ui = Ui::new(Theme::DEFAULT);
         let mut v = 1.0;
-        let el = crate::widgets::slider(&mut ui, "fixed", "Fixed", &mut v, 1.0..=1.0).el();
+        let el = mui_widgets::slider(&mut ui, "fixed", "Fixed", &mut v, 1.0..=1.0).el();
         ui.frame(el, None, PointerInput::default(), 0.016)
             .expect("a fixed parameter is still a tree");
         let mut down = 0.5;
-        let el = crate::widgets::slider(&mut ui, "down", "Down", &mut down, 1.0..=0.0).el();
+        let el = mui_widgets::slider(&mut ui, "down", "Down", &mut down, 1.0..=0.0).el();
         ui.frame(el, None, PointerInput::default(), 0.016)
             .expect("and so is a downward one");
     }
