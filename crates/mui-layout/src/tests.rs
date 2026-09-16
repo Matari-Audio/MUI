@@ -744,3 +744,17 @@ fn a_squeezed_flex_item_is_measured_again_at_its_share() {
     assert_eq!((p.size.width, p.size.height), (100., 100.));
     assert_eq!(l.frame("root").map(|f| f.size.height), None);
 }
+
+/// Padding has one slot: the last call wins, whatever spelling it used.
+#[test]
+fn a_pixel_pad_clears_the_token_before_it() {
+    let scale = SpacingScale::DEFAULT;
+    let n = Node::<()>::row([]).pad(SpacingToken::M).pad(12.0);
+    assert_eq!(n.padding(scale), Insets::all(12.0));
+    let n = Node::<()>::row([]).pad(12.0).pad(SpacingToken::M);
+    assert_eq!(n.padding(scale), Insets::all(scale.m));
+    let n = Node::<()>::row([])
+        .pad(SpacingToken::M)
+        .pad(Spacing::step(3.0));
+    assert_eq!(n.padding(scale), Insets::all(12.0));
+}

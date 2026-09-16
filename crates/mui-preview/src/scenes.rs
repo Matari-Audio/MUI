@@ -796,56 +796,39 @@ impl PreviewScene for Editor {
 pub fn editor() -> El {
     // A section tab is fluid between two stops: three of them fill a 240 px
     // window and stop growing at 120 in a 2000 px one.
-    let tabs = row(["Osc", "Filter", "Env"].map(|n| {
-        row([caption(n)])
+    let tab = |n: &str| {
+        chip(n)
             .justify(Justify::Center)
             .w(clamp(64.0, 18.0, 120.0))
             .pad_xy(0.0, 8.0)
             .radius(8.0)
-            .fill(Role::Field)
+            .on(State::Hover, |s| s.stroke(Ink.alpha(0.12)))
             .id(format!("tab-{n}"))
-    }))
-    .gap(S)
-    .wrap()
-    .id("tabs");
+    };
     let knob = |i: usize| {
-        column([
-            leaf(40.0, 40.0)
-                .pill()
-                .fill(Role::Primary)
-                .id(format!("k{i}")),
+        tile(col![
+            leaf(40.0, 40.0).pill().fill(Primary).id(format!("k{i}")),
             caption(["cut", "res", "drv", "mix"][i]),
         ])
-        .gap(Xs)
-        .align(Align::Center)
-        .pad(S)
-        .radius(10.0)
-        .fill(Role::Raised)
     };
-    let chips = row(["A", "B", "C", "D"].map(|n| {
-        row([caption(n)])
-            .pad_xy(10.0, 4.0)
-            .pill()
-            .fill(Role::Field)
-            .id(format!("chip-{n}"))
-    }))
-    .gap(S)
-    .wrap()
-    .id("chips");
-    column([
-        row([title("Kurv"), spacer(), caption("v1.0")])
+    col![
+        row![title("Kurv"), spacer(), caption("v1.0")]
             .baseline()
             .id("head"),
-        tabs,
+        row(["Osc", "Filter", "Env"].map(tab))
+            .gap(S)
+            .wrap()
+            .id("tabs"),
         grid(4, (0..4).map(knob)).gap(S).min_col(120.0).id("bank"),
-        chips,
-    ])
+        row(["A", "B", "C", "D"].map(|n| chip(n).id(format!("chip-{n}"))))
+            .gap(S)
+            .wrap()
+            .id("chips"),
+    ]
     .gap(M)
     .pad(M)
-    .w(pct(100.0))
-    .h(pct(100.0))
-    .radius(16.0)
-    .fill(Role::Surface)
+    .full()
+    .preset(&panel())
     .clip()
     .id("editor")
 }

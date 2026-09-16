@@ -84,7 +84,7 @@ assert_eq!(scene.surface("tab").unwrap().frame.size.width, 92.0);
 | `row([..])`, `column([..])`, `overlay([..])`, `grid(3, [..])` | the same four, taking an iterator |
 | `leaf(w, h)`, `spacer()`, `text("..")` | a sized box, a `grow(1)` gap, a measured text run |
 | `title("..")`, `label("..")`, `caption("..")` | text at 18, 13 and 11 px |
-| `.gap(M)`, `.pad(S)`, `.pad(12.0)` | spacing tokens `Xs S M L Xl` from the theme, or pixels |
+| `.gap(M)`, `.pad(S)`, `.pad(12.0)`, `.gap(step(1.5))` | spacing tokens `Xs S M L Xl` from the theme, `n` units of its grid, or pixels |
 | `.grow(w)`, `.shrink(w)`, `.basis(px)`, `.expand()` | flexbox weights |
 | `.width(Len::Pct(50.0))`, `.aspect(16.0 / 9.0)` | percentage and ratio sizes |
 | `.w(clamp(64.0, 30.0, 220.0))` | CSS `clamp(min, pct%, max)`: fluid between two pixel stops |
@@ -100,6 +100,12 @@ assert_eq!(scene.surface("tab").unwrap().frame.size.width, 92.0);
 | `.fill(Primary)`, `.fill(Color::..)`, `.fill(Gradient::vertical(a, b))` | a palette role, a literal, a gradient |
 | `.fill(Fill::Image(img, Fit::Cover))` | an RGBA buffer as a fill: `Cover`, `Contain` or `Fill` (`vello_cpu` paints the pixmap, `vello_hybrid` uploads it once into its atlas) |
 | `.stroke(Ink)`, `.radius(8.0)`, `.pill()`, `.shadow(Shadow::soft(12.0))` | outline, corners, shadow |
+| `.stroke(Ink.alpha(0.12))` | a role at an alpha: a hairline that still tracks the palette |
+| `.preset(&card())`, `.base(&panel())` | merge a prepared `Style` over or under this one, field by field: the side that states something wins |
+| `panel()`, `card()`, `chip("A")`, `tile(el)` | the presets in `mui::presets`: two styles to merge, two elements to finish |
+| `.apply(f)`, `.when(cond, f)` | hand the node to a builder run, conditionally or not |
+| `.on(State::Hover, \|s\| s.stroke(Ink))` | the look for a state, declared beside the resting one; `Hover`, `Press`, `Focus` |
+| `.full()` | all of the parent, both axes |
 | `.animate()`, `.transition(Spring::new(0.3, 1.0))` | this node's fill, stroke, radius, text size and shadow spring to their new values |
 | `.shell(d, fill)` | a parallel inset of the outline before it, cumulative |
 | `.weld(fill)` | paint the union of the children's frames as one filleted shape; its shadow is the union of their blurs |

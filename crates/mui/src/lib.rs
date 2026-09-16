@@ -30,12 +30,14 @@ pub use mui_layout as layout;
 pub use mui_tessellate as tessellate;
 pub use mui_vello as vello;
 
+pub mod presets;
 mod ui;
 pub mod widgets;
 
 pub use ui::{Edit, Frame, Ui};
 
 pub mod prelude {
+    pub use crate::presets::{card, chip, panel, tile};
     pub use crate::widgets::{button, knob, slider, text_input, toggle};
     pub use crate::{Edit, Frame, Ui};
     pub use mui_core::prelude::*;

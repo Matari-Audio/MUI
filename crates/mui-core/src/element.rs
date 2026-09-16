@@ -54,6 +54,30 @@ impl PartialEq for Canvas {
     }
 }
 
+/// An interaction state a node can declare its look for, beside the resting
+/// one. See [`Styled::on`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum State {
+    Hover,
+    Press,
+    Focus,
+}
+
+/// What a node looks like in one [`State`]: its resting style in, the style
+/// to paint out.
+#[derive(Clone)]
+pub struct StateStyle(pub Arc<dyn Fn(Style) -> Style>);
+impl std::fmt::Debug for StateStyle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("StateStyle(..)")
+    }
+}
+impl PartialEq for StateStyle {
+    fn eq(&self, o: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &o.0)
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub enum Content {
     #[default]
@@ -103,6 +127,9 @@ pub struct Element {
     pub lines: Option<usize>,
     /// What this node means: the role and name mui-access reports.
     pub semantics: Option<Semantics>,
+    /// Looks declared for interaction states, applied in order by the
+    /// runtime before the tree is resolved. See [`Styled::on`].
+    pub states: Vec<(State, StateStyle)>,
     /// The spring this node's paint chases when its declared style changes.
     /// Only meaningful on a node with an id: the runtime has nothing to
     /// compare an anonymous node against. See [`Styled::transition`].
@@ -167,11 +194,11 @@ impl IntoEl for String {
     }
 }
 
-/// Paint builders on any `El`. One trait, so `.fill(..)` chains after
-/// `.gap(..)` in either order.
-pub trait Styled: Sized {
+/// The paint builders, on an `El` or on a bare [`Style`]: one trait, so
+/// `.fill(..)` chains after `.gap(..)` in either order, and a state closure
+/// says `|s| s.fill(..)` with the same words the tree used.
+pub trait Paints: Sized {
     fn style_mut(&mut self) -> &mut Style;
-    fn element_mut(&mut self) -> &mut Element;
 
     fn fill(mut self, f: impl Into<Fill>) -> Self {
         self.style_mut().fill = f.into();
@@ -242,19 +269,96 @@ pub trait Styled: Sized {
         s.fill = f.into();
         self
     }
-    fn text_size(mut self, px: f64) -> Self {
-        self.element_mut().text_size = Some(px);
+    /// Merge a prepared style *over* this one: `.preset(&card())`. Every
+    /// field the preset states wins; the rest of the chain survives.
+    ///
+    /// ```
+    /// use mui_core::prelude::*;
+    /// # use mui_core::Style;
+    /// let card = Style { radius: Radius::Px(12.), ..Style::default() };
+    /// let mut el = leaf(80., 24.).fill(Primary).preset(&card);
+    /// assert_eq!(el.style_mut().radius, Radius::Px(12.));
+    /// assert_eq!(el.style_mut().fill, Fill::Role(Role::Primary));
+    /// ```
+    fn preset(mut self, s: &Style) -> Self {
+        let slot = self.style_mut();
+        *slot = slot.over(s);
         self
     }
-    /// Copy a prepared style: `.styled(&CARD)`.
-    fn styled(mut self, s: &Style) -> Self {
-        *self.style_mut() = s.clone();
+    /// Merge a prepared style *under* this one: a default the rest of the
+    /// chain, before or after, is free to override.
+    ///
+    /// ```
+    /// use mui_core::prelude::*;
+    /// # use mui_core::Style;
+    /// let card = Style { fill: Role::Raised.into(), ..Style::default() };
+    /// let mut el = leaf(80., 24.).fill(Role::Danger).base(&card);
+    /// assert_eq!(el.style_mut().fill, Fill::Role(Role::Danger));
+    /// ```
+    fn base(mut self, s: &Style) -> Self {
+        let slot = self.style_mut();
+        *slot = s.over(slot);
         self
+    }
+    /// Hand the node to `f`: a reusable run of builders, without a trait.
+    ///
+    /// ```
+    /// use mui_core::prelude::*;
+    /// let outlined = |e: El| e.stroke(Ink).radius(8.);
+    /// let mut el = leaf(80., 24.).apply(outlined);
+    /// assert_eq!(el.style_mut().radius, Radius::Px(8.));
+    /// ```
+    fn apply(self, f: impl FnOnce(Self) -> Self) -> Self {
+        f(self)
     }
     /// Pointer shape over this node and, unless they say otherwise, its
     /// children.
     fn cursor(mut self, c: Cursor) -> Self {
         self.style_mut().cursor = Some(c);
+        self
+    }
+    /// Apply `f` only when `cond`: `.when(selected, |e| e.fill(Primary))`.
+    fn when(self, cond: bool, f: impl FnOnce(Self) -> Self) -> Self {
+        if cond {
+            f(self)
+        } else {
+            self
+        }
+    }
+}
+impl Paints for Style {
+    fn style_mut(&mut self) -> &mut Style {
+        self
+    }
+}
+
+/// What a node is, beyond its paint: text, tips, semantics, motion and
+/// the looks it declares for the states it can be in.
+pub trait Styled: Paints {
+    fn element_mut(&mut self) -> &mut Element;
+
+    fn text_size(mut self, px: f64) -> Self {
+        self.element_mut().text_size = Some(px);
+        self
+    }
+    /// Declare what this node looks like while hovered, pressed or focused,
+    /// beside what it looks like at rest. `f` is handed the resting style,
+    /// so it edits rather than replaces, and a later `.fill(..)` is still
+    /// what the state derives from.
+    ///
+    /// Only a node with an id has a state to read; the runtime applies these
+    /// while building the frame. Pair with [`Styled::animate`] to cross
+    /// rather than cut.
+    ///
+    /// ```
+    /// use mui_core::prelude::*;
+    /// let mut el = leaf(80., 24.).fill(Field).on(State::Hover, |s| s.radius(4.)).id("b");
+    /// assert_eq!(el.element_mut().states.len(), 1);
+    /// ```
+    fn on(mut self, state: State, f: impl Fn(Style) -> Style + 'static) -> Self {
+        self.element_mut()
+            .states
+            .push((state, StateStyle(Arc::new(f))));
         self
     }
     fn tip(mut self, s: impl Into<String>) -> Self {
@@ -317,20 +421,72 @@ pub trait Styled: Sized {
     fn animate(self) -> Self {
         self.transition(Spring::DEFAULT)
     }
-    /// Apply `f` only when `cond`: `.when(selected, |e| e.fill(Primary))`.
-    fn when(self, cond: bool, f: impl FnOnce(Self) -> Self) -> Self {
-        if cond {
-            f(self)
-        } else {
-            self
-        }
-    }
 }
-impl Styled for El {
+impl Paints for El {
     fn style_mut(&mut self) -> &mut Style {
         &mut self.payload_mut().style
     }
+}
+impl Styled for El {
     fn element_mut(&mut self) -> &mut Element {
         self.payload_mut()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::prelude::*;
+    use crate::Style;
+
+    fn card() -> Style {
+        Style {
+            fill: Raised.into(),
+            radius: Radius::Px(12.),
+            ..Style::default()
+        }
+    }
+
+    /// The whole merge rule: per field, the side that states something wins,
+    /// and which side that is depends only on which method was called.
+    #[test]
+    fn preset_wins_per_field_and_base_loses_per_field() {
+        let mut over = leaf(10., 10.).fill(Primary).stroke(Ink).preset(&card());
+        let s = over.style_mut();
+        assert_eq!((s.fill.clone(), s.radius), (card().fill, card().radius));
+        assert!(s.stroke.is_some(), "a field the preset left unset survives");
+
+        let mut under = leaf(10., 10.).fill(Primary).base(&card());
+        let s = under.style_mut();
+        assert_eq!((s.fill.clone(), s.radius), (Primary.into(), card().radius));
+    }
+
+    /// One slot per concept: a second spelling of the same thing replaces
+    /// the first, and a different thing does not.
+    #[test]
+    fn radius_and_stroke_keep_one_slot_each() {
+        assert_eq!(
+            leaf(10., 10.).pill().radius(8.).style_mut().radius,
+            Radius::Px(8.)
+        );
+        assert_eq!(
+            leaf(10., 10.).radius(8.).pill().style_mut().radius,
+            Radius::Pill
+        );
+        let mut el = leaf(10., 10.).stroke_width(2.).stroke(Ink);
+        let stroke = el.style_mut().stroke.clone().expect("set");
+        assert_eq!((stroke.fill, stroke.width), (Ink.into(), Some(2.)));
+    }
+
+    /// A role at an alpha is still the role: it tracks the palette, and it
+    /// is not the literal colour a light-mode eyedropper would give.
+    #[test]
+    fn a_faded_role_resolves_through_the_palette() {
+        let p = crate::Palette::NEUTRAL;
+        let under = p.surface();
+        let Some(crate::Paint::Solid(c)) = Ink.alpha(0.12).paint(&p, under) else {
+            panic!("a faded role paints solid");
+        };
+        assert!((c.alpha() - 0.12).abs() < 1e-6);
+        assert_eq!(c.with_alpha(1.0), p.on(under));
     }
 }

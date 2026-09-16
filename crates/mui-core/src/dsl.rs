@@ -54,6 +54,8 @@ pub trait Sugar: Sized {
     fn end(self) -> Self;
     /// Children pushed to the two ends, cross-axis centred.
     fn between(self) -> Self;
+    /// All of the parent, both axes: `.w(pct(100.)).h(pct(100.))`.
+    fn full(self) -> Self;
 }
 impl Sugar for El {
     fn w(self, len: impl IntoLen) -> Self {
@@ -77,6 +79,9 @@ impl Sugar for El {
     }
     fn between(self) -> Self {
         self.align(Align::Center).justify(Justify::SpaceBetween)
+    }
+    fn full(self) -> Self {
+        self.w(Len::Pct(100.)).h(Len::Pct(100.))
     }
 }
 
@@ -144,6 +149,7 @@ mod dsl_tests {
         assert_eq!(leaf(1., 1.).w(120), leaf(1., 1.).width(Len::Px(120.)));
         assert_eq!(leaf(1., 1.).w(pct(50.)), leaf(1., 1.).width(Len::Pct(50.)));
         assert_eq!(leaf(1., 1.).square(8), leaf(1., 1.).size(8., 8.));
+        assert_eq!(leaf(1., 1.).full(), leaf(1., 1.).w(pct(100.)).h(pct(100.)));
         let c = row![].center();
         assert_eq!(c, row![].align(Align::Center).justify(Justify::Center));
     }

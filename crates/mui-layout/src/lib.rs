@@ -96,6 +96,10 @@ pub enum SpacingToken {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SpacingScale {
+    /// What one [`Spacing::Step`] comes to. The scale's own steps are not
+    /// multiples of it: the tokens are tuned, the unit is for the values
+    /// between them.
+    pub unit: f64,
     pub xs: f64,
     pub s: f64,
     pub m: f64,
@@ -104,6 +108,7 @@ pub struct SpacingScale {
 }
 impl SpacingScale {
     pub const DEFAULT: Self = Self {
+        unit: 4.0,
         xs: 4.0,
         s: 8.0,
         m: 12.0,
@@ -120,7 +125,7 @@ impl SpacingScale {
         }
     }
     pub fn is_valid(self) -> bool {
-        [self.xs, self.s, self.m, self.l, self.xl]
+        [self.unit, self.xs, self.s, self.m, self.l, self.xl]
             .iter()
             .all(|v| v.is_finite() && *v >= 0.0)
     }
@@ -137,15 +142,28 @@ impl Default for SpacingScale {
 pub enum Spacing {
     Px(f64),
     Token(SpacingToken),
+    /// `n` times the scale's [`unit`](SpacingScale::unit): the values
+    /// between the five tokens, without leaving the theme.
+    Step(f64),
 }
 impl Spacing {
     pub const fn px(v: f64) -> Self {
         Self::Px(v)
     }
+    /// `n` units of the theme's spacing grid.
+    ///
+    /// ```
+    /// use mui_layout::{Spacing, SpacingScale};
+    /// assert_eq!(Spacing::step(1.5).resolve(SpacingScale::DEFAULT), 6.0);
+    /// ```
+    pub const fn step(n: f64) -> Self {
+        Self::Step(n)
+    }
     pub fn resolve(self, scale: SpacingScale) -> f64 {
         match self {
             Self::Px(v) => v,
             Self::Token(t) => scale.get(t),
+            Self::Step(n) => n * scale.unit,
         }
     }
 }
@@ -286,7 +304,7 @@ pub struct Node<P = ()> {
     gap: Spacing,
     /// Pixel insets, unless `pad` names a token for all four sides.
     padding: Insets,
-    pad: Option<SpacingToken>,
+    pad: Option<Spacing>,
     minimum: Size,
     maximum: Option<Size>,
     width: Len,
@@ -434,11 +452,16 @@ impl<P> Node<P> {
         self.gap = gap.into();
         self
     }
-    /// The same on all four sides: `.pad(12.0)` or `.pad(M)`.
+    /// The same on all four sides: `.pad(12.0)`, `.pad(M)` or
+    /// `.pad(Spacing::step(3.))`. One slot per concept: the last call wins,
+    /// whichever spelling it used.
     pub fn pad(mut self, padding: impl Into<Spacing>) -> Self {
         match padding.into() {
-            Spacing::Px(v) => self.padding = Insets::all(v),
-            Spacing::Token(t) => self.pad = Some(t),
+            Spacing::Px(v) => {
+                self.padding = Insets::all(v);
+                self.pad = None;
+            }
+            scaled => self.pad = Some(scaled),
         }
         self
     }
@@ -454,7 +477,8 @@ impl<P> Node<P> {
     }
     /// What the padding comes to under `scale`.
     pub fn padding(&self, scale: SpacingScale) -> Insets {
-        self.pad.map_or(self.padding, |t| Insets::all(scale.get(t)))
+        self.pad
+            .map_or(self.padding, |s| Insets::all(s.resolve(scale)))
     }
     /// Declared outer size on both axes. `Auto` measures, `Px` fixes, `Pct`
     /// takes a share of the parent: `.size(Len::Pct(50.0), 24.0)`.

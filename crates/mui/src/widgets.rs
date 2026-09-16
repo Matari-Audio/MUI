@@ -359,6 +359,9 @@ pub fn text_input(ui: &mut Ui, id: &str, value: &mut String) -> El {
     .pad_xy(PAD, 6.0)
     .radius(6.0)
     .fill(Role::Field)
+    // The ring is declared beside the resting look rather than rebuilt from
+    // `focused` every frame; the runtime knows who has the focus.
+    .on(State::Focus, |s| s.stroke(Role::Primary))
     .cursor(Cursor::Text)
     .focusable()
     .role(Kind::TextInput {

@@ -60,6 +60,19 @@ impl Role {
             Self::Dim => p.dim(under),
         }
     }
+    /// This role at `a` alpha: a hairline that still tracks the theme.
+    ///
+    /// ```
+    /// use mui_core::prelude::*;
+    /// # use mui_core::Palette;
+    /// let hairline = Ink.alpha(0.12);
+    /// let p = Palette::NEUTRAL;
+    /// let under = p.surface();
+    /// assert_eq!(hairline.paint(&p, under), Fill::from(p.on(under).with_alpha(0.12)).paint(&p, under));
+    /// ```
+    pub fn alpha(self, a: f32) -> Fill {
+        Fill::Faded(self, a)
+    }
 }
 
 /// A linear gradient, CSS-style: `angle` 180 runs top to bottom.
@@ -130,6 +143,8 @@ pub enum Fill {
     #[default]
     None,
     Role(Role),
+    /// A role resolved, then taken to this alpha. See [`Role::alpha`].
+    Faded(Role, f32),
     Color(Color),
     Gradient(Gradient),
     Image(Arc<Image>, Fit),
@@ -194,6 +209,7 @@ impl Fill {
         Some(match self {
             Self::None => return None,
             Self::Role(r) => Paint::Solid(r.color(p, under)),
+            Self::Faded(r, a) => Paint::Solid(r.color(p, under).with_alpha(*a)),
             Self::Color(c) => Paint::Solid(*c),
             Self::Image(image, fit) => Paint::Image {
                 image: image.clone(),
@@ -289,6 +305,51 @@ pub struct Style {
     /// Blend mode and opacity for this node's whole subtree, as a
     /// compositing layer. `None` paints straight onto what is under it.
     pub layer: Option<(Mix, f32)>,
+}
+
+impl Style {
+    /// `other` merged over `self`, per field: every field `other` states
+    /// wins, every field it leaves at its default is kept from `self`. Last
+    /// write wins, one field at a time -- there is no cascade and no
+    /// specificity.
+    ///
+    /// A field's default *is* its "unset": `Fill::None` paints nothing,
+    /// `Radius::Theme` takes the theme's, `None` and `[]` say nothing. The
+    /// exception is `weld`, which has no third state and so only ever turns
+    /// on.
+    ///
+    /// ```
+    /// use mui_core::prelude::*;
+    /// # use mui_core::Style;
+    /// let card = Style { radius: Radius::Px(12.), ..Style::default() };
+    /// let mine = Style { fill: Primary.into(), ..Style::default() };
+    /// assert_eq!(mine.over(&card).fill, mine.fill);   // card states no fill
+    /// assert_eq!(mine.over(&card).radius, card.radius);
+    /// ```
+    pub fn over(&self, other: &Style) -> Style {
+        Style {
+            fill: if other.fill.is_none() {
+                self.fill.clone()
+            } else {
+                other.fill.clone()
+            },
+            stroke: other.stroke.clone().or_else(|| self.stroke.clone()),
+            radius: if other.radius == Radius::Theme {
+                self.radius
+            } else {
+                other.radius
+            },
+            shadow: other.shadow.clone().or_else(|| self.shadow.clone()),
+            shells: if other.shells.is_empty() {
+                self.shells.clone()
+            } else {
+                other.shells.clone()
+            },
+            weld: self.weld || other.weld,
+            cursor: other.cursor.or(self.cursor),
+            layer: other.layer.or(self.layer),
+        }
+    }
 }
 
 /// How a blended layer's colour combines with what is under it.

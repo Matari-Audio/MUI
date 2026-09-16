@@ -33,7 +33,7 @@ pub use color::{Color, Mode, Palette, Pigment};
 pub use dsl::{caption, label, title, IntoLen, Sugar};
 pub use element::{
     canvas, column, grid, leaf, overlay, row, spacer, text, Canvas, Content, Draw, El, Element,
-    IntoEl, Kind, Semantics, Styled,
+    IntoEl, Kind, Paints, Semantics, State, StateStyle, Styled,
 };
 pub use motion::Spring;
 pub use mui_layout::{
@@ -56,11 +56,23 @@ pub mod prelude {
     pub use crate::{
         canvas, caption, col, column, grid, label, leaf, overlay, resolve_scene, row, spacer,
         stack, text, title, Align, Color, Cursor, Draw, El, Fill, Fit, Gradient, Image, IntoEl,
-        IntoLen, Justify, Kind, Len, Mix, Radius, Role, SceneSpec, Shadow, Size, Style, Styled,
-        Sugar, Theme,
+        IntoLen, Justify, Kind, Len, Mix, Paints, Radius, Role, SceneSpec, Shadow, Size, State,
+        Style, Styled, Sugar, Theme,
     };
     pub use mui_geometry::{Path, Point};
+    pub use mui_layout::Spacing;
     pub use mui_layout::SpacingToken::{Xl, Xs, L, M, S};
+    /// `n` steps of the theme's spacing unit: `.gap(step(1.5))`, for the
+    /// values between `Xs` and `Xl`.
+    ///
+    /// ```
+    /// use mui_core::prelude::*;
+    /// let row = row!["a", "b"].gap(step(2.));
+    /// assert_eq!(step(2.).resolve(Default::default()), 8.);
+    /// ```
+    pub fn step(n: f64) -> Spacing {
+        Spacing::step(n)
+    }
     /// A percentage length: `.width(pct(50.))`.
     pub fn pct(p: f64) -> Len {
         Len::Pct(p)

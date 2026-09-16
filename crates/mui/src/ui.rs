@@ -2,10 +2,10 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use mui_core::prelude::{overlay, text, Role, Styled as _};
+use mui_core::prelude::{overlay, text, Paints as _, Role};
 use mui_core::{
     Align, Color, Cursor, El, Element, Fill, Paint, Palette, Radius, ResolvedScene, SceneError,
-    SceneSpec, Size, Spacing, Spring, TextCache, Theme,
+    SceneSpec, Size, Spacing, Spring, State, TextCache, Theme,
 };
 use mui_geometry::Point;
 use mui_input::{Hit, Ime, Input, Interaction, Key, KeyPress, PointerInput, Response};
@@ -500,6 +500,14 @@ impl Ui {
         };
 
         let pal = self.theme.palette;
+        // Declared state looks first, so a transition springs toward the
+        // style the node actually asked for this frame.
+        let (springs, focus) = (&self.springs, self.focus.as_deref());
+        declared_states(&mut root, &|k, st| match st {
+            State::Hover => springs.get(k).is_some_and(|[h, _]| h.value > 0.5),
+            State::Press => springs.get(k).is_some_and(|[_, p]| p.value > 0.5),
+            State::Focus => focus == Some(k),
+        });
         animating |= transitions(&mut root, &pal, &mut self.motion, dt);
         for (_, s) in self.motion.iter_mut().filter(|(k, _)| k.starts_with('~')) {
             if let Some(s) = s[0].as_mut() {
@@ -661,6 +669,22 @@ fn transitions(
         animating |= transitions(c, pal, motion, dt);
     }
     animating
+}
+
+/// Replace every named node's style with what it declared for the states it
+/// is in, in declaration order.
+fn declared_states(n: &mut El, is: &dyn Fn(&str, State) -> bool) {
+    if let Some(k) = n.key().map(str::to_owned) {
+        let e = n.payload_mut();
+        for (st, f) in std::mem::take(&mut e.states) {
+            if is(&k, st) {
+                e.style = f.0(e.style.clone());
+            }
+        }
+    }
+    for c in n.children_mut() {
+        declared_states(c, is);
+    }
 }
 
 /// Push hover and press into every named node's fill, proportionally, and
@@ -1064,6 +1088,39 @@ mod tests {
         assert_eq!(ui.edit("b"), Some(Edit::End));
         let f = ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
         assert!(f.edits.is_empty());
+    }
+
+    /// A look declared beside the resting one, applied because the runtime
+    /// knows which node the pointer is on -- no `ui.state` in the tree.
+    #[test]
+    fn a_declared_hover_style_is_applied_while_hovered() {
+        let mut ui = Ui::new(Theme::DEFAULT);
+        let tree = || {
+            leaf(40., 40.)
+                .fill(Role::Raised)
+                .on(State::Hover, |s| s.radius(3.))
+                .id("b")
+        };
+        let corner = |ui: &mut Ui, p| {
+            ui.frame(tree(), None, p, 0.016)
+                .unwrap()
+                .scene
+                .paint
+                .iter()
+                .find_map(|p| p.rect.map(|r| r.radius()))
+                .expect("the box paints a rounded rect")
+        };
+        let cold = corner(&mut ui, PointerInput::default());
+        // Hover long enough that the spring passes the halfway mark.
+        let mut warm = cold;
+        for _ in 0..12 {
+            warm = corner(&mut ui, at(10., 10., false));
+        }
+        assert_ne!(
+            cold, 3.,
+            "the resting radius is the theme's, not the hover one"
+        );
+        assert_eq!(warm, 3., "hovered, the declared radius is what paints");
     }
 
     #[test]

@@ -17,7 +17,7 @@ Input (pointer, wheel, keys, text)
    |                        one. A new target retargets; nothing restarts.
    |                        ui.tween does the same for a number MUI cannot see.
    v
-El tree  (row! / col! / stack! / grid!, Styled fills, roles, shells, welds,
+El tree  (row! / col! / stack! / grid!, Paints fills, presets, states, roles, shells, welds,
    |      canvas draws, .scroll() / .clip() / .float())
    |
    v  mui-layout            intrinsic flex solve, frames in tree order; a
