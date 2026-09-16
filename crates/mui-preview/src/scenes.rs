@@ -47,6 +47,7 @@ pub fn all() -> Vec<Box<dyn PreviewScene>> {
         Box::new(Cells),
         Box::new(Select::default()),
         Box::new(Editor),
+        Box::new(Effects),
     ]
 }
 
@@ -105,14 +106,17 @@ impl PreviewScene for SegmentedRow {
         "Segmented row"
     }
     fn about(&self) -> &'static str {
-        "Four flush cells unioned into one strip; shared edges are emitted zero times."
+        "One .join(): the gap closes, every seam goes square, and the strip's own corner rounds the two ends."
     }
     fn specimen(&mut self, _: &mut Ui) -> El {
-        row((0..4).map(|i| leaf(70.0, 44.0 + 12.0 * f64::from(i % 2)).id(format!("cell-{i}"))))
-            .radius(22.0)
-            .id("strip")
-            .weld(Role::Raised)
-            .shell(8.0, Role::Field)
+        row((0..4).map(|i| {
+            leaf(70.0, 44.0)
+                .fill(if i == 1 { Role::Primary } else { Role::Raised })
+                .id(format!("cell-{i}"))
+        }))
+        .radius(22.0)
+        .join()
+        .id("strip")
     }
 }
 
@@ -137,18 +141,20 @@ impl PreviewScene for Widgets {
         self.clicks += usize::from(clicked);
         column([
             row([
-                knob(ui, "cutoff", "Cutoff", &mut self.cutoff, 0.0..=1.0, 72.0),
-                knob(ui, "res", "Res", &mut self.res, 0.0..=1.0, 72.0),
+                knob(ui, "cutoff", "Cutoff", &mut self.cutoff, 0.0..=1.0).el(),
+                knob(ui, "res", "Res", &mut self.res, 0.0..=1.0)
+                    .variant(Variant::Soft)
+                    .el(),
             ])
             .gap(L)
             .justify(Justify::Center),
-            slider(ui, "gain", "Gain", &mut self.gain, -24.0..=6.0),
+            slider(ui, "gain", "Gain", &mut self.gain, -24.0..=6.0).el(),
             row([
                 text("Bypass").fill(Role::Dim),
-                toggle(ui, "bypass", &mut self.bypass),
+                toggle(ui, "bypass", &mut self.bypass).el(),
                 spacer(),
                 text(format!("{}×", self.clicks)).fill(Role::Dim),
-                go,
+                go.variant(Variant::Solid).el(),
             ])
             .gap(S)
             .align(Align::Center),
@@ -230,13 +236,13 @@ impl PreviewScene for GlyphAxes {
     fn controls(&mut self, ui: &mut Ui) -> Vec<El> {
         let mut rows = vec![
             text(self.source.clone()).fill(Role::Dim),
-            slider(ui, "size", "size", &mut self.size, 24.0..=400.0),
+            slider(ui, "size", "size", &mut self.size, 24.0..=400.0).el(),
         ];
         if self.axes.is_empty() {
             rows.push(text("no variation axes").fill(Role::Dim));
         }
         for (tag, min, max, value) in &mut self.axes {
-            rows.push(slider(ui, tag, tag, value, *min..=*max));
+            rows.push(slider(ui, tag, tag, value, *min..=*max).el());
         }
         rows
     }
@@ -280,7 +286,7 @@ impl PreviewScene for Scrolling {
         "Scroll"
     }
     fn about(&self) -> &'static str {
-        "A .scroll() column taller than its box. The wheel picks the surface under the pointer; a hit outside the clip is not a hit."
+        "A .scroll() column taller than its box, with a .mask() fade over the last rows. The wheel picks the surface under the pointer; a hit outside the clip is not a hit."
     }
     fn specimen(&mut self, ui: &mut Ui) -> El {
         let rows: Vec<El> = self
@@ -295,8 +301,18 @@ impl PreviewScene for Scrolling {
                     g,
                     -24.0..=6.0,
                 )
+                .el()
             })
             .collect();
+        // Source-atop, so the ramp paints the surface colour back over the
+        // rows at the bottom edge: the list reads as fading out under it.
+        let fade = Gradient::linear(
+            180.0,
+            [
+                (0.82, Role::Surface.alpha(0.0)),
+                (1.0, Role::Surface.into()),
+            ],
+        );
         column(rows)
             .gap(S)
             .pad(M)
@@ -304,6 +320,7 @@ impl PreviewScene for Scrolling {
             .size(320.0, 340.0)
             .radius(16.0)
             .fill(Role::Surface)
+            .mask(fade)
             .id("scroll")
     }
 }
@@ -354,6 +371,11 @@ impl PreviewScene for Tips {
         let (save, _) = button(ui, "tip-save", "Save");
         let (revert, _) = button(ui, "tip-revert", "Revert");
         let (more, _) = button(ui, "tip-more", "Hold for more");
+        let (save, revert, more) = (
+            save.el(),
+            revert.variant(Variant::Outline).el(),
+            more.variant(Variant::Ghost).el(),
+        );
         let held = ui.get("tip-more").held;
         // The menu is an ordinary child under the button that opened it, not a
         // float at a hand-measured offset: .gap(M) supplies the distance, so a
@@ -424,7 +446,7 @@ impl PreviewScene for Curve {
         .fill(Role::Field);
         column([
             plot,
-            slider(ui, "knee", "Cutoff", &mut self.cutoff, 0.0..=1.0),
+            slider(ui, "knee", "Cutoff", &mut self.cutoff, 0.0..=1.0).el(),
         ])
         .gap(M)
         .pad(L)
@@ -467,12 +489,15 @@ impl PreviewScene for Swap {
         let pills = (0..3).map(|i| {
             let id = format!("pill-{i}");
             let target = ui.get(&id).drop_target;
-            row([text(self.labels[i].clone())])
-                .pad_xy(18.0, 12.0)
-                .pill()
-                .fill(if target { Role::Primary } else { Role::Raised })
-                .cursor(Cursor::Grab)
-                .id(id)
+            let (pill, _) = button(ui, &id, &self.labels[i]);
+            pill.variant(if target {
+                Variant::Solid
+            } else {
+                Variant::Soft
+            })
+            .size(L)
+            .el()
+            .cursor(Cursor::Grab)
         });
         row(pills)
             .gap(M)
@@ -599,8 +624,8 @@ impl PreviewScene for Wrapping {
     }
     fn controls(&mut self, ui: &mut Ui) -> Vec<El> {
         vec![
-            slider(ui, "wrap-w", "width", &mut self.width, 160.0..=520.0),
-            slider(ui, "wrap-n", "lines (0 = all)", &mut self.lines, 0.0..=6.0),
+            slider(ui, "wrap-w", "width", &mut self.width, 160.0..=520.0).el(),
+            slider(ui, "wrap-n", "lines (0 = all)", &mut self.lines, 0.0..=6.0).el(),
         ]
     }
 }
@@ -665,7 +690,7 @@ impl PreviewScene for Motion {
         column([
             row(cards).gap(M).justify(Justify::Center),
             pie.anchor(Align::Center, Align::Center),
-            knob(ui, "mot-gain", "Gain", &mut self.gain, 0.0..=1.0, 72.0),
+            knob(ui, "mot-gain", "Gain", &mut self.gain, 0.0..=1.0).el(),
             text(if self.last.is_empty() {
                 "drag the knob".to_owned()
             } else {
@@ -681,7 +706,7 @@ impl PreviewScene for Motion {
         .id("motion")
     }
     fn controls(&mut self, ui: &mut Ui) -> Vec<El> {
-        vec![slider(ui, "sweep", "sweep", &mut self.sweep, 0.0..=1.0)]
+        vec![slider(ui, "sweep", "sweep", &mut self.sweep, 0.0..=1.0).el()]
     }
 }
 
@@ -796,62 +821,105 @@ impl PreviewScene for Editor {
 pub fn editor() -> El {
     // A section tab is fluid between two stops: three of them fill a 240 px
     // window and stop growing at 120 in a 2000 px one.
-    let tabs = row(["Osc", "Filter", "Env"].map(|n| {
-        row([caption(n)])
+    let tab = |n: &str| {
+        chip(n)
             .justify(Justify::Center)
             .w(clamp(64.0, 18.0, 120.0))
             .pad_xy(0.0, 8.0)
             .radius(8.0)
-            .fill(Role::Field)
+            .on(State::Hover, |s| s.stroke(Ink.alpha(0.12)))
             .id(format!("tab-{n}"))
-    }))
-    .gap(S)
-    .wrap()
-    .id("tabs");
+    };
     let knob = |i: usize| {
-        column([
-            leaf(40.0, 40.0)
-                .pill()
-                .fill(Role::Primary)
-                .id(format!("k{i}")),
+        tile(col![
+            leaf(40.0, 40.0).pill().fill(Primary).id(format!("k{i}")),
             caption(["cut", "res", "drv", "mix"][i]),
         ])
-        .gap(Xs)
-        .align(Align::Center)
-        .pad(S)
-        .radius(10.0)
-        .fill(Role::Raised)
     };
-    let chips = row(["A", "B", "C", "D"].map(|n| {
-        row([caption(n)])
-            .pad_xy(10.0, 4.0)
-            .pill()
-            .fill(Role::Field)
-            .id(format!("chip-{n}"))
-    }))
-    .gap(S)
-    .wrap()
-    .id("chips");
-    column([
-        row([title("Kurv"), spacer(), caption("v1.0")])
-            .baseline()
-            .id("head"),
-        tabs,
+    // The header keeps the widest version of itself that still fits: no
+    // width branch in the scene, and no second build pass.
+    // No spacer in a candidate: a flex base of 0 measures small, so a row
+    // holding one always "fits" and the widest would always win.
+    let head = fits![
+        row![title("Kurv"), caption("v1.0 -- four operators")]
+            .gap(M)
+            .baseline(),
+        row![title("Kurv"), caption("v1.0")].gap(S).baseline(),
+        title("Kurv"),
+    ]
+    .id("head");
+    col![
+        head,
+        row(["Osc", "Filter", "Env"].map(tab))
+            .gap(S)
+            .wrap()
+            .id("tabs"),
         grid(4, (0..4).map(knob)).gap(S).min_col(120.0).id("bank"),
-        chips,
-    ])
+        row(["A", "B", "C", "D"].map(|n| chip(n).id(format!("chip-{n}"))))
+            .gap(S)
+            .wrap()
+            .id("chips"),
+    ]
     .gap(M)
     .pad(M)
-    .w(pct(100.0))
-    .h(pct(100.0))
-    .radius(16.0)
-    .fill(Role::Surface)
+    .full()
+    .preset(&panel())
     .clip()
     .id("editor")
 }
 
+/// Paint the renderer could always do and the DSL could not say: a conic
+/// arc, a radial glow, stacked shadows, and glass without a backdrop blur.
+pub struct Effects;
+impl PreviewScene for Effects {
+    fn name(&self) -> &'static str {
+        "Gradients and shadows"
+    }
+    fn about(&self) -> &'static str {
+        "Conic and radial ramps, a two-shadow key, and glass as a translucent fill plus a bright edge plus an inner floor. No filter layer anywhere."
+    }
+    fn specimen(&mut self, _: &mut Ui) -> El {
+        effects()
+    }
+}
+
+/// The tree [`Effects`] shows, as a free function so the snapshot test below
+/// paints the same one the gallery does.
+pub fn effects() -> El {
+    // A knob arc is a conic gradient and nothing else: no path, no per-frame
+    // geometry, and the value is the stop position.
+    let knob = leaf(96.0, 96.0)
+        .pill()
+        .fill(Gradient::conic(
+            -135.0,
+            [(0.0, Primary), (0.7, Primary), (0.7, Field), (1.0, Field)],
+        ))
+        .id("knob");
+    let glow = leaf(96.0, 96.0)
+        .pill()
+        .fill(Gradient::radial(
+            (0.35, 0.3),
+            0.7,
+            [(0.0, Primary), (1.0, Surface)],
+        ))
+        .id("glow");
+    let key = leaf(96.0, 96.0)
+        .radius(12.0)
+        .fill(Field)
+        .elevation(Elevation::Raised)
+        .id("key");
+    let pane = leaf(96.0, 96.0).preset(&glass()).id("glass");
+    row![knob, glow, key, pane]
+        .gap(L)
+        .pad(L)
+        .fill(Surface)
+        .id("effects")
+}
+
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "cpu")]
+    use super::effects;
     use super::{editor, GlyphAxes};
     use mui::core::Frame as LayoutFrame;
     use mui::prelude::*;
@@ -862,6 +930,76 @@ mod tests {
             GlyphAxes::load_font(Some(("broken.ttf".to_owned(), Ok(Vec::new()))));
         assert_eq!(font.as_slice(), epaint_default_fonts::HACK_REGULAR);
         assert!(source.starts_with("broken.ttf: ") && source.ends_with(" — using Hack"));
+    }
+
+    /// The effects scene on the CPU. Every claim here is one a flat fill
+    /// cannot make: a ramp changes colour across a box, and a shadow darkens
+    /// the surface outside one.
+    #[cfg(feature = "cpu")]
+    #[test]
+    fn the_effects_scene_paints_ramps_and_shadows_a_flat_fill_cannot() {
+        use mui::vello::vello_cpu::{Pixmap, RenderContext, Resources};
+        let (w, h) = (620u16, 160u16);
+        let scene =
+            resolve_scene(&SceneSpec::new(effects()).offered(Size::new(w.into(), h.into())))
+                .unwrap();
+        let mut ctx = RenderContext::new(w, h);
+        let mut res = Resources::default();
+        mui::vello::paint(
+            &mut mui::vello::Cpu {
+                ctx: &mut ctx,
+                resources: &mut res,
+            },
+            &scene,
+            mui::vello::kurbo::Affine::IDENTITY,
+        )
+        .unwrap();
+        ctx.flush();
+        let mut pix = Pixmap::new(w, h);
+        ctx.render(&mut pix, &mut res);
+        let at = |x: f64, y: f64| {
+            let p = pix.data()[(y as usize) * usize::from(w) + x as usize];
+            (p.r, p.g, p.b)
+        };
+        let frame = |id: &str| scene.surface(id).unwrap().frame;
+        // A 5x5 grid inside a box: one colour is a flat fill, several is a ramp.
+        let shades = |id: &str| {
+            let f = frame(id);
+            let mut seen = Vec::new();
+            for i in 1..6 {
+                for j in 1..6 {
+                    let c = at(
+                        f.x + f.size.width * f64::from(i) / 6.0,
+                        f.y + f.size.height * f64::from(j) / 6.0,
+                    );
+                    if !seen.contains(&c) {
+                        seen.push(c);
+                    }
+                }
+            }
+            seen.len()
+        };
+        // The arc's stops are hard, so two colours is the whole ramp; the
+        // glow's are not, so it has as many as the grid can find.
+        assert!(shades("knob") > 1, "the conic arc painted flat");
+        assert!(shades("glow") > 2, "the radial glow painted flat");
+        // Glass is a fill plus an edge plus a floor: the edge is brighter
+        // than the middle and the floor is darker, which no fill can be.
+        let g = frame("glass");
+        let (mx, my) = (g.x + g.size.width / 2.0, g.y + g.size.height / 2.0);
+        let (edge, mid, floor) = (at(mx, g.y + 1.0), at(mx, my), at(mx, g.bottom() - 2.0));
+        assert!(edge.0 > mid.0, "no bright top edge: {edge:?} vs {mid:?}");
+        assert!(floor.0 < mid.0, "no inner floor: {floor:?} vs {mid:?}");
+        // The key's contact and ambient shadows darken the surface under it.
+        // The knob, the same box in the same row with no shadow, is the
+        // control: same panel, same y, no darkening.
+        let (k, n) = (frame("key"), frame("knob"));
+        let under = at(k.x + k.size.width / 2.0, k.bottom() + 4.0);
+        let bare = at(n.x + n.size.width / 2.0, n.bottom() + 4.0);
+        assert!(
+            under.0 < bare.0,
+            "no shadow under the key: {under:?} vs {bare:?}"
+        );
     }
 
     /// The three window shapes a plugin editor is actually dragged to. No

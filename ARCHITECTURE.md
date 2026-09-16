@@ -9,6 +9,10 @@ Input (pointer, wheel, keys, text)
    |                        capture edges -> Frame::edits (begin/end edit),
    |                        clipboard in and out
    |
+   v  declared states       a node's .on(Hover | Press | Focus, ..) closures
+   |                        run first, so the style the springs chase is the
+   |                        one the node asked for in the state it is in
+   |
    v  transitions           before anything is resolved: a node marked
    |                        .animate() has its declared fill, stroke width,
    |                        radius, text size, shadow blur and shell depths
@@ -17,29 +21,43 @@ Input (pointer, wheel, keys, text)
    |                        one. A new target retargets; nothing restarts.
    |                        ui.tween does the same for a number MUI cannot see.
    v
-El tree  (row! / col! / stack! / grid!, Styled fills, roles, shells, welds,
-   |      canvas draws, .scroll() / .clip() / .float())
+El tree  (row! / col! / stack! / grid! / fits!, Paints fills, presets merged
+   |      per field, .on(State, ..) looks, roles, shells, welds, carves,
+   |      canvas draws, .scroll() / .clip() / .float() / .pin(..))
    |
    v  mui-layout            intrinsic flex solve, frames in tree order; a
-   |                        squeezed item is re-measured at its dealt share
+   |                        squeezed item is re-measured at its dealt share.
+   |                        A `fits` node picks its candidate in that same
+   |                        pass, and a `Pin` costs one more arrange over the
+   |                        floats, fed the anchor frames the first one found
    |
    v  mui-core walk         per node, in z-order:
-   |     plain  -> RoundedRect(frame, radius)
+   |     plain  -> RoundedRect(frame, radius)              a radius may be a
+   |               theme token (selector / field / box); a squircle corner
+   |               rewrites the rounded rect's arcs as cubics and gives up
+   |               the analytic blur for that node
    |     weld   -> union(children's sharp frames) then fillet(convex, concave)
+   |     carve  -> boolean(outline, a .cut/.keep child's shape, Difference |
+   |               Intersection); the child is placed by layout and never paints
    |     shell  -> inset(previous outline, d)        exact or parallel offset
    |     text   -> shaped run from the TextCache      mui-text, kept across frames
    |               wrapped to the room its parent has, one Painted a line
    |     canvas -> the closure's own paths, in the node's space
    |     clip   -> Clip(outline) ... children ... Unclip
    |     blend  -> Blend(mix, opacity) ... subtree ... Unblend, outside the clip
+   |     mask   -> Blend(Normal, 1) ... subtree ... Mask(fill, source-atop) ...
+   |               Unblend; a paint over what the subtree drew, not an alpha mask
    |     weld   -> the shadow is one blurred rect per welded child
+   |     shadow -> drop shadows under the fill, inset ones over the shells
+   |               inside a Clip of the outline; both are one analytic
+   |               blurred rounded rect, inverted for the inset case
    |     roles  -> Palette                            ink resolves on its ground
    |     image  -> Fill::Image                        straight RGBA, fitted to
    |                                                  the node's own outline
    |                                                  (vello_cpu: pixmap; vello_hybrid: atlas id,
    |                                                  no Atlas -> a grey stand-in)
    |
-   v  ResolvedScene         paint: Vec<Painted>  (shadow, fill, shells, stroke,
+   v  ResolvedScene         paint: Vec<Painted>  (shadows, fill, shells, stroke,
    |                        text, draws, clip/unclip); floats are appended after
    |                        the root, so a tooltip or menu lands on top
    |                        surfaces: frame + path + clip + cursor + tip +
@@ -85,7 +103,10 @@ it answers it against the paths that were actually painted last frame, which
 is why hit testing and clipping never disagree with the picture.
 
 The invariants that matter: a shell is derived from the outline before it,
-never from a guessed child radius; a weld unions sharp frames before it
+never from a guessed child radius; a preset merges per field and never
+clobbers the chain around it, and no style is ever a string parsed at runtime;
+a corner style rides the outline, so a
+squircle stays inside the rounded rect it replaces; a weld unions sharp frames before it
 fillets; a clip is a layer pair in the paint list, not a state flag, so a
 renderer that ignores it still draws something sane; a float keeps its
 declaration slot in frame order but its paint slot at the end. Everything

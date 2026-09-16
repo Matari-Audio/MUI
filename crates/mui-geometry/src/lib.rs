@@ -23,7 +23,7 @@ pub use offset::{
 pub use boolean::{
     boolean, union, BooleanOp, GeometryOptions, PlacedShape, Polygon, Ring, RingKind, Topology,
 };
-pub use fillet::{fillet, Corner, CornerStyle, RoundedShape};
+pub use fillet::{fillet, Corner, CornerStyle, Fillet, RoundedShape};
 pub use math::{Affine, Bounds, Point};
 pub use path::{Arc, Path, PathCommand};
 

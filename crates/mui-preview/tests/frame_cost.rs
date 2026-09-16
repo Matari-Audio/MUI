@@ -26,7 +26,7 @@ impl mui::vello::Canvas for Sink {
     fn stroke_path(&mut self, p: &mui::vello::kurbo::BezPath) {
         black_box(p);
     }
-    fn fill_blurred_rounded_rect(&mut self, _: &mui::vello::kurbo::Rect, _: f32, _: f32) {}
+    fn fill_blurred_rounded_rect(&mut self, _: &mui::vello::kurbo::Rect, _: f32, _: f32, _: bool) {}
     fn push_clip(&mut self, _: &mui::vello::kurbo::BezPath) {}
     fn pop_clip(&mut self) {}
     fn push_layer(&mut self, _: mui::vello::peniko::BlendMode, _: f32) {}
@@ -75,8 +75,8 @@ fn what_a_frame_costs() {
     let mut v = 0.3;
     let frame = ms(|| {
         let root = column([
-            slider(&mut ui, "a", "A", &mut v, 0.0..=1.0),
-            knob(&mut ui, "k", "K", &mut v, 0.0..=1.0, 64.0),
+            slider(&mut ui, "a", "A", &mut v, 0.0..=1.0).el(),
+            knob(&mut ui, "k", "K", &mut v, 0.0..=1.0).el(),
         ])
         .pad(M);
         black_box(

@@ -4,7 +4,8 @@
 //! default, a parent may offer an exact size, and surplus goes out by `grow`
 //! and comes back by `shrink`. Alignment is automatic: containers stretch to
 //! fill their cross axis, content centres in it, and nothing is ever placed by
-//! coordinate -- an `offset` on an overlay child is the only nudge there is.
+//! coordinate -- a float names a region around another node with [`Pin`], and
+//! an `offset` is the nudge left over.
 //!
 //! A node carries a payload `P` so a styling layer can ride the same tree
 //! instead of mirroring it by id.
@@ -96,6 +97,10 @@ pub enum SpacingToken {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SpacingScale {
+    /// What one [`Spacing::Step`] comes to. The scale's own steps are not
+    /// multiples of it: the tokens are tuned, the unit is for the values
+    /// between them.
+    pub unit: f64,
     pub xs: f64,
     pub s: f64,
     pub m: f64,
@@ -104,6 +109,7 @@ pub struct SpacingScale {
 }
 impl SpacingScale {
     pub const DEFAULT: Self = Self {
+        unit: 4.0,
         xs: 4.0,
         s: 8.0,
         m: 12.0,
@@ -120,7 +126,7 @@ impl SpacingScale {
         }
     }
     pub fn is_valid(self) -> bool {
-        [self.xs, self.s, self.m, self.l, self.xl]
+        [self.unit, self.xs, self.s, self.m, self.l, self.xl]
             .iter()
             .all(|v| v.is_finite() && *v >= 0.0)
     }
@@ -137,15 +143,28 @@ impl Default for SpacingScale {
 pub enum Spacing {
     Px(f64),
     Token(SpacingToken),
+    /// `n` times the scale's [`unit`](SpacingScale::unit): the values
+    /// between the five tokens, without leaving the theme.
+    Step(f64),
 }
 impl Spacing {
     pub const fn px(v: f64) -> Self {
         Self::Px(v)
     }
+    /// `n` units of the theme's spacing grid.
+    ///
+    /// ```
+    /// use mui_layout::{Spacing, SpacingScale};
+    /// assert_eq!(Spacing::step(1.5).resolve(SpacingScale::DEFAULT), 6.0);
+    /// ```
+    pub const fn step(n: f64) -> Self {
+        Self::Step(n)
+    }
     pub fn resolve(self, scale: SpacingScale) -> f64 {
         match self {
             Self::Px(v) => v,
             Self::Token(t) => scale.get(t),
+            Self::Step(n) => n * scale.unit,
         }
     }
 }
@@ -224,6 +243,21 @@ pub enum Len {
         pct: f64,
         max: f64,
     },
+    /// A share of the nearest ancestor with a definite size on this axis --
+    /// CSS `cqw`/`cqh`, without the `container-type` ceremony. `Pct` is a
+    /// share of the parent, whatever the parent turned out to be; this is a
+    /// share of the box that actually has a size.
+    ///
+    /// ```
+    /// use mui_layout::{leaf, resolve, row, Len, Size};
+    /// // The row hugs, so it is no one's container: the bar takes half of
+    /// // the 400 px panel above it, not half of the row around it.
+    /// let bar = leaf(0., 8.).width(Len::Container(50.)).id("bar");
+    /// let tree = row([row([bar])]).width(Len::Px(400.));
+    /// let l = resolve(&tree, Some(Size::new(400., 8.)), Default::default()).unwrap();
+    /// assert_eq!(l.frame("bar").unwrap().size.width, 200.);
+    /// ```
+    Container(f64),
 }
 impl From<f64> for Len {
     fn from(v: f64) -> Self {
@@ -237,19 +271,22 @@ impl Len {
             _ => None,
         }
     }
-    fn fixed(self, parent: f64) -> Option<f64> {
+    /// `container` is the nearest definite ancestor extent on this axis;
+    /// without one, a container share degrades to a share of the parent.
+    fn fixed(self, parent: f64, container: Option<f64>) -> Option<f64> {
         match self {
             Self::Auto => None,
             Self::Px(v) => Some(v),
             Self::Pct(p) => Some(parent * p / 100.0),
             Self::Clamp { min, pct, max } => Some((parent * pct / 100.0).clamp(min, max)),
+            Self::Container(p) => Some(container.unwrap_or(parent) * p / 100.0),
         }
     }
     fn valid(self, limit: f64) -> bool {
         match self {
             Self::Auto => true,
             Self::Px(v) => v.is_finite() && (0.0..=limit).contains(&v),
-            Self::Pct(p) => p.is_finite() && (0.0..=100.0).contains(&p),
+            Self::Pct(p) | Self::Container(p) => p.is_finite() && (0.0..=100.0).contains(&p),
             Self::Clamp { min, pct, max } => {
                 Self::Pct(pct).valid(limit)
                     && Self::Px(min).valid(limit)
@@ -276,6 +313,184 @@ enum Kind<P> {
         cols: usize,
         children: Vec<Node<P>>,
     },
+    /// Candidates in order of preference. See [`Node::fits`].
+    Fits(Vec<Node<P>>),
+}
+
+/// One of the nine named regions around an anchor, CSS `position-area`
+/// without the coordinates. The four sides centre on the anchor's other
+/// axis; the four corners align to the anchor's near edge, which is what a
+/// dropdown under a field wants. [`Area::Center`] sits over the anchor.
+///
+/// ```
+/// use mui_layout::{leaf, overlay, resolve, Align, Area, Pin, Size};
+/// let field = leaf(40., 40.).anchor(Align::Start, Align::Start).id("f");
+/// let menu = leaf(30., 20.).pin(Pin::to("f").area(Area::End)).id("menu");
+/// let l = resolve(&overlay([field, menu]),
+///                 Some(Size::new(200., 200.)), Default::default()).unwrap();
+/// // Past the anchor's right edge, centred on its height.
+/// assert_eq!((l.frame("menu").unwrap().x, l.frame("menu").unwrap().y), (40., 10.));
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Area {
+    TopStart,
+    /// Above, centred. The default.
+    #[default]
+    Top,
+    TopEnd,
+    Start,
+    Center,
+    End,
+    BottomStart,
+    Bottom,
+    BottomEnd,
+}
+
+/// Take one axis of the size from the anchor, CSS `anchor-size()`. See
+/// [`Pin::match_width`] and [`Pin::match_height`].
+///
+/// ```
+/// use mui_layout::{leaf, overlay, resolve, Pin, Size};
+/// let menu = leaf(10., 20.).pin(Pin::to("f").match_width()).id("menu");
+/// let l = resolve(&overlay([leaf(90., 24.).id("f"), menu]),
+///                 Some(Size::new(200., 200.)), Default::default()).unwrap();
+/// assert_eq!(l.frame("menu").unwrap().size.width, 90.);
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Match {
+    #[default]
+    None,
+    Width,
+    Height,
+}
+
+/// Where a float sits relative to another node, by name: the anchor, a named
+/// region around it, a gap, an optional size taken from it, and an ordered
+/// list of regions to try when the preferred one leaves the root rect. The
+/// first candidate that fits wins; if none does, the preferred one is pulled
+/// back inside.
+///
+/// ```
+/// use mui_layout::{leaf, overlay, resolve, Align, Pin, Size, SpacingToken::Xs};
+/// let tip = leaf(30., 20.).pin(Pin::to("knob").gap(Xs)).id("tip");
+/// let knob = leaf(40., 40.).anchor(Align::Start, Align::Start).id("knob");
+/// let tree = overlay([knob, tip]);
+/// let l = resolve(&tree, Some(Size::new(200., 200.)), Default::default()).unwrap();
+/// // No room above at the top of the window, so it flips under the knob.
+/// assert_eq!(l.frame("tip").unwrap().y, 44.);
+/// ```
+#[derive(Clone, Debug, PartialEq)]
+pub struct Pin {
+    anchor: String,
+    area: Area,
+    gap: Spacing,
+    size: Match,
+    fallbacks: Vec<Area>,
+}
+impl Pin {
+    /// Pin to the node with this id, above it by default, flipping below if
+    /// there is no room.
+    pub fn to(anchor: impl Into<String>) -> Self {
+        Self {
+            anchor: anchor.into(),
+            area: Area::Top,
+            gap: Spacing::Px(0.0),
+            size: Match::None,
+            fallbacks: vec![Area::Bottom],
+        }
+    }
+    /// The preferred region. Setting it clears the default flip; add your own
+    /// with [`fallback`](Pin::fallback).
+    pub fn area(mut self, area: Area) -> Self {
+        self.area = area;
+        self.fallbacks.clear();
+        self
+    }
+    /// Distance from the anchor's edge.
+    pub fn gap(mut self, gap: impl Into<Spacing>) -> Self {
+        self.gap = gap.into();
+        self
+    }
+    /// Take the anchor's width: a menu as wide as its field.
+    pub fn match_width(mut self) -> Self {
+        self.size = Match::Width;
+        self
+    }
+    /// Take the anchor's height: a side panel as tall as its row.
+    pub fn match_height(mut self) -> Self {
+        self.size = Match::Height;
+        self
+    }
+    /// Another region to try, in order, when the ones before it overflow.
+    pub fn fallback(mut self, area: Area) -> Self {
+        self.fallbacks.push(area);
+        self
+    }
+    fn sized(&self, anchor: Frame, s: Size) -> Size {
+        match self.size {
+            Match::None => s,
+            Match::Width => Size::new(anchor.size.width, s.height),
+            Match::Height => Size::new(s.width, anchor.size.height),
+        }
+    }
+    /// The top-left corner for `area`, in the same space as `anchor`.
+    fn corner(&self, area: Area, anchor: Frame, s: Size, gap: f64) -> [f64; 2] {
+        let (a, w, h) = (anchor, s.width, s.height);
+        let x = match area {
+            Area::Start => a.x - w - gap,
+            Area::End => a.right() + gap,
+            Area::TopStart | Area::BottomStart => a.x,
+            Area::TopEnd | Area::BottomEnd => a.right() - w,
+            Area::Top | Area::Bottom | Area::Center => a.x + (a.size.width - w) / 2.0,
+        };
+        let y = match area {
+            Area::TopStart | Area::Top | Area::TopEnd => a.y - h - gap,
+            Area::BottomStart | Area::Bottom | Area::BottomEnd => a.bottom() + gap,
+            Area::Start | Area::End | Area::Center => a.y + (a.size.height - h) / 2.0,
+        };
+        [x, y]
+    }
+    /// The winning corner: the first candidate inside `root`, else the
+    /// preferred one pulled back in.
+    fn place(&self, anchor: Frame, s: Size, root: Size, scale: SpacingScale) -> [f64; 2] {
+        let gap = self.gap.resolve(scale);
+        let fits = |p: [f64; 2]| {
+            p[0] >= 0.0
+                && p[1] >= 0.0
+                && p[0] + s.width <= root.width
+                && p[1] + s.height <= root.height
+        };
+        std::iter::once(self.area)
+            .chain(self.fallbacks.iter().copied())
+            .map(|a| self.corner(a, anchor, s, gap))
+            .find(|p| fits(*p))
+            .unwrap_or_else(|| {
+                let p = self.corner(self.area, anchor, s, gap);
+                [
+                    inside(p[0], s.width, root.width),
+                    inside(p[1], s.height, root.height),
+                ]
+            })
+    }
+}
+
+/// Everything a pinned float needs that its parent does not know: the anchor
+/// frames from the previous arrange pass, the root rect they live in, and the
+/// scale a [`Spacing`] gap resolves against.
+struct Pins<'a> {
+    anchors: &'a BTreeMap<String, Frame>,
+    root: Size,
+    scale: SpacingScale,
+}
+
+/// Pull `v` back inside `avail`. One too big to fit keeps its place: there is
+/// no inside to pull it to.
+fn inside(v: f64, extent: f64, avail: f64) -> f64 {
+    if extent <= avail {
+        v.clamp(0.0, avail - extent)
+    } else {
+        v
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -286,7 +501,7 @@ pub struct Node<P = ()> {
     gap: Spacing,
     /// Pixel insets, unless `pad` names a token for all four sides.
     padding: Insets,
-    pad: Option<SpacingToken>,
+    pad: Option<Spacing>,
     minimum: Size,
     maximum: Option<Size>,
     width: Len,
@@ -300,6 +515,8 @@ pub struct Node<P = ()> {
     justify: Justify,
     anchor: Option<(Align, Align)>,
     offset: [f64; 2],
+    /// Anchored placement for a float; see [`Node::pin`].
+    pin: Option<Pin>,
     /// Children may overflow the main axis; the frame clips them and
     /// `scrolled` slides them. Implies `clip`.
     scroll: bool,
@@ -343,6 +560,7 @@ impl<P: Default> Node<P> {
             justify: Justify::Start,
             anchor: None,
             offset: [0.0; 2],
+            pin: None,
             scroll: false,
             clip: false,
             scrolled: [0.0; 2],
@@ -387,6 +605,35 @@ impl<P: Default> Node<P> {
             children: children.into_iter().collect(),
         })
     }
+    /// Candidates in order of preference, largest first: the first one whose
+    /// measured size fits the space this node is offered is the one laid out,
+    /// and the rest are given empty frames. SwiftUI's `ViewThatFits`.
+    ///
+    /// The candidates are already built, so nothing is measured twice and
+    /// there is no second build pass -- which is the whole reason to prefer
+    /// it to a width branch in the caller. An axis this node has no definite
+    /// size on never rejects a candidate; the last one is the fallback.
+    ///
+    /// ```
+    /// use mui_layout::{leaf, resolve, Node, Size};
+    /// let bar = Node::fits([
+    ///     leaf(300., 20.).id("wide"),
+    ///     leaf(120., 20.).id("mid"),
+    ///     leaf(40., 20.).id("thin"),
+    /// ]);
+    /// let shown = |w: f64| {
+    ///     let l = resolve(&bar, Some(Size::new(w, 20.)), Default::default()).unwrap();
+    ///     ["wide", "mid", "thin"]
+    ///         .iter()
+    ///         .find(|k| l.frame(k).unwrap().size.width > 0.)
+    ///         .copied()
+    ///         .unwrap()
+    /// };
+    /// assert_eq!((shown(400.), shown(200.), shown(60.)), ("wide", "mid", "thin"));
+    /// ```
+    pub fn fits(candidates: impl IntoIterator<Item = Self>) -> Self {
+        Self::new(Kind::Fits(candidates.into_iter().collect()))
+    }
 }
 
 impl<P> Node<P> {
@@ -413,7 +660,8 @@ impl<P> Node<P> {
         match &self.kind {
             Kind::Branch { children, .. }
             | Kind::Overlay(children)
-            | Kind::Grid { children, .. } => children,
+            | Kind::Grid { children, .. }
+            | Kind::Fits(children) => children,
             _ => &[],
         }
     }
@@ -421,7 +669,8 @@ impl<P> Node<P> {
         match &mut self.kind {
             Kind::Branch { children, .. }
             | Kind::Overlay(children)
-            | Kind::Grid { children, .. } => children,
+            | Kind::Grid { children, .. }
+            | Kind::Fits(children) => children,
             _ => &mut [],
         }
     }
@@ -434,11 +683,16 @@ impl<P> Node<P> {
         self.gap = gap.into();
         self
     }
-    /// The same on all four sides: `.pad(12.0)` or `.pad(M)`.
+    /// The same on all four sides: `.pad(12.0)`, `.pad(M)` or
+    /// `.pad(Spacing::step(3.))`. One slot per concept: the last call wins,
+    /// whichever spelling it used.
     pub fn pad(mut self, padding: impl Into<Spacing>) -> Self {
         match padding.into() {
-            Spacing::Px(v) => self.padding = Insets::all(v),
-            Spacing::Token(t) => self.pad = Some(t),
+            Spacing::Px(v) => {
+                self.padding = Insets::all(v);
+                self.pad = None;
+            }
+            scaled => self.pad = Some(scaled),
         }
         self
     }
@@ -454,7 +708,8 @@ impl<P> Node<P> {
     }
     /// What the padding comes to under `scale`.
     pub fn padding(&self, scale: SpacingScale) -> Insets {
-        self.pad.map_or(self.padding, |t| Insets::all(scale.get(t)))
+        self.pad
+            .map_or(self.padding, |s| Insets::all(s.resolve(scale)))
     }
     /// Declared outer size on both axes. `Auto` measures, `Px` fixes, `Pct`
     /// takes a share of the parent: `.size(Len::Pct(50.0), 24.0)`.
@@ -564,6 +819,22 @@ impl<P> Node<P> {
         self.scrolled = [x, y];
         self
     }
+    /// Place this node against another node by name rather than inside its
+    /// own parent: see [`Pin`]. Implies [`float`](Node::float), and the
+    /// position is absolute, so the parent's padding and alignment no longer
+    /// apply. Keep [`offset`](Node::offset) for a nudge no region can name.
+    ///
+    /// ```
+    /// use mui_layout::{leaf, overlay, resolve, Area, Pin, Size};
+    /// let menu = leaf(10., 20.).pin(Pin::to("field").area(Area::Bottom).match_width()).id("m");
+    /// let l = resolve(&overlay([leaf(90., 24.).id("field"), menu]),
+    ///                 Some(Size::new(200., 200.)), Default::default()).unwrap();
+    /// assert_eq!(l.frame("m").unwrap().size.width, 90.);
+    /// ```
+    pub fn pin(mut self, pin: Pin) -> Self {
+        self.pin = Some(pin);
+        self.float()
+    }
     /// Take this node out of flow: see the `float` field.
     pub fn float(mut self) -> Self {
         self.float = true;
@@ -611,7 +882,8 @@ impl<P> Node<P> {
         match &mut self.kind {
             Kind::Branch { children, .. }
             | Kind::Overlay(children)
-            | Kind::Grid { children, .. } => children.push(child),
+            | Kind::Grid { children, .. }
+            | Kind::Fits(children) => children.push(child),
             Kind::Leaf | Kind::Content => {}
         }
         self
@@ -658,6 +930,10 @@ pub fn overlay(children: impl IntoIterator<Item = Node>) -> Node {
 }
 pub fn grid(cols: usize, children: impl IntoIterator<Item = Node>) -> Node {
     Node::grid(cols, children)
+}
+/// See [`Node::fits`].
+pub fn fits(candidates: impl IntoIterator<Item = Node>) -> Node {
+    Node::fits(candidates)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -784,6 +1060,12 @@ struct Measured<'a, P> {
     /// A grid's resolved column count, after `min_col`; 0 for anything else.
     /// Measured once so arrange cannot re-derive a different one.
     cols: usize,
+    /// A `Fits` node's chosen candidate; 0 for anything else. Picked once, at
+    /// measure, for the same reason as `cols`.
+    pick: usize,
+    /// The nearest definite ancestor extent per axis: what a
+    /// [`Len::Container`] on *this* node is a share of.
+    container: [Option<f64>; 2],
     children: Vec<Measured<'a, P>>,
 }
 
@@ -831,9 +1113,9 @@ impl<'a, P> Measured<'a, P> {
             return fallback();
         };
         match (self.node.len(vertical), self.aspect_width(inner)) {
-            (l @ (Len::Pct(_) | Len::Clamp { .. }), _) => {
-                l.fixed(inner.main(vertical)).unwrap_or_else(fallback)
-            }
+            (l @ (Len::Pct(_) | Len::Clamp { .. } | Len::Container(_)), _) => l
+                .fixed(inner.main(vertical), self.container[vertical as usize])
+                .unwrap_or_else(fallback),
             (_, Some((w, a))) if vertical => w / a,
             _ => fallback(),
         }
@@ -845,7 +1127,13 @@ impl<'a, P> Measured<'a, P> {
         let n = self.node;
         let a = n.aspect.filter(|_| matches!(n.height, Len::Auto))?;
         let cap = |v: f64| n.maximum.map_or(v, |m| v.min(m.width));
-        Some((cap(n.width.fixed(inner.width).unwrap_or(inner.width)), a))
+        Some((
+            cap(n
+                .width
+                .fixed(inner.width, self.container[0])
+                .unwrap_or(inner.width)),
+            a,
+        ))
     }
     /// Size on one axis inside `avail`, given how it is aligned there.
     fn extent(&self, vertical: bool, avail: f64, align: Align) -> f64 {
@@ -857,7 +1145,10 @@ impl<'a, P> Measured<'a, P> {
                 .map_or(v, |m| v.min(m.cross(!vertical)))
                 .max(self.floor.main(vertical))
         };
-        match n.len(vertical).fixed(avail) {
+        match n
+            .len(vertical)
+            .fixed(avail, self.container[vertical as usize])
+        {
             Some(v) => cap(v),
             None if align == Align::Stretch && n.is_container() => cap(avail),
             // Content never keeps a cross extent wider than the room it was
@@ -948,11 +1239,19 @@ fn grid_rows<'a, 'm, P>(
 /// a fixed length, a share of a definite inner extent, or -- for a container
 /// (or an aspect-ratio node) that will be stretched -- that extent itself.
 /// `None` is "measure yourself".
-fn offer<P>(c: &Node<P>, vertical: bool, inner: Option<f64>, stretch: bool) -> Option<f64> {
+fn offer<P>(
+    c: &Node<P>,
+    vertical: bool,
+    inner: Option<f64>,
+    container: Option<f64>,
+    stretch: bool,
+) -> Option<f64> {
     match c.len(vertical) {
         Len::Px(v) => Some(v),
         Len::Auto => inner.filter(|_| stretch && (c.is_container() || c.aspect.is_some())),
-        l => inner.and_then(|i| l.fixed(i)),
+        // A container share needs no definite parent: that is the point of it.
+        Len::Container(p) => container.map(|cq| cq * p / 100.0),
+        l => inner.and_then(|i| l.fixed(i, container)),
     }
 }
 
@@ -965,6 +1264,9 @@ struct Pass<'a, 'f, P> {
     /// Inside a re-measure: ids are already checked and the subtree is being
     /// measured a second time at its final main size.
     redo: bool,
+    /// Any node carries a [`Pin`], so arrange runs a second pass with the
+    /// anchor frames the first one found.
+    pinned: bool,
     measurer: &'f mut dyn FnMut(&P, Option<f64>) -> Size,
 }
 
@@ -977,6 +1279,7 @@ fn measure<'a, P>(
     ancestor: &str,
     definite: [Option<f64>; 2],
     room: Option<f64>,
+    container: [Option<f64>; 2],
     depth: usize,
     pass: &mut Pass<'a, '_, P>,
 ) -> Result<Measured<'a, P>, Error> {
@@ -984,6 +1287,7 @@ fn measure<'a, P>(
     if depth > l.depth || pass.left == 0 {
         return Err(Error::BudgetExceeded);
     }
+    pass.pinned |= node.pin.is_some();
     pass.left -= 1;
     validate_node(node, l)?;
     let (gap, padding) = (node.gap.resolve(pass.scale), node.padding(pass.scale));
@@ -1034,22 +1338,39 @@ fn measure<'a, P>(
         },
         _ => 0,
     };
+    // A box with a definite inner extent is the container everything under it
+    // takes a `Len::Container` share of, until a nearer one says otherwise.
+    // ponytail: a grid column is room, not a container; make it one if a
+    // `cq()` inside a cell ever needs the cell rather than the grid.
+    let sub = [inner[0].or(container[0]), inner[1].or(container[1])];
     let mut children = Vec::with_capacity(node.children().len());
     for (index, c) in node.children().iter().enumerate() {
         let align = c.align_self.unwrap_or(node.align);
         let mut child_room = room.filter(|_| !node.scroll);
         let promise = match &node.kind {
+            // Candidates are measured at what they would like to be: a
+            // stretched one would fit every time and pick itself.
+            Kind::Fits(_) if !c.float => [
+                offer(c, false, inner[0], sub[0], false),
+                offer(c, true, inner[1], sub[1], false),
+            ],
             _ if c.float => {
                 let (ax, ay) = c.anchor.unwrap_or(cell_default(node));
                 [
-                    offer(c, false, inner[0], ax == Align::Stretch),
-                    offer(c, true, inner[1], ay == Align::Stretch),
+                    offer(c, false, inner[0], sub[0], ax == Align::Stretch),
+                    offer(c, true, inner[1], sub[1], ay == Align::Stretch),
                 ]
             }
             Kind::Branch { vertical, .. } => {
                 let v = *vertical;
-                let cross = offer(c, !v, inner[!v as usize], align == Align::Stretch);
-                let main = offer(c, v, inner[v as usize], false);
+                let cross = offer(
+                    c,
+                    !v,
+                    inner[!v as usize],
+                    sub[!v as usize],
+                    align == Align::Stretch,
+                );
+                let main = offer(c, v, inner[v as usize], sub[v as usize], false);
                 if v {
                     [cross, main]
                 } else {
@@ -1059,8 +1380,8 @@ fn measure<'a, P>(
             Kind::Overlay(_) => {
                 let (ax, ay) = c.anchor.unwrap_or(cell_default(node));
                 [
-                    offer(c, false, inner[0], ax == Align::Stretch),
-                    offer(c, true, inner[1], ay == Align::Stretch),
+                    offer(c, false, inner[0], sub[0], ax == Align::Stretch),
+                    offer(c, true, inner[1], sub[1], ay == Align::Stretch),
                 ]
             }
             Kind::Grid { .. } => {
@@ -1071,14 +1392,29 @@ fn measure<'a, P>(
                         + gap * (span - 1.0)
                 });
                 child_room = [child_room, col].into_iter().flatten().reduce(f64::min);
-                [offer(c, false, col, ax == Align::Stretch), None]
+                [offer(c, false, col, sub[0], ax == Align::Stretch), None]
             }
             _ => [None; 2],
         };
-        let mut m = measure(c, here, promise, child_room, depth + 1, pass)?;
+        let mut m = measure(c, here, promise, child_room, sub, depth + 1, pass)?;
         m.index = index;
         children.push(m);
     }
+    // Largest first, so the first candidate that clears both offered axes is
+    // the richest one that fits. An axis with no offer never rejects.
+    let pick = match &node.kind {
+        Kind::Fits(_) => {
+            let fits = |m: &Measured<'_, P>| {
+                inner[0].is_none_or(|w| m.size.width <= w + 1e-8)
+                    && inner[1].is_none_or(|h| m.size.height <= h + 1e-8)
+            };
+            children
+                .iter()
+                .position(fits)
+                .unwrap_or(children.len().saturating_sub(1))
+        }
+        _ => 0,
+    };
     // A flex item only learns its final main size once the row's surplus (or
     // deficit) is dealt, so anything whose measured cross depends on its main
     // -- a paragraph, a `min_col` grid -- is measured again at the share it
@@ -1109,9 +1445,17 @@ fn measure<'a, P>(
                 continue;
             }
             let align = c.align_self.unwrap_or(node.align);
-            let cross = offer(c, true, inner[1], align == Align::Stretch);
+            let cross = offer(c, true, inner[1], sub[1], align == Align::Stretch);
             let was = std::mem::replace(&mut pass.redo, true);
-            let m = measure(c, here, [Some(main), cross], Some(main), depth + 1, pass);
+            let m = measure(
+                c,
+                here,
+                [Some(main), cross],
+                Some(main),
+                sub,
+                depth + 1,
+                pass,
+            );
             pass.redo = was;
             children[index] = m?;
             children[index].index = index;
@@ -1187,6 +1531,11 @@ fn measure<'a, P>(
             Size::new(max_of(&|c| c.size.width), max_of(&|c| c.size.height)),
             Size::new(max_of(&|c| c.floor.width), max_of(&|c| c.floor.height)),
         ),
+        // The chosen candidate is the whole content; the rest were measured
+        // and dropped, and cost nothing but their measure.
+        Kind::Fits(_) => children
+            .get(pick)
+            .map_or((Size::ZERO, Size::ZERO), |c| (c.size, c.floor)),
         Kind::Grid { .. } => {
             let rows = grid_rows(&flow, cols);
             let gaps = |n: f64| (n - 1.0).max(0.0) * gap;
@@ -1248,7 +1597,9 @@ fn measure<'a, P>(
             });
         }
     }
-    let fluid = matches!(node.kind, Kind::Content)
+    // A squeezed flex row re-measures its fluid items, which is the one
+    // chance a `fits` inside one gets to pick against its real share.
+    let fluid = matches!(node.kind, Kind::Content | Kind::Fits(_))
         || (node.min_col.is_some() && inner[0].is_none() && matches!(node.kind, Kind::Grid { .. }))
         || children.iter().any(|c| c.fluid && !c.node.float);
     Ok(Measured {
@@ -1261,6 +1612,8 @@ fn measure<'a, P>(
         floor,
         content,
         cols,
+        pick,
+        container,
         children,
     })
 }
@@ -1339,11 +1692,31 @@ fn cell<P>(c: &Measured<'_, P>, cell: Size, default: (Align, Align)) -> ([f64; 2
     )
 }
 
+/// An empty frame for a subtree that is not laid out -- a `fits` candidate
+/// that lost. At the parent's own origin, so a walk that checks children
+/// against their parent's box still passes, and at zero size, which is how a
+/// paint walk knows to skip it.
+fn hide<P>(m: &Measured<'_, P>, origin: [f64; 2], out: &mut (BTreeMap<String, Frame>, Vec<Frame>)) {
+    let frame = Frame {
+        x: origin[0],
+        y: origin[1],
+        size: Size::ZERO,
+    };
+    out.1.push(frame);
+    if let Some(id) = m.node.id.clone() {
+        out.0.insert(id, frame);
+    }
+    for c in &m.children {
+        hide(c, origin, out);
+    }
+}
+
 fn arrange<P>(
     m: &Measured<'_, P>,
     ancestor: &str,
     origin: [f64; 2],
     size: Size,
+    pins: &Pins<'_>,
     out: &mut (BTreeMap<String, Frame>, Vec<Frame>),
 ) -> Result<(), Error> {
     let n = m.node;
@@ -1387,6 +1760,16 @@ fn arrange<P>(
             for c in &flow {
                 let (p, s) = cell(c, inner, default);
                 placed[c.index] = Some((at(p[0], p[1]), s));
+            }
+        }
+        Kind::Fits(_) => {
+            for (i, c) in m.children.iter().enumerate() {
+                if i == m.pick && !c.node.float {
+                    let (p, s) = cell(c, inner, default);
+                    placed[i] = Some((at(p[0], p[1]), s));
+                } else if !c.node.float {
+                    placed[i] = Some(([origin[0], origin[1]], Size::ZERO));
+                }
             }
         }
         Kind::Grid { .. } => {
@@ -1517,30 +1900,41 @@ fn arrange<P>(
         }
     }
     for (i, c) in m.children.iter().enumerate() {
+        // A candidate that lost keeps its place in the frame list, empty, so
+        // a walk of the tree still lines up with it.
+        if matches!(n.kind, Kind::Fits(_)) && i != m.pick {
+            hide(c, origin, out);
+            continue;
+        }
         let (pos, s) = if c.node.float {
             let (p, s) = cell(c, inner, default);
-            // A tooltip or menu offset past the edge is pulled back inside the
-            // box it floats in -- floats are painted after the root and clipped
-            // by nothing, so off the box is off the window. One too big to fit
-            // keeps its place: there is no inside to pull it to.
-            let inside = |v: f64, extent: f64, avail: f64| {
-                if extent <= avail {
-                    v.clamp(0.0, avail - extent)
-                } else {
-                    v
+            match c
+                .node
+                .pin
+                .as_ref()
+                .and_then(|pin| Some((pin, *pins.anchors.get(&pin.anchor)?)))
+            {
+                // A pin is absolute: the anchor may be anywhere in the tree,
+                // so the parent's padding box has nothing to say about it.
+                Some((pin, anchor)) => {
+                    let s = pin.sized(anchor, s);
+                    (pin.place(anchor, s, pins.root, pins.scale), s)
                 }
-            };
-            (
-                [
-                    origin[0] + m.padding.left + inside(p[0], s.width, inner.width),
-                    origin[1] + m.padding.top + inside(p[1], s.height, inner.height),
-                ],
-                s,
-            )
+                // A tooltip or menu offset past the edge is pulled back inside
+                // the box it floats in -- floats are painted after the root and
+                // clipped by nothing, so off the box is off the window.
+                None => (
+                    [
+                        origin[0] + m.padding.left + inside(p[0], s.width, inner.width),
+                        origin[1] + m.padding.top + inside(p[1], s.height, inner.height),
+                    ],
+                    s,
+                ),
+            }
         } else {
             placed[i].take().ok_or(Error::BudgetExceeded)?
         };
-        arrange(c, here, pos, s, out)?;
+        arrange(c, here, pos, s, pins, out)?;
     }
     Ok(())
 }
@@ -1581,9 +1975,11 @@ pub fn resolve_with<P>(
         scale,
         keys: BTreeMap::new(),
         redo: false,
+        pinned: false,
         measurer: &mut measurer,
     };
-    let m = measure(root, "root", definite, None, 0, &mut pass)?;
+    // The root's own offered size is the outermost container there is.
+    let m = measure(root, "root", definite, None, definite, 0, &mut pass)?;
     let size = offered.unwrap_or(m.size);
     if !size.valid(limits.extent) {
         return Err(Error::InvalidValue);
@@ -1605,13 +2001,29 @@ pub fn resolve_with<P>(
     );
     // Only `resolve` knows the whole tree's floor, and that is the number a
     // host scales by; the sites that raise the error only know their own node.
-    arrange(&m, "root", [0.0, 0.0], size, &mut out).map_err(|e| match e {
+    let fix = |e| match e {
         Error::InsufficientSpace { node, .. } => Error::InsufficientSpace {
             node,
             needs: m.floor,
         },
         e => e,
-    })?;
+    };
+    let empty = BTreeMap::new();
+    let pins = |anchors| Pins {
+        anchors,
+        root: size,
+        scale,
+    };
+    arrange(&m, "root", [0.0, 0.0], size, &pins(&empty), &mut out).map_err(fix)?;
+    // ponytail: one extra arrange resolves every pin, because a float takes no
+    // space and so cannot move an anchor. A pin whose anchor is itself inside a
+    // pinned float reads that float's first-pass position; give the pass a
+    // dependency order if that ever matters.
+    if pass.pinned {
+        let anchors = std::mem::take(&mut out.0);
+        out.1.clear();
+        arrange(&m, "root", [0.0, 0.0], size, &pins(&anchors), &mut out).map_err(fix)?;
+    }
     Ok(Layout {
         size,
         frames: out.0,

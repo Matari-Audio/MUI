@@ -10,13 +10,16 @@ use std::fmt::Write as _;
 use std::sync::Arc;
 
 use mui_geometry::{
-    fillet, inset_path, union, Bounds, CornerStyle, GeometryOptions, OffsetOptions, Path,
-    PlacedShape, Point, Polygon, RoundedRect,
+    boolean, fillet, inset_path, union, BooleanOp, Bounds, CornerStyle, Fillet, GeometryOptions,
+    OffsetOptions, Path, PlacedShape, Point, Polygon, RoundedRect, Topology,
 };
 use mui_layout::{resolve_with, Frame, Layout, Limits, Size};
 use mui_text::TextRun;
 
-use crate::{Color, Content, Cursor, El, Fill, Mix, Paint, Radius, Semantics, Theme};
+use crate::{
+    Carve, Color, Content, Cursor, El, Fill, Mix, Paint, Radius, Semantics, Shadow, ShadowKind,
+    Theme,
+};
 
 #[derive(Debug, Clone)]
 pub struct SceneSpec {
@@ -84,7 +87,9 @@ impl SceneSpec {
 /// Which layer of a node's style a [`Painted`] entry is.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Layer {
-    Shadow,
+    /// One shadow of the node's list; an inset one paints clipped to the
+    /// node's own outline.
+    Shadow(ShadowKind),
     Fill,
     Shell(usize),
     Stroke,
@@ -103,6 +108,10 @@ pub enum Layer {
         mix: Mix,
         opacity: f32,
     },
+    /// Painted source-atop the node's own blend layer, in `path`: it lands
+    /// only where the node and its children already painted. Always inside
+    /// a `Blend`/`Unblend` pair. See [`Paints::mask`](crate::Paints::mask).
+    Mask,
     Unblend,
 }
 
@@ -253,6 +262,18 @@ fn bounds(f: Frame, scale: Option<f64>) -> Bounds {
         max: Point::new(snap(f.right(), scale), snap(f.bottom(), scale)),
     }
 }
+/// A resolved outline back as boolean input.
+// ponytail: every contour becomes its own shape, so a path that already has
+// a hole comes back solid. Carving chains through `Topology::placed_shapes`
+// instead, which keeps them; only a first, un-carved outline lands here.
+fn polygons(path: &Path) -> Result<Vec<PlacedShape>, SceneError> {
+    Ok(path
+        .flatten(0.25, 100_000)?
+        .into_iter()
+        .filter(|c| c.len() >= 3)
+        .map(|c| Polygon::new(c).into())
+        .collect())
+}
 fn rect_poly(b: Bounds) -> Result<PlacedShape, SceneError> {
     Ok(Polygon::rectangle(b.min.x, b.min.y, b.width(), b.height())?.into())
 }
@@ -390,19 +411,69 @@ struct Walk<'a> {
     base_y: Option<f64>,
 }
 impl<'a> Walk<'a> {
+    /// The node's own shape, with every [`Carve`] child taken out of it (or
+    /// intersected with it). A carved outline is a path like a welded one:
+    /// no analytic rect, so shells, strokes and clips all follow the result.
     fn outline(
         &self,
         n: &El,
         frame: Frame,
     ) -> Result<(Path, Option<RoundedRect>, bool, Vec<RoundedRect>), SceneError> {
+        let base = self.shape(n, frame, self.i)?;
+        let (mut at, mut topo): (usize, Option<Topology>) = (self.i, None);
+        let mut shapes = Vec::new();
+        for c in n.children() {
+            let (f, carve) = (self.frames[at], c.payload().carve);
+            at += count(c);
+            let Some(carve) = carve.filter(|_| f.size.width > 0.0 && f.size.height > 0.0) else {
+                continue;
+            };
+            if topo.is_none() {
+                shapes = polygons(&base.0)?;
+            }
+            let rhs = polygons(&self.shape(c, f, at - count(c) + 1)?.0)?;
+            let op = match carve {
+                Carve::Cut => BooleanOp::Difference,
+                Carve::Keep => BooleanOp::Intersection,
+            };
+            let t = boolean(&shapes, &rhs, op, self.spec.geometry)?;
+            shapes = t.placed_shapes();
+            topo = Some(t);
+        }
+        let Some(topo) = topo else { return Ok(base) };
+        // Radius 0: the shapes going in already carry their own rounding,
+        // and a second fillet would eat the corners the carve just made.
+        let rounded = fillet(
+            &topo,
+            Fillet {
+                convex_radius: 0.,
+                concave_radius: 0.,
+                ..Fillet::default()
+            },
+        )?;
+        Ok((
+            n.payload().style.corners.shape(&rounded.path),
+            None,
+            true,
+            Vec::new(),
+        ))
+    }
+
+    fn shape(
+        &self,
+        n: &El,
+        frame: Frame,
+        first: usize,
+    ) -> Result<(Path, Option<RoundedRect>, bool, Vec<RoundedRect>), SceneError> {
         let th = &self.spec.theme;
         let s = &n.payload().style;
         let (convex, concave) = match s.radius {
-            Radius::Theme => (th.corners.convex, th.corners.concave),
+            Radius::Theme => (th.corners.box_, th.corners.concave),
             Radius::Px(r) => (r, th.corners.concave),
+            Radius::Token(c) => (th.corners.get(c), th.corners.concave),
             Radius::Scale(k) => {
                 let p = th.corners.scaled(k).ok_or(SceneError::InvalidRadius)?;
-                (p.convex, p.concave)
+                (p.box_, p.concave)
             }
             Radius::Pill => (
                 frame.size.width.min(frame.size.height) / 2.0,
@@ -414,11 +485,17 @@ impl<'a> Walk<'a> {
         }
         if !s.weld || n.children().is_empty() {
             let rr = RoundedRect::new(bounds(frame, self.spec.device_scale), convex)?;
+            // A squircle is no longer a rounded rectangle, so it gives up the
+            // analytic blur and the analytic shell inset with it; the path
+            // route below draws both from the outline itself.
+            if s.corners != CornerStyle::Round {
+                return Ok((s.corners.shape(&rr.path()), None, false, vec![rr]));
+            }
             return Ok((rr.path(), Some(rr), false, Vec::new()));
         }
         // Children's frames sit right after this node in pre-order, each
         // subtree `count` long.
-        let (mut at, mut shapes, mut rects) = (self.i, Vec::new(), Vec::new());
+        let (mut at, mut shapes, mut rects) = (first, Vec::new(), Vec::new());
         for c in n.children() {
             let b = bounds(self.frames[at], self.spec.device_scale);
             shapes.push(rect_poly(b)?);
@@ -428,18 +505,82 @@ impl<'a> Walk<'a> {
         let merged = union(&shapes, self.spec.geometry)?;
         let rounded = fillet(
             &merged,
-            CornerStyle {
+            Fillet {
                 convex_radius: convex,
                 concave_radius: concave,
-                ..CornerStyle::default()
+                ..Fillet::default()
             },
         )?;
         Ok((
-            rounded.path,
+            s.corners.shape(&rounded.path),
             None,
             merged.components() != n.children().len(),
             rects,
         ))
+    }
+
+    /// One shadow of a node, offset and spread off the node's own outline.
+    ///
+    /// A rounded rect blurs analytically, so that is what the entry carries
+    /// whenever the outline is one. A welded outline is not, and becomes one
+    /// blurred rect per welded child instead.
+    fn shadow(
+        &mut self,
+        sh: &Shadow,
+        outline: &Path,
+        rect: Option<RoundedRect>,
+        welds: &[RoundedRect],
+        under: Color,
+    ) -> Result<(), SceneError> {
+        let d = Point::new(sh.dx, sh.dy);
+        // CSS spread: the drop grows, the inset shrinks, and the radius
+        // follows so the corner keeps its shape.
+        let grow = match sh.kind {
+            ShadowKind::Drop => sh.spread,
+            ShadowKind::Inset => -sh.spread,
+        };
+        let moved = |r: RoundedRect| {
+            let b = r.bounds();
+            RoundedRect::new(
+                Bounds::new(
+                    b.min.x + d.x - grow,
+                    b.min.y + d.y - grow,
+                    b.max.x + d.x + grow,
+                    b.max.y + d.y + grow,
+                ),
+                (r.radius() + grow).max(0.0),
+            )
+        };
+        // ponytail: a welded shadow is the union of the children's blurs,
+        // not the blur of the union -- each child rect keeps the convex
+        // radius, so the seams are rounded where the welded outline is
+        // straight or concave, and overlapping children over-composite
+        // there. A blur filter layer is the upgrade.
+        let rects: Vec<RoundedRect> = match rect {
+            Some(r) => vec![r],
+            None if !welds.is_empty() => welds.to_vec(),
+            // ponytail: no analytic rect and no welds -- the shape travels
+            // as a path, and the spread with it is dropped.
+            None => {
+                if let Some(p) = self.push(
+                    Layer::Shadow(sh.kind),
+                    outline.rigid_transform(d, 0.0)?,
+                    None,
+                    &sh.fill,
+                    under,
+                ) {
+                    p.blur = sh.blur;
+                }
+                return Ok(());
+            }
+        };
+        for r in rects {
+            let r = moved(r)?;
+            if let Some(p) = self.push(Layer::Shadow(sh.kind), r.path(), Some(r), &sh.fill, under) {
+                p.blur = sh.blur;
+            }
+        }
+        Ok(())
     }
 
     fn push(
@@ -492,52 +633,25 @@ impl<'a> Walk<'a> {
 
         self.key = key.clone();
         let clear = Fill::Color(Color::oklcha(0.0, 0.0, 0.0, 0.0));
+        // A mask composites against what the subtree drew, so the subtree
+        // needs a layer of its own even when nothing asked to blend.
+        let masked = !s.mask.is_none();
         let blended = match s.layer {
-            Some((mix, opacity)) if !(mix == Mix::Normal && opacity == 1.0) => {
-                self.push(
-                    Layer::Blend { mix, opacity },
-                    Path::default(),
-                    None,
-                    &clear,
-                    under,
-                );
-                true
-            }
-            _ => false,
+            Some((mix, opacity)) if !(mix == Mix::Normal && opacity == 1.0) => Some((mix, opacity)),
+            _ if masked => Some((Mix::Normal, 1.0)),
+            _ => None,
         };
-        if let Some(sh) = &s.shadow {
-            let d = Point::new(sh.dx, sh.dy);
-            let moved = outline.rigid_transform(d, 0.0)?;
-            let moved_rect = rect
-                .map(|r| {
-                    let b = r.bounds();
-                    RoundedRect::new(
-                        Bounds::new(b.min.x + d.x, b.min.y + d.y, b.max.x + d.x, b.max.y + d.y),
-                        r.radius(),
-                    )
-                })
-                .transpose()?;
-            // ponytail: a welded shadow is the union of the children's
-            // blurs, not the blur of the union -- each child rect keeps the
-            // convex radius, so the seams are rounded where the welded
-            // outline is straight or concave, and overlapping children
-            // over-composite there. A blur filter layer is the upgrade.
-            if rect.is_none() && !welds.is_empty() {
-                for w in &welds {
-                    let b = w.bounds();
-                    let moved = RoundedRect::new(
-                        Bounds::new(b.min.x + d.x, b.min.y + d.y, b.max.x + d.x, b.max.y + d.y),
-                        w.radius(),
-                    )?;
-                    if let Some(p) =
-                        self.push(Layer::Shadow, moved.path(), Some(moved), &sh.fill, under)
-                    {
-                        p.blur = sh.blur;
-                    }
-                }
-            } else if let Some(p) = self.push(Layer::Shadow, moved, moved_rect, &sh.fill, under) {
-                p.blur = sh.blur;
-            }
+        if let Some((mix, opacity)) = blended {
+            self.push(
+                Layer::Blend { mix, opacity },
+                Path::default(),
+                None,
+                &clear,
+                under,
+            );
+        }
+        for sh in s.shadow.iter().filter(|sh| sh.kind == ShadowKind::Drop) {
+            self.shadow(sh, &outline, rect, &welds, under)?;
         }
         let solid = |p: Option<&mut Painted>, or: Color| p.map_or(or, |p| p.paint.solid());
         let mut bg = solid(
@@ -566,6 +680,17 @@ impl<'a> Walk<'a> {
                 }
             }
             bg = solid(self.push(Layer::Shell(i), cur.clone(), cur_rect, f, bg), bg);
+        }
+
+        if s.shadow.iter().any(|sh| sh.kind == ShadowKind::Inset) {
+            // Inside the shape, over everything it has painted so far: the
+            // inverse blur is opaque *outside* its rectangle, so the outline
+            // is what keeps it in the box.
+            self.push(Layer::Clip, outline.clone(), rect, &clear, bg);
+            for sh in s.shadow.iter().filter(|sh| sh.kind == ShadowKind::Inset) {
+                self.shadow(sh, &outline, rect, &welds, bg)?;
+            }
+            self.push(Layer::Unclip, Path::default(), None, &clear, bg);
         }
 
         if let Some(st) = &s.stroke {
@@ -706,6 +831,11 @@ impl<'a> Walk<'a> {
             clip,
             content,
         });
+        let mask_path = if masked {
+            outline.clone()
+        } else {
+            Path::default()
+        };
         let inner = if n.is_clip() {
             let b = bounds(frame, self.spec.device_scale);
             let b = clip.map_or(b, |c| {
@@ -761,6 +891,11 @@ impl<'a> Walk<'a> {
             self.base_y = bases.get(j).and_then(|b| b.map(|(y, _)| y));
             path.truncate(mark);
             let _ = write!(path, "/{j}");
+            if c.payload().carve.is_some() {
+                // Already spent: it shaped the outline instead of painting.
+                self.i += count(c);
+                continue;
+            }
             if c.is_float() {
                 self.deferred.push(Deferred {
                     at: self.i,
@@ -780,7 +915,11 @@ impl<'a> Walk<'a> {
             self.key = key.clone();
             self.push(Layer::Unclip, Path::default(), None, &clear, bg);
         }
-        if blended {
+        if blended.is_some() {
+            self.key = key.clone();
+            if masked {
+                self.push(Layer::Mask, mask_path, rect, &s.mask, bg);
+            }
             self.key = key;
             self.push(Layer::Unblend, Path::default(), None, &clear, bg);
         }
@@ -910,7 +1049,74 @@ impl SceneState {
 mod tests {
     use super::*;
     use crate::prelude::*;
-    use crate::{CornerProfile, Spacing};
+    use crate::{Corners, Spacing};
+
+    /// A hole is a hole: the carved outline loses the child's area, the
+    /// child never paints, and `keep` is the same machinery inverted.
+    #[test]
+    fn a_cut_child_leaves_a_hole_and_paints_nothing() {
+        // Signed, so a hole subtracts: the rings come back wound apart.
+        let area = |el: El| {
+            let s = resolve_scene(&SceneSpec::new(stack![el.id("card")])).unwrap();
+            let rings = s
+                .surface("card")
+                .unwrap()
+                .path
+                .flatten(0.1, 100_000)
+                .unwrap();
+            let signed: f64 = rings
+                .iter()
+                .map(|r| {
+                    r.iter()
+                        .zip(r.iter().cycle().skip(1))
+                        .map(|(a, b)| a.x * b.y - b.x * a.y)
+                        .sum::<f64>()
+                        / 2.0
+                })
+                .sum();
+            (signed.abs(), s.paint.len())
+        };
+        let square = |w: f64, h: f64| leaf(w, h).radius(Radius::Px(0.)).center();
+        let plain = stack![]
+            .square(100.)
+            .radius(Radius::Px(0.))
+            .fill(Role::Primary);
+        let (whole, layers) = area(plain.clone());
+        let (holed, carved) = area(plain.clone().cut(square(50., 50.)));
+        let (kept, _) = area(plain.keep(square(50., 50.)));
+        assert!((whole - 10_000.).abs() < 1.0, "{whole}");
+        assert!((holed - 7_500.).abs() < 1.0, "{holed}");
+        assert!((kept - 2_500.).abs() < 1.0, "{kept}");
+        // The carve child added no paint of its own.
+        assert_eq!(layers, carved);
+    }
+
+    /// The fade paints last, source-atop, and only inside the layer the node
+    /// opened for it.
+    #[test]
+    fn a_mask_paints_inside_the_nodes_own_blend_layer() {
+        let fade = Gradient::linear(
+            180.,
+            [(0.7, Role::Surface.alpha(0.)), (1., Role::Surface.into())],
+        );
+        let row = col![leaf(40., 20.).fill(Role::Primary)]
+            .pad(8.)
+            .mask(fade)
+            .id("list");
+        let s = resolve_scene(&SceneSpec::new(row)).unwrap();
+        let at = |l: Layer| s.paint.iter().position(|p| p.layer == l).unwrap();
+        let blend = at(Layer::Blend {
+            mix: Mix::Normal,
+            opacity: 1.0,
+        });
+        assert!(
+            blend < at(Layer::Fill),
+            "the subtree paints inside the layer"
+        );
+        assert!(at(Layer::Fill) < at(Layer::Mask));
+        assert!(at(Layer::Mask) < at(Layer::Unblend));
+        assert!(!s.paint[at(Layer::Mask)].path.commands.is_empty());
+    }
 
     /// The canonical case: a tab welded to its panel, with a pill shell
     /// inside the tab.
@@ -927,10 +1133,37 @@ mod tests {
             .id("root")
             .weld(Role::Surface);
         SceneSpec::new(root).theme(Theme {
-            corners: CornerProfile::new(28., 32.),
+            corners: Corners {
+                box_: 28.,
+                concave: 32.,
+                ..Corners::DEFAULT
+            },
             ..Theme::default()
         })
     }
+    /// An inset shadow paints over the fill and inside the outline, which
+    /// is the whole difference from a drop shadow: same call, opposite side.
+    #[test]
+    fn an_inset_shadow_paints_over_the_fill_and_clipped_to_the_outline() {
+        let root = leaf(40., 40.)
+            .radius(8.)
+            .fill(Role::Surface)
+            .shadow(Shadow::soft(6.))
+            .shadow(Shadow::inset(4.))
+            .id("box");
+        let s = resolve_scene(&SceneSpec::new(root).offered(Size::new(40., 40.))).unwrap();
+        let at = |l: Layer| s.paint.iter().position(|p| p.layer == l).expect("layer");
+        let (drop, fill) = (at(Layer::Shadow(ShadowKind::Drop)), at(Layer::Fill));
+        let inset = at(Layer::Shadow(ShadowKind::Inset));
+        assert!(drop < fill, "the drop shadow is over the fill");
+        assert!(fill < at(Layer::Clip) && at(Layer::Clip) < inset);
+        assert!(
+            inset < at(Layer::Unclip),
+            "the inset shadow escapes the box"
+        );
+        assert_eq!(s.paint[inset].blur, 4.);
+    }
+
     /// A welded outline has no analytic rounded rect, so its shadow is one
     /// blurred rect per welded child instead of a single dropped entry.
     #[test]
@@ -943,7 +1176,7 @@ mod tests {
         let sh: Vec<_> = s
             .paint
             .iter()
-            .filter(|p| p.layer == Layer::Shadow)
+            .filter(|p| matches!(p.layer, Layer::Shadow(_)))
             .collect();
         assert_eq!(sh.len(), 2, "one blurred rect per welded child");
         for (p, k) in sh.iter().zip(["a", "b"]) {
@@ -1044,7 +1277,10 @@ mod tests {
         let s = resolve_scene(&SceneSpec::new(root)).unwrap();
         assert_eq!(s.layout.frame("k").unwrap().x, 8.);
         assert_eq!(s.surface("k").unwrap().rect.unwrap().radius(), 10.);
-        assert!(matches!(s.paint[0].paint, Paint::Linear { angle, .. } if angle == 180.));
+        assert!(matches!(
+            s.paint[0].paint,
+            Paint::Gradient { kind: crate::GradientKind::Linear { angle }, .. } if angle == 180.
+        ));
     }
     #[test]
     fn failed_commit_is_transactional() {

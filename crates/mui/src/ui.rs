@@ -2,14 +2,18 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use mui_core::prelude::{overlay, text, Role, Styled as _};
+use mui_core::prelude::{overlay, text, Paints as _, Role};
 use mui_core::{
-    Align, Color, Cursor, El, Element, Fill, Paint, Palette, Radius, ResolvedScene, SceneError,
-    SceneSpec, Size, Spacing, Spring, TextCache, Theme,
+    Area, Color, Cursor, El, Element, Fill, Paint, Palette, Pin, Radius, ResolvedScene, SceneError,
+    SceneSpec, Size, Spacing, Spring, State, TextCache, Theme,
 };
 use mui_geometry::Point;
 use mui_input::{Hit, Ime, Input, Interaction, Key, KeyPress, PointerInput, Response};
-use mui_layout::SpacingToken::S;
+use mui_layout::SpacingToken::{Xs, S};
+
+/// The id the floated tip carries. A leading `/` keeps it out of hit
+/// testing, like every other key the runtime owns.
+const TIP_KEY: &str = "/tip";
 
 /// How long the pointer must rest on a surface before its tip is due.
 pub const TIP_DELAY: f64 = 0.5;
@@ -162,7 +166,7 @@ impl Ui {
     ///     Some(Edit::End) => { /* host.end_gesture(CUTOFF) */ }
     ///     None => {}
     /// }
-    /// let el = slider(&mut ui, "cutoff", "Cutoff", &mut cutoff, 0.0..=1.0);
+    /// let el = slider(&mut ui, "cutoff", "Cutoff", &mut cutoff, 0.0..=1.0).el();
     /// ```
     pub fn edit(&self, id: &str) -> Option<Edit> {
         self.delivered
@@ -476,30 +480,40 @@ impl Ui {
             .filter(|(_, t)| *t >= TIP_DELAY)
             .and_then(|(id, _)| {
                 let s = self.scene.as_ref()?.surface(id)?;
-                Some((
-                    s.tip.clone()?,
-                    Point::new(s.frame.x, s.frame.bottom() + 4.0),
-                ))
+                Some((s.tip.clone()?, id.clone()))
             });
         let mut root = match &tip {
-            Some((t, at)) => {
+            Some((t, anchor)) => {
+                // Under the surface, flipping over it at the bottom edge of
+                // the window: the placement is the pin's, not arithmetic
+                // here. A float is placed in its parent's padding box, but a
+                // pinned one is absolute, so the wrapper only keeps the tip
+                // out of a root that has no children.
                 let float = text(t.clone())
                     .pad(S)
                     .fill(Role::Raised)
                     .radius(6.0)
-                    .float()
-                    .anchor(Align::Start, Align::Start)
-                    .offset(at.x, at.y);
-                // `at` is scene-absolute, and a float is placed at its
-                // parent's padding box, so the tip rides a wrapper with no
-                // padding at 0,0 -- pushing it into the root would displace
-                // every tip by the root's own padding.
+                    .pin(
+                        Pin::to(anchor.clone())
+                            .area(Area::BottomStart)
+                            .gap(Xs)
+                            .fallback(Area::TopStart),
+                    )
+                    .id(TIP_KEY);
                 overlay([root, float])
             }
             None => root,
         };
 
         let pal = self.theme.palette;
+        // Declared state looks first, so a transition springs toward the
+        // style the node actually asked for this frame.
+        let (springs, focus) = (&self.springs, self.focus.as_deref());
+        declared_states(&mut root, &|k, st| match st {
+            State::Hover => springs.get(k).is_some_and(|[h, _]| h.value > 0.5),
+            State::Press => springs.get(k).is_some_and(|[_, p]| p.value > 0.5),
+            State::Focus => focus == Some(k),
+        });
         animating |= transitions(&mut root, &pal, &mut self.motion, dt);
         for (_, s) in self.motion.iter_mut().filter(|(k, _)| k.starts_with('~')) {
             if let Some(s) = s[0].as_mut() {
@@ -544,6 +558,12 @@ impl Ui {
         let ime = self.ime_caret.take().and_then(|(id, at, h)| {
             let f = scene.surface(&id)?.frame;
             Some((Point::new(f.x + at.x, f.y + at.y), Size::new(1.0, h)))
+        });
+        // Where the pin actually put it, so a host placing its own tooltip
+        // window agrees with the one in the scene.
+        let tip = tip.and_then(|(t, _)| {
+            let f = scene.surface(TIP_KEY)?.frame;
+            Some((t, Point::new(f.x, f.y)))
         });
         self.delivered = std::mem::take(&mut self.edits);
         self.scene = Some(scene);
@@ -617,12 +637,14 @@ fn channels(e: &mut Element, pal: &Palette, ch: &mut impl FnMut(usize, f64) -> f
     if let Some(t) = e.text_size.as_mut() {
         *t = ch(6, *t).max(0.0);
     }
-    if let Some(s) = e.style.shadow.as_mut() {
-        s.blur = ch(7, s.blur).max(0.0);
+    for (i, s) in e.style.shadow.iter_mut().enumerate() {
+        s.blur = ch(7 + i, s.blur).max(0.0);
     }
+    // After the shadows, so a two-shadow node's shells keep their own slots.
+    let shells = 7 + e.style.shadow.len();
     for (i, (d, _)) in e.style.shells.iter_mut().enumerate() {
         if let Spacing::Px(v) = d {
-            *v = ch(8 + i, *v).max(0.0);
+            *v = ch(shells + i, *v).max(0.0);
         }
     }
 }
@@ -661,6 +683,22 @@ fn transitions(
         animating |= transitions(c, pal, motion, dt);
     }
     animating
+}
+
+/// Replace every named node's style with what it declared for the states it
+/// is in, in declaration order.
+fn declared_states(n: &mut El, is: &dyn Fn(&str, State) -> bool) {
+    if let Some(k) = n.key().map(str::to_owned) {
+        let e = n.payload_mut();
+        for (st, f) in std::mem::take(&mut e.states) {
+            if is(&k, st) {
+                e.style = f.0(e.style.clone());
+            }
+        }
+    }
+    for c in n.children_mut() {
+        declared_states(c, is);
+    }
 }
 
 /// Push hover and press into every named node's fill, proportionally, and
@@ -1066,6 +1104,39 @@ mod tests {
         assert!(f.edits.is_empty());
     }
 
+    /// A look declared beside the resting one, applied because the runtime
+    /// knows which node the pointer is on -- no `ui.state` in the tree.
+    #[test]
+    fn a_declared_hover_style_is_applied_while_hovered() {
+        let mut ui = Ui::new(Theme::DEFAULT);
+        let tree = || {
+            leaf(40., 40.)
+                .fill(Role::Raised)
+                .on(State::Hover, |s| s.radius(3.))
+                .id("b")
+        };
+        let corner = |ui: &mut Ui, p| {
+            ui.frame(tree(), None, p, 0.016)
+                .unwrap()
+                .scene
+                .paint
+                .iter()
+                .find_map(|p| p.rect.map(|r| r.radius()))
+                .expect("the box paints a rounded rect")
+        };
+        let cold = corner(&mut ui, PointerInput::default());
+        // Hover long enough that the spring passes the halfway mark.
+        let mut warm = cold;
+        for _ in 0..12 {
+            warm = corner(&mut ui, at(10., 10., false));
+        }
+        assert_ne!(
+            cold, 3.,
+            "the resting radius is the theme's, not the hover one"
+        );
+        assert_eq!(warm, 3., "hovered, the declared radius is what paints");
+    }
+
     #[test]
     fn a_cancelled_gesture_still_ends() {
         let mut ui = Ui::new(Theme::DEFAULT);
@@ -1201,11 +1272,11 @@ mod tests {
     fn a_degenerate_or_inverted_range_resolves_and_clamps() {
         let mut ui = Ui::new(Theme::DEFAULT);
         let mut v = 1.0;
-        let el = crate::widgets::slider(&mut ui, "fixed", "Fixed", &mut v, 1.0..=1.0);
+        let el = crate::widgets::slider(&mut ui, "fixed", "Fixed", &mut v, 1.0..=1.0).el();
         ui.frame(el, None, PointerInput::default(), 0.016)
             .expect("a fixed parameter is still a tree");
         let mut down = 0.5;
-        let el = crate::widgets::slider(&mut ui, "down", "Down", &mut down, 1.0..=0.0);
+        let el = crate::widgets::slider(&mut ui, "down", "Down", &mut down, 1.0..=0.0).el();
         ui.frame(el, None, PointerInput::default(), 0.016)
             .expect("and so is a downward one");
     }

@@ -16,17 +16,17 @@ fn main() {
         let (go, _) = button(&ui, "go", "Trigger");
         let card = column([
             row([
-                knob(&mut ui, "cutoff", "Cutoff", &mut cutoff, 0.0..=1.0, 72.0),
-                knob(&mut ui, "res", "Res", &mut res, 0.0..=1.0, 72.0),
+                knob(&mut ui, "cutoff", "Cutoff", &mut cutoff, 0.0..=1.0).el(),
+                knob(&mut ui, "res", "Res", &mut res, 0.0..=1.0).el(),
             ])
             .gap(L)
             .justify(Justify::Center),
-            slider(&mut ui, "gain", "Gain", &mut gain, -24.0..=6.0),
+            slider(&mut ui, "gain", "Gain", &mut gain, -24.0..=6.0).el(),
             row([
                 text("Bypass").fill(Role::Dim),
-                toggle(&ui, "bypass", &mut on),
+                toggle(&ui, "bypass", &mut on).el(),
                 spacer(),
-                go,
+                go.el(),
             ])
             .gap(S)
             .align(Align::Center),

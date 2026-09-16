@@ -5,8 +5,10 @@ plugins. You write a tree the way you would write CSS flexbox with tokens; MUI
 lays it out intrinsically, turns every welded group into one filleted outline,
 derives every shell as a true parallel inset of the outline before it, colours
 every surface from a role palette, and hands a z-ordered paint list to Vello.
-Nothing is placed absolutely: the only coordinates in the system are an
-anchor and an offset, and a slider thumb sits where two flex weights put it.
+Nothing is placed absolutely: a float names a region around another node and
+a slider thumb sits where two flex weights put it. **No runtime style
+strings**: there is no `.class("btn btn-sm")` and there will not be one --
+every value in the DSL is a Rust expression the compiler already checks.
 
 Every library crate is `#![forbid(unsafe_code)]`, dependency-light, and
 compiles to `wasm32-unknown-unknown`. The native preview host is the one
@@ -24,7 +26,7 @@ let mut bypass = false;
 // Built every frame, like an immediate-mode tree. Widgets read last frame's
 // gesture on their id, so state lives in your own variables.
 let root = col![
-    row![title("Filter"), spacer(), toggle(&ui, "bypass", &mut bypass)]
+    row![title("Filter"), spacer(), toggle(&ui, "bypass", &mut bypass).size(S)]
         .center()
         .tip("Bypass the filter"),
     slider(&mut ui, "cutoff", "Cutoff", &mut cutoff, 0.0..=1.0),
@@ -84,10 +86,12 @@ assert_eq!(scene.surface("tab").unwrap().frame.size.width, 92.0);
 | `row([..])`, `column([..])`, `overlay([..])`, `grid(3, [..])` | the same four, taking an iterator |
 | `leaf(w, h)`, `spacer()`, `text("..")` | a sized box, a `grow(1)` gap, a measured text run |
 | `title("..")`, `label("..")`, `caption("..")` | text at 18, 13 and 11 px |
-| `.gap(M)`, `.pad(S)`, `.pad(12.0)` | spacing tokens `Xs S M L Xl` from the theme, or pixels |
+| `.gap(M)`, `.pad(S)`, `.pad(12.0)`, `.gap(step(1.5))` | spacing tokens `Xs S M L Xl` from the theme, `n` units of its grid, or pixels |
 | `.grow(w)`, `.shrink(w)`, `.basis(px)`, `.expand()` | flexbox weights |
 | `.width(Len::Pct(50.0))`, `.aspect(16.0 / 9.0)` | percentage and ratio sizes |
 | `.w(clamp(64.0, 30.0, 220.0))` | CSS `clamp(min, pct%, max)`: fluid between two pixel stops |
+| `.w(cq(40.0))` | a share of the nearest ancestor with a definite size on that axis -- CSS `cqw`/`cqh`, with no `container-type` to declare |
+| `fits![wide, mid, thin]`, `fits([..])` | SwiftUI's `ViewThatFits`: the first candidate that measures inside the room on offer is the one that lays out and paints, no second build pass |
 | `SceneSpec::new(root).scale(2.0)`, `Ui::scale` | the host's device pixels per unit: every edge and baseline the walk paints lands on the device grid, so abutting fills have no seam |
 | `.w(120)`, `.h(40)`, `.square(28)` | the same sizes taking a bare integer |
 | `.align(..)`, `.justify(..)`, `.anchor(x, y)`, `.offset(dx, dy)` | cross axis, main axis, overlay placement, nudge |
@@ -98,15 +102,31 @@ assert_eq!(scene.surface("tab").unwrap().frame.size.width, 92.0);
 | `.min_col(120.0)` | `repeat(auto-fit, minmax(120px, 1fr))`: the grid drops columns until each clears 120 px |
 | `.push(child)`, `.baseline()`, `.lines(2)` | append to a container, sit text children on one baseline, cap a wrapped label |
 | `.fill(Primary)`, `.fill(Color::..)`, `.fill(Gradient::vertical(a, b))` | a palette role, a literal, a gradient |
+| `Gradient::linear(180., ..)`, `::radial((0.3, 0.3), 0.6, ..)`, `::conic(-135., ..)` | the three ramps, stops as roles or colours: a knob arc is a conic gradient and no geometry |
 | `.fill(Fill::Image(img, Fit::Cover))` | an RGBA buffer as a fill: `Cover`, `Contain` or `Fill` (`vello_cpu` paints the pixmap, `vello_hybrid` uploads it once into its atlas) |
-| `.stroke(Ink)`, `.radius(8.0)`, `.pill()`, `.shadow(Shadow::soft(12.0))` | outline, corners, shadow |
+| `.stroke(Ink)`, `.radius(8.0)`, `.pill()`, `.shadow(Shadow::soft(12.0))` | outline, corners, a shadow appended to the list |
+| `.radius(Corner::Field)` | the theme's radius for this kind of thing: `Selector` (toggle, badge), `Field` (button, input, tab), `Box` (card, panel) |
+| `.corners(CornerStyle::Squircle)` | the curve the corners turn through, apart from how big they are: a continuous superellipse instead of a circular arc, through welds, shells and strokes alike |
+| `.join()` | butt a row's or column's children into one strip: the gap closes, every seam goes square, the container's own corner rounds the two ends |
+| `.shadows([a, b])`, `.elevation(Elevation::Raised)` | replace the list; a contact and an ambient shadow, from the theme's steps |
+| `.shadow(Shadow::inset(4.0))` | cast inward instead, clipped to the outline: a recess, a floor under glass |
+| `.stroke(Ink.alpha(0.12))` | a role at an alpha: a hairline that still tracks the palette |
+| `.preset(&card())`, `.base(&panel())` | merge a prepared `Style` over or under this one, field by field: the side that states something wins |
+| `panel()`, `card()`, `glass()`, `chip("A")`, `tile(el)` | the presets in `mui::presets`: three styles to merge, two elements to finish. `glass()` is a translucent fill, a bright 1 px edge and an inner floor -- there is no backdrop blur and there will not be one |
+| `.apply(f)`, `.when(cond, f)` | hand the node to a builder run, conditionally or not |
+| `.on(State::Hover, \|s\| s.stroke(Ink))` | the look for a state, declared beside the resting one; `Hover`, `Press`, `Focus` |
+| `.full()` | all of the parent, both axes |
 | `.animate()`, `.transition(Spring::new(0.3, 1.0))` | this node's fill, stroke, radius, text size and shadow spring to their new values |
 | `.shell(d, fill)` | a parallel inset of the outline before it, cumulative |
 | `.weld(fill)` | paint the union of the children's frames as one filleted shape; its shadow is the union of their blurs |
+| `.cut(el)`, `.keep(el)` | boolean difference and intersection against a child placed like any floating one: a hole, or only the overlap. The shell, the stroke and the clip all follow the result, as they do a weld. A leaf has no children, so wrap one in `stack![..]` to carve it |
+| `.mask(fill)` | paint `fill` source-atop the node's own subtree: a scroll fade is a ramp from transparent to the surface colour. It paints onto the shape, it cannot erase alpha -- an alpha mask layer is CPU-only in vello |
 | `.blend(Mix::Multiply)`, `.opacity(0.5)` | composite this node's whole subtree as one layer |
 | `.scroll()`, `.clip()`, `.float()` | overflow the wheel slides, overflow cut off, a child painted over everything |
+| `.pin(Pin::to("field").area(Area::Bottom).gap(Xs).match_width().fallback(Area::Top))` | a float placed against another node by name: one of nine named regions around it, a gap, a size taken from it, and areas tried in order until one fits the window. `.tip("..")` is this. Keep `.offset(dx, dy)` for the nudge no region can name |
 | `canvas(\|size\| vec![Draw::fill(path, Ink)])` | your own paths, in the node's own space |
 | `.cursor(Cursor::Hand)`, `.tip("..")`, `.focusable()` | the pointer, a tooltip after half a second, Tab stops here |
+| `button(&ui, "save", "Save").0.variant(Variant::Soft).size(S)` | a control's look and size: `Solid`, `Soft`, `Outline`, `Ghost`, and the same five sizes everywhere. `.role(Danger)` recolours it, `.px(72.0)` is the hatch, `.el()` finishes it |
 | `.role(Kind::Button)`, `.label("OK")` | what a screen reader hears: `mui-access` reads both off the surface |
 | `.id("name")` | a gesture target and a lookup key; unnamed nodes are decoration |
 | `Path::from_svg_data("M0 0 h10 a5 5 0 0 1 0 10 z")` | an icon's `d` attribute as a `Path`, arcs and all |
@@ -134,7 +154,7 @@ const NAMES: [&str; 5] = ["Drive", "Tilt", "Mix", "Air", "Floor"];
 let params: Vec<El> = NAMES
     .iter()
     .zip(&mut values)
-    .map(|(n, v)| slider(&mut ui, n, n, v, 0.0..=1.0))
+    .map(|(n, v)| slider(&mut ui, n, n, v, 0.0..=1.0).el())
     .collect();
 
 let curve = canvas(|size| {
@@ -150,7 +170,7 @@ let root = col![
         title("Kurv"),
         text_input(&mut ui, "preset", &mut preset).w(140),
         spacer(),
-        toggle(&ui, "bypass", &mut bypass).tip("Bypass"),
+        toggle(&ui, "bypass", &mut bypass).el().tip("Bypass"),
     ]
     .gap(S)
     .center(),
@@ -244,7 +264,7 @@ let mut gain = 0.5;
 let sweep = ui.tween("sweep", gain);
 let root = col![
     leaf(60.0, 60.0).fill(Primary).animate().id("lamp"),
-    knob(&mut ui, "gain", "Gain", &mut gain, 0.0..=1.0, 72.0),
+    knob(&mut ui, "gain", "Gain", &mut gain, 0.0..=1.0).el(),
 ];
 let frame = ui.frame(root, Some(Size::new(200.0, 200.0)), Input::default(), 1.0 / 60.0).unwrap();
 assert!(sweep <= gain && frame.edits.is_empty());
@@ -297,7 +317,7 @@ pub const SKIN: Theme = Theme {
         hover: 0.11,
         ..Palette::NEUTRAL
     },
-    corners: CornerProfile::new(28.0, 32.0),
+    corners: Corners { box_: 28.0, concave: 32.0, ..Corners::DEFAULT },
     ..Theme::DEFAULT
 };
 let light = SKIN.palette.with_mode(Mode::Light);
@@ -309,9 +329,11 @@ light-theme half because there is nothing in it a mode could contradict.
 
 ## Geometry rules
 
-- A plain node's outline is its frame rounded by `Radius::{Theme, Px, Scale, Pill}`.
+- A plain node's outline is its frame rounded by `Radius::{Theme, Px, Token, Scale, Pill}`,
+  and drawn with circular or squircle corners (`CornerStyle`). A squircle gives
+  up the analytic blur: its shells and shadows come off the outline itself.
 - A welded node unions the children's **sharp** frames first and fillets the
-  result second, with the theme's convex and concave radii, so old rounded
+  result second, with the theme's box and concave radii, so old rounded
   corners never leak into a new junction.
 - A shell is an inset of the **final** outline before it: analytic for a
   rounded rectangle (`radius − d`, concentric arcs), a parallel offset of the

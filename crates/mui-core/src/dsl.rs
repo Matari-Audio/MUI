@@ -9,7 +9,8 @@
 //!     .w(pct(100.));
 //! assert_eq!(bar.children().len(), 3);
 //! ```
-use crate::element::{text, El, Styled};
+use crate::element::{text, Carve, El, Styled};
+use crate::style::Radius;
 use mui_layout::{Align, Justify, Len};
 
 /// A length argument: a `Len`, or a bare number in pixels. `Len` lives in
@@ -54,6 +55,40 @@ pub trait Sugar: Sized {
     fn end(self) -> Self;
     /// Children pushed to the two ends, cross-axis centred.
     fn between(self) -> Self;
+    /// All of the parent, both axes: `.w(pct(100.)).h(pct(100.))`.
+    fn full(self) -> Self;
+    /// Butt these children into one control: the gap closes, every child
+    /// goes square, and the container clips them to its own corner. The
+    /// strip's outer corners keep the radius; every seam inside it is
+    /// square. daisyUI's `join`, on whichever axis the container already
+    /// runs.
+    ///
+    /// ```
+    /// use mui_core::prelude::*;
+    /// let mut strip = row![leaf(60., 28.), leaf(60., 28.)].radius(Corner::Field).join();
+    /// assert_eq!(strip.children_mut()[0].style_mut().radius, Radius::Px(0.));
+    /// ```
+    fn join(self) -> Self;
+    /// Takes `el`'s shape out of this node's outline: boolean difference.
+    /// The child is placed like any floating overlay child, so `.center()`,
+    /// `.w(..)` and the rest position the hole, and then it is never
+    /// painted. The shell, the border and the clip all follow the result,
+    /// exactly as they follow a [`weld`](Styled::weld).
+    ///
+    /// ```
+    /// use mui_core::prelude::*;
+    /// let ring = stack![].square(64.).pill().fill(Primary).cut(leaf(40., 40.).pill());
+    /// assert!(ring.children()[0].payload().carve.is_some());
+    /// ```
+    fn cut(self, el: El) -> Self;
+    /// Keeps only what `el` overlaps: boolean intersection. See [`cut`](Sugar::cut).
+    ///
+    /// ```
+    /// use mui_core::prelude::*;
+    /// let half = stack![].square(64.).fill(Primary).keep(leaf(32., 64.));
+    /// assert!(half.children()[0].payload().carve.is_some());
+    /// ```
+    fn keep(self, el: El) -> Self;
 }
 impl Sugar for El {
     fn w(self, len: impl IntoLen) -> Self {
@@ -78,6 +113,33 @@ impl Sugar for El {
     fn between(self) -> Self {
         self.align(Align::Center).justify(Justify::SpaceBetween)
     }
+    fn full(self) -> Self {
+        self.w(Len::Pct(100.)).h(Len::Pct(100.))
+    }
+    fn join(mut self) -> Self {
+        for c in self.children_mut() {
+            c.payload_mut().style.radius = Radius::Px(0.);
+        }
+        // The container's own outline is what rounds the two ends: a clip,
+        // not four per-corner radii the rest of the system would have to
+        // learn.
+        self.gap(0.).clip()
+    }
+    fn cut(self, el: El) -> Self {
+        self.push(carved(el, Carve::Cut))
+    }
+    fn keep(self, el: El) -> Self {
+        self.push(carved(el, Carve::Keep))
+    }
+}
+
+// ponytail: a carve rides along as a floating child so layout sizes and
+// places it for free. A leaf has no children, so `.cut` on one is a no-op;
+// wrap it in `stack![..]` if you need a hole in a leaf.
+fn carved(el: El, how: Carve) -> El {
+    let mut el = el.float();
+    el.payload_mut().carve = Some(how);
+    el
 }
 
 // ponytail: fixed px, because `Theme` carries one text size and no type
@@ -126,6 +188,21 @@ macro_rules! grid {
     };
 }
 
+/// The first of these that fits the room on offer wins; the rest are not
+/// painted and take no space. Declare them widest first.
+///
+/// ```
+/// use mui_core::prelude::*;
+/// let bar = fits![title("Export selection"), text("Export"), leaf(16., 16.)];
+/// assert_eq!(bar.children().len(), 3);
+/// ```
+#[macro_export]
+macro_rules! fits {
+    ($($child:expr),* $(,)?) => {
+        $crate::fits(::std::vec![$($crate::IntoEl::into_el($child)),*])
+    };
+}
+
 #[cfg(test)]
 mod dsl_tests {
     use crate::prelude::*;
@@ -144,6 +221,7 @@ mod dsl_tests {
         assert_eq!(leaf(1., 1.).w(120), leaf(1., 1.).width(Len::Px(120.)));
         assert_eq!(leaf(1., 1.).w(pct(50.)), leaf(1., 1.).width(Len::Pct(50.)));
         assert_eq!(leaf(1., 1.).square(8), leaf(1., 1.).size(8., 8.));
+        assert_eq!(leaf(1., 1.).full(), leaf(1., 1.).w(pct(100.)).h(pct(100.)));
         let c = row![].center();
         assert_eq!(c, row![].align(Align::Center).justify(Justify::Center));
     }

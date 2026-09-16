@@ -9,7 +9,7 @@
 //!
 //! The test at the bottom is what keeps that true.
 
-use mui::prelude::{CornerProfile, Mode, Palette, Pigment, Theme};
+use mui::prelude::{Corners, Mode, Palette, Pigment, Theme};
 
 /// Two hues and a corner profile. Every other colour the gallery paints --
 /// every surface, every ink, every hover, and the entire light theme -- is
@@ -32,7 +32,11 @@ pub const SKIN: Theme = Theme {
         hover: 0.11,
         ..Palette::NEUTRAL
     },
-    corners: CornerProfile::new(28.0, 32.0),
+    corners: Corners {
+        box_: 28.0,
+        concave: 32.0,
+        ..Corners::DEFAULT
+    },
     ..Theme::DEFAULT
 };
 

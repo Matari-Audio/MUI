@@ -744,3 +744,138 @@ fn a_squeezed_flex_item_is_measured_again_at_its_share() {
     assert_eq!((p.size.width, p.size.height), (100., 100.));
     assert_eq!(l.frame("root").map(|f| f.size.height), None);
 }
+
+/// Padding has one slot: the last call wins, whatever spelling it used.
+#[test]
+fn a_pixel_pad_clears_the_token_before_it() {
+    let scale = SpacingScale::DEFAULT;
+    let n = Node::<()>::row([]).pad(SpacingToken::M).pad(12.0);
+    assert_eq!(n.padding(scale), Insets::all(12.0));
+    let n = Node::<()>::row([]).pad(12.0).pad(SpacingToken::M);
+    assert_eq!(n.padding(scale), Insets::all(scale.m));
+    let n = Node::<()>::row([])
+        .pad(SpacingToken::M)
+        .pad(Spacing::step(3.0));
+    assert_eq!(n.padding(scale), Insets::all(12.0));
+}
+
+/// Three real subtrees, largest first, at the three window widths a plugin
+/// is dragged to: the richest one that fits wins, the losers get empty
+/// frames in their own slots, and nothing is built twice.
+#[test]
+fn fits_keeps_the_first_candidate_that_clears_the_offered_width() {
+    let head = || {
+        Node::fits([
+            row([
+                leaf(120., 20.).id("name"),
+                leaf(80., 20.).id("version"),
+                leaf(80., 20.).id("meter"),
+            ])
+            .gap(10.)
+            .id("wide"),
+            row([leaf(120., 20.).id("name2"), leaf(80., 20.).id("version2")])
+                .gap(10.)
+                .id("mid"),
+            leaf(120., 20.).id("thin"),
+        ])
+        .id("head")
+    };
+    let shown = |w: f64| {
+        let l = resolve(&head(), Some(Size::new(w, 20.)), Default::default()).unwrap();
+        // Every candidate has a frame, in tree order; only one has a size.
+        assert_eq!(l.all().len(), 1 + 3 + 1 + 2 + 1 + 1);
+        ["wide", "mid", "thin"]
+            .into_iter()
+            .filter(|k| l.frame(k).unwrap().size.width > 0.0)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(shown(400.), ["wide"]);
+    assert_eq!(shown(220.), ["mid"]);
+    assert_eq!(shown(60.), ["thin"]);
+    // The children of a candidate that lost are empty too, and sit at the
+    // fits node's own origin rather than at the window's.
+    let l = resolve(
+        &column([leaf(0., 40.), head()]),
+        Some(Size::new(60., 60.)),
+        Default::default(),
+    )
+    .unwrap();
+    assert_eq!(l.frame("name").unwrap().size, Size::ZERO);
+    assert_eq!(l.frame("name").unwrap().y, l.frame("head").unwrap().y);
+}
+
+/// A percentage of the parent and a percentage of the container are the same
+/// number until the parent stops having a size of its own.
+#[test]
+fn a_container_share_skips_the_hugging_parent_between() {
+    let bar = |len: Len| row([row([leaf(0., 8.).width(len).id("bar")]).id("hug")]).width(200.);
+    let at = |len: Len| {
+        resolve(&bar(len), Some(Size::new(200., 8.)), Default::default())
+            .unwrap()
+            .frame("bar")
+            .unwrap()
+            .size
+            .width
+    };
+    assert_eq!(at(Len::Container(50.)), 100.);
+    // The hugging row measured nothing, so a share of *it* is nothing.
+    assert_eq!(at(Len::Pct(50.)), 0.);
+    // With a definite parent the two agree: the parent is the container.
+    let sized = |len: Len| {
+        let t = row([row([leaf(0., 8.).width(len).id("bar")]).width(80.)]).width(200.);
+        resolve(&t, Some(Size::new(200., 8.)), Default::default())
+            .unwrap()
+            .frame("bar")
+            .unwrap()
+            .size
+            .width
+    };
+    assert_eq!(
+        (sized(Len::Container(50.)), sized(Len::Pct(50.))),
+        (40., 40.)
+    );
+}
+
+#[test]
+fn a_pin_falls_back_to_the_first_area_that_fits_the_root() {
+    // The field sits at the bottom of the window, so a menu under it would
+    // hang out of the root; the fallback puts it above instead.
+    let menu = |gap: f64| {
+        let m = leaf(80., 60.)
+            .pin(
+                Pin::to("field")
+                    .area(Area::BottomStart)
+                    .gap(gap)
+                    .fallback(Area::TopStart),
+            )
+            .id("menu");
+        let field = leaf(80., 24.).anchor(Align::Start, Align::End).id("field");
+        resolve(
+            &overlay([field, m]),
+            Some(Size::new(200., 100.)),
+            Default::default(),
+        )
+        .unwrap()
+        .frame("menu")
+        .unwrap()
+    };
+    assert_eq!((menu(4.).x, menu(4.).y), (0., 12.), "above, by the gap");
+    // Neither area fits with a gap that big, so the preferred one is pulled
+    // back inside the root rather than painted off-window.
+    assert_eq!(menu(90.).y, 40.);
+}
+
+#[test]
+fn a_matched_pin_takes_the_anchor_width() {
+    let tree = overlay([
+        leaf(90., 24.)
+            .anchor(Align::Start, Align::Start)
+            .id("field"),
+        leaf(10., 20.)
+            .pin(Pin::to("field").area(Area::BottomStart).match_width())
+            .id("menu"),
+    ]);
+    let l = resolve(&tree, Some(Size::new(200., 200.)), Default::default()).unwrap();
+    assert_eq!(l.frame("menu").unwrap().size.width, 90.);
+    assert_eq!(l.frame("menu").unwrap().y, 24.);
+}

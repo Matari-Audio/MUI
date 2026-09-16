@@ -10,7 +10,8 @@
 //! assert_eq!(card.children().len(), 2);
 //! ```
 use crate::motion::Spring;
-use crate::style::{Cursor, Fill, Mix, Radius, Shadow, Stroke, Style};
+use crate::style::{Cursor, Elevation, Fill, Mix, Radius, Shadow, Stroke, Style};
+use mui_geometry::CornerStyle;
 use mui_geometry::Path;
 use mui_layout::{Node, Size, Spacing};
 use std::sync::Arc;
@@ -52,6 +53,63 @@ impl PartialEq for Canvas {
     fn eq(&self, o: &Self) -> bool {
         Arc::ptr_eq(&self.0, &o.0)
     }
+}
+
+/// An interaction state a node can declare its look for, beside the resting
+/// one. See [`Styled::on`].
+///
+/// ```
+/// use mui_core::prelude::*;
+/// let tab = leaf(64., 28.).fill(Field).on(State::Focus, |s| s.stroke(Ink)).id("tab");
+/// assert_eq!(tab.payload().states.len(), 1);
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum State {
+    Hover,
+    Press,
+    Focus,
+}
+
+/// What a node looks like in one [`State`]: its resting style in, the style
+/// to paint out. [`Styled::on`] wraps the closure in one; two of them are
+/// equal only when they are the same closure.
+///
+/// ```
+/// use mui_core::prelude::*;
+/// # use mui_core::StateStyle;
+/// # use std::sync::Arc;
+/// let lift = StateStyle(Arc::new(|s: Style| s.fill(Primary)));
+/// assert_eq!(lift.0(Style::default()).fill, Fill::Role(Role::Primary));
+/// ```
+#[derive(Clone)]
+pub struct StateStyle(pub Arc<dyn Fn(Style) -> Style>);
+impl std::fmt::Debug for StateStyle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("StateStyle(..)")
+    }
+}
+impl PartialEq for StateStyle {
+    fn eq(&self, o: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &o.0)
+    }
+}
+
+/// What a child does to its parent's outline instead of painting itself.
+/// `.weld` is the third of these, and the only one that reads every child at
+/// once, so it stays a flag on the parent's style.
+///
+/// ```
+/// use mui_core::prelude::*;
+/// # use mui_core::Carve;
+/// let ring = stack![].square(64.).pill().fill(Primary).cut(leaf(40., 40.).pill());
+/// assert_eq!(ring.children()[0].payload().carve, Some(Carve::Cut));
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Carve {
+    /// Boolean difference: the child's shape is taken out of the parent's.
+    Cut,
+    /// Boolean intersection: only the overlap survives.
+    Keep,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -103,10 +161,17 @@ pub struct Element {
     pub lines: Option<usize>,
     /// What this node means: the role and name mui-access reports.
     pub semantics: Option<Semantics>,
+    /// Looks declared for interaction states, applied in order by the
+    /// runtime before the tree is resolved. See [`Styled::on`].
+    pub states: Vec<(State, StateStyle)>,
     /// The spring this node's paint chases when its declared style changes.
     /// Only meaningful on a node with an id: the runtime has nothing to
     /// compare an anonymous node against. See [`Styled::transition`].
     pub transition: Option<Spring>,
+    /// Set on a child pushed by [`Sugar::cut`](crate::Sugar::cut) or
+    /// [`Sugar::keep`](crate::Sugar::keep): the child shapes its parent's
+    /// outline instead of painting itself.
+    pub carve: Option<Carve>,
 }
 
 /// A styled layout node: the type every constructor here returns.
@@ -130,6 +195,17 @@ pub fn overlay(children: impl IntoIterator<Item = El>) -> El {
 }
 pub fn grid(cols: usize, children: impl IntoIterator<Item = El>) -> El {
     Node::grid(cols, children)
+}
+/// Shows the first candidate that fits the room on offer, widest first.
+/// See [`Node::fits`] and the `fits!` macro.
+///
+/// ```
+/// use mui_core::prelude::*;
+/// let bar = fits([text("Save changes"), text("Save"), leaf(8., 8.)]);
+/// assert_eq!(bar.children().len(), 3);
+/// ```
+pub fn fits(candidates: impl IntoIterator<Item = El>) -> El {
+    Node::fits(candidates)
 }
 /// A label, measured from the scene's font. Ink defaults to whatever reads on
 /// the nearest painted ancestor; `.fill(..)` overrides it.
@@ -167,11 +243,18 @@ impl IntoEl for String {
     }
 }
 
-/// Paint builders on any `El`. One trait, so `.fill(..)` chains after
-/// `.gap(..)` in either order.
-pub trait Styled: Sized {
+/// The paint builders, on an `El` or on a bare [`Style`]: one trait, so
+/// `.fill(..)` chains after `.gap(..)` in either order, and a state closure
+/// says `|s| s.fill(..)` with the same words the tree used.
+///
+/// ```
+/// use mui_core::prelude::*;
+/// let bare = Style::default().fill(Raised).radius(12.);
+/// let mut node = leaf(80., 24.).preset(&bare);
+/// assert_eq!(node.style_mut().radius, Radius::Px(12.));
+/// ```
+pub trait Paints: Sized {
     fn style_mut(&mut self) -> &mut Style;
-    fn element_mut(&mut self) -> &mut Element;
 
     fn fill(mut self, f: impl Into<Fill>) -> Self {
         self.style_mut().fill = f.into();
@@ -204,9 +287,54 @@ pub trait Styled: Sized {
     fn pill(self) -> Self {
         self.radius(Radius::Pill)
     }
-    fn shadow(mut self, s: Shadow) -> Self {
-        self.style_mut().shadow = Some(s);
+    /// The curve this node's corners turn through, separately from how big
+    /// they are: a continuous superellipse instead of a circular arc.
+    ///
+    /// It flows through whatever the node's outline turns out to be -- a
+    /// welded union, its shells, its stroke -- because it restyles the arcs
+    /// the outline is made of.
+    ///
+    /// ```
+    /// use mui_core::prelude::*;
+    /// let mut card = leaf(80., 48.).radius(16.).corners(CornerStyle::Squircle);
+    /// assert_eq!(card.style_mut().corners, CornerStyle::Squircle);
+    /// ```
+    fn corners(mut self, c: CornerStyle) -> Self {
+        self.style_mut().corners = c;
         self
+    }
+    /// Add a shadow. Shadows stack, so a tight contact and a wide ambient
+    /// are two calls; [`Paints::shadows`] replaces the list instead.
+    ///
+    /// ```
+    /// use mui_core::prelude::*;
+    /// let mut el = leaf(80., 24.).shadow(Shadow::soft(2.)).shadow(Shadow::soft(12.));
+    /// assert_eq!(el.style_mut().shadow.len(), 2);
+    /// ```
+    fn shadow(mut self, s: Shadow) -> Self {
+        self.style_mut().shadow.push(s);
+        self
+    }
+    /// Replace the whole shadow list.
+    ///
+    /// ```
+    /// use mui_core::prelude::*;
+    /// let mut el = leaf(80., 24.).shadow(Shadow::soft(12.)).shadows([]);
+    /// assert!(el.style_mut().shadow.is_empty());
+    /// ```
+    fn shadows(mut self, s: impl IntoIterator<Item = Shadow>) -> Self {
+        self.style_mut().shadow = s.into_iter().collect();
+        self
+    }
+    /// The theme's shadow list for this step off the surface.
+    ///
+    /// ```
+    /// use mui_core::prelude::*;
+    /// let mut el = leaf(80., 24.).elevation(Elevation::Floating);
+    /// assert_eq!(el.style_mut().shadow.len(), 2);
+    /// ```
+    fn elevation(self, e: Elevation) -> Self {
+        self.shadows(e.shadows())
     }
     /// A ring `d` inside the previous outline, painted `f`. Stack them for
     /// constant-thickness nesting.
@@ -235,6 +363,26 @@ pub trait Styled: Sized {
         l.1 = o;
         self
     }
+    /// Paint `f` over everything this node and its subtree drew, and only
+    /// where they drew it: one source-atop layer, no mask buffer, both
+    /// backends.
+    ///
+    /// A ramp from the surface colour to transparent is the fade at the
+    /// clipped edge of a scroll; a ramp between two roles over a label is a
+    /// gradient-tinted glyph. What it cannot do is cut alpha out of the
+    /// node -- source-atop paints *onto* the shape, it does not erase it.
+    ///
+    /// ```
+    /// use mui_core::prelude::*;
+    /// # use mui_core::Fill;
+    /// let fade = Gradient::linear(180., [(0.8, Surface.alpha(0.)), (1., Surface.into())]);
+    /// let mut list = col!["one", "two"].scroll().mask(fade);
+    /// assert!(!list.style_mut().mask.is_none());
+    /// ```
+    fn mask(mut self, f: impl Into<Fill>) -> Self {
+        self.style_mut().mask = f.into();
+        self
+    }
     /// Paint the union of the children's frames as one filleted shape.
     fn weld(mut self, f: impl Into<Fill>) -> Self {
         let s = self.style_mut();
@@ -242,19 +390,103 @@ pub trait Styled: Sized {
         s.fill = f.into();
         self
     }
-    fn text_size(mut self, px: f64) -> Self {
-        self.element_mut().text_size = Some(px);
+    /// Merge a prepared style *over* this one: `.preset(&card())`. Every
+    /// field the preset states wins; the rest of the chain survives.
+    ///
+    /// ```
+    /// use mui_core::prelude::*;
+    /// # use mui_core::Style;
+    /// let card = Style { radius: Radius::Px(12.), ..Style::default() };
+    /// let mut el = leaf(80., 24.).fill(Primary).preset(&card);
+    /// assert_eq!(el.style_mut().radius, Radius::Px(12.));
+    /// assert_eq!(el.style_mut().fill, Fill::Role(Role::Primary));
+    /// ```
+    fn preset(mut self, s: &Style) -> Self {
+        let slot = self.style_mut();
+        *slot = slot.over(s);
         self
     }
-    /// Copy a prepared style: `.styled(&CARD)`.
-    fn styled(mut self, s: &Style) -> Self {
-        *self.style_mut() = s.clone();
+    /// Merge a prepared style *under* this one: a default the rest of the
+    /// chain, before or after, is free to override.
+    ///
+    /// ```
+    /// use mui_core::prelude::*;
+    /// # use mui_core::Style;
+    /// let card = Style { fill: Role::Raised.into(), ..Style::default() };
+    /// let mut el = leaf(80., 24.).fill(Role::Danger).base(&card);
+    /// assert_eq!(el.style_mut().fill, Fill::Role(Role::Danger));
+    /// ```
+    fn base(mut self, s: &Style) -> Self {
+        let slot = self.style_mut();
+        *slot = s.over(slot);
         self
+    }
+    /// Hand the node to `f`: a reusable run of builders, without a trait.
+    ///
+    /// ```
+    /// use mui_core::prelude::*;
+    /// let outlined = |e: El| e.stroke(Ink).radius(8.);
+    /// let mut el = leaf(80., 24.).apply(outlined);
+    /// assert_eq!(el.style_mut().radius, Radius::Px(8.));
+    /// ```
+    fn apply(self, f: impl FnOnce(Self) -> Self) -> Self {
+        f(self)
     }
     /// Pointer shape over this node and, unless they say otherwise, its
     /// children.
     fn cursor(mut self, c: Cursor) -> Self {
         self.style_mut().cursor = Some(c);
+        self
+    }
+    /// Apply `f` only when `cond`: `.when(selected, |e| e.fill(Primary))`.
+    fn when(self, cond: bool, f: impl FnOnce(Self) -> Self) -> Self {
+        if cond {
+            f(self)
+        } else {
+            self
+        }
+    }
+}
+impl Paints for Style {
+    fn style_mut(&mut self) -> &mut Style {
+        self
+    }
+}
+
+/// What a node is, beyond its paint: text, tips, semantics, motion and
+/// the looks it declares for the states it can be in. Only an `El` has
+/// these -- a bare [`Style`] is paint and nothing else.
+///
+/// ```
+/// use mui_core::prelude::*;
+/// let save = leaf(64., 28.).role(Kind::Button).label("Save").tip("Write it out").id("save");
+/// assert!(save.payload().tip.is_some());
+/// ```
+pub trait Styled: Paints {
+    fn element_mut(&mut self) -> &mut Element;
+
+    fn text_size(mut self, px: f64) -> Self {
+        self.element_mut().text_size = Some(px);
+        self
+    }
+    /// Declare what this node looks like while hovered, pressed or focused,
+    /// beside what it looks like at rest. `f` is handed the resting style,
+    /// so it edits rather than replaces, and a later `.fill(..)` is still
+    /// what the state derives from.
+    ///
+    /// Only a node with an id has a state to read; the runtime applies these
+    /// while building the frame. Pair with [`Styled::animate`] to cross
+    /// rather than cut.
+    ///
+    /// ```
+    /// use mui_core::prelude::*;
+    /// let mut el = leaf(80., 24.).fill(Field).on(State::Hover, |s| s.radius(4.)).id("b");
+    /// assert_eq!(el.element_mut().states.len(), 1);
+    /// ```
+    fn on(mut self, state: State, f: impl Fn(Style) -> Style + 'static) -> Self {
+        self.element_mut()
+            .states
+            .push((state, StateStyle(Arc::new(f))));
         self
     }
     fn tip(mut self, s: impl Into<String>) -> Self {
@@ -317,20 +549,86 @@ pub trait Styled: Sized {
     fn animate(self) -> Self {
         self.transition(Spring::DEFAULT)
     }
-    /// Apply `f` only when `cond`: `.when(selected, |e| e.fill(Primary))`.
-    fn when(self, cond: bool, f: impl FnOnce(Self) -> Self) -> Self {
-        if cond {
-            f(self)
-        } else {
-            self
-        }
-    }
 }
-impl Styled for El {
+impl Paints for El {
     fn style_mut(&mut self) -> &mut Style {
         &mut self.payload_mut().style
     }
+}
+impl Styled for El {
     fn element_mut(&mut self) -> &mut Element {
         self.payload_mut()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::prelude::*;
+    use crate::Style;
+
+    fn card() -> Style {
+        Style {
+            fill: Raised.into(),
+            radius: Radius::Px(12.),
+            ..Style::default()
+        }
+    }
+
+    /// The whole merge rule: per field, the side that states something wins,
+    /// and which side that is depends only on which method was called.
+    #[test]
+    fn preset_wins_per_field_and_base_loses_per_field() {
+        let mut over = leaf(10., 10.).fill(Primary).stroke(Ink).preset(&card());
+        let s = over.style_mut();
+        assert_eq!((s.fill.clone(), s.radius), (card().fill, card().radius));
+        assert!(s.stroke.is_some(), "a field the preset left unset survives");
+
+        let mut under = leaf(10., 10.).fill(Primary).base(&card());
+        let s = under.style_mut();
+        assert_eq!((s.fill.clone(), s.radius), (Primary.into(), card().radius));
+    }
+
+    /// One slot per concept: a second spelling of the same thing replaces
+    /// the first, and a different thing does not.
+    #[test]
+    fn radius_and_stroke_keep_one_slot_each() {
+        assert_eq!(
+            leaf(10., 10.).pill().radius(8.).style_mut().radius,
+            Radius::Px(8.)
+        );
+        assert_eq!(
+            leaf(10., 10.).radius(8.).pill().style_mut().radius,
+            Radius::Pill
+        );
+        let mut el = leaf(10., 10.).stroke_width(2.).stroke(Ink);
+        let stroke = el.style_mut().stroke.clone().expect("set");
+        assert_eq!((stroke.fill, stroke.width), (Ink.into(), Some(2.)));
+    }
+
+    /// A joined strip says it once, on the container: the children go
+    /// square and its own corner is what rounds the two ends.
+    #[test]
+    fn join_squares_every_inner_corner_and_keeps_the_strips_own() {
+        let mut strip = row![leaf(60., 28.), leaf(60., 28.), leaf(60., 28.)]
+            .radius(12.)
+            .join();
+        assert_eq!(strip.style_mut().radius, Radius::Px(12.));
+        assert!(strip.is_clip(), "the ends are rounded by the clip");
+        for c in strip.children_mut() {
+            assert_eq!(c.style_mut().radius, Radius::Px(0.));
+        }
+    }
+
+    /// A role at an alpha is still the role: it tracks the palette, and it
+    /// is not the literal colour a light-mode eyedropper would give.
+    #[test]
+    fn a_faded_role_resolves_through_the_palette() {
+        let p = crate::Palette::NEUTRAL;
+        let under = p.surface();
+        let Some(crate::Paint::Solid(c)) = Ink.alpha(0.12).paint(&p, under) else {
+            panic!("a faded role paints solid");
+        };
+        assert!((c.alpha() - 0.12).abs() < 1e-6);
+        assert_eq!(c.with_alpha(1.0), p.on(under));
     }
 }

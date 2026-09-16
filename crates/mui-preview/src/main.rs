@@ -110,7 +110,9 @@ fn parse_theme(src: &str) -> (Theme, Vec<String>) {
             "primary_chroma" => t.palette.primary.chroma = f,
             "step" => t.palette.step = f,
             "hover" => t.palette.hover = f,
-            "corners_convex" => t.corners.convex = v,
+            "corners_selector" => t.corners.selector = v,
+            "corners_field" => t.corners.field = v,
+            "corners_box" => t.corners.box_ = v,
             "corners_concave" => t.corners.concave = v,
             k => bad.push(format!("line {}: unknown key `{k}`", n + 1)),
         }
@@ -333,15 +335,21 @@ impl App {
         ];
         side.extend((0..self.scenes.len()).map(|i| {
             let on = i == self.selected;
-            row([text(self.scenes[i].name())])
-                .pad_xy(10.0, 6.0)
-                .radius(8.0)
-                .fill(if on { Role::Primary } else { Role::Raised })
-                .id(format!("scene-{i}"))
+            let (item, _) = button(ui, &format!("scene-{i}"), self.scenes[i].name());
+            item.variant(if on { Variant::Solid } else { Variant::Soft })
+                .size(S)
+                .el()
+                .radius(Corner::Field)
+                .w(pct(100.))
         }));
         let scene = &mut self.scenes[self.selected];
         let switch = |label: &str, id: &str, v: &mut bool| {
-            row([text(label).fill(Role::Dim), spacer(), toggle(ui, id, v)]).align(Align::Center)
+            row([
+                text(label).fill(Role::Dim),
+                spacer(),
+                toggle(ui, id, v).el(),
+            ])
+            .align(Align::Center)
         };
         side.push(switch("light", "light", &mut self.light));
         side.push(switch("frames", "frames", &mut self.frames));

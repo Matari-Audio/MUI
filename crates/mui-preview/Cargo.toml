@@ -5,6 +5,12 @@ edition.workspace = true
 license.workspace = true
 publish = false
 
+[features]
+default = []
+# The CPU rasteriser, for the snapshot test. The gallery itself is a GPU
+# host and never uses it.
+cpu = ["mui/cpu"]
+
 [dependencies]
 mui = { path = "../mui" }
 mui-text = { path = "../mui-text" }
