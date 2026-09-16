@@ -2,6 +2,7 @@
 members = [
   "crates/mui-geometry",
   "crates/mui-style",
+  "crates/mui-motion",
   "crates/mui-layout",
   "crates/mui-tessellate",
   "crates/mui-egui",

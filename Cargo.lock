@@ -1865,6 +1865,7 @@ dependencies = [
  "mui-geometry",
  "mui-input",
  "mui-layout",
+ "mui-motion",
  "mui-tessellate",
  "mui-text",
  "mui-vello",
@@ -1886,6 +1887,7 @@ dependencies = [
  "epaint_default_fonts",
  "mui-geometry",
  "mui-layout",
+ "mui-motion",
  "mui-style",
  "mui-text",
 ]
@@ -1919,6 +1921,10 @@ dependencies = [
 
 [[package]]
 name = "mui-layout"
+version = "0.3.0"
+
+[[package]]
+name = "mui-motion"
 version = "0.3.0"
 
 [[package]]

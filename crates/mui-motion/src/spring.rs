@@ -55,6 +55,16 @@ impl Spring {
             ..Self::at(0.0)
         }
     }
+    /// This spring's shape, resting at `value`: the state a channel starts
+    /// in the first frame it is animated, so nothing flies in from zero.
+    pub fn seeded(self, value: f64) -> Self {
+        Self {
+            value,
+            velocity: 0.0,
+            target: value,
+            ..self
+        }
+    }
     pub fn to(&mut self, target: f64) {
         self.target = target;
     }
@@ -100,6 +110,12 @@ mod tests {
         let s = Spring::new(std::f64::consts::TAU / 20.0, 1.0);
         assert!((s.stiffness - 400.0).abs() < 1e-6);
         assert!((s.damping - 40.0).abs() < 1e-6);
+        let seeded = Spring::new(0.3, 1.0).seeded(7.0);
+        assert_eq!(
+            (seeded.value, seeded.target, seeded.velocity),
+            (7.0, 7.0, 0.0)
+        );
+        assert_eq!(seeded.stiffness, Spring::new(0.3, 1.0).stiffness);
         let mut i = Spring::instant();
         i.to(3.0);
         assert!(!i.step(1.0 / 60.0));

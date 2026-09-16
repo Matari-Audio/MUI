@@ -9,11 +9,11 @@
 //!     .shell(4.0, Role::Field);
 //! assert_eq!(card.children().len(), 2);
 //! ```
-use crate::motion::Spring;
 use crate::{Cursor, Elevation, Fill, Mix, Radius, Shadow, Stroke, Style};
 use mui_geometry::CornerStyle;
 use mui_geometry::Path;
 use mui_layout::{Node, Size, Spacing};
+use mui_motion::Spring;
 use std::sync::Arc;
 
 /// One stroke or fill a canvas hands back, in the canvas's own pixels.

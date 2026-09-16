@@ -20,10 +20,8 @@
 //! ```
 #![forbid(unsafe_code)]
 
-pub mod curve;
 mod dsl;
 mod element;
-mod motion;
 mod scene;
 
 pub use dsl::{caption, label, title, IntoLen, Sugar};
@@ -31,12 +29,12 @@ pub use element::{
     canvas, column, fits, grid, leaf, overlay, row, spacer, text, Canvas, Carve, Content, Draw, El,
     Element, IntoEl, Kind, Paints, Semantics, State, StateStyle, Styled,
 };
-pub use motion::Spring;
 pub use mui_geometry::CornerStyle;
 pub use mui_layout::{
     Align, Area, Frame, Insets, Justify, Layout, Len, Limits, Match, Node, Pin, Size, Spacing,
     SpacingScale, SpacingToken,
 };
+pub use mui_motion::{curve, Spring};
 pub use mui_style::{
     Color, Corner, Corners, Cursor, Elevation, Fill, Fit, Gradient, GradientKind, Image, Mix, Mode,
     Paint, Palette, Pigment, Radius, Role, Shadow, ShadowKind, Stroke, Style, Theme,

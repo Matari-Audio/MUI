@@ -12,6 +12,7 @@ cpu-threads = ["mui-vello/cpu-threads"]
 
 [dependencies]
 mui-core = { path = "../mui-core" }
+mui-motion = { path = "../mui-motion" }
 mui-layout = { path = "../mui-layout" }
 mui-geometry = { path = "../mui-geometry" }
 mui-tessellate = { path = "../mui-tessellate" }

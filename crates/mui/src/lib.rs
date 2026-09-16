@@ -27,6 +27,7 @@ pub use mui_egui as egui;
 pub use mui_geometry as geometry;
 pub use mui_input as input;
 pub use mui_layout as layout;
+pub use mui_motion as motion;
 pub use mui_tessellate as tessellate;
 pub use mui_vello as vello;
 

@@ -189,8 +189,8 @@ impl Ui {
         let s = self
             .motion
             .entry(format!("~{id}"))
-            .or_insert_with(|| vec![Some(seed(spring, target))]);
-        let s = s[0].get_or_insert_with(|| seed(spring, target));
+            .or_insert_with(|| vec![Some(spring.seeded(target))]);
+        let s = s[0].get_or_insert_with(|| spring.seeded(target));
         s.to(target);
         s.value
     }
@@ -610,16 +610,6 @@ impl Ui {
     }
 }
 
-/// A spring shaped like `s`, resting at `value`.
-fn seed(s: Spring, value: f64) -> Spring {
-    Spring {
-        value,
-        velocity: 0.0,
-        target: value,
-        ..s
-    }
-}
-
 /// Every numeric paint channel of `e`, in a fixed order, replaced by
 /// `ch(index, declared)`. Sizes and layout are deliberately absent.
 fn channels(e: &mut Element, pal: &Palette, ch: &mut impl FnMut(usize, f64) -> f64) {
@@ -668,7 +658,7 @@ fn transitions(
             if list.len() <= i {
                 list.resize(i + 1, None);
             }
-            let s = list[i].get_or_insert_with(|| seed(spring, declared));
+            let s = list[i].get_or_insert_with(|| spring.seeded(declared));
             // Hue is an angle: take the short way round rather than
             // sweeping 350 degrees back to 10.
             if i == 2 {
