@@ -487,6 +487,10 @@ pub struct Style {
     /// Blend mode and opacity for this node's whole subtree, as a
     /// compositing layer. `None` paints straight onto what is under it.
     pub layer: Option<(Mix, f32)>,
+    /// Painted over everything this node and its children drew, and only
+    /// where they drew: source-atop, in the node's outline. See
+    /// [`Paints::mask`](crate::Paints::mask).
+    pub mask: Fill,
 }
 
 impl Style {
@@ -539,6 +543,11 @@ impl Style {
             weld: self.weld || other.weld,
             cursor: other.cursor.or(self.cursor),
             layer: other.layer.or(self.layer),
+            mask: if other.mask.is_none() {
+                self.mask.clone()
+            } else {
+                other.mask.clone()
+            },
         }
     }
 }

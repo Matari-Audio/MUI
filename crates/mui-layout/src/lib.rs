@@ -242,6 +242,21 @@ pub enum Len {
         pct: f64,
         max: f64,
     },
+    /// A share of the nearest ancestor with a definite size on this axis --
+    /// CSS `cqw`/`cqh`, without the `container-type` ceremony. `Pct` is a
+    /// share of the parent, whatever the parent turned out to be; this is a
+    /// share of the box that actually has a size.
+    ///
+    /// ```
+    /// use mui_layout::{leaf, resolve, row, Len, Size};
+    /// // The row hugs, so it is no one's container: the bar takes half of
+    /// // the 400 px panel above it, not half of the row around it.
+    /// let bar = leaf(0., 8.).width(Len::Container(50.)).id("bar");
+    /// let tree = row([row([bar])]).width(Len::Px(400.));
+    /// let l = resolve(&tree, Some(Size::new(400., 8.)), Default::default()).unwrap();
+    /// assert_eq!(l.frame("bar").unwrap().size.width, 200.);
+    /// ```
+    Container(f64),
 }
 impl From<f64> for Len {
     fn from(v: f64) -> Self {
@@ -255,19 +270,22 @@ impl Len {
             _ => None,
         }
     }
-    fn fixed(self, parent: f64) -> Option<f64> {
+    /// `container` is the nearest definite ancestor extent on this axis;
+    /// without one, a container share degrades to a share of the parent.
+    fn fixed(self, parent: f64, container: Option<f64>) -> Option<f64> {
         match self {
             Self::Auto => None,
             Self::Px(v) => Some(v),
             Self::Pct(p) => Some(parent * p / 100.0),
             Self::Clamp { min, pct, max } => Some((parent * pct / 100.0).clamp(min, max)),
+            Self::Container(p) => Some(container.unwrap_or(parent) * p / 100.0),
         }
     }
     fn valid(self, limit: f64) -> bool {
         match self {
             Self::Auto => true,
             Self::Px(v) => v.is_finite() && (0.0..=limit).contains(&v),
-            Self::Pct(p) => p.is_finite() && (0.0..=100.0).contains(&p),
+            Self::Pct(p) | Self::Container(p) => p.is_finite() && (0.0..=100.0).contains(&p),
             Self::Clamp { min, pct, max } => {
                 Self::Pct(pct).valid(limit)
                     && Self::Px(min).valid(limit)
@@ -294,6 +312,8 @@ enum Kind<P> {
         cols: usize,
         children: Vec<Node<P>>,
     },
+    /// Candidates in order of preference. See [`Node::fits`].
+    Fits(Vec<Node<P>>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -405,6 +425,35 @@ impl<P: Default> Node<P> {
             children: children.into_iter().collect(),
         })
     }
+    /// Candidates in order of preference, largest first: the first one whose
+    /// measured size fits the space this node is offered is the one laid out,
+    /// and the rest are given empty frames. SwiftUI's `ViewThatFits`.
+    ///
+    /// The candidates are already built, so nothing is measured twice and
+    /// there is no second build pass -- which is the whole reason to prefer
+    /// it to a width branch in the caller. An axis this node has no definite
+    /// size on never rejects a candidate; the last one is the fallback.
+    ///
+    /// ```
+    /// use mui_layout::{leaf, resolve, Node, Size};
+    /// let bar = Node::fits([
+    ///     leaf(300., 20.).id("wide"),
+    ///     leaf(120., 20.).id("mid"),
+    ///     leaf(40., 20.).id("thin"),
+    /// ]);
+    /// let shown = |w: f64| {
+    ///     let l = resolve(&bar, Some(Size::new(w, 20.)), Default::default()).unwrap();
+    ///     ["wide", "mid", "thin"]
+    ///         .iter()
+    ///         .find(|k| l.frame(k).unwrap().size.width > 0.)
+    ///         .copied()
+    ///         .unwrap()
+    /// };
+    /// assert_eq!((shown(400.), shown(200.), shown(60.)), ("wide", "mid", "thin"));
+    /// ```
+    pub fn fits(candidates: impl IntoIterator<Item = Self>) -> Self {
+        Self::new(Kind::Fits(candidates.into_iter().collect()))
+    }
 }
 
 impl<P> Node<P> {
@@ -431,7 +480,8 @@ impl<P> Node<P> {
         match &self.kind {
             Kind::Branch { children, .. }
             | Kind::Overlay(children)
-            | Kind::Grid { children, .. } => children,
+            | Kind::Grid { children, .. }
+            | Kind::Fits(children) => children,
             _ => &[],
         }
     }
@@ -439,7 +489,8 @@ impl<P> Node<P> {
         match &mut self.kind {
             Kind::Branch { children, .. }
             | Kind::Overlay(children)
-            | Kind::Grid { children, .. } => children,
+            | Kind::Grid { children, .. }
+            | Kind::Fits(children) => children,
             _ => &mut [],
         }
     }
@@ -635,7 +686,8 @@ impl<P> Node<P> {
         match &mut self.kind {
             Kind::Branch { children, .. }
             | Kind::Overlay(children)
-            | Kind::Grid { children, .. } => children.push(child),
+            | Kind::Grid { children, .. }
+            | Kind::Fits(children) => children.push(child),
             Kind::Leaf | Kind::Content => {}
         }
         self
@@ -682,6 +734,10 @@ pub fn overlay(children: impl IntoIterator<Item = Node>) -> Node {
 }
 pub fn grid(cols: usize, children: impl IntoIterator<Item = Node>) -> Node {
     Node::grid(cols, children)
+}
+/// See [`Node::fits`].
+pub fn fits(candidates: impl IntoIterator<Item = Node>) -> Node {
+    Node::fits(candidates)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -808,6 +864,12 @@ struct Measured<'a, P> {
     /// A grid's resolved column count, after `min_col`; 0 for anything else.
     /// Measured once so arrange cannot re-derive a different one.
     cols: usize,
+    /// A `Fits` node's chosen candidate; 0 for anything else. Picked once, at
+    /// measure, for the same reason as `cols`.
+    pick: usize,
+    /// The nearest definite ancestor extent per axis: what a
+    /// [`Len::Container`] on *this* node is a share of.
+    container: [Option<f64>; 2],
     children: Vec<Measured<'a, P>>,
 }
 
@@ -855,9 +917,9 @@ impl<'a, P> Measured<'a, P> {
             return fallback();
         };
         match (self.node.len(vertical), self.aspect_width(inner)) {
-            (l @ (Len::Pct(_) | Len::Clamp { .. }), _) => {
-                l.fixed(inner.main(vertical)).unwrap_or_else(fallback)
-            }
+            (l @ (Len::Pct(_) | Len::Clamp { .. } | Len::Container(_)), _) => l
+                .fixed(inner.main(vertical), self.container[vertical as usize])
+                .unwrap_or_else(fallback),
             (_, Some((w, a))) if vertical => w / a,
             _ => fallback(),
         }
@@ -869,7 +931,13 @@ impl<'a, P> Measured<'a, P> {
         let n = self.node;
         let a = n.aspect.filter(|_| matches!(n.height, Len::Auto))?;
         let cap = |v: f64| n.maximum.map_or(v, |m| v.min(m.width));
-        Some((cap(n.width.fixed(inner.width).unwrap_or(inner.width)), a))
+        Some((
+            cap(n
+                .width
+                .fixed(inner.width, self.container[0])
+                .unwrap_or(inner.width)),
+            a,
+        ))
     }
     /// Size on one axis inside `avail`, given how it is aligned there.
     fn extent(&self, vertical: bool, avail: f64, align: Align) -> f64 {
@@ -881,7 +949,10 @@ impl<'a, P> Measured<'a, P> {
                 .map_or(v, |m| v.min(m.cross(!vertical)))
                 .max(self.floor.main(vertical))
         };
-        match n.len(vertical).fixed(avail) {
+        match n
+            .len(vertical)
+            .fixed(avail, self.container[vertical as usize])
+        {
             Some(v) => cap(v),
             None if align == Align::Stretch && n.is_container() => cap(avail),
             // Content never keeps a cross extent wider than the room it was
@@ -972,11 +1043,19 @@ fn grid_rows<'a, 'm, P>(
 /// a fixed length, a share of a definite inner extent, or -- for a container
 /// (or an aspect-ratio node) that will be stretched -- that extent itself.
 /// `None` is "measure yourself".
-fn offer<P>(c: &Node<P>, vertical: bool, inner: Option<f64>, stretch: bool) -> Option<f64> {
+fn offer<P>(
+    c: &Node<P>,
+    vertical: bool,
+    inner: Option<f64>,
+    container: Option<f64>,
+    stretch: bool,
+) -> Option<f64> {
     match c.len(vertical) {
         Len::Px(v) => Some(v),
         Len::Auto => inner.filter(|_| stretch && (c.is_container() || c.aspect.is_some())),
-        l => inner.and_then(|i| l.fixed(i)),
+        // A container share needs no definite parent: that is the point of it.
+        Len::Container(p) => container.map(|cq| cq * p / 100.0),
+        l => inner.and_then(|i| l.fixed(i, container)),
     }
 }
 
@@ -1001,6 +1080,7 @@ fn measure<'a, P>(
     ancestor: &str,
     definite: [Option<f64>; 2],
     room: Option<f64>,
+    container: [Option<f64>; 2],
     depth: usize,
     pass: &mut Pass<'a, '_, P>,
 ) -> Result<Measured<'a, P>, Error> {
@@ -1058,22 +1138,39 @@ fn measure<'a, P>(
         },
         _ => 0,
     };
+    // A box with a definite inner extent is the container everything under it
+    // takes a `Len::Container` share of, until a nearer one says otherwise.
+    // ponytail: a grid column is room, not a container; make it one if a
+    // `cq()` inside a cell ever needs the cell rather than the grid.
+    let sub = [inner[0].or(container[0]), inner[1].or(container[1])];
     let mut children = Vec::with_capacity(node.children().len());
     for (index, c) in node.children().iter().enumerate() {
         let align = c.align_self.unwrap_or(node.align);
         let mut child_room = room.filter(|_| !node.scroll);
         let promise = match &node.kind {
+            // Candidates are measured at what they would like to be: a
+            // stretched one would fit every time and pick itself.
+            Kind::Fits(_) if !c.float => [
+                offer(c, false, inner[0], sub[0], false),
+                offer(c, true, inner[1], sub[1], false),
+            ],
             _ if c.float => {
                 let (ax, ay) = c.anchor.unwrap_or(cell_default(node));
                 [
-                    offer(c, false, inner[0], ax == Align::Stretch),
-                    offer(c, true, inner[1], ay == Align::Stretch),
+                    offer(c, false, inner[0], sub[0], ax == Align::Stretch),
+                    offer(c, true, inner[1], sub[1], ay == Align::Stretch),
                 ]
             }
             Kind::Branch { vertical, .. } => {
                 let v = *vertical;
-                let cross = offer(c, !v, inner[!v as usize], align == Align::Stretch);
-                let main = offer(c, v, inner[v as usize], false);
+                let cross = offer(
+                    c,
+                    !v,
+                    inner[!v as usize],
+                    sub[!v as usize],
+                    align == Align::Stretch,
+                );
+                let main = offer(c, v, inner[v as usize], sub[v as usize], false);
                 if v {
                     [cross, main]
                 } else {
@@ -1083,8 +1180,8 @@ fn measure<'a, P>(
             Kind::Overlay(_) => {
                 let (ax, ay) = c.anchor.unwrap_or(cell_default(node));
                 [
-                    offer(c, false, inner[0], ax == Align::Stretch),
-                    offer(c, true, inner[1], ay == Align::Stretch),
+                    offer(c, false, inner[0], sub[0], ax == Align::Stretch),
+                    offer(c, true, inner[1], sub[1], ay == Align::Stretch),
                 ]
             }
             Kind::Grid { .. } => {
@@ -1095,14 +1192,29 @@ fn measure<'a, P>(
                         + gap * (span - 1.0)
                 });
                 child_room = [child_room, col].into_iter().flatten().reduce(f64::min);
-                [offer(c, false, col, ax == Align::Stretch), None]
+                [offer(c, false, col, sub[0], ax == Align::Stretch), None]
             }
             _ => [None; 2],
         };
-        let mut m = measure(c, here, promise, child_room, depth + 1, pass)?;
+        let mut m = measure(c, here, promise, child_room, sub, depth + 1, pass)?;
         m.index = index;
         children.push(m);
     }
+    // Largest first, so the first candidate that clears both offered axes is
+    // the richest one that fits. An axis with no offer never rejects.
+    let pick = match &node.kind {
+        Kind::Fits(_) => {
+            let fits = |m: &Measured<'_, P>| {
+                inner[0].is_none_or(|w| m.size.width <= w + 1e-8)
+                    && inner[1].is_none_or(|h| m.size.height <= h + 1e-8)
+            };
+            children
+                .iter()
+                .position(fits)
+                .unwrap_or(children.len().saturating_sub(1))
+        }
+        _ => 0,
+    };
     // A flex item only learns its final main size once the row's surplus (or
     // deficit) is dealt, so anything whose measured cross depends on its main
     // -- a paragraph, a `min_col` grid -- is measured again at the share it
@@ -1133,9 +1245,17 @@ fn measure<'a, P>(
                 continue;
             }
             let align = c.align_self.unwrap_or(node.align);
-            let cross = offer(c, true, inner[1], align == Align::Stretch);
+            let cross = offer(c, true, inner[1], sub[1], align == Align::Stretch);
             let was = std::mem::replace(&mut pass.redo, true);
-            let m = measure(c, here, [Some(main), cross], Some(main), depth + 1, pass);
+            let m = measure(
+                c,
+                here,
+                [Some(main), cross],
+                Some(main),
+                sub,
+                depth + 1,
+                pass,
+            );
             pass.redo = was;
             children[index] = m?;
             children[index].index = index;
@@ -1211,6 +1331,11 @@ fn measure<'a, P>(
             Size::new(max_of(&|c| c.size.width), max_of(&|c| c.size.height)),
             Size::new(max_of(&|c| c.floor.width), max_of(&|c| c.floor.height)),
         ),
+        // The chosen candidate is the whole content; the rest were measured
+        // and dropped, and cost nothing but their measure.
+        Kind::Fits(_) => children
+            .get(pick)
+            .map_or((Size::ZERO, Size::ZERO), |c| (c.size, c.floor)),
         Kind::Grid { .. } => {
             let rows = grid_rows(&flow, cols);
             let gaps = |n: f64| (n - 1.0).max(0.0) * gap;
@@ -1272,7 +1397,9 @@ fn measure<'a, P>(
             });
         }
     }
-    let fluid = matches!(node.kind, Kind::Content)
+    // A squeezed flex row re-measures its fluid items, which is the one
+    // chance a `fits` inside one gets to pick against its real share.
+    let fluid = matches!(node.kind, Kind::Content | Kind::Fits(_))
         || (node.min_col.is_some() && inner[0].is_none() && matches!(node.kind, Kind::Grid { .. }))
         || children.iter().any(|c| c.fluid && !c.node.float);
     Ok(Measured {
@@ -1285,6 +1412,8 @@ fn measure<'a, P>(
         floor,
         content,
         cols,
+        pick,
+        container,
         children,
     })
 }
@@ -1363,6 +1492,25 @@ fn cell<P>(c: &Measured<'_, P>, cell: Size, default: (Align, Align)) -> ([f64; 2
     )
 }
 
+/// An empty frame for a subtree that is not laid out -- a `fits` candidate
+/// that lost. At the parent's own origin, so a walk that checks children
+/// against their parent's box still passes, and at zero size, which is how a
+/// paint walk knows to skip it.
+fn hide<P>(m: &Measured<'_, P>, origin: [f64; 2], out: &mut (BTreeMap<String, Frame>, Vec<Frame>)) {
+    let frame = Frame {
+        x: origin[0],
+        y: origin[1],
+        size: Size::ZERO,
+    };
+    out.1.push(frame);
+    if let Some(id) = m.node.id.clone() {
+        out.0.insert(id, frame);
+    }
+    for c in &m.children {
+        hide(c, origin, out);
+    }
+}
+
 fn arrange<P>(
     m: &Measured<'_, P>,
     ancestor: &str,
@@ -1411,6 +1559,16 @@ fn arrange<P>(
             for c in &flow {
                 let (p, s) = cell(c, inner, default);
                 placed[c.index] = Some((at(p[0], p[1]), s));
+            }
+        }
+        Kind::Fits(_) => {
+            for (i, c) in m.children.iter().enumerate() {
+                if i == m.pick && !c.node.float {
+                    let (p, s) = cell(c, inner, default);
+                    placed[i] = Some((at(p[0], p[1]), s));
+                } else if !c.node.float {
+                    placed[i] = Some(([origin[0], origin[1]], Size::ZERO));
+                }
             }
         }
         Kind::Grid { .. } => {
@@ -1541,6 +1699,12 @@ fn arrange<P>(
         }
     }
     for (i, c) in m.children.iter().enumerate() {
+        // A candidate that lost keeps its place in the frame list, empty, so
+        // a walk of the tree still lines up with it.
+        if matches!(n.kind, Kind::Fits(_)) && i != m.pick {
+            hide(c, origin, out);
+            continue;
+        }
         let (pos, s) = if c.node.float {
             let (p, s) = cell(c, inner, default);
             // A tooltip or menu offset past the edge is pulled back inside the
@@ -1607,7 +1771,8 @@ pub fn resolve_with<P>(
         redo: false,
         measurer: &mut measurer,
     };
-    let m = measure(root, "root", definite, None, 0, &mut pass)?;
+    // The root's own offered size is the outermost container there is.
+    let m = measure(root, "root", definite, None, definite, 0, &mut pass)?;
     let size = offered.unwrap_or(m.size);
     if !size.valid(limits.extent) {
         return Err(Error::InvalidValue);

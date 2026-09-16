@@ -79,6 +79,24 @@ impl PartialEq for StateStyle {
     }
 }
 
+/// What a child does to its parent's outline instead of painting itself.
+/// `.weld` is the third of these, and the only one that reads every child at
+/// once, so it stays a flag on the parent's style.
+///
+/// ```
+/// use mui_core::prelude::*;
+/// # use mui_core::Carve;
+/// let ring = stack![].square(64.).pill().fill(Primary).cut(leaf(40., 40.).pill());
+/// assert_eq!(ring.children()[0].payload().carve, Some(Carve::Cut));
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Carve {
+    /// Boolean difference: the child's shape is taken out of the parent's.
+    Cut,
+    /// Boolean intersection: only the overlap survives.
+    Keep,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub enum Content {
     #[default]
@@ -135,6 +153,10 @@ pub struct Element {
     /// Only meaningful on a node with an id: the runtime has nothing to
     /// compare an anonymous node against. See [`Styled::transition`].
     pub transition: Option<Spring>,
+    /// Set on a child pushed by [`Sugar::cut`](crate::Sugar::cut) or
+    /// [`Sugar::keep`](crate::Sugar::keep): the child shapes its parent's
+    /// outline instead of painting itself.
+    pub carve: Option<Carve>,
 }
 
 /// A styled layout node: the type every constructor here returns.
@@ -158,6 +180,17 @@ pub fn overlay(children: impl IntoIterator<Item = El>) -> El {
 }
 pub fn grid(cols: usize, children: impl IntoIterator<Item = El>) -> El {
     Node::grid(cols, children)
+}
+/// Shows the first candidate that fits the room on offer, widest first.
+/// See [`Node::fits`] and the `fits!` macro.
+///
+/// ```
+/// use mui_core::prelude::*;
+/// let bar = fits([text("Save changes"), text("Save"), leaf(8., 8.)]);
+/// assert_eq!(bar.children().len(), 3);
+/// ```
+pub fn fits(candidates: impl IntoIterator<Item = El>) -> El {
+    Node::fits(candidates)
 }
 /// A label, measured from the scene's font. Ink defaults to whatever reads on
 /// the nearest painted ancestor; `.fill(..)` overrides it.
@@ -306,6 +339,26 @@ pub trait Paints: Sized {
     fn opacity(mut self, o: f32) -> Self {
         let l = self.style_mut().layer.get_or_insert((Mix::Normal, 1.0));
         l.1 = o;
+        self
+    }
+    /// Paint `f` over everything this node and its subtree drew, and only
+    /// where they drew it: one source-atop layer, no mask buffer, both
+    /// backends.
+    ///
+    /// A ramp from the surface colour to transparent is the fade at the
+    /// clipped edge of a scroll; a ramp between two roles over a label is a
+    /// gradient-tinted glyph. What it cannot do is cut alpha out of the
+    /// node -- source-atop paints *onto* the shape, it does not erase it.
+    ///
+    /// ```
+    /// use mui_core::prelude::*;
+    /// # use mui_core::Fill;
+    /// let fade = Gradient::linear(180., [(0.8, Surface.alpha(0.)), (1., Surface.into())]);
+    /// let mut list = col!["one", "two"].scroll().mask(fade);
+    /// assert!(!list.style_mut().mask.is_none());
+    /// ```
+    fn mask(mut self, f: impl Into<Fill>) -> Self {
+        self.style_mut().mask = f.into();
         self
     }
     /// Paint the union of the children's frames as one filleted shape.

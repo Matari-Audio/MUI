@@ -286,7 +286,7 @@ impl PreviewScene for Scrolling {
         "Scroll"
     }
     fn about(&self) -> &'static str {
-        "A .scroll() column taller than its box. The wheel picks the surface under the pointer; a hit outside the clip is not a hit."
+        "A .scroll() column taller than its box, with a .mask() fade over the last rows. The wheel picks the surface under the pointer; a hit outside the clip is not a hit."
     }
     fn specimen(&mut self, ui: &mut Ui) -> El {
         let rows: Vec<El> = self
@@ -304,6 +304,15 @@ impl PreviewScene for Scrolling {
                 .el()
             })
             .collect();
+        // Source-atop, so the ramp paints the surface colour back over the
+        // rows at the bottom edge: the list reads as fading out under it.
+        let fade = Gradient::linear(
+            180.0,
+            [
+                (0.82, Role::Surface.alpha(0.0)),
+                (1.0, Role::Surface.into()),
+            ],
+        );
         column(rows)
             .gap(S)
             .pad(M)
@@ -311,6 +320,7 @@ impl PreviewScene for Scrolling {
             .size(320.0, 340.0)
             .radius(16.0)
             .fill(Role::Surface)
+            .mask(fade)
             .id("scroll")
     }
 }
@@ -826,10 +836,20 @@ pub fn editor() -> El {
             caption(["cut", "res", "drv", "mix"][i]),
         ])
     };
+    // The header keeps the widest version of itself that still fits: no
+    // width branch in the scene, and no second build pass.
+    // No spacer in a candidate: a flex base of 0 measures small, so a row
+    // holding one always "fits" and the widest would always win.
+    let head = fits![
+        row![title("Kurv"), caption("v1.0 -- four operators")]
+            .gap(M)
+            .baseline(),
+        row![title("Kurv"), caption("v1.0")].gap(S).baseline(),
+        title("Kurv"),
+    ]
+    .id("head");
     col![
-        row![title("Kurv"), spacer(), caption("v1.0")]
-            .baseline()
-            .id("head"),
+        head,
         row(["Osc", "Filter", "Env"].map(tab))
             .gap(S)
             .wrap()

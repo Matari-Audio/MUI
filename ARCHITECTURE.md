@@ -29,12 +29,16 @@ El tree  (row! / col! / stack! / grid!, Paints fills, presets, states, roles, sh
    |               rewrites the rounded rect's arcs as cubics and gives up
    |               the analytic blur for that node
    |     weld   -> union(children's sharp frames) then fillet(convex, concave)
+   |     carve  -> boolean(outline, a .cut/.keep child's shape, Difference |
+   |               Intersection); the child is placed by layout and never paints
    |     shell  -> inset(previous outline, d)        exact or parallel offset
    |     text   -> shaped run from the TextCache      mui-text, kept across frames
    |               wrapped to the room its parent has, one Painted a line
    |     canvas -> the closure's own paths, in the node's space
    |     clip   -> Clip(outline) ... children ... Unclip
    |     blend  -> Blend(mix, opacity) ... subtree ... Unblend, outside the clip
+   |     mask   -> Blend(Normal, 1) ... subtree ... Mask(fill, source-atop) ...
+   |               Unblend; a paint over what the subtree drew, not an alpha mask
    |     weld   -> the shadow is one blurred rect per welded child
    |     shadow -> drop shadows under the fill, inset ones over the shells
    |               inside a Clip of the outline; both are one analytic

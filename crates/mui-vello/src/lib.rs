@@ -620,6 +620,7 @@ fn fingerprint(p: &Painted) -> u64 {
         Layer::Unclip => (7, 0),
         Layer::Blend { .. } => (8, 0),
         Layer::Unblend => (9, 0),
+        Layer::Mask => (10, 0),
     };
     eat(tag);
     eat(n as u64);
@@ -747,6 +748,20 @@ fn mix(m: mui_core::Mix) -> peniko::Mix {
 fn one(canvas: &mut impl Canvas, p: &Painted, path: &BezPath) -> Result<(), Error> {
     if p.layer == Layer::Clip {
         canvas.push_clip(path);
+        return Ok(());
+    }
+    if p.layer == Layer::Mask {
+        // Source-atop inside the node's own blend layer: the fill lands
+        // only where the subtree already painted.
+        // ponytail: solid and gradient paints only -- an image mask would
+        // need the paint-transform dance below, and nothing asks for one.
+        canvas.push_layer(
+            peniko::BlendMode::new(peniko::Mix::Normal, peniko::Compose::SrcAtop),
+            1.0,
+        );
+        canvas.set_paint(brush(&p.paint, paint_box(p, path)));
+        canvas.fill_path(path);
+        canvas.pop_layer();
         return Ok(());
     }
     let bounds = paint_box(p, path);

@@ -9,7 +9,7 @@
 //!     .w(pct(100.));
 //! assert_eq!(bar.children().len(), 3);
 //! ```
-use crate::element::{text, El, Styled};
+use crate::element::{text, Carve, El, Styled};
 use crate::style::Radius;
 use mui_layout::{Align, Justify, Len};
 
@@ -69,6 +69,26 @@ pub trait Sugar: Sized {
     /// assert_eq!(strip.children_mut()[0].style_mut().radius, Radius::Px(0.));
     /// ```
     fn join(self) -> Self;
+    /// Takes `el`'s shape out of this node's outline: boolean difference.
+    /// The child is placed like any floating overlay child, so `.center()`,
+    /// `.w(..)` and the rest position the hole, and then it is never
+    /// painted. The shell, the border and the clip all follow the result,
+    /// exactly as they follow a [`weld`](Styled::weld).
+    ///
+    /// ```
+    /// use mui_core::prelude::*;
+    /// let ring = stack![].square(64.).pill().fill(Primary).cut(leaf(40., 40.).pill());
+    /// assert!(ring.children()[0].payload().carve.is_some());
+    /// ```
+    fn cut(self, el: El) -> Self;
+    /// Keeps only what `el` overlaps: boolean intersection. See [`cut`](Sugar::cut).
+    ///
+    /// ```
+    /// use mui_core::prelude::*;
+    /// let half = stack![].square(64.).fill(Primary).keep(leaf(32., 64.));
+    /// assert!(half.children()[0].payload().carve.is_some());
+    /// ```
+    fn keep(self, el: El) -> Self;
 }
 impl Sugar for El {
     fn w(self, len: impl IntoLen) -> Self {
@@ -105,6 +125,21 @@ impl Sugar for El {
         // learn.
         self.gap(0.).clip()
     }
+    fn cut(self, el: El) -> Self {
+        self.push(carved(el, Carve::Cut))
+    }
+    fn keep(self, el: El) -> Self {
+        self.push(carved(el, Carve::Keep))
+    }
+}
+
+// ponytail: a carve rides along as a floating child so layout sizes and
+// places it for free. A leaf has no children, so `.cut` on one is a no-op;
+// wrap it in `stack![..]` if you need a hole in a leaf.
+fn carved(el: El, how: Carve) -> El {
+    let mut el = el.float();
+    el.payload_mut().carve = Some(how);
+    el
 }
 
 // ponytail: fixed px, because `Theme` carries one text size and no type
@@ -150,6 +185,21 @@ macro_rules! stack {
 macro_rules! grid {
     ($cols:expr $(; $($child:expr),* $(,)?)?) => {
         $crate::grid($cols, ::std::vec![$($($crate::IntoEl::into_el($child)),*)?])
+    };
+}
+
+/// The first of these that fits the room on offer wins; the rest are not
+/// painted and take no space. Declare them widest first.
+///
+/// ```
+/// use mui_core::prelude::*;
+/// let bar = fits![title("Export selection"), text("Export"), leaf(16., 16.)];
+/// assert_eq!(bar.children().len(), 3);
+/// ```
+#[macro_export]
+macro_rules! fits {
+    ($($child:expr),* $(,)?) => {
+        $crate::fits(::std::vec![$($crate::IntoEl::into_el($child)),*])
     };
 }
 
