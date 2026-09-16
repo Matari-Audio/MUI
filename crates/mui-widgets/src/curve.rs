@@ -159,6 +159,9 @@ pub fn curve(ui: &impl Host, id: &str, c: &mut Curve) -> (El, Option<CurveEdit>)
     let lit = ui.tag(id).map(str::to_owned);
     let el = canvas(move |size| {
         let hot = |t: &str| lit.as_deref() == Some(t);
+        // `Curve` holds 2..=64 points and one handle pair per segment as an
+        // invariant of every constructor and edit, so these are not fallible
+        // lookups dressed as indexing.
         let mut spine = Path::default().move_to(at(size, points[0]));
         for (j, h) in handles.iter().enumerate() {
             spine = spine.cubic_to(
