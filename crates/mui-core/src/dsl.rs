@@ -10,7 +10,7 @@
 //! assert_eq!(bar.children().len(), 3);
 //! ```
 use crate::element::{text, Carve, El, Styled};
-use crate::style::Radius;
+use crate::Radius;
 use mui_layout::{Align, Justify, Len};
 
 /// A length argument: a `Len`, or a bare number in pixels. `Len` lives in

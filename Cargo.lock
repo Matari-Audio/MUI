@@ -1883,10 +1883,10 @@ dependencies = [
 name = "mui-core"
 version = "0.3.0"
 dependencies = [
- "color",
  "epaint_default_fonts",
  "mui-geometry",
  "mui-layout",
+ "mui-style",
  "mui-text",
 ]
 
@@ -1935,6 +1935,15 @@ dependencies = [
  "vello_hybrid",
  "wgpu",
  "winit",
+]
+
+[[package]]
+name = "mui-style"
+version = "0.3.0"
+dependencies = [
+ "color",
+ "mui-geometry",
+ "mui-layout",
 ]
 
 [[package]]

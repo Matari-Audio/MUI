@@ -349,7 +349,8 @@ light-theme half because there is nothing in it a mode could contradict.
 | `mui-layout` | the dependency-free flex solver: tokens, pct, aspect, grid, anchors, frames in tree order |
 | `mui-geometry` | Booleans, fillets, exact rounded-rect insets, general parallel offsets |
 | `mui-text` | glyph and string outlines from a (variable) font |
-| `mui-core` | `El` + `Styled` DSL and the `row!`/`col!`/`stack!`/`grid!` sugar, roles and palette, `canvas` draws, clip and float layers, the walk from tree to `ResolvedScene` paint list, the frame-to-frame `TextCache`, `Spring` |
+| `mui-style` | theme data: Oklch `Color`, `Palette`, `Role`, `Fill`, `Gradient`, `Shadow`, `Elevation`, `Radius`, `Style` and the `Theme` they resolve against |
+| `mui-core` | `El` + `Styled` DSL and the `row!`/`col!`/`stack!`/`grid!` sugar, `canvas` draws, clip and float layers, the walk from tree to `ResolvedScene` paint list, the frame-to-frame `TextCache`, `Spring` |
 | `mui-input` | `Input` (pointer, wheel, keys, text), hit testing against real paths and their clips, press capture, hover, click, drag and drop |
 | `mui-vello` | the `Canvas` trait and its `Gpu` / `Cpu` wrappers over `vello_hybrid` and `vello_cpu`: fills, strokes, image fills (`Cpu` paints the pixmap, `Gpu` uploads once through its `Atlas`, see Images), clip push/pop, and hinted glyph runs (Vello hints and caches the outlines per font blob); `paint(canvas, scene, transform)`, and `paint_cached` with a `PathCache` that keeps a still frame's arc-to-cubic conversions |
 | `mui-access` | a `ResolvedScene`'s roles and labels as an `accesskit::TreeUpdate` |

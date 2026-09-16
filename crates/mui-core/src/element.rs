@@ -10,7 +10,7 @@
 //! assert_eq!(card.children().len(), 2);
 //! ```
 use crate::motion::Spring;
-use crate::style::{Cursor, Elevation, Fill, Mix, Radius, Shadow, Stroke, Style};
+use crate::{Cursor, Elevation, Fill, Mix, Radius, Shadow, Stroke, Style};
 use mui_geometry::CornerStyle;
 use mui_geometry::Path;
 use mui_layout::{Node, Size, Spacing};

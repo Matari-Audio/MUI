@@ -64,8 +64,7 @@ impl Role {
     /// This role at `a` alpha: a hairline that still tracks the theme.
     ///
     /// ```
-    /// use mui_core::prelude::*;
-    /// # use mui_core::Palette;
+    /// use mui_style::{Role::*, *};
     /// let hairline = Ink.alpha(0.12);
     /// let p = Palette::NEUTRAL;
     /// let under = p.surface();
@@ -79,8 +78,7 @@ impl Role {
 /// Where a gradient's ramp runs across the box it fills.
 ///
 /// ```
-/// use mui_core::prelude::*;
-/// # use mui_core::GradientKind;
+/// use mui_style::{Role::*, *};
 /// let arc = Gradient::conic(-135., [(0., Primary), (1., Field)]);
 /// assert_eq!(arc.kind, GradientKind::Conic { angle: -135. });
 /// ```
@@ -104,7 +102,7 @@ pub enum GradientKind {
 /// geometries, so a kind change cuts rather than tweens.
 ///
 /// ```
-/// use mui_core::prelude::*;
+/// use mui_style::{Role::*, *};
 /// let ramp = Gradient::linear(90., [(0., Primary), (1., Surface)]);
 /// assert_eq!(ramp.stops.len(), 2);
 /// ```
@@ -117,7 +115,7 @@ impl Gradient {
     /// A ramp along `angle`, CSS-style: 180 runs top to bottom.
     ///
     /// ```
-    /// use mui_core::prelude::*;
+    /// use mui_style::{Role::*, *};
     /// let sky = Gradient::linear(180., [(0., Raised), (1., Surface)]);
     /// assert_eq!(sky.stops.len(), 2);
     /// ```
@@ -128,7 +126,7 @@ impl Gradient {
     /// box's longer side: an LED, a glow, a specular highlight.
     ///
     /// ```
-    /// use mui_core::prelude::*;
+    /// use mui_style::{Role::*, *};
     /// let led = Gradient::radial((0.3, 0.3), 0.6, [(0., Raised), (1., Surface)]);
     /// assert_eq!(led.stops.len(), 2);
     /// ```
@@ -142,7 +140,7 @@ impl Gradient {
     /// A sweep from `angle`, clockwise about the centre: the knob arc.
     ///
     /// ```
-    /// use mui_core::prelude::*;
+    /// use mui_style::{Role::*, *};
     /// let arc = Gradient::conic(-135., [(0., Primary), (0.7, Primary), (0.7, Field)]);
     /// assert_eq!(arc.stops.len(), 3);
     /// ```
@@ -152,7 +150,7 @@ impl Gradient {
     /// Two stops, top to bottom.
     ///
     /// ```
-    /// use mui_core::prelude::*;
+    /// use mui_style::{Role::*, *};
     /// let card = Gradient::vertical(Raised, Surface);
     /// assert_eq!(card.stops.len(), 2);
     /// ```
@@ -360,8 +358,7 @@ pub struct Stroke {
 /// inset shadow paints nothing -- use a small one for a crisp edge.
 ///
 /// ```
-/// use mui_core::prelude::*;
-/// # use mui_core::ShadowKind;
+/// use mui_style::{Role::*, *};
 /// assert_eq!(Shadow::inset(3.).kind, ShadowKind::Inset);
 /// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -386,7 +383,7 @@ impl Shadow {
     /// A soft drop below the box, a quarter-strength black.
     ///
     /// ```
-    /// use mui_core::prelude::*;
+    /// use mui_style::{Role::*, *};
     /// assert_eq!(Shadow::soft(12.).dy, 6.);
     /// ```
     pub fn soft(blur: f64) -> Self {
@@ -403,8 +400,7 @@ impl Shadow {
     /// floor under a translucent panel.
     ///
     /// ```
-    /// use mui_core::prelude::*;
-    /// # use mui_core::ShadowKind;
+    /// use mui_style::{Role::*, *};
     /// let recess = Shadow::inset(4.);
     /// assert_eq!((recess.kind, recess.dy), (ShadowKind::Inset, 2.));
     /// ```
@@ -423,9 +419,8 @@ impl Shadow {
 /// hand-tune four numbers per node to get them.
 ///
 /// ```
-/// use mui_core::prelude::*;
-/// let mut el = leaf(80., 24.).elevation(Elevation::Raised);
-/// assert_eq!(el.style_mut().shadow.len(), 2);
+/// use mui_style::{Role::*, *};
+/// assert_eq!(Elevation::Raised.shadows().len(), 2);
 /// assert!(Elevation::Flat.shadows().is_empty());
 /// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -442,7 +437,7 @@ impl Elevation {
     /// The contact and ambient pair this step is made of.
     ///
     /// ```
-    /// use mui_core::prelude::*;
+    /// use mui_style::{Role::*, *};
     /// let [contact, ambient] = &Elevation::Floating.shadows()[..] else { panic!() };
     /// assert!(ambient.blur > contact.blur);
     /// ```
@@ -473,7 +468,7 @@ pub struct Style {
     pub stroke: Option<Stroke>,
     pub radius: Radius,
     /// The curve every corner turns through: circular, or a continuous
-    /// superellipse. See [`Paints::corners`](crate::Paints::corners).
+    /// superellipse. See `Paints::corners` in `mui-core`.
     pub corners: CornerStyle,
     /// Back to front: every [`ShadowKind::Drop`] under the fill, every
     /// [`ShadowKind::Inset`] over the shells.
@@ -489,7 +484,7 @@ pub struct Style {
     pub layer: Option<(Mix, f32)>,
     /// Painted over everything this node and its children drew, and only
     /// where they drew: source-atop, in the node's outline. See
-    /// [`Paints::mask`](crate::Paints::mask).
+    /// `Paints::mask` in `mui-core`.
     pub mask: Fill,
 }
 
@@ -505,8 +500,7 @@ impl Style {
     /// on.
     ///
     /// ```
-    /// use mui_core::prelude::*;
-    /// # use mui_core::Style;
+    /// use mui_style::{Role::*, *};
     /// let card = Style { radius: Radius::Px(12.), ..Style::default() };
     /// let mine = Style { fill: Primary.into(), ..Style::default() };
     /// assert_eq!(mine.over(&card).fill, mine.fill);   // card states no fill
