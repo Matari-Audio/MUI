@@ -103,7 +103,7 @@ assert_eq!(scene.surface("tab").unwrap().frame.size.width, 92.0);
 | `.justify(Justify::SpaceAround)`, `.justify(Justify::SpaceEvenly)` | the other two CSS distributions |
 | `.wrap()` | a row or column that breaks into lines instead of overflowing |
 | `.span(2)`, `.order(-1)` | a grid cell two columns wide; placed before its declaration slot |
-| `.min_col(120.0)` | `repeat(auto-fit, minmax(120px, 1fr))`: the grid drops columns until each clears 120 px |
+| `.min_col(120.0)` | `repeat(auto-fit, minmax(120px, 1fr))`: the grid drops columns until each clears 120 px, and a hugging grid widens to it rather than squeezing a column under it |
 | `.push(child)`, `.baseline()`, `.lines(2)` | append to a container, sit text children on one baseline, cap a wrapped label |
 | `.fill(Primary)`, `.fill(Color::..)`, `.fill(Gradient::vertical(a, b))` | a palette role, a literal, a gradient |
 | `Gradient::linear(180., ..)`, `::radial((0.3, 0.3), 0.6, ..)`, `::conic(-135., ..)` | the three ramps, stops as roles or colours: a knob arc is a conic gradient and no geometry |

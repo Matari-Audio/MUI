@@ -505,13 +505,20 @@ pub(crate) fn measure<'a, P>(
         Kind::Grid { .. } => {
             let rows = grid_rows(&flow, cols);
             let gaps = |n: f64| (n - 1.0).max(0.0) * gap;
-            let hug = |g: fn(&Measured<'_, P>) -> Size| {
+            // With no width offered there is nothing to drop columns against,
+            // so the declared count stands -- but `min_col` is still a column
+            // minimum, and a hugging parent (a modal, a popover) must widen to
+            // it instead of squeezing its cells below it. It widens the hug
+            // only: the floor stays the cells' own, so a flex ancestor can
+            // still squeeze the grid and have it drop columns.
+            let col_min = node.min_col.filter(|_| inner[0].is_none()).unwrap_or(0.0);
+            let hug = |g: fn(&Measured<'_, P>) -> Size, col_min: f64| {
                 // A spanning cell pays for its span, so its share of one
                 // column is what sets the column width.
                 let widest = flow
                     .iter()
                     .map(|c| g(c).width / c.node.span.clamp(1, cols) as f64)
-                    .fold(0.0, f64::max);
+                    .fold(col_min, f64::max);
                 let tall: f64 = rows
                     .iter()
                     .map(|r| r.iter().map(|c| g(c).height).fold(0.0, f64::max))
@@ -521,7 +528,7 @@ pub(crate) fn measure<'a, P>(
                     tall + gaps(rows.len() as f64),
                 )
             };
-            (hug(|c| c.size), hug(|c| c.floor))
+            (hug(|c| c.size, col_min), hug(|c| c.floor, 0.0))
         }
     };
     let pad = |s: Size| {

@@ -861,7 +861,7 @@ impl PreviewScene for Cells {
         "Grid"
     }
     fn about(&self) -> &'static str {
-        ".span(n) makes a cell n columns wide, .order(n) moves it without moving its declaration, SpaceEvenly splits the slack."
+        ".span(n) makes a cell n columns wide, .order(n) moves it without moving its declaration, SpaceEvenly splits the slack, and the hugging card widens to its min_col instead of squeezing a column."
     }
     fn specimen(&mut self, _: &mut Ui) -> El {
         let cell = |n: &str, fill: Role| {
@@ -892,6 +892,23 @@ impl PreviewScene for Cells {
             .justify(Justify::SpaceEvenly)
             .width(320.0)
             .id("evenly"),
+            // A modal: nothing offers it a width, so it hugs. Its cells are
+            // 90 px wide and its columns are 140, because `min_col` is a
+            // minimum whether or not there is a window to drop columns
+            // against -- the card grows, the cells do not shrink.
+            column([
+                caption("hugging card, min_col(140)"),
+                grid(
+                    2,
+                    ["one", "two", "three", "four"].map(|n| cell(n, Role::Field)),
+                )
+                .gap(S)
+                .min_col(140.0)
+                .id("hug-grid"),
+            ])
+            .gap(S)
+            .preset(&card())
+            .id("hug"),
         ])
         .gap(M)
         .pad(L)

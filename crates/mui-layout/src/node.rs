@@ -418,7 +418,10 @@ impl<P> Node<P> {
     /// Grids only: CSS `repeat(auto-fit, minmax(px, 1fr))`. The declared
     /// column count becomes a ceiling, and the grid drops columns until each
     /// one is at least `px` wide. One primitive covers most reflow: the same
-    /// tree is three columns in a wide window and one in a thin one.
+    /// tree is three columns in a wide window and one in a thin one. A
+    /// hugging grid -- a modal, a popover, anything offered no width -- has
+    /// nothing to drop columns against, so it keeps its count and widens
+    /// itself to the minimum instead of squeezing a column under it.
     ///
     /// ```
     /// use mui_layout::{grid, leaf, resolve, Size};
