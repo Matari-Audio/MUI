@@ -34,7 +34,43 @@ pub fn card() -> Style {
     Style {
         fill: Raised.into(),
         radius: 12.0.into(),
-        shadow: Some(Shadow::soft(12.0)),
+        shadow: vec![Shadow::soft(12.0)],
+        ..Style::default()
+    }
+}
+
+/// Glass, at plugin scale: a translucent fill, a bright one-pixel top edge
+/// and a soft inner floor. There is no backdrop blur behind it and there
+/// will not be -- neither Vello backend can sample what it is over -- and at
+/// this size those three layers are what the look actually is.
+///
+/// The top edge is an inset shadow with a half-pixel feather: an inset
+/// shadow fades over its blur, so a zero-blur one would paint nothing.
+///
+/// ```
+/// use mui::prelude::*;
+/// let mut overlay = col!["Preset browser"].pad(M).preset(&glass());
+/// assert_eq!(overlay.style_mut().shadow.len(), 2);
+/// ```
+pub fn glass() -> Style {
+    let edge = |l: f32, a: f32| Fill::Color(Color::oklcha(l, 0.0, 0.0, a));
+    Style {
+        fill: edge(1.0, 0.10),
+        radius: 14.0.into(),
+        shadow: vec![
+            Shadow {
+                blur: 0.5,
+                dy: 1.0,
+                fill: edge(1.0, 0.35),
+                ..Shadow::inset(0.5)
+            },
+            Shadow {
+                blur: 6.0,
+                dy: -3.0,
+                fill: edge(0.0, 0.25),
+                ..Shadow::inset(6.0)
+            },
+        ],
         ..Style::default()
     }
 }

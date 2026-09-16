@@ -10,7 +10,7 @@
 //! assert_eq!(card.children().len(), 2);
 //! ```
 use crate::motion::Spring;
-use crate::style::{Cursor, Fill, Mix, Radius, Shadow, Stroke, Style};
+use crate::style::{Cursor, Elevation, Fill, Mix, Radius, Shadow, Stroke, Style};
 use mui_geometry::Path;
 use mui_layout::{Node, Size, Spacing};
 use std::sync::Arc;
@@ -231,9 +231,38 @@ pub trait Paints: Sized {
     fn pill(self) -> Self {
         self.radius(Radius::Pill)
     }
+    /// Add a shadow. Shadows stack, so a tight contact and a wide ambient
+    /// are two calls; [`Paints::shadows`] replaces the list instead.
+    ///
+    /// ```
+    /// use mui_core::prelude::*;
+    /// let mut el = leaf(80., 24.).shadow(Shadow::soft(2.)).shadow(Shadow::soft(12.));
+    /// assert_eq!(el.style_mut().shadow.len(), 2);
+    /// ```
     fn shadow(mut self, s: Shadow) -> Self {
-        self.style_mut().shadow = Some(s);
+        self.style_mut().shadow.push(s);
         self
+    }
+    /// Replace the whole shadow list.
+    ///
+    /// ```
+    /// use mui_core::prelude::*;
+    /// let mut el = leaf(80., 24.).shadow(Shadow::soft(12.)).shadows([]);
+    /// assert!(el.style_mut().shadow.is_empty());
+    /// ```
+    fn shadows(mut self, s: impl IntoIterator<Item = Shadow>) -> Self {
+        self.style_mut().shadow = s.into_iter().collect();
+        self
+    }
+    /// The theme's shadow list for this step off the surface.
+    ///
+    /// ```
+    /// use mui_core::prelude::*;
+    /// let mut el = leaf(80., 24.).elevation(Elevation::Floating);
+    /// assert_eq!(el.style_mut().shadow.len(), 2);
+    /// ```
+    fn elevation(self, e: Elevation) -> Self {
+        self.shadows(e.shadows())
     }
     /// A ring `d` inside the previous outline, painted `f`. Stack them for
     /// constant-thickness nesting.

@@ -660,7 +660,7 @@ mod classic {
             self.scene
                 .stroke(&self.stroke, self.transform, &self.brush, None, p);
         }
-        fn fill_blurred_rounded_rect(&mut self, r: &Rect, radius: f32, std_dev: f32) {
+        fn fill_blurred_rounded_rect(&mut self, r: &Rect, radius: f32, std_dev: f32, _: bool) {
             let c = self.color();
             self.scene.draw_blurred_rounded_rect(
                 self.transform,

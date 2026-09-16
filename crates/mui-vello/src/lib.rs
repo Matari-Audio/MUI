@@ -13,7 +13,7 @@
 #![forbid(unsafe_code)]
 
 use kurbo::{Affine, BezPath, Rect, Shape as _, Stroke};
-use mui_core::{Fit, Layer, Paint, Painted, ResolvedScene};
+use mui_core::{Fit, GradientKind, Layer, Paint, Painted, ResolvedScene, ShadowKind};
 use mui_geometry::{Error, Path, PathCommand};
 use std::sync::{Arc, Mutex};
 /// The brush type [`Canvas::set_paint`] takes, so the trait can be
@@ -166,7 +166,10 @@ pub trait Canvas {
     fn set_stroke(&mut self, s: Stroke);
     fn fill_path(&mut self, p: &BezPath);
     fn stroke_path(&mut self, p: &BezPath);
-    fn fill_blurred_rounded_rect(&mut self, r: &Rect, radius: f32, std_dev: f32);
+    /// A Gaussian-blurred rounded rectangle, analytically. With `invert`
+    /// the coverage is flipped -- opaque outside the rectangle, fading to
+    /// nothing inside it -- which, clipped to a shape, is an inset shadow.
+    fn fill_blurred_rounded_rect(&mut self, r: &Rect, radius: f32, std_dev: f32, invert: bool);
     /// Everything drawn until the matching [`Canvas::pop_clip`] is clipped to
     /// `p`. This is Vello's clip *stack*, not a compositing layer: no
     /// intermediate texture, and an unpopped clip is not a panic.
@@ -266,9 +269,9 @@ macro_rules! wrapper {
         fn stroke_path(&mut self, p: &BezPath) {
             self.$inner.stroke_path(p)
         }
-        fn fill_blurred_rounded_rect(&mut self, r: &Rect, radius: f32, std_dev: f32) {
+        fn fill_blurred_rounded_rect(&mut self, r: &Rect, radius: f32, std_dev: f32, invert: bool) {
             self.$inner
-                .fill_blurred_rounded_rect(r, radius, std_dev, false)
+                .fill_blurred_rounded_rect(r, radius, std_dev, invert)
         }
         fn push_clip(&mut self, p: &BezPath) {
             self.$inner.push_clip_path(p)
@@ -456,12 +459,7 @@ pub fn brush(p: &Paint, bounds: Rect) -> PaintType {
                 .into()
             })
         }
-        Paint::Linear { angle, stops } => {
-            let a = angle.to_radians();
-            let (s, c) = (a.sin(), -a.cos());
-            let len = (bounds.width() * s).abs() + (bounds.height() * c).abs();
-            let mid = bounds.center();
-            let half = (s * len / 2.0, c * len / 2.0);
+        Paint::Gradient { kind, stops } => {
             // `ColorStops` holds four stops inline, so the common gradient
             // does not allocate; a longer one allocates once, as before.
             let stops = ColorStops(
@@ -473,21 +471,45 @@ pub fn brush(p: &Paint, bounds: Rect) -> PaintType {
                     })
                     .collect(),
             );
-            PaintType::Gradient(
-                Gradient::new_linear(
-                    (mid.x - half.0, mid.y - half.1),
-                    (mid.x + half.0, mid.y + half.1),
-                )
-                .with_stops(stops),
-            )
+            let mid = bounds.center();
+            let g = match *kind {
+                GradientKind::Linear { angle } => {
+                    let a = angle.to_radians();
+                    let (s, c) = (a.sin(), -a.cos());
+                    let len = (bounds.width() * s).abs() + (bounds.height() * c).abs();
+                    let half = (s * len / 2.0, c * len / 2.0);
+                    Gradient::new_linear(
+                        (mid.x - half.0, mid.y - half.1),
+                        (mid.x + half.0, mid.y + half.1),
+                    )
+                }
+                // Unit coordinates in, scene units out: the ramp travels with
+                // the box instead of carrying pixels a layout has not solved.
+                GradientKind::Radial { center, radius } => Gradient::new_radial(
+                    (
+                        bounds.x0 + center.0 * bounds.width(),
+                        bounds.y0 + center.1 * bounds.height(),
+                    ),
+                    (radius * bounds.width().max(bounds.height())) as f32,
+                ),
+                // Radians, and clockwise from three o'clock: the quarter turn
+                // puts zero at the top, where CSS `conic-gradient` starts it.
+                // A whole turn, because a sweep that stopped short would
+                // repeat its extend mode over the rest of the box.
+                GradientKind::Conic { angle } => {
+                    let from = (angle - 90.0).to_radians() as f32;
+                    Gradient::new_sweep((mid.x, mid.y), from, from + std::f32::consts::TAU)
+                }
+            };
+            PaintType::Gradient(g.with_stops(stops))
         }
     }
 }
 
 /// Draw every entry of the scene's paint list, in order, under `transform`.
 ///
-/// Shadows take Vello's analytic blurred rectangle; a welded outline arrives
-/// as one such rect per welded child.
+/// Shadows take Vello's analytic blurred rectangle -- inverted, for an inset
+/// one; a welded outline arrives as one such rect per welded child.
 ///
 /// Every path is converted afresh. [`paint_cached`] is the same walk with the
 /// conversion remembered between frames.
@@ -587,7 +609,8 @@ fn fingerprint(p: &Painted) -> u64 {
         eat(u64::from_ne_bytes(w));
     }
     let (tag, n) = match p.layer {
-        Layer::Shadow => (0, 0),
+        Layer::Shadow(ShadowKind::Drop) => (0, 0),
+        Layer::Shadow(ShadowKind::Inset) => (0, 1),
         Layer::Fill => (1, 0),
         Layer::Shell(i) => (2, i),
         Layer::Stroke => (3, 0),
@@ -776,6 +799,9 @@ fn one(canvas: &mut impl Canvas, p: &Painted, path: &BezPath) -> Result<(), Erro
                 &Rect::new(b.min.x, b.min.y, b.max.x, b.max.y),
                 rr.radius() as f32,
                 p.blur as f32,
+                // The inverse coverage is the inset shadow; the walk has
+                // already clipped it to the node's outline.
+                matches!(p.layer, Layer::Shadow(ShadowKind::Inset)),
             );
         }
         // The walk emits a welded shadow as one blurred rect per child, so
@@ -974,10 +1000,9 @@ mod snapshot {
         let root = leaf(20., 20.)
             .fill(Role::Primary)
             .shadow(Shadow {
-                blur: 4.,
-                dx: 0.,
                 dy: 8.,
                 fill: Fill::Gradient(mui_core::Gradient::vertical(faint, faint.with_alpha(0.0))),
+                ..Shadow::soft(4.)
             })
             .id("card");
         let pix = pixels(&SceneSpec::new(root).offered(Size::new(20., 20.)), 40, 40);

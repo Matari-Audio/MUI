@@ -625,12 +625,14 @@ fn channels(e: &mut Element, pal: &Palette, ch: &mut impl FnMut(usize, f64) -> f
     if let Some(t) = e.text_size.as_mut() {
         *t = ch(6, *t).max(0.0);
     }
-    if let Some(s) = e.style.shadow.as_mut() {
-        s.blur = ch(7, s.blur).max(0.0);
+    for (i, s) in e.style.shadow.iter_mut().enumerate() {
+        s.blur = ch(7 + i, s.blur).max(0.0);
     }
+    // After the shadows, so a two-shadow node's shells keep their own slots.
+    let shells = 7 + e.style.shadow.len();
     for (i, (d, _)) in e.style.shells.iter_mut().enumerate() {
         if let Spacing::Px(v) = d {
-            *v = ch(8 + i, *v).max(0.0);
+            *v = ch(shells + i, *v).max(0.0);
         }
     }
 }

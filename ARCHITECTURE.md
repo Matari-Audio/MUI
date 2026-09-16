@@ -33,13 +33,16 @@ El tree  (row! / col! / stack! / grid!, Paints fills, presets, states, roles, sh
    |     clip   -> Clip(outline) ... children ... Unclip
    |     blend  -> Blend(mix, opacity) ... subtree ... Unblend, outside the clip
    |     weld   -> the shadow is one blurred rect per welded child
+   |     shadow -> drop shadows under the fill, inset ones over the shells
+   |               inside a Clip of the outline; both are one analytic
+   |               blurred rounded rect, inverted for the inset case
    |     roles  -> Palette                            ink resolves on its ground
    |     image  -> Fill::Image                        straight RGBA, fitted to
    |                                                  the node's own outline
    |                                                  (vello_cpu: pixmap; vello_hybrid: atlas id,
    |                                                  no Atlas -> a grey stand-in)
    |
-   v  ResolvedScene         paint: Vec<Painted>  (shadow, fill, shells, stroke,
+   v  ResolvedScene         paint: Vec<Painted>  (shadows, fill, shells, stroke,
    |                        text, draws, clip/unclip); floats are appended after
    |                        the root, so a tooltip or menu lands on top
    |                        surfaces: frame + path + clip + cursor + tip +

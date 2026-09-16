@@ -47,6 +47,7 @@ pub fn all() -> Vec<Box<dyn PreviewScene>> {
         Box::new(Cells),
         Box::new(Select::default()),
         Box::new(Editor),
+        Box::new(Effects),
     ]
 }
 
@@ -833,8 +834,58 @@ pub fn editor() -> El {
     .id("editor")
 }
 
+/// Paint the renderer could always do and the DSL could not say: a conic
+/// arc, a radial glow, stacked shadows, and glass without a backdrop blur.
+pub struct Effects;
+impl PreviewScene for Effects {
+    fn name(&self) -> &'static str {
+        "Gradients and shadows"
+    }
+    fn about(&self) -> &'static str {
+        "Conic and radial ramps, a two-shadow key, and glass as a translucent fill plus a bright edge plus an inner floor. No filter layer anywhere."
+    }
+    fn specimen(&mut self, _: &mut Ui) -> El {
+        effects()
+    }
+}
+
+/// The tree [`Effects`] shows, as a free function so the snapshot test below
+/// paints the same one the gallery does.
+pub fn effects() -> El {
+    // A knob arc is a conic gradient and nothing else: no path, no per-frame
+    // geometry, and the value is the stop position.
+    let knob = leaf(96.0, 96.0)
+        .pill()
+        .fill(Gradient::conic(
+            -135.0,
+            [(0.0, Primary), (0.7, Primary), (0.7, Field), (1.0, Field)],
+        ))
+        .id("knob");
+    let glow = leaf(96.0, 96.0)
+        .pill()
+        .fill(Gradient::radial(
+            (0.35, 0.3),
+            0.7,
+            [(0.0, Primary), (1.0, Surface)],
+        ))
+        .id("glow");
+    let key = leaf(96.0, 96.0)
+        .radius(12.0)
+        .fill(Field)
+        .elevation(Elevation::Raised)
+        .id("key");
+    let pane = leaf(96.0, 96.0).preset(&glass()).id("glass");
+    row![knob, glow, key, pane]
+        .gap(L)
+        .pad(L)
+        .fill(Surface)
+        .id("effects")
+}
+
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "cpu")]
+    use super::effects;
     use super::{editor, GlyphAxes};
     use mui::core::Frame as LayoutFrame;
     use mui::prelude::*;
@@ -845,6 +896,76 @@ mod tests {
             GlyphAxes::load_font(Some(("broken.ttf".to_owned(), Ok(Vec::new()))));
         assert_eq!(font.as_slice(), epaint_default_fonts::HACK_REGULAR);
         assert!(source.starts_with("broken.ttf: ") && source.ends_with(" — using Hack"));
+    }
+
+    /// The effects scene on the CPU. Every claim here is one a flat fill
+    /// cannot make: a ramp changes colour across a box, and a shadow darkens
+    /// the surface outside one.
+    #[cfg(feature = "cpu")]
+    #[test]
+    fn the_effects_scene_paints_ramps_and_shadows_a_flat_fill_cannot() {
+        use mui::vello::vello_cpu::{Pixmap, RenderContext, Resources};
+        let (w, h) = (620u16, 160u16);
+        let scene =
+            resolve_scene(&SceneSpec::new(effects()).offered(Size::new(w.into(), h.into())))
+                .unwrap();
+        let mut ctx = RenderContext::new(w, h);
+        let mut res = Resources::default();
+        mui::vello::paint(
+            &mut mui::vello::Cpu {
+                ctx: &mut ctx,
+                resources: &mut res,
+            },
+            &scene,
+            mui::vello::kurbo::Affine::IDENTITY,
+        )
+        .unwrap();
+        ctx.flush();
+        let mut pix = Pixmap::new(w, h);
+        ctx.render(&mut pix, &mut res);
+        let at = |x: f64, y: f64| {
+            let p = pix.data()[(y as usize) * usize::from(w) + x as usize];
+            (p.r, p.g, p.b)
+        };
+        let frame = |id: &str| scene.surface(id).unwrap().frame;
+        // A 5x5 grid inside a box: one colour is a flat fill, several is a ramp.
+        let shades = |id: &str| {
+            let f = frame(id);
+            let mut seen = Vec::new();
+            for i in 1..6 {
+                for j in 1..6 {
+                    let c = at(
+                        f.x + f.size.width * f64::from(i) / 6.0,
+                        f.y + f.size.height * f64::from(j) / 6.0,
+                    );
+                    if !seen.contains(&c) {
+                        seen.push(c);
+                    }
+                }
+            }
+            seen.len()
+        };
+        // The arc's stops are hard, so two colours is the whole ramp; the
+        // glow's are not, so it has as many as the grid can find.
+        assert!(shades("knob") > 1, "the conic arc painted flat");
+        assert!(shades("glow") > 2, "the radial glow painted flat");
+        // Glass is a fill plus an edge plus a floor: the edge is brighter
+        // than the middle and the floor is darker, which no fill can be.
+        let g = frame("glass");
+        let (mx, my) = (g.x + g.size.width / 2.0, g.y + g.size.height / 2.0);
+        let (edge, mid, floor) = (at(mx, g.y + 1.0), at(mx, my), at(mx, g.bottom() - 2.0));
+        assert!(edge.0 > mid.0, "no bright top edge: {edge:?} vs {mid:?}");
+        assert!(floor.0 < mid.0, "no inner floor: {floor:?} vs {mid:?}");
+        // The key's contact and ambient shadows darken the surface under it.
+        // The knob, the same box in the same row with no shadow, is the
+        // control: same panel, same y, no darkening.
+        let (k, n) = (frame("key"), frame("knob"));
+        let under = at(k.x + k.size.width / 2.0, k.bottom() + 4.0);
+        let bare = at(n.x + n.size.width / 2.0, n.bottom() + 4.0);
+        assert!(
+            under.0 < bare.0,
+            "no shadow under the key: {under:?} vs {bare:?}"
+        );
     }
 
     /// The three window shapes a plugin editor is actually dragged to. No

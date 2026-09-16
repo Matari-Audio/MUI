@@ -45,7 +45,8 @@ pub use scene::{
     SceneSpec, SceneState, Text, TextCache,
 };
 pub use style::{
-    Cursor, Fill, Fit, Gradient, Image, Mix, Paint, Radius, Role, Shadow, Stroke, Style,
+    Cursor, Elevation, Fill, Fit, Gradient, GradientKind, Image, Mix, Paint, Radius, Role, Shadow,
+    ShadowKind, Stroke, Style,
 };
 pub use theme::{CornerProfile, Theme};
 
@@ -55,9 +56,9 @@ pub mod prelude {
     pub use crate::Role::*;
     pub use crate::{
         canvas, caption, col, column, grid, label, leaf, overlay, resolve_scene, row, spacer,
-        stack, text, title, Align, Color, Cursor, Draw, El, Fill, Fit, Gradient, Image, IntoEl,
-        IntoLen, Justify, Kind, Len, Mix, Paints, Radius, Role, SceneSpec, Shadow, Size, State,
-        Style, Styled, Sugar, Theme,
+        stack, text, title, Align, Color, Cursor, Draw, El, Elevation, Fill, Fit, Gradient, Image,
+        IntoEl, IntoLen, Justify, Kind, Len, Mix, Paints, Radius, Role, SceneSpec, Shadow, Size,
+        State, Style, Styled, Sugar, Theme,
     };
     pub use mui_geometry::{Path, Point};
     pub use mui_layout::Spacing;
