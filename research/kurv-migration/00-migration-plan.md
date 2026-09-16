@@ -183,13 +183,13 @@ roughly doubling `mui-widgets`.
 | Change | Lines | Blocks | Phase |
 |---|---:|---|---|
 | `PointerInput { …, secondary_down, mods }` threaded onto `Response`; axis-lock in `Interaction` | ~90 | 7 surfaces: spline, pan, brush, fine drag, wavetable, reorder, every context menu | M1 |
-| `canvas` returns hit paths beside its `Draw`s | ~80 | pies, cables, knots, waveform scrub | M2 |
-| `State::Disabled` + `.disabled()` gating `Hit::push` | ~60 | bypassed modules, illegal routes | M3 |
-| `Ui::shortcuts()` unfocused key stream; F-keys, Space, PageUp/Down in `Key` | ~40 | undo/redo, F1, list nav | M3 |
-| Sticky as a `Pin` area against the enclosing scroll frame | ~70 | group rack, source rack | M4 |
-| Min-extent query from the intrinsic pass (`resolve` → `min_size`) | ~40 | the host's minimum window size | M4 |
-| `.reserve(s)` + `ResolvedScene::set_text(id, s)` | ~60 | every modulated readout at 60 Hz | M5 |
-| `Palette::from_seed(Color)`; `.text_weight()` | ~60 | 8 group accents, 13 `.typography` sites | M5 |
+| `canvas` returns hit paths beside its `Draw`s | ~80 | pies, cables, knots, waveform scrub | M2 — shipped |
+| `State::Disabled` + `.disabled()` gating `Hit::push` | ~60 | bypassed modules, illegal routes | M3 — shipped |
+| `Ui::shortcuts()` unfocused key stream; F-keys, Space, PageUp/Down in `Key` | ~40 | undo/redo, F1, list nav | M3 — shipped |
+| Sticky as a `Pin` area against the enclosing scroll frame | ~70 | group rack, source rack | M4 — shipped |
+| Min-extent query from the intrinsic pass (`resolve` → `min_size`) | ~40 | the host's minimum window size | M4 — shipped |
+| `.reserve(s)` + `ResolvedScene::set_text(id, s)` | ~60 | every modulated readout at 60 Hz | M5 — shipped |
+| `Palette::from_seed(Color)`; `.text_weight()` | ~60 | 8 group accents, 13 `.typography` sites | M5 — shipped |
 | `mui_widgets::curve` over `mui_motion::Curve` (knot hit, handle drag, insert/remove, magnetic snap, guides) | ~350 | ADSR, LFO/env, pan, wavetable, warp response | M6 |
 | Typed drag payload + ghost float | ~90 | modulation drag, card reorder | M7 |
 | Stable node identity (a key distinct from the path, honoured by springs/scrolls/focus/access) | ~100 | every reorder gesture, quietly | M7 |
@@ -235,11 +235,11 @@ land before K1; M6–M8 land before the surfaces that need them.
 
 | # | Branch (worktree) | Repo | Does | Acceptance | Size | After |
 |---|---|---|---|---|---:|---|
-| M1 | `mui/pointer-mods` | MUI | modifiers + secondary button on `PointerInput`→`Response`, axis-lock, `mui::Edit`→`Gesture` | unit tests in `mui-input`; preview gallery still green; one gallery scene drags with Shift | 90 | — |
-| M2 | `mui/canvas-hits` | MUI | `canvas` returns hit paths beside `Draw`s; `Hit::push` takes them | a gallery scene where a drawn arc responds only inside the arc; CPU snapshot unchanged | 80 | — |
-| M3 | `mui/disabled-and-keys` | MUI | `State::Disabled` + `.disabled()` gating `Hit::push`; `Ui::shortcuts()`; F-keys/Space/PageUp | a disabled widget neither paints lit nor hit-tests; a shortcut fires with nothing focused | 100 | M1 |
-| M4 | `mui/sticky-and-extent` | MUI | sticky as a `Pin` area against the scroll frame; `resolve` returns `min_size` | reflow test: a sticky header holds y at 3 scroll offsets; `min_size` matches the intrinsic pass | 110 | — |
-| M5 | `mui/live-text-and-seed` | MUI | `.reserve(s)` + `set_text(id, s)`; `Palette::from_seed`; `.text_weight()` | a readout changes text without re-resolving (assert one resolve per N frames); seeded palette passes the legibility check | 120 | — |
+| M1 ✅ | `mui/pointer-mods` | MUI | modifiers + secondary button on `PointerInput`→`Response`, axis-lock (`mui::Edit`→`Gesture` deliberately not done: `Edit` keeps its name, so KURV disambiguates the `mui_truce::Edit` import at its one call site) | unit tests in `mui-input`; preview gallery still green; one gallery scene drags with Shift | 90 | — |
+| M2 ✅ | `mui/canvas-hits` | MUI | `canvas` returns hit paths beside `Draw`s; `Hit::push` takes them | a gallery scene where a drawn arc responds only inside the arc; CPU snapshot unchanged | 80 | — |
+| M3 ✅ | `mui/disabled-and-keys` | MUI | `State::Disabled` + `.disabled()` gating `Hit::push`; `Ui::shortcuts()`; F-keys/Space/PageUp | a disabled widget neither paints lit nor hit-tests; a shortcut fires with nothing focused | 100 | M1 |
+| M4 ✅ | `mui/sticky-and-extent` | MUI | sticky as a `Pin` area against the scroll frame; `resolve` returns `min_size` | reflow test: a sticky header holds y at 3 scroll offsets; `min_size` matches the intrinsic pass | 110 | — |
+| M5 ✅ | `mui/live-text-and-seed` | MUI | `.reserve(s)` + `set_text(id, s)`; `Palette::from_seed`; `.text_weight()` | a readout changes text without re-resolving (assert one resolve per N frames); seeded palette passes the legibility check | 120 | — |
 | K0 | `kurv/editor-model` | KURV | extract `kurv::editor_model` (§2); repoint A's and B's 150 `crate::editor*` references; delete D1 + D2 | full `cargo test`; `check_mui_editor.py` unchanged (8 PASS scenarios); no behaviour change | −9,400 | — |
 | K1 | `kurv/mui2-skeleton` | KURV | `editor/host.rs` + `shell.rs` behind `--features mui2`: masthead, three racks, splitter, scroll, no content | reflow at 1000×600, 1400×900, 2000×1200: no `InsufficientSpace`, no horizontal overflow, splitter drags; CPU snapshot per size | 550 | M1,M4,K0 |
 | K2 | `kurv/mui2-theme-controls` | KURV | `editor_model/theme.rs` + `editor/components.rs`; one real oscillator card bound to truce | a knob drag emits Begin/Value/End through `Automation`; 0 colour literals (CI grep); snapshot at 3 sizes | 400 | K1,M5 |

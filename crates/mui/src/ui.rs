@@ -658,14 +658,18 @@ impl Ui {
         // Declared state looks first, so a transition springs toward the
         // style the node actually asked for this frame.
         let (springs, focus) = (&self.springs, self.focus.as_deref());
-        declared_states(&mut root, &|k, st| match st {
-            State::Hover => springs.get(k).is_some_and(|[h, _]| h.value > 0.5),
-            State::Press => springs.get(k).is_some_and(|[_, p]| p.value > 0.5),
-            State::Focus => focus == Some(k),
-            // Declared by the node, not discovered here: `declared_states`
-            // answers this one from the element itself.
-            State::Disabled => false,
-        });
+        declared_states(
+            &mut root,
+            &|k, st| match st {
+                State::Hover => springs.get(k).is_some_and(|[h, _]| h.value > 0.5),
+                State::Press => springs.get(k).is_some_and(|[_, p]| p.value > 0.5),
+                State::Focus => focus == Some(k),
+                // Declared by the node, not discovered here: `declared_states`
+                // answers this one from the element itself.
+                State::Disabled => false,
+            },
+            false,
+        );
         animating |= transitions(&mut root, &pal, &mut self.motion, dt);
         for (_, s) in self.motion.iter_mut().filter(|(k, _)| k.starts_with('~')) {
             if let Some(s) = s[0].as_mut() {
@@ -679,6 +683,7 @@ impl Ui {
             &pal,
             &|k| springs.get(k).map(|[h, p]| (h.value, p.value)),
             scrolls,
+            false,
         );
 
         let mut spec = SceneSpec::new(root).theme(self.theme);
@@ -839,14 +844,10 @@ fn transitions(
 
 /// Replace every named node's style with what it declared for the states it
 /// is in, in declaration order.
-fn declared_states(n: &mut El, is: &dyn Fn(&str, State) -> bool) {
-    declared_states_under(n, is, false);
-}
-
-/// `off` is the enclosing subtree's disabled flag: a card that switched
-/// itself off greys the controls inside it too, which is the same rule the
-/// hit gate uses.
-fn declared_states_under(n: &mut El, is: &dyn Fn(&str, State) -> bool, off: bool) {
+/// `off` is the enclosing subtree's disabled flag, `false` at the root: a card
+/// that switched itself off greys the controls inside it too, which is the same
+/// rule the hit gate uses.
+fn declared_states(n: &mut El, is: &dyn Fn(&str, State) -> bool, off: bool) {
     let off = off || n.payload().disabled;
     if let Some(k) = n.key().map(str::to_owned) {
         let e = n.payload_mut();
@@ -864,24 +865,15 @@ fn declared_states_under(n: &mut El, is: &dyn Fn(&str, State) -> bool, off: bool
         }
     }
     for c in n.children_mut() {
-        declared_states_under(c, is, off);
+        declared_states(c, is, off);
     }
 }
 
 /// Push hover and press into every named node's fill, proportionally, and
-/// slide the ones the wheel has scrolled.
+/// slide the ones the wheel has scrolled. `off` is the enclosing subtree's
+/// disabled flag, `false` at the root: a hover spring still decaying from
+/// before the node was switched off must not tint it.
 fn state(
-    n: &mut El,
-    pal: &Palette,
-    of: &dyn Fn(&str) -> Option<(f64, f64)>,
-    scrolls: &BTreeMap<String, [f64; 2]>,
-) {
-    state_under(n, pal, of, scrolls, false);
-}
-
-/// `off` is the enclosing subtree's disabled flag: a hover spring still
-/// decaying from before the node was switched off must not tint it.
-fn state_under(
     n: &mut El,
     pal: &Palette,
     of: &dyn Fn(&str) -> Option<(f64, f64)>,
@@ -904,7 +896,7 @@ fn state_under(
         }
     }
     for c in n.children_mut() {
-        state_under(c, pal, of, scrolls, off);
+        state(c, pal, of, scrolls, off);
     }
 }
 impl std::fmt::Debug for Ui {
@@ -997,7 +989,7 @@ mod tests {
     fn at(x: f64, y: f64, down: bool) -> PointerInput {
         PointerInput {
             pos: Some(Point::new(x, y)),
-            buttons: mui_input::Buttons::default().set(mui_input::Button::Primary, down),
+            buttons: Buttons::default().set(Button::Primary, down),
             ..PointerInput::default()
         }
     }

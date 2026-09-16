@@ -1,17 +1,25 @@
 # Architecture
 
 ```text
-Input (pointer, wheel, keys, text)
+Input (pointer with its Buttons and Mods, wheel, keys, text)
    |
    v  mui::Ui::frame        gestures + springs -> state mixed into fills
+   |                        one capture per button, with the modifiers at the
+   |                        press and now (Shift is the fine drag), the travel
+   |                        since the press and the axis it favours,
    |                        focus (press, Tab, Escape), wheel -> scroll offsets,
    |                        hover clock -> the tip that comes due,
    |                        capture edges -> Frame::edits (begin/end edit),
-   |                        clipboard in and out
+   |                        clipboard in and out. ui.keys(id) is focus-gated;
+   |                        ui.shortcuts() is not, except by a typing field
    |
-   v  declared states       a node's .on(Hover | Press | Focus, ..) closures
-   |                        run first, so the style the springs chase is the
-   |                        one the node asked for in the state it is in
+   v  declared states       a node's .on(Hover | Press | Focus | Disabled, ..)
+   |                        closures run first, so the style the springs chase
+   |                        is the one the node asked for in the state it is
+   |                        in. .disabled(flag) is declared, not discovered,
+   |                        and it flows down the subtree: the off look wins,
+   |                        the hover spring is not mixed in, and the node
+   |                        leaves the hit map, Tab and any gesture in flight
    |
    v  transitions           before anything is resolved: a node marked
    |                        .animate() has its declared fill, stroke width,
@@ -29,7 +37,12 @@ El tree  (row! / col! / stack! / grid! / fits!, Paints fills, presets merged
    |                        squeezed item is re-measured at its dealt share.
    |                        A `fits` node picks its candidate in that same
    |                        pass, and a `Pin` costs one more arrange over the
-   |                        floats, fed the anchor frames the first one found
+   |                        floats, fed the anchor frames the first one found.
+   |                        A `.sticky()` child is placed inside that same
+   |                        arrange, against the enclosing scroll viewport
+   |                        rather than an anchor node. The measure pass's
+   |                        floor comes back as Layout::min_size, which is
+   |                        the smallest window a host may offer
    |
    v  mui-scene walk         per node, in z-order:
    |     plain  -> RoundedRect(frame, radius)              a radius may be a
@@ -41,8 +54,15 @@ El tree  (row! / col! / stack! / grid! / fits!, Paints fills, presets merged
    |               Intersection); the child is placed by layout and never paints
    |     shell  -> inset(previous outline, d)        exact or parallel offset
    |     text   -> shaped run from the TextCache      mui-text, kept across frames
-   |               wrapped to the room its parent has, one Painted a line
-   |     canvas -> the closure's own paths, in the node's space
+   |               wrapped to the room its parent has, one Painted a line,
+   |               keyed on (string, size, weight) and carrying the face's
+   |               normalized coords so the renderer draws the instance that
+   |               was measured; .reserve(s) widens the box to hold s, and
+   |               ResolvedScene::set_text then swaps one run's glyphs
+   |               against the frame already solved -- no second walk
+   |     canvas -> the closure's own paths, in the node's space; a Draw
+   |               with a .tag becomes the surface's hit geometry instead of
+   |               its outline, and Draw::hit is that geometry unpainted
    |     clip   -> Clip(outline) ... children ... Unclip
    |     blend  -> Blend(mix, opacity) ... subtree ... Unblend, outside the clip
    |     mask   -> Blend(Normal, 1) ... subtree ... Mask(fill, source-atop) ...
@@ -64,11 +84,14 @@ El tree  (row! / col! / stack! / grid! / fits!, Paints fills, presets merged
    |                        semantics, in paint order, with their keys
    |
    +--> mui-input Hit       the same paths, pushed in paint order with their
-   |                        clip rect, so nothing responds where nothing is drawn
+   |                        clip rect, so nothing responds where nothing is
+   |                        drawn -- a canvas's tagged paths in place of its
+   |                        outline, a disabled surface not at all
    |
    +--> mui-access          the same surfaces, each with the role and label it
    |                        declared, as an accesskit::TreeUpdate for the
-   |                        host's adapter
+   |                        host's adapter; a disabled one says so and offers
+   |                        no Focus action
    |
    v  mui-vello paint       Canvas: Gpu { scene, resources } over vello_hybrid,
                             Cpu { ctx, resources } over vello_cpu.
@@ -106,7 +129,10 @@ The invariants that matter: a shell is derived from the outline before it,
 never from a guessed child radius; a preset merges per field and never
 clobbers the chain around it, and no style is ever a string parsed at runtime;
 a corner style rides the outline, so a
-squircle stays inside the rounded rect it replaces; a weld unions sharp frames before it
+squircle stays inside the rounded rect it replaces; what responds is what was
+drawn, which is why a tagged canvas answers in its ring and not in its hole,
+and why switching a node off is one call and not a grey fill beside a live
+gesture; a weld unions sharp frames before it
 fillets; a clip is a layer pair in the paint list, not a state flag, so a
 renderer that ignores it still draws something sane; a float keeps its
 declaration slot in frame order but its paint slot at the end. Everything

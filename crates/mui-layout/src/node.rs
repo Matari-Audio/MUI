@@ -457,6 +457,14 @@ impl<P> Node<P> {
     pub fn is_float(&self) -> bool {
         self.float
     }
+    /// Whether [`Node::sticky`] was called: the scene walk asks, because a
+    /// sticky child paints after the siblings that scroll under it.
+    ///
+    /// ```
+    /// use mui_layout::leaf;
+    /// assert!(leaf(10., 10.).sticky().is_sticky());
+    /// assert!(!leaf(10., 10.).is_sticky());
+    /// ```
     pub fn is_sticky(&self) -> bool {
         self.sticky
     }
