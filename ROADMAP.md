@@ -178,6 +178,20 @@ public function and a test behind it.
       is drawn and what `Curve::evaluate` samples for the DSP side are one
       curve. The Curve scene is the proof.
 
+- [x] `bins(ui, id, &Bins)`: the additive bin display, in the spirit of
+      Razor's bin view. One canvas and one hit shape -- the pointer's x
+      becomes a bin index arithmetically, not through a thousand tagged
+      draws -- so a press-drag paints every bin between the last sample and
+      this one, Shift refines from the level the press landed on, a
+      secondary click resets the bin under the pointer, and the arrows
+      select, jump and nudge while it holds the focus. `Bins` carries the
+      authored spectrum, the engine's live levels (drawn as a cap line over
+      the bars), a linear or log axis, per-bin positions for inharmonic
+      partials and the selection; `BinEdit` is what the caller applies to
+      its own model. Bars coalesce to one per pixel column at their
+      maximum, so 1024 partials at 200 px are 200 draws. The Bins scene is
+      the proof.
+
 - [x] `Ui::shortcuts()`: every key this frame, whatever holds the focus, so
       undo/redo and the function keys work with nothing selected. A focused
       `text_input` consumes the stream and nothing else does. `Key` grew

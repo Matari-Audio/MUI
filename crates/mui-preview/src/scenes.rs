@@ -41,6 +41,7 @@ pub fn all() -> Vec<Box<dyn PreviewScene>> {
         Box::new(Tips),
         Box::new(Curve::default()),
         Box::new(CurveEditor::default()),
+        Box::new(BinSpectrum::default()),
         Box::new(Hits::default()),
         Box::new(Swap::default()),
         Box::new(Images::new()),
@@ -509,6 +510,118 @@ impl PreviewScene for CurveEditor {
         .radius(16.0)
         .fill(Role::Surface)
         .id("curve-editor")
+    }
+}
+
+/// The bin display over a 64-partial saw: paint the bars, and watch a live
+/// overlay ride over what was authored.
+pub struct BinSpectrum {
+    authored: Vec<f32>,
+    selected: usize,
+    /// The ping-pong target the ripple's tween chases, so the scene keeps
+    /// asking for another frame.
+    target: f64,
+    log: bool,
+}
+impl Default for BinSpectrum {
+    fn default() -> Self {
+        Self {
+            authored: (1..=64).map(|h| 1.0 / h as f32).collect(),
+            selected: 0,
+            target: 1.0,
+            log: false,
+        }
+    }
+}
+impl PreviewScene for BinSpectrum {
+    fn name(&self) -> &'static str {
+        "Bins"
+    }
+    fn about(&self) -> &'static str {
+        "bins(ui, id, &Bins): draw across the bars to paint an additive spectrum. Shift is fine, a secondary click resets one, and with the focus here the arrows select and nudge. The cap line is the live level an operator chain would produce."
+    }
+    fn controls(&mut self, ui: &mut Ui) -> Vec<El> {
+        vec![row![
+            caption("Log axis"),
+            spacer(),
+            toggle(ui, "bins-log", &mut self.log).size(S).el(),
+        ]
+        .align(Align::Center)]
+    }
+    fn specimen(&mut self, ui: &mut Ui) -> El {
+        // A tween that flips its target on arrival: the ripple never settles,
+        // so `frame.animating` stays true without a clock of its own.
+        let phase = ui.tween("bins-ripple", self.target);
+        if (phase - self.target).abs() < 0.02 {
+            self.target = 1.0 - self.target;
+        }
+        let live: Vec<f32> = self
+            .authored
+            .iter()
+            .enumerate()
+            .map(|(i, v)| {
+                let w = (phase * std::f64::consts::TAU + i as f64 * 0.4).sin() * 0.5 + 0.5;
+                (f64::from(*v) * (0.2 + 0.8 * w)) as f32
+            })
+            .collect();
+        let model = Bins {
+            authored: &self.authored,
+            live: Some(&live),
+            x: if self.log {
+                BinAxis::Log
+            } else {
+                BinAxis::Linear
+            },
+            selected: Some(self.selected),
+            ..Bins::default()
+        };
+        let hovered = bins_hover(ui, "spectrum", &model);
+        let (plot, edit) = bins(ui, "spectrum", &model);
+        match edit {
+            Some(BinEdit::Paint(painted)) => {
+                for (i, v) in painted {
+                    if let Some(slot) = self.authored.get_mut(i) {
+                        *slot = v;
+                        self.selected = i;
+                    }
+                }
+            }
+            Some(BinEdit::Reset(i)) => {
+                if let Some(slot) = self.authored.get_mut(i) {
+                    *slot = 0.0;
+                }
+            }
+            Some(BinEdit::Select(i)) => self.selected = i,
+            None => {}
+        }
+        // The readout is the caller's: the widget hands back an index and
+        // this scene knows the partials are harmonics of 110 Hz.
+        let shown = hovered.unwrap_or(self.selected);
+        let level = self.authored.get(shown).copied().unwrap_or(0.0);
+        let readout = format!(
+            "partial {} — {:.0} Hz — {level:.2}",
+            shown + 1,
+            110.0 * (shown + 1) as f64
+        );
+        column([
+            plot.size(360.0, 150.0).radius(12.0).fill(Role::Field),
+            row([
+                text(readout).fill(Role::Dim),
+                spacer(),
+                text(if hovered.is_some() {
+                    "hovering"
+                } else {
+                    "selected"
+                })
+                .fill(Role::Dim),
+            ]),
+        ])
+        .gap(M)
+        .pad(L)
+        .width(400.0)
+        .radius(16.0)
+        .fill(Role::Surface)
+        .id("bin-spectrum")
     }
 }
 
