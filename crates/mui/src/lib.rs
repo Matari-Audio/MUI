@@ -47,7 +47,9 @@ pub mod prelude {
     pub use mui_scene::prelude::*;
     pub use mui_scene::{Corners, Mode, Palette, Pigment, SpacingToken, Spring};
     pub use mui_widgets::presets::{card, chip, glass, panel, tile};
-    pub use mui_widgets::{button, knob, slider, text_input, toggle, Control, Host, Variant};
+    pub use mui_widgets::{
+        button, curve, knob, slider, text_input, toggle, Control, CurveEdit, Host, Variant,
+    };
 }
 
 /// Every runnable `rust` block in the README, compiled and run by

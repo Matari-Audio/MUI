@@ -110,6 +110,29 @@ Every outline, weld rect and clip comes from one `bounds(frame, scale)`, and
 every baseline from one `snap`, so `SceneSpec::device_scale` puts paint, hit
 paths and clips on the same device grid or none of them.
 
+### The scale contract
+
+A host hands MUI a device scale (`Ui::scale`, `SceneSpec::device_scale`) and a
+size in *logical* units. Three rules follow, and `crates/mui/examples/snapshot.rs`
+renders the gallery at 1x, 1.5x and 2x to hold them:
+
+1. **Layout is scale-free.** Every length -- `gap`, `pad`, a font size, a knob's
+   radius -- is logical, at every scale. The resolved frames at 2x are the
+   frames at 1x, to the bit. Nothing in the tree multiplies by the scale, so
+   there is no scale for a widget to forget to apply.
+2. **The scale is a snapping grid.** `device_scale` moves each painted edge and
+   baseline onto the nearest device pixel, so abutting fills composite opaque.
+   A snapped edge is therefore within **half a device pixel** of the layout
+   edge at every scale: `painted * scale` never drifts from `frame * scale`.
+3. **The scale is a paint transform.** The renderer draws the logical scene
+   under `Affine::scale(s)` into an `s`-times-larger target. Glyphs and curves
+   are rasterised from outlines through that transform, so 2x is a 2x
+   rendering, not an upscaled 1x.
+
+A host that instead multiplies its lengths by the scale breaks (1), and the
+snapshot's own tests fail: that is the whole point of running the gallery at a
+fractional scale as well as an integer one.
+
 Reflow is three declarations, not a breakpoint: `clamp(min, pct, max)` is a
 length with two stops, `.min_col(px)` makes a grid's declared column count a
 ceiling it drops from, and `.wrap()` breaks a line. They resolve in the same
@@ -118,7 +141,9 @@ same tree measured twice. A grid, or a paragraph, only fits against a width it
 was offered -- but a flex share counts as one: a row deals its shares inside
 the measure pass and measures a squeezed item again at the size it got, so
 height-for-width resolves in the one solve. Only a hugging container, offered
-no width at all, has nothing to fit against.
+no width at all, has nothing to fit against -- it still honours the floors it
+was given there: a hugging grid keeps its declared column count and widens
+itself to `.min_col(px)` instead of squeezing a column under it.
 
 Layout answers **where content gets space**. Geometry answers **what shape
 gets painted**. Input answers **what the pointer and the keyboard mean**, and

@@ -40,6 +40,7 @@ pub fn all() -> Vec<Box<dyn PreviewScene>> {
         Box::new(Fields::default()),
         Box::new(Tips),
         Box::new(Curve::default()),
+        Box::new(CurveEditor::default()),
         Box::new(Hits::default()),
         Box::new(Swap::default()),
         Box::new(Images::new()),
@@ -470,6 +471,47 @@ impl PreviewScene for Curve {
     }
 }
 
+/// The curve editor over `mui_motion::Curve`: knots and tension handles are
+/// the canvas's own hit shapes, and the drag lands on the model.
+#[derive(Default)]
+pub struct CurveEditor {
+    env: mui::scene::curve::Curve,
+    last: Option<CurveEdit>,
+}
+impl PreviewScene for CurveEditor {
+    fn name(&self) -> &'static str {
+        "Curve"
+    }
+    fn about(&self) -> &'static str {
+        "curve(ui, id, &mut Curve): drag a knot or a tension handle. Shift is the fine drag, Alt at the press locks an axis, and a knot clamps between its neighbours."
+    }
+    fn specimen(&mut self, ui: &mut Ui) -> El {
+        let (plot, edit) = curve(ui, "env", &mut self.env);
+        self.last = edit.or(self.last);
+        let over = ui.tag("env").map(str::to_owned);
+        let readout = match (&over, self.last) {
+            (Some(t), _) => format!("over {t}"),
+            (None, Some(CurveEdit::Point(i))) => format!("last moved knot {i}"),
+            (None, Some(CurveEdit::Tension(j, h))) => format!("last bent segment {j} ({h:?})"),
+            (None, None) => "drag a knot".to_owned(),
+        };
+        column([
+            plot.size(320.0, 180.0).radius(12.0).fill(Role::Field),
+            row([
+                text(readout).fill(Role::Dim),
+                spacer(),
+                text(format!("f(0.5) = {:.2}", self.env.evaluate(0.5))).fill(Role::Dim),
+            ]),
+        ])
+        .gap(M)
+        .pad(L)
+        .width(360.0)
+        .radius(16.0)
+        .fill(Role::Surface)
+        .id("curve-editor")
+    }
+}
+
 /// A canvas whose drawn geometry is its hit geometry: the ring responds
 /// inside the ring, and the hole it leaves does not.
 #[derive(Default)]
@@ -819,7 +861,7 @@ impl PreviewScene for Cells {
         "Grid"
     }
     fn about(&self) -> &'static str {
-        ".span(n) makes a cell n columns wide, .order(n) moves it without moving its declaration, SpaceEvenly splits the slack."
+        ".span(n) makes a cell n columns wide, .order(n) moves it without moving its declaration, SpaceEvenly splits the slack, and the hugging card widens to its min_col instead of squeezing a column."
     }
     fn specimen(&mut self, _: &mut Ui) -> El {
         let cell = |n: &str, fill: Role| {
@@ -850,6 +892,23 @@ impl PreviewScene for Cells {
             .justify(Justify::SpaceEvenly)
             .width(320.0)
             .id("evenly"),
+            // A modal: nothing offers it a width, so it hugs. Its cells are
+            // 90 px wide and its columns are 140, because `min_col` is a
+            // minimum whether or not there is a window to drop columns
+            // against -- the card grows, the cells do not shrink.
+            column([
+                caption("hugging card, min_col(140)"),
+                grid(
+                    2,
+                    ["one", "two", "three", "four"].map(|n| cell(n, Role::Field)),
+                )
+                .gap(S)
+                .min_col(140.0)
+                .id("hug-grid"),
+            ])
+            .gap(S)
+            .preset(&card())
+            .id("hug"),
         ])
         .gap(M)
         .pad(L)
@@ -907,9 +966,17 @@ impl PreviewScene for Select {
 pub struct Gestures {
     cutoff: f64,
     gain: f64,
+    /// What has been dropped into each of the two slots.
+    slots: [Option<&'static str>; 2],
 }
+
+/// The payload one of the waveform chips carries while it is dragged. A
+/// caller's own type: MUI never looks inside it.
+struct Wave(&'static str);
+
 impl Gestures {
     const DEFAULTS: [f64; 2] = [0.5, -6.0];
+    const WAVES: [&'static str; 3] = ["sine", "saw", "noise"];
 
     /// A secondary click on `id` resets `value`. The button is on the same
     /// `Response` the drag came from, so nothing else has to be tracked.
@@ -924,16 +991,52 @@ impl PreviewScene for Gestures {
         "Pointer gestures"
     }
     fn about(&self) -> &'static str {
-        "Drag with Shift held for a tenth of the travel; right-click a control to reset it. The readout is the live Response."
+        "Drag with Shift held for a tenth of the travel; right-click a control to reset it. Drag a wave onto a slot: the payload is typed and lands once."
     }
     fn specimen(&mut self, ui: &mut Ui) -> El {
         Self::reset(ui, "g-cutoff", &mut self.cutoff, Self::DEFAULTS[0]);
         Self::reset(ui, "g-gain", &mut self.gain, Self::DEFAULTS[1]);
         let r = ui.get("g-cutoff");
         let said = |on: bool, s: &str| if on { s } else { "-" }.to_owned();
+
+        // A list of chips, each of which starts a typed drag, and two slots
+        // that take one. Ids are composed, not formatted: `Id::of("g-wave")
+        // .slot(i)` allocates nothing per frame.
+        let chips: Vec<El> = Self::WAVES
+            .iter()
+            .enumerate()
+            .map(|(i, w)| {
+                let id = Id::of("g-wave").slot(i);
+                if ui.get(&id).dragged {
+                    ui.start_drag(&id, Wave(w));
+                }
+                chip(w).cursor(Cursor::Grab).id(id)
+            })
+            .collect();
+        let slots: Vec<El> = (0..self.slots.len())
+            .map(|i| {
+                let id = Id::of("g-slot").slot(i);
+                if let Some(Wave(w)) = ui.dropped_on(&id) {
+                    self.slots[i] = Some(w);
+                }
+                // Only a slot the pointer is over lights up, and only while
+                // a wave is what is being carried.
+                let armed = ui.get(&id).drop_target && ui.dragging::<Wave>().is_some();
+                text(self.slots[i].unwrap_or("drop here"))
+                    .pad(S)
+                    .grow(1.0)
+                    .center()
+                    .radius(8.0)
+                    .fill(if armed { Role::Primary } else { Role::Field })
+                    .id(id)
+            })
+            .collect();
+
         column([
             knob(ui, "g-cutoff", "Cutoff", &mut self.cutoff, 0.0..=1.0).el(),
             slider(ui, "g-gain", "Gain", &mut self.gain, -24.0..=6.0).el(),
+            row(chips).gap(S),
+            row(slots).gap(S),
             row([
                 text(said(r.mods.shift, "shift")).fill(Role::Dim),
                 text(said(r.mods.alt, "alt")).fill(Role::Dim),

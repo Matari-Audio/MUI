@@ -77,6 +77,16 @@ public function and a test behind it.
 - [x] Device-grid paint: `SceneSpec::scale` / `Ui::scale` snap every edge,
       clip and baseline through one `bounds` and one `snap`, so abutting
       fills have no seam and a hinted paragraph has even leading.
+- [x] `.min_col` on a grid that hugs: with no offered width the declared
+      column count stands, but the grid widens itself to the minimum instead
+      of squeezing its cells under it -- the hug grows, the floor does not, so
+      a flex ancestor can still squeeze it into fewer columns. Every modal in
+      a plugin editor is a hugging container.
+- [x] The scale contract, written down in `ARCHITECTURE.md` and held by the
+      CPU snapshot example: it renders the gallery at 1x, 1.5x and 2x, and its
+      tests assert layout is identical at every scale, that a snapped edge is
+      within half a device pixel of it, and that the 2x render is a 2x
+      rasterisation rather than an upscaled 1x.
 - [x] Per-line baselines (a `.baseline()` row taller than its text keeps its
       letters in their frames), a wrapped paragraph reporting its column
       rather than its longest line, and a stroke painted inside its frame.
@@ -158,11 +168,32 @@ public function and a test behind it.
       all of that to its subtree. A gesture already in flight on it is
       cancelled with the `Edit::End` its host is owed.
 
+- [x] `curve(ui, id, &mut Curve)`: the envelope editor over the cubic model
+      `mui-motion` already had. One canvas, whose knots (`n{i}`) and tension
+      handles (`out{j}`/`in{j}`) are its hit shapes, so the drawn disc is the
+      grab disc and the spine between them is not a target. The drag lands on
+      `Curve::move_point`/`move_handle`, which clamp a knot to its neighbours
+      and a handle to its segment; Shift is the fine drag and Alt at the press
+      locks the axis. The path is fed the model's own control points, so what
+      is drawn and what `Curve::evaluate` samples for the DSP side are one
+      curve. The Curve scene is the proof.
+
 - [x] `Ui::shortcuts()`: every key this frame, whatever holds the focus, so
       undo/redo and the function keys work with nothing selected. A focused
       `text_input` consumes the stream and nothing else does. `Key` grew
       `Space`, `PageUp`, `PageDown` and `Function(n)`; the preview feeds all
       of them. The Disabled + shortcuts scene is the proof.
+
+- [x] Drag payloads and composed ids. `Ui::start_drag(id, payload)` attaches
+      any `Any + Send` value to the gesture in flight, `Ui::dragging::<T>()`
+      is the look at it a drop target wants before it lights up, and
+      `Ui::dropped_on::<T>(id)` takes it -- once, on the one frame the drop
+      is reported, and only from the drag that actually landed there. A ghost
+      stays the caller's: it is a `.float()` pinned to the pointer's surface.
+      `Id::of("osc").slot(3).field("gain")` composes a name into the same
+      `/`-joined key space with no allocation up to 46 bytes, `.id()` takes
+      anything `Into<Id>`, and `&str` still works everywhere it did. The
+      Pointer gestures scene is the proof.
 
 - [x] The crate split: theme data, motion and the scalar/spacing vocabulary
       sit under the element tree (`mui-style`, `mui-motion`, `mui-geometry`),
@@ -202,9 +233,6 @@ public function and a test behind it.
       straight or concave-filleted. A blur filter layer
       (`vello_common::filter_effects`) is the exact fix, once `vello_cpu`
       stops panicking on a filter in a multi-threaded context.
-- [ ] `.min_col` on a grid that hugs: with no width offered at all there is
-      nothing to drop columns against, so it keeps its declared count. A flex
-      share now counts as a width; a hugging grid still needs one.
 - [ ] No selection highlight while an input method is composing: the ends
       were measured against the value and the preedit sits between them, so
       the highlight is dropped for those frames. The commit still replaces
@@ -212,10 +240,11 @@ public function and a test behind it.
 - [ ] The first frame of a freshly-populated over-long `text_input` shows the
       head of the value: the widget has no inner width before its first
       layout. It catches up on the next frame.
-- [ ] Node identity: `ResolvedScene::keys` is gone (`surfaces()` yields paint
-      order and every surface carries its key), but focus rings, scroll
-      offsets and `mui-access` still key on `String` paths, so renaming a
-      node silently resets its state.
+- [ ] Node identity: `Id` makes a name cheap to compose, but it is still the
+      name that keys springs, focus rings, scroll offsets and `mui-access`,
+      so *renaming* a node -- which is what reordering a rack does -- still
+      resets its state. The fix is an identity distinct from the name,
+      threaded through those four maps.
 
 ## Order
 

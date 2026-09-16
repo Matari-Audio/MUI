@@ -17,9 +17,11 @@ use mui_geometry::Point;
 use mui_input::{KeyPress, Response};
 use mui_scene::{ResolvedScene, Spring, Theme};
 
+mod curve;
 pub mod presets;
 mod widgets;
 
+pub use curve::{curve, CurveEdit};
 pub use presets::{card, chip, glass, panel, tile};
 pub use widgets::{button, knob, slider, text_input, toggle, Control, Variant};
 
@@ -36,6 +38,9 @@ pub trait Host {
     fn scene(&self) -> Option<&ResolvedScene>;
     /// Last frame's gesture on `id`.
     fn get(&self, id: &str) -> Response;
+    /// Which shape of the canvas `id` the pointer is on, by the tag its
+    /// `Draw` carried, latched for the length of a gesture.
+    fn tag(&self, id: &str) -> Option<&str>;
     /// Hover and press amounts for `id`, 0..1 and spring-smoothed.
     fn state(&self, id: &str) -> (f64, f64);
     /// Apply a drag on `id` to `value` across `range`, `px` pixels for the

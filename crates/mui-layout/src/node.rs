@@ -28,7 +28,7 @@ pub(crate) enum Kind<P> {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Node<P = ()> {
-    pub(crate) id: Option<String>,
+    pub(crate) id: Option<Id>,
     pub(crate) kind: Kind<P>,
     pub(crate) payload: P,
     pub(crate) gap: Spacing,
@@ -176,7 +176,11 @@ impl<P: Default> Node<P> {
 impl<P> Node<P> {
     /// Name this node, so `Layout::frame` can find it. Structural nodes need no
     /// name and cost nothing unnamed.
-    pub fn id(mut self, id: impl Into<String>) -> Self {
+    /// ```
+    /// use mui_layout::{leaf, Id};
+    /// assert_eq!(leaf(1., 1.).id(Id::of("osc").slot(3)).key(), Some("osc/3"));
+    /// ```
+    pub fn id(mut self, id: impl Into<Id>) -> Self {
         self.id = Some(id.into());
         self
     }
@@ -414,7 +418,10 @@ impl<P> Node<P> {
     /// Grids only: CSS `repeat(auto-fit, minmax(px, 1fr))`. The declared
     /// column count becomes a ceiling, and the grid drops columns until each
     /// one is at least `px` wide. One primitive covers most reflow: the same
-    /// tree is three columns in a wide window and one in a thin one.
+    /// tree is three columns in a wide window and one in a thin one. A
+    /// hugging grid -- a modal, a popover, anything offered no width -- has
+    /// nothing to drop columns against, so it keeps its count and widens
+    /// itself to the minimum instead of squeezing a column under it.
     ///
     /// ```
     /// use mui_layout::{grid, leaf, resolve, Size};

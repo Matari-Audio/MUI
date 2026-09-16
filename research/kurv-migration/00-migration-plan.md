@@ -190,10 +190,10 @@ roughly doubling `mui-widgets`.
 | Min-extent query from the intrinsic pass (`resolve` → `min_size`) | ~40 | the host's minimum window size | M4 — shipped |
 | `.reserve(s)` + `ResolvedScene::set_text(id, s)` | ~60 | every modulated readout at 60 Hz | M5 — shipped |
 | `Palette::from_seed(Color)`; `.text_weight()` | ~60 | 8 group accents, 13 `.typography` sites | M5 — shipped |
-| `mui_widgets::curve` over `mui_motion::Curve` (knot hit, handle drag, insert/remove, magnetic snap, guides) | ~350 | ADSR, LFO/env, pan, wavetable, warp response | M6 |
-| Typed drag payload + ghost float | ~90 | modulation drag, card reorder | M7 |
-| Stable node identity (a key distinct from the path, honoured by springs/scrolls/focus/access) | ~100 | every reorder gesture, quietly | M7 |
-| `.min_col` against a hugging container (`ROADMAP.md` Missing) | ~60 | every KURV modal | M8 |
+| `mui_widgets::curve` over `mui_motion::Curve` (knot hit, handle drag) | ~350 | ADSR, LFO/env, pan, wavetable, warp response | M6 — shipped; insert/remove, magnetic snap and guides left to K4's gestures over `Curve::insert`/`split`/`remove` |
+| Typed drag payload + ghost float | ~90 | modulation drag, card reorder | M7 — shipped; the ghost stays the caller's `.float()` |
+| Stable node identity (a key distinct from the path, honoured by springs/scrolls/focus/access) | ~100 | every reorder gesture, quietly | M7 — **deferred**: `Id` makes the path cheap to compose, but it is still the path that keys springs/scroll/focus/access (`ROADMAP.md` Missing) |
+| `.min_col` against a hugging container (`ROADMAP.md` Missing) | ~60 | every KURV modal | M8 — shipped |
 
 Explicitly **not** MUI's: splitter, file dialogs, import jobs, document undo,
 preset audition, route legality, unit formatting, the HSV picker (1 call site),
@@ -244,13 +244,13 @@ land before K1; M6–M8 land before the surfaces that need them.
 | K1 | `kurv/mui2-skeleton` | KURV | `editor/host.rs` + `shell.rs` behind `--features mui2`: masthead, three racks, splitter, scroll, no content | reflow at 1000×600, 1400×900, 2000×1200: no `InsufficientSpace`, no horizontal overflow, splitter drags; CPU snapshot per size | 550 | M1,M4,K0 |
 | K2 | `kurv/mui2-theme-controls` | KURV | `editor_model/theme.rs` + `editor/components.rs`; one real oscillator card bound to truce | a knob drag emits Begin/Value/End through `Automation`; 0 colour literals (CI grep); snapshot at 3 sizes | 400 | K1,M5 |
 | K3 | `kurv/mui2-synth` | KURV | engine cards, VA table, unison, pan | `native_shell_recall`-equivalent scenario for VA controls staying in bounds; snapshots | 700 | K2 |
-| M6 | `mui/curve-widget` | MUI | `mui_widgets::curve` over `mui_motion::Curve`: knot hit, handle drag, insert/remove, magnetic snap, guides | port `magnetic_snap`/`curve_hit` tests verbatim; a gallery curve scene; drag under 1.5× | 350 | M1,M2 |
+| M6 ✅ | `mui/curve-widget` | MUI | `mui_widgets::curve` over `mui_motion::Curve`: knot hit, handle drag (insert/remove, magnetic snap and guides deferred to K4 over `Curve::insert`/`split`/`remove`) | port `magnetic_snap`/`curve_hit` tests verbatim; a gallery curve scene; drag under 1.5× | 350 | M1,M2 |
 | K4 | `kurv/mui2-groups-curves` | KURV | groups + inline ADSR + the curve bindings + brush | the checker's Alt-bend, ENV-stage-drag and Ctrl-brush scenarios, rewritten against the hit map | 550 | K3,M6 |
 | K5 | `kurv/mui2-modulators` | KURV | modulator rack, LFO/env/gate surfaces, sticky source headers | sticky header y under scroll; source curve drag + undo scenario | 450 | K4 |
-| M7 | `mui/drag-payload-identity` | MUI | typed drag payload + ghost float; stable node identity | reorder a gallery list: focus, scroll offset and springs survive; access tree keeps ids | 190 | M1 |
+| M7 ✅ | `mui/drag-payload-identity` | MUI | typed drag payload (the ghost stays a caller's `.float()`); composable `Id` — a *stable* identity distinct from the name is still deferred | reorder a gallery list: focus, scroll offset and springs survive; access tree keeps ids | 190 | M1 |
 | K6 | `kurv/mui2-routing` | KURV | ports, pies, cables, depth, drag-to-route; `editor_ghost` restored | `editor_ports`' moved tests run against the new hit map; a pie hits as a ring, not a rect | 400 | K5,M7,M2 |
 | K7 | `kurv/mui2-structure` | KURV | drag-reorder of cards/groups/warps, add/remove menus | the checker's add-Noise / add-groups / outside-group-extraction scenarios | 350 | K6 |
-| M8 | `mui/min-col-hug` | MUI | `.min_col` against a hugging container; a 1.5×/2× CPU snapshot case | the Responsive gallery scene at 240×600 and 2000×300; two new snapshot factors | 80 | — |
+| M8 ✅ | `mui/min-col-hug` | MUI | `.min_col` against a hugging container; the CPU snapshot at 1×/1.5×/2× with the scale contract asserted | the Responsive gallery scene at 240×600 and 2000×300; two new snapshot factors | 80 | — |
 | K8 | `kurv/mui2-browsers` | KURV | preset browser, samples/grain/resynth, wavetable, import jobs | round-trip: import a sample, audition a preset, undo; modals reflow at 3 sizes | 900 | K7,M8 |
 | K9 | `kurv/mui2-settings-manual` | KURV | settings/performance form, F1 manual overlay | the form drops to one column at 1000 px; F1 pops the component under the pointer | 350 | K8 |
 | K10 | `kurv/mui2-checker` | KURV | rewrite `tools/check_mui_editor.py` against the hit map: assert frames and `Interaction` responses, run at 1×/1.5×/2×, publish measured idle and drag frame times | the whole scenario list green at three scale factors; a number replaces the 165 fps claim | 250 | K9 |

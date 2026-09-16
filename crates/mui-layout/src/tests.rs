@@ -935,3 +935,40 @@ fn min_size_is_the_intrinsic_floor_and_a_scroll_gives_up_its_axis() {
     .unwrap();
     assert_eq!(scrolled.min_size(), Size::new(56., 16.));
 }
+
+#[test]
+fn min_col_widens_a_hugging_grid_instead_of_squeezing_its_columns() {
+    // A KURV modal: nothing offers it a width, so the grid used to keep its
+    // declared columns at the width of their narrowest content and ignore the
+    // minimum entirely. Hugging is not a licence to go under a declared floor.
+    let modal = |min: f64| {
+        column([grid(2, (0..4).map(|i| leaf(90., 40.).id(format!("c{i}"))))
+            .gap(10.)
+            .min_col(min)
+            .id("grid")])
+        .pad(12.)
+        .id("modal")
+    };
+    let l = resolve(&modal(160.), None, Default::default()).unwrap();
+    // Two 160-wide columns and one gap, not two 90-wide cells.
+    assert_eq!(l.frame("grid").unwrap().size.width, 330.);
+    assert_eq!(l.size.width, 354.);
+    // A minimum the content already clears changes nothing.
+    let l = resolve(&modal(80.), None, Default::default()).unwrap();
+    assert_eq!(l.frame("grid").unwrap().size.width, 190.);
+    // And the floor is still the cells', so a squeeze past the hug is a
+    // column drop, not an error: `min_col` widens, it does not pin.
+    let l = resolve(
+        &modal(160.),
+        Some(Size::new(200., 300.)),
+        Default::default(),
+    )
+    .unwrap();
+    let top = l.frame("c0").unwrap().y;
+    assert_eq!(
+        (0..4)
+            .filter(|i| l.frame(&format!("c{i}")).unwrap().y == top)
+            .count(),
+        1
+    );
+}

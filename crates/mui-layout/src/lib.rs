@@ -14,11 +14,13 @@
 use std::collections::BTreeMap;
 
 mod arrange;
+mod id;
 mod len;
 mod measure;
 mod node;
 mod pin;
 
+pub use id::Id;
 pub use len::{Align, Insets, Justify, Len, Size};
 pub use mui_geometry::{Spacing, SpacingScale, SpacingToken};
 pub use node::{column, fits, grid, leaf, overlay, row, Node};
@@ -68,7 +70,7 @@ impl Frame {
 pub struct Layout {
     pub size: Size,
     min: Size,
-    frames: BTreeMap<String, Frame>,
+    frames: BTreeMap<Id, Frame>,
     /// Every node's frame, in tree order (parent first, then children in
     /// declaration order). A walk of the same tree indexes straight into it,
     /// so nothing needs a name to be found.

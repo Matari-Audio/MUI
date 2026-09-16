@@ -96,7 +96,7 @@ pub(crate) fn cell<P>(
 pub(crate) fn hide<P>(
     m: &Measured<'_, P>,
     origin: [f64; 2],
-    out: &mut (BTreeMap<String, Frame>, Vec<Frame>),
+    out: &mut (BTreeMap<Id, Frame>, Vec<Frame>),
 ) {
     let frame = Frame {
         x: origin[0],
@@ -119,7 +119,7 @@ pub(crate) fn arrange<P>(
     size: Size,
     pins: &Pins<'_>,
     viewport: Option<Viewport>,
-    out: &mut (BTreeMap<String, Frame>, Vec<Frame>),
+    out: &mut (BTreeMap<Id, Frame>, Vec<Frame>),
 ) -> Result<(), Error> {
     let n = m.node;
     // Content is squeezable -- that is the whole point of shrink -- but the
@@ -324,7 +324,7 @@ pub(crate) fn arrange<P>(
                 .node
                 .pin
                 .as_ref()
-                .and_then(|pin| Some((pin, *pins.anchors.get(&pin.anchor)?)))
+                .and_then(|pin| Some((pin, *pins.anchors.get(pin.anchor.as_str())?)))
             {
                 // A pin is absolute: the anchor may be anywhere in the tree,
                 // so the parent's padding box has nothing to say about it.

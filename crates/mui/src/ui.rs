@@ -1,4 +1,5 @@
 //! The per-frame runtime: gestures in, animated styles applied, scene out.
+use std::any::Any;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -86,6 +87,10 @@ pub struct Ui {
     /// What a field asked for as its caret area this frame: its id and the
     /// caret rect in the field's own space.
     ime_caret: Option<(String, Point, f64)>,
+    /// The drag in flight and what it carries: the id that started it and a
+    /// payload only the dropping caller knows the type of. Cleared the frame
+    /// after the drop, taken by [`Ui::dropped_on`] before that.
+    drag: Option<(String, Box<dyn Any + Send>)>,
     /// A press that landed on the same target within [`DOUBLE_CLICK`].
     double: Option<String>,
     last_press: Option<(String, f64)>,
@@ -126,6 +131,7 @@ impl Ui {
             copied: None,
             preedit: None,
             ime_caret: None,
+            drag: None,
             double: None,
             last_press: None,
             focus: None,
@@ -343,6 +349,74 @@ impl Ui {
     pub fn dropped(&self) -> Option<(&str, &str)> {
         self.interaction.dropped()
     }
+    /// Attach a payload to the drag `id` has in flight: the value the drop
+    /// target will be handed. Call it while the gesture is dragging -- a
+    /// second call replaces what the first attached, so a widget may simply
+    /// set it every frame.
+    ///
+    /// The payload is the caller's type, not MUI's. A drag *ghost* is the
+    /// caller's too: pin an `El` to the pointer's surface and `.float()` it.
+    ///
+    /// ```
+    /// # use mui::Ui; use mui::prelude::*;
+    /// # let mut ui = Ui::new(Theme::DEFAULT);
+    /// struct Wave(&'static str);
+    /// if ui.get("saw").dragged {
+    ///     ui.start_drag("saw", Wave("saw"));
+    /// }
+    /// assert!(ui.dragging::<Wave>().is_none(), "nothing is dragging");
+    /// ```
+    pub fn start_drag(&mut self, id: &str, payload: impl Any + Send) {
+        self.drag = Some((id.to_owned(), Box::new(payload)));
+    }
+    /// The payload of the drag in flight, for anything that wants to look
+    /// before it lands: a drop target that highlights only for a payload it
+    /// accepts, a ghost that draws what is being carried. `None` once the
+    /// pointer is released, or when the payload is not a `T`.
+    ///
+    /// ```
+    /// # use mui::Ui; use mui::prelude::*;
+    /// # let ui = Ui::new(Theme::DEFAULT);
+    /// struct Wave(&'static str);
+    /// assert!(ui.dragging::<Wave>().is_none());
+    /// ```
+    pub fn dragging<T: Any>(&self) -> Option<&T> {
+        self.interaction.held()?;
+        self.drag.as_ref()?.1.downcast_ref::<T>()
+    }
+    /// Take the payload of a drag released over `id` this frame. Delivered
+    /// exactly once: the next call, on this frame or any later one, is
+    /// `None`. A release anywhere else delivers nothing to `id`, and a
+    /// payload of another type is left in place for whoever wants it.
+    ///
+    /// ```
+    /// # use mui::Ui; use mui::prelude::*;
+    /// # let mut ui = Ui::new(Theme::DEFAULT);
+    /// struct Wave(&'static str);
+    /// let mut slot: Option<&'static str> = None;
+    /// if let Some(Wave(w)) = ui.dropped_on::<Wave>("slot-0") {
+    ///     slot = Some(w);
+    /// }
+    /// assert_eq!(slot, None, "nothing was dropped");
+    /// ```
+    pub fn dropped_on<T: Any>(&mut self, id: &str) -> Option<T> {
+        let from = self.drag.as_ref().map(|(k, _)| k.as_str());
+        if !self
+            .interaction
+            .dropped()
+            .is_some_and(|(src, target)| target == id && from == Some(src))
+        {
+            return None;
+        }
+        let (src, payload) = self.drag.take()?;
+        match payload.downcast::<T>() {
+            Ok(v) => Some(*v),
+            Err(payload) => {
+                self.drag = Some((src, payload));
+                None
+            }
+        }
+    }
     /// The smallest the last resolved tree can be squeezed to, for a host that
     /// owns a window: a plugin refuses a resize below it. `None` before the
     /// first frame resolves.
@@ -521,6 +595,11 @@ impl Ui {
         }
         let prev_held = self.interaction.held().map(str::to_owned);
         self.interaction.update(&self.hit, input.pointer);
+        // A payload outlives its gesture by exactly the one frame the drop is
+        // reported in -- the frame the target's tree reads it from.
+        if self.interaction.held().is_none() && self.interaction.dropped().is_none() {
+            self.drag = None;
+        }
         let (hovered, held) = (
             self.interaction.hovered().map(str::to_owned),
             self.interaction.held().map(str::to_owned),
@@ -919,6 +998,9 @@ impl Host for Ui {
     fn get(&self, id: &str) -> Response {
         Ui::get(self, id)
     }
+    fn tag(&self, id: &str) -> Option<&str> {
+        Ui::tag(self, id)
+    }
     fn state(&self, id: &str) -> (f64, f64) {
         Ui::state(self, id)
     }
@@ -1018,6 +1100,66 @@ mod tests {
             p = if i == 0 { p.move_to(q) } else { p.line_to(q) };
         }
         p.close()
+    }
+
+    /// A source and a target side by side, 50 px each.
+    fn two() -> El {
+        row([
+            leaf(50., 50.).fill(Role::Field).id("src"),
+            leaf(50., 50.).fill(Role::Field).id("dst"),
+        ])
+    }
+
+    #[derive(Debug, PartialEq)]
+    struct Wave(&'static str);
+
+    /// Drag `src` out and back to `x`, then let go, attaching a payload once
+    /// the gesture is a drag. Returns the `Ui` on the frame the drop is reported in.
+    fn drag_to(x: f64) -> Ui {
+        let mut ui = Ui::new(Theme::DEFAULT);
+        for _ in 0..2 {
+            ui.frame(two(), None, at(25., 25., false), 0.016).unwrap();
+        }
+        ui.frame(two(), None, at(25., 25., true), 0.016).unwrap();
+        // Out past the drag threshold first, then wherever this drag ends.
+        ui.frame(two(), None, at(80., 25., true), 0.016).unwrap();
+        ui.frame(two(), None, at(x, 25., true), 0.016).unwrap();
+        assert!(ui.get("src").dragged, "the gesture is a drag by now");
+        ui.start_drag("src", Wave("saw"));
+        assert_eq!(ui.dragging::<Wave>(), Some(&Wave("saw")));
+        ui.frame(two(), None, at(x, 25., false), 0.016).unwrap();
+        ui
+    }
+
+    /// The payload reaches the target it was dropped on, once. A second ask
+    /// -- another widget, a later frame -- gets nothing, so a drop can never
+    /// be applied twice.
+    #[test]
+    fn a_dropped_payload_is_delivered_exactly_once() {
+        let mut ui = drag_to(80.);
+        assert_eq!(ui.dropped_on::<Wave>("dst"), Some(Wave("saw")));
+        assert_eq!(ui.dropped_on::<Wave>("dst"), None, "already taken");
+        assert!(ui.dragging::<Wave>().is_none(), "the gesture is over");
+    }
+
+    /// A payload nobody took does not survive its drag, and a release that
+    /// landed somewhere else was never that target's to take.
+    #[test]
+    fn a_release_elsewhere_delivers_nothing() {
+        // Back onto the source: `dst` sees no drop.
+        let mut ui = drag_to(25.);
+        assert_eq!(ui.dropped_on::<Wave>("dst"), None);
+        assert_eq!(ui.dropped_on::<Wave>("src"), Some(Wave("saw")));
+
+        // And the frame after a drop nobody took, the payload is gone.
+        let mut ui = drag_to(80.);
+        ui.frame(two(), None, at(80., 25., false), 0.016).unwrap();
+        assert_eq!(ui.dropped_on::<Wave>("dst"), None, "one frame only");
+
+        // A target asking for the wrong type leaves it for the right one.
+        let mut ui = drag_to(80.);
+        assert!(ui.dropped_on::<f64>("dst").is_none(), "not an f64");
+        assert_eq!(ui.dropped_on::<Wave>("dst"), Some(Wave("saw")));
     }
 
     /// The drawn shape is the hit shape: the ring responds, the hole it
