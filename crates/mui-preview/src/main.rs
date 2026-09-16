@@ -277,10 +277,17 @@ impl App {
         }
     }
 
-    fn queue(&mut self, pos: Option<Option<Point>>, down: Option<bool>) {
+    /// One pointer sample. `button` is the one whose state changed, if any;
+    /// the modifiers ride on every sample, because a gesture reads them long
+    /// after the key that set them was pressed.
+    fn queue(&mut self, pos: Option<Option<Point>>, button: Option<(Button, bool)>) {
         self.pointer = PointerInput {
             pos: pos.unwrap_or(self.pointer.pos),
-            primary_down: down.unwrap_or(self.pointer.primary_down),
+            buttons: match button {
+                Some((b, down)) => self.pointer.buttons.set(b, down),
+                None => self.pointer.buttons,
+            },
+            mods: self.mods,
         };
         self.events.push(self.pointer);
     }
@@ -549,8 +556,8 @@ impl App {
             (f.x + f.size.width / 2.0) * scale,
             (f.y + f.size.height / 2.0) * scale,
         );
-        self.queue(Some(Some(c)), Some(true));
-        self.queue(None, Some(false));
+        self.queue(Some(Some(c)), Some((Button::Primary, true)));
+        self.queue(None, Some((Button::Primary, false)));
     }
 
     fn draw(&mut self) {
@@ -670,12 +677,15 @@ impl ApplicationHandler<AccessEvent> for App {
             }
             WindowEvent::CursorLeft { .. } => self.queue(Some(None), None),
             WindowEvent::Focused(false) => self.cancel(),
-            WindowEvent::MouseInput {
-                state,
-                button: MouseButton::Left,
-                ..
-            } => {
-                self.queue(None, Some(state == ElementState::Pressed));
+            WindowEvent::MouseInput { state, button, .. } => {
+                let b = match button {
+                    MouseButton::Left => Button::Primary,
+                    MouseButton::Right => Button::Secondary,
+                    MouseButton::Middle => Button::Middle,
+                    // Back, forward and the rest are not gestures MUI knows.
+                    _ => return,
+                };
+                self.queue(None, Some((b, state == ElementState::Pressed)));
             }
             WindowEvent::Ime(e) => {
                 self.ime.push(match e {
@@ -693,6 +703,9 @@ impl ApplicationHandler<AccessEvent> for App {
                     alt: s.alt_key(),
                     cmd: s.super_key(),
                 };
+                // A modifier pressed without moving the pointer still changes
+                // the gesture in flight.
+                self.pointer.mods = self.mods;
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 // winit points the wheel at the viewer; a scroll offset points
@@ -790,7 +803,8 @@ mod tests {
     fn at(x: f64, y: f64, down: bool) -> PointerInput {
         PointerInput {
             pos: Some(Point::new(x, y)),
-            primary_down: down,
+            buttons: Buttons::default().set(Button::Primary, down),
+            ..PointerInput::default()
         }
     }
     fn centre(app: &App, key: &str) -> Point {

@@ -41,7 +41,9 @@ pub use ui::{Edit, Frame, Ui};
 
 pub mod prelude {
     pub use crate::{Edit, Frame, Ui};
-    pub use mui_input::{Ime, Input, Key, KeyPress, Mods, PointerInput, Response};
+    pub use mui_input::{
+        Axis, Button, Buttons, Ime, Input, Key, KeyPress, Mods, PointerInput, Response, FINE_DRAG,
+    };
     pub use mui_scene::prelude::*;
     pub use mui_scene::{Corners, Mode, Palette, Pigment, SpacingToken, Spring};
     pub use mui_widgets::presets::{card, chip, glass, panel, tile};

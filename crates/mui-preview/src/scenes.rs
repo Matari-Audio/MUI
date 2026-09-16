@@ -46,6 +46,7 @@ pub fn all() -> Vec<Box<dyn PreviewScene>> {
         Box::new(Motion::default()),
         Box::new(Cells),
         Box::new(Select::default()),
+        Box::new(Gestures::default()),
         Box::new(Editor),
         Box::new(Effects),
     ]
@@ -797,6 +798,64 @@ impl PreviewScene for Select {
         .radius(16.0)
         .fill(Role::Surface)
         .id("select")
+    }
+}
+
+/// Modifiers and the second button, which is what a parameter gesture is
+/// actually made of: Shift is the fine drag, secondary resets to default.
+#[derive(Default)]
+pub struct Gestures {
+    cutoff: f64,
+    gain: f64,
+}
+impl Gestures {
+    const DEFAULTS: [f64; 2] = [0.5, -6.0];
+
+    /// A secondary click on `id` resets `value`. The button is on the same
+    /// `Response` the drag came from, so nothing else has to be tracked.
+    fn reset(ui: &Ui, id: &str, value: &mut f64, default: f64) {
+        if ui.get(id).clicked_with(Button::Secondary) {
+            *value = default;
+        }
+    }
+}
+impl PreviewScene for Gestures {
+    fn name(&self) -> &'static str {
+        "Pointer gestures"
+    }
+    fn about(&self) -> &'static str {
+        "Drag with Shift held for a tenth of the travel; right-click a control to reset it. The readout is the live Response."
+    }
+    fn specimen(&mut self, ui: &mut Ui) -> El {
+        Self::reset(ui, "g-cutoff", &mut self.cutoff, Self::DEFAULTS[0]);
+        Self::reset(ui, "g-gain", &mut self.gain, Self::DEFAULTS[1]);
+        let r = ui.get("g-cutoff");
+        let said = |on: bool, s: &str| if on { s } else { "-" }.to_owned();
+        column([
+            knob(ui, "g-cutoff", "Cutoff", &mut self.cutoff, 0.0..=1.0).el(),
+            slider(ui, "g-gain", "Gain", &mut self.gain, -24.0..=6.0).el(),
+            row([
+                text(said(r.mods.shift, "shift")).fill(Role::Dim),
+                text(said(r.mods.alt, "alt")).fill(Role::Dim),
+                text(said(r.mods.ctrl, "ctrl")).fill(Role::Dim),
+                spacer(),
+                text(match r.button {
+                    Some(Button::Primary) => "primary",
+                    Some(Button::Secondary) => "secondary",
+                    Some(Button::Middle) => "middle",
+                    None => "-",
+                })
+                .fill(Role::Dim),
+            ])
+            .gap(S)
+            .align(Align::Center),
+        ])
+        .gap(M)
+        .pad(L)
+        .width(300.0)
+        .radius(20.0)
+        .fill(Role::Surface)
+        .id("gestures")
     }
 }
 

@@ -131,6 +131,15 @@ public function and a test behind it.
       typed text, and `Frame::ime` puts the host's candidate window under the
       field. No selection highlight while a composition is up.
 
+- [x] Pointer modifiers and the second button: `PointerInput` carries a
+      `Buttons` set and the shared `Mods`, `Response` reports the button that
+      pressed, the modifiers at the press and now, the travel since the press
+      and `drag_axis()`, and Shift is the fine drag every parameter wants
+      (`Ui::drag` applies `FINE_DRAG`). A click is `clicked_with(button)`, so
+      a secondary click resets a control instead of toggling it. The preview
+      feeds winit's three buttons and its modifiers; the Pointer gestures
+      scene is the proof.
+
 - [x] The crate split: theme data, motion and the scalar/spacing vocabulary
       sit under the element tree (`mui-style`, `mui-motion`, `mui-geometry`),
       `mui-core` is `mui-scene`, the controls are `mui-widgets` behind a

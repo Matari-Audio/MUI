@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use mui_geometry::Point;
-use mui_input::{Hit, Ime, Input, Interaction, Key, KeyPress, PointerInput, Response};
+use mui_input::{Hit, Ime, Input, Interaction, Key, KeyPress, PointerInput, Response, FINE_DRAG};
 use mui_layout::SpacingToken::{Xs, S};
 use mui_scene::prelude::{overlay, text, Paints as _, Role};
 use mui_scene::{
@@ -338,6 +338,18 @@ impl Ui {
 
     /// Apply a horizontal or vertical drag on `id` to `value` across `range`,
     /// `px` pixels for the full span. Returns whether it changed.
+    ///
+    /// Shift is the fine modifier: the same travel moves a tenth as far
+    /// ([`mui_input::FINE_DRAG`]), which is how every parameter in a synth
+    /// editor is dialled in.
+    ///
+    /// ```
+    /// # use mui::Ui; use mui::prelude::*;
+    /// # let ui = Ui::new(Theme::DEFAULT);
+    /// let mut cutoff = 0.5;
+    /// // Nothing is dragging, so nothing moves.
+    /// assert!(!ui.drag("cutoff", &mut cutoff, 0.0..=1.0, 160.0, false));
+    /// ```
     pub fn drag(
         &self,
         id: &str,
@@ -350,11 +362,8 @@ impl Ui {
         if !r.dragged || px <= 0.0 {
             return false;
         }
-        let d = if vertical {
-            -r.drag_delta.y
-        } else {
-            r.drag_delta.x
-        };
+        let delta = r.drag_fine(FINE_DRAG);
+        let d = if vertical { -delta.y } else { delta.x };
         // An inverted range (`1.0..=0.0`) is a legitimate downward control and
         // the delta math already reverses for it; only `clamp` needs the
         // bounds in order, since it panics on `min > max`.
@@ -802,13 +811,14 @@ impl Host for Ui {
 mod tests {
     use super::*;
     use mui_geometry::Point;
-    use mui_input::Mods;
+    use mui_input::{Button, Buttons, Mods};
     use mui_scene::prelude::*;
 
     fn at(x: f64, y: f64, down: bool) -> PointerInput {
         PointerInput {
             pos: Some(Point::new(x, y)),
-            primary_down: down,
+            buttons: mui_input::Buttons::default().set(mui_input::Button::Primary, down),
+            ..PointerInput::default()
         }
     }
     fn key(k: Key) -> Input {
@@ -1198,6 +1208,53 @@ mod tests {
             "the resting radius is the theme's, not the hover one"
         );
         assert_eq!(warm, 3., "hovered, the declared radius is what paints");
+    }
+
+    /// The whole of M1 as one widget sees it: Shift is fine, and a
+    /// secondary click is a click the caller can tell apart.
+    #[test]
+    fn shift_drags_a_value_fine_and_a_secondary_click_is_distinguishable() {
+        let mut ui = Ui::new(Theme::DEFAULT);
+        let tree = || leaf(40., 40.).fill(Role::Raised).id("b");
+        let drag = |ui: &mut Ui, mods: Mods| {
+            // The hit map is last frame's, so a press needs a frame to land on.
+            ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
+            let press = PointerInput {
+                mods,
+                ..at(10., 10., true)
+            };
+            ui.frame(tree(), None, press, 0.016).unwrap();
+            let moved = PointerInput {
+                mods,
+                ..at(90., 10., true)
+            };
+            ui.frame(tree(), None, moved, 0.016).unwrap();
+            let mut v = 0.0;
+            assert!(ui.drag("b", &mut v, 0.0..=1.0, 80.0, false));
+            ui.frame(tree(), None, at(90., 10., false), 0.016).unwrap();
+            v
+        };
+        let coarse = drag(&mut ui, Mods::default());
+        let fine = drag(
+            &mut ui,
+            Mods {
+                shift: true,
+                ..Mods::default()
+            },
+        );
+        assert!((coarse - 1.0).abs() < 1e-9, "80 px is the full span");
+        assert!((fine - coarse * FINE_DRAG).abs() < 1e-9, "a tenth of it");
+
+        ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
+        let secondary = PointerInput {
+            buttons: Buttons::default().set(Button::Secondary, true),
+            ..at(10., 10., false)
+        };
+        ui.frame(tree(), None, secondary, 0.016).unwrap();
+        ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
+        let r = ui.get("b");
+        assert!(r.clicked_with(Button::Secondary), "the reset gesture");
+        assert!(!r.clicked_with(Button::Primary));
     }
 
     #[test]

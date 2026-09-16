@@ -20,7 +20,9 @@
 //! purpose, because only the caller knows which of several scenes was clicked.
 #![forbid(unsafe_code)]
 
-use mui_geometry::{Bounds, Error, Path, Point};
+pub use mui_geometry::Point;
+
+use mui_geometry::{Bounds, Error, Path};
 use vello_common::kurbo::{BezPath, Rect, Shape as _};
 
 /// How far the pointer may travel between press and release and still count as
@@ -100,12 +102,106 @@ impl Hit {
     }
 }
 
+/// How much of a drag a gesture keeps while the fine modifier is held.
+/// KURV's `FINE_DRAG_SCALE`: a tenth, which is the difference between
+/// "somewhere near 3 kHz" and "3 kHz".
+pub const FINE_DRAG: f64 = 0.1;
+
+/// A pointer button. Primary is the one a click means; secondary opens a
+/// menu or resets a parameter; middle is the pan grab.
+///
+/// ```
+/// # use mui_input::{Button, Buttons};
+/// assert!(Buttons::default().set(Button::Secondary, true).contains(Button::Secondary));
+/// ```
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum Button {
+    #[default]
+    Primary,
+    Secondary,
+    Middle,
+}
+
+impl Button {
+    /// In press-priority order: two buttons going down on one frame are read
+    /// as the first of these.
+    const ALL: [Self; 3] = [Self::Primary, Self::Secondary, Self::Middle];
+
+    const fn bit(self) -> u8 {
+        1 << self as u8
+    }
+}
+
+/// Which buttons are down this frame. A set rather than a field per button,
+/// so a fourth one costs a constant and nothing else.
+///
+/// ```
+/// # use mui_input::{Button, Buttons};
+/// let b = Buttons::default().set(Button::Primary, true);
+/// assert!(b.contains(Button::Primary) && !b.contains(Button::Middle));
+/// assert!(Buttons::default().is_empty());
+/// ```
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Buttons(u8);
+
+impl Buttons {
+    /// The primary button alone -- what a host reports for an ordinary click.
+    ///
+    /// ```
+    /// # use mui_input::{Button, Buttons};
+    /// assert!(Buttons::PRIMARY.contains(Button::Primary));
+    /// ```
+    pub const PRIMARY: Self = Self(Button::Primary.bit());
+
+    /// Whether `b` is down.
+    ///
+    /// ```
+    /// # use mui_input::{Button, Buttons};
+    /// assert!(!Buttons::PRIMARY.contains(Button::Secondary));
+    /// ```
+    #[must_use]
+    pub const fn contains(self, b: Button) -> bool {
+        self.0 & b.bit() != 0
+    }
+
+    /// The set with `b` added or removed. Hosts report one button at a time,
+    /// so this is the shape an event handler wants.
+    ///
+    /// ```
+    /// # use mui_input::{Button, Buttons};
+    /// let b = Buttons::PRIMARY.set(Button::Primary, false);
+    /// assert!(b.is_empty());
+    /// ```
+    #[must_use]
+    pub const fn set(self, b: Button, down: bool) -> Self {
+        Self(if down {
+            self.0 | b.bit()
+        } else {
+            self.0 & !b.bit()
+        })
+    }
+
+    /// Whether no button is down.
+    ///
+    /// ```
+    /// # use mui_input::Buttons;
+    /// assert!(Buttons::default().is_empty());
+    /// ```
+    #[must_use]
+    pub const fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+}
+
 /// One frame of raw pointer state. Whatever the windowing layer reports.
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
 pub struct PointerInput {
     /// `None` when the pointer left the surface entirely.
     pub pos: Option<Point>,
-    pub primary_down: bool,
+    pub buttons: Buttons,
+    /// The modifiers held *now*, which is not the same question as the
+    /// modifiers held at the press: a fine drag reads this one.
+    pub mods: Mods,
 }
 
 /// A key the host reports, already interpreted: a printable character or one
@@ -126,6 +222,14 @@ pub enum Key {
     End,
 }
 
+/// The modifier keys held. Shared by [`KeyPress`] and [`PointerInput`]: a
+/// gesture and a shortcut ask the same question.
+///
+/// ```
+/// # use mui_input::Mods;
+/// let fine = Mods { shift: true, ..Mods::default() };
+/// assert!(fine.shift && !fine.alt);
+/// ```
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct Mods {
     pub shift: bool,
@@ -209,6 +313,83 @@ pub struct Response {
     pub drop_target: bool,
     /// A drag was released over this target this frame.
     pub dropped_on: bool,
+    /// Which button opened the capture, while this target has one.
+    pub button: Option<Button>,
+    /// The modifiers held now. A fine drag reads these, because letting go of
+    /// Shift mid-drag must coarsen the rest of it.
+    pub mods: Mods,
+    /// The modifiers held when the press landed. A gesture whose *kind* was
+    /// chosen at the press -- bend versus move, add versus remove -- reads
+    /// these, so releasing Alt halfway does not change what it is doing.
+    pub press_mods: Mods,
+    /// Pointer travel since the press, zero unless dragging. Distinct from
+    /// [`Response::drag_delta`], which is this frame alone.
+    pub drag_total: Point,
+}
+
+/// Which way a drag is mostly going. Returned by [`Response::drag_axis`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Axis {
+    X,
+    Y,
+}
+
+impl Response {
+    /// This frame's drag movement with `fine` applied while Shift is held --
+    /// pass [`FINE_DRAG`] unless the control wants its own ratio.
+    ///
+    /// ```
+    /// # use mui_input::{Mods, Point, Response, FINE_DRAG};
+    /// let r = Response {
+    ///     drag_delta: Point::new(10.0, 0.0),
+    ///     mods: Mods { shift: true, ..Mods::default() },
+    ///     ..Response::default()
+    /// };
+    /// assert_eq!(r.drag_fine(FINE_DRAG).x, 1.0);
+    /// ```
+    #[must_use]
+    pub fn drag_fine(&self, fine: f64) -> Point {
+        self.drag_delta * if self.mods.shift { fine } else { 1.0 }
+    }
+
+    /// The axis this drag has travelled furthest along since its press, for a
+    /// caller that wants to lock to one. `None` until it has moved at all, so
+    /// a lock never picks an axis from a single noisy frame.
+    ///
+    /// ```
+    /// # use mui_input::{Axis, Point, Response};
+    /// let r = Response {
+    ///     dragged: true,
+    ///     drag_total: Point::new(2.0, 40.0),
+    ///     ..Response::default()
+    /// };
+    /// assert_eq!(r.drag_axis(), Some(Axis::Y));
+    /// ```
+    #[must_use]
+    pub fn drag_axis(&self) -> Option<Axis> {
+        let d = self.drag_total;
+        (self.dragged && (d.x != 0.0 || d.y != 0.0)).then(|| {
+            if d.x.abs() >= d.y.abs() {
+                Axis::X
+            } else {
+                Axis::Y
+            }
+        })
+    }
+
+    /// Clicked by one particular button. `clicked` alone says nothing about
+    /// which, so a button widget asks for [`Button::Primary`] and a reset
+    /// gesture asks for [`Button::Secondary`].
+    ///
+    /// ```
+    /// # use mui_input::{Button, Response};
+    /// let r = Response { clicked: true, button: Some(Button::Secondary), ..Response::default() };
+    /// assert!(r.clicked_with(Button::Secondary) && !r.clicked_with(Button::Primary));
+    /// ```
+    #[must_use]
+    pub fn clicked_with(&self, b: Button) -> bool {
+        self.clicked && self.button == Some(b)
+    }
 }
 
 /// Interaction state carried between frames.
@@ -231,7 +412,12 @@ pub struct Interaction {
     last_pos: Option<Point>,
     drag_delta: Point,
     dragging: bool,
-    was_down: bool,
+    /// The buttons that were down last frame, for edge detection.
+    was: Buttons,
+    /// Which button opened the capture, and the modifiers it opened under.
+    press_button: Option<Button>,
+    press_mods: Mods,
+    mods: Mods,
     threshold: f64,
 }
 
@@ -249,7 +435,10 @@ impl Default for Interaction {
             last_pos: None,
             drag_delta: Point::new(0., 0.),
             dragging: false,
-            was_down: false,
+            was: Buttons::default(),
+            press_button: None,
+            press_mods: Mods::default(),
+            mods: Mods::default(),
             threshold: DRAG_THRESHOLD,
         }
     }
@@ -296,15 +485,26 @@ impl Interaction {
         self.drag_delta = Point::new(0., 0.);
 
         let over = input.pos.and_then(|p| hit.at(p)).map(str::to_owned);
+        self.mods = input.mods;
+        // A capture belongs to one button: a second one going down mid-drag
+        // is ignored, and only the one that pressed can end the gesture.
+        let newly = Button::ALL
+            .into_iter()
+            .find(|&b| input.buttons.contains(b) && !self.was.contains(b));
 
-        if input.primary_down && !self.was_down {
-            if let Some(id) = over.clone() {
+        if self.active.is_none() {
+            if let (Some(b), Some(id)) = (newly, over.clone()) {
                 self.press_pos = input.pos;
+                self.press_button = Some(b);
+                self.press_mods = input.mods;
                 self.dragging = false;
                 self.pressed = Some(id.clone());
                 self.active = Some(id);
             }
-        } else if !input.primary_down && self.was_down {
+        } else if self
+            .press_button
+            .is_some_and(|b| !input.buttons.contains(b))
+        {
             if let Some(id) = self.active.take() {
                 if self.dragging {
                     // The pointer may have left every target; a drag that
@@ -343,7 +543,7 @@ impl Interaction {
 
         self.over = over;
         self.last_pos = input.pos;
-        self.was_down = input.primary_down;
+        self.was = input.buttons;
     }
 
     /// What happened to `id` this frame. Unknown ids report a default
@@ -352,6 +552,9 @@ impl Interaction {
     pub fn get(&self, id: &str) -> Response {
         let is = |slot: &Option<String>| slot.as_deref() == Some(id);
         let held = is(&self.active);
+        // Everything that names a button is about *this* target's gesture;
+        // the edge flags only ever fire on the target that was captured.
+        let mine = held || is(&self.pressed) || is(&self.released) || is(&self.clicked);
         Response {
             hovered: is(&self.hovered),
             pressed: is(&self.pressed),
@@ -366,6 +569,17 @@ impl Interaction {
             },
             drop_target: self.dragging && !held && is(&self.over),
             dropped_on: self.dropped.as_ref().is_some_and(|(_, t)| t == id),
+            button: if mine { self.press_button } else { None },
+            mods: self.mods,
+            press_mods: if mine {
+                self.press_mods
+            } else {
+                Mods::default()
+            },
+            drag_total: match (held && self.dragging, self.last_pos, self.press_pos) {
+                (true, Some(now), Some(origin)) => now - origin,
+                _ => Point::ZERO,
+            },
         }
     }
 
@@ -388,6 +602,11 @@ impl Interaction {
     /// The captured target, if a gesture is in progress.
     pub fn held(&self) -> Option<&str> {
         self.active.as_deref()
+    }
+
+    /// The button holding the gesture in flight, if there is one.
+    pub fn held_button(&self) -> Option<Button> {
+        self.active.as_ref().and(self.press_button)
     }
 }
 

@@ -3,7 +3,7 @@
 use std::ops::RangeInclusive;
 
 use mui_geometry::Point;
-use mui_input::Key;
+use mui_input::{Button, Key};
 use mui_scene::prelude::*;
 use mui_scene::{Palette, SpacingToken, Spring, Stroke};
 
@@ -350,7 +350,7 @@ pub fn knob(
 /// assert_eq!(save.variant(Variant::Soft).size(S).el().children().len(), 1);
 /// ```
 pub fn button(ui: &impl Host, id: &str, label: &str) -> (Control, bool) {
-    let clicked = ui.get(id).clicked;
+    let clicked = ui.get(id).clicked_with(Button::Primary);
     let (id, label) = (id.to_owned(), label.to_owned());
     let el = Control::new(ui, move |look| {
         let pad_y = ((look.px - 14.0) / 2.0).max(2.0);
@@ -377,7 +377,7 @@ pub fn button(ui: &impl Host, id: &str, label: &str) -> (Control, bool) {
 /// assert_eq!(sw.el().children().len(), 3);
 /// ```
 pub fn toggle(ui: &impl Host, id: &str, on: &mut bool) -> Control {
-    if ui.get(id).clicked {
+    if ui.get(id).clicked_with(Button::Primary) {
         *on = !*on;
     }
     let (id, on) = (id.to_owned(), *on);

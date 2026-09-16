@@ -55,14 +55,27 @@ fn reversed(mut c: Vec<PathCommand>) -> Vec<PathCommand> {
 fn at(x: f64, y: f64) -> PointerInput {
     PointerInput {
         pos: Some(Point::new(x, y)),
-        primary_down: false,
+        ..PointerInput::default()
     }
 }
 
 fn down(x: f64, y: f64) -> PointerInput {
     PointerInput {
-        primary_down: true,
+        buttons: Buttons::PRIMARY,
         ..at(x, y)
+    }
+}
+
+fn with(mut p: PointerInput, b: Button, mods: Mods) -> PointerInput {
+    p.buttons = p.buttons.set(Button::Primary, false).set(b, true);
+    p.mods = mods;
+    p
+}
+
+fn shift() -> Mods {
+    Mods {
+        shift: true,
+        ..Mods::default()
     }
 }
 
@@ -251,7 +264,8 @@ fn losing_the_pointer_mid_gesture_keeps_the_capture() {
         &hit,
         PointerInput {
             pos: None,
-            primary_down: true,
+            buttons: Buttons::PRIMARY,
+            ..PointerInput::default()
         },
     );
     assert!(ui.get("a").held, "capture dropped when the pointer left");
@@ -362,4 +376,77 @@ fn a_drag_released_over_another_target_is_a_drop() {
     assert!(!i.get("a").clicked, "a drag is never a click");
     i.update(&hit, at(80., 20.));
     assert_eq!(i.dropped(), None, "one frame only");
+}
+
+// ---- buttons and modifiers ---------------------------------------------
+
+#[test]
+fn a_secondary_press_captures_and_names_its_button() {
+    let (hit, mut i) = (one_square(), Interaction::new());
+    i.update(
+        &hit,
+        with(down(50., 50.), Button::Secondary, Mods::default()),
+    );
+    let r = i.get("a");
+    assert!(r.pressed && r.held);
+    assert_eq!(r.button, Some(Button::Secondary));
+    assert_eq!(i.held_button(), Some(Button::Secondary));
+    i.update(&hit, at(50., 50.));
+    let r = i.get("a");
+    assert!(
+        r.clicked_with(Button::Secondary),
+        "a right click is a click"
+    );
+    assert!(!r.clicked_with(Button::Primary), "but not a left one");
+}
+
+#[test]
+fn a_second_button_pressed_mid_gesture_does_not_steal_the_capture() {
+    let (hit, mut i) = (one_square(), Interaction::new());
+    i.update(&hit, down(50., 50.));
+    let both = PointerInput {
+        buttons: Buttons::PRIMARY.set(Button::Secondary, true),
+        ..down(50., 50.)
+    };
+    i.update(&hit, both);
+    assert_eq!(i.get("a").button, Some(Button::Primary));
+    // Letting go of the *other* button ends nothing.
+    i.update(&hit, down(50., 50.));
+    assert!(i.get("a").held);
+    i.update(&hit, at(50., 50.));
+    assert!(i.get("a").released);
+}
+
+#[test]
+fn modifiers_are_reported_at_the_press_and_now() {
+    let (hit, mut i) = (one_square(), Interaction::new());
+    i.update(&hit, with(down(50., 50.), Button::Primary, shift()));
+    i.update(&hit, with(down(60., 50.), Button::Primary, Mods::default()));
+    let r = i.get("a");
+    assert!(r.press_mods.shift, "the press was a Shift press");
+    assert!(!r.mods.shift, "and Shift is gone now");
+    assert_eq!(
+        i.get("b").press_mods,
+        Mods::default(),
+        "a target with no gesture claims no modifiers"
+    );
+}
+
+#[test]
+fn shift_drags_fine_and_a_drag_locks_to_its_longest_axis() {
+    let (hit, mut i) = (one_square(), Interaction::new());
+    i.update(&hit, with(down(50., 50.), Button::Primary, shift()));
+    i.update(&hit, with(down(50., 90.), Button::Primary, shift()));
+    let r = i.get("a");
+    assert_eq!(r.drag_delta.y, 40.0, "the raw delta is untouched");
+    assert_eq!(r.drag_fine(FINE_DRAG).y, 4.0, "Shift is the fine modifier");
+    assert_eq!(r.drag_total, Point::new(0., 40.), "travel since the press");
+    assert_eq!(r.drag_axis(), Some(Axis::Y));
+    i.update(
+        &hit,
+        with(down(150., 90.), Button::Primary, Mods::default()),
+    );
+    let r = i.get("a");
+    assert_eq!(r.drag_fine(FINE_DRAG).x, 100.0, "coarse again mid-drag");
+    assert_eq!(r.drag_axis(), Some(Axis::X), "x now dominates");
 }
