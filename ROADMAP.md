@@ -12,7 +12,7 @@ public function and a test behind it.
 - [x] Geometry: Booleans with holes, adaptive convex/concave fillets, exact
       rounded-rect inset/outset, general parallel offsets, validation.
 - [x] Text: glyph and string outlines from variable fonts, as paths.
-- [x] Core: the `Paints`/`Styled` DSL (`fill`, `stroke`, `radius`, `pill`,
+- [x] Scene (was `mui-core`): the `Paints`/`Styled` DSL (`fill`, `stroke`, `radius`, `pill`,
       `shadow`, `shell`, `weld`, `text_size`), `Role`/`Fill`/`Gradient`/`Paint`,
       Oklch palette with checked legibility, the tree walk to a z-ordered
       paint list, `Spring`.
@@ -24,7 +24,7 @@ public function and a test behind it.
 - [x] Preview: the gallery is one `mui` tree, sidebar included, its text
       renders as hinted glyph runs, and winit's wheel, keys, modifiers and
       cursor icon ride through `Input` / `Frame`.
-- [x] Core DSL sugar: `row!`/`col!`/`stack!`/`grid!` taking anything
+- [x] Scene DSL sugar: `row!`/`col!`/`stack!`/`grid!` taking anything
       `IntoEl`, `.w`/`.h`/`.square` on bare integers, `.center`/`.start`/
       `.end`/`.between`, `title`/`label`/`caption`.
 - [x] Clips: `.clip()` and `.scroll()` as a `Clip`/`Unclip` layer pair in the
@@ -130,6 +130,13 @@ public function and a test behind it.
       under the caret without ever joining the value, a commit inserts like
       typed text, and `Frame::ime` puts the host's candidate window under the
       field. No selection highlight while a composition is up.
+
+- [x] The crate split: theme data, motion and the scalar/spacing vocabulary
+      sit under the element tree (`mui-style`, `mui-motion`, `mui-geometry`),
+      `mui-core` is `mui-scene`, the controls are `mui-widgets` behind a
+      `Host` trait, and `mui` is the facade that owns the runtime and the
+      prelude. The graph is acyclic and every public path is unchanged;
+      `mui::core` stays as a deprecated alias of `mui::scene` for one release.
 
 ## Missing
 

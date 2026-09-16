@@ -3,6 +3,9 @@
 //! Coordinates are group-local logical units. Apply input affine transforms BEFORE
 //! the Boolean operation; radii are measured in the resulting coordinate space.
 //! Nothing in this crate knows about egui, wgpu, windowing, input or colors.
+//! It also holds the [`Spacing`] scale, the unit both the style crate and the
+//! layout solver state a gap or a pad in; it is the shared floor, not a
+//! theme.
 //!
 //! Supported input: closed polygon exteriors with optional polygon holes. A hole
 //! means subtraction from its exterior; it is not an independent negative shape.
@@ -15,6 +18,7 @@ mod math;
 mod nesting;
 mod offset;
 mod path;
+mod spacing;
 pub use nesting::{inset_arc_radius, inset_for_stroked_gap, InsetRect, NestedRadius, RoundedRect};
 pub use offset::{
     boundary_distance, inset_path, offset_path, outset_path, InsetShape, OffsetOptions, OffsetShape,
@@ -26,6 +30,7 @@ pub use boolean::{
 pub use fillet::{fillet, Corner, CornerStyle, Fillet, RoundedShape};
 pub use math::{Affine, Bounds, Point};
 pub use path::{Arc, Path, PathCommand};
+pub use spacing::{Spacing, SpacingScale, SpacingToken};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Error {

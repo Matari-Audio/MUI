@@ -1860,14 +1860,16 @@ name = "mui"
 version = "0.3.0"
 dependencies = [
  "epaint_default_fonts",
- "mui-core",
  "mui-egui",
  "mui-geometry",
  "mui-input",
  "mui-layout",
+ "mui-motion",
+ "mui-scene",
  "mui-tessellate",
  "mui-text",
  "mui-vello",
+ "mui-widgets",
  "png 0.17.16",
 ]
 
@@ -1876,18 +1878,7 @@ name = "mui-access"
 version = "0.3.0"
 dependencies = [
  "accesskit",
- "mui-core",
-]
-
-[[package]]
-name = "mui-core"
-version = "0.3.0"
-dependencies = [
- "color",
- "epaint_default_fonts",
- "mui-geometry",
- "mui-layout",
- "mui-text",
+ "mui-scene",
 ]
 
 [[package]]
@@ -1910,15 +1901,22 @@ dependencies = [
 name = "mui-input"
 version = "0.3.0"
 dependencies = [
- "mui-core",
  "mui-geometry",
  "mui-layout",
+ "mui-scene",
  "mui-vello",
  "vello_common 0.2.0",
 ]
 
 [[package]]
 name = "mui-layout"
+version = "0.3.0"
+dependencies = [
+ "mui-geometry",
+]
+
+[[package]]
+name = "mui-motion"
 version = "0.3.0"
 
 [[package]]
@@ -1935,6 +1933,26 @@ dependencies = [
  "vello_hybrid",
  "wgpu",
  "winit",
+]
+
+[[package]]
+name = "mui-scene"
+version = "0.3.0"
+dependencies = [
+ "epaint_default_fonts",
+ "mui-geometry",
+ "mui-layout",
+ "mui-motion",
+ "mui-style",
+ "mui-text",
+]
+
+[[package]]
+name = "mui-style"
+version = "0.3.0"
+dependencies = [
+ "color",
+ "mui-geometry",
 ]
 
 [[package]]
@@ -1973,9 +1991,9 @@ dependencies = [
  "epaint_default_fonts",
  "glifo 0.3.0",
  "mui",
- "mui-core",
  "mui-geometry",
  "mui-layout",
+ "mui-scene",
  "mui-text",
  "png 0.17.16",
  "pollster",
@@ -1984,6 +2002,16 @@ dependencies = [
  "vello_cpu 0.2.0",
  "vello_hybrid",
  "wgpu",
+]
+
+[[package]]
+name = "mui-widgets"
+version = "0.3.0"
+dependencies = [
+ "mui",
+ "mui-geometry",
+ "mui-input",
+ "mui-scene",
 ]
 
 [[package]]

@@ -1,14 +1,21 @@
-//! MUI core: a styled layout tree in, a z-ordered paint list out.
+//! A styled element tree lowered to a resolved, paint-ordered scene.
+//!
+//! The [`El`] DSL and its `row!`/`col!`/`stack!`/`grid!` sugar build the tree,
+//! [`Styled`] and [`Paints`] decorate it, and [`resolve_scene`] walks it once
+//! against a [`Theme`] into a z-ordered [`ResolvedScene`] paint list.
 //!
 //! Renderer-independent, `forbid(unsafe_code)`. Layout frames and painted
 //! geometry stay separate: a node's outline may be its own rounded frame or
 //! the filleted union of its children, and every shell is a true parallel
 //! inset of the outline before it.
 //!
+//! What this crate is not: it holds no widgets and no state (`mui-widgets`),
+//! no event loop or input handling (`mui`), and no rasterizer (`mui-vello`).
+//!
 //! The compact spelling, which says the same thing:
 //!
 //! ```
-//! use mui_core::prelude::*;
+//! use mui_scene::prelude::*;
 //! # let _before =
 //! column([row([text("Filter"), spacer(), text("on")])
 //!     .align(Align::Center)
@@ -20,36 +27,29 @@
 //! ```
 #![forbid(unsafe_code)]
 
-mod color;
-pub mod curve;
 mod dsl;
 mod element;
-mod motion;
 mod scene;
-mod style;
-mod theme;
 
-pub use color::{Color, Mode, Palette, Pigment};
 pub use dsl::{caption, label, title, IntoLen, Sugar};
 pub use element::{
     canvas, column, fits, grid, leaf, overlay, row, spacer, text, Canvas, Carve, Content, Draw, El,
     Element, IntoEl, Kind, Paints, Semantics, State, StateStyle, Styled,
 };
-pub use motion::Spring;
 pub use mui_geometry::CornerStyle;
 pub use mui_layout::{
     Align, Area, Frame, Insets, Justify, Layout, Len, Limits, Match, Node, Pin, Size, Spacing,
     SpacingScale, SpacingToken,
 };
+pub use mui_motion::{curve, Spring};
+pub use mui_style::{
+    Color, Corner, Corners, Cursor, Elevation, Fill, Fit, Gradient, GradientKind, Image, Mix, Mode,
+    Paint, Palette, Pigment, Radius, Role, Shadow, ShadowKind, Stroke, Style, Theme,
+};
 pub use scene::{
     resolve_scene, resolve_scene_with, Layer, Painted, ResolvedScene, ResolvedSurface, SceneError,
     SceneSpec, SceneState, Text, TextCache,
 };
-pub use style::{
-    Cursor, Elevation, Fill, Fit, Gradient, GradientKind, Image, Mix, Paint, Radius, Role, Shadow,
-    ShadowKind, Stroke, Style,
-};
-pub use theme::{Corner, Corners, Theme};
 
 /// Everything a scene file needs, including the spacing tokens as bare
 /// names: `.gap(M).pad(L)`.
@@ -68,7 +68,7 @@ pub mod prelude {
     /// values between `Xs` and `Xl`.
     ///
     /// ```
-    /// use mui_core::prelude::*;
+    /// use mui_scene::prelude::*;
     /// let row = row!["a", "b"].gap(step(2.));
     /// assert_eq!(step(2.).resolve(Default::default()), 8.);
     /// ```
@@ -84,7 +84,7 @@ pub mod prelude {
     /// is a fifth of the panel, whatever the hugging row between them does:
     ///
     /// ```
-    /// use mui_core::prelude::*;
+    /// use mui_scene::prelude::*;
     /// let badge = leaf(0., 12.).w(cq(20.)).id("badge");
     /// let panel = col![row![badge]].w(400.);
     /// let scene = resolve_scene(&SceneSpec::new(panel)).unwrap();
@@ -99,7 +99,7 @@ pub mod prelude {
     /// the nearest sized ancestor instead, see [`cq`]:
     ///
     /// ```
-    /// use mui_core::prelude::*;
+    /// use mui_scene::prelude::*;
     /// let rail = col![text("Filters")].w(clamp(64., 30., 220.)).id("rail");
     /// let row = row![rail, leaf(0., 0.).grow(1.)];
     /// let scene =

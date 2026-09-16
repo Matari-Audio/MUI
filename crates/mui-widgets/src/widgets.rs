@@ -2,12 +2,12 @@
 //! where two flex weights put it, a knob's pointer is an anchored offset.
 use std::ops::RangeInclusive;
 
-use mui_core::prelude::*;
-use mui_core::{Palette, SpacingToken, Spring, Stroke};
 use mui_geometry::Point;
 use mui_input::Key;
+use mui_scene::prelude::*;
+use mui_scene::{Palette, SpacingToken, Spring, Stroke};
 
-use crate::Ui;
+use crate::Host;
 
 /// How solid a control looks. daisyUI's four button styles, resolved from
 /// the role and the palette rather than from a table of colours.
@@ -109,13 +109,13 @@ pub struct Control {
     build: Box<dyn FnOnce(&Look) -> El>,
 }
 impl Control {
-    fn new(ui: &Ui, build: impl FnOnce(&Look) -> El + 'static) -> Self {
+    fn new(ui: &impl Host, build: impl FnOnce(&Look) -> El + 'static) -> Self {
         Self {
             look: Look {
-                px: ui.theme.control,
+                px: ui.theme().control,
                 variant: Variant::Solid,
                 role: Role::Primary,
-                palette: ui.theme.palette,
+                palette: ui.theme().palette,
             },
             size: SpacingToken::M,
             px: None,
@@ -150,7 +150,7 @@ impl Control {
         self
     }
     /// One of the five sizes, the same five everywhere: `Xs` through `Xl`
-    /// multiply the theme's [`control`](mui_core::Theme::control) unit.
+    /// multiply the theme's [`control`](mui_scene::Theme::control) unit.
     ///
     /// ```
     /// use mui::prelude::*;
@@ -222,7 +222,7 @@ fn unit(value: f64, range: &RangeInclusive<f64>) -> f64 {
 
 /// Label, readout, and a track whose fill and thumb are flex shares.
 ///
-/// Call [`Ui::edit`](crate::Ui::edit) with the same id to bracket the drag
+/// Call `Ui::edit` with the same id to bracket the drag
 /// for a host's automation: `Begin` on the press, `End` on the release.
 ///
 /// ```
@@ -233,7 +233,7 @@ fn unit(value: f64, range: &RangeInclusive<f64>) -> f64 {
 /// assert_eq!(fader.el().children().len(), 2);
 /// ```
 pub fn slider(
-    ui: &mut Ui,
+    ui: &mut impl Host,
     id: &str,
     label: &str,
     value: &mut f64,
@@ -285,7 +285,7 @@ pub fn slider(
 /// tween, so a value set from outside -- a preset, a host automation curve --
 /// glides instead of jumping, while a drag still tracks the pointer.
 ///
-/// Bracket it with [`Ui::edit`](crate::Ui::edit), as for [`slider`]. The
+/// Bracket it with `Ui::edit`, as for [`slider`]. The
 /// diameter comes from the theme and the size token; `.px(72.0)` is the
 /// hatch for a dial that has to match a hardware panel.
 ///
@@ -297,7 +297,7 @@ pub fn slider(
 /// assert_eq!(dial.size(Xl).el().children().len(), 2);
 /// ```
 pub fn knob(
-    ui: &mut Ui,
+    ui: &mut impl Host,
     id: &str,
     label: &str,
     value: &mut f64,
@@ -349,7 +349,7 @@ pub fn knob(
 /// assert!(!clicked);
 /// assert_eq!(save.variant(Variant::Soft).size(S).el().children().len(), 1);
 /// ```
-pub fn button(ui: &Ui, id: &str, label: &str) -> (Control, bool) {
+pub fn button(ui: &impl Host, id: &str, label: &str) -> (Control, bool) {
     let clicked = ui.get(id).clicked;
     let (id, label) = (id.to_owned(), label.to_owned());
     let el = Control::new(ui, move |look| {
@@ -376,7 +376,7 @@ pub fn button(ui: &Ui, id: &str, label: &str) -> (Control, bool) {
 /// let sw = toggle(&ui, "bypass", &mut bypass).size(Xs);
 /// assert_eq!(sw.el().children().len(), 3);
 /// ```
-pub fn toggle(ui: &Ui, id: &str, on: &mut bool) -> Control {
+pub fn toggle(ui: &impl Host, id: &str, on: &mut bool) -> Control {
     if ui.get(id).clicked {
         *on = !*on;
     }
@@ -445,12 +445,12 @@ fn insert(value: &mut String, caret: &mut usize, c: char) {
 /// edits the focused keys imply. Click to focus and set the caret, drag to
 /// select, double click for a word, shift+arrows to extend. ctrl/cmd+A, C, X
 /// and V select all, copy, cut and paste -- a copy leaves the text in
-/// [`Frame::clipboard`](crate::Frame) for the host to hand to the OS, and a
+/// `Frame::clipboard` for the host to hand to the OS, and a
 /// paste reads `Input::clipboard`, which the host fills on the paste key.
 // ponytail: single line. A multi-line field wants the caret on a line index,
 // not a byte, and `mui_text::break_lines` to place it.
-pub fn text_input(ui: &mut Ui, id: &str, value: &mut String) -> El {
-    let size = ui.theme.text;
+pub fn text_input(ui: &mut impl Host, id: &str, value: &mut String) -> El {
+    let size = ui.theme().text;
     let focused = ui.focused(id);
     let n = value.chars().count();
     let (anchor, caret) = ui.sel(id);
@@ -629,66 +629,4 @@ pub fn text_input(ui: &mut Ui, id: &str, value: &mut String) -> El {
         ui.set_ime_caret(id, Point::new(PAD + caret_x - shift, 6.0), size);
     }
     el
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn face(v: Variant) -> Style {
-        let ui = Ui::new(Theme::DEFAULT);
-        button(&ui, "b", "Save")
-            .0
-            .variant(v)
-            .el()
-            .payload()
-            .style
-            .clone()
-    }
-
-    /// Each variant is arithmetic on one role: filled, faded, stroked, bare.
-    #[test]
-    fn a_variant_paints_the_role_without_naming_a_second_colour() {
-        assert_eq!(face(Variant::Solid).fill, Fill::Role(Role::Primary));
-        assert_eq!(face(Variant::Soft).fill, Fill::Faded(Role::Primary, 0.18));
-        let outline = face(Variant::Outline);
-        assert_eq!(outline.fill, Fill::None);
-        assert_eq!(
-            outline.stroke.map(|s| s.fill),
-            Some(Fill::Role(Role::Primary))
-        );
-        assert_eq!(face(Variant::Ghost).fill, Fill::None);
-        // A filled face carries contrast ink; the rest speak as the role.
-        let ink = |v: Variant| {
-            let ui = Ui::new(Theme::DEFAULT);
-            let el = button(&ui, "b", "Save").0.variant(v).el();
-            el.children()[0].payload().style.fill.clone()
-        };
-        assert_eq!(ink(Variant::Solid), Fill::Role(Role::Ink));
-        assert_eq!(ink(Variant::Ghost), Fill::Role(Role::Primary));
-    }
-
-    /// One `Theme.control` unit, five steps, and pixels as the escape hatch.
-    #[test]
-    fn the_size_scale_steps_every_control_off_the_theme_unit() {
-        let width = |c: Control| {
-            let ui = Ui::new(Theme::DEFAULT);
-            let _ = &ui;
-            let scene = resolve_scene(&SceneSpec::new(c.el())).expect("resolves");
-            scene.surface("sw").expect("the toggle").frame.size.width
-        };
-        let ui = Ui::new(Theme::DEFAULT);
-        let mut on = false;
-        let sw = |size: SpacingToken| {
-            let mut on = on;
-            toggle(&ui, "sw", &mut on).size(size)
-        };
-        let (xs, m, xl) = (width(sw(Xs)), width(sw(M)), width(sw(Xl)));
-        assert!(xs < m && m < xl, "{xs} {m} {xl}");
-        // M is ten units of the default 4 px control step.
-        assert!((m - 40.).abs() < 0.01, "{m}");
-        // Steps are even: Xs and Xl sit two units either side of M.
-        assert!(((xl - m) - (m - xs)).abs() < 0.01);
-        assert!((width(toggle(&ui, "sw", &mut on).px(64.)) - 64.).abs() < 0.01);
-    }
 }

@@ -1,5 +1,5 @@
 //! Audit reproductions: assertions cover the corrected public contracts.
-use mui_core::{resolve_scene, Palette, Radius, SceneSpec, Spacing, SurfaceSpec, Theme};
+use mui_scene::{resolve_scene, Palette, Radius, SceneSpec, Spacing, SurfaceSpec, Theme};
 use mui_geometry::{Bounds, Error, Point, RoundedRect};
 use mui_input::{Hit, Interaction, PointerInput};
 

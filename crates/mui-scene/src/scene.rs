@@ -71,7 +71,7 @@ impl SceneSpec {
     /// translucent; at scale 1 they land on whole pixels instead:
     ///
     /// ```
-    /// use mui_core::prelude::*;
+    /// use mui_scene::prelude::*;
     /// let row = row![leaf(0., 20.).grow(1.).id("a"), leaf(0., 20.).grow(1.)];
     /// let spec = SceneSpec::new(row).offered(Size::new(41., 20.)).scale(1.);
     /// let a = resolve_scene(&spec).unwrap();

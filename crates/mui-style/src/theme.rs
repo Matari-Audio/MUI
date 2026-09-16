@@ -1,14 +1,14 @@
 #![forbid(unsafe_code)]
 
 use crate::color::Palette;
-use mui_layout::SpacingScale;
+use mui_geometry::SpacingScale;
 
 /// The theme's radii, named by what kind of thing they round -- daisyUI's
 /// `--radius-selector` / `--radius-field` / `--radius-box` -- plus the one
 /// CSS has no word for: the concave radius a weld's junction turns through.
 ///
 /// ```
-/// use mui_core::{Corner, Corners, Theme};
+/// use mui_style::{Corner, Corners, Theme};
 /// let square = Theme { corners: Corners { field: 0.0, ..Corners::DEFAULT }, ..Theme::DEFAULT };
 /// assert_eq!(square.corners.get(Corner::Field), 0.0);
 /// ```
@@ -34,7 +34,7 @@ impl Corners {
     /// The radius this kind of thing rounds by.
     ///
     /// ```
-    /// use mui_core::{Corner, Corners};
+    /// use mui_style::{Corner, Corners};
     /// assert_eq!(Corners::DEFAULT.get(Corner::Box), Corners::DEFAULT.box_);
     /// ```
     pub fn get(self, c: Corner) -> f64 {
@@ -52,7 +52,7 @@ impl Corners {
     /// Every radius multiplied, for [`Radius::Scale`](crate::Radius::Scale).
     ///
     /// ```
-    /// use mui_core::Corners;
+    /// use mui_style::Corners;
     /// assert_eq!(Corners::DEFAULT.scaled(0.).map(|c| c.box_), Some(0.));
     /// ```
     pub fn scaled(self, scale: f64) -> Option<Self> {
@@ -76,10 +76,8 @@ impl Default for Corners {
 /// Which of the theme's radii a node rounds by: `.radius(Corner::Field)`.
 ///
 /// ```
-/// use mui_core::prelude::*;
-/// # use mui_core::Corner;
-/// let mut tab = leaf(64., 28.).radius(Corner::Field);
-/// assert_eq!(tab.style_mut().radius, Radius::Token(Corner::Field));
+/// use mui_style::{Corner, Radius};
+/// assert_eq!(Radius::from(Corner::Field), Radius::Token(Corner::Field));
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Corner {
@@ -110,7 +108,7 @@ impl Theme {
     /// what differs and spread the rest:
     ///
     /// ```
-    /// # use mui_core::{Palette, Pigment, Theme};
+    /// # use mui_style::{Palette, Pigment, Theme};
     /// pub const SKIN: Theme = Theme {
     ///     palette: Palette {
     ///         primary: Pigment::new(242.0, 0.131),

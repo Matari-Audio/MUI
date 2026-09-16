@@ -31,7 +31,7 @@ El tree  (row! / col! / stack! / grid! / fits!, Paints fills, presets merged
    |                        pass, and a `Pin` costs one more arrange over the
    |                        floats, fed the anchor frames the first one found
    |
-   v  mui-core walk         per node, in z-order:
+   v  mui-scene walk         per node, in z-order:
    |     plain  -> RoundedRect(frame, radius)              a radius may be a
    |               theme token (selector / field / box); a squircle corner
    |               rewrites the rounded rect's arcs as cubics and gives up
@@ -112,3 +112,37 @@ renderer that ignores it still draws something sane; a float keeps its
 declaration slot in frame order but its paint slot at the end. Everything
 above the paint list is renderer-independent and wasm-clean; `mui-preview` is
 the only crate that owns a window.
+
+## Crates
+
+The pipeline above is cut into crates along the same lines. Every edge points
+down; nothing below knows what is above it.
+
+```text
+mui-preview          window, wgpu surface, the gallery as one tree
+   |
+   v
+mui                  Ui runtime, Frame, Edit, prelude, re-exports
+   |                 (mui::core is a deprecated alias of mui::scene)
+   +--> mui-widgets  controls and presets; reads state through `Host`
+   +--> mui-vello    Canvas, paint, PathCache      +--> mui-access
+   +--> mui-input    hit testing, gestures (over mui-vello's paths)
+   |
+   v
+mui-scene            El DSL, Styled/Paints, Theme resolution, the scene walk
+   |
+   +--> mui-style    colours, roles, fills, shadows, Style, Theme (+ color)
+   +--> mui-motion   Spring, curve (std only)
+   +--> mui-text     glyph and string outlines      +--> mui-tessellate
+   +--> mui-layout   the flex solve
+         |
+         v
+      mui-geometry   Booleans, fillets, offsets, and the Spacing scale
+```
+
+`Spacing`/`SpacingScale` live in `mui-geometry` because both `mui-style` (a
+shell's thickness, a theme's scale) and `mui-layout` (`gap`, `pad`) are
+written in them; putting them in either would point an edge sideways.
+`mui-egui` is an optional debug adapter off `mui-geometry`/`mui-tessellate`,
+and `mui-truce` stands alone. `mui-widgets` dev-depends on `mui` so its
+doctests can call a real `Ui`; the library graph stays one-way.

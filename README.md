@@ -346,15 +346,18 @@ light-theme half because there is nothing in it a mode could contradict.
 
 | crate | what it owns |
 |---|---|
-| `mui-layout` | the dependency-free flex solver: tokens, pct, aspect, grid, anchors, frames in tree order |
-| `mui-geometry` | Booleans, fillets, exact rounded-rect insets, general parallel offsets |
+| `mui-layout` | the flex solver: tokens, pct, aspect, grid, anchors, frames in tree order |
+| `mui-geometry` | Booleans, fillets, exact rounded-rect insets, general parallel offsets, and the `Spacing` scale layout and style are both written in |
 | `mui-text` | glyph and string outlines from a (variable) font |
-| `mui-core` | `El` + `Styled` DSL and the `row!`/`col!`/`stack!`/`grid!` sugar, roles and palette, `canvas` draws, clip and float layers, the walk from tree to `ResolvedScene` paint list, the frame-to-frame `TextCache`, `Spring` |
+| `mui-motion` | motion maths, dependency-free: the `Spring` every animated property chases, and editable normalized cubic Bezier response `curve`s |
+| `mui-style` | theme data: Oklch `Color`, `Palette`, `Role`, `Fill`, `Gradient`, `Shadow`, `Elevation`, `Radius`, `Style` and the `Theme` they resolve against |
+| `mui-scene` | `El` + `Styled` DSL and the `row!`/`col!`/`stack!`/`grid!` sugar, `canvas` draws, clip and float layers, the walk from tree to `ResolvedScene` paint list, the frame-to-frame `TextCache` |
 | `mui-input` | `Input` (pointer, wheel, keys, text), hit testing against real paths and their clips, press capture, hover, click, drag and drop |
 | `mui-vello` | the `Canvas` trait and its `Gpu` / `Cpu` wrappers over `vello_hybrid` and `vello_cpu`: fills, strokes, image fills (`Cpu` paints the pixmap, `Gpu` uploads once through its `Atlas`, see Images), clip push/pop, and hinted glyph runs (Vello hints and caches the outlines per font blob); `paint(canvas, scene, transform)`, and `paint_cached` with a `PathCache` that keeps a still frame's arc-to-cubic conversions |
 | `mui-access` | a `ResolvedScene`'s roles and labels as an `accesskit::TreeUpdate` |
 | `mui-truce` | the non-real-time document and parameter contract a Truce plugin shares with its editor |
-| `mui` | `Ui` runtime, focus and wheel scrolling, tooltips, transitions, tweens, gesture edits, and widgets (`slider`, `knob`, `toggle`, `button`, `text_input`); the `prelude` |
+| `mui-widgets` | the controls and presets as plain styled trees: `slider`, `knob`, `toggle`, `button`, `text_input`, `panel`/`card`/`glass`/`chip`/`tile`, and the `Host` trait they read state through |
+| `mui` | `Ui` runtime, focus and wheel scrolling, tooltips, transitions, tweens, gesture edits; implements `Host`, so the widgets above keep their `button(ui, ..)` call; the `prelude` |
 | `mui-tessellate`, `mui-egui` | triangle meshes and the egui debug adapter |
 | `mui-preview` | the winit + wgpu gallery, itself one `mui` tree |
 
@@ -410,7 +413,7 @@ default because a snapshot-sized pixmap loses more to thread hand-off than
 it gains (BENCHMARKS.md measures both).
 
 ```bash
-cargo run -p mui-core --release --example stress
+cargo run -p mui-scene --release --example stress
 ```
 
 resolves a ~1000-node tree at three window shapes and counts the allocations
