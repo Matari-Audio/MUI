@@ -3,7 +3,8 @@
 //! Nothing here is a pixel colour until [`Fill::paint`] is asked, with a
 //! palette and the colour underneath. A tree written once against roles reads
 //! correctly in light and dark, on a chip and on the ground.
-use crate::{Color, Palette};
+use crate::{Color, Corner, Palette};
+use mui_geometry::CornerStyle;
 use mui_layout::Spacing;
 use std::sync::Arc;
 
@@ -322,9 +323,12 @@ impl Fill {
 /// Convex corner radius of a box.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum Radius {
+    /// The theme's box radius: what a panel, a card or a dialog rounds by.
     #[default]
     Theme,
     Px(f64),
+    /// One of the theme's radii, named by what it rounds. See [`Corner`].
+    Token(Corner),
     /// Multiple of the theme radius.
     Scale(f64),
     /// Half the short side, whatever that turns out to be.
@@ -333,6 +337,12 @@ pub enum Radius {
 impl From<f64> for Radius {
     fn from(v: f64) -> Self {
         Self::Px(v)
+    }
+}
+/// `.radius(Corner::Field)`: the theme says how much.
+impl From<Corner> for Radius {
+    fn from(c: Corner) -> Self {
+        Self::Token(c)
     }
 }
 
@@ -462,6 +472,9 @@ pub struct Style {
     pub fill: Fill,
     pub stroke: Option<Stroke>,
     pub radius: Radius,
+    /// The curve every corner turns through: circular, or a continuous
+    /// superellipse. See [`Paints::corners`](crate::Paints::corners).
+    pub corners: CornerStyle,
     /// Back to front: every [`ShadowKind::Drop`] under the fill, every
     /// [`ShadowKind::Inset`] over the shells.
     pub shadow: Vec<Shadow>,
@@ -507,6 +520,11 @@ impl Style {
                 self.radius
             } else {
                 other.radius
+            },
+            corners: if other.corners == CornerStyle::Round {
+                self.corners
+            } else {
+                other.corners
             },
             shadow: if other.shadow.is_empty() {
                 self.shadow.clone()

@@ -127,7 +127,7 @@ mod tests {
         let t = union(&[p.into()], Default::default()).unwrap();
         let r = fillet(
             &t,
-            CornerStyle {
+            Fillet {
                 convex_radius: 0.,
                 concave_radius: 0.,
                 ..Default::default()

@@ -22,7 +22,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     let surface = fillet(
         &topology,
-        CornerStyle {
+        Fillet {
             convex_radius: 28.,
             concave_radius: 32.,
             ..Default::default()

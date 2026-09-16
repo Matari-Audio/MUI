@@ -11,6 +11,7 @@
 //! ```
 use crate::motion::Spring;
 use crate::style::{Cursor, Elevation, Fill, Mix, Radius, Shadow, Stroke, Style};
+use mui_geometry::CornerStyle;
 use mui_geometry::Path;
 use mui_layout::{Node, Size, Spacing};
 use std::sync::Arc;
@@ -230,6 +231,22 @@ pub trait Paints: Sized {
     }
     fn pill(self) -> Self {
         self.radius(Radius::Pill)
+    }
+    /// The curve this node's corners turn through, separately from how big
+    /// they are: a continuous superellipse instead of a circular arc.
+    ///
+    /// It flows through whatever the node's outline turns out to be -- a
+    /// welded union, its shells, its stroke -- because it restyles the arcs
+    /// the outline is made of.
+    ///
+    /// ```
+    /// use mui_core::prelude::*;
+    /// let mut card = leaf(80., 48.).radius(16.).corners(CornerStyle::Squircle);
+    /// assert_eq!(card.style_mut().corners, CornerStyle::Squircle);
+    /// ```
+    fn corners(mut self, c: CornerStyle) -> Self {
+        self.style_mut().corners = c;
+        self
     }
     /// Add a shadow. Shadows stack, so a tight contact and a wide ambient
     /// are two calls; [`Paints::shadows`] replaces the list instead.
@@ -504,6 +521,20 @@ mod tests {
         let mut el = leaf(10., 10.).stroke_width(2.).stroke(Ink);
         let stroke = el.style_mut().stroke.clone().expect("set");
         assert_eq!((stroke.fill, stroke.width), (Ink.into(), Some(2.)));
+    }
+
+    /// A joined strip says it once, on the container: the children go
+    /// square and its own corner is what rounds the two ends.
+    #[test]
+    fn join_squares_every_inner_corner_and_keeps_the_strips_own() {
+        let mut strip = row![leaf(60., 28.), leaf(60., 28.), leaf(60., 28.)]
+            .radius(12.)
+            .join();
+        assert_eq!(strip.style_mut().radius, Radius::Px(12.));
+        assert!(strip.is_clip(), "the ends are rounded by the clip");
+        for c in strip.children_mut() {
+            assert_eq!(c.style_mut().radius, Radius::Px(0.));
+        }
     }
 
     /// A role at an alpha is still the role: it tracks the palette, and it

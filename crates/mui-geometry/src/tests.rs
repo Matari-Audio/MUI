@@ -33,7 +33,7 @@ fn u(p: &[PlacedShape]) -> Topology {
     union(p, GeometryOptions::default()).unwrap()
 }
 fn rounded(p: &[PlacedShape]) -> RoundedShape {
-    fillet(&u(p), CornerStyle::default()).unwrap()
+    fillet(&u(p), Fillet::default()).unwrap()
 }
 fn concaves(s: &RoundedShape) -> usize {
     s.corners.iter().flatten().filter(|c| c.concave).count()
@@ -88,7 +88,7 @@ fn centered_shoulders_are_two() {
 fn zero_radius_returns_lines() {
     let s = fillet(
         &u(&[r(0., 0., 100., 100.)]),
-        CornerStyle {
+        Fillet {
             convex_radius: 0.,
             concave_radius: 0.,
             ..Default::default()
@@ -101,7 +101,7 @@ fn zero_radius_returns_lines() {
 fn only_concave() {
     let s = fillet(
         &u(&[r(0., 50., 200., 100.), r(0., 0., 60., 50.)]),
-        CornerStyle {
+        Fillet {
             convex_radius: 0.,
             ..Default::default()
         },
@@ -122,7 +122,7 @@ fn hole_classification_uses_material() {
     let t = u(&[outer.into()]);
     assert_eq!(t.rings().len(), 2);
     near(t.area(), 30000.);
-    assert_eq!(concaves(&fillet(&t, CornerStyle::default()).unwrap()), 4);
+    assert_eq!(concaves(&fillet(&t, Fillet::default()).unwrap()), 4);
 }
 #[test]
 fn a_shape_can_fill_another_shapes_hole() {
@@ -178,7 +178,7 @@ fn nonincident_boundary_limits_radius() {
     let t = u(&[p.into()]);
     let s = fillet(
         &t,
-        CornerStyle {
+        Fillet {
             convex_radius: 200.,
             concave_radius: 200.,
             ..Default::default()
@@ -215,7 +215,7 @@ fn arcs_are_tangent() {
 fn shared_edge_budget() {
     let s = fillet(
         &u(&[r(0., 0., 25., 80.)]),
-        CornerStyle {
+        Fillet {
             convex_radius: 500.,
             ..Default::default()
         },
@@ -233,7 +233,7 @@ fn shared_edge_budget() {
 fn negative_options_fail() {
     assert!(fillet(
         &u(&[r(0., 0., 10., 10.)]),
-        CornerStyle {
+        Fillet {
             convex_radius: -1.,
             ..Default::default()
         }
@@ -405,7 +405,7 @@ fn general_offset_distance_is_measured() {
     let t = u(&[r(0., 80., 300., 170.), r(100., 0., 90., 90.)]);
     let s = fillet(
         &t,
-        CornerStyle {
+        Fillet {
             convex_radius: 24.,
             concave_radius: 32.,
             ..Default::default()
@@ -583,4 +583,34 @@ fn randomized_inset_boundary_clearance() {
             assert!((actual - d).abs() < 0.25, "distance {actual} expected {d}");
         }
     }
+}
+
+/// A squircle is the same corner drawn fuller: it never leaves the box the
+/// circular corner sat in, and at 45 degrees it stands measurably further
+/// out than the arc it replaced.
+#[test]
+fn a_squircle_corner_stays_in_the_box_and_bulges_past_the_arc() {
+    let b = Bounds::new(0., 0., 100., 100.);
+    let round = RoundedRect::new(b, 25.).unwrap().path();
+    let squircle = CornerStyle::Squircle.shape(&round);
+    // The corner's 45-degree point is the extreme of `x + y` toward (0, 0).
+    let diagonal = |p: &Path| {
+        p.flatten(0.01, 100_000)
+            .unwrap()
+            .into_iter()
+            .flatten()
+            .inspect(|q| {
+                assert!(
+                    q.x >= b.min.x - 1e-9
+                        && q.y >= b.min.y - 1e-9
+                        && q.x <= b.max.x + 1e-9
+                        && q.y <= b.max.y + 1e-9,
+                    "{q:?} left the rounded rect's own box"
+                );
+            })
+            .fold(f64::INFINITY, |lo, q| lo.min(q.x + q.y))
+    };
+    // The arc sits at 50 - r*sqrt(2); the superellipse at 50 - r*2^0.75.
+    assert!((diagonal(&round) - (50. - 25. * 2f64.sqrt())).abs() < 0.05);
+    assert!((diagonal(&squircle) - (50. - 25. * 2f64.powf(0.75))).abs() < 0.05);
 }

@@ -10,7 +10,7 @@ use std::fmt::Write as _;
 use std::sync::Arc;
 
 use mui_geometry::{
-    fillet, inset_path, union, Bounds, CornerStyle, GeometryOptions, OffsetOptions, Path,
+    fillet, inset_path, union, Bounds, CornerStyle, Fillet, GeometryOptions, OffsetOptions, Path,
     PlacedShape, Point, Polygon, RoundedRect,
 };
 use mui_layout::{resolve_with, Frame, Layout, Limits, Size};
@@ -402,11 +402,12 @@ impl<'a> Walk<'a> {
         let th = &self.spec.theme;
         let s = &n.payload().style;
         let (convex, concave) = match s.radius {
-            Radius::Theme => (th.corners.convex, th.corners.concave),
+            Radius::Theme => (th.corners.box_, th.corners.concave),
             Radius::Px(r) => (r, th.corners.concave),
+            Radius::Token(c) => (th.corners.get(c), th.corners.concave),
             Radius::Scale(k) => {
                 let p = th.corners.scaled(k).ok_or(SceneError::InvalidRadius)?;
-                (p.convex, p.concave)
+                (p.box_, p.concave)
             }
             Radius::Pill => (
                 frame.size.width.min(frame.size.height) / 2.0,
@@ -418,6 +419,12 @@ impl<'a> Walk<'a> {
         }
         if !s.weld || n.children().is_empty() {
             let rr = RoundedRect::new(bounds(frame, self.spec.device_scale), convex)?;
+            // A squircle is no longer a rounded rectangle, so it gives up the
+            // analytic blur and the analytic shell inset with it; the path
+            // route below draws both from the outline itself.
+            if s.corners != CornerStyle::Round {
+                return Ok((s.corners.shape(&rr.path()), None, false, vec![rr]));
+            }
             return Ok((rr.path(), Some(rr), false, Vec::new()));
         }
         // Children's frames sit right after this node in pre-order, each
@@ -432,14 +439,14 @@ impl<'a> Walk<'a> {
         let merged = union(&shapes, self.spec.geometry)?;
         let rounded = fillet(
             &merged,
-            CornerStyle {
+            Fillet {
                 convex_radius: convex,
                 concave_radius: concave,
-                ..CornerStyle::default()
+                ..Fillet::default()
             },
         )?;
         Ok((
-            rounded.path,
+            s.corners.shape(&rounded.path),
             None,
             merged.components() != n.children().len(),
             rects,
@@ -958,7 +965,7 @@ impl SceneState {
 mod tests {
     use super::*;
     use crate::prelude::*;
-    use crate::{CornerProfile, Spacing};
+    use crate::{Corners, Spacing};
 
     /// The canonical case: a tab welded to its panel, with a pill shell
     /// inside the tab.
@@ -975,7 +982,11 @@ mod tests {
             .id("root")
             .weld(Role::Surface);
         SceneSpec::new(root).theme(Theme {
-            corners: CornerProfile::new(28., 32.),
+            corners: Corners {
+                box_: 28.,
+                concave: 32.,
+                ..Corners::DEFAULT
+            },
             ..Theme::default()
         })
     }

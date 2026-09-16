@@ -24,7 +24,7 @@ let mut bypass = false;
 // Built every frame, like an immediate-mode tree. Widgets read last frame's
 // gesture on their id, so state lives in your own variables.
 let root = col![
-    row![title("Filter"), spacer(), toggle(&ui, "bypass", &mut bypass)]
+    row![title("Filter"), spacer(), toggle(&ui, "bypass", &mut bypass).size(S)]
         .center()
         .tip("Bypass the filter"),
     slider(&mut ui, "cutoff", "Cutoff", &mut cutoff, 0.0..=1.0),
@@ -101,6 +101,9 @@ assert_eq!(scene.surface("tab").unwrap().frame.size.width, 92.0);
 | `Gradient::linear(180., ..)`, `::radial((0.3, 0.3), 0.6, ..)`, `::conic(-135., ..)` | the three ramps, stops as roles or colours: a knob arc is a conic gradient and no geometry |
 | `.fill(Fill::Image(img, Fit::Cover))` | an RGBA buffer as a fill: `Cover`, `Contain` or `Fill` (`vello_cpu` paints the pixmap, `vello_hybrid` uploads it once into its atlas) |
 | `.stroke(Ink)`, `.radius(8.0)`, `.pill()`, `.shadow(Shadow::soft(12.0))` | outline, corners, a shadow appended to the list |
+| `.radius(Corner::Field)` | the theme's radius for this kind of thing: `Selector` (toggle, badge), `Field` (button, input, tab), `Box` (card, panel) |
+| `.corners(CornerStyle::Squircle)` | the curve the corners turn through, apart from how big they are: a continuous superellipse instead of a circular arc, through welds, shells and strokes alike |
+| `.join()` | butt a row's or column's children into one strip: the gap closes, every seam goes square, the container's own corner rounds the two ends |
 | `.shadows([a, b])`, `.elevation(Elevation::Raised)` | replace the list; a contact and an ambient shadow, from the theme's steps |
 | `.shadow(Shadow::inset(4.0))` | cast inward instead, clipped to the outline: a recess, a floor under glass |
 | `.stroke(Ink.alpha(0.12))` | a role at an alpha: a hairline that still tracks the palette |
@@ -116,6 +119,7 @@ assert_eq!(scene.surface("tab").unwrap().frame.size.width, 92.0);
 | `.scroll()`, `.clip()`, `.float()` | overflow the wheel slides, overflow cut off, a child painted over everything |
 | `canvas(\|size\| vec![Draw::fill(path, Ink)])` | your own paths, in the node's own space |
 | `.cursor(Cursor::Hand)`, `.tip("..")`, `.focusable()` | the pointer, a tooltip after half a second, Tab stops here |
+| `button(&ui, "save", "Save").0.variant(Variant::Soft).size(S)` | a control's look and size: `Solid`, `Soft`, `Outline`, `Ghost`, and the same five sizes everywhere. `.role(Danger)` recolours it, `.px(72.0)` is the hatch, `.el()` finishes it |
 | `.role(Kind::Button)`, `.label("OK")` | what a screen reader hears: `mui-access` reads both off the surface |
 | `.id("name")` | a gesture target and a lookup key; unnamed nodes are decoration |
 | `Path::from_svg_data("M0 0 h10 a5 5 0 0 1 0 10 z")` | an icon's `d` attribute as a `Path`, arcs and all |
@@ -143,7 +147,7 @@ const NAMES: [&str; 5] = ["Drive", "Tilt", "Mix", "Air", "Floor"];
 let params: Vec<El> = NAMES
     .iter()
     .zip(&mut values)
-    .map(|(n, v)| slider(&mut ui, n, n, v, 0.0..=1.0))
+    .map(|(n, v)| slider(&mut ui, n, n, v, 0.0..=1.0).el())
     .collect();
 
 let curve = canvas(|size| {
@@ -159,7 +163,7 @@ let root = col![
         title("Kurv"),
         text_input(&mut ui, "preset", &mut preset).w(140),
         spacer(),
-        toggle(&ui, "bypass", &mut bypass).tip("Bypass"),
+        toggle(&ui, "bypass", &mut bypass).el().tip("Bypass"),
     ]
     .gap(S)
     .center(),
@@ -253,7 +257,7 @@ let mut gain = 0.5;
 let sweep = ui.tween("sweep", gain);
 let root = col![
     leaf(60.0, 60.0).fill(Primary).animate().id("lamp"),
-    knob(&mut ui, "gain", "Gain", &mut gain, 0.0..=1.0, 72.0),
+    knob(&mut ui, "gain", "Gain", &mut gain, 0.0..=1.0).el(),
 ];
 let frame = ui.frame(root, Some(Size::new(200.0, 200.0)), Input::default(), 1.0 / 60.0).unwrap();
 assert!(sweep <= gain && frame.edits.is_empty());
@@ -306,7 +310,7 @@ pub const SKIN: Theme = Theme {
         hover: 0.11,
         ..Palette::NEUTRAL
     },
-    corners: CornerProfile::new(28.0, 32.0),
+    corners: Corners { box_: 28.0, concave: 32.0, ..Corners::DEFAULT },
     ..Theme::DEFAULT
 };
 let light = SKIN.palette.with_mode(Mode::Light);
@@ -318,9 +322,11 @@ light-theme half because there is nothing in it a mode could contradict.
 
 ## Geometry rules
 
-- A plain node's outline is its frame rounded by `Radius::{Theme, Px, Scale, Pill}`.
+- A plain node's outline is its frame rounded by `Radius::{Theme, Px, Token, Scale, Pill}`,
+  and drawn with circular or squircle corners (`CornerStyle`). A squircle gives
+  up the analytic blur: its shells and shadows come off the outline itself.
 - A welded node unions the children's **sharp** frames first and fillets the
-  result second, with the theme's convex and concave radii, so old rounded
+  result second, with the theme's box and concave radii, so old rounded
   corners never leak into a new junction.
 - A shell is an inset of the **final** outline before it: analytic for a
   rounded rectangle (`radius − d`, concentric arcs), a parallel offset of the

@@ -36,6 +36,7 @@ pub use element::{
     IntoEl, Kind, Paints, Semantics, State, StateStyle, Styled,
 };
 pub use motion::Spring;
+pub use mui_geometry::CornerStyle;
 pub use mui_layout::{
     Align, Frame, Insets, Justify, Layout, Len, Limits, Node, Size, Spacing, SpacingScale,
     SpacingToken,
@@ -48,7 +49,7 @@ pub use style::{
     Cursor, Elevation, Fill, Fit, Gradient, GradientKind, Image, Mix, Paint, Radius, Role, Shadow,
     ShadowKind, Stroke, Style,
 };
-pub use theme::{CornerProfile, Theme};
+pub use theme::{Corner, Corners, Theme};
 
 /// Everything a scene file needs, including the spacing tokens as bare
 /// names: `.gap(M).pad(L)`.
@@ -56,11 +57,11 @@ pub mod prelude {
     pub use crate::Role::*;
     pub use crate::{
         canvas, caption, col, column, grid, label, leaf, overlay, resolve_scene, row, spacer,
-        stack, text, title, Align, Color, Cursor, Draw, El, Elevation, Fill, Fit, Gradient, Image,
-        IntoEl, IntoLen, Justify, Kind, Len, Mix, Paints, Radius, Role, SceneSpec, Shadow, Size,
-        State, Style, Styled, Sugar, Theme,
+        stack, text, title, Align, Color, Corner, Cursor, Draw, El, Elevation, Fill, Fit, Gradient,
+        Image, IntoEl, IntoLen, Justify, Kind, Len, Mix, Paints, Radius, Role, SceneSpec, Shadow,
+        Size, State, Style, Styled, Sugar, Theme,
     };
-    pub use mui_geometry::{Path, Point};
+    pub use mui_geometry::{CornerStyle, Path, Point};
     pub use mui_layout::Spacing;
     pub use mui_layout::SpacingToken::{Xl, Xs, L, M, S};
     /// `n` steps of the theme's spacing unit: `.gap(step(1.5))`, for the

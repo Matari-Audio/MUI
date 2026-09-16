@@ -87,14 +87,9 @@ which is what the second knob is for when the resonance is high";
 fn editor(ui: &mut Ui, app: &mut App, images: bool) -> El {
     let knobs: Vec<El> = (0..40)
         .map(|i| {
-            knob(
-                ui,
-                &format!("k{i}"),
-                "cut",
-                &mut app.knobs[i],
-                0.0..=1.0,
-                44.0,
-            )
+            knob(ui, &format!("k{i}"), "cut", &mut app.knobs[i], 0.0..=1.0)
+                .size(S)
+                .el()
         })
         .collect();
     let sliders: Vec<El> = (0..8)
@@ -106,6 +101,7 @@ fn editor(ui: &mut Ui, app: &mut App, images: bool) -> El {
                 &mut app.sliders[i],
                 0.0..=1.0,
             )
+            .el()
         })
         .collect();
     let labels: Vec<El> = (0..200).map(|i| caption(format!("p{i:03}"))).collect();

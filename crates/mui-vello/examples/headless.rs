@@ -9,7 +9,7 @@
 //! problem: a surface would get the same pixels.
 
 use mui_core::prelude::*;
-use mui_core::CornerProfile;
+use mui_core::Corners;
 use mui_vello::Gpu;
 use vello_common::kurbo::Affine;
 use vello_hybrid::{RenderSize, RenderTargetConfig, Renderer, Scene, TextureBindings};
@@ -36,7 +36,11 @@ fn spec() -> SceneSpec {
         .weld(Role::Surface);
     SceneSpec::new(root)
         .theme(Theme {
-            corners: CornerProfile::new(28.0, 32.0),
+            corners: Corners {
+                box_: 28.0,
+                concave: 32.0,
+                ..Corners::DEFAULT
+            },
             ..Theme::DEFAULT
         })
         .font(epaint_default_fonts::HACK_REGULAR.to_vec())

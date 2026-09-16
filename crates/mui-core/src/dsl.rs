@@ -10,6 +10,7 @@
 //! assert_eq!(bar.children().len(), 3);
 //! ```
 use crate::element::{text, El, Styled};
+use crate::style::Radius;
 use mui_layout::{Align, Justify, Len};
 
 /// A length argument: a `Len`, or a bare number in pixels. `Len` lives in
@@ -56,6 +57,18 @@ pub trait Sugar: Sized {
     fn between(self) -> Self;
     /// All of the parent, both axes: `.w(pct(100.)).h(pct(100.))`.
     fn full(self) -> Self;
+    /// Butt these children into one control: the gap closes, every child
+    /// goes square, and the container clips them to its own corner. The
+    /// strip's outer corners keep the radius; every seam inside it is
+    /// square. daisyUI's `join`, on whichever axis the container already
+    /// runs.
+    ///
+    /// ```
+    /// use mui_core::prelude::*;
+    /// let mut strip = row![leaf(60., 28.), leaf(60., 28.)].radius(Corner::Field).join();
+    /// assert_eq!(strip.children_mut()[0].style_mut().radius, Radius::Px(0.));
+    /// ```
+    fn join(self) -> Self;
 }
 impl Sugar for El {
     fn w(self, len: impl IntoLen) -> Self {
@@ -82,6 +95,15 @@ impl Sugar for El {
     }
     fn full(self) -> Self {
         self.w(Len::Pct(100.)).h(Len::Pct(100.))
+    }
+    fn join(mut self) -> Self {
+        for c in self.children_mut() {
+            c.payload_mut().style.radius = Radius::Px(0.);
+        }
+        // The container's own outline is what rounds the two ends: a clip,
+        // not four per-corner radii the rest of the system would have to
+        // learn.
+        self.gap(0.).clip()
     }
 }
 

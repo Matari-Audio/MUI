@@ -162,7 +162,7 @@ impl Ui {
     ///     Some(Edit::End) => { /* host.end_gesture(CUTOFF) */ }
     ///     None => {}
     /// }
-    /// let el = slider(&mut ui, "cutoff", "Cutoff", &mut cutoff, 0.0..=1.0);
+    /// let el = slider(&mut ui, "cutoff", "Cutoff", &mut cutoff, 0.0..=1.0).el();
     /// ```
     pub fn edit(&self, id: &str) -> Option<Edit> {
         self.delivered
@@ -1260,11 +1260,11 @@ mod tests {
     fn a_degenerate_or_inverted_range_resolves_and_clamps() {
         let mut ui = Ui::new(Theme::DEFAULT);
         let mut v = 1.0;
-        let el = crate::widgets::slider(&mut ui, "fixed", "Fixed", &mut v, 1.0..=1.0);
+        let el = crate::widgets::slider(&mut ui, "fixed", "Fixed", &mut v, 1.0..=1.0).el();
         ui.frame(el, None, PointerInput::default(), 0.016)
             .expect("a fixed parameter is still a tree");
         let mut down = 0.5;
-        let el = crate::widgets::slider(&mut ui, "down", "Down", &mut down, 1.0..=0.0);
+        let el = crate::widgets::slider(&mut ui, "down", "Down", &mut down, 1.0..=0.0).el();
         ui.frame(el, None, PointerInput::default(), 0.016)
             .expect("and so is a downward one");
     }

@@ -4,7 +4,7 @@
 //! substitute for fill coverage. No GPU/window/parameter ownership lives here.
 #![forbid(unsafe_code)]
 use egui::{Color32, Mesh, Painter, Pos2, Shape, Stroke, Vec2};
-use mui_geometry::{CornerStyle, GeometryOptions, OffsetOptions, Path, PlacedShape, Topology};
+use mui_geometry::{Fillet, GeometryOptions, OffsetOptions, Path, PlacedShape, Topology};
 use mui_tessellate::{Tessellator, TriangleMesh};
 
 #[derive(Debug)]
@@ -53,7 +53,7 @@ pub struct PreparedSurface {
 /// border does not double-fill.
 pub fn prepare(
     inputs: &[PlacedShape],
-    corners: CornerStyle,
+    corners: Fillet,
     inset: f64,
     quality: OffsetOptions,
 ) -> Result<PreparedSurface, Error> {
@@ -121,7 +121,7 @@ impl SurfaceState {
     pub fn commit(
         &mut self,
         inputs: &[PlacedShape],
-        corners: CornerStyle,
+        corners: Fillet,
         inset: f64,
         quality: OffsetOptions,
     ) -> Result<(), Error> {
@@ -196,30 +196,19 @@ mod tests {
     }
     #[test]
     fn border_mesh_has_no_double_fill() {
-        let p = prepare(
-            &shapes(),
-            CornerStyle::default(),
-            6.,
-            OffsetOptions::default(),
-        )
-        .unwrap();
+        let p = prepare(&shapes(), Fillet::default(), 6., OffsetOptions::default()).unwrap();
         assert!((area(&p.band) + area(&p.inner) - area(&p.outer)).abs() < 0.1);
     }
     #[test]
     fn failed_surface_commit_keeps_previous() {
         let mut s = SurfaceState::default();
-        s.commit(
-            &shapes(),
-            CornerStyle::default(),
-            6.,
-            OffsetOptions::default(),
-        )
-        .unwrap();
+        s.commit(&shapes(), Fillet::default(), 6., OffsetOptions::default())
+            .unwrap();
         let a = area(&s.current().unwrap().outer);
         assert!(s
             .commit(
                 &shapes(),
-                CornerStyle::default(),
+                Fillet::default(),
                 f64::NAN,
                 OffsetOptions::default()
             )
@@ -231,13 +220,8 @@ mod tests {
     fn instances_do_not_share_state() {
         let a = SurfaceState::default();
         let mut b = SurfaceState::default();
-        b.commit(
-            &shapes(),
-            CornerStyle::default(),
-            6.,
-            OffsetOptions::default(),
-        )
-        .unwrap();
+        b.commit(&shapes(), Fillet::default(), 6., OffsetOptions::default())
+            .unwrap();
         assert!(a.current().is_none());
     }
 }
