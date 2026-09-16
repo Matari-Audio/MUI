@@ -21,3 +21,5 @@ pollster = "0.4"
 # Fallback face so the glyph scene has something to draw without a system font.
 # Zero dependencies of its own -- no egui reaches the graph through it.
 epaint_default_fonts = "0.36"
+mui-access = { path = "../mui-access" }
+accesskit_winit = "0.33"

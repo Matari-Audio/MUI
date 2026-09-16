@@ -53,8 +53,8 @@ public function and a test behind it.
       and `Path::from_svg_data` for an icon's `d` attribute. `vello_cpu`
       paints the pixmap; `vello_hybrid` uploads it once through `Gpu`'s
       `Atlas` and paints by id.
-- [x] AccessKit: `mui-access` turns a `ResolvedScene` plus a `Semantics` map
-      into a `TreeUpdate`.
+- [x] AccessKit: `mui-access` turns a `ResolvedScene` into a `TreeUpdate`,
+      and the preview feeds it to an `accesskit_winit::Adapter`.
 - [x] `mui_vello::PathCache` / `paint_cached`: a still frame re-encodes
       without reconverting a path.
 - [x] Image eviction: both image caches key on the buffer's `Arc` and drop
@@ -79,28 +79,48 @@ public function and a test behind it.
 - [x] A gradient shadow keeps its paint instead of going black; a tooltip
       lands where it was measured under a padded root; a long `text_input`
       value scrolls under a clip instead of wrapping.
+- [x] Wrap in one pass everywhere: the flex pass re-measures a squeezed item
+      at the main size it was dealt, so a paragraph beside another wraps in
+      the one solve that sizes the row, `.min_col` works inside a share, and
+      `wrap_hints` and the second solve are gone. Caching line breaks across
+      frames stays unbuilt: `break_lines` is 0.051 ms of a 1.23 ms resolve.
+- [x] A welded shadow blurs: the walk emits one analytic blurred rect per
+      welded child instead of a rect-less entry the renderer dropped. Blend
+      modes and opacity too -- `.blend(Mix::Multiply)` / `.opacity(0.5)`
+      become a `Layer::Blend`/`Unblend` pair the renderer pushes as a Vello
+      compositing layer.
+- [x] UAX#14 line breaking: `break_lines` takes its opportunities from
+      `unicode-linebreak`, so CJK breaks between ideographs and a no-break
+      space or an emoji ZWJ sequence holds together. A word wider than the
+      line still overflows at a char, not a grapheme cluster.
+- [x] Real semantic roles: `.role(Kind::..)` / `.label(..)` on any node, set
+      by every widget, so `mui-access` reports a named button and a slider
+      with its range instead of a pile of groups, and the preview keeps an
+      `accesskit_winit::Adapter` that publishes after each frame and serves
+      Focus and Click action requests.
+- [x] IME: `Input::ime` carries the platform's four events, a preedit paints
+      under the caret without ever joining the value, a commit inserts like
+      typed text, and `Frame::ime` puts the host's candidate window under the
+      field. No selection highlight while a composition is up.
 
 ## Missing
 
 - [ ] Kurv rewritten on MUI: the first real plugin editor on this stack, and
       the only honest test of whether the DSL survives a product.
-- [ ] IME.
-- [ ] UAX#14 line breaking: today a break is ASCII whitespace or a hyphen,
-      which is wrong for CJK.
-- [ ] Real semantic roles in `mui-core`, so a widget describes itself and
-      `mui-access` stops reporting every surface as a group.
-- [ ] `mui-access` wired into a window: nothing calls it yet. `accesskit_winit`
-      0.33 matches the preview's winit 0.30, so the preview is the first host.
 - [ ] `vello_hybrid` against classic `vello`, re-measured on Windows — the
       hybrid choice was made on Linux numbers only.
-- [ ] Blurred shadows on welded shapes: the sharp fallback read as a second
-      misaligned panel, so it is now dropped rather than drawn. A blur filter
-      layer is the fix. Blend modes too.
-- [ ] `.min_col` against a width nobody offered: a grid that hugs, or one
-      whose width is a flex share, keeps its declared column count, because
-      the share is not dealt until `arrange`. Same fix as the wrap item
-      below -- the flex pass re-measuring its items -- and until then a knob
-      bank goes where its width is definite.
+- [ ] A welded shadow is the union of the children's blurred rects, not the
+      blur of the welded outline: the seams are rounded where the outline is
+      straight or concave-filleted. A blur filter layer
+      (`vello_common::filter_effects`) is the exact fix, once `vello_cpu`
+      stops panicking on a filter in a multi-threaded context.
+- [ ] `.min_col` on a grid that hugs: with no width offered at all there is
+      nothing to drop columns against, so it keeps its declared count. A flex
+      share now counts as a width; a hugging grid still needs one.
+- [ ] No selection highlight while an input method is composing: the ends
+      were measured against the value and the preedit sits between them, so
+      the highlight is dropped for those frames. The commit still replaces
+      the selection. Measuring the two runs separately is the fix.
 - [ ] The first frame of a freshly-populated over-long `text_input` shows the
       head of the value: the widget has no inner width before its first
       layout. It catches up on the next frame.
@@ -108,17 +128,9 @@ public function and a test behind it.
       order and every surface carries its key), but focus rings, scroll
       offsets and `mui-access` still key on `String` paths, so renaming a
       node silently resets its state.
-- [ ] Wrap in one pass everywhere: a paragraph squeezed by a flex row still
-      needs a hint and a second solve, because the measurer only learns a
-      column's or a grid cell's room. The flex pass re-measuring its items at
-      their final main size retires `wrap_hints`. Caching line breaks across
-      frames is not the follow-up it looked like: BENCHMARKS.md measures
-      `break_lines` at 0.051 ms of a 1.23 ms resolve.
 
 ## Order
 
 Kurv first: everything above is guesswork until a shipping editor uses it,
-and it is the only item left that can change the DSL. Then semantic roles,
-since `mui-access` is a crate nobody can use until widgets describe
-themselves, then the Windows re-measure before any renderer decision is
-locked in.
+and it is the only item left that can change the DSL. Then the Windows
+re-measure, before any renderer decision is locked in.

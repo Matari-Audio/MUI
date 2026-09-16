@@ -398,11 +398,14 @@ pub struct Line {
 
 /// Greedy line breaking on advances alone.
 ///
-/// Break opportunities are ASCII whitespace and just after a `'-'`; `'\n'`
-/// forces a break; a word wider than `max_width` breaks at the glyph that
-/// overflows rather than hanging off the edge.
+/// Break opportunities come from UAX#14 (`unicode-linebreak`), so a space and a
+/// hyphen break, a no-break space and an emoji ZWJ sequence do not, and CJK
+/// breaks between ideographs; `'\n'` forces a break; a word wider than
+/// `max_width` breaks at the glyph that overflows rather than hanging off the
+/// edge.
 ///
-/// ponytail: no UAX#14 -- no CJK, no Thai; add `unicode-linebreak` if that matters.
+/// ponytail: the overflow fallback still splits at a char, not a grapheme
+/// cluster -- fix when a combining mark visibly detaches.
 pub fn break_lines(
     font: &[u8],
     text: &str,
@@ -413,6 +416,13 @@ pub fn break_lines(
         return Err(Error::InvalidOptions("max_width"));
     }
     let advances = advances(font, text, size_px)?;
+    // Byte offsets a line may start at, ascending, walked alongside the chars.
+    // One at a skipped space (LB8 after a ZWSP) is dropped; the next ink char
+    // offers it again.
+    let mut opps = unicode_linebreak::linebreaks(text)
+        .filter(|&(_, o)| o == unicode_linebreak::BreakOpportunity::Allowed)
+        .map(|(i, _)| i)
+        .peekable();
     let mut lines = Vec::new();
     let mut start = 0;
     // Advance since `start`, trailing-whitespace part of it, and the width of
@@ -436,12 +446,15 @@ pub fn break_lines(
             trim += a;
             continue;
         }
-        if trim > 0. {
-            // Ink after spaces: the word starts here, and so may a line.
+        while opps.peek().is_some_and(|&bi| bi < i) {
+            opps.next();
+        }
+        if opps.peek() == Some(&i) {
+            // A line may start here; any spaces before it stay on this one.
             brk = Some((i, x - trim));
-            trim = 0.;
             word = 0.;
         }
+        trim = 0.;
         if x + a > max_width && i > start {
             match brk.filter(|&(bi, _)| bi > start) {
                 Some((bi, advance)) => {
@@ -466,10 +479,6 @@ pub fn break_lines(
         }
         x += a;
         word += a;
-        if ch == '-' {
-            brk = Some((i + 1, x));
-            word = 0.;
-        }
     }
     lines.push(Line {
         text_range: start..text.len(),
@@ -811,6 +820,27 @@ mod measure_tests {
         let out = lines(&word, caret_x(HACK_REGULAR, &word, SIZE, 10).unwrap());
         assert_eq!(out.len(), 4, "{out:?}");
         assert!(out.iter().all(|l| l.len() == 10), "{out:?}");
+    }
+
+    #[test]
+    fn uax14_says_where_a_line_may_start() {
+        // Width of the first `n` bytes of the text itself, so the font's own
+        // advances decide and no test hard-codes a pixel.
+        let w = |t: &str, n: usize| caret_x(HACK_REGULAR, t, SIZE, n).unwrap();
+
+        // A no-break space holds its word together; the ASCII space breaks.
+        let nbsp = "a\u{00A0}b c";
+        assert_eq!(lines(nbsp, w(nbsp, 4)), ["a\u{00A0}b ", "c"]);
+        // A hyphen still breaks, after it.
+        assert_eq!(lines("ab-cd", w("ab-cd", 3)), ["ab-", "cd"]);
+        // CJK breaks between ideographs with no space in sight.
+        let cjk = "\u{4E00}\u{4E8C}\u{4E09}";
+        assert_eq!(lines(cjk, w(cjk, 6)), ["\u{4E00}\u{4E8C}", "\u{4E09}"]);
+        // An emoji ZWJ sequence is one unit: the break lands on the space.
+        let emoji = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F466}";
+        let text = format!("x {emoji}");
+        let width = w(&text, text.len()) - w(&text, 1);
+        assert_eq!(lines(&text, width), ["x ", emoji]);
     }
 
     #[test]

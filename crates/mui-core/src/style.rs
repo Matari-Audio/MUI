@@ -286,4 +286,32 @@ pub struct Style {
     pub weld: bool,
     /// Pointer shape over the node; inherited by children that set none.
     pub cursor: Option<Cursor>,
+    /// Blend mode and opacity for this node's whole subtree, as a
+    /// compositing layer. `None` paints straight onto what is under it.
+    pub layer: Option<(Mix, f32)>,
+}
+
+/// How a blended layer's colour combines with what is under it.
+///
+/// Mirrors `peniko::Mix` variant for variant: `mui-core` has no renderer
+/// dependency, and `mui-vello` maps the two with an exhaustive match.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Mix {
+    #[default]
+    Normal,
+    Multiply,
+    Screen,
+    Overlay,
+    Darken,
+    Lighten,
+    ColorDodge,
+    ColorBurn,
+    HardLight,
+    SoftLight,
+    Difference,
+    Exclusion,
+    Hue,
+    Saturation,
+    Color,
+    Luminosity,
 }
