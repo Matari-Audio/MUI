@@ -4,7 +4,8 @@
 //! default, a parent may offer an exact size, and surplus goes out by `grow`
 //! and comes back by `shrink`. Alignment is automatic: containers stretch to
 //! fill their cross axis, content centres in it, and nothing is ever placed by
-//! coordinate -- an `offset` on an overlay child is the only nudge there is.
+//! coordinate -- a float names a region around another node with [`Pin`], and
+//! an `offset` is the nudge left over.
 //!
 //! A node carries a payload `P` so a styling layer can ride the same tree
 //! instead of mirroring it by id.
@@ -316,6 +317,163 @@ enum Kind<P> {
     Fits(Vec<Node<P>>),
 }
 
+/// One of the nine named regions around an anchor, CSS `position-area`
+/// without the coordinates. The four sides centre on the anchor's other
+/// axis; the four corners align to the anchor's near edge, which is what a
+/// dropdown under a field wants. [`Area::Center`] sits over the anchor.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Area {
+    TopStart,
+    /// Above, centred. The default.
+    #[default]
+    Top,
+    TopEnd,
+    Start,
+    Center,
+    End,
+    BottomStart,
+    Bottom,
+    BottomEnd,
+}
+
+/// Take one axis of the size from the anchor, CSS `anchor-size()`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Match {
+    #[default]
+    None,
+    Width,
+    Height,
+}
+
+/// Where a float sits relative to another node, by name: the anchor, a named
+/// region around it, a gap, an optional size taken from it, and an ordered
+/// list of regions to try when the preferred one leaves the root rect. The
+/// first candidate that fits wins; if none does, the preferred one is pulled
+/// back inside.
+///
+/// ```
+/// use mui_layout::{leaf, overlay, resolve, Align, Pin, Size, SpacingToken::Xs};
+/// let tip = leaf(30., 20.).pin(Pin::to("knob").gap(Xs)).id("tip");
+/// let knob = leaf(40., 40.).anchor(Align::Start, Align::Start).id("knob");
+/// let tree = overlay([knob, tip]);
+/// let l = resolve(&tree, Some(Size::new(200., 200.)), Default::default()).unwrap();
+/// // No room above at the top of the window, so it flips under the knob.
+/// assert_eq!(l.frame("tip").unwrap().y, 44.);
+/// ```
+#[derive(Clone, Debug, PartialEq)]
+pub struct Pin {
+    anchor: String,
+    area: Area,
+    gap: Spacing,
+    size: Match,
+    fallbacks: Vec<Area>,
+}
+impl Pin {
+    /// Pin to the node with this id, above it by default, flipping below if
+    /// there is no room.
+    pub fn to(anchor: impl Into<String>) -> Self {
+        Self {
+            anchor: anchor.into(),
+            area: Area::Top,
+            gap: Spacing::Px(0.0),
+            size: Match::None,
+            fallbacks: vec![Area::Bottom],
+        }
+    }
+    /// The preferred region. Setting it clears the default flip; add your own
+    /// with [`fallback`](Pin::fallback).
+    pub fn area(mut self, area: Area) -> Self {
+        self.area = area;
+        self.fallbacks.clear();
+        self
+    }
+    /// Distance from the anchor's edge.
+    pub fn gap(mut self, gap: impl Into<Spacing>) -> Self {
+        self.gap = gap.into();
+        self
+    }
+    /// Take the anchor's width: a menu as wide as its field.
+    pub fn match_width(mut self) -> Self {
+        self.size = Match::Width;
+        self
+    }
+    /// Take the anchor's height: a side panel as tall as its row.
+    pub fn match_height(mut self) -> Self {
+        self.size = Match::Height;
+        self
+    }
+    /// Another region to try, in order, when the ones before it overflow.
+    pub fn fallback(mut self, area: Area) -> Self {
+        self.fallbacks.push(area);
+        self
+    }
+    fn sized(&self, anchor: Frame, s: Size) -> Size {
+        match self.size {
+            Match::None => s,
+            Match::Width => Size::new(anchor.size.width, s.height),
+            Match::Height => Size::new(s.width, anchor.size.height),
+        }
+    }
+    /// The top-left corner for `area`, in the same space as `anchor`.
+    fn corner(&self, area: Area, anchor: Frame, s: Size, gap: f64) -> [f64; 2] {
+        let (a, w, h) = (anchor, s.width, s.height);
+        let x = match area {
+            Area::Start => a.x - w - gap,
+            Area::End => a.right() + gap,
+            Area::TopStart | Area::BottomStart => a.x,
+            Area::TopEnd | Area::BottomEnd => a.right() - w,
+            Area::Top | Area::Bottom | Area::Center => a.x + (a.size.width - w) / 2.0,
+        };
+        let y = match area {
+            Area::TopStart | Area::Top | Area::TopEnd => a.y - h - gap,
+            Area::BottomStart | Area::Bottom | Area::BottomEnd => a.bottom() + gap,
+            Area::Start | Area::End | Area::Center => a.y + (a.size.height - h) / 2.0,
+        };
+        [x, y]
+    }
+    /// The winning corner: the first candidate inside `root`, else the
+    /// preferred one pulled back in.
+    fn place(&self, anchor: Frame, s: Size, root: Size, scale: SpacingScale) -> [f64; 2] {
+        let gap = self.gap.resolve(scale);
+        let fits = |p: [f64; 2]| {
+            p[0] >= 0.0
+                && p[1] >= 0.0
+                && p[0] + s.width <= root.width
+                && p[1] + s.height <= root.height
+        };
+        std::iter::once(self.area)
+            .chain(self.fallbacks.iter().copied())
+            .map(|a| self.corner(a, anchor, s, gap))
+            .find(|p| fits(*p))
+            .unwrap_or_else(|| {
+                let p = self.corner(self.area, anchor, s, gap);
+                [
+                    inside(p[0], s.width, root.width),
+                    inside(p[1], s.height, root.height),
+                ]
+            })
+    }
+}
+
+/// Everything a pinned float needs that its parent does not know: the anchor
+/// frames from the previous arrange pass, the root rect they live in, and the
+/// scale a [`Spacing`] gap resolves against.
+struct Pins<'a> {
+    anchors: &'a BTreeMap<String, Frame>,
+    root: Size,
+    scale: SpacingScale,
+}
+
+/// Pull `v` back inside `avail`. One too big to fit keeps its place: there is
+/// no inside to pull it to.
+fn inside(v: f64, extent: f64, avail: f64) -> f64 {
+    if extent <= avail {
+        v.clamp(0.0, avail - extent)
+    } else {
+        v
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Node<P = ()> {
     id: Option<String>,
@@ -338,6 +496,8 @@ pub struct Node<P = ()> {
     justify: Justify,
     anchor: Option<(Align, Align)>,
     offset: [f64; 2],
+    /// Anchored placement for a float; see [`Node::pin`].
+    pin: Option<Pin>,
     /// Children may overflow the main axis; the frame clips them and
     /// `scrolled` slides them. Implies `clip`.
     scroll: bool,
@@ -381,6 +541,7 @@ impl<P: Default> Node<P> {
             justify: Justify::Start,
             anchor: None,
             offset: [0.0; 2],
+            pin: None,
             scroll: false,
             clip: false,
             scrolled: [0.0; 2],
@@ -638,6 +799,22 @@ impl<P> Node<P> {
     pub fn scrolled(mut self, x: f64, y: f64) -> Self {
         self.scrolled = [x, y];
         self
+    }
+    /// Place this node against another node by name rather than inside its
+    /// own parent: see [`Pin`]. Implies [`float`](Node::float), and the
+    /// position is absolute, so the parent's padding and alignment no longer
+    /// apply. Keep [`offset`](Node::offset) for a nudge no region can name.
+    ///
+    /// ```
+    /// use mui_layout::{leaf, overlay, resolve, Area, Pin, Size};
+    /// let menu = leaf(10., 20.).pin(Pin::to("field").area(Area::Bottom).match_width()).id("m");
+    /// let l = resolve(&overlay([leaf(90., 24.).id("field"), menu]),
+    ///                 Some(Size::new(200., 200.)), Default::default()).unwrap();
+    /// assert_eq!(l.frame("m").unwrap().size.width, 90.);
+    /// ```
+    pub fn pin(mut self, pin: Pin) -> Self {
+        self.pin = Some(pin);
+        self.float()
     }
     /// Take this node out of flow: see the `float` field.
     pub fn float(mut self) -> Self {
@@ -1068,6 +1245,9 @@ struct Pass<'a, 'f, P> {
     /// Inside a re-measure: ids are already checked and the subtree is being
     /// measured a second time at its final main size.
     redo: bool,
+    /// Any node carries a [`Pin`], so arrange runs a second pass with the
+    /// anchor frames the first one found.
+    pinned: bool,
     measurer: &'f mut dyn FnMut(&P, Option<f64>) -> Size,
 }
 
@@ -1088,6 +1268,7 @@ fn measure<'a, P>(
     if depth > l.depth || pass.left == 0 {
         return Err(Error::BudgetExceeded);
     }
+    pass.pinned |= node.pin.is_some();
     pass.left -= 1;
     validate_node(node, l)?;
     let (gap, padding) = (node.gap.resolve(pass.scale), node.padding(pass.scale));
@@ -1516,6 +1697,7 @@ fn arrange<P>(
     ancestor: &str,
     origin: [f64; 2],
     size: Size,
+    pins: &Pins<'_>,
     out: &mut (BTreeMap<String, Frame>, Vec<Frame>),
 ) -> Result<(), Error> {
     let n = m.node;
@@ -1707,28 +1889,33 @@ fn arrange<P>(
         }
         let (pos, s) = if c.node.float {
             let (p, s) = cell(c, inner, default);
-            // A tooltip or menu offset past the edge is pulled back inside the
-            // box it floats in -- floats are painted after the root and clipped
-            // by nothing, so off the box is off the window. One too big to fit
-            // keeps its place: there is no inside to pull it to.
-            let inside = |v: f64, extent: f64, avail: f64| {
-                if extent <= avail {
-                    v.clamp(0.0, avail - extent)
-                } else {
-                    v
+            match c
+                .node
+                .pin
+                .as_ref()
+                .and_then(|pin| Some((pin, *pins.anchors.get(&pin.anchor)?)))
+            {
+                // A pin is absolute: the anchor may be anywhere in the tree,
+                // so the parent's padding box has nothing to say about it.
+                Some((pin, anchor)) => {
+                    let s = pin.sized(anchor, s);
+                    (pin.place(anchor, s, pins.root, pins.scale), s)
                 }
-            };
-            (
-                [
-                    origin[0] + m.padding.left + inside(p[0], s.width, inner.width),
-                    origin[1] + m.padding.top + inside(p[1], s.height, inner.height),
-                ],
-                s,
-            )
+                // A tooltip or menu offset past the edge is pulled back inside
+                // the box it floats in -- floats are painted after the root and
+                // clipped by nothing, so off the box is off the window.
+                None => (
+                    [
+                        origin[0] + m.padding.left + inside(p[0], s.width, inner.width),
+                        origin[1] + m.padding.top + inside(p[1], s.height, inner.height),
+                    ],
+                    s,
+                ),
+            }
         } else {
             placed[i].take().ok_or(Error::BudgetExceeded)?
         };
-        arrange(c, here, pos, s, out)?;
+        arrange(c, here, pos, s, pins, out)?;
     }
     Ok(())
 }
@@ -1769,6 +1956,7 @@ pub fn resolve_with<P>(
         scale,
         keys: BTreeMap::new(),
         redo: false,
+        pinned: false,
         measurer: &mut measurer,
     };
     // The root's own offered size is the outermost container there is.
@@ -1794,13 +1982,29 @@ pub fn resolve_with<P>(
     );
     // Only `resolve` knows the whole tree's floor, and that is the number a
     // host scales by; the sites that raise the error only know their own node.
-    arrange(&m, "root", [0.0, 0.0], size, &mut out).map_err(|e| match e {
+    let fix = |e| match e {
         Error::InsufficientSpace { node, .. } => Error::InsufficientSpace {
             node,
             needs: m.floor,
         },
         e => e,
-    })?;
+    };
+    let empty = BTreeMap::new();
+    let pins = |anchors| Pins {
+        anchors,
+        root: size,
+        scale,
+    };
+    arrange(&m, "root", [0.0, 0.0], size, &pins(&empty), &mut out).map_err(fix)?;
+    // ponytail: one extra arrange resolves every pin, because a float takes no
+    // space and so cannot move an anchor. A pin whose anchor is itself inside a
+    // pinned float reads that float's first-pass position; give the pass a
+    // dependency order if that ever matters.
+    if pass.pinned {
+        let anchors = std::mem::take(&mut out.0);
+        out.1.clear();
+        arrange(&m, "root", [0.0, 0.0], size, &pins(&anchors), &mut out).map_err(fix)?;
+    }
     Ok(Layout {
         size,
         frames: out.0,

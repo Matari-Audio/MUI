@@ -4,12 +4,16 @@ use std::sync::Arc;
 
 use mui_core::prelude::{overlay, text, Paints as _, Role};
 use mui_core::{
-    Align, Color, Cursor, El, Element, Fill, Paint, Palette, Radius, ResolvedScene, SceneError,
+    Area, Color, Cursor, El, Element, Fill, Paint, Palette, Pin, Radius, ResolvedScene, SceneError,
     SceneSpec, Size, Spacing, Spring, State, TextCache, Theme,
 };
 use mui_geometry::Point;
 use mui_input::{Hit, Ime, Input, Interaction, Key, KeyPress, PointerInput, Response};
-use mui_layout::SpacingToken::S;
+use mui_layout::SpacingToken::{Xs, S};
+
+/// The id the floated tip carries. A leading `/` keeps it out of hit
+/// testing, like every other key the runtime owns.
+const TIP_KEY: &str = "/tip";
 
 /// How long the pointer must rest on a surface before its tip is due.
 pub const TIP_DELAY: f64 = 0.5;
@@ -476,24 +480,26 @@ impl Ui {
             .filter(|(_, t)| *t >= TIP_DELAY)
             .and_then(|(id, _)| {
                 let s = self.scene.as_ref()?.surface(id)?;
-                Some((
-                    s.tip.clone()?,
-                    Point::new(s.frame.x, s.frame.bottom() + 4.0),
-                ))
+                Some((s.tip.clone()?, id.clone()))
             });
         let mut root = match &tip {
-            Some((t, at)) => {
+            Some((t, anchor)) => {
+                // Under the surface, flipping over it at the bottom edge of
+                // the window: the placement is the pin's, not arithmetic
+                // here. A float is placed in its parent's padding box, but a
+                // pinned one is absolute, so the wrapper only keeps the tip
+                // out of a root that has no children.
                 let float = text(t.clone())
                     .pad(S)
                     .fill(Role::Raised)
                     .radius(6.0)
-                    .float()
-                    .anchor(Align::Start, Align::Start)
-                    .offset(at.x, at.y);
-                // `at` is scene-absolute, and a float is placed at its
-                // parent's padding box, so the tip rides a wrapper with no
-                // padding at 0,0 -- pushing it into the root would displace
-                // every tip by the root's own padding.
+                    .pin(
+                        Pin::to(anchor.clone())
+                            .area(Area::BottomStart)
+                            .gap(Xs)
+                            .fallback(Area::TopStart),
+                    )
+                    .id(TIP_KEY);
                 overlay([root, float])
             }
             None => root,
@@ -552,6 +558,12 @@ impl Ui {
         let ime = self.ime_caret.take().and_then(|(id, at, h)| {
             let f = scene.surface(&id)?.frame;
             Some((Point::new(f.x + at.x, f.y + at.y), Size::new(1.0, h)))
+        });
+        // Where the pin actually put it, so a host placing its own tooltip
+        // window agrees with the one in the scene.
+        let tip = tip.and_then(|(t, _)| {
+            let f = scene.surface(TIP_KEY)?.frame;
+            Some((t, Point::new(f.x, f.y)))
         });
         self.delivered = std::mem::take(&mut self.edits);
         self.scene = Some(scene);

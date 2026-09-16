@@ -835,3 +835,47 @@ fn a_container_share_skips_the_hugging_parent_between() {
         (40., 40.)
     );
 }
+
+#[test]
+fn a_pin_falls_back_to_the_first_area_that_fits_the_root() {
+    // The field sits at the bottom of the window, so a menu under it would
+    // hang out of the root; the fallback puts it above instead.
+    let menu = |gap: f64| {
+        let m = leaf(80., 60.)
+            .pin(
+                Pin::to("field")
+                    .area(Area::BottomStart)
+                    .gap(gap)
+                    .fallback(Area::TopStart),
+            )
+            .id("menu");
+        let field = leaf(80., 24.).anchor(Align::Start, Align::End).id("field");
+        resolve(
+            &overlay([field, m]),
+            Some(Size::new(200., 100.)),
+            Default::default(),
+        )
+        .unwrap()
+        .frame("menu")
+        .unwrap()
+    };
+    assert_eq!((menu(4.).x, menu(4.).y), (0., 12.), "above, by the gap");
+    // Neither area fits with a gap that big, so the preferred one is pulled
+    // back inside the root rather than painted off-window.
+    assert_eq!(menu(90.).y, 40.);
+}
+
+#[test]
+fn a_matched_pin_takes_the_anchor_width() {
+    let tree = overlay([
+        leaf(90., 24.)
+            .anchor(Align::Start, Align::Start)
+            .id("field"),
+        leaf(10., 20.)
+            .pin(Pin::to("field").area(Area::BottomStart).match_width())
+            .id("menu"),
+    ]);
+    let l = resolve(&tree, Some(Size::new(200., 200.)), Default::default()).unwrap();
+    assert_eq!(l.frame("menu").unwrap().size.width, 90.);
+    assert_eq!(l.frame("menu").unwrap().y, 24.);
+}

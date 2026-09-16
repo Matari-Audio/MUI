@@ -38,8 +38,8 @@ pub use element::{
 pub use motion::Spring;
 pub use mui_geometry::CornerStyle;
 pub use mui_layout::{
-    Align, Frame, Insets, Justify, Layout, Len, Limits, Node, Size, Spacing, SpacingScale,
-    SpacingToken,
+    Align, Area, Frame, Insets, Justify, Layout, Len, Limits, Match, Node, Pin, Size, Spacing,
+    SpacingScale, SpacingToken,
 };
 pub use scene::{
     resolve_scene, resolve_scene_with, Layer, Painted, ResolvedScene, ResolvedSurface, SceneError,
@@ -57,9 +57,9 @@ pub mod prelude {
     pub use crate::Role::*;
     pub use crate::{
         canvas, caption, col, column, fits, grid, label, leaf, overlay, resolve_scene, row, spacer,
-        stack, text, title, Align, Color, Corner, Cursor, Draw, El, Elevation, Fill, Fit, Gradient,
-        Image, IntoEl, IntoLen, Justify, Kind, Len, Mix, Paints, Radius, Role, SceneSpec, Shadow,
-        Size, State, Style, Styled, Sugar, Theme,
+        stack, text, title, Align, Area, Color, Corner, Cursor, Draw, El, Elevation, Fill, Fit,
+        Gradient, Image, IntoEl, IntoLen, Justify, Kind, Len, Match, Mix, Paints, Pin, Radius,
+        Role, SceneSpec, Shadow, Size, State, Style, Styled, Sugar, Theme,
     };
     pub use mui_geometry::{CornerStyle, Path, Point};
     pub use mui_layout::Spacing;
