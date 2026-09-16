@@ -40,6 +40,7 @@ pub fn all() -> Vec<Box<dyn PreviewScene>> {
         Box::new(Fields::default()),
         Box::new(Tips),
         Box::new(Curve::default()),
+        Box::new(CurveEditor::default()),
         Box::new(Hits::default()),
         Box::new(Swap::default()),
         Box::new(Images::new()),
@@ -467,6 +468,47 @@ impl PreviewScene for Curve {
         .radius(16.0)
         .fill(Role::Surface)
         .id("curve")
+    }
+}
+
+/// The curve editor over `mui_motion::Curve`: knots and tension handles are
+/// the canvas's own hit shapes, and the drag lands on the model.
+#[derive(Default)]
+pub struct CurveEditor {
+    env: mui::scene::curve::Curve,
+    last: Option<CurveEdit>,
+}
+impl PreviewScene for CurveEditor {
+    fn name(&self) -> &'static str {
+        "Curve"
+    }
+    fn about(&self) -> &'static str {
+        "curve(ui, id, &mut Curve): drag a knot or a tension handle. Shift is the fine drag, Alt at the press locks an axis, and a knot clamps between its neighbours."
+    }
+    fn specimen(&mut self, ui: &mut Ui) -> El {
+        let (plot, edit) = curve(ui, "env", &mut self.env);
+        self.last = edit.or(self.last);
+        let over = ui.tag("env").map(str::to_owned);
+        let readout = match (&over, self.last) {
+            (Some(t), _) => format!("over {t}"),
+            (None, Some(CurveEdit::Point(i))) => format!("last moved knot {i}"),
+            (None, Some(CurveEdit::Tension(j, h))) => format!("last bent segment {j} ({h:?})"),
+            (None, None) => "drag a knot".to_owned(),
+        };
+        column([
+            plot.size(320.0, 180.0).radius(12.0).fill(Role::Field),
+            row([
+                text(readout).fill(Role::Dim),
+                spacer(),
+                text(format!("f(0.5) = {:.2}", self.env.evaluate(0.5))).fill(Role::Dim),
+            ]),
+        ])
+        .gap(M)
+        .pad(L)
+        .width(360.0)
+        .radius(16.0)
+        .fill(Role::Surface)
+        .id("curve-editor")
     }
 }
 

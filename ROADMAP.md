@@ -158,6 +158,16 @@ public function and a test behind it.
       all of that to its subtree. A gesture already in flight on it is
       cancelled with the `Edit::End` its host is owed.
 
+- [x] `curve(ui, id, &mut Curve)`: the envelope editor over the cubic model
+      `mui-motion` already had. One canvas, whose knots (`n{i}`) and tension
+      handles (`out{j}`/`in{j}`) are its hit shapes, so the drawn disc is the
+      grab disc and the spine between them is not a target. The drag lands on
+      `Curve::move_point`/`move_handle`, which clamp a knot to its neighbours
+      and a handle to its segment; Shift is the fine drag and Alt at the press
+      locks the axis. The path is fed the model's own control points, so what
+      is drawn and what `Curve::evaluate` samples for the DSP side are one
+      curve. The Curve scene is the proof.
+
 - [x] `Ui::shortcuts()`: every key this frame, whatever holds the focus, so
       undo/redo and the function keys work with nothing selected. A focused
       `text_input` consumes the stream and nothing else does. `Key` grew

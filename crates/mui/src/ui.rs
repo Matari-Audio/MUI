@@ -919,6 +919,9 @@ impl Host for Ui {
     fn get(&self, id: &str) -> Response {
         Ui::get(self, id)
     }
+    fn tag(&self, id: &str) -> Option<&str> {
+        Ui::tag(self, id)
+    }
     fn state(&self, id: &str) -> (f64, f64) {
         Ui::state(self, id)
     }
