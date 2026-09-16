@@ -170,6 +170,10 @@ pub struct ResolvedSurface {
     pub cursor: Option<Cursor>,
     pub tip: Option<String>,
     pub focusable: bool,
+    /// Switched off by itself or by an ancestor: not a hit target, not a Tab
+    /// stop, and reported disabled to a screen reader. See
+    /// [`Styled::disabled`](crate::Styled::disabled).
+    pub disabled: bool,
     /// The role and name this surface reports to a screen reader.
     pub semantics: Option<Semantics>,
     /// The nearest clipping ancestor's frame, for hit-testing.
@@ -399,6 +403,7 @@ struct Deferred<'a> {
     path: String,
     under: Color,
     cursor: Option<Cursor>,
+    disabled: bool,
 }
 
 struct Walk<'a> {
@@ -616,6 +621,7 @@ impl<'a> Walk<'a> {
         under: Color,
         cursor: Option<Cursor>,
         clip: Option<Bounds>,
+        disabled: bool,
     ) -> Result<(), SceneError> {
         let frame = self.frames[self.i];
         let at = self.i;
@@ -627,6 +633,9 @@ impl<'a> Walk<'a> {
         let e = n.payload();
         let s = &e.style;
         let cursor = s.cursor.or(cursor);
+        // A switched-off card switches off what it contains: nothing inside
+        // it may be reached while its own frame cannot be.
+        let disabled = disabled || e.disabled;
         if frame.size.width <= 0.0 || frame.size.height <= 0.0 {
             // A flex share that collapsed to nothing: invisible, and so are
             // its children.
@@ -836,6 +845,7 @@ impl<'a> Walk<'a> {
             cursor,
             tip: e.tip.clone(),
             focusable: e.focusable,
+            disabled,
             semantics: e.semantics.clone(),
             clip,
             content,
@@ -913,10 +923,11 @@ impl<'a> Walk<'a> {
                     path: path.clone(),
                     under: bg,
                     cursor,
+                    disabled,
                 });
                 self.i += count(c);
             } else {
-                self.node(c, path, bg, cursor, inner)?;
+                self.node(c, path, bg, cursor, inner, disabled)?;
             }
         }
         path.truncate(mark);
@@ -1006,6 +1017,7 @@ pub fn resolve_scene_with(
         th.palette.background(),
         None,
         None,
+        false,
     )?;
     // Floats paint last, in the order they were met; a float inside a float
     // lands on the end of the same queue.
@@ -1017,10 +1029,11 @@ pub fn resolve_scene_with(
             mut path,
             under,
             cursor,
+            disabled,
         } = w.deferred[k].clone();
         w.i = at;
         w.base_y = None;
-        w.node(node, &mut path, under, cursor, None)?;
+        w.node(node, &mut path, under, cursor, None, disabled)?;
         k += 1;
     }
     let (paint, surfaces, at) = (w.paint, w.surfaces, w.at);

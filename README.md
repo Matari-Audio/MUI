@@ -53,7 +53,11 @@ an `Input`, so a pointer-only host passes one unchanged. What comes back:
 `frame.animating` says whether to schedule another frame, `frame.cursor` is
 what the hovered surface asks for, and `frame.tip` is the tooltip that came
 due (already floated into the scene, handed back for a host that would
-rather open a native window).
+rather open a native window). Keys reach a widget through `ui.keys(id)`,
+which is empty unless `id` is focused, and a global shortcut through
+`ui.shortcuts()`, which is not gated by focus at all — except by the one
+rule every editor has: a focused `text_input` consumes the stream, so a `z`
+in a search box is a `z` and not an undo.
 
 ## The DSL
 
@@ -114,7 +118,8 @@ assert_eq!(scene.surface("tab").unwrap().frame.size.width, 92.0);
 | `.preset(&card())`, `.base(&panel())` | merge a prepared `Style` over or under this one, field by field: the side that states something wins |
 | `panel()`, `card()`, `glass()`, `chip("A")`, `tile(el)` | the presets in `mui::presets`: three styles to merge, two elements to finish. `glass()` is a translucent fill, a bright 1 px edge and an inner floor -- there is no backdrop blur and there will not be one |
 | `.apply(f)`, `.when(cond, f)` | hand the node to a builder run, conditionally or not |
-| `.on(State::Hover, \|s\| s.stroke(Ink))` | the look for a state, declared beside the resting one; `Hover`, `Press`, `Focus` |
+| `.on(State::Hover, \|s\| s.stroke(Ink))` | the look for a state, declared beside the resting one; `Hover`, `Press`, `Focus`, `Disabled` |
+| `.disabled(bypassed)` | switch this node and its subtree off: the `State::Disabled` look, out of the hit map, out of Tab, and `disabled` to a screen reader. A gesture in flight on it is cancelled |
 | `.full()` | all of the parent, both axes |
 | `.animate()`, `.transition(Spring::new(0.3, 1.0))` | this node's fill, stroke, radius, text size and shadow spring to their new values |
 | `.shell(d, fill)` | a parallel inset of the outline before it, cumulative |

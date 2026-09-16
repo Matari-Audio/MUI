@@ -257,8 +257,15 @@ pub struct PointerInput {
     pub mods: Mods,
 }
 
-/// A key the host reports, already interpreted: a printable character or one
-/// of the editing keys a text field has to handle.
+/// A key the host reports, already interpreted: a printable character, one
+/// of the editing keys a text field has to handle, or one of the keys only
+/// a shortcut ever wants.
+///
+/// ```
+/// # use mui_input::Key;
+/// assert_eq!(Key::Function(1), Key::Function(1));
+/// assert_ne!(Key::Function(1), Key::Function(2));
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Key {
     Char(char),
@@ -273,6 +280,14 @@ pub enum Key {
     Down,
     Home,
     End,
+    /// The space bar as a *key*: the character also arrives as typed text,
+    /// so a field inserts it from there and a shortcut reads it here.
+    Space,
+    PageUp,
+    PageDown,
+    /// `F1` is `Function(1)`. One variant rather than twelve, because a
+    /// shortcut table compares the number.
+    Function(u8),
 }
 
 /// The modifier keys held. Shared by [`KeyPress`] and [`PointerInput`]: a

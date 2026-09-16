@@ -112,6 +112,10 @@ pub enum State {
     Hover,
     Press,
     Focus,
+    /// Switched off: see [`Styled::disabled`]. Unlike the other three it is
+    /// declared by the tree rather than discovered by the runtime, and the
+    /// node it is on responds to nothing.
+    Disabled,
 }
 
 /// What a node looks like in one [`State`]: its resting style in, the style
@@ -199,6 +203,10 @@ pub struct Element {
     pub tip: Option<String>,
     /// Takes keyboard focus on click and on Tab.
     pub focusable: bool,
+    /// Switched off: no hit testing, no focus, and the look declared for
+    /// [`State::Disabled`]. Inherited by the subtree. See
+    /// [`Styled::disabled`].
+    pub disabled: bool,
     /// A row whose text children share one baseline. See [`Styled::baseline`].
     pub baseline: bool,
     /// Cap a wrapped label at this many lines. See [`Styled::lines`].
@@ -558,6 +566,27 @@ pub trait Styled: Paints {
     }
     fn focusable(mut self) -> Self {
         self.element_mut().focusable = true;
+        self
+    }
+    /// Switch this node -- and everything under it -- off: it drops out of
+    /// hit testing and out of Tab, and it paints whatever it declared for
+    /// [`State::Disabled`]. A greyed control that still drags is worse than
+    /// no grey at all, so the look and the gate are one call.
+    ///
+    /// Takes the flag rather than being a marker, because the caller almost
+    /// always has one already (`.disabled(!module.enabled)`).
+    ///
+    /// ```
+    /// use mui_scene::prelude::*;
+    /// let bypassed = leaf(64., 28.)
+    ///     .fill(Primary)
+    ///     .on(State::Disabled, |s| s.fill(Ink.alpha(0.2)))
+    ///     .disabled(true)
+    ///     .id("osc-2");
+    /// assert!(bypassed.payload().disabled);
+    /// ```
+    fn disabled(mut self, on: bool) -> Self {
+        self.element_mut().disabled = on;
         self
     }
     /// Spring this node's paint toward whatever it is next declared to be,

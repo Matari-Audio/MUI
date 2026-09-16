@@ -71,9 +71,34 @@ fn named(k: NamedKey) -> Option<mui::prelude::Key> {
         NamedKey::ArrowDown => K::Down,
         NamedKey::Home => K::Home,
         NamedKey::End => K::End,
-        _ => return None,
+        NamedKey::Space => K::Space,
+        NamedKey::PageUp => K::PageUp,
+        NamedKey::PageDown => K::PageDown,
+        // F1..F12 by position: twelve match arms would say the same thing.
+        _ => {
+            return FUNCTION
+                .iter()
+                .position(|f| *f == k)
+                .map(|i| K::Function(i as u8 + 1))
+        }
     })
 }
+
+/// winit's function keys, in order, so `F3` is `Function(3)`.
+const FUNCTION: [NamedKey; 12] = [
+    NamedKey::F1,
+    NamedKey::F2,
+    NamedKey::F3,
+    NamedKey::F4,
+    NamedKey::F5,
+    NamedKey::F6,
+    NamedKey::F7,
+    NamedKey::F8,
+    NamedKey::F9,
+    NamedKey::F10,
+    NamedKey::F11,
+    NamedKey::F12,
+];
 
 /// A theme file: `key = value` a line, `#` starts a comment, everything
 /// unstated stays [`skin::SKIN`]'s. Returns what failed to parse so the caller
@@ -340,15 +365,23 @@ impl App {
             text("MUI preview").text_size(16.0),
             text(scene.about()).fill(Role::Dim),
         ];
-        side.extend((0..self.scenes.len()).map(|i| {
-            let on = i == self.selected;
-            let (item, _) = button(ui, &format!("scene-{i}"), self.scenes[i].name());
-            item.variant(if on { Variant::Solid } else { Variant::Soft })
-                .size(S)
-                .el()
-                .radius(Corner::Field)
-                .w(pct(100.))
-        }));
+        // The list grows with the gallery, so it takes the slack and scrolls;
+        // the switches below it stay put instead of being squeezed to nothing.
+        side.push(
+            column((0..self.scenes.len()).map(|i| {
+                let on = i == self.selected;
+                let (item, _) = button(ui, &format!("scene-{i}"), self.scenes[i].name());
+                item.variant(if on { Variant::Solid } else { Variant::Soft })
+                    .size(S)
+                    .el()
+                    .radius(Corner::Field)
+                    .w(pct(100.))
+            }))
+            .gap(S)
+            .scroll()
+            .grow(1.0)
+            .id("scene-list"),
+        );
         let scene = &mut self.scenes[self.selected];
         let switch = |label: &str, id: &str, v: &mut bool| {
             row([

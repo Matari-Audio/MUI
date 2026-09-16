@@ -48,6 +48,7 @@ pub fn all() -> Vec<Box<dyn PreviewScene>> {
         Box::new(Cells),
         Box::new(Select::default()),
         Box::new(Gestures::default()),
+        Box::new(Switched::default()),
         Box::new(Editor),
         Box::new(Effects),
     ]
@@ -944,6 +945,57 @@ impl PreviewScene for Gestures {
         .radius(20.0)
         .fill(Role::Surface)
         .id("gestures")
+    }
+}
+
+/// A bypassed rack and a key nobody owns: the two things a shortcut-driven
+/// editor needs and the five widgets did not have.
+#[derive(Default)]
+pub struct Switched {
+    bypassed: bool,
+    cutoff: f64,
+    fired: usize,
+    query: String,
+}
+impl PreviewScene for Switched {
+    fn name(&self) -> &'static str {
+        "Disabled + shortcuts"
+    }
+    fn about(&self) -> &'static str {
+        "Space or F1 counts wherever the pointer is -- until the field takes the focus. Bypass greys the rack and it stops responding."
+    }
+    fn specimen(&mut self, ui: &mut Ui) -> El {
+        if ui
+            .shortcuts()
+            .iter()
+            .any(|k| matches!(k.key, Key::Space | Key::Function(1)))
+        {
+            self.fired += 1;
+        }
+        let bypass = toggle(ui, "sw-bypass", &mut self.bypassed).size(S).el();
+        let rack = row([knob(ui, "sw-cut", "Cutoff", &mut self.cutoff, 0.0..=1.0).el()])
+            .pad(M)
+            .radius(12.0)
+            .fill(Role::Field)
+            // One call for both halves: the look and the gate.
+            .on(State::Disabled, |s| s.fill(Ink.alpha(0.04)))
+            .disabled(self.bypassed)
+            .opacity(if self.bypassed { 0.4 } else { 1.0 })
+            .id("sw-rack");
+        column([
+            row([label("bypass"), spacer(), bypass])
+                .gap(S)
+                .align(Align::Center),
+            rack,
+            text_input(ui, "sw-query", &mut self.query),
+            caption(format!("shortcut fired {} times", self.fired)),
+        ])
+        .gap(M)
+        .pad(L)
+        .width(300.0)
+        .radius(20.0)
+        .fill(Role::Surface)
+        .id("switched")
     }
 }
 

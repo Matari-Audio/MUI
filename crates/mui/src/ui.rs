@@ -7,8 +7,8 @@ use mui_input::{Hit, Ime, Input, Interaction, Key, KeyPress, PointerInput, Respo
 use mui_layout::SpacingToken::{Xs, S};
 use mui_scene::prelude::{overlay, text, Paints as _, Role};
 use mui_scene::{
-    Area, Color, Cursor, El, Element, Fill, Paint, Palette, Pin, Radius, ResolvedScene, SceneError,
-    SceneSpec, Size, Spacing, Spring, State, TextCache, Theme,
+    Area, Color, Cursor, El, Element, Fill, Kind, Paint, Palette, Pin, Radius, ResolvedScene,
+    SceneError, SceneSpec, Size, Spacing, Spring, State, TextCache, Theme,
 };
 use mui_widgets::Host;
 
@@ -260,6 +260,45 @@ impl Ui {
             &[]
         }
     }
+    /// Every key this frame, whatever holds the focus: the stream a global
+    /// shortcut reads. `Ui` has already taken Tab and Escape for focus, and
+    /// the keys are here as well as in [`Ui::keys`] -- a shortcut and a
+    /// focused widget see the same press.
+    ///
+    /// The one exception is the rule every editor has: **a focused text
+    /// input consumes the stream**, so typing `z` in a search box is a `z`
+    /// and not an undo. Nothing else swallows keys; a widget that wants to
+    /// claim a key while focused must check [`Ui::focused`] itself.
+    ///
+    /// ```
+    /// # use mui::Ui; use mui::prelude::*;
+    /// # let mut ui = Ui::new(Theme::DEFAULT);
+    /// # let root = leaf(10., 10.).id("root");
+    /// # ui.frame(root, None, PointerInput::default(), 0.016).unwrap();
+    /// let undo = ui
+    ///     .shortcuts()
+    ///     .iter()
+    ///     .any(|k| k.key == Key::Char('z') && (k.mods.ctrl || k.mods.cmd));
+    /// assert!(!undo, "nothing was pressed");
+    /// ```
+    pub fn shortcuts(&self) -> &[KeyPress] {
+        let typing = self.focus.as_deref().is_some_and(|k| {
+            self.scene
+                .as_ref()
+                .and_then(|s| s.surface(k))
+                .is_some_and(|s| {
+                    matches!(
+                        s.semantics.as_ref().map(|s| &s.role),
+                        Some(Kind::TextInput { .. })
+                    )
+                })
+        });
+        if typing {
+            &[]
+        } else {
+            &self.keys
+        }
+    }
     /// The text typed this frame, if `id` is focused.
     pub fn text(&self, id: &str) -> &str {
         if self.focused(id) {
@@ -347,7 +386,7 @@ impl Ui {
         };
         let stops: Vec<String> = scene
             .surfaces()
-            .filter(|s| s.focusable)
+            .filter(|s| s.focusable && !s.disabled)
             .map(|s| s.key.to_string())
             .collect();
         if stops.is_empty() {
@@ -418,6 +457,28 @@ impl Ui {
         self.pointer = input.pointer;
         self.pasted = input.clipboard;
         self.time += dt;
+        // Switched off mid-gesture: the hit map stopped reporting it when it
+        // resolved disabled, and a drag must not outlive its target. The
+        // cancel still owes the host an `Edit::End`.
+        let off = |scene: Option<&ResolvedScene>, k: &str| {
+            scene.and_then(|s| s.surface(k)).is_some_and(|s| s.disabled)
+        };
+        if self
+            .interaction
+            .held()
+            .is_some_and(|k| off(self.scene.as_ref(), k))
+        {
+            self.cancel();
+        }
+        // The same for a focus it held when it was switched off: Tab already
+        // steps over it, and a key stream into a dead node is worse.
+        if self
+            .focus
+            .as_deref()
+            .is_some_and(|k| off(self.scene.as_ref(), k))
+        {
+            self.focus = None;
+        }
         let prev_held = self.interaction.held().map(str::to_owned);
         self.interaction.update(&self.hit, input.pointer);
         let (hovered, held) = (
@@ -561,6 +622,9 @@ impl Ui {
             State::Hover => springs.get(k).is_some_and(|[h, _]| h.value > 0.5),
             State::Press => springs.get(k).is_some_and(|[_, p]| p.value > 0.5),
             State::Focus => focus == Some(k),
+            // Declared by the node, not discovered here: `declared_states`
+            // answers this one from the element itself.
+            State::Disabled => false,
         });
         animating |= transitions(&mut root, &pal, &mut self.motion, dt);
         for (_, s) in self.motion.iter_mut().filter(|(k, _)| k.starts_with('~')) {
@@ -585,7 +649,10 @@ impl Ui {
         // Named nodes are the gesture targets, in z-order. Unnamed ones are
         // decoration. A target clipped away does not respond.
         let mut hit = Hit::default();
-        for s in scene.surfaces().filter(|s| !s.key.starts_with('/')) {
+        for s in scene
+            .surfaces()
+            .filter(|s| !s.key.starts_with('/') && !s.disabled)
+        {
             if s.hits.is_empty() {
                 hit.push_clipped(s.key.to_string(), &s.path, s.clip)?;
             }
@@ -733,16 +800,31 @@ fn transitions(
 /// Replace every named node's style with what it declared for the states it
 /// is in, in declaration order.
 fn declared_states(n: &mut El, is: &dyn Fn(&str, State) -> bool) {
+    declared_states_under(n, is, false);
+}
+
+/// `off` is the enclosing subtree's disabled flag: a card that switched
+/// itself off greys the controls inside it too, which is the same rule the
+/// hit gate uses.
+fn declared_states_under(n: &mut El, is: &dyn Fn(&str, State) -> bool, off: bool) {
+    let off = off || n.payload().disabled;
     if let Some(k) = n.key().map(str::to_owned) {
         let e = n.payload_mut();
         for (st, f) in std::mem::take(&mut e.states) {
-            if is(&k, st) {
+            let on = match st {
+                State::Disabled => off,
+                // A disabled node is never hovered or pressed -- it is not in
+                // the hit map -- and a focus it held before it was switched
+                // off is not a reason to paint it lit.
+                _ => !off && is(&k, st),
+            };
+            if on {
                 e.style = f.0(e.style.clone());
             }
         }
     }
     for c in n.children_mut() {
-        declared_states(c, is);
+        declared_states_under(c, is, off);
     }
 }
 
@@ -754,12 +836,25 @@ fn state(
     of: &dyn Fn(&str) -> Option<(f64, f64)>,
     scrolls: &BTreeMap<String, [f64; 2]>,
 ) {
+    state_under(n, pal, of, scrolls, false);
+}
+
+/// `off` is the enclosing subtree's disabled flag: a hover spring still
+/// decaying from before the node was switched off must not tint it.
+fn state_under(
+    n: &mut El,
+    pal: &Palette,
+    of: &dyn Fn(&str) -> Option<(f64, f64)>,
+    scrolls: &BTreeMap<String, [f64; 2]>,
+    off: bool,
+) {
+    let off = off || n.payload().disabled;
     if let Some([x, y]) = n.key().and_then(|k| scrolls.get(k)).copied() {
         // `scrolled` is a builder and a built node cannot be reopened.
         let node = std::mem::replace(n, mui_scene::leaf(0.0, 0.0));
         *n = node.scrolled(x, y);
     }
-    if let Some((h, p)) = n.key().and_then(of) {
+    if let Some((h, p)) = n.key().and_then(of).filter(|_| !off) {
         let bg = pal.background();
         let e = n.payload_mut();
         if !e.style.fill.is_none() && (h > 0.0 || p > 0.0) {
@@ -769,7 +864,7 @@ fn state(
         }
     }
     for c in n.children_mut() {
-        state(c, pal, of, scrolls);
+        state_under(c, pal, of, scrolls, off);
     }
 }
 impl std::fmt::Debug for Ui {
@@ -943,6 +1038,92 @@ mod tests {
         ui.frame(tree(), None, at(50., 50., false), 0.016).unwrap();
         ui.frame(tree(), None, at(50., 50., false), 0.016).unwrap();
         assert_eq!(ui.tag("dial"), None, "released over the hole");
+    }
+
+    /// The two halves of `.disabled` are one feature: the look it declared
+    /// for `State::Disabled` is painted, the look it declared for a hover is
+    /// not, and the pointer sitting on it produces no gesture at all.
+    #[test]
+    fn a_disabled_node_paints_its_off_look_and_hits_nothing() {
+        let mut ui = Ui::new(Theme::DEFAULT);
+        let tree = |off: bool| {
+            leaf(100., 100.)
+                .fill(Role::Field)
+                .on(State::Hover, |s| s.fill(Role::Primary))
+                .on(State::Disabled, |s| s.fill(Role::Dim))
+                .disabled(off)
+                .focusable()
+                .id("bypass")
+        };
+        let fill = |f: &Frame<'_>| {
+            f.scene
+                .paint
+                .iter()
+                .find(|p| &*p.key == "bypass")
+                .expect("painted")
+                .paint
+                .solid()
+        };
+        let pal = Theme::DEFAULT.palette;
+        let role = |r: Role| match Fill::from(r).paint(&pal, pal.background()) {
+            Some(Paint::Solid(c)) => c,
+            _ => panic!("a role paints solid"),
+        };
+        // Live: two frames, because a gesture reads the previous hit map.
+        ui.frame(tree(false), None, at(50., 50., false), 0.016)
+            .unwrap();
+        let lit = fill(
+            &ui.frame(tree(false), None, at(50., 50., false), 0.016)
+                .unwrap(),
+        );
+        assert!(ui.get("bypass").hovered, "live, and under the pointer");
+        assert!(
+            lit != role(Role::Field) && lit != role(Role::Dim),
+            "the hover look, lifted by the hover spring"
+        );
+
+        for _ in 0..2 {
+            ui.frame(tree(true), None, at(50., 50., true), 0.016)
+                .unwrap();
+        }
+        let off = fill(
+            &ui.frame(tree(true), None, at(50., 50., true), 0.016)
+                .unwrap(),
+        );
+        let r = ui.get("bypass");
+        assert!(!r.hovered && !r.pressed && !r.held, "no gesture: {r:?}");
+        assert_eq!(off, role(Role::Dim), "the disabled look, unlifted");
+
+        // And it is no Tab stop -- nor does it keep a focus it already had.
+        ui.frame(tree(true), None, key(Key::Tab), 0.016).unwrap();
+        assert!(!ui.focused("bypass"));
+        ui.focus("bypass");
+        ui.frame(tree(true), None, PointerInput::default(), 0.016)
+            .unwrap();
+        assert!(!ui.focused("bypass"), "a focus on a dead node is dropped");
+    }
+
+    /// A shortcut is not focus-gated -- except by a field that is typing.
+    #[test]
+    fn a_shortcut_fires_unfocused_and_never_while_a_field_has_the_focus() {
+        let mut ui = Ui::new(Theme::DEFAULT);
+        let mut value = String::new();
+        let undo = |ui: &Ui| {
+            ui.shortcuts()
+                .iter()
+                .any(|k| k.key == Key::Function(1) || k.key == Key::Space)
+        };
+        let tree = |ui: &mut Ui, v: &mut String| mui_widgets::text_input(ui, "f", v);
+
+        let root = tree(&mut ui, &mut value);
+        ui.frame(root, None, key(Key::Function(1)), 0.016).unwrap();
+        assert!(undo(&ui), "nothing is focused, so the shortcut is ours");
+
+        ui.focus("f");
+        let root = tree(&mut ui, &mut value);
+        ui.frame(root, None, key(Key::Space), 0.016).unwrap();
+        assert!(!undo(&ui), "the field is typing: the key is its own");
+        assert_eq!(ui.keys("f").len(), 1, "and it still gets it");
     }
 
     #[test]

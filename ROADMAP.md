@@ -148,6 +148,18 @@ public function and a test behind it.
       latched at the press so a drag keeps the knot it grabbed. The Canvas
       hits scene is the proof.
 
+- [x] `State::Disabled` and `.disabled(flag)`, which are one feature: the
+      node paints what it declared for `State::Disabled`, drops out of the
+      hit map and out of Tab, reports `disabled` to `mui-access`, and passes
+      all of that to its subtree. A gesture already in flight on it is
+      cancelled with the `Edit::End` its host is owed.
+
+- [x] `Ui::shortcuts()`: every key this frame, whatever holds the focus, so
+      undo/redo and the function keys work with nothing selected. A focused
+      `text_input` consumes the stream and nothing else does. `Key` grew
+      `Space`, `PageUp`, `PageDown` and `Function(n)`; the preview feeds all
+      of them. The Disabled + shortcuts scene is the proof.
+
 - [x] The crate split: theme data, motion and the scalar/spacing vocabulary
       sit under the element tree (`mui-style`, `mui-motion`, `mui-geometry`),
       `mui-core` is `mui-scene`, the controls are `mui-widgets` behind a
@@ -157,8 +169,6 @@ public function and a test behind it.
 
 ## Missing
 
-- [ ] `State::Disabled`: nothing in `Ui` reports disabled, and the variant
-      only makes sense beside the flag that gates hit testing.
 - [ ] A pin whose anchor is itself inside another pinned float reads that
       float's first-pass position; a dependency-ordered pin pass is the fix.
 - [ ] Spring interpolation of gradient *stops*: `Ui`'s channels only ever
