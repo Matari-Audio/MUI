@@ -1,6 +1,6 @@
 //! Everything this application decides about how it looks, and nothing else.
 //!
-//! One file, one `const`. `mui-core` ships the mechanism -- how a surface is
+//! One file, one `const`. `mui-scene` ships the mechanism -- how a surface is
 //! derived, where ink is allowed to sit, what a hover does -- and deliberately
 //! ships no taste: `Palette::NEUTRAL` leaves every brand role grey, because
 //! which colour is *yours* is not a layout library's decision. This is where

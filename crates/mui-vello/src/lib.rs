@@ -13,8 +13,8 @@
 #![forbid(unsafe_code)]
 
 use kurbo::{Affine, BezPath, Rect, Shape as _, Stroke};
-use mui_core::{Fit, GradientKind, Layer, Paint, Painted, ResolvedScene, ShadowKind};
 use mui_geometry::{Error, Path, PathCommand};
+use mui_scene::{Fit, GradientKind, Layer, Paint, Painted, ResolvedScene, ShadowKind};
 use std::sync::{Arc, Mutex};
 /// The brush type [`Canvas::set_paint`] takes, so the trait can be
 /// implemented outside this crate.
@@ -150,11 +150,11 @@ pub trait Canvas {
     /// a canvas that never paints an image may leave both of these alone.
     fn set_paint_transform(&mut self, _t: Affine) {}
     fn reset_paint_transform(&mut self) {}
-    /// This image as a brush, or `None` for [`mui_core::Paint::solid`]'s
+    /// This image as a brush, or `None` for [`mui_scene::Paint::solid`]'s
     /// stand-in. `vello_cpu` takes the pixmap itself; `vello_hybrid` wants
     /// an atlas id and *panics* on a pixmap, so [`Gpu`] uploads through its
     /// [`Atlas`] and says `None` without one.
-    fn image(&mut self, img: &mui_core::Image) -> Option<PaintType> {
+    fn image(&mut self, img: &mui_scene::Image) -> Option<PaintType> {
         pixmap(img).map(|p| {
             vello_common::paint::Image {
                 image: vello_common::paint::ImageSource::Pixmap(p),
@@ -183,7 +183,7 @@ pub trait Canvas {
     fn pop_layer(&mut self);
     /// Draw a hinted glyph run in the current paint, each glyph's `x`
     /// measured from the run's origin along the baseline.
-    fn glyphs(&mut self, text: &mui_core::Text);
+    fn glyphs(&mut self, text: &mui_scene::Text);
 }
 
 /// One [`FontData`] per distinct font. Vello's hinted-glyph and atlas caches
@@ -286,7 +286,7 @@ macro_rules! wrapper {
         fn pop_layer(&mut self) {
             self.$inner.pop_layer()
         }
-        fn glyphs(&mut self, text: &mui_core::Text) {
+        fn glyphs(&mut self, text: &mui_scene::Text) {
             self.$inner
                 .glyph_run(self.resources, &font_data(&text.font))
                 .font_size(text.size)
@@ -298,7 +298,7 @@ macro_rules! wrapper {
 }
 
 impl Canvas for Gpu<'_> {
-    fn image(&mut self, img: &mui_core::Image) -> Option<PaintType> {
+    fn image(&mut self, img: &mui_scene::Image) -> Option<PaintType> {
         let atlas = self.atlas.as_mut()?;
         let (id, clear) = match atlas.ids.0.iter().find(|(k, ..)| Arc::ptr_eq(k, &img.rgba)) {
             Some(&(_, id, clear)) => (id, clear),
@@ -365,7 +365,7 @@ pub struct Cpu<'a> {
     pub resources: &'a mut vello_cpu::Resources,
 }
 
-fn srgb(c: mui_core::Color) -> AlphaColor<Srgb> {
+fn srgb(c: mui_scene::Color) -> AlphaColor<Srgb> {
     c.to_srgb()
 }
 
@@ -383,12 +383,12 @@ static IMAGES: Mutex<Vec<(Arc<[u8]>, Arc<Pixmap>)>> = Mutex::new(Vec::new());
 /// size ever fits.
 // ponytail: 4096 is the default tile; `MemorySettings::normalize` can clamp it
 // further down to a device limit, so this is a guard, not a guarantee.
-fn fits_atlas(img: &mui_core::Image) -> bool {
+fn fits_atlas(img: &mui_scene::Image) -> bool {
     let (w, h) = vello_common::multi_atlas::AtlasConfig::default().atlas_size;
     img.width <= w && img.height <= h
 }
 
-fn pixmap(img: &mui_core::Image) -> Option<Arc<Pixmap>> {
+fn pixmap(img: &mui_scene::Image) -> Option<Arc<Pixmap>> {
     // A single image has to fit one atlas tile; u16 is the hard ceiling.
     let (w, h) = (
         u16::try_from(img.width).ok()?,
@@ -428,7 +428,7 @@ fn pixmap(img: &mui_core::Image) -> Option<Arc<Pixmap>> {
 }
 
 /// Where the image's pixels land so that it fills `bounds` per `fit`.
-fn image_transform(img: &mui_core::Image, fit: Fit, bounds: Rect) -> Affine {
+fn image_transform(img: &mui_scene::Image, fit: Fit, bounds: Rect) -> Affine {
     let (iw, ih) = (f64::from(img.width), f64::from(img.height));
     let (sx, sy) = (bounds.width() / iw, bounds.height() / ih);
     let (sx, sy) = match fit {
@@ -721,10 +721,10 @@ fn layered(canvas: &mut impl Canvas, p: &Painted) -> bool {
     true
 }
 
-/// `mui-core` mirrors `peniko::Mix` rather than depend on it; this match is
+/// `mui-scene` mirrors `peniko::Mix` rather than depend on it; this match is
 /// exhaustive, so a rename on either side fails the build.
-fn mix(m: mui_core::Mix) -> peniko::Mix {
-    use mui_core::Mix as M;
+fn mix(m: mui_scene::Mix) -> peniko::Mix {
+    use mui_scene::Mix as M;
     match m {
         M::Normal => peniko::Mix::Normal,
         M::Multiply => peniko::Mix::Multiply,
@@ -841,7 +841,7 @@ fn one(canvas: &mut impl Canvas, p: &Painted, path: &BezPath) -> Result<(), Erro
 #[cfg(test)]
 mod seam {
     use super::*;
-    use mui_core::{Image, Text};
+    use mui_scene::{Image, Text};
 
     /// `Image`'s fields are public, so a caller can skip `Image::rgba` and
     /// hand over a buffer that does not match the size. Vello's `Pixmap`
@@ -903,7 +903,7 @@ mod seam {
             key: "t".into(),
             layer: Layer::Text,
             path: Path::default(),
-            paint: Paint::Solid(mui_core::Color::oklch(0.5, 0., 0.)),
+            paint: Paint::Solid(mui_scene::Color::oklch(0.5, 0., 0.)),
             rect: None,
             width: 0.,
             blur: 0.,
@@ -925,7 +925,7 @@ mod seam {
 #[cfg(all(test, feature = "cpu"))]
 mod snapshot {
     use super::*;
-    use mui_core::prelude::*;
+    use mui_scene::prelude::*;
     use vello_common::pixmap::Pixmap;
 
     /// The whole stack on the CPU: a filled card reaches the pixels, its ink
@@ -942,7 +942,10 @@ mod snapshot {
             epaint_default_fonts::HACK_REGULAR.to_vec(),
         ));
         let scene = resolve_scene(&spec).unwrap();
-        assert!(scene.paint.iter().any(|p| p.layer == mui_core::Layer::Text));
+        assert!(scene
+            .paint
+            .iter()
+            .any(|p| p.layer == mui_scene::Layer::Text));
 
         let mut ctx = vello_cpu::RenderContext::new(120, 60);
         let mut res = vello_cpu::Resources::default();
@@ -1011,12 +1014,12 @@ mod snapshot {
     /// its solid stand-in first.
     #[test]
     fn a_gradient_shadow_does_not_paint_black() {
-        let faint = mui_core::Color::oklcha(0.0, 0.0, 0.0, 0.1);
+        let faint = mui_scene::Color::oklcha(0.0, 0.0, 0.0, 0.1);
         let root = leaf(20., 20.)
             .fill(Role::Primary)
             .shadow(Shadow {
                 dy: 8.,
-                fill: Fill::Gradient(mui_core::Gradient::vertical(faint, faint.with_alpha(0.0))),
+                fill: Fill::Gradient(mui_scene::Gradient::vertical(faint, faint.with_alpha(0.0))),
                 ..Shadow::soft(4.)
             })
             .id("card");
@@ -1079,7 +1082,7 @@ mod snapshot {
             255, 0, 0, 255,  0, 255, 0, 255,
             0, 0, 255, 255,  255, 255, 255, 255,
         ];
-        let img = std::sync::Arc::new(mui_core::Image::rgba(2, 2, px).unwrap());
+        let img = std::sync::Arc::new(mui_scene::Image::rgba(2, 2, px).unwrap());
         let root = leaf(20., 20.)
             .fill(Fill::Image(img.clone(), Fit::Fill))
             .radius(6.)

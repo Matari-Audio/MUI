@@ -162,7 +162,7 @@ walk was already the cost:
 The stroke fix pulls the other way: a stroked node now insets its outline
 rather than reusing the fill's, which is a rounded-rect inset per stroke. The
 net is the 5%. Allocations per resolve on the `stress` example (873 nodes,
-`cargo run -p mui-core --release --example stress`): 12066 → 10702, and its
+`cargo run -p mui-scene --release --example stress`): 12066 → 10702, and its
 warm resolve is 0.64–0.65 ms at all three of 1280x800, 240x2400 and 2000x300
 — the thin window costs nothing extra.
 

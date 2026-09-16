@@ -6,7 +6,7 @@
 //!
 //! ```
 //! use mui_access::tree_update;
-//! use mui_core::prelude::*;
+//! use mui_scene::prelude::*;
 //!
 //! let ok = leaf(40., 20.).role(Kind::Button).label("OK").id("ok").focusable();
 //! let scene = resolve_scene(&SceneSpec::new(ok)).unwrap();
@@ -24,8 +24,8 @@
 pub use accesskit;
 
 use accesskit::{Action, Node, NodeId, Rect, Role, Tree, TreeId, TreeUpdate};
-pub use mui_core::{Kind, Semantics};
-use mui_core::{ResolvedScene, ResolvedSurface};
+pub use mui_scene::{Kind, Semantics};
+use mui_scene::{ResolvedScene, ResolvedSurface};
 
 /// FNV-1a: a node id that is the same on every frame for the same surface id.
 pub fn node_id(key: &str) -> NodeId {
@@ -125,7 +125,7 @@ pub fn tree_update(scene: &ResolvedScene, focus: Option<&str>) -> TreeUpdate {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mui_core::prelude::*;
+    use mui_scene::prelude::*;
 
     #[test]
     fn nests_by_containment_and_ids_are_stable() {

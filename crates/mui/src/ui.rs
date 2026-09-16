@@ -2,14 +2,14 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use mui_core::prelude::{overlay, text, Paints as _, Role};
-use mui_core::{
-    Area, Color, Cursor, El, Element, Fill, Paint, Palette, Pin, Radius, ResolvedScene, SceneError,
-    SceneSpec, Size, Spacing, Spring, State, TextCache, Theme,
-};
 use mui_geometry::Point;
 use mui_input::{Hit, Ime, Input, Interaction, Key, KeyPress, PointerInput, Response};
 use mui_layout::SpacingToken::{Xs, S};
+use mui_scene::prelude::{overlay, text, Paints as _, Role};
+use mui_scene::{
+    Area, Color, Cursor, El, Element, Fill, Paint, Palette, Pin, Radius, ResolvedScene, SceneError,
+    SceneSpec, Size, Spacing, Spring, State, TextCache, Theme,
+};
 
 /// The id the floated tip carries. A leading `/` keeps it out of hit
 /// testing, like every other key the runtime owns.
@@ -533,7 +533,7 @@ impl Ui {
         spec.offered = offered;
         spec.font = self.font.clone();
         spec.device_scale = self.scale;
-        let scene = mui_core::resolve_scene_with(&spec, &mut self.text_cache)?;
+        let scene = mui_scene::resolve_scene_with(&spec, &mut self.text_cache)?;
         // Named nodes are the gesture targets, in z-order. Unnamed ones are
         // decoration. A target clipped away does not respond.
         let mut hit = Hit::default();
@@ -701,7 +701,7 @@ fn state(
 ) {
     if let Some([x, y]) = n.key().and_then(|k| scrolls.get(k)).copied() {
         // `scrolled` is a builder and a built node cannot be reopened.
-        let node = std::mem::replace(n, mui_core::leaf(0.0, 0.0));
+        let node = std::mem::replace(n, mui_scene::leaf(0.0, 0.0));
         *n = node.scrolled(x, y);
     }
     if let Some((h, p)) = n.key().and_then(of) {
@@ -728,9 +728,9 @@ impl std::fmt::Debug for Ui {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mui_core::prelude::*;
     use mui_geometry::Point;
     use mui_input::Mods;
+    use mui_scene::prelude::*;
 
     fn at(x: f64, y: f64, down: bool) -> PointerInput {
         PointerInput {
@@ -999,7 +999,7 @@ mod tests {
         assert_eq!((tip.frame.x, tip.frame.y), (at.x, at.y));
     }
 
-    fn solid(f: &Frame) -> mui_core::Paint {
+    fn solid(f: &Frame) -> mui_scene::Paint {
         f.scene.paint[0].paint.clone()
     }
 

@@ -21,8 +21,8 @@ unsafe impl GlobalAlloc for Counting {
 #[global_allocator]
 static A: Counting = Counting;
 
-use mui_core::prelude::*;
-use mui_core::{resolve_scene_with, Limits, TextCache};
+use mui_scene::prelude::*;
+use mui_scene::{resolve_scene_with, Limits, TextCache};
 
 const PARA: &str = "A compact CSS-like DSL where everything aligns automatically and nothing is placed absolutely.";
 
@@ -72,7 +72,7 @@ fn hash_tree(n: &El, h: &mut std::collections::hash_map::DefaultHasher) {
     use std::hash::{Hash, Hasher};
     n.key().hash(h);
     n.children().len().hash(h);
-    let p = n.padding(mui_core::SpacingScale::DEFAULT);
+    let p = n.padding(mui_scene::SpacingScale::DEFAULT);
     for v in [
         p.left,
         p.top,
@@ -99,8 +99,8 @@ fn main() {
     println!("nodes: {}", count(&tree()));
     println!(
         "size_of Painted {} ResolvedSurface {}",
-        std::mem::size_of::<mui_core::Painted>(),
-        std::mem::size_of::<mui_core::ResolvedSurface>()
+        std::mem::size_of::<mui_scene::Painted>(),
+        std::mem::size_of::<mui_scene::ResolvedSurface>()
     );
     let font: std::sync::Arc<[u8]> = epaint_default_fonts::HACK_REGULAR.to_vec().into();
     for (w, h) in [(1280.0, 800.0), (240.0, 2400.0), (2000.0, 300.0)] {

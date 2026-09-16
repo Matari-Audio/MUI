@@ -16,7 +16,7 @@ cpu-threads = ["cpu", "vello_cpu/multithreading"]
 bench-classic = []
 
 [dependencies]
-mui-core = { path = "../mui-core" }
+mui-scene = { path = "../mui-scene" }
 mui-geometry = { path = "../mui-geometry" }
 # No wgpu backend features: a plugin renders into the device its host wrapper
 # already created, so this crate must not choose the backend. Hosts turn on

@@ -2,7 +2,7 @@
 //! the three text roles.
 //!
 //! ```
-//! use mui_core::prelude::*;
+//! use mui_scene::prelude::*;
 //! let bar = row!["Filter", spacer(), col![text("on"), text("off")]]
 //!     .gap(M)
 //!     .center()
@@ -64,7 +64,7 @@ pub trait Sugar: Sized {
     /// runs.
     ///
     /// ```
-    /// use mui_core::prelude::*;
+    /// use mui_scene::prelude::*;
     /// let mut strip = row![leaf(60., 28.), leaf(60., 28.)].radius(Corner::Field).join();
     /// assert_eq!(strip.children_mut()[0].style_mut().radius, Radius::Px(0.));
     /// ```
@@ -76,7 +76,7 @@ pub trait Sugar: Sized {
     /// exactly as they follow a [`weld`](Styled::weld).
     ///
     /// ```
-    /// use mui_core::prelude::*;
+    /// use mui_scene::prelude::*;
     /// let ring = stack![].square(64.).pill().fill(Primary).cut(leaf(40., 40.).pill());
     /// assert!(ring.children()[0].payload().carve.is_some());
     /// ```
@@ -84,7 +84,7 @@ pub trait Sugar: Sized {
     /// Keeps only what `el` overlaps: boolean intersection. See [`cut`](Sugar::cut).
     ///
     /// ```
-    /// use mui_core::prelude::*;
+    /// use mui_scene::prelude::*;
     /// let half = stack![].square(64.).fill(Primary).keep(leaf(32., 64.));
     /// assert!(half.children()[0].payload().carve.is_some());
     /// ```
@@ -192,7 +192,7 @@ macro_rules! grid {
 /// painted and take no space. Declare them widest first.
 ///
 /// ```
-/// use mui_core::prelude::*;
+/// use mui_scene::prelude::*;
 /// let bar = fits![title("Export selection"), text("Export"), leaf(16., 16.)];
 /// assert_eq!(bar.children().len(), 3);
 /// ```

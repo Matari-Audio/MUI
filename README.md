@@ -351,7 +351,7 @@ light-theme half because there is nothing in it a mode could contradict.
 | `mui-text` | glyph and string outlines from a (variable) font |
 | `mui-motion` | motion maths, dependency-free: the `Spring` every animated property chases, and editable normalized cubic Bezier response `curve`s |
 | `mui-style` | theme data: Oklch `Color`, `Palette`, `Role`, `Fill`, `Gradient`, `Shadow`, `Elevation`, `Radius`, `Style` and the `Theme` they resolve against |
-| `mui-core` | `El` + `Styled` DSL and the `row!`/`col!`/`stack!`/`grid!` sugar, `canvas` draws, clip and float layers, the walk from tree to `ResolvedScene` paint list, the frame-to-frame `TextCache` |
+| `mui-scene` | `El` + `Styled` DSL and the `row!`/`col!`/`stack!`/`grid!` sugar, `canvas` draws, clip and float layers, the walk from tree to `ResolvedScene` paint list, the frame-to-frame `TextCache` |
 | `mui-input` | `Input` (pointer, wheel, keys, text), hit testing against real paths and their clips, press capture, hover, click, drag and drop |
 | `mui-vello` | the `Canvas` trait and its `Gpu` / `Cpu` wrappers over `vello_hybrid` and `vello_cpu`: fills, strokes, image fills (`Cpu` paints the pixmap, `Gpu` uploads once through its `Atlas`, see Images), clip push/pop, and hinted glyph runs (Vello hints and caches the outlines per font blob); `paint(canvas, scene, transform)`, and `paint_cached` with a `PathCache` that keeps a still frame's arc-to-cubic conversions |
 | `mui-access` | a `ResolvedScene`'s roles and labels as an `accesskit::TreeUpdate` |
@@ -412,7 +412,7 @@ default because a snapshot-sized pixmap loses more to thread hand-off than
 it gains (BENCHMARKS.md measures both).
 
 ```bash
-cargo run -p mui-core --release --example stress
+cargo run -p mui-scene --release --example stress
 ```
 
 resolves a ~1000-node tree at three window shapes and counts the allocations

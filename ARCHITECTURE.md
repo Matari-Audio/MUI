@@ -31,7 +31,7 @@ El tree  (row! / col! / stack! / grid! / fits!, Paints fills, presets merged
    |                        pass, and a `Pin` costs one more arrange over the
    |                        floats, fed the anchor frames the first one found
    |
-   v  mui-core walk         per node, in z-order:
+   v  mui-scene walk         per node, in z-order:
    |     plain  -> RoundedRect(frame, radius)              a radius may be a
    |               theme token (selector / field / box); a squircle corner
    |               rewrites the rounded rect's arcs as cubics and gives up

@@ -2,10 +2,10 @@
 //! where two flex weights put it, a knob's pointer is an anchored offset.
 use std::ops::RangeInclusive;
 
-use mui_core::prelude::*;
-use mui_core::{Palette, SpacingToken, Spring, Stroke};
 use mui_geometry::Point;
 use mui_input::Key;
+use mui_scene::prelude::*;
+use mui_scene::{Palette, SpacingToken, Spring, Stroke};
 
 use crate::Ui;
 
@@ -150,7 +150,7 @@ impl Control {
         self
     }
     /// One of the five sizes, the same five everywhere: `Xs` through `Xl`
-    /// multiply the theme's [`control`](mui_core::Theme::control) unit.
+    /// multiply the theme's [`control`](mui_scene::Theme::control) unit.
     ///
     /// ```
     /// use mui::prelude::*;

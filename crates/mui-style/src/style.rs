@@ -468,7 +468,7 @@ pub struct Style {
     pub stroke: Option<Stroke>,
     pub radius: Radius,
     /// The curve every corner turns through: circular, or a continuous
-    /// superellipse. See `Paints::corners` in `mui-core`.
+    /// superellipse. See `Paints::corners` in `mui-scene`.
     pub corners: CornerStyle,
     /// Back to front: every [`ShadowKind::Drop`] under the fill, every
     /// [`ShadowKind::Inset`] over the shells.
@@ -484,7 +484,7 @@ pub struct Style {
     pub layer: Option<(Mix, f32)>,
     /// Painted over everything this node and its children drew, and only
     /// where they drew: source-atop, in the node's outline. See
-    /// `Paints::mask` in `mui-core`.
+    /// `Paints::mask` in `mui-scene`.
     pub mask: Fill,
 }
 
@@ -548,7 +548,7 @@ impl Style {
 
 /// How a blended layer's colour combines with what is under it.
 ///
-/// Mirrors `peniko::Mix` variant for variant: `mui-core` has no renderer
+/// Mirrors `peniko::Mix` variant for variant: `mui-scene` has no renderer
 /// dependency, and `mui-vello` maps the two with an exhaustive match.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Mix {

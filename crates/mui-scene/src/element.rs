@@ -1,7 +1,7 @@
 //! The payload a layout node carries, and the words that build a tree.
 //!
 //! ```
-//! use mui_core::prelude::*;
+//! use mui_scene::prelude::*;
 //! let card = column([text("Cutoff"), text("1.2 kHz").fill(Role::Dim)])
 //!     .gap(S)
 //!     .pad(M)
@@ -59,7 +59,7 @@ impl PartialEq for Canvas {
 /// one. See [`Styled::on`].
 ///
 /// ```
-/// use mui_core::prelude::*;
+/// use mui_scene::prelude::*;
 /// let tab = leaf(64., 28.).fill(Field).on(State::Focus, |s| s.stroke(Ink)).id("tab");
 /// assert_eq!(tab.payload().states.len(), 1);
 /// ```
@@ -75,8 +75,8 @@ pub enum State {
 /// equal only when they are the same closure.
 ///
 /// ```
-/// use mui_core::prelude::*;
-/// # use mui_core::StateStyle;
+/// use mui_scene::prelude::*;
+/// # use mui_scene::StateStyle;
 /// # use std::sync::Arc;
 /// let lift = StateStyle(Arc::new(|s: Style| s.fill(Primary)));
 /// assert_eq!(lift.0(Style::default()).fill, Fill::Role(Role::Primary));
@@ -99,8 +99,8 @@ impl PartialEq for StateStyle {
 /// once, so it stays a flag on the parent's style.
 ///
 /// ```
-/// use mui_core::prelude::*;
-/// # use mui_core::Carve;
+/// use mui_scene::prelude::*;
+/// # use mui_scene::Carve;
 /// let ring = stack![].square(64.).pill().fill(Primary).cut(leaf(40., 40.).pill());
 /// assert_eq!(ring.children()[0].payload().carve, Some(Carve::Cut));
 /// ```
@@ -200,7 +200,7 @@ pub fn grid(cols: usize, children: impl IntoIterator<Item = El>) -> El {
 /// See [`Node::fits`] and the `fits!` macro.
 ///
 /// ```
-/// use mui_core::prelude::*;
+/// use mui_scene::prelude::*;
 /// let bar = fits([text("Save changes"), text("Save"), leaf(8., 8.)]);
 /// assert_eq!(bar.children().len(), 3);
 /// ```
@@ -248,7 +248,7 @@ impl IntoEl for String {
 /// says `|s| s.fill(..)` with the same words the tree used.
 ///
 /// ```
-/// use mui_core::prelude::*;
+/// use mui_scene::prelude::*;
 /// let bare = Style::default().fill(Raised).radius(12.);
 /// let mut node = leaf(80., 24.).preset(&bare);
 /// assert_eq!(node.style_mut().radius, Radius::Px(12.));
@@ -295,7 +295,7 @@ pub trait Paints: Sized {
     /// the outline is made of.
     ///
     /// ```
-    /// use mui_core::prelude::*;
+    /// use mui_scene::prelude::*;
     /// let mut card = leaf(80., 48.).radius(16.).corners(CornerStyle::Squircle);
     /// assert_eq!(card.style_mut().corners, CornerStyle::Squircle);
     /// ```
@@ -307,7 +307,7 @@ pub trait Paints: Sized {
     /// are two calls; [`Paints::shadows`] replaces the list instead.
     ///
     /// ```
-    /// use mui_core::prelude::*;
+    /// use mui_scene::prelude::*;
     /// let mut el = leaf(80., 24.).shadow(Shadow::soft(2.)).shadow(Shadow::soft(12.));
     /// assert_eq!(el.style_mut().shadow.len(), 2);
     /// ```
@@ -318,7 +318,7 @@ pub trait Paints: Sized {
     /// Replace the whole shadow list.
     ///
     /// ```
-    /// use mui_core::prelude::*;
+    /// use mui_scene::prelude::*;
     /// let mut el = leaf(80., 24.).shadow(Shadow::soft(12.)).shadows([]);
     /// assert!(el.style_mut().shadow.is_empty());
     /// ```
@@ -329,7 +329,7 @@ pub trait Paints: Sized {
     /// The theme's shadow list for this step off the surface.
     ///
     /// ```
-    /// use mui_core::prelude::*;
+    /// use mui_scene::prelude::*;
     /// let mut el = leaf(80., 24.).elevation(Elevation::Floating);
     /// assert_eq!(el.style_mut().shadow.len(), 2);
     /// ```
@@ -354,7 +354,7 @@ pub trait Paints: Sized {
     /// blend mode was set.
     ///
     /// ```
-    /// use mui_core::prelude::*;
+    /// use mui_scene::prelude::*;
     /// let mut el = leaf(10., 10.).blend(Mix::Multiply).opacity(0.5);
     /// assert_eq!(el.style_mut().layer, Some((Mix::Multiply, 0.5)));
     /// ```
@@ -373,8 +373,8 @@ pub trait Paints: Sized {
     /// node -- source-atop paints *onto* the shape, it does not erase it.
     ///
     /// ```
-    /// use mui_core::prelude::*;
-    /// # use mui_core::Fill;
+    /// use mui_scene::prelude::*;
+    /// # use mui_scene::Fill;
     /// let fade = Gradient::linear(180., [(0.8, Surface.alpha(0.)), (1., Surface.into())]);
     /// let mut list = col!["one", "two"].scroll().mask(fade);
     /// assert!(!list.style_mut().mask.is_none());
@@ -394,8 +394,8 @@ pub trait Paints: Sized {
     /// field the preset states wins; the rest of the chain survives.
     ///
     /// ```
-    /// use mui_core::prelude::*;
-    /// # use mui_core::Style;
+    /// use mui_scene::prelude::*;
+    /// # use mui_scene::Style;
     /// let card = Style { radius: Radius::Px(12.), ..Style::default() };
     /// let mut el = leaf(80., 24.).fill(Primary).preset(&card);
     /// assert_eq!(el.style_mut().radius, Radius::Px(12.));
@@ -410,8 +410,8 @@ pub trait Paints: Sized {
     /// chain, before or after, is free to override.
     ///
     /// ```
-    /// use mui_core::prelude::*;
-    /// # use mui_core::Style;
+    /// use mui_scene::prelude::*;
+    /// # use mui_scene::Style;
     /// let card = Style { fill: Role::Raised.into(), ..Style::default() };
     /// let mut el = leaf(80., 24.).fill(Role::Danger).base(&card);
     /// assert_eq!(el.style_mut().fill, Fill::Role(Role::Danger));
@@ -424,7 +424,7 @@ pub trait Paints: Sized {
     /// Hand the node to `f`: a reusable run of builders, without a trait.
     ///
     /// ```
-    /// use mui_core::prelude::*;
+    /// use mui_scene::prelude::*;
     /// let outlined = |e: El| e.stroke(Ink).radius(8.);
     /// let mut el = leaf(80., 24.).apply(outlined);
     /// assert_eq!(el.style_mut().radius, Radius::Px(8.));
@@ -458,7 +458,7 @@ impl Paints for Style {
 /// these -- a bare [`Style`] is paint and nothing else.
 ///
 /// ```
-/// use mui_core::prelude::*;
+/// use mui_scene::prelude::*;
 /// let save = leaf(64., 28.).role(Kind::Button).label("Save").tip("Write it out").id("save");
 /// assert!(save.payload().tip.is_some());
 /// ```
@@ -479,7 +479,7 @@ pub trait Styled: Paints {
     /// rather than cut.
     ///
     /// ```
-    /// use mui_core::prelude::*;
+    /// use mui_scene::prelude::*;
     /// let mut el = leaf(80., 24.).fill(Field).on(State::Hover, |s| s.radius(4.)).id("b");
     /// assert_eq!(el.element_mut().states.len(), 1);
     /// ```

@@ -8,8 +8,8 @@
 //! file instead of opening a window only because a window is a separate
 //! problem: a surface would get the same pixels.
 
-use mui_core::prelude::*;
-use mui_core::Corners;
+use mui_scene::prelude::*;
+use mui_scene::Corners;
 use mui_vello::Gpu;
 use vello_common::kurbo::Affine;
 use vello_hybrid::{RenderSize, RenderTargetConfig, Renderer, Scene, TextureBindings};
@@ -65,7 +65,7 @@ fn main() {
 
 /// The device has to exist before the scene does: glyph runs cache into the
 /// renderer's `Resources`, so painting happens here rather than in `main`.
-async fn rasterise(resolved: &mui_core::ResolvedScene) -> Vec<u8> {
+async fn rasterise(resolved: &mui_scene::ResolvedScene) -> Vec<u8> {
     let instance = wgpu::Instance::default();
     let adapter = instance
         .request_adapter(&wgpu::RequestAdapterOptions::default())

@@ -21,13 +21,15 @@
 //! ```
 #![forbid(unsafe_code)]
 
-pub use mui_core as core;
 #[cfg(feature = "egui")]
 pub use mui_egui as egui;
 pub use mui_geometry as geometry;
 pub use mui_input as input;
 pub use mui_layout as layout;
 pub use mui_motion as motion;
+#[deprecated(note = "use mui::scene")]
+pub use mui_scene as core;
+pub use mui_scene as scene;
 pub use mui_tessellate as tessellate;
 pub use mui_vello as vello;
 
@@ -41,9 +43,9 @@ pub mod prelude {
     pub use crate::presets::{card, chip, glass, panel, tile};
     pub use crate::widgets::{button, knob, slider, text_input, toggle, Control, Variant};
     pub use crate::{Edit, Frame, Ui};
-    pub use mui_core::prelude::*;
-    pub use mui_core::{Corners, Mode, Palette, Pigment, SpacingToken, Spring};
     pub use mui_input::{Ime, Input, Key, KeyPress, Mods, PointerInput, Response};
+    pub use mui_scene::prelude::*;
+    pub use mui_scene::{Corners, Mode, Palette, Pigment, SpacingToken, Spring};
 }
 
 /// Every runnable `rust` block in the README, compiled and run by

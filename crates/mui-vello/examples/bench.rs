@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use mui::prelude::*;
 use mui::Ui;
-use mui_core::{Layer, ResolvedScene};
+use mui_scene::{Layer, ResolvedScene};
 use mui_vello::kurbo::Affine;
 use mui_vello::{Cpu, Gpu, PathCache};
 use vello_common::pixmap::Pixmap;
@@ -605,7 +605,7 @@ fn target(device: &wgpu::Device, extra: wgpu::TextureUsages) -> wgpu::Texture {
 #[cfg(feature = "bench-classic")]
 mod classic {
     use super::{run, since, target, Row, CASES, H, W};
-    use mui_core::ResolvedScene;
+    use mui_scene::ResolvedScene;
     use mui_vello::kurbo::{Affine, BezPath, Rect, Stroke};
     use mui_vello::{Canvas, PaintType};
     use std::sync::Arc;
@@ -688,7 +688,7 @@ mod classic {
         // ponytail: one font per process, because `Blob::new` mints a fresh id
         // per call and classic's glyph cache keys on it. The library keeps a
         // real map; this bench only ever draws one font.
-        fn glyphs(&mut self, text: &mui_core::Text) {
+        fn glyphs(&mut self, text: &mui_scene::Text) {
             let (size, glyphs) = (text.size, &text.glyphs);
             let f = self
                 .font
