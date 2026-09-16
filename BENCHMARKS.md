@@ -234,6 +234,24 @@ in this run, where an earlier run of the same binary wandered to 1.6 ms); it is
 GPU submit plus `poll(wait)` and it moves between runs for reasons unrelated to
 the paint list.
 
+### After the styling pass, re-measured
+
+The presets/paint/widgets/geometry/pin work (`0df76b6..`, gradients, shadow
+stacks, squircle corners, `.cut`/`.keep`, `.mask`, `Len::Container`, `fits!`
+and `Pin`) moved neither column. Same machine, same binary, re-run at
+717 surfaces / 630 paint ops / 472 glyph runs:
+
+| backend | case | resolve | encode | render | total | fps |
+|---|---|---:|---:|---:|---:|---:|
+| mui (resolve only) | static | 1.159 | — | — | 1.159 | 863 |
+| vello_cpu cached | static | 1.164 | 3.526 | 0.683 | 5.373 | 186 |
+| vello_hybrid cached | static | 1.184 | 3.675 | 0.696 | 5.555 | 180 |
+
+Against 1.188 / 3.474 and 1.207 / 3.640 above: inside the run-to-run spread.
+The new work is per-node only where a node asks for it — a `Style::over` is a
+struct copy, a pin is one extra `arrange` over the floats, and a `fits`
+candidate costs its measure and nothing else.
+
 ### What would change the answer
 
 A scene an order of magnitude denser, or a machine whose CPU is much weaker

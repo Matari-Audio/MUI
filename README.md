@@ -5,8 +5,10 @@ plugins. You write a tree the way you would write CSS flexbox with tokens; MUI
 lays it out intrinsically, turns every welded group into one filleted outline,
 derives every shell as a true parallel inset of the outline before it, colours
 every surface from a role palette, and hands a z-ordered paint list to Vello.
-Nothing is placed absolutely: the only coordinates in the system are an
-anchor and an offset, and a slider thumb sits where two flex weights put it.
+Nothing is placed absolutely: a float names a region around another node and
+a slider thumb sits where two flex weights put it. **No runtime style
+strings**: there is no `.class("btn btn-sm")` and there will not be one --
+every value in the DSL is a Rust expression the compiler already checks.
 
 Every library crate is `#![forbid(unsafe_code)]`, dependency-light, and
 compiles to `wasm32-unknown-unknown`. The native preview host is the one

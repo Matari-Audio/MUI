@@ -12,8 +12,8 @@ public function and a test behind it.
 - [x] Geometry: Booleans with holes, adaptive convex/concave fillets, exact
       rounded-rect inset/outset, general parallel offsets, validation.
 - [x] Text: glyph and string outlines from variable fonts, as paths.
-- [x] Core: the `Styled` DSL (`fill`, `stroke`, `radius`, `pill`, `shadow`,
-      `shell`, `weld`, `text_size`), `Role`/`Fill`/`Gradient`/`Paint`,
+- [x] Core: the `Paints`/`Styled` DSL (`fill`, `stroke`, `radius`, `pill`,
+      `shadow`, `shell`, `weld`, `text_size`), `Role`/`Fill`/`Gradient`/`Paint`,
       Oklch palette with checked legibility, the tree walk to a z-ordered
       paint list, `Spring`.
 - [x] Input: hit testing against painted paths, capture, hover, click, drag.
@@ -98,6 +98,34 @@ public function and a test behind it.
       with its range instead of a pile of groups, and the preview keeps an
       `accesskit_winit::Adapter` that publishes after each frame and serves
       Focus and Click action requests.
+- [x] Presets that merge instead of clobbering: `Style::over`, `.preset(&s)`
+      / `.base(&s)` / `.apply(f)`, `Paints` implemented for a bare `Style`,
+      `.on(State::Hover, |s| ..)` resolved by the runtime, `.full()`,
+      `Spacing::Step` over `SpacingScale::unit`, `Role::alpha`, and
+      `mui::presets::{panel, card, glass, chip, tile}`. `.pad(M).pad(12.)` is
+      12 px now: a pixel pad clears the token slot.
+- [x] Paint the renderer already did: `GradientKind::{Linear, Radial, Conic}`
+      behind `Gradient::{linear, radial, conic, vertical}`, `Style.shadow` a
+      list, `ShadowKind::Inset` and `Shadow.spread` through
+      `fill_blurred_rounded_rect`'s `invert`, `Elevation::{Flat, Raised,
+      Floating}`, and `.mask(fill)` as one source-atop layer.
+- [x] Semantic widgets: `Variant::{Solid, Soft, Outline, Ghost}` and one
+      `Xs..Xl` size scale off `Theme.control`, every widget returning a
+      `Control` (`.variant .role .size .px .el`), faces derived from the
+      palette rather than a colour table, `knob`'s raw `f64` size gone, and
+      `.join()` on a row or column.
+- [x] Corners as a theme vocabulary: `Corners { selector, field, box_,
+      concave }` with `.radius(Corner::Field)`, and `CornerStyle::Squircle`
+      restyling welds, shells and strokes alike (it gives up the analytic
+      blur for that node).
+- [x] Geometry the DSL could not say: `.cut(el)` / `.keep(el)` exposing
+      `boolean`'s difference and intersection as outlines, `Len::Container`
+      (`cq()`) resolved against the nearest sized ancestor, and `fits![..]`
+      picking the first candidate that clears the offered box in one pass.
+- [x] `Pin`: a float placed against another node by name -- nine `Area`s, a
+      gap, `Match::{Width, Height}`, and ordered `fallback`s tried until one
+      fits the root. `Ui`'s tooltip is a pin now, and `Frame::tip` reads the
+      resolved frame back.
 - [x] IME: `Input::ime` carries the platform's four events, a preedit paints
       under the caret without ever joining the value, a commit inserts like
       typed text, and `Frame::ime` puts the host's candidate window under the
@@ -105,6 +133,12 @@ public function and a test behind it.
 
 ## Missing
 
+- [ ] `State::Disabled`: nothing in `Ui` reports disabled, and the variant
+      only makes sense beside the flag that gates hit testing.
+- [ ] A pin whose anchor is itself inside another pinned float reads that
+      float's first-pass position; a dependency-ordered pin pass is the fix.
+- [ ] Spring interpolation of gradient *stops*: `Ui`'s channels only ever
+      sprang solid fills, and no scene needs the per-stop slots yet.
 - [ ] Kurv rewritten on MUI: the first real plugin editor on this stack, and
       the only honest test of whether the DSL survives a product.
 - [ ] `vello_hybrid` against classic `vello`, re-measured on Windows — the

@@ -321,6 +321,16 @@ enum Kind<P> {
 /// without the coordinates. The four sides centre on the anchor's other
 /// axis; the four corners align to the anchor's near edge, which is what a
 /// dropdown under a field wants. [`Area::Center`] sits over the anchor.
+///
+/// ```
+/// use mui_layout::{leaf, overlay, resolve, Align, Area, Pin, Size};
+/// let field = leaf(40., 40.).anchor(Align::Start, Align::Start).id("f");
+/// let menu = leaf(30., 20.).pin(Pin::to("f").area(Area::End)).id("menu");
+/// let l = resolve(&overlay([field, menu]),
+///                 Some(Size::new(200., 200.)), Default::default()).unwrap();
+/// // Past the anchor's right edge, centred on its height.
+/// assert_eq!((l.frame("menu").unwrap().x, l.frame("menu").unwrap().y), (40., 10.));
+/// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Area {
     TopStart,
@@ -336,7 +346,16 @@ pub enum Area {
     BottomEnd,
 }
 
-/// Take one axis of the size from the anchor, CSS `anchor-size()`.
+/// Take one axis of the size from the anchor, CSS `anchor-size()`. See
+/// [`Pin::match_width`] and [`Pin::match_height`].
+///
+/// ```
+/// use mui_layout::{leaf, overlay, resolve, Pin, Size};
+/// let menu = leaf(10., 20.).pin(Pin::to("f").match_width()).id("menu");
+/// let l = resolve(&overlay([leaf(90., 24.).id("f"), menu]),
+///                 Some(Size::new(200., 200.)), Default::default()).unwrap();
+/// assert_eq!(l.frame("menu").unwrap().size.width, 90.);
+/// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Match {
     #[default]

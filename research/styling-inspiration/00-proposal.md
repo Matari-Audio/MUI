@@ -1,5 +1,9 @@
 # Proposal: a compacter MUI DSL, and the paint it deserves
 
+**Status: shipped on `feat/styling` (`0df76b6..`), all three PRs plus the
+queue behind them. Per item, below. What is deferred is listed under
+[Deferred](#deferred) at the end; nothing here was abandoned.**
+
 Synthesis of `01-stylex` … `06-geometry-and-effects`, read against the DSL as it
 stands today (`mui-core/src/{element.rs,style.rs,dsl.rs}`, `mui/src/widgets.rs`,
 `mui-preview/src/scenes.rs`). Ranked, opinionated, sized. Nothing here is a
@@ -11,7 +15,15 @@ framework; every item is a function, a field, or an enum variant.
 
 Four candidate directions were on the table. The ranking:
 
-### 1. Typed presets as plain functions, plus a per-field merge — **build it**
+### 1. Typed presets as plain functions, plus a per-field merge — **shipped**
+
+`Style::over` (per-field, a field's default *is* its unset -- no `set: u16`
+bitmask was needed), `Paints::{preset, base, apply}` with `.styled` deleted,
+`Styled::on(State, f)` resolved by `Ui` before transitions, `Sugar::full`,
+`Spacing::Step` over `SpacingScale::unit`, `Role::alpha` via `Fill::Faded`,
+`mui::presets::{panel, card, glass, chip, tile}`, and the `pad` bug fixed.
+`Paints` is a second trait so a bare `Style` takes the same builders.
+
 
 The whole "variants / recipes / design system" feature, in Rust, is:
 
@@ -38,7 +50,11 @@ a 25-line change. `Styled::when` already exists and is half of a cva recipe
 This ranks first because it costs almost nothing, needs no new vocabulary, and
 every other item below composes through it.
 
-### 2. Semantic widget vocabulary, daisyUI-style — **build it, scoped to widgets**
+### 2. Semantic widget vocabulary, daisyUI-style — **shipped**
+
+`Variant`, `Control` (`.variant .role .size .px .el`), `Theme.control`,
+`knob`'s `f64 size` deleted, faces from palette math only, and `Sugar::join`.
+
 
 `Variant { Solid, Soft, Outline, Ghost }` and one size scale reusing the existing
 `Xs S M L Xl`, resolved from `role` + the palette math already in `Palette::on`
@@ -58,7 +74,12 @@ Also take `.join()` — outer corners round, inner square — because
 `SegmentedRow` in `scenes.rs` builds it by hand today, and the container already
 knows its own axis.
 
-### 3. Shorter names and token sugar — **build it, it is the cheapest**
+### 3. Shorter names and token sugar — **shipped**, except `.behind` / `.over`
+
+`Spacing::Step`, `Role::alpha`, `.on(State, ..)` and `.full()` all landed.
+`.behind(el)` / `.over(el)` did not: `stack![a, b]` already orders two
+children, and neither the gallery nor a widget wanted a second spelling.
+
 
 Four independent one-liners, in value order:
 
@@ -74,7 +95,11 @@ Four independent one-liners, in value order:
   string prefix — grouping (`hover:(a b)`) exists only because strings repeat.
 - `.full()` = `.w(pct(100.)).h(pct(100.))`, `.behind(el)` / `.over(el)` (05 §2).
 
-### 4. A shorthand string — **refuse the runtime one; defer the macro**
+### 4. A shorthand string — **refused, and written down**
+
+The ban is in README.md's opening paragraph and in ARCHITECTURE.md's
+invariants. `sty!` stays unbuilt.
+
 
 `.class("btn btn-sm p-4")` moves every error from compile time to runtime and
 buys nothing: every MUI value is already a Rust expression, and there is no
@@ -150,6 +175,9 @@ onion — it would kill `Vec<El>` and `dyn`.
 
 ## Part 2 — Paint and effects
 
+Every row of the table below shipped except #8, which was refused as planned.
+
+
 Ranked by capability per line. Vello feasibility is from the vendored sources
 (`vello_common 0.2`, `vello_cpu`, `vello_hybrid`), not from the docs.
 
@@ -163,6 +191,17 @@ Ranked by capability per line. Vello feasibility is from the vendored sources
 | 6 | `Pin` replacing `.offset` | not involved | `Pin { anchor, area, fallbacks }` in layout | ~140 |
 | 7 | `Len::Container(pct)` | not involved | one `Len` variant + resolve rule | ~40 |
 | 8 | Host shader layer | **no** | — | skip |
+
+| # | shipped as |
+|---|---|
+| 1 | `GradientKind::{Linear, Radial, Conic}`, one `Paint::Gradient` (not two variants), `mui_vello::brush` |
+| 2 | `Style.shadow: Vec<Shadow>`, `ShadowKind::Inset`, `Shadow.spread`, `Paints::{shadow, shadows, elevation}`, `Elevation` |
+| 3 | `mui_geometry::CornerStyle { Round, Squircle }`, `Paints::corners`; the old `CornerStyle` struct is now `Fillet` |
+| 4 | `mui::presets::glass()` |
+| 5 | `Sugar::{cut, keep}`, `Carve`, `Element.carve` |
+| 6 | `Pin`, `Area`, `Match`, `Node::pin`; `Ui`'s tooltip rides it |
+| 7 | `Len::Container`, `cq()`; plus `fits!` / `Node::fits` from SwiftUI's `ViewThatFits` |
+| 8 | not built, and `.mask(fill)` shipped in its place as planned |
 
 **1. Gradients.** The biggest gap between what the renderer can do and what the
 DSL can say. `PaintType = peniko::Brush` in `vello_common 0.2`, so both backends
@@ -253,7 +292,7 @@ for one method.
 - **A `Layout` / `MeasurePolicy` trait, intrinsics, `GeometryReader`** — YAGNI;
   `canvas()` already hands back a resolved size.
 
-### One live bug found on the way
+### One live bug found on the way — **fixed**
 
 `mui-layout/src/lib.rs:438` — `pad(Spacing::Px(v))` sets `self.padding` without
 clearing `self.pad`, and `padding()` resolves token-first, so `.pad(M).pad(12.)`
@@ -261,6 +300,25 @@ silently keeps `M`. One-line fix; audit `radius`/`pill` and
 `stroke`/`stroke_width` for the same shape (01-stylex §2).
 
 ---
+
+## Deferred
+
+Everything in the plan shipped. What was deliberately left, each with the
+condition that would justify it:
+
+- `State::Disabled` — nothing in `Ui` reports disabled, and the variant
+  without the flag that gates hit testing would be a lie.
+- `.behind(el)` / `.over(el)` — `stack![..]` already does it.
+- Spring interpolation of gradient *stops* — the channel slots are indexed by
+  a fixed layout and no scene springs a ramp. `Fill::map` already walks stops.
+- A dependency-ordered pin pass — a pin anchored inside another pinned float
+  reads the first pass's position (`ponytail:` in `mui-layout`).
+- `CornerStyle::pull` is one kappa derived for a 90-degree turn, so a shallow
+  weld junction reads a little full (`ponytail:` in `mui-geometry::fillet`).
+- No gallery scene for squircle corners; the geometry and `.corners()` have
+  tests, not pixels.
+- `Elevation` is not a `Theme` field: the steps are black at an alpha and
+  nothing in `Theme` would change them.
 
 ## Plan — three PRs
 

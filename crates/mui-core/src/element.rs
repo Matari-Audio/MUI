@@ -57,6 +57,12 @@ impl PartialEq for Canvas {
 
 /// An interaction state a node can declare its look for, beside the resting
 /// one. See [`Styled::on`].
+///
+/// ```
+/// use mui_core::prelude::*;
+/// let tab = leaf(64., 28.).fill(Field).on(State::Focus, |s| s.stroke(Ink)).id("tab");
+/// assert_eq!(tab.payload().states.len(), 1);
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum State {
     Hover,
@@ -65,7 +71,16 @@ pub enum State {
 }
 
 /// What a node looks like in one [`State`]: its resting style in, the style
-/// to paint out.
+/// to paint out. [`Styled::on`] wraps the closure in one; two of them are
+/// equal only when they are the same closure.
+///
+/// ```
+/// use mui_core::prelude::*;
+/// # use mui_core::StateStyle;
+/// # use std::sync::Arc;
+/// let lift = StateStyle(Arc::new(|s: Style| s.fill(Primary)));
+/// assert_eq!(lift.0(Style::default()).fill, Fill::Role(Role::Primary));
+/// ```
 #[derive(Clone)]
 pub struct StateStyle(pub Arc<dyn Fn(Style) -> Style>);
 impl std::fmt::Debug for StateStyle {
@@ -231,6 +246,13 @@ impl IntoEl for String {
 /// The paint builders, on an `El` or on a bare [`Style`]: one trait, so
 /// `.fill(..)` chains after `.gap(..)` in either order, and a state closure
 /// says `|s| s.fill(..)` with the same words the tree used.
+///
+/// ```
+/// use mui_core::prelude::*;
+/// let bare = Style::default().fill(Raised).radius(12.);
+/// let mut node = leaf(80., 24.).preset(&bare);
+/// assert_eq!(node.style_mut().radius, Radius::Px(12.));
+/// ```
 pub trait Paints: Sized {
     fn style_mut(&mut self) -> &mut Style;
 
@@ -432,7 +454,14 @@ impl Paints for Style {
 }
 
 /// What a node is, beyond its paint: text, tips, semantics, motion and
-/// the looks it declares for the states it can be in.
+/// the looks it declares for the states it can be in. Only an `El` has
+/// these -- a bare [`Style`] is paint and nothing else.
+///
+/// ```
+/// use mui_core::prelude::*;
+/// let save = leaf(64., 28.).role(Kind::Button).label("Save").tip("Write it out").id("save");
+/// assert!(save.payload().tip.is_some());
+/// ```
 pub trait Styled: Paints {
     fn element_mut(&mut self) -> &mut Element;
 

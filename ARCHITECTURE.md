@@ -9,6 +9,10 @@ Input (pointer, wheel, keys, text)
    |                        capture edges -> Frame::edits (begin/end edit),
    |                        clipboard in and out
    |
+   v  declared states       a node's .on(Hover | Press | Focus, ..) closures
+   |                        run first, so the style the springs chase is the
+   |                        one the node asked for in the state it is in
+   |
    v  transitions           before anything is resolved: a node marked
    |                        .animate() has its declared fill, stroke width,
    |                        radius, text size, shadow blur and shell depths
@@ -17,11 +21,15 @@ Input (pointer, wheel, keys, text)
    |                        one. A new target retargets; nothing restarts.
    |                        ui.tween does the same for a number MUI cannot see.
    v
-El tree  (row! / col! / stack! / grid!, Paints fills, presets, states, roles, shells, welds,
-   |      canvas draws, .scroll() / .clip() / .float())
+El tree  (row! / col! / stack! / grid! / fits!, Paints fills, presets merged
+   |      per field, .on(State, ..) looks, roles, shells, welds, carves,
+   |      canvas draws, .scroll() / .clip() / .float() / .pin(..))
    |
    v  mui-layout            intrinsic flex solve, frames in tree order; a
-   |                        squeezed item is re-measured at its dealt share
+   |                        squeezed item is re-measured at its dealt share.
+   |                        A `fits` node picks its candidate in that same
+   |                        pass, and a `Pin` costs one more arrange over the
+   |                        floats, fed the anchor frames the first one found
    |
    v  mui-core walk         per node, in z-order:
    |     plain  -> RoundedRect(frame, radius)              a radius may be a
@@ -95,7 +103,9 @@ it answers it against the paths that were actually painted last frame, which
 is why hit testing and clipping never disagree with the picture.
 
 The invariants that matter: a shell is derived from the outline before it,
-never from a guessed child radius; a corner style rides the outline, so a
+never from a guessed child radius; a preset merges per field and never
+clobbers the chain around it, and no style is ever a string parsed at runtime;
+a corner style rides the outline, so a
 squircle stays inside the rounded rect it replaces; a weld unions sharp frames before it
 fillets; a clip is a layer pair in the paint list, not a state flag, so a
 renderer that ignores it still draws something sane; a float keeps its
