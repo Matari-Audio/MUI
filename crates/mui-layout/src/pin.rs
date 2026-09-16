@@ -178,6 +178,28 @@ pub(crate) struct Pins<'a> {
     pub(crate) scale: SpacingScale,
 }
 
+/// The scroll frame a [`sticky`](Node::sticky) child pins itself against: the
+/// enclosing scroll node's main axis and the absolute coordinate of its
+/// leading edge. Sticky is the same second thought as a pin -- a position the
+/// parent's flow does not know -- applied against the viewport instead of
+/// against an anchor node.
+#[derive(Clone, Copy)]
+pub(crate) struct Viewport {
+    pub(crate) vertical: bool,
+    pub(crate) edge: f64,
+}
+impl Viewport {
+    /// Where a sticky child goes: its flow position, held at the viewport edge
+    /// once it would scroll past it, and pushed back off by `end`, the far
+    /// edge of its section. It never moves ahead of its flow position.
+    pub(crate) fn stick(self, mut flow: [f64; 2], size: Size, end: f64) -> [f64; 2] {
+        let a = self.vertical as usize;
+        let last = (end - size.main(self.vertical)).max(flow[a]);
+        flow[a] = flow[a].max(self.edge).min(last);
+        flow
+    }
+}
+
 /// Pull `v` back inside `avail`. One too big to fit keeps its place: there is
 /// no inside to pull it to.
 pub(crate) fn inside(v: f64, extent: f64, avail: f64) -> f64 {

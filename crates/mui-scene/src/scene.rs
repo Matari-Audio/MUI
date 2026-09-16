@@ -907,12 +907,20 @@ impl<'a> Walk<'a> {
         // One scratch string for the whole walk: a path is O(depth) bytes and
         // formatting a fresh one per node was the walk's largest single cost.
         let mark = path.len();
+        let mut sticky = Vec::new();
         for (j, c) in n.children().iter().enumerate() {
             self.base_y = bases.get(j).and_then(|b| b.map(|(y, _)| y));
             path.truncate(mark);
             let _ = write!(path, "/{j}");
             if c.payload().carve.is_some() {
                 // Already spent: it shaped the outline instead of painting.
+                self.i += count(c);
+                continue;
+            }
+            if c.is_sticky() && !c.is_float() {
+                // Pinned over the siblings that scroll under it, so it paints
+                // after them -- but inside this node's clip, unlike a float.
+                sticky.push((self.i, c, path.clone(), self.base_y));
                 self.i += count(c);
                 continue;
             }
@@ -930,6 +938,13 @@ impl<'a> Walk<'a> {
                 self.node(c, path, bg, cursor, inner, disabled)?;
             }
         }
+        let end = self.i;
+        for (at2, c, mut p, base) in sticky {
+            self.i = at2;
+            self.base_y = base;
+            self.node(c, &mut p, bg, cursor, inner, disabled)?;
+        }
+        self.i = end;
         path.truncate(mark);
         self.base_y = outer_base;
         if n.is_clip() {
@@ -1380,6 +1395,27 @@ mod feature_tests {
         assert_eq!(s.surface("a").unwrap().cursor, Some(Cursor::Hand));
         assert_eq!(s.layout.frame("a").unwrap().y, -25.);
         assert_eq!(s.surfaces().last().map(|s| &*s.key), Some("tip"));
+    }
+
+    /// A sticky header paints after the rows that slide under it, and stays
+    /// inside the scroll's clip -- a float would escape it.
+    #[test]
+    fn a_sticky_header_paints_over_its_section_and_keeps_the_clip() {
+        let section = column([
+            leaf(60., 20.).fill(Role::Surface).id("head").sticky(),
+            leaf(60., 60.).id("row"),
+        ])
+        .id("section");
+        let list = column([section]).scroll().size(60., 40.).id("list");
+        let s = resolve_scene(&SceneSpec::new(list)).unwrap();
+        let order: Vec<_> = s.surfaces().map(|s| &*s.key).collect();
+        assert_eq!(
+            order,
+            ["list", "section", "row", "head"],
+            "the header paints last"
+        );
+        let clip = s.surface("list").unwrap().bounds;
+        assert_eq!(s.surface("head").unwrap().clip, clip);
     }
 
     /// A tagged draw is hit geometry in scene space; an untagged one is

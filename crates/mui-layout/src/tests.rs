@@ -879,3 +879,59 @@ fn a_matched_pin_takes_the_anchor_width() {
     assert_eq!(l.frame("menu").unwrap().size.width, 90.);
     assert_eq!(l.frame("menu").unwrap().y, 24.);
 }
+
+#[test]
+fn a_sticky_header_holds_the_viewport_edge_until_its_section_ends() {
+    let section = |k: &str| {
+        column([
+            leaf(100., 20.).id(format!("{k}-head")).sticky(),
+            leaf(100., 180.).id(k),
+        ])
+    };
+    let at = |dy: f64| {
+        let list = column([section("a"), section("b")])
+            .scroll()
+            .scrolled(0., dy)
+            .id("list");
+        let l = resolve(&list, Some(Size::new(100., 120.)), Default::default()).unwrap();
+        (
+            l.frame("a-head").unwrap().y,
+            l.frame("b-head").unwrap().y,
+            l.frame("a").unwrap().y,
+        )
+    };
+    // Unscrolled, both headers sit where the flow put them.
+    assert_eq!(at(0.), (0., 200., 20.));
+    // Scrolled into the first section: its header holds the top edge while the
+    // rows slide under it, and the second one has not arrived yet.
+    assert_eq!(at(60.), (0., 140., -40.));
+    // Past the first section's end, the first header is pushed off the edge by
+    // its own section's bottom, just as the second one takes the edge.
+    assert_eq!(at(190.), (-10., 10., -170.));
+}
+
+#[test]
+fn min_size_is_the_intrinsic_floor_and_a_scroll_gives_up_its_axis() {
+    let rows = || {
+        column([
+            leaf(40., 30.).min_size(Size::new(40., 30.)),
+            leaf(40., 30.).min_size(Size::new(40., 30.)),
+        ])
+        .gap(4.)
+        .pad(8.)
+    };
+    // Nothing here can shrink, so the floor is the intrinsic pass exactly.
+    let hug = resolve(&rows(), None, Default::default()).unwrap();
+    let l = resolve(&rows(), Some(Size::new(400., 300.)), Default::default()).unwrap();
+    assert_eq!(l.min_size(), hug.size);
+    assert_eq!(l.min_size(), Size::new(56., 80.));
+    // The same rows behind a scroll cost nothing on the scrolling axis: a host
+    // may make the window as short as the padding.
+    let scrolled = resolve(
+        &rows().scroll(),
+        Some(Size::new(400., 300.)),
+        Default::default(),
+    )
+    .unwrap();
+    assert_eq!(scrolled.min_size(), Size::new(56., 16.));
+}

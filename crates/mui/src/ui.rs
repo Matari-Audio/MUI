@@ -317,6 +317,20 @@ impl Ui {
     pub fn dropped(&self) -> Option<(&str, &str)> {
         self.interaction.dropped()
     }
+    /// The smallest the last resolved tree can be squeezed to, for a host that
+    /// owns a window: a plugin refuses a resize below it. `None` before the
+    /// first frame resolves.
+    ///
+    /// ```
+    /// # use mui::Ui; use mui::prelude::*;
+    /// # let mut ui = Ui::new(Theme::DEFAULT);
+    /// # let tree = col![leaf(40., 30.).min_size(Size::new(40., 30.))].pad(8.);
+    /// # ui.frame(tree, Some(Size::new(400., 300.)), PointerInput::default(), 0.016).unwrap();
+    /// assert_eq!(ui.min_size(), Some(Size::new(56., 46.)));
+    /// ```
+    pub fn min_size(&self) -> Option<Size> {
+        Some(self.scene.as_ref()?.layout.min_size())
+    }
     /// How far `id`'s children are scrolled.
     pub fn scroll(&self, id: &str) -> [f64; 2] {
         self.scrolls.get(id).copied().unwrap_or([0.0, 0.0])

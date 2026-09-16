@@ -118,6 +118,7 @@ pub(crate) fn arrange<P>(
     origin: [f64; 2],
     size: Size,
     pins: &Pins<'_>,
+    viewport: Option<Viewport>,
     out: &mut (BTreeMap<String, Frame>, Vec<Frame>),
 ) -> Result<(), Error> {
     let n = m.node;
@@ -151,6 +152,17 @@ pub(crate) fn arrange<P>(
     };
     let default = cell_default(n);
     let flow = m.flow();
+    // The box a sticky child travels in -- this node's content box, which for
+    // a scroll node is the whole extent its children were laid into.
+    let mut section = inner;
+    // Everything under a scroll node sticks to that node's leading edge.
+    let viewport = match n.vertical().filter(|_| n.scroll) {
+        Some(v) => Some(Viewport {
+            vertical: v,
+            edge: origin[v as usize] + if v { m.padding.top } else { m.padding.left },
+        }),
+        None => viewport,
+    };
     // Where each in-flow child goes, then every child in declaration order
     // so frames stay in tree order; a float sits in the padding box like an
     // overlay child, unscrolled.
@@ -221,11 +233,10 @@ pub(crate) fn arrange<P>(
             let v = *vertical;
             // A scroll node lays its children into their own extent when
             // that is larger than the frame: nothing shrinks, it overflows.
-            let inner = if n.scroll {
-                Size::axes(inner.main(v).max(m.content.main(v)), inner.cross(v), v)
-            } else {
-                inner
-            };
+            if n.scroll {
+                section = Size::axes(inner.main(v).max(m.content.main(v)), inner.cross(v), v);
+            }
+            let inner = section;
             let lines = if n.wrap {
                 wrap_lines(&flow, m.gap, v, inner.main(v))
             } else {
@@ -333,9 +344,16 @@ pub(crate) fn arrange<P>(
                 ),
             }
         } else {
-            placed[i].take().ok_or(Error::BudgetExceeded)?
+            let (pos, s) = placed[i].take().ok_or(Error::BudgetExceeded)?;
+            match viewport.filter(|_| c.node.sticky) {
+                Some(vp) => {
+                    let end = at(0.0, 0.0)[vp.vertical as usize] + section.main(vp.vertical);
+                    (vp.stick(pos, s, end), s)
+                }
+                None => (pos, s),
+            }
         };
-        arrange(c, here, pos, s, pins, out)?;
+        arrange(c, here, pos, s, pins, viewport, out)?;
     }
     Ok(())
 }

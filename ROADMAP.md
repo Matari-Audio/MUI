@@ -30,6 +30,10 @@ public function and a test behind it.
 - [x] Clips: `.clip()` and `.scroll()` as a `Clip`/`Unclip` layer pair in the
       paint list, honoured by the renderer and by hit testing.
 - [x] Floats: `.float()` keeps its layout slot and is painted after the root.
+- [x] Sticky: `.sticky()` pins a child to the enclosing scroll viewport's
+      leading edge for the length of its section, through the same second
+      placement pass as a pin, and `Layout::min_size` / `Ui::min_size` report
+      the intrinsic floor a host sizes its window against.
 - [x] Text-run cache across frames (`resolve_scene_with`, owned by `Ui`).
 - [x] Glyph runs: text reaches Vello as a hinted run, not a filled outline;
       the font blob is interned so Vello's hinted-outline cache survives.

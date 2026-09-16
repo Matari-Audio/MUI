@@ -289,22 +289,33 @@ impl PreviewScene for Scrolling {
         "Scroll"
     }
     fn about(&self) -> &'static str {
-        "A .scroll() column taller than its box, with a .mask() fade over the last rows. The wheel picks the surface under the pointer; a hit outside the clip is not a hit."
+        "A .scroll() column taller than its box, with a .mask() fade over the last rows and .sticky() section headers that hold the top edge until their section ends. The wheel picks the surface under the pointer; a hit outside the clip is not a hit."
     }
     fn specimen(&mut self, ui: &mut Ui) -> El {
-        let rows: Vec<El> = self
+        // Eight bands to a section, each behind a header that rides the top
+        // edge of the viewport while its own bands are still in it.
+        let sections: Vec<El> = self
             .gains
-            .iter_mut()
+            .chunks_mut(8)
             .enumerate()
-            .map(|(i, g)| {
-                slider(
-                    ui,
-                    &format!("band-{i}"),
-                    &format!("band {i}"),
-                    g,
-                    -24.0..=6.0,
-                )
-                .el()
+            .map(|(s, bands)| {
+                let rows = bands.iter_mut().enumerate().map(|(j, g)| {
+                    let i = s * 8 + j;
+                    slider(
+                        ui,
+                        &format!("band-{i}"),
+                        &format!("band {i}"),
+                        g,
+                        -24.0..=6.0,
+                    )
+                    .el()
+                });
+                let head = label(format!("octave {s}"))
+                    .w(Len::Pct(100.))
+                    .pad_xy(0., 4.)
+                    .fill(Role::Surface)
+                    .sticky();
+                column(std::iter::once(head).chain(rows)).gap(S)
             })
             .collect();
         // Source-atop, so the ramp paints the surface colour back over the
@@ -316,8 +327,8 @@ impl PreviewScene for Scrolling {
                 (1.0, Role::Surface.into()),
             ],
         );
-        column(rows)
-            .gap(S)
+        column(sections)
+            .gap(M)
             .pad(M)
             .scroll()
             .size(320.0, 340.0)

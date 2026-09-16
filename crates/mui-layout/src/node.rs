@@ -55,6 +55,9 @@ pub struct Node<P = ()> {
     pub(crate) scroll: bool,
     pub(crate) clip: bool,
     pub(crate) scrolled: [f64; 2],
+    /// Pinned to the enclosing scroll viewport's leading edge; see
+    /// [`Node::sticky`]. Stays in flow, unlike a float.
+    pub(crate) sticky: bool,
     /// Out of flow: takes no space in its parent and sits like an overlay
     /// child, anchored and offset within the parent's padding box. Tooltips,
     /// popups, drag ghosts.
@@ -97,6 +100,7 @@ impl<P: Default> Node<P> {
             scroll: false,
             clip: false,
             scrolled: [0.0; 2],
+            sticky: false,
             float: false,
             wrap: false,
             span: 1,
@@ -368,6 +372,29 @@ impl<P> Node<P> {
         self.pin = Some(pin);
         self.float()
     }
+    /// Pin this node to the leading edge of the enclosing
+    /// [`scroll`](Node::scroll) viewport -- the top of a scrolling column, the
+    /// start of a scrolling row -- while its section is still in view. The
+    /// section is this node's own parent, so a header in a section column
+    /// rides at the edge until its section ends and then is pushed off by the
+    /// next one, CSS `position: sticky`. It keeps its slot in the flow, unlike
+    /// a float, and with no scrolling ancestor it does nothing.
+    ///
+    /// ```
+    /// use mui_layout::{column, leaf, resolve, Size};
+    /// let section = |k: &str| column([leaf(80., 20.).id(k).sticky(), leaf(80., 200.)]);
+    /// let header_y = |dy: f64| {
+    ///     let list = column([section("a"), section("b")]).scroll().scrolled(0., dy);
+    ///     let l = resolve(&list, Some(Size::new(80., 100.)), Default::default()).unwrap();
+    ///     l.frame("a").unwrap().y
+    /// };
+    /// // Held at the top while its section runs, then pushed off by its end.
+    /// assert_eq!((header_y(0.), header_y(50.), header_y(210.)), (0., 0., -10.));
+    /// ```
+    pub fn sticky(mut self) -> Self {
+        self.sticky = true;
+        self
+    }
     /// Take this node out of flow: see the `float` field.
     pub fn float(mut self) -> Self {
         self.float = true;
@@ -429,6 +456,9 @@ impl<P> Node<P> {
     }
     pub fn is_float(&self) -> bool {
         self.float
+    }
+    pub fn is_sticky(&self) -> bool {
+        self.sticky
     }
     pub fn scroll_offset(&self) -> [f64; 2] {
         self.scrolled
