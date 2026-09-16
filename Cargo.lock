@@ -1911,6 +1911,9 @@ dependencies = [
 [[package]]
 name = "mui-layout"
 version = "0.3.0"
+dependencies = [
+ "mui-geometry",
+]
 
 [[package]]
 name = "mui-motion"
@@ -1950,7 +1953,6 @@ version = "0.3.0"
 dependencies = [
  "color",
  "mui-geometry",
- "mui-layout",
 ]
 
 [[package]]

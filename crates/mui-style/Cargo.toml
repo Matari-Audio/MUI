@@ -9,7 +9,5 @@ description = "Theme data for MUI: Oklch colours, palettes, roles, fills, gradie
 # The renderer reaches us through the same crate, so colour types cannot
 # version-skew with what vello paints. No transitive dependencies of its own.
 color = "0.3"
-# Only for CornerStyle, the curve a corner turns through.
+# Only for CornerStyle and the spacing vocabulary a shell's thickness is stated in.
 mui-geometry = { path = "../mui-geometry" }
-# Only for Spacing, which a shell's thickness is stated in.
-mui-layout = { path = "../mui-layout" }

@@ -7,8 +7,9 @@
 //! builds a tree, measures a box or paints a pixel.
 //!
 //! It is not the element DSL (that is `mui-scene`), not a renderer (that is
-//! `mui-vello`), and not the layout solver (that is `mui-layout`, which this
-//! crate touches only for [`Spacing`](mui_layout::Spacing)).
+//! `mui-vello`), and not the layout solver (that is `mui-layout`). It shares
+//! only the [`Spacing`](mui_geometry::Spacing) vocabulary with the solver,
+//! and reads it from below, in `mui-geometry`.
 #![forbid(unsafe_code)]
 
 mod color;

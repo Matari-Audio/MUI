@@ -346,8 +346,8 @@ light-theme half because there is nothing in it a mode could contradict.
 
 | crate | what it owns |
 |---|---|
-| `mui-layout` | the dependency-free flex solver: tokens, pct, aspect, grid, anchors, frames in tree order |
-| `mui-geometry` | Booleans, fillets, exact rounded-rect insets, general parallel offsets |
+| `mui-layout` | the flex solver: tokens, pct, aspect, grid, anchors, frames in tree order |
+| `mui-geometry` | Booleans, fillets, exact rounded-rect insets, general parallel offsets, and the `Spacing` scale layout and style are both written in |
 | `mui-text` | glyph and string outlines from a (variable) font |
 | `mui-motion` | motion maths, dependency-free: the `Spring` every animated property chases, and editable normalized cubic Bezier response `curve`s |
 | `mui-style` | theme data: Oklch `Color`, `Palette`, `Role`, `Fill`, `Gradient`, `Shadow`, `Elevation`, `Radius`, `Style` and the `Theme` they resolve against |

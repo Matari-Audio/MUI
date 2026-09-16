@@ -3,3 +3,7 @@ name = "mui-layout"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+
+[dependencies]
+# Only for the spacing vocabulary, shared with the style crate.
+mui-geometry = { path = "../mui-geometry" }

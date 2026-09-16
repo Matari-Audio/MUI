@@ -19,7 +19,8 @@ mod measure;
 mod node;
 mod pin;
 
-pub use len::{Align, Insets, Justify, Len, Size, Spacing, SpacingScale, SpacingToken};
+pub use len::{Align, Insets, Justify, Len, Size};
+pub use mui_geometry::{Spacing, SpacingScale, SpacingToken};
 pub use node::{column, fits, grid, leaf, overlay, row, Node};
 pub use pin::{Area, Match, Pin};
 
