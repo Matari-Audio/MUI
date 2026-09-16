@@ -3,12 +3,12 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use mui_geometry::Point;
-use mui_input::{Hit, Ime, Input, Interaction, Key, KeyPress, PointerInput, Response};
+use mui_input::{Hit, Ime, Input, Interaction, Key, KeyPress, PointerInput, Response, FINE_DRAG};
 use mui_layout::SpacingToken::{Xs, S};
 use mui_scene::prelude::{overlay, text, Paints as _, Role};
 use mui_scene::{
-    Area, Color, Cursor, El, Element, Fill, Paint, Palette, Pin, Radius, ResolvedScene, SceneError,
-    SceneSpec, Size, Spacing, Spring, State, TextCache, Theme,
+    Area, Color, Cursor, El, Element, Fill, Kind, Paint, Palette, Pin, Radius, ResolvedScene,
+    SceneError, SceneSpec, Size, Spacing, Spring, State, TextCache, Theme,
 };
 use mui_widgets::Host;
 
@@ -102,6 +102,10 @@ pub struct Ui {
     pointer: PointerInput,
     /// The hovered key and how long it has been hovered.
     hover: Option<(String, f64)>,
+    /// The canvas shape the pointer is on: its node's key and the draw's
+    /// tag. Latched while a gesture is held, so a drag that leaves the knot
+    /// still reports the knot it grabbed.
+    tagged: Option<(String, String)>,
     time: f64,
 }
 impl Ui {
@@ -132,6 +136,7 @@ impl Ui {
             typed: String::new(),
             pointer: PointerInput::default(),
             hover: None,
+            tagged: None,
             time: 0.0,
         }
     }
@@ -145,6 +150,32 @@ impl Ui {
     /// What the last frame resolved to, for anything drawn on top of it.
     pub fn scene(&self) -> Option<&ResolvedScene> {
         self.scene.as_ref()
+    }
+    /// Swap what one text node says without resolving the tree again: the
+    /// last frame's layout stands and only that node's glyphs are shaped.
+    ///
+    /// For readouts that change every frame -- a meter, a value under a
+    /// knob -- where the tree is otherwise identical. Give the node a
+    /// [`reserve`](mui_scene::Styled::reserve) string so the box was
+    /// measured for the widest value it will ever hold.
+    ///
+    /// ponytail: takes `AsRef<str>`, not `Into<Arc<str>>` -- the string is
+    /// shaped and dropped, never stored, so an `Arc` would only allocate.
+    /// See [`ResolvedScene::set_text`] for the rest of the ceiling: one
+    /// line, and the accessibility label still says what the tree said.
+    ///
+    /// ```
+    /// # use mui::prelude::*;
+    /// let mut ui = Ui::new(Theme::DEFAULT).font(epaint_default_fonts::HACK_REGULAR.to_vec());
+    /// let tree = row![text("0.0").reserve("-88.8").id("gain")];
+    /// ui.frame(tree, Some(Size::new(200., 40.)), PointerInput::default(), 0.016).unwrap();
+    /// ui.set_text("gain", "-12.4").unwrap();
+    /// ```
+    pub fn set_text(&mut self, id: &str, s: impl AsRef<str>) -> Result<(), mui_scene::SceneError> {
+        self.scene
+            .as_mut()
+            .ok_or(mui_scene::SceneError::NoTextLayer)?
+            .set_text(id, s.as_ref())
     }
     /// Drop the gesture in flight, for focus loss. The held target still
     /// gets its [`Edit::End`] on the next frame: a host that was told a
@@ -200,6 +231,31 @@ impl Ui {
     pub fn get(&self, id: &str) -> Response {
         self.interaction.get(id)
     }
+    /// Which shape of the canvas `id` the pointer is on, by the tag its
+    /// [`Draw`](mui_scene::Draw) carried. `None` when the pointer is over no
+    /// tagged shape of that node -- including inside its frame but outside
+    /// every drawn path.
+    ///
+    /// Latched at the press: through a drag it stays the shape the gesture
+    /// grabbed, so a knot dragged past its neighbours is still that knot.
+    ///
+    /// ```
+    /// # use mui::Ui; use mui::prelude::*;
+    /// # let mut ui = Ui::new(Theme::DEFAULT);
+    /// let plot = canvas(|size| {
+    ///     let box_ = [(0., 0.), (size.width, 0.), (size.width, size.height)];
+    ///     vec![Draw::fill(Path::polyline(box_.map(|(x, y)| Point::new(x, y)), true), Primary)
+    ///         .tag("wedge")]
+    /// })
+    /// .square(80.)
+    /// .id("plot");
+    /// ui.frame(plot, None, PointerInput::default(), 0.016).unwrap();
+    /// assert_eq!(ui.tag("plot"), None, "the pointer is nowhere");
+    /// ```
+    pub fn tag(&self, id: &str) -> Option<&str> {
+        let (k, t) = self.tagged.as_ref()?;
+        (k == id).then_some(t.as_str())
+    }
     /// Hover and press amounts for `id`, 0..1 and spring-smoothed.
     pub fn state(&self, id: &str) -> (f64, f64) {
         self.springs
@@ -230,6 +286,45 @@ impl Ui {
             &[]
         }
     }
+    /// Every key this frame, whatever holds the focus: the stream a global
+    /// shortcut reads. `Ui` has already taken Tab and Escape for focus, and
+    /// the keys are here as well as in [`Ui::keys`] -- a shortcut and a
+    /// focused widget see the same press.
+    ///
+    /// The one exception is the rule every editor has: **a focused text
+    /// input consumes the stream**, so typing `z` in a search box is a `z`
+    /// and not an undo. Nothing else swallows keys; a widget that wants to
+    /// claim a key while focused must check [`Ui::focused`] itself.
+    ///
+    /// ```
+    /// # use mui::Ui; use mui::prelude::*;
+    /// # let mut ui = Ui::new(Theme::DEFAULT);
+    /// # let root = leaf(10., 10.).id("root");
+    /// # ui.frame(root, None, PointerInput::default(), 0.016).unwrap();
+    /// let undo = ui
+    ///     .shortcuts()
+    ///     .iter()
+    ///     .any(|k| k.key == Key::Char('z') && (k.mods.ctrl || k.mods.cmd));
+    /// assert!(!undo, "nothing was pressed");
+    /// ```
+    pub fn shortcuts(&self) -> &[KeyPress] {
+        let typing = self.focus.as_deref().is_some_and(|k| {
+            self.scene
+                .as_ref()
+                .and_then(|s| s.surface(k))
+                .is_some_and(|s| {
+                    matches!(
+                        s.semantics.as_ref().map(|s| &s.role),
+                        Some(Kind::TextInput { .. })
+                    )
+                })
+        });
+        if typing {
+            &[]
+        } else {
+            &self.keys
+        }
+    }
     /// The text typed this frame, if `id` is focused.
     pub fn text(&self, id: &str) -> &str {
         if self.focused(id) {
@@ -247,6 +342,20 @@ impl Ui {
     /// Source and target of a drag released this frame.
     pub fn dropped(&self) -> Option<(&str, &str)> {
         self.interaction.dropped()
+    }
+    /// The smallest the last resolved tree can be squeezed to, for a host that
+    /// owns a window: a plugin refuses a resize below it. `None` before the
+    /// first frame resolves.
+    ///
+    /// ```
+    /// # use mui::Ui; use mui::prelude::*;
+    /// # let mut ui = Ui::new(Theme::DEFAULT);
+    /// # let tree = col![leaf(40., 30.).min_size(Size::new(40., 30.))].pad(8.);
+    /// # ui.frame(tree, Some(Size::new(400., 300.)), PointerInput::default(), 0.016).unwrap();
+    /// assert_eq!(ui.min_size(), Some(Size::new(56., 46.)));
+    /// ```
+    pub fn min_size(&self) -> Option<Size> {
+        Some(self.scene.as_ref()?.layout.min_size())
     }
     /// How far `id`'s children are scrolled.
     pub fn scroll(&self, id: &str) -> [f64; 2] {
@@ -317,7 +426,7 @@ impl Ui {
         };
         let stops: Vec<String> = scene
             .surfaces()
-            .filter(|s| s.focusable)
+            .filter(|s| s.focusable && !s.disabled)
             .map(|s| s.key.to_string())
             .collect();
         if stops.is_empty() {
@@ -338,6 +447,18 @@ impl Ui {
 
     /// Apply a horizontal or vertical drag on `id` to `value` across `range`,
     /// `px` pixels for the full span. Returns whether it changed.
+    ///
+    /// Shift is the fine modifier: the same travel moves a tenth as far
+    /// ([`mui_input::FINE_DRAG`]), which is how every parameter in a synth
+    /// editor is dialled in.
+    ///
+    /// ```
+    /// # use mui::Ui; use mui::prelude::*;
+    /// # let ui = Ui::new(Theme::DEFAULT);
+    /// let mut cutoff = 0.5;
+    /// // Nothing is dragging, so nothing moves.
+    /// assert!(!ui.drag("cutoff", &mut cutoff, 0.0..=1.0, 160.0, false));
+    /// ```
     pub fn drag(
         &self,
         id: &str,
@@ -350,11 +471,8 @@ impl Ui {
         if !r.dragged || px <= 0.0 {
             return false;
         }
-        let d = if vertical {
-            -r.drag_delta.y
-        } else {
-            r.drag_delta.x
-        };
+        let delta = r.drag_fine(FINE_DRAG);
+        let d = if vertical { -delta.y } else { delta.x };
         // An inverted range (`1.0..=0.0`) is a legitimate downward control and
         // the delta math already reverses for it; only `clamp` needs the
         // bounds in order, since it panics on `min > max`.
@@ -379,6 +497,28 @@ impl Ui {
         self.pointer = input.pointer;
         self.pasted = input.clipboard;
         self.time += dt;
+        // Switched off mid-gesture: the hit map stopped reporting it when it
+        // resolved disabled, and a drag must not outlive its target. The
+        // cancel still owes the host an `Edit::End`.
+        let off = |scene: Option<&ResolvedScene>, k: &str| {
+            scene.and_then(|s| s.surface(k)).is_some_and(|s| s.disabled)
+        };
+        if self
+            .interaction
+            .held()
+            .is_some_and(|k| off(self.scene.as_ref(), k))
+        {
+            self.cancel();
+        }
+        // The same for a focus it held when it was switched off: Tab already
+        // steps over it, and a key stream into a dead node is worse.
+        if self
+            .focus
+            .as_deref()
+            .is_some_and(|k| off(self.scene.as_ref(), k))
+        {
+            self.focus = None;
+        }
         let prev_held = self.interaction.held().map(str::to_owned);
         self.interaction.update(&self.hit, input.pointer);
         let (hovered, held) = (
@@ -395,6 +535,14 @@ impl Ui {
         if prev_held != held {
             self.edits.extend(prev_held.clone().map(|k| (k, Edit::End)));
             self.edits.extend(held.clone().map(|k| (k, Edit::Begin)));
+        }
+        // Last frame's hit map and this frame's pointer, exactly as the
+        // interaction above: a new capture latches the shape under the press.
+        if held.is_none() || prev_held != held {
+            self.tagged = input.pointer.pos.and_then(|p| {
+                let (id, tag) = self.hit.at_tagged(p)?;
+                Some((id.to_owned(), tag?.to_owned()))
+            });
         }
         for (k, [h, p]) in &mut self.springs {
             h.to(f64::from(
@@ -510,11 +658,18 @@ impl Ui {
         // Declared state looks first, so a transition springs toward the
         // style the node actually asked for this frame.
         let (springs, focus) = (&self.springs, self.focus.as_deref());
-        declared_states(&mut root, &|k, st| match st {
-            State::Hover => springs.get(k).is_some_and(|[h, _]| h.value > 0.5),
-            State::Press => springs.get(k).is_some_and(|[_, p]| p.value > 0.5),
-            State::Focus => focus == Some(k),
-        });
+        declared_states(
+            &mut root,
+            &|k, st| match st {
+                State::Hover => springs.get(k).is_some_and(|[h, _]| h.value > 0.5),
+                State::Press => springs.get(k).is_some_and(|[_, p]| p.value > 0.5),
+                State::Focus => focus == Some(k),
+                // Declared by the node, not discovered here: `declared_states`
+                // answers this one from the element itself.
+                State::Disabled => false,
+            },
+            false,
+        );
         animating |= transitions(&mut root, &pal, &mut self.motion, dt);
         for (_, s) in self.motion.iter_mut().filter(|(k, _)| k.starts_with('~')) {
             if let Some(s) = s[0].as_mut() {
@@ -528,6 +683,7 @@ impl Ui {
             &pal,
             &|k| springs.get(k).map(|[h, p]| (h.value, p.value)),
             scrolls,
+            false,
         );
 
         let mut spec = SceneSpec::new(root).theme(self.theme);
@@ -538,8 +694,18 @@ impl Ui {
         // Named nodes are the gesture targets, in z-order. Unnamed ones are
         // decoration. A target clipped away does not respond.
         let mut hit = Hit::default();
-        for s in scene.surfaces().filter(|s| !s.key.starts_with('/')) {
-            hit.push_clipped(s.key.to_string(), &s.path, s.clip)?;
+        for s in scene
+            .surfaces()
+            .filter(|s| !s.key.starts_with('/') && !s.disabled)
+        {
+            if s.hits.is_empty() {
+                hit.push_clipped(s.key.to_string(), &s.path, s.clip)?;
+            }
+            // A canvas that named its draws is hit by those shapes instead of
+            // by its frame, so a ring responds in the ring and not in its hole.
+            for (tag, path) in &s.hits {
+                hit.push_tagged(s.key.to_string(), tag.to_string(), path, s.clip)?;
+            }
         }
         self.hit = hit;
         self.wheel(&scene, input.wheel);
@@ -678,34 +844,49 @@ fn transitions(
 
 /// Replace every named node's style with what it declared for the states it
 /// is in, in declaration order.
-fn declared_states(n: &mut El, is: &dyn Fn(&str, State) -> bool) {
+/// `off` is the enclosing subtree's disabled flag, `false` at the root: a card
+/// that switched itself off greys the controls inside it too, which is the same
+/// rule the hit gate uses.
+fn declared_states(n: &mut El, is: &dyn Fn(&str, State) -> bool, off: bool) {
+    let off = off || n.payload().disabled;
     if let Some(k) = n.key().map(str::to_owned) {
         let e = n.payload_mut();
         for (st, f) in std::mem::take(&mut e.states) {
-            if is(&k, st) {
+            let on = match st {
+                State::Disabled => off,
+                // A disabled node is never hovered or pressed -- it is not in
+                // the hit map -- and a focus it held before it was switched
+                // off is not a reason to paint it lit.
+                _ => !off && is(&k, st),
+            };
+            if on {
                 e.style = f.0(e.style.clone());
             }
         }
     }
     for c in n.children_mut() {
-        declared_states(c, is);
+        declared_states(c, is, off);
     }
 }
 
 /// Push hover and press into every named node's fill, proportionally, and
-/// slide the ones the wheel has scrolled.
+/// slide the ones the wheel has scrolled. `off` is the enclosing subtree's
+/// disabled flag, `false` at the root: a hover spring still decaying from
+/// before the node was switched off must not tint it.
 fn state(
     n: &mut El,
     pal: &Palette,
     of: &dyn Fn(&str) -> Option<(f64, f64)>,
     scrolls: &BTreeMap<String, [f64; 2]>,
+    off: bool,
 ) {
+    let off = off || n.payload().disabled;
     if let Some([x, y]) = n.key().and_then(|k| scrolls.get(k)).copied() {
         // `scrolled` is a builder and a built node cannot be reopened.
         let node = std::mem::replace(n, mui_scene::leaf(0.0, 0.0));
         *n = node.scrolled(x, y);
     }
-    if let Some((h, p)) = n.key().and_then(of) {
+    if let Some((h, p)) = n.key().and_then(of).filter(|_| !off) {
         let bg = pal.background();
         let e = n.payload_mut();
         if !e.style.fill.is_none() && (h > 0.0 || p > 0.0) {
@@ -715,7 +896,7 @@ fn state(
         }
     }
     for c in n.children_mut() {
-        state(c, pal, of, scrolls);
+        state(c, pal, of, scrolls, off);
     }
 }
 impl std::fmt::Debug for Ui {
@@ -802,13 +983,14 @@ impl Host for Ui {
 mod tests {
     use super::*;
     use mui_geometry::Point;
-    use mui_input::Mods;
+    use mui_input::{Button, Buttons, Mods};
     use mui_scene::prelude::*;
 
     fn at(x: f64, y: f64, down: bool) -> PointerInput {
         PointerInput {
             pos: Some(Point::new(x, y)),
-            primary_down: down,
+            buttons: Buttons::default().set(Button::Primary, down),
+            ..PointerInput::default()
         }
     }
     fn key(k: Key) -> Input {
@@ -819,6 +1001,161 @@ mod tests {
             }],
             ..Input::default()
         }
+    }
+
+    /// A ring: the outer circle one way round, the inner the other, so the
+    /// hole is outside under the non-zero rule the renderer fills by.
+    fn ring(c: Point, outer: f64, inner: f64) -> mui_geometry::Path {
+        let arc = move |r: f64, rev: bool| {
+            (0..64).map(move |i| {
+                let k = if rev { 64 - i } else { i };
+                let a = std::f64::consts::TAU * f64::from(k) / 64.0;
+                Point::new(c.x + r * a.cos(), c.y + r * a.sin())
+            })
+        };
+        let mut p = mui_geometry::Path::polyline(arc(outer, false), true);
+        for (i, q) in arc(inner, true).enumerate() {
+            p = if i == 0 { p.move_to(q) } else { p.line_to(q) };
+        }
+        p.close()
+    }
+
+    /// The drawn shape is the hit shape: the ring responds, the hole it
+    /// leaves does not, and the tag says which draw was hit.
+    #[test]
+    fn a_tagged_canvas_responds_in_its_drawn_ring_only() {
+        let mut ui = Ui::new(Theme::DEFAULT);
+        let tree = || {
+            canvas(|s| {
+                let c = Point::new(s.width / 2., s.height / 2.);
+                vec![Draw::fill(ring(c, 50., 25.), Role::Primary).tag("band")]
+            })
+            .size(100., 100.)
+            .id("dial")
+        };
+        // Two frames per move: the hit map a gesture reads is the last built.
+        let hover = |ui: &mut Ui, x: f64, y: f64| {
+            for _ in 0..2 {
+                ui.frame(tree(), None, at(x, y, false), 0.016).unwrap();
+            }
+        };
+        hover(&mut ui, 50., 50.);
+        assert!(!ui.get("dial").hovered, "the hole is not the dial");
+        assert_eq!(ui.tag("dial"), None);
+        hover(&mut ui, 50., 12.);
+        assert!(ui.get("dial").hovered, "the band is");
+        assert_eq!(ui.tag("dial"), Some("band"));
+        hover(&mut ui, 2., 2.);
+        assert!(!ui.get("dial").hovered, "and the frame's corner is not");
+    }
+
+    /// The tag a press grabbed survives a drag that leaves the shape.
+    #[test]
+    fn the_tag_is_latched_for_the_length_of_the_gesture() {
+        let mut ui = Ui::new(Theme::DEFAULT);
+        let tree = || {
+            canvas(|s| {
+                let c = Point::new(s.width / 2., s.height / 2.);
+                vec![Draw::fill(ring(c, 50., 25.), Role::Primary).tag("band")]
+            })
+            .size(100., 100.)
+            .id("dial")
+        };
+        for _ in 0..2 {
+            ui.frame(tree(), None, at(50., 12., false), 0.016).unwrap();
+        }
+        ui.frame(tree(), None, at(50., 12., true), 0.016).unwrap();
+        ui.frame(tree(), None, at(50., 50., true), 0.016).unwrap();
+        assert_eq!(ui.tag("dial"), Some("band"), "still the shape it grabbed");
+        ui.frame(tree(), None, at(50., 50., false), 0.016).unwrap();
+        ui.frame(tree(), None, at(50., 50., false), 0.016).unwrap();
+        assert_eq!(ui.tag("dial"), None, "released over the hole");
+    }
+
+    /// The two halves of `.disabled` are one feature: the look it declared
+    /// for `State::Disabled` is painted, the look it declared for a hover is
+    /// not, and the pointer sitting on it produces no gesture at all.
+    #[test]
+    fn a_disabled_node_paints_its_off_look_and_hits_nothing() {
+        let mut ui = Ui::new(Theme::DEFAULT);
+        let tree = |off: bool| {
+            leaf(100., 100.)
+                .fill(Role::Field)
+                .on(State::Hover, |s| s.fill(Role::Primary))
+                .on(State::Disabled, |s| s.fill(Role::Dim))
+                .disabled(off)
+                .focusable()
+                .id("bypass")
+        };
+        let fill = |f: &Frame<'_>| {
+            f.scene
+                .paint
+                .iter()
+                .find(|p| &*p.key == "bypass")
+                .expect("painted")
+                .paint
+                .solid()
+        };
+        let pal = Theme::DEFAULT.palette;
+        let role = |r: Role| match Fill::from(r).paint(&pal, pal.background()) {
+            Some(Paint::Solid(c)) => c,
+            _ => panic!("a role paints solid"),
+        };
+        // Live: two frames, because a gesture reads the previous hit map.
+        ui.frame(tree(false), None, at(50., 50., false), 0.016)
+            .unwrap();
+        let lit = fill(
+            &ui.frame(tree(false), None, at(50., 50., false), 0.016)
+                .unwrap(),
+        );
+        assert!(ui.get("bypass").hovered, "live, and under the pointer");
+        assert!(
+            lit != role(Role::Field) && lit != role(Role::Dim),
+            "the hover look, lifted by the hover spring"
+        );
+
+        for _ in 0..2 {
+            ui.frame(tree(true), None, at(50., 50., true), 0.016)
+                .unwrap();
+        }
+        let off = fill(
+            &ui.frame(tree(true), None, at(50., 50., true), 0.016)
+                .unwrap(),
+        );
+        let r = ui.get("bypass");
+        assert!(!r.hovered && !r.pressed && !r.held, "no gesture: {r:?}");
+        assert_eq!(off, role(Role::Dim), "the disabled look, unlifted");
+
+        // And it is no Tab stop -- nor does it keep a focus it already had.
+        ui.frame(tree(true), None, key(Key::Tab), 0.016).unwrap();
+        assert!(!ui.focused("bypass"));
+        ui.focus("bypass");
+        ui.frame(tree(true), None, PointerInput::default(), 0.016)
+            .unwrap();
+        assert!(!ui.focused("bypass"), "a focus on a dead node is dropped");
+    }
+
+    /// A shortcut is not focus-gated -- except by a field that is typing.
+    #[test]
+    fn a_shortcut_fires_unfocused_and_never_while_a_field_has_the_focus() {
+        let mut ui = Ui::new(Theme::DEFAULT);
+        let mut value = String::new();
+        let undo = |ui: &Ui| {
+            ui.shortcuts()
+                .iter()
+                .any(|k| k.key == Key::Function(1) || k.key == Key::Space)
+        };
+        let tree = |ui: &mut Ui, v: &mut String| mui_widgets::text_input(ui, "f", v);
+
+        let root = tree(&mut ui, &mut value);
+        ui.frame(root, None, key(Key::Function(1)), 0.016).unwrap();
+        assert!(undo(&ui), "nothing is focused, so the shortcut is ours");
+
+        ui.focus("f");
+        let root = tree(&mut ui, &mut value);
+        ui.frame(root, None, key(Key::Space), 0.016).unwrap();
+        assert!(!undo(&ui), "the field is typing: the key is its own");
+        assert_eq!(ui.keys("f").len(), 1, "and it still gets it");
     }
 
     #[test]
@@ -1200,6 +1537,53 @@ mod tests {
         assert_eq!(warm, 3., "hovered, the declared radius is what paints");
     }
 
+    /// The whole of M1 as one widget sees it: Shift is fine, and a
+    /// secondary click is a click the caller can tell apart.
+    #[test]
+    fn shift_drags_a_value_fine_and_a_secondary_click_is_distinguishable() {
+        let mut ui = Ui::new(Theme::DEFAULT);
+        let tree = || leaf(40., 40.).fill(Role::Raised).id("b");
+        let drag = |ui: &mut Ui, mods: Mods| {
+            // The hit map is last frame's, so a press needs a frame to land on.
+            ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
+            let press = PointerInput {
+                mods,
+                ..at(10., 10., true)
+            };
+            ui.frame(tree(), None, press, 0.016).unwrap();
+            let moved = PointerInput {
+                mods,
+                ..at(90., 10., true)
+            };
+            ui.frame(tree(), None, moved, 0.016).unwrap();
+            let mut v = 0.0;
+            assert!(ui.drag("b", &mut v, 0.0..=1.0, 80.0, false));
+            ui.frame(tree(), None, at(90., 10., false), 0.016).unwrap();
+            v
+        };
+        let coarse = drag(&mut ui, Mods::default());
+        let fine = drag(
+            &mut ui,
+            Mods {
+                shift: true,
+                ..Mods::default()
+            },
+        );
+        assert!((coarse - 1.0).abs() < 1e-9, "80 px is the full span");
+        assert!((fine - coarse * FINE_DRAG).abs() < 1e-9, "a tenth of it");
+
+        ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
+        let secondary = PointerInput {
+            buttons: Buttons::default().set(Button::Secondary, true),
+            ..at(10., 10., false)
+        };
+        ui.frame(tree(), None, secondary, 0.016).unwrap();
+        ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
+        let r = ui.get("b");
+        assert!(r.clicked_with(Button::Secondary), "the reset gesture");
+        assert!(!r.clicked_with(Button::Primary));
+    }
+
     #[test]
     fn a_cancelled_gesture_still_ends() {
         let mut ui = Ui::new(Theme::DEFAULT);
@@ -1342,5 +1726,69 @@ mod tests {
         let el = mui_widgets::slider(&mut ui, "down", "Down", &mut down, 1.0..=0.0).el();
         ui.frame(el, None, PointerInput::default(), 0.016)
             .expect("and so is a downward one");
+    }
+
+    #[test]
+    fn a_live_readout_swaps_its_glyphs_without_resolving_again() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        let walks = Rc::new(Cell::new(0));
+        let (w, seen) = (walks.clone(), walks.clone());
+        let tree = move || {
+            let w = w.clone();
+            row![
+                text("0.0").reserve("-88.8").id("gain"),
+                canvas(move |_| {
+                    w.set(w.get() + 1);
+                    Vec::new()
+                })
+                .size(10., 10.)
+            ]
+        };
+        let mut ui = Ui::new(Theme::DEFAULT).font(epaint_default_fonts::HACK_REGULAR.to_vec());
+        ui.frame(tree(), Some(Size::new(300., 40.)), Input::default(), 0.016)
+            .unwrap();
+        assert_eq!(seen.get(), 1, "the one resolve");
+
+        let glyphs = |ui: &Ui| {
+            let t = ui
+                .scene()
+                .unwrap()
+                .paint
+                .iter()
+                .find(|p| p.layer == mui_scene::Layer::Text);
+            t.unwrap().text.clone().unwrap().glyphs
+        };
+        let (before, frame) = (
+            glyphs(&ui),
+            ui.scene().unwrap().surface("gain").unwrap().frame,
+        );
+        for i in 0..32 {
+            ui.set_text("gain", format!("-{i}.5")).unwrap();
+        }
+        assert_eq!(seen.get(), 1, "32 readouts, still one layout resolve");
+        assert_ne!(glyphs(&ui), before, "and the glyphs did change");
+        assert_eq!(ui.scene().unwrap().surface("gain").unwrap().frame, frame);
+    }
+
+    #[test]
+    fn set_text_says_so_when_there_is_nothing_to_set() {
+        let mut ui = Ui::new(Theme::DEFAULT).font(epaint_default_fonts::HACK_REGULAR.to_vec());
+        assert!(matches!(
+            ui.set_text("gain", "1"),
+            Err(SceneError::NoTextLayer)
+        ));
+        let tree = row![leaf(20., 20.).id("box")];
+        ui.frame(tree, Some(Size::new(80., 40.)), Input::default(), 0.016)
+            .unwrap();
+        assert!(matches!(
+            ui.set_text("box", "1"),
+            Err(SceneError::NoTextLayer)
+        ));
+        assert!(matches!(
+            ui.set_text("nope", "1"),
+            Err(SceneError::NoTextLayer)
+        ));
     }
 }

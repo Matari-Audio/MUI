@@ -415,6 +415,57 @@ impl Palette {
     /// shown only by a colour change, needs this against what is next to it.
     pub const UI_NONTEXT: f32 = 3.0;
 
+    /// A whole palette from one accent, in `mode`.
+    ///
+    /// The seed's hue and chroma become `primary`; `secondary` and `tertiary`
+    /// step around the wheel from it, the greys take a trace of its hue so the
+    /// surfaces read warm or cool with the brand, and the three signal roles
+    /// keep their own hues -- red is not the brand's to move. Only hue and
+    /// chroma are read: where each role sits in lightness is [`Mode`]'s
+    /// business, which is what makes one seed serve both modes.
+    ///
+    /// The legibility this guarantees, swept over every hue in both modes:
+    /// every role's fill clears [`Self::UI_NONTEXT`] against
+    /// [`Self::background`] and [`Self::surface`], and [`Self::on`] clears
+    /// [`Self::AA_TEXT`] on both of those. Chroma is clamped to what Oklch
+    /// can still show in sRGB.
+    ///
+    /// ponytail: label text laid directly on a fully saturated fill is the
+    /// one case that can land short -- near 4.4:1 rather than 4.5:1 -- because
+    /// [`Color::readable_on`] keeps the ink's hue while it walks its
+    /// lightness, and a chromatic near-black is not black. That is an `on`
+    /// ceiling, not a seeding one. Against [`Self::raised`] in light mode an accent lands near
+    /// 2.8:1 -- a property of the layer band, not of seeding (the shipped
+    /// grey does the same), and chroma cannot buy it back. Put a label or a
+    /// border on a control that floats on a raised card. A near-grey seed
+    /// yields a near-grey palette; that is the seed's answer, not a fault.
+    ///
+    /// ```
+    /// use mui_style::{Color, Mode, Palette};
+    /// let p = Palette::from_seed(Color::oklch(0.6, 0.18, 250.0), Mode::Dark);
+    /// assert_eq!(p.primary.hue, 250.0);
+    /// assert!(p.primary().contrast(p.surface()) >= Palette::UI_NONTEXT);
+    /// assert!(p.on(p.surface()).contrast(p.surface()) >= Palette::AA_TEXT);
+    /// ```
+    pub fn from_seed(seed: Color, mode: Mode) -> Self {
+        // A seed out of a computation can arrive NaN; a palette that then
+        // paints nothing is worse than one that paints grey.
+        let ok = |v: f32, fallback| if v.is_finite() { v } else { fallback };
+        let hue = ok(seed.hue(), 0.0).rem_euclid(360.0);
+        let chroma = ok(seed.chroma(), 0.0).clamp(0.0, 0.33);
+        let around = |turn: f32| Pigment::new((hue + turn).rem_euclid(360.0), chroma);
+        Self {
+            mode,
+            // Enough hue to tell a warm interface from a cool one at a
+            // glance, not enough to read as a colour.
+            neutral: Pigment::new(hue, (chroma * 0.1).min(0.02)),
+            primary: around(0.0),
+            secondary: around(40.0),
+            tertiary: around(-40.0),
+            ..Self::NEUTRAL
+        }
+    }
+
     /// The same palette, lit the other way. This is the entire theme switch.
     pub const fn with_mode(self, mode: Mode) -> Self {
         Self { mode, ..self }
@@ -1017,5 +1068,53 @@ mod tests {
             ..Palette::NEUTRAL
         }
         .is_valid());
+    }
+
+    #[test]
+    fn a_seeded_palette_is_legible_in_both_modes() {
+        for mode in [Mode::Light, Mode::Dark] {
+            for hue in (0..360).step_by(15) {
+                let seed = Color::oklch(0.6, 0.2, hue as f32);
+                let p = Palette::from_seed(seed, mode);
+                assert!(p.is_valid(), "{mode:?} {hue}");
+                for role in [
+                    p.primary,
+                    p.secondary,
+                    p.tertiary,
+                    p.success,
+                    p.warning,
+                    p.danger,
+                ] {
+                    let fill = p.role(role);
+                    for (name, under) in [("bg", p.background()), ("surface", p.surface())] {
+                        let c = fill.contrast(under);
+                        assert!(c >= Palette::UI_NONTEXT, "{mode:?} {hue} on {name}: {c}");
+                    }
+                    // AA on the surfaces text actually sits on; large-text
+                    // AA on the saturated fill itself, which is the `on`
+                    // ceiling the doc names.
+                    for under in [p.background(), p.surface()] {
+                        let ink = p.on(under).contrast(under);
+                        assert!(
+                            ink >= Palette::AA_TEXT - 0.01,
+                            "{mode:?} {hue} ink {ink:.2}"
+                        );
+                    }
+                    let ink = p.on(fill).contrast(fill);
+                    assert!(ink >= Palette::AA_LARGE, "{mode:?} {hue} on fill {ink:.2}");
+                }
+                assert_eq!(p.primary.hue, hue as f32);
+                assert!(p.neutral.chroma <= 0.02, "the greys stay grey");
+            }
+        }
+    }
+
+    #[test]
+    fn a_seed_no_one_should_have_sent_still_paints() {
+        let p = Palette::from_seed(Color::oklch(0.5, f32::NAN, f32::NAN), Mode::Dark);
+        assert!(p.is_valid());
+        assert_eq!((p.primary.hue, p.primary.chroma), (0.0, 0.0));
+        let hot = Palette::from_seed(Color::oklch(0.5, 9.0, 400.0), Mode::Light);
+        assert_eq!((hot.primary.hue, hot.primary.chroma), (40.0, 0.33));
     }
 }

@@ -14,15 +14,22 @@ use mui_geometry::CornerStyle;
 use mui_geometry::Path;
 use mui_layout::{Node, Size, Spacing};
 use mui_motion::Spring;
+use mui_text::Weight;
 use std::sync::Arc;
 
 /// One stroke or fill a canvas hands back, in the canvas's own pixels.
+///
+/// A draw with a [`tag`](Draw::tag) is also the canvas node's hit shape:
+/// see [`Draw::hit`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct Draw {
     pub path: Path,
     pub fill: Fill,
     /// Stroke width; `0` fills.
     pub width: f64,
+    /// Names this shape as a hit target of the canvas node. The runtime
+    /// reports it as the node's own gesture, tagged with this name.
+    pub tag: Option<Arc<str>>,
 }
 impl Draw {
     pub fn fill(path: Path, fill: impl Into<Fill>) -> Self {
@@ -30,6 +37,7 @@ impl Draw {
             path,
             fill: fill.into(),
             width: 0.0,
+            tag: None,
         }
     }
     pub fn stroke(path: Path, fill: impl Into<Fill>, width: f64) -> Self {
@@ -37,7 +45,44 @@ impl Draw {
             path,
             fill: fill.into(),
             width,
+            tag: None,
         }
+    }
+    /// Geometry that responds but paints nothing: the fat target around a
+    /// hairline, or a knot's grab radius.
+    ///
+    /// ```
+    /// use mui_scene::prelude::*;
+    /// # use mui_scene::Draw;
+    /// let square = [(12., 12.), (28., 12.), (28., 28.), (12., 28.)];
+    /// let grab = Draw::hit(Path::polyline(square.map(|(x, y)| Point::new(x, y)), true), "knot-0");
+    /// assert!(grab.fill.is_none());
+    /// ```
+    pub fn hit(path: Path, tag: impl Into<Arc<str>>) -> Self {
+        Self {
+            path,
+            fill: Fill::None,
+            width: 0.0,
+            tag: Some(tag.into()),
+        }
+    }
+    /// Name this drawn shape, so the pointer inside it -- and nowhere else
+    /// in the node's frame -- is a gesture on the canvas. Read the name back
+    /// with `Ui::tag`.
+    ///
+    /// A stroke is hit-tested by its path's *fill*, not its outline: tag a
+    /// closed shape, or add a [`Draw::hit`] beside the stroke.
+    ///
+    /// ```
+    /// use mui_scene::prelude::*;
+    /// # use mui_scene::Draw;
+    /// let tri = [(0., 0.), (20., 0.), (10., 16.)].map(|(x, y)| Point::new(x, y));
+    /// let ring = Draw::fill(Path::polyline(tri, true), Primary).tag("ring");
+    /// assert_eq!(ring.tag.as_deref(), Some("ring"));
+    /// ```
+    pub fn tag(mut self, tag: impl Into<Arc<str>>) -> Self {
+        self.tag = Some(tag.into());
+        self
     }
 }
 
@@ -68,6 +113,10 @@ pub enum State {
     Hover,
     Press,
     Focus,
+    /// Switched off: see [`Styled::disabled`]. Unlike the other three it is
+    /// declared by the tree rather than discovered by the runtime, and the
+    /// node it is on responds to nothing.
+    Disabled,
 }
 
 /// What a node looks like in one [`State`]: its resting style in, the style
@@ -151,10 +200,19 @@ pub struct Element {
     pub content: Content,
     /// Text size in pixels; `None` is the theme's.
     pub text_size: Option<f64>,
+    /// How heavy the glyphs are drawn. See [`Styled::text_weight`].
+    pub weight: Weight,
+    /// A string this text node is at least as wide as, whatever it currently
+    /// says. See [`Styled::reserve`].
+    pub reserve: Option<String>,
     /// Shown after the pointer rests on the node.
     pub tip: Option<String>,
     /// Takes keyboard focus on click and on Tab.
     pub focusable: bool,
+    /// Switched off: no hit testing, no focus, and the look declared for
+    /// [`State::Disabled`]. Inherited by the subtree. See
+    /// [`Styled::disabled`].
+    pub disabled: bool,
     /// A row whose text children share one baseline. See [`Styled::baseline`].
     pub baseline: bool,
     /// Cap a wrapped label at this many lines. See [`Styled::lines`].
@@ -469,6 +527,39 @@ pub trait Styled: Paints {
         self.element_mut().text_size = Some(px);
         self
     }
+    /// How heavy this label's glyphs are, as a position on the font's `wght`
+    /// axis. Inherited by nothing: a weight is a property of the run, so a
+    /// row of labels states it per label.
+    ///
+    /// ```
+    /// use mui_scene::prelude::*;
+    /// let heading = text("Oscillator").text_weight(Weight::BOLD);
+    /// assert_eq!(heading.payload().weight, Weight::BOLD);
+    /// ```
+    fn text_weight(mut self, w: Weight) -> Self {
+        self.element_mut().weight = w;
+        self
+    }
+    /// Measure this text node as if it said `s`, whenever `s` is the wider
+    /// of the two: a readout keeps its box while its value changes, so the
+    /// row beside it does not shuffle every frame.
+    ///
+    /// Give it the widest string the node can ever show -- `"-88.8 dB"`, not
+    /// the value now. It sets a floor, never a ceiling: a longer string than
+    /// reserved still measures at its own width.
+    ///
+    /// ```
+    /// use mui_scene::prelude::*;
+    /// let spec = SceneSpec::new(row![text("0.0 dB").reserve("-88.8 dB").id("gain")]);
+    /// let wide = resolve_scene(&spec).unwrap().surface("gain").unwrap().frame.size.width;
+    /// let bare = SceneSpec::new(row![text("0.0 dB").id("gain")]);
+    /// let bare = resolve_scene(&bare).unwrap().surface("gain").unwrap().frame.size.width;
+    /// assert!(wide > bare);
+    /// ```
+    fn reserve(mut self, s: impl Into<String>) -> Self {
+        self.element_mut().reserve = Some(s.into());
+        self
+    }
     /// Declare what this node looks like while hovered, pressed or focused,
     /// beside what it looks like at rest. `f` is handed the resting style,
     /// so it edits rather than replaces, and a later `.fill(..)` is still
@@ -514,6 +605,27 @@ pub trait Styled: Paints {
     }
     fn focusable(mut self) -> Self {
         self.element_mut().focusable = true;
+        self
+    }
+    /// Switch this node -- and everything under it -- off: it drops out of
+    /// hit testing and out of Tab, and it paints whatever it declared for
+    /// [`State::Disabled`]. A greyed control that still drags is worse than
+    /// no grey at all, so the look and the gate are one call.
+    ///
+    /// Takes the flag rather than being a marker, because the caller almost
+    /// always has one already (`.disabled(!module.enabled)`).
+    ///
+    /// ```
+    /// use mui_scene::prelude::*;
+    /// let bypassed = leaf(64., 28.)
+    ///     .fill(Primary)
+    ///     .on(State::Disabled, |s| s.fill(Ink.alpha(0.2)))
+    ///     .disabled(true)
+    ///     .id("osc-2");
+    /// assert!(bypassed.payload().disabled);
+    /// ```
+    fn disabled(mut self, on: bool) -> Self {
+        self.element_mut().disabled = on;
         self
     }
     /// Spring this node's paint toward whatever it is next declared to be,

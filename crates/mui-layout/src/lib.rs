@@ -29,7 +29,7 @@ pub(crate) use measure::{
     cell_default, grid_rows, label, measure, place, wrap_lines, Measured, Pass,
 };
 pub(crate) use node::Kind;
-pub(crate) use pin::{inside, Pins};
+pub(crate) use pin::{inside, Pins, Viewport};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Frame {
@@ -67,6 +67,7 @@ impl Frame {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Layout {
     pub size: Size,
+    min: Size,
     frames: BTreeMap<String, Frame>,
     /// Every node's frame, in tree order (parent first, then children in
     /// declaration order). A walk of the same tree indexes straight into it,
@@ -74,6 +75,23 @@ pub struct Layout {
     order: Vec<Frame>,
 }
 impl Layout {
+    /// The smallest this tree can be squeezed to: every `minimum`, padding and
+    /// unsqueezable leaf in it, summed along the axis it sits on. A scroll
+    /// node contributes nothing on its scrolling axis, which is the point of
+    /// one. A host that owns a window refuses anything smaller; below it
+    /// [`resolve`] answers [`Error::InsufficientSpace`].
+    ///
+    /// ```
+    /// use mui_layout::{column, leaf, resolve, Size};
+    /// let fixed = leaf(40., 30.).min_size(Size::new(40., 30.));
+    /// let tree = column([fixed, leaf(40., 30.)]).pad(8.);
+    /// let l = resolve(&tree, Some(Size::new(400., 300.)), Default::default()).unwrap();
+    /// // The second leaf states no minimum, so it may be squeezed to nothing.
+    /// assert_eq!(l.min_size(), Size::new(56., 46.));
+    /// ```
+    pub fn min_size(&self) -> Size {
+        self.min
+    }
     pub fn frame(&self, key: &str) -> Option<Frame> {
         self.frames.get(key).copied()
     }
@@ -210,7 +228,7 @@ pub fn resolve_with<P>(
         root: size,
         scale,
     };
-    arrange(&m, "root", [0.0, 0.0], size, &pins(&empty), &mut out).map_err(fix)?;
+    arrange(&m, "root", [0.0, 0.0], size, &pins(&empty), None, &mut out).map_err(fix)?;
     // ponytail: one extra arrange resolves every pin, because a float takes no
     // space and so cannot move an anchor. A pin whose anchor is itself inside a
     // pinned float reads that float's first-pass position; give the pass a
@@ -218,10 +236,20 @@ pub fn resolve_with<P>(
     if pass.pinned {
         let anchors = std::mem::take(&mut out.0);
         out.1.clear();
-        arrange(&m, "root", [0.0, 0.0], size, &pins(&anchors), &mut out).map_err(fix)?;
+        arrange(
+            &m,
+            "root",
+            [0.0, 0.0],
+            size,
+            &pins(&anchors),
+            None,
+            &mut out,
+        )
+        .map_err(fix)?;
     }
     Ok(Layout {
         size,
+        min: m.floor,
         frames: out.0,
         order: out.1,
     })

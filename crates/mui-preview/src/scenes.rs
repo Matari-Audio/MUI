@@ -40,12 +40,15 @@ pub fn all() -> Vec<Box<dyn PreviewScene>> {
         Box::new(Fields::default()),
         Box::new(Tips),
         Box::new(Curve::default()),
+        Box::new(Hits::default()),
         Box::new(Swap::default()),
         Box::new(Images::new()),
         Box::new(Wrapping::default()),
         Box::new(Motion::default()),
         Box::new(Cells),
         Box::new(Select::default()),
+        Box::new(Gestures::default()),
+        Box::new(Switched::default()),
         Box::new(Editor),
         Box::new(Effects),
     ]
@@ -286,22 +289,33 @@ impl PreviewScene for Scrolling {
         "Scroll"
     }
     fn about(&self) -> &'static str {
-        "A .scroll() column taller than its box, with a .mask() fade over the last rows. The wheel picks the surface under the pointer; a hit outside the clip is not a hit."
+        "A .scroll() column taller than its box, with a .mask() fade over the last rows and .sticky() section headers that hold the top edge until their section ends. The wheel picks the surface under the pointer; a hit outside the clip is not a hit."
     }
     fn specimen(&mut self, ui: &mut Ui) -> El {
-        let rows: Vec<El> = self
+        // Eight bands to a section, each behind a header that rides the top
+        // edge of the viewport while its own bands are still in it.
+        let sections: Vec<El> = self
             .gains
-            .iter_mut()
+            .chunks_mut(8)
             .enumerate()
-            .map(|(i, g)| {
-                slider(
-                    ui,
-                    &format!("band-{i}"),
-                    &format!("band {i}"),
-                    g,
-                    -24.0..=6.0,
-                )
-                .el()
+            .map(|(s, bands)| {
+                let rows = bands.iter_mut().enumerate().map(|(j, g)| {
+                    let i = s * 8 + j;
+                    slider(
+                        ui,
+                        &format!("band-{i}"),
+                        &format!("band {i}"),
+                        g,
+                        -24.0..=6.0,
+                    )
+                    .el()
+                });
+                let head = label(format!("octave {s}"))
+                    .w(Len::Pct(100.))
+                    .pad_xy(0., 4.)
+                    .fill(Role::Surface)
+                    .sticky();
+                column(std::iter::once(head).chain(rows)).gap(S)
             })
             .collect();
         // Source-atop, so the ramp paints the surface colour back over the
@@ -313,8 +327,8 @@ impl PreviewScene for Scrolling {
                 (1.0, Role::Surface.into()),
             ],
         );
-        column(rows)
-            .gap(S)
+        column(sections)
+            .gap(M)
             .pad(M)
             .scroll()
             .size(320.0, 340.0)
@@ -453,6 +467,93 @@ impl PreviewScene for Curve {
         .radius(16.0)
         .fill(Role::Surface)
         .id("curve")
+    }
+}
+
+/// A canvas whose drawn geometry is its hit geometry: the ring responds
+/// inside the ring, and the hole it leaves does not.
+#[derive(Default)]
+pub struct Hits {
+    held: Option<usize>,
+}
+fn circle(c: Point, r: f64, rev: bool) -> impl Iterator<Item = Point> {
+    (0..64).map(move |i| {
+        let k = if rev { 64 - i } else { i };
+        let a = std::f64::consts::TAU * f64::from(k) / 64.0;
+        Point::new(c.x + r * a.cos(), c.y + r * a.sin())
+    })
+}
+/// Outer circle one way round, inner the other, so the hole is outside
+/// under the non-zero rule the renderer fills by -- and the hit test that
+/// reads the same path agrees with what you can see.
+fn ring(c: Point, outer: f64, inner: f64) -> Path {
+    let mut p = Path::polyline(circle(c, outer, false), true);
+    for (i, q) in circle(c, inner, true).enumerate() {
+        p = if i == 0 { p.move_to(q) } else { p.line_to(q) };
+    }
+    p.close()
+}
+impl PreviewScene for Hits {
+    fn name(&self) -> &'static str {
+        "Canvas hits"
+    }
+    fn about(&self) -> &'static str {
+        "Draw::tag makes a drawn shape a hit shape. The ring lights only inside the ring; each knot answers for itself; the hole is not the dial."
+    }
+    fn specimen(&mut self, ui: &mut Ui) -> El {
+        let tag = ui.tag("dial").map(str::to_owned);
+        if ui.get("dial").pressed {
+            self.held = tag
+                .as_deref()
+                .and_then(|t| t.strip_prefix("knot-"))
+                .and_then(|n| n.parse().ok());
+        }
+        let (lit, held) = (tag.clone(), self.held);
+        let dial = canvas(move |size| {
+            let c = Point::new(size.width / 2.0, size.height / 2.0);
+            let band = ring(c, 70.0, 44.0);
+            let mut draws = vec![Draw::fill(
+                band,
+                if lit.as_deref() == Some("band") {
+                    Role::Primary
+                } else {
+                    Role::Field
+                },
+            )
+            .tag("band")];
+            for i in 0..3usize {
+                let a = std::f64::consts::TAU * i as f64 / 3.0;
+                let at = Point::new(c.x + 57.0 * a.cos(), c.y + 57.0 * a.sin());
+                let knot = format!("knot-{i}");
+                let on = held == Some(i) || lit.as_deref() == Some(&*knot);
+                draws.push(
+                    Draw::fill(
+                        Path::polyline(circle(at, 9.0, false), true),
+                        if on { Role::Ink } else { Role::Dim },
+                    )
+                    .tag(knot),
+                );
+            }
+            draws
+        })
+        .square(200.0)
+        .radius(100.0)
+        .id("dial");
+        column([
+            dial,
+            text(match (&tag, self.held) {
+                (Some(t), _) => format!("over {t}"),
+                (None, Some(i)) => format!("last grabbed knot-{i}"),
+                (None, None) => "over nothing".to_owned(),
+            })
+            .fill(Role::Dim),
+        ])
+        .gap(M)
+        .pad(L)
+        .align(Align::Center)
+        .radius(20.0)
+        .fill(Role::Surface)
+        .id("hits")
     }
 }
 
@@ -797,6 +898,115 @@ impl PreviewScene for Select {
         .radius(16.0)
         .fill(Role::Surface)
         .id("select")
+    }
+}
+
+/// Modifiers and the second button, which is what a parameter gesture is
+/// actually made of: Shift is the fine drag, secondary resets to default.
+#[derive(Default)]
+pub struct Gestures {
+    cutoff: f64,
+    gain: f64,
+}
+impl Gestures {
+    const DEFAULTS: [f64; 2] = [0.5, -6.0];
+
+    /// A secondary click on `id` resets `value`. The button is on the same
+    /// `Response` the drag came from, so nothing else has to be tracked.
+    fn reset(ui: &Ui, id: &str, value: &mut f64, default: f64) {
+        if ui.get(id).clicked_with(Button::Secondary) {
+            *value = default;
+        }
+    }
+}
+impl PreviewScene for Gestures {
+    fn name(&self) -> &'static str {
+        "Pointer gestures"
+    }
+    fn about(&self) -> &'static str {
+        "Drag with Shift held for a tenth of the travel; right-click a control to reset it. The readout is the live Response."
+    }
+    fn specimen(&mut self, ui: &mut Ui) -> El {
+        Self::reset(ui, "g-cutoff", &mut self.cutoff, Self::DEFAULTS[0]);
+        Self::reset(ui, "g-gain", &mut self.gain, Self::DEFAULTS[1]);
+        let r = ui.get("g-cutoff");
+        let said = |on: bool, s: &str| if on { s } else { "-" }.to_owned();
+        column([
+            knob(ui, "g-cutoff", "Cutoff", &mut self.cutoff, 0.0..=1.0).el(),
+            slider(ui, "g-gain", "Gain", &mut self.gain, -24.0..=6.0).el(),
+            row([
+                text(said(r.mods.shift, "shift")).fill(Role::Dim),
+                text(said(r.mods.alt, "alt")).fill(Role::Dim),
+                text(said(r.mods.ctrl, "ctrl")).fill(Role::Dim),
+                spacer(),
+                text(match r.button {
+                    Some(Button::Primary) => "primary",
+                    Some(Button::Secondary) => "secondary",
+                    Some(Button::Middle) => "middle",
+                    None => "-",
+                })
+                .fill(Role::Dim),
+            ])
+            .gap(S)
+            .align(Align::Center),
+        ])
+        .gap(M)
+        .pad(L)
+        .width(300.0)
+        .radius(20.0)
+        .fill(Role::Surface)
+        .id("gestures")
+    }
+}
+
+/// A bypassed rack and a key nobody owns: the two things a shortcut-driven
+/// editor needs and the five widgets did not have.
+#[derive(Default)]
+pub struct Switched {
+    bypassed: bool,
+    cutoff: f64,
+    fired: usize,
+    query: String,
+}
+impl PreviewScene for Switched {
+    fn name(&self) -> &'static str {
+        "Disabled + shortcuts"
+    }
+    fn about(&self) -> &'static str {
+        "Space or F1 counts wherever the pointer is -- until the field takes the focus. Bypass greys the rack and it stops responding."
+    }
+    fn specimen(&mut self, ui: &mut Ui) -> El {
+        if ui
+            .shortcuts()
+            .iter()
+            .any(|k| matches!(k.key, Key::Space | Key::Function(1)))
+        {
+            self.fired += 1;
+        }
+        let bypass = toggle(ui, "sw-bypass", &mut self.bypassed).size(S).el();
+        let rack = row([knob(ui, "sw-cut", "Cutoff", &mut self.cutoff, 0.0..=1.0).el()])
+            .pad(M)
+            .radius(12.0)
+            .fill(Role::Field)
+            // One call for both halves: the look and the gate.
+            .on(State::Disabled, |s| s.fill(Ink.alpha(0.04)))
+            .disabled(self.bypassed)
+            .opacity(if self.bypassed { 0.4 } else { 1.0 })
+            .id("sw-rack");
+        column([
+            row([label("bypass"), spacer(), bypass])
+                .gap(S)
+                .align(Align::Center),
+            rack,
+            text_input(ui, "sw-query", &mut self.query),
+            caption(format!("shortcut fired {} times", self.fired)),
+        ])
+        .gap(M)
+        .pad(L)
+        .width(300.0)
+        .radius(20.0)
+        .fill(Role::Surface)
+        .id("switched")
     }
 }
 

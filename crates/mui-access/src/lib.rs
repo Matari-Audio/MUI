@@ -75,8 +75,12 @@ fn node(s: &ResolvedSurface, sem: Option<&Semantics>) -> Node {
     n.set_label(sem.label.clone().unwrap_or_else(|| s.key.to_string()));
     let f = s.frame;
     n.set_bounds(Rect::new(f.x, f.y, f.right(), f.bottom()));
-    if s.focusable {
+    if s.focusable && !s.disabled {
         n.add_action(Action::Focus);
+    }
+    // A screen reader is told the same thing the pointer is: this one is off.
+    if s.disabled {
+        n.set_disabled();
     }
     n
 }

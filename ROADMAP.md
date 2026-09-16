@@ -30,6 +30,10 @@ public function and a test behind it.
 - [x] Clips: `.clip()` and `.scroll()` as a `Clip`/`Unclip` layer pair in the
       paint list, honoured by the renderer and by hit testing.
 - [x] Floats: `.float()` keeps its layout slot and is painted after the root.
+- [x] Sticky: `.sticky()` pins a child to the enclosing scroll viewport's
+      leading edge for the length of its section, through the same second
+      placement pass as a pin, and `Layout::min_size` / `Ui::min_size` report
+      the intrinsic floor a host sizes its window against.
 - [x] Text-run cache across frames (`resolve_scene_with`, owned by `Ui`).
 - [x] Glyph runs: text reaches Vello as a hinted run, not a filled outline;
       the font blob is interned so Vello's hinted-outline cache survives.
@@ -131,6 +135,35 @@ public function and a test behind it.
       typed text, and `Frame::ime` puts the host's candidate window under the
       field. No selection highlight while a composition is up.
 
+- [x] Pointer modifiers and the second button: `PointerInput` carries a
+      `Buttons` set and the shared `Mods`, `Response` reports the button that
+      pressed, the modifiers at the press and now, the travel since the press
+      and `drag_axis()`, and Shift is the fine drag every parameter wants
+      (`Ui::drag` applies `FINE_DRAG`). A click is `clicked_with(button)`, so
+      a secondary click resets a control instead of toggling it. The preview
+      feeds winit's three buttons and its modifiers; the Pointer gestures
+      scene is the proof.
+
+- [x] Canvas hit shapes: a `Draw` carries a `tag`, and a tagged draw is the
+      canvas node's hit geometry instead of its frame -- `Draw::hit` is the
+      shape that responds without painting. The pointer outside every tagged
+      path is outside the node, so a drawn ring answers in the ring and not
+      in its hole, and `Ui::tag(id)` names the shape under the pointer,
+      latched at the press so a drag keeps the knot it grabbed. The Canvas
+      hits scene is the proof.
+
+- [x] `State::Disabled` and `.disabled(flag)`, which are one feature: the
+      node paints what it declared for `State::Disabled`, drops out of the
+      hit map and out of Tab, reports `disabled` to `mui-access`, and passes
+      all of that to its subtree. A gesture already in flight on it is
+      cancelled with the `Edit::End` its host is owed.
+
+- [x] `Ui::shortcuts()`: every key this frame, whatever holds the focus, so
+      undo/redo and the function keys work with nothing selected. A focused
+      `text_input` consumes the stream and nothing else does. `Key` grew
+      `Space`, `PageUp`, `PageDown` and `Function(n)`; the preview feeds all
+      of them. The Disabled + shortcuts scene is the proof.
+
 - [x] The crate split: theme data, motion and the scalar/spacing vocabulary
       sit under the element tree (`mui-style`, `mui-motion`, `mui-geometry`),
       `mui-core` is `mui-scene`, the controls are `mui-widgets` behind a
@@ -138,10 +171,24 @@ public function and a test behind it.
       prelude. The graph is acyclic and every public path is unchanged;
       `mui::core` stays as a deprecated alias of `mui::scene` for one release.
 
+- [x] Live readouts and one-seed palettes: `.reserve("-88.8 dB")` measures a
+      text node for the widest value it will ever show, `Ui::set_text(id, s)`
+      then swaps what it says while the resolved frame stands -- one glyph run
+      re-shapes, the tree is not walked again, which is the whole point at 60
+      Hz. `.text_weight(Weight::BOLD)` drives the run's `wght` axis and the
+      position reaches the renderer as `Text::coords`, so a bold run is drawn
+      at the instance it was measured at. `Palette::from_seed(accent, mode)`
+      derives every role from one colour, hue-swept in both modes against
+      `UI_NONTEXT` and `AA_TEXT` instead of trusting a hex table.
+
 ## Missing
 
-- [ ] `State::Disabled`: nothing in `Ui` reports disabled, and the variant
-      only makes sense beside the flag that gates hit testing.
+- [ ] `Ui::set_text` swaps one line: a wrapped label re-shapes to a single
+      run rather than breaking again, because the swap deliberately does no
+      layout. Re-breaking needs the measure pass it is avoiding.
+- [ ] `Ui::set_text` does not touch what `mui-access` reports; a screen
+      reader hears the value the last resolved tree carried.
+
 - [ ] A pin whose anchor is itself inside another pinned float reads that
       float's first-pass position; a dependency-ordered pin pass is the fix.
 - [ ] Spring interpolation of gradient *stops*: `Ui`'s channels only ever

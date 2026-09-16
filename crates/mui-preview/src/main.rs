@@ -71,9 +71,34 @@ fn named(k: NamedKey) -> Option<mui::prelude::Key> {
         NamedKey::ArrowDown => K::Down,
         NamedKey::Home => K::Home,
         NamedKey::End => K::End,
-        _ => return None,
+        NamedKey::Space => K::Space,
+        NamedKey::PageUp => K::PageUp,
+        NamedKey::PageDown => K::PageDown,
+        // F1..F12 by position: twelve match arms would say the same thing.
+        _ => {
+            return FUNCTION
+                .iter()
+                .position(|f| *f == k)
+                .map(|i| K::Function(i as u8 + 1))
+        }
     })
 }
+
+/// winit's function keys, in order, so `F3` is `Function(3)`.
+const FUNCTION: [NamedKey; 12] = [
+    NamedKey::F1,
+    NamedKey::F2,
+    NamedKey::F3,
+    NamedKey::F4,
+    NamedKey::F5,
+    NamedKey::F6,
+    NamedKey::F7,
+    NamedKey::F8,
+    NamedKey::F9,
+    NamedKey::F10,
+    NamedKey::F11,
+    NamedKey::F12,
+];
 
 /// A theme file: `key = value` a line, `#` starts a comment, everything
 /// unstated stays [`skin::SKIN`]'s. Returns what failed to parse so the caller
@@ -177,6 +202,8 @@ fn inspect(
         size: LABEL as f32,
         origin: Point::new(SIDEBAR + 12.0, height - 12.0),
         glyphs: run.glyphs.iter().map(|&(id, x)| (id, x as f32)).collect(),
+        weight: Default::default(),
+        coords: Arc::from(&[][..]),
     });
 }
 
@@ -277,10 +304,17 @@ impl App {
         }
     }
 
-    fn queue(&mut self, pos: Option<Option<Point>>, down: Option<bool>) {
+    /// One pointer sample. `button` is the one whose state changed, if any;
+    /// the modifiers ride on every sample, because a gesture reads them long
+    /// after the key that set them was pressed.
+    fn queue(&mut self, pos: Option<Option<Point>>, button: Option<(Button, bool)>) {
         self.pointer = PointerInput {
             pos: pos.unwrap_or(self.pointer.pos),
-            primary_down: down.unwrap_or(self.pointer.primary_down),
+            buttons: match button {
+                Some((b, down)) => self.pointer.buttons.set(b, down),
+                None => self.pointer.buttons,
+            },
+            mods: self.mods,
         };
         self.events.push(self.pointer);
     }
@@ -333,15 +367,23 @@ impl App {
             text("MUI preview").text_size(16.0),
             text(scene.about()).fill(Role::Dim),
         ];
-        side.extend((0..self.scenes.len()).map(|i| {
-            let on = i == self.selected;
-            let (item, _) = button(ui, &format!("scene-{i}"), self.scenes[i].name());
-            item.variant(if on { Variant::Solid } else { Variant::Soft })
-                .size(S)
-                .el()
-                .radius(Corner::Field)
-                .w(pct(100.))
-        }));
+        // The list grows with the gallery, so it takes the slack and scrolls;
+        // the switches below it stay put instead of being squeezed to nothing.
+        side.push(
+            column((0..self.scenes.len()).map(|i| {
+                let on = i == self.selected;
+                let (item, _) = button(ui, &format!("scene-{i}"), self.scenes[i].name());
+                item.variant(if on { Variant::Solid } else { Variant::Soft })
+                    .size(S)
+                    .el()
+                    .radius(Corner::Field)
+                    .w(pct(100.))
+            }))
+            .gap(S)
+            .scroll()
+            .grow(1.0)
+            .id("scene-list"),
+        );
         let scene = &mut self.scenes[self.selected];
         let switch = |label: &str, id: &str, v: &mut bool| {
             row([
@@ -549,8 +591,8 @@ impl App {
             (f.x + f.size.width / 2.0) * scale,
             (f.y + f.size.height / 2.0) * scale,
         );
-        self.queue(Some(Some(c)), Some(true));
-        self.queue(None, Some(false));
+        self.queue(Some(Some(c)), Some((Button::Primary, true)));
+        self.queue(None, Some((Button::Primary, false)));
     }
 
     fn draw(&mut self) {
@@ -670,12 +712,15 @@ impl ApplicationHandler<AccessEvent> for App {
             }
             WindowEvent::CursorLeft { .. } => self.queue(Some(None), None),
             WindowEvent::Focused(false) => self.cancel(),
-            WindowEvent::MouseInput {
-                state,
-                button: MouseButton::Left,
-                ..
-            } => {
-                self.queue(None, Some(state == ElementState::Pressed));
+            WindowEvent::MouseInput { state, button, .. } => {
+                let b = match button {
+                    MouseButton::Left => Button::Primary,
+                    MouseButton::Right => Button::Secondary,
+                    MouseButton::Middle => Button::Middle,
+                    // Back, forward and the rest are not gestures MUI knows.
+                    _ => return,
+                };
+                self.queue(None, Some((b, state == ElementState::Pressed)));
             }
             WindowEvent::Ime(e) => {
                 self.ime.push(match e {
@@ -693,6 +738,9 @@ impl ApplicationHandler<AccessEvent> for App {
                     alt: s.alt_key(),
                     cmd: s.super_key(),
                 };
+                // A modifier pressed without moving the pointer still changes
+                // the gesture in flight.
+                self.pointer.mods = self.mods;
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 // winit points the wheel at the viewer; a scroll offset points
@@ -790,7 +838,8 @@ mod tests {
     fn at(x: f64, y: f64, down: bool) -> PointerInput {
         PointerInput {
             pos: Some(Point::new(x, y)),
-            primary_down: down,
+            buttons: Buttons::default().set(Button::Primary, down),
+            ..PointerInput::default()
         }
     }
     fn centre(app: &App, key: &str) -> Point {
@@ -932,7 +981,13 @@ mod tests {
     #[test]
     fn the_wheel_scrolls_and_a_drag_between_pills_swaps_them() {
         let mut app = App::new();
-        app.selected = 5;
+        let pick = |app: &App, name| {
+            app.scenes
+                .iter()
+                .position(|s| s.name() == name)
+                .expect(name)
+        };
+        app.selected = pick(&app, "Scroll");
         app.tick(SIZE, 1.0, PointerInput::default());
         let c = centre(&app, "scroll");
         app.tick(
@@ -946,7 +1001,7 @@ mod tests {
         );
         assert!(app.ui.scroll("scroll")[1] > 0.0, "the wheel moved nothing");
 
-        app.selected = 9;
+        app.selected = pick(&app, "Drag");
         app.tick(SIZE, 1.0, PointerInput::default());
         let width = |app: &App, key| {
             app.ui
