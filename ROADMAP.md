@@ -174,6 +174,17 @@ public function and a test behind it.
       `Space`, `PageUp`, `PageDown` and `Function(n)`; the preview feeds all
       of them. The Disabled + shortcuts scene is the proof.
 
+- [x] Drag payloads and composed ids. `Ui::start_drag(id, payload)` attaches
+      any `Any + Send` value to the gesture in flight, `Ui::dragging::<T>()`
+      is the look at it a drop target wants before it lights up, and
+      `Ui::dropped_on::<T>(id)` takes it -- once, on the one frame the drop
+      is reported, and only from the drag that actually landed there. A ghost
+      stays the caller's: it is a `.float()` pinned to the pointer's surface.
+      `Id::of("osc").slot(3).field("gain")` composes a name into the same
+      `/`-joined key space with no allocation up to 46 bytes, `.id()` takes
+      anything `Into<Id>`, and `&str` still works everywhere it did. The
+      Pointer gestures scene is the proof.
+
 - [x] The crate split: theme data, motion and the scalar/spacing vocabulary
       sit under the element tree (`mui-style`, `mui-motion`, `mui-geometry`),
       `mui-core` is `mui-scene`, the controls are `mui-widgets` behind a
@@ -222,10 +233,11 @@ public function and a test behind it.
 - [ ] The first frame of a freshly-populated over-long `text_input` shows the
       head of the value: the widget has no inner width before its first
       layout. It catches up on the next frame.
-- [ ] Node identity: `ResolvedScene::keys` is gone (`surfaces()` yields paint
-      order and every surface carries its key), but focus rings, scroll
-      offsets and `mui-access` still key on `String` paths, so renaming a
-      node silently resets its state.
+- [ ] Node identity: `Id` makes a name cheap to compose, but it is still the
+      name that keys springs, focus rings, scroll offsets and `mui-access`,
+      so *renaming* a node -- which is what reordering a rack does -- still
+      resets its state. The fix is an identity distinct from the name,
+      threaded through those four maps.
 
 ## Order
 

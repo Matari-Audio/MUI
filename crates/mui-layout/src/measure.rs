@@ -174,8 +174,8 @@ pub(crate) fn validate_node<P>(node: &Node<P>, l: Limits) -> Result<(), Error> {
 /// nearest named ancestor is the useful thing to point at.
 pub(crate) fn label<P>(node: &Node<P>, ancestor: &str) -> String {
     node.id
-        .clone()
-        .unwrap_or_else(|| format!("{ancestor} > unnamed"))
+        .as_ref()
+        .map_or_else(|| format!("{ancestor} > unnamed"), Id::to_string)
 }
 
 /// Rows of a grid, splitting where the spans fill the column count. A cell

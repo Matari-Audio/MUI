@@ -949,9 +949,17 @@ impl PreviewScene for Select {
 pub struct Gestures {
     cutoff: f64,
     gain: f64,
+    /// What has been dropped into each of the two slots.
+    slots: [Option<&'static str>; 2],
 }
+
+/// The payload one of the waveform chips carries while it is dragged. A
+/// caller's own type: MUI never looks inside it.
+struct Wave(&'static str);
+
 impl Gestures {
     const DEFAULTS: [f64; 2] = [0.5, -6.0];
+    const WAVES: [&'static str; 3] = ["sine", "saw", "noise"];
 
     /// A secondary click on `id` resets `value`. The button is on the same
     /// `Response` the drag came from, so nothing else has to be tracked.
@@ -966,16 +974,52 @@ impl PreviewScene for Gestures {
         "Pointer gestures"
     }
     fn about(&self) -> &'static str {
-        "Drag with Shift held for a tenth of the travel; right-click a control to reset it. The readout is the live Response."
+        "Drag with Shift held for a tenth of the travel; right-click a control to reset it. Drag a wave onto a slot: the payload is typed and lands once."
     }
     fn specimen(&mut self, ui: &mut Ui) -> El {
         Self::reset(ui, "g-cutoff", &mut self.cutoff, Self::DEFAULTS[0]);
         Self::reset(ui, "g-gain", &mut self.gain, Self::DEFAULTS[1]);
         let r = ui.get("g-cutoff");
         let said = |on: bool, s: &str| if on { s } else { "-" }.to_owned();
+
+        // A list of chips, each of which starts a typed drag, and two slots
+        // that take one. Ids are composed, not formatted: `Id::of("g-wave")
+        // .slot(i)` allocates nothing per frame.
+        let chips: Vec<El> = Self::WAVES
+            .iter()
+            .enumerate()
+            .map(|(i, w)| {
+                let id = Id::of("g-wave").slot(i);
+                if ui.get(&id).dragged {
+                    ui.start_drag(&id, Wave(w));
+                }
+                chip(w).cursor(Cursor::Grab).id(id)
+            })
+            .collect();
+        let slots: Vec<El> = (0..self.slots.len())
+            .map(|i| {
+                let id = Id::of("g-slot").slot(i);
+                if let Some(Wave(w)) = ui.dropped_on(&id) {
+                    self.slots[i] = Some(w);
+                }
+                // Only a slot the pointer is over lights up, and only while
+                // a wave is what is being carried.
+                let armed = ui.get(&id).drop_target && ui.dragging::<Wave>().is_some();
+                text(self.slots[i].unwrap_or("drop here"))
+                    .pad(S)
+                    .grow(1.0)
+                    .center()
+                    .radius(8.0)
+                    .fill(if armed { Role::Primary } else { Role::Field })
+                    .id(id)
+            })
+            .collect();
+
         column([
             knob(ui, "g-cutoff", "Cutoff", &mut self.cutoff, 0.0..=1.0).el(),
             slider(ui, "g-gain", "Gain", &mut self.gain, -24.0..=6.0).el(),
+            row(chips).gap(S),
+            row(slots).gap(S),
             row([
                 text(said(r.mods.shift, "shift")).fill(Role::Dim),
                 text(said(r.mods.alt, "alt")).fill(Role::Dim),
