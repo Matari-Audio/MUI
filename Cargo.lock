@@ -2008,6 +2008,7 @@ dependencies = [
 name = "mui-widgets"
 version = "0.3.0"
 dependencies = [
+ "epaint_default_fonts",
  "mui",
  "mui-geometry",
  "mui-input",

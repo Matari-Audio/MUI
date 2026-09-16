@@ -1,5 +1,6 @@
-//! The two claims that hold every control together: a variant is arithmetic on
-//! one role, and one theme unit steps every size. They live here rather than
+//! The three claims that hold every control together: a variant is arithmetic
+//! on one role, one theme unit steps every size, and a readout says what it
+//! was given. They live here rather than
 //! beside the code because they need a [`Host`], and the only one is the
 //! runtime in `mui` -- a dev-dependency, so it cannot be reached from a
 //! `#[cfg(test)]` module inside the library itself.
@@ -60,4 +61,32 @@ fn the_size_scale_steps_every_control_off_the_theme_unit() {
     // Steps are even: Xs and Xl sit two units either side of M.
     assert!(((xl - m) - (m - xs)).abs() < 0.01);
     assert!((width(toggle(&ui, "sw", &mut on).px(64.)) - 64.).abs() < 0.01);
+}
+
+/// The glyph runs a control resolves to, in paint order.
+fn runs(c: Control) -> Vec<usize> {
+    let spec = SceneSpec::new(c.el()).font(epaint_default_fonts::HACK_REGULAR.to_vec());
+    resolve_scene(&spec)
+        .expect("resolves")
+        .paint
+        .iter()
+        .filter_map(|p| p.text.as_ref().map(|t| t.glyphs.len()))
+        .collect()
+}
+
+/// A readout prints the units the parameter has, and two decimals when the
+/// caller says nothing.
+#[test]
+fn a_control_prints_the_value_text_it_is_given() {
+    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut hz = 440.0;
+    let bare = runs(slider(&mut ui, "cut", "Cutoff", &mut hz, 20.0..=20_000.0));
+    // Label, then readout: the default is `{value:.2}`, so "440.00".
+    assert_eq!(bare, vec!["Cutoff".len(), "440.00".len()], "{bare:?}");
+    let with =
+        runs(slider(&mut ui, "cut", "Cutoff", &mut hz, 20.0..=20_000.0).value_text("440 Hz"));
+    assert_eq!(with, vec!["Cutoff".len(), "440 Hz".len()], "{with:?}");
+    // A knob has no header, so the text lands under the dial.
+    let dial = runs(knob(&mut ui, "cut", "Cutoff", &mut hz, 20.0..=20_000.0).value_text("440 Hz"));
+    assert_eq!(dial, vec!["440 Hz".len()], "{dial:?}");
 }
