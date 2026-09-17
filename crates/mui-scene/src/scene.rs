@@ -1359,7 +1359,11 @@ impl<'a> Walk<'a> {
         } else {
             Path::default()
         };
-        let inner = if n.is_clip() {
+        // A weld is one contour, so its children paint inside it: a square
+        // tab's own fill stops at the filleted corner instead of poking past
+        // the shared outline.
+        let clips = n.is_clip() || s.weld;
+        let inner = if clips {
             let b = bounds(frame, self.spec.device_scale);
             let b = clip.map_or(b, |c| {
                 Bounds::new(
@@ -1374,7 +1378,7 @@ impl<'a> Walk<'a> {
         } else {
             clip
         };
-        let inner_path = if n.is_clip() {
+        let inner_path = if clips {
             // Keep every exact outline in one shared allocation for all
             // descendants. `clip` remains the rectangular fast path used by
             // existing input adapters; rounded or welded corners can now be
@@ -1469,7 +1473,7 @@ impl<'a> Walk<'a> {
                 p.width = width;
             }
         }
-        if n.is_clip() {
+        if clips {
             self.key = key.clone();
             self.push(Layer::Unclip, Path::default(), None, &clear, bg);
         }
@@ -1822,7 +1826,15 @@ mod tests {
         assert!((tab.radius() - r.radius() - 12.).abs() < 1e-9);
         assert!((r.bounds().min.x - tab.bounds().min.x - 12.).abs() < 1e-9);
         let layers: Vec<_> = s.paint.iter().map(|p| (&*p.key, p.layer)).collect();
-        assert_eq!(layers, [("root", Layer::Fill), ("tab", Layer::Shell(0))]);
+        assert_eq!(
+            layers,
+            [
+                ("root", Layer::Fill),
+                ("root", Layer::Clip),
+                ("tab", Layer::Shell(0)),
+                ("root", Layer::Unclip)
+            ]
+        );
         assert!(
             s.surface("/0/1").is_some(),
             "unnamed nodes are keyed by path"
@@ -1936,6 +1948,34 @@ mod tests {
             at("weld", Layer::Fill) < at("child", Layer::Fill)
                 && at("child", Layer::Fill) < at("weld", Layer::Stroke),
             "welded border was painted under its child: {order:?}"
+        );
+    }
+
+    #[test]
+    fn a_weld_clips_its_children_to_the_shared_contour() {
+        // A square tab welded to a rounded body: the tab's own fill must not
+        // paint the corner the fillet rounded off, so the weld clips.
+        let root = row([
+            leaf(36., 60.).fill(Role::Surface).radius(0.).id("tab"),
+            leaf(200., 120.).id("body"),
+        ])
+        .radius(20.)
+        .weld(Role::Surface)
+        .id("weld");
+        let s = resolve_scene(&SceneSpec::new(root).offered(Size::new(236., 120.))).unwrap();
+        let order: Vec<_> = s.paint.iter().map(|p| (&*p.key, p.layer)).collect();
+        let at = |key: &str, layer: Layer| order.iter().position(|x| *x == (key, layer)).unwrap();
+        assert!(
+            at("weld", Layer::Fill) < at("weld", Layer::Clip)
+                && at("weld", Layer::Clip) < at("tab", Layer::Fill)
+                && at("tab", Layer::Fill) < at("weld", Layer::Unclip),
+            "the tab painted outside the welded contour: {order:?}"
+        );
+        let clip = &s.paint[at("weld", Layer::Clip)].path;
+        let corner = clip.flatten(0.1, 20_000).unwrap().concat();
+        assert!(
+            !corner.iter().any(|p| p.x.abs() < 1e-6 && p.y.abs() < 1e-6),
+            "the clip is the square frame, not the filleted contour"
         );
     }
 
