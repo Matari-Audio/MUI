@@ -1,0 +1,9 @@
+[package]
+name = "mui-access"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+accesskit = "0.24"
+mui-scene = { path = "../mui-scene" }

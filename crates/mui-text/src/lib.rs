@@ -19,12 +19,12 @@ use skrifa::{FontRef, GlyphId, MetadataProvider as _};
 #[derive(Debug)]
 pub enum Error {
     /// The bytes are not a font this build can read.
-    Font(String),
+    Font(skrifa::raw::ReadError),
     /// The character has no glyph in this face. Fallback is the caller's job.
     MissingGlyph(char),
     /// The face has no scalable outline for that glyph (bitmap-only, say).
     NoOutline(char),
-    Draw(String),
+    Draw(skrifa::outline::DrawError),
     Geometry(mui_geometry::Error),
     InvalidOptions(&'static str),
 }
@@ -43,6 +43,8 @@ impl std::fmt::Display for Error {
 impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::Font(e) => Some(e),
+            Self::Draw(e) => Some(e),
             Self::Geometry(error) => Some(error),
             _ => None,
         }
@@ -82,6 +84,54 @@ fn checked_metric(value: f32, name: &'static str) -> Result<f64, Error> {
 /// axis bounds, so a caller cannot produce an outline the font does not define.
 pub type Axis<'a> = (&'a str, f32);
 
+/// How heavy a run is drawn, as the `wght` axis position every variable font
+/// names the same way: 400 regular, 700 bold.
+///
+/// A newtype rather than an enum because the axis is continuous -- a display
+/// face that looks right at 520 should be able to say so -- and the four
+/// constants cover what a UI usually asks for.
+///
+/// ponytail: a static face has no `wght` axis, so it draws at its one
+/// weight; nothing here synthesises a bold by smearing outlines. Ship a
+/// variable face, or a second blob for the bold, if the difference matters.
+///
+/// ```
+/// use mui_text::Weight;
+/// assert_eq!(Weight::BOLD.axis(), ("wght", 700.0));
+/// assert_eq!(Weight::default(), Weight::REGULAR);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Weight(u16);
+impl Weight {
+    pub const REGULAR: Self = Self(400);
+    pub const MEDIUM: Self = Self(500);
+    pub const SEMIBOLD: Self = Self(600);
+    pub const BOLD: Self = Self(700);
+
+    /// Any position on the axis. The face clamps it to the range it declares.
+    ///
+    /// ```
+    /// use mui_text::Weight;
+    /// assert_eq!(Weight::new(520).value(), 520);
+    /// ```
+    pub const fn new(wght: u16) -> Self {
+        Self(wght)
+    }
+    /// The number, for a caller that stores or shows it.
+    pub const fn value(self) -> u16 {
+        self.0
+    }
+    /// This weight as the axis setting [`text_run`] takes.
+    pub fn axis(self) -> Axis<'static> {
+        ("wght", f32::from(self.0))
+    }
+}
+impl Default for Weight {
+    fn default() -> Self {
+        Self::REGULAR
+    }
+}
+
 /// One variation axis the face actually declares, with the range it accepts.
 /// A UI needs this to offer a slider that cannot leave the design space.
 #[derive(Debug, Clone, PartialEq)]
@@ -95,7 +145,7 @@ pub struct AxisInfo {
 /// The variation axes of a face, in the font's own order. Empty for a static
 /// font — which is the honest answer, not an error.
 pub fn axes(font: &[u8]) -> Result<Vec<AxisInfo>, Error> {
-    let font = FontRef::new(font).map_err(|e| Error::Font(format!("{e}")))?;
+    let font = FontRef::new(font).map_err(Error::Font)?;
     Ok(font
         .axes()
         .iter()
@@ -105,6 +155,32 @@ pub fn axes(font: &[u8]) -> Result<Vec<AxisInfo>, Error> {
             default: a.default_value(),
             max: a.max_value(),
         })
+        .collect())
+}
+
+/// The face's normalized coordinates for an axis setting, one per axis it
+/// declares, in the font's own order.
+///
+/// A renderer that draws cached glyph outlines instead of the path
+/// [`text_run`] hands back needs these, or it paints the default instance
+/// while layout measured the varied one. The numbers are F2Dot14 bits --
+/// what every glyph cache keys its variations on.
+///
+/// ```
+/// # let font = epaint_default_fonts::HACK_REGULAR;
+/// // A static face declares no axes, so there is nothing to vary.
+/// assert!(mui_text::normalized_coords(font, &[mui_text::Weight::BOLD.axis()])
+///     .unwrap()
+///     .is_empty());
+/// ```
+pub fn normalized_coords(font: &[u8], axes: &[Axis<'_>]) -> Result<Vec<i16>, Error> {
+    let font = FontRef::new(font).map_err(Error::Font)?;
+    Ok(font
+        .axes()
+        .location(axes.iter().copied())
+        .coords()
+        .iter()
+        .map(|c| c.to_bits())
         .collect())
 }
 
@@ -130,7 +206,7 @@ pub fn glyph_path(
     if !tolerance.is_finite() || tolerance <= 0. {
         return Err(Error::InvalidOptions("tolerance"));
     }
-    let font = FontRef::new(font).map_err(|e| Error::Font(format!("{e}")))?;
+    let font = FontRef::new(font).map_err(Error::Font)?;
     let glyph_id = font.charmap().map(ch).ok_or(Error::MissingGlyph(ch))?;
     if font.outline_glyphs().get(glyph_id).is_none() {
         return Err(Error::NoOutline(ch));
@@ -174,6 +250,9 @@ pub struct TextRun {
     pub descent: f64,
     /// The face's own idea of a line pitch, leading included.
     pub line_height: f64,
+    /// Every glyph id with its pen x, for a renderer with its own glyph
+    /// cache and hinting; `path` is the same ink as plain geometry.
+    pub glyphs: Vec<(u32, f64)>,
 }
 
 /// Lay `text` out as one path, glyphs appended at successive pen positions.
@@ -205,7 +284,7 @@ pub fn text_run(
     if !tolerance.is_finite() || tolerance <= 0. {
         return Err(Error::InvalidOptions("tolerance"));
     }
-    let font = FontRef::new(font).map_err(|e| Error::Font(format!("{e}")))?;
+    let font = FontRef::new(font).map_err(Error::Font)?;
     let font_size = Size::new(size);
     let location = font.axes().location(axes.iter().copied());
     let charmap = font.charmap();
@@ -219,8 +298,10 @@ pub fn text_run(
         tolerance,
         dx: 0.,
     };
+    let mut glyphs = Vec::with_capacity(text.len());
     for ch in text.chars() {
         let glyph_id = charmap.map(ch).unwrap_or(GlyphId::NOTDEF);
+        glyphs.push((glyph_id.to_u32(), pen.dx));
         if outlines.get(glyph_id).is_some() {
             draw_glyph(&font, glyph_id, size, &location, &mut pen)?;
         }
@@ -245,6 +326,7 @@ pub fn text_run(
         // Negative in font space, positive below the baseline here.
         descent,
         line_height,
+        glyphs,
     })
 }
 
@@ -263,7 +345,7 @@ fn draw_glyph(
             DrawSettings::unhinted(Size::new(size), LocationRef::from(location)),
             pen,
         )
-        .map_err(|e| Error::Draw(format!("{e}")))?;
+        .map_err(Error::Draw)?;
     Ok(())
 }
 
@@ -356,6 +438,157 @@ impl OutlinePen for PathPen {
     fn close(&mut self) {
         self.close_open_contour();
     }
+}
+
+/// One advance per `char` of `text`, at the default variation position. The
+/// only allocation the measuring functions make.
+fn advances(font: &[u8], text: &str, size_px: f64) -> Result<Vec<f64>, Error> {
+    let size = checked_size(size_px)?;
+    let font = FontRef::new(font).map_err(Error::Font)?;
+    let location = font.axes().location(std::iter::empty::<Axis<'_>>());
+    let charmap = font.charmap();
+    let glyph_metrics = font.glyph_metrics(Size::new(size), LocationRef::from(&location));
+    text.chars()
+        .map(|ch| {
+            let glyph_id = charmap.map(ch).unwrap_or(GlyphId::NOTDEF);
+            checked_finite(
+                f64::from(glyph_metrics.advance_width(glyph_id).unwrap_or(0.)),
+                "font metrics",
+            )
+        })
+        .collect()
+}
+
+/// One laid-out line: the slice of the source it covers and how wide that is.
+///
+/// `text_range` keeps any whitespace the break consumed -- it is a slice of the
+/// original string, not a trimmed copy -- while `advance` does not count
+/// trailing spaces, so a right-aligned line does not hang.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Line {
+    pub text_range: std::ops::Range<usize>,
+    pub advance: f64,
+}
+
+/// Greedy line breaking on advances alone.
+///
+/// Break opportunities come from UAX#14 (`unicode-linebreak`), so a space and a
+/// hyphen break, a no-break space and an emoji ZWJ sequence do not, and CJK
+/// breaks between ideographs; `'\n'` forces a break; a word wider than
+/// `max_width` breaks at the glyph that overflows rather than hanging off the
+/// edge.
+///
+/// ponytail: the overflow fallback still splits at a char, not a grapheme
+/// cluster -- fix when a combining mark visibly detaches.
+pub fn break_lines(
+    font: &[u8],
+    text: &str,
+    size_px: f64,
+    max_width: f64,
+) -> Result<Vec<Line>, Error> {
+    if !(max_width.is_finite() && max_width > 0.) {
+        return Err(Error::InvalidOptions("max_width"));
+    }
+    let advances = advances(font, text, size_px)?;
+    // Byte offsets a line may start at, ascending, walked alongside the chars.
+    // One at a skipped space (LB8 after a ZWSP) is dropped; the next ink char
+    // offers it again.
+    let mut opps = unicode_linebreak::linebreaks(text)
+        .filter(|&(_, o)| o == unicode_linebreak::BreakOpportunity::Allowed)
+        .map(|(i, _)| i)
+        .peekable();
+    let mut lines = Vec::new();
+    let mut start = 0;
+    // Advance since `start`, trailing-whitespace part of it, and the width of
+    // the word since the last break opportunity.
+    let (mut x, mut trim, mut word) = (0., 0., 0.);
+    let mut brk: Option<(usize, f64)> = None;
+
+    for ((i, ch), &a) in text.char_indices().zip(&advances) {
+        if ch == '\n' {
+            lines.push(Line {
+                text_range: start..i,
+                advance: x - trim,
+            });
+            start = i + 1;
+            (x, trim, word, brk) = (0., 0., 0., None);
+            continue;
+        }
+        if ch.is_ascii_whitespace() {
+            // Trailing space always fits: it costs nothing at the line end.
+            x += a;
+            trim += a;
+            continue;
+        }
+        while opps.peek().is_some_and(|&bi| bi < i) {
+            opps.next();
+        }
+        if opps.peek() == Some(&i) {
+            // A line may start here; any spaces before it stay on this one.
+            brk = Some((i, x - trim));
+            word = 0.;
+        }
+        trim = 0.;
+        if x + a > max_width && i > start {
+            match brk.filter(|&(bi, _)| bi > start) {
+                Some((bi, advance)) => {
+                    lines.push(Line {
+                        text_range: start..bi,
+                        advance,
+                    });
+                    start = bi;
+                    x = word;
+                }
+                // The word itself does not fit: break at the overflowing glyph.
+                None => {
+                    lines.push(Line {
+                        text_range: start..i,
+                        advance: x,
+                    });
+                    start = i;
+                    (x, word) = (0., 0.);
+                }
+            }
+            brk = None;
+        }
+        x += a;
+        word += a;
+    }
+    lines.push(Line {
+        text_range: start..text.len(),
+        advance: x - trim,
+    });
+    Ok(lines)
+}
+
+/// Pen x of the caret sitting *before* the char at `byte_index`, which must be
+/// a char boundary. `text.len()` is the caret at the end.
+pub fn caret_x(font: &[u8], text: &str, size_px: f64, byte_index: usize) -> Result<f64, Error> {
+    if byte_index > text.len() || !text.is_char_boundary(byte_index) {
+        return Err(Error::InvalidOptions("byte_index"));
+    }
+    Ok(advances(font, text, size_px)?
+        .iter()
+        .zip(text.char_indices())
+        .take_while(|(_, (i, _))| *i < byte_index)
+        .map(|(a, _)| a)
+        .sum())
+}
+
+/// The char boundary whose caret is nearest `x`. The inverse of [`caret_x`],
+/// which is what a click in a text field needs.
+pub fn hit_index(font: &[u8], text: &str, size_px: f64, x: f64) -> Result<usize, Error> {
+    let x = checked_finite(x, "x")?;
+    let advances = advances(font, text, size_px)?;
+    let (mut pen, mut best, mut best_d) = (0., 0, x.abs());
+    for ((i, ch), a) in text.char_indices().zip(&advances) {
+        pen += a;
+        let d = (pen - x).abs();
+        if d < best_d {
+            (best, best_d) = (i + ch.len_utf8(), d);
+        }
+    }
+    Ok(best)
 }
 
 #[cfg(test)]
@@ -625,5 +858,96 @@ mod axis_tests {
     #[test]
     fn a_static_font_declares_no_axes() {
         assert!(axes(epaint_default_fonts::HACK_REGULAR).unwrap().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod measure_tests {
+    use super::*;
+    use epaint_default_fonts::HACK_REGULAR;
+
+    const SIZE: f64 = 16.;
+
+    fn lines(text: &str, width: f64) -> Vec<&str> {
+        break_lines(HACK_REGULAR, text, SIZE, width)
+            .unwrap()
+            .into_iter()
+            .map(|l| &text[l.text_range])
+            .collect()
+    }
+
+    #[test]
+    fn a_line_breaks_at_the_last_space_that_fits() {
+        let text = "hello world foo";
+        let width = caret_x(HACK_REGULAR, text, SIZE, 11).unwrap();
+        assert_eq!(lines(text, width), ["hello world ", "foo"]);
+        let first = &break_lines(HACK_REGULAR, text, SIZE, width).unwrap()[0];
+        assert!(
+            (first.advance - width).abs() < 1e-9,
+            "the trailing space does not count: {first:?}"
+        );
+    }
+
+    #[test]
+    fn a_word_wider_than_the_line_breaks_mid_word() {
+        let word = "x".repeat(40);
+        let out = lines(&word, caret_x(HACK_REGULAR, &word, SIZE, 10).unwrap());
+        assert_eq!(out.len(), 4, "{out:?}");
+        assert!(out.iter().all(|l| l.len() == 10), "{out:?}");
+    }
+
+    #[test]
+    fn uax14_says_where_a_line_may_start() {
+        // Width of the first `n` bytes of the text itself, so the font's own
+        // advances decide and no test hard-codes a pixel.
+        let w = |t: &str, n: usize| caret_x(HACK_REGULAR, t, SIZE, n).unwrap();
+
+        // A no-break space holds its word together; the ASCII space breaks.
+        let nbsp = "a\u{00A0}b c";
+        assert_eq!(lines(nbsp, w(nbsp, 4)), ["a\u{00A0}b ", "c"]);
+        // A hyphen still breaks, after it.
+        assert_eq!(lines("ab-cd", w("ab-cd", 3)), ["ab-", "cd"]);
+        // CJK breaks between ideographs with no space in sight.
+        let cjk = "\u{4E00}\u{4E8C}\u{4E09}";
+        assert_eq!(lines(cjk, w(cjk, 6)), ["\u{4E00}\u{4E8C}", "\u{4E09}"]);
+        // An emoji ZWJ sequence is one unit: the break lands on the space.
+        let emoji = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F466}";
+        let text = format!("x {emoji}");
+        let width = w(&text, text.len()) - w(&text, 1);
+        assert_eq!(lines(&text, width), ["x ", emoji]);
+    }
+
+    #[test]
+    fn a_newline_breaks_whatever_fits() {
+        assert_eq!(lines("a\nb", 1e6), ["a", "b"]);
+    }
+
+    #[test]
+    fn a_caret_round_trips_through_its_x() {
+        let text = "the quick brown fox";
+        for (i, _) in text
+            .char_indices()
+            .chain(std::iter::once((text.len(), ' ')))
+        {
+            let x = caret_x(HACK_REGULAR, text, SIZE, i).unwrap();
+            assert_eq!(hit_index(HACK_REGULAR, text, SIZE, x).unwrap(), i, "at {i}");
+        }
+    }
+
+    #[test]
+    fn a_bad_font_keeps_its_skrifa_cause() {
+        let Err(e) = axes(b"not a font") else {
+            panic!("bad bytes must not parse");
+        };
+        assert!(matches!(e, Error::Font(_)));
+        assert!(std::error::Error::source(&e).is_some());
+    }
+
+    #[test]
+    fn a_non_finite_click_does_not_snap_to_the_start() {
+        for x in [f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
+            assert!(hit_index(HACK_REGULAR, "abc", SIZE, x).is_err(), "{x}");
+        }
+        assert_eq!(hit_index(HACK_REGULAR, "abc", SIZE, 1e6).unwrap(), 3);
     }
 }

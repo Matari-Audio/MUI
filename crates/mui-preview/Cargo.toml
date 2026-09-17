@@ -5,6 +5,12 @@ edition.workspace = true
 license.workspace = true
 publish = false
 
+[features]
+default = []
+# The CPU rasteriser, for the snapshot test. The gallery itself is a GPU
+# host and never uses it.
+cpu = ["mui/cpu"]
+
 [dependencies]
 mui = { path = "../mui" }
 mui-text = { path = "../mui-text" }
@@ -21,3 +27,5 @@ pollster = "0.4"
 # Fallback face so the glyph scene has something to draw without a system font.
 # Zero dependencies of its own -- no egui reaches the graph through it.
 epaint_default_fonts = "0.36"
+mui-access = { path = "../mui-access" }
+accesskit_winit = "0.33"

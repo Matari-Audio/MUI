@@ -4,35 +4,53 @@
 //! use mui::prelude::*;
 //! let mut ui = Ui::new(Theme::DEFAULT);
 //! let mut cutoff = 0.5;
-//! // One frame: build the tree, hand it in with the pointer, draw what comes back.
-//! let root = column([slider(&mut ui, "cutoff", "Cutoff", &mut cutoff, 0.0..=1.0)])
-//!     .pad(M)
-//!     .fill(Role::Surface);
-//! let frame = ui.frame(root, Some(Size::new(240.0, 80.0)), PointerInput::default(), 1.0 / 60.0).unwrap();
+//! // One frame: build the tree, hand it in with the input, draw what comes back.
+//! let root = col![
+//!     label("Filter"),
+//!     slider(&mut ui, "cutoff", "Cutoff", &mut cutoff, 0.0..=1.0),
+//! ]
+//! .gap(S)
+//! .pad(M)
+//! .fill(Surface);
+//! let frame = ui.frame(root, Some(Size::new(240.0, 96.0)), Input::default(), 1.0 / 60.0).unwrap();
 //! assert!(frame.scene.paint.len() > 3);
+//! // frame.cursor is what to set; frame.tip is the tooltip that came due;
+//! // frame.animating says whether to schedule another frame; frame.edits is
+//! // every gesture that began or ended, and frame.clipboard is what a copy
+//! // wants put on the system clipboard.
 //! ```
 #![forbid(unsafe_code)]
 
-pub use mui_core as core;
 #[cfg(feature = "egui")]
 pub use mui_egui as egui;
 pub use mui_geometry as geometry;
 pub use mui_input as input;
 pub use mui_layout as layout;
+pub use mui_motion as motion;
+#[deprecated(note = "use mui::scene")]
+pub use mui_scene as core;
+pub use mui_scene as scene;
 pub use mui_tessellate as tessellate;
 pub use mui_vello as vello;
+pub use mui_widgets as widgets;
+pub use mui_widgets::presets;
 
 mod ui;
-pub mod widgets;
 
-pub use ui::{Frame, Ui};
+pub use ui::{Edit, Frame, Ui};
 
 pub mod prelude {
-    pub use crate::widgets::{button, knob, slider, toggle};
-    pub use crate::{Frame, Ui};
-    pub use mui_core::prelude::*;
-    pub use mui_core::{CornerProfile, Mode, Palette, Pigment, Spring};
-    pub use mui_input::{PointerInput, Response};
+    pub use crate::{Edit, Frame, Ui};
+    pub use mui_input::{
+        Axis, Button, Buttons, Ime, Input, Key, KeyPress, Mods, PointerInput, Response, FINE_DRAG,
+    };
+    pub use mui_scene::prelude::*;
+    pub use mui_scene::{Corners, Mode, Palette, Pigment, SpacingToken, Spring};
+    pub use mui_widgets::presets::{card, chip, glass, panel, tile};
+    pub use mui_widgets::{
+        bins, bins_hover, button, curve, knob, slider, text_input, toggle, BinAxis, BinEdit, Bins,
+        Control, CurveEdit, Host, Variant,
+    };
 }
 
 /// Every runnable `rust` block in the README, compiled and run by

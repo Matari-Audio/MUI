@@ -1,15 +1,20 @@
 [workspace]
 members = [
   "crates/mui-geometry",
+  "crates/mui-style",
+  "crates/mui-motion",
   "crates/mui-layout",
   "crates/mui-tessellate",
   "crates/mui-egui",
-  "crates/mui-core",
+  "crates/mui-scene",
+  "crates/mui-widgets",
   "crates/mui",
   "crates/mui-preview",
   "crates/mui-text",
   "crates/mui-vello",
+  "crates/mui-truce",
   "crates/mui-input",
+  "crates/mui-access",
 ]
 resolver = "2"
 

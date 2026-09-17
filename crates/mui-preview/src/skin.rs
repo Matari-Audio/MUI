@@ -1,16 +1,15 @@
 //! Everything this application decides about how it looks, and nothing else.
 //!
-//! One file, one `const`. `mui-core` ships the mechanism -- how a surface is
+//! One file, one `const`. `mui-scene` ships the mechanism -- how a surface is
 //! derived, where ink is allowed to sit, what a hover does -- and deliberately
 //! ships no taste: `Palette::NEUTRAL` leaves every brand role grey, because
 //! which colour is *yours* is not a layout library's decision. This is where
 //! that decision is made, and the only place in this program where a colour is
-//! chosen -- with one deliberate exception, `main.rs`'s debug frame overlay,
-//! which is off-palette precisely so it cannot be mistaken for design.
+//! chosen.
 //!
 //! The test at the bottom is what keeps that true.
 
-use mui::prelude::{CornerProfile, Mode, Palette, Pigment, Theme};
+use mui::prelude::{Corners, Mode, Palette, Pigment, Theme};
 
 /// Two hues and a corner profile. Every other colour the gallery paints --
 /// every surface, every ink, every hover, and the entire light theme -- is
@@ -33,7 +32,11 @@ pub const SKIN: Theme = Theme {
         hover: 0.11,
         ..Palette::NEUTRAL
     },
-    corners: CornerProfile::new(28.0, 32.0),
+    corners: Corners {
+        box_: 28.0,
+        concave: 32.0,
+        ..Corners::DEFAULT
+    },
     ..Theme::DEFAULT
 };
 
@@ -55,10 +58,10 @@ mod tests {
     /// the failure shows up as an unreadable label three crates away.
     #[test]
     fn the_skin_is_a_valid_theme_in_both_modes() {
-        assert!(SKIN.valid());
+        assert!(SKIN.is_valid());
         for light in [false, true] {
             let p = skin(light);
-            assert!(p.valid());
+            assert!(p.is_valid());
             // The brand roles were actually declared. `Palette::NEUTRAL`
             // leaves them grey, and a grey primary is the shape of a theme
             // file that was half filled in.

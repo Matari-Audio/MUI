@@ -1,0 +1,16 @@
+[package]
+name = "mui-scene"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "A styled element tree lowered to a resolved, paint-ordered scene: MUI's El DSL, theme resolution and scene walk."
+
+[dependencies]
+mui-geometry = { path = "../mui-geometry" }
+mui-style = { path = "../mui-style" }
+mui-motion = { path = "../mui-motion" }
+mui-layout = { path = "../mui-layout" }
+mui-text = { path = "../mui-text" }
+
+[dev-dependencies]
+epaint_default_fonts = "0.36"

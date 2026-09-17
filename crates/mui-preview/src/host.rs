@@ -32,6 +32,7 @@ pub struct Gpu {
     config: wgpu::SurfaceConfiguration,
     renderer: Renderer,
     resources: Resources,
+    ids: mui::vello::ImageIds,
     vello: Scene,
 }
 
@@ -104,6 +105,7 @@ impl Gpu {
             config,
             renderer,
             resources,
+            ids: Default::default(),
         }
     }
 
@@ -136,11 +138,22 @@ impl Gpu {
         self.vello.reset_and_resize(width as u16, height as u16);
     }
 
-    /// Clear the scene and hand it over. Returning the `Scene` rather than
-    /// exposing it as a field is what makes forgetting the reset impossible.
-    pub fn begin(&mut self) -> &mut Scene {
+    /// Clear the scene and hand it over as a `Canvas`. Returning it rather
+    /// than exposing it as a field is what makes forgetting the reset
+    /// impossible; the `Resources` ride along so a glyph run reuses Vello's
+    /// hinted-outline cache rather than re-hinting every frame.
+    pub fn begin(&mut self) -> mui::vello::Gpu<'_> {
         self.vello.reset();
-        &mut self.vello
+        mui::vello::Gpu {
+            scene: &mut self.vello,
+            resources: &mut self.resources,
+            atlas: Some(mui::vello::Atlas {
+                renderer: &mut self.renderer,
+                device: &self.device,
+                queue: &self.queue,
+                ids: &mut self.ids,
+            }),
+        }
     }
 
     /// Render and present what [`Gpu::begin`] handed out.

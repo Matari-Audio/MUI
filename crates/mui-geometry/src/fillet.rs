@@ -2,15 +2,102 @@ use crate::math::{point_segment_distance, signed_area};
 use crate::{Arc, Error, Path, PathCommand, Point, RingKind, Topology};
 use std::f64::consts::PI;
 
+/// The curve a corner's turn is drawn with. Separate from the radius, as CSS
+/// `corner-shape` is: one value restyles every corner of a tree without
+/// touching a single size.
+///
+/// ```
+/// use mui_geometry::{CornerStyle, RoundedRect, Bounds};
+/// let rect = RoundedRect::new(Bounds::new(0., 0., 100., 60.), 20.).unwrap();
+/// let round = rect.path();
+/// let squircle = CornerStyle::Squircle.shape(&round);
+/// // Same corners, drawn as cubics instead of arcs.
+/// assert_eq!(round.commands.len(), squircle.commands.len());
+/// ```
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum CornerStyle {
+    /// A circular arc: the corner every rounded rectangle has always had.
+    #[default]
+    Round,
+    /// A continuous corner -- the superellipse whose 45-degree point sits at
+    /// `2^-0.25` of the corner's radius, iOS's squircle.
+    Squircle,
+}
+impl CornerStyle {
+    /// How far each cubic control point is pulled toward the corner's
+    /// vertex, as a fraction of the distance to it. `0.5523` redraws the
+    /// circle; the squircle pulls further out, toward the square corner.
+    ///
+    /// ponytail: one constant, derived for a 90-degree turn. A weld's
+    /// shallow junction gets the same pull and reads a little fuller than a
+    /// true superellipse; solve per turn angle if that ever shows.
+    const fn pull(self) -> f64 {
+        match self {
+            Self::Round => 0.552_284_75,
+            Self::Squircle => 0.909_07,
+        }
+    }
+    /// Every arc in `path` redrawn in this style; [`CornerStyle::Round`]
+    /// hands the path back untouched, arcs and all.
+    ///
+    /// Works on any arc, so a filleted weld, a shell's parallel offset and a
+    /// stroke's inset all pass through it the same way.
+    ///
+    /// ```
+    /// use mui_geometry::{CornerStyle, RoundedRect, Bounds};
+    /// let rect = RoundedRect::new(Bounds::new(0., 0., 80., 80.), 16.).unwrap();
+    /// let round = rect.path();
+    /// assert_eq!(CornerStyle::Round.shape(&round), round);
+    /// ```
+    pub fn shape(self, path: &Path) -> Path {
+        if self == Self::Round {
+            return path.clone();
+        }
+        let k = self.pull();
+        let mut at = Point::new(0., 0.);
+        let mut commands = Vec::with_capacity(path.commands.len());
+        for c in &path.commands {
+            match *c {
+                PathCommand::ArcTo(a) if a.radius > 0. => {
+                    // The tangents at both ends meet at the corner's vertex;
+                    // the cubic is the same corner pulled toward it.
+                    let dir = (at - a.center).perpendicular() / a.radius * a.sweep.signum();
+                    let vertex = at + dir * (a.radius * (a.sweep.abs() / 2.).tan());
+                    commands.push(PathCommand::CubicTo(
+                        at + (vertex - at) * k,
+                        a.to + (vertex - a.to) * k,
+                        a.to,
+                    ));
+                    at = a.to;
+                }
+                PathCommand::MoveTo(p) | PathCommand::LineTo(p) => {
+                    commands.push(*c);
+                    at = p;
+                }
+                PathCommand::ArcTo(a) => {
+                    commands.push(*c);
+                    at = a.to;
+                }
+                PathCommand::CubicTo(_, _, p) => {
+                    commands.push(*c);
+                    at = p;
+                }
+                PathCommand::Close => commands.push(*c),
+            }
+        }
+        Path { commands }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct CornerStyle {
+pub struct Fillet {
     pub convex_radius: f64,
     pub concave_radius: f64,
     /// Strictly below 0.5: neighboring protected disks cannot overlap.
     /// Larger radii are allowed only as far as ALL geometric clearances allow.
     pub clearance_fraction: f64,
 }
-impl Default for CornerStyle {
+impl Default for Fillet {
     fn default() -> Self {
         Self {
             convex_radius: 24.,
@@ -19,7 +106,7 @@ impl Default for CornerStyle {
         }
     }
 }
-impl CornerStyle {
+impl Fillet {
     fn validate(self) -> Result<(), Error> {
         if ![
             self.convex_radius,
@@ -77,7 +164,7 @@ pub struct RoundedShape {
 ///
 /// Topology can still change abruptly when touching/separating inputs cause the
 /// Boolean result itself to change. Exact set union does not promise goo motion.
-pub fn fillet(topology: &Topology, style: CornerStyle) -> Result<RoundedShape, Error> {
+pub fn fillet(topology: &Topology, style: Fillet) -> Result<RoundedShape, Error> {
     style.validate()?;
     let mut corners = Vec::with_capacity(topology.rings.len());
     for (ri, ring) in topology.rings.iter().enumerate() {

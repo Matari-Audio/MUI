@@ -7,7 +7,7 @@ default-run = "mui-audit-repros"
 [workspace]
 
 [dependencies]
-mui-core = { path = "../../../crates/mui-core" }
+mui-scene = { path = "../../../crates/mui-scene" }
 mui-input = { path = "../../../crates/mui-input" }
 mui-geometry = { path = "../../../crates/mui-geometry" }
 mui-layout = { path = "../../../crates/mui-layout" }

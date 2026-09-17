@@ -12,5 +12,5 @@ mui-vello = { path = "../mui-vello" }
 vello_common = { version = "0.2", default-features = false }
 
 [dev-dependencies]
-mui-core = { path = "../mui-core" }
+mui-scene = { path = "../mui-scene" }
 mui-layout = { path = "../mui-layout" }

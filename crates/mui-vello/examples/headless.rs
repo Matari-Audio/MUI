@@ -8,8 +8,9 @@
 //! file instead of opening a window only because a window is a separate
 //! problem: a surface would get the same pixels.
 
-use mui_core::prelude::*;
-use mui_core::CornerProfile;
+use mui_scene::prelude::*;
+use mui_scene::Corners;
+use mui_vello::Gpu;
 use vello_common::kurbo::Affine;
 use vello_hybrid::{RenderSize, RenderTargetConfig, Renderer, Scene, TextureBindings};
 
@@ -35,7 +36,11 @@ fn spec() -> SceneSpec {
         .weld(Role::Surface);
     SceneSpec::new(root)
         .theme(Theme {
-            corners: CornerProfile::new(28.0, 32.0),
+            corners: Corners {
+                box_: 28.0,
+                concave: 32.0,
+                ..Corners::DEFAULT
+            },
             ..Theme::DEFAULT
         })
         .font(epaint_default_fonts::HACK_REGULAR.to_vec())
@@ -44,9 +49,7 @@ fn spec() -> SceneSpec {
 fn main() {
     let out = std::env::args().nth(1).unwrap_or("mui-vello.png".into());
     let resolved = resolve_scene(&spec()).expect("scene resolves");
-    let mut scene = Scene::new(WIDTH, HEIGHT);
-    mui_vello::paint(&mut scene, &resolved, Affine::translate((32.0, 32.0))).expect("paints");
-    let rgba = pollster::block_on(rasterise(&scene));
+    let rgba = pollster::block_on(rasterise(&resolved));
     let file = std::fs::File::create(&out).expect("create output");
     let mut enc = png::Encoder::new(std::io::BufWriter::new(file), WIDTH.into(), HEIGHT.into());
     enc.set_color(png::ColorType::Rgba);
@@ -55,12 +58,14 @@ fn main() {
         .expect("write png");
     println!(
         "wrote {out}: {} surfaces, {} paint ops",
-        resolved.keys.len(),
+        resolved.surfaces().count(),
         resolved.paint.len()
     );
 }
 
-async fn rasterise(scene: &Scene) -> Vec<u8> {
+/// The device has to exist before the scene does: glyph runs cache into the
+/// renderer's `Resources`, so painting happens here rather than in `main`.
+async fn rasterise(resolved: &mui_scene::ResolvedScene) -> Vec<u8> {
     let instance = wgpu::Instance::default();
     let adapter = instance
         .request_adapter(&wgpu::RequestAdapterOptions::default())
@@ -96,10 +101,22 @@ async fn rasterise(scene: &Scene) -> Vec<u8> {
             height: HEIGHT.into(),
         },
     );
+    let mut scene = Scene::new(WIDTH, HEIGHT);
+    mui_vello::paint(
+        &mut Gpu {
+            scene: &mut scene,
+            resources: &mut resources,
+            atlas: None,
+        },
+        resolved,
+        Affine::translate((32.0, 32.0)),
+    )
+    .expect("paints");
+
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
     renderer
         .render(
-            scene,
+            &scene,
             &mut resources,
             &device,
             &queue,

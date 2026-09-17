@@ -1,0 +1,14 @@
+{
+  "pinned_gpui": "7960b2a7c9568e90fbe0727332149e5b2a5fd57a",
+  "patched_shader_sha256": "41ca3204a801660e98fe7859bf5e4586f1a3c638e1f1df7e18d83be78f44a6b4",
+  "gradient_check": "6 GPUI captures (default/tight x 1/1.5/2); sRGB/Oklab x path/quad; maximum error <=2/255",
+  "native_interactions": {
+    "scale_1_display_99": "passed",
+    "scale_1_5_display_99": "failed at source re-arming; restricted 1920x1200 surface",
+    "scale_1_5_display_0": "passed on full desktop"
+  },
+  "cargo_test": "render-lab 1 shared pie-container contract passed",
+  "cargo_clippy": "render-lab passed -D warnings",
+  "plugin_example_build": "passed; two existing gpui_linux dead-code warnings",
+  "timing_caveat": "60 samples; CPU acquire/draw/present/device wait, not GPU timestamps; no performance improvement claim"
+}
