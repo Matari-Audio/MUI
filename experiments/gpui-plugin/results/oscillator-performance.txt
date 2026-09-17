@@ -1,0 +1,47 @@
+Debug build, same machine, 1440 logical pixels, 120 changing-level frames.
+Before: 31.306 ms/frame
+After: 1.345 ms/frame
+Metric: oscillator CPU drawing preparation; excludes GPU presentation.
+Reproduce: cargo run --offline --manifest-path experiments/gpui-plugin/Cargo.toml --example oscillator -- --bench
+Validation: oscillator_contract passed; local Clippy -D warnings passed.
+
+2026-09-13 routing preview, same GPU-selected X11 executable, no MUI_LAB_CAPTURE.
+Full editor refresh (debug): CPU draw median 18.32 ms, p95 18.76 ms;
+180-frame refresh probe: median 25.01 ms, p95 25.69 ms, 39.8 redraws/sec.
+Retained racks + overlay invalidation (debug): CPU draw median 9.72 ms;
+refresh probe: median 18.78 ms, p95 19.01 ms, 53.3 redraws/sec.
+Retained racks + optimized GPUI/taffy dependencies (application remains debug):
+CPU draw median 1.66 ms, p95 1.92 ms;
+refresh probe: median 12.24 ms, p95 12.78 ms, 105.9 redraws/sec.
+GPUI recorded median presentation interval: 10.29 ms.
+Probe uses 30 warm-up + 180 measured redraws; viewport 1256x1382 at scale 1.
+Cadence includes compositor/timer scheduling; not a GPU execution timestamp or a universal FPS guarantee.
+Group header/outline preparation: uncached 0.699 ms, cached 0.123 ms.
+Oscillator changing-value preparation remains 1.319 ms/frame.
+Reproduce cadence: MUI_ROUTING_PROFILE=1 cargo run --offline --manifest-path experiments/gpui-plugin/Cargo.toml --features profile --example oscillator -- --kurv
+
+2026-09-13 native text / curves / robustness pass.
+Same selected RX 6600, debug app with optimized GPUI/taffy dependencies.
+Active X11 window, 3804x2073 physical pixels, GPUI scale 1, no GPU readback.
+Before binary preserved at /tmp/mui-before-quality during the comparison.
+                                  Before          After
+Changing-value CPU preparation    1.231 ms        0.313 ms (~75% lower)
+GPUI CPU draw median              2.79 ms         1.89 ms (~32% lower)
+GPUI CPU draw p95                 3.21 ms         2.24 ms
+Refresh cadence (180 frames)      74.2/s          100.4/s
+Median present interval          13.18 ms        9.84 ms
+111-route stress after change: CPU draw median 3.20 ms, p95 3.62 ms;
+refresh cadence 80.0/s; median present interval 12.53 ms.
+Preparation excludes GPUI shaping/painting; the full CPU draw metric includes them.
+Frame measurements use 30 warm-up and 180 measured refreshes. Cadence depends on
+compositor scheduling and focus; these are not GPU timestamp measurements.
+Pinned GPUI intentionally caps inactive animated windows near 30 fps. A nested
+inactive Xwayland run reproduced ~29.9/s; it is not used in the active comparison.
+Verified live rendering at scale 1 and 1.5, including group picker placement.
+Reproduce with --features profile; use MUI_ROUTING_PROFILE=1 for frame statistics,
+MUI_ROUTING_STRESS=1 for dense routes, and --bench for changing-value preparation.
+Validation: 5 library contract tests pass; local Clippy -D warnings passes.
+Embedded-editor harness passes on desktop X11 with RX 6600: resize, drag/cancel,
+Tab traversal, text selection/editing/clipboard, clipping/scroll, two instances,
+close during drag and close/reopen. Nested Xwayland input automation failed its
+drag-release assertion; the same harness passes on the desktop without an input fix.

@@ -16,6 +16,7 @@ members = [
   "crates/mui-input",
   "crates/mui-access",
 ]
+exclude = ["experiments/upstream", "experiments/upstream/**", "experiments/gpui-plugin", "experiments/mui-gpui"]
 resolver = "2"
 
 [workspace.package]

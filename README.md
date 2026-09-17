@@ -449,3 +449,10 @@ across `vello_hybrid`, `vello_cpu` and classic `vello`, reproduced by
 `cargo run -p mui-vello --release --features cpu --example bench`. The
 TypeScript frontend under `packages/mui-ts` is frozen; see
 `packages/mui-ts/FROZEN.md`.
+
+## The GPUI reference
+
+`experiments/gpui-plugin` and `experiments/mui-gpui` are the 2026-09-13 GPUI
+milestone kept for study (workspace-excluded, needs `experiments/upstream`).
+The Vello pipeline in `crates/` replaced it; the benchmarks are in `BENCHMARKS.md`
+and `research/`.
