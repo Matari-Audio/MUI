@@ -1,0 +1,13 @@
+[vendor]
+name = "MUI Experiments"
+id = "dev.mui"
+au_manufacturer = "MUIx"
+url = "https://github.com/Matari-Audio/MUI"
+
+[[plugin]]
+name = "MUI GPUI Probe"
+bundle_id = "gpui-probe"
+crate = "mui-gpui-plugin-probe"
+description = "Experimental GPUI plugin runtime compatibility probe"
+category = "effect"
+fourcc = "MGPu"

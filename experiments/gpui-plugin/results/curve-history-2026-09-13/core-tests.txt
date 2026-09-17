@@ -1,0 +1,45 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.02s
+     Running unittests src/lib.rs (/mnt/Windows11/DEV_WORKSPACE/Toolchains/User/cargo-target/debug/deps/mui_core-e02f9dd4b9b68b83)
+
+running 2 tests
+test curve::tests::history_keeps_gestures_bounded_and_does_not_overwrite_external_state ... ok
+test curve::tests::bezier_contract ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/colors.rs (/mnt/Windows11/DEV_WORKSPACE/Toolchains/User/cargo-target/debug/deps/colors-de576b775879d02e)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/contracts.rs (/mnt/Windows11/DEV_WORKSPACE/Toolchains/User/cargo-target/debug/deps/contracts-e87a760c07f856d8)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+
+     Running tests/hover.rs (/mnt/Windows11/DEV_WORKSPACE/Toolchains/User/cargo-target/debug/deps/hover-ffee6d5bbd6b89e1)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running tests/items.rs (/mnt/Windows11/DEV_WORKSPACE/Toolchains/User/cargo-target/debug/deps/items-751eba60eec99ac1)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running tests/theme_updates.rs (/mnt/Windows11/DEV_WORKSPACE/Toolchains/User/cargo-target/debug/deps/theme_updates-f86b53c9c5e39daa)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/view.rs (/mnt/Windows11/DEV_WORKSPACE/Toolchains/User/cargo-target/debug/deps/view-691842ee36e5eebd)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+

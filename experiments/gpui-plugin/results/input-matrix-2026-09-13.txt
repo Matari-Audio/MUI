@@ -1,0 +1,55 @@
+Input reliability baseline — 2026-09-13
+Command: MESA_VK_DEVICE_SELECT=1002:73ff! ZED_DEVICE_ID=0x73ff python3 experiments/gpui-plugin/tools/check_input.py --repeat 2
+Build: debug, locked dependencies; AMD RX 6600, Mesa 26.2.2, hardware Vulkan.
+Display: owned Xwayland 3200x2400; composition height 1040 logical px.
+14/14 completed with PASS markers. Earlier intermittent failures remain open.
+Composition uses GPUI-dispatched events; embedded uses native XTest at 1x.
+No real DAW, desktop compositor input, embedded fractional DPI or short-height proof.
+
+composition-1280-1x-0: exit 0
+PASS: native focus/actions, balanced gestures, typed drag/drop, cancellation, automatic parameter routing, oscillator power off/on
+
+composition-1480-1x-0: exit 0
+PASS: native focus/actions, balanced gestures, typed drag/drop, cancellation, automatic parameter routing, oscillator power off/on
+
+composition-1280-1.5x-0: exit 0
+PASS: native focus/actions, balanced gestures, typed drag/drop, cancellation, automatic parameter routing, oscillator power off/on
+
+composition-1480-1.5x-0: exit 0
+PASS: native focus/actions, balanced gestures, typed drag/drop, cancellation, automatic parameter routing, oscillator power off/on
+
+composition-1280-2x-0: exit 0
+PASS: native focus/actions, balanced gestures, typed drag/drop, cancellation, automatic parameter routing, oscillator power off/on
+
+composition-1480-2x-0: exit 0
+PASS: native focus/actions, balanced gestures, typed drag/drop, cancellation, automatic parameter routing, oscillator power off/on
+
+embedded-800-1x-0: exit 0
+GPUI device: AMD Radeon RX 6600 (RADV NAVI23) (Mesa 26.2.2-arch3.2; software=false)
+GPUI device: AMD Radeon RX 6600 (RADV NAVI23) (Mesa 26.2.2-arch3.2; software=false)
+GPUI device: AMD Radeon RX 6600 (RADV NAVI23) (Mesa 26.2.2-arch3.2; software=false)
+PASS: real GPUI views, X11 parenting, resize validation, MUI layout/path hits, pointer + keyboard, drag/cancel automation, Tab traversal, text selection/editing/clipboard, GPUI baselines + nested native scroll/MUI clips, close during drag, two instances, close/reopen
+
+composition-1280-1x-1: exit 0
+PASS: native focus/actions, balanced gestures, typed drag/drop, cancellation, automatic parameter routing, oscillator power off/on
+
+composition-1480-1x-1: exit 0
+PASS: native focus/actions, balanced gestures, typed drag/drop, cancellation, automatic parameter routing, oscillator power off/on
+
+composition-1280-1.5x-1: exit 0
+PASS: native focus/actions, balanced gestures, typed drag/drop, cancellation, automatic parameter routing, oscillator power off/on
+
+composition-1480-1.5x-1: exit 0
+PASS: native focus/actions, balanced gestures, typed drag/drop, cancellation, automatic parameter routing, oscillator power off/on
+
+composition-1280-2x-1: exit 0
+PASS: native focus/actions, balanced gestures, typed drag/drop, cancellation, automatic parameter routing, oscillator power off/on
+
+composition-1480-2x-1: exit 0
+PASS: native focus/actions, balanced gestures, typed drag/drop, cancellation, automatic parameter routing, oscillator power off/on
+
+embedded-800-1x-1: exit 0
+GPUI device: AMD Radeon RX 6600 (RADV NAVI23) (Mesa 26.2.2-arch3.2; software=false)
+GPUI device: AMD Radeon RX 6600 (RADV NAVI23) (Mesa 26.2.2-arch3.2; software=false)
+GPUI device: AMD Radeon RX 6600 (RADV NAVI23) (Mesa 26.2.2-arch3.2; software=false)
+PASS: real GPUI views, X11 parenting, resize validation, MUI layout/path hits, pointer + keyboard, drag/cancel automation, Tab traversal, text selection/editing/clipboard, GPUI baselines + nested native scroll/MUI clips, close during drag, two instances, close/reopen
