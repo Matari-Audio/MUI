@@ -745,6 +745,85 @@ fn a_squeezed_flex_item_is_measured_again_at_its_share() {
     assert_eq!(l.frame("root").map(|f| f.size.height), None);
 }
 
+#[test]
+fn a_flex_overlay_with_percentage_body_is_remeasured_at_its_share() {
+    // A rack is an overlay over a scrolling column. Its body fills the rack
+    // by percentage, so its first intrinsic pass must not pin the rack to the
+    // whole row's width before flex distribution gives it a share.
+    let rack = |id: &str, minimum: f64| {
+        overlay([column([leaf(32., 30.).width(Len::Pct(100.))])
+            .width(Len::Pct(100.))
+            .height(Len::Pct(100.))
+            .scroll()])
+        .flex(1.0)
+        .min_width(minimum)
+        .id(id)
+    };
+    let tree = row([rack("warps", 120.), rack("synth", 120.)])
+        .gap(8.)
+        .width(Len::Pct(100.))
+        .height(30.);
+    let layout = resolve(&tree, Some(Size::new(300., 30.)), Default::default())
+        .expect("percentage bodies must follow their flex share");
+    assert_eq!(layout.frame("warps").unwrap().size.width, 146.);
+    assert_eq!(layout.frame("synth").unwrap().size.width, 146.);
+}
+
+#[test]
+fn a_zero_basis_flex_rack_remeasures_wrapped_controls_at_its_final_width() {
+    // The first pass sees the rack's zero-width basis, so every control lands
+    // on its own line. The final flex share is wide enough for three controls
+    // per line; retaining the first cross size would leave a six-line hole.
+    let controls = row((0..6).map(|i| leaf(80., 44.7).id(format!("control-{i}"))))
+        .wrap()
+        .gap(4.)
+        .width(Len::Pct(100.))
+        .id("controls");
+    let rack = overlay([column([controls]).width(Len::Pct(100.))])
+        .width(Len::Px(0.))
+        .flex(1.)
+        .height(Len::Pct(100.))
+        .id("rack");
+    let root = row([rack]).width(Len::Pct(100.)).height(Len::Pct(100.));
+    let layout = resolve(&root, Some(Size::new(300., 400.)), Default::default())
+        .expect("the flex rack resolves");
+    let row = layout.frame("controls").expect("wrapped controls");
+    assert_eq!(layout.frame("rack").unwrap().size.width, 300.);
+    assert!((row.size.height - 93.4).abs() < 1e-9, "{row:?}");
+    let lines: Vec<_> = (0..6)
+        .map(|i| layout.frame(&format!("control-{i}")).unwrap().y)
+        .collect();
+    assert_eq!(&lines[..3], &[0.0, 0.0, 0.0]);
+    assert_eq!(&lines[3..], &[48.7, 48.7, 48.7]);
+}
+
+#[test]
+fn a_sized_flex_rack_remeasures_wrapped_controls_after_growth_and_shrink() {
+    let layout_for = |basis| {
+        let controls = row((0..6).map(|i| leaf(80., 44.7).id(format!("control-{i}"))))
+            .wrap()
+            .gap(4.)
+            .width(Len::Pct(100.))
+            .id("controls");
+        let rack = overlay([column([controls]).width(Len::Pct(100.))])
+            .width(Len::Px(basis))
+            .grow(1.)
+            .shrink(1.)
+            .height(Len::Pct(100.))
+            .id("rack");
+        let root = row([rack]).width(Len::Pct(100.)).height(Len::Pct(100.));
+        resolve(&root, Some(Size::new(300., 400.)), Default::default())
+            .expect("the sized flex rack resolves")
+    };
+
+    for basis in [80., 400.] {
+        let layout = layout_for(basis);
+        let controls = layout.frame("controls").expect("wrapped controls");
+        assert_eq!(layout.frame("rack").unwrap().size.width, 300.);
+        assert!((controls.size.height - 93.4).abs() < 1e-9, "basis={basis}: {controls:?}");
+    }
+}
+
 /// Padding has one slot: the last call wins, whatever spelling it used.
 #[test]
 fn a_pixel_pad_clears_the_token_before_it() {

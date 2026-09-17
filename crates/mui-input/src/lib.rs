@@ -22,6 +22,9 @@
 
 pub use mui_geometry::Point;
 
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use mui_geometry::{Bounds, Error, Path};
 use vello_common::kurbo::{BezPath, Rect, Shape as _};
 
@@ -43,6 +46,9 @@ struct Target {
     /// The nearest clipping ancestor's rect: outside it, the target is not
     /// drawn, so it must not respond either.
     clip: Option<Bounds>,
+    /// Cached exact clipping contours, outermost first. Pointer queries only
+    /// run winding tests over these already-converted paths.
+    clip_paths: Arc<[BezPath]>,
 }
 
 /// The targets under the pointer, in paint order.
@@ -51,6 +57,10 @@ struct Target {
 #[derive(Default)]
 pub struct Hit {
     targets: Vec<Target>,
+    /// The scene shares one `Arc<[Path]>` among all descendants of a clip.
+    /// Cache its Bézier conversion by slice identity so tagged draws on one
+    /// surface do not repeat validation or curve conversion.
+    clip_cache: HashMap<(usize, usize), Arc<[BezPath]>>,
 }
 
 impl Hit {
@@ -71,7 +81,21 @@ impl Hit {
         path: &Path,
         clip: Option<Bounds>,
     ) -> Result<(), Error> {
-        self.add(id.into(), None, path, clip)
+        self.push_clipped_paths(id, path, clip, None)
+    }
+
+    /// Add a target clipped by the exact contours of all its clipping
+    /// ancestors. The paths are converted once while the hit map is built,
+    /// never during pointer queries.
+    pub fn push_clipped_paths(
+        &mut self,
+        id: impl Into<String>,
+        path: &Path,
+        clip: Option<Bounds>,
+        clips: Option<&[Path]>,
+    ) -> Result<(), Error> {
+        let clips = self.bez_clips(clips)?;
+        self.add(id.into(), None, path, clip, clips)
     }
 
     /// Add one named shape of a target: a canvas's drawn ring, a knot, a
@@ -95,7 +119,22 @@ impl Hit {
         path: &Path,
         clip: Option<Bounds>,
     ) -> Result<(), Error> {
-        self.add(id.into(), Some(tag.into()), path, clip)
+        self.push_tagged_paths(id, tag, path, clip, None)
+    }
+
+    /// Add a named shape with the exact contours of all its clipping
+    /// ancestors. This is the tagged counterpart to
+    /// [`Hit::push_clipped_paths`].
+    pub fn push_tagged_paths(
+        &mut self,
+        id: impl Into<String>,
+        tag: impl Into<String>,
+        path: &Path,
+        clip: Option<Bounds>,
+        clips: Option<&[Path]>,
+    ) -> Result<(), Error> {
+        let clips = self.bez_clips(clips)?;
+        self.add(id.into(), Some(tag.into()), path, clip, clips)
     }
 
     fn add(
@@ -104,6 +143,7 @@ impl Hit {
         tag: Option<String>,
         path: &Path,
         clip: Option<Bounds>,
+        clip_paths: Arc<[BezPath]>,
     ) -> Result<(), Error> {
         let path = mui_vello::bez_path(path, mui_vello::ARC_TOLERANCE)?;
         self.targets.push(Target {
@@ -112,8 +152,26 @@ impl Hit {
             bounds: path.bounding_box(),
             path,
             clip,
+            clip_paths,
         });
         Ok(())
+    }
+
+    fn bez_clips(&mut self, paths: Option<&[Path]>) -> Result<Arc<[BezPath]>, Error> {
+        let Some(paths) = paths.filter(|paths| !paths.is_empty()) else {
+            return Ok(Arc::from([]));
+        };
+        let key = (paths.as_ptr() as usize, paths.len());
+        if let Some(clips) = self.clip_cache.get(&key) {
+            return Ok(clips.clone());
+        }
+        let clips: Arc<[BezPath]> = paths
+            .iter()
+            .map(|path| mui_vello::bez_path(path, mui_vello::ARC_TOLERANCE))
+            .collect::<Result<Vec<_>, _>>()?
+            .into();
+        self.clip_cache.insert(key, clips.clone());
+        Ok(clips)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -150,7 +208,12 @@ impl Hit {
         self.targets
             .iter()
             .rev()
-            .find(|t| inside(&t.clip) && t.bounds.contains(q) && t.path.winding(q) != 0)
+            .find(|t| {
+                inside(&t.clip)
+                    && t.clip_paths.iter().all(|clip| clip.winding(q) != 0)
+                    && t.bounds.contains(q)
+                    && t.path.winding(q) != 0
+            })
             .map(|t| (t.id.as_str(), t.tag.as_deref()))
     }
 }

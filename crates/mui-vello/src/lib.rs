@@ -211,13 +211,13 @@ fn font_data(font: &Arc<[u8]>) -> FontData {
 
 fn run(
     origin: mui_geometry::Point,
-    glyphs: &[(u32, f32)],
+    glyphs: &[mui_scene::TextGlyph],
 ) -> impl Iterator<Item = glifo::Glyph> + Clone + '_ {
     let (ox, oy) = (origin.x as f32, origin.y as f32);
-    glyphs.iter().map(move |&(id, x)| glifo::Glyph {
-        id,
-        x: ox + x,
-        y: oy,
+    glyphs.iter().map(move |glyph| glifo::Glyph {
+        id: glyph.id,
+        x: ox + glyph.x,
+        y: oy + glyph.y,
     })
 }
 
@@ -287,15 +287,35 @@ macro_rules! wrapper {
             self.$inner.pop_layer()
         }
         fn glyphs(&mut self, text: &mui_scene::Text) {
-            self.$inner
-                .glyph_run(self.resources, &font_data(&text.font))
-                .font_size(text.size)
-                // glifo's current default, not a promise it will stay one.
-                .hint(true)
-                // The run was measured at this instance; drawing the default
-                // one under its advances is how a bold readout goes ragged.
-                .normalized_coords(&text.coords)
-                .fill_glyphs(run(text.origin, &text.glyphs));
+            let mut start = 0;
+            while start < text.glyphs.len() {
+                let font_index = text.glyphs[start].font;
+                let end = text.glyphs[start + 1..]
+                    .iter()
+                    .position(|glyph| glyph.font != font_index)
+                    .map_or(text.glyphs.len(), |offset| start + 1 + offset);
+                let font = text.fonts.get(font_index).unwrap_or(&text.font);
+                let coords = text.font_coords.get(font_index).map_or_else(
+                    || {
+                        if font_index == 0 {
+                            text.coords.as_ref()
+                        } else {
+                            &[]
+                        }
+                    },
+                    |coords| coords.as_ref(),
+                );
+                self.$inner
+                    .glyph_run(self.resources, &font_data(font))
+                    .font_size(text.size)
+                    // glifo's current default, not a promise it will stay one.
+                    .hint(true)
+                    // The run was measured at this instance; drawing the default
+                    // one under its advances is how a bold readout goes ragged.
+                    .normalized_coords(coords)
+                    .fill_glyphs(run(text.origin, &text.glyphs[start..end]));
+                start = end;
+            }
         }
     };
 }
@@ -700,7 +720,12 @@ fn paint_box(p: &Painted, path: &BezPath) -> Rect {
     let Some(t) = &p.text else {
         return path.bounding_box();
     };
-    let w = t.glyphs.last().map_or(0.0, |&(_, x)| f64::from(x)) + f64::from(t.size);
+    let w = t
+        .glyphs
+        .iter()
+        .map(|glyph| f64::from(glyph.x))
+        .fold(0.0, f64::max)
+        + f64::from(t.size);
     Rect::new(
         t.origin.x,
         t.origin.y - f64::from(t.size),
@@ -912,11 +937,28 @@ mod seam {
             blur: 0.,
             text: Some(Text {
                 font: Arc::from(&[][..]),
+                fonts: Arc::from(&[][..]),
                 size: 16.,
                 origin: mui_geometry::Point::new(10., 30.),
-                glyphs: Arc::from(&[(1u32, 0.0f32), (2, 12.0)][..]),
+                glyphs: Arc::from(
+                    &[
+                        mui_scene::TextGlyph {
+                            id: 1,
+                            x: 0.,
+                            y: 0.,
+                            font: 0,
+                        },
+                        mui_scene::TextGlyph {
+                            id: 2,
+                            x: 12.,
+                            y: 0.,
+                            font: 0,
+                        },
+                    ][..],
+                ),
                 weight: Default::default(),
                 coords: Arc::from(&[][..]),
+                font_coords: Arc::from(&[][..]),
             }),
         };
         let b = paint_box(&p, &BezPath::new());
@@ -930,7 +972,7 @@ mod seam {
 #[cfg(all(test, feature = "cpu"))]
 mod snapshot {
     use super::*;
-    use mui_scene::prelude::*;
+    use mui_scene::{prelude::*, ResolvedScene, TextGlyph};
     use vello_common::pixmap::Pixmap;
 
     /// The whole stack on the CPU: a filled card reaches the pixels, its ink
@@ -979,6 +1021,10 @@ mod snapshot {
     /// Render `spec` on the CPU and hand back the pixels.
     fn pixels(spec: &SceneSpec, w: u16, h: u16) -> Pixmap {
         let scene = resolve_scene(spec).unwrap();
+        pixels_scene(&scene, w, h)
+    }
+
+    fn pixels_scene(scene: &ResolvedScene, w: u16, h: u16) -> Pixmap {
         let mut ctx = vello_cpu::RenderContext::new(w, h);
         let mut res = vello_cpu::Resources::default();
         paint(
@@ -1012,6 +1058,66 @@ mod snapshot {
         );
         let pix = pixels(&spec, 80, 40);
         assert!(pix.data().iter().any(|p| p.a > 0), "the run drew nothing");
+    }
+
+    #[test]
+    fn a_gpos_mark_is_rendered_at_its_shaped_y_offset() {
+        let mut spec = SceneSpec::new(text("ש\u{05b8}").fill(Role::Ink).id("t"))
+            .offered(Size::new(80., 40.));
+        spec.font = Some(std::sync::Arc::from(ttf_inter::REGULAR));
+        let scene = resolve_scene(&spec).unwrap();
+        let text = scene
+            .paint
+            .iter()
+            .find_map(|p| p.text.as_ref())
+            .expect("text layer");
+        assert!(
+            text.glyphs.iter().any(|glyph| glyph.y.abs() > 0.01),
+            "scene dropped GPOS y offsets: {:?}",
+            text.glyphs
+        );
+        let mut without_offsets = scene.clone();
+        for painted in &mut without_offsets.paint {
+            let Some(text) = painted.text.as_mut() else {
+                continue;
+            };
+            text.glyphs = text
+                .glyphs
+                .iter()
+                .map(|glyph| TextGlyph { y: 0., ..*glyph })
+                .collect();
+        }
+        let positioned = pixels_scene(&scene, 80, 40);
+        let flattened = pixels_scene(&without_offsets, 80, 40);
+        assert_ne!(positioned.data(), flattened.data(), "mark offset had no raster effect");
+    }
+
+    #[test]
+    fn a_missing_primary_glyph_uses_the_selected_fallback_font() {
+        let root = text("A😀").fill(Role::Ink).id("t");
+        let mut with_fallback = SceneSpec::new(root.clone()).offered(Size::new(100., 40.));
+        with_fallback.font = Some(std::sync::Arc::from(epaint_default_fonts::HACK_REGULAR));
+        with_fallback
+            .fallback_fonts
+            .push(std::sync::Arc::from(epaint_default_fonts::NOTO_EMOJI_REGULAR));
+        let fallback_scene = resolve_scene(&with_fallback).unwrap();
+        let glyphs = fallback_scene
+            .paint
+            .iter()
+            .find_map(|p| p.text.as_ref())
+            .expect("text layer")
+            .glyphs
+            .clone();
+        assert!(glyphs.iter().any(|glyph| glyph.font == 1), "no fallback glyph was selected");
+
+        let mut primary_only = with_fallback.clone();
+        primary_only.fallback_fonts.clear();
+        let primary_scene = resolve_scene(&primary_only).unwrap();
+        assert_ne!(
+            pixels_scene(&fallback_scene, 100, 40).data(),
+            pixels_scene(&primary_scene, 100, 40).data(),
+            "fallback output equals the primary .notdef output"
+        );
     }
 
     /// A gradient shadow keeps its alpha. Both backends paint opaque black

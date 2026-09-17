@@ -49,7 +49,7 @@ pub use mui_style::{
 pub use mui_text::Weight;
 pub use scene::{
     resolve_scene, resolve_scene_with, Layer, Painted, ResolvedScene, ResolvedSurface, SceneError,
-    SceneSpec, SceneState, Text, TextCache,
+    SceneSpec, SceneState, Text, TextCache, TextGlyph,
 };
 
 /// Everything a scene file needs, including the spacing tokens as bare

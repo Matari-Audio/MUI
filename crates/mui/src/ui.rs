@@ -25,7 +25,8 @@ pub const DOUBLE_CLICK: f64 = 0.4;
 /// What one call to [`Ui::frame`] produced.
 pub struct Frame<'a> {
     pub scene: &'a ResolvedScene,
-    /// A spring is still moving: schedule another frame.
+    /// A spring or interaction deadline is still moving: schedule another frame.
+    /// This includes transitions, a pending tooltip, and a focused text caret.
     pub animating: bool,
     /// A tip that came due this frame, and where to put it. It is already
     /// floated into the scene; this is for a host that would rather place its
@@ -58,6 +59,8 @@ pub enum Edit {
 pub struct Ui {
     pub theme: Theme,
     pub font: Option<Arc<[u8]>>,
+    /// Optional faces tried per grapheme after [`Self::font`].
+    pub fallback_fonts: Vec<Arc<[u8]>>,
     /// The window's device pixels per logical unit. Set it and every painted
     /// edge lands on a device pixel; `None` paints on layout's raw f64.
     pub scale: Option<f64>,
@@ -118,6 +121,7 @@ impl Ui {
         Self {
             theme,
             font: None,
+            fallback_fonts: Vec::new(),
             scale: None,
             interaction: Interaction::new(),
             hit: Hit::default(),
@@ -151,6 +155,16 @@ impl Ui {
     pub fn font(mut self, font: impl Into<Arc<[u8]>>) -> Self {
         let bytes = font.into();
         self.font = mui_text::axes(&bytes).is_ok().then_some(bytes);
+        self
+    }
+    /// Add a font used when the primary face has no glyph for a grapheme.
+    /// The selected face is retained in the scene text payload, so CPU and
+    /// GPU renderers use the same fallback choice.
+    pub fn fallback_font(mut self, font: impl Into<Arc<[u8]>>) -> Self {
+        let bytes = font.into();
+        if mui_text::axes(&bytes).is_ok() {
+            self.fallback_fonts.push(bytes);
+        }
         self
     }
     /// What the last frame resolved to, for anything drawn on top of it.
@@ -469,8 +483,17 @@ impl Ui {
     /// The character index in `s` nearest `x`, measured in the scene's font.
     pub(crate) fn hit(&self, s: &str, size: f64, x: f64) -> usize {
         match self.font.as_deref() {
-            Some(f) => mui_text::hit_index(f, s, size, x)
-                .map_or(0, |b| s[..b.min(s.len())].chars().count()),
+            Some(f) => {
+                let byte = if self.fallback_fonts.is_empty() {
+                    mui_text::hit_index(f, s, size, x)
+                } else {
+                    let mut fonts = Vec::with_capacity(1 + self.fallback_fonts.len());
+                    fonts.push(f);
+                    fonts.extend(self.fallback_fonts.iter().map(AsRef::as_ref));
+                    mui_text::fallback_hit_index(&fonts, s, size, x)
+                };
+                byte.map_or(0, |b| s[..b.min(s.len())].chars().count())
+            }
             // ponytail: the same 0.6em guess `advance` falls back to.
             None => ((x / (size * 0.6)).round().max(0.0) as usize).min(s.chars().count()),
         }
@@ -481,7 +504,16 @@ impl Ui {
     /// `text_run` would build every outline to throw them away.
     pub(crate) fn caret_x(&self, s: &str, size: f64, byte: usize) -> f64 {
         match self.font.as_deref() {
-            Some(f) => mui_text::caret_x(f, s, size, byte).unwrap_or(0.0),
+            Some(f) => {
+                if self.fallback_fonts.is_empty() {
+                    mui_text::caret_x(f, s, size, byte).unwrap_or(0.0)
+                } else {
+                    let mut fonts = Vec::with_capacity(1 + self.fallback_fonts.len());
+                    fonts.push(f);
+                    fonts.extend(self.fallback_fonts.iter().map(AsRef::as_ref));
+                    mui_text::fallback_caret_x(&fonts, s, size, byte).unwrap_or(0.0)
+                }
+            }
             // ponytail: the 0.6em guess the scene itself falls back to
             // without a font; set a font and both agree.
             None => s[..byte.min(s.len())].chars().count() as f64 * size * 0.6,
@@ -623,18 +655,44 @@ impl Ui {
                 Some((id.to_owned(), tag?.to_owned()))
             });
         }
+        // Identity and state ownership are separate. A named layout surface
+        // still participates in hit testing, while only an interactive role
+        // or an explicitly declared hover/press look earns springs. Resolve
+        // the two possible active targets directly so idle frames do not
+        // allocate a policy table for the whole tree.
+        let hovered_policy = hovered
+            .as_deref()
+            .map(|id| state_policy(&root, id))
+            .unwrap_or([false, false]);
+        let held_policy = held
+            .as_deref()
+            .map(|id| state_policy(&root, id))
+            .unwrap_or([false, false]);
         for (k, [h, p]) in &mut self.springs {
+            let hovered = hovered.as_deref() == Some(k);
+            let held = held.as_deref() == Some(k);
             h.to(f64::from(
-                hovered.as_deref() == Some(k) || held.as_deref() == Some(k),
+                (hovered && hovered_policy[0]) || (held && held_policy[0]),
             ));
-            p.to(f64::from(held.as_deref() == Some(k)));
+            p.to(f64::from(held && held_policy[1]));
         }
-        for k in [hovered, held].into_iter().flatten() {
+        if let Some(k) = hovered.as_deref().filter(|_| hovered_policy[0]) {
             self.springs
-                .entry(k)
-                .or_insert_with(|| [Spring::at(0.0), Spring::at(0.0)])
-                .iter_mut()
-                .for_each(|s| s.to(1.0));
+                .entry(k.to_owned())
+                .or_insert_with(|| [Spring::at(0.0), Spring::at(0.0)])[0]
+                .to(1.0);
+        }
+        if let Some(k) = held.as_deref() {
+            let entry = self
+                .springs
+                .entry(k.to_owned())
+                .or_insert_with(|| [Spring::at(0.0), Spring::at(0.0)]);
+            if held_policy[0] {
+                entry[0].to(1.0);
+            }
+            if held_policy[1] {
+                entry[1].to(1.0);
+            }
         }
         // A release is read by the *next* tree, so that frame must come even
         // when nothing is moving.
@@ -702,6 +760,30 @@ impl Ui {
             (_, Some(h)) => self.hover = Some((h.clone(), 0.0)),
             (_, None) => self.hover = None,
         }
+        // A host may sleep when a frame is otherwise static. Keep it awake
+        // until the tooltip deadline, and while a focused text field's caret
+        // is blinking; both are time-driven visual changes rather than paint
+        // springs. The previous scene is the one that measured this hover.
+        let tip_pending = self.hover.as_ref().is_some_and(|(id, t)| {
+            *t < TIP_DELAY
+                && self
+                    .scene
+                    .as_ref()
+                    .and_then(|scene| scene.surface(id))
+                    .is_some_and(|surface| surface.tip.is_some())
+        });
+        animating |= tip_pending;
+        let caret_active = self
+            .focus
+            .as_deref()
+            .and_then(|id| self.scene.as_ref()?.surface(id))
+            .is_some_and(|surface| {
+                matches!(
+                    surface.semantics.as_ref().map(|s| &s.role),
+                    Some(Kind::TextInput { .. })
+                )
+            });
+        animating |= caret_active;
         let tip = self
             .hover
             .as_ref()
@@ -768,6 +850,7 @@ impl Ui {
         let mut spec = SceneSpec::new(root).theme(self.theme);
         spec.offered = offered;
         spec.font = self.font.clone();
+        spec.fallback_fonts = self.fallback_fonts.clone();
         spec.device_scale = self.scale;
         let scene = mui_scene::resolve_scene_with(&spec, &mut self.text_cache)?;
         // Named nodes are the gesture targets, in z-order. Unnamed ones are
@@ -778,12 +861,18 @@ impl Ui {
             .filter(|s| !s.key.starts_with('/') && !s.disabled)
         {
             if s.hits.is_empty() {
-                hit.push_clipped(s.key.to_string(), &s.path, s.clip)?;
+                hit.push_clipped_paths(s.key.to_string(), &s.path, s.clip, s.clip_paths())?;
             }
             // A canvas that named its draws is hit by those shapes instead of
             // by its frame, so a ring responds in the ring and not in its hole.
             for (tag, path) in &s.hits {
-                hit.push_tagged(s.key.to_string(), tag.to_string(), path, s.clip)?;
+                hit.push_tagged_paths(
+                    s.key.to_string(),
+                    tag.to_string(),
+                    path,
+                    s.clip,
+                    s.clip_paths(),
+                )?;
             }
         }
         self.hit = hit;
@@ -921,8 +1010,46 @@ fn transitions(
     animating
 }
 
+/// Whether a semantic role owns the runtime's default pointer looks.
+fn interactive(e: &Element) -> bool {
+    e.semantics.as_ref().is_some_and(|s| {
+        matches!(
+            &s.role,
+            Kind::Button
+                | Kind::Slider { .. }
+                | Kind::Toggle { .. }
+                | Kind::TextInput { .. }
+        )
+    })
+}
+
+/// Which pointer states deserve springs for one key. Structural IDs remain
+/// hit-testable, but do not keep the host animating merely because the pointer
+/// rests on them. Only the active targets are searched, so this adds no
+/// per-frame policy allocation.
+fn state_policy(root: &El, id: &str) -> [bool; 2] {
+    fn visit(n: &El, id: &str) -> Option<[bool; 2]> {
+        if n.key().is_some_and(|k| k == id) {
+            let e = n.payload();
+            let mut policy = [interactive(e), interactive(e)];
+            for (state, _) in &e.states {
+                match state {
+                    State::Hover => policy[0] = true,
+                    State::Press => policy[1] = true,
+                    State::Focus | State::Disabled => {}
+                }
+            }
+            return Some(policy);
+        }
+        n.children().iter().find_map(|child| visit(child, id))
+    }
+
+    visit(root, id).unwrap_or([false, false])
+}
+
 /// Replace every named node's style with what it declared for the states it
-/// is in, in declaration order.
+/// is in, in declaration order. Keep the declarations on the node: the later
+/// automatic-state pass uses them to avoid applying the same state twice.
 /// `off` is the enclosing subtree's disabled flag, `false` at the root: a card
 /// that switched itself off greys the controls inside it too, which is the same
 /// rule the hit gate uses.
@@ -930,28 +1057,33 @@ fn declared_states(n: &mut El, is: &dyn Fn(&str, State) -> bool, off: bool) {
     let off = off || n.payload().disabled;
     if let Some(k) = n.key().map(str::to_owned) {
         let e = n.payload_mut();
-        for (st, f) in std::mem::take(&mut e.states) {
+        let states = std::mem::take(&mut e.states);
+        for (st, f) in &states {
             let on = match st {
                 State::Disabled => off,
                 // A disabled node is never hovered or pressed -- it is not in
                 // the hit map -- and a focus it held before it was switched
                 // off is not a reason to paint it lit.
-                _ => !off && is(&k, st),
+                _ => !off && is(&k, *st),
             };
             if on {
                 e.style = f.0(e.style.clone());
             }
         }
+        e.states = states;
     }
     for c in n.children_mut() {
         declared_states(c, is, off);
     }
 }
 
-/// Push hover and press into every named node's fill, proportionally, and
-/// slide the ones the wheel has scrolled. `off` is the enclosing subtree's
-/// disabled flag, `false` at the root: a hover spring still decaying from
-/// before the node was switched off must not tint it.
+/// Push automatic hover and press into interactive surfaces' fills,
+/// proportionally, and slide the ones the wheel has scrolled. A named layout
+/// node is an identity and hit-test surface, not automatically a control. An
+/// explicit state owns its channel so a declared look is applied once.
+/// `off` is the enclosing subtree's disabled flag, `false` at the root: a
+/// hover spring still decaying from before the node was switched off must not
+/// tint it.
 fn state(
     n: &mut El,
     pal: &Palette,
@@ -967,10 +1099,30 @@ fn state(
     }
     if let Some((h, p)) = n.key().and_then(of).filter(|_| !off) {
         let bg = pal.background();
+        let (auto_hover, auto_press) = {
+            let e = n.payload();
+            (
+                interactive(e)
+                    && !e.states.iter().any(|(state, _)| *state == State::Hover),
+                interactive(e)
+                    && !e.states.iter().any(|(state, _)| *state == State::Press),
+            )
+        };
         let e = n.payload_mut();
-        if !e.style.fill.is_none() && (h > 0.0 || p > 0.0) {
+        if !e.style.fill.is_none()
+            && ((auto_hover && h > 0.0) || (auto_press && p > 0.0))
+        {
             e.style.fill = e.style.fill.map(pal, bg, |c| {
-                c.mix(pal.hover(c), h as f32).mix(pal.pressed(c), p as f32)
+                let c = if auto_hover {
+                    c.mix(pal.hover(c), h as f32)
+                } else {
+                    c
+                };
+                if auto_press {
+                    c.mix(pal.pressed(c), p as f32)
+                } else {
+                    c
+                }
             });
         }
     }
@@ -1082,6 +1234,23 @@ mod tests {
                 mods: Mods::default(),
             }],
             ..Input::default()
+        }
+    }
+    fn paint_color(frame: &Frame<'_>, id: &str) -> Color {
+        frame
+            .scene
+            .paint
+            .iter()
+            .find(|p| &*p.key == id)
+            .unwrap_or_else(|| panic!("missing paint for {id}"))
+            .paint
+            .solid()
+    }
+    fn role_color(role: Role) -> Color {
+        let pal = Theme::DEFAULT.palette;
+        match Fill::from(role).paint(&pal, pal.background()) {
+            Some(Paint::Solid(c)) => c,
+            _ => panic!("role has no solid paint"),
         }
     }
 
@@ -1227,6 +1396,7 @@ mod tests {
                 .on(State::Disabled, |s| s.fill(Role::Dim))
                 .disabled(off)
                 .focusable()
+                .role(Kind::Button)
                 .id("bypass")
         };
         let fill = |f: &Frame<'_>| {
@@ -1246,15 +1416,14 @@ mod tests {
         // Live: two frames, because a gesture reads the previous hit map.
         ui.frame(tree(false), None, at(50., 50., false), 0.016)
             .unwrap();
-        let lit = fill(
-            &ui.frame(tree(false), None, at(50., 50., false), 0.016)
-                .unwrap(),
-        );
+        for _ in 0..12 {
+            ui.frame(tree(false), None, at(50., 50., false), 0.016)
+                .unwrap();
+        }
+        let frame = ui.frame(tree(false), None, at(50., 50., false), 0.016).unwrap();
+        let lit = fill(&frame);
         assert!(ui.get("bypass").hovered, "live, and under the pointer");
-        assert!(
-            lit != role(Role::Field) && lit != role(Role::Dim),
-            "the hover look, lifted by the hover spring"
-        );
+        assert_eq!(lit, role(Role::Primary), "the explicit hover look, once");
 
         for _ in 0..2 {
             ui.frame(tree(true), None, at(50., 50., true), 0.016)
@@ -1318,6 +1487,29 @@ mod tests {
         }
         ui.frame(tree(), None, key(Key::Escape), 0.016).unwrap();
         assert!(!ui.focused("a") && !ui.focused("b"));
+    }
+
+    /// A shipped button is a real Tab stop and Enter reaches the same action
+    /// path as a primary click.
+    #[test]
+    fn a_button_can_be_focused_and_activated_from_the_keyboard() {
+        fn tree(ui: &Ui) -> El {
+            mui_widgets::button(ui, "button", "Save").0.el()
+        }
+
+        let mut ui = Ui::new(Theme::DEFAULT);
+        ui.frame(tree(&ui), None, PointerInput::default(), 0.016)
+            .unwrap();
+        ui.frame(tree(&ui), None, key(Key::Tab), 0.016)
+            .unwrap();
+        assert_eq!(ui.focus_key(), Some("button"));
+
+        // Keys are delivered to the tree on the following frame, exactly as
+        // mouse edges are, so the widget sees the same activation boundary.
+        ui.frame(tree(&ui), None, key(Key::Enter), 0.016)
+            .unwrap();
+        let (_, activated) = mui_widgets::button(&ui, "button", "Save");
+        assert!(activated, "Enter activates the focused button");
     }
 
     #[test]
@@ -1519,10 +1711,12 @@ mod tests {
         ui.frame(tree(), win(), at(10., 10., false), 0.016).unwrap();
         let f = ui.frame(tree(), win(), at(10., 10., false), 0.4).unwrap();
         assert!(f.tip.is_none(), "the pointer has not rested long enough");
+        assert!(f.animating, "the tooltip deadline keeps idle hosts awake");
         let f = ui.frame(tree(), win(), at(10., 10., false), 0.6).unwrap();
         let (t, at) = f.tip.clone().expect("due");
         assert_eq!(t, "why");
         assert!(at.y > 40., "below the surface");
+        assert!(!f.animating, "a settled tooltip does not spin the host");
         assert!(
             f.scene.surfaces().any(|s| s.frame.y > 40.),
             "and floated into the scene"
@@ -1679,6 +1873,152 @@ mod tests {
         assert_eq!(warm, 3., "hovered, the declared radius is what paints");
     }
 
+    /// A structural id remains a hit target for gestures, but it does not
+    /// warm or animate. The semantic child still gets the default look.
+    #[test]
+    fn a_named_layout_surface_stays_cold_while_an_interactive_child_warms() {
+        let tree = || {
+            column([leaf(40., 40.)
+                .fill(Role::Raised)
+                .role(Kind::Button)
+                .focusable()
+                .id("child")])
+            .size(100., 100.)
+            .fill(Role::Background)
+            .id("panel")
+        };
+
+        let mut ui = Ui::new(Theme::DEFAULT);
+        let cold = ui
+            .frame(tree(), None, PointerInput::default(), 0.016)
+            .unwrap();
+        let panel_cold = paint_color(&cold, "panel");
+        let child_cold = paint_color(&cold, "child");
+        let mut child_warm = child_cold;
+        for _ in 0..12 {
+            let frame = ui.frame(tree(), None, at(40., 10., false), 0.016).unwrap();
+            child_warm = paint_color(&frame, "child");
+        }
+        assert!(ui.get("child").hovered, "the child is the topmost target");
+        assert!(!ui.get("panel").hovered, "the parent is only underneath");
+        assert_ne!(child_warm, child_cold, "the control warms");
+        // The child loop's final frame also proves that the parent never
+        // received an automatic tint while it sat underneath the child.
+        let parent_warm = ui
+            .scene()
+            .map(|scene| {
+                scene
+                    .paint
+                    .iter()
+                    .find(|p| &*p.key == "panel")
+                    .expect("panel paint")
+                    .paint
+                    .solid()
+            })
+            .expect("scene");
+        assert_eq!(parent_warm, panel_cold, "the layout stays cold");
+
+        // Resting on the empty part of the named parent remains interactive
+        // for hit testing, without starting a useless animation loop.
+        let mut ui = Ui::new(Theme::DEFAULT);
+        ui.frame(tree(), None, PointerInput::default(), 0.016)
+            .unwrap();
+        let (panel_warm, animating) = {
+            let frame = ui.frame(tree(), None, at(80., 80., false), 0.016).unwrap();
+            (paint_color(&frame, "panel"), frame.animating)
+        };
+        assert!(ui.get("panel").hovered, "the parent still receives the hit");
+        assert_eq!(panel_warm, panel_cold);
+        assert!(!animating, "a structural hover has no spring");
+    }
+
+    /// A child rectangle can extend into the transparent corner of a rounded
+    /// clipped parent, but that corner was never drawn and must not hit.
+    #[test]
+    fn a_rounded_clip_rejects_a_child_corner() {
+        let tree = || {
+            overlay([leaf(40., 40.)
+                .fill(Role::Primary)
+                .anchor(Align::Start, Align::Start)
+                .id("child")])
+            .size(100., 100.)
+            .fill(Role::Field)
+            .radius(20.)
+            .clip()
+            .id("panel")
+        };
+        let mut ui = Ui::new(Theme::DEFAULT);
+        ui.frame(tree(), None, PointerInput::default(), 0.016)
+            .unwrap();
+        ui.frame(tree(), None, at(5., 5., false), 0.016).unwrap();
+        assert!(
+            !ui.get("child").hovered,
+            "the child is outside the parent's rounded contour"
+        );
+        ui.frame(tree(), None, at(25., 25., false), 0.016).unwrap();
+        assert!(ui.get("child").hovered, "the child is inside the clip");
+    }
+
+    /// Every nested clipped ancestor contributes its contour. A point in the
+    /// outer rounded parent but outside the inner one cannot reach a child.
+    #[test]
+    fn nested_rounded_clips_intersect_for_hit_testing() {
+        let tree = || {
+            overlay([
+                overlay([leaf(80., 80.)
+                    .fill(Role::Primary)
+                    .anchor(Align::Center, Align::Center)
+                    .id("target")])
+                .size(60., 60.)
+                .fill(Role::Raised)
+                .radius(15.)
+                .clip()
+                .anchor(Align::Center, Align::Center)
+                .id("inner"),
+            ])
+            .size(100., 100.)
+            .fill(Role::Field)
+            .radius(20.)
+            .clip()
+            .id("outer")
+        };
+        let mut ui = Ui::new(Theme::DEFAULT);
+        ui.frame(tree(), None, PointerInput::default(), 0.016)
+            .unwrap();
+        ui.frame(tree(), None, at(21., 21., false), 0.016).unwrap();
+        assert!(
+            !ui.get("target").hovered,
+            "the outer clip contains this point but the inner clip does not"
+        );
+        ui.frame(tree(), None, at(30., 30., false), 0.016).unwrap();
+        assert!(ui.get("target").hovered, "the point is inside both clips");
+    }
+
+    /// An explicit hover look owns its fill channel. The automatic semantic
+    /// fallback must not remap that already-resolved color a second time.
+    #[test]
+    fn an_explicit_hover_look_is_applied_once() {
+        let mut ui = Ui::new(Theme::DEFAULT);
+        let tree = || {
+            leaf(40., 40.)
+                .fill(Role::Field)
+                .role(Kind::Button)
+                .on(State::Hover, |s| s.fill(Role::Primary))
+                .id("button")
+        };
+        ui.frame(tree(), None, PointerInput::default(), 0.016)
+            .unwrap();
+        let mut warm;
+        let frame = ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
+        warm = paint_color(&frame, "button");
+        for _ in 0..12 {
+            let frame = ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
+            warm = paint_color(&frame, "button");
+        }
+        assert!(ui.get("button").hovered);
+        assert_eq!(warm, role_color(Role::Primary));
+    }
+
     /// The whole of M1 as one widget sees it: Shift is fine, and a
     /// secondary click is a click the caller can tell apart.
     #[test]
@@ -1740,7 +2080,10 @@ mod tests {
     #[test]
     fn hover_warms_the_fill_and_a_press_is_reported_next_frame() {
         let mut ui = Ui::new(Theme::DEFAULT);
-        let tree = || leaf(40., 40.).fill(Role::Raised).id("b");
+        let tree = || leaf(40., 40.)
+            .fill(Role::Raised)
+            .role(Kind::Button)
+            .id("b");
         let base = ui
             .frame(tree(), None, PointerInput::default(), 0.016)
             .unwrap()
@@ -1932,5 +2275,18 @@ mod tests {
             ui.set_text("nope", "1"),
             Err(SceneError::NoTextLayer)
         ));
+    }
+
+    #[test]
+    fn fallback_text_input_caret_uses_the_fallback_advance() {
+        let ui = Ui::new(Theme::DEFAULT)
+            .font(epaint_default_fonts::HACK_REGULAR.to_vec())
+            .fallback_font(epaint_default_fonts::NOTO_EMOJI_REGULAR.to_vec());
+        let value = "A😀";
+        let emoji = value.char_indices().nth(1).unwrap().0;
+        let before = ui.caret_x(value, 16., emoji);
+        let end = ui.caret_x(value, 16., value.len());
+        assert!(end > before, "fallback glyph has no caret advance");
+        assert_eq!(ui.hit(value, 16., end), value.chars().count());
     }
 }

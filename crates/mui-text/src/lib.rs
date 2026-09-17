@@ -11,10 +11,15 @@
 //! Symbols from unfilled to filled is `FILL` 0 -> 1 with no atlas in the way.
 #![forbid(unsafe_code)]
 
+use std::collections::HashMap;
+
 use mui_geometry::{Path, PathCommand, Point};
+use rustybuzz::{BufferClusterLevel, BufferFlags, Direction};
 use skrifa::outline::{DrawSettings, OutlinePen};
 use skrifa::prelude::{LocationRef, Size};
 use skrifa::{FontRef, GlyphId, MetadataProvider as _};
+use unicode_bidi::BidiInfo;
+use unicode_segmentation::UnicodeSegmentation;
 
 #[derive(Debug)]
 pub enum Error {
@@ -219,6 +224,7 @@ pub fn glyph_path(
         open: false,
         tolerance,
         dx: 0.,
+        dy: 0.,
     };
     draw_glyph(&font, glyph_id, size, &location, &mut pen)?;
     let path = pen.finish();
@@ -253,14 +259,59 @@ pub struct TextRun {
     /// Every glyph id with its pen x, for a renderer with its own glyph
     /// cache and hinting; `path` is the same ink as plain geometry.
     pub glyphs: Vec<(u32, f64)>,
+    /// The shaped x/y offsets for the same glyphs. The y component is
+    /// non-zero for marks and other GPOS placements; a glyph cache renderer
+    /// must use it or its output will disagree with [`Self::path`].
+    pub glyph_offsets: Vec<(f64, f64)>,
 }
 
-/// Lay `text` out as one path, glyphs appended at successive pen positions.
+/// A glyph in a [`FallbackTextRun`]. The font index is part of the glyph
+/// identity: glyph id `42` in a fallback face is not glyph id `42` in the
+/// primary face.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FallbackGlyph {
+    pub font: usize,
+    pub glyph: u32,
+    pub x: f64,
+    pub y: f64,
+    pub advance: f64,
+    pub cluster: usize,
+}
+
+/// A shaped run built from a primary face followed by fallback faces.
 ///
-/// Advance-only positioning: skrifa exposes no shaper, so pairs like `AV` sit
-/// at their nominal advances and nothing reorders or substitutes. For the UI
-/// labels this exists to draw that is invisible; for display type it is not,
-/// and the fix is a real shaper rather than a correction here.
+/// [`TextRun`] remains the cheap single-face API used by the current scene
+/// renderer. This type carries the face for every glyph so a renderer can
+/// safely draw fallback glyphs; treating its `glyph` values as if they all
+/// belonged to the first face is incorrect.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FallbackTextRun {
+    pub path: Path,
+    pub glyphs: Vec<FallbackGlyph>,
+    pub advance: f64,
+    pub ascent: f64,
+    pub descent: f64,
+    pub line_height: f64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ShapedGlyph {
+    glyph_id: GlyphId,
+    x: f64,
+    y: f64,
+    advance: f64,
+    cluster: usize,
+    rtl: bool,
+}
+
+#[derive(Debug, Default)]
+struct ShapedText {
+    glyphs: Vec<ShapedGlyph>,
+    advance: f64,
+}
+
+/// Lay `text` out as one path, using OpenType shaping and the Unicode bidi
+/// algorithm to determine glyph order and pen positions.
 ///
 /// **Fill the result non-zero.** Two glyphs whose ink overlaps -- an italic
 /// `f`, a negative sidebearing -- would XOR each other's overlap away under
@@ -274,7 +325,7 @@ pub struct TextRun {
 ///
 /// [`mui_input::Hit`]: https://docs.rs/mui-input
 pub fn text_run(
-    font: &[u8],
+    font_bytes: &[u8],
     text: &str,
     size_px: f64,
     axes: &[Axis<'_>],
@@ -284,12 +335,11 @@ pub fn text_run(
     if !tolerance.is_finite() || tolerance <= 0. {
         return Err(Error::InvalidOptions("tolerance"));
     }
-    let font = FontRef::new(font).map_err(Error::Font)?;
+    let font = FontRef::new(font_bytes).map_err(Error::Font)?;
     let font_size = Size::new(size);
     let location = font.axes().location(axes.iter().copied());
-    let charmap = font.charmap();
     let outlines = font.outline_glyphs();
-    let glyph_metrics = font.glyph_metrics(font_size, LocationRef::from(&location));
+    let shaped = shape_text(font_bytes, text, size_px, axes)?;
 
     let mut pen = PathPen {
         commands: Vec::new(),
@@ -297,18 +347,21 @@ pub fn text_run(
         open: false,
         tolerance,
         dx: 0.,
+        dy: 0.,
     };
-    let mut glyphs = Vec::with_capacity(text.len());
-    for ch in text.chars() {
-        let glyph_id = charmap.map(ch).unwrap_or(GlyphId::NOTDEF);
-        glyphs.push((glyph_id.to_u32(), pen.dx));
-        if outlines.get(glyph_id).is_some() {
-            draw_glyph(&font, glyph_id, size, &location, &mut pen)?;
+    let mut glyphs = Vec::with_capacity(shaped.glyphs.len());
+    let mut glyph_offsets = Vec::with_capacity(shaped.glyphs.len());
+    for glyph in &shaped.glyphs {
+        glyphs.push((glyph.glyph_id.to_u32(), glyph.x));
+        glyph_offsets.push((glyph.x, glyph.y));
+        if outlines.get(glyph.glyph_id).is_some() {
+            pen.dx = glyph.x;
+            pen.dy = glyph.y;
+            draw_glyph(&font, glyph.glyph_id, size, &location, &mut pen)?;
         }
         pen.close_open_contour();
-        pen.dx += glyph_metrics.advance_width(glyph_id).unwrap_or(0.) as f64;
     }
-    let advance = checked_finite(pen.dx, "font metrics")?;
+    let advance = checked_finite(shaped.advance, "font metrics")?;
 
     let metrics = font.metrics(font_size, LocationRef::from(&location));
     let ascent = checked_metric(metrics.ascent, "font metrics")?;
@@ -327,7 +380,268 @@ pub fn text_run(
         descent,
         line_height,
         glyphs,
+        glyph_offsets,
     })
+}
+
+/// Shape a run with `fonts[0]` as the primary face and subsequent faces as
+/// fallback. Fallback selection is per grapheme cluster, so a base character
+/// and its combining marks stay in one face and one shaping call.
+pub fn fallback_text_run(
+    fonts: &[&[u8]],
+    text: &str,
+    size_px: f64,
+    axes: &[Axis<'_>],
+    tolerance: f64,
+) -> Result<FallbackTextRun, Error> {
+    let size = checked_size(size_px)?;
+    if fonts.is_empty() {
+        return Err(Error::InvalidOptions("fonts"));
+    }
+    if !tolerance.is_finite() || tolerance <= 0. {
+        return Err(Error::InvalidOptions("tolerance"));
+    }
+    let faces = fonts
+        .iter()
+        .map(|font| shape_face(font, axes))
+        .collect::<Result<Vec<_>, _>>()?;
+    let font_refs = fonts
+        .iter()
+        .map(|font| FontRef::new(font).map_err(Error::Font))
+        .collect::<Result<Vec<_>, _>>()?;
+    let metrics: Vec<_> = font_refs
+        .iter()
+        .map(|font| {
+            let size = Size::new(size);
+            let location = font.axes().location(axes.iter().copied());
+            font.metrics(size, LocationRef::from(&location))
+        })
+        .collect();
+    let ascent = metrics
+        .iter()
+        .map(|m| checked_metric(m.ascent, "font metrics"))
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .fold(0., f64::max);
+    let descent = metrics
+        .iter()
+        .map(|m| checked_metric(-m.descent, "font metrics"))
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .fold(0., f64::max);
+    let line_height = metrics
+        .iter()
+        .map(|m| checked_metric(m.ascent - m.descent + m.leading, "font metrics"))
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .fold(0., f64::max);
+
+    let mut pen = PathPen {
+        commands: Vec::new(),
+        cursor: Point::new(0., 0.),
+        open: false,
+        tolerance,
+        dx: 0.,
+        dy: 0.,
+    };
+    let mut glyphs = Vec::new();
+    let mut advance = 0.;
+    for (range, direction) in visual_segments(text) {
+        let mut chunks = fallback_chunks(&font_refs, text, range);
+        if direction == Direction::RightToLeft {
+            chunks.reverse();
+        }
+        for (chunk, font_index) in chunks {
+            let mut shaped = shape_segment(
+                &faces[font_index],
+                &text[chunk.clone()],
+                chunk.start,
+                direction,
+                size_px,
+            )?;
+            for glyph in &mut shaped.glyphs {
+                glyph.x += advance;
+                glyphs.push(FallbackGlyph {
+                    font: font_index,
+                    glyph: glyph.glyph_id.to_u32(),
+                    x: glyph.x,
+                    y: glyph.y,
+                    advance: glyph.advance,
+                    cluster: glyph.cluster,
+                });
+                if font_refs[font_index]
+                    .outline_glyphs()
+                    .get(glyph.glyph_id)
+                    .is_some()
+                {
+                    let location = font_refs[font_index]
+                        .axes()
+                        .location(axes.iter().copied());
+                    pen.dx = glyph.x;
+                    pen.dy = glyph.y;
+                    draw_glyph(
+                        &font_refs[font_index],
+                        glyph.glyph_id,
+                        size,
+                        &location,
+                        &mut pen,
+                    )?;
+                }
+                pen.close_open_contour();
+            }
+            advance += shaped.advance;
+        }
+    }
+    let path = pen.finish();
+    path.validate(usize::MAX)?;
+    Ok(FallbackTextRun {
+        path,
+        glyphs,
+        advance: checked_finite(advance, "font metrics")?,
+        ascent,
+        descent,
+        line_height,
+    })
+}
+
+fn fallback_chunks(
+    fonts: &[FontRef<'_>],
+    text: &str,
+    range: std::ops::Range<usize>,
+) -> Vec<(std::ops::Range<usize>, usize)> {
+    let mut chunks = Vec::new();
+    let mut current = None;
+    let mut start = range.start;
+    for (offset, grapheme) in text[range.clone()].grapheme_indices(true) {
+        let at = range.start + offset;
+        let font = fonts
+            .iter()
+            .position(|font| grapheme.chars().all(|ch| font.charmap().map(ch).is_some()))
+            .unwrap_or(0);
+        if current.is_some_and(|index| index != font) {
+            chunks.push((start..at, current.unwrap()));
+            start = at;
+        }
+        current = Some(font);
+    }
+    if let Some(font) = current {
+        chunks.push((start..range.end, font));
+    }
+    chunks
+}
+
+fn variations(axes: &[Axis<'_>]) -> Vec<rustybuzz::Variation> {
+    axes.iter()
+        .filter_map(|&(tag, value)| {
+            let tag: [u8; 4] = tag.as_bytes().try_into().ok()?;
+            Some(rustybuzz::Variation {
+                tag: rustybuzz::ttf_parser::Tag::from_bytes(&tag),
+                value,
+            })
+        })
+        .collect()
+}
+
+fn shape_face<'a>(font: &'a [u8], axes: &[Axis<'_>]) -> Result<rustybuzz::Face<'a>, Error> {
+    let mut face = rustybuzz::Face::from_slice(font, 0).ok_or(Error::InvalidOptions("font"))?;
+    face.set_variations(&variations(axes));
+    Ok(face)
+}
+
+fn shape_segment(
+    face: &rustybuzz::Face<'_>,
+    text: &str,
+    byte_offset: usize,
+    direction: Direction,
+    size_px: f64,
+) -> Result<ShapedText, Error> {
+    let mut buffer = rustybuzz::UnicodeBuffer::new();
+    buffer.push_str(text);
+    buffer.set_direction(direction);
+    buffer.set_cluster_level(BufferClusterLevel::MonotoneGraphemes);
+    buffer.set_flags(BufferFlags::BEGINNING_OF_TEXT | BufferFlags::END_OF_TEXT);
+    let shaped = rustybuzz::shape(face, &[], buffer);
+    let scale = size_px / f64::from(face.units_per_em());
+    let mut pen = 0.;
+    let mut glyphs = Vec::with_capacity(shaped.len());
+    for (info, position) in shaped
+        .glyph_infos()
+        .iter()
+        .zip(shaped.glyph_positions())
+    {
+        let x_advance = f64::from(position.x_advance) * scale;
+        glyphs.push(ShapedGlyph {
+            glyph_id: GlyphId::new(info.glyph_id),
+            x: pen + f64::from(position.x_offset) * scale,
+            // HarfBuzz uses a y-up offset; MUI paths use y-down coordinates.
+            y: -f64::from(position.y_offset) * scale,
+            advance: x_advance,
+            cluster: byte_offset + info.cluster as usize,
+            rtl: direction == Direction::RightToLeft,
+        });
+        pen += x_advance;
+    }
+    Ok(ShapedText {
+        glyphs,
+        advance: pen,
+    })
+}
+
+fn paragraph_line_range(text: &str, start: usize, end: usize) -> std::ops::Range<usize> {
+    let mut end = end;
+    while end > start {
+        let ch = text[..end].chars().next_back().unwrap();
+        if ch == '\n' || ch == '\r' {
+            end -= ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+    start..end
+}
+
+fn visual_segments(text: &str) -> Vec<(std::ops::Range<usize>, Direction)> {
+    let bidi = BidiInfo::new(text, None);
+    let mut segments = Vec::new();
+    for para in &bidi.paragraphs {
+        let line = paragraph_line_range(text, para.range.start, para.range.end);
+        if line.is_empty() {
+            continue;
+        }
+        let (levels, runs) = bidi.visual_runs(para, line);
+        segments.extend(runs.into_iter().map(|range| {
+            let direction = if levels[range.start].is_rtl() {
+                Direction::RightToLeft
+            } else {
+                Direction::LeftToRight
+            };
+            (range, direction)
+        }));
+    }
+    segments
+}
+
+fn shape_text(
+    font: &[u8],
+    text: &str,
+    size_px: f64,
+    axes: &[Axis<'_>],
+) -> Result<ShapedText, Error> {
+    if text.is_empty() {
+        return Ok(ShapedText::default());
+    }
+    let face = shape_face(font, axes)?;
+    let mut out = ShapedText::default();
+    for (range, direction) in visual_segments(text) {
+        let mut segment =
+            shape_segment(&face, &text[range.clone()], range.start, direction, size_px)?;
+        for glyph in &mut segment.glyphs {
+            glyph.x += out.advance;
+        }
+        out.advance += segment.advance;
+        out.glyphs.extend(segment.glyphs);
+    }
+    Ok(out)
 }
 
 fn draw_glyph(
@@ -358,12 +672,13 @@ struct PathPen {
     /// Where this glyph's origin sits. Carried on the pen rather than applied
     /// afterwards so a run never pays for a second pass over its own points.
     dx: f64,
+    dy: f64,
 }
 
 impl PathPen {
     /// Font space is y-up, the scene is y-down.
     fn point(&self, x: f32, y: f32) -> Point {
-        Point::new(self.dx + x as f64, -(y as f64))
+        Point::new(self.dx + x as f64, self.dy - y as f64)
     }
     fn line(&mut self, p: Point) {
         self.commands.push(PathCommand::LineTo(p));
@@ -440,23 +755,77 @@ impl OutlinePen for PathPen {
     }
 }
 
-/// One advance per `char` of `text`, at the default variation position. The
-/// only allocation the measuring functions make.
-fn advances(font: &[u8], text: &str, size_px: f64) -> Result<Vec<f64>, Error> {
-    let size = checked_size(size_px)?;
-    let font = FontRef::new(font).map_err(Error::Font)?;
-    let location = font.axes().location(std::iter::empty::<Axis<'_>>());
-    let charmap = font.charmap();
-    let glyph_metrics = font.glyph_metrics(Size::new(size), LocationRef::from(&location));
-    text.chars()
-        .map(|ch| {
-            let glyph_id = charmap.map(ch).unwrap_or(GlyphId::NOTDEF);
-            checked_finite(
-                f64::from(glyph_metrics.advance_width(glyph_id).unwrap_or(0.)),
-                "font metrics",
-            )
-        })
-        .collect()
+#[derive(Debug, Clone, Copy)]
+struct TextCluster {
+    start: usize,
+    end: usize,
+    advance: f64,
+    rtl: bool,
+    left: f64,
+    right: f64,
+}
+
+fn shaped_clusters(font: &[u8], text: &str, size_px: f64) -> Result<Vec<TextCluster>, Error> {
+    shaped_clusters_with_axes(font, text, size_px, &[])
+}
+
+fn shaped_clusters_with_axes(
+    font: &[u8],
+    text: &str,
+    size_px: f64,
+    axes: &[Axis<'_>],
+) -> Result<Vec<TextCluster>, Error> {
+    let shaped = shape_text(font, text, size_px, axes)?;
+    let mut clusters: Vec<TextCluster> = Vec::new();
+    for glyph in shaped.glyphs {
+        if let Some(cluster) = clusters
+            .iter_mut()
+            .find(|cluster| cluster.start == glyph.cluster)
+        {
+            cluster.advance += glyph.advance;
+            cluster.left = cluster.left.min(glyph.x);
+            cluster.right = cluster.right.max(glyph.x + glyph.advance);
+        } else {
+            clusters.push(TextCluster {
+                start: glyph.cluster,
+                end: text.len(),
+                advance: glyph.advance,
+                rtl: glyph.rtl,
+                left: glyph.x,
+                right: glyph.x + glyph.advance,
+            });
+        }
+    }
+    clusters.sort_unstable_by_key(|cluster| cluster.start);
+    for i in 0..clusters.len().saturating_sub(1) {
+        clusters[i].end = clusters[i + 1].start;
+    }
+    Ok(clusters)
+}
+
+/// One shaped advance per `char` of `text`, at the default variation position.
+/// Glyph clusters keep ligatures and combining marks together. The advance is
+/// assigned to the cluster's first source character for wrapping; caret queries
+/// use [`caret_positions`] so they never enter a ligature or combining cluster.
+fn advances_with_axes(
+    font: &[u8],
+    text: &str,
+    size_px: f64,
+    axes: &[Axis<'_>],
+) -> Result<Vec<f64>, Error> {
+    checked_size(size_px)?;
+    let clusters = shaped_clusters_with_axes(font, text, size_px, axes)?;
+    let starts: Vec<usize> = text.char_indices().map(|(i, _)| i).collect();
+    let mut out = vec![0.; starts.len()];
+    if starts.is_empty() {
+        return Ok(out);
+    }
+    for cluster in clusters {
+        let start = cluster.start;
+        let first = starts.partition_point(|&byte| byte < start).min(out.len() - 1);
+        out[first] += checked_finite(cluster.advance, "font metrics")?;
+    }
+    Ok(out)
 }
 
 /// One laid-out line: the slice of the source it covers and how wide that is.
@@ -478,18 +847,45 @@ pub struct Line {
 /// `max_width` breaks at the glyph that overflows rather than hanging off the
 /// edge.
 ///
-/// ponytail: the overflow fallback still splits at a char, not a grapheme
-/// cluster -- fix when a combining mark visibly detaches.
 pub fn break_lines(
     font: &[u8],
     text: &str,
     size_px: f64,
     max_width: f64,
 ) -> Result<Vec<Line>, Error> {
+    break_lines_with_axes(font, text, size_px, &[], max_width)
+}
+
+/// [`break_lines`] at a variable-font axis location. Wrapping must use the
+/// same instance that shaped the rendered line; otherwise a bold run can
+/// cross its box even though the default instance fit during layout.
+pub fn break_lines_with_axes(
+    font: &[u8],
+    text: &str,
+    size_px: f64,
+    axes: &[Axis<'_>],
+    max_width: f64,
+) -> Result<Vec<Line>, Error> {
     if !(max_width.is_finite() && max_width > 0.) {
         return Err(Error::InvalidOptions("max_width"));
     }
-    let advances = advances(font, text, size_px)?;
+    let advances = advances_with_axes(font, text, size_px, axes)?;
+    let cluster_starts: Vec<usize> = shaped_clusters_with_axes(font, text, size_px, axes)?
+        .into_iter()
+        .map(|cluster| cluster.start)
+        .collect();
+    break_lines_from_advances(text, &advances, &cluster_starts, max_width)
+}
+
+fn break_lines_from_advances(
+    text: &str,
+    advances: &[f64],
+    cluster_starts: &[usize],
+    max_width: f64,
+) -> Result<Vec<Line>, Error> {
+    if advances.len() != text.chars().count() {
+        return Err(Error::InvalidOptions("advances"));
+    }
     // Byte offsets a line may start at, ascending, walked alongside the chars.
     // One at a skipped space (LB8 after a ZWSP) is dropped; the next ink char
     // offers it again.
@@ -504,7 +900,7 @@ pub fn break_lines(
     let (mut x, mut trim, mut word) = (0., 0., 0.);
     let mut brk: Option<(usize, f64)> = None;
 
-    for ((i, ch), &a) in text.char_indices().zip(&advances) {
+    for ((i, ch), &a) in text.char_indices().zip(advances.iter()) {
         if ch == '\n' {
             lines.push(Line {
                 text_range: start..i,
@@ -514,6 +910,10 @@ pub fn break_lines(
             (x, trim, word, brk) = (0., 0., 0., None);
             continue;
         }
+        let at_cluster_start = cluster_starts
+            .partition_point(|&start| start <= i)
+            .checked_sub(1)
+            .is_none_or(|index| cluster_starts[index] == i);
         if ch.is_ascii_whitespace() {
             // Trailing space always fits: it costs nothing at the line end.
             x += a;
@@ -523,7 +923,7 @@ pub fn break_lines(
         while opps.peek().is_some_and(|&bi| bi < i) {
             opps.next();
         }
-        if opps.peek() == Some(&i) {
+        if at_cluster_start && opps.peek() == Some(&i) {
             // A line may start here; any spaces before it stay on this one.
             brk = Some((i, x - trim));
             word = 0.;
@@ -561,33 +961,199 @@ pub fn break_lines(
     Ok(lines)
 }
 
+/// Greedy UAX#14 line breaking using the same fallback faces and variation
+/// axes as [`fallback_text_run`]. A grapheme cluster remains indivisible even
+/// when its glyph comes from a fallback face.
+pub fn fallback_break_lines(
+    fonts: &[&[u8]],
+    text: &str,
+    size_px: f64,
+    axes: &[Axis<'_>],
+    max_width: f64,
+) -> Result<Vec<Line>, Error> {
+    if !(max_width.is_finite() && max_width > 0.) {
+        return Err(Error::InvalidOptions("max_width"));
+    }
+    let run = fallback_text_run(fonts, text, size_px, axes, 0.05)?;
+    let starts: Vec<usize> = text.char_indices().map(|(i, _)| i).collect();
+    let mut advances = vec![0.; starts.len()];
+    let mut clusters = Vec::new();
+    for glyph in &run.glyphs {
+        if let Some((_, advance)) = clusters
+            .iter_mut()
+            .find(|(start, _)| *start == glyph.cluster)
+        {
+            *advance += glyph.advance;
+        } else {
+            clusters.push((glyph.cluster, glyph.advance));
+        }
+    }
+    for (start, advance) in clusters {
+        let Some(first) = starts.iter().position(|&byte| byte == start) else {
+            continue;
+        };
+        advances[first] += advance;
+    }
+    let mut cluster_starts = run
+        .glyphs
+        .iter()
+        .map(|glyph| glyph.cluster)
+        .collect::<Vec<_>>();
+    cluster_starts.sort_unstable();
+    cluster_starts.dedup();
+    break_lines_from_advances(text, &advances, &cluster_starts, max_width)
+}
+
+fn caret_positions(font: &[u8], text: &str, size_px: f64) -> Result<Vec<(usize, f64)>, Error> {
+    caret_positions_from_clusters(text, shaped_clusters(font, text, size_px)?)
+}
+
+fn caret_positions_from_clusters(
+    text: &str,
+    clusters: Vec<TextCluster>,
+) -> Result<Vec<(usize, f64)>, Error> {
+    let boundaries: Vec<usize> = text
+        .char_indices()
+        .map(|(byte, _)| byte)
+        .chain(std::iter::once(text.len()))
+        .collect();
+    let mut positions = vec![f64::NAN; boundaries.len()];
+    for cluster in clusters {
+        let first = boundaries
+            .partition_point(|&byte| byte < cluster.start)
+            .min(boundaries.len() - 1);
+        let last = boundaries
+            .partition_point(|&byte| byte < cluster.end)
+            .min(boundaries.len() - 1);
+        let leading = if cluster.rtl {
+            cluster.right
+        } else {
+            cluster.left
+        };
+        let trailing = if cluster.rtl {
+            cluster.left
+        } else {
+            cluster.right
+        };
+        for position in first..=last {
+            positions[position] = if boundaries[position] == cluster.end {
+                trailing
+            } else {
+                leading
+            };
+        }
+    }
+    let mut previous = 0.;
+    for position in &mut positions {
+        if position.is_finite() {
+            previous = *position;
+        } else {
+            *position = previous;
+        }
+    }
+    Ok(boundaries.into_iter().zip(positions).collect())
+}
+
 /// Pen x of the caret sitting *before* the char at `byte_index`, which must be
 /// a char boundary. `text.len()` is the caret at the end.
 pub fn caret_x(font: &[u8], text: &str, size_px: f64, byte_index: usize) -> Result<f64, Error> {
     if byte_index > text.len() || !text.is_char_boundary(byte_index) {
         return Err(Error::InvalidOptions("byte_index"));
     }
-    Ok(advances(font, text, size_px)?
-        .iter()
-        .zip(text.char_indices())
-        .take_while(|(_, (i, _))| *i < byte_index)
-        .map(|(a, _)| a)
-        .sum())
+    let positions = caret_positions(font, text, size_px)?;
+    Ok(positions
+        .into_iter()
+        .find_map(|(byte, x)| (byte == byte_index).then_some(x))
+        .unwrap_or(0.))
 }
 
 /// The char boundary whose caret is nearest `x`. The inverse of [`caret_x`],
 /// which is what a click in a text field needs.
 pub fn hit_index(font: &[u8], text: &str, size_px: f64, x: f64) -> Result<usize, Error> {
     let x = checked_finite(x, "x")?;
-    let advances = advances(font, text, size_px)?;
-    let (mut pen, mut best, mut best_d) = (0., 0, x.abs());
-    for ((i, ch), a) in text.char_indices().zip(&advances) {
-        pen += a;
-        let d = (pen - x).abs();
-        if d < best_d {
-            (best, best_d) = (i + ch.len_utf8(), d);
+    let positions = caret_positions(font, text, size_px)?;
+    let (best, _) = positions.into_iter().fold(
+        (0, x.abs()),
+        |(best, best_distance), (byte, position)| {
+            let distance = (position - x).abs();
+            if distance < best_distance {
+                (byte, distance)
+            } else {
+                (best, best_distance)
+            }
+        },
+    );
+    Ok(best)
+}
+
+fn fallback_caret_positions(
+    fonts: &[&[u8]],
+    text: &str,
+    size_px: f64,
+) -> Result<Vec<(usize, f64)>, Error> {
+    let run = fallback_text_run(fonts, text, size_px, &[], 0.05)?;
+    let mut rtl = HashMap::new();
+    for (range, direction) in visual_segments(text) {
+        for (offset, _) in text[range.clone()].char_indices() {
+            rtl.insert(range.start + offset, direction == Direction::RightToLeft);
         }
     }
+    let mut by_cluster: HashMap<usize, TextCluster> = HashMap::new();
+    for glyph in run.glyphs {
+        let entry = by_cluster.entry(glyph.cluster).or_insert(TextCluster {
+            start: glyph.cluster,
+            end: text.len(),
+            advance: 0.,
+            rtl: rtl.get(&glyph.cluster).copied().unwrap_or(false),
+            left: glyph.x,
+            right: glyph.x,
+        });
+        entry.advance += glyph.advance;
+        entry.left = entry.left.min(glyph.x);
+        entry.right = entry.right.max(glyph.x + glyph.advance);
+    }
+    let mut clusters: Vec<TextCluster> = by_cluster.into_values().collect();
+    clusters.sort_unstable_by_key(|cluster| cluster.start);
+    for i in 0..clusters.len().saturating_sub(1) {
+        clusters[i].end = clusters[i + 1].start;
+    }
+    caret_positions_from_clusters(text, clusters)
+}
+
+/// Pen x of a caret in a run that can use fallback faces.
+pub fn fallback_caret_x(
+    fonts: &[&[u8]],
+    text: &str,
+    size_px: f64,
+    byte_index: usize,
+) -> Result<f64, Error> {
+    if byte_index > text.len() || !text.is_char_boundary(byte_index) {
+        return Err(Error::InvalidOptions("byte_index"));
+    }
+    Ok(fallback_caret_positions(fonts, text, size_px)?
+        .into_iter()
+        .find_map(|(byte, x)| (byte == byte_index).then_some(x))
+        .unwrap_or(0.))
+}
+
+/// The char boundary whose caret is nearest `x` in a fallback run.
+pub fn fallback_hit_index(
+    fonts: &[&[u8]],
+    text: &str,
+    size_px: f64,
+    x: f64,
+) -> Result<usize, Error> {
+    let x = checked_finite(x, "x")?;
+    let (best, _) = fallback_caret_positions(fonts, text, size_px)?
+        .into_iter()
+        .fold((0, x.abs()), |(best, best_distance), (byte, position)| {
+            let distance = (position - x).abs();
+            if distance < best_distance {
+                (byte, distance)
+            } else {
+                (best, best_distance)
+            }
+        });
     Ok(best)
 }
 
@@ -848,6 +1414,121 @@ mod tests {
             glyph_path(HACK_REGULAR, '\u{10FFFD}', 64., &[], 0.05),
             Err(Error::MissingGlyph(_))
         ));
+    }
+
+    #[test]
+    fn open_type_shaping_applies_kerning_and_combining_substitution() {
+        let pair = text_run(ttf_inter::REGULAR, "AV", 32., &[], 0.05).unwrap();
+        let separate = text_run(ttf_inter::REGULAR, "A", 32., &[], 0.05)
+            .unwrap()
+            .advance
+            + text_run(ttf_inter::REGULAR, "V", 32., &[], 0.05)
+                .unwrap()
+                .advance;
+        assert!(pair.advance < separate, "kerning was not applied: {pair:?}");
+
+        let composed = text_run(ttf_inter::REGULAR, "A\u{301}", 32., &[], 0.05).unwrap();
+        assert_eq!(composed.glyphs.len(), 1, "the mark was not composed");
+    }
+
+    #[test]
+    fn combining_marks_keep_their_position_offsets_for_renderers() {
+        // Inter keeps the Hebrew niqqud as a separate mark and positions it
+        // with GPOS, which exercises the renderer's y-offset transport.
+        let run = text_run(ttf_inter::REGULAR, "ש\u{05b8}", 32., &[], 0.05).unwrap();
+        assert!(
+            run.glyph_offsets
+                .iter()
+                .any(|&(_, y)| y.abs() > 0.01),
+            "GPOS mark placement was discarded: {:?}",
+            run.glyph_offsets
+        );
+    }
+
+    #[test]
+    fn variable_weight_reaches_the_shaper_and_outline() {
+        let regular = text_run(
+            ttf_inter::REGULAR,
+            "KURV",
+            24.,
+            &[Weight::REGULAR.axis()],
+            0.05,
+        )
+        .unwrap();
+        let bold = text_run(
+            ttf_inter::REGULAR,
+            "KURV",
+            24.,
+            &[Weight::BOLD.axis()],
+            0.05,
+        )
+        .unwrap();
+        assert_ne!(regular.path, bold.path, "the wght axis was ignored");
+    }
+
+    #[test]
+    fn bidi_reorders_a_rtl_run_in_visual_order() {
+        let shaped = shape_text(HACK_REGULAR, "ab \u{05D0}\u{05D1}\u{05D2} cd", 16., &[]).unwrap();
+        let clusters: Vec<usize> = shaped.glyphs.iter().map(|glyph| glyph.cluster).collect();
+        assert!(
+            clusters.windows(3).any(|window| window == [7, 5, 3]),
+            "RTL glyphs were not visually reordered: {clusters:?}"
+        );
+    }
+
+    #[test]
+    fn wrapping_does_not_split_a_combining_cluster() {
+        let text = "A\u{301}B";
+        let first = text_run(ttf_inter::REGULAR, "A\u{301}", 16., &[], 0.05)
+            .unwrap()
+            .advance;
+        let lines = break_lines(ttf_inter::REGULAR, text, 16., first);
+        assert_eq!(
+            lines.unwrap()
+                .into_iter()
+                .map(|line| &text[line.text_range])
+                .collect::<Vec<_>>(),
+            ["A\u{301}", "B"]
+        );
+    }
+
+    #[test]
+    fn fallback_selects_a_face_per_grapheme_cluster() {
+        let run = fallback_text_run(
+            &[HACK_REGULAR, epaint_default_fonts::NOTO_EMOJI_REGULAR],
+            "A😀",
+            24.,
+            &[],
+            0.05,
+        )
+        .unwrap();
+        assert_eq!(run.glyphs[0].font, 0);
+        assert_eq!(run.glyphs.last().unwrap().font, 1);
+        assert!(run.advance > 0.);
+    }
+
+    #[test]
+    fn fallback_caret_round_trips_across_a_missing_glyph() {
+        let fonts = [HACK_REGULAR, epaint_default_fonts::NOTO_EMOJI_REGULAR];
+        let text = "A😀";
+        let end = fallback_caret_x(&fonts, text, 24., text.len()).unwrap();
+        assert_eq!(fallback_hit_index(&fonts, text, 24., end).unwrap(), text.len());
+        let emoji = text.char_indices().nth(1).unwrap().0;
+        let before_emoji = fallback_caret_x(&fonts, text, 24., emoji).unwrap();
+        assert!(end > before_emoji, "fallback glyph has no advance");
+    }
+
+    #[test]
+    fn fallback_wrap_breaks_before_a_glyph_cluster() {
+        let fonts = [HACK_REGULAR, epaint_default_fonts::NOTO_EMOJI_REGULAR];
+        let text = "A😀B";
+        let emoji_end = text.char_indices().nth(2).unwrap().0;
+        let first_two = fallback_text_run(&fonts, &text[..emoji_end], 24., &[], 0.05)
+            .unwrap()
+            .advance;
+        let lines = fallback_break_lines(&fonts, text, 24., &[], first_two + 0.1).unwrap();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].text_range, 0..emoji_end);
     }
 }
 

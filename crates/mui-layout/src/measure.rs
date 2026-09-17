@@ -21,7 +21,8 @@ pub(crate) struct Measured<'a, P> {
     /// overrides it: what a scroll node lays its children into.
     pub(crate) content: Size,
     /// This subtree's measured size can still change if its main extent does:
-    /// a content leaf that wraps, or a `min_col` grid with no width yet.
+    /// a content leaf that wraps, a percentage-sized descendant, an
+    /// aspect-ratio node, or a `min_col` grid with no width yet.
     pub(crate) fluid: bool,
     /// A grid's resolved column count, after `min_col`; 0 for anything else.
     /// Measured once so arrange cannot re-derive a different one.
@@ -268,10 +269,17 @@ pub(crate) fn measure<'a, P>(
     let here = node.id.as_deref().unwrap_or(ancestor);
     // Aspect is width-first, like CSS: a definite width settles the height,
     // and only a definite height with no width settles the width.
-    let mut definite = [
-        node.width.px().or(definite[0]),
-        node.height.px().or(definite[1]),
-    ];
+    // A flex item may use an explicit width as its intrinsic basis while its
+    // parent is still measuring the row. Once that item is re-measured at the
+    // share the parent actually assigned, the share is the authoritative width
+    // for descendants whose layout depends on it. Keep the declared width for
+    // the first pass and for nodes that opted out of both growth and shrink;
+    // those are genuinely fixed even when a parent has spare room.
+    let flex_width = node
+        .width
+        .px()
+        .filter(|_| !(pass.redo && (node.grow > 0.0 || node.shrink > 0.0)));
+    let mut definite = [flex_width.or(definite[0]), node.height.px().or(definite[1])];
     if let Some(a) = node.aspect {
         match (definite, node.height, node.width) {
             ([Some(w), _], Len::Auto, _) => definite[1] = Some(w / a),
@@ -391,7 +399,7 @@ pub(crate) fn measure<'a, P>(
             vertical: false, ..
         },
         Some(avail),
-        false,
+        _,
     ) = (&node.kind, inner[0], node.wrap)
     {
         let shares: Vec<(usize, f64)> = {
@@ -572,9 +580,26 @@ pub(crate) fn measure<'a, P>(
     }
     // A squeezed flex row re-measures its fluid items, which is the one
     // chance a `fits` inside one gets to pick against its real share.
+    // Percentage-like widths and aspect ratios resolve from a flex ancestor's
+    // final share. Carry that local dependency through the measured child bit;
+    // the existing child propagation handles overlays and scroll wrappers
+    // without rescanning their descendants or pulling floats into the chain.
+    let width_fluid = matches!(
+        node.width,
+        Len::Pct(_) | Len::Clamp { .. } | Len::Container(_)
+    ) || node.aspect.is_some();
+    let wrap_fluid = matches!(
+        node.kind,
+        Kind::Branch {
+            vertical: false,
+            ..
+        }
+    ) && node.wrap;
     let fluid = matches!(node.kind, Kind::Content | Kind::Fits(_))
         || (node.min_col.is_some() && inner[0].is_none() && matches!(node.kind, Kind::Grid { .. }))
-        || children.iter().any(|c| c.fluid && !c.node.float);
+        || children.iter().any(|c| c.fluid && !c.node.float)
+        || width_fluid
+        || wrap_fluid;
     Ok(Measured {
         node,
         index: 0,

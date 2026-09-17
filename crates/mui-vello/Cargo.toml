@@ -35,6 +35,7 @@ vello_cpu = { version = "0.2", optional = true, default-features = false, featur
 mui-layout = { path = "../mui-layout" }
 epaint_default_fonts = "0.36"
 mui-text = { path = "../mui-text" }
+ttf-inter = { version = "0.1", default-features = false, features = ["v"] }
 png = "0.17"
 # The example builds its own headless device.
 wgpu = { version = "29", default-features = false, features = ["wgsl", "vulkan", "gles", "metal", "dx12"] }
