@@ -251,11 +251,15 @@ pub(crate) fn measure<'a, P>(
     pass: &mut Pass<'a, '_, P>,
 ) -> Result<Measured<'a, P>, Error> {
     let l = pass.limits;
-    if depth > l.depth || pass.left == 0 {
+    if depth > l.depth || (!pass.redo && pass.left == 0) {
         return Err(Error::BudgetExceeded);
     }
     pass.pinned |= node.pin.is_some();
-    pass.left -= 1;
+    // The node budget counts nodes: a re-measure at the final share visits a
+    // subtree again but adds nothing to the tree.
+    if !pass.redo {
+        pass.left -= 1;
+    }
     validate_node(node, l)?;
     let (gap, padding) = (node.gap.resolve(pass.scale), node.padding(pass.scale));
     if !(gap.is_finite() && (0.0..=l.extent).contains(&gap) && padding.valid(l.extent)) {

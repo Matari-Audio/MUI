@@ -2637,3 +2637,45 @@ mod feature_tests {
         assert_eq!(cache.len(), 1);
     }
 }
+
+#[cfg(test)]
+mod module_tab_weld {
+    use crate::prelude::*;
+    use crate::*;
+    use mui_layout::{Align, Size, Spacing};
+    #[test]
+    /// A square port tab next to a square body welds into one contour; a
+    /// rounded tab is a pill that only kisses the body and the union splits.
+    #[allow(clippy::float_cmp)]
+    fn a_square_tab_welds_into_one_contour_with_its_body() {
+        let tab = column([leaf(24., 24.)])
+            .w(36.)
+            .h(36.)
+            .pad(6.)
+            .gap(0.)
+            .shrink(0.)
+            .fill(Role::Surface)
+            .radius(0.)
+            .align(Align::End);
+        let body = leaf(400., 200.).grow(1.).shrink(1.).min_width(0.).radius(0.).id("body");
+        let root = row([tab, body])
+            .align(Align::Start)
+            .gap(Spacing::Px(0.0))
+            .w(pct(100.))
+            .weld(Role::Surface)
+            .stroke(Role::Dim)
+            .stroke_width(1.5)
+            .radius(20.)
+            .id("weld");
+        let s = resolve_scene(&SceneSpec::new(root).offered(Size::new(500., 200.))).unwrap();
+        let pts = s.surface("weld").unwrap().path.flatten(0.1, 20_000).unwrap().concat();
+        let minx = pts.iter().map(|p| p.x).fold(f64::MAX, f64::min);
+        let maxx = pts.iter().map(|p| p.x).fold(f64::MIN, f64::max);
+        let miny = pts.iter().map(|p| p.y).fold(f64::MAX, f64::min);
+        let maxy = pts.iter().map(|p| p.y).fold(f64::MIN, f64::max);
+        // a point on the seam x=36 at y=100: inside the union?
+        let contours = s.surface("weld").unwrap().path.flatten(0.1, 20_000).unwrap();
+        assert!(minx < 1.0, "tab dropped from the weld: minx {minx}");
+        assert_eq!(contours.len(), 1);
+    }
+}
