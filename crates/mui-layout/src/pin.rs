@@ -173,6 +173,7 @@ impl Pin {
 /// frames from the previous arrange pass, the root rect they live in, and the
 /// scale a [`Spacing`] gap resolves against.
 pub(crate) struct Pins<'a> {
+    pub(crate) memo: Option<&'a std::cell::RefCell<crate::incremental::ArrangementCache>>,
     pub(crate) anchors: &'a BTreeMap<Id, Frame>,
     pub(crate) root: Size,
     pub(crate) scale: SpacingScale,

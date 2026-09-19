@@ -25,8 +25,8 @@ pub use mui_geometry::Point;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use mui_geometry::kurbo::{BezPath, Rect, Shape as _};
 use mui_geometry::{Bounds, Error, Path};
-use vello_common::kurbo::{BezPath, Rect, Shape as _};
 
 /// How far the pointer may travel between press and release and still count as
 /// a click. Past this, the gesture is a drag and [`Response::clicked`] never
@@ -145,7 +145,7 @@ impl Hit {
         clip: Option<Bounds>,
         clip_paths: Arc<[BezPath]>,
     ) -> Result<(), Error> {
-        let path = mui_vello::bez_path(path, mui_vello::ARC_TOLERANCE)?;
+        let path = mui_geometry::bez_path(path, mui_geometry::ARC_TOLERANCE)?;
         self.targets.push(Target {
             id,
             tag,
@@ -167,7 +167,7 @@ impl Hit {
         }
         let clips: Arc<[BezPath]> = paths
             .iter()
-            .map(|path| mui_vello::bez_path(path, mui_vello::ARC_TOLERANCE))
+            .map(|path| mui_geometry::bez_path(path, mui_geometry::ARC_TOLERANCE))
             .collect::<Result<Vec<_>, _>>()?
             .into();
         self.clip_cache.insert(key, clips.clone());
@@ -201,7 +201,20 @@ impl Hit {
     /// assert_eq!(hit.at_tagged(Point::new(5., 5.)), Some(("plain", None)));
     /// ```
     pub fn at_tagged(&self, p: Point) -> Option<(&str, Option<&str>)> {
-        let q = vello_common::kurbo::Point::new(p.x, p.y);
+        self.at_tagged_with(p, |_, _, _| None)
+    }
+
+    /// Override only final containment. Broad bounds, paint order and the exact
+    /// ancestor clip stack are still enforced. `None` uses the ordinary path.
+    pub fn at_tagged_with(
+        &self,
+        p: Point,
+        contains: impl Fn(&str, Option<&str>, Point) -> Option<bool>,
+    ) -> Option<(&str, Option<&str>)> {
+        if !(p.x.is_finite() && p.y.is_finite()) {
+            return None;
+        }
+        let q = mui_geometry::kurbo::Point::new(p.x, p.y);
         let inside = |c: &Option<Bounds>| {
             c.is_none_or(|b| p.x >= b.min.x && p.x <= b.max.x && p.y >= b.min.y && p.y <= b.max.y)
         };
@@ -212,7 +225,8 @@ impl Hit {
                 inside(&t.clip)
                     && t.clip_paths.iter().all(|clip| clip.winding(q) != 0)
                     && t.bounds.contains(q)
-                    && t.path.winding(q) != 0
+                    && contains(&t.id, t.tag.as_deref(), p)
+                        .unwrap_or_else(|| t.path.winding(q) != 0)
             })
             .map(|t| (t.id.as_str(), t.tag.as_deref()))
     }
@@ -608,6 +622,16 @@ impl Interaction {
 
     /// Advance one frame. Call once, before reading any [`Response`].
     pub fn update(&mut self, hit: &Hit, input: PointerInput) {
+        self.update_with(hit, input, |_, _, _| None);
+    }
+
+    /// Same gesture state machine with an optional non-path containment rule.
+    pub fn update_with(
+        &mut self,
+        hit: &Hit,
+        input: PointerInput,
+        contains: impl Fn(&str, Option<&str>, Point) -> Option<bool>,
+    ) {
         // Edge-triggered flags last exactly one frame.
         self.pressed = None;
         self.released = None;
@@ -615,7 +639,10 @@ impl Interaction {
         self.dropped = None;
         self.drag_delta = Point::new(0., 0.);
 
-        let over = input.pos.and_then(|p| hit.at(p)).map(str::to_owned);
+        let over = input
+            .pos
+            .and_then(|p| hit.at_tagged_with(p, &contains))
+            .map(|(key, _)| key.to_owned());
         self.mods = input.mods;
         // A capture belongs to one button: a second one going down mid-drag
         // is ignored, and only the one that pressed can end the gesture.

@@ -1,6 +1,9 @@
 //! The per-frame runtime: gestures in, animated styles applied, scene out.
 use std::any::Any;
-use std::collections::BTreeMap;
+#[path = "wake.rs"]
+mod wake;
+use crate::SemanticAction;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use mui_geometry::Point;
@@ -12,6 +15,10 @@ use mui_scene::{
     SceneError, SceneSpec, Size, Spacing, Spring, State, TextCache, Theme,
 };
 use mui_widgets::Host;
+
+#[cfg(test)]
+#[path = "audit_tests.rs"]
+mod audit_tests;
 
 /// The id the floated tip carries. A leading `/` keeps it out of hit
 /// testing, like every other key the runtime owns.
@@ -26,8 +33,11 @@ pub const DOUBLE_CLICK: f64 = 0.4;
 pub struct Frame<'a> {
     pub scene: &'a ResolvedScene,
     /// A spring or interaction deadline is still moving: schedule another frame.
-    /// This includes transitions, a pending tooltip, and a focused text caret.
+    /// This includes transitions and a pending tooltip; a focused caret uses
+    /// `repaint_after` instead.
     pub animating: bool,
+    /// Next timer-driven change; input and model updates invalidate separately.
+    pub repaint_after: Option<std::time::Duration>,
     /// A tip that came due this frame, and where to put it. It is already
     /// floated into the scene; this is for a host that would rather place its
     /// own (a native tooltip window, say).
@@ -64,17 +74,20 @@ pub struct Ui {
     /// The window's device pixels per logical unit. Set it and every painted
     /// edge lands on a device pixel; `None` paints on layout's raw f64.
     pub scale: Option<f64>,
+    pub weld_backend: mui_scene::WeldBackend,
     interaction: Interaction,
+    actions: Vec<SemanticAction>,
     hit: Hit,
     scene: Option<ResolvedScene>,
     /// Per key: hover and press springs, 0..1.
     springs: BTreeMap<String, [Spring; 2]>,
     /// Transition springs per node id, one per paint channel, and tweens
     /// under a `~` prefix so a widget id cannot collide with one.
-    // ponytail: never pruned -- bounded by the ids an app ever uses; retain
-    // against the keys a frame touched if a generated-id list grows.
     motion: BTreeMap<String, Vec<Option<Spring>>>,
+    /// Tweens read by the builder and transitions visited by the current frame.
+    motion_seen: BTreeSet<String>,
     text_cache: TextCache,
+    weld_cache: mui_scene::WeldCache,
     /// Per scroll node: how far its children are slid.
     scrolls: BTreeMap<String, [f64; 2]>,
     /// Per text field: the selection's anchor and caret, in characters. They
@@ -123,12 +136,16 @@ impl Ui {
             font: None,
             fallback_fonts: Vec::new(),
             scale: None,
+            weld_backend: mui_scene::WeldBackend::Reference,
             interaction: Interaction::new(),
+            actions: Vec::new(),
             hit: Hit::default(),
             scene: None,
             springs: BTreeMap::new(),
             motion: BTreeMap::new(),
+            motion_seen: BTreeSet::new(),
             text_cache: TextCache::default(),
+            weld_cache: mui_scene::WeldCache::default(),
             scrolls: BTreeMap::new(),
             sel: BTreeMap::new(),
             pasted: None,
@@ -167,7 +184,54 @@ impl Ui {
         }
         self
     }
+    /// Use the analytic GPU backend for `.weld_with` / `weld!` by default.
+    /// A node may opt into `.reference_weld` for offline-only general contours.
+    pub fn gpu_welding(mut self) -> Self {
+        self.weld_backend = mui_scene::WeldBackend::AnalyticGpu;
+        self
+    }
+    /// Morph-only render update: keep the application declaration synchronized.
+    /// Input reads the live scene's analytic predicate, so no hit-mask or closure
+    /// has to be recreated on every animation tick.
+    pub fn set_weld_morph(&mut self, id: &str, progress: f64) -> Result<bool, SceneError> {
+        self.scene
+            .as_mut()
+            .ok_or(SceneError::UnsupportedWeld("no resolved scene"))?
+            .set_weld_morph(id, progress)
+    }
+    pub fn set_weld_solid_material(
+        &mut self,
+        id: &str,
+        index: usize,
+        fill: Option<Color>,
+        border: Option<Color>,
+        width: f64,
+    ) -> Result<bool, SceneError> {
+        self.scene
+            .as_mut()
+            .ok_or(SceneError::UnsupportedWeld("no resolved scene"))?
+            .set_weld_solid_material(id, index, fill, border, width)
+    }
+    pub fn set_weld_material_blend(&mut self, id: &str, blend: f64) -> Result<bool, SceneError> {
+        self.scene
+            .as_mut()
+            .ok_or(SceneError::UnsupportedWeld("no resolved scene"))?
+            .set_weld_material_blend(id, blend)
+    }
     /// What the last frame resolved to, for anything drawn on top of it.
+    /// Cache hits, misses, and conservative retained bytes for material welding.
+    pub fn weld_cache_stats(&self) -> (u64, u64, usize) {
+        let (hits, misses) = self.weld_cache.stats();
+        (hits, misses, self.weld_cache.bytes())
+    }
+    /// Drop retained weld assets without changing live interaction state.
+    pub fn clear_weld_cache(&mut self) {
+        self.weld_cache.clear();
+    }
+
+    pub fn layout_stats(&self) -> mui_layout::LayoutStats {
+        self.text_cache.layout_stats()
+    }
     pub fn scene(&self) -> Option<&ResolvedScene> {
         self.scene.as_ref()
     }
@@ -182,7 +246,7 @@ impl Ui {
     /// ponytail: takes `AsRef<str>`, not `Into<Arc<str>>` -- the string is
     /// shaped and dropped, never stored, so an `Arc` would only allocate.
     /// See [`ResolvedScene::set_text`] for the rest of the ceiling: one
-    /// line, and the accessibility label still says what the tree said.
+    /// line. Accessible text follows the update; explicit labels are preserved.
     ///
     /// ```
     /// # use mui::prelude::*;
@@ -201,13 +265,22 @@ impl Ui {
     /// gets its [`Edit::End`] on the next frame: a host that was told a
     /// gesture began must be told it ended.
     pub fn cancel(&mut self) {
-        self.cancelled = self.interaction.held().map(str::to_owned);
+        if let Some(id) = self.interaction.held().map(str::to_owned) {
+            // Repeated cancellation must not erase an End already owed to the host.
+            if let Some(previous) = self.cancelled.replace(id) {
+                self.edits.push((previous, Edit::End));
+            }
+        }
         self.preedit = None;
+        self.drag = None;
+        self.tagged = None;
         self.interaction.cancel();
     }
 
-    /// Whether a parameter gesture on `id` began or ended, on the same frame
-    /// boundary as [`Ui::get`]. Bracket automation with it:
+    /// The first gesture edge on `id`, on the same frame boundary as [`Ui::get`].
+    /// Use [`Ui::edits_for`] or [`Frame::edits`] for host dispatch: an atomic
+    /// semantic action can begin AND end on the same frame.
+    /// Pointer-only example:
     ///
     /// ```
     /// # use mui::{Edit, Ui}; use mui::prelude::*;
@@ -238,9 +311,11 @@ impl Ui {
     /// [`Ui::tween`] with your own spring. The spring's shape is taken on
     /// the first call for `id`.
     pub fn tween_with(&mut self, id: &str, target: f64, spring: Spring) -> f64 {
+        let key = format!("~{id}");
+        self.motion_seen.insert(key.clone());
         let s = self
             .motion
-            .entry(format!("~{id}"))
+            .entry(key)
             .or_insert_with(|| vec![Some(spring.seeded(target))]);
         let s = s[0].get_or_insert_with(|| spring.seeded(target));
         s.to(target);
@@ -249,7 +324,89 @@ impl Ui {
     /// Last frame's gesture on `id`. Widgets read this while building the
     /// next tree, so a drag lands one frame late and nobody notices.
     pub fn get(&self, id: &str) -> Response {
-        self.interaction.get(id)
+        let mut response = self.interaction.get(id);
+        if self
+            .actions
+            .iter()
+            .any(|a| matches!(a, SemanticAction::Activate { id: target } if target == id))
+        {
+            response.clicked = true;
+            response.button = Some(mui_input::Button::Primary);
+        }
+        response
+    }
+
+    /// Accept an accessibility/platform action against the last presented scene.
+    /// No pointer warp or bounding-box click is synthesized. Unknown, disabled,
+    /// incompatible and non-finite requests are rejected without changing state.
+    /// Custom controls must consume the matching action through `get`/`drag`.
+    pub fn request_action(&mut self, action: SemanticAction) -> bool {
+        let Some(surface) = self.scene.as_ref().and_then(|s| s.surface(action.id())) else {
+            return false;
+        };
+        if surface.disabled {
+            return false;
+        }
+        let role = surface.semantics.as_ref().map(|s| &s.role);
+        match action {
+            SemanticAction::Focus { id } if surface.focusable => {
+                self.focus(id);
+                true
+            }
+            SemanticAction::Activate { id }
+                if matches!(role, Some(Kind::Button | Kind::Toggle { .. })) =>
+            {
+                // One activation per control per frame, matching `Response::clicked`.
+                if !self
+                    .actions
+                    .iter()
+                    .any(|a| matches!(a, SemanticAction::Activate { id: old } if old == &id))
+                {
+                    self.actions.push(SemanticAction::Activate { id });
+                }
+                true
+            }
+            SemanticAction::SetValue { id, value } if value.is_finite() => {
+                let Some(Kind::Slider { min, max, .. }) = role else {
+                    return false;
+                };
+                if !(min.is_finite() && max.is_finite()) {
+                    return false;
+                }
+                let value = value.clamp(min.min(*max), min.max(*max));
+                // Coalesce repeated requests, while leaving pointer capture untouched.
+                self.actions.retain(
+                    |a| !matches!(a, SemanticAction::SetValue { id: old, .. } if old == &id),
+                );
+                self.actions.push(SemanticAction::SetValue { id, value });
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// All gesture edges for a control. Unlike `edit`, this preserves an atomic
+    /// Begin/End pair, such as one accessibility value change in one frame.
+    pub fn edits_for<'a>(&'a self, id: &'a str) -> impl Iterator<Item = Edit> + 'a {
+        self.delivered
+            .iter()
+            .filter(move |(k, _)| k == id)
+            .map(|(_, e)| *e)
+    }
+
+    /// End an editor session without requiring another successful layout/frame.
+    /// The host must dispatch the returned edges before destroying its editor.
+    /// Calling this again returns no duplicate End events.
+    pub fn close(&mut self) -> Vec<(String, Edit)> {
+        self.cancel();
+        self.edits
+            .extend(self.cancelled.take().map(|id| (id, Edit::End)));
+        self.actions.clear();
+        self.focus = None;
+        self.keys.clear();
+        self.typed.clear();
+        self.delivered.clear();
+        std::mem::take(&mut self.edits)
     }
     /// Which shape of the canvas `id` the pointer is on, by the tag its
     /// [`Draw`](mui_scene::Draw) carried. `None` when the pointer is over no
@@ -573,12 +730,30 @@ impl Ui {
         px: f64,
         vertical: bool,
     ) -> bool {
+        if !(range.start().is_finite() && range.end().is_finite()) {
+            return false;
+        }
+        if let Some(value_from_action) = self.actions.iter().rev().find_map(|a| match a {
+            SemanticAction::SetValue { id: target, value } if target == id => Some(*value),
+            _ => None,
+        }) {
+            let next = value_from_action.clamp(
+                range.start().min(*range.end()),
+                range.start().max(*range.end()),
+            );
+            let changed = next != *value;
+            *value = next;
+            return changed;
+        }
         let r = self.get(id);
-        if !r.dragged || px <= 0.0 {
+        if !r.dragged || !px.is_finite() || px <= 0.0 || !value.is_finite() {
             return false;
         }
         let delta = r.drag_fine(FINE_DRAG);
         let d = if vertical { -delta.y } else { delta.x };
+        if !d.is_finite() {
+            return false;
+        }
         // An inverted range (`1.0..=0.0`) is a legitimate downward control and
         // the delta math already reverses for it; only `clamp` needs the
         // bounds in order, since it panics on `min > max`.
@@ -599,9 +774,25 @@ impl Ui {
         input: impl Into<Input>,
         dt: f64,
     ) -> Result<Frame<'_>, SceneError> {
+        if !(dt.is_finite() && dt >= 0.0 && (self.time + dt).is_finite()) {
+            return Err(SceneError::InvalidFrameDelta);
+        }
+        // The caller has now built its tree and consumed these commands. Drain
+        // before resolution so a layout error cannot replay an activation. Gesture
+        // edges stay queued in `edits` until delivered by a frame or `close`.
+        let active = self.interaction.held().map(str::to_owned);
+        let mut atomic = BTreeSet::new();
+        for action in std::mem::take(&mut self.actions) {
+            let id = action.id().to_owned();
+            if active.as_deref() != Some(id.as_str()) && atomic.insert(id.clone()) {
+                self.edits.push((id.clone(), Edit::Begin));
+                self.edits.push((id, Edit::End));
+            }
+        }
         let input = input.into();
         self.pointer = input.pointer;
         self.pasted = input.clipboard;
+        let previous_blink = self.blink();
         self.time += dt;
         // Switched off mid-gesture: the hit map stopped reporting it when it
         // resolved disabled, and a drag must not outlive its target. The
@@ -626,7 +817,16 @@ impl Ui {
             self.focus = None;
         }
         let prev_held = self.interaction.held().map(str::to_owned);
-        self.interaction.update(&self.hit, input.pointer);
+        let last_scene = self.scene.as_ref();
+        self.interaction
+            .update_with(&self.hit, input.pointer, |key, tag, p| {
+                if tag.is_some() {
+                    return None;
+                }
+                last_scene
+                    .and_then(|s| s.external_weld(key))
+                    .map(|e| e.contains(p))
+            });
         // A payload outlives its gesture by exactly the one frame the drop is
         // reported in -- the frame the target's tree reads it from.
         if self.interaction.held().is_none() && self.interaction.dropped().is_none() {
@@ -651,7 +851,15 @@ impl Ui {
         // interaction above: a new capture latches the shape under the press.
         if held.is_none() || prev_held != held {
             self.tagged = input.pointer.pos.and_then(|p| {
-                let (id, tag) = self.hit.at_tagged(p)?;
+                let (id, tag) = self.hit.at_tagged_with(p, |key, tag, p| {
+                    if tag.is_some() {
+                        return None;
+                    }
+                    self.scene
+                        .as_ref()
+                        .and_then(|s| s.external_weld(key))
+                        .map(|e| e.contains(p))
+                })?;
                 Some((id.to_owned(), tag?.to_owned()))
             });
         }
@@ -773,17 +981,9 @@ impl Ui {
                     .is_some_and(|surface| surface.tip.is_some())
         });
         animating |= tip_pending;
-        let caret_active = self
-            .focus
-            .as_deref()
-            .and_then(|id| self.scene.as_ref()?.surface(id))
-            .is_some_and(|surface| {
-                matches!(
-                    surface.semantics.as_ref().map(|s| &s.role),
-                    Some(Kind::TextInput { .. })
-                )
-            });
-        animating |= caret_active;
+        // A focused caret is a deadline, not an animation: `repaint_after`
+        // wakes the host at the next blink edge and one catch-up frame below
+        // makes that edge visible.
         let tip = self
             .hover
             .as_ref()
@@ -831,7 +1031,7 @@ impl Ui {
             },
             false,
         );
-        animating |= transitions(&mut root, &pal, &mut self.motion, dt);
+        animating |= transitions(&mut root, &pal, &mut self.motion, &mut self.motion_seen, dt);
         for (_, s) in self.motion.iter_mut().filter(|(k, _)| k.starts_with('~')) {
             if let Some(s) = s[0].as_mut() {
                 animating |= s.step(dt);
@@ -852,7 +1052,9 @@ impl Ui {
         spec.font = self.font.clone();
         spec.fallback_fonts = self.fallback_fonts.clone();
         spec.device_scale = self.scale;
-        let scene = mui_scene::resolve_scene_with(&spec, &mut self.text_cache)?;
+        spec.weld_backend = self.weld_backend;
+        let scene =
+            mui_scene::resolve_scene_cached(&spec, &mut self.text_cache, &mut self.weld_cache)?;
         // Named nodes are the gesture targets, in z-order. Unnamed ones are
         // decoration. A target clipped away does not respond.
         let mut hit = Hit::default();
@@ -876,6 +1078,18 @@ impl Ui {
             }
         }
         self.hit = hit;
+        let live = |id: &str| scene.surface(id).is_some_and(|s| !s.disabled);
+        if self.interaction.held().is_some_and(|id| !live(id)) {
+            self.cancel();
+            self.edits
+                .extend(self.cancelled.take().map(|id| (id, Edit::End)));
+        }
+        if self.focus.as_deref().is_some_and(|id| !live(id)) {
+            self.focus = None;
+            self.preedit = None;
+        }
+        self.scrolls.retain(|id, _| scene.surface(id).is_some());
+        self.sel.retain(|id, _| scene.surface(id).is_some());
         self.wheel(&scene, input.wheel);
 
         let held = self.interaction.held().map(str::to_owned);
@@ -900,11 +1114,30 @@ impl Ui {
             let f = scene.surface(TIP_KEY)?.frame;
             Some((t, Point::new(f.x, f.y)))
         });
+        self.motion.retain(|id, _| self.motion_seen.contains(id));
+        self.motion_seen.clear();
         self.delivered = std::mem::take(&mut self.edits);
         self.scene = Some(scene);
+        let repaint_after = self.repaint_after();
+        // Widgets read the clock while constructing the tree, before this frame
+        // advances it. One catch-up frame makes the blink edge visible now,
+        // rather than one whole half-period late. It then sleeps again.
+        animating |= previous_blink != self.blink()
+            && self
+                .focus
+                .as_deref()
+                .and_then(|key| self.scene.as_ref()?.surface(key))
+                .is_some_and(|surface| {
+                    !surface.disabled
+                        && matches!(
+                            surface.semantics.as_ref().map(|sem| &sem.role),
+                            Some(Kind::TextInput { .. })
+                        )
+                });
         Ok(Frame {
             scene: self.scene.as_ref().expect("just set"),
             animating,
+            repaint_after,
             tip,
             cursor,
             edits: self.delivered.clone(),
@@ -981,10 +1214,12 @@ fn transitions(
     n: &mut El,
     pal: &Palette,
     motion: &mut BTreeMap<String, Vec<Option<Spring>>>,
+    seen: &mut BTreeSet<String>,
     dt: f64,
 ) -> bool {
     let mut animating = false;
     if let (Some(k), Some(spring)) = (n.key().map(str::to_owned), n.payload().transition) {
+        seen.insert(k.clone());
         let list = motion.entry(k).or_default();
         channels(n.payload_mut(), pal, &mut |i, declared| {
             // Each slot is seeded from its own declared value the first time
@@ -1005,7 +1240,7 @@ fn transitions(
         });
     }
     for c in n.children_mut() {
-        animating |= transitions(c, pal, motion, dt);
+        animating |= transitions(c, pal, motion, seen, dt);
     }
     animating
 }
@@ -1015,10 +1250,7 @@ fn interactive(e: &Element) -> bool {
     e.semantics.as_ref().is_some_and(|s| {
         matches!(
             &s.role,
-            Kind::Button
-                | Kind::Slider { .. }
-                | Kind::Toggle { .. }
-                | Kind::TextInput { .. }
+            Kind::Button | Kind::Slider { .. } | Kind::Toggle { .. } | Kind::TextInput { .. }
         )
     })
 }
@@ -1102,16 +1334,12 @@ fn state(
         let (auto_hover, auto_press) = {
             let e = n.payload();
             (
-                interactive(e)
-                    && !e.states.iter().any(|(state, _)| *state == State::Hover),
-                interactive(e)
-                    && !e.states.iter().any(|(state, _)| *state == State::Press),
+                interactive(e) && !e.states.iter().any(|(state, _)| *state == State::Hover),
+                interactive(e) && !e.states.iter().any(|(state, _)| *state == State::Press),
             )
         };
         let e = n.payload_mut();
-        if !e.style.fill.is_none()
-            && ((auto_hover && h > 0.0) || (auto_press && p > 0.0))
-        {
+        if !e.style.fill.is_none() && ((auto_hover && h > 0.0) || (auto_press && p > 0.0)) {
             e.style.fill = e.style.fill.map(pal, bg, |c| {
                 let c = if auto_hover {
                     c.mix(pal.hover(c), h as f32)
@@ -1420,7 +1648,9 @@ mod tests {
             ui.frame(tree(false), None, at(50., 50., false), 0.016)
                 .unwrap();
         }
-        let frame = ui.frame(tree(false), None, at(50., 50., false), 0.016).unwrap();
+        let frame = ui
+            .frame(tree(false), None, at(50., 50., false), 0.016)
+            .unwrap();
         let lit = fill(&frame);
         assert!(ui.get("bypass").hovered, "live, and under the pointer");
         assert_eq!(lit, role(Role::Primary), "the explicit hover look, once");
@@ -1500,14 +1730,12 @@ mod tests {
         let mut ui = Ui::new(Theme::DEFAULT);
         ui.frame(tree(&ui), None, PointerInput::default(), 0.016)
             .unwrap();
-        ui.frame(tree(&ui), None, key(Key::Tab), 0.016)
-            .unwrap();
+        ui.frame(tree(&ui), None, key(Key::Tab), 0.016).unwrap();
         assert_eq!(ui.focus_key(), Some("button"));
 
         // Keys are delivered to the tree on the following frame, exactly as
         // mouse edges are, so the widget sees the same activation boundary.
-        ui.frame(tree(&ui), None, key(Key::Enter), 0.016)
-            .unwrap();
+        ui.frame(tree(&ui), None, key(Key::Enter), 0.016).unwrap();
         let (_, activated) = mui_widgets::button(&ui, "button", "Save");
         assert!(activated, "Enter activates the focused button");
     }
@@ -1964,18 +2192,16 @@ mod tests {
     #[test]
     fn nested_rounded_clips_intersect_for_hit_testing() {
         let tree = || {
-            overlay([
-                overlay([leaf(80., 80.)
-                    .fill(Role::Primary)
-                    .anchor(Align::Center, Align::Center)
-                    .id("target")])
-                .size(60., 60.)
-                .fill(Role::Raised)
-                .radius(15.)
-                .clip()
+            overlay([overlay([leaf(80., 80.)
+                .fill(Role::Primary)
                 .anchor(Align::Center, Align::Center)
-                .id("inner"),
-            ])
+                .id("target")])
+            .size(60., 60.)
+            .fill(Role::Raised)
+            .radius(15.)
+            .clip()
+            .anchor(Align::Center, Align::Center)
+            .id("inner")])
             .size(100., 100.)
             .fill(Role::Field)
             .radius(20.)
@@ -2080,10 +2306,7 @@ mod tests {
     #[test]
     fn hover_warms_the_fill_and_a_press_is_reported_next_frame() {
         let mut ui = Ui::new(Theme::DEFAULT);
-        let tree = || leaf(40., 40.)
-            .fill(Role::Raised)
-            .role(Kind::Button)
-            .id("b");
+        let tree = || leaf(40., 40.).fill(Role::Raised).role(Kind::Button).id("b");
         let base = ui
             .frame(tree(), None, PointerInput::default(), 0.016)
             .unwrap()

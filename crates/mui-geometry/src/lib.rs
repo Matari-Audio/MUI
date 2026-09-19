@@ -12,7 +12,10 @@
 //! Native Bezier-curve Boolean operations and distance-based "goo" are not included.
 #![forbid(unsafe_code)]
 
+mod bezier;
 mod boolean;
+pub use bezier::{bez_path, ARC_TOLERANCE};
+pub use kurbo;
 mod fillet;
 mod math;
 mod nesting;

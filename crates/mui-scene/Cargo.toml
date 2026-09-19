@@ -6,6 +6,7 @@ license.workspace = true
 description = "A styled element tree lowered to a resolved, paint-ordered scene: MUI's El DSL, theme resolution and scene walk."
 
 [dependencies]
+mui-weld = { path = "../mui-weld" }
 mui-geometry = { path = "../mui-geometry" }
 mui-style = { path = "../mui-style" }
 mui-motion = { path = "../mui-motion" }

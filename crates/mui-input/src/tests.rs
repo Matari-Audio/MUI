@@ -362,18 +362,12 @@ fn a_clip_rejects_a_hit_the_renderer_would_not_draw() {
 
 #[test]
 fn exact_rounded_and_nested_clips_reject_corners() {
-    let outer = mui_geometry::RoundedRect::new(
-        mui_geometry::Bounds::new(0., 0., 100., 100.),
-        20.,
-    )
-    .unwrap()
-    .path();
-    let inner = mui_geometry::RoundedRect::new(
-        mui_geometry::Bounds::new(20., 20., 80., 80.),
-        15.,
-    )
-    .unwrap()
-    .path();
+    let outer = mui_geometry::RoundedRect::new(mui_geometry::Bounds::new(0., 0., 100., 100.), 20.)
+        .unwrap()
+        .path();
+    let inner = mui_geometry::RoundedRect::new(mui_geometry::Bounds::new(20., 20., 80., 80.), 15.)
+        .unwrap()
+        .path();
     let mut hit = Hit::default();
     hit.push_clipped_paths(
         "target",
@@ -383,7 +377,11 @@ fn exact_rounded_and_nested_clips_reject_corners() {
     )
     .unwrap();
     assert_eq!(hit.at(Point::new(21., 21.)), None, "inner rounded clip");
-    assert_eq!(hit.at(Point::new(30., 30.)), Some("target"), "inside both clips");
+    assert_eq!(
+        hit.at(Point::new(30., 30.)),
+        Some("target"),
+        "inside both clips"
+    );
 }
 
 #[test]

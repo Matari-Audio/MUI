@@ -6,6 +6,7 @@ license.workspace = true
 description = "MUI's controls and presets: button, knob, toggle, slider and text field, built as ordinary styled trees."
 
 [dependencies]
+unicode-segmentation = "1.12"
 mui-scene = { path = "../mui-scene" }
 mui-geometry = { path = "../mui-geometry" }
 mui-input = { path = "../mui-input" }

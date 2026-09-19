@@ -26,6 +26,7 @@ pub use accesskit;
 use accesskit::{Action, Node, NodeId, Rect, Role, Tree, TreeId, TreeUpdate};
 pub use mui_scene::{Kind, Semantics};
 use mui_scene::{ResolvedScene, ResolvedSurface};
+use std::collections::HashMap;
 
 /// FNV-1a: a node id that is the same on every frame for the same surface id.
 pub fn node_id(key: &str) -> NodeId {
@@ -40,13 +41,12 @@ pub fn node_id(key: &str) -> NodeId {
 
 const WINDOW: NodeId = NodeId(0);
 
-fn contains(a: &ResolvedSurface, b: &ResolvedSurface) -> bool {
-    let (a, b) = (a.frame, b.frame);
-    a.x <= b.x && a.y <= b.y && a.right() >= b.right() && a.bottom() >= b.bottom()
-}
-
 fn node(s: &ResolvedSurface, sem: Option<&Semantics>) -> Node {
-    let default = Semantics::new(Kind::Group);
+    let default = Semantics::new(if s.text_value.is_some() {
+        Kind::Label
+    } else {
+        Kind::Group
+    });
     let sem = sem.unwrap_or(&default);
     let mut n = Node::new(match &sem.role {
         Kind::Button => Role::Button,
@@ -58,21 +58,30 @@ fn node(s: &ResolvedSurface, sem: Option<&Semantics>) -> Node {
         Kind::Scroll => Role::ScrollView,
     });
     match &sem.role {
-        Kind::Button => n.add_action(Action::Click),
+        Kind::Button if !s.disabled => n.add_action(Action::Click),
         Kind::Slider { value, min, max } => {
             n.set_numeric_value(*value);
             n.set_min_numeric_value(*min);
             n.set_max_numeric_value(*max);
-            n.add_action(Action::SetValue);
+            if !s.disabled {
+                n.add_action(Action::SetValue);
+            }
         }
         Kind::Toggle { on } => {
             n.set_toggled((*on).into());
-            n.add_action(Action::Click);
+            if !s.disabled {
+                n.add_action(Action::Click);
+            }
         }
         Kind::TextInput { value } => n.set_value(value.clone()),
         _ => {}
     }
-    n.set_label(sem.label.clone().unwrap_or_else(|| s.key.to_string()));
+    n.set_label(
+        sem.label
+            .clone()
+            .or_else(|| s.text_value.clone())
+            .unwrap_or_else(|| s.key.to_string()),
+    );
     let f = s.frame;
     n.set_bounds(Rect::new(f.x, f.y, f.right(), f.bottom()));
     if s.focusable && !s.disabled {
@@ -88,13 +97,12 @@ fn node(s: &ResolvedSurface, sem: Option<&Semantics>) -> Node {
 /// Every named surface (an id, not a `/0/2` tree path) becomes a node under
 /// a window root.
 ///
-/// ponytail: containment nesting — the nearest preceding surface whose frame
-/// encloses this one is its parent. Replace with real tree paths when the
-/// scene exposes a surface's ancestors.
+/// Hierarchy follows authored semantic parentage, including floated and
+/// overlapping elements. Geometry never determines ownership.
 pub fn tree_update(scene: &ResolvedScene, focus: Option<&str>) -> TreeUpdate {
     let named: Vec<&ResolvedSurface> = scene
         .surfaces()
-        .filter(|s| !s.key.starts_with('/'))
+        .filter(|s| !s.key.is_empty() && !s.key.starts_with('/'))
         .collect();
 
     let mut nodes: Vec<(NodeId, Node)> = named
@@ -102,9 +110,14 @@ pub fn tree_update(scene: &ResolvedScene, focus: Option<&str>) -> TreeUpdate {
         .map(|s| (node_id(&s.key), node(s, s.semantics.as_ref())))
         .collect();
 
+    let indices: HashMap<&str, usize> = named
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (s.key.as_ref(), i))
+        .collect();
     let mut root_kids = Vec::new();
-    for (i, s) in named.iter().enumerate() {
-        let parent = named[..i].iter().rposition(|p| contains(p, s));
+    for s in &named {
+        let parent = s.parent.as_deref().and_then(|p| indices.get(p)).copied();
         match parent {
             Some(p) => nodes[p].1.push_child(node_id(&s.key)),
             None => root_kids.push(node_id(&s.key)),
@@ -120,7 +133,11 @@ pub fn tree_update(scene: &ResolvedScene, focus: Option<&str>) -> TreeUpdate {
         tree: Some(Tree::new(WINDOW)),
         tree_id: TreeId::ROOT,
         focus: focus
-            .filter(|k| scene.surface(k).is_some())
+            .filter(|k| {
+                !k.is_empty()
+                    && !k.starts_with('/')
+                    && scene.surface(k).is_some_and(|s| s.focusable && !s.disabled)
+            })
             .map(node_id)
             .unwrap_or(WINDOW),
     }

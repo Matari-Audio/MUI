@@ -101,6 +101,31 @@ impl Id {
         self.join(std::str::from_utf8(&digits[i..]).unwrap_or_default())
     }
 
+    /// One more segment from a permanent, non-reused model entity ID.
+    /// Unlike a display index, this value must remain unchanged on reorder,
+    /// reparent or rename. The caller owns allocation/generation of entity IDs.
+    /// Keep display names in `.label(..)`, not in this identity path.
+    ///
+    /// ```
+    /// use mui_layout::Id;
+    /// let gain = Id::of("osc").entity(u64::MAX).field("gain");
+    /// assert_eq!(gain.as_str(), "osc/18446744073709551615/gain");
+    /// ```
+    pub fn entity(&self, mut id: u64) -> Self {
+        let mut digits = [0u8; 20];
+        let mut at = digits.len();
+        loop {
+            at -= 1;
+            digits[at] = b'0' + (id % 10) as u8;
+            id /= 10;
+            if id == 0 {
+                break;
+            }
+        }
+        // These bytes are generated ASCII digits, not user-provided UTF-8.
+        self.join(std::str::from_utf8(&digits[at..]).expect("ASCII entity id"))
+    }
+
     /// One more segment, by name: the field on that card.
     ///
     /// ```
