@@ -1247,7 +1247,11 @@ impl<'a> Walk<'a> {
                     // One line sits centred on ascent+descent, or on the
                     // baseline its parent chose; a stack centres the block.
                     let dy = match (base, n) {
-                        (Some(b), 1) => b,
+                        // A baseline row pins the FIRST line; later lines
+                        // stack below it, as they would unaligned.
+                        (Some(b), _) => {
+                            b + li as f64 * snap(run.line_height, self.spec.device_scale)
+                        }
                         (_, 1) => {
                             frame.y
                                 + (frame.size.height - run.ascent - run.descent) / 2.0
@@ -1407,9 +1411,18 @@ impl<'a> Walk<'a> {
                 let own = match &c.payload().content {
                     Content::Text(t) => {
                         let s = c.payload().text_size.unwrap_or(th.text);
-                        self.runs
-                            .run(t, s, c.payload().weight)?
-                            .map(|r| f.y + (f.size.height - r.ascent - r.descent) / 2.0 + r.ascent)
+                        let scale = self.spec.device_scale;
+                        self.runs.run(t, s, c.payload().weight)?.map(|r| {
+                            // The child's own first-line baseline, wrapped or
+                            // not, so the shared one is a real candidate.
+                            let lh = snap(r.line_height, scale);
+                            let rows = (f.size.height / lh).round().max(1.0);
+                            if rows == 1.0 {
+                                f.y + (f.size.height - r.ascent - r.descent) / 2.0 + r.ascent
+                            } else {
+                                f.y + (f.size.height - rows * lh) / 2.0 + r.ascent
+                            }
+                        })
                     }
                     _ => None,
                 };
@@ -2298,7 +2311,7 @@ mod feature_tests {
     }
 
     #[test]
-    fn a_wrapping_baseline_row_gives_every_line_its_own_baseline() {
+    fn a_baseline_row_pins_a_wrapped_label_by_its_first_line() {
         let root = row([
             text("alpha").text_size(20.).id("a"),
             text("beta").text_size(11.).id("b"),
@@ -2310,11 +2323,13 @@ mod feature_tests {
         let mut sp = SceneSpec::new(root).offered(Size::new(120., 200.));
         sp.font = Some(font());
         let s = resolve_scene(&sp).unwrap();
-        let (a, c) = (baselines(&s, "a")[0], baselines(&s, "c")[0]);
-        assert_eq!(a, baselines(&s, "b")[0], "line one shares a baseline");
-        assert!(a < c, "line two sits below line one: {a} {c}");
-        let f = s.layout.frame("c").unwrap();
-        assert!(c > f.y && c < f.bottom(), "baseline {c} outside {f:?}");
+        let a = baselines(&s, "a");
+        assert!(a.len() > 1, "the 20 px label wrapped in its column");
+        assert_eq!(a[0], baselines(&s, "b")[0], "first lines share a baseline");
+        assert_eq!(a[0], baselines(&s, "c")[0], "and so does the third label");
+        assert!(a[1] > a[0], "the wrapped line stacks below: {a:?}");
+        let f = s.layout.frame("a").unwrap();
+        assert!(a[0] > f.y && *a.last().unwrap() < f.bottom(), "outside {f:?}");
     }
 
     #[test]
