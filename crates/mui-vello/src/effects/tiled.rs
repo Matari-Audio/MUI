@@ -154,9 +154,13 @@ impl TiledEffects {
             let id = vello_hybrid::TextureId(i as u64 + 1);
             self.bindings.insert(id, view.clone());
             // Guard pixels are rasterized but never overlap neighboring tiles.
+            // The transform maps the source region's *local* rectangle, so
+            // the guard offset lives in `source_region` alone. The blit is
+            // 1:1, and bilinear sampling bleeds the guard texel into the
+            // last content column, so it samples nearest.
             self.present_scene.draw_texture_rects(
                 id,
-                ImageQuality::Medium,
+                ImageQuality::Low,
                 [vello_hybrid::SampleRect {
                     source_region: RectU16::new(
                         GUARD as u16,
@@ -164,10 +168,7 @@ impl TiledEffects {
                         (GUARD + tile.width) as u16,
                         (GUARD + tile.height) as u16,
                     ),
-                    transform: Affine::translate((
-                        tile.x as f64 - GUARD as f64,
-                        tile.y as f64 - GUARD as f64,
-                    )),
+                    transform: Affine::translate((f64::from(tile.x), f64::from(tile.y))),
                 }],
             );
             self.tiles.push(CachedTile {

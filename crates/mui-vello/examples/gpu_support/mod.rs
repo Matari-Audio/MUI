@@ -37,6 +37,8 @@ pub fn fixture(scale: f64) -> mui_scene::ResolvedScene {
             .offset(100., 74.),
     ]
     .size(f64::from(W), f64::from(H))
+    // The theme rounds a filled box by default; the contract reads the corners.
+    .radius(0.)
     .fill(Color::oklcha(0., 0., 0., 1.));
     mui_scene::resolve_scene(&SceneSpec::new(root).scale(scale)).expect("GPU fixture resolves")
 }
