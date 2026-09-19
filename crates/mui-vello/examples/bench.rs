@@ -9,6 +9,7 @@
 //! Reported as the median of 50 frames after 5 warm-ups, so a stray scheduler
 //! hiccup cannot move a number.
 
+use std::cell::Cell;
 use std::time::Instant;
 
 use std::sync::Arc;
@@ -287,6 +288,37 @@ fn peak_rss() -> f64 {
         / 1024.0
 }
 
+fn cache_counters(cache: &PathCache) -> (u64, u64, usize) {
+    (cache.hits(), cache.misses(), cache.len())
+}
+
+fn print_cache_stats(label: &str, (hits, misses, entries): (u64, u64, usize)) {
+    let total = hits.saturating_add(misses);
+    let hit_rate = if total == 0 {
+        0.0
+    } else {
+        hits as f64 * 100.0 / total as f64
+    };
+    println!(
+        "{label} path cache: {hits} hits, {misses} misses, {entries} entries ({hit_rate:.1}% hit rate)"
+    );
+}
+
+fn print_cache_delta(label: &str, case: Case, before: (u64, u64, usize), after: (u64, u64, usize)) {
+    let hits = after.0.saturating_sub(before.0);
+    let misses = after.1.saturating_sub(before.1);
+    let total = hits.saturating_add(misses);
+    let hit_rate = if total == 0 {
+        0.0
+    } else {
+        hits as f64 * 100.0 / total as f64
+    };
+    println!(
+        "{label} {} path cache: {hits} hits, {misses} misses ({hit_rate:.1}% hit rate)",
+        case.name()
+    );
+}
+
 // ---------------------------------------------------------------- backends
 
 fn main() {
@@ -339,6 +371,7 @@ fn main() {
             median(&mut warm),
             cache.len()
         );
+        print_cache_stats("conversion probe", cache_counters(&cache));
     }
 
     // Resolve with nothing painted at all: MUI's own floor.
@@ -380,6 +413,7 @@ fn main() {
         let mut res = vello_cpu::Resources::default();
         let mut pix = Pixmap::new(W, H);
         let mut cache = PathCache::new();
+        let stats = Cell::new((0, 0, 0));
         let mut draw = |scene: &ResolvedScene| {
             ctx.reset();
             let t = Instant::now();
@@ -393,6 +427,7 @@ fn main() {
                 &mut cache,
             )
             .expect("paints");
+            stats.set(cache_counters(&cache));
             ctx.flush();
             let encode = since(t);
             let t = Instant::now();
@@ -400,8 +435,11 @@ fn main() {
             (encode, since(t))
         };
         for c in CASES {
+            let before = stats.get();
             rows.push(run("vello_cpu cached", c, font, true, &mut draw));
+            print_cache_delta("vello_cpu cached", c, before, stats.get());
         }
+        print_cache_stats("vello_cpu cached", stats.get());
     }
 
     match pollster::block_on(gpu()) {
@@ -528,6 +566,7 @@ async fn gpu() -> Option<(wgpu::AdapterInfo, Vec<Row>)> {
         );
         let mut scene = vello_hybrid::Scene::new(W, H);
         let mut cache = PathCache::new();
+        let stats = Cell::new((0, 0, 0));
         let mut ids = mui_vello::ImageIds::default();
         let mut draw = |resolved: &ResolvedScene| {
             scene.reset();
@@ -548,6 +587,7 @@ async fn gpu() -> Option<(wgpu::AdapterInfo, Vec<Row>)> {
                 &mut cache,
             )
             .expect("paints");
+            stats.set(cache_counters(&cache));
             let encode = since(t);
             let t = Instant::now();
             let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
@@ -573,8 +613,11 @@ async fn gpu() -> Option<(wgpu::AdapterInfo, Vec<Row>)> {
             (encode, since(t))
         };
         for c in CASES {
+            let before = stats.get();
             rows.push(run("vello_hybrid cached", c, font, true, &mut draw));
+            print_cache_delta("vello_hybrid cached", c, before, stats.get());
         }
+        print_cache_stats("vello_hybrid cached", stats.get());
     }
 
     #[cfg(feature = "bench-classic")]
@@ -703,10 +746,10 @@ mod classic {
                 .brush(&self.brush)
                 .draw(
                     Fill::NonZero,
-                    glyphs.iter().map(|&(id, x)| vello::Glyph {
-                        id,
-                        x: ox + x,
-                        y: oy,
+                    glyphs.iter().map(|glyph| vello::Glyph {
+                        id: glyph.id,
+                        x: ox + glyph.x,
+                        y: oy + glyph.y,
                     }),
                 );
         }

@@ -361,6 +361,32 @@ fn a_clip_rejects_a_hit_the_renderer_would_not_draw() {
 }
 
 #[test]
+fn exact_rounded_and_nested_clips_reject_corners() {
+    let outer = mui_geometry::RoundedRect::new(
+        mui_geometry::Bounds::new(0., 0., 100., 100.),
+        20.,
+    )
+    .unwrap()
+    .path();
+    let inner = mui_geometry::RoundedRect::new(
+        mui_geometry::Bounds::new(20., 20., 80., 80.),
+        15.,
+    )
+    .unwrap()
+    .path();
+    let mut hit = Hit::default();
+    hit.push_clipped_paths(
+        "target",
+        &path(square(10., 10., 80., 80.)),
+        Some(mui_geometry::Bounds::new(0., 0., 100., 100.)),
+        Some(&[outer, inner]),
+    )
+    .unwrap();
+    assert_eq!(hit.at(Point::new(21., 21.)), None, "inner rounded clip");
+    assert_eq!(hit.at(Point::new(30., 30.)), Some("target"), "inside both clips");
+}
+
+#[test]
 fn a_drag_released_over_another_target_is_a_drop() {
     let mut hit = Hit::default();
     hit.push("a", &path(square(0., 0., 40., 40.))).unwrap();

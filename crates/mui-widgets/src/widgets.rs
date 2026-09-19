@@ -42,6 +42,14 @@ struct Look {
     palette: Palette,
     text: Option<String>,
 }
+
+/// A keyboard activation is the same primary action as a click. `Host::keys`
+/// is already gated to the focused surface, so widgets do not need to invent
+/// a second focus test or consume another key stream.
+fn activated(ui: &impl Host, id: &str) -> bool {
+    ui.get(id).clicked_with(Button::Primary)
+        || ui.keys(id).iter().any(|k| matches!(k.key, Key::Enter | Key::Space))
+}
 impl Look {
     /// What the control's own box is painted with, where the role is the
     /// fill: a button, a toggle that is on.
@@ -291,6 +299,7 @@ pub fn slider(
             .fill(look.role)
             .role(Kind::Slider { value, min, max })
             .label(label.clone())
+            .focusable()
             .id(id);
         column([
             row([
@@ -359,6 +368,7 @@ pub fn knob(
                     .shell(size / 24.0 + 1.0 * h, Role::Field)
                     .role(Kind::Slider { value, min, max })
                     .label(label.clone())
+                    .focusable()
                     .id(id),
                 // The pointer is the reading, so it keeps the role at full
                 // strength whatever the variant does to the face.
@@ -385,7 +395,7 @@ pub fn knob(
 /// assert_eq!(save.variant(Variant::Soft).size(S).el().children().len(), 1);
 /// ```
 pub fn button(ui: &impl Host, id: &str, label: &str) -> (Control, bool) {
-    let clicked = ui.get(id).clicked_with(Button::Primary);
+    let clicked = activated(ui, id);
     let (id, label) = (id.to_owned(), label.to_owned());
     let el = Control::new(ui, move |look| {
         let pad_y = ((look.px - 14.0) / 2.0).max(2.0);
@@ -397,6 +407,7 @@ pub fn button(ui: &impl Host, id: &str, label: &str) -> (Control, bool) {
             .animate()
             .role(Kind::Button)
             .label(label)
+            .focusable()
             .id(id)
     });
     (el, clicked)
@@ -412,7 +423,7 @@ pub fn button(ui: &impl Host, id: &str, label: &str) -> (Control, bool) {
 /// assert_eq!(sw.el().children().len(), 3);
 /// ```
 pub fn toggle(ui: &impl Host, id: &str, on: &mut bool) -> Control {
-    if ui.get(id).clicked_with(Button::Primary) {
+    if activated(ui, id) {
         *on = !*on;
     }
     let (id, on) = (id.to_owned(), *on);
@@ -436,6 +447,7 @@ pub fn toggle(ui: &impl Host, id: &str, on: &mut bool) -> Control {
         })
         .animate()
         .role(Kind::Toggle { on })
+        .focusable()
         .id(id)
     })
 }

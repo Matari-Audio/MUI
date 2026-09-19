@@ -199,11 +199,22 @@ fn inspect(
     };
     canvas.glyphs(&mui::core::Text {
         font: font.clone(),
+        fonts: vec![font.clone()].into(),
         size: LABEL as f32,
         origin: Point::new(SIDEBAR + 12.0, height - 12.0),
-        glyphs: run.glyphs.iter().map(|&(id, x)| (id, x as f32)).collect(),
+        glyphs: run
+            .glyphs
+            .iter()
+            .map(|&(id, x)| mui::core::TextGlyph {
+                id,
+                x: x as f32,
+                y: 0.,
+                font: 0,
+            })
+            .collect(),
         weight: Default::default(),
         coords: Arc::from(&[][..]),
+        font_coords: vec![Arc::from(&[][..])].into(),
     });
 }
 
@@ -269,7 +280,9 @@ impl App {
     fn new() -> Self {
         let font: Arc<[u8]> = Arc::from(epaint_default_fonts::HACK_REGULAR);
         Self {
-            ui: Ui::new(skin::SKIN).font(font.clone()),
+            ui: Ui::new(skin::SKIN)
+                .font(font.clone())
+                .fallback_font(epaint_default_fonts::NOTO_EMOJI_REGULAR.to_vec()),
             font,
             scenes: scenes::all(),
             selected: 0,

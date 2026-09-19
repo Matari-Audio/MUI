@@ -209,8 +209,7 @@ pub fn resolve_with<P>(
             needs: m.floor,
         });
     }
-    // An upper bound, not a node count: a re-measured item spends budget
-    // twice and produces one frame.
+    // Every measured node produces at most one frame.
     let mut out = (
         BTreeMap::new(),
         Vec::with_capacity(limits.nodes - pass.left),
