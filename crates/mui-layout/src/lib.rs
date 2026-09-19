@@ -13,6 +13,8 @@
 
 use std::collections::BTreeMap;
 
+mod incremental;
+pub use incremental::{resolve_cached_with, LayoutCache, LayoutStats};
 mod arrange;
 mod id;
 mod len;
@@ -174,7 +176,17 @@ pub fn resolve_with<P>(
     offered: Option<Size>,
     limits: Limits,
     scale: SpacingScale,
+    measurer: impl FnMut(&P, Option<f64>) -> Size,
+) -> Result<Layout, Error> {
+    resolve_impl(root, offered, limits, scale, measurer, None)
+}
+fn resolve_impl<P>(
+    root: &Node<P>,
+    offered: Option<Size>,
+    limits: Limits,
+    scale: SpacingScale,
     mut measurer: impl FnMut(&P, Option<f64>) -> Size,
+    cache: Option<&mut LayoutCache>,
 ) -> Result<Layout, Error> {
     if !limits.extent.is_finite()
         || limits.extent <= 0.0
@@ -193,6 +205,7 @@ pub fn resolve_with<P>(
         redo: false,
         pinned: false,
         measurer: &mut measurer,
+        cache,
     };
     // The root's own offered size is the outermost container there is.
     let m = measure(root, "root", definite, None, definite, 0, &mut pass)?;
@@ -224,10 +237,16 @@ pub fn resolve_with<P>(
         e => e,
     };
     let empty = BTreeMap::new();
+    let memo = pass
+        .cache
+        .as_deref()
+        .filter(|_| !pass.pinned)
+        .map(|c| &c.arrangement);
     let pins = |anchors| Pins {
         anchors,
         root: size,
         scale,
+        memo,
     };
     arrange(&m, "root", [0.0, 0.0], size, &pins(&empty), None, &mut out).map_err(fix)?;
     // ponytail: one extra arrange resolves every pin, because a float takes no

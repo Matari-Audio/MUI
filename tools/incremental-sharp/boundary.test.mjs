@@ -1,0 +1,17 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {unionBoundary,sampleBoundary,boundaryWidth,distance,point,closest,encodeBoundary} from './boundary.mjs';
+const plate=(cx=0,cy=0,angle=0,r=6)=>({cx,cy,hx:40,hy:25,r,angle});
+const near=(a,b,e=1e-6)=>assert.ok(Math.abs(a-b)<e,`${a} != ${b}`);
+test('one rounded plate matches exact SDF at 6000 points',()=>{for(const angle of [0,.37,1.1]){const s=plate(2,3,angle),b=unionBoundary([s]);for(let x=-50;x<50;x+=2)for(let y=-40;y<40;y+=2)near(sampleBoundary([s],b,[x+.1,y+.3]).distance,distance(s,[x+.1,y+.3]));}});
+test('coincident original edges do not become internal borders',()=>{const a=plate(-40,0,0,0),b=plate(40,0,0,0),ss=[a,b],u=unionBoundary(ss);near(sampleBoundary(ss,u,[0,0]).distance,-25);});
+test('identical shapes retain exterior',()=>{const p=plate(),ss=[p,{...p}],u=unionBoundary(ss);near(sampleBoundary(ss,u,[0,0]).distance,-25);});
+test('a contained shape cannot introduce an interior stroke',()=>{const ss=[plate(),{...plate(),hx:5,hy:4,r:2}],u=unionBoundary(ss);near(sampleBoundary(ss,u,[0,0]).distance,-25);});
+test('no precontact splat or bridge in crisp mode',()=>{const ss=[plate(-50,0,0,0),plate(50,0,0,0)],u=unionBoundary(ss);near(sampleBoundary(ss,u,[0,0]).distance,10);});
+test('union distance is invariant under source permutation',()=>{const ss=[plate(-18,0,.4),plate(24,4,-.7),plate(2,24,1.2)],u=unionBoundary(ss),reverse=[...ss].reverse(),v=unionBoundary(reverse);for(let x=-70;x<70;x+=3)for(let y=-60;y<80;y+=3)near(sampleBoundary(ss,u,[x,y]).distance,sampleBoundary(reverse,v,[x,y]).distance);});
+test('2 to 4 never numerically overshoots for 37 orientations',()=>{for(let i=0;i<=36;i++){const ss=[plate(-20,0),plate(25,3,i*Math.PI/18)],u=unionBoundary(ss);for(let x=-45;x<=45;x+=5)for(let y=-30;y<=35;y+=5){const h=boundaryWidth(ss,u,[x,y],[2,4],25);assert.ok(h.width>=2-1e-10&&h.width<=4+1e-10);}}});
+test('border width is constant along a normal away from medial axes',()=>{const ss=[plate(-20,0),plate(25,3,.52)],u=unionBoundary(ss);let checked=0;for(const e of u){const q=point(e,.5),t0=point(e,.49),t1=point(e,.51),dx=t1[0]-t0[0],dy=t1[1]-t0[1],norm=Math.hypot(dx,dy),n=[-dy/norm,dx/norm];const w=boundaryWidth(ss,u,q,[2,4],25).width;let valid=true;for(const step of [1,2,3,4]){const p=[q[0]+n[0]*step,q[1]+n[1]*step],h=boundaryWidth(ss,u,p,[2,4],25);if(Math.hypot(h.point[0]-q[0],h.point[1]-q[1])>1e-5){valid=false;break;}near(h.width,w);near(h.distance,-step);}if(valid)checked++;}assert.ok(checked>=4);});
+test('true union distance differs from minimum inside overlaps',()=>{const a={...plate(),hx:50,hy:10,r:0},b={...plate(),hx:10,hy:50,r:0},ss=[a,b],u=unionBoundary(ss);near(sampleBoundary(ss,u,[0,0]).distance,-Math.sqrt(200));near(Math.min(...ss.map(s=>distance(s,[0,0]))),-10);});
+test('arc endpoints and projection are on exposed edges',()=>{for(const s of [plate(0,0,.76),plate(20,0,-.2)]){for(const e of unionBoundary([s])){for(const p of [[0,0],[80,80],[-80,10]]){const q=closest(e,p);near(distance(s,q),0,1e-5);}}}});
+test('uniform data has exact 6144-byte binding size',()=>{const u=unionBoundary([plate()]);assert.equal(encodeBoundary(u).byteLength,6144);assert.ok(encodeBoundary(u).every(Number.isFinite));});
+test('reject unsupported or nonfinite geometry',()=>{for(const ss of [[],[plate(),plate(),plate(),plate()],[{...plate(),hx:0}],[{...plate(),angle:NaN}]])assert.throws(()=>unionBoundary(ss));});

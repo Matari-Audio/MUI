@@ -194,6 +194,22 @@ impl Semantics {
     }
 }
 
+/// A node's own local outline. It is used for painting, clipping and input, not
+/// merely drawn on top of a rectangular hit target. Its callback is evaluated at
+/// the layout size; it must return closed, consistently wound contours.
+#[derive(Clone)]
+pub struct Outline(pub Arc<dyn Fn(Size) -> Path>);
+impl std::fmt::Debug for Outline {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Outline(..)")
+    }
+}
+impl PartialEq for Outline {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Element {
     pub style: Style,
@@ -230,6 +246,16 @@ pub struct Element {
     /// [`Sugar::keep`](crate::Sugar::keep): the child shapes its parent's
     /// outline instead of painting itself.
     pub carve: Option<Carve>,
+    /// New material-aware welding. `None` leaves legacy/ordinary drawing alone.
+    pub welding: Option<crate::Weld>,
+    /// None inherits the host backend. An explicit reference path is never automatic.
+    pub weld_backend: Option<crate::WeldBackend>,
+    /// Exclude this immediate child from its parent's weld, not from layout.
+    pub weld_excluded: bool,
+    /// Host-scaled bounded raster quality, optional per group.
+    pub weld_quality: Option<crate::WeldQuality>,
+    /// Custom local shape; geometry is validated before publication.
+    pub outline: Option<Outline>,
 }
 
 /// A styled layout node: the type every constructor here returns.
@@ -313,6 +339,26 @@ impl IntoEl for String {
 /// ```
 pub trait Paints: Sized {
     fn style_mut(&mut self) -> &mut Style;
+
+    /// Set border paint and logical inside width together. Equivalent to
+    /// `.stroke(paint).stroke_width(width)`; later calls still win.
+    fn border(mut self, paint: impl Into<Fill>, width: f64) -> Self {
+        self.style_mut().stroke = Some(Stroke {
+            fill: paint.into(),
+            width: Some(width),
+        });
+        self
+    }
+    /// Clear the border now. Apply after presets that should not restore it.
+    fn no_border(mut self) -> Self {
+        self.style_mut().stroke = None;
+        self
+    }
+    /// Clear the fill now, without disabling input or the border.
+    fn no_fill(mut self) -> Self {
+        self.style_mut().fill = Fill::None;
+        self
+    }
 
     fn fill(mut self, f: impl Into<Fill>) -> Self {
         self.style_mut().fill = f.into();
@@ -522,6 +568,64 @@ impl Paints for Style {
 /// ```
 pub trait Styled: Paints {
     fn element_mut(&mut self) -> &mut Element;
+
+    /// Weld immediate non-floating, non-excluded plate children. `Weld::all()`
+    /// blends fills and borders. This is not the legacy `.weld(fill)` helper.
+    /// Request the analytic GPU backend explicitly. Unsupported effects and
+    /// contours fail; this never silently bakes an image on the UI thread.
+    fn gpu_weld(mut self, options: crate::Weld) -> Self {
+        self.element_mut().welding = Some(options);
+        self.element_mut().weld_backend = Some(crate::WeldBackend::AnalyticGpu);
+        self
+    }
+    /// Explicit CPU reference for snapshots/general contours, not animation.
+    fn reference_weld(mut self, options: crate::Weld) -> Self {
+        self.element_mut().welding = Some(options);
+        self.element_mut().weld_backend = Some(crate::WeldBackend::Reference);
+        self
+    }
+    fn weld_with(mut self, weld: crate::Weld) -> Self {
+        self.element_mut().welding = Some(weld);
+        self
+    }
+    /// Merge bodies but keep each source border, including internal seams.
+    fn weld_shape(self) -> Self {
+        self.weld_with(crate::Weld::shape())
+    }
+    /// Merge borders while preserving the original body coverage and paint.
+    fn weld_borders(self) -> Self {
+        self.weld_with(crate::Weld::borders())
+    }
+    /// Set explicit progress, retaining the group's other welding settings.
+    /// Non-finite or out-of-range progress is a resolution error, not clamped.
+    fn weld_morph(mut self, progress: f64) -> Self {
+        let e = self.element_mut();
+        e.welding = Some(e.welding.unwrap_or_default().morph(progress));
+        self
+    }
+    /// Remove new material welding. Legacy `.weld(fill)` is independent.
+    fn without_weld(mut self) -> Self {
+        self.element_mut().welding = None;
+        self
+    }
+    /// Keep this child independent from its immediate parent's weld. Text and
+    /// floating children are excluded automatically; layout is never removed.
+    fn exclude_from_weld(mut self) -> Self {
+        self.element_mut().weld_excluded = true;
+        self
+    }
+    /// Override this group's pixel/work budgets. The host's device scale still
+    /// wins when SceneSpec supplies one; no widget multiplies layout lengths.
+    fn weld_quality(mut self, quality: crate::WeldQuality) -> Self {
+        self.element_mut().weld_quality = Some(quality);
+        self
+    }
+    /// A custom closed shape in local logical units. Use opposite contour
+    /// winding for holes. The shape becomes paint, clip and hit geometry.
+    fn outline(mut self, shape: impl Fn(Size) -> Path + 'static) -> Self {
+        self.element_mut().outline = Some(Outline(Arc::new(shape)));
+        self
+    }
 
     fn text_size(mut self, px: f64) -> Self {
         self.element_mut().text_size = Some(px);

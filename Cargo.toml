@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "crates/mui-geometry",
+  "crates/mui-weld",
   "crates/mui-style",
   "crates/mui-motion",
   "crates/mui-layout",
@@ -28,6 +29,13 @@ license = "MIT"
 i_overlay = "=8.1.0"
 egui = { version = "=0.36.2", default-features = false }
 lyon_tessellation = "=1.0.20"
+
+# Comparable speed-oriented benchmark profile; release's size policy is unchanged.
+[profile.perf]
+inherits = "release"
+opt-level = 3
+debug = 1
+strip = "none"
 
 [profile.release]
 opt-level = "s"

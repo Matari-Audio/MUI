@@ -1904,6 +1904,7 @@ name = "mui-geometry"
 version = "0.3.0"
 dependencies = [
  "i_overlay",
+ "kurbo",
 ]
 
 [[package]]
@@ -1913,8 +1914,6 @@ dependencies = [
  "mui-geometry",
  "mui-layout",
  "mui-scene",
- "mui-vello",
- "vello_common 0.2.0",
 ]
 
 [[package]]
@@ -1954,6 +1953,7 @@ dependencies = [
  "mui-motion",
  "mui-style",
  "mui-text",
+ "mui-weld",
 ]
 
 [[package]]
@@ -2008,6 +2008,8 @@ dependencies = [
  "mui-layout",
  "mui-scene",
  "mui-text",
+ "mui-weld",
+ "naga",
  "png 0.17.16",
  "pollster",
  "ttf-inter",
@@ -2027,6 +2029,7 @@ dependencies = [
  "mui-geometry",
  "mui-input",
  "mui-scene",
+ "unicode-segmentation",
 ]
 
 [[package]]
@@ -4671,3 +4674,7 @@ dependencies = [
  "syn 3.0.5",
  "winnow",
 ]
+
+[[package]]
+name = "mui-weld"
+version = "0.3.0"

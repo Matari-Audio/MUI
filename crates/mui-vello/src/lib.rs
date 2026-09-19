@@ -13,7 +13,7 @@
 #![forbid(unsafe_code)]
 
 use kurbo::{Affine, BezPath, Rect, Shape as _, Stroke};
-use mui_geometry::{Error, Path, PathCommand};
+use mui_geometry::{Error, PathCommand};
 use mui_scene::{Fit, GradientKind, Layer, Paint, Painted, ResolvedScene, ShadowKind};
 use std::sync::{Arc, Mutex};
 /// The brush type [`Canvas::set_paint`] takes, so the trait can be
@@ -27,54 +27,17 @@ pub use vello_common::{kurbo, peniko};
 #[cfg(feature = "cpu")]
 pub use vello_cpu;
 pub use vello_hybrid;
+#[cfg(feature = "gpu-effects")]
+pub mod effects;
 
-/// Curve error, in scene units, allowed when an arc becomes cubics. Vello
-/// re-flattens per frame at device resolution, so this only has to be finer
-/// than anything a later transform can magnify into view.
-pub const ARC_TOLERANCE: f64 = 0.01;
-
-/// Convert a resolved MUI path into a Bézier path Vello can fill or stroke.
-///
-/// The path is validated first: a malformed arc here would silently render as
-/// a wrong shape rather than fail, and geometry bugs are much cheaper to find
-/// at the seam than in a screenshot.
-pub fn bez_path(path: &Path, tolerance: f64) -> Result<BezPath, Error> {
-    if !(tolerance.is_finite() && tolerance > 0.) {
-        return Err(Error::InvalidPath);
-    }
-    path.validate(250_000)?;
-
-    let mut out = BezPath::new();
-    for command in &path.commands {
-        match *command {
-            PathCommand::MoveTo(p) => out.move_to((p.x, p.y)),
-            PathCommand::LineTo(p) => out.line_to((p.x, p.y)),
-            PathCommand::ArcTo(arc) => {
-                // `append_iter` emits curves only, continuing from the current
-                // point -- exactly the shape of an `ArcTo`.
-                let k = kurbo::Arc::new(
-                    (arc.center.x, arc.center.y),
-                    (arc.radius, arc.radius),
-                    arc.start_angle,
-                    arc.sweep,
-                    0.,
-                );
-                out.extend(k.append_iter(tolerance));
-                // Land on the tangent point MUI recorded rather than on the
-                // one trig reconstructed, so consecutive arcs cannot drift.
-                out.line_to((arc.to.x, arc.to.y));
-            }
-            PathCommand::CubicTo(a, b, p) => out.curve_to((a.x, a.y), (b.x, b.y), (p.x, p.y)),
-            PathCommand::Close => out.close_path(),
-        }
-    }
-    Ok(out)
-}
+/// Canonical conversion shared with input; retained here for source compatibility.
+pub use mui_geometry::{bez_path, ARC_TOLERANCE};
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use kurbo::{ParamCurve as _, PathEl};
+    use mui_geometry::Path;
 
     fn capsule() -> Path {
         Path::capsule(48., 120.).unwrap()
@@ -541,6 +504,11 @@ pub fn paint(
     scene: &ResolvedScene,
     transform: Affine,
 ) -> Result<(), Error> {
+    // A CPU/sink Canvas must not silently omit external GPU paint. Use
+    // effects::HybridEffects for scenes containing native material surfaces.
+    if scene.paint.iter().any(|p| p.layer == Layer::External) {
+        return Err(Error::InvalidPath);
+    }
     canvas.set_transform(transform);
     for p in &scene.paint {
         if layered(canvas, p) {
@@ -644,6 +612,7 @@ fn fingerprint(p: &Painted) -> u64 {
         Layer::Blend { .. } => (8, 0),
         Layer::Unblend => (9, 0),
         Layer::Mask => (10, 0),
+        Layer::External => (11, 0),
     };
     eat(tag);
     eat(n as u64);
@@ -699,6 +668,11 @@ pub fn paint_cached(
     transform: Affine,
     cache: &mut PathCache,
 ) -> Result<(), Error> {
+    // A CPU/sink Canvas must not silently omit external GPU paint. Use
+    // effects::HybridEffects for scenes containing native material surfaces.
+    if scene.paint.iter().any(|p| p.layer == Layer::External) {
+        return Err(Error::InvalidPath);
+    }
     canvas.set_transform(transform);
     cache.frame += 1;
     let frame = cache.frame;
@@ -869,6 +843,7 @@ fn one(canvas: &mut impl Canvas, p: &Painted, path: &BezPath) -> Result<(), Erro
 #[cfg(test)]
 mod seam {
     use super::*;
+    use mui_geometry::Path;
     use mui_scene::{Image, Text};
 
     /// `Image`'s fields are public, so a caller can skip `Image::rgba` and
@@ -1032,7 +1007,7 @@ mod snapshot {
                 ctx: &mut ctx,
                 resources: &mut res,
             },
-            &scene,
+            scene,
             Affine::IDENTITY,
         )
         .unwrap();
@@ -1062,8 +1037,8 @@ mod snapshot {
 
     #[test]
     fn a_gpos_mark_is_rendered_at_its_shaped_y_offset() {
-        let mut spec = SceneSpec::new(text("ש\u{05b8}").fill(Role::Ink).id("t"))
-            .offered(Size::new(80., 40.));
+        let mut spec =
+            SceneSpec::new(text("ש\u{05b8}").fill(Role::Ink).id("t")).offered(Size::new(80., 40.));
         spec.font = Some(std::sync::Arc::from(ttf_inter::REGULAR));
         let scene = resolve_scene(&spec).unwrap();
         let text = scene
@@ -1089,7 +1064,11 @@ mod snapshot {
         }
         let positioned = pixels_scene(&scene, 80, 40);
         let flattened = pixels_scene(&without_offsets, 80, 40);
-        assert_ne!(positioned.data(), flattened.data(), "mark offset had no raster effect");
+        assert_ne!(
+            positioned.data(),
+            flattened.data(),
+            "mark offset had no raster effect"
+        );
     }
 
     #[test]
@@ -1097,9 +1076,9 @@ mod snapshot {
         let root = text("A😀").fill(Role::Ink).id("t");
         let mut with_fallback = SceneSpec::new(root.clone()).offered(Size::new(100., 40.));
         with_fallback.font = Some(std::sync::Arc::from(epaint_default_fonts::HACK_REGULAR));
-        with_fallback
-            .fallback_fonts
-            .push(std::sync::Arc::from(epaint_default_fonts::NOTO_EMOJI_REGULAR));
+        with_fallback.fallback_fonts.push(std::sync::Arc::from(
+            epaint_default_fonts::NOTO_EMOJI_REGULAR,
+        ));
         let fallback_scene = resolve_scene(&with_fallback).unwrap();
         let glyphs = fallback_scene
             .paint
@@ -1108,7 +1087,10 @@ mod snapshot {
             .expect("text layer")
             .glyphs
             .clone();
-        assert!(glyphs.iter().any(|glyph| glyph.font == 1), "no fallback glyph was selected");
+        assert!(
+            glyphs.iter().any(|glyph| glyph.font == 1),
+            "no fallback glyph was selected"
+        );
 
         let mut primary_only = with_fallback.clone();
         primary_only.fallback_fonts.clear();

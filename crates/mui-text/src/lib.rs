@@ -474,9 +474,7 @@ pub fn fallback_text_run(
                     .get(glyph.glyph_id)
                     .is_some()
                 {
-                    let location = font_refs[font_index]
-                        .axes()
-                        .location(axes.iter().copied());
+                    let location = font_refs[font_index].axes().location(axes.iter().copied());
                     pen.dx = glyph.x;
                     pen.dy = glyph.y;
                     draw_glyph(
@@ -564,11 +562,7 @@ fn shape_segment(
     let scale = size_px / f64::from(face.units_per_em());
     let mut pen = 0.;
     let mut glyphs = Vec::with_capacity(shaped.len());
-    for (info, position) in shaped
-        .glyph_infos()
-        .iter()
-        .zip(shaped.glyph_positions())
-    {
+    for (info, position) in shaped.glyph_infos().iter().zip(shaped.glyph_positions()) {
         let x_advance = f64::from(position.x_advance) * scale;
         glyphs.push(ShapedGlyph {
             glyph_id: GlyphId::new(info.glyph_id),
@@ -822,7 +816,9 @@ fn advances_with_axes(
     }
     for cluster in clusters {
         let start = cluster.start;
-        let first = starts.partition_point(|&byte| byte < start).min(out.len() - 1);
+        let first = starts
+            .partition_point(|&byte| byte < start)
+            .min(out.len() - 1);
         out[first] += checked_finite(cluster.advance, "font metrics")?;
     }
     Ok(out)
@@ -1072,17 +1068,17 @@ pub fn caret_x(font: &[u8], text: &str, size_px: f64, byte_index: usize) -> Resu
 pub fn hit_index(font: &[u8], text: &str, size_px: f64, x: f64) -> Result<usize, Error> {
     let x = checked_finite(x, "x")?;
     let positions = caret_positions(font, text, size_px)?;
-    let (best, _) = positions.into_iter().fold(
-        (0, x.abs()),
-        |(best, best_distance), (byte, position)| {
-            let distance = (position - x).abs();
-            if distance < best_distance {
-                (byte, distance)
-            } else {
-                (best, best_distance)
-            }
-        },
-    );
+    let (best, _) =
+        positions
+            .into_iter()
+            .fold((0, x.abs()), |(best, best_distance), (byte, position)| {
+                let distance = (position - x).abs();
+                if distance < best_distance {
+                    (byte, distance)
+                } else {
+                    (best, best_distance)
+                }
+            });
     Ok(best)
 }
 
@@ -1437,9 +1433,7 @@ mod tests {
         // with GPOS, which exercises the renderer's y-offset transport.
         let run = text_run(ttf_inter::REGULAR, "ש\u{05b8}", 32., &[], 0.05).unwrap();
         assert!(
-            run.glyph_offsets
-                .iter()
-                .any(|&(_, y)| y.abs() > 0.01),
+            run.glyph_offsets.iter().any(|&(_, y)| y.abs() > 0.01),
             "GPOS mark placement was discarded: {:?}",
             run.glyph_offsets
         );
@@ -1484,7 +1478,8 @@ mod tests {
             .advance;
         let lines = break_lines(ttf_inter::REGULAR, text, 16., first);
         assert_eq!(
-            lines.unwrap()
+            lines
+                .unwrap()
                 .into_iter()
                 .map(|line| &text[line.text_range])
                 .collect::<Vec<_>>(),
@@ -1512,7 +1507,10 @@ mod tests {
         let fonts = [HACK_REGULAR, epaint_default_fonts::NOTO_EMOJI_REGULAR];
         let text = "A😀";
         let end = fallback_caret_x(&fonts, text, 24., text.len()).unwrap();
-        assert_eq!(fallback_hit_index(&fonts, text, 24., end).unwrap(), text.len());
+        assert_eq!(
+            fallback_hit_index(&fonts, text, 24., end).unwrap(),
+            text.len()
+        );
         let emoji = text.char_indices().nth(1).unwrap().0;
         let before_emoji = fallback_caret_x(&fonts, text, 24., emoji).unwrap();
         assert!(end > before_emoji, "fallback glyph has no advance");

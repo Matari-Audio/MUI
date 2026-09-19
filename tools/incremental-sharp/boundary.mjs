@@ -1,0 +1,31 @@
+// Exact line/arc union boundary for up to three rounded plates.
+// CPU geometry work runs on GEOMETRY changes only. Material/morph changes reuse it.
+// MIT; authored for MUI. No third-party code copied.
+export const MAX_SEGMENTS = 128;
+const TAU=2*Math.PI, EPS=1e-8;
+const add=(a,b)=>[a[0]+b[0],a[1]+b[1]],sub=(a,b)=>[a[0]-b[0],a[1]-b[1]],mul=(a,t)=>[a[0]*t,a[1]*t],dot=(a,b)=>a[0]*b[0]+a[1]*b[1],cross=(a,b)=>a[0]*b[1]-a[1]*b[0],len=a=>Math.hypot(...a),clamp=(x,a,b)=>Math.max(a,Math.min(b,x));
+const wrap=x=>(x%TAU+TAU)%TAU;
+export function distance(s,p){const x=p[0]-s.cx,y=p[1]-s.cy,c=Math.cos(s.angle??0),sn=Math.sin(s.angle??0),r=Math.min(s.r,s.hx,s.hy),qx=Math.abs(c*x+sn*y)-s.hx+r,qy=Math.abs(-sn*x+c*y)-s.hy+r;return Math.hypot(Math.max(qx,0),Math.max(qy,0))+Math.min(Math.max(qx,qy),0)-r;}
+export function point(s,t){return s.kind===0?add(s.a,mul(sub(s.b,s.a),t)):add(s.c,[s.r*Math.cos(s.start+s.sweep*t),s.r*Math.sin(s.start+s.sweep*t)]);}
+export function parameter(s,p){if(s.kind===0){const v=sub(s.b,s.a),l=dot(v,v);if(l<EPS*EPS)return null;const t=dot(sub(p,s.a),v)/l;if(t< -EPS||t>1+EPS||Math.abs(cross(sub(p,s.a),v))>EPS*64*Math.max(1,len(v)))return null;return clamp(t,0,1);}if(Math.abs(len(sub(p,s.c))-s.r)>EPS*64*Math.max(1,s.r))return null;let a=wrap(Math.atan2(p[1]-s.c[1],p[0]-s.c[0])-s.start);if(a>TAU-EPS*64)a=0;if(a>s.sweep+EPS*64)return null;return clamp(a/s.sweep,0,1);}
+export function closest(s,p){if(s.kind===0){const v=sub(s.b,s.a);return add(s.a,mul(v,clamp(dot(sub(p,s.a),v)/dot(v,v),0,1)));}const v=sub(p,s.c),n=len(v);if(n>EPS){const q=add(s.c,mul(v,s.r/n));if(parameter(s,q)!==null)return q;}const a=point(s,0),b=point(s,1);return len(sub(p,a))<=len(sub(p,b))?a:b;}
+export function intersections(a,b){const out=[],push=p=>{if(parameter(a,p)!==null&&parameter(b,p)!==null&&!out.some(q=>len(sub(p,q))<EPS*32))out.push(p);};
+ if(a.kind===0&&b.kind===0){const va=sub(a.b,a.a),vb=sub(b.b,b.a),den=cross(va,vb);if(Math.abs(den)>EPS*len(va)*len(vb))push(add(a.a,mul(va,cross(sub(b.a,a.a),vb)/den)));else for(const p of [a.a,a.b,b.a,b.b])push(p);}
+ else if(a.kind===0||b.kind===0){const line=a.kind===0?a:b,arc=a.kind===1?a:b,v=sub(line.b,line.a),o=sub(line.a,arc.c),A=dot(v,v),B=2*dot(o,v),C=dot(o,o)-arc.r*arc.r,D=B*B-4*A*C;if(D>=-EPS*Math.max(1,B*B,Math.abs(4*A*C))){const root=Math.sqrt(Math.max(0,D));push(add(line.a,mul(v,(-B-root)/(2*A))));push(add(line.a,mul(v,(-B+root)/(2*A))));}}
+ else {const v=sub(b.c,a.c),d=len(v);if(d<EPS){if(Math.abs(a.r-b.r)<EPS*32)for(const p of [point(a,0),point(a,1),point(b,0),point(b,1)])push(p);}else if(d<=a.r+b.r+EPS&&d>=Math.abs(a.r-b.r)-EPS){const x=(a.r*a.r-b.r*b.r+d*d)/(2*d),h=Math.sqrt(Math.max(0,a.r*a.r-x*x)),base=add(a.c,mul(v,x/d)),off=[-v[1]*h/d,v[0]*h/d];push(add(base,off));push(sub(base,off));}}
+ return out;}
+export function primitives(s,owner){const c=Math.cos(s.angle??0),sn=Math.sin(s.angle??0),xf=p=>[s.cx+c*p[0]-sn*p[1],s.cy+sn*p[0]+c*p[1]],r=Math.min(s.r,s.hx,s.hy),x=s.hx,y=s.hy,out=[];
+ const line=(a,b)=>{if(len(sub(a,b))>EPS)out.push({kind:0,a:xf(a),b:xf(b),owner});},arc=(p,start)=>{if(r>EPS)out.push({kind:1,c:xf(p),r,start:start+(s.angle??0),sweep:Math.PI/2,owner});};
+ line([-x+r,-y],[x-r,-y]);arc([x-r,-y+r],-Math.PI/2);line([x,-y+r],[x,y-r]);arc([x-r,y-r],0);line([x-r,y],[-x+r,y]);arc([-x+r,y-r],Math.PI/2);line([-x,y-r],[-x,-y+r]);arc([-x+r,-y+r],Math.PI);return out;}
+export function unionBoundary(sources){if(!sources.length||sources.length>3)throw Error('crisp supports one to three plates');for(const s of sources){if(![s.cx,s.cy,s.hx,s.hy,s.r,s.angle??0].every(Number.isFinite)||s.hx<=0||s.hy<=0||s.r<0||Math.max(Math.abs(s.cx),Math.abs(s.cy))>1e5)throw Error('invalid plate');}
+ const all=sources.flatMap(primitives),out=[];for(let i=0;i<all.length;i++){const e=all[i],cuts=[0,1];for(let j=0;j<all.length;j++)if(e.owner!==all[j].owner)for(const p of intersections(e,all[j]))cuts.push(parameter(e,p));cuts.sort((a,b)=>a-b);const unique=cuts.filter((x,k)=>!k||x-cuts[k-1]>EPS);for(let k=1;k<unique.length;k++){const a=unique[k-1],b=unique[k];if(b-a<=EPS)continue;const m=point(e,(a+b)/2);
+ // Midpoint classification is exact between all intersection cuts. Coincident
+ // boundaries are handled with an OUTWARD probe, not midpoint-on-boundary alone.
+ const tangent=e.kind===0?sub(e.b,e.a):[-Math.sin(e.start+e.sweep*(a+b)/2),Math.cos(e.start+e.sweep*(a+b)/2)];const norm=[tangent[1]/len(tangent),-tangent[0]/len(tangent)];const probe=add(m,mul(norm,1e-6));
+ if(sources.some((s,j)=>j!==e.owner&&distance(s,m)<-EPS*16)||sources.some((s,j)=>j!==e.owner&&Math.abs(distance(s,m))<=EPS*16&&distance(s,probe)<-EPS))continue;
+ const piece=e.kind===0?{...e,a:point(e,a),b:point(e,b)}:{...e,start:e.start+e.sweep*a,sweep:e.sweep*(b-a)};out.push(piece);if(out.length>MAX_SEGMENTS)throw Error('crisp boundary budget');}}
+ if(!out.length)throw Error('empty union boundary');return out;}
+export function sampleBoundary(sources,boundary,p){let best=Infinity,q=p;for(const e of boundary){const v=closest(e,p),d=len(sub(v,p));if(d<best){best=d;q=v;}}const inside=sources.some(s=>distance(s,p)<=0);return{distance:inside?-best:best,point:q};}
+export function ownership(ds,k){let lo=Math.min(...ds);if(k<=1e-12){let count=ds.filter(d=>d===lo).length;return ds.map(d=>d===lo?1/count:0);}const sorted=ds.map(d=>d-lo).sort((a,b)=>a-b);let lambda=k,sum=0;for(let i=1;i<sorted.length&&sorted[i]<lambda;i++){sum+=sorted[i];lambda=(k+sum)/(i+1);}const w=ds.map(d=>Math.max(0,(lambda-(d-lo))/k)),total=w.reduce((a,b)=>a+b,0);return w.map(v=>v/total);}
+export function boundaryWidth(sources,boundary,p,widths,blend){if(widths.length!==sources.length||widths.some(w=>!Number.isFinite(w)||w<0))throw Error('invalid widths');const hit=sampleBoundary(sources,boundary,p),w=ownership(sources.map(s=>Math.abs(distance(s,hit.point))),blend);return{...hit,width:w.reduce((v,a,i)=>v+a*widths[i],0),weights:w};}
+export function encodeBoundary(edges,origin=[0,0]){const out=new Float32Array(MAX_SEGMENTS*12);for(let i=0;i<edges.length;i++){const e=edges[i],b=i*12;if(e.kind===0){out.set([e.a[0]-origin[0],e.a[1]-origin[1],e.b[0]-origin[0],e.b[1]-origin[1]],b);}else{out.set([e.c[0]-origin[0],e.c[1]-origin[1],e.r,1],b);out.set([Math.cos(e.start),Math.sin(e.start),Math.cos(e.start+e.sweep),Math.sin(e.start+e.sweep)],b+4);}out[b+8]=e.kind;}return out;}

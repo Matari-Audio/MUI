@@ -35,12 +35,14 @@ pub use mui_vello as vello;
 pub use mui_widgets as widgets;
 pub use mui_widgets::presets;
 
+mod actions;
 mod ui;
+pub use actions::SemanticAction;
 
 pub use ui::{Edit, Frame, Ui};
 
 pub mod prelude {
-    pub use crate::{Edit, Frame, Ui};
+    pub use crate::{Edit, Frame, SemanticAction, Ui};
     pub use mui_input::{
         Axis, Button, Buttons, Ime, Input, Key, KeyPress, Mods, PointerInput, Response, FINE_DRAG,
     };

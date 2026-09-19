@@ -6,6 +6,7 @@ license.workspace = true
 
 [features]
 default = []
+gpu-effects = ["mui-vello/gpu-effects"]
 egui = ["dep:mui-egui"]
 cpu = ["mui-vello/cpu"]
 cpu-threads = ["mui-vello/cpu-threads"]

@@ -820,7 +820,10 @@ fn a_sized_flex_rack_remeasures_wrapped_controls_after_growth_and_shrink() {
         let layout = layout_for(basis);
         let controls = layout.frame("controls").expect("wrapped controls");
         assert_eq!(layout.frame("rack").unwrap().size.width, 300.);
-        assert!((controls.size.height - 93.4).abs() < 1e-9, "basis={basis}: {controls:?}");
+        assert!(
+            (controls.size.height - 93.4).abs() < 1e-9,
+            "basis={basis}: {controls:?}"
+        );
     }
 }
 

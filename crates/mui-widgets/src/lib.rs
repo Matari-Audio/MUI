@@ -20,7 +20,9 @@ use mui_scene::{ResolvedScene, Spring, Theme};
 
 mod bins;
 mod curve;
+mod grapheme;
 pub mod presets;
+pub mod visualization;
 mod widgets;
 
 pub use bins::{bins, bins_hover, BinAxis, BinEdit, Bins};

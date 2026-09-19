@@ -8,6 +8,10 @@
 //! Run: `cargo run -p mui-preview`
 #![forbid(unsafe_code)]
 
+#[cfg(not(feature = "gpu-effects"))]
+mod host;
+#[cfg(feature = "gpu-effects")]
+#[path = "host_gpu.rs"]
 mod host;
 mod scenes;
 mod skin;
@@ -266,6 +270,8 @@ struct App {
     /// no OS clipboard, add `arboard` here if cross-app paste matters.
     clipboard: String,
     last: Instant,
+    repaint_at: Option<Instant>,
+    visible: bool,
     gpu: Option<Gpu>,
     /// The screen reader's adapter, and the proxy it posts requests through.
     /// Both are `None` in a test: no event loop, no window, no adapter.
@@ -273,6 +279,7 @@ struct App {
     access: Option<Adapter>,
     /// Arc-to-cubic conversions reused across frames; a still gallery
     /// re-encodes without reconverting a single path.
+    #[cfg(not(feature = "gpu-effects"))]
     paths: mui::vello::PathCache,
 }
 
@@ -280,9 +287,14 @@ impl App {
     fn new() -> Self {
         let font: Arc<[u8]> = Arc::from(epaint_default_fonts::HACK_REGULAR);
         Self {
-            ui: Ui::new(skin::SKIN)
-                .font(font.clone())
-                .fallback_font(epaint_default_fonts::NOTO_EMOJI_REGULAR.to_vec()),
+            ui: {
+                let ui = Ui::new(skin::SKIN)
+                    .font(font.clone())
+                    .fallback_font(epaint_default_fonts::NOTO_EMOJI_REGULAR.to_vec());
+                #[cfg(feature = "gpu-effects")]
+                let ui = ui.gpu_welding();
+                ui
+            },
             font,
             scenes: scenes::all(),
             selected: 0,
@@ -310,9 +322,12 @@ impl App {
             typed: None,
             clipboard: String::new(),
             last: Instant::now(),
+            repaint_at: None,
+            visible: true,
             gpu: None,
             proxy: None,
             access: None,
+            #[cfg(not(feature = "gpu-effects"))]
             paths: mui::vello::PathCache::new(),
         }
     }
@@ -439,7 +454,7 @@ impl App {
             .pos
             .map(|p| Point::new(p.x / scale, p.y / scale));
         let now = Instant::now();
-        let dt = now.duration_since(self.last).as_secs_f64().min(0.1);
+        let dt = now.duration_since(self.last).as_secs_f64();
         self.last = now;
         input.clipboard = Some(self.clipboard.clone());
         self.ui.scale = Some(scale);
@@ -450,6 +465,7 @@ impl App {
             Ok(f) => {
                 let (animating, cursor, copied) = (f.animating, f.cursor, f.clipboard.clone());
                 self.ime_area = f.ime;
+                self.repaint_at = f.repaint_after.and_then(|delay| now.checked_add(delay));
                 if let Some(s) = copied {
                     self.scenes[self.selected].clipboard(&s);
                     self.clipboard = s;
@@ -592,22 +608,66 @@ impl App {
             .map(|s| s.key.to_string())
     }
 
-    /// A click from a screen reader: a press and a release at the surface's
-    /// centre, in the same queue the pointer uses, so a widget sees one
-    /// ordinary click.
+    /// A semantic activation targets the requested control, even when its
+    /// bounding-box centre is a hole or is covered by another surface.
     fn press(&mut self, key: &str) {
-        let Some(s) = self.ui.scene().and_then(|s| s.surface(key)) else {
-            return;
-        };
-        let (f, scale) = (s.frame, self.ui.scale.unwrap_or(1.0));
-        let c = Point::new(
-            (f.x + f.size.width / 2.0) * scale,
-            (f.y + f.size.height / 2.0) * scale,
-        );
-        self.queue(Some(Some(c)), Some((Button::Primary, true)));
-        self.queue(None, Some((Button::Primary, false)));
+        self.ui.request_action(SemanticAction::activate(key));
     }
 
+    #[cfg(feature = "gpu-effects")]
+    fn draw(&mut self) {
+        let Some(gpu) = &mut self.gpu else { return };
+        let scale = gpu.window().scale_factor();
+        let height = f64::from(gpu.size().1) / scale;
+        let Some(scene) = self.ui.scene() else { return };
+        let xf = Affine::scale(scale);
+        let extra = self.scenes[self.selected].overlay();
+        let wants_overlay = self.frames || extra.is_some();
+        let draw_extra = |canvas: &mut mui::vello::Gpu<'_>| {
+            if let Some((key, path)) = extra {
+                if let (Some(s), Ok(bez)) = (
+                    scene.surface(key),
+                    mui::vello::bez_path(&path, mui::vello::ARC_TOLERANCE),
+                ) {
+                    canvas.set_transform(xf * Affine::translate((s.frame.x, s.frame.y)));
+                    canvas.set_paint(
+                        self.ui
+                            .theme
+                            .palette
+                            .on(self.ui.theme.palette.raised())
+                            .to_srgb()
+                            .into(),
+                    );
+                    canvas.fill_path(&bez);
+                }
+            }
+            if self.frames {
+                let pointer = self
+                    .pointer
+                    .pos
+                    .map(|p| Point::new(p.x / scale, p.y / scale));
+                inspect(
+                    canvas,
+                    scene,
+                    xf,
+                    &self.ui.theme.palette,
+                    &self.font,
+                    pointer,
+                    height,
+                );
+            }
+        };
+        let result = if wants_overlay {
+            gpu.present_with_overlay(scene, xf, draw_extra)
+        } else {
+            gpu.present(scene, xf)
+        };
+        if let Err(e) = result {
+            eprintln!("GPU paint: {e}");
+        }
+    }
+
+    #[cfg(not(feature = "gpu-effects"))]
     fn draw(&mut self) {
         let Some(gpu) = &mut self.gpu else { return };
         let scale = gpu.window().scale_factor();
@@ -664,8 +724,18 @@ impl ApplicationHandler<AccessEvent> for App {
             AccessWindowEvent::ActionRequested(r) => {
                 if let Some(key) = self.key_of(r.target_node) {
                     match r.action {
-                        AccessAction::Focus => self.ui.focus(key),
+                        AccessAction::Focus => {
+                            self.ui.request_action(SemanticAction::focus(key));
+                        }
                         AccessAction::Click => self.press(&key),
+                        AccessAction::SetValue => {
+                            if let Some(mui_access::accesskit::ActionData::NumericValue(value)) =
+                                r.data
+                            {
+                                self.ui
+                                    .request_action(SemanticAction::set_value(key, value));
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -698,15 +768,31 @@ impl ApplicationHandler<AccessEvent> for App {
     /// The theme file is the only thing that changes with no event behind it,
     /// so it is the only reason this loop ever wakes on a timer.
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        if self.theme_path.is_none() {
+        if !self.visible {
+            event_loop.set_control_flow(ControlFlow::Wait);
             return;
+        }
+        let now = Instant::now();
+        if self.repaint_at.is_some_and(|at| at <= now) {
+            self.repaint_at = None;
+            if let Some(gpu) = &self.gpu {
+                gpu.window().request_redraw();
+            }
         }
         if self.reload() {
             if let Some(gpu) = &self.gpu {
                 gpu.window().request_redraw();
             }
         }
-        event_loop.set_control_flow(ControlFlow::WaitUntil(Instant::now() + POLL));
+        let theme = self
+            .theme_path
+            .as_ref()
+            .and_then(|_| self.theme_at.checked_add(POLL));
+        let next = match (self.repaint_at, theme) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+        event_loop.set_control_flow(next.map_or(ControlFlow::Wait, ControlFlow::WaitUntil));
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
@@ -716,6 +802,7 @@ impl ApplicationHandler<AccessEvent> for App {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => {
+                self.visible = size.width > 0 && size.height > 0;
                 if let Some(gpu) = &mut self.gpu {
                     gpu.resize(size.width, size.height);
                 }
@@ -801,7 +888,17 @@ impl ApplicationHandler<AccessEvent> for App {
                     }
                 }
             }
+            WindowEvent::Occluded(hidden) => {
+                self.visible = !hidden;
+                if hidden {
+                    self.repaint_at = None;
+                    self.cancel();
+                }
+            }
             WindowEvent::RedrawRequested => {
+                if !self.visible {
+                    return;
+                }
                 let Some(gpu) = &self.gpu else { return };
                 let (size, scale) = (gpu.size(), gpu.window().scale_factor());
                 let start = Instant::now();
