@@ -404,13 +404,15 @@ pub(crate) fn measure_uncached<'a, P>(
     // deficit) is dealt, so anything whose measured cross depends on its main
     // -- a paragraph, a `min_col` grid -- is measured again at the share it
     // actually got. Doing it here, inside the one measure pass, is what makes
-    // the row's own cross size right; a second solve outside cannot.
+    // the row's own cross size right; a second solve outside cannot. A
+    // wrapping row deals lines, not shares: squeezing its items onto one
+    // line would break words instead of wrapping them.
     if let (
         Kind::Branch {
             vertical: false, ..
         },
         Some(avail),
-        _,
+        false,
     ) = (&node.kind, inner[0], node.wrap)
     {
         let shares: Vec<(usize, f64)> = {
