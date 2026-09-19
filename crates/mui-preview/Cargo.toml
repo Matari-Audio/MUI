@@ -7,9 +7,14 @@ publish = false
 
 [features]
 default = []
+gpu-effects = ["mui/gpu-effects"]
 # The CPU rasteriser, for the snapshot test. The gallery itself is a GPU
 # host and never uses it.
 cpu = ["mui/cpu"]
+
+[[example]]
+name = "gpu_welding"
+required-features = ["gpu-effects"]
 
 [dependencies]
 mui = { path = "../mui" }

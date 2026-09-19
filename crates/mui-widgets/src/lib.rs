@@ -22,6 +22,8 @@ mod bins;
 mod curve;
 pub mod presets;
 mod widgets;
+pub mod visualization;
+mod grapheme;
 
 pub use bins::{bins, bins_hover, BinAxis, BinEdit, Bins};
 pub use curve::{curve, CurveEdit};

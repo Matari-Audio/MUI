@@ -30,11 +30,17 @@
 mod dsl;
 mod element;
 mod scene;
+mod material_weld;
+mod external;
+pub use external::{ExternalWeld, WeldBackend};
+mod weld_dsl;
+
+pub use mui_weld::{Channel as WeldChannel, Quality as WeldQuality, Weld, WeldCache};
 
 pub use dsl::{caption, label, title, IntoLen, Sugar};
 pub use element::{
     canvas, column, fits, grid, leaf, overlay, row, spacer, text, Canvas, Carve, Content, Draw, El,
-    Element, IntoEl, Kind, Paints, Semantics, State, StateStyle, Styled,
+    Element, IntoEl, Kind, Outline, Paints, Semantics, State, StateStyle, Styled,
 };
 pub use mui_geometry::CornerStyle;
 pub use mui_layout::{
@@ -48,7 +54,7 @@ pub use mui_style::{
 };
 pub use mui_text::Weight;
 pub use scene::{
-    resolve_scene, resolve_scene_with, Layer, Painted, ResolvedScene, ResolvedSurface, SceneError,
+    resolve_scene, resolve_scene_with, resolve_scene_cached, Layer, Painted, ResolvedScene, ResolvedSurface, SceneError,
     SceneSpec, SceneState, Text, TextCache,
 };
 
@@ -61,6 +67,7 @@ pub mod prelude {
         stack, text, title, Align, Area, Color, Corner, Cursor, Draw, El, Elevation, Fill, Fit,
         Gradient, Id, Image, IntoEl, IntoLen, Justify, Kind, Len, Match, Mix, Paints, Pin, Radius,
         Role, SceneSpec, Shadow, Size, State, Style, Styled, Sugar, Theme, Weight,
+        weld, weld_morph, Weld, WeldChannel, WeldQuality, WeldBackend,
     };
     pub use mui_geometry::{CornerStyle, Path, Point};
     pub use mui_layout::Spacing;

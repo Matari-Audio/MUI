@@ -1,0 +1,211 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>MUI · Material welding lab</title>
+<style>
+:root{color-scheme:dark;font-family:Inter,ui-sans-serif,system-ui,sans-serif;background:#101214;color:#eceef0;font-size:14px}*{box-sizing:border-box}body{margin:0}main{max-width:1160px;margin:0 auto;padding:38px 30px}header{border-bottom:1px solid #34383c;padding-bottom:22px;display:flex;justify-content:space-between;align-items:end;gap:20px}.eyebrow{letter-spacing:.17em;font-size:11px;color:#92c4bd;font-weight:700}h1{font-weight:550;font-size:34px;letter-spacing:-1.1px;margin:8px 0}p{color:#aab1b6;line-height:1.6;margin:6px 0}.badge{font-size:11px;letter-spacing:.08em;padding:7px 10px;border:1px solid #3c4549;border-radius:30px;white-space:nowrap}.grid{display:grid;grid-template-columns:minmax(0,1fr) 270px;gap:28px;margin-top:24px}.stage{border:1px solid #32363b;border-radius:16px;overflow:hidden;background:radial-gradient(circle at 1px 1px,#30353b 1px,transparent 0);background-size:20px 20px;position:relative}.stage-note{position:absolute;top:18px;left:20px;font-size:12px;color:#9aa3aa;pointer-events:none}canvas{display:block;width:100%;aspect-ratio:720/420;touch-action:none;cursor:grab}.toolbar{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin:15px 0}button,select{font:inherit;background:#22272b;color:#e8ecef;border:1px solid #414a4f;border-radius:7px;padding:9px 12px}button:hover{background:#30383d}button{cursor:pointer}select{width:100%;margin:7px 0 12px}.side{padding:0 0 10px}h2{font-size:14px;font-weight:600;margin:0 0 13px}.section{margin-bottom:22px;padding-bottom:20px;border-bottom:1px solid #30353a}.control{margin:12px 0}label{font-size:12px;display:flex;justify-content:space-between;gap:8px;color:#c2cbd1}input[type=range]{width:100%;accent-color:#8ac5bb;margin:9px 0 0}output{font-variant-numeric:tabular-nums;color:#edede8}.checks label{display:block;margin:11px 0}input[type=checkbox]{accent-color:#8ac5bb}.colors{display:grid;grid-template-columns:1fr 1fr;gap:12px}input[type=color]{width:42px;height:29px;border:0;background:none;padding:0;border-radius:4px}.colors label{align-items:center}pre{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;background:#161a1d;border-left:2px solid #587f79;padding:17px;font-size:12px;line-height:1.6;overflow:auto;color:#c9dad6}#status{color:#c0c9cd;font-size:12px}#cost{color:#8f989f;font-size:11px}.footer{font-size:12px;border-top:1px solid #32363b;padding-top:16px;margin-top:23px;color:#a4adb4}strong{color:#e4e9eb;font-weight:600}@media(max-width:850px){main{padding:22px 16px}.grid{grid-template-columns:1fr}.side{display:grid;grid-template-columns:1fr 1fr;gap:18px}.section{margin:0}header{align-items:start}h1{font-size:27px}.badge{display:none}}@media(max-width:450px){.side{display:block}.section{margin-bottom:22px}}
+.source-tag{position:absolute;transform:translate(-50%,-50%);pointer-events:none;font-size:12px;font-weight:750;color:#142021}.source-tag[hidden]{display:none}#error{position:absolute;inset:45px 12px 12px;padding:15px;line-height:1.6;background:#191d20;color:#f4d3b8;border-radius:8px}#error[hidden]{display:none}#idle{font-size:11px;color:#8fb6aa}input[type=range]{min-height:28px}button{min-height:42px}.stage-note{font-size:11px}canvas{height:auto}@media(max-width:450px){main{padding:14px 12px}.stage-note{top:9px;left:10px}.grid{gap:18px;margin-top:15px}h1{font-size:27px}.toolbar{gap:6px}button{padding:8px 10px}} </style></head><body><main><header><div><div class="eyebrow">MATARI UI / ENGINE LAB</div><h1>Crisp welding. No splat.</h1><p>Sharp contours, smoothly changing materials, and true-distance border bands.</p></div><span class="badge">GPU ANALYTIC PATH</span></header><div class="grid"><section><div class="stage"><div class="stage-note">Drag A or B · Borders can stay independent</div><canvas id="canvas" width="720" height="420" aria-label="Interactive material welding preview"></canvas><span id="tag0" class="source-tag">A</span><span id="tag1" class="source-tag">B</span><span id="tag2" class="source-tag" hidden>C</span><div id="error" hidden></div></div><div class="toolbar"><button id="apart">Unmerged</button><button id="join">Merged</button><button id="reset">Reset</button><button id="play">Animate</button><span id="status"></span></div><p id="cost"></p><p id="idle"></p><pre id="code"></pre><p>Crisp mode unions the contours without a soft-distance field. Its morph blends materials and removes interior borders; organic mode also changes geometry. Border width is measured perpendicular to the exposed edge, not across an acute corner or a narrow body.</p></section><aside class="side"><div class="section"><h2>Geometry mode</h2><select id="geometryMode"><option value="crisp">Crisp · contact union</option><option value="organic">Organic · original soft union</option></select><p id="modeNote">Crisp mode preserves the source boundaries. Sources must touch or overlap; it does not grow a blob across a gap.</p><h2>Weld policy</h2><select id="mode" aria-label="Weld policy"><option value="all">Body + border · default</option><option value="shape">Body only · keep borders</option><option value="border">Border only · keep bodies</option><option value="no-border">Body · omit borders</option></select><div class="control"><label for="progress">Morph progress <output id="progressOut"></output></label><input id="progress" type="range" min="0" max="1" step=".01" value="1"></div><div class="control"><label for="reach">Geometric reach <output id="reachOut"></output></label><input id="reach" type="range" min="0" max="100" value="48"></div><div class="control"><label for="blend">Material blend width <output id="blendOut"></output></label><input id="blend" type="range" min="0" max="240" value="65"></div></div><div class="section"><h2>Source materials</h2><div class="colors"><label>A fill <input aria-label="A fill color" id="colorA" type="color" value="#54d9c2"></label><label>B fill <input aria-label="B fill color" id="colorB" type="color" value="#cb81ec"></label><label>A border <input aria-label="A border color" id="edgeA" type="color" value="#d4fff6"></label><label>B border <input aria-label="B border color" id="edgeB" type="color" value="#ffd4ef"></label></div><div class="control"><label for="widthA">A border width <output id="widthAOut"></output></label><input id="widthA" type="range" min="0" max="22" step=".5" value="2"></div><div class="control"><label for="widthB">B border width <output id="widthBOut"></output></label><input id="widthB" type="range" min="0" max="22" step=".5" value="4"></div><div class="control"><label for="alpha">A opacity <output id="alphaOut"></output></label><input id="alpha" type="range" min="0" max="1" step=".01" value="1"></div></div><div class="section"><h2>Geometry & rendering</h2><label for="quality">Resolution</label><select id="quality"><option value="auto">Auto · up to 2× display density</option><option value="1">1× · lowest pixel cost</option><option value="1.5">1.5×</option><option value="2">2×</option><option value="native">Native · up to 2.5M pixels</option></select><div class="control"><label for="radius">Corner radius <output id="radiusOut"></output></label><input id="radius" type="range" min="0" max="70" value="27"></div><div class="control"><label for="rotate">Rotate B <output id="rotateOut"></output></label><input id="rotate" type="range" min="-90" max="90" value="0"></div><div class="checks"><label><input id="measure" type="checkbox"> Measure GPU time · when available</label><label><input id="gradient" type="checkbox" checked> Gradient fill on A</label><label><input id="third" type="checkbox"> Add third material</label><label><input id="contour" type="checkbox"> Show field edge · shader</label></div></div></aside></div><div class="footer"><strong>Execution:</strong> WebGL2 fragment shader, not Vello or Rust/WASM. Analytic rotated rounded rectangles; no per-frame CPU pixels or contour baking. One 352-byte parameter block plus a 6144-byte cached boundary buffer. Analytic line/arc intersections run only when geometry changes, not on a morph tick. This is the JavaScript/GLSL reference; native WGSL is not build-validated. GPU time is asynchronous and separate from CPU submission; no performance claim about your device. Arbitrary contours, masks, and shadows are not part of this fast path.</div></main><script>
+const Crisp=(()=>{// Exact line/arc union boundary for up to three rounded plates.
+// CPU geometry work runs on GEOMETRY changes only. Material/morph changes reuse it.
+// MIT; authored for MUI. No third-party code copied.
+const MAX_SEGMENTS = 128;
+const TAU=2*Math.PI, EPS=1e-8;
+const add=(a,b)=>[a[0]+b[0],a[1]+b[1]],sub=(a,b)=>[a[0]-b[0],a[1]-b[1]],mul=(a,t)=>[a[0]*t,a[1]*t],dot=(a,b)=>a[0]*b[0]+a[1]*b[1],cross=(a,b)=>a[0]*b[1]-a[1]*b[0],len=a=>Math.hypot(...a),clamp=(x,a,b)=>Math.max(a,Math.min(b,x));
+const wrap=x=>(x%TAU+TAU)%TAU;
+function distance(s,p){const x=p[0]-s.cx,y=p[1]-s.cy,c=Math.cos(s.angle??0),sn=Math.sin(s.angle??0),r=Math.min(s.r,s.hx,s.hy),qx=Math.abs(c*x+sn*y)-s.hx+r,qy=Math.abs(-sn*x+c*y)-s.hy+r;return Math.hypot(Math.max(qx,0),Math.max(qy,0))+Math.min(Math.max(qx,qy),0)-r;}
+function point(s,t){return s.kind===0?add(s.a,mul(sub(s.b,s.a),t)):add(s.c,[s.r*Math.cos(s.start+s.sweep*t),s.r*Math.sin(s.start+s.sweep*t)]);}
+function parameter(s,p){if(s.kind===0){const v=sub(s.b,s.a),l=dot(v,v);if(l<EPS*EPS)return null;const t=dot(sub(p,s.a),v)/l;if(t< -EPS||t>1+EPS||Math.abs(cross(sub(p,s.a),v))>EPS*64*Math.max(1,len(v)))return null;return clamp(t,0,1);}if(Math.abs(len(sub(p,s.c))-s.r)>EPS*64*Math.max(1,s.r))return null;let a=wrap(Math.atan2(p[1]-s.c[1],p[0]-s.c[0])-s.start);if(a>TAU-EPS*64)a=0;if(a>s.sweep+EPS*64)return null;return clamp(a/s.sweep,0,1);}
+function closest(s,p){if(s.kind===0){const v=sub(s.b,s.a);return add(s.a,mul(v,clamp(dot(sub(p,s.a),v)/dot(v,v),0,1)));}const v=sub(p,s.c),n=len(v);if(n>EPS){const q=add(s.c,mul(v,s.r/n));if(parameter(s,q)!==null)return q;}const a=point(s,0),b=point(s,1);return len(sub(p,a))<=len(sub(p,b))?a:b;}
+function intersections(a,b){const out=[],push=p=>{if(parameter(a,p)!==null&&parameter(b,p)!==null&&!out.some(q=>len(sub(p,q))<EPS*32))out.push(p);};
+ if(a.kind===0&&b.kind===0){const va=sub(a.b,a.a),vb=sub(b.b,b.a),den=cross(va,vb);if(Math.abs(den)>EPS*len(va)*len(vb))push(add(a.a,mul(va,cross(sub(b.a,a.a),vb)/den)));else for(const p of [a.a,a.b,b.a,b.b])push(p);}
+ else if(a.kind===0||b.kind===0){const line=a.kind===0?a:b,arc=a.kind===1?a:b,v=sub(line.b,line.a),o=sub(line.a,arc.c),A=dot(v,v),B=2*dot(o,v),C=dot(o,o)-arc.r*arc.r,D=B*B-4*A*C;if(D>=-EPS*Math.max(1,B*B,Math.abs(4*A*C))){const root=Math.sqrt(Math.max(0,D));push(add(line.a,mul(v,(-B-root)/(2*A))));push(add(line.a,mul(v,(-B+root)/(2*A))));}}
+ else {const v=sub(b.c,a.c),d=len(v);if(d<EPS){if(Math.abs(a.r-b.r)<EPS*32)for(const p of [point(a,0),point(a,1),point(b,0),point(b,1)])push(p);}else if(d<=a.r+b.r+EPS&&d>=Math.abs(a.r-b.r)-EPS){const x=(a.r*a.r-b.r*b.r+d*d)/(2*d),h=Math.sqrt(Math.max(0,a.r*a.r-x*x)),base=add(a.c,mul(v,x/d)),off=[-v[1]*h/d,v[0]*h/d];push(add(base,off));push(sub(base,off));}}
+ return out;}
+function primitives(s,owner){const c=Math.cos(s.angle??0),sn=Math.sin(s.angle??0),xf=p=>[s.cx+c*p[0]-sn*p[1],s.cy+sn*p[0]+c*p[1]],r=Math.min(s.r,s.hx,s.hy),x=s.hx,y=s.hy,out=[];
+ const line=(a,b)=>{if(len(sub(a,b))>EPS)out.push({kind:0,a:xf(a),b:xf(b),owner});},arc=(p,start)=>{if(r>EPS)out.push({kind:1,c:xf(p),r,start:start+(s.angle??0),sweep:Math.PI/2,owner});};
+ line([-x+r,-y],[x-r,-y]);arc([x-r,-y+r],-Math.PI/2);line([x,-y+r],[x,y-r]);arc([x-r,y-r],0);line([x-r,y],[-x+r,y]);arc([-x+r,y-r],Math.PI/2);line([-x,y-r],[-x,-y+r]);arc([-x+r,-y+r],Math.PI);return out;}
+function unionBoundary(sources){if(!sources.length||sources.length>3)throw Error('crisp supports one to three plates');for(const s of sources){if(![s.cx,s.cy,s.hx,s.hy,s.r,s.angle??0].every(Number.isFinite)||s.hx<=0||s.hy<=0||s.r<0||Math.max(Math.abs(s.cx),Math.abs(s.cy))>1e5)throw Error('invalid plate');}
+ const all=sources.flatMap(primitives),out=[];for(let i=0;i<all.length;i++){const e=all[i],cuts=[0,1];for(let j=0;j<all.length;j++)if(e.owner!==all[j].owner)for(const p of intersections(e,all[j]))cuts.push(parameter(e,p));cuts.sort((a,b)=>a-b);const unique=cuts.filter((x,k)=>!k||x-cuts[k-1]>EPS);for(let k=1;k<unique.length;k++){const a=unique[k-1],b=unique[k];if(b-a<=EPS)continue;const m=point(e,(a+b)/2);
+ // Midpoint classification is exact between all intersection cuts. Coincident
+ // boundaries are handled with an OUTWARD probe, not midpoint-on-boundary alone.
+ const tangent=e.kind===0?sub(e.b,e.a):[-Math.sin(e.start+e.sweep*(a+b)/2),Math.cos(e.start+e.sweep*(a+b)/2)];const norm=[tangent[1]/len(tangent),-tangent[0]/len(tangent)];const probe=add(m,mul(norm,1e-6));
+ if(sources.some((s,j)=>j!==e.owner&&distance(s,m)<-EPS*16)||sources.some((s,j)=>j!==e.owner&&Math.abs(distance(s,m))<=EPS*16&&distance(s,probe)<-EPS))continue;
+ const piece=e.kind===0?{...e,a:point(e,a),b:point(e,b)}:{...e,start:e.start+e.sweep*a,sweep:e.sweep*(b-a)};out.push(piece);if(out.length>MAX_SEGMENTS)throw Error('crisp boundary budget');}}
+ if(!out.length)throw Error('empty union boundary');return out;}
+function sampleBoundary(sources,boundary,p){let best=Infinity,q=p;for(const e of boundary){const v=closest(e,p),d=len(sub(v,p));if(d<best){best=d;q=v;}}const inside=sources.some(s=>distance(s,p)<=0);return{distance:inside?-best:best,point:q};}
+function ownership(ds,k){let lo=Math.min(...ds);if(k<=1e-12){let count=ds.filter(d=>d===lo).length;return ds.map(d=>d===lo?1/count:0);}const sorted=ds.map(d=>d-lo).sort((a,b)=>a-b);let lambda=k,sum=0;for(let i=1;i<sorted.length&&sorted[i]<lambda;i++){sum+=sorted[i];lambda=(k+sum)/(i+1);}const w=ds.map(d=>Math.max(0,(lambda-(d-lo))/k)),total=w.reduce((a,b)=>a+b,0);return w.map(v=>v/total);}
+function boundaryWidth(sources,boundary,p,widths,blend){if(widths.length!==sources.length||widths.some(w=>!Number.isFinite(w)||w<0))throw Error('invalid widths');const hit=sampleBoundary(sources,boundary,p),w=ownership(sources.map(s=>Math.abs(distance(s,hit.point))),blend);return{...hit,width:w.reduce((v,a,i)=>v+a*widths[i],0),weights:w};}
+function encodeBoundary(edges,origin=[0,0]){const out=new Float32Array(MAX_SEGMENTS*12);for(let i=0;i<edges.length;i++){const e=edges[i],b=i*12;if(e.kind===0){out.set([e.a[0]-origin[0],e.a[1]-origin[1],e.b[0]-origin[0],e.b[1]-origin[1]],b);}else{out.set([e.c[0]-origin[0],e.c[1]-origin[1],e.r,1],b);out.set([Math.cos(e.start),Math.sin(e.start),Math.cos(e.start+e.sweep),Math.sin(e.start+e.sweep)],b+4);}out[b+8]=e.kind;}return out;}
+
+return {unionBoundary,encodeBoundary,boundaryWidth};})();
+
+const VERTEX_SHADER="#version 300 es\nprecision highp float;\nstruct Source { vec4 geom; vec4 params; vec4 fill0; vec4 fill1; vec4 edge; vec4 grad; };\nlayout(std140) uniform WeldParams { vec4 viewport; vec4 cfg; vec4 policy; vec4 crop; Source sources[3]; };\nout vec2 point;\nvoid main() {\n    vec2 corner = vec2(float(gl_VertexID & 1), float((gl_VertexID >> 1) & 1));\n    point = crop.xy + corner * crop.zw;\n    gl_Position = vec4(point.x / viewport.z * 2.0 - 1.0,\n                       1.0 - point.y / viewport.w * 2.0, 0.0, 1.0);\n}\n";
+const FRAGMENT_SHADER="#version 300 es\nprecision highp float;\n// This is a bounded analytic fast path for 1..3 rotated rounded rectangles.\n// Independent source channels and morph endpoints match the CPU specification.\n// No per-frame raster baking or readback. Crisp geometry is cached between source-shape changes.\nstruct Source { vec4 geom; vec4 params; vec4 fill0; vec4 fill1; vec4 edge; vec4 grad; };\nlayout(std140) uniform WeldParams { vec4 viewport; vec4 cfg; vec4 policy; vec4 crop; Source sources[3]; };\nstruct BoundaryEdge { vec4 geom; vec4 directions; vec4 meta; };\nlayout(std140) uniform CrispBoundary { BoundaryEdge edges[128]; };\nuniform int boundaryCount;\nfloat cross2(vec2 a,vec2 b){return a.x*b.y-a.y*b.x;}\nvec2 nearestEdge(BoundaryEdge e,vec2 p){\n if(e.meta.x<0.5){vec2 v=e.geom.zw-e.geom.xy;return e.geom.xy+v*clamp(dot(p-e.geom.xy,v)/max(dot(v,v),1e-20),0.0,1.0);}\n vec2 v=p-e.geom.xy;float n=length(v);vec2 d=v/max(n,1e-20);\n if(n>1e-10&&cross2(e.directions.xy,d)>=-1e-6&&cross2(d,e.directions.zw)>=-1e-6)return e.geom.xy+d*e.geom.z;\n vec2 a=e.geom.xy+e.directions.xy*e.geom.z,b=e.geom.xy+e.directions.zw*e.geom.z;return distance(p,a)<=distance(p,b)?a:b;\n}\nvec2 nearestBoundary(vec2 p){float best=1e30;vec2 q=p;for(int i=0;i<128;i++){if(i>=boundaryCount)break;vec2 v=nearestEdge(edges[i],p);float d=dot(v-p,v-p);if(d<best){best=d;q=v;}}return q;}\nin vec2 point;\nout vec4 outColor;\nvec2 localPoint(Source s, vec2 p) {\n    vec2 q = p - s.geom.xy;\n    return vec2(s.params.z*q.x + s.params.w*q.y, -s.params.w*q.x + s.params.z*q.y);\n}\nfloat rectDistance(Source s, vec2 p) {\n    float r = min(s.params.x, min(s.geom.z, s.geom.w));\n    vec2 q = abs(localPoint(s, p)) - s.geom.zw + r;\n    return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;\n}\n// Projection onto a simplex: symmetric in all sources; no sequential smooth-min.\n// A sorting network and two thresholds specialize the reference water-fill to 3.\nvec3 weightsAt(vec3 d, float k) {\n    float lo = min(d.x, min(d.y, d.z));\n    if (k <= 0.000001) {\n        vec3 ties = vec3(d.x == lo ? 1.0 : 0.0, d.y == lo ? 1.0 : 0.0, d.z == lo ? 1.0 : 0.0);\n        return ties / (ties.x + ties.y + ties.z);\n    }\n    vec3 q = d - lo;\n    float hi = max(q.x, max(q.y, q.z));\n    // Median via min/max, rather than sum-minus-max: avoids cancellation against\n    // the unused-slot sentinel on the two-source specialization.\n    float mid = max(min(q.x,q.y), min(max(q.x,q.y),q.z));\n    float lambda = k;\n    if (mid < lambda) lambda = (k + mid)*0.5;\n    if (hi < lambda) lambda = (k + mid + hi)/3.0;\n    vec3 w = max(vec3(lambda) - q, 0.0)/k;\n    return w / (w.x + w.y + w.z);\n}\nfloat joinedDistance(vec3 d, float k) {\n    float lo = min(d.x,min(d.y,d.z));\n    vec3 w = weightsAt(d,k);\n    return lo + dot(w,d-lo) - k*0.5*(1.0-dot(w,w));\n}\n// Source endpoints are converted to Oklab once by the host, not per fragment.\nvec4 gradientLab(Source s, vec2 p) {\n    float t = clamp(dot(localPoint(s,p)-s.grad.xy, s.grad.zw),0.0,1.0);\n    float a = mix(s.fill0.a,s.fill1.a,t);\n    vec3 lab = mix(s.fill0.rgb*s.fill0.a,s.fill1.rgb*s.fill1.a,t)/max(a,1e-12);\n    return vec4(lab,a);\n}\nvec4 labLinear(vec4 v) {\n    vec3 lms = vec3(v.x + .3963377774*v.y + .2158037573*v.z,\n                    v.x - .1055613458*v.y - .0638541728*v.z,\n                    v.x - .0894841775*v.y - 1.2914855480*v.z);\n    lms = lms*lms*lms;\n    return vec4(4.0767416621*lms.x-3.3077115913*lms.y+.2309699292*lms.z,\n                -1.2684380046*lms.x+2.6097574011*lms.y-.3413193965*lms.z,\n                -.0041960863*lms.x-.7034186147*lms.y+1.7076147010*lms.z,v.a);\n}\nvec4 mixedLab(vec4 a, vec4 b, vec4 c, vec3 w) {\n    float alpha = dot(vec3(a.a,b.a,c.a),w);\n    return vec4((a.rgb*a.a*w.x+b.rgb*b.a*w.y+c.rgb*c.a*w.z)/max(alpha,1e-12),alpha);\n}\nvec4 premul(vec4 c) { return vec4(c.rgb*c.a,c.a); }\nvec4 over(vec4 a, vec4 b) { return a+b*(1.0-a.a); }\nfloat coverage(float d, float aa) { return clamp(.5-d/aa,0.0,1.0); }\nvec3 encodeSrgb(vec3 c) {\n    c = clamp(c,0.0,1.0);\n    return mix(1.055*pow(c,vec3(1.0/2.4))-.055,12.92*c,lessThanEqual(c,vec3(.0031308)));\n}\nvoid main() {\n    int n = int(cfg.w);\n    vec3 ds = vec3(rectDistance(sources[0],point),1e6,1e6);\n    if(n>1) ds.y = rectDistance(sources[1],point);\n    if(n>2) ds.z = rectDistance(sources[2],point);\n    float t = cfg.z*cfg.z*(3.0-2.0*cfg.z);\n    float d = joinedDistance(ds,2.0*cfg.x*t);\n    vec2 borderPoint=point;\n    float hardMin=min(ds.x,min(ds.y,ds.z)),maxWidth=max(sources[0].params.y,max(sources[1].params.y,sources[2].params.y)),pixel=viewport.z/viewport.x;\n    if(boundaryCount>0&&hardMin>=-maxWidth-2.0*pixel&&hardMin<=2.0*pixel){borderPoint=nearestBoundary(point);d=distance(point,borderPoint)*(hardMin<=0.0?-1.0:1.0);}\n    // Derivatives are evaluated before any non-uniform return/discard.\n    float derivative = length(vec2(dFdx(d),dFdy(d)));\n    float aa = policy.w>0.0 ? policy.w : (boundaryCount>0?viewport.z/viewport.x:max(derivative,viewport.z/viewport.x));\n    float a = coverage(d,aa);\n    if(a<=0.0) { outColor=vec4(0); return; }\n    vec4 labs[3]; vec4 borders[3];\n    vec4 original=vec4(0),oldFill=vec4(0);\n    for(int i=0;i<3;i++) {\n        labs[i]=policy.x==2.0 ? vec4(0) : gradientLab(sources[i],point);\n        borders[i]=policy.y==2.0 ? vec4(0) : sources[i].edge;\n        if(i>=n) { labs[i]=vec4(0); borders[i]=vec4(0); continue; }\n        float sa=coverage(ds[i],aa);\n        float ring=max(0.0,sa-coverage(ds[i]+sources[i].params.y,aa));\n        vec4 f=premul(labLinear(labs[i])),b=premul(labLinear(borders[i]));\n        original=over(over(b*(ring/max(sa,1e-12)),f)*sa,original);\n        oldFill=over(f*sa,oldFill);\n    }\n    vec4 result=original;\n    if(t>0.0) {\n        vec3 w=weightsAt(ds,cfg.y*t);\n        result=policy.x==0.0 ? premul(labLinear(mixedLab(labs[0],labs[1],labs[2],w)))*a : (policy.x==1.0 ? oldFill : vec4(0));\n        if(policy.y==0.0) {\n            vec3 bw=w;\n            if(boundaryCount>0){vec3 bd=vec3(abs(rectDistance(sources[0],borderPoint)),1e6,1e6);if(n>1)bd.y=abs(rectDistance(sources[1],borderPoint));if(n>2)bd.z=abs(rectDistance(sources[2],borderPoint));bw=weightsAt(bd,cfg.y*t);}\n            float width=dot(vec3(sources[0].params.y,sources[1].params.y,sources[2].params.y),bw);\n            vec4 b=labLinear(mixedLab(borders[0],borders[1],borders[2],bw));\n            float ring=max(0.0,a-coverage(d+width,aa));\n            result=result*(1.0-b.a*ring/max(a,1e-12))+premul(b)*ring;\n        } else if(policy.y==1.0) {\n            for(int i=0;i<3;i++) { if(i>=n) break;\n                vec4 b=labLinear(borders[i]);\n                float ring=max(0.0,coverage(ds[i],aa)-coverage(ds[i]+sources[i].params.y,aa));\n                float ratio=min(1.0,ring/max(a,1e-12));\n                result=result*(1.0-b.a*ratio)+premul(b)*ring;\n            }\n        }\n        float base=coverage(min(ds.x,min(ds.y,ds.z)),aa);\n        float added=clamp((a-base)/max(a,1e-12),0.0,1.0);\n        result=mix(original,result,t+(1.0-t)*added);\n    }\n    // Browser canvas consumes premultiplied sRGB; the maths above was linear.\n    vec3 rgb=encodeSrgb(result.rgb/max(result.a,1e-12));\n    outColor=vec4(rgb*result.a,result.a);\n    if(policy.z>0.0 && abs(d)<aa*1.5 && mod(floor((point.x+point.y)/5.0),2.0)<1.0) {\n        float line=clamp(1.5-abs(d)/aa,0.0,1.0);\n        outColor=mix(outColor,vec4(1),line);\n    }\n}\n";
+'use strict';
+const LOGICAL_W=720, LOGICAL_H=420, PARAM_FLOATS=88;
+const clamp=(x,a=0,b=1)=>Math.max(a,Math.min(b,x));
+function colorLab(hex,alpha=1) {
+ if(!/^#[0-9a-f]{6}$/i.test(hex)||!Number.isFinite(alpha)||alpha<0||alpha>1)throw Error('invalid color');
+ const n=parseInt(hex.slice(1),16),lin=x=>x<=.04045?x/12.92:((x+.055)/1.055)**2.4;
+ const r=lin((n>>16&255)/255),g=lin((n>>8&255)/255),b=lin((n&255)/255);
+ const l=Math.cbrt(.4122214708*r+.5363325363*g+.0514459929*b),m=Math.cbrt(.2119034982*r+.6806995451*g+.1073969566*b),s=Math.cbrt(.0883024619*r+.2817188376*g+.6299787005*b);
+ return [.2104542553*l+.793617785*m-.0040720468*s,1.9779984951*l-2.428592205*m+.4505937099*s,.0259040371*l+.7827717662*m-.808675766*s,alpha];
+}
+function rectDistance(g,x,y) {
+ const a=g.angle??0,c=Math.cos(a),s=Math.sin(a),dx=x-g.x-g.w/2,dy=y-g.y-g.h/2;
+ const r=Math.min(g.r,g.w/2,g.h/2),qx=Math.abs(c*dx+s*dy)-g.w/2+r,qy=Math.abs(-s*dx+c*dy)-g.h/2+r;
+ return Math.hypot(Math.max(qx,0),Math.max(qy,0))+Math.min(Math.max(qx,qy),0)-r;
+}
+function weights3(d,k) {
+ const lo=Math.min(...d);
+ if(k<=1e-6){const n=d.reduce((a,v)=>a+(v===lo),0);return d.map(v=>v===lo?1/n:0);}
+ const q=d.map(v=>v-lo),hi=Math.max(...q),mid=Math.max(Math.min(q[0],q[1]),Math.min(Math.max(q[0],q[1]),q[2]));
+ let lambda=k;if(mid<lambda)lambda=(k+mid)/2;if(hi<lambda)lambda=(k+mid+hi)/3;
+ const w=q.map(v=>Math.max(0,(lambda-v)/k)),sum=w[0]+w[1]+w[2];return w.map(v=>v/sum);
+}
+function joinedDistance3(d,k){const lo=Math.min(...d),w=weights3(d,k);return lo+w.reduce((a,v,i)=>a+v*(d[i]-lo),0)-k*.5*(1-w.reduce((a,v)=>a+v*v,0));}
+function writeParams(out,ss,o,width,height,aa=0,contour=false) {
+ if(!(out instanceof Float32Array)||out.length!==PARAM_FLOATS)throw Error('352-byte Float32 parameter block required');
+ if(!ss.length||ss.length>3)throw Error('The analytic shader supports one to three rounded rectangles');
+ for(const v of [o.reach,o.blend,o.progress,width,height,aa])if(!Number.isFinite(v))throw Error('nonfinite parameters');
+ if(o.reach<0||o.reach>1e4||o.blend<0||o.blend>1e4||o.progress<0||o.progress>1||width<=0||height<=0||aa<0)throw Error('parameter range');
+ if(!['blend','keep','omit'].includes(o.fill)||!['blend','keep','omit'].includes(o.border))throw Error('invalid policy');
+ out.fill(0);out.set([width,height,LOGICAL_W,LOGICAL_H,o.reach,o.blend,o.progress,ss.length, ['blend','keep','omit'].indexOf(o.fill),['blend','keep','omit'].indexOf(o.border),Number(contour),aa]);
+ let x0=Infinity,y0=Infinity,x1=-Infinity,y1=-Infinity;
+ for(let i=0;i<ss.length;i++) {
+  const s=ss[i],g=s.shape,a=g.angle??0,c=Math.cos(a),sn=Math.sin(a),hw=g.w/2,hh=g.h/2,cx=g.x+hw,cy=g.y+hh;
+  if(![g.x,g.y,g.w,g.h,g.r,a,s.width].every(Number.isFinite)||g.w<=0||g.h<=0||g.r<0||s.width<0||Math.abs(g.x)>1e5||Math.abs(g.y)>1e5||g.w>1e4||g.h>1e4||g.r>1e4||s.width>1e4)throw Error('invalid shape');
+  for(const color of [s.fill0,s.fill1||s.fill0,s.border])if(!color||color.length!==4||!Array.from(color).every(Number.isFinite)||color[3]<0||color[3]>1||Array.from(color).slice(0,3).some(v=>Math.abs(v)>4))throw Error('invalid Oklab color');
+  const ex=Math.abs(c)*hw+Math.abs(sn)*hh,ey=Math.abs(sn)*hw+Math.abs(c)*hh,b=16+24*i;
+  x0=Math.min(x0,cx-ex);x1=Math.max(x1,cx+ex);y0=Math.min(y0,cy-ey);y1=Math.max(y1,cy+ey);
+  out.set([cx,cy,hw,hh,g.r,s.width,c,sn],b);
+  out.set(s.fill0,b+8);out.set(s.fill1||s.fill0,b+12);out.set(s.border,b+16);
+  const len2=g.w*g.w+g.h*g.h;out.set([-hw,-hh,g.w/len2,g.h/len2],b+20);
+ }
+ const pad=o.reach+3*LOGICAL_W/width;
+ x0=clamp(x0-pad,0,LOGICAL_W);x1=clamp(x1+pad,0,LOGICAL_W);y0=clamp(y0-pad,0,LOGICAL_H);y1=clamp(y1+pad,0,LOGICAL_H);
+ out.set([x0,y0,Math.max(0,x1-x0),Math.max(0,y1-y0)],12);
+ return out;
+}
+if(typeof module!=='undefined')module.exports={colorLab,rectDistance,weights3,joinedDistance3,writeParams,PARAM_FLOATS};
+
+'use strict';
+class WeldRenderer {
+ constructor(canvas){
+  this.canvas=canvas;this.draws=0;this.lost=false;this.gpuMs=null;this.measure=false;this.inflight=[];
+  this.gl=canvas.getContext('webgl2',{alpha:true,premultipliedAlpha:true,antialias:false,depth:false,stencil:false,preserveDrawingBuffer:false,powerPreference:'default'});
+  if(!this.gl)throw Error('WebGL2 is unavailable in this browser/viewer. Open in a browser with GPU rendering enabled. No slow CPU fallback is running.');
+  this.initialize();
+  canvas.addEventListener('webglcontextlost',e=>{e.preventDefault();this.lost=true;this.inflight=[];this.onLost?.();});
+  canvas.addEventListener('webglcontextrestored',()=>{try{this.lost=false;this.initialize();this.onRestore?.();}catch(e){this.onError?.(e);}});
+ }
+ initialize(){
+  const g=this.gl,compile=(type,src)=>{let s=g.createShader(type);if(!s)throw Error('Shader allocation failed');g.shaderSource(s,src);g.compileShader(s);if(!g.getShaderParameter(s,g.COMPILE_STATUS)){const log=g.getShaderInfoLog(s);g.deleteShader(s);throw Error(log);}return s;};
+  const v=compile(g.VERTEX_SHADER,VERTEX_SHADER),f=compile(g.FRAGMENT_SHADER,FRAGMENT_SHADER),p=g.createProgram();
+  if(!p)throw Error('Program allocation failed');g.attachShader(p,v);g.attachShader(p,f);g.linkProgram(p);g.deleteShader(v);g.deleteShader(f);
+  if(!g.getProgramParameter(p,g.LINK_STATUS)){const log=g.getProgramInfoLog(p);g.deleteProgram(p);throw Error(log);}
+  this.program=p;g.useProgram(p);
+  this.geometryKey=null;this.geometryBuilds=0;this.geometryUploadBytes=0;this.edges=[];
+  this.boundaryBuffer=g.createBuffer();g.bindBuffer(g.UNIFORM_BUFFER,this.boundaryBuffer);g.bufferData(g.UNIFORM_BUFFER,6144,g.DYNAMIC_DRAW);g.bindBufferBase(g.UNIFORM_BUFFER,1,this.boundaryBuffer);
+  const cb=g.getUniformBlockIndex(p,'CrispBoundary');if(cb===g.INVALID_INDEX)throw Error('CrispBoundary missing');g.uniformBlockBinding(p,cb,1);this.boundaryCount=g.getUniformLocation(p,'boundaryCount');const block=g.getUniformBlockIndex(p,'WeldParams');
+  if(block===g.INVALID_INDEX)throw Error('WeldParams missing');g.uniformBlockBinding(p,block,0);
+  this.buffer=g.createBuffer();g.bindBuffer(g.UNIFORM_BUFFER,this.buffer);g.bufferData(g.UNIFORM_BUFFER,PARAM_FLOATS*4,g.DYNAMIC_DRAW);g.bindBufferBase(g.UNIFORM_BUFFER,0,this.buffer);
+  this.vao=g.createVertexArray();g.bindVertexArray(this.vao);g.disable(g.BLEND);g.disable(g.DEPTH_TEST);g.disable(g.CULL_FACE);
+  this.timer=g.getExtension('EXT_disjoint_timer_query_webgl2');this.inflight=[];
+  const debug=g.getExtension('WEBGL_debug_renderer_info');this.adapter=debug?g.getParameter(debug.UNMASKED_RENDERER_WEBGL):'Not disclosed by browser';
+  this.maxSize=Math.min(g.getParameter(g.MAX_RENDERBUFFER_SIZE),4096);this.gpuMs=null;
+ }
+ poll(){
+  const g=this.gl,e=this.timer;if(!e||!this.inflight.length)return;
+  if(g.getParameter(e.GPU_DISJOINT_EXT)){for(const q of this.inflight)g.deleteQuery(q);this.inflight=[];this.gpuMs=null;return;}
+  while(this.inflight.length&&g.getQueryParameter(this.inflight[0],g.QUERY_RESULT_AVAILABLE)){
+   const q=this.inflight.shift();this.gpuMs=g.getQueryParameter(q,g.QUERY_RESULT)/1e6;g.deleteQuery(q);
+  }
+ }
+ geometry(sources,crisp){
+  const shapes=sources.map(({shape:s})=>({cx:s.x+s.w/2,cy:s.y+s.h/2,hx:s.w/2,hy:s.h/2,r:s.r,angle:s.angle||0}));
+  const key=JSON.stringify([crisp,shapes]);
+  if(this.geometryKey!==key){this.edges=crisp?Crisp.unionBoundary(shapes):[];const g=this.gl;
+   g.bindBuffer(g.UNIFORM_BUFFER,this.boundaryBuffer);g.bufferSubData(g.UNIFORM_BUFFER,0,Crisp.encodeBoundary(this.edges));this.geometryKey=key;this.geometryBuilds++;this.geometryUploadBytes+=6144;}
+ }
+ render(data){
+  if(this.lost)return;const g=this.gl,w=data[0],h=data[1];
+  if(this.canvas.width!==w||this.canvas.height!==h){this.canvas.width=w;this.canvas.height=h;}
+  g.viewport(0,0,w,h);g.disable(g.SCISSOR_TEST);g.clearColor(0,0,0,0);g.clear(g.COLOR_BUFFER_BIT);
+  g.useProgram(this.program);g.bindVertexArray(this.vao);g.bindBuffer(g.UNIFORM_BUFFER,this.buffer);g.bufferSubData(g.UNIFORM_BUFFER,0,data);g.bindBufferBase(g.UNIFORM_BUFFER,0,this.buffer);
+  this.poll();let q=null;
+  // Opt-in asynchronous timing. Never finish(), readPixels(), or block for a result.
+  if(this.measure&&this.timer&&this.inflight.length<4){q=g.createQuery();g.beginQuery(this.timer.TIME_ELAPSED_EXT,q);}
+  g.uniform1i(this.boundaryCount,this.edges.length);g.bindBufferBase(g.UNIFORM_BUFFER,1,this.boundaryBuffer);g.drawArrays(g.TRIANGLE_STRIP,0,4);if(q){g.endQuery(this.timer.TIME_ELAPSED_EXT);this.inflight.push(q);}this.draws++;
+ }
+ destroy(){const g=this.gl;if(this.lost)return;for(const q of this.inflight)g.deleteQuery(q);g.deleteBuffer(this.buffer);g.deleteBuffer(this.boundaryBuffer);g.deleteVertexArray(this.vao);g.deleteProgram(this.program);this.inflight=[];}
+}
+
+'use strict';
+const $=id=>document.getElementById(id),canvas=$('canvas'),data=new Float32Array(PARAM_FLOATS);
+const controls={};for(const e of document.querySelectorAll('input,select'))controls[e.id]=e;
+const positions=[{x:150,y:146},{x:310,y:114},{x:267,y:260}];
+let renderer=null,raf=0,drag=null,playing=false,lastFrame=0,hudAt=0,mainMs=0,frameInterval=0;
+let dimensions={w:720,h:420},liveSources=[],error=null;
+const cache=new Map();
+function color(id,alpha=1){const hex=controls[id]?.value||id,key=hex+':'+alpha;let c=cache.get(key);if(!c){c=colorLab(hex,alpha);if(cache.size>64)cache.clear();cache.set(key,c);}return c;}
+const value=id=>Number(controls[id].value);
+function options(){const mode=controls.mode.value;return{crisp:controls.geometryMode.value==='crisp',reach:controls.geometryMode.value==='crisp'?0:value('reach'),blend:value('blend'),progress:value('progress'),fill:mode==='border'?'keep':'blend',border:mode==='shape'?'keep':mode==='no-border'?'omit':'blend'};}
+function sourceList(){
+ const p=positions,r=value('radius'),a=color('colorA',value('alpha'));
+ const ss=[{shape:{x:p[0].x,y:p[0].y,w:188,h:148,r,angle:0},fill0:a,fill1:controls.gradient.checked?color('#137876',value('alpha')):a,border:color('edgeA'),width:value('widthA')},
+ {shape:{x:p[1].x,y:p[1].y,w:164,h:140,r:r*1.3,angle:value('rotate')*Math.PI/180},fill0:color('colorB'),border:color('edgeB'),width:value('widthB')}];
+ if(controls.third.checked)ss.push({shape:{x:p[2].x,y:p[2].y,w:105,h:88,r:44,angle:0},fill0:color('#fac878'),border:color('#fff0c8'),width:4});return ss;
+}
+function resize(){
+ const box=canvas.getBoundingClientRect(),wanted=controls.quality.value==='auto'?Math.min(devicePixelRatio||1,2):controls.quality.value==='native'?(devicePixelRatio||1):Number(controls.quality.value);
+ const limit=renderer?.maxSize||4096,scale=Math.min(wanted,limit/box.width,limit/box.height,Math.sqrt(2_500_000/(box.width*box.height)));
+ dimensions={w:Math.max(1,Math.round(box.width*scale)),h:Math.max(1,Math.round(box.height*scale))};schedule();
+}
+function updateText(o){
+ for(const id of ['progress','reach','blend','widthA','widthB','radius','rotate','alpha'])$(id+'Out').textContent=controls[id].value;
+ let w=o.border==='keep'?'Weld::shape()':o.fill==='keep'?'Weld::borders()':'Weld::all()';if(o.border==='omit')w+='.border(WeldChannel::Omit)';
+ if(o.crisp)w+='.sharp()';controls.reach.disabled=o.crisp;
+ $('code').textContent=`row![shape_a, shape_b]\n    .weld_with(${w}\n        .reach(${o.reach.toFixed(1)})\n        .blend(${o.blend.toFixed(1)})\n        .morph(${o.progress.toFixed(2)}))`;
+}
+function labels(){
+ const xy=[[positions[0].x+94,positions[0].y+74],[positions[1].x+82,positions[1].y+70],[positions[2].x+52.5,positions[2].y+44]];
+ for(let i=0;i<3;i++){const el=$('tag'+i);el.style.left=(xy[i][0]/720*100)+'%';el.style.top=(xy[i][1]/420*100)+'%';el.hidden=i===2&&!controls.third.checked;}
+}
+function draw(now){
+ raf=0;if(document.hidden||!renderer||renderer.lost)return;
+ const start=performance.now();
+ if(playing){if(lastFrame)frameInterval=frameInterval?frameInterval*.85+(now-lastFrame)*.15:now-lastFrame;controls.progress.value=(.5+.5*Math.sin(now*.0015)).toFixed(4);}
+ lastFrame=now;
+ try{
+  const o=options();liveSources=sourceList();writeParams(data,liveSources,o,dimensions.w,dimensions.h,0,controls.contour.checked);
+  renderer.geometry(liveSources,o.crisp);renderer.measure=controls.measure.checked;renderer.render(data);labels();mainMs=performance.now()-start;
+  if(!playing||now-hudAt>250){
+   hudAt=now;updateText(o);$('status').textContent=`WebGL2 shader · ${liveSources.length} sources · ${dimensions.w} × ${dimensions.h}`;
+   $('cost').textContent=`Main-thread prepare + submit: ${mainMs.toFixed(2)} ms · ${renderer.edges.length} exposed pieces · ${renderer.geometryBuilds} geometry builds · GPU draw: ${renderer.gpuMs===null?'not measured':renderer.gpuMs.toFixed(2)+' ms'}${playing&&frameInterval?' · animation cadence: '+(1000/frameInterval).toFixed(0)+' Hz':''}`;
+   $('idle').textContent=playing?'Animating · display-paced':'Event-driven · no idle rendering';
+  }
+  window.__weldGPU={renderCount:renderer.draws,mainMs,gpuMs:renderer.gpuMs,frameInterval,options:o,width:dimensions.w,height:dimensions.h,positions:positions.map(p=>({...p})),adapter:renderer.adapter,error:null,uploadBytes:352,geometryBuilds:renderer.geometryBuilds,geometryUploadBytes:renderer.geometryUploadBytes,boundarySegments:renderer.edges.length,pixelReadbacks:0,contourBakes:0};
+ }catch(e){fail(e);return;}
+ if(playing)schedule();
+}
+function schedule(){if(!raf&&!document.hidden&&renderer&&!renderer.lost)raf=requestAnimationFrame(draw);}
+function fail(e){error=String(e.message||e);playing=false;$('status').textContent=error;$('cost').textContent='The CPU raster fallback is deliberately disabled.';$('error').hidden=false;$('error').textContent=error;window.__weldGPU={error,renderCount:renderer?.draws||0};}
+function local(e){const r=canvas.getBoundingClientRect();return{x:(e.clientX-r.left)*720/r.width,y:(e.clientY-r.top)*420/r.height};}
+canvas.addEventListener('pointerdown',e=>{
+ if(!renderer||renderer.lost||drag)return;const p=local(e),ss=sourceList();
+ for(let i=ss.length-1;i>=0;i--)if(rectDistance(ss[i].shape,p.x,p.y)<=4){drag={i,dx:p.x-positions[i].x,dy:p.y-positions[i].y,id:e.pointerId};canvas.setPointerCapture(e.pointerId);canvas.style.cursor='grabbing';e.preventDefault();break;}
+});
+canvas.addEventListener('pointermove',e=>{if(!drag||e.pointerId!==drag.id)return;const p=local(e);positions[drag.i].x=clamp(p.x-drag.dx,20,550);positions[drag.i].y=clamp(p.y-drag.dy,25,300);schedule();});
+function release(e){if(drag&&e.pointerId===drag.id){drag=null;if(canvas.hasPointerCapture(e.pointerId))canvas.releasePointerCapture(e.pointerId);canvas.style.cursor='grab';schedule();}}
+for(const n of ['pointerup','pointercancel','lostpointercapture'])canvas.addEventListener(n,release);
+for(const e of Object.values(controls))e.addEventListener('input',()=>{if(e.id==='progress'){playing=false;$('play').textContent='Animate';lastFrame=0;}if(e.id==='quality')resize();else schedule();});
+$('play').addEventListener('click',()=>{playing=!playing;lastFrame=0;$('play').textContent=playing?'Pause':'Animate';schedule();});
+$('apart').addEventListener('click',()=>{playing=false;positions[1]={x:410,y:100};controls.progress.value=0;$('play').textContent='Animate';schedule();});
+$('join').addEventListener('click',()=>{playing=false;positions[1]={x:310,y:114};controls.progress.value=1;$('play').textContent='Animate';schedule();});
+$('reset').addEventListener('click',()=>{playing=false;positions[0]={x:150,y:146};positions[1]={x:310,y:114};positions[2]={x:267,y:260};for(const [k,v] of Object.entries({progress:1,reach:48,blend:130,rotate:0,radius:27,widthA:2,widthB:4,alpha:1,mode:'all',geometryMode:'crisp'}))controls[k].value=v;controls.third.checked=false;controls.gradient.checked=true;controls.contour.checked=false;$('play').textContent='Animate';schedule();});
+document.addEventListener('visibilitychange',()=>{if(document.hidden){if(raf)cancelAnimationFrame(raf);raf=0;lastFrame=0;drag=null;canvas.style.cursor='grab';}else schedule();});
+window.addEventListener('resize',resize);
+window.__setWeldGPU=values=>{for(const [id,v] of Object.entries(values)){const e=controls[id];if(!e)throw Error('Unknown control '+id);if(e.type==='checkbox')e.checked=Boolean(v);else e.value=v;}resize();};
+// Test/debug access; no readback is used by the production render loop.
+window.__weldTest={get renderer(){return renderer;},get params(){return data;},writeParams,sourceList,options,positions,schedule};
+try{renderer=new WeldRenderer(canvas);renderer.onLost=()=>{$('status').textContent='GPU context lost. Waiting for browser restoration.';if(raf)cancelAnimationFrame(raf);raf=0;};renderer.onRestore=()=>{$('error').hidden=true;error=null;resize();};renderer.onError=fail;new ResizeObserver(resize).observe(canvas);resize();}catch(e){updateText(options());fail(e);}
+
+</script></body></html>

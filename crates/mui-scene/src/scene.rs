@@ -13,7 +13,7 @@ use mui_geometry::{
     boolean, fillet, inset_path, union, BooleanOp, Bounds, CornerStyle, Fillet, GeometryOptions,
     OffsetOptions, Path, PlacedShape, Point, Polygon, RoundedRect, Topology,
 };
-use mui_layout::{resolve_with, Frame, Layout, Limits, Size};
+use mui_layout::{Frame, Layout, Limits, Size};
 use mui_text::{TextRun, Weight};
 
 use crate::{
@@ -39,6 +39,8 @@ pub struct SceneSpec {
     /// pixel, so abutting fills composite opaque and hinted glyphs keep an
     /// even leading. `None` leaves layout's raw f64 alone.
     pub device_scale: Option<f64>,
+    /// Selected by the host. CPU reference remains available for snapshots.
+    pub weld_backend: crate::WeldBackend,
 }
 impl SceneSpec {
     pub fn new(root: El) -> Self {
@@ -52,6 +54,7 @@ impl SceneSpec {
             font: None,
             tolerance: 0.05,
             device_scale: None,
+            weld_backend: crate::WeldBackend::Reference,
         }
     }
     pub fn theme(mut self, theme: Theme) -> Self {
@@ -113,6 +116,8 @@ pub enum Layer {
     /// a `Blend`/`Unblend` pair. See [`Paints::mask`](crate::Paints::mask).
     Mask,
     Unblend,
+    /// External GPU material, sampled in paint order through the effect renderer.
+    External,
 }
 
 /// A text layer's glyphs, for a renderer that hints and caches its own.
@@ -187,9 +192,16 @@ pub struct ResolvedSurface {
     pub disabled: bool,
     /// The role and name this surface reports to a screen reader.
     pub semantics: Option<Semantics>,
-    /// The nearest clipping ancestor's frame, for hit-testing.
-    /// ponytail: a rect, not the ancestor's rounded path.
+    /// Current authored text, used as the accessible name unless explicitly
+    /// overridden by semantics. Live readout updates change this too.
+    pub text_value: Option<String>,
+    /// Intersection of ancestor clip bounds, for cheap rejection only.
     pub clip: Option<Bounds>,
+    /// The actual painted ancestor clips. Input must test all of these.
+    pub clip_paths: Vec<Arc<Path>>,
+    /// Nearest explicitly named ancestor in the authored tree, not a containing
+    /// rectangle. A floating node keeps this parent even when it escapes clipping.
+    pub parent: Option<Arc<str>>,
     /// A scroll node's children extent inside its padding, unscrolled;
     /// the frame size otherwise.
     pub content: Size,
@@ -206,6 +218,7 @@ pub struct ResolvedScene {
     /// Every surface in paint order, which is also z-order.
     surfaces: Vec<ResolvedSurface>,
     at: HashMap<Arc<str>, usize>,
+    pub(crate) external_welds: HashMap<Arc<str>, crate::ExternalWeld>,
     /// What the scene was shaped with, so a live readout can re-shape one
     /// run without the spec that produced it. See [`Self::set_text`].
     font: Option<Arc<[u8]>>,
@@ -222,9 +235,9 @@ impl ResolvedScene {
     /// shorter ones sit inside it and nothing reflows.
     ///
     /// ponytail: one line, painted from the old run's origin. A string wider
-    /// than the frame overhangs instead of wrapping, the node's accessibility
-    /// label is unchanged, and the next resolve paints whatever the tree
-    /// says -- so keep feeding the tree the same value.
+    /// than the frame overhangs instead of wrapping. The accessible text is
+    /// updated, but an explicitly authored accessibility label is preserved.
+    /// The next resolve paints whatever the tree says, so update its value too.
     ///
     /// ```
     /// use mui_scene::prelude::*;
@@ -267,6 +280,9 @@ impl ResolvedScene {
         for i in rest.into_iter().rev() {
             self.paint.remove(i);
         }
+        if let Some(&i) = self.at.get(key) {
+            self.surfaces[i].text_value = Some(s.to_owned());
+        }
         Ok(())
     }
     pub fn surface(&self, key: &str) -> Option<&ResolvedSurface> {
@@ -283,6 +299,10 @@ impl ResolvedScene {
 pub enum SceneError {
     InvalidTheme,
     InvalidRadius,
+    MaterialWeld(mui_weld::Error),
+    UnsupportedWeld(&'static str),
+    /// Frame deltas must be finite and non-negative before any runtime state changes.
+    InvalidFrameDelta,
     Layout(mui_layout::Error),
     Geometry(mui_geometry::Error),
     Text(mui_text::Error),
@@ -297,6 +317,9 @@ impl std::fmt::Display for SceneError {
             Self::InvalidTheme => {
                 f.write_str("the theme's corners, spacing or palette are unusable")
             }
+            Self::InvalidFrameDelta => f.write_str("frame delta must be finite and non-negative"),
+            Self::MaterialWeld(e) => write!(f, "{e}"),
+            Self::UnsupportedWeld(feature) => write!(f, "unsupported material weld: {feature}"),
             Self::InvalidRadius => f.write_str(
                 "a corner radius, shell inset or stroke width is negative or not finite",
             ),
@@ -314,9 +337,13 @@ impl std::error::Error for SceneError {
             Self::Layout(e) => Some(e),
             Self::Geometry(e) => Some(e),
             Self::Text(e) => Some(e),
+            Self::MaterialWeld(e) => Some(e),
             _ => None,
         }
     }
+}
+impl From<mui_weld::Error> for SceneError {
+    fn from(error: mui_weld::Error) -> Self { Self::MaterialWeld(error) }
 }
 impl From<mui_layout::Error> for SceneError {
     fn from(v: mui_layout::Error) -> Self {
@@ -370,12 +397,17 @@ fn count(n: &El) -> usize {
 /// to [`resolve_scene_with`].
 #[derive(Debug, Default)]
 pub struct TextCache {
-    font: usize,
+    layout: mui_layout::LayoutCache,
+    // Holding the source allocation prevents pointer reuse from aliasing another font.
+    font: Option<Arc<[u8]>>,
+    tolerance_bits: u64,
+    entries: usize,
     runs: HashMap<String, HashMap<(u64, u16), TextRun>>,
 }
 impl TextCache {
+    pub fn layout_stats(&self) -> mui_layout::LayoutStats { self.layout.stats() }
     pub fn len(&self) -> usize {
-        self.runs.values().map(HashMap::len).sum()
+        self.entries
     }
     pub fn is_empty(&self) -> bool {
         self.runs.is_empty()
@@ -386,6 +418,7 @@ struct Runs<'a> {
     font: Option<&'a [u8]>,
     tolerance: f64,
     cache: &'a mut HashMap<String, HashMap<(u64, u16), TextRun>>,
+    entries: &'a mut usize,
 }
 impl Runs<'_> {
     fn run(
@@ -402,16 +435,18 @@ impl Runs<'_> {
         let bits = (size.to_bits(), w.value());
         if self.cache.get(text).is_none_or(|m| !m.contains_key(&bits)) {
             let run = mui_text::text_run(font, text, size, &[w.axis()], self.tolerance)?;
-            // ponytail: an unbounded cache holds every string ever shown, so
-            // flush the lot at a ceiling -- one cold frame. Per-entry frame
-            // stamping is the upgrade if that ever shows.
-            if self.cache.len() > 4096 {
+            // Count complete (text, size, weight) variants. A single animated
+            // label can otherwise grow its inner map without ever hitting a cap.
+            // This remains a coarse flush policy, not an LRU or byte budget.
+            if *self.entries >= 4096 {
                 self.cache.clear();
+                *self.entries = 0;
             }
             self.cache
                 .entry(text.to_owned())
                 .or_default()
                 .insert(bits, run);
+            *self.entries += 1;
         }
         Ok(self.cache.get(text).and_then(|m| m.get(&bits)))
     }
@@ -480,6 +515,13 @@ impl Runs<'_> {
 
 /// A float, painted after the whole tree so it sits on top and escapes
 /// every clip.
+#[derive(Clone, Default)]
+struct Ancestors {
+    parent: Option<Arc<str>>,
+    clip: Option<Bounds>,
+    clip_paths: Vec<Arc<Path>>,
+}
+
 #[derive(Clone)]
 struct Deferred<'a> {
     at: usize,
@@ -488,17 +530,20 @@ struct Deferred<'a> {
     under: Color,
     cursor: Option<Cursor>,
     disabled: bool,
+    parent: Option<Arc<str>>,
 }
 
 struct Walk<'a> {
     spec: &'a SceneSpec,
     frames: &'a [Frame],
     runs: Runs<'a>,
+    weld_cache: &'a mut crate::WeldCache,
     i: usize,
     key: Arc<str>,
     paint: Vec<Painted>,
     surfaces: Vec<ResolvedSurface>,
     at: HashMap<Arc<str>, usize>,
+    pub(crate) external_welds: HashMap<Arc<str>, crate::ExternalWeld>,
     deferred: Vec<Deferred<'a>>,
     /// The baseline a `.baseline()` parent asks its text children to sit on.
     base_y: Option<f64>,
@@ -511,9 +556,16 @@ impl<'a> Walk<'a> {
         &self,
         n: &El,
         frame: Frame,
+        first: usize,
     ) -> Result<(Path, Option<RoundedRect>, bool, Vec<RoundedRect>), SceneError> {
-        let base = self.shape(n, frame, self.i)?;
-        let (mut at, mut topo): (usize, Option<Topology>) = (self.i, None);
+        if n.payload().outline.is_some()
+            && n.children().iter().any(|c| c.payload().carve.is_some()) {
+            return Err(mui_geometry::Error::InvalidOptions(
+                "cut/keep on a custom outline requires contour normalization; provide the finished outline instead",
+            ).into());
+        }
+        let base = self.shape(n, frame, first)?;
+        let (mut at, mut topo): (usize, Option<Topology>) = (first, None);
         let mut shapes = Vec::new();
         for c in n.children() {
             let (f, carve) = (self.frames[at], c.payload().carve);
@@ -560,6 +612,18 @@ impl<'a> Walk<'a> {
     ) -> Result<(Path, Option<RoundedRect>, bool, Vec<RoundedRect>), SceneError> {
         let th = &self.spec.theme;
         let s = &n.payload().style;
+        if let Some(shape) = &n.payload().outline {
+            if !s.shadow.is_empty() {
+                return Err(mui_geometry::Error::InvalidOptions(
+                    "custom-path shadows require a path-filter renderer; use an outer wrapper",
+                ).into());
+            }
+            let local = (shape.0)(frame.size);
+            local.validate(250_000)?;
+            let world = local.rigid_transform(Point::new(frame.x, frame.y), 0.0)?;
+            world.validate(250_000)?;
+            return Ok((world, None, false, Vec::new()));
+        }
         let (convex, concave) = match s.radius {
             Radius::Theme => (th.corners.box_, th.corners.concave),
             Radius::Px(r) => (r, th.corners.concave),
@@ -610,6 +674,89 @@ impl<'a> Walk<'a> {
             merged.components() != n.children().len(),
             rects,
         ))
+    }
+
+    /// Bake the plates in group-local coordinates, before clips and the parent
+    /// hit surface are emitted. Descendant content and identities are untouched.
+    fn material_weld(
+        &mut self,
+        n: &El,
+        frame: Frame,
+        path: &str,
+        under: Color,
+    ) -> Result<Option<crate::material_weld::MaterialWeld>, SceneError> {
+        let Some(weld) = n.payload().welding else { return Ok(None) };
+        let gpu = n.payload().weld_backend.unwrap_or(self.spec.weld_backend)
+            == crate::WeldBackend::AnalyticGpu;
+        if gpu && n.is_clip() {
+            return Err(SceneError::UnsupportedWeld("GPU weld cannot itself clip children to its changing union; put a normal clipping viewport above it"));
+        }
+        crate::material_weld::check_plate(n, false)?;
+        if n.payload().outline.is_some() || n.payload().style.weld {
+            return Err(SceneError::UnsupportedWeld("custom/legacy-weld outline on the group; put it on a source child"));
+        }
+        let mut quality = n.payload().weld_quality.unwrap_or_default();
+        if let Some(scale) = self.spec.device_scale { quality.scale = scale; }
+        if !quality.scale.is_finite() || !(0.125..=8.0).contains(&quality.scale) {
+            return Err(mui_weld::Error::Invalid("weld raster scale").into());
+        }
+        // A snapped local origin keeps the baked image on the device grid even
+        // when layout has a fractional origin. Layout itself remains untouched.
+        let origin = Point::new(snap(frame.x, Some(quality.scale)), snap(frame.y, Some(quality.scale)));
+        let th = self.spec.theme;
+        let parent = &n.payload().style;
+        let mut sources = Vec::new();
+        let mut members = std::collections::HashSet::new();
+        let mut at = self.i;
+        for (j, c) in n.children().iter().enumerate() {
+            let first = at;
+            let f = self.frames[first];
+            at += count(c);
+            let e = c.payload();
+            if c.is_float() || c.is_sticky() || e.carve.is_some() || e.weld_excluded
+                || matches!(&e.content, Content::Text(_))
+                || f.size.width <= 0.0 || f.size.height <= 0.0 {
+                continue;
+            }
+            // Empty spacers affect layout, never material. A group fill can
+            // explicitly give otherwise unpainted child outlines material.
+            if parent.fill.is_none() && parent.stroke.is_none()
+                && e.style.fill.is_none() && e.style.stroke.is_none() {
+                continue;
+            }
+            crate::material_weld::check_plate(c, true)?;
+            if gpu && (sources.len() >= mui_weld::analytic::ANALYTIC_SOURCES
+                || e.outline.is_some() || e.style.weld
+                || e.style.corners != CornerStyle::Round
+                || c.children().iter().any(|child| child.payload().carve.is_some())) {
+                return Err(SceneError::UnsupportedWeld("analytic GPU weld requires at most three ordinary rounded-rectangle plates; custom/carved/nested outlines need an explicit reference backend"));
+            }
+            let (outline, rect, _, _) = self.outline(c, f, first + 1)?;
+            if gpu && rect.is_none() {
+                return Err(SceneError::UnsupportedWeld("GPU participant is not an analytic rounded rectangle"));
+            }
+            let fill = if parent.fill.is_none() { &e.style.fill } else { &parent.fill };
+            let fill_paint = fill.paint(&th.palette, under);
+            let ground = fill_paint.as_ref().map_or(under, Paint::solid);
+            let stroke = parent.stroke.as_ref().or(e.style.stroke.as_ref());
+            let border = stroke.and_then(|s| s.fill.paint(&th.palette, ground));
+            let width = stroke.map_or(0.0, |s| s.width.unwrap_or(th.stroke_width));
+            sources.push(crate::material_weld::source(
+                crate::material_weld::Plate { outline, rect, frame: f, fill: fill_paint, border, width },
+                origin,
+                0.25 / quality.scale,
+            )?);
+            members.insert(c.key().map_or_else(|| Arc::from(format!("{path}/{j}")), Arc::from));
+        }
+        if sources.is_empty() {
+            return Err(SceneError::UnsupportedWeld("no painted, non-excluded plate children"));
+        }
+        if gpu {
+            return Ok(Some(crate::external::finish_gpu(&sources, weld, quality, origin, members, self.weld_cache)?));
+        }
+        let request = mui_weld::Request { sources, weld, quality };
+        let baked = self.weld_cache.get(&request)?;
+        Ok(Some(crate::material_weld::finish(&baked, origin, members)?))
     }
 
     /// One shadow of a node, offset and spread off the node's own outline.
@@ -704,9 +851,10 @@ impl<'a> Walk<'a> {
         path: &mut String,
         under: Color,
         cursor: Option<Cursor>,
-        clip: Option<Bounds>,
+        ancestors: &Ancestors,
         disabled: bool,
     ) -> Result<(), SceneError> {
+        let clip = ancestors.clip;
         let frame = self.frames[self.i];
         let at = self.i;
         self.i += 1;
@@ -726,7 +874,11 @@ impl<'a> Walk<'a> {
             self.i += n.children().iter().map(count).sum::<usize>();
             return Ok(());
         }
-        let (outline, rect, mut changed, welds) = self.outline(n, frame)?;
+        let material = self.material_weld(n, frame, path, under)?;
+        let (outline, rect, mut changed, welds) = match &material {
+            Some(m) => (m.outline.clone(), None, true, Vec::new()),
+            None => self.outline(n, frame, self.i)?,
+        };
 
         self.key = key.clone();
         let clear = Fill::Color(Color::oklcha(0.0, 0.0, 0.0, 0.0));
@@ -751,10 +903,23 @@ impl<'a> Walk<'a> {
             self.shadow(sh, &outline, rect, &welds, under)?;
         }
         let solid = |p: Option<&mut Painted>, or: Color| p.map_or(or, |p| p.paint.solid());
-        let mut bg = solid(
-            self.push(Layer::Fill, outline.clone(), rect, &s.fill, under),
-            under,
-        );
+        let mut bg = match &material {
+            Some(m) if m.external.is_some() => {
+                let external = m.external.as_ref().expect("matched Some").clone();
+                self.external_welds.insert(self.key.clone(), external);
+                self.paint.push(Painted {
+                    key: self.key.clone(), layer: Layer::External,
+                    path: m.image_rect.path(), paint: Paint::Solid(under),
+                    rect: Some(m.image_rect), width: 0.0, blur: 0.0, text: None,
+                });
+                under
+            }
+            Some(m) => solid(
+                self.push(Layer::Fill, m.image_rect.path(), Some(m.image_rect), &m.image_fill, under),
+                under,
+            ),
+            None => solid(self.push(Layer::Fill, outline.clone(), rect, &s.fill, under), under),
+        };
 
         let (mut cur, mut cur_rect) = (outline.clone(), rect);
         for (i, (d, f)) in s.shells.iter().enumerate() {
@@ -790,7 +955,7 @@ impl<'a> Walk<'a> {
             self.push(Layer::Unclip, Path::default(), None, &clear, bg);
         }
 
-        if let Some(st) = &s.stroke {
+        if let Some(st) = s.stroke.as_ref().filter(|_| material.is_none()) {
             let w = st.width.unwrap_or(th.stroke_width);
             if !(w.is_finite() && w >= 0.0) {
                 return Err(SceneError::InvalidRadius);
@@ -936,7 +1101,13 @@ impl<'a> Walk<'a> {
             focusable: e.focusable,
             disabled,
             semantics: e.semantics.clone(),
+            text_value: match &e.content {
+                Content::Text(t) => Some(t.clone()),
+                _ => None,
+            },
             clip,
+            clip_paths: ancestors.clip_paths.clone(),
+            parent: ancestors.parent.clone(),
             content,
             hits,
         });
@@ -945,8 +1116,16 @@ impl<'a> Walk<'a> {
         } else {
             Path::default()
         };
-        let inner = if n.is_clip() {
-            let b = bounds(frame, self.spec.device_scale);
+        let mut inner = ancestors.clone();
+        if n.key().is_some_and(|k| !k.is_empty() && !k.starts_with('/')) {
+            inner.parent = Some(key.clone());
+        }
+        if n.is_clip() {
+            let b = match &material {
+                Some(m) => m.image_rect.bounds(),
+                None => Bounds::from_points(outline.flatten(0.5, 100_000)?.concat())
+                    .unwrap_or_else(|| bounds(frame, self.spec.device_scale)),
+            };
             let b = clip.map_or(b, |c| {
                 Bounds::new(
                     b.min.x.max(c.min.x),
@@ -955,11 +1134,10 @@ impl<'a> Walk<'a> {
                     b.max.y.min(c.max.y),
                 )
             });
+            inner.clip = Some(b);
+            inner.clip_paths.push(Arc::new(outline.clone()));
             self.push(Layer::Clip, outline, rect, &clear, bg);
-            Some(b)
-        } else {
-            clip
-        };
+        }
         let outer_base = self.base_y;
         self.base_y = None;
         // Each direct text child's own centred baseline, then every child
@@ -1021,21 +1199,27 @@ impl<'a> Walk<'a> {
                     under: bg,
                     cursor,
                     disabled,
+                    parent: inner.parent.clone(),
                 });
                 self.i += count(c);
             } else {
-                self.node(c, path, bg, cursor, inner, disabled)?;
+                self.node(c, path, bg, cursor, &inner, disabled)?;
             }
         }
         let end = self.i;
         for (at2, c, mut p, base) in sticky {
             self.i = at2;
             self.base_y = base;
-            self.node(c, &mut p, bg, cursor, inner, disabled)?;
+            self.node(c, &mut p, bg, cursor, &inner, disabled)?;
         }
         self.i = end;
         path.truncate(mark);
         self.base_y = outer_base;
+        if let Some(m) = &material {
+            // Consume only immediate source plates. Text, canvases, children,
+            // clips and semantics keep their own authoring and painter order.
+            self.paint.retain(|p| !m.consumes(&p.key, p.layer));
+        }
         if n.is_clip() {
             self.key = key.clone();
             self.push(Layer::Unclip, Path::default(), None, &clear, bg);
@@ -1091,28 +1275,54 @@ pub fn resolve_scene_with(
     spec: &SceneSpec,
     text: &mut TextCache,
 ) -> Result<ResolvedScene, SceneError> {
+    resolve_scene_cached(spec, text, &mut crate::WeldCache::default())
+}
+
+/// Resolve with persistent text and material-weld caches. Runtime owners should
+/// keep both; the compatibility functions use a temporary welding cache.
+pub fn resolve_scene_cached(
+    spec: &SceneSpec,
+    text: &mut TextCache,
+    weld_cache: &mut crate::WeldCache,
+) -> Result<ResolvedScene, SceneError> {
     if !spec.theme.is_valid() {
         return Err(SceneError::InvalidTheme);
     }
-    let font_id = spec.font.as_ref().map_or(0, |f| f.as_ptr() as usize);
-    if text.font != font_id {
+    if !(spec.tolerance.is_finite() && spec.tolerance > 0.0) {
+        return Err(SceneError::Text(mui_text::Error::InvalidOptions("tolerance")));
+    }
+    let same_font = match (&text.font, &spec.font) {
+        (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+        (None, None) => true,
+        _ => false,
+    };
+    if !same_font || text.tolerance_bits != spec.tolerance.to_bits() {
         text.runs.clear();
-        text.font = font_id;
+        text.entries = 0;
+        text.font = spec.font.clone();
+        text.tolerance_bits = spec.tolerance.to_bits();
+        text.layout.clear();
     }
     let mut runs = Runs {
         font: spec.font.as_deref(),
         tolerance: spec.tolerance,
         cache: &mut text.runs,
+        entries: &mut text.entries,
     };
     let th = spec.theme;
     // Every paragraph wraps in this one pass: mui-layout hands a flex item's
     // final main size back to the measurer, so there is no share left to learn
     // afterwards.
-    let layout = resolve_with(
-        &spec.root,
-        spec.offered,
-        spec.limits,
-        th.spacing,
+    let layout = mui_layout::resolve_cached_with(
+        &spec.root, spec.offered, spec.limits, th.spacing, &mut text.layout,
+        |e| {
+            // Exact, unambiguous key for precisely the fields `fit` consumes.
+            // This is a correctness-first projection, not hash-only equality.
+            if let Content::Text(t) = &e.content {
+                format!("{:?}|{:016x}|{}|{:?}|{:?}", t,
+                    e.text_size.unwrap_or(th.text).to_bits(), e.weight.value(), e.lines, e.reserve).into_bytes()
+            } else { Vec::new() }
+        },
         |e, room| fit(&mut runs, th, e, room),
     )?;
     let nodes = count(&spec.root);
@@ -1120,11 +1330,13 @@ pub fn resolve_scene_with(
         spec,
         frames: layout.all(),
         runs,
+        weld_cache,
         i: 0,
         key: Arc::from(""),
         paint: Vec::new(),
         surfaces: Vec::with_capacity(nodes),
         at: HashMap::with_capacity(nodes),
+        external_welds: HashMap::new(),
         deferred: Vec::new(),
         base_y: None,
     };
@@ -1133,7 +1345,7 @@ pub fn resolve_scene_with(
         &mut String::new(),
         th.palette.background(),
         None,
-        None,
+        &Ancestors::default(),
         false,
     )?;
     // Floats paint last, in the order they were met; a float inside a float
@@ -1147,18 +1359,27 @@ pub fn resolve_scene_with(
             under,
             cursor,
             disabled,
+            parent,
         } = w.deferred[k].clone();
         w.i = at;
         w.base_y = None;
-        w.node(node, &mut path, under, cursor, None, disabled)?;
+        w.node(
+            node,
+            &mut path,
+            under,
+            cursor,
+            &Ancestors { parent, ..Ancestors::default() },
+            disabled,
+        )?;
         k += 1;
     }
-    let (paint, surfaces, at) = (w.paint, w.surfaces, w.at);
+    let (paint, surfaces, at, external_welds) = (w.paint, w.surfaces, w.at, w.external_welds);
     Ok(ResolvedScene {
         layout,
         paint,
         surfaces,
         at,
+        external_welds,
         font: spec.font.clone(),
         tolerance: spec.tolerance,
     })

@@ -8,6 +8,7 @@ use super::*;
 
 pub(crate) struct Measured<'a, P> {
     pub(crate) node: &'a Node<P>,
+    pub(crate) memo_id: u64,
     /// Slot among the parent's children, so a reordered placement can be
     /// written back to the declaration order the frames keep.
     pub(crate) index: usize,
@@ -234,13 +235,15 @@ pub(crate) struct Pass<'a, 'f, P> {
     /// anchor frames the first one found.
     pub(crate) pinned: bool,
     pub(crate) measurer: &'f mut dyn FnMut(&P, Option<f64>) -> Size,
+    pub(crate) cache: Option<&'f mut LayoutCache>,
 }
 
 /// `room` is the narrowest definite inner width above this node (a grid
 /// column counts; a scroll node stops it), handed to content so a paragraph
 /// can wrap in the first and only pass. It is the room, not the flex share:
 /// a row still squeezes its content after measuring.
-pub(crate) fn measure<'a, P>(
+pub(crate) use crate::incremental::measure_cached as measure;
+pub(crate) fn measure_uncached<'a, P>(
     node: &'a Node<P>,
     ancestor: &str,
     definite: [Option<f64>; 2],
@@ -260,7 +263,7 @@ pub(crate) fn measure<'a, P>(
     if !(gap.is_finite() && (0.0..=l.extent).contains(&gap) && padding.valid(l.extent)) {
         return Err(Error::InvalidValue);
     }
-    if let Some(id) = node.id.as_deref().filter(|_| !pass.redo) {
+    if let Some(id) = node.id.as_deref().filter(|_| !pass.redo && pass.cache.is_none()) {
         if pass.keys.insert(id, ()).is_some() {
             return Err(Error::DuplicateKey(id.to_string()));
         }
@@ -577,6 +580,7 @@ pub(crate) fn measure<'a, P>(
         || children.iter().any(|c| c.fluid && !c.node.float);
     Ok(Measured {
         node,
+        memo_id: 0,
         index: 0,
         fluid,
         gap,

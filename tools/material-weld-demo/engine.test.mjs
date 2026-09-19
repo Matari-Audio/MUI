@@ -1,0 +1,34 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {defaults,smoothMin,distance,field,pixel,weighted,srgb,rgba8,bake,validate,sample,contours} from './engine.mjs';
+const red=srgb(1,0,0),blue=srgb(0,0,1),white=srgb(1,1,1);
+const src=(x=0,c=red,w=1)=>({shape:{x,y:0,w:24,h:24,r:5},fill:c,border:white,width:w});
+const sources=()=>[src(),src(26,blue,4)];
+const close=(a,b,e=1e-8)=>assert.ok(Math.abs(a-b)<e,`${a} != ${b}`);
+let seed=21919;const random=()=>((seed=(Math.imul(seed,1664525)+1013904223)>>>0)/4294967296);
+const shuffle=a=>a.map(x=>[random(),x]).sort((x,y)=>x[0]-y[0]).map(x=>x[1]);
+test('defaults merge both; keep and omit are distinct',()=>{assert.deepEqual([defaults().fill,defaults().border],['blend','blend']);});
+test('two-source result matches analytic quadratic smooth min',()=>{for(let i=0;i<2000;i++){const a=random()*100-50,b=random()*100-50,k=random()*30+.001,h=Math.max(0,Math.min(1,.5+.5*(b-a)/k));close(smoothMin([a,b],k).distance,b+(a-b)*h-k*h*(1-h));}});
+test('n-way geometry is permutation invariant',()=>{for(let z=0;z<600;z++){const d=Array.from({length:2+Math.floor(random()*63)},()=>random()*30-15),k=random()*20+.001;const a=smoothMin(d,k),b=smoothMin(shuffle(d),k);close(a.distance,b.distance);close(a.weights.reduce((a,b)=>a+b,0),1);assert.ok(a.weights.every(w=>w>=0&&w<=1+1e-12));}});
+test('compact support: far sources cannot change local seams',()=>{for(let i=0;i<100;i++){const d=[random()*2,random()*2],k=4;close(smoothMin(d,k).distance,smoothMin([...d,1e5],k).distance);}});
+test('growth is bounded and monotone as smoothing grows',()=>{for(let i=0;i<300;i++){const d=Array.from({length:10},()=>random()*10),k=random()*20;const a=smoothMin(d,k).distance;assert.ok(a<=Math.min(...d)+1e-9);assert.ok(a>=Math.min(...d)-k/2-1e-9);assert.ok(smoothMin(d,k+1).distance<=a+1e-9);}});
+test('zero reach is hard union; no mysterious bridge',()=>{assert.ok(field(sources(),25,12,{...defaults(),reach:0}).distance>0);});
+test('morph creates actual geometry in the gap',()=>{assert.ok(field(sources(),25,12,{...defaults(),progress:0}).distance>0);assert.ok(field(sources(),25,12,defaults()).distance<0);});
+test('transparent hues do not contaminate material interpolation',()=>{assert.deepEqual(rgba8(weighted([red,srgb(0,0,1,0)],[.5,.5])),[255,0,0,128]);});
+test('fully merged material is order-independent',()=>{const s=[src(),src(26,blue),src(12,srgb(0,1,0),3)];for(let i=0;i<100;i++){const x=random()*60-5,y=random()*35-5,a=pixel(s,x,y,defaults()),b=pixel(shuffle(s),x,y,defaults());a.forEach((c,j)=>close(c,b[j]));}});
+test('half-covered border applies antialias coverage once',()=>{close(pixel([src()],0,12,{...defaults(),progress:0})[3],.5);close(pixel([src()],0,12,defaults())[3],.5);});
+test('shape-only preserves the interior source border',()=>{const a=src(),b=src(20,red);a.border=blue;const kept=rgba8(pixel([a,b],23.5,12,{...defaults(),border:'keep'},.1)),fused=rgba8(pixel([a,b],23.5,12,defaults(),.1));assert.ok(kept[2]>200);assert.ok(fused[0]>200&&fused[2]<10);});
+test('omit means absent border, not independent border',()=>{assert.deepEqual(rgba8(pixel(sources(),.25,12,{...defaults(),reach:0,blend:0,border:'omit'},.1)),[255,0,0,255]);});
+test('original endpoint retains border colors',()=>{const a=src();a.border=blue;assert.deepEqual(rgba8(pixel([a],.25,12,{...defaults(),progress:0},.1)),[0,0,255,255]);});
+test('rounded geometry is not a bounding-box hit',()=>{assert.ok(distance(src().shape,0,0)>0);assert.ok(distance(src().shape,12,12)<0);});
+test('holes survive raster and companion contour',()=>{const rings=[[[0,0],[20,0],[20,20],[0,20]],[[5,5],[5,15],[15,15],[15,5]]],s={shape:{rings},fill:red,border:null,width:0};assert.ok(distance(s.shape,10,10)>0);const b=bake([s],{...defaults(),reach:0});assert.equal(b.contours.length,2);const area=r=>r.reduce((v,a,i)=>{const z=r[(i+1)%r.length];return v+a[0]*z[1]-a[1]*z[0]},0);assert.ok(area(b.contours[0])*area(b.contours[1])<0);});
+test('marching triangles close isolated islands and saddle cells',()=>{for(let k=0;k<50;k++){const w=9,h=9,v=new Float64Array((w+1)*(h+1));for(let y=0;y<=h;y++)for(let x=0;x<=w;x++)v[y*(w+1)+x]=(x===0||y===0||x===w||y===h)?1:(random()-.5);const rings=contours(v,w,h,{x:0,y:0,w,h});assert.ok(rings.every(r=>r.length>=3));}});
+test('fractional scale changes true raster dimensions',()=>{const a=bake(sources(),defaults()),b=bake(sources(),defaults(),1.5);assert.ok(b.width>a.width&&b.height>a.height);});
+test('all invalid morph options are rejected',()=>{for(const v of [NaN,Infinity,-1,2])assert.throws(()=>bake(sources(),{...defaults(),progress:v}));assert.throws(()=>bake(sources(),defaults(),1,4));assert.throws(()=>validate([],defaults()));});
+test('hard gradient stops select the later stop',()=>{const brush={kind:'linear',from:[0,0],to:[1,0],stops:[{at:0,color:red},{at:.5,color:red},{at:.5,color:blue},{at:1,color:blue}]};assert.deepEqual(rgba8(sample(brush,.5,0)),[0,0,255,255]);});
+test('random policy/morph samples have finite bounded alpha',()=>{for(let z=0;z<1000;z++){const s=[src(),src(22,blue,random()*5)],o={...defaults(),progress:random(),fill:['blend','keep','omit'][z%3],border:['blend','keep','omit'][Math.floor(z/3)%3]};const c=pixel(s,random()*60-5,random()*40-5,o);assert.ok(c.every(Number.isFinite));assert.ok(c[3]>=-1e-12&&c[3]<=1+1e-12);}});
+
+test('first nonzero morph frame cannot pop overlapping AA-edge alpha',()=>{
+ const a=src(),b=src(0,blue),zero=pixel([a,b],0,12,{...defaults(),progress:0}),tiny=pixel([a,b],0,12,{...defaults(),progress:1e-6});
+ close(zero[3],.75);zero.forEach((v,i)=>close(v,tiny[i],1e-7));
+});

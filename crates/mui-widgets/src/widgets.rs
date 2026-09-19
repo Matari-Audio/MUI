@@ -459,17 +459,9 @@ fn take(value: &mut String, a: usize, c: usize) -> (usize, bool) {
     value.replace_range(x..y, "");
     (lo, true)
 }
-/// The run of alphanumerics around `at`, for a double click.
+/// Unicode word boundaries, falling back to one grapheme for punctuation.
 fn word(value: &str, at: usize) -> (usize, usize) {
-    let ch: Vec<char> = value.chars().collect();
-    let (mut lo, mut hi) = (at.min(ch.len()), at.min(ch.len()));
-    while lo > 0 && ch[lo - 1].is_alphanumeric() {
-        lo -= 1;
-    }
-    while hi < ch.len() && ch[hi].is_alphanumeric() {
-        hi += 1;
-    }
-    (lo, hi)
+    crate::grapheme::word(value, at)
 }
 fn insert(value: &mut String, caret: &mut usize, c: char) {
     value.insert(byte(value, *caret), c);
@@ -489,14 +481,17 @@ pub fn text_input(ui: &mut impl Host, id: &str, value: &mut String) -> El {
     let focused = ui.focused(id);
     let n = value.chars().count();
     let (anchor, caret) = ui.sel(id);
-    let (mut anchor, mut caret) = (anchor.min(n), caret.min(n));
+    let (mut anchor, mut caret) = (
+        crate::grapheme::floor(value, anchor.min(n)),
+        crate::grapheme::floor(value, caret.min(n)),
+    );
 
     // The pointer, against last frame's frame: pad_xy's 8 px is where the
     // text starts.
     let r = ui.get(id);
     if r.pressed || r.dragged {
         if let Some(p) = ui.local(id) {
-            caret = ui.hit(value, size, p.x - 8.0);
+            caret = crate::grapheme::floor(value, ui.hit(value, size, p.x - 8.0));
             if r.pressed {
                 anchor = caret;
             }
@@ -507,7 +502,9 @@ pub fn text_input(ui: &mut impl Host, id: &str, value: &mut String) -> El {
     }
 
     if focused {
-        for c in ui.text(id).to_owned().chars().filter(|c| !c.is_control()) {
+        let committed = ui.text(id).to_owned();
+        let has_committed_text = !committed.is_empty();
+        for c in committed.chars().filter(|c| !c.is_control()) {
             (caret, _) = take(value, anchor, caret);
             insert(value, &mut caret, c);
             anchor = caret;
@@ -538,7 +535,7 @@ pub fn text_input(ui: &mut impl Host, id: &str, value: &mut String) -> El {
                     }
                     _ => {}
                 },
-                Key::Char(c) if !c.is_control() => {
+                Key::Char(c) if !c.is_control() && !has_committed_text => {
                     (caret, _) = take(value, anchor, caret);
                     insert(value, &mut caret, c);
                     anchor = caret;
@@ -547,8 +544,9 @@ pub fn text_input(ui: &mut impl Host, id: &str, value: &mut String) -> El {
                     let (at, had) = take(value, anchor, caret);
                     caret = at;
                     if !had && caret > 0 {
-                        value.remove(byte(value, caret - 1));
-                        caret -= 1;
+                        let start = crate::grapheme::previous(value, caret);
+                        value.replace_range(byte(value, start)..byte(value, caret), "");
+                        caret = start;
                     }
                     anchor = caret;
                 }
@@ -556,14 +554,17 @@ pub fn text_input(ui: &mut impl Host, id: &str, value: &mut String) -> El {
                     let (at, had) = take(value, anchor, caret);
                     caret = at;
                     if !had && caret < value.chars().count() {
-                        value.remove(byte(value, caret));
+                        let end = crate::grapheme::next(value, caret);
+                        value.replace_range(byte(value, caret)..byte(value, end), "");
                     }
                     anchor = caret;
                 }
                 Key::Left | Key::Right | Key::Home | Key::End => {
                     caret = match k.key {
-                        Key::Left => caret.saturating_sub(1),
-                        Key::Right => (caret + 1).min(value.chars().count()),
+                        Key::Left if !k.mods.shift && anchor != caret => anchor.min(caret),
+                        Key::Right if !k.mods.shift && anchor != caret => anchor.max(caret),
+                        Key::Left => crate::grapheme::previous(value, caret),
+                        Key::Right => crate::grapheme::next(value, caret),
                         Key::Home => 0,
                         _ => value.chars().count(),
                     };

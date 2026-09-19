@@ -6,6 +6,7 @@ license.workspace = true
 
 [features]
 default = []
+gpu-effects = ["wgpu/wgsl"]
 # A CPU rasteriser: snapshot tests, thumbnails, hosts with no GPU.
 cpu = ["dep:vello_cpu"]
 # Rasterise on a rayon pool instead of one core. Off by default: a snapshot-
@@ -17,6 +18,7 @@ bench-classic = []
 
 [dependencies]
 mui-scene = { path = "../mui-scene" }
+mui-weld = { path = "../mui-weld" }
 mui-geometry = { path = "../mui-geometry" }
 # No wgpu backend features: a plugin renders into the device its host wrapper
 # already created, so this crate must not choose the backend. Hosts turn on
@@ -32,6 +34,7 @@ wgpu = { version = "29", default-features = false }
 vello_cpu = { version = "0.2", optional = true, default-features = false, features = ["std", "u8_pipeline", "text"] }
 
 [dev-dependencies]
+naga = { version = "29", features = ["wgsl-in"] }
 mui-layout = { path = "../mui-layout" }
 epaint_default_fonts = "0.36"
 mui-text = { path = "../mui-text" }
@@ -44,6 +47,14 @@ mui = { path = "../mui" }
 # Classic vello, for `--features bench-classic`. `bump_estimate` is the only
 # way either renderer will tell us what it asks the GPU for.
 vello = { version = "0.10", default-features = false, features = ["wgpu", "bump_estimate"] }
+
+[[example]]
+name = "gpu_contract"
+required-features = ["gpu-effects"]
+
+[[example]]
+name = "gpu_matrix"
+required-features = ["gpu-effects", "bench-classic"]
 
 [[example]]
 name = "bench"
