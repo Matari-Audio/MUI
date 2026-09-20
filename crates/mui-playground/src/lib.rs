@@ -302,7 +302,9 @@ mod tests {
             assert!(frame.surfaces > 1);
             assert!(frame
                 .pixels
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .any(|p| p != &frame.pixels[..4]));
         }
         let a = render("leaf(100., 100.).fill(Primary)", 320, 240).unwrap();
