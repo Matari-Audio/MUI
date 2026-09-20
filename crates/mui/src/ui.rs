@@ -1088,9 +1088,26 @@ impl Ui {
             self.focus = None;
             self.preedit = None;
         }
-        self.scrolls.retain(|id, _| scene.surface(id).is_some());
+        self.scrolls.retain(|id, at| {
+            let Some(surface) = scene.surface(id) else {
+                return false;
+            };
+            let next = [
+                at[0].clamp(
+                    0.0,
+                    (surface.content.width - surface.frame.size.width).max(0.0),
+                ),
+                at[1].clamp(
+                    0.0,
+                    (surface.content.height - surface.frame.size.height).max(0.0),
+                ),
+            ];
+            animating |= *at != next;
+            *at = next;
+            true
+        });
         self.sel.retain(|id, _| scene.surface(id).is_some());
-        self.wheel(&scene, input.wheel);
+        animating |= self.wheel(&scene, input.wheel);
 
         let held = self.interaction.held().map(str::to_owned);
         let cursor = held
@@ -1148,17 +1165,24 @@ impl Ui {
 
     /// Send the wheel to the innermost scrollable surface under the pointer.
     /// It lands on the next frame's tree, the same frame late a release is.
-    fn wheel(&mut self, scene: &ResolvedScene, wheel: Point) {
+    fn wheel(&mut self, scene: &ResolvedScene, wheel: Point) -> bool {
         // A non-finite delta would land in `self.scrolls` for good: `clamp`
         // returns a NaN receiver unchanged, and every later frame would fail
         // validation on the offset.
         if !(wheel.x.is_finite() && wheel.y.is_finite()) || (wheel.x == 0.0 && wheel.y == 0.0) {
-            return;
+            return false;
         }
-        let Some(p) = self.pointer.pos else { return };
+        let Some(p) = self.pointer.pos else {
+            return false;
+        };
         for s in scene.surfaces().rev() {
             let f = s.frame;
             if p.x < f.x || p.x > f.right() || p.y < f.y || p.y > f.bottom() {
+                continue;
+            }
+            if s.clip.is_some_and(|clip| {
+                p.x < clip.min.x || p.x > clip.max.x || p.y < clip.min.y || p.y > clip.max.y
+            }) {
                 continue;
             }
             // `content` is the frame size for everything but a scroll node,
@@ -1171,10 +1195,17 @@ impl Ui {
                 continue;
             }
             let at = self.scrolls.entry(s.key.to_string()).or_insert([0.0, 0.0]);
-            at[0] = (at[0] + wheel.x).clamp(0.0, max[0]);
-            at[1] = (at[1] + wheel.y).clamp(0.0, max[1]);
-            return;
+            let next = [
+                (at[0] + wheel.x).clamp(0.0, max[0]),
+                (at[1] + wheel.y).clamp(0.0, max[1]),
+            ];
+            if next != *at {
+                *at = next;
+                return true;
+            }
+            // An exhausted or perpendicular nested scroller yields to its parent.
         }
+        false
     }
 }
 
@@ -1758,6 +1789,85 @@ mod tests {
         ui.frame(tree(&ui), None, key(Key::Enter), 0.016).unwrap();
         let (_, activated) = mui_widgets::button(&ui, "button", "Save");
         assert!(activated, "Enter activates the focused button");
+    }
+
+    #[test]
+    fn nested_scrollers_yield_and_shorter_content_clamps_the_offset() {
+        let mut ui = Ui::new(Theme::DEFAULT);
+        let tree = |tall| {
+            column([
+                row([leaf(100., 20.)])
+                    .size(30., 20.)
+                    .scroll()
+                    .id("horizontal"),
+                leaf(30., if tall { 150. } else { 10. }),
+            ])
+            .size(30., 40.)
+            .scroll()
+            .id("outer")
+        };
+        ui.frame(tree(true), None, PointerInput::default(), 0.016)
+            .unwrap();
+        let input = Input {
+            pointer: at(10., 10., false),
+            wheel: Point::new(0., 80.),
+            ..Input::default()
+        };
+        let frame = ui.frame(tree(true), None, input, 0.016).unwrap();
+        assert!(frame.animating, "wheel changes need a catch-up frame");
+        assert_eq!(ui.scroll("horizontal"), [0., 0.]);
+        assert_eq!(ui.scroll("outer"), [0., 80.]);
+        let frame = ui
+            .frame(tree(false), None, PointerInput::default(), 0.016)
+            .unwrap();
+        assert!(frame.animating, "clamping needs a catch-up frame");
+        assert_eq!(ui.scroll("outer"), [0., 0.]);
+    }
+
+    #[test]
+    fn nested_and_floating_content_does_not_extend_the_outer_scroll() {
+        let mut ui = Ui::new(Theme::DEFAULT);
+        let tree = column([
+            column([leaf(30., 1000.)])
+                .size(30., 40.)
+                .scroll()
+                .id("inner"),
+            leaf(30., 20.),
+            leaf(30., 900.).float(),
+        ])
+        .gap(0.)
+        .size(30., 50.)
+        .scroll()
+        .id("outer");
+        ui.frame(tree, None, PointerInput::default(), 0.016)
+            .unwrap();
+        assert_eq!(
+            ui.scene().unwrap().surface("outer").unwrap().content.height,
+            60.
+        );
+    }
+
+    #[test]
+    fn an_exhausted_inner_scroll_yields_to_its_parent() {
+        let mut ui = Ui::new(Theme::DEFAULT);
+        let tree = || {
+            column([
+                column([leaf(30., 80.)]).size(30., 40.).scroll().id("inner"),
+                leaf(30., 100.),
+            ])
+            .size(30., 60.)
+            .scroll()
+            .id("outer")
+        };
+        let input = || Input {
+            pointer: at(10., 10., false),
+            wheel: Point::new(0., 100.),
+            ..Input::default()
+        };
+        ui.frame(tree(), None, input(), 0.016).unwrap();
+        assert_eq!(ui.scroll("inner"), [0., 40.]);
+        ui.frame(tree(), None, input(), 0.016).unwrap();
+        assert!(ui.scroll("outer")[1] > 0.);
     }
 
     #[test]
