@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Edit and render MUI shape scenes in your browser.">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' blob: data:; worker-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'">
+  <title>MUI / Playground</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <a class="brand" href="./" aria-label="MUI playground home"><span class="mark">m</span><span>MUI <small>/ playground</small></span></a>
+    <nav><a href="https://github.com/Matari-Audio/MUI/blob/main/docs/shape-layout.md">Shape guide ↗</a><a href="https://github.com/Matari-Audio/MUI">GitHub ↗</a></nav>
+  </header>
+  <main>
+    <section class="workspace" aria-label="Interactive MUI editor">
+      <div class="editor-pane">
+        <div class="pane-heading"><span><i class="file-icon" aria-hidden="true"></i>scene.rs</span><span class="badge">Rust DSL subset</span></div>
+        <div class="examples" aria-label="Example scenes"><button data-example="weld" aria-pressed="true">Weld</button><button data-example="regions" aria-pressed="false">Regions</button><button data-example="cut" aria-pressed="false">Cutouts</button><button data-example="layout" aria-pressed="false">Layout</button></div>
+        <label class="sr-only" for="source">MUI scene expression</label>
+        <textarea id="source" spellcheck="false" autocapitalize="off" autocomplete="off" aria-describedby="editor-help" placeholder="Loading the example…"></textarea>
+        <div class="editor-bottom"><span id="editor-help">Auto-runs · Ctrl / ⌘ + Enter</span><div class="editor-actions"><button id="reset" title="Restore the selected example">Reset</button><button id="run" class="primary">Run</button></div></div>
+      </div>
+      <div class="preview-pane">
+        <div class="pane-heading"><span><span class="dot" aria-hidden="true"></span>Live canvas</span><div class="preview-actions"><button id="share">Share</button><button id="export">Export PNG</button></div></div>
+        <div class="stage"><canvas id="canvas" width="640" height="480" aria-label="Rendered MUI scene"></canvas><span class="canvas-label">640 × 480</span><div id="loading">Starting engine…</div></div>
+        <div class="preview-bottom"><span id="status" role="status" aria-live="polite">Loading WebAssembly</span><span>CPU / WASM</span></div>
+      </div>
+    </section>
+    <pre id="error" role="alert" hidden></pre>
+    <details class="subset"><summary>Supported subset</summary><div class="syntax"><p><code>leaf(w, h)</code> · <code>text("hello")</code> · <code>spacer()</code> · <code>row![…]</code> · <code>col![…]</code> · <code>stack![…]</code></p><p><b>Shape</b> <code>.radius(24.) .pill() .weld(Surface)</code> · <code>.cut(leaf(80., 80.)) .keep(leaf(80., 80.))</code></p><p><b>Layout</b> <code>.w(320.) .h(200.) .gap(8.) .pad(16.)</code> · <code>.flex(1.) .center() .offset(10., 0.) .inside(4.) .bend(0.2)</code></p><p><b>Paint</b> <code>.fill(Primary) .border(Ink, 2.) .shell(8., Raised)</code> · <code>Gradient::vertical(Primary, Secondary)</code> · <code>Color::oklch(0.75, 0.02, 230.)</code></p><p class="muted">One expression with numeric literals and named palette roles. No variables, closures, loops or arbitrary Rust.</p></div></details>
+  </main>
+  <footer><span>MUI / OPEN SOURCE</span><span>Matari Audio</span></footer>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

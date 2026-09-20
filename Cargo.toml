@@ -11,6 +11,7 @@ members = [
   "crates/mui-widgets",
   "crates/mui",
   "crates/mui-preview",
+  "crates/mui-playground",
   "crates/mui-text",
   "crates/mui-vello",
   "crates/mui-truce",

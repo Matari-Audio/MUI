@@ -186,3 +186,55 @@ fn geometry_limits_and_invalid_inputs_are_errors() {
         .unwrap();
     assert!(empty.iter().all(|p| p.commands.is_empty()));
 }
+
+#[test]
+fn uniform_offsets_match_sweep_for_holes_and_all_alignments() {
+    let o = OffsetOptions::default();
+    let g = GeometryOptions::default();
+    let hole = RoundedRect::new(Bounds::new(60., 30., 80., 40.), 8.)
+        .unwrap()
+        .path();
+    let outline = boolean_paths(&rect(), &hole, BooleanOp::Difference, o, g).unwrap();
+    for align in [
+        BorderAlign::Inside,
+        BorderAlign::Center,
+        BorderAlign::Outside,
+    ] {
+        let width = 4.;
+        let fast = border_geometry(&outline, WidthProfile::uniform(width), align, o, g).unwrap();
+        let radius = if align == BorderAlign::Center {
+            width / 2.
+        } else {
+            width
+        };
+        let sweep = union_contours(
+            &boundary_band(&outline, WidthProfile::uniform(radius), o).unwrap(),
+            o,
+            g,
+        )
+        .unwrap();
+        let reference = match align {
+            BorderAlign::Inside => {
+                boolean_paths(&sweep, &outline, BooleanOp::Intersection, o, g).unwrap()
+            }
+            BorderAlign::Center => sweep,
+            BorderAlign::Outside => {
+                boolean_paths(&sweep, &outline, BooleanOp::Difference, o, g).unwrap()
+            }
+        };
+        for x in (-5..206).step_by(3) {
+            for y in (-5..106).step_by(3) {
+                let (x, y) = (f64::from(x) + 0.37, f64::from(y) + 0.37);
+                assert_eq!(
+                    has(&fast.band, x, y),
+                    has(&reference, x, y),
+                    "{align:?} at {x},{y}"
+                );
+                assert_eq!(
+                    has(&fast.interior, x, y),
+                    has(&outline, x, y) && !has(&reference, x, y)
+                );
+            }
+        }
+    }
+}

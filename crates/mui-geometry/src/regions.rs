@@ -97,6 +97,18 @@ pub fn border_geometry(
     g: GeometryOptions,
 ) -> Result<BorderGeometry, Error> {
     width.validate()?;
+    // Uniform borders are the difference of parallel offsets. Sweeping disks
+    // around every flattened vertex is only needed for a varying width.
+    if width.from == width.to {
+        let inward = width.from * align.inward();
+        let outward = width.from - inward;
+        let inner = offset_path(outline, -inward, o)?.path;
+        let outer = offset_path(outline, outward, o)?.path;
+        let band = boolean_paths(&outer, &inner, BooleanOp::Difference, o, g)?;
+        let interior = boolean_paths(outline, &inner, BooleanOp::Intersection, o, g)?;
+        return Ok(BorderGeometry { band, interior });
+    }
+
     let sweep = union_contours(
         &boundary_band(
             outline,

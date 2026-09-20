@@ -1,0 +1,42 @@
+name: Playground
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: playground-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Test expression interpreter and examples
+        run: cargo test -p mui-playground --locked
+      - name: Install matching WASM bindings generator
+        run: cargo install wasm-bindgen-cli --version 0.2.128 --locked
+      - name: Build browser module
+        run: ./playground/build.sh
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: playground
+  deploy:
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/deploy-pages@v4
+        id: deployment
