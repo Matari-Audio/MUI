@@ -766,7 +766,12 @@ fn one(canvas: &mut impl Canvas, p: &Painted, path: &BezPath) -> Result<(), Erro
         canvas.pop_layer();
         return Ok(());
     }
-    let bounds = paint_box(p, path);
+    // Solid paint has no coordinate mapping; cubic extrema are wasted work.
+    let bounds = if matches!(p.paint, Paint::Solid(_)) {
+        Rect::ZERO
+    } else {
+        paint_box(p, path)
+    };
     // A canvas that cannot take this image gets its solid stand-in rather
     // than a panic, and none of the paint-transform dance below.
     let (img, b) = match &p.paint {

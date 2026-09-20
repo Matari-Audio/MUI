@@ -359,7 +359,7 @@ impl ResolvedScene {
             fonts: all_fonts,
             size,
             origin,
-            glyphs: run.glyphs.into(),
+            glyphs: run.glyphs,
             weight,
             coords,
             font_coords,
@@ -620,7 +620,7 @@ struct CachedRun {
     ascent: f64,
     descent: f64,
     line_height: f64,
-    glyphs: Vec<TextGlyph>,
+    glyphs: Arc<[TextGlyph]>,
 }
 
 impl CachedRun {
@@ -833,7 +833,7 @@ struct Deferred<'a> {
 
 struct Walk<'a> {
     spec: &'a SceneSpec,
-    frames: Vec<Frame>,
+    frames: Cow<'a, [Frame]>,
     regions: HashMap<usize, Path>,
     region_envelopes: HashMap<usize, Path>,
     runs: Runs<'a>,
@@ -973,7 +973,7 @@ impl<'a> Walk<'a> {
                 )?
                 .concat(),
         ) else {
-            for f in &mut self.frames[at + 1..at + count(n)] {
+            for f in &mut self.frames.to_mut()[at + 1..at + count(n)] {
                 f.size = Size::ZERO;
             }
             return Ok(());
@@ -988,7 +988,7 @@ impl<'a> Walk<'a> {
             th.spacing,
             |e, room| fit(&mut self.runs, th, e, room),
         )?;
-        for (dest, f) in self.frames[at + 1..at + count(n)]
+        for (dest, f) in self.frames.to_mut()[at + 1..at + count(n)]
             .iter_mut()
             .zip(&layout.all()[1..])
         {
@@ -1139,7 +1139,7 @@ impl<'a> Walk<'a> {
                     th.spacing,
                     |e, room| fit(&mut self.runs, th, e, room),
                 )?;
-                for (dest, f) in self.frames[i..i + count(child)]
+                for (dest, f) in self.frames.to_mut()[i..i + count(child)]
                     .iter_mut()
                     .zip(layout.all())
                 {
@@ -1150,7 +1150,7 @@ impl<'a> Walk<'a> {
                     };
                 }
             } else {
-                for f in &mut self.frames[i..i + count(child)] {
+                for f in &mut self.frames.to_mut()[i..i + count(child)] {
                     f.size = Size::ZERO;
                 }
             }
@@ -1865,7 +1865,7 @@ impl<'a> Walk<'a> {
                         fonts: fonts.clone(),
                         size: size as f32,
                         origin,
-                        glyphs: run.glyphs.clone().into(),
+                        glyphs: run.glyphs.clone(),
                         weight: e.weight,
                         coords: coords.clone(),
                         font_coords: font_coords.clone(),
@@ -2322,10 +2322,10 @@ pub fn resolve_scene_cached(
         |e, room| fit(&mut runs, th, e, room),
     )?;
     text.welds.begin_frame();
-    let nodes = count(&spec.root);
+    let nodes = layout.all().len();
     let mut w = Walk {
         spec,
-        frames: layout.all().to_vec(),
+        frames: Cow::Borrowed(layout.all()),
         regions: HashMap::new(),
         region_envelopes: HashMap::new(),
         runs,
@@ -2381,8 +2381,18 @@ pub fn resolve_scene_cached(
         k += 1;
     }
     w.welds.finish_frame();
-    let layout = layout.reframe(&spec.root, w.frames)?;
-    let (paint, surfaces, at, external_welds) = (w.paint, w.surfaces, w.at, w.external_welds);
+    let Walk {
+        frames,
+        paint,
+        surfaces,
+        at,
+        external_welds,
+        ..
+    } = w;
+    let layout = match frames {
+        Cow::Owned(frames) => layout.reframe(&spec.root, frames)?,
+        Cow::Borrowed(_) => layout,
+    };
     Ok(ResolvedScene {
         layout,
         paint,
@@ -3438,7 +3448,9 @@ mod feature_tests {
             .unwrap();
         assert_eq!(t.glyphs.len(), 2);
         assert!(t.glyphs[1].x > 0.);
-        resolve_scene_with(&sp, &mut cache).unwrap();
+        let next = resolve_scene_with(&sp, &mut cache).unwrap();
+        let next_text = next.paint.iter().find_map(|p| p.text.as_ref()).unwrap();
+        assert!(Arc::ptr_eq(&t.glyphs, &next_text.glyphs));
         assert_eq!(cache.len(), 1);
     }
 }
