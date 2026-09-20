@@ -325,6 +325,8 @@ pub enum Radius {
     #[default]
     Theme,
     Px(f64),
+    /// Independent convex and concave radii; (0, 0) defers all rounding.
+    Pair(f64, f64),
     /// One of the theme's radii, named by what it rounds. See [`Corner`].
     Token(Corner),
     /// Multiple of the theme radius.
@@ -335,6 +337,11 @@ pub enum Radius {
 impl From<f64> for Radius {
     fn from(v: f64) -> Self {
         Self::Px(v)
+    }
+}
+impl From<(f64, f64)> for Radius {
+    fn from((convex, concave): (f64, f64)) -> Self {
+        Self::Pair(convex, concave)
     }
 }
 /// `.radius(Corner::Field)`: the theme says how much.

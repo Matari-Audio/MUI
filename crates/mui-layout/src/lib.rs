@@ -102,6 +102,36 @@ impl Layout {
     pub fn all(&self) -> &[Frame] {
         &self.order
     }
+    /// Publish contour-derived frames in the same tree order, keeping named lookup consistent.
+    pub fn reframe<P>(mut self, root: &Node<P>, frames: Vec<Frame>) -> Result<Self, Error> {
+        if frames.len() != self.order.len()
+            || frames.iter().any(|f| {
+                ![f.x, f.y, f.size.width, f.size.height]
+                    .iter()
+                    .all(|v| v.is_finite())
+                    || f.size.width < 0.
+                    || f.size.height < 0.
+            })
+        {
+            return Err(Error::InvalidValue);
+        }
+        let mut nodes = vec![root];
+        self.frames.clear();
+        for frame in &frames {
+            let node = nodes.pop().ok_or(Error::InvalidValue)?;
+            if let Some(key) = node.key() {
+                if self.frames.insert(Id::of(key), *frame).is_some() {
+                    return Err(Error::DuplicateKey(key.to_owned()));
+                }
+            }
+            nodes.extend(node.children().iter().rev());
+        }
+        if !nodes.is_empty() {
+            return Err(Error::InvalidValue);
+        }
+        self.order = frames;
+        Ok(self)
+    }
     pub fn frames(&self) -> impl Iterator<Item = (&str, Frame)> {
         self.frames.iter().map(|(k, v)| (k.as_str(), *v))
     }

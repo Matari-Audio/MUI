@@ -11,11 +11,12 @@ use std::sync::Arc;
 
 use mui_geometry::{
     boolean, fillet, inset_path, union, BooleanOp, Bounds, CornerStyle, Fillet, GeometryOptions,
-    OffsetOptions, Path, PlacedShape, Point, Polygon, RoundedRect, Topology,
+    OffsetOptions, Path, PlacedShape, Point, RoundedRect, Topology,
 };
 use mui_layout::{Frame, Layout, Limits, Size};
 use mui_text::{FallbackTextRun, TextRun, Weight};
 
+use crate::regions::Operation;
 use crate::{
     Carve, Color, Content, Cursor, El, Fill, Mix, Paint, Radius, Semantics, Shadow, ShadowKind,
     Theme,
@@ -469,17 +470,20 @@ fn bounds(f: Frame, scale: Option<f64>) -> Bounds {
     }
 }
 /// A resolved outline back as boolean input.
-// ponytail: every contour becomes its own shape, so a path that already has
-// a hole comes back solid. Carving chains through `Topology::placed_shapes`
-// instead, which keeps them; only a first, un-carved outline lands here.
 fn polygons(path: &Path) -> Result<Vec<PlacedShape>, SceneError> {
-    Ok(path
-        .flatten(0.25, 100_000)?
-        .into_iter()
-        .filter(|c| c.len() >= 3)
-        .map(|c| Polygon::new(c).into())
-        .collect())
+    Ok(mui_geometry::offset_path(
+        path,
+        0.,
+        OffsetOptions {
+            flatten_tolerance: 0.25,
+            max_points: 100_000,
+            ..OffsetOptions::default()
+        },
+    )?
+    .topology
+    .placed_shapes())
 }
+
 fn count(n: &El) -> usize {
     1 + n.children().iter().map(count).sum::<usize>()
 }
@@ -565,6 +569,11 @@ fn hash_geometry_shallow(n: &El, frames: &[Frame], at: usize, eat: &mut impl FnM
             eat(value.to_bits());
         }
         Radius::Pill => eat(4),
+        Radius::Pair(convex, concave) => {
+            eat(32);
+            eat(convex.to_bits());
+            eat(concave.to_bits());
+        }
     }
     eat(match style.corners {
         CornerStyle::Round => 0,
@@ -669,6 +678,8 @@ pub struct TextCache {
     entries: usize,
     runs: HashMap<String, HashMap<(u64, u16), CachedRun>>,
     welds: WeldCache,
+    borders: crate::border_ramp::BorderCache,
+    region_cache: crate::regions::RegionCache,
 }
 impl TextCache {
     pub fn layout_stats(&self) -> mui_layout::LayoutStats {
@@ -822,9 +833,15 @@ struct Deferred<'a> {
 
 struct Walk<'a> {
     spec: &'a SceneSpec,
-    frames: &'a [Frame],
+    frames: Vec<Frame>,
+    regions: HashMap<usize, Path>,
+    region_envelopes: HashMap<usize, Path>,
     runs: Runs<'a>,
     welds: &'a mut WeldCache,
+    borders: &'a mut crate::border_ramp::BorderCache,
+    region_cache: &'a mut crate::regions::RegionCache,
+    ramp_anchors: HashMap<usize, Frame>,
+    ramp_frames: HashMap<(usize, mui_layout::Id), Frame>,
     weld_cache: &'a mut crate::WeldCache,
     i: usize,
     key: Arc<str>,
@@ -837,6 +854,311 @@ struct Walk<'a> {
     base_y: Option<f64>,
 }
 impl<'a> Walk<'a> {
+    fn partition(
+        &mut self,
+        n: &El,
+        outline: &Path,
+        frame: Frame,
+        at: usize,
+    ) -> Result<(), SceneError> {
+        let e = n.payload();
+        let Some(padding) = e.inside else {
+            if e.bend != 0. {
+                return Err(mui_geometry::Error::InvalidOptions("bend requires inside").into());
+            }
+            return Ok(());
+        };
+        let padding = padding.resolve(self.spec.theme.spacing);
+        if !padding.is_finite() || padding < 0. || !e.bend.is_finite() || e.bend.abs() > 0.45 {
+            return Err(mui_geometry::Error::InvalidOptions("shape padding/bend").into());
+        }
+        if e.welding.is_some() {
+            return Err(SceneError::UnsupportedWeld(
+                "inside requires vector welding",
+            ));
+        }
+        let mut interior = outline.clone();
+        if let Some(ramp) = &e.border_ramp {
+            ramp.validate()?;
+            fn find(n: &El, id: &str, at: usize) -> Option<usize> {
+                if n.key() == Some(id) {
+                    return Some(at);
+                }
+                let mut at = at + 1;
+                for c in n.children() {
+                    if let Some(i) = find(c, id, at) {
+                        return Some(i);
+                    }
+                    at += count(c);
+                }
+                None
+            }
+            let anchor = match &ramp.anchor {
+                None => frame,
+                Some(id) => {
+                    self.frames[find(n, id.as_str(), at).ok_or(
+                        mui_geometry::Error::InvalidOptions("border ramp descendant missing"),
+                    )?]
+                }
+            };
+            if anchor.size.width <= 0. {
+                return Err(
+                    mui_geometry::Error::InvalidOptions("border ramp anchor has no width").into(),
+                );
+            }
+            let anchor = *self.ramp_anchors.entry(at).or_insert(anchor);
+            for id in ramp.tabs.iter().chain(&ramp.dividers) {
+                let index = find(n, id.as_str(), at).ok_or(mui_geometry::Error::InvalidOptions(
+                    "border ramp descendant missing",
+                ))?;
+                self.ramp_frames
+                    .insert((at, id.clone()), self.frames[index]);
+            }
+            let decoration = ramp.clone();
+            let mut ramp = ramp.clone();
+            ramp.from.1 *= ramp.align.inward();
+            ramp.to.1 *= ramp.align.inward();
+            if ramp.from.1.max(ramp.to.1) > 0. {
+                let mut band = self.borders.band(
+                    &format!("inside/{at}"),
+                    outline,
+                    &ramp,
+                    anchor,
+                    0.1 / self.spec.device_scale.unwrap_or(1.),
+                )?;
+                let shoulder = match e.style.radius {
+                    Radius::Pair(_, r) => r,
+                    Radius::Scale(k) => self.spec.theme.corners.concave * k,
+                    _ => self.spec.theme.corners.concave,
+                };
+                crate::border_ramp::decorate(&mut band, &decoration, anchor, shoulder, |id| {
+                    Ok(self.ramp_frames[&(at, id.clone())])
+                })?;
+                let band = self.region_cache.resolve(
+                    (at, 0),
+                    Operation::Sweep(band),
+                    self.spec.offsets,
+                    self.spec.geometry,
+                )?;
+                interior = self.region_cache.resolve(
+                    (at, 1),
+                    Operation::Combine(interior, band, BooleanOp::Difference),
+                    self.spec.offsets,
+                    self.spec.geometry,
+                )?;
+            }
+        } else if let Some(stroke) = &e.style.stroke {
+            let width = stroke.width.unwrap_or(self.spec.theme.stroke_width);
+            if !width.is_finite() || width < 0. {
+                return Err(SceneError::InvalidRadius);
+            }
+            interior = self.region_cache.resolve(
+                (at, 2),
+                Operation::Inset(interior, width * e.border_align.inward()),
+                self.spec.offsets,
+                self.spec.geometry,
+            )?;
+        }
+        interior = self.region_cache.resolve(
+            (at, 3),
+            Operation::Inset(interior, padding),
+            self.spec.offsets,
+            self.spec.geometry,
+        )?;
+        let Some(b) = Bounds::from_points(
+            interior
+                .flatten(
+                    self.spec.offsets.flatten_tolerance,
+                    self.spec.offsets.max_points,
+                )?
+                .concat(),
+        ) else {
+            for f in &mut self.frames[at + 1..at + count(n)] {
+                f.size = Size::ZERO;
+            }
+            return Ok(());
+        };
+        let size = Size::new(b.max.x - b.min.x, b.max.y - b.min.y);
+        let root = n.clone().size(size.width, size.height).pad(0.);
+        let th = self.spec.theme;
+        let layout = mui_layout::resolve_with(
+            &root,
+            Some(size),
+            self.spec.limits,
+            th.spacing,
+            |e, room| fit(&mut self.runs, th, e, room),
+        )?;
+        for (dest, f) in self.frames[at + 1..at + count(n)]
+            .iter_mut()
+            .zip(&layout.all()[1..])
+        {
+            *dest = Frame {
+                x: f.x + b.min.x,
+                y: f.y + b.min.y,
+                size: f.size,
+            };
+        }
+        let mut next = at + 1;
+        let children: Vec<_> = n
+            .children()
+            .iter()
+            .filter_map(|c| {
+                let i = next;
+                next += count(c);
+                (!c.is_float() && c.payload().carve.is_none()).then_some((i, c))
+            })
+            .collect();
+        let mut masks: Vec<Path> = children
+            .iter()
+            .map(|(i, _)| {
+                if self.frames[*i].size.width <= 0. || self.frames[*i].size.height <= 0. {
+                    Ok(Path::default())
+                } else {
+                    RoundedRect::new(bounds(self.frames[*i], None), 0.).map(|r| r.path())
+                }
+            })
+            .collect::<Result<_, _>>()?;
+        if e.bend != 0. {
+            if children.len() != 2 {
+                return Err(
+                    mui_geometry::Error::InvalidOptions("bend requires two siblings").into(),
+                );
+            }
+            let a = self.frames[children[0].0];
+            let z = self.frames[children[1].0];
+            let horizontal = z.x >= a.right() - 1e-6;
+            if !horizontal && z.y < a.bottom() - 1e-6 {
+                return Err(
+                    mui_geometry::Error::InvalidOptions("bend requires a row or column").into(),
+                );
+            }
+            let (axis, cut, gap) = if horizontal {
+                (
+                    mui_geometry::SplitAxis::X,
+                    ((a.right() + z.x) * 0.5 - b.min.x) / size.width,
+                    z.x - a.right(),
+                )
+            } else {
+                (
+                    mui_geometry::SplitAxis::Y,
+                    ((a.bottom() + z.y) * 0.5 - b.min.y) / size.height,
+                    z.y - a.bottom(),
+                )
+            };
+            let split = mui_geometry::ShapeSplit::new(axis, cut)
+                .gap(gap.max(0.))
+                .bend(e.bend);
+            for (side, mask) in masks.iter_mut().enumerate() {
+                *mask = self.region_cache.resolve(
+                    (at, 4 + side as u8),
+                    Operation::SplitMask(b, split, side == 1),
+                    self.spec.offsets,
+                    self.spec.geometry,
+                )?;
+            }
+        }
+
+        for ((i, child), mask) in children.into_iter().zip(masks) {
+            let path = self.region_cache.resolve(
+                (i, 6),
+                Operation::Combine(interior.clone(), mask, BooleanOp::Intersection),
+                self.spec.offsets,
+                self.spec.geometry,
+            )?;
+            // A child's outward border belongs inside its allocation too. Reserve
+            // it before fitting the child, and retain the allocation as a paint cap.
+            self.region_envelopes.insert(i, path.clone());
+            let mut path = path;
+            if let Some(ramp) = &child.payload().border_ramp {
+                ramp.validate()?;
+                let outward = 1. - ramp.align.inward();
+                if outward > 0. && ramp.from.1.max(ramp.to.1) > 0. {
+                    if ramp
+                        .anchor
+                        .as_ref()
+                        .is_some_and(|id| child.key() != Some(id.as_str()))
+                    {
+                        return Err(mui_geometry::Error::InvalidOptions(
+                            "outward region border anchor must be the child",
+                        )
+                        .into());
+                    }
+                    let anchor = self.frames[i];
+                    self.ramp_anchors.insert(i, anchor);
+                    let mut sweep = ramp.clone();
+                    sweep.from.1 *= outward;
+                    sweep.to.1 *= outward;
+                    let band = self.borders.band(
+                        &format!("outside/{i}"),
+                        &path,
+                        &sweep,
+                        anchor,
+                        0.1 / self.spec.device_scale.unwrap_or(1.),
+                    )?;
+                    let band = self.region_cache.resolve(
+                        (i, 8),
+                        Operation::Sweep(band),
+                        self.spec.offsets,
+                        self.spec.geometry,
+                    )?;
+                    path = self.region_cache.resolve(
+                        (i, 9),
+                        Operation::Combine(path, band, BooleanOp::Difference),
+                        self.spec.offsets,
+                        self.spec.geometry,
+                    )?;
+                }
+            } else if let Some(stroke) = &child.payload().style.stroke {
+                let width = stroke.width.unwrap_or(self.spec.theme.stroke_width);
+                if !width.is_finite() || width < 0. {
+                    return Err(SceneError::InvalidRadius);
+                }
+                let outward = width * (1. - child.payload().border_align.inward());
+                if outward > 0. {
+                    path = self.region_cache.resolve(
+                        (i, 9),
+                        Operation::Inset(path, outward),
+                        self.spec.offsets,
+                        self.spec.geometry,
+                    )?;
+                }
+            }
+            if let Some(b) = Bounds::from_points(
+                path.flatten(
+                    self.spec.offsets.flatten_tolerance,
+                    self.spec.offsets.max_points,
+                )?
+                .concat(),
+            ) {
+                let size = Size::new(b.max.x - b.min.x, b.max.y - b.min.y);
+                let root = child.clone().size(size.width, size.height);
+                let layout = mui_layout::resolve_with(
+                    &root,
+                    Some(size),
+                    self.spec.limits,
+                    th.spacing,
+                    |e, room| fit(&mut self.runs, th, e, room),
+                )?;
+                for (dest, f) in self.frames[i..i + count(child)]
+                    .iter_mut()
+                    .zip(layout.all())
+                {
+                    *dest = Frame {
+                        x: f.x + b.min.x,
+                        y: f.y + b.min.y,
+                        size: f.size,
+                    };
+                }
+            } else {
+                for f in &mut self.frames[i..i + count(child)] {
+                    f.size = Size::ZERO;
+                }
+            }
+            self.regions.insert(i, path);
+        }
+        Ok(())
+    }
+
     /// The node's own shape, with every [`Carve`] child taken out of it (or
     /// intersected with it). A carved outline is a path like a welded one:
     /// no analytic rect, so shells, strokes and clips all follow the result.
@@ -861,6 +1183,9 @@ impl<'a> Walk<'a> {
         frame: Frame,
         first: usize,
     ) -> Result<(Path, Option<RoundedRect>, bool, Vec<RoundedRect>), SceneError> {
+        if let Some(path) = self.regions.get(&first.saturating_sub(1)) {
+            return Ok((path.clone(), None, false, Vec::new()));
+        }
         if n.payload().outline.is_some() && n.children().iter().any(|c| c.payload().carve.is_some())
         {
             return Err(mui_geometry::Error::InvalidOptions(
@@ -957,7 +1282,7 @@ impl<'a> Walk<'a> {
                 eat(scale.to_bits());
             }
         }
-        hash_geometry_node(n, self.frames, first.saturating_sub(1), &mut eat);
+        hash_geometry_node(n, &self.frames, first.saturating_sub(1), &mut eat);
         h
     }
 
@@ -988,6 +1313,7 @@ impl<'a> Walk<'a> {
             // (concave) corner remains the theme contract; a pair such as
             // `(20., 14.)` is two radii, never an elliptical radius.
             Radius::Px(r) => (r, th.corners.concave),
+            Radius::Pair(convex, concave) => (convex, concave),
             Radius::Token(c) => (th.corners.get(c), th.corners.concave),
             Radius::Scale(k) => {
                 let p = th.corners.scaled(k).ok_or(SceneError::InvalidRadius)?;
@@ -998,7 +1324,7 @@ impl<'a> Walk<'a> {
                 th.corners.concave,
             ),
         };
-        if !(convex.is_finite() && convex >= 0.0) {
+        if !(convex.is_finite() && convex >= 0.0 && concave.is_finite() && concave >= 0.0) {
             return Err(SceneError::InvalidRadius);
         }
         if !s.weld || n.children().is_empty() {
@@ -1075,7 +1401,9 @@ impl<'a> Walk<'a> {
         let gpu = n.payload().weld_backend.unwrap_or(self.spec.weld_backend)
             == crate::WeldBackend::AnalyticGpu;
         if gpu && n.is_clip() {
-            return Err(SceneError::UnsupportedWeld("GPU weld cannot itself clip children to its changing union; put a normal clipping viewport above it"));
+            return Err(SceneError::UnsupportedWeld(
+                "GPU weld cannot itself clip children to its changing union; put a normal clipping viewport above it",
+            ));
         }
         crate::material_weld::check_plate(n, false)?;
         if n.payload().outline.is_some() || n.payload().style.weld {
@@ -1135,7 +1463,9 @@ impl<'a> Walk<'a> {
                         .iter()
                         .any(|child| child.payload().carve.is_some()))
             {
-                return Err(SceneError::UnsupportedWeld("analytic GPU weld requires at most three ordinary rounded-rectangle plates; custom/carved/nested outlines need an explicit reference backend"));
+                return Err(SceneError::UnsupportedWeld(
+                    "analytic GPU weld requires at most three ordinary rounded-rectangle plates; custom/carved/nested outlines need an explicit reference backend",
+                ));
             }
             let (outline, rect, _, _) = self.outline(c, f, first + 1)?;
             if gpu && rect.is_none() {
@@ -1315,8 +1645,13 @@ impl<'a> Walk<'a> {
             None => self.outline(n, frame, self.i)?,
         };
 
+        self.partition(n, &outline, frame, at)?;
         self.key = key.clone();
         let clear = Fill::Color(Color::oklcha(0.0, 0.0, 0.0, 0.0));
+        let envelope = self.region_envelopes.get(&at).cloned();
+        if let Some(p) = &envelope {
+            self.push(Layer::Clip, p.clone(), None, &clear, under);
+        }
         // A mask composites against what the subtree drew, so the subtree
         // needs a layer of its own even when nothing asked to blend.
         let masked = !s.mask.is_none();
@@ -1370,6 +1705,7 @@ impl<'a> Walk<'a> {
             ),
         };
 
+        let border_background = self.paint.len();
         let (mut cur, mut cur_rect) = (outline.clone(), rect);
         for (i, (d, f)) in s.shells.iter().enumerate() {
             let d = d.resolve(th.spacing);
@@ -1409,29 +1745,47 @@ impl<'a> Walk<'a> {
         // a child fill cannot erase the shared outer border. Ordinary nodes
         // retain the historical ordering (stroke before their content).
         let mut deferred_stroke: Option<(Path, Option<RoundedRect>, Fill, f64)> = None;
-        if let Some(st) = s.stroke.as_ref().filter(|_| material.is_none()) {
+        if let Some(st) = s
+            .stroke
+            .as_ref()
+            .filter(|_| material.is_none() && e.border_ramp.is_none())
+        {
             let w = st.width.unwrap_or(th.stroke_width);
             if !(w.is_finite() && w >= 0.0) {
                 return Err(SceneError::InvalidRadius);
             }
-            // Inside the frame, not straddling it: a centred stroke leaves
-            // half its width outside the box layout gave the node, where a
-            // window edge or a gapless neighbour eats it.
-            let stroked = match rect {
-                Some(rr) => rr.inset(w / 2.0)?.shape.map(|r| (r.path(), Some(r))),
-                None => Some((inset_path(&outline, w / 2.0, self.spec.offsets)?.path, None)),
-            };
-            if let Some((path, srect)) = stroked {
-                if s.weld {
-                    deferred_stroke = Some((path, srect, st.fill.clone(), w));
-                } else if let Some(p) = self.push(Layer::Stroke, path, srect, &st.fill, bg) {
-                    p.width = w;
+            if let (crate::BorderAlign::Inside, Some(rr)) = (e.border_align, rect) {
+                let stroked = rr.inset(w / 2.)?.shape;
+                if let Some(rr) = stroked {
+                    if s.weld {
+                        deferred_stroke = Some((rr.path(), Some(rr), st.fill.clone(), w));
+                    } else if let Some(p) =
+                        self.push(Layer::Stroke, rr.path(), Some(rr), &st.fill, bg)
+                    {
+                        p.width = w;
+                    }
+                } else {
+                    deferred_stroke = Some((outline.clone(), None, st.fill.clone(), 0.));
                 }
+            } else {
+                let band = mui_geometry::border_geometry(
+                    &outline,
+                    mui_geometry::WidthProfile::uniform(w),
+                    e.border_align,
+                    self.spec.offsets,
+                    self.spec.geometry,
+                )?
+                .band;
+                deferred_stroke = Some((band, None, st.fill.clone(), 0.));
             }
         }
 
         // A canvas's tagged draws, collected as the surface's hit shapes.
         let mut hits = Vec::new();
+        let shaped_content = self.regions.contains_key(&at) && !matches!(e.content, Content::None);
+        if shaped_content {
+            self.push(Layer::Clip, outline.clone(), rect, &clear, bg);
+        }
         match &e.content {
             Content::Text(t) => {
                 let size = e.text_size.unwrap_or(th.text);
@@ -1480,7 +1834,9 @@ impl<'a> Walk<'a> {
                     // One line sits centred on ascent+descent, or on the
                     // baseline its parent chose; a stack centres the block.
                     let dy = match (base, n) {
-                        (Some(b), 1) => b,
+                        (Some(b), _) => {
+                            b + li as f64 * snap(run.line_height, self.spec.device_scale)
+                        }
                         (_, 1) => {
                             frame.y
                                 + (frame.size.height - run.ascent - run.descent) / 2.0
@@ -1539,6 +1895,9 @@ impl<'a> Walk<'a> {
             Content::None => {}
         }
 
+        if shaped_content {
+            self.push(Layer::Unclip, Path::default(), None, &clear, bg);
+        }
         let scrolled = n.scroll_offset();
         let mut content = frame.size;
         if n.is_scroll() {
@@ -1606,7 +1965,7 @@ impl<'a> Walk<'a> {
         // A weld is one contour, so its children paint inside it: a square
         // tab's own fill stops at the filleted corner instead of poking past
         // the shared outline.
-        let clips = n.is_clip() || s.weld;
+        let clips = n.is_clip() || s.weld || e.inside.is_some() || self.regions.contains_key(&at);
         if clips {
             let b = match &material {
                 Some(m) => m.image_rect.bounds(),
@@ -1650,9 +2009,21 @@ impl<'a> Walk<'a> {
                 let own = match &c.payload().content {
                     Content::Text(t) => {
                         let s = c.payload().text_size.unwrap_or(th.text);
-                        self.runs
-                            .run(t, s, c.payload().weight)?
-                            .map(|r| f.y + (f.size.height - r.ascent - r.descent) / 2.0 + r.ascent)
+                        let lines = self.runs.lines(
+                            t,
+                            s,
+                            c.payload().weight,
+                            f.size.width,
+                            c.payload().lines,
+                        );
+                        self.runs.run(&lines[0], s, c.payload().weight)?.map(|r| {
+                            let height = if lines.len() == 1 {
+                                r.ascent + r.descent
+                            } else {
+                                lines.len() as f64 * snap(r.line_height, self.spec.device_scale)
+                            };
+                            f.y + (f.size.height - height) / 2.0 + r.ascent
+                        })
                     }
                     _ => None,
                 };
@@ -1711,20 +2082,113 @@ impl<'a> Walk<'a> {
         self.i = end;
         path.truncate(mark);
         self.base_y = outer_base;
+        if clips {
+            self.key = key.clone();
+            self.push(Layer::Unclip, Path::default(), None, &clear, bg);
+        }
         if let Some((stroke_path, stroke_rect, fill, width)) = deferred_stroke {
             self.key = key.clone();
             if let Some(p) = self.push(Layer::Stroke, stroke_path, stroke_rect, &fill, bg) {
                 p.width = width;
             }
         }
+        if let Some(ramp) = &e.border_ramp {
+            ramp.validate()?;
+            if material.is_some() {
+                return Err(SceneError::UnsupportedWeld(
+                    "border ramp requires a fixed outline, not material welding",
+                ));
+            }
+            fn find(n: &El, id: &str, at: usize) -> Option<usize> {
+                if n.key() == Some(id) {
+                    return Some(at);
+                }
+                let mut next = at + 1;
+                for child in n.children() {
+                    if let Some(index) = find(child, id, next) {
+                        return Some(index);
+                    }
+                    next += count(child);
+                }
+                None
+            }
+            let named_frame = |id: &mui_layout::Id| -> Result<_, SceneError> {
+                if let Some(frame) = self.ramp_frames.get(&(at, id.clone())) {
+                    return Ok(*frame);
+                }
+                let index = find(n, id.as_str(), at).ok_or(mui_geometry::Error::InvalidOptions(
+                    "border ramp descendant missing",
+                ))?;
+                Ok(self.frames[index])
+            };
+            let anchor = match self.ramp_anchors.get(&at) {
+                Some(frame) => *frame,
+                None => match &ramp.anchor {
+                    None => frame,
+                    Some(id) => named_frame(id)?,
+                },
+            };
+            if anchor.size.width <= 0.0 {
+                return Err(
+                    mui_geometry::Error::InvalidOptions("border ramp anchor has no width").into(),
+                );
+            }
+            let mut sweep = ramp.clone();
+            if ramp.align == crate::BorderAlign::Center {
+                sweep.from.1 *= 0.5;
+                sweep.to.1 *= 0.5;
+            }
+            let mut band = self.borders.band(
+                &key,
+                &outline,
+                &sweep,
+                anchor,
+                0.1 / self.spec.device_scale.unwrap_or(1.0),
+            )?;
+            // Extend the same material into the tabs and their concave shoulders.
+            // The final welded outline supplies all corners through the clip.
+            let shoulder = match s.radius {
+                Radius::Pair(_, concave) => concave,
+                Radius::Scale(k) => th.corners.concave * k,
+                _ => th.corners.concave,
+            };
+            crate::border_ramp::decorate(&mut band, ramp, anchor, shoulder, named_frame)?;
+            if ramp.align == crate::BorderAlign::Outside {
+                let merged = self.region_cache.resolve(
+                    (at, 7),
+                    Operation::Sweep(band),
+                    self.spec.offsets,
+                    self.spec.geometry,
+                )?;
+                band = mui_geometry::boolean_paths(
+                    &merged,
+                    &outline,
+                    BooleanOp::Difference,
+                    self.spec.offsets,
+                    self.spec.geometry,
+                )?;
+            }
+            if let Some(bounds) = Bounds::from_points(band.flatten(0.1, 250_000)?.concat()) {
+                self.key = key.clone();
+                let start = self.paint.len();
+                if ramp.align == crate::BorderAlign::Inside {
+                    self.push(Layer::Clip, outline.clone(), rect, &clear, bg);
+                }
+                self.push(Layer::Stroke, band, None, &ramp.fill(anchor, bounds), bg);
+                if ramp.align == crate::BorderAlign::Inside {
+                    self.push(Layer::Unclip, Path::default(), None, &clear, bg);
+                }
+                if !ramp.tabs.is_empty() {
+                    let paint: Vec<_> = self.paint.drain(start..).collect();
+                    self.paint
+                        .splice(border_background..border_background, paint);
+                }
+            }
+        }
         if let Some(m) = &material {
             // Consume only immediate source plates. Text, canvases, children,
             // clips and semantics keep their own authoring and painter order.
             self.paint.retain(|p| !m.consumes(&p.key, p.layer));
-        }
-        if clips {
-            self.key = key.clone();
-            self.push(Layer::Unclip, Path::default(), None, &clear, bg);
         }
         if blended.is_some() {
             self.key = key.clone();
@@ -1733,6 +2197,9 @@ impl<'a> Walk<'a> {
             }
             self.key = key;
             self.push(Layer::Unblend, Path::default(), None, &clear, bg);
+        }
+        if envelope.is_some() {
+            self.push(Layer::Unclip, Path::default(), None, &clear, bg);
         }
         Ok(())
     }
@@ -1858,9 +2325,15 @@ pub fn resolve_scene_cached(
     let nodes = count(&spec.root);
     let mut w = Walk {
         spec,
-        frames: layout.all(),
+        frames: layout.all().to_vec(),
+        regions: HashMap::new(),
+        region_envelopes: HashMap::new(),
         runs,
         welds: &mut text.welds,
+        borders: &mut text.borders,
+        region_cache: &mut text.region_cache,
+        ramp_anchors: HashMap::new(),
+        ramp_frames: HashMap::new(),
         weld_cache,
         i: 0,
         key: Arc::from(""),
@@ -1908,6 +2381,7 @@ pub fn resolve_scene_cached(
         k += 1;
     }
     w.welds.finish_frame();
+    let layout = layout.reframe(&spec.root, w.frames)?;
     let (paint, surfaces, at, external_welds) = (w.paint, w.surfaces, w.at, w.external_welds);
     Ok(ResolvedScene {
         layout,

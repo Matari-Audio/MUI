@@ -220,6 +220,10 @@ impl<P> Node<P> {
     pub fn is_container(&self) -> bool {
         !matches!(self.kind, Kind::Leaf | Kind::Content)
     }
+    /// Mutable spacing for retained animation of a coupled shape gap.
+    pub fn gap_mut(&mut self) -> &mut Spacing {
+        &mut self.gap
+    }
     pub fn gap(mut self, gap: impl Into<Spacing>) -> Self {
         self.gap = gap.into();
         self
