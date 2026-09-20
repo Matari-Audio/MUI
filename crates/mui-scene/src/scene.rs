@@ -1906,13 +1906,18 @@ impl<'a> Walk<'a> {
         let scrolled = n.scroll_offset();
         let mut content = frame.size;
         if n.is_scroll() {
-            // The children's extent, read back from their frames.
+            // Only in-flow child boxes belong to this viewport. A nested
+            // viewport owns its own overflow; floats do not enlarge the flow.
             let pad = n.padding(th.spacing);
-            let sub = &self.frames[at + 1..at + count(n)];
-            let (mut right, mut bottom) = (frame.x, frame.y);
-            for f in sub {
-                right = right.max(f.right());
-                bottom = bottom.max(f.bottom());
+            let (mut right, mut bottom) = (frame.x - scrolled[0], frame.y - scrolled[1]);
+            let mut child_at = at + 1;
+            for child in n.children() {
+                if !child.is_float() {
+                    let f = self.frames[child_at];
+                    right = right.max(f.right());
+                    bottom = bottom.max(f.bottom());
+                }
+                child_at += count(child);
             }
             content = Size::new(
                 (right - frame.x + scrolled[0] + pad.right - pad.left).max(0.0),
