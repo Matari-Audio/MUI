@@ -638,6 +638,50 @@ async fn gpu() -> Option<(wgpu::AdapterInfo, Vec<Row>)> {
         print_cache_stats("vello_hybrid cached", stats.get());
     }
 
+    #[cfg(feature = "gpu-effects")]
+    for (name, bytes) in [
+        (
+            "tiles per-tile",
+            u64::from(u32::from(W).div_ceil(256) * u32::from(H).div_ceil(256)) * 260 * 260 * 4,
+        ),
+        ("tiles adaptive", 64 * 1024 * 1024),
+    ] {
+        let texture = target(&device, wgpu::TextureUsages::RENDER_ATTACHMENT);
+        let view = texture.create_view(&Default::default());
+        let mut renderer = mui_vello::effects::TiledEffects::new(
+            &device,
+            &queue,
+            texture.format(),
+            [W.into(), H.into()],
+            mui_vello::effects::Budget::default(),
+            bytes,
+        )
+        .await
+        .expect("tiled renderer");
+        for case in CASES {
+            let mut submissions = 0;
+            let mut full_redraws = 0;
+            rows.push(run(name, case, font, IMAGES, |scene| {
+                let start = Instant::now();
+                renderer
+                    .render(scene, Affine::IDENTITY, &view)
+                    .expect("tiles render");
+                let encode = since(start);
+                let start = Instant::now();
+                device
+                    .poll(wgpu::PollType::wait_indefinitely())
+                    .expect("poll");
+                submissions += renderer.stats().tile_submissions;
+                full_redraws += usize::from(renderer.stats().full_redraw);
+                (encode, since(start))
+            }));
+            println!(
+                "{name} {}: {submissions} tile submissions, {full_redraws} full redraws",
+                case.name()
+            );
+        }
+    }
+
     #[cfg(feature = "bench-classic")]
     rows.extend(classic::rows(&device, &queue, font));
 
