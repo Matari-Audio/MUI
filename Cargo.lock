@@ -1928,6 +1928,19 @@ name = "mui-motion"
 version = "0.3.2"
 
 [[package]]
+name = "mui-playground"
+version = "0.3.2"
+dependencies = [
+ "epaint_default_fonts",
+ "mui-scene",
+ "mui-vello",
+ "proc-macro2",
+ "syn 2.0.119",
+ "vello_cpu 0.2.0",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "mui-preview"
 version = "0.3.2"
 dependencies = [

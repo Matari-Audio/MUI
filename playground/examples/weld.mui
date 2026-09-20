@@ -1,0 +1,12 @@
+// One contour. Edit the sizes, then change the radius.
+row![
+    leaf(76., 116.).fill(Secondary),
+    leaf(250., 230.).fill(Primary),
+    leaf(76., 116.).fill(Secondary),
+]
+.center()
+.gap(0.)
+.weld(Surface)
+.radius(30.)
+.border(Ink, 2.)
+.shell(8., Raised)

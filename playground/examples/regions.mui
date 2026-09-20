@@ -1,0 +1,13 @@
+// Children inherit the curved outline, with a bowed divider.
+row![
+    stack![].flex(1.).fill(Primary),
+    col![
+        stack![].flex(1.).fill(Secondary),
+        stack![].flex(1.).fill(Tertiary),
+    ].flex(1.).inside(6.),
+]
+.w(440.).h(290.)
+.radius(80.)
+.inside(8.)
+.bend(0.2)
+.border(Ink, 2.)

@@ -5,14 +5,48 @@ plugins. You write a tree the way you would write CSS flexbox with tokens; MUI
 lays it out intrinsically, turns every welded group into one filleted outline,
 derives every shell as a true parallel inset of the outline before it, colours
 every surface from a role palette, and hands a z-ordered paint list to Vello.
-Nothing is placed absolutely: a float names a region around another node and
-a slider thumb sits where two flex weights put it. **No runtime style
+Layout is intrinsic: a float names a region around another node and
+a slider thumb sits where two flex weights put it; explicit offsets are available when needed. **No runtime style
 strings**: there is no `.class("btn btn-sm")` and there will not be one --
 every value in the DSL is a Rust expression the compiler already checks.
 
 Every library crate is `#![forbid(unsafe_code)]`, dependency-light, and
 compiles to `wasm32-unknown-unknown`. The native preview host is the one
 exception.
+
+## Try it in your browser
+
+[Open the MUI playground](https://matari-audio.github.io/MUI/) to edit welded
+shapes, curved partitions, cutouts and layouts with immediate visual feedback.
+It accepts a documented subset of Rust builder expressions and runs the actual
+MUI scene engine with **Vello CPU compiled to WebAssembly** in a worker. It does
+not compile arbitrary Rust or measure native GPU performance. Edits stay in your
+browser; shared links carry the source in their URL fragment.
+
+Run locally with `./playground/build.sh` (requires the WASM Rust target and
+`wasm-bindgen-cli` 0.2.128), then serve `playground/` with any static web server.
+
+## Under the hood
+
+MUI owns layout, contours, input, animation and the paint list. Vello renders it:
+`mui-vello` provides CPU rendering, Vello Hybrid GPU rendering, and retained GPU
+effects. Native hosts can keep `TiledEffects` alive between frames to reuse clean
+tiles; broad changes switch to one full-scene render when the memory budget
+allows it. `HybridEffects` is the whole-scene retained alternative. The host must
+select and retain these renderers to benefit from their caches.
+
+GPUI is an experimental integration, not the MUI graphics engine. Classic Vello
+compute and Hybrid comparisons live in the [rendering investigation](docs/rendering-investigation.md),
+including measured results and their limits.
+
+## Contours are layout too
+
+Use `.weld(fill)` for a shared outline, `.inside(padding)` to partition a parent's
+contour, `.bend(amount)` for a curved divider, and `.cut(shape)` / `.keep(shape)`
+for boolean regions. Borders and parallel shells follow the resulting outline.
+`BorderRamp` gives a shared contour continuous color while identifying its tabs.
+See the [shape-layout guide](docs/shape-layout.md) for the full contracts and
+composable examples; the browser playground supports a smaller, explicit subset.
 
 ## One frame
 
