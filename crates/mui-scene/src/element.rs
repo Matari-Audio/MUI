@@ -256,6 +256,10 @@ pub struct Element {
     pub weld_quality: Option<crate::WeldQuality>,
     /// Custom local shape; geometry is validated before publication.
     pub outline: Option<Outline>,
+    pub border_ramp: Option<crate::BorderRamp>,
+    pub inside: Option<Spacing>,
+    pub bend: f64,
+    pub border_align: crate::BorderAlign,
 }
 
 /// A styled layout node: the type every constructor here returns.
@@ -568,6 +572,14 @@ impl Paints for Style {
 /// ```
 pub trait Styled: Paints {
     fn element_mut(&mut self) -> &mut Element;
+
+    /// Transform width and color on this node's single, fixed inside border.
+    /// Supports ordinary, custom, and legacy welded contours on every renderer.
+    fn border_ramp(mut self, ramp: crate::BorderRamp) -> Self {
+        self.style_mut().stroke = None;
+        self.element_mut().border_ramp = Some(ramp);
+        self
+    }
 
     /// Weld immediate non-floating, non-excluded plate children. `Weld::all()`
     /// blends fills and borders. This is not the legacy `.weld(fill)` helper.

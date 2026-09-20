@@ -123,6 +123,7 @@ assert_eq!(scene.surface("tab").unwrap().frame.size.width, 92.0);
 | `.full()` | all of the parent, both axes |
 | `.animate()`, `.transition(Spring::new(0.3, 1.0))` | this node's fill, stroke, radius, text size and shadow spring to their new values |
 | `.shell(d, fill)` | a parallel inset of the outline before it, cumulative |
+| `.inside(2.)`, `.bend(0.2)` | [shape-aware layout](docs/shape-layout.md): nested regions inherit their parent's contour, with border-aware padding and normal-clearance split gaps |
 | `.weld(fill)` | paint the union of the children's frames as one filleted shape; its shadow is the union of their blurs |
 | `.cut(el)`, `.keep(el)` | boolean difference and intersection against a child placed like any floating one: a hole, or only the overlap. The shell, the stroke and the clip all follow the result, as they do a weld. A leaf has no children, so wrap one in `stack![..]` to carve it |
 | `.mask(fill)` | paint `fill` source-atop the node's own subtree: a scroll fade is a ramp from transparent to the surface colour. It paints onto the shape, it cannot erase alpha -- an alpha mask layer is CPU-only in vello |
@@ -364,7 +365,7 @@ light-theme half because there is nothing in it a mode could contradict.
 | crate | what it owns |
 |---|---|
 | `mui-layout` | the flex solver: tokens, pct, aspect, grid, anchors, frames in tree order, and `Id`, the composable node name they are keyed by |
-| `mui-geometry` | Booleans, fillets, exact rounded-rect insets, general parallel offsets, and the `Spacing` scale layout and style are both written in |
+| `mui-geometry` | Booleans, fillets, parallel offsets, variable-width border regions, curved shape partitions, and the `Spacing` scale layout and style are both written in |
 | `mui-text` | glyph and string outlines from a (variable) font |
 | `mui-motion` | motion maths, dependency-free: the `Spring` every animated property chases, and editable normalized cubic Bezier response `curve`s |
 | `mui-style` | theme data: Oklch `Color`, `Palette`, `Role`, `Fill`, `Gradient`, `Shadow`, `Elevation`, `Radius`, `Style` and the `Theme` they resolve against |

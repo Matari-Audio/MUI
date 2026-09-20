@@ -20,6 +20,11 @@ mod fillet;
 mod math;
 mod nesting;
 mod offset;
+mod regions;
+pub use regions::{
+    boolean_paths, border_geometry, boundary_band, union_contours, BorderAlign, BorderGeometry,
+    ShapeSplit, SplitAxis, WidthProfile,
+};
 mod path;
 mod spacing;
 pub use nesting::{inset_arc_radius, inset_for_stroked_gap, InsetRect, NestedRadius, RoundedRect};

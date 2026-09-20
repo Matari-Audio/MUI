@@ -27,6 +27,11 @@
 //! ```
 #![forbid(unsafe_code)]
 
+mod regions;
+pub use mui_geometry::BorderAlign;
+pub use regions::ShapeLayout;
+mod border_ramp;
+pub use border_ramp::BorderRamp;
 mod dsl;
 mod element;
 mod external;
@@ -64,10 +69,10 @@ pub mod prelude {
     pub use crate::Role::*;
     pub use crate::{
         canvas, caption, col, column, fits, grid, label, leaf, overlay, resolve_scene, row, spacer,
-        stack, text, title, weld, weld_morph, Align, Area, Color, Corner, Cursor, Draw, El,
-        Elevation, Fill, Fit, Gradient, Id, Image, IntoEl, IntoLen, Justify, Kind, Len, Match, Mix,
-        Paints, Pin, Radius, Role, SceneSpec, Shadow, Size, State, Style, Styled, Sugar, Theme,
-        Weight, Weld, WeldBackend, WeldChannel, WeldQuality,
+        stack, text, title, weld, weld_morph, Align, Area, BorderAlign, BorderRamp, Color, Corner,
+        Cursor, Draw, El, Elevation, Fill, Fit, Gradient, Id, Image, IntoEl, IntoLen, Justify,
+        Kind, Len, Match, Mix, Paints, Pin, Radius, Role, SceneSpec, Shadow, ShapeLayout, Size,
+        State, Style, Styled, Sugar, Theme, Weight, Weld, WeldBackend, WeldChannel, WeldQuality,
     };
     pub use mui_geometry::{CornerStyle, Path, Point};
     pub use mui_layout::Spacing;

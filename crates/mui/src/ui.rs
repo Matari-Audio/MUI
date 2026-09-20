@@ -1179,7 +1179,7 @@ impl Ui {
 }
 
 /// Every numeric paint channel of `e`, in a fixed order, replaced by
-/// `ch(index, declared)`. Sizes and layout are deliberately absent.
+/// `ch(index, declared)`. Shape padding/bend and border widths share this clock.
 fn channels(e: &mut Element, pal: &Palette, ch: &mut impl FnMut(usize, f64) -> f64) {
     if let Some(Paint::Solid(c)) = e.style.fill.paint(pal, pal.background()) {
         let v = [c.lightness(), c.chroma(), c.hue(), c.alpha()];
@@ -1205,6 +1205,22 @@ fn channels(e: &mut Element, pal: &Palette, ch: &mut impl FnMut(usize, f64) -> f
             *v = ch(shells + i, *v).max(0.0);
         }
     }
+    let shape = shells + e.style.shells.len();
+    if let Some(Spacing::Px(pad)) = &mut e.inside {
+        if pad.is_finite() && *pad >= 0. {
+            *pad = ch(shape, *pad).max(0.);
+        }
+    }
+    if e.bend.is_finite() && e.bend.abs() <= 0.45 {
+        e.bend = ch(shape + 1, e.bend).clamp(-0.45, 0.45);
+    }
+    if let Some(ramp) = &mut e.border_ramp {
+        for (i, width) in [&mut ramp.from.1, &mut ramp.to.1].into_iter().enumerate() {
+            if width.is_finite() && *width >= 0. {
+                *width = ch(shape + 2 + i, *width).max(0.);
+            }
+        }
+    }
 }
 
 /// Spring every transitioning node's paint toward what it declared this
@@ -1221,6 +1237,7 @@ fn transitions(
     if let (Some(k), Some(spring)) = (n.key().map(str::to_owned), n.payload().transition) {
         seen.insert(k.clone());
         let list = motion.entry(k).or_default();
+        let coupled_gap = n.payload().inside.is_some_and(|p| p == *n.gap_mut());
         channels(n.payload_mut(), pal, &mut |i, declared| {
             // Each slot is seeded from its own declared value the first time
             // it is touched: `channels` skips channels a node has no paint
@@ -1238,6 +1255,9 @@ fn transitions(
             animating |= s.step(dt);
             s.value
         });
+        if coupled_gap {
+            *n.gap_mut() = n.payload().inside.expect("coupled inside");
+        }
     }
     for c in n.children_mut() {
         animating |= transitions(c, pal, motion, seen, dt);
