@@ -105,3 +105,20 @@ MUI_BENCH_SCENE=vectors cargo run -p mui-vello --example bench --features cpu,be
 ## Implemented follow-up: adaptive tiled redraws
 
 `TiledEffects` now renders once when most tiles are dirty and an extra full-window target fits the existing tile budget. Guarded copies refresh the persistent tiles; local changes retain the old path. This follows the investigation's full-redraw fallback recommendation. See [repeated measurements and validation](rendering-evidence/tile-adaptive-notes.md). It remains opt-in and does not change KURV's host backend.
+
+## Uniform border geometry (2026-09-20)
+
+The browser welding example exposed the uniform-border path exhausting its default
+4,096-vertex budget: it used the variable-width sweep, constructing strips and
+round disks at every flattened edge before repeatedly unioning them. Uniform
+width now uses the difference of existing parallel contour offsets. Variable
+widths retain the sweep.
+
+Reproduce with `cargo run -p mui-geometry --release --example uniform_border_bench`.
+On this development desktop, a 400×260 rounded rectangle with a 2px inside border
+measured **6.218 ms sweep / 0.335 ms offsets (18.58×)**, median of 51 warmed samples.
+The reference gets a 65,536-vertex allowance so it can finish; this benchmark
+measures uncached geometry construction, not GPU time or KURV frame rate.
+The regression check compares coverage with the old sweep across holes and all
+three border alignments. The default-budget welded example also resolves and
+renders in native and WASM playground checks.

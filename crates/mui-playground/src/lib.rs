@@ -257,7 +257,8 @@ pub fn render(source: &str, width: u16, height: u16) -> Result<Frame, String> {
     let mut spec = SceneSpec::new(root).offered(Size::new(width.into(), height.into()));
     spec.font = Some(Arc::from(epaint_default_fonts::HACK_REGULAR));
     spec.theme.palette =
-        mui_scene::Palette::from_seed(Color::oklch(0.75, 0.17, 155.), mui_scene::Mode::Dark);
+        mui_scene::Palette::from_seed(Color::oklch(0.75, 0.14, 260.), mui_scene::Mode::Dark);
+    spec.theme.palette.neutral = mui_scene::Palette::NEUTRAL.neutral;
     let scene = resolve_scene(&spec).map_err(|e| e.to_string())?;
     let mut ctx = vello_cpu::RenderContext::new(width, height);
     let mut resources = vello_cpu::Resources::default();

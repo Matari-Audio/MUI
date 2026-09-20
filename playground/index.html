@@ -1,25 +1,37 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Build shapes, weld contours and explore MUI's Rust layout DSL live in your browser.">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Edit and render MUI shape scenes in your browser.">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' blob: data:; worker-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'">
-  <title>MUI — Shape playground</title><link rel="stylesheet" href="style.css">
+  <title>MUI / Playground</title>
+  <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <header><a class="brand" href="./" aria-label="MUI playground home"><span class="mark">m</span>MUI<span class="muted">/ playground</span></a><nav><a href="https://github.com/Matari-Audio/MUI/blob/main/docs/shape-layout.md">Shape guide ↗</a><a href="https://github.com/Matari-Audio/MUI">GitHub ↗</a></nav></header>
+  <header>
+    <a class="brand" href="./" aria-label="MUI playground home"><span class="mark">m</span><span>MUI <small>/ playground</small></span></a>
+    <nav><a href="https://github.com/Matari-Audio/MUI/blob/main/docs/shape-layout.md">Shape guide ↗</a><a href="https://github.com/Matari-Audio/MUI">GitHub ↗</a></nav>
+  </header>
   <main>
-    <section class="intro"><div><p class="eyebrow">MATARI UI · LIVE SHAPE LAB</p><h1>Think in shapes.<br><span>Build something fluid.</span></h1><p class="lede">A few lines. One continuous surface. Explore the same geometry and layout engine that powers our native interfaces.</p></div><div class="intro-aside"><span class="dot"></span> RUST → WEBASSEMBLY<p>Local execution.<br>No account. No round trip.</p></div></section>
     <section class="workspace" aria-label="Interactive MUI editor">
-      <div class="editor-pane"><div class="pane-heading"><span><i class="file-icon"></i>scene.rs</span><span class="badge">RUST DSL SUBSET</span></div>
-        <div class="examples" aria-label="Example scenes"><button data-example="weld" aria-pressed="true">01 Weld</button><button data-example="regions" aria-pressed="false">02 Regions</button><button data-example="cut" aria-pressed="false">03 Cutouts</button><button data-example="layout" aria-pressed="false">04 Layout</button></div>
-        <label class="sr-only" for="source">MUI scene expression</label><textarea id="source" spellcheck="false" autocapitalize="off" autocomplete="off" aria-describedby="editor-help" placeholder="Loading the example…"></textarea>
-        <div class="editor-bottom"><span id="editor-help">Live preview · Ctrl / ⌘ + Enter to run</span><button id="run" class="primary">Run scene <span>↗</span></button></div>
+      <div class="editor-pane">
+        <div class="pane-heading"><span><i class="file-icon" aria-hidden="true"></i>scene.rs</span><span class="badge">Rust DSL subset</span></div>
+        <div class="examples" aria-label="Example scenes"><button data-example="weld" aria-pressed="true">Weld</button><button data-example="regions" aria-pressed="false">Regions</button><button data-example="cut" aria-pressed="false">Cutouts</button><button data-example="layout" aria-pressed="false">Layout</button></div>
+        <label class="sr-only" for="source">MUI scene expression</label>
+        <textarea id="source" spellcheck="false" autocapitalize="off" autocomplete="off" aria-describedby="editor-help" placeholder="Loading the example…"></textarea>
+        <div class="editor-bottom"><span id="editor-help">Auto-runs · Ctrl / ⌘ + Enter</span><div class="editor-actions"><button id="reset" title="Restore the selected example">Reset</button><button id="run" class="primary">Run</button></div></div>
       </div>
-      <div class="preview-pane"><div class="pane-heading"><span><span class="dot"></span> Live canvas</span><div class="preview-actions"><button id="reset" title="Restore the selected example">Reset</button><button id="export">Export PNG ↓</button></div></div><div class="stage"><canvas id="canvas" width="640" height="480" aria-label="Rendered MUI scene"></canvas><span class="canvas-label">640 × 480</span><div id="loading">Starting the Rust engine…</div></div><div class="preview-bottom"><span id="status" role="status" aria-live="polite">Loading WebAssembly</span><span>VELLO CPU / WASM</span></div></div>
+      <div class="preview-pane">
+        <div class="pane-heading"><span><span class="dot" aria-hidden="true"></span>Live canvas</span><div class="preview-actions"><button id="share">Share</button><button id="export">Export PNG</button></div></div>
+        <div class="stage"><canvas id="canvas" width="640" height="480" aria-label="Rendered MUI scene"></canvas><span class="canvas-label">640 × 480</span><div id="loading">Starting engine…</div></div>
+        <div class="preview-bottom"><span id="status" role="status" aria-live="polite">Loading WebAssembly</span><span>CPU / WASM</span></div>
+      </div>
     </section>
     <pre id="error" role="alert" hidden></pre>
-    <section class="below"><div><p class="eyebrow">START WITH AN IDEA</p><h2>Small expressions.<br>Interesting geometry.</h2><p>Change a dimension, cut a hole, or bend a divider. Your scene stays on this device. Drafts are saved in this browser.</p><button id="share">Copy scene link ↗</button></div><details open><summary>Syntax / what works here</summary><div class="syntax"><p><code>leaf(w, h)</code> · <code>text("hello")</code> · <code>spacer()</code><br><code>row![…]</code> · <code>col![…]</code> · <code>stack![…]</code></p><p><b>Shape</b> <code>.radius(24.) .pill() .weld(Surface)</code><br><code>.cut(leaf(80., 80.)) .keep(leaf(80., 80.))</code></p><p><b>Layout</b> <code>.w(320.) .h(200.) .gap(8.) .pad(16.)</code><br><code>.flex(1.) .center() .offset(10., 0.) .inside(4.) .bend(0.2)</code></p><p><b>Paint</b> <code>.fill(Primary) .border(Ink, 2.) .shell(8., Raised)</code><br><code>Gradient::vertical(Primary, Secondary)</code><br><code>Color::oklch(0.75, 0.17, 155.)</code></p><p class="muted">One expression, numeric literals and named palette roles. No variables, closures, loops or arbitrary Rust. This worker runs MUI geometry and Vello's CPU renderer in WASM; it does not benchmark the native GPU renderer.</p></div></details></section>
-  </main><footer><span>MUI / MADE FOR THE WAY YOU BUILD.</span><span>Open source · Matari Audio</span></footer>
+    <details class="subset"><summary>Supported subset</summary><div class="syntax"><p><code>leaf(w, h)</code> · <code>text("hello")</code> · <code>spacer()</code> · <code>row![…]</code> · <code>col![…]</code> · <code>stack![…]</code></p><p><b>Shape</b> <code>.radius(24.) .pill() .weld(Surface)</code> · <code>.cut(leaf(80., 80.)) .keep(leaf(80., 80.))</code></p><p><b>Layout</b> <code>.w(320.) .h(200.) .gap(8.) .pad(16.)</code> · <code>.flex(1.) .center() .offset(10., 0.) .inside(4.) .bend(0.2)</code></p><p><b>Paint</b> <code>.fill(Primary) .border(Ink, 2.) .shell(8., Raised)</code> · <code>Gradient::vertical(Primary, Secondary)</code> · <code>Color::oklch(0.75, 0.02, 230.)</code></p><p class="muted">One expression with numeric literals and named palette roles. No variables, closures, loops or arbitrary Rust.</p></div></details>
+  </main>
+  <footer><span>MUI / OPEN SOURCE</span><span>Matari Audio</span></footer>
   <script type="module" src="app.js"></script>
-</body></html>
+</body>
+</html>
