@@ -1866,7 +1866,7 @@ dependencies = [
 
 [[package]]
 name = "mui"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "epaint_default_fonts",
  "mui-egui",
@@ -1884,7 +1884,7 @@ dependencies = [
 
 [[package]]
 name = "mui-access"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "accesskit",
  "mui-scene",
@@ -1892,7 +1892,7 @@ dependencies = [
 
 [[package]]
 name = "mui-egui"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "egui",
  "mui-geometry",
@@ -1901,7 +1901,7 @@ dependencies = [
 
 [[package]]
 name = "mui-geometry"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "i_overlay",
  "kurbo",
@@ -1909,7 +1909,7 @@ dependencies = [
 
 [[package]]
 name = "mui-input"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "mui-geometry",
  "mui-layout",
@@ -1918,18 +1918,18 @@ dependencies = [
 
 [[package]]
 name = "mui-layout"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "mui-geometry",
 ]
 
 [[package]]
 name = "mui-motion"
-version = "0.3.1"
+version = "0.3.2"
 
 [[package]]
 name = "mui-preview"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "accesskit_winit",
  "epaint_default_fonts",
@@ -1945,7 +1945,7 @@ dependencies = [
 
 [[package]]
 name = "mui-scene"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "epaint_default_fonts",
  "mui-geometry",
@@ -1958,7 +1958,7 @@ dependencies = [
 
 [[package]]
 name = "mui-style"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "color",
  "mui-geometry",
@@ -1966,7 +1966,7 @@ dependencies = [
 
 [[package]]
 name = "mui-tessellate"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "lyon_tessellation",
  "mui-geometry",
@@ -1974,7 +1974,7 @@ dependencies = [
 
 [[package]]
 name = "mui-text"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "epaint_default_fonts",
  "mui-geometry",
@@ -1989,7 +1989,7 @@ dependencies = [
 
 [[package]]
 name = "mui-truce"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "truce",
  "truce-core",
@@ -1999,7 +1999,7 @@ dependencies = [
 
 [[package]]
 name = "mui-vello"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "epaint_default_fonts",
  "glifo 0.3.0",
@@ -2022,11 +2022,11 @@ dependencies = [
 
 [[package]]
 name = "mui-weld"
-version = "0.3.1"
+version = "0.3.2"
 
 [[package]]
 name = "mui-widgets"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "epaint_default_fonts",
  "mui",
