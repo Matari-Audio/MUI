@@ -177,7 +177,12 @@ pub struct Text {
 impl PartialEq for Text {
     fn eq(&self, o: &Self) -> bool {
         Arc::ptr_eq(&self.font, &o.font)
-            && Arc::ptr_eq(&self.fonts, &o.fonts)
+            && self.fonts.len() == o.fonts.len()
+            && self
+                .fonts
+                .iter()
+                .zip(o.fonts.iter())
+                .all(|(a, b)| Arc::ptr_eq(a, b))
             && self.size == o.size
             && self.origin == o.origin
             && self.glyphs == o.glyphs
@@ -3452,6 +3457,20 @@ mod feature_tests {
         let next_text = next.paint.iter().find_map(|p| p.text.as_ref()).unwrap();
         assert!(Arc::ptr_eq(&t.glyphs, &next_text.glyphs));
         assert_eq!(cache.len(), 1);
+        assert!(
+            s.paint == next.paint,
+            "unchanged text must retain its paint"
+        );
+        let mut changed_face = next_text.clone();
+        changed_face.fonts = next_text
+            .fonts
+            .iter()
+            .map(|font| Arc::from(font.as_ref().to_vec()))
+            .collect();
+        assert!(
+            t != &changed_face,
+            "different font allocations invalidate paint"
+        );
     }
 }
 

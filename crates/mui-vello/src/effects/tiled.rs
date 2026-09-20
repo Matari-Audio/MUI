@@ -13,7 +13,7 @@ const SIDE: u32 = 256;
 const GUARD: u32 = 2;
 struct CachedTile {
     tile: Tile,
-    _texture: wgpu::Texture,
+    texture: wgpu::Texture,
     view: wgpu::TextureView,
 }
 #[derive(Clone, Debug, Default)]
@@ -22,6 +22,8 @@ pub struct TileStats {
     pub total_tiles: usize,
     pub dirty_pixels: u64,
     pub tile_submissions: usize,
+    /// The tile cache was populated from one full-window raster pass.
+    pub full_redraw: bool,
     pub replayed_ops: usize,
     pub culled_ops: usize,
 }
@@ -39,6 +41,7 @@ pub struct TiledEffects {
     paths: PathCache,
     effects: WeldTextures,
     tiles: Vec<CachedTile>,
+    full: Option<CachedTile>,
     bindings: vello_hybrid::TextureBindings,
     damage: DamageTracker,
     limit: u64,
@@ -99,6 +102,7 @@ impl TiledEffects {
             paths: PathCache::new(),
             effects,
             tiles: Vec::new(),
+            full: None,
             bindings: Default::default(),
             damage: Default::default(),
             limit: tile_bytes,
@@ -129,12 +133,27 @@ impl TiledEffects {
         if bytes > self.limit || list.len() > 1024 {
             return Err(Error::Budget("persistent tiles exceed explicit budget"));
         }
+        // The optional full-window target shares the explicit tile budget.
+        // Small budgets and maximum-size viewports keep the per-tile path.
+        let full_size = [size[0] + 2 * GUARD, size[1] + 2 * GUARD];
+        let full_bytes = u64::from(full_size[0]) * u64::from(full_size[1]) * 4;
+        let whole = (list.len() > 1
+            && full_size.iter().all(|s| *s <= max)
+            && bytes + full_bytes <= self.limit)
+            .then_some(Tile {
+                x: 0,
+                y: 0,
+                width: size[0],
+                height: size[1],
+            });
+        self.full = None;
         self.tiles.clear();
         self.bindings = Default::default();
         self.size = size;
         self.present_scene
             .reset_and_resize(size[0] as u16, size[1] as u16);
-        for (i, tile) in list.into_iter().enumerate() {
+        let tile_count = list.len();
+        for (i, tile) in list.into_iter().chain(whole).enumerate() {
             let texture = self.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("MUI retained tile"),
                 size: wgpu::Extent3d {
@@ -147,10 +166,20 @@ impl TiledEffects {
                 dimension: wgpu::TextureDimension::D2,
                 format: wgpu::TextureFormat::Rgba8Unorm,
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::TEXTURE_BINDING,
+                    | wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_SRC
+                    | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             });
             let view = texture.create_view(&Default::default());
+            if i == tile_count {
+                self.full = Some(CachedTile {
+                    tile,
+                    texture,
+                    view,
+                });
+                continue;
+            }
             let id = vello_hybrid::TextureId(i as u64 + 1);
             self.bindings.insert(id, view.clone());
             // Guard pixels are rasterized but never overlap neighboring tiles.
@@ -173,7 +202,7 @@ impl TiledEffects {
             );
             self.tiles.push(CachedTile {
                 tile,
-                _texture: texture,
+                texture,
                 view,
             });
         }
@@ -246,8 +275,21 @@ impl TiledEffects {
         };
         self.paths.frame = self.paths.frame.wrapping_add(1);
         let epoch = self.paths.frame;
-        for &i in dirty {
-            let tile = self.tiles[i].tile;
+        let full_redraw =
+            // Once most tiles need replay, rasterizing the window once avoids
+            // repeated path/text processing. Sparse damage keeps tile culling.
+            dirty.len() > self.tiles.len() / 2 && self.full.is_some();
+        self.stats.full_redraw = full_redraw;
+        let passes = if full_redraw { 1 } else { dirty.len() };
+        for &i in dirty.iter().take(passes) {
+            let target_tile = if full_redraw {
+                self.full
+                    .as_ref()
+                    .expect("full target admitted within budget")
+            } else {
+                &self.tiles[i]
+            };
+            let tile = target_tile.tile;
             let region = tile.rect().inflate(GUARD as f64, GUARD as f64);
             let transform = Affine::translate((-region.x0, -region.y0)) * xf;
             let size = [tile.width + 2 * GUARD, tile.height + 2 * GUARD];
@@ -316,10 +358,40 @@ impl TiledEffects {
                         width: size[0],
                         height: size[1],
                     },
-                    &self.tiles[i].view,
+                    &target_tile.view,
                     self.effects.bindings(),
                 )
                 .map_err(|e| Error::Render(e.to_string()))?;
+            if full_redraw {
+                // Include the same guard band as individual tile rasterization.
+                // The full target starts at (-GUARD, -GUARD), so tile origins
+                // already address their corresponding guard pixels.
+                for cached in &self.tiles {
+                    encoder.copy_texture_to_texture(
+                        wgpu::TexelCopyTextureInfo {
+                            texture: &target_tile.texture,
+                            mip_level: 0,
+                            origin: wgpu::Origin3d {
+                                x: cached.tile.x,
+                                y: cached.tile.y,
+                                z: 0,
+                            },
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        wgpu::TexelCopyTextureInfo {
+                            texture: &cached.texture,
+                            mip_level: 0,
+                            origin: wgpu::Origin3d::ZERO,
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        wgpu::Extent3d {
+                            width: cached.tile.width + 2 * GUARD,
+                            height: cached.tile.height + 2 * GUARD,
+                            depth_or_array_layers: 1,
+                        },
+                    );
+                }
+            }
             // Submit before the same Vello renderer rewrites internal buffers
             // for another tile. No completion wait, mapping or readback occurs.
             self.queue.submit([encoder.finish()]);

@@ -1,0 +1,173 @@
+   Compiling mui-scene v0.3.2 (/home/derpcat/projects/MUI-render-investigation/crates/mui-scene)
+    Finished `test` profile [optimized + debuginfo] target(s) in 4.50s
+     Running unittests src/lib.rs (/mnt/Windows11/DEV_WORKSPACE/Toolchains/User/cargo-target/debug/deps/mui_scene-a74af952aa37e6bd)
+
+running 52 tests
+test dsl::dsl_tests::lengths_and_alignment ... ok
+test dsl::dsl_tests::grid_wraps_five_cells_into_two_rows ... ok
+test dsl::dsl_tests::macros_take_strings_and_els ... ok
+test element::tests::a_faded_role_resolves_through_the_palette ... ok
+test element::tests::join_squares_every_inner_corner_and_keeps_the_strips_own ... ok
+test element::tests::preset_wins_per_field_and_base_loses_per_field ... ok
+test border_ramp::tests::cache_reuses_color_changes_but_invalidates_width_and_contour ... ok
+test element::tests::radius_and_stroke_keep_one_slot_each ... ok
+test border_ramp::tests::widths_follow_the_anchor_and_vector_band_matches_the_ramp ... ok
+test scene::feature_tests::a_canvas_closure_may_capture_a_non_send_handle ... ok
+test scene::feature_tests::a_rect_surface_reads_its_bounds_off_the_rect ... ok
+test scene::feature_tests::a_sticky_header_paints_over_its_section_and_keeps_the_clip ... ok
+test scene::feature_tests::a_stroke_paints_inside_the_frame_it_was_given ... ok
+test border_ramp::tests::edge_tabs_share_one_material_below_controls ... ok
+test scene::feature_tests::a_baseline_row_taller_than_its_text_keeps_the_letters_in_their_frames ... ok
+test scene::feature_tests::a_tagged_draw_becomes_the_surfaces_hit_shape ... ok
+test scene::feature_tests::a_baseline_row_lines_two_sizes_up_on_the_letters ... ok
+test scene::feature_tests::errors_read_as_sentences_not_as_debug ... ok
+test scene::feature_tests::nested_rounded_clips_keep_every_cached_path ... ok
+test scene::feature_tests::rounded_clip_exposes_cached_path_alongside_rect_bounds ... ok
+test scene::feature_tests::a_swapped_readout_keeps_the_reserved_box ... ok
+test border_ramp::tests::internal_divider_shares_the_outer_border_material_and_width ... ok
+test scene::feature_tests::clip_floats_canvas_cursor_and_content ... ok
+test scene::feature_tests::a_text_node_keeps_no_fill_layer_and_no_glyph_path ... ok
+test scene::tests::a_blended_node_is_wrapped_in_a_layer_pair ... ok
+test scene::feature_tests::a_wrapping_baseline_row_gives_every_line_its_own_baseline ... ok
+test scene::tests::a_mask_paints_inside_the_nodes_own_blend_layer ... ok
+test scene::feature_tests::text_cache_keys_on_size_as_well_as_string ... ok
+test scene::feature_tests::weight_reaches_the_run_and_keys_the_cache ... ok
+test scene::tests::a_weld_clips_its_children_to_the_shared_contour ... ok
+test scene::tests::a_welded_shadow_is_one_blurred_rect_per_child ... ok
+test scene::tests::errors_expose_their_source ... ok
+test scene::feature_tests::set_text_updates_only_an_implicit_accessibility_label ... ok
+test scene::tests::an_inset_shadow_paints_over_the_fill_and_clipped_to_the_outline ... ok
+test scene::feature_tests::set_text_keeps_a_wrapped_node_single_line_without_relayout ... ok
+test scene::tests::a_cut_child_leaves_a_hole_and_paints_nothing ... ok
+test scene::feature_tests::a_device_scale_puts_every_edge_and_every_baseline_on_the_grid ... ok
+test scene::tests::roles_resolve_against_the_palette_and_ink_reads_on_its_ground ... ok
+test scene::tests::tokens_pill_and_gradient ... ok
+test scene::tests::failed_commit_is_transactional ... ok
+test scene::tests::weld_ignores_zero_area_children ... ok
+test scene::tests::shells_are_parallel_and_paint_in_z_order ... ok
+test scene::tests::welded_children_keep_their_own_outlines ... ok
+test scene::feature_tests::text_cache_survives_frames_and_carries_glyphs ... ok
+test scene::tests::weld_cache_reuses_only_matching_geometry_inputs ... ok
+test scene::feature_tests::a_wrapped_paragraph_fills_its_column_instead_of_its_longest_line ... ok
+test scene::tests::a_shell_on_a_weld_follows_the_concave_outline ... ok
+test scene::feature_tests::the_same_paragraph_wraps_to_each_width_it_is_given_and_a_row_share_too ... ok
+test scene::feature_tests::a_narrow_column_wraps_a_paragraph_and_grows_taller ... ok
+test scene::tests::weld_cache_stays_bounded_for_many_distinct_welds ... ok
+test scene::tests::welded_stroke_paints_after_child_fills ... ok
+test scene::module_tab_weld::a_square_tab_welds_into_one_contour_with_its_body ... ok
+
+test result: ok. 52 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/baselines.rs (/mnt/Windows11/DEV_WORKSPACE/Toolchains/User/cargo-target/debug/deps/baselines-662898b0931a2bfc)
+
+running 1 test
+test wrapped_text_aligns_its_first_line_without_collapsing_later_lines ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/border_ramp.rs (/mnt/Windows11/DEV_WORKSPACE/Toolchains/User/cargo-target/debug/deps/border_ramp-23a69cfb356bf6d9)
+
+running 2 tests
+test invalid_fields_and_missing_anchors_are_errors ... ok
+test named_anchor_keeps_the_outline_and_emits_one_vector_border ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/material_welding.rs (/mnt/Windows11/DEV_WORKSPACE/Toolchains/User/cargo-target/debug/deps/material_welding-576afef7f24137b6)
+
+running 15 tests
+test default_and_explicit_macros_construct_the_same_policy ... ok
+test a_custom_outline_is_not_silently_reinterpreted_as_solid_when_carved ... ok
+test custom_outline_is_not_a_rectangular_hit_proxy ... ok
+test explicit_off_returns_to_ordinary_painting ... ok
+test unsupported_effects_are_not_silently_lost ... ok
+test legacy_weld_remains_a_vector_operation ... ok
+test excluded_members_keep_their_paints ... ok
+test default_dsl_welds_body_and_border_without_replacing_identity ... ok
+test unchanged_weld_reuses_the_pixel_buffer ... ok
+test descendants_are_not_consumed_with_the_source_plate ... ok
+test baked_weld_clip_is_carried_as_its_actual_shape ... ok
+test morph_does_not_change_intrinsic_layout ... ok
+test shape_only_is_not_border_omission ... ok
+test fractional_layout_origin_does_not_shift_the_baked_device_grid ... ok
+test style_changes_invalidate_pixels ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/native_welding.rs (/mnt/Windows11/DEV_WORKSPACE/Toolchains/User/cargo-target/debug/deps/native_welding-d01737d81602cb7d)
+
+running 6 tests
+test changing_union_is_not_misrepresented_as_a_clip_rectangle ... ok
+test fourth_source_is_rejected_not_cpu_baked ... ok
+test gpu_resolution_never_populates_the_cpu_bake_cache ... ok
+test ids_and_original_plate_surfaces_survive ... ok
+test material_only_update_preserves_the_geometry ... ok
+test morph_is_transactional_and_does_not_relayout ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/regions.rs (/mnt/Windows11/DEV_WORKSPACE/Toolchains/User/cargo-target/debug/deps/regions-ea9369fd3acc380a)
+
+running 10 tests
+test invalid_padding_bend_and_border_fail_before_publication ... ok
+test shaped_canvases_clip_their_own_draws ... ok
+test octagon_split_nests_and_keeps_exact_padding_and_total_gap ... ok
+test vector_weld_is_partitioned_after_the_union ... ok
+test curved_split_has_a_real_gap_and_reverses_direction ... ok
+test inward_ramp_padding_follows_the_actual_sloped_border ... ok
+test outward_child_borders_preserve_the_allocated_gap ... ok
+test ordinary_alignment_reserves_only_the_inward_share ... ok
+test morph_resize_and_cached_resolution_agree ... ok
+test holes_survive_and_consumed_regions_disappear ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/text_cache_hardening.rs (/mnt/Windows11/DEV_WORKSPACE/Toolchains/User/cargo-target/debug/deps/text_cache_hardening-386f376c25154453)
+
+running 3 tests
+test changing_tolerance_invalidates_existing_outlines ... ok
+test live_text_updates_preserve_frames_and_explicit_labels ... ok
+test one_animated_label_cannot_bypass_the_variant_cap ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+   Doc-tests mui_scene
+
+running 34 tests
+test crates/mui-scene/src/dsl.rs - dsl::Sugar::keep (line 86) ... ok
+test crates/mui-scene/src/element.rs - element::Paints::apply (line 534) ... ok
+test crates/mui-scene/src/dsl.rs - dsl::fits (line 194) ... ok
+test crates/mui-scene/src/element.rs - element::Draw::hit (line 54) ... ok
+test crates/mui-scene/src/element.rs - element::Paints::corners (line 405) ... ok
+test crates/mui-scene/src/dsl.rs - dsl::Sugar::cut (line 78) ... ok
+test crates/mui-scene/src/element.rs - element::Carve (line 150) ... ok
+test crates/mui-scene/src/element.rs - element::Paints::opacity (line 464) ... ok
+test crates/mui-scene/src/element.rs - element::Paints (line 338) ... ok
+test crates/mui-scene/src/element.rs - element (line 3) ... ok
+test crates/mui-scene/src/element.rs - element::Paints::elevation (line 439) ... ok
+test crates/mui-scene/src/dsl.rs - dsl::Sugar::join (line 66) ... ok
+test crates/mui-scene/src/element.rs - element::Paints::mask (line 483) ... ok
+test crates/mui-scene/src/element.rs - element::Paints::base (line 520) ... ok
+test crates/mui-scene/src/dsl.rs - dsl (line 4) ... ok
+test crates/mui-scene/src/element.rs - element::Draw::tag (line 76) ... ok
+test crates/mui-scene/src/element.rs - element::Paints::shadow (line 417) ... ok
+test crates/mui-scene/src/element.rs - element::State (line 106) ... ok
+test crates/mui-scene/src/element.rs - element::Paints::shadows (line 428) ... ok
+test crates/mui-scene/src/element.rs - element::Styled (line 568) ... ok
+test crates/mui-scene/src/element.rs - element::Paints::preset (line 504) ... ok
+test crates/mui-scene/src/element.rs - element::Styled::disabled (line 734) ... ok
+test crates/mui-scene/src/element.rs - element::Styled::text_weight (line 650) ... ok
+test crates/mui-scene/src/element.rs - element::StateStyle (line 126) ... ok
+test crates/mui-scene/src/element.rs - element::Styled::on (line 688) ... ok
+test crates/mui-scene/src/element.rs - element::Styled::reserve (line 667) ... ok
+test crates/mui-scene/src/element.rs - element::fits (line 290) ... ok
+test crates/mui-scene/src/lib.rs - (line 17) ... ok
+test crates/mui-scene/src/lib.rs - prelude::step (line 83) ... ok
+test crates/mui-scene/src/lib.rs - prelude::clamp (line 114) ... ok
+test crates/mui-scene/src/lib.rs - prelude::cq (line 99) ... ok
+test crates/mui-scene/src/regions.rs - regions::ShapeLayout::inside (line 13) ... ok
+test crates/mui-scene/src/scene.rs - scene::ResolvedScene::set_text (line 303) ... ok
+test crates/mui-scene/src/scene.rs - scene::SceneSpec::scale (line 89) ... ok
+
+test result: ok. 34 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.76s
+

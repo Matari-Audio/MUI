@@ -1,0 +1,17 @@
+    Checking mui-geometry v0.3.2 (/home/derpcat/projects/MUI-render-investigation/crates/mui-geometry)
+    Checking vello_common v0.2.0
+    Checking mui-weld v0.3.2 (/home/derpcat/projects/MUI-render-investigation/crates/mui-weld)
+    Checking mui-motion v0.3.2 (/home/derpcat/projects/MUI-render-investigation/crates/mui-motion)
+    Checking mui-style v0.3.2 (/home/derpcat/projects/MUI-render-investigation/crates/mui-style)
+    Checking mui-text v0.3.2 (/home/derpcat/projects/MUI-render-investigation/crates/mui-text)
+    Checking mui-layout v0.3.2 (/home/derpcat/projects/MUI-render-investigation/crates/mui-layout)
+    Checking mui-input v0.3.2 (/home/derpcat/projects/MUI-render-investigation/crates/mui-input)
+    Checking mui-tessellate v0.3.2 (/home/derpcat/projects/MUI-render-investigation/crates/mui-tessellate)
+    Checking mui-scene v0.3.2 (/home/derpcat/projects/MUI-render-investigation/crates/mui-scene)
+    Checking glifo v0.3.0
+    Checking mui-widgets v0.3.2 (/home/derpcat/projects/MUI-render-investigation/crates/mui-widgets)
+    Checking vello_hybrid v0.2.0
+    Checking vello_cpu v0.2.0
+    Checking mui-vello v0.3.2 (/home/derpcat/projects/MUI-render-investigation/crates/mui-vello)
+    Checking mui v0.3.2 (/home/derpcat/projects/MUI-render-investigation/crates/mui)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 1.46s

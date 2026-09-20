@@ -1,0 +1,45 @@
+scene: 717 surfaces, 632 paint ops, 472 glyph runs
+bez conversion: 0.101 ms uncached, 0.024 ms from a warm PathCache (570 entries)
+conversion probe path cache: 34080 hits, 570 misses, 570 entries (98.4% hit rate)
+vello_cpu cached cold path cache: 34080 hits, 570 misses (98.4% hit rate)
+vello_cpu cached static path cache: 34650 hits, 0 misses (100.0% hit rate)
+vello_cpu cached one knob turning path cache: 34596 hits, 54 misses (99.8% hit rate)
+vello_cpu cached path cache: 103326 hits, 624 misses, 570 entries (99.4% hit rate)
+vello_hybrid cached cold path cache: 34080 hits, 570 misses (98.4% hit rate)
+vello_hybrid cached static path cache: 34650 hits, 0 misses (100.0% hit rate)
+vello_hybrid cached one knob turning path cache: 34596 hits, 54 misses (99.8% hit rate)
+vello_hybrid cached path cache: 103326 hits, 624 misses, 570 entries (99.4% hit rate)
+tiles per-tile cold: 1100 tile submissions, 0 full redraws
+tiles per-tile static: 20 tile submissions, 0 full redraws
+tiles per-tile one knob turning: 73 tile submissions, 0 full redraws
+tiles adaptive cold: 55 tile submissions, 55 full redraws
+tiles adaptive static: 1 tile submissions, 1 full redraws
+tiles adaptive one knob turning: 54 tile submissions, 1 full redraws
+classic GPU buffer estimate: 2.5 MiB peak
+adapter: AMD Radeon RX 6600 (RADV NAVI23) (Vulkan, DiscreteGpu)
+
+backend              case                  build   resolve    encode    render     total       p95
+mui (resolve only)   static                0.071     1.913     0.000     0.000     1.985     2.247
+vello_cpu            cold                  0.085     8.167     3.982     0.335    12.570    12.900
+vello_cpu            static                0.071     1.944     2.978     0.333     5.325     5.489
+vello_cpu            one knob turning      0.072     2.133     3.024     0.338     5.591     6.442
+vello_cpu cached     cold                  0.086     8.183     3.922     0.334    12.531    12.840
+vello_cpu cached     static                0.069     1.937     2.905     0.336     5.246     5.349
+vello_cpu cached     one knob turning      0.068     2.059     2.916     0.327     5.371     5.587
+vello_hybrid         cold                  0.089     8.310     4.078     0.633    13.265    14.226
+vello_hybrid         static                0.076     2.006     3.075     0.733     5.985     7.925
+vello_hybrid         one knob turning      0.074     2.122     3.051     0.621     5.881     6.964
+vello_hybrid cached  cold                  0.089     8.194     3.947     0.601    12.846    13.790
+vello_hybrid cached  static                0.077     1.992     2.991     0.615     5.683     5.926
+vello_hybrid cached  one knob turning      0.072     2.076     2.955     0.596     5.704     5.998
+tiles per-tile       cold                  0.094     8.298    24.001     0.312    32.849    34.359
+tiles per-tile       static                0.074     1.964     0.211     0.257     2.503     2.890
+tiles per-tile       one knob turning      0.075     2.139     1.453     0.328     4.002     4.832
+tiles adaptive       cold                  0.100     8.399     4.680     0.528    13.713    14.219
+tiles adaptive       static                0.077     1.970     0.213     0.255     2.514     2.540
+tiles adaptive       one knob turning      0.078     2.178     1.508     0.324     4.092     4.589
+vello (classic)      cold                  0.106     8.641     0.247     2.107    11.122    11.645
+vello (classic)      static                0.076     2.177     0.248     2.083     4.640     5.172
+vello (classic)      one knob turning      0.073     2.241     0.245     2.075     4.636     4.916
+
+peak RSS 209.6 MiB

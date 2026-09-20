@@ -1,0 +1,111 @@
+{
+  "source_commit": "63887bb49d95f55d3e244090f93d00a4eef5f625",
+  "method": "median of 3 run medians, 5 warm-up + 50 measured frames per case; baseline first in each run; 1280x800; RX 6600; headless completion latency",
+  "results": [
+    {
+      "fixture": "text",
+      "case": "cold",
+      "tiles per-tile": {
+        "median_ms": 33.594,
+        "runs_ms": [
+          33.594,
+          32.849,
+          34.071
+        ]
+      },
+      "tiles adaptive": {
+        "median_ms": 13.971,
+        "runs_ms": [
+          14.956,
+          13.713,
+          13.971
+        ]
+      },
+      "speedup": 2.404552286879966
+    },
+    {
+      "fixture": "text",
+      "case": "static",
+      "tiles per-tile": {
+        "median_ms": 2.503,
+        "runs_ms": [
+          2.489,
+          2.503,
+          2.833
+        ]
+      },
+      "tiles adaptive": {
+        "median_ms": 2.541,
+        "runs_ms": [
+          2.758,
+          2.514,
+          2.541
+        ]
+      },
+      "speedup": 0.9850452577725306
+    },
+    {
+      "fixture": "text",
+      "case": "one knob turning",
+      "tiles per-tile": {
+        "median_ms": 4.132,
+        "runs_ms": [
+          4.132,
+          4.002,
+          4.39
+        ]
+      },
+      "tiles adaptive": {
+        "median_ms": 4.416,
+        "runs_ms": [
+          4.553,
+          4.092,
+          4.416
+        ]
+      },
+      "speedup": 0.9356884057971013
+    },
+    {
+      "fixture": "vectors",
+      "case": "all curves moving",
+      "tiles per-tile": {
+        "median_ms": 28.847,
+        "runs_ms": [
+          28.847,
+          29.598,
+          28.795
+        ]
+      },
+      "tiles adaptive": {
+        "median_ms": 18.571,
+        "runs_ms": [
+          18.297,
+          18.713,
+          18.571
+        ]
+      },
+      "speedup": 1.5533358462118356
+    },
+    {
+      "fixture": "vectors",
+      "case": "static",
+      "tiles per-tile": {
+        "median_ms": 0.632,
+        "runs_ms": [
+          0.633,
+          0.632,
+          0.584
+        ]
+      },
+      "tiles adaptive": {
+        "median_ms": 0.627,
+        "runs_ms": [
+          0.676,
+          0.627,
+          0.621
+        ]
+      },
+      "speedup": 1.0079744816586922
+    }
+  ]
+}

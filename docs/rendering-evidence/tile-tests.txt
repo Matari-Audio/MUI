@@ -1,0 +1,66 @@
+   Compiling mui-geometry v0.3.2 (/home/derpcat/projects/MUI-render-investigation/crates/mui-geometry)
+   Compiling crossbeam-utils v0.8.23
+   Compiling vello_common v0.2.0
+   Compiling mui-motion v0.3.2 (/home/derpcat/projects/MUI-render-investigation/crates/mui-motion)
+   Compiling either v1.18.0
+   Compiling mui-weld v0.3.2 (/home/derpcat/projects/MUI-render-investigation/crates/mui-weld)
+   Compiling thread_local v1.1.10
+   Compiling crossbeam-epoch v0.9.21
+   Compiling crossbeam-channel v0.5.17
+   Compiling crossbeam-deque v0.8.8
+   Compiling rayon-core v1.13.0
+   Compiling ordered-channel v1.2.0
+   Compiling rayon v1.12.0
+   Compiling glifo v0.3.0
+   Compiling vello_cpu v0.2.0
+   Compiling vello_hybrid v0.2.0
+   Compiling mui-text v0.3.2 (/home/derpcat/projects/MUI-render-investigation/crates/mui-text)
+   Compiling mui-style v0.3.2 (/home/derpcat/projects/MUI-render-investigation/crates/mui-style)
+   Compiling mui-layout v0.3.2 (/home/derpcat/projects/MUI-render-investigation/crates/mui-layout)
+   Compiling mui-input v0.3.2 (/home/derpcat/projects/MUI-render-investigation/crates/mui-input)
+   Compiling mui-tessellate v0.3.2 (/home/derpcat/projects/MUI-render-investigation/crates/mui-tessellate)
+   Compiling mui-scene v0.3.2 (/home/derpcat/projects/MUI-render-investigation/crates/mui-scene)
+   Compiling mui-widgets v0.3.2 (/home/derpcat/projects/MUI-render-investigation/crates/mui-widgets)
+   Compiling mui-vello v0.3.2 (/home/derpcat/projects/MUI-render-investigation/crates/mui-vello)
+   Compiling mui v0.3.2 (/home/derpcat/projects/MUI-render-investigation/crates/mui)
+    Finished `perf` profile [optimized + debuginfo] target(s) in 45.70s
+     Running unittests src/lib.rs (/mnt/Windows11/DEV_WORKSPACE/Toolchains/User/cargo-target/perf/deps/mui_vello-a351997697744248)
+
+running 34 tests
+test effects::damage::tests::first_frame_invalidates_all ... ok
+test effects::damage::tests::cancelled_plan_is_not_committed ... ok
+test effects::damage::tests::resize_grid_covers_the_target_without_overlap ... ok
+test effects::damage::tests::no_change_means_no_tile_raster ... ok
+test effects::damage::tests::colour_change_dirties_only_intersected_tiles ... ok
+test effects::tests::aborted_encoder_does_not_mark_texture_rendered ... ok
+test effects::damage::tests::transform_change_invalidates_all ... ok
+test effects::tests::non_multiple_device_limit_does_not_overflow ... ok
+test effects::tests::production_shader_has_both_explicit_alpha_contracts ... ok
+test effects::tests::return_to_old_value_after_abort_reuses_the_old_texture ... ok
+test effects::tests::size_buckets_are_bounded_and_cover_request ... ok
+test effects::tests::sparse_dirty_ranges_are_coalesced_without_painting_everything ... ok
+test effects::tests::submission_commits_but_does_not_claim_gpu_completion ... ok
+test seam::a_text_layer_takes_its_brush_box_from_the_run ... ok
+test seam::an_image_too_big_for_the_atlas_is_refused ... ok
+test seam::an_image_whose_buffer_does_not_match_its_size_falls_back ... ok
+test seam::the_pixmap_cache_drops_a_buffer_the_app_let_go_of ... ok
+test tests::a_malformed_arc_is_caught_at_the_seam ... ok
+test tests::a_nonsense_tolerance_is_refused_rather_than_hung_on ... ok
+test tests::a_capsule_keeps_its_extent_through_the_conversion ... ok
+test tests::an_arc_lands_on_the_tangent_point_mui_recorded ... ok
+test tests::arcs_become_curves_not_a_polyline ... ok
+test snapshot::a_gpos_mark_is_rendered_at_its_shaped_y_offset ... ok
+test snapshot::a_gradient_shadow_does_not_paint_black ... ok
+test snapshot::a_glyph_run_lands_pixels ... ok
+test snapshot::a_card_lands_on_the_pixmap ... ok
+test snapshot::a_clipped_child_stays_inside_its_parent ... ok
+test snapshot::a_multiply_layer_darkens_what_is_under_it ... ok
+test snapshot::a_welded_shadow_blurs ... ok
+test effects::tests::naga_validates_crisp_boundary_uniform_stride ... ok
+test snapshot::a_missing_primary_glyph_uses_the_selected_fallback_font ... ok
+test effects::tests::naga_validates_both_outputs_and_the_uniform_abi ... ok
+test snapshot::an_image_fill_lands_the_right_pixel_in_each_quadrant ... ok
+test snapshot::a_static_frame_reuses_its_paths_and_a_gone_one_is_dropped ... ok
+
+test result: ok. 34 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
