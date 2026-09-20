@@ -101,3 +101,7 @@ cargo test -p mui-scene --locked --offline
 cargo run -p mui-vello --example bench --features cpu,bench-classic --profile perf --locked --offline
 MUI_BENCH_SCENE=vectors cargo run -p mui-vello --example bench --features cpu,bench-classic --profile perf --locked --offline
 ```
+
+## Implemented follow-up: adaptive tiled redraws
+
+`TiledEffects` now renders once when most tiles are dirty and an extra full-window target fits the existing tile budget. Guarded copies refresh the persistent tiles; local changes retain the old path. This follows the investigation's full-redraw fallback recommendation. See [repeated measurements and validation](rendering-evidence/tile-adaptive-notes.md). It remains opt-in and does not change KURV's host backend.

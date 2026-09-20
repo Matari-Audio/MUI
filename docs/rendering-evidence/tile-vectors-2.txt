@@ -1,0 +1,45 @@
+scene: 97 surfaces, 97 paint ops, 0 glyph runs
+bez conversion: 0.024 ms uncached, 0.020 ms from a warm PathCache (97 entries)
+conversion probe path cache: 5238 hits, 97 misses, 97 entries (98.2% hit rate)
+vello_cpu cached cold path cache: 5238 hits, 97 misses (98.2% hit rate)
+vello_cpu cached static path cache: 5335 hits, 0 misses (100.0% hit rate)
+vello_cpu cached all curves moving path cache: 55 hits, 5280 misses (1.0% hit rate)
+vello_cpu cached path cache: 10628 hits, 5377 misses, 97 entries (66.4% hit rate)
+vello_hybrid cached cold path cache: 5238 hits, 97 misses (98.2% hit rate)
+vello_hybrid cached static path cache: 5335 hits, 0 misses (100.0% hit rate)
+vello_hybrid cached all curves moving path cache: 55 hits, 5280 misses (1.0% hit rate)
+vello_hybrid cached path cache: 10628 hits, 5377 misses, 97 entries (66.4% hit rate)
+tiles per-tile cold: 20 tile submissions, 0 full redraws
+tiles per-tile static: 0 tile submissions, 0 full redraws
+tiles per-tile all curves moving: 1100 tile submissions, 0 full redraws
+tiles adaptive cold: 1 tile submissions, 1 full redraws
+tiles adaptive static: 0 tile submissions, 0 full redraws
+tiles adaptive all curves moving: 55 tile submissions, 55 full redraws
+classic GPU buffer estimate: 8.7 MiB peak
+adapter: AMD Radeon RX 6600 (RADV NAVI23) (Vulkan, DiscreteGpu)
+
+backend              case                  build   resolve    encode    render     total       p95
+mui (resolve only)   static                0.006     0.174     0.000     0.000     0.180     0.229
+vello_cpu            cold                  0.007     0.221    16.083     0.315    16.628    17.268
+vello_cpu            static                0.006     0.177    15.905     0.304    16.402    16.944
+vello_cpu            all curves moving     0.006     0.177    15.900     0.314    16.401    17.096
+vello_cpu cached     cold                  0.007     0.218    15.899     0.307    16.434    17.463
+vello_cpu cached     static                0.006     0.177    15.867     0.312    16.360    16.903
+vello_cpu cached     all curves moving     0.006     0.179    15.925     0.314    16.424    17.070
+vello_hybrid         cold                  0.007     0.223    15.932     0.526    16.702    17.579
+vello_hybrid         static                0.006     0.187    16.117     0.537    16.951    18.243
+vello_hybrid         all curves moving     0.006     0.184    16.035     0.512    16.794    18.233
+vello_hybrid cached  cold                  0.007     0.224    16.008     0.522    16.891    17.708
+vello_hybrid cached  static                0.006     0.189    15.999     0.528    17.078    18.410
+vello_hybrid cached  all curves moving     0.009     0.222    17.845     0.656    18.893    24.265
+tiles per-tile       cold                  0.007     0.226     0.143     0.301     0.715     1.767
+tiles per-tile       static                0.006     0.181     0.142     0.295     0.632     1.583
+tiles per-tile       all curves moving     0.007     0.192    28.881     0.311    29.598    32.120
+tiles adaptive       cold                  0.007     0.227     0.149     0.299     0.714     1.756
+tiles adaptive       static                0.006     0.181     0.142     0.294     0.627     1.561
+tiles adaptive       all curves moving     0.007     0.193    17.423     0.864    18.713    20.188
+vello (classic)      cold                  0.008     0.224     0.156     0.895     1.324     2.005
+vello (classic)      static                0.007     0.187     0.159     0.865     1.266     2.287
+vello (classic)      all curves moving     0.007     0.186     0.159     0.855     1.222     1.795
+
+peak RSS 78.4 MiB

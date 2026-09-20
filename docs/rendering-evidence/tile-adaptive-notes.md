@@ -11,3 +11,19 @@ Validation compares the whole-scene reference, a tiled renderer with the full ta
 The benchmark's `tiles per-tile` and `tiles adaptive` rows use the same application scene and GPU. For these rows `encode` measures host rendering/submission work and `render` is the completion wait; compare actual `total` values rather than interpreting their phase names as GPU-only timings. Timings are headless completion latency, not KURV presented FPS.
 
 Build-storage maintenance: old task binaries were archived under `/home/derpcat/projects/mui-research-binary-archive`. Cargo's download cache and the perf example-output directory were relocated there with symlinks preserving their original paths after the shared Windows-mounted disk filled. No downloaded crates or unrelated project files were deleted.
+
+## Reproduced measurements
+
+Ryzen 7 7800X3D and RX 6600 (RADV Vulkan), 1280×800. Median of three run medians, each five warm-up and 50 measured frames. Both paths run in the same executable with identical scene content; the tile-only path runs first each time. Other desktop activity and GPU scheduling can affect the small timings. These are development-desktop results, not validation on the target weak laptop.
+
+| Fixture/case | Per-tile total (ms) | Adaptive total (ms) | Speedup |
+|---|---:|---:|---:|
+| text: cold | 33.594 | 13.971 | 2.40× |
+| text: static | 2.503 | 2.541 | 0.99× |
+| text: one knob turning | 4.132 | 4.416 | 0.94× |
+| vectors: all curves moving | 28.847 | 18.571 | 1.55× |
+| vectors: static | 0.632 | 0.627 | 1.01× |
+
+Full redraws reduced tile-render submissions from 1,100 to 55 across 55 frames (20× fewer); final presentation submissions are separate. Sparse-case differences remain visible in the table rather than being rounded into an improvement claim. The principal gain is avoiding repeated encoding on widespread damage. Classic compute Vello remains substantially faster for the synthetic dense-vector fixture; this change does not replace Hybrid's CPU vector processing or migrate KURV.
+
+Validation: 34 renderer library tests, strict all-target/all-feature Clippy, formatting, and the GPU contract at all three scales passed. The GPU contract checks maximum per-channel differences of 2/255 against reference rendering. Raw logs and summary JSON are stored beside this file.
