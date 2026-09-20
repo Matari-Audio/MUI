@@ -1,0 +1,28 @@
+   Compiling mui-motion v0.3.2 (/home/derpcat/projects/MUI-render-investigation/crates/mui-motion)
+   Compiling mui-weld v0.3.2 (/home/derpcat/projects/MUI-render-investigation/crates/mui-weld)
+   Compiling mui-geometry v0.3.2 (/home/derpcat/projects/MUI-render-investigation/crates/mui-geometry)
+   Compiling mui-style v0.3.2 (/home/derpcat/projects/MUI-render-investigation/crates/mui-style)
+   Compiling mui-text v0.3.2 (/home/derpcat/projects/MUI-render-investigation/crates/mui-text)
+   Compiling mui-layout v0.3.2 (/home/derpcat/projects/MUI-render-investigation/crates/mui-layout)
+   Compiling mui-scene v0.3.2 (/home/derpcat/projects/MUI-render-investigation/crates/mui-scene)
+    Finished `test` profile [optimized + debuginfo] target(s) in 4.81s
+     Running unittests src/lib.rs (/mnt/Windows11/DEV_WORKSPACE/Toolchains/User/cargo-target/debug/deps/mui_scene-a74af952aa37e6bd)
+
+running 1 test
+test scene::feature_tests::text_cache_survives_frames_and_carries_glyphs ... FAILED
+
+failures:
+
+---- scene::feature_tests::text_cache_survives_frames_and_carries_glyphs stdout ----
+
+thread 'scene::feature_tests::text_cache_survives_frames_and_carries_glyphs' (15104) panicked at crates/mui-scene/src/scene.rs:3455:9:
+unchanged text must retain its paint
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    scene::feature_tests::text_cache_survives_frames_and_carries_glyphs
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 51 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p mui-scene --lib`

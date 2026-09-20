@@ -25,6 +25,12 @@ const W: u16 = 1280;
 const H: u16 = 800;
 const WARM: usize = 5;
 const N: usize = 50;
+const IMAGES: bool = !cfg!(feature = "bench-classic");
+
+fn vectors() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var("MUI_BENCH_SCENE").as_deref() == Ok("vectors"))
+}
 
 // ---------------------------------------------------------------- the scene
 
@@ -83,9 +89,17 @@ which is what the second knob is for when the resonance is high";
 /// 40 knobs, 8 sliders, 200 labels, a clipped 60-row list, two curves, three
 /// floats, 20 wrapped paragraphs, 4 image-filled pills and 6 cards whose fill
 /// is spring-driven -- roughly what a synth editor puts on screen at once.
-/// `images` is false for classic vello (see `run`); the four pills are then
-/// plain fills.
+/// Comparisons with classic Vello disable images for every backend.
 fn editor(ui: &mut Ui, app: &mut App, images: bool) -> El {
+    if vectors() {
+        return grid(
+            8,
+            (0..96).map(|i| curve(f64::from(i) * 0.13 + app.knobs[7] * 2.0).height(50.0)),
+        )
+        .gap(2.0)
+        .pad(4.0)
+        .fill(Role::Surface);
+    }
     let knobs: Vec<El> = (0..40)
         .map(|i| {
             knob(ui, &format!("k{i}"), "cut", &mut app.knobs[i], 0.0..=1.0)
@@ -184,15 +198,12 @@ fn editor(ui: &mut Ui, app: &mut App, images: bool) -> El {
 struct Row {
     backend: &'static str,
     case: &'static str,
+    build: f64,
+    total: f64,
+    p95: f64,
     resolve: f64,
     encode: f64,
     render: f64,
-}
-
-impl Row {
-    fn total(&self) -> f64 {
-        self.resolve + self.encode + self.render
-    }
 }
 
 fn median(v: &mut [f64]) -> f64 {
@@ -219,6 +230,7 @@ impl Case {
         match self {
             Self::Cold => "cold",
             Self::Static => "static",
+            Self::Knob if vectors() => "all curves moving",
             Self::Knob => "one knob turning",
         }
     }
@@ -226,8 +238,7 @@ impl Case {
 
 /// Drive `WARM + N` frames of `case` and hand each resolved scene to `draw`,
 /// which returns (encode ms, render ms).
-/// Classic vello wants a `peniko::Image` this bench does not build, so it
-/// alone gets the same scene with four solid fills instead.
+/// Backend comparisons use identical image-free scenes.
 fn run(
     backend: &'static str,
     case: Case,
@@ -238,6 +249,7 @@ fn run(
     let mut ui = Ui::new(Theme::DEFAULT).font(font.to_vec());
     let mut app = App::new();
     let (mut r, mut e, mut d) = (vec![], vec![], vec![]);
+    let (mut b, mut totals) = (vec![], vec![]);
     for i in 0..WARM + N {
         if case == Case::Cold {
             ui = Ui::new(Theme::DEFAULT).font(font.to_vec());
@@ -245,7 +257,9 @@ fn run(
         if case == Case::Knob {
             app.knobs[7] = f64::from(i as u32 % 100) / 100.0;
         }
+        let start = Instant::now();
         let root = editor(&mut ui, &mut app, images);
+        let build = since(start);
         let t = Instant::now();
         let frame = ui
             .frame(
@@ -258,12 +272,18 @@ fn run(
         let resolve = since(t);
         let (encode, render) = draw(frame.scene);
         if i >= WARM {
+            totals.push(since(start));
+            b.push(build);
             r.push(resolve);
             e.push(encode);
             d.push(render);
         }
     }
+    let total = median(&mut totals);
     Row {
+        build: median(&mut b),
+        total,
+        p95: totals[(totals.len() * 95).div_ceil(100) - 1],
         backend,
         case: case.name(),
         resolve: median(&mut r),
@@ -327,7 +347,7 @@ fn main() {
     {
         let mut ui = Ui::new(Theme::DEFAULT).font(font.to_vec());
         let mut app = App::new();
-        let root = editor(&mut ui, &mut app, true);
+        let root = editor(&mut ui, &mut app, IMAGES);
         let f = ui
             .frame(
                 root,
@@ -375,9 +395,13 @@ fn main() {
     }
 
     // Resolve with nothing painted at all: MUI's own floor.
-    rows.push(run("mui (resolve only)", Case::Static, font, true, |_| {
-        (0.0, 0.0)
-    }));
+    rows.push(run(
+        "mui (resolve only)",
+        Case::Static,
+        font,
+        IMAGES,
+        |_| (0.0, 0.0),
+    ));
 
     // --- CPU (vello_cpu, the same sparse-strip pipeline as hybrid)
     {
@@ -403,7 +427,7 @@ fn main() {
             (encode, since(t))
         };
         for c in CASES {
-            rows.push(run("vello_cpu", c, font, true, &mut draw));
+            rows.push(run("vello_cpu", c, font, IMAGES, &mut draw));
         }
     }
 
@@ -436,7 +460,7 @@ fn main() {
         };
         for c in CASES {
             let before = stats.get();
-            rows.push(run("vello_cpu cached", c, font, true, &mut draw));
+            rows.push(run("vello_cpu cached", c, font, IMAGES, &mut draw));
             print_cache_delta("vello_cpu cached", c, before, stats.get());
         }
         print_cache_stats("vello_cpu cached", stats.get());
@@ -454,19 +478,13 @@ fn main() {
     }
 
     println!(
-        "\n{:<20} {:<17} {:>9} {:>9} {:>9} {:>9} {:>8}",
-        "backend", "case", "resolve", "encode", "render", "total", "fps"
+        "\n{:<20} {:<17} {:>9} {:>9} {:>9} {:>9} {:>9} {:>9}",
+        "backend", "case", "build", "resolve", "encode", "render", "total", "p95"
     );
     for r in &rows {
         println!(
-            "{:<20} {:<17} {:9.3} {:9.3} {:9.3} {:9.3} {:8.0}",
-            r.backend,
-            r.case,
-            r.resolve,
-            r.encode,
-            r.render,
-            r.total(),
-            1000.0 / r.total()
+            "{:<20} {:<17} {:9.3} {:9.3} {:9.3} {:9.3} {:9.3} {:9.3}",
+            r.backend, r.case, r.build, r.resolve, r.encode, r.render, r.total, r.p95
         );
     }
     println!("\npeak RSS {:.1} MiB", peak_rss());
@@ -548,7 +566,7 @@ async fn gpu() -> Option<(wgpu::AdapterInfo, Vec<Row>)> {
             (encode, since(t))
         };
         for c in CASES {
-            rows.push(run("vello_hybrid", c, font, true, &mut draw));
+            rows.push(run("vello_hybrid", c, font, IMAGES, &mut draw));
         }
     }
 
@@ -614,7 +632,7 @@ async fn gpu() -> Option<(wgpu::AdapterInfo, Vec<Row>)> {
         };
         for c in CASES {
             let before = stats.get();
-            rows.push(run("vello_hybrid cached", c, font, true, &mut draw));
+            rows.push(run("vello_hybrid cached", c, font, IMAGES, &mut draw));
             print_cache_delta("vello_hybrid cached", c, before, stats.get());
         }
         print_cache_stats("vello_hybrid cached", stats.get());
@@ -664,7 +682,7 @@ mod classic {
         transform: Affine,
         brush: Brush,
         stroke: Stroke,
-        font: Option<FontData>,
+        font: &'a mut Option<FontData>,
     }
 
     impl Classic<'_> {
@@ -765,6 +783,7 @@ mod classic {
             .expect("classic renderer");
         let mut scene = vello::Scene::new();
         let mut peak = 0u32;
+        let mut font_data = None;
         let mut draw = |resolved: &ResolvedScene| {
             scene.reset();
             let t = Instant::now();
@@ -774,7 +793,7 @@ mod classic {
                     transform: Affine::IDENTITY,
                     brush: Brush::Solid(AlphaColor::TRANSPARENT),
                     stroke: Stroke::new(1.0),
-                    font: None,
+                    font: &mut font_data,
                 },
                 resolved,
                 Affine::IDENTITY,
