@@ -55,6 +55,22 @@ The restored benchmark includes tree construction, records actual per-frame tota
 
 `MUI_BENCH_SCENE=vectors` selects 96 curves, 50 cubic segments each (4,800 cubics). Its moving case changes every curve each frame. Default dimensions are 1280×800, with five warm-up frames and 50 measured frames per case. A cold case resets UI state, not the GPU device. GPU completion is waited for: results are headless completion latency, not presentation FPS or input latency. GPU timestamp measurements and visual parity are additional gates.
 
+## Fresh reproduced results
+
+Development desktop: Ryzen 7 7800X3D, Radeon RX 6600, RADV Vulkan, Linux 7.3.0-rc3. Other desktop applications were running. Three sequential vector runs, each with 50 measured frames after warm-up:
+
+| Backend, all 4,800 cubics changing | Median of run medians (ms) | Individual run medians (ms) |
+|---|---:|---|
+| vello_cpu cached | 16.439 | 16.439, 16.362, 16.450 |
+| vello_hybrid cached | 18.749 | 18.749, 18.749, 18.750 |
+| vello (classic) | 1.030 | 1.030, 1.040, 1.009 |
+
+Compute is about **18× faster** than cached Hybrid in this synthetic vector workload. Hybrid spends about 16 ms preparing/encoding paths; caching Bezier conversion alone does not remove that work. This supports investigating a compute or specialized graph path. Pixel-level parity is still outstanding; neither this timing nor the earlier 15× observation proves equal visual quality or end-to-end KURV improvement.
+
+The default text-heavy fixture tells a different story: static cached Hybrid is 6.251 ms and classic 6.001 ms in one fresh run. Switching backends alone does not deliver a comparable improvement there. These are actual total-frame medians, not sums of phase medians.
+
+The recovered benchmark passes strict Clippy. Raw vector, text, regression, and Clippy logs accompany this report. The completed rebuild required moving old task-owned binaries off the full shared build disk; no other project's data was deleted.
+
 ## Earlier provisional observations
 
 These numbers were observed before loss of the temporary directory. They are hypotheses to reproduce, **not retained benchmark evidence or deployment results**:

@@ -1,0 +1,33 @@
+scene: 717 surfaces, 632 paint ops, 472 glyph runs
+bez conversion: 0.100 ms uncached, 0.025 ms from a warm PathCache (570 entries)
+conversion probe path cache: 34080 hits, 570 misses, 570 entries (98.4% hit rate)
+vello_cpu cached cold path cache: 34080 hits, 570 misses (98.4% hit rate)
+vello_cpu cached static path cache: 34650 hits, 0 misses (100.0% hit rate)
+vello_cpu cached one knob turning path cache: 34596 hits, 54 misses (99.8% hit rate)
+vello_cpu cached path cache: 103326 hits, 624 misses, 570 entries (99.4% hit rate)
+vello_hybrid cached cold path cache: 34080 hits, 570 misses (98.4% hit rate)
+vello_hybrid cached static path cache: 34650 hits, 0 misses (100.0% hit rate)
+vello_hybrid cached one knob turning path cache: 34596 hits, 54 misses (99.8% hit rate)
+vello_hybrid cached path cache: 103326 hits, 624 misses, 570 entries (99.4% hit rate)
+classic GPU buffer estimate: 2.5 MiB peak
+adapter: AMD Radeon RX 6600 (RADV NAVI23) (Vulkan, DiscreteGpu)
+
+backend              case                  build   resolve    encode    render     total       p95
+mui (resolve only)   static                0.073     1.937     0.000     0.000     2.011     2.135
+vello_cpu            cold                  0.085     8.319     4.068     0.327    12.812    13.075
+vello_cpu            static                0.073     1.997     3.015     0.361     5.450     5.482
+vello_cpu            one knob turning      0.070     2.095     3.012     0.332     5.514     6.383
+vello_cpu cached     cold                  0.088     8.216     3.969     0.350    12.625    13.005
+vello_cpu cached     static                0.072     1.964     2.917     0.354     5.307     5.346
+vello_cpu cached     one knob turning      0.070     2.090     2.930     0.336     5.434     5.856
+vello_hybrid         cold                  0.092     8.330     4.078     0.706    13.453    15.045
+vello_hybrid         static                0.076     2.001     3.057     1.119     6.251     6.300
+vello_hybrid         one knob turning      0.075     2.164     3.052     0.959     6.244     6.573
+vello_hybrid cached  cold                  0.094     8.280     3.991     0.640    13.222    15.251
+vello_hybrid cached  static                0.078     2.001     2.970     1.196     6.251     6.282
+vello_hybrid cached  one knob turning      0.075     2.112     2.978     1.082     6.249     6.306
+vello (classic)      cold                  0.106     8.420     0.244     3.432    12.199    12.289
+vello (classic)      static                0.092     2.114     0.243     3.611     6.001     7.034
+vello (classic)      one knob turning      0.089     2.211     0.240     3.446     6.058     6.998
+
+peak RSS 161.6 MiB
