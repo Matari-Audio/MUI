@@ -135,12 +135,30 @@ pub fn border_geometry(
 /// For shapes with holes use `boolean_paths` instead.
 pub fn union_contours(path: &Path, o: OffsetOptions, g: GeometryOptions) -> Result<Path, Error> {
     offset_path(&Path::default(), 0., o)?;
-    let shapes: Vec<_> = path
-        .flatten(o.flatten_tolerance, o.max_points)?
-        .into_iter()
-        .filter(|r| r.len() >= 3)
-        .map(|r| Polygon::new(r).into())
-        .collect();
+    // A border sweep has many overlapping disks, but a small final contour.
+    // Reduce bounded batches instead of spending the polygon budget on every
+    // intermediate disk at once. The final union retains the same vertex cap.
+    let mut shapes = Vec::new();
+    let mut vertices = 0;
+    for ring in path.flatten(o.flatten_tolerance, o.max_points)? {
+        if ring.len() < 3 {
+            continue;
+        }
+        if vertices + ring.len() > g.max_vertices {
+            shapes = union(&shapes, g)?.placed_shapes();
+            vertices = shapes
+                .iter()
+                .map(|s| {
+                    s.polygon.exterior.len() + s.polygon.holes.iter().map(Vec::len).sum::<usize>()
+                })
+                .sum();
+        }
+        if vertices + ring.len() > g.max_vertices {
+            return Err(Error::TooManyVertices);
+        }
+        vertices += ring.len();
+        shapes.push(Polygon::new(ring).into());
+    }
     Ok(union(&shapes, g)?.to_path())
 }
 

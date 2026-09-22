@@ -12,7 +12,7 @@
 use crate::{Cursor, Elevation, Fill, Mix, Radius, Shadow, Stroke, Style};
 use mui_geometry::CornerStyle;
 use mui_geometry::Path;
-use mui_layout::{Node, Size, Spacing};
+use mui_layout::{Id, Node, Size, Spacing};
 use mui_motion::Spring;
 use mui_text::{Axes, Weight};
 use std::cell::RefCell;
@@ -287,6 +287,12 @@ pub struct Element {
     pub outline: Option<Outline>,
     pub border_ramp: Option<crate::BorderRamp>,
     pub inside: Option<Spacing>,
+    /// Own the corner policy and clearances of marked descendant surfaces.
+    pub surface_padding: Option<Spacing>,
+    /// Empty uses this node's frame; otherwise union the named footprints.
+    pub inset_surface: Option<Vec<Id>>,
+    /// Join this frame to the nearest horizontal edge of the named body.
+    pub border_join: Option<Id>,
     pub bend: f64,
     pub border_align: crate::BorderAlign,
 }
@@ -645,6 +651,32 @@ pub trait Styled: Paints {
     fn border_ramp(mut self, ramp: crate::BorderRamp) -> Self {
         self.style_mut().stroke = None;
         self.element_mut().border_ramp = Some(ramp);
+        self
+    }
+
+    /// Derive marked surfaces from this container's final contour and border.
+    /// Layout remains intrinsic; only material outlines are derived. Nested
+    /// owners start a new scope. Rounding belongs here, never on each panel.
+    fn surface_layout(mut self, padding: impl Into<Spacing>) -> Self {
+        self.element_mut().surface_padding = Some(padding.into());
+        self
+    }
+    /// A recessed material using this node's footprint and the owner's corners.
+    fn inset_surface(mut self) -> Self {
+        self.element_mut().inset_surface = Some(Vec::new());
+        self
+    }
+    /// One recessed material made from several named layout footprints.
+    /// Use a background sibling when controls occupy holes in the material.
+    fn inset_surface_of(mut self, members: impl IntoIterator<Item = Id>) -> Self {
+        self.element_mut().inset_surface = Some(members.into_iter().collect());
+        self
+    }
+    /// Extend the owner's border material into this frame. The named body
+    /// supplies the attachment edge, including when several bodies share a rim.
+    /// This node retains its ordinary layout and interaction rectangle.
+    fn join_border(mut self, body: impl Into<Id>) -> Self {
+        self.element_mut().border_join = Some(body.into());
         self
     }
 

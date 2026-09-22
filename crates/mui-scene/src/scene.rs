@@ -703,6 +703,7 @@ pub struct TextCache {
     welds: WeldCache,
     borders: crate::border_ramp::BorderCache,
     region_cache: crate::regions::RegionCache,
+    surface_cache: crate::surfaces::Cache,
 }
 impl TextCache {
     pub fn layout_stats(&self) -> mui_layout::LayoutStats {
@@ -927,6 +928,9 @@ struct Walk<'a> {
     welds: &'a mut WeldCache,
     borders: &'a mut crate::border_ramp::BorderCache,
     region_cache: &'a mut crate::regions::RegionCache,
+    surface_cache: &'a mut crate::surfaces::Cache,
+    surface_joins: HashMap<usize, Path>,
+    joined_nodes: std::collections::HashSet<usize>,
     ramp_anchors: HashMap<usize, Frame>,
     ramp_frames: HashMap<(usize, mui_layout::Id), Frame>,
     weld_cache: &'a mut crate::WeldCache,
@@ -1726,6 +1730,14 @@ impl<'a> Walk<'a> {
             self.i += n.children().iter().map(count).sum::<usize>();
             return Ok(());
         }
+        if (e.inset_surface.is_some() && !self.regions.contains_key(&at))
+            || (e.border_join.is_some() && !self.joined_nodes.contains(&at))
+        {
+            return Err(mui_geometry::Error::InvalidOptions(
+                "material requires a surface-layout owner",
+            )
+            .into());
+        }
         let material = self.material_weld(n, frame, path, under)?;
         let (outline, rect, mut changed, welds) = match &material {
             Some(m) => (m.outline.clone(), None, true, Vec::new()),
@@ -1733,6 +1745,14 @@ impl<'a> Walk<'a> {
         };
 
         self.partition(n, &outline, frame, at)?;
+        if e.surface_padding.is_some() {
+            let geometry = self
+                .surface_cache
+                .resolve(n, at, &self.frames, &outline, self.spec)?;
+            self.regions.extend(geometry.panels);
+            self.joined_nodes.extend(geometry.join_nodes);
+            self.surface_joins.insert(at, geometry.joins);
+        }
         self.key = key.clone();
         let clear = Fill::Color(Color::oklcha(0.0, 0.0, 0.0, 0.0));
         let envelope = self.region_envelopes.get(&at).cloned();
@@ -1786,6 +1806,10 @@ impl<'a> Walk<'a> {
                 ),
                 under,
             ),
+            None if e.border_join.is_some() => s
+                .fill
+                .paint(&th.palette, under)
+                .map_or(under, |paint| paint.solid()),
             None => solid(
                 self.push(Layer::Fill, outline.clone(), rect, &s.fill, under),
                 under,
@@ -2237,6 +2261,9 @@ impl<'a> Walk<'a> {
                 _ => th.corners.concave,
             };
             crate::border_ramp::decorate(&mut band, ramp, anchor, shoulder, named_frame)?;
+            if let Some(joins) = self.surface_joins.get(&at) {
+                band.commands.extend(joins.commands.clone());
+            }
             if ramp.align == crate::BorderAlign::Outside {
                 let merged = self.region_cache.resolve(
                     (at, 7),
@@ -2262,7 +2289,7 @@ impl<'a> Walk<'a> {
                 if ramp.align == crate::BorderAlign::Inside {
                     self.push(Layer::Unclip, Path::default(), None, &clear, bg);
                 }
-                if !ramp.tabs.is_empty() {
+                if !ramp.tabs.is_empty() || self.surface_joins.contains_key(&at) {
                     let paint: Vec<_> = self.paint.drain(start..).collect();
                     self.paint
                         .splice(border_background..border_background, paint);
@@ -2414,6 +2441,9 @@ pub fn resolve_scene_cached(
         welds: &mut text.welds,
         borders: &mut text.borders,
         region_cache: &mut text.region_cache,
+        surface_cache: &mut text.surface_cache,
+        surface_joins: HashMap::new(),
+        joined_nodes: std::collections::HashSet::new(),
         ramp_anchors: HashMap::new(),
         ramp_frames: HashMap::new(),
         weld_cache,

@@ -28,6 +28,7 @@
 #![forbid(unsafe_code)]
 
 mod regions;
+mod surfaces;
 pub use mui_geometry::BorderAlign;
 pub use regions::ShapeLayout;
 mod border_ramp;

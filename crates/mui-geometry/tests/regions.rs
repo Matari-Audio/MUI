@@ -238,3 +238,33 @@ fn uniform_offsets_match_sweep_for_holes_and_all_alignments() {
         }
     }
 }
+
+#[test]
+fn overlapping_sweep_pieces_use_bounded_batches_but_keep_the_output_limit() {
+    let square = |x: f64| {
+        Path::polyline(
+            [
+                Point::new(x, 0.),
+                Point::new(x + 4., 0.),
+                Point::new(x + 4., 4.),
+                Point::new(x, 4.),
+            ],
+            true,
+        )
+    };
+    let mut sweep = Path::default();
+    for _ in 0..200 {
+        sweep.commands.extend(square(0.).commands);
+    }
+    let geometry = GeometryOptions {
+        max_vertices: 64,
+        ..GeometryOptions::default()
+    };
+    let joined = union_contours(&sweep, OffsetOptions::default(), geometry).unwrap();
+    assert_eq!(joined.flatten(0.1, 1000).unwrap().len(), 1);
+    let mut disjoint = Path::default();
+    for n in 0..100 {
+        disjoint.commands.extend(square(f64::from(n) * 8.).commands);
+    }
+    assert!(union_contours(&disjoint, OffsetOptions::default(), geometry).is_err());
+}
