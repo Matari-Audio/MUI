@@ -143,7 +143,9 @@ resolve_scene(&SceneSpec::new(body)).unwrap();
   intersect the padded interior left by the actual border and joins. Inherited
   boundary curves are clipped directly, without filleting their flattened arcs. Changing only the
   owner updates all marked material outlines. No panel radius arithmetic or
-  label overlap offsets are needed.
+  label overlap offsets are needed. A joined label also identifies its content
+  body: panels inside that body reserve the owner's maximum inward border width
+  and padding, so external ports and footer tabs cannot pull their edges outward.
 - This does not reflow children or infer groups from matching colors. Marked
   surfaces publish their derived paint/clip/hit outline; layout frames remain
   the authored footprints. Floating descendants and nested owners are separate

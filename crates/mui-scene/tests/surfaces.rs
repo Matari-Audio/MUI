@@ -180,3 +180,35 @@ fn a_uniform_border_preserves_the_panel_interior() {
         "partition corner must be rounded"
     );
 }
+
+#[test]
+fn an_attached_footer_does_not_pull_panels_past_the_body_inset() {
+    let mut body = card(24.);
+    body.payload_mut().surface_padding = None;
+    body.payload_mut().border_ramp = None;
+    body.payload_mut().style.radius = Radius::Pair(0., 0.);
+    let root = col![body, leaf(24., 24.).align_self(Align::Center)]
+        .gap(0.)
+        .w(400.)
+        .weld(Surface)
+        .radius((24., 16.))
+        .surface_layout(8.)
+        .border_ramp(BorderRamp::horizontal((Primary, 4.), (Dim, 1.5)).over("body"));
+    let scene = resolve_scene(&SceneSpec::new(root)).unwrap();
+    let bottom = scene.surface("body").unwrap().frame.bottom() - 8. - 4.;
+    for id in ["well", "other"] {
+        for point in scene
+            .surface(id)
+            .unwrap()
+            .path
+            .flatten(0.1, 10000)
+            .unwrap()
+            .concat()
+        {
+            assert!(
+                point.y <= bottom + 0.01,
+                "{id} entered the footer: {point:?}"
+            );
+        }
+    }
+}

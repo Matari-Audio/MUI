@@ -14,6 +14,7 @@ struct Inputs {
     panels: Vec<(usize, Vec<Frame>)>,
     joins: Vec<(usize, Frame, Frame, f64)>,
     padding: f64,
+    border_inset: f64,
     rounding: Fillet,
     corners: CornerStyle,
     offsets: OffsetOptions,
@@ -176,6 +177,14 @@ impl Cache {
             panels,
             joins,
             padding,
+            border_inset: e.border_ramp.as_ref().map_or_else(
+                || {
+                    e.style.stroke.as_ref().map_or(0., |stroke| {
+                        stroke.width.unwrap_or(spec.theme.stroke_width) * e.border_align.inward()
+                    })
+                },
+                |ramp| ramp.from.1.max(ramp.to.1) * ramp.align.inward(),
+            ),
             rounding: Fillet {
                 convex_radius: convex,
                 concave_radius: concave,
@@ -304,9 +313,24 @@ fn resolve(i: &Inputs) -> Result<Geometry, SceneError> {
                 );
             }
         }
-        // Round only authored partitions; clipping supplies all inherited
-        // border and title curves without re-filleting flattened arcs.
-        let rounded = fillet(&union(&shapes, i.geometry)?, rounding)?.path;
+        let mut footprint = union(&shapes, i.geometry)?.to_path();
+        // A label identifies its content body even when the owning outline
+        // also includes ports or footer tabs. Those attachments must not pull
+        // an interior material beyond the body's reserved border clearance.
+        if let Some((_, _, body, _)) = i.joins.iter().find(|(_, _, body, _)| {
+            bounds.min.x >= body.x
+                && bounds.max.x <= body.right()
+                && bounds.min.y >= body.y
+                && bounds.max.y <= body.bottom()
+        }) {
+            let body_path = Polygon::rectangle(body.x, body.y, body.size.width, body.size.height)?;
+            let body_path = union(&[body_path.into()], i.geometry)?.to_path();
+            let content = inset_path(&body_path, i.padding + i.border_inset, i.offsets)?.path;
+            footprint = combine(&footprint, &content, BooleanOp::Intersection)?;
+        }
+        // Round authored partitions before applying inherited curved boundaries.
+        let topology = mui_geometry::offset_path(&footprint, 0., i.offsets)?.topology;
+        let rounded = fillet(&topology, rounding)?.path;
         panels.push((
             *index,
             combine(
