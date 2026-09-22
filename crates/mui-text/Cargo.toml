@@ -6,10 +6,11 @@ license.workspace = true
 
 [dependencies]
 mui-geometry = { path = "../mui-geometry" }
-skrifa = "0.44"
-# Pinned: 0.12 shares read-fonts 0.41 with skrifa 0.44, so one parse serves
-# both shaping and outlines. Bump together with skrifa.
-harfrust = "=0.12.0"
+# Bump these two together: skrifa 0.46 and harfrust 0.13 share read-fonts
+# 0.43, so one parse serves both outlines and shaping. (skrifa 0.47 moved to
+# read-fonts 0.44 ahead of harfrust; glifo/vello still carry their own 0.44.)
+skrifa = "0.46"
+harfrust = "0.13"
 unicode-bidi = "0.3"
 unicode-linebreak = "0.1.5"
 unicode-segmentation = "1.13"
