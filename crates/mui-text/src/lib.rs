@@ -1221,6 +1221,29 @@ mod tests {
         assert_eq!(plain, asked, "Hack has no FILL axis, so nothing moves");
     }
 
+    /// Three Material Symbols glyphs (home, favorite, settings), fvar/avar/
+    /// gvar/HVAR and GSUB FeatureVariations kept. Regenerate with
+    /// `pyftsubset MaterialSymbolsOutlined[FILL,GRAD,opsz,wght].ttf
+    /// --unicodes=U+E88A,U+E87D,U+E8B8 --layout-features='*' --no-hinting`.
+    pub(crate) const MATERIAL_SYMBOLS: &[u8] =
+        include_bytes!("../fonts/MaterialSymbolsOutlined-subset.ttf");
+
+    #[test]
+    fn a_collapsed_fill_contour_is_dropped_not_an_error() {
+        // At FILL=0 the fill ring of every Material Symbol collapses to a
+        // point. That is a legal empty contour, not an invalid path.
+        let hollow = glyph_path(MATERIAL_SYMBOLS, '\u{E87D}', 24., &[("FILL", 0.)], 0.05).unwrap();
+        let solid = glyph_path(MATERIAL_SYMBOLS, '\u{E87D}', 24., &[("FILL", 1.)], 0.05).unwrap();
+        let hollow_area = area(&hollow).abs();
+        let solid_area = area(&solid).abs();
+        assert!(hollow_area > 0.);
+        assert!(solid_area > hollow_area * 1.5, "filled heart covers more: {solid_area} vs {hollow_area}");
+        let mid = glyph_path(MATERIAL_SYMBOLS, '\u{E87D}', 24., &[("FILL", 0.5)], 0.05).unwrap();
+        let mid_area = area(&mid).abs();
+        assert!(mid_area > hollow_area && mid_area < solid_area, "morph is monotone: {mid_area}");
+        mui_tessellate::Tessellator::default().tessellate(&hollow, 0.05).unwrap();
+    }
+
     #[test]
     fn a_glyph_tessellates_like_any_other_surface() {
         let path = glyph_path(HACK_REGULAR, 'O', 96., &[], 0.05).unwrap();
