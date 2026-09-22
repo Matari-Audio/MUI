@@ -268,3 +268,40 @@ fn overlapping_sweep_pieces_use_bounded_batches_but_keep_the_output_limit() {
     }
     assert!(union_contours(&disjoint, OffsetOptions::default(), geometry).is_err());
 }
+
+#[test]
+fn filled_path_booleans_preserve_a_hole_touching_the_outer_edge() {
+    let mut shape = Path::polyline(
+        [
+            Point::new(0., 0.),
+            Point::new(40., 0.),
+            Point::new(40., 40.),
+            Point::new(0., 40.),
+        ],
+        true,
+    );
+    shape.commands.extend(
+        Path::polyline(
+            [
+                Point::new(0., 20.),
+                Point::new(10., 10.),
+                Point::new(20., 20.),
+                Point::new(10., 30.),
+            ],
+            true,
+        )
+        .commands,
+    );
+    let result = boolean_paths(
+        &shape,
+        &shape,
+        BooleanOp::Intersection,
+        OffsetOptions::default(),
+        GeometryOptions::default(),
+    )
+    .unwrap();
+    let topology = offset_path(&result, 0., OffsetOptions::default())
+        .unwrap()
+        .topology;
+    assert!((topology.area() - 1400.).abs() < 0.01);
+}
