@@ -106,7 +106,8 @@ impl PartialEq for Canvas {
 ///
 /// The key must cover everything the drawing closure reads. Reusing a key at
 /// the same size deliberately reuses the old immutable draw list.
-pub struct CanvasCache<K>(Rc<RefCell<Option<(K, Size, Arc<[Draw]>)>>>);
+type CacheSlot<K> = Rc<RefCell<Option<(K, Size, Arc<[Draw]>)>>>;
+pub struct CanvasCache<K>(CacheSlot<K>);
 impl<K> CanvasCache<K> {
     pub fn new() -> Self {
         Self(Rc::new(RefCell::new(None)))

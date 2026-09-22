@@ -1967,7 +1967,7 @@ impl<'a> Walk<'a> {
             }
             Content::Canvas(c) => {
                 let origin = Point::new(frame.x, frame.y);
-                for (k, d) in (c.0)(frame.size).into_iter().enumerate() {
+                for (k, d) in (c.0)(frame.size).iter().enumerate() {
                     let moved = d.path.rigid_transform(origin, 0.0)?;
                     if let Some(tag) = &d.tag {
                         hits.push((Arc::clone(tag), moved.clone()));
