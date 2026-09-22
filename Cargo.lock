@@ -1958,6 +1958,7 @@ dependencies = [
  "mui-style",
  "mui-text",
  "mui-weld",
+ "ttf-inter",
 ]
 
 [[package]]

@@ -44,7 +44,7 @@ pub use mui_weld::{Channel as WeldChannel, Quality as WeldQuality, Weld, WeldCac
 
 pub use dsl::{caption, label, title, IntoLen, Sugar};
 pub use element::{
-    canvas, canvas_cached, column, fits, grid, leaf, overlay, row, spacer, text, Canvas,
+    canvas, canvas_cached, column, fits, grid, icon, leaf, overlay, row, spacer, text, Canvas,
     CanvasCache, Carve, Content, Draw, El, Element, IntoEl, Kind, Outline, Paints, Semantics,
     State, StateStyle, Styled,
 };
@@ -58,7 +58,8 @@ pub use mui_style::{
     Color, Corner, Corners, Cursor, Elevation, Fill, Fit, Gradient, GradientKind, Image, Mix, Mode,
     Paint, Palette, Pigment, Radius, Role, Shadow, ShadowKind, Stroke, Style, Theme,
 };
-pub use mui_text::Weight;
+pub use mui_text::{Axes, Weight};
+pub mod material_symbols;
 pub use scene::{
     resolve_scene, resolve_scene_cached, resolve_scene_with, Layer, Painted, ResolvedScene,
     ResolvedSurface, SceneError, SceneSpec, SceneState, Text, TextCache, TextGlyph,
@@ -69,12 +70,12 @@ pub use scene::{
 pub mod prelude {
     pub use crate::Role::*;
     pub use crate::{
-        canvas, canvas_cached, caption, col, column, fits, grid, label, leaf, overlay,
-        resolve_scene, row, spacer, stack, text, title, weld, weld_morph, Align, Area, BorderAlign,
-        BorderRamp, CanvasCache, Color, Corner, Cursor, Draw, El, Elevation, Fill, Fit, Gradient,
-        Id, Image, IntoEl, IntoLen, Justify, Kind, Len, Match, Mix, Paints, Pin, Radius, Role,
-        SceneSpec, Shadow, ShapeLayout, Size, State, Style, Styled, Sugar, Theme, Weight, Weld,
-        WeldBackend, WeldChannel, WeldQuality,
+        canvas, canvas_cached, caption, col, column, fits, grid, icon, label, leaf, overlay,
+        resolve_scene, row, spacer, stack, text, title, weld, weld_morph, Align, Area, Axes,
+        BorderAlign, BorderRamp, CanvasCache, Color, Corner, Cursor, Draw, El, Elevation, Fill,
+        Fit, Gradient, Id, Image, IntoEl, IntoLen, Justify, Kind, Len, Match, Mix, Paints, Pin,
+        Radius, Role, SceneSpec, Shadow, ShapeLayout, Size, State, Style, Styled, Sugar, Theme,
+        Weight, Weld, WeldBackend, WeldChannel, WeldQuality,
     };
     pub use mui_geometry::{CornerStyle, Path, Point};
     pub use mui_layout::Spacing;

@@ -216,7 +216,8 @@ fn inspect(
                 font: 0,
             })
             .collect(),
-        weight: Default::default(),
+        axes: Default::default(),
+        hint: true,
         coords: Arc::from(&[][..]),
         font_coords: vec![Arc::from(&[][..])].into(),
     });

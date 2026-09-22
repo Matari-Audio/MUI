@@ -14,7 +14,7 @@ use mui_geometry::{
     OffsetOptions, Path, PlacedShape, Point, RoundedRect, Topology,
 };
 use mui_layout::{Frame, Layout, Limits, Size};
-use mui_text::{FallbackTextRun, TextRun, Weight};
+use mui_text::{Axes, FallbackTextRun, TextRun};
 
 use crate::regions::Operation;
 use crate::{
@@ -161,10 +161,10 @@ pub struct Text {
     pub origin: Point,
     /// Shaped glyph id, x/y offset and face index from the origin.
     pub glyphs: Arc<[TextGlyph]>,
-    /// The weight the run was shaped at; `coords` is the same thing in the
-    /// form a glyph cache wants, and [`ResolvedScene::set_text`] re-shapes
-    /// from this one.
-    pub weight: Weight,
+    /// The axis settings the run was shaped at; `coords` is the same thing
+    /// in the form a glyph cache wants, and [`ResolvedScene::set_text`]
+    /// re-shapes from this one.
+    pub axes: Axes,
     /// The face's normalized axis coordinates this run was measured at, from
     /// [`mui_text::normalized_coords`]. Empty for a static face. A renderer
     /// with its own glyph cache has to pass these on, or it paints the
@@ -173,6 +173,10 @@ pub struct Text {
     /// Per-face normalized coordinates. `coords` remains the primary face's
     /// value for callers that only know about one font.
     pub font_coords: Arc<[Arc<[i16]>]>,
+    /// Whether a renderer should hint this run. Off for the frame after its
+    /// axes moved: a glyph mid-morph gains nothing from stem snapping and
+    /// would cost a fresh hinting instance per frame.
+    pub hint: bool,
 }
 impl PartialEq for Text {
     fn eq(&self, o: &Self) -> bool {
@@ -186,9 +190,10 @@ impl PartialEq for Text {
             && self.size == o.size
             && self.origin == o.origin
             && self.glyphs == o.glyphs
-            && self.weight == o.weight
+            && self.axes == o.axes
             && self.coords == o.coords
             && self.font_coords == o.font_coords
+            && self.hint == o.hint
     }
 }
 
@@ -313,7 +318,6 @@ impl ResolvedScene {
     /// assert_eq!(run.text.as_ref().unwrap().glyphs.len(), "-12.4 dB".len());
     /// ```
     pub fn set_text(&mut self, key: &str, s: &str) -> Result<(), SceneError> {
-        let font = self.font.clone().ok_or(SceneError::NoTextLayer)?;
         let mut at = self
             .paint
             .iter()
@@ -328,22 +332,28 @@ impl ResolvedScene {
             .text
             .as_ref()
             .ok_or(SceneError::NoTextLayer)?;
-        let (size, origin, weight, coords, font_coords) = (
+        let (size, origin, axes, coords, font_coords, font, all_fonts, hint) = (
             old.size,
             old.origin,
-            old.weight,
+            old.axes.clone(),
             old.coords.clone(),
             old.font_coords.clone(),
+            old.font.clone(),
+            old.fonts.clone(),
+            old.hint,
         );
-        let mut fonts = Vec::with_capacity(1 + self.fallback_fonts.len());
-        fonts.push(font.as_ref());
-        fonts.extend(self.fallback_fonts.iter().map(AsRef::as_ref));
+        // The faces the run was resolved with, per-node font included.
+        let fonts: Vec<&[u8]> = if all_fonts.is_empty() {
+            vec![font.as_ref()]
+        } else {
+            all_fonts.iter().map(AsRef::as_ref).collect()
+        };
         let run = if fonts.len() == 1 {
             CachedRun::from_text(mui_text::text_run(
-                &font,
+                fonts[0],
                 s,
                 f64::from(size),
-                &[weight.axis()],
+                &axes.to_vec(),
                 self.tolerance,
             )?)
         } else {
@@ -351,23 +361,20 @@ impl ResolvedScene {
                 &fonts,
                 s,
                 f64::from(size),
-                &[weight.axis()],
+                &axes.to_vec(),
                 self.tolerance,
             )?)
         };
-        let all_fonts: Arc<[Arc<[u8]>]> = std::iter::once(font.clone())
-            .chain(self.fallback_fonts.iter().cloned())
-            .collect::<Vec<_>>()
-            .into();
         self.paint[first].text = Some(Text {
             font,
             fonts: all_fonts,
             size,
             origin,
             glyphs: run.glyphs,
-            weight,
+            axes,
             coords,
             font_coords,
+            hint,
         });
         for i in rest.into_iter().rev() {
             self.paint.remove(i);
@@ -675,13 +682,24 @@ impl CachedRun {
     }
 }
 
+/// Per-face normalized coordinates, primary face first. What a run is keyed
+/// on: two axis settings that round to the same coordinates share a run.
+type Coords = Arc<[Arc<[i16]>]>;
+/// (size bits, primary face identity, coordinates).
+type RunKey = (u64, usize, Coords);
+
 #[derive(Debug, Default)]
 pub struct TextCache {
     layout: mui_layout::LayoutCache,
     fonts: usize,
     tolerance_bits: u64,
     entries: usize,
-    runs: HashMap<String, HashMap<(u64, u16), CachedRun>>,
+    runs: HashMap<String, HashMap<RunKey, CachedRun>>,
+    /// Axis settings already normalized, so a frame does not re-derive the
+    /// same coordinates per measure call. Flushed with `runs`.
+    coords: HashMap<(u64, usize, Axes), Coords>,
+    /// The coordinates each text key drew with last frame, for `Text::hint`.
+    last_coords: HashMap<Arc<str>, Coords>,
     welds: WeldCache,
     borders: crate::border_ramp::BorderCache,
     region_cache: crate::regions::RegionCache,
@@ -698,57 +716,119 @@ impl TextCache {
     }
 }
 
+/// What one text node is measured and shaped with.
+#[derive(Clone, Copy)]
+struct Face<'a> {
+    size: f64,
+    axes: &'a Axes,
+    /// The node's own face, if it set one; tried before the scene's fonts.
+    font: Option<&'a [u8]>,
+}
+impl<'a> Face<'a> {
+    fn of(e: &'a crate::Element, th: Theme) -> Self {
+        Self {
+            size: e.text_size.unwrap_or(th.text),
+            axes: &e.axes,
+            font: e.font.as_deref(),
+        }
+    }
+}
+
 struct Runs<'a> {
     fonts: Vec<&'a [u8]>,
     tolerance: f64,
-    cache: &'a mut HashMap<String, HashMap<(u64, u16), CachedRun>>,
+    cache: &'a mut HashMap<String, HashMap<RunKey, CachedRun>>,
     entries: &'a mut usize,
+    coords: &'a mut HashMap<(u64, usize, Axes), Coords>,
+    last_coords: &'a mut HashMap<Arc<str>, Coords>,
 }
-impl Runs<'_> {
-    fn run(
-        &mut self,
-        text: &str,
-        size: f64,
-        w: Weight,
-    ) -> Result<Option<&CachedRun>, mui_text::Error> {
-        let Some(font) = self.fonts.first().copied() else {
+impl<'a> Runs<'a> {
+    /// The faces a node shapes with: its own first, then the scene's.
+    fn fonts_for<'f>(&self, face: Face<'f>) -> Vec<&'f [u8]>
+    where
+        'a: 'f,
+    {
+        face.font
+            .into_iter()
+            .chain(self.fonts.iter().copied())
+            .collect()
+    }
+    /// Per-face coordinates for `face`, memoised per (size, font, axes).
+    fn coords(&mut self, fonts: &[&[u8]], face: Face<'_>) -> Coords {
+        let primary = fonts.first().map_or(0, |f| f.as_ptr() as usize);
+        let key = (face.size.to_bits(), primary, face.axes.clone());
+        if let Some(c) = self.coords.get(&key) {
+            return c.clone();
+        }
+        let settings = face.axes.to_vec();
+        let coords: Coords = fonts
+            .iter()
+            .map(|f| {
+                mui_text::normalized_coords(f, face.size, &settings)
+                    .map_or_else(|_| Arc::from(&[][..]), Arc::from)
+            })
+            .collect::<Vec<_>>()
+            .into();
+        // ponytail: a spring writes a new key per frame; a flat cap keeps
+        // that bounded without an LRU.
+        if self.coords.len() >= 4096 {
+            self.coords.clear();
+        }
+        self.coords.insert(key, coords.clone());
+        coords
+    }
+    /// Whether `key` drew at these coordinates last frame too. False only
+    /// for the frame after an axis moved, which is what turns hinting off
+    /// mid-tween; text seen for the first time counts as settled.
+    fn settled(&mut self, key: &Arc<str>, coords: &Coords) -> bool {
+        match self.last_coords.insert(key.clone(), coords.clone()) {
+            Some(last) => last == *coords,
+            None => true,
+        }
+    }
+    fn run(&mut self, text: &str, face: Face<'_>) -> Result<Option<&CachedRun>, mui_text::Error> {
+        let fonts = self.fonts_for(face);
+        let Some(&font) = fonts.first() else {
             return Ok(None);
         };
+        let coords = self.coords(&fonts, face);
         // Nested so a hit borrows `text` instead of allocating a key for it:
         // `run` is called several times per line, per frame.
-        let bits = (size.to_bits(), w.value());
-        if self.cache.get(text).is_none_or(|m| !m.contains_key(&bits)) {
-            let run = if self.fonts.len() == 1 {
+        let key: RunKey = (face.size.to_bits(), font.as_ptr() as usize, coords);
+        if self.cache.get(text).is_none_or(|m| !m.contains_key(&key)) {
+            let settings = face.axes.to_vec();
+            let run = if fonts.len() == 1 {
                 CachedRun::from_text(mui_text::text_run(
                     font,
                     text,
-                    size,
-                    &[w.axis()],
+                    face.size,
+                    &settings,
                     self.tolerance,
                 )?)
             } else {
                 CachedRun::from_fallback(mui_text::fallback_text_run(
-                    &self.fonts,
+                    &fonts,
                     text,
-                    size,
-                    &[w.axis()],
+                    face.size,
+                    &settings,
                     self.tolerance,
                 )?)
             };
-            // Count complete (text, size, weight) variants. A single animated
+            // Count complete (text, size, axes) variants. A single animated
             // label can otherwise grow its inner map without ever hitting a cap.
             // This remains a coarse flush policy, not an LRU or byte budget.
             if *self.entries >= 4096 {
                 self.cache.clear();
+                self.coords.clear();
                 *self.entries = 0;
             }
             self.cache
                 .entry(text.to_owned())
                 .or_default()
-                .insert(bits, run);
+                .insert(key.clone(), run);
             *self.entries += 1;
         }
-        Ok(self.cache.get(text).and_then(|m| m.get(&bits)))
+        Ok(self.cache.get(text).and_then(|m| m.get(&key)))
     }
     /// The lines `text` breaks into at `max` width, capped at `cap` of them
     /// with an ellipsis on the last. One line when it fits, or when there is
@@ -760,19 +840,20 @@ impl Runs<'_> {
     fn lines<'t>(
         &mut self,
         text: &'t str,
-        size: f64,
-        w: Weight,
+        face: Face<'_>,
         max: f64,
         cap: Option<usize>,
     ) -> Vec<Cow<'t, str>> {
-        let fits = self.measure(text, size, w).width <= max + 0.5;
-        let Some(font) = self.fonts.first().copied().filter(|_| !fits && max > 0.0) else {
+        let fits = self.measure(text, face).width <= max + 0.5;
+        let fonts = self.fonts_for(face);
+        let Some(&font) = fonts.first().filter(|_| !fits && max > 0.0) else {
             return vec![Cow::Borrowed(text)];
         };
-        let lines = if self.fonts.len() == 1 {
-            mui_text::break_lines_with_axes(font, text, size, &[w.axis()], max)
+        let settings = face.axes.to_vec();
+        let lines = if fonts.len() == 1 {
+            mui_text::break_lines_with_axes(font, text, face.size, &settings, max)
         } else {
-            mui_text::fallback_break_lines(&self.fonts, text, size, &[w.axis()], max)
+            mui_text::fallback_break_lines(&fonts, text, face.size, &settings, max)
         };
         let Ok(lines) = lines else {
             return vec![Cow::Borrowed(text)];
@@ -797,17 +878,18 @@ impl Runs<'_> {
         out
     }
     /// A wrapped label's box: the widest line by the stack of line heights.
-    fn wrapped(&mut self, text: &str, size: f64, wt: Weight, max: f64, cap: Option<usize>) -> Size {
+    fn wrapped(&mut self, text: &str, face: Face<'_>, max: f64, cap: Option<usize>) -> Size {
         let (mut w, mut h) = (0.0f64, 0.0);
-        for l in self.lines(text, size, wt, max, cap) {
-            let s = self.measure(&l, size, wt);
+        for l in self.lines(text, face, max, cap) {
+            let s = self.measure(&l, face);
             w = w.max(s.width);
             h += s.height;
         }
         Size::new(w, h)
     }
-    fn measure(&mut self, text: &str, size: f64, w: Weight) -> Size {
-        match self.run(text, size, w) {
+    fn measure(&mut self, text: &str, face: Face<'_>) -> Size {
+        let size = face.size;
+        match self.run(text, face) {
             // ponytail: no font → a monospace guess, so layout tests stay
             // font-free. Wrong widths are visible the moment a font is set.
             Ok(None) | Err(_) => Size::new(text.chars().count() as f64 * size * 0.6, size * 1.25),
@@ -1810,30 +1892,27 @@ impl<'a> Walk<'a> {
                     self.paint.remove(i);
                 }
                 bg = under;
-                let lines = self
-                    .runs
-                    .lines(t, size, e.weight, frame.size.width, e.lines);
-                let coords = coords_for(self.spec.font.as_deref(), e.weight);
-                let font_coords: Arc<[Arc<[i16]>]> = self
-                    .spec
+                let face = Face::of(e, th);
+                let lines = self.runs.lines(t, face, frame.size.width, e.lines);
+                let fonts: Arc<[Arc<[u8]>]> = e
                     .font
                     .iter()
-                    .chain(self.spec.fallback_fonts.iter())
-                    .map(|font| coords_for(Some(font), e.weight))
-                    .collect::<Vec<_>>()
-                    .into();
-                let fonts: Arc<[Arc<[u8]>]> = self
-                    .spec
-                    .font
-                    .iter()
+                    .chain(self.spec.font.iter())
                     .chain(self.spec.fallback_fonts.iter())
                     .cloned()
                     .collect::<Vec<_>>()
                     .into();
+                let faces = self.runs.fonts_for(face);
+                let font_coords = self.runs.coords(&faces, face);
+                let coords = font_coords
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| Arc::from(&[][..]));
+                let hint = self.runs.settled(&key, &font_coords);
                 let n = lines.len();
                 let base = self.base_y;
                 for (li, line) in lines.iter().enumerate() {
-                    let Some(run) = self.runs.run(line, size, e.weight)? else {
+                    let Some(run) = self.runs.run(line, face)? else {
                         break;
                     };
                     // One line sits centred on ascent+descent, or on the
@@ -1865,15 +1944,16 @@ impl<'a> Walk<'a> {
                         snap(frame.x, self.spec.device_scale),
                         snap(dy, self.spec.device_scale),
                     );
-                    let text = self.spec.font.clone().map(|font| Text {
+                    let text = fonts.first().cloned().map(|font| Text {
                         font,
                         fonts: fonts.clone(),
                         size: size as f32,
                         origin,
                         glyphs: run.glyphs.clone(),
-                        weight: e.weight,
+                        axes: e.axes.clone(),
                         coords: coords.clone(),
                         font_coords: font_coords.clone(),
+                        hint,
                     });
                     let ink_path = if text.is_some() {
                         Path::default()
@@ -2018,15 +2098,9 @@ impl<'a> Walk<'a> {
                 at2 += count(c);
                 let own = match &c.payload().content {
                     Content::Text(t) => {
-                        let s = c.payload().text_size.unwrap_or(th.text);
-                        let lines = self.runs.lines(
-                            t,
-                            s,
-                            c.payload().weight,
-                            f.size.width,
-                            c.payload().lines,
-                        );
-                        self.runs.run(&lines[0], s, c.payload().weight)?.map(|r| {
+                        let face = Face::of(c.payload(), th);
+                        let lines = self.runs.lines(t, face, f.size.width, c.payload().lines);
+                        self.runs.run(&lines[0], face)?.map(|r| {
                             let height = if lines.len() == 1 {
                                 r.ascent + r.descent
                             } else {
@@ -2220,29 +2294,22 @@ fn fit(runs: &mut Runs, th: Theme, e: &crate::Element, room: Option<f64>) -> Siz
     let Content::Text(t) = &e.content else {
         return Size::ZERO;
     };
-    let (t, size, w) = (t.as_str(), e.text_size.unwrap_or(th.text), e.weight);
+    let (t, face) = (t.as_str(), Face::of(e, th));
     let mut fit = match room {
         // The room it wrapped into, not its longest line: a paragraph that
         // reported the ragged width would then be centred inside its own
         // column, aligned with nothing above it.
-        Some(room) if room > 0.0 && runs.measure(t, size, w).width > room + 0.5 => {
-            Size::new(room, runs.wrapped(t, size, w, room, e.lines).height)
+        Some(room) if room > 0.0 && runs.measure(t, face).width > room + 0.5 => {
+            Size::new(room, runs.wrapped(t, face, room, e.lines).height)
         }
-        _ => runs.measure(t, size, w),
+        _ => runs.measure(t, face),
     };
     // The reserved string widens the box and nothing else: its own height is
     // the same line at the same size, and a longer value still measures long.
     if let Some(r) = &e.reserve {
-        fit.width = fit.width.max(runs.measure(r, size, w).width);
+        fit.width = fit.width.max(runs.measure(r, face).width);
     }
     fit
-}
-
-/// The axis coordinates a run at `w` is drawn at, for a renderer with its own
-/// glyph cache. Empty for a static face, which is most of them.
-fn coords_for(font: Option<&[u8]>, w: Weight) -> Arc<[i16]> {
-    font.and_then(|f| mui_text::normalized_coords(f, &[w.axis()]).ok())
-        .map_or_else(|| Arc::from(&[][..]), Arc::from)
 }
 
 pub fn resolve_scene(spec: &SceneSpec) -> Result<ResolvedScene, SceneError> {
@@ -2285,6 +2352,8 @@ pub fn resolve_scene_cached(
     }
     if text.fonts != font_id || text.tolerance_bits != spec.tolerance.to_bits() {
         text.runs.clear();
+        text.coords.clear();
+        text.last_coords.clear();
         text.entries = 0;
         text.fonts = font_id;
         text.tolerance_bits = spec.tolerance.to_bits();
@@ -2301,6 +2370,8 @@ pub fn resolve_scene_cached(
         tolerance: spec.tolerance,
         cache: &mut text.runs,
         entries: &mut text.entries,
+        coords: &mut text.coords,
+        last_coords: &mut text.last_coords,
     };
     let th = spec.theme;
     // Every paragraph wraps in this one pass: mui-layout hands a flex item's
@@ -2317,10 +2388,11 @@ pub fn resolve_scene_cached(
             // This is a correctness-first projection, not hash-only equality.
             if let Content::Text(t) = &e.content {
                 format!(
-                    "{:?}|{:016x}|{}|{:?}|{:?}",
+                    "{:?}|{:016x}|{:?}|{:x}|{:?}|{:?}",
                     t,
                     e.text_size.unwrap_or(th.text).to_bits(),
-                    e.weight.value(),
+                    e.axes,
+                    e.font.as_ref().map_or(0, |f| f.as_ptr() as usize),
                     e.lines,
                     e.reserve
                 )
@@ -3332,18 +3404,42 @@ mod feature_tests {
             text("hi").id("a"),
             text("hi").text_weight(Weight::BOLD).id("b")
         ]);
-        sp.font = Some(Arc::from(epaint_default_fonts::HACK_REGULAR));
+        sp.font = Some(Arc::from(ttf_inter::REGULAR));
         let s = resolve_scene_with(&sp, &mut cache).unwrap();
-        // Same string, two weights: two shaped runs, not one reused at the
-        // wrong instance.
+        // Same string, two weights of a variable face: two shaped runs, not
+        // one reused at the wrong instance.
         assert_eq!(cache.len(), 2);
-        let w: Vec<Weight> = s
+        // A static face shapes the same at any weight, so it shares one.
+        let mut hack = TextCache::default();
+        sp.font = Some(Arc::from(epaint_default_fonts::HACK_REGULAR));
+        resolve_scene_with(&sp, &mut hack).unwrap();
+        assert_eq!(hack.len(), 1);
+        sp.font = Some(Arc::from(ttf_inter::REGULAR));
+        let s = resolve_scene_with(&sp, &mut cache).unwrap();
+        let w: Vec<Option<f32>> = s
             .paint
             .iter()
             .filter(|p| p.layer == Layer::Text)
-            .filter_map(|p| p.text.as_ref().map(|t| t.weight))
+            .filter_map(|p| p.text.as_ref().map(|t| t.axes.get("wght")))
             .collect();
-        assert_eq!(w, [Weight::REGULAR, Weight::BOLD]);
+        assert_eq!(w, [None, Some(700.)]);
+    }
+
+    #[test]
+    fn hinting_pauses_for_the_frame_after_an_axis_moves() {
+        let hint_at = |w: f32, cache: &mut TextCache| {
+            let mut sp = SceneSpec::new(row([text("hi").text_axis("wght", w).id("t")]));
+            sp.font = Some(Arc::from(ttf_inter::REGULAR));
+            let s = resolve_scene_with(&sp, cache).unwrap();
+            s.paint.iter().find_map(|p| p.text.as_ref()).unwrap().hint
+        };
+        let mut cache = TextCache::default();
+        assert!(hint_at(400., &mut cache), "first frame is settled");
+        assert!(hint_at(400., &mut cache));
+        assert!(!hint_at(500., &mut cache), "the frame it moved on");
+        assert!(hint_at(500., &mut cache), "settled again");
+        // Two settings that round to the same coordinates are one instance.
+        assert!(hint_at(500.001, &mut cache));
     }
 
     #[test]

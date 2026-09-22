@@ -271,8 +271,8 @@ macro_rules! wrapper {
                 self.$inner
                     .glyph_run(self.resources, &font_data(font))
                     .font_size(text.size)
-                    // glifo's current default, not a promise it will stay one.
-                    .hint(true)
+                    // Off for the frame after an axis moved: see Text::hint.
+                    .hint(text.hint)
                     // The run was measured at this instance; drawing the default
                     // one under its advances is how a bold readout goes ragged.
                     .normalized_coords(coords)
@@ -936,7 +936,8 @@ mod seam {
                         },
                     ][..],
                 ),
-                weight: Default::default(),
+                axes: Default::default(),
+                hint: true,
                 coords: Arc::from(&[][..]),
                 font_coords: Arc::from(&[][..]),
             }),
