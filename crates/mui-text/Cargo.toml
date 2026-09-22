@@ -7,7 +7,9 @@ license.workspace = true
 [dependencies]
 mui-geometry = { path = "../mui-geometry" }
 skrifa = "0.44"
-rustybuzz = "0.20"
+# Pinned: 0.12 shares read-fonts 0.41 with skrifa 0.44, so one parse serves
+# both shaping and outlines. Bump together with skrifa.
+harfrust = "=0.12.0"
 unicode-bidi = "0.3"
 unicode-linebreak = "0.1.5"
 unicode-segmentation = "1.13"

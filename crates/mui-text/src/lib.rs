@@ -7,14 +7,19 @@
 //! way, as one path; there is still no atlas anywhere.
 //!
 //! Variable-font axes are an argument rather than a font variant: the outline
-//! is re-derived at whatever axis position is asked for. Animating Material
-//! Symbols from unfilled to filled is `FILL` 0 -> 1 with no atlas in the way.
+//! is re-derived at whatever axis position is asked for, so Material Symbols
+//! morph from unfilled to filled as `FILL` 0 -> 1. The geometry path here has
+//! no cache at all; `mui-vello` rasterises the same outlines through a glyph
+//! cache keyed on the normalized axis coordinates, one entry per position.
 #![forbid(unsafe_code)]
 
 use std::collections::HashMap;
 
+use harfrust::{
+    BufferClusterLevel, BufferFlags, Direction, ShapeOptions, ShaperData, ShaperInstance,
+    UnicodeBuffer,
+};
 use mui_geometry::{Path, PathCommand, Point};
-use rustybuzz::{BufferClusterLevel, BufferFlags, Direction};
 use skrifa::outline::{DrawSettings, OutlinePen};
 use skrifa::prelude::{LocationRef, Size};
 use skrifa::{FontRef, GlyphId, MetadataProvider as _};
@@ -137,6 +142,73 @@ impl Default for Weight {
     }
 }
 
+/// An owned axis setting list: what an element stores and a cache keys on.
+///
+/// Tags are kept sorted and values as `f32` bits, so the same settings in any
+/// order compare and hash equal. Setting a tag again replaces it. A tag that
+/// is not four ASCII bytes, or a value that is not finite, is ignored: no
+/// font can declare the one and no outline exists at the other.
+///
+/// Always set the same tags every frame of an animation: an omitted axis
+/// sits at its default, so `FILL` present then absent is a jump to 0.
+///
+/// ```
+/// use mui_text::{Axes, Weight};
+/// let a = Axes::new().with("wght", 700.).with("FILL", 1.);
+/// let b = Axes::from(Weight::BOLD).with("FILL", 1.);
+/// assert_eq!(a, b);
+/// assert_eq!(a.get("FILL"), Some(1.));
+/// assert_eq!(a.to_vec(), [("FILL", 1.), ("wght", 700.)]);
+/// ```
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct Axes(Vec<([u8; 4], u32)>);
+impl Axes {
+    pub const fn new() -> Self {
+        Self(Vec::new())
+    }
+    pub fn with(mut self, tag: &str, value: f32) -> Self {
+        self.set(tag, value);
+        self
+    }
+    pub fn set(&mut self, tag: &str, value: f32) {
+        let Ok(tag) = <[u8; 4]>::try_from(tag.as_bytes()) else {
+            return;
+        };
+        if !tag.is_ascii() || !value.is_finite() {
+            return;
+        }
+        match self.0.binary_search_by_key(&tag, |a| a.0) {
+            Ok(i) => self.0[i].1 = value.to_bits(),
+            Err(i) => self.0.insert(i, (tag, value.to_bits())),
+        }
+    }
+    pub fn get(&self, tag: &str) -> Option<f32> {
+        let tag = <[u8; 4]>::try_from(tag.as_bytes()).ok()?;
+        self.0
+            .binary_search_by_key(&tag, |a| a.0)
+            .ok()
+            .map(|i| f32::from_bits(self.0[i].1))
+    }
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+    pub fn iter(&self) -> impl Iterator<Item = Axis<'_>> + '_ {
+        // ASCII was checked on the way in, so this never fails.
+        self.0
+            .iter()
+            .map(|(t, v)| (std::str::from_utf8(t).unwrap_or(""), f32::from_bits(*v)))
+    }
+    /// The borrowed form every measuring function here takes.
+    pub fn to_vec(&self) -> Vec<Axis<'_>> {
+        self.iter().collect()
+    }
+}
+impl From<Weight> for Axes {
+    fn from(w: Weight) -> Self {
+        Self::new().with("wght", f32::from(w.value()))
+    }
+}
+
 /// One variation axis the face actually declares, with the range it accepts.
 /// A UI needs this to offer a slider that cannot leave the design space.
 #[derive(Debug, Clone, PartialEq)]
@@ -145,6 +217,9 @@ pub struct AxisInfo {
     pub min: f32,
     pub default: f32,
     pub max: f32,
+    /// fvar `HIDDEN_AXIS`: the font asks UIs not to expose this axis directly
+    /// (an `opsz` it sets itself, an internal `XTRA`). Still settable.
+    pub hidden: bool,
 }
 
 /// The variation axes of a face, in the font's own order. Empty for a static
@@ -159,6 +234,7 @@ pub fn axes(font: &[u8]) -> Result<Vec<AxisInfo>, Error> {
             min: a.min_value(),
             default: a.default_value(),
             max: a.max_value(),
+            hidden: a.is_hidden(),
         })
         .collect())
 }
@@ -169,24 +245,52 @@ pub fn axes(font: &[u8]) -> Result<Vec<AxisInfo>, Error> {
 /// A renderer that draws cached glyph outlines instead of the path
 /// [`text_run`] hands back needs these, or it paints the default instance
 /// while layout measured the varied one. The numbers are F2Dot14 bits --
-/// what every glyph cache keys its variations on.
+/// what every glyph cache keys its variations on. `size_px` matters only to
+/// a face with an `opsz` axis, which follows the em size unless set.
 ///
 /// ```
 /// # let font = epaint_default_fonts::HACK_REGULAR;
 /// // A static face declares no axes, so there is nothing to vary.
-/// assert!(mui_text::normalized_coords(font, &[mui_text::Weight::BOLD.axis()])
+/// assert!(mui_text::normalized_coords(font, 16., &[mui_text::Weight::BOLD.axis()])
 ///     .unwrap()
 ///     .is_empty());
 /// ```
-pub fn normalized_coords(font: &[u8], axes: &[Axis<'_>]) -> Result<Vec<i16>, Error> {
+pub fn normalized_coords(font: &[u8], size_px: f64, axes: &[Axis<'_>]) -> Result<Vec<i16>, Error> {
     let font = FontRef::new(font).map_err(Error::Font)?;
-    Ok(font
-        .axes()
-        .location(axes.iter().copied())
+    Ok(location(&font, size_px, axes)
         .coords()
         .iter()
         .map(|c| c.to_bits())
         .collect())
+}
+
+/// The one place an axis setting becomes a position in the design space, so
+/// outlines, metrics, shaping and a renderer's cache key all agree.
+///
+/// `opsz` follows the em size unless the caller sets it -- CSS
+/// `font-optical-sizing: auto`, in CSS-pixel semantics; the face clamps it
+/// to the range it declares, so nothing is asked for that does not exist.
+///
+/// Coordinates are then rounded to 1/128 of a half-axis. A spring never
+/// lands on the same float twice, so without this every frame of a `FILL`
+/// tween is a new glyph-cache instance; with it a hover in and out reuses
+/// at most 128 per axis, and the extremes and the default round to
+/// themselves. Nobody can see 1/128 of an axis.
+fn location(font: &FontRef<'_>, size_px: f64, axes: &[Axis<'_>]) -> skrifa::instance::Location {
+    let all = font.axes();
+    let auto_opsz =
+        all.get_by_tag(skrifa::Tag::new(b"opsz")).is_some() && !axes.iter().any(|a| a.0 == "opsz");
+    let mut location = if auto_opsz {
+        all.location(axes.iter().copied().chain([("opsz", size_px as f32)]))
+    } else {
+        all.location(axes.iter().copied())
+    };
+    for c in location.coords_mut() {
+        *c = skrifa::instance::NormalizedCoord::from_bits(
+            ((i32::from(c.to_bits()) + 64).div_euclid(128) * 128) as i16,
+        );
+    }
+    location
 }
 
 /// The outline of one glyph, baseline at `y = 0` and growing upward as
@@ -217,7 +321,7 @@ pub fn glyph_path(
         return Err(Error::NoOutline(ch));
     }
 
-    let location = font.axes().location(axes.iter().copied());
+    let location = location(&font, size_px, axes);
     let mut pen = PathPen {
         commands: Vec::new(),
         cursor: Point::new(0., 0.),
@@ -337,7 +441,7 @@ pub fn text_run(
     }
     let font = FontRef::new(font_bytes).map_err(Error::Font)?;
     let font_size = Size::new(size);
-    let location = font.axes().location(axes.iter().copied());
+    let location = location(&font, size_px, axes);
     let outlines = font.outline_glyphs();
     let shaped = shape_text(font_bytes, text, size_px, axes)?;
 
@@ -403,7 +507,7 @@ pub fn fallback_text_run(
     }
     let faces = fonts
         .iter()
-        .map(|font| shape_face(font, axes))
+        .map(|font| shape_face(font, size_px, axes))
         .collect::<Result<Vec<_>, _>>()?;
     let font_refs = fonts
         .iter()
@@ -413,7 +517,7 @@ pub fn fallback_text_run(
         .iter()
         .map(|font| {
             let size = Size::new(size);
-            let location = font.axes().location(axes.iter().copied());
+            let location = location(font, size_px, axes);
             font.metrics(size, LocationRef::from(&location))
         })
         .collect();
@@ -474,7 +578,7 @@ pub fn fallback_text_run(
                     .get(glyph.glyph_id)
                     .is_some()
                 {
-                    let location = font_refs[font_index].axes().location(axes.iter().copied());
+                    let location = location(&font_refs[font_index], size_px, axes);
                     pen.dx = glyph.x;
                     pen.dy = glyph.y;
                     draw_glyph(
@@ -528,38 +632,55 @@ fn fallback_chunks(
     chunks
 }
 
-fn variations(axes: &[Axis<'_>]) -> Vec<rustybuzz::Variation> {
-    axes.iter()
-        .filter_map(|&(tag, value)| {
-            let tag: [u8; 4] = tag.as_bytes().try_into().ok()?;
-            Some(rustybuzz::Variation {
-                tag: rustybuzz::ttf_parser::Tag::from_bytes(&tag),
-                value,
-            })
-        })
-        .collect()
+/// A face parsed once for shaping, plus the variation instance every segment
+/// of one run shares. Omitted axes sit at their defaults, so the same tag set
+/// always means the same instance.
+struct ShapeFace<'a> {
+    font: FontRef<'a>,
+    data: ShaperData,
+    instance: ShaperInstance,
 }
 
-fn shape_face<'a>(font: &'a [u8], axes: &[Axis<'_>]) -> Result<rustybuzz::Face<'a>, Error> {
-    let mut face = rustybuzz::Face::from_slice(font, 0).ok_or(Error::InvalidOptions("font"))?;
-    face.set_variations(&variations(axes));
-    Ok(face)
+fn shape_face<'a>(font: &'a [u8], size_px: f64, axes: &[Axis<'_>]) -> Result<ShapeFace<'a>, Error> {
+    let font = FontRef::new(font).map_err(Error::Font)?;
+    let data = ShaperData::new(&font);
+    // The same normalized coordinates the outlines are drawn at, so the
+    // shaper's advances and FeatureVariations never disagree with the ink.
+    let instance = ShaperInstance::from_coords(
+        &font,
+        location(&font, size_px, axes).coords().iter().copied(),
+    );
+    Ok(ShapeFace {
+        font,
+        data,
+        instance,
+    })
 }
 
 fn shape_segment(
-    face: &rustybuzz::Face<'_>,
+    face: &ShapeFace<'_>,
     text: &str,
     byte_offset: usize,
     direction: Direction,
     size_px: f64,
 ) -> Result<ShapedText, Error> {
-    let mut buffer = rustybuzz::UnicodeBuffer::new();
+    let mut buffer = UnicodeBuffer::new();
     buffer.push_str(text);
     buffer.set_direction(direction);
     buffer.set_cluster_level(BufferClusterLevel::MonotoneGraphemes);
     buffer.set_flags(BufferFlags::BEGINNING_OF_TEXT | BufferFlags::END_OF_TEXT);
-    let shaped = rustybuzz::shape(face, &[], buffer);
-    let scale = size_px / f64::from(face.units_per_em());
+    // Unlike rustybuzz, harfrust does not infer the script; without it the
+    // shaper picks the default shaper and skips mark positioning.
+    buffer.guess_segment_properties();
+    let shaper = face
+        .data
+        .shaper(&face.font)
+        .instance(Some(&face.instance))
+        .build();
+    // Default feature set: HarfBuzz turns on rlig/rclt/calt/liga, which is
+    // what FeatureVariations-driven swaps (Material Symbols FILL) hang off.
+    let shaped = shaper.shape(buffer, ShapeOptions::new());
+    let scale = size_px / f64::from(shaper.units_per_em());
     let mut pen = 0.;
     let mut glyphs = Vec::with_capacity(shaped.len());
     for (info, position) in shaped.glyph_infos().iter().zip(shaped.glyph_positions()) {
@@ -624,7 +745,7 @@ fn shape_text(
     if text.is_empty() {
         return Ok(ShapedText::default());
     }
-    let face = shape_face(font, axes)?;
+    let face = shape_face(font, size_px, axes)?;
     let mut out = ShapedText::default();
     for (range, direction) in visual_segments(text) {
         let mut segment =
@@ -759,11 +880,7 @@ struct TextCluster {
     right: f64,
 }
 
-fn shaped_clusters(font: &[u8], text: &str, size_px: f64) -> Result<Vec<TextCluster>, Error> {
-    shaped_clusters_with_axes(font, text, size_px, &[])
-}
-
-fn shaped_clusters_with_axes(
+fn shaped_clusters(
     font: &[u8],
     text: &str,
     size_px: f64,
@@ -808,7 +925,7 @@ fn advances_with_axes(
     axes: &[Axis<'_>],
 ) -> Result<Vec<f64>, Error> {
     checked_size(size_px)?;
-    let clusters = shaped_clusters_with_axes(font, text, size_px, axes)?;
+    let clusters = shaped_clusters(font, text, size_px, axes)?;
     let starts: Vec<usize> = text.char_indices().map(|(i, _)| i).collect();
     let mut out = vec![0.; starts.len()];
     if starts.is_empty() {
@@ -866,7 +983,7 @@ pub fn break_lines_with_axes(
         return Err(Error::InvalidOptions("max_width"));
     }
     let advances = advances_with_axes(font, text, size_px, axes)?;
-    let cluster_starts: Vec<usize> = shaped_clusters_with_axes(font, text, size_px, axes)?
+    let cluster_starts: Vec<usize> = shaped_clusters(font, text, size_px, axes)?
         .into_iter()
         .map(|cluster| cluster.start)
         .collect();
@@ -1000,8 +1117,13 @@ pub fn fallback_break_lines(
     break_lines_from_advances(text, &advances, &cluster_starts, max_width)
 }
 
-fn caret_positions(font: &[u8], text: &str, size_px: f64) -> Result<Vec<(usize, f64)>, Error> {
-    caret_positions_from_clusters(text, shaped_clusters(font, text, size_px)?)
+fn caret_positions(
+    font: &[u8],
+    text: &str,
+    size_px: f64,
+    axes: &[Axis<'_>],
+) -> Result<Vec<(usize, f64)>, Error> {
+    caret_positions_from_clusters(text, shaped_clusters(font, text, size_px, axes)?)
 }
 
 fn caret_positions_from_clusters(
@@ -1051,12 +1173,20 @@ fn caret_positions_from_clusters(
 }
 
 /// Pen x of the caret sitting *before* the char at `byte_index`, which must be
-/// a char boundary. `text.len()` is the caret at the end.
-pub fn caret_x(font: &[u8], text: &str, size_px: f64, byte_index: usize) -> Result<f64, Error> {
+/// a char boundary. `text.len()` is the caret at the end. `axes` must match
+/// what the run is drawn with: a variable face advances differently at
+/// `wght` 700 than at 400, and a caret measured at the wrong weight drifts.
+pub fn caret_x(
+    font: &[u8],
+    text: &str,
+    size_px: f64,
+    axes: &[Axis<'_>],
+    byte_index: usize,
+) -> Result<f64, Error> {
     if byte_index > text.len() || !text.is_char_boundary(byte_index) {
         return Err(Error::InvalidOptions("byte_index"));
     }
-    let positions = caret_positions(font, text, size_px)?;
+    let positions = caret_positions(font, text, size_px, axes)?;
     Ok(positions
         .into_iter()
         .find_map(|(byte, x)| (byte == byte_index).then_some(x))
@@ -1065,9 +1195,15 @@ pub fn caret_x(font: &[u8], text: &str, size_px: f64, byte_index: usize) -> Resu
 
 /// The char boundary whose caret is nearest `x`. The inverse of [`caret_x`],
 /// which is what a click in a text field needs.
-pub fn hit_index(font: &[u8], text: &str, size_px: f64, x: f64) -> Result<usize, Error> {
+pub fn hit_index(
+    font: &[u8],
+    text: &str,
+    size_px: f64,
+    axes: &[Axis<'_>],
+    x: f64,
+) -> Result<usize, Error> {
     let x = checked_finite(x, "x")?;
-    let positions = caret_positions(font, text, size_px)?;
+    let positions = caret_positions(font, text, size_px, axes)?;
     let (best, _) =
         positions
             .into_iter()
@@ -1086,8 +1222,9 @@ fn fallback_caret_positions(
     fonts: &[&[u8]],
     text: &str,
     size_px: f64,
+    axes: &[Axis<'_>],
 ) -> Result<Vec<(usize, f64)>, Error> {
-    let run = fallback_text_run(fonts, text, size_px, &[], 0.05)?;
+    let run = fallback_text_run(fonts, text, size_px, axes, 0.05)?;
     let mut rtl = HashMap::new();
     for (range, direction) in visual_segments(text) {
         for (offset, _) in text[range.clone()].char_indices() {
@@ -1121,12 +1258,13 @@ pub fn fallback_caret_x(
     fonts: &[&[u8]],
     text: &str,
     size_px: f64,
+    axes: &[Axis<'_>],
     byte_index: usize,
 ) -> Result<f64, Error> {
     if byte_index > text.len() || !text.is_char_boundary(byte_index) {
         return Err(Error::InvalidOptions("byte_index"));
     }
-    Ok(fallback_caret_positions(fonts, text, size_px)?
+    Ok(fallback_caret_positions(fonts, text, size_px, axes)?
         .into_iter()
         .find_map(|(byte, x)| (byte == byte_index).then_some(x))
         .unwrap_or(0.))
@@ -1137,10 +1275,11 @@ pub fn fallback_hit_index(
     fonts: &[&[u8]],
     text: &str,
     size_px: f64,
+    axes: &[Axis<'_>],
     x: f64,
 ) -> Result<usize, Error> {
     let x = checked_finite(x, "x")?;
-    let (best, _) = fallback_caret_positions(fonts, text, size_px)?
+    let (best, _) = fallback_caret_positions(fonts, text, size_px, axes)?
         .into_iter()
         .fold((0, x.abs()), |(best, best_distance), (byte, position)| {
             let distance = (position - x).abs();
@@ -1237,11 +1376,74 @@ mod tests {
         let hollow_area = area(&hollow).abs();
         let solid_area = area(&solid).abs();
         assert!(hollow_area > 0.);
-        assert!(solid_area > hollow_area * 1.5, "filled heart covers more: {solid_area} vs {hollow_area}");
+        assert!(
+            solid_area > hollow_area * 1.5,
+            "filled heart covers more: {solid_area} vs {hollow_area}"
+        );
         let mid = glyph_path(MATERIAL_SYMBOLS, '\u{E87D}', 24., &[("FILL", 0.5)], 0.05).unwrap();
         let mid_area = area(&mid).abs();
-        assert!(mid_area > hollow_area && mid_area < solid_area, "morph is monotone: {mid_area}");
-        mui_tessellate::Tessellator::default().tessellate(&hollow, 0.05).unwrap();
+        assert!(
+            mid_area > hollow_area && mid_area < solid_area,
+            "morph is monotone: {mid_area}"
+        );
+        mui_tessellate::Tessellator::default()
+            .tessellate(&hollow, 0.05)
+            .unwrap();
+    }
+
+    #[test]
+    fn the_shaper_applies_feature_variations_at_the_fill_extreme() {
+        // Material Symbols swap in a dedicated filled glyph via GSUB
+        // FeatureVariations once FILL >= 0.99; the shaper must honour it, and
+        // the swap must not move the advance (icons are fixed-width).
+        let hollow = text_run(MATERIAL_SYMBOLS, "\u{E88A}", 24., &[("FILL", 0.)], 0.05).unwrap();
+        let solid = text_run(MATERIAL_SYMBOLS, "\u{E88A}", 24., &[("FILL", 1.)], 0.05).unwrap();
+        assert_ne!(
+            hollow.glyphs[0].0, solid.glyphs[0].0,
+            "filled glyph substituted"
+        );
+        assert_eq!(hollow.advance, solid.advance);
+        assert_eq!(hollow.advance, 24., "Material Symbols advance one em");
+    }
+
+    #[test]
+    fn caret_follows_the_weight_it_is_drawn_at() {
+        use ttf_inter::REGULAR as INTER_VARIABLE;
+        let text = "mmmm";
+        let regular = caret_x(INTER_VARIABLE, text, 24., &[Weight::REGULAR.axis()], 4).unwrap();
+        let bold = caret_x(INTER_VARIABLE, text, 24., &[Weight::BOLD.axis()], 4).unwrap();
+        assert!(bold > regular, "bold is wider: {bold} vs {regular}");
+        let run = text_run(INTER_VARIABLE, text, 24., &[Weight::BOLD.axis()], 0.05).unwrap();
+        assert!((run.advance - bold).abs() < 1e-9, "caret and run agree");
+        assert_eq!(
+            hit_index(INTER_VARIABLE, text, 24., &[Weight::BOLD.axis()], bold).unwrap(),
+            4
+        );
+    }
+
+    #[test]
+    fn opsz_follows_the_size_unless_set_and_coords_are_quantised() {
+        let at24 = normalized_coords(MATERIAL_SYMBOLS, 24., &[]).unwrap();
+        let at48 = normalized_coords(MATERIAL_SYMBOLS, 48., &[]).unwrap();
+        let at480 = normalized_coords(MATERIAL_SYMBOLS, 480., &[]).unwrap();
+        // Axis order is FILL, GRAD, opsz, wght; opsz default is 24, max 48.
+        assert_eq!(at24[2], 0);
+        assert_eq!(at48[2], 16384);
+        assert_eq!(at480, at48, "clamped to the font's range, not reset");
+        let pinned = normalized_coords(MATERIAL_SYMBOLS, 480., &[("opsz", 24.)]).unwrap();
+        assert_eq!(pinned[2], 0, "an explicit opsz wins");
+        let a = normalized_coords(MATERIAL_SYMBOLS, 24., &[("FILL", 0.5001)]).unwrap();
+        let b = normalized_coords(MATERIAL_SYMBOLS, 24., &[("FILL", 0.5019)]).unwrap();
+        assert_eq!(a, b, "a spring's neighbouring floats share a cache key");
+        assert_eq!(a[0] % 128, 0);
+        assert_eq!(
+            normalized_coords(MATERIAL_SYMBOLS, 24., &[("FILL", 1.)]).unwrap()[0],
+            16384
+        );
+        assert_eq!(
+            normalized_coords(MATERIAL_SYMBOLS, 24., &[("wght", 100.)]).unwrap()[3],
+            -16384
+        );
     }
 
     #[test]
@@ -1529,13 +1731,13 @@ mod tests {
     fn fallback_caret_round_trips_across_a_missing_glyph() {
         let fonts = [HACK_REGULAR, epaint_default_fonts::NOTO_EMOJI_REGULAR];
         let text = "A😀";
-        let end = fallback_caret_x(&fonts, text, 24., text.len()).unwrap();
+        let end = fallback_caret_x(&fonts, text, 24., &[], text.len()).unwrap();
         assert_eq!(
-            fallback_hit_index(&fonts, text, 24., end).unwrap(),
+            fallback_hit_index(&fonts, text, 24., &[], end).unwrap(),
             text.len()
         );
         let emoji = text.char_indices().nth(1).unwrap().0;
-        let before_emoji = fallback_caret_x(&fonts, text, 24., emoji).unwrap();
+        let before_emoji = fallback_caret_x(&fonts, text, 24., &[], emoji).unwrap();
         assert!(end > before_emoji, "fallback glyph has no advance");
     }
 
@@ -1581,7 +1783,7 @@ mod measure_tests {
     #[test]
     fn a_line_breaks_at_the_last_space_that_fits() {
         let text = "hello world foo";
-        let width = caret_x(HACK_REGULAR, text, SIZE, 11).unwrap();
+        let width = caret_x(HACK_REGULAR, text, SIZE, &[], 11).unwrap();
         assert_eq!(lines(text, width), ["hello world ", "foo"]);
         let first = &break_lines(HACK_REGULAR, text, SIZE, width).unwrap()[0];
         assert!(
@@ -1593,7 +1795,7 @@ mod measure_tests {
     #[test]
     fn a_word_wider_than_the_line_breaks_mid_word() {
         let word = "x".repeat(40);
-        let out = lines(&word, caret_x(HACK_REGULAR, &word, SIZE, 10).unwrap());
+        let out = lines(&word, caret_x(HACK_REGULAR, &word, SIZE, &[], 10).unwrap());
         assert_eq!(out.len(), 4, "{out:?}");
         assert!(out.iter().all(|l| l.len() == 10), "{out:?}");
     }
@@ -1602,7 +1804,7 @@ mod measure_tests {
     fn uax14_says_where_a_line_may_start() {
         // Width of the first `n` bytes of the text itself, so the font's own
         // advances decide and no test hard-codes a pixel.
-        let w = |t: &str, n: usize| caret_x(HACK_REGULAR, t, SIZE, n).unwrap();
+        let w = |t: &str, n: usize| caret_x(HACK_REGULAR, t, SIZE, &[], n).unwrap();
 
         // A no-break space holds its word together; the ASCII space breaks.
         let nbsp = "a\u{00A0}b c";
@@ -1631,8 +1833,12 @@ mod measure_tests {
             .char_indices()
             .chain(std::iter::once((text.len(), ' ')))
         {
-            let x = caret_x(HACK_REGULAR, text, SIZE, i).unwrap();
-            assert_eq!(hit_index(HACK_REGULAR, text, SIZE, x).unwrap(), i, "at {i}");
+            let x = caret_x(HACK_REGULAR, text, SIZE, &[], i).unwrap();
+            assert_eq!(
+                hit_index(HACK_REGULAR, text, SIZE, &[], x).unwrap(),
+                i,
+                "at {i}"
+            );
         }
     }
 
@@ -1648,8 +1854,8 @@ mod measure_tests {
     #[test]
     fn a_non_finite_click_does_not_snap_to_the_start() {
         for x in [f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
-            assert!(hit_index(HACK_REGULAR, "abc", SIZE, x).is_err(), "{x}");
+            assert!(hit_index(HACK_REGULAR, "abc", SIZE, &[], x).is_err(), "{x}");
         }
-        assert_eq!(hit_index(HACK_REGULAR, "abc", SIZE, 1e6).unwrap(), 3);
+        assert_eq!(hit_index(HACK_REGULAR, "abc", SIZE, &[], 1e6).unwrap(), 3);
     }
 }
