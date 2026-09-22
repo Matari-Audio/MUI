@@ -1,9 +1,13 @@
 //! A bounded expression interpreter for the browser playground, not a Rust compiler.
 #![forbid(unsafe_code)]
-use mui_scene::prelude::*;
+use mui_scene::{material_symbols, prelude::*};
 use std::sync::Arc;
 use syn::{parse::Parser, punctuated::Punctuated, spanned::Spanned, Expr, Lit, Token};
 use wasm_bindgen::prelude::*;
+
+/// Material Symbols Outlined, cut down to the icons `icon("name")` accepts;
+/// see `fonts/README.md`. Variable in FILL, GRAD, opsz and wght.
+const ICONS: &[u8] = include_bytes!("../fonts/MaterialSymbolsOutlined-ui.ttf");
 
 type Args = Punctuated<Expr, Token![,]>;
 fn error(at: &impl Spanned, message: &str) -> syn::Error {
@@ -146,9 +150,24 @@ fn element(e: &Expr, depth: usize, nodes: &mut usize) -> syn::Result<El> {
                     count(&c.args, 0)?;
                     Ok(spacer())
                 }
+                Some("icon") => {
+                    count(&c.args, 1)?;
+                    let name = string(&c.args[0])?;
+                    // The subset carries a few dozen of the font's names; a
+                    // name it lacks would draw .notdef, so refuse it here.
+                    let in_subset =
+                        |ch: &char| mui_text::glyph_path(ICONS, *ch, 24., &[], 1.).is_ok();
+                    match material_symbols::codepoint(&name).filter(in_subset) {
+                        Some(ch) => Ok(icon(ICONS, ch)),
+                        None => Err(error(
+                            &c.args[0],
+                            "not an icon in the playground's Material Symbols subset; see crates/mui-playground/fonts/README.md",
+                        )),
+                    }
+                }
                 _ => Err(error(
                     e,
-                    "supported constructors: leaf(w, h), text(\"…\"), spacer()",
+                    "supported constructors: leaf(w, h), text(\"…\"), icon(\"home\"), spacer()",
                 )),
             }
         }
@@ -185,6 +204,9 @@ fn element(e: &Expr, depth: usize, nodes: &mut usize) -> syn::Result<El> {
                 "offset" => el.offset(number(&args[0])?, number(&args[1])?),
                 "id" => el.id(string(&args[0])?),
                 "text_size" => el.text_size(number(&args[0])?),
+                "icon_fill" => el.icon_fill(number(&args[0])? as f32),
+                "grade" => el.grade(number(&args[0])? as f32),
+                "weight" => el.text_axis("wght", number(&args[0])? as f32),
                 "cut" => el.cut(child(&args[0], nodes)?),
                 "keep" => el.keep(child(&args[0], nodes)?),
                 "center" => el.center(),
@@ -288,7 +310,8 @@ pub fn render(source: &str, width: u16, height: u16) -> Result<Frame, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    const EXAMPLES: [&str; 4] = [
+    const EXAMPLES: [&str; 5] = [
+        include_str!("../../../playground/examples/icons.mui"),
         include_str!("../../../playground/examples/weld.mui"),
         include_str!("../../../playground/examples/regions.mui"),
         include_str!("../../../playground/examples/cut.mui"),
@@ -310,6 +333,26 @@ mod tests {
         let a = render("leaf(100., 100.).fill(Primary)", 320, 240).unwrap();
         let b = render("leaf(100., 100.).fill(Secondary)", 320, 240).unwrap();
         assert_ne!(a.pixels, b.pixels);
+    }
+    #[test]
+    fn icons_morph_with_fill_and_reject_names_outside_the_subset() {
+        let at = |fill: &str| {
+            render(
+                &format!("icon(\"favorite\").text_size(96.).icon_fill({fill}).fill(Ink)"),
+                160,
+                160,
+            )
+            .unwrap()
+            .pixels
+        };
+        let blank = render("spacer()", 160, 160).unwrap().pixels;
+        let ink = |px: &[u8]| px.iter().zip(&blank).filter(|(a, b)| a != b).count();
+        let (hollow, half, solid) = (ink(&at("0.")), ink(&at("0.5")), ink(&at("1.")));
+        assert!(hollow < half && half < solid, "{hollow} {half} {solid}");
+        assert!(parse("icon(\"home\").weight(700.).grade(200.)").is_ok());
+        // In the font, not in the subset.
+        assert!(parse("icon(\"10k\")").is_err());
+        assert!(parse("icon(\"no_such_icon\")").is_err());
     }
     #[test]
     fn malformed_and_unbounded_programs_are_rejected() {

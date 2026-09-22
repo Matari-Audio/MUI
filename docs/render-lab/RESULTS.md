@@ -110,5 +110,5 @@ as a separate decision that must justify its platform and embedding costs.
 Before production adoption, rerun on real integrated/discrete GPUs and the intended platforms;
 exercise real DAW child-window lifecycle and input; add text/glyph rendering, full UI
 invalidation workloads, memory/power measurements and a live custom-shader composition path.
-Parley is already integrated into MUI text measurement/layout, but **text rasterization is
-not covered by this renderer fixture**. No production backend was changed by this prototype.
+MUI text measurement/layout is `mui-text` (skrifa outlines, harfrust shaping), but **text
+rasterization is not covered by this renderer fixture**. No production backend was changed by this prototype.

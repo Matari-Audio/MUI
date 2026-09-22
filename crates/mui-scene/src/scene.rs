@@ -3405,7 +3405,7 @@ mod feature_tests {
             text("hi").text_weight(Weight::BOLD).id("b")
         ]);
         sp.font = Some(Arc::from(ttf_inter::REGULAR));
-        let s = resolve_scene_with(&sp, &mut cache).unwrap();
+        resolve_scene_with(&sp, &mut cache).unwrap();
         // Same string, two weights of a variable face: two shaped runs, not
         // one reused at the wrong instance.
         assert_eq!(cache.len(), 2);

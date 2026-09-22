@@ -191,6 +191,8 @@ impl GlyphAxes {
     fn axes(font: &[u8]) -> Result<Vec<Axis>, mui_text::Error> {
         mui_text::axes(font).map(|a| {
             a.into_iter()
+                // A hidden axis is the designer's internal knob, not a slider.
+                .filter(|a| !a.hidden)
                 .map(|a| (a.tag, a.min.into(), a.max.into(), a.default.into()))
                 .collect()
         })

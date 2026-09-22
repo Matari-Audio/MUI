@@ -1,0 +1,21 @@
+// Material Symbols is one variable font: icon_fill(0..1) morphs
+// outline to filled, weight(100..700) and grade(-50..200) go with it.
+col![
+    row![
+        icon("favorite").text_size(48.).icon_fill(0.),
+        icon("favorite").text_size(48.).icon_fill(0.25),
+        icon("favorite").text_size(48.).icon_fill(0.5),
+        icon("favorite").text_size(48.).icon_fill(0.75),
+        icon("favorite").text_size(48.).icon_fill(1.),
+    ].gap(16.),
+    row![
+        icon("home").text_size(48.).weight(100.),
+        icon("home").text_size(48.).weight(400.),
+        icon("home").text_size(48.).weight(700.),
+        icon("home").text_size(48.).weight(700.).grade(200.),
+        icon("settings").text_size(48.).icon_fill(1.).fill(Primary),
+    ].gap(16.),
+]
+.gap(24.).pad(32.)
+.radius(32.).fill(Surface)
+.border(Dim, 1.)
