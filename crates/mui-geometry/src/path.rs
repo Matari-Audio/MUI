@@ -183,10 +183,12 @@ impl Path {
                     if ring.len() > 1 && ring.first() == ring.last() {
                         ring.pop();
                     }
-                    if ring.len() < 3 {
-                        return Err(Error::InvalidPath);
+                    // Fewer than three distinct points is a legal, empty
+                    // contour: variable fonts collapse rings to a point at an
+                    // axis extreme (Material Symbols at FILL=0). Drop it.
+                    if ring.len() >= 3 {
+                        contours.push(ring);
                     }
-                    contours.push(ring);
                 }
             }
             if count > max_points {

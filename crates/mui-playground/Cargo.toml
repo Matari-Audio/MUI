@@ -10,6 +10,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 mui-scene = { path = "../mui-scene" }
+mui-text = { path = "../mui-text" }
 mui-vello = { path = "../mui-vello", features = ["cpu"] }
 vello_cpu = { version = "0.2", default-features = false, features = ["std", "u8_pipeline", "text"] }
 syn = { version = "2", features = ["full", "parsing"] }

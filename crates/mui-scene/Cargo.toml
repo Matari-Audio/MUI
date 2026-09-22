@@ -15,3 +15,4 @@ mui-text = { path = "../mui-text" }
 
 [dev-dependencies]
 epaint_default_fonts = "0.36"
+ttf-inter = { version = "0.1", default-features = false, features = ["v"] }

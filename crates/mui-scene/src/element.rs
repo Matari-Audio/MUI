@@ -14,7 +14,7 @@ use mui_geometry::CornerStyle;
 use mui_geometry::Path;
 use mui_layout::{Node, Size, Spacing};
 use mui_motion::Spring;
-use mui_text::Weight;
+use mui_text::{Axes, Weight};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -106,7 +106,8 @@ impl PartialEq for Canvas {
 ///
 /// The key must cover everything the drawing closure reads. Reusing a key at
 /// the same size deliberately reuses the old immutable draw list.
-pub struct CanvasCache<K>(Rc<RefCell<Option<(K, Size, Arc<[Draw]>)>>>);
+type CacheSlot<K> = Rc<RefCell<Option<(K, Size, Arc<[Draw]>)>>>;
+pub struct CanvasCache<K>(CacheSlot<K>);
 impl<K> CanvasCache<K> {
     pub fn new() -> Self {
         Self(Rc::new(RefCell::new(None)))
@@ -239,8 +240,13 @@ pub struct Element {
     pub content: Content,
     /// Text size in pixels; `None` is the theme's.
     pub text_size: Option<f64>,
-    /// How heavy the glyphs are drawn. See [`Styled::text_weight`].
-    pub weight: Weight,
+    /// Variable-font axis positions the glyphs are drawn at: `wght`, `FILL`,
+    /// whatever the face declares. Empty is the face's default instance.
+    /// See [`Styled::text_weight`] and [`Styled::text_axis`].
+    pub axes: Axes,
+    /// A face for this node alone, tried before the scene's font and its
+    /// fallbacks: an icon font on an icon. See [`Styled::font`].
+    pub font: Option<Arc<[u8]>>,
     /// A string this text node is at least as wide as, whatever it currently
     /// says. See [`Styled::reserve`].
     pub reserve: Option<String>,
@@ -325,6 +331,23 @@ pub fn text(s: impl Into<String>) -> El {
         content: Content::Text(s.into()),
         ..Element::default()
     })
+}
+/// One symbol from an icon font, drawn as text at the text size so `opsz`
+/// tracks it. `symbol` is the font's codepoint for it -- for Material
+/// Symbols, [`material_symbols::codepoint`](crate::material_symbols::codepoint)
+/// turns `"home"` into one. Style it like a label: `.text_size(24.)`,
+/// `.icon_fill(1.)`, `.text_weight(..)`, `.grade(..)`, `.fill(..)` for ink.
+///
+/// ```
+/// use mui_scene::{material_symbols, prelude::*};
+/// # let font: std::sync::Arc<[u8]> = std::sync::Arc::from(&b"not a font"[..]);
+/// let home = material_symbols::codepoint("home").unwrap();
+/// let home = icon(font.clone(), home).text_size(24.).icon_fill(1.);
+/// assert_eq!(home.payload().axes.get("FILL"), Some(1.));
+/// assert!(home.payload().font.is_some());
+/// ```
+pub fn icon(font: impl Into<Arc<[u8]>>, symbol: char) -> El {
+    text(symbol).font(font)
 }
 /// Your own paths, painted inside the node's frame. Sized like any
 /// container: give it `.size(..)`, `.aspect(..)` or let it stretch.
@@ -694,11 +717,42 @@ pub trait Styled: Paints {
     /// ```
     /// use mui_scene::prelude::*;
     /// let heading = text("Oscillator").text_weight(Weight::BOLD);
-    /// assert_eq!(heading.payload().weight, Weight::BOLD);
+    /// assert_eq!(heading.payload().axes.get("wght"), Some(700.));
     /// ```
-    fn text_weight(mut self, w: Weight) -> Self {
-        self.element_mut().weight = w;
+    fn text_weight(self, w: Weight) -> Self {
+        self.text_axis("wght", f32::from(w.value()))
+    }
+    /// Any variable-font axis by tag: `FILL`, `GRAD`, `wdth`, `slnt`. A tag
+    /// the face lacks does nothing; a value outside its range is clamped.
+    /// `opsz` follows the text size on its own unless set here.
+    ///
+    /// Animate it with a spring and set it every frame -- an axis left out
+    /// snaps back to its default, it does not hold.
+    ///
+    /// ```
+    /// use mui_scene::prelude::*;
+    /// let star = text("\u{E838}").text_axis("FILL", 1.0);
+    /// assert_eq!(star.payload().axes.get("FILL"), Some(1.0));
+    /// ```
+    fn text_axis(mut self, tag: &str, value: f32) -> Self {
+        self.element_mut().axes.set(tag, value);
         self
+    }
+    /// A face for this node, tried before the scene's font. The scene's font
+    /// and fallbacks still cover any glyph it lacks.
+    fn font(mut self, font: impl Into<Arc<[u8]>>) -> Self {
+        self.element_mut().font = Some(font.into());
+        self
+    }
+    /// Material Symbols `FILL`, 0 outlined to 1 filled. Tween it for the
+    /// morph. Sugar for [`Styled::text_axis`].
+    fn icon_fill(self, fill: f32) -> Self {
+        self.text_axis("FILL", fill)
+    }
+    /// Material Symbols `GRAD`, -50 to 200: weight without width, for
+    /// emphasis or a light-on-dark correction. Sugar for [`Styled::text_axis`].
+    fn grade(self, grade: f32) -> Self {
+        self.text_axis("GRAD", grade)
     }
     /// Measure this text node as if it said `s`, whenever `s` is the wider
     /// of the two: a readout keeps its box while its value changes, so the

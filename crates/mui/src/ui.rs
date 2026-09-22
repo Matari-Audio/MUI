@@ -660,12 +660,12 @@ impl Ui {
         match self.font.as_deref() {
             Some(f) => {
                 let byte = if self.fallback_fonts.is_empty() {
-                    mui_text::hit_index(f, s, size, x)
+                    mui_text::hit_index(f, s, size, &[], x)
                 } else {
                     let mut fonts = Vec::with_capacity(1 + self.fallback_fonts.len());
                     fonts.push(f);
                     fonts.extend(self.fallback_fonts.iter().map(AsRef::as_ref));
-                    mui_text::fallback_hit_index(&fonts, s, size, x)
+                    mui_text::fallback_hit_index(&fonts, s, size, &[], x)
                 };
                 byte.map_or(0, |b| s[..b.min(s.len())].chars().count())
             }
@@ -681,12 +681,12 @@ impl Ui {
         match self.font.as_deref() {
             Some(f) => {
                 if self.fallback_fonts.is_empty() {
-                    mui_text::caret_x(f, s, size, byte).unwrap_or(0.0)
+                    mui_text::caret_x(f, s, size, &[], byte).unwrap_or(0.0)
                 } else {
                     let mut fonts = Vec::with_capacity(1 + self.fallback_fonts.len());
                     fonts.push(f);
                     fonts.extend(self.fallback_fonts.iter().map(AsRef::as_ref));
-                    mui_text::fallback_caret_x(&fonts, s, size, byte).unwrap_or(0.0)
+                    mui_text::fallback_caret_x(&fonts, s, size, &[], byte).unwrap_or(0.0)
                 }
             }
             // ponytail: the 0.6em guess the scene itself falls back to
