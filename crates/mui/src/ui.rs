@@ -129,6 +129,24 @@ pub struct Ui {
     tagged: Option<(String, String)>,
     time: f64,
 }
+
+fn same_hit_geometry(a: &ResolvedScene, b: &ResolvedScene) -> bool {
+    let mut a = a.surfaces();
+    let mut b = b.surfaces();
+    loop {
+        match (a.next(), b.next()) {
+            (None, None) => return true,
+            (Some(a), Some(b))
+                if a.key == b.key
+                    && a.disabled == b.disabled
+                    && a.path == b.path
+                    && a.clip == b.clip
+                    && a.clip_paths() == b.clip_paths()
+                    && a.hits == b.hits => {}
+            _ => return false,
+        }
+    }
+}
 impl Ui {
     pub fn new(theme: Theme) -> Self {
         Self {
@@ -1055,29 +1073,35 @@ impl Ui {
         spec.weld_backend = self.weld_backend;
         let scene =
             mui_scene::resolve_scene_cached(&spec, &mut self.text_cache, &mut self.weld_cache)?;
-        // Named nodes are the gesture targets, in z-order. Unnamed ones are
-        // decoration. A target clipped away does not respond.
-        let mut hit = Hit::default();
-        for s in scene
-            .surfaces()
-            .filter(|s| !s.key.starts_with('/') && !s.disabled)
+        if self
+            .scene
+            .as_ref()
+            .is_none_or(|previous| !same_hit_geometry(previous, &scene))
         {
-            if s.hits.is_empty() {
-                hit.push_clipped_paths(s.key.to_string(), &s.path, s.clip, s.clip_paths())?;
+            // Named nodes are the gesture targets, in z-order. Unnamed ones
+            // are decoration. A target clipped away does not respond.
+            let mut hit = Hit::default();
+            for s in scene
+                .surfaces()
+                .filter(|s| !s.key.starts_with('/') && !s.disabled)
+            {
+                if s.hits.is_empty() {
+                    hit.push_clipped_paths(s.key.to_string(), &s.path, s.clip, s.clip_paths())?;
+                }
+                // A canvas that named its draws is hit by those shapes instead
+                // of by its frame, so a ring responds in the ring, not its hole.
+                for (tag, path) in &s.hits {
+                    hit.push_tagged_paths(
+                        s.key.to_string(),
+                        tag.to_string(),
+                        path,
+                        s.clip,
+                        s.clip_paths(),
+                    )?;
+                }
             }
-            // A canvas that named its draws is hit by those shapes instead of
-            // by its frame, so a ring responds in the ring and not in its hole.
-            for (tag, path) in &s.hits {
-                hit.push_tagged_paths(
-                    s.key.to_string(),
-                    tag.to_string(),
-                    path,
-                    s.clip,
-                    s.clip_paths(),
-                )?;
-            }
+            self.hit = hit;
         }
-        self.hit = hit;
         let live = |id: &str| scene.surface(id).is_some_and(|s| !s.disabled);
         if self.interaction.held().is_some_and(|id| !live(id)) {
             self.cancel();
@@ -2602,12 +2626,14 @@ mod tests {
             glyphs(&ui),
             ui.scene().unwrap().surface("gain").unwrap().frame,
         );
+        let hit_geometry = ui.scene().unwrap().clone();
         for i in 0..32 {
             ui.set_text("gain", format!("-{i}.5")).unwrap();
         }
         assert_eq!(seen.get(), 1, "32 readouts, still one layout resolve");
         assert_ne!(glyphs(&ui), before, "and the glyphs did change");
         assert_eq!(ui.scene().unwrap().surface("gain").unwrap().frame, frame);
+        assert!(same_hit_geometry(&hit_geometry, ui.scene().unwrap()));
     }
 
     #[test]

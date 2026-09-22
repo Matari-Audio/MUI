@@ -15,6 +15,8 @@ use mui_geometry::Path;
 use mui_layout::{Node, Size, Spacing};
 use mui_motion::Spring;
 use mui_text::Weight;
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::Arc;
 
 /// One stroke or fill a canvas hands back, in the canvas's own pixels.
@@ -88,7 +90,7 @@ impl Draw {
 
 /// Custom drawing: called with the node's size every frame, in the walk.
 #[derive(Clone)]
-pub struct Canvas(pub Arc<dyn Fn(Size) -> Vec<Draw>>);
+pub struct Canvas(pub Arc<dyn Fn(Size) -> Arc<[Draw]>>);
 impl std::fmt::Debug for Canvas {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("Canvas(..)")
@@ -97,6 +99,27 @@ impl std::fmt::Debug for Canvas {
 impl PartialEq for Canvas {
     fn eq(&self, o: &Self) -> bool {
         Arc::ptr_eq(&self.0, &o.0)
+    }
+}
+
+/// One caller-owned memo for custom drawing.
+///
+/// The key must cover everything the drawing closure reads. Reusing a key at
+/// the same size deliberately reuses the old immutable draw list.
+pub struct CanvasCache<K>(Rc<RefCell<Option<(K, Size, Arc<[Draw]>)>>>);
+impl<K> CanvasCache<K> {
+    pub fn new() -> Self {
+        Self(Rc::new(RefCell::new(None)))
+    }
+}
+impl<K> Clone for CanvasCache<K> {
+    fn clone(&self) -> Self {
+        Self(Rc::clone(&self.0))
+    }
+}
+impl<K> Default for CanvasCache<K> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -307,7 +330,28 @@ pub fn text(s: impl Into<String>) -> El {
 /// container: give it `.size(..)`, `.aspect(..)` or let it stretch.
 pub fn canvas(f: impl Fn(Size) -> Vec<Draw> + 'static) -> El {
     Node::overlay([]).with(Element {
-        content: Content::Canvas(Canvas(Arc::new(f))),
+        content: Content::Canvas(Canvas(Arc::new(move |size| f(size).into()))),
+        ..Element::default()
+    })
+}
+/// A [`canvas`] whose draw list is rebuilt only when `key` or its size changes.
+pub fn canvas_cached<K: Clone + PartialEq + 'static>(
+    cache: &CanvasCache<K>,
+    key: K,
+    f: impl Fn(Size) -> Vec<Draw> + 'static,
+) -> El {
+    let cache = cache.clone();
+    Node::overlay([]).with(Element {
+        content: Content::Canvas(Canvas(Arc::new(move |size| {
+            if let Some((old_key, old_size, draws)) = cache.0.borrow().as_ref() {
+                if *old_key == key && *old_size == size {
+                    return Arc::clone(draws);
+                }
+            }
+            let draws: Arc<[Draw]> = f(size).into();
+            *cache.0.borrow_mut() = Some((key.clone(), size, Arc::clone(&draws)));
+            draws
+        }))),
         ..Element::default()
     })
 }
@@ -792,7 +836,10 @@ impl Styled for El {
 #[cfg(test)]
 mod tests {
     use crate::prelude::*;
-    use crate::Style;
+    use crate::{Content, Style};
+    use std::cell::Cell;
+    use std::rc::Rc;
+    use std::sync::Arc;
 
     fn card() -> Style {
         Style {
@@ -800,6 +847,47 @@ mod tests {
             radius: Radius::Px(12.),
             ..Style::default()
         }
+    }
+
+    #[test]
+    fn cached_canvas_reuses_only_the_same_key_and_size() {
+        let cache = CanvasCache::new();
+        let calls = Rc::new(Cell::new(0));
+        let make = |key| {
+            let calls = Rc::clone(&calls);
+            canvas_cached(&cache, key, move |size| {
+                calls.set(calls.get() + 1);
+                vec![Draw::fill(
+                    Path::polyline(
+                        [
+                            Point::ZERO,
+                            Point::new(size.width, 0.),
+                            Point::new(size.width, size.height),
+                            Point::new(0., size.height),
+                        ],
+                        true,
+                    ),
+                    Primary,
+                )]
+            })
+        };
+        let size = Size::new(80., 40.);
+        let first = make(7);
+        let Content::Canvas(first) = &first.payload().content else {
+            panic!("a canvas")
+        };
+        let a = (first.0)(size);
+        let b = (first.0)(size);
+        assert!(Arc::ptr_eq(&a, &b));
+        assert_eq!(calls.get(), 1);
+
+        let changed = make(8);
+        let Content::Canvas(changed) = &changed.payload().content else {
+            panic!("a canvas")
+        };
+        let _ = (changed.0)(size);
+        let _ = (changed.0)(Size::new(81., 40.));
+        assert_eq!(calls.get(), 3);
     }
 
     /// The whole merge rule: per field, the side that states something wins,

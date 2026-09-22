@@ -1889,8 +1889,8 @@ impl<'a> Walk<'a> {
                 let origin = Point::new(frame.x, frame.y);
                 for (k, d) in (c.0)(frame.size).into_iter().enumerate() {
                     let moved = d.path.rigid_transform(origin, 0.0)?;
-                    if let Some(tag) = d.tag {
-                        hits.push((tag, moved.clone()));
+                    if let Some(tag) = &d.tag {
+                        hits.push((Arc::clone(tag), moved.clone()));
                     }
                     if let Some(p) = self.push(Layer::Draw(k), moved, None, &d.fill, bg) {
                         p.width = d.width;
