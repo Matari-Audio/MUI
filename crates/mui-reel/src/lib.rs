@@ -58,14 +58,28 @@ use mui::motion::Keys;
 /// sample.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ReelEvent {
-    NoteOn { key: u8, velocity: u8 },
-    NoteOff { key: u8 },
+    NoteOn {
+        key: u8,
+        velocity: u8,
+    },
+    NoteOff {
+        key: u8,
+    },
     /// A gesture edge from [`Frame::edits`]: the automation bracket.
-    Edit { id: String, begin: bool },
+    Edit {
+        id: String,
+        begin: bool,
+    },
     /// A slider-, knob- or toggle-role surface changed its reported value.
     /// Read from the scene's semantics, so it needs nothing from the plugin.
-    Value { id: String, value: f64 },
-    Custom { name: String, value: f64 },
+    Value {
+        id: String,
+        value: f64,
+    },
+    Custom {
+        name: String,
+        value: f64,
+    },
 }
 impl ReelEvent {
     fn json(&self, t: f64) -> Value {
@@ -385,8 +399,20 @@ impl Reel {
         let open = |dir: &Path, name: &str, codec| {
             Sink::open(ffmpeg.then_some(codec), dir, name, w, h, self.fps)
         };
-        let layer_codec = if self.master { Codec::ProRes } else { Codec::Vp9 };
-        let mut take = open(dir, "take", if self.ten_bit { Codec::H265 } else { Codec::H264 })?;
+        let layer_codec = if self.master {
+            Codec::ProRes
+        } else {
+            Codec::Vp9
+        };
+        let mut take = open(
+            dir,
+            "take",
+            if self.ten_bit {
+                Codec::H265
+            } else {
+                Codec::H264
+            },
+        )?;
         let mut master = match (ffmpeg, self.master) {
             (true, true) => Some(open(dir, "take", Codec::ProRes)?),
             _ => None,
@@ -419,13 +445,25 @@ impl Reel {
             .into_iter()
             .map(Sink::finish)
             .collect::<Result<Vec<_>, _>>()?;
-        files.extend(["track.json".into(), "track.js".into(), "mui-track.js".into()]);
+        files.extend([
+            "track.json".into(),
+            "track.js".into(),
+            "mui-track.js".into(),
+        ]);
         if has_audio {
             std::fs::write(dir.join("audio.wav"), wav(&samples, self.rate))?;
             files.push("audio.wav".into());
             if ffmpeg {
                 let ok = Command::new("ffmpeg")
-                    .args(["-y", "-loglevel", "error", "-i", "take.mp4", "-i", "audio.wav"])
+                    .args([
+                        "-y",
+                        "-loglevel",
+                        "error",
+                        "-i",
+                        "take.mp4",
+                        "-i",
+                        "audio.wav",
+                    ])
                     .args(["-c:v", "copy", "-c:a", "aac", "-b:a", "320k", "-shortest"])
                     .arg("take-with-audio.mp4")
                     .current_dir(dir)
@@ -677,7 +715,8 @@ impl Reel {
                     .then_some(pos)
                     .flatten()
                     .map(|p| (to_device(view, p), down));
-                let mut shots = vec![raster.draw(frame.scene, view, cursor.map(|c| (c, self.scale)))?];
+                let mut shots =
+                    vec![raster.draw(frame.scene, view, cursor.map(|c| (c, self.scale)))?];
                 if !script.layers.is_empty() {
                     let ids: Vec<&str> = script.layers.iter().map(String::as_str).collect();
                     for id in &ids {
@@ -713,7 +752,12 @@ impl Reel {
                     ));
                     let col = surfaces.entry(s.key.to_string()).or_default();
                     col.resize(i, Value::Null);
-                    col.push(json!([round(r.x0), round(r.y0), round(r.width()), round(r.height())]));
+                    col.push(json!([
+                        round(r.x0),
+                        round(r.y0),
+                        round(r.width()),
+                        round(r.height())
+                    ]));
                 }
                 pointer.push(pos.map_or(Value::Null, |p| {
                     let d = to_device(view, p);
@@ -730,9 +774,11 @@ impl Reel {
             }
             // ponytail: averaged in sRGB with straight alpha, not linear light;
             // indistinguishable for UI motion, convert first if it ever shows.
-            let mut shots = acc
-                .into_iter()
-                .map(|a| a.into_iter().map(|v| ((v + n as u32 / 2) / n as u32) as u8).collect());
+            let mut shots = acc.into_iter().map(|a| {
+                a.into_iter()
+                    .map(|v| ((v + n as u32 / 2) / n as u32) as u8)
+                    .collect()
+            });
             let rgba = shots.next().unwrap_or_default();
             // Integer sample boundaries: frame i owns [i*rate/fps, (i+1)*rate/fps),
             // so any fps/rate pair sums exactly with no drift.
@@ -943,6 +989,8 @@ impl Codec {
             Codec::Vp9 => "webm",
         }
     }
+    // Flag/value pairs read best as pairs.
+    #[rustfmt::skip]
     fn args(self) -> &'static [&'static str] {
         match self {
             Codec::H264 => &[
@@ -986,18 +1034,35 @@ impl Sink {
         let Some(codec) = codec else {
             let seq = if name == "take" { "frames" } else { name };
             std::fs::create_dir_all(dir.join(seq))?;
-            return Ok(Sink::Png(dir.join(seq), w.into(), h.into(), 0, format!("{seq}/%05d.png")));
+            return Ok(Sink::Png(
+                dir.join(seq),
+                w.into(),
+                h.into(),
+                0,
+                format!("{seq}/%05d.png"),
+            ));
         };
         let file = format!("{name}.{}", codec.ext());
         let fps = fps.to_string();
         let child = Command::new("ffmpeg")
-            .args(["-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgba"])
+            .args([
+                "-y",
+                "-loglevel",
+                "error",
+                "-f",
+                "rawvideo",
+                "-pix_fmt",
+                "rgba",
+            ])
             .args(["-color_range", "pc", "-colorspace", "rgb"])
             .args(["-s", &format!("{w}x{h}"), "-r", &fps, "-i", "-"])
             // Convert, then stamp the frames: ffmpeg writes the stream's
             // colour tags from the frames, so output flags alone are lost.
-            .args(["-vf", "scale=out_color_matrix=bt709:out_range=tv,\
-                setparams=colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv"])
+            .args([
+                "-vf",
+                "scale=out_color_matrix=bt709:out_range=tv,\
+                setparams=colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv",
+            ])
             .args(codec.args())
             .args(["-colorspace", "bt709", "-color_primaries", "bt709"])
             .args(["-color_trc", "bt709", "-color_range", "tv", "-r", &fps])

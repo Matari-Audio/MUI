@@ -79,7 +79,13 @@ fn beats_land_on_the_frame_at_the_tempo() {
         .end(beat(3.0));
     let (frames, track, heard, _) = play(&r, &s);
     assert_eq!(frames.len(), 45);
-    assert_eq!(heard[15], vec![ReelEvent::NoteOn { key: 60, velocity: 100 }]);
+    assert_eq!(
+        heard[15],
+        vec![ReelEvent::NoteOn {
+            key: 60,
+            velocity: 100
+        }]
+    );
     assert_eq!(heard[30], vec![ReelEvent::NoteOff { key: 60 }]);
     assert_eq!(track["events"][0]["t"], 0.5);
 }
@@ -141,7 +147,8 @@ fn track_rects_are_surface_frames_at_scale() {
         gain: 0.5,
         on: false,
     };
-    let mut ui = Ui::new(Theme::DEFAULT).font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
+    let mut ui =
+        Ui::new(Theme::DEFAULT).font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
     ui.scale = Some(2.0);
     let root = build(&mut ui, &mut m);
     let f = ui
@@ -170,12 +177,20 @@ fn camera_focus_settles_on_the_node() {
     let (_, track, ..) = play(&r, &s);
     let last = |k: &str| track[k].as_array().unwrap().last().unwrap().clone();
     let rect: Vec<f64> = serde_json::from_value(
-        track["surfaces"]["bypass"].as_array().unwrap().last().unwrap().clone(),
+        track["surfaces"]["bypass"]
+            .as_array()
+            .unwrap()
+            .last()
+            .unwrap()
+            .clone(),
     )
     .unwrap();
     // Centred in the 200x120 frame, and the padded node fills one axis.
     let (cx, cy) = (rect[0] + rect[2] / 2.0, rect[1] + rect[3] / 2.0);
-    assert!((cx - 100.0).abs() < 0.5 && (cy - 60.0).abs() < 0.5, "{rect:?}");
+    assert!(
+        (cx - 100.0).abs() < 0.5 && (cy - 60.0).abs() < 0.5,
+        "{rect:?}"
+    );
     let zoom = last("camera")[2].as_f64().unwrap();
     let fits_w = ((rect[2] / zoom + 8.0) * zoom - 200.0).abs() < 1.0;
     let fits_h = ((rect[3] / zoom + 8.0) * zoom - 120.0).abs() < 1.0;
@@ -214,5 +229,8 @@ fn motion_blur_averages_subframes_without_changing_the_gesture() {
     // slop is crossed in smaller steps and swallows a little more travel,
     // which is what a 120 Hz mouse does to the real editor as well.
     assert!(m.gain > 0.95 && m.on, "gain {} on {}", m.gain, m.on);
-    assert!(heard.iter().flatten().any(|e| matches!(e, ReelEvent::Edit { begin: false, .. })));
+    assert!(heard
+        .iter()
+        .flatten()
+        .any(|e| matches!(e, ReelEvent::Edit { begin: false, .. })));
 }
