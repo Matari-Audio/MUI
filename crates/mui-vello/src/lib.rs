@@ -347,6 +347,7 @@ macro_rules! wrapper {
                     // The run was measured at this instance; drawing the default
                     // one under its advances is how a bold readout goes ragged.
                     .normalized_coords(coords)
+                    .atlas_cache(std::env::var_os("MUI_ATLAS").is_some())
                     .fill_glyphs(run(text.origin, &text.glyphs[start..end]));
                 start = end;
             }

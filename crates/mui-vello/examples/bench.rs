@@ -38,6 +38,9 @@ fn vectors() -> bool {
 struct App {
     knobs: Vec<f64>,
     sliders: Vec<f64>,
+    /// Decoded once and kept, as a host keeps what it decoded: a renderer
+    /// keys its upload on this `Arc`, and so does the retained paint list.
+    swatch: Arc<Image>,
 }
 
 impl App {
@@ -45,6 +48,7 @@ impl App {
         Self {
             knobs: (0..40).map(|i| f64::from(i) / 40.0).collect(),
             sliders: (0..8).map(|i| f64::from(i) / 8.0).collect(),
+            swatch: swatch(),
         }
     }
 }
@@ -135,7 +139,7 @@ fn editor(ui: &mut Ui, app: &mut App, images: bool) -> El {
         .map(|i| label(format!("{i}. {BLURB}")).w(150.0).lines(4))
         .collect();
     // 4 image-filled pills, all sharing one 2x2 buffer.
-    let img = swatch();
+    let img = app.swatch.clone();
     let pills: Vec<El> = [Fit::Cover, Fit::Contain, Fit::Fill, Fit::Cover]
         .into_iter()
         .map(|fit| {
@@ -224,6 +228,9 @@ enum Case {
     Static,
     /// One knob moves; everything else is the same tree.
     Knob,
+    /// The same tree, but the host hands over a freshly decoded image every
+    /// frame: a video or meter texture. Every retained path has to redraw.
+    Image,
 }
 
 impl Case {
@@ -233,6 +240,7 @@ impl Case {
             Self::Static => "static",
             Self::Knob if vectors() => "all curves moving",
             Self::Knob => "one knob turning",
+            Self::Image => "fresh image",
         }
     }
 }
@@ -257,6 +265,9 @@ fn run(
         }
         if case == Case::Knob {
             app.knobs[7] = f64::from(i as u32 % 100) / 100.0;
+        }
+        if case == Case::Image {
+            app.swatch = swatch();
         }
         let start = Instant::now();
         let root = editor(&mut ui, &mut app, images);
@@ -293,7 +304,7 @@ fn run(
     }
 }
 
-const CASES: [Case; 3] = [Case::Cold, Case::Static, Case::Knob];
+const CASES: [Case; 4] = [Case::Cold, Case::Static, Case::Knob, Case::Image];
 
 /// Peak resident set of this process, in MiB -- the only memory number the
 /// sparse-strip renderers expose at all.
@@ -348,6 +359,41 @@ fn main() {
             }
         }
         println!("bez conversion: {:.3} ms per frame", median(&mut times));
+        // TEMP-PROFILE
+        struct FakeFrame<'a> { scene: &'a ResolvedScene }
+        if let Ok(mode) = std::env::var("MUI_PROF") {
+            let mut ctx = vello_cpu::RenderContext::new(W, H);
+            let mut res = vello_cpu::Resources::default();
+            let mut cache = Cache::default();
+            let mut sc = f.scene.clone();
+            let keep = |p: &mui_scene::Painted| matches!(p.layer, Layer::Clip | Layer::Unclip | Layer::Blend{..} | Layer::Unblend);
+            match mode.as_str() {
+                "text" => sc.paint.retain(|p| keep(p) || p.text.is_some()),
+                "notext" => sc.paint.retain(|p| p.text.is_none()),
+                "shadow" => sc.paint.retain(|p| keep(p) || matches!(p.layer, Layer::Shadow(_))),
+                "fill" => sc.paint.retain(|p| keep(p) || matches!(p.layer, Layer::Fill | Layer::Shell(_))),
+                "stroke" => sc.paint.retain(|p| keep(p) || matches!(p.layer, Layer::Stroke)),
+                "draw" => sc.paint.retain(|p| keep(p) || matches!(p.layer, Layer::Draw(_))),
+                "clips" => sc.paint.retain(|p| keep(p)),
+                _ => {}
+            }
+            let mut hist = std::collections::BTreeMap::new();
+            for p in &sc.paint { *hist.entry(format!("{:?}", p.layer).chars().take(12).collect::<String>()).or_insert(0) += 1; }
+            println!("{hist:?}");
+            let f = (&sc,);
+            let f = FakeFrame { scene: f.0 };
+            let t = Instant::now();
+            for _ in 0..3000 {
+                ctx.reset();
+                if mode == "walk" {
+                    for p in &f.scene.paint { std::hint::black_box(p); }
+                }
+                mui_vello::paint(&mut Cpu { ctx: &mut ctx, resources: &mut res, cache: &mut cache }, f.scene, Affine::IDENTITY).unwrap();
+                ctx.flush();
+            }
+            println!("encode {:.3} ms", since(t) / 3000.0);
+            std::process::exit(0);
+        }
     }
 
     // Resolve with nothing painted at all: MUI's own floor.
