@@ -58,7 +58,7 @@ impl Default for SpacingScale {
 }
 
 /// A gap or padding: pixels, or a token resolved against the scale handed to
-/// [`resolve_with`]. Plain `f64` converts, so `.gap(10.0)` still works.
+/// `resolve_with`. Plain `f64` converts, so `.gap(10.0)` still works.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Spacing {
     Px(f64),

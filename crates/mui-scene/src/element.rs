@@ -520,7 +520,7 @@ pub trait Paints: Sized {
     }
     /// Composite this node's whole subtree through `m`.
     ///
-    /// Keeps whatever opacity was set; see [`Styled::opacity`].
+    /// Keeps whatever opacity was set; see [`Paints::opacity`].
     fn blend(mut self, m: Mix) -> Self {
         let l = self.style_mut().layer.get_or_insert((Mix::Normal, 1.0));
         l.0 = m;

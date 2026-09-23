@@ -314,7 +314,7 @@ impl Path {
         })
     }
     /// Standalone SVG path data; circular arcs remain exact SVG arcs.
-    /// Caller wraps in <path fill-rule="evenodd" d="..."/>.
+    /// Caller wraps in `<path fill-rule="evenodd" d="..."/>`.
     pub fn to_svg_data(&self) -> Result<String, Error> {
         self.validate(100_000)?;
         let mut out = String::new();

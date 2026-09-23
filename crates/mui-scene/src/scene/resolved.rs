@@ -117,7 +117,7 @@ pub struct Painted {
     pub width: f64,
     /// Gaussian blur radius, shadows only.
     pub blur: f64,
-    /// Present on `Layer::Text` whenever [`SceneSpec::font`] is set: the
+    /// Present on `Layer::Text` whenever [`SceneSpec::font`](crate::SceneSpec::font) is set: the
     /// layer's ink, as glyphs. `path` is then empty -- a renderer that draws
     /// glyphs never looks at it, and translating every run's outline into a
     /// fresh path is the most expensive thing the walk can do.
@@ -170,7 +170,7 @@ pub struct ResolvedSurface {
     pub content: Size,
     /// The tagged shapes a `canvas` drew, in scene space. Non-empty means
     /// *these* are the surface's hit geometry, not its outline: the pointer
-    /// outside all of them is outside the node. See [`Draw::tag`].
+    /// outside all of them is outside the node. See [`Draw::tag`](crate::Draw::tag).
     pub hits: Vec<(Arc<str>, Path)>,
 }
 impl ResolvedSurface {

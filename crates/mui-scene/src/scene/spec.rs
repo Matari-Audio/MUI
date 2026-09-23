@@ -110,7 +110,7 @@ pub enum SceneError {
     Layout(mui_layout::Error),
     Geometry(mui_geometry::Error),
     Text(mui_text::Error),
-    /// [`ResolvedScene::set_text`] was asked for a key that resolved no text
+    /// [`ResolvedScene::set_text`](crate::ResolvedScene::set_text) was asked for a key that resolved no text
     /// layer: no such node, not a text node, or no font was set.
     NoTextLayer,
     /// [`SceneSpec::device_scale`] is not a finite, positive number.

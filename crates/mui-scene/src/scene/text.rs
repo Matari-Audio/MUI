@@ -59,7 +59,7 @@ pub(super) type PerText<K, V> = HashMap<String, HashMap<K, (V, u64)>>;
 pub(super) type CoordsCache = HashMap<Axes, HashMap<(u64, Option<u64>), (Coords, u64)>>;
 
 /// Everything shaped, broken and bent across frames. Own one in your runtime
-/// and pass it to [`resolve_scene_with`]. Nothing is flushed wholesale: an
+/// and pass it to [`resolve_scene_with`](crate::resolve_scene_with). Nothing is flushed wholesale: an
 /// entry the last resolve did not use is dropped at its end, so memory tracks
 /// the live tree and a steady frame reshapes nothing.
 #[derive(Debug, Default)]
