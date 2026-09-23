@@ -789,10 +789,10 @@ pub trait Styled: Paints {
     /// so it edits rather than replaces, and a later `.fill(..)` is still
     /// what the state derives from.
     ///
-    /// The runtime applies these while building the frame. Focus and
-    /// Disabled reach any node; Hover and Press only a node with an id,
-    /// since an unnamed surface is decoration and never hit. Pair with [`Styled::animate`] to cross
-    /// rather than cut.
+    /// The runtime applies these while building the frame, to any node: an
+    /// unnamed one that declares Hover or Press becomes a pointer target by
+    /// its tree path, where other unnamed surfaces are decoration and never
+    /// hit. Pair with [`Styled::animate`] to cross rather than cut.
     ///
     /// ```
     /// use mui_scene::prelude::*;

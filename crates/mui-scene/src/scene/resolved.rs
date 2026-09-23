@@ -123,6 +123,10 @@ pub struct ResolvedSurface {
     pub cursor: Option<Cursor>,
     pub tip: Option<String>,
     pub focusable: bool,
+    /// Declares a [`State::Hover`](crate::State::Hover) or
+    /// [`State::Press`](crate::State::Press) look, so the runtime makes it a
+    /// pointer target even without an id.
+    pub pointer_states: bool,
     /// Switched off by itself or by an ancestor: not a hit target, not a Tab
     /// stop, and reported disabled to a screen reader. See
     /// [`Styled::disabled`](crate::Styled::disabled).

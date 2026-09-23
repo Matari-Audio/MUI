@@ -311,8 +311,16 @@ let (field, edited) = text_input(&mut ui, "name", &mut name);
   the new arms. Both land as the equivalent `SetValue`.
 - Behaviour: `.scroll()`, `.animate()`/`.transition()` and
   `.on(State::Focus | State::Disabled)` now work on a node without an id,
-  keyed by its `/0/2` tree path. `.on(State::Hover | State::Press)` still
-  needs an id.
+  keyed by its `/0/2` tree path. So does `.on(State::Hover | State::Press)`:
+  an unnamed node that declares one is a pointer target by its tree path and
+  takes presses exactly where the same node with an id would.
+- Behaviour: an unnamed root is no longer a pointer target keyed `""`: it
+  does not hover, and its cursor and tip no longer show over the bare
+  background. A press that lands on no target still drops the focus, now as
+  a rule rather than through the root. A tip needs an id.
+- `button`, `toggle`, `slider`, `knob`: `id: &str` -> `id: impl Into<Id>`.
+  `&str`, `String`, `&String`, `Id` and `&Id` all pass; a `&mut String`
+  needs `&**s`.
 - Behaviour: while a tip is shown the root sits under a wrapper, so positional
   keys move under `/0` and back when it goes: ask `ui.scroll("/0/1")`, not
   `ui.scroll("/1")`, while the tip is up. Named keys do not move.

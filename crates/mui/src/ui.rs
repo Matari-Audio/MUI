@@ -7,7 +7,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
 use mui_geometry::Point;
-use mui_input::{Hit, Ime, Input, Interaction, Key, KeyPress, PointerInput, Response, FINE_DRAG};
+use mui_input::{
+    Button, Buttons, Hit, Ime, Input, Interaction, Key, KeyPress, PointerInput, Response, FINE_DRAG,
+};
 use mui_layout::SpacingToken::{Xs, S};
 use mui_scene::prelude::{overlay, text, Paints as _, Role};
 use mui_scene::{
@@ -144,6 +146,7 @@ fn same_hit_geometry(a: &ResolvedScene, b: &ResolvedScene) -> bool {
             (Some(a), Some(b))
                 if a.key == b.key
                     && a.disabled == b.disabled
+                    && a.pointer_states == b.pointer_states
                     && a.path == b.path
                     && a.clip == b.clip
                     && a.clip_paths() == b.clip_paths()
@@ -829,7 +832,7 @@ impl Ui {
             clipboard,
             ime,
         } = input.into();
-        self.pointer = pointer;
+        let was = std::mem::replace(&mut self.pointer, pointer).buttons;
         self.pasted = clipboard;
         let previous_blink = self.blink();
         self.time += dt;
@@ -837,7 +840,7 @@ impl Ui {
         // when nothing is moving.
         let mut animating = self.reconcile();
         animating |= self.hover_springs(&root, dt);
-        self.intake_focus(keys, text, ime);
+        self.intake_focus(was, keys, text, ime);
         let hovered = self.interaction.hovered().map(str::to_owned);
         let (tip, tip_pending) = self.tip_due(hovered.as_deref(), dt);
         animating |= tip_pending;
@@ -958,10 +961,10 @@ impl Ui {
         // the two possible active targets directly so idle frames do not
         // allocate a policy table for the whole tree.
         let hovered_policy = hovered
-            .map(|id| state_policy(root, id))
+            .map(|id| state_policy(root, id, self.wrapped))
             .unwrap_or([false, false]);
         let held_policy = held
-            .map(|id| state_policy(root, id))
+            .map(|id| state_policy(root, id, self.wrapped))
             .unwrap_or([false, false]);
         for (k, [h, p]) in &mut self.springs {
             let hovered = hovered == Some(k.as_str());
@@ -994,10 +997,17 @@ impl Ui {
     }
 
     /// Focus follows a press on a focusable surface, and a press on anything
-    /// else drops it; then the keys, typed text and input-method events land
-    /// for the widgets to read.
-    fn intake_focus(&mut self, keys: Vec<KeyPress>, text: String, ime: Vec<Ime>) {
+    /// else -- another target, or empty background that is no target at all
+    /// -- drops it; then the keys, typed text and input-method events land
+    /// for the widgets to read. `was` is last frame's buttons.
+    fn intake_focus(&mut self, was: Buttons, keys: Vec<KeyPress>, text: String, ime: Vec<Ime>) {
         self.double = None;
+        let went_down = [Button::Primary, Button::Secondary, Button::Middle]
+            .into_iter()
+            .any(|b| self.pointer.buttons.contains(b) && !was.contains(b));
+        if went_down && self.interaction.held().is_none() {
+            self.focus = None;
+        }
         if let Some(id) = self.interaction.pressed().map(str::to_owned) {
             if let Some((prev, t)) = self.last_press.take() {
                 if prev == id && self.time - t < DOUBLE_CLICK {
@@ -1049,6 +1059,9 @@ impl Ui {
     /// was actually over. Returns the due tip and its anchor, and whether one
     /// is still counting down.
     fn tip_due(&mut self, hovered: Option<&str>, dt: f64) -> (Option<(String, String)>, bool) {
+        // A tip is pinned to its anchor by id, and a positional key moves
+        // when the tip wraps the root: only a named surface has one.
+        let hovered = hovered.filter(|k| named(k));
         match (&mut self.hover, hovered) {
             (Some((id, t)), Some(h)) if id == h => *t += dt,
             (_, Some(h)) => self.hover = Some((h.to_owned(), 0.0)),
@@ -1111,6 +1124,7 @@ impl Ui {
             self.wrapped = tip.is_some();
             rekey(&mut self.scrolls, self.wrapped);
             rekey(&mut self.motion, self.wrapped);
+            rekey(&mut self.springs, self.wrapped);
             self.focus = self.focus.take().and_then(|k| shift(k, self.wrapped));
         }
         root
@@ -1173,12 +1187,20 @@ impl Ui {
             .as_ref()
             .is_none_or(|previous| !same_hit_geometry(previous, &scene))
         {
-            // Named nodes are the gesture targets, in z-order. Unnamed ones
-            // are decoration. A target clipped away does not respond.
+            // Named nodes are the gesture targets, in z-order, and so is an
+            // unnamed one that declared a hover or press look, by its tree
+            // path: it routes exactly as it would with an id. Every other
+            // unnamed node, the root included, is decoration the pointer
+            // passes through. A target clipped away does not respond.
+            //
+            // ponytail: a capture an unnamed node takes on the frame a tip
+            // wraps or unwraps the root keeps its old path; it releases
+            // normally but reports no click. Key positional targets by
+            // something stabler than the path if that ever shows.
             let mut hit = Hit::default();
             for s in scene
                 .surfaces()
-                .filter(|s| !s.key.starts_with('/') && !s.disabled)
+                .filter(|s| (named(&s.key) || s.pointer_states) && !s.disabled)
             {
                 if s.hits.is_empty() {
                     hit.push_clipped_paths(s.key.to_string(), &s.path, s.clip, s.clip_paths())?;
@@ -1460,7 +1482,7 @@ fn slot<'m, V>(map: &'m mut BTreeMap<String, V>, k: &str, new: impl FnOnce() -> 
 /// move; a tree path gains or loses its leading `/0`, and one that was under
 /// the wrapper but not the caller's root is gone.
 fn shift(k: String, wrap: bool) -> Option<String> {
-    if !(k.is_empty() || k.starts_with('/')) {
+    if named(&k) {
         return Some(k);
     }
     if wrap {
@@ -1502,6 +1524,35 @@ fn keyed_edit(scene: Option<&ResolvedScene>, id: &str, keys: &[KeyPress]) -> boo
     })
 }
 
+/// Whether `k` is an id rather than a tree path (`/0/2`, or `""` for the
+/// root) or a key the runtime owns (`/tip`).
+fn named(k: &str) -> bool {
+    !(k.is_empty() || k.starts_with('/'))
+}
+
+/// The node `key` names in `root`: an id anywhere in the tree, or a tree
+/// path walked by index. `wrapped` says the key came from a scene whose root
+/// sat under the tip wrapper, one `/0` deeper than `root`.
+fn find<'a>(root: &'a El, key: &str, wrapped: bool) -> Option<&'a El> {
+    fn by_id<'a>(n: &'a El, id: &str) -> Option<&'a El> {
+        if n.key() == Some(id) {
+            return Some(n);
+        }
+        n.children().iter().find_map(|c| by_id(c, id))
+    }
+    if named(key) {
+        return by_id(root, key);
+    }
+    let key = if wrapped {
+        key.strip_prefix("/0")?
+    } else {
+        key
+    };
+    key.split('/')
+        .skip(1)
+        .try_fold(root, |n, i| n.children().get(i.parse::<usize>().ok()?))
+}
+
 /// Whether a semantic role owns the runtime's default pointer looks.
 fn interactive(e: &Element) -> bool {
     e.semantics.as_ref().is_some_and(|s| {
@@ -1516,24 +1567,19 @@ fn interactive(e: &Element) -> bool {
 /// hit-testable, but do not keep the host animating merely because the pointer
 /// rests on them. Only the active targets are searched, so this adds no
 /// per-frame policy allocation.
-fn state_policy(root: &El, id: &str) -> [bool; 2] {
-    fn visit(n: &El, id: &str) -> Option<[bool; 2]> {
-        if n.key().is_some_and(|k| k == id) {
-            let e = n.payload();
-            let mut policy = [interactive(e), interactive(e)];
-            for (state, _) in &e.states {
-                match state {
-                    State::Hover => policy[0] = true,
-                    State::Press => policy[1] = true,
-                    State::Focus | State::Disabled => {}
-                }
-            }
-            return Some(policy);
+fn state_policy(root: &El, id: &str, wrapped: bool) -> [bool; 2] {
+    let Some(e) = find(root, id, wrapped).map(El::payload) else {
+        return [false, false];
+    };
+    let mut policy = [interactive(e), interactive(e)];
+    for (state, _) in &e.states {
+        match state {
+            State::Hover => policy[0] = true,
+            State::Press => policy[1] = true,
+            State::Focus | State::Disabled => {}
         }
-        n.children().iter().find_map(|child| visit(child, id))
     }
-
-    visit(root, id).unwrap_or([false, false])
+    policy
 }
 
 /// Replace every node's style with what it declared for the states it
@@ -1541,11 +1587,8 @@ fn state_policy(root: &El, id: &str) -> [bool; 2] {
 /// automatic-state pass uses them to avoid applying the same state twice.
 /// `off` is the enclosing subtree's disabled flag, `false` at the root: a card
 /// that switched itself off greys the controls inside it too, which is the same
-/// rule the hit gate uses.
-///
-/// ponytail: an unnamed node gets Focus and Disabled by its tree path, but
-/// never Hover or Press -- unnamed surfaces are decoration, kept out of the
-/// hit map. Admit the ones that declare those states when that matters.
+/// rule the hit gate uses. An unnamed node is keyed by its tree path, the key
+/// the hit map gives it when it declares a hover or press look.
 fn declared_states(n: &mut El, path: &mut String, is: &dyn Fn(&str, State) -> bool, off: bool) {
     let off = off || n.payload().disabled;
     if !n.payload().states.is_empty() {
@@ -1633,7 +1676,7 @@ mod tests {
     use super::*;
     use crate::widgets;
     use mui_geometry::Point;
-    use mui_input::{Button, Buttons, Mods};
+    use mui_input::Mods;
     use mui_scene::prelude::*;
 
     fn at(x: f64, y: f64, down: bool) -> PointerInput {
@@ -2884,6 +2927,133 @@ mod tests {
         let f = ui.frame(off(), None, Input::default(), 0.016).unwrap();
         assert_eq!(solid(&f), to_paint(Role::Field));
     }
+    /// The corner radius the one rounded box in `f` paints with.
+    fn corner(f: &Frame) -> f64 {
+        f.scene
+            .paint
+            .iter()
+            .find_map(|p| p.rect.map(|r| r.radius()))
+            .expect("a rounded rect")
+    }
+
+    /// `.on(State::Hover | State::Press)` needs no id: a node that declares
+    /// one is a pointer target by its tree path.
+    #[test]
+    fn an_unnamed_node_takes_its_hover_and_press_looks() {
+        let tree = || {
+            row![leaf(40., 40.)
+                .fill(Role::Raised)
+                .on(State::Hover, |s| s.radius(3.))
+                .on(State::Press, |s| s.radius(5.))]
+        };
+        let mut ui = Ui::new(Theme::DEFAULT);
+        let cold = corner(&ui.frame(tree(), None, Input::default(), 0.016).unwrap());
+        let mut look = cold;
+        for _ in 0..12 {
+            look = corner(&ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap());
+        }
+        assert!(
+            cold != 3. && look == 3.,
+            "hovered by its path: {cold} -> {look}"
+        );
+        for _ in 0..12 {
+            look = corner(&ui.frame(tree(), None, at(10., 10., true), 0.016).unwrap());
+        }
+        assert_eq!(look, 5., "and pressed");
+        assert_eq!(ui.interaction.held(), Some("/0"));
+    }
+
+    /// Which of `top` and `under`, stacked, a press on both takes -- and
+    /// whether a named field focused beforehand keeps the focus.
+    fn press_stack(under: El, top: El) -> (Option<String>, bool) {
+        let tree = |under: &El, top: &El| {
+            col![
+                overlay([under.clone(), top.clone()]),
+                leaf(40., 20.).focusable().id("field"),
+            ]
+        };
+        let mut ui = Ui::new(Theme::DEFAULT);
+        ui.frame(tree(&under, &top), None, Input::default(), 0.016)
+            .unwrap();
+        ui.focus("field");
+        for down in [false, true] {
+            ui.frame(tree(&under, &top), None, at(10., 10., down), 0.016)
+                .unwrap();
+        }
+        (
+            ui.interaction.held().map(str::to_owned),
+            ui.focused("field"),
+        )
+    }
+
+    /// An unnamed node with a pointer look routes exactly as the same node
+    /// with an id: over a named control it takes the press, under one it
+    /// does not. Plain decoration stays transparent to the pointer.
+    #[test]
+    fn an_unnamed_stateful_node_routes_like_a_named_one_and_decoration_not_at_all() {
+        let control = || leaf(40., 40.).role(Kind::Button).id("c");
+        let lit = || leaf(40., 40.).on(State::Hover, |s| s.radius(3.));
+        let plain = || leaf(40., 40.).fill(Role::Raised);
+
+        // Over the control.
+        assert_eq!(press_stack(control(), lit()), (Some("/0/1".into()), false));
+        assert_eq!(
+            press_stack(control(), lit().id("top")),
+            (Some("top".into()), false)
+        );
+        // Under it.
+        assert_eq!(press_stack(lit(), control()), (Some("c".into()), false));
+        assert_eq!(
+            press_stack(lit().id("under"), control()),
+            (Some("c".into()), false)
+        );
+        // Decoration over the control is not there as far as the pointer is
+        // concerned; with an id it would be.
+        assert_eq!(press_stack(control(), plain()), (Some("c".into()), false));
+        assert_eq!(
+            press_stack(control(), plain().id("top")),
+            (Some("top".into()), false)
+        );
+    }
+
+    /// The unnamed root is decoration like any unnamed node: it does not
+    /// hover as `""`. Clicking the empty background still drops the focus,
+    /// because a press that lands on no target does -- not because the root
+    /// happened to be one.
+    #[test]
+    fn empty_background_is_no_target_and_a_press_on_it_drops_the_focus() {
+        let tree = || {
+            // The field sits centred along the top: x 80..120, y 0..20.
+            col![leaf(40., 20.).focusable().id("field")]
+                .size(200., 200.)
+                .fill(Role::Background)
+        };
+        let mut ui = Ui::new(Theme::DEFAULT);
+        ui.frame(tree(), None, Input::default(), 0.016).unwrap();
+        ui.frame(tree(), None, at(100., 10., true), 0.016).unwrap();
+        assert!(ui.focused("field"), "a press on the field focuses it");
+        ui.frame(tree(), None, at(100., 10., false), 0.016).unwrap();
+        ui.frame(tree(), None, at(150., 150., false), 0.016)
+            .unwrap();
+        assert_eq!(ui.interaction.hovered(), None, "the root is no target");
+        assert!(ui.focused("field"), "hovering the background keeps it");
+        ui.frame(tree(), None, at(150., 150., true), 0.016).unwrap();
+        assert!(!ui.focused("field"), "a press on nothing drops it");
+        assert_eq!(ui.interaction.held(), None, "and captures nothing");
+
+        // A press that starts on the field and a second button going down
+        // elsewhere mid-gesture is still the field's gesture.
+        ui.frame(tree(), None, at(100., 10., false), 0.016).unwrap();
+        ui.frame(tree(), None, at(100., 10., true), 0.016).unwrap();
+        let both = PointerInput {
+            pos: Some(Point::new(150., 150.)),
+            buttons: Buttons::PRIMARY.set(Button::Secondary, true),
+            ..PointerInput::default()
+        };
+        ui.frame(tree(), None, both, 0.016).unwrap();
+        assert!(ui.focused("field"), "held, the field keeps the focus");
+    }
+
     fn to_paint(r: Role) -> mui_scene::Paint {
         let mut ui = Ui::new(Theme::DEFAULT);
         solid(
