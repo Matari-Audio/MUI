@@ -86,6 +86,7 @@ fn shot(scale: f64) -> Shot {
             &mut mui::vello::Cpu {
                 ctx: &mut ctx,
                 resources: &mut res,
+                cache: &mut mui::vello::Cache::default(),
             },
             frame.scene,
             // The whole scale story on the paint side: one transform. Glyph

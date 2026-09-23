@@ -8,7 +8,7 @@ use crate::boundary::{Boundary, Plate, BOUNDARY_BYTES};
 use crate::{Brush, Channel, Color, Error, Geometry, Point, Rect, Source, Weld};
 use std::sync::Arc;
 
-pub const PARAM_BYTES: usize = 352;
+pub const PARAM_BYTES: usize = 336;
 pub const ANALYTIC_SOURCES: usize = 3;
 
 /// One shader source. Colour conversion is performed while constructing or
@@ -19,6 +19,9 @@ pub struct AnalyticSource {
     half: [f64; 2],
     radius: f64,
     width: f64,
+    // ponytail: always the identity -- nothing in the tree rotates a source.
+    // The shader and `Boundary` still take the angle, so a rotating adapter
+    // only has to set it here.
     rotation: [f64; 2],
     fill0: [f32; 4],
     fill1: [f32; 4],
@@ -93,16 +96,6 @@ impl AnalyticSource {
         };
         value.validate()?;
         Ok(value)
-    }
-    /// Rigid rotation about the source centre; material coordinates rotate with
-    /// the source. This does not rotate a widget's child layout or semantics.
-    pub fn rotated(mut self, radians: f64) -> Result<Self, Error> {
-        if !radians.is_finite() {
-            return Err(Error::Invalid("GPU source rotation"));
-        }
-        self.rotation = [radians.cos(), radians.sin()];
-        self.validate()?;
-        Ok(self)
     }
     fn validate(&self) -> Result<(), Error> {
         let mut scalars = self
@@ -298,12 +291,6 @@ impl AnalyticWeld {
         self.weld.blend = blend;
         Ok(changed)
     }
-    pub fn set_channels(&mut self, fill: Channel, border: Channel) -> bool {
-        let changed = self.weld.fill != fill || self.weld.border != border;
-        self.weld.fill = fill;
-        self.weld.border = border;
-        changed
-    }
     /// Change solid paints/width without changing source geometry or allocation.
     pub fn set_solid_material(
         &mut self,
@@ -396,9 +383,8 @@ impl AnalyticWeld {
                 0.,
             ],
         );
-        set(48, [0., 0., w, h]);
         for (i, s) in self.sources.iter().enumerate() {
-            let b = 64 + 96 * i;
+            let b = 48 + 96 * i;
             set(
                 b,
                 [
@@ -472,10 +458,10 @@ mod tests {
         AnalyticWeld::from_sources(&[source(0.), source(90.)], Weld::all().reach(30.), 1.5).unwrap()
     }
     #[test]
-    fn abi_is_352_bytes_and_first_upload_is_one_range() {
+    fn abi_is_336_bytes_and_first_upload_is_one_range() {
         let a = request().uniform_bytes();
-        assert_eq!(a.len(), 352);
-        assert_eq!(dirty_ranges(None, &a).collect::<Vec<_>>(), vec![0..352]);
+        assert_eq!(a.len(), 336);
+        assert_eq!(dirty_ranges(None, &a).collect::<Vec<_>>(), vec![0..336]);
     }
     #[test]
     fn morph_touches_one_16_byte_lane_and_no_geometry() {
@@ -506,18 +492,6 @@ mod tests {
         assert_eq!(a, old);
     }
     #[test]
-    fn channel_changes_do_not_resize() {
-        let mut a = request();
-        let old = a.uniform_bytes();
-        let size = a.pixels();
-        a.set_channels(Channel::Keep, Channel::Omit);
-        assert_eq!(
-            dirty_ranges(Some(&old), &a.uniform_bytes()).collect::<Vec<_>>(),
-            vec![32..48]
-        );
-        assert_eq!(a.pixels(), size);
-    }
-    #[test]
     fn material_update_cannot_move_geometry() {
         let mut a = request();
         let before = a.clone();
@@ -538,7 +512,7 @@ mod tests {
         let next = a.uniform_bytes();
         assert_eq!(
             dirty_ranges(Some(&old), &next).collect::<Vec<_>>(),
-            vec![80..96]
+            vec![64..80]
         );
         assert_eq!(domain, a.domain());
     }
@@ -564,18 +538,6 @@ mod tests {
             }],
         });
         assert!(AnalyticSource::from_source(&s).is_err());
-    }
-    #[test]
-    fn rotation_keeps_local_distance() {
-        let s = AnalyticSource::from_source(&source(0.)).unwrap();
-        let angle = 0.83_f64;
-        let r = s.clone().rotated(angle).unwrap();
-        let p = Point::new(15., 9.);
-        let q = Point::new(
-            40. + angle.cos() * (p.x - 40.) - angle.sin() * (p.y - 30.),
-            30. + angle.sin() * (p.x - 40.) + angle.cos() * (p.y - 30.),
-        );
-        assert!((s.distance(p) - r.distance(q)).abs() < 1e-9);
     }
     #[test]
     fn invalid_coordinates_never_hit() {

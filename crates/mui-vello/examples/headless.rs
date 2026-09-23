@@ -106,6 +106,7 @@ async fn rasterise(resolved: &mui_scene::ResolvedScene) -> Vec<u8> {
         &mut Gpu {
             scene: &mut scene,
             resources: &mut resources,
+            cache: &mut mui_vello::Cache::default(),
             atlas: None,
         },
         resolved,

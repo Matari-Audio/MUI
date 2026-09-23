@@ -1,12 +1,11 @@
-//! ISOLATED effect/composition benchmark, not a KURV/DAW or presented-FPS test.
-//! The same WGSL, plates, crop, background, clip, opacity and foreground are used
-//! for both backends. Classic includes its registered-texture atlas copy.
-//! GPU timestamps bracket queue commands; classic's multi-submit interval also
-//! includes intervening queue idle time. CPU timing excludes the in-flight gate.
+//! ISOLATED effect/composition benchmark, not a KURV/DAW or presented-FPS test:
+//! one analytic weld sampled by Hybrid under a background, clip, opacity and
+//! foreground. GPU timestamps bracket queue commands. CPU timing excludes the
+//! in-flight gate.
 use mui_vello::{
-    effects::{Budget, GpuTimer, GpuTiming, OutputEncoding, WeldTextures},
+    effects::{Budget, GpuTimer, GpuTiming, WeldTextures},
     kurbo::{Affine, Rect, RoundedRect, Shape as _},
-    Canvas as _, Gpu,
+    Cache, Canvas as _, Gpu,
 };
 use mui_weld::{analytic::AnalyticWeld, Brush, Color, Geometry, Rect as WRect, Source, Weld};
 use std::{
@@ -21,7 +20,7 @@ use vello_common::{
     geometry::RectU16,
     peniko::{
         color::{AlphaColor, Srgb},
-        BlendMode, Fill, ImageData, ImageQuality,
+        BlendMode, ImageQuality,
     },
 };
 #[allow(dead_code)]
@@ -51,8 +50,6 @@ fn image_transform(m: &AnalyticWeld, scale: f64) -> Affine {
     let d = m.domain();
     Affine::scale(scale) * Affine::translate((55. + d.x0, 70. + d.y0)) * Affine::scale(1. / scale)
 }
-// Keep clipping source construction simple and shared; apply the transform when
-// encoding rather than relying on backend-specific rectangle convenience APIs.
 fn clip_path() -> mui_vello::kurbo::BezPath {
     RoundedRect::from_rect(Rect::new(18., 24., 320., 215.), 18.).to_path(0.01)
 }
@@ -71,6 +68,7 @@ fn encode_hybrid(
     let mut c = Gpu {
         scene,
         resources,
+        cache: &mut Cache::default(),
         atlas: None,
     };
     c.set_transform(Affine::IDENTITY);
@@ -95,45 +93,6 @@ fn encode_hybrid(
     c.set_paint(opaque(1.).into());
     c.fill_path(&Rect::new(130., 95., 155., 120.).to_path(0.01));
 }
-fn encode_classic(
-    scene: &mut vello::Scene,
-    image: &ImageData,
-    m: &AnalyticWeld,
-    size: [u32; 2],
-    scale: f64,
-) {
-    scene.reset();
-    let whole = Rect::new(0., 0., f64::from(size[0]), f64::from(size[1]));
-    scene.fill(Fill::NonZero, Affine::IDENTITY, opaque(0.), None, &whole);
-    scene.push_layer(
-        Fill::NonZero,
-        BlendMode::default(),
-        0.8,
-        Affine::IDENTITY,
-        &whole,
-    );
-    scene.push_clip_layer(Fill::NonZero, Affine::scale(scale), &clip_path());
-    // The registered texture has capacity dimensions; transparent bucket padding
-    // is clipped to the same USED region that Hybrid's SampleRect selects.
-    let [w, h] = m.pixels();
-    let transform = image_transform(m, scale);
-    scene.push_clip_layer(
-        Fill::NonZero,
-        transform,
-        &Rect::new(0., 0., f64::from(w), f64::from(h)),
-    );
-    scene.draw_image(image, transform);
-    scene.pop_layer();
-    scene.pop_layer();
-    scene.pop_layer();
-    scene.fill(
-        Fill::NonZero,
-        Affine::scale(scale),
-        opaque(1.),
-        None,
-        &Rect::new(130., 95., 155., 120.),
-    );
-}
 fn value(args: &[String], key: &str, default: &str) -> gpu_support::Result<String> {
     match args.iter().position(|a| a == key) {
         Some(i) => args
@@ -148,12 +107,9 @@ fn main() -> gpu_support::Result<()> {
 }
 async fn run() -> gpu_support::Result<()> {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
-    let backend = value(&args, "--backend", "hybrid")?;
     let case = value(&args, "--case", "morph")?;
-    if !["hybrid", "classic"].contains(&backend.as_str())
-        || !["static", "morph", "geometry", "resize"].contains(&case.as_str())
-    {
-        return Err("invalid backend/case".into());
+    if !["static", "morph", "geometry", "resize"].contains(&case.as_str()) {
+        return Err("invalid case".into());
     }
     let frames: u64 = value(&args, "--frames", "600")?.parse()?;
     let scale: f64 = value(&args, "--scale", "1")?.parse()?;
@@ -166,48 +122,21 @@ async fn run() -> gpu_support::Result<()> {
     if info.device_type == wgpu::DeviceType::Cpu && !args.iter().any(|a| a == "--allow-software") {
         return Err("software adapter refused for performance ranking; pass --allow-software for diagnostic execution".into());
     }
-    let tag = format!("{backend}-{case}-{scale}");
+    let tag = format!("hybrid-{case}-{scale}");
     std::fs::write(out.join(format!("{tag}-adapter.txt")),format!("{info:?}\nheadless effect/composition fixture; not presented FPS or whole-editor performance\n"))?;
-    let encoding = if backend == "hybrid" {
-        OutputEncoding::HybridPremultipliedSrgb
-    } else {
-        OutputEncoding::ClassicStraightSrgb
-    };
-    let mut pool = WeldTextures::new(&device, &queue, Budget::default(), encoding).await?;
+    let mut pool = WeldTextures::new(&device, &queue, Budget::default()).await?;
     let mut size = [(384. * scale) as u32, (256. * scale) as u32];
     let mut texture = gpu_support::target(&device, size);
     let mut view = texture.create_view(&Default::default());
-    let mut hybrid = if backend == "hybrid" {
-        Some(vello_hybrid::Renderer::new(
-            &device,
-            &vello_hybrid::RenderTargetConfig {
-                format: wgpu::TextureFormat::Rgba8Unorm,
-                width: size[0],
-                height: size[1],
-            },
-        ))
-    } else {
-        None
-    };
-    let mut hscene = if backend == "hybrid" {
-        Some(vello_hybrid::Scene::new(size[0] as u16, size[1] as u16))
-    } else {
-        None
-    };
-    let mut classic = if backend == "classic" {
-        Some(vello::Renderer::new(
-            &device,
-            vello::RendererOptions::default(),
-        )?)
-    } else {
-        None
-    };
-    let mut cscene = if backend == "classic" {
-        Some(vello::Scene::new())
-    } else {
-        None
-    };
-    let mut registered: Option<ImageData> = None;
+    let (mut hybrid, mut resources) = vello_hybrid::Renderer::new(
+        &device,
+        &vello_hybrid::RenderTargetConfig {
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            width: size[0],
+            height: size[1],
+        },
+    );
+    let mut hscene = vello_hybrid::Scene::new(size[0] as u16, size[1] as u16);
     let mut mapping = u64::MAX;
     let mut m = spec(0., scale);
     let mut timer = GpuTimer::new(&device, &queue).ok();
@@ -250,69 +179,29 @@ async fn run() -> gpu_support::Result<()> {
         let ticket = timer.as_mut().and_then(|t| t.begin(&mut encoder));
         pool.encode("join", &m, &mut encoder, &mut stats)?;
         let changed = mapping != pool.mapping_revision() || case == "resize";
-        if let Some(renderer) = &mut classic {
-            let cscene = cscene.as_mut().expect("classic scene");
-            if mapping != pool.mapping_revision() {
-                if let Some(old) = registered.take() {
-                    renderer.unregister_texture(old);
-                }
-                registered =
-                    Some(renderer.register_texture(pool.texture("join").expect("texture").clone()));
-            }
-            let image = registered.as_ref().expect("registered");
-            if stats.effect_draws > 0 {
-                renderer.mark_override_image_dirty(image);
-            }
-            if changed {
-                encode_classic(cscene, image, &m, size, scale);
-                stats.encoded_scenes += 1;
-            }
-            queue.submit([encoder.finish()]);
-            renderer.render_to_texture(
-                &device,
-                &queue,
-                cscene,
-                &view,
-                &vello::RenderParams {
-                    base_color: opaque(0.),
-                    width: size[0],
-                    height: size[1],
-                    antialiasing_method: vello::AaConfig::Area,
-                },
-            )?;
-            if let (Some(t), Some(ticket)) = (&mut timer, ticket) {
-                let mut end = device.create_command_encoder(&Default::default());
-                t.finish(&mut end, ticket);
-                queue.submit([end.finish()]);
-                t.submitted(ticket);
-            }
-        } else {
-            let (hybrid, resources) = hybrid.as_mut().expect("Hybrid resources");
-            let hscene = hscene.as_mut().expect("Hybrid scene");
-            if changed {
-                encode_hybrid(hscene, resources, &pool, &m, size, scale);
-                stats.encoded_scenes += 1;
-            }
-            hybrid.render(
-                hscene,
-                resources,
-                &device,
-                &queue,
-                &mut encoder,
-                &vello_hybrid::RenderSize {
-                    width: size[0],
-                    height: size[1],
-                },
-                &view,
-                pool.bindings(),
-            )?;
-            if let (Some(t), Some(ticket)) = (&mut timer, ticket) {
-                t.finish(&mut encoder, ticket);
-            }
-            queue.submit([encoder.finish()]);
-            if let (Some(t), Some(ticket)) = (&mut timer, ticket) {
-                t.submitted(ticket);
-            }
+        if changed {
+            encode_hybrid(&mut hscene, &mut resources, &pool, &m, size, scale);
+            stats.encoded_scenes += 1;
+        }
+        hybrid.render(
+            &hscene,
+            &mut resources,
+            &device,
+            &queue,
+            &mut encoder,
+            &vello_hybrid::RenderSize {
+                width: size[0],
+                height: size[1],
+            },
+            &view,
+            pool.bindings(),
+        )?;
+        if let (Some(t), Some(ticket)) = (&mut timer, ticket) {
+            t.finish(&mut encoder, ticket);
+        }
+        queue.submit([encoder.finish()]);
+        if let (Some(t), Some(ticket)) = (&mut timer, ticket) {
+            t.submitted(ticket);
         }
         pool.commit_submitted(&mut stats);
         mapping = pool.mapping_revision();
@@ -361,9 +250,6 @@ async fn run() -> gpu_support::Result<()> {
     }
     let pixels = gpu_support::readback(&device, &queue, &texture, size)?;
     gpu_support::save(&out.join(format!("{tag}.png")), size, &pixels)?;
-    if let (Some(renderer), Some(image)) = (&mut classic, registered) {
-        renderer.unregister_texture(image);
-    }
     println!("WROTE {}", out.join(format!("{tag}.csv")).display());
     Ok(())
 }

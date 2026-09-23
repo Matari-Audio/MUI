@@ -370,32 +370,6 @@ impl Boundary {
             point: closest,
         }
     }
-    /// Spatial widths are a convex combination on the BOUNDARY, not at the
-    /// interior sample. This prevents changing material weights from tilting the
-    /// inner edge through a nominally constant-width normal section.
-    pub fn width(
-        &self,
-        p: Point,
-        widths: &[f64],
-        blend: f64,
-    ) -> Result<(BoundarySample, f64), Error> {
-        if widths.len() != self.plates.len()
-            || widths.iter().any(|v| !v.is_finite() || *v < 0.0)
-            || !blend.is_finite()
-            || blend < 0.0
-        {
-            return Err(Error::Invalid("crisp border widths/blend"));
-        }
-        p.validate()?;
-        let hit = self.sample(p);
-        let ds: Vec<_> = self
-            .plates
-            .iter()
-            .map(|s| s.distance(hit.point).abs())
-            .collect();
-        let (_, w) = crate::field::smooth_min(&ds, blend);
-        Ok((hit, widths.iter().zip(w).map(|(v, w)| v * w).sum()))
-    }
     /// Uniform buffer ABI: three vec4s per piece. kind is meta.x, 0=line, 1=arc.
     /// Circle endpoints are unit vectors; GPU closest-point testing uses crosses
     /// instead of atan2. Zero-filled tail is never read past the explicit count.
@@ -476,25 +450,6 @@ mod tests {
         b.radius = 0.0;
         let u = Boundary::new(vec![a, b]).unwrap();
         assert!((u.sample(Point::new(0.0, 0.0)).distance + 12.0).abs() < 1e-6);
-    }
-    #[test]
-    fn two_to_four_stays_bounded() {
-        let b = Boundary::new(vec![
-            plate(-12.0),
-            Plate {
-                angle: 0.8,
-                ..plate(12.0)
-            },
-        ])
-        .unwrap();
-        for x in -35..35 {
-            for y in -25..25 {
-                let (_, w) = b
-                    .width(Point::new(x as f64, y as f64), &[2.0, 4.0], 24.0)
-                    .unwrap();
-                assert!((2.0 - 1e-10..=4.0 + 1e-10).contains(&w));
-            }
-        }
     }
     #[test]
     fn coincident_shapes_keep_the_exterior() {

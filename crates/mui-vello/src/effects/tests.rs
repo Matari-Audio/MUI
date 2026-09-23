@@ -66,17 +66,10 @@ fn sparse_dirty_ranges_are_coalesced_without_painting_everything() {
         vec![16..48, 80..96]
     );
 }
-#[test]
-fn production_shader_has_both_explicit_alpha_contracts() {
-    assert!(super::WELD_SHADER.contains("fn fs_hybrid"));
-    assert!(super::WELD_SHADER.contains("fn fs_classic"));
-    assert!(super::WELD_SHADER.contains("array<Source, 3>"));
-}
-
 /// This is the real WGSL parser/type/uniformity check, not a string assertion.
 /// It runs without an adapter; native pixel tests are a separate opt-in binary.
 #[test]
-fn naga_validates_both_outputs_and_the_uniform_abi() {
+fn naga_validates_the_shader_and_the_uniform_abi() {
     let module = naga::front::wgsl::parse_str(super::WELD_SHADER)
         .unwrap_or_else(|e| panic!("{}", e.emit_to_string(super::WELD_SHADER)));
     naga::valid::Validator::new(
@@ -85,7 +78,7 @@ fn naga_validates_both_outputs_and_the_uniform_abi() {
     )
     .validate(&module)
     .expect("WGSL type/uniformity validation");
-    for name in ["vs_main", "fs_hybrid", "fs_classic"] {
+    for name in ["vs_main", "fs_hybrid"] {
         assert!(module.entry_points.iter().any(|e| e.name == name));
     }
     let uniform = module
@@ -100,9 +93,9 @@ fn naga_validates_both_outputs_and_the_uniform_abi() {
     assert_eq!(*span, PARAM_BYTES as u32);
     assert_eq!(
         members.iter().map(|m| m.offset).collect::<Vec<_>>(),
-        [0, 16, 32, 48, 64]
+        [0, 16, 32, 48]
     );
-    let naga::TypeInner::Array { stride, .. } = &module.types[members[4].ty].inner else {
+    let naga::TypeInner::Array { stride, .. } = &module.types[members[3].ty].inner else {
         panic!("sources must be an array")
     };
     assert_eq!(*stride, 96);
