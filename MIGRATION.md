@@ -252,6 +252,27 @@ mui_vello::paint(&mut canvas, &resolved, xf)?;
 - `HybridEffects::enable_profiling` / `collect_timings` / `timing_losses` /
   `resident_effect_bytes` / `release_effects` -> removed. `GpuTimer` remains
   and can be driven directly.
+- `EffectStats` gains `renders: u64`, the Vello passes recorded. A struct
+  literal needs it; `..Default::default()` covers it.
+- `Canvas` gains `begin_frame()`, a default no-op; `paint` calls it first.
+  `Gpu` and `Cpu` age the cache's fonts there: a font unused for 64 frames
+  lets go of its `FontData`.
+- new: `Cache::for_atlas(AtlasConfig)` for a renderer built with
+  `Renderer::new_with`; `Cache::default()` matches `Renderer::new`.
+- new: `WeldTextures::forget_absent(in_scene)` and `ABSENT_FRAMES` (3). Both
+  retained renderers call it: a weld gone from the scene for more than 3
+  frames frees its texture instead of waiting for budget pressure.
+- Behaviour: `HybridEffects` and `TiledEffects` record no Vello pass (and
+  `HybridEffects` submits nothing) when the frame is unchanged and the
+  target is the view presented last. A host that draws into that target
+  itself between frames calls `invalidate()`.
+- Behaviour: the `Cpu` canvas draws a font's glyphs from `vello_cpu`'s glyph
+  atlas from the font's second frame on, instead of per-glyph paths;
+  antialiasing can differ slightly from the first frame's. `Gpu` is
+  unchanged.
+- Behaviour: a `Gpu` image that does not fit the atlas is sized, not
+  premultiplied, before it is refused, so a refused photo costs nothing per
+  frame.
 - `DamageTracker::plan(&self, scene, xf, tiles) -> DamagePlan` ->
   `plan(&self, scene, xf, tiles, out: &mut DamagePlan)`. Reuse one plan.
 - `DamagePlan { dirty, total_tiles, full, dirty_pixels }` struct literal ->
