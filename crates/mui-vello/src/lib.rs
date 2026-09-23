@@ -205,8 +205,13 @@ pub struct Cache {
 }
 
 enum Stored {
+    /// Only the CPU canvas stores pixmaps.
+    #[cfg_attr(not(feature = "cpu"), allow(dead_code))]
     Pixmap(Arc<Pixmap>),
-    Atlas { id: ImageId, clear: bool },
+    Atlas {
+        id: ImageId,
+        clear: bool,
+    },
 }
 
 impl Cache {
