@@ -184,7 +184,7 @@ pub enum BooleanOp {
     Xor,
 }
 impl BooleanOp {
-    fn rule(self) -> OverlayRule {
+    pub(crate) fn rule(self) -> OverlayRule {
         match self {
             Self::Union => OverlayRule::Union,
             Self::Intersection => OverlayRule::Intersect,

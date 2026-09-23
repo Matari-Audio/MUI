@@ -68,6 +68,13 @@ impl Walk<'_> {
                 .fill
                 .paint(&self.spec.theme.palette, under)
                 .map_or(under, |p| p.solid()),
+            // A joined tab takes the owner's border material; its fill only
+            // grounds its content.
+            None if e.border_join.is_some() => e
+                .style
+                .fill
+                .paint(&self.spec.theme.palette, under)
+                .map_or(under, |p| p.solid()),
             // ponytail: `Painted` owns its path, so a filled node copies its
             // outline once. `Arc<Path>` there is the upgrade -- an API break
             // for every renderer.
@@ -297,6 +304,9 @@ impl Walk<'_> {
             _ => th.corners.concave,
         };
         crate::border_ramp::decorate(&mut band, ramp, anchor, shoulder, named_frame)?;
+        if let Some(joins) = self.surface_joins.get(&at) {
+            band.commands.extend(joins.commands.iter().cloned());
+        }
         if ramp.align == crate::BorderAlign::Outside {
             let merged = self.cached_region((at, 7), Operation::Sweep(band))?;
             band = mui_geometry::boolean_paths(
@@ -318,7 +328,7 @@ impl Walk<'_> {
         if ramp.align == crate::BorderAlign::Inside {
             self.mark(Layer::Unclip, Path::default(), None);
         }
-        if !ramp.tabs.is_empty() {
+        if !ramp.tabs.is_empty() || self.surface_joins.contains_key(&at) {
             let paint: Vec<_> = self.paint.drain(start..).collect();
             self.paint
                 .splice(border_background..border_background, paint);

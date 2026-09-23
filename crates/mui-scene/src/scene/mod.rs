@@ -117,6 +117,11 @@ struct Walk<'a> {
     outlines: &'a mut OutlineCache,
     borders: &'a mut crate::border_ramp::BorderCache,
     region_cache: &'a mut crate::regions::RegionCache,
+    surface_cache: &'a mut crate::surfaces::Cache,
+    /// Border joins a surface owner adds to its ramp band.
+    surface_joins: HashMap<usize, Path>,
+    /// Nodes whose `.join_border(..)` an owner resolved.
+    joined_nodes: std::collections::HashSet<usize>,
     ramp_anchors: HashMap<usize, Frame>,
     ramp_frames: HashMap<(usize, mui_layout::Id), Frame>,
     weld_cache: &'a mut crate::WeldCache,
@@ -194,6 +199,9 @@ pub fn resolve_scene_cached(
         outlines: &mut text.outlines,
         borders: &mut text.borders,
         region_cache: &mut text.region_cache,
+        surface_cache: &mut text.surface_cache,
+        surface_joins: HashMap::new(),
+        joined_nodes: std::collections::HashSet::new(),
         ramp_anchors: HashMap::new(),
         ramp_frames: HashMap::new(),
         weld_cache,
