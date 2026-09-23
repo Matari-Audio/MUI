@@ -16,7 +16,7 @@ A temporary research worktree and its raw logs disappeared during this investiga
 
 KURV's host already skips settled idle frames. During animation or interaction it constructs the tree, resolves a complete MUI frame, rebuilds hit-testing/paint data, and re-encodes the scene. Processing queued events can produce multiple resolves before one presentation. Preserving event ordering and gesture edges is essential if these resolves are coalesced.
 
-MUI's incremental layout still scans and validates the tree. Cached layout does not mean no tree construction, styling, text-key generation, scene traversal, or paint-list allocation. The existing `PathCache` remembers conversion into Bezier paths; Hybrid still processes those paths into sparse strips. This distinction matters for thousands of animated curves.
+MUI's incremental layout still scans and validates the tree. Cached layout does not mean no tree construction, styling, text-key generation, scene traversal, or paint-list allocation. Paths are converted into Bezier paths every frame; a `PathCache` for this was measured at ~0.08 ms/frame saved on the bench editor and deleted. Hybrid still processes those paths into sparse strips. This distinction matters for thousands of animated curves.
 
 The existing `Ui::set_text` supports a reserved single-line readout without a full layout rebuild. Reuse this API for suitable meters/readouts before inventing a new update system. Structural changes, wrapping, accessibility, hit testing, and animated geometry still need their respective updates.
 
