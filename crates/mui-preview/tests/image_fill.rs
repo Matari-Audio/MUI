@@ -65,16 +65,15 @@ fn render(with_atlas: bool) -> [u8; 4] {
         },
     );
     scene.reset();
-    let mut ids = mui::vello::ImageIds::default();
     mui::vello::paint(
         &mut mui::vello::Gpu {
             scene: &mut scene,
             resources: &mut resources,
+            cache: &mut mui::vello::Cache::default(),
             atlas: with_atlas.then_some(mui::vello::Atlas {
                 renderer: &mut renderer,
                 device: &device,
                 queue: &queue,
-                ids: &mut ids,
             }),
         },
         frame.scene,

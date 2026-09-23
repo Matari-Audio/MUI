@@ -295,6 +295,7 @@ pub fn render(source: &str, width: u16, height: u16) -> Result<Frame, String> {
         &mut mui_vello::Cpu {
             ctx: &mut ctx,
             resources: &mut resources,
+            cache: &mut mui_vello::Cache::default(),
         },
         &scene,
         mui_vello::kurbo::Affine::IDENTITY,

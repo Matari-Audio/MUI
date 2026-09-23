@@ -2,12 +2,10 @@
 
 19 September 2026. Integration base: `a9cc11d232986fce8dfb1a12aa20afd7dcbb664e`.
 
-**Status: implementation authored, not Rust-build-validated.** No native WGSL
-execution, Vello capture, physical-device benchmark or DAW test ran in the
-bundle-authoring environment. It lacked Rust tools, network downloads failed,
-and browser navigation policy prevented a secure WebGPU test page. A native
-conformance binary and a Naga validation test are supplied; their existence is
-not a passing test result.
+**Status: builds, passes its tests, and runs on a physical device.** The
+workspace builds and its test suite passes (including the Naga validation test
+and the `effects_smoke` device test). The `bench` example has been run on an
+AMD RX 6600 (RADV/Vulkan). No DAW or plugin-host test has been run.
 
 This is cumulative with the earlier audit-hardening and CPU material-welding
 patches. The CPU baker remains an explicit reference/snapshot path. Native
@@ -29,9 +27,18 @@ El tree -> layout -> paint-ordered scene
                         persistent RGBA8 texture
                                  |
                    Hybrid external texture sample in its z slot
-                                 |
-                         one queue submission
 ```
+
+Queue submissions per frame, as the code does them today:
+
+- `HybridEffects`: one encoder holds the material passes and the Vello render.
+  It is submitted once per frame.
+- `Gpu::image`: an image upload or atlas free submits its own small encoder at
+  the moment the image is painted. A frame that uploads new images therefore
+  submits more than once.
+- `TiledEffects`: one encoder for the material passes, one per dirty tile, and
+  one for the final blit to the target. That is N+2 submissions for N dirty
+  tiles, plus any image uploads.
 
 `Ui::gpu_welding()` selects the analytic backend for new material welds.
 `.gpu_weld(options)` and `.reference_weld(options)` are explicit per-node
@@ -60,10 +67,11 @@ refresh those dependent values explicitly when needed.
 ## What is implemented
 
 - `mui-weld::analytic`: validated local analytic sources, stable maximum-reach
-  texture domain, a 352-byte uniform ABI, allocation-free changed-lane iterator,
+  texture domain, a 336-byte uniform ABI (21 `vec4<f32>`), allocation-free changed-lane iterator,
   CPU point containment using the same smooth-min policy.
-- `mui-scene`: explicit execution backend; GPU lowering bypasses `WeldCache`
-  and CPU rasterization; an external paint marker preserves z order, surrounding
+- `mui-scene`: explicit execution backend. GPU lowering skips CPU
+  rasterization, but it still goes through `WeldCache`: `finish_gpu` in
+  `external.rs` calls `cache.get_analytic` to reuse the analytic material. An external paint marker preserves z order, surrounding
   clips, group opacity and authored child identity. Morph/material setters leave
   layout and the ordinary paint list unchanged.
 - `mui-input`: analytic containment override after normal broad rejection and
@@ -72,18 +80,60 @@ refresh those dependent values explicitly when needed.
   the group can own its connecting region. Opacity is not geometric hit policy.
 - `mui-vello::effects::WeldTextures`: persistent texture/uniform/bind-group
   slots; changed parameter uploads; 64-pixel capacity buckets; budgets by logical
-  texel bytes and visible count; unused-resource eviction; commit after queue
-  submission and explicit abort. Low-level callers must not mutate an effect
+  texel bytes and visible count. Textures stay resident after their weld leaves
+  the viewport. When a new frame goes over budget, `begin` evicts idle slots,
+  least recently used first. A weld that scrolls back into view therefore
+  re-renders nothing. Commit happens after queue submission, and aborts are
+  explicit. Low-level callers must not mutate an effect
   twice in one submission or call commit before submission.
 - `HybridEffects`: a real Hybrid renderer and resources, not a parallel overlay
   renderer. An exactly unchanged paint list and transform reuse the already
   encoded Hybrid scene, skipping its CPU strip preparation. The material pass
   precedes sampling in the same encoder. Optional overlays invalidate retention.
-- Optional four-slot asynchronous GPU timestamps. Unsupported devices report
-  unsupported; a full telemetry ring drops a sample instead of blocking rendering.
+  Retention helps only when the paint list really is identical. In the `bench`
+  editor something changes every frame, so it re-encodes all 55 of 55 frames.
+- `TiledEffects`: damage-tracked tiles. Welds whose bounds miss the viewport
+  are culled before `begin`, so they are never admitted or rendered. An idle
+  frame plans and commits its damage without allocating
+  (`tests/idle_alloc.rs`).
+- `GpuTimer`: an optional, standalone four-slot asynchronous timestamp ring,
+  used by `gpu_matrix`. `HybridEffects` no longer carries a profiler.
 - Feature-selected native gallery host plus `gpu_welding` windowed example.
-  Resize preserves pipelines. Surface loss attempts surface recreation; full
-  device loss still requires reconstructing the host/renderer and its resources.
+  Resize preserves pipelines. Surface loss recreates the surface. Device loss
+  rebuilds the device and the renderer (see below).
+
+## Images and the per-renderer `Cache`
+
+Decoded pixmaps, atlas ids and fonts live in a `mui_vello::Cache` that belongs
+to the renderer. There are no process-wide globals. `HybridEffects` and
+`TiledEffects` own their cache; direct `Gpu`/`Cpu` callers pass one in.
+Images are keyed by `Weak<[u8]>` on the app's pixel buffer, so the cache never
+keeps a buffer alive. On each image lookup, entries whose buffer the app has
+dropped are swept: their pixmap is freed and their atlas slot is released.
+Fonts are kept for the renderer's lifetime.
+
+When the image atlas is full, the image draws as its solid stand-in colour
+instead of panicking. The cache tracks atlas occupancy with a mirror
+`vello_common` allocator. This mirror is exact only with the default
+`vello_hybrid::Renderer::new` atlas settings and with the glyph atlas off.
+
+## Device loss (host contract)
+
+A wgpu device loss kills everything created from that device: pipelines, weld
+textures, atlas contents and ids, and the retained encoding. `mui-preview`'s
+`host_gpu.rs` is the reference host. It does the following:
+
+1. It registers `Device::set_device_lost_callback`. The callback only sets an
+   `AtomicBool`, because wgpu may call it on any thread.
+2. At the start of the next `present`, if the flag is set, it requests a new
+   adapter and device for the same surface. It then reconfigures the surface
+   and builds a new `HybridEffects` or `TiledEffects`, which brings a fresh
+   `Cache`. That frame is skipped and a redraw is requested.
+3. Nothing from the old device is carried over: no `Cache`, no `WeldTextures`
+   and no texture ids. The scene is plain CPU data and needs no change.
+
+Other hosts must follow the same steps. The path has not yet been exercised by
+a real device loss. The plain `host.rs` gallery host (Hybrid without effects) does not recover yet.
 - Deadline-based tooltip/caret wakeups, true elapsed wall-clock time, one
   catch-up frame for an immediate-mode caret edge, and hidden-window gating.
 - Allocation-free waveform extrema and spectrum peak reducers over existing
@@ -119,10 +169,9 @@ The retained cache stores an exact copy of one paint list; it is not a bounded
 history of every scene ever shown.
 
 The high-level renderer currently supports non-sRGB RGBA8/BGRA8 UNORM output.
-Its effect texture contains premultiplied sRGB-encoded values. The separate
-classic shader entry produces straight-alpha sRGB RGBA8 for classic texture
-registration, including its required atlas-copy path. Do not exchange these two
-contracts or assume an sRGB attachment requires no further changes.
+Its effect texture contains premultiplied sRGB-encoded values, written by the
+single `fs_hybrid` entry point. The classic straight-alpha entry is gone. Do not
+assume an sRGB attachment works without further changes.
 
 The native window host is winit, NOT a completed CLAP/VST3/AU parent-window host.
 No KURV or BUFFR product source or real-time audio transport was changed. Parley
@@ -154,25 +203,32 @@ sample; and native validation errors at 1x/1.5x/2x. Failure to obtain an adapter
 fails the command. Software adapters may be used for correctness, but are named.
 Its current pixel assertions are targeted, not exhaustive CPU/GPU parity.
 
-## Hybrid/classic measurement
+## Hybrid measurement
 
 The separate `gpu_matrix` example measures an ISOLATED analytic-effect fixture
-with the same background, clip, opacity and foreground in each backend. It is
-not the old whole-editor fixture and not a DAW or presentation benchmark.
-Only the selected backend creates renderer resources. Classic includes its
-texture-registration/dirty-atlas-copy route. Both use the exact WGSL file, with
-separate output-alpha entry points.
+on the Hybrid path: background, clip, opacity and foreground around one weld.
+It is not the whole-editor fixture, and it is not a DAW or presentation
+benchmark. The classic backend has been removed.
 
 ```sh
-# Requires Pillow for strict paired-image checks.
 python tools/native-gpu/run_matrix.py ./gpu-results --frames 600 --repetitions 3
 ```
 
 This runs a device contract first, then static/morph/geometry/resize at
-1x/1.5x/2x, alternates backend order, writes raw CSVs, adapter metadata and PNGs,
-and rejects paired images beyond an explicit 3/255 channel threshold. A mismatch
-stops the report; do not silently loosen the threshold to pick a winner. Shader
-and edge equivalence must be reviewed before interpreting performance.
+1x/1.5x/2x, and writes raw CSVs, adapter metadata and PNGs.
+
+The whole-editor comparison is the `bench` example:
+`cargo run -p mui-vello --profile perf --features cpu,gpu-effects --example bench`.
+It includes `hybrid retained` (HybridEffects) and `tiles` (TiledEffects) rows.
+On an RX 6600, median frame times were:
+
+| case | HybridEffects | TiledEffects, per tile | TiledEffects, adaptive |
+|---|---|---|---|
+| static | 5.9 ms | 4.0 ms | 4.3 ms |
+| one knob turning | 5.8 ms | 4.2 ms | 4.5 ms |
+| cold | 11.4 ms | 16.0 ms | 12.0 ms |
+
+On warm frames with partial damage, tiles save about 1.6 to 1.9 ms.
 
 The `perf` Cargo profile inherits release with opt-level=3; the original
 size-optimized release profile remains unchanged. Compare profiles using
@@ -180,8 +236,7 @@ size-optimized release profile remains unchanged. Compare profiles using
 
 Reports use nearest-rank p50/p95/p99 and retain missing timestamp samples.
 `cpu_submit_ms` excludes the bounded three-in-flight admission wait.
-`gpu_queue_interval_ms` brackets queue commands; classic's multi-submit route
-can include intervening idle gaps. Neither metric is presented latency/FPS.
+`gpu_queue_interval_ms` brackets queue commands. Neither metric is presented latency/FPS.
 Readback and final draining occur only in diagnostic binaries, outside timed
 samples, not in production rendering. Window scheduling, input-to-display,
 power/thermals, real audio underruns and multiple plugin instances remain

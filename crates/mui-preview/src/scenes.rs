@@ -1380,6 +1380,7 @@ mod tests {
             &mut mui::vello::Cpu {
                 ctx: &mut ctx,
                 resources: &mut res,
+                cache: &mut mui::vello::Cache::default(),
             },
             &scene,
             mui::vello::kurbo::Affine::IDENTITY,

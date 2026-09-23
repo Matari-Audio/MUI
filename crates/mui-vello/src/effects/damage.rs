@@ -1,7 +1,7 @@
 //! Transactional damage detection. No pixels are assumed to survive in a
 //! swapchain image. TiledEffects owns persistent tiles and recomposes all paint
 //! overlapping each dirty tile, not just the node that changed.
-use crate::kurbo::{Affine, Rect, Shape as _};
+use crate::kurbo::{Affine, BezPath, Rect, Shape as _};
 use mui_scene::{ExternalWeld, Layer, Painted, ResolvedScene};
 use std::collections::BTreeMap;
 
@@ -22,12 +22,14 @@ impl Tile {
         )
     }
 }
+/// Reused frame to frame: planning an idle frame allocates nothing.
 #[derive(Clone, Debug, Default)]
 pub struct DamagePlan {
     pub dirty: Vec<usize>,
     pub total_tiles: usize,
     pub full: bool,
     pub dirty_pixels: u64,
+    flags: Vec<bool>,
 }
 #[derive(Default)]
 pub struct DamageTracker {
@@ -41,8 +43,10 @@ impl DamageTracker {
         self.valid = false;
     }
     /// Inspection does NOT commit: rendering can fail or be cancelled after it.
-    pub fn plan(&self, scene: &ResolvedScene, xf: Affine, tiles: &[Tile]) -> DamagePlan {
-        let mut flags = vec![false; tiles.len()];
+    pub fn plan(&self, scene: &ResolvedScene, xf: Affine, tiles: &[Tile], out: &mut DamagePlan) {
+        let flags = &mut out.flags;
+        flags.clear();
+        flags.resize(tiles.len(), false);
         let mut full = !self.valid || self.xf != Some(xf);
         if !full {
             for (a, b) in self.paint.iter().zip(&scene.paint) {
@@ -50,7 +54,7 @@ impl DamageTracker {
                     continue;
                 }
                 match (paint_bounds(a, xf), paint_bounds(b, xf)) {
-                    (Some(a), Some(b)) => mark(&mut flags, tiles, a.union(b)),
+                    (Some(a), Some(b)) => mark(flags, tiles, a.union(b)),
                     _ => {
                         full = true;
                         break;
@@ -63,7 +67,7 @@ impl DamageTracker {
                 .chain(scene.paint[common..].iter())
             {
                 if let Some(bounds) = paint_bounds(paint, xf) {
-                    mark(&mut flags, tiles, bounds);
+                    mark(flags, tiles, bounds);
                 } else {
                     full = true;
                     break;
@@ -74,45 +78,56 @@ impl DamageTracker {
                 match self.external.get(k) {
                     Some(a) if a == b => {}
                     Some(a) => mark(
-                        &mut flags,
+                        flags,
                         tiles,
                         external_bounds(a, xf).union(external_bounds(b, xf)),
                     ),
-                    None => mark(&mut flags, tiles, external_bounds(b, xf)),
+                    None => mark(flags, tiles, external_bounds(b, xf)),
                 }
             }
             for (k, a) in &self.external {
                 if scene.external_weld(k).is_none() {
-                    mark(&mut flags, tiles, external_bounds(a, xf));
+                    mark(flags, tiles, external_bounds(a, xf));
                 }
             }
         }
         if full {
             flags.fill(true);
         }
-        let dirty: Vec<_> = flags
-            .iter()
-            .enumerate()
-            .filter_map(|(i, f)| f.then_some(i))
-            .collect();
-        let dirty_pixels = dirty
+        out.dirty.clear();
+        out.dirty
+            .extend(flags.iter().enumerate().filter_map(|(i, f)| f.then_some(i)));
+        out.dirty_pixels = out
+            .dirty
             .iter()
             .map(|i| u64::from(tiles[*i].width) * u64::from(tiles[*i].height))
             .sum();
-        DamagePlan {
-            dirty,
-            total_tiles: tiles.len(),
-            full,
-            dirty_pixels,
-        }
+        out.total_tiles = tiles.len();
+        out.full = full;
     }
     /// Call only after ALL dirty tiles and final presentation commands submit.
+    /// Only entries that changed are copied, so committing an idle frame
+    /// allocates nothing.
     pub fn commit(&mut self, scene: &ResolvedScene, xf: Affine) {
-        self.paint.clone_from(&scene.paint);
-        self.external = scene
-            .external_welds()
-            .map(|(k, v)| (k.to_owned(), v.clone()))
-            .collect();
+        self.paint.truncate(scene.paint.len());
+        let kept = self.paint.len();
+        for (old, new) in self.paint.iter_mut().zip(&scene.paint) {
+            if old != new {
+                old.clone_from(new);
+            }
+        }
+        self.paint.extend_from_slice(&scene.paint[kept..]);
+        self.external
+            .retain(|k, _| scene.external_weld(k).is_some());
+        for (k, v) in scene.external_welds() {
+            match self.external.get_mut(k) {
+                Some(old) if old == v => {}
+                Some(old) => old.clone_from(v),
+                None => {
+                    self.external.insert(k.to_owned(), v.clone());
+                }
+            }
+        }
         self.xf = Some(xf);
         self.valid = true;
     }
@@ -155,6 +170,10 @@ pub(crate) fn external_bounds(e: &ExternalWeld, xf: Affine) -> Rect {
 /// invalidate the whole target when it changes. Glyph overhang/shadow filters
 /// must not be incorrectly cropped to their layout boxes.
 pub(crate) fn paint_bounds(p: &Painted, xf: Affine) -> Option<Rect> {
+    bounds(p, &crate::bez_path(&p.path, crate::ARC_TOLERANCE).ok()?, xf)
+}
+/// [`paint_bounds`] of an entry whose path is already converted to `bez`.
+pub(crate) fn bounds(p: &Painted, bez: &BezPath, xf: Affine) -> Option<Rect> {
     if p.layer == Layer::Text {
         let text = p.text.as_ref()?;
         let em = f64::from(text.size);
@@ -190,7 +209,6 @@ pub(crate) fn paint_bounds(p: &Painted, xf: Affine) -> Option<Rect> {
     ) {
         return None;
     }
-    let bez = crate::bez_path(&p.path, crate::ARC_TOLERANCE).ok()?;
     if bez.elements().is_empty() {
         return None;
     }
@@ -210,6 +228,11 @@ mod tests {
     use mui_scene::prelude::*;
     use mui_scene::{Paint, Text, TextGlyph};
     use std::sync::Arc;
+    fn plan(t: &DamageTracker, s: &ResolvedScene, xf: Affine, tiles: &[Tile]) -> DamagePlan {
+        let mut out = DamagePlan::default();
+        t.plan(s, xf, tiles, &mut out);
+        out
+    }
     fn scene(colour: Role, x: f64) -> ResolvedScene {
         resolve_scene(&SceneSpec::new(
             leaf(40., 40.).fill(colour).id("x").offset(x, 0.),
@@ -219,7 +242,12 @@ mod tests {
     #[test]
     fn first_frame_invalidates_all() {
         let t = tiles([512, 512], 128);
-        let d = DamageTracker::default().plan(&scene(Primary, 0.), Affine::IDENTITY, &t);
+        let d = plan(
+            &DamageTracker::default(),
+            &scene(Primary, 0.),
+            Affine::IDENTITY,
+            &t,
+        );
         assert_eq!(d.dirty.len(), 16);
     }
     #[test]
@@ -227,8 +255,7 @@ mod tests {
         let s = scene(Primary, 0.);
         let mut c = DamageTracker::default();
         c.commit(&s, Affine::IDENTITY);
-        assert!(c
-            .plan(&s, Affine::IDENTITY, &tiles([512, 512], 128))
+        assert!(plan(&c, &s, Affine::IDENTITY, &tiles([512, 512], 128))
             .dirty
             .is_empty());
     }
@@ -237,7 +264,12 @@ mod tests {
         let mut c = DamageTracker::default();
         // The default palette paints Primary and Secondary the same grey.
         c.commit(&scene(Primary, 0.), Affine::IDENTITY);
-        let d = c.plan(&scene(Ink, 0.), Affine::IDENTITY, &tiles([512, 512], 128));
+        let d = plan(
+            &c,
+            &scene(Ink, 0.),
+            Affine::IDENTITY,
+            &tiles([512, 512], 128),
+        );
         assert_eq!(d.dirty, vec![0]);
     }
     #[test]
@@ -253,9 +285,26 @@ mod tests {
         after.paint.push(extra);
         let mut tracker = DamageTracker::default();
         tracker.commit(&before, Affine::IDENTITY);
-        let damage = tracker.plan(&after, Affine::IDENTITY, &tiles([512, 128], 128));
+        let damage = plan(&tracker, &after, Affine::IDENTITY, &tiles([512, 128], 128));
         assert!(!damage.full);
         assert_eq!(damage.dirty, vec![2]);
+    }
+    /// `commit` copies only what changed, so it must still leave the tracker
+    /// equal to the scene: growing, shrinking and recolouring alike.
+    #[test]
+    fn an_incremental_commit_matches_the_scene() {
+        let before = scene(Primary, 0.);
+        let mut after = scene(Ink, 0.);
+        let mut extra = after.paint[0].clone();
+        extra.key = "added".into();
+        after.paint.push(extra);
+        let t = tiles([512, 512], 128);
+        let mut c = DamageTracker::default();
+        for s in [&before, &after, &before] {
+            c.commit(s, Affine::IDENTITY);
+            assert_eq!(c.paint, s.paint);
+            assert!(plan(&c, s, Affine::IDENTITY, &t).dirty.is_empty());
+        }
     }
     #[test]
     fn resize_grid_covers_the_target_without_overlap() {
@@ -266,15 +315,15 @@ mod tests {
     fn cancelled_plan_is_not_committed() {
         let s = scene(Primary, 0.);
         let c = DamageTracker::default();
-        c.plan(&s, Affine::IDENTITY, &tiles([512, 512], 128));
-        assert!(c.plan(&s, Affine::IDENTITY, &tiles([512, 512], 128)).full);
+        plan(&c, &s, Affine::IDENTITY, &tiles([512, 512], 128));
+        assert!(plan(&c, &s, Affine::IDENTITY, &tiles([512, 512], 128)).full);
     }
     #[test]
     fn transform_change_invalidates_all() {
         let s = scene(Primary, 0.);
         let mut c = DamageTracker::default();
         c.commit(&s, Affine::IDENTITY);
-        assert!(c.plan(&s, Affine::scale(2.), &tiles([512, 512], 128)).full);
+        assert!(plan(&c, &s, Affine::scale(2.), &tiles([512, 512], 128)).full);
     }
     #[test]
     fn text_has_bounded_damage() {

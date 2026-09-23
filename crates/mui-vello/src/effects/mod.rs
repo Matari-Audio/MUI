@@ -14,7 +14,7 @@ pub use tiled::{TileStats, TiledEffects};
 #[cfg(test)]
 mod tests;
 
-pub use pool::{Budget, EffectStats, OutputEncoding, WeldTextures};
+pub use pool::{Budget, EffectStats, WeldTextures};
 pub use retained::HybridEffects;
 pub const WELD_SHADER: &str = include_str!("weld.wgsl");
 
