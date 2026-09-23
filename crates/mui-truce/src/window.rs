@@ -71,8 +71,10 @@ pub struct Requests {
 impl Requests {
     /// Resize the child window to `width` x `height` logical points.
     pub fn resize(&self, width: u32, height: u32) {
-        self.size
-            .store(u64::from(width) << 32 | u64::from(height), Ordering::Release);
+        self.size.store(
+            u64::from(width) << 32 | u64::from(height),
+            Ordering::Release,
+        );
     }
     /// The host's content scale changed.
     pub fn scale(&self, factor: f64) {
@@ -134,7 +136,7 @@ enum Present {
     Rebuild,
 }
 
-struct Handler<V> {
+pub(crate) struct Handler<V> {
     shared: Arc<Mutex<Shared<V>>>,
     requests: Arc<Requests>,
     gpu: Option<Gpu>,
@@ -162,7 +164,7 @@ struct Handler<V> {
 }
 
 impl<V: View> Handler<V> {
-    fn new(
+    pub(crate) fn new(
         shared: Arc<Mutex<Shared<V>>>,
         requests: Arc<Requests>,
         size: (u32, u32),
@@ -238,9 +240,19 @@ impl<V: View> Handler<V> {
         }
     }
 
+    /// One display tick without a window or GPU, a frame's time after the
+    /// last: what the headless tests drive.
+    #[cfg(test)]
+    pub(crate) fn step(&mut self) -> bool {
+        let shared = Arc::clone(&self.shared);
+        let now = self.last_frame + Duration::from_millis(16);
+        let painted = self.advance(&mut lock(&shared), now);
+        painted
+    }
+
     /// Run the queued events and whatever else is due through `Ui::frame`.
     /// Returns whether there is a new scene to paint.
-    fn advance(&mut self, s: &mut Shared<V>, now: Instant) -> bool {
+    pub(crate) fn advance(&mut self, s: &mut Shared<V>, now: Instant) -> bool {
         self.dirty |= self.requests.redraw.swap(false, Ordering::AcqRel);
         self.dirty |= s.view.changed();
         if target_size(self.size).is_none() {
@@ -291,7 +303,13 @@ impl<V: View> Handler<V> {
         true
     }
 
-    fn resolve(&mut self, s: &mut Shared<V>, input: Input, dt: f64, now: Instant) -> Result<(), ()> {
+    fn resolve(
+        &mut self,
+        s: &mut Shared<V>,
+        input: Input,
+        dt: f64,
+        now: Instant,
+    ) -> Result<(), ()> {
         s.ui.scale = Some(self.scale);
         self.line = s.ui.theme.text;
         let root = s.view.build(&mut s.ui);
@@ -300,7 +318,9 @@ impl<V: View> Handler<V> {
             Ok(frame) => {
                 self.failing = false;
                 self.cursor = frame.cursor;
-                self.animating = frame.animating;
+                // An edge is dispatched by the tree after the frame that
+                // delivered it: that tree has to come even if nothing moves.
+                self.animating = frame.animating || !frame.edits.is_empty();
                 self.wake_at = frame.repaint_after.map(|after| now + after);
                 if let Some(text) = frame.clipboard {
                     self.clipboard.write(&text);
@@ -337,7 +357,7 @@ impl<V: View> Handler<V> {
         }
     }
 
-    fn on_event_inner(&mut self, event: &Event) -> EventStatus {
+    pub(crate) fn on_event_inner(&mut self, event: &Event) -> EventStatus {
         match event {
             Event::Mouse(mouse) => {
                 let mut input = Input::default();
@@ -379,7 +399,8 @@ impl<V: View> Handler<V> {
                 self.pending.push_back(Pending::Cancel(self.pointer));
             }
             Event::Window(WindowEvent::Focused) => {
-                self.pending.push_back(Pending::Input(Input::from(self.pointer)));
+                self.pending
+                    .push_back(Pending::Input(Input::from(self.pointer)));
             }
             Event::Window(WindowEvent::WillClose) => {
                 // No tree is built from here on; the editor's close ends the
@@ -486,9 +507,10 @@ fn on_key(input: &mut Input, key: &HostKey, modifiers: Modifiers) {
                 input.text.push(' ');
             }
         } else if mods.ctrl || mods.cmd {
-            input
-                .keys
-                .extend(s.chars().map(|c| KeyPress { key: Key::Char(c), mods }));
+            input.keys.extend(s.chars().map(|c| KeyPress {
+                key: Key::Char(c),
+                mods,
+            }));
         } else {
             input.text.push_str(s);
         }
@@ -716,12 +738,7 @@ impl Gpu {
         })
     }
 
-    fn present(
-        &mut self,
-        size: (u32, u32),
-        scene: &ResolvedScene,
-        xf: Affine,
-    ) -> Present {
+    fn present(&mut self, size: (u32, u32), scene: &ResolvedScene, xf: Affine) -> Present {
         if self.lost.load(Ordering::Acquire) {
             return Present::Rebuild;
         }
@@ -749,7 +766,9 @@ impl Gpu {
             Acquired::Occluded | Acquired::Timeout => return Present::Retry,
             Acquired::Lost | Acquired::Validation => return Present::Rebuild,
         };
-        let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let view = frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
         match self.renderer.render(scene, xf, &view) {
             Ok(_) => {
                 frame.present();

@@ -178,8 +178,7 @@ impl<P: Params + ?Sized> Bridge<P> {
         for (slot, edit) in edges.iter_mut().zip(ui.edits_for(widget)) {
             *slot = Some(edit);
         }
-        let atomic = edges == [Some(Edit::Begin), Some(Edit::End), None, None]
-            && !self.is_open(id);
+        let atomic = edges == [Some(Edit::Begin), Some(Edit::End), None, None] && !self.is_open(id);
         let last = |e| edges.iter().rposition(|x| *x == Some(e));
         // An End after the last Begin closes the gesture after this frame's
         // value, so the value lands inside it.
