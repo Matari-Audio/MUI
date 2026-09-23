@@ -298,12 +298,7 @@ impl Walk<'_> {
         };
         crate::border_ramp::decorate(&mut band, ramp, anchor, shoulder, named_frame)?;
         if ramp.align == crate::BorderAlign::Outside {
-            let merged = self.region_cache.resolve(
-                (at, 7),
-                Operation::Sweep(band),
-                self.spec.offsets,
-                self.spec.geometry,
-            )?;
+            let merged = self.cached_region((at, 7), Operation::Sweep(band))?;
             band = mui_geometry::boolean_paths(
                 &merged,
                 &contour.path,
