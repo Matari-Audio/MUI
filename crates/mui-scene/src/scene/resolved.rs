@@ -59,12 +59,10 @@ pub struct TextGlyph {
 }
 
 /// A text layer's glyphs, for a renderer that hints and caches its own.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Text {
-    /// The primary face, retained for compatibility with callers that only
-    /// need one face. It is also `fonts[0]` whenever `fonts` is non-empty.
-    pub font: Font,
-    /// Primary face followed by any fallback faces used by this run.
+    /// Primary face followed by any fallback faces used by this run; never
+    /// empty.
     pub fonts: Arc<[Font]>,
     pub size: f32,
     /// Baseline origin.
@@ -87,19 +85,6 @@ pub struct Text {
     /// axes moved: a glyph mid-morph gains nothing from stem snapping and
     /// would cost a fresh hinting instance per frame.
     pub hint: bool,
-}
-impl PartialEq for Text {
-    fn eq(&self, o: &Self) -> bool {
-        self.font == o.font
-            && self.fonts == o.fonts
-            && self.size == o.size
-            && self.origin == o.origin
-            && self.glyphs == o.glyphs
-            && self.axes == o.axes
-            && self.coords == o.coords
-            && self.font_coords == o.font_coords
-            && self.hint == o.hint
-    }
 }
 
 /// One thing to draw. `key` is the node's id, or its tree path (`/0/2`)
@@ -189,10 +174,6 @@ pub struct ResolvedScene {
     pub(super) surfaces: Vec<ResolvedSurface>,
     pub(super) at: HashMap<Arc<str>, usize>,
     pub(crate) external_welds: HashMap<Arc<str>, crate::ExternalWeld>,
-    /// The spec's glyph tolerance, so a live readout can re-shape one run
-    /// without the spec that produced it; the run carries its own faces.
-    /// See [`Self::set_text`].
-    pub(super) tolerance: f64,
 }
 impl ResolvedScene {
     /// Swap what one text node says, keeping every frame this scene already
@@ -232,44 +213,14 @@ impl ResolvedScene {
         // A wrapped label's later lines have no string to re-break against,
         // so the swap collapses it to the one run it now says.
         let rest: Vec<usize> = at.collect();
-        let old = self.paint[first]
+        let mut text = self.paint[first]
             .text
-            .as_ref()
+            .clone()
             .ok_or(SceneError::NoTextLayer)?;
-        let (size, origin, axes, coords, font_coords, font, all_fonts, hint) = (
-            old.size,
-            old.origin,
-            old.axes.clone(),
-            old.coords.clone(),
-            old.font_coords.clone(),
-            old.font.clone(),
-            old.fonts.clone(),
-            old.hint,
-        );
         // The faces the run was resolved with, per-node font included.
-        let fonts = if all_fonts.is_empty() {
-            std::slice::from_ref(&font)
-        } else {
-            &all_fonts[..]
-        };
-        let run = CachedRun::from_run(mui_text::text_run(
-            fonts,
-            s,
-            f64::from(size),
-            &axes.to_vec(),
-            self.tolerance,
-        )?);
-        self.paint[first].text = Some(Text {
-            font,
-            fonts: all_fonts,
-            size,
-            origin,
-            glyphs: run.glyphs,
-            axes,
-            coords,
-            font_coords,
-            hint,
-        });
+        let run = mui_text::shape_run(&text.fonts, s, f64::from(text.size), &text.axes.to_vec())?;
+        text.glyphs = CachedRun::from_run(run).glyphs;
+        self.paint[first].text = Some(text);
         for i in rest.into_iter().rev() {
             self.paint.remove(i);
         }

@@ -82,8 +82,12 @@ fn node(s: &ResolvedSurface, sem: Option<&Semantics>) -> Node {
         Kind::TextInput { value } => n.set_value(value.clone()),
         _ => {}
     }
-    // No name rather than the id: `osc/3/gain` read aloud is noise.
-    if let Some(name) = sem.label.clone().or_else(|| s.text_value.clone()) {
+    // A group goes unnamed rather than read out as `osc/3/gain`, but a
+    // control with neither label nor text (`toggle`, `text_input`) keeps its
+    // id: an unnamed switch is worse than a noisy one.
+    let control = !matches!(sem.role, Kind::Label | Kind::Group | Kind::Scroll);
+    let name = sem.label.clone().or_else(|| s.text_value.clone());
+    if let Some(name) = name.or_else(|| control.then(|| s.key.to_string())) {
         n.set_label(name);
     }
     let f = s.frame;
@@ -206,5 +210,23 @@ mod tests {
         assert_eq!(gain.numeric_value_step(), Some(0.3));
         assert!(gain.supports_action(Action::Increment));
         assert!(gain.supports_action(Action::Decrement));
+    }
+
+    #[test]
+    fn an_unlabelled_control_is_named_by_its_id() {
+        let root = row![
+            leaf(40., 20.).role(Kind::Toggle { on: true }).id("bypass"),
+            leaf(40., 20.)
+                .role(Kind::TextInput { value: "x".into() })
+                .id("preset"),
+        ];
+        let scene = resolve_scene(&SceneSpec::new(root)).unwrap();
+        let u = tree_update(&scene, None, 1.0);
+        let label = |k: &str| {
+            let (_, n) = u.nodes.iter().find(|(id, _)| *id == node_id(k)).unwrap();
+            n.label().map(str::to_owned)
+        };
+        assert_eq!(label("bypass").as_deref(), Some("bypass"));
+        assert_eq!(label("preset").as_deref(), Some("preset"));
     }
 }

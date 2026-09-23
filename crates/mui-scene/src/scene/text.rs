@@ -3,7 +3,6 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use mui_geometry::Path;
 use mui_layout::Size;
 use mui_text::{Axes, Font, TextRun};
 
@@ -14,7 +13,6 @@ use crate::{Content, Element, Theme};
 /// One shaped string, kept in [`TextCache`] while the font stays the same.
 #[derive(Debug, Clone)]
 pub(super) struct CachedRun {
-    pub(super) path: Path,
     pub(super) advance: f64,
     pub(super) ascent: f64,
     pub(super) descent: f64,
@@ -25,7 +23,6 @@ pub(super) struct CachedRun {
 impl CachedRun {
     pub(super) fn from_run(run: TextRun) -> Self {
         Self {
-            path: run.path,
             advance: run.advance,
             ascent: run.ascent,
             descent: run.descent,
@@ -67,7 +64,6 @@ pub struct TextCache {
     pub(super) layout: mui_layout::LayoutCache,
     /// The ids of the spec's faces the cache was filled with.
     pub(super) fonts: Vec<u64>,
-    pub(super) tolerance_bits: u64,
     pub(super) generation: u64,
     pub(super) runs: PerText<RunKey, CachedRun>,
     /// Wrapped paragraphs' line breaks, keyed like `runs`.
@@ -94,19 +90,16 @@ impl TextCache {
         // An inner map is never left empty, so no strings means no runs.
         self.runs.is_empty()
     }
-    /// Start of a resolve: drop every shaped run when the faces or the
-    /// tolerance they were shaped with changed.
+    /// Start of a resolve: drop every shaped run when the faces they were
+    /// shaped with changed.
     pub(super) fn retain_for(&mut self, spec: &SceneSpec) {
         let font_ids = spec.font.iter().chain(&spec.fallback_fonts).map(Font::id);
-        if !self.fonts.iter().copied().eq(font_ids.clone())
-            || self.tolerance_bits != spec.tolerance.to_bits()
-        {
+        if !self.fonts.iter().copied().eq(font_ids.clone()) {
             self.runs.clear();
             self.breaks.clear();
             self.coords.clear();
             self.last_coords.clear();
             self.fonts = font_ids.collect();
-            self.tolerance_bits = spec.tolerance.to_bits();
             self.layout.clear();
         }
     }
@@ -151,7 +144,6 @@ pub(super) struct Runs<'a> {
     pub(super) fonts: Arc<[Font]>,
     /// The last node face's chain, so a column of icons builds it once.
     pub(super) own_fonts: Option<(u64, Arc<[Font]>)>,
-    pub(super) tolerance: f64,
     pub(super) generation: u64,
     pub(super) cache: &'a mut PerText<RunKey, CachedRun>,
     pub(super) breaks: &'a mut PerText<BreakKey, Breaks>,
@@ -224,13 +216,7 @@ impl<'a> Runs<'a> {
         let generation = self.generation;
         if self.cache.get(text).is_none_or(|m| !m.contains_key(&key)) {
             let settings = face.axes.to_vec();
-            let run = CachedRun::from_run(mui_text::text_run(
-                &fonts,
-                text,
-                face.size,
-                &settings,
-                self.tolerance,
-            )?);
+            let run = CachedRun::from_run(mui_text::shape_run(&fonts, text, face.size, &settings)?);
             self.cache
                 .entry(text.to_owned())
                 .or_default()

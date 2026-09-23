@@ -283,8 +283,7 @@ impl<'a> Walk<'a> {
                 snap(frame.x, self.spec.device_scale),
                 snap(dy, self.spec.device_scale),
             );
-            let text = fonts.first().cloned().map(|font| Text {
-                font,
+            let text = Text {
                 fonts: fonts.clone(),
                 size: size as f32,
                 origin,
@@ -293,14 +292,9 @@ impl<'a> Walk<'a> {
                 coords: coords.clone(),
                 font_coords: font_coords.clone(),
                 hint,
-            });
-            let ink_path = if text.is_some() {
-                Path::default()
-            } else {
-                run.path.rigid_transform(origin, 0.0)?
             };
-            if let Some(p) = self.push(Layer::Text, ink_path, None, &ink, under) {
-                p.text = text;
+            if let Some(p) = self.push(Layer::Text, Path::default(), None, &ink, under) {
+                p.text = Some(text);
             }
         }
         Ok(())

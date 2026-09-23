@@ -20,8 +20,6 @@ pub struct SceneSpec {
     /// glyph. They are carried into the resolved text layer so both CPU and
     /// GPU renderers draw the selected face.
     pub fallback_fonts: Vec<Font>,
-    /// Curve tolerance for glyph outlines.
-    pub tolerance: f64,
     /// The host's device pixels per layout unit. Set it and every edge the
     /// walk derives -- outlines, welds, clips, baselines -- lands on a device
     /// pixel, so abutting fills composite opaque and hinted glyphs keep an
@@ -41,7 +39,6 @@ impl SceneSpec {
             offsets: OffsetOptions::default(),
             font: None,
             fallback_fonts: Vec::new(),
-            tolerance: 0.05,
             device_scale: None,
             weld_backend: crate::WeldBackend::Reference,
         }
@@ -89,11 +86,6 @@ impl SceneSpec {
             .is_some_and(|s| !(s.is_finite() && s > 0.0))
         {
             return Err(SceneError::InvalidScale);
-        }
-        if !(self.tolerance.is_finite() && self.tolerance > 0.0) {
-            return Err(SceneError::Text(mui_text::Error::InvalidOptions(
-                "tolerance",
-            )));
         }
         Ok(())
     }

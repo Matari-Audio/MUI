@@ -336,8 +336,9 @@ mod tests {
             width: 0.,
             blur: 0.,
             text: Some(Text {
-                font: mui_scene::Font::new(epaint_default_fonts::HACK_REGULAR).unwrap(),
-                fonts: Arc::from(&[][..]),
+                fonts: Arc::from([
+                    mui_scene::Font::new(epaint_default_fonts::HACK_REGULAR).unwrap()
+                ]),
                 size: 12.,
                 origin: Point::new(100., 80.),
                 glyphs: Arc::from(

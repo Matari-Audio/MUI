@@ -686,7 +686,7 @@ mod classic {
             let (size, glyphs) = (text.size, &text.glyphs);
             let f = self
                 .font
-                .get_or_insert_with(|| FontData::new(Blob::new(Arc::new(text.font.clone())), 0))
+                .get_or_insert_with(|| FontData::new(Blob::new(Arc::new(text.fonts[0].clone())), 0))
                 .clone();
             let (ox, oy) = (text.origin.x as f32, text.origin.y as f32);
             self.scene

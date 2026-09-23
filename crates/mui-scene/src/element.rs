@@ -205,8 +205,8 @@ pub enum Kind {
     Scroll,
 }
 
-/// A role and the name read out with it. A node with none is a group named
-/// by its own id.
+/// A role and the name read out with it. A node with none is an unnamed
+/// group; a control with no label is named by its id.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Semantics {
     pub role: Kind,

@@ -160,7 +160,6 @@ pub fn resolve_scene_cached(
             .cloned()
             .collect(),
         own_fonts: None,
-        tolerance: spec.tolerance,
         generation: text.generation,
         cache: &mut text.runs,
         breaks: &mut text.breaks,
@@ -246,7 +245,6 @@ pub fn resolve_scene_cached(
         surfaces,
         at,
         external_welds,
-        tolerance: spec.tolerance,
     })
 }
 

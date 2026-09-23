@@ -199,11 +199,10 @@ fn inspect(
         s.key, f.x, f.y, f.size.width, f.size.height
     );
     let fonts = std::slice::from_ref(font);
-    let Ok(run) = mui_text::text_run(fonts, &label, LABEL, &[], mui::vello::ARC_TOLERANCE) else {
+    let Ok(run) = mui_text::shape_run(fonts, &label, LABEL, &[]) else {
         return;
     };
     canvas.glyphs(&mui::scene::Text {
-        font: font.clone(),
         fonts: fonts.into(),
         size: LABEL as f32,
         origin: Point::new(SIDEBAR + 12.0, height - 12.0),

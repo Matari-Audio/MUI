@@ -323,9 +323,12 @@ macro_rules! wrapper {
                     .iter()
                     .position(|glyph| glyph.font != font_index)
                     .map_or(text.glyphs.len(), |offset| start + 1 + offset);
-                let font = self
-                    .cache
-                    .font(text.fonts.get(font_index).unwrap_or(&text.font));
+                // A hand-built run can name a face it does not carry.
+                let Some(face) = text.fonts.get(font_index) else {
+                    start = end;
+                    continue;
+                };
+                let font = self.cache.font(face);
                 let coords = text.font_coords.get(font_index).map_or_else(
                     || {
                         if font_index == 0 {
@@ -798,8 +801,9 @@ mod seam {
             width: 0.,
             blur: 0.,
             text: Some(Text {
-                font: mui_scene::Font::new(epaint_default_fonts::HACK_REGULAR).unwrap(),
-                fonts: Arc::from(&[][..]),
+                fonts: Arc::from([
+                    mui_scene::Font::new(epaint_default_fonts::HACK_REGULAR).unwrap()
+                ]),
                 size: 16.,
                 origin: mui_geometry::Point::new(10., 30.),
                 glyphs: Arc::from(

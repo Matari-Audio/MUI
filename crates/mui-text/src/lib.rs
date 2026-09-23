@@ -542,29 +542,11 @@ pub fn text_run(
 ) -> Result<TextRun, Error> {
     let mut pen = PathPen::new(tolerance)?;
     let faces = open(fonts, size_px, axes)?;
+    let mut run = shaped_run(&faces, text, size_px)?;
     let size = Size::new(checked_size(size_px)?);
-    let (mut ascent, mut descent, mut line_height) = (0f64, 0f64, 0f64);
-    for face in &faces {
-        let m = face.font.metrics(size, LocationRef::from(&face.location));
-        ascent = ascent.max(checked_metric(m.ascent, "font metrics")?);
-        // Negative in font space, positive below the baseline here.
-        descent = descent.max(checked_metric(-m.descent, "font metrics")?);
-        line_height = line_height.max(checked_metric(
-            m.ascent - m.descent + m.leading,
-            "font metrics",
-        )?);
-    }
-    let shaped = shape(&faces, text, size_px);
     let outlines: Vec<_> = faces.iter().map(|f| f.font.outline_glyphs()).collect();
-    let mut glyphs = Vec::with_capacity(shaped.glyphs.len());
-    for g in &shaped.glyphs {
-        glyphs.push(Glyph {
-            font: g.font,
-            id: g.glyph_id.to_u32(),
-            x: g.x,
-            y: g.y,
-        });
-        if let Some(outline) = outlines[g.font].get(g.glyph_id) {
+    for g in &run.glyphs {
+        if let Some(outline) = outlines[g.font].get(GlyphId::new(g.id)) {
             pen.dx = g.x;
             pen.dy = g.y;
             let location = LocationRef::from(&faces[g.font].location);
@@ -574,11 +556,49 @@ pub fn text_run(
         }
         pen.close_open_contour();
     }
-    let path = pen.finish();
-    path.validate(usize::MAX)?;
+    run.path = pen.finish();
+    run.path.validate(usize::MAX)?;
+    Ok(run)
+}
+
+/// [`text_run`] without the outlines: the same glyphs, advance and metrics,
+/// and an empty `path`. For a renderer that draws `glyphs` from its own
+/// cache, and for measuring, which never needs the ink.
+pub fn shape_run(
+    fonts: &[Font],
+    text: &str,
+    size_px: f64,
+    axes: &[Axis<'_>],
+) -> Result<TextRun, Error> {
+    shaped_run(&open(fonts, size_px, axes)?, text, size_px)
+}
+
+fn shaped_run(faces: &[Face<'_>], text: &str, size_px: f64) -> Result<TextRun, Error> {
+    let size = Size::new(checked_size(size_px)?);
+    let (mut ascent, mut descent, mut line_height) = (0f64, 0f64, 0f64);
+    for face in faces {
+        let m = face.font.metrics(size, LocationRef::from(&face.location));
+        ascent = ascent.max(checked_metric(m.ascent, "font metrics")?);
+        // Negative in font space, positive below the baseline here.
+        descent = descent.max(checked_metric(-m.descent, "font metrics")?);
+        line_height = line_height.max(checked_metric(
+            m.ascent - m.descent + m.leading,
+            "font metrics",
+        )?);
+    }
+    let shaped = shape(faces, text, size_px);
     Ok(TextRun {
-        path,
-        glyphs,
+        path: Path::default(),
+        glyphs: shaped
+            .glyphs
+            .iter()
+            .map(|g| Glyph {
+                font: g.font,
+                id: g.glyph_id.to_u32(),
+                x: g.x,
+                y: g.y,
+            })
+            .collect(),
         advance: checked_finite(shaped.advance, "font metrics")?,
         ascent,
         descent,
@@ -1338,6 +1358,21 @@ mod tests {
             "non-zero: covered twice, inside"
         );
         assert_eq!(winding(&both, p) % 2, 0, "even-odd would have erased it");
+    }
+
+    #[test]
+    fn shape_run_is_text_run_without_the_ink() {
+        let fonts = [hack(), inter()];
+        let drawn = text_run(&fonts, "Hg \u{e9}", 24., &[], 0.05).unwrap();
+        let shaped = shape_run(&fonts, "Hg \u{e9}", 24., &[]).unwrap();
+        assert!(!drawn.path.commands.is_empty());
+        assert_eq!(
+            shaped,
+            TextRun {
+                path: Path::default(),
+                ..drawn
+            }
+        );
     }
 
     #[test]

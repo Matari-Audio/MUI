@@ -35,6 +35,8 @@ became one function that takes `&[Font]`, primary face first.
   `TextRun { glyphs: Vec<Glyph>, .. }`; `glyph_offsets` is gone, the offset is in `Glyph::x`/`y`
 - `FallbackTextRun` -> removed, use `TextRun`
 - `FallbackGlyph { font, glyph, x, y, advance, cluster }` -> `Glyph { font, id, x, y }`
+- new: `shape_run(&[Font], text, size, axes)`, a `TextRun` with the glyphs and
+  metrics and an empty `path`. Use it wherever the outlines go unread.
 
 ```rust
 // old
@@ -110,9 +112,12 @@ let s = mine.over(card); // or mine.clone().over(card.clone())
   compares the font's id, not its bytes.
 - `icon(impl Into<Arc<[u8]>>, char)` -> `icon(Font, char)`
 - `Styled::font(impl Into<Arc<[u8]>>)` -> `Styled::font(Font)`
-- `Text.font: Arc<[u8]>` -> `Font`
-- `Text.fonts: Arc<[Arc<[u8]>]>` -> `Arc<[Font]>`. `Text` equality compares
-  font ids instead of `Arc` pointers.
+- `Text.font: Arc<[u8]>` -> removed. It was always `fonts[0]`; read that.
+- `Text.fonts: Arc<[Arc<[u8]>]>` -> `Arc<[Font]>`, never empty. `Text`
+  equality compares font ids instead of `Arc` pointers.
+- `SceneSpec.tolerance` -> removed. The scene lays text out as glyphs and
+  never outlined it for drawing, so the tolerance changed nothing but the
+  cache. `mui_text::text_run` still takes one for its path.
 
 ```rust
 // old
@@ -238,7 +243,9 @@ tracker.plan(&scene, xf, &tiles, &mut plan);
   `scale` is the window's device pixels per scene unit; it becomes the window
   node's transform and bounds stay in scene units. Pass `1.0` for the old
   output.
-- An unlabeled node's label: its surface id -> none
+- An unlabeled node's label: its surface id -> none, except a control
+  (button, slider, toggle, text input) with neither label nor text, which
+  keeps its id as its name
 - Sliders gain `Action::Increment`/`Decrement` and a `numeric_value_step`
   (a hundredth of the range)
 
