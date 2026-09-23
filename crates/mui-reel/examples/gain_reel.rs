@@ -150,17 +150,48 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let staged = stage.is_some();
     let bpm = 116.0;
-    let mut look = |scene: &mui::scene::ResolvedScene, t: f64| {
+    let font = Font::new(epaint_default_fonts::HACK_REGULAR)?;
+    let mut title = None;
+    let mut look = |take: &mui_reel::Take| {
         let stage = stage.as_mut().expect("look only runs with --stage");
-        stage.layer(
-            "card",
-            &scene.isolate(&["card"])?,
-            Size::new(640.0, 360.0),
-            3.0,
-        )?;
-        let outline = scene.surface("card").map(|s| s.path.clone());
+        let title = match &title {
+            Some(t) => t,
+            None => title.insert(stage.text_layer(
+                "title",
+                std::slice::from_ref(&font),
+                "GAIN",
+                72.0,
+                Color::srgb(0.75, 0.7, 1.0),
+                6.0,
+                2.0,
+            )?),
+        };
+        // The pointer rides the card, painted into the same layer.
+        let card = take.scene.isolate(&["card"])?;
+        let card = match take.pointer {
+            Some((p, down)) => mui_reel::with_cursor(&card, p, down),
+            None => card,
+        };
+        stage.layer("card", &card, Size::new(640.0, 360.0), 3.0)?;
+        let surface = take.scene.surface("card").ok_or("no card")?;
+        let bottom = 180.0 - (surface.frame.y + surface.frame.size.height) as f32;
+        let top = 180.0 - surface.frame.y as f32;
+        let outline = surface.path.clone();
+        let [cx, cy, zoom] = take.camera.map(|v| v as f32);
         Ok(stage
-            .render(t, 0.0, 1, &|t| shot(t * bpm / 60.0, outline.clone()))?
+            .render(take.t, 0.0, 1, &|t| {
+                let mut s = shot(t * bpm / 60.0, [cx, cy, zoom], outline.clone(), bottom);
+                s.planes.insert(
+                    0,
+                    title
+                        .clone()
+                        .depth(24.0)
+                        .edge([0.3, 0.2, 0.8])
+                        .glow(2.2)
+                        .at(0.0, top + 40.0, -220.0),
+                );
+                s
+            })?
             .rgba8())
     };
     let look: Option<mui_reel::Look> = staged.then_some(&mut look as _);
@@ -178,29 +209,46 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 /// The 3D move, in beats: in from a low three-quarter angle, square to the
 /// lens for the knob drag, then a slow drift while the tone plays.
-fn shot(beat: f64, outline: Option<std::sync::Arc<mui::geometry::Path>>) -> mui_stage::Shot {
-    use mui_stage::{Camera, Plane, Post, Shot};
+/// The 3D move, in beats: in from a low three-quarter angle, square to the
+/// lens for the knob drag (following the script's own punch-in), then a
+/// slow drift while the tone plays. The card stands on a glossy floor, and
+/// the lens focuses on it, so the title behind softens.
+fn shot(
+    beat: f64,
+    [cx, cy, zoom]: [f32; 3],
+    outline: std::sync::Arc<mui::geometry::Path>,
+    floor: f32,
+) -> mui_stage::Shot {
+    use mui_stage::{Camera, Floor, Plane, Post, Shot};
     let arrive = Keys::new(0.0).to(2.0, 1.0, Ease::EMPHASIZED).at(beat) as f32;
     let drift = Keys::new(0.0)
         .hold(5.0)
         .to(12.0, 1.0, Ease::IN_OUT)
         .at(beat) as f32;
     let mut cam = Camera::front(360.0, 35.0)
+        .punch([640.0, 360.0], [cx, cy], zoom)
         .orbit(
             -28.0 * (1.0 - arrive) + 10.0 * drift,
-            -12.0 * (1.0 - arrive) + 5.0 * drift,
+            8.0 + 6.0 * (1.0 - arrive) + 4.0 * drift,
         )
         .dolly(0.25 * (1.0 - arrive) - 0.08 * drift);
     cam.roll = -2.0 * (1.0 - arrive);
-    let mut card = Plane::new("card", 640.0, 360.0)
+    let card = Plane::new("card", 640.0, 360.0)
         .depth(16.0)
         .edge([0.1, 0.07, 0.25])
-        .glow(1.2);
-    card.outline = outline;
+        .glow(1.2)
+        .outline(outline);
     Shot {
         planes: vec![card],
+        floor: Some(Floor {
+            reflect: 0.3,
+            ..Floor::at(floor - 1.0)
+        }),
         post: Post {
             bloom: 0.7,
+            focus: cam.distance(),
+            aperture: 30.0,
+            max_blur: 14.0,
             ..Post::default()
         },
         ..Shot::new(cam)

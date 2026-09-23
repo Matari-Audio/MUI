@@ -1969,6 +1969,7 @@ dependencies = [
  "mui",
  "mui-geometry",
  "mui-scene",
+ "mui-text",
  "mui-vello",
  "png 0.17.16",
  "pollster",

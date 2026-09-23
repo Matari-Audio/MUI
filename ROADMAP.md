@@ -251,8 +251,11 @@ public function and a test behind it.
       BT.709-tagged take, sample-locked audio, alpha layers, a per-frame
       surface track, and HyperFrames and Remotion handoffs. `mui-stage`
       shoots the same take on the GPU: layers on lit, extruded slabs under a
-      perspective camera, a WGSL background, bloom, lens and grain, and
-      subframe motion blur (`gain_reel --stage`).
+      perspective camera that can follow the script's punch-in, extruded 3D
+      text, a reflective floor, a WGSL background, depth of field, bloom,
+      lens and grain, and subframe motion blur averaged in linear light
+      (`gain_reel --stage`). Layers are mipmapped, premultiplied linear
+      light, so distant fine detail averages instead of shimmering.
 
 ## Missing
 
@@ -306,12 +309,10 @@ public function and a test behind it.
 - [ ] A morph's hit shape and analytic shadow stay the target's for the
       frames it lasts, and shells snap; exits fade on top of the paint list
       rather than at their old depth.
-- [ ] `mui-stage` ignores the reel's 2D camera and cursor: a staged take
-      moves its own 3D camera and draws no pointer. Layer textures have no
-      mips, so a slab far from the lens shimmers; the sRGB-premultiplied
-      alpha darkens antialiased edges a touch. No 3D text, no reflections, no
-      depth of field.
-- [ ] The reel's motion blur averages sRGB bytes, not linear light.
+- [ ] `mui-stage` has no shadows cast between slabs, and its floor is a
+      perfect mirror faded into its colour: no rough (blurred) reflection.
+      Glyph walls follow the flattened outline, so a curve's facets show at
+      an extreme close-up.
 
 ## Order
 

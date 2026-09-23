@@ -281,8 +281,8 @@ fn a_look_draws_the_take_and_sees_every_subframe_time() {
     let r = reel().fps(10).motion_blur(2);
     let (w, h) = r.pixels();
     let mut times = Vec::new();
-    let mut look = |_: &mui::scene::ResolvedScene, t: f64| {
-        times.push(t);
+    let mut look = |take: &Take| {
+        times.push(take.t);
         Ok(vec![200; usize::from(w) * usize::from(h) * 4])
     };
     let mut m = Model {
@@ -305,7 +305,7 @@ fn a_look_draws_the_take_and_sees_every_subframe_time() {
     assert_eq!(times, [0.0, 0.05, 0.1, 0.15, 0.2, 0.25]);
     assert!(frames.iter().all(|f| f.iter().all(|&b| b == 200)));
     // The wrong size is an error, not a garbled stream.
-    let mut short = |_: &mui::scene::ResolvedScene, _: f64| Ok(vec![0; 4]);
+    let mut short = |_: &Take| Ok(vec![0; 4]);
     assert!(r
         .run(
             &Script::new().end(0.1),
@@ -316,4 +316,30 @@ fn a_look_draws_the_take_and_sees_every_subframe_time() {
             &mut |_| Ok(())
         )
         .is_err());
+}
+
+#[test]
+fn motion_blur_averages_light_not_bytes() {
+    // White over black for one subframe of two: half the light, which is
+    // sRGB 188, not the byte mean 128. Alpha averages plainly.
+    let mut acc = vec![0.0; 8];
+    accumulate(&mut acc, &[255, 255, 255, 255, 0, 0, 0, 0]);
+    accumulate(&mut acc, &[0, 0, 0, 255, 0, 0, 0, 0]);
+    assert_eq!(resolve(&acc, 2), [188, 188, 188, 255, 0, 0, 0, 0]);
+    // A pixel covered only half the time keeps its colour and halves its alpha.
+    let mut acc = vec![0.0; 4];
+    accumulate(&mut acc, &[200, 100, 50, 255]);
+    accumulate(&mut acc, &[0, 0, 0, 0]);
+    assert_eq!(resolve(&acc, 2), [200, 100, 50, 128]);
+}
+
+#[test]
+fn the_cursor_paints_into_the_scene_on_top() {
+    let scene = mui::scene::resolve_scene(&mui::scene::SceneSpec::new(
+        leaf(40.0, 40.0).fill(Role::Surface),
+    ))
+    .unwrap();
+    let with = with_cursor(&scene, Point::new(10.0, 10.0), false);
+    assert_eq!(with.paint.len(), scene.paint.len() + 2);
+    assert_eq!(&*with.paint.last().unwrap().key, "mui-reel/cursor");
 }

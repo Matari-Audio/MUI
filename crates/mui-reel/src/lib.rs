@@ -260,9 +260,66 @@ impl<S> Script<S> {
     }
 }
 
-/// Draws the take's picture for [`Reel::render_through`]: the subframe's
-/// scene and its absolute time in, `Reel::pixels()` RGBA out.
-pub type Look<'a> = &'a mut dyn FnMut(&mui::scene::ResolvedScene, f64) -> Result<Vec<u8>, Error>;
+/// Draws the take's picture for [`Reel::render_through`]: one subframe in,
+/// `Reel::pixels()` straight RGBA out.
+pub type Look<'a> = &'a mut dyn FnMut(&Take<'_>) -> Result<Vec<u8>, Error>;
+
+/// One subframe, as a [`Look`] sees it.
+pub struct Take<'a> {
+    pub scene: &'a mui::scene::ResolvedScene,
+    /// Absolute seconds.
+    pub t: f64,
+    /// The script's camera: the logical point at the frame's centre, and the
+    /// zoom (1 is the whole canvas).
+    pub camera: [f64; 3],
+    /// The pointer in logical canvas units and whether it is pressed, when
+    /// the reel draws a cursor. [`with_cursor`] paints it into the scene.
+    pub pointer: Option<(Point, bool)>,
+}
+
+/// `scene` with the reel's arrow pointer painted on top at `at` (logical
+/// units), dipping when `down`: a look that puts the UI on a slab gets the
+/// pointer on the same surface.
+pub fn with_cursor(
+    scene: &mui::scene::ResolvedScene,
+    at: Point,
+    down: bool,
+) -> mui::scene::ResolvedScene {
+    use mui::scene::{Layer, Paint, Painted};
+    let k = if down { 0.85 } else { 1.0 };
+    let arrow = std::sync::Arc::new(mui::geometry::Path::polyline(
+        ARROW.map(|(x, y)| Point::new(at.x + x * k, at.y + y * k)),
+        true,
+    ));
+    let mut out = scene.clone();
+    for (layer, color, width) in [
+        (Layer::Fill, Color::srgb(1.0, 1.0, 1.0), 0.0),
+        (Layer::Stroke, Color::srgb(0.0, 0.0, 0.0), 1.2),
+    ] {
+        out.paint.push(Painted {
+            key: "mui-reel/cursor".into(),
+            layer,
+            path: arrow.clone(),
+            paint: Paint::Solid(color),
+            rect: None,
+            width,
+            blur: 0.0,
+            text: None,
+        });
+    }
+    out
+}
+
+/// A classic arrow, tip at the origin, in logical units.
+const ARROW: [(f64, f64); 7] = [
+    (0.0, 0.0),
+    (0.0, 17.0),
+    (4.5, 13.0),
+    (7.5, 19.5),
+    (10.0, 18.5),
+    (7.0, 12.0),
+    (12.5, 12.0),
+];
 /// The per-frame audio callback: the model, this frame's events, and exactly
 /// this frame's samples to fill (stereo, silence on entry).
 pub type Audio<'a, S> = &'a mut dyn FnMut(&mut S, &[ReelEvent], &mut [[f32; 2]]);
@@ -665,7 +722,7 @@ impl Reel {
                     Action::Call(f) => f(state),
                 }
             }
-            let mut acc: Vec<Vec<u32>> = Vec::new();
+            let mut acc: Vec<Vec<f32>> = Vec::new();
             for k in 0..n {
                 let g = i * n + k;
                 let t = g as f64 / sub;
@@ -739,7 +796,12 @@ impl Reel {
                     .map(|p| (to_device(view, p), down));
                 let mut shots = vec![match look {
                     Some(look) => {
-                        let rgba = look(frame.scene, t)?;
+                        let rgba = look(&Take {
+                            scene: frame.scene,
+                            t,
+                            camera: [cx, cy, zoom],
+                            pointer: self.cursor.then_some(pos).flatten().map(|p| (p, down)),
+                        })?;
                         if rgba.len() != usize::from(w) * usize::from(h) * 4 {
                             return Err(format!(
                                 "the look returned {} bytes, not {w}x{h} RGBA",
@@ -758,10 +820,16 @@ impl Reel {
                     }
                     shots.push(raster.draw(&frame.scene.without(&ids)?, view, None)?);
                 }
-                acc.resize_with(shots.len(), || vec![0; shots[0].len()]);
-                for (a, s) in acc.iter_mut().zip(&shots) {
-                    for (a, &b) in a.iter_mut().zip(s) {
-                        *a += u32::from(b);
+                if n == 1 {
+                    // No blur: the bytes as drawn, bit-exact.
+                    acc = shots
+                        .iter()
+                        .map(|s| s.iter().map(|&b| f32::from(b)).collect())
+                        .collect();
+                } else {
+                    acc.resize_with(shots.len(), || vec![0.0; shots[0].len()]);
+                    for (a, s) in acc.iter_mut().zip(&shots) {
+                        accumulate(a, s);
                     }
                 }
                 if k > 0 {
@@ -806,12 +874,12 @@ impl Reel {
             for col in surfaces.values_mut() {
                 col.resize(i + 1, Value::Null);
             }
-            // ponytail: averaged in sRGB with straight alpha, not linear light;
-            // indistinguishable for UI motion, convert first if it ever shows.
             let mut shots = acc.into_iter().map(|a| {
-                a.into_iter()
-                    .map(|v| ((v + n as u32 / 2) / n as u32) as u8)
-                    .collect()
+                if n == 1 {
+                    a.into_iter().map(|v| v as u8).collect()
+                } else {
+                    resolve(&a, n)
+                }
             });
             let rgba = shots.next().unwrap_or_default();
             // Integer sample boundaries: frame i owns [i*rate/fps, (i+1)*rate/fps),
@@ -918,6 +986,53 @@ fn aim(cam: &mut [Spring; 3], to: [f64; 3], spring: Spring) {
     }
 }
 
+/// sRGB byte to linear light.
+fn linear(b: u8) -> f32 {
+    let c = f32::from(b) / 255.0;
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+/// Add one straight-alpha sRGB subframe to `acc` as premultiplied linear
+/// light, which is what a shutter integrates: a white edge sweeping over
+/// black blurs to the grey a camera sees, not a darker sRGB mean.
+fn accumulate(acc: &mut [f32], rgba: &[u8]) {
+    for (a, p) in acc
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .zip(rgba.as_chunks::<4>().0)
+    {
+        let alpha = f32::from(p[3]) / 255.0;
+        for c in 0..3 {
+            a[c] += linear(p[c]) * alpha;
+        }
+        a[3] += alpha;
+    }
+}
+
+/// The sum of `n` subframes back to straight-alpha sRGB bytes.
+fn resolve(acc: &[f32], n: usize) -> Vec<u8> {
+    let mut out = Vec::with_capacity(acc.len());
+    for a in acc.as_chunks::<4>().0 {
+        let w = a[3];
+        for &sum in &a[..3] {
+            let v = if w > 0.0 { sum / w } else { 0.0 };
+            let e = if v <= 0.0031308 {
+                v * 12.92
+            } else {
+                1.055 * v.powf(1.0 / 2.4) - 0.055
+            };
+            out.push((e.clamp(0.0, 1.0) * 255.0).round() as u8);
+        }
+        out.push((w / n as f32 * 255.0).round().clamp(0.0, 255.0) as u8);
+    }
+    out
+}
+
 /// The CPU rasteriser, reused across frames.
 struct Raster {
     w: u16,
@@ -956,15 +1071,7 @@ impl Raster {
         if let Some(((p, down), s)) = cursor {
             // A classic arrow, tip at the pointer; it dips when pressed.
             let mut path = BezPath::new();
-            let pts = [
-                (0.0, 0.0),
-                (0.0, 17.0),
-                (4.5, 13.0),
-                (7.5, 19.5),
-                (10.0, 18.5),
-                (7.0, 12.0),
-                (12.5, 12.0),
-            ];
+            let pts = ARROW;
             let k = if down { 0.85 } else { 1.0 } * s;
             for (j, (x, y)) in pts.iter().enumerate() {
                 let q = (p.x + x * k, p.y + y * k);

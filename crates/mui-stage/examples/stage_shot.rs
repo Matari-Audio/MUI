@@ -1,6 +1,7 @@
 //! A four-second 3D shot of a live MUI card: it flies in from deep space as a
 //! lit, extruded slab, turns while its knob sweeps and its toggle flips, over
-//! a WGSL background, with bloom, grain and 8-subframe motion blur.
+//! a WGSL background and a glossy floor that mirrors it, with depth of
+//! field, bloom, grain and 8-subframe motion blur.
 //!
 //!     cargo run -p mui-stage --example stage_shot --release -- /tmp/stage
 //!
@@ -12,7 +13,7 @@ use std::process::{Command, Stdio};
 
 use mui::motion::{Ease, Keys};
 use mui::prelude::*;
-use mui_stage::{Camera, Plane, Post, Shot, Stage};
+use mui_stage::{Camera, Floor, Plane, Post, Shot, Stage};
 
 const W: u32 = 1280;
 const H: u32 = 720;
@@ -66,9 +67,13 @@ fn shot(t: f64) -> Shot {
             .depth(22.)
             .edge([0.08, 0.06, 0.2])
             .glow(1.25)],
+        floor: Some(Floor::at(-CARD.height as f32 / 2. - 30.)),
         post: Post {
             bloom: 0.8,
             aberration: 0.003,
+            // Sharp where it lands; soft while it is still far off.
+            focus: cam.distance(),
+            aperture: 20.,
             ..Post::default()
         },
         ..Shot::new(cam)

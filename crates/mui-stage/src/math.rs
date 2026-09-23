@@ -110,6 +110,19 @@ mod tests {
     }
 
     #[test]
+    fn a_punch_in_centres_its_point_and_closes_in() {
+        let base = crate::Camera::front(360., 35.);
+        let c = base.punch([640., 360.], [160., 90.], 2.);
+        // (160, 90) y-down in a 640x360 canvas is (-160, 90) in the world.
+        assert_eq!(&c.target[..2], &[-160., 90.]);
+        assert!((c.distance() - base.distance() / 2.).abs() < 1e-3);
+        let vp = Mat4::perspective(35f32.to_radians(), 16. / 9., 1., 1e5)
+            * Mat4::look_at(c.eye, c.target, [0., 1., 0.]);
+        let p = vp.project([-160., 90., 0.]);
+        assert!(p[0].abs() < 1e-5 && p[1].abs() < 1e-5);
+    }
+
+    #[test]
     fn rotations_turn_the_right_way() {
         // +90 about y takes +x to -z (right-handed).
         let p = Mat4::rotate_y(std::f32::consts::FRAC_PI_2).project([1., 0., 0.]);

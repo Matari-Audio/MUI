@@ -10,6 +10,7 @@ description = "GPU trailer stage for MUI: layers on lit, extruded 3D slabs, WGSL
 [dependencies]
 mui-scene = { path = "../mui-scene" }
 mui-geometry = { path = "../mui-geometry" }
+mui-text = { path = "../mui-text" }
 mui-vello = { path = "../mui-vello" }
 vello_hybrid = { version = "0.2", features = ["wgpu_default"] }
 vello_common = { version = "0.2", default-features = false }
