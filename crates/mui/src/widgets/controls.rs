@@ -329,24 +329,25 @@ const LANE: f64 = 0.45;
 /// ```
 pub fn slider(
     ui: &mut Ui,
-    id: &str,
+    id: impl Into<Id>,
     label: &str,
     value: &mut f64,
     range: RangeInclusive<f64>,
 ) -> (Control, bool) {
+    let id: Id = id.into();
     let before = *value;
-    let (h, _) = ui.state(id);
+    let (h, _) = ui.state(&id);
     // Last frame's lane, less the thumb riding it, is the travel a
     // full-range drag covers; before the first frame nothing can drag.
     let (grip, travel) = ui
         .scene()
-        .and_then(|s| s.surface(id))
+        .and_then(|s| s.surface(&id))
         .map_or((0.0, 0.0), |s| {
             let grip = s.frame.size.height * THUMB / LANE + 2.0 * h;
             (grip, s.frame.size.width - grip)
         });
-    if ui.get(id).pressed && travel > 0.0 {
-        if let Some(p) = ui.local(id) {
+    if ui.get(&id).pressed && travel > 0.0 {
+        if let Some(p) = ui.local(&id) {
             // Off the thumb, a press puts the thumb's centre under it.
             let at = unit(*value, &range) * travel + grip / 2.0;
             if (p.x - at).abs() > grip / 2.0 {
@@ -355,11 +356,11 @@ pub fn slider(
             }
         }
     }
-    ui.drag(id, value, range.clone(), travel, false);
-    stepped(ui, id, value, &range);
+    ui.drag(&id, value, range.clone(), travel, false);
+    stepped(ui, &id, value, &range);
     let changed = moved(before, *value);
     let t = unit(*value, &range);
-    let (id, label, value) = (id.to_owned(), label.to_owned(), *value);
+    let (label, value) = (label.to_owned(), *value);
     let (min, max) = (*range.start(), *range.end());
     let control = Control::new(ui, move |look| {
         // The rail is a fraction of the control's height, so one size token
@@ -416,23 +417,24 @@ pub fn slider(
 /// ```
 pub fn knob(
     ui: &mut Ui,
-    id: &str,
+    id: impl Into<Id>,
     label: &str,
     value: &mut f64,
     range: RangeInclusive<f64>,
 ) -> (Control, bool) {
+    let id: Id = id.into();
     let before = *value;
     // Unlike a slider's, a dial's travel is a hand distance, not a geometry:
     // the whole face is the target and 120 px of vertical drag sweeps the
     // range whatever the diameter, so a small knob is not a twitchy one.
-    ui.drag(id, value, range.clone(), 120.0, true);
-    stepped(ui, id, value, &range);
+    ui.drag(&id, value, range.clone(), 120.0, true);
+    stepped(ui, &id, value, &range);
     let changed = moved(before, *value);
     // Fast enough that a drag still feels direct, slow enough that a
     // preset change is a glide.
-    let t = ui.tween_with(id, unit(*value, &range), Spring::new(0.12, 1.0));
-    let (h, _) = ui.state(id);
-    let (id, label, value) = (id.to_owned(), label.to_owned(), *value);
+    let t = ui.tween_with(&id, unit(*value, &range), Spring::new(0.12, 1.0));
+    let (h, _) = ui.state(&id);
+    let (label, value) = (label.to_owned(), *value);
     let (min, max) = (*range.start(), *range.end());
     let control = Control::new(ui, move |look| {
         // A dial reads bigger than a button of the same size token: the
@@ -476,9 +478,10 @@ pub fn knob(
 /// assert!(!clicked, "nothing pressed it last frame");
 /// let save = save.variant(Variant::Soft).size(S);
 /// ```
-pub fn button(ui: &mut Ui, id: &str, label: &str) -> (Control, bool) {
-    let clicked = activated(ui, id);
-    let (id, label) = (id.to_owned(), label.to_owned());
+pub fn button(ui: &mut Ui, id: impl Into<Id>, label: &str) -> (Control, bool) {
+    let id: Id = id.into();
+    let clicked = activated(ui, &id);
+    let label = label.to_owned();
     let el = Control::new(ui, move |look| {
         let pad_y = ((look.px - 14.0) / 2.0).max(2.0);
         row([text(label.clone()).fill(look.ink())])
@@ -506,12 +509,13 @@ pub fn button(ui: &mut Ui, id: &str, label: &str) -> (Control, bool) {
 /// assert!(!flipped && !bypass, "nothing clicked it, so it did not flip");
 /// let sw = sw.size(Xs);
 /// ```
-pub fn toggle(ui: &mut Ui, id: &str, on: &mut bool) -> (Control, bool) {
-    let flipped = activated(ui, id);
+pub fn toggle(ui: &mut Ui, id: impl Into<Id>, on: &mut bool) -> (Control, bool) {
+    let id: Id = id.into();
+    let flipped = activated(ui, &id);
     if flipped {
         *on = !*on;
     }
-    let (id, on) = (id.to_owned(), *on);
+    let on = *on;
     let t = f64::from(on);
     let control = Control::new(ui, move |look| {
         // A track is as wide as the control's height and a bit over half as

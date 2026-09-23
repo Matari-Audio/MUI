@@ -651,7 +651,7 @@ impl Ui {
         self.sel.get(id).copied().unwrap_or((0, 0))
     }
     pub(crate) fn set_sel(&mut self, id: &str, anchor: usize, caret: usize) {
-        self.sel.insert(id.to_owned(), (anchor, caret));
+        *slot(&mut self.sel, id, || (0, 0)) = (anchor, caret);
     }
     /// The clipboard the host handed in because a paste key arrived.
     pub(crate) fn pasted(&self) -> Option<&str> {
