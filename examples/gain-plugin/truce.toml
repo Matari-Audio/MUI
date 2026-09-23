@@ -1,0 +1,14 @@
+[vendor]
+name = "Matari Audio"
+id = "com.matariaudio"
+url = "https://github.com/Matari-Audio/MUI"
+au_manufacturer = "Mtri"
+
+[[plugin]]
+name = "MUI Gain"
+bundle_id = "mui-gain"
+crate = "mui-gain-plugin"
+category = "effect"
+fourcc = "MGan"
+au_tag = "Effects"
+vst3_subcategory = "Tools"

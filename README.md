@@ -10,8 +10,11 @@ a slider thumb sits where two flex weights put it; explicit offsets are availabl
 strings**: there is no `.class("btn btn-sm")` and there will not be one --
 every value in the DSL is a Rust expression the compiler already checks.
 
-Every crate is `#![forbid(unsafe_code)]`, and every library crate compiles to
-`wasm32-unknown-unknown` (the native preview host is the one exception). The
+Every crate is `#![forbid(unsafe_code)]` except `mui-truce`, which denies it
+and allows two blocks: the wgpu surface on the host's child window and `Send`
+for the window handle. Every library crate compiles to
+`wasm32-unknown-unknown`; the native preview host, `mui-truce`'s editor
+window and the example plugin do not. The
 geometry, layout, style and motion crates stay small -- `mui-motion` has no
 dependencies at all -- but the renderer, text and accessibility stack does
 not: Vello, wgpu, harfrust, accesskit and truce put about 440 packages in
@@ -292,6 +295,32 @@ assert_eq!((stacked(240.0, 600.0), stacked(2000.0, 300.0)), (true, false));
 The gallery's **Responsive editor** scene is this tree with knobs on it, and
 `scenes::tests` resolves it at 240x600, 800x500 and 2000x300 asserting that
 no child ever leaves its parent.
+
+## Plugins
+
+`mui-truce` puts a MUI tree in a CLAP or VST3 plugin built with
+[truce](https://crates.io/crates/truce). `MuiEditor` is truce's `Editor`: a
+baseview child window in the host's window, a wgpu surface on it, and one
+`Ui::frame` per native event. `Bridge::bind` connects a widget id to a truce
+parameter. A drag becomes the host's begin/perform/end, and host automation
+is the value the next tree reads:
+
+```rust,ignore
+fn editor(params: Arc<GainParams>) -> Box<dyn Editor> {
+    MuiEditor::new(params, Ui::new(Theme::DEFAULT), (300, 200), |ui, bridge| {
+        let gain = bridge.bind(ui, "gain", P::Gain, |ui, v| {
+            knob(ui, "gain", "Gain", v, 0.0..=1.0).0.el()
+        });
+        col![gain, title(bridge.text(P::Gain))].pad(L).fill(Surface)
+    })
+    .resizable((260, 180))
+    .into_editor()
+}
+```
+
+`examples/gain-plugin` is a complete plugin: a gain knob, a bypass toggle and
+an output meter. [crates/mui-truce/README.md](crates/mui-truce/README.md) has
+the build commands and the clap-validator and pluginval results.
 
 ## Motion
 
