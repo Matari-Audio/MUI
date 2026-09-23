@@ -62,7 +62,7 @@ pub use mui_text::{Axes, Font, Weight};
 pub mod material_symbols;
 pub use scene::{
     resolve_scene, resolve_scene_cached, resolve_scene_with, Layer, Painted, ResolvedScene,
-    ResolvedSurface, SceneError, SceneSpec, SceneState, Text, TextCache, TextGlyph,
+    ResolvedSurface, SceneError, SceneSpec, Text, TextCache, TextGlyph,
 };
 
 /// Everything a scene file needs, including the spacing tokens as bare

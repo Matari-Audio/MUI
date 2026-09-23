@@ -6,13 +6,13 @@ fn font() -> Font {
 }
 
 #[test]
-fn one_animated_label_cannot_bypass_the_variant_cap() {
+fn an_animated_label_keeps_only_the_run_it_drew() {
     let font = font();
     let mut cache = TextCache::default();
-    for i in 0..4100 {
+    for i in 0..100 {
         let spec = SceneSpec::new(text("x").text_size(10.0 + i as f64 * 0.001)).font(font.clone());
         resolve_scene_with(&spec, &mut cache).unwrap();
-        assert!(cache.len() <= 4096);
+        assert_eq!(cache.len(), 1);
     }
 }
 
@@ -20,13 +20,8 @@ fn one_animated_label_cannot_bypass_the_variant_cap() {
 fn changing_tolerance_invalidates_existing_outlines() {
     let font = font();
     let mut cache = TextCache::default();
-    for size in [10.0, 12.0] {
-        resolve_scene_with(
-            &SceneSpec::new(text("x").text_size(size)).font(font.clone()),
-            &mut cache,
-        )
-        .unwrap();
-    }
+    let both = row![text("x").text_size(10.0), text("x").text_size(12.0)];
+    resolve_scene_with(&SceneSpec::new(both).font(font.clone()), &mut cache).unwrap();
     assert_eq!(cache.len(), 2);
     let mut spec = SceneSpec::new(text("x").text_size(10.0)).font(font);
     spec.tolerance *= 0.5;

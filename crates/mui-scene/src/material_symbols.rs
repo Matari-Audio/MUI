@@ -2,8 +2,8 @@
 //!
 //! Generated from the `MaterialSymbolsOutlined[FILL,GRAD,opsz,wght].codepoints`
 //! file that ships next to the font in google/material-design-icons. Regenerate
-//! by re-running the table generator over a newer file; the entries are sorted
-//! by name so lookup is a binary search.
+//! with `python3 tools/material_symbols_table.py <that file>`, which rewrites
+//! the table below sorted by name so lookup stays a binary search.
 
 /// The codepoint Material Symbols draws `name` at: `codepoint("home")` is
 /// `Some('\u{E9B2}')`. `None` for a name the font does not have.
@@ -17,11 +17,6 @@ pub fn codepoint(name: &str) -> Option<char> {
         .binary_search_by(|(n, _)| n.cmp(&name))
         .ok()
         .map(|i| TABLE[i].1)
-}
-
-/// Every name the font knows, sorted.
-pub fn names() -> impl Iterator<Item = &'static str> {
-    TABLE.iter().map(|(n, _)| *n)
 }
 
 #[rustfmt::skip]

@@ -211,7 +211,11 @@ fn a_custom_outline_is_not_silently_reinterpreted_as_solid_when_carved() {
         })
         .fill(Primary)
         .cut(leaf(4., 4.));
-    assert!(resolve_scene(&SceneSpec::new(root)).is_err());
+    assert!(matches!(
+        resolve_scene(&SceneSpec::new(root)),
+        Err(SceneError::Geometry(mui_geometry::Error::InvalidOptions(m)))
+            if m.starts_with("cut/keep on a custom outline")
+    ));
 }
 
 #[test]
