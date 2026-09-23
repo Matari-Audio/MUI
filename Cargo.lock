@@ -1936,6 +1936,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "mui-reel"
+version = "0.3.2"
+dependencies = [
+ "epaint_default_fonts",
+ "mui",
+ "png 0.17.16",
+ "serde_json",
+]
+
+[[package]]
 name = "mui-scene"
 version = "0.3.2"
 dependencies = [
