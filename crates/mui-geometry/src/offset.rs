@@ -55,7 +55,7 @@ impl Topology {
     }
 }
 
-fn validate(distance: f64, o: OffsetOptions) -> Result<(), Error> {
+pub(crate) fn validate(distance: f64, o: OffsetOptions) -> Result<(), Error> {
     if !distance.is_finite() || !o.integer_scale.is_finite() {
         return Err(Error::NonFinite);
     }

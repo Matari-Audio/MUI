@@ -1,7 +1,7 @@
 //! Contour regions, variable borders and shape partitions without UI dependencies.
 use crate::{
-    boolean, inset_path, offset_path, union, BooleanOp, Bounds, Error, GeometryOptions,
-    OffsetOptions, Path, PathCommand, Point, Polygon, RoundedRect,
+    boolean, inset_path, offset_path, BooleanOp, Bounds, Error, GeometryOptions, OffsetOptions,
+    Path, PathCommand, Point, RoundedRect,
 };
 
 /// Which side of the authored outline the border occupies. Default preserves MUI.
@@ -134,32 +134,30 @@ pub fn border_geometry(
 /// Union every contour as a solid piece, as required for overlapping sweep meshes.
 /// For shapes with holes use `boolean_paths` instead.
 pub fn union_contours(path: &Path, o: OffsetOptions, g: GeometryOptions) -> Result<Path, Error> {
-    offset_path(&Path::default(), 0., o)?;
-    // A border sweep has many overlapping disks, but a small final contour.
-    // Reduce bounded batches instead of spending the polygon budget on every
-    // intermediate disk at once. The final union retains the same vertex cap.
-    let mut shapes = Vec::new();
-    let mut vertices = 0;
-    for ring in path.flatten(o.flatten_tolerance, o.max_points)? {
+    use i_overlay::{core::fill_rule::FillRule, float::simplify::SimplifyShape};
+    crate::offset::validate(0., o)?;
+    g.validate()?;
+    // A border sweep is hundreds of overlapping quads and disks with a small
+    // final contour. Orient every piece alike and merge them in one nonzero
+    // pass: pairwise unions re-validate the growing result, O(n^2) per piece.
+    let mut rings: Vec<Vec<[f64; 2]>> = Vec::new();
+    for mut ring in path.flatten(o.flatten_tolerance, o.max_points)? {
         if ring.len() < 3 {
             continue;
         }
-        if vertices + ring.len() > g.max_vertices {
-            shapes = union(&shapes, g)?.placed_shapes();
-            vertices = shapes
-                .iter()
-                .map(|s| {
-                    s.polygon.exterior.len() + s.polygon.holes.iter().map(Vec::len).sum::<usize>()
-                })
-                .sum();
+        if ring
+            .iter()
+            .any(|p| p.x.abs() > g.coordinate_limit || p.y.abs() > g.coordinate_limit)
+        {
+            return Err(Error::CoordinateLimit);
         }
-        if vertices + ring.len() > g.max_vertices {
-            return Err(Error::TooManyVertices);
+        if crate::math::signed_area(&ring) < 0. {
+            ring.reverse();
         }
-        vertices += ring.len();
-        shapes.push(Polygon::new(ring).into());
+        rings.push(ring.into_iter().map(|p| [p.x, p.y]).collect());
     }
-    Ok(union(&shapes, g)?.to_path())
+    let merged = rings.simplify_shape_as::<i64>(FillRule::NonZero);
+    Ok(crate::boolean::topology(merged, g)?.to_path())
 }
 
 /// Boolean operation on filled paths. Normalization preserves holes and gives
