@@ -63,6 +63,9 @@ line at its combining mark.
   ```
 - `LayoutState` (`revision`/`current`/`commit`) -> removed. Use `resolve_with`
   or `resolve_cached_with`.
+- new: `resolve_boxed_with(root, size, padding, ..)`: the root laid out as
+  exactly `size` with `padding`, instead of `resolve_with` on a clone of the
+  tree restyled with `.size(..).pad(..)`.
 
 ## mui-geometry
 
@@ -113,6 +116,17 @@ let s = mine.over(card); // or mine.clone().over(card.clone())
 - `icon(impl Into<Arc<[u8]>>, char)` -> `icon(Font, char)`
 - `Styled::font(impl Into<Arc<[u8]>>)` -> `Styled::font(Font)`
 - `Text.font: Arc<[u8]>` -> removed. It was always `fonts[0]`; read that.
+- `Text.coords: Arc<[i16]>` -> removed. It was always `font_coords[0]`; read
+  `font_coords[glyph.font]`.
+- `Painted.path: Path` -> `Arc<Path>`, `ResolvedSurface.path: Path` ->
+  `Arc<Path>`: a node's fill, clip, mask and surface share one outline.
+  Reading through `&p.path` is unchanged; build one with `path.into()`.
+- `ResolvedSurface.clip_path: Option<Arc<[Path]>>` -> `Option<Arc<[Arc<Path>]>>`,
+  `clip_paths() -> Option<&[Path]>` -> `Option<&[Arc<Path>]>`.
+- `ResolvedSurface.hits: Vec<(Arc<str>, Path)>` -> `Vec<(Arc<str>, Arc<Path>)>`.
+- `Outline(Arc<dyn Fn(Size) -> Path>)` -> `Outline(Arc<dyn Fn(Size) -> Path + Send + Sync>)`,
+  and `.outline(..)` takes a `Send + Sync` closure: the weld cache holds it by
+  identity. Capture `Arc`s, not `Rc`s.
 - `Text.fonts: Arc<[Arc<[u8]>]>` -> `Arc<[Font]>`, never empty. `Text`
   equality compares font ids instead of `Arc` pointers.
 - `SceneSpec.tolerance` -> removed. The scene lays text out as glyphs and
@@ -161,7 +175,9 @@ let spec = SceneSpec::new(root).font(Font::new(epaint_default_fonts::HACK_REGULA
   `font`/`fallback_fonts`: the scene stopped copying them, since each `Text`
   carries its own faces.
 - Behaviour: a union or carve whose outline includes a custom `.outline(..)`
-  is no longer cached, so changing the closure reshapes it. A text node's
+  is cached by the closure's identity: the same `Outline` hits, a new
+  closure reshapes. A tree that rebuilds its closures every frame reshapes
+  every frame. A text node's
   fill is never pushed as a `Layer::Fill` entry (it used to be pushed and
   removed again); its colour is the ink, as before.
 
@@ -174,6 +190,12 @@ let scene = state.current().unwrap();
 let scene = resolve_scene(&spec)?;
 ```
 
+
+## mui-input
+
+- `Hit::push_clipped_paths(.., clips: Option<&[Path]>)` and
+  `push_tagged_paths(..)` -> `clips: Option<&[Arc<Path>]>`, which is what
+  `ResolvedSurface::clip_paths()` returns.
 
 ## mui-vello
 
