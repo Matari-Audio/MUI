@@ -78,7 +78,7 @@ impl PreviewScene for PillTab {
         column([tab, leaf(520.0, 230.0).id("panel")])
             .align(Align::Start)
             .id("pill")
-            .weld(Role::Surface)
+            .union(Role::Surface)
     }
 }
 

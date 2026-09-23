@@ -6,7 +6,7 @@ row![
 ]
 .center()
 .gap(0.)
-.weld(Surface)
+.union(Surface)
 .radius(30.)
 .border(Ink, 2.)
 .shell(8., Raised)

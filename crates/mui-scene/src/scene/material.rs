@@ -29,9 +29,9 @@ impl Walk<'_> {
             ));
         }
         crate::material_weld::check_plate(n, false)?;
-        if n.payload().outline.is_some() || n.payload().style.weld {
+        if n.payload().outline.is_some() || n.payload().style.union {
             return Err(SceneError::UnsupportedWeld(
-                "custom/legacy-weld outline on the group; put it on a source child",
+                "custom or union outline on the group; put it on a source child",
             ));
         }
         let mut quality = n.payload().weld_quality.unwrap_or_default();
@@ -80,7 +80,7 @@ impl Walk<'_> {
             if gpu
                 && (sources.len() >= mui_weld::analytic::ANALYTIC_SOURCES
                     || e.outline.is_some()
-                    || e.style.weld
+                    || e.style.union
                     || e.style.corners != CornerStyle::Round
                     || c.children()
                         .iter()

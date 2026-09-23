@@ -42,7 +42,7 @@ Queue submissions per frame, as the code does them today:
 
 `Ui::gpu_welding()` selects the analytic backend for new material welds.
 `.gpu_weld(options)` and `.reference_weld(options)` are explicit per-node
-choices. The legacy `.weld(fill)` operation is unchanged. No renderer is swapped
+choices. The vector `.union(fill)` outline is a separate operation. No renderer is swapped
 on a frame-by-frame basis.
 
 ```rust,ignore

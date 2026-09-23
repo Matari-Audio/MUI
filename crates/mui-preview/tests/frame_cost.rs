@@ -56,7 +56,7 @@ fn pill() -> El {
         row([text("welded")]).size(520.0, 230.0).pad(L).id("panel"),
     ])
     .align(Align::Start)
-    .weld(Role::Surface)
+    .union(Role::Surface)
 }
 
 #[test]

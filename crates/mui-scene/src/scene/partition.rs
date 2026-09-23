@@ -32,7 +32,7 @@ impl Walk<'_> {
         }
         if e.welding.is_some() {
             return Err(SceneError::UnsupportedWeld(
-                "inside requires vector welding",
+                "inside takes a vector union, not a material weld",
             ));
         }
         let interior = self.interior(n, outline, frame, at, padding)?;

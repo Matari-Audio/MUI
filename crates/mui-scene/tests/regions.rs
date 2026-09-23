@@ -274,7 +274,7 @@ fn vector_weld_is_partitioned_after_the_union() {
         stack![].w(100.).h(120.).id("b")
     ]
     .align(Align::Center)
-    .weld(Surface)
+    .union(Surface)
     .radius((0., 0.))
     .inside(2.)
     .w(200.)

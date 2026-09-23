@@ -399,7 +399,7 @@ mod tests {
                     leaf(12., 12.),
                     text(format!("{tag}{i}")).id(format!("{tag}{i}")),
                 ])
-                .weld(Role::Surface)
+                .union(Role::Surface)
             }))
         };
         let spec = |n, tag| {

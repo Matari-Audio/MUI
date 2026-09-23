@@ -241,7 +241,7 @@ mod tests {
     #[test]
     fn internal_divider_shares_the_outer_border_material_and_width() {
         let object = column([leaf(200., 60.), leaf(200., 60.).id("lower")])
-            .weld(Surface)
+            .union(Surface)
             .radius(12.)
             .border_ramp(
                 BorderRamp::horizontal((Primary, 4.), (Dim, 1.)).dividers([Id::of("lower")]),
@@ -284,10 +284,10 @@ mod tests {
         let tab = leaf(32., 36.).radius((0., 0.)).id("tab");
         let plate = row![tab, leaf(180., 140.).radius((0., 0.))]
             .align(Align::Center)
-            .weld(Fill::None)
+            .union(Fill::None)
             .radius((0., 0.));
         let object = column([plate])
-            .weld(Surface)
+            .union(Surface)
             .radius((12., 10.))
             .border_ramp(BorderRamp::horizontal((Primary, 4.), (Dim, 1.)).tabs([Id::of("tab")]))
             .id("object");

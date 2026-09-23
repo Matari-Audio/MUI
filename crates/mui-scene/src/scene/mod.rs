@@ -270,7 +270,7 @@ mod fixtures {
         let root = column([tab, leaf(520., 230.).id("panel")])
             .align(Align::Start)
             .id("root")
-            .weld(Role::Surface);
+            .union(Role::Surface);
         SceneSpec::new(root).theme(Theme {
             corners: Corners {
                 box_: 28.,

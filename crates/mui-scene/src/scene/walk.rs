@@ -131,10 +131,10 @@ impl<'a> Walk<'a> {
         {
             inner.parent = Some(key.clone());
         }
-        // A weld is one contour, so its children paint inside it: a square
+        // A union is one contour, so its children paint inside it: a square
         // tab's own fill stops at the filleted corner instead of poking past
         // the shared outline.
-        let clips = n.is_clip() || s.weld || e.inside.is_some() || self.regions.contains_key(&at);
+        let clips = n.is_clip() || s.union || e.inside.is_some() || self.regions.contains_key(&at);
         if clips {
             let image = material.as_ref().map(|m| m.image_rect.bounds());
             self.clip(image, &contour, frame, &mut inner)?;
@@ -552,7 +552,7 @@ mod tests {
             leaf(200., 120.).id("body"),
         ])
         .radius(20.)
-        .weld(Role::Surface)
+        .union(Role::Surface)
         .id("weld");
         let s = resolve_scene(&SceneSpec::new(root).offered(Size::new(236., 120.))).unwrap();
         let order: Vec<_> = s.paint.iter().map(|p| (&*p.key, p.layer)).collect();

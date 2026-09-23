@@ -53,9 +53,9 @@ New convenience DSL: `.border(paint, width)`, `.no_border()`, `.no_fill()`,
 `.weld_shape()`, `.weld_borders()`, `.weld_morph(t)`, `.without_weld()`,
 `.exclude_from_weld()`, `.weld_quality(...)`, and `.outline(|size| path)`.
 
-The existing `.weld(fill)` is preserved unchanged. Rust cannot overload a method
-by argument count, so this patch does not pretend `.weld()` and `.weld(fill)` are
-simultaneously available. `without_weld()` removes the new operation only.
+A shared vector outline is a different operation, `.union(fill)`: it unions
+the children's outlines and leaves each child's paint alone. `without_weld()`
+removes the material weld only.
 `no_fill()` and `no_border()` clear the current style; a later preset can restore
 it. They are not hidden inheritance/reset sentinels.
 
@@ -160,14 +160,14 @@ not a guaranteed exact Euclidean parallel offset.
 
 This version does not silently flatten the following into something unrelated:
 shadow/shell/mask stacks on welded plates; nested material-weld participants;
-nontrivial member compositing layers; a custom or legacy-weld outline on the
+nontrivial member compositing layers; a custom or union outline on the
 material-weld container; and carving the material-weld container itself.
 
 A nested group can be excluded from its parent's weld. Place independent effects
 on an excluded wrapper/descendant. Custom outline plus `cut`/`keep` is rejected
 because the legacy polygon converter would fill existing holes; provide the
 finished outline instead. Custom-path shadows are likewise rejected until a path
-filter renderer can honor them. Existing ordinary legacy welding remains intact.
+filter renderer can honor them. A vector `.union(fill)` is unaffected by all of this.
 
 Direct text, floats, sticky children, excluded children and zero-area children
 are not weld plates. An unpainted spacer is excluded unless the parent explicitly

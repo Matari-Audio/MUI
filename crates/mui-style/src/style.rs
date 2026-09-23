@@ -481,9 +481,10 @@ pub struct Style {
     /// [`ShadowKind::Inset`] over the shells.
     pub shadow: Vec<Shadow>,
     pub shells: Vec<(Spacing, Fill)>,
-    /// Outline is the union of the children's frames, filleted, instead of
-    /// this node's own rectangle: a tab welded to its panel.
-    pub weld: bool,
+    /// Outline is the union of the children's outlines, filleted, instead
+    /// of this node's own rectangle: a tab joined to its panel. See
+    /// `Paints::union` in `mui-scene`.
+    pub union: bool,
     /// Pointer shape over the node; inherited by children that set none.
     pub cursor: Option<Cursor>,
     /// Blend mode and opacity for this node's whole subtree, as a
@@ -503,7 +504,7 @@ impl Style {
     ///
     /// A field's default *is* its "unset": `Fill::None` paints nothing,
     /// `Radius::Theme` takes the theme's, `None` and `[]` say nothing. The
-    /// exception is `weld`, which has no third state and so only ever turns
+    /// exception is `union`, which has no third state and so only ever turns
     /// on.
     ///
     /// ```
@@ -541,7 +542,7 @@ impl Style {
             } else {
                 other.shells.clone()
             },
-            weld: self.weld || other.weld,
+            union: self.union || other.union,
             cursor: other.cursor.or(self.cursor),
             layer: other.layer.or(self.layer),
             mask: if other.mask.is_none() {

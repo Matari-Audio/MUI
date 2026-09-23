@@ -168,8 +168,8 @@ impl PartialEq for StateStyle {
 }
 
 /// What a child does to its parent's outline instead of painting itself.
-/// `.weld` is the third of these, and the only one that reads every child at
-/// once, so it stays a flag on the parent's style.
+/// [`Paints::union`] is the third boolean, and the only one that reads every
+/// child at once, so it stays a flag on the parent's style.
 ///
 /// ```
 /// use mui_scene::prelude::*;
@@ -275,7 +275,8 @@ pub struct Element {
     /// [`Sugar::keep`](crate::Sugar::keep): the child shapes its parent's
     /// outline instead of painting itself.
     pub carve: Option<Carve>,
-    /// New material-aware welding. `None` leaves legacy/ordinary drawing alone.
+    /// Material weld: the plates' paint blended into one baked or GPU
+    /// image. `None` paints every child itself. See [`Styled::weld_with`].
     pub welding: Option<crate::Weld>,
     /// None inherits the host backend. An explicit reference path is never automatic.
     pub weld_backend: Option<crate::WeldBackend>,
@@ -558,10 +559,14 @@ pub trait Paints: Sized {
         self.style_mut().mask = f.into();
         self
     }
-    /// Paint the union of the children's frames as one filleted shape.
-    fn weld(mut self, f: impl Into<Fill>) -> Self {
+    /// Paint the union of the children's outlines as one filleted vector
+    /// shape. Only the outline is shared: each child keeps its own paint.
+    /// Shells, strokes, shadows, clips and `.inside(..)` follow the union.
+    /// To blend the children's paint across the seam instead, see
+    /// [`Styled::weld_with`].
+    fn union(mut self, f: impl Into<Fill>) -> Self {
         let s = self.style_mut();
-        s.weld = true;
+        s.union = true;
         s.fill = f.into();
         self
     }
@@ -641,17 +646,17 @@ pub trait Styled: Paints {
     fn element_mut(&mut self) -> &mut Element;
 
     /// Transform width and color on this node's single, fixed inside border.
-    /// Supports ordinary, custom, and legacy welded contours on every renderer.
+    /// Supports ordinary, custom and [`Paints::union`] contours on every
+    /// renderer.
     fn border_ramp(mut self, ramp: crate::BorderRamp) -> Self {
         self.style_mut().stroke = None;
         self.element_mut().border_ramp = Some(ramp);
         self
     }
 
-    /// Weld immediate non-floating, non-excluded plate children. `Weld::all()`
-    /// blends fills and borders. This is not the legacy `.weld(fill)` helper.
-    /// Request the analytic GPU backend explicitly. Unsupported effects and
-    /// contours fail; this never silently bakes an image on the UI thread.
+    /// Material-weld immediate non-floating, non-excluded plate children on
+    /// the analytic GPU backend. Unsupported effects and contours fail; this
+    /// never silently bakes an image on the UI thread.
     fn gpu_weld(mut self, options: crate::Weld) -> Self {
         self.element_mut().welding = Some(options);
         self.element_mut().weld_backend = Some(crate::WeldBackend::AnalyticGpu);
@@ -663,6 +668,10 @@ pub trait Styled: Paints {
         self.element_mut().weld_backend = Some(crate::WeldBackend::Reference);
         self
     }
+    /// Material-weld immediate non-floating, non-excluded plate children:
+    /// their fills and borders blend into one image across the seams.
+    /// `Weld::all()` blends both. For a shared vector outline that leaves
+    /// each child's paint alone, see [`Paints::union`].
     fn weld_with(mut self, weld: crate::Weld) -> Self {
         self.element_mut().welding = Some(weld);
         self
@@ -682,7 +691,7 @@ pub trait Styled: Paints {
         e.welding = Some(e.welding.unwrap_or_default().morph(progress));
         self
     }
-    /// Remove new material welding. Legacy `.weld(fill)` is independent.
+    /// Remove the material weld. A [`Paints::union`] is independent.
     fn without_weld(mut self) -> Self {
         self.element_mut().welding = None;
         self

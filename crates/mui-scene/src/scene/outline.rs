@@ -98,7 +98,7 @@ fn geometry_shallow(n: &El, frames: &[Frame], at: usize, key: &mut Vec<u64>) -> 
         CornerStyle::Round => 0,
         CornerStyle::Squircle => 1,
     });
-    key.push(u64::from(style.weld));
+    key.push(u64::from(style.union));
     key.push(match n.payload().carve {
         None => 0,
         Some(Carve::Cut) => 1,
@@ -118,7 +118,7 @@ fn geometry_node(n: &El, frames: &[Frame], sizes: &[usize], at: usize, key: &mut
         // Descendants matter when this child welds them or carves one out;
         // skipping unrelated descendants keeps the cache key cheaper than
         // the boolean work it avoids.
-        let complex = child.payload().style.weld
+        let complex = child.payload().style.union
             || child
                 .children()
                 .iter()
@@ -161,7 +161,7 @@ impl Walk<'_> {
             )
             .into());
         }
-        let cacheable = n.payload().style.weld
+        let cacheable = n.payload().style.union
             || n.children()
                 .iter()
                 .any(|child| child.payload().carve.is_some());
@@ -288,7 +288,7 @@ impl Walk<'_> {
         if !(convex.is_finite() && convex >= 0.0 && concave.is_finite() && concave >= 0.0) {
             return Err(SceneError::InvalidRadius);
         }
-        if !s.weld || n.children().is_empty() {
+        if !s.union || n.children().is_empty() {
             let rr = RoundedRect::new(bounds(frame, self.spec.device_scale), convex)?;
             // A squircle is no longer a rounded rectangle, so it gives up the
             // analytic blur and the analytic shell inset with it; the path
@@ -414,7 +414,7 @@ mod tests {
         // the weld. The old frame-only union produced a sharp (0, 0) corner.
         let root = row([leaf(20., 20.).radius(8.)])
             .radius(0.)
-            .weld(Role::Surface)
+            .union(Role::Surface)
             .id("weld");
         let s = resolve_scene(&SceneSpec::new(root).offered(Size::new(20., 20.))).unwrap();
         let points = s
@@ -435,7 +435,7 @@ mod tests {
         let base = SceneSpec::new(
             row([leaf(20., 20.).radius(6.), leaf(18., 24.).radius(8.)])
                 .radius(0.)
-                .weld(Role::Surface),
+                .union(Role::Surface),
         );
         let mut text = TextCache::default();
         resolve_scene_with(&base, &mut text).unwrap();
@@ -491,7 +491,7 @@ mod tests {
                 let p = [(0., 0.), (s.width * w, 0.), (0., s.height)];
                 Path::polyline(p.map(|(x, y)| Point::new(x, y)), true)
             });
-            SceneSpec::new(row([child, leaf(20., 20.)]).weld(Role::Surface).id("weld"))
+            SceneSpec::new(row([child, leaf(20., 20.)]).union(Role::Surface).id("weld"))
                 .offered(Size::new(60., 20.))
         };
         let mut text = TextCache::default();
@@ -507,7 +507,7 @@ mod tests {
             SceneSpec::new(
                 row([leaf(40., 20.), leaf(20., 20.)])
                     .radius(r)
-                    .weld(Role::Surface)
+                    .union(Role::Surface)
                     .id("weld"),
             )
             .offered(Size::new(60., 20.))
@@ -527,7 +527,7 @@ mod tests {
     #[test]
     fn weld_ignores_zero_area_children() {
         let root = row([leaf(0., 20.), leaf(20., 20.)])
-            .weld(Role::Surface)
+            .union(Role::Surface)
             .id("weld");
         let s = resolve_scene(&SceneSpec::new(root).offered(Size::new(20., 20.))).unwrap();
         assert!(!s.surface("weld").unwrap().path.commands.is_empty());
@@ -574,7 +574,7 @@ mod tests {
             .align(Align::Start)
             .gap(Spacing::Px(0.0))
             .w(pct(100.))
-            .weld(Role::Surface)
+            .union(Role::Surface)
             .stroke(Role::Dim)
             .stroke_width(1.5)
             .radius(20.)

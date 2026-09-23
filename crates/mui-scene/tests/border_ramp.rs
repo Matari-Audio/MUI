@@ -11,7 +11,7 @@ fn named_anchor_keeps_the_outline_and_emits_one_vector_border() {
             leaf(20., 40.)
         ]
         .gap(0.)
-        .weld(Surface)
+        .union(Surface)
         .radius(12.)
         .id("card");
         let plain = resolve_scene(&SceneSpec::new(root.clone())).unwrap();

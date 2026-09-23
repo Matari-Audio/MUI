@@ -44,7 +44,7 @@ results and their limits.
 
 ## Contours are layout too
 
-Use `.weld(fill)` for a shared outline, `.inside(padding)` to partition a parent's
+Use `.union(fill)` for a shared outline, `.inside(padding)` to partition a parent's
 contour, `.bend(amount)` for a curved divider, and `.cut(shape)` / `.keep(shape)`
 for boolean regions. Borders and parallel shells follow the resulting outline.
 `BorderRamp` gives a shared contour continuous color while identifying its tabs.
@@ -115,7 +115,7 @@ let tab = col![control("plus"), control("phase"), control("warp")]
 // The tab and the panel welded into one filleted shape.
 let root = row![tab, leaf(520.0, 230.0).id("panel")]
     .start()
-    .weld(Surface);
+    .union(Surface);
 
 let scene = resolve_scene(&SceneSpec::new(root)).unwrap();
 assert_eq!(scene.surface("tab").unwrap().frame.size.width, 92.0);
@@ -161,8 +161,8 @@ assert_eq!(scene.surface("tab").unwrap().frame.size.width, 92.0);
 | `.animate()`, `.transition(Spring::new(0.3, 1.0))` | this node's fill, stroke, radius, text size and shadow spring to their new values |
 | `.shell(d, fill)` | a parallel inset of the outline before it, cumulative |
 | `.inside(2.)`, `.bend(0.2)` | [shape-aware layout](docs/shape-layout.md): nested regions inherit their parent's contour, with border-aware padding and normal-clearance split gaps |
-| `.weld(fill)` | paint the union of the children's frames as one filleted shape; its shadow is the union of their blurs |
-| `.cut(el)`, `.keep(el)` | boolean difference and intersection against a child placed like any floating one: a hole, or only the overlap. The shell, the stroke and the clip all follow the result, as they do a weld. A leaf has no children, so wrap one in `stack![..]` to carve it |
+| `.union(fill)` | paint the union of the children's outlines as one filleted vector shape; its shadow is the union of their blurs. `.weld_with(Weld)` / `weld![..]` blend the children's paint across the seam instead |
+| `.cut(el)`, `.keep(el)` | boolean difference and intersection against a child placed like any floating one: a hole, or only the overlap. The shell, the stroke and the clip all follow the result, as they do a union. A leaf has no children, so wrap one in `stack![..]` to carve it |
 | `.mask(fill)` | paint `fill` source-atop the node's own subtree: a scroll fade is a ramp from transparent to the surface colour. It paints onto the shape, it cannot erase alpha -- an alpha mask layer is CPU-only in vello |
 | `.blend(Mix::Multiply)`, `.opacity(0.5)` | composite this node's whole subtree as one layer |
 | `.scroll()`, `.clip()`, `.float()` | overflow the wheel slides, overflow cut off, a child painted over everything |

@@ -206,7 +206,7 @@ impl Walk<'_> {
     /// The node's stroke. Painted now, or handed back when it has to paint
     /// after the children.
     ///
-    /// A welded parent is one continuous outline, but its children paint
+    /// A union parent is one continuous outline, but its children paint
     /// after the parent. Keep the stroke until the subtree is complete so a
     /// child fill cannot erase the shared outer border. Ordinary nodes
     /// retain the historical ordering (stroke before their content).
@@ -225,7 +225,7 @@ impl Walk<'_> {
             let Some(rr) = rr.inset(w / 2.)?.shape else {
                 return Ok(Some((contour.path.clone(), None, st.fill.clone(), 0.)));
             };
-            if e.style.weld {
+            if e.style.union {
                 return Ok(Some((rr.path(), Some(rr), st.fill.clone(), w)));
             }
             if let Some(p) = self.push(Layer::Stroke, rr.path(), Some(rr), &st.fill, bg) {
@@ -398,7 +398,7 @@ mod tests {
     #[test]
     fn a_welded_shadow_is_one_blurred_rect_per_child() {
         let root = row([leaf(20., 20.).id("a"), leaf(20., 40.).id("b")])
-            .weld(Role::Surface)
+            .union(Role::Surface)
             .shadow(Shadow::soft(12.))
             .id("weld");
         let s = resolve_scene(&SceneSpec::new(root).offered(Size::new(40., 40.))).unwrap();
@@ -444,7 +444,7 @@ mod tests {
     #[test]
     fn welded_stroke_paints_after_child_fills() {
         let root = row([leaf(20., 20.).fill(Role::Primary).id("child")])
-            .weld(Role::Surface)
+            .union(Role::Surface)
             .stroke(Role::Ink)
             .stroke_width(2.)
             .id("weld");
