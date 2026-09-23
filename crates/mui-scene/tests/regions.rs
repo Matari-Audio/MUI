@@ -1,6 +1,7 @@
 use mui_geometry::kurbo::{Point as KPoint, Shape};
 use mui_geometry::{bez_path, boundary_distance, Bounds};
 use mui_scene::prelude::*;
+use mui_scene::SceneError;
 fn has(path: &Path, x: f64, y: f64) -> bool {
     bez_path(path, 0.01).unwrap().winding(KPoint::new(x, y)) != 0
 }
@@ -145,21 +146,28 @@ fn holes_survive_and_consumed_regions_disappear() {
 }
 #[test]
 fn invalid_padding_bend_and_border_fail_before_publication() {
+    // `.inside(pad)` is also the gap, so layout refuses it first.
     for pad in [-1., f64::NAN, f64::INFINITY] {
-        assert!(resolve_scene(&SceneSpec::new(
-            row![cell("a"), cell("b")].inside(pad).w(100.).h(100.)
-        ))
-        .is_err());
+        assert!(matches!(
+            resolve_scene(&SceneSpec::new(
+                row![cell("a"), cell("b")].inside(pad).w(100.).h(100.)
+            )),
+            Err(SceneError::Layout(mui_layout::Error::InvalidValue))
+        ));
     }
     for bend in [0.5, f64::NAN] {
-        assert!(resolve_scene(&SceneSpec::new(
-            row![cell("a"), cell("b")]
-                .inside(2.)
-                .bend(bend)
-                .w(100.)
-                .h(100.)
-        ))
-        .is_err());
+        assert!(matches!(
+            resolve_scene(&SceneSpec::new(
+                row![cell("a"), cell("b")]
+                    .inside(2.)
+                    .bend(bend)
+                    .w(100.)
+                    .h(100.)
+            )),
+            Err(SceneError::Geometry(mui_geometry::Error::InvalidOptions(
+                "shape padding/bend"
+            )))
+        ));
     }
 }
 #[test]

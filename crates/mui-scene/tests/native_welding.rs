@@ -1,5 +1,5 @@
 use mui_scene::prelude::*;
-use mui_scene::{resolve_scene_cached, Layer, TextCache, WeldCache};
+use mui_scene::{resolve_scene_cached, Layer, SceneError, TextCache, WeldCache};
 fn tree() -> El {
     row![
         leaf(80., 60.)
@@ -33,7 +33,12 @@ fn gpu_resolution_never_populates_the_cpu_bake_cache() {
 fn morph_is_transactional_and_does_not_relayout() {
     let mut scene = resolve_scene(&SceneSpec::new(tree())).unwrap();
     let before = scene.clone();
-    assert!(scene.set_weld_morph("join", f64::NAN).is_err());
+    assert!(matches!(
+        scene.set_weld_morph("join", f64::NAN),
+        Err(SceneError::MaterialWeld(mui_weld::Error::Invalid(
+            "GPU morph"
+        )))
+    ));
     assert_eq!(scene, before);
     scene.set_weld_morph("join", 0.).unwrap();
     assert_eq!(scene.layout, before.layout);
@@ -51,12 +56,18 @@ fn ids_and_original_plate_surfaces_survive() {
 }
 #[test]
 fn changing_union_is_not_misrepresented_as_a_clip_rectangle() {
-    assert!(resolve_scene(&SceneSpec::new(tree().clip())).is_err());
+    assert!(matches!(
+        resolve_scene(&SceneSpec::new(tree().clip())),
+        Err(SceneError::UnsupportedWeld(m)) if m.starts_with("GPU weld cannot itself clip")
+    ));
 }
 #[test]
 fn fourth_source_is_rejected_not_cpu_baked() {
     let root = row((0..4).map(|_| leaf(20., 20.).fill(Primary))).gpu_weld(Weld::all());
-    assert!(resolve_scene(&SceneSpec::new(root)).is_err());
+    assert!(matches!(
+        resolve_scene(&SceneSpec::new(root)),
+        Err(SceneError::UnsupportedWeld(m)) if m.starts_with("analytic GPU weld requires at most three")
+    ));
 }
 #[test]
 fn material_only_update_preserves_the_geometry() {
