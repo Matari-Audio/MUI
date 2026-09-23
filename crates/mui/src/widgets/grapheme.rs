@@ -1,4 +1,4 @@
-//! Editing boundaries. Public Host selections remain scalar indices for compatibility;
+//! Editing boundaries. `Ui` selections are scalar indices;
 //! convert only at the edge and never split an extended grapheme cluster.
 use unicode_segmentation::UnicodeSegmentation;
 

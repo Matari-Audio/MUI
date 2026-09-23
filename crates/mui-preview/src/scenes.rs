@@ -146,17 +146,22 @@ impl PreviewScene for Widgets {
         self.clicks += usize::from(clicked);
         column([
             row([
-                knob(ui, "cutoff", "Cutoff", &mut self.cutoff, 0.0..=1.0).el(),
+                knob(ui, "cutoff", "Cutoff", &mut self.cutoff, 0.0..=1.0)
+                    .0
+                    .el(),
                 knob(ui, "res", "Res", &mut self.res, 0.0..=1.0)
+                    .0
                     .variant(Variant::Soft)
                     .el(),
             ])
             .gap(L)
             .justify(Justify::Center),
-            slider(ui, "gain", "Gain", &mut self.gain, -24.0..=6.0).el(),
+            slider(ui, "gain", "Gain", &mut self.gain, -24.0..=6.0)
+                .0
+                .el(),
             row([
                 text("Bypass").fill(Role::Dim),
-                toggle(ui, "bypass", &mut self.bypass).el(),
+                toggle(ui, "bypass", &mut self.bypass).0.el(),
                 spacer(),
                 text(format!("{}×", self.clicks)).fill(Role::Dim),
                 go.variant(Variant::Solid).el(),
@@ -246,13 +251,15 @@ impl PreviewScene for GlyphAxes {
     fn controls(&mut self, ui: &mut Ui) -> Vec<El> {
         let mut rows = vec![
             text(self.source.clone()).fill(Role::Dim),
-            slider(ui, "size", "size", &mut self.size, 24.0..=400.0).el(),
+            slider(ui, "size", "size", &mut self.size, 24.0..=400.0)
+                .0
+                .el(),
         ];
         if self.axes.is_empty() {
             rows.push(text("no variation axes").fill(Role::Dim));
         }
         for (tag, min, max, value) in &mut self.axes {
-            rows.push(slider(ui, tag, tag, value, *min..=*max).el());
+            rows.push(slider(ui, tag, tag, value, *min..=*max).0.el());
         }
         rows
     }
@@ -315,6 +322,7 @@ impl PreviewScene for Scrolling {
                         g,
                         -24.0..=6.0,
                     )
+                    .0
                     .el()
                 });
                 let head = label(format!("octave {s}"))
@@ -360,8 +368,8 @@ impl PreviewScene for Fields {
         "Click or Tab to focus, type, arrows and Backspace edit. The label mirrors the first field."
     }
     fn specimen(&mut self, ui: &mut Ui) -> El {
-        let name = text_input(ui, "field-name", &mut self.name);
-        let note = text_input(ui, "field-note", &mut self.note);
+        let name = text_input(ui, "field-name", &mut self.name).0;
+        let note = text_input(ui, "field-note", &mut self.note).0;
         column([
             label("name"),
             name,
@@ -467,7 +475,9 @@ impl PreviewScene for Curve {
         .fill(Role::Field);
         column([
             plot,
-            slider(ui, "knee", "Cutoff", &mut self.cutoff, 0.0..=1.0).el(),
+            slider(ui, "knee", "Cutoff", &mut self.cutoff, 0.0..=1.0)
+                .0
+                .el(),
         ])
         .gap(M)
         .pad(L)
@@ -549,7 +559,7 @@ impl PreviewScene for BinSpectrum {
         vec![row![
             caption("Log axis"),
             spacer(),
-            toggle(ui, "bins-log", &mut self.log).size(S).el(),
+            toggle(ui, "bins-log", &mut self.log).0.size(S).el(),
         ]
         .align(Align::Center)]
     }
@@ -885,8 +895,12 @@ impl PreviewScene for Wrapping {
     }
     fn controls(&mut self, ui: &mut Ui) -> Vec<El> {
         vec![
-            slider(ui, "wrap-w", "width", &mut self.width, 160.0..=520.0).el(),
-            slider(ui, "wrap-n", "lines (0 = all)", &mut self.lines, 0.0..=6.0).el(),
+            slider(ui, "wrap-w", "width", &mut self.width, 160.0..=520.0)
+                .0
+                .el(),
+            slider(ui, "wrap-n", "lines (0 = all)", &mut self.lines, 0.0..=6.0)
+                .0
+                .el(),
         ]
     }
 }
@@ -951,7 +965,9 @@ impl PreviewScene for Motion {
         column([
             row(cards).gap(M).justify(Justify::Center),
             pie.anchor(Align::Center, Align::Center),
-            knob(ui, "mot-gain", "Gain", &mut self.gain, 0.0..=1.0).el(),
+            knob(ui, "mot-gain", "Gain", &mut self.gain, 0.0..=1.0)
+                .0
+                .el(),
             text(if self.last.is_empty() {
                 "drag the knob".to_owned()
             } else {
@@ -967,7 +983,9 @@ impl PreviewScene for Motion {
         .id("motion")
     }
     fn controls(&mut self, ui: &mut Ui) -> Vec<El> {
-        vec![slider(ui, "sweep", "sweep", &mut self.sweep, 0.0..=1.0).el()]
+        vec![slider(ui, "sweep", "sweep", &mut self.sweep, 0.0..=1.0)
+            .0
+            .el()]
     }
 }
 
@@ -1063,7 +1081,7 @@ impl PreviewScene for Select {
         self.clipboard = s.to_owned();
     }
     fn specimen(&mut self, ui: &mut Ui) -> El {
-        let field = text_input(ui, "sel-field", &mut self.value);
+        let field = text_input(ui, "sel-field", &mut self.value).0;
         column([
             label("field"),
             field,
@@ -1151,8 +1169,12 @@ impl PreviewScene for Gestures {
             .collect();
 
         column([
-            knob(ui, "g-cutoff", "Cutoff", &mut self.cutoff, 0.0..=1.0).el(),
-            slider(ui, "g-gain", "Gain", &mut self.gain, -24.0..=6.0).el(),
+            knob(ui, "g-cutoff", "Cutoff", &mut self.cutoff, 0.0..=1.0)
+                .0
+                .el(),
+            slider(ui, "g-gain", "Gain", &mut self.gain, -24.0..=6.0)
+                .0
+                .el(),
             row(chips).gap(S),
             row(slots).gap(S),
             row([
@@ -1204,22 +1226,24 @@ impl PreviewScene for Switched {
         {
             self.fired += 1;
         }
-        let bypass = toggle(ui, "sw-bypass", &mut self.bypassed).size(S).el();
-        let rack = row([knob(ui, "sw-cut", "Cutoff", &mut self.cutoff, 0.0..=1.0).el()])
-            .pad(M)
-            .radius(12.0)
-            .fill(Role::Field)
-            // One call for both halves: the look and the gate.
-            .on(State::Disabled, |s| s.fill(Ink.alpha(0.04)))
-            .disabled(self.bypassed)
-            .opacity(if self.bypassed { 0.4 } else { 1.0 })
-            .id("sw-rack");
+        let bypass = toggle(ui, "sw-bypass", &mut self.bypassed).0.size(S).el();
+        let rack = row([knob(ui, "sw-cut", "Cutoff", &mut self.cutoff, 0.0..=1.0)
+            .0
+            .el()])
+        .pad(M)
+        .radius(12.0)
+        .fill(Role::Field)
+        // One call for both halves: the look and the gate.
+        .on(State::Disabled, |s| s.fill(Ink.alpha(0.04)))
+        .disabled(self.bypassed)
+        .opacity(if self.bypassed { 0.4 } else { 1.0 })
+        .id("sw-rack");
         column([
             row([label("bypass"), spacer(), bypass])
                 .gap(S)
                 .align(Align::Center),
             rack,
-            text_input(ui, "sw-query", &mut self.query),
+            text_input(ui, "sw-query", &mut self.query).0,
             caption(format!("shortcut fired {} times", self.fired)),
         ])
         .gap(M)

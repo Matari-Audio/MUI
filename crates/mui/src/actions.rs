@@ -16,7 +16,7 @@ pub enum SemanticAction {
         value: f64,
     },
     /// One step up a slider, the step its arrow keys take: see
-    /// [`mui_widgets::step`]. Lands as the equivalent `SetValue`.
+    /// [`crate::widgets::step`]. Lands as the equivalent `SetValue`.
     Increment {
         id: String,
     },

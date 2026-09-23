@@ -6,7 +6,6 @@ members = [
   "crates/mui-motion",
   "crates/mui-layout",
   "crates/mui-scene",
-  "crates/mui-widgets",
   "crates/mui",
   "crates/mui-preview",
   "crates/mui-playground",

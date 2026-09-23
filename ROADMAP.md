@@ -213,7 +213,8 @@ public function and a test behind it.
 - [x] The crate split: theme data, motion and the scalar/spacing vocabulary
       sit under the element tree (`mui-style`, `mui-motion`, `mui-geometry`),
       `mui-core` is `mui-scene`, the controls are `mui-widgets` behind a
-      `Host` trait, and `mui` is the facade that owns the runtime and the
+      `Host` trait (since folded into `mui::widgets`, taking `&mut Ui`
+      directly), and `mui` is the facade that owns the runtime and the
       prelude. The graph is acyclic; the old `mui::core` alias is gone,
       use `mui::scene`.
 

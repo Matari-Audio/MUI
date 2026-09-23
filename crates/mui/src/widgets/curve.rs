@@ -9,7 +9,7 @@ use mui_scene::curve::{Curve, CurvePoint, Handle};
 use mui_scene::prelude::*;
 use mui_scene::Size;
 
-use crate::Host;
+use crate::Ui;
 
 /// The knot radius, and the inset the plot keeps on every side so an end
 /// knot sits inside the frame instead of half outside it.
@@ -82,7 +82,7 @@ fn dot(c: Point, r: f64) -> Path {
 /// Apply this frame's drag to whatever the press grabbed. The tag is latched
 /// by the runtime for the length of the gesture, so a knot dragged past its
 /// neighbour is still the knot that was grabbed.
-fn dragged(ui: &impl Host, id: &str, c: &mut Curve) -> Option<CurveEdit> {
+fn dragged(ui: &Ui, id: &str, c: &mut Curve) -> Option<CurveEdit> {
     let r = ui.get(id);
     let what = target(ui.tag(id)?)?;
     if !r.dragged {
@@ -149,11 +149,11 @@ fn dragged(ui: &impl Host, id: &str, c: &mut Curve) -> Option<CurveEdit> {
 /// use mui::scene::curve::Curve;
 /// let mut ui = Ui::new(Theme::DEFAULT);
 /// let mut env = Curve::default();
-/// let (plot, edit) = curve(&ui, "env", &mut env);
+/// let (plot, edit) = curve(&mut ui, "env", &mut env);
 /// assert_eq!(edit, None, "nothing is dragging");
 /// let _ = plot.size(240.0, 120.0);
 /// ```
-pub fn curve(ui: &impl Host, id: &str, c: &mut Curve) -> (El, Option<CurveEdit>) {
+pub fn curve(ui: &mut Ui, id: &str, c: &mut Curve) -> (El, Option<CurveEdit>) {
     let edit = dragged(ui, id, c);
     let (points, handles) = (c.points().to_vec(), c.handles().to_vec());
     let lit = ui.tag(id).map(str::to_owned);

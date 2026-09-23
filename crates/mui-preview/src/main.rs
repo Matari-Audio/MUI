@@ -410,11 +410,11 @@ impl App {
             .id("scene-list"),
         );
         let scene = &mut self.scenes[self.selected];
-        let switch = |label: &str, id: &str, v: &mut bool| {
+        let mut switch = |label: &str, id: &str, v: &mut bool| {
             row([
                 text(label).fill(Role::Dim),
                 spacer(),
-                toggle(ui, id, v).el(),
+                toggle(ui, id, v).0.el(),
             ])
             .align(Align::Center)
         };
