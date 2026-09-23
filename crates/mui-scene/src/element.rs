@@ -297,6 +297,9 @@ pub struct Element {
     /// Where the node comes in from on its first frame, and fades out to
     /// after it leaves the tree. See [`Styled::appear`].
     pub appear: Option<Appear>,
+    /// What this node *is*, whatever it is named this frame. See
+    /// [`Styled::identity`].
+    pub identity: Option<u64>,
     /// Shape identity: when it changes, the outline morphs from the old
     /// shape to the new one. See [`Styled::morph`].
     pub morph: Option<u64>,
@@ -970,6 +973,27 @@ pub trait Styled: Paints {
         e.appear = Some(from);
         e.transition.get_or_insert(Spring::DEFAULT);
         e.layout_transition.get_or_insert(Spring::DEFAULT);
+        self
+    }
+    /// What this node is, independent of its name: a rack slot's module,
+    /// not its position. When a node with the same identity comes back under
+    /// another name -- `osc/3` became `osc/1` because the rack was reordered
+    /// -- the runtime carries everything it kept under the old name to the
+    /// new one: springs, a layout glide (so the slot *moves* to its new place
+    /// instead of both slots cross-fading), focus, scroll offsets, a text
+    /// selection, and a drag in flight. Names composed under it
+    /// (`osc/3/gain`) and unnamed descendants follow too.
+    ///
+    /// ```
+    /// use mui_scene::prelude::*;
+    /// let module_uid = 7u64;
+    /// let slot = leaf(80., 40.).animate_layout().identity(module_uid).id("osc/3");
+    /// assert!(slot.payload().identity.is_some());
+    /// ```
+    fn identity(mut self, what: impl std::hash::Hash) -> Self {
+        use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher};
+        self.element_mut().identity =
+            Some(BuildHasherDefault::<DefaultHasher>::default().hash_one(what));
         self
     }
     /// Name this node's shape. When the name changes -- a play glyph becomes

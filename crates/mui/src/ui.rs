@@ -3,7 +3,7 @@ use std::any::Any;
 #[path = "wake.rs"]
 mod wake;
 use crate::SemanticAction;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Write as _;
 
 use mui_geometry::Point;
@@ -100,6 +100,9 @@ pub struct Ui {
     ghosts: Vec<Ghost>,
     /// [`Styled::morph`](mui_scene::Styled::morph) state per node key.
     morphs: BTreeMap<String, Morph>,
+    /// Last frame's [`Styled::identity`](mui_scene::Styled::identity)
+    /// nodes: what each was named and where it sat in the caller's tree.
+    identities: HashMap<u64, (Option<String>, String)>,
     /// [`Ui::tween`] springs per id, flagged when the builder reads them.
     tweens: BTreeMap<String, (bool, Spring)>,
     /// [`Ui::play`] start times per id, flagged when the builder reads them.
@@ -192,6 +195,7 @@ impl Ui {
             appearing: BTreeMap::new(),
             ghosts: Vec::new(),
             morphs: BTreeMap::new(),
+            identities: HashMap::new(),
             tweens: BTreeMap::new(),
             plays: BTreeMap::new(),
             play_until: 0.0,
@@ -904,6 +908,7 @@ impl Ui {
         // A key still to land wants the frame that shows it; the clock that
         // decides is the one this frame advances to.
         let mut animating = self.reconcile() | (self.time < self.play_until);
+        self.follow_identities(&root);
         animating |= self.hover_springs(&root, dt);
         self.intake_focus(was, keys, text, ime);
         let hovered = self.interaction.hovered().map(str::to_owned);
@@ -1017,6 +1022,91 @@ impl Ui {
             });
         }
         prev_held.is_some()
+    }
+
+    /// Carry state kept under a name to the node's new name when a node with
+    /// the same identity comes back renamed or moved. Runs after this frame's
+    /// pointer has been matched against last frame's names, so a drag that
+    /// caused the reorder keeps its capture under the new name.
+    fn follow_identities(&mut self, root: &El) {
+        fn visit(n: &El, path: &mut String, out: &mut HashMap<u64, (Option<String>, String)>) {
+            if let Some(id) = n.payload().identity {
+                out.insert(id, (n.key().map(str::to_owned), path.clone()));
+            }
+            let mark = path.len();
+            for (j, c) in n.children().iter().enumerate() {
+                let _ = write!(path, "/{j}");
+                visit(c, path, out);
+                path.truncate(mark);
+            }
+        }
+        let mut now = HashMap::new();
+        visit(root, &mut String::new(), &mut now);
+        // Keys are in last frame's wrap state here; `wrap_tip` shifts them after.
+        let pre = if self.wrapped { "/0" } else { "" };
+        let mut moves: Vec<(String, String)> = Vec::new();
+        for (id, (key, path)) in &now {
+            let Some((was_key, was_path)) = self.identities.get(id) else {
+                continue;
+            };
+            if let (Some(a), Some(b)) = (was_key, key) {
+                if a != b {
+                    moves.push((a.clone(), b.clone()));
+                }
+            }
+            if was_path != path {
+                moves.push((format!("{pre}{was_path}"), format!("{pre}{path}")));
+            }
+        }
+        self.identities = now;
+        if moves.is_empty() {
+            return;
+        }
+        // The deepest match wins: a renamed slot inside a renamed rack.
+        moves.sort_by_key(|m| std::cmp::Reverse(m.0.len()));
+        let to = |k: &str| -> Option<String> {
+            moves.iter().find_map(|(a, b)| {
+                if k == a {
+                    return Some(b.clone());
+                }
+                // A name prefixes the names composed under it, a path the
+                // paths below it; "osc/30" is not under "osc/3".
+                let rest = k.strip_prefix(a.as_str())?;
+                rest.starts_with('/').then(|| format!("{b}{rest}"))
+            })
+        };
+        fn remap<V>(m: &mut BTreeMap<String, V>, to: &dyn Fn(&str) -> Option<String>) {
+            *m = std::mem::take(m)
+                .into_iter()
+                .map(|(k, v)| (to(&k).unwrap_or(k), v))
+                .collect();
+        }
+        remap(&mut self.springs, &to);
+        remap(&mut self.motion, &to);
+        remap(&mut self.glides, &to);
+        remap(&mut self.morphs, &to);
+        remap(&mut self.scrolls, &to);
+        remap(&mut self.sel, &to);
+        remap(&mut self.appearing, &to);
+        for k in [&mut self.focus, &mut self.double] {
+            if let Some(new) = k.as_deref().and_then(to) {
+                *k = Some(new);
+            }
+        }
+        for k in [
+            self.hover.as_mut().map(|h| &mut h.0),
+            self.tagged.as_mut().map(|t| &mut t.0),
+            self.drag.as_mut().map(|d| &mut d.0),
+            self.last_press.as_mut().map(|p| &mut p.0),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if let Some(new) = to(k) {
+                *k = new;
+            }
+        }
+        self.interaction.rename(&to);
     }
 
     /// Retarget and step the hover and press springs. Returns whether one is

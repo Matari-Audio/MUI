@@ -258,3 +258,48 @@ fn opacity_and_gradient_stops_spring() {
         .unwrap();
     assert!(o > 0. && o < 1. && f.animating, "{o}");
 }
+
+#[test]
+fn a_reordered_slot_keeps_its_state_and_glides_to_its_new_place() {
+    // Two modules in a rack, named by slot index as a real rack names them.
+    let rack = |order: [u64; 2]| {
+        row(order.iter().enumerate().map(|(slot, &module)| {
+            stack![leaf(10., 10.).id(format!("slot/{slot}/knob"))]
+                .size(60., 30.)
+                .animate_layout()
+                .identity(module)
+                .id(format!("slot/{slot}"))
+        }))
+        .gap(20.)
+    };
+    let mut ui = Ui::new(Theme::DEFAULT);
+    let f = ui
+        .frame(rack([7, 9]), Some(SIZE), Input::default(), DT)
+        .unwrap();
+    let was = x(f.scene, "slot/0");
+    let inset = x(f.scene, "slot/0/knob") - was;
+    assert_eq!(was, 0.);
+    // Swapped: module 7 is now slot 1. It moves from where it stood rather
+    // than appearing in its new place.
+    let f = ui
+        .frame(rack([9, 7]), Some(SIZE), Input::default(), DT)
+        .unwrap();
+    let now = x(f.scene, "slot/1");
+    assert!(
+        f.animating && now > was && now < 80.,
+        "module 7 on its way: {now}"
+    );
+    let knob = x(f.scene, "slot/1/knob");
+    assert!(
+        (knob - now - inset).abs() < 1e-9,
+        "its composed child came along"
+    );
+    for _ in 0..120 {
+        ui.frame(rack([9, 7]), Some(SIZE), Input::default(), DT)
+            .unwrap();
+    }
+    let f = ui
+        .frame(rack([9, 7]), Some(SIZE), Input::default(), DT)
+        .unwrap();
+    assert!((x(f.scene, "slot/1") - 80.).abs() < 1e-6 && !f.animating);
+}
