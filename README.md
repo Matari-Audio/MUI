@@ -2,7 +2,7 @@
 
 **MUI** (Matari-UI) is the UI foundation for [Matari Audio](https://github.com/Matari-Audio)
 plugins. You write a tree the way you would write CSS flexbox with tokens; MUI
-lays it out intrinsically, turns every welded group into one filleted outline,
+lays it out intrinsically, turns every `.union` group into one filleted outline,
 derives every shell as a true parallel inset of the outline before it, colours
 every surface from a role palette, and hands a z-ordered paint list to Vello.
 Layout is intrinsic: a float names a region around another node and
@@ -112,7 +112,7 @@ let tab = col![control("plus"), control("phase"), control("warp")]
     .id("tab")
     .shell(12.0, Raised);
 
-// The tab and the panel welded into one filleted shape.
+// The tab and the panel unioned into one filleted shape.
 let root = row![tab, leaf(520.0, 230.0).id("panel")]
     .start()
     .union(Surface);
@@ -446,7 +446,7 @@ default because a snapshot-sized pixmap loses more to thread hand-off than
 it gains (BENCHMARKS.md measures both).
 
 ```bash
-cargo run -p mui-scene --release --example stress
+cargo run -p mui-scene --profile perf --example stress
 ```
 
 resolves a ~1000-node tree at three window shapes and counts the allocations
@@ -462,4 +462,4 @@ global allocator, which the library itself forbids.
 Formatting, tests, clippy with warnings denied, and a wasm check of the
 library crates. `BENCHMARKS.md` is the frame budget of a Kurv-sized scene
 across `vello_hybrid`, `vello_cpu` and classic `vello`, reproduced by
-`cargo run -p mui-vello --release --features cpu --example bench`.
+`cargo run -p mui-vello --profile perf --features cpu --example bench`.

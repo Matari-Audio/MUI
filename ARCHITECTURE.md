@@ -30,7 +30,7 @@ Input (pointer with its Buttons and Mods, wheel, keys, text)
    |                        ui.tween does the same for a number MUI cannot see.
    v
 El tree  (row! / col! / stack! / grid! / fits!, Paints fills, presets merged
-   |      per field, .on(State, ..) looks, roles, shells, welds, carves,
+   |      per field, .on(State, ..) looks, roles, shells, unions, welds, carves,
    |      canvas draws, .scroll() / .clip() / .float() / .pin(..))
    |
    v  mui-layout            intrinsic flex solve, frames in tree order; a
@@ -49,7 +49,7 @@ El tree  (row! / col! / stack! / grid! / fits!, Paints fills, presets merged
    |               theme token (selector / field / box); a squircle corner
    |               rewrites the rounded rect's arcs as cubics and gives up
    |               the analytic blur for that node
-   |     weld   -> union(children's sharp frames) then fillet(convex, concave)
+   |     union  -> union(children's sharp frames) then fillet(convex, concave)
    |     carve  -> boolean(outline, a .cut/.keep child's shape, Difference |
    |               Intersection); the child is placed by layout and never paints
    |     shell  -> inset(previous outline, d)        exact or parallel offset
@@ -67,7 +67,7 @@ El tree  (row! / col! / stack! / grid! / fits!, Paints fills, presets merged
    |     blend  -> Blend(mix, opacity) ... subtree ... Unblend, outside the clip
    |     mask   -> Blend(Normal, 1) ... subtree ... Mask(fill, source-atop) ...
    |               Unblend; a paint over what the subtree drew, not an alpha mask
-   |     weld   -> the shadow is one blurred rect per welded child
+   |     union  -> the shadow is one blurred rect per child
    |     shadow -> drop shadows under the fill, inset ones over the shells
    |               inside a Clip of the outline; both are one analytic
    |               blurred rounded rect, inverted for the inset case
@@ -156,7 +156,7 @@ a corner style rides the outline, so a
 squircle stays inside the rounded rect it replaces; what responds is what was
 drawn, which is why a tagged canvas answers in its ring and not in its hole,
 and why switching a node off is one call and not a grey fill beside a live
-gesture; a weld unions sharp frames before it
+gesture; a `.union` joins sharp frames before it
 fillets; a clip is a layer pair in the paint list, not a state flag, so a
 renderer that ignores it still draws something sane; a float keeps its
 declaration slot in frame order but its paint slot at the end. Everything
@@ -181,6 +181,7 @@ mui                  Ui runtime, Frame, Edit, prelude, re-exports, and
    v
 mui-scene            El DSL, Styled/Paints, Theme resolution, the scene walk
    |
+   +--> mui-weld     material welds: plates' paint blended, baked or on the GPU
    +--> mui-style    colours, roles, fills, shadows, Style, Theme (+ color)
    +--> mui-motion   Spring, curve (std only)
    +--> mui-text     glyph and string outlines
@@ -193,4 +194,5 @@ mui-scene            El DSL, Styled/Paints, Theme resolution, the scene walk
 `Spacing`/`SpacingScale` live in `mui-geometry` because both `mui-style` (a
 shell's thickness, a theme's scale) and `mui-layout` (`gap`, `pad`) are
 written in them; putting them in either would point an edge sideways.
-`mui-truce` stands alone.
+`mui-playground` is the browser playground's DSL, straight over `mui-scene` and
+`mui-vello`. `mui-truce` stands alone.

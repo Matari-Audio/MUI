@@ -1,7 +1,7 @@
 //! What a frame costs, printed rather than asserted: a wall-clock budget is
 //! noise on a shared CI runner. Run it with `--nocapture` to read it. Real
 //! numbers, and the hybrid/cpu/classic comparison, live in BENCHMARKS.md and
-//! `cargo run -p mui-vello --release --features cpu --example bench`.
+//! `cargo run -p mui-vello --profile perf --features cpu --example bench`.
 //!
 //! ```text
 //! cargo test -p mui-preview --test frame_cost -- --nocapture
@@ -66,7 +66,7 @@ fn what_a_frame_costs() {
     let resolve = ms(|| {
         black_box(resolve_scene(black_box(&spec)).unwrap());
     });
-    println!("pill resolve (weld + shell + text) {resolve:8.3} ms");
+    println!("pill resolve (union + shell + text) {resolve:8.3} ms");
     let mut ui = Ui::new(Theme::DEFAULT).font(Font::new(font).unwrap());
     let mut v = 0.3;
     let frame = ms(|| {
