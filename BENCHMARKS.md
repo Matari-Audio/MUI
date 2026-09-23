@@ -81,18 +81,17 @@ Milliseconds. Before is `d75b234`, after is this commit.
 
 **What got slower.** The paint walk in `frame_cost` went from 1 to 11
 microseconds, because stage B deleted `PathCache`. The walk now converts every
-arc to cubics every frame. In the full bench that costs about 0.1 ms: the old
-`vello_cpu cached` static row (5.560 total, 2.984 encode) beat the uncached one
-by 0.36 ms of total in the baseline run, and today's uncached static frame
-(5.125) is still faster than that cached one. The `vello_hybrid` render column
+arc to cubics every frame. In the full bench the conversion alone measures
+0.106 ms a frame, against 0.026 ms from the old warm cache. In the baseline run
+the `vello_cpu cached` static row beat the uncached one by 0.23 ms of encode
+(2.984 against 3.212). Today's uncached static frame (5.125 total) is still
+faster than that cached one (5.560). The `vello_hybrid` render column
 reads higher, but the same binary spread from 0.56 to 1.6 ms across runs, so
 that change is load on a shared GPU, not a regression.
 
-**What got faster, and why.** Most of the resolve win is allocation: 14257 ->
-5924 allocations per warm resolve. The retained caches keep exactly what the
-last resolve used, and the flush-when-full caps are gone. The thin and wide
-stress windows gained the most because they used to overflow those caps and
-reshape every frame. Stage C (the scene and runtime split, the widget fold,
+**What got faster.** Resolve, warm and cold, and the allocation count behind
+it: 14257 -> 5924 allocations per warm resolve. This file does not attribute
+the win to individual stage A/B commits. Stage C (the scene and runtime split, the widget fold,
 `preset`/`base` by move) did not move these numbers. The C1 builder measured
 stress warm resolve before and after its refactor (0.894 -> 0.878 ms at
 1280x800) and got identical allocation counts, and it claimed no speedup.
@@ -155,6 +154,7 @@ A bare solve is 2907 allocations and 329 KiB, the same as before.
 ## Where the frame goes
 
 In a static `vello_cpu` frame (5.1 ms), MUI's own resolve is 1.35 ms and the
-paint walk plus Vello's strip generation (encode) is 3.3 ms. Only about 0.1 ms
-of that encode is MUI's arc-to-cubic conversion; the rest is Vello. The next
+paint walk plus Vello's strip generation (encode) is 3.3 ms. MUI's
+arc-to-cubic conversion is 0.106 ms of that encode, and most of the rest is
+Vello. The next
 real win is on Vello's side of that seam, not in the walk.
