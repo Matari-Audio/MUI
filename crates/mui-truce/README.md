@@ -69,26 +69,42 @@ The bundles land in `$CARGO_TARGET_DIR/bundles` (`target/bundles` by default):
 truce's FFI `catch_unwind` working, so a panic in the plugin is contained
 instead of aborting the host. For a quicker unoptimised build, add `--debug`.
 
-Validate the bundles:
+Validate the bundles (the commands and results below are from 2026-09-23,
+Linux, X11 display, clap-validator 0.4.1, pluginval 1.0.4):
 
 ```sh
 clap-validator validate "target/bundles/MUI Gain.clap"
 pluginval --strictness-level 5 --validate "target/bundles/MUI Gain.vst3"
 ```
 
-Current results on Linux (2026-09-23; clap-validator from git and
-pluginval 1.x):
-
-- **clap-validator:** 34 passed, 7 skipped, 3 failed. The failures are
+- **clap-validator:** 44 run, 34 passed, 7 skipped, 3 failed. The failures are
   `state-reproducibility-basic`, `-binary` and `-buffered`: after
   `clap_plugin_state::load` the values change without a
   `clap_host_params::rescan(CLAP_PARAM_RESCAN_VALUES)`, and truce-clap 6.3's
   `state_load` never requests one. This is upstream, in the truce wrapper.
-- **pluginval:** every pluginval test passes, including the editor tests. Only
-  Steinberg's `vst3 validator` step fails, with "Missing mandatory
+- **pluginval:** exit 1. Every pluginval test passes, including `Editor`,
+  `Open editor whilst processing` and `Editor Automation`. Only Steinberg's
+  `vst3 validator` step fails, with "Missing mandatory
   IProcessContextRequirements extension". truce-vst3 6.3's shim declares that
   IID as `0x2A654303, 0xEF764E3C, 0xA8E8C6F3, 0xDBAE0F77`. The SDK's IID is
   `0x2A654303, 0xEF764E3D, 0x95B5FE83, 0x730EF6D0`. This is upstream too.
+
+Kurv vendors truce with both fixes (`vendor/truce-clap-6.3.0`: `state_load`
+sets `needs_rescan` and calls `request_callback`; `vendor/truce-vst3-6.3.0`:
+the SDK IID). MUI does not vendor 12k lines of wrapper for two one-line
+fixes in an example; they belong upstream.
+
+## What Kurv's vendored baseview adds
+
+The editor builds against upstream `baseview-truce`. Kurv's copy adds, and
+this crate does without:
+
+- A 4 ms X11 frame poll (upstream: 15 ms). Here an animation ticks at about
+  66 Hz on X11.
+- Forwarding of keys the editor ignores to the host's window, so DAW
+  shortcuts still work while the editor has focus. Upstream has no
+  forwarding, so the editor captures every key.
+- XDND file drops and a bounded-close detach for blocked renderer threads.
 
 ## Tests
 

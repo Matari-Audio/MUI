@@ -326,7 +326,32 @@ let (field, edited) = text_input(&mut ui, "name", &mut name);
 
 ## mui-truce
 
-- edition 2024 -> 2021, the workspace edition. The public API is unchanged.
+The crate was a state-document and gesture contract with no editor. It is
+now the editor: the document went back to Kurv, and a `Bridge` replaces the
+per-parameter wrapper.
+
+- edition 2024 -> 2021, the workspace edition
+- `#![forbid(unsafe_code)]` -> `#![deny(unsafe_code)]`, with two allowed
+  blocks (the wgpu surface on the host's window and `Send` for the window
+  handle)
+- `Document`, `EditorState`, `Module`, `Route`, `Target`, `Error` -> deleted.
+  The editor document was Kurv's schema; keep it in the plugin as a
+  `#[persist]` field of its own type.
+- `Parameter` -> `Bridge`. `Parameter::new(params, id, modulatable, edits)`
+  / `new_many(params, ids, edits)` -> `Bridge::new(params)`, one per editor,
+  with no channel: the bridge calls the host directly. `value()` / `text()`
+  -> `bridge.value(id)` / `bridge.text(id)`. `begin` / `set` / `drag` /
+  `end` / `cancel` / `step` / `reset` -> `bridge.bind(ui, widget, id, |ui, v|
+  ..)`, which sends the host's begin/set/end from the `Ui` edits of that
+  widget. `parse(text)`, `set_enabled` and `modulatable` -> no replacement.
+- `Automation::dispatch(context, edit)` / `Automation::close(context)` ->
+  `Bridge::bind` / `Bridge::close`. `MuiEditor` calls `close` when the host
+  closes the editor.
+- `mui_truce::Edit::{Begin(id), Value(id, v), End(id)}` -> gone; `Ui` reports
+  `mui::Edit::{Begin, End}` per widget and `bind` supplies the id and value.
+- new: `MuiEditor::new(params, ui, size, build).resizable(min).into_editor()`
+  is a truce `Editor`, and `mui_truce::window` is the host-agnostic window
+  (`View`, `Shared`, `Requests`, `open`).
 
 ## Removed crates and packages
 

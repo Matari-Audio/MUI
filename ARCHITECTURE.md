@@ -170,7 +170,8 @@ down; nothing below knows what is above it.
 
 ```text
 mui-preview          window, wgpu surface, the gallery as one tree
-   |
+mui-truce            plugin editor: baseview child window + wgpu (`window`),
+   |                 truce `Editor` + parameter `Bridge` (over truce)
    v
 mui                  Ui runtime, Frame, Edit, prelude, re-exports, and
    |                 the controls and presets (`mui::widgets`), which
@@ -195,4 +196,12 @@ mui-scene            El DSL, Styled/Paints, Theme resolution, the scene walk
 shell's thickness, a theme's scale) and `mui-layout` (`gap`, `pad`) are
 written in them; putting them in either would point an edge sideways.
 `mui-playground` is the browser playground's DSL, straight over `mui-scene` and
-`mui-vello`. `mui-truce` stands alone.
+`mui-vello`.
+
+`mui-truce` is two halves. `window` knows no plugin framework: a `View`
+trait (build a tree, report outside changes, ask for a size), the native
+event queue, and the GPU surface painted with `HybridEffects`. `MuiEditor`
+and `Bridge` are the truce half: a `View` whose model is truce's parameter
+store, and truce's `Editor` around the window. An adapter for another
+framework (nih-plug, say) is another `View` plus that framework's editor
+trait; it does not touch `window`. `examples/gain-plugin` is the consumer.
