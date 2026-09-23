@@ -1,19 +1,33 @@
 name: Verify
-on: [push, pull_request]
+# PRs get the full gate on Linux. Windows and macOS (wgpu backends, baseview
+# embedding, truce wrappers) build and test only after a merge to main, from
+# the merge queue, on demand, or on a PR labelled `ci:all-platforms`.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+  push:
+    branches: [main]
+  merge_group:
+  workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  # A label run gets its own group so it never cancels the code run it rides beside.
+  group: verify-${{ github.event.pull_request.number || github.ref }}-${{ github.event.action == 'labeled' && github.event.label.name || 'code' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
 jobs:
-  verify:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+  linux:
+    if: github.event.action != 'labeled'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
-      - name: Linux native dependencies
-        if: runner.os == 'Linux'
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Native dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -23,9 +37,32 @@ jobs:
             libxcb-randr0-dev libxcb-sync-dev libxkbcommon-dev libxkbcommon-x11-dev \
             libwayland-dev libvulkan-dev libfontconfig1-dev libclang-dev libssl-dev libzstd-dev
       # rust-toolchain.toml pins the toolchain, rustfmt, clippy and the wasm target.
-      - run: rustup show
-      - uses: Swatinem/rust-cache@v2
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo fetch --locked
       # fmt, test, clippy and the wasm library check: the same gate as local.
       - run: ./tools/verify.sh
-        shell: bash
+
+  platforms:
+    if: >-
+      github.event_name != 'pull_request' ||
+      (github.event.action == 'labeled' && github.event.label.name == 'ci:all-platforms') ||
+      (github.event.action != 'labeled' && contains(github.event.pull_request.labels.*.name, 'ci:all-platforms'))
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # fmt, clippy and wasm are platform-independent and already gated on Linux.
+      - run: cargo test --workspace --all-features --locked
