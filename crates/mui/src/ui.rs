@@ -111,8 +111,9 @@ pub struct Ui {
     play_until: f64,
     text_cache: TextCache,
     weld_cache: mui_scene::WeldCache,
-    /// Per scroll node: how far its children are slid.
-    scrolls: BTreeMap<String, [f64; 2]>,
+    /// Per scroll node, per axis: the spring's target is where the wheel
+    /// clamped it, its value how far the children are drawn slid.
+    scrolls: BTreeMap<String, [Spring; 2]>,
     /// The last frame floated a tip, so the caller's root sat under a
     /// wrapper and every positional key started `/0`.
     wrapped: bool,
@@ -712,9 +713,12 @@ impl Ui {
     pub fn min_size(&self) -> Option<Size> {
         Some(self.scene.as_ref()?.layout.min_size())
     }
-    /// How far `id`'s children are scrolled.
+    /// How far `id`'s children are scrolled to: the settled offset, which
+    /// the drawn one springs toward.
     pub fn scroll(&self, id: &str) -> [f64; 2] {
-        self.scrolls.get(id).copied().unwrap_or([0.0, 0.0])
+        self.scrolls
+            .get(id)
+            .map_or([0.0, 0.0], |s| s.map(|s| s.target))
     }
 
     pub(crate) fn sel(&self, id: &str) -> (usize, usize) {
@@ -1320,6 +1324,9 @@ impl Ui {
             let drawn = s.value;
             animating |= s.step(dt) || s.value != drawn;
         }
+        for s in self.scrolls.values_mut().flatten() {
+            animating |= s.step(dt);
+        }
         let springs = &self.springs;
         let scrolls = &self.scrolls;
         state(
@@ -1545,18 +1552,15 @@ impl Ui {
             let Some(surface) = scene.surface(id) else {
                 return false;
             };
-            let next = [
-                at[0].clamp(
-                    0.0,
-                    (surface.content.width - surface.frame.size.width).max(0.0),
-                ),
-                at[1].clamp(
-                    0.0,
-                    (surface.content.height - surface.frame.size.height).max(0.0),
-                ),
+            let max = [
+                surface.content.width - surface.frame.size.width,
+                surface.content.height - surface.frame.size.height,
             ];
-            animating |= *at != next;
-            *at = next;
+            for (s, max) in at.iter_mut().zip(max) {
+                let next = s.target.clamp(0.0, max.max(0.0));
+                animating |= s.target != next;
+                s.to(next);
+            }
             true
         });
         self.sel.retain(|id, _| scene.surface(id).is_some());
@@ -1661,13 +1665,16 @@ impl Ui {
             if max[0] <= 0.0 && max[1] <= 0.0 {
                 continue;
             }
-            let at = slot(&mut self.scrolls, &s.key, || [0.0, 0.0]);
+            // The handoff reads the target, not the drawn offset, so a flick
+            // still in flight does not pass the next notch to the parent.
+            let at = slot(&mut self.scrolls, &s.key, || [scroll_spring(); 2]);
             let next = [
-                (at[0] + wheel.x).clamp(0.0, max[0]),
-                (at[1] + wheel.y).clamp(0.0, max[1]),
+                (at[0].target + wheel.x).clamp(0.0, max[0]),
+                (at[1].target + wheel.y).clamp(0.0, max[1]),
             ];
-            if next != *at {
-                *at = next;
+            if next != at.map(|s| s.target) {
+                at[0].to(next[0]);
+                at[1].to(next[1]);
                 return true;
             }
             // An exhausted or perpendicular nested scroller yields to its parent.
@@ -1693,6 +1700,12 @@ const STROKE: u32 = 12;
 const STOPS: u32 = 0x100;
 const SHADOWS: u32 = 0x1000;
 const SHELLS: u32 = 0x2000;
+
+/// A scroll offset's glide toward where the wheel put it: short, and
+/// critically damped so it never overshoots the end of the content.
+fn scroll_spring() -> Spring {
+    Spring::new(0.12, 1.0)
+}
 
 /// Every numeric paint channel of `e`, each under its stable id, replaced by
 /// `ch(id, declared, is_angle)`. Shape padding/bend and border widths share
@@ -2071,11 +2084,14 @@ fn state(
     path: &mut String,
     pal: &Palette,
     of: &dyn Fn(&str) -> Option<(f64, f64)>,
-    scrolls: &BTreeMap<String, [f64; 2]>,
+    scrolls: &BTreeMap<String, [Spring; 2]>,
     off: bool,
 ) {
     let off = off || n.payload().disabled;
-    if let Some([x, y]) = scrolls.get(n.key().unwrap_or(path)).copied() {
+    if let Some([x, y]) = scrolls
+        .get(n.key().unwrap_or(path))
+        .map(|s| s.map(|s| s.value))
+    {
         // `scrolled` is a builder and a built node cannot be reopened.
         let node = std::mem::replace(n, mui_scene::leaf(0.0, 0.0));
         *n = node.scrolled(x, y);
@@ -3309,6 +3325,40 @@ mod tests {
         assert_eq!(ui.hit(value, 16., end), value.chars().count());
     }
 
+    /// The wheel moves the target at once; the drawn offset glides after
+    /// it, never back, and lands on it exactly.
+    #[test]
+    fn a_wheel_scroll_glides_onto_its_target() {
+        let mut ui = Ui::new(Theme::DEFAULT);
+        let tree = || {
+            column([leaf(20., 100.).id("top"), leaf(20., 100.)])
+                .height(50.)
+                .scroll()
+                .id("list")
+        };
+        let wheel = Input {
+            pointer: at(10., 10., false),
+            wheel: Point::new(0., 60.),
+            ..Input::default()
+        };
+        ui.frame(tree(), None, PointerInput::default(), 0.016)
+            .unwrap();
+        assert!(ui.frame(tree(), None, wheel, 0.016).unwrap().animating);
+        assert_eq!(ui.scroll("list"), [0., 60.], "the target moves at once");
+        let mut prev = 0.0;
+        for _ in 0..100 {
+            let f = ui.frame(tree(), None, Input::default(), 0.016).unwrap();
+            let y = -f.scene.surface("top").unwrap().frame.y;
+            assert!(y >= prev && y <= 60., "{y} after {prev}");
+            prev = y;
+            if !f.animating {
+                assert_eq!(y, 60., "lands exactly");
+                return;
+            }
+        }
+        panic!("never settled");
+    }
+
     /// The README's shape: a column that scrolls, with no id. The wheel's
     /// offset is keyed by the tree path, and the tree applies it by the same.
     #[test]
@@ -3333,7 +3383,8 @@ mod tests {
             .unwrap();
         ui.frame(tree(), None, wheel, 0.016).unwrap();
         assert_eq!(ui.scroll("/0"), [0., 30.]);
-        let f = ui.frame(tree(), None, Input::default(), 0.016).unwrap();
+        // Long enough for the glide to land.
+        let f = ui.frame(tree(), None, Input::default(), 1.0).unwrap();
         assert_eq!(f.scene.surface("/0/0").unwrap().frame.y, -30.);
     }
 
@@ -3365,6 +3416,8 @@ mod tests {
             ..Input::default()
         };
         ui.frame(tree(), win(), wheel, 0.016).unwrap();
+        ui.frame(tree(), win(), PointerInput::default(), 1.0)
+            .unwrap();
         let item_y = |f: &Frame| f.scene.surface("item").unwrap().frame.y;
         let f = ui
             .frame(tree(), win(), at(120., 20., false), 0.016)
