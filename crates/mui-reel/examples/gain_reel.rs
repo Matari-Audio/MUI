@@ -38,7 +38,7 @@ fn editor(ui: &mut Ui, m: &mut Gain) -> El {
     } else {
         "-inf dB".into()
     };
-    let meter = row([leaf(220.0 * m.peak.clamp(0.0, 1.0), 8.0)
+    let meter = row([leaf((220.0 * m.peak).clamp(8.0, 220.0), 8.0)
         .pill()
         .fill(Primary)])
     .size(220.0, 8.0)
@@ -64,7 +64,8 @@ fn editor(ui: &mut Ui, m: &mut Gain) -> El {
     .fill(Surface)
     .shadow(Shadow::soft(16.0))
     .anchor(Align::Center, Align::Center);
-    overlay([card]).fill(Background)
+    // Square: a filled node takes the theme radius, and a take has no window corners.
+    overlay([card]).fill(Background).radius(0.0)
 }
 
 /// One video frame of audio: a sine at `tone`, gated by the script's notes,
@@ -104,7 +105,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .at(beat(0.25))
         .move_to("gain", beats(1.0))
         .at(beat(1.5))
-        .camera_focus("gain-panel", 24.0, Spring::new(0.7, 0.9))
+        .camera_focus("gain-panel", 60.0, Spring::new(0.7, 0.9))
         .at(beat(2.0))
         .drag("gain", (0.0, -70.0), beats(2.0), Ease::default())
         .at(beat(5.0))

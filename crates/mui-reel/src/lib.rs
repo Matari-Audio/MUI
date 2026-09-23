@@ -97,7 +97,7 @@ pub enum ReelEvent {
 }
 impl ReelEvent {
     fn json(&self, t: f64) -> Value {
-        let t = round(t * 1000.0) / 1000.0;
+        let t = (t * 1000.0).round() / 1000.0;
         match self {
             ReelEvent::NoteOn { key, velocity } => {
                 json!({"t": t, "kind": "note_on", "key": key, "velocity": velocity})
@@ -107,7 +107,7 @@ impl ReelEvent {
                 json!({"t": t, "kind": if *begin { "edit_begin" } else { "edit_end" }, "id": id})
             }
             ReelEvent::Value { id, value } => {
-                json!({"t": t, "kind": "value", "id": id, "value": value})
+                json!({"t": t, "kind": "value", "id": id, "value": (value * 1e4).round() / 1e4})
             }
             ReelEvent::Custom { name, value } => {
                 json!({"t": t, "kind": "custom", "name": name, "value": value})
@@ -443,15 +443,14 @@ impl Reel {
             "encoder": if ffmpeg { "ffmpeg: take H.264 High yuv420p crf 14; layers VP9 yuva420p" }
                        else { "none: ffmpeg missing or disabled, PNG sequences written instead" },
             "files": files,
-            "layers": script.layers.iter().zip(&layer_names).map(|(id, f)| json!({"id": id, "file": format!("layers/{f}")}))
-                .chain(layer_files.last().map(|f| json!({"id": null, "file": f})))
+            "layers": layer_files.iter().enumerate().map(|(i, f)| json!({"id": script.layers.get(i), "file": format!("layers/{f}")}))
                 .collect::<Vec<_>>(),
             "fps": self.fps,
             "size": [w, h],
             "logical": [self.size.width, self.size.height],
             "scale": self.scale,
             "bpm": self.bpm,
-            "beats": self.bpm.map(|b| round(duration * b / 60.0 * 1000.0) / 1000.0),
+            "beats": self.bpm.map(|b| (duration * b / 60.0 * 1000.0).round() / 1000.0),
             "duration": duration,
             "frames": track["frames"],
             "sample_rate": has_audio.then_some(self.rate),
@@ -592,7 +591,9 @@ impl Reel {
                 * Affine::translate((-cx, -cy));
 
             let root = build(&mut ui, state);
-            let frame = ui.frame(root, Some(self.size), input, dt)?;
+            let frame = ui
+                .frame(root, Some(self.size), input, dt)
+                .map_err(|e| format!("frame {i}: {e}"))?;
             for (id, e) in &frame.edits {
                 evs.push(ReelEvent::Edit {
                     id: id.clone(),
@@ -625,7 +626,7 @@ impl Reel {
                 layers.push(raster.draw(&frame.scene.without(&ids)?, view, None)?);
             }
             for s in frame.scene.surfaces() {
-                let named = !s.key.starts_with('/');
+                let named = !s.key.is_empty() && !s.key.starts_with('/');
                 let wanted = script
                     .track
                     .as_ref()
@@ -655,7 +656,7 @@ impl Reel {
             camera.push(json!([
                 round(cx * self.scale),
                 round(cy * self.scale),
-                round(zoom * 1000.0) / 1000.0
+                (zoom * 1000.0).round() / 1000.0
             ]));
             // Integer sample boundaries: frame i owns [i*rate/fps, (i+1)*rate/fps),
             // so any fps/rate pair sums exactly with no drift.
