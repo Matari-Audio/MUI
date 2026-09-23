@@ -33,7 +33,8 @@ pub use offset::{
 };
 
 pub use boolean::{
-    boolean, union, BooleanOp, GeometryOptions, PlacedShape, Polygon, Ring, RingKind, Topology,
+    boolean, boolean_passes, union, BooleanOp, GeometryOptions, PlacedShape, Polygon, Ring,
+    RingKind, Topology,
 };
 pub use fillet::{fillet, Corner, CornerStyle, Fillet, RoundedShape};
 pub use math::{Affine, Bounds, Point};

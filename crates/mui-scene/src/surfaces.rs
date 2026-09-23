@@ -1,11 +1,13 @@
 //! Container-owned materials: authored footprints, derived corners and clearance.
 //! Keeps layout/controls separate from a material that can wrap around their holes.
+use crate::regions::{Operation, RegionCache, RAMP_BAND, STROKE_BAND};
 use crate::{El, Frame, Id, Radius, SceneError, SceneSpec};
 use mui_geometry::{
     boolean_paths, fillet, inset_path, union, union_contours, BooleanOp, CornerStyle, Fillet,
     GeometryOptions, OffsetOptions, Path, PlacedShape, Point, Polygon,
 };
 use std::collections::HashMap;
+use std::sync::Arc;
 
 #[derive(Clone, Debug, PartialEq)]
 struct Inputs {
@@ -27,33 +29,40 @@ pub(crate) struct Geometry {
     pub joins: Path,
     pub join_nodes: Vec<usize>,
 }
+/// Keyed by node identity, so a tooltip or menu reshaping the tree around an
+/// owner reuses its geometry. Every boolean pass is miss-only: the border an
+/// owner compares against comes from the identity-keyed region cache.
 #[derive(Debug, Default)]
 pub(crate) struct Cache {
-    entries: HashMap<usize, (Inputs, Geometry)>,
+    entries: HashMap<Arc<str>, (Inputs, Geometry)>,
     borders: crate::border_ramp::BorderCache,
 }
 
 fn count(n: &El) -> usize {
     1 + n.children().iter().map(count).sum::<usize>()
 }
-fn collect<'a>(n: &'a El, at: usize, nodes: &mut Vec<(usize, &'a El)>) {
+/// The owner's scope in pre-order; returns the subtree size so a walk is O(n).
+fn collect<'a>(n: &'a El, at: usize, nodes: &mut Vec<(usize, &'a El)>) -> usize {
     nodes.push((at, n));
     let mut next = at + 1;
     for child in n.children() {
-        if child.payload().surface_padding.is_none() && !child.is_float() {
-            collect(child, next, nodes);
-        }
-        next += count(child);
+        next += if child.payload().surface_padding.is_none() && !child.is_float() {
+            collect(child, next, nodes)
+        } else {
+            count(child)
+        };
     }
+    next - at
 }
 impl Cache {
     pub fn resolve(
         &mut self,
         root: &El,
-        at: usize,
+        (key, at): (&Arc<str>, usize),
         frames: &[Frame],
         outline: &Path,
         spec: &SceneSpec,
+        regions: &mut RegionCache,
     ) -> Result<Geometry, SceneError> {
         let e = root.payload();
         let padding = e.surface_padding.unwrap().resolve(spec.theme.spacing);
@@ -101,7 +110,7 @@ impl Cache {
                 } else {
                     members.iter().map(&named).collect::<Result<Vec<_>, _>>()?
                 };
-                panels.push((*i, footprints));
+                panels.push((*i - at, footprints));
             }
             if let Some(body) = &node.payload().border_join {
                 let body = named(body)?;
@@ -125,7 +134,7 @@ impl Cache {
                     .unwrap_or(frames[at]);
                 let left = frame.x + frame.size.width * 0.5 < body.x + body.size.width * 0.5;
                 let edge = if left { body.x } else { body.right() };
-                joins.push((*i, frame, body, ramp.width(edge, anchor)?));
+                joins.push((*i - at, frame, body, ramp.width(edge, anchor)?));
             }
         }
         if panels.is_empty() && joins.is_empty() {
@@ -143,16 +152,17 @@ impl Cache {
             let mut inward = ramp.clone();
             inward.from.1 *= ramp.align.inward();
             inward.to.1 *= ramp.align.inward();
-            border = self.borders.band(
-                &at.to_string(),
+            let mut sweep = self.borders.band(
+                key,
                 outline,
                 &inward,
                 anchor,
                 spec.offsets.flatten_tolerance,
             )?;
-            crate::border_ramp::decorate(&mut border, ramp, anchor, concave, named)?;
-            border = union_contours(
-                &border,
+            crate::border_ramp::decorate(&mut sweep, ramp, anchor, concave, named)?;
+            border = regions.resolve(
+                (key.clone(), RAMP_BAND),
+                Operation::Sweep(sweep),
                 OffsetOptions {
                     max_points: 100_000,
                     ..spec.offsets
@@ -160,16 +170,16 @@ impl Cache {
                 spec.geometry,
             )?;
         } else if let Some(stroke) = &e.style.stroke {
-            border = mui_geometry::border_geometry(
-                outline,
-                mui_geometry::WidthProfile::uniform(
+            border = regions.resolve(
+                (key.clone(), STROKE_BAND),
+                Operation::Border(
+                    outline.clone(),
                     stroke.width.unwrap_or(spec.theme.stroke_width),
+                    e.border_align,
                 ),
-                e.border_align,
                 spec.offsets,
                 spec.geometry,
-            )?
-            .band;
+            )?;
         }
         let input = Inputs {
             outline: outline.clone(),
@@ -195,9 +205,16 @@ impl Cache {
             geometry: spec.geometry,
             device_scale: spec.device_scale,
         };
-        if let Some((old, result)) = self.entries.get(&at) {
+        // Node indices are stored relative to the owner, which a wrapper
+        // around the root shifts as a whole.
+        let placed = |mut g: Geometry| {
+            g.panels.iter_mut().for_each(|(i, _)| *i += at);
+            g.join_nodes.iter_mut().for_each(|i| *i += at);
+            g
+        };
+        if let Some((old, result)) = self.entries.get(key) {
             if *old == input {
-                return Ok(result.clone());
+                return Ok(placed(result.clone()));
             }
         }
         let result = resolve(&input)?;
@@ -205,8 +222,8 @@ impl Cache {
         if self.entries.len() >= 256 {
             self.entries.clear();
         }
-        self.entries.insert(at, (input, result.clone()));
-        Ok(result)
+        self.entries.insert(key.clone(), (input, result.clone()));
+        Ok(placed(result))
     }
 }
 

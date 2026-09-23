@@ -1,5 +1,6 @@
 //! `.inside(..)`: a parent's interior partitioned into its children's regions.
 use std::ops::Range;
+use std::sync::Arc;
 
 use mui_geometry::{BooleanOp, Bounds, Path, RoundedRect};
 use mui_layout::{Frame, Size};
@@ -18,6 +19,7 @@ impl Walk<'_> {
         outline: &Path,
         frame: Frame,
         at: usize,
+        (key, parent): (&Arc<str>, &str),
     ) -> Result<(), SceneError> {
         let e = n.payload();
         let Some(padding) = e.inside else {
@@ -35,7 +37,7 @@ impl Walk<'_> {
                 "inside takes a vector union, not a material weld",
             ));
         }
-        let interior = self.interior(n, outline, frame, at, padding)?;
+        let interior = self.interior(n, outline, frame, (key, at), padding)?;
         let end = at + self.sizes[at];
         let Some(b) = self.flat_bounds(&interior)? else {
             self.collapse(at + 1..end);
@@ -55,15 +57,20 @@ impl Walk<'_> {
         let children: Vec<_> = n
             .children()
             .iter()
-            .filter_map(|c| {
+            .enumerate()
+            .filter_map(|(j, c)| {
                 let i = next;
                 next += self.sizes[i];
-                (!c.is_float() && c.payload().carve.is_none()).then_some((i, c))
+                (!c.is_float() && c.payload().carve.is_none()).then_some((i, c, j))
             })
             .collect();
-        let masks = self.masks(e, at, b, &children)?;
-        for ((i, child), mask) in children.into_iter().zip(masks) {
-            self.region(i, child, &interior, mask)?;
+        let masks = self.masks(e, key, b, &children)?;
+        for ((i, child, j), mask) in children.into_iter().zip(masks) {
+            // The same identity `node` gives this child when it walks it.
+            let id: Arc<str> = child
+                .key()
+                .map_or_else(|| Arc::from(format!("{parent}/{j}")), Arc::from);
+            self.region((i, &id), child, &interior, mask)?;
         }
         Ok(())
     }
@@ -75,7 +82,7 @@ impl Walk<'_> {
         n: &El,
         outline: &Path,
         frame: Frame,
-        at: usize,
+        (key, at): (&Arc<str>, usize),
         padding: f64,
     ) -> Result<Path, SceneError> {
         let e = n.payload();
@@ -108,7 +115,7 @@ impl Walk<'_> {
             inward.to.1 *= ramp.align.inward();
             if inward.from.1.max(inward.to.1) > 0. {
                 let mut band = self.borders.band(
-                    &format!("inside/{at}"),
+                    &format!("inside/{key}"),
                     outline,
                     &inward,
                     anchor,
@@ -122,9 +129,9 @@ impl Walk<'_> {
                 crate::border_ramp::decorate(&mut band, ramp, anchor, shoulder, |id| {
                     Ok(self.ramp_frames[&(at, id.clone())])
                 })?;
-                let band = self.cached_region((at, 0), Operation::Sweep(band))?;
+                let band = self.cached_region((key.clone(), 0), Operation::Sweep(band))?;
                 interior = self.cached_region(
-                    (at, 1),
+                    (key.clone(), 1),
                     Operation::Combine(interior, band, BooleanOp::Difference),
                 )?;
             }
@@ -134,11 +141,11 @@ impl Walk<'_> {
                 return Err(SceneError::InvalidRadius);
             }
             interior = self.cached_region(
-                (at, 2),
+                (key.clone(), 2),
                 Operation::Inset(interior, width * e.border_align.inward()),
             )?;
         }
-        self.cached_region((at, 3), Operation::Inset(interior, padding))
+        self.cached_region((key.clone(), 3), Operation::Inset(interior, padding))
     }
 
     /// Each child's share of the interior's bounds `b`: its own frame, or
@@ -146,13 +153,13 @@ impl Walk<'_> {
     fn masks(
         &mut self,
         e: &Element,
-        at: usize,
+        key: &Arc<str>,
         b: Bounds,
-        children: &[(usize, &El)],
+        children: &[(usize, &El, usize)],
     ) -> Result<Vec<Path>, SceneError> {
         let mut masks: Vec<Path> = children
             .iter()
-            .map(|(i, _)| {
+            .map(|(i, ..)| {
                 if self.frames[*i].size.width <= 0. || self.frames[*i].size.height <= 0. {
                     Ok(Path::default())
                 } else {
@@ -193,7 +200,7 @@ impl Walk<'_> {
             .bend(e.bend);
         for (side, mask) in masks.iter_mut().enumerate() {
             *mask = self.cached_region(
-                (at, 4 + side as u8),
+                (key.clone(), 4 + side as u8),
                 Operation::SplitMask(b, split, side == 1),
             )?;
         }
@@ -204,13 +211,13 @@ impl Walk<'_> {
     /// draws outward. The child is laid out again inside the region.
     fn region(
         &mut self,
-        i: usize,
+        (i, id): (usize, &Arc<str>),
         child: &El,
         interior: &Path,
         mask: Path,
     ) -> Result<(), SceneError> {
         let path = self.cached_region(
-            (i, 6),
+            (id.clone(), 6),
             Operation::Combine(interior.clone(), mask, BooleanOp::Intersection),
         )?;
         // A child's outward border belongs inside its allocation too. Reserve
@@ -237,15 +244,15 @@ impl Walk<'_> {
                 sweep.from.1 *= outward;
                 sweep.to.1 *= outward;
                 let band = self.borders.band(
-                    &format!("outside/{i}"),
+                    &format!("outside/{id}"),
                     &path,
                     &sweep,
                     anchor,
                     0.1 / self.spec.device_scale.unwrap_or(1.),
                 )?;
-                let band = self.cached_region((i, 8), Operation::Sweep(band))?;
+                let band = self.cached_region((id.clone(), 8), Operation::Sweep(band))?;
                 path = self.cached_region(
-                    (i, 9),
+                    (id.clone(), 9),
                     Operation::Combine(path, band, BooleanOp::Difference),
                 )?;
             }
@@ -256,7 +263,7 @@ impl Walk<'_> {
             }
             let outward = width * (1. - child.payload().border_align.inward());
             if outward > 0. {
-                path = self.cached_region((i, 9), Operation::Inset(path, outward))?;
+                path = self.cached_region((id.clone(), 9), Operation::Inset(path, outward))?;
             }
         }
         let end = i + self.sizes[i];
@@ -316,7 +323,7 @@ impl Walk<'_> {
     /// Region geometry for step `key`, reused while its inputs match.
     pub(super) fn cached_region(
         &mut self,
-        key: (usize, u8),
+        key: (Arc<str>, u8),
         op: Operation,
     ) -> Result<Path, SceneError> {
         self.region_cache

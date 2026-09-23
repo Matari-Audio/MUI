@@ -58,11 +58,16 @@ impl<'a> Walk<'a> {
             None => self.outline(n, frame, self.i)?,
         };
 
-        self.partition(n, &contour.path, frame, at)?;
+        self.partition(n, &contour.path, frame, at, (&key, path.as_str()))?;
         if e.surface_padding.is_some() {
-            let geometry =
-                self.surface_cache
-                    .resolve(n, at, &self.frames, &contour.path, self.spec)?;
+            let geometry = self.surface_cache.resolve(
+                n,
+                (&key, at),
+                &self.frames,
+                &contour.path,
+                self.spec,
+                self.region_cache,
+            )?;
             self.regions.extend(geometry.panels);
             self.joined_nodes.extend(geometry.join_nodes);
             self.surface_joins.insert(at, geometry.joins);

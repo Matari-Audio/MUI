@@ -5,7 +5,7 @@ use mui_geometry::{inset_path, BooleanOp, Bounds, Path, Point, RoundedRect};
 use super::outline::Contour;
 use super::{find, Layer, Painted, SceneError, Walk};
 use crate::material_weld::MaterialWeld;
-use crate::regions::Operation;
+use crate::regions::{Operation, STROKE_BAND};
 use crate::{BorderRamp, Color, Content, El, Element, Fill, Paint, Radius, Shadow, ShadowKind};
 use crate::{Stroke, Style};
 
@@ -240,14 +240,11 @@ impl Walk<'_> {
             }
             return Ok(None);
         }
-        let band = mui_geometry::border_geometry(
-            &contour.path,
-            mui_geometry::WidthProfile::uniform(w),
-            e.border_align,
-            self.spec.offsets,
-            self.spec.geometry,
-        )?
-        .band;
+        // Shared with a surface owner's clearance: one entry per node.
+        let band = self.cached_region(
+            (self.key.clone(), STROKE_BAND),
+            Operation::Border(contour.path.clone(), w, e.border_align),
+        )?;
         Ok(Some((band, None, st.fill.clone(), 0.)))
     }
 
@@ -308,7 +305,7 @@ impl Walk<'_> {
             band.commands.extend(joins.commands.iter().cloned());
         }
         if ramp.align == crate::BorderAlign::Outside {
-            let merged = self.cached_region((at, 7), Operation::Sweep(band))?;
+            let merged = self.cached_region((self.key.clone(), 7), Operation::Sweep(band))?;
             band = mui_geometry::boolean_paths(
                 &merged,
                 &contour.path,

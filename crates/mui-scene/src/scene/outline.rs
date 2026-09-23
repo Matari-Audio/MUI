@@ -232,8 +232,11 @@ impl Walk<'_> {
     /// Every input `n`'s outline depends on, as words compared in full.
     /// `false` when a custom outline is involved; see [`geometry_shallow`].
     fn geometry_key(&self, n: &El, first: usize, key: &mut Vec<u64>) -> bool {
+        use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher};
         key.clear();
-        key.push(first as u64);
+        // Identity is the node's key, not its pre-order index: a tooltip or
+        // menu wrapping the root shifts every index but no key or geometry.
+        key.push(BuildHasherDefault::<DefaultHasher>::default().hash_one(n.key()));
         for value in [
             self.spec.theme.corners.selector,
             self.spec.theme.corners.field,

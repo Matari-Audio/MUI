@@ -212,3 +212,67 @@ fn an_attached_footer_does_not_pull_panels_past_the_body_inset() {
         }
     }
 }
+
+/// A stroked weld owner: path outline, no analytic rect, uniform border.
+fn stroked_weld() -> El {
+    row![
+        leaf(24., 24.)
+            .radius(0.)
+            .align_self(Align::Center)
+            .id("port"),
+        stack![leaf(180., 80.).inset_surface().fill(Field).id("panel")]
+            .radius(0.)
+            .id("module"),
+    ]
+    .gap(0.)
+    .union(Surface)
+    .radius((16., 10.))
+    .stroke(Dim)
+    .stroke_width(1.5)
+    .surface_layout(8.)
+    .id("owner")
+}
+
+#[test]
+fn steady_and_tooltip_frames_run_no_boolean_pass() {
+    for root in [card(24.), stroked_weld()] {
+        let mut cache = TextCache::default();
+        let cold = resolve_scene_with(&SceneSpec::new(root.clone()), &mut cache).unwrap();
+        let passes = mui_geometry::boolean_passes();
+        let steady = resolve_scene_with(&SceneSpec::new(root.clone()), &mut cache).unwrap();
+        assert_eq!(
+            mui_geometry::boolean_passes(),
+            passes,
+            "a steady frame reuses every surface, border and weld band"
+        );
+        // `Ui::frame` wraps the root like this while a tooltip shows: every
+        // pre-order index shifts, but no node's identity or geometry does.
+        let anchor = root.key().unwrap().to_owned();
+        let tip = overlay([
+            root,
+            leaf(40., 16.)
+                .fill(Raised)
+                .pin(Pin::to(anchor).area(Area::BottomStart))
+                .id("tip"),
+        ]);
+        let tipped = resolve_scene_with(&SceneSpec::new(tip), &mut cache).unwrap();
+        assert_eq!(
+            mui_geometry::boolean_passes(),
+            passes,
+            "a tooltip must not invalidate surface caches"
+        );
+        for scene in [&steady, &tipped] {
+            for p in &cold.paint {
+                assert!(
+                    scene
+                        .paint
+                        .iter()
+                        .any(|q| q.key == p.key && q.layer == p.layer && q.path == p.path),
+                    "{} {:?} changed",
+                    p.key,
+                    p.layer
+                );
+            }
+        }
+    }
+}

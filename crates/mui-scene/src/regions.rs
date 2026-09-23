@@ -48,20 +48,27 @@ pub(crate) enum Operation {
     /// A nonzero sweep consists of overlapping solid pieces, not even-odd holes.
     Sweep(Path),
     SplitMask(Bounds, ShapeSplit, bool),
+    /// The band of a uniform stroke on a path outline.
+    Border(Path, f64, BorderAlign),
 }
+/// Region-cache slots a node's own stroke and ramp borders share.
+pub(crate) const STROKE_BAND: u8 = 10;
+pub(crate) const RAMP_BAND: u8 = 11;
 type Entry = (Operation, OffsetOptions, GeometryOptions, Path, u64);
-/// Region geometry per (pre-order index, step). An entry is reused only when
-/// its whole input compares equal, and dropped by the first resolve that
-/// does not use it.
+/// Region geometry per (node identity, step). Keyed by identity, not
+/// pre-order index: a tooltip or menu wrapping the root shifts every index
+/// but leaves keys and geometry untouched. An entry is reused only when its
+/// whole input compares equal, and dropped by the first resolve that does
+/// not use it.
 #[derive(Debug, Default)]
 pub(crate) struct RegionCache {
-    entries: std::collections::HashMap<(usize, u8), Entry>,
+    entries: std::collections::HashMap<(std::sync::Arc<str>, u8), Entry>,
     generation: u64,
 }
 impl RegionCache {
     pub(crate) fn resolve(
         &mut self,
-        key: (usize, u8),
+        key: (std::sync::Arc<str>, u8),
         op: Operation,
         o: OffsetOptions,
         g: GeometryOptions,
@@ -77,6 +84,16 @@ impl RegionCache {
             Operation::Combine(a, b, op) => boolean_paths(a, b, *op, o, g)?,
             Operation::Sweep(p) => union_contours(p, o, g)?,
             Operation::SplitMask(bounds, split, second) => split.mask(*bounds, *second, o)?,
+            Operation::Border(p, width, align) => {
+                mui_geometry::border_geometry(
+                    p,
+                    mui_geometry::WidthProfile::uniform(*width),
+                    *align,
+                    o,
+                    g,
+                )?
+                .band
+            }
         };
         self.entries
             .insert(key, (op, o, g, path.clone(), self.generation));
