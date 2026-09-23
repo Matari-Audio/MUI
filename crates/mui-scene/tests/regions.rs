@@ -113,11 +113,12 @@ fn curved_split_has_a_real_gap_and_reverses_direction() {
 }
 #[test]
 fn holes_survive_and_consumed_regions_disappear() {
+    // Wound against the octagon: outlines fill NonZero, like the renderer.
     let ring = |s: Size| {
         let mut p = octagon(s);
         p.commands.extend(
             Path::polyline(
-                [(70., 50.), (130., 50.), (130., 110.), (70., 110.)].map(|(x, y)| Point::new(x, y)),
+                [(70., 50.), (70., 110.), (130., 110.), (130., 50.)].map(|(x, y)| Point::new(x, y)),
                 true,
             )
             .commands,
