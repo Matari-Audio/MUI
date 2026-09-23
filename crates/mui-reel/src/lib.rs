@@ -419,7 +419,7 @@ impl Reel {
             .into_iter()
             .map(Sink::finish)
             .collect::<Result<Vec<_>, _>>()?;
-        files.extend(["track.json".into(), "mui-track.js".into()]);
+        files.extend(["track.json".into(), "track.js".into(), "mui-track.js".into()]);
         if has_audio {
             std::fs::write(dir.join("audio.wav"), wav(&samples, self.rate))?;
             files.push("audio.wav".into());
@@ -439,6 +439,12 @@ impl Reel {
         let track_json = serde_json::to_string(&track)?;
         std::fs::write(dir.join("track.json"), &track_json)?;
         std::fs::write(dir.join("mui-track.js"), MUI_TRACK_JS)?;
+        // The same track as a classic script, for a composition that must
+        // not fetch at render time: `<script src="take/track.js">`.
+        std::fs::write(
+            dir.join("track.js"),
+            format!("window.MUI_TRACK_DATA = {track_json};\n"),
+        )?;
         let frames = track["frames"].as_u64().unwrap_or(0);
         let duration = frames as f64 / f64::from(self.fps);
         if ffmpeg {
