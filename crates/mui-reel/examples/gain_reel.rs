@@ -3,7 +3,9 @@
 //!     cargo run -p mui-reel --example gain_reel -- /tmp/gain-reel [--master]
 //!
 //! `--master` adds a ProRes 4444 `take.mov` and writes the layers as ProRes
-//! with alpha instead of VP9 WebM.
+//! with alpha instead of VP9 WebM. `--stage` shoots the card on the GPU as a
+//! lit 3D slab over a shader background, with bloom and film grain
+//! (`mui-stage`); the alpha layers and track stay the flat 2D ones.
 //!
 //! The editor is the gain plugin's tree (`examples/gain-plugin`) plus a tone
 //! slider and a preset button, built from the stock widgets. The DSP is a
@@ -66,6 +68,7 @@ fn editor(ui: &mut Ui, m: &mut Gain) -> El {
     .radius(20.0)
     .fill(Surface)
     .shadow(Shadow::soft(16.0))
+    .id("card")
     .anchor(Align::Center, Align::Center);
     // Square: a filled node takes the theme radius, and a take has no window corners.
     overlay([card]).fill(Background).radius(0.0)
@@ -139,13 +142,67 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         gate: false,
         peak: 0.0,
     };
-    let manifest = reel.render(
+    let mut stage = if std::env::args().any(|a| a == "--stage") {
+        let (w, h) = reel.pixels();
+        Some(mui_stage::Stage::new(w.into(), h.into())?)
+    } else {
+        None
+    };
+    let staged = stage.is_some();
+    let bpm = 116.0;
+    let mut look = |scene: &mui::scene::ResolvedScene, t: f64| {
+        let stage = stage.as_mut().expect("look only runs with --stage");
+        stage.layer(
+            "card",
+            &scene.isolate(&["card"])?,
+            Size::new(640.0, 360.0),
+            3.0,
+        )?;
+        let outline = scene.surface("card").map(|s| s.path.clone());
+        Ok(stage
+            .render(t, 0.0, 1, &|t| shot(t * bpm / 60.0, outline.clone()))?
+            .rgba8())
+    };
+    let look: Option<mui_reel::Look> = staged.then_some(&mut look as _);
+    let manifest = reel.render_through(
         &script,
         std::path::Path::new(&out),
         &mut model,
         editor,
         Some(&mut dsp),
+        look,
     )?;
     println!("{}", serde_json::to_string_pretty(&manifest)?);
     Ok(())
+}
+
+/// The 3D move, in beats: in from a low three-quarter angle, square to the
+/// lens for the knob drag, then a slow drift while the tone plays.
+fn shot(beat: f64, outline: Option<std::sync::Arc<mui::geometry::Path>>) -> mui_stage::Shot {
+    use mui_stage::{Camera, Plane, Post, Shot};
+    let arrive = Keys::new(0.0).to(2.0, 1.0, Ease::EMPHASIZED).at(beat) as f32;
+    let drift = Keys::new(0.0)
+        .hold(5.0)
+        .to(12.0, 1.0, Ease::IN_OUT)
+        .at(beat) as f32;
+    let mut cam = Camera::front(360.0, 35.0)
+        .orbit(
+            -28.0 * (1.0 - arrive) + 10.0 * drift,
+            -12.0 * (1.0 - arrive) + 5.0 * drift,
+        )
+        .dolly(0.25 * (1.0 - arrive) - 0.08 * drift);
+    cam.roll = -2.0 * (1.0 - arrive);
+    let mut card = Plane::new("card", 640.0, 360.0)
+        .depth(16.0)
+        .edge([0.1, 0.07, 0.25])
+        .glow(1.2);
+    card.outline = outline;
+    Shot {
+        planes: vec![card],
+        post: Post {
+            bloom: 0.7,
+            ..Post::default()
+        },
+        ..Shot::new(cam)
+    }
 }

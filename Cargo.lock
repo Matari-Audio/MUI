@@ -1941,6 +1941,7 @@ version = "0.3.2"
 dependencies = [
  "epaint_default_fonts",
  "mui",
+ "mui-stage",
  "png 0.17.16",
  "serde_json",
 ]

@@ -260,6 +260,9 @@ impl<S> Script<S> {
     }
 }
 
+/// Draws the take's picture for [`Reel::render_through`]: the subframe's
+/// scene and its absolute time in, `Reel::pixels()` RGBA out.
+pub type Look<'a> = &'a mut dyn FnMut(&mui::scene::ResolvedScene, f64) -> Result<Vec<u8>, Error>;
 /// The per-frame audio callback: the model, this frame's events, and exactly
 /// this frame's samples to fill (stereo, silence on entry).
 pub type Audio<'a, S> = &'a mut dyn FnMut(&mut S, &[ReelEvent], &mut [[f32; 2]]);
@@ -387,6 +390,24 @@ impl Reel {
         build: impl FnMut(&mut Ui, &mut S) -> El,
         audio: Option<Audio<'_, S>>,
     ) -> Result<Value, Error> {
+        self.render_through(script, dir, state, build, audio, None)
+    }
+
+    /// [`Reel::render`], with the take's pictures drawn by `look` instead of
+    /// the CPU rasteriser: `mui-stage` puts the scripted UI on a 3D slab.
+    /// It gets every subframe's scene and absolute time and returns
+    /// `pixels()`-sized RGBA; the reel still averages the subframes, writes
+    /// alpha layers on the CPU, and records the 2D track. The cursor is the
+    /// look's to draw.
+    pub fn render_through<S>(
+        &self,
+        script: &Script<S>,
+        dir: &Path,
+        state: &mut S,
+        build: impl FnMut(&mut Ui, &mut S) -> El,
+        audio: Option<Audio<'_, S>>,
+        mut look: Option<Look<'_>>,
+    ) -> Result<Value, Error> {
         std::fs::create_dir_all(dir)?;
         let ffmpeg = self.encode
             && Command::new("ffmpeg")
@@ -426,7 +447,7 @@ impl Reel {
             .collect::<Result<Vec<_>, _>>()?;
         let mut samples = Vec::new();
         let has_audio = audio.is_some();
-        let track = self.run(script, state, build, audio, &mut |shot| {
+        let track = self.run(script, state, build, audio, &mut look, &mut |shot| {
             take.write(&shot.rgba)?;
             if let Some(m) = &mut master {
                 m.write(&shot.rgba)?;
@@ -539,6 +560,7 @@ impl Reel {
         state: &mut S,
         mut build: impl FnMut(&mut Ui, &mut S) -> El,
         mut audio: Option<Audio<'_, S>>,
+        look: &mut Option<Look<'_>>,
         out: &mut dyn FnMut(Shot) -> Result<(), Error>,
     ) -> Result<Value, Error> {
         if self.fps == 0 || !(self.scale.is_finite() && self.scale > 0.0) {
@@ -715,8 +737,20 @@ impl Reel {
                     .then_some(pos)
                     .flatten()
                     .map(|p| (to_device(view, p), down));
-                let mut shots =
-                    vec![raster.draw(frame.scene, view, cursor.map(|c| (c, self.scale)))?];
+                let mut shots = vec![match look {
+                    Some(look) => {
+                        let rgba = look(frame.scene, t)?;
+                        if rgba.len() != usize::from(w) * usize::from(h) * 4 {
+                            return Err(format!(
+                                "the look returned {} bytes, not {w}x{h} RGBA",
+                                rgba.len()
+                            )
+                            .into());
+                        }
+                        rgba
+                    }
+                    None => raster.draw(frame.scene, view, cursor.map(|c| (c, self.scale)))?,
+                }];
                 if !script.layers.is_empty() {
                     let ids: Vec<&str> = script.layers.iter().map(String::as_str).collect();
                     for id in &ids {
