@@ -1315,7 +1315,10 @@ impl Ui {
         );
         let mut animating = transitions(root, &mut path, &pal, &mut self.motion, dt);
         for (_, s) in self.tweens.values_mut() {
-            animating |= s.step(dt);
+            // The tree already drew the value before this step: a step that
+            // snaps onto the target still owes the frame that shows it.
+            let drawn = s.value;
+            animating |= s.step(dt) || s.value != drawn;
         }
         let springs = &self.springs;
         let scrolls = &self.scrolls;

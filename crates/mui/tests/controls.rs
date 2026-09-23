@@ -123,6 +123,50 @@ fn a_slider_takes_a_track_press_and_drags_across_its_width() {
     assert!((v - 0.75).abs() < 0.02, "the drag spans the lane: {v}");
 }
 
+/// A value set from outside glides the thumb over; the value itself,
+/// and what the slider reports, are exact from the first frame.
+#[test]
+fn a_slider_thumb_glides_to_a_value_set_from_outside() {
+    let mut ui = Ui::new(Theme::DEFAULT);
+    let frame = |ui: &mut Ui, mut v: f64| {
+        let (fader, changed) = slider(ui, "s", "S", &mut v, 0.0..=1.0);
+        assert!(!changed && (v == 0.0 || v == 1.0), "the value is untouched");
+        let tree = column([fader.el()]).width(400.);
+        let animating = ui
+            .frame(tree, None, Input::default(), 0.016)
+            .unwrap()
+            .animating;
+        let scene = ui.scene().unwrap();
+        let lane = scene.surface("s").unwrap().frame;
+        let grip = lane.size.height * 0.35 / 0.45;
+        let thumb = scene
+            .surfaces()
+            .find(|s| (s.frame.size.width - grip).abs() < 1e-6 && s.frame.y >= lane.y)
+            .expect("the thumb")
+            .frame;
+        ((thumb.x - lane.x) / (lane.size.width - grip), animating)
+    };
+    assert_eq!(frame(&mut ui, 0.0).0, 0.0);
+    // The tree is built before the frame steps its tween: one frame late.
+    assert!(frame(&mut ui, 1.0).1);
+    let (mid, animating) = frame(&mut ui, 1.0);
+    assert!(
+        animating && 0.0 < mid && mid < 1.0,
+        "between the ends: {mid}"
+    );
+    let mut prev = mid;
+    for _ in 0..100 {
+        let (t, animating) = frame(&mut ui, 1.0);
+        assert!(t >= prev - 1e-9, "went back: {t} after {prev}");
+        prev = t;
+        if !animating {
+            assert!((t - 1.0).abs() < 1e-9, "lands on the value: {t}");
+            return;
+        }
+    }
+    panic!("never settled");
+}
+
 /// Every widget hands back what happened with its element: a key that edits
 /// the field says changed, a key that only moves the caret does not, and an
 /// arrow on a focused slider does.

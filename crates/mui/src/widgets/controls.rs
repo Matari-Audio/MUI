@@ -315,7 +315,8 @@ const LANE: f64 = 0.45;
 ///
 /// The whole lane is the target: a press on the track jumps the value there
 /// and the drag carries on from it, a full-width drag sweeps the full range,
-/// and a focused slider steps with the arrow keys. Call `Ui::edit` with the
+/// and a focused slider steps with the arrow keys. As on a [`knob`], the
+/// drawn thumb follows a tween, so a value set from outside glides. Call `Ui::edit` with the
 /// same id to bracket the gesture for a host's automation: `Begin` on the
 /// press, `End` on the release.
 ///
@@ -359,7 +360,9 @@ pub fn slider(
     ui.drag(&id, value, range.clone(), travel, false);
     stepped(ui, &id, value, &range);
     let changed = moved(before, *value);
-    let t = unit(*value, &range);
+    // The drawn thumb glides like a knob's pointer; the value, the readout
+    // and the grab test above stay exact.
+    let t = ui.tween_with(&id, unit(*value, &range), Spring::new(0.12, 1.0));
     let (label, value) = (label.to_owned(), *value);
     let (min, max) = (*range.start(), *range.end());
     let control = Control::new(ui, move |look| {
