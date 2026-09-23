@@ -69,17 +69,15 @@ pub struct Text {
     pub origin: Point,
     /// Shaped glyph id, x/y offset and face index from the origin.
     pub glyphs: Arc<[TextGlyph]>,
-    /// The axis settings the run was shaped at; `coords` is the same thing
-    /// in the form a glyph cache wants, and [`ResolvedScene::set_text`]
-    /// re-shapes from this one.
+    /// The axis settings the run was shaped at; `font_coords` is the same
+    /// thing in the form a glyph cache wants, and
+    /// [`ResolvedScene::set_text`] re-shapes from this one.
     pub axes: Axes,
-    /// The face's normalized axis coordinates this run was measured at, from
-    /// [`mui_text::normalized_coords`]. Empty for a static face. A renderer
-    /// with its own glyph cache has to pass these on, or it paints the
-    /// default instance under a bold run's advances.
-    pub coords: Arc<[i16]>,
-    /// Per-face normalized coordinates. `coords` remains the primary face's
-    /// value for callers that only know about one font.
+    /// Each face's normalized axis coordinates this run was measured at,
+    /// indexed like [`Self::fonts`], from [`mui_text::normalized_coords`].
+    /// Empty for a static face. A renderer with its own glyph cache has to
+    /// pass these on, or it paints the default instance under a bold run's
+    /// advances.
     pub font_coords: Arc<[Arc<[i16]>]>,
     /// Whether a renderer should hint this run. Off for the frame after its
     /// axes moved: a glyph mid-morph gains nothing from stem snapping and
@@ -93,7 +91,9 @@ pub struct Text {
 pub struct Painted {
     pub key: Arc<str>,
     pub layer: Layer,
-    pub path: Path,
+    /// Shared with the node's surface and every other layer drawn along the
+    /// same outline, so a filled, clipped node holds one path.
+    pub path: Arc<Path>,
     pub paint: Paint,
     /// Analytic form when the path is a plain rounded rectangle: a renderer
     /// with a fast path (blurred rects, say) can take it.
@@ -114,7 +114,7 @@ pub struct Painted {
 pub struct ResolvedSurface {
     pub key: Arc<str>,
     pub frame: Frame,
-    pub path: Path,
+    pub path: Arc<Path>,
     pub bounds: Option<Bounds>,
     /// Exact rounded rectangle when the outline is one (not welded).
     pub rect: Option<RoundedRect>,
@@ -145,8 +145,9 @@ pub struct ResolvedSurface {
     /// The clipping ancestors' outlines, cached during scene resolution from
     /// outermost to innermost. This is the path counterpart to [`Self::clip`];
     /// it avoids making every pointer query tessellate a rounded or welded
-    /// clip and preserves every nested clip boundary.
-    pub clip_path: Option<Arc<[Path]>>,
+    /// clip and preserves every nested clip boundary. Each path is the
+    /// clipping ancestor's own outline, shared, not a copy.
+    pub clip_path: Option<Arc<[Arc<Path>]>>,
     /// Nearest explicitly named ancestor in the authored tree, not a containing
     /// rectangle. A floating node keeps this parent even when it escapes clipping.
     pub parent: Option<Arc<str>>,
@@ -156,12 +157,12 @@ pub struct ResolvedSurface {
     /// The tagged shapes a `canvas` drew, in scene space. Non-empty means
     /// *these* are the surface's hit geometry, not its outline: the pointer
     /// outside all of them is outside the node. See [`Draw::tag`](crate::Draw::tag).
-    pub hits: Vec<(Arc<str>, Path)>,
+    pub hits: Vec<(Arc<str>, Arc<Path>)>,
 }
 impl ResolvedSurface {
     /// Borrow the cached clip outlines without exposing their shared
     /// allocation. Paths are ordered outermost to innermost.
-    pub fn clip_paths(&self) -> Option<&[Path]> {
+    pub fn clip_paths(&self) -> Option<&[Arc<Path>]> {
         self.clip_path.as_deref()
     }
 }

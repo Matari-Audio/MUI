@@ -426,7 +426,7 @@ pub fn resolve_cached_with<P>(
         return Err(Error::InvalidValue);
     }
     cache.prepare(root, limits, scale, &mut key)?;
-    super::resolve_impl(root, offered, limits, scale, measurer, Some(cache))
+    super::resolve_impl(root, offered, limits, scale, measurer, Some(cache), None)
 }
 /// Hook around the ORIGINAL measure implementation. Re-measure requests under
 /// different flex constraints receive different keys, including room/container.

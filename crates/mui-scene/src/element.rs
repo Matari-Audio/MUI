@@ -221,8 +221,12 @@ impl Semantics {
 /// A node's own local outline. It is used for painting, clipping and input, not
 /// merely drawn on top of a rectangular hit target. Its callback is evaluated at
 /// the layout size; it must return closed, consistently wound contours.
+///
+/// `Send + Sync` so a weld's cached outline can hold it by identity: the
+/// same `Outline` at the same size is the same shape, and reusing the node
+/// across frames skips the boolean.
 #[derive(Clone)]
-pub struct Outline(pub Arc<dyn Fn(Size) -> Path>);
+pub struct Outline(pub Arc<dyn Fn(Size) -> Path + Send + Sync>);
 impl std::fmt::Debug for Outline {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("Outline(..)")
@@ -711,7 +715,7 @@ pub trait Styled: Paints {
     }
     /// A custom closed shape in local logical units. Use opposite contour
     /// winding for holes. The shape becomes paint, clip and hit geometry.
-    fn outline(mut self, shape: impl Fn(Size) -> Path + 'static) -> Self {
+    fn outline(mut self, shape: impl Fn(Size) -> Path + Send + Sync + 'static) -> Self {
         self.element_mut().outline = Some(Outline(Arc::new(shape)));
         self
     }

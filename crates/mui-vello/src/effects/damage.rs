@@ -286,7 +286,8 @@ mod tests {
         extra.path = extra
             .path
             .rigid_transform(Point::new(300., 0.), 0.)
-            .unwrap();
+            .unwrap()
+            .into();
         after.paint.push(extra);
         let mut tracker = DamageTracker::default();
         tracker.commit(&before, Affine::IDENTITY);
@@ -344,7 +345,7 @@ mod tests {
         let paint = Painted {
             key: "readout".into(),
             layer: Layer::Text,
-            path: Path::default(),
+            path: Path::default().into(),
             paint: Paint::Solid(Color::oklch(0.8, 0., 0.)),
             rect: None,
             width: 0.,
@@ -365,7 +366,6 @@ mod tests {
                 ),
                 axes: Default::default(),
                 hint: true,
-                coords: Arc::from(&[][..]),
                 font_coords: Arc::from(&[][..]),
             }),
         };

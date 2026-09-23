@@ -237,6 +237,9 @@ pub(crate) struct Pass<'a, 'f, P> {
     pub(crate) pinned: bool,
     pub(crate) measurer: &'f mut dyn FnMut(&P, Option<f64>) -> Size,
     pub(crate) cache: Option<&'f mut LayoutCache>,
+    /// The root's padding when its box is given rather than declared; see
+    /// [`resolve_boxed_with`]. Taken by the first node measured, the root.
+    pub(crate) boxed: Option<Insets>,
 }
 
 /// `room` is the narrowest definite inner width above this node (a grid
@@ -258,13 +261,15 @@ pub(crate) fn measure_uncached<'a, P>(
         return Err(Error::BudgetExceeded);
     }
     pass.pinned |= node.pin.is_some();
+    let boxed = pass.boxed.take();
     // The node budget counts nodes: a re-measure at the final share visits a
     // subtree again but adds nothing to the tree.
     if !pass.redo {
         pass.left -= 1;
     }
     validate_node(node, l)?;
-    let (gap, padding) = (node.gap.resolve(pass.scale), node.padding(pass.scale));
+    let padding = boxed.unwrap_or_else(|| node.padding(pass.scale));
+    let gap = node.gap.resolve(pass.scale);
     if !(gap.is_finite() && (0.0..=l.extent).contains(&gap) && padding.valid(l.extent)) {
         return Err(Error::InvalidValue);
     }
@@ -290,8 +295,12 @@ pub(crate) fn measure_uncached<'a, P>(
         .width
         .px()
         .filter(|_| !(pass.redo && (node.grow > 0.0 || node.shrink > 0.0)));
-    let mut definite = [flex_width.or(definite[0]), node.height.px().or(definite[1])];
-    if let Some(a) = node.aspect {
+    // A given box is the offered size on both axes, whatever the node says.
+    let mut definite = match boxed {
+        Some(_) => definite,
+        None => [flex_width.or(definite[0]), node.height.px().or(definite[1])],
+    };
+    if let Some(a) = node.aspect.filter(|_| boxed.is_none()) {
         match (definite, node.height, node.width) {
             ([Some(w), _], Len::Auto, _) => definite[1] = Some(w / a),
             ([None, Some(h)], _, Len::Auto) => definite[0] = Some(h * a),
@@ -578,8 +587,14 @@ pub(crate) fn measure_uncached<'a, P>(
     };
     // A size the node declares itself is also its floor: `.size(10., 10.).pad(6.)`
     // is a 10x10 box with no room inside, not a layout error.
-    let cap = |f: f64, l: Len| l.px().map_or(f, |v| f.min(v));
-    let floor = Size::new(cap(floor.width, node.width), cap(floor.height, node.height));
+    let cap = |f: f64, l: Len, given: Option<f64>| {
+        let own = if boxed.is_some() { given } else { l.px() };
+        own.map_or(f, |v| f.min(v))
+    };
+    let floor = Size::new(
+        cap(floor.width, node.width, definite[0]),
+        cap(floor.height, node.height, definite[1]),
+    );
     if !size.valid(l.extent) {
         return Err(Error::BudgetExceeded);
     }

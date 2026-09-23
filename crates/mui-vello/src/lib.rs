@@ -329,16 +329,7 @@ macro_rules! wrapper {
                     continue;
                 };
                 let font = self.cache.font(face);
-                let coords = text.font_coords.get(font_index).map_or_else(
-                    || {
-                        if font_index == 0 {
-                            text.coords.as_ref()
-                        } else {
-                            &[]
-                        }
-                    },
-                    |coords| coords.as_ref(),
-                );
+                let coords = text.font_coords.get(font_index).map_or(&[][..], |c| &c[..]);
                 self.$inner
                     .glyph_run(self.resources, &font)
                     .font_size(text.size)
@@ -797,7 +788,7 @@ mod seam {
         let mut p = Painted {
             key: "t".into(),
             layer: Layer::Text,
-            path: Path::default(),
+            path: Path::default().into(),
             paint: Paint::Solid(mui_scene::Color::oklch(0.5, 0., 0.)),
             rect: None,
             width: 0.,
@@ -826,7 +817,6 @@ mod seam {
                 ),
                 axes: Default::default(),
                 hint: true,
-                coords: Arc::from(&[][..]),
                 font_coords: Arc::from(&[][..]),
             }),
         };

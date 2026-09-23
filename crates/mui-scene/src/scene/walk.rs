@@ -7,11 +7,13 @@ use mui_layout::{Frame, Size};
 
 use super::outline::Contour;
 use super::text::Face;
-use super::{bounds, snap, Ancestors, Deferred, Layer, ResolvedSurface, SceneError, Text, Walk};
+use super::{
+    bounds, empty, snap, Ancestors, Deferred, Layer, ResolvedSurface, SceneError, Text, Walk,
+};
 use crate::{Color, Content, El, Element, Fill, Mix, ShadowKind};
 
 /// A canvas's tagged draws: the surface's hit shapes.
-type Hits = Vec<(Arc<str>, Path)>;
+type Hits = Vec<(Arc<str>, Arc<Path>)>;
 
 impl<'a> Walk<'a> {
     pub(super) fn node<'n: 'a>(
@@ -30,9 +32,7 @@ impl<'a> Walk<'a> {
             self.i = at + self.sizes[at];
             return Ok(());
         }
-        // ponytail: one `Arc<str>` per node per frame, cloned four times
-        // instead of four heap copies; interning across frames is the upgrade.
-        let key: Arc<str> = n.key().map_or_else(|| Arc::from(path.as_str()), Arc::from);
+        let key = self.intern(n.key().unwrap_or(path));
         let e = n.payload();
         let s = &e.style;
         let mut inner = ancestors.clone();
@@ -69,7 +69,7 @@ impl<'a> Walk<'a> {
             _ => None,
         };
         if let Some((mix, opacity)) = blended {
-            self.mark(Layer::Blend { mix, opacity }, Path::default(), None);
+            self.mark(Layer::Blend { mix, opacity }, empty(), None);
         }
         for sh in s.shadow.iter().filter(|sh| sh.kind == ShadowKind::Drop) {
             self.shadow(sh, &contour, under)?;
@@ -106,8 +106,7 @@ impl<'a> Walk<'a> {
                 Some(r) => Some(r.bounds()),
                 None => Bounds::from_points(contour.path.flatten(0.5, 100_000)?.concat()),
             },
-            // Filled in at the end of this node, from the outline itself.
-            path: Path::default(),
+            path: contour.path.clone(),
             rect: contour.rect,
             topology_changed: contour.changed,
             cursor: inner.cursor,
@@ -145,7 +144,7 @@ impl<'a> Walk<'a> {
         // left the key at.
         self.key = key;
         if clips {
-            self.mark(Layer::Unclip, Path::default(), None);
+            self.mark(Layer::Unclip, empty(), None);
         }
         if let Some((stroke_path, stroke_rect, fill, width)) = late_stroke {
             if let Some(p) = self.push(Layer::Stroke, stroke_path, stroke_rect, &fill, bg) {
@@ -174,13 +173,11 @@ impl<'a> Walk<'a> {
             if masked {
                 self.push(Layer::Mask, contour.path.clone(), contour.rect, &s.mask, bg);
             }
-            self.mark(Layer::Unblend, Path::default(), None);
+            self.mark(Layer::Unblend, empty(), None);
         }
         if enveloped {
-            self.mark(Layer::Unclip, Path::default(), None);
+            self.mark(Layer::Unclip, empty(), None);
         }
-        // The outline's last use, so the surface takes it instead of a copy.
-        self.surfaces[surface].path = contour.path;
         Ok(())
     }
 
@@ -209,7 +206,7 @@ impl<'a> Walk<'a> {
             Content::Canvas(c) => {
                 let origin = Point::new(frame.x, frame.y);
                 for (k, d) in (c.0)(frame.size).iter().enumerate() {
-                    let moved = d.path.rigid_transform(origin, 0.0)?;
+                    let moved = Arc::new(d.path.rigid_transform(origin, 0.0)?);
                     if let Some(tag) = &d.tag {
                         hits.push((Arc::clone(tag), moved.clone()));
                     }
@@ -221,7 +218,7 @@ impl<'a> Walk<'a> {
             Content::None => {}
         }
         if shaped {
-            self.mark(Layer::Unclip, Path::default(), None);
+            self.mark(Layer::Unclip, empty(), None);
         }
         Ok(hits)
     }
@@ -247,10 +244,6 @@ impl<'a> Walk<'a> {
         let lines = self.runs.lines(t, face, frame.size.width, e.lines);
         let fonts = self.runs.fonts_for(face);
         let font_coords = self.runs.coords(&fonts, face);
-        let coords = font_coords
-            .first()
-            .cloned()
-            .unwrap_or_else(|| Arc::from(&[][..]));
         let hint = self.runs.settled(key, &font_coords);
         let n = lines.len();
         let base = self.base_y;
@@ -289,11 +282,10 @@ impl<'a> Walk<'a> {
                 origin,
                 glyphs: run.glyphs.clone(),
                 axes: e.axes.clone(),
-                coords: coords.clone(),
                 font_coords: font_coords.clone(),
                 hint,
             };
-            if let Some(p) = self.push(Layer::Text, Path::default(), None, &ink, under) {
+            if let Some(p) = self.push(Layer::Text, empty(), None, &ink, under) {
                 p.text = Some(text);
             }
         }
@@ -350,19 +342,19 @@ impl<'a> Walk<'a> {
         });
         self.mark(Layer::Clip, contour.path.clone(), contour.rect);
         inner.clip = Some(b);
-        // Keep every exact outline in one shared allocation for all
-        // descendants. `clip` remains the rectangular fast path used by
-        // existing input adapters; rounded or welded corners can now be
-        // tested without tessellating during each pointer query.
-        // ponytail: a nested clip copies its clipping ancestors' paths,
-        // O(clip depth) per clipping node; `Arc<[Arc<Path>]>` is the
-        // upgrade, and it changes mui-input's `&[Path]` clip API too.
-        let mut paths = inner
-            .clip_paths
-            .as_deref()
-            .map_or_else(Vec::new, |paths| paths.to_vec());
-        paths.push(contour.path.clone());
-        inner.clip_paths = Some(Arc::from(paths.into_boxed_slice()));
+        // Every exact outline in one allocation all descendants share.
+        // `clip` remains the rectangular fast path used by existing input
+        // adapters; rounded or welded corners can now be tested without
+        // tessellating during each pointer query. The paths themselves are
+        // the ancestors' own outlines: a nested clip adds a pointer each.
+        let outer = inner.clip_paths.as_deref().unwrap_or_default();
+        inner.clip_paths = Some(
+            outer
+                .iter()
+                .chain(std::iter::once(&contour.path))
+                .cloned()
+                .collect(),
+        );
         Ok(())
     }
 
@@ -662,6 +654,12 @@ mod tests {
             2,
             "inner and outer clips must both filter hits"
         );
+        for (p, k) in paths.iter().zip(["outer", "inner"]) {
+            assert!(
+                Arc::ptr_eq(p, &s.surface(k).unwrap().path),
+                "{k}'s clip is a copy of its outline"
+            );
+        }
         assert!(paths.iter().all(|p| {
             p.commands
                 .iter()
@@ -849,6 +847,35 @@ mod tests {
             gaps.windows(2).all(|g| g[0] == g[1]) && ys[0] == ys[0].round(),
             "uneven leading {gaps:?} from {ys:?}"
         );
+    }
+
+    /// Fill, clip, mask and surface all hold the node's one outline.
+    #[test]
+    fn a_filled_clipping_node_shares_one_outline() {
+        let card = column([leaf(10., 10.)])
+            .fill(Role::Surface)
+            .clip()
+            .mask(Role::Surface)
+            .id("card");
+        let s = resolve_scene(&SceneSpec::new(card)).unwrap();
+        let outline = &s.surface("card").unwrap().path;
+        for layer in [Layer::Fill, Layer::Clip, Layer::Mask] {
+            let p = s.paint.iter().find(|p| p.layer == layer).unwrap();
+            assert!(Arc::ptr_eq(&p.path, outline), "{layer:?} copied it");
+        }
+    }
+
+    /// A warm resolve hands every node the key it had last frame.
+    #[test]
+    fn a_warm_resolve_reuses_every_key() {
+        let spec = SceneSpec::new(column([leaf(10., 10.).id("named"), leaf(10., 10.)]));
+        let mut text = TextCache::default();
+        let cold = resolve_scene_with(&spec, &mut text).unwrap();
+        let warm = resolve_scene_with(&spec, &mut text).unwrap();
+        assert_eq!(cold.surfaces().count(), 3);
+        for (a, b) in cold.surfaces().zip(warm.surfaces()) {
+            assert!(Arc::ptr_eq(&a.key, &b.key), "{} was allocated again", a.key);
+        }
     }
 
     #[test]

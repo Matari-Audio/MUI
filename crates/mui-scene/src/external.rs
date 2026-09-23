@@ -134,7 +134,7 @@ pub(crate) fn finish_gpu(
     let external = ExternalWeld { origin, material };
     let image_rect = external.rect()?;
     Ok(crate::material_weld::MaterialWeld {
-        outline: image_rect.path(),
+        outline: Arc::new(image_rect.path()),
         image_fill: crate::Fill::None,
         image_rect,
         members,
