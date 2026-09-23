@@ -511,17 +511,18 @@ impl Style {
     /// use mui_style::{Role::*, *};
     /// let card = Style { radius: Radius::Px(12.), ..Style::default() };
     /// let mine = Style { fill: Primary.into(), ..Style::default() };
-    /// assert_eq!(mine.over(&card).fill, mine.fill);   // card states no fill
-    /// assert_eq!(mine.over(&card).radius, card.radius);
+    /// let both = mine.clone().over(card.clone());
+    /// assert_eq!(both.fill, mine.fill);   // card states no fill
+    /// assert_eq!(both.radius, card.radius);
     /// ```
-    pub fn over(&self, other: &Style) -> Style {
+    pub fn over(self, other: Style) -> Style {
         Style {
             fill: if other.fill.is_none() {
-                self.fill.clone()
+                self.fill
             } else {
-                other.fill.clone()
+                other.fill
             },
-            stroke: other.stroke.clone().or_else(|| self.stroke.clone()),
+            stroke: other.stroke.or(self.stroke),
             radius: if other.radius == Radius::Theme {
                 self.radius
             } else {
@@ -533,22 +534,22 @@ impl Style {
                 other.corners
             },
             shadow: if other.shadow.is_empty() {
-                self.shadow.clone()
+                self.shadow
             } else {
-                other.shadow.clone()
+                other.shadow
             },
             shells: if other.shells.is_empty() {
-                self.shells.clone()
+                self.shells
             } else {
-                other.shells.clone()
+                other.shells
             },
             union: self.union || other.union,
             cursor: other.cursor.or(self.cursor),
             layer: other.layer.or(self.layer),
             mask: if other.mask.is_none() {
-                self.mask.clone()
+                self.mask
             } else {
-                other.mask.clone()
+                other.mask
             },
         }
     }

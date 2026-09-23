@@ -406,7 +406,7 @@ impl IntoEl for String {
 /// ```
 /// use mui_scene::prelude::*;
 /// let bare = Style::default().fill(Raised).radius(12.);
-/// let mut node = leaf(80., 24.).preset(&bare);
+/// let mut node = leaf(80., 24.).preset(bare);
 /// assert_eq!(node.style_mut().radius, Radius::Px(12.));
 /// ```
 pub trait Paints: Sized {
@@ -570,20 +570,21 @@ pub trait Paints: Sized {
         s.fill = f.into();
         self
     }
-    /// Merge a prepared style *over* this one: `.preset(&card())`. Every
-    /// field the preset states wins; the rest of the chain survives.
+    /// Merge a prepared style *over* this one: `.preset(card())`. Every
+    /// field the preset states wins; the rest of the chain survives. Both
+    /// are moved, never copied: pass `card.clone()` to keep one.
     ///
     /// ```
     /// use mui_scene::prelude::*;
     /// # use mui_scene::Style;
     /// let card = Style { radius: Radius::Px(12.), ..Style::default() };
-    /// let mut el = leaf(80., 24.).fill(Primary).preset(&card);
+    /// let mut el = leaf(80., 24.).fill(Primary).preset(card);
     /// assert_eq!(el.style_mut().radius, Radius::Px(12.));
     /// assert_eq!(el.style_mut().fill, Fill::Role(Role::Primary));
     /// ```
-    fn preset(mut self, s: &Style) -> Self {
+    fn preset(mut self, s: Style) -> Self {
         let slot = self.style_mut();
-        *slot = slot.over(s);
+        *slot = std::mem::take(slot).over(s);
         self
     }
     /// Merge a prepared style *under* this one: a default the rest of the
@@ -593,12 +594,12 @@ pub trait Paints: Sized {
     /// use mui_scene::prelude::*;
     /// # use mui_scene::Style;
     /// let card = Style { fill: Role::Raised.into(), ..Style::default() };
-    /// let mut el = leaf(80., 24.).fill(Role::Danger).base(&card);
+    /// let mut el = leaf(80., 24.).fill(Role::Danger).base(card);
     /// assert_eq!(el.style_mut().fill, Fill::Role(Role::Danger));
     /// ```
-    fn base(mut self, s: &Style) -> Self {
+    fn base(mut self, s: Style) -> Self {
         let slot = self.style_mut();
-        *slot = s.over(slot);
+        *slot = s.over(std::mem::take(slot));
         self
     }
     /// Hand the node to `f`: a reusable run of builders, without a trait.
@@ -959,12 +960,12 @@ mod tests {
     /// and which side that is depends only on which method was called.
     #[test]
     fn preset_wins_per_field_and_base_loses_per_field() {
-        let mut over = leaf(10., 10.).fill(Primary).stroke(Ink).preset(&card());
+        let mut over = leaf(10., 10.).fill(Primary).stroke(Ink).preset(card());
         let s = over.style_mut();
         assert_eq!((s.fill.clone(), s.radius), (card().fill, card().radius));
         assert!(s.stroke.is_some(), "a field the preset left unset survives");
 
-        let mut under = leaf(10., 10.).fill(Primary).base(&card());
+        let mut under = leaf(10., 10.).fill(Primary).base(card());
         let s = under.style_mut();
         assert_eq!((s.fill.clone(), s.radius), (Primary.into(), card().radius));
     }

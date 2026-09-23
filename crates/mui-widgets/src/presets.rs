@@ -1,6 +1,6 @@
 //! The four shapes every panel is made of, as plain functions.
 //!
-//! A preset is a `Style` you merge (`.preset(&panel())`, `.base(&card())`) or
+//! A preset is a `Style` you merge (`.preset(panel())`, `.base(card())`) or
 //! an `El` you finish (`chip("A").id("chip-A")`). No registry, no trait, no
 //! variant table: a preset that needs a variant is a function with an
 //! argument.
@@ -11,7 +11,7 @@ use mui_scene::Style;
 ///
 /// ```
 /// use mui::prelude::*;
-/// let editor = col!["Kurv"].pad(M).full().preset(&panel()).clip().id("editor");
+/// let editor = col!["Kurv"].pad(M).full().preset(panel()).clip().id("editor");
 /// assert_eq!(editor.children().len(), 1);
 /// ```
 pub fn panel() -> Style {
@@ -27,7 +27,7 @@ pub fn panel() -> Style {
 /// ```
 /// use mui::prelude::*;
 /// # use mui::scene::Style;
-/// let mut dialog = col!["Save?"].pad(M).preset(&card());
+/// let mut dialog = col!["Save?"].pad(M).preset(card());
 /// assert_eq!(dialog.style_mut().radius, Radius::Px(12.));
 /// ```
 pub fn card() -> Style {
@@ -49,7 +49,7 @@ pub fn card() -> Style {
 ///
 /// ```
 /// use mui::prelude::*;
-/// let mut overlay = col!["Preset browser"].pad(M).preset(&glass());
+/// let mut overlay = col!["Preset browser"].pad(M).preset(glass());
 /// assert_eq!(overlay.style_mut().shadow.len(), 2);
 /// ```
 pub fn glass() -> Style {
