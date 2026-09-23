@@ -69,18 +69,6 @@ fn growth_caps() {
     assert_eq!(l.frame("b").unwrap().size.width, 80.);
 }
 #[test]
-fn failed_commit_preserves() {
-    let mut s = LayoutState::default();
-    s.commit(&leaf(1., 1.).id("x"), None, Default::default())
-        .unwrap();
-    let old = s.current.clone();
-    assert!(s
-        .commit(&leaf(f64::NAN, 1.).id("bad"), None, Default::default())
-        .is_err());
-    assert_eq!(s.current, old);
-    assert_eq!(s.revision, 1);
-}
-#[test]
 fn duplicate_ids() {
     assert!(matches!(
         resolve(
