@@ -1,5 +1,6 @@
 //! The smallest real plugin with a MUI editor: a gain knob and a bypass
 //! switch bound to truce parameters, and an output meter.
+#![forbid(unsafe_code)]
 use mui::prelude::*;
 use mui_truce::MuiEditor;
 use truce::prelude::*;

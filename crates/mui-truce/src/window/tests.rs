@@ -265,3 +265,64 @@ fn a_delivered_edge_gets_the_tree_that_dispatches_it() {
     );
     assert!(h.step(), "and the next tree, which dispatches it, comes");
 }
+
+/// Counts the Enter presses its trees read; refuses layout while `refuse`.
+struct Keys {
+    enters: usize,
+    refuse: bool,
+}
+
+impl View for Keys {
+    fn build(&mut self, ui: &mut Ui) -> El {
+        self.enters += ui
+            .shortcuts()
+            .iter()
+            .filter(|k| k.key == Key::Enter)
+            .count();
+        let side = if self.refuse { f64::NAN } else { 100.0 };
+        mui::prelude::leaf(side, side).id("pad")
+    }
+    fn changed(&mut self) -> bool {
+        false
+    }
+    fn request_resize(&mut self, _: u32, _: u32) -> bool {
+        false
+    }
+}
+
+#[test]
+fn a_refused_layout_does_not_replay_the_keys_it_took() {
+    let shared = Arc::new(Mutex::new(Shared {
+        ui: Ui::new(Theme::DEFAULT),
+        view: Keys {
+            enters: 0,
+            refuse: false,
+        },
+    }));
+    let mut h = Handler::new(Arc::clone(&shared), Arc::default(), (200, 200), 1.0);
+    h.step();
+    lock(&shared).view.refuse = true;
+    h.on_event_inner(&key(HostKey::Enter, KeyState::Down, Modifiers::default()));
+    assert!(!h.step(), "the layout is refused");
+    lock(&shared).view.refuse = false;
+    for x in 0..4 {
+        h.on_event_inner(&moved(f64::from(x), 1.0, Modifiers::default()));
+        h.step();
+    }
+    assert_eq!(lock(&shared).view.enters, 1, "one press, read once");
+}
+
+#[test]
+fn a_key_goes_back_to_the_host_unless_something_here_has_focus() {
+    let mut h = handler((200, 200), 1.0);
+    h.step();
+    let space = key(
+        HostKey::Character(" ".into()),
+        KeyState::Down,
+        Modifiers::default(),
+    );
+    assert_eq!(h.on_event_inner(&space), EventStatus::Ignored);
+    assert_eq!(h.pending.len(), 1, "still read, for global shortcuts");
+    lock(&h.shared).ui.focus("k");
+    assert_eq!(h.on_event_inner(&space), EventStatus::Captured);
+}

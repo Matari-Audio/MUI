@@ -83,7 +83,13 @@ fn editor(params: &Arc<Synth>) -> MuiEditor<Synth> {
 
 /// The editor opened on a recording host, and the window handler over it.
 fn open(params: &Arc<Synth>) -> (MuiEditor<Synth>, Handler<Session<Synth>>, Log) {
-    let editor = editor(params);
+    open_with(params, editor(params))
+}
+
+fn open_with(
+    params: &Arc<Synth>,
+    editor: MuiEditor<Synth>,
+) -> (MuiEditor<Synth>, Handler<Session<Synth>>, Log) {
     let (context, log) = context(params);
     lock(&editor.shared)
         .view
@@ -294,6 +300,49 @@ fn a_state_load_ends_the_gesture_in_flight() {
     h.step();
     let c = calls(&log);
     assert!(bracketed(&c, 10), "{c:?}");
+}
+
+#[test]
+fn a_control_that_leaves_the_tree_mid_drag_ends_its_gesture() {
+    let params = Arc::new(Synth::default());
+    let hidden = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let hide = hidden.clone();
+    let editor = MuiEditor::new(
+        params.clone(),
+        Ui::new(Theme::DEFAULT),
+        (400, 300),
+        move |ui, bridge| {
+            if hide.load(std::sync::atomic::Ordering::Relaxed) {
+                return row([]);
+            }
+            bridge.bind(ui, "gain", 10u32, |ui, v| {
+                knob(ui, "gain", "Gain", v, 0.0..=1.0).0.into()
+            })
+        },
+    );
+    let (editor, mut h, log) = open_with(&params, editor);
+    let p = centre(&editor, "gain");
+    at(&mut h, p);
+    press(&mut h, true);
+    h.step();
+    at(&mut h, Point::new(p.x, p.y - 30.0));
+    h.step();
+    h.step();
+    let c = calls(&log);
+    assert!(
+        matches!(c.as_slice(), [Call::Begin(10), .., Call::Set(10, _)]),
+        "{c:?}"
+    );
+    hidden.store(true, std::sync::atomic::Ordering::Relaxed);
+    editor.requests.redraw();
+    h.step();
+    assert_eq!(calls(&log), [Call::End(10)]);
+    let s = lock(&editor.shared);
+    assert_eq!(
+        s.view.bridge.value(10u32),
+        params.get_normalized(10).unwrap(),
+        "the store's value, not the drag's"
+    );
 }
 
 #[test]
