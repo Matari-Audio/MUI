@@ -552,6 +552,11 @@ impl OutlineCache {
 /// `n`'s own outline inputs as key words. `false` for a custom
 /// `.outline(..)`: nothing here can see what its closure returns, so an
 /// outline that includes one is never cached.
+///
+/// ponytail: such a weld redoes its boolean every frame. Keying on the
+/// closure's `Arc` identity would need the cache to hold the `Arc`, which is
+/// not `Send` and would take `Send` away from `TextCache`; and a tree rebuilt
+/// per frame makes a new closure per frame anyway, so it would never hit.
 fn geometry_shallow(n: &El, frames: &[Frame], at: usize, key: &mut Vec<u64>) -> bool {
     if n.payload().outline.is_some() {
         return false;
@@ -1772,6 +1777,9 @@ impl<'a> Walk<'a> {
                 .fill
                 .paint(&th.palette, under)
                 .map_or(under, |p| p.solid()),
+            // ponytail: `Painted` owns its path, so a filled node copies its
+            // outline once. `Arc<Path>` there is the upgrade -- an API break
+            // for every renderer.
             None => solid(
                 self.push(Layer::Fill, outline.clone(), rect, &s.fill, under),
                 under,
@@ -2050,6 +2058,9 @@ impl<'a> Walk<'a> {
             // descendants. `clip` remains the rectangular fast path used by
             // existing input adapters; rounded or welded corners can now be
             // tested without tessellating during each pointer query.
+            // ponytail: a nested clip copies its clipping ancestors' paths,
+            // O(clip depth) per clipping node; `Arc<[Arc<Path>]>` is the
+            // upgrade, and it changes mui-input's `&[Path]` clip API too.
             let mut paths = inner
                 .clip_paths
                 .as_deref()
