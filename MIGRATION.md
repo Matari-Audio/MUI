@@ -77,6 +77,16 @@ line at its combining mark.
   Trajectories change slightly, are the same at any frame rate, and `dt` is no
   longer clamped to 64/240 s. Stiff springs that used to diverge now settle.
 
+## mui-weld
+
+- `AnalyticWeld::set_channels` -> removed
+- `AnalyticSource::rotated` -> removed
+- `Boundary::width` -> removed
+- `analytic::PARAM_BYTES` 352 -> 336. The uniform `crop` lane at offset 48 is
+  gone and the sources start at offset 48. A shader or buffer layout written
+  against the old ABI must drop that `vec4`; the weld always covers its whole
+  texture.
+
 ## mui-scene
 
 - new: `mui_scene::Font` (the `mui_text::Font` re-export), also in `mui_scene::prelude` and `mui::prelude`
@@ -98,6 +108,124 @@ let spec = SceneSpec::new(root).font(epaint_default_fonts::HACK_REGULAR.to_vec()
 let spec = SceneSpec::new(root).font(Font::new(epaint_default_fonts::HACK_REGULAR)?);
 ```
 
+- `SceneState` (`revision`/`current`/`commit`) -> removed. Keep the
+  `ResolvedScene` that `resolve_scene*` returns yourself.
+- `SceneError::RevisionExhausted` -> removed
+- new: `SceneError::InvalidScale`. `SceneSpec::device_scale` of
+  `Some(0 | negative | NaN | inf)` used to resolve into NaN geometry; every
+  `resolve_scene*` now returns `Err(SceneError::InvalidScale)`. A `match` over
+  `SceneError` needs the new arm.
+- `material_symbols::names()` -> removed, no replacement. `codepoint(name)`
+  stays. Regenerate the table with `python3 tools/material_symbols_table.py`.
+- `TextCache` retention: runs, line breaks, coordinates, outlines, borders and
+  regions were capped at 4096/256 entries and flushed when full -> the cache
+  now keeps exactly what the last successful resolve used and drops the rest
+  at its end. `TextCache::len()` counts the shaped runs currently held.
+- Behaviour: a weld or carve whose outline includes a custom `.outline(..)`
+  is no longer cached, so changing the closure reshapes it. A text node's
+  fill is never pushed as a `Layer::Fill` entry (it used to be pushed and
+  removed again); its colour is the ink, as before.
+
+```rust
+// old
+let mut state = SceneState::default();
+state.commit(&spec)?;
+let scene = state.current().unwrap();
+// new
+let scene = resolve_scene(&spec)?;
+```
+
+
+## mui-vello
+
+The process-global font and image caches are gone. Each renderer owns a
+`mui_vello::Cache` and hands it to every `Gpu`/`Cpu` canvas it builds. Keep
+one per renderer and drop it with that renderer: an atlas id means nothing to
+another one. It holds only a `Weak` to each image buffer and frees a dropped
+buffer's pixmap or atlas slot on the next image lookup.
+
+```rust
+// old
+let mut ids = ImageIds::default();
+let mut canvas = Gpu { scene: &mut scene, resources: &mut res,
+    atlas: Some(Atlas { renderer: &mut r, device: &d, queue: &q, ids: &mut ids }) };
+mui_vello::paint_cached(&mut canvas, &resolved, xf, &mut paths)?;
+// new
+let mut cache = mui_vello::Cache::default(); // beside the renderer
+let mut canvas = Gpu { scene: &mut scene, resources: &mut res, cache: &mut cache,
+    atlas: Some(Atlas { renderer: &mut r, device: &d, queue: &q }) };
+mui_vello::paint(&mut canvas, &resolved, xf)?;
+```
+
+- `Gpu { scene, resources, atlas }` -> `Gpu { scene, resources, cache: &mut Cache, atlas }`
+- `Cpu { ctx, resources }` -> `Cpu { ctx, resources, cache: &mut Cache }`
+- `Atlas { renderer, device, queue, ids }` -> `Atlas { renderer, device, queue }`
+- `ImageIds` -> `Cache`
+- `PathCache` -> removed
+- `paint_cached(canvas, scene, xf, &mut PathCache)` -> `paint(canvas, scene, xf)`
+- `Canvas::image` default method (built a pixmap from the global cache) ->
+  returns `None`, so a custom canvas paints the solid stand-in unless it
+  overrides it
+- `brush(&Paint::Image { .. }, bounds)` (a pixmap brush, or transparent when
+  too big) -> `PaintType::Solid` of `Paint::solid()`, the stand-in colour.
+  Images go through `Canvas::image`.
+- A full image atlas: `upload_image` used to panic -> the image paints as its
+  solid stand-in
+- `effects::OutputEncoding` -> removed; the one entry point is `fs_hybrid`
+- `weld.wgsl` `fs_classic` entry point -> removed
+- `WeldTextures::new(device, queue, encoding, budget)` -> `WeldTextures::new(device, queue, budget)`
+- `WeldTextures::encoding` / `texture` / `sample_size` / `clear` -> removed
+- `WeldTextures::resident_bytes` -> private
+- `WeldTextures::begin` with a key listed twice: `Err(Unsupported)` -> accepted
+  (the second `encode` for that key in the frame is still refused)
+- Behaviour: `WeldTextures::begin` used to free every texture not wanted this
+  frame -> textures stay resident while the budget allows and the least
+  recently wanted are evicted when it does not. `TiledEffects` renders only
+  the welds inside the viewport plus its guard.
+- `HybridEffects::enable_profiling` / `collect_timings` / `timing_losses` /
+  `resident_effect_bytes` / `release_effects` -> removed. `GpuTimer` remains
+  and can be driven directly.
+- `DamageTracker::plan(&self, scene, xf, tiles) -> DamagePlan` ->
+  `plan(&self, scene, xf, tiles, out: &mut DamagePlan)`. Reuse one plan.
+- `DamagePlan { dirty, total_tiles, full, dirty_pixels }` struct literal ->
+  `DamagePlan::default()`; it has a private field now
+
+```rust
+// old
+let plan = tracker.plan(&scene, xf, &tiles);
+// new
+let mut plan = DamagePlan::default(); // kept across frames
+tracker.plan(&scene, xf, &tiles, &mut plan);
+```
+
+## mui-access
+
+- `tree_update(scene, focus)` -> `tree_update(scene, focus, scale: f64)`.
+  `scale` is the window's device pixels per scene unit; it becomes the window
+  node's transform and bounds stay in scene units. Pass `1.0` for the old
+  output.
+- An unlabeled node's label: its surface id -> none
+- Sliders gain `Action::Increment`/`Decrement` and a `numeric_value_step`
+  (a hundredth of the range)
+
+```rust
+// old
+adapter.update_if_active(|| tree_update(&scene, focus));
+// new
+adapter.update_if_active(|| tree_update(&scene, focus, ui.scale.unwrap_or(1.0)));
+```
+
+## mui-widgets
+
+- `slider`: the id, `Kind::Slider` role, label and focus moved from the thumb
+  to the whole lane. The surface named by the slider id is now the track, and
+  the thumb is unnamed. A press on the track jumps the value there; drag
+  travel is the lane's width, not 160 px.
+- Behaviour: a focused `slider` or `knob` steps on the arrow keys (a
+  hundredth of the range, a tenth of that with Shift), Page Up/Down (ten
+  steps) and Home/End.
+- new: `mui_widgets::step(&RangeInclusive<f64>) -> f64`, that step
+
 ## mui
 
 - `Ui.font: Option<Arc<[u8]>>` -> `Option<Font>`
@@ -108,6 +236,18 @@ let spec = SceneSpec::new(root).font(Font::new(epaint_default_fonts::HACK_REGULA
 - `mui::core` (deprecated alias) -> `mui::scene`
 - `mui::tessellate` -> removed, no replacement
 - `mui::egui` and the `egui` cargo feature -> removed, no replacement
+- `SemanticAction` gains `Increment { id }` and `Decrement { id }`, with
+  `SemanticAction::increment(id)` / `decrement(id)`. A `match` over it needs
+  the new arms. Both land as the equivalent `SetValue`.
+- Behaviour: `.scroll()`, `.animate()`/`.transition()` and
+  `.on(State::Focus | State::Disabled)` now work on a node without an id,
+  keyed by its `/0/2` tree path. `.on(State::Hover | State::Press)` still
+  needs an id.
+- Behaviour: while a tip is shown the root sits under a wrapper, so positional
+  keys move under `/0` and back when it goes: ask `ui.scroll("/0/1")`, not
+  `ui.scroll("/1")`, while the tip is up. Named keys do not move.
+- Behaviour: Enter/Space on a focused button or toggle, and a stepping key on
+  a focused slider, are delivered as an `Edit::Begin`/`End` pair.
 
 ## mui-truce
 
@@ -119,3 +259,10 @@ let spec = SceneSpec::new(root).font(Font::new(epaint_default_fonts::HACK_REGULA
 - `mui-tessellate` -> deleted, no replacement. Fill a glyph or shape path with
   `mui-vello`, or flatten it with `Path::flatten`.
 - `packages/mui-ts` -> deleted. The Rust DSL is the only front end.
+
+## Examples and tools
+
+- `mui-vello` example `gpu_matrix --backend classic|hybrid` -> hybrid only;
+  the flag and its `bench-classic` requirement are gone
+- `tools/native-gpu/compare.py` -> deleted, with the classic/hybrid pairing in
+  `run_matrix.py`
