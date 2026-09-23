@@ -19,7 +19,8 @@ pub use text::TextCache;
 
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::hash::BuildHasher;
+use std::sync::{Arc, LazyLock};
 
 use mui_geometry::{Bounds, OffsetOptions, Path, PlacedShape, Point};
 use mui_layout::Frame;
@@ -40,6 +41,13 @@ fn bounds(f: Frame, scale: Option<f64>) -> Bounds {
         max: Point::new(snap(f.right(), scale), snap(f.bottom(), scale)),
     }
 }
+/// The path a structural or glyph entry carries: empty, and shared, so
+/// closing a clip allocates nothing.
+fn empty() -> Arc<Path> {
+    static EMPTY: LazyLock<Arc<Path>> = LazyLock::new(|| Arc::new(Path::default()));
+    EMPTY.clone()
+}
+
 /// A resolved outline back as boolean input.
 fn polygons(path: &Path) -> Result<Vec<PlacedShape>, SceneError> {
     Ok(mui_geometry::offset_path(
@@ -90,7 +98,7 @@ fn find(n: &El, id: &str, at: usize, sizes: &[usize]) -> Option<usize> {
 struct Ancestors {
     parent: Option<Arc<str>>,
     clip: Option<Bounds>,
-    clip_paths: Option<Arc<[Path]>>,
+    clip_paths: Option<Arc<[Arc<Path>]>>,
     cursor: Option<Cursor>,
     disabled: bool,
 }
@@ -109,8 +117,8 @@ struct Deferred<'a> {
 struct Walk<'a> {
     spec: &'a SceneSpec,
     frames: Cow<'a, [Frame]>,
-    regions: HashMap<usize, Path>,
-    region_envelopes: HashMap<usize, Path>,
+    regions: HashMap<usize, Arc<Path>>,
+    region_envelopes: HashMap<usize, Arc<Path>>,
     runs: Runs<'a>,
     /// Subtree size per pre-order index; see [`subtree_sizes`].
     sizes: Vec<usize>,
@@ -122,6 +130,8 @@ struct Walk<'a> {
     weld_cache: &'a mut crate::WeldCache,
     i: usize,
     key: Arc<str>,
+    /// Last frame's node keys by hash; see [`Walk::intern`].
+    keys: &'a mut HashMap<u64, (Arc<str>, u64)>,
     paint: Vec<Painted>,
     surfaces: Vec<ResolvedSurface>,
     at: HashMap<Arc<str>, usize>,
@@ -129,6 +139,33 @@ struct Walk<'a> {
     deferred: Vec<Deferred<'a>>,
     /// The baseline a `.baseline()` parent asks its text children to sit on.
     base_y: Option<f64>,
+}
+
+/// The key a walk starts from, before it meets the root.
+fn empty_key() -> Arc<str> {
+    static EMPTY: LazyLock<Arc<str>> = LazyLock::new(|| Arc::from(""));
+    EMPTY.clone()
+}
+
+impl Walk<'_> {
+    /// `s` as an `Arc<str>`, the same one every frame it stays in the tree,
+    /// so a warm walk allocates no keys.
+    fn intern(&mut self, s: &str) -> Arc<str> {
+        let hash = self.keys.hasher().hash_one(s);
+        let generation = self.runs.generation;
+        match self.keys.get_mut(&hash) {
+            Some((key, seen)) if **key == *s => {
+                *seen = generation;
+                key.clone()
+            }
+            // New, or a 64-bit collision: the newer string takes the slot.
+            _ => {
+                let key: Arc<str> = Arc::from(s);
+                self.keys.insert(hash, (key.clone(), generation));
+                key
+            }
+        }
+    }
 }
 
 pub fn resolve_scene(spec: &SceneSpec) -> Result<ResolvedScene, SceneError> {
@@ -198,7 +235,8 @@ pub fn resolve_scene_cached(
         ramp_frames: HashMap::new(),
         weld_cache,
         i: 0,
-        key: Arc::from(""),
+        key: empty_key(),
+        keys: &mut text.keys,
         paint: Vec::new(),
         surfaces: Vec::with_capacity(nodes),
         at: HashMap::with_capacity(nodes),
