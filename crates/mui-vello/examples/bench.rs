@@ -1,7 +1,7 @@
 //! Why `vello_hybrid` and not classic `vello`, measured on a Kurv-sized editor.
 //!
-//!     cargo run -p mui-vello --release --features cpu --example bench
-//!     cargo run -p mui-vello --release --features cpu,bench-classic --example bench
+//!     cargo run -p mui-vello --profile perf --features cpu --example bench
+//!     cargo run -p mui-vello --profile perf --features cpu,bench-classic --example bench
 //!
 //! One scene, three backends, three cases. Each frame is split into resolve
 //! (`Ui::frame`: styling, layout, text shaping, the paint list), encode (the
