@@ -988,7 +988,10 @@ impl Sink {
             .args(["-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgba"])
             .args(["-color_range", "pc", "-colorspace", "rgb"])
             .args(["-s", &format!("{w}x{h}"), "-r", &fps, "-i", "-"])
-            .args(["-vf", "scale=out_color_matrix=bt709:out_range=tv"])
+            // Convert, then stamp the frames: ffmpeg writes the stream's
+            // colour tags from the frames, so output flags alone are lost.
+            .args(["-vf", "scale=out_color_matrix=bt709:out_range=tv,\
+                setparams=colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv"])
             .args(codec.args())
             .args(["-colorspace", "bt709", "-color_primaries", "bt709"])
             .args(["-color_trc", "bt709", "-color_range", "tv", "-r", &fps])

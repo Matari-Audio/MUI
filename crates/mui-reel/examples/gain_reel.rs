@@ -1,6 +1,9 @@
 //! A beat-synced take of a gain-plugin editor, with its sound.
 //!
-//!     cargo run -p mui-reel --release --example gain_reel -- /tmp/gain-reel
+//!     cargo run -p mui-reel --example gain_reel -- /tmp/gain-reel [--master]
+//!
+//! `--master` adds a ProRes 4444 `take.mov` and writes the layers as ProRes
+//! with alpha instead of VP9 WebM.
 //!
 //! The editor is the gain plugin's tree (`examples/gain-plugin`) plus a tone
 //! slider and a preset button, built from the stock widgets. The DSP is a
@@ -94,11 +97,13 @@ fn dsp(m: &mut Gain, events: &[ReelEvent], out: &mut [[f32; 2]]) {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let out = std::env::args().nth(1).unwrap_or("gain-reel".into());
+    let master = std::env::args().any(|a| a == "--master");
     let reel = Reel::new(Size::new(640.0, 360.0))
         .scale(3.0) // 1920x1080, rasterised at 3x: the punch-in stays vector-crisp
         .fps(60)
         .bpm(116.0)
         .cursor(true)
+        .master(master)
         .font(Font::new(epaint_default_fonts::HACK_REGULAR)?);
     let script = Script::new()
         .note_on(57, 100)
