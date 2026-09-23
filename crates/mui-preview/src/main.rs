@@ -162,7 +162,7 @@ fn parse_theme(src: &str) -> (Theme, Vec<String>) {
 /// nobody named draw at 0.5, so a scene's ids stand out of its scaffolding.
 fn inspect(
     canvas: &mut impl mui::vello::Canvas,
-    scene: &mui::core::ResolvedScene,
+    scene: &mui::scene::ResolvedScene,
     xf: Affine,
     palette: &Palette,
     font: &Font,
@@ -202,7 +202,7 @@ fn inspect(
     let Ok(run) = mui_text::text_run(fonts, &label, LABEL, &[], mui::vello::ARC_TOLERANCE) else {
         return;
     };
-    canvas.glyphs(&mui::core::Text {
+    canvas.glyphs(&mui::scene::Text {
         font: font.clone(),
         fonts: fonts.into(),
         size: LABEL as f32,
@@ -210,7 +210,7 @@ fn inspect(
         glyphs: run
             .glyphs
             .iter()
-            .map(|g| mui::core::TextGlyph {
+            .map(|g| mui::scene::TextGlyph {
                 id: g.id,
                 x: g.x as f32,
                 y: g.y as f32,
@@ -262,7 +262,7 @@ struct App {
     /// window has been told to allow an input method at all. Toggling
     /// `set_ime_allowed` on an unchanged state can drop a composition, so it
     /// is only called on the edge.
-    ime_area: Option<(Point, mui::core::Size)>,
+    ime_area: Option<(Point, mui::scene::Size)>,
     ime_on: bool,
     mods: Mods,
     cursor: Cursor,

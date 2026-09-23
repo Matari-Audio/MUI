@@ -1,8 +1,8 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{
-        RwLock,
         atomic::{AtomicU64, Ordering},
+        RwLock,
     },
 };
 use truce_core::custom_state::{PersistField, State, StateCursor, StateField};
@@ -377,10 +377,10 @@ impl PersistField for Document {
         self.snapshot().serialize().write_field(out);
     }
     fn persist_read(&self, cursor: &mut StateCursor) {
-        if let Some(len) = u32::read_field(cursor)
-            && len <= 4 * 1024 * 1024
-            && let Some(data) = cursor.read_bytes(len as usize)
-        {
+        let data = u32::read_field(cursor)
+            .filter(|&len| len <= 4 * 1024 * 1024)
+            .and_then(|len| cursor.read_bytes(len as usize));
+        if let Some(data) = data {
             let _ = self.restore(data);
         }
     }

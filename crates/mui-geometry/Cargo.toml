@@ -6,4 +6,4 @@ license.workspace = true
 
 [dependencies]
 i_overlay.workspace = true
-kurbo = "=0.13.1"
+kurbo = "0.13.1"

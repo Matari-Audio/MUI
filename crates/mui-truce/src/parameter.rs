@@ -1,6 +1,6 @@
 use std::{
     collections::BTreeSet,
-    sync::{Arc, mpsc::Sender},
+    sync::{mpsc::Sender, Arc},
 };
 use truce_core::editor::PluginContext;
 use truce_params::{ParamFlags, ParamInfo, Params};

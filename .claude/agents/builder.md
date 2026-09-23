@@ -12,9 +12,11 @@ abstractions, mark cut corners with a `ponytail:` comment naming the ceiling,
 and leave ONE runnable check per non-trivial piece of logic (a `#[test]`).
 
 Environment:
-- The worktree is /mnt/Windows11/DEV_PROJECTS/Repos/MUI-vello on branch
-  feat/vello-mui. The shell cwd resets after every command: start every
-  Bash command with `cd /mnt/Windows11/DEV_PROJECTS/Repos/MUI-vello &&`.
+- The repo root is whatever `git rev-parse --show-toplevel` prints in your
+  starting directory; work on the branch already checked out there. The shell
+  cwd resets after every command: start every Bash command with
+  `cd <that root> &&`. Use the `CARGO_TARGET_DIR` your environment sets, if
+  any, for every cargo command.
 - Prefer Bash (cat, sed -n, grep, python3 heredoc scripts) for reading and
   editing. The shell errors on unquoted globs: quote them.
 - Vello sources for reference are under

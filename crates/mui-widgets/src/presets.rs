@@ -26,7 +26,7 @@ pub fn panel() -> Style {
 ///
 /// ```
 /// use mui::prelude::*;
-/// # use mui::core::Style;
+/// # use mui::scene::Style;
 /// let mut dialog = col!["Save?"].pad(M).preset(&card());
 /// assert_eq!(dialog.style_mut().radius, Radius::Px(12.));
 /// ```

@@ -10,9 +10,12 @@ a slider thumb sits where two flex weights put it; explicit offsets are availabl
 strings**: there is no `.class("btn btn-sm")` and there will not be one --
 every value in the DSL is a Rust expression the compiler already checks.
 
-Every library crate is `#![forbid(unsafe_code)]`, dependency-light, and
-compiles to `wasm32-unknown-unknown`. The native preview host is the one
-exception.
+Every crate is `#![forbid(unsafe_code)]`, and every library crate compiles to
+`wasm32-unknown-unknown` (the native preview host is the one exception). The
+geometry, layout, style and motion crates stay small -- `mui-motion` has no
+dependencies at all -- but the renderer, text and accessibility stack does
+not: Vello, wgpu, harfrust, accesskit and truce put about 440 packages in
+`Cargo.lock`.
 
 ## Try it in your browser
 
@@ -35,9 +38,9 @@ tiles; broad changes switch to one full-scene render when the memory budget
 allows it. `HybridEffects` is the whole-scene retained alternative. The host must
 select and retain these renderers to benefit from their caches.
 
-GPUI is an experimental integration, not the MUI graphics engine. Classic Vello
-compute and Hybrid comparisons live in the [rendering investigation](docs/rendering-investigation.md),
-including measured results and their limits.
+Classic Vello compute and Hybrid comparisons live in the
+[rendering investigation](docs/rendering-investigation.md), including measured
+results and their limits.
 
 ## Contours are layout too
 
@@ -189,11 +192,12 @@ Alignment is inherited: a child without `.anchor` sits where its parent's
 `align` and `justify` say, and `Stretch` is the default cross-axis value so
 a row of controls fills its column unless told otherwise.
 
-## Kurv on MUI
+## A plugin editor shell
 
-A plugin editor shell — header, a scrolling parameter list, a response
-curve, a status bar — is forty-six lines, twenty-one of them the tree
-itself, and not one coordinate:
+Kurv, Matari's synth, is not ported to MUI yet (see [ROADMAP.md](ROADMAP.md));
+this is the shape its editor is heading for. A header, a scrolling parameter
+list, a response curve and a status bar are forty-six lines, twenty-one of
+them the tree itself, and not one coordinate:
 
 ```rust
 use mui::prelude::*;
@@ -379,39 +383,12 @@ assert!(light.is_valid());
 `crates/mui-preview/src/skin.rs` is exactly this file. There is no
 light-theme half because there is nothing in it a mode could contradict.
 
-## Geometry rules
-
-- A plain node's outline is its frame rounded by `Radius::{Theme, Px, Token, Scale, Pill}`,
-  and drawn with circular or squircle corners (`CornerStyle`). A squircle gives
-  up the analytic blur: its shells and shadows come off the outline itself.
-- A welded node unions the children's **sharp** frames first and fillets the
-  result second, with the theme's box and concave radii, so old rounded
-  corners never leak into a new junction.
-- A shell is an inset of the **final** outline before it: analytic for a
-  rounded rectangle (`radius − d`, concentric arcs), a parallel offset of the
-  filleted path for a weld. A shell that would collapse simply stops.
-- Text is a glyph outline from `mui-text`, in the same space as every other
-  path, so a variable-font axis change is a geometry change.
-- Zero-area frames are invisible, not errors: a flex share may collapse.
-
 ## Crates
 
-| crate | what it owns |
-|---|---|
-| `mui-layout` | the flex solver: tokens, pct, aspect, grid, anchors, frames in tree order, and `Id`, the composable node name they are keyed by |
-| `mui-geometry` | Booleans, fillets, parallel offsets, variable-width border regions, curved shape partitions, and the `Spacing` scale layout and style are both written in |
-| `mui-text` | glyph and string outlines from a (variable) font |
-| `mui-motion` | motion maths, dependency-free: the `Spring` every animated property chases, and editable normalized cubic Bezier response `curve`s |
-| `mui-style` | theme data: Oklch `Color`, `Palette`, `Role`, `Fill`, `Gradient`, `Shadow`, `Elevation`, `Radius`, `Style` and the `Theme` they resolve against |
-| `mui-scene` | `El` + `Styled` DSL and the `row!`/`col!`/`stack!`/`grid!` sugar, `canvas` draws, clip and float layers, the walk from tree to `ResolvedScene` paint list, the frame-to-frame `TextCache` |
-| `mui-input` | `Input` (pointer with its buttons and modifiers, wheel, keys, text), hit testing against real paths and their clips, press capture, hover, click, drag and drop |
-| `mui-vello` | the `Canvas` trait and its `Gpu` / `Cpu` wrappers over `vello_hybrid` and `vello_cpu`: fills, strokes, image fills (`Cpu` paints the pixmap, `Gpu` uploads once through its `Atlas`, see Images), clip push/pop, and hinted glyph runs (Vello hints and caches the outlines per font blob); `paint(canvas, scene, transform)`, and `paint_cached` with a `PathCache` that keeps a still frame's arc-to-cubic conversions |
-| `mui-access` | a `ResolvedScene`'s roles and labels as an `accesskit::TreeUpdate` |
-| `mui-truce` | the non-real-time document and parameter contract a Truce plugin shares with its editor |
-| `mui-widgets` | the controls and presets as plain styled trees: `slider`, `knob`, `toggle`, `button`, `text_input`, `curve`, `bins`, `panel`/`card`/`glass`/`chip`/`tile`, and the `Host` trait they read state through |
-| `mui` | `Ui` runtime, focus and wheel scrolling, tooltips, transitions, tweens, gesture edits; implements `Host`, so the widgets above keep their `button(ui, ..)` call; the `prelude` |
-| `mui-tessellate`, `mui-egui` | triangle meshes and the egui debug adapter |
-| `mui-preview` | the winit + wgpu gallery, itself one `mui` tree |
+[ARCHITECTURE.md](ARCHITECTURE.md) has the crate graph and the scene walk --
+how welds, shells, carves and text become one paint list -- and
+[docs/shape-layout.md](docs/shape-layout.md) the contour-aware layout
+contracts.
 
 ## Preview
 
@@ -481,13 +458,4 @@ global allocator, which the library itself forbids.
 Formatting, tests, clippy with warnings denied, and a wasm check of the
 library crates. `BENCHMARKS.md` is the frame budget of a Kurv-sized scene
 across `vello_hybrid`, `vello_cpu` and classic `vello`, reproduced by
-`cargo run -p mui-vello --release --features cpu --example bench`. The
-TypeScript frontend under `packages/mui-ts` is frozen; see
-`packages/mui-ts/FROZEN.md`.
-
-## The GPUI reference
-
-`experiments/gpui-plugin` and `experiments/mui-gpui` are the 2026-09-13 GPUI
-milestone kept for study (workspace-excluded, needs `experiments/upstream`).
-The Vello pipeline in `crates/` replaced it; the benchmarks are in `BENCHMARKS.md`
-and `research/`.
+`cargo run -p mui-vello --release --features cpu --example bench`.

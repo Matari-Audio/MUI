@@ -1215,9 +1215,6 @@ mod tests {
             mid_area > hollow_area && mid_area < solid_area,
             "morph is monotone: {mid_area}"
         );
-        mui_tessellate::Tessellator::default()
-            .tessellate(&hollow, 0.05)
-            .unwrap();
     }
 
     #[test]
@@ -1275,15 +1272,10 @@ mod tests {
     }
 
     #[test]
-    fn a_glyph_tessellates_like_any_other_surface() {
+    fn a_glyph_counter_winds_as_a_hole() {
         let path = glyph_path(&hack(), 'O', 96., &[], 0.05).unwrap();
-        let mesh = mui_tessellate::Tessellator::default()
-            .tessellate(&path, 0.05)
-            .unwrap();
-        assert_eq!(mesh.indices.len() % 3, 0);
-        assert!(!mesh.indices.is_empty());
         // The counter comes out empty because a typeface reverses it, not
-        // because of the fill rule: the filled area is the ring, not the disc.
+        // because of the fill rule: the signed area is the ring, not the disc.
         // Compare against the outer contour's own area.
         let rings = path.flatten(0.05, 250_000).unwrap();
         let outer = rings
@@ -1297,20 +1289,7 @@ mod tests {
                     .abs()
             })
             .fold(0., f64::max);
-        let filled: f64 = mesh
-            .indices
-            .as_chunks::<3>()
-            .0
-            .iter()
-            .map(|i| {
-                let (a, b, c) = (
-                    mesh.positions[i[0] as usize],
-                    mesh.positions[i[1] as usize],
-                    mesh.positions[i[2] as usize],
-                );
-                ((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])).abs() as f64 * 0.5
-            })
-            .sum();
+        let filled = area(&path).abs();
         assert!(filled < outer * 0.9, "the counter is a hole, not fill");
         assert!(filled > outer * 0.3, "but the ring itself is filled");
     }

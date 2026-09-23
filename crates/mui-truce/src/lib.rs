@@ -1,5 +1,6 @@
 //! MUI's non-real-time control/document contract for Truce plugins.
 //! Truce owns parameter metadata, atomics, host transport and the state envelope.
+#![forbid(unsafe_code)]
 pub mod document;
 pub mod parameter;
 pub use document::{Document, EditorState, Error, Module, Route, Target};

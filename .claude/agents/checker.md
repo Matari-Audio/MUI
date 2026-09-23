@@ -13,9 +13,11 @@ abstractions, no unrequested features, keep the `ponytail:` corner-cut
 comments where they are honest.
 
 Environment:
-- Worktree /mnt/Windows11/DEV_PROJECTS/Repos/MUI-vello, branch feat/vello-mui.
-  The shell cwd resets after every command: start every Bash command with
-  `cd /mnt/Windows11/DEV_PROJECTS/Repos/MUI-vello &&`.
+- The repo root is whatever `git rev-parse --show-toplevel` prints in your
+  starting directory; work on the branch already checked out there. The shell
+  cwd resets after every command: start every Bash command with
+  `cd <that root> &&`. Use the `CARGO_TARGET_DIR` your environment sets, if
+  any, for every cargo command.
 - Prefer Bash for reading and editing; quote globs.
 - Never run git commands that discard work (reset --hard, checkout --,
   restore, clean, stash drop, branch -D). Commit your fixes with
