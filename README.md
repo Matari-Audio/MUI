@@ -354,7 +354,10 @@ so a panel handing over a fresh frame buffer every frame does not grow it.
 pixels per scene unit. A node says what it is in the tree itself --
 `.role(Kind::Button).label("OK")` -- and the walk carries that onto the
 surface; a node with no role reports as a group, and a node with no label
-has no name (its id is not read aloud). The
+has no name (its id is not read aloud). A `text_input` reports its line
+as a `TextRun` with each character's position and its selection, so a reader
+follows the caret, and a reader's `SetTextSelection` comes back as
+`SemanticAction::set_selection`. The
 widgets in `mui` already describe themselves, so the preview just hands the
 update to its `accesskit_winit::Adapter` after each frame.
 
