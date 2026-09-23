@@ -231,13 +231,23 @@ public function and a test behind it.
 - [ ] `Ui::set_text` swaps one line: a wrapped label re-shapes to a single
       run rather than breaking again, because the swap deliberately does no
       layout. Re-breaking needs the measure pass it is avoiding.
-- [ ] `Ui::set_text` does not touch what `mui-access` reports; a screen
-      reader hears the value the last resolved tree carried.
-
 - [ ] A pin whose anchor is itself inside another pinned float reads that
       float's first-pass position; a dependency-ordered pin pass is the fix.
 - [ ] Spring interpolation of gradient *stops*: `Ui`'s channels only ever
       sprang solid fills, and no scene needs the per-stop slots yet.
+- [ ] A native CLAP/VST3 editor host: parent-window embedding, per-platform
+      threading and lifetimes, resize negotiation, focus, IME, clipboard and
+      GPU device loss, tested in real DAWs. `mui-preview` is a winit dev host,
+      not that.
+- [ ] The `mui-truce` <-> `Ui` parameter bridge: `mui-truce` owns parameter
+      metadata, automation and the state document, but nothing yet binds a
+      truce parameter to a slider or knob, or routes `Edit::Begin`/`End` to
+      host automation gestures.
+- [ ] Keyboard value stepping: sliders and knobs take no arrow keys yet;
+      only `text_input` and `bins` read navigation keys.
+- [ ] The text cache flushes at 4096 entries; it has no byte budget or LRU
+      eviction, and `mui-vello`'s process-global font table never evicts.
+- [ ] No fuzzing or property campaigns over layout, welding or text input.
 - [ ] Kurv rewritten on MUI: the first real plugin editor on this stack, and
       the only honest test of whether the DSL survives a product.
 - [ ] `vello_hybrid` against classic `vello`, re-measured on Windows — the
