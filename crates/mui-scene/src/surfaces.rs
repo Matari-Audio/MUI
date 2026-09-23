@@ -41,15 +41,18 @@ pub(crate) struct Cache {
 fn count(n: &El) -> usize {
     1 + n.children().iter().map(count).sum::<usize>()
 }
-fn collect<'a>(n: &'a El, at: usize, nodes: &mut Vec<(usize, &'a El)>) {
+/// The owner's scope in pre-order; returns the subtree size so a walk is O(n).
+fn collect<'a>(n: &'a El, at: usize, nodes: &mut Vec<(usize, &'a El)>) -> usize {
     nodes.push((at, n));
     let mut next = at + 1;
     for child in n.children() {
-        if child.payload().surface_padding.is_none() && !child.is_float() {
-            collect(child, next, nodes);
-        }
-        next += count(child);
+        next += if child.payload().surface_padding.is_none() && !child.is_float() {
+            collect(child, next, nodes)
+        } else {
+            count(child)
+        };
     }
+    next - at
 }
 impl Cache {
     pub fn resolve(
