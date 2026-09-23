@@ -6,6 +6,58 @@ caches and shims, the scene and runtime split, `mui-widgets` folded into
 `mui`). Every number is a median. No row is a sum of per-phase medians and
 there is no FPS column (see `docs/rendering-investigation.md`).
 
+## Since `780c3f4`: render-perf, scene-copies, interaction-access, daw-host
+
+Base `780c3f4` against the merge of the four branches, run alternately
+(base, head, base, head ...) 6 times each under `--profile perf`, same
+machine. **Load average 58 to 68 on 16 threads** the whole time (other
+agents building), so every absolute number here is 2 to 5 times the idle
+figures below and only the before -> after column means anything; under 10%
+is noise, and some rows moved more than that both ways between runs.
+
+Each tree ran its own `bench.rs`. At `780c3f4` the bench built a new image
+`Arc` every frame, which defeated every retained cache; head keeps one and adds
+a `fresh image` row for that case. The `static` and `one knob turning` encode
+rows below include that bench fix as well as the library change (the CPU
+glyph atlas from a font's second frame).
+
+| measurement (median ms) | 780c3f4 | head | change |
+|---|---:|---:|---:|
+| bench, mui (resolve only), static: total | 3.773 | 3.161 | -16% |
+| bench, vello_cpu, cold: total | 26.115 | 20.586 | -21% |
+| bench, vello_cpu, static: encode | 14.131 | 6.992 | -51% |
+| bench, vello_cpu, static: total | 29.481 | 24.024 | -19% |
+| bench, vello_cpu, one knob turning: encode | 12.898 | 7.582 | -41% |
+| bench, vello_cpu, one knob turning: total | 24.419 | 21.284 | -13% |
+| bench, vello_cpu, static: render | 0.833 | 1.162 | **+40%, slower** |
+| bench, vello_hybrid, cold: total | 20.084 | 18.425 | -8% (noise) |
+| bench, vello_hybrid, static: total | 15.131 | 12.941 | -14% |
+| bench, vello_hybrid, one knob turning: total | 13.527 | 12.713 | -6% (noise) |
+| bench, arc-to-cubic conversion per frame | 0.152 | 0.160 | same |
+| bench, peak RSS | 96.1 MiB | 110.7 MiB | **+15%, larger** |
+| stress 1280x800: warm resolve | 1.892 | 1.075 | -43% |
+| stress 240x2400: warm resolve | 1.365 | 1.079 | -21% |
+| stress 2000x300: warm resolve | 1.146 | 1.058 | -8% (noise) |
+| stress 1280x800: cold resolve | 7.409 | 9.172 | +24% (noise: runs spread 5.2 to 10.4 at base, 5.6 to 18.9 at head) |
+| stress 240x2400 / 2000x300: cold resolve | 5.346 / 5.827 | 4.197 / 4.482 | -21% / -23% |
+| stress: bare layout solve (3 shapes) | 0.322 / 0.324 / 0.324 | 0.340 / 0.330 / 0.328 | same |
+| stress: allocations per warm resolve | 5924, 3161 KiB | 5310, 2737 KiB | -10%, -13% (exact) |
+| frame_cost: pill resolve (cold) | 0.163 | 0.156 | same |
+| frame_cost: `Ui::frame`, sliders + knob | 0.059 | 0.029 | -51% (base spread 0.029 to 0.174) |
+| frame_cost: mui paint walk | 0.014 | 0.015 | same |
+
+**What did not improve.** The paint walk in `frame_cost` is unchanged: the
+free `paint()` still converts every path every frame (only the retained
+renderers keep conversions now), so the 0.001 ms of the old `PathCache` is
+not back. Arc-to-cubic conversion in the bench is the same. `vello_cpu`
+render reads 40% higher, since glyphs now come from atlas bitmaps that the
+render stage composites; the encode saving is about twenty times that. Peak RSS
+grew by the CPU glyph atlas pages. `vello_hybrid` encode is unchanged in
+kind (no glyph atlas on the GPU canvas, see ROADMAP). The retained
+renderers' skipped render pass (`hybrid retained static`, 1 -> 0 renders
+over 55 frames) is behind the `gpu-effects` rows, which this run did not
+take; the render-perf builder measured 3.253 -> 1.558 ms at load 27 to 38.
+
 ## Machine and conditions
 
 | | |
