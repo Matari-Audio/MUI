@@ -1715,10 +1715,10 @@ impl<'a> Walk<'a> {
         self.partition(n, &outline, frame, at)?;
         self.key = key.clone();
         let clear = Fill::Color(Color::oklcha(0.0, 0.0, 0.0, 0.0));
-        let envelope = self.region_envelopes.get(&at).cloned();
-        if let Some(p) = &envelope {
-            self.push(Layer::Clip, p.clone(), None, &clear, under);
-        }
+        // Each envelope belongs to exactly one node, visited once.
+        let enveloped = self.region_envelopes.remove(&at).map(|p| {
+            self.push(Layer::Clip, p, None, &clear, under);
+        });
         // A mask composites against what the subtree drew, so the subtree
         // needs a layer of its own even when nothing asked to blend.
         let masked = !s.mask.is_none();
@@ -1779,27 +1779,30 @@ impl<'a> Walk<'a> {
         };
 
         let border_background = self.paint.len();
-        let (mut cur, mut cur_rect) = (outline.clone(), rect);
+        // The shell before this one: an analytic rect insets as one, and
+        // only a path shell needs the previous path kept.
+        let (mut cur, mut cur_rect) = (None::<Path>, rect);
         for (i, (d, f)) in s.shells.iter().enumerate() {
             let d = d.resolve(th.spacing);
             if !(d.is_finite() && d >= 0.0) {
                 return Err(SceneError::InvalidRadius);
             }
-            match cur_rect {
+            let shell = match cur_rect {
                 Some(rr) => {
                     let i2 = rr.inset(d)?;
                     changed |= i2.corner_collapsed;
                     let Some(child) = i2.shape else { break };
-                    cur = child.path();
                     cur_rect = Some(child);
+                    child.path()
                 }
                 None => {
-                    let i2 = inset_path(&cur, d, self.spec.offsets)?;
+                    let i2 = inset_path(cur.as_ref().unwrap_or(&outline), d, self.spec.offsets)?;
                     changed |= i2.counts_changed;
-                    cur = i2.path;
+                    cur = Some(i2.path.clone());
+                    i2.path
                 }
-            }
-            bg = solid(self.push(Layer::Shell(i), cur.clone(), cur_rect, f, bg), bg);
+            };
+            bg = solid(self.push(Layer::Shell(i), shell, cur_rect, f, bg), bg);
         }
 
         if s.shadow.iter().any(|sh| sh.kind == ShadowKind::Inset) {
@@ -1973,7 +1976,8 @@ impl<'a> Walk<'a> {
                 (bottom - frame.y + scrolled[1] + pad.bottom - pad.top).max(0.0),
             );
         }
-        self.at.insert(key.clone(), self.surfaces.len());
+        let surface = self.surfaces.len();
+        self.at.insert(key.clone(), surface);
         let (semantics, semantic_label_implicit) = match (&e.semantics, &e.content) {
             (Some(semantics), Content::Text(text)) if semantics.label.is_none() => {
                 let mut semantics = semantics.clone();
@@ -1991,7 +1995,8 @@ impl<'a> Walk<'a> {
                 Some(r) => Some(r.bounds()),
                 None => Bounds::from_points(outline.flatten(0.5, 100_000)?.concat()),
             },
-            path: outline.clone(),
+            // Filled in at the end of this node, from the outline itself.
+            path: Path::default(),
             rect,
             topology_changed: changed,
             cursor,
@@ -2242,9 +2247,11 @@ impl<'a> Walk<'a> {
             self.key = key;
             self.push(Layer::Unblend, Path::default(), None, &clear, bg);
         }
-        if envelope.is_some() {
+        if enveloped.is_some() {
             self.push(Layer::Unclip, Path::default(), None, &clear, bg);
         }
+        // The outline's last use, so the surface takes it instead of a copy.
+        self.surfaces[surface].path = outline;
         Ok(())
     }
 }
