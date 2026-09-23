@@ -1950,6 +1950,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "mui-stage"
+version = "0.3.2"
+dependencies = [
+ "bytemuck",
+ "epaint_default_fonts",
+ "mui",
+ "mui-geometry",
+ "mui-scene",
+ "mui-vello",
+ "png 0.17.16",
+ "pollster",
+ "vello_common",
+ "vello_hybrid",
+ "wgpu",
+]
+
+[[package]]
 name = "mui-style"
 version = "0.3.2"
 dependencies = [

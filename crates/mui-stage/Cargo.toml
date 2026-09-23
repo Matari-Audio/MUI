@@ -1,0 +1,23 @@
+[package]
+name = "mui-stage"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "GPU trailer stage for MUI: layers on lit, extruded 3D slabs, WGSL backgrounds, bloom and film post, subframe motion blur."
+
+# An offline renderer picks its own backend, unlike mui-vello, which renders
+# into whatever device a plugin host made.
+[dependencies]
+mui-scene = { path = "../mui-scene" }
+mui-geometry = { path = "../mui-geometry" }
+mui-vello = { path = "../mui-vello" }
+vello_hybrid = { version = "0.2", features = ["wgpu_default"] }
+vello_common = { version = "0.2", default-features = false }
+wgpu = { version = "29", default-features = false, features = ["wgsl", "vulkan", "gles", "metal", "dx12"] }
+pollster = "0.4"
+bytemuck = "1"
+
+[dev-dependencies]
+mui = { path = "../mui" }
+epaint_default_fonts = "0.36"
+png = "0.17"

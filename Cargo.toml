@@ -12,6 +12,7 @@ members = [
   "crates/mui-playground",
   "crates/mui-text",
   "crates/mui-vello",
+  "crates/mui-stage",
   "crates/mui-truce",
   "crates/mui-input",
   "crates/mui-access",
