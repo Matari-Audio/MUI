@@ -27,7 +27,7 @@ pub use regions::{
 };
 mod path;
 mod spacing;
-pub use nesting::{inset_arc_radius, inset_for_stroked_gap, InsetRect, NestedRadius, RoundedRect};
+pub use nesting::{InsetRect, RoundedRect};
 pub use offset::{
     boundary_distance, inset_path, offset_path, outset_path, InsetShape, OffsetOptions, OffsetShape,
 };

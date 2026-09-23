@@ -2313,23 +2313,24 @@ pub fn resolve_scene_cached(
         spec.limits,
         th.spacing,
         &mut text.layout,
-        |e| {
+        |e, out| {
             // Exact, unambiguous key for precisely the fields `fit` consumes.
             // This is a correctness-first projection, not hash-only equality.
             if let Content::Text(t) = &e.content {
-                format!(
-                    "{:?}|{:016x}|{:?}|{:x}|{:?}|{:?}",
-                    t,
-                    e.text_size.unwrap_or(th.text).to_bits(),
-                    e.axes,
-                    // 0 is "no face of its own"; ids shift up one past it.
-                    e.font.as_ref().map_or(0, |f| f.id() + 1),
-                    e.lines,
-                    e.reserve
-                )
-                .into_bytes()
-            } else {
-                Vec::new()
+                // Writing into a Vec cannot fail.
+                let _ = std::io::Write::write_fmt(
+                    out,
+                    format_args!(
+                        "{:?}|{:016x}|{:?}|{:x}|{:?}|{:?}",
+                        t,
+                        e.text_size.unwrap_or(th.text).to_bits(),
+                        e.axes,
+                        // 0 is "no face of its own"; ids shift up one past it.
+                        e.font.as_ref().map_or(0, |f| f.id() + 1),
+                        e.lines,
+                        e.reserve
+                    ),
+                );
             }
         },
         |e, room| fit(&mut runs, th, e, room),

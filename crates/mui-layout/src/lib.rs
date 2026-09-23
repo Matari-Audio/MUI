@@ -171,7 +171,7 @@ impl std::fmt::Display for Error {
 }
 impl std::error::Error for Error {}
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Limits {
     pub nodes: usize,
     pub depth: usize,
@@ -303,36 +303,6 @@ fn resolve_impl<P>(
         frames: out.0,
         order: out.1,
     })
-}
-
-/// UI-thread transactional commit. This is not a CPU atomic and not an audio-thread data structure.
-#[derive(Debug, Default)]
-pub struct LayoutState {
-    revision: u64,
-    current: Option<Layout>,
-}
-impl LayoutState {
-    pub fn revision(&self) -> u64 {
-        self.revision
-    }
-    pub fn current(&self) -> Option<&Layout> {
-        self.current.as_ref()
-    }
-    pub fn commit<P>(
-        &mut self,
-        root: &Node<P>,
-        offered: Option<Size>,
-        limits: Limits,
-    ) -> Result<(), Error> {
-        let next = resolve(root, offered, limits)?;
-        let revision = self
-            .revision
-            .checked_add(1)
-            .ok_or(Error::RevisionExhausted)?;
-        self.current = Some(next);
-        self.revision = revision;
-        Ok(())
-    }
 }
 
 #[cfg(test)]

@@ -45,6 +45,9 @@ pub(crate) fn distribute<P>(
             c.node.shrink * base[i]
         }
     };
+    // ponytail: O(children x clamp rounds), quadratic only when children hit
+    // their limits one round at a time. Water-fill in room/weight order
+    // (O(n log n)) if rows of thousands of clamped children ever show up.
     for _ in 0..=children.len() {
         let active: Vec<usize> = (0..children.len())
             .filter(|i| weight(*i) > 0.0 && room(*i, &allocated) > 1e-8)

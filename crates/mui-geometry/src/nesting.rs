@@ -2,18 +2,6 @@
 use crate::{Arc, Bounds, Error, Path, PathCommand, Point};
 use std::f64::consts::FRAC_PI_2;
 
-/// These policies are deliberately different. Only `Concentric` also derives
-/// the child's bounds. A radius number alone cannot guarantee a uniform band.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum NestedRadius {
-    /// Parallel inset of the parent's boundary in the SAME coordinate space.
-    Concentric { inset: f64 },
-    /// Same dimensionless r / short_side. This is a style, NOT a parallel inset.
-    Proportional { scale: f64 },
-    /// Deliberate independent styling. This gives no thickness guarantee.
-    Independent { radius: f64 },
-}
-
 /// Validated circular-corner rectangle. Fields cannot be changed independently.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RoundedRect {
@@ -146,63 +134,4 @@ impl RoundedRect {
         commands.push(PathCommand::Close);
         Path { commands }
     }
-}
-
-impl NestedRadius {
-    /// Concentric ignores `independent_bounds`: there is exactly one child
-    /// boundary for a specified inset. Other modes deliberately use those bounds.
-    pub fn resolve(
-        self,
-        parent: RoundedRect,
-        independent_bounds: Bounds,
-    ) -> Result<InsetRect, Error> {
-        match self {
-            Self::Concentric { inset } => parent.inset(inset),
-            Self::Proportional { scale } => {
-                nonnegative(scale)?;
-                let short = parent.bounds.width().min(parent.bounds.height());
-                let child = RoundedRect::new(independent_bounds, 0.0)?;
-                let r =
-                    parent.radius / short * child.bounds.width().min(child.bounds.height()) * scale;
-                Ok(InsetRect {
-                    shape: Some(RoundedRect::new(independent_bounds, r)?),
-                    corner_collapsed: false,
-                })
-            }
-            Self::Independent { radius } => Ok(InsetRect {
-                shape: Some(RoundedRect::new(independent_bounds, radius)?),
-                corner_collapsed: false,
-            }),
-        }
-    }
-}
-
-/// For locally corresponding, smooth circular arcs before an offset singularity.
-/// Convex and concave mean relative to filled material, not ring winding.
-/// None says that a convex arc collapsed; a general offset needs topology cleanup.
-pub fn inset_arc_radius(radius: f64, inset: f64, concave: bool) -> Result<Option<f64>, Error> {
-    nonnegative(radius)?;
-    nonnegative(inset)?;
-    let next = if concave {
-        radius + inset
-    } else {
-        radius - inset
-    };
-    if !next.is_finite() {
-        return Err(Error::CoordinateLimit);
-    }
-    Ok((next > 0.0).then_some(next))
-}
-
-/// Uniform centerline inset needed to leave an exposed gap between two centered
-/// strokes. `gap` alone is not the centerline-to-centerline distance.
-pub fn inset_for_stroked_gap(gap: f64, outer_stroke: f64, inner_stroke: f64) -> Result<f64, Error> {
-    nonnegative(gap)?;
-    nonnegative(outer_stroke)?;
-    nonnegative(inner_stroke)?;
-    let d = gap + outer_stroke * 0.5 + inner_stroke * 0.5;
-    if !d.is_finite() {
-        return Err(Error::CoordinateLimit);
-    }
-    Ok(d)
 }
