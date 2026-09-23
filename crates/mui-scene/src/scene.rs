@@ -16,7 +16,7 @@ use mui_geometry::{
 use mui_layout::{Frame, Layout, Limits, Size};
 use mui_text::{Axes, FallbackTextRun, TextRun};
 
-use crate::regions::Operation;
+use crate::regions::{Operation, STROKE_BAND};
 use crate::{
     Carve, Color, Content, Cursor, El, Fill, Mix, Paint, Radius, Semantics, Shadow, ShadowKind,
     Theme,
@@ -951,6 +951,7 @@ impl<'a> Walk<'a> {
         outline: &Path,
         frame: Frame,
         at: usize,
+        (key, parent): (&Arc<str>, &str),
     ) -> Result<(), SceneError> {
         let e = n.payload();
         let Some(padding) = e.inside else {
@@ -1011,7 +1012,7 @@ impl<'a> Walk<'a> {
             ramp.to.1 *= ramp.align.inward();
             if ramp.from.1.max(ramp.to.1) > 0. {
                 let mut band = self.borders.band(
-                    &format!("inside/{at}"),
+                    &format!("inside/{key}"),
                     outline,
                     &ramp,
                     anchor,
@@ -1026,13 +1027,13 @@ impl<'a> Walk<'a> {
                     Ok(self.ramp_frames[&(at, id.clone())])
                 })?;
                 let band = self.region_cache.resolve(
-                    (at, 0),
+                    (key.clone(), 0),
                     Operation::Sweep(band),
                     self.spec.offsets,
                     self.spec.geometry,
                 )?;
                 interior = self.region_cache.resolve(
-                    (at, 1),
+                    (key.clone(), 1),
                     Operation::Combine(interior, band, BooleanOp::Difference),
                     self.spec.offsets,
                     self.spec.geometry,
@@ -1044,14 +1045,14 @@ impl<'a> Walk<'a> {
                 return Err(SceneError::InvalidRadius);
             }
             interior = self.region_cache.resolve(
-                (at, 2),
+                (key.clone(), 2),
                 Operation::Inset(interior, width * e.border_align.inward()),
                 self.spec.offsets,
                 self.spec.geometry,
             )?;
         }
         interior = self.region_cache.resolve(
-            (at, 3),
+            (key.clone(), 3),
             Operation::Inset(interior, padding),
             self.spec.offsets,
             self.spec.geometry,
@@ -1093,15 +1094,16 @@ impl<'a> Walk<'a> {
         let children: Vec<_> = n
             .children()
             .iter()
-            .filter_map(|c| {
+            .enumerate()
+            .filter_map(|(j, c)| {
                 let i = next;
                 next += count(c);
-                (!c.is_float() && c.payload().carve.is_none()).then_some((i, c))
+                (!c.is_float() && c.payload().carve.is_none()).then_some((i, c, j))
             })
             .collect();
         let mut masks: Vec<Path> = children
             .iter()
-            .map(|(i, _)| {
+            .map(|(i, ..)| {
                 if self.frames[*i].size.width <= 0. || self.frames[*i].size.height <= 0. {
                     Ok(Path::default())
                 } else {
@@ -1141,7 +1143,7 @@ impl<'a> Walk<'a> {
                 .bend(e.bend);
             for (side, mask) in masks.iter_mut().enumerate() {
                 *mask = self.region_cache.resolve(
-                    (at, 4 + side as u8),
+                    (key.clone(), 4 + side as u8),
                     Operation::SplitMask(b, split, side == 1),
                     self.spec.offsets,
                     self.spec.geometry,
@@ -1149,9 +1151,13 @@ impl<'a> Walk<'a> {
             }
         }
 
-        for ((i, child), mask) in children.into_iter().zip(masks) {
+        for ((i, child, j), mask) in children.into_iter().zip(masks) {
+            // The same identity `node` gives this child when it walks it.
+            let id: Arc<str> = child
+                .key()
+                .map_or_else(|| Arc::from(format!("{parent}/{j}")), Arc::from);
             let path = self.region_cache.resolve(
-                (i, 6),
+                (id.clone(), 6),
                 Operation::Combine(interior.clone(), mask, BooleanOp::Intersection),
                 self.spec.offsets,
                 self.spec.geometry,
@@ -1180,20 +1186,20 @@ impl<'a> Walk<'a> {
                     sweep.from.1 *= outward;
                     sweep.to.1 *= outward;
                     let band = self.borders.band(
-                        &format!("outside/{i}"),
+                        &format!("outside/{id}"),
                         &path,
                         &sweep,
                         anchor,
                         0.1 / self.spec.device_scale.unwrap_or(1.),
                     )?;
                     let band = self.region_cache.resolve(
-                        (i, 8),
+                        (id.clone(), 8),
                         Operation::Sweep(band),
                         self.spec.offsets,
                         self.spec.geometry,
                     )?;
                     path = self.region_cache.resolve(
-                        (i, 9),
+                        (id.clone(), 9),
                         Operation::Combine(path, band, BooleanOp::Difference),
                         self.spec.offsets,
                         self.spec.geometry,
@@ -1207,7 +1213,7 @@ impl<'a> Walk<'a> {
                 let outward = width * (1. - child.payload().border_align.inward());
                 if outward > 0. {
                     path = self.region_cache.resolve(
-                        (i, 9),
+                        (id.clone(), 9),
                         Operation::Inset(path, outward),
                         self.spec.offsets,
                         self.spec.geometry,
@@ -1352,9 +1358,12 @@ impl<'a> Walk<'a> {
     }
 
     fn geometry_key(&self, n: &El, first: usize) -> u64 {
+        use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher};
         let mut h = 0xcbf2_9ce4_8422_2325_u64;
         let mut eat = |value: u64| h = (h ^ value).wrapping_mul(0x100_0000_01b3);
-        eat(first as u64);
+        // Identity is the node's key, not its pre-order index: a tooltip or
+        // menu wrapping the root shifts every index but no key or geometry.
+        eat(BuildHasherDefault::<DefaultHasher>::default().hash_one(n.key()));
         for value in [
             self.spec.theme.corners.selector,
             self.spec.theme.corners.field,
@@ -1744,11 +1753,16 @@ impl<'a> Walk<'a> {
             None => self.outline(n, frame, self.i)?,
         };
 
-        self.partition(n, &outline, frame, at)?;
+        self.partition(n, &outline, frame, at, (&key, path.as_str()))?;
         if e.surface_padding.is_some() {
-            let geometry = self
-                .surface_cache
-                .resolve(n, at, &self.frames, &outline, self.spec)?;
+            let geometry = self.surface_cache.resolve(
+                n,
+                (&key, at),
+                &self.frames,
+                &outline,
+                self.spec,
+                self.region_cache,
+            )?;
             self.regions.extend(geometry.panels);
             self.joined_nodes.extend(geometry.join_nodes);
             self.surface_joins.insert(at, geometry.joins);
@@ -1879,14 +1893,13 @@ impl<'a> Walk<'a> {
                     deferred_stroke = Some((outline.clone(), None, st.fill.clone(), 0.));
                 }
             } else {
-                let band = mui_geometry::border_geometry(
-                    &outline,
-                    mui_geometry::WidthProfile::uniform(w),
-                    e.border_align,
+                // Shared with a surface owner's clearance: one entry per node.
+                let band = self.region_cache.resolve(
+                    (key.clone(), STROKE_BAND),
+                    Operation::Border(outline.clone(), w, e.border_align),
                     self.spec.offsets,
                     self.spec.geometry,
-                )?
-                .band;
+                )?;
                 deferred_stroke = Some((band, None, st.fill.clone(), 0.));
             }
         }
@@ -2266,7 +2279,7 @@ impl<'a> Walk<'a> {
             }
             if ramp.align == crate::BorderAlign::Outside {
                 let merged = self.region_cache.resolve(
-                    (at, 7),
+                    (key.clone(), 7),
                     Operation::Sweep(band),
                     self.spec.offsets,
                     self.spec.geometry,
