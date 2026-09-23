@@ -1349,7 +1349,7 @@ mod tests {
     #[cfg(feature = "cpu")]
     use super::effects;
     use super::{editor, GlyphAxes};
-    use mui::core::Frame as LayoutFrame;
+    use mui::scene::Frame as LayoutFrame;
     use mui::prelude::*;
 
     #[test]

@@ -5,8 +5,6 @@ members = [
   "crates/mui-style",
   "crates/mui-motion",
   "crates/mui-layout",
-  "crates/mui-tessellate",
-  "crates/mui-egui",
   "crates/mui-scene",
   "crates/mui-widgets",
   "crates/mui",
@@ -18,7 +16,6 @@ members = [
   "crates/mui-input",
   "crates/mui-access",
 ]
-exclude = ["experiments/upstream", "experiments/upstream/**", "experiments/gpui-plugin", "experiments/mui-gpui"]
 resolver = "2"
 
 [workspace.package]
@@ -28,8 +25,6 @@ license = "MIT"
 
 [workspace.dependencies]
 i_overlay = "=8.1.0"
-egui = { version = "=0.36.2", default-features = false }
-lyon_tessellation = "=1.0.20"
 
 # Comparable speed-oriented benchmark profile; release's size policy is unchanged.
 [profile.perf]

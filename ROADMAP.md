@@ -213,8 +213,8 @@ public function and a test behind it.
       sit under the element tree (`mui-style`, `mui-motion`, `mui-geometry`),
       `mui-core` is `mui-scene`, the controls are `mui-widgets` behind a
       `Host` trait, and `mui` is the facade that owns the runtime and the
-      prelude. The graph is acyclic and every public path is unchanged;
-      `mui::core` stays as a deprecated alias of `mui::scene` for one release.
+      prelude. The graph is acyclic; the old `mui::core` alias is gone,
+      use `mui::scene`.
 
 - [x] Live readouts and one-seed palettes: `.reserve("-88.8 dB")` measures a
       text node for the widest value it will ever show, `Ui::set_text(id, s)`

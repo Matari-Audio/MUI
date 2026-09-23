@@ -7,7 +7,6 @@ license.workspace = true
 [features]
 default = []
 gpu-effects = ["mui-vello/gpu-effects"]
-egui = ["dep:mui-egui"]
 cpu = ["mui-vello/cpu"]
 cpu-threads = ["mui-vello/cpu-threads"]
 
@@ -17,11 +16,9 @@ mui-widgets = { path = "../mui-widgets" }
 mui-motion = { path = "../mui-motion" }
 mui-layout = { path = "../mui-layout" }
 mui-geometry = { path = "../mui-geometry" }
-mui-tessellate = { path = "../mui-tessellate" }
 mui-input = { path = "../mui-input" }
 mui-text = { path = "../mui-text" }
 mui-vello = { path = "../mui-vello" }
-mui-egui = { path = "../mui-egui", optional = true }
 
 [dev-dependencies]
 epaint_default_fonts = "0.36"

@@ -31,7 +31,7 @@ impl mui::vello::Canvas for Sink {
     fn pop_clip(&mut self) {}
     fn push_layer(&mut self, _: mui::vello::peniko::BlendMode, _: f32) {}
     fn pop_layer(&mut self) {}
-    fn glyphs(&mut self, _: &mui::core::Text) {}
+    fn glyphs(&mut self, _: &mui::scene::Text) {}
 }
 
 fn ms(mut f: impl FnMut()) -> f64 {

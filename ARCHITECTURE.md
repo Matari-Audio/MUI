@@ -174,7 +174,6 @@ mui-preview          window, wgpu surface, the gallery as one tree
    |
    v
 mui                  Ui runtime, Frame, Edit, prelude, re-exports
-   |                 (mui::core is a deprecated alias of mui::scene)
    +--> mui-widgets  controls and presets; reads state through `Host`
    +--> mui-vello    Canvas, paint, PathCache      +--> mui-access
    +--> mui-input    hit testing, gestures (over mui-vello's paths)
@@ -184,7 +183,7 @@ mui-scene            El DSL, Styled/Paints, Theme resolution, the scene walk
    |
    +--> mui-style    colours, roles, fills, shadows, Style, Theme (+ color)
    +--> mui-motion   Spring, curve (std only)
-   +--> mui-text     glyph and string outlines      +--> mui-tessellate
+   +--> mui-text     glyph and string outlines
    +--> mui-layout   the flex solve
          |
          v
@@ -194,6 +193,5 @@ mui-scene            El DSL, Styled/Paints, Theme resolution, the scene walk
 `Spacing`/`SpacingScale` live in `mui-geometry` because both `mui-style` (a
 shell's thickness, a theme's scale) and `mui-layout` (`gap`, `pad`) are
 written in them; putting them in either would point an edge sideways.
-`mui-egui` is an optional debug adapter off `mui-geometry`/`mui-tessellate`,
-and `mui-truce` stands alone. `mui-widgets` dev-depends on `mui` so its
+`mui-truce` stands alone. `mui-widgets` dev-depends on `mui` so its
 doctests can call a real `Ui`; the library graph stays one-way.
