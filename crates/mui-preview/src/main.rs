@@ -165,7 +165,7 @@ fn inspect(
     scene: &mui::core::ResolvedScene,
     xf: Affine,
     palette: &Palette,
-    font: &Arc<[u8]>,
+    font: &Font,
     pointer: Option<Point>,
     height: f64,
 ) {
@@ -198,22 +198,23 @@ fn inspect(
         "{}  {:.0} {:.0} {:.0} {:.0}",
         s.key, f.x, f.y, f.size.width, f.size.height
     );
-    let Ok(run) = mui_text::text_run(font, &label, LABEL, &[], mui::vello::ARC_TOLERANCE) else {
+    let fonts = std::slice::from_ref(font);
+    let Ok(run) = mui_text::text_run(fonts, &label, LABEL, &[], mui::vello::ARC_TOLERANCE) else {
         return;
     };
     canvas.glyphs(&mui::core::Text {
         font: font.clone(),
-        fonts: vec![font.clone()].into(),
+        fonts: fonts.into(),
         size: LABEL as f32,
         origin: Point::new(SIDEBAR + 12.0, height - 12.0),
         glyphs: run
             .glyphs
             .iter()
-            .map(|&(id, x)| mui::core::TextGlyph {
-                id,
-                x: x as f32,
-                y: 0.,
-                font: 0,
+            .map(|g| mui::core::TextGlyph {
+                id: g.id,
+                x: g.x as f32,
+                y: g.y as f32,
+                font: g.font,
             })
             .collect(),
         axes: Default::default(),
@@ -227,7 +228,7 @@ struct App {
     ui: Ui,
     /// The gallery's own font, kept so the inspector can set its own labels
     /// without going through the scene.
-    font: Arc<[u8]>,
+    font: Font,
     scenes: Vec<Box<dyn PreviewScene>>,
     selected: usize,
     /// Where the specimen was dragged to, relative to centred.
@@ -286,12 +287,13 @@ struct App {
 
 impl App {
     fn new() -> Self {
-        let font: Arc<[u8]> = Arc::from(epaint_default_fonts::HACK_REGULAR);
+        let font = Font::new(epaint_default_fonts::HACK_REGULAR).expect("bundled Hack parses");
         Self {
             ui: {
-                let ui = Ui::new(skin::SKIN)
-                    .font(font.clone())
-                    .fallback_font(epaint_default_fonts::NOTO_EMOJI_REGULAR.to_vec());
+                let ui = Ui::new(skin::SKIN).font(font.clone()).fallback_font(
+                    Font::new(epaint_default_fonts::NOTO_EMOJI_REGULAR)
+                        .expect("bundled Noto Emoji parses"),
+                );
                 #[cfg(feature = "gpu-effects")]
                 let ui = ui.gpu_welding();
                 ui

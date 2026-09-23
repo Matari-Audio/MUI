@@ -246,13 +246,13 @@ fn run(
     images: bool,
     mut draw: impl FnMut(&ResolvedScene) -> (f64, f64),
 ) -> Row {
-    let mut ui = Ui::new(Theme::DEFAULT).font(font.to_vec());
+    let mut ui = Ui::new(Theme::DEFAULT).font(Font::new(font).unwrap());
     let mut app = App::new();
     let (mut r, mut e, mut d) = (vec![], vec![], vec![]);
     let (mut b, mut totals) = (vec![], vec![]);
     for i in 0..WARM + N {
         if case == Case::Cold {
-            ui = Ui::new(Theme::DEFAULT).font(font.to_vec());
+            ui = Ui::new(Theme::DEFAULT).font(Font::new(font).unwrap());
         }
         if case == Case::Knob {
             app.knobs[7] = f64::from(i as u32 % 100) / 100.0;
@@ -345,7 +345,7 @@ fn main() {
     let font = epaint_default_fonts::HACK_REGULAR;
     let mut rows = Vec::new();
     {
-        let mut ui = Ui::new(Theme::DEFAULT).font(font.to_vec());
+        let mut ui = Ui::new(Theme::DEFAULT).font(Font::new(font).unwrap());
         let mut app = App::new();
         let root = editor(&mut ui, &mut app, IMAGES);
         let f = ui

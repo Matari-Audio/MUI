@@ -43,7 +43,7 @@ fn spec() -> SceneSpec {
             },
             ..Theme::DEFAULT
         })
-        .font(epaint_default_fonts::HACK_REGULAR.to_vec())
+        .font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap())
 }
 
 fn main() {

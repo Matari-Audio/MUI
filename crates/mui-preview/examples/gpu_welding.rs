@@ -37,7 +37,7 @@ impl Lab {
             gpu: None,
             ui: Ui::new(Theme::DEFAULT)
                 .gpu_welding()
-                .font(epaint_default_fonts::HACK_REGULAR.to_vec()),
+                .font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap()),
             dirty: true,
             visible: true,
             morph: 1.,

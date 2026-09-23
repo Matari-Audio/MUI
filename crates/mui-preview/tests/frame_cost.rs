@@ -66,12 +66,12 @@ const BUDGET_MS: f64 = 50.0;
 #[test]
 fn what_a_frame_costs() {
     let font = epaint_default_fonts::HACK_REGULAR;
-    let spec = SceneSpec::new(pill()).font(font.to_vec());
+    let spec = SceneSpec::new(pill()).font(Font::new(font).unwrap());
     let resolve = ms(|| {
         black_box(resolve_scene(black_box(&spec)).unwrap());
     });
     println!("pill resolve (weld + shell + text) {resolve:8.3} ms");
-    let mut ui = Ui::new(Theme::DEFAULT).font(font.to_vec());
+    let mut ui = Ui::new(Theme::DEFAULT).font(Font::new(font).unwrap());
     let mut v = 0.3;
     let frame = ms(|| {
         let root = column([

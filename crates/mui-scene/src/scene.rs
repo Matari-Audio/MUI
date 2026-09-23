@@ -789,7 +789,7 @@ impl<'a> Runs<'a> {
     ) -> Vec<Cow<'t, str>> {
         let fits = self.measure(text, face).width <= max + 0.5;
         let fonts = self.fonts_for(face);
-        if fonts.is_empty() || fits || !(max > 0.0) {
+        if fonts.first().filter(|_| !fits && max > 0.0).is_none() {
             return vec![Cow::Borrowed(text)];
         }
         let settings = face.axes.to_vec();
@@ -2318,11 +2318,12 @@ pub fn resolve_scene_cached(
             // This is a correctness-first projection, not hash-only equality.
             if let Content::Text(t) = &e.content {
                 format!(
-                    "{:?}|{:016x}|{:?}|{:?}|{:?}|{:?}",
+                    "{:?}|{:016x}|{:?}|{:x}|{:?}|{:?}",
                     t,
                     e.text_size.unwrap_or(th.text).to_bits(),
                     e.axes,
-                    e.font.as_ref().map(Font::id),
+                    // 0 is "no face of its own"; ids shift up one past it.
+                    e.font.as_ref().map_or(0, |f| f.id() + 1),
                     e.lines,
                     e.reserve
                 )

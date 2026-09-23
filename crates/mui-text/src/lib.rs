@@ -1061,6 +1061,10 @@ fn caret_positions(
 /// must match what the run is drawn with: a variable face advances
 /// differently at `wght` 700 than at 400, and a caret measured at the wrong
 /// weight drifts.
+///
+/// ponytail: every call shapes `text` again -- the face's parse and plans are
+/// cached, the glyphs are not. A field asking for four carets a frame shapes
+/// four times; return the whole boundary table once if that ever shows.
 pub fn caret_x(
     fonts: &[Font],
     text: &str,

@@ -125,7 +125,7 @@ async fn tile_contract(device: &wgpu::Device, queue: &wgpu::Queue) -> gpu_suppor
         .fill(Surface)
         .opacity(0.8);
         let mut spec = SceneSpec::new(root).scale(scale);
-        spec.font = Some(std::sync::Arc::from(epaint_default_fonts::HACK_REGULAR));
+        spec.font = Some(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
         resolve_scene(&spec).unwrap()
     };
     for scale in [1., 1.5, 2.] {
