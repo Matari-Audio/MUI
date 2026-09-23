@@ -79,6 +79,24 @@ impl SceneSpec {
         self.device_scale = Some(device_scale);
         self
     }
+    /// Refuse what no resolve could honour, before anything is cached.
+    pub(super) fn validate(&self) -> Result<(), SceneError> {
+        if !self.theme.is_valid() {
+            return Err(SceneError::InvalidTheme);
+        }
+        if self
+            .device_scale
+            .is_some_and(|s| !(s.is_finite() && s > 0.0))
+        {
+            return Err(SceneError::InvalidScale);
+        }
+        if !(self.tolerance.is_finite() && self.tolerance > 0.0) {
+            return Err(SceneError::Text(mui_text::Error::InvalidOptions(
+                "tolerance",
+            )));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug)]

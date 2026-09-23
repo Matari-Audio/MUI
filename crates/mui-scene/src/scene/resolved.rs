@@ -189,10 +189,9 @@ pub struct ResolvedScene {
     pub(super) surfaces: Vec<ResolvedSurface>,
     pub(super) at: HashMap<Arc<str>, usize>,
     pub(crate) external_welds: HashMap<Arc<str>, crate::ExternalWeld>,
-    /// What the scene was shaped with, so a live readout can re-shape one
-    /// run without the spec that produced it. See [`Self::set_text`].
-    pub(super) font: Option<Font>,
-    pub(super) fallback_fonts: Vec<Font>,
+    /// The spec's glyph tolerance, so a live readout can re-shape one run
+    /// without the spec that produced it; the run carries its own faces.
+    /// See [`Self::set_text`].
     pub(super) tolerance: f64,
 }
 impl ResolvedScene {

@@ -23,11 +23,10 @@ use std::sync::Arc;
 
 use mui_geometry::{Bounds, OffsetOptions, Path, PlacedShape, Point};
 use mui_layout::Frame;
-use mui_text::Font;
 
-use crate::{Color, Content, Cursor, El};
+use crate::{Color, Cursor, El};
 use outline::OutlineCache;
-use text::{fit, Runs};
+use text::{fit, layout_key, Runs};
 
 /// A length on the device grid, or untouched when the host gave no scale.
 fn snap(v: f64, scale: Option<f64>) -> f64 {
@@ -151,32 +150,8 @@ pub fn resolve_scene_cached(
     text: &mut TextCache,
     weld_cache: &mut crate::WeldCache,
 ) -> Result<ResolvedScene, SceneError> {
-    if !spec.theme.is_valid() {
-        return Err(SceneError::InvalidTheme);
-    }
-    if spec
-        .device_scale
-        .is_some_and(|s| !(s.is_finite() && s > 0.0))
-    {
-        return Err(SceneError::InvalidScale);
-    }
-    if !(spec.tolerance.is_finite() && spec.tolerance > 0.0) {
-        return Err(SceneError::Text(mui_text::Error::InvalidOptions(
-            "tolerance",
-        )));
-    }
-    let font_ids = spec.font.iter().chain(&spec.fallback_fonts).map(Font::id);
-    if !text.fonts.iter().copied().eq(font_ids.clone())
-        || text.tolerance_bits != spec.tolerance.to_bits()
-    {
-        text.runs.clear();
-        text.breaks.clear();
-        text.coords.clear();
-        text.last_coords.clear();
-        text.fonts = font_ids.collect();
-        text.tolerance_bits = spec.tolerance.to_bits();
-        text.layout.clear();
-    }
+    spec.validate()?;
+    text.retain_for(spec);
     let mut runs = Runs {
         fonts: spec
             .font
@@ -202,33 +177,7 @@ pub fn resolve_scene_cached(
         spec.limits,
         th.spacing,
         &mut text.layout,
-        |e, out| {
-            // Exactly the fields `fit` consumes, as bytes the layout cache
-            // compares in full. Strings carry their length, so no two
-            // payloads share an encoding, and nothing is formatted.
-            if let Content::Text(t) = &e.content {
-                let mut bytes = |b: &[u8]| {
-                    out.extend_from_slice(&b.len().to_le_bytes());
-                    out.extend_from_slice(b);
-                };
-                bytes(t.as_bytes());
-                match &e.reserve {
-                    Some(r) => bytes(r.as_bytes()),
-                    None => out.extend_from_slice(&u64::MAX.to_le_bytes()),
-                }
-                // Four-byte tags, so the count is all the framing they need.
-                out.extend_from_slice(&e.axes.iter().count().to_le_bytes());
-                for (tag, value) in e.axes.iter() {
-                    out.extend_from_slice(tag.as_bytes());
-                    out.extend_from_slice(&value.to_bits().to_le_bytes());
-                }
-                out.extend_from_slice(&e.text_size.unwrap_or(th.text).to_bits().to_le_bytes());
-                // 0 is "no face of its own"; ids shift up one past it.
-                out.extend_from_slice(&e.font.as_ref().map_or(0, |f| f.id() + 1).to_le_bytes());
-                // usize::MAX is "no cap".
-                out.extend_from_slice(&e.lines.unwrap_or(usize::MAX).to_le_bytes());
-            }
-        },
+        |e, out| layout_key(e, th, out),
         |e, room| fit(&mut runs, th, e, room),
     )?;
     let nodes = layout.all().len();
@@ -297,8 +246,6 @@ pub fn resolve_scene_cached(
         surfaces,
         at,
         external_welds,
-        font: spec.font.clone(),
-        fallback_fonts: spec.fallback_fonts.clone(),
         tolerance: spec.tolerance,
     })
 }

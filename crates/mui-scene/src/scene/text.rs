@@ -8,8 +8,8 @@ use mui_layout::Size;
 use mui_text::{Axes, Font, TextRun};
 
 use super::outline::OutlineCache;
-use super::TextGlyph;
-use crate::{Content, Theme};
+use super::{SceneSpec, TextGlyph};
+use crate::{Content, Element, Theme};
 
 /// One shaped string, kept in [`TextCache`] while the font stays the same.
 #[derive(Debug, Clone)]
@@ -93,6 +93,22 @@ impl TextCache {
     pub fn is_empty(&self) -> bool {
         // An inner map is never left empty, so no strings means no runs.
         self.runs.is_empty()
+    }
+    /// Start of a resolve: drop every shaped run when the faces or the
+    /// tolerance they were shaped with changed.
+    pub(super) fn retain_for(&mut self, spec: &SceneSpec) {
+        let font_ids = spec.font.iter().chain(&spec.fallback_fonts).map(Font::id);
+        if !self.fonts.iter().copied().eq(font_ids.clone())
+            || self.tolerance_bits != spec.tolerance.to_bits()
+        {
+            self.runs.clear();
+            self.breaks.clear();
+            self.coords.clear();
+            self.last_coords.clear();
+            self.fonts = font_ids.collect();
+            self.tolerance_bits = spec.tolerance.to_bits();
+            self.layout.clear();
+        }
     }
     /// End of a resolve: keep exactly what it used.
     pub(super) fn sweep(&mut self) {
@@ -317,6 +333,35 @@ impl<'a> Runs<'a> {
             Ok(Some(r)) => Size::new(r.advance, r.line_height),
         }
     }
+}
+
+/// Exactly the fields [`fit`] consumes, as bytes the layout cache compares
+/// in full. Strings carry their length, so no two payloads share an
+/// encoding, and nothing is formatted.
+pub(super) fn layout_key(e: &Element, th: Theme, out: &mut Vec<u8>) {
+    let Content::Text(t) = &e.content else {
+        return;
+    };
+    let mut bytes = |b: &[u8]| {
+        out.extend_from_slice(&b.len().to_le_bytes());
+        out.extend_from_slice(b);
+    };
+    bytes(t.as_bytes());
+    match &e.reserve {
+        Some(r) => bytes(r.as_bytes()),
+        None => out.extend_from_slice(&u64::MAX.to_le_bytes()),
+    }
+    // Four-byte tags, so the count is all the framing they need.
+    out.extend_from_slice(&e.axes.iter().count().to_le_bytes());
+    for (tag, value) in e.axes.iter() {
+        out.extend_from_slice(tag.as_bytes());
+        out.extend_from_slice(&value.to_bits().to_le_bytes());
+    }
+    out.extend_from_slice(&e.text_size.unwrap_or(th.text).to_bits().to_le_bytes());
+    // 0 is "no face of its own"; ids shift up one past it.
+    out.extend_from_slice(&e.font.as_ref().map_or(0, |f| f.id() + 1).to_le_bytes());
+    // usize::MAX is "no cap".
+    out.extend_from_slice(&e.lines.unwrap_or(usize::MAX).to_le_bytes());
 }
 
 /// A content leaf's size: a paragraph wrapped to its room when it needs it.
