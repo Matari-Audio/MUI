@@ -424,6 +424,18 @@ impl Ui {
                     value: value + step,
                 })
             }
+            // Lands straight in the field's selection, which its next build
+            // reads: nothing about it is an edit a host brackets.
+            SemanticAction::SetSelection { id, anchor, caret } => {
+                let Some(Kind::TextInput { value, .. }) = role else {
+                    return false;
+                };
+                if anchor.max(caret) > value.chars().count() {
+                    return false;
+                }
+                self.set_sel(&id, anchor, caret);
+                true
+            }
             _ => false,
         }
     }
@@ -2099,6 +2111,48 @@ mod tests {
         ui.frame(root, None, PointerInput::default(), 0.016)
             .unwrap();
         assert_eq!(value, "h");
+    }
+
+    /// A field tells a screen reader where its selection is and where each
+    /// character sits, and a reader's `SetTextSelection` moves it.
+    #[test]
+    fn a_field_reports_its_selection_and_carets_and_a_reader_can_select() {
+        let mut ui = Ui::new(Theme::DEFAULT);
+        let mut value = String::from("héllo");
+        let tree = |ui: &mut Ui, v: &mut String| widgets::text_input(ui, "f", v).0;
+        let text = |ui: &Ui| match &ui.scene().unwrap().surface("f").unwrap().semantics {
+            Some(mui_scene::Semantics {
+                role: Kind::TextInput {
+                    selection, carets, ..
+                },
+                ..
+            }) => (*selection, carets.clone()),
+            _ => panic!("not a text input"),
+        };
+        let root = tree(&mut ui, &mut value);
+        ui.frame(root, None, Input::default(), 0.016).unwrap();
+        ui.focus("f");
+        let root = tree(&mut ui, &mut value);
+        ui.frame(root, None, key(Key::End), 0.016).unwrap();
+        let root = tree(&mut ui, &mut value);
+        ui.frame(root, None, Input::default(), 0.016).unwrap();
+        let (sel, carets) = text(&ui);
+        assert_eq!(sel, (5, 5), "the caret went to the end");
+        assert_eq!(carets.len(), 6, "one per boundary of five characters");
+        assert_eq!(carets[0], 8.0, "the text starts inside the padding");
+        assert!(carets.windows(2).all(|w| w[1] > w[0]), "{carets:?}");
+
+        assert!(ui.request_action(SemanticAction::set_selection("f", 1, 4)));
+        assert!(!ui.request_action(SemanticAction::set_selection("f", 0, 6)));
+        let root = tree(&mut ui, &mut value);
+        let edits = ui
+            .frame(root, None, Input::default(), 0.016)
+            .unwrap()
+            .edits
+            .len();
+        assert_eq!(text(&ui).0, (1, 4), "the reader's selection landed");
+        assert_eq!(edits, 0, "a selection is not a bracketed edit");
+        assert_eq!(value, "héllo");
     }
 
     #[test]

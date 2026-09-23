@@ -317,7 +317,7 @@ impl PreviewScene for Scrolling {
                     let i = s * 8 + j;
                     slider(
                         ui,
-                        &format!("band-{i}"),
+                        format!("band-{i}"),
                         &format!("band {i}"),
                         g,
                         -24.0..=6.0,

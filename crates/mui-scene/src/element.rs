@@ -197,9 +197,24 @@ pub enum Content {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Kind {
     Button,
-    Slider { value: f64, min: f64, max: f64 },
-    Toggle { on: bool },
-    TextInput { value: String },
+    Slider {
+        value: f64,
+        min: f64,
+        max: f64,
+    },
+    Toggle {
+        on: bool,
+    },
+    /// A one-line field. `selection` is the anchor and the caret, in
+    /// characters of `value`, equal when nothing is selected. `carets` is
+    /// the x of a caret before each character and after the last, in the
+    /// field's own space -- one more entry than `value` has characters --
+    /// or empty when the field did not measure them.
+    TextInput {
+        value: String,
+        selection: (usize, usize),
+        carets: Vec<f64>,
+    },
     Label,
     Group,
     Scroll,

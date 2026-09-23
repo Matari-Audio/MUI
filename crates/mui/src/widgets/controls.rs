@@ -759,6 +759,14 @@ pub fn text_input(ui: &mut Ui, id: &str, value: &mut String) -> (El, bool) {
     let room = room.unwrap_or(run);
     let caret_x = x(at);
     let shift = (caret_x - room).max(0.0);
+    // What a screen reader follows: a caret before each character of the
+    // value and after the last, in the field's space. A composition sits in
+    // the value's gap at the caret, so the characters after it sit after it.
+    let tail = pre.as_ref().map_or(0, |(t, _)| t.len());
+    let reader = (value.char_indices().map(|(b, _)| b))
+        .chain([value.len()])
+        .map(|b| PAD - shift + x(if b < base { b } else { b + tail }))
+        .collect();
     let el = overlay([
         leaf(hi - lo, size)
             .anchor(Align::Start, Align::Center)
@@ -790,6 +798,8 @@ pub fn text_input(ui: &mut Ui, id: &str, value: &mut String) -> (El, bool) {
     .focusable()
     .role(Kind::TextInput {
         value: value.clone(),
+        selection: (anchor, caret),
+        carets: reader,
     })
     .id(id);
     if focused {

@@ -164,6 +164,12 @@ let spec = SceneSpec::new(root).font(Font::new(epaint_default_fonts::HACK_REGULA
   is no longer cached, so changing the closure reshapes it. A text node's
   fill is never pushed as a `Layer::Fill` entry (it used to be pushed and
   removed again); its colour is the ink, as before.
+- `Kind::TextInput { value }` -> `Kind::TextInput { value, selection,
+  carets }`: the selection's anchor and caret in characters, and a caret x
+  per character boundary in the field's space (`Vec::new()` when unknown).
+  `text_input` fills both.
+- `ResolvedSurface` gains `pointer_states: bool`: the node declared a Hover
+  or Press look.
 
 ```rust
 // old
@@ -248,6 +254,11 @@ tracker.plan(&scene, xf, &tiles, &mut plan);
   keeps its id as its name
 - Sliders gain `Action::Increment`/`Decrement` and a `numeric_value_step`
   (a hundredth of the range)
+- A text input gains a `TextRun` child (`run_id(key)`) with its characters'
+  lengths, positions and widths, a `text_selection`, and
+  `Action::SetTextSelection`; route that to
+  `SemanticAction::set_selection(key, anchor.character_index,
+  focus.character_index)`
 
 ```rust
 // old
@@ -306,6 +317,9 @@ let (field, edited) = text_input(&mut ui, "name", &mut name);
 - `mui::core` (deprecated alias) -> `mui::scene`
 - `mui::tessellate` -> removed, no replacement
 - `mui::egui` and the `egui` cargo feature -> removed, no replacement
+- `SemanticAction` gains `SetSelection { id, anchor, caret }`, with
+  `SemanticAction::set_selection(id, anchor, caret)`. A `match` over it needs
+  the new arm.
 - `SemanticAction` gains `Increment { id }` and `Decrement { id }`, with
   `SemanticAction::increment(id)` / `decrement(id)`. A `match` over it needs
   the new arms. Both land as the equivalent `SetValue`.
