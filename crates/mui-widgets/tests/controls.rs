@@ -65,7 +65,7 @@ fn the_size_scale_steps_every_control_off_the_theme_unit() {
 
 /// The glyph runs a control resolves to, in paint order.
 fn runs(c: Control) -> Vec<usize> {
-    let spec = SceneSpec::new(c.el()).font(epaint_default_fonts::HACK_REGULAR.to_vec());
+    let spec = SceneSpec::new(c.el()).font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
     resolve_scene(&spec)
         .expect("resolves")
         .paint

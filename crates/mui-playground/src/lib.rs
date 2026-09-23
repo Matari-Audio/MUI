@@ -1,13 +1,20 @@
 //! A bounded expression interpreter for the browser playground, not a Rust compiler.
 #![forbid(unsafe_code)]
 use mui_scene::{material_symbols, prelude::*};
-use std::sync::Arc;
+use std::sync::LazyLock;
 use syn::{parse::Parser, punctuated::Punctuated, spanned::Spanned, Expr, Lit, Token};
 use wasm_bindgen::prelude::*;
 
 /// Material Symbols Outlined, cut down to the icons `icon("name")` accepts;
-/// see `fonts/README.md`. Variable in FILL, GRAD, opsz and wght.
-const ICONS: &[u8] = include_bytes!("../fonts/MaterialSymbolsOutlined-ui.ttf");
+/// see `fonts/README.md`. Variable in FILL, GRAD, opsz and wght. Parsed once,
+/// so every render shares one face and its glyph caches.
+static ICONS: LazyLock<Font> = LazyLock::new(|| {
+    Font::new(&include_bytes!("../fonts/MaterialSymbolsOutlined-ui.ttf")[..])
+        .expect("the bundled icon font parses")
+});
+static TEXT: LazyLock<Font> = LazyLock::new(|| {
+    Font::new(epaint_default_fonts::HACK_REGULAR).expect("the bundled text font parses")
+});
 
 type Args = Punctuated<Expr, Token![,]>;
 fn error(at: &impl Spanned, message: &str) -> syn::Error {
@@ -156,9 +163,9 @@ fn element(e: &Expr, depth: usize, nodes: &mut usize) -> syn::Result<El> {
                     // The subset carries a few dozen of the font's names; a
                     // name it lacks would draw .notdef, so refuse it here.
                     let in_subset =
-                        |ch: &char| mui_text::glyph_path(ICONS, *ch, 24., &[], 1.).is_ok();
+                        |ch: &char| mui_text::glyph_path(&ICONS, *ch, 24., &[], 1.).is_ok();
                     match material_symbols::codepoint(&name).filter(in_subset) {
-                        Some(ch) => Ok(icon(ICONS, ch)),
+                        Some(ch) => Ok(icon(ICONS.clone(), ch)),
                         None => Err(error(
                             &c.args[0],
                             "not an icon in the playground's Material Symbols subset; see crates/mui-playground/fonts/README.md",
@@ -277,7 +284,7 @@ pub fn render(source: &str, width: u16, height: u16) -> Result<Frame, String> {
     }
     let root = overlay([parse(source)?]).center().pad(32.).fill(Background);
     let mut spec = SceneSpec::new(root).offered(Size::new(width.into(), height.into()));
-    spec.font = Some(Arc::from(epaint_default_fonts::HACK_REGULAR));
+    spec.font = Some(TEXT.clone());
     spec.theme.palette =
         mui_scene::Palette::from_seed(Color::oklch(0.75, 0.14, 260.), mui_scene::Mode::Dark);
     spec.theme.palette.neutral = mui_scene::Palette::NEUTRAL.neutral;

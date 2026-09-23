@@ -287,7 +287,7 @@ mod tests {
             width: 0.,
             blur: 0.,
             text: Some(Text {
-                font: Arc::from(&[][..]),
+                font: mui_scene::Font::new(epaint_default_fonts::HACK_REGULAR).unwrap(),
                 fonts: Arc::from(&[][..]),
                 size: 12.,
                 origin: Point::new(100., 80.),

@@ -1,9 +1,8 @@
 use mui_scene::prelude::*;
 use mui_scene::{resolve_scene_with, TextCache};
-use std::sync::Arc;
 
-fn font() -> Arc<[u8]> {
-    Arc::from(epaint_default_fonts::HACK_REGULAR)
+fn font() -> Font {
+    Font::new(epaint_default_fonts::HACK_REGULAR).unwrap()
 }
 
 #[test]

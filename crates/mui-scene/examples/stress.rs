@@ -102,7 +102,7 @@ fn main() {
         std::mem::size_of::<mui_scene::Painted>(),
         std::mem::size_of::<mui_scene::ResolvedSurface>()
     );
-    let font: std::sync::Arc<[u8]> = epaint_default_fonts::HACK_REGULAR.to_vec().into();
+    let font = Font::new(epaint_default_fonts::HACK_REGULAR).unwrap();
     for (w, h) in [(1280.0, 800.0), (240.0, 2400.0), (2000.0, 300.0)] {
         let mut spec = SceneSpec::new(tree())
             .offered(Size::new(w, h))

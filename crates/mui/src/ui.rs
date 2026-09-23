@@ -4,14 +4,13 @@ use std::any::Any;
 mod wake;
 use crate::SemanticAction;
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
 
 use mui_geometry::Point;
 use mui_input::{Hit, Ime, Input, Interaction, Key, KeyPress, PointerInput, Response, FINE_DRAG};
 use mui_layout::SpacingToken::{Xs, S};
 use mui_scene::prelude::{overlay, text, Paints as _, Role};
 use mui_scene::{
-    Area, Color, Cursor, El, Element, Fill, Kind, Paint, Palette, Pin, Radius, ResolvedScene,
+    Area, Color, Cursor, El, Element, Fill, Font, Kind, Paint, Palette, Pin, Radius, ResolvedScene,
     SceneError, SceneSpec, Size, Spacing, Spring, State, TextCache, Theme,
 };
 use mui_widgets::Host;
@@ -68,9 +67,9 @@ pub enum Edit {
 /// runtime remembers what is hovered, held, and mid-animation.
 pub struct Ui {
     pub theme: Theme,
-    pub font: Option<Arc<[u8]>>,
+    pub font: Option<Font>,
     /// Optional faces tried per grapheme after [`Self::font`].
-    pub fallback_fonts: Vec<Arc<[u8]>>,
+    pub fallback_fonts: Vec<Font>,
     /// The window's device pixels per logical unit. Set it and every painted
     /// edge lands on a device pixel; `None` paints on layout's raw f64.
     pub scale: Option<f64>,
@@ -185,21 +184,16 @@ impl Ui {
             time: 0.0,
         }
     }
-    /// Set the font blob. Bytes no font parser accepts are dropped: the
-    /// fontless path is measured and drawn, a bad blob is not.
-    pub fn font(mut self, font: impl Into<Arc<[u8]>>) -> Self {
-        let bytes = font.into();
-        self.font = mui_text::axes(&bytes).is_ok().then_some(bytes);
+    /// Set the font.
+    pub fn font(mut self, font: Font) -> Self {
+        self.font = Some(font);
         self
     }
     /// Add a font used when the primary face has no glyph for a grapheme.
     /// The selected face is retained in the scene text payload, so CPU and
     /// GPU renderers use the same fallback choice.
-    pub fn fallback_font(mut self, font: impl Into<Arc<[u8]>>) -> Self {
-        let bytes = font.into();
-        if mui_text::axes(&bytes).is_ok() {
-            self.fallback_fonts.push(bytes);
-        }
+    pub fn fallback_font(mut self, font: Font) -> Self {
+        self.fallback_fonts.push(font);
         self
     }
     /// Use the analytic GPU backend for `.weld_with` / `weld!` by default.
@@ -268,7 +262,7 @@ impl Ui {
     ///
     /// ```
     /// # use mui::prelude::*;
-    /// let mut ui = Ui::new(Theme::DEFAULT).font(epaint_default_fonts::HACK_REGULAR.to_vec());
+    /// let mut ui = Ui::new(Theme::DEFAULT).font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
     /// let tree = row![text("0.0").reserve("-88.8").id("gain")];
     /// ui.frame(tree, Some(Size::new(200., 40.)), PointerInput::default(), 0.016).unwrap();
     /// ui.set_text("gain", "-12.4").unwrap();
@@ -655,20 +649,24 @@ impl Ui {
     pub fn set_clipboard(&mut self, s: impl Into<String>) {
         self.copied = Some(s.into());
     }
+    /// The scene's font then its fallbacks, borrowed when there are none.
+    fn fonts(&self) -> Option<std::borrow::Cow<'_, [Font]>> {
+        let font = self.font.as_ref()?;
+        Some(if self.fallback_fonts.is_empty() {
+            std::slice::from_ref(font).into()
+        } else {
+            std::iter::once(font)
+                .chain(&self.fallback_fonts)
+                .cloned()
+                .collect::<Vec<_>>()
+                .into()
+        })
+    }
     /// The character index in `s` nearest `x`, measured in the scene's font.
     pub(crate) fn hit(&self, s: &str, size: f64, x: f64) -> usize {
-        match self.font.as_deref() {
-            Some(f) => {
-                let byte = if self.fallback_fonts.is_empty() {
-                    mui_text::hit_index(f, s, size, &[], x)
-                } else {
-                    let mut fonts = Vec::with_capacity(1 + self.fallback_fonts.len());
-                    fonts.push(f);
-                    fonts.extend(self.fallback_fonts.iter().map(AsRef::as_ref));
-                    mui_text::fallback_hit_index(&fonts, s, size, &[], x)
-                };
-                byte.map_or(0, |b| s[..b.min(s.len())].chars().count())
-            }
+        match self.fonts() {
+            Some(fonts) => mui_text::hit_index(&fonts, s, size, &[], x)
+                .map_or(0, |b| s[..b.min(s.len())].chars().count()),
             // ponytail: the same 0.6em guess `advance` falls back to.
             None => ((x / (size * 0.6)).round().max(0.0) as usize).min(s.chars().count()),
         }
@@ -678,17 +676,8 @@ impl Ui {
     /// Measured, not shaped -- `mui_text::caret_x` reads advances only, where
     /// `text_run` would build every outline to throw them away.
     pub(crate) fn caret_x(&self, s: &str, size: f64, byte: usize) -> f64 {
-        match self.font.as_deref() {
-            Some(f) => {
-                if self.fallback_fonts.is_empty() {
-                    mui_text::caret_x(f, s, size, &[], byte).unwrap_or(0.0)
-                } else {
-                    let mut fonts = Vec::with_capacity(1 + self.fallback_fonts.len());
-                    fonts.push(f);
-                    fonts.extend(self.fallback_fonts.iter().map(AsRef::as_ref));
-                    mui_text::fallback_caret_x(&fonts, s, size, &[], byte).unwrap_or(0.0)
-                }
-            }
+        match self.fonts() {
+            Some(fonts) => mui_text::caret_x(&fonts, s, size, &[], byte).unwrap_or(0.0),
             // ponytail: the 0.6em guess the scene itself falls back to
             // without a font; set a font and both agree.
             None => s[..byte.min(s.len())].chars().count() as f64 * size * 0.6,
@@ -2497,18 +2486,6 @@ mod tests {
     }
 
     #[test]
-    fn a_font_no_parser_accepts_is_dropped_rather_than_bricking_every_frame() {
-        let mut ui = Ui::new(Theme::DEFAULT).font(vec![0u8; 64]);
-        ui.frame(
-            column([text("hello")]),
-            None,
-            PointerInput::default(),
-            0.016,
-        )
-        .expect("the fontless path, not an error");
-    }
-
-    #[test]
     fn a_transitioning_node_seeds_each_channel_from_its_own_declaration() {
         let mut ui = Ui::new(Theme::DEFAULT);
         let stroked = || {
@@ -2608,7 +2585,8 @@ mod tests {
                 .size(10., 10.)
             ]
         };
-        let mut ui = Ui::new(Theme::DEFAULT).font(epaint_default_fonts::HACK_REGULAR.to_vec());
+        let mut ui =
+            Ui::new(Theme::DEFAULT).font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
         ui.frame(tree(), Some(Size::new(300., 40.)), Input::default(), 0.016)
             .unwrap();
         assert_eq!(seen.get(), 1, "the one resolve");
@@ -2638,7 +2616,8 @@ mod tests {
 
     #[test]
     fn set_text_says_so_when_there_is_nothing_to_set() {
-        let mut ui = Ui::new(Theme::DEFAULT).font(epaint_default_fonts::HACK_REGULAR.to_vec());
+        let mut ui =
+            Ui::new(Theme::DEFAULT).font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
         assert!(matches!(
             ui.set_text("gain", "1"),
             Err(SceneError::NoTextLayer)
@@ -2659,8 +2638,8 @@ mod tests {
     #[test]
     fn fallback_text_input_caret_uses_the_fallback_advance() {
         let ui = Ui::new(Theme::DEFAULT)
-            .font(epaint_default_fonts::HACK_REGULAR.to_vec())
-            .fallback_font(epaint_default_fonts::NOTO_EMOJI_REGULAR.to_vec());
+            .font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap())
+            .fallback_font(Font::new(epaint_default_fonts::NOTO_EMOJI_REGULAR).unwrap());
         let value = "A😀";
         let emoji = value.char_indices().nth(1).unwrap().0;
         let before = ui.caret_x(value, 16., emoji);

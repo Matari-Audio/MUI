@@ -178,7 +178,7 @@ impl PreviewScene for Widgets {
 type Axis = (String, f64, f64, f64);
 
 pub struct GlyphAxes {
-    font: Vec<u8>,
+    font: Font,
     source: String,
     glyph: char,
     size: f64,
@@ -188,26 +188,29 @@ pub struct GlyphAxes {
 impl GlyphAxes {
     const CARD: f64 = 320.0;
 
-    fn axes(font: &[u8]) -> Result<Vec<Axis>, mui_text::Error> {
-        mui_text::axes(font).map(|a| {
-            a.into_iter()
-                // A hidden axis is the designer's internal knob, not a slider.
-                .filter(|a| !a.hidden)
-                .map(|a| (a.tag, a.min.into(), a.max.into(), a.default.into()))
-                .collect()
-        })
+    fn axes(font: &Font) -> Vec<Axis> {
+        mui_text::axes(font)
+            .into_iter()
+            // A hidden axis is the designer's internal knob, not a slider.
+            .filter(|a| !a.hidden)
+            .map(|a| (a.tag, a.min.into(), a.max.into(), a.default.into()))
+            .collect()
     }
     fn load_font(
         requested: Option<(String, std::io::Result<Vec<u8>>)>,
-    ) -> (Vec<u8>, String, Vec<Axis>) {
+    ) -> (Font, String, Vec<Axis>) {
         let fallback = |source| {
-            let font = epaint_default_fonts::HACK_REGULAR.to_vec();
-            let axes = Self::axes(&font).expect("bundled Hack font must be valid");
+            let font = Font::new(epaint_default_fonts::HACK_REGULAR)
+                .expect("bundled Hack font must be valid");
+            let axes = Self::axes(&font);
             (font, source, axes)
         };
         match requested {
-            Some((path, Ok(font))) => match Self::axes(&font) {
-                Ok(axes) => (font, path, axes),
+            Some((path, Ok(bytes))) => match Font::new(bytes) {
+                Ok(font) => {
+                    let axes = Self::axes(&font);
+                    (font, path, axes)
+                }
                 Err(e) => fallback(format!("{path}: {e} — using Hack")),
             },
             Some((path, Err(e))) => fallback(format!("{path}: {e} — using Hack")),
@@ -1356,7 +1359,7 @@ mod tests {
     fn malformed_readable_font_falls_back_with_parse_diagnostic() {
         let (font, source, _) =
             GlyphAxes::load_font(Some(("broken.ttf".to_owned(), Ok(Vec::new()))));
-        assert_eq!(font.as_slice(), epaint_default_fonts::HACK_REGULAR);
+        assert_eq!(font.as_ref(), epaint_default_fonts::HACK_REGULAR);
         assert!(source.starts_with("broken.ttf: ") && source.ends_with(" — using Hack"));
     }
 
@@ -1459,7 +1462,7 @@ mod tests {
         let cols = |w: f64, h: f64| {
             let tree = editor();
             let mut spec = SceneSpec::new(editor()).offered(Size::new(w, h));
-            spec.font = Some(std::sync::Arc::from(epaint_default_fonts::HACK_REGULAR));
+            spec.font = Some(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
             let scene = resolve_scene(&spec).unwrap();
             let frames = scene.layout.all();
             walk(&tree, frames, &mut 0, None);

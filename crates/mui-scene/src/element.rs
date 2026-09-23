@@ -246,7 +246,7 @@ pub struct Element {
     pub axes: Axes,
     /// A face for this node alone, tried before the scene's font and its
     /// fallbacks: an icon font on an icon. See [`Styled::font`].
-    pub font: Option<Arc<[u8]>>,
+    pub font: Option<mui_text::Font>,
     /// A string this text node is at least as wide as, whatever it currently
     /// says. See [`Styled::reserve`].
     pub reserve: Option<String>,
@@ -340,13 +340,13 @@ pub fn text(s: impl Into<String>) -> El {
 ///
 /// ```
 /// use mui_scene::{material_symbols, prelude::*};
-/// # let font: std::sync::Arc<[u8]> = std::sync::Arc::from(&b"not a font"[..]);
+/// # let font = Font::new(epaint_default_fonts::HACK_REGULAR).unwrap();
 /// let home = material_symbols::codepoint("home").unwrap();
 /// let home = icon(font.clone(), home).text_size(24.).icon_fill(1.);
 /// assert_eq!(home.payload().axes.get("FILL"), Some(1.));
 /// assert!(home.payload().font.is_some());
 /// ```
-pub fn icon(font: impl Into<Arc<[u8]>>, symbol: char) -> El {
+pub fn icon(font: mui_text::Font, symbol: char) -> El {
     text(symbol).font(font)
 }
 /// Your own paths, painted inside the node's frame. Sized like any
@@ -740,8 +740,8 @@ pub trait Styled: Paints {
     }
     /// A face for this node, tried before the scene's font. The scene's font
     /// and fallbacks still cover any glyph it lacks.
-    fn font(mut self, font: impl Into<Arc<[u8]>>) -> Self {
-        self.element_mut().font = Some(font.into());
+    fn font(mut self, font: mui_text::Font) -> Self {
+        self.element_mut().font = Some(font);
         self
     }
     /// Material Symbols `FILL`, 0 outlined to 1 filled. Tween it for the

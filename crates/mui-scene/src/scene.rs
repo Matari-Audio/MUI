@@ -14,7 +14,7 @@ use mui_geometry::{
     OffsetOptions, Path, PlacedShape, Point, RoundedRect, Topology,
 };
 use mui_layout::{Frame, Layout, Limits, Size};
-use mui_text::{Axes, FallbackTextRun, TextRun};
+use mui_text::{Axes, Font, TextRun};
 
 use crate::regions::Operation;
 use crate::{
@@ -30,13 +30,13 @@ pub struct SceneSpec {
     pub limits: Limits,
     pub geometry: GeometryOptions,
     pub offsets: OffsetOptions,
-    /// Font bytes for `text(..)` leaves. Without one, text is boxed at an
+    /// The face for `text(..)` leaves. Without one, text is boxed at an
     /// estimate and draws nothing, so a layout test needs no font file.
-    pub font: Option<Arc<[u8]>>,
+    pub font: Option<Font>,
     /// Additional faces tried per grapheme when the primary face has no
     /// glyph. They are carried into the resolved text layer so both CPU and
     /// GPU renderers draw the selected face.
-    pub fallback_fonts: Vec<Arc<[u8]>>,
+    pub fallback_fonts: Vec<Font>,
     /// Curve tolerance for glyph outlines.
     pub tolerance: f64,
     /// The host's device pixels per layout unit. Set it and every edge the
@@ -71,15 +71,13 @@ impl SceneSpec {
         self.offered = Some(size);
         self
     }
-    pub fn font(mut self, font: impl Into<Arc<[u8]>>) -> Self {
-        self.font = Some(font.into());
+    pub fn font(mut self, font: Font) -> Self {
+        self.font = Some(font);
         self
     }
-    /// Add a fallback face after the primary [`Self::font`]. Invalid faces
-    /// are ignored by the fontless layout path and reported when a text run
-    /// is shaped, just like an invalid primary face.
-    pub fn fallback_font(mut self, font: impl Into<Arc<[u8]>>) -> Self {
-        self.fallback_fonts.push(font.into());
+    /// Add a fallback face after the primary [`Self::font`].
+    pub fn fallback_font(mut self, font: Font) -> Self {
+        self.fallback_fonts.push(font);
         self
     }
     /// Snap every painted edge to the device grid. Three equal shares of 41
@@ -153,9 +151,9 @@ pub struct TextGlyph {
 pub struct Text {
     /// The primary face, retained for compatibility with callers that only
     /// need one face. It is also `fonts[0]` whenever `fonts` is non-empty.
-    pub font: Arc<[u8]>,
+    pub font: Font,
     /// Primary face followed by any fallback faces used by this run.
-    pub fonts: Arc<[Arc<[u8]>]>,
+    pub fonts: Arc<[Font]>,
     pub size: f32,
     /// Baseline origin.
     pub origin: Point,
@@ -180,13 +178,8 @@ pub struct Text {
 }
 impl PartialEq for Text {
     fn eq(&self, o: &Self) -> bool {
-        Arc::ptr_eq(&self.font, &o.font)
-            && self.fonts.len() == o.fonts.len()
-            && self
-                .fonts
-                .iter()
-                .zip(o.fonts.iter())
-                .all(|(a, b)| Arc::ptr_eq(a, b))
+        self.font == o.font
+            && self.fonts == o.fonts
             && self.size == o.size
             && self.origin == o.origin
             && self.glyphs == o.glyphs
@@ -286,8 +279,8 @@ pub struct ResolvedScene {
     pub(crate) external_welds: HashMap<Arc<str>, crate::ExternalWeld>,
     /// What the scene was shaped with, so a live readout can re-shape one
     /// run without the spec that produced it. See [`Self::set_text`].
-    font: Option<Arc<[u8]>>,
-    fallback_fonts: Vec<Arc<[u8]>>,
+    font: Option<Font>,
+    fallback_fonts: Vec<Font>,
     tolerance: f64,
 }
 impl ResolvedScene {
@@ -309,7 +302,7 @@ impl ResolvedScene {
     /// use mui_scene::prelude::*;
     /// # use mui_scene::{Layer, SceneSpec};
     /// let root = row![text("0.0 dB").reserve("-88.8 dB").id("gain")];
-    /// let spec = SceneSpec::new(root).font(epaint_default_fonts::HACK_REGULAR.to_vec());
+    /// let spec = SceneSpec::new(root).font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
     /// let mut scene = resolve_scene(&spec).unwrap();
     /// let before = scene.surface("gain").unwrap().frame;
     /// scene.set_text("gain", "-12.4 dB").unwrap();
@@ -343,28 +336,18 @@ impl ResolvedScene {
             old.hint,
         );
         // The faces the run was resolved with, per-node font included.
-        let fonts: Vec<&[u8]> = if all_fonts.is_empty() {
-            vec![font.as_ref()]
+        let fonts = if all_fonts.is_empty() {
+            std::slice::from_ref(&font)
         } else {
-            all_fonts.iter().map(AsRef::as_ref).collect()
+            &all_fonts[..]
         };
-        let run = if fonts.len() == 1 {
-            CachedRun::from_text(mui_text::text_run(
-                fonts[0],
-                s,
-                f64::from(size),
-                &axes.to_vec(),
-                self.tolerance,
-            )?)
-        } else {
-            CachedRun::from_fallback(mui_text::fallback_text_run(
-                &fonts,
-                s,
-                f64::from(size),
-                &axes.to_vec(),
-                self.tolerance,
-            )?)
-        };
+        let run = CachedRun::from_run(mui_text::text_run(
+            fonts,
+            s,
+            f64::from(size),
+            &axes.to_vec(),
+            self.tolerance,
+        )?);
         self.paint[first].text = Some(Text {
             font,
             fonts: all_fonts,
@@ -636,32 +619,7 @@ struct CachedRun {
 }
 
 impl CachedRun {
-    fn from_text(run: TextRun) -> Self {
-        let offsets = run.glyph_offsets;
-        Self {
-            path: run.path,
-            advance: run.advance,
-            ascent: run.ascent,
-            descent: run.descent,
-            line_height: run.line_height,
-            glyphs: run
-                .glyphs
-                .into_iter()
-                .enumerate()
-                .map(move |(i, (id, x))| {
-                    let (_, y) = offsets.get(i).copied().unwrap_or((x, 0.));
-                    TextGlyph {
-                        id,
-                        x: x as f32,
-                        y: y as f32,
-                        font: 0,
-                    }
-                })
-                .collect(),
-        }
-    }
-
-    fn from_fallback(run: FallbackTextRun) -> Self {
+    fn from_run(run: TextRun) -> Self {
         Self {
             path: run.path,
             advance: run.advance,
@@ -672,7 +630,7 @@ impl CachedRun {
                 .glyphs
                 .into_iter()
                 .map(|g| TextGlyph {
-                    id: g.glyph,
+                    id: g.id,
                     x: g.x as f32,
                     y: g.y as f32,
                     font: g.font,
@@ -685,19 +643,20 @@ impl CachedRun {
 /// Per-face normalized coordinates, primary face first. What a run is keyed
 /// on: two axis settings that round to the same coordinates share a run.
 type Coords = Arc<[Arc<[i16]>]>;
-/// (size bits, primary face identity, coordinates).
-type RunKey = (u64, usize, Coords);
+/// (size bits, primary face id, coordinates).
+type RunKey = (u64, u64, Coords);
 
 #[derive(Debug, Default)]
 pub struct TextCache {
     layout: mui_layout::LayoutCache,
-    fonts: usize,
+    /// The ids of the spec's faces the cache was filled with.
+    fonts: Vec<u64>,
     tolerance_bits: u64,
     entries: usize,
     runs: HashMap<String, HashMap<RunKey, CachedRun>>,
     /// Axis settings already normalized, so a frame does not re-derive the
     /// same coordinates per measure call. Flushed with `runs`.
-    coords: HashMap<(u64, usize, Axes), Coords>,
+    coords: HashMap<(u64, Option<u64>, Axes), Coords>,
     /// The coordinates each text key drew with last frame, for `Text::hint`.
     last_coords: HashMap<Arc<str>, Coords>,
     welds: WeldCache,
@@ -722,40 +681,34 @@ struct Face<'a> {
     size: f64,
     axes: &'a Axes,
     /// The node's own face, if it set one; tried before the scene's fonts.
-    font: Option<&'a [u8]>,
+    font: Option<&'a Font>,
 }
 impl<'a> Face<'a> {
     fn of(e: &'a crate::Element, th: Theme) -> Self {
         Self {
             size: e.text_size.unwrap_or(th.text),
             axes: &e.axes,
-            font: e.font.as_deref(),
+            font: e.font.as_ref(),
         }
     }
 }
 
 struct Runs<'a> {
-    fonts: Vec<&'a [u8]>,
+    fonts: Vec<Font>,
     tolerance: f64,
     cache: &'a mut HashMap<String, HashMap<RunKey, CachedRun>>,
     entries: &'a mut usize,
-    coords: &'a mut HashMap<(u64, usize, Axes), Coords>,
+    coords: &'a mut HashMap<(u64, Option<u64>, Axes), Coords>,
     last_coords: &'a mut HashMap<Arc<str>, Coords>,
 }
 impl<'a> Runs<'a> {
     /// The faces a node shapes with: its own first, then the scene's.
-    fn fonts_for<'f>(&self, face: Face<'f>) -> Vec<&'f [u8]>
-    where
-        'a: 'f,
-    {
-        face.font
-            .into_iter()
-            .chain(self.fonts.iter().copied())
-            .collect()
+    fn fonts_for(&self, face: Face<'_>) -> Vec<Font> {
+        face.font.into_iter().chain(&self.fonts).cloned().collect()
     }
     /// Per-face coordinates for `face`, memoised per (size, font, axes).
-    fn coords(&mut self, fonts: &[&[u8]], face: Face<'_>) -> Coords {
-        let primary = fonts.first().map_or(0, |f| f.as_ptr() as usize);
+    fn coords(&mut self, fonts: &[Font], face: Face<'_>) -> Coords {
+        let primary = fonts.first().map(Font::id);
         let key = (face.size.to_bits(), primary, face.axes.clone());
         if let Some(c) = self.coords.get(&key) {
             return c.clone();
@@ -788,32 +741,22 @@ impl<'a> Runs<'a> {
     }
     fn run(&mut self, text: &str, face: Face<'_>) -> Result<Option<&CachedRun>, mui_text::Error> {
         let fonts = self.fonts_for(face);
-        let Some(&font) = fonts.first() else {
+        let Some(font) = fonts.first() else {
             return Ok(None);
         };
         let coords = self.coords(&fonts, face);
         // Nested so a hit borrows `text` instead of allocating a key for it:
         // `run` is called several times per line, per frame.
-        let key: RunKey = (face.size.to_bits(), font.as_ptr() as usize, coords);
+        let key: RunKey = (face.size.to_bits(), font.id(), coords);
         if self.cache.get(text).is_none_or(|m| !m.contains_key(&key)) {
             let settings = face.axes.to_vec();
-            let run = if fonts.len() == 1 {
-                CachedRun::from_text(mui_text::text_run(
-                    font,
-                    text,
-                    face.size,
-                    &settings,
-                    self.tolerance,
-                )?)
-            } else {
-                CachedRun::from_fallback(mui_text::fallback_text_run(
-                    &fonts,
-                    text,
-                    face.size,
-                    &settings,
-                    self.tolerance,
-                )?)
-            };
+            let run = CachedRun::from_run(mui_text::text_run(
+                &fonts,
+                text,
+                face.size,
+                &settings,
+                self.tolerance,
+            )?);
             // Count complete (text, size, axes) variants. A single animated
             // label can otherwise grow its inner map without ever hitting a cap.
             // This remains a coarse flush policy, not an LRU or byte budget.
@@ -846,16 +789,11 @@ impl<'a> Runs<'a> {
     ) -> Vec<Cow<'t, str>> {
         let fits = self.measure(text, face).width <= max + 0.5;
         let fonts = self.fonts_for(face);
-        let Some(&font) = fonts.first().filter(|_| !fits && max > 0.0) else {
+        if fonts.first().filter(|_| !fits && max > 0.0).is_none() {
             return vec![Cow::Borrowed(text)];
-        };
+        }
         let settings = face.axes.to_vec();
-        let lines = if fonts.len() == 1 {
-            mui_text::break_lines_with_axes(font, text, face.size, &settings, max)
-        } else {
-            mui_text::fallback_break_lines(&fonts, text, face.size, &settings, max)
-        };
-        let Ok(lines) = lines else {
+        let Ok(lines) = mui_text::break_lines(&fonts, text, face.size, &settings, max) else {
             return vec![Cow::Borrowed(text)];
         };
         let n = cap.unwrap_or(usize::MAX).max(1);
@@ -1894,7 +1832,7 @@ impl<'a> Walk<'a> {
                 bg = under;
                 let face = Face::of(e, th);
                 let lines = self.runs.lines(t, face, frame.size.width, e.lines);
-                let fonts: Arc<[Arc<[u8]>]> = e
+                let fonts: Arc<[Font]> = e
                     .font
                     .iter()
                     .chain(self.spec.font.iter())
@@ -2339,31 +2277,23 @@ pub fn resolve_scene_cached(
             "tolerance",
         )));
     }
-    let mut font_id = 0usize;
-    if let Some(font) = &spec.font {
-        font_id = font_id
-            .wrapping_mul(0x9e37_79b9)
-            .wrapping_add(font.as_ptr() as usize);
-    }
-    for font in &spec.fallback_fonts {
-        font_id = font_id
-            .wrapping_mul(0x9e37_79b9)
-            .wrapping_add(font.as_ptr() as usize);
-    }
-    if text.fonts != font_id || text.tolerance_bits != spec.tolerance.to_bits() {
+    let font_ids = spec.font.iter().chain(&spec.fallback_fonts).map(Font::id);
+    if !text.fonts.iter().copied().eq(font_ids.clone())
+        || text.tolerance_bits != spec.tolerance.to_bits()
+    {
         text.runs.clear();
         text.coords.clear();
         text.last_coords.clear();
         text.entries = 0;
-        text.fonts = font_id;
+        text.fonts = font_ids.collect();
         text.tolerance_bits = spec.tolerance.to_bits();
         text.layout.clear();
     }
-    let fonts: Vec<&[u8]> = spec
+    let fonts: Vec<Font> = spec
         .font
         .iter()
-        .chain(spec.fallback_fonts.iter())
-        .map(|font| font.as_ref())
+        .chain(&spec.fallback_fonts)
+        .cloned()
         .collect();
     let mut runs = Runs {
         fonts,
@@ -2392,7 +2322,8 @@ pub fn resolve_scene_cached(
                     t,
                     e.text_size.unwrap_or(th.text).to_bits(),
                     e.axes,
-                    e.font.as_ref().map_or(0, |f| f.as_ptr() as usize),
+                    // 0 is "no face of its own"; ids shift up one past it.
+                    e.font.as_ref().map_or(0, |f| f.id() + 1),
                     e.lines,
                     e.reserve
                 )
@@ -2869,7 +2800,7 @@ mod tests {
     fn roles_resolve_against_the_palette_and_ink_reads_on_its_ground() {
         let root = column([text("hi").id("t")]).fill(Role::Primary).id("card");
         let mut sp = SceneSpec::new(root);
-        sp.font = Some(Arc::from(epaint_default_fonts::HACK_REGULAR));
+        sp.font = Some(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
         let s = resolve_scene(&sp).unwrap();
         let th = Theme::default();
         let card = &s.paint[0];
@@ -3086,8 +3017,8 @@ mod feature_tests {
         );
     }
 
-    fn font() -> Arc<[u8]> {
-        Arc::from(epaint_default_fonts::HACK_REGULAR)
+    fn font() -> Font {
+        Font::new(epaint_default_fonts::HACK_REGULAR).unwrap()
     }
 
     #[test]
@@ -3404,17 +3335,17 @@ mod feature_tests {
             text("hi").id("a"),
             text("hi").text_weight(Weight::BOLD).id("b")
         ]);
-        sp.font = Some(Arc::from(ttf_inter::REGULAR));
+        sp.font = Some(Font::new(ttf_inter::REGULAR).unwrap());
         resolve_scene_with(&sp, &mut cache).unwrap();
         // Same string, two weights of a variable face: two shaped runs, not
         // one reused at the wrong instance.
         assert_eq!(cache.len(), 2);
         // A static face shapes the same at any weight, so it shares one.
         let mut hack = TextCache::default();
-        sp.font = Some(Arc::from(epaint_default_fonts::HACK_REGULAR));
+        sp.font = Some(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
         resolve_scene_with(&sp, &mut hack).unwrap();
         assert_eq!(hack.len(), 1);
-        sp.font = Some(Arc::from(ttf_inter::REGULAR));
+        sp.font = Some(Font::new(ttf_inter::REGULAR).unwrap());
         let s = resolve_scene_with(&sp, &mut cache).unwrap();
         let w: Vec<Option<f32>> = s
             .paint
@@ -3427,9 +3358,10 @@ mod feature_tests {
 
     #[test]
     fn hinting_pauses_for_the_frame_after_an_axis_moves() {
+        let inter = Font::new(ttf_inter::REGULAR).unwrap();
         let hint_at = |w: f32, cache: &mut TextCache| {
             let mut sp = SceneSpec::new(row([text("hi").text_axis("wght", w).id("t")]));
-            sp.font = Some(Arc::from(ttf_inter::REGULAR));
+            sp.font = Some(inter.clone());
             let s = resolve_scene_with(&sp, cache).unwrap();
             s.paint.iter().find_map(|p| p.text.as_ref()).unwrap().hint
         };
@@ -3445,7 +3377,7 @@ mod feature_tests {
     #[test]
     fn a_swapped_readout_keeps_the_reserved_box() {
         let mut sp = SceneSpec::new(row![text("0.0").reserve("-88.8").id("gain")]);
-        sp.font = Some(Arc::from(epaint_default_fonts::HACK_REGULAR));
+        sp.font = Some(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
         let mut s = resolve_scene(&sp).unwrap();
         let frame = s.surface("gain").unwrap().frame;
         s.set_text("gain", "-88.8").unwrap();
@@ -3541,7 +3473,7 @@ mod feature_tests {
     fn text_cache_survives_frames_and_carries_glyphs() {
         let mut cache = TextCache::default();
         let mut sp = SceneSpec::new(row([text("hi").id("t")]));
-        sp.font = Some(Arc::from(epaint_default_fonts::HACK_REGULAR));
+        sp.font = Some(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
         let s = resolve_scene_with(&sp, &mut cache).unwrap();
         assert_eq!(cache.len(), 1);
         let t = s
@@ -3566,12 +3498,9 @@ mod feature_tests {
         changed_face.fonts = next_text
             .fonts
             .iter()
-            .map(|font| Arc::from(font.as_ref().to_vec()))
+            .map(|font| Font::new(font.as_ref().to_vec()).unwrap())
             .collect();
-        assert!(
-            t != &changed_face,
-            "different font allocations invalidate paint"
-        );
+        assert!(t != &changed_face, "a different Font invalidates paint");
     }
 }
 

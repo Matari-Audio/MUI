@@ -155,18 +155,16 @@ pub trait Canvas {
 // ponytail: global and never evicted -- an entry is one `Arc` clone and a font
 // outlives the process anyway; a host-owned cache is the upgrade if a plugin
 // ever unloads one.
-static FONTS: Mutex<Vec<(usize, FontData)>> = Mutex::new(Vec::new());
+static FONTS: Mutex<Vec<(u64, FontData)>> = Mutex::new(Vec::new());
 
-fn font_data(font: &Arc<[u8]>) -> FontData {
-    // Holding the `Arc` is what makes the pointer a sound key: the allocation
-    // cannot be freed and its address reused under a stale entry.
-    let key = font.as_ptr() as usize;
+fn font_data(font: &mui_scene::Font) -> FontData {
+    // A `Font` id is never reused, so an entry cannot answer for another font.
+    let key = font.id();
     let mut fonts = FONTS.lock().unwrap_or_else(|e| e.into_inner());
     if let Some((_, f)) = fonts.iter().find(|(k, _)| *k == key) {
         return f.clone();
     }
-    // `Arc<[u8]>` cannot unsize into `Arc<dyn AsRef<[u8]>>`; the extra
-    // `Arc` is built once per font, not per run.
+    // Built once per font, not per run.
     let f = FontData::new(Blob::new(Arc::new(font.clone())), 0);
     fonts.push((key, f.clone()));
     f
@@ -916,7 +914,7 @@ mod seam {
             width: 0.,
             blur: 0.,
             text: Some(Text {
-                font: Arc::from(&[][..]),
+                font: mui_scene::Font::new(epaint_default_fonts::HACK_REGULAR).unwrap(),
                 fonts: Arc::from(&[][..]),
                 size: 16.,
                 origin: mui_geometry::Point::new(10., 30.),
@@ -966,9 +964,7 @@ mod snapshot {
             .stroke(Role::Ink)
             .id("card");
         let mut spec = SceneSpec::new(root).offered(Size::new(120., 60.));
-        spec.font = Some(std::sync::Arc::from(
-            epaint_default_fonts::HACK_REGULAR.to_vec(),
-        ));
+        spec.font = Some(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
         let scene = resolve_scene(&spec).unwrap();
         assert!(scene
             .paint
@@ -1029,9 +1025,7 @@ mod snapshot {
     fn a_glyph_run_lands_pixels() {
         let mut spec =
             SceneSpec::new(text("HI").fill(Role::Ink).id("t")).offered(Size::new(80., 40.));
-        spec.font = Some(std::sync::Arc::from(
-            epaint_default_fonts::HACK_REGULAR.to_vec(),
-        ));
+        spec.font = Some(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
         let scene = resolve_scene(&spec).unwrap();
         assert!(
             scene.paint.iter().any(|p| p.text.is_some()),
@@ -1045,7 +1039,7 @@ mod snapshot {
     fn a_gpos_mark_is_rendered_at_its_shaped_y_offset() {
         let mut spec =
             SceneSpec::new(text("ש\u{05b8}").fill(Role::Ink).id("t")).offered(Size::new(80., 40.));
-        spec.font = Some(std::sync::Arc::from(ttf_inter::REGULAR));
+        spec.font = Some(Font::new(ttf_inter::REGULAR).unwrap());
         let scene = resolve_scene(&spec).unwrap();
         let text = scene
             .paint
@@ -1081,10 +1075,10 @@ mod snapshot {
     fn a_missing_primary_glyph_uses_the_selected_fallback_font() {
         let root = text("A😀").fill(Role::Ink).id("t");
         let mut with_fallback = SceneSpec::new(root.clone()).offered(Size::new(100., 40.));
-        with_fallback.font = Some(std::sync::Arc::from(epaint_default_fonts::HACK_REGULAR));
-        with_fallback.fallback_fonts.push(std::sync::Arc::from(
-            epaint_default_fonts::NOTO_EMOJI_REGULAR,
-        ));
+        with_fallback.font = Some(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
+        with_fallback
+            .fallback_fonts
+            .push(Font::new(epaint_default_fonts::NOTO_EMOJI_REGULAR).unwrap());
         let fallback_scene = resolve_scene(&with_fallback).unwrap();
         let glyphs = fallback_scene
             .paint
