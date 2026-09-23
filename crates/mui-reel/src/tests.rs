@@ -29,12 +29,19 @@ fn play(reel: &Reel, script: &Script<Model>) -> (Vec<u64>, Value, Vec<Vec<ReelEv
     let mut heard = Vec::new();
     let mut audio = |_: &mut Model, e: &[ReelEvent], _: &mut [[f32; 2]]| heard.push(e.to_vec());
     let track = reel
-        .run(script, &mut m, build, Some(&mut audio), &mut |s| {
-            let mut h = DefaultHasher::new();
-            s.rgba.hash(&mut h);
-            hashes.push(h.finish());
-            Ok(())
-        })
+        .run(
+            script,
+            &mut m,
+            build,
+            Some(&mut audio),
+            &mut None,
+            &mut |s| {
+                let mut h = DefaultHasher::new();
+                s.rgba.hash(&mut h);
+                hashes.push(h.finish());
+                Ok(())
+            },
+        )
         .unwrap();
     (hashes, track, heard, m)
 }
@@ -105,6 +112,7 @@ fn audio_blocks_sum_to_the_duration_exactly() {
         &mut m,
         build,
         Some(&mut audio),
+        &mut None,
         &mut |_| Ok(()),
     )
     .unwrap();
@@ -266,4 +274,46 @@ fn without_ffmpeg_the_folder_is_png_sequences_and_says_so() {
     }
     assert!(!dir.join("frames/00003.png").exists());
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_look_draws_the_take_and_sees_every_subframe_time() {
+    let r = reel().fps(10).motion_blur(2);
+    let (w, h) = r.pixels();
+    let mut times = Vec::new();
+    let mut look = |_: &mui::scene::ResolvedScene, t: f64| {
+        times.push(t);
+        Ok(vec![200; usize::from(w) * usize::from(h) * 4])
+    };
+    let mut m = Model {
+        gain: 0.5,
+        on: false,
+    };
+    let mut frames = Vec::new();
+    r.run(
+        &Script::new().end(0.3),
+        &mut m,
+        build,
+        None,
+        &mut Some(&mut look),
+        &mut |s| {
+            frames.push(s.rgba);
+            Ok(())
+        },
+    )
+    .unwrap();
+    assert_eq!(times, [0.0, 0.05, 0.1, 0.15, 0.2, 0.25]);
+    assert!(frames.iter().all(|f| f.iter().all(|&b| b == 200)));
+    // The wrong size is an error, not a garbled stream.
+    let mut short = |_: &mui::scene::ResolvedScene, _: f64| Ok(vec![0; 4]);
+    assert!(r
+        .run(
+            &Script::new().end(0.1),
+            &mut m,
+            build,
+            None,
+            &mut Some(&mut short),
+            &mut |_| Ok(())
+        )
+        .is_err());
 }
