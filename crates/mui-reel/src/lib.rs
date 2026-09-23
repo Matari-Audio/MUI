@@ -21,7 +21,6 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
-use mui::motion::curve::Curve;
 use mui::prelude::*;
 use mui::vello::kurbo::{Affine, BezPath, Rect, Stroke};
 use mui::vello::vello_cpu::{Pixmap, RenderContext, Resources};
@@ -49,37 +48,10 @@ pub fn beats(n: f64) -> At {
     At::Beats(n)
 }
 
-/// How a pointer path is paced between its ends.
-#[derive(Clone, Debug, Default)]
-pub enum Ease {
-    /// Smootherstep: zero velocity and acceleration at both ends, which is
-    /// what a hand looks like.
-    #[default]
-    Smooth,
-    Linear,
-    /// A normalized curve from the plugin's own curve editor.
-    Curve(Curve),
-    /// A spring released from 0 towards 1 at the gesture's start. Honest:
-    /// the path ends where the spring is at the end of the duration, so pick
-    /// a response shorter than the gesture.
-    Spring(Spring),
-}
-impl Ease {
-    fn at(&self, u: f64, secs: f64) -> f64 {
-        let u = u.clamp(0.0, 1.0);
-        match self {
-            Ease::Smooth => u * u * u * (u * (u * 6.0 - 15.0) + 10.0),
-            Ease::Linear => u,
-            Ease::Curve(c) => f64::from(c.evaluate(u as f32)),
-            Ease::Spring(s) => {
-                let mut s = s.seeded(0.0);
-                s.to(1.0);
-                s.step(u * secs);
-                s.value
-            }
-        }
-    }
-}
+/// How a pointer path is paced: the keyframe eases from `mui::motion`
+/// (`Ease::IN_OUT`, `Ease::Cubic(..)` from a design tool, `Ease::Spring`).
+pub use mui::motion::Ease;
+use mui::motion::Keys;
 
 /// Something the audio closure and `track.json` hear about, on the video
 /// frame it happened. Frame-quantised: it applies from the frame's first
@@ -182,7 +154,7 @@ impl<S> Script<S> {
             target: id.into(),
             delta: (0.0, 0.0),
             dur: dur.into(),
-            ease: Ease::Smooth,
+            ease: Ease::IN_OUT,
             hold: false,
             wheel: None,
         })
@@ -290,6 +262,9 @@ pub struct Reel {
     font: Option<Font>,
     cursor: bool,
     encode: bool,
+    master: bool,
+    ten_bit: bool,
+    blur: u32,
 }
 
 impl Reel {
@@ -304,6 +279,9 @@ impl Reel {
             font: None,
             cursor: false,
             encode: true,
+            master: false,
+            ten_bit: false,
+            blur: 1,
         }
     }
     /// Device pixels per logical unit. The tree is laid out at `size` and
@@ -343,6 +321,26 @@ impl Reel {
         self
     }
 
+    /// Also write `take.mov`, ProRes 4444 with alpha, as the grading master;
+    /// layers then go to ProRes 4444 `.mov` too, the alpha container every
+    /// platform decodes (VP9 alpha in WebM does not decode on Windows).
+    pub fn master(mut self, on: bool) -> Self {
+        self.master = on;
+        self
+    }
+    /// Deliver the take as 10-bit H.265 (`yuv420p10le`) instead of 8-bit H.264.
+    pub fn ten_bit(mut self, on: bool) -> Self {
+        self.ten_bit = on;
+        self
+    }
+    /// Render `n` subframes per frame, at `t + k / (n * fps)`, and average
+    /// them. The UI is stepped at `dt / n`, so springs and drags blur along
+    /// their real paths. `1` (the default) is off.
+    pub fn motion_blur(mut self, n: u32) -> Self {
+        self.blur = n.max(1);
+        self
+    }
+
     fn secs(&self, t: At) -> Result<f64, Error> {
         match t {
             At::Secs(s) => Ok(s),
@@ -352,9 +350,10 @@ impl Reel {
             },
         }
     }
-    /// The frame nearest `t`.
+    /// The first frame at or after `t`: a cue between frames (116 bpm is
+    /// 31.03 frames a beat) fires on the next one, never early.
     pub fn frame_of(&self, t: At) -> Result<usize, Error> {
-        Ok((self.secs(t)? * f64::from(self.fps)).round().max(0.0) as usize)
+        Ok(first(self.secs(t)?, f64::from(self.fps)))
     }
     /// Video size in device pixels.
     pub fn pixels(&self) -> (u16, u16) {
@@ -383,33 +382,44 @@ impl Reel {
                 .status()
                 .is_ok_and(|s| s.success());
         let (w, h) = self.pixels();
-        let layer_names: Vec<String> = script
+        let open = |dir: &Path, name: &str, codec| {
+            Sink::open(ffmpeg.then_some(codec), dir, name, w, h, self.fps)
+        };
+        let layer_codec = if self.master { Codec::ProRes } else { Codec::Vp9 };
+        let mut take = open(dir, "take", if self.ten_bit { Codec::H265 } else { Codec::H264 })?;
+        let mut master = match (ffmpeg, self.master) {
+            (true, true) => Some(open(dir, "take", Codec::ProRes)?),
+            _ => None,
+        };
+        let mut layers = script
             .layers
             .iter()
             .map(|s| s.replace('/', "_"))
             .chain((!script.layers.is_empty()).then(|| "rest".to_string()))
-            .collect();
-        let mut take = Sink::open(ffmpeg, dir, "take", w, h, self.fps, false)?;
-        let mut layers = layer_names
-            .iter()
-            .map(|n| Sink::open(ffmpeg, &dir.join("layers"), n, w, h, self.fps, true))
+            .map(|n| open(&dir.join("layers"), &n, layer_codec))
             .collect::<Result<Vec<_>, _>>()?;
         let mut samples = Vec::new();
         let has_audio = audio.is_some();
         let track = self.run(script, state, build, audio, &mut |shot| {
             take.write(&shot.rgba)?;
+            if let Some(m) = &mut master {
+                m.write(&shot.rgba)?;
+            }
             for (sink, rgba) in layers.iter_mut().zip(&shot.layers) {
                 sink.write(rgba)?;
             }
             samples.extend_from_slice(&shot.samples);
             Ok(())
         })?;
-        let video = take.finish()?;
+        let mut files = vec![take.finish()?];
+        if let Some(m) = master {
+            files.push(m.finish()?);
+        }
         let layer_files = layers
             .into_iter()
             .map(Sink::finish)
             .collect::<Result<Vec<_>, _>>()?;
-        let mut files = vec![video.clone(), "track.json".into(), "mui-track.js".into()];
+        files.extend(["track.json".into(), "mui-track.js".into()]);
         if has_audio {
             std::fs::write(dir.join("audio.wav"), wav(&samples, self.rate))?;
             files.push("audio.wav".into());
@@ -429,7 +439,8 @@ impl Reel {
         let track_json = serde_json::to_string(&track)?;
         std::fs::write(dir.join("track.json"), &track_json)?;
         std::fs::write(dir.join("mui-track.js"), MUI_TRACK_JS)?;
-        let duration = f64::from(track["frames"].as_u64().unwrap_or(0) as u32) / f64::from(self.fps);
+        let frames = track["frames"].as_u64().unwrap_or(0);
+        let duration = frames as f64 / f64::from(self.fps);
         if ffmpeg {
             std::fs::write(
                 dir.join("clip.html"),
@@ -440,10 +451,16 @@ impl Reel {
         let manifest = json!({
             "tool": "mui-reel",
             "version": env!("CARGO_PKG_VERSION"),
-            "encoder": if ffmpeg { "ffmpeg: take H.264 High yuv420p crf 14; layers VP9 yuva420p" }
-                       else { "none: ffmpeg missing or disabled, PNG sequences written instead" },
+            "encoder": if ffmpeg {
+                format!("ffmpeg: take {}; layers {}; bt709 tv-range, converted and tagged",
+                    if self.ten_bit { Codec::H265 } else { Codec::H264 }.describe(),
+                    layer_codec.describe())
+            } else {
+                "none: ffmpeg missing or disabled, PNG sequences written instead".into()
+            },
             "files": files,
-            "layers": layer_files.iter().enumerate().map(|(i, f)| json!({"id": script.layers.get(i), "file": format!("layers/{f}")}))
+            "layers": layer_files.iter().enumerate()
+                .map(|(i, f)| json!({"id": script.layers.get(i), "file": format!("layers/{f}")}))
                 .collect::<Vec<_>>(),
             "fps": self.fps,
             "size": [w, h],
@@ -452,9 +469,10 @@ impl Reel {
             "bpm": self.bpm,
             "beats": self.bpm.map(|b| (duration * b / 60.0 * 1000.0).round() / 1000.0),
             "duration": duration,
-            "frames": track["frames"],
+            "frames": frames,
             "sample_rate": has_audio.then_some(self.rate),
             "cursor": self.cursor,
+            "motion_blur": self.blur,
         });
         std::fs::write(
             dir.join("manifest.json"),
@@ -465,6 +483,12 @@ impl Reel {
 
     /// The whole fixed-step loop, handing each finished frame to `out`.
     /// Returns `track.json`'s value.
+    ///
+    /// Time is absolute: subframe `g` is at `g / (fps * blur)`, a cue fires
+    /// on the first frame at or after its time, and pointer paths and the
+    /// camera are evaluated at the subframe's own time, not by counting
+    /// frames -- so a cue between frames moves nothing early and loses
+    /// nothing late.
     fn run<S>(
         &self,
         script: &Script<S>,
@@ -477,17 +501,19 @@ impl Reel {
             return Err("fps and scale must be positive".into());
         }
         let fps = f64::from(self.fps);
-        let dt = 1.0 / fps;
+        let n = self.blur.max(1) as usize;
+        let sub = fps * n as f64;
+        let dt = 1.0 / sub;
         let mut cues = script
             .cues
             .iter()
-            .map(|(t, a)| Ok((self.frame_of(*t)?, a)))
+            .map(|(t, a)| Ok((self.secs(*t)?, a)))
             .collect::<Result<Vec<_>, Error>>()?;
-        // Stable: same-frame cues keep the order they were written in.
-        cues.sort_by_key(|c| c.0);
+        // Stable: same-time cues keep the order they were written in.
+        cues.sort_by(|a, b| a.0.total_cmp(&b.0));
         let frames = match script.end {
             Some(t) => self.frame_of(t)?,
-            None => cues.last().map_or(0, |c| c.0) + self.fps as usize,
+            None => cues.last().map_or(0, |c| first(c.0, fps)) + self.fps as usize,
         };
         let (w, h) = self.pixels();
         let mut ui = Ui::new(self.theme);
@@ -498,6 +524,8 @@ impl Reel {
         let (lw, lh) = (self.size.width, self.size.height);
         let home = [lw / 2.0, lh / 2.0, 1.0];
         let mut cam = home.map(Spring::at);
+        // The time the camera springs currently stand at.
+        let mut cam_t = 0.0;
         let mut motion: Option<Motion> = None;
         let mut pos: Option<Point> = None;
         let mut raster = Raster::new(w, h);
@@ -507,9 +535,10 @@ impl Reel {
         let mut next = 0;
         for i in 0..frames {
             let mut input = Input::default();
+            // Heard by the audio closure this frame; and (time, event) for the track.
             let mut evs = Vec::new();
-            while let Some(&(f, action)) = cues.get(next) {
-                if f > i {
+            while let Some(&(te, action)) = cues.get(next) {
+                if first(te, fps) > i {
                     break;
                 }
                 next += 1;
@@ -524,14 +553,20 @@ impl Reel {
                     } => {
                         let c = centre(surface(&ui, target, i)?);
                         let secs = self.secs(*dur)?;
+                        // The path starts where the cue fires, not at its
+                        // off-grid time: a press lands on the target and the
+                        // whole delta is travelled.
+                        let t0 = i as f64 / fps;
                         motion = Some(Motion {
                             from: if *hold { c } else { pos.unwrap_or(c) },
                             to: Point::new(c.x + delta.0, c.y + delta.1),
-                            start: i,
-                            frames: (secs * fps).round() as usize,
+                            t0,
                             secs,
-                            ease: ease.clone(),
+                            ease: *ease,
                             hold: *hold,
+                            // The first subframe at or after the path's end
+                            // still holds the button, at the end point.
+                            last: first(t0 + secs, sub).max(i * n),
                         });
                         if let Some(dy) = wheel {
                             input.wheel = Point::new(0.0, *dy);
@@ -549,130 +584,163 @@ impl Reel {
                     } => {
                         let r = surface(&ui, target, i)?;
                         let (fw, fh) = (r.size.width + 2.0 * pad, r.size.height + 2.0 * pad);
-                        let zoom = (lw / fw).min(lh / fh);
                         let c = centre(r);
-                        aim(&mut cam, [c.x, c.y, zoom], *spring);
+                        settle(&mut cam, &mut cam_t, te);
+                        aim(&mut cam, [c.x, c.y, (lw / fw).min(lh / fh)], *spring);
                     }
-                    Action::Reset(spring) => aim(&mut cam, home, *spring),
-                    Action::Event(e) => evs.push(e.clone()),
+                    Action::Reset(spring) => {
+                        settle(&mut cam, &mut cam_t, te);
+                        aim(&mut cam, home, *spring);
+                    }
+                    Action::Event(e) => {
+                        evs.push(e.clone());
+                        events.push(e.json(te));
+                    }
                     Action::Call(f) => f(state),
                 }
             }
-            let mut down = false;
-            if let Some(m) = &motion {
-                let k = i - m.start;
-                let u = if m.frames == 0 {
-                    1.0
+            let mut acc: Vec<Vec<u32>> = Vec::new();
+            for k in 0..n {
+                let g = i * n + k;
+                let t = g as f64 / sub;
+                let mut down = false;
+                if let Some(m) = &motion {
+                    let e = if m.secs > 0.0 {
+                        Keys::new(0.0).to(m.secs, 1.0, m.ease).at(t - m.t0)
+                    } else {
+                        1.0
+                    };
+                    pos = Some(Point::new(
+                        m.from.x + (m.to.x - m.from.x) * e,
+                        m.from.y + (m.to.y - m.from.y) * e,
+                    ));
+                    down = m.hold && g <= m.last;
+                }
+                let mut input = if k == 0 {
+                    std::mem::take(&mut input)
                 } else {
-                    k as f64 / m.frames as f64
+                    Input::default()
                 };
-                let e = m.ease.at(u, m.secs);
-                pos = Some(Point::new(
-                    m.from.x + (m.to.x - m.from.x) * e,
-                    m.from.y + (m.to.y - m.from.y) * e,
-                ));
-                down = m.hold && k <= m.frames;
-            }
-            input.pointer = PointerInput {
-                pos,
-                buttons: if down {
-                    Buttons::PRIMARY
-                } else {
-                    Buttons::default()
-                },
-                mods: Mods::default(),
-            };
-            for s in &mut cam {
-                s.step(dt);
-            }
-            let [cx, cy, zoom] = cam.map(|s| s.value);
-            let view = Affine::translate((f64::from(w) / 2.0, f64::from(h) / 2.0))
-                * Affine::scale(self.scale * zoom)
-                * Affine::translate((-cx, -cy));
+                input.pointer = PointerInput {
+                    pos,
+                    buttons: if down {
+                        Buttons::PRIMARY
+                    } else {
+                        Buttons::default()
+                    },
+                    mods: Mods::default(),
+                };
+                settle(&mut cam, &mut cam_t, t);
+                let [cx, cy, zoom] = cam.map(|s| s.value);
+                let view = Affine::translate((f64::from(w) / 2.0, f64::from(h) / 2.0))
+                    * Affine::scale(self.scale * zoom)
+                    * Affine::translate((-cx, -cy));
 
-            let root = build(&mut ui, state);
-            let frame = ui
-                .frame(root, Some(self.size), input, dt)
-                .map_err(|e| format!("frame {i}: {e}"))?;
-            for (id, e) in &frame.edits {
-                evs.push(ReelEvent::Edit {
-                    id: id.clone(),
-                    begin: *e == Edit::Begin,
-                });
-            }
-            for s in frame.scene.surfaces() {
-                let value = match s.semantics.as_ref().map(|m| &m.role) {
-                    Some(Kind::Slider { value, .. }) => *value,
-                    Some(Kind::Toggle { on }) => f64::from(u8::from(*on)),
-                    _ => continue,
-                };
-                if let Some(old) = values.insert(s.key.to_string(), value) {
-                    if old != value {
-                        evs.push(ReelEvent::Value {
-                            id: s.key.to_string(),
-                            value,
-                        });
+                let root = build(&mut ui, state);
+                let frame = ui
+                    .frame(root, Some(self.size), input, dt)
+                    .map_err(|e| format!("frame {i}: {e}"))?;
+                for (id, e) in &frame.edits {
+                    let e = ReelEvent::Edit {
+                        id: id.clone(),
+                        begin: *e == Edit::Begin,
+                    };
+                    events.push(e.json(t));
+                    evs.push(e);
+                }
+                for s in frame.scene.surfaces() {
+                    let value = match s.semantics.as_ref().map(|m| &m.role) {
+                        Some(Kind::Slider { value, .. }) => *value,
+                        Some(Kind::Toggle { on }) => f64::from(u8::from(*on)),
+                        _ => continue,
+                    };
+                    match values.insert(s.key.to_string(), value) {
+                        Some(old) if old != value => {
+                            let e = ReelEvent::Value {
+                                id: s.key.to_string(),
+                                value,
+                            };
+                            events.push(e.json(t));
+                            evs.push(e);
+                        }
+                        _ => {}
                     }
                 }
-            }
-            let cursor = (self.cursor).then_some(pos).flatten().map(|p| (to_device(view, p), down));
-            let rgba = raster.draw(frame.scene, view, cursor.map(|c| (c, self.scale)))?;
-            let mut layers = Vec::new();
-            if !script.layers.is_empty() {
-                let ids: Vec<&str> = script.layers.iter().map(String::as_str).collect();
-                for id in &ids {
-                    layers.push(raster.draw(&frame.scene.isolate(&[id])?, view, None)?);
+                let cursor = self
+                    .cursor
+                    .then_some(pos)
+                    .flatten()
+                    .map(|p| (to_device(view, p), down));
+                let mut shots = vec![raster.draw(frame.scene, view, cursor.map(|c| (c, self.scale)))?];
+                if !script.layers.is_empty() {
+                    let ids: Vec<&str> = script.layers.iter().map(String::as_str).collect();
+                    for id in &ids {
+                        shots.push(raster.draw(&frame.scene.isolate(&[id])?, view, None)?);
+                    }
+                    shots.push(raster.draw(&frame.scene.without(&ids)?, view, None)?);
                 }
-                layers.push(raster.draw(&frame.scene.without(&ids)?, view, None)?);
-            }
-            for s in frame.scene.surfaces() {
-                let named = !s.key.is_empty() && !s.key.starts_with('/');
-                let wanted = script
-                    .track
-                    .as_ref()
-                    .map_or(named, |t| t.iter().any(|k| **k == *s.key));
-                if !wanted {
+                acc.resize_with(shots.len(), || vec![0; shots[0].len()]);
+                for (a, s) in acc.iter_mut().zip(&shots) {
+                    for (a, &b) in a.iter_mut().zip(s) {
+                        *a += u32::from(b);
+                    }
+                }
+                if k > 0 {
                     continue;
                 }
-                let f = s.frame;
-                let r = view.transform_rect_bbox(Rect::new(
-                    f.x,
-                    f.y,
-                    f.x + f.size.width,
-                    f.y + f.size.height,
-                ));
-                let col = surfaces.entry(s.key.to_string()).or_default();
-                col.resize(i, Value::Null);
-                col.push(json!([round(r.x0), round(r.y0), round(r.width()), round(r.height())]));
+                // The track samples the frame's own time, subframe 0.
+                for s in frame.scene.surfaces() {
+                    let named = !s.key.is_empty() && !s.key.starts_with('/');
+                    let wanted = script
+                        .track
+                        .as_ref()
+                        .map_or(named, |t| t.iter().any(|k| **k == *s.key));
+                    if !wanted {
+                        continue;
+                    }
+                    let f = s.frame;
+                    let r = view.transform_rect_bbox(Rect::new(
+                        f.x,
+                        f.y,
+                        f.x + f.size.width,
+                        f.y + f.size.height,
+                    ));
+                    let col = surfaces.entry(s.key.to_string()).or_default();
+                    col.resize(i, Value::Null);
+                    col.push(json!([round(r.x0), round(r.y0), round(r.width()), round(r.height())]));
+                }
+                pointer.push(pos.map_or(Value::Null, |p| {
+                    let d = to_device(view, p);
+                    json!([round(d.x), round(d.y), down])
+                }));
+                camera.push(json!([
+                    round(cx * self.scale),
+                    round(cy * self.scale),
+                    (zoom * 1000.0).round() / 1000.0
+                ]));
             }
-            drop(frame);
             for col in surfaces.values_mut() {
                 col.resize(i + 1, Value::Null);
             }
-            pointer.push(pos.map_or(Value::Null, |p| {
-                let d = to_device(view, p);
-                json!([round(d.x), round(d.y), down])
-            }));
-            camera.push(json!([
-                round(cx * self.scale),
-                round(cy * self.scale),
-                (zoom * 1000.0).round() / 1000.0
-            ]));
+            // ponytail: averaged in sRGB with straight alpha, not linear light;
+            // indistinguishable for UI motion, convert first if it ever shows.
+            let mut shots = acc
+                .into_iter()
+                .map(|a| a.into_iter().map(|v| ((v + n as u32 / 2) / n as u32) as u8).collect());
+            let rgba = shots.next().unwrap_or_default();
             // Integer sample boundaries: frame i owns [i*rate/fps, (i+1)*rate/fps),
             // so any fps/rate pair sums exactly with no drift.
             let rate = u64::from(self.rate);
-            let n = ((i as u64 + 1) * rate / u64::from(self.fps)
+            let len = ((i as u64 + 1) * rate / u64::from(self.fps)
                 - i as u64 * rate / u64::from(self.fps)) as usize;
             let mut samples = Vec::new();
             if let Some(a) = audio.as_mut() {
-                samples = vec![[0.0f32; 2]; n];
+                samples = vec![[0.0f32; 2]; len];
                 a(state, &evs, &mut samples);
             }
-            let t = i as f64 * dt;
-            events.extend(evs.iter().map(|e| e.json(t)));
             out(Shot {
                 rgba,
-                layers,
+                layers: shots.collect(),
                 samples,
             })?;
         }
@@ -698,14 +766,33 @@ struct Shot {
     samples: Vec<[f32; 2]>,
 }
 
+/// A pointer path in flight: from `t0` for `secs`, and the last subframe
+/// that holds the button.
 struct Motion {
     from: Point,
     to: Point,
-    start: usize,
-    frames: usize,
+    t0: f64,
     secs: f64,
     ease: Ease,
     hold: bool,
+    last: usize,
+}
+
+/// The first tick of a `rate` Hz clock at or after `t` seconds. The epsilon
+/// keeps an exact multiple (beat 1 at 120 bpm, 30 fps) on its own tick.
+fn first(t: f64, rate: f64) -> usize {
+    (t * rate - 1e-9).ceil().max(0.0) as usize
+}
+
+/// Advance the camera springs to absolute time `t`. Exact for any step: the
+/// springs are closed-form.
+fn settle(cam: &mut [Spring; 3], at: &mut f64, t: f64) {
+    if t > *at {
+        for s in cam.iter_mut() {
+            s.step(t - *at);
+        }
+        *at = t;
+    }
 }
 
 fn to_device(view: Affine, p: Point) -> Point {
@@ -820,6 +907,58 @@ impl Raster {
     }
 }
 
+/// What ffmpeg encodes a stream to. Every one is converted *and* tagged
+/// BT.709 limited range: tagging alone leaves the matrix to a guess, and
+/// players guess differently.
+#[derive(Clone, Copy)]
+enum Codec {
+    /// The delivery take: H.264 High, 8-bit 4:2:0, CRF 14.
+    H264,
+    /// `.ten_bit(true)`: H.265 Main 10.
+    H265,
+    /// The master and alpha layers with `.master(true)`: ProRes 4444 + alpha.
+    ProRes,
+    /// Alpha layers by default: VP9 with a yuva420p alpha plane.
+    Vp9,
+}
+impl Codec {
+    fn describe(self) -> &'static str {
+        match self {
+            Codec::H264 => "H.264 High yuv420p crf 14",
+            Codec::H265 => "H.265 Main10 yuv420p10le crf 14",
+            Codec::ProRes => "ProRes 4444 yuva444p10le",
+            Codec::Vp9 => "VP9 yuva420p crf 24",
+        }
+    }
+    fn ext(self) -> &'static str {
+        match self {
+            Codec::H264 | Codec::H265 => "mp4",
+            Codec::ProRes => "mov",
+            Codec::Vp9 => "webm",
+        }
+    }
+    fn args(self) -> &'static [&'static str] {
+        match self {
+            Codec::H264 => &[
+                "-c:v", "libx264", "-profile:v", "high", "-pix_fmt", "yuv420p", "-crf", "14",
+                "-preset", "slow", "-movflags", "+faststart",
+            ],
+            Codec::H265 => &[
+                "-c:v", "libx265", "-pix_fmt", "yuv420p10le", "-crf", "14", "-preset", "slow",
+                "-tag:v", "hvc1", "-movflags", "+faststart",
+            ],
+            Codec::ProRes => &[
+                "-c:v", "prores_ks", "-profile:v", "4444", "-pix_fmt", "yuva444p10le",
+                "-alpha_bits", "16",
+            ],
+            Codec::Vp9 => &[
+                "-c:v", "libvpx-vp9", "-pix_fmt", "yuva420p", "-b:v", "0", "-crf", "24",
+                "-row-mt", "1", "-deadline", "good", "-cpu-used", "4",
+            ],
+        }
+    }
+}
+
 /// Where frames go: an ffmpeg child reading raw RGBA on stdin, or a PNG
 /// sequence directory.
 enum Sink {
@@ -827,35 +966,32 @@ enum Sink {
     Png(PathBuf, u32, u32, usize, String),
 }
 impl Sink {
+    /// `codec: None` is the PNG fallback: `frames/` for the take, `<name>/`
+    /// for a layer.
     fn open(
-        ffmpeg: bool,
+        codec: Option<Codec>,
         dir: &Path,
         name: &str,
         w: u16,
         h: u16,
         fps: u32,
-        alpha: bool,
     ) -> Result<Self, Error> {
         std::fs::create_dir_all(dir)?;
-        if !ffmpeg {
-            let seq = dir.join(if alpha { name } else { "frames" });
-            std::fs::create_dir_all(&seq)?;
-            let rel = format!("{}/%05d.png", if alpha { name } else { "frames" });
-            return Ok(Sink::Png(seq, w.into(), h.into(), 0, rel));
-        }
-        let file = format!("{name}.{}", if alpha { "webm" } else { "mp4" });
-        let mut cmd = Command::new("ffmpeg");
-        cmd.args(["-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgba"])
-            .args(["-s", &format!("{w}x{h}"), "-r", &fps.to_string(), "-i", "-"]);
-        if alpha {
-            cmd.args(["-c:v", "libvpx-vp9", "-pix_fmt", "yuva420p", "-b:v", "0"])
-                .args(["-crf", "24", "-row-mt", "1", "-deadline", "good", "-cpu-used", "4"]);
-        } else {
-            cmd.args(["-c:v", "libx264", "-profile:v", "high", "-pix_fmt", "yuv420p"])
-                .args(["-crf", "14", "-preset", "slow", "-movflags", "+faststart"]);
-        }
-        let child = cmd
-            .args(["-r", &fps.to_string()])
+        let Some(codec) = codec else {
+            let seq = if name == "take" { "frames" } else { name };
+            std::fs::create_dir_all(dir.join(seq))?;
+            return Ok(Sink::Png(dir.join(seq), w.into(), h.into(), 0, format!("{seq}/%05d.png")));
+        };
+        let file = format!("{name}.{}", codec.ext());
+        let fps = fps.to_string();
+        let child = Command::new("ffmpeg")
+            .args(["-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgba"])
+            .args(["-color_range", "pc", "-colorspace", "rgb"])
+            .args(["-s", &format!("{w}x{h}"), "-r", &fps, "-i", "-"])
+            .args(["-vf", "scale=out_color_matrix=bt709:out_range=tv"])
+            .args(codec.args())
+            .args(["-colorspace", "bt709", "-color_primaries", "bt709"])
+            .args(["-color_trc", "bt709", "-color_range", "tv", "-r", &fps])
             .arg(&file)
             .current_dir(dir)
             .stdin(Stdio::piped())

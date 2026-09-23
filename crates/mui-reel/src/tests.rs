@@ -44,7 +44,7 @@ fn gesture() -> Script<Model> {
         .at(0.1)
         .move_to("gain", 0.1)
         .at(beat(0.5))
-        .drag("gain", (0.0, -60.0), beats(0.5), Ease::default())
+        .drag("gain", (0.0, -60.0), beats(0.5), Ease::IN_OUT)
         .at(0.9)
         .click("bypass")
         .end(beat(2.5))
@@ -188,4 +188,31 @@ fn wav_header_is_float_stereo() {
     assert_eq!(&b[..4], b"RIFF");
     assert_eq!(u16::from_le_bytes([b[20], b[21]]), 3);
     assert_eq!(b.len(), 44 + 24);
+}
+
+#[test]
+fn an_off_grid_beat_fires_on_the_next_frame_and_keeps_its_exact_time() {
+    // 116 bpm at 60 fps is 31.03 frames a beat.
+    let r = reel().fps(60).bpm(116.0);
+    assert_eq!(r.frame_of(beat(1.0)).unwrap(), 32);
+    let s = Script::new().at(beat(1.0)).note_on(60, 1).end(beat(2.0));
+    let (_, track, heard, _) = play(&r, &s);
+    assert!(heard[31].is_empty() && !heard[32].is_empty());
+    assert_eq!(track["events"][0]["t"], 0.517);
+}
+
+#[test]
+fn motion_blur_averages_subframes_without_changing_the_gesture() {
+    let r = reel().motion_blur(4);
+    let (a, _, heard, m) = play(&r, &gesture());
+    let (b, ..) = play(&r, &gesture());
+    let (sharp, ..) = play(&reel(), &gesture());
+    assert_eq!(a, b, "blurred renders are deterministic too");
+    assert_eq!(a.len(), sharp.len());
+    assert_ne!(a, sharp);
+    // Not exactly the sharp 1.0: at 4x the input rate the runtime's drag
+    // slop is crossed in smaller steps and swallows a little more travel,
+    // which is what a 120 Hz mouse does to the real editor as well.
+    assert!(m.gain > 0.95 && m.on, "gain {} on {}", m.gain, m.on);
+    assert!(heard.iter().flatten().any(|e| matches!(e, ReelEvent::Edit { begin: false, .. })));
 }
