@@ -357,6 +357,22 @@ impl Stage {
             power_preference: wgpu::PowerPreference::HighPerformance,
             ..Default::default()
         }))?;
+        // A bare GL or software adapter may lack these; say so instead of
+        // failing validation halfway through a take.
+        let hdr = adapter.get_texture_format_features(HDR);
+        let out = adapter.get_texture_format_features(OUT);
+        if !hdr.flags.sample_count_supported(SAMPLES)
+            || !hdr.allowed_usages.contains(RT)
+            || !out
+                .allowed_usages
+                .contains(wgpu::TextureUsages::RENDER_ATTACHMENT)
+        {
+            return Err(format!(
+                "{} cannot render the stage: needs {SAMPLES}x MSAA {HDR:?} and a {OUT:?} target",
+                adapter.get_info().name
+            )
+            .into());
+        }
         let (device, queue) =
             pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))?;
         Self::with_device(device, queue, width, height)

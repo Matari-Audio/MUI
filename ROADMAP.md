@@ -245,6 +245,14 @@ public function and a test behind it.
       opacity, stroke and shadow colour, shadow offset and spread, shell
       colour and gradient stops spring. `examples/motion_strip.rs` renders
       it as a filmstrip; the Motion scene is the proof.
+- [x] Trailers without a screen recorder: `mui-reel` plays a beat-timed
+      script (pointer paths, drags, clicks, keys, notes, a springed camera)
+      against the real editor on the caller's clock, and writes a
+      BT.709-tagged take, sample-locked audio, alpha layers, a per-frame
+      surface track, and HyperFrames and Remotion handoffs. `mui-stage`
+      shoots the same take on the GPU: layers on lit, extruded slabs under a
+      perspective camera, a WGSL background, bloom, lens and grain, and
+      subframe motion blur (`gain_reel --stage`).
 
 ## Missing
 
@@ -298,6 +306,12 @@ public function and a test behind it.
 - [ ] A morph's hit shape and analytic shadow stay the target's for the
       frames it lasts, and shells snap; exits fade on top of the paint list
       rather than at their old depth.
+- [ ] `mui-stage` ignores the reel's 2D camera and cursor: a staged take
+      moves its own 3D camera and draws no pointer. Layer textures have no
+      mips, so a slab far from the lens shimmers; the sRGB-premultiplied
+      alpha darkens antialiased edges a touch. No 3D text, no reflections, no
+      depth of field.
+- [ ] The reel's motion blur averages sRGB bytes, not linear light.
 
 ## Order
 
