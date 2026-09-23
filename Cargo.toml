@@ -24,7 +24,7 @@ edition = "2021"
 license = "MIT"
 
 [workspace.dependencies]
-i_overlay = "=8.1.0"
+i_overlay = "8.1"
 
 # Comparable speed-oriented benchmark profile; release's size policy is unchanged.
 [profile.perf]
