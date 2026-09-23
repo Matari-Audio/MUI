@@ -1349,8 +1349,8 @@ mod tests {
     #[cfg(feature = "cpu")]
     use super::effects;
     use super::{editor, GlyphAxes};
-    use mui::scene::Frame as LayoutFrame;
     use mui::prelude::*;
+    use mui::scene::Frame as LayoutFrame;
 
     #[test]
     fn malformed_readable_font_falls_back_with_parse_diagnostic() {

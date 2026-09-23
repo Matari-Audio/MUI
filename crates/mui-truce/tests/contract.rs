@@ -1,5 +1,5 @@
 use mui_truce::{Automation, Document, Edit, Error, Parameter, Target};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{mpsc, Arc, Mutex};
 use truce::prelude::*;
 use truce_core::{
     custom_state::State,
@@ -130,14 +130,13 @@ fn truce_parameters_and_documents_survive_reorder_recall_and_instances() {
     assert_eq!(a.editor.snapshot().routes[0].target, Target::Parameter(10));
     let previous = a.editor.snapshot();
     let revision = a.editor.revision();
-    assert!(
-        a.editor
-            .edit(|doc| {
-                doc.connect(osc, Target::Input(lfo))?;
-                Ok(())
-            })
-            .is_err()
-    );
+    assert!(a
+        .editor
+        .edit(|doc| {
+            doc.connect(osc, Target::Input(lfo))?;
+            Ok(())
+        })
+        .is_err());
     assert_eq!(a.editor.snapshot(), previous);
     assert_eq!(a.editor.revision(), revision);
     let mut invalid = previous.clone();
@@ -165,27 +164,24 @@ fn truce_parameters_and_documents_survive_reorder_recall_and_instances() {
             Ok(())
         })
         .unwrap();
-    assert!(
-        a.editor
-            .edit(|doc| doc.add_module("unrelated", vec![10]))
-            .is_err()
-    );
-    assert!(
-        a.editor
-            .edit(|doc| {
-                doc.next_module = 1;
-                Ok(())
-            })
-            .is_err()
-    );
-    assert!(
-        a.editor
-            .edit(|doc| {
-                doc.retired_parameters.clear();
-                Ok(())
-            })
-            .is_err()
-    );
+    assert!(a
+        .editor
+        .edit(|doc| doc.add_module("unrelated", vec![10]))
+        .is_err());
+    assert!(a
+        .editor
+        .edit(|doc| {
+            doc.next_module = 1;
+            Ok(())
+        })
+        .is_err());
+    assert!(a
+        .editor
+        .edit(|doc| {
+            doc.retired_parameters.clear();
+            Ok(())
+        })
+        .is_err());
     assert!(voices.parse("3"));
     assert!(!voices.parse("NaN"));
     for edit in rx.try_iter() {

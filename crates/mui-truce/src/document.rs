@@ -1,8 +1,8 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{
-        RwLock,
         atomic::{AtomicU64, Ordering},
+        RwLock,
     },
 };
 use truce_core::custom_state::{PersistField, State, StateCursor, StateField};
