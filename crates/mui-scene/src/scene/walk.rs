@@ -2,16 +2,16 @@
 use std::fmt::Write as _;
 use std::sync::Arc;
 
-use mui_geometry::{inset_path, BooleanOp, Bounds, Path, Point, RoundedRect};
+use mui_geometry::{Bounds, Path, Point};
 use mui_layout::{Frame, Size};
 
+use super::outline::Contour;
 use super::text::Face;
-use super::{
-    bounds, find, snap, Ancestors, Deferred, Layer, Painted, ResolvedSurface, SceneError, Text,
-    Walk,
-};
-use crate::regions::Operation;
-use crate::{Color, Content, Cursor, El, Fill, Mix, Paint, Radius, ShadowKind};
+use super::{bounds, snap, Ancestors, Deferred, Layer, ResolvedSurface, SceneError, Text, Walk};
+use crate::{Color, Content, El, Element, Fill, Mix, ShadowKind};
+
+/// A canvas's tagged draws: the surface's hit shapes.
+type Hits = Vec<(Arc<str>, Path)>;
 
 impl<'a> Walk<'a> {
     pub(super) fn node<'n: 'a>(
@@ -19,44 +19,47 @@ impl<'a> Walk<'a> {
         n: &'n El,
         path: &mut String,
         under: Color,
-        cursor: Option<Cursor>,
         ancestors: &Ancestors,
-        disabled: bool,
     ) -> Result<(), SceneError> {
-        let clip = ancestors.clip;
         let frame = self.frames[self.i];
         let at = self.i;
         self.i += 1;
-        // ponytail: one `Arc<str>` per node per frame, cloned four times
-        // instead of four heap copies; interning across frames is the upgrade.
-        let key: Arc<str> = n.key().map_or_else(|| Arc::from(path.as_str()), Arc::from);
-        let th = self.spec.theme;
-        let e = n.payload();
-        let s = &e.style;
-        let cursor = s.cursor.or(cursor);
-        // A switched-off card switches off what it contains: nothing inside
-        // it may be reached while its own frame cannot be.
-        let disabled = disabled || e.disabled;
         if frame.size.width <= 0.0 || frame.size.height <= 0.0 {
             // A flex share that collapsed to nothing: invisible, and so are
             // its children.
             self.i = at + self.sizes[at];
             return Ok(());
         }
+        // ponytail: one `Arc<str>` per node per frame, cloned four times
+        // instead of four heap copies; interning across frames is the upgrade.
+        let key: Arc<str> = n.key().map_or_else(|| Arc::from(path.as_str()), Arc::from);
+        let e = n.payload();
+        let s = &e.style;
+        let mut inner = ancestors.clone();
+        inner.cursor = s.cursor.or(ancestors.cursor);
+        // A switched-off card switches off what it contains: nothing inside
+        // it may be reached while its own frame cannot be.
+        inner.disabled = ancestors.disabled || e.disabled;
         let start = self.paint.len();
         let material = self.material_weld(n, frame, path, under)?;
-        let (outline, rect, mut changed, welds) = match &material {
-            Some(m) => (m.outline.clone(), None, true, Vec::new()),
+        let mut contour = match &material {
+            Some(m) => Contour {
+                changed: true,
+                ..Contour::path(m.outline.clone())
+            },
             None => self.outline(n, frame, self.i)?,
         };
 
-        self.partition(n, &outline, frame, at)?;
+        self.partition(n, &contour.path, frame, at)?;
         self.key = key.clone();
-        let clear = Fill::Color(Color::oklcha(0.0, 0.0, 0.0, 0.0));
         // Each envelope belongs to exactly one node, visited once.
-        let enveloped = self.region_envelopes.remove(&at).map(|p| {
-            self.push(Layer::Clip, p, None, &clear, under);
-        });
+        let enveloped = match self.region_envelopes.remove(&at) {
+            Some(p) => {
+                self.mark(Layer::Clip, p, None);
+                true
+            }
+            None => false,
+        };
         // A mask composites against what the subtree drew, so the subtree
         // needs a layer of its own even when nothing asked to blend.
         let masked = !s.mask.is_none();
@@ -66,257 +69,24 @@ impl<'a> Walk<'a> {
             _ => None,
         };
         if let Some((mix, opacity)) = blended {
-            self.push(
-                Layer::Blend { mix, opacity },
-                Path::default(),
-                None,
-                &clear,
-                under,
-            );
+            self.mark(Layer::Blend { mix, opacity }, Path::default(), None);
         }
         for sh in s.shadow.iter().filter(|sh| sh.kind == ShadowKind::Drop) {
-            self.shadow(sh, &outline, rect, &welds, under)?;
+            self.shadow(sh, &contour, under)?;
         }
-        let solid = |p: Option<&mut Painted>, or: Color| p.map_or(or, |p| p.paint.solid());
-        let mut bg = match &material {
-            Some(m) if m.external.is_some() => {
-                let external = m.external.as_ref().expect("matched Some").clone();
-                self.external_welds.insert(self.key.clone(), external);
-                self.paint.push(Painted {
-                    key: self.key.clone(),
-                    layer: Layer::External,
-                    path: m.image_rect.path(),
-                    paint: Paint::Solid(under),
-                    rect: Some(m.image_rect),
-                    width: 0.0,
-                    blur: 0.0,
-                    text: None,
-                });
-                under
-            }
-            Some(m) => solid(
-                self.push(
-                    Layer::Fill,
-                    m.image_rect.path(),
-                    Some(m.image_rect),
-                    &m.image_fill,
-                    under,
-                ),
-                under,
-            ),
-            // Text's own fill is its ink, not a box behind it: never pushed,
-            // though its colour still grounds the shells as before.
-            None if matches!(e.content, Content::Text(_)) => s
-                .fill
-                .paint(&th.palette, under)
-                .map_or(under, |p| p.solid()),
-            // ponytail: `Painted` owns its path, so a filled node copies its
-            // outline once. `Arc<Path>` there is the upgrade -- an API break
-            // for every renderer.
-            None => solid(
-                self.push(Layer::Fill, outline.clone(), rect, &s.fill, under),
-                under,
-            ),
-        };
-
+        let bg = self.fill(e, material.as_ref(), &contour, under);
         let border_background = self.paint.len();
-        // The shell before this one: an analytic rect insets as one, and
-        // only a path shell needs the previous path kept.
-        let (mut cur, mut cur_rect) = (None::<Path>, rect);
-        for (i, (d, f)) in s.shells.iter().enumerate() {
-            let d = d.resolve(th.spacing);
-            if !(d.is_finite() && d >= 0.0) {
-                return Err(SceneError::InvalidRadius);
+        let mut bg = self.shells(s, &mut contour, bg)?;
+        self.inset_shadows(s, &contour, bg)?;
+        let late_stroke = match &s.stroke {
+            Some(st) if material.is_none() && e.border_ramp.is_none() => {
+                self.stroke(st, e, &contour, bg)?
             }
-            let shell = match cur_rect {
-                Some(rr) => {
-                    let i2 = rr.inset(d)?;
-                    changed |= i2.corner_collapsed;
-                    let Some(child) = i2.shape else { break };
-                    cur_rect = Some(child);
-                    child.path()
-                }
-                None => {
-                    let i2 = inset_path(cur.as_ref().unwrap_or(&outline), d, self.spec.offsets)?;
-                    changed |= i2.counts_changed;
-                    cur = Some(i2.path.clone());
-                    i2.path
-                }
-            };
-            bg = solid(self.push(Layer::Shell(i), shell, cur_rect, f, bg), bg);
-        }
+            _ => None,
+        };
+        let hits = self.content(e, at, &key, &contour, &mut bg, under)?;
+        let content = self.content_size(n, at, frame);
 
-        if s.shadow.iter().any(|sh| sh.kind == ShadowKind::Inset) {
-            // Inside the shape, over everything it has painted so far: the
-            // inverse blur is opaque *outside* its rectangle, so the outline
-            // is what keeps it in the box.
-            self.push(Layer::Clip, outline.clone(), rect, &clear, bg);
-            for sh in s.shadow.iter().filter(|sh| sh.kind == ShadowKind::Inset) {
-                self.shadow(sh, &outline, rect, &welds, bg)?;
-            }
-            self.push(Layer::Unclip, Path::default(), None, &clear, bg);
-        }
-
-        // A welded parent is one continuous outline, but its children paint
-        // after the parent. Keep the stroke until the subtree is complete so
-        // a child fill cannot erase the shared outer border. Ordinary nodes
-        // retain the historical ordering (stroke before their content).
-        let mut deferred_stroke: Option<(Path, Option<RoundedRect>, Fill, f64)> = None;
-        if let Some(st) = s
-            .stroke
-            .as_ref()
-            .filter(|_| material.is_none() && e.border_ramp.is_none())
-        {
-            let w = st.width.unwrap_or(th.stroke_width);
-            if !(w.is_finite() && w >= 0.0) {
-                return Err(SceneError::InvalidRadius);
-            }
-            if let (crate::BorderAlign::Inside, Some(rr)) = (e.border_align, rect) {
-                let stroked = rr.inset(w / 2.)?.shape;
-                if let Some(rr) = stroked {
-                    if s.weld {
-                        deferred_stroke = Some((rr.path(), Some(rr), st.fill.clone(), w));
-                    } else if let Some(p) =
-                        self.push(Layer::Stroke, rr.path(), Some(rr), &st.fill, bg)
-                    {
-                        p.width = w;
-                    }
-                } else {
-                    deferred_stroke = Some((outline.clone(), None, st.fill.clone(), 0.));
-                }
-            } else {
-                let band = mui_geometry::border_geometry(
-                    &outline,
-                    mui_geometry::WidthProfile::uniform(w),
-                    e.border_align,
-                    self.spec.offsets,
-                    self.spec.geometry,
-                )?
-                .band;
-                deferred_stroke = Some((band, None, st.fill.clone(), 0.));
-            }
-        }
-
-        // A canvas's tagged draws, collected as the surface's hit shapes.
-        let mut hits = Vec::new();
-        let shaped_content = self.regions.contains_key(&at) && !matches!(e.content, Content::None);
-        if shaped_content {
-            self.push(Layer::Clip, outline.clone(), rect, &clear, bg);
-        }
-        match &e.content {
-            Content::Text(t) => {
-                let size = e.text_size.unwrap_or(th.text);
-                // Text's own fill is its ink, not a box behind it.
-                let ink = if s.fill.is_none() {
-                    Fill::Role(crate::Role::Ink)
-                } else {
-                    s.fill.clone()
-                };
-                bg = under;
-                let face = Face::of(e, th);
-                let lines = self.runs.lines(t, face, frame.size.width, e.lines);
-                let fonts = self.runs.fonts_for(face);
-                let font_coords = self.runs.coords(&fonts, face);
-                let coords = font_coords
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| Arc::from(&[][..]));
-                let hint = self.runs.settled(&key, &font_coords);
-                let n = lines.len();
-                let base = self.base_y;
-                for (li, line) in lines.iter().enumerate() {
-                    let Some(run) = self.runs.run(line, face)? else {
-                        break;
-                    };
-                    // One line sits centred on ascent+descent, or on the
-                    // baseline its parent chose; a stack centres the block.
-                    let dy = match (base, n) {
-                        (Some(b), _) => {
-                            b + li as f64 * snap(run.line_height, self.spec.device_scale)
-                        }
-                        (_, 1) => {
-                            frame.y
-                                + (frame.size.height - run.ascent - run.descent) / 2.0
-                                + run.ascent
-                        }
-                        _ => {
-                            // A snapped line height, so the stack of
-                            // baselines is even once the renderer hints each
-                            // one to a whole device pixel.
-                            let lh = snap(run.line_height, self.spec.device_scale);
-                            frame.y
-                                + (frame.size.height - n as f64 * lh) / 2.0
-                                + run.ascent
-                                + li as f64 * lh
-                        }
-                    };
-                    // glifo hints by rounding the device-space baseline per
-                    // glyph, so an unsnapped stack of fractional line heights
-                    // rounds to uneven leading. Snap the line, not the glyph.
-                    let origin = Point::new(
-                        snap(frame.x, self.spec.device_scale),
-                        snap(dy, self.spec.device_scale),
-                    );
-                    let text = fonts.first().cloned().map(|font| Text {
-                        font,
-                        fonts: fonts.clone(),
-                        size: size as f32,
-                        origin,
-                        glyphs: run.glyphs.clone(),
-                        axes: e.axes.clone(),
-                        coords: coords.clone(),
-                        font_coords: font_coords.clone(),
-                        hint,
-                    });
-                    let ink_path = if text.is_some() {
-                        Path::default()
-                    } else {
-                        run.path.rigid_transform(origin, 0.0)?
-                    };
-                    if let Some(p) = self.push(Layer::Text, ink_path, None, &ink, under) {
-                        p.text = text;
-                    }
-                }
-            }
-            Content::Canvas(c) => {
-                let origin = Point::new(frame.x, frame.y);
-                for (k, d) in (c.0)(frame.size).iter().enumerate() {
-                    let moved = d.path.rigid_transform(origin, 0.0)?;
-                    if let Some(tag) = &d.tag {
-                        hits.push((Arc::clone(tag), moved.clone()));
-                    }
-                    if let Some(p) = self.push(Layer::Draw(k), moved, None, &d.fill, bg) {
-                        p.width = d.width;
-                    }
-                }
-            }
-            Content::None => {}
-        }
-
-        if shaped_content {
-            self.push(Layer::Unclip, Path::default(), None, &clear, bg);
-        }
-        let scrolled = n.scroll_offset();
-        let mut content = frame.size;
-        if n.is_scroll() {
-            // Only in-flow child boxes belong to this viewport. A nested
-            // viewport owns its own overflow; floats do not enlarge the flow.
-            let pad = n.padding(th.spacing);
-            let (mut right, mut bottom) = (frame.x - scrolled[0], frame.y - scrolled[1]);
-            let mut child_at = at + 1;
-            for child in n.children() {
-                if !child.is_float() {
-                    let f = self.frames[child_at];
-                    right = right.max(f.right());
-                    bottom = bottom.max(f.bottom());
-                }
-                child_at += self.sizes[child_at];
-            }
-            content = Size::new(
-                (right - frame.x + scrolled[0] + pad.right - pad.left).max(0.0),
-                (bottom - frame.y + scrolled[1] + pad.bottom - pad.top).max(0.0),
-            );
-        }
         let surface = self.surfaces.len();
         self.at.insert(key.clone(), surface);
         let (semantics, semantic_label_implicit) = match (&e.semantics, &e.content) {
@@ -330,38 +100,32 @@ impl<'a> Walk<'a> {
         self.surfaces.push(ResolvedSurface {
             key: key.clone(),
             frame,
-            bounds: match rect {
+            bounds: match contour.rect {
                 // A rounded rectangle already knows its bounds; only a
                 // welded outline has to be flattened to find them.
                 Some(r) => Some(r.bounds()),
-                None => Bounds::from_points(outline.flatten(0.5, 100_000)?.concat()),
+                None => Bounds::from_points(contour.path.flatten(0.5, 100_000)?.concat()),
             },
             // Filled in at the end of this node, from the outline itself.
             path: Path::default(),
-            rect,
-            topology_changed: changed,
-            cursor,
+            rect: contour.rect,
+            topology_changed: contour.changed,
+            cursor: inner.cursor,
             tip: e.tip.clone(),
             focusable: e.focusable,
-            disabled,
+            disabled: inner.disabled,
             semantics,
             semantic_label_implicit,
             text_value: match &e.content {
                 Content::Text(t) => Some(t.clone()),
                 _ => None,
             },
-            clip,
+            clip: ancestors.clip,
             clip_path: ancestors.clip_paths.clone(),
             parent: ancestors.parent.clone(),
             content,
             hits,
         });
-        let mask_path = if masked {
-            outline.clone()
-        } else {
-            Path::default()
-        };
-        let mut inner = ancestors.clone();
         if n.key()
             .is_some_and(|k| !k.is_empty() && !k.starts_with('/'))
         {
@@ -372,74 +136,255 @@ impl<'a> Walk<'a> {
         // the shared outline.
         let clips = n.is_clip() || s.weld || e.inside.is_some() || self.regions.contains_key(&at);
         if clips {
-            let b = match &material {
-                Some(m) => m.image_rect.bounds(),
-                None => Bounds::from_points(outline.flatten(0.5, 100_000)?.concat())
-                    .unwrap_or_else(|| bounds(frame, self.spec.device_scale)),
-            };
-            let b = clip.map_or(b, |c| {
-                Bounds::new(
-                    b.min.x.max(c.min.x),
-                    b.min.y.max(c.min.y),
-                    b.max.x.min(c.max.x),
-                    b.max.y.min(c.max.y),
-                )
-            });
-            self.push(Layer::Clip, outline.clone(), rect, &clear, bg);
-            inner.clip = Some(b);
-            // Keep every exact outline in one shared allocation for all
-            // descendants. `clip` remains the rectangular fast path used by
-            // existing input adapters; rounded or welded corners can now be
-            // tested without tessellating during each pointer query.
-            // ponytail: a nested clip copies its clipping ancestors' paths,
-            // O(clip depth) per clipping node; `Arc<[Arc<Path>]>` is the
-            // upgrade, and it changes mui-input's `&[Path]` clip API too.
-            let mut paths = inner
-                .clip_paths
-                .as_deref()
-                .map_or_else(Vec::new, |paths| paths.to_vec());
-            paths.push(outline.clone());
-            inner.clip_paths = Some(Arc::from(paths.into_boxed_slice()));
+            let image = material.as_ref().map(|m| m.image_rect.bounds());
+            self.clip(image, &contour, frame, &mut inner)?;
         }
+        self.children(n, at, path, bg, &inner)?;
+
+        // Everything from here on closes this node, whatever its children
+        // left the key at.
+        self.key = key;
+        if clips {
+            self.mark(Layer::Unclip, Path::default(), None);
+        }
+        if let Some((stroke_path, stroke_rect, fill, width)) = late_stroke {
+            if let Some(p) = self.push(Layer::Stroke, stroke_path, stroke_rect, &fill, bg) {
+                p.width = width;
+            }
+        }
+        if let Some(ramp) = &e.border_ramp {
+            ramp.validate()?;
+            if material.is_some() {
+                return Err(SceneError::UnsupportedWeld(
+                    "border ramp requires a fixed outline, not material welding",
+                ));
+            }
+            self.border_ramp(n, ramp, at, &contour, bg, border_background)?;
+        }
+        if let Some(m) = &material {
+            // Consume only immediate source plates. Text, canvases, children,
+            // clips and semantics keep their own authoring and painter order.
+            // The plates painted inside this node, so only its entries are
+            // scanned, not everything painted before it.
+            let own = self.paint.split_off(start);
+            self.paint
+                .extend(own.into_iter().filter(|p| !m.consumes(&p.key, p.layer)));
+        }
+        if blended.is_some() {
+            if masked {
+                self.push(Layer::Mask, contour.path.clone(), contour.rect, &s.mask, bg);
+            }
+            self.mark(Layer::Unblend, Path::default(), None);
+        }
+        if enveloped {
+            self.mark(Layer::Unclip, Path::default(), None);
+        }
+        // The outline's last use, so the surface takes it instead of a copy.
+        self.surfaces[surface].path = contour.path;
+        Ok(())
+    }
+
+    /// The node's text or canvas draws, clipped to its region when it has
+    /// one. Text is ink over `under`, so it hands `under` on as the ground.
+    fn content(
+        &mut self,
+        e: &Element,
+        at: usize,
+        key: &Arc<str>,
+        contour: &Contour,
+        bg: &mut Color,
+        under: Color,
+    ) -> Result<Hits, SceneError> {
+        let mut hits = Vec::new();
+        let shaped = self.regions.contains_key(&at) && !matches!(e.content, Content::None);
+        if shaped {
+            self.mark(Layer::Clip, contour.path.clone(), contour.rect);
+        }
+        let frame = self.frames[at];
+        match &e.content {
+            Content::Text(t) => {
+                *bg = under;
+                self.text(e, t, frame, key, under)?;
+            }
+            Content::Canvas(c) => {
+                let origin = Point::new(frame.x, frame.y);
+                for (k, d) in (c.0)(frame.size).iter().enumerate() {
+                    let moved = d.path.rigid_transform(origin, 0.0)?;
+                    if let Some(tag) = &d.tag {
+                        hits.push((Arc::clone(tag), moved.clone()));
+                    }
+                    if let Some(p) = self.push(Layer::Draw(k), moved, None, &d.fill, *bg) {
+                        p.width = d.width;
+                    }
+                }
+            }
+            Content::None => {}
+        }
+        if shaped {
+            self.mark(Layer::Unclip, Path::default(), None);
+        }
+        Ok(hits)
+    }
+
+    /// A label: one run per line, each on its own baseline.
+    fn text(
+        &mut self,
+        e: &Element,
+        t: &str,
+        frame: Frame,
+        key: &Arc<str>,
+        under: Color,
+    ) -> Result<(), SceneError> {
+        let th = self.spec.theme;
+        let size = e.text_size.unwrap_or(th.text);
+        // Text's own fill is its ink, not a box behind it.
+        let ink = if e.style.fill.is_none() {
+            Fill::Role(crate::Role::Ink)
+        } else {
+            e.style.fill.clone()
+        };
+        let face = Face::of(e, th);
+        let lines = self.runs.lines(t, face, frame.size.width, e.lines);
+        let fonts = self.runs.fonts_for(face);
+        let font_coords = self.runs.coords(&fonts, face);
+        let coords = font_coords
+            .first()
+            .cloned()
+            .unwrap_or_else(|| Arc::from(&[][..]));
+        let hint = self.runs.settled(key, &font_coords);
+        let n = lines.len();
+        let base = self.base_y;
+        for (li, line) in lines.iter().enumerate() {
+            let Some(run) = self.runs.run(line, face)? else {
+                break;
+            };
+            // One line sits centred on ascent+descent, or on the
+            // baseline its parent chose; a stack centres the block.
+            let dy = match (base, n) {
+                (Some(b), _) => b + li as f64 * snap(run.line_height, self.spec.device_scale),
+                (_, 1) => {
+                    frame.y + (frame.size.height - run.ascent - run.descent) / 2.0 + run.ascent
+                }
+                _ => {
+                    // A snapped line height, so the stack of
+                    // baselines is even once the renderer hints each
+                    // one to a whole device pixel.
+                    let lh = snap(run.line_height, self.spec.device_scale);
+                    frame.y
+                        + (frame.size.height - n as f64 * lh) / 2.0
+                        + run.ascent
+                        + li as f64 * lh
+                }
+            };
+            // glifo hints by rounding the device-space baseline per
+            // glyph, so an unsnapped stack of fractional line heights
+            // rounds to uneven leading. Snap the line, not the glyph.
+            let origin = Point::new(
+                snap(frame.x, self.spec.device_scale),
+                snap(dy, self.spec.device_scale),
+            );
+            let text = fonts.first().cloned().map(|font| Text {
+                font,
+                fonts: fonts.clone(),
+                size: size as f32,
+                origin,
+                glyphs: run.glyphs.clone(),
+                axes: e.axes.clone(),
+                coords: coords.clone(),
+                font_coords: font_coords.clone(),
+                hint,
+            });
+            let ink_path = if text.is_some() {
+                Path::default()
+            } else {
+                run.path.rigid_transform(origin, 0.0)?
+            };
+            if let Some(p) = self.push(Layer::Text, ink_path, None, &ink, under) {
+                p.text = text;
+            }
+        }
+        Ok(())
+    }
+
+    /// A scroll node's in-flow children extent inside its padding,
+    /// unscrolled; the frame size otherwise.
+    fn content_size(&self, n: &El, at: usize, frame: Frame) -> Size {
+        if !n.is_scroll() {
+            return frame.size;
+        }
+        // Only in-flow child boxes belong to this viewport. A nested
+        // viewport owns its own overflow; floats do not enlarge the flow.
+        let scrolled = n.scroll_offset();
+        let pad = n.padding(self.spec.theme.spacing);
+        let (mut right, mut bottom) = (frame.x - scrolled[0], frame.y - scrolled[1]);
+        let mut child_at = at + 1;
+        for child in n.children() {
+            if !child.is_float() {
+                let f = self.frames[child_at];
+                right = right.max(f.right());
+                bottom = bottom.max(f.bottom());
+            }
+            child_at += self.sizes[child_at];
+        }
+        Size::new(
+            (right - frame.x + scrolled[0] + pad.right - pad.left).max(0.0),
+            (bottom - frame.y + scrolled[1] + pad.bottom - pad.top).max(0.0),
+        )
+    }
+
+    /// Clip the subtree to the node's outline, and hand the descendants
+    /// that clip both as a rectangle and as the exact path.
+    fn clip(
+        &mut self,
+        image: Option<Bounds>,
+        contour: &Contour,
+        frame: Frame,
+        inner: &mut Ancestors,
+    ) -> Result<(), SceneError> {
+        let b = match image {
+            Some(b) => b,
+            None => Bounds::from_points(contour.path.flatten(0.5, 100_000)?.concat())
+                .unwrap_or_else(|| bounds(frame, self.spec.device_scale)),
+        };
+        let b = inner.clip.map_or(b, |c| {
+            Bounds::new(
+                b.min.x.max(c.min.x),
+                b.min.y.max(c.min.y),
+                b.max.x.min(c.max.x),
+                b.max.y.min(c.max.y),
+            )
+        });
+        self.mark(Layer::Clip, contour.path.clone(), contour.rect);
+        inner.clip = Some(b);
+        // Keep every exact outline in one shared allocation for all
+        // descendants. `clip` remains the rectangular fast path used by
+        // existing input adapters; rounded or welded corners can now be
+        // tested without tessellating during each pointer query.
+        // ponytail: a nested clip copies its clipping ancestors' paths,
+        // O(clip depth) per clipping node; `Arc<[Arc<Path>]>` is the
+        // upgrade, and it changes mui-input's `&[Path]` clip API too.
+        let mut paths = inner
+            .clip_paths
+            .as_deref()
+            .map_or_else(Vec::new, |paths| paths.to_vec());
+        paths.push(contour.path.clone());
+        inner.clip_paths = Some(Arc::from(paths.into_boxed_slice()));
+        Ok(())
+    }
+
+    /// Walk `n`'s children in paint order: carves are spent, sticky ones
+    /// paint after their siblings, floats wait for the end of the walk.
+    fn children<'n: 'a>(
+        &mut self,
+        n: &'n El,
+        at: usize,
+        path: &mut String,
+        bg: Color,
+        inner: &Ancestors,
+    ) -> Result<(), SceneError> {
         let outer_base = self.base_y;
         self.base_y = None;
-        // Each direct text child's own centred baseline, then every child
-        // takes the lowest of the ones it shares a line with: a row taller
-        // than its text keeps its labels inside their frames, and a wrapping
-        // row gets one baseline per line instead of one per box.
-        // ponytail: O(n^2) over direct children, which is a handful.
-        let mut bases: Vec<Option<(f64, Frame)>> = Vec::new();
-        if e.baseline {
-            let mut at2 = at + 1;
-            for c in n.children() {
-                let f = self.frames[at2];
-                at2 += self.sizes[at2];
-                let own = match &c.payload().content {
-                    Content::Text(t) => {
-                        let face = Face::of(c.payload(), th);
-                        let lines = self.runs.lines(t, face, f.size.width, c.payload().lines);
-                        self.runs.run(&lines[0], face)?.map(|r| {
-                            let height = if lines.len() == 1 {
-                                r.ascent + r.descent
-                            } else {
-                                lines.len() as f64 * snap(r.line_height, self.spec.device_scale)
-                            };
-                            f.y + (f.size.height - height) / 2.0 + r.ascent
-                        })
-                    }
-                    _ => None,
-                };
-                bases.push(own.map(|b| (b, f)));
-            }
-            let lines = bases.clone();
-            for (b, f) in bases.iter_mut().flatten() {
-                *b = lines
-                    .iter()
-                    .flatten()
-                    .filter(|(_, g)| g.y < f.bottom() && f.y < g.bottom())
-                    .fold(*b, |m, (o, _)| m.max(*o));
-            }
-        }
+        let bases = self.baselines(n, at)?;
         // One scratch string for the whole walk: a path is O(depth) bytes and
         // formatting a fresh one per node was the walk's largest single cost.
         let mark = path.len();
@@ -466,137 +411,73 @@ impl<'a> Walk<'a> {
                     node: c,
                     path: path.clone(),
                     under: bg,
-                    cursor,
-                    disabled,
-                    parent: inner.parent.clone(),
+                    ancestors: Ancestors {
+                        parent: inner.parent.clone(),
+                        cursor: inner.cursor,
+                        disabled: inner.disabled,
+                        ..Ancestors::default()
+                    },
                 });
                 self.i += self.sizes[self.i];
             } else {
-                self.node(c, path, bg, cursor, &inner, disabled)?;
+                self.node(c, path, bg, inner)?;
             }
         }
         let end = self.i;
         for (at2, c, mut p, base) in sticky {
             self.i = at2;
             self.base_y = base;
-            self.node(c, &mut p, bg, cursor, &inner, disabled)?;
+            self.node(c, &mut p, bg, inner)?;
         }
         self.i = end;
         path.truncate(mark);
         self.base_y = outer_base;
-        if clips {
-            self.key = key.clone();
-            self.push(Layer::Unclip, Path::default(), None, &clear, bg);
-        }
-        if let Some((stroke_path, stroke_rect, fill, width)) = deferred_stroke {
-            self.key = key.clone();
-            if let Some(p) = self.push(Layer::Stroke, stroke_path, stroke_rect, &fill, bg) {
-                p.width = width;
-            }
-        }
-        if let Some(ramp) = &e.border_ramp {
-            ramp.validate()?;
-            if material.is_some() {
-                return Err(SceneError::UnsupportedWeld(
-                    "border ramp requires a fixed outline, not material welding",
-                ));
-            }
-            let named_frame = |id: &mui_layout::Id| -> Result<_, SceneError> {
-                if let Some(frame) = self.ramp_frames.get(&(at, id.clone())) {
-                    return Ok(*frame);
-                }
-                let index = find(n, id.as_str(), at, &self.sizes).ok_or(
-                    mui_geometry::Error::InvalidOptions("border ramp descendant missing"),
-                )?;
-                Ok(self.frames[index])
-            };
-            let anchor = match self.ramp_anchors.get(&at) {
-                Some(frame) => *frame,
-                None => match &ramp.anchor {
-                    None => frame,
-                    Some(id) => named_frame(id)?,
-                },
-            };
-            if anchor.size.width <= 0.0 {
-                return Err(
-                    mui_geometry::Error::InvalidOptions("border ramp anchor has no width").into(),
-                );
-            }
-            let mut sweep = ramp.clone();
-            if ramp.align == crate::BorderAlign::Center {
-                sweep.from.1 *= 0.5;
-                sweep.to.1 *= 0.5;
-            }
-            let mut band = self.borders.band(
-                &key,
-                &outline,
-                &sweep,
-                anchor,
-                0.1 / self.spec.device_scale.unwrap_or(1.0),
-            )?;
-            // Extend the same material into the tabs and their concave shoulders.
-            // The final welded outline supplies all corners through the clip.
-            let shoulder = match s.radius {
-                Radius::Pair(_, concave) => concave,
-                Radius::Scale(k) => th.corners.concave * k,
-                _ => th.corners.concave,
-            };
-            crate::border_ramp::decorate(&mut band, ramp, anchor, shoulder, named_frame)?;
-            if ramp.align == crate::BorderAlign::Outside {
-                let merged = self.region_cache.resolve(
-                    (at, 7),
-                    Operation::Sweep(band),
-                    self.spec.offsets,
-                    self.spec.geometry,
-                )?;
-                band = mui_geometry::boolean_paths(
-                    &merged,
-                    &outline,
-                    BooleanOp::Difference,
-                    self.spec.offsets,
-                    self.spec.geometry,
-                )?;
-            }
-            if let Some(bounds) = Bounds::from_points(band.flatten(0.1, 250_000)?.concat()) {
-                self.key = key.clone();
-                let start = self.paint.len();
-                if ramp.align == crate::BorderAlign::Inside {
-                    self.push(Layer::Clip, outline.clone(), rect, &clear, bg);
-                }
-                self.push(Layer::Stroke, band, None, &ramp.fill(anchor, bounds), bg);
-                if ramp.align == crate::BorderAlign::Inside {
-                    self.push(Layer::Unclip, Path::default(), None, &clear, bg);
-                }
-                if !ramp.tabs.is_empty() {
-                    let paint: Vec<_> = self.paint.drain(start..).collect();
-                    self.paint
-                        .splice(border_background..border_background, paint);
-                }
-            }
-        }
-        if let Some(m) = &material {
-            // Consume only immediate source plates. Text, canvases, children,
-            // clips and semantics keep their own authoring and painter order.
-            // The plates painted inside this node, so only its entries are
-            // scanned, not everything painted before it.
-            let own = self.paint.split_off(start);
-            self.paint
-                .extend(own.into_iter().filter(|p| !m.consumes(&p.key, p.layer)));
-        }
-        if blended.is_some() {
-            self.key = key.clone();
-            if masked {
-                self.push(Layer::Mask, mask_path, rect, &s.mask, bg);
-            }
-            self.key = key;
-            self.push(Layer::Unblend, Path::default(), None, &clear, bg);
-        }
-        if enveloped.is_some() {
-            self.push(Layer::Unclip, Path::default(), None, &clear, bg);
-        }
-        // The outline's last use, so the surface takes it instead of a copy.
-        self.surfaces[surface].path = outline;
         Ok(())
+    }
+
+    /// Each direct text child's own centred baseline, then every child
+    /// takes the lowest of the ones it shares a line with: a row taller than
+    /// its text keeps its labels inside their frames, and a wrapping row gets
+    /// one baseline per line instead of one per box. Empty unless `n` is a
+    /// `.baseline()` row.
+    ///
+    /// ponytail: O(n^2) over direct children, which is a handful.
+    fn baselines(&mut self, n: &El, at: usize) -> Result<Vec<Option<(f64, Frame)>>, SceneError> {
+        let mut bases: Vec<Option<(f64, Frame)>> = Vec::new();
+        if !n.payload().baseline {
+            return Ok(bases);
+        }
+        let th = self.spec.theme;
+        let mut at2 = at + 1;
+        for c in n.children() {
+            let f = self.frames[at2];
+            at2 += self.sizes[at2];
+            let own = match &c.payload().content {
+                Content::Text(t) => {
+                    let face = Face::of(c.payload(), th);
+                    let lines = self.runs.lines(t, face, f.size.width, c.payload().lines);
+                    self.runs.run(&lines[0], face)?.map(|r| {
+                        let height = if lines.len() == 1 {
+                            r.ascent + r.descent
+                        } else {
+                            lines.len() as f64 * snap(r.line_height, self.spec.device_scale)
+                        };
+                        f.y + (f.size.height - height) / 2.0 + r.ascent
+                    })
+                }
+                _ => None,
+            };
+            bases.push(own.map(|b| (b, f)));
+        }
+        let lines = bases.clone();
+        for (b, f) in bases.iter_mut().flatten() {
+            *b = lines
+                .iter()
+                .flatten()
+                .filter(|(_, g)| g.y < f.bottom() && f.y < g.bottom())
+                .fold(*b, |m, (o, _)| m.max(*o));
+        }
+        Ok(bases)
     }
 }
 

@@ -86,24 +86,25 @@ fn find(n: &El, id: &str, at: usize, sizes: &[usize]) -> Option<usize> {
     None
 }
 
-/// A float, painted after the whole tree so it sits on top and escapes
-/// every clip.
+/// What a node inherits from the nodes above it.
 #[derive(Clone, Default)]
 struct Ancestors {
     parent: Option<Arc<str>>,
     clip: Option<Bounds>,
     clip_paths: Option<Arc<[Path]>>,
+    cursor: Option<Cursor>,
+    disabled: bool,
 }
 
+/// A float, painted after the whole tree so it sits on top and escapes
+/// every clip.
 #[derive(Clone)]
 struct Deferred<'a> {
     at: usize,
     node: &'a El,
     path: String,
     under: Color,
-    cursor: Option<Cursor>,
-    disabled: bool,
-    parent: Option<Arc<str>>,
+    ancestors: Ancestors,
 }
 
 struct Walk<'a> {
@@ -259,9 +260,7 @@ pub fn resolve_scene_cached(
         &spec.root,
         &mut String::new(),
         th.palette.background(),
-        None,
         &Ancestors::default(),
-        false,
     )?;
     // Floats paint last, in the order they were met; a float inside a float
     // lands on the end of the same queue.
@@ -272,23 +271,11 @@ pub fn resolve_scene_cached(
             node,
             mut path,
             under,
-            cursor,
-            disabled,
-            parent,
+            ancestors,
         } = w.deferred[k].clone();
         w.i = at;
         w.base_y = None;
-        w.node(
-            node,
-            &mut path,
-            under,
-            cursor,
-            &Ancestors {
-                parent,
-                ..Ancestors::default()
-            },
-            disabled,
-        )?;
+        w.node(node, &mut path, under, &ancestors)?;
         k += 1;
     }
     let Walk {

@@ -10,14 +10,36 @@ use mui_layout::Frame;
 use super::{bounds, polygons, SceneError, Walk};
 use crate::{Carve, El, Radius};
 
-pub(super) type OutlineResult = (Path, Option<RoundedRect>, bool, Vec<RoundedRect>);
+/// A node's resolved outline, and what else its shape knows.
+#[derive(Clone, Debug)]
+pub(super) struct Contour {
+    pub(super) path: Path,
+    /// Exact rounded rectangle when the outline is one (not welded).
+    pub(super) rect: Option<RoundedRect>,
+    /// A shell collapsed or a merge changed ring counts.
+    pub(super) changed: bool,
+    /// Rounded rects that stand in for an outline with no `rect` when it
+    /// casts a shadow: one per welded child, or a squircle's own frame.
+    pub(super) shadow_rects: Vec<RoundedRect>,
+}
+impl Contour {
+    /// A plain path: no analytic form, nothing changed.
+    pub(super) fn path(path: Path) -> Self {
+        Self {
+            path,
+            rect: None,
+            changed: false,
+            shadow_rects: Vec::new(),
+        }
+    }
+}
 
 /// Weld and carve outlines, the walk's most expensive geometry, keyed by
 /// every input word that shaped them and compared in full: a hash match
 /// alone is never trusted. Entries no resolve used are swept at its end.
 #[derive(Debug, Default)]
 pub(super) struct OutlineCache {
-    pub(super) entries: HashMap<Vec<u64>, (OutlineResult, u64)>,
+    pub(super) entries: HashMap<Vec<u64>, (Contour, u64)>,
     /// A key buffer, handed back after a hit so a warm frame builds keys
     /// without allocating.
     pub(super) scratch: Vec<u64>,
@@ -27,7 +49,7 @@ pub(super) struct OutlineCache {
 }
 
 impl OutlineCache {
-    fn get(&mut self, key: &[u64]) -> Option<OutlineResult> {
+    fn get(&mut self, key: &[u64]) -> Option<Contour> {
         let Some((outline, seen)) = self.entries.get_mut(key) else {
             self.misses += 1;
             return None;
@@ -37,7 +59,7 @@ impl OutlineCache {
         Some(outline.clone())
     }
 
-    fn insert(&mut self, key: Vec<u64>, outline: OutlineResult) {
+    fn insert(&mut self, key: Vec<u64>, outline: Contour) {
         self.entries.insert(key, (outline, self.generation));
     }
 
@@ -128,9 +150,9 @@ impl Walk<'_> {
         n: &El,
         frame: Frame,
         first: usize,
-    ) -> Result<OutlineResult, SceneError> {
+    ) -> Result<Contour, SceneError> {
         if let Some(path) = self.regions.get(&first.saturating_sub(1)) {
-            return Ok((path.clone(), None, false, Vec::new()));
+            return Ok(Contour::path(path.clone()));
         }
         if n.payload().outline.is_some() && n.children().iter().any(|c| c.payload().carve.is_some())
         {
@@ -167,9 +189,9 @@ impl Walk<'_> {
                 continue;
             };
             if topo.is_none() {
-                shapes = polygons(&base.0)?;
+                shapes = polygons(&base.path)?;
             }
-            let rhs = polygons(&self.outline(c, f, child_first)?.0)?;
+            let rhs = polygons(&self.outline(c, f, child_first)?.path)?;
             if rhs.is_empty() {
                 continue;
             }
@@ -197,12 +219,10 @@ impl Walk<'_> {
                 ..Fillet::default()
             },
         )?;
-        let outline = (
-            n.payload().style.corners.shape(&rounded.path),
-            None,
-            true,
-            Vec::new(),
-        );
+        let outline = Contour {
+            changed: true,
+            ..Contour::path(n.payload().style.corners.shape(&rounded.path))
+        };
         if let Some(key) = key {
             self.outlines.insert(key, outline.clone());
         }
@@ -232,7 +252,7 @@ impl Walk<'_> {
         geometry_node(n, &self.frames, &self.sizes, first.saturating_sub(1), key)
     }
 
-    fn shape(&mut self, n: &El, frame: Frame, first: usize) -> Result<OutlineResult, SceneError> {
+    fn shape(&mut self, n: &El, frame: Frame, first: usize) -> Result<Contour, SceneError> {
         let th = &self.spec.theme;
         let s = &n.payload().style;
         if let Some(shape) = &n.payload().outline {
@@ -246,7 +266,7 @@ impl Walk<'_> {
             local.validate(250_000)?;
             let world = local.rigid_transform(Point::new(frame.x, frame.y), 0.0)?;
             world.validate(250_000)?;
-            return Ok((world, None, false, Vec::new()));
+            return Ok(Contour::path(world));
         }
         let (convex, concave) = match s.radius {
             Radius::Theme => (th.corners.box_, th.corners.concave),
@@ -274,9 +294,15 @@ impl Walk<'_> {
             // analytic blur and the analytic shell inset with it; the path
             // route below draws both from the outline itself.
             if s.corners != CornerStyle::Round {
-                return Ok((s.corners.shape(&rr.path()), None, false, vec![rr]));
+                return Ok(Contour {
+                    shadow_rects: vec![rr],
+                    ..Contour::path(s.corners.shape(&rr.path()))
+                });
             }
-            return Ok((rr.path(), Some(rr), false, Vec::new()));
+            return Ok(Contour {
+                rect: Some(rr),
+                ..Contour::path(rr.path())
+            });
         }
         // Children's outlines sit right after this node in pre-order, each
         // subtree `count` long. Carved children shape this node separately;
@@ -292,7 +318,11 @@ impl Walk<'_> {
             if c.payload().carve.is_some() || f.size.width <= 0.0 || f.size.height <= 0.0 {
                 continue;
             }
-            let (path, child_rect, ..) = self.outline(c, f, child_first)?;
+            let Contour {
+                path,
+                rect: child_rect,
+                ..
+            } = self.outline(c, f, child_first)?;
             let child_shapes = polygons(&path)?;
             if child_shapes.is_empty() {
                 continue;
@@ -308,7 +338,10 @@ impl Walk<'_> {
             participants += 1;
         }
         if shapes.is_empty() {
-            return Ok((Path::default(), None, false, rects));
+            return Ok(Contour {
+                shadow_rects: rects,
+                ..Contour::path(Path::default())
+            });
         }
         let merged = union(&shapes, self.spec.geometry)?;
         let rounded = fillet(
@@ -319,12 +352,12 @@ impl Walk<'_> {
                 ..Fillet::default()
             },
         )?;
-        Ok((
-            s.corners.shape(&rounded.path),
-            None,
-            merged.components() != participants,
-            rects,
-        ))
+        Ok(Contour {
+            path: s.corners.shape(&rounded.path),
+            rect: None,
+            changed: merged.components() != participants,
+            shadow_rects: rects,
+        })
     }
 }
 
