@@ -4,6 +4,7 @@ use std::any::Any;
 mod wake;
 use crate::SemanticAction;
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
 
 use mui_geometry::Point;
 use mui_input::{Hit, Ime, Input, Interaction, Key, KeyPress, PointerInput, Response, FINE_DRAG};
@@ -80,15 +81,21 @@ pub struct Ui {
     scene: Option<ResolvedScene>,
     /// Per key: hover and press springs, 0..1.
     springs: BTreeMap<String, [Spring; 2]>,
-    /// Transition springs per node id, one per paint channel, and tweens
-    /// under a `~` prefix so a widget id cannot collide with one.
-    motion: BTreeMap<String, Vec<Option<Spring>>>,
-    /// Tweens read by the builder and transitions visited by the current frame.
-    motion_seen: BTreeSet<String>,
+    /// Transition springs per node key, one per paint channel, flagged when
+    /// the current frame visits them; the rest are dropped at its end.
+    motion: BTreeMap<String, (bool, Vec<Option<Spring>>)>,
+    /// [`Ui::tween`] springs per id, flagged when the builder reads them.
+    tweens: BTreeMap<String, (bool, Spring)>,
     text_cache: TextCache,
     weld_cache: mui_scene::WeldCache,
     /// Per scroll node: how far its children are slid.
     scrolls: BTreeMap<String, [f64; 2]>,
+    /// The last frame floated a tip, so the caller's root sat under a
+    /// wrapper and every positional key started `/0`.
+    wrapped: bool,
+    /// Scratch for the tree path of the node a walk is on: an unnamed node's
+    /// key, built without a heap copy per node.
+    path: String,
     /// Per text field: the selection's anchor and caret, in characters. They
     /// are equal when nothing is selected.
     sel: BTreeMap<String, (usize, usize)>,
@@ -160,10 +167,12 @@ impl Ui {
             scene: None,
             springs: BTreeMap::new(),
             motion: BTreeMap::new(),
-            motion_seen: BTreeSet::new(),
+            tweens: BTreeMap::new(),
             text_cache: TextCache::default(),
             weld_cache: mui_scene::WeldCache::default(),
             scrolls: BTreeMap::new(),
+            wrapped: false,
+            path: String::new(),
             sel: BTreeMap::new(),
             pasted: None,
             copied: None,
@@ -323,13 +332,8 @@ impl Ui {
     /// [`Ui::tween`] with your own spring. The spring's shape is taken on
     /// the first call for `id`.
     pub fn tween_with(&mut self, id: &str, target: f64, spring: Spring) -> f64 {
-        let key = format!("~{id}");
-        self.motion_seen.insert(key.clone());
-        let s = self
-            .motion
-            .entry(key)
-            .or_insert_with(|| vec![Some(spring.seeded(target))]);
-        let s = s[0].get_or_insert_with(|| spring.seeded(target));
+        let (seen, s) = slot(&mut self.tweens, id, || (false, spring.seeded(target)));
+        *seen = true;
         s.to(target);
         s.value
     }
@@ -360,6 +364,11 @@ impl Ui {
             return false;
         }
         let role = surface.semantics.as_ref().map(|s| &s.role);
+        let sign = if matches!(action, SemanticAction::Decrement { .. }) {
+            -1.0
+        } else {
+            1.0
+        };
         match action {
             SemanticAction::Focus { id } if surface.focusable => {
                 self.focus(id);
@@ -392,6 +401,16 @@ impl Ui {
                 );
                 self.actions.push(SemanticAction::SetValue { id, value });
                 true
+            }
+            SemanticAction::Increment { id } | SemanticAction::Decrement { id } => {
+                let Some(&Kind::Slider { value, min, max }) = role else {
+                    return false;
+                };
+                let step = mui_widgets::step(&(min..=max)) * sign;
+                self.request_action(SemanticAction::SetValue {
+                    id,
+                    value: value + step,
+                })
             }
             _ => false,
         }
@@ -789,8 +808,18 @@ impl Ui {
         // edges stay queued in `edits` until delivered by a frame or `close`.
         let active = self.interaction.held().map(str::to_owned);
         let mut atomic = BTreeSet::new();
-        for action in std::mem::take(&mut self.actions) {
-            let id = action.id().to_owned();
+        // So are the keys the focused control just read: an activation or a
+        // step is one edit, bracketed like the semantic action it mirrors.
+        let keyed = self
+            .focus
+            .as_deref()
+            .filter(|id| keyed_edit(self.scene.as_ref(), id, &self.keys))
+            .map(str::to_owned);
+        let ids = std::mem::take(&mut self.actions)
+            .into_iter()
+            .map(|action| action.id().to_owned())
+            .chain(keyed);
+        for id in ids {
             if active.as_deref() != Some(id.as_str()) && atomic.insert(id.clone()) {
                 self.edits.push((id.clone(), Edit::Begin));
                 self.edits.push((id, Edit::End));
@@ -891,17 +920,12 @@ impl Ui {
             ));
             p.to(f64::from(held && held_policy[1]));
         }
+        let rest = || [Spring::at(0.0), Spring::at(0.0)];
         if let Some(k) = hovered.as_deref().filter(|_| hovered_policy[0]) {
-            self.springs
-                .entry(k.to_owned())
-                .or_insert_with(|| [Spring::at(0.0), Spring::at(0.0)])[0]
-                .to(1.0);
+            slot(&mut self.springs, k, rest)[0].to(1.0);
         }
         if let Some(k) = held.as_deref() {
-            let entry = self
-                .springs
-                .entry(k.to_owned())
-                .or_insert_with(|| [Spring::at(0.0), Spring::at(0.0)]);
+            let entry = slot(&mut self.springs, k, rest);
             if held_policy[0] {
                 entry[0].to(1.0);
             }
@@ -1021,13 +1045,26 @@ impl Ui {
             }
             None => root,
         };
+        // The wrapper moves the caller's root to `/0`, and every positional
+        // key with it: carry them across, so an unnamed scroller keeps its
+        // offset and a transition its springs while a tip is up.
+        if tip.is_some() != self.wrapped {
+            self.wrapped = tip.is_some();
+            rekey(&mut self.scrolls, self.wrapped);
+            rekey(&mut self.motion, self.wrapped);
+            self.focus = self.focus.take().and_then(|k| shift(k, self.wrapped));
+        }
 
         let pal = self.theme.palette;
         // Declared state looks first, so a transition springs toward the
-        // style the node actually asked for this frame.
+        // style the node actually asked for this frame. The walks key an
+        // unnamed node by its tree path, exactly as the scene does.
+        let mut path = std::mem::take(&mut self.path);
+        path.clear();
         let (springs, focus) = (&self.springs, self.focus.as_deref());
         declared_states(
             &mut root,
+            &mut path,
             &|k, st| match st {
                 State::Hover => springs.get(k).is_some_and(|[h, _]| h.value > 0.5),
                 State::Press => springs.get(k).is_some_and(|[_, p]| p.value > 0.5),
@@ -1038,21 +1075,21 @@ impl Ui {
             },
             false,
         );
-        animating |= transitions(&mut root, &pal, &mut self.motion, &mut self.motion_seen, dt);
-        for (_, s) in self.motion.iter_mut().filter(|(k, _)| k.starts_with('~')) {
-            if let Some(s) = s[0].as_mut() {
-                animating |= s.step(dt);
-            }
+        animating |= transitions(&mut root, &mut path, &pal, &mut self.motion, dt);
+        for (_, s) in self.tweens.values_mut() {
+            animating |= s.step(dt);
         }
         let springs = &self.springs;
         let scrolls = &self.scrolls;
         state(
             &mut root,
+            &mut path,
             &pal,
             &|k| springs.get(k).map(|[h, p]| (h.value, p.value)),
             scrolls,
             false,
         );
+        self.path = path;
 
         let mut spec = SceneSpec::new(root).theme(self.theme);
         spec.offered = offered;
@@ -1144,8 +1181,8 @@ impl Ui {
             let f = scene.surface(TIP_KEY)?.frame;
             Some((t, Point::new(f.x, f.y)))
         });
-        self.motion.retain(|id, _| self.motion_seen.contains(id));
-        self.motion_seen.clear();
+        self.motion.retain(|_, (seen, _)| std::mem::take(seen));
+        self.tweens.retain(|_, (seen, _)| std::mem::take(seen));
         self.delivered = std::mem::take(&mut self.edits);
         self.scene = Some(scene);
         let repaint_after = self.repaint_after();
@@ -1207,7 +1244,7 @@ impl Ui {
             if max[0] <= 0.0 && max[1] <= 0.0 {
                 continue;
             }
-            let at = self.scrolls.entry(s.key.to_string()).or_insert([0.0, 0.0]);
+            let at = slot(&mut self.scrolls, &s.key, || [0.0, 0.0]);
             let next = [
                 (at[0] + wheel.x).clamp(0.0, max[0]),
                 (at[1] + wheel.y).clamp(0.0, max[1]),
@@ -1272,15 +1309,15 @@ fn channels(e: &mut Element, pal: &Palette, ch: &mut impl FnMut(usize, f64) -> f
 /// target mid-flight retargets the live spring instead of restarting it.
 fn transitions(
     n: &mut El,
+    path: &mut String,
     pal: &Palette,
-    motion: &mut BTreeMap<String, Vec<Option<Spring>>>,
-    seen: &mut BTreeSet<String>,
+    motion: &mut BTreeMap<String, (bool, Vec<Option<Spring>>)>,
     dt: f64,
 ) -> bool {
     let mut animating = false;
-    if let (Some(k), Some(spring)) = (n.key().map(str::to_owned), n.payload().transition) {
-        seen.insert(k.clone());
-        let list = motion.entry(k).or_default();
+    if let Some(spring) = n.payload().transition {
+        let (seen, list) = slot(motion, n.key().unwrap_or(path), || (false, Vec::new()));
+        *seen = true;
         let coupled_gap = n.payload().inside.is_some_and(|p| p == *n.gap_mut());
         channels(n.payload_mut(), pal, &mut |i, declared| {
             // Each slot is seeded from its own declared value the first time
@@ -1303,10 +1340,76 @@ fn transitions(
             *n.gap_mut() = n.payload().inside.expect("coupled inside");
         }
     }
-    for c in n.children_mut() {
-        animating |= transitions(c, pal, motion, seen, dt);
-    }
+    children(n, path, |c, path| {
+        animating |= transitions(c, path, pal, motion, dt)
+    });
     animating
+}
+
+/// Visit `n`'s children with `path` extended to each one's tree path, the
+/// `/0/2` key the scene gives a node without an id.
+fn children(n: &mut El, path: &mut String, mut f: impl FnMut(&mut El, &mut String)) {
+    let mark = path.len();
+    for (j, c) in n.children_mut().iter_mut().enumerate() {
+        let _ = write!(path, "/{j}");
+        f(c, path);
+        path.truncate(mark);
+    }
+}
+
+/// `map[k]`, inserted by `new` when absent: the key reaches the heap once, on
+/// insertion, and not on every frame's lookup.
+fn slot<'m, V>(map: &'m mut BTreeMap<String, V>, k: &str, new: impl FnOnce() -> V) -> &'m mut V {
+    if !map.contains_key(k) {
+        map.insert(k.to_owned(), new());
+    }
+    map.get_mut(k).expect("inserted above")
+}
+
+/// `k` once the tip wrapper is added (`wrap`) or taken away. An id does not
+/// move; a tree path gains or loses its leading `/0`, and one that was under
+/// the wrapper but not the caller's root is gone.
+fn shift(k: String, wrap: bool) -> Option<String> {
+    if !(k.is_empty() || k.starts_with('/')) {
+        return Some(k);
+    }
+    if wrap {
+        return Some(format!("/0{k}"));
+    }
+    k.strip_prefix("/0")
+        .filter(|rest| rest.is_empty() || rest.starts_with('/'))
+        .map(str::to_owned)
+}
+fn rekey<V>(map: &mut BTreeMap<String, V>, wrap: bool) {
+    *map = std::mem::take(map)
+        .into_iter()
+        .filter_map(|(k, v)| Some((shift(k, wrap)?, v)))
+        .collect();
+}
+
+/// Whether `keys`, read by the focused `id`, edit it: Enter or Space on a
+/// button or switch, a step on a slider.
+fn keyed_edit(scene: Option<&ResolvedScene>, id: &str, keys: &[KeyPress]) -> bool {
+    let role = scene
+        .and_then(|s| s.surface(id))
+        .filter(|s| !s.disabled)
+        .and_then(|s| s.semantics.as_ref())
+        .map(|s| &s.role);
+    keys.iter().any(|k| match role {
+        Some(Kind::Button | Kind::Toggle { .. }) => matches!(k.key, Key::Enter | Key::Space),
+        Some(Kind::Slider { .. }) => matches!(
+            k.key,
+            Key::Left
+                | Key::Right
+                | Key::Up
+                | Key::Down
+                | Key::PageUp
+                | Key::PageDown
+                | Key::Home
+                | Key::End
+        ),
+        _ => false,
+    })
 }
 
 /// Whether a semantic role owns the runtime's default pointer looks.
@@ -1343,34 +1446,40 @@ fn state_policy(root: &El, id: &str) -> [bool; 2] {
     visit(root, id).unwrap_or([false, false])
 }
 
-/// Replace every named node's style with what it declared for the states it
+/// Replace every node's style with what it declared for the states it
 /// is in, in declaration order. Keep the declarations on the node: the later
 /// automatic-state pass uses them to avoid applying the same state twice.
 /// `off` is the enclosing subtree's disabled flag, `false` at the root: a card
 /// that switched itself off greys the controls inside it too, which is the same
 /// rule the hit gate uses.
-fn declared_states(n: &mut El, is: &dyn Fn(&str, State) -> bool, off: bool) {
+///
+/// ponytail: an unnamed node gets Focus and Disabled by its tree path, but
+/// never Hover or Press -- unnamed surfaces are decoration, kept out of the
+/// hit map. Admit the ones that declare those states when that matters.
+fn declared_states(n: &mut El, path: &mut String, is: &dyn Fn(&str, State) -> bool, off: bool) {
     let off = off || n.payload().disabled;
-    if let Some(k) = n.key().map(str::to_owned) {
+    if !n.payload().states.is_empty() {
         let e = n.payload_mut();
         let states = std::mem::take(&mut e.states);
+        let mut style = std::mem::take(&mut e.style);
+        let k = n.key().unwrap_or(path);
         for (st, f) in &states {
             let on = match st {
                 State::Disabled => off,
                 // A disabled node is never hovered or pressed -- it is not in
                 // the hit map -- and a focus it held before it was switched
                 // off is not a reason to paint it lit.
-                _ => !off && is(&k, *st),
+                _ => !off && is(k, *st),
             };
             if on {
-                e.style = f.0(e.style.clone());
+                style = f.0(style);
             }
         }
+        let e = n.payload_mut();
+        e.style = style;
         e.states = states;
     }
-    for c in n.children_mut() {
-        declared_states(c, is, off);
-    }
+    children(n, path, |c, path| declared_states(c, path, is, off));
 }
 
 /// Push automatic hover and press into interactive surfaces' fills,
@@ -1382,18 +1491,19 @@ fn declared_states(n: &mut El, is: &dyn Fn(&str, State) -> bool, off: bool) {
 /// tint it.
 fn state(
     n: &mut El,
+    path: &mut String,
     pal: &Palette,
     of: &dyn Fn(&str) -> Option<(f64, f64)>,
     scrolls: &BTreeMap<String, [f64; 2]>,
     off: bool,
 ) {
     let off = off || n.payload().disabled;
-    if let Some([x, y]) = n.key().and_then(|k| scrolls.get(k)).copied() {
+    if let Some([x, y]) = scrolls.get(n.key().unwrap_or(path)).copied() {
         // `scrolled` is a builder and a built node cannot be reopened.
         let node = std::mem::replace(n, mui_scene::leaf(0.0, 0.0));
         *n = node.scrolled(x, y);
     }
-    if let Some((h, p)) = n.key().and_then(of).filter(|_| !off) {
+    if let Some((h, p)) = of(n.key().unwrap_or(path)).filter(|_| !off) {
         let bg = pal.background();
         let (auto_hover, auto_press) = {
             let e = n.payload();
@@ -1418,9 +1528,7 @@ fn state(
             });
         }
     }
-    for c in n.children_mut() {
-        state(c, pal, of, scrolls, off);
-    }
+    children(n, path, |c, path| state(c, path, pal, of, scrolls, off));
 }
 impl std::fmt::Debug for Ui {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -2646,5 +2754,212 @@ mod tests {
         let end = ui.caret_x(value, 16., value.len());
         assert!(end > before, "fallback glyph has no caret advance");
         assert_eq!(ui.hit(value, 16., end), value.chars().count());
+    }
+
+    /// The README's shape: a column that scrolls, with no id. The wheel's
+    /// offset is keyed by the tree path, and the tree applies it by the same.
+    #[test]
+    fn an_unnamed_scroller_scrolls() {
+        let mut ui = Ui::new(Theme::DEFAULT);
+        let tree = || {
+            row![
+                column((0..6).map(|_| leaf(20., 40.)))
+                    .gap(S)
+                    .scroll()
+                    .w(200),
+                leaf(40., 40.),
+            ]
+            .height(100.)
+        };
+        let wheel = Input {
+            pointer: at(10., 10., false),
+            wheel: Point::new(0., 30.),
+            ..Input::default()
+        };
+        ui.frame(tree(), None, PointerInput::default(), 0.016)
+            .unwrap();
+        ui.frame(tree(), None, wheel, 0.016).unwrap();
+        assert_eq!(ui.scroll("/0"), [0., 30.]);
+        let f = ui.frame(tree(), None, Input::default(), 0.016).unwrap();
+        assert_eq!(f.scene.surface("/0/0").unwrap().frame.y, -30.);
+    }
+
+    /// A tip wraps the root and moves every tree path under `/0`; an unnamed
+    /// scroller keeps its offset through it, and after it.
+    #[test]
+    fn an_unnamed_scroller_keeps_its_offset_while_a_tip_is_up() {
+        let mut ui = Ui::new(Theme::DEFAULT);
+        let tree = || {
+            col![
+                column([
+                    leaf(20., 40.).tip("why").id("item"),
+                    leaf(20., 40.),
+                    leaf(20., 40.),
+                ])
+                .gap(0.)
+                .scroll()
+                .height(50.),
+                leaf(20., 200.),
+            ]
+            .gap(0.)
+        };
+        let win = || Some(Size::new(240., 300.));
+        ui.frame(tree(), win(), PointerInput::default(), 0.016)
+            .unwrap();
+        let wheel = Input {
+            pointer: at(120., 20., false),
+            wheel: Point::new(0., 10.),
+            ..Input::default()
+        };
+        ui.frame(tree(), win(), wheel, 0.016).unwrap();
+        let item_y = |f: &Frame| f.scene.surface("item").unwrap().frame.y;
+        let f = ui
+            .frame(tree(), win(), at(120., 20., false), 0.016)
+            .unwrap();
+        assert_eq!(item_y(&f), -10.);
+        let f = ui.frame(tree(), win(), at(120., 20., false), 0.6).unwrap();
+        assert!(f.tip.is_some(), "the tip is up");
+        assert_eq!(item_y(&f), -10., "and the list did not jump");
+        let f = ui
+            .frame(tree(), win(), PointerInput::default(), 0.016)
+            .unwrap();
+        assert!(f.tip.is_none());
+        assert_eq!(item_y(&f), -10., "nor when it went");
+    }
+
+    /// `.animate()` and `.on(..)` need no id: the tree path keys them.
+    #[test]
+    fn an_unnamed_node_transitions_and_takes_its_declared_states() {
+        let mut ui = Ui::new(Theme::DEFAULT);
+        let tree = |on: bool| {
+            row![leaf(40., 40.)
+                .fill(if on { Role::Primary } else { Role::Field })
+                .animate()]
+        };
+        let from = solid(
+            &ui.frame(tree(false), None, Input::default(), 0.016)
+                .unwrap(),
+        );
+        let f = ui.frame(tree(true), None, Input::default(), 0.016).unwrap();
+        assert!(f.animating, "it springs");
+        let mid = solid(&f);
+        let mut fresh = Ui::new(Theme::DEFAULT);
+        let to = solid(
+            &fresh
+                .frame(tree(true), None, Input::default(), 0.016)
+                .unwrap(),
+        );
+        assert!(mid != from && mid != to, "between the two fills");
+
+        let off = || {
+            row![leaf(40., 40.)
+                .fill(Role::Primary)
+                .on(State::Disabled, |s| s.fill(Role::Field))
+                .disabled(true)]
+        };
+        let f = ui.frame(off(), None, Input::default(), 0.016).unwrap();
+        assert_eq!(solid(&f), to_paint(Role::Field));
+    }
+    fn to_paint(r: Role) -> mui_scene::Paint {
+        let mut ui = Ui::new(Theme::DEFAULT);
+        solid(
+            &ui.frame(leaf(40., 40.).fill(r), None, Input::default(), 0.016)
+                .unwrap(),
+        )
+    }
+
+    /// Enter on a button and an arrow on a slider are edits a plugin host
+    /// has to see bracketed, on the frame the tree applied them.
+    #[test]
+    fn keyboard_edits_are_bracketed_and_a_slider_steps() {
+        let mut ui = Ui::new(Theme::DEFAULT);
+        let mut v = 0.5;
+        let mut clicks = 0;
+        let mut tree = |ui: &mut Ui| {
+            let (b, clicked) = mui_widgets::button(ui, "b", "Go");
+            clicks += usize::from(clicked);
+            let s = mui_widgets::slider(ui, "s", "S", &mut v, 0.0..=1.0);
+            column([b.el(), s.el()]).width(200.)
+        };
+        let root = tree(&mut ui);
+        ui.frame(root, None, Input::default(), 0.016).unwrap();
+        ui.focus("b");
+        let root = tree(&mut ui);
+        ui.frame(root, None, key(Key::Enter), 0.016).unwrap();
+        let root = tree(&mut ui);
+        let f = ui.frame(root, None, Input::default(), 0.016).unwrap();
+        assert_eq!(
+            f.edits,
+            [("b".into(), Edit::Begin), ("b".into(), Edit::End)]
+        );
+        ui.focus("s");
+        let shifted = |k| Input {
+            keys: vec![KeyPress {
+                key: k,
+                mods: Mods {
+                    shift: true,
+                    ..Mods::default()
+                },
+            }],
+            ..Input::default()
+        };
+        for input in [key(Key::Right), shifted(Key::Left), key(Key::PageDown)] {
+            let root = tree(&mut ui);
+            ui.frame(root, None, input, 0.016).unwrap();
+        }
+        let root = tree(&mut ui);
+        let f = ui.frame(root, None, key(Key::End), 0.016).unwrap();
+        assert_eq!(
+            f.edits,
+            [("s".into(), Edit::Begin), ("s".into(), Edit::End)]
+        );
+        assert_eq!(clicks, 1);
+        assert!((v - 0.409).abs() < 1e-9, "+0.01, -0.001, -0.1: {v}");
+        let mut tree = |ui: &mut Ui| mui_widgets::slider(ui, "s", "S", &mut v, 0.0..=1.0).el();
+        let root = tree(&mut ui);
+        ui.frame(root, None, Input::default(), 0.016).unwrap();
+        assert_eq!(v, 1.0, "End goes to the end");
+    }
+
+    /// A platform's Increment takes the arrow keys' step, as a `SetValue`.
+    #[test]
+    fn increment_and_decrement_step_like_the_arrow_keys() {
+        let mut ui = Ui::new(Theme::DEFAULT);
+        let mut v = 0.5;
+        let root = mui_widgets::slider(&mut ui, "s", "S", &mut v, 0.0..=1.0).el();
+        ui.frame(root, None, Input::default(), 0.016).unwrap();
+        assert!(ui.request_action(SemanticAction::increment("s")));
+        mui_widgets::slider(&mut ui, "s", "S", &mut v, 0.0..=1.0);
+        assert!((v - 0.51).abs() < 1e-12, "{v}");
+        let f = ui
+            .frame(leaf(1., 1.), None, Input::default(), 0.016)
+            .unwrap();
+        assert_eq!(
+            f.edits,
+            [("s".into(), Edit::Begin), ("s".into(), Edit::End)]
+        );
+        assert!(!ui.request_action(SemanticAction::decrement("absent")));
+    }
+
+    /// A click in a field scrolled to its tail lands where the text was
+    /// painted, not where it would be unscrolled.
+    #[test]
+    fn a_click_in_a_scrolled_field_lands_on_the_painted_character() {
+        let mut ui = Ui::new(Theme::DEFAULT);
+        let mut value = "x".repeat(60);
+        let win = Some(Size::new(200., 60.));
+        let tree = |ui: &mut Ui, v: &mut String| mui_widgets::text_input(ui, "f", v);
+        let root = tree(&mut ui, &mut value);
+        ui.frame(root, win, PointerInput::default(), 0.016).unwrap();
+        ui.set_sel("f", 60, 60);
+        let root = tree(&mut ui, &mut value);
+        let f = ui.frame(root, win, PointerInput::default(), 0.016).unwrap();
+        let field = f.scene.surface("f").unwrap().frame;
+        let (x, y) = (field.right() - 10., field.y + field.size.height / 2.);
+        let root = tree(&mut ui, &mut value);
+        ui.frame(root, win, at(x, y, true), 0.016).unwrap();
+        tree(&mut ui, &mut value);
+        let (_, caret) = ui.sel("f");
+        assert!(caret >= 58, "the tail was under the pointer, got {caret}");
     }
 }

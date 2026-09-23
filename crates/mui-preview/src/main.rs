@@ -592,8 +592,8 @@ impl App {
         let (Some(a), Some(scene)) = (&mut self.access, self.ui.scene()) else {
             return;
         };
-        let focus = self.ui.focus_key();
-        a.update_if_active(|| mui_access::tree_update(scene, focus));
+        let (focus, scale) = (self.ui.focus_key(), self.ui.scale.unwrap_or(1.0));
+        a.update_if_active(|| mui_access::tree_update(scene, focus, scale));
     }
 
     /// The surface behind an accesskit node id.
@@ -732,6 +732,12 @@ impl ApplicationHandler<AccessEvent> for App {
                                 self.ui
                                     .request_action(SemanticAction::set_value(key, value));
                             }
+                        }
+                        AccessAction::Increment => {
+                            self.ui.request_action(SemanticAction::increment(key));
+                        }
+                        AccessAction::Decrement => {
+                            self.ui.request_action(SemanticAction::decrement(key));
                         }
                         _ => {}
                     }
@@ -974,7 +980,7 @@ mod tests {
             .position(|s| s.name() == "Widgets")
             .unwrap();
         app.tick(SIZE, 1.0, PointerInput::default());
-        let u = mui_access::tree_update(app.ui.scene().unwrap(), None);
+        let u = mui_access::tree_update(app.ui.scene().unwrap(), None, 1.0);
         let named = |role| {
             u.nodes
                 .iter()
@@ -1065,7 +1071,15 @@ mod tests {
             before.x
         );
 
-        let g = centre(&app, "gain");
+        // The whole lane is the slider: its value is what moves.
+        let gain = |app: &App| {
+            let s = app.ui.scene().unwrap().surface("gain").unwrap();
+            match s.semantics.as_ref().map(|s| &s.role) {
+                Some(mui::scene::Kind::Slider { value, .. }) => *value,
+                _ => panic!("gain is a slider"),
+            }
+        };
+        let (g, v) = (centre(&app, "gain"), gain(&app));
         for (dx, down) in [
             (0.0, false),
             (0.0, true),
@@ -1076,10 +1090,7 @@ mod tests {
         ] {
             app.tick(SIZE, 1.0, at(g.x + dx, g.y, down));
         }
-        assert!(
-            centre(&app, "gain").x > g.x + 30.0,
-            "thumb did not follow the hand"
-        );
+        assert!(gain(&app) > v, "the value did not follow the hand");
     }
 
     /// The whole new input path in one go: a wheel event reaching the scroll

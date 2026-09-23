@@ -90,3 +90,34 @@ fn a_control_prints_the_value_text_it_is_given() {
     let dial = runs(knob(&mut ui, "cut", "Cutoff", &mut hz, 20.0..=20_000.0).value_text("440 Hz"));
     assert_eq!(dial, vec!["440 Hz".len()], "{dial:?}");
 }
+
+/// The whole lane is the slider: a press on the track jumps the value
+/// there, and a drag sweeps the range across the lane's own width.
+#[test]
+fn a_slider_takes_a_track_press_and_drags_across_its_width() {
+    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut v = 0.0;
+    let step = |ui: &mut Ui, v: &mut f64, pointer: PointerInput| {
+        let tree = column([slider(ui, "s", "S", v, 0.0..=1.0).el()]).width(400.);
+        ui.frame(tree, None, pointer, 0.016).unwrap();
+    };
+    let at = |x: f64, y: f64, down: bool| PointerInput {
+        pos: Some(Point::new(x, y)),
+        buttons: Buttons::default().set(Button::Primary, down),
+        ..PointerInput::default()
+    };
+    step(&mut ui, &mut v, PointerInput::default());
+    let lane = ui.scene().unwrap().surface("s").unwrap().frame;
+    let y = lane.y + lane.size.height / 2.0;
+    // The thumb sits at the left end; half-way along the track is 0.5.
+    let grip = lane.size.height * 0.35 / 0.45;
+    let half = lane.x + grip / 2.0 + (lane.size.width - grip) / 2.0;
+    step(&mut ui, &mut v, at(half, y, true));
+    step(&mut ui, &mut v, at(half, y, true));
+    assert!((v - 0.5).abs() < 0.02, "the press jumped the value: {v}");
+    // A quarter of the travel further is a quarter of the range further.
+    let quarter = (lane.size.width - grip) / 4.0;
+    step(&mut ui, &mut v, at(half + quarter, y, true));
+    step(&mut ui, &mut v, at(half + quarter, y, false));
+    assert!((v - 0.75).abs() < 0.02, "the drag spans the lane: {v}");
+}

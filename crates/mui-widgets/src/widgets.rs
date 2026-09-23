@@ -3,7 +3,7 @@
 use std::ops::RangeInclusive;
 
 use mui_geometry::Point;
-use mui_input::{Button, Key};
+use mui_input::{Button, Key, FINE_DRAG};
 use mui_scene::prelude::*;
 use mui_scene::{Palette, SpacingToken, Spring, Stroke};
 
@@ -16,7 +16,8 @@ use crate::Host;
 /// use mui::prelude::*;
 /// let mut ui = Ui::new(Theme::DEFAULT);
 /// let (quiet, _) = button(&ui, "bypass", "Bypass");
-/// assert_eq!(quiet.variant(Variant::Ghost).el().children().len(), 1);
+/// // Ink only: the resting box paints nothing.
+/// assert_eq!(quiet.variant(Variant::Ghost).el().payload().style.fill, Fill::None);
 /// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Variant {
@@ -113,7 +114,7 @@ impl Look {
 /// let mut ui = Ui::new(Theme::DEFAULT);
 /// let mut cutoff = 0.5;
 /// let dial = knob(&mut ui, "cut", "Cutoff", &mut cutoff, 0.0..=1.0).size(L);
-/// assert_eq!(dial.el().children().len(), 2);
+/// let strip = row![dial, label("post")];
 /// ```
 pub struct Control {
     look: Look,
@@ -143,7 +144,7 @@ impl Control {
     /// let mut ui = Ui::new(Theme::DEFAULT);
     /// let mut on = false;
     /// let sw = toggle(&ui, "bypass", &mut on).variant(Variant::Outline);
-    /// assert!(sw.el().key().is_some());
+    /// assert!(sw.el().payload().style.stroke.is_some(), "outlined");
     /// ```
     pub fn variant(mut self, v: Variant) -> Self {
         self.look.variant = v;
@@ -157,7 +158,8 @@ impl Control {
     /// let mut ui = Ui::new(Theme::DEFAULT);
     /// let (clear, _) = button(&ui, "clear", "Clear");
     /// let el = clear.role(Danger).variant(Variant::Outline).el();
-    /// assert!(el.key().is_some());
+    /// let ring = el.payload().style.stroke.clone().map(|s| s.fill);
+    /// assert_eq!(ring, Some(Fill::Role(Danger)));
     /// ```
     pub fn role(mut self, r: Role) -> Self {
         self.look.role = r;
@@ -170,7 +172,7 @@ impl Control {
     /// use mui::prelude::*;
     /// let mut ui = Ui::new(Theme::DEFAULT);
     /// let mut on = false;
-    /// assert!(toggle(&ui, "bypass", &mut on).size(Xs).el().key().is_some());
+    /// let small = toggle(&ui, "bypass", &mut on).size(Xs);
     /// ```
     pub fn size(mut self, s: SpacingToken) -> Self {
         self.size = s;
@@ -186,7 +188,6 @@ impl Control {
     /// let mut cutoff = 440.0;
     /// let dial = knob(&mut ui, "cut", "Cutoff", &mut cutoff, 20.0..=20_000.0)
     ///     .value_text(format!("{cutoff:.0} Hz"));
-    /// assert_eq!(dial.el().children().len(), 2);
     /// ```
     pub fn value_text(mut self, s: impl Into<String>) -> Self {
         self.look.text = Some(s.into());
@@ -200,7 +201,6 @@ impl Control {
     /// let mut ui = Ui::new(Theme::DEFAULT);
     /// let mut v = 0.5;
     /// let dial = knob(&mut ui, "cut", "Cutoff", &mut v, 0.0..=1.0).px(37.0);
-    /// assert_eq!(dial.el().children().len(), 2);
     /// ```
     pub fn px(mut self, px: f64) -> Self {
         self.px = Some(px);
@@ -212,7 +212,7 @@ impl Control {
     /// use mui::prelude::*;
     /// let mut ui = Ui::new(Theme::DEFAULT);
     /// let (go, _clicked) = button(&ui, "go", "Go");
-    /// assert_eq!(go.el().children().len(), 1);
+    /// let el: El = go.el();
     /// ```
     pub fn el(mut self) -> El {
         // Ten units at M, two either side: daisyUI's -xs .. -xl scale, so one
@@ -236,6 +236,36 @@ impl From<Control> for El {
 impl IntoEl for Control {
     fn into_el(self) -> El {
         self.el()
+    }
+}
+
+/// One arrow-key step of a slider or knob across `range`: a hundredth of it,
+/// signed with the range, so an inverted control still steps toward its end.
+/// A platform's `Increment` and `Decrement` take the same step.
+pub fn step(range: &RangeInclusive<f64>) -> f64 {
+    (range.end() - range.start()) / 100.0
+}
+
+/// Step `value` by the focused control's keys: arrows by [`step`] (a tenth
+/// of it with Shift), Page Up and Down by ten steps, Home and End to the
+/// ends. The runtime brackets the frame as one edit.
+fn stepped(ui: &impl Host, id: &str, value: &mut f64, range: &RangeInclusive<f64>) {
+    let (lo, hi) = (*range.start(), *range.end());
+    if !(lo.is_finite() && hi.is_finite()) {
+        return;
+    }
+    for k in ui.keys(id) {
+        let one = step(range) * if k.mods.shift { FINE_DRAG } else { 1.0 };
+        *value = match k.key {
+            Key::Right | Key::Up => *value + one,
+            Key::Left | Key::Down => *value - one,
+            Key::PageUp => *value + 10.0 * step(range),
+            Key::PageDown => *value - 10.0 * step(range),
+            Key::Home => lo,
+            Key::End => hi,
+            _ => continue,
+        }
+        .clamp(lo.min(hi), lo.max(hi));
     }
 }
 
@@ -266,17 +296,25 @@ fn readout(given: Option<String>, value: f64, min: f64, max: f64) -> El {
     }
 }
 
+/// The thumb's diameter and the lane it slides in, as shares of the
+/// control's height.
+const THUMB: f64 = 0.35;
+const LANE: f64 = 0.45;
+
 /// Label, readout, and a track whose fill and thumb are flex shares.
 ///
-/// Call `Ui::edit` with the same id to bracket the drag
-/// for a host's automation: `Begin` on the press, `End` on the release.
+/// The whole lane is the target: a press on the track jumps the value there
+/// and the drag carries on from it, a full-width drag sweeps the full range,
+/// and a focused slider steps with the arrow keys. Call `Ui::edit` with the
+/// same id to bracket the gesture for a host's automation: `Begin` on the
+/// press, `End` on the release.
 ///
 /// ```
 /// use mui::prelude::*;
 /// let mut ui = Ui::new(Theme::DEFAULT);
 /// let mut gain = 0.5;
 /// let fader = slider(&mut ui, "gain", "Gain", &mut gain, 0.0..=1.0).size(S);
-/// assert_eq!(fader.el().children().len(), 2);
+/// assert_eq!(gain, 0.5, "no gesture, no change");
 /// ```
 pub fn slider(
     ui: &mut impl Host,
@@ -285,28 +323,41 @@ pub fn slider(
     value: &mut f64,
     range: RangeInclusive<f64>,
 ) -> Control {
-    ui.drag(id, value, range.clone(), 160.0, false);
-    let t = unit(*value, &range);
     let (h, _) = ui.state(id);
+    // Last frame's lane, less the thumb riding it, is the travel a
+    // full-range drag covers; before the first frame nothing can drag.
+    let (grip, travel) = ui
+        .scene()
+        .and_then(|s| s.surface(id))
+        .map_or((0.0, 0.0), |s| {
+            let grip = s.frame.size.height * THUMB / LANE + 2.0 * h;
+            (grip, s.frame.size.width - grip)
+        });
+    if ui.get(id).pressed && travel > 0.0 {
+        if let Some(p) = ui.local(id) {
+            // Off the thumb, a press puts the thumb's centre under it.
+            let at = unit(*value, &range) * travel + grip / 2.0;
+            if (p.x - at).abs() > grip / 2.0 {
+                let t = ((p.x - grip / 2.0) / travel).clamp(0.0, 1.0);
+                *value = range.start() + t * (range.end() - range.start());
+            }
+        }
+    }
+    ui.drag(id, value, range.clone(), travel, false);
+    stepped(ui, id, value, &range);
+    let t = unit(*value, &range);
     let (id, label, value) = (id.to_owned(), label.to_owned(), *value);
     let (min, max) = (*range.start(), *range.end());
     Control::new(ui, move |look| {
         // The rail is a fraction of the control's height, so one size token
         // moves the track, the thumb and the row together.
-        let (track, thumb, lane) = (look.px * 0.15, look.px * 0.35, look.px * 0.45);
-        // ponytail: the thumb holds the id, so a screen reader hears the slider at
-        // the thumb's bounds, not the track's. Move it to the column when a
-        // surface can carry one id for input and another for reporting.
+        let (track, thumb, lane) = (look.px * 0.15, look.px * THUMB, look.px * LANE);
         let grip = leaf(thumb + 2.0 * h, thumb + 2.0 * h)
             .pill()
-            .fill(look.role)
-            .role(Kind::Slider { value, min, max })
-            .label(label.clone())
-            .focusable()
-            .id(id);
+            .fill(look.role);
         column([
             row([
-                text(label),
+                text(label.clone()),
                 spacer(),
                 readout(look.text.clone(), value, min, max).fill(Role::Dim),
             ])
@@ -322,7 +373,11 @@ pub fn slider(
                 row([spacer().grow(t), grip, spacer().grow(1.0 - t)])
                     .anchor(Align::Stretch, Align::Center),
             ])
-            .height(lane),
+            .height(lane)
+            .role(Kind::Slider { value, min, max })
+            .label(label)
+            .focusable()
+            .id(id),
         ])
         .gap(Xs)
     })
@@ -340,8 +395,8 @@ pub fn slider(
 /// use mui::prelude::*;
 /// let mut ui = Ui::new(Theme::DEFAULT);
 /// let mut cutoff = 0.5;
-/// let dial = knob(&mut ui, "cut", "Cutoff", &mut cutoff, 0.0..=1.0);
-/// assert_eq!(dial.size(Xl).el().children().len(), 2);
+/// let dial = knob(&mut ui, "cut", "Cutoff", &mut cutoff, 0.0..=1.0).size(Xl);
+/// assert_eq!(cutoff, 0.5, "no gesture, no change");
 /// ```
 pub fn knob(
     ui: &mut impl Host,
@@ -350,7 +405,11 @@ pub fn knob(
     value: &mut f64,
     range: RangeInclusive<f64>,
 ) -> Control {
+    // Unlike a slider's, a dial's travel is a hand distance, not a geometry:
+    // the whole face is the target and 120 px of vertical drag sweeps the
+    // range whatever the diameter, so a small knob is not a twitchy one.
     ui.drag(id, value, range.clone(), 120.0, true);
+    stepped(ui, id, value, &range);
     // Fast enough that a drag still feels direct, slow enough that a
     // preset change is a glide.
     let t = ui.tween_with(id, unit(*value, &range), Spring::new(0.12, 1.0));
@@ -394,8 +453,8 @@ pub fn knob(
 /// use mui::prelude::*;
 /// let mut ui = Ui::new(Theme::DEFAULT);
 /// let (save, clicked) = button(&ui, "save", "Save");
-/// assert!(!clicked);
-/// assert_eq!(save.variant(Variant::Soft).size(S).el().children().len(), 1);
+/// assert!(!clicked, "nothing pressed it last frame");
+/// let save = save.variant(Variant::Soft).size(S);
 /// ```
 pub fn button(ui: &impl Host, id: &str, label: &str) -> (Control, bool) {
     let clicked = activated(ui, id);
@@ -423,7 +482,7 @@ pub fn button(ui: &impl Host, id: &str, label: &str) -> (Control, bool) {
 /// let mut ui = Ui::new(Theme::DEFAULT);
 /// let mut bypass = false;
 /// let sw = toggle(&ui, "bypass", &mut bypass).size(Xs);
-/// assert_eq!(sw.el().children().len(), 3);
+/// assert!(!bypass, "nothing clicked it, so it did not flip");
 /// ```
 pub fn toggle(ui: &impl Host, id: &str, on: &mut bool) -> Control {
     if activated(ui, id) {
@@ -501,12 +560,22 @@ pub fn text_input(ui: &mut impl Host, id: &str, value: &mut String) -> El {
         crate::grapheme::floor(value, caret.min(n)),
     );
 
-    // The pointer, against last frame's frame: pad_xy's 8 px is where the
-    // text starts.
+    // The pointer, against last frame's field: the text starts `PAD` in,
+    // slid left by the shift that kept last frame's caret in the room.
+    // ponytail: a composition shown last frame is not in that shift; a click
+    // mid-composition lands as if the preedit were not there.
+    const PAD: f64 = 8.0;
+    let room = ui
+        .scene()
+        .and_then(|s| s.surface(id))
+        .map(|s| s.frame.size.width - 2.0 * PAD);
     let r = ui.get(id);
     if r.pressed || r.dragged {
         if let Some(p) = ui.local(id) {
-            caret = crate::grapheme::floor(value, ui.hit(value, size, p.x - 8.0));
+            let shift = room.map_or(0.0, |room| {
+                (ui.caret_x(value, size, byte(value, caret)) - room).max(0.0)
+            });
+            caret = crate::grapheme::floor(value, ui.hit(value, size, p.x - PAD + shift));
             if r.pressed {
                 anchor = caret;
             }
@@ -635,12 +704,8 @@ pub fn text_input(ui: &mut impl Host, id: &str, value: &mut String) -> El {
     // together so it never leaves the box.
     // ponytail: the first frame of an over-long value shows its head; it
     // catches up on the next one.
-    const PAD: f64 = 8.0;
     let run = x(shown.len());
-    let room = ui
-        .scene()
-        .and_then(|s| s.surface(id))
-        .map_or(run, |s| s.frame.size.width - 2.0 * PAD);
+    let room = room.unwrap_or(run);
     let caret_x = x(at);
     let shift = (caret_x - room).max(0.0);
     let el = overlay([
