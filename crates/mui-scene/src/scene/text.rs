@@ -74,6 +74,8 @@ pub struct TextCache {
     pub(super) coords: CoordsCache,
     /// The coordinates each text key drew with last frame, for `Text::hint`.
     pub(super) last_coords: HashMap<Arc<str>, (Coords, u64)>,
+    /// Node keys by hash, reused while the node stays in the tree.
+    pub(super) keys: HashMap<u64, (Arc<str>, u64)>,
     pub(super) outlines: OutlineCache,
     pub(super) borders: crate::border_ramp::BorderCache,
     pub(super) region_cache: crate::regions::RegionCache,
@@ -115,6 +117,7 @@ impl TextCache {
         self.breaks.retain(|_, m| keep(m, g));
         self.coords.retain(|_, m| keep(m, g));
         keep(&mut self.last_coords, g);
+        keep(&mut self.keys, g);
         self.generation = g.wrapping_add(1);
         self.outlines.sweep();
         self.borders.sweep();

@@ -4,7 +4,7 @@
 
 use mui_scene::prelude::*;
 use mui_scene::{Image, ResolvedScene};
-use mui_vello::effects::{Budget, HybridEffects, TiledEffects};
+use mui_vello::effects::{Budget, EffectStats, HybridEffects, TiledEffects};
 use mui_vello::kurbo::Affine;
 use std::sync::Arc;
 
@@ -140,4 +140,60 @@ fn a_dropped_image_buffer_is_freed_on_the_gpu_path() {
         "the renderer kept the app's buffer"
     );
     assert!(kept.upgrade().is_some());
+}
+
+/// An unchanged scene into the same target costs no encode and no GPU pass
+/// on either retained renderer: the target already holds the frame. A new
+/// target gets the pass again, from the retained encoding.
+#[test]
+fn a_static_frame_neither_encodes_nor_renders() {
+    let Some((device, queue)) = device() else {
+        return;
+    };
+    let (view, other) = (target(&device), target(&device));
+    let scene = welded();
+    let mut whole = pollster::block_on(hybrid(&device, &queue));
+    let mut tiles = pollster::block_on(TiledEffects::new(
+        &device,
+        &queue,
+        wgpu::TextureFormat::Rgba8Unorm,
+        SIZE,
+        Budget::default(),
+        64 * 1024 * 1024,
+    ))
+    .unwrap();
+    let mut frames: [&mut dyn FnMut(&wgpu::TextureView) -> EffectStats; 2] = [
+        &mut |v| whole.render(&scene, Affine::IDENTITY, v).unwrap(),
+        &mut |v| tiles.render(&scene, Affine::IDENTITY, v).unwrap(),
+    ];
+    for frame in &mut frames {
+        let first = frame(&view);
+        assert!(first.encoded_scenes > 0 && first.renders > 0);
+        for _ in 0..5 {
+            let idle = frame(&view);
+            assert_eq!((idle.encoded_scenes, idle.renders), (0, 0));
+        }
+        let moved = frame(&other);
+        assert_eq!((moved.encoded_scenes, moved.renders), (0, 1));
+    }
+}
+
+/// A weld gone from the scene gives its texture back after a few frames,
+/// without waiting for budget pressure.
+#[test]
+fn a_removed_weld_frees_its_texture() {
+    let Some((device, queue)) = device() else {
+        return;
+    };
+    let view = target(&device);
+    let mut r = pollster::block_on(hybrid(&device, &queue));
+    let first = r.render(&welded(), Affine::IDENTITY, &view).unwrap();
+    assert!(first.resident_texture_bytes > 0);
+    let (plain, _) = pictured(1);
+    let mut last = first;
+    for _ in 0..=mui_vello::effects::ABSENT_FRAMES {
+        assert!(last.resident_texture_bytes > 0, "freed too early");
+        last = r.render(&plain, Affine::IDENTITY, &view).unwrap();
+    }
+    assert_eq!(last.resident_texture_bytes, 0, "the weld texture stayed");
 }

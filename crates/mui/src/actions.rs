@@ -24,6 +24,14 @@ pub enum SemanticAction {
     Decrement {
         id: String,
     },
+    /// Select in a text field: the anchor and the caret, in characters of
+    /// its value, equal for a bare caret. AccessKit's `SetTextSelection`,
+    /// whose character indices are these.
+    SetSelection {
+        id: String,
+        anchor: usize,
+        caret: usize,
+    },
 }
 impl SemanticAction {
     pub fn focus(id: impl Into<String>) -> Self {
@@ -44,13 +52,21 @@ impl SemanticAction {
     pub fn decrement(id: impl Into<String>) -> Self {
         Self::Decrement { id: id.into() }
     }
+    pub fn set_selection(id: impl Into<String>, anchor: usize, caret: usize) -> Self {
+        Self::SetSelection {
+            id: id.into(),
+            anchor,
+            caret,
+        }
+    }
     pub(crate) fn id(&self) -> &str {
         match self {
             Self::Focus { id }
             | Self::Activate { id }
             | Self::SetValue { id, .. }
             | Self::Increment { id }
-            | Self::Decrement { id } => id,
+            | Self::Decrement { id }
+            | Self::SetSelection { id, .. } => id,
         }
     }
 }

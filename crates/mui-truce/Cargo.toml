@@ -5,7 +5,27 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-truce = { version = "6.3", default-features = false }
+mui = { path = "../mui", features = ["gpu-effects"] }
 truce-core = "6.3"
 truce-params = "6.3"
-truce-derive = "6.3"
+
+# The native editor: a baseview child window under the host's parent, a wgpu
+# surface on it. None of it builds for wasm, and the parameter bridge needs
+# none of it.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+baseview = { package = "baseview-truce", version = "0.1.1-truce.13" }
+# Only `platform`: truce's parent-handle and rwh 0.5 -> 0.6 surface bridge.
+truce-gui = { version = "6.3", default-features = false }
+keyboard-types = { version = "0.7", default-features = false }
+# baseview's parent handle is raw-window-handle 0.5.
+raw-window-handle = "0.5"
+pollster = "0.4"
+# mui-vello picks no backend; the window that owns the device does.
+wgpu = { version = "29", default-features = false, features = ["wgsl", "vulkan", "gles", "metal", "dx12"] }
+
+# baseview does not own an X11 selection; arboard keeps one alive.
+[target.'cfg(target_os = "linux")'.dependencies]
+arboard = { version = "3.6", default-features = false }
+
+[dev-dependencies]
+truce = { version = "6.3", default-features = false }

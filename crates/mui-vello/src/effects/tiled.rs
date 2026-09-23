@@ -4,10 +4,10 @@
 //! text/effect extents conservatively retain their draw commands.
 use super::{
     damage::{self, DamagePlan, DamageTracker, Tile},
-    Budget, EffectStats, Error, WeldTextures,
+    Budget, Converted, EffectStats, Error, WeldTextures,
 };
 use crate::{
-    kurbo::{Affine, BezPath, Rect},
+    kurbo::{Affine, Rect},
     Cache, Canvas as _, Gpu,
 };
 use mui_scene::{Layer, ResolvedScene};
@@ -49,11 +49,15 @@ pub struct TiledEffects {
     bindings: vello_hybrid::TextureBindings,
     damage: DamageTracker,
     plan: DamagePlan,
-    /// Each paint entry's converted path and bounds on a dirty frame, reused
-    /// so the conversion runs once per entry rather than once per tile.
-    ops: Vec<(BezPath, Option<Rect>)>,
+    /// Each paint entry's converted path, redone only when it changed, and
+    /// its bounds on a dirty frame: once per entry, not once per tile.
+    paths: Converted,
+    bounds: Vec<Option<Rect>>,
     limit: u64,
     stats: TileStats,
+    /// The view the last complete presentation went to: with no dirty tile
+    /// and no effect redrawn it still holds this frame.
+    presented: Option<wgpu::TextureView>,
 }
 impl TiledEffects {
     pub async fn new(
@@ -108,9 +112,11 @@ impl TiledEffects {
             bindings: Default::default(),
             damage: Default::default(),
             plan: Default::default(),
-            ops: Vec::new(),
+            paths: Converted::default(),
+            bounds: Vec::new(),
             limit: tile_bytes,
             stats: Default::default(),
+            presented: None,
         };
         s.resize(size)?;
         Ok(s)
@@ -120,6 +126,7 @@ impl TiledEffects {
     }
     pub fn invalidate(&mut self) {
         self.damage.invalidate();
+        self.presented = None;
     }
     pub fn resize(&mut self, size: [u32; 2]) -> Result<(), Error> {
         if size == self.size {
@@ -258,6 +265,8 @@ impl TiledEffects {
         let mut stats = self
             .effects
             .begin(wanted.clone().map(|(k, e)| (k, &e.material)))?;
+        self.effects
+            .forget_absent(|k| resolved.external_weld(k).is_some());
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -286,12 +295,11 @@ impl TiledEffects {
         stats: &mut EffectStats,
     ) -> Result<(), Error> {
         if !dirty.is_empty() {
-            // Each op's path is refilled in place, so a steady tree
-            // converts every frame without allocating.
-            self.ops.resize_with(resolved.paint.len(), Default::default);
-            for (p, (bez, bounds)) in resolved.paint.iter().zip(&mut self.ops) {
-                crate::bez_path_into(&p.path, crate::ARC_TOLERANCE, bez)?;
-                *bounds = damage::bounds(p, bez, xf);
+            self.paths.resize(resolved.paint.len());
+            self.bounds.clear();
+            for (i, p) in resolved.paint.iter().enumerate() {
+                let bez = self.paths.get(i, &p.path)?;
+                self.bounds.push(damage::bounds(p, bez, xf));
             }
         }
         let full_redraw =
@@ -300,6 +308,10 @@ impl TiledEffects {
             dirty.len() > self.tiles.len() / 2 && self.full.is_some();
         self.stats.full_redraw = full_redraw;
         let passes = if full_redraw { 1 } else { dirty.len() };
+        if passes > 0 || stats.effect_draws > 0 {
+            self.presented = None;
+            self.cache.tick();
+        }
         for &i in dirty.iter().take(passes) {
             let target_tile = if full_redraw {
                 self.full
@@ -325,7 +337,8 @@ impl TiledEffects {
                 }),
             };
             canvas.set_transform(transform);
-            for (p, (bez, bounds)) in resolved.paint.iter().zip(&self.ops) {
+            let ops = self.paths.0.iter().zip(&self.bounds);
+            for (p, ((_, bez), bounds)) in resolved.paint.iter().zip(ops) {
                 if bounds.is_some_and(|b| !damage::intersects(b, region)) {
                     self.stats.culled_ops += 1;
                     continue;
@@ -415,6 +428,10 @@ impl TiledEffects {
             self.queue.submit([encoder.finish()]);
             self.stats.tile_submissions += 1;
             stats.encoded_scenes += 1;
+            stats.renders += 1;
+        }
+        if self.presented.as_ref() == Some(target) {
+            return Ok(());
         }
         let mut encoder = self
             .device
@@ -437,6 +454,8 @@ impl TiledEffects {
             )
             .map_err(|e| Error::Render(e.to_string()))?;
         self.queue.submit([encoder.finish()]);
+        stats.renders += 1;
+        self.presented = Some(target.clone());
         Ok(())
     }
 }

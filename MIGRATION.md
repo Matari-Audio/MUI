@@ -63,6 +63,9 @@ line at its combining mark.
   ```
 - `LayoutState` (`revision`/`current`/`commit`) -> removed. Use `resolve_with`
   or `resolve_cached_with`.
+- new: `resolve_boxed_with(root, size, padding, ..)`: the root laid out as
+  exactly `size` with `padding`, instead of `resolve_with` on a clone of the
+  tree restyled with `.size(..).pad(..)`.
 
 ## mui-geometry
 
@@ -113,6 +116,17 @@ let s = mine.over(card); // or mine.clone().over(card.clone())
 - `icon(impl Into<Arc<[u8]>>, char)` -> `icon(Font, char)`
 - `Styled::font(impl Into<Arc<[u8]>>)` -> `Styled::font(Font)`
 - `Text.font: Arc<[u8]>` -> removed. It was always `fonts[0]`; read that.
+- `Text.coords: Arc<[i16]>` -> removed. It was always `font_coords[0]`; read
+  `font_coords[glyph.font]`.
+- `Painted.path: Path` -> `Arc<Path>`, `ResolvedSurface.path: Path` ->
+  `Arc<Path>`: a node's fill, clip, mask and surface share one outline.
+  Reading through `&p.path` is unchanged; build one with `path.into()`.
+- `ResolvedSurface.clip_path: Option<Arc<[Path]>>` -> `Option<Arc<[Arc<Path>]>>`,
+  `clip_paths() -> Option<&[Path]>` -> `Option<&[Arc<Path>]>`.
+- `ResolvedSurface.hits: Vec<(Arc<str>, Path)>` -> `Vec<(Arc<str>, Arc<Path>)>`.
+- `Outline(Arc<dyn Fn(Size) -> Path>)` -> `Outline(Arc<dyn Fn(Size) -> Path + Send + Sync>)`,
+  and `.outline(..)` takes a `Send + Sync` closure: the weld cache holds it by
+  identity. Capture `Arc`s, not `Rc`s.
 - `Text.fonts: Arc<[Arc<[u8]>]>` -> `Arc<[Font]>`, never empty. `Text`
   equality compares font ids instead of `Arc` pointers.
 - `SceneSpec.tolerance` -> removed. The scene lays text out as glyphs and
@@ -161,9 +175,17 @@ let spec = SceneSpec::new(root).font(Font::new(epaint_default_fonts::HACK_REGULA
   `font`/`fallback_fonts`: the scene stopped copying them, since each `Text`
   carries its own faces.
 - Behaviour: a union or carve whose outline includes a custom `.outline(..)`
-  is no longer cached, so changing the closure reshapes it. A text node's
+  is cached by the closure's identity: the same `Outline` hits, a new
+  closure reshapes. A tree that rebuilds its closures every frame reshapes
+  every frame. A text node's
   fill is never pushed as a `Layer::Fill` entry (it used to be pushed and
   removed again); its colour is the ink, as before.
+- `Kind::TextInput { value }` -> `Kind::TextInput { value, selection,
+  carets }`: the selection's anchor and caret in characters, and a caret x
+  per character boundary in the field's space (`Vec::new()` when unknown).
+  `text_input` fills both.
+- `ResolvedSurface` gains `pointer_states: bool`: the node declared a Hover
+  or Press look.
 
 ```rust
 // old
@@ -174,6 +196,12 @@ let scene = state.current().unwrap();
 let scene = resolve_scene(&spec)?;
 ```
 
+
+## mui-input
+
+- `Hit::push_clipped_paths(.., clips: Option<&[Path]>)` and
+  `push_tagged_paths(..)` -> `clips: Option<&[Arc<Path>]>`, which is what
+  `ResolvedSurface::clip_paths()` returns.
 
 ## mui-vello
 
@@ -224,6 +252,27 @@ mui_vello::paint(&mut canvas, &resolved, xf)?;
 - `HybridEffects::enable_profiling` / `collect_timings` / `timing_losses` /
   `resident_effect_bytes` / `release_effects` -> removed. `GpuTimer` remains
   and can be driven directly.
+- `EffectStats` gains `renders: u64`, the Vello passes recorded. A struct
+  literal needs it; `..Default::default()` covers it.
+- `Canvas` gains `begin_frame()`, a default no-op; `paint` calls it first.
+  `Gpu` and `Cpu` age the cache's fonts there: a font unused for 64 frames
+  lets go of its `FontData`.
+- new: `Cache::for_atlas(AtlasConfig)` for a renderer built with
+  `Renderer::new_with`; `Cache::default()` matches `Renderer::new`.
+- new: `WeldTextures::forget_absent(in_scene)` and `ABSENT_FRAMES` (3). Both
+  retained renderers call it: a weld gone from the scene for more than 3
+  frames frees its texture instead of waiting for budget pressure.
+- Behaviour: `HybridEffects` and `TiledEffects` record no Vello pass (and
+  `HybridEffects` submits nothing) when the frame is unchanged and the
+  target is the view presented last. A host that draws into that target
+  itself between frames calls `invalidate()`.
+- Behaviour: the `Cpu` canvas draws a font's glyphs from `vello_cpu`'s glyph
+  atlas from the font's second frame on, instead of per-glyph paths;
+  antialiasing can differ slightly from the first frame's. `Gpu` is
+  unchanged.
+- Behaviour: a `Gpu` image that does not fit the atlas is sized, not
+  premultiplied, before it is refused, so a refused photo costs nothing per
+  frame.
 - `DamageTracker::plan(&self, scene, xf, tiles) -> DamagePlan` ->
   `plan(&self, scene, xf, tiles, out: &mut DamagePlan)`. Reuse one plan.
 - `DamagePlan { dirty, total_tiles, full, dirty_pixels }` struct literal ->
@@ -248,6 +297,11 @@ tracker.plan(&scene, xf, &tiles, &mut plan);
   keeps its id as its name
 - Sliders gain `Action::Increment`/`Decrement` and a `numeric_value_step`
   (a hundredth of the range)
+- A text input gains a `TextRun` child (`run_id(key)`) with its characters'
+  lengths, positions and widths, a `text_selection`, and
+  `Action::SetTextSelection`; route that to
+  `SemanticAction::set_selection(key, anchor.character_index,
+  focus.character_index)`
 
 ```rust
 // old
@@ -307,13 +361,24 @@ let (field, edited) = text_input(&mut ui, "name", &mut name);
 - `mui::core` (deprecated alias) -> `mui::scene`
 - `mui::tessellate` -> removed, no replacement
 - `mui::egui` and the `egui` cargo feature -> removed, no replacement
+- `SemanticAction` gains `SetSelection { id, anchor, caret }`, with
+  `SemanticAction::set_selection(id, anchor, caret)`. A `match` over it needs
+  the new arm.
 - `SemanticAction` gains `Increment { id }` and `Decrement { id }`, with
   `SemanticAction::increment(id)` / `decrement(id)`. A `match` over it needs
   the new arms. Both land as the equivalent `SetValue`.
 - Behaviour: `.scroll()`, `.animate()`/`.transition()` and
   `.on(State::Focus | State::Disabled)` now work on a node without an id,
-  keyed by its `/0/2` tree path. `.on(State::Hover | State::Press)` still
-  needs an id.
+  keyed by its `/0/2` tree path. So does `.on(State::Hover | State::Press)`:
+  an unnamed node that declares one is a pointer target by its tree path and
+  takes presses exactly where the same node with an id would.
+- Behaviour: an unnamed root is no longer a pointer target keyed `""`: it
+  does not hover, and its cursor and tip no longer show over the bare
+  background. A press that lands on no target still drops the focus, now as
+  a rule rather than through the root. A tip needs an id.
+- `button`, `toggle`, `slider`, `knob`: `id: &str` -> `id: impl Into<Id>`.
+  `&str`, `String`, `&String`, `Id` and `&Id` all pass; a `&mut String`
+  needs `&**s`.
 - Behaviour: while a tip is shown the root sits under a wrapper, so positional
   keys move under `/0` and back when it goes: ask `ui.scroll("/0/1")`, not
   `ui.scroll("/1")`, while the tip is up. Named keys do not move.
@@ -327,7 +392,32 @@ let (field, edited) = text_input(&mut ui, "name", &mut name);
 
 ## mui-truce
 
-- edition 2024 -> 2021, the workspace edition. The public API is unchanged.
+The crate was a state-document and gesture contract with no editor. It is
+now the editor: the document went back to Kurv, and a `Bridge` replaces the
+per-parameter wrapper.
+
+- edition 2024 -> 2021, the workspace edition
+- `#![forbid(unsafe_code)]` -> `#![deny(unsafe_code)]`, with two allowed
+  blocks (the wgpu surface on the host's window and `Send` for the window
+  handle)
+- `Document`, `EditorState`, `Module`, `Route`, `Target`, `Error` -> deleted.
+  The editor document was Kurv's schema; keep it in the plugin as a
+  `#[persist]` field of its own type.
+- `Parameter` -> `Bridge`. `Parameter::new(params, id, modulatable, edits)`
+  / `new_many(params, ids, edits)` -> `Bridge::new(params)`, one per editor,
+  with no channel: the bridge calls the host directly. `value()` / `text()`
+  -> `bridge.value(id)` / `bridge.text(id)`. `begin` / `set` / `drag` /
+  `end` / `cancel` / `step` / `reset` -> `bridge.bind(ui, widget, id, |ui, v|
+  ..)`, which sends the host's begin/set/end from the `Ui` edits of that
+  widget. `parse(text)`, `set_enabled` and `modulatable` -> no replacement.
+- `Automation::dispatch(context, edit)` / `Automation::close(context)` ->
+  `Bridge::bind` / `Bridge::close`. `MuiEditor` calls `close` when the host
+  closes the editor.
+- `mui_truce::Edit::{Begin(id), Value(id, v), End(id)}` -> gone; `Ui` reports
+  `mui::Edit::{Begin, End}` per widget and `bind` supplies the id and value.
+- new: `MuiEditor::new(params, ui, size, build).resizable(min).into_editor()`
+  is a truce `Editor`, and `mui_truce::window` is the host-agnostic window
+  (`View`, `Shared`, `Requests`, `open`).
 
 ## Removed crates and packages
 

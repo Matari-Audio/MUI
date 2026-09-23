@@ -11,6 +11,8 @@ use winit::{
     keyboard::{Key as WinitKey, NamedKey},
     window::{Window, WindowId},
 };
+#[path = "../src/device.rs"]
+mod device;
 // Shared gallery host has optional debug-overlay methods unused by this lab.
 #[allow(dead_code)]
 #[path = "../src/host_gpu.rs"]

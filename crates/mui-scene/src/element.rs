@@ -197,9 +197,24 @@ pub enum Content {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Kind {
     Button,
-    Slider { value: f64, min: f64, max: f64 },
-    Toggle { on: bool },
-    TextInput { value: String },
+    Slider {
+        value: f64,
+        min: f64,
+        max: f64,
+    },
+    Toggle {
+        on: bool,
+    },
+    /// A one-line field. `selection` is the anchor and the caret, in
+    /// characters of `value`, equal when nothing is selected. `carets` is
+    /// the x of a caret before each character and after the last, in the
+    /// field's own space -- one more entry than `value` has characters --
+    /// or empty when the field did not measure them.
+    TextInput {
+        value: String,
+        selection: (usize, usize),
+        carets: Vec<f64>,
+    },
     Label,
     Group,
     Scroll,
@@ -221,8 +236,12 @@ impl Semantics {
 /// A node's own local outline. It is used for painting, clipping and input, not
 /// merely drawn on top of a rectangular hit target. Its callback is evaluated at
 /// the layout size; it must return closed, consistently wound contours.
+///
+/// `Send + Sync` so a weld's cached outline can hold it by identity: the
+/// same `Outline` at the same size is the same shape, and reusing the node
+/// across frames skips the boolean.
 #[derive(Clone)]
-pub struct Outline(pub Arc<dyn Fn(Size) -> Path>);
+pub struct Outline(pub Arc<dyn Fn(Size) -> Path + Send + Sync>);
 impl std::fmt::Debug for Outline {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("Outline(..)")
@@ -743,7 +762,7 @@ pub trait Styled: Paints {
     }
     /// A custom closed shape in local logical units. Use opposite contour
     /// winding for holes. The shape becomes paint, clip and hit geometry.
-    fn outline(mut self, shape: impl Fn(Size) -> Path + 'static) -> Self {
+    fn outline(mut self, shape: impl Fn(Size) -> Path + Send + Sync + 'static) -> Self {
         self.element_mut().outline = Some(Outline(Arc::new(shape)));
         self
     }
@@ -821,10 +840,10 @@ pub trait Styled: Paints {
     /// so it edits rather than replaces, and a later `.fill(..)` is still
     /// what the state derives from.
     ///
-    /// The runtime applies these while building the frame. Focus and
-    /// Disabled reach any node; Hover and Press only a node with an id,
-    /// since an unnamed surface is decoration and never hit. Pair with [`Styled::animate`] to cross
-    /// rather than cut.
+    /// The runtime applies these while building the frame, to any node: an
+    /// unnamed one that declares Hover or Press becomes a pointer target by
+    /// its tree path, where other unnamed surfaces are decoration and never
+    /// hit. Pair with [`Styled::animate`] to cross rather than cut.
     ///
     /// ```
     /// use mui_scene::prelude::*;

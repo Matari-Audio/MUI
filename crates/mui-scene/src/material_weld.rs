@@ -10,7 +10,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 pub(crate) struct MaterialWeld {
-    pub outline: Path,
+    pub outline: Arc<Path>,
     pub image_fill: Fill,
     pub image_rect: RoundedRect,
     pub members: HashSet<Arc<str>>,
@@ -109,7 +109,7 @@ pub(crate) fn check_plate(n: &El, nested: bool) -> Result<(), SceneError> {
 }
 
 pub(crate) struct Plate {
-    pub outline: Path,
+    pub outline: Arc<Path>,
     pub rect: Option<RoundedRect>,
     pub frame: Frame,
     pub fill: Option<Paint>,
@@ -201,7 +201,7 @@ pub(crate) fn finish(
         SceneError::UnsupportedWeld("invalid baked image dimensions"),
     )?;
     Ok(MaterialWeld {
-        outline,
+        outline: Arc::new(outline),
         image_fill: Fill::Image(Arc::new(image), Fit::Fill),
         image_rect,
         members,

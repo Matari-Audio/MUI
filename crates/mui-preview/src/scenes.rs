@@ -259,7 +259,7 @@ impl PreviewScene for GlyphAxes {
             rows.push(text("no variation axes").fill(Role::Dim));
         }
         for (tag, min, max, value) in &mut self.axes {
-            rows.push(slider(ui, tag, tag, value, *min..=*max).0.el());
+            rows.push(slider(ui, &**tag, tag, value, *min..=*max).0.el());
         }
         rows
     }
@@ -317,7 +317,7 @@ impl PreviewScene for Scrolling {
                     let i = s * 8 + j;
                     slider(
                         ui,
-                        &format!("band-{i}"),
+                        format!("band-{i}"),
                         &format!("band {i}"),
                         g,
                         -24.0..=6.0,

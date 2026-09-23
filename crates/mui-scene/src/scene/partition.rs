@@ -3,7 +3,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use mui_geometry::{BooleanOp, Bounds, Path, RoundedRect};
-use mui_layout::{Frame, Size};
+use mui_layout::{Frame, Insets, Size};
 
 use super::{bounds, find, fit, SceneError, Walk};
 use crate::regions::Operation;
@@ -43,16 +43,8 @@ impl Walk<'_> {
             self.collapse(at + 1..end);
             return Ok(());
         };
-        let size = Size::new(b.max.x - b.min.x, b.max.y - b.min.y);
-        // ponytail: clones the subtree every resolve to pin its root to the
-        // interior's size; a mui-layout entry point that takes the root's
-        // box would drop the copy.
-        self.relayout(
-            &n.clone().size(size.width, size.height).pad(0.),
-            b,
-            at + 1..end,
-            1,
-        )?;
+        // The interior is already inside the padding.
+        self.relayout(n, Insets::ZERO, b, at + 1..end, 1)?;
         let mut next = at + 1;
         let children: Vec<_> = n
             .children()
@@ -222,6 +214,7 @@ impl Walk<'_> {
         )?;
         // A child's outward border belongs inside its allocation too. Reserve
         // it before fitting the child, and retain the allocation as a paint cap.
+        let path = Arc::new(path);
         self.region_envelopes.insert(i, path.clone());
         let mut path = path;
         if let Some(ramp) = &child.payload().border_ramp {
@@ -251,10 +244,10 @@ impl Walk<'_> {
                     0.1 / self.spec.device_scale.unwrap_or(1.),
                 )?;
                 let band = self.cached_region((id.clone(), 8), Operation::Sweep(band))?;
-                path = self.cached_region(
+                path = Arc::new(self.cached_region(
                     (id.clone(), 9),
-                    Operation::Combine(path, band, BooleanOp::Difference),
-                )?;
+                    Operation::Combine(Arc::unwrap_or_clone(path), band, BooleanOp::Difference),
+                )?);
             }
         } else if let Some(stroke) = &child.payload().style.stroke {
             let width = stroke.width.unwrap_or(self.spec.theme.stroke_width);
@@ -263,14 +256,17 @@ impl Walk<'_> {
             }
             let outward = width * (1. - child.payload().border_align.inward());
             if outward > 0. {
-                path = self.cached_region((id.clone(), 9), Operation::Inset(path, outward))?;
+                path = Arc::new(self.cached_region(
+                    (id.clone(), 9),
+                    Operation::Inset(Arc::unwrap_or_clone(path), outward),
+                )?);
             }
         }
         let end = i + self.sizes[i];
         match self.flat_bounds(&path)? {
             Some(b) => {
-                let size = Size::new(b.max.x - b.min.x, b.max.y - b.min.y);
-                self.relayout(&child.clone().size(size.width, size.height), b, i..end, 0)?;
+                let padding = child.padding(self.spec.theme.spacing);
+                self.relayout(child, padding, b, i..end, 0)?;
             }
             None => self.collapse(i..end),
         }
@@ -278,21 +274,26 @@ impl Walk<'_> {
         Ok(())
     }
 
-    /// Lay `root` out again at the size of `b`, and move the frames in
-    /// `range` to where it put its nodes past the first `skip`.
+    /// Lay `root` out again as exactly `b`, padded by `padding`, and move
+    /// the frames in `range` to where it put its nodes past the first `skip`.
     fn relayout(
         &mut self,
         root: &El,
+        padding: Insets,
         b: Bounds,
         range: Range<usize>,
         skip: usize,
     ) -> Result<(), SceneError> {
         let size = Size::new(b.max.x - b.min.x, b.max.y - b.min.y);
         let th = self.spec.theme;
-        let layout =
-            mui_layout::resolve_with(root, Some(size), self.spec.limits, th.spacing, |e, room| {
-                fit(&mut self.runs, th, e, room)
-            })?;
+        let layout = mui_layout::resolve_boxed_with(
+            root,
+            size,
+            padding,
+            self.spec.limits,
+            th.spacing,
+            |e, room| fit(&mut self.runs, th, e, room),
+        )?;
         for (dest, f) in self.frames.to_mut()[range]
             .iter_mut()
             .zip(&layout.all()[skip..])

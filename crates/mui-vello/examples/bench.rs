@@ -3,7 +3,7 @@
 //!     cargo run -p mui-vello --profile perf --features cpu --example bench
 //!     cargo run -p mui-vello --profile perf --features cpu,bench-classic --example bench
 //!
-//! One scene, three backends, three cases. Each frame is split into resolve
+//! One scene, every backend, four cases. Each frame is split into resolve
 //! (`Ui::frame`: styling, layout, text shaping, the paint list), encode (the
 //! paint-list walk onto a `Canvas`) and render (rasterise and wait for it).
 //! Reported as the median of 50 frames after 5 warm-ups, so a stray scheduler
@@ -38,6 +38,9 @@ fn vectors() -> bool {
 struct App {
     knobs: Vec<f64>,
     sliders: Vec<f64>,
+    /// Decoded once and kept, as a host keeps what it decoded: a renderer
+    /// keys its upload on this `Arc`, and so does the retained paint list.
+    swatch: Arc<Image>,
 }
 
 impl App {
@@ -45,6 +48,7 @@ impl App {
         Self {
             knobs: (0..40).map(|i| f64::from(i) / 40.0).collect(),
             sliders: (0..8).map(|i| f64::from(i) / 8.0).collect(),
+            swatch: swatch(),
         }
     }
 }
@@ -101,7 +105,7 @@ fn editor(ui: &mut Ui, app: &mut App, images: bool) -> El {
     }
     let knobs: Vec<El> = (0..40)
         .map(|i| {
-            knob(ui, &format!("k{i}"), "cut", &mut app.knobs[i], 0.0..=1.0)
+            knob(ui, format!("k{i}"), "cut", &mut app.knobs[i], 0.0..=1.0)
                 .0
                 .size(S)
                 .el()
@@ -111,7 +115,7 @@ fn editor(ui: &mut Ui, app: &mut App, images: bool) -> El {
         .map(|i| {
             slider(
                 ui,
-                &format!("s{i}"),
+                format!("s{i}"),
                 "amount",
                 &mut app.sliders[i],
                 0.0..=1.0,
@@ -135,7 +139,7 @@ fn editor(ui: &mut Ui, app: &mut App, images: bool) -> El {
         .map(|i| label(format!("{i}. {BLURB}")).w(150.0).lines(4))
         .collect();
     // 4 image-filled pills, all sharing one 2x2 buffer.
-    let img = swatch();
+    let img = app.swatch.clone();
     let pills: Vec<El> = [Fit::Cover, Fit::Contain, Fit::Fill, Fit::Cover]
         .into_iter()
         .map(|fit| {
@@ -224,6 +228,9 @@ enum Case {
     Static,
     /// One knob moves; everything else is the same tree.
     Knob,
+    /// The same tree, but the host hands over a freshly decoded image every
+    /// frame: a video or meter texture. Every retained path has to redraw.
+    Image,
 }
 
 impl Case {
@@ -233,6 +240,7 @@ impl Case {
             Self::Static => "static",
             Self::Knob if vectors() => "all curves moving",
             Self::Knob => "one knob turning",
+            Self::Image => "fresh image",
         }
     }
 }
@@ -257,6 +265,9 @@ fn run(
         }
         if case == Case::Knob {
             app.knobs[7] = f64::from(i as u32 % 100) / 100.0;
+        }
+        if case == Case::Image {
+            app.swatch = swatch();
         }
         let start = Instant::now();
         let root = editor(&mut ui, &mut app, images);
@@ -293,7 +304,7 @@ fn run(
     }
 }
 
-const CASES: [Case; 3] = [Case::Cold, Case::Static, Case::Knob];
+const CASES: [Case; 4] = [Case::Cold, Case::Static, Case::Knob, Case::Image];
 
 /// Peak resident set of this process, in MiB -- the only memory number the
 /// sparse-strip renderers expose at all.
@@ -509,13 +520,14 @@ async fn gpu() -> Option<(wgpu::AdapterInfo, Vec<Row>)> {
         .await
         .expect("retained renderer");
         for case in CASES {
-            let mut encodes = 0;
+            let (mut encodes, mut renders) = (0, 0);
             rows.push(run("hybrid retained", case, font, IMAGES, |scene| {
                 let start = Instant::now();
-                encodes += renderer
+                let stats = renderer
                     .render(scene, Affine::IDENTITY, &view)
-                    .expect("retained render")
-                    .encoded_scenes;
+                    .expect("retained render");
+                encodes += stats.encoded_scenes;
+                renders += stats.renders;
                 let encode = since(start);
                 let start = Instant::now();
                 device
@@ -523,7 +535,10 @@ async fn gpu() -> Option<(wgpu::AdapterInfo, Vec<Row>)> {
                     .expect("poll");
                 (encode, since(start))
             }));
-            println!("hybrid retained {}: {encodes} scene encodes", case.name());
+            println!(
+                "hybrid retained {}: {encodes} scene encodes, {renders} renders",
+                case.name()
+            );
         }
     }
 
