@@ -109,6 +109,9 @@ mod tests {
 /// The handful of calls painting needs, so one walk serves the GPU scene and
 /// the CPU context alike.
 pub trait Canvas {
+    /// Called once at the start of every paint walk, before anything draws:
+    /// a canvas with caches ages them here.
+    fn begin_frame(&mut self) {}
     fn set_transform(&mut self, t: Affine);
     fn set_paint(&mut self, p: PaintType);
     /// Where the current paint's own space lands, composed after the scene
@@ -187,9 +190,13 @@ pub struct Cache {
     /// Vello's hinted-glyph caches key on the blob id, and `Blob::new` mints a
     /// fresh one per call, so building the font per run would throw those
     /// caches away every frame.
-    // ponytail: never evicted -- bounded by the fonts this renderer has drawn
-    // and freed with it; `Font` exposes no handle a `Weak` could watch.
-    fonts: Vec<(u64, FontData)>,
+    /// With the frames each was first and last drawn in: `Font` exposes no
+    /// handle a `Weak` could watch, so a font goes once it sat unused for
+    /// [`FONT_FRAMES`] frames -- a host that makes a fresh `Font` per frame
+    /// no longer grows this without bound.
+    fonts: Vec<(u64, FontData, Frames)>,
+    /// Paint walks so far; see [`Canvas::begin_frame`].
+    frame: u64,
     /// Keyed by a `Weak`, so no entry keeps the app's buffer alive. The one
     /// eviction rule: an entry goes on the first image lookup after its
     /// buffer's last `Arc` dropped. Until then the dead `Weak` still pins the
@@ -199,10 +206,21 @@ pub struct Cache {
     /// A mirror of `vello_hybrid`'s image-atlas allocator: `upload_image`
     /// unwraps a full atlas, and its own allocator is private. Built lazily
     /// from the device limits the way `Renderer::new` builds the real one.
-    // ponytail: exact only while nothing else allocates in that atlas -- the
-    // experimental glyph atlas and `Renderer::new_with` settings both would.
+    /// Exact because `Gpu` keeps the glyph atlas off, and as long as
+    /// `atlas_config` is the one the renderer was built with.
     atlas: Option<ImageCache>,
+    atlas_config: AtlasConfig,
 }
+
+#[derive(Clone, Copy)]
+struct Frames {
+    born: u64,
+    used: u64,
+}
+
+/// How long an unused font keeps its [`FontData`], and with it Vello's
+/// hinted outlines: glifo's own glyph atlas ages entries out after as many.
+const FONT_FRAMES: u64 = 64;
 
 enum Stored {
     /// Only the CPU canvas stores pixmaps.
@@ -215,15 +233,43 @@ enum Stored {
 }
 
 impl Cache {
-    fn font(&mut self, font: &mui_scene::Font) -> FontData {
+    /// A cache for a renderer built with `Renderer::new_with` and this image
+    /// atlas config; `Cache::default()` matches `Renderer::new`.
+    pub fn for_atlas(atlas_config: AtlasConfig) -> Self {
+        Self {
+            atlas_config,
+            ..Self::default()
+        }
+    }
+
+    /// Start a frame: fonts unused for [`FONT_FRAMES`] frames go.
+    fn tick(&mut self) {
+        self.frame += 1;
+        let now = self.frame;
+        self.fonts.retain(|(_, _, f)| now - f.used <= FONT_FRAMES);
+    }
+
+    /// The font's `FontData`, and whether it was already drawn in an earlier
+    /// frame: a glyph atlas only pays for itself from the second frame on,
+    /// and a one-shot render (a snapshot, a thumbnail) never gets there.
+    fn font(&mut self, font: &mui_scene::Font) -> (FontData, bool) {
         // A `Font` id is never reused, so an entry cannot answer for another font.
         let key = font.id();
-        if let Some((_, f)) = self.fonts.iter().find(|(k, _)| *k == key) {
-            return f.clone();
+        let now = self.frame;
+        if let Some((_, f, frames)) = self.fonts.iter_mut().find(|(k, ..)| *k == key) {
+            frames.used = now;
+            return (f.clone(), frames.born < now);
         }
         let f = FontData::new(Blob::new(Arc::new(font.clone())), 0);
-        self.fonts.push((key, f.clone()));
-        f
+        self.fonts.push((
+            key,
+            f.clone(),
+            Frames {
+                born: now,
+                used: now,
+            },
+        ));
+        (f, false)
     }
 
     fn find(&self, rgba: &Arc<[u8]>) -> Option<&Stored> {
@@ -259,10 +305,11 @@ impl Cache {
     /// an `Ok`, `Renderer::upload_image` makes the same allocation and so
     /// cannot reach its `unwrap`.
     fn reserve(&mut self, limits: &wgpu::Limits, w: u32, h: u32) -> Result<ImageId, AtlasError> {
+        let config = self.atlas_config;
         self.atlas
             .get_or_insert_with(|| {
                 // `MemorySettings::normalize`, which `Renderer::new` applies.
-                let mut config = AtlasConfig::default();
+                let mut config = config;
                 let side = limits.max_texture_dimension_2d.max(1);
                 config.atlas_size = (config.atlas_size.0.min(side), config.atlas_size.1.min(side));
                 config.max_atlases = config
@@ -276,7 +323,10 @@ impl Cache {
 }
 
 macro_rules! wrapper {
-    ($inner:ident) => {
+    ($inner:ident, $atlas:expr) => {
+        fn begin_frame(&mut self) {
+            self.cache.tick();
+        }
         fn set_transform(&mut self, t: Affine) {
             self.$inner.set_transform(t)
         }
@@ -328,7 +378,7 @@ macro_rules! wrapper {
                     start = end;
                     continue;
                 };
-                let font = self.cache.font(face);
+                let (font, warm) = self.cache.font(face);
                 let coords = text.font_coords.get(font_index).map_or_else(
                     || {
                         if font_index == 0 {
@@ -347,6 +397,9 @@ macro_rules! wrapper {
                     // The run was measured at this instance; drawing the default
                     // one under its advances is how a bold readout goes ragged.
                     .normalized_coords(coords)
+                    // Rasterise each glyph once and reuse the bitmap: strip
+                    // generation per glyph was most of a frame's encode.
+                    .atlas_cache($atlas && warm)
                     .fill_glyphs(run(text.origin, &text.glyphs[start..end]));
                 start = end;
             }
@@ -371,14 +424,17 @@ impl Canvas for Gpu<'_> {
         });
         let found = match self.cache.find(&img.rgba) {
             Some(&Stored::Atlas { id, clear }) => Some((id, clear)),
-            _ => premultiply(img).and_then(|p| {
+            _ => size(img).and_then(|(w, h)| {
                 // Refused here rather than inside `upload_image`, which
                 // unwraps: a full atlas would abort the host, and in a plugin
-                // the DAW with it. The paint falls back to its solid.
+                // the DAW with it. The paint falls back to its solid -- and
+                // asks again next frame, so the room is checked before the
+                // photo is premultiplied, not after.
                 let want = self
                     .cache
-                    .reserve(&device.limits(), p.width().into(), p.height().into())
+                    .reserve(&device.limits(), w.into(), h.into())
                     .ok()?;
+                let p = premultiplied(img, w, h);
                 let id = renderer.upload_image(
                     resources,
                     device,
@@ -407,7 +463,11 @@ impl Canvas for Gpu<'_> {
             .into(),
         )
     }
-    wrapper!(scene);
+    // ponytail: no glyph atlas here. `vello_hybrid` keeps glyphs in the same
+    // private allocator as images, and `upload_image` unwraps a full one, so
+    // the `Cache` mirror that keeps that unwrap unreachable must see every
+    // allocation. Turn it on when `upload_image` returns a `Result`.
+    wrapper!(scene, false);
 }
 
 #[cfg(feature = "cpu")]
@@ -430,7 +490,8 @@ impl Canvas for Cpu<'_> {
             .into(),
         )
     }
-    wrapper!(ctx);
+    // `vello_cpu` keeps its glyph atlas apart from images: nothing to mirror.
+    wrapper!(ctx, true);
 }
 
 /// A `vello_cpu` context together with the resources its glyph cache lives
@@ -449,19 +510,27 @@ fn srgb(c: mui_scene::Color) -> AlphaColor<Srgb> {
 /// The premultiplied [`Pixmap`] of an image. MUI hands over straight RGBA --
 /// what a decoder produces -- and premultiplying a photo is far too much work
 /// to redo every frame, so each renderer's [`Cache`] keeps the result.
+#[cfg_attr(not(any(test, feature = "cpu")), allow(dead_code))]
 fn premultiply(img: &mui_scene::Image) -> Option<Pixmap> {
+    size(img).map(|(w, h)| premultiplied(img, w, h))
+}
+
+/// The image's size, or `None` when it cannot become a [`Pixmap`].
+fn size(img: &mui_scene::Image) -> Option<(u16, u16)> {
     // A single image has to fit one atlas tile; u16 is the hard ceiling.
     let (w, h) = (
         u16::try_from(img.width).ok()?,
         u16::try_from(img.height).ok()?,
     );
-    let mut clear = false;
-    let (pixels, _) = img.rgba.as_chunks::<4>();
     // `Image`'s fields are public, so the buffer need not match the size;
     // `Pixmap::from_parts_with_opacity` asserts that it does.
-    if pixels.len() != usize::from(w) * usize::from(h) {
-        return None;
-    }
+    (img.rgba.len() == usize::from(w) * usize::from(h) * 4).then_some((w, h))
+}
+
+/// [`premultiply`] for a size [`size`] already checked.
+fn premultiplied(img: &mui_scene::Image, w: u16, h: u16) -> Pixmap {
+    let mut clear = false;
+    let (pixels, _) = img.rgba.as_chunks::<4>();
     let data = pixels
         .iter()
         .map(|p| {
@@ -475,7 +544,7 @@ fn premultiply(img: &mui_scene::Image) -> Option<Pixmap> {
             }
         })
         .collect();
-    Some(Pixmap::from_parts_with_opacity(data, w, h, clear))
+    Pixmap::from_parts_with_opacity(data, w, h, clear)
 }
 
 /// Where the image's pixels land so that it fills `bounds` per `fit`.
@@ -563,6 +632,7 @@ pub fn paint(
     if scene.paint.iter().any(|p| p.layer == Layer::External) {
         return Err(Error::InvalidPath);
     }
+    canvas.begin_frame();
     canvas.set_transform(transform);
     let mut bez = BezPath::new();
     for p in &scene.paint {
@@ -773,6 +843,30 @@ mod seam {
         assert!(cache.images.is_empty());
         // The mirror gave the slot back too: the same id comes round again.
         assert_eq!(cache.reserve(&limits, 1, 1).unwrap(), id);
+    }
+
+    /// A font unused for `FONT_FRAMES` frames lets go of its `FontData`; one
+    /// drawn every frame keeps it, blob id and all.
+    #[test]
+    fn an_unused_font_ages_out() {
+        let font = |bytes| mui_scene::Font::new(bytes).unwrap();
+        let (kept, dropped) = (
+            font(epaint_default_fonts::HACK_REGULAR),
+            font(epaint_default_fonts::UBUNTU_LIGHT),
+        );
+        let mut cache = Cache::default();
+        cache.tick();
+        let (first, warm) = cache.font(&kept);
+        assert!(!warm && !cache.font(&kept).1, "warm in its first frame");
+        cache.font(&dropped);
+        for _ in 0..FONT_FRAMES {
+            cache.tick();
+            assert!(cache.font(&kept).1, "cold after its first frame");
+        }
+        assert_eq!(cache.fonts.len(), 2, "aged out early");
+        cache.tick();
+        assert_eq!(cache.fonts.len(), 1, "the idle font is still held");
+        assert_eq!(cache.font(&kept).0.data.id(), first.data.id());
     }
 
     /// A full atlas is an error from `reserve`, not the `unwrap` inside
