@@ -1,7 +1,8 @@
 // MUI analytic material welding for native wgpu. The earlier WebGL/GLSL
 // reference is not evidence that this WGSL has compiled or rendered.
 // Uniform ABI: 21 vec4<f32>, 336 bytes, all offsets multiples of 16.
-// Supported geometry: one to three rigidly rotated rounded rectangles.
+// Supported geometry: one to three axis-aligned rounded rectangles. The
+// cos/sin lane is always (1, 0): no source sets a rotation (mui-weld analytic.rs).
 struct Source {
     geom: vec4<f32>,   // centre.xy, half-size.xy
     params: vec4<f32>, // radius, inside-border width, cos(angle), sin(angle)

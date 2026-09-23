@@ -136,6 +136,7 @@ pub fn resolve_scene(spec: &SceneSpec) -> Result<ResolvedScene, SceneError> {
 }
 
 /// [`resolve_scene`] with text shaped once per (string, size) across calls.
+/// Material welds still start cold every call; see [`resolve_scene_cached`].
 pub fn resolve_scene_with(
     spec: &SceneSpec,
     text: &mut TextCache,
@@ -143,8 +144,9 @@ pub fn resolve_scene_with(
     resolve_scene_cached(spec, text, &mut crate::WeldCache::default())
 }
 
-/// Resolve with persistent text and material-weld caches. Runtime owners should
-/// keep both; the compatibility functions use a temporary welding cache.
+/// Resolve with persistent text and material-weld caches. A runtime keeps
+/// both; [`resolve_scene`] and [`resolve_scene_with`] make a fresh
+/// [`WeldCache`](crate::WeldCache) per call.
 pub fn resolve_scene_cached(
     spec: &SceneSpec,
     text: &mut TextCache,

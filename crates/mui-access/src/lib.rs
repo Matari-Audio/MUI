@@ -64,8 +64,8 @@ fn node(s: &ResolvedSurface, sem: Option<&Semantics>) -> Node {
             n.set_numeric_value(*value);
             n.set_min_numeric_value(*min);
             n.set_max_numeric_value(*max);
-            // `mui::widgets::step`, the arrow keys' step, which is what the
-            // runtime's `Increment` and `Decrement` take. Unsigned here.
+            // The arrow keys' step, a hundredth of the range, which is what
+            // the runtime's `Increment` and `Decrement` take. Unsigned here.
             n.set_numeric_value_step(((max - min) / 100.0).abs());
             if !s.disabled {
                 n.add_action(Action::SetValue);

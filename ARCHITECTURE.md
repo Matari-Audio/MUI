@@ -93,7 +93,7 @@ El tree  (row! / col! / stack! / grid! / fits!, Paints fills, presets merged
    |                        host's adapter; a disabled one says so and offers
    |                        no Focus action
    |
-   v  mui-vello paint       Canvas: Gpu { scene, resources, cache } over
+   v  mui-vello paint       Canvas: Gpu { scene, resources, cache, atlas } over
                             vello_hybrid, Cpu { ctx, resources, cache } over
                             vello_cpu.
                             Fill / stroke / blurred rect / push_clip / pop_clip

@@ -149,8 +149,8 @@ silently lowering quality.
 
 The native shader supports one to three rounded rectangles, solid or two-stop
 linear fills, solid borders, different border widths, Blend/Keep/Omit channels
-and geometric morph. The low-level analytic source supports rigid rotation; the
-current in-tree source adapter lowers ordinary axis-aligned rounded plates.
+and geometric morph, all axis-aligned: the shader keeps a rotation term, but no
+public constructor sets one, so every analytic source is unrotated.
 
 General arbitrary contours, image brushes, nested welds, shadow/shell effect
 stacks, arbitrary GPU visualization payloads and backdrop refraction are NOT

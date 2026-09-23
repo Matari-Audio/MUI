@@ -1,6 +1,6 @@
 use super::{Budget, EffectStats, Error, WeldTextures};
 use crate::{
-    kurbo::{Affine, Rect},
+    kurbo::{Affine, BezPath, Rect},
     Cache, Canvas as _, Gpu,
 };
 use mui_scene::{ExternalWeld, Layer, Painted, ResolvedScene};
@@ -165,6 +165,7 @@ impl HybridEffects {
                     }),
                 };
                 canvas.set_transform(xf);
+                let mut bez = BezPath::new();
                 for p in &resolved.paint {
                     if p.layer == Layer::External {
                         let e = resolved
@@ -195,17 +196,14 @@ impl HybridEffects {
                             }],
                         );
                     } else if !crate::layered(&mut canvas, p) {
-                        crate::one(
-                            &mut canvas,
-                            p,
-                            &crate::bez_path(&p.path, crate::ARC_TOLERANCE)?,
-                        )?;
+                        crate::bez_path_into(&p.path, crate::ARC_TOLERANCE, &mut bez)?;
+                        crate::one(&mut canvas, p, &bez)?;
                     }
                 }
                 if let Some(draw) = overlay {
                     draw(&mut canvas);
                 } else {
-                    self.retained.clone_from(&resolved.paint);
+                    super::damage::copy_changed(&mut self.retained, &resolved.paint);
                     self.transform = Some(xf);
                     self.mapping = mapping;
                     self.valid = true;

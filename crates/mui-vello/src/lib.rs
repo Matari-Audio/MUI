@@ -33,8 +33,8 @@ pub use vello_hybrid;
 #[cfg(feature = "gpu-effects")]
 pub mod effects;
 
-/// Canonical conversion shared with input; retained here for source compatibility.
-pub use mui_geometry::{bez_path, ARC_TOLERANCE};
+/// The path conversion painting uses, the same one input hit-tests with.
+pub use mui_geometry::{bez_path, bez_path_into, ARC_TOLERANCE};
 
 #[cfg(test)]
 mod tests {
@@ -564,11 +564,13 @@ pub fn paint(
         return Err(Error::InvalidPath);
     }
     canvas.set_transform(transform);
+    let mut bez = BezPath::new();
     for p in &scene.paint {
         if layered(canvas, p) {
             continue;
         }
-        one(canvas, p, &bez_path(&p.path, ARC_TOLERANCE)?)?;
+        bez_path_into(&p.path, ARC_TOLERANCE, &mut bez)?;
+        one(canvas, p, &bez)?;
     }
     Ok(())
 }

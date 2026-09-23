@@ -295,7 +295,6 @@ let (field, edited) = text_input(&mut ui, "name", &mut name);
 - Behaviour: a focused `slider` or `knob` steps on the arrow keys (a
   hundredth of the range, a tenth of that with Shift), Page Up/Down (ten
   steps) and Home/End.
-- new: `mui::widgets::step(&RangeInclusive<f64>) -> f64`, that step
 
 ## mui
 

@@ -78,7 +78,7 @@ let frame = ui
     .frame(root, Some(Size::new(280.0, 120.0)), Input::default(), 1.0 / 60.0)
     .unwrap();
 assert!(frame.scene.paint.len() > 5);
-// mui::vello::paint(&mut Gpu { scene, resources }, frame.scene, Affine::IDENTITY)?;
+// mui::vello::paint(&mut Gpu { scene, resources, cache, atlas: None }, frame.scene, Affine::IDENTITY)?;
 ```
 
 `Ui::frame` takes an `Input` — pointer, wheel, key presses and typed text —

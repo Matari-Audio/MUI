@@ -14,7 +14,7 @@
 
 mod bezier;
 mod boolean;
-pub use bezier::{bez_path, ARC_TOLERANCE};
+pub use bezier::{bez_path, bez_path_into, ARC_TOLERANCE};
 pub use kurbo;
 mod fillet;
 mod math;

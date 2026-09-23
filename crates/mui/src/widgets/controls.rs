@@ -245,7 +245,7 @@ impl IntoEl for Control {
 /// One arrow-key step of a slider or knob across `range`: a hundredth of it,
 /// signed with the range, so an inverted control still steps toward its end.
 /// A platform's `Increment` and `Decrement` take the same step.
-pub fn step(range: &RangeInclusive<f64>) -> f64 {
+pub(crate) fn step(range: &RangeInclusive<f64>) -> f64 {
     (range.end() - range.start()) / 100.0
 }
 
@@ -538,6 +538,13 @@ pub fn toggle(ui: &mut Ui, id: &str, on: &mut bool) -> (Control, bool) {
     (control, flipped)
 }
 
+/// A caret's x from [`Ui::carets`]; `0` for a byte that is not a boundary.
+fn caret_at(carets: &[(usize, f64)], byte: usize) -> f64 {
+    carets
+        .binary_search_by_key(&byte, |&(b, _)| b)
+        .map_or(0.0, |i| carets[i].1)
+}
+
 fn byte(s: &str, chars: usize) -> usize {
     s.char_indices().nth(chars).map_or(s.len(), |(b, _)| b)
 }
@@ -607,7 +614,7 @@ pub fn text_input(ui: &mut Ui, id: &str, value: &mut String) -> (El, bool) {
     if r.pressed || r.dragged {
         if let Some(p) = ui.local(id) {
             let shift = room.map_or(0.0, |room| {
-                (ui.caret_x(value, size, byte(value, caret)) - room).max(0.0)
+                (caret_at(&ui.carets(value, size), byte(value, caret)) - room).max(0.0)
             });
             caret = super::grapheme::floor(value, ui.hit(value, size, p.x - PAD + shift));
             if r.pressed {
@@ -713,7 +720,8 @@ pub fn text_input(ui: &mut Ui, id: &str, value: &mut String) -> (El, bool) {
     if let Some((t, _)) = &pre {
         shown.insert_str(base, t);
     }
-    let x = |b: usize| ui.caret_x(&shown, size, b);
+    let carets = ui.carets(&shown, size);
+    let x = |b: usize| caret_at(&carets, b);
     // The caret sits inside the preedit, where the IME put its cursor.
     let at = match &pre {
         Some((t, c)) => base + c.map_or(t.len(), |(s, _)| s.min(t.len())),

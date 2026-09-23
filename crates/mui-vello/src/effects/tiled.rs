@@ -286,11 +286,12 @@ impl TiledEffects {
         stats: &mut EffectStats,
     ) -> Result<(), Error> {
         if !dirty.is_empty() {
-            self.ops.clear();
-            for p in &resolved.paint {
-                let bez = crate::bez_path(&p.path, crate::ARC_TOLERANCE)?;
-                let bounds = damage::bounds(p, &bez, xf);
-                self.ops.push((bez, bounds));
+            // Each op's path is refilled in place, so a steady tree
+            // converts every frame without allocating.
+            self.ops.resize_with(resolved.paint.len(), Default::default);
+            for (p, (bez, bounds)) in resolved.paint.iter().zip(&mut self.ops) {
+                crate::bez_path_into(&p.path, crate::ARC_TOLERANCE, bez)?;
+                *bounds = damage::bounds(p, bez, xf);
             }
         }
         let full_redraw =

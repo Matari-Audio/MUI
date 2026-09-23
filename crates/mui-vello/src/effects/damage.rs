@@ -109,14 +109,7 @@ impl DamageTracker {
     /// Only entries that changed are copied, so committing an idle frame
     /// allocates nothing.
     pub fn commit(&mut self, scene: &ResolvedScene, xf: Affine) {
-        self.paint.truncate(scene.paint.len());
-        let kept = self.paint.len();
-        for (old, new) in self.paint.iter_mut().zip(&scene.paint) {
-            if old != new {
-                old.clone_from(new);
-            }
-        }
-        self.paint.extend_from_slice(&scene.paint[kept..]);
+        copy_changed(&mut self.paint, &scene.paint);
         self.external
             .retain(|k, _| scene.external_weld(k).is_some());
         for (k, v) in scene.external_welds() {
@@ -131,6 +124,18 @@ impl DamageTracker {
         self.xf = Some(xf);
         self.valid = true;
     }
+}
+/// Make `dst` equal `src`, cloning only the entries that differ: a paint list
+/// kept across frames reallocates nothing for what stayed the same.
+pub(crate) fn copy_changed(dst: &mut Vec<Painted>, src: &[Painted]) {
+    dst.truncate(src.len());
+    let kept = dst.len();
+    for (old, new) in dst.iter_mut().zip(src) {
+        if old != new {
+            old.clone_from(new);
+        }
+    }
+    dst.extend_from_slice(&src[kept..]);
 }
 pub fn tiles(size: [u32; 2], side: u32) -> Vec<Tile> {
     if size.contains(&0) || side == 0 {
@@ -305,6 +310,15 @@ mod tests {
             assert_eq!(c.paint, s.paint);
             assert!(plan(&c, s, Affine::IDENTITY, &t).dirty.is_empty());
         }
+    }
+    #[test]
+    fn an_unchanged_entry_keeps_its_allocation() {
+        let s = scene(Primary, 0.);
+        let mut kept = s.paint.clone();
+        let at = kept[0].path.commands.as_ptr();
+        copy_changed(&mut kept, &s.paint);
+        assert_eq!(kept[0].path.commands.as_ptr(), at);
+        assert_eq!(kept, s.paint);
     }
     #[test]
     fn resize_grid_covers_the_target_without_overlap() {

@@ -1030,8 +1030,9 @@ fn break_lines_from_advances(text: &str, advances: &[(f64, bool)], max_width: f6
 
 /// Every char boundary of `text` with the pen x of a caret there, ascending
 /// by byte. A caret never lands inside a ligature or combining cluster: every
-/// boundary within one sits at its leading edge.
-fn caret_positions(
+/// boundary within one sits at its leading edge. One shaping for any number
+/// of carets; [`caret_x`] is one lookup in this.
+pub fn caret_positions(
     fonts: &[Font],
     text: &str,
     size_px: f64,
@@ -1082,9 +1083,8 @@ fn caret_positions(
 /// differently at `wght` 700 than at 400, and a caret measured at the wrong
 /// weight drifts.
 ///
-/// ponytail: every call shapes `text` again -- the face's parse and plans are
-/// cached, the glyphs are not. A field asking for four carets a frame shapes
-/// four times; return the whole boundary table once if that ever shows.
+/// Every call shapes `text` again; a caller wanting several carets in one
+/// string takes [`caret_positions`] once instead.
 pub fn caret_x(
     fonts: &[Font],
     text: &str,

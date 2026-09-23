@@ -699,16 +699,18 @@ impl Ui {
             None => ((x / (size * 0.6)).round().max(0.0) as usize).min(s.chars().count()),
         }
     }
-    /// Where the caret sits when it is `byte` bytes into `s`: the inverse of
-    /// [`Ui::hit`], and the advance of the whole string when `byte == s.len()`.
-    /// Shaped, not drawn -- `mui_text::caret_x` reads advances only, where
-    /// `text_run` would build every outline to throw them away.
-    pub(crate) fn caret_x(&self, s: &str, size: f64, byte: usize) -> f64 {
+    /// Every char boundary of `s` with the x of a caret there, ascending by
+    /// byte: the inverse of [`Ui::hit`], ending at the whole string's
+    /// advance. Shaped once, however many carets a field asks for.
+    pub(crate) fn carets(&self, s: &str, size: f64) -> Vec<(usize, f64)> {
         match self.fonts() {
-            Some(fonts) => mui_text::caret_x(&fonts, s, size, &[], byte).unwrap_or(0.0),
+            Some(fonts) => mui_text::caret_positions(&fonts, s, size, &[]).unwrap_or_default(),
             // ponytail: the 0.6em guess the scene itself falls back to
             // without a font; set a font and both agree.
-            None => s[..byte.min(s.len())].chars().count() as f64 * size * 0.6,
+            None => (s.char_indices().map(|(b, _)| b).chain([s.len()]))
+                .enumerate()
+                .map(|(i, b)| (b, i as f64 * size * 0.6))
+                .collect(),
         }
     }
     /// A caret is on for 0.625 s of every 1.25 s.
@@ -2770,9 +2772,10 @@ mod tests {
             .font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap())
             .fallback_font(Font::new(epaint_default_fonts::NOTO_EMOJI_REGULAR).unwrap());
         let value = "A😀";
-        let emoji = value.char_indices().nth(1).unwrap().0;
-        let before = ui.caret_x(value, 16., emoji);
-        let end = ui.caret_x(value, 16., value.len());
+        let carets = ui.carets(value, 16.);
+        let [_, (_, before), (_, end)] = carets[..] else {
+            panic!("{carets:?}");
+        };
         assert!(end > before, "fallback glyph has no caret advance");
         assert_eq!(ui.hit(value, 16., end), value.chars().count());
     }

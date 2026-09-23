@@ -17,9 +17,9 @@ there is no FPS column (see `docs/rendering-investigation.md`).
 
 The machine was shared while these ran: other builds and a DAW were running,
 and the load average was 6 to 19. The after-numbers are medians over 3 to 6
-runs of each command; the baseline in `/home/derpcat/.cache/mui-fix-baseline`
-is a single run, under unrecorded load. Treat a difference under about 10% as
-noise. The GPU render column on `vello_hybrid` was the noisiest (0.56 to 1.6 ms
+runs of each command; the before column is a single run of `d75b234`, under
+unrecorded load, so its deltas are indicative, not medians against medians.
+Treat a difference under about 10% as noise. The GPU render column on `vello_hybrid` was the noisiest (0.56 to 1.6 ms
 for the same binary across runs), because the GPU was shared too.
 
 ## Commands
@@ -84,8 +84,9 @@ microseconds, because stage B deleted `PathCache`. The walk now converts every
 arc to cubics every frame. In the full bench the conversion alone measures
 0.106 ms a frame, against 0.026 ms from the old warm cache. In the baseline run
 the `vello_cpu cached` static row beat the uncached one by 0.23 ms of encode
-(2.984 against 3.212). Today's uncached static frame (5.125 total) is still
-faster than that cached one (5.560). The `vello_hybrid` render column
+(2.984 against 3.212). Since these numbers the walk refills one reused
+`BezPath` instead of allocating one per entry; that is not re-measured here.
+The `vello_hybrid` render column
 reads higher, but the same binary spread from 0.56 to 1.6 ms across runs, so
 that change is load on a shared GPU, not a regression.
 
