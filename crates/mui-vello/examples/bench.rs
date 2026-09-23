@@ -105,7 +105,7 @@ fn editor(ui: &mut Ui, app: &mut App, images: bool) -> El {
     }
     let knobs: Vec<El> = (0..40)
         .map(|i| {
-            knob(ui, &format!("k{i}"), "cut", &mut app.knobs[i], 0.0..=1.0)
+            knob(ui, format!("k{i}"), "cut", &mut app.knobs[i], 0.0..=1.0)
                 .0
                 .size(S)
                 .el()
@@ -115,7 +115,7 @@ fn editor(ui: &mut Ui, app: &mut App, images: bool) -> El {
         .map(|i| {
             slider(
                 ui,
-                &format!("s{i}"),
+                format!("s{i}"),
                 "amount",
                 &mut app.sliders[i],
                 0.0..=1.0,

@@ -10,7 +10,7 @@ use super::text::Face;
 use super::{
     bounds, empty, snap, Ancestors, Deferred, Layer, ResolvedSurface, SceneError, Text, Walk,
 };
-use crate::{Color, Content, El, Element, Fill, Mix, ShadowKind};
+use crate::{Color, Content, El, Element, Fill, Mix, ShadowKind, State};
 
 /// A canvas's tagged draws: the surface's hit shapes.
 type Hits = Vec<(Arc<str>, Arc<Path>)>;
@@ -112,6 +112,10 @@ impl<'a> Walk<'a> {
             cursor: inner.cursor,
             tip: e.tip.clone(),
             focusable: e.focusable,
+            pointer_states: e
+                .states
+                .iter()
+                .any(|(st, _)| matches!(st, State::Hover | State::Press)),
             disabled: inner.disabled,
             semantics,
             semantic_label_implicit,

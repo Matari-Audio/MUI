@@ -180,6 +180,12 @@ let spec = SceneSpec::new(root).font(Font::new(epaint_default_fonts::HACK_REGULA
   every frame. A text node's
   fill is never pushed as a `Layer::Fill` entry (it used to be pushed and
   removed again); its colour is the ink, as before.
+- `Kind::TextInput { value }` -> `Kind::TextInput { value, selection,
+  carets }`: the selection's anchor and caret in characters, and a caret x
+  per character boundary in the field's space (`Vec::new()` when unknown).
+  `text_input` fills both.
+- `ResolvedSurface` gains `pointer_states: bool`: the node declared a Hover
+  or Press look.
 
 ```rust
 // old
@@ -270,6 +276,11 @@ tracker.plan(&scene, xf, &tiles, &mut plan);
   keeps its id as its name
 - Sliders gain `Action::Increment`/`Decrement` and a `numeric_value_step`
   (a hundredth of the range)
+- A text input gains a `TextRun` child (`run_id(key)`) with its characters'
+  lengths, positions and widths, a `text_selection`, and
+  `Action::SetTextSelection`; route that to
+  `SemanticAction::set_selection(key, anchor.character_index,
+  focus.character_index)`
 
 ```rust
 // old
@@ -328,13 +339,24 @@ let (field, edited) = text_input(&mut ui, "name", &mut name);
 - `mui::core` (deprecated alias) -> `mui::scene`
 - `mui::tessellate` -> removed, no replacement
 - `mui::egui` and the `egui` cargo feature -> removed, no replacement
+- `SemanticAction` gains `SetSelection { id, anchor, caret }`, with
+  `SemanticAction::set_selection(id, anchor, caret)`. A `match` over it needs
+  the new arm.
 - `SemanticAction` gains `Increment { id }` and `Decrement { id }`, with
   `SemanticAction::increment(id)` / `decrement(id)`. A `match` over it needs
   the new arms. Both land as the equivalent `SetValue`.
 - Behaviour: `.scroll()`, `.animate()`/`.transition()` and
   `.on(State::Focus | State::Disabled)` now work on a node without an id,
-  keyed by its `/0/2` tree path. `.on(State::Hover | State::Press)` still
-  needs an id.
+  keyed by its `/0/2` tree path. So does `.on(State::Hover | State::Press)`:
+  an unnamed node that declares one is a pointer target by its tree path and
+  takes presses exactly where the same node with an id would.
+- Behaviour: an unnamed root is no longer a pointer target keyed `""`: it
+  does not hover, and its cursor and tip no longer show over the bare
+  background. A press that lands on no target still drops the focus, now as
+  a rule rather than through the root. A tip needs an id.
+- `button`, `toggle`, `slider`, `knob`: `id: &str` -> `id: impl Into<Id>`.
+  `&str`, `String`, `&String`, `Id` and `&Id` all pass; a `&mut String`
+  needs `&**s`.
 - Behaviour: while a tip is shown the root sits under a wrapper, so positional
   keys move under `/0` and back when it goes: ask `ui.scroll("/0/1")`, not
   `ui.scroll("/1")`, while the tip is up. Named keys do not move.

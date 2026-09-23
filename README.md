@@ -183,7 +183,7 @@ assert_eq!(scene.surface("tab").unwrap().frame.size.width, 92.0);
 | `.reserve("-88.8 dB")`, `ui.set_text("gain", v)` | measure a readout for the widest value it can show, then swap what it says without resolving the tree again: the frame stands, one glyph run re-shapes |
 | `.text_weight(Weight::BOLD)` | the run's `wght` axis. A variable face moves; a static one has one weight and draws it |
 | `Palette::from_seed(accent, Mode::Dark)` | a whole palette from one colour: brand roles around the seed's hue, greys tinted by it, signal hues left alone. Every role clears 3:1 on the background and the surface |
-| `.id("name")` | a gesture target and a lookup key; unnamed nodes are decoration |
+| `.id("name")` | a gesture target and a lookup key; unnamed nodes are decoration, unless they declare an `.on(State::Hover \| State::Press)` look |
 | `.id(Id::of("osc").slot(3).field("gain"))` | the same key, composed: segments join with `/` and nothing reaches the heap under 46 bytes, so a rack of 374 named slots costs no `format!` per frame. `.id(..)` takes anything `Into<Id>` |
 | `ui.start_drag(id, payload)`, `ui.dragging::<T>()`, `ui.dropped_on::<T>(id)` | drag-and-drop with a payload of your own type: attach it while the gesture drags, peek at it to light up a drop target, take it once when it lands. A drop elsewhere delivers nothing, and the ghost is yours -- a `.float()` pinned to the pointer's surface |
 | `Path::from_svg_data("M0 0 h10 a5 5 0 0 1 0 10 z")` | an icon's `d` attribute as a `Path`, arcs and all |
@@ -214,7 +214,7 @@ const NAMES: [&str; 5] = ["Drive", "Tilt", "Mix", "Air", "Floor"];
 let params: Vec<El> = NAMES
     .iter()
     .zip(&mut values)
-    .map(|(n, v)| slider(&mut ui, n, n, v, 0.0..=1.0).0.el())
+    .map(|(n, v)| slider(&mut ui, *n, n, v, 0.0..=1.0).0.el())
     .collect();
 
 let curve = canvas(|size| {
@@ -383,7 +383,10 @@ so a panel handing over a fresh frame buffer every frame does not grow it.
 pixels per scene unit. A node says what it is in the tree itself --
 `.role(Kind::Button).label("OK")` -- and the walk carries that onto the
 surface; a node with no role reports as a group, and a node with no label
-has no name (its id is not read aloud). The
+has no name (its id is not read aloud). A `text_input` reports its line
+as a `TextRun` with each character's position and its selection, so a reader
+follows the caret, and a reader's `SetTextSelection` comes back as
+`SemanticAction::set_selection`. The
 widgets in `mui` already describe themselves, so the preview just hands the
 update to its `accesskit_winit::Adapter` after each frame.
 

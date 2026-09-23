@@ -396,7 +396,7 @@ impl App {
         side.push(
             column((0..self.scenes.len()).map(|i| {
                 let on = i == self.selected;
-                let (item, _) = button(ui, &format!("scene-{i}"), self.scenes[i].name());
+                let (item, _) = button(ui, format!("scene-{i}"), self.scenes[i].name());
                 item.variant(if on { Variant::Solid } else { Variant::Soft })
                     .size(S)
                     .el()
@@ -737,6 +737,17 @@ impl ApplicationHandler<AccessEvent> for App {
                         }
                         AccessAction::Decrement => {
                             self.ui.request_action(SemanticAction::decrement(key));
+                        }
+                        AccessAction::SetTextSelection => {
+                            if let Some(mui_access::accesskit::ActionData::SetTextSelection(s)) =
+                                r.data
+                            {
+                                self.ui.request_action(SemanticAction::set_selection(
+                                    key,
+                                    s.anchor.character_index,
+                                    s.focus.character_index,
+                                ));
+                            }
                         }
                         _ => {}
                     }

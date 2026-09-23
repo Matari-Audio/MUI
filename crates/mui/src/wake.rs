@@ -56,7 +56,11 @@ mod tests {
             leaf(100., 30.)
                 .id("edit")
                 .focusable()
-                .role(Kind::TextInput { value: "".into() })
+                .role(Kind::TextInput {
+                    value: "".into(),
+                    selection: (0, 0),
+                    carets: Vec::new(),
+                })
         };
         u.frame(tree(), None, Input::default(), 0.).unwrap();
         u.focus("edit");
@@ -72,7 +76,11 @@ mod tests {
             leaf(100., 30.)
                 .id("edit")
                 .focusable()
-                .role(Kind::TextInput { value: "".into() })
+                .role(Kind::TextInput {
+                    value: "".into(),
+                    selection: (0, 0),
+                    carets: Vec::new(),
+                })
         };
         u.frame(tree(), None, Input::default(), 0.).unwrap();
         u.focus("edit");
