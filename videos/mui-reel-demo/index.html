@@ -1,0 +1,158 @@
+<!doctype html>
+<!--
+  mui-reel demo: a deterministic MUI take on a beat grid, with one callout that
+  follows the real knob's rect from the take's own track.
+
+  The take is rendered, not recorded:
+    cargo run -p mui-reel --example gain_reel -- videos/mui-reel-demo/take
+  One source of truth: bpm and beat times come from take/track.js (the reel's
+  track), so re-timing the Rust script re-times this composition. The one
+  hand-copied number is the take's length on the host slot below
+  (manifest.json "duration").
+-->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <script src="take/mui-track.js"></script>
+    <script src="take/track.js"></script>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        width: 1920px;
+        height: 1080px;
+        overflow: hidden;
+        background: #0a0a0a;
+      }
+      #root {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        font-family: ui-monospace, monospace;
+      }
+      #overlay {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+      }
+      #callout {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 100px;
+        height: 100px;
+        border: 4px solid #7cf2c8;
+        border-radius: 24px;
+        opacity: 0;
+      }
+      #callout-label {
+        position: absolute;
+        left: 0;
+        bottom: calc(100% + 14px);
+        padding: 8px 16px;
+        border-radius: 12px;
+        background: #7cf2c8;
+        color: #06110d;
+        font-size: 30px;
+        font-weight: 700;
+        white-space: nowrap;
+      }
+      #beats {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 36px;
+        display: flex;
+        justify-content: center;
+        gap: 18px;
+      }
+      .beat {
+        width: 14px;
+        height: 14px;
+        border-radius: 7px;
+        background: #f4f4f5;
+        opacity: 0.2;
+      }
+    </style>
+  </head>
+  <body>
+    <div
+      id="root"
+      data-composition-id="main"
+      data-fps="60"
+      data-start="0"
+      data-duration="6.2167"
+      data-width="1920"
+      data-height="1080"
+    >
+      <div
+        id="mui-reel"
+        data-composition-id="mui-reel"
+        data-composition-src="take/clip.html"
+        data-start="0"
+        data-duration="6.2167"
+        data-track-index="0"
+        data-width="1920"
+        data-height="1080"
+      ></div>
+      <div id="overlay">
+        <div id="callout"><div id="callout-label">GAIN</div></div>
+        <div id="beats"></div>
+      </div>
+    </div>
+    <script>
+      const track = MuiTrack.load(window.MUI_TRACK_DATA);
+      const tl = gsap.timeline({ paused: true });
+
+      // The beat grid: one dot per beat of the take, lit on its beat.
+      const beats = document.getElementById("beats");
+      const count = Math.floor((track.duration * track.data.bpm) / 60);
+      for (let n = 0; n < count; n++) {
+        const dot = document.createElement("div");
+        dot.className = "beat";
+        dot.id = "beat-" + n;
+        beats.appendChild(dot);
+        tl.fromTo(
+          dot,
+          { opacity: 0.2, scale: 1 },
+          { opacity: 1, scale: 1.6, duration: 0.08, ease: "power2.out", immediateRender: false },
+          track.beat(n),
+        );
+        tl.to(dot, { opacity: 0.35, scale: 1, duration: 0.3, ease: "power2.in" }, track.beat(n) + 0.08);
+      }
+
+      // The callout rides the knob's real rect, read from the track at the
+      // timeline's own time: seek-safe, and exact under the reel's camera.
+      const callout = document.getElementById("callout");
+      const pad = 18;
+      const follow = { t: 0 };
+      const place = () => {
+        const r = track.rect("gain", follow.t);
+        if (!r) return;
+        gsap.set(callout, {
+          x: r.x - pad,
+          y: r.y - pad,
+          width: r.w + 2 * pad,
+          height: r.h + 2 * pad,
+        });
+      };
+      tl.fromTo(
+        follow,
+        { t: 0 },
+        { t: track.duration, duration: track.duration, ease: "none", onUpdate: place, immediateRender: true },
+        0,
+      );
+      // Shown from the camera punch-in (beat 1.5) until the reset (beat 5).
+      tl.fromTo(callout, { opacity: 0 }, { opacity: 1, duration: 0.25 }, track.beat(1.5));
+      tl.to(callout, { opacity: 0, duration: 0.25 }, track.beat(5));
+      window.__timelines["main"] = tl;
+    </script>
+  </body>
+</html>
