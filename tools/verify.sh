@@ -12,4 +12,7 @@ cargo clippy --workspace --all-features --all-targets --locked --offline -- -D w
 # surface, neither of which this gate can build for wasm. The wasm claim is
 # about the library crates; drop the --exclude once the preview grows a
 # `spawn_app` entry point and is served from a canvas.
-cargo check --workspace --all-features --exclude mui-preview --target wasm32-unknown-unknown --locked --offline
+# mui-gain-plugin is a CLAP/VST3 cdylib: truce-vst3 compiles a C++ shim and
+# truce-clap wants a native parent window, so it has no wasm build at all.
+# mui-truce itself stays in: its window/GPU half is cfg'd out on wasm32.
+cargo check --workspace --all-features --exclude mui-preview --exclude mui-gain-plugin --target wasm32-unknown-unknown --locked --offline
