@@ -27,6 +27,10 @@ png = "0.17"
 [[example]]
 name = "snapshot"
 required-features = ["cpu"]
+
+[[example]]
+name = "motion_strip"
+required-features = ["cpu"]
 # The scale contract is asserted where it is demonstrated, so the example and
 # the test cannot drift apart.
 test = true

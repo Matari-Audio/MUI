@@ -233,6 +233,19 @@ public function and a test behind it.
       derives every role from one colour, hue-swept in both modes against
       `UI_NONTEXT` and `AA_TEXT` instead of trusting a hex table.
 
+- [x] Motion beyond paint: `.animate_layout()` springs a node's solved
+      frame between the solve and the walk (a child that animates springs
+      relative to its animating ancestor, one that does not rides along),
+      `.appear(Appear::..)` enters from an offset or scale and fades out where
+      it stood, `.morph(name)` morphs the outline through
+      `mui_geometry::morph` when the name changes, `.identity(x)` carries
+      springs, glides, focus, scroll, selection and a drag capture across a
+      rename, `Keys`/`Ease` keyframes land motion on a time and `Ui::play`
+      runs them on the runtime clock. Paint channels have stable ids, and
+      opacity, stroke and shadow colour, shadow offset and spread, shell
+      colour and gradient stops spring. `examples/motion_strip.rs` renders
+      it as a filmstrip; the Motion scene is the proof.
+
 ## Missing
 
 - [ ] `Ui::set_text` swaps one line: a wrapped label re-shapes to a single
@@ -240,8 +253,6 @@ public function and a test behind it.
       layout. Re-breaking needs the measure pass it is avoiding.
 - [ ] A pin whose anchor is itself inside another pinned float reads that
       float's first-pass position; a dependency-ordered pin pass is the fix.
-- [ ] Spring interpolation of gradient *stops*: `Ui`'s channels only ever
-      sprang solid fills, and no scene needs the per-stop slots yet.
 - [ ] `mui-truce` in a real DAW: the editor passes pluginval's editor tests
       and clap-validator on Linux, but nobody has yet opened it by hand in
       Bitwig, Reaper or Ableton, on any OS. macOS and Windows are only
@@ -281,11 +292,12 @@ public function and a test behind it.
 - [ ] The first frame of a freshly-populated over-long `text_input` shows the
       head of the value: the widget has no inner width before its first
       layout. It catches up on the next frame.
-- [ ] Node identity: `Id` makes a name cheap to compose, but it is still the
-      name that keys springs, focus rings, scroll offsets and `mui-access`,
-      so *renaming* a node -- which is what reordering a rack does -- still
-      resets its state. The fix is an identity distinct from the name,
-      threaded through those four maps.
+- [ ] `mui-access` still keys nodes by name, so a screen reader sees a
+      reordered slot as a new node; `.identity()` carries the runtime's own
+      state across the rename but not the accessibility tree's.
+- [ ] A morph's hit shape and analytic shadow stay the target's for the
+      frames it lasts, and shells snap; exits fade on top of the paint list
+      rather than at their old depth.
 
 ## Order
 
