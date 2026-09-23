@@ -98,7 +98,7 @@ El tree  (row! / col! / stack! / grid! / fits!, Paints fills, presets merged
                             Fill / stroke / blurred rect / push_clip / pop_clip
                             / push_layer / pop_layer (blend mode + opacity),
                             and text as a hinted glyph run (a font blob is
-                            interned by Arc pointer, so Vello's hinted-outline
+                            interned by Font id, so Vello's hinted-outline
                             cache survives the frame). paint_cached
                             keeps each Painted's arc-to-cubic conversion in a
                             PathCache keyed on a fingerprint of the path

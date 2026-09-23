@@ -195,6 +195,8 @@ impl LayoutCache {
         };
         let walked = self.scan(n, 0, 0, &mut scan);
         (self.revisions, self.payload) = (scan.revisions, scan.payload);
+        // A failed walk returns before popping its path's revisions.
+        self.revisions.clear();
         walked?;
         self.stamps.retain(|_, s| s.seen == scan.pass);
         let mut a = self.arrangement.borrow_mut();

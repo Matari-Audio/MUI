@@ -673,7 +673,7 @@ impl Ui {
     }
     /// Where the caret sits when it is `byte` bytes into `s`: the inverse of
     /// [`Ui::hit`], and the advance of the whole string when `byte == s.len()`.
-    /// Measured, not shaped -- `mui_text::caret_x` reads advances only, where
+    /// Shaped, not drawn -- `mui_text::caret_x` reads advances only, where
     /// `text_run` would build every outline to throw them away.
     pub(crate) fn caret_x(&self, s: &str, size: f64, byte: usize) -> f64 {
         match self.fonts() {
