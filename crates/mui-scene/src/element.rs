@@ -168,8 +168,8 @@ impl PartialEq for StateStyle {
 }
 
 /// What a child does to its parent's outline instead of painting itself.
-/// `.weld` is the third of these, and the only one that reads every child at
-/// once, so it stays a flag on the parent's style.
+/// [`Paints::union`] is the third boolean, and the only one that reads every
+/// child at once, so it stays a flag on the parent's style.
 ///
 /// ```
 /// use mui_scene::prelude::*;
@@ -275,7 +275,8 @@ pub struct Element {
     /// [`Sugar::keep`](crate::Sugar::keep): the child shapes its parent's
     /// outline instead of painting itself.
     pub carve: Option<Carve>,
-    /// New material-aware welding. `None` leaves legacy/ordinary drawing alone.
+    /// Material weld: the plates' paint blended into one baked or GPU
+    /// image. `None` paints every child itself. See [`Styled::weld_with`].
     pub welding: Option<crate::Weld>,
     /// None inherits the host backend. An explicit reference path is never automatic.
     pub weld_backend: Option<crate::WeldBackend>,
@@ -405,7 +406,7 @@ impl IntoEl for String {
 /// ```
 /// use mui_scene::prelude::*;
 /// let bare = Style::default().fill(Raised).radius(12.);
-/// let mut node = leaf(80., 24.).preset(&bare);
+/// let mut node = leaf(80., 24.).preset(bare);
 /// assert_eq!(node.style_mut().radius, Radius::Px(12.));
 /// ```
 pub trait Paints: Sized {
@@ -558,27 +559,32 @@ pub trait Paints: Sized {
         self.style_mut().mask = f.into();
         self
     }
-    /// Paint the union of the children's frames as one filleted shape.
-    fn weld(mut self, f: impl Into<Fill>) -> Self {
+    /// Paint the union of the children's outlines as one filleted vector
+    /// shape. Only the outline is shared: each child keeps its own paint.
+    /// Shells, strokes, shadows, clips and `.inside(..)` follow the union.
+    /// To blend the children's paint across the seam instead, see
+    /// [`Styled::weld_with`].
+    fn union(mut self, f: impl Into<Fill>) -> Self {
         let s = self.style_mut();
-        s.weld = true;
+        s.union = true;
         s.fill = f.into();
         self
     }
-    /// Merge a prepared style *over* this one: `.preset(&card())`. Every
-    /// field the preset states wins; the rest of the chain survives.
+    /// Merge a prepared style *over* this one: `.preset(card())`. Every
+    /// field the preset states wins; the rest of the chain survives. Both
+    /// are moved, never copied: pass `card.clone()` to keep one.
     ///
     /// ```
     /// use mui_scene::prelude::*;
     /// # use mui_scene::Style;
     /// let card = Style { radius: Radius::Px(12.), ..Style::default() };
-    /// let mut el = leaf(80., 24.).fill(Primary).preset(&card);
+    /// let mut el = leaf(80., 24.).fill(Primary).preset(card);
     /// assert_eq!(el.style_mut().radius, Radius::Px(12.));
     /// assert_eq!(el.style_mut().fill, Fill::Role(Role::Primary));
     /// ```
-    fn preset(mut self, s: &Style) -> Self {
+    fn preset(mut self, s: Style) -> Self {
         let slot = self.style_mut();
-        *slot = slot.over(s);
+        *slot = std::mem::take(slot).over(s);
         self
     }
     /// Merge a prepared style *under* this one: a default the rest of the
@@ -588,12 +594,12 @@ pub trait Paints: Sized {
     /// use mui_scene::prelude::*;
     /// # use mui_scene::Style;
     /// let card = Style { fill: Role::Raised.into(), ..Style::default() };
-    /// let mut el = leaf(80., 24.).fill(Role::Danger).base(&card);
+    /// let mut el = leaf(80., 24.).fill(Role::Danger).base(card);
     /// assert_eq!(el.style_mut().fill, Fill::Role(Role::Danger));
     /// ```
-    fn base(mut self, s: &Style) -> Self {
+    fn base(mut self, s: Style) -> Self {
         let slot = self.style_mut();
-        *slot = s.over(slot);
+        *slot = s.over(std::mem::take(slot));
         self
     }
     /// Hand the node to `f`: a reusable run of builders, without a trait.
@@ -641,17 +647,17 @@ pub trait Styled: Paints {
     fn element_mut(&mut self) -> &mut Element;
 
     /// Transform width and color on this node's single, fixed inside border.
-    /// Supports ordinary, custom, and legacy welded contours on every renderer.
+    /// Supports ordinary, custom and [`Paints::union`] contours on every
+    /// renderer.
     fn border_ramp(mut self, ramp: crate::BorderRamp) -> Self {
         self.style_mut().stroke = None;
         self.element_mut().border_ramp = Some(ramp);
         self
     }
 
-    /// Weld immediate non-floating, non-excluded plate children. `Weld::all()`
-    /// blends fills and borders. This is not the legacy `.weld(fill)` helper.
-    /// Request the analytic GPU backend explicitly. Unsupported effects and
-    /// contours fail; this never silently bakes an image on the UI thread.
+    /// Material-weld immediate non-floating, non-excluded plate children on
+    /// the analytic GPU backend. Unsupported effects and contours fail; this
+    /// never silently bakes an image on the UI thread.
     fn gpu_weld(mut self, options: crate::Weld) -> Self {
         self.element_mut().welding = Some(options);
         self.element_mut().weld_backend = Some(crate::WeldBackend::AnalyticGpu);
@@ -663,6 +669,10 @@ pub trait Styled: Paints {
         self.element_mut().weld_backend = Some(crate::WeldBackend::Reference);
         self
     }
+    /// Material-weld immediate non-floating, non-excluded plate children:
+    /// their fills and borders blend into one image across the seams.
+    /// `Weld::all()` blends both. For a shared vector outline that leaves
+    /// each child's paint alone, see [`Paints::union`].
     fn weld_with(mut self, weld: crate::Weld) -> Self {
         self.element_mut().welding = Some(weld);
         self
@@ -682,7 +692,7 @@ pub trait Styled: Paints {
         e.welding = Some(e.welding.unwrap_or_default().morph(progress));
         self
     }
-    /// Remove new material welding. Legacy `.weld(fill)` is independent.
+    /// Remove the material weld. A [`Paints::union`] is independent.
     fn without_weld(mut self) -> Self {
         self.element_mut().welding = None;
         self
@@ -950,12 +960,12 @@ mod tests {
     /// and which side that is depends only on which method was called.
     #[test]
     fn preset_wins_per_field_and_base_loses_per_field() {
-        let mut over = leaf(10., 10.).fill(Primary).stroke(Ink).preset(&card());
+        let mut over = leaf(10., 10.).fill(Primary).stroke(Ink).preset(card());
         let s = over.style_mut();
         assert_eq!((s.fill.clone(), s.radius), (card().fill, card().radius));
         assert!(s.stroke.is_some(), "a field the preset left unset survives");
 
-        let mut under = leaf(10., 10.).fill(Primary).base(&card());
+        let mut under = leaf(10., 10.).fill(Primary).base(card());
         let s = under.style_mut();
         assert_eq!((s.fill.clone(), s.radius), (Primary.into(), card().radius));
     }

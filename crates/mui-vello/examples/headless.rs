@@ -33,7 +33,7 @@ fn spec() -> SceneSpec {
     let root = column([tab, panel])
         .align(Align::Start)
         .id("root")
-        .weld(Role::Surface);
+        .union(Role::Surface);
     SceneSpec::new(root)
         .theme(Theme {
             corners: Corners {

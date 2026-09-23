@@ -1,6 +1,5 @@
-//! Default-first welding macros. The existing `.weld(fill)` remains the exact
-//! legacy API; Rust methods cannot overload `.weld()` and `.weld(fill)` by arity.
-//! These macros are ordinary element constructors, not a second style language.
+//! Default-first material-weld macros: ordinary element constructors, not a
+//! second style language. A shared vector outline is `.union(fill)` instead.
 
 /// Default material weld, or `weld![Weld::shape(); a, b]` for an explicit policy.
 /// Use `.weld_with(..)` on a row/column/grid when it should arrange the sources.

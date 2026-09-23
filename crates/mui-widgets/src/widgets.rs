@@ -369,7 +369,7 @@ pub fn slider(
                 ])
                 .anchor(Align::Stretch, Align::Center)
                 .pill()
-                .preset(&look.face(Role::Field)),
+                .preset(look.face(Role::Field)),
                 row([spacer().grow(t), grip, spacer().grow(1.0 - t)])
                     .anchor(Align::Stretch, Align::Center),
             ])
@@ -426,7 +426,7 @@ pub fn knob(
             overlay([
                 leaf(size, size)
                     .pill()
-                    .preset(&look.face(Role::Raised))
+                    .preset(look.face(Role::Raised))
                     .shell(size / 24.0 + 1.0 * h, Role::Field)
                     .role(Kind::Slider { value, min, max })
                     .label(label.clone())
@@ -464,7 +464,7 @@ pub fn button(ui: &impl Host, id: &str, label: &str) -> (Control, bool) {
         row([text(label.clone()).fill(look.ink())])
             .pad_xy(look.px * 0.4, pad_y)
             .pill()
-            .preset(&look.style())
+            .preset(look.style())
             .on(State::Hover, look.hover())
             .animate()
             .role(Kind::Button)
@@ -502,7 +502,7 @@ pub fn toggle(ui: &impl Host, id: &str, on: &mut bool) -> Control {
         .size(w, h)
         .pad(h * 0.14)
         .pill()
-        .preset(&if on {
+        .preset(if on {
             look.style()
         } else {
             look.face(Role::Field)

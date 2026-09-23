@@ -78,7 +78,7 @@ impl PreviewScene for PillTab {
         column([tab, leaf(520.0, 230.0).id("panel")])
             .align(Align::Start)
             .id("pill")
-            .weld(Role::Surface)
+            .union(Role::Surface)
     }
 }
 
@@ -1025,7 +1025,7 @@ impl PreviewScene for Cells {
                 .id("hug-grid"),
             ])
             .gap(S)
-            .preset(&card())
+            .preset(card())
             .id("hug"),
         ])
         .gap(M)
@@ -1294,7 +1294,7 @@ pub fn editor() -> El {
     .gap(M)
     .pad(M)
     .full()
-    .preset(&panel())
+    .preset(panel())
     .clip()
     .id("editor")
 }
@@ -1339,7 +1339,7 @@ pub fn effects() -> El {
         .fill(Field)
         .elevation(Elevation::Raised)
         .id("key");
-    let pane = leaf(96.0, 96.0).preset(&glass()).id("glass");
+    let pane = leaf(96.0, 96.0).preset(glass()).id("glass");
     row![knob, glow, key, pane]
         .gap(L)
         .pad(L)

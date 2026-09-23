@@ -1013,7 +1013,7 @@ mod snapshot {
     #[test]
     fn a_welded_shadow_blurs() {
         let root = row([leaf(20., 20.).id("a"), leaf(20., 40.).id("b")])
-            .weld(Role::Surface)
+            .union(Role::Surface)
             .shadow(Shadow::soft(12.))
             .id("weld");
         let spec = SceneSpec::new(root).offered(Size::new(40., 40.));

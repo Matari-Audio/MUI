@@ -169,7 +169,7 @@ fn editor(ui: &mut Ui, app: &mut App, images: bool) -> El {
         row(pills).gap(S).pad(S),
         grid(6, cards).gap(S).pad(S),
     ]
-    .weld(Role::Surface);
+    .union(Role::Surface);
 
     // Three floats: a tooltip, a readout and a menu, painted over everything.
     stack![

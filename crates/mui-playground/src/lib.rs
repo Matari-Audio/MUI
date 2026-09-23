@@ -203,7 +203,7 @@ fn element(e: &Expr, depth: usize, nodes: &mut usize) -> syn::Result<El> {
                 "radius" => el.radius(number(&args[0])?),
                 "pill" => el.pill(),
                 "fill" => el.fill(paint(&args[0])?),
-                "weld" => el.weld(paint(&args[0])?),
+                "union" => el.union(paint(&args[0])?),
                 "stroke" => el.stroke(paint(&args[0])?),
                 "border" => el.border(paint(&args[0])?, number(&args[1])?),
                 "shell" => el.shell(number(&args[0])?, paint(&args[1])?),
