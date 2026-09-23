@@ -87,6 +87,19 @@ line at its combining mark.
   against the old ABI must drop that `vec4`; the weld always covers its whole
   texture.
 
+## mui-style
+
+- `Style.weld: bool` -> `Style.union: bool`
+- `Style::over(&self, &Style) -> Style` -> `Style::over(self, Style) -> Style`.
+  Both styles are moved, so the merge copies nothing; clone one to keep it.
+
+```rust
+// old
+let s = mine.over(&card);
+// new
+let s = mine.over(card); // or mine.clone().over(card.clone())
+```
+
 ## mui-scene
 
 - new: `mui_scene::Font` (the `mui_text::Font` re-export), also in `mui_scene::prelude` and `mui::prelude`
@@ -121,7 +134,28 @@ let spec = SceneSpec::new(root).font(Font::new(epaint_default_fonts::HACK_REGULA
   regions were capped at 4096/256 entries and flushed when full -> the cache
   now keeps exactly what the last successful resolve used and drops the rest
   at its end. `TextCache::len()` counts the shaped runs currently held.
-- Behaviour: a weld or carve whose outline includes a custom `.outline(..)`
+- `Paints::weld(fill)` -> `Paints::union(fill)`. The vector outline union
+  (children share one filleted outline, each keeps its own paint) is now named
+  beside `.cut` and `.keep`. The material weld (`weld!`, `.weld_with`,
+  `.gpu_weld`) keeps the word and is unchanged.
+
+  ```rust
+  // old
+  row![tab, body].weld(Surface)
+  // new
+  row![tab, body].union(Surface)
+  ```
+- `Paints::preset(self, &Style)` / `Paints::base(self, &Style)` ->
+  `preset(self, Style)` / `base(self, Style)`: `.preset(&card())` ->
+  `.preset(card())`. Pass `s.clone()` to keep a named style.
+- `SceneError::UnsupportedWeld` messages: `"custom/legacy-weld outline on the
+  group; ..."` -> `"custom or union outline on the group; ..."`, and
+  `"inside requires vector welding"` -> `"inside takes a vector union, not a
+  material weld"`. Only code matching on the text is affected.
+- `ResolvedScene`'s `PartialEq` and `Debug` no longer include the spec's
+  `font`/`fallback_fonts`: the scene stopped copying them, since each `Text`
+  carries its own faces.
+- Behaviour: a union or carve whose outline includes a custom `.outline(..)`
   is no longer cached, so changing the closure reshapes it. A text node's
   fill is never pushed as a `Layer::Fill` entry (it used to be pushed and
   removed again); its colour is the ink, as before.
@@ -217,6 +251,36 @@ adapter.update_if_active(|| tree_update(&scene, focus, ui.scale.unwrap_or(1.0)))
 
 ## mui-widgets
 
+The crate is folded into `mui` as `mui::widgets` (`mui::presets` and the
+`mui::prelude` names still resolve). The `Host` trait is gone: every widget
+takes `&mut Ui` and returns its element with what happened.
+
+```rust
+// old
+let knob_el = knob(&mut ui, "cut", "Cutoff", &mut v, 0.0..=1.0);
+let field = text_input(&mut ui, "name", &mut name);
+// new
+let (knob_el, changed) = knob(&mut ui, "cut", "Cutoff", &mut v, 0.0..=1.0);
+let (field, edited) = text_input(&mut ui, "name", &mut name);
+```
+
+- crate `mui-widgets` / `mui_widgets::*` -> `mui::widgets::*`
+- `mui_widgets::Host` / `mui::prelude::Host` -> removed; widgets take
+  `&mut mui::Ui`. `Ui::sel`, `set_sel`, `pasted`, `double_click`, `hit`,
+  `caret_x` and `blink` were reachable only through `Host` and are now
+  crate-private.
+- `button(&impl Host, id, label) -> (Control, bool)` ->
+  `button(&mut Ui, id, label) -> (Control, bool /* clicked */)`
+- `toggle(&impl Host, id, &mut bool) -> Control` ->
+  `toggle(&mut Ui, id, &mut bool) -> (Control, bool /* flipped */)`
+- `slider(&mut impl Host, ..) -> Control` / `knob(&mut impl Host, ..) -> Control`
+  -> `slider(&mut Ui, ..)` / `knob(&mut Ui, ..) -> (Control, bool /* changed */)`.
+  A NaN value handed in is not a change.
+- `text_input(&mut impl Host, id, &mut String) -> El` ->
+  `text_input(&mut Ui, id, &mut String) -> (El, bool /* changed */)`
+- `curve(&impl Host, ..)` / `bins(&impl Host, ..)` -> `curve(&mut Ui, ..)` /
+  `bins(&mut Ui, ..)`, same return types
+- `bins_hover(&impl Host, ..)` -> `bins_hover(&Ui, ..)`
 - `slider`: the id, `Kind::Slider` role, label and focus moved from the thumb
   to the whole lane. The surface named by the slider id is now the track, and
   the thumb is unnamed. A press on the track jumps the value there; drag
@@ -224,7 +288,7 @@ adapter.update_if_active(|| tree_update(&scene, focus, ui.scale.unwrap_or(1.0)))
 - Behaviour: a focused `slider` or `knob` steps on the arrow keys (a
   hundredth of the range, a tenth of that with Shift), Page Up/Down (ten
   steps) and Home/End.
-- new: `mui_widgets::step(&RangeInclusive<f64>) -> f64`, that step
+- new: `mui::widgets::step(&RangeInclusive<f64>) -> f64`, that step
 
 ## mui
 
@@ -249,12 +313,18 @@ adapter.update_if_active(|| tree_update(&scene, focus, ui.scale.unwrap_or(1.0)))
 - Behaviour: Enter/Space on a focused button or toggle, and a stepping key on
   a focused slider, are delivered as an `Edit::Begin`/`End` pair.
 
+## mui-playground
+
+- DSL method `weld` -> `union`: `.weld(Surface)` -> `.union(Surface)`, as in
+  the Rust API
+
 ## mui-truce
 
 - edition 2024 -> 2021, the workspace edition. The public API is unchanged.
 
 ## Removed crates and packages
 
+- `mui-widgets` -> folded into `mui::widgets` (see above)
 - `mui-egui` -> deleted, no replacement
 - `mui-tessellate` -> deleted, no replacement. Fill a glyph or shape path with
   `mui-vello`, or flatten it with `Path::flatten`.

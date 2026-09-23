@@ -257,7 +257,7 @@ mod fixtures {
     use crate::prelude::*;
     use crate::Corners;
 
-    /// The canonical weld: a tab welded to its panel, with a pill shell inside
+    /// The canonical union: a tab welded to its panel, with a pill shell inside
     /// the tab.
     pub fn welded_tab() -> SceneSpec {
         let tab = column([leaf(28., 28.), leaf(28., 28.), leaf(28., 28.)])
