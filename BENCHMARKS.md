@@ -3,7 +3,8 @@
 One scene, three backends, three cases. The question is narrow: MUI renders
 through `vello_hybrid`, and classic `vello` is the obvious alternative. This
 file is the number that answers "why". A second question rides along: what the
-`PathCache` is worth, measured as two extra rows per sparse-strip backend.
+`PathCache` is worth, measured as two extra rows per sparse-strip backend
+(it has since been deleted: about 0.08 ms a frame was not worth its API).
 
 ## Machine
 

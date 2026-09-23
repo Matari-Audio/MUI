@@ -337,20 +337,23 @@ image dependency. `Path::from_svg_data` turns an icon's `d` attribute into a
 
 `vello_cpu` paints the pixmap itself. `vello_hybrid` wants an atlas id and
 panics on a pixmap, so `mui_vello::Gpu` carries an optional `Atlas` -- the
-renderer, device, queue and a host-owned `ImageIds` -- and uploads each image
-buffer once through `Renderer::upload_image`, then paints by id. A `Gpu` built
-without an `Atlas` flattens an image fill to the mid grey `Paint::solid`
-already uses for contrast rather than crashing, and so does an image no
-atlas tile could hold. Both caches key on the buffer's `Arc` and sweep the
-entries the app has dropped on the next upload, so a panel handing over a
-fresh frame buffer every frame does not grow either one.
+renderer, device and queue -- and uploads each image buffer once through
+`Renderer::upload_image`, then paints by id. A `Gpu` built without an `Atlas`
+flattens an image fill to the mid grey `Paint::solid` already uses for
+contrast rather than crashing, and so does an image the atlas has no room
+for. What was uploaded (or premultiplied, on the CPU) lives in a
+`mui_vello::Cache` owned beside the renderer. It holds only a `Weak` to each
+buffer and sweeps the entries the app has dropped on the next image lookup,
+so a panel handing over a fresh frame buffer every frame does not grow it.
 
 ## Accessibility
 
 `mui-access` turns a `ResolvedScene` into an `accesskit::TreeUpdate`:
-`tree_update(&scene, focus)`. A node says what it is in the tree itself --
+`tree_update(&scene, focus, scale)`, where `scale` is the window's device
+pixels per scene unit. A node says what it is in the tree itself --
 `.role(Kind::Button).label("OK")` -- and the walk carries that onto the
-surface; a node with no role reports as a group labelled by its id. The
+surface; a node with no role reports as a group, and a node with no label
+has no name (its id is not read aloud). The
 widgets in `mui` already describe themselves, so the preview just hands the
 update to its `accesskit_winit::Adapter` after each frame.
 

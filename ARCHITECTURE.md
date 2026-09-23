@@ -93,17 +93,16 @@ El tree  (row! / col! / stack! / grid! / fits!, Paints fills, presets merged
    |                        host's adapter; a disabled one says so and offers
    |                        no Focus action
    |
-   v  mui-vello paint       Canvas: Gpu { scene, resources } over vello_hybrid,
-                            Cpu { ctx, resources } over vello_cpu.
+   v  mui-vello paint       Canvas: Gpu { scene, resources, cache } over
+                            vello_hybrid, Cpu { ctx, resources, cache } over
+                            vello_cpu.
                             Fill / stroke / blurred rect / push_clip / pop_clip
                             / push_layer / pop_layer (blend mode + opacity),
                             and text as a hinted glyph run (a font blob is
-                            interned by Font id, so Vello's hinted-outline
-                            cache survives the frame). paint_cached
-                            keeps each Painted's arc-to-cubic conversion in a
-                            PathCache keyed on a fingerprint of the path
-                            itself, so a still frame re-encodes without
-                            reconverting anything.
+                            interned by Font id in the renderer's Cache, so
+                            Vello's hinted-outline cache survives the frame).
+                            Paths convert arc-to-cubic every frame; caching
+                            that saved ~0.08 ms and was deleted.
 ```
 
 Every outline, weld rect and clip comes from one `bounds(frame, scale)`, and
@@ -175,7 +174,7 @@ mui-preview          window, wgpu surface, the gallery as one tree
    v
 mui                  Ui runtime, Frame, Edit, prelude, re-exports
    +--> mui-widgets  controls and presets; reads state through `Host`
-   +--> mui-vello    Canvas, paint, PathCache      +--> mui-access
+   +--> mui-vello    Canvas, paint, Cache          +--> mui-access
    +--> mui-input    hit testing, gestures (over mui-vello's paths)
    |
    v

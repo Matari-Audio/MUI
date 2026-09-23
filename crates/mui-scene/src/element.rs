@@ -779,8 +779,9 @@ pub trait Styled: Paints {
     /// so it edits rather than replaces, and a later `.fill(..)` is still
     /// what the state derives from.
     ///
-    /// Only a node with an id has a state to read; the runtime applies these
-    /// while building the frame. Pair with [`Styled::animate`] to cross
+    /// The runtime applies these while building the frame. Focus and
+    /// Disabled reach any node; Hover and Press only a node with an id,
+    /// since an unnamed surface is decoration and never hit. Pair with [`Styled::animate`] to cross
     /// rather than cut.
     ///
     /// ```
@@ -843,7 +844,8 @@ pub trait Styled: Paints {
         self
     }
     /// Spring this node's paint toward whatever it is next declared to be,
-    /// instead of cutting. Needs an id: the runtime keys the springs by it.
+    /// instead of cutting. The runtime keys the springs by the node's id, or
+    /// by its tree path when it has none.
     ///
     /// Paint only -- fill colour, stroke width, `Px` radius, text size,
     /// shadow blur, `Px` shell depths. Sizes, gaps, padding and layout

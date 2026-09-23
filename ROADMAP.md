@@ -59,11 +59,12 @@ public function and a test behind it.
       `Atlas` and paints by id.
 - [x] AccessKit: `mui-access` turns a `ResolvedScene` into a `TreeUpdate`,
       and the preview feeds it to an `accesskit_winit::Adapter`.
-- [x] `mui_vello::PathCache` / `paint_cached`: a still frame re-encodes
-      without reconverting a path.
-- [x] Image eviction: both image caches key on the buffer's `Arc` and drop
-      the entries the app has let go of, `Renderer::destroy_image` included,
-      and an image too big for an atlas tile falls back to a solid.
+- [x] `mui_vello::PathCache` / `paint_cached`: measured at ~0.08 ms a frame
+      on the bench editor, then deleted as not worth its API.
+- [x] Image eviction: the renderer-owned `mui_vello::Cache` holds a `Weak`
+      per buffer and drops the entries the app has let go of,
+      `Renderer::destroy_image` included, and an image the atlas has no room
+      for falls back to a solid.
 - [x] Preview: an F12 inspector, `MUI_PREVIEW_THEME` hot reload, a frame-cost
       title bar, and a scene per feature above.
 - [x] Responsive without breakpoints: `clamp(min, pct, max)` lengths,
@@ -243,10 +244,10 @@ public function and a test behind it.
       metadata, automation and the state document, but nothing yet binds a
       truce parameter to a slider or knob, or routes `Edit::Begin`/`End` to
       host automation gestures.
-- [ ] Keyboard value stepping: sliders and knobs take no arrow keys yet;
-      only `text_input` and `bins` read navigation keys.
-- [ ] The text cache flushes at 4096 entries; it has no byte budget or LRU
-      eviction, and `mui-vello`'s process-global font table never evicts.
+- [x] Keyboard value stepping: a focused slider or knob steps on the arrow,
+      Page and Home/End keys, bracketed as one edit.
+- [ ] The text cache keeps exactly what the last resolve used, with no byte
+      budget; `mui_vello::Cache` never evicts a font while its renderer lives.
 - [ ] No fuzzing or property campaigns over layout, welding or text input.
 - [ ] Kurv rewritten on MUI: the first real plugin editor on this stack, and
       the only honest test of whether the DSL survives a product.

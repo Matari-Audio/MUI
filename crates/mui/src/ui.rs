@@ -406,6 +406,16 @@ impl Ui {
                 let Some(&Kind::Slider { value, min, max }) = role else {
                     return false;
                 };
+                // Two steps in one frame are two steps: step from the value
+                // already queued, not twice from the presented one.
+                let value = self
+                    .actions
+                    .iter()
+                    .find_map(|a| match a {
+                        SemanticAction::SetValue { id: old, value } if old == &id => Some(*value),
+                        _ => None,
+                    })
+                    .unwrap_or(value);
                 let step = mui_widgets::step(&(min..=max)) * sign;
                 self.request_action(SemanticAction::SetValue {
                     id,
@@ -2929,8 +2939,10 @@ mod tests {
         let root = mui_widgets::slider(&mut ui, "s", "S", &mut v, 0.0..=1.0).el();
         ui.frame(root, None, Input::default(), 0.016).unwrap();
         assert!(ui.request_action(SemanticAction::increment("s")));
+        assert!(ui.request_action(SemanticAction::increment("s")));
+        assert!(ui.request_action(SemanticAction::decrement("s")));
         mui_widgets::slider(&mut ui, "s", "S", &mut v, 0.0..=1.0);
-        assert!((v - 0.51).abs() < 1e-12, "{v}");
+        assert!((v - 0.51).abs() < 1e-12, "+0.01 +0.01 -0.01: {v}");
         let f = ui
             .frame(leaf(1., 1.), None, Input::default(), 0.016)
             .unwrap();
