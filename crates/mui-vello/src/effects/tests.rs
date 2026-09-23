@@ -120,3 +120,25 @@ fn naga_validates_crisp_boundary_uniform_stride() {
     };
     assert_eq!(*stride, 48);
 }
+
+/// A path converts once; asked again unchanged it is not converted again,
+/// and a changed path is. A failed conversion leaves no stale pair behind.
+#[test]
+fn an_unchanged_path_is_not_converted_again() {
+    use mui_geometry::Path;
+    let mut c = super::Converted::default();
+    c.resize(1);
+    let pill = Path::capsule(20., 60.).unwrap();
+    let first = c.get(0, &pill).unwrap().clone();
+    // Poison the kept conversion: an unchanged path must come back as is.
+    c.0[0].1.truncate(0);
+    assert!(c.get(0, &pill).unwrap().elements().is_empty());
+    let wider = Path::capsule(20., 80.).unwrap();
+    assert_ne!(c.get(0, &wider).unwrap(), &first);
+    let mut bad = pill.clone();
+    if let mui_geometry::PathCommand::ArcTo(arc) = &mut bad.commands[1] {
+        arc.radius *= 2.;
+    }
+    assert!(c.get(0, &bad).is_err());
+    assert_eq!(c.get(0, &pill).unwrap(), &first);
+}

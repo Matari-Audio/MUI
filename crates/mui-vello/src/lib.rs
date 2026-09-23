@@ -190,11 +190,11 @@ pub struct Cache {
     /// Vello's hinted-glyph caches key on the blob id, and `Blob::new` mints a
     /// fresh one per call, so building the font per run would throw those
     /// caches away every frame.
-    /// With the frame each was last drawn in: `Font` exposes no handle a
-    /// `Weak` could watch, so a font goes once it sat unused for
+    /// With the frames each was first and last drawn in: `Font` exposes no
+    /// handle a `Weak` could watch, so a font goes once it sat unused for
     /// [`FONT_FRAMES`] frames -- a host that makes a fresh `Font` per frame
     /// no longer grows this without bound.
-    fonts: Vec<(u64, FontData, u64)>,
+    fonts: Vec<(u64, FontData, Frames)>,
     /// Paint walks so far; see [`Canvas::begin_frame`].
     frame: u64,
     /// Keyed by a `Weak`, so no entry keeps the app's buffer alive. The one
@@ -210,6 +210,12 @@ pub struct Cache {
     /// `atlas_config` is the one the renderer was built with.
     atlas: Option<ImageCache>,
     atlas_config: AtlasConfig,
+}
+
+#[derive(Clone, Copy)]
+struct Frames {
+    born: u64,
+    used: u64,
 }
 
 /// How long an unused font keeps its [`FontData`], and with it Vello's
@@ -240,20 +246,30 @@ impl Cache {
     fn tick(&mut self) {
         self.frame += 1;
         let now = self.frame;
-        self.fonts.retain(|(_, _, used)| now - used <= FONT_FRAMES);
+        self.fonts.retain(|(_, _, f)| now - f.used <= FONT_FRAMES);
     }
 
-    fn font(&mut self, font: &mui_scene::Font) -> FontData {
+    /// The font's `FontData`, and whether it was already drawn in an earlier
+    /// frame: a glyph atlas only pays for itself from the second frame on,
+    /// and a one-shot render (a snapshot, a thumbnail) never gets there.
+    fn font(&mut self, font: &mui_scene::Font) -> (FontData, bool) {
         // A `Font` id is never reused, so an entry cannot answer for another font.
         let key = font.id();
         let now = self.frame;
-        if let Some((_, f, used)) = self.fonts.iter_mut().find(|(k, ..)| *k == key) {
-            *used = now;
-            return f.clone();
+        if let Some((_, f, frames)) = self.fonts.iter_mut().find(|(k, ..)| *k == key) {
+            frames.used = now;
+            return (f.clone(), frames.born < now);
         }
         let f = FontData::new(Blob::new(Arc::new(font.clone())), 0);
-        self.fonts.push((key, f.clone(), now));
-        f
+        self.fonts.push((
+            key,
+            f.clone(),
+            Frames {
+                born: now,
+                used: now,
+            },
+        ));
+        (f, false)
     }
 
     fn find(&self, rgba: &Arc<[u8]>) -> Option<&Stored> {
@@ -362,7 +378,7 @@ macro_rules! wrapper {
                     start = end;
                     continue;
                 };
-                let font = self.cache.font(face);
+                let (font, warm) = self.cache.font(face);
                 let coords = text.font_coords.get(font_index).map_or_else(
                     || {
                         if font_index == 0 {
@@ -383,7 +399,7 @@ macro_rules! wrapper {
                     .normalized_coords(coords)
                     // Rasterise each glyph once and reuse the bitmap: strip
                     // generation per glyph was most of a frame's encode.
-                    .atlas_cache($atlas)
+                    .atlas_cache($atlas && warm)
                     .fill_glyphs(run(text.origin, &text.glyphs[start..end]));
                 start = end;
             }
@@ -840,16 +856,17 @@ mod seam {
         );
         let mut cache = Cache::default();
         cache.tick();
-        let first = cache.font(&kept);
+        let (first, warm) = cache.font(&kept);
+        assert!(!warm && !cache.font(&kept).1, "warm in its first frame");
         cache.font(&dropped);
         for _ in 0..FONT_FRAMES {
             cache.tick();
-            cache.font(&kept);
+            assert!(cache.font(&kept).1, "cold after its first frame");
         }
         assert_eq!(cache.fonts.len(), 2, "aged out early");
         cache.tick();
         assert_eq!(cache.fonts.len(), 1, "the idle font is still held");
-        assert_eq!(cache.font(&kept).data.id(), first.data.id());
+        assert_eq!(cache.font(&kept).0.data.id(), first.data.id());
     }
 
     /// A full atlas is an error from `reserve`, not the `unwrap` inside

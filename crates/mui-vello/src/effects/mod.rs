@@ -53,5 +53,33 @@ impl From<mui_geometry::Error> for Error {
     }
 }
 
+/// Each paint entry's path as a `BezPath`, kept across frames beside the
+/// path it came from: an entry whose path did not change is not converted
+/// again. Index `i` is paint entry `i`.
+#[derive(Default)]
+pub(crate) struct Converted(Vec<(mui_geometry::Path, crate::kurbo::BezPath)>);
+impl Converted {
+    pub fn resize(&mut self, len: usize) {
+        self.0.resize_with(len, Default::default);
+    }
+    pub fn get(
+        &mut self,
+        i: usize,
+        path: &mui_geometry::Path,
+    ) -> Result<&crate::kurbo::BezPath, Error> {
+        let (source, bez) = &mut self.0[i];
+        if source != path {
+            if let Err(e) = crate::bez_path_into(path, crate::ARC_TOLERANCE, bez) {
+                // Leave a pair that still matches: the empty path, empty.
+                *source = mui_geometry::Path::default();
+                bez.truncate(0);
+                return Err(e.into());
+            }
+            source.clone_from(path);
+        }
+        Ok(bez)
+    }
+}
+
 mod timing;
 pub use timing::{GpuTimer, GpuTiming, TimingTicket};

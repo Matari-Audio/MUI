@@ -1,6 +1,6 @@
-use super::{Budget, EffectStats, Error, WeldTextures};
+use super::{Budget, Converted, EffectStats, Error, WeldTextures};
 use crate::{
-    kurbo::{Affine, BezPath, Rect},
+    kurbo::{Affine, Rect},
     Cache, Canvas as _, Gpu,
 };
 use mui_scene::{ExternalWeld, Layer, Painted, ResolvedScene};
@@ -22,6 +22,7 @@ pub struct HybridEffects {
     effects: WeldTextures,
     size: [u32; 2],
     retained: Vec<Painted>,
+    paths: Converted,
     transform: Option<Affine>,
     mapping: u64,
     valid: bool,
@@ -83,6 +84,7 @@ impl HybridEffects {
             effects,
             size,
             retained: Vec::new(),
+            paths: Converted::default(),
             transform: None,
             mapping: 0,
             valid: false,
@@ -146,7 +148,8 @@ impl HybridEffects {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("MUI effects + Vello"),
             });
-        let result = (|| -> Result<(), Error> {
+        // `Ok(false)`: nothing was recorded, so there is nothing to submit.
+        let result = (|| -> Result<bool, Error> {
             for (key, e) in resolved
                 .external_welds()
                 .filter(|(_, e)| visible(e, xf, size))
@@ -176,8 +179,8 @@ impl HybridEffects {
                     }),
                 };
                 canvas.set_transform(xf);
-                let mut bez = BezPath::new();
-                for p in &resolved.paint {
+                self.paths.resize(resolved.paint.len());
+                for (i, p) in resolved.paint.iter().enumerate() {
                     if p.layer == Layer::External {
                         let e = resolved
                             .external_weld(&p.key)
@@ -207,8 +210,7 @@ impl HybridEffects {
                             }],
                         );
                     } else if !crate::layered(&mut canvas, p) {
-                        crate::bez_path_into(&p.path, crate::ARC_TOLERANCE, &mut bez)?;
-                        crate::one(&mut canvas, p, &bez)?;
+                        crate::one(&mut canvas, p, self.paths.get(i, &p.path)?)?;
                     }
                 }
                 if let Some(draw) = overlay {
@@ -222,7 +224,7 @@ impl HybridEffects {
                 stats.encoded_scenes += 1;
             }
             if stats.effect_draws == 0 && self.presented.as_ref() == Some(target) {
-                return Ok(());
+                return Ok(false);
             }
             self.renderer
                 .render(
@@ -240,13 +242,15 @@ impl HybridEffects {
                 )
                 .map_err(|e| Error::Render(e.to_string()))?;
             stats.renders += 1;
-            Ok(())
+            Ok(true)
         })();
         match result {
-            Ok(()) => {
+            Ok(recorded) => {
                 // Accepted submission is the cache commit boundary, not an
                 // encode call and not a synchronous GPU-completion wait.
-                self.queue.submit([encoder.finish()]);
+                if recorded {
+                    self.queue.submit([encoder.finish()]);
+                }
                 self.effects.commit_submitted(&mut stats);
                 if self.valid {
                     self.presented = Some(target.clone());
