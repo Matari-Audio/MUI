@@ -1452,6 +1452,10 @@ fn state_policy(root: &El, id: &str) -> [bool; 2] {
 /// `off` is the enclosing subtree's disabled flag, `false` at the root: a card
 /// that switched itself off greys the controls inside it too, which is the same
 /// rule the hit gate uses.
+///
+/// ponytail: an unnamed node gets Focus and Disabled by its tree path, but
+/// never Hover or Press -- unnamed surfaces are decoration, kept out of the
+/// hit map. Admit the ones that declare those states when that matters.
 fn declared_states(n: &mut El, path: &mut String, is: &dyn Fn(&str, State) -> bool, off: bool) {
     let off = off || n.payload().disabled;
     if !n.payload().states.is_empty() {
