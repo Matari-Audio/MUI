@@ -137,7 +137,7 @@ DISPLAY=:89 MESA_VK_DEVICE_SELECT='1002:73ff!' ZED_DEVICE_ID=0x73ff \
 comparison, repeat `gpui`, `vello-area-present` and `vello-present` with 300 samples
 at scales 1 and 2 and the scale-1 tile-side-8 stress case, three separate process
 runs each, rotating backend order. All commands and argument meanings are documented
-in the [lab README](../../../experiments/render-lab/README.md).
+in the lab README (`experiments/render-lab`, removed in `92033ae`; recover it from git history).
 
 **Remaining decision gates:** text rasterization, real plugin-host lifecycle and
 input, full UI invalidation, memory/power, other platforms, and any combined-runtime

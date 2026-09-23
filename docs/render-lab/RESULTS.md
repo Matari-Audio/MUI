@@ -21,7 +21,7 @@ predict Metal, discrete/integrated GPU performance, power consumption or DAW res
 
 ## What was tested
 
-The [reproducible harness](../../experiments/render-lab/README.md) pins Zed/GPUI revision
+The harness (`experiments/render-lab`, removed in `92033ae`; recover it from git history) pinned Zed/GPUI revision
 `7960b2a7c9568e90fbe0727332149e5b2a5fd57a`, Vello 0.10.0 and wgpu 29.0.4. Release builds ran
 on Mesa 25.2.8 / LLVM 20.1.2 with four llvmpipe worker threads, under Xvfb/X11.
 
@@ -99,7 +99,7 @@ See [GPUI](gpui-1.json), [Vello area](vello-area-present-1.json),
   captured image, around 4.33–4.34 ms median on llvmpipe. Upload/readback were excluded.
   This demonstrates shared shader capability, not native Apple Liquid Glass, a live backdrop
   compositor or an integrated GPUI custom element. [GPUI input](glass-gpui.png),
-  [Vello input](glass-vello.png), [shader](../../experiments/render-lab/src/glass.wgsl).
+  [Vello input](glass-vello.png); the shader was `experiments/render-lab/src/glass.wgsl` (removed in `92033ae`).
 
 ## Decision and remaining gates
 

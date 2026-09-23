@@ -13,7 +13,7 @@ comment. The selected surface uses `Bgra8Unorm`/`Rgba8Unorm`, not an sRGB attach
 The old gradient preparation incorrectly treated the stops as linear, encoded
 them, then decoded the interpolated result. Solid colors used a different path.
 
-[The guarded patch](../../../experiments/render-lab/tools/fix_gpui_gradients.py)
+The guarded patch (`experiments/render-lab/tools/fix_gpui_gradients.py`, removed in `92033ae`)
 keeps sRGB stops/output encoded; Oklab interpolation explicitly decodes before
 conversion to Oklab and encodes after conversion back. This agrees with the
 pinned Metal backend's gradient convention. Solid colors, blend state, sampling,
@@ -31,7 +31,7 @@ surface prevents the desktop compositor resizing the benchmark window.
 | 1.5× mean channel error / 255 | not repeated | 0.258 |
 | 2× mean channel error / 255 | not repeated | 0.253 |
 
-The [GPU regression check](../../../experiments/render-lab/tools/check_gradients.py)
+The GPU regression check (`experiments/render-lab/tools/check_gradients.py`, removed in `92033ae`)
 validates colored sRGB and Oklab ramps on both native quads and paths against
 independent analytic interpolation. All six GPUI captures (default/tight
 at 1×/1.5×/2×) pass a maximum error of 2/255. It also records circle coverage.
@@ -52,7 +52,7 @@ identical before/after**, and the after-component checks use its own exact fixtu
 Cairo image metrics exclude Oklab, which its SVG renderer does not implement;
 the analytic check covers those ramps separately.
 
-[Before standard](before/standard/gpui-1.png) ·
+[Before standard](../rx6600-2026-09-13/gpui-1.png) ·
 [After standard](after/standard/gpui-1.png) ·
 [After components](after/components/gpui-1.png) ·
 [Component metrics](after/components/gradient-check.json)
