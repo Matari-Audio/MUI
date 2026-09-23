@@ -405,14 +405,22 @@ impl Canvas for Gpu<'_> {
             device,
             queue,
         } = self.atlas.as_mut()?;
-        // One encoder for the frees and the upload, submitted now: the queue
-        // keeps it ahead of the frame that paints with the id.
+        // One encoder for the upload, submitted now: the queue keeps it
+        // ahead of the frame that paints with the id.
         let mut enc = None;
         let mut encoder = || device.create_command_encoder(&Default::default());
         let resources = &mut *self.resources;
+        let mut frees = None;
         self.cache.sweep(|id| {
-            renderer.destroy_image(resources, enc.get_or_insert_with(&mut encoder), id)
+            renderer.destroy_image(resources, frees.get_or_insert_with(&mut encoder), id)
         });
+        // The frees clear their slots with a render pass, but a pixmap upload
+        // is a `queue.write_texture`, which runs ahead of every command buffer
+        // of its submission: an image taking a freed slot in the same encoder
+        // would be cleared right after it landed. Submit the frees first.
+        if let Some(frees) = frees {
+            queue.submit([frees.finish()]);
+        }
         let found = match self.cache.find(&img.rgba) {
             Some(&Stored::Atlas { id, clear }) => Some((id, clear)),
             _ => size(img).and_then(|(w, h)| {
