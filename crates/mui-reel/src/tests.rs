@@ -234,3 +234,36 @@ fn motion_blur_averages_subframes_without_changing_the_gesture() {
         .flatten()
         .any(|e| matches!(e, ReelEvent::Edit { begin: false, .. })));
 }
+
+#[test]
+fn without_ffmpeg_the_folder_is_png_sequences_and_says_so() {
+    let dir = std::env::temp_dir().join(format!("mui-reel-png-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut m = Model {
+        gain: 0.5,
+        on: false,
+    };
+    let mut silence = |_: &mut Model, _: &[ReelEvent], _: &mut [[f32; 2]]| {};
+    let manifest = reel()
+        .encode(false)
+        .render(
+            &Script::new().layers(&["gain"]).end(0.1),
+            &dir,
+            &mut m,
+            build,
+            Some(&mut silence),
+        )
+        .unwrap();
+    assert!(manifest["encoder"].as_str().unwrap().starts_with("none"));
+    for f in [
+        "frames/00002.png",
+        "layers/gain/00002.png",
+        "layers/rest/00000.png",
+        "audio.wav",
+        "track.js",
+    ] {
+        assert!(dir.join(f).exists(), "{f} missing");
+    }
+    assert!(!dir.join("frames/00003.png").exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}
