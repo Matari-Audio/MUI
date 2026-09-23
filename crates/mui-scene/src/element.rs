@@ -9,9 +9,9 @@
 //!     .shell(4.0, Role::Field);
 //! assert_eq!(card.children().len(), 2);
 //! ```
-use crate::{Cursor, Elevation, Fill, Mix, Radius, Shadow, Stroke, Style};
+use crate::{Cursor, Elevation, Fill, Fit, Image, Mix, Radius, Shadow, Stroke, Style};
 use mui_geometry::CornerStyle;
-use mui_geometry::Path;
+use mui_geometry::{Path, Point};
 use mui_layout::{Node, Size, Spacing};
 use mui_motion::Spring;
 use mui_text::{Axes, Weight};
@@ -49,6 +49,18 @@ impl Draw {
             width,
             tag: None,
         }
+    }
+    /// `image` stretched over the rectangle at `(x, y)`, `w` by `h`: a logo,
+    /// a screenshot, or pixels read back from another GPU pipeline. Built at
+    /// `w * scale` by `h * scale` pixels it lands one image pixel per device
+    /// pixel. The GPU renderer keeps one atlas upload per `rgba` buffer, so
+    /// hand it the same `Arc` while the pixels stay the same.
+    pub fn image(x: f64, y: f64, w: f64, h: f64, image: Arc<Image>) -> Self {
+        let corners = [(x, y), (x + w, y), (x + w, y + h), (x, y + h)];
+        Self::fill(
+            Path::polyline(corners.map(|(x, y)| Point::new(x, y)), true),
+            Fill::Image(image, Fit::Fill),
+        )
     }
     /// Geometry that responds but paints nothing: the fat target around a
     /// hairline, or a knot's grab radius.
