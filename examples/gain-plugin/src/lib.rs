@@ -68,10 +68,12 @@ impl PurePluginLogic for Gain {
                 el
             });
             let level = f64::from(bridge.meter(bridge.params().level.id()));
-            let meter = row([leaf(200.0 * level.clamp(0.0, 1.0), 8.0).pill().fill(Primary)])
-                .size(200.0, 8.0)
+            let meter = row([leaf(200.0 * level.clamp(0.0, 1.0), 8.0)
                 .pill()
-                .fill(Field);
+                .fill(Primary)])
+            .size(200.0, 8.0)
+            .pill()
+            .fill(Field);
             col![
                 row![
                     gain,
