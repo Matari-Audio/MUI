@@ -36,3 +36,12 @@ fn padding_gap_and_border_morph_together_and_settle() {
     assert!((end.0 - 30.).abs() < 0.05);
     assert!((end.1 - 10.).abs() < 0.05);
 }
+
+/// Both globs together, as an app writes them: `step` is the spacing helper,
+/// not an ambiguous name.
+#[test]
+fn the_prelude_and_widgets_globs_do_not_collide() {
+    #[allow(unused_imports)]
+    use mui::widgets::*;
+    assert_eq!(step(2.).resolve(Default::default()), 8.);
+}

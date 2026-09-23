@@ -11,6 +11,8 @@ use winit::{
     keyboard::{Key as WinitKey, NamedKey},
     window::{Window, WindowId},
 };
+#[path = "../src/device.rs"]
+mod device;
 // Shared gallery host has optional debug-overlay methods unused by this lab.
 #[allow(dead_code)]
 #[path = "../src/host_gpu.rs"]
@@ -37,7 +39,7 @@ impl Lab {
             gpu: None,
             ui: Ui::new(Theme::DEFAULT)
                 .gpu_welding()
-                .font(epaint_default_fonts::HACK_REGULAR.to_vec()),
+                .font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap()),
             dirty: true,
             visible: true,
             morph: 1.,

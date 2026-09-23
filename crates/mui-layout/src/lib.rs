@@ -171,7 +171,7 @@ impl std::fmt::Display for Error {
 }
 impl std::error::Error for Error {}
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Limits {
     pub nodes: usize,
     pub depth: usize,
@@ -208,7 +208,45 @@ pub fn resolve_with<P>(
     scale: SpacingScale,
     measurer: impl FnMut(&P, Option<f64>) -> Size,
 ) -> Result<Layout, Error> {
-    resolve_impl(root, offered, limits, scale, measurer, None)
+    resolve_impl(root, offered, limits, scale, measurer, None, None)
+}
+
+/// [`resolve_with`] with the root's box given rather than declared: the root
+/// is exactly `size`, padded by `padding`, whatever its own width, height,
+/// aspect and padding say. This is how a subtree is laid out again inside a
+/// region other geometry decided, without cloning it to restyle its root.
+///
+/// ```
+/// use mui_layout::{column, resolve_boxed_with, row, Insets, Size};
+/// let tree = column([row([]).grow(1.)]).size(500., 500.).pad(40.);
+/// let size = Size::new(100., 60.);
+/// let unpadded = Insets::ZERO;
+/// let l = resolve_boxed_with(&tree, size, unpadded, Default::default(), Default::default(), |_, _| {
+///     Size::ZERO
+/// })
+/// .unwrap();
+/// assert_eq!(l.all()[1].size, size, "the child fills the given box");
+/// ```
+pub fn resolve_boxed_with<P>(
+    root: &Node<P>,
+    size: Size,
+    padding: Insets,
+    limits: Limits,
+    scale: SpacingScale,
+    measurer: impl FnMut(&P, Option<f64>) -> Size,
+) -> Result<Layout, Error> {
+    if !size.valid(limits.extent) || !padding.valid(limits.extent) {
+        return Err(Error::InvalidValue);
+    }
+    resolve_impl(
+        root,
+        Some(size),
+        limits,
+        scale,
+        measurer,
+        None,
+        Some(padding),
+    )
 }
 fn resolve_impl<P>(
     root: &Node<P>,
@@ -217,6 +255,7 @@ fn resolve_impl<P>(
     scale: SpacingScale,
     mut measurer: impl FnMut(&P, Option<f64>) -> Size,
     cache: Option<&mut LayoutCache>,
+    boxed: Option<Insets>,
 ) -> Result<Layout, Error> {
     if !limits.extent.is_finite()
         || limits.extent <= 0.0
@@ -236,6 +275,7 @@ fn resolve_impl<P>(
         pinned: false,
         measurer: &mut measurer,
         cache,
+        boxed,
     };
     // The root's own offered size is the outermost container there is.
     let m = measure(root, "root", definite, None, definite, 0, &mut pass)?;
@@ -303,36 +343,6 @@ fn resolve_impl<P>(
         frames: out.0,
         order: out.1,
     })
-}
-
-/// UI-thread transactional commit. This is not a CPU atomic and not an audio-thread data structure.
-#[derive(Debug, Default)]
-pub struct LayoutState {
-    revision: u64,
-    current: Option<Layout>,
-}
-impl LayoutState {
-    pub fn revision(&self) -> u64 {
-        self.revision
-    }
-    pub fn current(&self) -> Option<&Layout> {
-        self.current.as_ref()
-    }
-    pub fn commit<P>(
-        &mut self,
-        root: &Node<P>,
-        offered: Option<Size>,
-        limits: Limits,
-    ) -> Result<(), Error> {
-        let next = resolve(root, offered, limits)?;
-        let revision = self
-            .revision
-            .checked_add(1)
-            .ok_or(Error::RevisionExhausted)?;
-        self.current = Some(next);
-        self.revision = revision;
-        Ok(())
-    }
 }
 
 #[cfg(test)]

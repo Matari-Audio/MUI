@@ -49,10 +49,15 @@ pub(crate) enum Operation {
     Sweep(Path),
     SplitMask(Bounds, ShapeSplit, bool),
 }
+type Entry = (Operation, OffsetOptions, GeometryOptions, Path, u64);
+/// Region geometry per (pre-order index, step). An entry is reused only when
+/// its whole input compares equal, and dropped by the first resolve that
+/// does not use it.
 #[derive(Debug, Default)]
-pub(crate) struct RegionCache(
-    std::collections::HashMap<(usize, u8), (Operation, OffsetOptions, GeometryOptions, Path)>,
-);
+pub(crate) struct RegionCache {
+    entries: std::collections::HashMap<(usize, u8), Entry>,
+    generation: u64,
+}
 impl RegionCache {
     pub(crate) fn resolve(
         &mut self,
@@ -61,8 +66,9 @@ impl RegionCache {
         o: OffsetOptions,
         g: GeometryOptions,
     ) -> Result<Path, SceneError> {
-        if let Some((old, offsets, geometry, path)) = self.0.get(&key) {
+        if let Some((old, offsets, geometry, path, seen)) = self.entries.get_mut(&key) {
             if old == &op && *offsets == o && *geometry == g {
+                *seen = self.generation;
                 return Ok(path.clone());
             }
         }
@@ -72,10 +78,17 @@ impl RegionCache {
             Operation::Sweep(p) => union_contours(p, o, g)?,
             Operation::SplitMask(bounds, split, second) => split.mask(*bounds, *second, o)?,
         };
-        if self.0.len() >= 256 {
-            self.0.clear();
-        }
-        self.0.insert(key, (op, o, g, path.clone()));
+        self.entries
+            .insert(key, (op, o, g, path.clone(), self.generation));
         Ok(path)
+    }
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.entries.len()
+    }
+    pub(crate) fn sweep(&mut self) {
+        let generation = self.generation;
+        self.entries.retain(|_, e| e.4 == generation);
+        self.generation = generation.wrapping_add(1);
     }
 }

@@ -186,9 +186,9 @@ fn baked_weld_clip_is_carried_as_its_actual_shape() {
         .is_some_and(|paths| paths.contains(&group.path)));
 }
 #[test]
-fn legacy_weld_remains_a_vector_operation() {
-    let old = row![leaf(24., 24.), leaf(24., 24.)].weld(Surface);
-    let s = resolve_scene(&SceneSpec::new(old)).unwrap();
+fn a_union_is_a_vector_operation() {
+    let union = row![leaf(24., 24.), leaf(24., 24.)].union(Surface);
+    let s = resolve_scene(&SceneSpec::new(union)).unwrap();
     assert!(s
         .paint
         .iter()
@@ -211,7 +211,11 @@ fn a_custom_outline_is_not_silently_reinterpreted_as_solid_when_carved() {
         })
         .fill(Primary)
         .cut(leaf(4., 4.));
-    assert!(resolve_scene(&SceneSpec::new(root)).is_err());
+    assert!(matches!(
+        resolve_scene(&SceneSpec::new(root)),
+        Err(SceneError::Geometry(mui_geometry::Error::InvalidOptions(m)))
+            if m.starts_with("cut/keep on a custom outline")
+    ));
 }
 
 #[test]

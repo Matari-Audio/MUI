@@ -2,7 +2,7 @@
 
 **MUI** (Matari-UI) is the UI foundation for [Matari Audio](https://github.com/Matari-Audio)
 plugins. You write a tree the way you would write CSS flexbox with tokens; MUI
-lays it out intrinsically, turns every welded group into one filleted outline,
+lays it out intrinsically, turns every `.union` group into one filleted outline,
 derives every shell as a true parallel inset of the outline before it, colours
 every surface from a role palette, and hands a z-ordered paint list to Vello.
 Layout is intrinsic: a float names a region around another node and
@@ -10,9 +10,15 @@ a slider thumb sits where two flex weights put it; explicit offsets are availabl
 strings**: there is no `.class("btn btn-sm")` and there will not be one --
 every value in the DSL is a Rust expression the compiler already checks.
 
-Every library crate is `#![forbid(unsafe_code)]`, dependency-light, and
-compiles to `wasm32-unknown-unknown`. The native preview host is the one
-exception.
+Every crate is `#![forbid(unsafe_code)]` except `mui-truce`, which denies it
+and allows two blocks: the wgpu surface on the host's child window and `Send`
+for the window handle. Every library crate compiles to
+`wasm32-unknown-unknown`; the native preview host, `mui-truce`'s editor
+window and the example plugin do not. The
+geometry, layout, style and motion crates stay small -- `mui-motion` has no
+dependencies at all -- but the renderer, text and accessibility stack does
+not: Vello, wgpu, harfrust, accesskit and truce put about 440 packages in
+`Cargo.lock`.
 
 ## Try it in your browser
 
@@ -33,15 +39,17 @@ MUI owns layout, contours, input, animation and the paint list. Vello renders it
 effects. Native hosts can keep `TiledEffects` alive between frames to reuse clean
 tiles; broad changes switch to one full-scene render when the memory budget
 allows it. `HybridEffects` is the whole-scene retained alternative. The host must
-select and retain these renderers to benefit from their caches.
+select and retain these renderers to benefit from their caches. An unchanged
+frame into the view they presented last records no GPU pass; a swapchain hands
+out a new view per frame, so there the host saves the pass by not asking.
 
-GPUI is an experimental integration, not the MUI graphics engine. Classic Vello
-compute and Hybrid comparisons live in the [rendering investigation](docs/rendering-investigation.md),
-including measured results and their limits.
+Classic Vello compute and Hybrid comparisons live in the
+[rendering investigation](docs/rendering-investigation.md), including measured
+results and their limits.
 
 ## Contours are layout too
 
-Use `.weld(fill)` for a shared outline, `.inside(padding)` to partition a parent's
+Use `.union(fill)` for a shared outline, `.inside(padding)` to partition a parent's
 contour, `.bend(amount)` for a curved divider, and `.cut(shape)` / `.keep(shape)`
 for boolean regions. Borders and parallel shells follow the resulting outline.
 `BorderRamp` gives a shared contour continuous color while identifying its tabs.
@@ -60,10 +68,10 @@ let mut bypass = false;
 // Built every frame, like an immediate-mode tree. Widgets read last frame's
 // gesture on their id, so state lives in your own variables.
 let root = col![
-    row![title("Filter"), spacer(), toggle(&ui, "bypass", &mut bypass).size(S)]
+    row![title("Filter"), spacer(), toggle(&mut ui, "bypass", &mut bypass).0.size(S)]
         .center()
         .tip("Bypass the filter"),
-    slider(&mut ui, "cutoff", "Cutoff", &mut cutoff, 0.0..=1.0),
+    slider(&mut ui, "cutoff", "Cutoff", &mut cutoff, 0.0..=1.0).0,
 ]
 .gap(M)
 .pad(L)
@@ -75,7 +83,7 @@ let frame = ui
     .frame(root, Some(Size::new(280.0, 120.0)), Input::default(), 1.0 / 60.0)
     .unwrap();
 assert!(frame.scene.paint.len() > 5);
-// mui::vello::paint(&mut Gpu { scene, resources }, frame.scene, Affine::IDENTITY)?;
+// mui::vello::paint(&mut Gpu { scene, resources, cache, atlas: None }, frame.scene, Affine::IDENTITY)?;
 ```
 
 `Ui::frame` takes an `Input` — pointer, wheel, key presses and typed text —
@@ -109,10 +117,10 @@ let tab = col![control("plus"), control("phase"), control("warp")]
     .id("tab")
     .shell(12.0, Raised);
 
-// The tab and the panel welded into one filleted shape.
+// The tab and the panel unioned into one filleted shape.
 let root = row![tab, leaf(520.0, 230.0).id("panel")]
     .start()
-    .weld(Surface);
+    .union(Surface);
 
 let scene = resolve_scene(&SceneSpec::new(root)).unwrap();
 assert_eq!(scene.surface("tab").unwrap().frame.size.width, 92.0);
@@ -149,7 +157,7 @@ assert_eq!(scene.surface("tab").unwrap().frame.size.width, 92.0);
 | `.shadows([a, b])`, `.elevation(Elevation::Raised)` | replace the list; a contact and an ambient shadow, from the theme's steps |
 | `.shadow(Shadow::inset(4.0))` | cast inward instead, clipped to the outline: a recess, a floor under glass |
 | `.stroke(Ink.alpha(0.12))` | a role at an alpha: a hairline that still tracks the palette |
-| `.preset(&card())`, `.base(&panel())` | merge a prepared `Style` over or under this one, field by field: the side that states something wins |
+| `.preset(card())`, `.base(panel())` | merge a prepared `Style` over or under this one, field by field: the side that states something wins. Both are moved, not copied |
 | `panel()`, `card()`, `glass()`, `chip("A")`, `tile(el)` | the presets in `mui::presets`: three styles to merge, two elements to finish. `glass()` is a translucent fill, a bright 1 px edge and an inner floor -- there is no backdrop blur and there will not be one |
 | `.apply(f)`, `.when(cond, f)` | hand the node to a builder run, conditionally or not |
 | `.on(State::Hover, \|s\| s.stroke(Ink))` | the look for a state, declared beside the resting one; `Hover`, `Press`, `Focus`, `Disabled` |
@@ -158,8 +166,8 @@ assert_eq!(scene.surface("tab").unwrap().frame.size.width, 92.0);
 | `.animate()`, `.transition(Spring::new(0.3, 1.0))` | this node's fill, stroke, radius, text size and shadow spring to their new values |
 | `.shell(d, fill)` | a parallel inset of the outline before it, cumulative |
 | `.inside(2.)`, `.bend(0.2)` | [shape-aware layout](docs/shape-layout.md): nested regions inherit their parent's contour, with border-aware padding and normal-clearance split gaps |
-| `.weld(fill)` | paint the union of the children's frames as one filleted shape; its shadow is the union of their blurs |
-| `.cut(el)`, `.keep(el)` | boolean difference and intersection against a child placed like any floating one: a hole, or only the overlap. The shell, the stroke and the clip all follow the result, as they do a weld. A leaf has no children, so wrap one in `stack![..]` to carve it |
+| `.union(fill)` | paint the union of the children's outlines as one filleted vector shape; its shadow is the union of their blurs. `.weld_with(Weld)` / `weld![..]` blend the children's paint across the seam instead |
+| `.cut(el)`, `.keep(el)` | boolean difference and intersection against a child placed like any floating one: a hole, or only the overlap. The shell, the stroke and the clip all follow the result, as they do a union. A leaf has no children, so wrap one in `stack![..]` to carve it |
 | `.mask(fill)` | paint `fill` source-atop the node's own subtree: a scroll fade is a ramp from transparent to the surface colour. It paints onto the shape, it cannot erase alpha -- an alpha mask layer is CPU-only in vello |
 | `.blend(Mix::Multiply)`, `.opacity(0.5)` | composite this node's whole subtree as one layer |
 | `.scroll()`, `.clip()`, `.float()` | overflow the wheel slides, overflow cut off, a child painted over everything |
@@ -168,15 +176,16 @@ assert_eq!(scene.surface("tab").unwrap().frame.size.width, 92.0);
 | `canvas(\|size\| vec![Draw::fill(path, Ink)])` | your own paths, in the node's own space |
 | `Draw::fill(path, Ink).tag("band")`, `Draw::hit(path, "knot-0")` | a drawn shape that is also the node's hit shape, by name, and hit geometry that paints nothing. Tag one draw and the node responds inside its tagged paths only: `ui.tag("dial")` says which, latched for the length of a drag |
 | `.cursor(Cursor::Hand)`, `.tip("..")`, `.focusable()` | the pointer, a tooltip after half a second, Tab stops here |
-| `button(&ui, "save", "Save").0.variant(Variant::Soft).size(S)` | a control's look and size: `Solid`, `Soft`, `Outline`, `Ghost`, and the same five sizes everywhere. `.role(Danger)` recolours it, `.px(72.0)` is the hatch, `.el()` finishes it |
-| `slider(&mut ui, "cut", "Cutoff", &mut hz, 20.0..=20e3).value_text(format!("{hz:.0} Hz"))` | what the readout says, in the parameter's own units, instead of the default two decimals. The string is also what the readout is measured for, so nothing shuffles as digits come and go; a knob has no header, so it says this under the dial in place of its label |
-| `curve(&ui, "env", &mut env)` | an envelope over `mui::scene::curve::Curve`: the model's own cubics as one stroked path, a knot per point and two tension handles per segment, each its own hit shape. Returns the tree and a `CurveEdit` saying what the drag moved -- Shift drags fine, Alt at the press locks an axis, `ui.tag("env")` names the shape under the pointer |
-| `bins(&ui, "spectrum", &Bins { authored, .. })` | an additive spectrum: a bar per partial in the accent, the engine's live levels as a cap line over them, and a faint level grid. One canvas and one hit shape -- pointer x becomes a bin index, so a drag paints every bin it crossed with no gaps, Shift refines from the press level, a secondary click resets one, and the arrows select and nudge. Over ~one bar a pixel the bins coalesce per column at their maximum, so 1024 partials still draw 200 bars. `bins_hover` is the index under the pointer, for a readout in your own units |
+| `let (el, changed) = slider(&mut ui, "cut", "Cutoff", &mut hz, 20.0..=20e3)` | the one widget shape: `&mut Ui`, the id, and what it edits in; the element and what happened last frame out. `button` says whether it was clicked, `toggle`, `slider`, `knob` and `text_input` whether the value changed, `curve` and `bins` which part the gesture edited |
+| `button(&mut ui, "save", "Save").0.variant(Variant::Soft).size(S)` | a control's look and size: `Solid`, `Soft`, `Outline`, `Ghost`, and the same five sizes everywhere. `.role(Danger)` recolours it, `.px(72.0)` is the hatch, `.el()` finishes it |
+| `slider(&mut ui, "cut", "Cutoff", &mut hz, 20.0..=20e3).0.value_text(format!("{hz:.0} Hz"))` | what the readout says, in the parameter's own units, instead of the default two decimals. The string is also what the readout is measured for, so nothing shuffles as digits come and go; a knob has no header, so it says this under the dial in place of its label |
+| `curve(&mut ui, "env", &mut env)` | an envelope over `mui::scene::curve::Curve`: the model's own cubics as one stroked path, a knot per point and two tension handles per segment, each its own hit shape. Returns the tree and a `CurveEdit` saying what the drag moved -- Shift drags fine, Alt at the press locks an axis, `ui.tag("env")` names the shape under the pointer |
+| `bins(&mut ui, "spectrum", &Bins { authored, .. })` | an additive spectrum: a bar per partial in the accent, the engine's live levels as a cap line over them, and a faint level grid. One canvas and one hit shape -- pointer x becomes a bin index, so a drag paints every bin it crossed with no gaps, Shift refines from the press level, a secondary click resets one, and the arrows select and nudge. Over ~one bar a pixel the bins coalesce per column at their maximum, so 1024 partials still draw 200 bars. `bins_hover` is the index under the pointer, for a readout in your own units |
 | `.role(Kind::Button)`, `.label("OK")` | what a screen reader hears: `mui-access` reads both off the surface |
 | `.reserve("-88.8 dB")`, `ui.set_text("gain", v)` | measure a readout for the widest value it can show, then swap what it says without resolving the tree again: the frame stands, one glyph run re-shapes |
 | `.text_weight(Weight::BOLD)` | the run's `wght` axis. A variable face moves; a static one has one weight and draws it |
 | `Palette::from_seed(accent, Mode::Dark)` | a whole palette from one colour: brand roles around the seed's hue, greys tinted by it, signal hues left alone. Every role clears 3:1 on the background and the surface |
-| `.id("name")` | a gesture target and a lookup key; unnamed nodes are decoration |
+| `.id("name")` | a gesture target and a lookup key; unnamed nodes are decoration, unless they declare an `.on(State::Hover \| State::Press)` look |
 | `.id(Id::of("osc").slot(3).field("gain"))` | the same key, composed: segments join with `/` and nothing reaches the heap under 46 bytes, so a rack of 374 named slots costs no `format!` per frame. `.id(..)` takes anything `Into<Id>` |
 | `ui.start_drag(id, payload)`, `ui.dragging::<T>()`, `ui.dropped_on::<T>(id)` | drag-and-drop with a payload of your own type: attach it while the gesture drags, peek at it to light up a drop target, take it once when it lands. A drop elsewhere delivers nothing, and the ghost is yours -- a `.float()` pinned to the pointer's surface |
 | `Path::from_svg_data("M0 0 h10 a5 5 0 0 1 0 10 z")` | an icon's `d` attribute as a `Path`, arcs and all |
@@ -189,11 +198,12 @@ Alignment is inherited: a child without `.anchor` sits where its parent's
 `align` and `justify` say, and `Stretch` is the default cross-axis value so
 a row of controls fills its column unless told otherwise.
 
-## Kurv on MUI
+## A plugin editor shell
 
-A plugin editor shell — header, a scrolling parameter list, a response
-curve, a status bar — is forty-six lines, twenty-one of them the tree
-itself, and not one coordinate:
+Kurv, Matari's synth, is not ported to MUI yet (see [ROADMAP.md](ROADMAP.md));
+this is the shape its editor is heading for. A header, a scrolling parameter
+list, a response curve and a status bar are forty-six lines, twenty-one of
+them the tree itself, and not one coordinate:
 
 ```rust
 use mui::prelude::*;
@@ -206,7 +216,7 @@ const NAMES: [&str; 5] = ["Drive", "Tilt", "Mix", "Air", "Floor"];
 let params: Vec<El> = NAMES
     .iter()
     .zip(&mut values)
-    .map(|(n, v)| slider(&mut ui, n, n, v, 0.0..=1.0).el())
+    .map(|(n, v)| slider(&mut ui, *n, n, v, 0.0..=1.0).0.el())
     .collect();
 
 let curve = canvas(|size| {
@@ -220,9 +230,9 @@ let curve = canvas(|size| {
 let root = col![
     row![
         title("Kurv"),
-        text_input(&mut ui, "preset", &mut preset).w(140),
+        text_input(&mut ui, "preset", &mut preset).0.w(140),
         spacer(),
-        toggle(&ui, "bypass", &mut bypass).el().tip("Bypass"),
+        toggle(&mut ui, "bypass", &mut bypass).0.el().tip("Bypass"),
     ]
     .gap(S)
     .center(),
@@ -288,6 +298,32 @@ The gallery's **Responsive editor** scene is this tree with knobs on it, and
 `scenes::tests` resolves it at 240x600, 800x500 and 2000x300 asserting that
 no child ever leaves its parent.
 
+## Plugins
+
+`mui-truce` puts a MUI tree in a CLAP or VST3 plugin built with
+[truce](https://crates.io/crates/truce). `MuiEditor` is truce's `Editor`: a
+baseview child window in the host's window, a wgpu surface on it, and one
+`Ui::frame` per native event. `Bridge::bind` connects a widget id to a truce
+parameter. A drag becomes the host's begin/perform/end, and host automation
+is the value the next tree reads:
+
+```rust,ignore
+fn editor(params: Arc<GainParams>) -> Box<dyn Editor> {
+    MuiEditor::new(params, Ui::new(Theme::DEFAULT), (300, 200), |ui, bridge| {
+        let gain = bridge.bind(ui, "gain", P::Gain, |ui, v| {
+            knob(ui, "gain", "Gain", v, 0.0..=1.0).0.el()
+        });
+        col![gain, title(bridge.text(P::Gain))].pad(L).fill(Surface)
+    })
+    .resizable((260, 180))
+    .into_editor()
+}
+```
+
+`examples/gain-plugin` is a complete plugin: a gain knob, a bypass toggle and
+an output meter. [crates/mui-truce/README.md](crates/mui-truce/README.md) has
+the build commands and the clap-validator and pluginval results.
+
 ## Motion
 
 Nothing is keyframed. `.animate()` puts a spring on a node's own visual
@@ -316,7 +352,7 @@ let mut gain = 0.5;
 let sweep = ui.tween("sweep", gain);
 let root = col![
     leaf(60.0, 60.0).fill(Primary).animate().id("lamp"),
-    knob(&mut ui, "gain", "Gain", &mut gain, 0.0..=1.0).el(),
+    knob(&mut ui, "gain", "Gain", &mut gain, 0.0..=1.0).0.el(),
 ];
 let frame = ui.frame(root, Some(Size::new(200.0, 200.0)), Input::default(), 1.0 / 60.0).unwrap();
 assert!(sweep <= gain && frame.edits.is_empty());
@@ -333,20 +369,26 @@ image dependency. `Path::from_svg_data` turns an icon's `d` attribute into a
 
 `vello_cpu` paints the pixmap itself. `vello_hybrid` wants an atlas id and
 panics on a pixmap, so `mui_vello::Gpu` carries an optional `Atlas` -- the
-renderer, device, queue and a host-owned `ImageIds` -- and uploads each image
-buffer once through `Renderer::upload_image`, then paints by id. A `Gpu` built
-without an `Atlas` flattens an image fill to the mid grey `Paint::solid`
-already uses for contrast rather than crashing, and so does an image no
-atlas tile could hold. Both caches key on the buffer's `Arc` and sweep the
-entries the app has dropped on the next upload, so a panel handing over a
-fresh frame buffer every frame does not grow either one.
+renderer, device and queue -- and uploads each image buffer once through
+`Renderer::upload_image`, then paints by id. A `Gpu` built without an `Atlas`
+flattens an image fill to the mid grey `Paint::solid` already uses for
+contrast rather than crashing, and so does an image the atlas has no room
+for. What was uploaded (or premultiplied, on the CPU) lives in a
+`mui_vello::Cache` owned beside the renderer. It holds only a `Weak` to each
+buffer and sweeps the entries the app has dropped on the next image lookup,
+so a panel handing over a fresh frame buffer every frame does not grow it.
 
 ## Accessibility
 
 `mui-access` turns a `ResolvedScene` into an `accesskit::TreeUpdate`:
-`tree_update(&scene, focus)`. A node says what it is in the tree itself --
+`tree_update(&scene, focus, scale)`, where `scale` is the window's device
+pixels per scene unit. A node says what it is in the tree itself --
 `.role(Kind::Button).label("OK")` -- and the walk carries that onto the
-surface; a node with no role reports as a group labelled by its id. The
+surface; a node with no role reports as a group, and a control with no
+label is named by its id (a group with none stays unnamed). A `text_input` reports its line
+as a `TextRun` with each character's position and its selection, so a reader
+follows the caret, and a reader's `SetTextSelection` comes back as
+`SemanticAction::set_selection`. The
 widgets in `mui` already describe themselves, so the preview just hands the
 update to its `accesskit_winit::Adapter` after each frame.
 
@@ -379,39 +421,12 @@ assert!(light.is_valid());
 `crates/mui-preview/src/skin.rs` is exactly this file. There is no
 light-theme half because there is nothing in it a mode could contradict.
 
-## Geometry rules
-
-- A plain node's outline is its frame rounded by `Radius::{Theme, Px, Token, Scale, Pill}`,
-  and drawn with circular or squircle corners (`CornerStyle`). A squircle gives
-  up the analytic blur: its shells and shadows come off the outline itself.
-- A welded node unions the children's **sharp** frames first and fillets the
-  result second, with the theme's box and concave radii, so old rounded
-  corners never leak into a new junction.
-- A shell is an inset of the **final** outline before it: analytic for a
-  rounded rectangle (`radius − d`, concentric arcs), a parallel offset of the
-  filleted path for a weld. A shell that would collapse simply stops.
-- Text is a glyph outline from `mui-text`, in the same space as every other
-  path, so a variable-font axis change is a geometry change.
-- Zero-area frames are invisible, not errors: a flex share may collapse.
-
 ## Crates
 
-| crate | what it owns |
-|---|---|
-| `mui-layout` | the flex solver: tokens, pct, aspect, grid, anchors, frames in tree order, and `Id`, the composable node name they are keyed by |
-| `mui-geometry` | Booleans, fillets, parallel offsets, variable-width border regions, curved shape partitions, and the `Spacing` scale layout and style are both written in |
-| `mui-text` | glyph and string outlines from a (variable) font |
-| `mui-motion` | motion maths, dependency-free: the `Spring` every animated property chases, and editable normalized cubic Bezier response `curve`s |
-| `mui-style` | theme data: Oklch `Color`, `Palette`, `Role`, `Fill`, `Gradient`, `Shadow`, `Elevation`, `Radius`, `Style` and the `Theme` they resolve against |
-| `mui-scene` | `El` + `Styled` DSL and the `row!`/`col!`/`stack!`/`grid!` sugar, `canvas` draws, clip and float layers, the walk from tree to `ResolvedScene` paint list, the frame-to-frame `TextCache` |
-| `mui-input` | `Input` (pointer with its buttons and modifiers, wheel, keys, text), hit testing against real paths and their clips, press capture, hover, click, drag and drop |
-| `mui-vello` | the `Canvas` trait and its `Gpu` / `Cpu` wrappers over `vello_hybrid` and `vello_cpu`: fills, strokes, image fills (`Cpu` paints the pixmap, `Gpu` uploads once through its `Atlas`, see Images), clip push/pop, and hinted glyph runs (Vello hints and caches the outlines per font blob); `paint(canvas, scene, transform)`, and `paint_cached` with a `PathCache` that keeps a still frame's arc-to-cubic conversions |
-| `mui-access` | a `ResolvedScene`'s roles and labels as an `accesskit::TreeUpdate` |
-| `mui-truce` | the non-real-time document and parameter contract a Truce plugin shares with its editor |
-| `mui-widgets` | the controls and presets as plain styled trees: `slider`, `knob`, `toggle`, `button`, `text_input`, `curve`, `bins`, `panel`/`card`/`glass`/`chip`/`tile`, and the `Host` trait they read state through |
-| `mui` | `Ui` runtime, focus and wheel scrolling, tooltips, transitions, tweens, gesture edits; implements `Host`, so the widgets above keep their `button(ui, ..)` call; the `prelude` |
-| `mui-tessellate`, `mui-egui` | triangle meshes and the egui debug adapter |
-| `mui-preview` | the winit + wgpu gallery, itself one `mui` tree |
+[ARCHITECTURE.md](ARCHITECTURE.md) has the crate graph and the scene walk --
+how welds, shells, carves and text become one paint list -- and
+[docs/shape-layout.md](docs/shape-layout.md) the contour-aware layout
+contracts.
 
 ## Preview
 
@@ -465,7 +480,7 @@ default because a snapshot-sized pixmap loses more to thread hand-off than
 it gains (BENCHMARKS.md measures both).
 
 ```bash
-cargo run -p mui-scene --release --example stress
+cargo run -p mui-scene --profile perf --example stress
 ```
 
 resolves a ~1000-node tree at three window shapes and counts the allocations
@@ -481,13 +496,4 @@ global allocator, which the library itself forbids.
 Formatting, tests, clippy with warnings denied, and a wasm check of the
 library crates. `BENCHMARKS.md` is the frame budget of a Kurv-sized scene
 across `vello_hybrid`, `vello_cpu` and classic `vello`, reproduced by
-`cargo run -p mui-vello --release --features cpu --example bench`. The
-TypeScript frontend under `packages/mui-ts` is frozen; see
-`packages/mui-ts/FROZEN.md`.
-
-## The GPUI reference
-
-`experiments/gpui-plugin` and `experiments/mui-gpui` are the 2026-09-13 GPUI
-milestone kept for study (workspace-excluded, needs `experiments/upstream`).
-The Vello pipeline in `crates/` replaced it; the benchmarks are in `BENCHMARKS.md`
-and `research/`.
+`cargo run -p mui-vello --profile perf --features cpu --example bench`.

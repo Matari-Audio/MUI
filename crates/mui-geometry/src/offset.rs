@@ -93,8 +93,10 @@ pub fn offset_path(path: &Path, distance: f64, o: OffsetOptions) -> Result<Offse
     {
         return Err(Error::CoordinateLimit);
     }
+    // NonZero, like the renderer, hit testing and text: overlapping subpaths
+    // are one painted region, not a hole.
     let normalized: BackendMulti =
-        input.overlay_as::<i64>(&input, OverlayRule::Union, FillRule::EvenOdd);
+        input.overlay_as::<i64>(&input, OverlayRule::Union, FillRule::NonZero);
     let source_components = normalized.len();
     let source_holes = normalized
         .iter()

@@ -350,17 +350,6 @@ fn concentric_inset_preserves_arc_centers() {
     }
 }
 #[test]
-fn proportional_is_not_concentric() {
-    let p = rr(92., 170., 28.);
-    let b = p.inset(12.).unwrap().shape.unwrap().bounds();
-    let c = NestedRadius::Proportional { scale: 1. }
-        .resolve(p, b)
-        .unwrap()
-        .shape
-        .unwrap();
-    assert!((c.radius() - 16.).abs() > 1.);
-}
-#[test]
 fn negative_inset_is_error() {
     assert!(rr(30., 80., 10.).inset(-2.).is_err());
 }
@@ -373,15 +362,6 @@ fn vanished_convex_arc_is_reported() {
     let i = rr(80., 100., 8.).inset(12.).unwrap();
     assert!(i.corner_collapsed);
     assert_eq!(i.shape.unwrap().radius(), 0.);
-}
-#[test]
-fn concave_arc_grows_while_convex_shrinks() {
-    assert_eq!(inset_arc_radius(28., 12., false).unwrap(), Some(16.));
-    assert_eq!(inset_arc_radius(28., 12., true).unwrap(), Some(40.));
-}
-#[test]
-fn stroked_gap_counts_both_half_strokes() {
-    near(inset_for_stroked_gap(12., 2., 4.).unwrap(), 15.);
 }
 #[test]
 fn rectangle_offset_matches_analytic() {
@@ -613,4 +593,52 @@ fn a_squircle_corner_stays_in_the_box_and_bulges_past_the_arc() {
     // The arc sits at 50 - r*sqrt(2); the superellipse at 50 - r*2^0.75.
     assert!((diagonal(&round) - (50. - 25. * 2f64.sqrt())).abs() < 0.05);
     assert!((diagonal(&squircle) - (50. - 25. * 2f64.powf(0.75))).abs() < 0.05);
+}
+/// A degenerate exterior must not leave a gap in component numbering:
+/// `polygons()` walks `0..components()` and would drop the last one.
+#[test]
+fn a_degenerate_exterior_does_not_drop_a_later_component() {
+    let sq = |x: f64| vec![vec![[x, 0.], [x + 10., 0.], [x + 10., 10.], [x, 10.]]];
+    let sliver = vec![vec![[0., 0.], [5., 0.], [10., 0.]]];
+    let t = crate::boolean::topology(vec![sliver, sq(0.), sq(20.)], GeometryOptions::default())
+        .unwrap();
+    assert_eq!(t.components(), 2);
+    assert_eq!(t.polygons().len(), 2);
+}
+/// The renderer fills NonZero, so an inset of two overlapping same-winding
+/// subpaths must not punch the overlap out as a hole.
+#[test]
+fn inset_treats_overlapping_subpaths_as_nonzero() {
+    let square = |x: f64, y: f64| {
+        Path::polyline(
+            [
+                Point::new(x, y),
+                Point::new(x + 100., y),
+                Point::new(x + 100., y + 100.),
+                Point::new(x, y + 100.),
+            ],
+            true,
+        )
+        .commands
+    };
+    let mut p = Path::default();
+    p.commands.extend(square(0., 0.));
+    p.commands.extend(square(50., 50.));
+    let i = inset_path(&p, 2., OffsetOptions::default()).unwrap();
+    assert_eq!((i.source_components, i.source_holes), (1, 0));
+    assert_eq!(i.topology.rings().len(), 1);
+    // Union area 17500 less a ~2-unit band along a 600-unit perimeter.
+    assert!(i.topology.area() > 16_000., "{}", i.topology.area());
+}
+/// clean_ring is one pass: a dense half-disc keeps its arc and drops the
+/// collinear diameter points without rescanning the arc for each of them.
+#[test]
+fn clean_ring_drops_a_dense_diameter_in_one_pass() {
+    let m = 20_000;
+    let arc = (0..=m).map(|i| Point::new(1000., 0.).rotated(PI * i as f64 / m as f64));
+    let diameter = (1..m).map(|j| Point::new(-1000. + 2000. * j as f64 / m as f64, 0.));
+    let ring: Vec<_> = arc.chain(diameter).collect();
+    let clean = crate::math::clean_ring(&ring, 1e-7).unwrap();
+    assert_eq!(clean.len(), m + 1);
+    assert!((signed_area(&clean) - PI * 1e6 / 2.).abs() < 1.);
 }

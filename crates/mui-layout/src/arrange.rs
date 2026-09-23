@@ -9,8 +9,8 @@ use super::*;
 /// Hand every child its main-axis size. Surplus goes out by `grow`; a deficit
 /// comes back by `shrink` scaled by basis, which is how flexbox weights it, and
 /// never takes a child below its declared `minimum`. Either way a child that
-/// can absorb no more is dropped from the pool and the remainder redistributes
-/// over the rest, which is what the outer loop is for.
+/// can absorb no more stops at its limit and the remainder redistributes over
+/// the rest; see [`deal`].
 ///
 /// Only one direction runs. A row that overflows never grew.
 pub(crate) fn distribute<P>(
@@ -19,46 +19,85 @@ pub(crate) fn distribute<P>(
     vertical: bool,
     inner: Size,
 ) -> Vec<f64> {
-    let inner_main = inner.main(vertical);
     let base: Vec<f64> = children
         .iter()
         .map(|c| c.base(vertical, Some(inner)))
         .collect();
-    let mut allocated = base.clone();
     let gaps = gap * children.len().saturating_sub(1) as f64;
-    let mut free = inner_main - base.iter().sum::<f64>() - gaps;
+    let free = inner.main(vertical) - base.iter().sum::<f64>() - gaps;
     let growing = free > 0.0;
-    let room = |i: usize, allocated: &[f64]| {
-        let c = children[i];
-        let edge = if growing {
-            c.node.maximum.map_or(f64::INFINITY, |s| s.main(vertical)) - allocated[i]
-        } else {
-            allocated[i] - c.floor.main(vertical)
-        };
-        edge.max(0.0)
-    };
-    let weight = |i: usize| {
-        let c = children[i];
+    deal(
+        &base,
+        |i| {
+            let c = children[i];
+            if growing {
+                c.node.grow
+            } else {
+                c.node.shrink * base[i]
+            }
+        },
+        |i| {
+            let c = children[i];
+            if growing {
+                c.node.maximum.map_or(f64::INFINITY, |s| s.main(vertical))
+            } else {
+                c.floor.main(vertical)
+            }
+        },
+        free,
+    )
+}
+
+/// Deal `free` out over `base` in proportion to `weight`, never past a
+/// child's `edge` (its maximum when growing, its floor when shrinking).
+///
+/// Water-filling: the children that would reach their edge first -- least
+/// room per unit of weight -- are clamped one after another, each against
+/// the level what is left sets, until the next one fits; everyone from there
+/// on takes the same share of what remains. One sort, O(n log n), where
+/// clamping round by round was O(n x rounds). The unclamped shares are
+/// dealt in declaration order in one pass, so a row nothing clamps comes out
+/// bit for bit as it did.
+fn deal(
+    base: &[f64],
+    weight: impl Fn(usize) -> f64,
+    edge: impl Fn(usize) -> f64,
+    mut free: f64,
+) -> Vec<f64> {
+    let growing = free > 0.0;
+    let room = |i: usize| {
         if growing {
-            c.node.grow
+            edge(i) - base[i]
         } else {
-            c.node.shrink * base[i]
+            base[i] - edge(i)
         }
+        .max(0.0)
     };
-    for _ in 0..=children.len() {
-        let active: Vec<usize> = (0..children.len())
-            .filter(|i| weight(*i) > 0.0 && room(*i, &allocated) > 1e-8)
-            .collect();
-        let total = active.iter().map(|i| weight(*i)).sum::<f64>();
-        if free.abs() < 1e-8 || total <= 0.0 {
+    let mut allocated = base.to_vec();
+    let mut active: Vec<usize> = (0..base.len())
+        .filter(|&i| weight(i) > 0.0 && room(i) > 1e-8)
+        .collect();
+    active.sort_by(|&a, &b| (room(a) / weight(a)).total_cmp(&(room(b) / weight(b))));
+    let mut total = active.iter().map(|&i| weight(i)).sum::<f64>();
+    let mut clamped = 0;
+    for &i in &active {
+        let limit = room(i);
+        if free.abs() < 1e-8 || total <= 0.0 || (free * weight(i) / total).abs() < limit {
             break;
         }
-        let budget = free;
-        for i in active {
-            let limit = room(i, &allocated);
-            let delta = (budget * weight(i) / total).clamp(-limit, limit);
-            allocated[i] += delta;
-            free -= delta;
+        let delta = limit.copysign(free);
+        allocated[i] += delta;
+        free -= delta;
+        total -= weight(i);
+        clamped += 1;
+    }
+    let rest = &mut active[clamped..];
+    rest.sort_unstable();
+    let total = rest.iter().map(|&i| weight(i)).sum::<f64>();
+    if free.abs() >= 1e-8 && total > 0.0 {
+        for &i in rest.iter() {
+            let limit = room(i);
+            allocated[i] += (free * weight(i) / total).clamp(-limit, limit);
         }
     }
     allocated
@@ -357,4 +396,94 @@ pub(crate) fn arrange_uncached<P>(
         arrange(c, here, pos, s, pins, viewport, out)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::deal;
+
+    /// The round-by-round clamp `deal` replaced, kept only to hold it to the
+    /// same answers.
+    fn rounds(base: &[f64], weight: &[f64], edge: &[f64], mut free: f64) -> Vec<f64> {
+        let mut allocated = base.to_vec();
+        let growing = free > 0.0;
+        let room = |i: usize, allocated: &[f64]| {
+            if growing {
+                edge[i] - allocated[i]
+            } else {
+                allocated[i] - edge[i]
+            }
+            .max(0.0)
+        };
+        for _ in 0..=base.len() {
+            let active: Vec<usize> = (0..base.len())
+                .filter(|i| weight[*i] > 0.0 && room(*i, &allocated) > 1e-8)
+                .collect();
+            let total = active.iter().map(|i| weight[*i]).sum::<f64>();
+            if free.abs() < 1e-8 || total <= 0.0 {
+                break;
+            }
+            let budget = free;
+            for i in active {
+                let limit = room(i, &allocated);
+                let delta = (budget * weight[i] / total).clamp(-limit, limit);
+                allocated[i] += delta;
+                free -= delta;
+            }
+        }
+        allocated
+    }
+
+    #[test]
+    fn water_filling_deals_what_clamping_round_by_round_dealt() {
+        // xorshift: no dependency, and the same cases every run.
+        let mut seed = 0x9e37_79b9_7f4a_7c15_u64;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed >> 11) as f64 / (1u64 << 53) as f64
+        };
+        for case in 0..20_000 {
+            let n = 1 + (next() * 12.) as usize;
+            let base: Vec<f64> = (0..n).map(|_| (next() * 200.).floor()).collect();
+            // Some weightless, some tied, the rest anything.
+            let weight: Vec<f64> = (0..n)
+                .map(|_| match (next() * 4.) as u8 {
+                    0 => 0.,
+                    1 => 1.,
+                    _ => next() * 3.,
+                })
+                .collect();
+            let growing = next() < 0.5;
+            let edge: Vec<f64> = base
+                .iter()
+                .map(|b| match (next() * 3.) as u8 {
+                    0 if growing => f64::INFINITY,
+                    0 => 0.,
+                    _ if growing => b + (next() * 80.).floor(),
+                    _ => (b - (next() * 80.).floor()).max(0.),
+                })
+                .collect();
+            let free = (next() * 400.).floor() * if growing { 1. } else { -1. };
+            let w = weight.clone();
+            let e = edge.clone();
+            let new = deal(&base, |i| w[i], |i| e[i], free);
+            let old = rounds(&base, &weight, &edge, free);
+            for (a, b) in new.iter().zip(&old) {
+                assert!(
+                    (a - b).abs() <= 1e-9 * b.abs().max(1.),
+                    "case {case}: {new:?} != {old:?} for base {base:?} weight {weight:?} edge {edge:?} free {free}"
+                );
+            }
+            // Nothing clamped: the very same bits.
+            let unclamped = (0..n).all(|i| {
+                weight[i] == 0.
+                    || (old[i] - edge[i]).abs() > 1e-6 && (old[i] - base[i]).abs() > 1e-9
+            });
+            if unclamped {
+                assert_eq!(new, old, "case {case}");
+            }
+        }
+    }
 }

@@ -1,38 +1,19 @@
 use mui_scene::prelude::*;
 use mui_scene::{resolve_scene_with, TextCache};
-use std::sync::Arc;
 
-fn font() -> Arc<[u8]> {
-    Arc::from(epaint_default_fonts::HACK_REGULAR)
+fn font() -> Font {
+    Font::new(epaint_default_fonts::HACK_REGULAR).unwrap()
 }
 
 #[test]
-fn one_animated_label_cannot_bypass_the_variant_cap() {
+fn an_animated_label_keeps_only_the_run_it_drew() {
     let font = font();
     let mut cache = TextCache::default();
-    for i in 0..4100 {
+    for i in 0..100 {
         let spec = SceneSpec::new(text("x").text_size(10.0 + i as f64 * 0.001)).font(font.clone());
         resolve_scene_with(&spec, &mut cache).unwrap();
-        assert!(cache.len() <= 4096);
+        assert_eq!(cache.len(), 1);
     }
-}
-
-#[test]
-fn changing_tolerance_invalidates_existing_outlines() {
-    let font = font();
-    let mut cache = TextCache::default();
-    for size in [10.0, 12.0] {
-        resolve_scene_with(
-            &SceneSpec::new(text("x").text_size(size)).font(font.clone()),
-            &mut cache,
-        )
-        .unwrap();
-    }
-    assert_eq!(cache.len(), 2);
-    let mut spec = SceneSpec::new(text("x").text_size(10.0)).font(font);
-    spec.tolerance *= 0.5;
-    resolve_scene_with(&spec, &mut cache).unwrap();
-    assert_eq!(cache.len(), 1);
 }
 
 #[test]

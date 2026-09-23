@@ -481,9 +481,10 @@ pub struct Style {
     /// [`ShadowKind::Inset`] over the shells.
     pub shadow: Vec<Shadow>,
     pub shells: Vec<(Spacing, Fill)>,
-    /// Outline is the union of the children's frames, filleted, instead of
-    /// this node's own rectangle: a tab welded to its panel.
-    pub weld: bool,
+    /// Outline is the union of the children's outlines, filleted, instead
+    /// of this node's own rectangle: a tab joined to its panel. See
+    /// `Paints::union` in `mui-scene`.
+    pub union: bool,
     /// Pointer shape over the node; inherited by children that set none.
     pub cursor: Option<Cursor>,
     /// Blend mode and opacity for this node's whole subtree, as a
@@ -503,24 +504,25 @@ impl Style {
     ///
     /// A field's default *is* its "unset": `Fill::None` paints nothing,
     /// `Radius::Theme` takes the theme's, `None` and `[]` say nothing. The
-    /// exception is `weld`, which has no third state and so only ever turns
+    /// exception is `union`, which has no third state and so only ever turns
     /// on.
     ///
     /// ```
     /// use mui_style::{Role::*, *};
     /// let card = Style { radius: Radius::Px(12.), ..Style::default() };
     /// let mine = Style { fill: Primary.into(), ..Style::default() };
-    /// assert_eq!(mine.over(&card).fill, mine.fill);   // card states no fill
-    /// assert_eq!(mine.over(&card).radius, card.radius);
+    /// let both = mine.clone().over(card.clone());
+    /// assert_eq!(both.fill, mine.fill);   // card states no fill
+    /// assert_eq!(both.radius, card.radius);
     /// ```
-    pub fn over(&self, other: &Style) -> Style {
+    pub fn over(self, other: Style) -> Style {
         Style {
             fill: if other.fill.is_none() {
-                self.fill.clone()
+                self.fill
             } else {
-                other.fill.clone()
+                other.fill
             },
-            stroke: other.stroke.clone().or_else(|| self.stroke.clone()),
+            stroke: other.stroke.or(self.stroke),
             radius: if other.radius == Radius::Theme {
                 self.radius
             } else {
@@ -532,22 +534,22 @@ impl Style {
                 other.corners
             },
             shadow: if other.shadow.is_empty() {
-                self.shadow.clone()
+                self.shadow
             } else {
-                other.shadow.clone()
+                other.shadow
             },
             shells: if other.shells.is_empty() {
-                self.shells.clone()
+                self.shells
             } else {
-                other.shells.clone()
+                other.shells
             },
-            weld: self.weld || other.weld,
+            union: self.union || other.union,
             cursor: other.cursor.or(self.cursor),
             layer: other.layer.or(self.layer),
             mask: if other.mask.is_none() {
-                self.mask.clone()
+                self.mask
             } else {
-                other.mask.clone()
+                other.mask
             },
         }
     }

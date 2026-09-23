@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the native conformance binary, then an isolated Hybrid/classic matrix.
+"""Run the native conformance binary, then the isolated Hybrid effect matrix.
 
 Creates a NEW output directory; never overwrites evidence. No background jobs,
 no software-adapter rankings, and no inferred FPS. Real audio/presentation tests
@@ -55,36 +55,26 @@ def main() -> None:
     (out / 'metadata.json').write_text(json.dumps(meta, indent=2) + '\n')
     (out / 'tracked-working-tree.patch').write_bytes(diff)
     common = ['cargo', 'run', '--locked', '--profile', args.profile, '-p', 'mui-vello',
-              '--features', 'gpu-effects,bench-classic']
+              '--features', 'gpu-effects']
     run(common + ['--example', 'gpu_contract', '--', str(out / 'contract')], out / 'contract.log')
-    # Fail before timing starts when the image-parity dependency is absent.
-    __import__('PIL.Image')
     paths = []
     for repetition in range(args.repetitions):
-        # Alternate first backend rather than systematically warming one first.
-        order = ['hybrid', 'classic'] if repetition % 2 == 0 else ['classic', 'hybrid']
         directory = out / f'repeat-{repetition + 1}'
         directory.mkdir()
         for scale in args.scales:
             for case in ['static', 'morph', 'geometry', 'resize']:
-                for backend in order:
-                    tag = f'{backend}-{case}-{scale:g}'
-                    command = common + ['--example', 'gpu_matrix', '--', '--backend', backend,
-                        '--case', case, '--scale', f'{scale:g}', '--frames', str(args.frames),
-                        '--out', str(directory)]
-                    if args.allow_software:
-                        command.append('--allow-software')
-                    run(command, directory / f'{tag}.log')
-                    paths.append(directory / f'{tag}.csv')
-                    time.sleep(.25)  # explicit inter-run pause; not inside a measured sample
-                run([sys.executable, str(Path(__file__).with_name('compare.py')),
-                     str(directory / f'hybrid-{case}-{scale:g}.png'),
-                     str(directory / f'classic-{case}-{scale:g}.png'),
-                     '--out', str(directory / f'parity-{case}-{scale:g}.json')],
-                    directory / f'parity-{case}-{scale:g}.log')
+                tag = f'hybrid-{case}-{scale:g}'
+                command = common + ['--example', 'gpu_matrix', '--',
+                    '--case', case, '--scale', f'{scale:g}', '--frames', str(args.frames),
+                    '--out', str(directory)]
+                if args.allow_software:
+                    command.append('--allow-software')
+                run(command, directory / f'{tag}.log')
+                paths.append(directory / f'{tag}.csv')
+                time.sleep(.25)  # explicit inter-run pause; not inside a measured sample
     run([sys.executable, str(Path(__file__).with_name('report.py')), *map(str, paths),
          '--out', str(out / 'summary.json')])
-    print('Raw evidence written. Review paired images before interpreting performance differences.')
+    print('Raw evidence written.')
 
 if __name__ == '__main__':
     main()

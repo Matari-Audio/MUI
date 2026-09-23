@@ -373,7 +373,7 @@ fn exact_rounded_and_nested_clips_reject_corners() {
         "target",
         &path(square(10., 10., 80., 80.)),
         Some(mui_geometry::Bounds::new(0., 0., 100., 100.)),
-        Some(&[outer, inner]),
+        Some(&[outer.into(), inner.into()]),
     )
     .unwrap();
     assert_eq!(hit.at(Point::new(21., 21.)), None, "inner rounded clip");

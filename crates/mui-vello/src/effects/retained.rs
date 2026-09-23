@@ -1,30 +1,34 @@
-use super::{Budget, EffectStats, Error, OutputEncoding, WeldTextures};
+use super::{Budget, Converted, EffectStats, Error, WeldTextures};
 use crate::{
     kurbo::{Affine, Rect},
-    Canvas as _, Gpu, ImageIds, PathCache,
+    Cache, Canvas as _, Gpu,
 };
 use mui_scene::{ExternalWeld, Layer, Painted, ResolvedScene};
 use vello_common::{geometry::RectU16, peniko::ImageQuality};
 
 /// A single Vello renderer, its resources, and its associated external textures.
 /// An unchanged paint list reuses the already-prepared Hybrid scene: this skips
-/// strip generation, not merely arc-to-cubic conversion. GPU compositing still
-/// runs when a frame is requested; the host must stop requesting idle frames.
+/// strip generation, not merely arc-to-cubic conversion. Rendered into the
+/// same target view as last time, an unchanged frame skips the GPU pass too:
+/// the target still holds it. A swapchain hands out a fresh view per frame,
+/// so there the pass runs; such a host should stop requesting idle frames.
 pub struct HybridEffects {
     device: wgpu::Device,
     queue: wgpu::Queue,
     renderer: vello_hybrid::Renderer,
     resources: vello_hybrid::Resources,
     scene: vello_hybrid::Scene,
-    images: ImageIds,
-    paths: PathCache,
+    cache: Cache,
     effects: WeldTextures,
     size: [u32; 2],
     retained: Vec<Painted>,
+    paths: Converted,
     transform: Option<Affine>,
     mapping: u64,
     valid: bool,
-    timer: Option<super::GpuTimer>,
+    /// The view the last complete frame went to; cleared by anything that
+    /// could leave it stale.
+    presented: Option<wgpu::TextureView>,
 }
 fn checked_size(device: &wgpu::Device, size: [u32; 2]) -> Result<(), Error> {
     let max = device
@@ -61,13 +65,7 @@ impl HybridEffects {
                 "target must be non-sRGB RGBA8/BGRA8 UNORM",
             ));
         }
-        let effects = WeldTextures::new(
-            device,
-            queue,
-            budget,
-            OutputEncoding::HybridPremultipliedSrgb,
-        )
-        .await?;
+        let effects = WeldTextures::new(device, queue, budget).await?;
         let (renderer, resources) = vello_hybrid::Renderer::new(
             device,
             &vello_hybrid::RenderTargetConfig {
@@ -82,33 +80,16 @@ impl HybridEffects {
             renderer,
             resources,
             scene: vello_hybrid::Scene::new(size[0] as u16, size[1] as u16),
-            images: Default::default(),
-            paths: PathCache::new(),
+            cache: Cache::default(),
             effects,
             size,
             retained: Vec::new(),
+            paths: Converted::default(),
             transform: None,
             mapping: 0,
             valid: false,
-            timer: None,
+            presented: None,
         })
-    }
-    /// Optional diagnostic. No queries or mapping callbacks exist until enabled.
-    pub fn enable_profiling(&mut self) -> Result<(), Error> {
-        if self.timer.is_none() {
-            self.timer = Some(super::GpuTimer::new(&self.device, &self.queue)?);
-        }
-        Ok(())
-    }
-    pub fn collect_timings(&mut self, out: &mut Vec<super::GpuTiming>) {
-        if let Some(timer) = &mut self.timer {
-            timer.collect(&self.device, out);
-        }
-    }
-    pub fn timing_losses(&self) -> (u64, u64) {
-        self.timer
-            .as_ref()
-            .map_or((0, 0), |t| (t.dropped_samples, t.failed_samples))
     }
     pub fn resize(&mut self, size: [u32; 2]) -> Result<(), Error> {
         checked_size(&self.device, size)?;
@@ -123,13 +104,7 @@ impl HybridEffects {
     /// glyph preparation resources, or unchanged material textures.
     pub fn invalidate(&mut self) {
         self.valid = false;
-    }
-    pub fn resident_effect_bytes(&self) -> u64 {
-        self.effects.resident_bytes()
-    }
-    pub fn release_effects(&mut self) {
-        self.effects.clear();
-        self.invalidate();
+        self.presented = None;
     }
     pub fn render(
         &mut self,
@@ -166,16 +141,15 @@ impl HybridEffects {
             .filter(move |(_, e)| visible(e, xf, size))
             .map(|(k, e)| (k, &e.material));
         let mut stats = self.effects.begin(wanted)?;
+        self.effects
+            .forget_absent(|k| resolved.external_weld(k).is_some());
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("MUI effects + Vello"),
             });
-        let ticket = self
-            .timer
-            .as_mut()
-            .and_then(|timer| timer.begin(&mut encoder));
-        let result = (|| -> Result<(), Error> {
+        // `Ok(false)`: nothing was recorded, so there is nothing to submit.
+        let result = (|| -> Result<bool, Error> {
             for (key, e) in resolved
                 .external_welds()
                 .filter(|(_, e)| visible(e, xf, size))
@@ -191,21 +165,22 @@ impl HybridEffects {
                 || self.retained != resolved.paint;
             if needs_encode {
                 self.valid = false; // partial encoding must never be reused after error
+                self.presented = None;
+                self.cache.tick();
                 self.scene.reset();
-                self.paths.frame = self.paths.frame.wrapping_add(1);
-                let frame = self.paths.frame;
                 let mut canvas = Gpu {
                     scene: &mut self.scene,
                     resources: &mut self.resources,
+                    cache: &mut self.cache,
                     atlas: Some(crate::Atlas {
                         renderer: &mut self.renderer,
                         device: &self.device,
                         queue: &self.queue,
-                        ids: &mut self.images,
                     }),
                 };
                 canvas.set_transform(xf);
-                for p in &resolved.paint {
+                self.paths.resize(resolved.paint.len());
+                for (i, p) in resolved.paint.iter().enumerate() {
                     if p.layer == Layer::External {
                         let e = resolved
                             .external_weld(&p.key)
@@ -235,20 +210,21 @@ impl HybridEffects {
                             }],
                         );
                     } else if !crate::layered(&mut canvas, p) {
-                        let bez = self.paths.bez(p)?;
-                        crate::one(&mut canvas, p, &bez)?;
+                        crate::one(&mut canvas, p, self.paths.get(i, &p.path)?)?;
                     }
                 }
                 if let Some(draw) = overlay {
                     draw(&mut canvas);
                 } else {
-                    self.retained.clone_from(&resolved.paint);
+                    super::damage::copy_changed(&mut self.retained, &resolved.paint);
                     self.transform = Some(xf);
                     self.mapping = mapping;
                     self.valid = true;
                 }
-                self.paths.entries.retain(|_, e| e.frame == frame);
                 stats.encoded_scenes += 1;
+            }
+            if stats.effect_draws == 0 && self.presented.as_ref() == Some(target) {
+                return Ok(false);
             }
             self.renderer
                 .render(
@@ -265,28 +241,25 @@ impl HybridEffects {
                     self.effects.bindings(),
                 )
                 .map_err(|e| Error::Render(e.to_string()))?;
-            Ok(())
+            stats.renders += 1;
+            Ok(true)
         })();
         match result {
-            Ok(()) => {
+            Ok(recorded) => {
                 // Accepted submission is the cache commit boundary, not an
                 // encode call and not a synchronous GPU-completion wait.
-                if let (Some(timer), Some(ticket)) = (&mut self.timer, ticket) {
-                    timer.finish(&mut encoder, ticket);
-                }
-                self.queue.submit([encoder.finish()]);
-                if let (Some(timer), Some(ticket)) = (&mut self.timer, ticket) {
-                    timer.submitted(ticket);
+                if recorded {
+                    self.queue.submit([encoder.finish()]);
                 }
                 self.effects.commit_submitted(&mut stats);
+                if self.valid {
+                    self.presented = Some(target.clone());
+                }
                 Ok(stats)
             }
             Err(e) => {
-                if let (Some(timer), Some(ticket)) = (&mut self.timer, ticket) {
-                    timer.abort(ticket);
-                }
                 self.effects.abort();
-                self.valid = false;
+                self.invalidate();
                 Err(e)
             }
         }

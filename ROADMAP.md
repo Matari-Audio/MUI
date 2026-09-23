@@ -53,17 +53,23 @@ public function and a test behind it.
       transitions that retarget mid-flight, and `Ui::tween`.
 - [x] Plugin parameter gestures: `Ui::edit` / `Frame::edits` bracket every
       capture, cancelled ones included.
+- [x] A native CLAP/VST3 editor host and parameter bridge: `mui-truce`'s
+      `MuiEditor` embeds a baseview + wgpu child window (host scale, resize
+      floor, focus-loss cancel, clipboard, cursors, idle skipping, GPU
+      recovery), and `Bridge::bind` turns `Ui` edits into the host's
+      begin/set/end. `examples/gain-plugin` passes pluginval's editor tests.
 - [x] Images: `Image::rgba` + `Fill::Image` with `Cover`/`Contain`/`Fill`,
       and `Path::from_svg_data` for an icon's `d` attribute. `vello_cpu`
       paints the pixmap; `vello_hybrid` uploads it once through `Gpu`'s
       `Atlas` and paints by id.
 - [x] AccessKit: `mui-access` turns a `ResolvedScene` into a `TreeUpdate`,
       and the preview feeds it to an `accesskit_winit::Adapter`.
-- [x] `mui_vello::PathCache` / `paint_cached`: a still frame re-encodes
-      without reconverting a path.
-- [x] Image eviction: both image caches key on the buffer's `Arc` and drop
-      the entries the app has let go of, `Renderer::destroy_image` included,
-      and an image too big for an atlas tile falls back to a solid.
+- [x] `mui_vello::PathCache` / `paint_cached`: measured at ~0.08 ms a frame
+      on the bench editor, then deleted as not worth its API.
+- [x] Image eviction: the renderer-owned `mui_vello::Cache` holds a `Weak`
+      per buffer and drops the entries the app has let go of,
+      `Renderer::destroy_image` included, and an image the atlas has no room
+      for falls back to a solid.
 - [x] Preview: an F12 inspector, `MUI_PREVIEW_THEME` hot reload, a frame-cost
       title bar, and a scene per feature above.
 - [x] Responsive without breakpoints: `clamp(min, pct, max)` lengths,
@@ -212,16 +218,17 @@ public function and a test behind it.
 - [x] The crate split: theme data, motion and the scalar/spacing vocabulary
       sit under the element tree (`mui-style`, `mui-motion`, `mui-geometry`),
       `mui-core` is `mui-scene`, the controls are `mui-widgets` behind a
-      `Host` trait, and `mui` is the facade that owns the runtime and the
-      prelude. The graph is acyclic and every public path is unchanged;
-      `mui::core` stays as a deprecated alias of `mui::scene` for one release.
+      `Host` trait (since folded into `mui::widgets`, taking `&mut Ui`
+      directly), and `mui` is the facade that owns the runtime and the
+      prelude. The graph is acyclic; the old `mui::core` alias is gone,
+      use `mui::scene`.
 
 - [x] Live readouts and one-seed palettes: `.reserve("-88.8 dB")` measures a
       text node for the widest value it will ever show, `Ui::set_text(id, s)`
       then swaps what it says while the resolved frame stands -- one glyph run
       re-shapes, the tree is not walked again, which is the whole point at 60
       Hz. `.text_weight(Weight::BOLD)` drives the run's `wght` axis and the
-      position reaches the renderer as `Text::coords`, so a bold run is drawn
+      position reaches the renderer as `Text::font_coords`, so a bold run is drawn
       at the instance it was measured at. `Palette::from_seed(accent, mode)`
       derives every role from one colour, hue-swept in both modes against
       `UI_NONTEXT` and `AA_TEXT` instead of trusting a hex table.
@@ -231,13 +238,33 @@ public function and a test behind it.
 - [ ] `Ui::set_text` swaps one line: a wrapped label re-shapes to a single
       run rather than breaking again, because the swap deliberately does no
       layout. Re-breaking needs the measure pass it is avoiding.
-- [ ] `Ui::set_text` does not touch what `mui-access` reports; a screen
-      reader hears the value the last resolved tree carried.
-
 - [ ] A pin whose anchor is itself inside another pinned float reads that
       float's first-pass position; a dependency-ordered pin pass is the fix.
 - [ ] Spring interpolation of gradient *stops*: `Ui`'s channels only ever
       sprang solid fills, and no scene needs the per-stop slots yet.
+- [ ] `mui-truce` in a real DAW: the editor passes pluginval's editor tests
+      and clap-validator on Linux, but nobody has yet opened it by hand in
+      Bitwig, Reaper or Ableton, on any OS. macOS and Windows are only
+      compiled for, never run.
+- [ ] `mui-truce` has no IME: baseview has no composition or candidate-window
+      API, so `Frame::ime` is dropped and CJK input does not work in a
+      plugin text field.
+- [ ] `mui-truce` has no AU or AAX: truce builds them, but only CLAP and VST3
+      are wired and validated.
+- [ ] `mui-truce` swallows every key while focused: upstream baseview does not
+      forward unhandled keys to the host, so DAW shortcuts (space for
+      transport) stop while the editor has focus. Kurv's vendored baseview
+      has the forwarding.
+- [ ] The gain plugin fails three clap-validator state tests and Steinberg's
+      `vst3 validator`: truce-clap 6.3 never requests a value rescan after a
+      state load, and truce-vst3 6.3 declares the wrong
+      `IProcessContextRequirements` IID. Both are one-line upstream fixes
+      (Kurv vendors them); see `crates/mui-truce/README.md`.
+- [x] Keyboard value stepping: a focused slider or knob steps on the arrow,
+      Page and Home/End keys, bracketed as one edit.
+- [ ] The text cache keeps exactly what the last resolve used, with no byte
+      budget; `mui_vello::Cache` never evicts a font while its renderer lives.
+- [ ] No fuzzing or property campaigns over layout, welding or text input.
 - [ ] Kurv rewritten on MUI: the first real plugin editor on this stack, and
       the only honest test of whether the DSL survives a product.
 - [ ] `vello_hybrid` against classic `vello`, re-measured on Windows — the

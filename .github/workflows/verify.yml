@@ -3,12 +3,17 @@ on: [push, pull_request]
 permissions:
   contents: read
 jobs:
-  contracts:
-    runs-on: ubuntu-latest
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
-      - name: Restore pinned GPUI and install native build dependencies
+      - name: Linux native dependencies
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -17,7 +22,10 @@ jobs:
             libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
             libxcb-randr0-dev libxcb-sync-dev libxkbcommon-dev libxkbcommon-x11-dev \
             libwayland-dev libvulkan-dev libfontconfig1-dev libclang-dev libssl-dev libzstd-dev
+      # rust-toolchain.toml pins the toolchain, rustfmt, clippy and the wasm target.
       - run: rustup show
       - uses: Swatinem/rust-cache@v2
       - run: cargo fetch --locked
+      # fmt, test, clippy and the wasm library check: the same gate as local.
       - run: ./tools/verify.sh
+        shell: bash

@@ -3,19 +3,6 @@ use mui_weld::analytic::{dirty_ranges, AnalyticWeld, PARAM_BYTES};
 use mui_weld::boundary::BOUNDARY_BYTES;
 use std::{collections::BTreeMap, num::NonZeroU64, sync::Arc};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum OutputEncoding {
-    HybridPremultipliedSrgb,
-    ClassicStraightSrgb,
-}
-impl OutputEncoding {
-    fn entry(self) -> &'static str {
-        match self {
-            Self::HybridPremultipliedSrgb => "fs_hybrid",
-            Self::ClassicStraightSrgb => "fs_classic",
-        }
-    }
-}
 #[derive(Clone, Copy, Debug)]
 pub struct Budget {
     pub max_surfaces: usize,
@@ -41,6 +28,9 @@ pub struct EffectStats {
     pub effect_draws: u64,
     pub effect_pixels: u64,
     pub encoded_scenes: u64,
+    /// Vello render passes recorded: 0 on a frame that left the target as
+    /// the previous one did.
+    pub renders: u64,
     pub resident_texture_bytes: u64,
     pub peak_texture_bytes: u64,
 }
@@ -64,7 +54,6 @@ impl ContentState {
     }
 }
 struct Slot {
-    texture: wgpu::Texture,
     view: wgpu::TextureView,
     uniform: wgpu::Buffer,
     boundary: wgpu::Buffer,
@@ -77,6 +66,8 @@ struct Slot {
     texture_id: vello_hybrid::TextureId,
     state: ContentState,
     seen: u64,
+    /// The last frame whose scene carried this weld at all, visible or not.
+    present: u64,
     encoded_epoch: u64,
 }
 impl Slot {
@@ -101,7 +92,6 @@ pub struct WeldTextures {
     next_id: u64,
     mapping_revision: u64,
     peak: u64,
-    encoding: OutputEncoding,
     in_frame: bool,
 }
 impl WeldTextures {
@@ -109,7 +99,6 @@ impl WeldTextures {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         budget: Budget,
-        encoding: OutputEncoding,
     ) -> Result<Self, Error> {
         if budget.max_surfaces == 0
             || budget.max_texture_bytes == 0
@@ -168,7 +157,7 @@ impl WeldTextures {
             multisample: Default::default(),
             fragment: Some(wgpu::FragmentState {
                 module: &module,
-                entry_point: Some(encoding.entry()),
+                entry_point: Some("fs_hybrid"),
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: wgpu::TextureFormat::Rgba8Unorm,
@@ -194,12 +183,8 @@ impl WeldTextures {
             next_id: 1,
             mapping_revision: 0,
             peak: 0,
-            encoding,
             in_frame: false,
         })
-    }
-    pub fn encoding(&self) -> OutputEncoding {
-        self.encoding
     }
     pub fn mapping_revision(&self) -> u64 {
         self.mapping_revision
@@ -207,22 +192,19 @@ impl WeldTextures {
     pub fn bindings(&self) -> &vello_hybrid::TextureBindings {
         &self.bindings
     }
-    pub fn texture(&self, key: &str) -> Option<&wgpu::Texture> {
-        self.slots.get(key).map(|s| &s.texture)
-    }
     pub fn texture_id(&self, key: &str) -> Option<vello_hybrid::TextureId> {
         self.slots.get(key).map(|s| s.texture_id)
     }
-    pub fn sample_size(&self, key: &str) -> Option<[u32; 2]> {
-        self.slots.get(key).map(|s| s.used)
-    }
-    pub fn resident_bytes(&self) -> u64 {
+    fn resident_bytes(&self) -> u64 {
         self.slots.values().map(Slot::bytes).sum()
     }
-    /// Release resources not present in this frame, preflight ALL visible storage
-    /// before allocating, and start a transaction. Dropping wgpu handles permits
-    /// deferred release; explicit texture.destroy() is intentionally not used on
-    /// resources an earlier submission may still reference.
+    /// Preflight ALL of this frame's `wanted` (visible) storage before
+    /// allocating, and start a transaction. Textures not wanted this frame stay
+    /// resident while the budget allows -- scrolling back must not re-render --
+    /// and the least recently wanted go first when it does not. Dropping wgpu
+    /// handles permits deferred release; explicit texture.destroy() is
+    /// intentionally not used on resources an earlier submission may still
+    /// reference.
     pub fn begin<'a>(
         &mut self,
         wanted: impl Clone + Iterator<Item = (&'a str, &'a AnalyticWeld)>,
@@ -235,10 +217,9 @@ impl WeldTextures {
         let limit = self.device.limits().max_texture_dimension_2d.min(65535);
         let mut count = 0usize;
         let mut bytes = 0u64;
-        for (i, (key, m)) in wanted.clone().enumerate() {
-            if wanted.clone().take(i).any(|(previous, _)| previous == key) {
-                return Err(Error::Unsupported("duplicate effect key in one frame"));
-            }
+        // A key wanted twice is caught by `encode`, which refuses a second
+        // encode per submission; here it only counts twice against the budget.
+        for (key, m) in wanted.clone() {
             let size = m.pixels();
             if key.is_empty() || size.contains(&0) || size.iter().any(|v| *v > limit) {
                 return Err(Error::Budget("effect key or texture dimensions"));
@@ -272,6 +253,7 @@ impl WeldTextures {
         if self.epoch == u64::MAX {
             for s in self.slots.values_mut() {
                 s.seen = 0;
+                s.present = 0;
                 s.encoded_epoch = 0;
             }
             self.epoch = 0;
@@ -282,22 +264,58 @@ impl WeldTextures {
                 s.seen = self.epoch;
             }
         }
-        let (bindings, slots, revision) = (
-            &mut self.bindings,
-            &mut self.slots,
-            &mut self.mapping_revision,
-        );
-        slots.retain(|_, s| {
-            if s.seen != self.epoch {
-                bindings.remove(s.texture_id);
-                *revision = revision.wrapping_add(1);
-                false
-            } else {
-                true
+        let epoch = self.epoch;
+        let (mut count, mut bytes) = self
+            .slots
+            .values()
+            .filter(|s| s.seen != epoch)
+            .fold((count, bytes), |(n, b), s| {
+                (n + 1, b.saturating_add(s.bytes()))
+            });
+        if count > self.budget.max_surfaces || bytes > self.budget.max_texture_bytes {
+            // ponytail: collects and sorts the idle slots, but only on a frame
+            // that is over budget.
+            let mut idle: Vec<_> = self
+                .slots
+                .iter()
+                .filter(|(_, s)| s.seen != epoch)
+                .map(|(k, s)| (s.seen, k.clone()))
+                .collect();
+            idle.sort_unstable();
+            for (_, key) in idle {
+                if count <= self.budget.max_surfaces && bytes <= self.budget.max_texture_bytes {
+                    break;
+                }
+                if let Some(s) = self.slots.remove(&key) {
+                    self.bindings.remove(s.texture_id);
+                    self.mapping_revision = self.mapping_revision.wrapping_add(1);
+                    count -= 1;
+                    bytes -= s.bytes();
+                }
             }
-        });
+        }
         self.in_frame = true;
         Ok(EffectStats::default())
+    }
+    /// Free the texture of every weld the scene has not carried for
+    /// [`ABSENT_FRAMES`] frames. One scrolled offscreen is still in the
+    /// scene and keeps its texture; one removed goes without waiting for
+    /// budget pressure. Call after [`WeldTextures::begin`].
+    pub fn forget_absent(&mut self, in_scene: impl Fn(&str) -> bool) {
+        let epoch = self.epoch;
+        let before = self.slots.len();
+        self.slots.retain(|key, s| {
+            if in_scene(key) {
+                s.present = epoch;
+            }
+            epoch - s.present <= ABSENT_FRAMES || {
+                self.bindings.remove(s.texture_id);
+                false
+            }
+        });
+        if self.slots.len() != before {
+            self.mapping_revision = self.mapping_revision.wrapping_add(1);
+        }
     }
     pub fn encode(
         &mut self,
@@ -384,7 +402,6 @@ impl WeldTextures {
             self.slots.insert(
                 Arc::from(key),
                 Slot {
-                    texture,
                     view,
                     uniform,
                     boundary,
@@ -397,6 +414,7 @@ impl WeldTextures {
                     texture_id,
                     state: Default::default(),
                     seen: self.epoch,
+                    present: self.epoch,
                     encoded_epoch: 0,
                 },
             );
@@ -487,13 +505,10 @@ impl WeldTextures {
         }
         self.in_frame = false;
     }
-    pub fn clear(&mut self) {
-        self.abort();
-        self.slots.clear();
-        self.bindings = Default::default();
-        self.mapping_revision = self.mapping_revision.wrapping_add(1);
-    }
 }
+/// How many frames a weld may leave the scene and come back to its texture:
+/// a hover that flickers one off for a frame should not re-render it.
+pub const ABSENT_FRAMES: u64 = 3;
 fn fits(want: [u32; 2], capacity: [u32; 2]) -> bool {
     want[0] <= capacity[0] && want[1] <= capacity[1]
 }

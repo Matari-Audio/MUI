@@ -73,7 +73,7 @@ pub trait Sugar: Sized {
     /// The child is placed like any floating overlay child, so `.center()`,
     /// `.w(..)` and the rest position the hole, and then it is never
     /// painted. The shell, the border and the clip all follow the result,
-    /// exactly as they follow a [`weld`](Styled::weld).
+    /// exactly as they follow a [`union`](crate::Paints::union).
     ///
     /// ```
     /// use mui_scene::prelude::*;

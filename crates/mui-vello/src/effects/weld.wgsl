@@ -1,7 +1,8 @@
 // MUI analytic material welding for native wgpu. The earlier WebGL/GLSL
 // reference is not evidence that this WGSL has compiled or rendered.
-// Uniform ABI: 22 vec4<f32>, 352 bytes, all offsets multiples of 16.
-// Supported geometry: one to three rigidly rotated rounded rectangles.
+// Uniform ABI: 21 vec4<f32>, 336 bytes, all offsets multiples of 16.
+// Supported geometry: one to three axis-aligned rounded rectangles. The
+// cos/sin lane is always (1, 0): no source sets a rotation (mui-weld analytic.rs).
 struct Source {
     geom: vec4<f32>,   // centre.xy, half-size.xy
     params: vec4<f32>, // radius, inside-border width, cos(angle), sin(angle)
@@ -14,7 +15,6 @@ struct Params {
     viewport: vec4<f32>, // texture size.xy, logical domain size.xy
     cfg: vec4<f32>,      // reach, material blend, morph, source count
     policy: vec4<f32>,   // fill policy, border policy, crisp edge count (0=organic), fixed AA
-    crop: vec4<f32>,     // draw x, y, width, height within the logical domain
     sources: array<Source, 3>,
 }
 @group(0) @binding(0) var<uniform> u: Params;
@@ -52,7 +52,7 @@ struct Vertex {
     let corners = array<vec2<f32>, 6>(
         vec2(0., 0.), vec2(1., 0.), vec2(0., 1.),
         vec2(0., 1.), vec2(1., 0.), vec2(1., 1.));
-    let p = u.crop.xy + corners[i] * u.crop.zw;
+    let p = corners[i] * u.viewport.zw;
     var o: Vertex;
     o.position = vec4(p.x / u.viewport.z * 2. - 1.,
                       1. - p.y / u.viewport.w * 2., 0., 1.);
@@ -192,10 +192,4 @@ fn shade(p: vec2<f32>) -> vec4<f32> {
 @fragment fn fs_hybrid(vertex: Vertex) -> @location(0) vec4<f32> {
     let c = shade(vertex.point);
     return vec4(encode_srgb(c.rgb/max(c.a,1e-12))*c.a,c.a);
-}
-// Rgba8Unorm, already sRGB-encoded, STRAIGHT alpha: classic texture registration.
-// Keeping this entry point separate prevents an accidental premul atlas copy.
-@fragment fn fs_classic(vertex: Vertex) -> @location(0) vec4<f32> {
-    let c = shade(vertex.point);
-    return vec4(encode_srgb(c.rgb/max(c.a,1e-12)),c.a);
 }

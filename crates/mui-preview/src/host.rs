@@ -11,6 +11,7 @@
 
 use std::sync::Arc;
 
+use crate::device::OnDevice;
 use vello_hybrid::{RenderSize, RenderTargetConfig, Renderer, Resources, Scene, TextureBindings};
 use winit::window::Window;
 
@@ -25,15 +26,20 @@ pub fn target_size(width: u32, height: u32) -> Option<(u32, u32)> {
 }
 
 pub struct Gpu {
+    instance: wgpu::Instance,
     window: Arc<Window>,
     surface: wgpu::Surface<'static>,
-    device: wgpu::Device,
-    queue: wgpu::Queue,
+    gpu: OnDevice<Device>,
+    vello: Scene,
+}
+
+/// Everything that lives on one device: rebuilt whole when it is lost. The
+/// `Cache` too -- its atlas ids name slots in the dead renderer's atlas.
+struct Device {
     config: wgpu::SurfaceConfiguration,
     renderer: Renderer,
     resources: Resources,
-    ids: mui::vello::ImageIds,
-    vello: Scene,
+    cache: mui::vello::Cache,
 }
 
 impl Gpu {
@@ -56,56 +62,15 @@ impl Gpu {
                 window.clone(),
             ))
             .expect("surface");
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                compatible_surface: Some(&surface),
-                ..Default::default()
-            })
-            .await
-            .expect("adapter");
-        let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor::default())
-            .await
-            .expect("device");
-
-        let size = window.inner_size();
-        let (width, height) = target_size(size.width, size.height).unwrap_or((1, 1));
-        let caps = surface.get_capabilities(&adapter);
-        // Vello writes sRGB values, so an _Srgb surface would encode them a
-        // second time. Take the linear sibling of the surface's own preferred
-        // format -- picking the first non-sRGB entry instead lands on
-        // Rgba16Unorm here, which needs a device feature we never asked for.
-        let preferred = caps.formats[0];
-        let linear = preferred.remove_srgb_suffix();
-        let format = if caps.formats.contains(&linear) {
-            linear
-        } else {
-            preferred
-        };
-        let config = surface
-            .get_default_config(&adapter, width, height)
-            .expect("surface config");
-        let config = wgpu::SurfaceConfiguration { format, ..config };
-        surface.configure(&device, &config);
-
-        let (renderer, resources) = Renderer::new(
-            &device,
-            &RenderTargetConfig {
-                format,
-                width,
-                height,
-            },
-        );
+        let gpu = OnDevice::open(&instance, Some(&surface), build(&surface, &window))
+            .expect("initialize the gallery's GPU");
+        let (width, height) = (gpu.state.config.width, gpu.state.config.height);
         Self {
             vello: Scene::new(width as u16, height as u16),
+            instance,
             window,
             surface,
-            device,
-            queue,
-            config,
-            renderer,
-            resources,
-            ids: Default::default(),
+            gpu,
         }
     }
 
@@ -115,7 +80,7 @@ impl Gpu {
 
     /// The surface size in physical pixels. The only size in this program.
     pub fn size(&self) -> (u32, u32) {
-        (self.config.width, self.config.height)
+        (self.gpu.state.config.width, self.gpu.state.config.height)
     }
 
     /// Reconfigure for a new surface size.
@@ -129,12 +94,13 @@ impl Gpu {
         let Some((width, height)) = target_size(width, height) else {
             return;
         };
-        if (width, height) == (self.config.width, self.config.height) {
+        if (width, height) == self.size() {
             return;
         }
-        self.config.width = width;
-        self.config.height = height;
-        self.surface.configure(&self.device, &self.config);
+        let config = &mut self.gpu.state.config;
+        config.width = width;
+        config.height = height;
+        self.surface.configure(&self.gpu.device, config);
         self.vello.reset_and_resize(width as u16, height as u16);
     }
 
@@ -144,14 +110,20 @@ impl Gpu {
     /// hinted-outline cache rather than re-hinting every frame.
     pub fn begin(&mut self) -> mui::vello::Gpu<'_> {
         self.vello.reset();
+        let OnDevice {
+            device,
+            queue,
+            state,
+            ..
+        } = &mut self.gpu;
         mui::vello::Gpu {
             scene: &mut self.vello,
-            resources: &mut self.resources,
+            resources: &mut state.resources,
+            cache: &mut state.cache,
             atlas: Some(mui::vello::Atlas {
-                renderer: &mut self.renderer,
-                device: &self.device,
-                queue: &self.queue,
-                ids: &mut self.ids,
+                renderer: &mut state.renderer,
+                device,
+                queue,
             }),
         }
     }
@@ -161,6 +133,27 @@ impl Gpu {
     /// Notifies the compositor immediately before presenting, which is what
     /// keeps a Wayland frame callback from stalling the next redraw.
     pub fn present(&mut self) {
+        // What `begin` encoded may name atlas ids of the dead device; the
+        // redraw re-encodes it against the new one.
+        match self.gpu.recover(
+            &self.instance,
+            Some(&self.surface),
+            build(&self.surface, &self.window),
+        ) {
+            Ok(false) => {}
+            Ok(true) => return self.window.request_redraw(),
+            Err(e) => return eprintln!("GPU device lost and not rebuilt: {e}"),
+        }
+        let (
+            device,
+            queue,
+            Device {
+                config,
+                renderer,
+                resources,
+                ..
+            },
+        ) = (&self.gpu.device, &self.gpu.queue, &mut self.gpu.state);
         use wgpu::CurrentSurfaceTexture as Acquired;
         let frame = match self.surface.get_current_texture() {
             Acquired::Success(f) | Acquired::Suboptimal(f) => f,
@@ -170,7 +163,7 @@ impl Gpu {
             // dropped, so ask here or the window stays stale until the next
             // input -- which is how a keyboard-driven resize left it blank.
             Acquired::Outdated => {
-                self.surface.configure(&self.device, &self.config);
+                self.surface.configure(device, config);
                 self.window.request_redraw();
                 return;
             }
@@ -191,27 +184,25 @@ impl Gpu {
             _ => return,
         };
         let view = frame.texture.create_view(&wgpu::TextureViewDescriptor {
-            format: Some(self.config.format),
+            format: Some(config.format),
             ..Default::default()
         });
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-        match self.renderer.render(
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        match renderer.render(
             &self.vello,
-            &mut self.resources,
-            &self.device,
-            &self.queue,
+            resources,
+            device,
+            queue,
             &mut encoder,
             &RenderSize {
-                width: self.config.width,
-                height: self.config.height,
+                width: config.width,
+                height: config.height,
             },
             &view,
             &TextureBindings::new(),
         ) {
             Ok(()) => {
-                self.queue.submit([encoder.finish()]);
+                queue.submit([encoder.finish()]);
                 self.window.pre_present_notify();
                 frame.present();
             }
@@ -219,6 +210,49 @@ impl Gpu {
             // broke is the one failure that must not be silent.
             Err(e) => eprintln!("vello: {e}"),
         }
+    }
+}
+
+/// The renderer and surface configuration for `surface` on a device: the
+/// first frame and every device loss both come through here.
+fn build<'a>(
+    surface: &'a wgpu::Surface<'static>,
+    window: &'a Window,
+) -> impl FnOnce(&wgpu::Adapter, &wgpu::Device, &wgpu::Queue) -> Result<Device, String> + 'a {
+    move |adapter, device, _| {
+        let size = window.inner_size();
+        let (width, height) = target_size(size.width, size.height).unwrap_or((1, 1));
+        let caps = surface.get_capabilities(adapter);
+        // Vello writes sRGB values, so an _Srgb surface would encode them a
+        // second time. Take the linear sibling of the surface's own preferred
+        // format -- picking the first non-sRGB entry instead lands on
+        // Rgba16Unorm here, which needs a device feature we never asked for.
+        let preferred = *caps.formats.first().ok_or("surface has no formats")?;
+        let linear = preferred.remove_srgb_suffix();
+        let format = if caps.formats.contains(&linear) {
+            linear
+        } else {
+            preferred
+        };
+        let config = surface
+            .get_default_config(adapter, width, height)
+            .ok_or("surface config")?;
+        let config = wgpu::SurfaceConfiguration { format, ..config };
+        surface.configure(device, &config);
+        let (renderer, resources) = Renderer::new(
+            device,
+            &RenderTargetConfig {
+                format,
+                width,
+                height,
+            },
+        );
+        Ok(Device {
+            config,
+            renderer,
+            resources,
+            cache: Default::default(),
+        })
     }
 }
 

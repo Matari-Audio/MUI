@@ -71,8 +71,9 @@ impl Spring {
     pub fn settled(&self) -> bool {
         (self.value - self.target).abs() < 1e-3 && self.velocity.abs() < 1e-3
     }
-    /// Advance `dt` seconds. Returns whether it is still moving. Substepped at
-    /// 240 Hz so a dropped frame cannot blow the integrator up.
+    /// Advance `dt` seconds. Returns whether it is still moving. Uses the
+    /// exact solution of the damped oscillator, so any `dt` is stable and
+    /// sixty small steps land where one big step does.
     pub fn step(&mut self, dt: f64) -> bool {
         if self.stiffness <= 0.0 {
             self.value = self.target;
@@ -82,17 +83,30 @@ impl Spring {
         if !(dt.is_finite() && dt > 0.0) {
             return !self.settled();
         }
-        // The substep count is capped at 64, so past this the step size would
-        // grow and explicit Euler would diverge. Clamp the frame instead: a
-        // resumed laptop resumes a settling spring, not a NaN.
-        let dt = dt.min(64.0 / 240.0);
-        let n = (dt * 240.0).ceil().clamp(1.0, 64.0);
-        let h = dt / n;
-        for _ in 0..n as usize {
-            let a = -self.stiffness * (self.value - self.target) - self.damping * self.velocity;
-            self.velocity += a * h;
-            self.value += self.velocity * h;
-        }
+        // x'' + c x' + k x = 0 with x = value - target. Writing a = c / 2 and
+        // d = k - a^2, x(t) = e^(-at) (x0 C + (v0 + a x0) S) and
+        // v(t) = e^(-at) (v0 C - (a v0 + k x0) S), where (C, S) is
+        // (cos wt, sin(wt) / w) under-damped, (1, t) critical and
+        // (cosh wt, sinh(wt) / w) over-damped, w = sqrt(|d|). `e_c` and `e_s`
+        // carry the e^(-at) factor already.
+        let (k, a) = (self.stiffness, 0.5 * self.damping);
+        let (x0, v0) = (self.value - self.target, self.velocity);
+        let d = k - a * a;
+        let decay = (-a * dt).exp();
+        let (e_c, e_s) = if d.abs() <= 1e-9 * k {
+            (decay, decay * dt)
+        } else if d > 0.0 {
+            let w = d.sqrt();
+            let (sin, cos) = (w * dt).sin_cos();
+            (decay * cos, decay * sin / w)
+        } else {
+            // Both exponents are <= 0; e^(-at) * cosh(wt) would overflow first.
+            let w = (-d).sqrt();
+            let (slow, fast) = (((w - a) * dt).exp(), (-(w + a) * dt).exp());
+            (0.5 * (slow + fast), 0.5 * (slow - fast) / w)
+        };
+        self.value = self.target + x0 * e_c + (v0 + a * x0) * e_s;
+        self.velocity = v0 * e_c - (a * v0 + k * x0) * e_s;
         if self.settled() {
             self.value = self.target;
             self.velocity = 0.0;
@@ -146,5 +160,41 @@ mod tests {
         }
         assert_eq!(s.value, 1.0);
         assert!(peak <= 1.0 + 1e-6, "overshot to {peak}");
+    }
+
+    #[test]
+    fn stiff_springs_settle_at_60fps() {
+        // After 1 s these had diverged to -4.9e60, -1.2e51 and -1.6e14 under
+        // 240 Hz Euler. Two seconds: damping 5 crawls, as it should.
+        for mut s in [
+            Spring::new(0.025, 1.0),
+            Spring::new(0.1, 5.0),
+            Spring::new(0.03, 1.0),
+        ] {
+            s.to(1.0);
+            for _ in 0..120 {
+                s.step(1.0 / 60.0);
+                assert!(s.value.is_finite() && s.velocity.is_finite(), "{s:?}");
+            }
+            assert!(s.settled(), "{s:?}");
+        }
+    }
+
+    #[test]
+    fn the_trajectory_is_frame_rate_independent() {
+        let run = |hz: usize| {
+            let mut s = Spring::new(0.5, 0.2);
+            s.to(1.0);
+            for _ in 0..hz {
+                s.step(1.0 / hz as f64);
+            }
+            s
+        };
+        let (a, b, c) = (run(60), run(240), run(1));
+        assert!(!c.settled(), "pick a spring still moving at 1 s: {c:?}");
+        for s in [a, b] {
+            assert!((s.value - c.value).abs() < 1e-9, "{s:?} vs {c:?}");
+            assert!((s.velocity - c.velocity).abs() < 1e-7, "{s:?} vs {c:?}");
+        }
     }
 }

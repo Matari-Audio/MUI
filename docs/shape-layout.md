@@ -15,7 +15,7 @@
 
 
 `ShapeLayout` is part of the MUI prelude. Containers
-partition their **final contour**, including custom paths, vector welds and holes.
+partition their **final contour**, including custom paths, vector unions and holes.
 No new layout language or renderer is required:
 
 ```rust
@@ -42,8 +42,8 @@ let panel = row![
 - `.bend(0.2)`: bow a two-child row/column divider; negative bends the other way.
   The fraction is of the partition axis's available extent, limited to ±0.45.
   Gap is measured normal to the curve, not as a horizontal/vertical shift.
-- `.outline(...)`, `.weld(...)`, `.cut(...)`, and nesting remain the shape
-  vocabulary. Weld unions follow the authored source placement: gaps between
+- `.outline(...)`, `.union(...)`, `.cut(...)`, and nesting remain the shape
+  vocabulary. Unions follow the authored source placement: gaps between
   source shapes remain gaps, rather than being silently bridged.
 
 `BorderAlign::{Inside, Center, Outside}` controls ordinary borders through
@@ -65,7 +65,7 @@ proportions; this is contour fitting, not text flowing around holes or glyph
 warping. Existing floating overlays still escape parent clips. Outward child
 borders reserve space inside their allocated regions too, preserving sibling gaps.
 An outward region ramp must use its own frame as its anchor.
-Material/raster welding is rejected for `.inside(...)`; use vector `.weld(...)`.
+Material/raster welding is rejected for `.inside(...)`; use a vector `.union(...)`.
 
 Offsets may split or erase narrow regions. Empty children are omitted from the
 scene and hit testing rather than being stretched across a gap. Geometry uses

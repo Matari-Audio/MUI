@@ -79,7 +79,7 @@ retained as pointers into old trees.
 
 Measurement cache keys include the exact payload fields consumed by measurement,
 node revision, both offered extents, wrapping room and nearest container sizes.
-For text: text, text size, weight, line cap and reserve string. Font/tolerance and
+For text: text, text size, weight, line cap and reserve string. Font and
 spacing/limits changes invalidate context. Generic callers must include every
 external measurement dependency in their key or explicitly clear the cache.
 

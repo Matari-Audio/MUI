@@ -1,0 +1,24 @@
+[package]
+name = "mui-gain-plugin"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# truce exports the CLAP and VST3 entry points from the cdylib.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["clap", "vst3"]
+clap = ["dep:truce-clap", "dep:clap-sys"]
+vst3 = ["dep:truce-vst3"]
+
+[dependencies]
+truce = { version = "6.3", default-features = false }
+truce-clap = { version = "6.3", optional = true }
+truce-vst3 = { version = "6.3", optional = true }
+clap-sys = { version = "0.5", optional = true }
+mui = { path = "../../crates/mui" }
+mui-truce = { path = "../../crates/mui-truce" }
+epaint_default_fonts = "0.36"

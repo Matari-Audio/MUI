@@ -8,7 +8,8 @@
 use super::*;
 use std::{
     cell::RefCell,
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{hash_map::Entry, HashMap, VecDeque},
+    hash::{DefaultHasher, Hash, Hasher},
     sync::Arc,
 };
 
@@ -26,8 +27,24 @@ pub struct LayoutStats {
 #[derive(Clone, Debug, PartialEq)]
 struct Stamp {
     shape: Node<Vec<u8>>,
+    /// Kept beside `shape` so a warm frame compares it by reference instead
+    /// of cloning its strings into a projection.
+    pin: Option<Pin>,
     children: Vec<u64>,
     revision: u64,
+    /// The `prepare` pass that last visited this address.
+    seen: u64,
+}
+/// One `prepare` walk's state. The buffers live in the cache between frames,
+/// so a warm walk allocates nothing.
+struct Scan<'k, K> {
+    limits: Limits,
+    key: &'k mut K,
+    pass: u64,
+    count: usize,
+    /// Child revisions of every node on the current path, stacked.
+    revisions: Vec<u64>,
+    payload: Vec<u8>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct MeasureInput {
@@ -124,14 +141,19 @@ pub(crate) struct ArrangementCache {
 }
 #[derive(Debug, Default)]
 pub struct LayoutCache {
-    stamps: HashMap<String, Stamp>,
+    /// Keyed by a hash of the node's id, or of its child-index path if it
+    /// has none. See `scan` for why a collision cannot give a wrong answer.
+    stamps: HashMap<u64, Stamp>,
     pointers: HashMap<usize, u64>,
     entries: HashMap<MeasureInput, Arc<Frozen>>,
     order: VecDeque<MeasureInput>,
     snapshot_nodes: usize,
     serial: u64,
     ticket: u64,
-    context: Option<String>,
+    pass: u64,
+    revisions: Vec<u64>,
+    payload: Vec<u8>,
+    context: Option<(Limits, SpacingScale)>,
     pinned: bool,
     pub(crate) arrangement: RefCell<ArrangementCache>,
 }
@@ -151,94 +173,112 @@ impl LayoutCache {
         n: &Node<P>,
         limits: Limits,
         scale: SpacingScale,
-        key: &mut impl FnMut(&P) -> Vec<u8>,
+        key: &mut impl FnMut(&P, &mut Vec<u8>),
     ) -> Result<(), Error> {
         // Context changes invalidate metrics AND arrangement. Cache tickets may
         // be reused only after both stores are gone. Limits cannot be bypassed.
-        let context = format!("{limits:?}/{scale:?}");
-        if self.context.as_ref() != Some(&context) {
+        if self.context != Some((limits, scale)) {
             self.clear();
-            self.context = Some(context);
+            self.context = Some((limits, scale));
         }
         self.pointers.clear();
         self.pinned = false;
         self.arrangement.borrow_mut().stats = LayoutStats::default();
-        let mut names = HashSet::new();
-        let mut live = HashSet::new();
-        let mut count = 0;
-        self.scan(n, "", 0, limits, key, &mut names, &mut live, &mut count)?;
-        self.stamps.retain(|k, _| live.contains(k));
+        self.pass = self.pass.wrapping_add(1);
+        let mut scan = Scan {
+            limits,
+            key,
+            pass: self.pass,
+            count: 0,
+            revisions: std::mem::take(&mut self.revisions),
+            payload: std::mem::take(&mut self.payload),
+        };
+        let walked = self.scan(n, 0, 0, &mut scan);
+        (self.revisions, self.payload) = (scan.revisions, scan.payload);
+        // A failed walk returns before popping its path's revisions.
+        self.revisions.clear();
+        walked?;
+        self.stamps.retain(|_, s| s.seen == scan.pass);
         let mut a = self.arrangement.borrow_mut();
-        a.stats.validated_nodes = count;
+        a.stats.validated_nodes = scan.count;
         a.stats.pinned_arrange_fallback = self.pinned;
         Ok(())
     }
-    #[allow(clippy::too_many_arguments)]
-    fn scan<P>(
+    /// Validates `n`'s subtree and returns its revision: unchanged while its
+    /// shallow projection and every child revision are, so equal revisions
+    /// mean equal subtrees. That makes the u64 address a hint, not an
+    /// identity: two nodes that collide on it probe apart, and a node that
+    /// lands on a stranger's stamp just fails the comparison and misses.
+    fn scan<P, K: FnMut(&P, &mut Vec<u8>)>(
         &mut self,
         n: &Node<P>,
-        path: &str,
+        path: u64,
         depth: usize,
-        limits: Limits,
-        key: &mut impl FnMut(&P) -> Vec<u8>,
-        names: &mut HashSet<String>,
-        live: &mut HashSet<String>,
-        count: &mut usize,
+        s: &mut Scan<'_, K>,
     ) -> Result<u64, Error> {
-        if depth > limits.depth || *count >= limits.nodes {
+        if depth > s.limits.depth || s.count >= s.limits.nodes {
             return Err(Error::BudgetExceeded);
         }
-        *count += 1;
-        measure::validate_node(n, limits)?;
+        s.count += 1;
+        measure::validate_node(n, s.limits)?;
         if !n.scrolled.iter().all(|v| v.is_finite()) {
             return Err(Error::InvalidValue);
         }
-        if let Some(id) = n.key() {
-            if !names.insert(id.to_owned()) {
+        self.pinned |= n.pin.is_some();
+        let base = s.revisions.len();
+        for (i, c) in n.children().iter().enumerate() {
+            let mut h = DefaultHasher::new();
+            (path, i).hash(&mut h);
+            let revision = self.scan(c, h.finish(), depth + 1, s)?;
+            s.revisions.push(revision);
+        }
+        let mut address = n.key().map_or(path, |id| {
+            let mut h = DefaultHasher::new();
+            id.hash(&mut h);
+            h.finish()
+        });
+        // A slot already visited this pass belongs to another node: the same
+        // id is a duplicate, anything else a collision to probe past.
+        while let Some(taken) = self.stamps.get(&address).filter(|t| t.seen == s.pass) {
+            if let Some(id) = n.key().filter(|_| taken.shape.id == n.id) {
                 return Err(Error::DuplicateKey(id.to_owned()));
             }
+            address = address.wrapping_add(1);
         }
-        self.pinned |= n.pin.is_some();
-        let address = n
-            .key()
-            .map_or_else(|| format!("path:{path}"), |id| format!("id:{id}"));
-        let child_revisions = n
-            .children()
-            .iter()
-            .enumerate()
-            .map(|(i, c)| {
-                self.scan(
-                    c,
-                    &format!("{path}/{i}"),
-                    depth + 1,
-                    limits,
-                    key,
-                    names,
-                    live,
-                    count,
-                )
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let shape = projection(n, key(&n.payload));
-        let unchanged = self
-            .stamps
-            .get(&address)
-            .is_some_and(|s| s.shape == shape && s.children == child_revisions);
-        let revision = if unchanged {
-            self.stamps[&address].revision
-        } else {
-            self.serial = self.serial.checked_add(1).ok_or(Error::RevisionExhausted)?;
-            self.stamps.insert(
-                address.clone(),
-                Stamp {
+        s.payload.clear();
+        (s.key)(&n.payload, &mut s.payload);
+        let shape = projection(n, std::mem::take(&mut s.payload));
+        let children = &s.revisions[base..];
+        let revision = match self.stamps.entry(address) {
+            Entry::Occupied(mut o)
+                if o.get().shape == shape
+                    && o.get().pin == n.pin
+                    && o.get().children == children =>
+            {
+                s.payload = shape.payload;
+                o.get_mut().seen = s.pass;
+                o.get().revision
+            }
+            entry => {
+                self.serial = self.serial.checked_add(1).ok_or(Error::RevisionExhausted)?;
+                let stamp = Stamp {
                     shape,
-                    children: child_revisions,
+                    pin: n.pin.clone(),
+                    children: children.to_vec(),
                     revision: self.serial,
-                },
-            );
-            self.serial
+                    seen: s.pass,
+                };
+                match entry {
+                    // Hand the old payload buffer back for the next node.
+                    Entry::Occupied(mut o) => s.payload = o.insert(stamp).shape.payload,
+                    Entry::Vacant(v) => {
+                        v.insert(stamp);
+                    }
+                }
+                self.serial
+            }
         };
-        live.insert(address);
+        s.revisions.truncate(base);
         self.pointers.insert(n as *const Node<P> as usize, revision);
         Ok(revision)
     }
@@ -284,7 +324,8 @@ impl LayoutCache {
 }
 /// Complete shallow layout projection; destructuring without `..` makes adding
 /// a layout field a compile-time prompt to update invalidation. Payload values
-/// are exact bytes, not a hash used as a substitute for equality.
+/// are exact bytes, not a hash used as a substitute for equality. The pin is
+/// left out: [`Stamp`] keeps it and `scan` compares it by reference.
 fn projection<P>(n: &Node<P>, payload: Vec<u8>) -> Node<Vec<u8>> {
     let Node {
         id,
@@ -306,7 +347,7 @@ fn projection<P>(n: &Node<P>, payload: Vec<u8>) -> Node<Vec<u8>> {
         justify,
         anchor,
         offset,
-        pin,
+        pin: _,
         scroll,
         clip,
         scrolled,
@@ -351,7 +392,7 @@ fn projection<P>(n: &Node<P>, payload: Vec<u8>) -> Node<Vec<u8>> {
         justify: *justify,
         anchor: *anchor,
         offset: *offset,
-        pin: pin.clone(),
+        pin: None,
         scroll: *scroll,
         clip: *clip,
         scrolled: *scrolled,
@@ -365,15 +406,15 @@ fn projection<P>(n: &Node<P>, payload: Vec<u8>) -> Node<Vec<u8>> {
 }
 /// Exact content-measurement keys are mandatory. Every captured external font,
 /// locale or measurement policy must be included or explicitly clear the cache.
-/// Decorator colours should not appear in the key. The existing DSL is unchanged.
-#[allow(clippy::too_many_arguments)]
+/// Decorator colours should not appear in the key. `key` appends a payload's
+/// key to a buffer the cache reuses, so a warm frame allocates none.
 pub fn resolve_cached_with<P>(
     root: &Node<P>,
     offered: Option<Size>,
     limits: Limits,
     scale: SpacingScale,
     cache: &mut LayoutCache,
-    mut key: impl FnMut(&P) -> Vec<u8>,
+    mut key: impl FnMut(&P, &mut Vec<u8>),
     measurer: impl FnMut(&P, Option<f64>) -> Size,
 ) -> Result<Layout, Error> {
     if !limits.extent.is_finite()
@@ -385,11 +426,10 @@ pub fn resolve_cached_with<P>(
         return Err(Error::InvalidValue);
     }
     cache.prepare(root, limits, scale, &mut key)?;
-    super::resolve_impl(root, offered, limits, scale, measurer, Some(cache))
+    super::resolve_impl(root, offered, limits, scale, measurer, Some(cache), None)
 }
 /// Hook around the ORIGINAL measure implementation. Re-measure requests under
 /// different flex constraints receive different keys, including room/container.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn measure_cached<'a, P>(
     node: &'a Node<P>,
     ancestor: &str,
@@ -430,7 +470,6 @@ pub(crate) fn measure_cached<'a, P>(
     }
     Ok(m)
 }
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn arrange_cached<P>(
     m: &Measured<'_, P>,
     ancestor: &str,
@@ -504,8 +543,8 @@ mod tests {
         value: String,
         colour: u32,
     }
-    fn key(t: &Text) -> Vec<u8> {
-        t.value.as_bytes().to_vec()
+    fn key(t: &Text, out: &mut Vec<u8>) {
+        out.extend_from_slice(t.value.as_bytes());
     }
     fn metric(t: &Text, room: Option<f64>) -> Size {
         let full = t.value.len() as f64 * 8.;
@@ -640,6 +679,37 @@ mod tests {
         assert_eq!(cached(&n, 400., &mut c), oracle(&n, 400.));
         assert!(c.stats().pinned_arrange_fallback);
         assert_eq!(c.stats().arrange_hits, 0);
+    }
+    /// Stamps are keyed by hashed paths now, and the pin lives outside the
+    /// projection: unkeyed moves, pin edits and an id reused down its own
+    /// subtree must all still be seen on a warm cache.
+    #[test]
+    fn hashed_addresses_see_moves_pins_and_nested_duplicates() {
+        let mut n = Node::overlay([
+            Node::row([label("x", "One"), Node::leaf(30., 10.)]),
+            Node::row([Node::leaf(50., 10.), label("y", "Two")]),
+            label("tip", "Tip").pin(Pin::to("x")),
+        ]);
+        let mut c = LayoutCache::default();
+        assert_eq!(cached(&n, 400., &mut c), oracle(&n, 400.));
+        n.children_mut().swap(0, 1);
+        assert_eq!(cached(&n, 400., &mut c), oracle(&n, 400.));
+        n.children_mut()[2] = label("tip", "Tip").pin(Pin::to("y").area(Area::End));
+        assert_eq!(cached(&n, 400., &mut c), oracle(&n, 400.));
+        n.children_mut()[0].children_mut()[0] = label("y", "Dup");
+        let n = n.id("y");
+        assert!(matches!(
+            resolve_cached_with(
+                &n,
+                None,
+                Limits::default(),
+                SpacingScale::DEFAULT,
+                &mut c,
+                key,
+                metric
+            ),
+            Err(Error::DuplicateKey(id)) if id == "y"
+        ));
     }
     #[test]
     fn budget_changes_invalidate_cached_work() {

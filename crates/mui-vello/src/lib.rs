@@ -13,9 +13,12 @@
 #![forbid(unsafe_code)]
 
 use kurbo::{Affine, BezPath, Rect, Shape as _, Stroke};
-use mui_geometry::{Error, PathCommand};
+use mui_geometry::Error;
 use mui_scene::{Fit, GradientKind, Layer, Paint, Painted, ResolvedScene, ShadowKind};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Weak};
+use vello_common::image_cache::ImageCache;
+use vello_common::multi_atlas::{AtlasConfig, AtlasError};
+use vello_common::paint::ImageId;
 /// The brush type [`Canvas::set_paint`] takes, so the trait can be
 /// implemented outside this crate.
 pub use vello_common::paint::PaintType;
@@ -30,14 +33,14 @@ pub use vello_hybrid;
 #[cfg(feature = "gpu-effects")]
 pub mod effects;
 
-/// Canonical conversion shared with input; retained here for source compatibility.
-pub use mui_geometry::{bez_path, ARC_TOLERANCE};
+/// The path conversion painting uses, the same one input hit-tests with.
+pub use mui_geometry::{bez_path, bez_path_into, ARC_TOLERANCE};
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use kurbo::{ParamCurve as _, PathEl};
-    use mui_geometry::Path;
+    use mui_geometry::{Path, PathCommand};
 
     fn capsule() -> Path {
         Path::capsule(48., 120.).unwrap()
@@ -106,6 +109,9 @@ mod tests {
 /// The handful of calls painting needs, so one walk serves the GPU scene and
 /// the CPU context alike.
 pub trait Canvas {
+    /// Called once at the start of every paint walk, before anything draws:
+    /// a canvas with caches ages them here.
+    fn begin_frame(&mut self) {}
     fn set_transform(&mut self, t: Affine);
     fn set_paint(&mut self, p: PaintType);
     /// Where the current paint's own space lands, composed after the scene
@@ -116,15 +122,10 @@ pub trait Canvas {
     /// This image as a brush, or `None` for [`mui_scene::Paint::solid`]'s
     /// stand-in. `vello_cpu` takes the pixmap itself; `vello_hybrid` wants
     /// an atlas id and *panics* on a pixmap, so [`Gpu`] uploads through its
-    /// [`Atlas`] and says `None` without one.
-    fn image(&mut self, img: &mui_scene::Image) -> Option<PaintType> {
-        pixmap(img).map(|p| {
-            vello_common::paint::Image {
-                image: vello_common::paint::ImageSource::Pixmap(p),
-                sampler: ImageSampler::default(),
-            }
-            .into()
-        })
+    /// [`Atlas`] and says `None` without one. A canvas with no image support
+    /// keeps this default and paints the stand-in.
+    fn image(&mut self, _img: &mui_scene::Image) -> Option<PaintType> {
+        None
     }
     fn set_stroke(&mut self, s: Stroke);
     fn fill_path(&mut self, p: &BezPath);
@@ -149,29 +150,6 @@ pub trait Canvas {
     fn glyphs(&mut self, text: &mui_scene::Text);
 }
 
-/// One [`FontData`] per distinct font. Vello's hinted-glyph and atlas caches
-/// key on the blob id, and `Blob::new` mints a fresh one per call, so building
-/// the font per run would throw those caches away every frame.
-// ponytail: global and never evicted -- an entry is one `Arc` clone and a font
-// outlives the process anyway; a host-owned cache is the upgrade if a plugin
-// ever unloads one.
-static FONTS: Mutex<Vec<(usize, FontData)>> = Mutex::new(Vec::new());
-
-fn font_data(font: &Arc<[u8]>) -> FontData {
-    // Holding the `Arc` is what makes the pointer a sound key: the allocation
-    // cannot be freed and its address reused under a stale entry.
-    let key = font.as_ptr() as usize;
-    let mut fonts = FONTS.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some((_, f)) = fonts.iter().find(|(k, _)| *k == key) {
-        return f.clone();
-    }
-    // `Arc<[u8]>` cannot unsize into `Arc<dyn AsRef<[u8]>>`; the extra
-    // `Arc` is built once per font, not per run.
-    let f = FontData::new(Blob::new(Arc::new(font.clone())), 0);
-    fonts.push((key, f.clone()));
-    f
-}
-
 fn run(
     origin: mui_geometry::Point,
     glyphs: &[mui_scene::TextGlyph],
@@ -185,32 +163,170 @@ fn run(
 }
 
 /// A `vello_hybrid` scene together with the resources its glyph cache lives
-/// in, and optionally the [`Atlas`] that lets image fills reach the GPU.
+/// in, the [`Cache`] of its renderer, and optionally the [`Atlas`] that lets
+/// image fills reach the GPU.
 pub struct Gpu<'a> {
     pub scene: &'a mut vello_hybrid::Scene,
     pub resources: &'a mut vello_hybrid::Resources,
+    pub cache: &'a mut Cache,
     pub atlas: Option<Atlas<'a>>,
 }
 
 /// What uploading an image into `vello_hybrid`'s atlas takes: the renderer
-/// that owns the texture, the device and queue to write it with, and the
-/// host-owned [`ImageIds`] that remember what has been uploaded already.
+/// that owns the texture and the device and queue to write it with. What has
+/// been uploaded already lives in the [`Cache`] beside it.
 pub struct Atlas<'a> {
     pub renderer: &'a mut vello_hybrid::Renderer,
     pub device: &'a wgpu::Device,
     pub queue: &'a wgpu::Queue,
-    pub ids: &'a mut ImageIds,
 }
 
-/// One atlas id per image buffer a renderer has seen. Keep it next to the
-/// `Renderer` it belongs to: an id means nothing to any other one.
-// An entry holds its buffer, so the address stays a sound key; entries whose
-// buffer the app has dropped are destroyed on the next upload.
+/// What one renderer remembers between frames on MUI's side: a [`FontData`]
+/// per font and an entry per image buffer. Keep it next to the renderer it
+/// serves -- an atlas id means nothing to any other one -- and drop it with
+/// that renderer.
 #[derive(Default)]
-pub struct ImageIds(Vec<(Arc<[u8]>, vello_common::paint::ImageId, bool)>);
+pub struct Cache {
+    /// Vello's hinted-glyph caches key on the blob id, and `Blob::new` mints a
+    /// fresh one per call, so building the font per run would throw those
+    /// caches away every frame.
+    /// With the frames each was first and last drawn in: `Font` exposes no
+    /// handle a `Weak` could watch, so a font goes once it sat unused for
+    /// [`FONT_FRAMES`] frames -- a host that makes a fresh `Font` per frame
+    /// no longer grows this without bound.
+    fonts: Vec<(u64, FontData, Frames)>,
+    /// Paint walks so far; see [`Canvas::begin_frame`].
+    frame: u64,
+    /// Keyed by a `Weak`, so no entry keeps the app's buffer alive. The one
+    /// eviction rule: an entry goes on the first image lookup after its
+    /// buffer's last `Arc` dropped. Until then the dead `Weak` still pins the
+    /// allocation, which is what keeps the address a sound key.
+    // ponytail: linear scan, bounded by the live image count.
+    images: Vec<(Weak<[u8]>, Stored)>,
+    /// A mirror of `vello_hybrid`'s image-atlas allocator: `upload_image`
+    /// unwraps a full atlas, and its own allocator is private. Built lazily
+    /// from the device limits the way `Renderer::new` builds the real one.
+    /// Exact because `Gpu` keeps the glyph atlas off, and as long as
+    /// `atlas_config` is the one the renderer was built with.
+    atlas: Option<ImageCache>,
+    atlas_config: AtlasConfig,
+}
+
+#[derive(Clone, Copy)]
+struct Frames {
+    born: u64,
+    used: u64,
+}
+
+/// How long an unused font keeps its [`FontData`], and with it Vello's
+/// hinted outlines: glifo's own glyph atlas ages entries out after as many.
+const FONT_FRAMES: u64 = 64;
+
+enum Stored {
+    /// Only the CPU canvas stores pixmaps.
+    #[cfg_attr(not(feature = "cpu"), allow(dead_code))]
+    Pixmap(Arc<Pixmap>),
+    Atlas {
+        id: ImageId,
+        clear: bool,
+    },
+}
+
+impl Cache {
+    /// A cache for a renderer built with `Renderer::new_with` and this image
+    /// atlas config; `Cache::default()` matches `Renderer::new`.
+    pub fn for_atlas(atlas_config: AtlasConfig) -> Self {
+        Self {
+            atlas_config,
+            ..Self::default()
+        }
+    }
+
+    /// Start a frame: fonts unused for [`FONT_FRAMES`] frames go.
+    fn tick(&mut self) {
+        self.frame += 1;
+        let now = self.frame;
+        self.fonts.retain(|(_, _, f)| now - f.used <= FONT_FRAMES);
+    }
+
+    /// The font's `FontData`, and whether it was already drawn in an earlier
+    /// frame: a glyph atlas only pays for itself from the second frame on,
+    /// and a one-shot render (a snapshot, a thumbnail) never gets there.
+    fn font(&mut self, font: &mui_scene::Font) -> (FontData, bool) {
+        // A `Font` id is never reused, so an entry cannot answer for another font.
+        let key = font.id();
+        let now = self.frame;
+        if let Some((_, f, frames)) = self.fonts.iter_mut().find(|(k, ..)| *k == key) {
+            frames.used = now;
+            return (f.clone(), frames.born < now);
+        }
+        let f = FontData::new(Blob::new(Arc::new(font.clone())), 0);
+        self.fonts.push((
+            key,
+            f.clone(),
+            Frames {
+                born: now,
+                used: now,
+            },
+        ));
+        (f, false)
+    }
+
+    fn find(&self, rgba: &Arc<[u8]>) -> Option<&Stored> {
+        self.images
+            .iter()
+            .find(|(k, _)| std::ptr::addr_eq(k.as_ptr(), Arc::as_ptr(rgba)))
+            .map(|(_, s)| s)
+    }
+
+    fn remember(&mut self, rgba: &Arc<[u8]>, stored: Stored) {
+        self.images.push((Arc::downgrade(rgba), stored));
+    }
+
+    /// Drop every entry whose buffer the app has let go of; `gone` sees each
+    /// atlas slot that frees.
+    fn sweep(&mut self, mut gone: impl FnMut(ImageId)) {
+        let atlas = &mut self.atlas;
+        self.images.retain(|(k, s)| {
+            if k.strong_count() > 0 {
+                return true;
+            }
+            if let Stored::Atlas { id, .. } = *s {
+                if let Some(a) = atlas.as_mut() {
+                    a.deallocate(id);
+                }
+                gone(id);
+            }
+            false
+        });
+    }
+
+    /// Room in the atlas for a `w` x `h` image, or why there is none. After
+    /// an `Ok`, `Renderer::upload_image` makes the same allocation and so
+    /// cannot reach its `unwrap`.
+    fn reserve(&mut self, limits: &wgpu::Limits, w: u32, h: u32) -> Result<ImageId, AtlasError> {
+        let config = self.atlas_config;
+        self.atlas
+            .get_or_insert_with(|| {
+                // `MemorySettings::normalize`, which `Renderer::new` applies.
+                let mut config = config;
+                let side = limits.max_texture_dimension_2d.max(1);
+                config.atlas_size = (config.atlas_size.0.min(side), config.atlas_size.1.min(side));
+                config.max_atlases = config
+                    .max_atlases
+                    .min(limits.max_texture_array_layers as usize);
+                config.initial_atlas_count = config.initial_atlas_count.min(config.max_atlases);
+                ImageCache::new_with_config(config)
+            })
+            .allocate(w, h, 0)
+    }
+}
 
 macro_rules! wrapper {
-    ($inner:ident) => {
+    ($inner:ident, $atlas:expr) => {
+        fn begin_frame(&mut self) {
+            self.cache.tick();
+        }
         fn set_transform(&mut self, t: Affine) {
             self.$inner.set_transform(t)
         }
@@ -257,25 +373,24 @@ macro_rules! wrapper {
                     .iter()
                     .position(|glyph| glyph.font != font_index)
                     .map_or(text.glyphs.len(), |offset| start + 1 + offset);
-                let font = text.fonts.get(font_index).unwrap_or(&text.font);
-                let coords = text.font_coords.get(font_index).map_or_else(
-                    || {
-                        if font_index == 0 {
-                            text.coords.as_ref()
-                        } else {
-                            &[]
-                        }
-                    },
-                    |coords| coords.as_ref(),
-                );
+                // A hand-built run can name a face it does not carry.
+                let Some(face) = text.fonts.get(font_index) else {
+                    start = end;
+                    continue;
+                };
+                let (font, warm) = self.cache.font(face);
+                let coords = text.font_coords.get(font_index).map_or(&[][..], |c| &c[..]);
                 self.$inner
-                    .glyph_run(self.resources, &font_data(font))
+                    .glyph_run(self.resources, &font)
                     .font_size(text.size)
                     // Off for the frame after an axis moved: see Text::hint.
                     .hint(text.hint)
                     // The run was measured at this instance; drawing the default
                     // one under its advances is how a bold readout goes ragged.
                     .normalized_coords(coords)
+                    // Rasterise each glyph once and reuse the bitmap: strip
+                    // generation per glyph was most of a frame's encode.
+                    .atlas_cache($atlas && warm)
                     .fill_glyphs(run(text.origin, &text.glyphs[start..end]));
                 start = end;
             }
@@ -285,46 +400,49 @@ macro_rules! wrapper {
 
 impl Canvas for Gpu<'_> {
     fn image(&mut self, img: &mui_scene::Image) -> Option<PaintType> {
-        let atlas = self.atlas.as_mut()?;
-        let (id, clear) = match atlas.ids.0.iter().find(|(k, ..)| Arc::ptr_eq(k, &img.rgba)) {
-            Some(&(_, id, clear)) => (id, clear),
-            None => {
-                // `Renderer::upload_image` allocates with an `unwrap`, so an
-                // image the atlas cannot hold would abort the host -- and in a
-                // plugin that takes the DAW with it. Fall back to the solid.
-                if !fits_atlas(img) {
-                    return None;
-                }
-                // Own encoder, submitted now: the queue keeps it ahead of the
-                // frame that paints with the id. An upload is once per image.
-                let p = pixmap(img)?;
-                let mut enc = atlas.device.create_command_encoder(&Default::default());
-                // Free the slots of buffers the app has dropped; the cache's
-                // own clone is the last strong reference once it has.
-                for (_, id, _) in atlas
-                    .ids
-                    .0
-                    .iter()
-                    .filter(|(k, ..)| Arc::strong_count(k) == 1)
-                {
-                    atlas.renderer.destroy_image(self.resources, &mut enc, *id);
-                }
-                atlas.ids.0.retain(|(k, ..)| Arc::strong_count(k) > 1);
-                let id = atlas.renderer.upload_image(
-                    self.resources,
-                    atlas.device,
-                    atlas.queue,
-                    &mut enc,
+        let Atlas {
+            renderer,
+            device,
+            queue,
+        } = self.atlas.as_mut()?;
+        // One encoder for the frees and the upload, submitted now: the queue
+        // keeps it ahead of the frame that paints with the id.
+        let mut enc = None;
+        let mut encoder = || device.create_command_encoder(&Default::default());
+        let resources = &mut *self.resources;
+        self.cache.sweep(|id| {
+            renderer.destroy_image(resources, enc.get_or_insert_with(&mut encoder), id)
+        });
+        let found = match self.cache.find(&img.rgba) {
+            Some(&Stored::Atlas { id, clear }) => Some((id, clear)),
+            _ => size(img).and_then(|(w, h)| {
+                // Refused here rather than inside `upload_image`, which
+                // unwraps: a full atlas would abort the host, and in a plugin
+                // the DAW with it. The paint falls back to its solid -- and
+                // asks again next frame, so the room is checked before the
+                // photo is premultiplied, not after.
+                let want = self
+                    .cache
+                    .reserve(&device.limits(), w.into(), h.into())
+                    .ok()?;
+                let p = premultiplied(img, w, h);
+                let id = renderer.upload_image(
+                    resources,
+                    device,
+                    queue,
+                    enc.get_or_insert_with(&mut encoder),
                     &p,
                 );
-                atlas.queue.submit([enc.finish()]);
-                atlas
-                    .ids
-                    .0
-                    .push((img.rgba.clone(), id, p.may_have_transparency()));
-                (id, p.may_have_transparency())
-            }
+                debug_assert_eq!(id, want, "the atlas mirror drifted from the renderer");
+                let clear = p.may_have_transparency();
+                self.cache.remember(&img.rgba, Stored::Atlas { id, clear });
+                Some((id, clear))
+            }),
         };
+        if let Some(enc) = enc {
+            queue.submit([enc.finish()]);
+        }
+        let (id, clear) = found?;
         Some(
             vello_common::paint::Image {
                 image: vello_common::paint::ImageSource::OpaqueId {
@@ -336,62 +454,74 @@ impl Canvas for Gpu<'_> {
             .into(),
         )
     }
-    wrapper!(scene);
+    // ponytail: no glyph atlas here. `vello_hybrid` keeps glyphs in the same
+    // private allocator as images, and `upload_image` unwraps a full one, so
+    // the `Cache` mirror that keeps that unwrap unreachable must see every
+    // allocation. Turn it on when `upload_image` returns a `Result`.
+    wrapper!(scene, false);
 }
 
 #[cfg(feature = "cpu")]
 impl Canvas for Cpu<'_> {
-    wrapper!(ctx);
+    fn image(&mut self, img: &mui_scene::Image) -> Option<PaintType> {
+        self.cache.sweep(|_| {});
+        let p = match self.cache.find(&img.rgba) {
+            Some(Stored::Pixmap(p)) => p.clone(),
+            _ => {
+                let p = Arc::new(premultiply(img)?);
+                self.cache.remember(&img.rgba, Stored::Pixmap(p.clone()));
+                p
+            }
+        };
+        Some(
+            vello_common::paint::Image {
+                image: vello_common::paint::ImageSource::Pixmap(p),
+                sampler: ImageSampler::default(),
+            }
+            .into(),
+        )
+    }
+    // `vello_cpu` keeps its glyph atlas apart from images: nothing to mirror.
+    wrapper!(ctx, true);
 }
 
-/// A `vello_cpu` context together with the resources its glyph cache lives in.
+/// A `vello_cpu` context together with the resources its glyph cache lives
+/// in and the [`Cache`] of its renderer.
 #[cfg(feature = "cpu")]
 pub struct Cpu<'a> {
     pub ctx: &'a mut vello_cpu::RenderContext,
     pub resources: &'a mut vello_cpu::Resources,
+    pub cache: &'a mut Cache,
 }
 
 fn srgb(c: mui_scene::Color) -> AlphaColor<Srgb> {
     c.to_srgb()
 }
 
-/// One premultiplied [`Pixmap`] per distinct image buffer. MUI hands over
-/// straight RGBA -- what a decoder produces -- and premultiplying a photo is
-/// far too much work to redo every frame.
-/// Entries whose buffer the app has dropped go on the next miss, so a panel
-/// that hands over a fresh frame buffer every frame does not grow the cache.
-// ponytail: the lookup is a linear scan, bounded by the live image count.
-#[allow(clippy::type_complexity)]
-static IMAGES: Mutex<Vec<(Arc<[u8]>, Arc<Pixmap>)>> = Mutex::new(Vec::new());
-
-/// Whether `vello_hybrid`'s image atlas could hold this image at all.
-/// Growing the atlas adds tiles, never a bigger one, so nothing over the tile
-/// size ever fits.
-// ponytail: 4096 is the default tile; `MemorySettings::normalize` can clamp it
-// further down to a device limit, so this is a guard, not a guarantee.
-fn fits_atlas(img: &mui_scene::Image) -> bool {
-    let (w, h) = vello_common::multi_atlas::AtlasConfig::default().atlas_size;
-    img.width <= w && img.height <= h
+/// The premultiplied [`Pixmap`] of an image. MUI hands over straight RGBA --
+/// what a decoder produces -- and premultiplying a photo is far too much work
+/// to redo every frame, so each renderer's [`Cache`] keeps the result.
+#[cfg_attr(not(any(test, feature = "cpu")), allow(dead_code))]
+fn premultiply(img: &mui_scene::Image) -> Option<Pixmap> {
+    size(img).map(|(w, h)| premultiplied(img, w, h))
 }
 
-fn pixmap(img: &mui_scene::Image) -> Option<Arc<Pixmap>> {
+/// The image's size, or `None` when it cannot become a [`Pixmap`].
+fn size(img: &mui_scene::Image) -> Option<(u16, u16)> {
     // A single image has to fit one atlas tile; u16 is the hard ceiling.
     let (w, h) = (
         u16::try_from(img.width).ok()?,
         u16::try_from(img.height).ok()?,
     );
-    let mut images = IMAGES.lock().unwrap_or_else(|e| e.into_inner());
-    // Holding the buffer is what makes its address a sound key.
-    if let Some((_, p)) = images.iter().find(|(k, _)| Arc::ptr_eq(k, &img.rgba)) {
-        return Some(p.clone());
-    }
-    let mut clear = false;
-    let (pixels, _) = img.rgba.as_chunks::<4>();
     // `Image`'s fields are public, so the buffer need not match the size;
     // `Pixmap::from_parts_with_opacity` asserts that it does.
-    if pixels.len() != usize::from(w) * usize::from(h) {
-        return None;
-    }
+    (img.rgba.len() == usize::from(w) * usize::from(h) * 4).then_some((w, h))
+}
+
+/// [`premultiply`] for a size [`size`] already checked.
+fn premultiplied(img: &mui_scene::Image, w: u16, h: u16) -> Pixmap {
+    let mut clear = false;
+    let (pixels, _) = img.rgba.as_chunks::<4>();
     let data = pixels
         .iter()
         .map(|p| {
@@ -405,12 +535,7 @@ fn pixmap(img: &mui_scene::Image) -> Option<Arc<Pixmap>> {
             }
         })
         .collect();
-    let p = Arc::new(Pixmap::from_parts_with_opacity(data, w, h, clear));
-    // The cache's own clone is the last strong reference once the app has let
-    // its buffer go, so this is exact rather than a heuristic.
-    images.retain(|(k, _)| Arc::strong_count(k) > 1);
-    images.push((img.rgba.clone(), p.clone()));
-    Some(p)
+    Pixmap::from_parts_with_opacity(data, w, h, clear)
 }
 
 /// Where the image's pixels land so that it fills `bounds` per `fit`.
@@ -434,17 +559,9 @@ fn image_transform(img: &mui_scene::Image, fit: Fit, bounds: Rect) -> Affine {
 pub fn brush(p: &Paint, bounds: Rect) -> PaintType {
     match p {
         Paint::Solid(c) => PaintType::Solid(srgb(*c)),
-        // The pixmap form; a `Canvas` decides for itself in `Canvas::image`.
-        // An image too big for the atlas draws nothing rather than panicking.
-        Paint::Image { image, .. } => {
-            pixmap(image).map_or(PaintType::Solid(AlphaColor::TRANSPARENT), |p| {
-                vello_common::paint::Image {
-                    image: vello_common::paint::ImageSource::Pixmap(p),
-                    sampler: ImageSampler::default(),
-                }
-                .into()
-            })
-        }
+        // Images go through `Canvas::image`, which knows whether its
+        // renderer takes a pixmap or an atlas id; here only the stand-in.
+        Paint::Image { .. } => PaintType::Solid(srgb(p.solid())),
         Paint::Gradient { kind, stops } => {
             // `ColorStops` holds four stops inline, so the common gradient
             // does not allocate; a longer one allocates once, as before.
@@ -496,9 +613,6 @@ pub fn brush(p: &Paint, bounds: Rect) -> PaintType {
 ///
 /// Shadows take Vello's analytic blurred rectangle -- inverted, for an inset
 /// one; a welded outline arrives as one such rect per welded child.
-///
-/// Every path is converted afresh. [`paint_cached`] is the same walk with the
-/// conversion remembered between frames.
 pub fn paint(
     canvas: &mut impl Canvas,
     scene: &ResolvedScene,
@@ -509,181 +623,16 @@ pub fn paint(
     if scene.paint.iter().any(|p| p.layer == Layer::External) {
         return Err(Error::InvalidPath);
     }
+    canvas.begin_frame();
     canvas.set_transform(transform);
+    let mut bez = BezPath::new();
     for p in &scene.paint {
         if layered(canvas, p) {
             continue;
         }
-        one(canvas, p, &bez_path(&p.path, ARC_TOLERANCE)?)?;
-    }
-    Ok(())
-}
-
-/// One converted path, and the frame it was last wanted on.
-struct Entry {
-    bez: Arc<BezPath>,
-    frame: u64,
-}
-
-/// Remembers [`bez_path`] between frames, so a surface that did not change
-/// is not validated, re-flattened and re-allocated every time it is drawn.
-///
-/// A static frame is the common case in a plugin UI: one knob moves and six
-/// hundred other outlines are byte-identical to the last frame. The cache
-/// keys on a fingerprint of everything the conversion reads -- the node key,
-/// the layer, every coordinate, the stroke width and the blur -- so a changed
-/// path simply misses. Entries not wanted during a [`paint_cached`] call are
-/// dropped at the end of it, which is what keeps a scrolling list bounded.
-// ponytail: a 64-bit fingerprint, not a stored copy of the path -- a
-// collision would draw the wrong outline. At ~1e3 live entries that is a
-// 1e-13 chance; compare `Painted::path` on a hit if that is ever too much.
-#[derive(Default)]
-pub struct PathCache {
-    entries: std::collections::HashMap<u64, Entry>,
-    frame: u64,
-    hits: u64,
-    misses: u64,
-}
-
-impl PathCache {
-    pub fn new() -> Self {
-        Self::default()
-    }
-    /// Live entries.
-    pub fn len(&self) -> usize {
-        self.entries.len()
-    }
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
-    /// Conversions served from the cache, and conversions actually run,
-    /// since it was built.
-    pub fn hits(&self) -> u64 {
-        self.hits
-    }
-    pub fn misses(&self) -> u64 {
-        self.misses
-    }
-
-    /// The Bézier form of `p`, converted only if it is new or changed.
-    pub fn bez(&mut self, p: &Painted) -> Result<Arc<BezPath>, Error> {
-        let (key, frame) = (fingerprint(p), self.frame);
-        if let Some(e) = self.entries.get_mut(&key) {
-            e.frame = frame;
-            self.hits += 1;
-            return Ok(e.bez.clone());
-        }
-        self.misses += 1;
-        let bez = Arc::new(bez_path(&p.path, ARC_TOLERANCE)?);
-        self.entries.insert(
-            key,
-            Entry {
-                bez: bez.clone(),
-                frame,
-            },
-        );
-        Ok(bez)
-    }
-}
-
-/// FNV-1a over everything [`PathCache`] must notice a change in.
-///
-/// Folded eight bytes at a time rather than one: this runs over every
-/// coordinate of every path on screen, and byte-at-a-time FNV over that is
-/// slower than the conversion it is trying to avoid.
-fn fingerprint(p: &Painted) -> u64 {
-    let mut h = 0xcbf2_9ce4_8422_2325_u64;
-    let mut eat = |w: u64| h = (h ^ w).wrapping_mul(0x100_0000_01b3);
-    for c in p.key.as_bytes().chunks(8) {
-        let mut w = [0u8; 8];
-        w[..c.len()].copy_from_slice(c);
-        eat(u64::from_ne_bytes(w));
-    }
-    let (tag, n) = match p.layer {
-        Layer::Shadow(ShadowKind::Drop) => (0, 0),
-        Layer::Shadow(ShadowKind::Inset) => (0, 1),
-        Layer::Fill => (1, 0),
-        Layer::Shell(i) => (2, i),
-        Layer::Stroke => (3, 0),
-        Layer::Text => (4, 0),
-        Layer::Draw(i) => (5, i),
-        Layer::Clip => (6, 0),
-        Layer::Unclip => (7, 0),
-        Layer::Blend { .. } => (8, 0),
-        Layer::Unblend => (9, 0),
-        Layer::Mask => (10, 0),
-        Layer::External => (11, 0),
-    };
-    eat(tag);
-    eat(n as u64);
-    eat(p.width.to_bits());
-    eat(p.blur.to_bits());
-    for command in &p.path.commands {
-        match *command {
-            PathCommand::MoveTo(a) => {
-                eat(0);
-                eat(a.x.to_bits() ^ a.y.rotate());
-            }
-            PathCommand::LineTo(a) => {
-                eat(1);
-                eat(a.x.to_bits() ^ a.y.rotate());
-            }
-            PathCommand::ArcTo(a) => {
-                eat(2);
-                eat(a.center.x.to_bits() ^ a.center.y.rotate());
-                eat(a.radius.to_bits() ^ a.start_angle.rotate());
-                eat(a.sweep.to_bits() ^ a.to.x.rotate());
-                eat(a.to.y.to_bits());
-            }
-            PathCommand::CubicTo(a, b, c) => {
-                eat(3);
-                eat(a.x.to_bits() ^ a.y.rotate());
-                eat(b.x.to_bits() ^ b.y.rotate());
-                eat(c.x.to_bits() ^ c.y.rotate());
-            }
-            PathCommand::Close => eat(4),
-        }
-    }
-    h
-}
-
-/// Pack two coordinates into one FNV round without letting a swap of the
-/// pair go unnoticed.
-trait Rotate {
-    fn rotate(self) -> u64;
-}
-impl Rotate for f64 {
-    fn rotate(self) -> u64 {
-        self.to_bits().rotate_left(32)
-    }
-}
-
-/// [`paint`], with the path conversion remembered in `cache` between frames.
-///
-/// Entries untouched by this call are dropped, so the cache tracks whatever
-/// is on screen rather than everything that ever was.
-pub fn paint_cached(
-    canvas: &mut impl Canvas,
-    scene: &ResolvedScene,
-    transform: Affine,
-    cache: &mut PathCache,
-) -> Result<(), Error> {
-    // A CPU/sink Canvas must not silently omit external GPU paint. Use
-    // effects::HybridEffects for scenes containing native material surfaces.
-    if scene.paint.iter().any(|p| p.layer == Layer::External) {
-        return Err(Error::InvalidPath);
-    }
-    canvas.set_transform(transform);
-    cache.frame += 1;
-    let frame = cache.frame;
-    for p in &scene.paint {
-        if layered(canvas, p) {
-            continue;
-        }
-        let bez = cache.bez(p)?;
+        bez_path_into(&p.path, ARC_TOLERANCE, &mut bez)?;
         one(canvas, p, &bez)?;
     }
-    cache.entries.retain(|_, e| e.frame == frame);
     Ok(())
 }
 
@@ -709,7 +658,7 @@ fn paint_box(p: &Painted, path: &BezPath) -> Rect {
 }
 
 /// The entries that carry no geometry: clip and layer bookkeeping. Handled
-/// before any path conversion, so the cache never fingerprints them.
+/// before any path conversion.
 fn layered(canvas: &mut impl Canvas, p: &Painted) -> bool {
     match p.layer {
         Layer::Unclip => canvas.pop_clip(),
@@ -861,46 +810,69 @@ mod seam {
             height: 4,
             rgba: Arc::from(&[0u8, 0, 0, 255][..]),
         };
-        let p = brush(
-            &Paint::Image {
-                image: Arc::new(image),
-                fit: Fit::Fill,
-            },
-            Rect::new(0., 0., 10., 10.),
+        assert!(premultiply(&image).is_none());
+    }
+
+    /// The GPU path's bookkeeping holds no strong reference to the app's
+    /// buffer, so dropping it frees the buffer at once and its atlas slot on
+    /// the next lookup. The old path kept a clone in the global pixmap cache
+    /// *and* one in the atlas ids, and each waited for the other to let go.
+    #[test]
+    fn a_dropped_buffer_frees_its_atlas_slot() {
+        let limits = wgpu::Limits::downlevel_defaults();
+        let mut cache = Cache::default();
+        let rgba: Arc<[u8]> = Arc::from(&[1u8, 2, 3, 255][..]);
+        let id = cache.reserve(&limits, 1, 1).unwrap();
+        cache.remember(&rgba, Stored::Atlas { id, clear: false });
+        assert!(matches!(cache.find(&rgba), Some(Stored::Atlas { .. })));
+        let gone = Arc::downgrade(&rgba);
+        drop(rgba);
+        assert!(gone.upgrade().is_none(), "the cache kept the buffer alive");
+        let mut freed = Vec::new();
+        cache.sweep(|id| freed.push(id));
+        assert_eq!(freed, [id]);
+        assert!(cache.images.is_empty());
+        // The mirror gave the slot back too: the same id comes round again.
+        assert_eq!(cache.reserve(&limits, 1, 1).unwrap(), id);
+    }
+
+    /// A font unused for `FONT_FRAMES` frames lets go of its `FontData`; one
+    /// drawn every frame keeps it, blob id and all.
+    #[test]
+    fn an_unused_font_ages_out() {
+        let font = |bytes| mui_scene::Font::new(bytes).unwrap();
+        let (kept, dropped) = (
+            font(epaint_default_fonts::HACK_REGULAR),
+            font(epaint_default_fonts::UBUNTU_LIGHT),
         );
-        assert!(matches!(p, PaintType::Solid(_)), "fell back to a solid");
+        let mut cache = Cache::default();
+        cache.tick();
+        let (first, warm) = cache.font(&kept);
+        assert!(!warm && !cache.font(&kept).1, "warm in its first frame");
+        cache.font(&dropped);
+        for _ in 0..FONT_FRAMES {
+            cache.tick();
+            assert!(cache.font(&kept).1, "cold after its first frame");
+        }
+        assert_eq!(cache.fonts.len(), 2, "aged out early");
+        cache.tick();
+        assert_eq!(cache.fonts.len(), 1, "the idle font is still held");
+        assert_eq!(cache.font(&kept).0.data.id(), first.data.id());
     }
 
-    /// The pixmap cache lets go of a buffer the app has dropped, so a panel
-    /// handing over a fresh frame every frame does not leak one per frame.
+    /// A full atlas is an error from `reserve`, not the `unwrap` inside
+    /// `upload_image`, and an image bigger than one atlas page never fits.
     #[test]
-    fn the_pixmap_cache_drops_a_buffer_the_app_let_go_of() {
-        let img = |v: u8| Image {
-            width: 1,
-            height: 1,
-            rgba: Arc::from(&[v, v, v, 255][..]),
+    fn a_full_atlas_is_refused_rather_than_panicking() {
+        let limits = wgpu::Limits {
+            max_texture_dimension_2d: 64,
+            max_texture_array_layers: 1,
+            ..wgpu::Limits::downlevel_defaults()
         };
-        let (a, b) = (img(1), img(2));
-        let gone = Arc::downgrade(&a.rgba);
-        assert!(pixmap(&a).is_some());
-        drop(a);
-        // The next miss is what sweeps.
-        assert!(pixmap(&b).is_some());
-        assert!(gone.upgrade().is_none(), "the dropped buffer is still held");
-    }
-
-    /// An image no atlas tile can hold is refused here rather than inside
-    /// `upload_image`, which unwraps.
-    #[test]
-    fn an_image_too_big_for_the_atlas_is_refused() {
-        let img = |w, h| Image {
-            width: w,
-            height: h,
-            rgba: Arc::from(&[][..]),
-        };
-        assert!(fits_atlas(&img(4096, 4096)));
-        assert!(!fits_atlas(&img(5000, 3000)));
-        assert!(!fits_atlas(&img(100, 4097)));
+        let mut cache = Cache::default();
+        assert!(cache.reserve(&limits, 65, 1).is_err());
+        assert!(cache.reserve(&limits, 64, 64).is_ok());
+        assert!(cache.reserve(&limits, 1, 1).is_err(), "the atlas is full");
     }
 
     /// A gradient-filled label still gets a box to fit the gradient to,
@@ -910,14 +882,15 @@ mod seam {
         let mut p = Painted {
             key: "t".into(),
             layer: Layer::Text,
-            path: Path::default(),
+            path: Path::default().into(),
             paint: Paint::Solid(mui_scene::Color::oklch(0.5, 0., 0.)),
             rect: None,
             width: 0.,
             blur: 0.,
             text: Some(Text {
-                font: Arc::from(&[][..]),
-                fonts: Arc::from(&[][..]),
+                fonts: Arc::from([
+                    mui_scene::Font::new(epaint_default_fonts::HACK_REGULAR).unwrap()
+                ]),
                 size: 16.,
                 origin: mui_geometry::Point::new(10., 30.),
                 glyphs: Arc::from(
@@ -938,7 +911,6 @@ mod seam {
                 ),
                 axes: Default::default(),
                 hint: true,
-                coords: Arc::from(&[][..]),
                 font_coords: Arc::from(&[][..]),
             }),
         };
@@ -966,9 +938,7 @@ mod snapshot {
             .stroke(Role::Ink)
             .id("card");
         let mut spec = SceneSpec::new(root).offered(Size::new(120., 60.));
-        spec.font = Some(std::sync::Arc::from(
-            epaint_default_fonts::HACK_REGULAR.to_vec(),
-        ));
+        spec.font = Some(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
         let scene = resolve_scene(&spec).unwrap();
         assert!(scene
             .paint
@@ -981,6 +951,7 @@ mod snapshot {
             &mut Cpu {
                 ctx: &mut ctx,
                 resources: &mut res,
+                cache: &mut Cache::default(),
             },
             &scene,
             Affine::IDENTITY,
@@ -1012,6 +983,7 @@ mod snapshot {
             &mut Cpu {
                 ctx: &mut ctx,
                 resources: &mut res,
+                cache: &mut Cache::default(),
             },
             scene,
             Affine::IDENTITY,
@@ -1029,9 +1001,7 @@ mod snapshot {
     fn a_glyph_run_lands_pixels() {
         let mut spec =
             SceneSpec::new(text("HI").fill(Role::Ink).id("t")).offered(Size::new(80., 40.));
-        spec.font = Some(std::sync::Arc::from(
-            epaint_default_fonts::HACK_REGULAR.to_vec(),
-        ));
+        spec.font = Some(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
         let scene = resolve_scene(&spec).unwrap();
         assert!(
             scene.paint.iter().any(|p| p.text.is_some()),
@@ -1045,7 +1015,7 @@ mod snapshot {
     fn a_gpos_mark_is_rendered_at_its_shaped_y_offset() {
         let mut spec =
             SceneSpec::new(text("ש\u{05b8}").fill(Role::Ink).id("t")).offered(Size::new(80., 40.));
-        spec.font = Some(std::sync::Arc::from(ttf_inter::REGULAR));
+        spec.font = Some(Font::new(ttf_inter::REGULAR).unwrap());
         let scene = resolve_scene(&spec).unwrap();
         let text = scene
             .paint
@@ -1081,10 +1051,10 @@ mod snapshot {
     fn a_missing_primary_glyph_uses_the_selected_fallback_font() {
         let root = text("A😀").fill(Role::Ink).id("t");
         let mut with_fallback = SceneSpec::new(root.clone()).offered(Size::new(100., 40.));
-        with_fallback.font = Some(std::sync::Arc::from(epaint_default_fonts::HACK_REGULAR));
-        with_fallback.fallback_fonts.push(std::sync::Arc::from(
-            epaint_default_fonts::NOTO_EMOJI_REGULAR,
-        ));
+        with_fallback.font = Some(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
+        with_fallback
+            .fallback_fonts
+            .push(Font::new(epaint_default_fonts::NOTO_EMOJI_REGULAR).unwrap());
         let fallback_scene = resolve_scene(&with_fallback).unwrap();
         let glyphs = fallback_scene
             .paint
@@ -1133,7 +1103,7 @@ mod snapshot {
     #[test]
     fn a_welded_shadow_blurs() {
         let root = row([leaf(20., 20.).id("a"), leaf(20., 40.).id("b")])
-            .weld(Role::Surface)
+            .union(Role::Surface)
             .shadow(Shadow::soft(12.))
             .id("weld");
         let spec = SceneSpec::new(root).offered(Size::new(40., 40.));
@@ -1216,61 +1186,33 @@ mod snapshot {
         );
     }
 
-    /// Second frame, same tree: every conversion is a hit and hands back the
-    /// very same `BezPath`. A surface that goes away takes its entry with it.
+    /// The CPU path lets go of a buffer the app has dropped: its pixmap goes
+    /// on the next image lookup, so a panel handing over a fresh frame every
+    /// frame does not keep one per frame.
     #[test]
-    fn a_static_frame_reuses_its_paths_and_a_gone_one_is_dropped() {
-        let tree = |n: usize| {
-            let kids: Vec<El> = (0..n)
-                .map(|i| {
-                    leaf(20., 20.)
-                        .fill(Role::Primary)
-                        .radius(6.)
-                        .id(format!("l{i}"))
-                })
-                .collect();
-            SceneSpec::new(column(kids).pad(4.)).offered(Size::new(60., 200.))
+    fn the_pixmap_cache_drops_a_buffer_the_app_let_go_of() {
+        let img = |v: u8| mui_scene::Image::rgba(1, 1, vec![v, v, v, 255]).unwrap();
+        let (a, b) = (img(1), img(2));
+        let gone = Arc::downgrade(&a.rgba);
+        let mut ctx = vello_cpu::RenderContext::new(1, 1);
+        let mut resources = vello_cpu::Resources::default();
+        let mut cache = Cache::default();
+        let mut cpu = Cpu {
+            ctx: &mut ctx,
+            resources: &mut resources,
+            cache: &mut cache,
         };
-        let scene = resolve_scene(&tree(3)).unwrap();
-        let mut cache = PathCache::new();
-        let mut ctx = vello_cpu::RenderContext::new(60, 200);
-        let mut res = vello_cpu::Resources::default();
-        let mut draw = |scene: &ResolvedScene, cache: &mut PathCache| {
-            ctx.reset();
-            paint_cached(
-                &mut Cpu {
-                    ctx: &mut ctx,
-                    resources: &mut res,
-                },
-                scene,
-                Affine::IDENTITY,
-                cache,
-            )
-            .unwrap();
-        };
-
-        draw(&scene, &mut cache);
-        let n = cache.misses();
-        assert!(n >= 3, "only {n} paths for three leaves");
-        let first = cache.bez(&scene.paint[0]).unwrap();
-
-        let hits = cache.hits();
-        draw(&scene, &mut cache);
+        assert!(cpu.image(&a).is_some());
+        assert!(cpu.image(&a).is_some());
+        assert_eq!(cpu.cache.images.len(), 1, "a hit added an entry");
+        drop(a);
+        assert!(gone.upgrade().is_none(), "the cache kept the buffer alive");
+        assert!(cpu.image(&b).is_some());
         assert_eq!(
-            cache.misses(),
-            n,
-            "a byte-identical frame reconverted a path"
+            cpu.cache.images.len(),
+            1,
+            "the dropped buffer kept its entry"
         );
-        assert_eq!(
-            cache.hits(),
-            hits + n,
-            "the second frame came entirely from the cache"
-        );
-        assert!(Arc::ptr_eq(&first, &cache.bez(&scene.paint[0]).unwrap()));
-
-        let full = cache.len();
-        draw(&resolve_scene(&tree(2)).unwrap(), &mut cache);
-        assert!(cache.len() < full, "the gone leaf kept its entry: {full}");
     }
 
     /// A clip layer actually clips: the oversized child stops at its parent.

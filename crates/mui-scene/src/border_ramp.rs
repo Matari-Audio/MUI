@@ -164,11 +164,17 @@ struct Entry {
     widths: [f64; 4],
     tolerance: f64,
     band: Path,
+    /// The resolve that last used it.
+    seen: u64,
 }
 /// Geometry only: theme/color changes reuse the vector band. Bounded independently
 /// of card area; a tall card never allocates a full-surface raster texture.
+/// A band the last resolve did not use is swept at its end.
 #[derive(Debug, Default)]
-pub(crate) struct BorderCache(HashMap<String, Entry>);
+pub(crate) struct BorderCache {
+    entries: HashMap<String, Entry>,
+    generation: u64,
+}
 impl BorderCache {
     pub(crate) fn band(
         &mut self,
@@ -179,20 +185,18 @@ impl BorderCache {
         tolerance: f64,
     ) -> Result<Path, SceneError> {
         let widths = [ramp.from.1, ramp.to.1, ramp.start, ramp.end];
-        if let Some(e) = self.0.get(key) {
+        if let Some(e) = self.entries.get_mut(key) {
             if e.outline == *outline
                 && e.frame == frame
                 && e.widths == widths
                 && e.tolerance == tolerance
             {
+                e.seen = self.generation;
                 return Ok(e.band.clone());
             }
         }
         let band = band(outline, ramp, frame, tolerance)?;
-        if self.0.len() >= 256 {
-            self.0.clear();
-        }
-        self.0.insert(
+        self.entries.insert(
             key.to_owned(),
             Entry {
                 outline: outline.clone(),
@@ -200,9 +204,15 @@ impl BorderCache {
                 widths,
                 tolerance,
                 band: band.clone(),
+                seen: self.generation,
             },
         );
         Ok(band)
+    }
+    pub(crate) fn sweep(&mut self) {
+        let generation = self.generation;
+        self.entries.retain(|_, e| e.seen == generation);
+        self.generation = generation.wrapping_add(1);
     }
 }
 
@@ -231,7 +241,7 @@ mod tests {
     #[test]
     fn internal_divider_shares_the_outer_border_material_and_width() {
         let object = column([leaf(200., 60.), leaf(200., 60.).id("lower")])
-            .weld(Surface)
+            .union(Surface)
             .radius(12.)
             .border_ramp(
                 BorderRamp::horizontal((Primary, 4.), (Dim, 1.)).dividers([Id::of("lower")]),
@@ -274,10 +284,10 @@ mod tests {
         let tab = leaf(32., 36.).radius((0., 0.)).id("tab");
         let plate = row![tab, leaf(180., 140.).radius((0., 0.))]
             .align(Align::Center)
-            .weld(Fill::None)
+            .union(Fill::None)
             .radius((0., 0.));
         let object = column([plate])
-            .weld(Surface)
+            .union(Surface)
             .radius((12., 10.))
             .border_ramp(BorderRamp::horizontal((Primary, 4.), (Dim, 1.)).tabs([Id::of("tab")]))
             .id("object");

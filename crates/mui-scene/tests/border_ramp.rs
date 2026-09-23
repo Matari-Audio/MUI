@@ -1,5 +1,6 @@
+use mui_geometry::Error::InvalidOptions;
 use mui_scene::prelude::*;
-use mui_scene::{Layer, Paint};
+use mui_scene::{Layer, Paint, SceneError};
 
 #[test]
 fn named_anchor_keeps_the_outline_and_emits_one_vector_border() {
@@ -10,7 +11,7 @@ fn named_anchor_keeps_the_outline_and_emits_one_vector_border() {
             leaf(20., 40.)
         ]
         .gap(0.)
-        .weld(Surface)
+        .union(Surface)
         .radius(12.)
         .id("card");
         let plain = resolve_scene(&SceneSpec::new(root.clone())).unwrap();
@@ -53,11 +54,23 @@ fn named_anchor_keeps_the_outline_and_emits_one_vector_border() {
 
 #[test]
 fn invalid_fields_and_missing_anchors_are_errors() {
-    for ramp in [
-        BorderRamp::horizontal((Primary, -1.), (Dim, 1.)),
-        BorderRamp::horizontal((Primary, 6.), (Dim, 1.)).transition(0.5, 0.5),
-        BorderRamp::horizontal((Primary, 6.), (Dim, 1.)).over("missing"),
+    for (ramp, why) in [
+        (
+            BorderRamp::horizontal((Primary, -1.), (Dim, 1.)),
+            "border ramp widths/interval",
+        ),
+        (
+            BorderRamp::horizontal((Primary, 6.), (Dim, 1.)).transition(0.5, 0.5),
+            "border ramp widths/interval",
+        ),
+        (
+            BorderRamp::horizontal((Primary, 6.), (Dim, 1.)).over("missing"),
+            "border ramp descendant missing",
+        ),
     ] {
-        assert!(resolve_scene(&SceneSpec::new(leaf(100., 100.).border_ramp(ramp))).is_err());
+        assert!(matches!(
+            resolve_scene(&SceneSpec::new(leaf(100., 100.).border_ramp(ramp))),
+            Err(SceneError::Geometry(InvalidOptions(m))) if m == why
+        ));
     }
 }

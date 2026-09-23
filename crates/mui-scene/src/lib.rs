@@ -9,7 +9,7 @@
 //! the filleted union of its children, and every shell is a true parallel
 //! inset of the outline before it.
 //!
-//! What this crate is not: it holds no widgets and no state (`mui-widgets`),
+//! What this crate is not: it holds no widgets and no state (`mui::widgets`),
 //! no event loop or input handling (`mui`), and no rasterizer (`mui-vello`).
 //!
 //! The compact spelling, which says the same thing:
@@ -58,11 +58,11 @@ pub use mui_style::{
     Color, Corner, Corners, Cursor, Elevation, Fill, Fit, Gradient, GradientKind, Image, Mix, Mode,
     Paint, Palette, Pigment, Radius, Role, Shadow, ShadowKind, Stroke, Style, Theme,
 };
-pub use mui_text::{Axes, Weight};
+pub use mui_text::{Axes, Font, Weight};
 pub mod material_symbols;
 pub use scene::{
     resolve_scene, resolve_scene_cached, resolve_scene_with, Layer, Painted, ResolvedScene,
-    ResolvedSurface, SceneError, SceneSpec, SceneState, Text, TextCache, TextGlyph,
+    ResolvedSurface, SceneError, SceneSpec, Text, TextCache, TextGlyph,
 };
 
 /// Everything a scene file needs, including the spacing tokens as bare
@@ -73,9 +73,9 @@ pub mod prelude {
         canvas, canvas_cached, caption, col, column, fits, grid, icon, label, leaf, overlay,
         resolve_scene, row, spacer, stack, text, title, weld, weld_morph, Align, Area, Axes,
         BorderAlign, BorderRamp, CanvasCache, Color, Corner, Cursor, Draw, El, Elevation, Fill,
-        Fit, Gradient, Id, Image, IntoEl, IntoLen, Justify, Kind, Len, Match, Mix, Paints, Pin,
-        Radius, Role, SceneSpec, Shadow, ShapeLayout, Size, State, Style, Styled, Sugar, Theme,
-        Weight, Weld, WeldBackend, WeldChannel, WeldQuality,
+        Fit, Font, Gradient, Id, Image, IntoEl, IntoLen, Justify, Kind, Len, Match, Mix, Paints,
+        Pin, Radius, Role, SceneSpec, Shadow, ShapeLayout, Size, State, Style, Styled, Sugar,
+        Theme, Weight, Weld, WeldBackend, WeldChannel, WeldQuality,
     };
     pub use mui_geometry::{CornerStyle, Path, Point};
     pub use mui_layout::Spacing;

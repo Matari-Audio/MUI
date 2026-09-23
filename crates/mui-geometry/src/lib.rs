@@ -14,7 +14,7 @@
 
 mod bezier;
 mod boolean;
-pub use bezier::{bez_path, ARC_TOLERANCE};
+pub use bezier::{bez_path, bez_path_into, ARC_TOLERANCE};
 pub use kurbo;
 mod fillet;
 mod math;
@@ -27,7 +27,7 @@ pub use regions::{
 };
 mod path;
 mod spacing;
-pub use nesting::{inset_arc_radius, inset_for_stroked_gap, InsetRect, NestedRadius, RoundedRect};
+pub use nesting::{InsetRect, RoundedRect};
 pub use offset::{
     boundary_distance, inset_path, offset_path, outset_path, InsetShape, OffsetOptions, OffsetShape,
 };

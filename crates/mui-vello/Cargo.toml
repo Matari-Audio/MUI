@@ -55,7 +55,7 @@ required-features = ["gpu-effects"]
 
 [[example]]
 name = "gpu_matrix"
-required-features = ["gpu-effects", "bench-classic"]
+required-features = ["gpu-effects"]
 
 [[example]]
 name = "bench"

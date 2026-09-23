@@ -57,7 +57,7 @@ struct Target {
 #[derive(Default)]
 pub struct Hit {
     targets: Vec<Target>,
-    /// The scene shares one `Arc<[Path]>` among all descendants of a clip.
+    /// The scene shares one `Arc<[Arc<Path>]>` among all descendants of a clip.
     /// Cache its Bézier conversion by slice identity so tagged draws on one
     /// surface do not repeat validation or curve conversion.
     clip_cache: HashMap<(usize, usize), Arc<[BezPath]>>,
@@ -92,7 +92,7 @@ impl Hit {
         id: impl Into<String>,
         path: &Path,
         clip: Option<Bounds>,
-        clips: Option<&[Path]>,
+        clips: Option<&[Arc<Path>]>,
     ) -> Result<(), Error> {
         let clips = self.bez_clips(clips)?;
         self.add(id.into(), None, path, clip, clips)
@@ -131,7 +131,7 @@ impl Hit {
         tag: impl Into<String>,
         path: &Path,
         clip: Option<Bounds>,
-        clips: Option<&[Path]>,
+        clips: Option<&[Arc<Path>]>,
     ) -> Result<(), Error> {
         let clips = self.bez_clips(clips)?;
         self.add(id.into(), Some(tag.into()), path, clip, clips)
@@ -157,7 +157,7 @@ impl Hit {
         Ok(())
     }
 
-    fn bez_clips(&mut self, paths: Option<&[Path]>) -> Result<Arc<[BezPath]>, Error> {
+    fn bez_clips(&mut self, paths: Option<&[Arc<Path>]>) -> Result<Arc<[BezPath]>, Error> {
         let Some(paths) = paths.filter(|paths| !paths.is_empty()) else {
             return Ok(Arc::from([]));
         };

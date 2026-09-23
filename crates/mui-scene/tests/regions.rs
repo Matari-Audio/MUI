@@ -1,6 +1,7 @@
 use mui_geometry::kurbo::{Point as KPoint, Shape};
 use mui_geometry::{bez_path, boundary_distance, Bounds};
 use mui_scene::prelude::*;
+use mui_scene::SceneError;
 fn has(path: &Path, x: f64, y: f64) -> bool {
     bez_path(path, 0.01).unwrap().winding(KPoint::new(x, y)) != 0
 }
@@ -113,11 +114,12 @@ fn curved_split_has_a_real_gap_and_reverses_direction() {
 }
 #[test]
 fn holes_survive_and_consumed_regions_disappear() {
+    // Wound against the octagon: outlines fill NonZero, like the renderer.
     let ring = |s: Size| {
         let mut p = octagon(s);
         p.commands.extend(
             Path::polyline(
-                [(70., 50.), (130., 50.), (130., 110.), (70., 110.)].map(|(x, y)| Point::new(x, y)),
+                [(70., 50.), (70., 110.), (130., 110.), (130., 50.)].map(|(x, y)| Point::new(x, y)),
                 true,
             )
             .commands,
@@ -144,21 +146,28 @@ fn holes_survive_and_consumed_regions_disappear() {
 }
 #[test]
 fn invalid_padding_bend_and_border_fail_before_publication() {
+    // `.inside(pad)` is also the gap, so layout refuses it first.
     for pad in [-1., f64::NAN, f64::INFINITY] {
-        assert!(resolve_scene(&SceneSpec::new(
-            row![cell("a"), cell("b")].inside(pad).w(100.).h(100.)
-        ))
-        .is_err());
+        assert!(matches!(
+            resolve_scene(&SceneSpec::new(
+                row![cell("a"), cell("b")].inside(pad).w(100.).h(100.)
+            )),
+            Err(SceneError::Layout(mui_layout::Error::InvalidValue))
+        ));
     }
     for bend in [0.5, f64::NAN] {
-        assert!(resolve_scene(&SceneSpec::new(
-            row![cell("a"), cell("b")]
-                .inside(2.)
-                .bend(bend)
-                .w(100.)
-                .h(100.)
-        ))
-        .is_err());
+        assert!(matches!(
+            resolve_scene(&SceneSpec::new(
+                row![cell("a"), cell("b")]
+                    .inside(2.)
+                    .bend(bend)
+                    .w(100.)
+                    .h(100.)
+            )),
+            Err(SceneError::Geometry(mui_geometry::Error::InvalidOptions(
+                "shape padding/bend"
+            )))
+        ));
     }
 }
 #[test]
@@ -265,7 +274,7 @@ fn vector_weld_is_partitioned_after_the_union() {
         stack![].w(100.).h(120.).id("b")
     ]
     .align(Align::Center)
-    .weld(Surface)
+    .union(Surface)
     .radius((0., 0.))
     .inside(2.)
     .w(200.)

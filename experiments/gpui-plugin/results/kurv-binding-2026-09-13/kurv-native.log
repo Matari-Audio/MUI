@@ -1,9 +1,0 @@
-
-running 2 tests
-test editor_mui::tests::native_control_scales_round_trip ... ok
-GPUI device: AMD Radeon RX 6600 (RADV NAVI23) (Mesa 26.2.2-arch3.2; software=false)
-PASS: real KURV GPUI root, host recall, resize and close
-test editor_mui::tests::native_editor_recall ... ok
-
-test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 645 filtered out; finished in 0.63s
-

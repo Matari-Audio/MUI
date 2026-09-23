@@ -8,6 +8,7 @@
 //! Run: `cargo run -p mui-preview`
 #![forbid(unsafe_code)]
 
+mod device;
 #[cfg(not(feature = "gpu-effects"))]
 mod host;
 #[cfg(feature = "gpu-effects")]
@@ -162,10 +163,10 @@ fn parse_theme(src: &str) -> (Theme, Vec<String>) {
 /// nobody named draw at 0.5, so a scene's ids stand out of its scaffolding.
 fn inspect(
     canvas: &mut impl mui::vello::Canvas,
-    scene: &mui::core::ResolvedScene,
+    scene: &mui::scene::ResolvedScene,
     xf: Affine,
     palette: &Palette,
-    font: &Arc<[u8]>,
+    font: &Font,
     pointer: Option<Point>,
     height: f64,
 ) {
@@ -198,27 +199,26 @@ fn inspect(
         "{}  {:.0} {:.0} {:.0} {:.0}",
         s.key, f.x, f.y, f.size.width, f.size.height
     );
-    let Ok(run) = mui_text::text_run(font, &label, LABEL, &[], mui::vello::ARC_TOLERANCE) else {
+    let fonts = std::slice::from_ref(font);
+    let Ok(run) = mui_text::shape_run(fonts, &label, LABEL, &[]) else {
         return;
     };
-    canvas.glyphs(&mui::core::Text {
-        font: font.clone(),
-        fonts: vec![font.clone()].into(),
+    canvas.glyphs(&mui::scene::Text {
+        fonts: fonts.into(),
         size: LABEL as f32,
         origin: Point::new(SIDEBAR + 12.0, height - 12.0),
         glyphs: run
             .glyphs
             .iter()
-            .map(|&(id, x)| mui::core::TextGlyph {
-                id,
-                x: x as f32,
-                y: 0.,
-                font: 0,
+            .map(|g| mui::scene::TextGlyph {
+                id: g.id,
+                x: g.x as f32,
+                y: g.y as f32,
+                font: g.font,
             })
             .collect(),
         axes: Default::default(),
         hint: true,
-        coords: Arc::from(&[][..]),
         font_coords: vec![Arc::from(&[][..])].into(),
     });
 }
@@ -227,7 +227,7 @@ struct App {
     ui: Ui,
     /// The gallery's own font, kept so the inspector can set its own labels
     /// without going through the scene.
-    font: Arc<[u8]>,
+    font: Font,
     scenes: Vec<Box<dyn PreviewScene>>,
     selected: usize,
     /// Where the specimen was dragged to, relative to centred.
@@ -261,7 +261,7 @@ struct App {
     /// window has been told to allow an input method at all. Toggling
     /// `set_ime_allowed` on an unchanged state can drop a composition, so it
     /// is only called on the edge.
-    ime_area: Option<(Point, mui::core::Size)>,
+    ime_area: Option<(Point, mui::scene::Size)>,
     ime_on: bool,
     mods: Mods,
     cursor: Cursor,
@@ -278,20 +278,17 @@ struct App {
     /// Both are `None` in a test: no event loop, no window, no adapter.
     proxy: Option<EventLoopProxy<AccessEvent>>,
     access: Option<Adapter>,
-    /// Arc-to-cubic conversions reused across frames; a still gallery
-    /// re-encodes without reconverting a single path.
-    #[cfg(not(feature = "gpu-effects"))]
-    paths: mui::vello::PathCache,
 }
 
 impl App {
     fn new() -> Self {
-        let font: Arc<[u8]> = Arc::from(epaint_default_fonts::HACK_REGULAR);
+        let font = Font::new(epaint_default_fonts::HACK_REGULAR).expect("bundled Hack parses");
         Self {
             ui: {
-                let ui = Ui::new(skin::SKIN)
-                    .font(font.clone())
-                    .fallback_font(epaint_default_fonts::NOTO_EMOJI_REGULAR.to_vec());
+                let ui = Ui::new(skin::SKIN).font(font.clone()).fallback_font(
+                    Font::new(epaint_default_fonts::NOTO_EMOJI_REGULAR)
+                        .expect("bundled Noto Emoji parses"),
+                );
                 #[cfg(feature = "gpu-effects")]
                 let ui = ui.gpu_welding();
                 ui
@@ -328,8 +325,6 @@ impl App {
             gpu: None,
             proxy: None,
             access: None,
-            #[cfg(not(feature = "gpu-effects"))]
-            paths: mui::vello::PathCache::new(),
         }
     }
 
@@ -401,7 +396,7 @@ impl App {
         side.push(
             column((0..self.scenes.len()).map(|i| {
                 let on = i == self.selected;
-                let (item, _) = button(ui, &format!("scene-{i}"), self.scenes[i].name());
+                let (item, _) = button(ui, format!("scene-{i}"), self.scenes[i].name());
                 item.variant(if on { Variant::Solid } else { Variant::Soft })
                     .size(S)
                     .el()
@@ -414,11 +409,11 @@ impl App {
             .id("scene-list"),
         );
         let scene = &mut self.scenes[self.selected];
-        let switch = |label: &str, id: &str, v: &mut bool| {
+        let mut switch = |label: &str, id: &str, v: &mut bool| {
             row([
                 text(label).fill(Role::Dim),
                 spacer(),
-                toggle(ui, id, v).el(),
+                toggle(ui, id, v).0.el(),
             ])
             .align(Align::Center)
         };
@@ -596,8 +591,8 @@ impl App {
         let (Some(a), Some(scene)) = (&mut self.access, self.ui.scene()) else {
             return;
         };
-        let focus = self.ui.focus_key();
-        a.update_if_active(|| mui_access::tree_update(scene, focus));
+        let (focus, scale) = (self.ui.focus_key(), self.ui.scale.unwrap_or(1.0));
+        a.update_if_active(|| mui_access::tree_update(scene, focus, scale));
     }
 
     /// The surface behind an accesskit node id.
@@ -676,7 +671,7 @@ impl App {
         let Some(scene) = self.ui.scene() else { return };
         let mut canvas = gpu.begin();
         let xf = Affine::scale(scale);
-        if let Err(e) = mui::vello::paint_cached(&mut canvas, scene, xf, &mut self.paths) {
+        if let Err(e) = mui::vello::paint(&mut canvas, scene, xf) {
             eprintln!("paint: {e}");
         }
         if let Some((key, path)) = self.scenes[self.selected].overlay() {
@@ -735,6 +730,23 @@ impl ApplicationHandler<AccessEvent> for App {
                             {
                                 self.ui
                                     .request_action(SemanticAction::set_value(key, value));
+                            }
+                        }
+                        AccessAction::Increment => {
+                            self.ui.request_action(SemanticAction::increment(key));
+                        }
+                        AccessAction::Decrement => {
+                            self.ui.request_action(SemanticAction::decrement(key));
+                        }
+                        AccessAction::SetTextSelection => {
+                            if let Some(mui_access::accesskit::ActionData::SetTextSelection(s)) =
+                                r.data
+                            {
+                                self.ui.request_action(SemanticAction::set_selection(
+                                    key,
+                                    s.anchor.character_index,
+                                    s.focus.character_index,
+                                ));
                             }
                         }
                         _ => {}
@@ -978,7 +990,7 @@ mod tests {
             .position(|s| s.name() == "Widgets")
             .unwrap();
         app.tick(SIZE, 1.0, PointerInput::default());
-        let u = mui_access::tree_update(app.ui.scene().unwrap(), None);
+        let u = mui_access::tree_update(app.ui.scene().unwrap(), None, 1.0);
         let named = |role| {
             u.nodes
                 .iter()
@@ -1069,7 +1081,15 @@ mod tests {
             before.x
         );
 
-        let g = centre(&app, "gain");
+        // The whole lane is the slider: its value is what moves.
+        let gain = |app: &App| {
+            let s = app.ui.scene().unwrap().surface("gain").unwrap();
+            match s.semantics.as_ref().map(|s| &s.role) {
+                Some(mui::scene::Kind::Slider { value, .. }) => *value,
+                _ => panic!("gain is a slider"),
+            }
+        };
+        let (g, v) = (centre(&app, "gain"), gain(&app));
         for (dx, down) in [
             (0.0, false),
             (0.0, true),
@@ -1080,10 +1100,7 @@ mod tests {
         ] {
             app.tick(SIZE, 1.0, at(g.x + dx, g.y, down));
         }
-        assert!(
-            centre(&app, "gain").x > g.x + 30.0,
-            "thumb did not follow the hand"
-        );
+        assert!(gain(&app) > v, "the value did not follow the hand");
     }
 
     /// The whole new input path in one go: a wheel event reaching the scroll

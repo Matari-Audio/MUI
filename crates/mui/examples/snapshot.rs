@@ -17,15 +17,15 @@ fn gallery(ui: &mut Ui, state: &mut (f64, f64, f64, bool)) -> El {
     let (go, _) = button(ui, "go", "Trigger");
     let card = column([
         row([
-            knob(ui, "cutoff", "Cutoff", cutoff, 0.0..=1.0).el(),
-            knob(ui, "res", "Res", res, 0.0..=1.0).el(),
+            knob(ui, "cutoff", "Cutoff", cutoff, 0.0..=1.0).0.el(),
+            knob(ui, "res", "Res", res, 0.0..=1.0).0.el(),
         ])
         .gap(L)
         .justify(Justify::Center),
-        slider(ui, "gain", "Gain", gain, -24.0..=6.0).el(),
+        slider(ui, "gain", "Gain", gain, -24.0..=6.0).0.el(),
         row([
             text("Bypass").fill(Role::Dim),
-            toggle(ui, "bypass", on).el(),
+            toggle(ui, "bypass", on).0.el(),
             spacer(),
             go.el(),
         ])
@@ -68,7 +68,8 @@ fn shot(scale: f64) -> Shot {
         (SIZE.width * scale).round() as u16,
         (SIZE.height * scale).round() as u16,
     );
-    let mut ui = Ui::new(Theme::DEFAULT).font(epaint_default_fonts::HACK_REGULAR.to_vec());
+    let mut ui =
+        Ui::new(Theme::DEFAULT).font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
     ui.scale = Some(scale);
     let mut state = (0.35, 0.7, -6.0, true);
     // Two frames: the first has no gesture state, the second is what a real
@@ -85,6 +86,7 @@ fn shot(scale: f64) -> Shot {
             &mut mui::vello::Cpu {
                 ctx: &mut ctx,
                 resources: &mut res,
+                cache: &mut mui::vello::Cache::default(),
             },
             frame.scene,
             // The whole scale story on the paint side: one transform. Glyph

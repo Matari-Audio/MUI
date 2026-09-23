@@ -1,15 +1,14 @@
 //! Why `vello_hybrid` and not classic `vello`, measured on a Kurv-sized editor.
 //!
-//!     cargo run -p mui-vello --release --features cpu --example bench
-//!     cargo run -p mui-vello --release --features cpu,bench-classic --example bench
+//!     cargo run -p mui-vello --profile perf --features cpu --example bench
+//!     cargo run -p mui-vello --profile perf --features cpu,bench-classic --example bench
 //!
-//! One scene, three backends, three cases. Each frame is split into resolve
+//! One scene, every backend, four cases. Each frame is split into resolve
 //! (`Ui::frame`: styling, layout, text shaping, the paint list), encode (the
 //! paint-list walk onto a `Canvas`) and render (rasterise and wait for it).
 //! Reported as the median of 50 frames after 5 warm-ups, so a stray scheduler
 //! hiccup cannot move a number.
 
-use std::cell::Cell;
 use std::time::Instant;
 
 use std::sync::Arc;
@@ -18,7 +17,7 @@ use mui::prelude::*;
 use mui::Ui;
 use mui_scene::{Layer, ResolvedScene};
 use mui_vello::kurbo::Affine;
-use mui_vello::{Cpu, Gpu, PathCache};
+use mui_vello::{Cache, Cpu, Gpu};
 use vello_common::pixmap::Pixmap;
 
 const W: u16 = 1280;
@@ -39,6 +38,9 @@ fn vectors() -> bool {
 struct App {
     knobs: Vec<f64>,
     sliders: Vec<f64>,
+    /// Decoded once and kept, as a host keeps what it decoded: a renderer
+    /// keys its upload on this `Arc`, and so does the retained paint list.
+    swatch: Arc<Image>,
 }
 
 impl App {
@@ -46,13 +48,14 @@ impl App {
         Self {
             knobs: (0..40).map(|i| f64::from(i) / 40.0).collect(),
             sliders: (0..8).map(|i| f64::from(i) / 8.0).collect(),
+            swatch: swatch(),
         }
     }
 }
 
 /// A four-pixel texture, standing in for whatever a host decodes. One buffer,
-/// shared by every pill: `PathCache` and the pixmap intern both key on the
-/// `Arc`, so four pills cost one upload.
+/// shared by every pill: each renderer's `Cache` keys on the `Arc`, so four
+/// pills cost one upload.
 fn swatch() -> Arc<Image> {
     let px: Vec<u8> = [
         [220, 60, 60, 255],
@@ -102,7 +105,8 @@ fn editor(ui: &mut Ui, app: &mut App, images: bool) -> El {
     }
     let knobs: Vec<El> = (0..40)
         .map(|i| {
-            knob(ui, &format!("k{i}"), "cut", &mut app.knobs[i], 0.0..=1.0)
+            knob(ui, format!("k{i}"), "cut", &mut app.knobs[i], 0.0..=1.0)
+                .0
                 .size(S)
                 .el()
         })
@@ -111,11 +115,12 @@ fn editor(ui: &mut Ui, app: &mut App, images: bool) -> El {
         .map(|i| {
             slider(
                 ui,
-                &format!("s{i}"),
+                format!("s{i}"),
                 "amount",
                 &mut app.sliders[i],
                 0.0..=1.0,
             )
+            .0
             .el()
         })
         .collect();
@@ -134,7 +139,7 @@ fn editor(ui: &mut Ui, app: &mut App, images: bool) -> El {
         .map(|i| label(format!("{i}. {BLURB}")).w(150.0).lines(4))
         .collect();
     // 4 image-filled pills, all sharing one 2x2 buffer.
-    let img = swatch();
+    let img = app.swatch.clone();
     let pills: Vec<El> = [Fit::Cover, Fit::Contain, Fit::Fill, Fit::Cover]
         .into_iter()
         .map(|fit| {
@@ -170,7 +175,7 @@ fn editor(ui: &mut Ui, app: &mut App, images: bool) -> El {
         row(pills).gap(S).pad(S),
         grid(6, cards).gap(S).pad(S),
     ]
-    .weld(Role::Surface);
+    .union(Role::Surface);
 
     // Three floats: a tooltip, a readout and a menu, painted over everything.
     stack![
@@ -223,6 +228,9 @@ enum Case {
     Static,
     /// One knob moves; everything else is the same tree.
     Knob,
+    /// The same tree, but the host hands over a freshly decoded image every
+    /// frame: a video or meter texture. Every retained path has to redraw.
+    Image,
 }
 
 impl Case {
@@ -232,6 +240,7 @@ impl Case {
             Self::Static => "static",
             Self::Knob if vectors() => "all curves moving",
             Self::Knob => "one knob turning",
+            Self::Image => "fresh image",
         }
     }
 }
@@ -246,16 +255,19 @@ fn run(
     images: bool,
     mut draw: impl FnMut(&ResolvedScene) -> (f64, f64),
 ) -> Row {
-    let mut ui = Ui::new(Theme::DEFAULT).font(font.to_vec());
+    let mut ui = Ui::new(Theme::DEFAULT).font(Font::new(font).unwrap());
     let mut app = App::new();
     let (mut r, mut e, mut d) = (vec![], vec![], vec![]);
     let (mut b, mut totals) = (vec![], vec![]);
     for i in 0..WARM + N {
         if case == Case::Cold {
-            ui = Ui::new(Theme::DEFAULT).font(font.to_vec());
+            ui = Ui::new(Theme::DEFAULT).font(Font::new(font).unwrap());
         }
         if case == Case::Knob {
             app.knobs[7] = f64::from(i as u32 % 100) / 100.0;
+        }
+        if case == Case::Image {
+            app.swatch = swatch();
         }
         let start = Instant::now();
         let root = editor(&mut ui, &mut app, images);
@@ -292,7 +304,7 @@ fn run(
     }
 }
 
-const CASES: [Case; 3] = [Case::Cold, Case::Static, Case::Knob];
+const CASES: [Case; 4] = [Case::Cold, Case::Static, Case::Knob, Case::Image];
 
 /// Peak resident set of this process, in MiB -- the only memory number the
 /// sparse-strip renderers expose at all.
@@ -308,44 +320,13 @@ fn peak_rss() -> f64 {
         / 1024.0
 }
 
-fn cache_counters(cache: &PathCache) -> (u64, u64, usize) {
-    (cache.hits(), cache.misses(), cache.len())
-}
-
-fn print_cache_stats(label: &str, (hits, misses, entries): (u64, u64, usize)) {
-    let total = hits.saturating_add(misses);
-    let hit_rate = if total == 0 {
-        0.0
-    } else {
-        hits as f64 * 100.0 / total as f64
-    };
-    println!(
-        "{label} path cache: {hits} hits, {misses} misses, {entries} entries ({hit_rate:.1}% hit rate)"
-    );
-}
-
-fn print_cache_delta(label: &str, case: Case, before: (u64, u64, usize), after: (u64, u64, usize)) {
-    let hits = after.0.saturating_sub(before.0);
-    let misses = after.1.saturating_sub(before.1);
-    let total = hits.saturating_add(misses);
-    let hit_rate = if total == 0 {
-        0.0
-    } else {
-        hits as f64 * 100.0 / total as f64
-    };
-    println!(
-        "{label} {} path cache: {hits} hits, {misses} misses ({hit_rate:.1}% hit rate)",
-        case.name()
-    );
-}
-
 // ---------------------------------------------------------------- backends
 
 fn main() {
     let font = epaint_default_fonts::HACK_REGULAR;
     let mut rows = Vec::new();
     {
-        let mut ui = Ui::new(Theme::DEFAULT).font(font.to_vec());
+        let mut ui = Ui::new(Theme::DEFAULT).font(Font::new(font).unwrap());
         let mut app = App::new();
         let root = editor(&mut ui, &mut app, IMAGES);
         let f = ui
@@ -364,34 +345,20 @@ fn main() {
         );
 
         // What of `encode` is MUI's own arc-to-cubic conversion rather than
-        // the backend's strip building: the same walk, converting only.
-        let paths = || f.scene.paint.iter().filter(|p| p.layer != Layer::Unclip);
-        let mut cache = PathCache::new();
-        let (mut cold, mut warm) = (vec![], vec![]);
+        // the backend's strip building: the same walk, converting only. It is
+        // also the most a cache of the conversion could save per frame.
+        let mut times = vec![];
         for i in 0..WARM + N {
             let t = Instant::now();
-            for p in paths() {
+            for p in f.scene.paint.iter().filter(|p| p.layer != Layer::Unclip) {
                 std::hint::black_box(mui_vello::bez_path(&p.path, mui_vello::ARC_TOLERANCE))
                     .expect("converts");
             }
-            let a = since(t);
-            let t = Instant::now();
-            for p in paths() {
-                std::hint::black_box(cache.bez(p)).expect("converts");
-            }
-            let b = since(t);
             if i >= WARM {
-                cold.push(a);
-                warm.push(b);
+                times.push(since(t));
             }
         }
-        println!(
-            "bez conversion: {:.3} ms uncached, {:.3} ms from a warm PathCache ({} entries)",
-            median(&mut cold),
-            median(&mut warm),
-            cache.len()
-        );
-        print_cache_stats("conversion probe", cache_counters(&cache));
+        println!("bez conversion: {:.3} ms per frame", median(&mut times));
     }
 
     // Resolve with nothing painted at all: MUI's own floor.
@@ -407,6 +374,7 @@ fn main() {
     {
         let mut ctx = vello_cpu::RenderContext::new(W, H);
         let mut res = vello_cpu::Resources::default();
+        let mut cache = Cache::default();
         let mut pix = Pixmap::new(W, H);
         let mut draw = |scene: &ResolvedScene| {
             ctx.reset();
@@ -415,6 +383,7 @@ fn main() {
                 &mut Cpu {
                     ctx: &mut ctx,
                     resources: &mut res,
+                    cache: &mut cache,
                 },
                 scene,
                 Affine::IDENTITY,
@@ -429,41 +398,6 @@ fn main() {
         for c in CASES {
             rows.push(run("vello_cpu", c, font, IMAGES, &mut draw));
         }
-    }
-
-    // --- CPU again, with the path conversion remembered between frames.
-    {
-        let mut ctx = vello_cpu::RenderContext::new(W, H);
-        let mut res = vello_cpu::Resources::default();
-        let mut pix = Pixmap::new(W, H);
-        let mut cache = PathCache::new();
-        let stats = Cell::new((0, 0, 0));
-        let mut draw = |scene: &ResolvedScene| {
-            ctx.reset();
-            let t = Instant::now();
-            mui_vello::paint_cached(
-                &mut Cpu {
-                    ctx: &mut ctx,
-                    resources: &mut res,
-                },
-                scene,
-                Affine::IDENTITY,
-                &mut cache,
-            )
-            .expect("paints");
-            stats.set(cache_counters(&cache));
-            ctx.flush();
-            let encode = since(t);
-            let t = Instant::now();
-            ctx.render(&mut pix, &mut res);
-            (encode, since(t))
-        };
-        for c in CASES {
-            let before = stats.get();
-            rows.push(run("vello_cpu cached", c, font, IMAGES, &mut draw));
-            print_cache_delta("vello_cpu cached", c, before, stats.get());
-        }
-        print_cache_stats("vello_cpu cached", stats.get());
     }
 
     match pollster::block_on(gpu()) {
@@ -522,7 +456,7 @@ async fn gpu() -> Option<(wgpu::AdapterInfo, Vec<Row>)> {
             },
         );
         let mut scene = vello_hybrid::Scene::new(W, H);
-        let mut ids = mui_vello::ImageIds::default();
+        let mut cache = Cache::default();
         let mut draw = |resolved: &ResolvedScene| {
             scene.reset();
             let t = Instant::now();
@@ -530,11 +464,11 @@ async fn gpu() -> Option<(wgpu::AdapterInfo, Vec<Row>)> {
                 &mut Gpu {
                     scene: &mut scene,
                     resources: &mut resources,
+                    cache: &mut cache,
                     atlas: Some(mui_vello::Atlas {
                         renderer: &mut renderer,
                         device: &device,
                         queue: &queue,
-                        ids: &mut ids,
                     }),
                 },
                 resolved,
@@ -570,72 +504,42 @@ async fn gpu() -> Option<(wgpu::AdapterInfo, Vec<Row>)> {
         }
     }
 
-    // --- hybrid, with the path conversion cached.
+    // --- HybridEffects: the retained whole-window renderer the gallery uses
+    // by default. An unchanged paint list skips the encode entirely.
+    #[cfg(feature = "gpu-effects")]
     {
         let texture = target(&device, wgpu::TextureUsages::RENDER_ATTACHMENT);
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let (mut renderer, mut resources) = vello_hybrid::Renderer::new(
+        let view = texture.create_view(&Default::default());
+        let mut renderer = mui_vello::effects::HybridEffects::new(
             &device,
-            &vello_hybrid::RenderTargetConfig {
-                format: texture.format(),
-                width: W.into(),
-                height: H.into(),
-            },
-        );
-        let mut scene = vello_hybrid::Scene::new(W, H);
-        let mut cache = PathCache::new();
-        let stats = Cell::new((0, 0, 0));
-        let mut ids = mui_vello::ImageIds::default();
-        let mut draw = |resolved: &ResolvedScene| {
-            scene.reset();
-            let t = Instant::now();
-            mui_vello::paint_cached(
-                &mut Gpu {
-                    scene: &mut scene,
-                    resources: &mut resources,
-                    atlas: Some(mui_vello::Atlas {
-                        renderer: &mut renderer,
-                        device: &device,
-                        queue: &queue,
-                        ids: &mut ids,
-                    }),
-                },
-                resolved,
-                Affine::IDENTITY,
-                &mut cache,
-            )
-            .expect("paints");
-            stats.set(cache_counters(&cache));
-            let encode = since(t);
-            let t = Instant::now();
-            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-            renderer
-                .render(
-                    &scene,
-                    &mut resources,
-                    &device,
-                    &queue,
-                    &mut enc,
-                    &vello_hybrid::RenderSize {
-                        width: W.into(),
-                        height: H.into(),
-                    },
-                    &view,
-                    &vello_hybrid::TextureBindings::new(),
-                )
-                .expect("render");
-            queue.submit([enc.finish()]);
-            device
-                .poll(wgpu::PollType::wait_indefinitely())
-                .expect("poll");
-            (encode, since(t))
-        };
-        for c in CASES {
-            let before = stats.get();
-            rows.push(run("vello_hybrid cached", c, font, IMAGES, &mut draw));
-            print_cache_delta("vello_hybrid cached", c, before, stats.get());
+            &queue,
+            texture.format(),
+            [W.into(), H.into()],
+            mui_vello::effects::Budget::default(),
+        )
+        .await
+        .expect("retained renderer");
+        for case in CASES {
+            let (mut encodes, mut renders) = (0, 0);
+            rows.push(run("hybrid retained", case, font, IMAGES, |scene| {
+                let start = Instant::now();
+                let stats = renderer
+                    .render(scene, Affine::IDENTITY, &view)
+                    .expect("retained render");
+                encodes += stats.encoded_scenes;
+                renders += stats.renders;
+                let encode = since(start);
+                let start = Instant::now();
+                device
+                    .poll(wgpu::PollType::wait_indefinitely())
+                    .expect("poll");
+                (encode, since(start))
+            }));
+            println!(
+                "hybrid retained {}: {encodes} scene encodes, {renders} renders",
+                case.name()
+            );
         }
-        print_cache_stats("vello_hybrid cached", stats.get());
     }
 
     #[cfg(feature = "gpu-effects")]
@@ -797,7 +701,7 @@ mod classic {
             let (size, glyphs) = (text.size, &text.glyphs);
             let f = self
                 .font
-                .get_or_insert_with(|| FontData::new(Blob::new(Arc::new(text.font.clone())), 0))
+                .get_or_insert_with(|| FontData::new(Blob::new(Arc::new(text.fonts[0].clone())), 0))
                 .clone();
             let (ox, oy) = (text.origin.x as f32, text.origin.y as f32);
             self.scene

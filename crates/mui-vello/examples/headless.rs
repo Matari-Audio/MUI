@@ -33,7 +33,7 @@ fn spec() -> SceneSpec {
     let root = column([tab, panel])
         .align(Align::Start)
         .id("root")
-        .weld(Role::Surface);
+        .union(Role::Surface);
     SceneSpec::new(root)
         .theme(Theme {
             corners: Corners {
@@ -43,7 +43,7 @@ fn spec() -> SceneSpec {
             },
             ..Theme::DEFAULT
         })
-        .font(epaint_default_fonts::HACK_REGULAR.to_vec())
+        .font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap())
 }
 
 fn main() {
@@ -106,6 +106,7 @@ async fn rasterise(resolved: &mui_scene::ResolvedScene) -> Vec<u8> {
         &mut Gpu {
             scene: &mut scene,
             resources: &mut resources,
+            cache: &mut mui_vello::Cache::default(),
             atlas: None,
         },
         resolved,

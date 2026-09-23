@@ -7,7 +7,7 @@
 //! // One frame: build the tree, hand it in with the input, draw what comes back.
 //! let root = col![
 //!     label("Filter"),
-//!     slider(&mut ui, "cutoff", "Cutoff", &mut cutoff, 0.0..=1.0),
+//!     slider(&mut ui, "cutoff", "Cutoff", &mut cutoff, 0.0..=1.0).0,
 //! ]
 //! .gap(S)
 //! .pad(M)
@@ -21,38 +21,33 @@
 //! ```
 #![forbid(unsafe_code)]
 
-#[cfg(feature = "egui")]
-pub use mui_egui as egui;
 pub use mui_geometry as geometry;
 pub use mui_input as input;
 pub use mui_layout as layout;
 pub use mui_motion as motion;
-#[deprecated(note = "use mui::scene")]
-pub use mui_scene as core;
 pub use mui_scene as scene;
-pub use mui_tessellate as tessellate;
 pub use mui_vello as vello;
-pub use mui_widgets as widgets;
-pub use mui_widgets::presets;
 
 mod actions;
 mod ui;
+pub mod widgets;
 pub use actions::SemanticAction;
+pub use widgets::presets;
 
 pub use ui::{Edit, Frame, Ui};
 
 pub mod prelude {
+    pub use crate::widgets::presets::{card, chip, glass, panel, tile};
+    pub use crate::widgets::{
+        bins, bins_hover, button, curve, knob, slider, text_input, toggle, BinAxis, BinEdit, Bins,
+        Control, CurveEdit, Variant,
+    };
     pub use crate::{Edit, Frame, SemanticAction, Ui};
     pub use mui_input::{
         Axis, Button, Buttons, Ime, Input, Key, KeyPress, Mods, PointerInput, Response, FINE_DRAG,
     };
     pub use mui_scene::prelude::*;
     pub use mui_scene::{Corners, Mode, Palette, Pigment, SpacingToken, Spring};
-    pub use mui_widgets::presets::{card, chip, glass, panel, tile};
-    pub use mui_widgets::{
-        bins, bins_hover, button, curve, knob, slider, text_input, toggle, BinAxis, BinEdit, Bins,
-        Control, CurveEdit, Host, Variant,
-    };
 }
 
 /// Every runnable `rust` block in the README, compiled and run by
