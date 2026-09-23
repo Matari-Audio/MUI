@@ -218,24 +218,37 @@ pub(crate) fn clean_ring(input: &[Point], epsilon: f64) -> Result<Vec<Point>, Er
     if p.len() > 1 && p[0].distance(*p.last().unwrap()) <= epsilon {
         p.pop();
     }
+    // A vertex goes when it sits on its predecessor or on the chord to its
+    // successor (without doubling back). One stack pass settles the interior;
+    // the seam loop then settles the wrap-around, where only the two ends
+    // gain new neighbours.
+    let removable = |a: Point, b: Point, c: Point| {
+        b.distance(a) <= epsilon
+            || (point_segment_distance(b, a, c) <= epsilon && (b - a).dot(c - b) >= 0.)
+    };
+    let mut out: Vec<Point> = Vec::with_capacity(p.len());
+    for v in p {
+        while out.len() >= 2 && removable(out[out.len() - 2], out[out.len() - 1], v) {
+            out.pop();
+        }
+        out.push(v);
+    }
+    let mut start = 0;
     loop {
-        if p.len() < 3 {
+        if out.len() - start < 3 {
             return Err(Error::DegenerateRing);
         }
-        let n = p.len();
-        let remove = (0..n).find(|&i| {
-            let a = p[(i + n - 1) % n];
-            let b = p[i];
-            let c = p[(i + 1) % n];
-            b.distance(a) <= epsilon
-                || (point_segment_distance(b, a, c) <= epsilon && (b - a).dot(c - b) >= 0.)
-        });
-        if let Some(i) = remove {
-            p.remove(i);
+        let last = out.len() - 1;
+        if removable(out[last - 1], out[last], out[start]) {
+            out.pop();
+        } else if removable(out[last], out[start], out[start + 1]) {
+            start += 1;
         } else {
             break;
         }
     }
+    out.drain(..start);
+    let p = out;
     if signed_area(&p).abs() <= epsilon * epsilon {
         return Err(Error::DegenerateRing);
     }
@@ -244,6 +257,8 @@ pub(crate) fn clean_ring(input: &[Point], epsilon: f64) -> Result<Vec<Point>, Er
 
 /// Bounded O(V²) validation for caller-supplied polygon rings. The Boolean
 /// backend handles intersections BETWEEN valid shapes, not malformed leaf rings.
+// ponytail: all-pairs edge test, ~8M pairs at the default 4096-vertex cap;
+// a sweep line (Bentley-Ottmann) if that cap ever has to rise.
 pub(crate) fn validate_simple(p: &[Point], eps: f64) -> Result<(), Error> {
     let n = p.len();
     for i in 0..n {
