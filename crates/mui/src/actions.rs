@@ -15,6 +15,15 @@ pub enum SemanticAction {
         id: String,
         value: f64,
     },
+    /// One step up a slider, the step its arrow keys take: see
+    /// [`mui_widgets::step`]. Lands as the equivalent `SetValue`.
+    Increment {
+        id: String,
+    },
+    /// One step down; see [`SemanticAction::Increment`].
+    Decrement {
+        id: String,
+    },
 }
 impl SemanticAction {
     pub fn focus(id: impl Into<String>) -> Self {
@@ -29,9 +38,19 @@ impl SemanticAction {
             value,
         }
     }
+    pub fn increment(id: impl Into<String>) -> Self {
+        Self::Increment { id: id.into() }
+    }
+    pub fn decrement(id: impl Into<String>) -> Self {
+        Self::Decrement { id: id.into() }
+    }
     pub(crate) fn id(&self) -> &str {
         match self {
-            Self::Focus { id } | Self::Activate { id } | Self::SetValue { id, .. } => id,
+            Self::Focus { id }
+            | Self::Activate { id }
+            | Self::SetValue { id, .. }
+            | Self::Increment { id }
+            | Self::Decrement { id } => id,
         }
     }
 }

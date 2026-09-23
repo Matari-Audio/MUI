@@ -28,7 +28,7 @@ mod widgets;
 pub use bins::{bins, bins_hover, BinAxis, BinEdit, Bins};
 pub use curve::{curve, CurveEdit};
 pub use presets::{card, chip, glass, panel, tile};
-pub use widgets::{button, knob, slider, text_input, toggle, Control, Variant};
+pub use widgets::{button, knob, slider, step, text_input, toggle, Control, Variant};
 
 /// What a widget needs from the runtime that hosts it: last frame's gesture
 /// and focus state by key, the theme to size and colour against, a text

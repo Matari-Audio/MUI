@@ -5,7 +5,7 @@ use mui_scene::prelude::*;
 fn overlapping_siblings_do_not_become_each_others_children() {
     let tree = stack![leaf(100.0, 100.0).id("back"), leaf(20.0, 20.0).id("front"),].id("root");
     let scene = resolve_scene(&SceneSpec::new(tree)).unwrap();
-    let update = tree_update(&scene, None);
+    let update = tree_update(&scene, None, 1.0);
     let find = |id: &str| {
         &update
             .nodes
@@ -31,7 +31,7 @@ fn float_keeps_authored_parent_while_escaping_the_clip() {
     let popup = scene.surface("popup").unwrap();
     assert_eq!(popup.parent.as_deref(), Some("panel"));
     assert!(popup.clip_paths().is_none_or(|p| p.is_empty()));
-    let update = tree_update(&scene, None);
+    let update = tree_update(&scene, None, 1.0);
     let panel = &update
         .nodes
         .iter()
@@ -53,7 +53,7 @@ fn disabled_controls_advertise_no_mutating_actions_or_focus() {
             max: 1.0,
         });
     let scene = resolve_scene(&SceneSpec::new(tree)).unwrap();
-    let update = tree_update(&scene, Some("gain"));
+    let update = tree_update(&scene, Some("gain"), 1.0);
     let gain = &update
         .nodes
         .iter()
@@ -72,7 +72,7 @@ fn text_is_an_accessible_label_unless_explicitly_overridden() {
         text("880 Hz").label("Reference").id("explicit")
     ];
     let scene = resolve_scene(&SceneSpec::new(tree)).unwrap();
-    let update = tree_update(&scene, None);
+    let update = tree_update(&scene, None, 1.0);
     let label = |id: &str| {
         update
             .nodes
