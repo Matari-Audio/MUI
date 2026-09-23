@@ -1,0 +1,397 @@
+//! What a resolve hands back: the paint list and the surfaces.
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use mui_geometry::{Bounds, Path, Point, RoundedRect};
+use mui_layout::{Frame, Layout, Size};
+use mui_text::{Axes, Font};
+
+use super::text::CachedRun;
+use super::SceneError;
+use crate::{Cursor, Mix, Paint, Semantics, ShadowKind};
+
+/// Which layer of a node's style a [`Painted`] entry is.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Layer {
+    /// One shadow of the node's list; an inset one paints clipped to the
+    /// node's own outline.
+    Shadow(ShadowKind),
+    Fill,
+    Shell(usize),
+    Stroke,
+    Text,
+    /// A canvas's `k`th draw.
+    Draw(usize),
+    /// Everything up to the matching `Unclip` is clipped to `path`; the
+    /// paint is meaningless.
+    Clip,
+    Unclip,
+    /// Everything up to the matching `Unblend` composites as one layer; the
+    /// path and paint are meaningless. Wraps the node's own `Clip`, so a
+    /// blended subtree's clip is inside its layer -- but a float declared in
+    /// that subtree paints after the root, hence outside it.
+    Blend {
+        mix: Mix,
+        opacity: f32,
+    },
+    /// Painted source-atop the node's own blend layer, in `path`: it lands
+    /// only where the node and its children already painted. Always inside
+    /// a `Blend`/`Unblend` pair. See [`Paints::mask`](crate::Paints::mask).
+    Mask,
+    Unblend,
+    /// External GPU material, sampled in paint order through the effect renderer.
+    External,
+}
+
+/// One shaped glyph in a text layer.
+///
+/// `x` and `y` are offsets from the run baseline origin in scene pixels. The
+/// y offset matters for combining marks and OpenType GPOS; carrying it here
+/// keeps the glyph cache renderer in agreement with the outline path. `font`
+/// indexes [`Text::fonts`], so a fallback glyph can never accidentally be
+/// looked up in the primary face.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TextGlyph {
+    pub id: u32,
+    pub x: f32,
+    pub y: f32,
+    pub font: usize,
+}
+
+/// A text layer's glyphs, for a renderer that hints and caches its own.
+#[derive(Clone, Debug)]
+pub struct Text {
+    /// The primary face, retained for compatibility with callers that only
+    /// need one face. It is also `fonts[0]` whenever `fonts` is non-empty.
+    pub font: Font,
+    /// Primary face followed by any fallback faces used by this run.
+    pub fonts: Arc<[Font]>,
+    pub size: f32,
+    /// Baseline origin.
+    pub origin: Point,
+    /// Shaped glyph id, x/y offset and face index from the origin.
+    pub glyphs: Arc<[TextGlyph]>,
+    /// The axis settings the run was shaped at; `coords` is the same thing
+    /// in the form a glyph cache wants, and [`ResolvedScene::set_text`]
+    /// re-shapes from this one.
+    pub axes: Axes,
+    /// The face's normalized axis coordinates this run was measured at, from
+    /// [`mui_text::normalized_coords`]. Empty for a static face. A renderer
+    /// with its own glyph cache has to pass these on, or it paints the
+    /// default instance under a bold run's advances.
+    pub coords: Arc<[i16]>,
+    /// Per-face normalized coordinates. `coords` remains the primary face's
+    /// value for callers that only know about one font.
+    pub font_coords: Arc<[Arc<[i16]>]>,
+    /// Whether a renderer should hint this run. Off for the frame after its
+    /// axes moved: a glyph mid-morph gains nothing from stem snapping and
+    /// would cost a fresh hinting instance per frame.
+    pub hint: bool,
+}
+impl PartialEq for Text {
+    fn eq(&self, o: &Self) -> bool {
+        self.font == o.font
+            && self.fonts == o.fonts
+            && self.size == o.size
+            && self.origin == o.origin
+            && self.glyphs == o.glyphs
+            && self.axes == o.axes
+            && self.coords == o.coords
+            && self.font_coords == o.font_coords
+            && self.hint == o.hint
+    }
+}
+
+/// One thing to draw. `key` is the node's id, or its tree path (`/0/2`)
+/// when it has none: hit-testing and state keep working without names.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Painted {
+    pub key: Arc<str>,
+    pub layer: Layer,
+    pub path: Path,
+    pub paint: Paint,
+    /// Analytic form when the path is a plain rounded rectangle: a renderer
+    /// with a fast path (blurred rects, say) can take it.
+    pub rect: Option<RoundedRect>,
+    /// Stroke width; `0` fills.
+    pub width: f64,
+    /// Gaussian blur radius, shadows only.
+    pub blur: f64,
+    /// Present on `Layer::Text` whenever [`SceneSpec::font`] is set: the
+    /// layer's ink, as glyphs. `path` is then empty -- a renderer that draws
+    /// glyphs never looks at it, and translating every run's outline into a
+    /// fresh path is the most expensive thing the walk can do.
+    pub text: Option<Text>,
+}
+
+/// A node's outline, for hit-testing and for anything that derives from it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ResolvedSurface {
+    pub key: Arc<str>,
+    pub frame: Frame,
+    pub path: Path,
+    pub bounds: Option<Bounds>,
+    /// Exact rounded rectangle when the outline is one (not welded).
+    pub rect: Option<RoundedRect>,
+    /// A shell collapsed or a merge changed ring counts.
+    pub topology_changed: bool,
+    pub cursor: Option<Cursor>,
+    pub tip: Option<String>,
+    pub focusable: bool,
+    /// Switched off by itself or by an ancestor: not a hit target, not a Tab
+    /// stop, and reported disabled to a screen reader. See
+    /// [`Styled::disabled`](crate::Styled::disabled).
+    pub disabled: bool,
+    /// The role and name this surface reports to a screen reader.
+    pub semantics: Option<Semantics>,
+    /// The name came from this node's text because no explicit `.label(..)`
+    /// was supplied. Live text swaps update this name; an explicit label does
+    /// not move with the paint.
+    pub(super) semantic_label_implicit: bool,
+    /// Current authored text, used as the accessible name unless explicitly
+    /// overridden by semantics. Live readout updates change this too.
+    pub text_value: Option<String>,
+    /// The nearest clipping ancestor's frame, for hit-testing.
+    ///
+    /// This is kept as a rectangle for compatibility with the input adapter.
+    /// [`Self::clip_path`] carries the same ancestor's actual outline for
+    /// adapters that need corner-accurate filtering.
+    pub clip: Option<Bounds>,
+    /// The clipping ancestors' outlines, cached during scene resolution from
+    /// outermost to innermost. This is the path counterpart to [`Self::clip`];
+    /// it avoids making every pointer query tessellate a rounded or welded
+    /// clip and preserves every nested clip boundary.
+    pub clip_path: Option<Arc<[Path]>>,
+    /// Nearest explicitly named ancestor in the authored tree, not a containing
+    /// rectangle. A floating node keeps this parent even when it escapes clipping.
+    pub parent: Option<Arc<str>>,
+    /// A scroll node's children extent inside its padding, unscrolled;
+    /// the frame size otherwise.
+    pub content: Size,
+    /// The tagged shapes a `canvas` drew, in scene space. Non-empty means
+    /// *these* are the surface's hit geometry, not its outline: the pointer
+    /// outside all of them is outside the node. See [`Draw::tag`].
+    pub hits: Vec<(Arc<str>, Path)>,
+}
+impl ResolvedSurface {
+    /// Borrow the cached clip outlines without exposing their shared
+    /// allocation. Paths are ordered outermost to innermost.
+    pub fn clip_paths(&self) -> Option<&[Path]> {
+        self.clip_path.as_deref()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ResolvedScene {
+    pub layout: Layout,
+    pub paint: Vec<Painted>,
+    /// Every surface in paint order, which is also z-order.
+    pub(super) surfaces: Vec<ResolvedSurface>,
+    pub(super) at: HashMap<Arc<str>, usize>,
+    pub(crate) external_welds: HashMap<Arc<str>, crate::ExternalWeld>,
+    /// What the scene was shaped with, so a live readout can re-shape one
+    /// run without the spec that produced it. See [`Self::set_text`].
+    pub(super) font: Option<Font>,
+    pub(super) fallback_fonts: Vec<Font>,
+    pub(super) tolerance: f64,
+}
+impl ResolvedScene {
+    /// Swap what one text node says, keeping every frame this scene already
+    /// solved: only that node's glyph run is shaped again.
+    ///
+    /// This is the 60 Hz readout -- a modulated value, a meter, a clock --
+    /// where re-resolving the tree to move six digits is the whole frame
+    /// budget. Pair it with [`Styled::reserve`](crate::Styled::reserve): the
+    /// box was measured for the widest string the node can show, so the
+    /// shorter ones sit inside it and nothing reflows.
+    ///
+    /// ponytail: one line, painted from the old run's origin. A string wider
+    /// than the frame overhangs instead of wrapping. The accessible text is
+    /// updated, but an explicitly authored accessibility label is preserved.
+    /// The next resolve paints whatever the tree says, so update its value too.
+    ///
+    /// ```
+    /// use mui_scene::prelude::*;
+    /// # use mui_scene::{Layer, SceneSpec};
+    /// let root = row![text("0.0 dB").reserve("-88.8 dB").id("gain")];
+    /// let spec = SceneSpec::new(root).font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
+    /// let mut scene = resolve_scene(&spec).unwrap();
+    /// let before = scene.surface("gain").unwrap().frame;
+    /// scene.set_text("gain", "-12.4 dB").unwrap();
+    /// assert_eq!(scene.surface("gain").unwrap().frame, before, "the frame is kept");
+    /// let run = scene.paint.iter().find(|p| p.layer == Layer::Text).unwrap();
+    /// assert_eq!(run.text.as_ref().unwrap().glyphs.len(), "-12.4 dB".len());
+    /// ```
+    pub fn set_text(&mut self, key: &str, s: &str) -> Result<(), SceneError> {
+        let mut at = self
+            .paint
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| &*p.key == key && p.layer == Layer::Text)
+            .map(|(i, _)| i);
+        let first = at.next().ok_or(SceneError::NoTextLayer)?;
+        // A wrapped label's later lines have no string to re-break against,
+        // so the swap collapses it to the one run it now says.
+        let rest: Vec<usize> = at.collect();
+        let old = self.paint[first]
+            .text
+            .as_ref()
+            .ok_or(SceneError::NoTextLayer)?;
+        let (size, origin, axes, coords, font_coords, font, all_fonts, hint) = (
+            old.size,
+            old.origin,
+            old.axes.clone(),
+            old.coords.clone(),
+            old.font_coords.clone(),
+            old.font.clone(),
+            old.fonts.clone(),
+            old.hint,
+        );
+        // The faces the run was resolved with, per-node font included.
+        let fonts = if all_fonts.is_empty() {
+            std::slice::from_ref(&font)
+        } else {
+            &all_fonts[..]
+        };
+        let run = CachedRun::from_run(mui_text::text_run(
+            fonts,
+            s,
+            f64::from(size),
+            &axes.to_vec(),
+            self.tolerance,
+        )?);
+        self.paint[first].text = Some(Text {
+            font,
+            fonts: all_fonts,
+            size,
+            origin,
+            glyphs: run.glyphs,
+            axes,
+            coords,
+            font_coords,
+            hint,
+        });
+        for i in rest.into_iter().rev() {
+            self.paint.remove(i);
+        }
+        if let Some(&i) = self.at.get(key) {
+            self.surfaces[i].text_value = Some(s.to_owned());
+        }
+        for surface in &mut self.surfaces {
+            if &*surface.key == key && surface.semantic_label_implicit {
+                if let Some(semantics) = surface.semantics.as_mut() {
+                    semantics.label = Some(s.to_owned());
+                }
+            }
+        }
+        Ok(())
+    }
+    pub fn surface(&self, key: &str) -> Option<&ResolvedSurface> {
+        self.at.get(key).map(|&i| &self.surfaces[i])
+    }
+    /// Every surface in paint order, which is also z-order. A key is
+    /// `ResolvedSurface::key`, so nothing has to look one up to walk them.
+    pub fn surfaces(&self) -> impl DoubleEndedIterator<Item = &ResolvedSurface> {
+        self.surfaces.iter()
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::super::*;
+    use crate::prelude::*;
+
+    #[test]
+    fn a_swapped_readout_keeps_the_reserved_box() {
+        let mut sp = SceneSpec::new(row![text("0.0").reserve("-88.8").id("gain")]);
+        sp.font = Some(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
+        let mut s = resolve_scene(&sp).unwrap();
+        let frame = s.surface("gain").unwrap().frame;
+        s.set_text("gain", "-88.8").unwrap();
+        assert_eq!(s.surface("gain").unwrap().frame, frame);
+        let t = s
+            .paint
+            .iter()
+            .find(|p| p.layer == Layer::Text)
+            .and_then(|p| p.text.clone())
+            .unwrap();
+        assert_eq!(t.glyphs.len(), 5);
+        // The reserved string is exactly the frame's content, so the run
+        // ends inside the box it was measured for.
+        let last = t.origin.x + f64::from(t.glyphs[4].x);
+        assert!(
+            last <= frame.x + frame.size.width + 0.5,
+            "{last} in {frame:?}"
+        );
+    }
+
+    #[test]
+    fn set_text_updates_only_an_implicit_accessibility_label() {
+        let mut implicit = SceneSpec::new(text("before").role(Kind::Label).id("implicit"));
+        implicit.font = Some(font());
+        let mut implicit = resolve_scene(&implicit).unwrap();
+        assert_eq!(
+            implicit
+                .surface("implicit")
+                .unwrap()
+                .semantics
+                .as_ref()
+                .and_then(|semantics| semantics.label.as_deref()),
+            Some("before")
+        );
+        implicit.set_text("implicit", "after").unwrap();
+        assert_eq!(
+            implicit
+                .surface("implicit")
+                .unwrap()
+                .semantics
+                .as_ref()
+                .and_then(|semantics| semantics.label.as_deref()),
+            Some("after")
+        );
+
+        let mut explicit = SceneSpec::new(
+            text("before")
+                .role(Kind::Label)
+                .label("Stable name")
+                .id("explicit"),
+        );
+        explicit.font = Some(font());
+        let mut explicit = resolve_scene(&explicit).unwrap();
+        explicit.set_text("explicit", "after").unwrap();
+        assert_eq!(
+            explicit
+                .surface("explicit")
+                .unwrap()
+                .semantics
+                .as_ref()
+                .and_then(|semantics| semantics.label.as_deref()),
+            Some("Stable name")
+        );
+    }
+
+    #[test]
+    fn set_text_keeps_a_wrapped_node_single_line_without_relayout() {
+        let mut spec = SceneSpec::new(text("one two three four").lines(2).id("paragraph"))
+            .offered(Size::new(72., 80.));
+        spec.font = Some(font());
+        let mut scene = resolve_scene(&spec).unwrap();
+        let frame = scene.surface("paragraph").unwrap().frame;
+        let before = scene
+            .paint
+            .iter()
+            .filter(|paint| &*paint.key == "paragraph" && paint.layer == Layer::Text)
+            .count();
+        assert_eq!(before, 2);
+
+        scene
+            .set_text("paragraph", "a replacement that is much longer")
+            .unwrap();
+        assert_eq!(scene.surface("paragraph").unwrap().frame, frame);
+        let after = scene
+            .paint
+            .iter()
+            .filter(|paint| &*paint.key == "paragraph" && paint.layer == Layer::Text)
+            .count();
+        assert_eq!(after, 1, "set_text collapses wrapped paint by contract");
+    }
+}
