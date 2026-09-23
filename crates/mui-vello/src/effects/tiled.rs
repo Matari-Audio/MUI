@@ -54,6 +54,9 @@ pub struct TiledEffects {
     ops: Vec<(BezPath, Option<Rect>)>,
     limit: u64,
     stats: TileStats,
+    /// The view the last complete presentation went to: with no dirty tile
+    /// and no effect redrawn it still holds this frame.
+    presented: Option<wgpu::TextureView>,
 }
 impl TiledEffects {
     pub async fn new(
@@ -111,6 +114,7 @@ impl TiledEffects {
             ops: Vec::new(),
             limit: tile_bytes,
             stats: Default::default(),
+            presented: None,
         };
         s.resize(size)?;
         Ok(s)
@@ -120,6 +124,7 @@ impl TiledEffects {
     }
     pub fn invalidate(&mut self) {
         self.damage.invalidate();
+        self.presented = None;
     }
     pub fn resize(&mut self, size: [u32; 2]) -> Result<(), Error> {
         if size == self.size {
@@ -258,6 +263,8 @@ impl TiledEffects {
         let mut stats = self
             .effects
             .begin(wanted.clone().map(|(k, e)| (k, &e.material)))?;
+        self.effects
+            .forget_absent(|k| resolved.external_weld(k).is_some());
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -300,6 +307,10 @@ impl TiledEffects {
             dirty.len() > self.tiles.len() / 2 && self.full.is_some();
         self.stats.full_redraw = full_redraw;
         let passes = if full_redraw { 1 } else { dirty.len() };
+        if passes > 0 || stats.effect_draws > 0 {
+            self.presented = None;
+            self.cache.tick();
+        }
         for &i in dirty.iter().take(passes) {
             let target_tile = if full_redraw {
                 self.full
@@ -415,6 +426,10 @@ impl TiledEffects {
             self.queue.submit([encoder.finish()]);
             self.stats.tile_submissions += 1;
             stats.encoded_scenes += 1;
+            stats.renders += 1;
+        }
+        if self.presented.as_ref() == Some(target) {
+            return Ok(());
         }
         let mut encoder = self
             .device
@@ -437,6 +452,8 @@ impl TiledEffects {
             )
             .map_err(|e| Error::Render(e.to_string()))?;
         self.queue.submit([encoder.finish()]);
+        stats.renders += 1;
+        self.presented = Some(target.clone());
         Ok(())
     }
 }

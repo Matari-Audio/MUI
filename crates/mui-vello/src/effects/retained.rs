@@ -8,8 +8,10 @@ use vello_common::{geometry::RectU16, peniko::ImageQuality};
 
 /// A single Vello renderer, its resources, and its associated external textures.
 /// An unchanged paint list reuses the already-prepared Hybrid scene: this skips
-/// strip generation, not merely arc-to-cubic conversion. GPU compositing still
-/// runs when a frame is requested; the host must stop requesting idle frames.
+/// strip generation, not merely arc-to-cubic conversion. Rendered into the
+/// same target view as last time, an unchanged frame skips the GPU pass too:
+/// the target still holds it. A swapchain hands out a fresh view per frame,
+/// so there the pass runs; such a host should stop requesting idle frames.
 pub struct HybridEffects {
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -23,6 +25,9 @@ pub struct HybridEffects {
     transform: Option<Affine>,
     mapping: u64,
     valid: bool,
+    /// The view the last complete frame went to; cleared by anything that
+    /// could leave it stale.
+    presented: Option<wgpu::TextureView>,
 }
 fn checked_size(device: &wgpu::Device, size: [u32; 2]) -> Result<(), Error> {
     let max = device
@@ -81,6 +86,7 @@ impl HybridEffects {
             transform: None,
             mapping: 0,
             valid: false,
+            presented: None,
         })
     }
     pub fn resize(&mut self, size: [u32; 2]) -> Result<(), Error> {
@@ -96,6 +102,7 @@ impl HybridEffects {
     /// glyph preparation resources, or unchanged material textures.
     pub fn invalidate(&mut self) {
         self.valid = false;
+        self.presented = None;
     }
     pub fn render(
         &mut self,
@@ -132,6 +139,8 @@ impl HybridEffects {
             .filter(move |(_, e)| visible(e, xf, size))
             .map(|(k, e)| (k, &e.material));
         let mut stats = self.effects.begin(wanted)?;
+        self.effects
+            .forget_absent(|k| resolved.external_weld(k).is_some());
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -153,6 +162,8 @@ impl HybridEffects {
                 || self.retained != resolved.paint;
             if needs_encode {
                 self.valid = false; // partial encoding must never be reused after error
+                self.presented = None;
+                self.cache.tick();
                 self.scene.reset();
                 let mut canvas = Gpu {
                     scene: &mut self.scene,
@@ -210,6 +221,9 @@ impl HybridEffects {
                 }
                 stats.encoded_scenes += 1;
             }
+            if stats.effect_draws == 0 && self.presented.as_ref() == Some(target) {
+                return Ok(());
+            }
             self.renderer
                 .render(
                     &self.scene,
@@ -225,6 +239,7 @@ impl HybridEffects {
                     self.effects.bindings(),
                 )
                 .map_err(|e| Error::Render(e.to_string()))?;
+            stats.renders += 1;
             Ok(())
         })();
         match result {
@@ -233,11 +248,14 @@ impl HybridEffects {
                 // encode call and not a synchronous GPU-completion wait.
                 self.queue.submit([encoder.finish()]);
                 self.effects.commit_submitted(&mut stats);
+                if self.valid {
+                    self.presented = Some(target.clone());
+                }
                 Ok(stats)
             }
             Err(e) => {
                 self.effects.abort();
-                self.valid = false;
+                self.invalidate();
                 Err(e)
             }
         }

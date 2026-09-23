@@ -8,6 +8,7 @@
 //! Run: `cargo run -p mui-preview`
 #![forbid(unsafe_code)]
 
+mod device;
 #[cfg(not(feature = "gpu-effects"))]
 mod host;
 #[cfg(feature = "gpu-effects")]

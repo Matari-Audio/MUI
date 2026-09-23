@@ -28,6 +28,9 @@ pub struct EffectStats {
     pub effect_draws: u64,
     pub effect_pixels: u64,
     pub encoded_scenes: u64,
+    /// Vello render passes recorded: 0 on a frame that left the target as
+    /// the previous one did.
+    pub renders: u64,
     pub resident_texture_bytes: u64,
     pub peak_texture_bytes: u64,
 }
@@ -63,6 +66,8 @@ struct Slot {
     texture_id: vello_hybrid::TextureId,
     state: ContentState,
     seen: u64,
+    /// The last frame whose scene carried this weld at all, visible or not.
+    present: u64,
     encoded_epoch: u64,
 }
 impl Slot {
@@ -248,6 +253,7 @@ impl WeldTextures {
         if self.epoch == u64::MAX {
             for s in self.slots.values_mut() {
                 s.seen = 0;
+                s.present = 0;
                 s.encoded_epoch = 0;
             }
             self.epoch = 0;
@@ -290,6 +296,26 @@ impl WeldTextures {
         }
         self.in_frame = true;
         Ok(EffectStats::default())
+    }
+    /// Free the texture of every weld the scene has not carried for
+    /// [`ABSENT_FRAMES`] frames. One scrolled offscreen is still in the
+    /// scene and keeps its texture; one removed goes without waiting for
+    /// budget pressure. Call after [`WeldTextures::begin`].
+    pub fn forget_absent(&mut self, in_scene: impl Fn(&str) -> bool) {
+        let epoch = self.epoch;
+        let before = self.slots.len();
+        self.slots.retain(|key, s| {
+            if in_scene(key) {
+                s.present = epoch;
+            }
+            epoch - s.present <= ABSENT_FRAMES || {
+                self.bindings.remove(s.texture_id);
+                false
+            }
+        });
+        if self.slots.len() != before {
+            self.mapping_revision = self.mapping_revision.wrapping_add(1);
+        }
     }
     pub fn encode(
         &mut self,
@@ -388,6 +414,7 @@ impl WeldTextures {
                     texture_id,
                     state: Default::default(),
                     seen: self.epoch,
+                    present: self.epoch,
                     encoded_epoch: 0,
                 },
             );
@@ -479,6 +506,9 @@ impl WeldTextures {
         self.in_frame = false;
     }
 }
+/// How many frames a weld may leave the scene and come back to its texture:
+/// a hover that flickers one off for a frame should not re-render it.
+pub const ABSENT_FRAMES: u64 = 3;
 fn fits(want: [u32; 2], capacity: [u32; 2]) -> bool {
     want[0] <= capacity[0] && want[1] <= capacity[1]
 }

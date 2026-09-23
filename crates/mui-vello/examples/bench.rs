@@ -3,7 +3,7 @@
 //!     cargo run -p mui-vello --profile perf --features cpu --example bench
 //!     cargo run -p mui-vello --profile perf --features cpu,bench-classic --example bench
 //!
-//! One scene, three backends, three cases. Each frame is split into resolve
+//! One scene, every backend, four cases. Each frame is split into resolve
 //! (`Ui::frame`: styling, layout, text shaping, the paint list), encode (the
 //! paint-list walk onto a `Canvas`) and render (rasterise and wait for it).
 //! Reported as the median of 50 frames after 5 warm-ups, so a stray scheduler
@@ -359,41 +359,6 @@ fn main() {
             }
         }
         println!("bez conversion: {:.3} ms per frame", median(&mut times));
-        // TEMP-PROFILE
-        struct FakeFrame<'a> { scene: &'a ResolvedScene }
-        if let Ok(mode) = std::env::var("MUI_PROF") {
-            let mut ctx = vello_cpu::RenderContext::new(W, H);
-            let mut res = vello_cpu::Resources::default();
-            let mut cache = Cache::default();
-            let mut sc = f.scene.clone();
-            let keep = |p: &mui_scene::Painted| matches!(p.layer, Layer::Clip | Layer::Unclip | Layer::Blend{..} | Layer::Unblend);
-            match mode.as_str() {
-                "text" => sc.paint.retain(|p| keep(p) || p.text.is_some()),
-                "notext" => sc.paint.retain(|p| p.text.is_none()),
-                "shadow" => sc.paint.retain(|p| keep(p) || matches!(p.layer, Layer::Shadow(_))),
-                "fill" => sc.paint.retain(|p| keep(p) || matches!(p.layer, Layer::Fill | Layer::Shell(_))),
-                "stroke" => sc.paint.retain(|p| keep(p) || matches!(p.layer, Layer::Stroke)),
-                "draw" => sc.paint.retain(|p| keep(p) || matches!(p.layer, Layer::Draw(_))),
-                "clips" => sc.paint.retain(|p| keep(p)),
-                _ => {}
-            }
-            let mut hist = std::collections::BTreeMap::new();
-            for p in &sc.paint { *hist.entry(format!("{:?}", p.layer).chars().take(12).collect::<String>()).or_insert(0) += 1; }
-            println!("{hist:?}");
-            let f = (&sc,);
-            let f = FakeFrame { scene: f.0 };
-            let t = Instant::now();
-            for _ in 0..3000 {
-                ctx.reset();
-                if mode == "walk" {
-                    for p in &f.scene.paint { std::hint::black_box(p); }
-                }
-                mui_vello::paint(&mut Cpu { ctx: &mut ctx, resources: &mut res, cache: &mut cache }, f.scene, Affine::IDENTITY).unwrap();
-                ctx.flush();
-            }
-            println!("encode {:.3} ms", since(t) / 3000.0);
-            std::process::exit(0);
-        }
     }
 
     // Resolve with nothing painted at all: MUI's own floor.
@@ -555,13 +520,14 @@ async fn gpu() -> Option<(wgpu::AdapterInfo, Vec<Row>)> {
         .await
         .expect("retained renderer");
         for case in CASES {
-            let mut encodes = 0;
+            let (mut encodes, mut renders) = (0, 0);
             rows.push(run("hybrid retained", case, font, IMAGES, |scene| {
                 let start = Instant::now();
-                encodes += renderer
+                let stats = renderer
                     .render(scene, Affine::IDENTITY, &view)
-                    .expect("retained render")
-                    .encoded_scenes;
+                    .expect("retained render");
+                encodes += stats.encoded_scenes;
+                renders += stats.renders;
                 let encode = since(start);
                 let start = Instant::now();
                 device
@@ -569,7 +535,10 @@ async fn gpu() -> Option<(wgpu::AdapterInfo, Vec<Row>)> {
                     .expect("poll");
                 (encode, since(start))
             }));
-            println!("hybrid retained {}: {encodes} scene encodes", case.name());
+            println!(
+                "hybrid retained {}: {encodes} scene encodes, {renders} renders",
+                case.name()
+            );
         }
     }
 
