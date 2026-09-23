@@ -14,7 +14,6 @@ use mui_scene::{
     Area, Color, Cursor, El, Element, Fill, Font, Kind, Paint, Palette, Pin, Radius, ResolvedScene,
     SceneError, SceneSpec, Size, Spacing, Spring, State, TextCache, Theme,
 };
-use mui_widgets::Host;
 
 #[cfg(test)]
 #[path = "audit_tests.rs"]
@@ -312,7 +311,7 @@ impl Ui {
     ///     Some(Edit::End) => { /* host.end_gesture(CUTOFF) */ }
     ///     None => {}
     /// }
-    /// let el = slider(&mut ui, "cutoff", "Cutoff", &mut cutoff, 0.0..=1.0).el();
+    /// let (el, _) = slider(&mut ui, "cutoff", "Cutoff", &mut cutoff, 0.0..=1.0);
     /// ```
     pub fn edit(&self, id: &str) -> Option<Edit> {
         self.delivered
@@ -416,7 +415,7 @@ impl Ui {
                         _ => None,
                     })
                     .unwrap_or(value);
-                let step = mui_widgets::step(&(min..=max)) * sign;
+                let step = crate::widgets::step(&(min..=max)) * sign;
                 self.request_action(SemanticAction::SetValue {
                     id,
                     value: value + step,
@@ -803,6 +802,12 @@ impl Ui {
     }
 
     /// Advance gestures and springs, style the tree by state, resolve it.
+    ///
+    /// The phases run in this order, each reading what the one before left:
+    /// commands and input in, capture reconciled against last frame's hit
+    /// map, focus and keys, the tip, the state and motion sweep over the new
+    /// tree, the resolve, then what the new scene says about the old state,
+    /// and finally the commit.
     pub fn frame(
         &mut self,
         root: El,
@@ -813,9 +818,39 @@ impl Ui {
         if !(dt.is_finite() && dt >= 0.0 && (self.time + dt).is_finite()) {
             return Err(SceneError::InvalidFrameDelta);
         }
-        // The caller has now built its tree and consumed these commands. Drain
-        // before resolution so a layout error cannot replay an activation. Gesture
-        // edges stay queued in `edits` until delivered by a frame or `close`.
+        self.bracket_commands();
+        let Input {
+            pointer,
+            wheel,
+            keys,
+            text,
+            clipboard,
+            ime,
+        } = input.into();
+        self.pointer = pointer;
+        self.pasted = clipboard;
+        let previous_blink = self.blink();
+        self.time += dt;
+        // A release is read by the *next* tree, so that frame must come even
+        // when nothing is moving.
+        let mut animating = self.reconcile();
+        animating |= self.hover_springs(&root, dt);
+        self.intake_focus(keys, text, ime);
+        let hovered = self.interaction.hovered().map(str::to_owned);
+        let (tip, tip_pending) = self.tip_due(hovered.as_deref(), dt);
+        animating |= tip_pending;
+        let mut root = self.wrap_tip(root, tip.as_ref());
+        animating |= self.sweep(&mut root, dt);
+        let scene = self.resolve(root, offered)?;
+        animating |= self.settle(&scene, wheel);
+        Ok(self.commit(scene, hovered, tip, previous_blink, animating))
+    }
+
+    /// The caller has now built its tree and consumed these commands. Drain
+    /// before resolution so a layout error cannot replay an activation.
+    /// Gesture edges stay queued in `edits` until delivered by a frame or
+    /// `close`.
+    fn bracket_commands(&mut self) {
         let active = self.interaction.held().map(str::to_owned);
         let mut atomic = BTreeSet::new();
         // So are the keys the focused control just read: an activation or a
@@ -835,11 +870,13 @@ impl Ui {
                 self.edits.push((id, Edit::End));
             }
         }
-        let input = input.into();
-        self.pointer = input.pointer;
-        self.pasted = input.clipboard;
-        let previous_blink = self.blink();
-        self.time += dt;
+    }
+
+    /// Run this frame's pointer against last frame's hit map: drop a capture
+    /// or focus whose target was switched off, move the capture, queue its
+    /// edges and latch the tagged shape under a new press. Returns whether a
+    /// capture was held coming in, which owes the next tree its release.
+    fn reconcile(&mut self) -> bool {
         // Switched off mid-gesture: the hit map stopped reporting it when it
         // resolved disabled, and a drag must not outlive its target. The
         // cancel still owes the host an `Edit::End`.
@@ -865,7 +902,7 @@ impl Ui {
         let prev_held = self.interaction.held().map(str::to_owned);
         let last_scene = self.scene.as_ref();
         self.interaction
-            .update_with(&self.hit, input.pointer, |key, tag, p| {
+            .update_with(&self.hit, self.pointer, |key, tag, p| {
                 if tag.is_some() {
                     return None;
                 }
@@ -878,10 +915,7 @@ impl Ui {
         if self.interaction.held().is_none() && self.interaction.dropped().is_none() {
             self.drag = None;
         }
-        let (hovered, held) = (
-            self.interaction.hovered().map(str::to_owned),
-            self.interaction.held().map(str::to_owned),
-        );
+        let held = self.interaction.held().map(str::to_owned);
         // A gesture is exactly the span a target is captured for, so the two
         // edges are the two ends of that capture -- plus the one a `cancel`
         // stole before this frame could see it.
@@ -896,7 +930,7 @@ impl Ui {
         // Last frame's hit map and this frame's pointer, exactly as the
         // interaction above: a new capture latches the shape under the press.
         if held.is_none() || prev_held != held {
-            self.tagged = input.pointer.pos.and_then(|p| {
+            self.tagged = self.pointer.pos.and_then(|p| {
                 let (id, tag) = self.hit.at_tagged_with(p, |key, tag, p| {
                     if tag.is_some() {
                         return None;
@@ -909,32 +943,37 @@ impl Ui {
                 Some((id.to_owned(), tag?.to_owned()))
             });
         }
+        prev_held.is_some()
+    }
+
+    /// Retarget and step the hover and press springs. Returns whether one is
+    /// still moving.
+    fn hover_springs(&mut self, root: &El, dt: f64) -> bool {
+        let (hovered, held) = (self.interaction.hovered(), self.interaction.held());
         // Identity and state ownership are separate. A named layout surface
         // still participates in hit testing, while only an interactive role
         // or an explicitly declared hover/press look earns springs. Resolve
         // the two possible active targets directly so idle frames do not
         // allocate a policy table for the whole tree.
         let hovered_policy = hovered
-            .as_deref()
-            .map(|id| state_policy(&root, id))
+            .map(|id| state_policy(root, id))
             .unwrap_or([false, false]);
         let held_policy = held
-            .as_deref()
-            .map(|id| state_policy(&root, id))
+            .map(|id| state_policy(root, id))
             .unwrap_or([false, false]);
         for (k, [h, p]) in &mut self.springs {
-            let hovered = hovered.as_deref() == Some(k);
-            let held = held.as_deref() == Some(k);
+            let hovered = hovered == Some(k.as_str());
+            let held = held == Some(k.as_str());
             h.to(f64::from(
                 (hovered && hovered_policy[0]) || (held && held_policy[0]),
             ));
             p.to(f64::from(held && held_policy[1]));
         }
         let rest = || [Spring::at(0.0), Spring::at(0.0)];
-        if let Some(k) = hovered.as_deref().filter(|_| hovered_policy[0]) {
+        if let Some(k) = hovered.filter(|_| hovered_policy[0]) {
             slot(&mut self.springs, k, rest)[0].to(1.0);
         }
-        if let Some(k) = held.as_deref() {
+        if let Some(k) = held {
             let entry = slot(&mut self.springs, k, rest);
             if held_policy[0] {
                 entry[0].to(1.0);
@@ -943,17 +982,19 @@ impl Ui {
                 entry[1].to(1.0);
             }
         }
-        // A release is read by the *next* tree, so that frame must come even
-        // when nothing is moving.
-        let mut animating = prev_held.is_some();
+        let mut animating = false;
         for s in self.springs.values_mut().flatten() {
             animating |= s.step(dt);
         }
         self.springs
             .retain(|_, [h, p]| h.value > 0.0 || p.value > 0.0 || !h.settled() || !p.settled());
+        animating
+    }
 
-        // Focus follows a press on a focusable surface, and a press on
-        // anything else drops it.
+    /// Focus follows a press on a focusable surface, and a press on anything
+    /// else drops it; then the keys, typed text and input-method events land
+    /// for the widgets to read.
+    fn intake_focus(&mut self, keys: Vec<KeyPress>, text: String, ime: Vec<Ime>) {
         self.double = None;
         if let Some(id) = self.interaction.pressed().map(str::to_owned) {
             if let Some((prev, t)) = self.last_press.take() {
@@ -969,16 +1010,16 @@ impl Ui {
                 .is_some_and(|s| s.focusable);
             self.focus = keeps.then_some(id);
         }
-        for k in &input.keys {
+        for k in &keys {
             match k.key {
                 Key::Escape => self.focus = None,
                 Key::Tab => self.cycle_focus(k.mods.shift),
                 _ => {}
             }
         }
-        self.keys = input.keys;
-        self.typed = input.text;
-        for e in input.ime {
+        self.keys = keys;
+        self.typed = text;
+        for e in ime {
             match e {
                 // A commit is typed text: it inserts at the caret and
                 // replaces the selection exactly as a keystroke would.
@@ -999,21 +1040,23 @@ impl Ui {
         if self.focus.is_none() {
             self.preedit = None;
         }
+    }
 
-        // A tip is due after the pointer has rested. Both the hover and the
-        // surface come from last frame's scene, which is the one the pointer
-        // was actually over.
-        let hovered = self.interaction.hovered().map(str::to_owned);
-        match (&mut self.hover, &hovered) {
+    /// A tip is due after the pointer has rested. Both the hover and the
+    /// surface come from last frame's scene, which is the one the pointer
+    /// was actually over. Returns the due tip and its anchor, and whether one
+    /// is still counting down.
+    fn tip_due(&mut self, hovered: Option<&str>, dt: f64) -> (Option<(String, String)>, bool) {
+        match (&mut self.hover, hovered) {
             (Some((id, t)), Some(h)) if id == h => *t += dt,
-            (_, Some(h)) => self.hover = Some((h.clone(), 0.0)),
+            (_, Some(h)) => self.hover = Some((h.to_owned(), 0.0)),
             (_, None) => self.hover = None,
         }
         // A host may sleep when a frame is otherwise static. Keep it awake
         // until the tooltip deadline, and while a focused text field's caret
         // is blinking; both are time-driven visual changes rather than paint
         // springs. The previous scene is the one that measured this hover.
-        let tip_pending = self.hover.as_ref().is_some_and(|(id, t)| {
+        let pending = self.hover.as_ref().is_some_and(|(id, t)| {
             *t < TIP_DELAY
                 && self
                     .scene
@@ -1021,10 +1064,9 @@ impl Ui {
                     .and_then(|scene| scene.surface(id))
                     .is_some_and(|surface| surface.tip.is_some())
         });
-        animating |= tip_pending;
         // A focused caret is a deadline, not an animation: `repaint_after`
-        // wakes the host at the next blink edge and one catch-up frame below
-        // makes that edge visible.
+        // wakes the host at the next blink edge and one catch-up frame in
+        // `commit` makes that edge visible.
         let tip = self
             .hover
             .as_ref()
@@ -1033,7 +1075,12 @@ impl Ui {
                 let s = self.scene.as_ref()?.surface(id)?;
                 Some((s.tip.clone()?, id.clone()))
             });
-        let mut root = match &tip {
+        (tip, pending)
+    }
+
+    /// Float a due tip over the caller's root.
+    fn wrap_tip(&mut self, root: El, tip: Option<&(String, String)>) -> El {
+        let root = match tip {
             Some((t, anchor)) => {
                 // Under the surface, flipping over it at the bottom edge of
                 // the window: the placement is the pin's, not arithmetic
@@ -1064,7 +1111,12 @@ impl Ui {
             rekey(&mut self.motion, self.wrapped);
             self.focus = self.focus.take().and_then(|k| shift(k, self.wrapped));
         }
+        root
+    }
 
+    /// Style the tree by state and step every transition and tween. Returns
+    /// whether one is still moving.
+    fn sweep(&mut self, root: &mut El, dt: f64) -> bool {
         let pal = self.theme.palette;
         // Declared state looks first, so a transition springs toward the
         // style the node actually asked for this frame. The walks key an
@@ -1073,7 +1125,7 @@ impl Ui {
         path.clear();
         let (springs, focus) = (&self.springs, self.focus.as_deref());
         declared_states(
-            &mut root,
+            root,
             &mut path,
             &|k, st| match st {
                 State::Hover => springs.get(k).is_some_and(|[h, _]| h.value > 0.5),
@@ -1085,14 +1137,14 @@ impl Ui {
             },
             false,
         );
-        animating |= transitions(&mut root, &mut path, &pal, &mut self.motion, dt);
+        let mut animating = transitions(root, &mut path, &pal, &mut self.motion, dt);
         for (_, s) in self.tweens.values_mut() {
             animating |= s.step(dt);
         }
         let springs = &self.springs;
         let scrolls = &self.scrolls;
         state(
-            &mut root,
+            root,
             &mut path,
             &pal,
             &|k| springs.get(k).map(|[h, p]| (h.value, p.value)),
@@ -1100,7 +1152,12 @@ impl Ui {
             false,
         );
         self.path = path;
+        animating
+    }
 
+    /// Resolve the styled tree, and rebuild the hit map when the hit
+    /// geometry changed.
+    fn resolve(&mut self, root: El, offered: Option<Size>) -> Result<ResolvedScene, SceneError> {
         let mut spec = SceneSpec::new(root).theme(self.theme);
         spec.offered = offered;
         spec.font = self.font.clone();
@@ -1138,6 +1195,14 @@ impl Ui {
             }
             self.hit = hit;
         }
+        Ok(scene)
+    }
+
+    /// What the new scene says about the retained state: a capture or focus
+    /// whose target is gone ends, scroll offsets clamp to their content,
+    /// selections of vanished fields drop, and the wheel lands. Returns
+    /// whether an offset moved.
+    fn settle(&mut self, scene: &ResolvedScene, wheel: Point) -> bool {
         let live = |id: &str| scene.surface(id).is_some_and(|s| !s.disabled);
         if self.interaction.held().is_some_and(|id| !live(id)) {
             self.cancel();
@@ -1148,6 +1213,7 @@ impl Ui {
             self.focus = None;
             self.preedit = None;
         }
+        let mut animating = false;
         self.scrolls.retain(|id, at| {
             let Some(surface) = scene.surface(id) else {
                 return false;
@@ -1167,8 +1233,20 @@ impl Ui {
             true
         });
         self.sel.retain(|id, _| scene.surface(id).is_some());
-        animating |= self.wheel(&scene, input.wheel);
+        animating | self.wheel(scene, wheel)
+    }
 
+    /// Keep the scene, hand out the edges, and say what the host should do
+    /// next: the cursor, the caret area, where the tip landed, and whether
+    /// to schedule another frame.
+    fn commit(
+        &mut self,
+        scene: ResolvedScene,
+        hovered: Option<String>,
+        tip: Option<(String, String)>,
+        previous_blink: bool,
+        mut animating: bool,
+    ) -> Frame<'_> {
         let held = self.interaction.held().map(str::to_owned);
         let cursor = held
             .clone()
@@ -1211,7 +1289,7 @@ impl Ui {
                             Some(Kind::TextInput { .. })
                         )
                 });
-        Ok(Frame {
+        Frame {
             scene: self.scene.as_ref().expect("just set"),
             animating,
             repaint_after,
@@ -1220,7 +1298,7 @@ impl Ui {
             edits: self.delivered.clone(),
             clipboard: self.copied.take(),
             ime,
-        })
+        }
     }
 
     /// Send the wheel to the innermost scrollable surface under the pointer.
@@ -1548,84 +1626,10 @@ impl std::fmt::Debug for Ui {
     }
 }
 
-/// The runtime, seen from a widget: every method forwards to the inherent one
-/// of the same name, so `mui-widgets` can stay ignorant of the event loop.
-impl Host for Ui {
-    fn theme(&self) -> &Theme {
-        &self.theme
-    }
-    fn scene(&self) -> Option<&ResolvedScene> {
-        Ui::scene(self)
-    }
-    fn get(&self, id: &str) -> Response {
-        Ui::get(self, id)
-    }
-    fn tag(&self, id: &str) -> Option<&str> {
-        Ui::tag(self, id)
-    }
-    fn state(&self, id: &str) -> (f64, f64) {
-        Ui::state(self, id)
-    }
-    fn drag(
-        &self,
-        id: &str,
-        value: &mut f64,
-        range: std::ops::RangeInclusive<f64>,
-        px: f64,
-        vertical: bool,
-    ) -> bool {
-        Ui::drag(self, id, value, range, px, vertical)
-    }
-    fn tween_with(&mut self, id: &str, target: f64, spring: Spring) -> f64 {
-        Ui::tween_with(self, id, target, spring)
-    }
-    fn focused(&self, id: &str) -> bool {
-        Ui::focused(self, id)
-    }
-    fn double_click(&self, id: &str) -> bool {
-        Ui::double_click(self, id)
-    }
-    fn local(&self, id: &str) -> Option<Point> {
-        Ui::local(self, id)
-    }
-    fn keys(&self, id: &str) -> &[KeyPress] {
-        Ui::keys(self, id)
-    }
-    fn text(&self, id: &str) -> &str {
-        Ui::text(self, id)
-    }
-    fn sel(&self, id: &str) -> (usize, usize) {
-        Ui::sel(self, id)
-    }
-    fn set_sel(&mut self, id: &str, anchor: usize, caret: usize) {
-        Ui::set_sel(self, id, anchor, caret);
-    }
-    fn pasted(&self) -> Option<&str> {
-        Ui::pasted(self)
-    }
-    fn set_clipboard(&mut self, s: String) {
-        Ui::set_clipboard(self, s);
-    }
-    fn preedit(&self) -> Option<(&str, Option<(usize, usize)>)> {
-        Ui::preedit(self)
-    }
-    fn set_ime_caret(&mut self, id: &str, at: Point, height: f64) {
-        Ui::set_ime_caret(self, id, at, height);
-    }
-    fn hit(&self, s: &str, size: f64, x: f64) -> usize {
-        Ui::hit(self, s, size, x)
-    }
-    fn caret_x(&self, s: &str, size: f64, byte: usize) -> f64 {
-        Ui::caret_x(self, s, size, byte)
-    }
-    fn blink(&self) -> bool {
-        Ui::blink(self)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::widgets;
     use mui_geometry::Point;
     use mui_input::{Button, Buttons, Mods};
     use mui_scene::prelude::*;
@@ -1868,7 +1872,7 @@ mod tests {
                 .iter()
                 .any(|k| k.key == Key::Function(1) || k.key == Key::Space)
         };
-        let tree = |ui: &mut Ui, v: &mut String| mui_widgets::text_input(ui, "f", v);
+        let tree = |ui: &mut Ui, v: &mut String| widgets::text_input(ui, "f", v).0;
 
         let root = tree(&mut ui, &mut value);
         ui.frame(root, None, key(Key::Function(1)), 0.016).unwrap();
@@ -1905,20 +1909,23 @@ mod tests {
     /// path as a primary click.
     #[test]
     fn a_button_can_be_focused_and_activated_from_the_keyboard() {
-        fn tree(ui: &Ui) -> El {
-            mui_widgets::button(ui, "button", "Save").0.el()
+        fn tree(ui: &mut Ui) -> El {
+            widgets::button(ui, "button", "Save").0.el()
         }
 
         let mut ui = Ui::new(Theme::DEFAULT);
-        ui.frame(tree(&ui), None, PointerInput::default(), 0.016)
+        let root = tree(&mut ui);
+        ui.frame(root, None, PointerInput::default(), 0.016)
             .unwrap();
-        ui.frame(tree(&ui), None, key(Key::Tab), 0.016).unwrap();
+        let root = tree(&mut ui);
+        ui.frame(root, None, key(Key::Tab), 0.016).unwrap();
         assert_eq!(ui.focus_key(), Some("button"));
 
         // Keys are delivered to the tree on the following frame, exactly as
         // mouse edges are, so the widget sees the same activation boundary.
-        ui.frame(tree(&ui), None, key(Key::Enter), 0.016).unwrap();
-        let (_, activated) = mui_widgets::button(&ui, "button", "Save");
+        let root = tree(&mut ui);
+        ui.frame(root, None, key(Key::Enter), 0.016).unwrap();
+        let (_, activated) = widgets::button(&mut ui, "button", "Save");
         assert!(activated, "Enter activates the focused button");
     }
 
@@ -2030,7 +2037,7 @@ mod tests {
     fn typing_reaches_the_focused_field() {
         let mut ui = Ui::new(Theme::DEFAULT);
         let mut value = String::new();
-        let tree = |ui: &mut Ui, v: &mut String| mui_widgets::text_input(ui, "f", v);
+        let tree = |ui: &mut Ui, v: &mut String| widgets::text_input(ui, "f", v).0;
         let root = tree(&mut ui, &mut value);
         ui.frame(root, None, PointerInput::default(), 0.016)
             .unwrap();
@@ -2053,7 +2060,7 @@ mod tests {
     fn a_composition_paints_without_editing_the_value_and_the_commit_inserts() {
         let mut ui = Ui::new(Theme::DEFAULT);
         let mut value = "ab".to_owned();
-        let tree = |ui: &mut Ui, v: &mut String| mui_widgets::text_input(ui, "f", v);
+        let tree = |ui: &mut Ui, v: &mut String| widgets::text_input(ui, "f", v).0;
         let ime = |e: mui_input::Ime| Input {
             ime: vec![e],
             ..Input::default()
@@ -2109,7 +2116,7 @@ mod tests {
         let mut ui = Ui::new(Theme::DEFAULT);
         let mut value = "x".repeat(60);
         let win = Some(Size::new(200., 60.));
-        let tree = |ui: &mut Ui, v: &mut String| mui_widgets::text_input(ui, "f", v);
+        let tree = |ui: &mut Ui, v: &mut String| widgets::text_input(ui, "f", v).0;
         let root = tree(&mut ui, &mut value);
         ui.frame(root, win, PointerInput::default(), 0.016).unwrap();
         ui.set_sel("f", 60, 60);
@@ -2135,7 +2142,7 @@ mod tests {
         let mut ui = Ui::new(Theme::DEFAULT);
         let mut value = String::from("hello");
         let run = |ui: &mut Ui, v: &mut String, input: Input| {
-            let root = mui_widgets::text_input(ui, "f", v);
+            let root = widgets::text_input(ui, "f", v).0;
             ui.frame(root, None, input, 0.016).unwrap();
         };
         run(&mut ui, &mut value, Input::default());
@@ -2162,7 +2169,7 @@ mod tests {
         let mut ui = Ui::new(Theme::DEFAULT);
         let mut value = String::from("hi");
         let run = |ui: &mut Ui, v: &mut String, input: Input| {
-            let root = mui_widgets::text_input(ui, "f", v);
+            let root = widgets::text_input(ui, "f", v).0;
             ui.frame(root, None, input, 0.016)
                 .unwrap()
                 .clipboard
@@ -2676,11 +2683,15 @@ mod tests {
     fn a_degenerate_or_inverted_range_resolves_and_clamps() {
         let mut ui = Ui::new(Theme::DEFAULT);
         let mut v = 1.0;
-        let el = mui_widgets::slider(&mut ui, "fixed", "Fixed", &mut v, 1.0..=1.0).el();
+        let el = widgets::slider(&mut ui, "fixed", "Fixed", &mut v, 1.0..=1.0)
+            .0
+            .el();
         ui.frame(el, None, PointerInput::default(), 0.016)
             .expect("a fixed parameter is still a tree");
         let mut down = 0.5;
-        let el = mui_widgets::slider(&mut ui, "down", "Down", &mut down, 1.0..=0.0).el();
+        let el = widgets::slider(&mut ui, "down", "Down", &mut down, 1.0..=0.0)
+            .0
+            .el();
         ui.frame(el, None, PointerInput::default(), 0.016)
             .expect("and so is a downward one");
     }
@@ -2886,9 +2897,9 @@ mod tests {
         let mut v = 0.5;
         let mut clicks = 0;
         let mut tree = |ui: &mut Ui| {
-            let (b, clicked) = mui_widgets::button(ui, "b", "Go");
+            let (b, clicked) = widgets::button(ui, "b", "Go");
             clicks += usize::from(clicked);
-            let s = mui_widgets::slider(ui, "s", "S", &mut v, 0.0..=1.0);
+            let (s, _) = widgets::slider(ui, "s", "S", &mut v, 0.0..=1.0);
             column([b.el(), s.el()]).width(200.)
         };
         let root = tree(&mut ui);
@@ -2925,7 +2936,7 @@ mod tests {
         );
         assert_eq!(clicks, 1);
         assert!((v - 0.409).abs() < 1e-9, "+0.01, -0.001, -0.1: {v}");
-        let mut tree = |ui: &mut Ui| mui_widgets::slider(ui, "s", "S", &mut v, 0.0..=1.0).el();
+        let mut tree = |ui: &mut Ui| widgets::slider(ui, "s", "S", &mut v, 0.0..=1.0).0.el();
         let root = tree(&mut ui);
         ui.frame(root, None, Input::default(), 0.016).unwrap();
         assert_eq!(v, 1.0, "End goes to the end");
@@ -2936,12 +2947,12 @@ mod tests {
     fn increment_and_decrement_step_like_the_arrow_keys() {
         let mut ui = Ui::new(Theme::DEFAULT);
         let mut v = 0.5;
-        let root = mui_widgets::slider(&mut ui, "s", "S", &mut v, 0.0..=1.0).el();
+        let root = widgets::slider(&mut ui, "s", "S", &mut v, 0.0..=1.0).0.el();
         ui.frame(root, None, Input::default(), 0.016).unwrap();
         assert!(ui.request_action(SemanticAction::increment("s")));
         assert!(ui.request_action(SemanticAction::increment("s")));
         assert!(ui.request_action(SemanticAction::decrement("s")));
-        mui_widgets::slider(&mut ui, "s", "S", &mut v, 0.0..=1.0);
+        let _ = widgets::slider(&mut ui, "s", "S", &mut v, 0.0..=1.0);
         assert!((v - 0.51).abs() < 1e-12, "+0.01 +0.01 -0.01: {v}");
         let f = ui
             .frame(leaf(1., 1.), None, Input::default(), 0.016)
@@ -2960,7 +2971,7 @@ mod tests {
         let mut ui = Ui::new(Theme::DEFAULT);
         let mut value = "x".repeat(60);
         let win = Some(Size::new(200., 60.));
-        let tree = |ui: &mut Ui, v: &mut String| mui_widgets::text_input(ui, "f", v);
+        let tree = |ui: &mut Ui, v: &mut String| widgets::text_input(ui, "f", v).0;
         let root = tree(&mut ui, &mut value);
         ui.frame(root, win, PointerInput::default(), 0.016).unwrap();
         ui.set_sel("f", 60, 60);

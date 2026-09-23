@@ -1,8 +1,7 @@
 //! The bin display's claims: a drag paints a continuous run of bins, Shift
 //! refines it, a secondary click resets one, the arrows select and nudge,
 //! a thousand partials still cost one bar per pixel column, and a log axis
-//! puts an octave where an octave belongs. Here rather than beside the code
-//! because they need a [`Host`], and the only one is the runtime in `mui`.
+//! puts an octave where an octave belongs.
 use mui::input::{Button, Buttons, Key, KeyPress, Mods};
 use mui::prelude::*;
 use mui::scene::Content;
@@ -210,14 +209,14 @@ fn the_arrows_select_and_nudge_the_selected_bin() {
 #[test]
 fn a_thousand_bins_at_two_hundred_pixels_draw_one_bar_per_column() {
     let levels = saw(1024);
-    let ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::new(Theme::DEFAULT);
     let live: Vec<f32> = levels.iter().map(|v| v * 0.5).collect();
     let b = Bins {
         authored: &levels,
         live: Some(&live),
         ..Bins::default()
     };
-    let (el, _) = bins(&ui, "spec", &b);
+    let (el, _) = bins(&mut ui, "spec", &b);
     let Content::Canvas(f) = &el.payload().content else {
         panic!("a canvas")
     };

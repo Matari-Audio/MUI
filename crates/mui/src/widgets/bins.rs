@@ -8,7 +8,7 @@ use mui_input::{Button, Key, FINE_DRAG};
 use mui_scene::prelude::*;
 use mui_scene::Size;
 
-use crate::Host;
+use crate::Ui;
 
 /// One arrow press, as a fraction of the full level range. Shift takes
 /// [`FINE_DRAG`] of it, the same ratio every other parameter here uses.
@@ -147,14 +147,14 @@ fn level_at(y: f64, h: f64) -> f64 {
 /// The plot's size, from the frame it was given last time. The one place
 /// this widget reads a resolved frame back, because a bin index is a
 /// fraction of a width and nothing else knows the width.
-fn plot(ui: &impl Host, id: &str) -> Option<Size> {
+fn plot(ui: &Ui, id: &str) -> Option<Size> {
     let s = ui.scene()?.surface(id)?.frame.size;
     Some(Size::new(s.width.max(1.0), s.height.max(1.0)))
 }
 
 /// The pointer half of the gesture: paint while held, reset on a secondary
 /// click.
-fn pointed(ui: &impl Host, id: &str, b: &Bins, n: usize) -> Option<BinEdit> {
+fn pointed(ui: &Ui, id: &str, b: &Bins, n: usize) -> Option<BinEdit> {
     let r = ui.get(id);
     let p = ui.local(id)?;
     let size = plot(ui, id)?;
@@ -197,8 +197,8 @@ fn pointed(ui: &impl Host, id: &str, b: &Bins, n: usize) -> Option<BinEdit> {
 }
 
 /// The keyboard half: only while this widget holds the focus, because
-/// `Host::keys` is focus-gated.
-fn typed(ui: &impl Host, id: &str, b: &Bins, n: usize) -> Option<BinEdit> {
+/// `Ui::keys` is focus-gated.
+fn typed(ui: &Ui, id: &str, b: &Bins, n: usize) -> Option<BinEdit> {
     let sel = b.selected.unwrap_or(0).min(n - 1);
     ui.keys(id).iter().find_map(|k| match k.key {
         Key::Left => Some(BinEdit::Select(sel.saturating_sub(1))),
@@ -286,13 +286,13 @@ fn bar(x: f64, w: f64, h: f64, v: f64) -> Path {
 ///
 /// ```
 /// use mui::prelude::*;
-/// let mut ui = Ui::new(Theme::DEFAULT);
+/// let ui = Ui::new(Theme::DEFAULT);
 /// let saw: Vec<f32> = (1..=16).map(|n| 1.0 / n as f32).collect();
 /// let b = Bins { authored: &saw, ..Bins::default() };
 /// assert_eq!(bins_hover(&ui, "spectrum", &b), None, "nothing resolved yet");
 /// ```
 #[must_use]
-pub fn bins_hover(ui: &impl Host, id: &str, b: &Bins) -> Option<usize> {
+pub fn bins_hover(ui: &Ui, id: &str, b: &Bins) -> Option<usize> {
     let n = b.authored.len();
     let r = ui.get(id);
     if n == 0 || !(r.hovered || r.held) {
@@ -320,11 +320,11 @@ pub fn bins_hover(ui: &impl Host, id: &str, b: &Bins) -> Option<usize> {
 /// use mui::prelude::*;
 /// let mut ui = Ui::new(Theme::DEFAULT);
 /// let saw: Vec<f32> = (1..=64).map(|n| 1.0 / n as f32).collect();
-/// let (plot, edit) = bins(&ui, "spectrum", &Bins { authored: &saw, ..Bins::default() });
+/// let (plot, edit) = bins(&mut ui, "spectrum", &Bins { authored: &saw, ..Bins::default() });
 /// assert_eq!(edit, None, "nothing is dragging");
 /// let _ = plot.size(320.0, 140.0);
 /// ```
-pub fn bins(ui: &impl Host, id: &str, b: &Bins) -> (El, Option<BinEdit>) {
+pub fn bins(ui: &mut Ui, id: &str, b: &Bins) -> (El, Option<BinEdit>) {
     let n = b.authored.len();
     let edit = (n > 0)
         .then(|| pointed(ui, id, b, n).or_else(|| typed(ui, id, b, n)))

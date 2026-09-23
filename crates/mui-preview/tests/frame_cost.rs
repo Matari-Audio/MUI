@@ -71,8 +71,8 @@ fn what_a_frame_costs() {
     let mut v = 0.3;
     let frame = ms(|| {
         let root = column([
-            slider(&mut ui, "a", "A", &mut v, 0.0..=1.0).el(),
-            knob(&mut ui, "k", "K", &mut v, 0.0..=1.0).el(),
+            slider(&mut ui, "a", "A", &mut v, 0.0..=1.0).0.el(),
+            knob(&mut ui, "k", "K", &mut v, 0.0..=1.0).0.el(),
         ])
         .pad(M);
         black_box(

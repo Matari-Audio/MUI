@@ -7,7 +7,7 @@ use mui_input::{Button, Key, FINE_DRAG};
 use mui_scene::prelude::*;
 use mui_scene::{Palette, SpacingToken, Spring, Stroke};
 
-use crate::Host;
+use crate::Ui;
 
 /// How solid a control looks. daisyUI's four button styles, resolved from
 /// the role and the palette rather than from a table of colours.
@@ -15,7 +15,7 @@ use crate::Host;
 /// ```
 /// use mui::prelude::*;
 /// let mut ui = Ui::new(Theme::DEFAULT);
-/// let (quiet, _) = button(&ui, "bypass", "Bypass");
+/// let (quiet, _) = button(&mut ui, "bypass", "Bypass");
 /// // Ink only: the resting box paints nothing.
 /// assert_eq!(quiet.variant(Variant::Ghost).el().payload().style.fill, Fill::None);
 /// ```
@@ -44,10 +44,10 @@ struct Look {
     text: Option<String>,
 }
 
-/// A keyboard activation is the same primary action as a click. `Host::keys`
+/// A keyboard activation is the same primary action as a click. `Ui::keys`
 /// is already gated to the focused surface, so widgets do not need to invent
 /// a second focus test or consume another key stream.
-fn activated(ui: &impl Host, id: &str) -> bool {
+fn activated(ui: &Ui, id: &str) -> bool {
     ui.get(id).clicked_with(Button::Primary)
         || ui
             .keys(id)
@@ -113,8 +113,8 @@ impl Look {
 /// use mui::prelude::*;
 /// let mut ui = Ui::new(Theme::DEFAULT);
 /// let mut cutoff = 0.5;
-/// let dial = knob(&mut ui, "cut", "Cutoff", &mut cutoff, 0.0..=1.0).size(L);
-/// let strip = row![dial, label("post")];
+/// let (dial, _) = knob(&mut ui, "cut", "Cutoff", &mut cutoff, 0.0..=1.0);
+/// let strip = row![dial.size(L), label("post")];
 /// ```
 pub struct Control {
     look: Look,
@@ -123,13 +123,13 @@ pub struct Control {
     build: Box<dyn FnOnce(&Look) -> El>,
 }
 impl Control {
-    fn new(ui: &impl Host, build: impl FnOnce(&Look) -> El + 'static) -> Self {
+    fn new(ui: &Ui, build: impl FnOnce(&Look) -> El + 'static) -> Self {
         Self {
             look: Look {
-                px: ui.theme().control,
+                px: ui.theme.control,
                 variant: Variant::Solid,
                 role: Role::Primary,
-                palette: ui.theme().palette,
+                palette: ui.theme.palette,
                 text: None,
             },
             size: SpacingToken::M,
@@ -143,7 +143,8 @@ impl Control {
     /// use mui::prelude::*;
     /// let mut ui = Ui::new(Theme::DEFAULT);
     /// let mut on = false;
-    /// let sw = toggle(&ui, "bypass", &mut on).variant(Variant::Outline);
+    /// let (sw, _) = toggle(&mut ui, "bypass", &mut on);
+    /// let sw = sw.variant(Variant::Outline);
     /// assert!(sw.el().payload().style.stroke.is_some(), "outlined");
     /// ```
     pub fn variant(mut self, v: Variant) -> Self {
@@ -156,7 +157,7 @@ impl Control {
     /// ```
     /// use mui::prelude::*;
     /// let mut ui = Ui::new(Theme::DEFAULT);
-    /// let (clear, _) = button(&ui, "clear", "Clear");
+    /// let (clear, _) = button(&mut ui, "clear", "Clear");
     /// let el = clear.role(Danger).variant(Variant::Outline).el();
     /// let ring = el.payload().style.stroke.clone().map(|s| s.fill);
     /// assert_eq!(ring, Some(Fill::Role(Danger)));
@@ -172,7 +173,8 @@ impl Control {
     /// use mui::prelude::*;
     /// let mut ui = Ui::new(Theme::DEFAULT);
     /// let mut on = false;
-    /// let small = toggle(&ui, "bypass", &mut on).size(Xs);
+    /// let (small, _) = toggle(&mut ui, "bypass", &mut on);
+    /// let small = small.size(Xs);
     /// ```
     pub fn size(mut self, s: SpacingToken) -> Self {
         self.size = s;
@@ -186,8 +188,8 @@ impl Control {
     /// use mui::prelude::*;
     /// let mut ui = Ui::new(Theme::DEFAULT);
     /// let mut cutoff = 440.0;
-    /// let dial = knob(&mut ui, "cut", "Cutoff", &mut cutoff, 20.0..=20_000.0)
-    ///     .value_text(format!("{cutoff:.0} Hz"));
+    /// let (dial, _) = knob(&mut ui, "cut", "Cutoff", &mut cutoff, 20.0..=20_000.0);
+    /// let dial = dial.value_text(format!("{cutoff:.0} Hz"));
     /// ```
     pub fn value_text(mut self, s: impl Into<String>) -> Self {
         self.look.text = Some(s.into());
@@ -200,7 +202,8 @@ impl Control {
     /// use mui::prelude::*;
     /// let mut ui = Ui::new(Theme::DEFAULT);
     /// let mut v = 0.5;
-    /// let dial = knob(&mut ui, "cut", "Cutoff", &mut v, 0.0..=1.0).px(37.0);
+    /// let (dial, _) = knob(&mut ui, "cut", "Cutoff", &mut v, 0.0..=1.0);
+    /// let dial = dial.px(37.0);
     /// ```
     pub fn px(mut self, px: f64) -> Self {
         self.px = Some(px);
@@ -211,7 +214,7 @@ impl Control {
     /// ```
     /// use mui::prelude::*;
     /// let mut ui = Ui::new(Theme::DEFAULT);
-    /// let (go, _clicked) = button(&ui, "go", "Go");
+    /// let (go, _clicked) = button(&mut ui, "go", "Go");
     /// let el: El = go.el();
     /// ```
     pub fn el(mut self) -> El {
@@ -249,7 +252,7 @@ pub fn step(range: &RangeInclusive<f64>) -> f64 {
 /// Step `value` by the focused control's keys: arrows by [`step`] (a tenth
 /// of it with Shift), Page Up and Down by ten steps, Home and End to the
 /// ends. The runtime brackets the frame as one edit.
-fn stepped(ui: &impl Host, id: &str, value: &mut f64, range: &RangeInclusive<f64>) {
+fn stepped(ui: &Ui, id: &str, value: &mut f64, range: &RangeInclusive<f64>) {
     let (lo, hi) = (*range.start(), *range.end());
     if !(lo.is_finite() && hi.is_finite()) {
         return;
@@ -267,6 +270,12 @@ fn stepped(ui: &impl Host, id: &str, value: &mut f64, range: &RangeInclusive<f64
         }
         .clamp(lo.min(hi), lo.max(hi));
     }
+}
+
+/// Whether a drag or a key moved the value. Bitwise, so a NaN the caller
+/// handed in is not a change on every frame.
+fn moved(before: f64, after: f64) -> bool {
+    before.to_bits() != after.to_bits()
 }
 
 fn unit(value: f64, range: &RangeInclusive<f64>) -> f64 {
@@ -301,7 +310,8 @@ fn readout(given: Option<String>, value: f64, min: f64, max: f64) -> El {
 const THUMB: f64 = 0.35;
 const LANE: f64 = 0.45;
 
-/// Label, readout, and a track whose fill and thumb are flex shares.
+/// Label, readout, and a track whose fill and thumb are flex shares. Returns
+/// the control and whether the value changed.
 ///
 /// The whole lane is the target: a press on the track jumps the value there
 /// and the drag carries on from it, a full-width drag sweeps the full range,
@@ -313,16 +323,18 @@ const LANE: f64 = 0.45;
 /// use mui::prelude::*;
 /// let mut ui = Ui::new(Theme::DEFAULT);
 /// let mut gain = 0.5;
-/// let fader = slider(&mut ui, "gain", "Gain", &mut gain, 0.0..=1.0).size(S);
-/// assert_eq!(gain, 0.5, "no gesture, no change");
+/// let (fader, changed) = slider(&mut ui, "gain", "Gain", &mut gain, 0.0..=1.0);
+/// assert!(!changed && gain == 0.5, "no gesture, no change");
+/// let fader = fader.size(S);
 /// ```
 pub fn slider(
-    ui: &mut impl Host,
+    ui: &mut Ui,
     id: &str,
     label: &str,
     value: &mut f64,
     range: RangeInclusive<f64>,
-) -> Control {
+) -> (Control, bool) {
+    let before = *value;
     let (h, _) = ui.state(id);
     // Last frame's lane, less the thumb riding it, is the travel a
     // full-range drag covers; before the first frame nothing can drag.
@@ -345,10 +357,11 @@ pub fn slider(
     }
     ui.drag(id, value, range.clone(), travel, false);
     stepped(ui, id, value, &range);
+    let changed = moved(before, *value);
     let t = unit(*value, &range);
     let (id, label, value) = (id.to_owned(), label.to_owned(), *value);
     let (min, max) = (*range.start(), *range.end());
-    Control::new(ui, move |look| {
+    let control = Control::new(ui, move |look| {
         // The rail is a fraction of the control's height, so one size token
         // moves the track, the thumb and the row together.
         let (track, thumb, lane) = (look.px * 0.15, look.px * THUMB, look.px * LANE);
@@ -380,10 +393,12 @@ pub fn slider(
             .id(id),
         ])
         .gap(Xs)
-    })
+    });
+    (control, changed)
 }
 
-/// A dial: vertical drag, pointer on a 270° sweep. The pointer follows a
+/// A dial: vertical drag, pointer on a 270° sweep; returns the control and
+/// whether the value changed. The pointer follows a
 /// tween, so a value set from outside -- a preset, a host automation curve --
 /// glides instead of jumping, while a drag still tracks the pointer.
 ///
@@ -395,28 +410,31 @@ pub fn slider(
 /// use mui::prelude::*;
 /// let mut ui = Ui::new(Theme::DEFAULT);
 /// let mut cutoff = 0.5;
-/// let dial = knob(&mut ui, "cut", "Cutoff", &mut cutoff, 0.0..=1.0).size(Xl);
-/// assert_eq!(cutoff, 0.5, "no gesture, no change");
+/// let (dial, changed) = knob(&mut ui, "cut", "Cutoff", &mut cutoff, 0.0..=1.0);
+/// assert!(!changed && cutoff == 0.5, "no gesture, no change");
+/// let dial = dial.size(Xl);
 /// ```
 pub fn knob(
-    ui: &mut impl Host,
+    ui: &mut Ui,
     id: &str,
     label: &str,
     value: &mut f64,
     range: RangeInclusive<f64>,
-) -> Control {
+) -> (Control, bool) {
+    let before = *value;
     // Unlike a slider's, a dial's travel is a hand distance, not a geometry:
     // the whole face is the target and 120 px of vertical drag sweeps the
     // range whatever the diameter, so a small knob is not a twitchy one.
     ui.drag(id, value, range.clone(), 120.0, true);
     stepped(ui, id, value, &range);
+    let changed = moved(before, *value);
     // Fast enough that a drag still feels direct, slow enough that a
     // preset change is a glide.
     let t = ui.tween_with(id, unit(*value, &range), Spring::new(0.12, 1.0));
     let (h, _) = ui.state(id);
     let (id, label, value) = (id.to_owned(), label.to_owned(), *value);
     let (min, max) = (*range.start(), *range.end());
-    Control::new(ui, move |look| {
+    let control = Control::new(ui, move |look| {
         // A dial reads bigger than a button of the same size token: the
         // label sits under it rather than inside it.
         let size = look.px * 1.8;
@@ -444,19 +462,21 @@ pub fn knob(
         ])
         .gap(Xs)
         .align(Align::Center)
-    })
+    });
+    (control, changed)
 }
 
-/// Returns the control and whether it was clicked last frame.
+/// A labelled action. Returns the control and whether it was clicked last
+/// frame.
 ///
 /// ```
 /// use mui::prelude::*;
 /// let mut ui = Ui::new(Theme::DEFAULT);
-/// let (save, clicked) = button(&ui, "save", "Save");
+/// let (save, clicked) = button(&mut ui, "save", "Save");
 /// assert!(!clicked, "nothing pressed it last frame");
 /// let save = save.variant(Variant::Soft).size(S);
 /// ```
-pub fn button(ui: &impl Host, id: &str, label: &str) -> (Control, bool) {
+pub fn button(ui: &mut Ui, id: &str, label: &str) -> (Control, bool) {
     let clicked = activated(ui, id);
     let (id, label) = (id.to_owned(), label.to_owned());
     let el = Control::new(ui, move |look| {
@@ -475,22 +495,25 @@ pub fn button(ui: &impl Host, id: &str, label: &str) -> (Control, bool) {
     (el, clicked)
 }
 
-/// A switch: the knob's side is a flex share, the click flips it.
+/// A switch: the knob's side is a flex share, the click flips it. Returns
+/// the control and whether it flipped.
 ///
 /// ```
 /// use mui::prelude::*;
 /// let mut ui = Ui::new(Theme::DEFAULT);
 /// let mut bypass = false;
-/// let sw = toggle(&ui, "bypass", &mut bypass).size(Xs);
-/// assert!(!bypass, "nothing clicked it, so it did not flip");
+/// let (sw, flipped) = toggle(&mut ui, "bypass", &mut bypass);
+/// assert!(!flipped && !bypass, "nothing clicked it, so it did not flip");
+/// let sw = sw.size(Xs);
 /// ```
-pub fn toggle(ui: &impl Host, id: &str, on: &mut bool) -> Control {
-    if activated(ui, id) {
+pub fn toggle(ui: &mut Ui, id: &str, on: &mut bool) -> (Control, bool) {
+    let flipped = activated(ui, id);
+    if flipped {
         *on = !*on;
     }
     let (id, on) = (id.to_owned(), *on);
     let t = f64::from(on);
-    Control::new(ui, move |look| {
+    let control = Control::new(ui, move |look| {
         // A track is as wide as the control's height and a bit over half as
         // tall: 40 x 22 at the default theme's `M`.
         let (w, h) = (look.px, look.px * 0.55);
@@ -511,7 +534,8 @@ pub fn toggle(ui: &impl Host, id: &str, on: &mut bool) -> Control {
         .role(Kind::Toggle { on })
         .focusable()
         .id(id)
-    })
+    });
+    (control, flipped)
 }
 
 fn byte(s: &str, chars: usize) -> usize {
@@ -535,7 +559,7 @@ fn take(value: &mut String, a: usize, c: usize) -> (usize, bool) {
 }
 /// Unicode word boundaries, falling back to one grapheme for punctuation.
 fn word(value: &str, at: usize) -> (usize, usize) {
-    crate::grapheme::word(value, at)
+    super::grapheme::word(value, at)
 }
 fn insert(value: &mut String, caret: &mut usize, c: char) {
     value.insert(byte(value, *caret), c);
@@ -548,16 +572,26 @@ fn insert(value: &mut String, caret: &mut usize, c: char) {
 /// and V select all, copy, cut and paste -- a copy leaves the text in
 /// `Frame::clipboard` for the host to hand to the OS, and a
 /// paste reads `Input::clipboard`, which the host fills on the paste key.
+/// Returns the field and whether the value changed.
+///
+/// ```
+/// use mui::prelude::*;
+/// let mut ui = Ui::new(Theme::DEFAULT);
+/// let mut name = String::from("Init");
+/// let (field, changed) = text_input(&mut ui, "name", &mut name);
+/// assert!(!changed, "nothing is focused, so nothing was typed");
+/// let field = field.w(140);
+/// ```
 // ponytail: single line. A multi-line field wants the caret on a line index,
 // not a byte, and `mui_text::break_lines` to place it.
-pub fn text_input(ui: &mut impl Host, id: &str, value: &mut String) -> El {
-    let size = ui.theme().text;
+pub fn text_input(ui: &mut Ui, id: &str, value: &mut String) -> (El, bool) {
+    let size = ui.theme.text;
     let focused = ui.focused(id);
     let n = value.chars().count();
     let (anchor, caret) = ui.sel(id);
     let (mut anchor, mut caret) = (
-        crate::grapheme::floor(value, anchor.min(n)),
-        crate::grapheme::floor(value, caret.min(n)),
+        super::grapheme::floor(value, anchor.min(n)),
+        super::grapheme::floor(value, caret.min(n)),
     );
 
     // The pointer, against last frame's field: the text starts `PAD` in,
@@ -575,7 +609,7 @@ pub fn text_input(ui: &mut impl Host, id: &str, value: &mut String) -> El {
             let shift = room.map_or(0.0, |room| {
                 (ui.caret_x(value, size, byte(value, caret)) - room).max(0.0)
             });
-            caret = crate::grapheme::floor(value, ui.hit(value, size, p.x - PAD + shift));
+            caret = super::grapheme::floor(value, ui.hit(value, size, p.x - PAD + shift));
             if r.pressed {
                 anchor = caret;
             }
@@ -585,6 +619,10 @@ pub fn text_input(ui: &mut impl Host, id: &str, value: &mut String) -> El {
         (anchor, caret) = word(value, caret);
     }
 
+    // Only a frame with input can edit, so only that frame pays for the copy
+    // the change is judged against.
+    let before =
+        (focused && !(ui.text(id).is_empty() && ui.keys(id).is_empty())).then(|| value.clone());
     if focused {
         let committed = ui.text(id).to_owned();
         let has_committed_text = !committed.is_empty();
@@ -628,7 +666,7 @@ pub fn text_input(ui: &mut impl Host, id: &str, value: &mut String) -> El {
                     let (at, had) = take(value, anchor, caret);
                     caret = at;
                     if !had && caret > 0 {
-                        let start = crate::grapheme::previous(value, caret);
+                        let start = super::grapheme::previous(value, caret);
                         value.replace_range(byte(value, start)..byte(value, caret), "");
                         caret = start;
                     }
@@ -638,7 +676,7 @@ pub fn text_input(ui: &mut impl Host, id: &str, value: &mut String) -> El {
                     let (at, had) = take(value, anchor, caret);
                     caret = at;
                     if !had && caret < value.chars().count() {
-                        let end = crate::grapheme::next(value, caret);
+                        let end = super::grapheme::next(value, caret);
                         value.replace_range(byte(value, caret)..byte(value, end), "");
                     }
                     anchor = caret;
@@ -647,8 +685,8 @@ pub fn text_input(ui: &mut impl Host, id: &str, value: &mut String) -> El {
                     caret = match k.key {
                         Key::Left if !k.mods.shift && anchor != caret => anchor.min(caret),
                         Key::Right if !k.mods.shift && anchor != caret => anchor.max(caret),
-                        Key::Left => crate::grapheme::previous(value, caret),
-                        Key::Right => crate::grapheme::next(value, caret),
+                        Key::Left => super::grapheme::previous(value, caret),
+                        Key::Right => super::grapheme::next(value, caret),
                         Key::Home => 0,
                         _ => value.chars().count(),
                     };
@@ -661,6 +699,7 @@ pub fn text_input(ui: &mut impl Host, id: &str, value: &mut String) -> El {
         }
     }
     ui.set_sel(id, anchor, caret);
+    let changed = before.is_some_and(|b| b != *value);
 
     // The input method's composing text is shown at the caret and measured
     // with the value, but never joins it: only a commit, which arrives as
@@ -744,5 +783,5 @@ pub fn text_input(ui: &mut impl Host, id: &str, value: &mut String) -> El {
     if focused {
         ui.set_ime_caret(id, Point::new(PAD + caret_x - shift, 6.0), size);
     }
-    el
+    (el, changed)
 }

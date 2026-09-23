@@ -9,7 +9,7 @@
 //! the filleted union of its children, and every shell is a true parallel
 //! inset of the outline before it.
 //!
-//! What this crate is not: it holds no widgets and no state (`mui-widgets`),
+//! What this crate is not: it holds no widgets and no state (`mui::widgets`),
 //! no event loop or input handling (`mui`), and no rasterizer (`mui-vello`).
 //!
 //! The compact spelling, which says the same thing:

@@ -1,7 +1,6 @@
 //! The curve editor's four claims: the knot is the target and the line is
 //! not, a drag moves one knot and clamps it, Shift drags fine, and what is
-//! drawn is the cubic the DSP side samples. Here rather than beside the code
-//! because they need a [`Host`], and the only one is the runtime in `mui`.
+//! drawn is the cubic the DSP side samples.
 use mui::input::{Button, Buttons, Mods};
 use mui::prelude::*;
 use mui::scene::curve::Curve;
@@ -114,9 +113,9 @@ fn shift_drags_fine() {
 /// the model's own, and `Curve::evaluate` agrees at the knots.
 #[test]
 fn the_drawn_spine_is_the_models_cubic_and_matches_the_sampler() {
-    let ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::new(Theme::DEFAULT);
     let mut c = Curve::default();
-    let (el, _) = curve(&ui, "env", &mut c);
+    let (el, _) = curve(&mut ui, "env", &mut c);
     let draws = match &el.payload().content {
         Content::Canvas(f) => f.0(Size::new(SIZE, SIZE)),
         _ => panic!("a canvas"),

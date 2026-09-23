@@ -1747,8 +1747,8 @@ dependencies = [
  "mui-scene",
  "mui-text",
  "mui-vello",
- "mui-widgets",
  "png 0.17.16",
+ "unicode-segmentation",
 ]
 
 [[package]]
@@ -1889,18 +1889,6 @@ dependencies = [
 [[package]]
 name = "mui-weld"
 version = "0.3.2"
-
-[[package]]
-name = "mui-widgets"
-version = "0.3.2"
-dependencies = [
- "epaint_default_fonts",
- "mui",
- "mui-geometry",
- "mui-input",
- "mui-scene",
- "unicode-segmentation",
-]
 
 [[package]]
 name = "naga"

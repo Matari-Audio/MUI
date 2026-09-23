@@ -17,15 +17,15 @@ fn gallery(ui: &mut Ui, state: &mut (f64, f64, f64, bool)) -> El {
     let (go, _) = button(ui, "go", "Trigger");
     let card = column([
         row([
-            knob(ui, "cutoff", "Cutoff", cutoff, 0.0..=1.0).el(),
-            knob(ui, "res", "Res", res, 0.0..=1.0).el(),
+            knob(ui, "cutoff", "Cutoff", cutoff, 0.0..=1.0).0.el(),
+            knob(ui, "res", "Res", res, 0.0..=1.0).0.el(),
         ])
         .gap(L)
         .justify(Justify::Center),
-        slider(ui, "gain", "Gain", gain, -24.0..=6.0).el(),
+        slider(ui, "gain", "Gain", gain, -24.0..=6.0).0.el(),
         row([
             text("Bypass").fill(Role::Dim),
-            toggle(ui, "bypass", on).el(),
+            toggle(ui, "bypass", on).0.el(),
             spacer(),
             go.el(),
         ])
