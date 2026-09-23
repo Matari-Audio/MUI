@@ -228,7 +228,7 @@ public function and a test behind it.
       then swaps what it says while the resolved frame stands -- one glyph run
       re-shapes, the tree is not walked again, which is the whole point at 60
       Hz. `.text_weight(Weight::BOLD)` drives the run's `wght` axis and the
-      position reaches the renderer as `Text::coords`, so a bold run is drawn
+      position reaches the renderer as `Text::font_coords`, so a bold run is drawn
       at the instance it was measured at. `Palette::from_seed(accent, mode)`
       derives every role from one colour, hue-swept in both modes against
       `UI_NONTEXT` and `AA_TEXT` instead of trusting a hex table.

@@ -39,7 +39,9 @@ MUI owns layout, contours, input, animation and the paint list. Vello renders it
 effects. Native hosts can keep `TiledEffects` alive between frames to reuse clean
 tiles; broad changes switch to one full-scene render when the memory budget
 allows it. `HybridEffects` is the whole-scene retained alternative. The host must
-select and retain these renderers to benefit from their caches.
+select and retain these renderers to benefit from their caches. An unchanged
+frame into the view they presented last records no GPU pass; a swapchain hands
+out a new view per frame, so there the host saves the pass by not asking.
 
 Classic Vello compute and Hybrid comparisons live in the
 [rendering investigation](docs/rendering-investigation.md), including measured
@@ -382,8 +384,8 @@ so a panel handing over a fresh frame buffer every frame does not grow it.
 `tree_update(&scene, focus, scale)`, where `scale` is the window's device
 pixels per scene unit. A node says what it is in the tree itself --
 `.role(Kind::Button).label("OK")` -- and the walk carries that onto the
-surface; a node with no role reports as a group, and a node with no label
-has no name (its id is not read aloud). A `text_input` reports its line
+surface; a node with no role reports as a group, and a control with no
+label is named by its id (a group with none stays unnamed). A `text_input` reports its line
 as a `TextRun` with each character's position and its selection, so a reader
 follows the caret, and a reader's `SetTextSelection` comes back as
 `SemanticAction::set_selection`. The
