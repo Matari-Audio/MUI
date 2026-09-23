@@ -1,5 +1,5 @@
-//! A frame stays inside a generous budget. The budget is a tripwire, not a
-//! benchmark: it catches the accidental O(n^2), not a 10% regression. Real
+//! What a frame costs, printed rather than asserted: a wall-clock budget is
+//! noise on a shared CI runner. Run it with `--nocapture` to read it. Real
 //! numbers, and the hybrid/cpu/classic comparison, live in BENCHMARKS.md and
 //! `cargo run -p mui-vello --release --features cpu --example bench`.
 //!
@@ -59,10 +59,6 @@ fn pill() -> El {
     .weld(Role::Surface)
 }
 
-/// Generous enough that a debug build on a slow machine passes, tight enough
-/// that a quadratic walk over 500 paint ops does not.
-const BUDGET_MS: f64 = 50.0;
-
 #[test]
 fn what_a_frame_costs() {
     let font = epaint_default_fonts::HACK_REGULAR;
@@ -107,10 +103,4 @@ fn what_a_frame_costs() {
         .unwrap();
     });
     println!("mui paint walk (cached)           {walk:8.3} ms");
-    for (what, got) in [("resolve", resolve), ("frame", frame), ("paint walk", walk)] {
-        assert!(
-            got < BUDGET_MS,
-            "{what} took {got:.3} ms, budget {BUDGET_MS}"
-        );
-    }
 }
