@@ -46,16 +46,16 @@ pub use mui_weld::{Channel as WeldChannel, Quality as WeldQuality, Weld, WeldCac
 
 pub use dsl::{caption, label, title, IntoLen, Sugar};
 pub use element::{
-    canvas, canvas_cached, column, fits, grid, icon, leaf, overlay, row, spacer, text, Canvas,
-    CanvasCache, Carve, Content, Draw, El, Element, IntoEl, Kind, Outline, Paints, Semantics,
-    State, StateStyle, Styled,
+    canvas, canvas_cached, column, fits, grid, icon, leaf, overlay, row, spacer, text, Appear,
+    Canvas, CanvasCache, Carve, Content, Draw, El, Element, IntoEl, Kind, Outline, Paints,
+    Semantics, State, StateStyle, Styled,
 };
 pub use mui_geometry::CornerStyle;
 pub use mui_layout::{
     Align, Area, Frame, Id, Insets, Justify, Layout, Len, Limits, Match, Node, Pin, Size, Spacing,
     SpacingScale, SpacingToken,
 };
-pub use mui_motion::{curve, Spring};
+pub use mui_motion::{curve, Ease, Keys, Spring};
 pub use mui_style::{
     Color, Corner, Corners, Cursor, Elevation, Fill, Fit, Gradient, GradientKind, Image, Mix, Mode,
     Paint, Palette, Pigment, Radius, Role, Shadow, ShadowKind, Stroke, Style, Theme,
@@ -63,8 +63,8 @@ pub use mui_style::{
 pub use mui_text::{Axes, Font, Weight};
 pub mod material_symbols;
 pub use scene::{
-    resolve_scene, resolve_scene_cached, resolve_scene_with, Layer, Painted, ResolvedScene,
-    ResolvedSurface, SceneError, SceneSpec, Text, TextCache, TextGlyph,
+    resolve_scene, resolve_scene_animated, resolve_scene_cached, resolve_scene_with, Layer,
+    Painted, ResolvedScene, ResolvedSurface, SceneError, SceneSpec, Text, TextCache, TextGlyph,
 };
 
 /// Everything a scene file needs, including the spacing tokens as bare
@@ -73,11 +73,11 @@ pub mod prelude {
     pub use crate::Role::*;
     pub use crate::{
         canvas, canvas_cached, caption, col, column, fits, grid, icon, label, leaf, overlay,
-        resolve_scene, row, spacer, stack, text, title, weld, weld_morph, Align, Area, Axes,
-        BorderAlign, BorderRamp, CanvasCache, Color, Corner, Cursor, Draw, El, Elevation, Fill,
-        Fit, Font, Gradient, Id, Image, IntoEl, IntoLen, Justify, Kind, Len, Match, Mix, Paints,
-        Pin, Radius, Role, SceneSpec, Shadow, ShapeLayout, Size, State, Style, Styled, Sugar,
-        Theme, Weight, Weld, WeldBackend, WeldChannel, WeldQuality,
+        resolve_scene, row, spacer, stack, text, title, weld, weld_morph, Align, Appear, Area,
+        Axes, BorderAlign, BorderRamp, CanvasCache, Color, Corner, Cursor, Draw, Ease, El,
+        Elevation, Fill, Fit, Font, Gradient, Id, Image, IntoEl, IntoLen, Justify, Keys, Kind, Len,
+        Match, Mix, Paints, Pin, Radius, Role, SceneSpec, Shadow, ShapeLayout, Size, State, Style,
+        Styled, Sugar, Theme, Weight, Weld, WeldBackend, WeldChannel, WeldQuality,
     };
     pub use mui_geometry::{CornerStyle, Path, Point};
     pub use mui_layout::Spacing;

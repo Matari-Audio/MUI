@@ -498,8 +498,8 @@ pub fn button(ui: &mut Ui, id: impl Into<Id>, label: &str) -> (Control, bool) {
     (el, clicked)
 }
 
-/// A switch: the knob's side is a flex share, the click flips it. Returns
-/// the control and whether it flipped.
+/// A switch: the knob's side is a flex share it slides between, the click
+/// flips it. Returns the control and whether it flipped.
 ///
 /// ```
 /// use mui::prelude::*;
@@ -523,7 +523,11 @@ pub fn toggle(ui: &mut Ui, id: impl Into<Id>, on: &mut bool) -> (Control, bool) 
         let (w, h) = (look.px, look.px * 0.55);
         row([
             spacer().grow(t),
-            leaf(h * 0.73, h * 0.73).pill().fill(Role::Ink),
+            // The knob's side is a flex share; its frame glides between them.
+            leaf(h * 0.73, h * 0.73)
+                .pill()
+                .fill(Role::Ink)
+                .animate_layout(),
             spacer().grow(1.0 - t),
         ])
         .size(w, h)

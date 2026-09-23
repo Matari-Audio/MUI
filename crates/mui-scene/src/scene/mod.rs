@@ -19,13 +19,14 @@ pub use text::TextCache;
 
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::hash::BuildHasher;
 use std::sync::{Arc, LazyLock};
 
 use mui_geometry::{Bounds, OffsetOptions, Path, PlacedShape, Point};
 use mui_layout::Frame;
 
-use crate::{Color, Cursor, El};
+use crate::{Color, Cursor, El, Size};
 use outline::OutlineCache;
 use text::{fit, layout_key, Runs};
 
@@ -168,6 +169,61 @@ impl Walk<'_> {
     }
 }
 
+/// Walk the tree in layout order handing each animating node's frame to
+/// `glide`. `anchor` is the nearest animating ancestor's solved and shown
+/// origin, `[tx, ty, sx, sy]`; everything under it is offset by the
+/// difference. Keys match the runtime's: the id, or the `/0/2` tree path.
+fn glide_frames(
+    n: &El,
+    at: &mut usize,
+    path: &mut String,
+    anchor: [f64; 4],
+    frames: &mut Cow<'_, [Frame]>,
+    glide: &mut dyn FnMut(&str, &crate::Element, Frame) -> Frame,
+) {
+    let i = *at;
+    *at += 1;
+    let Some(&target) = frames.get(i) else {
+        return;
+    };
+    let [tx, ty, sx, sy] = anchor;
+    let mut inner = anchor;
+    if n.payload().layout_transition.is_some() {
+        let rel = Frame {
+            x: target.x - tx,
+            y: target.y - ty,
+            ..target
+        };
+        let got = glide(n.key().unwrap_or(path), n.payload(), rel);
+        let ok = [got.x, got.y, got.size.width, got.size.height]
+            .iter()
+            .all(|v| v.is_finite());
+        let shown = if ok {
+            Frame {
+                x: sx + got.x,
+                y: sy + got.y,
+                size: Size::new(got.size.width.max(0.), got.size.height.max(0.)),
+            }
+        } else {
+            target
+        };
+        if shown != target {
+            frames.to_mut()[i] = shown;
+        }
+        inner = [target.x, target.y, shown.x, shown.y];
+    } else if (sx, sy) != (tx, ty) {
+        let f = &mut frames.to_mut()[i];
+        f.x += sx - tx;
+        f.y += sy - ty;
+    }
+    let mark = path.len();
+    for (j, c) in n.children().iter().enumerate() {
+        let _ = write!(path, "/{j}");
+        glide_frames(c, at, path, inner, frames, glide);
+        path.truncate(mark);
+    }
+}
+
 pub fn resolve_scene(spec: &SceneSpec) -> Result<ResolvedScene, SceneError> {
     resolve_scene_with(spec, &mut TextCache::default())
 }
@@ -188,6 +244,23 @@ pub fn resolve_scene_cached(
     spec: &SceneSpec,
     text: &mut TextCache,
     weld_cache: &mut crate::WeldCache,
+) -> Result<ResolvedScene, SceneError> {
+    resolve_scene_animated(spec, text, weld_cache, &mut |_, _, f| f)
+}
+
+/// [`resolve_scene_cached`] with every
+/// [`animate_layout`](crate::Styled::animate_layout) node's frame handed to
+/// `glide` between the solve and the walk: `glide(key, element, target)`
+/// returns the frame to paint, clip and hit it at. `target` is relative to
+/// the nearest animating ancestor's *solved* origin (absolute for the
+/// outermost), and so is the answer, so a nested glide is never chased
+/// twice. A node that does not animate moves with its nearest animating
+/// ancestor. The runtime's springs live in `glide`; this only places them.
+pub fn resolve_scene_animated(
+    spec: &SceneSpec,
+    text: &mut TextCache,
+    weld_cache: &mut crate::WeldCache,
+    glide: &mut dyn FnMut(&str, &crate::Element, Frame) -> Frame,
 ) -> Result<ResolvedScene, SceneError> {
     spec.validate()?;
     text.retain_for(spec);
@@ -221,9 +294,18 @@ pub fn resolve_scene_cached(
     let nodes = layout.all().len();
     let mut sizes = Vec::with_capacity(nodes);
     subtree_sizes(&spec.root, &mut sizes);
+    let mut frames = Cow::Borrowed(layout.all());
+    glide_frames(
+        &spec.root,
+        &mut 0,
+        &mut String::new(),
+        [0.; 4],
+        &mut frames,
+        glide,
+    );
     let mut w = Walk {
         spec,
-        frames: Cow::Borrowed(layout.all()),
+        frames,
         regions: HashMap::new(),
         region_envelopes: HashMap::new(),
         runs,

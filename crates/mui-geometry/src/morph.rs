@@ -170,19 +170,18 @@ fn resample(c: &[Point], n: usize) -> Vec<Point> {
 /// shift per (from, to) pair if a morph-heavy scene ever shows it.
 fn best_shift(p: &[Point], q: &[Point]) -> usize {
     let n = p.len();
+    let cost = |s: usize| -> f64 {
+        (0..n)
+            .map(|k| {
+                let d = p[k] - q[(k + s) % n];
+                d.dot(d)
+            })
+            .sum()
+    };
     (0..n)
-        .min_by(|&s, &r| {
-            let cost = |s: usize| -> f64 {
-                (0..n)
-                    .map(|k| {
-                        let d = p[k] - q[(k + s) % n];
-                        d.dot(d)
-                    })
-                    .sum()
-            };
-            cost(s).total_cmp(&cost(r))
-        })
-        .unwrap_or(0)
+        .map(|s| (cost(s), s))
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .map_or(0, |(_, s)| s)
 }
 
 #[cfg(test)]

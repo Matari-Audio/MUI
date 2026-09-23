@@ -290,6 +290,16 @@ pub struct Element {
     /// Only meaningful on a node with an id: the runtime has nothing to
     /// compare an anonymous node against. See [`Styled::transition`].
     pub transition: Option<Spring>,
+    /// The spring this node's solved *frame* chases: position and size
+    /// glide instead of jumping when the layout moves it. See
+    /// [`Styled::animate_layout`].
+    pub layout_transition: Option<Spring>,
+    /// Where the node comes in from on its first frame, and fades out to
+    /// after it leaves the tree. See [`Styled::appear`].
+    pub appear: Option<Appear>,
+    /// Shape identity: when it changes, the outline morphs from the old
+    /// shape to the new one. See [`Styled::morph`].
+    pub morph: Option<u64>,
     /// Set on a child pushed by [`Sugar::cut`](crate::Sugar::cut) or
     /// [`Sugar::keep`](crate::Sugar::keep): the child shapes its parent's
     /// outline instead of painting itself.
@@ -309,6 +319,17 @@ pub struct Element {
     pub inside: Option<Spacing>,
     pub bend: f64,
     pub border_align: crate::BorderAlign,
+}
+
+/// How a node enters: it always fades in from transparent, and starts from
+/// here. On leaving it fades out where it last stood.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Appear {
+    Fade,
+    /// From this fraction of its size, about its centre.
+    Scale(f64),
+    /// From this far away, in logical units.
+    Slide(f64, f64),
 }
 
 /// A styled layout node: the type every constructor here returns.
@@ -905,6 +926,70 @@ pub trait Styled: Paints {
     /// [`Styled::transition`] with the default spring.
     fn animate(self) -> Self {
         self.transition(Spring::DEFAULT)
+    }
+    /// Spring the node's solved frame -- where layout put it and how big --
+    /// instead of cutting when the layout changes: a panel opening, a toggle
+    /// knob changing sides, a rack slot reordered. The solve itself is
+    /// untouched; only the frame this node is painted, clipped and hit at
+    /// chases it, so nothing fights the layout.
+    ///
+    /// Children ride along: a child that animates too springs relative to
+    /// this node, one that does not simply moves with it. The node's own
+    /// shape is rebuilt at the in-between frame, so a rounded panel grows as
+    /// a rounded panel rather than a stretched bitmap. Key by id (or tree
+    /// path): renaming the node restarts it.
+    ///
+    /// ```
+    /// use mui_scene::prelude::*;
+    /// let knob = leaf(16., 16.).pill().animate_layout();
+    /// assert!(knob.payload().layout_transition.is_some());
+    /// ```
+    fn animate_layout(self) -> Self {
+        self.layout_transition(Spring::DEFAULT)
+    }
+    /// [`Styled::animate_layout`] with your own spring.
+    fn layout_transition(mut self, s: Spring) -> Self {
+        self.element_mut().layout_transition = Some(s);
+        self
+    }
+    /// Come in from `from` and fade in on the first frame the node exists;
+    /// fade out where it stood on the frame it is gone. Implies
+    /// [`Styled::animate`] and [`Styled::animate_layout`] with the default
+    /// spring for whichever it has not set.
+    ///
+    /// The exit needs an id: the runtime keeps the node's last paint under
+    /// that name for as long as it takes to fade.
+    ///
+    /// ```
+    /// use mui_scene::prelude::*;
+    /// let toast = text("Saved").appear(Appear::Slide(0., 12.)).id("toast");
+    /// assert!(toast.payload().transition.is_some());
+    /// ```
+    fn appear(mut self, from: Appear) -> Self {
+        let e = self.element_mut();
+        e.appear = Some(from);
+        e.transition.get_or_insert(Spring::DEFAULT);
+        e.layout_transition.get_or_insert(Spring::DEFAULT);
+        self
+    }
+    /// Name this node's shape. When the name changes -- a play glyph becomes
+    /// a pause, a pill becomes a circle, a tab becomes a panel -- the outline
+    /// morphs from the old shape into the new one over the node's
+    /// transition spring ([`Spring::DEFAULT`] without one) instead of
+    /// cutting. The same name frame to frame follows the node's shape
+    /// directly, so springs on its radius or frame are left alone.
+    ///
+    /// ```
+    /// use mui_scene::prelude::*;
+    /// let playing = true;
+    /// let icon = leaf(24., 24.).morph(if playing { "pause" } else { "play" }).id("transport");
+    /// assert!(icon.payload().morph.is_some());
+    /// ```
+    fn morph(mut self, shape: impl std::hash::Hash) -> Self {
+        use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher};
+        self.element_mut().morph =
+            Some(BuildHasherDefault::<DefaultHasher>::default().hash_one(shape));
+        self
     }
 }
 impl Paints for El {

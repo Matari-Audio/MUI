@@ -12,10 +12,13 @@ use mui_input::{
 };
 use mui_layout::SpacingToken::{Xs, S};
 use mui_scene::prelude::{overlay, text, Paints as _, Role};
+use mui_scene::Keys;
 use mui_scene::{
-    Area, Color, Cursor, El, Element, Fill, Font, Kind, Paint, Palette, Pin, Radius, ResolvedScene,
-    SceneError, SceneSpec, Size, Spacing, Spring, State, TextCache, Theme,
+    Appear, Area, Color, Cursor, El, Element, Fill, Font, Kind, Layer, Mix, Paint, Painted,
+    Palette, Pin, Radius, ResolvedScene, SceneError, SceneSpec, Size, Spacing, Spring, State,
+    TextCache, Theme,
 };
+use std::sync::Arc;
 
 #[cfg(test)]
 #[path = "audit_tests.rs"]
@@ -82,11 +85,27 @@ pub struct Ui {
     scene: Option<ResolvedScene>,
     /// Per key: hover and press springs, 0..1.
     springs: BTreeMap<String, [Spring; 2]>,
-    /// Transition springs per node key, one per paint channel, flagged when
-    /// the current frame visits them; the rest are dropped at its end.
-    motion: BTreeMap<String, (bool, Vec<Option<Spring>>)>,
+    /// Transition springs per node key, one per paint channel under its
+    /// stable id (see [`channels`]), flagged when the current frame visits
+    /// them; the rest are dropped at its end.
+    motion: BTreeMap<String, Channels>,
+    /// [`Styled::animate_layout`](mui_scene::Styled::animate_layout)
+    /// springs per node key: x, y, width, height, relative to the nearest
+    /// animating ancestor.
+    glides: BTreeMap<String, (bool, [Spring; 4])>,
+    /// Keys that declared [`Appear`] this frame and last, with the spring
+    /// they fade by: a key in `last` and gone from the tree leaves a ghost.
+    appearing: BTreeMap<String, Spring>,
+    /// Nodes that left the tree, still fading out where they stood.
+    ghosts: Vec<Ghost>,
+    /// [`Styled::morph`](mui_scene::Styled::morph) state per node key.
+    morphs: BTreeMap<String, Morph>,
     /// [`Ui::tween`] springs per id, flagged when the builder reads them.
     tweens: BTreeMap<String, (bool, Spring)>,
+    /// [`Ui::play`] start times per id, flagged when the builder reads them.
+    plays: BTreeMap<String, (bool, f64)>,
+    /// The runtime clock at which the last playing key lands.
+    play_until: f64,
     text_cache: TextCache,
     weld_cache: mui_scene::WeldCache,
     /// Per scroll node: how far its children are slid.
@@ -169,7 +188,13 @@ impl Ui {
             scene: None,
             springs: BTreeMap::new(),
             motion: BTreeMap::new(),
+            glides: BTreeMap::new(),
+            appearing: BTreeMap::new(),
+            ghosts: Vec::new(),
+            morphs: BTreeMap::new(),
             tweens: BTreeMap::new(),
+            plays: BTreeMap::new(),
+            play_until: 0.0,
             text_cache: TextCache::default(),
             weld_cache: mui_scene::WeldCache::default(),
             scrolls: BTreeMap::new(),
@@ -338,6 +363,32 @@ impl Ui {
         *seen = true;
         s.to(target);
         s.value
+    }
+    /// `keys` played on the runtime's clock from the first frame `id` is
+    /// read: an entrance, an onboarding reveal, a pulse on a beat. The frame
+    /// keeps reporting `animating` until the last key lands. Stop reading
+    /// `id` for a frame and it starts over the next time it is read; see
+    /// also [`Ui::replay`].
+    ///
+    /// ```
+    /// use mui::prelude::*;
+    /// let mut ui = Ui::new(Theme::DEFAULT);
+    /// let intro = Keys::new(0.).to(0.5, 1., Ease::OUT);
+    /// assert_eq!(ui.play("intro", &intro), 0.);
+    /// ```
+    pub fn play(&mut self, id: &str, keys: &Keys) -> f64 {
+        let now = self.time;
+        let (seen, start) = slot(&mut self.plays, id, || (false, now));
+        *seen = true;
+        let end = *start + keys.end();
+        if now < end {
+            self.play_until = self.play_until.max(end);
+        }
+        keys.at(now - *start)
+    }
+    /// Start `id`'s [`Ui::play`] over from its first key on the next frame.
+    pub fn replay(&mut self, id: &str) {
+        self.plays.remove(id);
     }
     /// Last frame's gesture on `id`. Widgets read this while building the
     /// next tree, so a drag lands one frame late and nobody notices.
@@ -850,7 +901,9 @@ impl Ui {
         self.time += dt;
         // A release is read by the *next* tree, so that frame must come even
         // when nothing is moving.
-        let mut animating = self.reconcile();
+        // A key still to land wants the frame that shows it; the clock that
+        // decides is the one this frame advances to.
+        let mut animating = self.reconcile() | (self.time < self.play_until);
         animating |= self.hover_springs(&root, dt);
         self.intake_focus(was, keys, text, ime);
         let hovered = self.interaction.hovered().map(str::to_owned);
@@ -858,7 +911,10 @@ impl Ui {
         animating |= tip_pending;
         let mut root = self.wrap_tip(root, tip.as_ref());
         animating |= self.sweep(&mut root, dt);
-        let scene = self.resolve(root, offered)?;
+        let shaped = shapes(&root);
+        let (mut scene, glided) = self.resolve(root, offered, dt)?;
+        animating |= glided;
+        animating |= self.after_motion(&mut scene, shaped, dt);
         animating |= self.settle(&scene, wheel);
         Ok(self.commit(scene, hovered, tip, previous_blink, animating))
     }
@@ -1136,6 +1192,8 @@ impl Ui {
             self.wrapped = tip.is_some();
             rekey(&mut self.scrolls, self.wrapped);
             rekey(&mut self.motion, self.wrapped);
+            rekey(&mut self.glides, self.wrapped);
+            rekey(&mut self.morphs, self.wrapped);
             rekey(&mut self.springs, self.wrapped);
             self.focus = self.focus.take().and_then(|k| shift(k, self.wrapped));
         }
@@ -1185,15 +1243,40 @@ impl Ui {
 
     /// Resolve the styled tree, and rebuild the hit map when the hit
     /// geometry changed.
-    fn resolve(&mut self, root: El, offered: Option<Size>) -> Result<ResolvedScene, SceneError> {
+    fn resolve(
+        &mut self,
+        root: El,
+        offered: Option<Size>,
+        dt: f64,
+    ) -> Result<(ResolvedScene, bool), SceneError> {
         let mut spec = SceneSpec::new(root).theme(self.theme);
         spec.offered = offered;
         spec.font = self.font.clone();
         spec.fallback_fonts = self.fallback_fonts.clone();
         spec.device_scale = self.scale;
         spec.weld_backend = self.weld_backend;
-        let scene =
-            mui_scene::resolve_scene_cached(&spec, &mut self.text_cache, &mut self.weld_cache)?;
+        let mut glided = false;
+        let glides = &mut self.glides;
+        let scene = mui_scene::resolve_scene_animated(
+            &spec,
+            &mut self.text_cache,
+            &mut self.weld_cache,
+            &mut |key, e, target| {
+                let spring = e.layout_transition.unwrap_or(Spring::DEFAULT);
+                let t = [target.x, target.y, target.size.width, target.size.height];
+                let (seen, s) = slot(glides, key, || (false, enter(spring, t, e.appear)));
+                *seen = true;
+                for (s, t) in s.iter_mut().zip(t) {
+                    s.to(t);
+                    glided |= s.step(dt);
+                }
+                mui_scene::Frame {
+                    x: s[0].value,
+                    y: s[1].value,
+                    size: Size::new(s[2].value, s[3].value),
+                }
+            },
+        )?;
         if self
             .scene
             .as_ref()
@@ -1231,7 +1314,122 @@ impl Ui {
             }
             self.hit = hit;
         }
-        Ok(scene)
+        Ok((scene, glided))
+    }
+
+    /// What motion does to a resolved scene: shapes that changed name morph,
+    /// and nodes that appeared last frame and are gone now fade out where
+    /// they stood. Returns whether either is still moving.
+    fn after_motion(&mut self, scene: &mut ResolvedScene, shaped: Shapes, dt: f64) -> bool {
+        let mut animating = false;
+        for (key, shape, spring) in shaped.morphs {
+            let Some(surface) = scene.surface(&key) else {
+                continue;
+            };
+            let (origin, target) = (surface.frame, surface.path.clone());
+            let local = |p: &mui_geometry::Path, sign: f64| {
+                p.rigid_transform(Point::new(sign * origin.x, sign * origin.y), 0.)
+                    .ok()
+            };
+            let Some(target_local) = local(&target, -1.) else {
+                continue;
+            };
+            let m = slot(&mut self.morphs, &key, || Morph {
+                seen: false,
+                shape,
+                from: None,
+                shown: target_local.clone(),
+                t: spring.seeded(1.),
+            });
+            m.seen = true;
+            if m.shape != shape {
+                m.shape = shape;
+                m.from = Some(std::mem::take(&mut m.shown));
+                m.t = spring.seeded(0.);
+                m.t.to(1.);
+            }
+            let Some(from) = &m.from else {
+                m.shown = target_local;
+                continue;
+            };
+            let moving = m.t.step(dt);
+            animating |= moving;
+            m.shown = match mui_geometry::morph(from, &target_local, m.t.value) {
+                Ok(p) if moving => p,
+                _ => {
+                    m.from = None;
+                    target_local
+                }
+            };
+            if m.from.is_none() {
+                continue;
+            }
+            let Some(world) = local(&m.shown, 1.).map(Arc::new) else {
+                continue;
+            };
+            // ponytail: the hit shape and any analytic shadow stay the target's
+            // for the few frames a morph lasts; shells, being offsets of the
+            // outline, snap. Offset them per frame if a morph ever lingers.
+            for p in &mut scene.paint {
+                if *p.key == *key
+                    && Arc::ptr_eq(&p.path, &target)
+                    && matches!(
+                        p.layer,
+                        Layer::Fill | Layer::Stroke | Layer::Clip | Layer::Mask
+                    )
+                {
+                    p.path = world.clone();
+                    p.rect = None;
+                }
+            }
+        }
+        self.morphs.retain(|_, m| std::mem::take(&mut m.seen));
+
+        // Gone this frame: last frame's paint of every appearing node that
+        // left, kept to fade. One that came back is simply there again.
+        if let Some(last) = &self.scene {
+            for (key, spring) in &self.appearing {
+                if scene.surface(key).is_some() || !named(key) {
+                    continue;
+                }
+                if let Ok(only) = last.isolate(&[key.as_str()]) {
+                    self.ghosts.push(Ghost {
+                        key: key.clone(),
+                        paint: only.paint,
+                        fade: spring.seeded(1.),
+                    });
+                }
+            }
+        }
+        self.appearing = shaped.appearing;
+        self.ghosts.retain(|g| scene.surface(&g.key).is_none());
+        for g in &mut self.ghosts {
+            g.fade.to(0.);
+            animating |= g.fade.step(dt);
+        }
+        self.ghosts.retain(|g| g.fade.value > 1e-3);
+        // ponytail: ghosts paint on top of everything rather than at their
+        // old depth; interleave them into the paint list if a fade ever
+        // visibly crosses a neighbour.
+        for g in &self.ghosts {
+            let group = |layer| Painted {
+                key: g.key.as_str().into(),
+                layer,
+                path: Arc::default(),
+                paint: Paint::Solid(Color::oklcha(0., 0., 0., 0.)),
+                rect: None,
+                width: 0.,
+                blur: 0.,
+                text: None,
+            };
+            scene.paint.push(group(Layer::Blend {
+                mix: Mix::Normal,
+                opacity: g.fade.value.clamp(0., 1.) as f32,
+            }));
+            scene.paint.extend(g.paint.iter().cloned());
+            scene.paint.push(group(Layer::Unblend));
+        }
+        animating
     }
 
     /// What the new scene says about the retained state: a capture or focus
@@ -1306,7 +1504,9 @@ impl Ui {
             Some((t, Point::new(f.x, f.y)))
         });
         self.motion.retain(|_, (seen, _)| std::mem::take(seen));
+        self.glides.retain(|_, (seen, _)| std::mem::take(seen));
         self.tweens.retain(|_, (seen, _)| std::mem::take(seen));
+        self.plays.retain(|_, (seen, _)| std::mem::take(seen));
         self.delivered = std::mem::take(&mut self.edits);
         self.scene = Some(scene);
         let repaint_after = self.repaint_after();
@@ -1383,46 +1583,103 @@ impl Ui {
     }
 }
 
-/// Every numeric paint channel of `e`, in a fixed order, replaced by
-/// `ch(index, declared)`. Shape padding/bend and border widths share this clock.
-fn channels(e: &mut Element, pal: &Palette, ch: &mut impl FnMut(usize, f64) -> f64) {
-    if let Some(Paint::Solid(c)) = e.style.fill.paint(pal, pal.background()) {
+/// Channel ids. Fixed per field, never by position in a list, so a node
+/// gaining a shadow does not hand its shells' springs to another channel.
+const FILL: u32 = 0;
+const STROKE_WIDTH: u32 = 4;
+const RADIUS: u32 = 5;
+const TEXT_SIZE: u32 = 6;
+const OPACITY: u32 = 7;
+const INSIDE: u32 = 8;
+const BEND: u32 = 9;
+const RAMP: u32 = 10;
+const STROKE: u32 = 12;
+/// Per-item blocks: gradient stop `i` at `STOPS + 8 i` (offset, then
+/// colour), shadow `i` at `SHADOWS + 8 i` (blur, dx, dy, spread, colour),
+/// shell `i` at `SHELLS + 8 i` (depth, colour).
+const STOPS: u32 = 0x100;
+const SHADOWS: u32 = 0x1000;
+const SHELLS: u32 = 0x2000;
+
+/// Every numeric paint channel of `e`, each under its stable id, replaced by
+/// `ch(id, declared, is_angle)`. Shape padding/bend and border widths share
+/// this clock. Colours spring in Oklch, one channel per component.
+fn channels(e: &mut Element, pal: &Palette, ch: &mut impl FnMut(u32, f64, bool) -> f64) {
+    let under = pal.background();
+    fn color(c: Color, base: u32, ch: &mut impl FnMut(u32, f64, bool) -> f64) -> Color {
         let v = [c.lightness(), c.chroma(), c.hue(), c.alpha()];
-        let o = std::array::from_fn::<f32, 4, _>(|i| ch(i, f64::from(v[i])) as f32);
-        e.style.fill = Fill::Color(Color::oklcha(o[0], o[1], o[2], o[3]));
+        let o: [f32; 4] =
+            std::array::from_fn(|i| ch(base + i as u32, f64::from(v[i]), i == 2) as f32);
+        Color::oklcha(o[0].clamp(0., 1.), o[1].max(0.), o[2], o[3].clamp(0., 1.))
     }
-    if let Some(w) = e.style.stroke.as_mut().and_then(|s| s.width.as_mut()) {
-        *w = ch(4, *w).max(0.0);
-    }
-    if let Radius::Px(r) = &mut e.style.radius {
-        *r = ch(5, *r).max(0.0);
-    }
-    if let Some(t) = e.text_size.as_mut() {
-        *t = ch(6, *t).max(0.0);
-    }
-    for (i, s) in e.style.shadow.iter_mut().enumerate() {
-        s.blur = ch(7 + i, s.blur).max(0.0);
-    }
-    // After the shadows, so a two-shadow node's shells keep their own slots.
-    let shells = 7 + e.style.shadow.len();
-    for (i, (d, _)) in e.style.shells.iter_mut().enumerate() {
-        if let Spacing::Px(v) = d {
-            *v = ch(shells + i, *v).max(0.0);
+    match &mut e.style.fill {
+        Fill::Gradient(g) => {
+            for (i, (at, f)) in g.stops.iter_mut().enumerate() {
+                let base = STOPS + 8 * i as u32;
+                if let Some(Paint::Solid(c)) = f.paint(pal, under) {
+                    *f = Fill::Color(color(c, base + 1, ch));
+                }
+                *at = (ch(base, f64::from(*at), false) as f32).clamp(0., 1.);
+            }
+        }
+        fill => {
+            if let Some(Paint::Solid(c)) = fill.paint(pal, under) {
+                *fill = Fill::Color(color(c, FILL, ch));
+            }
         }
     }
-    let shape = shells + e.style.shells.len();
+    if let Some(s) = e.style.stroke.as_mut() {
+        if let Some(Paint::Solid(c)) = s.fill.paint(pal, under) {
+            s.fill = Fill::Color(color(c, STROKE, ch));
+        }
+        if let Some(w) = s.width.as_mut() {
+            *w = ch(STROKE_WIDTH, *w, false).max(0.0);
+        }
+    }
+    for (i, s) in e.style.shadow.iter_mut().enumerate() {
+        let base = SHADOWS + 8 * i as u32;
+        s.blur = ch(base, s.blur, false).max(0.0);
+        s.dx = ch(base + 1, s.dx, false);
+        s.dy = ch(base + 2, s.dy, false);
+        s.spread = ch(base + 3, s.spread, false);
+        if let Some(Paint::Solid(c)) = s.fill.paint(pal, under) {
+            s.fill = Fill::Color(color(c, base + 4, ch));
+        }
+    }
+    for (i, (d, f)) in e.style.shells.iter_mut().enumerate() {
+        let base = SHELLS + 8 * i as u32;
+        if let Spacing::Px(v) = d {
+            *v = ch(base, *v, false).max(0.0);
+        }
+        if let Some(Paint::Solid(c)) = f.paint(pal, under) {
+            *f = Fill::Color(color(c, base + 1, ch));
+        }
+    }
+    if let Radius::Px(r) = &mut e.style.radius {
+        *r = ch(RADIUS, *r, false).max(0.0);
+    }
+    if let Some(t) = e.text_size.as_mut() {
+        *t = ch(TEXT_SIZE, *t, false).max(0.0);
+    }
+    // Always a channel, so a node that never declared an opacity can still
+    // fade in; the layer is only added while it is actually translucent.
+    let (mix, o) = e.style.layer.unwrap_or((Mix::Normal, 1.0));
+    let o = ch(OPACITY, f64::from(o), false).clamp(0., 1.) as f32;
+    if e.style.layer.is_some() || o < 0.999 {
+        e.style.layer = Some((mix, o));
+    }
     if let Some(Spacing::Px(pad)) = &mut e.inside {
         if pad.is_finite() && *pad >= 0. {
-            *pad = ch(shape, *pad).max(0.);
+            *pad = ch(INSIDE, *pad, false).max(0.);
         }
     }
     if e.bend.is_finite() && e.bend.abs() <= 0.45 {
-        e.bend = ch(shape + 1, e.bend).clamp(-0.45, 0.45);
+        e.bend = ch(BEND, e.bend, false).clamp(-0.45, 0.45);
     }
     if let Some(ramp) = &mut e.border_ramp {
         for (i, width) in [&mut ramp.from.1, &mut ramp.to.1].into_iter().enumerate() {
             if width.is_finite() && *width >= 0. {
-                *width = ch(shape + 2 + i, *width).max(0.);
+                *width = ch(RAMP + i as u32, *width, false).max(0.);
             }
         }
     }
@@ -1435,31 +1692,47 @@ fn transitions(
     n: &mut El,
     path: &mut String,
     pal: &Palette,
-    motion: &mut BTreeMap<String, (bool, Vec<Option<Spring>>)>,
+    motion: &mut BTreeMap<String, Channels>,
     dt: f64,
 ) -> bool {
     let mut animating = false;
     if let Some(spring) = n.payload().transition {
-        let (seen, list) = slot(motion, n.key().unwrap_or(path), || (false, Vec::new()));
+        let mut fresh = false;
+        let (seen, list) = slot(motion, n.key().unwrap_or(path), || {
+            fresh = true;
+            (false, Vec::new())
+        });
         *seen = true;
+        // An appearing node's very first frame starts from transparent.
+        let from_clear = fresh && n.payload().appear.is_some();
         let coupled_gap = n.payload().inside.is_some_and(|p| p == *n.gap_mut());
-        channels(n.payload_mut(), pal, &mut |i, declared| {
-            // Each slot is seeded from its own declared value the first time
-            // it is touched: `channels` skips channels a node has no paint
-            // for, so a blanket resize would seed them from another channel.
-            if list.len() <= i {
-                list.resize(i + 1, None);
-            }
-            let s = list[i].get_or_insert_with(|| spring.seeded(declared));
+        channels(n.payload_mut(), pal, &mut |id, declared, angle| {
+            let i = match list.iter().position(|(k, _)| *k == id) {
+                Some(i) => i,
+                None => {
+                    let seed = if from_clear && id == OPACITY {
+                        0.
+                    } else {
+                        declared
+                    };
+                    list.push((id, spring.seeded(seed)));
+                    list.len() - 1
+                }
+            };
+            let s = &mut list[i].1;
             // Hue is an angle: take the short way round rather than
             // sweeping 350 degrees back to 10.
-            if i == 2 {
+            if angle {
                 s.value += ((declared - s.value) / 360.0).round() * 360.0;
             }
             s.to(declared);
             animating |= s.step(dt);
             s.value
         });
+        // A channel the node stopped declaring (a shadow removed, a stop
+        // dropped) has no target any more: forget it.
+        // ponytail: `channels` would need to report the ids it visited to
+        // prune these per frame; they are dropped with the node instead.
         if coupled_gap {
             *n.gap_mut() = n.payload().inside.expect("coupled inside");
         }
@@ -1468,6 +1741,72 @@ fn transitions(
         animating |= transitions(c, path, pal, motion, dt)
     });
     animating
+}
+
+/// Where an [`Appear`]ing node's frame springs start on its first frame, as
+/// `[x, y, w, h]`; anything else starts where layout put it.
+fn enter(spring: Spring, t: [f64; 4], appear: Option<Appear>) -> [Spring; 4] {
+    let [x, y, w, h] = t;
+    let from = match appear {
+        Some(Appear::Scale(f)) if f.is_finite() => {
+            let f = f.max(0.);
+            [x + w * (1. - f) / 2., y + h * (1. - f) / 2., w * f, h * f]
+        }
+        Some(Appear::Slide(dx, dy)) if dx.is_finite() && dy.is_finite() => [x + dx, y + dy, w, h],
+        _ => t,
+    };
+    from.map(|v| spring.seeded(v))
+}
+
+/// One node's paint springs, by channel id, and whether this frame saw it.
+type Channels = (bool, Vec<(u32, Spring)>);
+
+/// A node that left the tree: the paint it last had, fading.
+struct Ghost {
+    key: String,
+    paint: Vec<Painted>,
+    fade: Spring,
+}
+
+/// A [`Styled::morph`](mui_scene::Styled::morph) node: the shape name it
+/// last had, the outline it is morphing from (node-local), what it showed
+/// last frame, and the spring running `0..1` between.
+struct Morph {
+    seen: bool,
+    shape: u64,
+    from: Option<mui_geometry::Path>,
+    shown: mui_geometry::Path,
+    t: Spring,
+}
+
+/// What this frame's tree asks of motion beyond its paint: every appearing
+/// key with its spring, and every morphing node.
+#[derive(Default)]
+struct Shapes {
+    appearing: BTreeMap<String, Spring>,
+    morphs: Vec<(String, u64, Spring)>,
+}
+fn shapes(root: &El) -> Shapes {
+    fn visit(n: &El, path: &mut String, out: &mut Shapes) {
+        let e = n.payload();
+        let key = || n.key().unwrap_or(path).to_owned();
+        let spring = e.transition.unwrap_or(Spring::DEFAULT);
+        if e.appear.is_some() {
+            out.appearing.insert(key(), spring);
+        }
+        if let Some(shape) = e.morph {
+            out.morphs.push((key(), shape, spring));
+        }
+        let mark = path.len();
+        for (j, c) in n.children().iter().enumerate() {
+            let _ = write!(path, "/{j}");
+            visit(c, path, out);
+            path.truncate(mark);
+        }
+    }
+    let mut out = Shapes::default();
+    visit(root, &mut String::new(), &mut out);
+    out
 }
 
 /// Visit `n`'s children with `path` extended to each one's tree path, the
