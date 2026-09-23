@@ -204,7 +204,23 @@ impl<V: View> Handler<V> {
         if bits != 0 {
             window.set_scale_factor(f64::from_bits(bits));
         }
+        // A hidden or detached editor cannot present, and on Windows this is
+        // the host's GUI thread: a blocking present there freezes the host.
+        let handle = window.raw_window_handle();
+        if truce_gui::platform::should_skip_frame(handle) {
+            return;
+        }
+        // macOS: keep the child pinned to the parent's top as it resizes.
+        truce_gui::platform::reanchor_to_superview_top(handle);
         let now = Instant::now();
+        // Lost between presents: an idle editor would never find out.
+        if self
+            .gpu
+            .as_ref()
+            .is_some_and(|gpu| gpu.lost.load(Ordering::Acquire))
+        {
+            self.gpu = None;
+        }
         if self.gpu.is_none() && target_size(self.size).is_some() && now >= self.gpu_retry_at {
             match Gpu::new(window, self.size) {
                 Ok(gpu) => {
@@ -228,6 +244,9 @@ impl<V: View> Handler<V> {
                     Present::Rebuild => {
                         eprintln!("mui-truce: GPU lost; rebuilding");
                         self.gpu = None;
+                        // A surface that keeps failing must not rebuild a
+                        // device every tick.
+                        self.gpu_retry_at = now + GPU_RETRY;
                     }
                 }
             }
@@ -276,6 +295,7 @@ impl<V: View> Handler<V> {
             return false;
         }
         let mut timed = false;
+        let mut laid_out = true;
         while let Some(event) = self.pending.pop_front() {
             let last = self.pending.is_empty();
             let input = match event {
@@ -287,15 +307,17 @@ impl<V: View> Handler<V> {
             };
             // Only the last event of the tick carries the elapsed time.
             let event_dt = if last { dt } else { 0.0 };
-            if self.resolve(s, input.clone(), event_dt, now).is_err() {
-                // A refused layout must not consume an edge: retry it and
-                // everything after it on the next tick.
-                self.pending.push_front(Pending::Input(input));
-                return false;
-            }
+            // A refused layout has still taken the event's pointer edge,
+            // focus change and keys, and queued its gesture edges for the
+            // next frame that resolves: replaying it would press or type
+            // twice. Only its wheel is lost.
+            laid_out = self.resolve(s, input, event_dt, now).is_ok();
             timed |= last;
         }
-        if !timed && self.resolve(s, Input::from(self.pointer), dt, now).is_err() {
+        if !timed {
+            laid_out = self.resolve(s, Input::from(self.pointer), dt, now).is_ok();
+        }
+        if !laid_out {
             return false;
         }
         self.dirty = false;
@@ -387,6 +409,14 @@ impl<V: View> Handler<V> {
                 }
                 input.pointer = self.pointer;
                 self.pending.push_back(Pending::Input(input));
+                // A key nothing here has focus for goes back to the host too,
+                // so Space still starts its transport.
+                // ponytail: a global shortcut read from `Ui::shortcuts` also
+                // reaches the host; claiming it needs the tree to say which
+                // keys it used.
+                if lock(&self.shared).ui.focus_key().is_none() {
+                    return EventStatus::Ignored;
+                }
             }
             Event::Window(WindowEvent::Resized(info)) => {
                 let physical = info.physical_size();

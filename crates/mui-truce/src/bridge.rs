@@ -21,6 +21,9 @@ pub struct Bridge<P: ?Sized = dyn Params> {
     /// host echo cannot jitter a drag, and an incremental drag across a
     /// discrete parameter accumulates between the steps it sends.
     open: Vec<(u32, f64, f64)>,
+    /// The ids `bind` saw this build: an open gesture not among them lost
+    /// its widget, and nothing else would ever end it.
+    bound: Vec<u32>,
     /// Every parameter and meter as last seen, bit for bit: `changed`
     /// compares against it without hashing or allocating.
     seen: Box<[u64]>,
@@ -38,6 +41,7 @@ impl<P: Params + ?Sized> Bridge<P> {
             infos,
             meters,
             open: Vec::new(),
+            bound: Vec::new(),
             seen,
         }
     }
@@ -155,7 +159,8 @@ impl<P: Params + ?Sized> Bridge<P> {
     /// a key step, an accessibility action -- is wrapped in its own
     /// begin/set/end, and the atomic `Begin`/`End` pair `Ui` reports for it
     /// a frame later is dropped. Read-only and unknown parameters draw but
-    /// never reach the host.
+    /// never reach the host. A gesture whose parameter no `bind` of a build
+    /// names -- its control dropped out of the tree -- ends with that build.
     pub fn bind(
         &mut self,
         ui: &mut Ui,
@@ -164,6 +169,7 @@ impl<P: Params + ?Sized> Bridge<P> {
         control: impl FnOnce(&mut Ui, &mut f64) -> El,
     ) -> El {
         let id = param.into();
+        self.bound.push(id);
         let before = self.value(id);
         let mut value = before;
         let Some(range) = self
@@ -213,6 +219,15 @@ impl<P: Params + ?Sized> Bridge<P> {
             self.end(id);
         }
         el
+    }
+
+    /// After a build: end the gestures no `bind` in it named.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn end_unbound(&mut self) {
+        while let Some(&(id, ..)) = self.open.iter().find(|(id, ..)| !self.bound.contains(id)) {
+            self.end(id);
+        }
+        self.bound.clear();
     }
 
     fn is_open(&self, id: u32) -> bool {

@@ -20,7 +20,9 @@ pub(crate) struct Session<P: Params> {
 
 impl<P: Params> View for Session<P> {
     fn build(&mut self, ui: &mut Ui) -> El {
-        (self.build)(ui, &mut self.bridge)
+        let root = (self.build)(ui, &mut self.bridge);
+        self.bridge.end_unbound();
+        root
     }
     fn changed(&mut self) -> bool {
         self.bridge.changed()
