@@ -289,6 +289,23 @@ mod tests {
         assert!(!damage.full);
         assert_eq!(damage.dirty, vec![2]);
     }
+    /// `commit` copies only what changed, so it must still leave the tracker
+    /// equal to the scene: growing, shrinking and recolouring alike.
+    #[test]
+    fn an_incremental_commit_matches_the_scene() {
+        let before = scene(Primary, 0.);
+        let mut after = scene(Ink, 0.);
+        let mut extra = after.paint[0].clone();
+        extra.key = "added".into();
+        after.paint.push(extra);
+        let t = tiles([512, 512], 128);
+        let mut c = DamageTracker::default();
+        for s in [&before, &after, &before] {
+            c.commit(s, Affine::IDENTITY);
+            assert_eq!(c.paint, s.paint);
+            assert!(plan(&c, s, Affine::IDENTITY, &t).dirty.is_empty());
+        }
+    }
     #[test]
     fn resize_grid_covers_the_target_without_overlap() {
         let t = tiles([777, 333], 256);
