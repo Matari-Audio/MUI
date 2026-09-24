@@ -122,6 +122,9 @@ pub struct Ui {
     last_press: Option<(String, f64)>,
     /// This frame's wheel, for [`Response::wheel`].
     wheel: Point,
+    /// Where a button went down this frame, on a target or on nothing, for
+    /// [`Ui::clicked_outside`].
+    press_at: Option<Point>,
     focus: Option<String>,
     /// Gesture edges waiting for a frame that resolves. A frame that errors
     /// leaves them queued rather than dropping a host's `End`.
@@ -189,6 +192,7 @@ impl Ui {
             double: None,
             double_click: DOUBLE_CLICK,
             wheel: Point::ZERO,
+            press_at: None,
             last_press: None,
             focus: None,
             edits: Vec::new(),
@@ -697,6 +701,55 @@ impl Ui {
     pub fn min_size(&self) -> Option<Size> {
         Some(self.scene.as_ref()?.layout.min_size())
     }
+    /// A button went down this frame outside every one of `ids`: the signal a
+    /// popup or menu closes on. Pass the popup and whatever opened it, so
+    /// the press that reopens it from its own button does not also close it.
+    ///
+    /// Outside means outside each id's frame and not on a target nested
+    /// under it, so a submenu floated past its parent's edge is still in.
+    /// An id not in the last scene is skipped: the press that opened a
+    /// popup came before the popup existed, and does not dismiss it.
+    ///
+    /// ```
+    /// # use mui::Ui; use mui::prelude::*;
+    /// # let ui = Ui::new(Theme::DEFAULT);
+    /// let mut open = true;
+    /// if ui.dismissed(&["menu", "menu-button"]) {
+    ///     open = false;
+    /// }
+    /// # assert!(open, "nothing was pressed");
+    /// ```
+    pub fn clicked_outside(&self, ids: &[&str]) -> bool {
+        let (Some(p), Some(scene)) = (self.press_at, self.scene.as_ref()) else {
+            return false;
+        };
+        let pressed = self.interaction.pressed();
+        let mut any = false;
+        for id in ids {
+            let Some(s) = scene.surface(id) else {
+                continue;
+            };
+            any = true;
+            let f = s.frame;
+            if p.x >= f.x && p.x <= f.right() && p.y >= f.y && p.y <= f.bottom() {
+                return false;
+            }
+            // A press on a descendant: walk its named ancestors up to `id`.
+            let mut at = pressed.and_then(|k| scene.surface(k));
+            while let Some(t) = at {
+                if &*t.key == *id {
+                    return false;
+                }
+                at = t.parent.as_deref().and_then(|k| scene.surface(k));
+            }
+        }
+        any
+    }
+    /// [`Ui::clicked_outside`], or Escape pressed this frame whatever holds
+    /// the focus: everything that closes a popup, in one question.
+    pub fn dismissed(&self, ids: &[&str]) -> bool {
+        self.clicked_outside(ids) || self.keys.iter().any(|k| k.key == Key::Escape)
+    }
     /// How far `id`'s children are scrolled.
     pub fn scroll(&self, id: &str) -> [f64; 2] {
         self.scrolls.get(id).copied().unwrap_or([0.0, 0.0])
@@ -1062,6 +1115,7 @@ impl Ui {
         if went_down && self.interaction.held().is_none() {
             self.focus = None;
         }
+        self.press_at = self.pointer.pos.filter(|_| went_down);
         if let Some(id) = self.interaction.pressed().map(str::to_owned) {
             if let Some((prev, t)) = self.last_press.take() {
                 if prev == id && self.time - t < self.double_click {
