@@ -327,9 +327,10 @@ let (field, edited) = text_input(&mut ui, "name", &mut name);
 
 - crate `mui-widgets` / `mui_widgets::*` -> `mui::widgets::*`
 - `mui_widgets::Host` / `mui::prelude::Host` -> removed; widgets take
-  `&mut mui::Ui`. `Ui::sel`, `set_sel`, `pasted`, `double_click`, `hit`,
-  `caret_x` and `blink` were reachable only through `Host` and are now
-  crate-private.
+  `&mut mui::Ui`. `Ui::sel`, `set_sel`, `pasted`, `hit`, `caret_x` and
+  `blink` were reachable only through `Host` and are now crate-private.
+  `Host::double_click(ui, id)` -> `ui.double_click(id)`, still public: an app
+  control that resets on a double click needs it.
 - `button(&impl Host, id, label) -> (Control, bool)` ->
   `button(&mut Ui, id, label) -> (Control, bool /* clicked */)`
 - `toggle(&impl Host, id, &mut bool) -> Control` ->

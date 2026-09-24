@@ -79,6 +79,7 @@ pub struct TextCache {
     pub(super) outlines: OutlineCache,
     pub(super) borders: crate::border_ramp::BorderCache,
     pub(super) region_cache: crate::regions::RegionCache,
+    pub(super) surface_cache: crate::surfaces::Cache,
 }
 impl TextCache {
     pub fn layout_stats(&self) -> mui_layout::LayoutStats {
