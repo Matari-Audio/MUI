@@ -156,9 +156,10 @@ assert_eq!(scene.surface("tab").unwrap().frame.size.width, 92.0);
 | `.join()` | butt a row's or column's children into one strip: the gap closes, every seam goes square, the container's own corner rounds the two ends |
 | `.shadows([a, b])`, `.elevation(Elevation::Raised)` | replace the list; a contact and an ambient shadow, from the theme's steps |
 | `.shadow(Shadow::inset(4.0))` | cast inward instead, clipped to the outline: a recess, a floor under glass |
+| `.backdrop_blur(8.0)` | before the node paints, blur what is already painted behind it, clipped to its outline: a modal's frosted dim. Both renderers paint the scene under it once more through a real Gaussian; a canvas without filter layers shows the fill alone |
 | `.stroke(Ink.alpha(0.12))` | a role at an alpha: a hairline that still tracks the palette |
 | `.preset(card())`, `.base(panel())` | merge a prepared `Style` over or under this one, field by field: the side that states something wins. Both are moved, not copied |
-| `panel()`, `card()`, `glass()`, `chip("A")`, `tile(el)` | the presets in `mui::presets`: three styles to merge, two elements to finish. `glass()` is a translucent fill, a bright 1 px edge and an inner floor -- there is no backdrop blur and there will not be one |
+| `panel()`, `card()`, `glass()`, `chip("A")`, `tile(el)` | the presets in `mui::presets`: three styles to merge, two elements to finish. `glass()` is a translucent fill, a bright 1 px edge and an inner floor; add `.backdrop_blur(r)` to frost what is under it |
 | `.apply(f)`, `.when(cond, f)` | hand the node to a builder run, conditionally or not |
 | `.on(State::Hover, \|s\| s.stroke(Ink))` | the look for a state, declared beside the resting one; `Hover`, `Press`, `Focus`, `Disabled` |
 | `.disabled(bypassed)` | switch this node and its subtree off: the `State::Disabled` look, out of the hit map, out of Tab, and `disabled` to a screen reader. A gesture in flight on it is cancelled |

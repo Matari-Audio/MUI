@@ -71,6 +71,12 @@ impl<'a> Walk<'a> {
         if let Some((mix, opacity)) = blended {
             self.mark(Layer::Blend { mix, opacity }, empty(), None);
         }
+        if s.backdrop_blur > 0.0 {
+            self.mark(Layer::Backdrop, contour.path.clone(), contour.rect);
+            if let Some(p) = self.paint.last_mut() {
+                p.blur = s.backdrop_blur;
+            }
+        }
         for sh in s.shadow.iter().filter(|sh| sh.kind == ShadowKind::Drop) {
             self.shadow(sh, &contour, under)?;
         }

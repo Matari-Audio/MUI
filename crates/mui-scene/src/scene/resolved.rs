@@ -41,6 +41,11 @@ pub enum Layer {
     Unblend,
     /// External GPU material, sampled in paint order through the effect renderer.
     External,
+    /// Everything painted before this entry, again, blurred by `blur` and
+    /// clipped to `path`; the paint is meaningless. The first entry of a
+    /// node with [`Style::backdrop_blur`](crate::Style::backdrop_blur), inside
+    /// its own blend layer, so a fading modal fades its blur with it.
+    Backdrop,
 }
 
 /// One shaped glyph in a text layer.
@@ -100,7 +105,7 @@ pub struct Painted {
     pub rect: Option<RoundedRect>,
     /// Stroke width; `0` fills.
     pub width: f64,
-    /// Gaussian blur radius, shadows only.
+    /// Gaussian blur radius: a shadow's, or a [`Layer::Backdrop`]'s.
     pub blur: f64,
     /// Present on `Layer::Text` whenever [`SceneSpec::font`](crate::SceneSpec::font) is set: the
     /// layer's ink, as glyphs. `path` is then empty -- a renderer that draws

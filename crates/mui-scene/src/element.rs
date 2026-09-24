@@ -590,6 +590,26 @@ pub trait Paints: Sized {
         self.style_mut().mask = f.into();
         self
     }
+    /// Before this node paints, blur whatever was painted behind it, clipped
+    /// to its outline: the frosted dim under a modal. `radius` is the
+    /// Gaussian's standard deviation in logical pixels, as CSS `blur()`.
+    ///
+    /// The renderer paints everything before this node a second time
+    /// through a blur filter, so it costs about one more paint of the
+    /// scene under it -- once per encode, not per presented frame. A canvas
+    /// without filter layers skips it and shows the node's own fill alone,
+    /// so pair it with a translucent fill that reads on its own.
+    ///
+    /// ```
+    /// use mui_scene::prelude::*;
+    /// let scrim = Color::oklcha(0., 0., 0., 0.6);
+    /// let mut dim = stack![text("Save?")].fill(scrim).backdrop_blur(8.);
+    /// assert_eq!(dim.style_mut().backdrop_blur, 8.);
+    /// ```
+    fn backdrop_blur(mut self, radius: f64) -> Self {
+        self.style_mut().backdrop_blur = radius;
+        self
+    }
     /// Paint the union of the children's outlines as one filleted vector
     /// shape. Only the outline is shared: each child keeps its own paint.
     /// Shells, strokes, shadows, clips and `.inside(..)` follow the union.
