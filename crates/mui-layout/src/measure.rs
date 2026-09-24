@@ -427,6 +427,15 @@ pub(crate) fn measure_uncached<'a, P>(
         let shares: Vec<(usize, f64)> = {
             let flow = flow_of(&children);
             if flow.iter().any(|c| c.fluid) {
+                // A scrolling row deals what arrange will lay it into: its
+                // content where that overflows, so nothing is squeezed to
+                // the viewport and wrapped a letter a line.
+                let avail = if node.scroll {
+                    let bases = flow.iter().map(|c| c.base(false, None)).sum::<f64>();
+                    avail.max(bases + gap * flow.len().saturating_sub(1) as f64)
+                } else {
+                    avail
+                };
                 let inner = Size::new(avail, inner[1].unwrap_or(0.0));
                 let main = distribute(&flow, gap, false, inner);
                 flow.iter().map(|c| c.index).zip(main).collect()
