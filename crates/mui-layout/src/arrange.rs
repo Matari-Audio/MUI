@@ -236,7 +236,7 @@ pub(crate) fn arrange_uncached<P>(
                 .collect();
             let surplus = (inner.height
                 - heights.iter().sum::<f64>()
-                - m.gap * grid.len().saturating_sub(1) as f64)
+                - m.line_gap * grid.len().saturating_sub(1) as f64)
                 .max(0.0)
                 / grid.len().max(1) as f64;
             let mut y = 0.0;
@@ -266,7 +266,7 @@ pub(crate) fn arrange_uncached<P>(
                     ));
                     col += span;
                 }
-                y += h + surplus + m.gap;
+                y += h + surplus + m.line_gap;
             }
         }
         Kind::Branch { vertical, .. } => {
@@ -294,7 +294,7 @@ pub(crate) fn arrange_uncached<P>(
             // so say it does not fit rather than paint over the next widget.
             if lines.len() > 1 {
                 let needed = lines.iter().copied().map(line_cross).sum::<f64>()
-                    + m.gap * (lines.len() - 1) as f64;
+                    + m.line_gap * (lines.len() - 1) as f64;
                 if needed > inner.cross(v) + 1e-8 {
                     return Err(Error::InsufficientSpace {
                         node: label(n, ancestor),
@@ -347,7 +347,7 @@ pub(crate) fn arrange_uncached<P>(
                     placed[c.index] = Some((pos, Size::axes(main, cross, v)));
                     cursor += main + m.gap + extra;
                 }
-                line_start += line_cross + m.gap;
+                line_start += line_cross + m.line_gap;
             }
         }
     }

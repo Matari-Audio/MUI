@@ -32,6 +32,9 @@ pub struct Node<P = ()> {
     pub(crate) kind: Kind<P>,
     pub(crate) payload: P,
     pub(crate) gap: Spacing,
+    /// The gap between wrapped lines and grid rows; `None` is `gap`. See
+    /// [`Node::line_gap`].
+    pub(crate) line_gap: Option<Spacing>,
     /// Pixel insets, unless `pad` names a token for all four sides.
     pub(crate) padding: Insets,
     pub(crate) pad: Option<Spacing>,
@@ -81,6 +84,7 @@ impl<P: Default> Node<P> {
             kind,
             payload: P::default(),
             gap: Spacing::Px(0.0),
+            line_gap: None,
             padding: Insets::ZERO,
             pad: None,
             minimum: Size::ZERO,
@@ -409,9 +413,27 @@ impl<P> Node<P> {
         self
     }
     /// Let a row or column break into lines when its children overflow the
-    /// main axis. Lines stack on the cross axis with the same `gap`.
+    /// main axis. Lines stack on the cross axis with the same `gap`, unless
+    /// [`Node::line_gap`] says otherwise.
     pub fn wrap(mut self) -> Self {
         self.wrap = true;
+        self
+    }
+    /// The gap between the lines of a [`Node::wrap`]ped row or column, and
+    /// between a grid's rows: CSS `row-gap` beside `gap`'s `column-gap`, so
+    /// wrapped chips can sit 8 apart and their lines 6.
+    ///
+    /// ```
+    /// use mui_layout::{resolve, Node, Size};
+    /// let chips = Node::<()>::row((0..4).map(|i| Node::leaf(40., 20.).id(format!("c{i}"))))
+    ///     .gap(8.)
+    ///     .line_gap(2.)
+    ///     .wrap();
+    /// let l = resolve(&chips, Some(Size::new(100., 100.)), Default::default()).unwrap();
+    /// assert_eq!(l.frame("c2").unwrap().y, 22.);
+    /// ```
+    pub fn line_gap(mut self, gap: impl Into<Spacing>) -> Self {
+        self.line_gap = Some(gap.into());
         self
     }
     /// How many grid columns this cell takes, clamped to the column count.

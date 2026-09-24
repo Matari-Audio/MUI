@@ -13,6 +13,8 @@ pub(crate) struct Measured<'a, P> {
     /// written back to the declaration order the frames keep.
     pub(crate) index: usize,
     pub(crate) gap: f64,
+    /// `line_gap` resolved: the gap between wrapped lines and grid rows.
+    pub(crate) line_gap: f64,
     pub(crate) padding: Insets,
     pub(crate) size: Size,
     /// The smallest this subtree may be squeezed to: every minimum in it,
@@ -270,7 +272,12 @@ pub(crate) fn measure_uncached<'a, P>(
     validate_node(node, l)?;
     let padding = boxed.unwrap_or_else(|| node.padding(pass.scale));
     let gap = node.gap.resolve(pass.scale);
-    if !(gap.is_finite() && (0.0..=l.extent).contains(&gap) && padding.valid(l.extent)) {
+    let line_gap = node.line_gap.map_or(gap, |g| g.resolve(pass.scale));
+    if !([gap, line_gap]
+        .iter()
+        .all(|g| g.is_finite() && (0.0..=l.extent).contains(g))
+        && padding.valid(l.extent))
+    {
         return Err(Error::InvalidValue);
     }
     if let Some(id) = node
@@ -501,7 +508,7 @@ pub(crate) fn measure_uncached<'a, P>(
                             .fold(0.0, f64::max)
                     })
                     .sum::<f64>()
-                    + gap * lines.len().saturating_sub(1) as f64;
+                    + line_gap * lines.len().saturating_sub(1) as f64;
                 let sunk_main = if node.scroll {
                     0.0
                 } else {
@@ -555,7 +562,7 @@ pub(crate) fn measure_uncached<'a, P>(
                     .sum();
                 Size::new(
                     widest * cols as f64 + gaps(cols as f64),
-                    tall + gaps(rows.len() as f64),
+                    tall + (rows.len() as f64 - 1.0).max(0.0) * line_gap,
                 )
             };
             (hug(|c| c.size, col_min), hug(|c| c.floor, 0.0))
@@ -634,6 +641,7 @@ pub(crate) fn measure_uncached<'a, P>(
         index: 0,
         fluid,
         gap,
+        line_gap,
         padding,
         size,
         floor,
