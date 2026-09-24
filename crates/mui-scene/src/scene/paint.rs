@@ -7,7 +7,7 @@ use mui_geometry::{inset_path, BooleanOp, Bounds, Path, Point, RoundedRect};
 use super::outline::Contour;
 use super::{empty, find, Layer, Painted, SceneError, Walk};
 use crate::material_weld::MaterialWeld;
-use crate::regions::Operation;
+use crate::regions::{Operation, STROKE_BAND};
 use crate::{BorderRamp, Color, Content, El, Element, Fill, Paint, Radius, Shadow, ShadowKind};
 use crate::{Stroke, Style};
 
@@ -66,6 +66,13 @@ impl Walk<'_> {
             // Text's own fill is its ink, not a box behind it: never pushed,
             // though its colour still grounds the shells as before.
             None if matches!(e.content, Content::Text(_)) => e
+                .style
+                .fill
+                .paint(&self.spec.theme.palette, under)
+                .map_or(under, |p| p.solid()),
+            // A joined tab takes the owner's border material; its fill only
+            // grounds its content.
+            None if e.border_join.is_some() => e
                 .style
                 .fill
                 .paint(&self.spec.theme.palette, under)
@@ -231,14 +238,11 @@ impl Walk<'_> {
             }
             return Ok(None);
         }
-        let band = mui_geometry::border_geometry(
-            &contour.path,
-            mui_geometry::WidthProfile::uniform(w),
-            e.border_align,
-            self.spec.offsets,
-            self.spec.geometry,
-        )?
-        .band;
+        // Shared with a surface owner's clearance: one entry per node.
+        let band = self.cached_region(
+            (self.key.clone(), STROKE_BAND),
+            Operation::Border((*contour.path).clone(), w, e.border_align),
+        )?;
         Ok(Some((Arc::new(band), None, st.fill.clone(), 0.)))
     }
 
@@ -295,8 +299,11 @@ impl Walk<'_> {
             _ => th.corners.concave,
         };
         crate::border_ramp::decorate(&mut band, ramp, anchor, shoulder, named_frame)?;
+        if let Some(joins) = self.surface_joins.get(&at) {
+            band.commands.extend(joins.commands.iter().cloned());
+        }
         if ramp.align == crate::BorderAlign::Outside {
-            let merged = self.cached_region((at, 7), Operation::Sweep(band))?;
+            let merged = self.cached_region((self.key.clone(), 7), Operation::Sweep(band))?;
             band = mui_geometry::boolean_paths(
                 &merged,
                 &contour.path,
@@ -316,7 +323,7 @@ impl Walk<'_> {
         if ramp.align == crate::BorderAlign::Inside {
             self.mark(Layer::Unclip, empty(), None);
         }
-        if !ramp.tabs.is_empty() {
+        if !ramp.tabs.is_empty() || self.surface_joins.contains_key(&at) {
             let paint: Vec<_> = self.paint.drain(start..).collect();
             self.paint
                 .splice(border_background..border_background, paint);

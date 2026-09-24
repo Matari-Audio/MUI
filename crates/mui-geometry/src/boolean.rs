@@ -184,7 +184,7 @@ pub enum BooleanOp {
     Xor,
 }
 impl BooleanOp {
-    fn rule(self) -> OverlayRule {
+    pub(crate) fn rule(self) -> OverlayRule {
         match self {
             Self::Union => OverlayRule::Union,
             Self::Intersection => OverlayRule::Intersect,
@@ -255,7 +255,15 @@ fn prepare_all(shapes: &[PlacedShape], o: GeometryOptions) -> Result<BackendMult
     }
     Ok(out)
 }
+thread_local!(static PASSES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) });
+/// Boolean and offset passes this thread has run. Every clipping-backend
+/// result funnels through here, so a cache test can assert that a steady
+/// frame performs none.
+pub fn boolean_passes() -> u64 {
+    PASSES.with(std::cell::Cell::get)
+}
 pub(crate) fn topology(raw: BackendMulti, o: GeometryOptions) -> Result<Topology, Error> {
+    PASSES.with(|n| n.set(n.get() + 1));
     let mut rings = Vec::new();
     let mut count = 0;
     // Counted, not enumerated: a dropped exterior must not leave a gap, since

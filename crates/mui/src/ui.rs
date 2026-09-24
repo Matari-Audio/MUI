@@ -673,7 +673,7 @@ impl Ui {
         self.pasted.as_deref()
     }
     /// Whether the last press on `id` was the second of a double click.
-    pub(crate) fn double_click(&self, id: &str) -> bool {
+    pub fn double_click(&self, id: &str) -> bool {
         self.double.as_deref() == Some(id)
     }
     /// The text the input method is composing, for the focused field to

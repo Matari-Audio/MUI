@@ -1,7 +1,7 @@
 //! Contour regions, variable borders and shape partitions without UI dependencies.
 use crate::{
-    boolean, inset_path, offset_path, union, BooleanOp, Bounds, Error, GeometryOptions,
-    OffsetOptions, Path, PathCommand, Point, Polygon, RoundedRect,
+    boolean, inset_path, offset_path, BooleanOp, Bounds, Error, GeometryOptions, OffsetOptions,
+    Path, PathCommand, Point, RoundedRect,
 };
 
 /// Which side of the authored outline the border occupies. Default preserves MUI.
@@ -134,14 +134,30 @@ pub fn border_geometry(
 /// Union every contour as a solid piece, as required for overlapping sweep meshes.
 /// For shapes with holes use `boolean_paths` instead.
 pub fn union_contours(path: &Path, o: OffsetOptions, g: GeometryOptions) -> Result<Path, Error> {
-    offset_path(&Path::default(), 0., o)?;
-    let shapes: Vec<_> = path
-        .flatten(o.flatten_tolerance, o.max_points)?
-        .into_iter()
-        .filter(|r| r.len() >= 3)
-        .map(|r| Polygon::new(r).into())
-        .collect();
-    Ok(union(&shapes, g)?.to_path())
+    use i_overlay::{core::fill_rule::FillRule, float::simplify::SimplifyShape};
+    crate::offset::validate(0., o)?;
+    g.validate()?;
+    // A border sweep is hundreds of overlapping quads and disks with a small
+    // final contour. Orient every piece alike and merge them in one nonzero
+    // pass: pairwise unions re-validate the growing result, O(n^2) per piece.
+    let mut rings: Vec<Vec<[f64; 2]>> = Vec::new();
+    for mut ring in path.flatten(o.flatten_tolerance, o.max_points)? {
+        if ring.len() < 3 {
+            continue;
+        }
+        if ring
+            .iter()
+            .any(|p| p.x.abs() > g.coordinate_limit || p.y.abs() > g.coordinate_limit)
+        {
+            return Err(Error::CoordinateLimit);
+        }
+        if crate::math::signed_area(&ring) < 0. {
+            ring.reverse();
+        }
+        rings.push(ring.into_iter().map(|p| [p.x, p.y]).collect());
+    }
+    let merged = rings.simplify_shape_as::<i64>(FillRule::NonZero);
+    Ok(crate::boolean::topology(merged, g)?.to_path())
 }
 
 /// Boolean operation on filled paths. Normalization preserves holes and gives
@@ -153,9 +169,34 @@ pub fn boolean_paths(
     o: OffsetOptions,
     g: GeometryOptions,
 ) -> Result<Path, Error> {
-    let a = offset_path(a, 0., o)?.topology.placed_shapes();
-    let b = offset_path(b, 0., o)?.topology.placed_shapes();
-    Ok(boolean(&a, &b, op, g)?.to_path())
+    use i_overlay::{core::fill_rule::FillRule, float::single::SingleFloatOverlay};
+    g.validate()?;
+    let contours = |path| -> Result<Vec<Vec<[f64; 2]>>, Error> {
+        let topology = offset_path(path, 0., o)?.topology;
+        if topology.vertex_count() > g.max_vertices {
+            return Err(Error::TooManyVertices);
+        }
+        if topology
+            .rings()
+            .iter()
+            .flat_map(|r| r.points())
+            .any(|p| p.x.abs() > g.coordinate_limit || p.y.abs() > g.coordinate_limit)
+        {
+            return Err(Error::CoordinateLimit);
+        }
+        Ok(topology
+            .rings()
+            .iter()
+            .map(|r| r.points().iter().map(|p| [p.x, p.y]).collect())
+            .collect())
+    };
+    // Normalized filled contours can touch at a point after clipping/offsets.
+    // They are not caller-authored simple polygons: preserve that topology
+    // instead of routing them back through leaf-polygon validation.
+    let a = contours(a)?;
+    let b = contours(b)?;
+    let result = a.overlay_as::<i64>(&b, op.rule(), FillRule::EvenOdd);
+    Ok(crate::boolean::topology(result, g)?.to_path())
 }
 
 /// Sweep both sides of a boundary with a horizontal width profile.

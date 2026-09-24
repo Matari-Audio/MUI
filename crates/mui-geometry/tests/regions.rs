@@ -238,3 +238,71 @@ fn uniform_offsets_match_sweep_for_holes_and_all_alignments() {
         }
     }
 }
+
+#[test]
+fn overlapping_sweep_pieces_use_bounded_batches_but_keep_the_output_limit() {
+    let square = |x: f64| {
+        Path::polyline(
+            [
+                Point::new(x, 0.),
+                Point::new(x + 4., 0.),
+                Point::new(x + 4., 4.),
+                Point::new(x, 4.),
+            ],
+            true,
+        )
+    };
+    let mut sweep = Path::default();
+    for _ in 0..200 {
+        sweep.commands.extend(square(0.).commands);
+    }
+    let geometry = GeometryOptions {
+        max_vertices: 64,
+        ..GeometryOptions::default()
+    };
+    let joined = union_contours(&sweep, OffsetOptions::default(), geometry).unwrap();
+    assert_eq!(joined.flatten(0.1, 1000).unwrap().len(), 1);
+    let mut disjoint = Path::default();
+    for n in 0..100 {
+        disjoint.commands.extend(square(f64::from(n) * 8.).commands);
+    }
+    assert!(union_contours(&disjoint, OffsetOptions::default(), geometry).is_err());
+}
+
+#[test]
+fn filled_path_booleans_preserve_a_hole_touching_the_outer_edge() {
+    let mut shape = Path::polyline(
+        [
+            Point::new(0., 0.),
+            Point::new(40., 0.),
+            Point::new(40., 40.),
+            Point::new(0., 40.),
+        ],
+        true,
+    );
+    shape.commands.extend(
+        Path::polyline(
+            // Wound opposite to the exterior: offset input is nonzero.
+            [
+                Point::new(0., 20.),
+                Point::new(10., 30.),
+                Point::new(20., 20.),
+                Point::new(10., 10.),
+            ],
+            true,
+        )
+        .commands,
+    );
+    let result = boolean_paths(
+        &shape,
+        &shape,
+        BooleanOp::Intersection,
+        OffsetOptions::default(),
+        GeometryOptions::default(),
+    )
+    .unwrap();
+    let topology = offset_path(&result, 0., OffsetOptions::default())
+        .unwrap()
+        .topology;
+    assert!((topology.area() - 1400.).abs() < 0.01);
+}

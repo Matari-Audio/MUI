@@ -107,3 +107,51 @@ widths are logical units. Offsets preserve holes and can split or erase narrow
 regions. `boolean_paths` handles normalized filled sets; `union_contours` is for
 solid overlapping sweep pieces, which must not be interpreted as even-odd holes.
 Run the independent core tests with `cargo test -p mui-geometry`.
+
+## Joined border labels and inset materials
+
+Use `.surface_layout(padding)` when intrinsic layout footprints describe several
+materials inside one container, rather than partitioning every immediate child
+with `.inside(...)`:
+
+```rust
+use mui::prelude::*;
+let body = row![
+    col![
+        stack!["remove"].grow(1.).id("above"),
+        stack![label("OSC")].h(60.).fill(Primary).join_border("body"),
+        stack!["power"].grow(1.).id("below"),
+    ].w(48.),
+    stack!["wave"].grow(1.).fill(Field).inset_surface(),
+    stack!["unison"].grow(1.).fill(Field).inset_surface(),
+].gap(8.).pad(8.).w(400.).h(240.).id("body")
+ .radius((20., 14.)).surface_layout(8.)
+ .border_ramp(BorderRamp::horizontal((Primary, 4.), (Dim, 1.5)));
+resolve_scene(&SceneSpec::new(body)).unwrap();
+```
+
+- The owner supplies convex/concave radii and the actual border contour.
+- `.inset_surface()` uses the node's frame. `.inset_surface_of([ids...])`
+  unions named footprints, so two header extensions and a neighboring panel can
+  be one surface. Put that material on a background sibling if the layout also
+  contains controls in its holes; their rectangular hit ancestry stays intact.
+- `.join_border(body_id)` joins the node's footprint to the nearest left/right
+  edge of the named body. Its two roots and exposed corners follow the owner's
+  policy; the owner's **inside** border ramp paints it. The node's fill is used
+  only as the contrast background for its contents, not a second rectangle.
+- Authored panel footprints receive the owner’s inset rounding policy, then
+  intersect the padded interior left by the actual border and joins. Inherited
+  boundary curves are clipped directly, without filleting their flattened arcs. Changing only the
+  owner updates all marked material outlines. No panel radius arithmetic or
+  label overlap offsets are needed. A joined label also identifies its content
+  body: panels inside that body reserve the owner's maximum inward border width
+  and padding, so external ports and footer tabs cannot pull their edges outward.
+- This does not reflow children or infer groups from matching colors. Marked
+  surfaces publish their derived paint/clip/hit outline; layout frames remain
+  the authored footprints. Floating descendants and nested owners are separate
+  scopes. Normal controls are untouched.
+- The bounded cache keys geometry, member frames, border widths, padding,
+  corners, scale, and geometry options. Paint colors remain live independently.
+
+For a group sharing one outer border, put the owner on the group and leave the
+individual bodies as layout containers. Each title still names its own body.

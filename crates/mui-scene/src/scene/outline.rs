@@ -260,9 +260,12 @@ impl Walk<'_> {
 
     /// Every input `n`'s outline depends on, as words compared in full.
     fn geometry_key(&mut self, n: &El, first: usize, key: &mut Vec<u64>) {
+        use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher};
         key.clear();
         self.outlines.held.clear();
-        key.push(first as u64);
+        // Identity is the node's key, not its pre-order index: a tooltip or
+        // menu wrapping the root shifts every index but no key or geometry.
+        key.push(BuildHasherDefault::<DefaultHasher>::default().hash_one(n.key()));
         for value in [
             self.spec.theme.corners.selector,
             self.spec.theme.corners.field,

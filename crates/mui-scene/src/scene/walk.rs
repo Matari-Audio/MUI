@@ -40,6 +40,14 @@ impl<'a> Walk<'a> {
         // A switched-off card switches off what it contains: nothing inside
         // it may be reached while its own frame cannot be.
         inner.disabled = ancestors.disabled || e.disabled;
+        if (e.inset_surface.is_some() && !self.regions.contains_key(&at))
+            || (e.border_join.is_some() && !self.joined_nodes.contains(&at))
+        {
+            return Err(mui_geometry::Error::InvalidOptions(
+                "material requires a surface-layout owner",
+            )
+            .into());
+        }
         let start = self.paint.len();
         let material = self.material_weld(n, frame, path, under)?;
         let mut contour = match &material {
@@ -50,7 +58,21 @@ impl<'a> Walk<'a> {
             None => self.outline(n, frame, self.i)?,
         };
 
-        self.partition(n, &contour.path, frame, at)?;
+        self.partition(n, &contour.path, frame, at, (&key, path.as_str()))?;
+        if e.surface_padding.is_some() {
+            let geometry = self.surface_cache.resolve(
+                n,
+                (&key, at),
+                &self.frames,
+                &contour.path,
+                self.spec,
+                self.region_cache,
+            )?;
+            self.regions
+                .extend(geometry.panels.into_iter().map(|(i, p)| (i, Arc::new(p))));
+            self.joined_nodes.extend(geometry.join_nodes);
+            self.surface_joins.insert(at, geometry.joins);
+        }
         self.key = key.clone();
         // Each envelope belongs to exactly one node, visited once.
         let enveloped = match self.region_envelopes.remove(&at) {
