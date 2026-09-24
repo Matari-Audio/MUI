@@ -3,7 +3,7 @@
 use std::ops::RangeInclusive;
 
 use mui_geometry::Point;
-use mui_input::{Button, Key, FINE_DRAG};
+use mui_input::{Key, FINE_DRAG};
 use mui_scene::prelude::*;
 use mui_scene::{Palette, SpacingToken, Spring, Stroke};
 
@@ -48,11 +48,7 @@ struct Look {
 /// is already gated to the focused surface, so widgets do not need to invent
 /// a second focus test or consume another key stream.
 fn activated(ui: &Ui, id: &str) -> bool {
-    ui.get(id).clicked_with(Button::Primary)
-        || ui
-            .keys(id)
-            .iter()
-            .any(|k| matches!(k.key, Key::Enter | Key::Space))
+    ui.get(id).activated()
 }
 impl Look {
     /// What the control's own box is painted with, where the role is the
@@ -249,14 +245,25 @@ pub(crate) fn step(range: &RangeInclusive<f64>) -> f64 {
     (range.end() - range.start()) / 100.0
 }
 
-/// Step `value` by the focused control's keys: arrows by [`step`] (a tenth
-/// of it with Shift), Page Up and Down by ten steps, Home and End to the
-/// ends. The runtime brackets the frame as one edit.
-fn stepped(ui: &Ui, id: &str, value: &mut f64, range: &RangeInclusive<f64>) {
+/// Step `value` by the focused control's keys: arrows by a hundredth of
+/// `range` (a tenth of that with Shift), Page Up and Down by ten steps, Home
+/// and End to the ends. The runtime brackets the frame as one edit. Returns
+/// whether the value moved.
+///
+/// The keyboard half of [`slider`] and [`knob`], for a control of your own:
+///
+/// ```
+/// use mui::prelude::*;
+/// let ui = Ui::new(Theme::DEFAULT);
+/// let mut trim = 0.0;
+/// assert!(!stepped(&ui, "trim", &mut trim, &(-12.0..=12.0)), "nothing is focused");
+/// ```
+pub fn stepped(ui: &Ui, id: &str, value: &mut f64, range: &RangeInclusive<f64>) -> bool {
     let (lo, hi) = (*range.start(), *range.end());
     if !(lo.is_finite() && hi.is_finite()) {
-        return;
+        return false;
     }
+    let before = *value;
     for k in ui.keys(id) {
         let one = step(range) * if k.mods.shift { FINE_DRAG } else { 1.0 };
         *value = match k.key {
@@ -270,6 +277,7 @@ fn stepped(ui: &Ui, id: &str, value: &mut f64, range: &RangeInclusive<f64>) {
         }
         .clamp(lo.min(hi), lo.max(hi));
     }
+    moved(before, *value)
 }
 
 /// Whether a drag or a key moved the value. Bitwise, so a NaN the caller
@@ -626,7 +634,7 @@ pub fn text_input(ui: &mut Ui, id: &str, value: &mut String) -> (El, bool) {
             }
         }
     }
-    if ui.double_click(id) {
+    if ui.get(id).double_clicked {
         (anchor, caret) = word(value, caret);
     }
 

@@ -76,6 +76,9 @@ pub struct Ui {
     /// edge lands on a device pixel; `None` paints on layout's raw f64.
     pub scale: Option<f64>,
     pub weld_backend: mui_scene::WeldBackend,
+    /// Seconds between two presses on one target that still make a double
+    /// click. [`DOUBLE_CLICK`] unless the host matches a platform setting.
+    pub double_click: f64,
     interaction: Interaction,
     actions: Vec<SemanticAction>,
     hit: Hit,
@@ -117,6 +120,8 @@ pub struct Ui {
     /// A press that landed on the same target within [`DOUBLE_CLICK`].
     double: Option<String>,
     last_press: Option<(String, f64)>,
+    /// This frame's wheel, for [`Response::wheel`].
+    wheel: Point,
     focus: Option<String>,
     /// Gesture edges waiting for a frame that resolves. A frame that errors
     /// leaves them queued rather than dropping a host's `End`.
@@ -182,6 +187,8 @@ impl Ui {
             ime_caret: None,
             drag: None,
             double: None,
+            double_click: DOUBLE_CLICK,
+            wheel: Point::ZERO,
             last_press: None,
             focus: None,
             edits: Vec::new(),
@@ -341,8 +348,41 @@ impl Ui {
     }
     /// Last frame's gesture on `id`. Widgets read this while building the
     /// next tree, so a drag lands one frame late and nobody notices.
+    ///
+    /// The runtime fills in what the gesture machine cannot see: whether
+    /// the press was a double click, the wheel while the pointer is inside
+    /// `id`'s frame, and Enter or Space while `id` has the focus.
+    ///
+    /// ```
+    /// # use mui::Ui; use mui::prelude::*;
+    /// # let ui = Ui::new(Theme::DEFAULT);
+    /// let r = ui.get("lane");
+    /// let zoom = 1.0 - r.wheel.y * 0.01;
+    /// if r.double_clicked { /* reset */ }
+    /// # assert_eq!(zoom, 1.0);
+    /// ```
     pub fn get(&self, id: &str) -> Response {
         let mut response = self.interaction.get(id);
+        response.double_clicked = self.double.as_deref() == Some(id);
+        response.key_activated = self
+            .keys(id)
+            .iter()
+            .any(|k| matches!(k.key, Key::Enter | Key::Space));
+        if self.wheel != Point::ZERO {
+            if let (Some(p), Some(s)) = (
+                self.pointer.pos,
+                self.scene.as_ref().and_then(|s| s.surface(id)),
+            ) {
+                let f = s.frame;
+                let inside = p.x >= f.x && p.x <= f.right() && p.y >= f.y && p.y <= f.bottom();
+                let clipped = s.clip.is_some_and(|c| {
+                    p.x < c.min.x || p.x > c.max.x || p.y < c.min.y || p.y > c.max.y
+                });
+                if inside && !clipped {
+                    response.wheel = self.wheel;
+                }
+            }
+        }
         if self
             .actions
             .iter()
@@ -672,10 +712,6 @@ impl Ui {
     pub(crate) fn pasted(&self) -> Option<&str> {
         self.pasted.as_deref()
     }
-    /// Whether the last press on `id` was the second of a double click.
-    pub(crate) fn double_click(&self, id: &str) -> bool {
-        self.double.as_deref() == Some(id)
-    }
     /// The text the input method is composing, for the focused field to
     /// paint. It is never part of a value.
     pub fn preedit(&self) -> Option<(&str, Option<(usize, usize)>)> {
@@ -845,6 +881,12 @@ impl Ui {
             ime,
         } = input.into();
         let was = std::mem::replace(&mut self.pointer, pointer).buttons;
+        // A non-finite delta reaches no widget, as it reaches no scroller.
+        self.wheel = if wheel.x.is_finite() && wheel.y.is_finite() {
+            wheel
+        } else {
+            Point::ZERO
+        };
         self.pasted = clipboard;
         let previous_blink = self.blink();
         self.time += dt;
@@ -1022,7 +1064,7 @@ impl Ui {
         }
         if let Some(id) = self.interaction.pressed().map(str::to_owned) {
             if let Some((prev, t)) = self.last_press.take() {
-                if prev == id && self.time - t < DOUBLE_CLICK {
+                if prev == id && self.time - t < self.double_click {
                     self.double = Some(id.clone());
                 }
             }
@@ -1358,6 +1400,11 @@ impl Ui {
                 p.x < clip.min.x || p.x > clip.max.x || p.y < clip.min.y || p.y > clip.max.y
             }) {
                 continue;
+            }
+            // A node that keeps the wheel reads it from `Response::wheel`;
+            // nothing it sits in scrolls under it.
+            if s.captures_wheel && !s.disabled {
+                return false;
             }
             // `content` is the frame size for everything but a scroll node,
             // so an overflow here *is* the "is this scrollable" test.

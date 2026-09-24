@@ -112,6 +112,7 @@ impl<'a> Walk<'a> {
             cursor: inner.cursor,
             tip: e.tip.clone(),
             focusable: e.focusable,
+            captures_wheel: e.captures_wheel,
             pointer_states: e
                 .states
                 .iter()

@@ -285,6 +285,9 @@ pub struct Element {
     pub tip: Option<String>,
     /// Takes keyboard focus on click and on Tab.
     pub focusable: bool,
+    /// The wheel over this node is its own: an enclosing `.scroll()` does
+    /// not slide. See [`Styled::captures_wheel`].
+    pub captures_wheel: bool,
     /// Switched off: no hit testing, no focus, and the look declared for
     /// [`State::Disabled`]. Inherited by the subtree. See
     /// [`Styled::disabled`].
@@ -861,6 +864,14 @@ pub trait Styled: Paints {
     }
     fn focusable(mut self) -> Self {
         self.element_mut().focusable = true;
+        self
+    }
+    /// Keep the wheel for this node: a timeline that zooms on the wheel
+    /// inside a scrolling column reads it from `Response::wheel`, and the
+    /// column does not scroll under it. Without this, every node under the
+    /// pointer sees the wheel *and* the innermost scroller slides.
+    fn captures_wheel(mut self) -> Self {
+        self.element_mut().captures_wheel = true;
         self
     }
     /// Switch this node -- and everything under it -- off: it drops out of
