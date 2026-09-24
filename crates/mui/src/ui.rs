@@ -133,6 +133,10 @@ pub struct Ui {
     sel: BTreeMap<String, (usize, usize)>,
     /// Per multi-line field: how far its lines are scrolled up, in units.
     text_scroll: BTreeMap<String, f64>,
+    /// Per surface: what a widget keeps between frames that is not the
+    /// caller's value -- a picker's hue at zero saturation, a drag value's
+    /// half-typed text. Dropped with the surface.
+    memo: BTreeMap<String, Box<dyn Any + Send>>,
     /// The host's clipboard, handed in with a paste key; and what a copy or
     /// cut asked to put back on it.
     pasted: Option<String>,
@@ -220,6 +224,7 @@ impl Ui {
             path: String::new(),
             sel: BTreeMap::new(),
             text_scroll: BTreeMap::new(),
+            memo: BTreeMap::new(),
             pasted: None,
             copied: None,
             preedit: None,
@@ -820,6 +825,19 @@ impl Ui {
     }
     pub(crate) fn set_text_scroll(&mut self, id: &str, y: f64) {
         *slot(&mut self.text_scroll, id, || 0.0) = y;
+    }
+    pub(crate) fn memo<T: Any>(&self, id: &str) -> Option<&T> {
+        self.memo.get(id)?.downcast_ref()
+    }
+    pub(crate) fn set_memo<T: Any + Send>(&mut self, id: &str, v: Option<T>) {
+        match v {
+            Some(v) => {
+                self.memo.insert(id.to_owned(), Box::new(v));
+            }
+            None => {
+                self.memo.remove(id);
+            }
+        }
     }
     pub(crate) fn sel(&self, id: &str) -> (usize, usize) {
         self.sel.get(id).copied().unwrap_or((0, 0))
@@ -1474,6 +1492,7 @@ impl Ui {
         });
         self.sel.retain(|id, _| scene.surface(id).is_some());
         self.text_scroll.retain(|id, _| scene.surface(id).is_some());
+        self.memo.retain(|id, _| scene.surface(id).is_some());
         animating | self.wheel(scene, wheel)
     }
 

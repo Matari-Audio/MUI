@@ -38,6 +38,7 @@ pub fn all() -> Vec<Box<dyn PreviewScene>> {
         Box::new(GlyphAxes::new()),
         Box::new(Scrolling::default()),
         Box::new(Fields::default()),
+        Box::new(Picker::default()),
         Box::new(Tips),
         Box::new(Curve::default()),
         Box::new(CurveEditor::default()),
@@ -473,6 +474,47 @@ impl PreviewScene for Fields {
         .radius(16.0)
         .fill(Role::Surface)
         .id("fields")
+    }
+}
+
+/// A colour picker and two drag values reading back what they hold.
+pub struct Picker {
+    tint: Color,
+    bpm: f64,
+    gain: f64,
+}
+impl Default for Picker {
+    fn default() -> Self {
+        Self {
+            tint: Color::srgba(0.25, 0.55, 0.95, 0.8),
+            bpm: 120.0,
+            gain: -6.0,
+        }
+    }
+}
+impl PreviewScene for Picker {
+    fn name(&self) -> &'static str {
+        "Picker"
+    }
+    fn about(&self) -> &'static str {
+        "Drag the square and strips. Drag a number, double-click to type."
+    }
+    fn specimen(&mut self, ui: &mut Ui) -> El {
+        let (picker, _) = color_picker(ui, "pick-tint", &mut self.tint, true);
+        let (bpm, _) = drag_value(ui, "pick-bpm", &mut self.bpm, 20.0..=300.0);
+        let bpm = bpm.value_text(format!("{:.1} BPM", self.bpm));
+        let (gain, _) = drag_value(ui, "pick-gain", &mut self.gain, -60.0..=12.0);
+        column([
+            picker,
+            row([label("tempo"), bpm.el(), label("gain"), gain.el()])
+                .gap(S)
+                .align(Align::Center),
+        ])
+        .gap(M)
+        .pad(L)
+        .radius(16.0)
+        .fill(Role::Surface)
+        .id("picker")
     }
 }
 

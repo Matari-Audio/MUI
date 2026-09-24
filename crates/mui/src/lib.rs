@@ -39,8 +39,9 @@ pub use ui::{Clipboard, Edit, Frame, Ui};
 pub mod prelude {
     pub use crate::widgets::presets::{card, chip, glass, panel, tile};
     pub use crate::widgets::{
-        bins, bins_hover, button, curve, knob, slider, stepped, text_edit, text_input, toggle,
-        BinAxis, BinEdit, Bins, Control, CurveEdit, Newline, TextEdit, TextOpts, Variant,
+        bins, bins_hover, button, color_picker, curve, drag_value, knob, slider, stepped,
+        text_edit, text_input, toggle, BinAxis, BinEdit, Bins, Control, CurveEdit, Newline,
+        TextEdit, TextOpts, Variant,
     };
     pub use crate::{Edit, Frame, SemanticAction, Ui};
     pub use mui_input::{

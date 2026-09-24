@@ -6,6 +6,7 @@ use mui_input::{Key, FINE_DRAG};
 use mui_scene::prelude::*;
 use mui_scene::{Palette, SpacingToken, Spring, Stroke};
 
+use crate::widgets::{text_edit, TextOpts};
 use crate::Ui;
 
 /// How solid a control looks. daisyUI's four button styles, resolved from
@@ -547,4 +548,96 @@ pub fn toggle(ui: &mut Ui, id: impl Into<Id>, on: &mut bool) -> (Control, bool) 
         .id(id)
     });
     (control, flipped)
+}
+
+/// How far a [`drag_value`] is dragged to sweep its whole range.
+const DRAG_TRAVEL: f64 = 200.0;
+
+/// A number to drag: a horizontal drag of 200 px sweeps `range` (Shift is
+/// fine), the arrow keys step it, and a double click -- or Enter while it
+/// is focused -- turns it into a field to type the number into. Enter or a
+/// click away takes what was typed, Escape leaves the value alone. Returns
+/// the control and whether the value changed. `.value_text(..)` says it
+/// in units, as for a [`slider`].
+///
+/// ```
+/// use mui::prelude::*;
+/// let mut ui = Ui::new(Theme::DEFAULT);
+/// let mut bpm = 120.0;
+/// let (tempo, changed) = drag_value(&mut ui, "bpm", &mut bpm, 20.0..=300.0);
+/// assert!(!changed, "no gesture, no change");
+/// ```
+pub fn drag_value(
+    ui: &mut Ui,
+    id: impl Into<Id>,
+    value: &mut f64,
+    range: RangeInclusive<f64>,
+) -> (Control, bool) {
+    let id: Id = id.into();
+    let before = *value;
+    let (lo, hi) = (
+        range.start().min(*range.end()),
+        range.start().max(*range.end()),
+    );
+    let field = format!("{id}/edit");
+    // What was typed, and the width the number had when typing started.
+    let mut typing = ui.memo::<(String, f64)>(&field).cloned();
+    let r = ui.get(&id);
+    // Focus moves to the field only once it is built: this frame's keys --
+    // the Enter that opened it -- are not the field's to type.
+    let opening = typing.is_none() && (r.double_clicked || r.key_activated);
+    if opening {
+        let width = ui
+            .scene()
+            .and_then(|s| s.surface(&id))
+            .map_or(ui.theme.control * 16.0, |s| s.frame.size.width);
+        typing = Some((format!("{value}"), width));
+    }
+    if let Some((mut s, width)) = typing {
+        let take = |s: &str, value: &mut f64| {
+            if let Ok(v) = s.trim().parse::<f64>() {
+                if v.is_finite() {
+                    *value = v.clamp(lo, hi);
+                }
+            }
+        };
+        if opening || ui.focused(&field) {
+            let opts = TextOpts {
+                blur_on_submit: true,
+                ..TextOpts::default()
+            };
+            let (el, e) = text_edit(ui, &field, &mut s, opts);
+            if opening {
+                ui.set_sel(&field, 0, s.chars().count());
+                ui.focus(field.clone());
+            }
+            if !e.submitted {
+                ui.set_memo(&field, Some((s, width)));
+                let control = Control::new(ui, move |_| el.w(width));
+                return (control, false);
+            }
+            take(&s, value);
+        } else if !ui.shortcuts().iter().any(|k| k.key == Key::Escape) {
+            // The focus went elsewhere: a click away keeps what was typed.
+            take(&s, value);
+        }
+        ui.set_memo::<(String, f64)>(&field, None);
+    } else {
+        ui.drag(&id, value, range.clone(), DRAG_TRAVEL, false);
+        stepped(ui, &id, value, &range);
+    }
+    let changed = moved(before, *value);
+    let (value, min, max) = (*value, *range.start(), *range.end());
+    let control = Control::new(ui, move |look| {
+        let pad_y = ((look.px - 14.0) / 2.0).max(2.0);
+        row([readout(look.text.clone(), value, min, max)])
+            .pad_xy(look.px * 0.3, pad_y)
+            .radius(4.0)
+            .preset(look.face(Role::Field))
+            .cursor(Cursor::ResizeH)
+            .role(Kind::Slider { value, min, max })
+            .focusable()
+            .id(id)
+    });
+    (control, changed)
 }
