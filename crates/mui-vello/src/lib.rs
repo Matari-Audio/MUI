@@ -146,11 +146,14 @@ pub trait Canvas {
     /// that asks for it, not one per node.
     fn push_layer(&mut self, blend: peniko::BlendMode, opacity: f32);
     fn pop_layer(&mut self);
-    /// Everything drawn until the matching [`Canvas::pop_layer`] composites
-    /// through a Gaussian blur of `std_dev`, in the space of the current
-    /// transform. `false`, having pushed nothing, on a canvas without filter
-    /// layers: a [`Layer::Backdrop`] then leaves the backdrop sharp.
-    fn push_blur(&mut self, _std_dev: f32) -> bool {
+    /// Two layers, closed by two [`Canvas::pop_layer`]s: one clipped to
+    /// `clip`, and inside it one that composites through a Gaussian blur of
+    /// `std_dev`, in the space of the current transform. The clip is a layer
+    /// of its own because `vello_hybrid` does not clip a filter layer's
+    /// output to the clip-path stack around it. `false`, having pushed
+    /// nothing, on a canvas without filter layers: a [`Layer::Backdrop`]
+    /// then leaves the backdrop sharp.
+    fn push_blur(&mut self, _clip: &BezPath, _std_dev: f32) -> bool {
         false
     }
     /// Draw a hinted glyph run in the current paint, each glyph's `x`
@@ -470,7 +473,8 @@ impl Canvas for Gpu<'_> {
             .into(),
         )
     }
-    fn push_blur(&mut self, std_dev: f32) -> bool {
+    fn push_blur(&mut self, clip: &BezPath, std_dev: f32) -> bool {
+        self.scene.push_clip_layer(clip);
         self.scene.push_filter_layer(blur(std_dev));
         true
     }
@@ -501,10 +505,11 @@ impl Canvas for Cpu<'_> {
             .into(),
         )
     }
-    fn push_blur(&mut self, std_dev: f32) -> bool {
+    fn push_blur(&mut self, clip: &BezPath, std_dev: f32) -> bool {
         // `vello_cpu` panics on a filter layer in a multi-threaded context.
         let one_thread = self.ctx.render_settings().num_threads == 0;
         if one_thread {
+            self.ctx.push_clip_layer(clip);
             self.ctx.push_filter_layer(blur(std_dev));
         }
         one_thread
@@ -715,8 +720,7 @@ fn backdrop(
     }
     // What the blur can pull in: three standard deviations past the outline.
     let reach = outline.bounding_box().inflate(3. * p.blur, 3. * p.blur);
-    canvas.push_clip(outline);
-    if canvas.push_blur(p.blur as f32) {
+    if canvas.push_blur(outline, p.blur as f32) {
         let mut ancestors = open.into_iter().peekable();
         let mut bez = BezPath::new();
         for (i, q) in below.iter().enumerate() {
@@ -744,8 +748,8 @@ fn backdrop(
             }
         }
         canvas.pop_layer();
+        canvas.pop_layer();
     }
-    canvas.pop_clip();
     Ok(())
 }
 

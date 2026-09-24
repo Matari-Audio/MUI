@@ -53,7 +53,59 @@ pub fn all() -> Vec<Box<dyn PreviewScene>> {
         Box::new(Switched::default()),
         Box::new(Editor),
         Box::new(Effects),
+        Box::new(Frosted),
     ]
+}
+
+/// A modal over a busy panel. The dim is `.backdrop_blur`, so the panel goes
+/// soft under it instead of staying sharp behind the scrim.
+pub struct Frosted;
+impl PreviewScene for Frosted {
+    fn name(&self) -> &'static str {
+        "Frosted modal"
+    }
+    fn about(&self) -> &'static str {
+        "A translucent dim with .backdrop_blur(8.): what was painted under it paints again through a Gaussian, clipped to the dim. The dialog on top stays sharp."
+    }
+    fn specimen(&mut self, _: &mut Ui) -> El {
+        let tile = |i: usize| {
+            row([text(format!("ch {i}"))])
+                .size(96.0, 56.0)
+                .center()
+                .radius(10.0)
+                .fill(Color::oklch(0.72, 0.16, (i * 47 % 360) as f32))
+                .stroke(Role::Ink)
+        };
+        let busy = grid(6, (0..24).map(tile)).gap(S).pad(S).id("busy");
+        let button = |label: &str, fill: Role| {
+            row([text(label.to_owned())])
+                .pad(10.0)
+                .radius(8.0)
+                .fill(fill)
+        };
+        let dialog = column([
+            text("Discard this take?"),
+            text("Everything since the last save is lost.").fill(Role::Dim),
+            row([
+                button("Keep", Role::Raised),
+                button("Discard", Role::Primary),
+            ])
+            .gap(S),
+        ])
+        .gap(S)
+        .pad(24.0)
+        .radius(16.0)
+        .fill(Role::Surface)
+        .elevation(Elevation::Floating)
+        .id("dialog");
+        let dim = overlay([dialog])
+            .full()
+            .center()
+            .fill(Color::oklcha(0.0, 0.0, 0.0, 0.45))
+            .backdrop_blur(8.0)
+            .id("dim");
+        overlay([busy, dim]).id("frosted")
+    }
 }
 
 /// A tab welded to a panel: unioned sharp, filleted after, with a shell
