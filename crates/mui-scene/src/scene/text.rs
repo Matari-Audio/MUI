@@ -147,6 +147,9 @@ pub(super) struct Runs<'a> {
     pub(super) fonts: Arc<[Font]>,
     /// The last node face's chain, so a column of icons builds it once.
     pub(super) own_fonts: Option<(u64, Arc<[Font]>)>,
+    /// [`SceneSpec::device_scale`]: a line measures the pitch the walk
+    /// paints it at, not the face's raw line height.
+    pub(super) scale: Option<f64>,
     pub(super) generation: u64,
     pub(super) cache: &'a mut PerText<RunKey, CachedRun>,
     pub(super) breaks: &'a mut PerText<BreakKey, Breaks>,
@@ -319,7 +322,10 @@ impl<'a> Runs<'a> {
             // ponytail: no font → a monospace guess, so layout tests stay
             // font-free. Wrong widths are visible the moment a font is set.
             Ok(None) | Err(_) => Size::new(text.chars().count() as f64 * size * 0.6, size * 1.25),
-            Ok(Some(r)) => Size::new(r.advance, r.line_height),
+            // The snapped pitch the walk stacks lines at, as egui rounds each
+            // row to a device pixel: a raw 15.6 pt Barlow line at 1.5x would
+            // otherwise measure 0.27 pt taller than it paints, per line.
+            Ok(Some(r)) => Size::new(r.advance, super::snap(r.line_height, self.scale)),
         }
     }
 }
@@ -327,7 +333,7 @@ impl<'a> Runs<'a> {
 /// Exactly the fields [`fit`] consumes, as bytes the layout cache compares
 /// in full. Strings carry their length, so no two payloads share an
 /// encoding, and nothing is formatted.
-pub(super) fn layout_key(e: &Element, th: Theme, out: &mut Vec<u8>) {
+pub(super) fn layout_key(e: &Element, th: Theme, scale: Option<f64>, out: &mut Vec<u8>) {
     let Content::Text(t) = &e.content else {
         return;
     };
@@ -351,6 +357,8 @@ pub(super) fn layout_key(e: &Element, th: Theme, out: &mut Vec<u8>) {
     out.extend_from_slice(&e.font.as_ref().map_or(0, |f| f.id() + 1).to_le_bytes());
     // usize::MAX is "no cap".
     out.extend_from_slice(&e.lines.unwrap_or(usize::MAX).to_le_bytes());
+    // Line heights snap to the device scale, so a scale change remeasures.
+    out.extend_from_slice(&scale.map_or(u64::MAX, f64::to_bits).to_le_bytes());
 }
 
 /// A content leaf's size: a paragraph wrapped to its room when it needs it.
