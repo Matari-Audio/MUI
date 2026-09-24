@@ -1694,6 +1694,7 @@ const INSIDE: u32 = 8;
 const BEND: u32 = 9;
 const RAMP: u32 = 10;
 const STROKE: u32 = 12;
+const WELD_PROGRESS: u32 = 16;
 /// Per-item blocks: gradient stop `i` at `STOPS + 8 i` (offset, then
 /// colour), shadow `i` at `SHADOWS + 8 i` (blur, dx, dy, spread, colour),
 /// shell `i` at `SHELLS + 8 i` (depth, colour).
@@ -1788,6 +1789,14 @@ fn channels(e: &mut Element, pal: &Palette, ch: &mut impl FnMut(u32, f64, bool) 
                 *width = ch(RAMP + i as u32, *width, false).max(0.);
             }
         }
+    }
+    // Leave invalid progress for scene resolution to reject.
+    if let Some(w) = e
+        .welding
+        .as_mut()
+        .filter(|w| (0.0..=1.0).contains(&w.progress))
+    {
+        w.progress = ch(WELD_PROGRESS, w.progress, false).clamp(0.0, 1.0);
     }
 }
 
@@ -2825,6 +2834,33 @@ mod tests {
                 .unwrap(),
         );
         assert_eq!(to, want, "it settles on the declared fill");
+    }
+
+    #[test]
+    fn a_transitioning_weld_morph_springs_between_its_declarations() {
+        let tree = |p: f64| {
+            mui_scene::weld_morph![p; leaf(20., 20.), leaf(20., 20.)]
+                .transition(Spring::new(0.3, 0.6))
+                .id("w")
+        };
+        let (pal, mut motion) = (Theme::DEFAULT.palette, BTreeMap::new());
+        let mut step = |p: f64| {
+            let mut n = tree(p);
+            let moving = transitions(&mut n, &mut String::new(), &pal, &mut motion, 0.016);
+            (n.payload().welding.unwrap().progress, moving)
+        };
+        assert_eq!(step(1.0), (1.0, false), "seeded, not flown in");
+        let (mid, moving) = step(0.0);
+        assert!(moving && 0.0 < mid && mid < 1.0, "{mid}");
+        for _ in 0..200 {
+            let (p, moving) = step(0.0);
+            assert!((0.0..=1.0).contains(&p), "out of range: {p}");
+            if !moving {
+                assert_eq!(p, 0.0);
+                return;
+            }
+        }
+        panic!("never settled");
     }
 
     #[test]

@@ -119,4 +119,3 @@ fn motion_context(meters:Arc<truce_core::meters::MeterStore>,transport:Arc<truce
     });
     PluginContext::new(bridge, params)
 }
-
