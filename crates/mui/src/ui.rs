@@ -13,8 +13,8 @@ use mui_input::{
 use mui_layout::SpacingToken::{Xs, S};
 use mui_scene::prelude::{overlay, text, Paints as _, Role};
 use mui_scene::{
-    Area, Color, Cursor, El, Element, Fill, Font, Kind, Paint, Palette, Pin, Radius, ResolvedScene,
-    SceneError, SceneSpec, Size, Spacing, Spring, State, TextCache, Theme,
+    bar, Area, Color, Cursor, El, Element, Fill, Font, Kind, Paint, Palette, Pin, Radius,
+    ResolvedScene, SceneError, SceneSpec, Size, Spacing, Spring, State, TextCache, Theme,
 };
 
 #[cfg(test)]
@@ -135,6 +135,9 @@ pub struct Ui {
     /// still reports the knot it grabbed.
     tagged: Option<(String, String)>,
     time: f64,
+    /// Where along a held scrollbar's thumb the pointer took it, so the
+    /// thumb follows the pointer from that point instead of jumping to it.
+    bar_grab: f64,
 }
 
 fn same_hit_geometry(a: &ResolvedScene, b: &ResolvedScene) -> bool {
@@ -193,6 +196,7 @@ impl Ui {
             hover: None,
             tagged: None,
             time: 0.0,
+            bar_grab: 0.0,
         }
     }
     /// Set the font.
@@ -851,6 +855,7 @@ impl Ui {
         // A release is read by the *next* tree, so that frame must come even
         // when nothing is moving.
         let mut animating = self.reconcile();
+        animating |= self.drag_bar();
         animating |= self.hover_springs(&root, dt);
         self.intake_focus(was, keys, text, ime);
         let hovered = self.interaction.hovered().map(str::to_owned);
@@ -1146,6 +1151,7 @@ impl Ui {
     /// whether one is still moving.
     fn sweep(&mut self, root: &mut El, dt: f64) -> bool {
         let pal = self.theme.palette;
+        let heats = self.bar_heats();
         // Declared state looks first, so a transition springs toward the
         // style the node actually asked for this frame. The walks key an
         // unnamed node by its tree path, exactly as the scene does.
@@ -1170,7 +1176,7 @@ impl Ui {
             animating |= s.step(dt);
         }
         let springs = &self.springs;
-        let scrolls = &self.scrolls;
+        let scrolls = (&self.scrolls, &heats);
         state(
             root,
             &mut path,
@@ -1335,6 +1341,86 @@ impl Ui {
             clipboard: self.copied.take(),
             ime,
         }
+    }
+
+    /// A held scrollbar slides its node: the thumb follows the pointer from
+    /// where it was grabbed, and a press on the track beside the thumb
+    /// centres the thumb there first. It lands on this frame's tree, like a
+    /// widget reading its drag. Returns whether an offset moved.
+    fn drag_bar(&mut self) -> bool {
+        let (Some(held), Some(p)) = (self.interaction.held(), self.pointer.pos) else {
+            return false;
+        };
+        let Some((key, vertical)) = bar::bar_of(held) else {
+            return false;
+        };
+        let Some(scene) = self.scene.as_ref() else {
+            return false;
+        };
+        let (Some(node), Some(strip)) = (scene.surface(key), scene.surface(held)) else {
+            return false;
+        };
+        let along = |f: mui_layout::Frame| {
+            if vertical {
+                (f.y, f.size.height)
+            } else {
+                (f.x, f.size.width)
+            }
+        };
+        let ((start, len), (_, view)) = (along(strip.frame), along(node.frame));
+        let total = if vertical {
+            node.content.height
+        } else {
+            node.content.width
+        };
+        let (pos, a) = if vertical { (p.y, 1) } else { (p.x, 0) };
+        let pressed = self.interaction.pressed() == Some(held);
+        let at = slot(&mut self.scrolls, key, || [0.0, 0.0]);
+        let Some((thumb, size)) = bar::thumb(start, len, view, total, at[a]) else {
+            return false;
+        };
+        if pressed {
+            self.bar_grab = if (thumb..thumb + size).contains(&pos) {
+                pos - thumb
+            } else {
+                size / 2.0
+            };
+        }
+        let next = bar::thumb_offset(start, len, view, total, pos - self.bar_grab);
+        let moved = next != at[a];
+        at[a] = next;
+        moved
+    }
+
+    /// Per scroll node that showed a bar last frame, how hot its bar is:
+    /// resting, the pointer over the list, or the bar itself under the
+    /// pointer or held. Each rides a runtime-owned tween, so it eases.
+    fn bar_heats(&mut self) -> BTreeMap<String, f64> {
+        let mut targets = BTreeMap::new();
+        let Some(scene) = self.scene.as_ref() else {
+            return targets;
+        };
+        let (hovered, held) = (self.interaction.hovered(), self.interaction.held());
+        for s in scene.surfaces() {
+            let Some((key, _)) = bar::bar_of(&s.key) else {
+                continue;
+            };
+            let over =
+                |f: mui_layout::Frame| self.pointer.pos.is_some_and(|p| f.contains(p.x, p.y));
+            let target = if hovered == Some(&*s.key) || held == Some(&*s.key) {
+                1.0
+            } else if scene.surface(key).is_some_and(|n| over(n.frame)) {
+                0.35
+            } else {
+                0.0
+            };
+            let t: &mut f64 = targets.entry(key.to_owned()).or_default();
+            *t = t.max(target);
+        }
+        for (key, target) in &mut targets {
+            *target = self.tween(&format!("/bar{key}"), *target);
+        }
+        targets
     }
 
     /// Send the wheel to the innermost scrollable surface under the pointer.
@@ -1639,14 +1725,18 @@ fn state(
     path: &mut String,
     pal: &Palette,
     of: &dyn Fn(&str) -> Option<(f64, f64)>,
-    scrolls: &BTreeMap<String, [f64; 2]>,
+    scrolls: (&BTreeMap<String, [f64; 2]>, &BTreeMap<String, f64>),
     off: bool,
 ) {
     let off = off || n.payload().disabled;
-    if let Some([x, y]) = scrolls.get(n.key().unwrap_or(path)).copied() {
+    if let Some([x, y]) = scrolls.0.get(n.key().unwrap_or(path)).copied() {
         // `scrolled` is a builder and a built node cannot be reopened.
         let node = std::mem::replace(n, mui_scene::leaf(0.0, 0.0));
         *n = node.scrolled(x, y);
+    }
+    if n.is_scroll() {
+        let heat = scrolls.1.get(n.key().unwrap_or(path)).copied();
+        n.payload_mut().scroll_bar_heat = Some(heat.unwrap_or(0.0));
     }
     if let Some((h, p)) = of(n.key().unwrap_or(path)).filter(|_| !off) {
         let bg = pal.background();

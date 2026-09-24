@@ -4,6 +4,7 @@
 //! solver produced in the same order. Every node gets an outline; every layer
 //! of its [`Style`](crate::Style) becomes one [`Painted`] entry. Children
 //! paint after their parent, so a list index is a z-order.
+pub mod bar;
 mod material;
 mod outline;
 mod paint;

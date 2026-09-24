@@ -321,6 +321,14 @@ pub struct Element {
     pub inside: Option<Spacing>,
     pub bend: f64,
     pub border_align: crate::BorderAlign,
+    /// A `.scroll()` node paints no overlay scrollbar. See
+    /// [`Styled::scroll_bar`].
+    pub scroll_bar_off: bool,
+    /// How hot the overlay scrollbar is: 0 at rest, 1 under the pointer or
+    /// in a drag. The runtime sets it every frame, as it does the offset;
+    /// `None`, a scene resolved without it, paints no bar, since nothing
+    /// could drag one.
+    pub scroll_bar_heat: Option<f64>,
 }
 
 /// A styled layout node: the type every constructor here returns.
@@ -912,6 +920,16 @@ pub trait Styled: Paints {
     /// Cap a wrapping label at `n` lines; the last one ends in an ellipsis.
     fn lines(mut self, n: usize) -> Self {
         self.element_mut().lines = Some(n.max(1));
+        self
+    }
+    /// Paint the overlay scrollbar a `.scroll()` node shows while it
+    /// overflows, or not. On by default: a thin `Ink` thumb over the far
+    /// edge of the viewport that thickens under the pointer and drags. The
+    /// `Ui` runtime owns it, so a scene resolved without one paints none.
+    /// Switch it off where the list draws its own position, or where a
+    /// `.mask()` fade already says there is more.
+    fn scroll_bar(mut self, on: bool) -> Self {
+        self.element_mut().scroll_bar_off = !on;
         self
     }
     /// [`Styled::transition`] with the default spring.
