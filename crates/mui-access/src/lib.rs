@@ -119,6 +119,7 @@ fn node(s: &ResolvedSurface, sem: Option<&Semantics>, runs: &mut Vec<(NodeId, No
         Kind::Label => Role::Label,
         Kind::Group => Role::Group,
         Kind::Scroll => Role::ScrollView,
+        Kind::Image => Role::Image,
     });
     match &sem.role {
         Kind::Button if !s.disabled => n.add_action(Action::Click),
@@ -160,7 +161,10 @@ fn node(s: &ResolvedSurface, sem: Option<&Semantics>, runs: &mut Vec<(NodeId, No
     // A group goes unnamed rather than read out as `osc/3/gain`, but a
     // control with neither label nor text (`toggle`, `text_input`) keeps its
     // id: an unnamed switch is worse than a noisy one.
-    let control = !matches!(sem.role, Kind::Label | Kind::Group | Kind::Scroll);
+    let control = !matches!(
+        sem.role,
+        Kind::Label | Kind::Group | Kind::Scroll | Kind::Image
+    );
     let name = sem.label.clone().or_else(|| s.text_value.clone());
     if let Some(name) = name.or_else(|| control.then(|| s.key.to_string())) {
         n.set_label(name);

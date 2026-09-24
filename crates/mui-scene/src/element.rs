@@ -230,6 +230,10 @@ pub enum Kind {
     Label,
     Group,
     Scroll,
+    /// A picture: a logo, a screenshot, an icon that means something. Its
+    /// `.label(..)` is the alt text; without one it is decoration and goes
+    /// unnamed, as an `<img alt="">` does.
+    Image,
 }
 
 /// A role and the name read out with it. A node with none is an unnamed
