@@ -19,10 +19,12 @@ mod controls;
 mod curve;
 mod grapheme;
 pub mod presets;
+mod text;
 pub mod visualization;
 
 pub use bins::{bins, bins_hover, BinAxis, BinEdit, Bins};
 pub(crate) use controls::step;
-pub use controls::{button, knob, slider, stepped, text_input, toggle, Control, Variant};
+pub use controls::{button, knob, slider, stepped, toggle, Control, Variant};
 pub use curve::{curve, CurveEdit};
 pub use presets::{card, chip, glass, panel, tile};
+pub use text::{text_edit, text_input, Newline, TextEdit, TextOpts};

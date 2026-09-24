@@ -131,6 +131,8 @@ pub struct Ui {
     /// Per text field: the selection's anchor and caret, in characters. They
     /// are equal when nothing is selected.
     sel: BTreeMap<String, (usize, usize)>,
+    /// Per multi-line field: how far its lines are scrolled up, in units.
+    text_scroll: BTreeMap<String, f64>,
     /// The host's clipboard, handed in with a paste key; and what a copy or
     /// cut asked to put back on it.
     pasted: Option<String>,
@@ -217,6 +219,7 @@ impl Ui {
             wrapped: false,
             path: String::new(),
             sel: BTreeMap::new(),
+            text_scroll: BTreeMap::new(),
             pasted: None,
             copied: None,
             preedit: None,
@@ -597,6 +600,12 @@ impl Ui {
     pub fn focused(&self, id: &str) -> bool {
         self.focus.as_deref() == Some(id)
     }
+    /// Drop the keyboard focus from code: a field that submits on Enter
+    /// lets go of the keys, as a click on the background would.
+    pub fn blur(&mut self) {
+        self.preedit = None;
+        self.focus = None;
+    }
     /// Focus `id` from code. No check that it exists: it may not have been
     /// built yet.
     pub fn focus(&mut self, id: impl Into<String>) {
@@ -806,6 +815,12 @@ impl Ui {
         self.scrolls.get(id).copied().unwrap_or([0.0, 0.0])
     }
 
+    pub(crate) fn text_scroll(&self, id: &str) -> f64 {
+        self.text_scroll.get(id).copied().unwrap_or(0.0)
+    }
+    pub(crate) fn set_text_scroll(&mut self, id: &str, y: f64) {
+        *slot(&mut self.text_scroll, id, || 0.0) = y;
+    }
     pub(crate) fn sel(&self, id: &str) -> (usize, usize) {
         self.sel.get(id).copied().unwrap_or((0, 0))
     }
@@ -867,6 +882,37 @@ impl Ui {
                 .enumerate()
                 .map(|(i, b)| (b, i as f64 * size * 0.6))
                 .collect(),
+        }
+    }
+    /// `s` broken into lines no wider than `width`, as byte ranges: a
+    /// `'\n'` always breaks and is in no range. What a multi-line field lays
+    /// its rows out by.
+    pub(crate) fn lines(&self, s: &str, size: f64, width: f64) -> Vec<std::ops::Range<usize>> {
+        if let (Some(fonts), true) = (self.fonts(), width.is_finite() && width > 0.0) {
+            if let Ok(lines) = mui_text::break_lines(&fonts, s, size, &[], width) {
+                return lines.into_iter().map(|l| l.text_range).collect();
+            }
+        }
+        // ponytail: without a font, hard breaks only; set a font to wrap.
+        let mut at = 0;
+        s.split('\n')
+            .map(|l| {
+                let r = at..at + l.len();
+                at = r.end + 1;
+                r
+            })
+            .collect()
+    }
+    /// The pitch one line of text at `size` is stacked at: the font's line
+    /// height on the device grid, as the scene measures a text node.
+    pub(crate) fn line_height(&self, size: f64) -> f64 {
+        let h = self
+            .fonts()
+            .and_then(|fonts| mui_text::shape_run(&fonts, "M", size, &[]).ok())
+            .map_or(size * 1.25, |r| r.line_height);
+        match self.scale {
+            Some(s) if s > 0.0 => (h * s).round() / s,
+            _ => h,
         }
     }
     /// A caret is on for 0.625 s of every 1.25 s.
@@ -1427,6 +1473,7 @@ impl Ui {
             true
         });
         self.sel.retain(|id, _| scene.surface(id).is_some());
+        self.text_scroll.retain(|id, _| scene.surface(id).is_some());
         animating | self.wheel(scene, wheel)
     }
 

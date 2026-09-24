@@ -435,23 +435,37 @@ impl PreviewScene for Scrolling {
 pub struct Fields {
     name: String,
     note: String,
+    notes: Option<String>,
+    submits: usize,
 }
 impl PreviewScene for Fields {
     fn name(&self) -> &'static str {
         "Text"
     }
     fn about(&self) -> &'static str {
-        "Click or Tab to focus, type, arrows and Backspace edit. The label mirrors the first field."
+        "Type, select, edit. Notes wrap; ctrl+Enter submits."
     }
     fn specimen(&mut self, ui: &mut Ui) -> El {
         let name = text_input(ui, "field-name", &mut self.name).0;
         let note = text_input(ui, "field-note", &mut self.note).0;
+        let notes = self.notes.get_or_insert_with(|| {
+            "A take recorded at 120 BPM, trimmed to the second chorus.\n\nWrapped lines, Up and Down between them, and the wheel scrolls past the fourth row once there is more to read than fits.".to_owned()
+        });
+        let opts = TextOpts {
+            newline: Newline::Enter,
+            rows: 4,
+            ..TextOpts::default()
+        };
+        let (notes, edit) = text_edit(ui, "field-notes", notes, opts);
+        self.submits += usize::from(edit.submitted);
         column([
             label("name"),
             name,
             label("note"),
             note,
-            text(format!("name = {}", self.name)).fill(Role::Dim),
+            label("notes"),
+            notes,
+            text(format!("name = {}, submitted {}x", self.name, self.submits)).fill(Role::Dim),
         ])
         .gap(S)
         .pad(L)
