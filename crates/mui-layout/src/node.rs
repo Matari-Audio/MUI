@@ -348,7 +348,8 @@ impl<P> Node<P> {
         self
     }
     /// Let the children overflow the main axis behind a clip. The node's
-    /// floor on that axis drops to its padding, so it can be squeezed.
+    /// floor on that axis drops to its padding, so it can be squeezed. A
+    /// stack has no main axis and overflows on both.
     pub fn scroll(mut self) -> Self {
         self.scroll = true;
         self.clip = true;

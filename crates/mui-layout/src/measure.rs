@@ -583,6 +583,14 @@ pub(crate) fn measure_uncached<'a, P>(
             pad(sunk).cross(v),
             v,
         ),
+        // A scrolling stack has no main axis, so it scrolls on both and
+        // neither floor holds. Its content floor would otherwise pin it open
+        // and squeeze its siblings instead: `stack![body].scroll()` beside a
+        // header shrank the header and never overflowed at all.
+        None if node.scroll && matches!(node.kind, Kind::Overlay(_)) => Size::new(
+            padding.horizontal().max(node.minimum.width),
+            padding.vertical().max(node.minimum.height),
+        ),
         _ => pad(sunk),
     };
     // A size the node declares itself is also its floor: `.size(10., 10.).pad(6.)`
