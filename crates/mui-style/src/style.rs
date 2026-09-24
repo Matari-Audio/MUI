@@ -494,6 +494,10 @@ pub struct Style {
     /// where they drew: source-atop, in the node's outline. See
     /// `Paints::mask` in `mui-scene`.
     pub mask: Fill,
+    /// Blur what was painted before this node, inside its outline, by this
+    /// standard deviation in logical pixels; `0` leaves it sharp. See
+    /// `Paints::backdrop_blur` in `mui-scene`.
+    pub backdrop_blur: f64,
 }
 
 impl Style {
@@ -550,6 +554,11 @@ impl Style {
                 self.mask
             } else {
                 other.mask
+            },
+            backdrop_blur: if other.backdrop_blur > 0.0 {
+                other.backdrop_blur
+            } else {
+                self.backdrop_blur
             },
         }
     }

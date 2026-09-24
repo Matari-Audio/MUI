@@ -16,6 +16,7 @@ use kurbo::{Affine, BezPath, Rect, Shape as _, Stroke};
 use mui_geometry::Error;
 use mui_scene::{Fit, GradientKind, Layer, Paint, Painted, ResolvedScene, ShadowKind};
 use std::sync::{Arc, Weak};
+use vello_common::filter_effects::{EdgeMode, Filter, FilterPrimitive};
 use vello_common::image_cache::ImageCache;
 use vello_common::multi_atlas::{AtlasConfig, AtlasError};
 use vello_common::paint::ImageId;
@@ -145,6 +146,16 @@ pub trait Canvas {
     /// that asks for it, not one per node.
     fn push_layer(&mut self, blend: peniko::BlendMode, opacity: f32);
     fn pop_layer(&mut self);
+    /// Two layers, closed by two [`Canvas::pop_layer`]s: one clipped to
+    /// `clip`, and inside it one that composites through a Gaussian blur of
+    /// `std_dev`, in the space of the current transform. The clip is a layer
+    /// of its own because `vello_hybrid` does not clip a filter layer's
+    /// output to the clip-path stack around it. `false`, having pushed
+    /// nothing, on a canvas without filter layers: a [`Layer::Backdrop`]
+    /// then leaves the backdrop sharp.
+    fn push_blur(&mut self, _clip: &BezPath, _std_dev: f32) -> bool {
+        false
+    }
     /// Draw a hinted glyph run in the current paint, each glyph's `x`
     /// measured from the run's origin along the baseline.
     fn glyphs(&mut self, text: &mui_scene::Text);
@@ -462,6 +473,11 @@ impl Canvas for Gpu<'_> {
             .into(),
         )
     }
+    fn push_blur(&mut self, clip: &BezPath, std_dev: f32) -> bool {
+        self.scene.push_clip_layer(clip);
+        self.scene.push_filter_layer(blur(std_dev));
+        true
+    }
     // ponytail: no glyph atlas here. `vello_hybrid` keeps glyphs in the same
     // private allocator as images, and `upload_image` unwraps a full one, so
     // the `Cache` mirror that keeps that unwrap unreachable must see every
@@ -489,6 +505,15 @@ impl Canvas for Cpu<'_> {
             .into(),
         )
     }
+    fn push_blur(&mut self, clip: &BezPath, std_dev: f32) -> bool {
+        // `vello_cpu` panics on a filter layer in a multi-threaded context.
+        let one_thread = self.ctx.render_settings().num_threads == 0;
+        if one_thread {
+            self.ctx.push_clip_layer(clip);
+            self.ctx.push_filter_layer(blur(std_dev));
+        }
+        one_thread
+    }
     // `vello_cpu` keeps its glyph atlas apart from images: nothing to mirror.
     wrapper!(ctx, true);
 }
@@ -500,6 +525,16 @@ pub struct Cpu<'a> {
     pub ctx: &'a mut vello_cpu::RenderContext,
     pub resources: &'a mut vello_cpu::Resources,
     pub cache: &'a mut Cache,
+}
+
+/// The one filter MUI asks for. `Duplicate` edges, because the backdrop
+/// stops at the window, and fading it to transparent there would darken the
+/// frosted glass along every screen edge.
+fn blur(std_dev: f32) -> Filter {
+    Filter::from_primitive(FilterPrimitive::GaussianBlur {
+        std_deviation: std_dev,
+        edge_mode: EdgeMode::Duplicate,
+    })
 }
 
 fn srgb(c: mui_scene::Color) -> AlphaColor<Srgb> {
@@ -634,12 +669,86 @@ pub fn paint(
     canvas.begin_frame();
     canvas.set_transform(transform);
     let mut bez = BezPath::new();
-    for p in &scene.paint {
+    for (i, p) in scene.paint.iter().enumerate() {
         if layered(canvas, p) {
             continue;
         }
         bez_path_into(&p.path, ARC_TOLERANCE, &mut bez)?;
-        one(canvas, p, &bez)?;
+        if p.layer == Layer::Backdrop {
+            backdrop(canvas, &scene.paint[..i], p, &bez)?;
+        } else {
+            one(canvas, p, &bez)?;
+        }
+    }
+    Ok(())
+}
+
+/// A [`Layer::Backdrop`]: `below` -- everything the list painted before it
+/// -- painted again inside `outline`, through a blur layer.
+///
+/// Neither renderer can read back what it has drawn, so this is the whole
+/// trick, and it is a real Gaussian on both: `vello_hybrid` decimates a wide
+/// one on the GPU, `vello_cpu` convolves it. The cost is one more encode of
+/// the prefix, only where it can reach the outline; a retained renderer pays
+/// it when the list changes, not per presented frame.
+// ponytail: a backdrop inside `below` is not blurred again in the replay
+// (its dim still paints), so k modals cost k prefixes, not 2^k. External
+// welds are skipped too: `paint` cannot draw them, and the retained renderer
+// would need its texture ids here. Blur them when a weld sits under a modal.
+fn backdrop(
+    canvas: &mut impl Canvas,
+    below: &[Painted],
+    p: &Painted,
+    outline: &BezPath,
+) -> Result<(), Error> {
+    // NaN and negatives say nothing, as a zero does.
+    if p.blur.is_nan() || p.blur <= 0.0 {
+        return Ok(());
+    }
+    // A clip or layer the prefix opens and never closes is an ancestor's:
+    // its clip already bounds this node and its layer composites it, so
+    // replaying it would apply it twice -- an ancestor's opacity squared.
+    let mut open = Vec::new();
+    for (i, q) in below.iter().enumerate() {
+        match q.layer {
+            Layer::Clip | Layer::Blend { .. } => open.push(i),
+            Layer::Unclip | Layer::Unblend => {
+                open.pop();
+            }
+            _ => {}
+        }
+    }
+    // What the blur can pull in: three standard deviations past the outline.
+    let reach = outline.bounding_box().inflate(3. * p.blur, 3. * p.blur);
+    if canvas.push_blur(outline, p.blur as f32) {
+        let mut ancestors = open.into_iter().peekable();
+        let mut bez = BezPath::new();
+        for (i, q) in below.iter().enumerate() {
+            if ancestors.next_if_eq(&i).is_some()
+                || matches!(q.layer, Layer::Backdrop | Layer::External)
+                || layered(canvas, q)
+            {
+                continue;
+            }
+            bez_path_into(&q.path, ARC_TOLERANCE, &mut bez)?;
+            // Only plain paint is culled: clips, masks and shadows reach
+            // past their path's box, and are few.
+            let plain = matches!(
+                q.layer,
+                Layer::Fill | Layer::Shell(_) | Layer::Stroke | Layer::Text | Layer::Draw(_)
+            );
+            let em = q.text.as_ref().map_or(0., |t| f64::from(t.size));
+            let reaches = || {
+                paint_box(q, &bez)
+                    .inflate(q.width + em, q.width + em)
+                    .overlaps(reach)
+            };
+            if !plain || reaches() {
+                one(canvas, q, &bez)?;
+            }
+        }
+        canvas.pop_layer();
+        canvas.pop_layer();
     }
     Ok(())
 }
@@ -705,6 +814,11 @@ fn mix(m: mui_scene::Mix) -> peniko::Mix {
 }
 
 fn one(canvas: &mut impl Canvas, p: &Painted, path: &BezPath) -> Result<(), Error> {
+    // Needs the list before it; see `backdrop`. A caller without one (a
+    // tile, which cannot see past its edge) leaves the backdrop sharp.
+    if p.layer == Layer::Backdrop {
+        return Ok(());
+    }
     if p.layer == Layer::Clip {
         canvas.push_clip(path);
         return Ok(());
