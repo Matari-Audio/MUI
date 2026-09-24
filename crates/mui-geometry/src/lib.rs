@@ -25,6 +25,8 @@ pub use regions::{
     boolean_paths, border_geometry, boundary_band, union_contours, BorderAlign, BorderGeometry,
     ShapeSplit, SplitAxis, WidthProfile,
 };
+mod morph;
+pub use morph::morph;
 mod path;
 mod spacing;
 pub use nesting::{InsetRect, RoundedRect};

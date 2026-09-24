@@ -594,6 +594,35 @@ impl Interaction {
         Self::default()
     }
 
+    /// Rename every target this remembers -- hover, capture, press, the
+    /// drop in flight -- through `to`, which answers `None` for a key that
+    /// keeps its name. A runtime calls this when a node it tracks by
+    /// identity changed name, so a drag survives the reorder it causes.
+    pub fn rename(&mut self, to: &dyn Fn(&str) -> Option<String>) {
+        let go = |k: &mut Option<String>| {
+            if let Some(new) = k.as_deref().and_then(to) {
+                *k = Some(new);
+            }
+        };
+        for k in [
+            &mut self.hovered,
+            &mut self.over,
+            &mut self.active,
+            &mut self.pressed,
+            &mut self.released,
+            &mut self.clicked,
+        ] {
+            go(k);
+        }
+        if let Some((a, b)) = &mut self.dropped {
+            for k in [a, b] {
+                if let Some(new) = to(k) {
+                    *k = new;
+                }
+            }
+        }
+    }
+
     /// Override [`DRAG_THRESHOLD`] -- a touch screen wants a larger one.
     ///
     /// The threshold must be finite and non-negative. Zero is valid and makes

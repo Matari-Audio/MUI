@@ -7,7 +7,8 @@ Input (pointer with its Buttons and Mods, wheel, keys, text)
    |                        one capture per button, with the modifiers at the
    |                        press and now (Shift is the fine drag), the travel
    |                        since the press and the axis it favours,
-   |                        focus (press, Tab, Escape), wheel -> scroll offsets,
+   |                        focus (press, Tab, Escape), wheel -> scroll targets
+   |                        that the drawn offsets spring to (0.12 s),
    |                        hover clock -> the tip that comes due,
    |                        capture edges -> Frame::edits (begin/end edit),
    |                        clipboard in and out. ui.keys(id) is focus-gated;

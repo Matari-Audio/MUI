@@ -315,7 +315,8 @@ const LANE: f64 = 0.45;
 ///
 /// The whole lane is the target: a press on the track jumps the value there
 /// and the drag carries on from it, a full-width drag sweeps the full range,
-/// and a focused slider steps with the arrow keys. Call `Ui::edit` with the
+/// and a focused slider steps with the arrow keys. As on a [`knob`], the
+/// drawn thumb follows a tween, so a value set from outside glides. Call `Ui::edit` with the
 /// same id to bracket the gesture for a host's automation: `Begin` on the
 /// press, `End` on the release.
 ///
@@ -359,7 +360,9 @@ pub fn slider(
     ui.drag(&id, value, range.clone(), travel, false);
     stepped(ui, &id, value, &range);
     let changed = moved(before, *value);
-    let t = unit(*value, &range);
+    // The drawn thumb glides like a knob's pointer; the value, the readout
+    // and the grab test above stay exact.
+    let t = ui.tween_with(&id, unit(*value, &range), Spring::new(0.12, 1.0));
     let (label, value) = (label.to_owned(), *value);
     let (min, max) = (*range.start(), *range.end());
     let control = Control::new(ui, move |look| {
@@ -498,8 +501,8 @@ pub fn button(ui: &mut Ui, id: impl Into<Id>, label: &str) -> (Control, bool) {
     (el, clicked)
 }
 
-/// A switch: the knob's side is a flex share, the click flips it. Returns
-/// the control and whether it flipped.
+/// A switch: the knob's side is a flex share it slides between, the click
+/// flips it. Returns the control and whether it flipped.
 ///
 /// ```
 /// use mui::prelude::*;
@@ -523,7 +526,11 @@ pub fn toggle(ui: &mut Ui, id: impl Into<Id>, on: &mut bool) -> (Control, bool) 
         let (w, h) = (look.px, look.px * 0.55);
         row([
             spacer().grow(t),
-            leaf(h * 0.73, h * 0.73).pill().fill(Role::Ink),
+            // The knob's side is a flex share; its frame glides between them.
+            leaf(h * 0.73, h * 0.73)
+                .pill()
+                .fill(Role::Ink)
+                .animate_layout(),
             spacer().grow(1.0 - t),
         ])
         .size(w, h)
