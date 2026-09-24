@@ -1,0 +1,11 @@
+import assert from 'node:assert/strict';
+import {validateScene,poseTransform} from './layers.mjs';
+const scene={version:1,width:100,height:80,scale:2,layers:[{id:'osc/0',src:'layer-01.png',rect:[-2,0,50,40]}]};
+assert.equal(validateScene(scene),scene);
+for (const broken of [ {...scene,width:NaN}, {...scene,layers:[...scene.layers,...scene.layers]}, {...scene,layers:[{...scene.layers[0],src:'../secret.png'}]}, {...scene,layers:[{...scene.layers[0],rect:[0,0,0,10]}]}]) assert.throws(()=>validateScene(broken));
+assert.throws(()=>poseTransform({z:Infinity}));
+assert.throws(()=>poseTransform({scaleX:0}));
+const first=poseTransform({x:12,z:200,rotateY:30,scaleX:1.4});
+poseTransform({x:-100,z:-300});
+assert.equal(poseTransform({x:12,z:200,rotateY:30,scaleX:1.4}),first,'random-access poses must be history independent');
+console.log('MUI motion manifest and random-access pose checks passed.');

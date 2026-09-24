@@ -906,23 +906,31 @@ impl PreviewScene for Wrapping {
 }
 
 /// Everything that moves without being told a frame number: a fill that
-/// springs to its new role, a value that springs to the slider, and the two
-/// edges of a gesture.
+/// springs to its new role, a frame that glides to where layout moved it, a
+/// card that enters and leaves, a shape that morphs when it is renamed, a
+/// rack that reorders by identity, and keyframes that land on a time.
 #[derive(Default)]
 pub struct Motion {
     on: [bool; 4],
     sweep: f64,
     gain: f64,
     last: String,
+    wide: bool,
+    toast: bool,
+    playing: bool,
+    rack: Vec<u64>,
 }
 impl PreviewScene for Motion {
     fn name(&self) -> &'static str {
         "Motion"
     }
     fn about(&self) -> &'static str {
-        "Click a card: .animate() springs the fill to its new role. The pie follows ui.tween; the knob reports Begin/End."
+        "Cards spring their fill; the panel glides its frame; Toast enters and leaves; the transport morphs play to pause; the rack reorders by identity; the dots play keyframes."
     }
     fn specimen(&mut self, ui: &mut Ui) -> El {
+        if self.rack.is_empty() {
+            self.rack = vec![1, 2, 3];
+        }
         let cards: Vec<El> = (0..4)
             .map(|i| {
                 let id = format!("card-{i}");
@@ -952,8 +960,8 @@ impl PreviewScene for Motion {
             let pts: Vec<Point> = std::iter::once(c).chain(arc).collect();
             vec![Draw::fill(Path::polyline(pts, true), Role::Primary)]
         })
-        .square(140)
-        .radius(70.0)
+        .square(96)
+        .radius(48.0)
         .fill(Role::Field);
         if let Some(e) = ui.edit("mot-gain") {
             self.last = match e {
@@ -962,12 +970,121 @@ impl PreviewScene for Motion {
             }
             .to_owned();
         }
+
+        // A panel whose solved frame changes size: it grows, rounded, rather
+        // than cutting to the new rectangle.
+        self.wide ^= ui.get("mot-panel").clicked;
+        let panel = leaf(if self.wide { 260.0 } else { 120.0 }, 44.0)
+            .radius(22.0)
+            .fill(Role::Raised)
+            .animate_layout()
+            .cursor(Cursor::Hand)
+            .id("mot-panel");
+
+        // Play and pause are two shapes under one name each; the node
+        // morphs between them.
+        self.playing ^= ui.get("mot-transport").clicked;
+        let playing = self.playing;
+        let transport = leaf(36.0, 36.0)
+            .outline(move |s| {
+                let (w, h) = (s.width, s.height);
+                let p = |x: f64, y: f64| Point::new(x * w, y * h);
+                if playing {
+                    let bar = |x0: f64| {
+                        Path::polyline(
+                            [p(x0, 0.), p(x0 + 0.3, 0.), p(x0 + 0.3, 1.), p(x0, 1.)],
+                            true,
+                        )
+                    };
+                    Path {
+                        commands: [bar(0.1).commands, bar(0.6).commands].concat(),
+                    }
+                } else {
+                    Path::polyline([p(0.15, 0.), p(1., 0.5), p(0.15, 1.)], true)
+                }
+            })
+            .fill(Role::Primary)
+            .morph(if playing { "pause" } else { "play" })
+            .cursor(Cursor::Hand)
+            .id("mot-transport");
+
+        // A toast that enters from below and fades out where it stood.
+        self.toast ^= ui.get("mot-toast-btn").clicked;
+        let (toast_btn, _) = button(
+            ui,
+            "mot-toast-btn",
+            if self.toast {
+                "Hide toast"
+            } else {
+                "Show toast"
+            },
+        );
+        let toast = if self.toast {
+            text("Saved to preset A")
+                .pad(S)
+                .radius(10.0)
+                .fill(Role::Primary)
+                .appear(Appear::Slide(0.0, 16.0))
+                .id("mot-toast")
+        } else {
+            leaf(0.0, 0.0)
+        };
+
+        // A rack named by slot index, reordered on click: each module keeps
+        // its identity, so it glides to its new slot.
+        if ui.get("mot-rack-shuffle").clicked {
+            self.rack.rotate_left(1);
+        }
+        let (shuffle, _) = button(ui, "mot-rack-shuffle", "Rotate rack");
+        let rack = row(self.rack.iter().enumerate().map(|(slot, &module)| {
+            text(format!("M{module}"))
+                .pad(S)
+                .radius(8.0)
+                .fill(if module == 1 {
+                    Role::Primary
+                } else {
+                    Role::Raised
+                })
+                .animate_layout()
+                .identity(module)
+                .id(format!("mot-slot/{slot}"))
+        }))
+        .gap(S);
+
+        // Keyframes on the runtime clock, staggered per dot.
+        let dots = row((0..5).map(|i| {
+            let k = Keys::new(0.3)
+                .to(0.35, 1.0, Ease::EMPHASIZED)
+                .to(1.1, 0.3, Ease::IN_OUT)
+                .delay(f64::from(i) * 0.08);
+            let v = ui.play(&format!("mot-dot-{i}"), &k);
+            leaf(14.0, 14.0)
+                .pill()
+                .fill(Role::Primary)
+                .opacity(v as f32)
+        }))
+        .gap(S);
+        if ui.get("mot-dots").clicked {
+            for i in 0..5 {
+                ui.replay(&format!("mot-dot-{i}"));
+            }
+        }
+
         column([
             row(cards).gap(M).justify(Justify::Center),
-            pie.anchor(Align::Center, Align::Center),
-            knob(ui, "mot-gain", "Gain", &mut self.gain, 0.0..=1.0)
-                .0
-                .el(),
+            row([
+                pie,
+                knob(ui, "mot-gain", "Gain", &mut self.gain, 0.0..=1.0)
+                    .0
+                    .el(),
+                transport,
+            ])
+            .gap(L)
+            .align(Align::Center),
+            panel,
+            row([toast_btn.el(), toast]).gap(M).align(Align::Center),
+            row([shuffle.el(), rack]).gap(M).align(Align::Center),
+            dots.cursor(Cursor::Hand).id("mot-dots"),
             text(if self.last.is_empty() {
                 "drag the knob".to_owned()
             } else {

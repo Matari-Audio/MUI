@@ -474,3 +474,14 @@ fn shift_drags_fine_and_a_drag_locks_to_its_longest_axis() {
     assert_eq!(r.drag_fine(FINE_DRAG).x, 100.0, "coarse again mid-drag");
     assert_eq!(r.drag_axis(), Some(Axis::X), "x now dominates");
 }
+
+#[test]
+fn a_capture_follows_its_target_through_a_rename() {
+    let mut i = Interaction::new();
+    i.update(&one_square(), down(10., 10.));
+    assert!(i.get("a").held);
+    // The runtime reordered: what was "a" is "slot/1" now.
+    i.rename(&|k| (k == "a").then(|| "slot/1".to_owned()));
+    assert!(i.get("slot/1").held && !i.get("a").held);
+    assert_eq!(i.held(), Some("slot/1"));
+}

@@ -2,7 +2,7 @@
 //!
 //! Two independent things, both pure maths over `f64`/`f32` and `std` alone:
 //! a [`Spring`], the second-order chase every animated paint channel is
-//! stepped by, and [`curve`], normalized single-valued cubic Beziers for
+//! stepped by, [`Keys`], keyframes that land on a time, and [`curve`], normalized single-valued cubic Beziers for
 //! response shapers and their editors.
 //!
 //! Nothing here knows about time sources, frames or trees: a caller owns the
@@ -11,6 +11,8 @@
 #![forbid(unsafe_code)]
 
 pub mod curve;
+mod keys;
 mod spring;
 
+pub use keys::{Ease, Keys};
 pub use spring::Spring;
