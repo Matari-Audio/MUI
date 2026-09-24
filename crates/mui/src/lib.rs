@@ -34,7 +34,7 @@ pub mod widgets;
 pub use actions::SemanticAction;
 pub use widgets::presets;
 
-pub use ui::{Edit, Frame, Ui};
+pub use ui::{Clipboard, Edit, Frame, Ui};
 
 pub mod prelude {
     pub use crate::widgets::presets::{card, chip, glass, panel, tile};

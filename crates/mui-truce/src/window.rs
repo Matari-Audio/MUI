@@ -651,12 +651,24 @@ fn target_size((width, height): (u32, u32)) -> Option<(u32, u32)> {
 /// X11 drops a selection when its owner goes, so Linux keeps an arboard
 /// owner alive. baseview writes the clipboard elsewhere but cannot read it:
 /// there, a paste gets what this editor copied last.
+///
+/// Also a [`mui::Clipboard`], for a baseview host of your own:
+/// `Ui::new(theme).clipboard(Clipboard::default())`.
 #[derive(Default)]
-struct Clipboard {
+pub struct Clipboard {
     #[cfg(target_os = "linux")]
     x11: Option<arboard::Clipboard>,
     #[cfg(not(target_os = "linux"))]
     last: Option<String>,
+}
+
+impl mui::Clipboard for Clipboard {
+    fn get(&mut self) -> Option<String> {
+        self.read()
+    }
+    fn set(&mut self, text: &str) {
+        self.write(text);
+    }
 }
 
 impl Clipboard {

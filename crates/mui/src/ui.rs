@@ -30,6 +30,33 @@ pub const TIP_DELAY: f64 = 0.5;
 /// Two presses on one target within this are a double click.
 pub const DOUBLE_CLICK: f64 = 0.4;
 
+/// The host's clipboard, for a [`Ui`] that reads and writes it itself.
+///
+/// Without one, the clipboard is data: a copy comes out on
+/// [`Frame::clipboard`] and a paste comes in on [`Input::clipboard`], which
+/// the host fills because it saw the paste key. With one, a paste key reads
+/// [`Clipboard::get`] when the host handed no text in, a copy or cut goes
+/// straight to [`Clipboard::set`], and [`Ui::paste`] answers an app's own
+/// Paste button. baseview has no clipboard to read, so a plugin host brings
+/// one (arboard, say); a test brings a `String`.
+///
+/// ```
+/// # use mui::{Clipboard, Ui}; use mui::prelude::*;
+/// struct Memory(String);
+/// impl Clipboard for Memory {
+///     fn get(&mut self) -> Option<String> { Some(self.0.clone()) }
+///     fn set(&mut self, text: &str) { self.0 = text.to_owned(); }
+/// }
+/// let mut ui = Ui::new(Theme::DEFAULT).clipboard(Memory("saw".into()));
+/// assert_eq!(ui.paste().as_deref(), Some("saw"));
+/// ```
+pub trait Clipboard: Send {
+    /// The clipboard's text, or `None` when it holds none or cannot be read.
+    fn get(&mut self) -> Option<String>;
+    /// Replace the clipboard's contents with `text`.
+    fn set(&mut self, text: &str);
+}
+
 /// What one call to [`Ui::frame`] produced.
 pub struct Frame<'a> {
     pub scene: &'a ResolvedScene,
@@ -48,7 +75,8 @@ pub struct Frame<'a> {
     /// Every gesture that began or ended this frame, for a host that brackets
     /// automation. [`Ui::edit`] asks about one id.
     pub edits: Vec<(String, Edit)>,
-    /// A copy or cut asked for this: put it on the host's clipboard.
+    /// A copy or cut asked for this: put it on the host's clipboard. Always
+    /// `None` for a [`Ui`] given a [`Clipboard`], which already has it.
     pub clipboard: Option<String>,
     /// The caret of the field that wants an input method, in scene units.
     /// `Some` means "allow IME and put the candidate window here"; `None`
@@ -107,6 +135,8 @@ pub struct Ui {
     /// cut asked to put back on it.
     pasted: Option<String>,
     copied: Option<String>,
+    /// The host's clipboard, when it handed one in: see [`Clipboard`].
+    board: Option<Box<dyn Clipboard>>,
     /// The text the input method is composing, and its cursor in bytes. It
     /// belongs to whatever holds the focus; only a `Commit` touches a value.
     preedit: Option<(String, Option<(usize, usize)>)>,
@@ -204,6 +234,23 @@ impl Ui {
             hover: None,
             tagged: None,
             time: 0.0,
+            board: None,
+        }
+    }
+    /// Read and write the host's clipboard through `board`: copy, cut and
+    /// paste in a text field then need nothing from the host. See
+    /// [`Clipboard`].
+    pub fn clipboard(mut self, board: impl Clipboard + 'static) -> Self {
+        self.board = Some(Box::new(board));
+        self
+    }
+    /// The clipboard's text now, for an app's own Paste button: the
+    /// [`Clipboard`] if the host gave one, else what the host handed in on
+    /// this frame's [`Input::clipboard`].
+    pub fn paste(&mut self) -> Option<String> {
+        match self.board.as_mut() {
+            Some(b) => b.get(),
+            None => self.pasted.clone(),
         }
     }
     /// Set the font.
@@ -776,8 +823,9 @@ impl Ui {
     pub fn set_ime_caret(&mut self, id: &str, at: Point, height: f64) {
         self.ime_caret = Some((id.to_owned(), at, height));
     }
-    /// Ask the host to put `s` on the clipboard: it comes back on the next
-    /// frame's [`Frame::clipboard`].
+    /// Put `s` on the clipboard: what an app's own Copy button calls. It
+    /// goes to the [`Clipboard`] at the end of the next frame, or comes back
+    /// on that frame's [`Frame::clipboard`] for a host without one.
     pub fn set_clipboard(&mut self, s: impl Into<String>) {
         self.copied = Some(s.into());
     }
@@ -940,7 +988,15 @@ impl Ui {
         } else {
             Point::ZERO
         };
-        self.pasted = clipboard;
+        // A paste key with no text handed in reads the host's clipboard, if
+        // it gave one: nothing here reads it speculatively.
+        let paste_key = keys
+            .iter()
+            .any(|k| matches!(k.key, Key::Char('v' | 'V')) && (k.mods.ctrl || k.mods.cmd));
+        self.pasted = match (clipboard, self.board.as_mut()) {
+            (None, Some(b)) if paste_key => b.get(),
+            (c, _) => c,
+        };
         let previous_blink = self.blink();
         self.time += dt;
         // A release is read by the *next* tree, so that frame must come even
@@ -1428,7 +1484,13 @@ impl Ui {
             tip,
             cursor,
             edits: self.delivered.clone(),
-            clipboard: self.copied.take(),
+            clipboard: match (self.copied.take(), self.board.as_mut()) {
+                (Some(s), Some(b)) => {
+                    b.set(&s);
+                    None
+                }
+                (s, _) => s,
+            },
             ime,
         }
     }
