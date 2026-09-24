@@ -2,9 +2,10 @@
 use std::fmt::Write as _;
 use std::sync::Arc;
 
-use mui_geometry::{Bounds, Path, Point};
+use mui_geometry::{Bounds, Path, Point, RoundedRect};
 use mui_layout::{Frame, Size};
 
+use super::bar::{self, BAR_MARGIN, BAR_STRIP, BAR_THIN, BAR_WIDE};
 use super::outline::Contour;
 use super::text::Face;
 use super::{
@@ -154,6 +155,12 @@ impl<'a> Walk<'a> {
         // Everything from here on closes this node, whatever its children
         // left the key at.
         self.key = key;
+        if let Some(heat) = e
+            .scroll_bar_heat
+            .filter(|_| n.is_scroll() && !e.scroll_bar_off)
+        {
+            self.scroll_bars(n, heat, frame, content, bg, &inner)?;
+        }
         if clips {
             self.mark(Layer::Unclip, empty(), None);
         }
@@ -327,6 +334,97 @@ impl<'a> Walk<'a> {
             (right - frame.x + scrolled[0] + pad.right - pad.left).max(0.0),
             (bottom - frame.y + scrolled[1] + pad.bottom - pad.top).max(0.0),
         )
+    }
+
+    /// The overlay scrollbar of a scroll node that overflows, per axis: a
+    /// rounded thumb painted over the children inside the node's clip, and
+    /// the strip along the far edge it rides in as a surface of its own. The
+    /// strip is the pointer target, runtime-owned by its key, and pushed
+    /// after the children so it is on top of them in the hit map. Its path
+    /// is the strip rather than the thumb, so scrolling does not change the
+    /// hit geometry.
+    fn scroll_bars(
+        &mut self,
+        n: &El,
+        heat: f64,
+        frame: Frame,
+        content: Size,
+        under: Color,
+        inner: &Ancestors,
+    ) -> Result<(), SceneError> {
+        let key = self.key.clone();
+        let offset = n.scroll_offset();
+        let heat = heat.clamp(0.0, 1.0);
+        let thick = BAR_THIN + (BAR_WIDE - BAR_THIN) * heat;
+        let ink = crate::Role::Ink.alpha((0.28 + 0.27 * heat) as f32);
+        let frame_at = |x, y, width, height| Frame {
+            x,
+            y,
+            size: Size::new(width, height),
+        };
+        for vertical in [true, false] {
+            let (a, strip) = if vertical {
+                let x = frame.right() - BAR_STRIP;
+                (1, frame_at(x, frame.y, BAR_STRIP, frame.size.height))
+            } else {
+                let y = frame.bottom() - BAR_STRIP;
+                (0, frame_at(frame.x, y, frame.size.width, BAR_STRIP))
+            };
+            let along = |f: Frame| {
+                if vertical {
+                    (f.y, f.size.height)
+                } else {
+                    (f.x, f.size.width)
+                }
+            };
+            let ((start, len), (_, view)) = (along(strip), along(frame));
+            let total = if vertical {
+                content.height
+            } else {
+                content.width
+            };
+            let Some((at, size)) = bar::thumb(start, len, view, total, offset[a]) else {
+                continue;
+            };
+            // Hugging the far edge, so it thickens inward over the content.
+            let thumb = if vertical {
+                frame_at(frame.right() - BAR_MARGIN - thick, at, thick, size)
+            } else {
+                frame_at(at, frame.bottom() - BAR_MARGIN - thick, size, thick)
+            };
+            let scale = self.spec.device_scale;
+            let rr = RoundedRect::new(bounds(thumb, scale), thick / 2.0)?;
+            let hit = RoundedRect::new(bounds(strip, scale), 0.0)?;
+            let bar_key: Arc<str> = bar::bar_key(&key, vertical).into();
+            self.key = bar_key.clone();
+            self.push(Layer::Fill, rr.path(), Some(rr), &ink, under);
+            self.at.insert(bar_key.clone(), self.surfaces.len());
+            self.surfaces.push(ResolvedSurface {
+                key: bar_key,
+                frame: strip,
+                bounds: Some(hit.bounds()),
+                path: Arc::new(hit.path()),
+                rect: Some(hit),
+                topology_changed: false,
+                cursor: None,
+                tip: None,
+                focusable: false,
+                captures_wheel: false,
+                // Earns it a place in the hit map without an id.
+                pointer_states: true,
+                disabled: inner.disabled,
+                semantics: None,
+                semantic_label_implicit: false,
+                text_value: None,
+                clip: inner.clip,
+                clip_path: inner.clip_paths.clone(),
+                parent: None,
+                content: strip.size,
+                hits: Vec::new(),
+            });
+        }
+        self.key = key;
+        Ok(())
     }
 
     /// Clip the subtree to the node's outline, and hand the descendants

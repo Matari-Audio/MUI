@@ -210,8 +210,18 @@ pub(crate) fn arrange_uncached<P>(
     match &n.kind {
         Kind::Leaf | Kind::Content => {}
         Kind::Overlay(_) => {
+            // A scrolling stack lays its children into their own extent,
+            // like a scrolling column does on its main axis; placed in the
+            // viewport instead they were squeezed to it, and a viewport-sized
+            // child is nothing the wheel can slide.
+            if n.scroll {
+                section = Size::new(
+                    inner.width.max(m.content.width),
+                    inner.height.max(m.content.height),
+                );
+            }
             for c in &flow {
-                let (p, s) = cell(c, inner, default);
+                let (p, s) = cell(c, section, default);
                 placed[c.index] = Some((at(p[0], p[1]), s));
             }
         }

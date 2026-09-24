@@ -294,13 +294,13 @@ impl App {
                 ui
             },
             font,
-            scenes: scenes::all(),
-            // `MUI_PREVIEW_SCENE=<name>` opens on that scene: a screenshot
-            // without clicking through the sidebar.
+            // `MUI_PREVIEW_SCENE=Scroll` opens on a scene by name, for a
+            // screenshot with no clicking.
             selected: std::env::var("MUI_PREVIEW_SCENE")
                 .ok()
                 .and_then(|n| scenes::all().iter().position(|s| s.name() == n))
                 .unwrap_or(0),
+            scenes: scenes::all(),
             pan: Point::new(0.0, 0.0),
             light: false,
             frames: false,

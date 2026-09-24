@@ -394,7 +394,7 @@ impl PreviewScene for Scrolling {
                 (1.0, Role::Surface.into()),
             ],
         );
-        column(sections)
+        let bands = column(sections)
             .gap(M)
             .pad(M)
             .scroll()
@@ -402,7 +402,31 @@ impl PreviewScene for Scrolling {
             .radius(16.0)
             .fill(Role::Surface)
             .mask(fade)
-            .id("scroll")
+            .id("scroll");
+        // No fade here, so the bar reads the whole way down; and a row, whose
+        // bar runs along the bottom edge.
+        let presets = column((0..30).map(|i| text(format!("preset {i:02}")).pad_xy(8.0, 4.0)))
+            .pad(S)
+            .scroll()
+            .size(160.0, 340.0)
+            .radius(16.0)
+            .fill(Role::Surface)
+            .id("presets");
+        let tags = row((0..24).map(|i| {
+            // A text node's fill is its ink, so the chip is a box around it.
+            row([text(format!("tag {i}"))])
+                .pad(S)
+                .radius(8.0)
+                .fill(Role::Raised)
+        }))
+        .gap(S)
+        .pad(S)
+        .scroll()
+        .size(496.0, 56.0)
+        .radius(12.0)
+        .fill(Role::Surface)
+        .id("tags");
+        column([row([bands, presets]).gap(M), tags]).gap(M)
     }
 }
 
