@@ -273,7 +273,7 @@ fn resolve_impl<P>(
         left: limits.nodes,
         limits,
         scale,
-        keys: BTreeMap::new(),
+        keys: Default::default(),
         redo: false,
         pinned: false,
         measurer: &mut measurer,
