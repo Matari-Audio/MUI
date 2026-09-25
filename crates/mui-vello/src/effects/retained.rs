@@ -438,18 +438,21 @@ impl GpuRenderer {
         let size = self.size;
         // Weld materials first, in their own submission: Vello's render
         // submits as it goes, and copies from these textures when it does.
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("MUI welds"),
-            });
+        // No welds, no encoder.
+        let mut encoder = None;
         let mut drawn = Vec::new();
         for (key, e) in resolved
             .external_welds()
             .filter(|(_, e)| visible(e, xf, size))
         {
             let before = stats.effect_draws;
-            self.effects.encode(key, &e.material, &mut encoder, stats)?;
+            let encoder = encoder.get_or_insert_with(|| {
+                self.device
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("MUI welds"),
+                    })
+            });
+            self.effects.encode(key, &e.material, encoder, stats)?;
             let (id, tex, used) = self
                 .effects
                 .texture(key)
@@ -472,7 +475,7 @@ impl GpuRenderer {
                 }
             }
         }
-        if stats.effect_draws > 0 {
+        if let Some(encoder) = encoder.filter(|_| stats.effect_draws > 0) {
             self.queue.submit([encoder.finish()]);
             for image in &drawn {
                 self.vello.mark_override_image_dirty(image);
