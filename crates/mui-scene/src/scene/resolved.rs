@@ -64,7 +64,7 @@ pub struct TextGlyph {
 }
 
 /// A text layer's glyphs, for a renderer that hints and caches its own.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Text {
     /// Primary face followed by any fallback faces used by this run; never
     /// empty.
@@ -92,7 +92,7 @@ pub struct Text {
 
 /// One thing to draw. `key` is the node's id, or its tree path (`/0/2`)
 /// when it has none: hit-testing and state keep working without names.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Painted {
     pub key: Arc<str>,
     pub layer: Layer,
@@ -112,6 +112,57 @@ pub struct Painted {
     /// glyphs never looks at it, and translating every run's outline into a
     /// fresh path is the most expensive thing the walk can do.
     pub text: Option<Text>,
+}
+
+/// The same `Arc` is the same value: a still scene hands its paths and
+/// glyph runs back by pointer, and comparing them command by command is
+/// what a renderer's "did anything change" would otherwise spend its frame on.
+fn same<T: PartialEq + ?Sized>(a: &Arc<T>, b: &Arc<T>) -> bool {
+    Arc::ptr_eq(a, b) || a == b
+}
+// By hand for `same`; destructured without `..` so a new field cannot be
+// left out of the comparison.
+impl PartialEq for Text {
+    fn eq(&self, o: &Self) -> bool {
+        let Self {
+            fonts,
+            size,
+            origin,
+            glyphs,
+            axes,
+            font_coords,
+            hint,
+        } = self;
+        same(fonts, &o.fonts)
+            && *size == o.size
+            && *origin == o.origin
+            && same(glyphs, &o.glyphs)
+            && *axes == o.axes
+            && same(font_coords, &o.font_coords)
+            && *hint == o.hint
+    }
+}
+impl PartialEq for Painted {
+    fn eq(&self, o: &Self) -> bool {
+        let Self {
+            key,
+            layer,
+            path,
+            paint,
+            rect,
+            width,
+            blur,
+            text,
+        } = self;
+        same(key, &o.key)
+            && *layer == o.layer
+            && same(path, &o.path)
+            && *paint == o.paint
+            && *rect == o.rect
+            && *width == o.width
+            && *blur == o.blur
+            && *text == o.text
+    }
 }
 
 /// A node's outline, for hit-testing and for anything that derives from it.

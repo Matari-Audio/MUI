@@ -245,6 +245,20 @@ impl<'a> Walk<'a> {
                 let draws = (c.0)(frame.size);
                 let generation = self.outlines.generation;
                 let paths = match self.outlines.canvases.get_mut(key) {
+                    // A plain canvas draws a fresh list every frame, most
+                    // often the same shapes: those keep last frame's paths,
+                    // unvalidated, uncopied and equal downstream by pointer.
+                    Some((old, placed, paths, seen))
+                        if *placed == origin
+                            && old
+                                .iter()
+                                .map(|d| &d.path)
+                                .eq(draws.iter().map(|d| &d.path)) =>
+                    {
+                        *old = draws.clone();
+                        *seen = generation;
+                        paths.clone()
+                    }
                     Some((old, placed, paths, seen)) if Arc::ptr_eq(old, &draws) => {
                         if *placed != origin {
                             let d = origin - *placed;
