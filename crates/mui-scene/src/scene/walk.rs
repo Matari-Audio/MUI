@@ -184,9 +184,15 @@ impl<'a> Walk<'a> {
         if clips {
             self.mark(Layer::Unclip, empty(), None);
         }
-        if let Some((stroke_path, stroke_rect, fill, width)) = late_stroke {
+        if let Some((stroke_path, stroke_rect, fill, width, clipped)) = late_stroke {
+            if clipped {
+                self.mark(Layer::Clip, stroke_path.clone(), None);
+            }
             if let Some(p) = self.push(Layer::Stroke, stroke_path, stroke_rect, &fill, bg) {
                 p.width = width;
+            }
+            if clipped {
+                self.mark(Layer::Unclip, empty(), None);
             }
         }
         if let Some(ramp) = &e.border_ramp {

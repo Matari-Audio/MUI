@@ -15,8 +15,8 @@ use crate::{Stroke, Style};
 const CLEAR: Color = Color::oklcha(0.0, 0.0, 0.0, 0.0);
 
 /// A stroke held back until the node's children have painted: path, rect,
-/// paint and width.
-pub(super) type LateStroke = (Arc<Path>, Option<RoundedRect>, Fill, f64);
+/// paint, width, and whether it is clipped to its own path.
+pub(super) type LateStroke = (Arc<Path>, Option<RoundedRect>, Fill, f64, bool);
 
 /// The colour a painted entry leaves for what paints on it.
 fn solid(p: Option<&mut Painted>, or: Color) -> Color {
@@ -233,22 +233,36 @@ impl Walk<'_> {
         }
         if let (crate::BorderAlign::Inside, Some(rr)) = (e.border_align, contour.rect) {
             let Some(rr) = rr.inset(w / 2.)?.shape else {
-                return Ok(Some((contour.path.clone(), None, st.fill.clone(), 0.)));
+                return Ok(Some((contour.path.clone(), None, st.fill.clone(), 0., false)));
             };
             if e.style.union {
-                return Ok(Some((Arc::new(rr.path()), Some(rr), st.fill.clone(), w)));
+                return Ok(Some((Arc::new(rr.path()), Some(rr), st.fill.clone(), w, false)));
             }
             if let Some(p) = self.push(Layer::Stroke, rr.path(), Some(rr), &st.fill, bg) {
                 p.width = w;
             }
             return Ok(None);
         }
-        // Shared with a surface owner's clearance: one entry per node.
-        let band = self.cached_region(
-            (self.key.clone(), STROKE_BAND),
-            Operation::Border((*contour.path).clone(), w, e.border_align),
-        )?;
-        Ok(Some((Arc::new(band), None, st.fill.clone(), 0.)))
+        // Any other outline is stroked by the renderer, not offset here: the
+        // band of a welded outline was a fresh boolean on every resize. An
+        // inside stroke is a centred one twice as wide, clipped to the outline.
+        match e.border_align {
+            _ if w == 0. => Ok(None),
+            crate::BorderAlign::Center => {
+                Ok(Some((contour.path.clone(), None, st.fill.clone(), w, false)))
+            }
+            crate::BorderAlign::Inside => {
+                Ok(Some((contour.path.clone(), None, st.fill.clone(), 2. * w, true)))
+            }
+            crate::BorderAlign::Outside => {
+                // Shared with a surface owner's clearance: one entry per node.
+                let band = self.cached_region(
+                    (self.key.clone(), STROKE_BAND),
+                    Operation::Border((*contour.path).clone(), w, e.border_align),
+                )?;
+                Ok(Some((Arc::new(band), None, st.fill.clone(), 0., false)))
+            }
+        }
     }
 
     /// A border ramp's band, painted after the children. One with tabs moves
