@@ -363,7 +363,7 @@ pub(crate) fn arrange<P>(
     for (i, c) in m.children.iter().enumerate() {
         // A candidate that lost keeps its place in the frame list, empty, so
         // a walk of the tree still lines up with it.
-        if matches!(n.kind, Kind::Fits(_)) && i != m.pick {
+        if matches!(n.kind, Kind::Fits(_)) && i != m.pick && !c.node.float {
             hide(c, origin, out);
             continue;
         }

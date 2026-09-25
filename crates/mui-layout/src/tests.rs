@@ -829,6 +829,20 @@ fn a_pixel_pad_clears_the_token_before_it() {
     assert_eq!(n.padding(scale), Insets::all(12.0));
 }
 
+/// A float appended to a `fits` -- a tooltip -- is no candidate: the
+/// fallback still wins when nothing fits, and the float still shows.
+#[test]
+fn a_float_in_fits_is_not_a_candidate() {
+    let tree = Node::fits([
+        leaf(200., 20.).id("wide"),
+        leaf(100., 20.).id("thin"),
+        leaf(30., 10.).float().id("tip"),
+    ]);
+    let l = resolve(&tree, Some(Size::new(60., 20.)), Default::default()).unwrap();
+    assert!(l.frame("thin").unwrap().size.width > 0.0);
+    assert_eq!(l.frame("tip").unwrap().size, Size::new(30., 10.));
+}
+
 /// Three real subtrees, largest first, at the three window widths a plugin
 /// is dragged to: the richest one that fits wins, the losers get empty
 /// frames in their own slots, and nothing is built twice.

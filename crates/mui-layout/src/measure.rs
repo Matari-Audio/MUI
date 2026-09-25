@@ -413,17 +413,17 @@ pub(crate) fn measure_uncached<'a, P>(
         children.push(m);
     }
     // Largest first, so the first candidate that clears both offered axes is
-    // the richest one that fits. An axis with no offer never rejects.
+    // the richest one that fits. An axis with no offer never rejects. A float
+    // is no candidate: it floats over whichever one wins.
     let pick = match &node.kind {
         Kind::Fits(_) => {
             let fits = |m: &Measured<'_, P>| {
                 inner[0].is_none_or(|w| m.size.width <= w + 1e-8)
                     && inner[1].is_none_or(|h| m.size.height <= h + 1e-8)
             };
-            children
-                .iter()
-                .position(fits)
-                .unwrap_or(children.len().saturating_sub(1))
+            let mut candidates = children.iter().enumerate().filter(|(_, c)| !c.node.float);
+            let last = candidates.clone().last().map_or(0, |(i, _)| i);
+            candidates.find(|(_, c)| fits(c)).map_or(last, |(i, _)| i)
         }
         _ => 0,
     };

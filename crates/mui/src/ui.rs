@@ -145,9 +145,6 @@ pub struct Ui {
     /// Per scroll node, per axis: the spring's target is where the wheel
     /// clamped it, its value how far the children are drawn slid.
     scrolls: BTreeMap<String, [Spring; 2]>,
-    /// The last frame floated a tip, so the caller's root sat under a
-    /// wrapper and every positional key started `/0`.
-    wrapped: bool,
     /// Scratch for the tree path of the node a walk is on: an unnamed node's
     /// key, built without a heap copy per node.
     path: String,
@@ -250,7 +247,6 @@ impl Ui {
             text_cache: TextCache::default(),
             weld_cache: mui_scene::WeldCache::default(),
             scrolls: BTreeMap::new(),
-            wrapped: false,
             path: String::new(),
             sel: BTreeMap::new(),
             text_scroll: BTreeMap::new(),
@@ -1142,7 +1138,7 @@ impl Ui {
         let hovered = self.interaction.hovered().map(str::to_owned);
         let (tip, tip_pending) = self.tip_due(hovered.as_deref(), dt);
         animating |= tip_pending;
-        let mut root = self.wrap_tip(root, tip.as_ref());
+        let mut root = Self::wrap_tip(root, tip.as_ref());
         animating |= self.sweep(&mut root, dt);
         let shaped = shapes(&root);
         let (mut scene, glided) = self.resolve(root, offered, dt)?;
@@ -1270,8 +1266,6 @@ impl Ui {
         }
         let mut now = HashMap::new();
         visit(root, &mut String::new(), &mut now);
-        // Keys are in last frame's wrap state here; `wrap_tip` shifts them after.
-        let pre = if self.wrapped { "/0" } else { "" };
         let mut moves: Vec<(String, String)> = Vec::new();
         for (id, (key, path)) in &now {
             let Some((was_key, was_path)) = self.identities.get(id) else {
@@ -1283,7 +1277,7 @@ impl Ui {
                 }
             }
             if was_path != path {
-                moves.push((format!("{pre}{was_path}"), format!("{pre}{path}")));
+                moves.push((was_path.clone(), path.clone()));
             }
         }
         self.identities = now;
@@ -1347,10 +1341,10 @@ impl Ui {
         // the two possible active targets directly so idle frames do not
         // allocate a policy table for the whole tree.
         let hovered_policy = hovered
-            .map(|id| state_policy(root, id, self.wrapped))
+            .map(|id| state_policy(root, id))
             .unwrap_or([false, false]);
         let held_policy = held
-            .map(|id| state_policy(root, id, self.wrapped))
+            .map(|id| state_policy(root, id))
             .unwrap_or([false, false]);
         for (k, [h, p]) in &mut self.springs {
             let hovered = hovered == Some(k.as_str());
@@ -1481,42 +1475,34 @@ impl Ui {
     }
 
     /// Float a due tip over the caller's root.
-    fn wrap_tip(&mut self, root: El, tip: Option<&(String, String)>) -> El {
-        let root = match tip {
-            Some((t, anchor)) => {
-                // Under the surface, flipping over it at the bottom edge of
-                // the window: the placement is the pin's, not arithmetic
-                // here. A float is placed in its parent's padding box, but a
-                // pinned one is absolute, so the wrapper only keeps the tip
-                // out of a root that has no children.
-                let float = text(t.clone())
-                    .pad(S)
-                    .fill(Role::Raised)
-                    .radius(6.0)
-                    .pin(
-                        Pin::to(anchor.clone())
-                            .area(Area::BottomStart)
-                            .gap(Xs)
-                            .fallback(Area::TopStart),
-                    )
-                    .id(TIP_KEY);
-                overlay([root, float])
-            }
-            None => root,
+    fn wrap_tip(root: El, tip: Option<&(String, String)>) -> El {
+        let Some((t, anchor)) = tip else {
+            return root;
         };
-        // The wrapper moves the caller's root to `/0`, and every positional
-        // key with it: carry them across, so an unnamed scroller keeps its
-        // offset and a transition its springs while a tip is up.
-        if tip.is_some() != self.wrapped {
-            self.wrapped = tip.is_some();
-            rekey(&mut self.scrolls, self.wrapped);
-            rekey(&mut self.motion, self.wrapped);
-            rekey(&mut self.glides, self.wrapped);
-            rekey(&mut self.morphs, self.wrapped);
-            rekey(&mut self.springs, self.wrapped);
-            self.focus = self.focus.take().and_then(|k| shift(k, self.wrapped));
+        // Under the surface, flipping over it at the bottom edge of the
+        // window: the placement is the pin's, not arithmetic here. A pinned
+        // float is absolute and painted after everything, unclipped, so it
+        // joins the root as its last child: no other node's tree path moves,
+        // and every cache keyed by one stays warm while a tip comes and goes.
+        // ponytail: a tip under a scrolling root is offered no room and does
+        // not wrap; give tips a width cap if a long one ever runs off.
+        let float = text(t.clone())
+            .pad(S)
+            .fill(Role::Raised)
+            .radius(6.0)
+            .pin(
+                Pin::to(anchor.clone())
+                    .area(Area::BottomStart)
+                    .gap(Xs)
+                    .fallback(Area::TopStart),
+            )
+            .id(TIP_KEY);
+        if root.is_container() {
+            return root.push(float);
         }
-        root
+        // A leaf has no children to take it. Its own key is the only one
+        // the wrapper moves, and for the frames the tip is up.
+        overlay([root, float])
     }
 
     /// Style the tree by state and step every transition and tween. Returns
@@ -2264,27 +2250,6 @@ fn slot<'m, V>(map: &'m mut BTreeMap<String, V>, k: &str, new: impl FnOnce() -> 
     map.get_mut(k).expect("inserted above")
 }
 
-/// `k` once the tip wrapper is added (`wrap`) or taken away. An id does not
-/// move; a tree path gains or loses its leading `/0`, and one that was under
-/// the wrapper but not the caller's root is gone.
-fn shift(k: String, wrap: bool) -> Option<String> {
-    if named(&k) {
-        return Some(k);
-    }
-    if wrap {
-        return Some(format!("/0{k}"));
-    }
-    k.strip_prefix("/0")
-        .filter(|rest| rest.is_empty() || rest.starts_with('/'))
-        .map(str::to_owned)
-}
-fn rekey<V>(map: &mut BTreeMap<String, V>, wrap: bool) {
-    *map = std::mem::take(map)
-        .into_iter()
-        .filter_map(|(k, v)| Some((shift(k, wrap)?, v)))
-        .collect();
-}
-
 /// Whether `keys`, read by the focused `id`, edit it: Enter or Space on a
 /// button or switch, a step on a slider.
 fn keyed_edit(scene: Option<&ResolvedScene>, id: &str, keys: &[KeyPress]) -> bool {
@@ -2317,9 +2282,8 @@ fn named(k: &str) -> bool {
 }
 
 /// The node `key` names in `root`: an id anywhere in the tree, or a tree
-/// path walked by index. `wrapped` says the key came from a scene whose root
-/// sat under the tip wrapper, one `/0` deeper than `root`.
-fn find<'a>(root: &'a El, key: &str, wrapped: bool) -> Option<&'a El> {
+/// path walked by index.
+fn find<'a>(root: &'a El, key: &str) -> Option<&'a El> {
     fn by_id<'a>(n: &'a El, id: &str) -> Option<&'a El> {
         if n.key() == Some(id) {
             return Some(n);
@@ -2329,11 +2293,6 @@ fn find<'a>(root: &'a El, key: &str, wrapped: bool) -> Option<&'a El> {
     if named(key) {
         return by_id(root, key);
     }
-    let key = if wrapped {
-        key.strip_prefix("/0")?
-    } else {
-        key
-    };
     key.split('/')
         .skip(1)
         .try_fold(root, |n, i| n.children().get(i.parse::<usize>().ok()?))
@@ -2353,8 +2312,8 @@ fn interactive(e: &Element) -> bool {
 /// hit-testable, but do not keep the host animating merely because the pointer
 /// rests on them. Only the active targets are searched, so this adds no
 /// per-frame policy allocation.
-fn state_policy(root: &El, id: &str, wrapped: bool) -> [bool; 2] {
-    let Some(e) = find(root, id, wrapped).map(El::payload) else {
+fn state_policy(root: &El, id: &str) -> [bool; 2] {
+    let Some(e) = find(root, id).map(El::payload) else {
         return [false, false];
     };
     let mut policy = [interactive(e), interactive(e)];
