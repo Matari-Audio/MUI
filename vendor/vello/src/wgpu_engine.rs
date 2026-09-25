@@ -122,6 +122,11 @@ struct BufferProperties {
 #[derive(Default)]
 struct ResourcePool {
     bufs: HashMap<BufferProperties, Vec<Buffer>>,
+    /// MUI patch: images the last recording freed, for this one to reuse
+    /// (a gradient ramp is a fresh image per frame); the rest are destroyed
+    /// when it ends.
+    images: Vec<(Texture, TextureView)>,
+    spare_images: Vec<(Texture, TextureView)>,
 }
 
 /// MUI patch: bind groups kept across recordings, keyed by what they bind.
@@ -420,6 +425,7 @@ impl WgpuEngine {
         // proxies and finds its bind groups cached.
         let mut free_bufs: Vec<ResourceId> = Vec::new();
         let mut free_images: HashSet<ResourceId> = HashSet::default();
+        self.pool.spare_images = std::mem::take(&mut self.pool.images);
         let mut transient_map = TransientBindMap::new(external_resources);
 
         let mut encoder =
@@ -468,31 +474,7 @@ impl WgpuEngine {
                     let block_size = format
                         .block_copy_size(None)
                         .expect("ImageFormat must have a valid block size");
-                    let texture = device.create_texture(&wgpu::TextureDescriptor {
-                        label: None,
-                        size: wgpu::Extent3d {
-                            width: image_proxy.width,
-                            height: image_proxy.height,
-                            depth_or_array_layers: 1,
-                        },
-                        mip_level_count: 1,
-                        sample_count: 1,
-                        dimension: wgpu::TextureDimension::D2,
-                        usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
-                        format,
-                        view_formats: &[],
-                    });
-                    let texture_view = texture.create_view(&wgpu::TextureViewDescriptor {
-                        label: None,
-                        dimension: Some(TextureViewDimension::D2),
-                        usage: None,
-                        aspect: TextureAspect::All,
-                        mip_level_count: None,
-                        base_mip_level: 0,
-                        base_array_layer: 0,
-                        array_layer_count: None,
-                        format: Some(format),
-                    });
+                    let (texture, texture_view) = self.pool.get_image(image_proxy, device);
                     queue.write_texture(
                         wgpu::TexelCopyTextureInfo {
                             texture: &texture,
@@ -516,7 +498,11 @@ impl WgpuEngine {
                         .insert_image(image_proxy.id, texture, texture_view);
                 }
                 Command::WriteImage(proxy, [x, y], image) => {
-                    let (texture, _) = self.bind_map.get_or_create_image(*proxy, device);
+                    let (texture, _) = self
+                        .bind_map
+                        .image_map
+                        .entry(proxy.id)
+                        .or_insert_with(|| self.pool.get_image(proxy, device));
                     let format = proxy.format.to_wgpu();
                     let block_size = format
                         .block_copy_size(None)
@@ -829,10 +815,12 @@ impl WgpuEngine {
             .map
             .retain(|_, (_, used)| now - *used < BIND_GROUP_RECORDINGS);
         for id in free_images {
-            if let Some((texture, _view)) = self.bind_map.image_map.remove(&id) {
-                // TODO: have a pool to avoid needless re-allocation
-                texture.destroy();
+            if let Some(image) = self.bind_map.image_map.remove(&id) {
+                self.pool.images.push(image);
             }
+        }
+        for (texture, _) in self.pool.spare_images.drain(..) {
+            texture.destroy();
         }
         Ok(())
     }
@@ -990,44 +978,6 @@ impl BindMap {
         self.buf_map.get(&proxy.id)
     }
 
-    fn get_or_create_image(
-        &mut self,
-        proxy: ImageProxy,
-        device: &Device,
-    ) -> &(Texture, TextureView) {
-        match self.image_map.entry(proxy.id) {
-            Entry::Occupied(occupied) => occupied.into_mut(),
-            Entry::Vacant(vacant) => {
-                let format = proxy.format.to_wgpu();
-                let texture = device.create_texture(&wgpu::TextureDescriptor {
-                    label: None,
-                    size: wgpu::Extent3d {
-                        width: proxy.width,
-                        height: proxy.height,
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
-                    format,
-                    view_formats: &[],
-                });
-                let texture_view = texture.create_view(&wgpu::TextureViewDescriptor {
-                    label: None,
-                    usage: None,
-                    dimension: Some(TextureViewDimension::D2),
-                    aspect: TextureAspect::All,
-                    mip_level_count: None,
-                    base_mip_level: 0,
-                    base_array_layer: 0,
-                    array_layer_count: None,
-                    format: Some(proxy.format.to_wgpu()),
-                });
-                vacant.insert((texture, texture_view))
-            }
-        }
-    }
 }
 
 const SIZE_CLASS_BITS: u32 = 1;
@@ -1058,6 +1008,43 @@ impl ResourcePool {
             usage,
             mapped_at_creation: false,
         })
+    }
+
+    /// An image from the last recording's leftovers, or a new one.
+    fn get_image(&mut self, proxy: &ImageProxy, device: &Device) -> (Texture, TextureView) {
+        let format = proxy.format.to_wgpu();
+        let fits = |(t, _): &(Texture, TextureView)| {
+            (t.width(), t.height(), t.format()) == (proxy.width, proxy.height, format)
+        };
+        if let Some(i) = self.spare_images.iter().position(fits) {
+            return self.spare_images.swap_remove(i);
+        }
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: None,
+            size: wgpu::Extent3d {
+                width: proxy.width,
+                height: proxy.height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
+            format,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor {
+            label: None,
+            usage: None,
+            dimension: Some(TextureViewDimension::D2),
+            aspect: TextureAspect::All,
+            mip_level_count: None,
+            base_mip_level: 0,
+            base_array_layer: 0,
+            array_layer_count: None,
+            format: Some(format),
+        });
+        (texture, view)
     }
 
     /// Quantize a size up to the nearest size class.
@@ -1191,33 +1178,7 @@ impl<'a> TransientBindMap<'a> {
                         continue;
                     }
                     if let Entry::Vacant(v) = bind_map.image_map.entry(proxy.id) {
-                        let format = proxy.format.to_wgpu();
-                        let texture = device.create_texture(&wgpu::TextureDescriptor {
-                            label: None,
-                            size: wgpu::Extent3d {
-                                width: proxy.width,
-                                height: proxy.height,
-                                depth_or_array_layers: 1,
-                            },
-                            mip_level_count: 1,
-                            sample_count: 1,
-                            dimension: wgpu::TextureDimension::D2,
-                            usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
-                            format,
-                            view_formats: &[],
-                        });
-                        let texture_view = texture.create_view(&wgpu::TextureViewDescriptor {
-                            label: None,
-                            usage: None,
-                            dimension: Some(TextureViewDimension::D2),
-                            aspect: TextureAspect::All,
-                            mip_level_count: None,
-                            base_mip_level: 0,
-                            base_array_layer: 0,
-                            array_layer_count: None,
-                            format: Some(proxy.format.to_wgpu()),
-                        });
-                        v.insert((texture, texture_view));
+                        v.insert(pool.get_image(proxy, device));
                     }
                 }
             }
