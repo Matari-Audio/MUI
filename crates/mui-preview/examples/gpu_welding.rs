@@ -15,7 +15,7 @@ use winit::{
 mod device;
 // Shared gallery host has optional debug-overlay methods unused by this lab.
 #[allow(dead_code)]
-#[path = "../src/host_gpu.rs"]
+#[path = "../src/host.rs"]
 mod host;
 
 struct Lab {

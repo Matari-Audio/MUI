@@ -1,6 +1,6 @@
 //! What a frame costs, printed rather than asserted: a wall-clock budget is
 //! noise on a shared CI runner. Run it with `--nocapture` to read it. Real
-//! numbers, and the hybrid/cpu/classic comparison, live in BENCHMARKS.md and
+//! numbers, and the cpu/GPU comparison, live in BENCHMARKS.md and
 //! `cargo run -p mui-vello --profile perf --features cpu --example bench`.
 //!
 //! ```text
@@ -13,7 +13,7 @@ use mui::prelude::*;
 
 /// A canvas that draws nothing, so the number below is MUI's half of painting
 /// -- the paint-list walk and the arc-to-cubic conversion -- with Vello's
-/// rasteriser left out. A real `Gpu` canvas needs a device, and this test runs
+/// rasteriser left out. A real `Classic` canvas needs a scene on a device, and this test runs
 /// without one.
 struct Sink;
 impl mui::vello::Canvas for Sink {

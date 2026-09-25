@@ -6,23 +6,19 @@
 //! cargo test -p mui-preview --test image_fill -- --ignored --nocapture
 //! ```
 //!
-//! `vello_hybrid` does not `Err` on a pixmap image source, it `panic!`s
-//! ("pixmap image sources are not supported by Vello Hybrid"), so the host's
-//! `Err(e) => eprintln!` arm never sees it and the window dies. That is
-//! exactly what clicking the gallery's Image scene used to do. `mui_vello`'s
-//! `Gpu` now uploads the pixmap into the renderer's atlas through its
-//! `Atlas` and paints by id; this renders an image fill through the real
-//! renderer and reads a pixel back to prove the image, not its grey stand-in,
-//! is what lands. Without an `Atlas` the stand-in must still land, not a panic.
+//! Clicking the gallery's Image scene once panicked the GPU path, which
+//! could not sample a pixmap. This renders an image fill through the real
+//! renderer and reads a pixel back to prove the image, not a grey stand-in,
+//! is what lands.
 
 use std::sync::Arc;
 
 use mui::prelude::*;
-use vello_hybrid::{RenderSize, RenderTargetConfig, Renderer, Scene, TextureBindings};
+use mui::vello::effects::{Budget, GpuRenderer};
 
 const N: u32 = 200;
 
-fn render(with_atlas: bool) -> [u8; 4] {
+fn render() -> [u8; 4] {
     let instance = wgpu::Instance::default();
     let adapter =
         pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
@@ -55,32 +51,6 @@ fn render(with_atlas: bool) -> [u8; 4] {
         )
         .expect("frame");
 
-    let mut scene = Scene::new(N as u16, N as u16);
-    let (mut renderer, mut resources) = Renderer::new(
-        &device,
-        &RenderTargetConfig {
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            width: N,
-            height: N,
-        },
-    );
-    scene.reset();
-    mui::vello::paint(
-        &mut mui::vello::Gpu {
-            scene: &mut scene,
-            resources: &mut resources,
-            cache: &mut mui::vello::Cache::default(),
-            atlas: with_atlas.then_some(mui::vello::Atlas {
-                renderer: &mut renderer,
-                device: &device,
-                queue: &queue,
-            }),
-        },
-        frame.scene,
-        mui::vello::kurbo::Affine::IDENTITY,
-    )
-    .expect("paint");
-
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("image fill target"),
         size: wgpu::Extent3d {
@@ -96,21 +66,16 @@ fn render(with_atlas: bool) -> [u8; 4] {
         view_formats: &[],
     });
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    let mut renderer = pollster::block_on(GpuRenderer::new(
+        &device,
+        &queue,
+        texture.format(),
+        [N, N],
+        Budget::default(),
+    ))
+    .expect("renderer");
     renderer
-        .render(
-            &scene,
-            &mut resources,
-            &device,
-            &queue,
-            &mut encoder,
-            &RenderSize {
-                width: N,
-                height: N,
-            },
-            &view,
-            &TextureBindings::new(),
-        )
+        .render(frame.scene, mui::vello::kurbo::Affine::IDENTITY, &view)
         .expect("render");
 
     let row = (N * 4).next_multiple_of(256);
@@ -120,6 +85,7 @@ fn render(with_atlas: bool) -> [u8; 4] {
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         mapped_at_creation: false,
     });
+    let mut encoder = device.create_command_encoder(&Default::default());
     encoder.copy_texture_to_buffer(
         wgpu::TexelCopyTextureInfo {
             texture: &texture,
@@ -148,7 +114,7 @@ fn render(with_atlas: bool) -> [u8; 4] {
     device
         .poll(wgpu::PollType::wait_indefinitely())
         .expect("poll");
-    let mapped = readback.slice(..).get_mapped_range();
+    let mapped = readback.slice(..).get_mapped_range().expect("mapped");
     // Just inside the first (Cover) pill's top-left cap. Bilinear sampling
     // blends a 2x2 image into a gradient everywhere but the corners, so this
     // is where the red texel is still red -- or where the stand-in is.
@@ -161,22 +127,11 @@ fn render(with_atlas: bool) -> [u8; 4] {
 
 #[test]
 #[ignore = "needs a GPU"]
-fn an_image_fill_lands_in_the_atlas_and_on_the_pixel() {
-    let [r, g, b, a] = render(true);
+fn an_image_fill_lands_on_the_pixel() {
+    let [r, g, b, a] = render();
     assert!(
         r > 200 && g < 60 && b < 60 && a == 255,
         "expected red, got {:?}",
-        [r, g, b, a]
-    );
-}
-
-#[test]
-#[ignore = "needs a GPU"]
-fn an_image_fill_without_an_atlas_is_the_stand_in_not_a_panic() {
-    let [r, g, b, a] = render(false);
-    assert!(
-        a == 255 && r.abs_diff(g) < 8 && g.abs_diff(b) < 8,
-        "expected grey, got {:?}",
         [r, g, b, a]
     );
 }

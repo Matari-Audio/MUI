@@ -1,4 +1,4 @@
-//! The one device-loss path both hosts share. Everything built on a device
+//! The gallery's device-loss path. Everything built on a device
 //! -- pipelines, atlases, weld textures, retained encodings -- dies with it,
 //! so a host keeps all of that in `T` and [`OnDevice::recover`] rebuilds the
 //! lot on a fresh device. The window and surface survive; `T` does not.
@@ -7,8 +7,6 @@ use std::sync::Arc;
 
 pub struct OnDevice<T> {
     pub device: wgpu::Device,
-    /// Unread by the effects host, whose renderer keeps its own clone.
-    #[cfg_attr(feature = "gpu-effects", allow(dead_code))]
     pub queue: wgpu::Queue,
     pub state: T,
     /// Raised by wgpu's device-lost callback, on whatever thread wgpu calls it.
@@ -65,19 +63,20 @@ impl<T> OnDevice<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mui::prelude::*;
+    use mui::vello::effects::{Budget, GpuRenderer};
+    use mui::vello::kurbo::Affine;
 
     /// A real loss, not a flag flipped by hand: `Device::destroy` fires the
     /// lost callback, and the renderer rebuilt on the new device renders.
     #[test]
     fn a_destroyed_device_is_replaced_and_renders_again() {
         let instance = wgpu::Instance::default();
-        let build = |_: &wgpu::Adapter, d: &wgpu::Device, _: &wgpu::Queue| {
-            let config = vello_hybrid::RenderTargetConfig {
-                format: wgpu::TextureFormat::Rgba8Unorm,
-                width: 16,
-                height: 16,
-            };
-            Ok(vello_hybrid::Renderer::new(d, &config))
+        let build = |_: &wgpu::Adapter, d: &wgpu::Device, q: &wgpu::Queue| {
+            let format = wgpu::TextureFormat::Rgba8Unorm;
+            let budget = Budget::default();
+            pollster::block_on(GpuRenderer::new(d, q, format, [16, 16], budget))
+                .map_err(|e| e.to_string())
         };
         let mut gpu = match OnDevice::open(&instance, None, build) {
             Ok(gpu) => gpu,
@@ -104,24 +103,10 @@ mod tests {
             view_formats: &[],
         });
         let scope = gpu.device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let mut encoder = gpu.device.create_command_encoder(&Default::default());
-        let (renderer, resources) = &mut gpu.state;
-        renderer
-            .render(
-                &vello_hybrid::Scene::new(16, 16),
-                resources,
-                &gpu.device,
-                &gpu.queue,
-                &mut encoder,
-                &vello_hybrid::RenderSize {
-                    width: 16,
-                    height: 16,
-                },
-                &target.create_view(&Default::default()),
-                &vello_hybrid::TextureBindings::new(),
-            )
-            .unwrap();
-        gpu.queue.submit([encoder.finish()]);
+        let spec = SceneSpec::new(leaf(16., 16.).fill(Role::Primary)).offered(Size::new(16., 16.));
+        let scene = resolve_scene(&spec).unwrap();
+        let view = target.create_view(&Default::default());
+        gpu.state.render(&scene, Affine::IDENTITY, &view).unwrap();
         assert!(pollster::block_on(scope.pop()).is_none());
         assert!(!gpu.recover(&instance, None, build).unwrap());
     }

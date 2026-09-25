@@ -944,7 +944,7 @@ impl PreviewScene for Images {
         "Image"
     }
     fn about(&self) -> &'static str {
-        "The icon is a parsed SVG path. The two pills are Fill::Image, uploaded once into vello_hybrid's atlas and painted by id."
+        "The icon is a parsed SVG path. The two pills are Fill::Image, uploaded once into Vello's image atlas."
     }
     fn specimen(&mut self, _: &mut Ui) -> El {
         let icon = Path::from_svg_data(Self::ICON).ok();
