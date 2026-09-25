@@ -181,6 +181,8 @@ pub struct ResolvedSurface {
     pub focusable: bool,
     /// Keeps the wheel from the scrollers around it.
     pub captures_wheel: bool,
+    /// Reads the raw pointer: a move over it is never inert.
+    pub tracks_pointer: bool,
     /// Declares a [`State::Hover`](crate::State::Hover) or
     /// [`State::Press`](crate::State::Press) look, so the runtime makes it a
     /// pointer target even without an id.
