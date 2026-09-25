@@ -161,14 +161,8 @@ pub(crate) fn arrange<P>(
     out: &mut (BTreeMap<Id, Frame>, Vec<Frame>),
 ) -> Result<(), Error> {
     let n = m.node;
-    // Content is squeezable -- that is the whole point of shrink -- but the
-    // floor is not.
-    if size.width + 1e-8 < m.floor.width || size.height + 1e-8 < m.floor.height {
-        return Err(Error::InsufficientSpace {
-            node: label(n, ancestor),
-            needs: Size::ZERO,
-        });
-    }
+    // A box handed less than its floor is not refused: `distribute` and
+    // `extent` keep every child at its own floor, so the content overflows.
     let here = n.id.as_deref().unwrap_or(ancestor);
     let frame = Frame {
         x: origin[0],
@@ -299,18 +293,7 @@ pub(crate) fn arrange<P>(
             };
             // Measure broke the lines against the width it was offered; a flex
             // ancestor that squeezed the row since then can force one more, and
-            // the cross floor is still the one it measured. Nothing clips a row,
-            // so say it does not fit rather than paint over the next widget.
-            if lines.len() > 1 {
-                let needed = lines.iter().copied().map(line_cross).sum::<f64>()
-                    + m.line_gap * (lines.len() - 1) as f64;
-                if needed > inner.cross(v) + 1e-8 {
-                    return Err(Error::InsufficientSpace {
-                        node: label(n, ancestor),
-                        needs: Size::axes(inner.main(v), needed, v),
-                    });
-                }
-            }
+            // the lines then overflow the cross axis it measured.
             // One line keeps the whole cross axis, so an unwrapped row is
             // exactly what it was; several share it by their own heights.
             let single = lines.len() == 1;

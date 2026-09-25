@@ -89,15 +89,15 @@ fn a_declared_minimum_is_the_floor_and_content_alone_is_not() {
     )
     .unwrap();
     assert_eq!(l.frame("x").unwrap().size, Size::new(50., 50.));
-    // A minimum the author asked for is not.
-    assert!(matches!(
-        resolve(
-            &leaf(100., 100.).id("x").min_size(Size::new(100., 100.)),
-            Some(Size::new(50., 50.)),
-            Default::default()
-        ),
-        Err(Error::InsufficientSpace { .. })
-    ));
+    // A minimum the author asked for is not: it overflows its parent.
+    let l = resolve(
+        &column([leaf(100., 100.).id("x").min_size(Size::new(100., 100.))]),
+        Some(Size::new(50., 50.)),
+        Default::default(),
+    )
+    .unwrap();
+    assert_eq!(l.frame("x").unwrap().size, Size::new(100., 100.));
+    assert_eq!(l.size, Size::new(50., 50.));
 }
 
 /// The left/centre/right bar. Ends of different widths -- 50 and 20 -- must
@@ -196,11 +196,11 @@ fn a_parent_cannot_be_squeezed_past_what_its_children_refuse() {
     let l = resolve(&root, Some(Size::new(70., 20.)), Default::default()).unwrap();
     assert_eq!(l.frame("a").unwrap().size.width, 40.);
     assert_eq!(l.frame("b").unwrap().size.width, 30.);
-    // A pixel under, and it is refused rather than silently overflowing.
-    assert!(matches!(
-        resolve(&root, Some(Size::new(69., 20.)), Default::default()),
-        Err(Error::InsufficientSpace { .. })
-    ));
+    // A pixel under, and both keep their floors and overflow.
+    let l = resolve(&root, Some(Size::new(69., 20.)), Default::default()).unwrap();
+    assert_eq!(l.frame("a").unwrap().size.width, 40.);
+    assert_eq!(l.frame("b").unwrap().size.width, 30.);
+    assert_eq!(l.min_size().width, 70.);
 
     // The floor also has to bind while the deficit is being shared out, not
     // only as a check afterwards. Given a squeezable sibling, `in` freezes
@@ -531,12 +531,9 @@ fn a_declared_size_smaller_than_its_own_padding_is_not_a_squeeze() {
 fn grid_columns_never_go_negative_when_the_gaps_outgrow_the_grid() {
     // 21 wide less 15.4 of padding leaves 5.6 for two columns and an 8.4
     // gap. The column is zero-wide, not -1.4, so the percentage child is
-    // offered a valid width and the grid reports the squeeze it really is.
+    // offered a valid width and the grid overflows the squeeze it really is.
     let t = column([grid(2, [Node::leaf(0., 0.).width(Len::Pct(98.8))]).gap(8.4)]).pad(7.7);
-    assert!(matches!(
-        resolve(&t, Some(Size::new(21., 174.4)), Default::default()),
-        Err(Error::InsufficientSpace { .. })
-    ));
+    assert!(resolve(&t, Some(Size::new(21., 174.4)), Default::default()).is_ok());
 }
 
 #[test]
@@ -594,7 +591,7 @@ fn a_float_is_pulled_back_inside_a_thin_window() {
 }
 
 #[test]
-fn a_squeezed_wrapping_row_says_so_instead_of_overflowing() {
+fn a_squeezed_wrapping_row_overflows_its_cross_axis() {
     let bar = || {
         column([row([leaf(250., 40.), leaf(250., 40.)])
             .gap(10.)
@@ -605,11 +602,10 @@ fn a_squeezed_wrapping_row_says_so_instead_of_overflowing() {
     let l = resolve(&bar(), Some(Size::new(510., 40.)), Default::default()).unwrap();
     assert_eq!(l.frame("bar").unwrap().size, Size::new(510., 40.));
     // Squeezed to 420 the row needs a second line, and the 40 px it was given
-    // on the cross axis is a line short. Nothing clips a row, so this errors.
-    assert!(matches!(
-        resolve(&bar(), Some(Size::new(420., 40.)), Default::default()),
-        Err(Error::InsufficientSpace { .. })
-    ));
+    // on the cross axis is a line short: the second line hangs below it.
+    let l = resolve(&bar(), Some(Size::new(420., 40.)), Default::default()).unwrap();
+    assert_eq!(l.frame("bar").unwrap().size, Size::new(420., 40.));
+    assert_eq!(l.all()[3].y, 50.);
     // Given the stacked height it fits, both children inside the frame.
     let l = resolve(&bar(), Some(Size::new(420., 90.)), Default::default()).unwrap();
     let f = l.frame("bar").unwrap();
@@ -617,15 +613,17 @@ fn a_squeezed_wrapping_row_says_so_instead_of_overflowing() {
 }
 
 #[test]
-fn the_error_carries_what_the_whole_tree_needed() {
-    let panel = || column([]).min_width(120.).min_height(30.);
-    let t = row([panel(), panel()]).gap(10.).id("bar");
-    assert!(resolve(&t, Some(Size::new(250., 40.)), Default::default()).is_ok());
-    let Err(Error::InsufficientSpace { needs, .. }) =
-        resolve(&t, Some(Size::new(240., 40.)), Default::default())
-    else {
-        panic!("240 is ten short of the two panels and their gap");
-    };
+fn an_over_constrained_tree_overflows_and_says_what_it_needed() {
+    let panel = || column([]).min_width(120.).min_height(30.).id("p2");
+    let t = row([column([]).min_width(120.).min_height(30.), panel()])
+        .gap(10.)
+        .id("bar");
+    // 240 is ten short of the two panels and their gap: it lays out anyway,
+    // both panels at their floors, the second hanging past the window.
+    let l = resolve(&t, Some(Size::new(240., 40.)), Default::default()).unwrap();
+    let p = l.frame("p2").unwrap();
+    assert_eq!((p.x, p.size.width), (130., 120.));
+    let needs = l.min_size();
     assert_eq!(needs, Size::new(250., 30.));
     // Which is the whole point: the host can scale by it.
     assert!((240. / needs.width - 0.96).abs() < 1e-9);
@@ -1055,4 +1053,45 @@ fn min_col_widens_a_hugging_grid_instead_of_squeezing_its_columns() {
             .count(),
         1
     );
+}
+
+#[test]
+fn a_row_shrinks_content_only_down_to_its_min_content() {
+    // Both 100 wide; "a" may go to 60, "b" to 20.
+    let t = Node::row([
+        Node::content().with(60.).id("a"),
+        Node::content().with(20.).id("b"),
+    ]);
+    let solve = |w: f64| {
+        resolve_with(
+            &t,
+            Some(Size::new(w, 10.)),
+            Default::default(),
+            SpacingScale::DEFAULT,
+            |min: &f64, _| Intrinsic {
+                size: Size::new(100., 10.),
+                min_width: *min,
+            },
+        )
+        .unwrap()
+    };
+    let w = |l: &Layout, k| l.frame(k).unwrap().size.width;
+    // An even squeeze would put "a" at 50: it stops at 60, "b" takes the rest.
+    let l = solve(100.);
+    assert_eq!((w(&l, "a"), w(&l, "b")), (60., 40.));
+    // Below both floors the row overflows instead of refusing.
+    let l = solve(50.);
+    assert_eq!((w(&l, "a"), w(&l, "b")), (60., 20.));
+    assert_eq!(l.min_size().width, 80.);
+    // An explicit `shrink(0)` still never shrinks.
+    let t = Node::row([Node::content().with(60.).id("a").shrink(0.)]);
+    let l = resolve_with(
+        &t,
+        Some(Size::new(50., 10.)),
+        Default::default(),
+        SpacingScale::DEFAULT,
+        |_: &f64, _| Size::new(100., 10.),
+    )
+    .unwrap();
+    assert_eq!(w(&l, "a"), 100.);
 }

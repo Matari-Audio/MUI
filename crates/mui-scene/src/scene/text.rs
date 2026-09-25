@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use mui_layout::Size;
+use mui_layout::{Intrinsic, Size};
 use mui_text::{Axes, Font, TextRun};
 
 use super::outline::OutlineCache;
@@ -17,6 +17,8 @@ pub(super) struct CachedRun {
     pub(super) ascent: f64,
     pub(super) descent: f64,
     pub(super) line_height: f64,
+    /// Its widest word: how narrow a flex row may squeeze it.
+    pub(super) min_content: f64,
     pub(super) glyphs: Arc<[TextGlyph]>,
     /// Per-char advances, shaped the first time this string wraps, so every
     /// later width breaks without shaping.
@@ -30,6 +32,7 @@ impl CachedRun {
             ascent: run.ascent,
             descent: run.descent,
             line_height: run.line_height,
+            min_content: run.min_content,
             glyphs: run
                 .glyphs
                 .into_iter()
@@ -326,6 +329,21 @@ impl<'a> Runs<'a> {
         let lines = self.lines(text, face, max, cap).len();
         lines as f64 * self.measure(text, face).height
     }
+    /// `text`'s widest word, from the run [`Self::measure`] shaped.
+    pub(super) fn min_content(&mut self, text: &str, face: Face<'_>) -> f64 {
+        match self.run(text, face) {
+            Ok(Some(r)) => r.min_content,
+            // The same monospace guess `measure` makes.
+            _ => {
+                text.split_ascii_whitespace()
+                    .map(|w| w.chars().count())
+                    .max()
+                    .unwrap_or(0) as f64
+                    * face.size
+                    * 0.6
+            }
+        }
+    }
     pub(super) fn measure(&mut self, text: &str, face: Face<'_>) -> Size {
         let size = face.size;
         match self.run(text, face) {
@@ -372,11 +390,20 @@ pub(super) fn layout_key(e: &Element, th: Theme, scale: Option<f64>, out: &mut V
 }
 
 /// A content leaf's size: a paragraph wrapped to its room when it needs it.
-pub(super) fn fit(runs: &mut Runs, th: Theme, e: &crate::Element, room: Option<f64>) -> Size {
+/// Its widest word is as far as a flex row may squeeze it, unless a line cap
+/// asked for an ellipsis instead.
+pub(super) fn fit(runs: &mut Runs, th: Theme, e: &crate::Element, room: Option<f64>) -> Intrinsic {
     let Content::Text(t) = &e.content else {
-        return Size::ZERO;
+        return Size::ZERO.into();
     };
     let (t, face) = (t.as_str(), Face::of(e, th));
+    let min_width = if e.lines.is_some() {
+        0.0
+    } else {
+        runs.min_content(t, face)
+    };
+    // A room narrower than a word is overflowed, not broken mid-word.
+    let room = room.map(|r| r.max(min_width));
     let mut fit = match room {
         // The room it wrapped into, not its longest line: a paragraph that
         // reported the ragged width would then be centred inside its own
@@ -391,7 +418,10 @@ pub(super) fn fit(runs: &mut Runs, th: Theme, e: &crate::Element, room: Option<f
     if let Some(r) = &e.reserve {
         fit.width = fit.width.max(runs.measure(r, face).width);
     }
-    fit
+    Intrinsic {
+        size: fit,
+        min_width,
+    }
 }
 #[cfg(test)]
 mod tests {
@@ -513,6 +543,38 @@ mod tests {
             lines("b"),
             lines("c")
         );
+    }
+
+    #[test]
+    fn a_row_squeezed_below_its_words_keeps_them_whole() {
+        let word = |t: &str| {
+            let mut sp = SceneSpec::new(column([text(t).id("w")]));
+            sp.font = Some(font());
+            resolve_scene(&sp)
+                .unwrap()
+                .layout
+                .frame("w")
+                .unwrap()
+                .size
+                .width
+        };
+        // Far narrower than "Record" and "Region" side by side: each label
+        // wraps between its words, not inside one, and the row overflows.
+        let mut sp =
+            SceneSpec::new(row([text("Record Button").id("a"), text("Loop Region").id("b")]).w(40));
+        sp.font = Some(font());
+        let s = resolve_scene(&sp).unwrap();
+        let f = |k| s.layout.frame(k).unwrap();
+        let lines = |k| {
+            s.paint
+                .iter()
+                .filter(|p| &*p.key == k && p.layer == Layer::Text)
+                .count()
+        };
+        assert_eq!((lines("a"), lines("b")), (2, 2));
+        assert!(f("a").size.width >= word("Button") - 1e-9, "{:?}", f("a"));
+        assert!(f("b").size.width >= word("Region") - 1e-9, "{:?}", f("b"));
+        assert!(f("b").x >= f("a").right() - 1e-9);
     }
 
     #[test]

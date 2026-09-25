@@ -369,14 +369,14 @@ fn projection<P>(n: &Node<P>, payload: Vec<u8>) -> Node<Vec<u8>> {
 /// locale or measurement policy must be included or explicitly clear the cache.
 /// Decorator colours should not appear in the key. `key` appends a payload's
 /// key to a buffer the cache reuses, so a warm frame allocates none.
-pub fn resolve_cached_with<P>(
+pub fn resolve_cached_with<P, M: Into<Intrinsic>>(
     root: &Node<P>,
     offered: Option<Size>,
     limits: Limits,
     scale: SpacingScale,
     cache: &mut LayoutCache,
     mut key: impl FnMut(&P, &mut Vec<u8>),
-    measurer: impl FnMut(&P, Option<f64>) -> Size,
+    measurer: impl FnMut(&P, Option<f64>) -> M,
 ) -> Result<Layout, Error> {
     if !limits.extent.is_finite()
         || limits.extent <= 0.0
@@ -519,6 +519,37 @@ mod tests {
             metric,
         )
         .unwrap()
+    }
+    #[test]
+    fn a_changed_word_moves_the_cached_floor() {
+        // Eight per char, as `metric`, and the longest word is the floor:
+        // "ab" cannot shrink, so "a" takes the whole squeeze down to its word.
+        let words = |t: &Text, room: Option<f64>| Intrinsic {
+            size: metric(t, room),
+            min_width: t.value.split(' ').map(str::len).max().unwrap_or(0) as f64 * 8.,
+        };
+        let solve = |n: &Node<Text>, c: &mut LayoutCache| {
+            resolve_cached_with(
+                n,
+                Some(Size::new(48., 100.)),
+                Limits::default(),
+                SpacingScale::DEFAULT,
+                c,
+                key,
+                words,
+            )
+            .unwrap()
+        };
+        let mut n = Node::row([label("a", "ab abcd"), label("b", "ab")]).id("root");
+        let mut c = LayoutCache::default();
+        solve(&n, &mut c);
+        let l = solve(&n, &mut c);
+        assert_eq!(l.frame("a").unwrap().size.width, 32.);
+        n.children_mut()[0].payload_mut().value = "ab abcdef".into();
+        let l = solve(&n, &mut c);
+        assert!(c.stats().measured_nodes > 0);
+        assert_eq!(l.frame("a").unwrap().size.width, 48.);
+        assert_eq!(l.min_size().width, 64.);
     }
     #[test]
     fn warm_tree_skips_measure_and_arrange() {
