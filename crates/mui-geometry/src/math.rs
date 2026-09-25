@@ -178,6 +178,12 @@ impl Bounds {
         }
         Some(out)
     }
+    pub fn translated(self, d: Point) -> Self {
+        Self {
+            min: self.min + d,
+            max: self.max + d,
+        }
+    }
     pub fn width(self) -> f64 {
         self.max.x - self.min.x
     }

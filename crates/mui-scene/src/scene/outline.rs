@@ -10,7 +10,7 @@ use mui_geometry::{
 use mui_layout::Frame;
 
 use super::{bounds, polygons, SceneError, Walk};
-use crate::{Carve, El, Outline, Radius};
+use crate::{Carve, El, Radius};
 
 /// A node's resolved outline, and what else its shape knows.
 #[derive(Clone, Debug)]
@@ -35,20 +35,30 @@ impl Contour {
             shadow_rects: Vec::new(),
         }
     }
+
+    fn translated(&self, d: Point) -> Self {
+        let mut path = (*self.path).clone();
+        path.translate(d);
+        Self {
+            path: Arc::new(path),
+            rect: self.rect.map(|r| r.translated(d)),
+            changed: self.changed,
+            shadow_rects: self.shadow_rects.iter().map(|r| r.translated(d)).collect(),
+        }
+    }
 }
 
 /// Weld and carve outlines, the walk's most expensive geometry, keyed by
 /// every input word that shaped them and compared in full: a hash match
-/// alone is never trusted. Entries no resolve used are swept at its end.
+/// alone is never trusted. Frames enter the key relative to the node's own
+/// origin, so a weld that moves or scrolls is a hit, translated. Entries no
+/// resolve used are swept at its end.
 #[derive(Debug, Default)]
 pub(super) struct OutlineCache {
     pub(super) entries: HashMap<Vec<u64>, Entry>,
     /// A key buffer, handed back after a hit so a warm frame builds keys
     /// without allocating.
     pub(super) scratch: Vec<u64>,
-    /// The custom outlines the key being built names by address; see
-    /// [`Entry::_held`].
-    held: Vec<Outline>,
     pub(super) generation: u64,
     pub(super) hits: u64,
     pub(super) misses: u64,
@@ -57,31 +67,33 @@ pub(super) struct OutlineCache {
 #[derive(Debug)]
 pub(super) struct Entry {
     contour: Contour,
-    /// Every custom `.outline(..)` the key names by address, kept alive so
-    /// the address cannot be reused by a different closure while the entry
-    /// stands. Never read: holding it is the point.
-    _held: Vec<Outline>,
+    /// Where the contour stands: the key's origin when it was last used.
+    origin: Point,
     seen: u64,
 }
 
 impl OutlineCache {
-    fn get(&mut self, key: &[u64]) -> Option<Contour> {
+    fn get(&mut self, key: &[u64], origin: Point) -> Option<Contour> {
         let Some(e) = self.entries.get_mut(key) else {
             self.misses += 1;
             return None;
         };
+        if e.origin != origin {
+            e.contour = e.contour.translated(origin - e.origin);
+            e.origin = origin;
+        }
         e.seen = self.generation;
         self.hits += 1;
         Some(e.contour.clone())
     }
 
-    fn insert(&mut self, (key, held): (Vec<u64>, Vec<Outline>), contour: Contour) {
+    fn insert(&mut self, key: Vec<u64>, origin: Point, contour: Contour) {
         let seen = self.generation;
         self.entries.insert(
             key,
             Entry {
                 contour,
-                _held: held,
+                origin,
                 seen,
             },
         );
@@ -95,26 +107,66 @@ impl OutlineCache {
     }
 }
 
-/// `n`'s own outline inputs as key words. A custom `.outline(..)` is keyed
-/// by its closure's address, and the closure is held in `held` so the entry
-/// can keep that address from being reused.
-///
-/// ponytail: identity, not output -- a tree that rebuilds its closure every
-/// frame misses every frame. Keep the `El` (or the `Outline`) across frames
-/// to hit.
+/// `path` as key words, every coordinate by its bits.
+fn path_words(path: &Path, key: &mut Vec<u64>) {
+    use mui_geometry::PathCommand as C;
+    key.push(path.commands.len() as u64);
+    for c in &path.commands {
+        match *c {
+            C::MoveTo(p) => key.extend([0, p.x.to_bits(), p.y.to_bits()]),
+            C::LineTo(p) => key.extend([1, p.x.to_bits(), p.y.to_bits()]),
+            C::ArcTo(a) => key.extend(
+                [
+                    2.,
+                    a.center.x,
+                    a.center.y,
+                    a.radius,
+                    a.start_angle,
+                    a.sweep,
+                    a.to.x,
+                    a.to.y,
+                ]
+                .map(f64::to_bits),
+            ),
+            C::CubicTo(a, b, p) => key.extend([3., a.x, a.y, b.x, b.y, p.x, p.y].map(f64::to_bits)),
+            C::Close => key.push(4),
+        }
+    }
+}
+
+/// `n`'s own outline inputs as key words: its snapped bounds relative to
+/// `origin`, which sits on the device grid, and its size. A custom
+/// `.outline(..)` is keyed by the local path it draws and where that lands,
+/// so a tree rebuilt every frame with a fresh closure still hits.
 fn geometry_shallow(
     n: &El,
     frames: &[Frame],
     at: usize,
+    g: (Point, Option<f64>),
     key: &mut Vec<u64>,
-    held: &mut Vec<Outline>,
 ) {
-    if let Some(outline) = &n.payload().outline {
-        key.extend([6, Arc::as_ptr(&outline.0).cast::<()>() as usize as u64]);
-        held.push(outline.clone());
-    }
+    let (origin, scale) = g;
     let frame = frames[at];
-    key.extend([frame.x, frame.y, frame.size.width, frame.size.height].map(f64::to_bits));
+    if let Some(outline) = &n.payload().outline {
+        key.extend([
+            6,
+            (frame.x - origin.x).to_bits(),
+            (frame.y - origin.y).to_bits(),
+        ]);
+        path_words(&(outline.0)(frame.size), key);
+    }
+    let b = bounds(frame, scale);
+    key.extend(
+        [
+            b.min.x - origin.x,
+            b.min.y - origin.y,
+            b.max.x - origin.x,
+            b.max.y - origin.y,
+            frame.size.width,
+            frame.size.height,
+        ]
+        .map(f64::to_bits),
+    );
     let style = &n.payload().style;
     match style.radius {
         Radius::Theme => key.push(0),
@@ -142,10 +194,10 @@ fn geometry_node(
     frames: &[Frame],
     sizes: &[usize],
     at: usize,
+    g: (Point, Option<f64>),
     key: &mut Vec<u64>,
-    held: &mut Vec<Outline>,
 ) {
-    geometry_shallow(n, frames, at, key, held);
+    geometry_shallow(n, frames, at, g, key);
     let mut child_at = at + 1;
     for child in n.children() {
         // A plain child contributes only its own rounded frame to a weld.
@@ -158,9 +210,9 @@ fn geometry_node(
                 .iter()
                 .any(|grandchild| grandchild.payload().carve.is_some());
         if complex {
-            geometry_node(child, frames, sizes, child_at, key, held);
+            geometry_node(child, frames, sizes, child_at, g, key);
         } else {
-            geometry_shallow(child, frames, child_at, key, held);
+            geometry_shallow(child, frames, child_at, g, key);
         }
         child_at += sizes[child_at];
     }
@@ -198,15 +250,12 @@ impl Walk<'_> {
         let mut key = None;
         if cacheable {
             let mut words = std::mem::take(&mut self.outlines.scratch);
-            self.geometry_key(n, first, &mut words);
-            if let Some(outline) = self.outlines.get(&words) {
+            let origin = self.geometry_key(n, first, &mut words);
+            if let Some(outline) = self.outlines.get(&words, origin) {
                 self.outlines.scratch = words;
-                self.outlines.held.clear();
                 return Ok(outline);
             }
-            // Taken with the words: a nested weld keys itself before this
-            // one is inserted.
-            key = Some((words, std::mem::take(&mut self.outlines.held)));
+            key = Some((words, origin));
         }
         let base = self.shape(n, frame, first)?;
         let (mut at, mut topo): (usize, Option<Topology>) = (first, None);
@@ -234,8 +283,8 @@ impl Walk<'_> {
             topo = Some(t);
         }
         let Some(topo) = topo else {
-            if let Some(key) = key {
-                self.outlines.insert(key, base.clone());
+            if let Some((key, origin)) = key {
+                self.outlines.insert(key, origin, base.clone());
             }
             return Ok(base);
         };
@@ -253,20 +302,22 @@ impl Walk<'_> {
             changed: true,
             ..Contour::path(n.payload().style.corners.shape(&rounded.path))
         };
-        if let Some(key) = key {
-            self.outlines.insert(key, outline.clone());
+        if let Some((key, origin)) = key {
+            self.outlines.insert(key, origin, outline.clone());
         }
         Ok(outline)
     }
 
-    /// Every input `n`'s outline depends on, as words compared in full.
-    fn geometry_key(&mut self, n: &El, first: usize, key: &mut Vec<u64>) {
+    /// Every input `n`'s outline depends on, as words compared in full,
+    /// and the origin its frames are relative to: the node's own, floored to
+    /// the device grid when there is one so snapping moves with it.
+    fn geometry_key(&mut self, n: &El, first: usize, key: &mut Vec<u64>) -> Point {
         use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher};
         key.clear();
-        self.outlines.held.clear();
-        // Identity is the node's key, not its pre-order index: a tooltip or
-        // menu wrapping the root shifts every index but no key or geometry.
-        key.push(BuildHasherDefault::<DefaultHasher>::default().hash_one(n.key()));
+        // Identity is the walk's key (the id, or the tree path) and the
+        // node's own, not its pre-order index: a tooltip or menu wrapping
+        // the root shifts every index but no key or geometry.
+        key.push(BuildHasherDefault::<DefaultHasher>::default().hash_one((&*self.key, n.key())));
         for value in [
             self.spec.theme.corners.selector,
             self.spec.theme.corners.field,
@@ -282,14 +333,15 @@ impl Walk<'_> {
             None => key.push(0),
             Some(scale) => key.extend([1, scale.to_bits()]),
         }
-        geometry_node(
-            n,
-            &self.frames,
-            &self.sizes,
-            first.saturating_sub(1),
-            key,
-            &mut self.outlines.held,
-        );
+        let at = first.saturating_sub(1);
+        let f = self.frames[at];
+        let scale = self.spec.device_scale;
+        let origin = match scale {
+            None => Point::new(f.x, f.y),
+            Some(s) => Point::new((f.x * s).floor() / s, (f.y * s).floor() / s),
+        };
+        geometry_node(n, &self.frames, &self.sizes, at, (origin, scale), key);
+        origin
     }
 
     fn shape(&mut self, n: &El, frame: Frame, first: usize) -> Result<Contour, SceneError> {
@@ -302,11 +354,10 @@ impl Walk<'_> {
                 )
                 .into());
             }
-            let local = (shape.0)(frame.size);
-            local.validate(250_000)?;
-            let world = local.rigid_transform(Point::new(frame.x, frame.y), 0.0)?;
-            world.validate(250_000)?;
-            return Ok(Contour::path(world));
+            let mut path = (shape.0)(frame.size);
+            path.validate(250_000)?;
+            path.translate(Point::new(frame.x, frame.y));
+            return Ok(Contour::path(path));
         }
         let (convex, concave) = match s.radius {
             Radius::Theme => (th.corners.box_, th.corners.concave),
@@ -553,10 +604,11 @@ mod tests {
         same_as_fresh(&spec(0.5), &mut text);
     }
 
-    /// A weld with a custom outline in it is cached by the closure's
-    /// identity: the same closure hits, a new one reshapes.
+    /// A weld with a custom outline in it is cached by the path the
+    /// closure draws: the same drawing hits, even from a rebuilt closure,
+    /// and a different one reshapes.
     #[test]
-    fn a_custom_outline_weld_is_cached_while_its_closure_stays() {
+    fn a_custom_outline_weld_is_cached_while_its_drawing_stays() {
         fn send<T: Send>() {}
         send::<TextCache>();
         let triangle = |w: f64| {
@@ -574,13 +626,15 @@ mod tests {
         resolve_scene_with(&kept, &mut text).unwrap();
         let misses = text.outlines.misses;
         resolve_scene_with(&kept, &mut text).unwrap();
+        let rebuilt = spec(leaf(40., 20.).outline(triangle(1.)));
+        resolve_scene_with(&rebuilt, &mut text).unwrap();
         assert_eq!(
             text.outlines.misses, misses,
-            "an unchanged closure reshaped the weld"
+            "an unchanged drawing reshaped the weld"
         );
         let swapped = spec(leaf(40., 20.).outline(triangle(0.5)));
         same_as_fresh(&swapped, &mut text);
-        assert!(text.outlines.misses > misses, "a new closure hit the cache");
+        assert!(text.outlines.misses > misses, "a new drawing hit the cache");
     }
 
     #[test]
@@ -605,6 +659,47 @@ mod tests {
         let mut text = TextCache::default();
         resolve_scene_with(&spec(Radius::Token(Corner::Box)), &mut text).unwrap();
         same_as_fresh(&spec(Radius::Pill), &mut text);
+    }
+
+    /// Geometry is cached in local space: a steady frame runs no Boolean
+    /// pass, and neither does one that slides every panel over, and the
+    /// moved outline is the fresh one moved.
+    #[test]
+    fn a_steady_or_moved_frame_runs_no_boolean_pass() {
+        let spec = |shift: f64| {
+            let tab = column([leaf(20., 20.).pill()])
+                .pad(8.)
+                .shell(4., Role::Raised);
+            let body = row([leaf(40., 24.).stroke(Role::Dim), leaf(40., 24.)])
+                .inside(4.)
+                .stroke(Role::Dim)
+                .cut(leaf(8., 8.).center());
+            let weld = column([tab, body])
+                .align(Align::Start)
+                .union(Role::Surface)
+                .stroke(Role::Dim)
+                .shell(3., Role::Raised)
+                .id("weld");
+            SceneSpec::new(column([weld]).pad(Spacing::Px(8. + shift)))
+                .offered(Size::new(400. + 2. * shift, 300. + 2. * shift))
+        };
+        let mut text = TextCache::default();
+        resolve_scene_with(&spec(0.), &mut text).unwrap();
+        for shift in [0., 13., 13.25, 0.5] {
+            let before = mui_geometry::boolean_passes();
+            let cached = resolve_scene_with(&spec(shift), &mut text).unwrap();
+            assert_eq!(mui_geometry::boolean_passes(), before, "shift {shift}");
+            let fresh = resolve_scene(&spec(shift)).unwrap();
+            let flat = |s: &ResolvedScene| s.surface("weld").unwrap().path.flatten(0.1, 20_000);
+            for (a, b) in flat(&cached)
+                .unwrap()
+                .concat()
+                .iter()
+                .zip(flat(&fresh).unwrap().concat())
+            {
+                assert!(a.distance(b) < 1e-6, "shift {shift}: {a:?} vs {b:?}");
+            }
+        }
     }
 
     #[test]

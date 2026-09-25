@@ -231,26 +231,47 @@ impl Path {
         // re-validate the output if paths ever carry such extremes.
         Ok(Self { commands })
     }
-    /// Moved by `d`, unvalidated: a translation cannot make a valid path
-    /// invalid, so geometry cached in local space goes back to where it is
-    /// painted without re-checking every arc.
-    pub fn translated(&self, d: Point) -> Self {
-        let commands = self
-            .commands
-            .iter()
-            .map(|c| match *c {
-                PathCommand::MoveTo(p) => PathCommand::MoveTo(p + d),
-                PathCommand::LineTo(p) => PathCommand::LineTo(p + d),
-                PathCommand::ArcTo(a) => PathCommand::ArcTo(Arc {
-                    center: a.center + d,
-                    to: a.to + d,
-                    ..a
-                }),
-                PathCommand::CubicTo(a, b, p) => PathCommand::CubicTo(a + d, b + d, p + d),
-                PathCommand::Close => PathCommand::Close,
+    /// Move by `d` in place, unvalidated: a translation cannot make a valid
+    /// path invalid, so geometry cached in local space goes back to where it
+    /// is painted without re-checking every arc.
+    pub fn translate(&mut self, d: Point) {
+        for c in &mut self.commands {
+            match c {
+                PathCommand::MoveTo(p) | PathCommand::LineTo(p) => *p = *p + d,
+                PathCommand::ArcTo(a) => {
+                    a.center = a.center + d;
+                    a.to = a.to + d;
+                }
+                PathCommand::CubicTo(a, b, p) => {
+                    *a = *a + d;
+                    *b = *b + d;
+                    *p = *p + d;
+                }
+                PathCommand::Close => {}
+            }
+        }
+    }
+    /// The same commands, every coordinate within `tol`: how a cache compares
+    /// geometry that came back from a translation, which rounds the last bit.
+    pub fn near(&self, other: &Self, tol: f64) -> bool {
+        let p = |a: Point, b: Point| (a.x - b.x).abs() <= tol && (a.y - b.y).abs() <= tol;
+        self.commands.len() == other.commands.len()
+            && self.commands.iter().zip(&other.commands).all(|c| match c {
+                (PathCommand::MoveTo(a), PathCommand::MoveTo(b))
+                | (PathCommand::LineTo(a), PathCommand::LineTo(b)) => p(*a, *b),
+                (PathCommand::ArcTo(a), PathCommand::ArcTo(b)) => {
+                    p(a.center, b.center)
+                        && p(a.to, b.to)
+                        && a.radius == b.radius
+                        && a.start_angle == b.start_angle
+                        && a.sweep == b.sweep
+                }
+                (PathCommand::CubicTo(a, b, c), PathCommand::CubicTo(d, e, f)) => {
+                    p(*a, *d) && p(*b, *e) && p(*c, *f)
+                }
+                (PathCommand::Close, PathCommand::Close) => true,
+                _ => false,
             })
-            .collect();
-        Self { commands }
     }
     /// Chainable construction for hand-drawn geometry: a response curve, a
     /// grid line. `quad_to` is stored as the exact equivalent cubic.

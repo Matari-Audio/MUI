@@ -34,6 +34,8 @@ impl<'a> Walk<'a> {
             return Ok(());
         }
         let key = self.intern(n.key().unwrap_or(path));
+        // Before the outline: its cache names the node by it.
+        self.key = key.clone();
         let e = n.payload();
         let s = &e.style;
         let mut inner = ancestors.clone();
@@ -74,7 +76,6 @@ impl<'a> Walk<'a> {
             self.joined_nodes.extend(geometry.join_nodes);
             self.surface_joins.insert(at, geometry.joins);
         }
-        self.key = key.clone();
         // Each envelope belongs to exactly one node, visited once.
         let enveloped = match self.region_envelopes.remove(&at) {
             Some(p) => {

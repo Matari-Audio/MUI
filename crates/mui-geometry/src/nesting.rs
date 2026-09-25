@@ -27,6 +27,13 @@ fn nonnegative(x: f64) -> Result<(), Error> {
 }
 
 impl RoundedRect {
+    /// The same rectangle moved by `d`; a translation keeps it valid.
+    pub fn translated(self, d: Point) -> Self {
+        Self {
+            bounds: self.bounds.translated(d),
+            ..self
+        }
+    }
     pub fn new(bounds: Bounds, requested_radius: f64) -> Result<Self, Error> {
         nonnegative(requested_radius)?;
         if !bounds.min.finite() || !bounds.max.finite() {

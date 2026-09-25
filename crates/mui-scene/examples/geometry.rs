@@ -1,15 +1,18 @@
 //! Warm resolves of an editor-like tree of welded, stroked, shelled panels:
-//! once standing still, once sliding a pixel per frame. Prints the median
-//! time and the Boolean passes each frame ran.
+//! standing still, sliding a pixel per frame, and from cold caches. Prints
+//! the median time and the Boolean passes each frame ran.
 use mui_scene::prelude::*;
 use mui_scene::{resolve_scene_with, TextCache};
 use std::time::Instant;
 
 fn panel(i: usize) -> El {
-    let tab = column([leaf(20., 20.).pill().fill(Role::Primary).id(format!("k{i}"))])
-        .pad(8.)
-        .id(format!("tab{i}"))
-        .shell(4., Role::Raised);
+    let tab = column([leaf(20., 20.)
+        .pill()
+        .fill(Role::Primary)
+        .id(format!("k{i}"))])
+    .pad(8.)
+    .id(format!("tab{i}"))
+    .shell(4., Role::Raised);
     let body = row((0..4).map(|j| {
         leaf(40., 24.)
             .radius(6.)
@@ -40,17 +43,20 @@ fn main() {
     let font = Font::new(epaint_default_fonts::HACK_REGULAR).unwrap();
     let spec = |shift| {
         SceneSpec::new(tree(shift))
-            .offered(Size::new(1280., 4000.))
+            .offered(Size::new(1280. + 2. * shift, 4000. + 2. * shift))
             .font(font.clone())
     };
     let mut cache = TextCache::default();
     let still = spec(0.);
     resolve_scene_with(&still, &mut cache).unwrap();
-    let mut run = |label: &str, specs: &mut dyn FnMut(usize) -> SceneSpec| {
+    let mut run = |label: &str, specs: &mut dyn FnMut(usize) -> SceneSpec, cold: bool| {
         let mut times = Vec::new();
         let mut passes = 0;
         for k in 0..41 {
             let s = specs(k);
+            if cold {
+                cache = TextCache::default();
+            }
             let before = mui_geometry::boolean_passes();
             let t = Instant::now();
             std::hint::black_box(resolve_scene_with(&s, &mut cache).unwrap());
@@ -64,6 +70,8 @@ fn main() {
             passes as f64 / 41.
         );
     };
-    run("steady", &mut |_| still.clone());
-    run("moving", &mut |k| spec(1. + k as f64));
+    run("steady", &mut |_| still.clone(), false);
+    run("moving", &mut |k| spec(1. + k as f64), false);
+    // Every weld reshapes: what a miss costs.
+    run("cold", &mut |_| still.clone(), true);
 }
