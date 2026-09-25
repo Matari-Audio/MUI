@@ -1,6 +1,6 @@
 //! The editor window, independent of any plugin framework's traits: a
 //! baseview child of the host's window, a wgpu surface on it, and
-//! `HybridEffects` painting the resolved scene. [`crate::MuiEditor`] is
+//! `GpuRenderer` painting the resolved scene. [`crate::MuiEditor`] is
 //! truce's consumer; another framework's adapter opens the same window with
 //! its own [`View`].
 //!
@@ -23,7 +23,7 @@ use baseview::{
 use keyboard_types::{Key as HostKey, KeyState, Modifiers};
 use mui::prelude::{Button, Cursor, El, Input, Key, KeyPress, Mods, Point, PointerInput, Size};
 use mui::scene::ResolvedScene;
-use mui::vello::effects::{Budget, HybridEffects};
+use mui::vello::effects::{Budget, GpuRenderer};
 use mui::vello::kurbo::Affine;
 use mui::Ui;
 use raw_window_handle::HasRawWindowHandle;
@@ -705,8 +705,9 @@ impl Clipboard {
 struct Gpu {
     surface: wgpu::Surface<'static>,
     device: wgpu::Device,
+    queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
-    renderer: HybridEffects,
+    renderer: GpuRenderer,
     /// Raised by wgpu's device-lost callback, on whatever thread wgpu calls it.
     lost: Arc<AtomicBool>,
 }
@@ -724,7 +725,7 @@ impl Gpu {
         // SAFETY: the surface comes from this window's live native handle,
         // and baseview drops the handler that owns it before the window.
         #[allow(unsafe_code)]
-        let surface = unsafe { truce_gui::platform::create_wgpu_surface(&instance, window) }
+        let surface = unsafe { surface::create(&instance, window) }
             .ok_or("native surface creation failed")?;
         // A desktop with an iGPU enumerates it first; paint on the card.
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
@@ -761,9 +762,7 @@ impl Gpu {
                 .ok_or("surface has no default configuration")?
         };
         surface.configure(&device, &config);
-        // ponytail: whole-scene retention; `TiledEffects` redraws only the
-        // damaged tiles, for editors large enough that a full redraw shows.
-        let renderer = pollster::block_on(HybridEffects::new(
+        let renderer = pollster::block_on(GpuRenderer::new(
             &device,
             &queue,
             format,
@@ -774,6 +773,7 @@ impl Gpu {
         Ok(Self {
             surface,
             device,
+            queue,
             config,
             renderer,
             lost,
@@ -813,7 +813,7 @@ impl Gpu {
             .create_view(&wgpu::TextureViewDescriptor::default());
         match self.renderer.render(scene, xf, &view) {
             Ok(_) => {
-                frame.present();
+                self.queue.present(frame);
                 Present::Done
             }
             Err(e) => {
@@ -825,5 +825,6 @@ impl Gpu {
     }
 }
 
+mod surface;
 #[cfg(test)]
 mod tests;

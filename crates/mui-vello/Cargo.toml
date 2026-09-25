@@ -8,7 +8,7 @@ license.workspace = true
 default = []
 gpu-effects = ["wgpu/wgsl", "dep:vello"]
 # A CPU rasteriser: snapshot tests, thumbnails, hosts with no GPU.
-cpu = ["dep:vello_cpu"]
+cpu = ["dep:vello_cpu", "dep:glifo"]
 # Rasterise on a rayon pool instead of one core. Off by default: a snapshot-
 # sized pixmap loses more to thread hand-off than it gains.
 cpu-threads = ["cpu", "vello_cpu/multithreading"]
@@ -26,9 +26,9 @@ mui-geometry = { path = "../mui-geometry" }
 vello = { path = "../../vendor/vello", default-features = false, features = ["wgpu"], optional = true }
 # `Glyph` is the one glyph type `vello_cpu` does not re-export, so it comes
 # straight from the crate it builds on.
-glifo = { version = "0.3", default-features = false }
+glifo = { version = "0.3", default-features = false, optional = true }
 # kurbo and peniko reach us through vello_common so the types cannot version-skew.
-vello_common = { version = "0.2", default-features = false }
+vello_common = { version = "0.2", default-features = false, features = ["std"] }
 # Types only (`Device`, `Queue`) for the image atlas upload; still no backend.
 wgpu = { version = "30", default-features = false }
 vello_cpu = { version = "0.2", optional = true, default-features = false, features = ["std", "u8_pipeline", "text"] }

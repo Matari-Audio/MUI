@@ -16,13 +16,16 @@ use kurbo::{Affine, BezPath, Rect, Shape as _, Stroke};
 use mui_geometry::Error;
 use mui_scene::{Fit, GradientKind, Layer, Paint, Painted, ResolvedScene, ShadowKind};
 use std::sync::{Arc, Weak};
+#[cfg(feature = "cpu")]
 use vello_common::filter_effects::{EdgeMode, Filter, FilterPrimitive};
 /// The brush type [`Canvas::set_paint`] takes, so the trait can be
 /// implemented outside this crate.
 pub use vello_common::paint::PaintType;
 use vello_common::peniko::color::PremulRgba8;
 use vello_common::peniko::color::{AlphaColor, DynamicColor, Srgb};
-use vello_common::peniko::{Blob, ColorStop, ColorStops, FontData, Gradient, ImageSampler};
+use vello_common::peniko::{Blob, ColorStop, ColorStops, FontData, Gradient};
+#[cfg(feature = "cpu")]
+use vello_common::peniko::ImageSampler;
 use vello_common::pixmap::Pixmap;
 pub use vello_common::{kurbo, peniko};
 #[cfg(feature = "cpu")]
@@ -160,6 +163,7 @@ pub trait Canvas {
     fn glyphs(&mut self, text: &mui_scene::Text);
 }
 
+#[cfg(feature = "cpu")]
 fn run(
     origin: mui_geometry::Point,
     glyphs: &[mui_scene::TextGlyph],
@@ -263,6 +267,7 @@ impl Cache {
     }
 }
 
+#[cfg(feature = "cpu")]
 macro_rules! wrapper {
     ($inner:ident, $atlas:expr) => {
         fn begin_frame(&mut self) {
@@ -381,6 +386,7 @@ pub struct Cpu<'a> {
     pub cache: &'a mut Cache,
 }
 
+#[cfg(feature = "cpu")]
 /// The one filter MUI asks for. `Duplicate` edges, because the backdrop
 /// stops at the window, and fading it to transparent there would darken the
 /// frosted glass along every screen edge.
