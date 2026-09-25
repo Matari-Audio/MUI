@@ -82,7 +82,7 @@ impl Slot {
 /// The pool does not own a frame loop or submit behind the caller's back.
 /// Call `commit_submitted()` ONLY after the encoder containing these draws has
 /// been submitted. `abort()` leaves texture content dirty for a later attempt.
-/// The high-level `HybridEffects` wrapper performs this transaction itself.
+/// The high-level `GpuRenderer` performs this transaction itself.
 pub struct WeldTextures {
     device: wgpu::Device,
     queue: wgpu::Queue,

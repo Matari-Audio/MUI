@@ -35,11 +35,9 @@ Run locally with `./playground/build.sh` (requires the WASM Rust target and
 ## Under the hood
 
 MUI owns layout, contours, input, animation and the paint list. Vello renders it:
-`mui-vello` provides CPU rendering, Vello Hybrid GPU rendering, and retained GPU
-effects. Native hosts can keep `TiledEffects` alive between frames to reuse clean
-tiles; broad changes switch to one full-scene render when the memory budget
-allows it. `HybridEffects` is the whole-scene retained alternative. The host must
-select and retain these renderers to benefit from their caches. An unchanged
+`mui-vello` provides CPU rendering (`vello_cpu`) and `GpuRenderer`, a retained
+renderer over classic Vello on wgpu 30. The host must keep the `GpuRenderer`
+alive between frames to benefit from its caches. An unchanged
 frame into the view they presented last records no GPU pass; a swapchain hands
 out a new view per frame, so there the host saves the pass by not asking.
 
@@ -150,7 +148,7 @@ assert_eq!(scene.surface("tab").unwrap().frame.size.width, 92.0);
 | `.push(child)`, `.baseline()`, `.lines(2)` | append to a container, sit text children on one baseline, cap a wrapped label |
 | `.fill(Primary)`, `.fill(Color::..)`, `.fill(Gradient::vertical(a, b))` | a palette role, a literal, a gradient |
 | `Gradient::linear(180., ..)`, `::radial((0.3, 0.3), 0.6, ..)`, `::conic(-135., ..)` | the three ramps, stops as roles or colours: a knob arc is a conic gradient and no geometry |
-| `.fill(Fill::Image(img, Fit::Cover))` | an RGBA buffer as a fill: `Cover`, `Contain` or `Fill` (`vello_cpu` paints the pixmap, `vello_hybrid` uploads it once into its atlas) |
+| `.fill(Fill::Image(img, Fit::Cover))` | an RGBA buffer as a fill: `Cover`, `Contain` or `Fill` (`vello_cpu` paints the pixmap, `GpuRenderer` hands Vello the image once per buffer) |
 | `.stroke(Ink)`, `.radius(8.0)`, `.pill()`, `.shadow(Shadow::soft(12.0))` | outline, corners, a shadow appended to the list |
 | `.radius(Corner::Field)` | the theme's radius for this kind of thing: `Selector` (toggle, badge), `Field` (button, input, tab), `Box` (card, panel) |
 | `.corners(CornerStyle::Squircle)` | the curve the corners turn through, apart from how big they are: a continuous superellipse instead of a circular arc, through welds, shells and strokes alike |
@@ -378,13 +376,9 @@ stretched (`Fill`). Decoding is the host's job: no library crate takes an
 image dependency. `Path::from_svg_data` turns an icon's `d` attribute into a
 `Path` (arcs included), so a symbol is geometry like everything else.
 
-`vello_cpu` paints the pixmap itself. `vello_hybrid` wants an atlas id and
-panics on a pixmap, so `mui_vello::Gpu` carries an optional `Atlas` -- the
-renderer, device and queue -- and uploads each image buffer once through
-`Renderer::upload_image`, then paints by id. A `Gpu` built without an `Atlas`
-flattens an image fill to the mid grey `Paint::solid` already uses for
-contrast rather than crashing, and so does an image the atlas has no room
-for. What was uploaded (or premultiplied, on the CPU) lives in a
+`vello_cpu` paints the pixmap itself. `GpuRenderer` converts each image
+buffer once into a Vello image that Vello uploads and samples; a GPU texture
+registered with `GpuRenderer::set_texture` is sampled in place. What was uploaded (or premultiplied, on the CPU) lives in a
 `mui_vello::Cache` owned beside the renderer. It holds only a `Weak` to each
 buffer and sweeps the entries the app has dropped on the next image lookup,
 so a panel handing over a fresh frame buffer every frame does not grow it.
@@ -506,5 +500,5 @@ global allocator, which the library itself forbids.
 
 Formatting, tests, clippy with warnings denied, and a wasm check of the
 library crates. `BENCHMARKS.md` is the frame budget of a Kurv-sized scene
-across `vello_hybrid`, `vello_cpu` and classic `vello`, reproduced by
-`cargo run -p mui-vello --profile perf --features cpu --example bench`.
+on `vello_cpu` and `GpuRenderer`, reproduced by
+`cargo run -p mui-vello --profile perf --features cpu,gpu-effects --example bench`.

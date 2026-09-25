@@ -77,8 +77,8 @@ El tree  (row! / col! / stack! / grid! / fits!, Paints fills, presets merged
    |     roles  -> Palette                            ink resolves on its ground
    |     image  -> Fill::Image                        straight RGBA, fitted to
    |                                                  the node's own outline
-   |                                                  (vello_cpu: pixmap; vello_hybrid: atlas id,
-   |                                                  no Atlas -> a grey stand-in)
+   |                                                  (vello_cpu: pixmap; GpuRenderer: a Vello
+   |                                                  image, or a registered texture)
    |
    v  ResolvedScene         paint: Vec<Painted>  (shadows, fill, shells, stroke,
    |                        text, draws, clip/unclip); floats are appended after
@@ -96,8 +96,8 @@ El tree  (row! / col! / stack! / grid! / fits!, Paints fills, presets merged
    |                        host's adapter; a disabled one says so and offers
    |                        no Focus action
    |
-   v  mui-vello paint       Canvas: Gpu { scene, resources, cache, atlas } over
-                            vello_hybrid, Cpu { ctx, resources, cache } over
+   v  mui-vello paint       Canvas: Classic over a vello::Scene (GpuRenderer,
+                            wgpu 30), Cpu { ctx, resources, cache } over
                             vello_cpu.
                             Fill / stroke / blurred rect / push_clip / pop_clip
                             / push_layer / pop_layer (blend mode + opacity),
@@ -203,7 +203,7 @@ written in them; putting them in either would point an edge sideways.
 
 `mui-truce` is two halves. `window` knows no plugin framework: a `View`
 trait (build a tree, report outside changes, ask for a size), the native
-event queue, and the GPU surface painted with `HybridEffects`. `MuiEditor`
+event queue, and the GPU surface painted with `GpuRenderer`. `MuiEditor`
 and `Bridge` are the truce half: a `View` whose model is truce's parameter
 store, and truce's `Editor` around the window. An adapter for another
 framework (nih-plug, say) is another `View` plus that framework's editor

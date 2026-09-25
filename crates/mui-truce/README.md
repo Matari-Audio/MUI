@@ -5,7 +5,7 @@ store, the audio runtime and the state format. This crate adds the editor:
 
 - `MuiEditor` implements truce's `Editor`. It opens a baseview child window
   inside the host's window, puts a wgpu surface on it, and paints each resolved
-  `Ui` frame with `HybridEffects`.
+  `Ui` frame with `GpuRenderer`.
 - `Bridge` binds widget ids to truce parameters. A drag, a key step or a click
   becomes the host's begin/perform/end, and host automation or a state load is
   the value that the next tree reads.

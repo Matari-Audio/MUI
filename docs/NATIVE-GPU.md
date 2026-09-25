@@ -1,6 +1,10 @@
-# Native GPU welding and retained Hybrid encoding
+# Native GPU welding and the retained GPU renderer
 
 19 September 2026. Integration base: `a9cc11d232986fce8dfb1a12aa20afd7dcbb664e`.
+
+25 September 2026: the GPU path is classic Vello 0.10 (vendored) on wgpu 30,
+behind one retained renderer, `effects::GpuRenderer`. `vello_hybrid`,
+`HybridEffects`, `TiledEffects` and the `gpu_matrix` example are gone.
 
 **Status: builds, passes its tests, and runs on a physical device.** The
 workspace builds and its test suite passes (including the Naga validation test
@@ -26,19 +30,14 @@ El tree -> layout -> paint-ordered scene
                                  |
                         persistent RGBA8 texture
                                  |
-                   Hybrid external texture sample in its z slot
+              copied GPU-side into Vello's image atlas, sampled in its z slot
 ```
 
-Queue submissions per frame, as the code does them today:
-
-- `HybridEffects`: one encoder holds the material passes and the Vello render.
-  It is submitted once per frame.
-- `Gpu::image`: an image upload or atlas free submits its own small encoder at
-  the moment the image is painted. A frame that uploads new images therefore
-  submits more than once.
-- `TiledEffects`: one encoder for the material passes, one per dirty tile, and
-  one for the final blit to the target. That is N+2 submissions for N dirty
-  tiles, plus any image uploads.
+Queue submissions per frame: `GpuRenderer::render` records the material
+passes, the Vello render and the present pass, and submits them. An
+unchanged frame into the view presented last submits nothing; into a new
+view (a swapchain) it is one present pass of the texture already holding
+the frame. Nothing is read back to the CPU.
 
 `Ui::gpu_welding()` selects the analytic backend for new material welds.
 `.gpu_weld(options)` and `.reference_weld(options)` are explicit per-node
@@ -86,54 +85,42 @@ refresh those dependent values explicitly when needed.
   re-renders nothing. Commit happens after queue submission, and aborts are
   explicit. Low-level callers must not mutate an effect
   twice in one submission or call commit before submission.
-- `HybridEffects`: a real Hybrid renderer and resources, not a parallel overlay
-  renderer. An exactly unchanged paint list and transform reuse the already
-  encoded Hybrid scene, skipping its CPU strip preparation. The material pass
-  precedes sampling in the same encoder. Optional overlays invalidate retention.
-  Retention helps only when the paint list really is identical. In the `bench`
-  editor something changes every frame, so it re-encodes all 55 of 55 frames.
-- `TiledEffects`: damage-tracked tiles. Welds whose bounds miss the viewport
-  are culled before `begin`, so they are never admitted or rendered. An idle
-  frame plans and commits its damage without allocating
-  (`tests/idle_alloc.rs`).
-- `GpuTimer`: an optional, standalone four-slot asynchronous timestamp ring,
-  used by `gpu_matrix`. `HybridEffects` no longer carries a profiler.
-- Feature-selected native gallery host plus `gpu_welding` windowed example.
+- `GpuRenderer`: a classic Vello renderer on the host's device. An exactly
+  unchanged paint list and transform reuse the encoded `vello::Scene` and
+  the rendered texture. The material pass precedes sampling in the same
+  encoder. Retention helps only when the paint list really is identical: in
+  the `bench` editor with a knob turning it re-encodes 54 of 55 frames.
+- `GpuTimer`: an optional, standalone four-slot asynchronous timestamp ring.
+- The native gallery host (`mui-preview`) plus the `gpu_welding` windowed example.
   Resize preserves pipelines. Surface loss recreates the surface. Device loss
   rebuilds the device and the renderer (see below).
 
 ## Images and the per-renderer `Cache`
 
-Decoded pixmaps, atlas ids and fonts live in a `mui_vello::Cache` that belongs
-to the renderer. There are no process-wide globals. `HybridEffects` and
-`TiledEffects` own their cache; direct `Gpu`/`Cpu` callers pass one in.
-Images are keyed by `Weak<[u8]>` on the app's pixel buffer, so the cache never
-keeps a buffer alive. On each image lookup, entries whose buffer the app has
-dropped are swept: their pixmap is freed and their atlas slot is released.
-Fonts are kept for the renderer's lifetime.
-
-When the image atlas is full, the image draws as its solid stand-in colour
-instead of panicking. The cache tracks atlas occupancy with a mirror
-`vello_common` allocator. This mirror is exact only with the default
-`vello_hybrid::Renderer::new` atlas settings and with the glyph atlas off.
+Converted images and fonts live in a `mui_vello::Cache` that belongs to the
+renderer. There are no process-wide globals. `GpuRenderer` owns its cache;
+direct `Cpu` callers pass one in. Images are keyed by `Weak<[u8]>` on the
+app's pixel buffer, so the cache never keeps a buffer alive. On each image
+lookup, entries whose buffer the app has dropped are swept. A host texture
+registered with `GpuRenderer::set_texture` is sampled in place.
 
 ## Device loss (host contract)
 
 A wgpu device loss kills everything created from that device: pipelines, weld
 textures, atlas contents and ids, and the retained encoding. `mui-preview`'s
-`host_gpu.rs` is the reference host. It does the following:
+`host.rs` is the reference host. It does the following:
 
 1. It registers `Device::set_device_lost_callback`. The callback only sets an
    `AtomicBool`, because wgpu may call it on any thread.
 2. At the start of the next `present`, if the flag is set, it requests a new
    adapter and device for the same surface. It then reconfigures the surface
-   and builds a new `HybridEffects` or `TiledEffects`, which brings a fresh
+   and builds a new `GpuRenderer`, which brings a fresh
    `Cache`. That frame is skipped and a redraw is requested.
 3. Nothing from the old device is carried over: no `Cache`, no `WeldTextures`
    and no texture ids. The scene is plain CPU data and needs no change.
 
 Other hosts must follow the same steps. The path has not yet been exercised by
-a real device loss. The plain `host.rs` gallery host (Hybrid without effects) does not recover yet.
+a real device loss, only by `device::tests::a_destroyed_device_is_replaced_and_renders_again`.
 - Deadline-based tooltip/caret wakeups, true elapsed wall-clock time, one
   catch-up frame for an immediate-mode caret edge, and hidden-window gating.
 - Allocation-free waveform extrema and spectrum peak reducers over existing
@@ -162,7 +149,7 @@ Euclidean parallel offsets.
 
 Whole-group translation can reuse local texture contents, but changes the
 placement encoding. Morph-only updates reuse layout, texture allocation and
-Hybrid encoding. A normal `Ui::frame` STILL walks/resolves the immediate tree.
+the Vello encoding. A normal `Ui::frame` STILL walks/resolves the immediate tree.
 There is no automatic fine-grained reactive dependency graph, subtree layout
 retention, arbitrary-path distance-tile cache or generic static-layer atlas here.
 The retained cache stores an exact copy of one paint list; it is not a bounded
@@ -170,8 +157,8 @@ history of every scene ever shown.
 
 The high-level renderer currently supports non-sRGB RGBA8/BGRA8 UNORM output.
 Its effect texture contains premultiplied sRGB-encoded values, written by the
-single `fs_hybrid` entry point. The classic straight-alpha entry is gone. Do not
-assume an sRGB attachment works without further changes.
+single `fs_hybrid` entry point. Do not assume an sRGB attachment works
+without further changes.
 
 The native window host is winit, NOT a completed CLAP/VST3/AU parent-window host.
 No KURV or BUFFR product source or real-time audio transport was changed. Parley
@@ -187,12 +174,12 @@ cargo fmt --all
 rustup target add wasm32-unknown-unknown
 cargo fetch --locked
 bash tools/native-gpu/verify.sh
-cargo run --locked --profile perf -p mui-preview --features gpu-effects --example gpu_welding
+cargo run --locked --profile perf -p mui-preview --example gpu_welding
 ```
 
 `gpu_welding`: Space toggles animation, arrows change morph, 1/2/3 change the
 welding channel policy, R resets, mouse movement repositions the second source.
-The title reports resolves, upload bytes, effect draws and Hybrid encodes, not
+The title reports resolves, upload bytes, effect draws and scene encodes, not
 unvalidated FPS. The example intentionally isolates morph-only updates from full
 input/geometry rebuilds.
 
@@ -203,54 +190,31 @@ sample; and native validation errors at 1x/1.5x/2x. Failure to obtain an adapter
 fails the command. Software adapters may be used for correctness, but are named.
 Its current pixel assertions are targeted, not exhaustive CPU/GPU parity.
 
-## Hybrid measurement
-
-The separate `gpu_matrix` example measures an ISOLATED analytic-effect fixture
-on the Hybrid path: background, clip, opacity and foreground around one weld.
-It is not the whole-editor fixture, and it is not a DAW or presentation
-benchmark. The classic backend has been removed.
-
-```sh
-python tools/native-gpu/run_matrix.py ./gpu-results --frames 600 --repetitions 3
-```
-
-This runs a device contract first, then static/morph/geometry/resize at
-1x/1.5x/2x, and writes raw CSVs, adapter metadata and PNGs.
+## Measurement
 
 The whole-editor comparison is the `bench` example:
 `cargo run -p mui-vello --profile perf --features cpu,gpu-effects --example bench`.
-It includes `hybrid retained` (HybridEffects) and `tiles` (TiledEffects) rows.
-On an RX 6600, median frame times were:
+It has `vello_cpu` and `GpuRenderer` rows. On an RX 6600 (release build,
+25 September 2026), median frame totals were:
 
-| case | HybridEffects | TiledEffects, per tile | TiledEffects, adaptive |
-|---|---|---|---|
-| static | 5.9 ms | 4.0 ms | 4.3 ms |
-| one knob turning | 5.8 ms | 4.2 ms | 4.5 ms |
-| cold | 11.4 ms | 16.0 ms | 12.0 ms |
+| case | vello_cpu | GpuRenderer |
+|---|---|---|
+| cold | 11.3 ms | 8.9 ms |
+| static | 4.6 ms | 1.7 ms |
+| one knob turning | 4.4 ms | 4.2 ms |
+| fresh image | 4.6 ms | 4.4 ms |
 
-On warm frames with partial damage, tiles save about 1.6 to 1.9 ms.
-
-The `perf` Cargo profile inherits release with opt-level=3; the original
-size-optimized release profile remains unchanged. Compare profiles using
-`--profile release`, into a new output directory.
-
-Reports use nearest-rank p50/p95/p99 and retain missing timestamp samples.
-`cpu_submit_ms` excludes the bounded three-in-flight admission wait.
-`gpu_queue_interval_ms` brackets queue commands. Neither metric is presented latency/FPS.
-Readback and final draining occur only in diagnostic binaries, outside timed
-samples, not in production rendering. Window scheduling, input-to-display,
+`render` for `GpuRenderer` is the wait for the GPU after `render` returns;
+it is not presented latency or FPS. Window scheduling, input-to-display,
 power/thermals, real audio underruns and multiple plugin instances remain
-unmeasured. The timer ring may drop samples; reports show the missing count.
+unmeasured.
 
 ## Upstream contracts checked
 
-- https://docs.rs/vello_hybrid/0.2.0/vello_hybrid/struct.Scene.html
-- https://docs.rs/vello_hybrid/0.2.0/vello_hybrid/struct.TextureBindings.html
 - https://docs.rs/vello/0.10.0/vello/struct.Renderer.html
 - https://docs.rs/vello/0.10.0/vello/struct.Scene.html
-- https://github.com/gfx-rs/wgpu/tree/v29.0.3/wgpu/src/api
+- https://github.com/gfx-rs/wgpu/tree/v30.0.1/wgpu/src/api
 
-Published crate names remain `vello_hybrid = 0.2`, `vello = 0.10`, `wgpu = 29`.
-The lockfile patch reuses the existing Naga29 pin and changes only workspace
-edges. Cargo --locked remains authoritative; the applicator does not invent or
+`vello` 0.10 is vendored under `vendor/vello`, ported to `wgpu = 30`.
+Cargo --locked remains authoritative; do not invent or
 refresh registry checksums.
