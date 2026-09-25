@@ -4,7 +4,6 @@ use std::any::Any;
 mod wake;
 use crate::SemanticAction;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::fmt::Write as _;
 
 use mui_geometry::Point;
 use mui_input::{
@@ -205,6 +204,14 @@ pub struct Ui {
 }
 
 fn same_hit_geometry(a: &ResolvedScene, b: &ResolvedScene) -> bool {
+    // The scene's caches hand an unchanged outline back as the same Arc:
+    // compare by pointer before walking the commands.
+    fn same<'p>(
+        a: impl ExactSizeIterator<Item = &'p Arc<mui_geometry::Path>>,
+        mut b: impl ExactSizeIterator<Item = &'p Arc<mui_geometry::Path>>,
+    ) -> bool {
+        a.len() == b.len() && a.zip(&mut b).all(|(a, b)| Arc::ptr_eq(a, b) || a == b)
+    }
     let mut a = a.surfaces();
     let mut b = b.surfaces();
     loop {
@@ -214,10 +221,14 @@ fn same_hit_geometry(a: &ResolvedScene, b: &ResolvedScene) -> bool {
                 if a.key == b.key
                     && a.disabled == b.disabled
                     && a.pointer_states == b.pointer_states
-                    && a.path == b.path
+                    && same([&a.path].into_iter(), [&b.path].into_iter())
                     && a.clip == b.clip
-                    && a.clip_paths() == b.clip_paths()
-                    && a.hits == b.hits => {}
+                    && same(
+                        a.clip_paths().unwrap_or(&[]).iter(),
+                        b.clip_paths().unwrap_or(&[]).iter()
+                    )
+                    && a.hits.iter().map(|h| &h.0).eq(b.hits.iter().map(|h| &h.0))
+                    && same(a.hits.iter().map(|h| &h.1), b.hits.iter().map(|h| &h.1)) => {}
             _ => return false,
         }
     }
@@ -1259,7 +1270,7 @@ impl Ui {
             }
             let mark = path.len();
             for (j, c) in n.children().iter().enumerate() {
-                let _ = write!(path, "/{j}");
+                push_index(path, j);
                 visit(c, path, out);
                 path.truncate(mark);
             }
@@ -1510,26 +1521,8 @@ impl Ui {
     fn sweep(&mut self, root: &mut El, dt: f64) -> bool {
         let pal = self.theme.palette;
         let heats = self.bar_heats();
-        // Declared state looks first, so a transition springs toward the
-        // style the node actually asked for this frame. The walks key an
-        // unnamed node by its tree path, exactly as the scene does.
-        let mut path = std::mem::take(&mut self.path);
-        path.clear();
-        let (springs, focus) = (&self.springs, self.focus.as_deref());
-        declared_states(
-            root,
-            &mut path,
-            &|k, st| match st {
-                State::Hover => springs.get(k).is_some_and(|[h, _]| h.value > 0.5),
-                State::Press => springs.get(k).is_some_and(|[_, p]| p.value > 0.5),
-                State::Focus => focus == Some(k),
-                // Declared by the node, not discovered here: `declared_states`
-                // answers this one from the element itself.
-                State::Disabled => false,
-            },
-            false,
-        );
-        let mut animating = transitions(root, &mut path, &pal, &mut self.motion, dt);
+        // Scrolls step before the walk slides the tree by them.
+        let mut animating = false;
         for (_, s) in self.tweens.values_mut() {
             // The tree already drew the value before this step: a step that
             // snaps onto the target still owes the frame that shows it.
@@ -1539,16 +1532,25 @@ impl Ui {
         for s in self.scrolls.values_mut().flatten() {
             animating |= s.step(dt);
         }
-        let springs = &self.springs;
-        let scrolls = (&self.scrolls, &heats);
-        state(
-            root,
-            &mut path,
-            &pal,
-            &|k| springs.get(k).map(|[h, p]| (h.value, p.value)),
-            scrolls,
-            false,
-        );
+        let mut path = std::mem::take(&mut self.path);
+        path.clear();
+        let (springs, focus) = (&self.springs, self.focus.as_deref());
+        let mut sweep = Sweep {
+            pal: &pal,
+            is: &|k, st| match st {
+                State::Hover => springs.get(k).is_some_and(|[h, _]| h.value > 0.5),
+                State::Press => springs.get(k).is_some_and(|[_, p]| p.value > 0.5),
+                State::Focus => focus == Some(k),
+                // Declared by the node, not discovered here: `declared_states`
+                // answers this one from the element itself.
+                State::Disabled => false,
+            },
+            of: &|k| springs.get(k).map(|[h, p]| (h.value, p.value)),
+            scrolls: (&self.scrolls, &heats),
+            motion: &mut self.motion,
+            dt,
+        };
+        animating |= sweep.node(root, &mut path, false);
         self.path = path;
         animating
     }
@@ -2111,7 +2113,7 @@ fn channels(e: &mut Element, pal: &Palette, ch: &mut impl FnMut(u32, f64, bool) 
 /// target mid-flight retargets the live spring instead of restarting it.
 fn transitions(
     n: &mut El,
-    path: &mut String,
+    path: &str,
     pal: &Palette,
     motion: &mut BTreeMap<String, Channels>,
     dt: f64,
@@ -2158,9 +2160,6 @@ fn transitions(
             *n.gap_mut() = n.payload().inside.expect("coupled inside");
         }
     }
-    children(n, path, |c, path| {
-        animating |= transitions(c, path, pal, motion, dt)
-    });
     animating
 }
 
@@ -2220,7 +2219,7 @@ fn shapes(root: &El) -> Shapes {
         }
         let mark = path.len();
         for (j, c) in n.children().iter().enumerate() {
-            let _ = write!(path, "/{j}");
+            push_index(path, j);
             visit(c, path, out);
             path.truncate(mark);
         }
@@ -2230,14 +2229,46 @@ fn shapes(root: &El) -> Shapes {
     out
 }
 
-/// Visit `n`'s children with `path` extended to each one's tree path, the
-/// `/0/2` key the scene gives a node without an id.
-fn children(n: &mut El, path: &mut String, mut f: impl FnMut(&mut El, &mut String)) {
-    let mark = path.len();
-    for (j, c) in n.children_mut().iter_mut().enumerate() {
-        let _ = write!(path, "/{j}");
-        f(c, path);
-        path.truncate(mark);
+/// Append child `j`'s step to a tree path, the `/0/2` key the scene gives a
+/// node without an id. By hand: `write!` is most of a walk's cost.
+fn push_index(path: &mut String, mut j: usize) {
+    path.push('/');
+    let at = path.len();
+    loop {
+        path.insert(at, char::from(b'0' + (j % 10) as u8));
+        j /= 10;
+        if j == 0 {
+            break;
+        }
+    }
+}
+
+/// One walk styling the tree: per node its declared state looks first, so a
+/// transition springs toward the style the node actually asked for this
+/// frame, then the automatic hover, press and scroll. Each node's key is its
+/// id or its tree path, exactly as the scene's.
+struct Sweep<'a> {
+    pal: &'a Palette,
+    is: &'a dyn Fn(&str, State) -> bool,
+    of: &'a dyn Fn(&str) -> Option<(f64, f64)>,
+    scrolls: (&'a BTreeMap<String, [Spring; 2]>, &'a BTreeMap<String, f64>),
+    motion: &'a mut BTreeMap<String, Channels>,
+    dt: f64,
+}
+impl Sweep<'_> {
+    /// Returns whether a transition is still moving.
+    fn node(&mut self, n: &mut El, path: &mut String, off: bool) -> bool {
+        let off = off || n.payload().disabled;
+        declared_states(n, path, self.is, off);
+        let mut animating = transitions(n, path, self.pal, self.motion, self.dt);
+        state(n, path, self.pal, self.of, self.scrolls, off);
+        let mark = path.len();
+        for (j, c) in n.children_mut().iter_mut().enumerate() {
+            push_index(path, j);
+            animating |= self.node(c, path, off);
+            path.truncate(mark);
+        }
+        animating
     }
 }
 
@@ -2334,8 +2365,7 @@ fn state_policy(root: &El, id: &str) -> [bool; 2] {
 /// that switched itself off greys the controls inside it too, which is the same
 /// rule the hit gate uses. An unnamed node is keyed by its tree path, the key
 /// the hit map gives it when it declares a hover or press look.
-fn declared_states(n: &mut El, path: &mut String, is: &dyn Fn(&str, State) -> bool, off: bool) {
-    let off = off || n.payload().disabled;
+fn declared_states(n: &mut El, path: &str, is: &dyn Fn(&str, State) -> bool, off: bool) {
     if !n.payload().states.is_empty() {
         let e = n.payload_mut();
         let states = std::mem::take(&mut e.states);
@@ -2357,7 +2387,6 @@ fn declared_states(n: &mut El, path: &mut String, is: &dyn Fn(&str, State) -> bo
         e.style = style;
         e.states = states;
     }
-    children(n, path, |c, path| declared_states(c, path, is, off));
 }
 
 /// Push automatic hover and press into interactive surfaces' fills,
@@ -2369,13 +2398,12 @@ fn declared_states(n: &mut El, path: &mut String, is: &dyn Fn(&str, State) -> bo
 /// tint it.
 fn state(
     n: &mut El,
-    path: &mut String,
+    path: &str,
     pal: &Palette,
     of: &dyn Fn(&str) -> Option<(f64, f64)>,
     scrolls: (&BTreeMap<String, [Spring; 2]>, &BTreeMap<String, f64>),
     off: bool,
 ) {
-    let off = off || n.payload().disabled;
     if let Some([x, y]) = scrolls
         .0
         .get(n.key().unwrap_or(path))
@@ -2414,7 +2442,6 @@ fn state(
             });
         }
     }
-    children(n, path, |c, path| state(c, path, pal, of, scrolls, off));
 }
 impl std::fmt::Debug for Ui {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -3130,7 +3157,7 @@ mod tests {
         let (pal, mut motion) = (Theme::DEFAULT.palette, BTreeMap::new());
         let mut step = |p: f64| {
             let mut n = tree(p);
-            let moving = transitions(&mut n, &mut String::new(), &pal, &mut motion, 0.016);
+            let moving = transitions(&mut n, "", &pal, &mut motion, 0.016);
             (n.payload().welding.unwrap().progress, moving)
         };
         assert_eq!(step(1.0), (1.0, false), "seeded, not flown in");
