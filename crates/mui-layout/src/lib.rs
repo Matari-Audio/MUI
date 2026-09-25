@@ -11,7 +11,7 @@
 //! instead of mirroring it by id.
 #![forbid(unsafe_code)]
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 
 mod incremental;
 pub use incremental::{resolve_cached_with, LayoutCache, LayoutStats};
@@ -72,11 +72,13 @@ impl Frame {
 pub struct Layout {
     pub size: Size,
     min: Size,
-    frames: BTreeMap<Id, Frame>,
+    /// Shared, as is `order`, so the layout cache hands back an unchanged
+    /// frame's layout without copying it.
+    frames: Arc<BTreeMap<Id, Frame>>,
     /// Every node's frame, in tree order (parent first, then children in
     /// declaration order). A walk of the same tree indexes straight into it,
     /// so nothing needs a name to be found.
-    order: Vec<Frame>,
+    order: Arc<Vec<Frame>>,
 }
 impl Layout {
     /// The smallest this tree can be squeezed to: every `minimum`, padding and
@@ -116,11 +118,11 @@ impl Layout {
             return Err(Error::InvalidValue);
         }
         let mut nodes = vec![root];
-        self.frames.clear();
+        let mut named = BTreeMap::new();
         for frame in &frames {
             let node = nodes.pop().ok_or(Error::InvalidValue)?;
             if let Some(key) = node.key() {
-                if self.frames.insert(Id::of(key), *frame).is_some() {
+                if named.insert(Id::of(key), *frame).is_some() {
                     return Err(Error::DuplicateKey(key.to_owned()));
                 }
             }
@@ -129,7 +131,8 @@ impl Layout {
         if !nodes.is_empty() {
             return Err(Error::InvalidValue);
         }
-        self.order = frames;
+        self.frames = Arc::new(named);
+        self.order = Arc::new(frames);
         Ok(self)
     }
     pub fn frames(&self) -> impl Iterator<Item = (&str, Frame)> {
@@ -334,8 +337,8 @@ fn resolve_impl<P>(
     Ok(Layout {
         size,
         min: m.floor,
-        frames: out.0,
-        order: out.1,
+        frames: Arc::new(out.0),
+        order: Arc::new(out.1),
     })
 }
 

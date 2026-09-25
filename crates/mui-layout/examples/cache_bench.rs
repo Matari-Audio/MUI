@@ -63,7 +63,13 @@ const LIMITS: Limits = Limits {
     extent: 1e6,
 };
 
+/// `ONLY=<name>` runs one case long enough to profile.
 fn run(name: &str, mut f: impl FnMut(usize)) {
+    match std::env::var("ONLY") {
+        Ok(only) if only == name => (0..5000).for_each(&mut f),
+        Ok(_) => return,
+        Err(_) => {}
+    }
     for i in 0..5 {
         f(i);
     }

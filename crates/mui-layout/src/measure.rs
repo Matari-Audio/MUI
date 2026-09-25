@@ -270,7 +270,10 @@ pub(crate) fn measure_uncached<'a, P>(
     if !pass.redo {
         pass.left -= 1;
     }
-    validate_node(node, l)?;
+    // The cache's prepass has already validated every node.
+    if pass.cache.is_none() {
+        validate_node(node, l)?;
+    }
     let padding = boxed.unwrap_or_else(|| node.padding(pass.scale));
     let gap = node.gap.resolve(pass.scale);
     let line_gap = node.line_gap.map_or(gap, |g| g.resolve(pass.scale));

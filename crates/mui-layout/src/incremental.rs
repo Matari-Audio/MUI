@@ -209,10 +209,6 @@ impl LayoutCache {
             return Err(Error::BudgetExceeded);
         }
         s.count += 1;
-        measure::validate_node(n, s.limits)?;
-        if !n.scrolled.iter().all(|v| v.is_finite()) {
-            return Err(Error::InvalidValue);
-        }
         self.pinned |= n.pin.is_some();
         let base = s.revisions.len();
         for (i, c) in n.children().iter().enumerate() {
@@ -243,6 +239,12 @@ impl LayoutCache {
                 o.get().revision
             }
             entry => {
+                // A matching stamp was validated when it was made, under the
+                // same limits: only a changed node needs checking.
+                measure::validate_node(n, s.limits)?;
+                if !n.scrolled.iter().all(|v| v.is_finite()) {
+                    return Err(Error::InvalidValue);
+                }
                 self.serial = self.serial.checked_add(1).ok_or(Error::RevisionExhausted)?;
                 let stamp = Stamp {
                     shape,
