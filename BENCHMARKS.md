@@ -78,9 +78,8 @@ for the same binary across runs), because the GPU was shared too.
 
 ```
 cargo run -p mui-scene --profile perf --example stress
-cargo run -p mui-vello --profile perf --features cpu --example bench
-cargo run -p mui-vello --profile perf --features cpu,bench-classic --example bench
-cargo run -p mui-vello --profile perf --features cpu-threads --example bench
+cargo run -p mui-vello --profile perf --features cpu,gpu-effects --example bench
+cargo run -p mui-vello --profile perf --features cpu-threads,gpu-effects --example bench
 cargo test -p mui-preview --profile perf --test frame_cost -- --nocapture
 ```
 

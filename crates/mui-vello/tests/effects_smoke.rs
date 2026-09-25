@@ -1,10 +1,10 @@
-//! The retained GPU renderers on a real device. Skips, loudly, when the
+//! The retained GPU renderer on a real device. Skips, loudly, when the
 //! machine has no wgpu adapter at all; a software adapter still runs it.
 #![cfg(feature = "gpu-effects")]
 
 use mui_scene::prelude::*;
 use mui_scene::{Image, ResolvedScene};
-use mui_vello::effects::{Budget, EffectStats, HybridEffects, TiledEffects};
+use mui_vello::effects::{Budget, GpuRenderer};
 use mui_vello::kurbo::Affine;
 use std::sync::Arc;
 
@@ -64,9 +64,9 @@ fn pictured(v: u8) -> (ResolvedScene, std::sync::Weak<[u8]>) {
     (scene, buffer)
 }
 
-async fn hybrid(device: &wgpu::Device, queue: &wgpu::Queue) -> HybridEffects {
+async fn hybrid(device: &wgpu::Device, queue: &wgpu::Queue) -> GpuRenderer {
     let format = wgpu::TextureFormat::Rgba8Unorm;
-    HybridEffects::new(device, queue, format, SIZE, Budget::default())
+    GpuRenderer::new(device, queue, format, SIZE, Budget::default())
         .await
         .unwrap()
 }
@@ -93,33 +93,6 @@ fn a_weld_scrolled_away_and_back_is_not_rendered_again() {
     );
 }
 
-/// The tiled renderer only admits welds some tile can sample.
-#[test]
-fn tiles_do_not_render_an_offscreen_weld() {
-    let Some((device, queue)) = device() else {
-        return;
-    };
-    let view = target(&device);
-    let format = wgpu::TextureFormat::Rgba8Unorm;
-    let mut r = pollster::block_on(TiledEffects::new(
-        &device,
-        &queue,
-        format,
-        SIZE,
-        Budget::default(),
-        64 * 1024 * 1024,
-    ))
-    .unwrap();
-    let scene = welded();
-    let away = r.render(&scene, AWAY, &view).unwrap();
-    assert_eq!((away.texture_allocations, away.effect_draws), (0, 0));
-    let here = r.render(&scene, Affine::IDENTITY, &view).unwrap();
-    assert_eq!((here.texture_allocations, here.effect_draws), (1, 1));
-    let idle = r.render(&scene, Affine::IDENTITY, &view).unwrap();
-    assert_eq!(idle.effect_draws, 0);
-    assert_eq!(r.stats().dirty_tiles, 0, "an idle frame redrew tiles");
-}
-
 /// Once the app drops an image, nothing on the GPU path keeps its buffer.
 /// The global pixmap cache and the atlas ids used to hold a clone each, and
 /// each waited for the other to let go: every morph bake leaked one.
@@ -142,9 +115,9 @@ fn a_dropped_image_buffer_is_freed_on_the_gpu_path() {
     assert!(kept.upgrade().is_some());
 }
 
-/// An unchanged scene into the same target costs no encode and no GPU pass
-/// on either retained renderer: the target already holds the frame. A new
-/// target gets the pass again, from the retained encoding.
+/// An unchanged scene into the same target costs no encode, no Vello
+/// render and no present: the target already holds the frame. A new target
+/// (a swapchain's next image) gets only the present pass.
 #[test]
 fn a_static_frame_neither_encodes_nor_renders() {
     let Some((device, queue)) = device() else {
@@ -152,30 +125,150 @@ fn a_static_frame_neither_encodes_nor_renders() {
     };
     let (view, other) = (target(&device), target(&device));
     let scene = welded();
-    let mut whole = pollster::block_on(hybrid(&device, &queue));
-    let mut tiles = pollster::block_on(TiledEffects::new(
-        &device,
-        &queue,
-        wgpu::TextureFormat::Rgba8Unorm,
-        SIZE,
-        Budget::default(),
-        64 * 1024 * 1024,
-    ))
-    .unwrap();
-    let mut frames: [&mut dyn FnMut(&wgpu::TextureView) -> EffectStats; 2] = [
-        &mut |v| whole.render(&scene, Affine::IDENTITY, v).unwrap(),
-        &mut |v| tiles.render(&scene, Affine::IDENTITY, v).unwrap(),
-    ];
-    for frame in &mut frames {
-        let first = frame(&view);
-        assert!(first.encoded_scenes > 0 && first.renders > 0);
-        for _ in 0..5 {
-            let idle = frame(&view);
-            assert_eq!((idle.encoded_scenes, idle.renders), (0, 0));
-        }
-        let moved = frame(&other);
-        assert_eq!((moved.encoded_scenes, moved.renders), (0, 1));
+    let mut r = pollster::block_on(hybrid(&device, &queue));
+    let first = r.render(&scene, Affine::IDENTITY, &view).unwrap();
+    assert!(first.encoded_scenes > 0 && first.renders > 0);
+    for _ in 0..5 {
+        let idle = r.render(&scene, Affine::IDENTITY, &view).unwrap();
+        assert_eq!((idle.encoded_scenes, idle.renders), (0, 0));
     }
+    let moved = r.render(&scene, Affine::IDENTITY, &other).unwrap();
+    assert_eq!((moved.encoded_scenes, moved.renders), (0, 0));
+}
+
+fn readable(device: &wgpu::Device) -> wgpu::Texture {
+    device.create_texture(&wgpu::TextureDescriptor {
+        label: None,
+        size: wgpu::Extent3d {
+            width: SIZE[0],
+            height: SIZE[1],
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    })
+}
+
+/// The target's pixels, test-side only: the renderer never reads back.
+fn pixels(device: &wgpu::Device, queue: &wgpu::Queue, t: &wgpu::Texture) -> Vec<u8> {
+    let row = SIZE[0] * 4;
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: None,
+        size: u64::from(row * SIZE[1]),
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let mut encoder = device.create_command_encoder(&Default::default());
+    encoder.copy_texture_to_buffer(
+        t.as_image_copy(),
+        wgpu::TexelCopyBufferInfo {
+            buffer: &buffer,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(row),
+                rows_per_image: None,
+            },
+        },
+        t.size(),
+    );
+    queue.submit([encoder.finish()]);
+    buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+    device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+    let out = buffer.slice(..).get_mapped_range().unwrap().to_vec();
+    out
+}
+
+fn at(p: &[u8], x: u32, y: u32) -> [u8; 4] {
+    let i = ((y * SIZE[0] + x) * 4) as usize;
+    [p[i], p[i + 1], p[i + 2], p[i + 3]]
+}
+
+/// A host texture named by `Image::texture` is painted from the GPU copy,
+/// and a redraw of it shows after `set_texture` with the scene unchanged:
+/// the spectrogram path, with no readback and no upload.
+#[test]
+fn a_host_texture_paints_and_refreshes_without_a_new_scene() {
+    let Some((device, queue)) = device() else {
+        return;
+    };
+    let out = readable(&device);
+    let view = out.create_view(&Default::default());
+    let mut r = pollster::block_on(hybrid(&device, &queue));
+    let host = device.create_texture(&wgpu::TextureDescriptor {
+        label: None,
+        size: wgpu::Extent3d {
+            width: 4,
+            height: 4,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    let fill = |rgba: [u8; 4]| {
+        queue.write_texture(
+            host.as_image_copy(),
+            &rgba.repeat(16),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(16),
+                rows_per_image: None,
+            },
+            host.size(),
+        )
+    };
+    let image = Arc::new(Image::texture(7, 4, 4));
+    let root = leaf(320., 200.).fill(Fill::Image(image, Fit::Fill)).id("t");
+    let scene = resolve_scene(&SceneSpec::new(root).offered(Size::new(320., 200.))).unwrap();
+    fill([255, 0, 0, 255]);
+    r.set_texture(7, &host);
+    r.render(&scene, Affine::IDENTITY, &view).unwrap();
+    assert_eq!(
+        at(&pixels(&device, &queue, &out), 160, 100),
+        [255, 0, 0, 255]
+    );
+    fill([0, 0, 255, 255]);
+    r.set_texture(7, &host);
+    let again = r.render(&scene, Affine::IDENTITY, &view).unwrap();
+    assert_eq!((again.encoded_scenes, again.renders), (0, 1));
+    assert_eq!(
+        at(&pixels(&device, &queue, &out), 160, 100),
+        [0, 0, 255, 255]
+    );
+}
+
+/// A backdrop blurs what is under it: over a hard red/blue edge, the
+/// pixels either side of it inside the panel mix, and those outside stay.
+#[test]
+fn a_backdrop_blurs_the_edge_under_it() {
+    let Some((device, queue)) = device() else {
+        return;
+    };
+    let out = readable(&device);
+    let view = out.create_view(&Default::default());
+    let mut r = pollster::block_on(hybrid(&device, &queue));
+    let half = |c: Color| leaf(160., 200.).fill(Fill::Color(c));
+    let root = stack![
+        row![half(Color::srgb(1., 0., 0.)), half(Color::srgb(0., 0., 1.))],
+        leaf(320., 100.).backdrop_blur(8.).id("glass"),
+    ]
+    .id("root");
+    let scene = resolve_scene(&SceneSpec::new(root).offered(Size::new(320., 200.))).unwrap();
+    r.render(&scene, Affine::IDENTITY, &view).unwrap();
+    let p = pixels(&device, &queue, &out);
+    let (inside, outside) = (at(&p, 157, 75), at(&p, 157, 25));
+    assert!(
+        inside[0] < 250 && inside[2] > 5,
+        "no blur at the edge: {inside:?}"
+    );
+    assert_eq!(outside, [255, 0, 0, 255], "the blur leaked past the panel");
 }
 
 /// A weld gone from the scene gives its texture back after a few frames,

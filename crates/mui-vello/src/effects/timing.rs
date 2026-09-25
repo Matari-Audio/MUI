@@ -138,7 +138,9 @@ impl GpuTimer {
             match s.ready.load(Ordering::Acquire) {
                 0 => continue,
                 1 => {
-                    let bytes = s.read.slice(..).get_mapped_range();
+                    let Ok(bytes) = s.read.slice(..).get_mapped_range() else {
+                        continue;
+                    };
                     let start =
                         u64::from_le_bytes(bytes[0..8].try_into().expect("eight timestamp bytes"));
                     let end =

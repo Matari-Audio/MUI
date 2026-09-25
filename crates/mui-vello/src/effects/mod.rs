@@ -1,25 +1,22 @@
-//! Persistent analytic effects and retained Vello Hybrid encoding.
+//! Persistent analytic effects and the retained classic-Vello renderer.
 //!
 //! No CPU pixel bake or readback exists in the presentation path. A morph update
-//! changes one 16-byte uniform lane. Effects are rendered BEFORE the Vello pass
-//! in the same command encoder and sampled at their actual paint-list positions.
+//! changes one 16-byte uniform lane. Effects render BEFORE the Vello pass and
+//! are sampled at their actual paint-list positions.
 //!
 //! Device/queue ownership is per renderer. Recreate this object on device loss;
-//! do not carry texture IDs, bindings or retained encodings across devices.
+//! do not carry textures or retained encodings across devices.
 use std::sync::Arc;
 
 use mui_geometry::Path;
 
-pub mod damage;
 mod pool;
 mod retained;
-mod tiled;
-pub use tiled::{TileStats, TiledEffects};
 #[cfg(test)]
 mod tests;
 
 pub use pool::{Budget, EffectStats, WeldTextures, ABSENT_FRAMES};
-pub use retained::HybridEffects;
+pub use retained::GpuRenderer;
 pub const WELD_SHADER: &str = include_str!("weld.wgsl");
 
 #[derive(Debug)]
