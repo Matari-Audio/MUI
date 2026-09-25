@@ -1206,7 +1206,11 @@ impl Ui {
         // when nothing is moving.
         // A key still to land wants the frame that shows it; the clock that
         // decides is the one this frame advances to.
+        let was_hovered = self.interaction.hovered().map(str::to_owned);
         let mut animating = self.reconcile() | (self.time < self.play_until);
+        // The tree just built read last frame's hover: a new target is owed
+        // the tree that knows it, even with no spring to carry it there.
+        animating |= self.interaction.hovered() != was_hovered.as_deref();
         animating |= self.drag_bar();
         self.follow_identities(&root);
         animating |= self.hover_springs(&root, dt);
@@ -3151,6 +3155,21 @@ mod tests {
     }
 
     #[test]
+    fn a_new_hover_target_is_owed_one_more_tree() {
+        // Plain surfaces: no hover spring to keep frames coming.
+        let tree = || row([leaf(50., 50.).id("a"), leaf(50., 50.).id("b")]);
+        let mut ui = Ui::new(Theme::DEFAULT);
+        ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
+        ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
+        let f = ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
+        assert!(!f.animating, "resting on one target");
+        let f = ui.frame(tree(), None, at(60., 10., false), 0.016).unwrap();
+        assert!(f.animating, "the tree just built still saw `a` hovered");
+        let f = ui.frame(tree(), None, at(60., 10., false), 0.016).unwrap();
+        assert!(!f.animating, "and one tree later it has caught up");
+    }
+
+    #[test]
     fn an_inert_move_keeps_the_tip_counting_and_a_release_is_not_inert() {
         let tree = || leaf(40., 40.).fill(Role::Raised).tip("why").id("b");
         let mut ui = Ui::new(Theme::DEFAULT);
@@ -3422,7 +3441,9 @@ mod tests {
         };
         assert!(ui.get("panel").hovered, "the parent still receives the hit");
         assert_eq!(panel_warm, panel_cold);
-        assert!(!animating, "a structural hover has no spring");
+        assert!(animating, "the new hover is owed one tree");
+        let frame = ui.frame(tree(), None, at(80., 80., false), 0.016).unwrap();
+        assert!(!frame.animating, "a structural hover has no spring");
     }
 
     /// A child rectangle can extend into the transparent corner of a rounded
