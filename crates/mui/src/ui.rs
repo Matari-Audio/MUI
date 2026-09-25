@@ -1150,8 +1150,8 @@ impl Ui {
         let (tip, tip_pending) = self.tip_due(hovered.as_deref(), dt);
         animating |= tip_pending;
         let mut root = Self::wrap_tip(root, tip.as_ref());
-        animating |= self.sweep(&mut root, dt);
-        let shaped = shapes(&root);
+        let (moving, shaped) = self.sweep(&mut root, dt);
+        animating |= moving;
         let (mut scene, glided) = self.resolve(root, offered, dt)?;
         animating |= glided;
         animating |= self.after_motion(&mut scene, shaped, dt);
@@ -1264,19 +1264,22 @@ impl Ui {
     /// pointer has been matched against last frame's names, so a drag that
     /// caused the reorder keeps its capture under the new name.
     fn follow_identities(&mut self, root: &El) {
-        fn visit(n: &El, path: &mut String, out: &mut HashMap<u64, (Option<String>, String)>) {
+        // Child indices down to here: a path is spelled out only for a node
+        // that has an identity, and most trees have none.
+        fn visit(n: &El, at: &mut Vec<usize>, out: &mut HashMap<u64, (Option<String>, String)>) {
             if let Some(id) = n.payload().identity {
-                out.insert(id, (n.key().map(str::to_owned), path.clone()));
+                let mut path = String::new();
+                at.iter().for_each(|&j| push_index(&mut path, j));
+                out.insert(id, (n.key().map(str::to_owned), path));
             }
-            let mark = path.len();
             for (j, c) in n.children().iter().enumerate() {
-                push_index(path, j);
-                visit(c, path, out);
-                path.truncate(mark);
+                at.push(j);
+                visit(c, at, out);
+                at.pop();
             }
         }
         let mut now = HashMap::new();
-        visit(root, &mut String::new(), &mut now);
+        visit(root, &mut Vec::new(), &mut now);
         let mut moves: Vec<(String, String)> = Vec::new();
         for (id, (key, path)) in &now {
             let Some((was_key, was_path)) = self.identities.get(id) else {
@@ -1517,8 +1520,8 @@ impl Ui {
     }
 
     /// Style the tree by state and step every transition and tween. Returns
-    /// whether one is still moving.
-    fn sweep(&mut self, root: &mut El, dt: f64) -> bool {
+    /// whether one is still moving, and the shapes the styled tree declares.
+    fn sweep(&mut self, root: &mut El, dt: f64) -> (bool, Shapes) {
         let pal = self.theme.palette;
         let heats = self.bar_heats();
         // Scrolls step before the walk slides the tree by them.
@@ -1549,10 +1552,11 @@ impl Ui {
             scrolls: (&self.scrolls, &heats),
             motion: &mut self.motion,
             dt,
+            shaped: Shapes::default(),
         };
         animating |= sweep.node(root, &mut path, false);
         self.path = path;
-        animating
+        (animating, sweep.shaped)
     }
 
     /// Resolve the styled tree, and rebuild the hit map when the hit
@@ -2208,28 +2212,6 @@ struct Shapes {
     appearing: BTreeMap<String, Spring>,
     morphs: Vec<(String, u64, Spring)>,
 }
-fn shapes(root: &El) -> Shapes {
-    fn visit(n: &El, path: &mut String, out: &mut Shapes) {
-        let e = n.payload();
-        let key = || n.key().unwrap_or(path).to_owned();
-        let spring = e.transition.unwrap_or(Spring::DEFAULT);
-        if e.appear.is_some() {
-            out.appearing.insert(key(), spring);
-        }
-        if let Some(shape) = e.morph {
-            out.morphs.push((key(), shape, spring));
-        }
-        let mark = path.len();
-        for (j, c) in n.children().iter().enumerate() {
-            push_index(path, j);
-            visit(c, path, out);
-            path.truncate(mark);
-        }
-    }
-    let mut out = Shapes::default();
-    visit(root, &mut String::new(), &mut out);
-    out
-}
 
 /// One walk styling the tree: per node its declared state looks first, so a
 /// transition springs toward the style the node actually asked for this
@@ -2242,6 +2224,8 @@ struct Sweep<'a> {
     scrolls: (&'a BTreeMap<String, [Spring; 2]>, &'a BTreeMap<String, f64>),
     motion: &'a mut BTreeMap<String, Channels>,
     dt: f64,
+    /// What appears and what morphs, gathered on the way past.
+    shaped: Shapes,
 }
 impl Sweep<'_> {
     /// Returns whether a transition is still moving.
@@ -2250,6 +2234,15 @@ impl Sweep<'_> {
         declared_states(n, path, self.is, off);
         let mut animating = transitions(n, path, self.pal, self.motion, self.dt);
         state(n, path, self.pal, self.of, self.scrolls, off);
+        let e = n.payload();
+        let key = || n.key().unwrap_or(path).to_owned();
+        let spring = e.transition.unwrap_or(Spring::DEFAULT);
+        if e.appear.is_some() {
+            self.shaped.appearing.insert(key(), spring);
+        }
+        if let Some(shape) = e.morph {
+            self.shaped.morphs.push((key(), shape, spring));
+        }
         let mark = path.len();
         for (j, c) in n.children_mut().iter_mut().enumerate() {
             push_index(path, j);
