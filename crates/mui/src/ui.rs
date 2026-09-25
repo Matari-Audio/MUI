@@ -202,14 +202,14 @@ pub struct Ui {
     still: bool,
     /// The last tree, kept when nothing new reached it, and what it read.
     retained: Option<Retained>,
-    /// The last frame changed nothing its tree read: see [`Ui::reframe`].
+    /// The last frame changed nothing its tree read: see [`Ui::retake`].
     calm: bool,
     /// Where along a held scrollbar's thumb the pointer took it, so the
     /// thumb follows the pointer from that point instead of jumping to it.
     bar_grab: f64,
 }
 
-/// A tree [`Ui::reframe`] can frame again, and the state it was built on.
+/// A tree [`Ui::retake`] hands back, and the state it was built on.
 struct Retained {
     root: El,
     offered: Option<Size>,
@@ -820,23 +820,17 @@ impl Ui {
         self.pointer = p;
         true
     }
-    /// Frame the last tree again without the caller building one. `None`
-    /// unless the last frame changed nothing that tree read: the same bare
-    /// pointer, no edge, key or wheel, no tween, scroll or layout moving --
-    /// only hover and press springs, transitions, fades and the tip's clock.
-    /// A host whose own model has not changed calls this for a tick that is
-    /// only MUI animating.
-    pub fn reframe(
-        &mut self,
-        offered: Option<Size>,
-        dt: f64,
-    ) -> Option<Result<Frame<'_>, SceneError>> {
-        let pointer = Input::from(self.pointer);
+    /// The last tree, to frame again with `input` instead of building one.
+    /// `None` unless the last frame changed nothing that tree read and
+    /// `input` is the same bare pointer: no edge, key or wheel, no tween,
+    /// scroll or layout moving -- only hover and press springs, transitions,
+    /// fades and the tip's clock. A host whose own model has not changed asks
+    /// for it on a tick that is only MUI animating.
+    pub fn retake(&mut self, offered: Option<Size>, input: &Input) -> Option<El> {
         let r = self.retained.as_ref()?;
-        if !(self.calm && r.offered == offered && r.focus == self.focus && self.quiet(&pointer)) {
+        if !(self.calm && r.offered == offered && r.focus == self.focus && self.quiet(input)) {
             return None;
         }
-        let root = self.retained.take()?.root;
         // What the tree read while it was built, it reads again.
         for (seen, _) in self.tweens.values_mut() {
             *seen = true;
@@ -844,7 +838,7 @@ impl Ui {
         for (seen, _) in self.plays.values_mut() {
             *seen = true;
         }
-        Some(self.frame(root, offered, pointer, dt))
+        self.retained.take().map(|r| r.root)
     }
     /// Nothing reaches this frame's tree that did not reach the last one's:
     /// the same bare pointer, nothing held, no edge or key left over, and
@@ -3269,7 +3263,7 @@ mod tests {
     }
 
     #[test]
-    fn a_reframe_paints_what_a_rebuild_would_while_only_springs_move() {
+    fn a_retaken_tree_paints_what_a_rebuild_would_while_only_springs_move() {
         let tree = || {
             row([
                 leaf(40., 40.).fill(Role::Raised).role(Kind::Button).id("b"),
@@ -3282,63 +3276,67 @@ mod tests {
                 .unwrap();
             ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
         }
-        let mut reframed = 0;
+        let mut retaken = 0;
         for _ in 0..40 {
             let want = built
                 .frame(tree(), None, at(10., 10., false), 0.016)
                 .unwrap();
             let (paint, animating) = (want.scene.paint.clone(), want.animating);
-            let got = match again.reframe(None, 0.016) {
-                Some(f) => {
-                    reframed += 1;
-                    f.unwrap()
-                }
-                None => again
-                    .frame(tree(), None, at(10., 10., false), 0.016)
-                    .unwrap(),
-            };
+            let root = again.retake(None, &at(10., 10., false).into());
+            retaken += usize::from(root.is_some());
+            let root = root.unwrap_or_else(tree);
+            let got = again.frame(root, None, at(10., 10., false), 0.016).unwrap();
             assert_eq!(got.scene.paint, paint);
             assert_eq!(got.animating, animating);
         }
         assert!(
-            reframed > 30,
-            "the spring's frames reuse the tree: {reframed}"
+            retaken > 30,
+            "the spring's frames reuse the tree: {retaken}"
         );
 
-        // The tip's clock is the runtime's: it comes due on a reframe too.
+        // The tip's clock is the runtime's: it comes due on a retaken tree too.
         let mut ui = Ui::new(Theme::DEFAULT);
         for _ in 0..3 {
             ui.frame(tree(), None, at(50., 10., false), 0.016).unwrap();
         }
-        let f = ui.reframe(None, 0.6).expect("calm").unwrap();
+        let root = ui.retake(None, &at(50., 10., false).into()).expect("calm");
+        let f = ui.frame(root, None, at(50., 10., false), 0.6).unwrap();
         assert!(f.tip.is_some());
     }
 
     #[test]
-    fn a_reframe_is_refused_after_an_edge_or_a_moving_tween() {
+    fn a_retake_is_refused_after_an_edge_or_a_moving_tween() {
         let tree = || leaf(40., 40.).fill(Role::Raised).role(Kind::Button).id("b");
+        let still = || Input::from(at(10., 10., false));
         let mut ui = Ui::new(Theme::DEFAULT);
         ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
         ui.frame(tree(), None, at(10., 10., true), 0.016).unwrap();
-        assert!(ui.reframe(None, 0.016).is_none(), "held");
+        assert!(
+            ui.retake(None, &at(10., 10., true).into()).is_none(),
+            "held"
+        );
         ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
         assert!(
-            ui.reframe(None, 0.016).is_none(),
+            ui.retake(None, &still()).is_none(),
             "the release is read by a new tree"
         );
         ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
         ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
-        assert!(ui.reframe(None, 0.016).is_some(), "quiet again");
         assert!(
-            ui.reframe(Some(Size::new(90., 90.)), 0.016).is_none(),
+            ui.retake(Some(Size::new(90., 90.)), &still()).is_none(),
             "another size"
         );
+        assert!(
+            ui.retake(None, &at(11., 10., false).into()).is_none(),
+            "a move"
+        );
+        assert!(ui.retake(None, &still()).is_some(), "quiet again");
         ui.tween("knob", 0.0);
         ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
         ui.tween("knob", 1.0);
         ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
         assert!(
-            ui.reframe(None, 0.016).is_none(),
+            ui.retake(None, &still()).is_none(),
             "a tween the tree reads is moving"
         );
     }
