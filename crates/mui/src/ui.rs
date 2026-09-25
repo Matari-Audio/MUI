@@ -200,9 +200,22 @@ pub struct Ui {
     time: f64,
     /// The last frame resolved with nothing moving: see [`Ui::inert`].
     still: bool,
+    /// The last tree, kept when nothing new reached it, and what it read.
+    retained: Option<Retained>,
+    /// The last frame changed nothing its tree read: see [`Ui::reframe`].
+    calm: bool,
     /// Where along a held scrollbar's thumb the pointer took it, so the
     /// thumb follows the pointer from that point instead of jumping to it.
     bar_grab: f64,
+}
+
+/// A tree [`Ui::reframe`] can frame again, and the state it was built on.
+struct Retained {
+    root: El,
+    offered: Option<Size>,
+    hovered: Option<String>,
+    tagged: Option<(String, String)>,
+    focus: Option<String>,
 }
 
 fn same_hit_geometry(a: &ResolvedScene, b: &ResolvedScene) -> bool {
@@ -285,6 +298,8 @@ impl Ui {
             tagged: None,
             time: 0.0,
             still: false,
+            retained: None,
+            calm: false,
             board: None,
             bar_grab: 0.0,
         }
@@ -771,7 +786,8 @@ impl Ui {
             // What the last frame took in is read by the next tree.
             && self.keys.is_empty()
             && self.typed.is_empty()
-            && self.wheel == Point::ZERO)
+            && self.wheel == Point::ZERO
+            && self.press_at.is_none())
         {
             return false;
         }
@@ -803,6 +819,82 @@ impl Ui {
         }
         self.pointer = p;
         true
+    }
+    /// Frame the last tree again without the caller building one. `None`
+    /// unless the last frame changed nothing that tree read: the same bare
+    /// pointer, no edge, key or wheel, no tween, scroll or layout moving --
+    /// only hover and press springs, transitions, fades and the tip's clock.
+    /// A host whose own model has not changed calls this for a tick that is
+    /// only MUI animating.
+    pub fn reframe(
+        &mut self,
+        offered: Option<Size>,
+        dt: f64,
+    ) -> Option<Result<Frame<'_>, SceneError>> {
+        let pointer = Input::from(self.pointer);
+        let r = self.retained.as_ref()?;
+        if !(self.calm && r.offered == offered && r.focus == self.focus && self.quiet(&pointer)) {
+            return None;
+        }
+        let root = self.retained.take()?.root;
+        // What the tree read while it was built, it reads again.
+        for (seen, _) in self.tweens.values_mut() {
+            *seen = true;
+        }
+        for (seen, _) in self.plays.values_mut() {
+            *seen = true;
+        }
+        Some(self.frame(root, offered, pointer, dt))
+    }
+    /// Nothing reaches this frame's tree that did not reach the last one's:
+    /// the same bare pointer, nothing held, no edge or key left over, and
+    /// every tween and scroll at rest.
+    fn quiet(&self, input: &Input) -> bool {
+        input.pointer == self.pointer
+            && input.wheel == Point::ZERO
+            && input.keys.is_empty()
+            && input.text.is_empty()
+            && input.clipboard.is_none()
+            && input.ime.is_empty()
+            && self.interaction.held().is_none()
+            && self.delivered.is_empty()
+            && self.edits.is_empty()
+            && self.cancelled.is_none()
+            && self.actions.is_empty()
+            && self.keys.is_empty()
+            && self.typed.is_empty()
+            && self.wheel == Point::ZERO
+            && self.press_at.is_none()
+            && self.double.is_none()
+            && self.pasted.is_none()
+            && self.at_rest()
+    }
+    fn at_rest(&self) -> bool {
+        let rest = |s: &Spring| s.value == s.target && s.velocity == 0.0;
+        self.tweens.values().all(|(_, s)| rest(s))
+            && self.scrolls.values().flatten().all(rest)
+            && self.time >= self.play_until
+    }
+    /// A quiet frame left what its tree reads as it found it: the hover,
+    /// the focus and its caret, the layout, and no edge owed.
+    fn stayed(&self, scene: &ResolvedScene, glided: bool, blink: bool) -> bool {
+        self.retained.as_ref().is_some_and(|r| {
+            !glided
+                && self.interaction.held().is_none()
+                && self.edits.is_empty()
+                && self.press_at.is_none()
+                && self.double.is_none()
+                && self.ime_caret.is_none()
+                && r.hovered.as_deref() == self.interaction.hovered()
+                && r.tagged == self.tagged
+                && r.focus == self.focus
+                && (self.focus.is_none() || blink == self.blink())
+                && self.at_rest()
+                && self
+                    .scene
+                    .as_ref()
+                    .is_some_and(|last| same_hit_geometry(last, scene))
+        })
     }
     /// Source and target of a drag released this frame.
     pub fn dropped(&self) -> Option<(&str, &str)> {
@@ -1172,6 +1264,15 @@ impl Ui {
             return Err(SceneError::InvalidFrameDelta);
         }
         self.still = false;
+        let input = input.into();
+        self.calm = false;
+        self.retained = self.quiet(&input).then(|| Retained {
+            root: root.clone(),
+            offered,
+            hovered: self.interaction.hovered().map(str::to_owned),
+            tagged: self.tagged.clone(),
+            focus: self.focus.clone(),
+        });
         self.bracket_commands();
         let Input {
             pointer,
@@ -1180,7 +1281,7 @@ impl Ui {
             text,
             clipboard,
             ime,
-        } = input.into();
+        } = input;
         let was = std::mem::replace(&mut self.pointer, pointer).buttons;
         // A non-finite delta reaches no widget, as it reaches no scroller.
         self.wheel = if wheel.x.is_finite() && wheel.y.is_finite() {
@@ -1218,6 +1319,7 @@ impl Ui {
         animating |= glided;
         animating |= self.after_motion(&mut scene, shaped, dt);
         animating |= self.settle(&scene, wheel);
+        self.calm = self.stayed(&scene, glided, previous_blink);
         Ok(self.commit(scene, hovered, tip, previous_blink, animating))
     }
 
@@ -3164,6 +3266,81 @@ mod tests {
         ui.frame(tree(), None, at(10., 10., true), 0.016).unwrap();
         ui.frame(tree(), None, at(10., 10., true), 0.016).unwrap();
         assert!(!ui.inert(&at(12., 12., true).into()), "a held capture");
+    }
+
+    #[test]
+    fn a_reframe_paints_what_a_rebuild_would_while_only_springs_move() {
+        let tree = || {
+            row([
+                leaf(40., 40.).fill(Role::Raised).role(Kind::Button).id("b"),
+                leaf(40., 40.).fill(Role::Raised).tip("why").id("t"),
+            ])
+        };
+        let (mut built, mut again) = (Ui::new(Theme::DEFAULT), Ui::new(Theme::DEFAULT));
+        for ui in [&mut built, &mut again] {
+            ui.frame(tree(), None, PointerInput::default(), 0.016)
+                .unwrap();
+            ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
+        }
+        let mut reframed = 0;
+        for _ in 0..40 {
+            let want = built
+                .frame(tree(), None, at(10., 10., false), 0.016)
+                .unwrap();
+            let (paint, animating) = (want.scene.paint.clone(), want.animating);
+            let got = match again.reframe(None, 0.016) {
+                Some(f) => {
+                    reframed += 1;
+                    f.unwrap()
+                }
+                None => again
+                    .frame(tree(), None, at(10., 10., false), 0.016)
+                    .unwrap(),
+            };
+            assert_eq!(got.scene.paint, paint);
+            assert_eq!(got.animating, animating);
+        }
+        assert!(
+            reframed > 30,
+            "the spring's frames reuse the tree: {reframed}"
+        );
+
+        // The tip's clock is the runtime's: it comes due on a reframe too.
+        let mut ui = Ui::new(Theme::DEFAULT);
+        for _ in 0..3 {
+            ui.frame(tree(), None, at(50., 10., false), 0.016).unwrap();
+        }
+        let f = ui.reframe(None, 0.6).expect("calm").unwrap();
+        assert!(f.tip.is_some());
+    }
+
+    #[test]
+    fn a_reframe_is_refused_after_an_edge_or_a_moving_tween() {
+        let tree = || leaf(40., 40.).fill(Role::Raised).role(Kind::Button).id("b");
+        let mut ui = Ui::new(Theme::DEFAULT);
+        ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
+        ui.frame(tree(), None, at(10., 10., true), 0.016).unwrap();
+        assert!(ui.reframe(None, 0.016).is_none(), "held");
+        ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
+        assert!(
+            ui.reframe(None, 0.016).is_none(),
+            "the release is read by a new tree"
+        );
+        ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
+        ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
+        assert!(ui.reframe(None, 0.016).is_some(), "quiet again");
+        assert!(
+            ui.reframe(Some(Size::new(90., 90.)), 0.016).is_none(),
+            "another size"
+        );
+        ui.tween("knob", 0.0);
+        ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
+        ui.tween("knob", 1.0);
+        ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
+        assert!(
+            ui.reframe(None, 0.016).is_none(),
+            "a tween the tree reads is moving"
+        );
     }
 
     #[test]
