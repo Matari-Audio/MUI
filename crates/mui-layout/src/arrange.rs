@@ -151,8 +151,7 @@ pub(crate) fn hide<P>(
     }
 }
 
-pub(crate) use crate::incremental::arrange_cached as arrange;
-pub(crate) fn arrange_uncached<P>(
+pub(crate) fn arrange<P>(
     m: &Measured<'_, P>,
     ancestor: &str,
     origin: [f64; 2],

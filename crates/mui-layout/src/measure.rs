@@ -8,7 +8,8 @@ use super::*;
 
 pub(crate) struct Measured<'a, P> {
     pub(crate) node: &'a Node<P>,
-    pub(crate) memo_id: u64,
+    /// What the layout cache holds for this subtree; `None` without one.
+    pub(crate) frozen: Option<std::sync::Arc<crate::incremental::Frozen>>,
     /// Slot among the parent's children, so a reordered placement can be
     /// written back to the declaration order the frames keep.
     pub(crate) index: usize,
@@ -654,7 +655,7 @@ pub(crate) fn measure_uncached<'a, P>(
         || wrap_fluid;
     Ok(Measured {
         node,
-        memo_id: 0,
+        frozen: None,
         index: 0,
         fluid,
         gap,

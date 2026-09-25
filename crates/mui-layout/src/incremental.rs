@@ -1,15 +1,16 @@
-//! Dependency-aware measurement and arrangement caches for the existing solver.
+//! Dependency-aware measurement cache for the existing solver.
 //!
 //! This is not a second layout algorithm. Cache misses run the original solver.
 //! The prepass validates the complete declaration and compares exact shallow
 //! layout values plus child revisions; decorative payload changes are excluded
-//! by the caller's measurement key. Current trees are still visited and the flat
-//! output is still copied. Pins conservatively disable arrangement reuse.
+//! by the caller's measurement key. An unchanged tree at an unchanged size
+//! returns the last layout as it was; anything else re-arranges from the
+//! measurements, reusing every subtree whose revision and constraints held.
 use super::*;
+use rustc_hash::{FxHashMap, FxHasher};
 use std::{
-    cell::RefCell,
-    collections::{hash_map::Entry, HashMap, VecDeque},
-    hash::{DefaultHasher, Hash, Hasher},
+    collections::hash_map::Entry,
+    hash::{Hash, Hasher},
     sync::Arc,
 };
 
@@ -18,11 +19,9 @@ pub struct LayoutStats {
     pub validated_nodes: usize,
     pub measured_nodes: usize,
     pub measure_hits: usize,
+    /// Nodes given frames this frame: zero when the whole layout was reused.
     pub arranged_nodes: usize,
-    pub arrange_hits: usize,
     pub rebound_nodes: usize,
-    pub copied_frames: usize,
-    pub pinned_arrange_fallback: bool,
 }
 #[derive(Clone, Debug, PartialEq)]
 struct Stamp {
@@ -34,6 +33,9 @@ struct Stamp {
     revision: u64,
     /// The `prepare` pass that last visited this address.
     seen: u64,
+    /// This revision's measurements, one per constraint it was offered,
+    /// oldest first. A new revision is a new stamp, so these never go stale.
+    measured: Vec<(MeasureInput, Arc<Frozen>)>,
 }
 /// One `prepare` walk's state. The buffers live in the cache between frames,
 /// so a warm walk allocates nothing.
@@ -46,9 +48,8 @@ struct Scan<'k, K> {
     revisions: Vec<u64>,
     payload: Vec<u8>,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct MeasureInput {
-    revision: u64,
     /// A flex re-measure at the final share resolves declared widths
     /// differently from the first pass, so the two never share a snapshot.
     redo: bool,
@@ -56,9 +57,10 @@ struct MeasureInput {
     room: Option<u64>,
     container: [Option<u64>; 2],
 }
-#[derive(Clone, Debug)]
-struct Frozen {
-    ticket: u64,
+/// A measured subtree with its node references dropped. Children are shared,
+/// so storing a parent costs one record, not its whole subtree again.
+#[derive(Debug, PartialEq)]
+pub(crate) struct Frozen {
     cost: usize,
     gap: f64,
     line_gap: f64,
@@ -73,29 +75,29 @@ struct Frozen {
     children: Vec<Arc<Frozen>>,
 }
 impl Frozen {
-    fn bind<'a, P>(&self, n: &'a Node<P>, stats: &mut LayoutStats) -> Measured<'a, P> {
+    fn bind<'a, P>(this: &Arc<Self>, n: &'a Node<P>, stats: &mut LayoutStats) -> Measured<'a, P> {
         stats.rebound_nodes += 1;
         Measured {
             node: n,
+            frozen: Some(this.clone()),
             index: 0,
-            memo_id: self.ticket,
-            fluid: self.fluid,
-            gap: self.gap,
-            line_gap: self.line_gap,
-            padding: self.padding,
-            size: self.size,
-            floor: self.floor,
-            content: self.content,
-            cols: self.cols,
-            pick: self.pick,
-            container: self.container,
-            children: self
+            fluid: this.fluid,
+            gap: this.gap,
+            line_gap: this.line_gap,
+            padding: this.padding,
+            size: this.size,
+            floor: this.floor,
+            content: this.content,
+            cols: this.cols,
+            pick: this.pick,
+            container: this.container,
+            children: this
                 .children
                 .iter()
                 .zip(n.children())
                 .enumerate()
                 .map(|(i, (c, n))| {
-                    let mut m = c.bind(n, stats);
+                    let mut m = Self::bind(c, n, stats);
                     m.index = i;
                     m
                 })
@@ -104,7 +106,6 @@ impl Frozen {
     }
     fn freeze<P>(m: &Measured<'_, P>, cost: usize) -> Arc<Self> {
         Arc::new(Self {
-            ticket: m.memo_id,
             cost,
             gap: m.gap,
             line_gap: m.line_gap,
@@ -116,77 +117,64 @@ impl Frozen {
             cols: m.cols,
             pick: m.pick,
             container: m.container,
-            children: m.children.iter().map(|c| Self::freeze(c, 0)).collect(),
+            // Every child came through `measure_cached`, which froze it.
+            children: m
+                .children
+                .iter()
+                .map(|c| c.frozen.clone().unwrap_or_else(|| Self::freeze(c, 0)))
+                .collect(),
         })
     }
-    fn count(&self) -> usize {
-        1 + self.children.iter().map(|c| c.count()).sum::<usize>()
-    }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-struct ArrangeInput {
-    ticket: u64,
-    origin: [u64; 2],
-    size: [u64; 2],
-    viewport: Option<(bool, u64)>,
-}
-#[derive(Clone, Debug)]
-struct Arrangement {
-    frames: Vec<Frame>,
-    named: Vec<(Id, Frame)>,
-}
-#[derive(Debug, Default)]
-pub(crate) struct ArrangementCache {
-    entries: HashMap<ArrangeInput, Arc<Arrangement>>,
-    order: VecDeque<ArrangeInput>,
-    frames: usize,
-    pub(crate) stats: LayoutStats,
+fn fx(v: impl Hash) -> u64 {
+    let mut h = FxHasher::default();
+    v.hash(&mut h);
+    h.finish()
 }
 #[derive(Debug, Default)]
 pub struct LayoutCache {
     /// Keyed by a hash of the node's id, or of its child-index path if it
     /// has none. See `scan` for why a collision cannot give a wrong answer.
-    stamps: HashMap<u64, Stamp>,
-    pointers: HashMap<usize, u64>,
-    entries: HashMap<MeasureInput, Arc<Frozen>>,
-    order: VecDeque<MeasureInput>,
-    snapshot_nodes: usize,
+    stamps: FxHashMap<u64, Stamp>,
+    /// Node address to stamp address, for this pass's tree only.
+    pointers: FxHashMap<usize, u64>,
     serial: u64,
-    ticket: u64,
     pass: u64,
     revisions: Vec<u64>,
     payload: Vec<u8>,
     context: Option<(Limits, SpacingScale)>,
     pinned: bool,
-    pub(crate) arrangement: RefCell<ArrangementCache>,
+    /// The root's revision and offered size, and what they resolved to.
+    last: Option<(u64, Option<[u64; 2]>, Layout)>,
+    stats: LayoutStats,
 }
 impl LayoutCache {
     pub fn clear(&mut self) {
         *self = Self::default();
     }
     pub fn stats(&self) -> LayoutStats {
-        self.arrangement.borrow().stats
+        self.stats
     }
-    /// Bounds both variant count and retained subtree records. A small value
-    /// trades hit rate for memory, never correctness.
-    const MAX_ENTRIES: usize = 2048;
-    const MAX_RECORDS: usize = 32768;
+    /// Constraint variants kept per node: a first pass, a flex re-measure and
+    /// a couple of sizes to go back to. Fewer trades hit rate for memory,
+    /// never correctness.
+    const VARIANTS: usize = 4;
+    /// Validates the tree and returns the root's revision.
     fn prepare<P>(
         &mut self,
         n: &Node<P>,
         limits: Limits,
         scale: SpacingScale,
         key: &mut impl FnMut(&P, &mut Vec<u8>),
-    ) -> Result<(), Error> {
-        // Context changes invalidate metrics AND arrangement. Cache tickets may
-        // be reused only after both stores are gone. Limits cannot be bypassed.
+    ) -> Result<u64, Error> {
+        // A context change invalidates every metric. Limits cannot be bypassed.
         if self.context != Some((limits, scale)) {
             self.clear();
             self.context = Some((limits, scale));
         }
         self.pointers.clear();
         self.pinned = false;
-        self.arrangement.borrow_mut().stats = LayoutStats::default();
+        self.stats = LayoutStats::default();
         self.pass = self.pass.wrapping_add(1);
         let mut scan = Scan {
             limits,
@@ -200,12 +188,10 @@ impl LayoutCache {
         (self.revisions, self.payload) = (scan.revisions, scan.payload);
         // A failed walk returns before popping its path's revisions.
         self.revisions.clear();
-        walked?;
+        let revision = walked?;
         self.stamps.retain(|_, s| s.seen == scan.pass);
-        let mut a = self.arrangement.borrow_mut();
-        a.stats.validated_nodes = scan.count;
-        a.stats.pinned_arrange_fallback = self.pinned;
-        Ok(())
+        self.stats.validated_nodes = scan.count;
+        Ok(revision)
     }
     /// Validates `n`'s subtree and returns its revision: unchanged while its
     /// shallow projection and every child revision are, so equal revisions
@@ -230,16 +216,10 @@ impl LayoutCache {
         self.pinned |= n.pin.is_some();
         let base = s.revisions.len();
         for (i, c) in n.children().iter().enumerate() {
-            let mut h = DefaultHasher::new();
-            (path, i).hash(&mut h);
-            let revision = self.scan(c, h.finish(), depth + 1, s)?;
+            let revision = self.scan(c, fx((path, i)), depth + 1, s)?;
             s.revisions.push(revision);
         }
-        let mut address = n.key().map_or(path, |id| {
-            let mut h = DefaultHasher::new();
-            id.hash(&mut h);
-            h.finish()
-        });
+        let mut address = n.key().map_or(path, fx);
         // A slot already visited this pass belongs to another node: the same
         // id is a duplicate, anything else a collision to probe past.
         while let Some(taken) = self.stamps.get(&address).filter(|t| t.seen == s.pass) {
@@ -270,6 +250,7 @@ impl LayoutCache {
                     children: children.to_vec(),
                     revision: self.serial,
                     seen: s.pass,
+                    measured: Vec::new(),
                 };
                 match entry {
                     // Hand the old payload buffer back for the next node.
@@ -282,47 +263,13 @@ impl LayoutCache {
             }
         };
         s.revisions.truncate(base);
-        self.pointers.insert(n as *const Node<P> as usize, revision);
+        self.pointers.insert(n as *const Node<P> as usize, address);
         Ok(revision)
     }
-    fn input<P>(
-        &self,
-        n: &Node<P>,
-        redo: bool,
-        definite: [Option<f64>; 2],
-        room: Option<f64>,
-        container: [Option<f64>; 2],
-    ) -> MeasureInput {
-        MeasureInput {
-            revision: self.pointers[&(n as *const Node<P> as usize)],
-            redo,
-            definite: definite.map(|v| v.map(f64::to_bits)),
-            room: room.map(f64::to_bits),
-            container: container.map(|v| v.map(f64::to_bits)),
-        }
-    }
-    fn get(&mut self, key: MeasureInput) -> Option<Arc<Frozen>> {
-        self.entries.get(&key).cloned()
-    }
-    fn store<P>(&mut self, key: MeasureInput, m: &Measured<'_, P>, cost: usize) {
-        let snapshot = Frozen::freeze(m, cost);
-        let n = snapshot.count();
-        if n > Self::MAX_RECORDS {
-            return;
-        }
-        while self.entries.len() >= Self::MAX_ENTRIES || self.snapshot_nodes + n > Self::MAX_RECORDS
-        {
-            if let Some(k) = self.order.pop_front() {
-                if let Some(v) = self.entries.remove(&k) {
-                    self.snapshot_nodes -= v.count();
-                }
-            } else {
-                break;
-            }
-        }
-        self.snapshot_nodes += n;
-        self.entries.insert(key, snapshot);
-        self.order.push_back(key);
+    /// The stamp `scan` gave this node.
+    fn stamp<P>(&mut self, n: &Node<P>) -> &mut Stamp {
+        let address = self.pointers[&(n as *const Node<P> as usize)];
+        self.stamps.get_mut(&address).expect("scan stamped every node")
     }
 }
 /// Complete shallow layout projection; destructuring without `..` makes adding
@@ -430,8 +377,17 @@ pub fn resolve_cached_with<P>(
     {
         return Err(Error::InvalidValue);
     }
-    cache.prepare(root, limits, scale, &mut key)?;
-    super::resolve_impl(root, offered, limits, scale, measurer, Some(cache), None)
+    let revision = cache.prepare(root, limits, scale, &mut key)?;
+    let offered_bits = offered.map(|s| [s.width.to_bits(), s.height.to_bits()]);
+    if let Some((r, o, layout)) = &cache.last {
+        if (*r, *o) == (revision, offered_bits) {
+            return Ok(layout.clone());
+        }
+    }
+    let layout = super::resolve_impl(root, offered, limits, scale, measurer, Some(cache), None)?;
+    cache.stats.arranged_nodes = layout.all().len();
+    cache.last = Some((revision, offered_bits, layout.clone()));
+    Ok(layout)
 }
 /// Hook around the ORIGINAL measure implementation. Re-measure requests under
 /// different flex constraints receive different keys, including room/container.
@@ -444,100 +400,39 @@ pub(crate) fn measure_cached<'a, P>(
     depth: usize,
     pass: &mut Pass<'a, '_, P>,
 ) -> Result<Measured<'a, P>, Error> {
-    let key = pass
-        .cache
-        .as_ref()
-        .map(|c| c.input(node, pass.redo, definite, room, container));
-    if let (Some(cache), Some(key)) = (pass.cache.as_deref_mut(), key) {
-        if let Some(snapshot) = cache.get(key) {
-            if !pass.redo {
-                if snapshot.cost > pass.left {
-                    return Err(Error::BudgetExceeded);
-                }
-                pass.left -= snapshot.cost;
+    let Some(cache) = pass.cache.as_deref_mut() else {
+        return measure::measure_uncached(node, ancestor, definite, room, container, depth, pass);
+    };
+    let key = MeasureInput {
+        redo: pass.redo,
+        definite: definite.map(|v| v.map(f64::to_bits)),
+        room: room.map(f64::to_bits),
+        container: container.map(|v| v.map(f64::to_bits)),
+    };
+    let hit = cache.stamp(node).measured.iter().find(|(k, _)| *k == key);
+    if let Some(snapshot) = hit.map(|(_, f)| f.clone()) {
+        if !pass.redo {
+            if snapshot.cost > pass.left {
+                return Err(Error::BudgetExceeded);
             }
-            pass.pinned |= cache.pinned;
-            let mut a = cache.arrangement.borrow_mut();
-            a.stats.measure_hits += 1;
-            return Ok(snapshot.bind(node, &mut a.stats));
+            pass.left -= snapshot.cost;
         }
-        cache.arrangement.borrow_mut().stats.measured_nodes += 1;
+        pass.pinned |= cache.pinned;
+        cache.stats.measure_hits += 1;
+        return Ok(Frozen::bind(&snapshot, node, &mut cache.stats));
     }
+    cache.stats.measured_nodes += 1;
     let before = pass.left;
     let mut m = measure::measure_uncached(node, ancestor, definite, room, container, depth, pass)?;
-    if let (Some(cache), Some(key)) = (pass.cache.as_deref_mut(), key) {
-        cache.ticket = cache
-            .ticket
-            .checked_add(1)
-            .ok_or(Error::RevisionExhausted)?;
-        m.memo_id = cache.ticket;
-        cache.store(key, &m, before - pass.left);
+    let frozen = Frozen::freeze(&m, before - pass.left);
+    m.frozen = Some(frozen.clone());
+    let cache = pass.cache.as_deref_mut().expect("checked above");
+    let measured = &mut cache.stamp(node).measured;
+    if measured.len() >= LayoutCache::VARIANTS {
+        measured.remove(0);
     }
+    measured.push((key, frozen));
     Ok(m)
-}
-pub(crate) fn arrange_cached<P>(
-    m: &Measured<'_, P>,
-    ancestor: &str,
-    origin: [f64; 2],
-    size: Size,
-    pins: &Pins<'_>,
-    viewport: Option<Viewport>,
-    out: &mut (BTreeMap<Id, Frame>, Vec<Frame>),
-) -> Result<(), Error> {
-    let key = ArrangeInput {
-        ticket: m.memo_id,
-        origin: origin.map(f64::to_bits),
-        size: [size.width.to_bits(), size.height.to_bits()],
-        viewport: viewport.map(|v| (v.vertical, v.edge.to_bits())),
-    };
-    if let Some(cache) = pins.memo {
-        let mut c = cache.borrow_mut();
-        if let Some(value) = c.entries.get(&key).cloned() {
-            c.stats.arrange_hits += 1;
-            c.stats.copied_frames += value.frames.len();
-            out.1.extend_from_slice(&value.frames);
-            out.0.extend(value.named.iter().cloned());
-            return Ok(());
-        }
-        c.stats.arranged_nodes += 1;
-    }
-    let start = out.1.len();
-    arrange::arrange_uncached(m, ancestor, origin, size, pins, viewport, out)?;
-    if let Some(cache) = pins.memo {
-        let frames = out.1[start..].to_vec();
-        let mut named = Vec::new();
-        fn keys<P>(m: &Measured<'_, P>, out: &BTreeMap<Id, Frame>, names: &mut Vec<(Id, Frame)>) {
-            if let Some(id) = &m.node.id {
-                if let Some(frame) = out.get(id) {
-                    names.push((id.clone(), *frame));
-                }
-            }
-            for c in &m.children {
-                keys(c, out, names);
-            }
-        }
-        keys(m, &out.0, &mut named);
-        let n = frames.len();
-        if n <= LayoutCache::MAX_RECORDS {
-            let mut c = cache.borrow_mut();
-            while c.entries.len() >= LayoutCache::MAX_ENTRIES
-                || c.frames + n > LayoutCache::MAX_RECORDS
-            {
-                if let Some(k) = c.order.pop_front() {
-                    if let Some(v) = c.entries.remove(&k) {
-                        c.frames -= v.frames.len();
-                    }
-                } else {
-                    break;
-                }
-            }
-            c.frames += n;
-            c.entries
-                .insert(key, Arc::new(Arrangement { frames, named }));
-            c.order.push_back(key);
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -607,7 +502,7 @@ mod tests {
         let s = c.stats();
         assert_eq!(s.measured_nodes, 0);
         assert_eq!(s.arranged_nodes, 0);
-        assert!(s.measure_hits > 0 && s.arrange_hits > 0);
+        assert_eq!(s.validated_nodes, 7);
     }
     #[test]
     fn decorative_payload_does_not_invalidate_layout() {
@@ -673,7 +568,7 @@ mod tests {
         assert_eq!(cached(&n, 400., &mut c), oracle(&n, 400.));
     }
     #[test]
-    fn pin_dependencies_never_use_stale_arrangements() {
+    fn pin_dependencies_never_use_stale_frames() {
         let mut n = Node::overlay([
             label("anchor", "Hello"),
             label("tip", "Tip").pin(Pin::to("anchor")),
@@ -682,8 +577,6 @@ mod tests {
         cached(&n, 400., &mut c);
         n.children_mut()[0] = label("anchor", "Longer anchor").offset(80., 0.);
         assert_eq!(cached(&n, 400., &mut c), oracle(&n, 400.));
-        assert!(c.stats().pinned_arrange_fallback);
-        assert_eq!(c.stats().arrange_hits, 0);
     }
     /// Stamps are keyed by hashed paths now, and the pin lives outside the
     /// projection: unkeyed moves, pin edits and an id reused down its own

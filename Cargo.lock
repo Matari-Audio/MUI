@@ -1885,6 +1885,7 @@ name = "mui-layout"
 version = "0.3.2"
 dependencies = [
  "mui-geometry",
+ "rustc-hash",
 ]
 
 [[package]]

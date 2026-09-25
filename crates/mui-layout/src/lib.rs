@@ -307,16 +307,10 @@ fn resolve_impl<P>(
         e => e,
     };
     let empty = BTreeMap::new();
-    let memo = pass
-        .cache
-        .as_deref()
-        .filter(|_| !pass.pinned)
-        .map(|c| &c.arrangement);
     let pins = |anchors| Pins {
         anchors,
         root: size,
         scale,
-        memo,
     };
     arrange(&m, "root", [0.0, 0.0], size, &pins(&empty), None, &mut out).map_err(fix)?;
     // ponytail: one extra arrange resolves every pin, because a float takes no
