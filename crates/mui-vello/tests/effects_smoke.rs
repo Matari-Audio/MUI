@@ -230,12 +230,18 @@ fn a_host_texture_paints_and_refreshes_without_a_new_scene() {
     fill([255, 0, 0, 255]);
     r.set_texture(7, &host);
     r.render(&scene, Affine::IDENTITY, &view).unwrap();
-    assert_eq!(at(&pixels(&device, &queue, &out), 160, 100), [255, 0, 0, 255]);
+    assert_eq!(
+        at(&pixels(&device, &queue, &out), 160, 100),
+        [255, 0, 0, 255]
+    );
     fill([0, 0, 255, 255]);
     r.set_texture(7, &host);
     let again = r.render(&scene, Affine::IDENTITY, &view).unwrap();
     assert_eq!((again.encoded_scenes, again.renders), (0, 1));
-    assert_eq!(at(&pixels(&device, &queue, &out), 160, 100), [0, 0, 255, 255]);
+    assert_eq!(
+        at(&pixels(&device, &queue, &out), 160, 100),
+        [0, 0, 255, 255]
+    );
 }
 
 /// A backdrop blurs what is under it: over a hard red/blue edge, the
@@ -258,7 +264,10 @@ fn a_backdrop_blurs_the_edge_under_it() {
     r.render(&scene, Affine::IDENTITY, &view).unwrap();
     let p = pixels(&device, &queue, &out);
     let (inside, outside) = (at(&p, 157, 75), at(&p, 157, 25));
-    assert!(inside[0] < 250 && inside[2] > 5, "no blur at the edge: {inside:?}");
+    assert!(
+        inside[0] < 250 && inside[2] > 5,
+        "no blur at the edge: {inside:?}"
+    );
     assert_eq!(outside, [255, 0, 0, 255], "the blur leaked past the panel");
 }
 

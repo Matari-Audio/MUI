@@ -653,9 +653,12 @@ impl GpuRenderer {
         let scale = (sigma_device / 4.).ceil().max(1.) as u32;
         let scale = f64::from(scale.next_power_of_two());
         let reach = outline.bounding_box().inflate(3. * sigma, 3. * sigma);
-        let device = xf
-            .transform_rect_bbox(reach)
-            .intersect(Rect::new(0., 0., f64::from(self.size[0]), f64::from(self.size[1])));
+        let device = xf.transform_rect_bbox(reach).intersect(Rect::new(
+            0.,
+            0.,
+            f64::from(self.size[0]),
+            f64::from(self.size[1]),
+        ));
         if device.width() <= 0. || device.height() <= 0. {
             return Ok(None);
         }
@@ -664,8 +667,7 @@ impl GpuRenderer {
             ((device.x1 - origin.0) / scale).ceil().max(1.) as u32,
             ((device.y1 - origin.1) / scale).ceil().max(1.) as u32,
         ];
-        let to_prefix =
-            Affine::scale(1. / scale) * Affine::translate((-origin.0, -origin.1)) * xf;
+        let to_prefix = Affine::scale(1. / scale) * Affine::translate((-origin.0, -origin.1)) * xf;
 
         self.prefix.reset();
         let mut canvas = Classic::new(&mut self.prefix, &mut self.cache, &self.textures, size);
@@ -726,10 +728,20 @@ impl GpuRenderer {
     fn new_backdrop(&mut self, size: [u32; 2]) -> Backdrop {
         use wgpu::TextureUsages as U;
         let d = &self.device;
-        let prefix = texture(d, "MUI backdrop", size, U::STORAGE_BINDING | U::TEXTURE_BINDING)
-            .create_view(&Default::default());
-        let tmp = texture(d, "MUI backdrop", size, U::RENDER_ATTACHMENT | U::TEXTURE_BINDING)
-            .create_view(&Default::default());
+        let prefix = texture(
+            d,
+            "MUI backdrop",
+            size,
+            U::STORAGE_BINDING | U::TEXTURE_BINDING,
+        )
+        .create_view(&Default::default());
+        let tmp = texture(
+            d,
+            "MUI backdrop",
+            size,
+            U::RENDER_ATTACHMENT | U::TEXTURE_BINDING,
+        )
+        .create_view(&Default::default());
         let out = texture(d, "MUI backdrop", size, U::RENDER_ATTACHMENT | U::COPY_SRC);
         let image = stand_in(size, ImageAlphaType::AlphaPremultiplied);
         self.vello.override_image(&image, Some(whole(&out)));

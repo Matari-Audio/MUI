@@ -16,6 +16,8 @@ use kurbo::{Affine, BezPath, Rect, Shape as _, Stroke};
 use mui_geometry::Error;
 use mui_scene::{Fit, GradientKind, Layer, Paint, Painted, ResolvedScene, ShadowKind};
 use std::sync::{Arc, Weak};
+#[cfg(feature = "gpu-effects")]
+pub use vello;
 #[cfg(feature = "cpu")]
 use vello_common::filter_effects::{EdgeMode, Filter, FilterPrimitive};
 /// The brush type [`Canvas::set_paint`] takes, so the trait can be
@@ -23,15 +25,13 @@ use vello_common::filter_effects::{EdgeMode, Filter, FilterPrimitive};
 pub use vello_common::paint::PaintType;
 use vello_common::peniko::color::PremulRgba8;
 use vello_common::peniko::color::{AlphaColor, DynamicColor, Srgb};
-use vello_common::peniko::{Blob, ColorStop, ColorStops, FontData, Gradient};
 #[cfg(feature = "cpu")]
 use vello_common::peniko::ImageSampler;
+use vello_common::peniko::{Blob, ColorStop, ColorStops, FontData, Gradient};
 use vello_common::pixmap::Pixmap;
 pub use vello_common::{kurbo, peniko};
 #[cfg(feature = "cpu")]
 pub use vello_cpu;
-#[cfg(feature = "gpu-effects")]
-pub use vello;
 #[cfg(feature = "gpu-effects")]
 mod classic;
 #[cfg(feature = "gpu-effects")]

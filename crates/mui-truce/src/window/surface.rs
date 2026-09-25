@@ -1,6 +1,8 @@
 //! baseview's raw-window-handle 0.5 as a wgpu surface. truce-gui carries
 //! the same bridge, but typed against its own wgpu; MUI renders on another.
-use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle, RawDisplayHandle, RawWindowHandle};
+use raw_window_handle::{
+    HasRawDisplayHandle, HasRawWindowHandle, RawDisplayHandle, RawWindowHandle,
+};
 use wgpu::rwh;
 
 /// # Safety
@@ -22,9 +24,9 @@ pub unsafe fn create(
         #[cfg(target_os = "macos")]
         (_, RawWindowHandle::AppKit(w)) => (
             rwh::RawDisplayHandle::AppKit(rwh::AppKitDisplayHandle::new()),
-            rwh::RawWindowHandle::AppKit(rwh::AppKitWindowHandle::new(
-                std::ptr::NonNull::new(w.ns_view)?,
-            )),
+            rwh::RawWindowHandle::AppKit(rwh::AppKitWindowHandle::new(std::ptr::NonNull::new(
+                w.ns_view,
+            )?)),
         ),
         #[cfg(target_os = "windows")]
         (_, RawWindowHandle::Win32(w)) => {
@@ -35,9 +37,8 @@ pub unsafe fn create(
             unsafe extern "system" {
                 fn GetModuleHandleW(name: *const u16) -> isize;
             }
-            win32.hinstance = std::num::NonZeroIsize::new(unsafe {
-                GetModuleHandleW(std::ptr::null())
-            });
+            win32.hinstance =
+                std::num::NonZeroIsize::new(unsafe { GetModuleHandleW(std::ptr::null()) });
             (
                 rwh::RawDisplayHandle::Windows(rwh::WindowsDisplayHandle::new()),
                 rwh::RawWindowHandle::Win32(win32),

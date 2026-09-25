@@ -5,12 +5,12 @@
 //! Encoding is serialisation only -- flattening, binning and rasterising all
 //! run in compute shaders -- which is why a frame that changed costs the CPU
 //! a fraction of a millisecond however much of the window it touches.
-use crate::{Cache, Canvas, Stored};
 use crate::kurbo::{Affine, BezPath, Rect, Stroke};
+use crate::{Cache, Canvas, Stored};
 use std::collections::HashMap;
 use std::sync::Arc;
 use vello::peniko::{
-    self, Blob, BlendMode, Brush, Compose, Fill, ImageAlphaType, ImageBrush, ImageData,
+    self, BlendMode, Blob, Brush, Compose, Fill, ImageAlphaType, ImageBrush, ImageData,
     ImageFormat, Mix,
 };
 use vello_common::paint::{ImageId, ImageSource, PaintType};
@@ -21,7 +21,12 @@ pub(crate) type Textures = HashMap<u64, ImageData>;
 /// Everything a clip, layer or fill covers when it has nothing tighter:
 /// one tile past the target, so no edge is anti-aliased against the void.
 pub(crate) fn everything(size: [u32; 2]) -> Rect {
-    Rect::new(-16., -16., f64::from(size[0]) + 16., f64::from(size[1]) + 16.)
+    Rect::new(
+        -16.,
+        -16.,
+        f64::from(size[0]) + 16.,
+        f64::from(size[1]) + 16.,
+    )
 }
 
 pub struct Classic<'a> {
@@ -211,8 +216,7 @@ impl Canvas for Classic<'_> {
         self.scene.pop_layer();
     }
     fn push_clip(&mut self, p: &BezPath) {
-        self.scene
-            .push_clip_layer(Fill::NonZero, self.transform, p);
+        self.scene.push_clip_layer(Fill::NonZero, self.transform, p);
     }
     fn pop_clip(&mut self) {
         self.scene.pop_layer();
