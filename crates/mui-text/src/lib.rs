@@ -897,7 +897,7 @@ fn clusters(text: &str, shaped: &ShapedText) -> Vec<TextCluster> {
 /// One shaped advance per `char` of `text`, and whether a line may start at
 /// it. Glyph clusters keep ligatures and combining marks together: the
 /// cluster's advance goes to its first character and the rest get none.
-fn char_advances(text: &str, clusters: &[TextCluster]) -> Result<Vec<(f64, bool)>, Error> {
+fn advances_of(text: &str, clusters: &[TextCluster]) -> Result<Vec<(f64, bool)>, Error> {
     let mut clusters = clusters.iter().peekable();
     let mut seen = false;
     text.char_indices()
@@ -944,16 +944,32 @@ pub fn break_lines(
     if !(max_width.is_finite() && max_width > 0.) {
         return Err(Error::InvalidOptions("max_width"));
     }
-    let faces = open(fonts, size_px, axes)?;
-    let clusters = clusters(text, &shape(&faces, text, size_px));
     Ok(break_lines_from_advances(
         text,
-        &char_advances(text, &clusters)?,
+        &char_advances(fonts, text, size_px, axes)?,
         max_width,
     ))
 }
 
-fn break_lines_from_advances(text: &str, advances: &[(f64, bool)], max_width: f64) -> Vec<Line> {
+/// One shaped advance per `char` of `text`, and whether a line may start at
+/// it: what [`break_lines_from_advances`] breaks. Shape once, keep this, and a
+/// paragraph breaks at every new width without shaping again.
+pub fn char_advances(
+    fonts: &[Font],
+    text: &str,
+    size_px: f64,
+    axes: &[Axis<'_>],
+) -> Result<Vec<(f64, bool)>, Error> {
+    let faces = open(fonts, size_px, axes)?;
+    advances_of(text, &clusters(text, &shape(&faces, text, size_px)))
+}
+
+/// [`break_lines`] on advances [`char_advances`] already shaped for `text`.
+pub fn break_lines_from_advances(
+    text: &str,
+    advances: &[(f64, bool)],
+    max_width: f64,
+) -> Vec<Line> {
     // Byte offsets a line may start at, ascending, walked alongside the chars.
     // One at a skipped space (LB8 after a ZWSP) is dropped; the next ink char
     // offers it again.

@@ -18,6 +18,9 @@ pub(super) struct CachedRun {
     pub(super) descent: f64,
     pub(super) line_height: f64,
     pub(super) glyphs: Arc<[TextGlyph]>,
+    /// Per-char advances, shaped the first time this string wraps, so every
+    /// later width breaks without shaping.
+    pub(super) advances: Option<Arc<[(f64, bool)]>>,
 }
 
 impl CachedRun {
@@ -37,6 +40,7 @@ impl CachedRun {
                     font: g.font,
                 })
                 .collect(),
+            advances: None,
         }
     }
 }
@@ -254,7 +258,7 @@ impl<'a> Runs<'a> {
         cap: Option<usize>,
     ) -> Vec<Cow<'t, str>> {
         let one = || vec![Cow::Borrowed(text)];
-        if max <= 0.0 || self.measure(text, face).width <= max + 0.5 {
+        if max.is_nan() || max <= 0.0 || self.measure(text, face).width <= max + 0.5 {
             return one();
         }
         let fonts = self.fonts_for(face);
@@ -268,10 +272,19 @@ impl<'a> Runs<'a> {
         );
         let generation = self.generation;
         if self.breaks.get(text).is_none_or(|m| !m.contains_key(&key)) {
-            let settings = face.axes.to_vec();
-            let Ok(lines) = mui_text::break_lines(&fonts, text, face.size, &settings, max) else {
+            // `measure` above cached the run this string wraps from.
+            let Some((run, _)) = self.cache.get_mut(text).and_then(|m| m.get_mut(&key.0)) else {
                 return one();
             };
+            if run.advances.is_none() {
+                let settings = face.axes.to_vec();
+                let Ok(a) = mui_text::char_advances(&fonts, text, face.size, &settings) else {
+                    return one();
+                };
+                run.advances = Some(a.into());
+            }
+            let advances = run.advances.as_deref().unwrap_or_default();
+            let lines = mui_text::break_lines_from_advances(text, advances, max);
             let n = cap.unwrap_or(usize::MAX).max(1);
             let ranges = lines.iter().take(n).map(|l| l.text_range.clone()).collect();
             self.breaks
@@ -301,21 +314,11 @@ impl<'a> Runs<'a> {
         }
         out
     }
-    /// A wrapped label's box: the widest line by the stack of line heights.
-    pub(super) fn wrapped(
-        &mut self,
-        text: &str,
-        face: Face<'_>,
-        max: f64,
-        cap: Option<usize>,
-    ) -> Size {
-        let (mut w, mut h) = (0.0f64, 0.0);
-        for l in self.lines(text, face, max, cap) {
-            let s = self.measure(&l, face);
-            w = w.max(s.width);
-            h += s.height;
-        }
-        Size::new(w, h)
+    /// A wrapped label's height. Every line has the one pitch its face sets,
+    /// whatever its text, so no line is shaped to find it.
+    pub(super) fn wrapped(&mut self, text: &str, face: Face<'_>, max: f64, cap: Option<usize>) -> f64 {
+        let lines = self.lines(text, face, max, cap).len();
+        lines as f64 * self.measure(text, face).height
     }
     pub(super) fn measure(&mut self, text: &str, face: Face<'_>) -> Size {
         let size = face.size;
@@ -373,7 +376,7 @@ pub(super) fn fit(runs: &mut Runs, th: Theme, e: &crate::Element, room: Option<f
         // reported the ragged width would then be centred inside its own
         // column, aligned with nothing above it.
         Some(room) if room > 0.0 && runs.measure(t, face).width > room + 0.5 => {
-            Size::new(room, runs.wrapped(t, face, room, e.lines).height)
+            Size::new(room, runs.wrapped(t, face, room, e.lines))
         }
         _ => runs.measure(t, face),
     };
