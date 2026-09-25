@@ -13,9 +13,9 @@ use mui_layout::SpacingToken::{Xs, S};
 use mui_scene::prelude::{overlay, text, Paints as _, Role};
 use mui_scene::Keys;
 use mui_scene::{
-    bar, Appear, Area, Color, Cursor, El, Element, Fill, Font, Kind, Layer, Mix, Paint, Painted,
-    Palette, Pin, Radius, ResolvedScene, SceneError, SceneSpec, Size, Spacing, Spring, State,
-    TextCache, Theme,
+    bar, push_index, Appear, Area, Color, Cursor, El, Element, Fill, Font, Kind, Layer, Mix, Paint,
+    Painted, Palette, Pin, Radius, ResolvedScene, SceneError, SceneSpec, Size, Spacing, Spring,
+    State, TextCache, Theme,
 };
 use std::sync::Arc;
 
@@ -1821,7 +1821,9 @@ impl Ui {
         self.tweens.retain(|_, (seen, _)| std::mem::take(seen));
         self.plays.retain(|_, (seen, _)| std::mem::take(seen));
         self.delivered = std::mem::take(&mut self.edits);
-        self.scene = Some(scene);
+        if let Some(old) = self.scene.replace(scene) {
+            self.text_cache.recycle(old);
+        }
         let repaint_after = self.repaint_after();
         // Widgets read the clock while constructing the tree, before this frame
         // advances it. One catch-up frame makes the blink edge visible now,
@@ -2227,20 +2229,6 @@ fn shapes(root: &El) -> Shapes {
     let mut out = Shapes::default();
     visit(root, &mut String::new(), &mut out);
     out
-}
-
-/// Append child `j`'s step to a tree path, the `/0/2` key the scene gives a
-/// node without an id. By hand: `write!` is most of a walk's cost.
-fn push_index(path: &mut String, mut j: usize) {
-    path.push('/');
-    let at = path.len();
-    loop {
-        path.insert(at, char::from(b'0' + (j % 10) as u8));
-        j /= 10;
-        if j == 0 {
-            break;
-        }
-    }
 }
 
 /// One walk styling the tree: per node its declared state looks first, so a

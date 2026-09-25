@@ -20,7 +20,6 @@ pub use text::TextCache;
 
 use rustc_hash::FxHashMap as HashMap;
 use std::borrow::Cow;
-use std::fmt::Write as _;
 use std::hash::BuildHasher;
 use std::sync::{Arc, LazyLock};
 
@@ -30,6 +29,20 @@ use mui_layout::Frame;
 use crate::{Color, Cursor, El, Size};
 use outline::OutlineCache;
 use text::{fit, layout_key, Runs};
+
+/// Append child `j`'s step to a tree path, the `/0/2` key the scene gives a
+/// node without an id. By hand: `write!` is most of a walk's cost.
+pub fn push_index(path: &mut String, mut j: usize) {
+    path.push('/');
+    let at = path.len();
+    loop {
+        path.insert(at, char::from(b'0' + (j % 10) as u8));
+        j /= 10;
+        if j == 0 {
+            break;
+        }
+    }
+}
 
 /// A length on the device grid, or untouched when the host gave no scale.
 fn snap(v: f64, scale: Option<f64>) -> f64 {
@@ -226,7 +239,7 @@ fn glide_frames(
     }
     let mark = path.len();
     for (j, c) in n.children().iter().enumerate() {
-        let _ = write!(path, "/{j}");
+        push_index(path, j);
         glide_frames(c, at, path, inner, frames, glide);
         path.truncate(mark);
     }
@@ -312,6 +325,9 @@ pub fn resolve_scene_animated(
         &mut frames,
         glide,
     );
+    let (paint, mut surfaces, mut at) = std::mem::take(&mut text.spare);
+    surfaces.reserve(nodes);
+    at.reserve(nodes);
     let mut w = Walk {
         spec,
         frames,
@@ -331,9 +347,9 @@ pub fn resolve_scene_animated(
         i: 0,
         key: empty_key(),
         keys: &mut text.keys,
-        paint: Vec::new(),
-        surfaces: Vec::with_capacity(nodes),
-        at: HashMap::with_capacity_and_hasher(nodes, Default::default()),
+        paint,
+        surfaces,
+        at,
         external_welds: HashMap::default(),
         deferred: Vec::new(),
         base_y: None,

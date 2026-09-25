@@ -1,5 +1,4 @@
 //! One node of the walk: its outline, paint, surface and children.
-use std::fmt::Write as _;
 use std::sync::Arc;
 
 use mui_geometry::{Bounds, Path, Point, RoundedRect};
@@ -534,7 +533,7 @@ impl<'a> Walk<'a> {
         for (j, c) in n.children().iter().enumerate() {
             self.base_y = bases.get(j).and_then(|b| b.map(|(y, _)| y));
             path.truncate(mark);
-            let _ = write!(path, "/{j}");
+            super::push_index(path, j);
             if c.payload().carve.is_some() {
                 // Already spent: it shaped the outline instead of painting.
                 self.i += self.sizes[self.i];

@@ -84,8 +84,29 @@ pub struct TextCache {
     pub(super) borders: crate::border_ramp::BorderCache,
     pub(super) region_cache: crate::regions::RegionCache,
     pub(super) surface_cache: crate::surfaces::Cache,
+    /// A finished scene's buffers, emptied for the next resolve to fill.
+    pub(super) spare: Spare,
 }
+pub(super) type Spare = (
+    Vec<super::Painted>,
+    Vec<super::ResolvedSurface>,
+    HashMap<Arc<str>, usize>,
+);
 impl TextCache {
+    /// Hand a scene you are done with back, so the next resolve fills its
+    /// buffers instead of growing new ones.
+    pub fn recycle(&mut self, scene: super::ResolvedScene) {
+        let super::ResolvedScene {
+            mut paint,
+            mut surfaces,
+            mut at,
+            ..
+        } = scene;
+        paint.clear();
+        surfaces.clear();
+        at.clear();
+        self.spare = (paint, surfaces, at);
+    }
     pub fn layout_stats(&self) -> mui_layout::LayoutStats {
         self.layout.stats()
     }
