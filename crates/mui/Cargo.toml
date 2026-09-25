@@ -23,6 +23,7 @@ unicode-segmentation = "1.12"
 [dev-dependencies]
 epaint_default_fonts = "0.36"
 png = "0.17"
+libc = "0.2"
 
 [[example]]
 name = "snapshot"

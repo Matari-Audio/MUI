@@ -2,7 +2,8 @@
 //! toolbar, track headers with knobs, faders and hover-styled buttons, a
 //! waveform canvas and a lane of clips per track), per kind of frame: nothing
 //! changed, the pointer crossing widgets, a resize, and a tooltip coming and
-//! going. Only `Ui::frame` is timed, not the tree build. Median of 60,
+//! going. Only `Ui::frame` is timed, in thread CPU time, not the tree build.
+//! Median and min of 60,
 //! allocations per frame.
 //!
 //! ```text
@@ -10,7 +11,6 @@
 //! ```
 use std::alloc::{GlobalAlloc, Layout as AllocLayout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Instant;
 
 use mui::geometry::Path;
 use mui::prelude::*;
@@ -29,20 +29,36 @@ unsafe impl GlobalAlloc for Counting {
 #[global_allocator]
 static A: Counting = Counting;
 
+/// This thread's CPU time in ms: the machine is shared, the wall clock is not
+/// ours.
+fn cpu_ms() -> f64 {
+    let mut t = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut t) };
+    t.tv_sec as f64 * 1e3 + t.tv_nsec as f64 * 1e-6
+}
+
 const TRACKS: usize = 16;
 const CLIPS: usize = 40;
 
 /// A status-bar style button: a label on a rounded fill that lights and
 /// borders on hover.
 fn button(id: String, label: &str) -> El {
-    let (hover, press) = (Color::oklcha(0.4, 0.02, 250.0, 1.0), Color::oklcha(0.3, 0.02, 250.0, 1.0));
+    let (hover, press) = (
+        Color::oklcha(0.4, 0.02, 250.0, 1.0),
+        Color::oklcha(0.3, 0.02, 250.0, 1.0),
+    );
     row([text(label).text_size(12.0).fill(Ink)])
         .pad_xy(8.0, 3.0)
         .h(22.0)
         .align(Align::Center)
         .fill(Raised)
         .radius(5.0)
-        .on(State::Hover, move |s| s.fill(hover).border(Ink.alpha(0.3), 1.0))
+        .on(State::Hover, move |s| {
+            s.fill(hover).border(Ink.alpha(0.3), 1.0)
+        })
         .on(State::Press, move |s| s.fill(press))
         .role(Kind::Button)
         .label(label)
@@ -74,9 +90,15 @@ fn editor(ui: &mut Ui, values: &mut [f64]) -> El {
     let tracks = (0..TRACKS).map(|t| {
         let knobs: Vec<El> = (0..4)
             .map(|k| {
-                knob(ui, format!("t{t}/k{k}"), "Gain", v.next().unwrap(), 0.0..=1.0)
-                    .0
-                    .el()
+                knob(
+                    ui,
+                    format!("t{t}/k{k}"),
+                    "Gain",
+                    v.next().unwrap(),
+                    0.0..=1.0,
+                )
+                .0
+                .el()
             })
             .collect();
         let fader = slider(ui, format!("t{t}/f"), "Level", v.next().unwrap(), 0.0..=1.0)
@@ -134,9 +156,9 @@ fn main() {
     let mut frame = |ui: &mut Ui, w: f64, p: PointerInput, dt: f64| -> f64 {
         let root = editor(ui, &mut values);
         nodes = count(&root);
-        let s = Instant::now();
+        let s = cpu_ms();
         std::hint::black_box(ui.frame(root, size(w), p, dt).unwrap().scene.paint.len());
-        s.elapsed().as_secs_f64() * 1e3
+        cpu_ms() - s
     };
     frame(&mut ui, 1800.0, away, 0.016);
     let at = |ui: &Ui, id: &str| {
@@ -150,7 +172,13 @@ fn main() {
     // Across the clips and buttons of every track, the way a pointer
     // sweeps the editor.
     let over: Vec<PointerInput> = (0..TRACKS)
-        .flat_map(|t| [format!("t{t}/c{}", t % CLIPS), format!("t{t}/S"), format!("t{t}/k1")])
+        .flat_map(|t| {
+            [
+                format!("t{t}/c{}", t % CLIPS),
+                format!("t{t}/S"),
+                format!("t{t}/k1"),
+            ]
+        })
         .map(|id| at(&ui, &id))
         .collect();
     let name = at(&ui, "t3/name");
@@ -172,10 +200,16 @@ fn main() {
         let allocs = ALLOCS.load(Ordering::Relaxed) - a;
         let mut t: Vec<f64> = (11..71).map(|i| f(&mut ui, i)).collect();
         t.sort_by(f64::total_cmp);
-        println!("{name:>8}: {:.3} ms, {allocs} allocations", t[t.len() / 2]);
+        println!(
+            "{name:>8}: {:.3} ms median, {:.3} min, {allocs} allocations",
+            t[t.len() / 2],
+            t[0]
+        );
     };
     run("steady", &mut |ui, _| frame(ui, 1800.0, away, 0.016));
-    run("hover", &mut |ui, i| frame(ui, 1800.0, over[i % over.len()], 0.016));
+    run("hover", &mut |ui, i| {
+        frame(ui, 1800.0, over[i % over.len()], 0.016)
+    });
     run("resize", &mut |ui, i| {
         frame(ui, 1500.0 + (i % 50) as f64 * 6.0, away, 0.016)
     });
