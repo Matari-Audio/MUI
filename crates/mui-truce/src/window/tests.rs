@@ -255,7 +255,8 @@ fn a_delivered_edge_gets_the_tree_that_dispatches_it() {
     h.step();
     h.on_event_inner(&moved(50.0, 50.0, Modifiers::default()));
     h.step();
-    assert!(!h.step(), "hovering a plain surface settles at once");
+    assert!(h.step(), "the new hover is owed one tree");
+    assert!(!h.step(), "then hovering a plain surface settles");
     h.on_event_inner(&button(true));
     assert!(h.step());
     assert_eq!(
