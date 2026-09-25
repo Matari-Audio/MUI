@@ -146,6 +146,8 @@ struct Walk<'a> {
     deferred: Vec<Deferred<'a>>,
     /// The baseline a `.baseline()` parent asks its text children to sit on.
     base_y: Option<f64>,
+    /// Ink and dim per ground colour's bits; see [`Walk::paint_of`].
+    inks: HashMap<[u32; 4], (Color, Color)>,
 }
 
 /// The key a walk starts from, before it meets the root.
@@ -335,6 +337,7 @@ pub fn resolve_scene_animated(
         external_welds: HashMap::default(),
         deferred: Vec::new(),
         base_y: None,
+        inks: HashMap::default(),
     };
     w.node(
         &spec.root,

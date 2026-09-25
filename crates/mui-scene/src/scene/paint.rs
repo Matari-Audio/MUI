@@ -8,7 +8,9 @@ use super::outline::Contour;
 use super::{empty, find, Layer, Painted, SceneError, Walk};
 use crate::material_weld::MaterialWeld;
 use crate::regions::{Operation, RAMP_OUTSIDE, SHELL, STROKE_BAND};
-use crate::{BorderRamp, Color, Content, El, Element, Fill, Paint, Radius, Shadow, ShadowKind};
+use crate::{
+    BorderRamp, Color, Content, El, Element, Fill, Paint, Radius, Role, Shadow, ShadowKind,
+};
 use crate::{Stroke, Style};
 
 /// What a structural entry paints: nothing a renderer looks at.
@@ -65,17 +67,13 @@ impl Walk<'_> {
             ),
             // Text's own fill is its ink, not a box behind it: never pushed,
             // though its colour still grounds the shells as before.
-            None if matches!(e.content, Content::Text(_)) => e
-                .style
-                .fill
-                .paint(&self.spec.theme.palette, under)
+            None if matches!(e.content, Content::Text(_)) => self
+                .paint_of(&e.style.fill, under)
                 .map_or(under, |p| p.solid()),
             // A joined tab takes the owner's border material; its fill only
             // grounds its content.
-            None if e.border_join.is_some() => e
-                .style
-                .fill
-                .paint(&self.spec.theme.palette, under)
+            None if e.border_join.is_some() => self
+                .paint_of(&e.style.fill, under)
                 .map_or(under, |p| p.solid()),
             None => solid(
                 self.push(
@@ -243,12 +241,33 @@ impl Walk<'_> {
             }
             return Ok(None);
         }
+        // The same outline `Arc` is the same outline: its band is last
+        // frame's, with no path cloned to find that out.
+        let generation = self.outlines.generation;
+        if let Some((outline, width, align, band, seen)) = self.outlines.bands.get_mut(&self.key) {
+            if Arc::ptr_eq(outline, &contour.path) && *width == w && *align == e.border_align {
+                *seen = generation;
+                let band = band.clone();
+                self.region_cache.keep(&(self.key.clone(), STROKE_BAND));
+                return Ok(Some((band, None, st.fill.clone(), 0.)));
+            }
+        }
         // Shared with a surface owner's clearance: one entry per node.
-        let band = self.cached_region(
+        let band = Arc::new(self.cached_region(
             (self.key.clone(), STROKE_BAND),
             Operation::Border((*contour.path).clone(), w, e.border_align),
-        )?;
-        Ok(Some((Arc::new(band), None, st.fill.clone(), 0.)))
+        )?);
+        self.outlines.bands.insert(
+            self.key.clone(),
+            (
+                contour.path.clone(),
+                w,
+                e.border_align,
+                band.clone(),
+                generation,
+            ),
+        );
+        Ok(Some((band, None, st.fill.clone(), 0.)))
     }
 
     /// A border ramp's band, painted after the children. One with tabs moves
@@ -348,6 +367,31 @@ impl Walk<'_> {
         });
     }
 
+    /// `fill` over `under`. Ink and dim are a contrast search per call, and
+    /// a walk meets the same few grounds over and over: each is asked once
+    /// per ground.
+    pub(super) fn paint_of(&mut self, fill: &Fill, under: Color) -> Option<Paint> {
+        let (role, alpha) = match *fill {
+            Fill::Role(r @ (Role::Ink | Role::Dim)) => (r, None),
+            Fill::Faded(r @ (Role::Ink | Role::Dim), a) => (r, Some(a)),
+            _ => return fill.paint(&self.spec.theme.palette, under),
+        };
+        let p = &self.spec.theme.palette;
+        let ground = [
+            under.lightness(),
+            under.chroma(),
+            under.hue(),
+            under.alpha(),
+        ]
+        .map(f32::to_bits);
+        let &mut (on, dim) = self
+            .inks
+            .entry(ground)
+            .or_insert_with(|| (p.on(under), p.dim(under)));
+        let c = if role == Role::Ink { on } else { dim };
+        Some(Paint::Solid(alpha.map_or(c, |a| c.with_alpha(a))))
+    }
+
     pub(super) fn push(
         &mut self,
         layer: Layer,
@@ -356,7 +400,7 @@ impl Walk<'_> {
         fill: &Fill,
         under: Color,
     ) -> Option<&mut Painted> {
-        let paint = fill.paint(&self.spec.theme.palette, under)?;
+        let paint = self.paint_of(fill, under)?;
         self.paint.push(Painted {
             key: self.key.clone(),
             layer,

@@ -84,6 +84,11 @@ pub(super) struct OutlineCache {
     /// is painted from the same paths every frame. Holding the list keeps its
     /// address from being reused.
     pub(super) canvases: HashMap<Arc<str>, PlacedDraws>,
+    /// Each node's rounded-rect outline, and the band its stroke paints
+    /// along it: handed back as the same `Arc` while the rect holds, so a
+    /// still node builds no path and compares by pointer downstream.
+    pub(super) rects: HashMap<Arc<str>, (RoundedRect, Arc<Path>, u64)>,
+    pub(super) bands: HashMap<Arc<str>, (Arc<Path>, f64, crate::BorderAlign, Arc<Path>, u64)>,
 }
 
 pub(super) type PlacedDraws = (Arc<[crate::Draw]>, Point, Vec<Arc<Path>>, u64);
@@ -136,6 +141,8 @@ impl OutlineCache {
         let generation = self.generation;
         self.entries.retain(|_, e| e.seen == generation);
         self.canvases.retain(|_, c| c.3 == generation);
+        self.rects.retain(|_, r| r.2 == generation);
+        self.bands.retain(|_, b| b.4 == generation);
         self.generation = generation.wrapping_add(1);
     }
 }
@@ -377,6 +384,24 @@ impl Walk<'_> {
         origin
     }
 
+    /// `rr`'s path, the same one last frame's walk built when the node's
+    /// rect has not changed. A weld's children share their owner's slot,
+    /// which only costs them the reuse.
+    pub(super) fn rect_path(&mut self, rr: RoundedRect) -> Arc<Path> {
+        let generation = self.outlines.generation;
+        if let Some((r, p, seen)) = self.outlines.rects.get_mut(&self.key) {
+            if *r == rr {
+                *seen = generation;
+                return p.clone();
+            }
+        }
+        let p = Arc::new(rr.path());
+        self.outlines
+            .rects
+            .insert(self.key.clone(), (rr, p.clone(), generation));
+        p
+    }
+
     fn shape(&mut self, n: &El, frame: Frame, first: usize) -> Result<Contour, SceneError> {
         let th = &self.spec.theme;
         let s = &n.payload().style;
@@ -425,7 +450,7 @@ impl Walk<'_> {
             }
             return Ok(Contour {
                 rect: Some(rr),
-                ..Contour::path(rr.path())
+                ..Contour::path(self.rect_path(rr))
             });
         }
         // Children's outlines sit right after this node in pre-order, each

@@ -171,6 +171,13 @@ impl RegionCache {
             .insert(key, (op, o, g, path.clone(), changed, self.generation));
         Ok((world(path), changed))
     }
+    /// Keep `key`'s entry through this resolve's sweep without resolving it:
+    /// its caller reused what the entry made.
+    pub(crate) fn keep(&mut self, key: &(std::sync::Arc<str>, u8)) {
+        if let Some(e) = self.entries.get_mut(key) {
+            e.5 = self.generation;
+        }
+    }
     #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.entries.len()
