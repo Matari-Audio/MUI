@@ -83,10 +83,10 @@ pub(super) struct OutlineCache {
     /// there: a [`canvas_cached`](crate::canvas_cached) list that stays put
     /// is painted from the same paths every frame. Holding the list keeps its
     /// address from being reused.
-    pub(super) canvases: HashMap<Arc<str>, Canvas>,
+    pub(super) canvases: HashMap<Arc<str>, PlacedDraws>,
 }
 
-pub(super) type Canvas = (Arc<[crate::Draw]>, Point, Vec<Arc<Path>>, u64);
+pub(super) type PlacedDraws = (Arc<[crate::Draw]>, Point, Vec<Arc<Path>>, u64);
 
 #[derive(Debug)]
 pub(super) struct Entry {

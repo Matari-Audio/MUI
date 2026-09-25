@@ -246,13 +246,13 @@ impl<'a> Walk<'a> {
                 let draws = (c.0)(frame.size);
                 let generation = self.outlines.generation;
                 let paths = match self.outlines.canvases.get_mut(key) {
-                    Some((old, at, paths, seen)) if Arc::ptr_eq(old, &draws) => {
-                        if *at != origin {
-                            let d = origin - *at;
+                    Some((old, placed, paths, seen)) if Arc::ptr_eq(old, &draws) => {
+                        if *placed != origin {
+                            let d = origin - *placed;
                             for p in paths.iter_mut() {
                                 Arc::make_mut(p).translate(d);
                             }
-                            *at = origin;
+                            *placed = origin;
                         }
                         *seen = generation;
                         paths.clone()
