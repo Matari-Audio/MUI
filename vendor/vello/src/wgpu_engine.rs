@@ -8,8 +8,9 @@ use std::collections::{HashMap, HashSet};
 
 use wgpu::{
     BindGroup, BindGroupLayout, Buffer, BufferUsages, CommandEncoder, CommandEncoderDescriptor,
-    ComputePass, ComputePassDescriptor, ComputePipeline, Device, PipelineCache, PipelineCompilationOptions,
-    Queue, Texture, TextureAspect, TextureUsages, TextureView, TextureViewDimension,
+    ComputePass, ComputePassDescriptor, ComputePipeline, Device, PipelineCache,
+    PipelineCompilationOptions, Queue, Texture, TextureAspect, TextureUsages, TextureView,
+    TextureViewDimension,
 };
 
 use crate::{
@@ -977,7 +978,6 @@ impl BindMap {
     fn get_buf(&mut self, proxy: BufferProxy) -> Option<&BindMapBuffer> {
         self.buf_map.get(&proxy.id)
     }
-
 }
 
 const SIZE_CLASS_BITS: u32 = 1;
@@ -1216,34 +1216,35 @@ impl<'a> TransientBindMap<'a> {
             })
             .collect::<Vec<_>>();
         let now = cache.now;
-        let (group, used) = cache
-            .map
-            .entry((layout.clone(), bound))
-            .or_insert_with_key(|(_, bound)| {
-                let entries = bound
-                    .iter()
-                    .enumerate()
-                    .map(|(i, b)| wgpu::BindGroupEntry {
-                        binding: i as u32,
-                        resource: match b {
-                            Bound::Buffer(buffer, offset, size) => {
-                                wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                                    buffer,
-                                    offset: *offset,
-                                    size: *size,
-                                })
-                            }
-                            Bound::View(view) => wgpu::BindingResource::TextureView(view),
-                        },
-                    })
-                    .collect::<Vec<_>>();
-                let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: None,
-                    layout,
-                    entries: &entries,
+        let (group, used) =
+            cache
+                .map
+                .entry((layout.clone(), bound))
+                .or_insert_with_key(|(_, bound)| {
+                    let entries = bound
+                        .iter()
+                        .enumerate()
+                        .map(|(i, b)| wgpu::BindGroupEntry {
+                            binding: i as u32,
+                            resource: match b {
+                                Bound::Buffer(buffer, offset, size) => {
+                                    wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                                        buffer,
+                                        offset: *offset,
+                                        size: *size,
+                                    })
+                                }
+                                Bound::View(view) => wgpu::BindingResource::TextureView(view),
+                            },
+                        })
+                        .collect::<Vec<_>>();
+                    let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: None,
+                        layout,
+                        entries: &entries,
+                    });
+                    (group, now)
                 });
-                (group, now)
-            });
         *used = now;
         group.clone()
     }
