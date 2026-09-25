@@ -139,6 +139,7 @@ impl<'a> Walk<'a> {
             tip: e.tip.clone(),
             focusable: e.focusable,
             captures_wheel: e.captures_wheel,
+            tracks_pointer: e.tracks_pointer,
             pointer_states: e
                 .states
                 .iter()
@@ -460,6 +461,7 @@ impl<'a> Walk<'a> {
                 tip: None,
                 focusable: false,
                 captures_wheel: false,
+                tracks_pointer: false,
                 // Earns it a place in the hit map without an id.
                 pointer_states: true,
                 disabled: inner.disabled,

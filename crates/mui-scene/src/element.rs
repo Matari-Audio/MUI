@@ -292,6 +292,9 @@ pub struct Element {
     /// The wheel over this node is its own: an enclosing `.scroll()` does
     /// not slide. See [`Styled::captures_wheel`].
     pub captures_wheel: bool,
+    /// Reads the raw pointer while building, so a move over it is never
+    /// inert. See [`Styled::tracks_pointer`].
+    pub tracks_pointer: bool,
     /// Switched off: no hit testing, no focus, and the look declared for
     /// [`State::Disabled`]. Inherited by the subtree. See
     /// [`Styled::disabled`].
@@ -960,6 +963,13 @@ pub trait Styled: Paints {
     /// pointer sees the wheel *and* the innermost scroller slides.
     fn captures_wheel(mut self) -> Self {
         self.element_mut().captures_wheel = true;
+        self
+    }
+    /// This node's tree reads the raw pointer (`Ui::local`, the host's own
+    /// input), not just its hover: a hover readout, a crosshair. A move over
+    /// it is never `Ui::inert`, so the host frames it.
+    fn tracks_pointer(mut self) -> Self {
+        self.element_mut().tracks_pointer = true;
         self
     }
     /// Switch this node -- and everything under it -- off: it drops out of

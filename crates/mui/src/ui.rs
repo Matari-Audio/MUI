@@ -198,6 +198,8 @@ pub struct Ui {
     /// still reports the knot it grabbed.
     tagged: Option<(String, String)>,
     time: f64,
+    /// The last frame resolved with nothing moving: see [`Ui::inert`].
+    still: bool,
     /// Where along a held scrollbar's thumb the pointer took it, so the
     /// thumb follows the pointer from that point instead of jumping to it.
     bar_grab: f64,
@@ -282,6 +284,7 @@ impl Ui {
             hover: None,
             tagged: None,
             time: 0.0,
+            still: false,
             board: None,
             bar_grab: 0.0,
         }
@@ -743,6 +746,64 @@ impl Ui {
         let s = self.scene.as_ref()?.surface(id)?;
         Some(Point::new(p.x - s.frame.x, p.y - s.frame.y))
     }
+    /// Whether `input` would change nothing a frame shows, so the host can
+    /// skip building one: a bare move after a frame that settled, with no
+    /// capture held, landing on the hovered target and canvas shape, and
+    /// neither over a [`tracks_pointer`](mui_scene::Styled::tracks_pointer)
+    /// node nor crossing a scroller whose bar warms under the pointer. An
+    /// inert move becomes the pointer the next frame starts from.
+    pub fn inert(&mut self, input: &Input) -> bool {
+        let p = input.pointer;
+        let Some(scene) = self.scene.as_ref() else {
+            return false;
+        };
+        if !(self.still
+            && (p.buttons, p.mods) == (self.pointer.buttons, self.pointer.mods)
+            && input.wheel == Point::ZERO
+            && input.keys.is_empty()
+            && input.text.is_empty()
+            && input.clipboard.is_none()
+            && input.ime.is_empty()
+            && self.interaction.held().is_none()
+            && self.actions.is_empty()
+            && self.edits.is_empty()
+            && self.cancelled.is_none()
+            // What the last frame took in is read by the next tree.
+            && self.keys.is_empty()
+            && self.typed.is_empty()
+            && self.wheel == Point::ZERO)
+        {
+            return false;
+        }
+        // Last frame's hit map, as `reconcile` would read it.
+        let under = p.pos.and_then(|q| {
+            self.hit.at_tagged_with(q, |key, tag, q| {
+                if tag.is_some() {
+                    return None;
+                }
+                scene.external_weld(key).map(|e| e.contains(q))
+            })
+        });
+        let tagged = under.and_then(|(id, tag)| Some((id, tag?)));
+        if under.map(|(id, _)| id) != self.interaction.hovered()
+            || tagged != self.tagged.as_ref().map(|(k, t)| (k.as_str(), t.as_str()))
+        {
+            return false;
+        }
+        let on = |at: Option<Point>, f: mui_layout::Frame| at.is_some_and(|q| f.contains(q.x, q.y));
+        let was = self.pointer.pos;
+        let touched = scene.surfaces().any(|s| {
+            (s.tracks_pointer && (on(p.pos, s.frame) || on(was, s.frame)))
+                || bar::bar_of(&s.key)
+                    .and_then(|(key, _)| scene.surface(key))
+                    .is_some_and(|n| on(p.pos, n.frame) != on(was, n.frame))
+        });
+        if touched {
+            return false;
+        }
+        self.pointer = p;
+        true
+    }
     /// Source and target of a drag released this frame.
     pub fn dropped(&self) -> Option<(&str, &str)> {
         self.interaction.dropped()
@@ -1110,6 +1171,7 @@ impl Ui {
         if !(dt.is_finite() && dt >= 0.0 && (self.time + dt).is_finite()) {
             return Err(SceneError::InvalidFrameDelta);
         }
+        self.still = false;
         self.bracket_commands();
         let Input {
             pointer,
@@ -1838,6 +1900,7 @@ impl Ui {
                             Some(Kind::TextInput { .. })
                         )
                 });
+        self.still = !animating;
         Frame {
             scene: self.scene.as_ref().expect("just set"),
             animating,
@@ -3062,6 +3125,54 @@ mod tests {
         run(&mut ui, &mut value, ctrl('v', Some("yo".into())));
         run(&mut ui, &mut value, Input::default());
         assert_eq!(value, "yo", "and a paste replaced the selection");
+    }
+
+    #[test]
+    fn a_move_is_inert_only_on_the_same_target_away_from_raw_pointer_readers() {
+        let tree = || {
+            row([
+                leaf(50., 50.).fill(Role::Field).id("src"),
+                leaf(50., 50.).fill(Role::Field).id("dst"),
+                leaf(50., 50.).fill(Role::Field).tracks_pointer().id("xy"),
+            ])
+        };
+        let mut ui = Ui::new(Theme::DEFAULT);
+        for _ in 0..2 {
+            ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
+        }
+        assert!(ui.inert(&at(20., 20., false).into()), "same target");
+        assert_eq!(
+            ui.local("src"),
+            Some(Point::new(20., 20.)),
+            "taken as the pointer"
+        );
+        assert!(!ui.inert(&at(60., 10., false).into()), "a new target");
+        assert!(!ui.inert(&at(20., 20., true).into()), "a button");
+        let wheel = Input {
+            wheel: Point::new(0., 1.),
+            ..at(20., 20., false).into()
+        };
+        assert!(!ui.inert(&wheel), "the wheel");
+
+        ui.frame(tree(), None, at(110., 10., false), 0.016).unwrap();
+        ui.frame(tree(), None, at(110., 10., false), 0.016).unwrap();
+        assert!(
+            !ui.inert(&at(120., 20., false).into()),
+            "a tracks_pointer node"
+        );
+
+        ui.frame(tree(), None, at(10., 10., true), 0.016).unwrap();
+        ui.frame(tree(), None, at(10., 10., true), 0.016).unwrap();
+        assert!(!ui.inert(&at(12., 12., true).into()), "a held capture");
+    }
+
+    #[test]
+    fn a_move_is_not_inert_while_a_tip_counts_down() {
+        let tree = || leaf(40., 40.).fill(Role::Raised).tip("why").id("b");
+        let mut ui = Ui::new(Theme::DEFAULT);
+        ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
+        ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
+        assert!(!ui.inert(&at(12., 12., false).into()));
     }
 
     #[test]
