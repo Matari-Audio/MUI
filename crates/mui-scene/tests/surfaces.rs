@@ -276,3 +276,19 @@ fn steady_and_tooltip_frames_run_no_boolean_pass() {
         }
     }
 }
+
+/// Owner geometry is cached relative to the owner: sliding the whole card
+/// over reruns none of its Boolean passes.
+#[test]
+fn a_moved_owner_reuses_its_surfaces() {
+    let spec = |pad: f64| SceneSpec::new(column([card(16.)]).pad(Spacing::Px(pad)));
+    let mut cache = TextCache::default();
+    resolve_scene_with(&spec(0.), &mut cache).unwrap();
+    for pad in [0., 7., 7.5] {
+        let before = mui_geometry::boolean_passes();
+        let moved = resolve_scene_with(&spec(pad), &mut cache).unwrap();
+        assert_eq!(mui_geometry::boolean_passes(), before, "pad {pad}");
+        let well = &moved.surface("well").unwrap().path;
+        assert!(has(well, pad + 20., pad + 20.), "the well stayed behind");
+    }
+}

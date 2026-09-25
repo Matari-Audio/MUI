@@ -4,8 +4,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use mui_geometry::{
-    boolean, fillet, union, BooleanOp, CornerStyle, Fillet, Path, Point, Polygon, RoundedRect,
-    Topology,
+    boolean, fillet, union, BooleanOp, Bounds, CornerStyle, Fillet, Path, Point, Polygon,
+    RoundedRect, Topology,
 };
 use mui_layout::Frame;
 
@@ -24,6 +24,8 @@ pub(super) struct Contour {
     /// Rounded rects that stand in for an outline with no `rect` when it
     /// casts a shadow: one per welded child, or a squircle's own frame.
     pub(super) shadow_rects: Vec<RoundedRect>,
+    /// The path's bounds when already known; see [`Contour::bounds`].
+    pub(super) known_bounds: Option<Bounds>,
 }
 impl Contour {
     /// A plain path: no analytic form, nothing changed.
@@ -33,7 +35,21 @@ impl Contour {
             rect: None,
             changed: false,
             shadow_rects: Vec::new(),
+            known_bounds: None,
         }
+    }
+
+    /// The outline's bounds: the rect's, the cached ones, or flattened.
+    pub(super) fn bounds(&self) -> Result<Option<Bounds>, SceneError> {
+        if let Some(r) = self.rect {
+            return Ok(Some(r.bounds()));
+        }
+        if self.known_bounds.is_some() {
+            return Ok(self.known_bounds);
+        }
+        Ok(Bounds::from_points(
+            self.path.flatten(0.5, 100_000)?.concat(),
+        ))
     }
 
     fn translated(&self, d: Point) -> Self {
@@ -44,6 +60,7 @@ impl Contour {
             rect: self.rect.map(|r| r.translated(d)),
             changed: self.changed,
             shadow_rects: self.shadow_rects.iter().map(|r| r.translated(d)).collect(),
+            known_bounds: self.known_bounds.map(|b| b.translated(d)),
         }
     }
 }
@@ -62,7 +79,14 @@ pub(super) struct OutlineCache {
     pub(super) generation: u64,
     pub(super) hits: u64,
     pub(super) misses: u64,
+    /// Each canvas's last draw list, where it stood, and its paths moved
+    /// there: a [`canvas_cached`](crate::canvas_cached) list that stays put
+    /// is painted from the same paths every frame. Holding the list keeps its
+    /// address from being reused.
+    pub(super) canvases: HashMap<Arc<str>, Canvas>,
 }
+
+pub(super) type Canvas = (Arc<[crate::Draw]>, Point, Vec<Arc<Path>>, u64);
 
 #[derive(Debug)]
 pub(super) struct Entry {
@@ -87,22 +111,31 @@ impl OutlineCache {
         Some(e.contour.clone())
     }
 
-    fn insert(&mut self, key: Vec<u64>, origin: Point, contour: Contour) {
+    fn insert(
+        &mut self,
+        key: Vec<u64>,
+        origin: Point,
+        mut contour: Contour,
+    ) -> Result<Contour, SceneError> {
+        // Flattened once here rather than by every frame that hits.
+        contour.known_bounds = contour.bounds()?;
         let seen = self.generation;
         self.entries.insert(
             key,
             Entry {
-                contour,
+                contour: contour.clone(),
                 origin,
                 seen,
             },
         );
+        Ok(contour)
     }
 
     /// Drop what this resolve did not use: memory follows the live tree.
     pub(super) fn sweep(&mut self) {
         let generation = self.generation;
         self.entries.retain(|_, e| e.seen == generation);
+        self.canvases.retain(|_, c| c.3 == generation);
         self.generation = generation.wrapping_add(1);
     }
 }
@@ -283,10 +316,10 @@ impl Walk<'_> {
             topo = Some(t);
         }
         let Some(topo) = topo else {
-            if let Some((key, origin)) = key {
-                self.outlines.insert(key, origin, base.clone());
-            }
-            return Ok(base);
+            return match key {
+                Some((key, origin)) => self.outlines.insert(key, origin, base),
+                None => Ok(base),
+            };
         };
         // Radius 0: the shapes going in already carry their own rounding,
         // and a second fillet would eat the corners the carve just made.
@@ -302,10 +335,10 @@ impl Walk<'_> {
             changed: true,
             ..Contour::path(n.payload().style.corners.shape(&rounded.path))
         };
-        if let Some((key, origin)) = key {
-            self.outlines.insert(key, origin, outline.clone());
+        match key {
+            Some((key, origin)) => self.outlines.insert(key, origin, outline),
+            None => Ok(outline),
         }
-        Ok(outline)
     }
 
     /// Every input `n`'s outline depends on, as words compared in full,
@@ -457,10 +490,9 @@ impl Walk<'_> {
             },
         )?;
         Ok(Contour {
-            path: Arc::new(s.corners.shape(&rounded.path)),
-            rect: None,
             changed: merged.components() != participants,
             shadow_rects: rects,
+            ..Contour::path(s.corners.shape(&rounded.path))
         })
     }
 }
