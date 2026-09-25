@@ -782,7 +782,7 @@ impl Paints for Style {
 /// ```
 /// use mui_scene::prelude::*;
 /// let save = leaf(64., 28.).role(Kind::Button).label("Save").tip("Write it out").id("save");
-/// assert!(save.payload().tip.is_some());
+/// assert!(save.payload().extras().tip.is_some());
 /// ```
 pub trait Styled: Paints {
     fn element_mut(&mut self) -> &mut Element;
@@ -1096,7 +1096,7 @@ pub trait Styled: Paints {
     /// ```
     /// use mui_scene::prelude::*;
     /// let knob = leaf(16., 16.).pill().animate_layout();
-    /// assert!(knob.payload().layout_transition.is_some());
+    /// assert!(knob.payload().extras().layout_transition.is_some());
     /// ```
     fn animate_layout(self) -> Self {
         self.layout_transition(Spring::DEFAULT)
@@ -1117,7 +1117,7 @@ pub trait Styled: Paints {
     /// ```
     /// use mui_scene::prelude::*;
     /// let toast = text("Saved").appear(Appear::Slide(0., 12.)).id("toast");
-    /// assert!(toast.payload().transition.is_some());
+    /// assert!(toast.payload().extras().transition.is_some());
     /// ```
     fn appear(mut self, from: Appear) -> Self {
         let e = self.element_mut().extras_mut();
@@ -1139,7 +1139,7 @@ pub trait Styled: Paints {
     /// use mui_scene::prelude::*;
     /// let module_uid = 7u64;
     /// let slot = leaf(80., 40.).animate_layout().identity(module_uid).id("osc/3");
-    /// assert!(slot.payload().identity.is_some());
+    /// assert!(slot.payload().extras().identity.is_some());
     /// ```
     fn identity(mut self, what: impl std::hash::Hash) -> Self {
         use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher};
@@ -1158,7 +1158,7 @@ pub trait Styled: Paints {
     /// use mui_scene::prelude::*;
     /// let playing = true;
     /// let icon = leaf(24., 24.).morph(if playing { "pause" } else { "play" }).id("transport");
-    /// assert!(icon.payload().morph.is_some());
+    /// assert!(icon.payload().extras().morph.is_some());
     /// ```
     fn morph(mut self, shape: impl std::hash::Hash) -> Self {
         use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher};
@@ -1181,7 +1181,7 @@ impl Styled for El {
 #[cfg(test)]
 mod tests {
     use crate::prelude::*;
-    use crate::{Content, Style};
+    use crate::{Content, Element, Style};
     use std::cell::Cell;
     use std::rc::Rc;
     use std::sync::Arc;
