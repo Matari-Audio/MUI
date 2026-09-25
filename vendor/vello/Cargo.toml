@@ -110,6 +110,12 @@ features = [
 optional = true
 default-features = false
 
+[lints.clippy]
+# Upstream's code, held to upstream's lints: newer clippy flags these.
+too_many_arguments = "allow"
+chunks_exact_to_as_chunks = "allow"
+manual_noop_waker = "allow"
+
 [lints.rust]
 # The profiler integration was cut when this copy moved to wgpu 30; its
 # cfgs stay in the source so upstream diffs stay small.

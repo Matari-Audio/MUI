@@ -276,7 +276,9 @@ impl LayoutCache {
     /// The stamp `scan` gave this node.
     fn stamp<P>(&mut self, n: &Node<P>) -> &mut Stamp {
         let address = self.pointers[&(n as *const Node<P> as usize)];
-        self.stamps.get_mut(&address).expect("scan stamped every node")
+        self.stamps
+            .get_mut(&address)
+            .expect("scan stamped every node")
     }
 }
 /// Complete shallow layout projection; destructuring without `..` makes adding
@@ -389,7 +391,7 @@ pub fn resolve_cached_with<P>(
     // so it solves bare rather than pay to validate and store what the next
     // size cannot use. The cache starts again once the size holds.
     let offered_bits = offered.map(|s| [s.width.to_bits(), s.height.to_bits()]);
-    if std::mem::replace(&mut cache.sized, Some(offered_bits)) != Some(offered_bits) {
+    if cache.sized.replace(offered_bits) != Some(offered_bits) {
         let layout = super::resolve_impl(root, offered, limits, scale, measurer, None, None)?;
         cache.stats = LayoutStats {
             arranged_nodes: layout.all().len(),

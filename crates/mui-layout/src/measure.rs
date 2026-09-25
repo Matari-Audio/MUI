@@ -422,7 +422,7 @@ pub(crate) fn measure_uncached<'a, P>(
                     && inner[1].is_none_or(|h| m.size.height <= h + 1e-8)
             };
             let mut candidates = children.iter().enumerate().filter(|(_, c)| !c.node.float);
-            let last = candidates.clone().last().map_or(0, |(i, _)| i);
+            let last = candidates.clone().next_back().map_or(0, |(i, _)| i);
             candidates.find(|(_, c)| fits(c)).map_or(last, |(i, _)| i)
         }
         _ => 0,

@@ -33,9 +33,15 @@ fn editor(ui: &mut Ui, values: &mut [f64]) -> El {
         .map(|t| {
             let knobs: Vec<El> = (0..4)
                 .map(|k| {
-                    knob(ui, format!("t{t}/k{k}"), "Gain", v.next().unwrap(), 0.0..=1.0)
-                        .0
-                        .el()
+                    knob(
+                        ui,
+                        format!("t{t}/k{k}"),
+                        "Gain",
+                        v.next().unwrap(),
+                        0.0..=1.0,
+                    )
+                    .0
+                    .el()
                 })
                 .collect();
             let fader = slider(ui, format!("t{t}/f"), "Level", v.next().unwrap(), 0.0..=1.0)
@@ -84,9 +90,7 @@ fn main() {
             ..Default::default()
         }
     };
-    let over: Vec<PointerInput> = (0..TRACKS)
-        .map(|t| at(&ui, &format!("t{t}/k1")))
-        .collect();
+    let over: Vec<PointerInput> = (0..TRACKS).map(|t| at(&ui, &format!("t{t}/k1"))).collect();
     let name = at(&ui, "t3/name");
     // `ONLY=<name>` runs one case long enough to profile.
     let only = std::env::var("ONLY").ok();
@@ -113,7 +117,9 @@ fn main() {
         println!("{name:>8}: {:.3} ms, {allocs} allocations", t[t.len() / 2]);
     };
     run("steady", &mut |ui, _| frame(ui, 1200.0, away, 0.016));
-    run("hover", &mut |ui, i| frame(ui, 1200.0, over[i % TRACKS], 0.016));
+    run("hover", &mut |ui, i| {
+        frame(ui, 1200.0, over[i % TRACKS], 0.016)
+    });
     run("resize", &mut |ui, i| {
         frame(ui, 900.0 + (i % 50) as f64 * 6.0, away, 0.016)
     });

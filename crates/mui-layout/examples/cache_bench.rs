@@ -4,7 +4,9 @@ use std::alloc::{GlobalAlloc, Layout as AllocLayout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
-use mui_layout::{resolve_cached_with, resolve_with, LayoutCache, Limits, Node, Size, SpacingScale};
+use mui_layout::{
+    resolve_cached_with, resolve_with, LayoutCache, Limits, Node, Size, SpacingScale,
+};
 
 static ALLOCS: AtomicUsize = AtomicUsize::new(0);
 struct Counting;
@@ -39,7 +41,9 @@ fn block(depth: usize, i: usize) -> N {
             .wrap();
     }
     N::column([
-        N::row((0..3).map(|k| cell(i * 1000 + depth * 10 + k))).gap(6.).wrap(),
+        N::row((0..3).map(|k| cell(i * 1000 + depth * 10 + k)))
+            .gap(6.)
+            .wrap(),
         N::grid(3, (0..6).map(|k| cell(i * 1000 + depth * 10 + 3 + k))).gap(4.),
         block(depth - 1, i),
     ])
@@ -47,8 +51,13 @@ fn block(depth: usize, i: usize) -> N {
     .pad(4.)
 }
 fn tree() -> N {
-    N::column((0..4).map(|i| block(7, i + 1))).gap(8.).pad(8.).scroll()
+    N::column((0..4).map(|i| block(7, i + 1)))
+        .gap(8.)
+        .pad(8.)
+        .scroll()
 }
+// The measurer callback hands over `&P`, and `P` here is `String`.
+#[allow(clippy::ptr_arg)]
 fn metric(s: &String, room: Option<f64>) -> Size {
     let full = s.len() as f64 * 6.;
     let w = room.unwrap_or(full).max(6.);
@@ -91,26 +100,49 @@ fn main() {
     let mut n = tree();
     let at = |w: f64| Some(Size::new(w, 800.));
     run("bare", |_| {
-        std::hint::black_box(resolve_with(&n, at(1280.), LIMITS, SpacingScale::DEFAULT, metric).unwrap());
+        std::hint::black_box(
+            resolve_with(&n, at(1280.), LIMITS, SpacingScale::DEFAULT, metric).unwrap(),
+        );
     });
     let mut c = LayoutCache::default();
     run("warm", |_| {
         std::hint::black_box(
-            resolve_cached_with(&n, at(1280.), LIMITS, SpacingScale::DEFAULT, &mut c, key, metric)
-                .unwrap(),
+            resolve_cached_with(
+                &n,
+                at(1280.),
+                LIMITS,
+                SpacingScale::DEFAULT,
+                &mut c,
+                key,
+                metric,
+            )
+            .unwrap(),
         );
     });
     println!("{:?}", c.stats());
     run("resize", |i| {
         let w = 900. + (i % 40) as f64 * 7.;
-        let l = resolve_cached_with(&n, at(w), LIMITS, SpacingScale::DEFAULT, &mut c, key, metric)
-            .unwrap();
-        debug_assert_eq!(l, resolve_with(&n, at(w), LIMITS, SpacingScale::DEFAULT, metric).unwrap());
+        let l = resolve_cached_with(
+            &n,
+            at(w),
+            LIMITS,
+            SpacingScale::DEFAULT,
+            &mut c,
+            key,
+            metric,
+        )
+        .unwrap();
+        debug_assert_eq!(
+            l,
+            resolve_with(&n, at(w), LIMITS, SpacingScale::DEFAULT, metric).unwrap()
+        );
         std::hint::black_box(l);
     });
     run("bare resize", |i| {
         let w = 900. + (i % 40) as f64 * 7.;
-        std::hint::black_box(resolve_with(&n, at(w), LIMITS, SpacingScale::DEFAULT, metric).unwrap());
+        std::hint::black_box(
+            resolve_with(&n, at(w), LIMITS, SpacingScale::DEFAULT, metric).unwrap(),
+        );
     });
     run("one label", |i| {
         // Deep in the last block: the path from it to the root changes.
@@ -119,10 +151,25 @@ fn main() {
             let last = p.children().len() - 1;
             p = &mut p.children_mut()[last];
         }
-        *p.payload_mut() = if i % 2 == 0 { "short".into() } else { PARA.into() };
-        let l = resolve_cached_with(&n, at(1280.), LIMITS, SpacingScale::DEFAULT, &mut c, key, metric)
-            .unwrap();
-        debug_assert_eq!(l, resolve_with(&n, at(1280.), LIMITS, SpacingScale::DEFAULT, metric).unwrap());
+        *p.payload_mut() = if i % 2 == 0 {
+            "short".into()
+        } else {
+            PARA.into()
+        };
+        let l = resolve_cached_with(
+            &n,
+            at(1280.),
+            LIMITS,
+            SpacingScale::DEFAULT,
+            &mut c,
+            key,
+            metric,
+        )
+        .unwrap();
+        debug_assert_eq!(
+            l,
+            resolve_with(&n, at(1280.), LIMITS, SpacingScale::DEFAULT, metric).unwrap()
+        );
         std::hint::black_box(l);
     });
     println!("{:?}", c.stats());

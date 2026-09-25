@@ -225,7 +225,7 @@ fn same_hit_geometry(a: &ResolvedScene, b: &ResolvedScene) -> bool {
                     && a.clip == b.clip
                     && same(
                         a.clip_paths().unwrap_or(&[]).iter(),
-                        b.clip_paths().unwrap_or(&[]).iter()
+                        b.clip_paths().unwrap_or(&[]).iter(),
                     )
                     && a.hits.iter().map(|h| &h.0).eq(b.hits.iter().map(|h| &h.0))
                     && same(a.hits.iter().map(|h| &h.1), b.hits.iter().map(|h| &h.1)) => {}

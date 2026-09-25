@@ -316,7 +316,13 @@ impl<'a> Runs<'a> {
     }
     /// A wrapped label's height. Every line has the one pitch its face sets,
     /// whatever its text, so no line is shaped to find it.
-    pub(super) fn wrapped(&mut self, text: &str, face: Face<'_>, max: f64, cap: Option<usize>) -> f64 {
+    pub(super) fn wrapped(
+        &mut self,
+        text: &str,
+        face: Face<'_>,
+        max: f64,
+        cap: Option<usize>,
+    ) -> f64 {
         let lines = self.lines(text, face, max, cap).len();
         lines as f64 * self.measure(text, face).height
     }
