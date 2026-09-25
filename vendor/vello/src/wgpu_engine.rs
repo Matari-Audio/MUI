@@ -336,13 +336,20 @@ impl WgpuEngine {
             bind_group_layouts: &[Some(&bind_group_layout)],
             immediate_size: 0,
         });
+        // No buffer is no slot, not one empty slot.
+        let buffers = [vertex_buffer];
+        let buffers = if buffers[0].is_some() {
+            &buffers[..]
+        } else {
+            &[]
+        };
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some(label),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module,
                 entry_point: Some(vertex_main),
-                buffers: vertex_buffer.as_slice(),
+                buffers,
                 compilation_options: PipelineCompilationOptions::default(),
             },
             fragment: Some(wgpu::FragmentState {
