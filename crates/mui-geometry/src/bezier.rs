@@ -1,9 +1,20 @@
 //! Canonical MUI-path to cubic-Bezier conversion, shared by painting and input.
 use crate::{Error, Path, PathCommand};
-use kurbo::BezPath;
+use kurbo::{BezPath, PathEl, Vec2};
+use std::cell::RefCell;
+use std::collections::HashMap;
 
 /// Maximum arc-to-cubic error in logical scene units.
 pub const ARC_TOLERANCE: f64 = 0.01;
+
+thread_local! {
+    /// Arcs repeat -- a rounded corner is one of four quadrants of its
+    /// radius -- and kurbo builds every one from sines. Its cubics are the
+    /// centre plus offsets nothing else moves, so the offsets are kept and
+    /// the centre added as kurbo adds it: the same bits, without the sines.
+    // ponytail: cleared past 256 shapes; an LRU if a scene has more radii.
+    static ARCS: RefCell<HashMap<[u64; 4], Vec<[Vec2; 3]>>> = RefCell::default();
+}
 
 /// Validate and convert without selecting a renderer or creating GPU resources.
 pub fn bez_path(path: &Path, tolerance: f64) -> Result<BezPath, Error> {
@@ -25,14 +36,31 @@ pub fn bez_path_into(path: &Path, tolerance: f64, out: &mut BezPath) -> Result<(
             PathCommand::MoveTo(p) => out.move_to((p.x, p.y)),
             PathCommand::LineTo(p) => out.line_to((p.x, p.y)),
             PathCommand::ArcTo(arc) => {
-                let k = kurbo::Arc::new(
-                    (arc.center.x, arc.center.y),
-                    (arc.radius, arc.radius),
-                    arc.start_angle,
-                    arc.sweep,
-                    0.0,
-                );
-                out.extend(k.append_iter(tolerance));
+                let c = kurbo::Point::new(arc.center.x, arc.center.y);
+                let key = [arc.radius, arc.start_angle, arc.sweep, tolerance].map(f64::to_bits);
+                ARCS.with_borrow_mut(|arcs| {
+                    if arcs.len() > 256 {
+                        arcs.clear();
+                    }
+                    let arm = arcs.entry(key).or_insert_with(|| {
+                        let k = kurbo::Arc::new(
+                            (0.0, 0.0),
+                            (arc.radius, arc.radius),
+                            arc.start_angle,
+                            arc.sweep,
+                            0.0,
+                        );
+                        k.append_iter(tolerance)
+                            .filter_map(|el| match el {
+                                PathEl::CurveTo(a, b, p) => Some([a, b, p].map(|q| q.to_vec2())),
+                                _ => None,
+                            })
+                            .collect()
+                    });
+                    for [a, b, p] in arm.iter() {
+                        out.curve_to(c + *a, c + *b, c + *p);
+                    }
+                });
                 // Preserve the exact recorded tangent endpoint.
                 out.line_to((arc.to.x, arc.to.y));
             }
@@ -47,6 +75,36 @@ pub fn bez_path_into(path: &Path, tolerance: f64, out: &mut BezPath) -> Result<(
 mod tests {
     use super::*;
     use kurbo::{PathEl, Shape};
+
+    #[test]
+    fn a_remembered_arc_converts_to_kurbos_own_bits() {
+        let arc = |x: f64, y: f64, r: f64, start: f64, sweep: f64| {
+            let mut a = crate::path::Arc {
+                center: crate::Point { x, y },
+                radius: r,
+                start_angle: start,
+                sweep,
+                to: crate::Point { x, y },
+            };
+            a.to = a.point_at(1.0);
+            a
+        };
+        for (x, y) in [(3.3, 7.1), (1033.7, 0.1), (-12.25, 480.9), (3.3, 7.1)] {
+            for (r, start, sweep) in [(8.0, 0.0, 1.5), (6.5, 3.1, -2.0), (120.0, 1.0, 6.2)] {
+                let a = arc(x, y, r, start, sweep);
+                let path = Path {
+                    commands: vec![PathCommand::MoveTo(a.point_at(0.0)), PathCommand::ArcTo(a)],
+                };
+                let mut want = BezPath::new();
+                want.move_to((a.point_at(0.0).x, a.point_at(0.0).y));
+                want.extend(
+                    kurbo::Arc::new((x, y), (r, r), start, sweep, 0.0).append_iter(ARC_TOLERANCE),
+                );
+                want.line_to((a.to.x, a.to.y));
+                assert_eq!(bez_path(&path, ARC_TOLERANCE).unwrap(), want);
+            }
+        }
+    }
 
     #[test]
     fn a_reused_buffer_is_refilled_not_appended_to() {

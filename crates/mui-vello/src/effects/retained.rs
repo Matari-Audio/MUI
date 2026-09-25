@@ -52,9 +52,14 @@ pub struct GpuRenderer {
 
 /// Vello's output: compute shaders write only a storage texture, so the
 /// frame lands here and one fragment pass puts it on the surface.
+///
+/// Its corner is the frame: the texture only ever grows, so a window
+/// dragged smaller and back allocates nothing.
+// ponytail: never shrinks; the largest size seen stays allocated.
 struct Target {
     view: wgpu::TextureView,
     bind: wgpu::BindGroup,
+    size: [u32; 2],
 }
 
 struct Passes {
@@ -324,6 +329,7 @@ impl GpuRenderer {
         Target {
             bind: bind(device, &passes.layout, &view, &passes.idle),
             view,
+            size,
         }
     }
 
@@ -331,7 +337,11 @@ impl GpuRenderer {
         checked_size(&self.device, size)?;
         if size != self.size {
             self.size = size;
-            self.target = Self::target(&self.device, &self.passes, size);
+            let have = self.target.size;
+            if size[0] > have[0] || size[1] > have[1] {
+                let grown = [size[0].max(have[0]), size[1].max(have[1])];
+                self.target = Self::target(&self.device, &self.passes, grown);
+            }
             self.invalidate();
         }
         Ok(())
@@ -373,6 +383,19 @@ impl GpuRenderer {
             self.local_mapping += 1;
             self.stale = true;
         }
+    }
+
+    /// The surface last got `resolved` under `xf`, and nothing it samples
+    /// changed since: presenting it again draws the same pixels, so a host
+    /// can skip acquiring a surface texture at all. Never with welds, whose
+    /// materials may animate on their own.
+    pub fn is_current(&self, resolved: &ResolvedScene, xf: Affine) -> bool {
+        self.presented.is_some()
+            && !self.stale
+            && self.transform == Some(xf)
+            && self.mapping == (self.effects.mapping_revision(), self.local_mapping)
+            && resolved.external_welds().next().is_none()
+            && self.retained == resolved.paint
     }
 
     pub fn render(
@@ -438,18 +461,21 @@ impl GpuRenderer {
         let size = self.size;
         // Weld materials first, in their own submission: Vello's render
         // submits as it goes, and copies from these textures when it does.
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("MUI welds"),
-            });
+        // No welds, no encoder.
+        let mut encoder = None;
         let mut drawn = Vec::new();
         for (key, e) in resolved
             .external_welds()
             .filter(|(_, e)| visible(e, xf, size))
         {
             let before = stats.effect_draws;
-            self.effects.encode(key, &e.material, &mut encoder, stats)?;
+            let encoder = encoder.get_or_insert_with(|| {
+                self.device
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("MUI welds"),
+                    })
+            });
+            self.effects.encode(key, &e.material, encoder, stats)?;
             let (id, tex, used) = self
                 .effects
                 .texture(key)
@@ -472,7 +498,7 @@ impl GpuRenderer {
                 }
             }
         }
-        if stats.effect_draws > 0 {
+        if let Some(encoder) = encoder.filter(|_| stats.effect_draws > 0) {
             self.queue.submit([encoder.finish()]);
             for image in &drawn {
                 self.vello.mark_override_image_dirty(image);
