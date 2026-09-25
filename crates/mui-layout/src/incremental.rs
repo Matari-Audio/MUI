@@ -146,6 +146,8 @@ pub struct LayoutCache {
     pinned: bool,
     /// The root's revision and offered size, and what they resolved to.
     last: Option<(u64, Option<[u64; 2]>, Layout)>,
+    /// The size offered last call, cached or not.
+    sized: Option<Option<[u64; 2]>>,
     stats: LayoutStats,
 }
 impl LayoutCache {
@@ -169,8 +171,11 @@ impl LayoutCache {
     ) -> Result<u64, Error> {
         // A context change invalidates every metric. Limits cannot be bypassed.
         if self.context != Some((limits, scale)) {
-            self.clear();
-            self.context = Some((limits, scale));
+            *self = Self {
+                context: Some((limits, scale)),
+                sized: self.sized,
+                ..Self::default()
+            };
         }
         self.pointers.clear();
         self.pinned = false;
@@ -379,8 +384,20 @@ pub fn resolve_cached_with<P>(
     {
         return Err(Error::InvalidValue);
     }
-    let revision = cache.prepare(root, limits, scale, &mut key)?;
+    // A size that just changed is likely to change again next frame -- a
+    // window being dragged -- and a resize misses nearly every measurement,
+    // so it solves bare rather than pay to validate and store what the next
+    // size cannot use. The cache starts again once the size holds.
     let offered_bits = offered.map(|s| [s.width.to_bits(), s.height.to_bits()]);
+    if std::mem::replace(&mut cache.sized, Some(offered_bits)) != Some(offered_bits) {
+        let layout = super::resolve_impl(root, offered, limits, scale, measurer, None, None)?;
+        cache.stats = LayoutStats {
+            arranged_nodes: layout.all().len(),
+            ..LayoutStats::default()
+        };
+        return Ok(layout);
+    }
+    let revision = cache.prepare(root, limits, scale, &mut key)?;
     if let Some((r, o, layout)) = &cache.last {
         if (*r, *o) == (revision, offered_bits) {
             return Ok(layout.clone());
@@ -484,6 +501,13 @@ mod tests {
         )
         .unwrap()
     }
+    /// A new size solves bare; the cache takes over once it holds.
+    fn prime(n: &Node<Text>, w: f64, c: &mut LayoutCache) -> Layout {
+        let bare = cached(n, w, c);
+        assert_eq!(c.stats().validated_nodes, 0);
+        assert_eq!(cached(n, w, c), bare);
+        bare
+    }
     fn oracle(n: &Node<Text>, w: f64) -> Layout {
         resolve_with(
             n,
@@ -498,7 +522,7 @@ mod tests {
     fn warm_tree_skips_measure_and_arrange() {
         let n = fixture();
         let mut c = LayoutCache::default();
-        cached(&n, 400., &mut c);
+        prime(&n, 400., &mut c);
         let l = cached(&n, 400., &mut c);
         assert_eq!(l, oracle(&n, 400.));
         let s = c.stats();
@@ -510,7 +534,7 @@ mod tests {
     fn decorative_payload_does_not_invalidate_layout() {
         let mut n = fixture();
         let mut c = LayoutCache::default();
-        let before = cached(&n, 400., &mut c);
+        let before = prime(&n, 400., &mut c);
         n.children_mut()[0].children_mut()[0].payload_mut().colour = 42;
         assert_eq!(cached(&n, 400., &mut c), before);
         assert_eq!(c.stats().measured_nodes, 0);
@@ -519,7 +543,7 @@ mod tests {
     fn changing_one_label_reuses_other_metrics() {
         let mut n = fixture();
         let mut c = LayoutCache::default();
-        cached(&n, 400., &mut c);
+        prime(&n, 400., &mut c);
         n.children_mut()[0].children_mut()[0].payload_mut().value = "Changed".into();
         assert_eq!(cached(&n, 400., &mut c), oracle(&n, 400.));
         assert!(c.stats().measure_hits > 0);
@@ -529,14 +553,14 @@ mod tests {
         let n = fixture();
         let mut c = LayoutCache::default();
         for w in [400., 120., 640., 121., 400.] {
-            assert_eq!(cached(&n, w, &mut c), oracle(&n, w));
+            assert_eq!(prime(&n, w, &mut c), oracle(&n, w));
         }
     }
     #[test]
     fn removed_node_does_not_leak_into_layout() {
         let mut n = fixture();
         let mut c = LayoutCache::default();
-        cached(&n, 400., &mut c);
+        prime(&n, 400., &mut c);
         n.children_mut()[0].children_mut()[0] = label("new", "Replacement");
         let l = cached(&n, 400., &mut c);
         assert!(l.frame("a").is_none());
@@ -546,12 +570,12 @@ mod tests {
     fn duplicate_ids_are_validated_on_a_warm_cache() {
         let mut n = fixture();
         let mut c = LayoutCache::default();
-        cached(&n, 400., &mut c);
+        prime(&n, 400., &mut c);
         n.children_mut()[1].children_mut()[0] = label("a", "Duplicate");
         assert!(matches!(
             resolve_cached_with(
                 &n,
-                None,
+                Some(Size::new(400., 100.)),
                 Limits::default(),
                 SpacingScale::DEFAULT,
                 &mut c,
@@ -565,7 +589,7 @@ mod tests {
     fn reordered_layout_matches_uncached() {
         let mut n = fixture();
         let mut c = LayoutCache::default();
-        cached(&n, 400., &mut c);
+        prime(&n, 400., &mut c);
         n.children_mut().swap(0, 1);
         assert_eq!(cached(&n, 400., &mut c), oracle(&n, 400.));
     }
@@ -576,7 +600,7 @@ mod tests {
             label("tip", "Tip").pin(Pin::to("anchor")),
         ]);
         let mut c = LayoutCache::default();
-        cached(&n, 400., &mut c);
+        prime(&n, 400., &mut c);
         n.children_mut()[0] = label("anchor", "Longer anchor").offset(80., 0.);
         assert_eq!(cached(&n, 400., &mut c), oracle(&n, 400.));
     }
@@ -591,7 +615,7 @@ mod tests {
             label("tip", "Tip").pin(Pin::to("x")),
         ]);
         let mut c = LayoutCache::default();
-        assert_eq!(cached(&n, 400., &mut c), oracle(&n, 400.));
+        assert_eq!(prime(&n, 400., &mut c), oracle(&n, 400.));
         n.children_mut().swap(0, 1);
         assert_eq!(cached(&n, 400., &mut c), oracle(&n, 400.));
         n.children_mut()[2] = label("tip", "Tip").pin(Pin::to("y").area(Area::End));
@@ -601,7 +625,7 @@ mod tests {
         assert!(matches!(
             resolve_cached_with(
                 &n,
-                None,
+                Some(Size::new(400., 100.)),
                 Limits::default(),
                 SpacingScale::DEFAULT,
                 &mut c,
@@ -615,11 +639,11 @@ mod tests {
     fn budget_changes_invalidate_cached_work() {
         let n = fixture();
         let mut c = LayoutCache::default();
-        cached(&n, 400., &mut c);
+        prime(&n, 400., &mut c);
         assert!(matches!(
             resolve_cached_with(
                 &n,
-                None,
+                Some(Size::new(400., 100.)),
                 Limits {
                     nodes: 2,
                     ..Limits::default()
@@ -636,9 +660,9 @@ mod tests {
     fn changing_measure_environment_requires_clear() {
         let n = fixture();
         let mut c = LayoutCache::default();
-        cached(&n, 400., &mut c);
+        prime(&n, 400., &mut c);
         c.clear();
-        cached(&n, 400., &mut c);
+        prime(&n, 400., &mut c);
         assert!(c.stats().measured_nodes > 0);
     }
 }
