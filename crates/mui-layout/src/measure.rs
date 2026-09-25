@@ -185,14 +185,6 @@ pub(crate) fn validate_node<P>(node: &Node<P>, l: Limits) -> Result<(), Error> {
     Ok(())
 }
 
-/// What to call a node in an error. Unnamed nodes are structural, so the
-/// nearest named ancestor is the useful thing to point at.
-pub(crate) fn label<P>(node: &Node<P>, ancestor: &str) -> String {
-    node.id
-        .as_ref()
-        .map_or_else(|| format!("{ancestor} > unnamed"), Id::to_string)
-}
-
 /// Rows of a grid, splitting where the spans fill the column count. A cell
 /// wider than the grid takes a row alone.
 pub(crate) fn grid_rows<'a, 'm, P>(
@@ -236,6 +228,13 @@ pub(crate) fn offer<P>(
     }
 }
 
+/// `measurer` answering [`Intrinsic`], as [`Pass`] holds it.
+pub(crate) fn intrinsic<P, M: Into<Intrinsic>>(
+    mut measurer: impl FnMut(&P, Option<f64>) -> M,
+) -> impl FnMut(&P, Option<f64>) -> Intrinsic {
+    move |p, room| measurer(p, room).into()
+}
+
 /// One measure pass: the budget, the id set and the content measurer.
 pub(crate) struct Pass<'a, 'f, P> {
     pub(crate) left: usize,
@@ -248,7 +247,7 @@ pub(crate) struct Pass<'a, 'f, P> {
     /// Any node carries a [`Pin`], so arrange runs a second pass with the
     /// anchor frames the first one found.
     pub(crate) pinned: bool,
-    pub(crate) measurer: &'f mut dyn FnMut(&P, Option<f64>) -> Size,
+    pub(crate) measurer: &'f mut dyn FnMut(&P, Option<f64>) -> Intrinsic,
     pub(crate) cache: Option<&'f mut LayoutCache>,
     /// The root's padding when its box is given rather than declared; see
     /// [`resolve_boxed_with`]. Taken by the first node measured, the root.
@@ -490,11 +489,16 @@ pub(crate) fn measure_uncached<'a, P>(
     let (content, sunk) = match &node.kind {
         Kind::Leaf => (Size::ZERO, Size::ZERO),
         Kind::Content => {
-            let s = (pass.measurer)(&node.payload, room);
-            if !s.valid(l.extent) {
+            let Intrinsic { size, min_width } = (pass.measurer)(&node.payload, room);
+            if !size.valid(l.extent) || !(0.0..=l.extent).contains(&min_width) {
                 return Err(Error::InvalidValue);
             }
-            (s, Size::ZERO)
+            // Never narrower than it may be squeezed to: a word wider than the
+            // room overflows it.
+            (
+                Size::new(size.width.max(min_width), size.height),
+                Size::new(min_width, 0.0),
+            )
         }
         Kind::Branch { vertical: v, .. } => {
             let v = *v;
@@ -633,14 +637,15 @@ pub(crate) fn measure_uncached<'a, P>(
     if !size.valid(l.extent) {
         return Err(Error::BudgetExceeded);
     }
-    if let Some(max) = node.maximum {
-        if size.width > max.width + 1e-9 || size.height > max.height + 1e-9 {
-            return Err(Error::InsufficientSpace {
-                node: label(node, ancestor),
-                needs: size,
-            });
-        }
-    }
+    // A maximum wins over content and floor alike: what does not fit
+    // overflows the box.
+    let (size, floor) = match node.maximum {
+        Some(max) => (
+            Size::new(size.width.min(max.width), size.height.min(max.height)),
+            Size::new(floor.width.min(max.width), floor.height.min(max.height)),
+        ),
+        None => (size, floor),
+    };
     // A squeezed flex row re-measures its fluid items, which is the one
     // chance a `fits` inside one gets to pick against its real share.
     // Percentage-like widths and aspect ratios resolve from a flex ancestor's

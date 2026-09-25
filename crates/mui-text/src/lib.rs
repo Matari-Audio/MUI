@@ -441,6 +441,8 @@ pub struct TextRun {
     pub descent: f64,
     /// The face's own idea of a line pitch, leading included.
     pub line_height: f64,
+    /// Its widest unbreakable piece: see [`min_content_width`].
+    pub min_content: f64,
 }
 
 /// One glyph of a [`TextRun`]. `font` indexes the faces the run was shaped
@@ -587,6 +589,7 @@ fn shaped_run(faces: &[Face<'_>], text: &str, size_px: f64) -> Result<TextRun, E
         )?);
     }
     let shaped = shape(faces, text, size_px);
+    let min_content = min_content_width(text, &advances_of(text, &clusters(text, &shaped))?);
     Ok(TextRun {
         path: Path::default(),
         glyphs: shaped
@@ -603,6 +606,7 @@ fn shaped_run(faces: &[Face<'_>], text: &str, size_px: f64) -> Result<TextRun, E
         ascent,
         descent,
         line_height,
+        min_content,
     })
 }
 
@@ -1042,6 +1046,32 @@ pub fn break_lines_from_advances(
         advance: x - trim,
     });
     lines
+}
+
+/// The narrowest `text` breaks to without splitting a word: its widest run
+/// between two line-break opportunities, trailing spaces left out. What CSS
+/// calls the min-content width.
+pub fn min_content_width(text: &str, advances: &[(f64, bool)]) -> f64 {
+    let mut opps = unicode_linebreak::linebreaks(text)
+        .map(|(i, _)| i)
+        .peekable();
+    let (mut widest, mut word, mut trim) = (0f64, 0., 0.);
+    for ((i, ch), &(a, at_cluster_start)) in text.char_indices().zip(advances) {
+        while opps.peek().is_some_and(|&bi| bi < i) {
+            opps.next();
+        }
+        if at_cluster_start && opps.peek() == Some(&i) {
+            widest = widest.max(word - trim);
+            (word, trim) = (0., 0.);
+        }
+        word += a;
+        trim = if ch.is_ascii_whitespace() {
+            trim + a
+        } else {
+            0.
+        };
+    }
+    widest.max(word - trim)
 }
 
 /// Every char boundary of `text` with the pen x of a caret there, ascending
@@ -1662,6 +1692,23 @@ mod measure_tests {
         let out = lines(&word, caret_x(&[hack()], &word, SIZE, &[], 10).unwrap());
         assert_eq!(out.len(), 4, "{out:?}");
         assert!(out.iter().all(|l| l.len() == 10), "{out:?}");
+    }
+
+    #[test]
+    fn min_content_is_the_widest_word() {
+        let w = |t: &str| {
+            let a = char_advances(&[hack()], t, SIZE, &[]).unwrap();
+            min_content_width(t, &a)
+        };
+        // Hack is monospaced: the longest word sets it, spaces do not count.
+        assert_eq!(w("ab abcd abc  "), w("abcd"));
+        assert_eq!(w("ab\nabcd"), w("abcd"));
+        assert_eq!(
+            shape_run(&[hack()], "ab abcd", SIZE, &[])
+                .unwrap()
+                .min_content,
+            w("abcd")
+        );
     }
 
     #[test]

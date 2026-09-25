@@ -26,12 +26,28 @@ pub use id::Id;
 pub use len::{Align, Insets, Justify, Len, Size};
 pub use mui_geometry::{Spacing, SpacingScale, SpacingToken};
 pub use node::{column, fits, grid, leaf, overlay, row, Node};
+
+/// What a measurer says about a content leaf: its size in the room it was
+/// given, and the narrowest a flex parent may squeeze it to -- for text, its
+/// widest word, the way CSS `min-width: auto` keeps a flex item at its
+/// min-content. A bare [`Size`] is squeezable to nothing.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Intrinsic {
+    pub size: Size,
+    pub min_width: f64,
+}
+impl From<Size> for Intrinsic {
+    fn from(size: Size) -> Self {
+        Self {
+            size,
+            min_width: 0.0,
+        }
+    }
+}
 pub use pin::{Area, Match, Pin};
 
 pub(crate) use arrange::{arrange, distribute};
-pub(crate) use measure::{
-    cell_default, grid_rows, label, measure, place, wrap_lines, Measured, Pass,
-};
+pub(crate) use measure::{cell_default, grid_rows, measure, place, wrap_lines, Measured, Pass};
 pub(crate) use node::Kind;
 pub(crate) use pin::{inside, Pins, Viewport};
 
@@ -84,8 +100,9 @@ impl Layout {
     /// The smallest this tree can be squeezed to: every `minimum`, padding and
     /// unsqueezable leaf in it, summed along the axis it sits on. A scroll
     /// node contributes nothing on its scrolling axis, which is the point of
-    /// one. A host that owns a window refuses anything smaller; below it
-    /// [`resolve`] answers [`Error::InsufficientSpace`].
+    /// one. Below it nothing is refused: children keep their floors and the
+    /// content overflows, clipped wherever a clip is set. A host that owns a
+    /// window can scale by `offered / min_size()` or refuse to go smaller.
     ///
     /// ```
     /// use mui_layout::{column, leaf, resolve, Size};
@@ -145,14 +162,6 @@ pub enum Error {
     InvalidValue,
     DuplicateKey(String),
     BudgetExceeded,
-    /// `needs` is the whole tree's floor, so a host can work out the uniform
-    /// scale that would make it fit: `min(offered / needs)`. A node refused by
-    /// its own `maximum` carries what that node asked for instead -- the
-    /// tree's floor is not known until the measure pass it failed in ends.
-    InsufficientSpace {
-        node: String,
-        needs: Size,
-    },
     RevisionExhausted,
 }
 impl std::fmt::Display for Error {
@@ -163,11 +172,6 @@ impl std::fmt::Display for Error {
             }
             Self::DuplicateKey(k) => write!(f, "two nodes share the id {k}"),
             Self::BudgetExceeded => f.write_str("the tree exceeds its node or depth limit"),
-            Self::InsufficientSpace { node, needs } => write!(
-                f,
-                "node {node} does not fit in the space offered; the tree needs {}x{}",
-                needs.width, needs.height
-            ),
             Self::RevisionExhausted => f.write_str("the layout revision counter overflowed"),
         }
     }
@@ -204,12 +208,12 @@ pub fn resolve<P>(root: &Node<P>, offered: Option<Size>, limits: Limits) -> Resu
 /// inside a scroll. A leaf in a squeezed, non-wrapping row is measured a
 /// second time at the main size the row deals it; that last call is the
 /// authoritative one. Text shaping lives outside this crate on purpose.
-pub fn resolve_with<P>(
+pub fn resolve_with<P, M: Into<Intrinsic>>(
     root: &Node<P>,
     offered: Option<Size>,
     limits: Limits,
     scale: SpacingScale,
-    measurer: impl FnMut(&P, Option<f64>) -> Size,
+    measurer: impl FnMut(&P, Option<f64>) -> M,
 ) -> Result<Layout, Error> {
     resolve_impl(root, offered, limits, scale, measurer, None, None)
 }
@@ -230,13 +234,13 @@ pub fn resolve_with<P>(
 /// .unwrap();
 /// assert_eq!(l.all()[1].size, size, "the child fills the given box");
 /// ```
-pub fn resolve_boxed_with<P>(
+pub fn resolve_boxed_with<P, M: Into<Intrinsic>>(
     root: &Node<P>,
     size: Size,
     padding: Insets,
     limits: Limits,
     scale: SpacingScale,
-    measurer: impl FnMut(&P, Option<f64>) -> Size,
+    measurer: impl FnMut(&P, Option<f64>) -> M,
 ) -> Result<Layout, Error> {
     if !size.valid(limits.extent) || !padding.valid(limits.extent) {
         return Err(Error::InvalidValue);
@@ -251,12 +255,12 @@ pub fn resolve_boxed_with<P>(
         Some(padding),
     )
 }
-fn resolve_impl<P>(
+fn resolve_impl<P, M: Into<Intrinsic>>(
     root: &Node<P>,
     offered: Option<Size>,
     limits: Limits,
     scale: SpacingScale,
-    mut measurer: impl FnMut(&P, Option<f64>) -> Size,
+    measurer: impl FnMut(&P, Option<f64>) -> M,
     cache: Option<&mut LayoutCache>,
     boxed: Option<Insets>,
 ) -> Result<Layout, Error> {
@@ -268,6 +272,7 @@ fn resolve_impl<P>(
     {
         return Err(Error::InvalidValue);
     }
+    let mut measurer = crate::measure::intrinsic(measurer);
     let definite = offered.map_or([None; 2], |s| [Some(s.width), Some(s.height)]);
     let mut pass = Pass {
         left: limits.nodes,
@@ -286,36 +291,22 @@ fn resolve_impl<P>(
     if !size.valid(limits.extent) {
         return Err(Error::InvalidValue);
     }
-    if root
-        .maximum
-        .is_some_and(|max| size.width > max.width || size.height > max.height)
-    {
-        return Err(Error::InsufficientSpace {
-            node: label(root, "root"),
-            needs: m.floor,
-        });
-    }
+    // A root offered more than its maximum is its maximum, like any node.
+    let size = root.maximum.map_or(size, |max| {
+        Size::new(size.width.min(max.width), size.height.min(max.height))
+    });
     // Every measured node produces at most one frame.
     let mut out = (
         BTreeMap::new(),
         Vec::with_capacity(limits.nodes - pass.left),
     );
-    // Only `resolve` knows the whole tree's floor, and that is the number a
-    // host scales by; the sites that raise the error only know their own node.
-    let fix = |e| match e {
-        Error::InsufficientSpace { node, .. } => Error::InsufficientSpace {
-            node,
-            needs: m.floor,
-        },
-        e => e,
-    };
     let empty = BTreeMap::new();
     let pins = |anchors| Pins {
         anchors,
         root: size,
         scale,
     };
-    arrange(&m, "root", [0.0, 0.0], size, &pins(&empty), None, &mut out).map_err(fix)?;
+    arrange(&m, "root", [0.0, 0.0], size, &pins(&empty), None, &mut out)?;
     // ponytail: one extra arrange resolves every pin, because a float takes no
     // space and so cannot move an anchor. A pin whose anchor is itself inside a
     // pinned float reads that float's first-pass position; give the pass a
@@ -331,8 +322,7 @@ fn resolve_impl<P>(
             &pins(&anchors),
             None,
             &mut out,
-        )
-        .map_err(fix)?;
+        )?;
     }
     Ok(Layout {
         size,
