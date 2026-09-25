@@ -234,6 +234,27 @@ fn prepare_all(shapes: &[PlacedShape], o: GeometryOptions) -> Result<BackendMult
     if count > o.max_vertices {
         return Err(Error::TooManyVertices);
     }
+    let within = |out: &BackendMulti| {
+        let n: usize = out.iter().flat_map(|p| p.iter()).map(Vec::len).sum();
+        if n > o.max_vertices {
+            return Err(Error::TooManyVertices);
+        }
+        Ok(())
+    };
+    if shapes.iter().all(|s| s.polygon.holes.is_empty()) {
+        // Every ring is simple and wound positive, so one nonzero pass over
+        // all of them is their union: no per-shape self-union, no fold.
+        use i_overlay::float::simplify::SimplifyShape;
+        let rings = shapes
+            .iter()
+            .map(|s| prepared_ring(&s.polygon.exterior, s.transform, o))
+            .collect::<Result<Vec<_>, _>>()?;
+        let out = rings.simplify_shape_as::<i64>(FillRule::NonZero);
+        within(&out)?;
+        return Ok(out);
+    }
+    // A hole must not cancel another shape's cover under nonzero, so shapes
+    // with holes fold one union at a time.
     let mut out: BackendMulti = Vec::new();
     for s in shapes {
         let next = prepared_shape(s, o)?;
@@ -243,15 +264,7 @@ fn prepare_all(shapes: &[PlacedShape], o: GeometryOptions) -> Result<BackendMult
             // True set union, not globally applying EvenOdd to overlapping inputs.
             out = out.overlay_as::<i64>(&next, OverlayRule::Union, FillRule::NonZero);
         }
-        if out
-            .iter()
-            .flat_map(|p| p.iter())
-            .map(Vec::len)
-            .sum::<usize>()
-            > o.max_vertices
-        {
-            return Err(Error::TooManyVertices);
-        }
+        within(&out)?;
     }
     Ok(out)
 }

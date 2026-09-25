@@ -151,8 +151,7 @@ pub(crate) fn hide<P>(
     }
 }
 
-pub(crate) use crate::incremental::arrange_cached as arrange;
-pub(crate) fn arrange_uncached<P>(
+pub(crate) fn arrange<P>(
     m: &Measured<'_, P>,
     ancestor: &str,
     origin: [f64; 2],
@@ -210,8 +209,18 @@ pub(crate) fn arrange_uncached<P>(
     match &n.kind {
         Kind::Leaf | Kind::Content => {}
         Kind::Overlay(_) => {
+            // A scrolling stack lays its children into their own extent,
+            // like a scrolling column does on its main axis; placed in the
+            // viewport instead they were squeezed to it, and a viewport-sized
+            // child is nothing the wheel can slide.
+            if n.scroll {
+                section = Size::new(
+                    inner.width.max(m.content.width),
+                    inner.height.max(m.content.height),
+                );
+            }
             for c in &flow {
-                let (p, s) = cell(c, inner, default);
+                let (p, s) = cell(c, section, default);
                 placed[c.index] = Some((at(p[0], p[1]), s));
             }
         }
@@ -236,7 +245,7 @@ pub(crate) fn arrange_uncached<P>(
                 .collect();
             let surplus = (inner.height
                 - heights.iter().sum::<f64>()
-                - m.gap * grid.len().saturating_sub(1) as f64)
+                - m.line_gap * grid.len().saturating_sub(1) as f64)
                 .max(0.0)
                 / grid.len().max(1) as f64;
             let mut y = 0.0;
@@ -266,7 +275,7 @@ pub(crate) fn arrange_uncached<P>(
                     ));
                     col += span;
                 }
-                y += h + surplus + m.gap;
+                y += h + surplus + m.line_gap;
             }
         }
         Kind::Branch { vertical, .. } => {
@@ -294,7 +303,7 @@ pub(crate) fn arrange_uncached<P>(
             // so say it does not fit rather than paint over the next widget.
             if lines.len() > 1 {
                 let needed = lines.iter().copied().map(line_cross).sum::<f64>()
-                    + m.gap * (lines.len() - 1) as f64;
+                    + m.line_gap * (lines.len() - 1) as f64;
                 if needed > inner.cross(v) + 1e-8 {
                     return Err(Error::InsufficientSpace {
                         node: label(n, ancestor),
@@ -347,14 +356,14 @@ pub(crate) fn arrange_uncached<P>(
                     placed[c.index] = Some((pos, Size::axes(main, cross, v)));
                     cursor += main + m.gap + extra;
                 }
-                line_start += line_cross + m.gap;
+                line_start += line_cross + m.line_gap;
             }
         }
     }
     for (i, c) in m.children.iter().enumerate() {
         // A candidate that lost keeps its place in the frame list, empty, so
         // a walk of the tree still lines up with it.
-        if matches!(n.kind, Kind::Fits(_)) && i != m.pick {
+        if matches!(n.kind, Kind::Fits(_)) && i != m.pick && !c.node.float {
             hide(c, origin, out);
             continue;
         }

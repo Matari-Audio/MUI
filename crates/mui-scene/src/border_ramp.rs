@@ -185,21 +185,34 @@ impl BorderCache {
         tolerance: f64,
     ) -> Result<Path, SceneError> {
         let widths = [ramp.from.1, ramp.to.1, ramp.start, ramp.end];
+        // Local to the anchor's origin, so a moved card still hits.
+        let origin = Point::new(frame.x, frame.y);
+        let mut outline = outline.clone();
+        outline.translate(-origin);
+        let frame = Frame {
+            x: frame.x - origin.x,
+            y: frame.y - origin.y,
+            ..frame
+        };
+        let world = |mut p: Path| {
+            p.translate(origin);
+            p
+        };
         if let Some(e) = self.entries.get_mut(key) {
-            if e.outline == *outline
+            if e.outline.near(&outline, 1e-9)
                 && e.frame == frame
                 && e.widths == widths
                 && e.tolerance == tolerance
             {
                 e.seen = self.generation;
-                return Ok(e.band.clone());
+                return Ok(world(e.band.clone()));
             }
         }
-        let band = band(outline, ramp, frame, tolerance)?;
+        let band = band(&outline, ramp, frame, tolerance)?;
         self.entries.insert(
             key.to_owned(),
             Entry {
-                outline: outline.clone(),
+                outline,
                 frame,
                 widths,
                 tolerance,
@@ -207,7 +220,7 @@ impl BorderCache {
                 seen: self.generation,
             },
         );
-        Ok(band)
+        Ok(world(band))
     }
     pub(crate) fn sweep(&mut self) {
         let generation = self.generation;

@@ -38,6 +38,7 @@ pub fn all() -> Vec<Box<dyn PreviewScene>> {
         Box::new(GlyphAxes::new()),
         Box::new(Scrolling::default()),
         Box::new(Fields::default()),
+        Box::new(Picker::default()),
         Box::new(Tips),
         Box::new(Curve::default()),
         Box::new(CurveEditor::default()),
@@ -53,7 +54,59 @@ pub fn all() -> Vec<Box<dyn PreviewScene>> {
         Box::new(Switched::default()),
         Box::new(Editor),
         Box::new(Effects),
+        Box::new(Frosted),
     ]
+}
+
+/// A modal over a busy panel. The dim is `.backdrop_blur`, so the panel goes
+/// soft under it instead of staying sharp behind the scrim.
+pub struct Frosted;
+impl PreviewScene for Frosted {
+    fn name(&self) -> &'static str {
+        "Frosted modal"
+    }
+    fn about(&self) -> &'static str {
+        "A translucent dim with .backdrop_blur(8.): what was painted under it paints again through a Gaussian, clipped to the dim. The dialog on top stays sharp."
+    }
+    fn specimen(&mut self, _: &mut Ui) -> El {
+        let tile = |i: usize| {
+            row([text(format!("ch {i}"))])
+                .size(96.0, 56.0)
+                .center()
+                .radius(10.0)
+                .fill(Color::oklch(0.72, 0.16, (i * 47 % 360) as f32))
+                .stroke(Role::Ink)
+        };
+        let busy = grid(6, (0..24).map(tile)).gap(S).pad(S).id("busy");
+        let button = |label: &str, fill: Role| {
+            row([text(label.to_owned())])
+                .pad(10.0)
+                .radius(8.0)
+                .fill(fill)
+        };
+        let dialog = column([
+            text("Discard this take?"),
+            text("Everything since the last save is lost.").fill(Role::Dim),
+            row([
+                button("Keep", Role::Raised),
+                button("Discard", Role::Primary),
+            ])
+            .gap(S),
+        ])
+        .gap(S)
+        .pad(24.0)
+        .radius(16.0)
+        .fill(Role::Surface)
+        .elevation(Elevation::Floating)
+        .id("dialog");
+        let dim = overlay([dialog])
+            .full()
+            .center()
+            .fill(Color::oklcha(0.0, 0.0, 0.0, 0.45))
+            .backdrop_blur(8.0)
+            .id("dim");
+        overlay([busy, dim]).id("frosted")
+    }
 }
 
 /// A tab welded to a panel: unioned sharp, filleted after, with a shell
@@ -342,7 +395,7 @@ impl PreviewScene for Scrolling {
                 (1.0, Role::Surface.into()),
             ],
         );
-        column(sections)
+        let bands = column(sections)
             .gap(M)
             .pad(M)
             .scroll()
@@ -350,7 +403,31 @@ impl PreviewScene for Scrolling {
             .radius(16.0)
             .fill(Role::Surface)
             .mask(fade)
-            .id("scroll")
+            .id("scroll");
+        // No fade here, so the bar reads the whole way down; and a row, whose
+        // bar runs along the bottom edge.
+        let presets = column((0..30).map(|i| text(format!("preset {i:02}")).pad_xy(8.0, 4.0)))
+            .pad(S)
+            .scroll()
+            .size(160.0, 340.0)
+            .radius(16.0)
+            .fill(Role::Surface)
+            .id("presets");
+        let tags = row((0..24).map(|i| {
+            // A text node's fill is its ink, so the chip is a box around it.
+            row([text(format!("tag {i}"))])
+                .pad(S)
+                .radius(8.0)
+                .fill(Role::Raised)
+        }))
+        .gap(S)
+        .pad(S)
+        .scroll()
+        .size(496.0, 56.0)
+        .radius(12.0)
+        .fill(Role::Surface)
+        .id("tags");
+        column([row([bands, presets]).gap(M), tags]).gap(M)
     }
 }
 
@@ -359,23 +436,37 @@ impl PreviewScene for Scrolling {
 pub struct Fields {
     name: String,
     note: String,
+    notes: Option<String>,
+    submits: usize,
 }
 impl PreviewScene for Fields {
     fn name(&self) -> &'static str {
         "Text"
     }
     fn about(&self) -> &'static str {
-        "Click or Tab to focus, type, arrows and Backspace edit. The label mirrors the first field."
+        "Type, select, edit. Notes wrap; ctrl+Enter submits."
     }
     fn specimen(&mut self, ui: &mut Ui) -> El {
         let name = text_input(ui, "field-name", &mut self.name).0;
         let note = text_input(ui, "field-note", &mut self.note).0;
+        let notes = self.notes.get_or_insert_with(|| {
+            "A take recorded at 120 BPM, trimmed to the second chorus.\n\nWrapped lines, Up and Down between them, and the wheel scrolls past the fourth row once there is more to read than fits.".to_owned()
+        });
+        let opts = TextOpts {
+            newline: Newline::Enter,
+            rows: 4,
+            ..TextOpts::default()
+        };
+        let (notes, edit) = text_edit(ui, "field-notes", notes, opts);
+        self.submits += usize::from(edit.submitted);
         column([
             label("name"),
             name,
             label("note"),
             note,
-            text(format!("name = {}", self.name)).fill(Role::Dim),
+            label("notes"),
+            notes,
+            text(format!("name = {}, submitted {}x", self.name, self.submits)).fill(Role::Dim),
         ])
         .gap(S)
         .pad(L)
@@ -383,6 +474,47 @@ impl PreviewScene for Fields {
         .radius(16.0)
         .fill(Role::Surface)
         .id("fields")
+    }
+}
+
+/// A colour picker and two drag values reading back what they hold.
+pub struct Picker {
+    tint: Color,
+    bpm: f64,
+    gain: f64,
+}
+impl Default for Picker {
+    fn default() -> Self {
+        Self {
+            tint: Color::srgba(0.25, 0.55, 0.95, 0.8),
+            bpm: 120.0,
+            gain: -6.0,
+        }
+    }
+}
+impl PreviewScene for Picker {
+    fn name(&self) -> &'static str {
+        "Picker"
+    }
+    fn about(&self) -> &'static str {
+        "Drag the square and strips. Drag a number, double-click to type."
+    }
+    fn specimen(&mut self, ui: &mut Ui) -> El {
+        let (picker, _) = color_picker(ui, "pick-tint", &mut self.tint, true);
+        let (bpm, _) = drag_value(ui, "pick-bpm", &mut self.bpm, 20.0..=300.0);
+        let bpm = bpm.value_text(format!("{:.1} BPM", self.bpm));
+        let (gain, _) = drag_value(ui, "pick-gain", &mut self.gain, -60.0..=12.0);
+        column([
+            picker,
+            row([label("tempo"), bpm.el(), label("gain"), gain.el()])
+                .gap(S)
+                .align(Align::Center),
+        ])
+        .gap(M)
+        .pad(L)
+        .radius(16.0)
+        .fill(Role::Surface)
+        .id("picker")
     }
 }
 
@@ -812,7 +944,7 @@ impl PreviewScene for Images {
         "Image"
     }
     fn about(&self) -> &'static str {
-        "The icon is a parsed SVG path. The two pills are Fill::Image, uploaded once into vello_hybrid's atlas and painted by id."
+        "The icon is a parsed SVG path. The two pills are Fill::Image, uploaded once into Vello's image atlas."
     }
     fn specimen(&mut self, _: &mut Ui) -> El {
         let icon = Path::from_svg_data(Self::ICON).ok();

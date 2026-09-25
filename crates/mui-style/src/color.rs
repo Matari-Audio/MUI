@@ -198,8 +198,10 @@ fn delta_ok(a: [f32; 3], b: [f32; 3]) -> f32 {
 /// The `color` crate deliberately offers only per-component clipping, which
 /// it documents as perceptually poor, so the search lives here.
 fn gamut_map(v: [f32; 3]) -> [f32; 3] {
-    if in_gamut(v) {
-        return Oklch::convert::<Srgb>(v).map(|c| c.clamp(0.0, 1.0));
+    // Most colours are in gamut: convert once, not once to ask and again.
+    let rgb = Oklch::convert::<Srgb>(v);
+    if rgb.iter().all(|c| (-1e-4..=1.0 + 1e-4).contains(c)) {
+        return rgb.map(|c| c.clamp(0.0, 1.0));
     }
     if !v.iter().all(|c| c.is_finite()) {
         return [0.0, 0.0, 0.0];

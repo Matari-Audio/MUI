@@ -63,6 +63,7 @@ pub use mui_style::{
 };
 pub use mui_text::{Axes, Font, Weight};
 pub mod material_symbols;
+pub use scene::bar;
 pub use scene::{
     resolve_scene, resolve_scene_animated, resolve_scene_cached, resolve_scene_with, Layer,
     Painted, ResolvedScene, ResolvedSurface, SceneError, SceneSpec, Text, TextCache, TextGlyph,

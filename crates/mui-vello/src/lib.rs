@@ -16,20 +16,26 @@ use kurbo::{Affine, BezPath, Rect, Shape as _, Stroke};
 use mui_geometry::Error;
 use mui_scene::{Fit, GradientKind, Layer, Paint, Painted, ResolvedScene, ShadowKind};
 use std::sync::{Arc, Weak};
-use vello_common::image_cache::ImageCache;
-use vello_common::multi_atlas::{AtlasConfig, AtlasError};
-use vello_common::paint::ImageId;
+#[cfg(feature = "gpu-effects")]
+pub use vello;
+#[cfg(feature = "cpu")]
+use vello_common::filter_effects::{EdgeMode, Filter, FilterPrimitive};
 /// The brush type [`Canvas::set_paint`] takes, so the trait can be
 /// implemented outside this crate.
 pub use vello_common::paint::PaintType;
 use vello_common::peniko::color::PremulRgba8;
 use vello_common::peniko::color::{AlphaColor, DynamicColor, Srgb};
-use vello_common::peniko::{Blob, ColorStop, ColorStops, FontData, Gradient, ImageSampler};
+#[cfg(feature = "cpu")]
+use vello_common::peniko::ImageSampler;
+use vello_common::peniko::{Blob, ColorStop, ColorStops, FontData, Gradient};
 use vello_common::pixmap::Pixmap;
 pub use vello_common::{kurbo, peniko};
 #[cfg(feature = "cpu")]
 pub use vello_cpu;
-pub use vello_hybrid;
+#[cfg(feature = "gpu-effects")]
+mod classic;
+#[cfg(feature = "gpu-effects")]
+pub use classic::Classic;
 #[cfg(feature = "gpu-effects")]
 pub mod effects;
 
@@ -120,10 +126,9 @@ pub trait Canvas {
     fn set_paint_transform(&mut self, _t: Affine) {}
     fn reset_paint_transform(&mut self) {}
     /// This image as a brush, or `None` for [`mui_scene::Paint::solid`]'s
-    /// stand-in. `vello_cpu` takes the pixmap itself; `vello_hybrid` wants
-    /// an atlas id and *panics* on a pixmap, so [`Gpu`] uploads through its
-    /// [`Atlas`] and says `None` without one. A canvas with no image support
-    /// keeps this default and paints the stand-in.
+    /// stand-in. `vello_cpu` takes the pixmap itself, [`Classic`] the
+    /// buffer as Vello's image. A canvas with no image support keeps this
+    /// default and paints the stand-in.
     fn image(&mut self, _img: &mui_scene::Image) -> Option<PaintType> {
         None
     }
@@ -145,11 +150,20 @@ pub trait Canvas {
     /// that asks for it, not one per node.
     fn push_layer(&mut self, blend: peniko::BlendMode, opacity: f32);
     fn pop_layer(&mut self);
+    /// Two layers, closed by two [`Canvas::pop_layer`]s: one clipped to
+    /// `clip`, and inside it one that composites through a Gaussian blur of
+    /// `std_dev`, in the space of the current transform. `false`, having pushed
+    /// nothing, on a canvas without filter layers: a [`Layer::Backdrop`]
+    /// then leaves the backdrop sharp.
+    fn push_blur(&mut self, _clip: &BezPath, _std_dev: f32) -> bool {
+        false
+    }
     /// Draw a hinted glyph run in the current paint, each glyph's `x`
     /// measured from the run's origin along the baseline.
     fn glyphs(&mut self, text: &mui_scene::Text);
 }
 
+#[cfg(feature = "cpu")]
 fn run(
     origin: mui_geometry::Point,
     glyphs: &[mui_scene::TextGlyph],
@@ -162,28 +176,9 @@ fn run(
     })
 }
 
-/// A `vello_hybrid` scene together with the resources its glyph cache lives
-/// in, the [`Cache`] of its renderer, and optionally the [`Atlas`] that lets
-/// image fills reach the GPU.
-pub struct Gpu<'a> {
-    pub scene: &'a mut vello_hybrid::Scene,
-    pub resources: &'a mut vello_hybrid::Resources,
-    pub cache: &'a mut Cache,
-    pub atlas: Option<Atlas<'a>>,
-}
-
-/// What uploading an image into `vello_hybrid`'s atlas takes: the renderer
-/// that owns the texture and the device and queue to write it with. What has
-/// been uploaded already lives in the [`Cache`] beside it.
-pub struct Atlas<'a> {
-    pub renderer: &'a mut vello_hybrid::Renderer,
-    pub device: &'a wgpu::Device,
-    pub queue: &'a wgpu::Queue,
-}
-
 /// What one renderer remembers between frames on MUI's side: a [`FontData`]
 /// per font and an entry per image buffer. Keep it next to the renderer it
-/// serves -- an atlas id means nothing to any other one -- and drop it with
+/// serves and drop it with
 /// that renderer.
 #[derive(Default)]
 pub struct Cache {
@@ -203,13 +198,6 @@ pub struct Cache {
     /// allocation, which is what keeps the address a sound key.
     // ponytail: linear scan, bounded by the live image count.
     images: Vec<(Weak<[u8]>, Stored)>,
-    /// A mirror of `vello_hybrid`'s image-atlas allocator: `upload_image`
-    /// unwraps a full atlas, and its own allocator is private. Built lazily
-    /// from the device limits the way `Renderer::new` builds the real one.
-    /// Exact because `Gpu` keeps the glyph atlas off, and as long as
-    /// `atlas_config` is the one the renderer was built with.
-    atlas: Option<ImageCache>,
-    atlas_config: AtlasConfig,
 }
 
 #[derive(Clone, Copy)]
@@ -226,22 +214,12 @@ enum Stored {
     /// Only the CPU canvas stores pixmaps.
     #[cfg_attr(not(feature = "cpu"), allow(dead_code))]
     Pixmap(Arc<Pixmap>),
-    Atlas {
-        id: ImageId,
-        clear: bool,
-    },
+    /// Only the GPU canvas stores these.
+    #[cfg(feature = "gpu-effects")]
+    Image(vello::peniko::ImageData),
 }
 
 impl Cache {
-    /// A cache for a renderer built with `Renderer::new_with` and this image
-    /// atlas config; `Cache::default()` matches `Renderer::new`.
-    pub fn for_atlas(atlas_config: AtlasConfig) -> Self {
-        Self {
-            atlas_config,
-            ..Self::default()
-        }
-    }
-
     /// Start a frame: fonts unused for [`FONT_FRAMES`] frames go.
     fn tick(&mut self) {
         self.frame += 1;
@@ -283,45 +261,13 @@ impl Cache {
         self.images.push((Arc::downgrade(rgba), stored));
     }
 
-    /// Drop every entry whose buffer the app has let go of; `gone` sees each
-    /// atlas slot that frees.
-    fn sweep(&mut self, mut gone: impl FnMut(ImageId)) {
-        let atlas = &mut self.atlas;
-        self.images.retain(|(k, s)| {
-            if k.strong_count() > 0 {
-                return true;
-            }
-            if let Stored::Atlas { id, .. } = *s {
-                if let Some(a) = atlas.as_mut() {
-                    a.deallocate(id);
-                }
-                gone(id);
-            }
-            false
-        });
-    }
-
-    /// Room in the atlas for a `w` x `h` image, or why there is none. After
-    /// an `Ok`, `Renderer::upload_image` makes the same allocation and so
-    /// cannot reach its `unwrap`.
-    fn reserve(&mut self, limits: &wgpu::Limits, w: u32, h: u32) -> Result<ImageId, AtlasError> {
-        let config = self.atlas_config;
-        self.atlas
-            .get_or_insert_with(|| {
-                // `MemorySettings::normalize`, which `Renderer::new` applies.
-                let mut config = config;
-                let side = limits.max_texture_dimension_2d.max(1);
-                config.atlas_size = (config.atlas_size.0.min(side), config.atlas_size.1.min(side));
-                config.max_atlases = config
-                    .max_atlases
-                    .min(limits.max_texture_array_layers as usize);
-                config.initial_atlas_count = config.initial_atlas_count.min(config.max_atlases);
-                ImageCache::new_with_config(config)
-            })
-            .allocate(w, h, 0)
+    /// Drop every entry whose buffer the app has let go of.
+    fn sweep(&mut self) {
+        self.images.retain(|(k, _)| k.strong_count() > 0);
     }
 }
 
+#[cfg(feature = "cpu")]
 macro_rules! wrapper {
     ($inner:ident, $atlas:expr) => {
         fn begin_frame(&mut self) {
@@ -398,73 +344,10 @@ macro_rules! wrapper {
     };
 }
 
-impl Canvas for Gpu<'_> {
-    fn image(&mut self, img: &mui_scene::Image) -> Option<PaintType> {
-        let Atlas {
-            renderer,
-            device,
-            queue,
-        } = self.atlas.as_mut()?;
-        // One encoder for the frees and the upload, submitted now: the queue
-        // keeps it ahead of the frame that paints with the id.
-        let mut enc = None;
-        let mut encoder = || device.create_command_encoder(&Default::default());
-        let resources = &mut *self.resources;
-        self.cache.sweep(|id| {
-            renderer.destroy_image(resources, enc.get_or_insert_with(&mut encoder), id)
-        });
-        let found = match self.cache.find(&img.rgba) {
-            Some(&Stored::Atlas { id, clear }) => Some((id, clear)),
-            _ => size(img).and_then(|(w, h)| {
-                // Refused here rather than inside `upload_image`, which
-                // unwraps: a full atlas would abort the host, and in a plugin
-                // the DAW with it. The paint falls back to its solid -- and
-                // asks again next frame, so the room is checked before the
-                // photo is premultiplied, not after.
-                let want = self
-                    .cache
-                    .reserve(&device.limits(), w.into(), h.into())
-                    .ok()?;
-                let p = premultiplied(img, w, h);
-                let id = renderer.upload_image(
-                    resources,
-                    device,
-                    queue,
-                    enc.get_or_insert_with(&mut encoder),
-                    &p,
-                );
-                debug_assert_eq!(id, want, "the atlas mirror drifted from the renderer");
-                let clear = p.may_have_transparency();
-                self.cache.remember(&img.rgba, Stored::Atlas { id, clear });
-                Some((id, clear))
-            }),
-        };
-        if let Some(enc) = enc {
-            queue.submit([enc.finish()]);
-        }
-        let (id, clear) = found?;
-        Some(
-            vello_common::paint::Image {
-                image: vello_common::paint::ImageSource::OpaqueId {
-                    id,
-                    may_have_transparency: clear,
-                },
-                sampler: ImageSampler::default(),
-            }
-            .into(),
-        )
-    }
-    // ponytail: no glyph atlas here. `vello_hybrid` keeps glyphs in the same
-    // private allocator as images, and `upload_image` unwraps a full one, so
-    // the `Cache` mirror that keeps that unwrap unreachable must see every
-    // allocation. Turn it on when `upload_image` returns a `Result`.
-    wrapper!(scene, false);
-}
-
 #[cfg(feature = "cpu")]
 impl Canvas for Cpu<'_> {
     fn image(&mut self, img: &mui_scene::Image) -> Option<PaintType> {
-        self.cache.sweep(|_| {});
+        self.cache.sweep();
         let p = match self.cache.find(&img.rgba) {
             Some(Stored::Pixmap(p)) => p.clone(),
             _ => {
@@ -481,6 +364,15 @@ impl Canvas for Cpu<'_> {
             .into(),
         )
     }
+    fn push_blur(&mut self, clip: &BezPath, std_dev: f32) -> bool {
+        // `vello_cpu` panics on a filter layer in a multi-threaded context.
+        let one_thread = self.ctx.render_settings().num_threads == 0;
+        if one_thread {
+            self.ctx.push_clip_layer(clip);
+            self.ctx.push_filter_layer(blur(std_dev));
+        }
+        one_thread
+    }
     // `vello_cpu` keeps its glyph atlas apart from images: nothing to mirror.
     wrapper!(ctx, true);
 }
@@ -492,6 +384,17 @@ pub struct Cpu<'a> {
     pub ctx: &'a mut vello_cpu::RenderContext,
     pub resources: &'a mut vello_cpu::Resources,
     pub cache: &'a mut Cache,
+}
+
+#[cfg(feature = "cpu")]
+/// The one filter MUI asks for. `Duplicate` edges, because the backdrop
+/// stops at the window, and fading it to transparent there would darken the
+/// frosted glass along every screen edge.
+fn blur(std_dev: f32) -> Filter {
+    Filter::from_primitive(FilterPrimitive::GaussianBlur {
+        std_deviation: std_dev,
+        edge_mode: EdgeMode::Duplicate,
+    })
 }
 
 fn srgb(c: mui_scene::Color) -> AlphaColor<Srgb> {
@@ -619,19 +522,103 @@ pub fn paint(
     transform: Affine,
 ) -> Result<(), Error> {
     // A CPU/sink Canvas must not silently omit external GPU paint. Use
-    // effects::HybridEffects for scenes containing native material surfaces.
+    // effects::GpuRenderer for scenes containing native material surfaces.
     if scene.paint.iter().any(|p| p.layer == Layer::External) {
         return Err(Error::InvalidPath);
     }
     canvas.begin_frame();
     canvas.set_transform(transform);
     let mut bez = BezPath::new();
-    for p in &scene.paint {
+    for (i, p) in scene.paint.iter().enumerate() {
         if layered(canvas, p) {
             continue;
         }
         bez_path_into(&p.path, ARC_TOLERANCE, &mut bez)?;
-        one(canvas, p, &bez)?;
+        if p.layer == Layer::Backdrop {
+            backdrop(canvas, &scene.paint[..i], p, &bez)?;
+        } else {
+            one(canvas, p, &bez)?;
+        }
+    }
+    Ok(())
+}
+
+/// A [`Layer::Backdrop`]: `below` -- everything the list painted before it
+/// -- painted again inside `outline`, through a blur layer.
+///
+/// `vello_cpu` cannot read back what it has drawn, so this is the whole
+/// trick: the prefix again, convolved. The GPU renderer renders the same
+/// [`replay`] into a texture of its own and blurs that instead; both pay
+/// it when the list changes, not per presented frame.
+// ponytail: a backdrop inside `below` is not blurred again in the replay
+// (its dim still paints), so k modals cost k prefixes, not 2^k. External
+// welds are skipped too: `paint` cannot draw them, and the retained renderer
+// would need its texture ids here. Blur them when a weld sits under a modal.
+fn backdrop(
+    canvas: &mut impl Canvas,
+    below: &[Painted],
+    p: &Painted,
+    outline: &BezPath,
+) -> Result<(), Error> {
+    // NaN and negatives say nothing, as a zero does.
+    if p.blur.is_nan() || p.blur <= 0.0 {
+        return Ok(());
+    }
+    // What the blur can pull in: three standard deviations past the outline.
+    let reach = outline.bounding_box().inflate(3. * p.blur, 3. * p.blur);
+    if canvas.push_blur(outline, p.blur as f32) {
+        replay(canvas, below, reach)?;
+        canvas.pop_layer();
+        canvas.pop_layer();
+    }
+    Ok(())
+}
+
+/// `below` painted again as far as it can reach `reach`, bar what an open
+/// ancestor already applies.
+pub(crate) fn replay(
+    canvas: &mut impl Canvas,
+    below: &[Painted],
+    reach: Rect,
+) -> Result<(), Error> {
+    // A clip or layer the prefix opens and never closes is an ancestor's:
+    // its clip already bounds this node and its layer composites it, so
+    // replaying it would apply it twice -- an ancestor's opacity squared.
+    let mut open = Vec::new();
+    for (i, q) in below.iter().enumerate() {
+        match q.layer {
+            Layer::Clip | Layer::Blend { .. } => open.push(i),
+            Layer::Unclip | Layer::Unblend => {
+                open.pop();
+            }
+            _ => {}
+        }
+    }
+    let mut ancestors = open.into_iter().peekable();
+    let mut bez = BezPath::new();
+    for (i, q) in below.iter().enumerate() {
+        if ancestors.next_if_eq(&i).is_some()
+            || matches!(q.layer, Layer::Backdrop | Layer::External)
+            || layered(canvas, q)
+        {
+            continue;
+        }
+        bez_path_into(&q.path, ARC_TOLERANCE, &mut bez)?;
+        // Only plain paint is culled: clips, masks and shadows reach
+        // past their path's box, and are few.
+        let plain = matches!(
+            q.layer,
+            Layer::Fill | Layer::Shell(_) | Layer::Stroke | Layer::Text | Layer::Draw(_)
+        );
+        let em = q.text.as_ref().map_or(0., |t| f64::from(t.size));
+        let reaches = || {
+            paint_box(q, &bez)
+                .inflate(q.width + em, q.width + em)
+                .overlaps(reach)
+        };
+        if !plain || reaches() {
+            one(canvas, q, &bez)?;
+        }
     }
     Ok(())
 }
@@ -697,6 +684,11 @@ fn mix(m: mui_scene::Mix) -> peniko::Mix {
 }
 
 fn one(canvas: &mut impl Canvas, p: &Painted, path: &BezPath) -> Result<(), Error> {
+    // Needs the list before it; see `backdrop`. A caller without one (a
+    // tile, which cannot see past its edge) leaves the backdrop sharp.
+    if p.layer == Layer::Backdrop {
+        return Ok(());
+    }
     if p.layer == Layer::Clip {
         canvas.push_clip(path);
         return Ok(());
@@ -809,31 +801,9 @@ mod seam {
             width: 4,
             height: 4,
             rgba: Arc::from(&[0u8, 0, 0, 255][..]),
+            texture: None,
         };
         assert!(premultiply(&image).is_none());
-    }
-
-    /// The GPU path's bookkeeping holds no strong reference to the app's
-    /// buffer, so dropping it frees the buffer at once and its atlas slot on
-    /// the next lookup. The old path kept a clone in the global pixmap cache
-    /// *and* one in the atlas ids, and each waited for the other to let go.
-    #[test]
-    fn a_dropped_buffer_frees_its_atlas_slot() {
-        let limits = wgpu::Limits::downlevel_defaults();
-        let mut cache = Cache::default();
-        let rgba: Arc<[u8]> = Arc::from(&[1u8, 2, 3, 255][..]);
-        let id = cache.reserve(&limits, 1, 1).unwrap();
-        cache.remember(&rgba, Stored::Atlas { id, clear: false });
-        assert!(matches!(cache.find(&rgba), Some(Stored::Atlas { .. })));
-        let gone = Arc::downgrade(&rgba);
-        drop(rgba);
-        assert!(gone.upgrade().is_none(), "the cache kept the buffer alive");
-        let mut freed = Vec::new();
-        cache.sweep(|id| freed.push(id));
-        assert_eq!(freed, [id]);
-        assert!(cache.images.is_empty());
-        // The mirror gave the slot back too: the same id comes round again.
-        assert_eq!(cache.reserve(&limits, 1, 1).unwrap(), id);
     }
 
     /// A font unused for `FONT_FRAMES` frames lets go of its `FontData`; one
@@ -858,21 +828,6 @@ mod seam {
         cache.tick();
         assert_eq!(cache.fonts.len(), 1, "the idle font is still held");
         assert_eq!(cache.font(&kept).0.data.id(), first.data.id());
-    }
-
-    /// A full atlas is an error from `reserve`, not the `unwrap` inside
-    /// `upload_image`, and an image bigger than one atlas page never fits.
-    #[test]
-    fn a_full_atlas_is_refused_rather_than_panicking() {
-        let limits = wgpu::Limits {
-            max_texture_dimension_2d: 64,
-            max_texture_array_layers: 1,
-            ..wgpu::Limits::downlevel_defaults()
-        };
-        let mut cache = Cache::default();
-        assert!(cache.reserve(&limits, 65, 1).is_err());
-        assert!(cache.reserve(&limits, 64, 64).is_ok());
-        assert!(cache.reserve(&limits, 1, 1).is_err(), "the atlas is full");
     }
 
     /// A gradient-filled label still gets a box to fit the gradient to,

@@ -1,7 +1,7 @@
 //! Native GPU conformance. Failure to get an adapter is a FAILURE, not a skipped
 //! passing test. Software adapters are allowed for correctness, and named.
 use mui_vello::{
-    effects::{Budget, HybridEffects},
+    effects::{Budget, GpuRenderer},
     kurbo::Affine,
 };
 #[allow(dead_code)]
@@ -28,7 +28,7 @@ async fn run() -> gpu_support::Result<()> {
         let paint = scene.paint.clone();
         let texture = gpu_support::target(&device, size);
         let view = texture.create_view(&Default::default());
-        let mut renderer = HybridEffects::new(
+        let mut renderer = GpuRenderer::new(
             &device,
             &queue,
             wgpu::TextureFormat::Rgba8Unorm,
@@ -84,197 +84,6 @@ async fn run() -> gpu_support::Result<()> {
         gpu_support::save(&dir.join(format!("merged-{scale}.png")), size, &a)?;
         gpu_support::save(&dir.join(format!("separate-{scale}.png")), size, &b)?;
         println!("PASS scale={scale} static-reuse morph-16B no-relayout paint-order pixels");
-    }
-    tile_contract(&device, &queue).await?;
-    Ok(())
-}
-
-async fn tile_contract(device: &wgpu::Device, queue: &wgpu::Queue) -> gpu_support::Result<()> {
-    use mui_scene::prelude::*;
-    use mui_vello::effects::TiledEffects;
-    let make = |scale: f64| {
-        let group = stack![
-            leaf(120., 90.)
-                .fill(Primary)
-                .radius(20.)
-                .border(Ink, 2.)
-                .id("a"),
-            leaf(110., 70.)
-                .fill(Secondary)
-                .radius(15.)
-                .border(Ink, 4.)
-                .offset(80., 20.)
-                .id("b")
-        ]
-        .size(190., 100.)
-        .gpu_weld(Weld::crisp().blend(60.))
-        .id("join");
-        let root = stack![
-            group.anchor(Align::Start, Align::Start).offset(40., 50.),
-            text("Retained glyphs: AV 123")
-                .float()
-                .offset(320., 80.)
-                .id("label"),
-            leaf(80., 24.)
-                .fill(Ink)
-                .float()
-                .offset(100., 100.)
-                .id("front")
-        ]
-        .size(900., 500.)
-        .fill(Surface)
-        .opacity(0.8);
-        let mut spec = SceneSpec::new(root).scale(scale);
-        spec.font = Some(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
-        resolve_scene(&spec).unwrap()
-    };
-    for scale in [1., 1.5, 2.] {
-        let mut scene = make(scale);
-        let size = [(900. * scale) as u32, (500. * scale) as u32];
-        let a = gpu_support::target(device, size);
-        let b = gpu_support::target(device, size);
-        let c = gpu_support::target(device, size);
-        // Enough for guarded tiles, but not an additional viewport texture.
-        let tile_budget = u64::from(size[0].div_ceil(256) * size[1].div_ceil(256)) * 260 * 260 * 4;
-        let mut per_tile = TiledEffects::new(
-            device,
-            queue,
-            wgpu::TextureFormat::Rgba8Unorm,
-            size,
-            Budget::default(),
-            tile_budget,
-        )
-        .await?;
-        let mut full = HybridEffects::new(
-            device,
-            queue,
-            wgpu::TextureFormat::Rgba8Unorm,
-            size,
-            Budget::default(),
-        )
-        .await?;
-        let mut tiles = TiledEffects::new(
-            device,
-            queue,
-            wgpu::TextureFormat::Rgba8Unorm,
-            size,
-            Budget::default(),
-            64 * 1024 * 1024,
-        )
-        .await?;
-        for (frame, progress) in [1., 1., 0.4, 0.].into_iter().enumerate() {
-            scene.set_weld_morph("join", progress)?;
-            full.render(
-                &scene,
-                Affine::scale(scale),
-                &a.create_view(&Default::default()),
-            )?;
-            tiles.render(
-                &scene,
-                Affine::scale(scale),
-                &b.create_view(&Default::default()),
-            )?;
-            per_tile.render(
-                &scene,
-                Affine::scale(scale),
-                &c.create_view(&Default::default()),
-            )?;
-            assert!(!per_tile.stats().full_redraw, "small budget must use tiles");
-            if frame == 0 {
-                assert!(tiles.stats().full_redraw);
-                assert_eq!(tiles.stats().tile_submissions, 1);
-                assert_eq!(
-                    per_tile.stats().tile_submissions,
-                    per_tile.stats().total_tiles
-                );
-            } else {
-                assert!(
-                    !tiles.stats().full_redraw,
-                    "local/idle update must retain tiles"
-                );
-            }
-            let x = gpu_support::readback(device, queue, &a, size)?;
-            let y = gpu_support::readback(device, queue, &b, size)?;
-            let z = gpu_support::readback(device, queue, &c, size)?;
-            let tile_delta = y
-                .iter()
-                .zip(&z)
-                .map(|(a, b)| a.abs_diff(*b))
-                .max()
-                .unwrap_or(0);
-            assert!(
-                tile_delta <= 2,
-                "full/per-tile parity at {scale}: {tile_delta}"
-            );
-            let max = x
-                .iter()
-                .zip(&y)
-                .map(|(a, b)| a.abs_diff(*b))
-                .max()
-                .unwrap_or(0);
-            assert!(
-                max <= 2,
-                "tile/premul/guard-band parity failed at {scale}: {max}/255"
-            );
-        }
-        tiles.render(
-            &scene,
-            Affine::scale(scale),
-            &b.create_view(&Default::default()),
-        )?;
-        assert_eq!(tiles.stats().dirty_tiles, 0, "idle tile raster");
-        scene.set_weld_morph("join", 0.8)?;
-        tiles.render(
-            &scene,
-            Affine::scale(scale),
-            &b.create_view(&Default::default()),
-        )?;
-        assert!(
-            tiles.stats().dirty_tiles > 0 && tiles.stats().dirty_tiles < tiles.stats().total_tiles,
-            "local effect invalidated the whole editor"
-        );
-        // Switching back to full redraw must refresh every cached tile.
-        tiles.invalidate();
-        tiles.render(
-            &scene,
-            Affine::scale(scale),
-            &b.create_view(&Default::default()),
-        )?;
-        assert!(tiles.stats().full_redraw);
-        assert_eq!(tiles.stats().tile_submissions, 1);
-        full.render(
-            &scene,
-            Affine::scale(scale),
-            &a.create_view(&Default::default()),
-        )?;
-        let x = gpu_support::readback(device, queue, &a, size)?;
-        let y = gpu_support::readback(device, queue, &b, size)?;
-        assert!(x.iter().zip(&y).all(|(a, b)| a.abs_diff(*b) <= 2));
-        for resized in [[1, 1], [513, 257], size] {
-            full.resize(resized)?;
-            tiles.resize(resized)?;
-            let a = gpu_support::target(device, resized);
-            let b = gpu_support::target(device, resized);
-            full.render(
-                &scene,
-                Affine::scale(scale),
-                &a.create_view(&Default::default()),
-            )?;
-            tiles.render(
-                &scene,
-                Affine::scale(scale),
-                &b.create_view(&Default::default()),
-            )?;
-            assert_eq!(tiles.stats().dirty_tiles, tiles.stats().total_tiles);
-            assert_eq!(tiles.stats().tile_submissions, 1);
-            let x = gpu_support::readback(device, queue, &a, resized)?;
-            let y = gpu_support::readback(device, queue, &b, resized)?;
-            assert!(
-                x.iter().zip(&y).all(|(a, b)| a.abs_diff(*b) <= 2),
-                "resize parity {resized:?}"
-            );
-        }
-        println!("PASS tile reference/parity/idle/local/full/budget/resize scale={scale}");
     }
     Ok(())
 }

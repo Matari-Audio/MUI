@@ -17,7 +17,7 @@ impl Point {
         self.x * b.y - self.y * b.x
     }
     pub(crate) fn length(self) -> f64 {
-        self.x.hypot(self.y)
+        self.dot(self).sqrt()
     }
     pub(crate) fn validate(self) -> Result<(), Error> {
         if !self.x.is_finite() || !self.y.is_finite() || self.x.abs() > 1e7 || self.y.abs() > 1e7 {

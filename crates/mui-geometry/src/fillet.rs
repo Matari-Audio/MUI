@@ -1,4 +1,4 @@
-use crate::math::{point_segment_distance, signed_area};
+use crate::math::{point_segment_distance2, signed_area};
 use crate::{Arc, Error, Path, PathCommand, Point, RingKind, Topology};
 use std::f64::consts::PI;
 
@@ -189,18 +189,21 @@ pub fn fillet(topology: &Topology, style: Fillet) -> Result<RoundedShape, Error>
             } else {
                 style.concave_radius
             };
+            // Squared throughout; one root at the end.
             let mut clearance = f64::INFINITY;
             for (rj, other) in topology.rings.iter().enumerate() {
                 for (j, &q) in other.points.iter().enumerate() {
                     if ri != rj || i != j {
-                        clearance = clearance.min(p.distance(q));
+                        let d = p - q;
+                        clearance = clearance.min(d.dot(d));
                     }
                     let k = (j + 1) % other.points.len();
                     if ri != rj || (j != i && k != i) {
-                        clearance = clearance.min(point_segment_distance(p, q, other.points[k]));
+                        clearance = clearance.min(point_segment_distance2(p, q, other.points[k]));
                     }
                 }
             }
+            let clearance = clearance.sqrt();
             // Straight points and near-180-degree cusps remain sharp. Avoid an
             // ill-conditioned circle center; no fabricated zero-vector normals.
             let valid = turn.abs() > 1e-8 && turn.abs() < PI - 1e-6;

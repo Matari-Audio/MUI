@@ -2,12 +2,12 @@
 //! the one place an entry is pushed.
 use std::sync::Arc;
 
-use mui_geometry::{inset_path, BooleanOp, Bounds, Path, Point, RoundedRect};
+use mui_geometry::{BooleanOp, Bounds, Path, Point, RoundedRect};
 
 use super::outline::Contour;
 use super::{empty, find, Layer, Painted, SceneError, Walk};
 use crate::material_weld::MaterialWeld;
-use crate::regions::{Operation, STROKE_BAND};
+use crate::regions::{Operation, RAMP_OUTSIDE, SHELL, STROKE_BAND};
 use crate::{BorderRamp, Color, Content, El, Element, Fill, Paint, Radius, Shadow, ShadowKind};
 use crate::{Stroke, Style};
 
@@ -115,10 +115,15 @@ impl Walk<'_> {
                     Arc::new(child.path())
                 }
                 None => {
-                    let i2 =
-                        inset_path(cur.as_ref().unwrap_or(&contour.path), d, self.spec.offsets)?;
-                    contour.changed |= i2.counts_changed;
-                    cur.insert(Arc::new(i2.path)).clone()
+                    let from = (**cur.as_ref().unwrap_or(&contour.path)).clone();
+                    let (path, changed) = self.region_cache.resolve_counted(
+                        (self.key.clone(), SHELL.wrapping_add(i as u8)),
+                        Operation::Inset(from, d),
+                        self.spec.offsets,
+                        self.spec.geometry,
+                    )?;
+                    contour.changed |= changed;
+                    cur.insert(Arc::new(path)).clone()
                 }
             };
             bg = solid(self.push(Layer::Shell(i), shell, cur_rect, f, bg), bg);
@@ -304,12 +309,9 @@ impl Walk<'_> {
         }
         if ramp.align == crate::BorderAlign::Outside {
             let merged = self.cached_region((self.key.clone(), 7), Operation::Sweep(band))?;
-            band = mui_geometry::boolean_paths(
-                &merged,
-                &contour.path,
-                BooleanOp::Difference,
-                self.spec.offsets,
-                self.spec.geometry,
+            band = self.cached_region(
+                (self.key.clone(), RAMP_OUTSIDE),
+                Operation::Combine(merged, (*contour.path).clone(), BooleanOp::Difference),
             )?;
         }
         let Some(bounds) = Bounds::from_points(band.flatten(0.1, 250_000)?.concat()) else {

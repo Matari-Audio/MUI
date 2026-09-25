@@ -77,6 +77,14 @@ impl Id {
             Repr::Long(s) => s,
         }
     }
+    /// The same bytes as [`Id::as_str`] without its UTF-8 check: comparing
+    /// two ids needs no `str`, and a layout compares thousands.
+    fn bytes(&self) -> &[u8] {
+        match &self.0 {
+            Repr::Inline { buf, len } => &buf[..*len as usize],
+            Repr::Long(s) => s.as_bytes(),
+        }
+    }
 
     /// One more segment, by index: the *n*th card in a rack.
     ///
@@ -177,7 +185,7 @@ impl std::fmt::Display for Id {
 }
 impl PartialEq for Id {
     fn eq(&self, other: &Self) -> bool {
-        self.as_str() == other.as_str()
+        self.bytes() == other.bytes()
     }
 }
 impl Eq for Id {}
@@ -188,7 +196,8 @@ impl PartialOrd for Id {
 }
 impl Ord for Id {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.as_str().cmp(other.as_str())
+        // UTF-8 orders bytewise as `str` does.
+        self.bytes().cmp(other.bytes())
     }
 }
 impl std::hash::Hash for Id {

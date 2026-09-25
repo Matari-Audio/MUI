@@ -223,8 +223,8 @@ impl Hit {
             .rev()
             .find(|t| {
                 inside(&t.clip)
-                    && t.clip_paths.iter().all(|clip| clip.winding(q) != 0)
                     && t.bounds.contains(q)
+                    && t.clip_paths.iter().all(|clip| clip.winding(q) != 0)
                     && contains(&t.id, t.tag.as_deref(), p)
                         .unwrap_or_else(|| t.path.winding(q) != 0)
             })
@@ -470,6 +470,18 @@ pub struct Response {
     /// Pointer travel since the press, zero unless dragging. Distinct from
     /// [`Response::drag_delta`], which is this frame alone.
     pub drag_total: Point,
+    /// This frame's press was the second of a double click on this target.
+    /// [`Interaction`] has no clock, so it never sets this; the runtime that
+    /// owns one (`mui::Ui::get`) does.
+    pub double_clicked: bool,
+    /// The wheel this frame, in scene units (positive right and down), while
+    /// the pointer is inside this target's frame. Zero otherwise, so a zoom
+    /// may add it unconditionally. Filled in by the runtime, like
+    /// [`Response::double_clicked`].
+    pub wheel: Point,
+    /// Enter or Space reached this target while it held the keyboard focus:
+    /// the keyboard's click. Filled in by the runtime.
+    pub key_activated: bool,
 }
 
 /// Which way a drag is mostly going. Returned by [`Response::drag_axis`].
@@ -534,6 +546,19 @@ impl Response {
     #[must_use]
     pub fn clicked_with(&self, b: Button) -> bool {
         self.clicked && self.button == Some(b)
+    }
+
+    /// The control's primary action fired: a primary click, or Enter or
+    /// Space while focused. What a button means by "pressed".
+    ///
+    /// ```
+    /// # use mui_input::Response;
+    /// let r = Response { key_activated: true, ..Response::default() };
+    /// assert!(r.activated());
+    /// ```
+    #[must_use]
+    pub fn activated(&self) -> bool {
+        self.clicked_with(Button::Primary) || self.key_activated
     }
 }
 
@@ -767,6 +792,9 @@ impl Interaction {
                 (true, Some(now), Some(origin)) => now - origin,
                 _ => Point::ZERO,
             },
+            double_clicked: false,
+            wheel: Point::ZERO,
+            key_activated: false,
         }
     }
 

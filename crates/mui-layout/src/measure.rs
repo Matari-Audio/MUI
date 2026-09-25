@@ -8,11 +8,14 @@ use super::*;
 
 pub(crate) struct Measured<'a, P> {
     pub(crate) node: &'a Node<P>,
-    pub(crate) memo_id: u64,
+    /// What the layout cache holds for this subtree; `None` without one.
+    pub(crate) frozen: Option<std::sync::Arc<crate::incremental::Frozen>>,
     /// Slot among the parent's children, so a reordered placement can be
     /// written back to the declaration order the frames keep.
     pub(crate) index: usize,
     pub(crate) gap: f64,
+    /// `line_gap` resolved: the gap between wrapped lines and grid rows.
+    pub(crate) line_gap: f64,
     pub(crate) padding: Insets,
     pub(crate) size: Size,
     /// The smallest this subtree may be squeezed to: every minimum in it,
@@ -41,8 +44,18 @@ pub(crate) struct Measured<'a, P> {
 /// The sort is stable, so `order` only moves what asked to be moved.
 pub(crate) fn flow_of<'a, 'm, P>(children: &'m [Measured<'a, P>]) -> Vec<&'m Measured<'a, P>> {
     let mut flow: Vec<_> = children.iter().filter(|c| !c.node.float).collect();
-    flow.sort_by_key(|c| c.node.order);
+    if !flow.is_sorted_by_key(|c| c.node.order) {
+        flow.sort_by_key(|c| c.node.order);
+    }
     flow
+}
+
+/// The smaller of two optional extents; `None` is unbounded.
+fn narrower(a: Option<f64>, b: Option<f64>) -> Option<f64> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (a, b) => a.or(b),
+    }
 }
 
 /// Greedy line breaking: ranges into `flow`, each as long as it fits `avail`.
@@ -228,7 +241,7 @@ pub(crate) struct Pass<'a, 'f, P> {
     pub(crate) left: usize,
     pub(crate) limits: Limits,
     pub(crate) scale: SpacingScale,
-    pub(crate) keys: BTreeMap<&'a str, ()>,
+    pub(crate) keys: rustc_hash::FxHashSet<&'a str>,
     /// Inside a re-measure: ids are already checked and the subtree is being
     /// measured a second time at its final main size.
     pub(crate) redo: bool,
@@ -267,10 +280,18 @@ pub(crate) fn measure_uncached<'a, P>(
     if !pass.redo {
         pass.left -= 1;
     }
-    validate_node(node, l)?;
+    // The cache's prepass has already validated every node.
+    if pass.cache.is_none() {
+        validate_node(node, l)?;
+    }
     let padding = boxed.unwrap_or_else(|| node.padding(pass.scale));
     let gap = node.gap.resolve(pass.scale);
-    if !(gap.is_finite() && (0.0..=l.extent).contains(&gap) && padding.valid(l.extent)) {
+    let line_gap = node.line_gap.map_or(gap, |g| g.resolve(pass.scale));
+    if !([gap, line_gap]
+        .iter()
+        .all(|g| g.is_finite() && (0.0..=l.extent).contains(g))
+        && padding.valid(l.extent))
+    {
         return Err(Error::InvalidValue);
     }
     if let Some(id) = node
@@ -278,7 +299,7 @@ pub(crate) fn measure_uncached<'a, P>(
         .as_deref()
         .filter(|_| !pass.redo && pass.cache.is_none())
     {
-        if pass.keys.insert(id, ()).is_some() {
+        if !pass.keys.insert(id) {
             return Err(Error::DuplicateKey(id.to_string()));
         }
     }
@@ -311,10 +332,7 @@ pub(crate) fn measure_uncached<'a, P>(
         definite[0].map(|w| (w - padding.horizontal()).max(0.0)),
         definite[1].map(|h| (h - padding.vertical()).max(0.0)),
     ];
-    let room = [room.map(|r| (r - padding.horizontal()).max(0.0)), inner[0]]
-        .into_iter()
-        .flatten()
-        .reduce(f64::min);
+    let room = narrower(room.map(|r| (r - padding.horizontal()).max(0.0)), inner[0]);
     // A grid's column count is settled once, before anything is offered a
     // column's worth of room: `min_col` makes the declared count a ceiling and
     // drops columns until each one clears it. Everything downstream reads
@@ -385,7 +403,7 @@ pub(crate) fn measure_uncached<'a, P>(
                     ((w - gap * (cols - 1) as f64).max(0.0) / cols as f64) * span
                         + gap * (span - 1.0)
                 });
-                child_room = [child_room, col].into_iter().flatten().reduce(f64::min);
+                child_room = narrower(child_room, col);
                 [offer(c, false, col, sub[0], ax == Align::Stretch), None]
             }
             _ => [None; 2],
@@ -395,17 +413,17 @@ pub(crate) fn measure_uncached<'a, P>(
         children.push(m);
     }
     // Largest first, so the first candidate that clears both offered axes is
-    // the richest one that fits. An axis with no offer never rejects.
+    // the richest one that fits. An axis with no offer never rejects. A float
+    // is no candidate: it floats over whichever one wins.
     let pick = match &node.kind {
         Kind::Fits(_) => {
             let fits = |m: &Measured<'_, P>| {
                 inner[0].is_none_or(|w| m.size.width <= w + 1e-8)
                     && inner[1].is_none_or(|h| m.size.height <= h + 1e-8)
             };
-            children
-                .iter()
-                .position(fits)
-                .unwrap_or(children.len().saturating_sub(1))
+            let mut candidates = children.iter().enumerate().filter(|(_, c)| !c.node.float);
+            let last = candidates.clone().next_back().map_or(0, |(i, _)| i);
+            candidates.find(|(_, c)| fits(c)).map_or(last, |(i, _)| i)
         }
         _ => 0,
     };
@@ -427,6 +445,15 @@ pub(crate) fn measure_uncached<'a, P>(
         let shares: Vec<(usize, f64)> = {
             let flow = flow_of(&children);
             if flow.iter().any(|c| c.fluid) {
+                // A scrolling row deals what arrange will lay it into: its
+                // content where that overflows, so nothing is squeezed to
+                // the viewport and wrapped a letter a line.
+                let avail = if node.scroll {
+                    let bases = flow.iter().map(|c| c.base(false, None)).sum::<f64>();
+                    avail.max(bases + gap * flow.len().saturating_sub(1) as f64)
+                } else {
+                    avail
+                };
                 let inner = Size::new(avail, inner[1].unwrap_or(0.0));
                 let main = distribute(&flow, gap, false, inner);
                 flow.iter().map(|c| c.index).zip(main).collect()
@@ -501,7 +528,7 @@ pub(crate) fn measure_uncached<'a, P>(
                             .fold(0.0, f64::max)
                     })
                     .sum::<f64>()
-                    + gap * lines.len().saturating_sub(1) as f64;
+                    + line_gap * lines.len().saturating_sub(1) as f64;
                 let sunk_main = if node.scroll {
                     0.0
                 } else {
@@ -555,7 +582,7 @@ pub(crate) fn measure_uncached<'a, P>(
                     .sum();
                 Size::new(
                     widest * cols as f64 + gaps(cols as f64),
-                    tall + gaps(rows.len() as f64),
+                    tall + (rows.len() as f64 - 1.0).max(0.0) * line_gap,
                 )
             };
             (hug(|c| c.size, col_min), hug(|c| c.floor, 0.0))
@@ -582,6 +609,14 @@ pub(crate) fn measure_uncached<'a, P>(
             .max(node.minimum.main(v)),
             pad(sunk).cross(v),
             v,
+        ),
+        // A scrolling stack has no main axis, so it scrolls on both and
+        // neither floor holds. Its content floor would otherwise pin it open
+        // and squeeze its siblings instead: `stack![body].scroll()` beside a
+        // header shrank the header and never overflowed at all.
+        None if node.scroll && matches!(node.kind, Kind::Overlay(_)) => Size::new(
+            padding.horizontal().max(node.minimum.width),
+            padding.vertical().max(node.minimum.height),
         ),
         _ => pad(sunk),
     };
@@ -630,10 +665,11 @@ pub(crate) fn measure_uncached<'a, P>(
         || wrap_fluid;
     Ok(Measured {
         node,
-        memo_id: 0,
+        frozen: None,
         index: 0,
         fluid,
         gap,
+        line_gap,
         padding,
         size,
         floor,

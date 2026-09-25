@@ -9,10 +9,6 @@
 #![forbid(unsafe_code)]
 
 mod device;
-#[cfg(not(feature = "gpu-effects"))]
-mod host;
-#[cfg(feature = "gpu-effects")]
-#[path = "host_gpu.rs"]
 mod host;
 mod scenes;
 mod skin;
@@ -289,13 +285,16 @@ impl App {
                     Font::new(epaint_default_fonts::NOTO_EMOJI_REGULAR)
                         .expect("bundled Noto Emoji parses"),
                 );
-                #[cfg(feature = "gpu-effects")]
-                let ui = ui.gpu_welding();
-                ui
+                ui.gpu_welding()
             },
             font,
+            // `MUI_PREVIEW_SCENE=Scroll` opens on a scene by name, for a
+            // screenshot with no clicking.
+            selected: std::env::var("MUI_PREVIEW_SCENE")
+                .ok()
+                .and_then(|n| scenes::all().iter().position(|s| s.name() == n))
+                .unwrap_or(0),
             scenes: scenes::all(),
-            selected: 0,
             pan: Point::new(0.0, 0.0),
             light: false,
             frames: false,
@@ -610,7 +609,6 @@ impl App {
         self.ui.request_action(SemanticAction::activate(key));
     }
 
-    #[cfg(feature = "gpu-effects")]
     fn draw(&mut self) {
         let Some(gpu) = &mut self.gpu else { return };
         let scale = gpu.window().scale_factor();
@@ -619,7 +617,7 @@ impl App {
         let xf = Affine::scale(scale);
         let extra = self.scenes[self.selected].overlay();
         let wants_overlay = self.frames || extra.is_some();
-        let draw_extra = |canvas: &mut mui::vello::Gpu<'_>| {
+        let draw_extra = |canvas: &mut mui::vello::Classic<'_>| {
             if let Some((key, path)) = extra {
                 if let (Some(s), Ok(bez)) = (
                     scene.surface(key),
@@ -661,52 +659,6 @@ impl App {
         if let Err(e) = result {
             eprintln!("GPU paint: {e}");
         }
-    }
-
-    #[cfg(not(feature = "gpu-effects"))]
-    fn draw(&mut self) {
-        let Some(gpu) = &mut self.gpu else { return };
-        let scale = gpu.window().scale_factor();
-        let height = f64::from(gpu.size().1) / scale;
-        let Some(scene) = self.ui.scene() else { return };
-        let mut canvas = gpu.begin();
-        let xf = Affine::scale(scale);
-        if let Err(e) = mui::vello::paint(&mut canvas, scene, xf) {
-            eprintln!("paint: {e}");
-        }
-        if let Some((key, path)) = self.scenes[self.selected].overlay() {
-            if let (Some(s), Ok(bez)) = (
-                scene.surface(key),
-                mui::vello::bez_path(&path, mui::vello::ARC_TOLERANCE),
-            ) {
-                canvas.set_transform(xf * Affine::translate((s.frame.x, s.frame.y)));
-                canvas.set_paint(
-                    self.ui
-                        .theme
-                        .palette
-                        .on(self.ui.theme.palette.raised())
-                        .to_srgb()
-                        .into(),
-                );
-                canvas.fill_path(&bez);
-            }
-        }
-        if self.frames {
-            let pointer = self
-                .pointer
-                .pos
-                .map(|p| Point::new(p.x / scale, p.y / scale));
-            inspect(
-                &mut canvas,
-                scene,
-                xf,
-                &self.ui.theme.palette,
-                &self.font,
-                pointer,
-                height,
-            );
-        }
-        gpu.present();
     }
 }
 

@@ -493,6 +493,40 @@ fn self_intersection_rejected() {
         Err(Error::SelfIntersection)
     ));
 }
+/// The pruned validator still finds a crossing or a touch between edges far
+/// apart in ring order, and passes a dense simple ring.
+#[test]
+fn ring_validation_finds_far_touches_and_crossings() {
+    use crate::math::validate_simple;
+    let circle: Vec<_> = (0..400)
+        .map(|i| {
+            Point::new(0., 0.)
+                + Point::new(1., 0.).rotated(i as f64 / 400. * std::f64::consts::TAU) * 100.
+        })
+        .collect();
+    assert!(validate_simple(&circle, 1e-7).is_ok());
+    let mut crossed = circle.clone();
+    crossed[100] = Point::new(0., -120.);
+    assert_eq!(
+        validate_simple(&crossed, 1e-7),
+        Err(Error::SelfIntersection)
+    );
+    // A notch whose tip touches the far wall, vertex on edge.
+    let pinched = [
+        (0., 0.),
+        (10., 0.),
+        (10., 10.),
+        (6., 10.),
+        (5., 0.),
+        (4., 10.),
+        (0., 10.),
+    ]
+    .map(|(x, y)| Point::new(x, y));
+    assert_eq!(
+        validate_simple(&pinched, 1e-7),
+        Err(Error::SelfIntersection)
+    );
+}
 #[test]
 fn tight_offset_quality_is_rejected_not_faked() {
     assert!(inset_path(

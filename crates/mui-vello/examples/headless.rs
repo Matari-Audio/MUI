@@ -10,12 +10,12 @@
 
 use mui_scene::prelude::*;
 use mui_scene::Corners;
-use mui_vello::Gpu;
-use vello_common::kurbo::Affine;
-use vello_hybrid::{RenderSize, RenderTargetConfig, Renderer, Scene, TextureBindings};
+use mui_vello::effects::{Budget, GpuRenderer};
+use mui_vello::kurbo::Affine;
+#[allow(dead_code)]
+mod gpu_support;
 
-const WIDTH: u16 = 640;
-const HEIGHT: u16 = 360;
+const SIZE: [u32; 2] = [640, 360];
 
 fn spec() -> SceneSpec {
     let control = |id: &str| leaf(28.0, 28.0).pill().fill(Role::Primary).id(id);
@@ -46,134 +46,25 @@ fn spec() -> SceneSpec {
         .font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap())
 }
 
-fn main() {
+fn main() -> gpu_support::Result<()> {
     let out = std::env::args().nth(1).unwrap_or("mui-vello.png".into());
     let resolved = resolve_scene(&spec()).expect("scene resolves");
-    let rgba = pollster::block_on(rasterise(&resolved));
-    let file = std::fs::File::create(&out).expect("create output");
-    let mut enc = png::Encoder::new(std::io::BufWriter::new(file), WIDTH.into(), HEIGHT.into());
-    enc.set_color(png::ColorType::Rgba);
-    enc.write_header()
-        .and_then(|mut w| w.write_image_data(&rgba))
-        .expect("write png");
+    let rgba = pollster::block_on(rasterise(&resolved))?;
+    gpu_support::save(out.as_ref(), SIZE, &rgba)?;
     println!(
         "wrote {out}: {} surfaces, {} paint ops",
         resolved.surfaces().count(),
         resolved.paint.len()
     );
+    Ok(())
 }
 
-/// The device has to exist before the scene does: glyph runs cache into the
-/// renderer's `Resources`, so painting happens here rather than in `main`.
-async fn rasterise(resolved: &mui_scene::ResolvedScene) -> Vec<u8> {
-    let instance = wgpu::Instance::default();
-    let adapter = instance
-        .request_adapter(&wgpu::RequestAdapterOptions::default())
-        .await
-        .expect("no GPU adapter -- this example needs one, the library does not");
-    let (device, queue) = adapter
-        .request_device(&wgpu::DeviceDescriptor::default())
-        .await
-        .expect("device");
-
-    let size = wgpu::Extent3d {
-        width: WIDTH.into(),
-        height: HEIGHT.into(),
-        depth_or_array_layers: 1,
-    };
-    let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("mui target"),
-        size,
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8Unorm,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-        view_formats: &[],
-    });
-    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-    let (mut renderer, mut resources) = Renderer::new(
-        &device,
-        &RenderTargetConfig {
-            format: texture.format(),
-            width: WIDTH.into(),
-            height: HEIGHT.into(),
-        },
-    );
-    let mut scene = Scene::new(WIDTH, HEIGHT);
-    mui_vello::paint(
-        &mut Gpu {
-            scene: &mut scene,
-            resources: &mut resources,
-            cache: &mut mui_vello::Cache::default(),
-            atlas: None,
-        },
-        resolved,
-        Affine::translate((32.0, 32.0)),
-    )
-    .expect("paints");
-
-    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-    renderer
-        .render(
-            &scene,
-            &mut resources,
-            &device,
-            &queue,
-            &mut encoder,
-            &RenderSize {
-                width: WIDTH.into(),
-                height: HEIGHT.into(),
-            },
-            &view,
-            &TextureBindings::new(),
-        )
-        .expect("render");
-
-    // Readback rows are padded to 256 bytes, so the copy cannot be one memcpy.
-    let row = (u32::from(WIDTH) * 4).next_multiple_of(256);
-    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("readback"),
-        size: u64::from(row) * u64::from(HEIGHT),
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    });
-    encoder.copy_texture_to_buffer(
-        wgpu::TexelCopyTextureInfo {
-            texture: &texture,
-            mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-        },
-        wgpu::TexelCopyBufferInfo {
-            buffer: &buffer,
-            layout: wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(row),
-                rows_per_image: None,
-            },
-        },
-        size,
-    );
-    queue.submit([encoder.finish()]);
-
-    buffer.slice(..).map_async(wgpu::MapMode::Read, |r| {
-        r.expect("map readback buffer");
-    });
-    device
-        .poll(wgpu::PollType::wait_indefinitely())
-        .expect("poll");
-
-    let stride = usize::from(WIDTH) * 4;
-    let mut out = Vec::with_capacity(stride * usize::from(HEIGHT));
-    for line in buffer
-        .slice(..)
-        .get_mapped_range()
-        .chunks_exact(row as usize)
-    {
-        out.extend_from_slice(&line[..stride]);
-    }
-    buffer.unmap();
-    out
+async fn rasterise(resolved: &mui_scene::ResolvedScene) -> gpu_support::Result<Vec<u8>> {
+    let (_, device, queue) = gpu_support::device().await?;
+    let texture = gpu_support::target(&device, SIZE);
+    let format = texture.format();
+    let mut renderer = GpuRenderer::new(&device, &queue, format, SIZE, Budget::default()).await?;
+    let view = texture.create_view(&Default::default());
+    renderer.render(resolved, Affine::translate((32.0, 32.0)), &view)?;
+    gpu_support::readback(&device, &queue, &texture, SIZE)
 }

@@ -2,9 +2,10 @@
 use std::fmt::Write as _;
 use std::sync::Arc;
 
-use mui_geometry::{Bounds, Path, Point};
+use mui_geometry::{Bounds, Path, Point, RoundedRect};
 use mui_layout::{Frame, Size};
 
+use super::bar::{self, BAR_MARGIN, BAR_STRIP, BAR_THIN, BAR_WIDE};
 use super::outline::Contour;
 use super::text::Face;
 use super::{
@@ -33,6 +34,8 @@ impl<'a> Walk<'a> {
             return Ok(());
         }
         let key = self.intern(n.key().unwrap_or(path));
+        // Before the outline: its cache names the node by it.
+        self.key = key.clone();
         let e = n.payload();
         let s = &e.style;
         let mut inner = ancestors.clone();
@@ -73,7 +76,6 @@ impl<'a> Walk<'a> {
             self.joined_nodes.extend(geometry.join_nodes);
             self.surface_joins.insert(at, geometry.joins);
         }
-        self.key = key.clone();
         // Each envelope belongs to exactly one node, visited once.
         let enveloped = match self.region_envelopes.remove(&at) {
             Some(p) => {
@@ -93,6 +95,12 @@ impl<'a> Walk<'a> {
         if let Some((mix, opacity)) = blended {
             self.mark(Layer::Blend { mix, opacity }, empty(), None);
         }
+        if s.backdrop_blur > 0.0 {
+            self.mark(Layer::Backdrop, contour.path.clone(), contour.rect);
+            if let Some(p) = self.paint.last_mut() {
+                p.blur = s.backdrop_blur;
+            }
+        }
         for sh in s.shadow.iter().filter(|sh| sh.kind == ShadowKind::Drop) {
             self.shadow(sh, &contour, under)?;
         }
@@ -108,6 +116,7 @@ impl<'a> Walk<'a> {
         };
         let hits = self.content(e, at, &key, &contour, &mut bg, under)?;
         let content = self.content_size(n, at, frame);
+        let shape_bounds = contour.bounds()?;
 
         let surface = self.surfaces.len();
         self.at.insert(key.clone(), surface);
@@ -122,18 +131,14 @@ impl<'a> Walk<'a> {
         self.surfaces.push(ResolvedSurface {
             key: key.clone(),
             frame,
-            bounds: match contour.rect {
-                // A rounded rectangle already knows its bounds; only a
-                // welded outline has to be flattened to find them.
-                Some(r) => Some(r.bounds()),
-                None => Bounds::from_points(contour.path.flatten(0.5, 100_000)?.concat()),
-            },
+            bounds: shape_bounds,
             path: contour.path.clone(),
             rect: contour.rect,
             topology_changed: contour.changed,
             cursor: inner.cursor,
             tip: e.tip.clone(),
             focusable: e.focusable,
+            captures_wheel: e.captures_wheel,
             pointer_states: e
                 .states
                 .iter()
@@ -162,6 +167,7 @@ impl<'a> Walk<'a> {
         let clips = n.is_clip() || s.union || e.inside.is_some() || self.regions.contains_key(&at);
         if clips {
             let image = material.as_ref().map(|m| m.image_rect.bounds());
+            let image = image.or(shape_bounds);
             self.clip(image, &contour, frame, &mut inner)?;
         }
         self.children(n, at, path, bg, &inner)?;
@@ -169,6 +175,12 @@ impl<'a> Walk<'a> {
         // Everything from here on closes this node, whatever its children
         // left the key at.
         self.key = key;
+        if let Some(heat) = e
+            .scroll_bar_heat
+            .filter(|_| n.is_scroll() && !e.scroll_bar_off)
+        {
+            self.scroll_bars(n, heat, frame, content, bg, &inner)?;
+        }
         if clips {
             self.mark(Layer::Unclip, empty(), None);
         }
@@ -231,8 +243,38 @@ impl<'a> Walk<'a> {
             }
             Content::Canvas(c) => {
                 let origin = Point::new(frame.x, frame.y);
-                for (k, d) in (c.0)(frame.size).iter().enumerate() {
-                    let moved = Arc::new(d.path.rigid_transform(origin, 0.0)?);
+                let draws = (c.0)(frame.size);
+                let generation = self.outlines.generation;
+                let paths = match self.outlines.canvases.get_mut(key) {
+                    Some((old, placed, paths, seen)) if Arc::ptr_eq(old, &draws) => {
+                        if *placed != origin {
+                            let d = origin - *placed;
+                            for p in paths.iter_mut() {
+                                Arc::make_mut(p).translate(d);
+                            }
+                            *placed = origin;
+                        }
+                        *seen = generation;
+                        paths.clone()
+                    }
+                    _ => {
+                        let paths = draws
+                            .iter()
+                            .map(|d| {
+                                d.path.validate(100_000)?;
+                                let mut p = d.path.clone();
+                                p.translate(origin);
+                                Ok(Arc::new(p))
+                            })
+                            .collect::<Result<Vec<_>, SceneError>>()?;
+                        self.outlines.canvases.insert(
+                            key.clone(),
+                            (draws.clone(), origin, paths.clone(), generation),
+                        );
+                        paths
+                    }
+                };
+                for ((k, d), moved) in draws.iter().enumerate().zip(paths) {
                     if let Some(tag) = &d.tag {
                         hits.push((Arc::clone(tag), moved.clone()));
                     }
@@ -344,20 +386,108 @@ impl<'a> Walk<'a> {
         )
     }
 
-    /// Clip the subtree to the node's outline, and hand the descendants
-    /// that clip both as a rectangle and as the exact path.
+    /// The overlay scrollbar of a scroll node that overflows, per axis: a
+    /// rounded thumb painted over the children inside the node's clip, and
+    /// the strip along the far edge it rides in as a surface of its own. The
+    /// strip is the pointer target, runtime-owned by its key, and pushed
+    /// after the children so it is on top of them in the hit map. Its path
+    /// is the strip rather than the thumb, so scrolling does not change the
+    /// hit geometry.
+    fn scroll_bars(
+        &mut self,
+        n: &El,
+        heat: f64,
+        frame: Frame,
+        content: Size,
+        under: Color,
+        inner: &Ancestors,
+    ) -> Result<(), SceneError> {
+        let key = self.key.clone();
+        let offset = n.scroll_offset();
+        let heat = heat.clamp(0.0, 1.0);
+        let thick = BAR_THIN + (BAR_WIDE - BAR_THIN) * heat;
+        let ink = crate::Role::Ink.alpha((0.28 + 0.27 * heat) as f32);
+        let frame_at = |x, y, width, height| Frame {
+            x,
+            y,
+            size: Size::new(width, height),
+        };
+        for vertical in [true, false] {
+            let (a, strip) = if vertical {
+                let x = frame.right() - BAR_STRIP;
+                (1, frame_at(x, frame.y, BAR_STRIP, frame.size.height))
+            } else {
+                let y = frame.bottom() - BAR_STRIP;
+                (0, frame_at(frame.x, y, frame.size.width, BAR_STRIP))
+            };
+            let along = |f: Frame| {
+                if vertical {
+                    (f.y, f.size.height)
+                } else {
+                    (f.x, f.size.width)
+                }
+            };
+            let ((start, len), (_, view)) = (along(strip), along(frame));
+            let total = if vertical {
+                content.height
+            } else {
+                content.width
+            };
+            let Some((at, size)) = bar::thumb(start, len, view, total, offset[a]) else {
+                continue;
+            };
+            // Hugging the far edge, so it thickens inward over the content.
+            let thumb = if vertical {
+                frame_at(frame.right() - BAR_MARGIN - thick, at, thick, size)
+            } else {
+                frame_at(at, frame.bottom() - BAR_MARGIN - thick, size, thick)
+            };
+            let scale = self.spec.device_scale;
+            let rr = RoundedRect::new(bounds(thumb, scale), thick / 2.0)?;
+            let hit = RoundedRect::new(bounds(strip, scale), 0.0)?;
+            let bar_key: Arc<str> = bar::bar_key(&key, vertical).into();
+            self.key = bar_key.clone();
+            self.push(Layer::Fill, rr.path(), Some(rr), &ink, under);
+            self.at.insert(bar_key.clone(), self.surfaces.len());
+            self.surfaces.push(ResolvedSurface {
+                key: bar_key,
+                frame: strip,
+                bounds: Some(hit.bounds()),
+                path: Arc::new(hit.path()),
+                rect: Some(hit),
+                topology_changed: false,
+                cursor: None,
+                tip: None,
+                focusable: false,
+                captures_wheel: false,
+                // Earns it a place in the hit map without an id.
+                pointer_states: true,
+                disabled: inner.disabled,
+                semantics: None,
+                semantic_label_implicit: false,
+                text_value: None,
+                clip: inner.clip,
+                clip_path: inner.clip_paths.clone(),
+                parent: None,
+                content: strip.size,
+                hits: Vec::new(),
+            });
+        }
+        self.key = key;
+        Ok(())
+    }
+
+    /// Clip the subtree to `b` -- the outline's bounds, or a material's
+    /// image -- and hand the descendants that clip both as a rectangle and
+    /// as the exact path.
     fn clip(
         &mut self,
-        image: Option<Bounds>,
+        b: Option<Bounds>,
         contour: &Contour,
         frame: Frame,
         inner: &mut Ancestors,
     ) -> Result<(), SceneError> {
-        let b = match image {
-            Some(b) => b,
-            None => Bounds::from_points(contour.path.flatten(0.5, 100_000)?.concat())
-                .unwrap_or_else(|| bounds(frame, self.spec.device_scale)),
-        };
+        let b = b.unwrap_or_else(|| bounds(frame, self.spec.device_scale));
         let b = inner.clip.map_or(b, |c| {
             Bounds::new(
                 b.min.x.max(c.min.x),
@@ -944,5 +1074,46 @@ mod tests {
         .size(10., 10.);
         resolve_scene(&SceneSpec::new(root)).unwrap();
         assert_eq!(seen.get(), 1);
+    }
+    /// A cached draw list that stays put paints the very same paths every
+    /// frame; one that moves paints them moved.
+    #[test]
+    fn a_cached_canvas_reuses_its_placed_paths() {
+        let cache = crate::CanvasCache::new();
+        let spec = |pad: f64| {
+            let draw = crate::canvas_cached(&cache, 1, |s| {
+                vec![crate::Draw::fill(
+                    Path::polyline(
+                        [
+                            Point::ZERO,
+                            Point::new(s.width, 0.),
+                            Point::new(0., s.height),
+                        ],
+                        true,
+                    ),
+                    Role::Primary,
+                )]
+            })
+            .size(20., 20.)
+            .id("c");
+            SceneSpec::new(column([draw]).pad(Spacing::Px(pad)))
+        };
+        let path = |s: &ResolvedScene| {
+            s.paint
+                .iter()
+                .find(|p| p.layer == Layer::Draw(0))
+                .unwrap()
+                .path
+                .clone()
+        };
+        let mut text = TextCache::default();
+        let a = path(&resolve_scene_with(&spec(4.), &mut text).unwrap());
+        let b = path(&resolve_scene_with(&spec(4.), &mut text).unwrap());
+        assert!(Arc::ptr_eq(&a, &b), "a still canvas re-placed its paths");
+        let moved = path(&resolve_scene_with(&spec(9.), &mut text).unwrap());
+        assert_eq!(
+            moved.commands[0],
+            mui_geometry::PathCommand::MoveTo(Point::new(9., 9.))
+        );
     }
 }

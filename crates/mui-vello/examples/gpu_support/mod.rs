@@ -76,14 +76,12 @@ pub fn target(device: &wgpu::Device, size: [u32; 2]) -> wgpu::Texture {
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format: wgpu::TextureFormat::Rgba8Unorm,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-            | wgpu::TextureUsages::STORAGE_BINDING
-            | wgpu::TextureUsages::COPY_SRC,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
         view_formats: &[],
     })
 }
 /// Synchronous readback is ONLY for this correctness/benchmark tooling. Neither
-/// HybridEffects nor the gallery uses it during normal presentation.
+/// GpuRenderer nor the gallery uses it during normal presentation.
 pub fn readback(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -126,7 +124,7 @@ pub fn readback(
     });
     device.poll(wgpu::PollType::wait_indefinitely())?;
     recv.recv_timeout(Duration::from_secs(10))??;
-    let mapped = buffer.slice(..).get_mapped_range();
+    let mapped = buffer.slice(..).get_mapped_range()?;
     let mut pixels = Vec::with_capacity(size[0] as usize * size[1] as usize * 4);
     for row in mapped.chunks(stride as usize).take(size[1] as usize) {
         pixels.extend_from_slice(&row[..size[0] as usize * 4]);

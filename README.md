@@ -35,11 +35,9 @@ Run locally with `./playground/build.sh` (requires the WASM Rust target and
 ## Under the hood
 
 MUI owns layout, contours, input, animation and the paint list. Vello renders it:
-`mui-vello` provides CPU rendering, Vello Hybrid GPU rendering, and retained GPU
-effects. Native hosts can keep `TiledEffects` alive between frames to reuse clean
-tiles; broad changes switch to one full-scene render when the memory budget
-allows it. `HybridEffects` is the whole-scene retained alternative. The host must
-select and retain these renderers to benefit from their caches. An unchanged
+`mui-vello` provides CPU rendering (`vello_cpu`) and `GpuRenderer`, a retained
+renderer over classic Vello on wgpu 30. The host must keep the `GpuRenderer`
+alive between frames to benefit from its caches. An unchanged
 frame into the view they presented last records no GPU pass; a swapchain hands
 out a new view per frame, so there the host saves the pass by not asking.
 
@@ -144,21 +142,23 @@ assert_eq!(scene.surface("tab").unwrap().frame.size.width, 92.0);
 | `.center()`, `.start()`, `.end()`, `.between()` | the four alignments worth a word |
 | `.justify(Justify::SpaceAround)`, `.justify(Justify::SpaceEvenly)` | the other two CSS distributions |
 | `.wrap()` | a row or column that breaks into lines instead of overflowing |
+| `.wrap().line_gap(Xs)` | the space between wrapped lines (and between grid rows) apart from the `gap` between items along a line |
 | `.span(2)`, `.order(-1)` | a grid cell two columns wide; placed before its declaration slot |
 | `.min_col(120.0)` | `repeat(auto-fit, minmax(120px, 1fr))`: the grid drops columns until each clears 120 px, and a hugging grid widens to it rather than squeezing a column under it |
 | `.push(child)`, `.baseline()`, `.lines(2)` | append to a container, sit text children on one baseline, cap a wrapped label |
 | `.fill(Primary)`, `.fill(Color::..)`, `.fill(Gradient::vertical(a, b))` | a palette role, a literal, a gradient |
 | `Gradient::linear(180., ..)`, `::radial((0.3, 0.3), 0.6, ..)`, `::conic(-135., ..)` | the three ramps, stops as roles or colours: a knob arc is a conic gradient and no geometry |
-| `.fill(Fill::Image(img, Fit::Cover))` | an RGBA buffer as a fill: `Cover`, `Contain` or `Fill` (`vello_cpu` paints the pixmap, `vello_hybrid` uploads it once into its atlas) |
+| `.fill(Fill::Image(img, Fit::Cover))` | an RGBA buffer as a fill: `Cover`, `Contain` or `Fill` (`vello_cpu` paints the pixmap, `GpuRenderer` hands Vello the image once per buffer) |
 | `.stroke(Ink)`, `.radius(8.0)`, `.pill()`, `.shadow(Shadow::soft(12.0))` | outline, corners, a shadow appended to the list |
 | `.radius(Corner::Field)` | the theme's radius for this kind of thing: `Selector` (toggle, badge), `Field` (button, input, tab), `Box` (card, panel) |
 | `.corners(CornerStyle::Squircle)` | the curve the corners turn through, apart from how big they are: a continuous superellipse instead of a circular arc, through welds, shells and strokes alike |
 | `.join()` | butt a row's or column's children into one strip: the gap closes, every seam goes square, the container's own corner rounds the two ends |
 | `.shadows([a, b])`, `.elevation(Elevation::Raised)` | replace the list; a contact and an ambient shadow, from the theme's steps |
 | `.shadow(Shadow::inset(4.0))` | cast inward instead, clipped to the outline: a recess, a floor under glass |
+| `.backdrop_blur(8.0)` | before the node paints, blur what is already painted behind it, clipped to its outline: a modal's frosted dim. Both renderers paint the scene under it once more through a real Gaussian; a canvas without filter layers shows the fill alone |
 | `.stroke(Ink.alpha(0.12))` | a role at an alpha: a hairline that still tracks the palette |
 | `.preset(card())`, `.base(panel())` | merge a prepared `Style` over or under this one, field by field: the side that states something wins. Both are moved, not copied |
-| `panel()`, `card()`, `glass()`, `chip("A")`, `tile(el)` | the presets in `mui::presets`: three styles to merge, two elements to finish. `glass()` is a translucent fill, a bright 1 px edge and an inner floor -- there is no backdrop blur and there will not be one |
+| `panel()`, `card()`, `glass()`, `chip("A")`, `tile(el)` | the presets in `mui::presets`: three styles to merge, two elements to finish. `glass()` is a translucent fill, a bright 1 px edge and an inner floor; add `.backdrop_blur(r)` to frost what is under it |
 | `.apply(f)`, `.when(cond, f)` | hand the node to a builder run, conditionally or not |
 | `.on(State::Hover, \|s\| s.stroke(Ink))` | the look for a state, declared beside the resting one; `Hover`, `Press`, `Focus`, `Disabled` |
 | `.disabled(bypassed)` | switch this node and its subtree off: the `State::Disabled` look, out of the hit map, out of Tab, and `disabled` to a screen reader. A gesture in flight on it is cancelled |
@@ -171,17 +171,23 @@ assert_eq!(scene.surface("tab").unwrap().frame.size.width, 92.0);
 | `.mask(fill)` | paint `fill` source-atop the node's own subtree: a scroll fade is a ramp from transparent to the surface colour. It paints onto the shape, it cannot erase alpha -- an alpha mask layer is CPU-only in vello |
 | `.blend(Mix::Multiply)`, `.opacity(0.5)` | composite this node's whole subtree as one layer |
 | `.scroll()`, `.clip()`, `.float()` | overflow the wheel slides, overflow cut off, a child painted over everything |
+| `.scroll_bar(false)` | drop the overlay scrollbar a `.scroll()` node otherwise shows while it overflows: a thin `Ink` thumb over the far edge of the viewport (and the bottom one, for a row) that thickens under the pointer, drags, and jumps to a press on its track. The `Ui` paints and drags it; a scene resolved without one paints none |
 | `.sticky()` | hold the leading edge of the enclosing `.scroll()` viewport -- the top of a column, the start of a row -- while this node's section (its own parent) is in view, then let the next section push it off. It keeps its slot in the flow and paints over the siblings that scroll under it, inside the same clip. `ui.min_size()` (and `Layout::min_size`) is the other half of a scrolling shell: the floor a plugin host refuses to resize below |
 | `.pin(Pin::to("field").area(Area::Bottom).gap(Xs).match_width().fallback(Area::Top))` | a float placed against another node by name: one of nine named regions around it, a gap, a size taken from it, and areas tried in order until one fits the window. `.tip("..")` is this. Keep `.offset(dx, dy)` for the nudge no region can name |
 | `canvas(\|size\| vec![Draw::fill(path, Ink)])` | your own paths, in the node's own space |
 | `Draw::fill(path, Ink).tag("band")`, `Draw::hit(path, "knot-0")` | a drawn shape that is also the node's hit shape, by name, and hit geometry that paints nothing. Tag one draw and the node responds inside its tagged paths only: `ui.tag("dial")` says which, latched for the length of a drag |
 | `.cursor(Cursor::Hand)`, `.tip("..")`, `.focusable()` | the pointer, a tooltip after half a second, Tab stops here |
+| `.captures_wheel()` | a node that uses the wheel itself: over it, no enclosing `.scroll()` moves |
 | `let (el, changed) = slider(&mut ui, "cut", "Cutoff", &mut hz, 20.0..=20e3)` | the one widget shape: `&mut Ui`, the id, and what it edits in; the element and what happened last frame out. `button` says whether it was clicked, `toggle`, `slider`, `knob` and `text_input` whether the value changed, `curve` and `bins` which part the gesture edited |
 | `button(&mut ui, "save", "Save").0.variant(Variant::Soft).size(S)` | a control's look and size: `Solid`, `Soft`, `Outline`, `Ghost`, and the same five sizes everywhere. `.role(Danger)` recolours it, `.px(72.0)` is the hatch, `.el()` finishes it |
 | `slider(&mut ui, "cut", "Cutoff", &mut hz, 20.0..=20e3).0.value_text(format!("{hz:.0} Hz"))` | what the readout says, in the parameter's own units, instead of the default two decimals. The string is also what the readout is measured for, so nothing shuffles as digits come and go; a knob has no header, so it says this under the dial in place of its label |
+| `text_edit(&mut ui, "notes", &mut s, TextOpts { newline: Newline::Enter, rows: 6, .. })` | a field of many lines: wraps to its width, Up/Down/Page move the caret by line, the lines scroll inside it. `Newline::ShiftEnter` keeps Enter for submit; `TextEdit { changed, submitted }` says what it did, `blur_on_submit` lets go of the focus |
+| `drag_value(&mut ui, "bpm", &mut bpm, 20.0..=300.0)` | a number to drag sideways, 200 px across the range; a double click or Enter opens a field to type it, Escape cancels. A `Control`, so `.value_text(..)` applies |
+| `color_picker(&mut ui, "tint", &mut color, true)` | a saturation-value square, a hue strip, an alpha strip when asked, and a hex field |
+| `stepped(&ui, id, &mut v, &range)` | the arrow, Page and Home/End keys of a slider, for a control of your own |
 | `curve(&mut ui, "env", &mut env)` | an envelope over `mui::scene::curve::Curve`: the model's own cubics as one stroked path, a knot per point and two tension handles per segment, each its own hit shape. Returns the tree and a `CurveEdit` saying what the drag moved -- Shift drags fine, Alt at the press locks an axis, `ui.tag("env")` names the shape under the pointer |
 | `bins(&mut ui, "spectrum", &Bins { authored, .. })` | an additive spectrum: a bar per partial in the accent, the engine's live levels as a cap line over them, and a faint level grid. One canvas and one hit shape -- pointer x becomes a bin index, so a drag paints every bin it crossed with no gaps, Shift refines from the press level, a secondary click resets one, and the arrows select and nudge. Over ~one bar a pixel the bins coalesce per column at their maximum, so 1024 partials still draw 200 bars. `bins_hover` is the index under the pointer, for a readout in your own units |
-| `.role(Kind::Button)`, `.label("OK")` | what a screen reader hears: `mui-access` reads both off the surface |
+| `.role(Kind::Button)`, `.label("OK")` | what a screen reader hears: `mui-access` reads both off the surface. `.role(Kind::Image).label("BUFFR logo")` is a picture with alt text; unlabelled, it is decoration |
 | `.reserve("-88.8 dB")`, `ui.set_text("gain", v)` | measure a readout for the widest value it can show, then swap what it says without resolving the tree again: the frame stands, one glyph run re-shapes |
 | `.text_weight(Weight::BOLD)` | the run's `wght` axis. A variable face moves; a static one has one weight and draws it |
 | `Palette::from_seed(accent, Mode::Dark)` | a whole palette from one colour: brand roles around the seed's hue, greys tinted by it, signal hues left alone. Every role clears 3:1 on the background and the surface |
@@ -192,7 +198,10 @@ assert_eq!(scene.surface("tab").unwrap().frame.size.width, 92.0);
 | `ui.tween(id, target)`, `ui.edit(id)` | a spring-smoothed number; `Begin`/`End` of a gesture |
 | `ui.get(id).mods`, `.press_mods`, `.button` | the modifiers now and at the press, and which of `Primary`/`Secondary`/`Middle` opened the gesture |
 | `r.drag_fine(FINE_DRAG)`, `r.drag_axis()`, `r.clicked_with(Button::Secondary)` | Shift is the fine drag (`ui.drag` applies it already); the axis a drag has travelled furthest along; a click by one particular button |
+| `r.activated()`, `r.double_clicked`, `r.wheel` | a primary click or Enter/Space on the focused target; the second press inside `ui.double_click` seconds; the wheel delta over the target this frame |
+| `ui.dismissed(&["menu", "menu-button"])`, `ui.clicked_outside(..)` | a press outside every named node (and their descendants), or Escape: the close signal for a popup |
 | `frame.clipboard`, `frame.edits` | what a copy wants put on the clipboard, and every gesture edge this frame |
+| `Ui::new(theme).clipboard(board)`, `ui.set_clipboard(s)`, `ui.paste()` | a host's `mui::Clipboard` (`get`/`set`): text fields copy, cut and paste through it, and an app's Copy button sets it. With one, `frame.clipboard` stays `None` |
 
 Alignment is inherited: a child without `.anchor` sits where its parent's
 `align` and `justify` say, and `Stretch` is the default cross-axis value so
@@ -367,13 +376,9 @@ stretched (`Fill`). Decoding is the host's job: no library crate takes an
 image dependency. `Path::from_svg_data` turns an icon's `d` attribute into a
 `Path` (arcs included), so a symbol is geometry like everything else.
 
-`vello_cpu` paints the pixmap itself. `vello_hybrid` wants an atlas id and
-panics on a pixmap, so `mui_vello::Gpu` carries an optional `Atlas` -- the
-renderer, device and queue -- and uploads each image buffer once through
-`Renderer::upload_image`, then paints by id. A `Gpu` built without an `Atlas`
-flattens an image fill to the mid grey `Paint::solid` already uses for
-contrast rather than crashing, and so does an image the atlas has no room
-for. What was uploaded (or premultiplied, on the CPU) lives in a
+`vello_cpu` paints the pixmap itself. `GpuRenderer` converts each image
+buffer once into a Vello image that Vello uploads and samples; a GPU texture
+registered with `GpuRenderer::set_texture` is sampled in place. What was uploaded (or premultiplied, on the CPU) lives in a
 `mui_vello::Cache` owned beside the renderer. It holds only a `Weak` to each
 buffer and sweeps the entries the app has dropped on the next image lookup,
 so a panel handing over a fresh frame buffer every frame does not grow it.
@@ -495,5 +500,5 @@ global allocator, which the library itself forbids.
 
 Formatting, tests, clippy with warnings denied, and a wasm check of the
 library crates. `BENCHMARKS.md` is the frame budget of a Kurv-sized scene
-across `vello_hybrid`, `vello_cpu` and classic `vello`, reproduced by
-`cargo run -p mui-vello --profile perf --features cpu --example bench`.
+on `vello_cpu` and `GpuRenderer`, reproduced by
+`cargo run -p mui-vello --profile perf --features cpu,gpu-effects --example bench`.

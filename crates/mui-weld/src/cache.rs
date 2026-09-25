@@ -88,8 +88,11 @@ impl WeldCache {
         let a = crate::analytic::AnalyticWeld::new(shapes, weld, scale)?;
         self.analytic_builds += 1;
         if Self::ANALYTIC_SLOT_BYTES <= self.limit {
-            while self.bytes() + Self::ANALYTIC_SLOT_BYTES > self.limit || self.analytic.len() >= 16
-            {
+            // Bounded by bytes alone: a count cap below the live welds
+            // evicted and rebuilt every one of them every frame.
+            // ponytail: linear lookup, O(live welds) per get; hash the
+            // quantised request if a scene ever holds thousands.
+            while self.bytes() + Self::ANALYTIC_SLOT_BYTES > self.limit {
                 if self.analytic.pop_front().is_none() {
                     if let Some(e) = self.entries.pop_front() {
                         self.bytes -= e.bytes;
@@ -190,6 +193,24 @@ mod analytic_tests {
         let b = c.get_analytic(&src, Weld::crisp().morph(0.5), 1.).unwrap();
         assert!(Arc::ptr_eq(a.boundary_bytes(), b.boundary_bytes()));
         assert_eq!(c.analytic_stats(), (1, 1));
+    }
+    #[test]
+    fn many_live_welds_all_stay_cached() {
+        let mut c = WeldCache::default();
+        let at = |i: usize| {
+            let mut s = sources();
+            s[0].shape = Geometry::RoundedRect {
+                bounds: Rect::new(0., 0., 40. + i as f64, 25.),
+                radius: 4.,
+            };
+            s
+        };
+        for _ in 0..2 {
+            for i in 0..40 {
+                c.get_analytic(&at(i), Weld::crisp(), 1.).unwrap();
+            }
+        }
+        assert_eq!(c.analytic_stats(), (40, 40), "the second frame rebuilt");
     }
     #[test]
     fn clear_releases_boundary_cache() {

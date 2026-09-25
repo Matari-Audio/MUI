@@ -1,9 +1,9 @@
-//! Why `vello_hybrid` and not classic `vello`, measured on a Kurv-sized editor.
+//! What a frame costs on a Kurv-sized editor, on the CPU rasteriser and on
+//! the retained GPU renderer.
 //!
-//!     cargo run -p mui-vello --profile perf --features cpu --example bench
-//!     cargo run -p mui-vello --profile perf --features cpu,bench-classic --example bench
+//!     cargo run -p mui-vello --profile perf --features cpu,gpu-effects --example bench
 //!
-//! One scene, every backend, four cases. Each frame is split into resolve
+//! One scene, both backends, four cases. Each frame is split into resolve
 //! (`Ui::frame`: styling, layout, text shaping, the paint list), encode (the
 //! paint-list walk onto a `Canvas`) and render (rasterise and wait for it).
 //! Reported as the median of 50 frames after 5 warm-ups, so a stray scheduler
@@ -17,14 +17,13 @@ use mui::prelude::*;
 use mui::Ui;
 use mui_scene::{Layer, ResolvedScene};
 use mui_vello::kurbo::Affine;
-use mui_vello::{Cache, Cpu, Gpu};
+use mui_vello::{Cache, Cpu};
 use vello_common::pixmap::Pixmap;
 
 const W: u16 = 1280;
 const H: u16 = 800;
 const WARM: usize = 5;
 const N: usize = 50;
-const IMAGES: bool = !cfg!(feature = "bench-classic");
 
 fn vectors() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -92,8 +91,7 @@ which is what the second knob is for when the resonance is high";
 /// 40 knobs, 8 sliders, 200 labels, a clipped 60-row list, two curves, three
 /// floats, 20 wrapped paragraphs, 4 image-filled pills and 6 cards whose fill
 /// is spring-driven -- roughly what a synth editor puts on screen at once.
-/// Comparisons with classic Vello disable images for every backend.
-fn editor(ui: &mut Ui, app: &mut App, images: bool) -> El {
+fn editor(ui: &mut Ui, app: &mut App) -> El {
     if vectors() {
         return grid(
             8,
@@ -142,14 +140,7 @@ fn editor(ui: &mut Ui, app: &mut App, images: bool) -> El {
     let img = app.swatch.clone();
     let pills: Vec<El> = [Fit::Cover, Fit::Contain, Fit::Fill, Fit::Cover]
         .into_iter()
-        .map(|fit| {
-            let l = leaf(120.0, 40.0).pill();
-            if images {
-                l.fill(Fill::Image(img.clone(), fit))
-            } else {
-                l.fill(Role::Raised)
-            }
-        })
+        .map(|fit| leaf(120.0, 40.0).pill().fill(Fill::Image(img.clone(), fit)))
         .collect();
     // 6 cards carrying a transition, so every frame walks their spring
     // channels whether or not the colour moved.
@@ -247,12 +238,10 @@ impl Case {
 
 /// Drive `WARM + N` frames of `case` and hand each resolved scene to `draw`,
 /// which returns (encode ms, render ms).
-/// Backend comparisons use identical image-free scenes.
 fn run(
     backend: &'static str,
     case: Case,
     font: &[u8],
-    images: bool,
     mut draw: impl FnMut(&ResolvedScene) -> (f64, f64),
 ) -> Row {
     let mut ui = Ui::new(Theme::DEFAULT).font(Font::new(font).unwrap());
@@ -270,7 +259,7 @@ fn run(
             app.swatch = swatch();
         }
         let start = Instant::now();
-        let root = editor(&mut ui, &mut app, images);
+        let root = editor(&mut ui, &mut app);
         let build = since(start);
         let t = Instant::now();
         let frame = ui
@@ -328,7 +317,7 @@ fn main() {
     {
         let mut ui = Ui::new(Theme::DEFAULT).font(Font::new(font).unwrap());
         let mut app = App::new();
-        let root = editor(&mut ui, &mut app, IMAGES);
+        let root = editor(&mut ui, &mut app);
         let f = ui
             .frame(
                 root,
@@ -362,15 +351,11 @@ fn main() {
     }
 
     // Resolve with nothing painted at all: MUI's own floor.
-    rows.push(run(
-        "mui (resolve only)",
-        Case::Static,
-        font,
-        IMAGES,
-        |_| (0.0, 0.0),
-    ));
+    rows.push(run("mui (resolve only)", Case::Static, font, |_| {
+        (0.0, 0.0)
+    }));
 
-    // --- CPU (vello_cpu, the same sparse-strip pipeline as hybrid)
+    // --- CPU (vello_cpu, sparse strips)
     {
         let mut ctx = vello_cpu::RenderContext::new(W, H);
         let mut res = vello_cpu::Resources::default();
@@ -396,7 +381,7 @@ fn main() {
             (encode, since(t))
         };
         for c in CASES {
-            rows.push(run("vello_cpu", c, font, IMAGES, &mut draw));
+            rows.push(run("vello_cpu", c, font, &mut draw));
         }
     }
 
@@ -424,7 +409,7 @@ fn main() {
     println!("\npeak RSS {:.1} MiB", peak_rss());
 }
 
-/// Every GPU backend, on one device. `None` when there is no adapter.
+/// The retained GPU renderer. `None` when there is no adapter.
 async fn gpu() -> Option<(wgpu::AdapterInfo, Vec<Row>)> {
     let font = epaint_default_fonts::HACK_REGULAR;
     let instance = wgpu::Instance::default();
@@ -434,166 +419,13 @@ async fn gpu() -> Option<(wgpu::AdapterInfo, Vec<Row>)> {
         .ok()?;
     let (device, queue) = adapter
         .request_device(&wgpu::DeviceDescriptor {
-            // Classic vello's compute pipeline needs more than the downlevel
-            // defaults; hybrid would be happy with them.
+            // Vello's compute pipeline needs more than the downlevel defaults.
             required_limits: adapter.limits(),
             ..Default::default()
         })
         .await
         .ok()?;
-    let mut rows = Vec::new();
-
-    // --- hybrid: a render pass over sparse strips, no compute.
-    {
-        let texture = target(&device, wgpu::TextureUsages::RENDER_ATTACHMENT);
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let (mut renderer, mut resources) = vello_hybrid::Renderer::new(
-            &device,
-            &vello_hybrid::RenderTargetConfig {
-                format: texture.format(),
-                width: W.into(),
-                height: H.into(),
-            },
-        );
-        let mut scene = vello_hybrid::Scene::new(W, H);
-        let mut cache = Cache::default();
-        let mut draw = |resolved: &ResolvedScene| {
-            scene.reset();
-            let t = Instant::now();
-            mui_vello::paint(
-                &mut Gpu {
-                    scene: &mut scene,
-                    resources: &mut resources,
-                    cache: &mut cache,
-                    atlas: Some(mui_vello::Atlas {
-                        renderer: &mut renderer,
-                        device: &device,
-                        queue: &queue,
-                    }),
-                },
-                resolved,
-                Affine::IDENTITY,
-            )
-            .expect("paints");
-            let encode = since(t);
-            let t = Instant::now();
-            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-            renderer
-                .render(
-                    &scene,
-                    &mut resources,
-                    &device,
-                    &queue,
-                    &mut enc,
-                    &vello_hybrid::RenderSize {
-                        width: W.into(),
-                        height: H.into(),
-                    },
-                    &view,
-                    &vello_hybrid::TextureBindings::new(),
-                )
-                .expect("render");
-            queue.submit([enc.finish()]);
-            device
-                .poll(wgpu::PollType::wait_indefinitely())
-                .expect("poll");
-            (encode, since(t))
-        };
-        for c in CASES {
-            rows.push(run("vello_hybrid", c, font, IMAGES, &mut draw));
-        }
-    }
-
-    // --- HybridEffects: the retained whole-window renderer the gallery uses
-    // by default. An unchanged paint list skips the encode entirely.
-    #[cfg(feature = "gpu-effects")]
-    {
-        let texture = target(&device, wgpu::TextureUsages::RENDER_ATTACHMENT);
-        let view = texture.create_view(&Default::default());
-        let mut renderer = mui_vello::effects::HybridEffects::new(
-            &device,
-            &queue,
-            texture.format(),
-            [W.into(), H.into()],
-            mui_vello::effects::Budget::default(),
-        )
-        .await
-        .expect("retained renderer");
-        for case in CASES {
-            let (mut encodes, mut renders) = (0, 0);
-            rows.push(run("hybrid retained", case, font, IMAGES, |scene| {
-                let start = Instant::now();
-                let stats = renderer
-                    .render(scene, Affine::IDENTITY, &view)
-                    .expect("retained render");
-                encodes += stats.encoded_scenes;
-                renders += stats.renders;
-                let encode = since(start);
-                let start = Instant::now();
-                device
-                    .poll(wgpu::PollType::wait_indefinitely())
-                    .expect("poll");
-                (encode, since(start))
-            }));
-            println!(
-                "hybrid retained {}: {encodes} scene encodes, {renders} renders",
-                case.name()
-            );
-        }
-    }
-
-    #[cfg(feature = "gpu-effects")]
-    for (name, bytes) in [
-        (
-            "tiles per-tile",
-            u64::from(u32::from(W).div_ceil(256) * u32::from(H).div_ceil(256)) * 260 * 260 * 4,
-        ),
-        ("tiles adaptive", 64 * 1024 * 1024),
-    ] {
-        let texture = target(&device, wgpu::TextureUsages::RENDER_ATTACHMENT);
-        let view = texture.create_view(&Default::default());
-        let mut renderer = mui_vello::effects::TiledEffects::new(
-            &device,
-            &queue,
-            texture.format(),
-            [W.into(), H.into()],
-            mui_vello::effects::Budget::default(),
-            bytes,
-        )
-        .await
-        .expect("tiled renderer");
-        for case in CASES {
-            let mut submissions = 0;
-            let mut full_redraws = 0;
-            rows.push(run(name, case, font, IMAGES, |scene| {
-                let start = Instant::now();
-                renderer
-                    .render(scene, Affine::IDENTITY, &view)
-                    .expect("tiles render");
-                let encode = since(start);
-                let start = Instant::now();
-                device
-                    .poll(wgpu::PollType::wait_indefinitely())
-                    .expect("poll");
-                submissions += renderer.stats().tile_submissions;
-                full_redraws += usize::from(renderer.stats().full_redraw);
-                (encode, since(start))
-            }));
-            println!(
-                "{name} {}: {submissions} tile submissions, {full_redraws} full redraws",
-                case.name()
-            );
-        }
-    }
-
-    #[cfg(feature = "bench-classic")]
-    rows.extend(classic::rows(&device, &queue, font));
-
-    Some((adapter.get_info(), rows))
-}
-
-fn target(device: &wgpu::Device, extra: wgpu::TextureUsages) -> wgpu::Texture {
-    device.create_texture(&wgpu::TextureDescriptor {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("bench target"),
         size: wgpu::Extent3d {
             width: W.into(),
@@ -604,176 +436,43 @@ fn target(device: &wgpu::Device, extra: wgpu::TextureUsages) -> wgpu::Texture {
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format: wgpu::TextureFormat::Rgba8Unorm,
-        usage: extra,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
         view_formats: &[],
-    })
-}
-
-// ------------------------------------------------------------ classic vello
-
-#[cfg(feature = "bench-classic")]
-mod classic {
-    use super::{run, since, target, Row, CASES, H, W};
-    use mui_scene::ResolvedScene;
-    use mui_vello::kurbo::{Affine, BezPath, Rect, Stroke};
-    use mui_vello::{Canvas, PaintType};
-    use std::sync::Arc;
-    use std::time::Instant;
-    use vello_common::peniko::color::{AlphaColor, Srgb};
-    use vello_common::peniko::{Blob, Brush, Fill, FontData};
-
-    /// The same paint walk, encoded into a classic `vello::Scene`. Classic
-    /// takes the transform and brush per call where the sparse-strip scenes
-    /// hold them as state, so this wrapper is that state.
-    struct Classic<'a> {
-        scene: &'a mut vello::Scene,
-        transform: Affine,
-        brush: Brush,
-        stroke: Stroke,
-        font: &'a mut Option<FontData>,
-    }
-
-    impl Classic<'_> {
-        fn color(&self) -> AlphaColor<Srgb> {
-            match self.brush {
-                Brush::Solid(c) => c,
-                _ => AlphaColor::TRANSPARENT,
-            }
-        }
-    }
-
-    impl Canvas for Classic<'_> {
-        fn set_transform(&mut self, t: Affine) {
-            self.transform = t;
-        }
-        fn set_paint(&mut self, p: PaintType) {
-            self.brush = match p {
-                PaintType::Solid(c) => Brush::Solid(c),
-                PaintType::Gradient(g) => Brush::Gradient(g),
-                // Classic runs with `images: false`, so this never fires.
-                PaintType::Image(_) => Brush::Solid(AlphaColor::TRANSPARENT),
-            };
-        }
-        fn set_stroke(&mut self, s: Stroke) {
-            self.stroke = s;
-        }
-        fn fill_path(&mut self, p: &BezPath) {
-            self.scene
-                .fill(Fill::NonZero, self.transform, &self.brush, None, p);
-        }
-        fn stroke_path(&mut self, p: &BezPath) {
-            self.scene
-                .stroke(&self.stroke, self.transform, &self.brush, None, p);
-        }
-        fn fill_blurred_rounded_rect(&mut self, r: &Rect, radius: f32, std_dev: f32, _: bool) {
-            let c = self.color();
-            self.scene.draw_blurred_rounded_rect(
-                self.transform,
-                *r,
-                c,
-                radius.into(),
-                std_dev.into(),
-            );
-        }
-        fn push_clip(&mut self, p: &BezPath) {
-            self.scene.push_clip_layer(Fill::NonZero, self.transform, p);
-        }
-        fn pop_clip(&mut self) {
-            self.scene.pop_layer();
-        }
-        fn push_layer(&mut self, blend: mui_vello::peniko::BlendMode, opacity: f32) {
-            // Classic has no unbounded layer, so the clip is the whole canvas.
-            self.scene.push_layer(
-                Fill::NonZero,
-                blend,
-                opacity,
-                self.transform,
-                &Rect::new(-1e6, -1e6, 1e6, 1e6),
-            );
-        }
-        fn pop_layer(&mut self) {
-            self.scene.pop_layer();
-        }
-        // ponytail: one font per process, because `Blob::new` mints a fresh id
-        // per call and classic's glyph cache keys on it. The library keeps a
-        // real map; this bench only ever draws one font.
-        fn glyphs(&mut self, text: &mui_scene::Text) {
-            let (size, glyphs) = (text.size, &text.glyphs);
-            let f = self
-                .font
-                .get_or_insert_with(|| FontData::new(Blob::new(Arc::new(text.fonts[0].clone())), 0))
-                .clone();
-            let (ox, oy) = (text.origin.x as f32, text.origin.y as f32);
-            self.scene
-                .draw_glyphs(&f)
-                .font_size(size)
-                .hint(true)
-                .transform(self.transform)
-                .brush(&self.brush)
-                .draw(
-                    Fill::NonZero,
-                    glyphs.iter().map(|glyph| vello::Glyph {
-                        id: glyph.id,
-                        x: ox + glyph.x,
-                        y: oy + glyph.y,
-                    }),
-                );
-        }
-    }
-
-    pub fn rows(device: &wgpu::Device, queue: &wgpu::Queue, font: &[u8]) -> Vec<Row> {
-        let texture = target(
-            device,
-            wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_SRC,
-        );
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let mut renderer = vello::Renderer::new(device, vello::RendererOptions::default())
-            .expect("classic renderer");
-        let mut scene = vello::Scene::new();
-        let mut peak = 0u32;
-        let mut font_data = None;
-        let mut draw = |resolved: &ResolvedScene| {
-            scene.reset();
-            let t = Instant::now();
-            mui_vello::paint(
-                &mut Classic {
-                    scene: &mut scene,
-                    transform: Affine::IDENTITY,
-                    brush: Brush::Solid(AlphaColor::TRANSPARENT),
-                    stroke: Stroke::new(1.0),
-                    font: &mut font_data,
-                },
-                resolved,
-                Affine::IDENTITY,
-            )
-            .expect("paints");
-            let encode = since(t);
-            peak = peak.max(scene.bump_estimate(None).total);
-            let t = Instant::now();
-            renderer
-                .render_to_texture(
-                    device,
-                    queue,
-                    &scene,
-                    &view,
-                    &vello::RenderParams {
-                        base_color: vello_common::peniko::color::palette::css::BLACK,
-                        width: W.into(),
-                        height: H.into(),
-                        antialiasing_method: vello::AaConfig::Area,
-                    },
-                )
+    });
+    let view = texture.create_view(&Default::default());
+    let mut renderer = mui_vello::effects::GpuRenderer::new(
+        &device,
+        &queue,
+        texture.format(),
+        [W.into(), H.into()],
+        mui_vello::effects::Budget::default(),
+    )
+    .await
+    .expect("GPU renderer");
+    // An unchanged paint list skips the encode and the render entirely.
+    // `encode` is everything `render` spends on the CPU; `render` is the
+    // wait for the GPU.
+    let mut rows = Vec::new();
+    for case in CASES {
+        let (mut encodes, mut renders) = (0, 0);
+        rows.push(run("GpuRenderer", case, font, |scene| {
+            let start = Instant::now();
+            let stats = renderer
+                .render(scene, Affine::IDENTITY, &view)
                 .expect("render");
+            encodes += stats.encoded_scenes;
+            renders += stats.renders;
+            let encode = since(start);
+            let start = Instant::now();
             device
                 .poll(wgpu::PollType::wait_indefinitely())
                 .expect("poll");
-            (encode, since(t))
-        };
-        let rows = CASES.map(|c| run("vello (classic)", c, font, false, &mut draw));
+            (encode, since(start))
+        }));
         println!(
-            "classic GPU buffer estimate: {:.1} MiB peak",
-            f64::from(peak) / (1024.0 * 1024.0)
+            "GpuRenderer {}: {encodes} scene encodes, {renders} renders",
+            case.name()
         );
-        rows.into()
     }
+    Some((adapter.get_info(), rows))
 }

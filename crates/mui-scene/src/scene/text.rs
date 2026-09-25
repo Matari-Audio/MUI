@@ -18,6 +18,9 @@ pub(super) struct CachedRun {
     pub(super) descent: f64,
     pub(super) line_height: f64,
     pub(super) glyphs: Arc<[TextGlyph]>,
+    /// Per-char advances, shaped the first time this string wraps, so every
+    /// later width breaks without shaping.
+    pub(super) advances: Option<Arc<[(f64, bool)]>>,
 }
 
 impl CachedRun {
@@ -37,6 +40,7 @@ impl CachedRun {
                     font: g.font,
                 })
                 .collect(),
+            advances: None,
         }
     }
 }
@@ -148,6 +152,9 @@ pub(super) struct Runs<'a> {
     pub(super) fonts: Arc<[Font]>,
     /// The last node face's chain, so a column of icons builds it once.
     pub(super) own_fonts: Option<(u64, Arc<[Font]>)>,
+    /// [`SceneSpec::device_scale`]: a line measures the pitch the walk
+    /// paints it at, not the face's raw line height.
+    pub(super) scale: Option<f64>,
     pub(super) generation: u64,
     pub(super) cache: &'a mut PerText<RunKey, CachedRun>,
     pub(super) breaks: &'a mut PerText<BreakKey, Breaks>,
@@ -251,7 +258,7 @@ impl<'a> Runs<'a> {
         cap: Option<usize>,
     ) -> Vec<Cow<'t, str>> {
         let one = || vec![Cow::Borrowed(text)];
-        if max <= 0.0 || self.measure(text, face).width <= max + 0.5 {
+        if max.is_nan() || max <= 0.0 || self.measure(text, face).width <= max + 0.5 {
             return one();
         }
         let fonts = self.fonts_for(face);
@@ -265,10 +272,19 @@ impl<'a> Runs<'a> {
         );
         let generation = self.generation;
         if self.breaks.get(text).is_none_or(|m| !m.contains_key(&key)) {
-            let settings = face.axes.to_vec();
-            let Ok(lines) = mui_text::break_lines(&fonts, text, face.size, &settings, max) else {
+            // `measure` above cached the run this string wraps from.
+            let Some((run, _)) = self.cache.get_mut(text).and_then(|m| m.get_mut(&key.0)) else {
                 return one();
             };
+            if run.advances.is_none() {
+                let settings = face.axes.to_vec();
+                let Ok(a) = mui_text::char_advances(&fonts, text, face.size, &settings) else {
+                    return one();
+                };
+                run.advances = Some(a.into());
+            }
+            let advances = run.advances.as_deref().unwrap_or_default();
+            let lines = mui_text::break_lines_from_advances(text, advances, max);
             let n = cap.unwrap_or(usize::MAX).max(1);
             let ranges = lines.iter().take(n).map(|l| l.text_range.clone()).collect();
             self.breaks
@@ -298,21 +314,17 @@ impl<'a> Runs<'a> {
         }
         out
     }
-    /// A wrapped label's box: the widest line by the stack of line heights.
+    /// A wrapped label's height. Every line has the one pitch its face sets,
+    /// whatever its text, so no line is shaped to find it.
     pub(super) fn wrapped(
         &mut self,
         text: &str,
         face: Face<'_>,
         max: f64,
         cap: Option<usize>,
-    ) -> Size {
-        let (mut w, mut h) = (0.0f64, 0.0);
-        for l in self.lines(text, face, max, cap) {
-            let s = self.measure(&l, face);
-            w = w.max(s.width);
-            h += s.height;
-        }
-        Size::new(w, h)
+    ) -> f64 {
+        let lines = self.lines(text, face, max, cap).len();
+        lines as f64 * self.measure(text, face).height
     }
     pub(super) fn measure(&mut self, text: &str, face: Face<'_>) -> Size {
         let size = face.size;
@@ -320,7 +332,10 @@ impl<'a> Runs<'a> {
             // ponytail: no font → a monospace guess, so layout tests stay
             // font-free. Wrong widths are visible the moment a font is set.
             Ok(None) | Err(_) => Size::new(text.chars().count() as f64 * size * 0.6, size * 1.25),
-            Ok(Some(r)) => Size::new(r.advance, r.line_height),
+            // The snapped pitch the walk stacks lines at, as egui rounds each
+            // row to a device pixel: a raw 15.6 pt Barlow line at 1.5x would
+            // otherwise measure 0.27 pt taller than it paints, per line.
+            Ok(Some(r)) => Size::new(r.advance, super::snap(r.line_height, self.scale)),
         }
     }
 }
@@ -328,7 +343,7 @@ impl<'a> Runs<'a> {
 /// Exactly the fields [`fit`] consumes, as bytes the layout cache compares
 /// in full. Strings carry their length, so no two payloads share an
 /// encoding, and nothing is formatted.
-pub(super) fn layout_key(e: &Element, th: Theme, out: &mut Vec<u8>) {
+pub(super) fn layout_key(e: &Element, th: Theme, scale: Option<f64>, out: &mut Vec<u8>) {
     let Content::Text(t) = &e.content else {
         return;
     };
@@ -352,6 +367,8 @@ pub(super) fn layout_key(e: &Element, th: Theme, out: &mut Vec<u8>) {
     out.extend_from_slice(&e.font.as_ref().map_or(0, |f| f.id() + 1).to_le_bytes());
     // usize::MAX is "no cap".
     out.extend_from_slice(&e.lines.unwrap_or(usize::MAX).to_le_bytes());
+    // Line heights snap to the device scale, so a scale change remeasures.
+    out.extend_from_slice(&scale.map_or(u64::MAX, f64::to_bits).to_le_bytes());
 }
 
 /// A content leaf's size: a paragraph wrapped to its room when it needs it.
@@ -365,7 +382,7 @@ pub(super) fn fit(runs: &mut Runs, th: Theme, e: &crate::Element, room: Option<f
         // reported the ragged width would then be centred inside its own
         // column, aligned with nothing above it.
         Some(room) if room > 0.0 && runs.measure(t, face).width > room + 0.5 => {
-            Size::new(room, runs.wrapped(t, face, room, e.lines).height)
+            Size::new(room, runs.wrapped(t, face, room, e.lines))
         }
         _ => runs.measure(t, face),
     };

@@ -27,7 +27,8 @@ use std::sync::Arc;
 
 use mui_geometry::Path;
 use mui_scene::{ResolvedScene, Size};
-use vello_common::kurbo::Affine;
+use mui_vello::effects::{Budget, GpuRenderer};
+use mui_vello::kurbo::Affine;
 use wgpu::util::DeviceExt;
 
 mod math;
@@ -353,9 +354,7 @@ struct Layer {
     /// The same, premultiplied linear light, with a full mip chain.
     texture: wgpu::Texture,
     group: wgpu::BindGroup,
-    renderer: vello_hybrid::Renderer,
-    resources: vello_hybrid::Resources,
-    cache: mui_vello::Cache,
+    renderer: GpuRenderer,
 }
 
 struct Pipelines {
@@ -679,14 +678,13 @@ impl Stage {
                 view_formats: &[],
             });
             let group = self.tex_group(&view(&texture), &view(&texture));
-            let (renderer, resources) = vello_hybrid::Renderer::new(
+            let renderer = pollster::block_on(GpuRenderer::new(
                 &self.device,
-                &vello_hybrid::RenderTargetConfig {
-                    format: wgpu::TextureFormat::Rgba8Unorm,
-                    width: w.into(),
-                    height: h.into(),
-                },
-            );
+                &self.queue,
+                wgpu::TextureFormat::Rgba8Unorm,
+                [w.into(), h.into()],
+                Budget::default(),
+            ))?;
             self.layers.insert(
                 id.into(),
                 Layer {
@@ -694,43 +692,15 @@ impl Stage {
                     texture,
                     group,
                     renderer,
-                    resources,
-                    cache: mui_vello::Cache::default(),
                 },
             );
         }
         let layer = self.layers.get_mut(id).expect("inserted above");
-        let mut vscene = vello_hybrid::Scene::new(w, h);
-        mui_vello::paint(
-            &mut mui_vello::Gpu {
-                scene: &mut vscene,
-                resources: &mut layer.resources,
-                cache: &mut layer.cache,
-                atlas: None,
-            },
-            scene,
-            Affine::scale(supersample),
-        )?;
-        let mut enc = self.device.create_command_encoder(&Default::default());
         let target = view(&layer.raw);
-        // Vello draws over what is there: clear to transparent first.
-        drop(enc.begin_render_pass(&wgpu::RenderPassDescriptor {
-            color_attachments: &[Some(attach(&target, Some(wgpu::Color::TRANSPARENT)))],
-            ..Default::default()
-        }));
-        layer.renderer.render(
-            &vscene,
-            &mut layer.resources,
-            &self.device,
-            &self.queue,
-            &mut enc,
-            &vello_hybrid::RenderSize {
-                width: w.into(),
-                height: h.into(),
-            },
-            &target,
-            &vello_hybrid::TextureBindings::new(),
-        )?;
+        layer
+            .renderer
+            .render(scene, Affine::scale(supersample), &target)?;
+        let mut enc = self.device.create_command_encoder(&Default::default());
         // Linearise into mip 0, then halve down the chain.
         let layer = &self.layers[id];
         let level = |i: u32| {
@@ -1157,7 +1127,7 @@ impl Stage {
         self.device.poll(wgpu::PollType::wait_indefinitely())?;
         let stride = self.width as usize * 16;
         let mut rgba = Vec::with_capacity(self.width as usize * self.height as usize * 4);
-        for line in slice.get_mapped_range().chunks_exact(row as usize) {
+        for line in slice.get_mapped_range()?.chunks_exact(row as usize) {
             rgba.extend_from_slice(bytemuck::cast_slice::<u8, f32>(&line[..stride]));
         }
         self.readback.unmap();
@@ -1292,11 +1262,11 @@ fn pipelines(
         },
     };
     let wall_attrs = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
-    let wall_buf = [wgpu::VertexBufferLayout {
+    let wall_buf = [Some(wgpu::VertexBufferLayout {
         array_stride: 24,
         step_mode: wgpu::VertexStepMode::Vertex,
         attributes: &wall_attrs,
-    }];
+    })];
     // `scene`: into the multisampled HDR target with depth.
     let make = |vs: &str,
                 fs: &str,
@@ -1304,7 +1274,7 @@ fn pipelines(
                 blend: Option<wgpu::BlendState>,
                 scene: bool,
                 depth_write: bool,
-                buffers: &[wgpu::VertexBufferLayout]| {
+                buffers: &[Option<wgpu::VertexBufferLayout>]| {
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some(fs),
             layout: Some(layout),

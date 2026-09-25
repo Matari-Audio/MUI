@@ -286,6 +286,13 @@ let mut plan = DamagePlan::default(); // kept across frames
 tracker.plan(&scene, xf, &tiles, &mut plan);
 ```
 
+- `vello_hybrid` is gone; the GPU path is classic Vello on wgpu 30 (was 29).
+  `effects::HybridEffects` and `effects::TiledEffects` -> `effects::GpuRenderer`
+  (same `new(device, queue, format, size, budget).await`, `render`, `resize`,
+  `invalidate`). The target view needs `RENDER_ATTACHMENT`. `DamageTracker`,
+  `DamagePlan` and the `Gpu`/`Atlas` canvas go with the tiles and the atlas;
+  draw straight into a `vello::Scene` through `Classic` instead.
+
 ## mui-access
 
 - `tree_update(scene, focus)` -> `tree_update(scene, focus, scale: f64)`.
@@ -429,7 +436,14 @@ per-parameter wrapper.
 
 ## Examples and tools
 
-- `mui-vello` example `gpu_matrix --backend classic|hybrid` -> hybrid only;
-  the flag and its `bench-classic` requirement are gone
+- `mui-vello` example `gpu_matrix` -> deleted with `vello_hybrid`
+- `mui-vello` example `bench` -> `vello_cpu` and `GpuRenderer` rows only;
+  needs `--features cpu,gpu-effects`. The `vello_hybrid`, tiled and classic
+  rows and `bench-classic` are gone
+- `mui-vello` example `gpu_contract` -> the tile contract went with
+  `TiledEffects`
 - `tools/native-gpu/compare.py` -> deleted, with the classic/hybrid pairing in
   `run_matrix.py`
+- `tools/native-gpu/run_matrix.py`, `report.py` -> deleted with `gpu_matrix`
+- `mui-preview` feature `gpu-effects` -> removed; the gallery always renders
+  through `GpuRenderer`

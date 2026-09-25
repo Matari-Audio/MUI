@@ -14,14 +14,14 @@ truce-params = "6.3"
 # none of it.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 baseview = { package = "baseview-truce", version = "0.1.1-truce.13" }
-# Only `platform`: truce's parent-handle and rwh 0.5 -> 0.6 surface bridge.
+# Only `platform`: truce's parent handle and macOS view anchoring.
 truce-gui = { version = "6.3", default-features = false }
 keyboard-types = { version = "0.7", default-features = false }
 # baseview's parent handle is raw-window-handle 0.5.
 raw-window-handle = "0.5"
 pollster = "0.4"
 # mui-vello picks no backend; the window that owns the device does.
-wgpu = { version = "29", default-features = false, features = ["wgsl", "vulkan", "gles", "metal", "dx12"] }
+wgpu = { version = "30", default-features = false, features = ["wgsl", "vulkan", "gles", "metal", "dx12"] }
 
 # baseview does not own an X11 selection; arboard keeps one alive.
 [target.'cfg(target_os = "linux")'.dependencies]

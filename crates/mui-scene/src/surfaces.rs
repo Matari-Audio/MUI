@@ -9,7 +9,7 @@ use mui_geometry::{
 use std::collections::HashMap;
 use std::sync::Arc;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 struct Inputs {
     outline: Path,
     border: Path,
@@ -22,6 +22,22 @@ struct Inputs {
     offsets: OffsetOptions,
     geometry: GeometryOptions,
     device_scale: Option<f64>,
+}
+impl Inputs {
+    /// Equal, but for the last bits a translation rounds off the paths.
+    fn near(&self, o: &Self) -> bool {
+        self.outline.near(&o.outline, 1e-9)
+            && self.border.near(&o.border, 1e-9)
+            && self.panels == o.panels
+            && self.joins == o.joins
+            && self.padding == o.padding
+            && self.border_inset == o.border_inset
+            && self.rounding == o.rounding
+            && self.corners == o.corners
+            && self.offsets == o.offsets
+            && self.geometry == o.geometry
+            && self.device_scale == o.device_scale
+    }
 }
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Geometry {
@@ -88,14 +104,16 @@ impl Cache {
         };
         let mut nodes = Vec::new();
         collect(root, at, &mut nodes);
+        // Reversed, so the first node with a key wins as a scan would find.
+        let keyed: HashMap<&str, usize> = nodes
+            .iter()
+            .rev()
+            .filter_map(|(i, n)| Some((n.key()?, *i)))
+            .collect();
         let named = |id: &Id| -> Result<Frame, SceneError> {
-            nodes
-                .iter()
-                .find(|(_, n)| n.key() == Some(id.as_str()))
-                .map(|(i, _)| frames[*i])
-                .ok_or_else(|| {
-                    mui_geometry::Error::InvalidOptions("surface footprint missing").into()
-                })
+            keyed.get(id.as_str()).map(|i| frames[*i]).ok_or_else(|| {
+                mui_geometry::Error::InvalidOptions("surface footprint missing").into()
+            })
         };
         let mut panels = Vec::new();
         let mut joins = Vec::new();
@@ -181,8 +199,24 @@ impl Cache {
                 spec.geometry,
             )?;
         }
+        // Local to the owner's frame, so a moved owner still hits.
+        let origin = Point::new(frames[at].x, frames[at].y);
+        let local = |f: &mut Frame| {
+            f.x -= origin.x;
+            f.y -= origin.y;
+        };
+        panels
+            .iter_mut()
+            .for_each(|(_, fs)| fs.iter_mut().for_each(local));
+        for (_, tab, body, _) in &mut joins {
+            local(tab);
+            local(body);
+        }
+        let mut outline = outline.clone();
+        outline.translate(-origin);
+        border.translate(-origin);
         let input = Inputs {
-            outline: outline.clone(),
+            outline,
             border,
             panels,
             joins,
@@ -206,14 +240,18 @@ impl Cache {
             device_scale: spec.device_scale,
         };
         // Node indices are stored relative to the owner, which a wrapper
-        // around the root shifts as a whole.
+        // around the root shifts as a whole, and paths relative to its frame.
         let placed = |mut g: Geometry| {
-            g.panels.iter_mut().for_each(|(i, _)| *i += at);
+            for (i, p) in &mut g.panels {
+                *i += at;
+                p.translate(origin);
+            }
+            g.joins.translate(origin);
             g.join_nodes.iter_mut().for_each(|i| *i += at);
             g
         };
         if let Some((old, result)) = self.entries.get(key) {
-            if *old == input {
+            if old.near(&input) {
                 return Ok(placed(result.clone()));
             }
         }

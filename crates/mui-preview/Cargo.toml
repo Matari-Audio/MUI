@@ -7,26 +7,16 @@ publish = false
 
 [features]
 default = []
-gpu-effects = ["mui/gpu-effects"]
 # The CPU rasteriser, for the snapshot test. The gallery itself is a GPU
 # host and never uses it.
 cpu = ["mui/cpu"]
 
-[[example]]
-name = "gpu_welding"
-required-features = ["gpu-effects"]
-
 [dependencies]
-mui = { path = "../mui" }
+mui = { path = "../mui", features = ["gpu-effects"] }
 mui-text = { path = "../mui-text" }
 # The gallery owns the window and the device, which is exactly the split a
 # plugin wrapper has. The library crates above pick no backend of their own.
-vello_common = { version = "0.2", default-features = false }
-vello_hybrid = { version = "0.2", features = ["wgpu_default"] }
-# No feature list here: `vello_hybrid/wgpu_default` turns on `wgpu/default`,
-# which already carries every backend, so naming them looks like a policy the
-# build does not actually honour. Pick backends by dropping `wgpu_default`.
-wgpu = "29"
+wgpu = "30"
 winit = "0.30"
 pollster = "0.4"
 # Fallback face so the glyph scene has something to draw without a system font.
