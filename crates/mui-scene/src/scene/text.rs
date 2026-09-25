@@ -329,31 +329,30 @@ impl<'a> Runs<'a> {
         let lines = self.lines(text, face, max, cap).len();
         lines as f64 * self.measure(text, face).height
     }
-    /// `text`'s widest word, from the run [`Self::measure`] shaped.
-    pub(super) fn min_content(&mut self, text: &str, face: Face<'_>) -> f64 {
-        match self.run(text, face) {
-            Ok(Some(r)) => r.min_content,
-            // The same monospace guess `measure` makes.
-            _ => {
-                text.split_ascii_whitespace()
-                    .map(|w| w.chars().count())
-                    .max()
-                    .unwrap_or(0) as f64
-                    * face.size
-                    * 0.6
-            }
-        }
-    }
     pub(super) fn measure(&mut self, text: &str, face: Face<'_>) -> Size {
-        let size = face.size;
+        self.measured(text, face).0
+    }
+    /// [`Self::measure`] and the widest word, from one lookup.
+    pub(super) fn measured(&mut self, text: &str, face: Face<'_>) -> (Size, f64) {
+        let (size, scale) = (face.size, self.scale);
         match self.run(text, face) {
             // ponytail: no font → a monospace guess, so layout tests stay
             // font-free. Wrong widths are visible the moment a font is set.
-            Ok(None) | Err(_) => Size::new(text.chars().count() as f64 * size * 0.6, size * 1.25),
+            Ok(None) | Err(_) => {
+                let em = |n: usize| n as f64 * size * 0.6;
+                let word = text.split_ascii_whitespace().map(|w| w.chars().count());
+                (
+                    Size::new(em(text.chars().count()), size * 1.25),
+                    em(word.max().unwrap_or(0)),
+                )
+            }
             // The snapped pitch the walk stacks lines at, as egui rounds each
             // row to a device pixel: a raw 15.6 pt Barlow line at 1.5x would
             // otherwise measure 0.27 pt taller than it paints, per line.
-            Ok(Some(r)) => Size::new(r.advance, super::snap(r.line_height, self.scale)),
+            Ok(Some(r)) => (
+                Size::new(r.advance, super::snap(r.line_height, scale)),
+                r.min_content,
+            ),
         }
     }
 }
@@ -397,21 +396,18 @@ pub(super) fn fit(runs: &mut Runs, th: Theme, e: &crate::Element, room: Option<f
         return Size::ZERO.into();
     };
     let (t, face) = (t.as_str(), Face::of(e, th));
-    let min_width = if e.lines.is_some() {
-        0.0
-    } else {
-        runs.min_content(t, face)
-    };
+    let (one_line, word) = runs.measured(t, face);
+    let min_width = if e.lines.is_some() { 0.0 } else { word };
     // A room narrower than a word is overflowed, not broken mid-word.
     let room = room.map(|r| r.max(min_width));
     let mut fit = match room {
         // The room it wrapped into, not its longest line: a paragraph that
         // reported the ragged width would then be centred inside its own
         // column, aligned with nothing above it.
-        Some(room) if room > 0.0 && runs.measure(t, face).width > room + 0.5 => {
+        Some(room) if room > 0.0 && one_line.width > room + 0.5 => {
             Size::new(room, runs.wrapped(t, face, room, e.lines))
         }
-        _ => runs.measure(t, face),
+        _ => one_line,
     };
     // The reserved string widens the box and nothing else: its own height is
     // the same line at the same size, and a longer value still measures long.
