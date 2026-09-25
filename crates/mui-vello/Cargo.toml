@@ -50,9 +50,9 @@ name = "gpu_contract"
 required-features = ["gpu-effects"]
 
 [[example]]
-name = "gpu_matrix"
+name = "headless"
 required-features = ["gpu-effects"]
 
 [[example]]
 name = "bench"
-required-features = ["cpu"]
+required-features = ["cpu", "gpu-effects"]
