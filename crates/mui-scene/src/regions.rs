@@ -113,7 +113,7 @@ type Entry = (Operation, OffsetOptions, GeometryOptions, Path, bool, u64);
 /// resolve that does not use it.
 #[derive(Debug, Default)]
 pub(crate) struct RegionCache {
-    entries: std::collections::HashMap<(std::sync::Arc<str>, u8), Entry>,
+    entries: rustc_hash::FxHashMap<(std::sync::Arc<str>, u8), Entry>,
     generation: u64,
 }
 impl RegionCache {

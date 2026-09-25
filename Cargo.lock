@@ -1590,6 +1590,7 @@ name = "mui"
 version = "0.3.2"
 dependencies = [
  "epaint_default_fonts",
+ "libc",
  "mui-geometry",
  "mui-input",
  "mui-layout",
@@ -1715,6 +1716,7 @@ dependencies = [
  "mui-style",
  "mui-text",
  "mui-weld",
+ "rustc-hash",
  "ttf-inter",
 ]
 

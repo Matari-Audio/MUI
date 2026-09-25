@@ -1,5 +1,5 @@
 //! What a resolve hands back: the paint list and the surfaces.
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 use std::sync::Arc;
 
 use mui_geometry::{Bounds, Path, Point, RoundedRect};

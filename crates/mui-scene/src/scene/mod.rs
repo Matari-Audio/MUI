@@ -18,8 +18,8 @@ pub use resolved::{Layer, Painted, ResolvedScene, ResolvedSurface, Text, TextGly
 pub use spec::{SceneError, SceneSpec};
 pub use text::TextCache;
 
+use rustc_hash::FxHashMap as HashMap;
 use std::borrow::Cow;
-use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::hash::BuildHasher;
 use std::sync::{Arc, LazyLock};
@@ -131,7 +131,7 @@ struct Walk<'a> {
     /// Border joins a surface owner adds to its ramp band.
     surface_joins: HashMap<usize, Path>,
     /// Nodes whose `.join_border(..)` an owner resolved.
-    joined_nodes: std::collections::HashSet<usize>,
+    joined_nodes: rustc_hash::FxHashSet<usize>,
     ramp_anchors: HashMap<usize, Frame>,
     ramp_frames: HashMap<(usize, mui_layout::Id), Frame>,
     weld_cache: &'a mut crate::WeldCache,
@@ -313,26 +313,26 @@ pub fn resolve_scene_animated(
     let mut w = Walk {
         spec,
         frames,
-        regions: HashMap::new(),
-        region_envelopes: HashMap::new(),
+        regions: HashMap::default(),
+        region_envelopes: HashMap::default(),
         runs,
         sizes,
         outlines: &mut text.outlines,
         borders: &mut text.borders,
         region_cache: &mut text.region_cache,
         surface_cache: &mut text.surface_cache,
-        surface_joins: HashMap::new(),
-        joined_nodes: std::collections::HashSet::new(),
-        ramp_anchors: HashMap::new(),
-        ramp_frames: HashMap::new(),
+        surface_joins: HashMap::default(),
+        joined_nodes: Default::default(),
+        ramp_anchors: HashMap::default(),
+        ramp_frames: HashMap::default(),
         weld_cache,
         i: 0,
         key: empty_key(),
         keys: &mut text.keys,
         paint: Vec::new(),
         surfaces: Vec::with_capacity(nodes),
-        at: HashMap::with_capacity(nodes),
-        external_welds: HashMap::new(),
+        at: HashMap::with_capacity_and_hasher(nodes, Default::default()),
+        external_welds: HashMap::default(),
         deferred: Vec::new(),
         base_y: None,
     };

@@ -6,7 +6,7 @@ use mui_geometry::{
     boolean_paths, fillet, inset_path, union, union_contours, BooleanOp, CornerStyle, Fillet,
     GeometryOptions, OffsetOptions, Path, PlacedShape, Point, Polygon,
 };
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 use std::sync::Arc;
 
 #[derive(Clone, Debug)]

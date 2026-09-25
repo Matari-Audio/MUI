@@ -1,6 +1,6 @@
 //! Shaping, line breaking and measuring, cached across resolves.
+use rustc_hash::FxHashMap as HashMap;
 use std::borrow::Cow;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use mui_layout::Size;

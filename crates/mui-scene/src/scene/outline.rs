@@ -1,6 +1,6 @@
 //! A node's outline: its own rounded frame, a weld of its children, or
 //! either with carved children taken out -- and the cache for the costly ones.
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 use std::sync::Arc;
 
 use mui_geometry::{
