@@ -231,6 +231,27 @@ impl Path {
         // re-validate the output if paths ever carry such extremes.
         Ok(Self { commands })
     }
+    /// Moved by `d`, unvalidated: a translation cannot make a valid path
+    /// invalid, so geometry cached in local space goes back to where it is
+    /// painted without re-checking every arc.
+    pub fn translated(&self, d: Point) -> Self {
+        let commands = self
+            .commands
+            .iter()
+            .map(|c| match *c {
+                PathCommand::MoveTo(p) => PathCommand::MoveTo(p + d),
+                PathCommand::LineTo(p) => PathCommand::LineTo(p + d),
+                PathCommand::ArcTo(a) => PathCommand::ArcTo(Arc {
+                    center: a.center + d,
+                    to: a.to + d,
+                    ..a
+                }),
+                PathCommand::CubicTo(a, b, p) => PathCommand::CubicTo(a + d, b + d, p + d),
+                PathCommand::Close => PathCommand::Close,
+            })
+            .collect();
+        Self { commands }
+    }
     /// Chainable construction for hand-drawn geometry: a response curve, a
     /// grid line. `quad_to` is stored as the exact equivalent cubic.
     pub fn move_to(mut self, p: Point) -> Self {

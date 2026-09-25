@@ -22,7 +22,7 @@ mod nesting;
 mod offset;
 mod regions;
 pub use regions::{
-    boolean_paths, border_geometry, boundary_band, union_contours, BorderAlign, BorderGeometry,
+    boolean_paths, border_band, border_geometry, boundary_band, union_contours, BorderAlign, BorderGeometry,
     ShapeSplit, SplitAxis, WidthProfile,
 };
 mod morph;

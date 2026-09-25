@@ -4,7 +4,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use mui_geometry::{
-    boolean, fillet, union, BooleanOp, CornerStyle, Fillet, Path, Point, RoundedRect, Topology,
+    boolean, fillet, union, BooleanOp, CornerStyle, Fillet, Path, Point, Polygon, RoundedRect,
+    Topology,
 };
 use mui_layout::Frame;
 
@@ -363,7 +364,14 @@ impl Walk<'_> {
                 shadow_rects: child_rects,
                 ..
             } = self.outline(c, f, child_first)?;
-            let child_shapes = polygons(&path)?;
+            // A rounded rect is one simple ring already: no normalizing pass.
+            let child_shapes = match child_rect {
+                Some(r) => {
+                    let ring = r.path().flatten(0.25, 100_000)?.swap_remove(0);
+                    vec![Polygon::new(ring).into()]
+                }
+                None => polygons(&path)?,
+            };
             if child_shapes.is_empty() {
                 continue;
             }

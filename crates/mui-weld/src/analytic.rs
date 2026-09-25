@@ -134,7 +134,8 @@ impl AnalyticSource {
         let r = self.radius.min(self.half[0]).min(self.half[1]);
         let qx = (c * x + s * y).abs() - self.half[0] + r;
         let qy = (-s * x + c * y).abs() - self.half[1] + r;
-        qx.max(0.).hypot(qy.max(0.)) + qx.max(qy).min(0.) - r
+        let (ox, oy) = (qx.max(0.), qy.max(0.));
+        (ox * ox + oy * oy).sqrt() + qx.max(qy).min(0.) - r
     }
 }
 

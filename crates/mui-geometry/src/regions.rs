@@ -96,6 +96,20 @@ pub fn border_geometry(
     o: OffsetOptions,
     g: GeometryOptions,
 ) -> Result<BorderGeometry, Error> {
+    let band = border_band(outline, width, align, o, g)?;
+    let interior = boolean_paths(outline, &band, BooleanOp::Difference, o, g)?;
+    Ok(BorderGeometry { band, interior })
+}
+
+/// Just the painted band of [`border_geometry`], one Boolean pass cheaper:
+/// a stroke never needs the interior.
+pub fn border_band(
+    outline: &Path,
+    width: WidthProfile,
+    align: BorderAlign,
+    o: OffsetOptions,
+    g: GeometryOptions,
+) -> Result<Path, Error> {
     width.validate()?;
     // Uniform borders are the difference of parallel offsets. Sweeping disks
     // around every flattened vertex is only needed for a varying width.
@@ -104,9 +118,7 @@ pub fn border_geometry(
         let outward = width.from - inward;
         let inner = offset_path(outline, -inward, o)?.path;
         let outer = offset_path(outline, outward, o)?.path;
-        let band = boolean_paths(&outer, &inner, BooleanOp::Difference, o, g)?;
-        let interior = boolean_paths(outline, &inner, BooleanOp::Intersection, o, g)?;
-        return Ok(BorderGeometry { band, interior });
+        return boolean_paths(&outer, &inner, BooleanOp::Difference, o, g);
     }
 
     let sweep = union_contours(
@@ -122,13 +134,11 @@ pub fn border_geometry(
         o,
         g,
     )?;
-    let band = match align {
+    Ok(match align {
         BorderAlign::Inside => boolean_paths(&sweep, outline, BooleanOp::Intersection, o, g)?,
         BorderAlign::Center => sweep,
         BorderAlign::Outside => boolean_paths(&sweep, outline, BooleanOp::Difference, o, g)?,
-    };
-    let interior = boolean_paths(outline, &band, BooleanOp::Difference, o, g)?;
-    Ok(BorderGeometry { band, interior })
+    })
 }
 
 /// Union every contour as a solid piece, as required for overlapping sweep meshes.

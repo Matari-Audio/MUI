@@ -84,16 +84,13 @@ impl RegionCache {
             Operation::Combine(a, b, op) => boolean_paths(a, b, *op, o, g)?,
             Operation::Sweep(p) => union_contours(p, o, g)?,
             Operation::SplitMask(bounds, split, second) => split.mask(*bounds, *second, o)?,
-            Operation::Border(p, width, align) => {
-                mui_geometry::border_geometry(
-                    p,
-                    mui_geometry::WidthProfile::uniform(*width),
-                    *align,
-                    o,
-                    g,
-                )?
-                .band
-            }
+            Operation::Border(p, width, align) => mui_geometry::border_band(
+                p,
+                mui_geometry::WidthProfile::uniform(*width),
+                *align,
+                o,
+                g,
+            )?,
         };
         self.entries
             .insert(key, (op, o, g, path.clone(), self.generation));

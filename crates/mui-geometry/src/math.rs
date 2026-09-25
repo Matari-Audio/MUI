@@ -20,8 +20,10 @@ impl Point {
     pub fn cross(self, b: Self) -> f64 {
         self.x * b.y - self.y * b.x
     }
+    /// Plain `sqrt`, not `hypot`: UI coordinates sit far below where the
+    /// squares could overflow, and `hypot` was a profile hotspot.
     pub fn length(self) -> f64 {
-        self.x.hypot(self.y)
+        self.dot(self).sqrt()
     }
     pub fn distance(self, b: Self) -> f64 {
         (self - b).length()
@@ -196,12 +198,19 @@ pub(crate) fn signed_area(points: &[Point]) -> f64 {
         * 0.5
 }
 pub(crate) fn point_segment_distance(p: Point, a: Point, b: Point) -> f64 {
+    point_segment_distance2(p, a, b).sqrt()
+}
+/// Squared: the comparisons in the O(V²) passes skip the root.
+pub(crate) fn point_segment_distance2(p: Point, a: Point, b: Point) -> f64 {
     let v = b - a;
     let n = v.dot(v);
-    if n == 0. {
-        return p.distance(a);
-    }
-    p.distance(a + v * ((p - a).dot(v) / n).clamp(0., 1.))
+    let t = if n == 0. {
+        0.
+    } else {
+        ((p - a).dot(v) / n).clamp(0., 1.)
+    };
+    let d = p - (a + v * t);
+    d.dot(d)
 }
 
 /// Remove duplicate/collinear vertices without deleting an entire short edge twice.
@@ -255,12 +264,22 @@ pub(crate) fn clean_ring(input: &[Point], epsilon: f64) -> Result<Vec<Point>, Er
     Ok(p)
 }
 
-/// Bounded O(V²) validation for caller-supplied polygon rings. The Boolean
-/// backend handles intersections BETWEEN valid shapes, not malformed leaf rings.
-// ponytail: all-pairs edge test, ~8M pairs at the default 4096-vertex cap;
-// a sweep line (Bentley-Ottmann) if that cap ever has to rise.
+/// Validation for caller-supplied polygon rings. The Boolean backend handles
+/// intersections BETWEEN valid shapes, not malformed leaf rings.
+///
+/// Sweep and prune: edges sorted by their left end, and only pairs whose
+/// eps-grown boxes overlap get the exact test. A ring's edges mostly touch
+/// only their neighbours, so this is O(V log V) plus the near pairs.
 pub(crate) fn validate_simple(p: &[Point], eps: f64) -> Result<(), Error> {
     let n = p.len();
+    let eps2 = eps * eps;
+    let mut boxes: Vec<(f64, f64, f64, f64, usize)> = (0..n)
+        .map(|i| {
+            let (a, b) = (p[i], p[(i + 1) % n]);
+            (a.x.min(b.x), a.x.max(b.x), a.y.min(b.y), a.y.max(b.y), i)
+        })
+        .collect();
+    boxes.sort_unstable_by(|l, r| l.0.total_cmp(&r.0));
     for i in 0..n {
         let a = p[i];
         let b = p[(i + 1) % n];
@@ -269,16 +288,21 @@ pub(crate) fn validate_simple(p: &[Point], eps: f64) -> Result<(), Error> {
         {
             return Err(Error::SelfIntersection);
         }
-        for j in i + 1..n {
-            if j == (i + 1) % n || (j + 1) % n == i {
+    }
+    for (k, &(_, x1, y0, y1, i)) in boxes.iter().enumerate() {
+        let (a, b) = (p[i], p[(i + 1) % n]);
+        for &(ox0, _, oy0, oy1, j) in &boxes[k + 1..] {
+            if ox0 > x1 + eps {
+                break;
+            }
+            if oy0 > y1 + eps || y0 > oy1 + eps || j == (i + 1) % n || i == (j + 1) % n {
                 continue;
             }
-            let c = p[j];
-            let d = p[(j + 1) % n];
-            if point_segment_distance(a, c, d) <= eps
-                || point_segment_distance(b, c, d) <= eps
-                || point_segment_distance(c, a, b) <= eps
-                || point_segment_distance(d, a, b) <= eps
+            let (c, d) = (p[j], p[(j + 1) % n]);
+            if point_segment_distance2(a, c, d) <= eps2
+                || point_segment_distance2(b, c, d) <= eps2
+                || point_segment_distance2(c, a, b) <= eps2
+                || point_segment_distance2(d, a, b) <= eps2
             {
                 return Err(Error::SelfIntersection);
             }
