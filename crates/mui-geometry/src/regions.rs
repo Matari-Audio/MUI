@@ -116,9 +116,10 @@ pub fn border_band(
     if width.from == width.to {
         let inward = width.from * align.inward();
         let outward = width.from - inward;
-        let inner = offset_path(outline, -inward, o)?.path;
-        let outer = offset_path(outline, outward, o)?.path;
-        return boolean_paths(&outer, &inner, BooleanOp::Difference, o, g);
+        // Offsets come back normalized: overlay them as they are.
+        let inner = offset_path(outline, -inward, o)?.topology;
+        let outer = offset_path(outline, outward, o)?.topology;
+        return overlay(&outer, &inner, BooleanOp::Difference, g);
     }
 
     let sweep = union_contours(
@@ -179,10 +180,25 @@ pub fn boolean_paths(
     o: OffsetOptions,
     g: GeometryOptions,
 ) -> Result<Path, Error> {
+    g.validate()?;
+    // Normalized filled contours can touch at a point after clipping/offsets.
+    // They are not caller-authored simple polygons: preserve that topology
+    // instead of routing them back through leaf-polygon validation.
+    let a = offset_path(a, 0., o)?.topology;
+    let b = offset_path(b, 0., o)?.topology;
+    overlay(&a, &b, op, g)
+}
+
+/// [`boolean_paths`] on already normalized topologies.
+fn overlay(
+    a: &crate::Topology,
+    b: &crate::Topology,
+    op: BooleanOp,
+    g: GeometryOptions,
+) -> Result<Path, Error> {
     use i_overlay::{core::fill_rule::FillRule, float::single::SingleFloatOverlay};
     g.validate()?;
-    let contours = |path| -> Result<Vec<Vec<[f64; 2]>>, Error> {
-        let topology = offset_path(path, 0., o)?.topology;
+    let contours = |topology: &crate::Topology| -> Result<Vec<Vec<[f64; 2]>>, Error> {
         if topology.vertex_count() > g.max_vertices {
             return Err(Error::TooManyVertices);
         }
@@ -200,12 +216,7 @@ pub fn boolean_paths(
             .map(|r| r.points().iter().map(|p| [p.x, p.y]).collect())
             .collect())
     };
-    // Normalized filled contours can touch at a point after clipping/offsets.
-    // They are not caller-authored simple polygons: preserve that topology
-    // instead of routing them back through leaf-polygon validation.
-    let a = contours(a)?;
-    let b = contours(b)?;
-    let result = a.overlay_as::<i64>(&b, op.rule(), FillRule::EvenOdd);
+    let result = contours(a)?.overlay_as::<i64>(&contours(b)?, op.rule(), FillRule::EvenOdd);
     Ok(crate::boolean::topology(result, g)?.to_path())
 }
 
