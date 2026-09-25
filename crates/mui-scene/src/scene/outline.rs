@@ -360,6 +360,7 @@ impl Walk<'_> {
             let Contour {
                 path,
                 rect: child_rect,
+                shadow_rects: child_rects,
                 ..
             } = self.outline(c, f, child_first)?;
             let child_shapes = polygons(&path)?;
@@ -368,12 +369,17 @@ impl Walk<'_> {
             }
             shapes.extend(child_shapes);
             // Keep the child's analytic radius for the optional shadow fast
-            // path. A squircle or nested weld has no analytic rect and falls
-            // back to the frame with the weld's convex radius.
-            rects.push(match child_rect {
-                Some(r) => r,
-                None => RoundedRect::new(bounds(f, self.spec.device_scale), convex)?,
-            });
+            // path. A nested weld lends its own participants' rects (its
+            // frame can be far larger than its outline); a squircle has no
+            // analytic rect and falls back to the frame with the weld's
+            // convex radius.
+            match child_rect {
+                Some(r) => rects.push(r),
+                None if c.payload().style.union && !child_rects.is_empty() => {
+                    rects.extend(child_rects);
+                }
+                None => rects.push(RoundedRect::new(bounds(f, self.spec.device_scale), convex)?),
+            }
             participants += 1;
         }
         if shapes.is_empty() {

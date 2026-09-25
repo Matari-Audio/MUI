@@ -4,6 +4,7 @@
 //! solver produced in the same order. Every node gets an outline; every layer
 //! of its [`Style`](crate::Style) becomes one [`Painted`] entry. Children
 //! paint after their parent, so a list index is a z-order.
+pub mod bar;
 mod material;
 mod outline;
 mod paint;
@@ -277,6 +278,7 @@ pub fn resolve_scene_animated(
             .cloned()
             .collect(),
         own_fonts: None,
+        scale: spec.device_scale,
         generation: text.generation,
         cache: &mut text.runs,
         breaks: &mut text.breaks,
@@ -293,7 +295,7 @@ pub fn resolve_scene_animated(
         spec.limits,
         th.spacing,
         &mut text.layout,
-        |e, out| layout_key(e, th, out),
+        |e, out| layout_key(e, th, spec.device_scale, out),
         |e, room| fit(&mut runs, th, e, room),
     )?;
     let nodes = layout.all().len();

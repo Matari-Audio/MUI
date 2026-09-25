@@ -2,11 +2,11 @@
 //! where two flex weights put it, a knob's pointer is an anchored offset.
 use std::ops::RangeInclusive;
 
-use mui_geometry::Point;
-use mui_input::{Button, Key, FINE_DRAG};
+use mui_input::{Key, FINE_DRAG};
 use mui_scene::prelude::*;
 use mui_scene::{Palette, SpacingToken, Spring, Stroke};
 
+use crate::widgets::{text_edit, TextOpts};
 use crate::Ui;
 
 /// How solid a control looks. daisyUI's four button styles, resolved from
@@ -48,11 +48,7 @@ struct Look {
 /// is already gated to the focused surface, so widgets do not need to invent
 /// a second focus test or consume another key stream.
 fn activated(ui: &Ui, id: &str) -> bool {
-    ui.get(id).clicked_with(Button::Primary)
-        || ui
-            .keys(id)
-            .iter()
-            .any(|k| matches!(k.key, Key::Enter | Key::Space))
+    ui.get(id).activated()
 }
 impl Look {
     /// What the control's own box is painted with, where the role is the
@@ -249,14 +245,25 @@ pub(crate) fn step(range: &RangeInclusive<f64>) -> f64 {
     (range.end() - range.start()) / 100.0
 }
 
-/// Step `value` by the focused control's keys: arrows by [`step`] (a tenth
-/// of it with Shift), Page Up and Down by ten steps, Home and End to the
-/// ends. The runtime brackets the frame as one edit.
-fn stepped(ui: &Ui, id: &str, value: &mut f64, range: &RangeInclusive<f64>) {
+/// Step `value` by the focused control's keys: arrows by a hundredth of
+/// `range` (a tenth of that with Shift), Page Up and Down by ten steps, Home
+/// and End to the ends. The runtime brackets the frame as one edit. Returns
+/// whether the value moved.
+///
+/// The keyboard half of [`slider`] and [`knob`], for a control of your own:
+///
+/// ```
+/// use mui::prelude::*;
+/// let ui = Ui::new(Theme::DEFAULT);
+/// let mut trim = 0.0;
+/// assert!(!stepped(&ui, "trim", &mut trim, &(-12.0..=12.0)), "nothing is focused");
+/// ```
+pub fn stepped(ui: &Ui, id: &str, value: &mut f64, range: &RangeInclusive<f64>) -> bool {
     let (lo, hi) = (*range.start(), *range.end());
     if !(lo.is_finite() && hi.is_finite()) {
-        return;
+        return false;
     }
+    let before = *value;
     for k in ui.keys(id) {
         let one = step(range) * if k.mods.shift { FINE_DRAG } else { 1.0 };
         *value = match k.key {
@@ -270,6 +277,7 @@ fn stepped(ui: &Ui, id: &str, value: &mut f64, range: &RangeInclusive<f64>) {
         }
         .clamp(lo.min(hi), lo.max(hi));
     }
+    moved(before, *value)
 }
 
 /// Whether a drag or a key moved the value. Bitwise, so a NaN the caller
@@ -549,268 +557,94 @@ pub fn toggle(ui: &mut Ui, id: impl Into<Id>, on: &mut bool) -> (Control, bool) 
     (control, flipped)
 }
 
-/// A caret's x from [`Ui::carets`]; `0` for a byte that is not a boundary.
-fn caret_at(carets: &[(usize, f64)], byte: usize) -> f64 {
-    carets
-        .binary_search_by_key(&byte, |&(b, _)| b)
-        .map_or(0.0, |i| carets[i].1)
-}
+/// How far a [`drag_value`] is dragged to sweep its whole range.
+const DRAG_TRAVEL: f64 = 200.0;
 
-fn byte(s: &str, chars: usize) -> usize {
-    s.char_indices().nth(chars).map_or(s.len(), |(b, _)| b)
-}
-
-/// The selection as a string, and the two helpers that edit it. Indices are
-/// characters; `byte` turns them into slice offsets.
-fn selected(value: &str, a: usize, c: usize) -> String {
-    value[byte(value, a.min(c))..byte(value, a.max(c))].to_owned()
-}
-/// Remove the selection: the caret afterwards, and whether there was one.
-fn take(value: &mut String, a: usize, c: usize) -> (usize, bool) {
-    let (lo, hi) = (a.min(c), a.max(c));
-    if lo == hi {
-        return (c, false);
-    }
-    let (x, y) = (byte(value, lo), byte(value, hi));
-    value.replace_range(x..y, "");
-    (lo, true)
-}
-/// Unicode word boundaries, falling back to one grapheme for punctuation.
-fn word(value: &str, at: usize) -> (usize, usize) {
-    super::grapheme::word(value, at)
-}
-fn insert(value: &mut String, caret: &mut usize, c: char) {
-    value.insert(byte(value, *caret), c);
-    *caret += 1;
-}
-
-/// A single-line field: the text, a selection, a blinking caret, and the
-/// edits the focused keys imply. Click to focus and set the caret, drag to
-/// select, double click for a word, shift+arrows to extend. ctrl/cmd+A, C, X
-/// and V select all, copy, cut and paste -- a copy leaves the text in
-/// `Frame::clipboard` for the host to hand to the OS, and a
-/// paste reads `Input::clipboard`, which the host fills on the paste key.
-/// Returns the field and whether the value changed.
+/// A number to drag: a horizontal drag of 200 px sweeps `range` (Shift is
+/// fine), the arrow keys step it, and a double click -- or Enter while it
+/// is focused -- turns it into a field to type the number into. Enter or a
+/// click away takes what was typed, Escape leaves the value alone. Returns
+/// the control and whether the value changed. `.value_text(..)` says it
+/// in units, as for a [`slider`].
 ///
 /// ```
 /// use mui::prelude::*;
 /// let mut ui = Ui::new(Theme::DEFAULT);
-/// let mut name = String::from("Init");
-/// let (field, changed) = text_input(&mut ui, "name", &mut name);
-/// assert!(!changed, "nothing is focused, so nothing was typed");
-/// let field = field.w(140);
+/// let mut bpm = 120.0;
+/// let (tempo, changed) = drag_value(&mut ui, "bpm", &mut bpm, 20.0..=300.0);
+/// assert!(!changed, "no gesture, no change");
 /// ```
-// ponytail: single line. A multi-line field wants the caret on a line index,
-// not a byte, and `mui_text::break_lines` to place it.
-pub fn text_input(ui: &mut Ui, id: &str, value: &mut String) -> (El, bool) {
-    let size = ui.theme.text;
-    let focused = ui.focused(id);
-    let n = value.chars().count();
-    let (anchor, caret) = ui.sel(id);
-    let (mut anchor, mut caret) = (
-        super::grapheme::floor(value, anchor.min(n)),
-        super::grapheme::floor(value, caret.min(n)),
+pub fn drag_value(
+    ui: &mut Ui,
+    id: impl Into<Id>,
+    value: &mut f64,
+    range: RangeInclusive<f64>,
+) -> (Control, bool) {
+    let id: Id = id.into();
+    let before = *value;
+    let (lo, hi) = (
+        range.start().min(*range.end()),
+        range.start().max(*range.end()),
     );
-
-    // The pointer, against last frame's field: the text starts `PAD` in,
-    // slid left by the shift that kept last frame's caret in the room.
-    // ponytail: a composition shown last frame is not in that shift; a click
-    // mid-composition lands as if the preedit were not there.
-    const PAD: f64 = 8.0;
-    let room = ui
-        .scene()
-        .and_then(|s| s.surface(id))
-        .map(|s| s.frame.size.width - 2.0 * PAD);
-    let r = ui.get(id);
-    if r.pressed || r.dragged {
-        if let Some(p) = ui.local(id) {
-            let shift = room.map_or(0.0, |room| {
-                (caret_at(&ui.carets(value, size), byte(value, caret)) - room).max(0.0)
-            });
-            caret = super::grapheme::floor(value, ui.hit(value, size, p.x - PAD + shift));
-            if r.pressed {
-                anchor = caret;
+    let field = format!("{id}/edit");
+    // What was typed, and the width the number had when typing started.
+    let mut typing = ui.memo::<(String, f64)>(&field).cloned();
+    let r = ui.get(&id);
+    // Focus moves to the field only once it is built: this frame's keys --
+    // the Enter that opened it -- are not the field's to type.
+    let opening = typing.is_none() && (r.double_clicked || r.key_activated);
+    if opening {
+        let width = ui
+            .scene()
+            .and_then(|s| s.surface(&id))
+            .map_or(ui.theme.control * 16.0, |s| s.frame.size.width);
+        typing = Some((format!("{value}"), width));
+    }
+    if let Some((mut s, width)) = typing {
+        let take = |s: &str, value: &mut f64| {
+            if let Ok(v) = s.trim().parse::<f64>() {
+                if v.is_finite() {
+                    *value = v.clamp(lo, hi);
+                }
             }
-        }
-    }
-    if ui.double_click(id) {
-        (anchor, caret) = word(value, caret);
-    }
-
-    // Only a frame with input can edit, so only that frame pays for the copy
-    // the change is judged against.
-    let before =
-        (focused && !(ui.text(id).is_empty() && ui.keys(id).is_empty())).then(|| value.clone());
-    if focused {
-        let committed = ui.text(id).to_owned();
-        let has_committed_text = !committed.is_empty();
-        for c in committed.chars().filter(|c| !c.is_control()) {
-            (caret, _) = take(value, anchor, caret);
-            insert(value, &mut caret, c);
-            anchor = caret;
-        }
-        for k in ui.keys(id).to_vec() {
-            let cmd = k.mods.ctrl || k.mods.cmd;
-            match k.key {
-                Key::Char(c) if cmd => match c.to_ascii_lowercase() {
-                    'a' => (anchor, caret) = (0, value.chars().count()),
-                    // An empty selection copies nothing: handing the host
-                    // "" would wipe whatever is already on the clipboard.
-                    'c' if anchor != caret => {
-                        ui.set_clipboard(selected(value, anchor, caret));
-                    }
-                    'x' if anchor != caret => {
-                        ui.set_clipboard(selected(value, anchor, caret));
-                        (caret, _) = take(value, anchor, caret);
-                        anchor = caret;
-                    }
-                    'v' => {
-                        if let Some(s) = ui.pasted().map(str::to_owned) {
-                            (caret, _) = take(value, anchor, caret);
-                            for c in s.chars().filter(|c| !c.is_control()) {
-                                insert(value, &mut caret, c);
-                            }
-                            anchor = caret;
-                        }
-                    }
-                    _ => {}
-                },
-                Key::Char(c) if !c.is_control() && !has_committed_text => {
-                    (caret, _) = take(value, anchor, caret);
-                    insert(value, &mut caret, c);
-                    anchor = caret;
-                }
-                Key::Backspace => {
-                    let (at, had) = take(value, anchor, caret);
-                    caret = at;
-                    if !had && caret > 0 {
-                        let start = super::grapheme::previous(value, caret);
-                        value.replace_range(byte(value, start)..byte(value, caret), "");
-                        caret = start;
-                    }
-                    anchor = caret;
-                }
-                Key::Delete => {
-                    let (at, had) = take(value, anchor, caret);
-                    caret = at;
-                    if !had && caret < value.chars().count() {
-                        let end = super::grapheme::next(value, caret);
-                        value.replace_range(byte(value, caret)..byte(value, end), "");
-                    }
-                    anchor = caret;
-                }
-                Key::Left | Key::Right | Key::Home | Key::End => {
-                    caret = match k.key {
-                        Key::Left if !k.mods.shift && anchor != caret => anchor.min(caret),
-                        Key::Right if !k.mods.shift && anchor != caret => anchor.max(caret),
-                        Key::Left => super::grapheme::previous(value, caret),
-                        Key::Right => super::grapheme::next(value, caret),
-                        Key::Home => 0,
-                        _ => value.chars().count(),
-                    };
-                    if !k.mods.shift {
-                        anchor = caret;
-                    }
-                }
-                _ => {}
+        };
+        if opening || ui.focused(&field) {
+            let opts = TextOpts {
+                blur_on_submit: true,
+                ..TextOpts::default()
+            };
+            let (el, e) = text_edit(ui, &field, &mut s, opts);
+            if opening {
+                ui.set_sel(&field, 0, s.chars().count());
+                ui.focus(field.clone());
             }
+            if !e.submitted {
+                ui.set_memo(&field, Some((s, width)));
+                let control = Control::new(ui, move |_| el.w(width));
+                return (control, false);
+            }
+            take(&s, value);
+        } else if !ui.shortcuts().iter().any(|k| k.key == Key::Escape) {
+            // The focus went elsewhere: a click away keeps what was typed.
+            take(&s, value);
         }
+        ui.set_memo::<(String, f64)>(&field, None);
+    } else {
+        ui.drag(&id, value, range.clone(), DRAG_TRAVEL, false);
+        stepped(ui, &id, value, &range);
     }
-    ui.set_sel(id, anchor, caret);
-    let changed = before.is_some_and(|b| b != *value);
-
-    // The input method's composing text is shown at the caret and measured
-    // with the value, but never joins it: only a commit, which arrives as
-    // typed text above, edits `value`.
-    let pre = focused
-        .then(|| ui.preedit())
-        .flatten()
-        .map(|(t, c)| (t.to_owned(), c));
-    let base = byte(value, caret);
-    let mut shown = value.clone();
-    if let Some((t, _)) = &pre {
-        shown.insert_str(base, t);
-    }
-    let carets = ui.carets(&shown, size);
-    let x = |b: usize| caret_at(&carets, b);
-    // The caret sits inside the preedit, where the IME put its cursor.
-    let at = match &pre {
-        Some((t, c)) => base + c.map_or(t.len(), |(s, _)| s.min(t.len())),
-        None => base,
-    };
-    // ponytail: a selection is not painted under a composition -- its ends
-    // were measured against the value and the preedit sits between them, so
-    // the highlight is dropped for the frames the composition lasts. The
-    // commit still replaces the selection. Measure the two runs separately if
-    // composing over a selection ever needs to look right.
-    let (lo, hi) = match &pre {
-        Some(_) => (0.0, 0.0),
-        None => (
-            x(byte(value, anchor.min(caret))),
-            x(byte(value, anchor.max(caret))),
-        ),
-    };
-    let (plo, phi) = match &pre {
-        Some((t, _)) => (x(base), x(base + t.len())),
-        None => (0.0, 0.0),
-    };
-    let on = focused && ui.blink();
-    // The value keeps its whole measured advance so the field stays one line
-    // -- a plain `text()` would wrap to the frame and grow the field -- and
-    // the frame clips it. Room comes from last frame's field, the only inner
-    // width the widget can see, and the caret scrolls the three layers
-    // together so it never leaves the box.
-    // ponytail: the first frame of an over-long value shows its head; it
-    // catches up on the next one.
-    let run = x(shown.len());
-    let room = room.unwrap_or(run);
-    let caret_x = x(at);
-    let shift = (caret_x - room).max(0.0);
-    // What a screen reader follows: a caret before each character of the
-    // value and after the last, in the field's space. A composition sits in
-    // the value's gap at the caret, so the characters after it sit after it.
-    let tail = pre.as_ref().map_or(0, |(t, _)| t.len());
-    let reader = (value.char_indices().map(|(b, _)| b))
-        .chain([value.len()])
-        .map(|b| PAD - shift + x(if b < base { b } else { b + tail }))
-        .collect();
-    let el = overlay([
-        leaf(hi - lo, size)
-            .anchor(Align::Start, Align::Center)
-            .offset(lo - shift, 0.0)
-            .when(hi > lo, |e| e.fill(Role::Primary)),
-        text(shown.clone())
-            .width(run)
-            .lines(1)
-            .anchor(Align::Start, Align::Center)
-            .offset(-shift, 0.0),
-        leaf(2.0, size)
-            .anchor(Align::Start, Align::Center)
-            .offset(caret_x - shift, 0.0)
-            .when(on, |e| e.fill(Role::Ink)),
-        // Underline, last so the earlier children keep their keys.
-        leaf(phi - plo, 2.0)
-            .anchor(Align::Start, Align::End)
-            .offset(plo - shift, 0.0)
-            .when(phi > plo, |e| e.fill(Role::Ink)),
-    ])
-    .clip()
-    .pad_xy(PAD, 6.0)
-    .radius(6.0)
-    .fill(Role::Field)
-    // The ring is declared beside the resting look rather than rebuilt from
-    // `focused` every frame; the runtime knows who has the focus.
-    .on(State::Focus, |s| s.stroke(Role::Primary))
-    .cursor(Cursor::Text)
-    .focusable()
-    .role(Kind::TextInput {
-        value: value.clone(),
-        selection: (anchor, caret),
-        carets: reader,
-    })
-    .id(id);
-    if focused {
-        ui.set_ime_caret(id, Point::new(PAD + caret_x - shift, 6.0), size);
-    }
-    (el, changed)
+    let changed = moved(before, *value);
+    let (value, min, max) = (*value, *range.start(), *range.end());
+    let control = Control::new(ui, move |look| {
+        let pad_y = ((look.px - 14.0) / 2.0).max(2.0);
+        row([readout(look.text.clone(), value, min, max)])
+            .pad_xy(look.px * 0.3, pad_y)
+            .radius(4.0)
+            .preset(look.face(Role::Field))
+            .cursor(Cursor::ResizeH)
+            .role(Kind::Slider { value, min, max })
+            .focusable()
+            .id(id)
+    });
+    (control, changed)
 }

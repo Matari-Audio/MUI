@@ -9,9 +9,9 @@
 //!     .shell(4.0, Role::Field);
 //! assert_eq!(card.children().len(), 2);
 //! ```
-use crate::{Cursor, Elevation, Fill, Mix, Radius, Shadow, Stroke, Style};
+use crate::{Cursor, Elevation, Fill, Fit, Image, Mix, Radius, Shadow, Stroke, Style};
 use mui_geometry::CornerStyle;
-use mui_geometry::Path;
+use mui_geometry::{Path, Point};
 use mui_layout::{Id, Node, Size, Spacing};
 use mui_motion::Spring;
 use mui_text::{Axes, Weight};
@@ -49,6 +49,18 @@ impl Draw {
             width,
             tag: None,
         }
+    }
+    /// `image` stretched over the rectangle at `(x, y)`, `w` by `h`: a logo,
+    /// a screenshot, or pixels read back from another GPU pipeline. Built at
+    /// `w * scale` by `h * scale` pixels it lands one image pixel per device
+    /// pixel. The GPU renderer keeps one atlas upload per `rgba` buffer, so
+    /// hand it the same `Arc` while the pixels stay the same.
+    pub fn image(x: f64, y: f64, w: f64, h: f64, image: Arc<Image>) -> Self {
+        let corners = [(x, y), (x + w, y), (x + w, y + h), (x, y + h)];
+        Self::fill(
+            Path::polyline(corners.map(|(x, y)| Point::new(x, y)), true),
+            Fill::Image(image, Fit::Fill),
+        )
     }
     /// Geometry that responds but paints nothing: the fat target around a
     /// hairline, or a knot's grab radius.
@@ -218,6 +230,10 @@ pub enum Kind {
     Label,
     Group,
     Scroll,
+    /// A picture: a logo, a screenshot, an icon that means something. Its
+    /// `.label(..)` is the alt text; without one it is decoration and goes
+    /// unnamed, as an `<img alt="">` does.
+    Image,
 }
 
 /// A role and the name read out with it. A node with none is an unnamed
@@ -273,6 +289,9 @@ pub struct Element {
     pub tip: Option<String>,
     /// Takes keyboard focus on click and on Tab.
     pub focusable: bool,
+    /// The wheel over this node is its own: an enclosing `.scroll()` does
+    /// not slide. See [`Styled::captures_wheel`].
+    pub captures_wheel: bool,
     /// Switched off: no hit testing, no focus, and the look declared for
     /// [`State::Disabled`]. Inherited by the subtree. See
     /// [`Styled::disabled`].
@@ -328,6 +347,14 @@ pub struct Element {
     pub border_join: Option<Id>,
     pub bend: f64,
     pub border_align: crate::BorderAlign,
+    /// A `.scroll()` node paints no overlay scrollbar. See
+    /// [`Styled::scroll_bar`].
+    pub scroll_bar_off: bool,
+    /// How hot the overlay scrollbar is: 0 at rest, 1 under the pointer or
+    /// in a drag. The runtime sets it every frame, as it does the offset;
+    /// `None`, a scene resolved without it, paints no bar, since nothing
+    /// could drag one.
+    pub scroll_bar_heat: Option<f64>,
 }
 
 /// How a node enters: it always fades in from transparent, and starts from
@@ -606,6 +633,26 @@ pub trait Paints: Sized {
     /// ```
     fn mask(mut self, f: impl Into<Fill>) -> Self {
         self.style_mut().mask = f.into();
+        self
+    }
+    /// Before this node paints, blur whatever was painted behind it, clipped
+    /// to its outline: the frosted dim under a modal. `radius` is the
+    /// Gaussian's standard deviation in logical pixels, as CSS `blur()`.
+    ///
+    /// The renderer paints everything before this node a second time
+    /// through a blur filter, so it costs about one more paint of the
+    /// scene under it -- once per encode, not per presented frame. A canvas
+    /// without filter layers skips it and shows the node's own fill alone,
+    /// so pair it with a translucent fill that reads on its own.
+    ///
+    /// ```
+    /// use mui_scene::prelude::*;
+    /// let scrim = Color::oklcha(0., 0., 0., 0.6);
+    /// let mut dim = stack![text("Save?")].fill(scrim).backdrop_blur(8.);
+    /// assert_eq!(dim.style_mut().backdrop_blur, 8.);
+    /// ```
+    fn backdrop_blur(mut self, radius: f64) -> Self {
+        self.style_mut().backdrop_blur = radius;
         self
     }
     /// Paint the union of the children's outlines as one filleted vector
@@ -907,6 +954,14 @@ pub trait Styled: Paints {
         self.element_mut().focusable = true;
         self
     }
+    /// Keep the wheel for this node: a timeline that zooms on the wheel
+    /// inside a scrolling column reads it from `Response::wheel`, and the
+    /// column does not scroll under it. Without this, every node under the
+    /// pointer sees the wheel *and* the innermost scroller slides.
+    fn captures_wheel(mut self) -> Self {
+        self.element_mut().captures_wheel = true;
+        self
+    }
     /// Switch this node -- and everything under it -- off: it drops out of
     /// hit testing and out of Tab, and it paints whatever it declared for
     /// [`State::Disabled`]. A greyed control that still drags is worse than
@@ -956,6 +1011,16 @@ pub trait Styled: Paints {
     /// Cap a wrapping label at `n` lines; the last one ends in an ellipsis.
     fn lines(mut self, n: usize) -> Self {
         self.element_mut().lines = Some(n.max(1));
+        self
+    }
+    /// Paint the overlay scrollbar a `.scroll()` node shows while it
+    /// overflows, or not. On by default: a thin `Ink` thumb over the far
+    /// edge of the viewport that thickens under the pointer and drags. The
+    /// `Ui` runtime owns it, so a scene resolved without one paints none.
+    /// Switch it off where the list draws its own position, or where a
+    /// `.mask()` fade already says there is more.
+    fn scroll_bar(mut self, on: bool) -> Self {
+        self.element_mut().scroll_bar_off = !on;
         self
     }
     /// [`Styled::transition`] with the default spring.

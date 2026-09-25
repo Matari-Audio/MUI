@@ -14,7 +14,7 @@ use mui_layout::SpacingToken::{Xs, S};
 use mui_scene::prelude::{overlay, text, Paints as _, Role};
 use mui_scene::Keys;
 use mui_scene::{
-    Appear, Area, Color, Cursor, El, Element, Fill, Font, Kind, Layer, Mix, Paint, Painted,
+    bar, Appear, Area, Color, Cursor, El, Element, Fill, Font, Kind, Layer, Mix, Paint, Painted,
     Palette, Pin, Radius, ResolvedScene, SceneError, SceneSpec, Size, Spacing, Spring, State,
     TextCache, Theme,
 };
@@ -32,6 +32,33 @@ const TIP_KEY: &str = "/tip";
 pub const TIP_DELAY: f64 = 0.5;
 /// Two presses on one target within this are a double click.
 pub const DOUBLE_CLICK: f64 = 0.4;
+
+/// The host's clipboard, for a [`Ui`] that reads and writes it itself.
+///
+/// Without one, the clipboard is data: a copy comes out on
+/// [`Frame::clipboard`] and a paste comes in on [`Input::clipboard`], which
+/// the host fills because it saw the paste key. With one, a paste key reads
+/// [`Clipboard::get`] when the host handed no text in, a copy or cut goes
+/// straight to [`Clipboard::set`], and [`Ui::paste`] answers an app's own
+/// Paste button. baseview has no clipboard to read, so a plugin host brings
+/// one (arboard, say); a test brings a `String`.
+///
+/// ```
+/// # use mui::{Clipboard, Ui}; use mui::prelude::*;
+/// struct Memory(String);
+/// impl Clipboard for Memory {
+///     fn get(&mut self) -> Option<String> { Some(self.0.clone()) }
+///     fn set(&mut self, text: &str) { self.0 = text.to_owned(); }
+/// }
+/// let mut ui = Ui::new(Theme::DEFAULT).clipboard(Memory("saw".into()));
+/// assert_eq!(ui.paste().as_deref(), Some("saw"));
+/// ```
+pub trait Clipboard: Send {
+    /// The clipboard's text, or `None` when it holds none or cannot be read.
+    fn get(&mut self) -> Option<String>;
+    /// Replace the clipboard's contents with `text`.
+    fn set(&mut self, text: &str);
+}
 
 /// What one call to [`Ui::frame`] produced.
 pub struct Frame<'a> {
@@ -51,7 +78,8 @@ pub struct Frame<'a> {
     /// Every gesture that began or ended this frame, for a host that brackets
     /// automation. [`Ui::edit`] asks about one id.
     pub edits: Vec<(String, Edit)>,
-    /// A copy or cut asked for this: put it on the host's clipboard.
+    /// A copy or cut asked for this: put it on the host's clipboard. Always
+    /// `None` for a [`Ui`] given a [`Clipboard`], which already has it.
     pub clipboard: Option<String>,
     /// The caret of the field that wants an input method, in scene units.
     /// `Some` means "allow IME and put the candidate window here"; `None`
@@ -79,6 +107,9 @@ pub struct Ui {
     /// edge lands on a device pixel; `None` paints on layout's raw f64.
     pub scale: Option<f64>,
     pub weld_backend: mui_scene::WeldBackend,
+    /// Seconds between two presses on one target that still make a double
+    /// click. [`DOUBLE_CLICK`] unless the host matches a platform setting.
+    pub double_click: f64,
     interaction: Interaction,
     actions: Vec<SemanticAction>,
     hit: Hit,
@@ -123,10 +154,18 @@ pub struct Ui {
     /// Per text field: the selection's anchor and caret, in characters. They
     /// are equal when nothing is selected.
     sel: BTreeMap<String, (usize, usize)>,
+    /// Per multi-line field: how far its lines are scrolled up, in units.
+    text_scroll: BTreeMap<String, f64>,
+    /// Per surface: what a widget keeps between frames that is not the
+    /// caller's value -- a picker's hue at zero saturation, a drag value's
+    /// half-typed text. Dropped with the surface.
+    memo: BTreeMap<String, Box<dyn Any + Send>>,
     /// The host's clipboard, handed in with a paste key; and what a copy or
     /// cut asked to put back on it.
     pasted: Option<String>,
     copied: Option<String>,
+    /// The host's clipboard, when it handed one in: see [`Clipboard`].
+    board: Option<Box<dyn Clipboard>>,
     /// The text the input method is composing, and its cursor in bytes. It
     /// belongs to whatever holds the focus; only a `Commit` touches a value.
     preedit: Option<(String, Option<(usize, usize)>)>,
@@ -140,6 +179,11 @@ pub struct Ui {
     /// A press that landed on the same target within [`DOUBLE_CLICK`].
     double: Option<String>,
     last_press: Option<(String, f64)>,
+    /// This frame's wheel, for [`Response::wheel`].
+    wheel: Point,
+    /// Where a button went down this frame, on a target or on nothing, for
+    /// [`Ui::clicked_outside`].
+    press_at: Option<Point>,
     focus: Option<String>,
     /// Gesture edges waiting for a frame that resolves. A frame that errors
     /// leaves them queued rather than dropping a host's `End`.
@@ -158,6 +202,9 @@ pub struct Ui {
     /// still reports the knot it grabbed.
     tagged: Option<(String, String)>,
     time: f64,
+    /// Where along a held scrollbar's thumb the pointer took it, so the
+    /// thumb follows the pointer from that point instead of jumping to it.
+    bar_grab: f64,
 }
 
 fn same_hit_geometry(a: &ResolvedScene, b: &ResolvedScene) -> bool {
@@ -206,12 +253,17 @@ impl Ui {
             wrapped: false,
             path: String::new(),
             sel: BTreeMap::new(),
+            text_scroll: BTreeMap::new(),
+            memo: BTreeMap::new(),
             pasted: None,
             copied: None,
             preedit: None,
             ime_caret: None,
             drag: None,
             double: None,
+            double_click: DOUBLE_CLICK,
+            wheel: Point::ZERO,
+            press_at: None,
             last_press: None,
             focus: None,
             edits: Vec::new(),
@@ -223,6 +275,24 @@ impl Ui {
             hover: None,
             tagged: None,
             time: 0.0,
+            board: None,
+            bar_grab: 0.0,
+        }
+    }
+    /// Read and write the host's clipboard through `board`: copy, cut and
+    /// paste in a text field then need nothing from the host. See
+    /// [`Clipboard`].
+    pub fn clipboard(mut self, board: impl Clipboard + 'static) -> Self {
+        self.board = Some(Box::new(board));
+        self
+    }
+    /// The clipboard's text now, for an app's own Paste button: the
+    /// [`Clipboard`] if the host gave one, else what the host handed in on
+    /// this frame's [`Input::clipboard`].
+    pub fn paste(&mut self) -> Option<String> {
+        match self.board.as_mut() {
+            Some(b) => b.get(),
+            None => self.pasted.clone(),
         }
     }
     /// Set the font.
@@ -397,8 +467,41 @@ impl Ui {
     }
     /// Last frame's gesture on `id`. Widgets read this while building the
     /// next tree, so a drag lands one frame late and nobody notices.
+    ///
+    /// The runtime fills in what the gesture machine cannot see: whether
+    /// the press was a double click, the wheel while the pointer is inside
+    /// `id`'s frame, and Enter or Space while `id` has the focus.
+    ///
+    /// ```
+    /// # use mui::Ui; use mui::prelude::*;
+    /// # let ui = Ui::new(Theme::DEFAULT);
+    /// let r = ui.get("lane");
+    /// let zoom = 1.0 - r.wheel.y * 0.01;
+    /// if r.double_clicked { /* reset */ }
+    /// # assert_eq!(zoom, 1.0);
+    /// ```
     pub fn get(&self, id: &str) -> Response {
         let mut response = self.interaction.get(id);
+        response.double_clicked = self.double.as_deref() == Some(id);
+        response.key_activated = self
+            .keys(id)
+            .iter()
+            .any(|k| matches!(k.key, Key::Enter | Key::Space));
+        if self.wheel != Point::ZERO {
+            if let (Some(p), Some(s)) = (
+                self.pointer.pos,
+                self.scene.as_ref().and_then(|s| s.surface(id)),
+            ) {
+                let f = s.frame;
+                let inside = p.x >= f.x && p.x <= f.right() && p.y >= f.y && p.y <= f.bottom();
+                let clipped = s.clip.is_some_and(|c| {
+                    p.x < c.min.x || p.x > c.max.x || p.y < c.min.y || p.y > c.max.y
+                });
+                if inside && !clipped {
+                    response.wheel = self.wheel;
+                }
+            }
+        }
         if self
             .actions
             .iter()
@@ -558,6 +661,12 @@ impl Ui {
     pub fn focused(&self, id: &str) -> bool {
         self.focus.as_deref() == Some(id)
     }
+    /// Drop the keyboard focus from code: a field that submits on Enter
+    /// lets go of the keys, as a click on the background would.
+    pub fn blur(&mut self) {
+        self.preedit = None;
+        self.focus = None;
+    }
     /// Focus `id` from code. No check that it exists: it may not have been
     /// built yet.
     pub fn focus(&mut self, id: impl Into<String>) {
@@ -713,6 +822,55 @@ impl Ui {
     pub fn min_size(&self) -> Option<Size> {
         Some(self.scene.as_ref()?.layout.min_size())
     }
+    /// A button went down this frame outside every one of `ids`: the signal a
+    /// popup or menu closes on. Pass the popup and whatever opened it, so
+    /// the press that reopens it from its own button does not also close it.
+    ///
+    /// Outside means outside each id's frame and not on a target nested
+    /// under it, so a submenu floated past its parent's edge is still in.
+    /// An id not in the last scene is skipped: the press that opened a
+    /// popup came before the popup existed, and does not dismiss it.
+    ///
+    /// ```
+    /// # use mui::Ui; use mui::prelude::*;
+    /// # let ui = Ui::new(Theme::DEFAULT);
+    /// let mut open = true;
+    /// if ui.dismissed(&["menu", "menu-button"]) {
+    ///     open = false;
+    /// }
+    /// # assert!(open, "nothing was pressed");
+    /// ```
+    pub fn clicked_outside(&self, ids: &[&str]) -> bool {
+        let (Some(p), Some(scene)) = (self.press_at, self.scene.as_ref()) else {
+            return false;
+        };
+        let pressed = self.interaction.pressed();
+        let mut any = false;
+        for id in ids {
+            let Some(s) = scene.surface(id) else {
+                continue;
+            };
+            any = true;
+            let f = s.frame;
+            if p.x >= f.x && p.x <= f.right() && p.y >= f.y && p.y <= f.bottom() {
+                return false;
+            }
+            // A press on a descendant: walk its named ancestors up to `id`.
+            let mut at = pressed.and_then(|k| scene.surface(k));
+            while let Some(t) = at {
+                if &*t.key == *id {
+                    return false;
+                }
+                at = t.parent.as_deref().and_then(|k| scene.surface(k));
+            }
+        }
+        any
+    }
+    /// [`Ui::clicked_outside`], or Escape pressed this frame whatever holds
+    /// the focus: everything that closes a popup, in one question.
+    pub fn dismissed(&self, ids: &[&str]) -> bool {
+        self.clicked_outside(ids) || self.keys.iter().any(|k| k.key == Key::Escape)
+    }
     /// How far `id`'s children are scrolled to: the settled offset, which
     /// the drawn one springs toward.
     pub fn scroll(&self, id: &str) -> [f64; 2] {
@@ -721,6 +879,25 @@ impl Ui {
             .map_or([0.0, 0.0], |s| s.map(|s| s.target))
     }
 
+    pub(crate) fn text_scroll(&self, id: &str) -> f64 {
+        self.text_scroll.get(id).copied().unwrap_or(0.0)
+    }
+    pub(crate) fn set_text_scroll(&mut self, id: &str, y: f64) {
+        *slot(&mut self.text_scroll, id, || 0.0) = y;
+    }
+    pub(crate) fn memo<T: Any>(&self, id: &str) -> Option<&T> {
+        self.memo.get(id)?.downcast_ref()
+    }
+    pub(crate) fn set_memo<T: Any + Send>(&mut self, id: &str, v: Option<T>) {
+        match v {
+            Some(v) => {
+                self.memo.insert(id.to_owned(), Box::new(v));
+            }
+            None => {
+                self.memo.remove(id);
+            }
+        }
+    }
     pub(crate) fn sel(&self, id: &str) -> (usize, usize) {
         self.sel.get(id).copied().unwrap_or((0, 0))
     }
@@ -746,8 +923,9 @@ impl Ui {
     pub fn set_ime_caret(&mut self, id: &str, at: Point, height: f64) {
         self.ime_caret = Some((id.to_owned(), at, height));
     }
-    /// Ask the host to put `s` on the clipboard: it comes back on the next
-    /// frame's [`Frame::clipboard`].
+    /// Put `s` on the clipboard: what an app's own Copy button calls. It
+    /// goes to the [`Clipboard`] at the end of the next frame, or comes back
+    /// on that frame's [`Frame::clipboard`] for a host without one.
     pub fn set_clipboard(&mut self, s: impl Into<String>) {
         self.copied = Some(s.into());
     }
@@ -785,6 +963,37 @@ impl Ui {
                 .enumerate()
                 .map(|(i, b)| (b, i as f64 * size * 0.6))
                 .collect(),
+        }
+    }
+    /// `s` broken into lines no wider than `width`, as byte ranges: a
+    /// `'\n'` always breaks and is in no range. What a multi-line field lays
+    /// its rows out by.
+    pub(crate) fn lines(&self, s: &str, size: f64, width: f64) -> Vec<std::ops::Range<usize>> {
+        if let (Some(fonts), true) = (self.fonts(), width.is_finite() && width > 0.0) {
+            if let Ok(lines) = mui_text::break_lines(&fonts, s, size, &[], width) {
+                return lines.into_iter().map(|l| l.text_range).collect();
+            }
+        }
+        // ponytail: without a font, hard breaks only; set a font to wrap.
+        let mut at = 0;
+        s.split('\n')
+            .map(|l| {
+                let r = at..at + l.len();
+                at = r.end + 1;
+                r
+            })
+            .collect()
+    }
+    /// The pitch one line of text at `size` is stacked at: the font's line
+    /// height on the device grid, as the scene measures a text node.
+    pub(crate) fn line_height(&self, size: f64) -> f64 {
+        let h = self
+            .fonts()
+            .and_then(|fonts| mui_text::shape_run(&fonts, "M", size, &[]).ok())
+            .map_or(size * 1.25, |r| r.line_height);
+        match self.scale {
+            Some(s) if s > 0.0 => (h * s).round() / s,
+            _ => h,
         }
     }
     /// A caret is on for 0.625 s of every 1.25 s.
@@ -904,7 +1113,21 @@ impl Ui {
             ime,
         } = input.into();
         let was = std::mem::replace(&mut self.pointer, pointer).buttons;
-        self.pasted = clipboard;
+        // A non-finite delta reaches no widget, as it reaches no scroller.
+        self.wheel = if wheel.x.is_finite() && wheel.y.is_finite() {
+            wheel
+        } else {
+            Point::ZERO
+        };
+        // A paste key with no text handed in reads the host's clipboard, if
+        // it gave one: nothing here reads it speculatively.
+        let paste_key = keys
+            .iter()
+            .any(|k| matches!(k.key, Key::Char('v' | 'V')) && (k.mods.ctrl || k.mods.cmd));
+        self.pasted = match (clipboard, self.board.as_mut()) {
+            (None, Some(b)) if paste_key => b.get(),
+            (c, _) => c,
+        };
         let previous_blink = self.blink();
         self.time += dt;
         // A release is read by the *next* tree, so that frame must come even
@@ -912,6 +1135,7 @@ impl Ui {
         // A key still to land wants the frame that shows it; the clock that
         // decides is the one this frame advances to.
         let mut animating = self.reconcile() | (self.time < self.play_until);
+        animating |= self.drag_bar();
         self.follow_identities(&root);
         animating |= self.hover_springs(&root, dt);
         self.intake_focus(was, keys, text, ime);
@@ -1170,9 +1394,10 @@ impl Ui {
         if went_down && self.interaction.held().is_none() {
             self.focus = None;
         }
+        self.press_at = self.pointer.pos.filter(|_| went_down);
         if let Some(id) = self.interaction.pressed().map(str::to_owned) {
             if let Some((prev, t)) = self.last_press.take() {
-                if prev == id && self.time - t < DOUBLE_CLICK {
+                if prev == id && self.time - t < self.double_click {
                     self.double = Some(id.clone());
                 }
             }
@@ -1298,6 +1523,7 @@ impl Ui {
     /// whether one is still moving.
     fn sweep(&mut self, root: &mut El, dt: f64) -> bool {
         let pal = self.theme.palette;
+        let heats = self.bar_heats();
         // Declared state looks first, so a transition springs toward the
         // style the node actually asked for this frame. The walks key an
         // unnamed node by its tree path, exactly as the scene does.
@@ -1328,7 +1554,7 @@ impl Ui {
             animating |= s.step(dt);
         }
         let springs = &self.springs;
-        let scrolls = &self.scrolls;
+        let scrolls = (&self.scrolls, &heats);
         state(
             root,
             &mut path,
@@ -1564,6 +1790,8 @@ impl Ui {
             true
         });
         self.sel.retain(|id, _| scene.surface(id).is_some());
+        self.text_scroll.retain(|id, _| scene.surface(id).is_some());
+        self.memo.retain(|id, _| scene.surface(id).is_some());
         animating | self.wheel(scene, wheel)
     }
 
@@ -1629,9 +1857,96 @@ impl Ui {
             tip,
             cursor,
             edits: self.delivered.clone(),
-            clipboard: self.copied.take(),
+            clipboard: match (self.copied.take(), self.board.as_mut()) {
+                (Some(s), Some(b)) => {
+                    b.set(&s);
+                    None
+                }
+                (s, _) => s,
+            },
             ime,
         }
+    }
+
+    /// A held scrollbar slides its node: the thumb follows the pointer from
+    /// where it was grabbed, and a press on the track beside the thumb
+    /// centres the thumb there first. It lands on this frame's tree, like a
+    /// widget reading its drag. Returns whether an offset moved.
+    fn drag_bar(&mut self) -> bool {
+        let (Some(held), Some(p)) = (self.interaction.held(), self.pointer.pos) else {
+            return false;
+        };
+        let Some((key, vertical)) = bar::bar_of(held) else {
+            return false;
+        };
+        let Some(scene) = self.scene.as_ref() else {
+            return false;
+        };
+        let (Some(node), Some(strip)) = (scene.surface(key), scene.surface(held)) else {
+            return false;
+        };
+        let along = |f: mui_layout::Frame| {
+            if vertical {
+                (f.y, f.size.height)
+            } else {
+                (f.x, f.size.width)
+            }
+        };
+        let ((start, len), (_, view)) = (along(strip.frame), along(node.frame));
+        let total = if vertical {
+            node.content.height
+        } else {
+            node.content.width
+        };
+        let (pos, a) = if vertical { (p.y, 1) } else { (p.x, 0) };
+        let pressed = self.interaction.pressed() == Some(held);
+        let at = slot(&mut self.scrolls, key, || [scroll_spring(); 2]);
+        let Some((thumb, size)) = bar::thumb(start, len, view, total, at[a].target) else {
+            return false;
+        };
+        if pressed {
+            self.bar_grab = if (thumb..thumb + size).contains(&pos) {
+                pos - thumb
+            } else {
+                size / 2.0
+            };
+        }
+        let next = bar::thumb_offset(start, len, view, total, pos - self.bar_grab);
+        // The thumb is under the hand: the offset follows it, no glide.
+        let moved = next != at[a].target || next != at[a].value;
+        at[a] = at[a].seeded(next);
+        moved
+    }
+
+    /// Per scroll node that showed a bar last frame, how hot its bar is:
+    /// resting, the pointer over the list, or the bar itself under the
+    /// pointer or held. Each rides a runtime-owned tween, so it eases.
+    fn bar_heats(&mut self) -> BTreeMap<String, f64> {
+        let mut targets = BTreeMap::new();
+        let Some(scene) = self.scene.as_ref() else {
+            return targets;
+        };
+        let (hovered, held) = (self.interaction.hovered(), self.interaction.held());
+        for s in scene.surfaces() {
+            let Some((key, _)) = bar::bar_of(&s.key) else {
+                continue;
+            };
+            let over =
+                |f: mui_layout::Frame| self.pointer.pos.is_some_and(|p| f.contains(p.x, p.y));
+            let target = if hovered == Some(&*s.key) || held == Some(&*s.key) {
+                1.0
+            } else if scene.surface(key).is_some_and(|n| over(n.frame)) {
+                0.35
+            } else {
+                0.0
+            };
+            let t: &mut f64 = targets.entry(key.to_owned()).or_default();
+            *t = t.max(target);
+        }
+        for (key, target) in &mut targets {
+            *target = self.tween(&format!("/bar{key}"), *target);
+        }
+        targets
     }
 
     /// Send the wheel to the innermost scrollable surface under the pointer.
@@ -1655,6 +1970,11 @@ impl Ui {
                 p.x < clip.min.x || p.x > clip.max.x || p.y < clip.min.y || p.y > clip.max.y
             }) {
                 continue;
+            }
+            // A node that keeps the wheel reads it from `Response::wheel`;
+            // nothing it sits in scrolls under it.
+            if s.captures_wheel && !s.disabled {
+                return false;
             }
             // `content` is the frame size for everything but a scroll node,
             // so an overflow here *is* the "is this scrollable" test.
@@ -2093,17 +2413,22 @@ fn state(
     path: &mut String,
     pal: &Palette,
     of: &dyn Fn(&str) -> Option<(f64, f64)>,
-    scrolls: &BTreeMap<String, [Spring; 2]>,
+    scrolls: (&BTreeMap<String, [Spring; 2]>, &BTreeMap<String, f64>),
     off: bool,
 ) {
     let off = off || n.payload().disabled;
     if let Some([x, y]) = scrolls
+        .0
         .get(n.key().unwrap_or(path))
         .map(|s| s.map(|s| s.value))
     {
         // `scrolled` is a builder and a built node cannot be reopened.
         let node = std::mem::replace(n, mui_scene::leaf(0.0, 0.0));
         *n = node.scrolled(x, y);
+    }
+    if n.is_scroll() {
+        let heat = scrolls.1.get(n.key().unwrap_or(path)).copied();
+        n.payload_mut().scroll_bar_heat = Some(heat.unwrap_or(0.0));
     }
     if let Some((h, p)) = of(n.key().unwrap_or(path)).filter(|_| !off) {
         let bg = pal.background();

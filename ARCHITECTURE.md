@@ -66,6 +66,8 @@ El tree  (row! / col! / stack! / grid! / fits!, Paints fills, presets merged
    |               its outline, and Draw::hit is that geometry unpainted
    |     clip   -> Clip(outline) ... children ... Unclip
    |     blend  -> Blend(mix, opacity) ... subtree ... Unblend, outside the clip
+   |     frost  -> Backdrop(outline, blur) first inside the blend: the renderer
+   |               replays the list before it, clipped, through a blur layer
    |     mask   -> Blend(Normal, 1) ... subtree ... Mask(fill, source-atop) ...
    |               Unblend; a paint over what the subtree drew, not an alpha mask
    |     union  -> the shadow is one blurred rect per child

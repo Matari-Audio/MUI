@@ -209,6 +209,9 @@ impl HybridEffects {
                                 transform: local,
                             }],
                         );
+                    } else if p.layer == Layer::Backdrop {
+                        let outline = self.paths.get(i, &p.path)?;
+                        crate::backdrop(&mut canvas, &resolved.paint[..i], p, outline)?;
                     } else if !crate::layered(&mut canvas, p) {
                         crate::one(&mut canvas, p, self.paths.get(i, &p.path)?)?;
                     }
