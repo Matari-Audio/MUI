@@ -88,9 +88,12 @@ pub(super) struct OutlineCache {
     /// along it: handed back as the same `Arc` while the rect holds, so a
     /// still node builds no path and compares by pointer downstream.
     pub(super) rects: HashMap<Arc<str>, (RoundedRect, Arc<Path>, u64)>,
-    pub(super) bands: HashMap<Arc<str>, (Arc<Path>, f64, crate::BorderAlign, Arc<Path>, u64)>,
+    pub(super) bands: HashMap<Arc<str>, Band>,
 }
 
+/// The outline a stroke ran along, its width and alignment, the band, and
+/// the resolve that last used it.
+pub(super) type Band = (Arc<Path>, f64, crate::BorderAlign, Arc<Path>, u64);
 pub(super) type PlacedDraws = (Arc<[crate::Draw]>, Point, Vec<Arc<Path>>, u64);
 
 #[derive(Debug)]
