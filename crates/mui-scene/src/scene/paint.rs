@@ -72,7 +72,7 @@ impl Walk<'_> {
                 .map_or(under, |p| p.solid()),
             // A joined tab takes the owner's border material; its fill only
             // grounds its content.
-            None if e.border_join.is_some() => self
+            None if e.extras().border_join.is_some() => self
                 .paint_of(&e.style.fill, under)
                 .map_or(under, |p| p.solid()),
             None => solid(

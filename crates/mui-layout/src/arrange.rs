@@ -39,7 +39,10 @@ pub(crate) fn distribute<P>(
         |i| {
             let c = children[i];
             if growing {
-                c.node.maximum.map_or(f64::INFINITY, |s| s.main(vertical))
+                c.node
+                    .rare()
+                    .maximum
+                    .map_or(f64::INFINITY, |s| s.main(vertical))
             } else {
                 c.floor.main(vertical)
             }
@@ -354,6 +357,7 @@ pub(crate) fn arrange<P>(
             let (p, s) = cell(c, inner, default);
             match c
                 .node
+                .rare()
                 .pin
                 .as_ref()
                 .and_then(|pin| Some((pin, *pins.anchors.get(pin.anchor.as_str())?)))

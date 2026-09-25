@@ -190,7 +190,7 @@ fn geometry_shallow(
 ) {
     let (origin, scale) = g;
     let frame = frames[at];
-    if let Some(outline) = &n.payload().outline {
+    if let Some(outline) = &n.payload().extras().outline {
         key.extend([
             6,
             (frame.x - origin.x).to_bits(),
@@ -279,7 +279,8 @@ impl Walk<'_> {
         if let Some(path) = self.regions.get(&first.saturating_sub(1)) {
             return Ok(Contour::path(path.clone()));
         }
-        if n.payload().outline.is_some() && n.children().iter().any(|c| c.payload().carve.is_some())
+        if n.payload().extras().outline.is_some()
+            && n.children().iter().any(|c| c.payload().carve.is_some())
         {
             return Err(mui_geometry::Error::InvalidOptions(
                 "cut/keep on a custom outline requires contour normalization; provide the finished outline instead",
@@ -408,7 +409,7 @@ impl Walk<'_> {
     fn shape(&mut self, n: &El, frame: Frame, first: usize) -> Result<Contour, SceneError> {
         let th = &self.spec.theme;
         let s = &n.payload().style;
-        if let Some(shape) = &n.payload().outline {
+        if let Some(shape) = &n.payload().extras().outline {
             if !s.shadow.is_empty() {
                 return Err(mui_geometry::Error::InvalidOptions(
                     "custom-path shadows require a path-filter renderer; use an outer wrapper",

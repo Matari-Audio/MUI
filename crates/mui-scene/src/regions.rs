@@ -28,7 +28,7 @@ pub trait ShapeLayout: Sized {
 impl ShapeLayout for El {
     fn inside(mut self, padding: impl Into<Spacing>) -> Self {
         let padding = padding.into();
-        self.payload_mut().inside = Some(padding);
+        self.payload_mut().extras_mut().inside = Some(padding);
         self.gap(padding)
     }
     fn bend(mut self, amount: f64) -> Self {

@@ -209,7 +209,7 @@ fn glide_frames(
     };
     let [tx, ty, sx, sy] = anchor;
     let mut inner = anchor;
-    if n.payload().layout_transition.is_some() {
+    if n.payload().extras().layout_transition.is_some() {
         let rel = Frame {
             x: target.x - tx,
             y: target.y - ty,

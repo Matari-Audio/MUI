@@ -124,8 +124,8 @@ fn invalid_surface_declarations_fail_instead_of_drawing_an_unrelated_box() {
 #[test]
 fn a_welded_port_outline_can_own_the_same_surfaces() {
     let mut body = card(24.);
-    body.payload_mut().surface_padding = None;
-    body.payload_mut().border_ramp = None;
+    body.payload_mut().extras_mut().surface_padding = None;
+    body.payload_mut().extras_mut().border_ramp = None;
     body.payload_mut().style.radius = Radius::Pair(0., 0.);
     let root = row![
         leaf(36., 36.)
@@ -184,8 +184,8 @@ fn a_uniform_border_preserves_the_panel_interior() {
 #[test]
 fn an_attached_footer_does_not_pull_panels_past_the_body_inset() {
     let mut body = card(24.);
-    body.payload_mut().surface_padding = None;
-    body.payload_mut().border_ramp = None;
+    body.payload_mut().extras_mut().surface_padding = None;
+    body.payload_mut().extras_mut().border_ramp = None;
     body.payload_mut().style.radius = Radius::Pair(0., 0.);
     let root = col![body, leaf(24., 24.).align_self(Align::Center)]
         .gap(0.)

@@ -22,7 +22,7 @@ impl Walk<'_> {
         (key, parent): (&Arc<str>, &str),
     ) -> Result<(), SceneError> {
         let e = n.payload();
-        let Some(padding) = e.inside else {
+        let Some(padding) = e.extras().inside else {
             if e.bend != 0. {
                 return Err(mui_geometry::Error::InvalidOptions("bend requires inside").into());
             }
@@ -32,7 +32,7 @@ impl Walk<'_> {
         if !padding.is_finite() || padding < 0. || !e.bend.is_finite() || e.bend.abs() > 0.45 {
             return Err(mui_geometry::Error::InvalidOptions("shape padding/bend").into());
         }
-        if e.welding.is_some() {
+        if e.extras().welding.is_some() {
             return Err(SceneError::UnsupportedWeld(
                 "inside takes a vector union, not a material weld",
             ));
@@ -79,7 +79,7 @@ impl Walk<'_> {
     ) -> Result<Path, SceneError> {
         let e = n.payload();
         let mut interior = outline.clone();
-        if let Some(ramp) = &e.border_ramp {
+        if let Some(ramp) = &e.extras().border_ramp {
             ramp.validate()?;
             let anchor = match &ramp.anchor {
                 None => frame,
@@ -217,7 +217,7 @@ impl Walk<'_> {
         let path = Arc::new(path);
         self.region_envelopes.insert(i, path.clone());
         let mut path = path;
-        if let Some(ramp) = &child.payload().border_ramp {
+        if let Some(ramp) = &child.payload().extras().border_ramp {
             ramp.validate()?;
             let outward = 1. - ramp.align.inward();
             if outward > 0. && ramp.from.1.max(ramp.to.1) > 0. {

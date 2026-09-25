@@ -48,7 +48,7 @@ pub use pin::{Area, Match, Pin};
 
 pub(crate) use arrange::{arrange, distribute};
 pub(crate) use measure::{cell_default, grid_rows, measure, place, wrap_lines, Measured, Pass};
-pub(crate) use node::Kind;
+pub(crate) use node::{Kind, Rare};
 pub(crate) use pin::{inside, Pins, Viewport};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -292,7 +292,7 @@ fn resolve_impl<P, M: Into<Intrinsic>>(
         return Err(Error::InvalidValue);
     }
     // A root offered more than its maximum is its maximum, like any node.
-    let size = root.maximum.map_or(size, |max| {
+    let size = root.rare().maximum.map_or(size, |max| {
         Size::new(size.width.min(max.width), size.height.min(max.height))
     });
     // Every measured node produces at most one frame.
