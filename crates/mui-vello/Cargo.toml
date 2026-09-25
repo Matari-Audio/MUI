@@ -6,15 +6,12 @@ license.workspace = true
 
 [features]
 default = []
-gpu-effects = ["wgpu/wgsl"]
+gpu-effects = ["wgpu/wgsl", "dep:vello"]
 # A CPU rasteriser: snapshot tests, thumbnails, hosts with no GPU.
 cpu = ["dep:vello_cpu"]
 # Rasterise on a rayon pool instead of one core. Off by default: a snapshot-
 # sized pixmap loses more to thread hand-off than it gains.
 cpu-threads = ["cpu", "vello_cpu/multithreading"]
-# Compile classic vello into `examples/bench.rs` so the comparison has a third
-# column. Off by default: it drags in the whole compute pipeline for a number.
-bench-classic = []
 
 [dependencies]
 mui-scene = { path = "../mui-scene" }
@@ -23,31 +20,30 @@ mui-geometry = { path = "../mui-geometry" }
 # No wgpu backend features: a plugin renders into the device its host wrapper
 # already created, so this crate must not choose the backend. Hosts turn on
 # `wgpu_default` (desktop) or `webgl` (browser) themselves.
-vello_hybrid = { version = "0.2", default-features = false, features = ["wgpu", "text"] }
-# `Glyph` is the one glyph type neither renderer re-exports, so it comes
-# straight from the crate both of them already build on.
+# Classic Vello, vendored onto the wgpu the rest of the stack uses: the GPU
+# renderer. Rasterises in compute shaders, so a changed frame costs the CPU
+# its serialisation only.
+vello = { path = "../../vendor/vello", default-features = false, features = ["wgpu"], optional = true }
+# `Glyph` is the one glyph type `vello_cpu` does not re-export, so it comes
+# straight from the crate it builds on.
 glifo = { version = "0.3", default-features = false }
 # kurbo and peniko reach us through vello_common so the types cannot version-skew.
 vello_common = { version = "0.2", default-features = false }
 # Types only (`Device`, `Queue`) for the image atlas upload; still no backend.
-wgpu = { version = "29", default-features = false }
+wgpu = { version = "30", default-features = false }
 vello_cpu = { version = "0.2", optional = true, default-features = false, features = ["std", "u8_pipeline", "text"] }
 
 [dev-dependencies]
-naga = { version = "29", features = ["wgsl-in"] }
+naga = { version = "30", features = ["wgsl-in"] }
 mui-layout = { path = "../mui-layout" }
 epaint_default_fonts = "0.36"
 mui-text = { path = "../mui-text" }
 ttf-inter = { version = "0.1", default-features = false, features = ["v"] }
 png = "0.17"
 # The example builds its own headless device.
-wgpu = { version = "29", default-features = false, features = ["wgsl", "vulkan", "gles", "metal", "dx12"] }
+wgpu = { version = "30", default-features = false, features = ["wgsl", "vulkan", "gles", "metal", "dx12"] }
 pollster = "0.4"
-vello_hybrid = { version = "0.2", features = ["wgpu_default"] }
 mui = { path = "../mui" }
-# Classic vello, for `--features bench-classic`. `bump_estimate` is the only
-# way either renderer will tell us what it asks the GPU for.
-vello = { version = "0.10", default-features = false, features = ["wgpu", "bump_estimate"] }
 
 [[example]]
 name = "gpu_contract"

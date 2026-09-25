@@ -18,6 +18,7 @@ members = [
   "crates/mui-input",
   "crates/mui-access",
   "examples/gain-plugin",
+  "vendor/vello",
 ]
 resolver = "2"
 

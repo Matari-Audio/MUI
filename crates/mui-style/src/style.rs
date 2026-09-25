@@ -175,8 +175,24 @@ pub struct Image {
     pub width: u32,
     pub height: u32,
     pub rgba: Arc<[u8]>,
+    /// A GPU texture the host registered with its renderer under this key,
+    /// in place of `rgba`: pixels that never leave the GPU. See
+    /// [`Image::texture`].
+    pub texture: Option<u64>,
 }
 impl Image {
+    /// Pixels that live in a GPU texture the host keeps up to date and hands
+    /// the renderer under `key` (`GpuRenderer::set_texture`). A renderer with
+    /// no such texture, or none at all (the CPU one), paints the fill's
+    /// fallback.
+    pub fn texture(key: u64, width: u32, height: u32) -> Self {
+        Self {
+            width,
+            height,
+            rgba: Arc::from([]),
+            texture: Some(key),
+        }
+    }
     /// `None` unless `rgba` is exactly `width * height * 4` bytes.
     pub fn rgba(width: u32, height: u32, rgba: impl Into<Arc<[u8]>>) -> Option<Self> {
         let rgba = rgba.into();
@@ -187,6 +203,7 @@ impl Image {
             width,
             height,
             rgba,
+            texture: None,
         })
     }
 }
@@ -194,7 +211,10 @@ impl Image {
 /// are the same image when they are the same buffer.
 impl PartialEq for Image {
     fn eq(&self, o: &Self) -> bool {
-        self.width == o.width && self.height == o.height && Arc::ptr_eq(&self.rgba, &o.rgba)
+        self.width == o.width
+            && self.height == o.height
+            && self.texture == o.texture
+            && Arc::ptr_eq(&self.rgba, &o.rgba)
     }
 }
 

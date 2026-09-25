@@ -63,7 +63,10 @@ struct Slot {
     bind: wgpu::BindGroup,
     capacity: [u32; 2],
     used: [u32; 2],
-    texture_id: vello_hybrid::TextureId,
+    texture: wgpu::Texture,
+    /// Minted per allocation: a renderer that registered the old texture
+    /// sees the id change and registers the new one.
+    id: u64,
     state: ContentState,
     seen: u64,
     /// The last frame whose scene carried this weld at all, visible or not.
@@ -86,7 +89,6 @@ pub struct WeldTextures {
     pipeline: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
     slots: BTreeMap<Arc<str>, Slot>,
-    bindings: vello_hybrid::TextureBindings,
     budget: Budget,
     epoch: u64,
     next_id: u64,
@@ -177,7 +179,6 @@ impl WeldTextures {
             pipeline,
             layout,
             slots: BTreeMap::new(),
-            bindings: Default::default(),
             budget,
             epoch: 0,
             next_id: 1,
@@ -189,11 +190,10 @@ impl WeldTextures {
     pub fn mapping_revision(&self) -> u64 {
         self.mapping_revision
     }
-    pub fn bindings(&self) -> &vello_hybrid::TextureBindings {
-        &self.bindings
-    }
-    pub fn texture_id(&self, key: &str) -> Option<vello_hybrid::TextureId> {
-        self.slots.get(key).map(|s| s.texture_id)
+    /// The weld's texture: its allocation id, the texture, and the corner
+    /// of it the material fills. Premultiplied, sRGB-encoded RGBA.
+    pub fn texture(&self, key: &str) -> Option<(u64, &wgpu::Texture, [u32; 2])> {
+        self.slots.get(key).map(|s| (s.id, &s.texture, s.used))
     }
     fn resident_bytes(&self) -> u64 {
         self.slots.values().map(Slot::bytes).sum()
@@ -287,7 +287,6 @@ impl WeldTextures {
                     break;
                 }
                 if let Some(s) = self.slots.remove(&key) {
-                    self.bindings.remove(s.texture_id);
                     self.mapping_revision = self.mapping_revision.wrapping_add(1);
                     count -= 1;
                     bytes -= s.bytes();
@@ -308,10 +307,7 @@ impl WeldTextures {
             if in_scene(key) {
                 s.present = epoch;
             }
-            epoch - s.present <= ABSENT_FRAMES || {
-                self.bindings.remove(s.texture_id);
-                false
-            }
+            epoch - s.present <= ABSENT_FRAMES
         });
         if self.slots.len() != before {
             self.mapping_revision = self.mapping_revision.wrapping_add(1);
@@ -394,11 +390,6 @@ impl WeldTextures {
                     },
                 ],
             });
-            if let Some(s) = self.slots.remove(key) {
-                self.bindings.remove(s.texture_id);
-            }
-            let texture_id = vello_hybrid::TextureId(id);
-            self.bindings.insert(texture_id, view.clone());
             self.slots.insert(
                 Arc::from(key),
                 Slot {
@@ -411,7 +402,8 @@ impl WeldTextures {
                     bind,
                     capacity,
                     used: size,
-                    texture_id,
+                    texture,
+                    id,
                     state: Default::default(),
                     seen: self.epoch,
                     present: self.epoch,
