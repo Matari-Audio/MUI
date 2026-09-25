@@ -88,7 +88,14 @@ fn main() {
         .map(|t| at(&ui, &format!("t{t}/k1")))
         .collect();
     let name = at(&ui, "t3/name");
+    // `ONLY=<name>` runs one case long enough to profile.
+    let only = std::env::var("ONLY").ok();
     let mut run = |name: &str, f: &mut dyn FnMut(&mut Ui, usize)| {
+        match only.as_deref() {
+            Some(o) if o == name => (0..3000).for_each(|i| f(&mut ui, i)),
+            Some(_) => return,
+            None => {}
+        }
         for i in 0..10 {
             f(&mut ui, i);
         }
@@ -118,6 +125,6 @@ fn main() {
         frame(ui, 1200.0, p, 0.6);
         tips += ui.scene().unwrap().layout.frame("/tip").is_some() as usize;
     });
-    assert!(tips > 20, "the tip showed {tips} times");
+    assert!(only.is_some() || tips > 20, "the tip showed {tips} times");
     println!("{:?}", ui.layout_stats());
 }
