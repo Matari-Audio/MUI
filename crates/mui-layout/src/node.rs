@@ -32,17 +32,12 @@ pub struct Node<P = ()> {
     pub(crate) kind: Kind<P>,
     pub(crate) payload: P,
     pub(crate) gap: Spacing,
-    /// The gap between wrapped lines and grid rows; `None` is `gap`. See
-    /// [`Node::line_gap`].
-    pub(crate) line_gap: Option<Spacing>,
     /// Pixel insets, unless `pad` names a token for all four sides.
     pub(crate) padding: Insets,
     pub(crate) pad: Option<Spacing>,
     pub(crate) minimum: Size,
-    pub(crate) maximum: Option<Size>,
     pub(crate) width: Len,
     pub(crate) height: Len,
-    pub(crate) aspect: Option<f64>,
     pub(crate) grow: f64,
     pub(crate) basis: Option<f64>,
     pub(crate) shrink: f64,
@@ -51,8 +46,6 @@ pub struct Node<P = ()> {
     pub(crate) justify: Justify,
     pub(crate) anchor: Option<(Align, Align)>,
     pub(crate) offset: [f64; 2],
-    /// Anchored placement for a float; see [`Node::pin`].
-    pub(crate) pin: Option<Pin>,
     /// Children may overflow the main axis; the frame clips them and
     /// `scrolled` slides them. Implies `clip`.
     pub(crate) scroll: bool,
@@ -70,11 +63,34 @@ pub struct Node<P = ()> {
     pub(crate) wrap: bool,
     /// Grid cells only: how many columns this cell occupies.
     pub(crate) span: usize,
-    /// Grids only: the narrowest a column may get before the grid drops one.
-    pub(crate) min_col: Option<f64>,
     /// Placement order among siblings; ties keep declaration order. Frames
     /// stay in declaration order regardless.
     pub(crate) order: i32,
+    /// What most nodes never set, boxed on first write so a builder call
+    /// moves a small node. Read it through [`Node::rare`].
+    pub(crate) rare: Option<Box<Rare>>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Rare {
+    /// The gap between wrapped lines and grid rows; `None` is `gap`. See
+    /// [`Node::line_gap`].
+    pub(crate) line_gap: Option<Spacing>,
+    pub(crate) maximum: Option<Size>,
+    pub(crate) aspect: Option<f64>,
+    /// Anchored placement for a float; see [`Node::pin`].
+    pub(crate) pin: Option<Pin>,
+    /// Grids only: the narrowest a column may get before the grid drops one.
+    pub(crate) min_col: Option<f64>,
+}
+impl Rare {
+    const NONE: Self = Self {
+        line_gap: None,
+        maximum: None,
+        aspect: None,
+        pin: None,
+        min_col: None,
+    };
 }
 
 impl<P: Default> Node<P> {
@@ -84,14 +100,11 @@ impl<P: Default> Node<P> {
             kind,
             payload: P::default(),
             gap: Spacing::Px(0.0),
-            line_gap: None,
             padding: Insets::ZERO,
             pad: None,
             minimum: Size::ZERO,
-            maximum: None,
             width: Len::Auto,
             height: Len::Auto,
-            aspect: None,
             grow: 0.0,
             basis: None,
             shrink: 1.0,
@@ -100,7 +113,6 @@ impl<P: Default> Node<P> {
             justify: Justify::Start,
             anchor: None,
             offset: [0.0; 2],
-            pin: None,
             scroll: false,
             clip: false,
             scrolled: [0.0; 2],
@@ -108,8 +120,8 @@ impl<P: Default> Node<P> {
             float: false,
             wrap: false,
             span: 1,
-            min_col: None,
             order: 0,
+            rare: None,
         }
     }
     /// Content whose size is already known: an icon cell, a spacer.
@@ -178,6 +190,13 @@ impl<P: Default> Node<P> {
 }
 
 impl<P> Node<P> {
+    pub(crate) fn rare(&self) -> &Rare {
+        static NONE: Rare = Rare::NONE;
+        self.rare.as_deref().unwrap_or(&NONE)
+    }
+    fn rare_mut(&mut self) -> &mut Rare {
+        self.rare.get_or_insert_with(|| Box::new(Rare::NONE))
+    }
     /// Name this node, so `Layout::frame` can find it. Structural nodes need no
     /// name and cost nothing unnamed.
     /// ```
@@ -278,7 +297,7 @@ impl<P> Node<P> {
     /// `width / height`. Fills in whichever axis was left `Auto` -- at measure
     /// from a fixed sibling axis, at arrange from the allocated one.
     pub fn aspect(mut self, ratio: f64) -> Self {
-        self.aspect = Some(ratio);
+        self.rare_mut().aspect = Some(ratio);
         self
     }
     pub fn min_width(mut self, width: f64) -> Self {
@@ -294,7 +313,7 @@ impl<P> Node<P> {
         self
     }
     pub fn max_size(mut self, size: Size) -> Self {
-        self.maximum = Some(size);
+        self.rare_mut().maximum = Some(size);
         self
     }
     pub fn grow(mut self, weight: f64) -> Self {
@@ -382,7 +401,7 @@ impl<P> Node<P> {
     /// assert_eq!(l.frame("m").unwrap().size.width, 90.);
     /// ```
     pub fn pin(mut self, pin: Pin) -> Self {
-        self.pin = Some(pin);
+        self.rare_mut().pin = Some(pin);
         self.float()
     }
     /// Pin this node to the leading edge of the enclosing
@@ -434,7 +453,7 @@ impl<P> Node<P> {
     /// assert_eq!(l.frame("c2").unwrap().y, 22.);
     /// ```
     pub fn line_gap(mut self, gap: impl Into<Spacing>) -> Self {
-        self.line_gap = Some(gap.into());
+        self.rare_mut().line_gap = Some(gap.into());
         self
     }
     /// How many grid columns this cell takes, clamped to the column count.
@@ -461,7 +480,7 @@ impl<P> Node<P> {
     /// assert_eq!((cols(800.), cols(260.), cols(240.)), (3, 2, 1));
     /// ```
     pub fn min_col(mut self, px: f64) -> Self {
-        self.min_col = Some(px);
+        self.rare_mut().min_col = Some(px);
         self
     }
     /// Place this child as if it were declared at `order`; its frame keeps

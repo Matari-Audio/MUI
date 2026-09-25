@@ -1043,7 +1043,7 @@ mod snapshot {
             .fill(Role::Primary)
             .shadow(Shadow {
                 dy: 8.,
-                fill: Fill::Gradient(mui_scene::Gradient::vertical(faint, faint.with_alpha(0.0))),
+                fill: mui_scene::Gradient::vertical(faint, faint.with_alpha(0.0)).into(),
                 ..Shadow::soft(4.)
             })
             .id("card");

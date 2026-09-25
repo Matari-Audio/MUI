@@ -106,8 +106,8 @@ impl<'a, P> Measured<'a, P> {
     /// width -- and the height follows.
     pub(crate) fn aspect_width(&self, inner: Size) -> Option<(f64, f64)> {
         let n = self.node;
-        let a = n.aspect.filter(|_| matches!(n.height, Len::Auto))?;
-        let cap = |v: f64| n.maximum.map_or(v, |m| v.min(m.width));
+        let a = n.rare().aspect.filter(|_| matches!(n.height, Len::Auto))?;
+        let cap = |v: f64| n.rare().maximum.map_or(v, |m| v.min(m.width));
         Some((
             cap(n
                 .width
@@ -122,7 +122,8 @@ impl<'a, P> Measured<'a, P> {
         // A share of the parent is still never less than this subtree's floor:
         // `height: 50%` on a padded node is a squeeze, not an error.
         let cap = |v: f64| {
-            n.maximum
+            n.rare()
+                .maximum
                 .map_or(v, |m| v.min(m.cross(!vertical)))
                 .max(self.floor.main(vertical))
         };
@@ -161,23 +162,26 @@ pub(crate) fn validate_node<P>(node: &Node<P>, l: Limits) -> Result<(), Error> {
     let finite = |v: f64| v.is_finite() && (0.0..=l.extent).contains(&v);
     if node.id.as_deref().is_some_and(str::is_empty)
         || !node.minimum.valid(l.extent)
-        || node.maximum.is_some_and(|s| !s.valid(l.extent))
+        || node.rare().maximum.is_some_and(|s| !s.valid(l.extent))
         || !node.padding.valid(l.extent)
         || ![node.grow, node.shrink].iter().all(|v| finite(*v))
         || node.basis.is_some_and(|b| !finite(b))
         || !node.width.valid(l.extent)
         || !node.height.valid(l.extent)
-        || node.aspect.is_some_and(|a| !(a.is_finite() && a > 0.0))
+        || node
+            .rare()
+            .aspect
+            .is_some_and(|a| !(a.is_finite() && a > 0.0))
         || !node
             .offset
             .iter()
             .all(|v| v.is_finite() && v.abs() <= l.extent)
         || matches!(node.kind, Kind::Grid { cols: 0, .. })
-        || node.min_col.is_some_and(|v| !finite(v))
+        || node.rare().min_col.is_some_and(|v| !finite(v))
     {
         return Err(Error::InvalidValue);
     }
-    if let Some(max) = node.maximum {
+    if let Some(max) = node.rare().maximum {
         if max.width + 1e-9 < node.minimum.width || max.height + 1e-9 < node.minimum.height {
             return Err(Error::InvalidValue);
         }
@@ -221,7 +225,7 @@ pub(crate) fn offer<P>(
 ) -> Option<f64> {
     match c.len(vertical) {
         Len::Px(v) => Some(v),
-        Len::Auto => inner.filter(|_| stretch && (c.is_container() || c.aspect.is_some())),
+        Len::Auto => inner.filter(|_| stretch && (c.is_container() || c.rare().aspect.is_some())),
         // A container share needs no definite parent: that is the point of it.
         Len::Container(p) => container.map(|cq| cq * p / 100.0),
         l => inner.and_then(|i| l.fixed(i, container)),
@@ -272,7 +276,7 @@ pub(crate) fn measure_uncached<'a, P>(
     if depth > l.depth || (!pass.redo && pass.left == 0) {
         return Err(Error::BudgetExceeded);
     }
-    pass.pinned |= node.pin.is_some();
+    pass.pinned |= node.rare().pin.is_some();
     let boxed = pass.boxed.take();
     // The node budget counts nodes: a re-measure at the final share visits a
     // subtree again but adds nothing to the tree.
@@ -285,7 +289,7 @@ pub(crate) fn measure_uncached<'a, P>(
     }
     let padding = boxed.unwrap_or_else(|| node.padding(pass.scale));
     let gap = node.gap.resolve(pass.scale);
-    let line_gap = node.line_gap.map_or(gap, |g| g.resolve(pass.scale));
+    let line_gap = node.rare().line_gap.map_or(gap, |g| g.resolve(pass.scale));
     if !([gap, line_gap]
         .iter()
         .all(|g| g.is_finite() && (0.0..=l.extent).contains(g))
@@ -320,7 +324,7 @@ pub(crate) fn measure_uncached<'a, P>(
         Some(_) => definite,
         None => [flex_width.or(definite[0]), node.height.px().or(definite[1])],
     };
-    if let Some(a) = node.aspect.filter(|_| boxed.is_none()) {
+    if let Some(a) = node.rare().aspect.filter(|_| boxed.is_none()) {
         match (definite, node.height, node.width) {
             ([Some(w), _], Len::Auto, _) => definite[1] = Some(w / a),
             ([None, Some(h)], _, Len::Auto) => definite[0] = Some(h * a),
@@ -341,7 +345,7 @@ pub(crate) fn measure_uncached<'a, P>(
     // share now counts: the flex pass re-measures its items) until a hugging
     // grid learns a width to drop columns against.
     let cols = match node.kind {
-        Kind::Grid { cols, .. } => match (node.min_col, inner[0]) {
+        Kind::Grid { cols, .. } => match (node.rare().min_col, inner[0]) {
             (Some(min), Some(w)) if min > 0.0 => {
                 (((w + gap) / (min + gap)).floor() as usize).clamp(1, cols)
             }
@@ -462,7 +466,7 @@ pub(crate) fn measure_uncached<'a, P>(
         };
         for (index, main) in shares {
             let c = &node.children()[index];
-            let main = c.maximum.map_or(main, |m| main.min(m.width));
+            let main = c.rare().maximum.map_or(main, |m| main.min(m.width));
             if !children[index].fluid || (children[index].size.width - main).abs() <= 0.5 {
                 continue;
             }
@@ -572,7 +576,11 @@ pub(crate) fn measure_uncached<'a, P>(
             // it instead of squeezing its cells below it. It widens the hug
             // only: the floor stays the cells' own, so a flex ancestor can
             // still squeeze the grid and have it drop columns.
-            let col_min = node.min_col.filter(|_| inner[0].is_none()).unwrap_or(0.0);
+            let col_min = node
+                .rare()
+                .min_col
+                .filter(|_| inner[0].is_none())
+                .unwrap_or(0.0);
             let hug = |g: fn(&Measured<'_, P>) -> Size, col_min: f64| {
                 // A spanning cell pays for its span, so its share of one
                 // column is what sets the column width.
@@ -639,7 +647,7 @@ pub(crate) fn measure_uncached<'a, P>(
     }
     // A maximum wins over content and floor alike: what does not fit
     // overflows the box.
-    let (size, floor) = match node.maximum {
+    let (size, floor) = match node.rare().maximum {
         Some(max) => (
             Size::new(size.width.min(max.width), size.height.min(max.height)),
             Size::new(floor.width.min(max.width), floor.height.min(max.height)),
@@ -655,7 +663,7 @@ pub(crate) fn measure_uncached<'a, P>(
     let width_fluid = matches!(
         node.width,
         Len::Pct(_) | Len::Clamp { .. } | Len::Container(_)
-    ) || node.aspect.is_some();
+    ) || node.rare().aspect.is_some();
     let wrap_fluid = matches!(
         node.kind,
         Kind::Branch {
@@ -664,7 +672,9 @@ pub(crate) fn measure_uncached<'a, P>(
         }
     ) && node.wrap;
     let fluid = matches!(node.kind, Kind::Content | Kind::Fits(_))
-        || (node.min_col.is_some() && inner[0].is_none() && matches!(node.kind, Kind::Grid { .. }))
+        || (node.rare().min_col.is_some()
+            && inner[0].is_none()
+            && matches!(node.kind, Kind::Grid { .. }))
         || children.iter().any(|c| c.fluid && !c.node.float)
         || width_fluid
         || wrap_fluid;

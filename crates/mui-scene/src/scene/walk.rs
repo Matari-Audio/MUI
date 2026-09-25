@@ -42,8 +42,8 @@ impl<'a> Walk<'a> {
         // A switched-off card switches off what it contains: nothing inside
         // it may be reached while its own frame cannot be.
         inner.disabled = ancestors.disabled || e.disabled;
-        if (e.inset_surface.is_some() && !self.regions.contains_key(&at))
-            || (e.border_join.is_some() && !self.joined_nodes.contains(&at))
+        if (e.extras().inset_surface.is_some() && !self.regions.contains_key(&at))
+            || (e.extras().border_join.is_some() && !self.joined_nodes.contains(&at))
         {
             return Err(mui_geometry::Error::InvalidOptions(
                 "material requires a surface-layout owner",
@@ -61,7 +61,7 @@ impl<'a> Walk<'a> {
         };
 
         self.partition(n, &contour.path, frame, at, (&key, path.as_str()))?;
-        if e.surface_padding.is_some() {
+        if e.extras().surface_padding.is_some() {
             let geometry = self.surface_cache.resolve(
                 n,
                 (&key, at),
@@ -108,7 +108,7 @@ impl<'a> Walk<'a> {
         let mut bg = self.shells(s, &mut contour, bg)?;
         self.inset_shadows(s, &contour, bg)?;
         let late_stroke = match &s.stroke {
-            Some(st) if material.is_none() && e.border_ramp.is_none() => {
+            Some(st) if material.is_none() && e.extras().border_ramp.is_none() => {
                 self.stroke(st, e, &contour, bg)?
             }
             _ => None,
@@ -121,11 +121,11 @@ impl<'a> Walk<'a> {
         self.at.insert(key.clone(), surface);
         let (semantics, semantic_label_implicit) = match (&e.semantics, &e.content) {
             (Some(semantics), Content::Text(text)) if semantics.label.is_none() => {
-                let mut semantics = semantics.clone();
+                let mut semantics = crate::Semantics::clone(semantics);
                 semantics.label = Some(text.clone());
                 (Some(semantics), true)
             }
-            (semantics, _) => (semantics.clone(), false),
+            (semantics, _) => (semantics.as_deref().cloned(), false),
         };
         self.surfaces.push(ResolvedSurface {
             key: key.clone(),
@@ -135,7 +135,7 @@ impl<'a> Walk<'a> {
             rect: contour.rect,
             topology_changed: contour.changed,
             cursor: inner.cursor,
-            tip: e.tip.clone(),
+            tip: e.extras().tip.clone(),
             focusable: e.focusable,
             captures_wheel: e.captures_wheel,
             tracks_pointer: e.tracks_pointer,
@@ -164,7 +164,8 @@ impl<'a> Walk<'a> {
         // A union is one contour, so its children paint inside it: a square
         // tab's own fill stops at the filleted corner instead of poking past
         // the shared outline.
-        let clips = n.is_clip() || s.union || e.inside.is_some() || self.regions.contains_key(&at);
+        let clips =
+            n.is_clip() || s.union || e.extras().inside.is_some() || self.regions.contains_key(&at);
         if clips {
             let image = material.as_ref().map(|m| m.image_rect.bounds());
             let image = image.or(shape_bounds);
@@ -195,7 +196,7 @@ impl<'a> Walk<'a> {
                 self.mark(Layer::Unclip, empty(), None);
             }
         }
-        if let Some(ramp) = &e.border_ramp {
+        if let Some(ramp) = &e.extras().border_ramp {
             ramp.validate()?;
             if material.is_some() {
                 return Err(SceneError::UnsupportedWeld(

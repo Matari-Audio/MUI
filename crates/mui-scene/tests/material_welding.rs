@@ -49,10 +49,11 @@ fn shape_only_is_not_border_omission() {
 fn default_and_explicit_macros_construct_the_same_policy() {
     let a = weld![plate("a", Primary, 1.), plate("b", Secondary, 2.)];
     let b = weld![Weld::all(); plate("a", Primary, 1.), plate("b", Secondary, 2.)];
-    assert_eq!(a.payload().welding, b.payload().welding);
+    assert_eq!(a.payload().extras().welding, b.payload().extras().welding);
     assert_eq!(
         weld_morph![0.25; plate("a", Primary, 1.)]
             .payload()
+            .extras()
             .welding
             .unwrap()
             .progress,
@@ -61,6 +62,7 @@ fn default_and_explicit_macros_construct_the_same_policy() {
     assert_eq!(
         weld_morph![Weld::shape(), 0.75; plate("a", Primary, 1.)]
             .payload()
+            .extras()
             .welding
             .unwrap()
             .border,

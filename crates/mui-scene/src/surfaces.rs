@@ -62,7 +62,7 @@ fn collect<'a>(n: &'a El, at: usize, nodes: &mut Vec<(usize, &'a El)>) -> usize 
     nodes.push((at, n));
     let mut next = at + 1;
     for child in n.children() {
-        next += if child.payload().surface_padding.is_none() && !child.is_float() {
+        next += if child.payload().extras().surface_padding.is_none() && !child.is_float() {
             collect(child, next, nodes)
         } else {
             count(child)
@@ -81,11 +81,15 @@ impl Cache {
         regions: &mut RegionCache,
     ) -> Result<Geometry, SceneError> {
         let e = root.payload();
-        let padding = e.surface_padding.unwrap().resolve(spec.theme.spacing);
+        let padding = e
+            .extras()
+            .surface_padding
+            .unwrap()
+            .resolve(spec.theme.spacing);
         if !padding.is_finite() || padding < 0. {
             return Err(mui_geometry::Error::InvalidOptions("surface padding").into());
         }
-        if e.welding.is_some() {
+        if e.extras().welding.is_some() {
             return Err(SceneError::UnsupportedWeld(
                 "surface layout requires a vector contour",
             ));
@@ -122,7 +126,7 @@ impl Cache {
             if frame.size.width <= 0. || frame.size.height <= 0. {
                 continue;
             }
-            if let Some(members) = &node.payload().inset_surface {
+            if let Some(members) = &node.payload().extras().inset_surface {
                 let footprints = if members.is_empty() {
                     vec![frame]
                 } else {
@@ -130,14 +134,15 @@ impl Cache {
                 };
                 panels.push((*i - at, footprints));
             }
-            if let Some(body) = &node.payload().border_join {
+            if let Some(body) = &node.payload().extras().border_join {
                 let body = named(body)?;
-                let ramp = e
-                    .border_ramp
-                    .as_ref()
-                    .ok_or(mui_geometry::Error::InvalidOptions(
-                        "border join requires an owning ramp",
-                    ))?;
+                let ramp =
+                    e.extras()
+                        .border_ramp
+                        .as_ref()
+                        .ok_or(mui_geometry::Error::InvalidOptions(
+                            "border join requires an owning ramp",
+                        ))?;
                 if ramp.align != crate::BorderAlign::Inside {
                     return Err(mui_geometry::Error::InvalidOptions(
                         "border join requires an inside ramp",
@@ -159,7 +164,7 @@ impl Cache {
             return Ok(Geometry::default());
         }
         let mut border = Path::default();
-        if let Some(ramp) = &e.border_ramp {
+        if let Some(ramp) = &e.extras().border_ramp {
             ramp.validate()?;
             let anchor = ramp
                 .anchor
@@ -221,7 +226,7 @@ impl Cache {
             panels,
             joins,
             padding,
-            border_inset: e.border_ramp.as_ref().map_or_else(
+            border_inset: e.extras().border_ramp.as_ref().map_or_else(
                 || {
                     e.style.stroke.as_ref().map_or(0., |stroke| {
                         stroke.width.unwrap_or(spec.theme.stroke_width) * e.border_align.inward()

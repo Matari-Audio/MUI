@@ -27,8 +27,8 @@ pub struct LayoutStats {
 struct Stamp {
     shape: Node<Vec<u8>>,
     /// Kept beside `shape` so a warm frame compares it by reference instead
-    /// of cloning its strings into a projection.
-    pin: Option<Pin>,
+    /// of cloning its box -- and a pin's strings -- into a projection.
+    rare: Option<Box<Rare>>,
     children: Vec<u64>,
     revision: u64,
     /// The `prepare` pass that last visited this address.
@@ -214,7 +214,7 @@ impl LayoutCache {
             return Err(Error::BudgetExceeded);
         }
         s.count += 1;
-        self.pinned |= n.pin.is_some();
+        self.pinned |= n.rare().pin.is_some();
         let base = s.revisions.len();
         for (i, c) in n.children().iter().enumerate() {
             let revision = self.scan(c, fx((path, i)), depth + 1, s)?;
@@ -236,7 +236,7 @@ impl LayoutCache {
         let revision = match self.stamps.entry(address) {
             Entry::Occupied(mut o)
                 if o.get().shape == shape
-                    && o.get().pin == n.pin
+                    && o.get().rare == n.rare
                     && o.get().children == children =>
             {
                 s.payload = shape.payload;
@@ -253,7 +253,7 @@ impl LayoutCache {
                 self.serial = self.serial.checked_add(1).ok_or(Error::RevisionExhausted)?;
                 let stamp = Stamp {
                     shape,
-                    pin: n.pin.clone(),
+                    rare: n.rare.clone(),
                     children: children.to_vec(),
                     revision: self.serial,
                     seen: s.pass,
@@ -291,14 +291,11 @@ fn projection<P>(n: &Node<P>, payload: Vec<u8>) -> Node<Vec<u8>> {
         kind,
         payload: _,
         gap,
-        line_gap,
         padding,
         pad,
         minimum,
-        maximum,
         width,
         height,
-        aspect,
         grow,
         basis,
         shrink,
@@ -307,7 +304,7 @@ fn projection<P>(n: &Node<P>, payload: Vec<u8>) -> Node<Vec<u8>> {
         justify,
         anchor,
         offset,
-        pin: _,
+        rare: _,
         scroll,
         clip,
         scrolled,
@@ -315,7 +312,6 @@ fn projection<P>(n: &Node<P>, payload: Vec<u8>) -> Node<Vec<u8>> {
         float,
         wrap,
         span,
-        min_col,
         order,
     } = n;
     let kind = match kind {
@@ -337,14 +333,11 @@ fn projection<P>(n: &Node<P>, payload: Vec<u8>) -> Node<Vec<u8>> {
         kind,
         payload,
         gap: *gap,
-        line_gap: *line_gap,
         padding: *padding,
         pad: *pad,
         minimum: *minimum,
-        maximum: *maximum,
         width: *width,
         height: *height,
-        aspect: *aspect,
         grow: *grow,
         basis: *basis,
         shrink: *shrink,
@@ -353,7 +346,7 @@ fn projection<P>(n: &Node<P>, payload: Vec<u8>) -> Node<Vec<u8>> {
         justify: *justify,
         anchor: *anchor,
         offset: *offset,
-        pin: None,
+        rare: None,
         scroll: *scroll,
         clip: *clip,
         scrolled: *scrolled,
@@ -361,7 +354,6 @@ fn projection<P>(n: &Node<P>, payload: Vec<u8>) -> Node<Vec<u8>> {
         float: *float,
         wrap: *wrap,
         span: *span,
-        min_col: *min_col,
         order: *order,
     }
 }

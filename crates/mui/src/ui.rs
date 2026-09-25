@@ -1332,7 +1332,7 @@ impl Ui {
         // Child indices down to here: a path is spelled out only for a node
         // that has an identity, and most trees have none.
         fn visit(n: &El, at: &mut Vec<usize>, out: &mut HashMap<u64, (Option<String>, String)>) {
-            if let Some(id) = n.payload().identity {
+            if let Some(id) = n.payload().extras().identity {
                 let mut path = String::new();
                 at.iter().for_each(|&j| push_index(&mut path, j));
                 out.insert(id, (n.key().map(str::to_owned), path));
@@ -1645,9 +1645,9 @@ impl Ui {
             &mut self.text_cache,
             &mut self.weld_cache,
             &mut |key, e, target| {
-                let spring = e.layout_transition.unwrap_or(Spring::DEFAULT);
+                let spring = e.extras().layout_transition.unwrap_or(Spring::DEFAULT);
                 let t = [target.x, target.y, target.size.width, target.size.height];
-                let (seen, s) = slot(glides, key, || (false, enter(spring, t, e.appear)));
+                let (seen, s) = slot(glides, key, || (false, enter(spring, t, e.extras().appear)));
                 *seen = true;
                 for (s, t) in s.iter_mut().zip(t) {
                     s.to(t);
@@ -2155,7 +2155,7 @@ fn channels(e: &mut Element, pal: &Palette, ch: &mut impl FnMut(u32, f64, bool) 
     if e.style.layer.is_some() || o < 0.999 {
         e.style.layer = Some((mix, o));
     }
-    if let Some(Spacing::Px(pad)) = &mut e.inside {
+    if let Some(Spacing::Px(pad)) = e.extras.as_deref_mut().and_then(|x| x.inside.as_mut()) {
         if pad.is_finite() && *pad >= 0. {
             *pad = ch(INSIDE, *pad, false).max(0.);
         }
@@ -2163,7 +2163,7 @@ fn channels(e: &mut Element, pal: &Palette, ch: &mut impl FnMut(u32, f64, bool) 
     if e.bend.is_finite() && e.bend.abs() <= 0.45 {
         e.bend = ch(BEND, e.bend, false).clamp(-0.45, 0.45);
     }
-    if let Some(ramp) = &mut e.border_ramp {
+    if let Some(ramp) = e.extras.as_deref_mut().and_then(|x| x.border_ramp.as_mut()) {
         for (i, width) in [&mut ramp.from.1, &mut ramp.to.1].into_iter().enumerate() {
             if width.is_finite() && *width >= 0. {
                 *width = ch(RAMP + i as u32, *width, false).max(0.);
@@ -2172,8 +2172,9 @@ fn channels(e: &mut Element, pal: &Palette, ch: &mut impl FnMut(u32, f64, bool) 
     }
     // Leave invalid progress for scene resolution to reject.
     if let Some(w) = e
-        .welding
-        .as_mut()
+        .extras
+        .as_deref_mut()
+        .and_then(|x| x.welding.as_mut())
         .filter(|w| (0.0..=1.0).contains(&w.progress))
     {
         w.progress = ch(WELD_PROGRESS, w.progress, false).clamp(0.0, 1.0);
@@ -2191,7 +2192,7 @@ fn transitions(
     dt: f64,
 ) -> bool {
     let mut animating = false;
-    if let Some(spring) = n.payload().transition {
+    if let Some(spring) = n.payload().extras().transition {
         let mut fresh = false;
         let (seen, list) = slot(motion, n.key().unwrap_or(path), || {
             fresh = true;
@@ -2199,8 +2200,12 @@ fn transitions(
         });
         *seen = true;
         // An appearing node's very first frame starts from transparent.
-        let from_clear = fresh && n.payload().appear.is_some();
-        let coupled_gap = n.payload().inside.is_some_and(|p| p == *n.gap_mut());
+        let from_clear = fresh && n.payload().extras().appear.is_some();
+        let coupled_gap = n
+            .payload()
+            .extras()
+            .inside
+            .is_some_and(|p| p == *n.gap_mut());
         channels(n.payload_mut(), pal, &mut |id, declared, angle| {
             let i = match list.iter().position(|(k, _)| *k == id) {
                 Some(i) => i,
@@ -2229,7 +2234,7 @@ fn transitions(
         // ponytail: `channels` would need to report the ids it visited to
         // prune these per frame; they are dropped with the node instead.
         if coupled_gap {
-            *n.gap_mut() = n.payload().inside.expect("coupled inside");
+            *n.gap_mut() = n.payload().extras().inside.expect("coupled inside");
         }
     }
     animating
@@ -2302,11 +2307,11 @@ impl Sweep<'_> {
         state(n, path, self.pal, self.of, self.scrolls, off);
         let e = n.payload();
         let key = || n.key().unwrap_or(path).to_owned();
-        let spring = e.transition.unwrap_or(Spring::DEFAULT);
-        if e.appear.is_some() {
+        let spring = e.extras().transition.unwrap_or(Spring::DEFAULT);
+        if e.extras().appear.is_some() {
             self.shaped.appearing.insert(key(), spring);
         }
-        if let Some(shape) = e.morph {
+        if let Some(shape) = e.extras().morph {
             self.shaped.morphs.push((key(), shape, spring));
         }
         let mark = path.len();
@@ -3261,7 +3266,7 @@ mod tests {
         let mut step = |p: f64| {
             let mut n = tree(p);
             let moving = transitions(&mut n, "", &pal, &mut motion, 0.016);
-            (n.payload().welding.unwrap().progress, moving)
+            (n.payload().extras().welding.unwrap().progress, moving)
         };
         assert_eq!(step(1.0), (1.0, false), "seeded, not flown in");
         let (mid, moving) = step(0.0);

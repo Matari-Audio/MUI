@@ -390,7 +390,7 @@ pub(super) fn layout_key(e: &Element, th: Theme, scale: Option<f64>, out: &mut V
         out.extend_from_slice(b);
     };
     bytes(t.as_bytes());
-    match &e.reserve {
+    match &e.extras().reserve {
         Some(r) => bytes(r.as_bytes()),
         None => out.extend_from_slice(&u64::MAX.to_le_bytes()),
     }
@@ -432,7 +432,7 @@ pub(super) fn fit(runs: &mut Runs, th: Theme, e: &crate::Element, room: Option<f
     };
     // The reserved string widens the box and nothing else: its own height is
     // the same line at the same size, and a longer value still measures long.
-    if let Some(r) = &e.reserve {
+    if let Some(r) = &e.extras().reserve {
         fit.width = fit.width.max(runs.measure(r, face).width);
     }
     Intrinsic {

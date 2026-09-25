@@ -48,7 +48,7 @@ pub use mui_weld::{Channel as WeldChannel, Quality as WeldQuality, Weld, WeldCac
 pub use dsl::{caption, label, title, IntoLen, Sugar};
 pub use element::{
     canvas, canvas_cached, column, fits, grid, icon, leaf, overlay, row, spacer, text, Appear,
-    Canvas, CanvasCache, Carve, Content, Draw, El, Element, IntoEl, Kind, Outline, Paints,
+    Canvas, CanvasCache, Carve, Content, Draw, El, Element, Extras, IntoEl, Kind, Outline, Paints,
     Semantics, State, StateStyle, Styled,
 };
 pub use mui_geometry::CornerStyle;
