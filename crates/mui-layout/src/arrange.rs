@@ -151,8 +151,7 @@ pub(crate) fn hide<P>(
     }
 }
 
-pub(crate) use crate::incremental::arrange_cached as arrange;
-pub(crate) fn arrange_uncached<P>(
+pub(crate) fn arrange<P>(
     m: &Measured<'_, P>,
     ancestor: &str,
     origin: [f64; 2],
@@ -364,7 +363,7 @@ pub(crate) fn arrange_uncached<P>(
     for (i, c) in m.children.iter().enumerate() {
         // A candidate that lost keeps its place in the frame list, empty, so
         // a walk of the tree still lines up with it.
-        if matches!(n.kind, Kind::Fits(_)) && i != m.pick {
+        if matches!(n.kind, Kind::Fits(_)) && i != m.pick && !c.node.float {
             hide(c, origin, out);
             continue;
         }

@@ -223,8 +223,8 @@ impl Hit {
             .rev()
             .find(|t| {
                 inside(&t.clip)
-                    && t.clip_paths.iter().all(|clip| clip.winding(q) != 0)
                     && t.bounds.contains(q)
+                    && t.clip_paths.iter().all(|clip| clip.winding(q) != 0)
                     && contains(&t.id, t.tag.as_deref(), p)
                         .unwrap_or_else(|| t.path.winding(q) != 0)
             })
