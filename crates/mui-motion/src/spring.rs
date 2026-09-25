@@ -68,8 +68,11 @@ impl Spring {
     pub fn to(&mut self, target: f64) {
         self.target = target;
     }
+    /// Within 1e-3 of the target, which bounds the final snap, and too slow
+    /// to leave it: at 1e-3/s a hover spring framed for a further 0.2 s
+    /// that no pixel shows.
     pub fn settled(&self) -> bool {
-        (self.value - self.target).abs() < 1e-3 && self.velocity.abs() < 1e-3
+        (self.value - self.target).abs() < 1e-3 && self.velocity.abs() < 0.1
     }
     /// Advance `dt` seconds. Returns whether it is still moving. Uses the
     /// exact solution of the damped oscillator, so any `dt` is stable and
