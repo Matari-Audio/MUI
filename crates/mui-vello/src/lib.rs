@@ -397,8 +397,24 @@ fn blur(std_dev: f32) -> Filter {
     })
 }
 
+/// `c` as painted. A frame asks for the same few theme colours thousands of
+/// times, and the Oklch conversion takes cube roots, so the last conversions
+/// are kept in a small direct-mapped table.
 fn srgb(c: mui_scene::Color) -> AlphaColor<Srgb> {
-    c.to_srgb()
+    use std::cell::RefCell;
+    type Slot = Option<([u32; 4], AlphaColor<Srgb>)>;
+    thread_local!(static SEEN: RefCell<[Slot; 64]> = const { RefCell::new([None; 64]) });
+    let key = [c.lightness(), c.chroma(), c.hue(), c.alpha()].map(f32::to_bits);
+    let mix = key[0] ^ key[1].rotate_left(8) ^ key[2].rotate_left(16) ^ key[3].rotate_left(24);
+    let at = (mix.wrapping_mul(0x9E37_79B1) >> 26) as usize;
+    SEEN.with_borrow_mut(|seen| match seen[at] {
+        Some((k, v)) if k == key => v,
+        _ => {
+            let v = c.to_srgb();
+            seen[at] = Some((key, v));
+            v
+        }
+    })
 }
 
 /// The premultiplied [`Pixmap`] of an image. MUI hands over straight RGBA --
