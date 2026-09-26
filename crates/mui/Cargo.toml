@@ -27,6 +27,7 @@ unicode-segmentation.workspace = true
 [dev-dependencies]
 epaint_default_fonts.workspace = true
 png.workspace = true
+ttf-inter.workspace = true
 libc = "0.2"
 
 [[example]]

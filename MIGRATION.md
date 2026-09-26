@@ -2,6 +2,27 @@
 
 Every entry is `old -> new`. Crates are listed in dependency order.
 
+## Unreleased
+
+Breaking (by hand):
+
+- `mui_text::TextRun::path: Path` -> `Arc<Path>`, so a cached run draws
+  without copying its outlines. Reads deref as before; a caller that moved
+  the path out takes `Arc::unwrap_or_clone(run.path)`.
+
+Additions:
+
+- `Ui::text_runs() -> TextRuns`: the `Ui::text_run` cache as a cloneable,
+  thread-safe handle for canvas closures and helpers without a `&mut Ui`.
+  `TextRuns::get(font, text, size, axes)` keys on and shapes with the
+  variation axes. A run's baseline is `y = 0`: place its top-left at `(x, y)`
+  with `.at(pt(x, y + run.ascent))`.
+
+Behaviour:
+
+- `Ui::text_run` outlines at 0.1 px tolerance (was 0.05) and keeps up to
+  2048 runs (was 512).
+
 ## v0.4.1
 
 Breaking (by hand; `mui-migrate` has no rule for it):

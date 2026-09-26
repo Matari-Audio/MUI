@@ -171,3 +171,53 @@ fn a_text_run_is_shaped_once_and_kept() {
     let big = ui.text_run(&font, "gain", 24.).unwrap();
     assert!(big.advance > a.advance);
 }
+
+/// The cache keys on and shapes with the variation axes: BUFFR pins Martian
+/// Mono's `wdth` below its default, and a cache that ignored it came out wide.
+#[test]
+fn text_runs_honour_axes() {
+    let inter = Font::new(ttf_inter::REGULAR).unwrap();
+    let runs = Ui::default().text_runs();
+    let regular = runs.get(&inter, "KURV", 24., &[("wght", 400.)]).unwrap();
+    let bold = runs.get(&inter, "KURV", 24., &[("wght", 700.)]).unwrap();
+    assert!(bold.advance > regular.advance, "the wght axis was ignored");
+    let again = runs.get(&inter, "KURV", 24., &[("wght", 400.)]).unwrap();
+    assert!(Arc::ptr_eq(&regular, &again));
+}
+
+/// The path's baseline is y = 0 and its ink stays within ascent above and
+/// descent below, so `.at(y + ascent)` places the top-left at y.
+#[test]
+fn text_run_baseline_is_ascent_below_the_top() {
+    let font = Font::new(epaint_default_fonts::HACK_REGULAR).unwrap();
+    let run = Ui::default()
+        .text_runs()
+        .get(&font, "Hg", 96., &[])
+        .unwrap();
+    let points = run.path.flatten(0.1, 250_000).unwrap().concat();
+    let b = mui_geometry::bounds(points).unwrap();
+    assert!(b.y0 < -0.5 * run.ascent && b.y0 >= -run.ascent, "{b:?}");
+    assert!(b.y1 > 0. && b.y1 <= run.descent, "{b:?}");
+}
+
+/// A handle cloned into a canvas closure on another thread shares the cache,
+/// and the cache stays bounded however many labels go through it.
+#[test]
+fn text_runs_handle_is_shared_and_bounded() {
+    let font = Font::new(epaint_default_fonts::HACK_REGULAR).unwrap();
+    let mut ui = Ui::default();
+    let runs = ui.text_runs();
+    let f = font.clone();
+    let there = std::thread::spawn(move || runs.get(&f, "gain", 12., &[]).unwrap())
+        .join()
+        .unwrap();
+    assert!(Arc::ptr_eq(
+        &there,
+        &ui.text_run(&font, "gain", 12.).unwrap()
+    ));
+    let runs = ui.text_runs();
+    for i in 0..5000 {
+        runs.get(&font, &i.to_string(), 12., &[]).unwrap();
+        assert!(runs.len() <= 2048);
+    }
+}

@@ -23,9 +23,11 @@ mod input;
 mod memo;
 mod motion;
 mod scroll;
+mod text_runs;
 use input::*;
 use memo::*;
 use motion::*;
+pub use text_runs::TextRuns;
 
 #[cfg(test)]
 mod audit_tests;
@@ -118,7 +120,7 @@ pub struct Ui {
     /// Optional faces tried per grapheme after [`Self::font`].
     fallback_fonts: Vec<Font>,
     /// See [`Ui::text_run`].
-    runs: HashMap<(u64, u64, String), Arc<mui_text::TextRun>>,
+    runs: TextRuns,
     /// See [`Ui::set_scale`].
     scale: Option<f64>,
     weld_backend: mui_scene::WeldBackend,
@@ -262,7 +264,7 @@ impl Ui {
             theme,
             font: None,
             fallback_fonts: Vec::new(),
-            runs: HashMap::new(),
+            runs: TextRuns::default(),
             scale: None,
             weld_backend: mui_scene::WeldBackend::Reference,
             interaction: Pointer::new(),
@@ -363,6 +365,7 @@ impl Ui {
     /// GPU renderers use the same fallback choice.
     pub fn fallback_font(mut self, font: Font) -> Self {
         self.fallback_fonts.push(font);
+        self.runs.set_fallbacks(self.fallback_fonts.clone());
         self
     }
     /// Run `.weld(..)` / `weld!` on the analytic GPU backend: this `Ui`'s
@@ -696,27 +699,19 @@ impl Ui {
     /// `text` shaped and outlined in `font` (then the fallbacks) at `size`,
     /// for a canvas to draw: shaped once and kept, so a canvas redrawn every
     /// frame does not reshape its labels. `None` if the text cannot shape.
+    /// [`TextRuns::get`] at the face's default axes.
     pub fn text_run(
         &mut self,
         font: &Font,
         text: &str,
         size: f64,
     ) -> Option<Arc<mui_text::TextRun>> {
-        let key = (font.id(), size.to_bits(), text.to_owned());
-        if let Some(run) = self.runs.get(&key) {
-            return Some(run.clone());
-        }
-        let fonts: Vec<Font> = std::iter::once(font)
-            .chain(&self.fallback_fonts)
-            .cloned()
-            .collect();
-        let run = Arc::new(mui_text::text_run(&fonts, text, size, &[], 0.05).ok()?);
-        // ponytail: flushed whole at the cap; an LRU if canvases churn past it.
-        if self.runs.len() >= 512 {
-            self.runs.clear();
-        }
-        self.runs.insert(key, run.clone());
-        Some(run)
+        self.runs.get(font, text, size, &[])
+    }
+    /// The run cache behind [`Ui::text_run`] as a handle a canvas closure
+    /// can keep: clone it in, call [`TextRuns::get`] there.
+    pub fn text_runs(&self) -> TextRuns {
+        self.runs.clone()
     }
     /// The character index in `s` nearest `x`, measured in the scene's font.
     pub(crate) fn hit(&self, s: &str, size: f64, x: f64) -> usize {
