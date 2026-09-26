@@ -187,6 +187,11 @@ pub const RULES: &[Rule] = &[
     // `.then` and `.apply` are too common a name to rewrite without the receiver's type.
     Manual { pattern: "Affine :: translation", note: "kurbo `Affine`: `a.then(b)` -> `b * a`, `t.apply(p)` -> `t * p`" },
     Manual { pattern: "Affine :: rotation", note: "kurbo `Affine`: `a.then(b)` -> `b * a`, `t.apply(p)` -> `t * p`" },
+    // A displacement argument is a `Vec2`: a literal `Point::new(..)` there is rewritten.
+    Call { chain: &[("translate", &[After("Point::new")])], to: ".translate(Vec2::new$1)", gate: Mui, needs: &["Vec2"] },
+    Call { chain: &[("translated", &[After("Point::new")])], to: ".translated(Vec2::new$1)", gate: Mui, needs: &["Vec2"] },
+    Call { chain: &[("rigid_transform", &[After("Point::new"), A])], to: ".rigid_transform(Vec2::new$1, $2)", gate: Mui, needs: &["Vec2"] },
+    Retype { field: "half", from: "Point", to: "Vec2" },
     Manual { pattern: ". rigid_transform (", note: "`Path::rigid_transform` and `Path::translate` take a `Vec2` (`p.to_vec2()`)" },
     Manual { pattern: "drag_delta : Point", note: "`Response::drag_delta` and `drag_total` are `Vec2` (a kurbo `Point` has no `+ Point`)" },
     Manual { pattern: "drag_total : Point", note: "`Response::drag_total` is a `Vec2`" },

@@ -376,4 +376,8 @@ fn ui_fields_become_accessors_and_the_wheel_a_vec2() {
         &with_prelude("fn f() { let p = PointerInput { wheel: Point::new(0.0, 3.0), ..Default::default() }; if r.wheel != Point::ZERO {} let at: Point = Point::ZERO; }\n"),
         &with_prelude("fn f() { let p = PointerInput { wheel: Vec2::new(0.0, 3.0), ..Default::default() }; if r.wheel != Vec2::ZERO {} let at: Point = Point::ZERO; }\n"),
     );
+    check(
+        &with_prelude("fn f() { p.translate(Point::new(1.0, 2.0)); p.rigid_transform(Point::new(x, y), a); r.translated(d); Plate { half: Point::new(w, h) }; }\n"),
+        &with_prelude("fn f() { p.translate(Vec2::new(1.0, 2.0)); p.rigid_transform(Vec2::new(x, y), a); r.translated(d); Plate { half: Vec2::new(w, h) }; }\n"),
+    );
 }
