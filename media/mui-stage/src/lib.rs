@@ -23,7 +23,8 @@
 //! # Ok(()) }
 //! ```
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use mui_geometry::Path;
 use mui_scene::{ResolvedScene, Size};
@@ -39,6 +40,9 @@ pub use math::Mat4;
 pub enum Error {
     /// The adapter, device, readback or a shader said no.
     Gpu(String),
+    /// The stage's own device was lost (driver reset, GPU removed). Nothing
+    /// on it survives: make a new [`Stage`] and paint its layers again.
+    DeviceLost,
     /// A shot names a layer [`Stage::layer`] never painted.
     MissingLayer(String),
     /// Vello could not paint a layer.
@@ -51,6 +55,7 @@ impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Gpu(s) => write!(f, "stage GPU: {s}"),
+            Self::DeviceLost => f.write_str("stage GPU: device lost; make a new Stage"),
             Self::MissingLayer(s) => write!(f, "no layer {s:?}: paint it with Stage::layer first"),
             Self::Render(e) => write!(f, "stage layer: {e}"),
             Self::Text(e) => write!(f, "stage text: {e}"),
@@ -449,6 +454,11 @@ pub struct Stage {
     layers: HashMap<String, Layer>,
     /// One Vello pipeline set for every layer, resized to each in turn.
     renderer: GpuRenderer,
+    /// Set by the device-lost callback of a device [`Stage::new`] opened.
+    lost: Arc<AtomicBool>,
+    /// The first GPU error no scope caught since the last call, which
+    /// wgpu would otherwise panic on. Only on a device the stage opened.
+    uncaptured: Arc<Mutex<Option<String>>>,
 }
 
 fn target(
@@ -509,7 +519,35 @@ impl Stage {
         let (device, queue) =
             pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
                 .map_err(gpu)?;
-        Self::with_device(device, queue, width, height)
+        // The device is the stage's own, so loss and stray errors are too:
+        // reported by the next call as an `Error`, not a panic.
+        let stage = Self::with_device(device, queue, width, height)?;
+        let flag = Arc::clone(&stage.lost);
+        stage
+            .device
+            .set_device_lost_callback(move |_, _| flag.store(true, Ordering::Release));
+        let slot = Arc::clone(&stage.uncaptured);
+        stage.device.on_uncaptured_error(Arc::new(move |e| {
+            let mut slot = slot
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            slot.get_or_insert_with(|| e.to_string());
+        }));
+        Ok(stage)
+    }
+
+    /// A lost device or an uncaught GPU error since the last call, as an
+    /// `Error`. Polls first: wgpu reports loss from a poll.
+    fn fault(&self) -> Result<(), Error> {
+        let _ = self.device.poll(wgpu::PollType::Poll);
+        if self.lost.load(Ordering::Acquire) {
+            return Err(Error::DeviceLost);
+        }
+        let mut slot = self
+            .uncaptured
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        slot.take().map_or(Ok(()), |e| Err(Error::Gpu(e)))
     }
 
     /// On a device the host already has.
@@ -678,6 +716,8 @@ impl Stage {
             readback,
             layers: HashMap::new(),
             renderer,
+            lost: Arc::default(),
+            uncaptured: Arc::default(),
         })
     }
 
@@ -700,6 +740,7 @@ impl Stage {
         size: Size,
         supersample: f64,
     ) -> Result<(), Error> {
+        self.fault()?;
         let (w, h) = (
             (size.width * supersample).ceil().clamp(1., 8192.) as u16,
             (size.height * supersample).ceil().clamp(1., 8192.) as u16,
@@ -852,6 +893,7 @@ impl Stage {
         subframes: u32,
         shot: &dyn Fn(f64) -> Shot,
     ) -> Result<Frame, Error> {
+        self.fault()?;
         let n = subframes.max(1);
         let aspect = self.width as f32 / self.height as f32;
         let mut last = None;
@@ -1186,9 +1228,9 @@ impl Stage {
         self.queue.submit([enc.finish()]);
         let slice = self.readback.slice(..);
         slice.map_async(wgpu::MapMode::Read, |_| {});
-        self.device
-            .poll(wgpu::PollType::wait_indefinitely())
-            .map_err(gpu)?;
+        let waited = self.device.poll(wgpu::PollType::wait_indefinitely());
+        self.fault()?;
+        waited.map_err(gpu)?;
         let stride = self.width as usize * 16;
         let mut rgba = Vec::with_capacity(self.width as usize * self.height as usize * 4);
         for line in slice

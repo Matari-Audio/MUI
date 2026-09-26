@@ -287,3 +287,16 @@ fn layers_of_different_sizes_share_one_renderer() {
         at(&l, 80, 90)
     );
 }
+
+#[test]
+fn a_lost_device_is_an_error_not_a_panic() {
+    let Some(mut stage) = stage(8, 8) else {
+        return;
+    };
+    stage.device.destroy();
+    let size = Size::new(4., 4.);
+    assert!(matches!(
+        stage.layer("l", &halves(size), size, 1.),
+        Err(Error::DeviceLost)
+    ));
+}
