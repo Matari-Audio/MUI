@@ -14,16 +14,17 @@
 //! and no deadline due paints nothing.
 #![deny(unsafe_code)]
 use std::collections::VecDeque;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use a11y::A11y;
 use baseview::{
-    Event, EventStatus, MouseButton, MouseCursor, MouseEvent, Window, WindowEvent, WindowHandle,
-    WindowHandler, WindowOpenOptions, WindowScalePolicy,
+    DropData, DropEffect, Event, EventStatus, MouseButton, MouseCursor, MouseEvent, Window,
+    WindowEvent, WindowHandle, WindowHandler, WindowOpenOptions, WindowScalePolicy,
 };
-use keyboard_types::{Key as HostKey, KeyState, Modifiers};
+use keyboard_types::{Code, Key as HostKey, KeyState, KeyboardEvent, Modifiers};
 use mui::Ui;
 use mui::prelude::{
     Button, Cursor, El, Input, Key, KeyPress, Mods, Point, PointerInput, Size, Vec2,
@@ -40,14 +41,43 @@ const GPU_RETRY: Duration = Duration::from_millis(500);
 
 /// What the window asks of whoever owns the model.
 pub trait View: Send + 'static {
-    /// This frame's tree.
-    fn build(&mut self, ui: &mut Ui) -> El;
+    /// This frame's tree, and the input the frame is about to take.
+    fn build(&mut self, ui: &mut Ui, input: &Input) -> El;
     /// Whether the model moved outside the `Ui` since the last call --
     /// automation, a preset, a meter. Polled every display tick.
     fn changed(&mut self) -> bool;
     /// Ask the host for a new window size in logical points. A host may
     /// refuse, and the window clips rather than overflowing.
     fn request_resize(&mut self, width: u32, height: u32) -> bool;
+    /// After each frame that laid out: read what it dispatched.
+    fn after_frame(&mut self, ui: &mut Ui) {
+        let _ = ui;
+    }
+    /// The gesture in flight was cancelled: focus left, or the window closes.
+    fn cancel(&mut self, ui: &Ui) {
+        let _ = ui;
+    }
+    /// A UI zoom on top of the window's scale: 2 draws everything twice as
+    /// big and offers the tree half the logical size. Read once per tick.
+    fn zoom(&self) -> f64 {
+        1.0
+    }
+    /// Files dragged over the window at `at` (scene units); `dropped` on
+    /// release. `true` accepts them as a copy.
+    fn drop_files(&mut self, ui: &Ui, at: Point, paths: &[PathBuf], dropped: bool) -> bool {
+        let _ = (ui, at, paths, dropped);
+        false
+    }
+    /// An app-wide shortcut the window keeps even with no focused control
+    /// (undo, help, escape). Everything else unfocused goes to the host.
+    fn claims_key(&self, key: &Key, mods: Mods) -> bool {
+        let _ = (key, mods);
+        false
+    }
+    /// A line for the log: GPU failures, refused layouts, swallowed panics.
+    fn log(&mut self, line: &str) {
+        eprintln!("{line}");
+    }
 }
 
 /// The retained `Ui` and the model: shared between the window thread and
@@ -195,6 +225,8 @@ struct Driver {
     /// Physical pixels, and physical per logical.
     size: (u32, u32),
     scale: f64,
+    /// [`View::zoom`], as of the last tick.
+    zoom: f64,
     /// A wheel line in scene units: the theme's text size, as of last frame.
     line: f64,
     cursor: Cursor,
@@ -206,6 +238,8 @@ struct Driver {
     asked_to_grow: bool,
     /// A refused layout is reported once per run of refusals.
     failing: bool,
+    /// Keys down, and whether the window kept each press.
+    held: Vec<(Code, bool)>,
 }
 
 impl<V: View> Handler<V> {
@@ -232,6 +266,7 @@ impl<V: View> Handler<V> {
                 clipboard: Clipboard::default(),
                 size,
                 scale,
+                zoom: 1.0,
                 line: 16.0,
                 cursor: Cursor::Arrow,
                 last_frame: now,
@@ -240,6 +275,7 @@ impl<V: View> Handler<V> {
                 wake_at: None,
                 asked_to_grow: false,
                 failing: false,
+                held: Vec::new(),
             },
         }
     }
@@ -280,7 +316,10 @@ impl<V: View> Handler<V> {
                     self.unpainted = true;
                 }
                 Err(e) => {
-                    eprintln!("mui-baseview: GPU unavailable ({e}); retrying");
+                    log(
+                        &self.shared,
+                        &format!("mui-baseview: GPU unavailable ({e}); retrying"),
+                    );
                     self.gpu_retry_at = now + GPU_RETRY;
                 }
             }
@@ -318,10 +357,10 @@ impl<V: View> Handler<V> {
         };
         if let (Some(gpu), Some(scene)) = (self.gpu.as_mut(), scene) {
             if let Err(e) = gpu.resize(size.0, size.1) {
-                eprintln!("mui-baseview: {e}");
+                log(&self.shared, &format!("mui-baseview: {e}"));
             }
-            match gpu.present(&scene, Affine::scale(self.driver.scale)) {
-                Ok(Frame::Presented(_)) => self.unpainted = false,
+            match gpu.present(&scene, Affine::scale(self.driver.ui_scale())) {
+                Ok(Frame::Presented(_) | Frame::Current) => self.unpainted = false,
                 Ok(Frame::Skipped) => {}
                 Ok(Frame::SurfaceLost) => {
                     // SAFETY: the surface comes from this window's live
@@ -332,7 +371,7 @@ impl<V: View> Handler<V> {
                     if let Some(surface) = surface {
                         gpu.replace_surface(surface);
                     } else {
-                        eprintln!("mui-baseview: surface lost; rebuilding");
+                        log(&self.shared, "mui-baseview: surface lost; rebuilding");
                         self.gpu = None;
                         self.gpu_retry_at = now + GPU_RETRY;
                     }
@@ -340,7 +379,7 @@ impl<V: View> Handler<V> {
                 Err(e) => {
                     // Not a lost surface: painting it again would fail
                     // again. A lost device rebuilds on its own schedule.
-                    eprintln!("mui-baseview: {e}");
+                    log(&self.shared, &format!("mui-baseview: {e}"));
                     self.unpainted = false;
                 }
             }
@@ -361,29 +400,84 @@ impl<V: View> Handler<V> {
 
     /// One native event, as baseview delivers it.
     pub fn on_event_inner(&mut self, event: &Event) -> EventStatus {
+        if let Event::Keyboard(key) = event {
+            let captured = self.route_key(key);
+            self.driver.push_key(key, captured);
+            return if captured {
+                EventStatus::Captured
+            } else {
+                EventStatus::Ignored
+            };
+        }
         let status = self.driver.on_event(event);
+        if let Event::Mouse(
+            MouseEvent::DragEntered { data, .. }
+            | MouseEvent::DragMoved { data, .. }
+            | MouseEvent::DragDropped { data, .. },
+        ) = event
+            && let (DropData::Files(paths), Some(at)) = (data, self.driver.pointer.pos)
+        {
+            let dropped = matches!(event, Event::Mouse(MouseEvent::DragDropped { .. }));
+            let s = &mut *lock(&self.shared);
+            if s.view.drop_files(&s.ui, at, paths, dropped) {
+                return EventStatus::AcceptDrop(DropEffect::Copy);
+            }
+        }
+        if matches!(event, Event::Window(WindowEvent::WillClose)) {
+            let s = &mut *lock(&self.shared);
+            s.view.cancel(&s.ui);
+        }
         if let (Some(a11y), Event::Window(e @ (WindowEvent::Focused | WindowEvent::Unfocused))) =
             (self.a11y.as_mut(), event)
         {
             a11y.focus(matches!(e, WindowEvent::Focused));
         }
-        // A key nothing here has focus for goes back to the host too, so
-        // Space still starts its transport.
-        // ponytail: a global shortcut read from `Ui::shortcuts` also reaches
-        // the host; claiming it needs the tree to say which keys it used.
-        if matches!(event, Event::Keyboard(_)) && lock(&self.shared).ui.focus_key().is_none() {
-            return EventStatus::Ignored;
-        }
         status
+    }
+
+    /// Whether the window keeps this key, or the host gets it: a focused
+    /// text field takes every key, a focused control only its navigation
+    /// keys, and nothing else but [`View::claims_key`] -- so Space still
+    /// starts the host's transport. A release goes where its press went.
+    // ponytail: Windows hosts also want `set_keyboard_capture` while a text
+    // field is focused; upstream baseview-truce has no such call yet.
+    fn route_key(&mut self, key: &KeyboardEvent) -> bool {
+        let held = &mut self.driver.held;
+        if let Some(i) = held.iter().position(|(code, _)| *code == key.code) {
+            let captured = held[i].1;
+            if key.state == KeyState::Up {
+                held.swap_remove(i);
+            }
+            return captured;
+        }
+        if key.state == KeyState::Up {
+            return false;
+        }
+        let s = lock(&self.shared);
+        let captured = captures(&key.key, key_owner(&s.ui))
+            || shortcut_key(&key.key).is_some_and(|k| s.view.claims_key(&k, mods(key.modifiers)));
+        drop(s);
+        self.driver.held.push((key.code, captured));
+        captured
     }
 }
 
 impl Driver {
+    /// Physical pixels per scene unit: the window's scale times the zoom.
+    fn ui_scale(&self) -> f64 {
+        self.scale * self.zoom
+    }
+
     /// Run the queued events and whatever else is due through `Ui::frame`.
     /// Returns whether there is a new scene to paint.
     fn advance<V: View>(&mut self, s: &mut Shared<V>, now: Instant) -> bool {
         self.dirty |= self.requests.redraw.swap(false, Ordering::AcqRel);
         self.dirty |= s.view.changed();
+        let zoom = s.view.zoom();
+        if zoom.is_finite() && zoom > 0.0 && zoom != self.zoom {
+            self.zoom = zoom;
+            self.dirty = true;
+        }
         if target_size(self.size.0, self.size.1).is_none() {
             // Minimised: hold the input edges until there is a size again.
             return false;
@@ -412,6 +506,7 @@ impl Driver {
                 Pending::Input(input) | Pending::Move(input) => input,
                 Pending::Cancel(pointer) => {
                     s.ui.cancel();
+                    s.view.cancel(&s.ui);
                     Input::from(pointer)
                 }
             };
@@ -442,10 +537,10 @@ impl Driver {
         dt: f64,
         now: Instant,
     ) -> Result<(), ()> {
-        s.ui.set_scale(Some(self.scale));
+        s.ui.set_scale(Some(self.ui_scale()));
         self.line = s.ui.theme().text;
-        let root = s.view.build(&mut s.ui);
-        let offered = logical_size(self.size, self.scale);
+        let root = s.view.build(&mut s.ui, &input);
+        let offered = logical_size(self.size, self.ui_scale());
         match s.ui.frame(root, Some(offered), input, dt) {
             Ok(frame) => {
                 self.failing = false;
@@ -459,11 +554,13 @@ impl Driver {
                 }
                 // ponytail: `frame.ime` is dropped; baseview has no
                 // candidate-window API to hand it to.
+                s.view.after_frame(&mut s.ui);
                 Ok(())
             }
             Err(e) => {
                 if !self.failing {
-                    eprintln!("mui-baseview: layout refused at {offered:?}: {e}");
+                    s.view
+                        .log(&format!("mui-baseview: layout refused at {offered:?}: {e}"));
                 }
                 self.failing = true;
                 Err(())
@@ -482,9 +579,11 @@ impl Driver {
         else {
             return;
         };
-        if available.width < floor.width || available.height < floor.height {
-            let w = floor.width.max(available.width).ceil() as u32;
-            let h = floor.height.max(available.height).ceil() as u32;
+        // The floor is in scene units; the window is in points, zoom times.
+        let (fw, fh) = (floor.width * self.zoom, floor.height * self.zoom);
+        if available.width < fw || available.height < fh {
+            let w = fw.max(available.width).ceil() as u32;
+            let h = fh.max(available.height).ceil() as u32;
             s.view.request_resize(w, h);
         }
     }
@@ -508,18 +607,7 @@ impl Driver {
                     _ => self.pending.push_back(Pending::Input(input)),
                 }
             }
-            Event::Keyboard(key) => {
-                self.pointer.mods = event_mods(&key.key, key.modifiers, key.state);
-                let mut input = Input::default();
-                if key.state == KeyState::Down {
-                    on_key(&mut input, &key.key, key.modifiers);
-                    if is_paste(&key.key, key.modifiers) {
-                        input.clipboard = self.clipboard.read();
-                    }
-                }
-                input.pointer = self.pointer;
-                self.pending.push_back(Pending::Input(input));
-            }
+            Event::Keyboard(key) => self.push_key(key, true),
             Event::Window(WindowEvent::Resized(info)) => {
                 let physical = info.physical_size();
                 self.size = (physical.width, physical.height);
@@ -527,6 +615,7 @@ impl Driver {
                 self.dirty = true;
             }
             Event::Window(WindowEvent::Unfocused) => {
+                self.held.clear();
                 self.pointer = PointerInput::default();
                 self.pending.push_back(Pending::Cancel(self.pointer));
             }
@@ -542,6 +631,21 @@ impl Driver {
             }
         }
         EventStatus::Captured
+    }
+
+    /// A key event as a frame. One the host gets still carries the
+    /// modifiers, so Shift or Alt reaches a drag, but no keys or text.
+    fn push_key(&mut self, key: &KeyboardEvent, captured: bool) {
+        self.pointer.mods = event_mods(&key.key, key.modifiers, key.state);
+        let mut input = Input::default();
+        if captured && key.state == KeyState::Down {
+            on_key(&mut input, &key.key, key.modifiers);
+            if is_paste(&key.key, key.modifiers) {
+                input.clipboard = self.clipboard.read();
+            }
+        }
+        input.pointer = self.pointer;
+        self.pending.push_back(Pending::Input(input));
     }
 
     /// Hover samples carry no edges: keep only the newest of a run with the
@@ -581,7 +685,8 @@ impl Driver {
                 modifiers,
                 ..
             } => {
-                self.pointer.pos = Some(Point::new(position.x, position.y));
+                let z = self.zoom;
+                self.pointer.pos = Some(Point::new(position.x / z, position.y / z));
                 self.pointer.mods = mods(modifiers);
             }
             MouseEvent::ButtonPressed { button, modifiers }
@@ -598,7 +703,9 @@ impl Driver {
                     baseview::ScrollDelta::Lines { x, y } => {
                         (f64::from(x) * self.line, f64::from(y) * self.line)
                     }
-                    baseview::ScrollDelta::Pixels { x, y } => (f64::from(x), f64::from(y)),
+                    baseview::ScrollDelta::Pixels { x, y } => {
+                        (f64::from(x) / self.zoom, f64::from(y) / self.zoom)
+                    }
                 };
                 input.wheel = Vec2::new(x, -y);
                 self.pointer.mods = mods(modifiers);
@@ -616,7 +723,10 @@ impl<V: View> WindowHandler for Handler<V> {
         // under `panic = "unwind"` (the `plugin` profile); under release's
         // abort the panic kills the process before it gets here.
         if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.tick(window))).is_err() {
-            eprintln!("mui-baseview: panic in a frame, swallowed at the FFI edge");
+            log(
+                &self.shared,
+                "mui-baseview: panic in a frame, swallowed at the FFI edge",
+            );
         }
     }
 
@@ -651,6 +761,62 @@ fn on_key(input: &mut Input, key: &HostKey, modifiers: Modifiers) {
         }
     } else if let Some(key) = named_key(key) {
         input.keys.push(KeyPress { key, mods });
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum KeyOwner {
+    Host,
+    Control,
+    Text,
+}
+
+fn key_owner(ui: &Ui) -> KeyOwner {
+    let Some(id) = ui.focus_key() else {
+        return KeyOwner::Host;
+    };
+    let text = ui
+        .scene()
+        .and_then(|s| s.surface(id))
+        .and_then(|s| s.semantics.as_ref())
+        .is_some_and(|sem| matches!(sem.role, mui::scene::A11y::TextInput { .. }));
+    if text {
+        KeyOwner::Text
+    } else {
+        KeyOwner::Control
+    }
+}
+
+/// The generic policy; app shortcuts are [`View::claims_key`].
+fn captures(key: &HostKey, owner: KeyOwner) -> bool {
+    match owner {
+        KeyOwner::Text => true,
+        KeyOwner::Control => matches!(
+            key,
+            HostKey::Enter
+                | HostKey::Tab
+                | HostKey::ArrowLeft
+                | HostKey::ArrowRight
+                | HostKey::ArrowUp
+                | HostKey::ArrowDown
+                | HostKey::Home
+                | HostKey::End
+                | HostKey::PageUp
+                | HostKey::PageDown
+                | HostKey::Delete
+                | HostKey::Backspace
+        ),
+        KeyOwner::Host => false,
+    }
+}
+
+/// A native key as MUI names it for [`View::claims_key`]: a named key, or
+/// a character as `Key::Char` (lowercase, so Ctrl+Shift+Z is `z`).
+fn shortcut_key(key: &HostKey) -> Option<Key> {
+    match key {
+        HostKey::Character(s) if s == " " => Some(Key::Space),
+        HostKey::Character(s) => s.chars().next().map(|c| Key::Char(c.to_ascii_lowercase())),
+        key => named_key(key),
     }
 }
 
@@ -764,6 +930,10 @@ impl Clipboard {
         baseview::copy_to_clipboard(text);
         self.last = Some(text.to_owned());
     }
+}
+
+fn log<V: View>(shared: &Mutex<Shared<V>>, line: &str) {
+    lock(shared).view.log(line);
 }
 
 /// A device and renderer for this window's surface. A driver panic becomes

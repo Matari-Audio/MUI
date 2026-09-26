@@ -17,3 +17,5 @@ mod platform;
 pub use editor::MuiEditor;
 #[cfg(not(target_arch = "wasm32"))]
 pub use mui_baseview as window;
+#[cfg(not(target_arch = "wasm32"))]
+pub use platform::{HostScale, ParentWindow};

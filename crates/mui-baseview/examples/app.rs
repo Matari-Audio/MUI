@@ -10,7 +10,7 @@ struct App {
 }
 
 impl View for App {
-    fn build(&mut self, ui: &mut Ui) -> El {
+    fn build(&mut self, ui: &mut Ui, _: &Input) -> El {
         let knob = knob(ui, "gain", "Gain", &mut self.gain, 0.0..=1.0).size(L);
         col![knob, title(format!("{:.0} %", self.gain * 100.0))]
             .gap(M)

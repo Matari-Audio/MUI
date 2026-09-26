@@ -11,7 +11,7 @@ struct Knob {
 }
 
 impl View for Knob {
-    fn build(&mut self, ui: &mut Ui) -> El {
+    fn build(&mut self, ui: &mut Ui, _: &Input) -> El {
         self.builds += 1;
         knob(ui, "k", "K", &mut self.value, 0.0..=1.0).into()
     }
@@ -20,6 +20,9 @@ impl View for Knob {
     }
     fn request_resize(&mut self, _: u32, _: u32) -> bool {
         false
+    }
+    fn claims_key(&self, key: &Key, _: Mods) -> bool {
+        *key == Key::Escape
     }
 }
 
@@ -65,6 +68,14 @@ fn key(key: HostKey, state: KeyState, modifiers: Modifiers) -> Event {
     })
 }
 
+/// A key the window keeps, past the routing: what the mapping tests read.
+fn kept(h: &mut Handler<impl View>, event: &Event) {
+    let Event::Keyboard(k) = event else {
+        unreachable!()
+    };
+    h.driver.push_key(k, true);
+}
+
 fn inputs(h: &Handler<Knob>) -> Vec<&Input> {
     h.driver
         .pending
@@ -103,21 +114,30 @@ fn pointer_stays_logical_and_keyboard_modifiers_track_their_own_edges() {
 #[test]
 fn space_is_a_key_and_text_but_a_shortcut_is_only_a_key() {
     let mut h = handler((200, 200), 1.0);
-    h.on_event_inner(&key(
-        HostKey::Character(" ".into()),
-        KeyState::Down,
-        Modifiers::default(),
-    ));
-    h.on_event_inner(&key(
-        HostKey::Character("c".into()),
-        KeyState::Down,
-        Modifiers::CONTROL,
-    ));
-    h.on_event_inner(&key(
-        HostKey::Character("c".into()),
-        KeyState::Down,
-        Modifiers::default(),
-    ));
+    kept(
+        &mut h,
+        &key(
+            HostKey::Character(" ".into()),
+            KeyState::Down,
+            Modifiers::default(),
+        ),
+    );
+    kept(
+        &mut h,
+        &key(
+            HostKey::Character("c".into()),
+            KeyState::Down,
+            Modifiers::CONTROL,
+        ),
+    );
+    kept(
+        &mut h,
+        &key(
+            HostKey::Character("c".into()),
+            KeyState::Down,
+            Modifiers::default(),
+        ),
+    );
     let i = inputs(&h);
     assert_eq!(i[0].text, " ");
     assert_eq!(i[0].keys[0].key, Key::Space);
@@ -226,7 +246,7 @@ fn a_minimised_window_holds_its_input_until_it_has_a_size() {
 struct Pad;
 
 impl View for Pad {
-    fn build(&mut self, _: &mut Ui) -> El {
+    fn build(&mut self, _: &mut Ui, _: &Input) -> El {
         mui::prelude::block(100.0, 100.0).id("pad")
     }
     fn changed(&mut self) -> bool {
@@ -266,7 +286,7 @@ struct Keys {
 }
 
 impl View for Keys {
-    fn build(&mut self, ui: &mut Ui) -> El {
+    fn build(&mut self, ui: &mut Ui, _: &Input) -> El {
         self.enters += ui
             .shortcuts()
             .iter()
@@ -295,7 +315,10 @@ fn a_refused_layout_does_not_replay_the_keys_it_took() {
     let mut h = Handler::new(Arc::clone(&shared), Arc::default(), (200, 200), 1.0);
     h.step();
     lock(&shared).view.refuse = true;
-    h.on_event_inner(&key(HostKey::Enter, KeyState::Down, Modifiers::default()));
+    kept(
+        &mut h,
+        &key(HostKey::Enter, KeyState::Down, Modifiers::default()),
+    );
     assert!(!h.step(), "the layout is refused");
     lock(&shared).view.refuse = false;
     for x in 0..4 {
@@ -306,20 +329,59 @@ fn a_refused_layout_does_not_replay_the_keys_it_took() {
 }
 
 #[test]
-fn a_key_goes_back_to_the_host_unless_something_here_has_focus() {
+fn keys_route_to_the_host_unless_focus_or_a_shortcut_claims_them() {
     let mut h = handler((200, 200), 1.0);
     h.step();
-    let space = key(
-        HostKey::Character(" ".into()),
-        KeyState::Down,
-        Modifiers::default(),
-    );
+    let press = |k: HostKey, code: Code| {
+        Event::Keyboard(KeyboardEvent {
+            state: KeyState::Down,
+            key: k,
+            code,
+            ..KeyboardEvent::default()
+        })
+    };
+    let release = |code: Code| {
+        Event::Keyboard(KeyboardEvent {
+            state: KeyState::Up,
+            code,
+            ..KeyboardEvent::default()
+        })
+    };
+    let space = press(HostKey::Character(" ".into()), Code::Space);
+    let up = press(HostKey::ArrowUp, Code::ArrowUp);
+    // Nothing focused: the host's, but the frame still carries the mods.
     assert_eq!(h.on_event_inner(&space), EventStatus::Ignored);
     assert_eq!(
-        h.driver.pending.len(),
-        1,
-        "still read, for global shortcuts"
+        h.on_event_inner(&release(Code::Space)),
+        EventStatus::Ignored
     );
+    assert!(
+        inputs(&h)
+            .iter()
+            .all(|i| i.keys.is_empty() && i.text.is_empty())
+    );
+    assert_eq!(h.on_event_inner(&up), EventStatus::Ignored);
+    assert_eq!(
+        h.on_event_inner(&release(Code::ArrowUp)),
+        EventStatus::Ignored
+    );
+    // The view's shortcut, focused or not.
+    assert_eq!(
+        h.on_event_inner(&press(HostKey::Escape, Code::Escape)),
+        EventStatus::Captured
+    );
+    // A focused control: its navigation keys, never Space.
     lock(&h.shared).ui.focus("k");
-    assert_eq!(h.on_event_inner(&space), EventStatus::Captured);
+    assert_eq!(h.on_event_inner(&space), EventStatus::Ignored);
+    assert_eq!(h.on_event_inner(&up), EventStatus::Captured);
+    // The release follows its press, even after focus moved.
+    lock(&h.shared).ui.blur();
+    assert_eq!(
+        h.on_event_inner(&release(Code::ArrowUp)),
+        EventStatus::Captured
+    );
+    assert_eq!(
+        h.on_event_inner(&release(Code::ArrowUp)),
+        EventStatus::Ignored
+    );
 }

@@ -447,5 +447,5 @@ fn a_reopened_editor_keeps_the_host_scale() {
     let params = Arc::new(Synth::new());
     editor(&params).set_scale_factor(1.5);
     let reopened = editor(&params);
-    assert_eq!(reopened.host_scale(), Some(1.5));
+    assert_eq!(reopened.scale.get(), Some(1.5));
 }

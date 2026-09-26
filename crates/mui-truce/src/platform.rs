@@ -5,11 +5,15 @@
 //! Ported from truce-gui 6.3.0 `src/platform.rs`
 //! (<https://github.com/truce-audio/truce>), licensed
 //! `LicenseRef-TruceLicense-1.0`.
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use baseview::WindowScalePolicy;
 use raw_window_handle::{HasRawWindowHandle, RawWindowHandle as Rwh};
 use truce_core::editor::RawWindowHandle;
 
-/// Truce's parent handle as baseview's raw-window-handle 0.5.
-pub(crate) struct ParentWindow(pub RawWindowHandle);
+/// Truce's parent handle as baseview's raw-window-handle 0.5: what
+/// [`mui_baseview::open`] takes.
+pub struct ParentWindow(pub RawWindowHandle);
 
 // SAFETY: the handle is the host's live parent window, which the host keeps
 // alive for as long as the editor is open; this only re-types it.
@@ -49,10 +53,59 @@ unsafe impl HasRawWindowHandle for ParentWindow {
     }
 }
 
+/// The last scale any host passed to [`HostScale::set`], f64 bits, 0 = never.
+///
+/// truce's CLAP wrapper builds a new editor on every `gui.create` and tells
+/// it the host scale only when the host calls `gui.set_scale`, which hosts
+/// that set it once per instance do not repeat, so a reopened editor came
+/// back at 1.0 inside a 1.5x frame. (truce's VST3 wrapper replays it.)
+// ponytail: one scale per process; per-instance if a host ever mixes scales.
+static HOST_SCALE: AtomicU64 = AtomicU64::new(0);
+
+/// What truce's editor tells it about scale, as the policy an embedded
+/// window opens with. Feed it `Editor::set_scale_factor` and
+/// `set_uses_system_scale`; it remembers the last host scale across editors.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct HostScale {
+    host: Option<f64>,
+    system: bool,
+}
+
+impl HostScale {
+    /// The host's content scale; ignored unless finite and positive.
+    pub fn set(&mut self, factor: f64) {
+        if factor.is_finite() && factor > 0.0 {
+            self.host = Some(factor);
+            HOST_SCALE.store(factor.to_bits(), Ordering::Relaxed);
+        }
+    }
+    /// The host asks the editor to follow the system scale.
+    pub fn set_uses_system(&mut self, yes: bool) {
+        self.system = yes;
+    }
+    /// This editor's host scale, else the last one any editor was given.
+    pub fn get(&self) -> Option<f64> {
+        self.host.or(match HOST_SCALE.load(Ordering::Relaxed) {
+            0 => None,
+            bits => Some(f64::from_bits(bits)),
+        })
+    }
+    /// Linux: an embedded editor follows the host's scale, not the
+    /// desktop's, which a non-DPI-aware host does not share. Elsewhere the
+    /// OS reports a reliable per-window scale.
+    pub fn policy(&self) -> WindowScalePolicy {
+        let host = self.get();
+        match editor_window_scale(self.system, host.is_some(), host.unwrap_or(1.0)) {
+            Some(s) => WindowScalePolicy::ScaleFactor(s),
+            None => WindowScalePolicy::SystemScaleFactor,
+        }
+    }
+}
+
 /// `Some(scale)` to open with `ScaleFactor(scale)`, `None` for the system
 /// scale. Linux only: an embedded editor follows the host's content scale
 /// (default 1), not `Xft.dpi`, which a non-DPI-aware host does not share.
-pub(crate) fn editor_window_scale(
+fn editor_window_scale(
     uses_system_scale: bool,
     host_scale_set: bool,
     host_scale: f64,

@@ -1,31 +1,15 @@
 //! truce's `Editor` over the window in [`crate::window`].
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use mui::Ui;
+use mui::input::Input;
 use mui::scene::{El, Size};
 use truce_core::editor::{Editor, PluginContext, RawWindowHandle};
 use truce_params::Params;
 
 use crate::Bridge;
-use crate::platform::{ParentWindow, editor_window_scale};
+use crate::platform::{HostScale, ParentWindow};
 use crate::window::{self, Requests, Shared, View, lock};
-
-/// The last scale any host passed to `set_scale_factor`, f64 bits, 0 = never.
-///
-/// truce's CLAP wrapper builds a new editor on every `gui.create` and tells
-/// it the host scale only when the host calls `gui.set_scale`, which hosts
-/// that set it once per instance do not repeat, so a reopened editor came
-/// back at 1.0 inside a 1.5x frame. (truce's VST3 wrapper replays it.)
-// ponytail: one scale per process; per-instance if a host ever mixes scales.
-static HOST_SCALE: AtomicU64 = AtomicU64::new(0);
-
-fn last_host_scale() -> Option<f64> {
-    match HOST_SCALE.load(Ordering::Relaxed) {
-        0 => None,
-        bits => Some(f64::from_bits(bits)),
-    }
-}
 
 type Build<P> = Box<dyn FnMut(&mut Ui, &mut Bridge<P>) -> El + Send>;
 
@@ -36,7 +20,7 @@ pub(crate) struct Session<P: Params> {
 }
 
 impl<P: Params> View for Session<P> {
-    fn build(&mut self, ui: &mut Ui) -> El {
+    fn build(&mut self, ui: &mut Ui, _: &Input) -> El {
         let root = (self.build)(ui, &mut self.bridge);
         self.bridge.end_unbound();
         root
@@ -79,8 +63,7 @@ pub struct MuiEditor<P: Params> {
     params: Arc<P>,
     size: (u32, u32),
     min: Option<(u32, u32)>,
-    system_scale: bool,
-    host_scale: Option<f64>,
+    pub(crate) scale: HostScale,
     window: Option<Handle>,
 }
 
@@ -126,8 +109,7 @@ impl<P: Params> MuiEditor<P> {
             params,
             size: points(size.into()),
             min: None,
-            system_scale: false,
-            host_scale: None,
+            scale: HostScale::default(),
             window: None,
         }
     }
@@ -136,11 +118,6 @@ impl<P: Params> MuiEditor<P> {
     pub fn resizable(mut self, min: impl Into<Size>) -> Self {
         self.min = Some(points(min.into()));
         self
-    }
-
-    /// This editor's host scale, else the last one any editor was given.
-    fn host_scale(&self) -> Option<f64> {
-        self.host_scale.or_else(last_host_scale)
     }
 
     fn close_window(&mut self) {
@@ -173,23 +150,11 @@ impl<P: Params> Editor for MuiEditor<P> {
             .attach(context.with_params(Arc::clone(&self.params)));
         // A request made while closed was for the last window.
         self.requests = Arc::default();
-        // Linux: an embedded editor follows the host's scale, not the
-        // desktop's, which a non-DPI-aware host does not share. Elsewhere
-        // the OS reports a reliable per-window scale.
-        let host_scale = self.host_scale();
-        let scale = match editor_window_scale(
-            self.system_scale,
-            host_scale.is_some(),
-            host_scale.unwrap_or(1.0),
-        ) {
-            Some(s) => baseview::WindowScalePolicy::ScaleFactor(s),
-            None => baseview::WindowScalePolicy::SystemScaleFactor,
-        };
         self.window = Some(Handle(window::open(
             &ParentWindow(parent),
             "MUI",
             self.size,
-            scale,
+            self.scale.policy(),
             Arc::clone(&self.shared),
             Arc::clone(&self.requests),
         )));
@@ -220,15 +185,12 @@ impl<P: Params> Editor for MuiEditor<P> {
     }
 
     fn set_scale_factor(&mut self, factor: f64) {
-        if factor.is_finite() && factor > 0.0 {
-            self.host_scale = Some(factor);
-            HOST_SCALE.store(factor.to_bits(), Ordering::Relaxed);
-            self.requests.scale(factor);
-        }
+        self.scale.set(factor);
+        self.requests.scale(factor);
     }
 
     fn set_uses_system_scale(&mut self, yes: bool) {
-        self.system_scale = yes;
+        self.scale.set_uses_system(yes);
     }
 
     fn state_changed(&mut self) {
