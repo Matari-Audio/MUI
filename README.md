@@ -333,6 +333,10 @@ fn editor(params: Arc<GainParams>) -> Box<dyn Editor> {
 an output meter. [crates/mui-truce/README.md](crates/mui-truce/README.md) has
 the build commands and the clap-validator and pluginval results.
 
+Build plugins with `--profile plugin` (release with `panic = "unwind"`), not
+`--release`: release aborts on panic, so a bug in the editor would take the
+DAW down instead of being caught at the FFI edge.
+
 ## Motion
 
 Nothing is keyframed. `.animate()` puts a spring on a node's own visual

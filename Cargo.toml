@@ -109,6 +109,13 @@ codegen-units = 1
 panic = "abort"
 strip = "symbols"
 
+# Plugins: release, but panics unwind. Under abort the `catch_unwind` guards at
+# mui-truce's FFI edge are dead code and a UI panic takes the whole DAW down.
+# `cargo build --profile plugin -p <plugin>`.
+[profile.plugin]
+inherits = "release"
+panic = "unwind"
+
 # A dev build of this workspace is a GUI that has to hold 60 fps while you drag a
 # slider. Unoptimised dependencies cost ~25x: measured 8.4 ms per frame just to
 # re-shape the preview sidebar's labels, against 0.34 ms optimised. Dependencies

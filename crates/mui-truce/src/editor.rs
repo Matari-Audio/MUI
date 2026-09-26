@@ -49,6 +49,13 @@ impl<P: Params> View for Session<P> {
 ///     .into_editor()
 /// }
 /// ```
+///
+/// # Panics and build profile
+///
+/// The editor's window callbacks catch panics so a UI bug stays in the UI.
+/// That only works when the plugin cdylib unwinds: build it with the
+/// workspace's `plugin` profile (`cargo build --profile plugin`), never plain
+/// `--release`, whose `panic = "abort"` makes every UI panic abort the DAW.
 pub struct MuiEditor<P: Params> {
     shared: Arc<Mutex<Shared<Session<P>>>>,
     requests: Arc<Requests>,

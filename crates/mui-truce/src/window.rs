@@ -54,8 +54,8 @@ pub struct Shared<V> {
 }
 
 pub(crate) fn lock<V>(shared: &Mutex<Shared<V>>) -> MutexGuard<'_, Shared<V>> {
-    // A panic caught at the FFI edge poisons the lock; the state is still
-    // the last consistent frame's.
+    // A panic caught at the FFI edge (unwinding builds only) poisons the
+    // lock; the state is still the last consistent frame's.
     shared.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
@@ -510,13 +510,16 @@ impl<V: View> Handler<V> {
 impl<V: View> WindowHandler for Handler<V> {
     fn on_frame(&mut self, window: &mut Window) {
         // baseview calls this from a platform callback: a panic crossing it
-        // takes the host down, not just the editor.
+        // takes the host down, not just the editor. The guard only exists
+        // under `panic = "unwind"` (the `plugin` profile); under release's
+        // abort the panic kills the process before it gets here.
         if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.tick(window))).is_err() {
             eprintln!("mui-truce: panic in a frame, swallowed at the FFI edge");
         }
     }
 
     fn on_event(&mut self, _window: &mut Window, event: Event) -> EventStatus {
+        // Same guard as `on_frame`, and only under an unwinding profile.
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.on_event_inner(&event)))
             .unwrap_or(EventStatus::Ignored)
     }
@@ -714,6 +717,8 @@ struct Gpu {
 
 impl Gpu {
     fn new(window: &Window, size: (u32, u32)) -> Result<Self, String> {
+        // A driver panic becomes an error the editor can show, when the
+        // plugin unwinds; under `panic = "abort"` it is the host's crash.
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| Self::try_new(window, size)))
             .map_err(|_| "panic while creating GPU resources".to_owned())?
     }

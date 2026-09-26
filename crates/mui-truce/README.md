@@ -64,10 +64,20 @@ CARGO_PROFILE_RELEASE_PANIC=unwind cargo truce build --clap --vst3 -p mui-gain-p
 ```
 
 The bundles land in `$CARGO_TARGET_DIR/bundles` (`target/bundles` by default):
-`MUI Gain.clap` and `MUI Gain.vst3`. The workspace release profile sets
-`panic = "abort"`. The `CARGO_PROFILE_RELEASE_PANIC=unwind` override keeps
-truce's FFI `catch_unwind` working, so a panic in the plugin is contained
-instead of aborting the host. For a quicker unoptimised build, add `--debug`.
+`MUI Gain.clap` and `MUI Gain.vst3`. For a quicker unoptimised build, add `--debug`.
+
+A plugin must be built with panics that unwind. The workspace release profile
+sets `panic = "abort"`, which turns every `catch_unwind` at the FFI edge (truce's
+and `mui-truce`'s window callbacks) into dead code: a panic in the editor then
+aborts the host and the user's session with it. The workspace has a `plugin`
+profile for this, release with `panic = "unwind"`:
+
+```sh
+cargo build --profile plugin -p mui-gain-plugin   # the bare cdylib
+```
+
+`cargo truce build` always builds `release`, hence the
+`CARGO_PROFILE_RELEASE_PANIC=unwind` override on the bundle command above.
 
 Validate the bundles (the commands and results below are from 2026-09-23,
 Linux, X11 display, clap-validator 0.4.1, pluginval 1.0.4):

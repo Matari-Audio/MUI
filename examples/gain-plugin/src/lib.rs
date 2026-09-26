@@ -1,5 +1,10 @@
 //! The smallest real plugin with a MUI editor: a gain knob and a bypass
 //! switch bound to truce parameters, and an output meter.
+//!
+//! Build it with `cargo build --profile plugin -p mui-gain-plugin`, or with
+//! `CARGO_PROFILE_RELEASE_PANIC=unwind cargo truce build` for bundles: the
+//! release profile aborts on panic, and a plugin must unwind so a UI panic
+//! stays in the editor instead of killing the host.
 #![forbid(unsafe_code)]
 use mui::prelude::*;
 use mui_truce::MuiEditor;
