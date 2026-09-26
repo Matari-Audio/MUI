@@ -366,6 +366,21 @@ impl<'a> File<'a> {
         let lo = self.t[i].lo;
         self.line_starts.partition_point(|&s| s <= lo)
     }
+    /// Parameter count of the first closure argument of the call opened at
+    /// `open`. `args` splits `|a, b| body` at its commas, so count the pieces
+    /// from the one starting with `|` to the one holding the closing `|`.
+    fn closure_params(&self, open: usize) -> Option<usize> {
+        let args = self.args(open);
+        let first = args.iter().position(|&(a, _)| self.punct(a, '|'))?;
+        let (a, b) = args[first];
+        if (a + 1..=b).any(|j| self.punct(j, '|')) {
+            return Some(1);
+        }
+        args[first + 1..]
+            .iter()
+            .position(|&(a, b)| (a..=b).any(|j| self.punct(j, '|')))
+            .map(|n| n + 2)
+    }
     /// Top-level comma-separated args of the group opened at `open`.
     fn args(&self, open: usize) -> Vec<(usize, usize)> {
         let close = self.t[open].pair;
@@ -725,6 +740,9 @@ impl<'a> File<'a> {
                         Some(t) if t.text == p.text && std::mem::discriminant(&t.k) == std::mem::discriminant(&p.k) => {}
                         _ => continue 'at,
                     }
+                }
+                if *pattern == ". bind (" && self.closure_params(i + 2) == Some(3) {
+                    continue; // already `|ui, id, v|`
                 }
                 out.push((self.line(i), note.to_string()));
             }

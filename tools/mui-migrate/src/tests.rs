@@ -262,8 +262,9 @@ fn own_crate_module_import() {
 
 #[test]
 fn manual_pattern_with_an_open_paren() {
-    // `Bridge::bind(` is a call; a wgpu `.bind` field is not.
-    let src = with_prelude("fn f() {\n    let g = desc.bind;\n    bridge.bind (ui, P::Gain, |ui, id, v| knob(ui, id, \"G\", v, r));\n}\n");
+    // `Bridge::bind(` is a call; a wgpu `.bind` field is not. A closure
+    // already taking `|ui, id, v|` is migrated and gets no note.
+    let src = with_prelude("fn f() {\n    let g = desc.bind;\n    bridge.bind (ui, P::Gain, |ui, v| knob(ui, \"g\", \"G\", v, r));\n    bridge.bind(ui, P::Mix, |ui, id, v| knob(ui, id, \"M\", v, r));\n}\n");
     let out = run(&src);
     assert_eq!(out.warnings.iter().map(|w| w.0).collect::<Vec<_>>(), [4], "{:?}", out.warnings);
 }
