@@ -913,6 +913,11 @@ impl GpuRenderer {
                     if p.layer != Layer::Clip && cull.is_some_and(off) {
                         continue;
                     }
+                    if let Some(color) = crate::plain_fill(p) {
+                        let fill = self.paths.fill(&p.path, color)?;
+                        canvas.scene.append(fill, Some(crate::placed(xf, p)));
+                        continue;
+                    }
                     crate::one(&mut canvas, p, self.paths.get(&p.path)?)?;
                 }
             }

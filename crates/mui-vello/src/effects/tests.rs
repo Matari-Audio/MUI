@@ -147,3 +147,31 @@ fn a_shared_path_is_converted_once() {
     }
     assert_eq!(c.map.len(), 1, "the unused pill aged out");
 }
+
+/// A long path's fill is encoded once per colour and handed back while the
+/// colour stays; placed by `append`, it is the encoding a fresh fill writes.
+#[test]
+fn a_replayed_fill_is_kept_per_colour_and_encodes_as_a_fill() {
+    use mui_geometry::Path;
+    use std::sync::Arc;
+    use vello::peniko::{Color, Fill};
+    let mut c = super::Converted::default();
+    let pill = Arc::new(Path::capsule(20., 60.).unwrap());
+    let red = Color::from_rgb8(255, 0, 0);
+    let kept = c.fill(&pill, red).unwrap() as *const vello::Scene;
+    assert_eq!(kept, c.fill(&pill, red).unwrap() as *const _);
+    let at = crate::kurbo::Affine::translate((10.25, 3.5)) * crate::kurbo::Affine::scale(1.5);
+    for color in [Color::from_rgb8(0, 0, 255), red] {
+        let mut replayed = vello::Scene::new();
+        replayed.append(c.fill(&pill, color).unwrap(), Some(at));
+        let mut fresh = vello::Scene::new();
+        fresh.fill(Fill::NonZero, at, color, None, c.get(&pill).unwrap());
+        let (a, b) = (replayed.encoding(), fresh.encoding());
+        assert!(a.path_tags == b.path_tags);
+        assert_eq!(a.path_data, b.path_data);
+        assert!(a.draw_tags == b.draw_tags);
+        assert_eq!(a.draw_data, b.draw_data);
+        assert_eq!(a.transforms, b.transforms);
+        assert_eq!(a.styles, b.styles);
+    }
+}

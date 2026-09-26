@@ -716,6 +716,20 @@ fn mix(m: mui_scene::Mix) -> peniko::Mix {
     }
 }
 
+/// The colour of an entry [`one`] would only fill with it, when its path is
+/// long enough to be worth encoding once: see `Converted::fill`.
+#[cfg(feature = "gpu-effects")]
+pub(crate) fn plain_fill(p: &Painted) -> Option<AlphaColor<Srgb>> {
+    let Paint::Solid(c) = p.paint else {
+        return None;
+    };
+    let plain = matches!(p.layer, Layer::Fill | Layer::Draw(_))
+        && p.text.is_none()
+        && !(p.blur > 0.0 || p.width > 0.0)
+        && p.path.commands.len() >= effects::REPLAYED;
+    plain.then(|| srgb(c))
+}
+
 fn one(canvas: &mut impl Canvas, p: &Painted, path: &BezPath) -> Result<(), Error> {
     // Needs the list before it; see `backdrop`. A caller without one (a
     // tile, which cannot see past its edge) leaves the backdrop sharp.
