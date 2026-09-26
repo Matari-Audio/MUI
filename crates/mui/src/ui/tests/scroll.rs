@@ -228,3 +228,34 @@ fn an_unnamed_scroller_keeps_its_offset_while_a_tip_is_up() {
     assert!(f.tip.is_none());
     assert_eq!(item_y(&f), -10., "nor when it went");
 }
+
+/// A widget that reads `Ui::wheel` keeps it: the scroll node around it
+/// stays put, and the widget reads the delta the next build.
+#[test]
+fn a_widget_reading_the_wheel_keeps_it_from_the_scroll_around_it() {
+    let mut ui = Ui::default();
+    let tree = || {
+        col([block(30., 20.).id("dial"), block(30., 100.)])
+            .size(30., 40.)
+            .scroll()
+            .id("outer")
+    };
+    let input = |y: f64| Input {
+        pointer: at(10., y, false),
+        wheel: Vec2::new(0., 30.),
+        ..Input::default()
+    };
+    ui.frame(tree(), None, input(10.), 0.016).unwrap();
+    // Unclaimed, the column scrolls.
+    assert_eq!(ui.scroll("outer"), [0., 30.]);
+    let mut ui = Ui::default();
+    ui.frame(tree(), None, PointerInput::default(), 0.016)
+        .unwrap();
+    assert_eq!(ui.wheel("dial"), None);
+    ui.frame(tree(), None, input(10.), 0.016).unwrap();
+    assert_eq!(ui.scroll("outer"), [0., 0.]);
+    assert_eq!(ui.wheel("dial"), Some(Vec2::new(0., 30.)));
+    // Off the dial, the column takes it again.
+    ui.frame(tree(), None, input(30.), 0.016).unwrap();
+    assert_eq!(ui.scroll("outer"), [0., 30.]);
+}

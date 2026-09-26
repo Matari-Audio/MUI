@@ -160,6 +160,9 @@ pub struct Ui {
     last_press: Option<(String, f64)>,
     /// This frame's wheel, for [`Response::wheel`].
     wheel: Vec2,
+    /// Ids that read [`Ui::wheel`] while the tree now being handed in was
+    /// built: no scroll node they sit in takes the wheel over them.
+    wheel_claims: Vec<String>,
     /// Where a button went down this frame, on a target or on nothing, for
     /// [`Ui::clicked_outside`].
     press_at: Option<Point>,
@@ -274,6 +277,7 @@ impl Ui {
             double: None,
             double_click: DOUBLE_CLICK,
             wheel: Vec2::ZERO,
+            wheel_claims: Vec::new(),
             press_at: None,
             last_press: None,
             focus: None,
@@ -820,6 +824,7 @@ impl Ui {
         animating |= glided;
         animating |= self.after_motion(&mut scene, shaped, dt);
         animating |= self.settle(&scene, wheel);
+        self.wheel_claims.clear();
         self.heat(&scene, &before, self.pointer.buttons != was_buttons);
         Ok(self.commit(scene, hovered.as_deref(), tip, previous_blink, animating))
     }
