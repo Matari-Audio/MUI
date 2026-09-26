@@ -685,7 +685,12 @@ impl Ui {
         // and every cache keyed by one stays warm while a tip comes and goes.
         // ponytail: a tip under a scrolling root is offered no room and does
         // not wrap; give tips a width cap if a long one ever runs off.
-        let float = text(t.clone())
+        // The box is a stack around the text: a text node's own fill is its
+        // ink, so `text(..).fill(..)` would paint no background at all and
+        // the tip would read as see-through. Anchored at the start so a
+        // stretching parent does not offer the box its whole size.
+        let float = stack([text(t.clone())])
+            .anchor(mui_layout::Align::Start, mui_layout::Align::Start)
             .pad(S)
             .fill(Role::Raised)
             .radius(6.0)
