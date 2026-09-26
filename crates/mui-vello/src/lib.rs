@@ -571,6 +571,8 @@ pub fn paint(
         canvas.set_transform(placed(transform, p));
         if p.layer == Layer::Backdrop {
             backdrop(canvas, &scene.paint[..i], p, &bez, transform)?;
+        } else if path_shadow(p) {
+            blurred_path(canvas, p, &bez);
         } else {
             one(canvas, p, &bez)?;
         }
@@ -590,6 +592,31 @@ pub(crate) fn placed(base: Affine, p: &Painted) -> Affine {
 /// `p`'s paint box where it stands in the scene.
 pub(crate) fn scene_box(p: &Painted, path: &BezPath) -> Rect {
     paint_box(p, path) + kurbo::Vec2::new(p.offset.x, p.offset.y)
+}
+
+/// A drop shadow with no rounded rect to blur analytically: a custom
+/// outline's, which the walk hands over as the path itself.
+pub(crate) fn path_shadow(p: &Painted) -> bool {
+    p.layer == Layer::Shadow(ShadowKind::Drop) && p.rect.is_none() && p.blur > 0.0
+}
+
+/// How far past its path a blur of `p` reaches: three standard deviations,
+/// where Vello's own blurred rect stops too.
+pub(crate) fn blur_reach(p: &Painted, path: &BezPath) -> Rect {
+    use kurbo::Shape;
+    path.bounding_box().inflate(3. * p.blur, 3. * p.blur)
+}
+
+/// A [`path_shadow`]: the path filled sharp inside a blur layer. On a canvas
+/// without filter layers it is left out, as the sharp shape would read as a
+/// second, misaligned panel.
+fn blurred_path(canvas: &mut impl Canvas, p: &Painted, path: &BezPath) {
+    if canvas.push_blur(&blur_reach(p, path).to_path(0.1), p.blur as f32) {
+        canvas.set_paint(PaintType::Solid(srgb(p.paint.solid())));
+        canvas.fill_path(path);
+        canvas.pop_layer();
+        canvas.pop_layer();
+    }
 }
 
 /// A [`Layer::Backdrop`]: `below` -- everything the list painted before it
@@ -669,7 +696,11 @@ pub(crate) fn replay(
         };
         if !plain || reaches() {
             canvas.set_transform(placed(base, q));
-            one(canvas, q, &bez)?;
+            if path_shadow(q) {
+                blurred_path(canvas, q, &bez);
+            } else {
+                one(canvas, q, &bez)?;
+            }
         }
     }
     Ok(())
@@ -1001,7 +1032,12 @@ mod snapshot {
     }
 
     fn pixels_scene(scene: &ResolvedScene, w: u16, h: u16) -> Pixmap {
-        let mut ctx = vello_cpu::RenderContext::new(w, h);
+        // One thread: `cpu-threads` would otherwise leave out filter layers.
+        let one = vello_cpu::RenderSettings {
+            num_threads: 0,
+            ..Default::default()
+        };
+        let mut ctx = vello_cpu::RenderContext::new_with(w, h, one);
         let mut res = vello_cpu::Resources::default();
         paint(
             &mut Cpu {
@@ -1138,6 +1174,36 @@ mod snapshot {
         assert!(near > 0, "the welded shadow is still dropped");
         assert!(far < near, "it does not fall off: {near} then {far}");
         assert!(near < a(29) / 2, "that is a sharp copy, not a blur: {near}");
+    }
+
+    /// A custom outline's drop shadow is its own path blurred: shade just
+    /// past the path's edge, falling off, and soft rather than a sharp copy.
+    #[test]
+    fn a_custom_outline_drops_a_blurred_shadow() {
+        let diamond = |s: Size| {
+            let p = mui_geometry::Point::new;
+            let (w, h) = (s.width, s.height);
+            mui_geometry::Path::default()
+                .move_to(p(w / 2., 0.))
+                .line_to(p(w, h / 2.))
+                .line_to(p(w / 2., h))
+                .line_to(p(0., h / 2.))
+                .close()
+        };
+        let root = block(40., 40.)
+            .outline(diamond)
+            .fill(Role::Surface)
+            .shadow(Shadow::soft(6.))
+            .id("gem");
+        let spec = SceneSpec::new(stack![root].pad(20.)).offered(Size::new(80., 80.));
+        let pix = pixels(&spec, 80, 80);
+        // Down the diamond's vertical axis: its tip is at y = 60.
+        let a = |y: usize| pix.data()[y * 80 + 40].a;
+        assert!(a(55) > 200, "the outline itself is gone");
+        let (near, far) = (a(62), a(72));
+        assert!(near > 0, "the custom-path shadow is dropped");
+        assert!(far < near, "it does not fall off: {near} then {far}");
+        assert!(near < 200, "that is a sharp copy, not a blur: {near}");
     }
 
     /// A multiply layer darkens what is under it. The child is the same grey

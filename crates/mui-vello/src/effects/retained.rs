@@ -765,8 +765,12 @@ impl GpuRenderer {
         if head == old.len() && head == paint.len() {
             return Change::None;
         }
-        // Any backdrop may blur what changed, and a part renders none.
-        if paint.iter().any(|p| p.layer == Layer::Backdrop) {
+        // Any backdrop may blur what changed, and a part renders none (nor
+        // a path shadow, which is rendered the same way).
+        if paint
+            .iter()
+            .any(|p| p.layer == Layer::Backdrop || crate::path_shadow(p))
+        {
             return Change::Full;
         }
         let tail = old[head..]
@@ -841,6 +845,17 @@ impl GpuRenderer {
                     let outline = self.paths.get(&p.path)?.clone();
                     blurred.push(self.backdrop(k, &resolved.paint[..i], p, &outline, xf)?);
                     k += 1;
+                } else if crate::path_shadow(p) {
+                    // The same offscreen blur, over the path alone, sharp:
+                    // what fills its reach is the shadow.
+                    let path = self.paths.get(&p.path)?.clone();
+                    let sharp = Painted {
+                        layer: Layer::Fill,
+                        blur: 0.,
+                        ..p.clone()
+                    };
+                    blurred.push(self.backdrop(k, std::slice::from_ref(&sharp), p, &path, xf)?);
+                    k += 1;
                 }
             }
             self.backdrops.truncate(k);
@@ -892,6 +907,17 @@ impl GpuRenderer {
                     canvas.set_paint(brush);
                     canvas.set_paint_transform(local);
                     canvas.fill_path(&r.to_path(0.1));
+                    canvas.reset_paint_transform();
+                }
+                Layer::Shadow(_) if crate::path_shadow(p) => {
+                    let Some((image, brush_transform)) = blurred.next().flatten() else {
+                        continue;
+                    };
+                    let reach = crate::blur_reach(p, self.paths.get(&p.path)?).to_path(0.1);
+                    let brush = canvas.hand_out(image);
+                    canvas.set_paint(brush);
+                    canvas.set_paint_transform(brush_transform);
+                    canvas.fill_path(&reach);
                     canvas.reset_paint_transform();
                 }
                 Layer::Backdrop => {

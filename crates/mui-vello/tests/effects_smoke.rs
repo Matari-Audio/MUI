@@ -276,6 +276,43 @@ fn a_backdrop_blurs_the_edge_under_it() {
     assert_eq!(outside, [255, 0, 0, 255], "the blur leaked past the panel");
 }
 
+/// A custom outline's drop shadow is its path blurred through the backdrop
+/// pass: shade just past the tip, falling off, none far away.
+#[test]
+fn a_custom_outline_shadow_blurs_on_the_gpu() {
+    let Some((device, queue)) = device() else {
+        return;
+    };
+    let out = readable(&device);
+    let view = out.create_view(&wgpu::TextureViewDescriptor::default());
+    let mut r = pollster::block_on(hybrid(&device, &queue));
+    let diamond = |s: Size| {
+        let p = mui_geometry::Point::new;
+        let (w, h) = (s.width, s.height);
+        mui_geometry::Path::default()
+            .move_to(p(w / 2., 0.))
+            .line_to(p(w, h / 2.))
+            .line_to(p(w / 2., h))
+            .line_to(p(0., h / 2.))
+            .close()
+    };
+    let white = Fill::Color(Color::srgb(1., 1., 1.));
+    let gem = block(100., 100.)
+        .outline(diamond)
+        .fill(white.clone())
+        .shadow(Shadow::soft(8.))
+        .id("gem");
+    let root = stack![gem].square(200.).center().fill(white).id("root");
+    let scene = resolve(&SceneSpec::new(root).offered(Size::new(200., 200.))).unwrap();
+    r.render(&scene, Affine::IDENTITY, &view).unwrap();
+    let p = pixels(&device, &queue, &out);
+    // The tip is at (100, 150).
+    let (near, far) = (at(&p, 100, 153)[0], at(&p, 100, 190)[0]);
+    assert!(near < 250, "the custom-path shadow is dropped: {near}");
+    assert!(near > 5, "that is a sharp black copy, not a blur: {near}");
+    assert_eq!(far, 255, "the shadow reached far past its blur");
+}
+
 /// A weld gone from the scene gives its texture back after a few frames,
 /// without waiting for budget pressure.
 #[test]

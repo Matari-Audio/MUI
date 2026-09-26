@@ -10,7 +10,7 @@ use mui_geometry::{
 use mui_layout::Frame;
 
 use super::{SceneError, Walk, bounds, polygons};
-use crate::{Carve, El, Radius};
+use crate::{Carve, El, Radius, ShadowKind};
 
 /// A node's resolved outline, and what else its shape knows. Its geometry
 /// is local: `offset` places it, so an outline that only moved is the same
@@ -455,9 +455,16 @@ impl Walk<'_> {
         let th = &self.spec.theme;
         let s = &n.payload().style;
         if let Some(shape) = &n.payload().extras().outline {
-            if !s.shadow.as_deref().unwrap_or_default().is_empty() {
+            // A drop shadow travels as the path, blurred by the renderer's
+            // blur layer; an inset one would need the path's inverse blurred.
+            if s.shadow
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .any(|sh| sh.kind == ShadowKind::Inset)
+            {
                 return Err(mui_geometry::Error::InvalidOptions(
-                    "custom-path shadows require a path-filter renderer; use an outer wrapper",
+                    "an inset shadow on a custom outline is not supported; use a drop shadow or an inner node",
                 )
                 .into());
             }

@@ -40,6 +40,13 @@ Behaviour:
 - The tooltip is an opaque box; it used to paint no background.
 - `cut`/`keep` on a node with a custom `.outline(..)` carves that outline (it
   used to be an error).
+- A drop shadow on a custom `.outline(..)` is that path blurred (it used to be
+  an error). The CPU canvas and `GpuRenderer` blur it; the classic GPU canvas
+  without effects leaves it out, as it does backdrop blur. An inset shadow
+  on a custom outline is still an error.
+- A grid with `min_col` floors at one column, not all of them, since it can
+  drop to one: a flex share holding one no longer refuses to shrink past the
+  full grid width.
 
 ## v0.4 (DSL v2)
 
