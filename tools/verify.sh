@@ -8,6 +8,11 @@ cargo fmt --all -- --check
 # their facade forwards), so one all-features surface covers test, lint and wasm.
 cargo test --workspace --all-features --locked --offline
 cargo clippy --workspace --all-features --all-targets --locked --offline -- -D warnings
+# --all-features hides a cfg that only breaks with a feature off: mui-vello's
+# backends each compile alone and with none.
+cargo clippy -p mui-vello --no-default-features --all-targets --locked --offline -- -D warnings
+cargo clippy -p mui-vello --no-default-features --features cpu --all-targets --locked --offline -- -D warnings
+cargo clippy -p mui-vello --no-default-features --features gpu-effects --all-targets --locked --offline -- -D warnings
 # mui-preview is a native dev host: it owns a winit event loop and a wgpu
 # surface, neither of which this gate can build for wasm. The wasm claim is
 # about the library crates; drop the --exclude once the preview grows a
