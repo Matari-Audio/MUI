@@ -549,7 +549,9 @@ impl Ui {
     /// painted -- without walking it again.
     ///
     /// "Moved" is the runtime's own state, tracked by the keys the subtree
-    /// painted: a hover, press, capture or focus arriving or leaving, the
+    /// painted: a hover, press, capture or focus arriving or leaving (call
+    /// [`Ui::anticipate`] with the pointer before building, or a hover lands
+    /// on the frame after), the
     /// canvas shape under the pointer, a spring, transition, glide, morph or
     /// scroll still in flight, a tween or play it read still running, and
     /// any button, key, text or wheel input, which every tree reads. The
@@ -942,19 +944,7 @@ impl Ui {
         {
             return false;
         }
-        // Last frame's hit map, as `reconcile` would read it.
-        let under = p.pos.and_then(|q| {
-            self.hit.at_tagged_with(q, |key, tag, q| {
-                if tag.is_some() {
-                    return None;
-                }
-                scene.external_weld(key).map(|e| e.contains(q))
-            })
-        });
-        let tagged = under.and_then(|(id, tag)| Some((id, tag?)));
-        if under.map(|(id, _)| id) != self.interaction.hovered()
-            || tagged != self.tagged.as_ref().map(|(k, t)| (k.as_str(), t.as_str()))
-        {
+        if self.retargets(p.pos) {
             return false;
         }
         let on = |at: Option<Point>, f: mui_layout::Frame| at.is_some_and(|q| f.contains(q.x, q.y));
@@ -970,6 +960,46 @@ impl Ui {
         }
         self.pointer = p;
         true
+    }
+    /// The target and tagged shape under `pos` in last frame's hit map, as
+    /// `reconcile` will read it.
+    fn under(&self, pos: Option<Point>) -> Option<(&str, Option<&str>)> {
+        let scene = self.scene.as_ref()?;
+        self.hit.at_tagged_with(pos?, |key, tag, q| {
+            if tag.is_some() {
+                return None;
+            }
+            scene.external_weld(key).map(|e| e.contains(q))
+        })
+    }
+    /// Whether `pos` lands on another hovered target or tagged shape.
+    fn retargets(&self, pos: Option<Point>) -> bool {
+        let under = self.under(pos);
+        let tagged = under.and_then(|(id, tag)| Some((id, tag?)));
+        under.map(|(id, _)| id) != self.interaction.hovered()
+            || tagged != self.tagged.as_ref().map(|(k, t)| (k.as_str(), t.as_str()))
+    }
+    /// The pointer the next frame will bring, told before the tree is built:
+    /// a memo holding the target it leaves or the one it enters is built
+    /// again now, so its hover shows this frame rather than the next.
+    pub fn anticipate(&mut self, pos: Option<Point>) {
+        if self.kept.is_empty() || !self.retargets(pos) {
+            return;
+        }
+        let Some(scene) = self.scene.as_ref() else {
+            return;
+        };
+        let entered = self.under(pos).map(|(id, _)| id);
+        let left = [
+            self.interaction.hovered(),
+            self.tagged.as_ref().map(|t| t.0.as_str()),
+        ];
+        let hot: Vec<u64> = [entered, left[0], left[1]]
+            .into_iter()
+            .flatten()
+            .flat_map(|k| scene.memos_at(k).map(|(id, _)| id))
+            .collect();
+        self.hot.extend(hot);
     }
     /// Source and target of a drag released this frame.
     pub fn dropped(&self) -> Option<(&str, &str)> {
@@ -4609,13 +4639,14 @@ mod tests {
         );
     }
 
-    /// Hover warms a button inside a memo as it would outside one, and the
-    /// memo rests again once the spring does.
+    /// Hover warms a button inside a memo on the same frames it would outside
+    /// one, and the memo rests again once the spring does.
     #[test]
     fn a_hovered_button_in_a_memo_is_restyled() {
         let (mut ui, mut plain) = (Ui::new(Theme::DEFAULT), Ui::new(Theme::DEFAULT));
         let mut built = 0;
         let step = |ui: &mut Ui, plain: &mut Ui, p: PointerInput, built: &mut usize| {
+            ui.anticipate(p.pos);
             let t = memo_tree(ui, 1, 50., built);
             let a = paint_color(&ui.frame(t, ROOM, p, 0.016).unwrap(), "m.a");
             let b = paint_color(
@@ -4626,8 +4657,8 @@ mod tests {
         };
         let rest = step(&mut ui, &mut plain, PointerInput::default(), &mut built).0;
         step(&mut ui, &mut plain, PointerInput::default(), &mut built);
-        // The hover lands one frame late: the tree it rebuilds is the next one.
-        step(&mut ui, &mut plain, at(70., 20., false), &mut built);
+        // Told the pointer before the build, the memo warms on the frame the
+        // hover lands, as a plain tree does.
         for _ in 0..60 {
             let (a, b) = step(&mut ui, &mut plain, at(70., 20., false), &mut built);
             assert_eq!(a, b, "the memo paints what a plain tree does");
