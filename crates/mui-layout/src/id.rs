@@ -43,7 +43,9 @@ pub struct Id(Repr);
 
 impl Id {
     /// Name a root: `Id::of("osc")`. Names starting with `/` belong to the
-    /// runtime (tree paths, `/tip`); a debug build refuses them here.
+    /// runtime (tree paths, `/tip`); a debug build refuses them here. The
+    /// `From` conversions don't: a string can be a runtime id read back
+    /// from the scene (`ui.get(&surface.key)`), and it must reach its node.
     ///
     /// ```
     /// use mui_layout::Id;
@@ -248,17 +250,17 @@ impl std::hash::Hash for Id {
 }
 impl From<&str> for Id {
     fn from(s: &str) -> Self {
-        Self::of(s)
+        Self::runtime(s)
     }
 }
 impl From<&String> for Id {
     fn from(s: &String) -> Self {
-        Self::of(s)
+        Self::runtime(s)
     }
 }
 impl From<String> for Id {
     fn from(s: String) -> Self {
-        Self::of(&s)
+        Self::runtime(&s)
     }
 }
 impl From<&Id> for Id {
@@ -295,6 +297,13 @@ mod tests {
     fn a_leading_slash_is_the_runtimes() {
         assert_eq!(Id::runtime("/tip").as_str(), "/tip");
         let _ = Id::of("/tip");
+    }
+
+    #[test]
+    fn a_runtime_id_read_back_as_a_string_converts() {
+        let key = Id::runtime_slot("/0", 0).as_str().to_owned();
+        assert_eq!(Id::from(&key), Id::runtime(&key));
+        assert_eq!(Id::from(key.as_str()), Id::runtime(&key));
     }
 
     /// The whole point: the hot path -- one id per slot per field, every
