@@ -45,12 +45,12 @@ impl Ui {
     /// assert_eq!((hover, press), (0.0, 0.0), "nothing has touched it");
     /// ```
     pub fn state(&self, id: &str) -> Interaction {
-        self.springs
-            .get(id)
-            .map_or(Interaction::default(), |[h, p]| Interaction {
+        (self.nodes.get(id).and_then(|n| n.springs)).map_or(Interaction::default(), |[h, p]| {
+            Interaction {
                 hover: h.value,
                 press: p.value,
-            })
+            }
+        })
     }
     /// The id that holds the keyboard focus, for a host reporting it.
     pub fn focus_key(&self) -> Option<&str> {
@@ -334,29 +334,32 @@ impl Ui {
         self.clicked_outside(ids) || self.keys.iter().any(|k| k.key == Key::Escape)
     }
     pub(crate) fn text_scroll(&self, id: &str) -> f64 {
-        self.text_scroll.get(id).copied().unwrap_or(0.0)
+        self.nodes
+            .get(id)
+            .and_then(|n| n.text_scroll)
+            .unwrap_or(0.0)
     }
     pub(crate) fn set_text_scroll(&mut self, id: &str, y: f64) {
-        *slot(&mut self.text_scroll, id, || 0.0) = y;
+        node(&mut self.nodes, id).text_scroll = Some(y);
     }
     pub(crate) fn stash<T: Any>(&self, id: &str) -> Option<&T> {
-        self.stash.get(id)?.downcast_ref()
+        self.nodes.get(id)?.stash.as_ref()?.downcast_ref()
     }
     pub(crate) fn set_stash<T: Any + Send>(&mut self, id: &str, v: Option<T>) {
         match v {
-            Some(v) => {
-                self.stash.insert(id.to_owned(), Box::new(v));
-            }
+            Some(v) => node(&mut self.nodes, id).stash = Some(Box::new(v)),
             None => {
-                self.stash.remove(id);
+                if let Some(n) = self.nodes.get_mut(id) {
+                    n.stash = None;
+                }
             }
         }
     }
     pub(crate) fn sel(&self, id: &str) -> (usize, usize) {
-        self.sel.get(id).copied().unwrap_or((0, 0))
+        self.nodes.get(id).and_then(|n| n.sel).unwrap_or((0, 0))
     }
     pub(crate) fn set_sel(&mut self, id: &str, anchor: usize, caret: usize) {
-        *slot(&mut self.sel, id, || (0, 0)) = (anchor, caret);
+        node(&mut self.nodes, id).sel = Some((anchor, caret));
     }
     /// The clipboard the host handed in because a paste key arrived.
     pub(crate) fn pasted(&self) -> Option<&str> {
@@ -507,42 +510,22 @@ impl Ui {
             keys.extend(self.interaction.hovered());
         }
         let moving = |s: &[Spring]| s.iter().any(|s| !at_rest(s));
-        keys.extend(
-            self.springs
-                .iter()
-                .filter(|(_, s)| moving(&s[..]))
-                .map(|(k, _)| k.as_str()),
-        );
-        keys.extend(
-            self.motion
-                .iter()
-                .filter(|(_, (_, l))| l.iter().any(|(_, s)| !at_rest(s)))
-                .map(|(k, _)| k.as_str()),
-        );
-        keys.extend(
-            self.glides
-                .iter()
-                .filter(|(_, (_, s))| moving(s))
-                .map(|(k, _)| k.as_str()),
-        );
-        keys.extend(
-            self.scrolls
-                .iter()
-                .filter(|(_, s)| moving(&s[..]))
-                .map(|(k, _)| k.as_str()),
-        );
-        keys.extend(
-            self.morphs
-                .iter()
-                .filter(|(_, m)| m.from.is_some())
-                .map(|(k, _)| k.as_str()),
-        );
-        // A scrollbar's heat is the runtime's own tween, under its node's key.
-        keys.extend(
-            self.tweens
-                .iter()
-                .filter_map(|(k, (_, s))| k.strip_prefix("/bar").filter(|_| !at_rest(s))),
-        );
+        for (k, n) in &self.nodes {
+            if n.springs.is_some_and(|s| moving(&s))
+                || (n.motion.as_ref()).is_some_and(|(_, l)| l.iter().any(|(_, s)| !at_rest(s)))
+                || n.glide.is_some_and(|(_, s)| moving(&s))
+                || n.scroll.is_some_and(|s| moving(&s))
+                || n.morph.as_ref().is_some_and(|m| m.from.is_some())
+            {
+                keys.push(k);
+            }
+            // A scrollbar's heat is the runtime's own tween, under its node's key.
+            if let (Some(bar), Some((_, s))) = (k.strip_prefix("/bar"), &n.tween)
+                && !at_rest(s)
+            {
+                keys.push(bar);
+            }
+        }
         for k in keys {
             self.hot.extend(scene.memos_at(k).map(|(id, _)| id));
         }
@@ -725,23 +708,54 @@ pub(super) fn interactive(e: &Element) -> bool {
     })
 }
 
-/// Which pointer states deserve springs for one key. Structural IDs remain
-/// hit-testable, but do not keep the host animating merely because the pointer
-/// rests on them. Only the active targets are searched, so this adds no
-/// per-frame policy allocation.
-pub(super) fn state_policy(root: &El, id: &str) -> [bool; 2] {
-    let Some(e) = find(root, id).map(El::payload) else {
-        return [false, false];
+/// Which pointer states, hover then press, deserve springs for each of the
+/// two active targets. Structural IDs remain hit-testable, but do not keep
+/// the host animating merely because the pointer rests on them. One walk
+/// finds both, and none runs while the pointer rests on nothing.
+pub(super) fn state_policy(root: &El, ids: [Option<&str>; 2]) -> [[bool; 2]; 2] {
+    let policy = |e: &Element| {
+        let mut policy = [interactive(e), interactive(e)];
+        for (state, _) in &e.states {
+            match state {
+                State::Hover => policy[0] = true,
+                State::Press => policy[1] = true,
+                State::Focus | State::Disabled => {}
+            }
+        }
+        policy
     };
-    let mut policy = [interactive(e), interactive(e)];
-    for (state, _) in &e.states {
-        match state {
-            State::Hover => policy[0] = true,
-            State::Press => policy[1] = true,
-            State::Focus | State::Disabled => {}
+    let mut out = [[false; 2]; 2];
+    // A tree path is walked by index; only ids need the search.
+    let mut left = 0;
+    for (i, id) in ids.into_iter().enumerate() {
+        match id {
+            Some(id) if !named(id) => {
+                out[i] = find(root, id).map_or([false; 2], |n| policy(n.payload()))
+            }
+            Some(_) => left += 1,
+            None => {}
         }
     }
-    policy
+    if left > 0 {
+        let mut found = [false; 2];
+        find_each(root, &mut |n| {
+            for (i, id) in ids.into_iter().enumerate() {
+                // The first match wins, as `find`'s does.
+                if !found[i] && id.is_some_and(|id| named(id) && n.key() == Some(id)) {
+                    found[i] = true;
+                    out[i] = policy(n.payload());
+                    left -= 1;
+                }
+            }
+            left > 0
+        });
+    }
+    out
+}
+
+/// Visit `n` and its descendants in pre-order while `f` says to go on.
+fn find_each(n: &El, f: &mut dyn FnMut(&El) -> bool) -> bool {
+    f(n) && n.children().iter().all(|c| find_each(c, f))
 }
 
 /// Replace every node's style with what it declared for the states it
@@ -751,19 +765,25 @@ pub(super) fn state_policy(root: &El, id: &str) -> [bool; 2] {
 /// that switched itself off greys the controls inside it too, which is the same
 /// rule the hit gate uses. An unnamed node is keyed by its tree path, the key
 /// the hit map gives it when it declares a hover or press look.
-pub(super) fn declared_states(n: &mut El, path: &str, is: &dyn Fn(&str, State) -> bool, off: bool) {
+pub(super) fn declared_states(n: &mut El, springs: Option<[Spring; 2]>, focused: bool, off: bool) {
+    let is = |st: State| match st {
+        State::Hover => springs.is_some_and(|[h, _]| h.value > 0.5),
+        State::Press => springs.is_some_and(|[_, p]| p.value > 0.5),
+        State::Focus => focused,
+        // Declared by the node and answered by `off` below.
+        State::Disabled => false,
+    };
     if !n.payload().states.is_empty() {
         let e = n.payload_mut();
         let states = std::mem::take(&mut e.states);
         let mut style = std::mem::take(&mut e.style);
-        let k = n.key().unwrap_or(path);
         for (st, f) in &states {
             let on = match st {
                 State::Disabled => off,
                 // A disabled node is never hovered or pressed -- it is not in
                 // the hit map -- and a focus it held before it was switched
                 // off is not a reason to paint it lit.
-                _ => !off && is(k, *st),
+                _ => !off && is(*st),
             };
             if on {
                 style = f.0(style);
@@ -784,21 +804,17 @@ pub(super) fn declared_states(n: &mut El, path: &str, is: &dyn Fn(&str, State) -
 /// tint it.
 pub(super) fn state(
     n: &mut El,
-    path: &str,
     pal: &Palette,
-    of: &dyn Fn(&str) -> Option<(f64, f64)>,
-    scrolls: &BTreeMap<String, [Spring; 2]>,
+    springs: Option<[Spring; 2]>,
+    scroll: Option<[Spring; 2]>,
     off: bool,
 ) {
-    if let Some([x, y]) = scrolls
-        .get(n.key().unwrap_or(path))
-        .map(|s| s.map(|s| s.value))
-    {
+    if let Some([x, y]) = scroll.map(|s| s.map(|s| s.value)) {
         // `scrolled` is a builder and a built node cannot be reopened.
         let node = std::mem::replace(n, mui_scene::block(0.0, 0.0));
         *n = node.scrolled(x, y);
     }
-    if let Some((h, p)) = of(n.key().unwrap_or(path)).filter(|_| !off) {
+    if let Some([h, p]) = springs.map(|s| s.map(|s| s.value)).filter(|_| !off) {
         let bg = pal.background();
         let (auto_hover, auto_press) = {
             let e = n.payload();

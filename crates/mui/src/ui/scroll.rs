@@ -5,9 +5,7 @@ impl Ui {
     /// How far `id`'s children are scrolled to: the settled offset, which
     /// the drawn one springs toward.
     pub fn scroll(&self, id: &str) -> [f64; 2] {
-        self.scrolls
-            .get(id)
-            .map_or([0.0, 0.0], |s| s.map(|s| s.target))
+        (self.nodes.get(id).and_then(|n| n.scroll)).map_or([0.0, 0.0], |s| s.map(|s| s.target))
     }
 
     /// What the new scene says about the retained state: a capture or focus
@@ -26,9 +24,10 @@ impl Ui {
             self.preedit = None;
         }
         let mut animating = false;
-        self.scrolls.retain(|id, at| {
-            let Some(surface) = scene.surface(id) else {
-                return false;
+        // One whose surface is gone is dropped with it at the commit.
+        for (id, n) in &mut self.nodes {
+            let (Some(at), Some(surface)) = (&mut n.scroll, scene.surface(id)) else {
+                continue;
             };
             let max = [
                 surface.content.width - surface.frame.size.width,
@@ -39,11 +38,7 @@ impl Ui {
                 animating |= s.target != next;
                 s.to(next);
             }
-            true
-        });
-        self.sel.retain(|id, _| scene.surface(id).is_some());
-        self.text_scroll.retain(|id, _| scene.surface(id).is_some());
-        self.stash.retain(|id, _| scene.surface(id).is_some());
+        }
         animating | self.wheel(scene, wheel)
     }
 
@@ -79,7 +74,9 @@ impl Ui {
         };
         let (pos, a) = if vertical { (p.y, 1) } else { (p.x, 0) };
         let pressed = self.interaction.pressed() == Some(held);
-        let at = slot(&mut self.scrolls, key, || [scroll_spring(); 2]);
+        let at = super::node(&mut self.nodes, key)
+            .scroll
+            .get_or_insert([scroll_spring(); 2]);
         let Some((thumb, size)) = bar::thumb(start, len, view, total, at[a].target) else {
             return false;
         };
@@ -166,7 +163,9 @@ impl Ui {
             }
             // The handoff reads the target, not the drawn offset, so a flick
             // still in flight does not pass the next notch to the parent.
-            let at = slot(&mut self.scrolls, &s.key, || [scroll_spring(); 2]);
+            let at = node(&mut self.nodes, &s.key)
+                .scroll
+                .get_or_insert([scroll_spring(); 2]);
             let next = [
                 (at[0].target + wheel.x).clamp(0.0, max[0]),
                 (at[1].target + wheel.y).clamp(0.0, max[1]),

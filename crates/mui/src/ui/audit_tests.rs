@@ -195,15 +195,12 @@ fn transient_tweens_and_removed_field_state_do_not_accumulate() {
     for i in 0..256 {
         ui.tween(&format!("temporary-{i}"), i as f64);
         idle(&mut ui, block(20.0, 20.0));
-        assert!(ui.tweens.len() <= 1);
+        assert!(ui.nodes.len() <= 1);
     }
-    ui.sel.insert("gone".into(), (3, 8));
-    ui.scrolls
-        .insert("gone".into(), [Spring::at(5.0), Spring::at(9.0)]);
+    ui.set_sel("gone", 3, 8);
+    node(&mut ui.nodes, "gone").scroll = Some([Spring::at(5.0), Spring::at(9.0)]);
     idle(&mut ui, block(20.0, 20.0));
-    assert!(ui.tweens.is_empty());
-    assert!(ui.sel.is_empty());
-    assert!(ui.scrolls.is_empty());
+    assert!(ui.nodes.is_empty());
 }
 
 #[test]

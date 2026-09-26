@@ -14,7 +14,9 @@ impl Ui {
     /// [`Ui::tween`] with your own spring. The spring's shape is taken on
     /// the first call for `id`.
     pub fn tween_with(&mut self, id: &str, target: f64, spring: Spring) -> f64 {
-        let (seen, s) = slot(&mut self.tweens, id, || (false, spring.seeded(target)));
+        let (seen, s) = node(&mut self.nodes, id)
+            .tween
+            .get_or_insert_with(|| (false, spring.seeded(target)));
         *seen = true;
         s.to(target);
         let (value, rest) = (s.value, at_rest(s));
@@ -45,7 +47,7 @@ impl Ui {
     /// ```
     pub fn play(&mut self, id: &str, keys: &Keys) -> f64 {
         let now = self.time;
-        let (seen, start) = slot(&mut self.plays, id, || (false, now));
+        let (seen, start) = node(&mut self.nodes, id).play.get_or_insert((false, now));
         *seen = true;
         let end = *start + keys.end();
         if now < end {
@@ -57,7 +59,9 @@ impl Ui {
     }
     /// Start `id`'s [`Ui::play`] over from its first key on the next frame.
     pub fn replay(&mut self, id: &str) {
-        self.plays.remove(id);
+        if let Some(n) = self.nodes.get_mut(id) {
+            n.play = None;
+        }
     }
     /// Retarget and step the hover and press springs. Returns whether one is
     /// still moving.
@@ -68,35 +72,39 @@ impl Ui {
         // or an explicitly declared hover/press look earns springs. Resolve
         // the two possible active targets directly so idle frames do not
         // allocate a policy table for the whole tree.
-        let hovered_policy = hovered.map_or([false, false], |id| state_policy(root, id));
-        let held_policy = held.map_or([false, false], |id| state_policy(root, id));
-        for (k, [h, p]) in &mut self.springs {
+        let [hovered_policy, held_policy] = state_policy(root, [hovered, held]);
+        let mut animating = false;
+        for (k, n) in &mut self.nodes {
+            let Some([h, p]) = &mut n.springs else {
+                continue;
+            };
             let hovered = hovered == Some(k.as_str());
             let held = held == Some(k.as_str());
             h.to(f64::from(
                 (hovered && hovered_policy[0]) || (held && held_policy[0]),
             ));
             p.to(f64::from(held && held_policy[1]));
+            animating |= h.step(dt) | p.step(dt);
         }
-        let rest = || [Spring::at(0.0), Spring::at(0.0)];
+        // A target that just earned springs starts them from rest, stepped
+        // as the rest were.
+        let mut start = |k: &str, on: [bool; 2]| {
+            let n = node(&mut self.nodes, k);
+            if n.springs.is_none() {
+                let mut s = [Spring::at(0.0), Spring::at(0.0)];
+                for (s, on) in s.iter_mut().zip(on) {
+                    s.to(f64::from(on));
+                    animating |= s.step(dt);
+                }
+                n.springs = Some(s);
+            }
+        };
         if let Some(k) = hovered.filter(|_| hovered_policy[0]) {
-            slot(&mut self.springs, k, rest)[0].to(1.0);
+            start(k, [true, held == Some(k) && held_policy[1]]);
         }
-        if let Some(k) = held {
-            let entry = slot(&mut self.springs, k, rest);
-            if held_policy[0] {
-                entry[0].to(1.0);
-            }
-            if held_policy[1] {
-                entry[1].to(1.0);
-            }
+        if let Some(k) = held.filter(|_| held_policy[0] || held_policy[1]) {
+            start(k, held_policy);
         }
-        let mut animating = false;
-        for s in self.springs.values_mut().flatten() {
-            animating |= s.step(dt);
-        }
-        self.springs
-            .retain(|_, [h, p]| h.value > 0.0 || p.value > 0.0 || !h.settled() || !p.settled());
         animating
     }
 
@@ -106,31 +114,23 @@ impl Ui {
         let pal = self.theme.palette;
         // Scrolls step before the walk slides the tree by them.
         let mut animating = false;
-        for (_, s) in self.tweens.values_mut() {
-            // The tree already drew the value before this step: a step that
-            // snaps onto the target still owes the frame that shows it.
-            let drawn = s.value;
-            animating |= s.step(dt) || s.value != drawn;
-        }
-        for s in self.scrolls.values_mut().flatten() {
-            animating |= s.step(dt);
+        for n in self.nodes.values_mut() {
+            if let Some((_, s)) = &mut n.tween {
+                // The tree already drew the value before this step: a step
+                // that snaps onto the target still owes the frame that shows it.
+                let drawn = s.value;
+                animating |= s.step(dt) || s.value != drawn;
+            }
+            for s in n.scroll.iter_mut().flatten() {
+                animating |= s.step(dt);
+            }
         }
         let mut path = std::mem::take(&mut self.path);
         path.clear();
-        let (springs, focus) = (&self.springs, self.focus.as_deref());
         let mut sweep = Sweep {
             pal: &pal,
-            is: &|k, st| match st {
-                State::Hover => springs.get(k).is_some_and(|[h, _]| h.value > 0.5),
-                State::Press => springs.get(k).is_some_and(|[_, p]| p.value > 0.5),
-                State::Focus => focus == Some(k),
-                // Declared by the node, not discovered here: `declared_states`
-                // answers this one from the element itself.
-                State::Disabled => false,
-            },
-            of: &|k| springs.get(k).map(|[h, p]| (h.value, p.value)),
-            scrolls: &self.scrolls,
-            motion: &mut self.motion,
+            focus: self.focus.as_deref(),
+            nodes: &mut self.nodes,
             dt,
             shaped: Shapes::default(),
         };
@@ -156,12 +156,14 @@ impl Ui {
             // Local to the surface's offset, as every layer along it is.
             let target = surface.path.clone();
             let target_local = mui_geometry::Path::clone(&target);
-            let m = slot(&mut self.morphs, &key, || Morph {
-                seen: false,
-                shape,
-                from: None,
-                shown: target_local.clone(),
-                t: spring.seeded(1.),
+            let m = node(&mut self.nodes, &key).morph.get_or_insert_with(|| {
+                Box::new(Morph {
+                    seen: false,
+                    shape,
+                    from: None,
+                    shown: target_local.clone(),
+                    t: spring.seeded(1.),
+                })
             });
             m.seen = true;
             if m.shape != shape {
@@ -203,29 +205,32 @@ impl Ui {
                 }
             }
         }
-        let kept = |k: &str| scene.memos_at(k).any(|(_, reused)| reused);
-        self.morphs
-            .retain(|k, m| std::mem::take(&mut m.seen) || kept(k));
-
         // Gone this frame: last frame's paint of every appearing node that
-        // left, kept to fade. One that came back is simply there again.
+        // left, kept to fade. One that came back is simply there again; one
+        // this frame declared was seen.
         if let Some(last) = &self.scene {
-            for (key, spring) in &self.appearing {
-                if scene.surface(key).is_some() || !named(key) {
+            let mut gone: Vec<&str> = (self.nodes.iter())
+                .filter(|(k, n)| {
+                    n.appearing.is_some_and(|(seen, _)| !seen)
+                        && named(k)
+                        && scene.surface(k).is_none()
+                })
+                .map(|(k, _)| k.as_str())
+                .collect();
+            gone.sort_unstable();
+            for key in gone {
+                let Some((_, spring)) = self.nodes.get(key).and_then(|n| n.appearing) else {
                     continue;
-                }
-                if let Ok(only) = last.isolate(&[key.as_str()]) {
+                };
+                if let Ok(only) = last.isolate(&[key]) {
                     self.ghosts.push(Ghost {
-                        key: key.clone(),
+                        key: key.to_owned(),
                         paint: only.paint,
                         fade: spring.seeded(1.),
                     });
                 }
             }
         }
-        let appearing = std::mem::replace(&mut self.appearing, shaped.appearing);
-        self.appearing
-            .extend(appearing.into_iter().filter(|(k, _)| kept(k)));
         self.ghosts.retain(|g| scene.surface(&g.key).is_none());
         for g in &mut self.ghosts {
             g.fade.to(0.);
@@ -377,18 +382,14 @@ pub(super) fn channels(e: &mut Element, pal: &Palette, ch: &mut impl FnMut(u32, 
 /// target mid-flight retargets the live spring instead of restarting it.
 pub(super) fn transitions(
     n: &mut El,
-    path: &str,
+    motion: &mut Option<Channels>,
     pal: &Palette,
-    motion: &mut BTreeMap<String, Channels>,
     dt: f64,
 ) -> bool {
     let mut animating = false;
     if let Some(spring) = n.payload().extras().transition {
-        let mut fresh = false;
-        let (seen, list) = slot(motion, n.key().unwrap_or(path), || {
-            fresh = true;
-            (false, Vec::new())
-        });
+        let fresh = motion.is_none();
+        let (seen, list) = motion.get_or_insert_with(|| (false, Vec::new()));
         *seen = true;
         // An appearing node's very first frame starts from transparent.
         let from_clear = fresh && n.payload().extras().appear.is_some();
@@ -466,11 +467,10 @@ pub(super) struct Morph {
     pub(super) t: Spring,
 }
 
-/// What this frame's tree asks of motion beyond its paint: every appearing
-/// key with its spring, and every morphing node.
+/// What this frame's tree asks of motion beyond its paint: every morphing
+/// node, its shape name and spring.
 #[derive(Default)]
 pub(super) struct Shapes {
-    pub(super) appearing: BTreeMap<String, Spring>,
     pub(super) morphs: Vec<(String, u64, Spring)>,
 }
 
@@ -480,12 +480,11 @@ pub(super) struct Shapes {
 /// id or its tree path, exactly as the scene's.
 pub(super) struct Sweep<'a> {
     pub(super) pal: &'a Palette,
-    pub(super) is: &'a dyn Fn(&str, State) -> bool,
-    pub(super) of: &'a dyn Fn(&str) -> Option<(f64, f64)>,
-    pub(super) scrolls: &'a BTreeMap<String, [Spring; 2]>,
-    pub(super) motion: &'a mut BTreeMap<String, Channels>,
+    /// Who holds the keyboard focus.
+    pub(super) focus: Option<&'a str>,
+    pub(super) nodes: &'a mut Nodes,
     pub(super) dt: f64,
-    /// What appears and what morphs, gathered on the way past.
+    /// What morphs, gathered on the way past.
     pub(super) shaped: Shapes,
 }
 impl Sweep<'_> {
@@ -497,17 +496,35 @@ impl Sweep<'_> {
             return false;
         }
         let off = off || n.payload().has(Element::DISABLED);
-        declared_states(n, path, self.is, off);
-        let mut animating = transitions(n, path, self.pal, self.motion, self.dt);
-        state(n, path, self.pal, self.of, self.scrolls, off);
-        let e = n.payload();
-        let key = || n.key().unwrap_or(path).to_owned();
-        let spring = e.extras().transition.unwrap_or(Spring::DEFAULT);
-        if e.extras().appear.is_some() {
-            self.shaped.appearing.insert(key(), spring);
+        // One lookup per node: its key is its id or its tree path.
+        let key = n.key().unwrap_or(path);
+        let e = n.payload().extras();
+        let (transition, appear, morph) = (e.transition, e.appear, e.morph);
+        let focused = self.focus == Some(key);
+        let mut st = if transition.is_some() || appear.is_some() {
+            Some(node(self.nodes, key))
+        } else {
+            self.nodes.get_mut(key)
+        };
+        let springs = st.as_ref().and_then(|s| s.springs);
+        declared_states(n, springs, focused, off);
+        let mut animating = st
+            .as_mut()
+            .is_some_and(|s| transitions(n, &mut s.motion, self.pal, self.dt));
+        state(
+            n,
+            self.pal,
+            springs,
+            st.as_ref().and_then(|s| s.scroll),
+            off,
+        );
+        let spring = transition.unwrap_or(Spring::DEFAULT);
+        if let (Some(s), Some(_)) = (st, appear) {
+            s.appearing = Some((true, spring));
         }
-        if let Some(shape) = e.extras().morph {
-            self.shaped.morphs.push((key(), shape, spring));
+        if let Some(shape) = morph {
+            let key = n.key().unwrap_or(path).to_owned();
+            self.shaped.morphs.push((key, shape, spring));
         }
         let mark = path.len();
         for (j, c) in n.children_mut().iter_mut().enumerate() {

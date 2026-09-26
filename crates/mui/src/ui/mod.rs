@@ -128,48 +128,19 @@ pub struct Ui {
     actions: Vec<SemanticAction>,
     hit: Hit,
     scene: Option<ResolvedScene>,
-    /// Per key: hover and press springs, 0..1.
-    springs: BTreeMap<String, [Spring; 2]>,
-    /// Transition springs per node key, one per paint channel under its
-    /// stable id (see [`channels`]), flagged when the current frame visits
-    /// them; the rest are dropped at its end.
-    motion: BTreeMap<String, Channels>,
-    /// [`Styled::animate_layout`](mui_scene::Styled::animate_layout)
-    /// springs per node key: x, y, width, height, relative to the nearest
-    /// animating ancestor.
-    glides: BTreeMap<String, (bool, [Spring; 4])>,
-    /// Keys that declared [`Appear`] this frame and last, with the spring
-    /// they fade by: a key in `last` and gone from the tree leaves a ghost.
-    appearing: BTreeMap<String, Spring>,
+    /// Everything kept under a node key between frames: see [`NodeState`].
+    nodes: Nodes,
     /// Nodes that left the tree, still fading out where they stood.
     ghosts: Vec<Ghost>,
-    /// [`Styled::morph`](mui_scene::Styled::morph) state per node key.
-    morphs: BTreeMap<String, Morph>,
     /// Last frame's [`Styled::identity`](mui_scene::Styled::identity)
     /// nodes: what each was named and where it sat in the caller's tree.
     identities: HashMap<u64, (Option<String>, String)>,
-    /// [`Ui::tween`] springs per id, flagged when the builder reads them.
-    tweens: BTreeMap<String, (bool, Spring)>,
-    /// [`Ui::play`] start times per id, flagged when the builder reads them.
-    plays: BTreeMap<String, (bool, f64)>,
     /// The runtime clock at which the last playing key lands.
     play_until: f64,
     resolver: Resolver,
-    /// Per scroll node, per axis: the spring's target is where the wheel
-    /// clamped it, its value how far the children are drawn slid.
-    scrolls: BTreeMap<String, [Spring; 2]>,
     /// Scratch for the tree path of the node a walk is on: an unnamed node's
     /// key, built without a heap copy per node.
     path: String,
-    /// Per text field: the selection's anchor and caret, in characters. They
-    /// are equal when nothing is selected.
-    sel: BTreeMap<String, (usize, usize)>,
-    /// Per multi-line field: how far its lines are scrolled up, in units.
-    text_scroll: BTreeMap<String, f64>,
-    /// Per surface: what a widget keeps between frames that is not the
-    /// caller's value -- a picker's hue at zero saturation, a drag value's
-    /// half-typed text. Dropped with the surface.
-    stash: BTreeMap<String, Box<dyn Any + Send>>,
     /// The host's clipboard, handed in with a paste key; and what a copy or
     /// cut asked to put back on it.
     pasted: Option<String>,
@@ -282,22 +253,12 @@ impl Ui {
             actions: Vec::new(),
             hit: Hit::default(),
             scene: None,
-            springs: BTreeMap::new(),
-            motion: BTreeMap::new(),
-            glides: BTreeMap::new(),
-            appearing: BTreeMap::new(),
+            nodes: Nodes::default(),
             ghosts: Vec::new(),
-            morphs: BTreeMap::new(),
             identities: HashMap::new(),
-            tweens: BTreeMap::new(),
-            plays: BTreeMap::new(),
             play_until: 0.0,
             resolver: Resolver::default(),
-            scrolls: BTreeMap::new(),
             path: String::new(),
-            sel: BTreeMap::new(),
-            text_scroll: BTreeMap::new(),
-            stash: BTreeMap::new(),
             pasted: None,
             copied: None,
             preedit: None,
@@ -901,12 +862,6 @@ impl Ui {
     /// pointer has been matched against last frame's names, so a drag that
     /// caused the reorder keeps its capture under the new name.
     fn follow_identities(&mut self, root: &El) {
-        fn remap<V>(m: &mut BTreeMap<String, V>, to: &dyn Fn(&str) -> Option<String>) {
-            *m = std::mem::take(m)
-                .into_iter()
-                .map(|(k, v)| (to(&k).unwrap_or(k), v))
-                .collect();
-        }
         // Child indices down to here: a path is spelled out only for a node
         // that has an identity, and most trees have none.
         fn visit(n: &El, at: &mut Vec<usize>, out: &mut HashMap<u64, (Option<String>, String)>) {
@@ -954,13 +909,15 @@ impl Ui {
                 rest.starts_with('/').then(|| format!("{b}{rest}"))
             })
         };
-        remap(&mut self.springs, &to);
-        remap(&mut self.motion, &to);
-        remap(&mut self.glides, &to);
-        remap(&mut self.morphs, &to);
-        remap(&mut self.scrolls, &to);
-        remap(&mut self.sel, &to);
-        remap(&mut self.appearing, &to);
+        // A moved entry wins over one already under its new name.
+        // All leave before any lands, so a swap is a swap.
+        let renamed: Vec<_> = (self.nodes.keys())
+            .filter_map(|k| Some((k.clone(), to(k)?)))
+            .collect();
+        let moved: Vec<_> = (renamed.into_iter())
+            .filter_map(|(was, now)| Some((mui_scene::Id::runtime(&now), self.nodes.remove(&was)?)))
+            .collect();
+        self.nodes.extend(moved);
         for k in [&mut self.focus, &mut self.double] {
             if let Some(new) = k.as_deref().and_then(to) {
                 *k = Some(new);
@@ -999,13 +956,15 @@ impl Ui {
         spec.weld_backend = self.weld_backend;
         spec.scroll_bars = Some(heats);
         let mut glided = false;
-        let glides = &mut self.glides;
+        let nodes = &mut self.nodes;
         let scene = self.resolver.resolve_animated(
             &spec,
             &mut |key, e, target| {
                 let spring = e.extras().layout_transition.unwrap_or(Spring::DEFAULT);
                 let t = [target.x, target.y, target.size.width, target.size.height];
-                let (seen, s) = slot(glides, key, || (false, enter(spring, t, e.extras().appear)));
+                let (seen, s) = node(nodes, key)
+                    .glide
+                    .get_or_insert_with(|| (false, enter(spring, t, e.extras().appear)));
                 *seen = true;
                 for (s, t) in s.iter_mut().zip(t) {
                     s.to(t);
@@ -1092,13 +1051,12 @@ impl Ui {
             Some((t.to_string(), Point::new(f.x, f.y)))
         });
         // A reused memo's nodes were not visited, and are still there.
-        let kept = |k: &str| scene.memos_at(k).any(|(_, reused)| reused);
-        self.motion
-            .retain(|k, (seen, _)| std::mem::take(seen) || kept(k));
-        self.glides
-            .retain(|k, (seen, _)| std::mem::take(seen) || kept(k));
-        self.tweens.retain(|_, (seen, _)| std::mem::take(seen));
-        self.plays.retain(|_, (seen, _)| std::mem::take(seen));
+        self.nodes.retain(|k, n| {
+            n.prune(
+                || scene.memos_at(k).any(|(_, reused)| reused),
+                scene.surface(k).is_some(),
+            )
+        });
         self.delivered = std::mem::take(&mut self.edits);
         if let Some(old) = self.scene.replace(scene) {
             self.resolver.recycle(old);
@@ -1139,13 +1097,109 @@ impl Ui {
     }
 }
 
-/// `map[k]`, inserted by `new` when absent: the key reaches the heap once, on
-/// insertion, and not on every frame's lookup.
-fn slot<'m, V>(map: &'m mut BTreeMap<String, V>, k: &str, new: impl FnOnce() -> V) -> &'m mut V {
-    if !map.contains_key(k) {
-        map.insert(k.to_owned(), new());
+/// Every node key's retained state, one entry per key.
+///
+/// ponytail: an unordered map; the one pass whose order shows (the ghosts'
+/// paint order) sorts what it takes out of it.
+type Nodes = rustc_hash::FxHashMap<mui_scene::Id, NodeState>;
+
+/// What the runtime keeps under one node key between frames, each part
+/// absent until something asks for it. The key is the node's id, its tree
+/// path, or an id only [`Ui::tween`] and [`Ui::play`] read. A `bool` beside a
+/// part is its seen flag: set by whatever reads it this frame, cleared by
+/// [`NodeState::prune`], which drops a part left unseen.
+#[derive(Default)]
+struct NodeState {
+    /// Hover and press springs, 0..1.
+    springs: Option<[Spring; 2]>,
+    /// Transition springs, one per paint channel under its stable id (see
+    /// [`channels`]).
+    motion: Option<Channels>,
+    /// [`Styled::animate_layout`](mui_scene::Styled::animate_layout)
+    /// springs: x, y, width, height, relative to the nearest animating
+    /// ancestor.
+    glide: Option<(bool, [Spring; 4])>,
+    /// The spring an [`Appear`]ing node fades by: one gone from the tree
+    /// leaves a ghost.
+    appearing: Option<(bool, Spring)>,
+    /// [`Styled::morph`](mui_scene::Styled::morph) state.
+    morph: Option<Box<Morph>>,
+    /// [`Ui::tween`]'s spring.
+    tween: Option<(bool, Spring)>,
+    /// [`Ui::play`]'s start time.
+    play: Option<(bool, f64)>,
+    /// A scroll node's springs per axis: the target is where the wheel
+    /// clamped it, the value how far the children are drawn slid.
+    scroll: Option<[Spring; 2]>,
+    /// A text field's selection anchor and caret, in characters; equal when
+    /// nothing is selected.
+    sel: Option<(usize, usize)>,
+    /// How far a multi-line field's lines are scrolled up, in units.
+    text_scroll: Option<f64>,
+    /// What a widget keeps that is not the caller's value -- a picker's hue
+    /// at zero saturation, a drag value's half-typed text.
+    stash: Option<Box<dyn Any + Send>>,
+}
+
+impl NodeState {
+    /// End-of-frame upkeep: drop what nothing keeps. A seen part survives
+    /// once more; so does an unseen one inside a reused memo (`kept`), whose
+    /// nodes were not visited. Surface state goes with its surface (`here`).
+    /// Returns whether anything is left.
+    fn prune(&mut self, kept: impl Fn() -> bool, here: bool) -> bool {
+        fn seen<T>(
+            part: &mut Option<T>,
+            flag: fn(&mut T) -> &mut bool,
+            keep: &mut dyn FnMut() -> bool,
+        ) {
+            if let Some(v) = part
+                && !std::mem::take(flag(v))
+                && !keep()
+            {
+                *part = None;
+            }
+        }
+        let mut memo = None;
+        let mut kept = || *memo.get_or_insert_with(&kept);
+        if self
+            .springs
+            .is_some_and(|[h, p]| h.value <= 0.0 && p.value <= 0.0 && h.settled() && p.settled())
+        {
+            self.springs = None;
+        }
+        seen(&mut self.motion, |m| &mut m.0, &mut kept);
+        seen(&mut self.glide, |g| &mut g.0, &mut kept);
+        seen(&mut self.appearing, |a| &mut a.0, &mut kept);
+        seen(&mut self.morph, |m| &mut m.seen, &mut kept);
+        seen(&mut self.tween, |t| &mut t.0, &mut || false);
+        seen(&mut self.play, |p| &mut p.0, &mut || false);
+        if !here {
+            self.scroll = None;
+            self.sel = None;
+            self.text_scroll = None;
+            self.stash = None;
+        }
+        self.springs.is_some()
+            || self.motion.is_some()
+            || self.glide.is_some()
+            || self.appearing.is_some()
+            || self.morph.is_some()
+            || self.tween.is_some()
+            || self.play.is_some()
+            || self.scroll.is_some()
+            || self.sel.is_some()
+            || self.text_scroll.is_some()
+            || self.stash.is_some()
     }
-    map.get_mut(k).expect("inserted above")
+}
+
+/// `nodes[k]`, inserted empty when absent: the key is copied once, on
+/// insertion, and not on every frame's lookup.
+fn node<'m>(nodes: &'m mut Nodes, k: &str) -> &'m mut NodeState {
+    if !nodes.contains_key(k) {
+        nodes.insert(mui_scene::Id::runtime(k), NodeState::default());
+    }
+    nodes.get_mut(k).expect("inserted above")
 }
 
 /// root) or a key the runtime owns (`/tip`).
@@ -1172,7 +1226,7 @@ fn find<'a>(root: &'a El, key: &str) -> Option<&'a El> {
 impl std::fmt::Debug for Ui {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Ui")
-            .field("springs", &self.springs.len())
+            .field("nodes", &self.nodes.len())
             .finish()
     }
 }

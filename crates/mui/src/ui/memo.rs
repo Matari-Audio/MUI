@@ -56,11 +56,9 @@ impl Ui {
                 let read = std::mem::take(&mut k.read);
                 // What it read is still read, as the closure would have.
                 for id in &read {
-                    if let Some((seen, _)) = self.tweens.get_mut(id.as_str()) {
-                        *seen = true;
-                    }
-                    if let Some((seen, _)) = self.plays.get_mut(id.as_str()) {
-                        *seen = true;
+                    if let Some(n) = self.nodes.get_mut(id.as_str()) {
+                        n.tween.iter_mut().for_each(|t| t.0 = true);
+                        n.play.iter_mut().for_each(|p| p.0 = true);
                     }
                 }
                 // Reads stay on the building ones around it too.

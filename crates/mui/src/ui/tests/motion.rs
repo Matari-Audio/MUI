@@ -42,10 +42,10 @@ fn a_transitioning_weld_morph_springs_between_its_declarations() {
             .animate_with(Spring::new(0.3, 0.6))
             .id("w")
     };
-    let (pal, mut motion) = (Theme::DEFAULT.palette, BTreeMap::new());
+    let (pal, mut motion) = (Theme::DEFAULT.palette, None);
     let mut step = |p: f64| {
         let mut n = tree(p);
-        let moving = transitions(&mut n, "", &pal, &mut motion, 0.016);
+        let moving = transitions(&mut n, &mut motion, &pal, 0.016);
         (n.payload().extras().welding.unwrap().progress, moving)
     };
     assert_eq!(step(1.0), (1.0, false), "seeded, not flown in");

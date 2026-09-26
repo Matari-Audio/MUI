@@ -18,6 +18,7 @@ mui-motion.workspace = true
 mui-layout.workspace = true
 mui-geometry.workspace = true
 mui-input.workspace = true
+rustc-hash.workspace = true
 mui-text.workspace = true
 mui-vello.workspace = true
 unicode-segmentation.workspace = true
