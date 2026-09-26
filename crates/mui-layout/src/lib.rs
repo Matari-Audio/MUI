@@ -88,9 +88,11 @@ impl Frame {
 pub struct Layout {
     pub size: Size,
     min: Size,
-    /// Shared, as is `order`, so the layout cache hands back an unchanged
-    /// frame's layout without copying it.
-    frames: Arc<BTreeMap<Id, Frame>>,
+    /// Every named node and its index into `order`, in tree order. Shared,
+    /// as is `order`, so the layout cache hands back an unchanged frame's
+    /// layout without copying it. Nothing on a frame's path looks a name
+    /// up, so none is sorted or hashed for it.
+    named: Arc<Vec<(Id, u32)>>,
     /// Every node's frame, in tree order (parent first, then children in
     /// declaration order). A walk of the same tree indexes straight into it,
     /// so nothing needs a name to be found.
@@ -116,7 +118,8 @@ impl Layout {
         self.min
     }
     pub fn frame(&self, key: &str) -> Option<Frame> {
-        self.frames.get(key).copied()
+        let (_, at) = self.named.iter().find(|(id, _)| id.as_str() == key)?;
+        Some(self.order[*at as usize])
     }
     pub fn all(&self) -> &[Frame] {
         &self.order
@@ -135,25 +138,30 @@ impl Layout {
             return Err(Error::InvalidValue);
         }
         let mut nodes = vec![root];
-        let mut named = BTreeMap::new();
-        for frame in &frames {
+        let (mut named, mut seen) = (Vec::new(), rustc_hash::FxHashSet::default());
+        for at in 0..frames.len() {
             let node = nodes.pop().ok_or(Error::InvalidValue)?;
             if let Some(key) = node.key() {
-                if named.insert(Id::of(key), *frame).is_some() {
+                if !seen.insert(key) {
                     return Err(Error::DuplicateKey(key.to_owned()));
                 }
+                named.push((Id::of(key), at as u32));
             }
             nodes.extend(node.children().iter().rev());
         }
         if !nodes.is_empty() {
             return Err(Error::InvalidValue);
         }
-        self.frames = Arc::new(named);
+        self.named = Arc::new(named);
         self.order = Arc::new(frames);
         Ok(self)
     }
+    /// Every named node's frame, in tree order.
     pub fn frames(&self) -> impl Iterator<Item = (&str, Frame)> {
-        self.frames.iter().map(|(k, v)| (k.as_str(), *v))
+        let order = &self.order;
+        self.named
+            .iter()
+            .map(|(k, at)| (k.as_str(), order[*at as usize]))
     }
 }
 
@@ -301,10 +309,7 @@ fn resolve_impl<P, M: Into<Intrinsic>>(
         Size::new(size.width.min(max.width), size.height.min(max.height))
     });
     // Every measured node produces at most one frame.
-    let mut out = (
-        BTreeMap::new(),
-        Vec::with_capacity(limits.nodes - pass.left),
-    );
+    let mut out = (Vec::new(), Vec::with_capacity(limits.nodes - pass.left));
     let empty = BTreeMap::new();
     let pins = |anchors| Pins {
         anchors,
@@ -317,7 +322,11 @@ fn resolve_impl<P, M: Into<Intrinsic>>(
     // pinned float reads that float's first-pass position; give the pass a
     // dependency order if that ever matters.
     if pass.pinned {
-        let anchors = std::mem::take(&mut out.0);
+        let named = std::mem::take(&mut out.0);
+        let anchors = named
+            .into_iter()
+            .map(|(id, at)| (id, out.1[at as usize]))
+            .collect();
         out.1.clear();
         arrange(
             &m,
@@ -332,7 +341,7 @@ fn resolve_impl<P, M: Into<Intrinsic>>(
     Ok(Layout {
         size,
         min: m.floor,
-        frames: Arc::new(out.0),
+        named: Arc::new(out.0),
         order: Arc::new(out.1),
     })
 }

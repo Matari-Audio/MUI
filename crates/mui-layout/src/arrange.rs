@@ -138,17 +138,17 @@ pub(crate) fn cell<P>(
 pub(crate) fn hide<P>(
     m: &Measured<'_, P>,
     origin: [f64; 2],
-    out: &mut (BTreeMap<Id, Frame>, Vec<Frame>),
+    out: &mut (Vec<(Id, u32)>, Vec<Frame>),
 ) {
     let frame = Frame {
         x: origin[0],
         y: origin[1],
         size: Size::ZERO,
     };
-    out.1.push(frame);
     if let Some(id) = m.node.id.clone() {
-        out.0.insert(id, frame);
+        out.0.push((id, out.1.len() as u32));
     }
+    out.1.push(frame);
     for c in &m.children {
         hide(c, origin, out);
     }
@@ -161,7 +161,7 @@ pub(crate) fn arrange<P>(
     size: Size,
     pins: &Pins<'_>,
     viewport: Option<Viewport>,
-    out: &mut (BTreeMap<Id, Frame>, Vec<Frame>),
+    out: &mut (Vec<(Id, u32)>, Vec<Frame>),
 ) -> Result<(), Error> {
     let n = m.node;
     // A box handed less than its floor is not refused: `distribute` and
@@ -172,10 +172,10 @@ pub(crate) fn arrange<P>(
         y: origin[1],
         size,
     };
-    out.1.push(frame);
     if let Some(id) = n.id.clone() {
-        out.0.insert(id, frame);
+        out.0.push((id, out.1.len() as u32));
     }
+    out.1.push(frame);
     let inner = Size::new(
         (size.width - m.padding.horizontal()).max(0.0),
         (size.height - m.padding.vertical()).max(0.0),
