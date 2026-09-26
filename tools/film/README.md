@@ -105,4 +105,4 @@ python3 tools/film/check-recording.py /path/to/film
 
 The browser check exercises DSP-driven native pixel changes without edits, inverse-projected native control dragging, component selection/highlighting/animation, Tone layout reflow without stretching its knob, audio health, recording, and history-independent visual seeking.
 
-Assets: bundled Inter with OFL license, GSAP with upstream license header. The scope plots captured PCM rather than a decorative registry animation.
+Assets: Inter (variable) and its OFL license come from the `ttf-inter` crate the workspace already depends on, found through `cargo metadata`; GSAP 3.14.2 loads from a pinned jsDelivr URL under its own license. The scope plots captured PCM rather than a decorative registry animation.

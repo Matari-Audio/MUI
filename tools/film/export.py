@@ -1,6 +1,18 @@
 """Freeze one sample-clocked take into a standalone HyperFrames composition."""
-import array, json, math, os, re, shutil, wave
+import array, functools, json, math, os, re, shutil, subprocess, wave
 from pathlib import Path
+
+@functools.cache
+def inter(root):
+    """The ttf-inter crate's directory, which the workspace already depends
+    on: its ttf/Inter-V.otf and LICENSE.txt are the film's font, so the repo
+    carries no copy."""
+    run=lambda *a:subprocess.run(a,check=True,capture_output=True,text=True).stdout
+    # This host's dependencies only: resolving every target would want
+    # platform crates (accesskit_ios) an offline registry does not hold.
+    host=re.search(r'^host: (\S+)',run('rustc','-vV'),re.M)[1]
+    meta=json.loads(run('cargo','metadata','--format-version','1','--offline','--filter-platform',host,'--manifest-path',str(Path(root)/'Cargo.toml')))
+    return next(Path(p['manifest_path']).parent for p in meta['packages'] if p['name']=='ttf-inter')
 
 def export_film(session,record,root):
     folder=session/('film-'+record['id'] if 'id' in record else 'film');assets=folder/'assets';assets.mkdir(parents=True,exist_ok=True)
@@ -34,7 +46,7 @@ def export_film(session,record,root):
     data={'version':1,'plugin':record['plugin'],'sampleRate':48000,'start':record['start'],'duration':duration,'events':events,'scopes':scopes}
     (assets/'take.mjs').write_text('export default '+json.dumps(data,separators=(',',':'))+';\n')
     (folder/'take.json').write_text(json.dumps({k:v for k,v in data.items() if k!='scopes'},indent=2)+'\n')
-    for name in ['Inter-V.otf','Inter-LICENSE.txt']:shutil.copyfile(root/'tools/film/assets'/name,assets/name)
+    shutil.copyfile(inter(root)/'ttf/Inter-V.otf',assets/'Inter-V.otf');shutil.copyfile(inter(root)/'LICENSE.txt',assets/'Inter-LICENSE.txt')
     shutil.copyfile(root/'tools/film/layers.mjs',assets/'layers.mjs')
     template=(root/'tools/film/film.html').read_text().replace('__DURATION__',str(duration))
     (folder/'index.html').write_text(template)

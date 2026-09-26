@@ -4,7 +4,7 @@ import argparse, asyncio, base64, contextlib, json, os, re, struct, sys, uuid
 from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor
 from aiohttp import web, WSMsgType
-from export import export_film
+from export import export_film, inter
 ROOT=Path(__file__).resolve().parents[2]
 HERE=Path(__file__).resolve().parent
 
@@ -174,7 +174,7 @@ def main():
     files={'/':'index.html','/input.mjs':'input.mjs','/client.mjs':'client.mjs','/stream-worklet.mjs':'stream-worklet.mjs'}
     for route,file in files.items():app.router.add_get(route,lambda request,file=file:web.FileResponse(HERE/file))
     app.router.add_get('/layers.mjs',lambda r:web.FileResponse(ROOT/'tools/film/layers.mjs'))
-    app.router.add_get('/Inter-V.otf',lambda r:web.FileResponse(HERE/'assets/Inter-V.otf'))
+    app.router.add_get('/Inter-V.otf',lambda r:web.FileResponse(inter(ROOT)/'ttf/Inter-V.otf'))
     app.router.add_static('/sessions/',a.sessions.resolve(),show_index=False)
     async def cleanup(app):gateway.exports.shutdown(wait=False,cancel_futures=True)
     app.on_cleanup.append(cleanup)
