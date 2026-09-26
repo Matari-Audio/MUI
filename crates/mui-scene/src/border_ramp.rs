@@ -1,6 +1,6 @@
 //! A spatial border material on a fixed outline. Geometry is independent of paint.
 use crate::{Fill, Gradient, SceneError};
-use mui_geometry::{Bounds, Path, Point};
+use mui_geometry::{Path, Point, Rect};
 #[cfg(test)]
 use mui_geometry::{PathCommand, RoundedRect};
 use mui_layout::{Frame, Id};
@@ -83,10 +83,9 @@ impl BorderRamp {
     pub(crate) fn width(&self, x: f64, frame: Frame) -> Result<f64, SceneError> {
         Ok(self.profile(frame).at(x)?)
     }
-    pub(crate) fn fill(&self, frame: Frame, bounds: Bounds) -> Fill {
-        let stop = |t| {
-            ((frame.x + frame.size.width * t - bounds.min.x) / (bounds.max.x - bounds.min.x)) as f32
-        };
+    pub(crate) fn fill(&self, frame: Frame, bounds: Rect) -> Fill {
+        let stop =
+            |t| ((frame.x + frame.size.width * t - bounds.x0) / (bounds.x1 - bounds.x0)) as f32;
         Gradient::linear(
             90.0,
             [
@@ -188,14 +187,14 @@ impl BorderCache {
         // Local to the anchor's origin, so a moved card still hits.
         let origin = Point::new(frame.x, frame.y);
         let mut outline = outline.clone();
-        outline.translate(-origin);
+        outline.translate(-origin.to_vec2());
         let frame = Frame {
             x: frame.x - origin.x,
             y: frame.y - origin.y,
             ..frame
         };
         let world = |mut p: Path| {
-            p.translate(origin);
+            p.translate(origin.to_vec2());
             p
         };
         if let Some(e) = self.entries.get_mut(key)
@@ -324,11 +323,11 @@ mod tests {
         let rings = bands[0].path.flatten(0.1, 250_000).unwrap();
         assert!(
             rings.iter().any(|ring| {
-                let bounds = Bounds::from_points(ring.clone()).unwrap();
-                bounds.min.x <= tab.x
-                    && bounds.max.x >= tab.x + tab.size.width
-                    && bounds.min.y < tab.y
-                    && bounds.max.y > tab.y + tab.size.height
+                let bounds = mui_geometry::bounds(ring.clone()).unwrap();
+                bounds.x0 <= tab.x
+                    && bounds.x1 >= tab.x + tab.size.width
+                    && bounds.y0 < tab.y
+                    && bounds.y1 > tab.y + tab.size.height
             }),
             "tab material must reach both concave shoulders"
         );
@@ -352,7 +351,7 @@ mod tests {
         ] {
             assert!((ramp.width(x, frame).unwrap() - w).abs() < 1e-9);
         }
-        let outline = RoundedRect::new(Bounds::new(0.0, 0.0, 400.0, 80.0), 8.0)
+        let outline = RoundedRect::new(Rect::new(0.0, 0.0, 400.0, 80.0), 8.0)
             .unwrap()
             .path();
         let path = band(&outline, &ramp, frame, 0.05).unwrap();
@@ -396,7 +395,7 @@ mod tests {
             y: 0.0,
             size: Size::new(400.0, 80.0),
         };
-        let outline = RoundedRect::new(Bounds::new(0.0, 0.0, 400.0, 80.0), 8.0)
+        let outline = RoundedRect::new(Rect::new(0.0, 0.0, 400.0, 80.0), 8.0)
             .unwrap()
             .path();
         let mut cache = BorderCache::default();
@@ -412,7 +411,9 @@ mod tests {
             before,
             cache.band("card", &outline, &ramp, frame, 0.1).unwrap()
         );
-        let moved = outline.rigid_transform(Point::new(10.0, 0.0), 0.0).unwrap();
+        let moved = outline
+            .rigid_transform(mui_geometry::Vec2::new(10.0, 0.0), 0.0)
+            .unwrap();
         assert_ne!(
             before,
             cache.band("card", &moved, &ramp, frame, 0.1).unwrap()

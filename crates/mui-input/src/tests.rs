@@ -234,16 +234,16 @@ fn drag_delta_is_per_frame_and_zero_when_not_dragging() {
     let (hit, mut ui) = (one_square(), Interaction::new());
     ui.update(&hit, down(50., 50.));
     ui.update(&hit, down(90., 50.)); // crosses the threshold
-    assert_eq!(ui.get("a").drag_delta, Point::new(40., 0.));
+    assert_eq!(ui.get("a").drag_delta, Vec2::new(40., 0.));
 
     ui.update(&hit, down(95., 60.));
     assert_eq!(
         ui.get("a").drag_delta,
-        Point::new(5., 10.),
+        Vec2::new(5., 10.),
         "delta measured from the press instead of the last frame"
     );
 
-    assert_eq!(ui.get("b").drag_delta, Point::new(0., 0.));
+    assert_eq!(ui.get("b").drag_delta, Vec2::ZERO);
 }
 
 #[test]
@@ -270,7 +270,7 @@ fn losing_the_pointer_mid_gesture_keeps_the_capture() {
     );
     assert!(ui.get("a").held, "capture dropped when the pointer left");
     assert_eq!(ui.hovered(), None);
-    assert_eq!(ui.get("a").drag_delta, Point::new(0., 0.));
+    assert_eq!(ui.get("a").drag_delta, Vec2::ZERO);
 }
 
 #[test]
@@ -337,7 +337,7 @@ fn cancel_clears_capture_and_edges_but_preserves_threshold() {
     assert!(response.hovered);
     assert!(!response.pressed && !response.released && !response.clicked);
     assert!(!response.held && !response.dragged);
-    assert_eq!(response.drag_delta, Point::new(0., 0.));
+    assert_eq!(response.drag_delta, Vec2::ZERO);
 
     ui.update(&hit, down(50., 50.));
     ui.update(&hit, down(60., 50.));
@@ -353,7 +353,7 @@ fn a_clip_rejects_a_hit_the_renderer_would_not_draw() {
     hit.push_clipped(
         "row",
         &path(square(0., 0., 100., 100.)),
-        Some(mui_geometry::Bounds::new(0., 0., 100., 50.)),
+        Some(mui_geometry::Rect::new(0., 0., 100., 50.)),
     )
     .unwrap();
     assert_eq!(hit.at(Point::new(50., 25.)), Some("row"), "inside the clip");
@@ -362,17 +362,17 @@ fn a_clip_rejects_a_hit_the_renderer_would_not_draw() {
 
 #[test]
 fn exact_rounded_and_nested_clips_reject_corners() {
-    let outer = mui_geometry::RoundedRect::new(mui_geometry::Bounds::new(0., 0., 100., 100.), 20.)
+    let outer = mui_geometry::RoundedRect::new(mui_geometry::Rect::new(0., 0., 100., 100.), 20.)
         .unwrap()
         .path();
-    let inner = mui_geometry::RoundedRect::new(mui_geometry::Bounds::new(20., 20., 80., 80.), 15.)
+    let inner = mui_geometry::RoundedRect::new(mui_geometry::Rect::new(20., 20., 80., 80.), 15.)
         .unwrap()
         .path();
     let mut hit = Hit::default();
     hit.push_clipped_paths(
         "target",
         &path(square(10., 10., 80., 80.)),
-        Some(mui_geometry::Bounds::new(0., 0., 100., 100.)),
+        Some(mui_geometry::Rect::new(0., 0., 100., 100.)),
         Some(&[outer.into(), inner.into()]),
     )
     .unwrap();
@@ -464,7 +464,7 @@ fn shift_drags_fine_and_a_drag_locks_to_its_longest_axis() {
     let r = i.get("a");
     assert_eq!(r.drag_delta.y, 40.0, "the raw delta is untouched");
     assert_eq!(r.drag_fine(FINE_DRAG).y, 4.0, "Shift is the fine modifier");
-    assert_eq!(r.drag_total, Point::new(0., 40.), "travel since the press");
+    assert_eq!(r.drag_total, Vec2::new(0., 40.), "travel since the press");
     assert_eq!(r.drag_axis(), Some(Axis::Y));
     i.update(
         &hit,

@@ -9,7 +9,7 @@ fn main() {
         max_vertices: 65_536,
         ..Default::default()
     };
-    let outline = RoundedRect::new(Bounds::new(0., 0., 400., 260.), 30.)
+    let outline = RoundedRect::new(Rect::new(0., 0., 400., 260.), 30.)
         .unwrap()
         .path();
     let old = || {

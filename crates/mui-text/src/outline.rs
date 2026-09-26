@@ -116,20 +116,23 @@ impl OutlinePen for PathPen {
     }
 
     fn quad_to(&mut self, cx: f32, cy: f32, x: f32, y: f32) {
-        let (p0, c, p1) = (self.cursor, self.point(cx, cy), self.point(x, y));
+        let [p0, c, p1] = [self.cursor, self.point(cx, cy), self.point(x, y)].map(Point::to_vec2);
         let n = self.steps((p0 - c * 2. + p1).length(), 0.125);
         for i in 1..=n {
             let t = i as f64 / n as f64;
             let u = 1. - t;
-            self.line(p0 * (u * u) + c * (2. * u * t) + p1 * (t * t));
+            self.line((p0 * (u * u) + c * (2. * u * t) + p1 * (t * t)).to_point());
         }
     }
 
     fn curve_to(&mut self, cx0: f32, cy0: f32, cx1: f32, cy1: f32, x: f32, y: f32) {
-        let p0 = self.cursor;
-        let c0 = self.point(cx0, cy0);
-        let c1 = self.point(cx1, cy1);
-        let p1 = self.point(x, y);
+        let [p0, c0, c1, p1] = [
+            self.cursor,
+            self.point(cx0, cy0),
+            self.point(cx1, cy1),
+            self.point(x, y),
+        ]
+        .map(Point::to_vec2);
         let bow = (p0 - c0 * 2. + c1)
             .length()
             .max((c0 - c1 * 2. + p1).length());
@@ -138,7 +141,11 @@ impl OutlinePen for PathPen {
             let t = i as f64 / n as f64;
             let u = 1. - t;
             self.line(
-                p0 * (u * u * u) + c0 * (3. * u * u * t) + c1 * (3. * u * t * t) + p1 * (t * t * t),
+                (p0 * (u * u * u)
+                    + c0 * (3. * u * u * t)
+                    + c1 * (3. * u * t * t)
+                    + p1 * (t * t * t))
+                    .to_point(),
             );
         }
     }
@@ -160,7 +167,7 @@ mod tests {
             .map(|ring| {
                 ring.iter()
                     .zip(ring.iter().cycle().skip(1))
-                    .map(|(a, b)| a.cross(*b))
+                    .map(|(a, b)| a.to_vec2().cross(b.to_vec2()))
                     .sum::<f64>()
                     * 0.5
             })
@@ -249,7 +256,7 @@ mod tests {
             .map(|r| {
                 (r.iter()
                     .zip(r.iter().cycle().skip(1))
-                    .map(|(a, b)| a.cross(*b))
+                    .map(|(a, b)| a.to_vec2().cross(b.to_vec2()))
                     .sum::<f64>()
                     * 0.5)
                     .abs()
@@ -284,7 +291,9 @@ mod tests {
         // Two `O`s a pixel apart: the outer contours overlap almost entirely.
         // Even-odd would XOR that overlap away and leave a crescent.
         let a = glyph_path(&hack(), 'O', 96., &[], 0.05).unwrap();
-        let b = a.rigid_transform(Point::new(1., 0.), 0.).unwrap();
+        let b = a
+            .rigid_transform(mui_geometry::Vec2::new(1., 0.), 0.)
+            .unwrap();
         let both = Path {
             commands: a
                 .commands
@@ -294,9 +303,8 @@ mod tests {
                 .collect(),
         };
         // On the left stroke of the ring, where both glyphs have ink.
-        let bounds =
-            mui_geometry::Bounds::from_points(a.flatten(0.05, 250_000).unwrap().concat()).unwrap();
-        let p = Point::new(bounds.min.x + 4., (bounds.min.y + bounds.max.y) / 2.);
+        let bounds = mui_geometry::bounds(a.flatten(0.05, 250_000).unwrap().concat()).unwrap();
+        let p = Point::new(bounds.x0 + 4., (bounds.y0 + bounds.y1) / 2.);
         assert_eq!(winding(&a, p).abs(), 1, "one glyph covers the probe once");
         assert_eq!(
             winding(&both, p).abs(),

@@ -23,7 +23,7 @@ use std::borrow::Cow;
 use std::hash::BuildHasher;
 use std::sync::{Arc, LazyLock};
 
-use mui_geometry::{Bounds, OffsetOptions, Path, PlacedShape, Point};
+use mui_geometry::{OffsetOptions, Path, PlacedShape, Rect};
 use mui_layout::Frame;
 
 use crate::{Color, Cursor, El, Size};
@@ -50,11 +50,13 @@ fn snap(v: f64, scale: Option<f64>) -> f64 {
 }
 /// The one place every outline, weld rect and clip path comes from, so
 /// snapping here cannot leave paint, hits and clips disagreeing.
-fn bounds(f: Frame, scale: Option<f64>) -> Bounds {
-    Bounds {
-        min: Point::new(snap(f.x, scale), snap(f.y, scale)),
-        max: Point::new(snap(f.right(), scale), snap(f.bottom(), scale)),
-    }
+fn bounds(f: Frame, scale: Option<f64>) -> Rect {
+    Rect::new(
+        snap(f.x, scale),
+        snap(f.y, scale),
+        snap(f.right(), scale),
+        snap(f.bottom(), scale),
+    )
 }
 /// The path a structural or glyph entry carries: empty, and shared, so
 /// closing a clip allocates nothing.
@@ -130,7 +132,7 @@ fn missing(what: &'static str, id: &mui_layout::Id) -> SceneError {
 #[derive(Clone, Debug, Default)]
 struct Ancestors {
     parent: Option<Arc<str>>,
-    clip: Option<Bounds>,
+    clip: Option<Rect>,
     clip_paths: Option<Arc<[PlacedPath]>>,
     cursor: Option<Cursor>,
     disabled: bool,

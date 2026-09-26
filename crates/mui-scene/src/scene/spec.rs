@@ -74,7 +74,7 @@ impl SceneSpec {
     /// let row = row![block(0., 20.).grow(1.).id("a"), block(0., 20.).grow(1.)];
     /// let spec = SceneSpec::new(row).offered(Size::new(41., 20.)).scale(1.);
     /// let a = resolve(&spec).unwrap();
-    /// let edge = a.surface("a").unwrap().rect.unwrap().bounds().max.x;
+    /// let edge = a.surface("a").unwrap().rect.unwrap().bounds().x1;
     /// assert_eq!(edge, edge.round());
     /// ```
     pub fn scale(mut self, device_scale: f64) -> Self {

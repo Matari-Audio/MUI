@@ -812,7 +812,7 @@ fn one(canvas: &mut impl Canvas, p: &Painted, path: &BezPath) -> Result<(), Erro
             }
             let b = rr.bounds();
             canvas.fill_blurred_rounded_rect(
-                &Rect::new(b.min.x, b.min.y, b.max.x, b.max.y),
+                &b,
                 rr.radius() as f32,
                 p.blur as f32,
                 // The inverse coverage is the inset shadow; the walk has

@@ -20,13 +20,13 @@
 //! purpose, because only the caller knows which of several scenes was clicked.
 #![forbid(unsafe_code)]
 
-pub use mui_geometry::Point;
+pub use mui_geometry::{Point, Vec2};
 
 use rustc_hash::FxHashMap as HashMap;
 use std::sync::{Arc, OnceLock};
 
-use mui_geometry::kurbo::{self, BezPath, Rect, Shape as _, Vec2};
-use mui_geometry::{Bounds, Error, Path, PathCommand};
+use mui_geometry::kurbo::{self, BezPath, Rect, Shape as _};
+use mui_geometry::{Error, Path, PathCommand};
 
 /// How far the pointer may travel between press and release and still count as
 /// a click. Past this, the gesture is a drag and [`Response::clicked`] never
@@ -44,7 +44,7 @@ struct Target {
     at: Vec2,
     /// The nearest clipping ancestor's rect: outside it, the target is not
     /// drawn, so it must not respond either.
-    clip: Option<Bounds>,
+    clip: Option<Rect>,
     /// Cached exact clipping contours, outermost first, each local to its
     /// offset. Pointer queries only run winding tests over these
     /// already-converted paths.
@@ -108,10 +108,6 @@ impl Converted {
     }
 }
 
-fn vec(p: Point) -> Vec2 {
-    Vec2::new(p.x, p.y)
-}
-
 /// The targets under the pointer, in paint order.
 ///
 /// Push in the order you draw: later entries sit on top and win ties.
@@ -144,7 +140,7 @@ impl Hit {
         &mut self,
         id: impl Into<Arc<str>>,
         path: &Path,
-        clip: Option<Bounds>,
+        clip: Option<Rect>,
     ) -> Result<(), Error> {
         self.push_clipped_paths(id, path, clip, None)
     }
@@ -156,7 +152,7 @@ impl Hit {
         &mut self,
         id: impl Into<Arc<str>>,
         path: &Path,
-        clip: Option<Bounds>,
+        clip: Option<Rect>,
         clips: Option<&[Arc<Path>]>,
     ) -> Result<(), Error> {
         let clips = self.bez_clips(clips)?;
@@ -189,7 +185,7 @@ impl Hit {
         id: impl Into<Arc<str>>,
         tag: impl Into<Arc<str>>,
         path: &Path,
-        clip: Option<Bounds>,
+        clip: Option<Rect>,
     ) -> Result<(), Error> {
         self.push_tagged_paths(id, tag, path, clip, None)
     }
@@ -202,7 +198,7 @@ impl Hit {
         id: impl Into<Arc<str>>,
         tag: impl Into<Arc<str>>,
         path: &Path,
-        clip: Option<Bounds>,
+        clip: Option<Rect>,
         clips: Option<&[Arc<Path>]>,
     ) -> Result<(), Error> {
         let clips = self.bez_clips(clips)?;
@@ -233,7 +229,7 @@ impl Hit {
         tag: Option<Arc<str>>,
         path: &Arc<Path>,
         at: Point,
-        clip: Option<Bounds>,
+        clip: Option<Rect>,
         clips: Option<&[(Arc<Path>, Point)]>,
     ) -> Result<(), Error> {
         let clips = match clips.filter(|c| !c.is_empty()) {
@@ -245,7 +241,7 @@ impl Hit {
                 } else {
                     let c: Arc<[_]> = list
                         .iter()
-                        .map(|(p, o)| Ok((self.converted(p)?, vec(*o))))
+                        .map(|(p, o)| Ok((self.converted(p)?, o.to_vec2())))
                         .collect::<Result<Vec<_>, Error>>()?
                         .into();
                     self.clip_cache.insert(key, c.clone());
@@ -254,7 +250,7 @@ impl Hit {
             }
         };
         let path = self.converted(path)?;
-        self.add(id.into(), tag, path, vec(at), clip, clips)
+        self.add(id.into(), tag, path, at.to_vec2(), clip, clips)
     }
 
     /// Empty the map for a rebuild, keeping the conversions the last build
@@ -282,7 +278,7 @@ impl Hit {
         tag: Option<Arc<str>>,
         path: Arc<Converted>,
         at: Vec2,
-        clip: Option<Bounds>,
+        clip: Option<Rect>,
         clip_paths: Clips,
     ) -> Result<(), Error> {
         self.targets.push(Target {
@@ -353,9 +349,9 @@ impl Hit {
         if !(p.x.is_finite() && p.y.is_finite()) {
             return None;
         }
-        let q = mui_geometry::kurbo::Point::new(p.x, p.y);
-        let inside = |c: &Option<Bounds>| {
-            c.is_none_or(|b| p.x >= b.min.x && p.x <= b.max.x && p.y >= b.min.y && p.y <= b.max.y)
+        let q = p;
+        let inside = |c: &Option<Rect>| {
+            c.is_none_or(|b| p.x >= b.x0 && p.x <= b.x1 && p.y >= b.y0 && p.y <= b.y1)
         };
         self.targets
             .iter()
@@ -629,7 +625,7 @@ pub struct Response {
     pub dragged: bool,
     /// Pointer movement since the previous frame while dragging. Zero
     /// otherwise, so a caller may add it unconditionally.
-    pub drag_delta: Point,
+    pub drag_delta: Vec2,
     /// A drag started elsewhere is in flight and the pointer is over this
     /// target: highlight yourself, something is about to land.
     pub drop_target: bool,
@@ -646,7 +642,7 @@ pub struct Response {
     pub press_mods: Mods,
     /// Pointer travel since the press, zero unless dragging. Distinct from
     /// [`Response::drag_delta`], which is this frame alone.
-    pub drag_total: Point,
+    pub drag_total: Vec2,
     /// This frame's press was the second of a double click on this target.
     /// [`Interaction`] has no clock, so it never sets this; the runtime that
     /// owns one (`mui::Ui::get`) does.
@@ -673,16 +669,16 @@ impl Response {
     /// pass [`FINE_DRAG`] unless the control wants its own ratio.
     ///
     /// ```
-    /// # use mui_input::{Mods, Point, Response, FINE_DRAG};
+    /// # use mui_input::{Mods, Response, Vec2, FINE_DRAG};
     /// let r = Response {
-    ///     drag_delta: Point::new(10.0, 0.0),
+    ///     drag_delta: Vec2::new(10.0, 0.0),
     ///     mods: Mods { shift: true, ..Mods::default() },
     ///     ..Response::default()
     /// };
     /// assert_eq!(r.drag_fine(FINE_DRAG).x, 1.0);
     /// ```
     #[must_use]
-    pub fn drag_fine(&self, fine: f64) -> Point {
+    pub fn drag_fine(&self, fine: f64) -> Vec2 {
         self.drag_delta * if self.mods.shift { fine } else { 1.0 }
     }
 
@@ -691,10 +687,10 @@ impl Response {
     /// a lock never picks an axis from a single noisy frame.
     ///
     /// ```
-    /// # use mui_input::{Axis, Point, Response};
+    /// # use mui_input::{Axis, Response, Vec2};
     /// let r = Response {
     ///     dragged: true,
-    ///     drag_total: Point::new(2.0, 40.0),
+    ///     drag_total: Vec2::new(2.0, 40.0),
     ///     ..Response::default()
     /// };
     /// assert_eq!(r.drag_axis(), Some(Axis::Y));
@@ -757,7 +753,7 @@ pub struct Interaction {
     clicked: Option<String>,
     press_pos: Option<Point>,
     last_pos: Option<Point>,
-    drag_delta: Point,
+    drag_delta: Vec2,
     dragging: bool,
     /// The buttons that were down last frame, for edge detection.
     was: Buttons,
@@ -780,7 +776,7 @@ impl Default for Interaction {
             clicked: None,
             press_pos: None,
             last_pos: None,
-            drag_delta: Point::new(0., 0.),
+            drag_delta: Vec2::ZERO,
             dragging: false,
             was: Buttons::default(),
             press_button: None,
@@ -868,7 +864,7 @@ impl Interaction {
         self.released = None;
         self.clicked = None;
         self.dropped = None;
-        self.drag_delta = Point::new(0., 0.);
+        self.drag_delta = Vec2::ZERO;
 
         let over = input
             .pos
@@ -954,7 +950,7 @@ impl Interaction {
             drag_delta: if held && self.dragging {
                 self.drag_delta
             } else {
-                Point::new(0., 0.)
+                Vec2::ZERO
             },
             drop_target: self.dragging && !held && is(&self.over),
             dropped_on: self.dropped.as_ref().is_some_and(|(_, t)| t == id),
@@ -967,7 +963,7 @@ impl Interaction {
             },
             drag_total: match (held && self.dragging, self.last_pos, self.press_pos) {
                 (true, Some(now), Some(origin)) => now - origin,
-                _ => Point::ZERO,
+                _ => Vec2::ZERO,
             },
             double_clicked: false,
             wheel: Point::ZERO,

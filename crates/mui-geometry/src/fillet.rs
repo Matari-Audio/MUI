@@ -7,8 +7,8 @@ use std::f64::consts::PI;
 /// touching a single size.
 ///
 /// ```
-/// use mui_geometry::{CornerStyle, RoundedRect, Bounds};
-/// let rect = RoundedRect::new(Bounds::new(0., 0., 100., 60.), 20.).unwrap();
+/// use mui_geometry::{CornerStyle, Rect, RoundedRect};
+/// let rect = RoundedRect::new(Rect::new(0., 0., 100., 60.), 20.).unwrap();
 /// let round = rect.path();
 /// let squircle = CornerStyle::Squircle.shape(&round);
 /// // Same corners, drawn as cubics instead of arcs.
@@ -44,8 +44,8 @@ impl CornerStyle {
     /// stroke's inset all pass through it the same way.
     ///
     /// ```
-    /// use mui_geometry::{CornerStyle, RoundedRect, Bounds};
-    /// let rect = RoundedRect::new(Bounds::new(0., 0., 80., 80.), 16.).unwrap();
+    /// use mui_geometry::{CornerStyle, Rect, RoundedRect};
+    /// let rect = RoundedRect::new(Rect::new(0., 0., 80., 80.), 16.).unwrap();
     /// let round = rect.path();
     /// assert_eq!(CornerStyle::Round.shape(&round), round);
     /// ```
@@ -61,7 +61,7 @@ impl CornerStyle {
                 PathCommand::ArcTo(a) if a.radius > 0. => {
                     // The tangents at both ends meet at the corner's vertex;
                     // the cubic is the same corner pulled toward it.
-                    let dir = (at - a.center).perpendicular() / a.radius * a.sweep.signum();
+                    let dir = (at - a.center).turn_90() / a.radius * a.sweep.signum();
                     let vertex = at + dir * (a.radius * (a.sweep.abs() / 2.).tan());
                     commands.push(PathCommand::CubicTo(
                         at + (vertex - at) * k,
@@ -171,8 +171,8 @@ pub fn fillet(topology: &Topology, style: Fillet) -> Result<RoundedShape, Error>
             let p = ring.points[i];
             let prev = ring.points[(i + n - 1) % n];
             let next = ring.points[(i + 1) % n];
-            let incoming = (p - prev).unit();
-            let outgoing = (next - p).unit();
+            let incoming = (p - prev).normalize();
+            let outgoing = (next - p).normalize();
             let turn = incoming.cross(outgoing).atan2(incoming.dot(outgoing));
             let locally_convex = turn * winding > 0.;
             let convex = if ring.kind == RingKind::Hole {
@@ -213,7 +213,7 @@ pub fn fillet(topology: &Topology, style: Fillet) -> Result<RoundedShape, Error>
             let start = p - incoming * trim;
             let end = p + outgoing * trim;
             let arc = if radius > 0. {
-                let center = start + incoming.perpendicular() * (radius * turn.signum());
+                let center = start + incoming.turn_90() * (radius * turn.signum());
                 Some(Arc {
                     center,
                     radius,

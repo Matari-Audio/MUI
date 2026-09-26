@@ -1,5 +1,5 @@
 use mui_geometry::kurbo::{Point as KPoint, Shape};
-use mui_geometry::{Bounds, bez_path, boundary_distance};
+use mui_geometry::{bez_path, boundary_distance};
 use mui_scene::SceneError;
 use mui_scene::prelude::*;
 fn has(path: &Path, x: f64, y: f64) -> bool {
@@ -187,7 +187,7 @@ fn ordinary_alignment_reserves_only_the_inward_share() {
             .h(100.)
             .radius(0.);
         let scene = resolve(&SceneSpec::new(root)).unwrap();
-        let b = Bounds::from_points(
+        let b = mui_geometry::bounds(
             scene
                 .surface("child")
                 .unwrap()
@@ -197,7 +197,7 @@ fn ordinary_alignment_reserves_only_the_inward_share() {
                 .concat(),
         )
         .unwrap();
-        assert!((b.min.x - 20. * factor - 2.).abs() < 0.01);
+        assert!((b.x0 - 20. * factor - 2.).abs() < 0.01);
     }
 }
 

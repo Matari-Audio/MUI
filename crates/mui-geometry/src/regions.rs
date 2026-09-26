@@ -1,7 +1,7 @@
 //! Contour regions, variable borders and shape partitions without UI dependencies.
 use crate::{
-    BooleanOp, Bounds, Error, GeometryOptions, OffsetOptions, Path, PathCommand, Point,
-    RoundedRect, boolean, inset_path, offset_path,
+    BooleanOp, Error, GeometryOptions, OffsetOptions, Path, PathCommand, Point, Rect, RoundedRect,
+    boolean, inset_path, offset_path,
 };
 
 /// Which side of the authored outline the border occupies. Default preserves MUI.
@@ -246,7 +246,7 @@ pub fn boundary_band(
             if len < 1e-9 {
                 continue;
             }
-            let normal = Point::new(-d.y / len, d.x / len);
+            let normal = d.turn_90() / len;
             // Split at ramp knees, not every pixel: the width is exactly linear
             // on straight edges, regardless of the card's height or scale.
             let mut cuts = vec![0.0, 1.0];
@@ -281,13 +281,8 @@ pub fn boundary_band(
                 // contour remains exact; only the inner border edge varies.
                 for (p, w) in [(p, wp), (q, wq)] {
                     if w > 0.0 {
-                        let disk = RoundedRect::new(
-                            Bounds {
-                                min: Point::new(p.x - w, p.y - w),
-                                max: Point::new(p.x + w, p.y + w),
-                            },
-                            w,
-                        )?;
+                        let disk =
+                            RoundedRect::new(Rect::new(p.x - w, p.y - w, p.x + w, p.y + w), w)?;
                         path.commands.extend(disk.path().commands);
                     }
                 }
@@ -348,7 +343,7 @@ impl ShapeSplit {
     ///
     /// ```
     /// use mui_geometry::*;
-    /// let path=RoundedRect::new(Bounds::new(0.,0.,200.,100.),20.).unwrap().path();
+    /// let path=RoundedRect::new(Rect::new(0.,0.,200.,100.),20.).unwrap().path();
     /// let inner=inset_path(&path,2.,Default::default()).unwrap().path;
     /// let [left,right]=ShapeSplit::new(SplitAxis::X,0.5).gap(2.).bend(0.2)
     ///     .regions(&inner,Default::default(),Default::default()).unwrap();
@@ -362,7 +357,7 @@ impl ShapeSplit {
     ) -> Result<[Path; 2], Error> {
         self.validate()?;
         let normalized = offset_path(path, 0., o)?.path;
-        let Some(bounds) = Bounds::from_points(
+        let Some(bounds) = crate::bounds(
             normalized
                 .flatten(o.flatten_tolerance, o.max_points)?
                 .concat(),
@@ -381,21 +376,18 @@ impl ShapeSplit {
     /// One partition mask, useful when a layout engine already has child frames.
     /// Extend beyond the supplied bounds before eroding so the gap affects only
     /// the divider, never the parent's outer padding.
-    pub fn mask(self, b: Bounds, second: bool, o: OffsetOptions) -> Result<Path, Error> {
+    pub fn mask(self, b: Rect, second: bool, o: OffsetOptions) -> Result<Path, Error> {
         self.validate()?;
         offset_path(&Path::default(), 0., o)?;
-        if ![b.min.x, b.min.y, b.max.x, b.max.y]
-            .iter()
-            .all(|v| v.is_finite())
-        {
+        if !b.is_finite() {
             return Err(Error::NonFinite);
         }
         if b.width() <= 0. || b.height() <= 0. {
             return Err(Error::InvalidOptions("split bounds"));
         }
         let (start, end, origin, span) = match self.axis {
-            SplitAxis::X => (b.min.y, b.max.y, b.min.x, b.width()),
-            SplitAxis::Y => (b.min.x, b.max.x, b.min.y, b.height()),
+            SplitAxis::X => (b.y0, b.y1, b.x0, b.width()),
+            SplitAxis::Y => (b.x0, b.x1, b.y0, b.height()),
         };
         let point = |u, v| match self.axis {
             SplitAxis::X => Point::new(u, v),

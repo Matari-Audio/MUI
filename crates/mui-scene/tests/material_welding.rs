@@ -243,7 +243,7 @@ fn fractional_layout_origin_does_not_shift_the_baked_device_grid() {
         .find(|p| p.key.as_ref() == "group" && matches!(&p.paint, Paint::Image { .. }))
         .unwrap();
     let b = p.rect.unwrap().bounds();
-    for edge in [b.min.x, b.min.y, b.max.x, b.max.y] {
+    for edge in [b.x0, b.y0, b.x1, b.y1] {
         assert!((edge * 1.5 - (edge * 1.5).round()).abs() < 1e-8);
     }
 }

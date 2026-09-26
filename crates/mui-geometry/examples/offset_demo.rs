@@ -1,12 +1,6 @@
 use mui_geometry::*;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let outer = RoundedRect::new(
-        Bounds {
-            min: Point::ZERO,
-            max: Point::new(92., 170.),
-        },
-        28.,
-    )?;
+    let outer = RoundedRect::new(Rect::new(0., 0., 92., 170.), 28.)?;
     let child = outer.inset(12.)?.shape.ok_or("child disappeared")?;
     println!(
         "Concentric: parent={} inset=12 child={}",

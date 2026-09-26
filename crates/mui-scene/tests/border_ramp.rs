@@ -36,13 +36,11 @@ fn named_anchor_keeps_the_outline_and_emits_one_vector_border() {
         let Paint::Gradient { stops, .. } = &strokes[0].paint else {
             panic!("vector material");
         };
-        let bounds = mui_geometry::Bounds::from_points(
-            strokes[0].path.flatten(0.1, 250_000).unwrap().concat(),
-        )
-        .unwrap();
+        let bounds =
+            mui_geometry::bounds(strokes[0].path.flatten(0.1, 250_000).unwrap().concat()).unwrap();
         let header = ramp.surface("header").unwrap().frame;
         for (stop, fraction) in stops.iter().zip([0.35, 0.65]) {
-            let x = bounds.min.x + f64::from(stop.0) * bounds.width();
+            let x = bounds.x0 + f64::from(stop.0) * bounds.width();
             assert!((x - header.x - header.size.width * fraction).abs() < 0.001);
         }
         assert!(

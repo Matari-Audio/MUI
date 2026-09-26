@@ -4,7 +4,7 @@ fn has(path: &Path, x: f64, y: f64) -> bool {
     bez_path(path, 0.01).unwrap().winding(KPoint::new(x, y)) != 0
 }
 fn rect() -> Path {
-    RoundedRect::new(Bounds::new(0., 0., 200., 100.), 0.)
+    RoundedRect::new(Rect::new(0., 0., 200., 100.), 0.)
         .unwrap()
         .path()
 }
@@ -102,7 +102,7 @@ fn partition_inherits_star_and_hole_and_can_be_split_again() {
         Point::new(100. + radius * angle.cos(), 100. + radius * angle.sin())
     });
     let star = Path::polyline(vertices, true);
-    let hole = RoundedRect::new(Bounds::new(90., 90., 110., 110.), 4.)
+    let hole = RoundedRect::new(Rect::new(90., 90., 110., 110.), 4.)
         .unwrap()
         .path();
     let ring = boolean_paths(
@@ -231,7 +231,7 @@ fn geometry_limits_and_invalid_inputs_are_errors() {
 fn uniform_offsets_match_sweep_for_holes_and_all_alignments() {
     let o = OffsetOptions::default();
     let g = GeometryOptions::default();
-    let hole = RoundedRect::new(Bounds::new(60., 30., 80., 40.), 8.)
+    let hole = RoundedRect::new(Rect::new(60., 30., 80., 40.), 8.)
         .unwrap()
         .path();
     let outline = boolean_paths(&rect(), &hole, BooleanOp::Difference, o, g).unwrap();

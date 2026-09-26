@@ -35,7 +35,7 @@ pub use boolean::{
     boolean_passes, union,
 };
 pub use fillet::{Corner, CornerStyle, Fillet, RoundedShape, fillet};
-pub use math::{Affine, Bounds, Point};
+pub use math::{Affine, Point, Rect, Vec2, bounds};
 pub use path::{Arc, Path, PathCommand};
 
 #[derive(Debug, Clone, PartialEq)]

@@ -1,15 +1,15 @@
-use mui_geometry::{Bounds, Path, Point, RoundedRect};
+use mui_geometry::{Path, Point, Rect, RoundedRect};
 use mui_input::Hit;
 
 #[test]
 fn all_clips_must_accept_the_point() {
-    let square = RoundedRect::new(Bounds::new(0.0, 0.0, 100.0, 100.0), 0.0)
+    let square = RoundedRect::new(Rect::new(0.0, 0.0, 100.0, 100.0), 0.0)
         .unwrap()
         .path();
-    let circle = RoundedRect::new(Bounds::new(0.0, 0.0, 100.0, 100.0), 50.0)
+    let circle = RoundedRect::new(Rect::new(0.0, 0.0, 100.0, 100.0), 50.0)
         .unwrap()
         .path();
-    let inner = RoundedRect::new(Bounds::new(0.0, 0.0, 60.0, 100.0), 0.0)
+    let inner = RoundedRect::new(Rect::new(0.0, 0.0, 60.0, 100.0), 0.0)
         .unwrap()
         .path();
     let mut hit = Hit::default();
@@ -46,7 +46,7 @@ fn a_clip_hole_does_not_respond() {
 
 #[test]
 fn malformed_clip_cannot_publish_a_partial_target() {
-    let square = RoundedRect::new(Bounds::new(0.0, 0.0, 10.0, 10.0), 0.0)
+    let square = RoundedRect::new(Rect::new(0.0, 0.0, 10.0, 10.0), 0.0)
         .unwrap()
         .path();
     let mut invalid = square.clone();
@@ -64,7 +64,7 @@ fn nonfinite_pointer_coordinates_are_inert() {
     let mut hit = Hit::default();
     hit.push(
         "box",
-        &RoundedRect::new(Bounds::new(0.0, 0.0, 10.0, 10.0), 0.0)
+        &RoundedRect::new(Rect::new(0.0, 0.0, 10.0, 10.0), 0.0)
             .unwrap()
             .path(),
     )

@@ -9,7 +9,7 @@
 //! a one-triangle play and go back again. The ends are exact: `t <= 0` is
 //! `a` and `t >= 1` is `b`, curves and all; only the frames in between are
 //! polygons.
-use crate::{Error, Path, Point};
+use crate::{Error, Path, Point, Vec2};
 
 /// Chord error the in-between frames are flattened at, in logical units.
 const TOLERANCE: f64 = 0.05;
@@ -87,7 +87,7 @@ impl Ring {
         let (mut area, mut perimeter) = (0., 0.);
         for i in 0..n {
             let (p, q) = (points[i], points[(i + 1) % n]);
-            area += p.cross(q) * 0.5;
+            area += p.to_vec2().cross(q.to_vec2()) * 0.5;
             perimeter += p.distance(q);
         }
         Self {
@@ -98,7 +98,8 @@ impl Ring {
     }
     /// This ring shrunk to its vertex centroid, keeping its winding.
     fn point(&self) -> Self {
-        let c = self.points.iter().fold(Point::ZERO, |s, &p| s + p) / self.points.len() as f64;
+        let c = (self.points.iter().map(|p| p.to_vec2()).sum::<Vec2>() / self.points.len() as f64)
+            .to_point();
         Self {
             points: vec![c],
             area: self.area.signum() * f64::MIN_POSITIVE,
@@ -207,7 +208,7 @@ mod tests {
                 .flatten(0.1, 1 << 16)
                 .unwrap();
             assert_eq!(m.len(), 2, "the second bar grows out of a point at t={t}");
-            assert!(m.iter().flatten().all(|p| p.finite()));
+            assert!(m.iter().flatten().all(|p| p.is_finite()));
         }
         // Near the start the extra bar is almost a point.
         let early = morph(&play, &pause, 0.01)

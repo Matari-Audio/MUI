@@ -2,7 +2,7 @@
 //! the one place an entry is pushed.
 use std::sync::Arc;
 
-use mui_geometry::{BooleanOp, Bounds, Path, Point, RoundedRect};
+use mui_geometry::{BooleanOp, Path, Point, Rect, RoundedRect, Vec2};
 
 use super::outline::Contour;
 use super::{Layer, Painted, SceneError, Walk, empty, find, missing};
@@ -176,7 +176,7 @@ impl Walk<'_> {
         contour: &Contour,
         under: Color,
     ) -> Result<(), SceneError> {
-        let d = Point::new(sh.dx, sh.dy);
+        let d = Vec2::new(sh.dx, sh.dy);
         // CSS spread: the drop grows, the inset shrinks, and the radius
         // follows so the corner keeps its shape.
         let grow = match sh.kind {
@@ -186,11 +186,11 @@ impl Walk<'_> {
         let moved = |r: RoundedRect| {
             let b = r.bounds();
             RoundedRect::new(
-                Bounds::new(
-                    b.min.x + d.x - grow,
-                    b.min.y + d.y - grow,
-                    b.max.x + d.x + grow,
-                    b.max.y + d.y + grow,
+                Rect::new(
+                    b.x0 + d.x - grow,
+                    b.y0 + d.y - grow,
+                    b.x1 + d.x + grow,
+                    b.y1 + d.y + grow,
                 ),
                 (r.radius() + grow).max(0.0),
             )
@@ -380,7 +380,7 @@ impl Walk<'_> {
                 Operation::Combine(merged, (*world).clone(), BooleanOp::Difference),
             )?;
         }
-        let Some(bounds) = Bounds::from_points(band.flatten(0.1, 250_000)?.concat()) else {
+        let Some(bounds) = mui_geometry::bounds(band.flatten(0.1, 250_000)?.concat()) else {
             return Ok(());
         };
         let start = self.paint.len();
@@ -527,11 +527,11 @@ mod tests {
         for (p, k) in sh.iter().zip(["a", "b"]) {
             assert_eq!(p.blur, 12.);
             let r = p.rect.expect("a rect the renderer can blur").bounds();
-            let r = r.translated(p.offset);
+            let r = r + p.offset.to_vec2();
             let child = s.surface(k).unwrap();
-            let child = child.rect.unwrap().bounds().translated(child.offset);
-            assert!((r.min.x - child.min.x).abs() < 1e-9);
-            assert!((r.min.y - child.min.y - Shadow::soft(12.).dy).abs() < 1e-9);
+            let child = child.rect.unwrap().bounds() + child.offset.to_vec2();
+            assert!((r.x0 - child.x0).abs() < 1e-9);
+            assert!((r.y0 - child.y0 - Shadow::soft(12.).dy).abs() < 1e-9);
         }
     }
 
@@ -542,7 +542,7 @@ mod tests {
         let shell = s.paint.iter().find(|p| p.layer == Layer::Shell(0)).unwrap();
         let r = shell.rect.unwrap();
         assert!((tab.radius() - r.radius() - 12.).abs() < 1e-9);
-        assert!((r.bounds().min.x - tab.bounds().min.x - 12.).abs() < 1e-9);
+        assert!((r.bounds().x0 - tab.bounds().x0 - 12.).abs() < 1e-9);
         let layers: Vec<_> = s.paint.iter().map(|p| (&*p.key, p.layer)).collect();
         assert_eq!(
             layers,
@@ -617,12 +617,12 @@ mod tests {
         let root = stack([block(20., 20.).radius(0.).stroke(Role::Ink).id("k")]);
         let s = resolve(&SceneSpec::new(root).offered(Size::new(20., 20.))).unwrap();
         let st = s.paint.iter().find(|p| p.layer == Layer::Stroke).unwrap();
-        let b = Bounds::from_points(st.path.flatten(0.01, 100_000).unwrap().concat()).unwrap();
+        let b = mui_geometry::bounds(st.path.flatten(0.01, 100_000).unwrap().concat()).unwrap();
         let w = st.width / 2.0;
         let f = s.layout.frame("k").unwrap();
         // The painted band is the path grown by half the width; inside means
         // that band is exactly the frame.
-        assert!((b.min.x - w - f.x).abs() < 1e-9, "{b:?} {f:?} {w}");
-        assert!((b.max.y + w - f.bottom()).abs() < 1e-9, "{b:?} {f:?} {w}");
+        assert!((b.x0 - w - f.x).abs() < 1e-9, "{b:?} {f:?} {w}");
+        assert!((b.y1 + w - f.bottom()).abs() < 1e-9, "{b:?} {f:?} {w}");
     }
 }

@@ -4,8 +4,8 @@ use rustc_hash::FxHashMap as HashMap;
 use std::sync::Arc;
 
 use mui_geometry::{
-    BooleanOp, Bounds, CornerStyle, Fillet, Path, Point, Polygon, RoundedRect, Topology, boolean,
-    fillet, union,
+    BooleanOp, CornerStyle, Fillet, Path, Point, Polygon, Rect, RoundedRect, Topology, Vec2,
+    boolean, fillet, union,
 };
 use mui_layout::Frame;
 
@@ -27,7 +27,7 @@ pub(super) struct Contour {
     /// casts a shadow: one per welded child, or a squircle's own frame.
     pub(super) shadow_rects: Vec<RoundedRect>,
     /// The path's bounds when already known; see [`Contour::bounds`].
-    pub(super) known_bounds: Option<Bounds>,
+    pub(super) known_bounds: Option<Rect>,
     /// Where all of the above stands in the scene.
     pub(super) offset: Point,
 }
@@ -45,14 +45,14 @@ impl Contour {
     }
 
     /// The outline's local bounds: the rect's, the cached ones, or flattened.
-    pub(super) fn bounds(&self) -> Result<Option<Bounds>, SceneError> {
+    pub(super) fn bounds(&self) -> Result<Option<Rect>, SceneError> {
         if let Some(r) = self.rect {
             return Ok(Some(r.bounds()));
         }
         if self.known_bounds.is_some() {
             return Ok(self.known_bounds);
         }
-        Ok(Bounds::from_points(
+        Ok(mui_geometry::bounds(
             self.path.flatten(0.5, 100_000)?.concat(),
         ))
     }
@@ -63,24 +63,24 @@ impl Contour {
             return self.path.clone();
         }
         let mut p = (*self.path).clone();
-        p.translate(self.offset);
+        p.translate(self.offset.to_vec2());
         Arc::new(p)
     }
 
     pub(super) fn world_rect(&self) -> Option<RoundedRect> {
-        self.rect.map(|r| r.translated(self.offset))
+        self.rect.map(|r| r.translated(self.offset.to_vec2()))
     }
 
     /// The same outline, local to `origin` instead.
     fn placed_at(mut self, origin: Point) -> Self {
         let d = self.offset - origin;
-        if d != Point::ZERO {
+        if d != Vec2::ZERO {
             Arc::make_mut(&mut self.path).translate(d);
             self.rect = self.rect.map(|r| r.translated(d));
             for r in &mut self.shadow_rects {
                 *r = r.translated(d);
             }
-            self.known_bounds = self.known_bounds.map(|b| b.translated(d));
+            self.known_bounds = self.known_bounds.map(|b| b + d);
         }
         self.offset = origin;
         self
@@ -234,10 +234,10 @@ fn geometry_shallow(
     let b = bounds(frame, scale);
     key.extend(
         [
-            b.min.x - origin.x,
-            b.min.y - origin.y,
-            b.max.x - origin.x,
-            b.max.y - origin.y,
+            b.x0 - origin.x,
+            b.y0 - origin.y,
+            b.x1 - origin.x,
+            b.y1 - origin.y,
             frame.size.width,
             frame.size.height,
         ]
@@ -440,10 +440,10 @@ impl Walk<'_> {
     pub(super) fn rect_path(&mut self, rr: RoundedRect, corners: CornerStyle) -> Arc<Path> {
         let b = rr.bounds();
         let key = [
-            b.min.x.to_bits(),
-            b.min.y.to_bits(),
-            b.max.x.to_bits(),
-            b.max.y.to_bits(),
+            b.x0.to_bits(),
+            b.y0.to_bits(),
+            b.x1.to_bits(),
+            b.y1.to_bits(),
             rr.radius().to_bits(),
             corners as u64,
         ];
@@ -499,10 +499,10 @@ impl Walk<'_> {
         if !s.union.unwrap_or_default() || n.children().is_empty() {
             // Local to its snapped corner, so a move keeps the path.
             let b = bounds(frame, self.spec.device_scale);
-            let size = Bounds::new(0., 0., b.max.x - b.min.x, b.max.y - b.min.y);
+            let size = Rect::new(0., 0., b.x1 - b.x0, b.y1 - b.y0);
             let rr = RoundedRect::new(size, convex)?;
             let path = self.rect_path(rr, s.corners.unwrap_or_default());
-            let offset = b.min;
+            let offset = b.origin();
             // A squircle is no longer a rounded rectangle, so it gives up the
             // analytic blur and the analytic shell inset with it; the path
             // route below draws both from the outline itself.
@@ -539,7 +539,7 @@ impl Walk<'_> {
             let child_rects = child
                 .shadow_rects
                 .iter()
-                .map(|r| r.translated(child.offset));
+                .map(|r| r.translated(child.offset.to_vec2()));
             // A rounded rect is one simple ring already: no normalizing pass.
             let child_shapes = match child_rect {
                 Some(r) => {

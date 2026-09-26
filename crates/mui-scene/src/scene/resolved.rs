@@ -2,7 +2,7 @@
 use rustc_hash::FxHashMap as HashMap;
 use std::sync::Arc;
 
-use mui_geometry::{Bounds, Path, Point, RoundedRect};
+use mui_geometry::{Path, Point, Rect, RoundedRect};
 use mui_layout::{Frame, Layout, Size};
 use mui_text::{Axes, Font};
 
@@ -184,7 +184,7 @@ impl Painted {
 fn placed(p: &Path, d: Point) -> Path {
     let mut p = p.clone();
     if d != Point::ZERO {
-        p.translate(d);
+        p.translate(d.to_vec2());
     }
     p
 }
@@ -201,7 +201,7 @@ pub struct ResolvedSurface {
     /// as it does a [`Painted::path`].
     pub path: Arc<Path>,
     /// The outline's bounds, in scene space.
-    pub bounds: Option<Bounds>,
+    pub bounds: Option<Rect>,
     /// Exact rounded rectangle when the outline is one (not welded). Local.
     pub rect: Option<RoundedRect>,
     /// Where `path`, `rect` and `hits` stand in the scene.
@@ -237,7 +237,7 @@ pub struct ResolvedSurface {
     /// This is kept as a rectangle for compatibility with the input adapter.
     /// [`Self::clip_path`] carries the same ancestor's actual outline for
     /// adapters that need corner-accurate filtering.
-    pub clip: Option<Bounds>,
+    pub clip: Option<Rect>,
     /// The clipping ancestors' outlines, cached during scene resolution from
     /// outermost to innermost. This is the path counterpart to [`Self::clip`];
     /// it avoids making every pointer query tessellate a rounded or welded

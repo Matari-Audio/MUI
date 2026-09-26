@@ -146,14 +146,14 @@ fn overlapping_holes_are_subtractions_not_xor() {
 fn reflection_does_not_cancel_union() {
     let a = r(0., 0., 100., 100.);
     let b = r(0., 0., 100., 100.)
-        .transformed(Affine::scale(-1., 1.).then(Affine::translation(100., 0.)));
+        .transformed(Affine::translate((100., 0.)) * Affine::scale_non_uniform(-1., 1.));
     near(u(&[a, b]).area(), 10000.);
 }
 #[test]
 fn arbitrary_rotation() {
     let a = r(0., 0., 300., 120.);
-    let b = r(30., -50., 100., 80.)
-        .transformed(Affine::rotation_about(PI * 0.2, Point::new(80., -10.)));
+    let b =
+        r(30., -50., 100., 80.).transformed(Affine::rotate_about(PI * 0.2, Point::new(80., -10.)));
     let s = rounded(&[a, b]);
     assert!(!s.path.flatten(0.1, 100000).unwrap().is_empty());
 }
@@ -247,7 +247,7 @@ fn negative_options_fail() {
 fn invalid_values_fail() {
     assert!(
         union(
-            &[r(0., 0., 20., 20.).transformed(Affine::translation(f64::NAN, 0.))],
+            &[r(0., 0., 20., 20.).transformed(Affine::translate((f64::NAN, 0.)))],
             GeometryOptions::default()
         )
         .is_err()
@@ -302,27 +302,20 @@ fn randomized_rectangles_have_finite_safe_arcs() {
         let y = rand() * 300. - 100.;
         let a = rand() * TAU;
         let b = r(x, y, 20. + rand() * 150., 20. + rand() * 150.)
-            .transformed(Affine::rotation_about(a, Point::new(x, y)));
+            .transformed(Affine::rotate_about(a, Point::new(x, y)));
         let t = u(&[r(0., 0., 250., 130.), b]);
         let s = fillet(&t, Fillet::default()).unwrap();
         assert!(s.path.flatten(0.2, 100000).is_ok());
         for c in s.corners.iter().flatten() {
             assert!(c.effective_radius.is_finite() && c.effective_radius >= 0.);
-            assert!(c.start.finite() && c.end.finite());
+            assert!(c.start.is_finite() && c.end.is_finite());
         }
     }
 }
 const TAU: f64 = PI * 2.;
 
 fn rr(w: f64, h: f64, r: f64) -> RoundedRect {
-    RoundedRect::new(
-        Bounds {
-            min: Point::ZERO,
-            max: Point::new(w, h),
-        },
-        r,
-    )
-    .unwrap()
+    RoundedRect::new(Rect::new(0., 0., w, h), r).unwrap()
 }
 #[test]
 fn concentric_inset_preserves_arc_centers() {
@@ -373,10 +366,10 @@ fn rectangle_offset_matches_analytic() {
     let p = rr(180., 120., 28.).path();
     let i = inset_path(&p, 12., OffsetOptions::default()).unwrap();
     let b = i.topology.bounds().unwrap();
-    near(b.min.x, 12.);
-    near(b.min.y, 12.);
-    near(b.max.x, 168.);
-    near(b.max.y, 108.);
+    near(b.x0, 12.);
+    near(b.y0, 12.);
+    near(b.x1, 168.);
+    near(b.y1, 108.);
     let expected = (180. - 24.) * (120. - 24.) - (4. - PI) * 16_f64.powi(2);
     assert!(
         (i.topology.area() - expected).abs() < 8.,
@@ -514,8 +507,7 @@ fn ring_validation_finds_far_touches_and_crossings() {
     use crate::math::validate_simple;
     let circle: Vec<_> = (0..400)
         .map(|i| {
-            Point::new(0., 0.)
-                + Point::new(1., 0.).rotated(i as f64 / 400. * std::f64::consts::TAU) * 100.
+            Point::new(0., 0.) + Vec2::from_angle(i as f64 / 400. * std::f64::consts::TAU) * 100.
         })
         .collect();
     assert!(validate_simple(&circle, 1e-7).is_ok());
@@ -596,7 +588,7 @@ fn randomized_inset_boundary_clearance() {
                 40. + rand() * 90.,
                 50. + rand() * 80.,
             )
-            .transformed(Affine::rotation(rand() * PI)),
+            .transformed(Affine::rotate(rand() * PI)),
         ]);
         let p = fillet(&t, Fillet::default()).unwrap().path;
         let source = p.flatten(0.002, 50000).unwrap();
@@ -620,7 +612,7 @@ fn randomized_inset_boundary_clearance() {
 /// out than the arc it replaced.
 #[test]
 fn a_squircle_corner_stays_in_the_box_and_bulges_past_the_arc() {
-    let b = Bounds::new(0., 0., 100., 100.);
+    let b = Rect::new(0., 0., 100., 100.);
     let round = RoundedRect::new(b, 25.).unwrap().path();
     let squircle = CornerStyle::Squircle.shape(&round);
     // The corner's 45-degree point is the extreme of `x + y` toward (0, 0).
@@ -631,10 +623,10 @@ fn a_squircle_corner_stays_in_the_box_and_bulges_past_the_arc() {
             .flatten()
             .inspect(|q| {
                 assert!(
-                    q.x >= b.min.x - 1e-9
-                        && q.y >= b.min.y - 1e-9
-                        && q.x <= b.max.x + 1e-9
-                        && q.y <= b.max.y + 1e-9,
+                    q.x >= b.x0 - 1e-9
+                        && q.y >= b.y0 - 1e-9
+                        && q.x <= b.x1 + 1e-9
+                        && q.y <= b.y1 + 1e-9,
                     "{q:?} left the rounded rect's own box"
                 );
             })
@@ -685,7 +677,7 @@ fn inset_treats_overlapping_subpaths_as_nonzero() {
 #[test]
 fn clean_ring_drops_a_dense_diameter_in_one_pass() {
     let m = 20_000;
-    let arc = (0..=m).map(|i| Point::new(1000., 0.).rotated(PI * i as f64 / m as f64));
+    let arc = (0..=m).map(|i| (Vec2::from_angle(PI * i as f64 / m as f64) * 1000.).to_point());
     let diameter = (1..m).map(|j| Point::new(-1000. + 2000. * j as f64 / m as f64, 0.));
     let ring: Vec<_> = arc.chain(diameter).collect();
     let clean = crate::math::clean_ring(&ring, 1e-7).unwrap();

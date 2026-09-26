@@ -271,7 +271,7 @@ fn checked_size(device: &wgpu::Device, size: [u32; 2]) -> Result<(), Error> {
 
 fn visible(e: &ExternalWeld, xf: Affine, size: [u32; 2]) -> bool {
     let b = e.bounds();
-    let r = xf.transform_rect_bbox(Rect::new(b.min.x, b.min.y, b.max.x, b.max.y));
+    let r = xf.transform_rect_bbox(b);
     r.x1 > 0. && r.y1 > 0. && r.x0 < f64::from(size[0]) && r.y0 < f64::from(size[1])
 }
 
@@ -880,7 +880,7 @@ impl GpuRenderer {
                         .ok_or_else(|| Error::Missing(p.key.to_string()))?
                         .clone();
                     let b = e.bounds();
-                    let r = Rect::new(b.min.x, b.min.y, b.max.x, b.max.y);
+                    let r = b;
                     let local = Affine::translate((r.x0, r.y0))
                         * Affine::scale_non_uniform(
                             r.width() / f64::from(image.width),

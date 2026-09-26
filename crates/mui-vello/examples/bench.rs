@@ -118,7 +118,8 @@ fn editor(ui: &mut Ui, app: &mut App) -> El {
                 &mut app.sliders[i],
                 0.0..=1.0,
             )
-            .el.into_el()
+            .el
+            .into_el()
         })
         .collect();
     let labels: Vec<El> = (0..200).map(|i| caption(format!("p{i:03}"))).collect();

@@ -1,7 +1,7 @@
 //! One node of the walk: its outline, paint, surface and children.
 use std::sync::Arc;
 
-use mui_geometry::{Bounds, Path, Point, RoundedRect};
+use mui_geometry::{Path, Point, Rect, RoundedRect, Vec2};
 use mui_layout::{Frame, Size};
 
 use super::bar::{self, BAR_MARGIN, BAR_STRIP, BAR_THIN, BAR_WIDE};
@@ -135,7 +135,7 @@ impl<'a> Walk<'a> {
         };
         let hits = self.content(e, at, &key, &contour, &mut bg, under)?;
         let content = self.content_size(n, at, frame);
-        let shape_bounds = contour.bounds()?.map(|b| b.translated(contour.offset));
+        let shape_bounds = contour.bounds()?.map(|b| b + contour.offset.to_vec2());
 
         let surface = self.surfaces.len();
         self.at.insert(key.clone(), surface);
@@ -359,8 +359,8 @@ impl<'a> Walk<'a> {
         {
             return false;
         }
-        let d = Point::new(frame.x - old.origin.x, frame.y - old.origin.y);
-        let moved = d != Point::ZERO;
+        let d = Vec2::new(frame.x - old.origin.x, frame.y - old.origin.y);
+        let moved = d != Vec2::ZERO;
         let grid = |v: f64| {
             self.spec
                 .device_scale
@@ -401,7 +401,7 @@ impl<'a> Walk<'a> {
                 s.paint.start - old.paint.start + paint..s.paint.end - old.paint.start + paint;
             s.surfaces = s.surfaces.start - old.surfaces.start + surfaces
                 ..s.surfaces.end - old.surfaces.start + surfaces;
-            s.origin = s.origin + d;
+            s.origin += d;
             self.memos.push(s);
         }
         self.age = self.age.max(age);
@@ -469,9 +469,9 @@ impl<'a> Walk<'a> {
                 // Hits are local to the surface's offset, the outline's.
                 let d = origin - contour.offset;
                 for ((k, draw), local) in draws.iter().enumerate().zip(paths) {
-                    let d = d + draw.at;
+                    let d = d + draw.at.to_vec2();
                     if let Some(tag) = &draw.tag {
-                        let hit = if d == Point::ZERO {
+                        let hit = if d == Vec2::ZERO {
                             local.clone()
                         } else {
                             let mut p = Path::clone(&local);
@@ -482,7 +482,7 @@ impl<'a> Walk<'a> {
                     }
                     if let Some(p) = self.push(Layer::Draw(k), local, None, &draw.fill, *bg) {
                         p.width = draw.width;
-                        p.offset = origin + draw.at;
+                        p.offset = origin + draw.at.to_vec2();
                     }
                 }
             }
@@ -686,18 +686,18 @@ impl<'a> Walk<'a> {
     /// as the exact path.
     fn clip(
         &mut self,
-        b: Option<Bounds>,
+        b: Option<Rect>,
         contour: &Contour,
         frame: Frame,
         inner: &mut Ancestors,
     ) -> Result<(), SceneError> {
         let b = b.unwrap_or_else(|| bounds(frame, self.spec.device_scale));
         let b = inner.clip.map_or(b, |c| {
-            Bounds::new(
-                b.min.x.max(c.min.x),
-                b.min.y.max(c.min.y),
-                b.max.x.min(c.max.x),
-                b.max.y.min(c.max.y),
+            Rect::new(
+                b.x0.max(c.x0),
+                b.y0.max(c.y0),
+                b.x1.min(c.x1),
+                b.y1.min(c.y1),
             )
         });
         self.mark_on(Layer::Clip, contour);
@@ -834,11 +834,11 @@ type Clips = Arc<[super::PlacedPath]>;
 /// the paths are local and stay the same `Arc`s. Clip lists shared between
 /// surfaces are moved once and stay shared.
 struct Shift {
-    d: Point,
+    d: Vec2,
     lists: Vec<(*const [super::PlacedPath], Clips)>,
 }
 impl Shift {
-    fn new(d: Point) -> Self {
+    fn new(d: Vec2) -> Self {
         Self {
             d,
             lists: Vec::new(),
@@ -846,10 +846,10 @@ impl Shift {
     }
     fn painted(&mut self, p: &Painted) -> Painted {
         let mut p = p.clone();
-        if self.d != Point::ZERO {
+        if self.d != Vec2::ZERO {
             match &mut p.text {
-                Some(t) => t.origin = t.origin + self.d,
-                None => p.offset = p.offset + self.d,
+                Some(t) => t.origin += self.d,
+                None => p.offset += self.d,
             }
         }
         p
@@ -857,14 +857,14 @@ impl Shift {
     fn surface(&mut self, s: &ResolvedSurface) -> ResolvedSurface {
         let mut s = s.clone();
         let d = self.d;
-        if d == Point::ZERO {
+        if d == Vec2::ZERO {
             return s;
         }
         s.frame.x += d.x;
         s.frame.y += d.y;
-        s.bounds = s.bounds.map(|b| b.translated(d));
-        s.offset = s.offset + d;
-        s.clip = s.clip.map(|b| b.translated(d));
+        s.bounds = s.bounds.map(|b| b + d);
+        s.offset += d;
+        s.clip = s.clip.map(|b| b + d);
         if let Some(list) = &s.clip_path {
             let at = Arc::as_ptr(list);
             s.clip_path = Some(
@@ -1287,8 +1287,8 @@ mod tests {
             .iter()
             .map(|k| {
                 let s = s.surface(k).unwrap();
-                let b = s.rect.unwrap().bounds().translated(s.offset);
-                [b.min.x, b.max.x]
+                let b = s.rect.unwrap().bounds() + s.offset.to_vec2();
+                [b.x0, b.x1]
             })
             .collect();
         for e in edges.iter().flatten() {

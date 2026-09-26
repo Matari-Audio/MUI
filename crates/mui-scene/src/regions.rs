@@ -1,7 +1,7 @@
 //! Shape-aware layout: ordinary rows, columns and stacks inherit an inset contour.
 use crate::{BorderAlign, El, SceneError, Spacing};
 use mui_geometry::{
-    BooleanOp, Bounds, GeometryOptions, OffsetOptions, Path, PathCommand, Point, ShapeSplit,
+    BooleanOp, GeometryOptions, OffsetOptions, Path, PathCommand, Point, Rect, ShapeSplit, Vec2,
     boolean_paths, inset_path, union_contours,
 };
 
@@ -47,7 +47,7 @@ pub(crate) enum Operation {
     Combine(Path, Path, BooleanOp),
     /// A nonzero sweep consists of overlapping solid pieces, not even-odd holes.
     Sweep(Path),
-    SplitMask(Bounds, ShapeSplit, bool),
+    SplitMask(Rect, ShapeSplit, bool),
     /// The band of a uniform stroke on a path outline.
     Border(Path, f64, BorderAlign),
 }
@@ -64,7 +64,7 @@ impl Operation {
             Self::Inset(p, _) | Self::Combine(p, ..) | Self::Sweep(p) | Self::Border(p, ..) => {
                 first(p)
             }
-            Self::SplitMask(b, ..) => b.min,
+            Self::SplitMask(b, ..) => b.origin(),
         }
     }
     /// Equal but for the last bits a translation rounds away: one input
@@ -81,17 +81,14 @@ impl Operation {
             (a, b) => a == b,
         }
     }
-    fn translate(&mut self, d: Point) {
+    fn translate(&mut self, d: Vec2) {
         match self {
             Self::Inset(p, _) | Self::Sweep(p) | Self::Border(p, ..) => p.translate(d),
             Self::Combine(a, b, _) => {
                 a.translate(d);
                 b.translate(d);
             }
-            Self::SplitMask(b, ..) => {
-                b.min = b.min + d;
-                b.max = b.max + d;
-            }
+            Self::SplitMask(b, ..) => *b = *b + d,
         }
     }
 }
@@ -134,7 +131,7 @@ impl RegionCache {
         o: OffsetOptions,
         g: GeometryOptions,
     ) -> Result<(Path, bool), SceneError> {
-        let origin = op.origin();
+        let origin = op.origin().to_vec2();
         op.translate(-origin);
         let world = |mut p: Path| {
             p.translate(origin);

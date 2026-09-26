@@ -2,7 +2,7 @@
 use std::ops::Range;
 use std::sync::Arc;
 
-use mui_geometry::{BooleanOp, Bounds, Path, Point, RoundedRect};
+use mui_geometry::{BooleanOp, Path, Point, Rect, RoundedRect};
 use mui_layout::{Frame, Insets, Size};
 
 use super::{SceneError, Walk, bounds, find, fit, missing};
@@ -144,7 +144,7 @@ impl Walk<'_> {
         &mut self,
         e: &Element,
         key: &Arc<str>,
-        b: Bounds,
+        b: Rect,
         children: &[(usize, &El, usize)],
     ) -> Result<Vec<Path>, SceneError> {
         let mut masks: Vec<Path> = children
@@ -164,7 +164,7 @@ impl Walk<'_> {
         if children.len() != 2 {
             return Err(mui_geometry::Error::InvalidOptions("bend requires two siblings").into());
         }
-        let size = Size::new(b.max.x - b.min.x, b.max.y - b.min.y);
+        let size = Size::new(b.x1 - b.x0, b.y1 - b.y0);
         let a = self.frames[children[0].0];
         let z = self.frames[children[1].0];
         let horizontal = z.x >= a.right() - 1e-6;
@@ -176,13 +176,13 @@ impl Walk<'_> {
         let (axis, cut, gap) = if horizontal {
             (
                 mui_geometry::SplitAxis::X,
-                ((a.right() + z.x) * 0.5 - b.min.x) / size.width,
+                ((a.right() + z.x) * 0.5 - b.x0) / size.width,
                 z.x - a.right(),
             )
         } else {
             (
                 mui_geometry::SplitAxis::Y,
-                ((a.bottom() + z.y) * 0.5 - b.min.y) / size.height,
+                ((a.bottom() + z.y) * 0.5 - b.y0) / size.height,
                 z.y - a.bottom(),
             )
         };
@@ -279,11 +279,11 @@ impl Walk<'_> {
         &mut self,
         root: &El,
         padding: Insets,
-        b: Bounds,
+        b: Rect,
         range: Range<usize>,
         skip: usize,
     ) -> Result<(), SceneError> {
-        let size = Size::new(b.max.x - b.min.x, b.max.y - b.min.y);
+        let size = Size::new(b.x1 - b.x0, b.y1 - b.y0);
         let th = self.spec.theme;
         let layout = mui_layout::resolve_boxed_with(
             root,
@@ -298,8 +298,8 @@ impl Walk<'_> {
             .zip(&layout.all()[skip..])
         {
             *dest = Frame {
-                x: f.x + b.min.x,
-                y: f.y + b.min.y,
+                x: f.x + b.x0,
+                y: f.y + b.y0,
                 size: f.size,
             };
         }
@@ -313,9 +313,9 @@ impl Walk<'_> {
         }
     }
 
-    fn flat_bounds(&self, path: &Path) -> Result<Option<Bounds>, SceneError> {
+    fn flat_bounds(&self, path: &Path) -> Result<Option<Rect>, SceneError> {
         let o = self.spec.offsets;
-        Ok(Bounds::from_points(
+        Ok(mui_geometry::bounds(
             path.flatten(o.flatten_tolerance, o.max_points)?.concat(),
         ))
     }

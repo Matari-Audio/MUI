@@ -394,7 +394,7 @@ mod tests {
     use super::*;
     use crate::test_fonts::{emoji, hack, inter, symbols};
     use crate::{Weight, glyph_path};
-    use mui_geometry::{PathCommand, Point};
+    use mui_geometry::PathCommand;
 
     #[test]
     fn the_shaper_applies_feature_variations_at_the_fill_extreme() {
@@ -445,7 +445,9 @@ mod tests {
         let a = glyph_path(&hack(), 'a', 96., &[], 0.05).unwrap();
         let b = glyph_path(&hack(), 'b', 96., &[], 0.05).unwrap();
         let advance = text_run(&[hack()], "a", 96., &[], 0.05).unwrap().advance;
-        let shifted = b.rigid_transform(Point::new(advance, 0.), 0.).unwrap();
+        let shifted = b
+            .rigid_transform(mui_geometry::Vec2::new(advance, 0.), 0.)
+            .unwrap();
         let expected: Vec<PathCommand> =
             a.commands.iter().copied().chain(shifted.commands).collect();
         assert_eq!(run.path.commands.len(), expected.len());
@@ -470,10 +472,9 @@ mod tests {
         assert!(run.descent > 0., "descent is below the baseline: {run:?}");
         assert!(run.line_height >= run.ascent + run.descent, "{run:?}");
         let bounds =
-            mui_geometry::Bounds::from_points(run.path.flatten(0.05, 250_000).unwrap().concat())
-                .unwrap();
-        assert!(-bounds.min.y <= run.ascent, "ink fits above the baseline");
-        assert!(bounds.max.y <= run.descent, "and below it");
+            mui_geometry::bounds(run.path.flatten(0.05, 250_000).unwrap().concat()).unwrap();
+        assert!(-bounds.y0 <= run.ascent, "ink fits above the baseline");
+        assert!(bounds.y1 <= run.descent, "and below it");
     }
 
     #[test]

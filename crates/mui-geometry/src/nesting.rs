@@ -1,11 +1,11 @@
 //! Nesting is a geometric relationship, not an inherited CSS-like radius.
-use crate::{Arc, Bounds, Error, Path, PathCommand, Point};
+use crate::{Arc, Error, Path, PathCommand, Point, Rect, Vec2};
 use std::f64::consts::FRAC_PI_2;
 
 /// Validated circular-corner rectangle. Fields cannot be changed independently.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RoundedRect {
-    bounds: Bounds,
+    bounds: Rect,
     radius: f64,
 }
 
@@ -28,15 +28,15 @@ fn nonnegative(x: f64) -> Result<(), Error> {
 
 impl RoundedRect {
     /// The same rectangle moved by `d`; a translation keeps it valid.
-    pub fn translated(self, d: Point) -> Self {
+    pub fn translated(self, d: Vec2) -> Self {
         Self {
-            bounds: self.bounds.translated(d),
+            bounds: self.bounds + d,
             ..self
         }
     }
-    pub fn new(bounds: Bounds, requested_radius: f64) -> Result<Self, Error> {
+    pub fn new(bounds: Rect, requested_radius: f64) -> Result<Self, Error> {
         nonnegative(requested_radius)?;
-        if !bounds.min.finite() || !bounds.max.finite() {
+        if !bounds.is_finite() {
             return Err(Error::NonFinite);
         }
         let w = bounds.width();
@@ -52,7 +52,7 @@ impl RoundedRect {
             radius: requested_radius.min(0.5 * w.min(h)),
         })
     }
-    pub fn bounds(self) -> Bounds {
+    pub fn bounds(self) -> Rect {
         self.bounds
     }
     pub fn radius(self) -> f64 {
@@ -70,11 +70,7 @@ impl RoundedRect {
                 corner_collapsed: collapsed,
             });
         }
-        let d = Point::new(inset, inset);
-        let bounds = Bounds {
-            min: self.bounds.min + d,
-            max: self.bounds.max - d,
-        };
+        let bounds = self.bounds.inset(-inset);
         Ok(InsetRect {
             shape: Some(Self::new(bounds, (self.radius - inset).max(0.0))?),
             corner_collapsed: collapsed,
@@ -85,11 +81,7 @@ impl RoundedRect {
     /// convex arc radius grows by exactly `outset`, preserving a uniform shell.
     pub fn outset(self, outset: f64) -> Result<Self, Error> {
         nonnegative(outset)?;
-        let d = Point::new(outset, outset);
-        let bounds = Bounds {
-            min: self.bounds.min - d,
-            max: self.bounds.max + d,
-        };
+        let bounds = self.bounds.inset(outset);
         Self::new(bounds, self.radius + outset)
     }
 
@@ -100,34 +92,34 @@ impl RoundedRect {
         if r == 0.0 {
             return Path {
                 commands: vec![
-                    PathCommand::MoveTo(b.min),
-                    PathCommand::LineTo(Point::new(b.max.x, b.min.y)),
-                    PathCommand::LineTo(b.max),
-                    PathCommand::LineTo(Point::new(b.min.x, b.max.y)),
+                    PathCommand::MoveTo(b.origin()),
+                    PathCommand::LineTo(Point::new(b.x1, b.y0)),
+                    PathCommand::LineTo(Point::new(b.x1, b.y1)),
+                    PathCommand::LineTo(Point::new(b.x0, b.y1)),
                     PathCommand::Close,
                 ],
             };
         }
         let centers = [
-            Point::new(b.max.x - r, b.min.y + r),
-            Point::new(b.max.x - r, b.max.y - r),
-            Point::new(b.min.x + r, b.max.y - r),
-            Point::new(b.min.x + r, b.min.y + r),
+            Point::new(b.x1 - r, b.y0 + r),
+            Point::new(b.x1 - r, b.y1 - r),
+            Point::new(b.x0 + r, b.y1 - r),
+            Point::new(b.x0 + r, b.y0 + r),
         ];
         let starts = [-FRAC_PI_2, 0.0, FRAC_PI_2, 2.0 * FRAC_PI_2];
         let ends = [
-            Point::new(b.max.x, b.min.y + r),
-            Point::new(b.max.x - r, b.max.y),
-            Point::new(b.min.x, b.max.y - r),
-            Point::new(b.min.x + r, b.min.y),
+            Point::new(b.x1, b.y0 + r),
+            Point::new(b.x1 - r, b.y1),
+            Point::new(b.x0, b.y1 - r),
+            Point::new(b.x0 + r, b.y0),
         ];
         let tangent_starts = [
-            Point::new(b.max.x - r, b.min.y),
-            Point::new(b.max.x, b.max.y - r),
-            Point::new(b.min.x + r, b.max.y),
-            Point::new(b.min.x, b.min.y + r),
+            Point::new(b.x1 - r, b.y0),
+            Point::new(b.x1, b.y1 - r),
+            Point::new(b.x0 + r, b.y1),
+            Point::new(b.x0, b.y0 + r),
         ];
-        let mut commands = vec![PathCommand::MoveTo(Point::new(b.min.x + r, b.min.y))];
+        let mut commands = vec![PathCommand::MoveTo(Point::new(b.x0 + r, b.y0))];
         for i in 0..4 {
             commands.push(PathCommand::LineTo(tangent_starts[i]));
             commands.push(PathCommand::ArcTo(Arc {

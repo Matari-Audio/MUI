@@ -1,7 +1,7 @@
 //! Renderer-independent external material nodes. The renderer owns GPU handles;
 //! the scene owns placement, authored identity, and the validated material spec.
 use crate::{ResolvedScene, SceneError};
-use mui_geometry::{Bounds, Point, RoundedRect};
+use mui_geometry::{Point, Rect, RoundedRect};
 use mui_weld::{Point as WeldPoint, analytic::AnalyticWeld};
 use std::sync::Arc;
 
@@ -23,9 +23,9 @@ pub struct ExternalWeld {
     pub material: Arc<AnalyticWeld>,
 }
 impl ExternalWeld {
-    pub fn bounds(&self) -> Bounds {
+    pub fn bounds(&self) -> Rect {
         let b = self.material.domain();
-        Bounds::new(
+        Rect::new(
             b.x0 + self.origin.x,
             b.y0 + self.origin.y,
             b.x1 + self.origin.x,

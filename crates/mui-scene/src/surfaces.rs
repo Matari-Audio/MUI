@@ -224,8 +224,8 @@ impl Cache {
             local(body);
         }
         let mut outline = outline.clone();
-        outline.translate(-origin);
-        border.translate(-origin);
+        outline.translate(-origin.to_vec2());
+        border.translate(-origin.to_vec2());
         let input = Inputs {
             outline,
             border,
@@ -257,7 +257,7 @@ impl Cache {
                 *i += at;
             }
             g.origin = origin;
-            g.joins.translate(origin);
+            g.joins.translate(origin.to_vec2());
             g.join_nodes.iter_mut().for_each(|i| *i += at);
             g
         };
@@ -362,17 +362,17 @@ fn resolve(i: &Inputs) -> Result<Geometry, SceneError> {
         // Border labels own their cutout. Reserve their footprint here so a
         // merged well follows that one boundary instead of inventing a second
         // independently rounded notch around it.
-        let bounds = mui_geometry::Bounds::from_points(
+        let bounds = mui_geometry::bounds(
             frames
                 .iter()
                 .flat_map(|f| [Point::new(f.x, f.y), Point::new(f.right(), f.bottom())]),
         )
         .unwrap();
         for (_, tab, _, _) in &i.joins {
-            if tab.x >= bounds.min.x
-                && tab.right() <= bounds.max.x
-                && tab.y >= bounds.min.y
-                && tab.bottom() <= bounds.max.y
+            if tab.x >= bounds.x0
+                && tab.right() <= bounds.x1
+                && tab.y >= bounds.y0
+                && tab.bottom() <= bounds.y1
             {
                 shapes.push(
                     Polygon::rectangle(
@@ -390,10 +390,10 @@ fn resolve(i: &Inputs) -> Result<Geometry, SceneError> {
         // also includes ports or footer tabs. Those attachments must not pull
         // an interior material beyond the body's reserved border clearance.
         if let Some((_, _, body, _)) = i.joins.iter().find(|(_, _, body, _)| {
-            bounds.min.x >= body.x
-                && bounds.max.x <= body.right()
-                && bounds.min.y >= body.y
-                && bounds.max.y <= body.bottom()
+            bounds.x0 >= body.x
+                && bounds.x1 <= body.right()
+                && bounds.y0 >= body.y
+                && bounds.y1 <= body.bottom()
         }) {
             let body_path = Polygon::rectangle(body.x, body.y, body.size.width, body.size.height)?;
             let body_path = union(&[body_path.into()], i.geometry)?.to_path();
