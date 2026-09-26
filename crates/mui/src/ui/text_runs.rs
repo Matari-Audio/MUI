@@ -48,6 +48,11 @@ fn same(key: &Key, font: &Font, size: f64, axes: &[Axis<'_>]) -> bool {
 }
 
 impl TextRuns {
+    fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
     /// `text` shaped and outlined in `font` (then the `Ui`'s fallback faces)
     /// at `size` px, with the variation `axes` set (omitted axes sit at the
     /// face's defaults), shaped once and kept. `None` if it cannot shape.
@@ -59,7 +64,7 @@ impl TextRuns {
         axes: &[Axis<'_>],
     ) -> Option<Arc<TextRun>> {
         let fonts = {
-            let inner = self.0.lock().unwrap_or_else(|e| e.into_inner());
+            let inner = self.lock();
             let hit = inner
                 .sets
                 .iter()
@@ -75,29 +80,28 @@ impl TextRuns {
         };
         // Shaped outside the lock: another thread's hit need not wait on it.
         let run = Arc::new(mui_text::text_run(&fonts, text, size, axes, TOLERANCE).ok()?);
-        let mut inner = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let mut inner = self.lock();
         // ponytail: flushed whole at the cap; an LRU if canvases churn past it.
         if inner.len >= LIMIT {
             inner.sets.clear();
             inner.len = 0;
         }
-        let i = match inner
+        let i = if let Some(i) = inner
             .sets
             .iter()
             .position(|(k, _)| same(k, font, size, axes))
         {
-            Some(i) => i,
-            None => {
-                let key = (
-                    font.id(),
-                    size.to_bits(),
-                    axes.iter()
-                        .map(|(t, v)| ((*t).to_owned(), v.to_bits()))
-                        .collect(),
-                );
-                inner.sets.push((key, FxHashMap::default()));
-                inner.sets.len() - 1
-            }
+            i
+        } else {
+            let key = (
+                font.id(),
+                size.to_bits(),
+                axes.iter()
+                    .map(|(t, v)| ((*t).to_owned(), v.to_bits()))
+                    .collect(),
+            );
+            inner.sets.push((key, FxHashMap::default()));
+            inner.sets.len() - 1
         };
         if inner.sets[i]
             .1
@@ -111,7 +115,7 @@ impl TextRuns {
 
     /// How many runs are kept.
     pub fn len(&self) -> usize {
-        self.0.lock().unwrap_or_else(|e| e.into_inner()).len
+        self.lock().len
     }
 
     pub fn is_empty(&self) -> bool {
@@ -120,7 +124,7 @@ impl TextRuns {
 
     /// New fallback faces: every kept run may have picked differently.
     pub(super) fn set_fallbacks(&self, fallbacks: Vec<Font>) {
-        let mut inner = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let mut inner = self.lock();
         *inner = Inner {
             fallbacks,
             ..Inner::default()
