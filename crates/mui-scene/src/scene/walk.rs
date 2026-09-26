@@ -1,5 +1,4 @@
 //! One node of the walk: its outline, paint, surface and children.
-use std::fmt::Write as _;
 use std::sync::Arc;
 
 use mui_geometry::{Bounds, Path, Point, RoundedRect};
@@ -9,7 +8,8 @@ use super::bar::{self, BAR_MARGIN, BAR_STRIP, BAR_THIN, BAR_WIDE};
 use super::outline::Contour;
 use super::text::Face;
 use super::{
-    bounds, empty, snap, Ancestors, Deferred, Layer, ResolvedSurface, SceneError, Text, Walk,
+    bounds, empty, snap, Ancestors, Deferred, Layer, MemoSpan, Painted, ResolvedSurface,
+    SceneError, Text, Walk, MEMO_AGE,
 };
 use crate::{Color, Content, El, Element, Fill, Mix, ShadowKind, State};
 
@@ -33,6 +33,13 @@ impl<'a> Walk<'a> {
             self.i = at + self.sizes[at];
             return Ok(());
         }
+        let memo = match n.payload().extras().memo {
+            Some(m) if m.reused && self.splice(m.id, at, frame, path, under, ancestors) => {
+                return Ok(());
+            }
+            Some(m) => Some(self.open(m, at, frame, path, under, ancestors)),
+            None => None,
+        };
         let key = self.intern(n.key().unwrap_or(path));
         // Before the outline: its cache names the node by it.
         self.key = key.clone();
@@ -43,8 +50,8 @@ impl<'a> Walk<'a> {
         // A switched-off card switches off what it contains: nothing inside
         // it may be reached while its own frame cannot be.
         inner.disabled = ancestors.disabled || e.disabled;
-        if (e.inset_surface.is_some() && !self.regions.contains_key(&at))
-            || (e.border_join.is_some() && !self.joined_nodes.contains(&at))
+        if (e.extras().inset_surface.is_some() && !self.regions.contains_key(&at))
+            || (e.extras().border_join.is_some() && !self.joined_nodes.contains(&at))
         {
             return Err(mui_geometry::Error::InvalidOptions(
                 "material requires a surface-layout owner",
@@ -61,18 +68,23 @@ impl<'a> Walk<'a> {
             None => self.outline(n, frame, self.i)?,
         };
 
-        self.partition(n, &contour.path, frame, at, (&key, path.as_str()))?;
-        if e.surface_padding.is_some() {
+        // Regions and surfaces are laid out against frames: scene space.
+        let world = (e.extras().inside.is_some() || e.extras().surface_padding.is_some())
+            .then(|| contour.world());
+        let world = world.as_ref().unwrap_or(&contour.path);
+        self.partition(n, world, frame, at, (&key, path.as_str()))?;
+        if e.extras().surface_padding.is_some() {
             let geometry = self.surface_cache.resolve(
                 n,
                 (&key, at),
                 &self.frames,
-                &contour.path,
+                world,
                 self.spec,
                 self.region_cache,
             )?;
+            let origin = geometry.origin;
             self.regions
-                .extend(geometry.panels.into_iter().map(|(i, p)| (i, Arc::new(p))));
+                .extend(geometry.panels.into_iter().map(|(i, p)| (i, (p, origin))));
             self.joined_nodes.extend(geometry.join_nodes);
             self.surface_joins.insert(at, geometry.joins);
         }
@@ -96,7 +108,8 @@ impl<'a> Walk<'a> {
             self.mark(Layer::Blend { mix, opacity }, empty(), None);
         }
         if s.backdrop_blur > 0.0 {
-            self.mark(Layer::Backdrop, contour.path.clone(), contour.rect);
+            // In scene space: the renderer samples the backdrop there.
+            self.mark(Layer::Backdrop, contour.world(), contour.world_rect());
             if let Some(p) = self.paint.last_mut() {
                 p.blur = s.backdrop_blur;
             }
@@ -109,24 +122,24 @@ impl<'a> Walk<'a> {
         let mut bg = self.shells(s, &mut contour, bg)?;
         self.inset_shadows(s, &contour, bg)?;
         let late_stroke = match &s.stroke {
-            Some(st) if material.is_none() && e.border_ramp.is_none() => {
+            Some(st) if material.is_none() && e.extras().border_ramp.is_none() => {
                 self.stroke(st, e, &contour, bg)?
             }
             _ => None,
         };
         let hits = self.content(e, at, &key, &contour, &mut bg, under)?;
         let content = self.content_size(n, at, frame);
-        let shape_bounds = contour.bounds()?;
+        let shape_bounds = contour.bounds()?.map(|b| b.translated(contour.offset));
 
         let surface = self.surfaces.len();
         self.at.insert(key.clone(), surface);
         let (semantics, semantic_label_implicit) = match (&e.semantics, &e.content) {
             (Some(semantics), Content::Text(text)) if semantics.label.is_none() => {
-                let mut semantics = semantics.clone();
+                let mut semantics = crate::Semantics::clone(semantics);
                 semantics.label = Some(text.clone());
                 (Some(semantics), true)
             }
-            (semantics, _) => (semantics.clone(), false),
+            (semantics, _) => (semantics.as_deref().cloned(), false),
         };
         self.surfaces.push(ResolvedSurface {
             key: key.clone(),
@@ -134,11 +147,13 @@ impl<'a> Walk<'a> {
             bounds: shape_bounds,
             path: contour.path.clone(),
             rect: contour.rect,
+            offset: contour.offset,
             topology_changed: contour.changed,
             cursor: inner.cursor,
-            tip: e.tip.clone(),
+            tip: e.extras().tip.clone(),
             focusable: e.focusable,
             captures_wheel: e.captures_wheel,
+            tracks_pointer: e.tracks_pointer,
             pointer_states: e
                 .states
                 .iter()
@@ -164,7 +179,8 @@ impl<'a> Walk<'a> {
         // A union is one contour, so its children paint inside it: a square
         // tab's own fill stops at the filleted corner instead of poking past
         // the shared outline.
-        let clips = n.is_clip() || s.union || e.inside.is_some() || self.regions.contains_key(&at);
+        let clips =
+            n.is_clip() || s.union || e.extras().inside.is_some() || self.regions.contains_key(&at);
         if clips {
             let image = material.as_ref().map(|m| m.image_rect.bounds());
             let image = image.or(shape_bounds);
@@ -184,12 +200,20 @@ impl<'a> Walk<'a> {
         if clips {
             self.mark(Layer::Unclip, empty(), None);
         }
-        if let Some((stroke_path, stroke_rect, fill, width)) = late_stroke {
+        if let Some((stroke_path, stroke_rect, fill, width, clipped)) = late_stroke {
+            let at = contour.offset;
+            if clipped {
+                self.mark_at(Layer::Clip, stroke_path.clone(), None, at);
+            }
             if let Some(p) = self.push(Layer::Stroke, stroke_path, stroke_rect, &fill, bg) {
                 p.width = width;
+                p.offset = at;
+            }
+            if clipped {
+                self.mark(Layer::Unclip, empty(), None);
             }
         }
-        if let Some(ramp) = &e.border_ramp {
+        if let Some(ramp) = &e.extras().border_ramp {
             ramp.validate()?;
             if material.is_some() {
                 return Err(SceneError::UnsupportedWeld(
@@ -204,19 +228,175 @@ impl<'a> Walk<'a> {
             // The plates painted inside this node, so only its entries are
             // scanned, not everything painted before it.
             let own = self.paint.split_off(start);
+            let all = own.len();
             self.paint
                 .extend(own.into_iter().filter(|p| !m.consumes(&p.key, p.layer)));
+            if self.paint.len() - start != all {
+                // What a memo inside painted has been thinned: not copyable.
+                for s in self.memos.iter_mut().filter(|s| s.paint.start >= start) {
+                    s.closed = false;
+                }
+            }
         }
         if blended.is_some() {
             if masked {
-                self.push(Layer::Mask, contour.path.clone(), contour.rect, &s.mask, bg);
+                if let Some(p) =
+                    self.push(Layer::Mask, contour.path.clone(), contour.rect, &s.mask, bg)
+                {
+                    p.offset = contour.offset;
+                }
             }
             self.mark(Layer::Unblend, empty(), None);
         }
         if enveloped {
             self.mark(Layer::Unclip, empty(), None);
         }
+        if let Some(open) = memo {
+            self.close(open);
+        }
         Ok(())
+    }
+
+    /// Whether anything in the node range `at..at + size` takes a region,
+    /// an envelope, a join or a ramp anchor from the walk around it.
+    fn fed(&self, at: usize, size: usize) -> bool {
+        let inside = |k: &usize| (at..at + size).contains(k);
+        self.regions.keys().any(inside)
+            || self.region_envelopes.keys().any(inside)
+            || self.joined_nodes.iter().any(inside)
+            || self.ramp_anchors.keys().any(inside)
+            || self.surface_joins.keys().any(inside)
+    }
+
+    /// Start recording a memo's span; see [`MemoSpan`].
+    fn open(
+        &mut self,
+        m: crate::Memo,
+        at: usize,
+        frame: Frame,
+        path: &str,
+        under: Color,
+        ancestors: &Ancestors,
+    ) -> (usize, usize, usize) {
+        let size = self.sizes[at];
+        self.memos.push(MemoSpan {
+            id: m.id,
+            reused: m.reused,
+            at,
+            size,
+            paint: self.paint.len()..self.paint.len(),
+            surfaces: self.surfaces.len()..self.surfaces.len(),
+            nested: 0,
+            origin: Point::new(frame.x, frame.y),
+            path: path.to_owned(),
+            under,
+            base_y: self.base_y,
+            ancestors: ancestors.clone(),
+            closed: !self.fed(at, size),
+            floats: false,
+            generation: self.runs.generation,
+        });
+        (
+            self.memos.len() - 1,
+            self.deferred.len(),
+            self.external_welds.len(),
+        )
+    }
+
+    fn close(&mut self, (j, deferred, welds): (usize, usize, usize)) {
+        let (paint, surfaces, nested) = (self.paint.len(), self.surfaces.len(), self.memos.len());
+        let floats = self.deferred.len() != deferred;
+        let s = &mut self.memos[j];
+        s.paint.end = paint;
+        s.surfaces.end = surfaces;
+        s.nested = nested - j - 1;
+        s.floats = floats;
+        s.closed &= !floats && self.external_welds.len() == welds;
+    }
+
+    /// Paint a reused memo by copying last resolve's span of it, moved by
+    /// however far its origin did. Declines -- and the subtree is walked --
+    /// unless every frame in it moved by exactly that, on the device grid,
+    /// under the same inheritance, and nothing outside it fed its paint.
+    fn splice(
+        &mut self,
+        id: u64,
+        at: usize,
+        frame: Frame,
+        path: &str,
+        under: Color,
+        ancestors: &Ancestors,
+    ) -> bool {
+        let Some(prev) = self.prev else {
+            return false;
+        };
+        let Some(j) = prev.memos.iter().position(|s| s.id == id) else {
+            return false;
+        };
+        let old = &prev.memos[j];
+        let spans = &prev.memos[j..=j + old.nested];
+        let size = self.sizes[at];
+        let oldest = spans.iter().map(|s| s.generation).min().unwrap_or(0);
+        let age = self.runs.generation.wrapping_sub(oldest);
+        if !old.closed
+            || old.size != size
+            || old.path != path
+            || old.under != under
+            || old.base_y != self.base_y
+            || !old.ancestors.same(ancestors)
+            || age > MEMO_AGE
+            || self.fed(at, size)
+        {
+            return false;
+        }
+        let d = Point::new(frame.x - old.origin.x, frame.y - old.origin.y);
+        let moved = d != Point::ZERO;
+        let grid = |v: f64| {
+            self.spec
+                .device_scale
+                .is_none_or(|s| (v * s).fract() == 0.0)
+        };
+        // A moved span's clips are its own, so they move with it; an
+        // ancestor's would not.
+        if moved && (ancestors.clip.is_some() || !grid(d.x) || !grid(d.y)) {
+            return false;
+        }
+        let Some(was) = prev.layout.all().get(old.at..old.at + size) else {
+            return false;
+        };
+        let now = &self.frames[at..at + size];
+        if !was
+            .iter()
+            .zip(now)
+            .all(|(o, f)| f.x == o.x + d.x && f.y == o.y + d.y && f.size == o.size)
+        {
+            return false;
+        }
+        let (paint, surfaces) = (self.paint.len(), self.surfaces.len());
+        let mut shift = Shift::new(d);
+        self.paint.extend(
+            prev.paint[old.paint.clone()]
+                .iter()
+                .map(|p| shift.painted(p)),
+        );
+        for s in &prev.surfaces[old.surfaces.clone()] {
+            self.at.insert(s.key.clone(), self.surfaces.len());
+            self.surfaces.push(shift.surface(s));
+        }
+        for s in spans {
+            let mut s = s.clone();
+            s.reused = true;
+            s.at = s.at - old.at + at;
+            s.paint =
+                s.paint.start - old.paint.start + paint..s.paint.end - old.paint.start + paint;
+            s.surfaces = s.surfaces.start - old.surfaces.start + surfaces
+                ..s.surfaces.end - old.surfaces.start + surfaces;
+            s.origin = s.origin + d;
+            self.memos.push(s);
+        }
+        self.age = self.age.max(age);
+        self.i = at + size;
+        true
     }
 
     /// The node's text or canvas draws, clipped to its region when it has
@@ -233,7 +413,7 @@ impl<'a> Walk<'a> {
         let mut hits = Vec::new();
         let shaped = self.regions.contains_key(&at) && !matches!(e.content, Content::None);
         if shaped {
-            self.mark(Layer::Clip, contour.path.clone(), contour.rect);
+            self.mark_on(Layer::Clip, contour);
         }
         let frame = self.frames[at];
         match &e.content {
@@ -242,44 +422,58 @@ impl<'a> Walk<'a> {
                 self.text(e, t, frame, key, under)?;
             }
             Content::Canvas(c) => {
+                // Local to the frame corner, where the canvas draws from.
                 let origin = Point::new(frame.x, frame.y);
                 let draws = (c.0)(frame.size);
                 let generation = self.outlines.generation;
                 let paths = match self.outlines.canvases.get_mut(key) {
-                    Some((old, placed, paths, seen)) if Arc::ptr_eq(old, &draws) => {
-                        if *placed != origin {
-                            let d = origin - *placed;
-                            for p in paths.iter_mut() {
-                                Arc::make_mut(p).translate(d);
-                            }
-                            *placed = origin;
-                        }
+                    // A plain canvas draws a fresh list every frame, most
+                    // often the same shapes: those keep last frame's paths,
+                    // wherever it moved, unvalidated, uncopied and equal
+                    // downstream by pointer.
+                    Some((old, paths, seen))
+                        if Arc::ptr_eq(old, &draws)
+                            || old.len() == draws.len()
+                                && old.iter().zip(draws.iter()).all(|(a, b)| {
+                                    Arc::ptr_eq(&a.path, &b.path) || a.path == b.path
+                                }) =>
+                    {
+                        *old = draws.clone();
                         *seen = generation;
                         paths.clone()
                     }
                     _ => {
                         let paths = draws
                             .iter()
-                            .map(|d| {
-                                d.path.validate(100_000)?;
-                                let mut p = d.path.clone();
-                                p.translate(origin);
-                                Ok(Arc::new(p))
+                            .map(|draw| {
+                                draw.path.validate(100_000)?;
+                                Ok(draw.path.clone())
                             })
                             .collect::<Result<Vec<_>, SceneError>>()?;
-                        self.outlines.canvases.insert(
-                            key.clone(),
-                            (draws.clone(), origin, paths.clone(), generation),
-                        );
+                        self.outlines
+                            .canvases
+                            .insert(key.clone(), (draws.clone(), paths.clone(), generation));
                         paths
                     }
                 };
-                for ((k, d), moved) in draws.iter().enumerate().zip(paths) {
-                    if let Some(tag) = &d.tag {
-                        hits.push((Arc::clone(tag), moved.clone()));
+                // Hits are local to the surface's offset, the outline's.
+                let d = origin - contour.offset;
+                for ((k, draw), local) in draws.iter().enumerate().zip(paths) {
+                    let d = d + draw.at;
+                    if let Some(tag) = &draw.tag {
+                        let hit = match d == Point::ZERO {
+                            true => local.clone(),
+                            false => {
+                                let mut p = Path::clone(&local);
+                                p.translate(d);
+                                Arc::new(p)
+                            }
+                        };
+                        hits.push((Arc::clone(tag), hit));
                     }
-                    if let Some(p) = self.push(Layer::Draw(k), moved, None, &d.fill, *bg) {
-                        p.width = d.width;
+                    if let Some(p) = self.push(Layer::Draw(k), local, None, &draw.fill, *bg) {
+                        p.width = draw.width;
+                        p.offset = origin + draw.at;
                     }
                 }
             }
@@ -455,11 +649,13 @@ impl<'a> Walk<'a> {
                 bounds: Some(hit.bounds()),
                 path: Arc::new(hit.path()),
                 rect: Some(hit),
+                offset: Point::ZERO,
                 topology_changed: false,
                 cursor: None,
                 tip: None,
                 focusable: false,
                 captures_wheel: false,
+                tracks_pointer: false,
                 // Earns it a place in the hit map without an id.
                 pointer_states: true,
                 disabled: inner.disabled,
@@ -496,7 +692,7 @@ impl<'a> Walk<'a> {
                 b.max.y.min(c.max.y),
             )
         });
-        self.mark(Layer::Clip, contour.path.clone(), contour.rect);
+        self.mark_on(Layer::Clip, contour);
         inner.clip = Some(b);
         // Every exact outline in one allocation all descendants share.
         // `clip` remains the rectangular fast path used by existing input
@@ -507,8 +703,8 @@ impl<'a> Walk<'a> {
         inner.clip_paths = Some(
             outer
                 .iter()
-                .chain(std::iter::once(&contour.path))
                 .cloned()
+                .chain(std::iter::once((contour.path.clone(), contour.offset)))
                 .collect(),
         );
         Ok(())
@@ -534,7 +730,7 @@ impl<'a> Walk<'a> {
         for (j, c) in n.children().iter().enumerate() {
             self.base_y = bases.get(j).and_then(|b| b.map(|(y, _)| y));
             path.truncate(mark);
-            let _ = write!(path, "/{j}");
+            super::push_index(path, j);
             if c.payload().carve.is_some() {
                 // Already spent: it shaped the outline instead of painting.
                 self.i += self.sizes[self.i];
@@ -623,11 +819,109 @@ impl<'a> Walk<'a> {
     }
 }
 
+/// A clip list, and the same list moved.
+type Clips = Arc<[super::PlacedPath]>;
+
+/// A copied span moved by `d`: every offset, frame, origin and clip in it;
+/// the paths are local and stay the same `Arc`s. Clip lists shared between
+/// surfaces are moved once and stay shared.
+struct Shift {
+    d: Point,
+    lists: Vec<(*const [super::PlacedPath], Clips)>,
+}
+impl Shift {
+    fn new(d: Point) -> Self {
+        Self {
+            d,
+            lists: Vec::new(),
+        }
+    }
+    fn painted(&mut self, p: &Painted) -> Painted {
+        let mut p = p.clone();
+        if self.d != Point::ZERO {
+            match &mut p.text {
+                Some(t) => t.origin = t.origin + self.d,
+                None => p.offset = p.offset + self.d,
+            }
+        }
+        p
+    }
+    fn surface(&mut self, s: &ResolvedSurface) -> ResolvedSurface {
+        let mut s = s.clone();
+        let d = self.d;
+        if d == Point::ZERO {
+            return s;
+        }
+        s.frame.x += d.x;
+        s.frame.y += d.y;
+        s.bounds = s.bounds.map(|b| b.translated(d));
+        s.offset = s.offset + d;
+        s.clip = s.clip.map(|b| b.translated(d));
+        if let Some(list) = &s.clip_path {
+            let at = Arc::as_ptr(list);
+            s.clip_path = Some(
+                match self.lists.iter().find(|(p, _)| std::ptr::eq(*p, at)) {
+                    Some((_, moved)) => moved.clone(),
+                    None => {
+                        let moved: Clips = list.iter().map(|(p, o)| (p.clone(), *o + d)).collect();
+                        self.lists.push((at, moved.clone()));
+                        moved
+                    }
+                },
+            );
+        }
+        s
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::*;
     use crate::prelude::*;
     use crate::Paint;
+
+    /// Paths are local: two same-sized buttons paint one outline `Arc`, each
+    /// at its own offset, and a button that only moved keeps it -- its
+    /// surface too, so the hit map converts nothing new.
+    #[test]
+    fn same_shapes_share_one_path_and_a_move_keeps_it() {
+        let spec = |gap: f64| {
+            SceneSpec::new(
+                row((0..2).map(|i| {
+                    leaf(40., 20.)
+                        .radius(6.)
+                        .fill(Role::Primary)
+                        .id(format!("b{i}"))
+                }))
+                .gap(gap)
+                .pad(gap),
+            )
+        };
+        let fill = |s: &ResolvedScene, k: &str| {
+            s.paint
+                .iter()
+                .find(|p| p.layer == Layer::Fill && &*p.key == k)
+                .map(|p| (p.path.clone(), p.offset))
+                .unwrap()
+        };
+        let mut cache = TextCache::default();
+        let first = resolve_scene_with(&spec(4.), &mut cache).unwrap();
+        let ((a, at_a), (b, at_b)) = (fill(&first, "b0"), fill(&first, "b1"));
+        assert!(Arc::ptr_eq(&a, &b), "one path for both buttons");
+        assert_eq!((at_a, at_b), (Point::new(4., 4.), Point::new(48., 4.)));
+        let moved = resolve_scene_with(&spec(10.), &mut cache).unwrap();
+        let (c, at_c) = fill(&moved, "b1");
+        assert!(Arc::ptr_eq(&a, &c), "a move keeps the path");
+        assert_eq!(at_c, Point::new(60., 10.));
+        let s = moved.surface("b1").unwrap();
+        assert!(Arc::ptr_eq(&s.path, &a) && s.offset == at_c);
+        let placed = moved.surface("b1").unwrap().placed();
+        let first_point = match placed.commands[0] {
+            mui_geometry::PathCommand::MoveTo(p) => p,
+            ref c => panic!("{c:?}"),
+        };
+        assert!(first_point.x >= 60. && first_point.y >= 10.);
+    }
 
     /// The fade paints last, source-atop, and only inside the layer the node
     /// opened for it.
@@ -777,6 +1071,7 @@ mod tests {
         assert_eq!(paths.len(), 1);
         assert!(
             paths[0]
+                .0
                 .commands
                 .iter()
                 .any(|c| matches!(c, mui_geometry::PathCommand::ArcTo(_))),
@@ -812,12 +1107,12 @@ mod tests {
         );
         for (p, k) in paths.iter().zip(["outer", "inner"]) {
             assert!(
-                Arc::ptr_eq(p, &s.surface(k).unwrap().path),
+                Arc::ptr_eq(&p.0, &s.surface(k).unwrap().path),
                 "{k}'s clip is a copy of its outline"
             );
         }
         assert!(paths.iter().all(|p| {
-            p.commands
+            p.0.commands
                 .iter()
                 .any(|c| matches!(c, mui_geometry::PathCommand::ArcTo(_)))
         }));
@@ -871,7 +1166,7 @@ mod tests {
         assert_eq!(&**tag, "left");
         let pts = path.flatten(0.1, 1000).unwrap().concat();
         let top = pts.iter().map(|p| p.y).fold(f64::MAX, f64::min);
-        assert_eq!(top, 30., "moved into the node's frame");
+        assert_eq!(top + surface.offset.y, 30., "placed in the node's frame");
         assert!(
             !s.paint
                 .iter()
@@ -987,7 +1282,8 @@ mod tests {
         let edges: Vec<[f64; 2]> = ["a", "b", "c"]
             .iter()
             .map(|k| {
-                let b = s.surface(k).unwrap().rect.unwrap().bounds();
+                let s = s.surface(k).unwrap();
+                let b = s.rect.unwrap().bounds().translated(s.offset);
                 [b.min.x, b.max.x]
             })
             .collect();
@@ -1075,8 +1371,8 @@ mod tests {
         resolve_scene(&SceneSpec::new(root)).unwrap();
         assert_eq!(seen.get(), 1);
     }
-    /// A cached draw list that stays put paints the very same paths every
-    /// frame; one that moves paints them moved.
+    /// A cached draw list paints the very same paths every frame, where it
+    /// stays and where it moves: only its offset follows it.
     #[test]
     fn a_cached_canvas_reuses_its_placed_paths() {
         let cache = crate::CanvasCache::new();
@@ -1099,21 +1395,136 @@ mod tests {
             SceneSpec::new(column([draw]).pad(Spacing::Px(pad)))
         };
         let path = |s: &ResolvedScene| {
-            s.paint
-                .iter()
-                .find(|p| p.layer == Layer::Draw(0))
-                .unwrap()
-                .path
-                .clone()
+            let p = s.paint.iter().find(|p| p.layer == Layer::Draw(0)).unwrap();
+            (p.path.clone(), p.placed())
         };
         let mut text = TextCache::default();
-        let a = path(&resolve_scene_with(&spec(4.), &mut text).unwrap());
-        let b = path(&resolve_scene_with(&spec(4.), &mut text).unwrap());
+        let (a, _) = path(&resolve_scene_with(&spec(4.), &mut text).unwrap());
+        let (b, _) = path(&resolve_scene_with(&spec(4.), &mut text).unwrap());
         assert!(Arc::ptr_eq(&a, &b), "a still canvas re-placed its paths");
-        let moved = path(&resolve_scene_with(&spec(9.), &mut text).unwrap());
+        let (moved, placed) = path(&resolve_scene_with(&spec(9.), &mut text).unwrap());
+        assert!(
+            Arc::ptr_eq(&a, &moved),
+            "a moved canvas re-placed its paths"
+        );
         assert_eq!(
-            moved.commands[0],
+            placed.commands[0],
             mui_geometry::PathCommand::MoveTo(Point::new(9., 9.))
         );
+    }
+
+    /// A memoised panel after a lead of width `lead`: a rounded button, a
+    /// label and a canvas that counts its draws.
+    fn memo_spec(
+        lead: f64,
+        reused: bool,
+        draws: &Arc<std::sync::atomic::AtomicUsize>,
+    ) -> SceneSpec {
+        let count = draws.clone();
+        let mut panel = column([
+            leaf(40., 20.).fill(Role::Primary).radius(6.).id("m.a"),
+            text("kept").id("m.t"),
+            canvas(move |s| {
+                count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                vec![crate::Draw::fill(
+                    Path::polyline([Point::ZERO, Point::new(s.width, s.height)], true),
+                    Role::Ink,
+                )]
+            })
+            .size(10., 10.)
+            .id("m.c"),
+        ])
+        .fill(Role::Surface)
+        .id("m");
+        panel.payload_mut().extras_mut().memo = Some(crate::Memo { id: 7, reused });
+        let lead = leaf(lead, 10.).fill(Role::Raised);
+        let mut spec =
+            SceneSpec::new(row([lead, panel]).align(Align::Start)).offered(Size::new(300., 100.));
+        static FONT: std::sync::LazyLock<Font> = std::sync::LazyLock::new(super::super::font);
+        spec.font = Some(FONT.clone());
+        spec
+    }
+    fn draws() -> Arc<std::sync::atomic::AtomicUsize> {
+        Arc::default()
+    }
+    fn count(d: &Arc<std::sync::atomic::AtomicUsize>) -> usize {
+        d.load(std::sync::atomic::Ordering::Relaxed)
+    }
+    fn retained(
+        spec: &SceneSpec,
+        text: &mut TextCache,
+        prev: Option<&ResolvedScene>,
+    ) -> ResolvedScene {
+        resolve_scene_retained(
+            spec,
+            text,
+            &mut crate::WeldCache::default(),
+            &mut |_, _, f| f,
+            prev,
+        )
+        .unwrap()
+    }
+
+    /// A reused memo is copied, not walked: its canvas is not drawn again,
+    /// and what it paints is what a walk would, down to the same `Arc`s.
+    #[test]
+    fn a_reused_memo_copies_last_resolves_paint() {
+        let d = draws();
+        let mut text = TextCache::default();
+        let a = retained(&memo_spec(50., false, &d), &mut text, None);
+        let b = retained(&memo_spec(50., true, &d), &mut text, Some(&a));
+        assert_eq!(count(&d), 1, "the reused canvas was drawn again");
+        assert_eq!(a.paint, b.paint);
+        let shared = a
+            .paint
+            .iter()
+            .zip(&b.paint)
+            .filter(|(x, y)| Arc::ptr_eq(&x.path, &y.path));
+        assert_eq!(
+            shared.count(),
+            a.paint.len(),
+            "a copy keeps every path by pointer"
+        );
+        assert_eq!(b.surface("m.a"), a.surface("m.a"));
+    }
+
+    /// Moved by its neighbour, a reused memo is copied translated: paint
+    /// and surfaces land exactly where a walk puts them.
+    #[test]
+    fn a_moved_memo_translates_its_paint_and_surfaces() {
+        let d = draws();
+        let mut text = TextCache::default();
+        let a = retained(&memo_spec(50., false, &d), &mut text, None);
+        let b = retained(&memo_spec(70., true, &d), &mut text, Some(&a));
+        assert_eq!(count(&d), 1, "a moved memo was walked instead of copied");
+        let walked =
+            resolve_scene_with(&memo_spec(70., false, &draws()), &mut TextCache::default())
+                .unwrap();
+        assert_eq!(b.paint, walked.paint);
+        for k in ["m", "m.a", "m.t", "m.c"] {
+            assert_eq!(b.surface(k), walked.surface(k), "{k}");
+        }
+        assert_eq!(b.surface("m.a").unwrap().frame.x, 70.);
+    }
+
+    /// The caches a copied memo used stay warm while it is copied, and its
+    /// walk renews them once they are [`MEMO_AGE`] resolves old.
+    #[test]
+    fn a_copied_memo_keeps_its_cache_entries() {
+        let d = draws();
+        let mut text = TextCache::default();
+        let mut prev = retained(&memo_spec(50., false, &d), &mut text, None);
+        for i in 0..MEMO_AGE + 3 {
+            prev = retained(&memo_spec(50., true, &d), &mut text, Some(&prev));
+            assert!(
+                text.runs.contains_key("kept"),
+                "the label's run was swept at {i}"
+            );
+            assert!(
+                !text.outlines.rects.is_empty(),
+                "the button's rect was swept at {i}"
+            );
+        }
+        assert_eq!(count(&d), 2, "walked once when first built, once to renew");
     }
 }

@@ -26,13 +26,29 @@ pub use id::Id;
 pub use len::{Align, Insets, Justify, Len, Size};
 pub use mui_geometry::{Spacing, SpacingScale, SpacingToken};
 pub use node::{column, fits, grid, leaf, overlay, row, Node};
+
+/// What a measurer says about a content leaf: its size in the room it was
+/// given, and the narrowest a flex parent may squeeze it to -- for text, its
+/// widest word, the way CSS `min-width: auto` keeps a flex item at its
+/// min-content. A bare [`Size`] is squeezable to nothing.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Intrinsic {
+    pub size: Size,
+    pub min_width: f64,
+}
+impl From<Size> for Intrinsic {
+    fn from(size: Size) -> Self {
+        Self {
+            size,
+            min_width: 0.0,
+        }
+    }
+}
 pub use pin::{Area, Match, Pin};
 
 pub(crate) use arrange::{arrange, distribute};
-pub(crate) use measure::{
-    cell_default, grid_rows, label, measure, place, wrap_lines, Measured, Pass,
-};
-pub(crate) use node::Kind;
+pub(crate) use measure::{cell_default, grid_rows, measure, place, wrap_lines, Measured, Pass};
+pub(crate) use node::{Kind, Rare};
 pub(crate) use pin::{inside, Pins, Viewport};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -72,9 +88,11 @@ impl Frame {
 pub struct Layout {
     pub size: Size,
     min: Size,
-    /// Shared, as is `order`, so the layout cache hands back an unchanged
-    /// frame's layout without copying it.
-    frames: Arc<BTreeMap<Id, Frame>>,
+    /// Every named node and its index into `order`, in tree order. Shared,
+    /// as is `order`, so the layout cache hands back an unchanged frame's
+    /// layout without copying it. Nothing on a frame's path looks a name
+    /// up, so none is sorted or hashed for it.
+    named: Arc<Vec<(Id, u32)>>,
     /// Every node's frame, in tree order (parent first, then children in
     /// declaration order). A walk of the same tree indexes straight into it,
     /// so nothing needs a name to be found.
@@ -84,8 +102,9 @@ impl Layout {
     /// The smallest this tree can be squeezed to: every `minimum`, padding and
     /// unsqueezable leaf in it, summed along the axis it sits on. A scroll
     /// node contributes nothing on its scrolling axis, which is the point of
-    /// one. A host that owns a window refuses anything smaller; below it
-    /// [`resolve`] answers [`Error::InsufficientSpace`].
+    /// one. Below it nothing is refused: children keep their floors and the
+    /// content overflows, clipped wherever a clip is set. A host that owns a
+    /// window can scale by `offered / min_size()` or refuse to go smaller.
     ///
     /// ```
     /// use mui_layout::{column, leaf, resolve, Size};
@@ -99,7 +118,8 @@ impl Layout {
         self.min
     }
     pub fn frame(&self, key: &str) -> Option<Frame> {
-        self.frames.get(key).copied()
+        let (_, at) = self.named.iter().find(|(id, _)| id.as_str() == key)?;
+        Some(self.order[*at as usize])
     }
     pub fn all(&self) -> &[Frame] {
         &self.order
@@ -118,25 +138,30 @@ impl Layout {
             return Err(Error::InvalidValue);
         }
         let mut nodes = vec![root];
-        let mut named = BTreeMap::new();
-        for frame in &frames {
+        let (mut named, mut seen) = (Vec::new(), rustc_hash::FxHashSet::default());
+        for at in 0..frames.len() {
             let node = nodes.pop().ok_or(Error::InvalidValue)?;
             if let Some(key) = node.key() {
-                if named.insert(Id::of(key), *frame).is_some() {
+                if !seen.insert(key) {
                     return Err(Error::DuplicateKey(key.to_owned()));
                 }
+                named.push((Id::of(key), at as u32));
             }
             nodes.extend(node.children().iter().rev());
         }
         if !nodes.is_empty() {
             return Err(Error::InvalidValue);
         }
-        self.frames = Arc::new(named);
+        self.named = Arc::new(named);
         self.order = Arc::new(frames);
         Ok(self)
     }
+    /// Every named node's frame, in tree order.
     pub fn frames(&self) -> impl Iterator<Item = (&str, Frame)> {
-        self.frames.iter().map(|(k, v)| (k.as_str(), *v))
+        let order = &self.order;
+        self.named
+            .iter()
+            .map(|(k, at)| (k.as_str(), order[*at as usize]))
     }
 }
 
@@ -145,14 +170,6 @@ pub enum Error {
     InvalidValue,
     DuplicateKey(String),
     BudgetExceeded,
-    /// `needs` is the whole tree's floor, so a host can work out the uniform
-    /// scale that would make it fit: `min(offered / needs)`. A node refused by
-    /// its own `maximum` carries what that node asked for instead -- the
-    /// tree's floor is not known until the measure pass it failed in ends.
-    InsufficientSpace {
-        node: String,
-        needs: Size,
-    },
     RevisionExhausted,
 }
 impl std::fmt::Display for Error {
@@ -163,11 +180,6 @@ impl std::fmt::Display for Error {
             }
             Self::DuplicateKey(k) => write!(f, "two nodes share the id {k}"),
             Self::BudgetExceeded => f.write_str("the tree exceeds its node or depth limit"),
-            Self::InsufficientSpace { node, needs } => write!(
-                f,
-                "node {node} does not fit in the space offered; the tree needs {}x{}",
-                needs.width, needs.height
-            ),
             Self::RevisionExhausted => f.write_str("the layout revision counter overflowed"),
         }
     }
@@ -204,12 +216,12 @@ pub fn resolve<P>(root: &Node<P>, offered: Option<Size>, limits: Limits) -> Resu
 /// inside a scroll. A leaf in a squeezed, non-wrapping row is measured a
 /// second time at the main size the row deals it; that last call is the
 /// authoritative one. Text shaping lives outside this crate on purpose.
-pub fn resolve_with<P>(
+pub fn resolve_with<P, M: Into<Intrinsic>>(
     root: &Node<P>,
     offered: Option<Size>,
     limits: Limits,
     scale: SpacingScale,
-    measurer: impl FnMut(&P, Option<f64>) -> Size,
+    measurer: impl FnMut(&P, Option<f64>) -> M,
 ) -> Result<Layout, Error> {
     resolve_impl(root, offered, limits, scale, measurer, None, None)
 }
@@ -230,13 +242,13 @@ pub fn resolve_with<P>(
 /// .unwrap();
 /// assert_eq!(l.all()[1].size, size, "the child fills the given box");
 /// ```
-pub fn resolve_boxed_with<P>(
+pub fn resolve_boxed_with<P, M: Into<Intrinsic>>(
     root: &Node<P>,
     size: Size,
     padding: Insets,
     limits: Limits,
     scale: SpacingScale,
-    measurer: impl FnMut(&P, Option<f64>) -> Size,
+    measurer: impl FnMut(&P, Option<f64>) -> M,
 ) -> Result<Layout, Error> {
     if !size.valid(limits.extent) || !padding.valid(limits.extent) {
         return Err(Error::InvalidValue);
@@ -251,12 +263,12 @@ pub fn resolve_boxed_with<P>(
         Some(padding),
     )
 }
-fn resolve_impl<P>(
+fn resolve_impl<P, M: Into<Intrinsic>>(
     root: &Node<P>,
     offered: Option<Size>,
     limits: Limits,
     scale: SpacingScale,
-    mut measurer: impl FnMut(&P, Option<f64>) -> Size,
+    measurer: impl FnMut(&P, Option<f64>) -> M,
     cache: Option<&mut LayoutCache>,
     boxed: Option<Insets>,
 ) -> Result<Layout, Error> {
@@ -268,12 +280,18 @@ fn resolve_impl<P>(
     {
         return Err(Error::InvalidValue);
     }
+    let mut measurer = crate::measure::intrinsic(measurer);
     let definite = offered.map_or([None; 2], |s| [Some(s.width), Some(s.height)]);
     let mut pass = Pass {
         left: limits.nodes,
         limits,
         scale,
-        keys: Default::default(),
+        // Filled only by a solve without the cache -- every one of a live
+        // resize -- one id per keyed node: room for a window's worth at once.
+        keys: rustc_hash::FxHashSet::with_capacity_and_hasher(
+            limits.nodes.min(256),
+            Default::default(),
+        ),
         redo: false,
         pinned: false,
         measurer: &mut measurer,
@@ -286,42 +304,29 @@ fn resolve_impl<P>(
     if !size.valid(limits.extent) {
         return Err(Error::InvalidValue);
     }
-    if root
-        .maximum
-        .is_some_and(|max| size.width > max.width || size.height > max.height)
-    {
-        return Err(Error::InsufficientSpace {
-            node: label(root, "root"),
-            needs: m.floor,
-        });
-    }
+    // A root offered more than its maximum is its maximum, like any node.
+    let size = root.rare().maximum.map_or(size, |max| {
+        Size::new(size.width.min(max.width), size.height.min(max.height))
+    });
     // Every measured node produces at most one frame.
-    let mut out = (
-        BTreeMap::new(),
-        Vec::with_capacity(limits.nodes - pass.left),
-    );
-    // Only `resolve` knows the whole tree's floor, and that is the number a
-    // host scales by; the sites that raise the error only know their own node.
-    let fix = |e| match e {
-        Error::InsufficientSpace { node, .. } => Error::InsufficientSpace {
-            node,
-            needs: m.floor,
-        },
-        e => e,
-    };
+    let mut out = (Vec::new(), Vec::with_capacity(limits.nodes - pass.left));
     let empty = BTreeMap::new();
     let pins = |anchors| Pins {
         anchors,
         root: size,
         scale,
     };
-    arrange(&m, "root", [0.0, 0.0], size, &pins(&empty), None, &mut out).map_err(fix)?;
+    arrange(&m, "root", [0.0, 0.0], size, &pins(&empty), None, &mut out)?;
     // ponytail: one extra arrange resolves every pin, because a float takes no
     // space and so cannot move an anchor. A pin whose anchor is itself inside a
     // pinned float reads that float's first-pass position; give the pass a
     // dependency order if that ever matters.
     if pass.pinned {
-        let anchors = std::mem::take(&mut out.0);
+        let named = std::mem::take(&mut out.0);
+        let anchors = named
+            .into_iter()
+            .map(|(id, at)| (id, out.1[at as usize]))
+            .collect();
         out.1.clear();
         arrange(
             &m,
@@ -331,13 +336,12 @@ fn resolve_impl<P>(
             &pins(&anchors),
             None,
             &mut out,
-        )
-        .map_err(fix)?;
+        )?;
     }
     Ok(Layout {
         size,
         min: m.floor,
-        frames: Arc::new(out.0),
+        named: Arc::new(out.0),
         order: Arc::new(out.1),
     })
 }

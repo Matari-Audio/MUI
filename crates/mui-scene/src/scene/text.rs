@@ -1,9 +1,9 @@
 //! Shaping, line breaking and measuring, cached across resolves.
+use rustc_hash::FxHashMap as HashMap;
 use std::borrow::Cow;
-use std::collections::HashMap;
 use std::sync::Arc;
 
-use mui_layout::Size;
+use mui_layout::{Intrinsic, Size};
 use mui_text::{Axes, Font, TextRun};
 
 use super::outline::OutlineCache;
@@ -17,6 +17,8 @@ pub(super) struct CachedRun {
     pub(super) ascent: f64,
     pub(super) descent: f64,
     pub(super) line_height: f64,
+    /// Its widest word: how narrow a flex row may squeeze it.
+    pub(super) min_content: f64,
     pub(super) glyphs: Arc<[TextGlyph]>,
     /// Per-char advances, shaped the first time this string wraps, so every
     /// later width breaks without shaping.
@@ -30,6 +32,7 @@ impl CachedRun {
             ascent: run.ascent,
             descent: run.descent,
             line_height: run.line_height,
+            min_content: run.min_content,
             glyphs: run
                 .glyphs
                 .into_iter()
@@ -84,8 +87,29 @@ pub struct TextCache {
     pub(super) borders: crate::border_ramp::BorderCache,
     pub(super) region_cache: crate::regions::RegionCache,
     pub(super) surface_cache: crate::surfaces::Cache,
+    /// A finished scene's buffers, emptied for the next resolve to fill.
+    pub(super) spare: Spare,
 }
+pub(super) type Spare = (
+    Vec<super::Painted>,
+    Vec<super::ResolvedSurface>,
+    HashMap<Arc<str>, usize>,
+);
 impl TextCache {
+    /// Hand a scene you are done with back, so the next resolve fills its
+    /// buffers instead of growing new ones.
+    pub fn recycle(&mut self, scene: super::ResolvedScene) {
+        let super::ResolvedScene {
+            mut paint,
+            mut surfaces,
+            mut at,
+            ..
+        } = scene;
+        paint.clear();
+        surfaces.clear();
+        at.clear();
+        self.spare = (paint, surfaces, at);
+    }
     pub fn layout_stats(&self) -> mui_layout::LayoutStats {
         self.layout.stats()
     }
@@ -110,22 +134,23 @@ impl TextCache {
             self.layout.clear();
         }
     }
-    /// End of a resolve: keep exactly what it used.
-    pub(super) fn sweep(&mut self) {
-        fn keep<K, V>(m: &mut HashMap<K, (V, u64)>, g: u64) -> bool {
-            m.retain(|_, (_, seen)| *seen == g);
+    /// End of a resolve: keep exactly what it used -- and, for the subtrees
+    /// it copied rather than walked, what the last `age` resolves used.
+    pub(super) fn sweep(&mut self, age: u64) {
+        fn keep<K, V>(m: &mut HashMap<K, (V, u64)>, g: u64, age: u64) -> bool {
+            m.retain(|_, (_, seen)| g.wrapping_sub(*seen) <= age);
             !m.is_empty()
         }
         let g = self.generation;
-        self.runs.retain(|_, m| keep(m, g));
-        self.breaks.retain(|_, m| keep(m, g));
-        self.coords.retain(|_, m| keep(m, g));
-        keep(&mut self.last_coords, g);
-        keep(&mut self.keys, g);
+        self.runs.retain(|_, m| keep(m, g, age));
+        self.breaks.retain(|_, m| keep(m, g, age));
+        self.coords.retain(|_, m| keep(m, g, age));
+        keep(&mut self.last_coords, g, age);
+        keep(&mut self.keys, g, age);
         self.generation = g.wrapping_add(1);
-        self.outlines.sweep();
-        self.borders.sweep();
-        self.region_cache.sweep();
+        self.outlines.sweep(age);
+        self.borders.sweep(age);
+        self.region_cache.sweep(age);
     }
 }
 
@@ -327,15 +352,29 @@ impl<'a> Runs<'a> {
         lines as f64 * self.measure(text, face).height
     }
     pub(super) fn measure(&mut self, text: &str, face: Face<'_>) -> Size {
-        let size = face.size;
+        self.measured(text, face).0
+    }
+    /// [`Self::measure`] and the widest word, from one lookup.
+    pub(super) fn measured(&mut self, text: &str, face: Face<'_>) -> (Size, f64) {
+        let (size, scale) = (face.size, self.scale);
         match self.run(text, face) {
             // ponytail: no font → a monospace guess, so layout tests stay
             // font-free. Wrong widths are visible the moment a font is set.
-            Ok(None) | Err(_) => Size::new(text.chars().count() as f64 * size * 0.6, size * 1.25),
+            Ok(None) | Err(_) => {
+                let em = |n: usize| n as f64 * size * 0.6;
+                let word = text.split_ascii_whitespace().map(|w| w.chars().count());
+                (
+                    Size::new(em(text.chars().count()), size * 1.25),
+                    em(word.max().unwrap_or(0)),
+                )
+            }
             // The snapped pitch the walk stacks lines at, as egui rounds each
             // row to a device pixel: a raw 15.6 pt Barlow line at 1.5x would
             // otherwise measure 0.27 pt taller than it paints, per line.
-            Ok(Some(r)) => Size::new(r.advance, super::snap(r.line_height, self.scale)),
+            Ok(Some(r)) => (
+                Size::new(r.advance, super::snap(r.line_height, scale)),
+                r.min_content,
+            ),
         }
     }
 }
@@ -352,7 +391,7 @@ pub(super) fn layout_key(e: &Element, th: Theme, scale: Option<f64>, out: &mut V
         out.extend_from_slice(b);
     };
     bytes(t.as_bytes());
-    match &e.reserve {
+    match &e.extras().reserve {
         Some(r) => bytes(r.as_bytes()),
         None => out.extend_from_slice(&u64::MAX.to_le_bytes()),
     }
@@ -372,26 +411,35 @@ pub(super) fn layout_key(e: &Element, th: Theme, scale: Option<f64>, out: &mut V
 }
 
 /// A content leaf's size: a paragraph wrapped to its room when it needs it.
-pub(super) fn fit(runs: &mut Runs, th: Theme, e: &crate::Element, room: Option<f64>) -> Size {
+/// Its widest word is as far as a flex row may squeeze it, unless a line cap
+/// asked for an ellipsis instead.
+pub(super) fn fit(runs: &mut Runs, th: Theme, e: &crate::Element, room: Option<f64>) -> Intrinsic {
     let Content::Text(t) = &e.content else {
-        return Size::ZERO;
+        return Size::ZERO.into();
     };
     let (t, face) = (t.as_str(), Face::of(e, th));
+    let (one_line, word) = runs.measured(t, face);
+    let min_width = if e.lines.is_some() { 0.0 } else { word };
+    // A room narrower than a word is overflowed, not broken mid-word.
+    let room = room.map(|r| r.max(min_width));
     let mut fit = match room {
         // The room it wrapped into, not its longest line: a paragraph that
         // reported the ragged width would then be centred inside its own
         // column, aligned with nothing above it.
-        Some(room) if room > 0.0 && runs.measure(t, face).width > room + 0.5 => {
+        Some(room) if room > 0.0 && one_line.width > room + 0.5 => {
             Size::new(room, runs.wrapped(t, face, room, e.lines))
         }
-        _ => runs.measure(t, face),
+        _ => one_line,
     };
     // The reserved string widens the box and nothing else: its own height is
     // the same line at the same size, and a longer value still measures long.
-    if let Some(r) = &e.reserve {
+    if let Some(r) = &e.extras().reserve {
         fit.width = fit.width.max(runs.measure(r, face).width);
     }
-    fit
+    Intrinsic {
+        size: fit,
+        min_width,
+    }
 }
 #[cfg(test)]
 mod tests {
@@ -403,7 +451,8 @@ mod tests {
         let tree = |n: usize, tag: &str| {
             column((0..n).map(|i| {
                 row([
-                    leaf(12., 12.),
+                    // Each its own height: equal welds share one entry.
+                    leaf(12., 12. + i as f64 / 4.),
                     text(format!("{tag}{i}")).id(format!("{tag}{i}")),
                 ])
                 .union(Role::Surface)
@@ -513,6 +562,38 @@ mod tests {
             lines("b"),
             lines("c")
         );
+    }
+
+    #[test]
+    fn a_row_squeezed_below_its_words_keeps_them_whole() {
+        let word = |t: &str| {
+            let mut sp = SceneSpec::new(column([text(t).id("w")]));
+            sp.font = Some(font());
+            resolve_scene(&sp)
+                .unwrap()
+                .layout
+                .frame("w")
+                .unwrap()
+                .size
+                .width
+        };
+        // Far narrower than "Record" and "Region" side by side: each label
+        // wraps between its words, not inside one, and the row overflows.
+        let mut sp =
+            SceneSpec::new(row([text("Record Button").id("a"), text("Loop Region").id("b")]).w(40));
+        sp.font = Some(font());
+        let s = resolve_scene(&sp).unwrap();
+        let f = |k| s.layout.frame(k).unwrap();
+        let lines = |k| {
+            s.paint
+                .iter()
+                .filter(|p| &*p.key == k && p.layer == Layer::Text)
+                .count()
+        };
+        assert_eq!((lines("a"), lines("b")), (2, 2));
+        assert!(f("a").size.width >= word("Button") - 1e-9, "{:?}", f("a"));
+        assert!(f("b").size.width >= word("Region") - 1e-9, "{:?}", f("b"));
+        assert!(f("b").x >= f("a").right() - 1e-9);
     }
 
     #[test]

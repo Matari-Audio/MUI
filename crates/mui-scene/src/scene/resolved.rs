@@ -1,5 +1,5 @@
 //! What a resolve hands back: the paint list and the surfaces.
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 use std::sync::Arc;
 
 use mui_geometry::{Bounds, Path, Point, RoundedRect};
@@ -64,7 +64,7 @@ pub struct TextGlyph {
 }
 
 /// A text layer's glyphs, for a renderer that hints and caches its own.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Text {
     /// Primary face followed by any fallback faces used by this run; never
     /// empty.
@@ -92,17 +92,24 @@ pub struct Text {
 
 /// One thing to draw. `key` is the node's id, or its tree path (`/0/2`)
 /// when it has none: hit-testing and state keep working without names.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Painted {
     pub key: Arc<str>,
     pub layer: Layer,
     /// Shared with the node's surface and every other layer drawn along the
-    /// same outline, so a filled, clipped node holds one path.
+    /// same outline, so a filled, clipped node holds one path. In the
+    /// entry's own space: [`Self::offset`] puts it in the scene, so a node
+    /// that only moved keeps its path, and same-sized nodes share one.
     pub path: Arc<Path>,
     pub paint: Paint,
     /// Analytic form when the path is a plain rounded rectangle: a renderer
-    /// with a fast path (blurred rects, say) can take it.
+    /// with a fast path (blurred rects, say) can take it. Local, like `path`.
     pub rect: Option<RoundedRect>,
+    /// Where `path` and `rect` stand in the scene: added to every point. A
+    /// renderer paints the entry under this translation; gradients and
+    /// images are fitted to the local path, so they travel with it. Text
+    /// keeps its [`Text::origin`] in scene space and this at zero.
+    pub offset: Point,
     /// Stroke width; `0` fills.
     pub width: f64,
     /// Gaussian blur radius: a shadow's, or a [`Layer::Backdrop`]'s.
@@ -114,15 +121,91 @@ pub struct Painted {
     pub text: Option<Text>,
 }
 
+/// The same `Arc` is the same value: a still scene hands its paths and
+/// glyph runs back by pointer, and comparing them command by command is
+/// what a renderer's "did anything change" would otherwise spend its frame on.
+fn same<T: PartialEq + ?Sized>(a: &Arc<T>, b: &Arc<T>) -> bool {
+    Arc::ptr_eq(a, b) || a == b
+}
+// By hand for `same`; destructured without `..` so a new field cannot be
+// left out of the comparison.
+impl PartialEq for Text {
+    fn eq(&self, o: &Self) -> bool {
+        let Self {
+            fonts,
+            size,
+            origin,
+            glyphs,
+            axes,
+            font_coords,
+            hint,
+        } = self;
+        same(fonts, &o.fonts)
+            && *size == o.size
+            && *origin == o.origin
+            && same(glyphs, &o.glyphs)
+            && *axes == o.axes
+            && same(font_coords, &o.font_coords)
+            && *hint == o.hint
+    }
+}
+impl PartialEq for Painted {
+    fn eq(&self, o: &Self) -> bool {
+        let Self {
+            key,
+            layer,
+            path,
+            paint,
+            rect,
+            offset,
+            width,
+            blur,
+            text,
+        } = self;
+        same(key, &o.key)
+            && *layer == o.layer
+            && same(path, &o.path)
+            && *paint == o.paint
+            && *rect == o.rect
+            && *offset == o.offset
+            && *width == o.width
+            && *blur == o.blur
+            && *text == o.text
+    }
+}
+
+impl Painted {
+    /// `path` where it stands in the scene: a translated copy.
+    pub fn placed(&self) -> Path {
+        placed(&self.path, self.offset)
+    }
+}
+
+fn placed(p: &Path, d: Point) -> Path {
+    let mut p = p.clone();
+    if d != Point::ZERO {
+        p.translate(d);
+    }
+    p
+}
+
+/// A local path and the offset that places it in the scene.
+pub type PlacedPath = (Arc<Path>, Point);
+
 /// A node's outline, for hit-testing and for anything that derives from it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ResolvedSurface {
     pub key: Arc<str>,
     pub frame: Frame,
+    /// The outline in the surface's own space; [`Self::offset`] places it,
+    /// as it does a [`Painted::path`].
     pub path: Arc<Path>,
+    /// The outline's bounds, in scene space.
     pub bounds: Option<Bounds>,
-    /// Exact rounded rectangle when the outline is one (not welded).
+    /// Exact rounded rectangle when the outline is one (not welded). Local.
     pub rect: Option<RoundedRect>,
+    /// Where `path`, `rect` and `hits` stand in the scene.
+    pub offset: Point,
     /// A shell collapsed or a merge changed ring counts.
     pub topology_changed: bool,
     pub cursor: Option<Cursor>,
@@ -130,6 +213,8 @@ pub struct ResolvedSurface {
     pub focusable: bool,
     /// Keeps the wheel from the scrollers around it.
     pub captures_wheel: bool,
+    /// Reads the raw pointer: a move over it is never inert.
+    pub tracks_pointer: bool,
     /// Declares a [`State::Hover`](crate::State::Hover) or
     /// [`State::Press`](crate::State::Press) look, so the runtime makes it a
     /// pointer target even without an id.
@@ -157,24 +242,30 @@ pub struct ResolvedSurface {
     /// outermost to innermost. This is the path counterpart to [`Self::clip`];
     /// it avoids making every pointer query tessellate a rounded or welded
     /// clip and preserves every nested clip boundary. Each path is the
-    /// clipping ancestor's own outline, shared, not a copy.
-    pub clip_path: Option<Arc<[Arc<Path>]>>,
+    /// clipping ancestor's own outline, shared, not a copy, with the offset
+    /// that places it.
+    pub clip_path: Option<Arc<[PlacedPath]>>,
     /// Nearest explicitly named ancestor in the authored tree, not a containing
     /// rectangle. A floating node keeps this parent even when it escapes clipping.
     pub parent: Option<Arc<str>>,
     /// A scroll node's children extent inside its padding, unscrolled;
     /// the frame size otherwise.
     pub content: Size,
-    /// The tagged shapes a `canvas` drew, in scene space. Non-empty means
+    /// The tagged shapes a `canvas` drew, placed by [`Self::offset`]. Non-empty means
     /// *these* are the surface's hit geometry, not its outline: the pointer
     /// outside all of them is outside the node. See [`Draw::tag`](crate::Draw::tag).
     pub hits: Vec<(Arc<str>, Arc<Path>)>,
 }
 impl ResolvedSurface {
     /// Borrow the cached clip outlines without exposing their shared
-    /// allocation. Paths are ordered outermost to innermost.
-    pub fn clip_paths(&self) -> Option<&[Arc<Path>]> {
+    /// allocation. Paths are ordered outermost to innermost, each with the
+    /// offset that places it.
+    pub fn clip_paths(&self) -> Option<&[PlacedPath]> {
         self.clip_path.as_deref()
+    }
+    /// `path` where it stands in the scene: a translated copy.
+    pub fn placed(&self) -> Path {
+        placed(&self.path, self.offset)
     }
 }
 
@@ -186,8 +277,24 @@ pub struct ResolvedScene {
     pub(super) surfaces: Vec<ResolvedSurface>,
     pub(super) at: HashMap<Arc<str>, usize>,
     pub(crate) external_welds: HashMap<Arc<str>, crate::ExternalWeld>,
+    /// Where each memoised subtree landed, in pre-order.
+    pub(crate) memos: Vec<super::MemoSpan>,
 }
 impl ResolvedScene {
+    /// The memoised subtrees `key`'s surface is in, outermost first, each
+    /// with whether this resolve reused it.
+    pub fn memos_at(&self, key: &str) -> impl Iterator<Item = (u64, bool)> + '_ {
+        let at = self.at.get(key).copied();
+        self.memos
+            .iter()
+            .filter(move |m| at.is_some_and(|i| m.surfaces.contains(&i)))
+            .map(|m| (m.id, m.reused))
+    }
+    /// The memoised subtrees that floated a node, whose paint and surface
+    /// land outside what the memo is known to hold.
+    pub fn memos_floating(&self) -> impl Iterator<Item = u64> + '_ {
+        self.memos.iter().filter(|m| m.floats).map(|m| m.id)
+    }
     /// Swap what one text node says, keeping every frame this scene already
     /// solved: only that node's glyph run is shaped again.
     ///
@@ -222,6 +329,8 @@ impl ResolvedScene {
             .filter(|(_, p)| &*p.key == key && p.layer == Layer::Text)
             .map(|(i, _)| i);
         let first = at.next().ok_or(SceneError::NoTextLayer)?;
+        // The paint no longer says what the tree does: nothing may copy it.
+        self.memos.clear();
         // A wrapped label's later lines have no string to re-break against,
         // so the swap collapses it to the one run it now says.
         let rest: Vec<usize> = at.collect();

@@ -14,13 +14,12 @@ mod spec;
 mod text;
 mod walk;
 
-pub use resolved::{Layer, Painted, ResolvedScene, ResolvedSurface, Text, TextGlyph};
+pub use resolved::{Layer, Painted, PlacedPath, ResolvedScene, ResolvedSurface, Text, TextGlyph};
 pub use spec::{SceneError, SceneSpec};
 pub use text::TextCache;
 
+use rustc_hash::FxHashMap as HashMap;
 use std::borrow::Cow;
-use std::collections::HashMap;
-use std::fmt::Write as _;
 use std::hash::BuildHasher;
 use std::sync::{Arc, LazyLock};
 
@@ -30,6 +29,20 @@ use mui_layout::Frame;
 use crate::{Color, Cursor, El, Size};
 use outline::OutlineCache;
 use text::{fit, layout_key, Runs};
+
+/// Append child `j`'s step to a tree path, the `/0/2` key the scene gives a
+/// node without an id. By hand: `write!` is most of a walk's cost.
+pub fn push_index(path: &mut String, mut j: usize) {
+    path.push('/');
+    let at = path.len();
+    loop {
+        path.insert(at, char::from(b'0' + (j % 10) as u8));
+        j /= 10;
+        if j == 0 {
+            break;
+        }
+    }
+}
 
 /// A length on the device grid, or untouched when the host gave no scale.
 fn snap(v: f64, scale: Option<f64>) -> f64 {
@@ -96,14 +109,68 @@ fn find(n: &El, id: &str, at: usize, sizes: &[usize]) -> Option<usize> {
 }
 
 /// What a node inherits from the nodes above it.
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 struct Ancestors {
     parent: Option<Arc<str>>,
     clip: Option<Bounds>,
-    clip_paths: Option<Arc<[Arc<Path>]>>,
+    clip_paths: Option<Arc<[PlacedPath]>>,
     cursor: Option<Cursor>,
     disabled: bool,
 }
+
+impl Ancestors {
+    /// The same inheritance, comparing the clip outlines by pointer first.
+    fn same(&self, o: &Self) -> bool {
+        let paths = match (&self.clip_paths, &o.clip_paths) {
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b) || a == b,
+            (a, b) => a.is_none() && b.is_none(),
+        };
+        paths
+            && self.parent == o.parent
+            && self.clip == o.clip
+            && self.cursor == o.cursor
+            && self.disabled == o.disabled
+    }
+}
+
+/// Where one memoised subtree landed in a resolve: its node range, paint
+/// and surfaces, and everything its paint depended on from outside, so the
+/// next resolve can copy the lot instead of walking a reused subtree.
+#[derive(Clone, Debug)]
+pub(crate) struct MemoSpan {
+    id: u64,
+    /// Copied from the resolve before, or walked from a reused tree.
+    reused: bool,
+    /// Pre-order index and node count.
+    at: usize,
+    size: usize,
+    paint: std::ops::Range<usize>,
+    surfaces: std::ops::Range<usize>,
+    /// How many of the spans after this one lie inside it.
+    nested: usize,
+    origin: mui_geometry::Point,
+    path: String,
+    under: Color,
+    base_y: Option<f64>,
+    ancestors: Ancestors,
+    /// Nothing of it painted elsewhere (a float) or came from outside (a
+    /// surface owner's region); only a closed span is copied.
+    closed: bool,
+    /// It floated a node, whose paint and surface land outside the span.
+    floats: bool,
+    /// The resolve whose walk last filled its caches' entries.
+    generation: u64,
+}
+impl PartialEq for MemoSpan {
+    // Bookkeeping, not what the scene shows.
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+/// A copied span's cache entries are kept alive this many resolves past
+/// its last walk; after that it is walked again to renew them.
+pub(super) const MEMO_AGE: u64 = 60;
 
 /// A float, painted after the whole tree so it sits on top and escapes
 /// every clip.
@@ -119,7 +186,8 @@ struct Deferred<'a> {
 struct Walk<'a> {
     spec: &'a SceneSpec,
     frames: Cow<'a, [Frame]>,
-    regions: HashMap<usize, Arc<Path>>,
+    /// Each region child's outline, placed.
+    regions: HashMap<usize, PlacedPath>,
     region_envelopes: HashMap<usize, Arc<Path>>,
     runs: Runs<'a>,
     /// Subtree size per pre-order index; see [`subtree_sizes`].
@@ -131,7 +199,7 @@ struct Walk<'a> {
     /// Border joins a surface owner adds to its ramp band.
     surface_joins: HashMap<usize, Path>,
     /// Nodes whose `.join_border(..)` an owner resolved.
-    joined_nodes: std::collections::HashSet<usize>,
+    joined_nodes: rustc_hash::FxHashSet<usize>,
     ramp_anchors: HashMap<usize, Frame>,
     ramp_frames: HashMap<(usize, mui_layout::Id), Frame>,
     weld_cache: &'a mut crate::WeldCache,
@@ -146,6 +214,13 @@ struct Walk<'a> {
     deferred: Vec<Deferred<'a>>,
     /// The baseline a `.baseline()` parent asks its text children to sit on.
     base_y: Option<f64>,
+    /// Ink and dim per ground colour's bits; see [`Walk::paint_of`].
+    inks: HashMap<[u32; 4], (Color, Color)>,
+    /// The resolve before, whose memo spans a reused subtree copies.
+    prev: Option<&'a ResolvedScene>,
+    memos: Vec<MemoSpan>,
+    /// How many resolves back the oldest copied span was walked.
+    age: u64,
 }
 
 /// The key a walk starts from, before it meets the root.
@@ -194,7 +269,7 @@ fn glide_frames(
     };
     let [tx, ty, sx, sy] = anchor;
     let mut inner = anchor;
-    if n.payload().layout_transition.is_some() {
+    if n.payload().extras().layout_transition.is_some() {
         let rel = Frame {
             x: target.x - tx,
             y: target.y - ty,
@@ -224,7 +299,7 @@ fn glide_frames(
     }
     let mark = path.len();
     for (j, c) in n.children().iter().enumerate() {
-        let _ = write!(path, "/{j}");
+        push_index(path, j);
         glide_frames(c, at, path, inner, frames, glide);
         path.truncate(mark);
     }
@@ -268,6 +343,22 @@ pub fn resolve_scene_animated(
     weld_cache: &mut crate::WeldCache,
     glide: &mut dyn FnMut(&str, &crate::Element, Frame) -> Frame,
 ) -> Result<ResolvedScene, SceneError> {
+    resolve_scene_retained(spec, text, weld_cache, glide, None)
+}
+
+/// [`resolve_scene_animated`] that paints every reused
+/// [`Memo`](crate::Memo) subtree by copying its paint and surfaces out of
+/// `prev`, the scene the previous call returned, when nothing it depended
+/// on from outside moved -- translated when only its origin did. The copy
+/// keeps every `Arc`, so a renderer comparing by pointer sees it unchanged,
+/// and it keeps the caches' entries the subtree used alive.
+pub fn resolve_scene_retained(
+    spec: &SceneSpec,
+    text: &mut TextCache,
+    weld_cache: &mut crate::WeldCache,
+    glide: &mut dyn FnMut(&str, &crate::Element, Frame) -> Frame,
+    prev: Option<&ResolvedScene>,
+) -> Result<ResolvedScene, SceneError> {
     spec.validate()?;
     text.retain_for(spec);
     let mut runs = Runs {
@@ -310,31 +401,38 @@ pub fn resolve_scene_animated(
         &mut frames,
         glide,
     );
+    let (paint, mut surfaces, mut at) = std::mem::take(&mut text.spare);
+    surfaces.reserve(nodes);
+    at.reserve(nodes);
     let mut w = Walk {
         spec,
         frames,
-        regions: HashMap::new(),
-        region_envelopes: HashMap::new(),
+        regions: HashMap::default(),
+        region_envelopes: HashMap::default(),
         runs,
         sizes,
         outlines: &mut text.outlines,
         borders: &mut text.borders,
         region_cache: &mut text.region_cache,
         surface_cache: &mut text.surface_cache,
-        surface_joins: HashMap::new(),
-        joined_nodes: std::collections::HashSet::new(),
-        ramp_anchors: HashMap::new(),
-        ramp_frames: HashMap::new(),
+        surface_joins: HashMap::default(),
+        joined_nodes: Default::default(),
+        ramp_anchors: HashMap::default(),
+        ramp_frames: HashMap::default(),
         weld_cache,
         i: 0,
         key: empty_key(),
         keys: &mut text.keys,
-        paint: Vec::new(),
-        surfaces: Vec::with_capacity(nodes),
-        at: HashMap::with_capacity(nodes),
-        external_welds: HashMap::new(),
+        paint,
+        surfaces,
+        at,
+        external_welds: HashMap::default(),
         deferred: Vec::new(),
         base_y: None,
+        inks: HashMap::default(),
+        prev,
+        memos: Vec::new(),
+        age: 0,
     };
     w.node(
         &spec.root,
@@ -364,19 +462,22 @@ pub fn resolve_scene_animated(
         surfaces,
         at,
         external_welds,
+        memos,
+        age,
         ..
     } = w;
     let layout = match frames {
         Cow::Owned(frames) => layout.reframe(&spec.root, frames)?,
         Cow::Borrowed(_) => layout,
     };
-    text.sweep();
+    text.sweep(age);
     Ok(ResolvedScene {
         layout,
         paint,
         surfaces,
         at,
         external_welds,
+        memos,
     })
 }
 

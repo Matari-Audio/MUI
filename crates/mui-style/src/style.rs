@@ -238,7 +238,8 @@ pub enum Fill {
     /// A role resolved, then taken to this alpha. See [`Role::alpha`].
     Faded(Role, f32),
     Color(Color),
-    Gradient(Gradient),
+    /// Boxed: a ramp is rare, and inline it would triple every fill.
+    Gradient(Box<Gradient>),
     Image(Arc<Image>, Fit),
 }
 impl From<Role> for Fill {
@@ -259,7 +260,7 @@ impl From<Arc<Image>> for Fill {
 }
 impl From<Gradient> for Fill {
     fn from(g: Gradient) -> Self {
-        Self::Gradient(g)
+        Self::Gradient(Box::new(g))
     }
 }
 
@@ -327,13 +328,14 @@ impl Fill {
             Some(Paint::Solid(c)) => Fill::Color(f(c)),
             // Pixels are not a role: a hover tint has nothing to map here.
             Some(Paint::Image { image, fit }) => Fill::Image(image, fit),
-            Some(Paint::Gradient { kind, stops }) => Fill::Gradient(Gradient {
+            Some(Paint::Gradient { kind, stops }) => Gradient {
                 kind,
                 stops: stops
                     .into_iter()
                     .map(|(t, c)| (t, Fill::Color(f(c))))
                     .collect(),
-            }),
+            }
+            .into(),
         }
     }
 }

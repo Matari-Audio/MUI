@@ -4,7 +4,6 @@ use std::sync::Arc;
 use mui_geometry::{CornerStyle, Point};
 use mui_layout::Frame;
 
-use super::outline::Contour;
 use super::{snap, SceneError, Walk};
 use crate::{Color, Content, El, Paint};
 
@@ -18,7 +17,7 @@ impl Walk<'_> {
         path: &str,
         under: Color,
     ) -> Result<Option<crate::material_weld::MaterialWeld>, SceneError> {
-        let Some(weld) = n.payload().welding else {
+        let Some(weld) = n.payload().extras().welding else {
             return Ok(None);
         };
         let gpu = n.payload().weld_backend.unwrap_or(self.spec.weld_backend)
@@ -29,12 +28,12 @@ impl Walk<'_> {
             ));
         }
         crate::material_weld::check_plate(n, false)?;
-        if n.payload().outline.is_some() || n.payload().style.union {
+        if n.payload().extras().outline.is_some() || n.payload().style.union {
             return Err(SceneError::UnsupportedWeld(
                 "custom or union outline on the group; put it on a source child",
             ));
         }
-        let mut quality = n.payload().weld_quality.unwrap_or_default();
+        let mut quality = n.payload().extras().weld_quality.unwrap_or_default();
         if let Some(scale) = self.spec.device_scale {
             quality.scale = scale;
         }
@@ -79,7 +78,7 @@ impl Walk<'_> {
             crate::material_weld::check_plate(c, true)?;
             if gpu
                 && (sources.len() >= mui_weld::analytic::ANALYTIC_SOURCES
-                    || e.outline.is_some()
+                    || e.extras().outline.is_some()
                     || e.style.union
                     || e.style.corners != CornerStyle::Round
                     || c.children()
@@ -90,11 +89,9 @@ impl Walk<'_> {
                     "analytic GPU weld requires at most three ordinary rounded-rectangle plates; custom/carved/nested outlines need an explicit reference backend",
                 ));
             }
-            let Contour {
-                path: outline,
-                rect,
-                ..
-            } = self.outline(c, f, first + 1)?;
+            // Plates are placed by their frames: scene space.
+            let contour = self.outline(c, f, first + 1)?;
+            let (outline, rect) = (contour.world(), contour.world_rect());
             if gpu && rect.is_none() {
                 return Err(SceneError::UnsupportedWeld(
                     "GPU participant is not an analytic rounded rectangle",

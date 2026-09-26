@@ -79,6 +79,9 @@ default-features = true
 [dependencies.png]
 version = "0.18.1"
 
+[dependencies.rustc-hash]
+version = "1.1"
+
 [dependencies.skrifa]
 version = "0.44.0"
 features = [

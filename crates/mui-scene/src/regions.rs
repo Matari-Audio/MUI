@@ -28,7 +28,7 @@ pub trait ShapeLayout: Sized {
 impl ShapeLayout for El {
     fn inside(mut self, padding: impl Into<Spacing>) -> Self {
         let padding = padding.into();
-        self.payload_mut().inside = Some(padding);
+        self.payload_mut().extras_mut().inside = Some(padding);
         self.gap(padding)
     }
     fn bend(mut self, amount: f64) -> Self {
@@ -113,7 +113,7 @@ type Entry = (Operation, OffsetOptions, GeometryOptions, Path, bool, u64);
 /// resolve that does not use it.
 #[derive(Debug, Default)]
 pub(crate) struct RegionCache {
-    entries: std::collections::HashMap<(std::sync::Arc<str>, u8), Entry>,
+    entries: rustc_hash::FxHashMap<(std::sync::Arc<str>, u8), Entry>,
     generation: u64,
 }
 impl RegionCache {
@@ -171,13 +171,21 @@ impl RegionCache {
             .insert(key, (op, o, g, path.clone(), changed, self.generation));
         Ok((world(path), changed))
     }
+    /// Keep `key`'s entry through this resolve's sweep without resolving it:
+    /// its caller reused what the entry made.
+    pub(crate) fn keep(&mut self, key: &(std::sync::Arc<str>, u8)) {
+        if let Some(e) = self.entries.get_mut(key) {
+            e.5 = self.generation;
+        }
+    }
     #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.entries.len()
     }
-    pub(crate) fn sweep(&mut self) {
+    pub(crate) fn sweep(&mut self, age: u64) {
         let generation = self.generation;
-        self.entries.retain(|_, e| e.5 == generation);
+        self.entries
+            .retain(|_, e| generation.wrapping_sub(e.5) <= age);
         self.generation = generation.wrapping_add(1);
     }
 }

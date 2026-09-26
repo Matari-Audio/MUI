@@ -25,29 +25,36 @@ use std::sync::Arc;
 /// see [`Draw::hit`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct Draw {
-    pub path: Path,
+    /// Shared, so a canvas that keeps its shapes hands the walk the same
+    /// `Arc` and the walk never copies one.
+    pub path: Arc<Path>,
     pub fill: Fill,
     /// Stroke width; `0` fills.
     pub width: f64,
     /// Names this shape as a hit target of the canvas node. The runtime
     /// reports it as the node's own gesture, tagged with this name.
     pub tag: Option<Arc<str>>,
+    /// Where the path's origin sits in the canvas: a shape drawn once and
+    /// placed, like a cached run of glyphs, moves without a copy.
+    pub at: Point,
 }
 impl Draw {
-    pub fn fill(path: Path, fill: impl Into<Fill>) -> Self {
+    pub fn fill(path: impl Into<Arc<Path>>, fill: impl Into<Fill>) -> Self {
         Self {
-            path,
+            path: path.into(),
             fill: fill.into(),
             width: 0.0,
             tag: None,
+            at: Point::ZERO,
         }
     }
-    pub fn stroke(path: Path, fill: impl Into<Fill>, width: f64) -> Self {
+    pub fn stroke(path: impl Into<Arc<Path>>, fill: impl Into<Fill>, width: f64) -> Self {
         Self {
-            path,
+            path: path.into(),
             fill: fill.into(),
             width,
             tag: None,
+            at: Point::ZERO,
         }
     }
     /// `image` stretched over the rectangle at `(x, y)`, `w` by `h`: a logo,
@@ -72,12 +79,13 @@ impl Draw {
     /// let grab = Draw::hit(Path::polyline(square.map(|(x, y)| Point::new(x, y)), true), "knot-0");
     /// assert!(grab.fill.is_none());
     /// ```
-    pub fn hit(path: Path, tag: impl Into<Arc<str>>) -> Self {
+    pub fn hit(path: impl Into<Arc<Path>>, tag: impl Into<Arc<str>>) -> Self {
         Self {
-            path,
+            path: path.into(),
             fill: Fill::None,
             width: 0.0,
             tag: Some(tag.into()),
+            at: Point::ZERO,
         }
     }
     /// Name this drawn shape, so the pointer inside it -- and nowhere else
@@ -96,6 +104,11 @@ impl Draw {
     /// ```
     pub fn tag(mut self, tag: impl Into<Arc<str>>) -> Self {
         self.tag = Some(tag.into());
+        self
+    }
+    /// Place the path's origin at `p` in the canvas.
+    pub fn at(mut self, p: Point) -> Self {
+        self.at = p;
         self
     }
 }
@@ -282,16 +295,14 @@ pub struct Element {
     /// A face for this node alone, tried before the scene's font and its
     /// fallbacks: an icon font on an icon. See [`Styled::font`].
     pub font: Option<mui_text::Font>,
-    /// A string this text node is at least as wide as, whatever it currently
-    /// says. See [`Styled::reserve`].
-    pub reserve: Option<String>,
-    /// Shown after the pointer rests on the node.
-    pub tip: Option<String>,
     /// Takes keyboard focus on click and on Tab.
     pub focusable: bool,
     /// The wheel over this node is its own: an enclosing `.scroll()` does
     /// not slide. See [`Styled::captures_wheel`].
     pub captures_wheel: bool,
+    /// Reads the raw pointer while building, so a move over it is never
+    /// inert. See [`Styled::tracks_pointer`].
+    pub tracks_pointer: bool,
     /// Switched off: no hit testing, no focus, and the look declared for
     /// [`State::Disabled`]. Inherited by the subtree. See
     /// [`Styled::disabled`].
@@ -301,10 +312,41 @@ pub struct Element {
     /// Cap a wrapped label at this many lines. See [`Styled::lines`].
     pub lines: Option<usize>,
     /// What this node means: the role and name mui-access reports.
-    pub semantics: Option<Semantics>,
+    pub semantics: Option<Box<Semantics>>,
     /// Looks declared for interaction states, applied in order by the
     /// runtime before the tree is resolved. See [`Styled::on`].
     pub states: Vec<(State, StateStyle)>,
+    /// Set on a child pushed by [`Sugar::cut`](crate::Sugar::cut) or
+    /// [`Sugar::keep`](crate::Sugar::keep): the child shapes its parent's
+    /// outline instead of painting itself.
+    pub carve: Option<Carve>,
+    /// None inherits the host backend. An explicit reference path is never automatic.
+    pub weld_backend: Option<crate::WeldBackend>,
+    /// Exclude this immediate child from its parent's weld, not from layout.
+    pub weld_excluded: bool,
+    pub bend: f64,
+    pub border_align: crate::BorderAlign,
+    /// A `.scroll()` node paints no overlay scrollbar. See
+    /// [`Styled::scroll_bar`].
+    pub scroll_bar_off: bool,
+    /// How hot the overlay scrollbar is: 0 at rest, 1 under the pointer or
+    /// in a drag. The runtime sets it every frame, as it does the offset;
+    /// `None`, a scene resolved without it, paints no bar, since nothing
+    /// could drag one.
+    pub scroll_bar_heat: Option<f64>,
+    /// Everything most nodes never set, boxed on first write so every
+    /// builder call moves a small node. Read it through [`Element::extras`].
+    pub extras: Option<Box<Extras>>,
+}
+
+/// The rarely set half of an [`Element`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct Extras {
+    /// A string this text node is at least as wide as, whatever it currently
+    /// says. See [`Styled::reserve`].
+    pub reserve: Option<String>,
+    /// Shown after the pointer rests on the node.
+    pub tip: Option<String>,
     /// The spring this node's paint chases when its declared style changes.
     /// Only meaningful on a node with an id: the runtime has nothing to
     /// compare an anonymous node against. See [`Styled::transition`].
@@ -322,17 +364,9 @@ pub struct Element {
     /// Shape identity: when it changes, the outline morphs from the old
     /// shape to the new one. See [`Styled::morph`].
     pub morph: Option<u64>,
-    /// Set on a child pushed by [`Sugar::cut`](crate::Sugar::cut) or
-    /// [`Sugar::keep`](crate::Sugar::keep): the child shapes its parent's
-    /// outline instead of painting itself.
-    pub carve: Option<Carve>,
     /// Material weld: the plates' paint blended into one baked or GPU
     /// image. `None` paints every child itself. See [`Styled::weld_with`].
     pub welding: Option<crate::Weld>,
-    /// None inherits the host backend. An explicit reference path is never automatic.
-    pub weld_backend: Option<crate::WeldBackend>,
-    /// Exclude this immediate child from its parent's weld, not from layout.
-    pub weld_excluded: bool,
     /// Host-scaled bounded raster quality, optional per group.
     pub weld_quality: Option<crate::WeldQuality>,
     /// Custom local shape; geometry is validated before publication.
@@ -345,16 +379,52 @@ pub struct Element {
     pub inset_surface: Option<Vec<Id>>,
     /// Join this frame to the nearest horizontal edge of the named body.
     pub border_join: Option<Id>,
-    pub bend: f64,
-    pub border_align: crate::BorderAlign,
-    /// A `.scroll()` node paints no overlay scrollbar. See
-    /// [`Styled::scroll_bar`].
-    pub scroll_bar_off: bool,
-    /// How hot the overlay scrollbar is: 0 at rest, 1 under the pointer or
-    /// in a drag. The runtime sets it every frame, as it does the offset;
-    /// `None`, a scene resolved without it, paints no bar, since nothing
-    /// could drag one.
-    pub scroll_bar_heat: Option<f64>,
+    /// Set by the runtime on the root of a memoised subtree (`Ui::memo`).
+    pub memo: Option<Memo>,
+}
+
+/// The root of a memoised subtree. A resolve records where each memo's
+/// paint and surfaces land; a `reused` one -- the very subtree last frame
+/// resolved, handed back unchanged -- is painted by copying those.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Memo {
+    pub id: u64,
+    pub reused: bool,
+}
+impl Extras {
+    const NONE: Self = Self {
+        reserve: None,
+        tip: None,
+        transition: None,
+        layout_transition: None,
+        appear: None,
+        identity: None,
+        morph: None,
+        welding: None,
+        weld_quality: None,
+        outline: None,
+        border_ramp: None,
+        inside: None,
+        surface_padding: None,
+        inset_surface: None,
+        border_join: None,
+        memo: None,
+    };
+}
+impl Default for Extras {
+    fn default() -> Self {
+        Self::NONE
+    }
+}
+impl Element {
+    /// The rare fields, all unset when none was ever written.
+    pub fn extras(&self) -> &Extras {
+        static NONE: Extras = Extras::NONE;
+        self.extras.as_deref().unwrap_or(&NONE)
+    }
+    pub fn extras_mut(&mut self) -> &mut Extras {
+        self.extras.get_or_insert_default()
+    }
 }
 
 /// How a node enters: it always fades in from transparent, and starts from
@@ -737,7 +807,7 @@ impl Paints for Style {
 /// ```
 /// use mui_scene::prelude::*;
 /// let save = leaf(64., 28.).role(Kind::Button).label("Save").tip("Write it out").id("save");
-/// assert!(save.payload().tip.is_some());
+/// assert!(save.payload().extras().tip.is_some());
 /// ```
 pub trait Styled: Paints {
     fn element_mut(&mut self) -> &mut Element;
@@ -747,7 +817,7 @@ pub trait Styled: Paints {
     /// renderer.
     fn border_ramp(mut self, ramp: crate::BorderRamp) -> Self {
         self.style_mut().stroke = None;
-        self.element_mut().border_ramp = Some(ramp);
+        self.element_mut().extras_mut().border_ramp = Some(ramp);
         self
     }
 
@@ -755,25 +825,25 @@ pub trait Styled: Paints {
     /// Layout remains intrinsic; only material outlines are derived. Nested
     /// owners start a new scope. Rounding belongs here, never on each panel.
     fn surface_layout(mut self, padding: impl Into<Spacing>) -> Self {
-        self.element_mut().surface_padding = Some(padding.into());
+        self.element_mut().extras_mut().surface_padding = Some(padding.into());
         self
     }
     /// A recessed material using this node's footprint and the owner's corners.
     fn inset_surface(mut self) -> Self {
-        self.element_mut().inset_surface = Some(Vec::new());
+        self.element_mut().extras_mut().inset_surface = Some(Vec::new());
         self
     }
     /// One recessed material made from several named layout footprints.
     /// Use a background sibling when controls occupy holes in the material.
     fn inset_surface_of(mut self, members: impl IntoIterator<Item = Id>) -> Self {
-        self.element_mut().inset_surface = Some(members.into_iter().collect());
+        self.element_mut().extras_mut().inset_surface = Some(members.into_iter().collect());
         self
     }
     /// Extend the owner's border material into this frame. The named body
     /// supplies the attachment edge, including when several bodies share a rim.
     /// This node retains its ordinary layout and interaction rectangle.
     fn join_border(mut self, body: impl Into<Id>) -> Self {
-        self.element_mut().border_join = Some(body.into());
+        self.element_mut().extras_mut().border_join = Some(body.into());
         self
     }
 
@@ -781,13 +851,13 @@ pub trait Styled: Paints {
     /// the analytic GPU backend. Unsupported effects and contours fail; this
     /// never silently bakes an image on the UI thread.
     fn gpu_weld(mut self, options: crate::Weld) -> Self {
-        self.element_mut().welding = Some(options);
+        self.element_mut().extras_mut().welding = Some(options);
         self.element_mut().weld_backend = Some(crate::WeldBackend::AnalyticGpu);
         self
     }
     /// Explicit CPU reference for snapshots/general contours, not animation.
     fn reference_weld(mut self, options: crate::Weld) -> Self {
-        self.element_mut().welding = Some(options);
+        self.element_mut().extras_mut().welding = Some(options);
         self.element_mut().weld_backend = Some(crate::WeldBackend::Reference);
         self
     }
@@ -796,7 +866,7 @@ pub trait Styled: Paints {
     /// `Weld::all()` blends both. For a shared vector outline that leaves
     /// each child's paint alone, see [`Paints::union`].
     fn weld_with(mut self, weld: crate::Weld) -> Self {
-        self.element_mut().welding = Some(weld);
+        self.element_mut().extras_mut().welding = Some(weld);
         self
     }
     /// Merge bodies but keep each source border, including internal seams.
@@ -810,13 +880,15 @@ pub trait Styled: Paints {
     /// Set explicit progress, retaining the group's other welding settings.
     /// Non-finite or out-of-range progress is a resolution error, not clamped.
     fn weld_morph(mut self, progress: f64) -> Self {
-        let e = self.element_mut();
+        let e = self.element_mut().extras_mut();
         e.welding = Some(e.welding.unwrap_or_default().morph(progress));
         self
     }
     /// Remove the material weld. A [`Paints::union`] is independent.
     fn without_weld(mut self) -> Self {
-        self.element_mut().welding = None;
+        if let Some(x) = &mut self.element_mut().extras {
+            x.welding = None;
+        }
         self
     }
     /// Keep this child independent from its immediate parent's weld. Text and
@@ -828,13 +900,13 @@ pub trait Styled: Paints {
     /// Override this group's pixel/work budgets. The host's device scale still
     /// wins when SceneSpec supplies one; no widget multiplies layout lengths.
     fn weld_quality(mut self, quality: crate::WeldQuality) -> Self {
-        self.element_mut().weld_quality = Some(quality);
+        self.element_mut().extras_mut().weld_quality = Some(quality);
         self
     }
     /// A custom closed shape in local logical units. Use opposite contour
     /// winding for holes. The shape becomes paint, clip and hit geometry.
     fn outline(mut self, shape: impl Fn(Size) -> Path + Send + Sync + 'static) -> Self {
-        self.element_mut().outline = Some(Outline(Arc::new(shape)));
+        self.element_mut().extras_mut().outline = Some(Outline(Arc::new(shape)));
         self
     }
 
@@ -903,7 +975,7 @@ pub trait Styled: Paints {
     /// assert!(wide > bare);
     /// ```
     fn reserve(mut self, s: impl Into<String>) -> Self {
-        self.element_mut().reserve = Some(s.into());
+        self.element_mut().extras_mut().reserve = Some(s.into());
         self
     }
     /// Declare what this node looks like while hovered, pressed or focused,
@@ -928,7 +1000,7 @@ pub trait Styled: Paints {
         self
     }
     fn tip(mut self, s: impl Into<String>) -> Self {
-        self.element_mut().tip = Some(s.into());
+        self.element_mut().extras_mut().tip = Some(s.into());
         self
     }
     /// What this node is, for accessibility: `.role(Kind::Button)`. Only a
@@ -937,7 +1009,7 @@ pub trait Styled: Paints {
         let e = self.element_mut();
         match &mut e.semantics {
             Some(s) => s.role = k,
-            none => *none = Some(Semantics::new(k)),
+            none => *none = Some(Box::new(Semantics::new(k))),
         }
         self
     }
@@ -946,7 +1018,7 @@ pub trait Styled: Paints {
         let e = self.element_mut();
         let s = e
             .semantics
-            .get_or_insert_with(|| Semantics::new(Kind::Group));
+            .get_or_insert_with(|| Box::new(Semantics::new(Kind::Group)));
         s.label = Some(name.into());
         self
     }
@@ -960,6 +1032,13 @@ pub trait Styled: Paints {
     /// pointer sees the wheel *and* the innermost scroller slides.
     fn captures_wheel(mut self) -> Self {
         self.element_mut().captures_wheel = true;
+        self
+    }
+    /// This node's tree reads the raw pointer (`Ui::local`, the host's own
+    /// input), not just its hover: a hover readout, a crosshair. A move over
+    /// it is never `Ui::inert`, so the host frames it.
+    fn tracks_pointer(mut self) -> Self {
+        self.element_mut().tracks_pointer = true;
         self
     }
     /// Switch this node -- and everything under it -- off: it drops out of
@@ -994,7 +1073,7 @@ pub trait Styled: Paints {
     /// Animate a position by springing the value you feed the tree instead
     /// (see `Ui::tween`).
     fn transition(mut self, s: Spring) -> Self {
-        self.element_mut().transition = Some(s);
+        self.element_mut().extras_mut().transition = Some(s);
         self
     }
     /// Sit this container's text children on one baseline instead of
@@ -1042,14 +1121,14 @@ pub trait Styled: Paints {
     /// ```
     /// use mui_scene::prelude::*;
     /// let knob = leaf(16., 16.).pill().animate_layout();
-    /// assert!(knob.payload().layout_transition.is_some());
+    /// assert!(knob.payload().extras().layout_transition.is_some());
     /// ```
     fn animate_layout(self) -> Self {
         self.layout_transition(Spring::DEFAULT)
     }
     /// [`Styled::animate_layout`] with your own spring.
     fn layout_transition(mut self, s: Spring) -> Self {
-        self.element_mut().layout_transition = Some(s);
+        self.element_mut().extras_mut().layout_transition = Some(s);
         self
     }
     /// Come in from `from` and fade in on the first frame the node exists;
@@ -1063,10 +1142,10 @@ pub trait Styled: Paints {
     /// ```
     /// use mui_scene::prelude::*;
     /// let toast = text("Saved").appear(Appear::Slide(0., 12.)).id("toast");
-    /// assert!(toast.payload().transition.is_some());
+    /// assert!(toast.payload().extras().transition.is_some());
     /// ```
     fn appear(mut self, from: Appear) -> Self {
-        let e = self.element_mut();
+        let e = self.element_mut().extras_mut();
         e.appear = Some(from);
         e.transition.get_or_insert(Spring::DEFAULT);
         e.layout_transition.get_or_insert(Spring::DEFAULT);
@@ -1085,11 +1164,11 @@ pub trait Styled: Paints {
     /// use mui_scene::prelude::*;
     /// let module_uid = 7u64;
     /// let slot = leaf(80., 40.).animate_layout().identity(module_uid).id("osc/3");
-    /// assert!(slot.payload().identity.is_some());
+    /// assert!(slot.payload().extras().identity.is_some());
     /// ```
     fn identity(mut self, what: impl std::hash::Hash) -> Self {
         use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher};
-        self.element_mut().identity =
+        self.element_mut().extras_mut().identity =
             Some(BuildHasherDefault::<DefaultHasher>::default().hash_one(what));
         self
     }
@@ -1104,11 +1183,11 @@ pub trait Styled: Paints {
     /// use mui_scene::prelude::*;
     /// let playing = true;
     /// let icon = leaf(24., 24.).morph(if playing { "pause" } else { "play" }).id("transport");
-    /// assert!(icon.payload().morph.is_some());
+    /// assert!(icon.payload().extras().morph.is_some());
     /// ```
     fn morph(mut self, shape: impl std::hash::Hash) -> Self {
         use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher};
-        self.element_mut().morph =
+        self.element_mut().extras_mut().morph =
             Some(BuildHasherDefault::<DefaultHasher>::default().hash_one(shape));
         self
     }
@@ -1127,7 +1206,7 @@ impl Styled for El {
 #[cfg(test)]
 mod tests {
     use crate::prelude::*;
-    use crate::{Content, Style};
+    use crate::{Content, Element, Style};
     use std::cell::Cell;
     use std::rc::Rc;
     use std::sync::Arc;
@@ -1179,6 +1258,15 @@ mod tests {
         let _ = (changed.0)(size);
         let _ = (changed.0)(Size::new(81., 40.));
         assert_eq!(calls.get(), 3);
+    }
+
+    /// Every builder call moves the node by value, so its size is the price
+    /// of every `.fill(..)`: rare fields live in `Extras` and `Rare` boxes.
+    #[test]
+    fn nodes_stay_small() {
+        use std::mem::size_of;
+        assert!(size_of::<Element>() <= 352, "{}", size_of::<Element>());
+        assert!(size_of::<El>() <= 680, "{}", size_of::<El>());
     }
 
     /// The whole merge rule: per field, the side that states something wins,

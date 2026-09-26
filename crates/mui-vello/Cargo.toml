@@ -17,6 +17,7 @@ cpu-threads = ["cpu", "vello_cpu/multithreading"]
 mui-scene = { path = "../mui-scene" }
 mui-weld = { path = "../mui-weld" }
 mui-geometry = { path = "../mui-geometry" }
+rustc-hash = "1.1"
 # No wgpu backend features: a plugin renders into the device its host wrapper
 # already created, so this crate must not choose the backend. Hosts turn on
 # `wgpu_default` (desktop) or `webgl` (browser) themselves.

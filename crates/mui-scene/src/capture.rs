@@ -218,6 +218,7 @@ impl ResolvedScene {
             return Err(CaptureError::InvalidStack);
         }
         let mut result = self.clone();
+        result.memos.clear();
         result.paint.retain(|p| {
             matches!(
                 p.layer,

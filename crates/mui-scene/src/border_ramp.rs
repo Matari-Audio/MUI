@@ -4,7 +4,7 @@ use mui_geometry::{Bounds, Path, Point};
 #[cfg(test)]
 use mui_geometry::{PathCommand, RoundedRect};
 use mui_layout::{Frame, Id};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 /// One border, interpolated horizontally across a component's frame.
 /// Both width and paint use the same clamped linear ramp. This never changes
@@ -222,9 +222,10 @@ impl BorderCache {
         );
         Ok(world(band))
     }
-    pub(crate) fn sweep(&mut self) {
+    pub(crate) fn sweep(&mut self, age: u64) {
         let generation = self.generation;
-        self.entries.retain(|_, e| e.seen == generation);
+        self.entries
+            .retain(|_, e| generation.wrapping_sub(e.seen) <= age);
         self.generation = generation.wrapping_add(1);
     }
 }

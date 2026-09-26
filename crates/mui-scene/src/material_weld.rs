@@ -84,7 +84,7 @@ pub(crate) fn paint(p: Paint, b: Rect) -> Brush {
 /// integration consumes only the immediate plate's fill and inside stroke.
 pub(crate) fn check_plate(n: &El, nested: bool) -> Result<(), SceneError> {
     let s = &n.payload().style;
-    if nested && n.payload().welding.is_some() {
+    if nested && n.payload().extras().welding.is_some() {
         return Err(SceneError::UnsupportedWeld(
             "nested material-weld members; mark the nested group .exclude_from_weld()",
         ));
@@ -100,7 +100,9 @@ pub(crate) fn check_plate(n: &El, nested: bool) -> Result<(), SceneError> {
             "per-member compositing layers; use paint alpha or a layer on the welded group",
         ));
     }
-    if n.children().iter().any(|c| c.payload().carve.is_some()) && n.payload().welding.is_some() {
+    if n.children().iter().any(|c| c.payload().carve.is_some())
+        && n.payload().extras().welding.is_some()
+    {
         return Err(SceneError::UnsupportedWeld(
             "carving the material-weld container; carve an individual source outline instead",
         ));

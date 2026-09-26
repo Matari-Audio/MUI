@@ -121,28 +121,57 @@ fn naga_validates_crisp_boundary_uniform_stride() {
     assert_eq!(*stride, 48);
 }
 
-/// A path converts once; asked again unchanged -- the same `Arc` or an
-/// equal path -- it is not converted again, and a changed path is. A failed
-/// conversion leaves no stale pair behind.
+/// A path converts once per `Arc`, however many entries share it; a
+/// failed conversion leaves nothing behind, and an unused one ages out.
 #[test]
-fn an_unchanged_path_is_not_converted_again() {
+fn a_shared_path_is_converted_once() {
     use mui_geometry::Path;
     use std::sync::Arc;
     let mut c = super::Converted::default();
-    c.resize(1);
     let pill = Arc::new(Path::capsule(20., 60.).unwrap());
-    let first = c.get(0, &pill).unwrap().clone();
-    // Poison the kept conversion: an unchanged path must come back as is.
-    c.0[0].1.truncate(0);
-    assert!(c.get(0, &pill).unwrap().elements().is_empty());
-    let equal = Arc::new((*pill).clone());
-    assert!(c.get(0, &equal).unwrap().elements().is_empty(), "equal");
+    let first = c.get(&pill).unwrap().clone();
+    // Poison the kept conversion: the same `Arc` must come back as is.
+    c.map.values_mut().next().unwrap().1.truncate(0);
+    assert!(c.get(&pill.clone()).unwrap().elements().is_empty());
     let wider = Arc::new(Path::capsule(20., 80.).unwrap());
-    assert_ne!(c.get(0, &wider).unwrap(), &first);
+    assert_ne!(c.get(&wider).unwrap(), &first);
     let mut bad = (*pill).clone();
     if let mui_geometry::PathCommand::ArcTo(arc) = &mut bad.commands[1] {
         arc.radius *= 2.;
     }
-    assert!(c.get(0, &Arc::new(bad)).is_err());
-    assert_eq!(c.get(0, &pill).unwrap(), &first);
+    assert!(c.get(&Arc::new(bad)).is_err());
+    assert_eq!(c.map.len(), 2);
+    for _ in 0..=2 * super::AGE {
+        c.tick();
+        c.get(&wider).unwrap();
+    }
+    assert_eq!(c.map.len(), 1, "the unused pill aged out");
+}
+
+/// A long path's fill is encoded once per colour and handed back while the
+/// colour stays; placed by `append`, it is the encoding a fresh fill writes.
+#[test]
+fn a_replayed_fill_is_kept_per_colour_and_encodes_as_a_fill() {
+    use mui_geometry::Path;
+    use std::sync::Arc;
+    use vello::peniko::{Color, Fill};
+    let mut c = super::Converted::default();
+    let pill = Arc::new(Path::capsule(20., 60.).unwrap());
+    let red = Color::from_rgb8(255, 0, 0);
+    let kept = c.fill(&pill, red).unwrap() as *const vello::Scene;
+    assert_eq!(kept, c.fill(&pill, red).unwrap() as *const _);
+    let at = crate::kurbo::Affine::translate((10.25, 3.5)) * crate::kurbo::Affine::scale(1.5);
+    for color in [Color::from_rgb8(0, 0, 255), red] {
+        let mut replayed = vello::Scene::new();
+        replayed.append(c.fill(&pill, color).unwrap(), Some(at));
+        let mut fresh = vello::Scene::new();
+        fresh.fill(Fill::NonZero, at, color, None, c.get(&pill).unwrap());
+        let (a, b) = (replayed.encoding(), fresh.encoding());
+        assert!(a.path_tags == b.path_tags);
+        assert_eq!(a.path_data, b.path_data);
+        assert!(a.draw_tags == b.draw_tags);
+        assert_eq!(a.draw_data, b.draw_data);
+        assert_eq!(a.transforms, b.transforms);
+        assert_eq!(a.styles, b.styles);
+    }
 }
