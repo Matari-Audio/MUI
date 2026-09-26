@@ -82,8 +82,9 @@ impl<'a> Walk<'a> {
                 self.spec,
                 self.region_cache,
             )?;
+            let origin = geometry.origin;
             self.regions
-                .extend(geometry.panels.into_iter().map(|(i, p)| (i, Arc::new(p))));
+                .extend(geometry.panels.into_iter().map(|(i, p)| (i, (p, origin))));
             self.joined_nodes.extend(geometry.join_nodes);
             self.surface_joins.insert(at, geometry.joins);
         }

@@ -298,8 +298,11 @@ impl Walk<'_> {
         frame: Frame,
         first: usize,
     ) -> Result<Contour, SceneError> {
-        if let Some(path) = self.regions.get(&first.saturating_sub(1)) {
-            return Ok(Contour::path(path.clone()));
+        if let Some((path, offset)) = self.regions.get(&first.saturating_sub(1)) {
+            return Ok(Contour {
+                offset: *offset,
+                ..Contour::path(path.clone())
+            });
         }
         if n.payload().extras().outline.is_some()
             && n.children().iter().any(|c| c.payload().carve.is_some())

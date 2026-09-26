@@ -41,7 +41,9 @@ impl Inputs {
 }
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Geometry {
-    pub panels: Vec<(usize, Path)>,
+    /// Local to `origin`, and the same `Arc`s while the inputs hold.
+    pub panels: Vec<(usize, Arc<Path>)>,
+    pub origin: Point,
     pub joins: Path,
     pub join_nodes: Vec<usize>,
 }
@@ -247,10 +249,10 @@ impl Cache {
         // Node indices are stored relative to the owner, which a wrapper
         // around the root shifts as a whole, and paths relative to its frame.
         let placed = |mut g: Geometry| {
-            for (i, p) in &mut g.panels {
+            for (i, _) in &mut g.panels {
                 *i += at;
-                p.translate(origin);
             }
+            g.origin = origin;
             g.joins.translate(origin);
             g.join_nodes.iter_mut().for_each(|i| *i += at);
             g
@@ -350,7 +352,7 @@ fn resolve(i: &Inputs) -> Result<Geometry, SceneError> {
             })
             .collect::<Result<Vec<_>, _>>()?;
         if shapes.is_empty() {
-            panels.push((*index, Path::default()));
+            panels.push((*index, Arc::default()));
             continue;
         }
         // Border labels own their cutout. Reserve their footprint here so a
@@ -399,15 +401,16 @@ fn resolve(i: &Inputs) -> Result<Geometry, SceneError> {
         let rounded = fillet(&topology, rounding)?.path;
         panels.push((
             *index,
-            combine(
+            Arc::new(combine(
                 &i.corners.shape(&rounded),
                 &available,
                 BooleanOp::Intersection,
-            )?,
+            )?),
         ));
     }
     Ok(Geometry {
         panels,
+        origin: Point::ZERO,
         joins,
         join_nodes: i.joins.iter().map(|(index, ..)| *index).collect(),
     })

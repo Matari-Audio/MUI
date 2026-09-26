@@ -186,7 +186,8 @@ struct Deferred<'a> {
 struct Walk<'a> {
     spec: &'a SceneSpec,
     frames: Cow<'a, [Frame]>,
-    regions: HashMap<usize, Arc<Path>>,
+    /// Each region child's outline, placed.
+    regions: HashMap<usize, PlacedPath>,
     region_envelopes: HashMap<usize, Arc<Path>>,
     runs: Runs<'a>,
     /// Subtree size per pre-order index; see [`subtree_sizes`].
