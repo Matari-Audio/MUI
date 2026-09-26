@@ -330,10 +330,10 @@ impl PreviewScene for GlyphAxes {
             .map(|(t, _, _, v)| (t.as_str(), *v as f32))
             .collect();
         let path = mui_text::glyph_path(&self.font, self.glyph, self.size, &settings, 0.05).ok()?;
-        let b = mui::geometry::Bounds::from_points(path.flatten(0.05, 250_000).ok()?.concat())?;
-        let centre = mui::geometry::Point::new(
-            Self::CARD / 2.0 - (b.min.x + b.max.x) / 2.0,
-            Self::CARD / 2.0 - (b.min.y + b.max.y) / 2.0,
+        let b = mui::geometry::bounds(path.flatten(0.05, 250_000).ok()?.concat())?;
+        let centre = mui::geometry::Vec2::new(
+            Self::CARD / 2.0 - (b.x0 + b.x1) / 2.0,
+            Self::CARD / 2.0 - (b.y0 + b.y1) / 2.0,
         );
         Some(("glyph-card", path.rigid_transform(centre, 0.0).ok()?))
     }

@@ -686,7 +686,7 @@ impl Ui {
             let inside = p.x >= f.x && p.x <= f.right() && p.y >= f.y && p.y <= f.bottom();
             let clipped = s
                 .clip
-                .is_some_and(|c| p.x < c.min.x || p.x > c.max.x || p.y < c.min.y || p.y > c.max.y);
+                .is_some_and(|c| p.x < c.x0 || p.x > c.x1 || p.y < c.y0 || p.y > c.y1);
             if inside && !clipped {
                 response.wheel = self.wheel;
             }
@@ -2418,7 +2418,7 @@ impl Ui {
                 continue;
             }
             if s.clip.is_some_and(|clip| {
-                p.x < clip.min.x || p.x > clip.max.x || p.y < clip.min.y || p.y > clip.max.y
+                p.x < clip.x0 || p.x > clip.x1 || p.y < clip.y0 || p.y > clip.y1
             }) {
                 continue;
             }
