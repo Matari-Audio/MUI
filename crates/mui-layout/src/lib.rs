@@ -278,7 +278,12 @@ fn resolve_impl<P, M: Into<Intrinsic>>(
         left: limits.nodes,
         limits,
         scale,
-        keys: Default::default(),
+        // Filled only by a solve without the cache -- every one of a live
+        // resize -- one id per keyed node: room for a window's worth at once.
+        keys: rustc_hash::FxHashSet::with_capacity_and_hasher(
+            limits.nodes.min(256),
+            Default::default(),
+        ),
         redo: false,
         pinned: false,
         measurer: &mut measurer,
