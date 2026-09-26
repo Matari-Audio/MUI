@@ -19,8 +19,9 @@ cargo clippy -p mui-vello --no-default-features --features gpu-effects --all-tar
 # `spawn_app` entry point and is served from a canvas.
 # mui-gain-plugin is a CLAP/VST3 cdylib: truce-vst3 compiles a C++ shim and
 # truce-clap wants a native parent window, so it has no wasm build at all.
+# mui-baseview is a native window (baseview + a wgpu surface): no wasm either.
 # mui-truce itself stays in: its window/GPU half is cfg'd out on wasm32.
-cargo check --workspace --all-features --exclude mui-preview --exclude mui-gain-plugin --target wasm32-unknown-unknown --locked --offline
+cargo check --workspace --all-features --exclude mui-preview --exclude mui-gain-plugin --exclude mui-baseview --target wasm32-unknown-unknown --locked --offline
 
 # ---------------------------------------------------------------------------
 # media/: its own workspace (mui-stage, mui-reel, mui-motion-bridge), kept out

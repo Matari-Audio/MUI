@@ -1524,6 +1524,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "mui-baseview"
+version = "0.4.0"
+dependencies = [
+ "accesskit_unix",
+ "arboard",
+ "baseview-truce",
+ "epaint_default_fonts",
+ "keyboard-types",
+ "mui",
+ "mui-access",
+ "raw-window-handle 0.5.2",
+ "truce-gui-utils",
+ "wgpu",
+]
+
+[[package]]
 name = "mui-gain-plugin"
 version = "0.4.0"
 dependencies = [
@@ -1654,18 +1670,14 @@ dependencies = [
 name = "mui-truce"
 version = "0.4.0"
 dependencies = [
- "accesskit_unix",
- "arboard",
  "baseview-truce",
  "keyboard-types",
  "mui",
- "mui-access",
+ "mui-baseview",
  "raw-window-handle 0.5.2",
  "truce",
  "truce-core",
- "truce-gui-utils",
  "truce-params",
- "wgpu",
 ]
 
 [[package]]

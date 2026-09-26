@@ -13,6 +13,7 @@ members = [
   "crates/mui-text",
   "crates/mui-vello",
   "crates/mui-truce",
+  "crates/mui-baseview",
   "crates/mui-input",
   "crates/mui-access",
   "crates/mui-symbols",
@@ -33,6 +34,7 @@ license = "MIT"
 # Internal crates.
 mui = { path = "crates/mui" }
 mui-access = { path = "crates/mui-access" }
+mui-baseview = { path = "crates/mui-baseview" }
 mui-geometry = { path = "crates/mui-geometry" }
 mui-input = { path = "crates/mui-input" }
 mui-layout = { path = "crates/mui-layout" }

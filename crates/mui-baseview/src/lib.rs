@@ -1,8 +1,9 @@
-//! The editor window, independent of any plugin framework's traits: a
-//! baseview child of the host's window, a wgpu surface on it, and
-//! `GpuRenderer` painting the resolved scene. [`crate::MuiEditor`] is
-//! truce's consumer; another framework's adapter opens the same window with
-//! its own [`View`].
+//! A native MUI window that knows no plugin framework: a baseview window,
+//! a wgpu surface on it, and `GpuRenderer` painting the resolved scene.
+//! [`open`] parents it under a plugin host's window (mui-truce's
+//! `MuiEditor` is one consumer; any other framework's adapter opens the same
+//! window with its own [`View`]); [`run`] is the same window as a standalone
+//! app.
 //!
 //! The tree and the pointer are in **logical points**; the surface is
 //! physical, and the paint transform applies the window's scale once.
@@ -11,6 +12,7 @@
 //! display tick, so a press and release that land between two ticks are
 //! still two frames. A tick with no event, no model change, no animation
 //! and no deadline due paints nothing.
+#![deny(unsafe_code)]
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -55,7 +57,8 @@ pub struct Shared<V> {
     pub view: V,
 }
 
-pub(crate) fn lock<V>(shared: &Mutex<Shared<V>>) -> MutexGuard<'_, Shared<V>> {
+/// Lock the shared state, through a poisoned lock.
+pub fn lock<V>(shared: &Mutex<Shared<V>>) -> MutexGuard<'_, Shared<V>> {
     // A panic caught at the FFI edge (unwinding builds only) poisons the
     // lock; the state is still the last consistent frame's.
     shared.lock().unwrap_or_else(PoisonError::into_inner)
@@ -90,7 +93,7 @@ impl Requests {
     }
 }
 
-/// Open the editor under `parent`, `size` logical points.
+/// Open the window under `parent`, `size` logical points.
 pub fn open<V: View>(
     parent: &impl HasRawWindowHandle,
     title: &str,
@@ -99,6 +102,35 @@ pub fn open<V: View>(
     shared: Arc<Mutex<Shared<V>>>,
     requests: Arc<Requests>,
 ) -> WindowHandle {
+    let (options, build) = prepare(title, size, scale, shared, requests, true);
+    Window::open_parented(parent, options, build)
+}
+
+/// Run a top-level window of `size` logical points at the system scale, until
+/// it closes: an app's main loop.
+pub fn run<V: View>(
+    title: &str,
+    size: (u32, u32),
+    shared: Arc<Mutex<Shared<V>>>,
+    requests: Arc<Requests>,
+) {
+    let scale = WindowScalePolicy::SystemScaleFactor;
+    let (options, build) = prepare(title, size, scale, shared, requests, false);
+    Window::open_blocking(options, build);
+}
+
+/// The window options and the handler constructor `open` and `run` share.
+fn prepare<V: View>(
+    title: &str,
+    size: (u32, u32),
+    scale: WindowScalePolicy,
+    shared: Arc<Mutex<Shared<V>>>,
+    requests: Arc<Requests>,
+    parented: bool,
+) -> (
+    WindowOpenOptions,
+    impl FnOnce(&mut Window) -> Handler<V> + Send + 'static,
+) {
     let options = WindowOpenOptions {
         title: title.to_owned(),
         size: baseview::Size::new(f64::from(size.0), f64::from(size.1)),
@@ -112,11 +144,13 @@ pub fn open<V: View>(
         (f64::from(size.0) * initial_scale).round() as u32,
         (f64::from(size.1) * initial_scale).round() as u32,
     );
-    Window::open_parented(parent, options, move |_: &mut Window| {
+    let build = move |_: &mut Window| {
         let mut handler = Handler::new(shared, requests, physical, initial_scale);
         handler.a11y = Some(A11y::new());
+        handler.parented = parented;
         handler
-    })
+    };
+    (options, build)
 }
 
 /// A native event, as the frame it will become. Each carries its pointer
@@ -132,7 +166,11 @@ enum Pending {
     Cancel(PointerInput),
 }
 
-pub(crate) struct Handler<V> {
+/// The window's event handler. Public so a framework adapter can drive it
+/// headless in its own tests ([`Handler::new`], [`Handler::step`],
+/// [`Handler::on_event_inner`]); a window gets one from [`open`] or [`run`].
+#[doc(hidden)]
+pub struct Handler<V> {
     shared: Arc<Mutex<Shared<V>>>,
     gpu: Option<Host>,
     gpu_retry_at: Instant,
@@ -141,13 +179,15 @@ pub(crate) struct Handler<V> {
     unpainted: bool,
     /// A screen reader's side; only a real window has one.
     a11y: Option<A11y>,
+    /// A child of a host's window: keep it pinned to the parent's top.
+    parented: bool,
     driver: Driver,
 }
 
 /// Everything but the model and the GPU: the event queue and the frame
 /// schedule. Its own struct so a frame can borrow it next to the locked
 /// model.
-pub(crate) struct Driver {
+struct Driver {
     requests: Arc<Requests>,
     pointer: PointerInput,
     pending: VecDeque<Pending>,
@@ -169,7 +209,8 @@ pub(crate) struct Driver {
 }
 
 impl<V: View> Handler<V> {
-    pub(crate) fn new(
+    /// A handler with no window, GPU or screen reader yet.
+    pub fn new(
         shared: Arc<Mutex<Shared<V>>>,
         requests: Arc<Requests>,
         size: (u32, u32),
@@ -183,6 +224,7 @@ impl<V: View> Handler<V> {
             applied_cursor: None,
             unpainted: true,
             a11y: None,
+            parented: false,
             driver: Driver {
                 requests,
                 pointer: PointerInput::default(),
@@ -216,11 +258,14 @@ impl<V: View> Handler<V> {
         // A hidden or detached editor cannot present, and on Windows this is
         // the host's GUI thread: a blocking present there freezes the host.
         let handle = window.raw_window_handle();
-        if crate::platform::should_skip_frame(handle) {
+        if truce_gui_utils::should_skip_frame(handle) {
             return;
         }
         // macOS: keep the child pinned to the parent's top as it resizes.
-        crate::platform::reanchor_to_superview_top(handle);
+        // A top-level window's view is its content view: leave it be.
+        if self.parented {
+            truce_gui_utils::reanchor_to_superview_top(handle);
+        }
         let now = Instant::now();
         let size = self.driver.size;
         // Lost between presents: an idle editor would never find out. The
@@ -235,7 +280,7 @@ impl<V: View> Handler<V> {
                     self.unpainted = true;
                 }
                 Err(e) => {
-                    eprintln!("mui-truce: GPU unavailable ({e}); retrying");
+                    eprintln!("mui-baseview: GPU unavailable ({e}); retrying");
                     self.gpu_retry_at = now + GPU_RETRY;
                 }
             }
@@ -273,7 +318,7 @@ impl<V: View> Handler<V> {
         };
         if let (Some(gpu), Some(scene)) = (self.gpu.as_mut(), scene) {
             if let Err(e) = gpu.resize(size.0, size.1) {
-                eprintln!("mui-truce: {e}");
+                eprintln!("mui-baseview: {e}");
             }
             match gpu.present(&scene, Affine::scale(self.driver.scale)) {
                 Ok(Frame::Presented(_)) => self.unpainted = false,
@@ -287,7 +332,7 @@ impl<V: View> Handler<V> {
                     if let Some(surface) = surface {
                         gpu.replace_surface(surface);
                     } else {
-                        eprintln!("mui-truce: surface lost; rebuilding");
+                        eprintln!("mui-baseview: surface lost; rebuilding");
                         self.gpu = None;
                         self.gpu_retry_at = now + GPU_RETRY;
                     }
@@ -295,7 +340,7 @@ impl<V: View> Handler<V> {
                 Err(e) => {
                     // Not a lost surface: painting it again would fail
                     // again. A lost device rebuilds on its own schedule.
-                    eprintln!("mui-truce: {e}");
+                    eprintln!("mui-baseview: {e}");
                     self.unpainted = false;
                 }
             }
@@ -309,13 +354,13 @@ impl<V: View> Handler<V> {
 
     /// One display tick without a window or GPU, a frame's time after the
     /// last: what the headless tests drive.
-    #[cfg(test)]
-    pub(crate) fn step(&mut self) -> bool {
+    pub fn step(&mut self) -> bool {
         let now = self.driver.last_frame + Duration::from_millis(16);
         self.driver.advance(&mut lock(&self.shared), now)
     }
 
-    pub(crate) fn on_event_inner(&mut self, event: &Event) -> EventStatus {
+    /// One native event, as baseview delivers it.
+    pub fn on_event_inner(&mut self, event: &Event) -> EventStatus {
         let status = self.driver.on_event(event);
         if let (Some(a11y), Event::Window(e @ (WindowEvent::Focused | WindowEvent::Unfocused))) =
             (self.a11y.as_mut(), event)
@@ -336,7 +381,7 @@ impl<V: View> Handler<V> {
 impl Driver {
     /// Run the queued events and whatever else is due through `Ui::frame`.
     /// Returns whether there is a new scene to paint.
-    pub(crate) fn advance<V: View>(&mut self, s: &mut Shared<V>, now: Instant) -> bool {
+    fn advance<V: View>(&mut self, s: &mut Shared<V>, now: Instant) -> bool {
         self.dirty |= self.requests.redraw.swap(false, Ordering::AcqRel);
         self.dirty |= s.view.changed();
         if target_size(self.size.0, self.size.1).is_none() {
@@ -418,7 +463,7 @@ impl Driver {
             }
             Err(e) => {
                 if !self.failing {
-                    eprintln!("mui-truce: layout refused at {offered:?}: {e}");
+                    eprintln!("mui-baseview: layout refused at {offered:?}: {e}");
                 }
                 self.failing = true;
                 Err(())
@@ -571,7 +616,7 @@ impl<V: View> WindowHandler for Handler<V> {
         // under `panic = "unwind"` (the `plugin` profile); under release's
         // abort the panic kills the process before it gets here.
         if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.tick(window))).is_err() {
-            eprintln!("mui-truce: panic in a frame, swallowed at the FFI edge");
+            eprintln!("mui-baseview: panic in a frame, swallowed at the FFI edge");
         }
     }
 

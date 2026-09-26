@@ -4,12 +4,9 @@
 //!
 //! Ported from truce-gui 6.3.0 `src/platform.rs`
 //! (<https://github.com/truce-audio/truce>), licensed
-//! `LicenseRef-TruceLicense-1.0`. `should_skip_frame` and
-//! `reanchor_to_superview_top` come from truce-gui-utils directly, which
-//! has no wgpu.
+//! `LicenseRef-TruceLicense-1.0`.
 use raw_window_handle::{HasRawWindowHandle, RawWindowHandle as Rwh};
 use truce_core::editor::RawWindowHandle;
-pub(crate) use truce_gui_utils::{reanchor_to_superview_top, should_skip_frame};
 
 /// Truce's parent handle as baseview's raw-window-handle 0.5.
 pub(crate) struct ParentWindow(pub RawWindowHandle);
