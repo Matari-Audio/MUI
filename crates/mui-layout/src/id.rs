@@ -118,6 +118,17 @@ impl Id {
     /// assert_eq!(&*rack.slot(12), "rack/12");
     /// ```
     pub fn slot(&self, n: usize) -> Self {
+        Self::runtime_slot(self, n)
+    }
+
+    /// The runtime key of unnamed child `n` of the node keyed `parent`:
+    /// `parent/n`, built in place (`/0/2` under an unnamed root).
+    ///
+    /// ```
+    /// use mui_layout::Id;
+    /// assert_eq!(&*Id::runtime_slot("/0", 12), "/0/12");
+    /// ```
+    pub fn runtime_slot(parent: &str, n: usize) -> Self {
         // usize::MAX is 20 digits.
         let mut digits = [0u8; 20];
         let mut i = digits.len();
@@ -130,7 +141,7 @@ impl Id {
                 break;
             }
         }
-        self.join(std::str::from_utf8(&digits[i..]).unwrap_or_default())
+        Self::joined(parent, std::str::from_utf8(&digits[i..]).unwrap_or_default())
     }
 
     /// One more segment from a permanent, non-reused model entity ID.
@@ -169,7 +180,10 @@ impl Id {
     }
 
     fn join(&self, part: &str) -> Self {
-        let head = self.as_str();
+        Self::joined(self, part)
+    }
+
+    fn joined(head: &str, part: &str) -> Self {
         let len = head.len() + 1 + part.len();
         if len <= INLINE {
             let mut buf = [0u8; INLINE];

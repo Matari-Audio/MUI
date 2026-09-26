@@ -29,18 +29,19 @@ use crate::{Color, Cursor, El, Size};
 use outline::OutlineCache;
 use text::{Runs, fit, layout_key};
 
-/// Append child `j`'s step to a tree path, the `/0/2` key the scene gives a
-/// node without an id. By hand: `write!` is most of a walk's cost.
-/// The key `node` gives child `j` of the node at `parent`: its id, or its
-/// tree path.
+/// The key child `c`, the `j`th of the node at `parent`, gets: its id, or
+/// its tree path, the `/0/2` key the scene gives a node without an id.
 fn child_key(c: &El, parent: &str, j: usize) -> Id {
-    c.ident().cloned().unwrap_or_else(|| {
-        let mut p = parent.to_owned();
-        push_index(&mut p, j);
-        Id::runtime(&p)
-    })
+    c.ident()
+        .cloned()
+        .unwrap_or_else(|| Id::runtime_slot(parent, j))
 }
 
+/// Append child `j`'s step to a tree path held in a `String` buffer, for a
+/// walk that grows and truncates one path. By hand: `write!` is most of a
+/// walk's cost. Hidden: it is the runtime's
+/// shared spelling of [`Id::runtime_slot`], not an authoring API.
+#[doc(hidden)]
 pub fn push_index(path: &mut String, mut j: usize) {
     path.push('/');
     let at = path.len();
