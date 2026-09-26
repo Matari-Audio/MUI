@@ -38,6 +38,8 @@ Behaviour:
   wide as its longest line (it used to measure as one line), and one inside a
   flex share arranges the lines it measured.
 - The tooltip is an opaque box; it used to paint no background.
+- `cut`/`keep` on a node with a custom `.outline(..)` carves that outline (it
+  used to be an error).
 
 ## v0.4 (DSL v2)
 

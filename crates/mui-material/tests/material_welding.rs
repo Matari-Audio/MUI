@@ -219,7 +219,7 @@ fn a_union_is_a_vector_operation() {
 }
 
 #[test]
-fn a_custom_outline_is_not_silently_reinterpreted_as_solid_when_carved() {
+fn a_custom_outline_is_carved_as_itself_not_as_its_solid_frame() {
     let root = stack![]
         .square(24.)
         .outline(|s| {
@@ -233,12 +233,26 @@ fn a_custom_outline_is_not_silently_reinterpreted_as_solid_when_carved() {
             )
         })
         .fill(Role::Primary)
-        .cut(block(4., 4.));
-    assert!(matches!(
-        resolve(&SceneSpec::new(root)),
-        Err(SceneError::Geometry(mui_geometry::Error::InvalidOptions(m)))
-            if m.starts_with("cut/keep on a custom outline")
-    ));
+        .cut(block(4., 4.))
+        .id("t");
+    let s = resolve(&SceneSpec::new(root)).unwrap();
+    let rings = s.surface("t").unwrap().path.flatten(0.1, 10_000).unwrap();
+    let area: f64 = rings
+        .iter()
+        .map(|r| {
+            let twice: f64 = r
+                .iter()
+                .zip(r.iter().cycle().skip(1))
+                .map(|(a, b)| a.x * b.y - b.x * a.y)
+                .sum();
+            twice / 2.0
+        })
+        .sum();
+    // The triangle is 288; its solid frame would be 576.
+    assert!(
+        area.abs() < 288. && area.abs() > 288. - 16. - 1e-6,
+        "{area}"
+    );
 }
 
 #[test]
