@@ -41,9 +41,10 @@ impl Walk<'_> {
                 image_rect,
                 ..
             }) => {
-                self.external_welds
+                self.out
+                    .external_welds
                     .insert(self.key.clone(), external.clone());
-                self.paint.push(Painted {
+                self.out.paint.push(Painted {
                     key: self.key.clone(),
                     layer: Layer::External,
                     path: Arc::new(image_rect.path()),
@@ -117,7 +118,7 @@ impl Walk<'_> {
                 self.rect_path(child, mui_geometry::CornerStyle::Round)
             } else {
                 let from = (**cur.as_ref().unwrap_or(&contour.path)).clone();
-                let (path, changed) = self.region_cache.resolve_counted(
+                let (path, changed) = self.caches.regions.resolve_counted(
                     (self.key.clone(), SHELL.wrapping_add(i as u8)),
                     Operation::Inset(from, d),
                     self.spec.offsets,
@@ -285,15 +286,15 @@ impl Walk<'_> {
             crate::BorderAlign::Outside => {
                 // The same outline `Arc` is the same outline: its band is last
                 // frame's, with no path cloned to find that out.
-                let generation = self.outlines.generation;
+                let generation = self.caches.outlines.generation;
                 if let Some((outline, width, _, band, seen)) =
-                    self.outlines.bands.get_mut(&self.key)
+                    self.caches.outlines.bands.get_mut(&self.key)
                     && Arc::ptr_eq(outline, &contour.path)
                     && *width == w
                 {
                     *seen = generation;
                     let band = band.clone();
-                    self.region_cache.keep(&(self.key.clone(), STROKE_BAND));
+                    self.caches.regions.keep(&(self.key.clone(), STROKE_BAND));
                     return Ok(Some((band, None, st.fill.clone(), 0., false)));
                 }
                 // Shared with a surface owner's clearance: one entry per node.
@@ -301,7 +302,7 @@ impl Walk<'_> {
                     (self.key.clone(), STROKE_BAND),
                     Operation::Border((*contour.path).clone(), w, e.border_align),
                 )?);
-                self.outlines.bands.insert(
+                self.caches.outlines.bands.insert(
                     self.key.clone(),
                     (
                         contour.path.clone(),
@@ -329,17 +330,17 @@ impl Walk<'_> {
     ) -> Result<(), SceneError> {
         let th = self.spec.theme;
         let named_frame = |id: &mui_layout::Id| -> Result<_, SceneError> {
-            if let Some(frame) = self.ramp_frames.get(&(at, id.clone())) {
+            if let Some(frame) = self.plan.ramp_frames.get(&(at, id.clone())) {
                 return Ok(*frame);
             }
-            let index = find(n, id.as_str(), at, &self.sizes)
+            let index = find(n, id.as_str(), at, &self.tree.sizes)
                 .ok_or_else(|| missing("border ramp tab", id))?;
-            Ok(self.frames[index])
+            Ok(self.tree.frames[index])
         };
-        let anchor = match self.ramp_anchors.get(&at) {
+        let anchor = match self.plan.ramp_anchors.get(at) {
             Some(frame) => *frame,
             None => match &ramp.anchor {
-                None => self.frames[at],
+                None => self.tree.frames[at],
                 Some(id) => named_frame(id)?,
             },
         };
@@ -355,7 +356,7 @@ impl Walk<'_> {
         }
         // Anchors are frames, so the band is made in scene space.
         let world = contour.world();
-        let mut band = self.borders.band(
+        let mut band = self.caches.borders.band(
             &self.key,
             &world,
             &sweep,
@@ -370,7 +371,7 @@ impl Walk<'_> {
             _ => th.corners.concave,
         };
         crate::border_ramp::decorate(&mut band, ramp, anchor, shoulder, named_frame)?;
-        if let Some(joins) = self.surface_joins.get(&at) {
+        if let Some(joins) = self.plan.surface_joins.get(at) {
             band.commands.extend(joins.commands.iter().copied());
         }
         if ramp.align == crate::BorderAlign::Outside {
@@ -383,7 +384,7 @@ impl Walk<'_> {
         let Some(bounds) = mui_geometry::bounds(band.flatten(0.1, 250_000)?.concat()) else {
             return Ok(());
         };
-        let start = self.paint.len();
+        let start = self.out.paint.len();
         if ramp.align == crate::BorderAlign::Inside {
             self.mark_on(Layer::Clip, contour);
         }
@@ -391,9 +392,10 @@ impl Walk<'_> {
         if ramp.align == crate::BorderAlign::Inside {
             self.mark(Layer::Unclip, empty(), None);
         }
-        if !ramp.tabs.is_empty() || self.surface_joins.contains_key(&at) {
-            let paint: Vec<_> = self.paint.drain(start..).collect();
-            self.paint
+        if !ramp.tabs.is_empty() || self.plan.surface_joins.contains(at) {
+            let paint: Vec<_> = self.out.paint.drain(start..).collect();
+            self.out
+                .paint
                 .splice(border_background..border_background, paint);
         }
         Ok(())
@@ -418,7 +420,7 @@ impl Walk<'_> {
         rect: Option<RoundedRect>,
         offset: Point,
     ) {
-        self.paint.push(Painted {
+        self.out.paint.push(Painted {
             key: self.key.clone(),
             layer,
             path,
@@ -465,7 +467,7 @@ impl Walk<'_> {
         under: Color,
     ) -> Option<&mut Painted> {
         let paint = self.paint_of(fill, under)?;
-        self.paint.push(Painted {
+        self.out.paint.push(Painted {
             key: self.key.clone(),
             layer,
             path: path.into(),
@@ -476,7 +478,7 @@ impl Walk<'_> {
             blur: 0.0,
             text: None,
         });
-        self.paint.last_mut()
+        self.out.paint.last_mut()
     }
 }
 

@@ -38,7 +38,7 @@ impl Walk<'_> {
             ));
         }
         let interior = self.interior(n, outline, frame, (key, at), padding)?;
-        let end = at + self.sizes[at];
+        let end = at + self.tree.sizes[at];
         let Some(b) = self.flat_bounds(&interior)? else {
             self.collapse(at + 1..end);
             return Ok(());
@@ -52,7 +52,7 @@ impl Walk<'_> {
             .enumerate()
             .filter_map(|(j, c)| {
                 let i = next;
-                next += self.sizes[i];
+                next += self.tree.sizes[i];
                 (!c.is_float() && c.payload().carve.is_none()).then_some((i, c, j))
             })
             .collect();
@@ -82,7 +82,7 @@ impl Walk<'_> {
             let anchor = match &ramp.anchor {
                 None => frame,
                 Some(id) => {
-                    self.frames[find(n, id.as_str(), at, &self.sizes)
+                    self.tree.frames[find(n, id.as_str(), at, &self.tree.sizes)
                         .ok_or_else(|| missing("border ramp anchor", id))?]
                 }
             };
@@ -91,18 +91,19 @@ impl Walk<'_> {
                     mui_geometry::Error::InvalidOptions("border ramp anchor has no width").into(),
                 );
             }
-            let anchor = *self.ramp_anchors.entry(at).or_insert(anchor);
+            let anchor = *self.plan.ramp_anchors.get_or_insert(at, anchor);
             for id in ramp.tabs.iter().chain(&ramp.dividers) {
-                let index = find(n, id.as_str(), at, &self.sizes)
+                let index = find(n, id.as_str(), at, &self.tree.sizes)
                     .ok_or_else(|| missing("border ramp tab", id))?;
-                self.ramp_frames
-                    .insert((at, id.clone()), self.frames[index]);
+                self.plan
+                    .ramp_frames
+                    .insert((at, id.clone()), self.tree.frames[index]);
             }
             let mut inward = ramp.clone();
             inward.from.1 *= ramp.align.inward();
             inward.to.1 *= ramp.align.inward();
             if inward.from.1.max(inward.to.1) > 0. {
-                let mut band = self.borders.band(
+                let mut band = self.caches.borders.band(
                     &format!("inside/{key}"),
                     outline,
                     &inward,
@@ -115,7 +116,7 @@ impl Walk<'_> {
                     _ => self.spec.theme.corners.concave,
                 };
                 crate::border_ramp::decorate(&mut band, ramp, anchor, shoulder, |id| {
-                    Ok(self.ramp_frames[&(at, id.clone())])
+                    Ok(self.plan.ramp_frames[&(at, id.clone())])
                 })?;
                 let band = self.cached_region((key.clone(), 0), Operation::Sweep(band))?;
                 interior = self.cached_region(
@@ -148,10 +149,10 @@ impl Walk<'_> {
         let mut masks: Vec<Path> = children
             .iter()
             .map(|(i, ..)| {
-                if self.frames[*i].size.width <= 0. || self.frames[*i].size.height <= 0. {
+                if self.tree.frames[*i].size.width <= 0. || self.tree.frames[*i].size.height <= 0. {
                     Ok(Path::default())
                 } else {
-                    RoundedRect::new(bounds(self.frames[*i], None), 0.)
+                    RoundedRect::new(bounds(self.tree.frames[*i], None), 0.)
                         .map(mui_geometry::RoundedRect::path)
                 }
             })
@@ -163,8 +164,8 @@ impl Walk<'_> {
             return Err(mui_geometry::Error::InvalidOptions("bend requires two siblings").into());
         }
         let size = Size::new(b.x1 - b.x0, b.y1 - b.y0);
-        let a = self.frames[children[0].0];
-        let z = self.frames[children[1].0];
+        let a = self.tree.frames[children[0].0];
+        let z = self.tree.frames[children[1].0];
         let horizontal = z.x >= a.right() - 1e-6;
         if !horizontal && z.y < a.bottom() - 1e-6 {
             return Err(
@@ -212,7 +213,7 @@ impl Walk<'_> {
         // A child's outward border belongs inside its allocation too. Reserve
         // it before fitting the child, and retain the allocation as a paint cap.
         let path = Arc::new(path);
-        self.region_envelopes.insert(i, path.clone());
+        self.plan.region_envelopes.insert(i, path.clone());
         let mut path = path;
         if let Some(ramp) = &child.payload().extras().border_ramp {
             ramp.validate()?;
@@ -228,12 +229,12 @@ impl Walk<'_> {
                     )
                     .into());
                 }
-                let anchor = self.frames[i];
-                self.ramp_anchors.insert(i, anchor);
+                let anchor = self.tree.frames[i];
+                self.plan.ramp_anchors.insert(i, anchor);
                 let mut sweep = ramp.clone();
                 sweep.from.1 *= outward;
                 sweep.to.1 *= outward;
-                let band = self.borders.band(
+                let band = self.caches.borders.band(
                     &format!("outside/{id}"),
                     &path,
                     &sweep,
@@ -259,7 +260,7 @@ impl Walk<'_> {
                 )?);
             }
         }
-        let end = i + self.sizes[i];
+        let end = i + self.tree.sizes[i];
         match self.flat_bounds(&path)? {
             Some(b) => {
                 let padding = child.padding(self.spec.theme.spacing);
@@ -267,7 +268,7 @@ impl Walk<'_> {
             }
             None => self.collapse(i..end),
         }
-        self.regions.insert(i, (path, Point::ZERO));
+        self.plan.regions.insert(i, (path, Point::ZERO));
         Ok(())
     }
 
@@ -291,7 +292,7 @@ impl Walk<'_> {
             th.spacing,
             |e, room| fit(&mut self.runs, th, e, room),
         )?;
-        for (dest, f) in self.frames.to_mut()[range]
+        for (dest, f) in self.tree.frames.to_mut()[range]
             .iter_mut()
             .zip(&layout.all()[skip..])
         {
@@ -306,7 +307,7 @@ impl Walk<'_> {
 
     /// A subtree with no room: every frame in `range` paints nothing.
     fn collapse(&mut self, range: Range<usize>) {
-        for f in &mut self.frames.to_mut()[range] {
+        for f in &mut self.tree.frames.to_mut()[range] {
             f.size = Size::ZERO;
         }
     }
@@ -324,7 +325,8 @@ impl Walk<'_> {
         key: (crate::Id, u8),
         op: Operation,
     ) -> Result<Path, SceneError> {
-        self.region_cache
+        self.caches
+            .regions
             .resolve(key, op, self.spec.offsets, self.spec.geometry)
     }
 }

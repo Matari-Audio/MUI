@@ -24,13 +24,13 @@ impl<'a> Walk<'a> {
         under: Color,
         ancestors: &Ancestors,
     ) -> Result<(), SceneError> {
-        let frame = self.frames[self.i];
+        let frame = self.tree.frames[self.i];
         let at = self.i;
         self.i += 1;
         if frame.size.width <= 0.0 || frame.size.height <= 0.0 {
             // A flex share that collapsed to nothing: invisible, and so are
             // its children.
-            self.i = at + self.sizes[at];
+            self.i = at + self.tree.sizes[at];
             return Ok(());
         }
         let memo = match n.payload().extras().memo {
@@ -55,15 +55,15 @@ impl<'a> Walk<'a> {
         // A switched-off card switches off what it contains: nothing inside
         // it may be reached while its own frame cannot be.
         inner.disabled = ancestors.disabled || e.disabled;
-        if (e.extras().inset_surface.is_some() && !self.regions.contains_key(&at))
-            || (e.extras().border_join.is_some() && !self.joined_nodes.contains(&at))
+        if (e.extras().inset_surface.is_some() && !self.plan.regions.contains(at))
+            || (e.extras().border_join.is_some() && !self.plan.joined_nodes.contains(at))
         {
             return Err(mui_geometry::Error::InvalidOptions(
                 "material requires a surface-layout owner",
             )
             .into());
         }
-        let start = self.paint.len();
+        let start = self.out.paint.len();
         let material = self.material_weld(n, frame, path, under)?;
         let mut contour = match &material {
             Some(m) => Contour {
@@ -79,22 +79,25 @@ impl<'a> Walk<'a> {
         let world = world.as_ref().unwrap_or(&contour.path);
         self.partition(n, world, frame, at, (&key, path.as_str()))?;
         if e.extras().surface_padding.is_some() {
-            let geometry = self.surface_cache.resolve(
+            let geometry = self.caches.surfaces.resolve(
                 n,
                 (&key, at),
-                &self.frames,
+                &self.tree.frames,
                 world,
                 self.spec,
-                self.region_cache,
+                self.caches.regions,
             )?;
             let origin = geometry.origin;
-            self.regions
-                .extend(geometry.panels.into_iter().map(|(i, p)| (i, (p, origin))));
-            self.joined_nodes.extend(geometry.join_nodes);
-            self.surface_joins.insert(at, geometry.joins);
+            for (i, p) in geometry.panels {
+                self.plan.regions.insert(i, (p, origin));
+            }
+            for i in geometry.join_nodes {
+                self.plan.joined_nodes.insert(i, ());
+            }
+            self.plan.surface_joins.insert(at, geometry.joins);
         }
         // Each envelope belongs to exactly one node, visited once.
-        let enveloped = match self.region_envelopes.remove(&at) {
+        let enveloped = match self.plan.region_envelopes.remove(at) {
             Some(p) => {
                 self.mark(Layer::Clip, p, None);
                 true
@@ -116,7 +119,7 @@ impl<'a> Walk<'a> {
         if blur > 0.0 {
             // In scene space: the renderer samples the backdrop there.
             self.mark(Layer::Backdrop, contour.world(), contour.world_rect());
-            if let Some(p) = self.paint.last_mut() {
+            if let Some(p) = self.out.paint.last_mut() {
                 p.blur = blur;
             }
         }
@@ -129,7 +132,7 @@ impl<'a> Walk<'a> {
             self.shadow(sh, &contour, under)?;
         }
         let bg = self.fill(e, material.as_ref(), &contour, under);
-        let border_background = self.paint.len();
+        let border_background = self.out.paint.len();
         let mut bg = self.shells(s, &mut contour, bg)?;
         self.inset_shadows(s, &contour, bg)?;
         let late_stroke = match &s.stroke {
@@ -142,8 +145,8 @@ impl<'a> Walk<'a> {
         let content = self.content_size(n, at, frame);
         let shape_bounds = contour.bounds()?.map(|b| b + contour.offset.to_vec2());
 
-        let surface = self.surfaces.len();
-        self.at.insert(key.clone(), surface);
+        let surface = self.out.surfaces.len();
+        self.out.at.insert(key.clone(), surface);
         let (semantics, semantic_label_implicit) = match (&e.semantics, &e.content) {
             (Some(semantics), Content::Text(text)) if semantics.label.is_none() => {
                 let mut semantics = crate::Semantics::clone(semantics);
@@ -152,7 +155,7 @@ impl<'a> Walk<'a> {
             }
             (semantics, _) => (semantics.as_deref().cloned(), false),
         };
-        self.surfaces.push(ResolvedSurface {
+        self.out.surfaces.push(ResolvedSurface {
             key: key.clone(),
             frame,
             bounds: shape_bounds,
@@ -191,7 +194,7 @@ impl<'a> Walk<'a> {
         let clips = n.is_clip()
             || s.union.unwrap_or_default()
             || e.extras().inside.is_some()
-            || self.regions.contains_key(&at);
+            || self.plan.regions.contains(at);
         if clips {
             let image = material.as_ref().map(|m| m.image_rect.bounds());
             let image = image.or(shape_bounds);
@@ -238,13 +241,19 @@ impl<'a> Walk<'a> {
             // clips and semantics keep their own authoring and painter order.
             // The plates painted inside this node, so only its entries are
             // scanned, not everything painted before it.
-            let own = self.paint.split_off(start);
+            let own = self.out.paint.split_off(start);
             let all = own.len();
-            self.paint
+            self.out
+                .paint
                 .extend(own.into_iter().filter(|p| !m.consumes(&p.key, p.layer)));
-            if self.paint.len() - start != all {
+            if self.out.paint.len() - start != all {
                 // What a memo inside painted has been thinned: not copyable.
-                for s in self.memos.iter_mut().filter(|s| s.paint.start >= start) {
+                for s in self
+                    .memo
+                    .spans
+                    .iter_mut()
+                    .filter(|s| s.paint.start >= start)
+                {
                     s.closed = false;
                 }
             }
@@ -272,17 +281,6 @@ impl<'a> Walk<'a> {
         Ok(())
     }
 
-    /// Whether anything in the node range `at..at + size` takes a region,
-    /// an envelope, a join or a ramp anchor from the walk around it.
-    fn fed(&self, at: usize, size: usize) -> bool {
-        let inside = |k: &usize| (at..at + size).contains(k);
-        self.regions.keys().any(inside)
-            || self.region_envelopes.keys().any(inside)
-            || self.joined_nodes.iter().any(inside)
-            || self.ramp_anchors.keys().any(inside)
-            || self.surface_joins.keys().any(inside)
-    }
-
     /// Start recording a memo's span; see [`MemoSpan`].
     fn open(
         &mut self,
@@ -293,40 +291,44 @@ impl<'a> Walk<'a> {
         under: Color,
         ancestors: &Ancestors,
     ) -> (usize, usize, usize) {
-        let size = self.sizes[at];
-        self.memos.push(MemoSpan {
+        let size = self.tree.sizes[at];
+        self.memo.spans.push(MemoSpan {
             id: m.id,
             reused: m.reused,
             at,
             size,
-            paint: self.paint.len()..self.paint.len(),
-            surfaces: self.surfaces.len()..self.surfaces.len(),
+            paint: self.out.paint.len()..self.out.paint.len(),
+            surfaces: self.out.surfaces.len()..self.out.surfaces.len(),
             nested: 0,
             origin: Point::new(frame.x, frame.y),
             path: path.to_owned(),
             under,
             base_y: self.base_y,
             ancestors: ancestors.clone(),
-            closed: !self.fed(at, size),
+            closed: !self.plan.feeds(at..at + size),
             floats: false,
             generation: self.runs.generation,
         });
         (
-            self.memos.len() - 1,
-            self.deferred.len(),
-            self.external_welds.len(),
+            self.memo.spans.len() - 1,
+            self.out.deferred.len(),
+            self.out.external_welds.len(),
         )
     }
 
     fn close(&mut self, (j, deferred, welds): (usize, usize, usize)) {
-        let (paint, surfaces, nested) = (self.paint.len(), self.surfaces.len(), self.memos.len());
-        let floats = self.deferred.len() != deferred;
-        let s = &mut self.memos[j];
+        let (paint, surfaces, nested) = (
+            self.out.paint.len(),
+            self.out.surfaces.len(),
+            self.memo.spans.len(),
+        );
+        let floats = self.out.deferred.len() != deferred;
+        let s = &mut self.memo.spans[j];
         s.paint.end = paint;
         s.surfaces.end = surfaces;
         s.nested = nested - j - 1;
         s.floats = floats;
-        s.closed &= !floats && self.external_welds.len() == welds;
+        s.closed &= !floats && self.out.external_welds.len() == welds;
     }
 
     /// Paint a reused memo by copying last resolve's span of it, moved by
@@ -342,7 +344,7 @@ impl<'a> Walk<'a> {
         under: Color,
         ancestors: &Ancestors,
     ) -> bool {
-        let Some(prev) = self.prev else {
+        let Some(prev) = self.memo.prev else {
             return false;
         };
         let Some(j) = prev.memos.iter().position(|s| s.id == id) else {
@@ -350,7 +352,7 @@ impl<'a> Walk<'a> {
         };
         let old = &prev.memos[j];
         let spans = &prev.memos[j..=j + old.nested];
-        let size = self.sizes[at];
+        let size = self.tree.sizes[at];
         let oldest = spans.iter().map(|s| s.generation).min().unwrap_or(0);
         let age = self.runs.generation.wrapping_sub(oldest);
         if !old.closed
@@ -360,7 +362,7 @@ impl<'a> Walk<'a> {
             || old.base_y != self.base_y
             || !old.ancestors.same(ancestors)
             || age > MEMO_AGE
-            || self.fed(at, size)
+            || self.plan.feeds(at..at + size)
         {
             return false;
         }
@@ -379,7 +381,7 @@ impl<'a> Walk<'a> {
         let Some(was) = prev.layout.all().get(old.at..old.at + size) else {
             return false;
         };
-        let now = &self.frames[at..at + size];
+        let now = &self.tree.frames[at..at + size];
         if !was
             .iter()
             .zip(now)
@@ -387,16 +389,16 @@ impl<'a> Walk<'a> {
         {
             return false;
         }
-        let (paint, surfaces) = (self.paint.len(), self.surfaces.len());
+        let (paint, surfaces) = (self.out.paint.len(), self.out.surfaces.len());
         let mut shift = Shift::new(d);
-        self.paint.extend(
+        self.out.paint.extend(
             prev.paint[old.paint.clone()]
                 .iter()
                 .map(|p| shift.painted(p)),
         );
         for s in &prev.surfaces[old.surfaces.clone()] {
-            self.at.insert(s.key.clone(), self.surfaces.len());
-            self.surfaces.push(shift.surface(s));
+            self.out.at.insert(s.key.clone(), self.out.surfaces.len());
+            self.out.surfaces.push(shift.surface(s));
         }
         for s in spans {
             let mut s = s.clone();
@@ -407,9 +409,9 @@ impl<'a> Walk<'a> {
             s.surfaces = s.surfaces.start - old.surfaces.start + surfaces
                 ..s.surfaces.end - old.surfaces.start + surfaces;
             s.origin += d;
-            self.memos.push(s);
+            self.memo.spans.push(s);
         }
-        self.age = self.age.max(age);
+        self.memo.age = self.memo.age.max(age);
         self.i = at + size;
         true
     }
@@ -426,11 +428,11 @@ impl<'a> Walk<'a> {
         under: Color,
     ) -> Result<Hits, SceneError> {
         let mut hits = Vec::new();
-        let shaped = self.regions.contains_key(&at) && !matches!(e.content, Content::None);
+        let shaped = self.plan.regions.contains(at) && !matches!(e.content, Content::None);
         if shaped {
             self.mark_on(Layer::Clip, contour);
         }
-        let frame = self.frames[at];
+        let frame = self.tree.frames[at];
         match &e.content {
             Content::Text(t) => {
                 *bg = under;
@@ -440,8 +442,8 @@ impl<'a> Walk<'a> {
                 // Local to the frame corner, where the canvas draws from.
                 let origin = Point::new(frame.x, frame.y);
                 let draws = (c.0)(frame.size);
-                let generation = self.outlines.generation;
-                let paths = match self.outlines.canvases.get_mut(key) {
+                let generation = self.caches.outlines.generation;
+                let paths = match self.caches.outlines.canvases.get_mut(key) {
                     // A plain canvas draws a fresh list every frame, most
                     // often the same shapes: those keep last frame's paths,
                     // wherever it moved, unvalidated, uncopied and equal
@@ -465,7 +467,8 @@ impl<'a> Walk<'a> {
                                 Ok(draw.path.clone())
                             })
                             .collect::<Result<Vec<_>, SceneError>>()?;
-                        self.outlines
+                        self.caches
+                            .outlines
                             .canvases
                             .insert(key.clone(), (draws.clone(), paths.clone(), generation));
                         paths
@@ -581,11 +584,11 @@ impl<'a> Walk<'a> {
         let mut child_at = at + 1;
         for child in n.children() {
             if !child.is_float() {
-                let f = self.frames[child_at];
+                let f = self.tree.frames[child_at];
                 right = right.max(f.right());
                 bottom = bottom.max(f.bottom());
             }
-            child_at += self.sizes[child_at];
+            child_at += self.tree.sizes[child_at];
         }
         Size::new(
             (right - frame.x + scrolled[0] + pad.right - pad.left).max(0.0),
@@ -655,8 +658,8 @@ impl<'a> Walk<'a> {
             let bar_key = crate::Id::runtime(&bar::bar_key(&key, vertical));
             self.key = bar_key.clone();
             self.push(Layer::Fill, rr.path(), Some(rr), &ink, under);
-            self.at.insert(bar_key.clone(), self.surfaces.len());
-            self.surfaces.push(ResolvedSurface {
+            self.out.at.insert(bar_key.clone(), self.out.surfaces.len());
+            self.out.surfaces.push(ResolvedSurface {
                 key: bar_key,
                 frame: strip,
                 bounds: Some(hit.bounds()),
@@ -746,18 +749,18 @@ impl<'a> Walk<'a> {
             super::push_index(path, j);
             if c.payload().carve.is_some() {
                 // Already spent: it shaped the outline instead of painting.
-                self.i += self.sizes[self.i];
+                self.i += self.tree.sizes[self.i];
                 continue;
             }
             if c.is_sticky() && !c.is_float() {
                 // Pinned over the siblings that scroll under it, so it paints
                 // after them -- but inside this node's clip, unlike a float.
                 sticky.push((self.i, c, path.clone(), self.base_y));
-                self.i += self.sizes[self.i];
+                self.i += self.tree.sizes[self.i];
                 continue;
             }
             if c.is_float() {
-                self.deferred.push(Deferred {
+                self.out.deferred.push(Deferred {
                     at: self.i,
                     node: c,
                     path: path.clone(),
@@ -769,7 +772,7 @@ impl<'a> Walk<'a> {
                         ..Ancestors::default()
                     },
                 });
-                self.i += self.sizes[self.i];
+                self.i += self.tree.sizes[self.i];
             } else {
                 self.node(c, path, bg, inner)?;
             }
@@ -801,8 +804,8 @@ impl<'a> Walk<'a> {
         let th = self.spec.theme;
         let mut at2 = at + 1;
         for c in n.children() {
-            let f = self.frames[at2];
-            at2 += self.sizes[at2];
+            let f = self.tree.frames[at2];
+            at2 += self.tree.sizes[at2];
             let own = match &c.payload().content {
                 Content::Text(t) => {
                     let face = Face::of(c.payload(), th);

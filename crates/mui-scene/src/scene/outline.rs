@@ -309,7 +309,7 @@ impl Walk<'_> {
         frame: Frame,
         first: usize,
     ) -> Result<Contour, SceneError> {
-        if let Some((path, offset)) = self.regions.get(&first.saturating_sub(1)) {
+        if let Some((path, offset)) = self.plan.regions.get(first.saturating_sub(1)) {
             return Ok(Contour {
                 offset: *offset,
                 ..Contour::path(path.clone())
@@ -329,10 +329,10 @@ impl Walk<'_> {
                 .any(|child| child.payload().carve.is_some());
         let mut key = None;
         if cacheable {
-            let mut words = std::mem::take(&mut self.outlines.scratch);
+            let mut words = std::mem::take(&mut self.caches.outlines.scratch);
             let origin = self.geometry_key(n, first, &mut words);
-            if let Some(outline) = self.outlines.get(&words, origin) {
-                self.outlines.scratch = words;
+            if let Some(outline) = self.caches.outlines.get(&words, origin) {
+                self.caches.outlines.scratch = words;
                 return Ok(outline);
             }
             key = Some((words, origin));
@@ -341,9 +341,9 @@ impl Walk<'_> {
         let (mut at, mut topo): (usize, Option<Topology>) = (first, None);
         let mut shapes = Vec::new();
         for c in n.children() {
-            let (f, carve) = (self.frames[at], c.payload().carve);
+            let (f, carve) = (self.tree.frames[at], c.payload().carve);
             let child_first = at + 1;
-            at += self.sizes[at];
+            at += self.tree.sizes[at];
             let Some(carve) = carve.filter(|_| f.size.width > 0.0 && f.size.height > 0.0) else {
                 continue;
             };
@@ -364,7 +364,7 @@ impl Walk<'_> {
         }
         let Some(topo) = topo else {
             return match key {
-                Some((key, origin)) => self.outlines.insert(key, origin, base),
+                Some((key, origin)) => self.caches.outlines.insert(key, origin, base),
                 None => Ok(base),
             };
         };
@@ -389,7 +389,7 @@ impl Walk<'_> {
             )
         };
         match key {
-            Some((key, origin)) => self.outlines.insert(key, origin, outline),
+            Some((key, origin)) => self.caches.outlines.insert(key, origin, outline),
             None => Ok(outline),
         }
     }
@@ -418,7 +418,7 @@ impl Walk<'_> {
             Some(scale) => key.extend([1, scale.to_bits()]),
         }
         let at = first.saturating_sub(1);
-        let f = self.frames[at];
+        let f = self.tree.frames[at];
         let scale = self.spec.device_scale;
         let origin = match scale {
             None => Point::new(f.x, f.y),
@@ -426,8 +426,8 @@ impl Walk<'_> {
         };
         geometry_node(
             n,
-            &self.frames,
-            (&self.sizes, &self.squared),
+            &self.tree.frames,
+            (&self.tree.sizes, &self.tree.squared),
             at,
             (origin, scale),
             key,
@@ -447,8 +447,8 @@ impl Walk<'_> {
             rr.radius().to_bits(),
             corners as u64,
         ];
-        let generation = self.outlines.generation;
-        let (p, seen) = self.outlines.rects.entry(key).or_insert_with(|| {
+        let generation = self.caches.outlines.generation;
+        let (p, seen) = self.caches.outlines.rects.entry(key).or_insert_with(|| {
             let p = match corners {
                 CornerStyle::Round => rr.path(),
                 _ => corners.shape(&rr.path()),
@@ -476,7 +476,7 @@ impl Walk<'_> {
                 ..Contour::path(path)
             });
         }
-        let (convex, concave) = match radius(s, self.squared[first.saturating_sub(1)]) {
+        let (convex, concave) = match radius(s, self.tree.squared[first.saturating_sub(1)]) {
             Radius::Theme => (th.corners.box_, th.corners.concave),
             // A pixel radius names the outer (convex) corner. The inner
             // (concave) corner remains the theme contract; a pair such as
@@ -528,8 +528,8 @@ impl Walk<'_> {
         for c in n.children() {
             let child_at = at;
             let child_first = child_at + 1;
-            let f = self.frames[child_at];
-            at += self.sizes[at];
+            let f = self.tree.frames[child_at];
+            at += self.tree.sizes[at];
             if c.payload().carve.is_some() || f.size.width <= 0.0 || f.size.height <= 0.0 {
                 continue;
             }

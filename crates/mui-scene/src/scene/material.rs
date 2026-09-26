@@ -51,8 +51,8 @@ impl Walk<'_> {
         let mut at = self.i;
         for (j, c) in n.children().iter().enumerate() {
             let first = at;
-            let f = self.frames[first];
-            at += self.sizes[first];
+            let f = self.tree.frames[first];
+            at += self.tree.sizes[first];
             let e = c.payload();
             if c.is_float()
                 || c.is_sticky()
@@ -130,7 +130,7 @@ impl Walk<'_> {
                 quality,
                 origin,
                 members,
-                self.weld_cache,
+                self.caches.welds,
             )?));
         }
         let request = mui_weld::Request {
@@ -138,7 +138,7 @@ impl Walk<'_> {
             weld,
             quality,
         };
-        let baked = self.weld_cache.get(&request)?;
+        let baked = self.caches.welds.get(&request)?;
         Ok(Some(crate::material_weld::finish(&baked, origin, members)?))
     }
 }

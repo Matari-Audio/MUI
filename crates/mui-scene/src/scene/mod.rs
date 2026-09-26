@@ -212,42 +212,127 @@ struct Deferred<'a> {
     ancestors: Ancestors,
 }
 
+/// The resolve of one [`SceneSpec`]: a pre-order walk over the solved
+/// frames that paints each node, records its surface and hands material
+/// plans down to the descendants that consume them.
 struct Walk<'a> {
     spec: &'a SceneSpec,
-    frames: Cow<'a, [Frame]>,
-    /// Each region child's outline, placed.
-    regions: HashMap<usize, PlacedPath>,
-    region_envelopes: HashMap<usize, Arc<Path>>,
+    tree: Tree<'a>,
+    caches: Caches<'a>,
     runs: Runs<'a>,
-    /// Subtree size per pre-order index; see [`subtree_sizes`].
-    sizes: Vec<usize>,
-    /// Per pre-order index: the parent is segmented, so the corners are square.
-    squared: Vec<bool>,
-    outlines: &'a mut OutlineCache,
-    borders: &'a mut crate::border_ramp::BorderCache,
-    region_cache: &'a mut crate::regions::RegionCache,
-    surface_cache: &'a mut crate::surfaces::Cache,
-    /// Border joins a surface owner adds to its ramp band.
-    surface_joins: HashMap<usize, Path>,
-    /// Nodes whose `.join_border(..)` an owner resolved.
-    joined_nodes: rustc_hash::FxHashSet<usize>,
-    ramp_anchors: HashMap<usize, Frame>,
-    ramp_frames: HashMap<(usize, mui_layout::Id), Frame>,
-    weld_cache: &'a mut crate::WeldCache,
+    plan: Plan,
+    out: Out<'a>,
+    memo: Memos<'a>,
+    /// The pre-order index of the next node.
     i: usize,
+    /// The node being painted; its outline cache and paint are named by it.
     key: Id,
-    paint: Vec<Painted>,
-    surfaces: Vec<ResolvedSurface>,
-    at: HashMap<Id, usize>,
-    pub(crate) external_welds: HashMap<Id, crate::ExternalWeld>,
-    deferred: Vec<Deferred<'a>>,
     /// The baseline a `.baseline()` parent asks its text children to sit on.
     base_y: Option<f64>,
     /// Ink and dim per ground colour's bits; see [`Walk::paint_of`].
     inks: HashMap<[u32; 4], (Color, Color)>,
+}
+
+/// The solved tree, by pre-order index.
+struct Tree<'a> {
+    frames: Cow<'a, [Frame]>,
+    /// Subtree size; see [`subtree_sizes`].
+    sizes: Vec<usize>,
+    /// The parent is segmented, so the corners are square.
+    squared: Vec<bool>,
+}
+
+/// The [`Resolver`]'s caches the walk reads and refills.
+struct Caches<'a> {
+    outlines: &'a mut OutlineCache,
+    borders: &'a mut crate::border_ramp::BorderCache,
+    regions: &'a mut crate::regions::RegionCache,
+    surfaces: &'a mut crate::surfaces::Cache,
+    welds: &'a mut crate::WeldCache,
+}
+
+/// What a material owner (a region split, a surface layout, a ramp) decided
+/// for nodes below it, by their pre-order index, for them to pick up when the
+/// walk reaches them.
+#[derive(Default)]
+struct Plan {
+    /// Each region child's outline, placed.
+    regions: ByNode<PlacedPath>,
+    region_envelopes: ByNode<Arc<Path>>,
+    /// Border joins a surface owner adds to its ramp band.
+    surface_joins: ByNode<Path>,
+    /// Nodes whose `.join_border(..)` an owner resolved.
+    joined_nodes: ByNode<()>,
+    ramp_anchors: ByNode<Frame>,
+    ramp_frames: HashMap<(usize, Id), Frame>,
+}
+impl Plan {
+    /// Whether anything in `range` takes a region, an envelope, a join or a
+    /// ramp anchor from the walk around it.
+    fn feeds(&self, range: std::ops::Range<usize>) -> bool {
+        self.regions.any_in(range.clone())
+            || self.region_envelopes.any_in(range.clone())
+            || self.joined_nodes.any_in(range.clone())
+            || self.ramp_anchors.any_in(range.clone())
+            || self.surface_joins.any_in(range)
+    }
+}
+
+/// A value for some nodes, by pre-order index. Holds nothing until the
+/// first insert, then one slot per node, so a scene without materials pays
+/// nothing and one with them looks each node up by index.
+struct ByNode<T>(Vec<Option<T>>);
+impl<T> Default for ByNode<T> {
+    fn default() -> Self {
+        Self(Vec::new())
+    }
+}
+impl<T> ByNode<T> {
+    fn get(&self, i: usize) -> Option<&T> {
+        self.0.get(i)?.as_ref()
+    }
+    fn contains(&self, i: usize) -> bool {
+        self.get(i).is_some()
+    }
+    fn slot(&mut self, i: usize) -> &mut Option<T> {
+        if i >= self.0.len() {
+            self.0.resize_with(i + 1, || None);
+        }
+        &mut self.0[i]
+    }
+    fn insert(&mut self, i: usize, v: T) {
+        *self.slot(i) = Some(v);
+    }
+    fn get_or_insert(&mut self, i: usize, v: T) -> &mut T {
+        self.slot(i).get_or_insert(v)
+    }
+    fn remove(&mut self, i: usize) -> Option<T> {
+        self.0.get_mut(i)?.take()
+    }
+    fn any_in(&self, range: std::ops::Range<usize>) -> bool {
+        let end = range.end.min(self.0.len());
+        self.0
+            .get(range.start.min(end)..end)
+            .is_some_and(|s| s.iter().any(Option::is_some))
+    }
+}
+
+/// The scene the walk is building.
+struct Out<'a> {
+    paint: Vec<Painted>,
+    surfaces: Vec<ResolvedSurface>,
+    at: HashMap<Id, usize>,
+    external_welds: HashMap<Id, crate::ExternalWeld>,
+    /// Floats, painted after the tree in the order they were met.
+    deferred: Vec<Deferred<'a>>,
+}
+
+/// Memoised subtrees: the spans this walk records and the scene it copies
+/// reused ones from.
+struct Memos<'a> {
     /// The resolve before, whose memo spans a reused subtree copies.
     prev: Option<&'a ResolvedScene>,
-    memos: Vec<MemoSpan>,
+    spans: Vec<MemoSpan>,
     /// How many resolves back the oldest copied span was walked.
     age: u64,
 }
@@ -448,33 +533,36 @@ fn resolve_with(
     at.reserve(nodes);
     let mut w = Walk {
         spec,
-        frames,
-        regions: HashMap::default(),
-        region_envelopes: HashMap::default(),
+        tree: Tree {
+            frames,
+            sizes,
+            squared: square,
+        },
+        caches: Caches {
+            outlines: &mut text.outlines,
+            borders: &mut text.borders,
+            regions: &mut text.region_cache,
+            surfaces: &mut text.surface_cache,
+            welds: weld_cache,
+        },
         runs,
-        sizes,
-        squared: square,
-        outlines: &mut text.outlines,
-        borders: &mut text.borders,
-        region_cache: &mut text.region_cache,
-        surface_cache: &mut text.surface_cache,
-        surface_joins: HashMap::default(),
-        joined_nodes: rustc_hash::FxHashSet::default(),
-        ramp_anchors: HashMap::default(),
-        ramp_frames: HashMap::default(),
-        weld_cache,
+        plan: Plan::default(),
+        out: Out {
+            paint,
+            surfaces,
+            at,
+            external_welds: HashMap::default(),
+            deferred: Vec::new(),
+        },
+        memo: Memos {
+            prev,
+            spans: Vec::new(),
+            age: 0,
+        },
         i: 0,
         key: Id::runtime(""),
-        paint,
-        surfaces,
-        at,
-        external_welds: HashMap::default(),
-        deferred: Vec::new(),
         base_y: None,
         inks: HashMap::default(),
-        prev,
-        memos: Vec::new(),
-        age: 0,
     };
     w.node(
         &spec.root,
@@ -485,27 +573,32 @@ fn resolve_with(
     // Floats paint last, in the order they were met; a float inside a float
     // lands on the end of the same queue.
     let mut k = 0;
-    while k < w.deferred.len() {
+    while k < w.out.deferred.len() {
         let Deferred {
             at,
             node,
             mut path,
             under,
             ancestors,
-        } = w.deferred[k].clone();
+        } = w.out.deferred[k].clone();
         w.i = at;
         w.base_y = None;
         w.node(node, &mut path, under, &ancestors)?;
         k += 1;
     }
     let Walk {
-        frames,
-        paint,
-        surfaces,
-        at,
-        external_welds,
-        memos,
-        age,
+        tree: Tree { frames, .. },
+        out:
+            Out {
+                paint,
+                surfaces,
+                at,
+                external_welds,
+                ..
+            },
+        memo: Memos {
+            spans: memos, age, ..
+        },
         ..
     } = w;
     let layout = match frames {
