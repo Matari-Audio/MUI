@@ -6,17 +6,26 @@ rust-version.workspace = true
 license.workspace = true
 
 # A native window: nothing here builds for wasm.
+[features]
+# Windows: while a text field is focused, ask the host window for the
+# keyboard, so typing does not trigger the DAW's shortcuts. Needs a
+# baseview-truce with `Window::set_keyboard_capture` (stock builds lack it,
+# hence opt-in). Off everywhere else.
+keyboard-capture = []
+
 [dependencies]
 mui = { workspace = true, features = ["gpu-effects"] }
 baseview = { package = "baseview-truce", version = "0.1.1-truce.13" }
-# Frame skipping and macOS view anchoring. Despite the name it knows no truce:
-# its only deps are raw-window-handle 0.5, objc (macOS) and windows-sys.
-truce-gui-utils = "6.3"
 keyboard-types = { version = "0.7", default-features = false }
 # baseview's handles are raw-window-handle 0.5.
 raw-window-handle = "0.5"
 # mui-vello picks no backend; the window that owns the device does.
 wgpu = { workspace = true, features = ["wgsl", "vulkan", "gles", "metal", "dx12"] }
+
+# Frame skipping and view anchoring on macOS (src/platform.rs); baseview
+# already pulls it in there.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc = "0.2"
 
 # baseview does not own an X11 selection; arboard keeps one alive.
 [target.'cfg(target_os = "linux")'.dependencies]

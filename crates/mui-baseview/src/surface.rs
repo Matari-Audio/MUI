@@ -1,8 +1,8 @@
 //! baseview's raw-window-handle 0.5 as a wgpu surface. truce-gui carries
 //! the same bridge, but typed against its own wgpu; MUI renders on another.
-use raw_window_handle::{
-    HasRawDisplayHandle, HasRawWindowHandle, RawDisplayHandle, RawWindowHandle,
-};
+#[cfg(target_os = "linux")]
+use raw_window_handle::RawDisplayHandle;
+use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle, RawWindowHandle};
 use wgpu::rwh;
 
 /// # Safety

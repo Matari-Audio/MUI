@@ -36,6 +36,7 @@ static A: Counting = Counting;
 
 /// This thread's CPU time in ms: the machine is shared, the wall clock is not
 /// ours.
+#[cfg(unix)]
 fn cpu_ms() -> f64 {
     let mut t = libc::timespec {
         tv_sec: 0,
@@ -44,6 +45,17 @@ fn cpu_ms() -> f64 {
     // SAFETY: `t` is a live, writable timespec for the call's duration.
     unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut t) };
     t.tv_sec as f64 * 1e3 + t.tv_nsec as f64 * 1e-6
+}
+
+/// Elsewhere the wall clock stands in: noisier on a busy machine.
+#[cfg(not(unix))]
+fn cpu_ms() -> f64 {
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    START
+        .get_or_init(std::time::Instant::now)
+        .elapsed()
+        .as_secs_f64()
+        * 1e3
 }
 
 const TRACKS: usize = 16;

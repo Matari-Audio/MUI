@@ -14,6 +14,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use a11y::A11y;
+/// The baseview this window runs on, so a consumer names `WindowHandle`,
+/// `WindowScalePolicy` and friends without depending on it itself.
+pub use baseview;
 use baseview::{
     DropData, DropEffect, Event, EventStatus, MouseButton, MouseCursor, MouseEvent, ScrollDelta,
     Window, WindowEvent, WindowHandle, WindowHandler, WindowOpenOptions, WindowScalePolicy,
@@ -172,13 +175,13 @@ impl<V: View> Handler<V> {
         // A hidden or detached editor cannot present, and on Windows this is
         // the host's GUI thread: a blocking present there freezes the host.
         let handle = window.raw_window_handle();
-        if truce_gui_utils::should_skip_frame(handle) {
+        if platform::should_skip_frame(handle) {
             return;
         }
         // macOS: keep the child pinned to the parent's top as it resizes.
         // A top-level window's view is its content view: leave it be.
         if self.parented {
-            truce_gui_utils::reanchor_to_superview_top(handle);
+            platform::reanchor_to_superview_top(handle);
         }
         let now = Instant::now();
         let size = self.driver.size();
@@ -224,6 +227,9 @@ impl<V: View> Handler<V> {
                 self.driver.redraw();
             }
             let fresh = self.driver.advance(&mut s, now);
+            // Keys typed into a field must not reach the host's shortcuts.
+            #[cfg(all(windows, feature = "keyboard-capture"))]
+            window.set_keyboard_capture(s.ui.focus_is_text());
             if let Some(a11y) = self.a11y.as_mut()
                 && (fresh || a11y.wants_tree())
             {
@@ -283,8 +289,6 @@ impl<V: View> Handler<V> {
     }
 
     /// One native event, as baseview delivers it.
-    // ponytail: Windows hosts also want `set_keyboard_capture` while a text
-    // field is focused; upstream baseview-truce has no such call yet.
     pub fn on_event_inner(&mut self, event: &Event) -> EventStatus {
         let d = &mut self.driver;
         match event {
@@ -510,6 +514,7 @@ fn open_gpu(window: &Window, size: (u32, u32)) -> Result<Host, String> {
 }
 
 mod a11y;
+mod platform;
 mod surface;
 #[cfg(test)]
 mod tests;

@@ -1535,8 +1535,8 @@ dependencies = [
  "keyboard-types",
  "mui",
  "mui-access",
+ "objc",
  "raw-window-handle 0.5.2",
- "truce-gui-utils",
  "wgpu",
 ]
 
@@ -3139,17 +3139,6 @@ checksum = "f8417497c62104ff9737ff59e15d5f3a1ba415e2b8ec88c74f04f88436144586"
 dependencies = [
  "objc2 0.6.4",
  "truce-core",
-]
-
-[[package]]
-name = "truce-gui-utils"
-version = "6.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "52ab60ef3a723bc0e1e94778bc36443b25d8613b31809856daeaf58b706bb806"
-dependencies = [
- "objc",
- "raw-window-handle 0.5.2",
- "windows-sys 0.61.2",
 ]
 
 [[package]]

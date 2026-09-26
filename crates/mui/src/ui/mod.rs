@@ -117,6 +117,8 @@ pub struct Ui {
     font: Option<Font>,
     /// Optional faces tried per grapheme after [`Self::font`].
     fallback_fonts: Vec<Font>,
+    /// See [`Ui::text_run`].
+    runs: HashMap<(u64, u64, String), Arc<mui_text::TextRun>>,
     /// See [`Ui::set_scale`].
     scale: Option<f64>,
     weld_backend: mui_scene::WeldBackend,
@@ -160,10 +162,16 @@ pub struct Ui {
     last_press: Option<(String, f64)>,
     /// This frame's wheel, for [`Response::wheel`].
     wheel: Vec2,
+    /// Ids that read [`Ui::wheel`] while the tree now being handed in was
+    /// built: no scroll node they sit in takes the wheel over them.
+    wheel_claims: Vec<String>,
     /// Where a button went down this frame, on a target or on nothing, for
     /// [`Ui::clicked_outside`].
     press_at: Option<Point>,
     focus: Option<String>,
+    /// The focus came from the keyboard or from code, not a pointer press:
+    /// see [`Ui::focus_visible`].
+    focus_visible: bool,
     /// Gesture edges waiting for a frame that resolves. A frame that errors
     /// leaves them queued rather than dropping a host's `End`.
     edits: Vec<(String, Edit)>,
@@ -254,6 +262,7 @@ impl Ui {
             theme,
             font: None,
             fallback_fonts: Vec::new(),
+            runs: HashMap::new(),
             scale: None,
             weld_backend: mui_scene::WeldBackend::Reference,
             interaction: Pointer::new(),
@@ -274,9 +283,11 @@ impl Ui {
             double: None,
             double_click: DOUBLE_CLICK,
             wheel: Vec2::ZERO,
+            wheel_claims: Vec::new(),
             press_at: None,
             last_press: None,
             focus: None,
+            focus_visible: false,
             edits: Vec::new(),
             delivered: Vec::new(),
             cancelled: None,
@@ -634,6 +645,13 @@ impl Ui {
             .map(|(_, e)| *e)
     }
 
+    /// Every gesture edge the last frame delivered, in order, for a host
+    /// that dispatches them all rather than asking per control.
+    pub fn edits(&self) -> &[(String, Edit)] {
+        // `edits` is the queue still to deliver; this is what went out.
+        self.delivered.as_slice()
+    }
+
     /// End an editor session without requiring another successful layout/frame.
     /// The host must dispatch the returned edges before destroying its editor.
     /// Calling this again returns no duplicate End events.
@@ -674,6 +692,31 @@ impl Ui {
                 .collect::<Vec<_>>()
                 .into()
         })
+    }
+    /// `text` shaped and outlined in `font` (then the fallbacks) at `size`,
+    /// for a canvas to draw: shaped once and kept, so a canvas redrawn every
+    /// frame does not reshape its labels. `None` if the text cannot shape.
+    pub fn text_run(
+        &mut self,
+        font: &Font,
+        text: &str,
+        size: f64,
+    ) -> Option<Arc<mui_text::TextRun>> {
+        let key = (font.id(), size.to_bits(), text.to_owned());
+        if let Some(run) = self.runs.get(&key) {
+            return Some(run.clone());
+        }
+        let fonts: Vec<Font> = std::iter::once(font)
+            .chain(&self.fallback_fonts)
+            .cloned()
+            .collect();
+        let run = Arc::new(mui_text::text_run(&fonts, text, size, &[], 0.05).ok()?);
+        // ponytail: flushed whole at the cap; an LRU if canvases churn past it.
+        if self.runs.len() >= 512 {
+            self.runs.clear();
+        }
+        self.runs.insert(key, run.clone());
+        Some(run)
     }
     /// The character index in `s` nearest `x`, measured in the scene's font.
     pub(crate) fn hit(&self, s: &str, size: f64, x: f64) -> usize {
@@ -820,6 +863,7 @@ impl Ui {
         animating |= glided;
         animating |= self.after_motion(&mut scene, shaped, dt);
         animating |= self.settle(&scene, wheel);
+        self.wheel_claims.clear();
         self.heat(&scene, &before, self.pointer.buttons != was_buttons);
         Ok(self.commit(scene, hovered.as_deref(), tip, previous_blink, animating))
     }

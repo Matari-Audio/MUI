@@ -20,7 +20,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use mui_input::{Button, Input, Key, KeyPress, Mods, PointerInput, Vec2};
-use mui_scene::prelude::{A11y, Cursor, El, Point, Size};
+use mui_scene::prelude::{Cursor, El, Point, Size};
 
 use crate::{Clipboard, Ui};
 
@@ -59,8 +59,11 @@ pub trait View {
         true
     }
     /// A UI zoom on top of the window's scale: 2 draws everything twice as
-    /// big and offers the tree half the logical size. Read once per tick.
-    fn zoom(&self) -> f64 {
+    /// big and offers the tree half the logical size. Read once per tick,
+    /// with the window's logical size (before zoom), so a view can fit a
+    /// design size to the window: `window.width / 800.0`.
+    fn zoom(&self, window: Size) -> f64 {
+        let _ = window;
         1.0
     }
     /// Files dragged over the window at `at` (scene units); `dropped` on
@@ -396,14 +399,14 @@ impl Driver {
     /// Returns whether there is a new scene to paint.
     pub fn advance<V: View>(&mut self, s: &mut Shared<V>, now: Instant) -> bool {
         self.dirty |= s.view.changed();
-        let zoom = s.view.zoom();
-        if zoom.is_finite() && zoom > 0.0 && zoom != self.zoom {
-            self.zoom = zoom;
-            self.dirty = true;
-        }
         if self.size.0 == 0 || self.size.1 == 0 {
             // Minimised: hold the input edges until there is a size again.
             return false;
+        }
+        let zoom = s.view.zoom(logical_size(self.size, self.scale));
+        if zoom.is_finite() && zoom > 0.0 && zoom != self.zoom {
+            self.zoom = zoom;
+            self.dirty = true;
         }
         let due = self.wake_at.is_some_and(|at| now >= at);
         if s.ui.scene().is_some() && !self.dirty && !self.animating && !due {
@@ -543,15 +546,9 @@ pub fn logical_size(physical: (u32, u32), scale: f64) -> Size {
 }
 
 fn key_owner(ui: &Ui) -> KeyOwner {
-    let Some(id) = ui.focus_key() else {
-        return KeyOwner::Host;
-    };
-    let text = ui
-        .scene()
-        .and_then(|s| s.surface(id))
-        .and_then(|s| s.semantics.as_ref())
-        .is_some_and(|sem| matches!(sem.role, A11y::TextInput { .. }));
-    if text {
+    if ui.focus_key().is_none() {
+        KeyOwner::Host
+    } else if ui.focus_is_text() {
         KeyOwner::Text
     } else {
         KeyOwner::Control

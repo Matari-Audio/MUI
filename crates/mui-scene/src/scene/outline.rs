@@ -10,7 +10,7 @@ use mui_geometry::{
 use mui_layout::Frame;
 
 use super::{SceneError, Walk, bounds, polygons};
-use crate::{Carve, El, Radius};
+use crate::{Carve, El, Radius, ShadowKind};
 
 /// A node's resolved outline, and what else its shape knows. Its geometry
 /// is local: `offset` places it, so an outline that only moved is the same
@@ -315,14 +315,6 @@ impl Walk<'_> {
                 ..Contour::path(path.clone())
             });
         }
-        if n.payload().extras().outline.is_some()
-            && n.children().iter().any(|c| c.payload().carve.is_some())
-        {
-            return Err(mui_geometry::Error::InvalidOptions(
-                "cut/keep on a custom outline requires contour normalization; provide the finished outline instead",
-            )
-            .into());
-        }
         let cacheable = n.payload().style.union.unwrap_or_default()
             || n.children()
                 .iter()
@@ -463,9 +455,16 @@ impl Walk<'_> {
         let th = &self.spec.theme;
         let s = &n.payload().style;
         if let Some(shape) = &n.payload().extras().outline {
-            if !s.shadow.as_deref().unwrap_or_default().is_empty() {
+            // A drop shadow travels as the path, blurred by the renderer's
+            // blur layer; an inset one would need the path's inverse blurred.
+            if s.shadow
+                .as_deref()
+                .unwrap_or_default()
+                .iter()
+                .any(|sh| sh.kind == ShadowKind::Inset)
+            {
                 return Err(mui_geometry::Error::InvalidOptions(
-                    "custom-path shadows require a path-filter renderer; use an outer wrapper",
+                    "an inset shadow on a custom outline is not supported; use a drop shadow or an inner node",
                 )
                 .into());
             }
@@ -644,6 +643,66 @@ mod tests {
         let (label_holed, _) = area(label.cut(square(50., 50.)));
         assert!((label_whole - 10_000.).abs() < 1.0, "{label_whole}");
         assert!((label_holed - 7_500.).abs() < 1.0, "{label_holed}");
+    }
+
+    /// A custom outline is a carve base like any other: `polygons`
+    /// normalises it (NonZero), and the carve keeps its curves.
+    #[test]
+    fn a_custom_outline_carves_and_keeps_its_rounding() {
+        let area = |el: El| {
+            let s = resolve(&SceneSpec::new(stack![el.id("card")])).unwrap();
+            let rings = s
+                .surface("card")
+                .unwrap()
+                .path
+                .flatten(0.1, 100_000)
+                .unwrap();
+            rings
+                .iter()
+                .map(|r| {
+                    r.iter()
+                        .zip(r.iter().cycle().skip(1))
+                        .map(|(a, b)| a.x * b.y - b.x * a.y)
+                        .sum::<f64>()
+                        / 2.0
+                })
+                .sum::<f64>()
+                .abs()
+        };
+        let rounded = |s: Size| {
+            let r = mui_geometry::Rect::new(0., 0., s.width, s.height);
+            mui_geometry::RoundedRect::new(r, 20.).unwrap().path()
+        };
+        let card = stack![].square(100.).outline(rounded).fill(Role::Primary);
+        let square = block(50., 50.).radius(Radius::Px(0.)).center();
+        // Four r=20 corners take 343 off the square; flattening the arcs
+        // loses well under 25 more, so a sharp carve cannot pass.
+        let corners = (4. - std::f64::consts::PI) * 400.;
+        let whole = area(card.clone());
+        assert!((whole - (10_000. - corners)).abs() < 25., "{whole}");
+        let holed = area(card.clone().cut(square.clone()));
+        assert!((holed - (7_500. - corners)).abs() < 25., "{holed}");
+        let kept = area(card.keep(square.clone()));
+        assert!((kept - 2_500.).abs() < 1., "{kept}");
+        // A hole wound the other way stays a hole through the carve.
+        let ring = |s: Size| {
+            let p = |x: f64, y: f64| Point::new(x, y);
+            let (w, h) = (s.width, s.height);
+            Path::default()
+                .move_to(p(0., 0.))
+                .line_to(p(w, 0.))
+                .line_to(p(w, h))
+                .line_to(p(0., h))
+                .close()
+                .move_to(p(5., 5.))
+                .line_to(p(5., 20.))
+                .line_to(p(20., 20.))
+                .line_to(p(20., 5.))
+                .close()
+        };
+        let framed = stack![].square(100.).outline(ring).fill(Role::Primary);
+        let holed = area(framed.cut(square));
+        assert!((holed - (10_000. - 225. - 2_500.)).abs() < 1., "{holed}");
     }
 
     #[test]

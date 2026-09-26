@@ -11,6 +11,29 @@ impl Ui {
         (self.nodes.get(id).and_then(|n| n.scroll)).map_or([0.0, 0.0], |s| s.map(|s| s.target))
     }
 
+    /// The wheel over `id` last frame, if any: `Some` only while the
+    /// pointer is inside `id`'s frame and not clipped away, like
+    /// [`Response::wheel`].
+    ///
+    /// Reading it claims it. Call it every build, not only when it scrolled:
+    /// while the tree built alongside the call is on screen, a scroll node
+    /// enclosing `id` does not scroll under it. A scroll node *inside* `id`
+    /// still scrolls first -- the innermost taker wins -- and `id` reads the
+    /// wheel regardless.
+    ///
+    /// ```
+    /// # use mui::Ui;
+    /// let mut ui = Ui::default();
+    /// let zoom = ui.wheel("lane").map_or(1.0, |w| 1.0 - w.y * 0.01);
+    /// # assert_eq!(zoom, 1.0);
+    /// ```
+    pub fn wheel(&mut self, id: impl Into<Id>) -> Option<Vec2> {
+        let id: Id = id.into();
+        let wheel = self.get(id.as_str()).wheel;
+        self.wheel_claims.push(id.as_str().to_owned());
+        (wheel != Vec2::ZERO).then_some(wheel)
+    }
+
     /// What the new scene says about the retained state: a capture or focus
     /// whose target is gone ends, scroll offsets clamp to their content,
     /// selections of vanished fields drop, and the wheel lands. Returns
@@ -42,7 +65,7 @@ impl Ui {
                 s.to(next);
             }
         }
-        animating | self.wheel(scene, wheel)
+        animating | self.land_wheel(scene, wheel)
     }
 
     /// A held scrollbar slides its node: the thumb follows the pointer from
@@ -132,7 +155,7 @@ impl Ui {
 
     /// Send the wheel to the innermost scrollable surface under the pointer.
     /// It lands on the next frame's tree, the same frame late a release is.
-    pub(super) fn wheel(&mut self, scene: &ResolvedScene, wheel: Vec2) -> bool {
+    pub(super) fn land_wheel(&mut self, scene: &ResolvedScene, wheel: Vec2) -> bool {
         // A non-finite delta would land in `self.scrolls` for good: `clamp`
         // returns a NaN receiver unchanged, and every later frame would fail
         // validation on the offset.
@@ -152,9 +175,11 @@ impl Ui {
             }) {
                 continue;
             }
-            // A node that keeps the wheel reads it from `Response::wheel`;
-            // nothing it sits in scrolls under it.
-            if s.captures_wheel && !s.disabled {
+            // A node that keeps the wheel reads it from `Response::wheel`
+            // or claimed it with `Ui::wheel`; nothing it sits in scrolls
+            // under it.
+            let claimed = || self.wheel_claims.iter().any(|c| c == s.key.as_str());
+            if (s.captures_wheel || claimed()) && !s.disabled {
                 return false;
             }
             // `content` is the frame size for everything but a scroll node,

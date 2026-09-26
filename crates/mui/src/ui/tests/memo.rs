@@ -158,3 +158,16 @@ fn nested_memos_rebuild_only_what_changed() {
     assert!(n.0 > 2 && n.1 > 1, "the inner hover built both again");
     assert!(ui.get("in.b").hovered);
 }
+
+/// A canvas's label shapes once: the same (font, size, text) hands back the
+/// same run, and another size is its own.
+#[test]
+fn a_text_run_is_shaped_once_and_kept() {
+    let font = Font::new(epaint_default_fonts::HACK_REGULAR).unwrap();
+    let mut ui = Ui::default();
+    let a = ui.text_run(&font, "gain", 12.).unwrap();
+    let b = ui.text_run(&font, "gain", 12.).unwrap();
+    assert!(Arc::ptr_eq(&a, &b), "the run was shaped again");
+    let big = ui.text_run(&font, "gain", 24.).unwrap();
+    assert!(big.advance > a.advance);
+}

@@ -22,7 +22,8 @@ const TALL: u32 = 300;
 #[test]
 #[ignore = "needs a GPU"]
 fn a_resized_renderer_paints_its_whole_target() {
-    let instance = wgpu::Instance::default();
+    let instance =
+        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
     let adapter =
         pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
             .expect("adapter");

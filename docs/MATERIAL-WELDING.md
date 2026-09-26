@@ -165,10 +165,10 @@ nontrivial member compositing layers; a custom or union outline on the
 material-weld container; and carving the material-weld container itself.
 
 A nested group can be excluded from its parent's weld. Place independent effects
-on an excluded wrapper/descendant. Custom outline plus `cut`/`keep` is rejected
-because the legacy polygon converter would fill existing holes; provide the
-finished outline instead. Custom-path shadows are likewise rejected until a path
-filter renderer can honor them. A vector `.union(fill)` is unaffected by all of this.
+on an excluded wrapper/descendant. A custom outline is a `cut`/`keep` base like
+any other: it is normalised NonZero first, so a hole wound against its outer
+contour stays a hole. A drop shadow on a custom outline is the path blurred
+by the renderer's blur layer; an inset one is rejected. A vector `.union(fill)` is unaffected by all of this.
 
 Direct text, floats, sticky children, excluded children and zero-area children
 are not weld plates. An unpainted spacer is excluded unless the parent explicitly

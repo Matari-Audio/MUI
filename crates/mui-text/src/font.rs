@@ -31,6 +31,9 @@ pub type Axis<'a> = (&'a str, f32);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Weight(u16);
 impl Weight {
+    pub const THIN: Self = Self(100);
+    pub const EXTRA_LIGHT: Self = Self(200);
+    pub const LIGHT: Self = Self(300);
     pub const REGULAR: Self = Self(400);
     pub const MEDIUM: Self = Self(500);
     pub const SEMIBOLD: Self = Self(600);

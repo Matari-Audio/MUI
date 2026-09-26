@@ -449,7 +449,8 @@ mod tests {
     /// lost callback, and a device opened again renders.
     #[test]
     fn a_destroyed_device_is_seen_and_a_new_one_renders() {
-        let instance = wgpu::Instance::default();
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
         let gpu = match OnDevice::open(&instance, None, (16, 16)) {
             Ok(gpu) => gpu,
             Err(e) => return eprintln!("SKIPPED: no wgpu device ({e})"),

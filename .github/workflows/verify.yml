@@ -67,4 +67,16 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       # fmt, clippy and wasm are platform-independent and already gated on Linux.
-      - run: cargo test --workspace --all-features --locked
+      # mui-baseview's `keyboard-capture` needs a baseview-truce with
+      # `Window::set_keyboard_capture`, which the locked stock one lacks: the
+      # window crates run on their default features.
+      # Windows runners have only WARP, and wgpu's DX12 backend faults on it
+      # (Device::destroy, the effects smoke test). GPU tests read WGPU_BACKEND:
+      # `metal` has no adapter on Windows, so they skip; macOS keeps Metal.
+      - if: runner.os == 'Windows'
+        run: cargo test --workspace --all-features --locked --exclude mui-baseview --exclude mui-truce
+        env:
+          WGPU_BACKEND: metal
+      - if: runner.os != 'Windows'
+        run: cargo test --workspace --all-features --locked --exclude mui-baseview --exclude mui-truce
+      - run: cargo test -p mui-baseview -p mui-truce --locked

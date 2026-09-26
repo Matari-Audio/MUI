@@ -1096,3 +1096,104 @@ fn a_row_shrinks_content_only_down_to_its_min_content() {
     .unwrap();
     assert_eq!(w(&l, "a"), 100.);
 }
+/// KURV's parameter well: a wrapping row, width 100% through padded
+/// columns, in a hugging column beside a fixed port. Measure used to break
+/// the lines at one width and arrange at a narrower one, so a third line
+/// hung below the row's two-line height.
+#[test]
+fn a_wrap_row_under_a_flex_share_arranges_the_lines_it_measured() {
+    let ws = [65., 66.6, 66.6, 79.7, 70., 50., 52., 50., 48.];
+    // `above` adds a sibling outside the row, so a warm solve rebinds the
+    // whole row from the cache rather than measuring it.
+    let tree = |above: bool| {
+        let cells = ws
+            .iter()
+            .enumerate()
+            .map(|(i, w)| block(*w, 36.).id(format!("c{i}")).grow(1.));
+        let params = Node::row(cells)
+            .wrap()
+            .gap(8.)
+            .w(Len::Pct(100.))
+            .id("params");
+        let well = col([params]).pad(8.).w(Len::Pct(100.));
+        let body = col([block(10., 24.), col([well]).w(Len::Pct(100.))])
+            .pad(8.)
+            .id("body");
+        let port = block(24., 72.).id("port");
+        let row = row([body.grow(1.).shrink(1.).min_w(0.), port])
+            .gap(12.)
+            .w(Len::Pct(100.))
+            .id("row");
+        let above = above.then(|| block(10., 10.)).into_iter();
+        col(above.chain([row])).w(360.)
+    };
+    let offered = Some(Size::new(360., 650.));
+    let mut cache = LayoutCache::default();
+    let mut cached = |above: bool| {
+        let solve = |_: &(), _: Option<f64>| Size::ZERO;
+        let (limits, scale) = (Limits::default(), SpacingScale::DEFAULT);
+        resolve_cached_with(
+            &tree(above),
+            offered,
+            limits,
+            scale,
+            &mut cache,
+            |_, _| {},
+            solve,
+        )
+        .unwrap()
+    };
+    let layouts = [
+        resolve(&tree(false), offered, Limits::default()).unwrap(),
+        cached(false),
+        cached(false),
+        cached(true),
+    ];
+    assert!(cache.stats().measure_hits > 0);
+    for l in layouts {
+        let p = l.frame("params").unwrap();
+        for i in 0..ws.len() {
+            let c = l.frame(&format!("c{i}")).unwrap();
+            assert!(c.bottom() <= p.bottom() + 1e-9, "c{i} below the row");
+        }
+        let (body, port) = (l.frame("body").unwrap(), l.frame("port").unwrap());
+        assert!((body.size.width + 12. + port.size.width - 360.).abs() < 1e-9);
+        // Its longest line, not all nine cells, is the body's flex basis.
+        assert!(port.size.width > 23., "{}", port.size.width);
+    }
+}
+/// KURV's unison panel: a `min_col` grid and a wrapping row in a flex item.
+/// The grid can drop columns down to one, so that is its floor: held at its
+/// hugging (all-columns) floor the item overflowed its row, and each
+/// re-measure at a new share moved the floor and the share again, so the
+/// wrap broke its lines at one width and was arranged at another.
+#[test]
+fn a_min_col_grid_floors_at_one_column_and_a_wrap_beside_it_follows() {
+    fn cells(n: usize, id: &'static str) -> impl Iterator<Item = Node> {
+        (0..n).map(move |i| block(60., 30.).min_w(60.).id(format!("{id}{i}")))
+    }
+    let knobs = grid(6, cells(6, "k")).min_col(64.).gap(4.);
+    let pan = Node::row(cells(4, "p").map(|c| c.grow(1.)))
+        .wrap()
+        .gap(4.)
+        .id("pan");
+    let left = col([knobs, pan]).gap(4.).id("left");
+    let tree = row([
+        left.grow(1.).shrink(1.).min_w(0.),
+        block(100., 50.).grow(1.).id("right"),
+    ])
+    .gap(8.)
+    .w(300.);
+    let l = resolve(&tree, Some(Size::new(300., 400.)), Limits::default()).unwrap();
+    let (left, right) = (l.frame("left").unwrap(), l.frame("right").unwrap());
+    assert!(left.right() + 8. <= right.x + 1e-9 && right.right() <= 300. + 1e-9);
+    let pan = l.frame("pan").unwrap();
+    for i in 0..4 {
+        let c = l.frame(&format!("p{i}")).unwrap();
+        assert!(
+            c.x >= left.x - 1e-9 && c.right() <= left.right() + 1e-9,
+            "p{i} outside"
+        );
+        assert!(c.bottom() <= pan.bottom() + 1e-9, "p{i} below the row");
+    }
+}
