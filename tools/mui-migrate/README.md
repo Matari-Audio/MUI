@@ -9,7 +9,7 @@ cargo run --release -- --dry-run --diff ../../examples   # preview
 cargo run --release -- path/to/crate/src                 # rewrite in place
 ```
 
-`mui-migrate [--dry-run] [--diff] [--include-vendored] [--no-docs] [--widgets] <paths...>`
+`mui-migrate [--dry-run] [--diff] [--include-vendored] [--no-docs] [--no-widgets] <paths...>`
 
 - Walks directories for `.rs`, `.md` and `Cargo.toml`, skipping `target/`, `.git/`,
   and (unless `--include-vendored`) `vendor/` and `.build-inputs/`.
@@ -18,8 +18,10 @@ cargo run --release -- path/to/crate/src                 # rewrite in place
 - Docs mode (on; `--no-docs` turns it off): Rust code blocks in `.md` files
   and in `///`/`//!` doc comments are migrated like code. A `.md` file named
   on the command line is processed even when not under a walked directory.
-- `--widgets` adds the widget renames (named results, `id` arguments); they
-  touch common names, so they are opt-in.
+  A block with a `// old` or `// before` line is a before/after example and
+  is left as written.
+- The widget rules (`Response` fields, `Interaction`, control labels,
+  `ColorOpts`, `&mut Bins`) are on; `--no-widgets` turns them off.
 - Idempotent: a second run changes nothing.
 
 ## How it works
@@ -56,7 +58,9 @@ Call { chain: &[("disabled", &[Is("true")])], to: ".disabled()", gate: Mui, need
 Manual { pattern: "resolve_scene_cached", note: "use `Resolver`" },
 ```
 
-Tuple results that became structs go in `TUPLES`; moved crates in
+Widget rules go in `WIDGET_RULES`. Tuple results that became structs go in
+`TUPLES` (`.0` -> field, `let (a, _) =` -> `let a = f(..).el`, `.0.el()` ->
+`.el.into_el()`); moved crates in
 `CARGO_MOVES`. Add a fixture to `src/tests.rs` and run `cargo test`.
 
 ## Limitations
@@ -64,6 +68,10 @@ Tuple results that became structs go in `TUPLES`; moved crates in
 - `.disabled(x)` on a builder chain is assumed to be the element switch; a
   `palette().disabled(color)` chain would be misread.
 - A tuple result stored in a variable (`let r = knob(..); r.0`) is not traced.
+- A `let Response { .. }` pattern resolves to whatever `Response` the file
+  imports: a file that also imports `mui_input::Response` needs
+  `widgets::Response { .. }` by hand.
+- The label the tool gives `toggle` and `drag_value` is `""`.
 - `.anchor(..).offset(..)` is only folded when the two calls are adjacent.
 - Bare `Role` variants are qualified only in files with a mui glob and no
   other glob import.

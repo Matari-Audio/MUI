@@ -14,7 +14,9 @@ cargo run --release --manifest-path tools/mui-migrate/Cargo.toml -- path/to/crat
 
 It rewrites `.rs` files, the Rust code blocks in doc comments and `.md`
 files (`--no-docs` skips them) and moved crates in `Cargo.toml`. The widget
-renames are opt-in: add `--widgets`. A second run changes nothing. See
+rules are on too (`--no-widgets` skips them). A code block holding a
+`// old` or `// before` line is a before/after example and is left alone. A
+second run changes nothing. See
 [`tools/mui-migrate/README.md`](tools/mui-migrate/README.md).
 
 It prints `file:line: note` where a human has to look:
@@ -23,7 +25,8 @@ It prints `file:line: note` where a human has to look:
   with `SceneSpec::weld_backend(WeldBackend::..)` (or `Ui::gpu_welding`).
 - `resolve_scene_cached` / `_animated` / `_retained`: keep one `Resolver`
   across frames and call `resolve` or `resolve_animated(&spec, glide, prev)`.
-- `Bridge::bind`: the closure now receives the id; pass it to the widget.
+- `Bridge::bind(`: the closure now receives the id; pass it to the widget.
+  It may return the widget's whole `Response` (anything `IntoEl`).
 - Bare `Role` variants (`Surface`, `Primary`, ...) are qualified only in files
   whose one glob import is mui's; with another glob (`truce::prelude::*`) write
   `Role::X` yourself. `Role::*` left the prelude.
@@ -43,6 +46,37 @@ Changes the tool cannot express:
 - `material_symbols::codepoint("home")` -> `mui_symbols::sym::HOME` (crate
   `mui-symbols`; `codepoint(name)` stays there for runtime names).
 - A dangling cross-reference is `SceneError::MissingId { what, id }`.
+
+Widgets (`mui`), rewritten by the tool unless `--no-widgets`:
+
+- Every widget returns `Response<C = bool, E = El> { el, changed }`:
+  `f(..).0` -> `.el`, `.1` -> `.changed`, `let (a, _) = f(..)` ->
+  `let a = f(..).el`, `let (a, b) = f(..)` -> `let Response { el: a,
+  changed: b } = f(..)`, `.0.el()` / `.0.into()` -> `.el.into_el()`. A
+  control's (`button`, `toggle`, `slider`, `knob`, `drag_value`) `el` is the
+  `Control`, still taking `.size`/`.variant`/`.role`; a `Response` drops into
+  `row![..]` whole. `text_edit`'s `changed` is the `TextEdit`, `curve`'s and
+  `bins`' the `Option<CurveEdit/BinEdit>`.
+- `Ui::state(id)` returns `Interaction { hover, press }`; `.0`/`.1` and
+  `let (h, p) =` are rewritten.
+- `toggle(ui, id, on)` -> `toggle(ui, id, label, on)` and
+  `drag_value(ui, id, v, range)` -> `drag_value(ui, id, label, v, range)`:
+  every control takes a label (its accessible name). The tool inserts `""`;
+  give it a real one.
+- `color_picker(.., alpha: bool)` -> `color_picker(.., ColorOpts { alpha })`.
+- `bins(ui, id, &Bins)` -> `bins(ui, id, &mut Bins)`, `Bins::authored` is
+  `&mut [f32]`: the widget applies the paint, reset and selection itself, as
+  `curve` does, and `changed` says what it did. An old caller's own apply
+  code is now redundant (and harmless); delete it.
+- `text_input`, `text_edit`, `bins`, `bins_hover`, `curve` and
+  `color_picker` take `id: impl Into<Id>` (a `&str` still works).
+- `mui::prelude::Response` is the widget `Response`; the pointer's
+  per-target report is `mui::input::Response`. A file importing both names
+  by hand has to qualify one.
+- The `mui` prelude lists its names instead of globbing
+  `mui_scene::prelude`; the names are the same, so nothing to rewrite. The
+  crates stay reachable by name: `mui::scene`, `mui::layout`, `mui::input`,
+  `mui::motion`, `mui::vello`, `mui::geometry`.
 
 ## mui-text
 

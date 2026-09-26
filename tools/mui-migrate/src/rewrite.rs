@@ -266,6 +266,10 @@ pub(crate) struct File<'a> {
     /// Innermost brace frame each token sits in.
     frame: Vec<Frame>,
     defined: HashSet<String>,
+    /// `let name = |..|` closures: the name and the token span of the block
+    /// it is visible in, so one fn's local `button` does not hide the widget
+    /// from the rest of the file.
+    closures: Vec<(String, usize, usize)>,
     locals: HashMap<String, bool>,
     mui_glob: bool,
     foreign_glob: bool,
@@ -290,6 +294,7 @@ impl<'a> File<'a> {
             use_tok: HashMap::new(),
             frame: vec![Frame::Other; t.len()],
             defined: HashSet::new(),
+            closures: Vec::new(),
             locals: HashMap::new(),
             mui_glob: false,
             foreign_glob: false,
@@ -366,14 +371,20 @@ impl<'a> File<'a> {
     fn scan(&mut self) {
         let t = self.t;
         let mut stack: Vec<Frame> = Vec::new();
+        // The open brace of each frame on `stack`.
+        let mut opens: Vec<usize> = Vec::new();
         let mut pending: Option<Frame> = None;
         let mut i = 0;
         while i < t.len() {
             self.frame[i] = *stack.last().unwrap_or(&Frame::Other);
             match &t[i].k {
-                K::Open('{') => stack.push(pending.take().unwrap_or(Frame::Other)),
+                K::Open('{') => {
+                    stack.push(pending.take().unwrap_or(Frame::Other));
+                    opens.push(i);
+                }
                 K::Close('}') => {
                     stack.pop();
+                    opens.pop();
                 }
                 K::Punct(';') => pending = None,
                 K::Ident => {
@@ -415,7 +426,8 @@ impl<'a> File<'a> {
                                 k += 1;
                             }
                             if self.punct(k, '|') {
-                                self.defined.insert(t[j].text.clone());
+                                let end = opens.last().map_or(t.len(), |&o| t[o].pair);
+                                self.closures.push((t[j].text.clone(), i, end));
                             }
                         }
                     }
@@ -575,7 +587,7 @@ impl<'a> File<'a> {
             return true;
         }
         if j == i || ty {
-            if self.defined.contains(s) {
+            if self.defined.contains(s) || self.closures.iter().any(|(n, a, b)| n == s && (*a..=*b).contains(&j)) {
                 return false;
             }
             if let Some(&m) = self.locals.get(s) {
@@ -596,6 +608,10 @@ impl<'a> File<'a> {
         }
         if self.defined.contains(s) {
             return self.own;
+        }
+        // Inside a mui crate, an imported module (`use crate::widgets;`) is its own.
+        if self.own && self.locals.contains_key(s) && s.starts_with(char::is_lowercase) {
+            return true;
         }
         if let Some(&m) = self.locals.get(s) {
             return m;
@@ -921,8 +937,9 @@ impl<'a> File<'a> {
             && let Ok(n) = lit.text.parse::<usize>()
             && let Some(field) = spec.fields.get(n)
         {
-            // A control finished on the spot: `.0.el()` is `.el.into_el()`.
-            if *field == "el" && self.dot(close + 3) && self.ident(close + 4, "el") && self.open(close + 5, '(') && t[close + 5].pair == close + 6 {
+            // A control finished on the spot: `.0.el()` / `.0.into()` is `.el.into_el()`
+            // (`Bridge::bind` takes any `IntoEl` now, so `.into()` has no target).
+            if *field == "el" && self.dot(close + 3) && (self.ident(close + 4, "el") || self.ident(close + 4, "into")) && self.open(close + 5, '(') && t[close + 5].pair == close + 6 {
                 edit(lit.lo, t[close + 6].hi, "el.into_el()".into());
                 needs.push((self.line(i), "IntoEl"));
                 return;
@@ -957,6 +974,15 @@ impl<'a> File<'a> {
         }
         let items = self.args(open);
         if items.len() != spec.fields.len() {
+            return;
+        }
+        // One binding and the rest `_`: `let a = f(..).el;`.
+        let bound: Vec<_> = items.iter().zip(spec.fields).filter(|&(&(a, b), _)| self.norm(a, b) != "_").collect();
+        if let [(&(a, b), field)] = bound[..]
+            && (a == b || (b == a + 1 && self.ident(a, "mut")))
+        {
+            edit(t[open].lo, t[s - 2].hi, self.text(a, b).to_string());
+            edit(t[close].hi, t[close].hi, format!(".{field}"));
             return;
         }
         let mut parts = Vec::new();

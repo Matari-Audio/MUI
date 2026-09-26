@@ -195,15 +195,18 @@ impl PreviewScene for Widgets {
         "Knob, slider, toggle, button. No thumb is placed: it sits where two flex weights put it."
     }
     fn specimen(&mut self, ui: &mut Ui) -> El {
-        let (go, clicked) = button(ui, "go", "Trigger");
+        let Response {
+            el: go,
+            changed: clicked,
+        } = button(ui, "go", "Trigger");
         self.clicks += usize::from(clicked);
         col([
             row([
                 knob(ui, "cutoff", "Cutoff", &mut self.cutoff, 0.0..=1.0)
-                    .0
-                    .el(),
+                    .el
+                    .into_el(),
                 knob(ui, "res", "Res", &mut self.res, 0.0..=1.0)
-                    .0
+                    .el
                     .variant(Variant::Soft)
                     .el(),
             ])
@@ -214,7 +217,9 @@ impl PreviewScene for Widgets {
                 .into_el(),
             row([
                 text("Bypass").fill(Role::Dim),
-                toggle(ui, "bypass", "", &mut self.bypass).el.into_el(),
+                toggle(ui, "bypass", "Bypass", &mut self.bypass)
+                    .el
+                    .into_el(),
                 spacer(),
                 text(format!("{}×", self.clicks)).fill(Role::Dim),
                 go.variant(Variant::Solid).el(),
@@ -503,12 +508,10 @@ impl PreviewScene for Picker {
         "Drag the square and strips. Drag a number, double-click to type."
     }
     fn specimen(&mut self, ui: &mut Ui) -> El {
-        let Response { el: picker, .. } =
-            color_picker(ui, "pick-tint", &mut self.tint, ColorOpts { alpha: true });
-        let Response { el: bpm, .. } = drag_value(ui, "pick-bpm", "", &mut self.bpm, 20.0..=300.0);
+        let picker = color_picker(ui, "pick-tint", &mut self.tint, ColorOpts { alpha: true }).el;
+        let bpm = drag_value(ui, "pick-bpm", "Tempo", &mut self.bpm, 20.0..=300.0).el;
         let bpm = bpm.value_text(format!("{:.1} BPM", self.bpm));
-        let Response { el: gain, .. } =
-            drag_value(ui, "pick-gain", "", &mut self.gain, -60.0..=12.0);
+        let gain = drag_value(ui, "pick-gain", "Gain", &mut self.gain, -60.0..=12.0).el;
         col([
             picker,
             row([body("tempo"), bpm.el(), body("gain"), gain.el()])
@@ -534,9 +537,9 @@ impl PreviewScene for Tips {
         "Rest on a button for a tip. Hold the last one and the menu drops in under it -- nothing is placed."
     }
     fn specimen(&mut self, ui: &mut Ui) -> El {
-        let (save, _) = button(ui, "tip-save", "Save");
-        let (revert, _) = button(ui, "tip-revert", "Revert");
-        let (more, _) = button(ui, "tip-more", "Hold for more");
+        let save = button(ui, "tip-save", "Save").el;
+        let revert = button(ui, "tip-revert", "Revert").el;
+        let more = button(ui, "tip-more", "Hold for more").el;
         let (save, revert, more) = (
             save.el(),
             revert.variant(Variant::Outline).el(),
@@ -693,14 +696,17 @@ impl PreviewScene for BinSpectrum {
         "Bins"
     }
     fn about(&self) -> &'static str {
-        "bins(ui, id, &Bins): draw across the bars to paint an additive spectrum. Shift is fine, a secondary click resets one, and with the focus here the arrows select and nudge. The cap line is the live level an operator chain would produce."
+        "bins(ui, id, &mut Bins): draw across the bars to paint an additive spectrum. Shift is fine, a secondary click resets one, and with the focus here the arrows select and nudge. The cap line is the live level an operator chain would produce."
     }
     fn controls(&mut self, ui: &mut Ui) -> Vec<El> {
         vec![
             row![
                 caption("Log axis"),
                 spacer(),
-                toggle(ui, "bins-log", "", &mut self.log).el.size(S).el(),
+                toggle(ui, "bins-log", "Log axis", &mut self.log)
+                    .el
+                    .size(S)
+                    .el(),
             ]
             .align(Align::Center),
         ]
@@ -721,8 +727,8 @@ impl PreviewScene for BinSpectrum {
                 (f64::from(*v) * (0.2 + 0.8 * w)) as f32
             })
             .collect();
-        let model = Bins {
-            authored: &self.authored,
+        let mut model = Bins {
+            authored: &mut self.authored,
             live: Some(&live),
             x: if self.log {
                 BinAxis::Log
@@ -733,27 +739,10 @@ impl PreviewScene for BinSpectrum {
             ..Bins::default()
         };
         let hovered = bins_hover(ui, "spectrum", &model);
-        let Response {
-            el: plot,
-            changed: edit,
-        } = bins(ui, "spectrum", &mut model);
-        match edit {
-            Some(BinEdit::Paint(painted)) => {
-                for (i, v) in painted {
-                    if let Some(slot) = self.authored.get_mut(i) {
-                        *slot = v;
-                        self.selected = i;
-                    }
-                }
-            }
-            Some(BinEdit::Reset(i)) => {
-                if let Some(slot) = self.authored.get_mut(i) {
-                    *slot = 0.0;
-                }
-            }
-            Some(BinEdit::Select(i)) => self.selected = i,
-            None => {}
-        }
+        // The widget paints, resets and selects in `model`; the selection
+        // comes back out for the readout.
+        let plot = bins(ui, "spectrum", &mut model).el;
+        self.selected = model.selected.unwrap_or(self.selected);
         // The readout is the caller's: the widget hands back an index and
         // this scene knows the partials are harmonics of 110 Hz.
         let shown = hovered.unwrap_or(self.selected);
@@ -907,7 +896,7 @@ impl PreviewScene for Swap {
         let pills = (0..3).map(|i| {
             let id = format!("pill-{i}");
             let target = ui.get(&id).drop_target;
-            let (pill, _) = button(ui, &id, &self.labels[i]);
+            let pill = button(ui, &id, &self.labels[i]).el;
             pill.variant(if target {
                 Variant::Solid
             } else {
@@ -1157,7 +1146,7 @@ impl PreviewScene for Motion {
 
         // A toast that enters from below and fades out where it stood.
         self.toast ^= ui.get("mot-toast-btn").clicked;
-        let (toast_btn, _) = button(
+        let toast_btn = button(
             ui,
             "mot-toast-btn",
             if self.toast {
@@ -1165,7 +1154,8 @@ impl PreviewScene for Motion {
             } else {
                 "Show toast"
             },
-        );
+        )
+        .el;
         let toast = if self.toast {
             text("Saved to preset A")
                 .pad(S)
@@ -1182,7 +1172,7 @@ impl PreviewScene for Motion {
         if ui.get("mot-rack-shuffle").clicked {
             self.rack.rotate_left(1);
         }
-        let (shuffle, _) = button(ui, "mot-rack-shuffle", "Rotate rack");
+        let shuffle = button(ui, "mot-rack-shuffle", "Rotate rack").el;
         let rack = row(self.rack.iter().enumerate().map(|(slot, &module)| {
             text(format!("M{module}"))
                 .pad(S)
@@ -1222,8 +1212,8 @@ impl PreviewScene for Motion {
             row([
                 pie,
                 knob(ui, "mot-gain", "Gain", &mut self.gain, 0.0..=1.0)
-                    .0
-                    .el(),
+                    .el
+                    .into_el(),
                 transport,
             ])
             .gap(L)
@@ -1436,8 +1426,8 @@ impl PreviewScene for Gestures {
 
         col([
             knob(ui, "g-cutoff", "Cutoff", &mut self.cutoff, 0.0..=1.0)
-                .0
-                .el(),
+                .el
+                .into_el(),
             slider(ui, "g-gain", "Gain", &mut self.gain, -24.0..=6.0)
                 .el
                 .into_el(),
@@ -1492,13 +1482,13 @@ impl PreviewScene for Switched {
         {
             self.fired += 1;
         }
-        let bypass = toggle(ui, "sw-bypass", "", &mut self.bypassed)
+        let bypass = toggle(ui, "sw-bypass", "Bypass", &mut self.bypassed)
             .el
             .size(S)
             .el();
         let rack = row([knob(ui, "sw-cut", "Cutoff", &mut self.cutoff, 0.0..=1.0)
-            .0
-            .el()])
+            .el
+            .into_el()])
         .pad(M)
         .radius(12.0)
         .fill(Role::Field)

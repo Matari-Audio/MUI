@@ -14,7 +14,7 @@ use mui::vello::vello_cpu::{Pixmap, RenderContext, Resources};
 /// The gallery card: two knobs, a slider and a toggle row.
 fn gallery(ui: &mut Ui, state: &mut (f64, f64, f64, bool)) -> El {
     let (cutoff, res, gain, on) = state;
-    let Response { el: go, .. } = button(ui, "go", "Trigger");
+    let go = button(ui, "go", "Trigger").el;
     let card = col([
         row([
             knob(ui, "cutoff", "Cutoff", cutoff, 0.0..=1.0).el.into_el(),
@@ -25,7 +25,7 @@ fn gallery(ui: &mut Ui, state: &mut (f64, f64, f64, bool)) -> El {
         slider(ui, "gain", "Gain", gain, -24.0..=6.0).el.into_el(),
         row([
             text("Bypass").fill(Role::Dim),
-            toggle(ui, "bypass", "", on).el.into_el(),
+            toggle(ui, "bypass", "Bypass", on).el.into_el(),
             spacer(),
             go.el(),
         ])
@@ -115,7 +115,7 @@ fn shot(scale: f64) -> Shot {
                     Some((
                         s.key.to_string(),
                         [s.frame.x, s.frame.y, s.frame.right(), s.frame.bottom()],
-                        [b.min.x, b.min.y, b.max.x, b.max.y],
+                        [b.x0, b.y0, b.x1, b.y1],
                     ))
                 })
                 .collect(),

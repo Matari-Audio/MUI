@@ -30,10 +30,14 @@ fn editor(ui: &mut Ui, m: &mut Gain) -> El {
         .el
         .size(L)
         .el();
-    let bypass = toggle(ui, "bypass", "", &mut m.bypass).el.into_el();
+    let bypass = toggle(ui, "bypass", "Bypass", &mut m.bypass).el.into_el();
     let tone = slider(ui, "tone", "Tone", &mut m.tone, 110.0..=880.0)
-        .el.into_el();
-    let Response { el: a4, changed: clicked } = button(ui, "a4", "A4");
+        .el
+        .into_el();
+    let Response {
+        el: a4,
+        changed: clicked,
+    } = button(ui, "a4", "A4");
     if clicked {
         m.tone = 440.0;
     }

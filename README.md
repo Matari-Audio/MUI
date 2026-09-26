@@ -67,10 +67,10 @@ let mut bypass = false;
 // Built every frame, like an immediate-mode tree. Widgets read last frame's
 // gesture on their id, so state lives in your own variables.
 let root = col![
-    row![title("Filter"), spacer(), toggle(&mut ui, "bypass", &mut bypass).0.size(S)]
+    row![title("Filter"), spacer(), toggle(&mut ui, "bypass", "Bypass", &mut bypass).el.size(S)]
         .center()
         .tip("Bypass the filter"),
-    slider(&mut ui, "cutoff", "Cutoff", &mut cutoff, 0.0..=1.0).0,
+    slider(&mut ui, "cutoff", "Cutoff", &mut cutoff, 0.0..=1.0).el,
 ]
 .gap(M)
 .pad(L)
@@ -180,15 +180,15 @@ assert_eq!(scene.surface("tab").unwrap().frame.size.width, 92.0);
 | `Draw::fill(path, Role::Ink).tag("band")`, `Draw::hit(path, "knot-0")` | a drawn shape that is also the node's hit shape, by name, and hit geometry that paints nothing. Tag one draw and the node responds inside its tagged paths only: `ui.tag("dial")` says which, latched for the length of a drag |
 | `.cursor(Cursor::Hand)`, `.tip("..")`, `.focusable()` | the pointer, a tooltip after half a second, Tab stops here |
 | `.captures_wheel()` | a node that uses the wheel itself: over it, no enclosing `.scroll()` moves |
-| `let (el, changed) = slider(&mut ui, "cut", "Cutoff", &mut hz, 20.0..=20e3)` | the one widget shape: `&mut Ui`, the id, and what it edits in; the element and what happened last frame out. `button` says whether it was clicked, `toggle`, `slider`, `knob` and `text_input` whether the value changed, `curve` and `bins` which part the gesture edited |
-| `button(&mut ui, "save", "Save").0.variant(Variant::Soft).size(S)` | a control's look and size: `Solid`, `Soft`, `Outline`, `Ghost`, and the same five sizes everywhere. `.role(Role::Danger)` recolours it, `.px(72.0)` is the hatch, `.el()` finishes it |
-| `slider(&mut ui, "cut", "Cutoff", &mut hz, 20.0..=20e3).0.value_text(format!("{hz:.0} Hz"))` | what the readout says, in the parameter's own units, instead of the default two decimals. The string is also what the readout is measured for, so nothing shuffles as digits come and go; a knob has no header, so it says this under the dial in place of its label |
+| `let Response { el, changed } = slider(&mut ui, "cut", "Cutoff", &mut hz, 20.0..=20e3)` | the one widget shape: `&mut Ui`, the id, the label (controls), what it edits by `&mut`, then its range or options; a `Response` out, the element and what happened last frame. `button` says whether it was clicked, `toggle`, `slider`, `knob`, `drag_value`, `text_input` and `color_picker` whether the value changed, `curve` and `bins` which part the gesture edited. A `Response` drops into `row![..]` whole |
+| `button(&mut ui, "save", "Save").el.variant(Variant::Soft).size(S)` | a control's look and size: `Solid`, `Soft`, `Outline`, `Ghost`, and the same five sizes everywhere. `.role(Role::Danger)` recolours it, `.px(72.0)` is the hatch, `.el()` finishes it |
+| `slider(&mut ui, "cut", "Cutoff", &mut hz, 20.0..=20e3).el.value_text(format!("{hz:.0} Hz"))` | what the readout says, in the parameter's own units, instead of the default two decimals. The string is also what the readout is measured for, so nothing shuffles as digits come and go; a knob has no header, so it says this under the dial in place of its label |
 | `text_edit(&mut ui, "notes", &mut s, TextOpts { newline: Newline::Enter, rows: 6, .. })` | a field of many lines: wraps to its width, Up/Down/Page move the caret by line, the lines scroll inside it. `Newline::ShiftEnter` keeps Enter for submit; `TextEdit { changed, submitted }` says what it did, `blur_on_submit` lets go of the focus |
-| `drag_value(&mut ui, "bpm", &mut bpm, 20.0..=300.0)` | a number to drag sideways, 200 px across the range; a double click or Enter opens a field to type it, Escape cancels. A `Control`, so `.value_text(..)` applies |
-| `color_picker(&mut ui, "tint", &mut color, true)` | a saturation-value square, a hue strip, an alpha strip when asked, and a hex field |
+| `drag_value(&mut ui, "bpm", "Tempo", &mut bpm, 20.0..=300.0)` | a number to drag sideways, 200 px across the range; a double click or Enter opens a field to type it, Escape cancels. A `Control`, so `.value_text(..)` applies |
+| `color_picker(&mut ui, "tint", &mut color, ColorOpts { alpha: true })` | a saturation-value square, a hue strip, an alpha strip when asked, and a hex field |
 | `stepped(&ui, id, &mut v, &range)` | the arrow, Page and Home/End keys of a slider, for a control of your own |
-| `curve(&mut ui, "env", &mut env)` | an envelope over `mui::scene::curve::Curve`: the model's own cubics as one stroked path, a knot per point and two tension handles per segment, each its own hit shape. Returns the tree and a `CurveEdit` saying what the drag moved -- Shift drags fine, Alt at the press locks an axis, `ui.tag("env")` names the shape under the pointer |
-| `bins(&mut ui, "spectrum", &Bins { authored, .. })` | an additive spectrum: a bar per partial in the accent, the engine's live levels as a cap line over them, and a faint level grid. One canvas and one hit shape -- pointer x becomes a bin index, so a drag paints every bin it crossed with no gaps, Shift refines from the press level, a secondary click resets one, and the arrows select and nudge. Over ~one bar a pixel the bins coalesce per column at their maximum, so 1024 partials still draw 200 bars. `bins_hover` is the index under the pointer, for a readout in your own units |
+| `curve(&mut ui, "env", &mut env)` | an envelope over `mui::scene::curve::Curve`: the model's own cubics as one stroked path, a knot per point and two tension handles per segment, each its own hit shape. Edits `env` in place; `changed` is a `CurveEdit` saying what the drag moved -- Shift drags fine, Alt at the press locks an axis, `ui.tag("env")` names the shape under the pointer |
+| `bins(&mut ui, "spectrum", &mut Bins { authored: &mut levels, .. })` | an additive spectrum: a bar per partial in the accent, the engine's live levels as a cap line over them, and a faint level grid. Edits the levels and the selection in place, as `curve` does; `changed` is a `BinEdit` saying what. One canvas and one hit shape -- pointer x becomes a bin index, so a drag paints every bin it crossed with no gaps, Shift refines from the press level, a secondary click resets one, and the arrows select and nudge. Over ~one bar a pixel the bins coalesce per column at their maximum, so 1024 partials still draw 200 bars. `bins_hover` is the index under the pointer, for a readout in your own units |
 | `.a11y(A11y::Button)`, `.named("OK")` | what a screen reader hears: `mui-access` reads both off the surface. `.a11y(A11y::Image).named("BUFFR logo")` is a picture with alt text; unlabelled, it is decoration |
 | `.reserve("-88.8 dB")`, `ui.set_text("gain", v)` | measure a readout for the widest value it can show, then swap what it says without resolving the tree again: the frame stands, one glyph run re-shapes |
 | `.text_weight(Weight::BOLD)` | the run's `wght` axis. A variable face moves; a static one has one weight and draws it |
@@ -227,7 +227,7 @@ const NAMES: [&str; 5] = ["Drive", "Tilt", "Mix", "Air", "Floor"];
 let params: Vec<El> = NAMES
     .iter()
     .zip(&mut values)
-    .map(|(n, v)| slider(&mut ui, *n, n, v, 0.0..=1.0).0.el())
+    .map(|(n, v)| slider(&mut ui, *n, n, v, 0.0..=1.0).el.into_el())
     .collect();
 
 let curve = canvas(|size| {
@@ -241,9 +241,9 @@ let curve = canvas(|size| {
 let root = col![
     row![
         title("Kurv"),
-        text_input(&mut ui, "preset", &mut preset).0.w(140),
+        text_input(&mut ui, "preset", &mut preset).el.w(140),
         spacer(),
-        toggle(&mut ui, "bypass", &mut bypass).0.el().tip("Bypass"),
+        toggle(&mut ui, "bypass", "Bypass", &mut bypass).el.into_el().tip("Bypass"),
     ]
     .gap(S)
     .center(),
@@ -321,9 +321,7 @@ is the value the next tree reads:
 ```rust,ignore
 fn editor(params: Arc<GainParams>) -> Box<dyn Editor> {
     MuiEditor::new(params, Ui::new(Theme::DEFAULT), (300, 200), |ui, bridge| {
-        let gain = bridge.bind(ui, P::Gain, |ui, id, v| {
-            knob(ui, id, "Gain", v, 0.0..=1.0).0.el()
-        });
+        let gain = bridge.bind(ui, P::Gain, |ui, id, v| knob(ui, id, "Gain", v, 0.0..=1.0));
         col![gain, title(bridge.text(P::Gain))].pad(L).fill(Role::Surface)
     })
     .resizable((260, 180))
@@ -367,7 +365,7 @@ let mut gain = 0.5;
 let sweep = ui.tween("sweep", gain);
 let root = col![
     block(60.0, 60.0).fill(Role::Primary).animate().id("lamp"),
-    knob(&mut ui, "gain", "Gain", &mut gain, 0.0..=1.0).0.el(),
+    knob(&mut ui, "gain", "Gain", &mut gain, 0.0..=1.0),
 ];
 let frame = ui.frame(root, Some(Size::new(200.0, 200.0)), Input::default(), 1.0 / 60.0).unwrap();
 assert!(sweep <= gain && frame.edits.is_empty());

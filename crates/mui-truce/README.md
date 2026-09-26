@@ -17,7 +17,7 @@ store, the audio runtime and the state format. This crate adds the editor:
 fn editor(params: Arc<GainParams>) -> Box<dyn Editor> {
     MuiEditor::new(params, Ui::new(Theme::DEFAULT), (300, 200), |ui, bridge| {
         let gain = bridge.bind(ui, P::Gain, |ui, id, v| {
-            knob(ui, id, "Gain", v, 0.0..=1.0).el.into_el()
+            knob(ui, id, "Gain", v, 0.0..=1.0)
         });
         col![gain, title(bridge.text(P::Gain))].pad(L).fill(Surface)
     })

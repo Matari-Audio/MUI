@@ -43,7 +43,7 @@ impl<P: Params> View for Session<P> {
 /// fn editor(params: Arc<GainParams>) -> Box<dyn Editor> {
 ///     let ui = Ui::new(Theme::DEFAULT).font(font);
 ///     MuiEditor::new(params, ui, (320, 200), |ui, bridge| {
-///         bridge.bind(ui, P::Gain, |ui, id, v| knob(ui, id, "Gain", v, 0.0..=1.0).el.into())
+///         bridge.bind(ui, P::Gain, |ui, id, v| knob(ui, id, "Gain", v, 0.0..=1.0))
 ///     })
 ///     .resizable((240, 160))
 ///     .into_editor()

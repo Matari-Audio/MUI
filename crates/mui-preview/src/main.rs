@@ -359,8 +359,7 @@ impl App {
         side.push(
             col((0..self.scenes.len()).map(|i| {
                 let on = i == self.selected;
-                let Response { el: item, .. } =
-                    button(ui, format!("scene-{i}"), self.scenes[i].name());
+                let item = button(ui, format!("scene-{i}"), self.scenes[i].name()).el;
                 item.variant(if on { Variant::Solid } else { Variant::Soft })
                     .size(S)
                     .el()
@@ -377,7 +376,7 @@ impl App {
             row([
                 text(label).fill(Role::Dim),
                 spacer(),
-                toggle(ui, id, "", v).el.into_el(),
+                toggle(ui, id, label, v).el.into_el(),
             ])
             .align(Align::Center)
         };

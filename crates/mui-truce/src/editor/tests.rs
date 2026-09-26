@@ -64,13 +64,9 @@ fn editor(params: &Arc<Synth>) -> MuiEditor<Synth> {
         Ui::new(Theme::DEFAULT),
         (400, 300),
         |ui, bridge| {
-            let gain = bridge.bind(ui, 10u32, |ui, id, v| {
-                knob(ui, id, "Gain", v, 0.0..=1.0).el.into()
-            });
-            let voices = bridge.bind(ui, 20u32, |ui, id, v| {
-                knob(ui, id, "Voices", v, 0.0..=1.0).el.into()
-            });
-            let bypass = bridge.bind_bool(ui, 30u32, |ui, id, on| toggle(ui, id, "", on).el.into());
+            let gain = bridge.bind(ui, 10u32, |ui, id, v| knob(ui, id, "Gain", v, 0.0..=1.0));
+            let voices = bridge.bind(ui, 20u32, |ui, id, v| knob(ui, id, "Voices", v, 0.0..=1.0));
+            let bypass = bridge.bind_bool(ui, 30u32, |ui, id, on| toggle(ui, id, "Bypass", on));
             row([gain, voices, bypass])
         },
     )
@@ -315,9 +311,7 @@ fn a_control_that_leaves_the_tree_mid_drag_ends_its_gesture() {
             if hide.load(std::sync::atomic::Ordering::Relaxed) {
                 return row([]);
             }
-            bridge.bind(ui, 10u32, |ui, id, v| {
-                knob(ui, id, "Gain", v, 0.0..=1.0).el.into()
-            })
+            bridge.bind(ui, 10u32, |ui, id, v| knob(ui, id, "Gain", v, 0.0..=1.0))
         },
     );
     let (editor, mut h, log) = open_with(&params, editor);
@@ -395,7 +389,7 @@ fn a_read_only_parameter_never_reaches_the_host() {
     let mut ui = Ui::new(Theme::DEFAULT);
     let el = bridge.bind(&mut ui, 1u32, |ui, id, v| {
         *v = 0.7;
-        knob(ui, id, "Level", v, 0.0..=1.0).el.into()
+        knob(ui, id, "Level", v, 0.0..=1.0)
     });
     ui.frame(el, None, mui::prelude::Input::default(), 0.0)
         .unwrap();

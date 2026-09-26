@@ -49,7 +49,7 @@ fn the_size_scale_steps_every_control_off_the_theme_unit() {
     let mut ui = Ui::new(Theme::DEFAULT);
     let mut sw = |size: SpacingToken| {
         let mut on = false;
-        toggle(&mut ui, "sw", "", &mut on).el.size(size)
+        toggle(&mut ui, "sw", "Switch", &mut on).el.size(size)
     };
     let (xs, m, xl) = (width(sw(Xs)), width(sw(M)), width(sw(Xl)));
     assert!(xs < m && m < xl, "{xs} {m} {xl}");

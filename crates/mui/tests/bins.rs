@@ -1,5 +1,6 @@
-//! The bin display's claims: a drag paints a continuous run of bins, Shift
-//! refines it, a secondary click resets one, the arrows select and nudge,
+//! The bin display's claims: a drag paints a continuous run of bins into
+//! the levels, Shift refines it, a secondary click resets one, the arrows
+//! select and nudge,
 //! a thousand partials still cost one bar per pixel column, and a log axis
 //! puts an octave where an octave belongs.
 use mui::input::{Button, Buttons, Key, KeyPress, Mods};
@@ -31,14 +32,14 @@ fn pointer(p: Point, button: Option<Button>, shift: bool) -> PointerInput {
 }
 /// One frame of the display at 200x100. The widget reads *last* frame's
 /// gesture, so every step here is one call.
-fn frame(ui: &mut Ui, b: &Bins, input: impl Into<Input>) -> Option<BinEdit> {
+fn frame(ui: &mut Ui, b: &mut Bins, input: impl Into<Input>) -> Option<BinEdit> {
     let Response { el, changed: edit } = bins(ui, "spec", b);
     ui.frame(el.size(W, H), Some(Size::new(W, H)), input, 0.016)
         .expect("resolves");
     edit
 }
 /// Settle the hit map, then press at `from`: the state a paint test starts in.
-fn press(ui: &mut Ui, b: &Bins, from: Point, shift: bool) {
+fn press(ui: &mut Ui, b: &mut Bins, from: Point, shift: bool) {
     for _ in 0..2 {
         frame(ui, b, pointer(from, None, shift));
     }
@@ -50,22 +51,22 @@ fn press(ui: &mut Ui, b: &Bins, from: Point, shift: bool) {
 /// one is painted, at the level the pointer had as it crossed.
 #[test]
 fn a_drag_paints_every_bin_it_crossed_with_interpolated_levels() {
-    let levels = saw(N);
-    let b = Bins {
-        authored: &levels,
+    let mut levels = saw(N);
+    let mut b = Bins {
+        authored: &mut levels,
         ..Bins::default()
     };
     let mut ui = Ui::new(Theme::DEFAULT);
-    press(&mut ui, &b, at(3, 0.25), false);
+    press(&mut ui, &mut b, at(3, 0.25), false);
     // One frame's jump of six bins and half the height.
     frame(
         &mut ui,
-        &b,
+        &mut b,
         pointer(at(9, 0.75), Some(Button::Primary), false),
     );
     let edit = frame(
         &mut ui,
-        &b,
+        &mut b,
         pointer(at(9, 0.75), Some(Button::Primary), false),
     );
     let Some(BinEdit::Paint(painted)) = edit else {
@@ -83,23 +84,26 @@ fn a_drag_paints_every_bin_it_crossed_with_interpolated_levels() {
         painted.windows(2).all(|w| w[1].1 > w[0].1),
         "interpolated: {painted:?}"
     );
+    // Applied in place, and the last bin painted is the selection.
+    assert!((b.authored[9] - 0.75).abs() < 1e-3, "{:?}", b.authored);
+    assert_eq!(b.selected, Some(9));
 }
 
 /// Shift refines from the level the press landed on, so the same travel
 /// moves a fraction as far -- never more than half.
 #[test]
 fn shift_paints_fine_from_the_press_level() {
-    let levels = saw(N);
-    let b = Bins {
-        authored: &levels,
-        ..Bins::default()
-    };
     let travel = |shift: bool| {
+        let mut levels = saw(N);
+        let mut b = Bins {
+            authored: &mut levels,
+            ..Bins::default()
+        };
         let mut ui = Ui::new(Theme::DEFAULT);
-        press(&mut ui, &b, at(5, 0.2), shift);
+        press(&mut ui, &mut b, at(5, 0.2), shift);
         let to = || pointer(at(5, 0.9), Some(Button::Primary), shift);
-        frame(&mut ui, &b, to());
-        match frame(&mut ui, &b, to()) {
+        frame(&mut ui, &mut b, to());
+        match frame(&mut ui, &mut b, to()) {
             Some(BinEdit::Paint(p)) => f64::from(p[0].1),
             e => panic!("a drag paints: {e:?}"),
         }
@@ -117,37 +121,40 @@ fn shift_paints_fine_from_the_press_level() {
 /// The secondary button resets the bin under the pointer and nothing else.
 #[test]
 fn a_secondary_click_resets_the_bin_under_the_pointer() {
-    let levels = saw(N);
-    let b = Bins {
-        authored: &levels,
+    let mut levels = saw(N);
+    let mut b = Bins {
+        authored: &mut levels,
         ..Bins::default()
     };
     let mut ui = Ui::new(Theme::DEFAULT);
     let p = at(11, 0.5);
     for _ in 0..2 {
-        frame(&mut ui, &b, pointer(p, None, false));
+        frame(&mut ui, &mut b, pointer(p, None, false));
     }
-    frame(&mut ui, &b, pointer(p, Some(Button::Secondary), false));
+    frame(&mut ui, &mut b, pointer(p, Some(Button::Secondary), false));
     assert_eq!(
-        frame(&mut ui, &b, pointer(p, Some(Button::Secondary), false)),
+        frame(&mut ui, &mut b, pointer(p, Some(Button::Secondary), false)),
         None,
         "held by the secondary button is not a paint"
     );
     // The click is reported on release, and read the frame after that.
-    frame(&mut ui, &b, pointer(p, None, false));
+    frame(&mut ui, &mut b, pointer(p, None, false));
     assert_eq!(
-        frame(&mut ui, &b, pointer(p, None, false)),
+        frame(&mut ui, &mut b, pointer(p, None, false)),
         Some(BinEdit::Reset(11))
     );
+    assert_eq!(b.authored[11], 0.0, "reset in place");
+    assert_eq!(b.authored[10], 1.0 / 11.0, "and nothing else");
 }
 
 /// With the focus here, Left/Right move the selection, Home/End jump, and
-/// Up/Down nudge the selected bin's level -- Shift finer.
+/// Up/Down nudge the selected bin's level -- Shift finer. Each lands in the
+/// `Bins` it was handed, so the next key starts from it.
 #[test]
 fn the_arrows_select_and_nudge_the_selected_bin() {
-    let levels = saw(N);
-    let b = Bins {
-        authored: &levels,
+    let mut levels = saw(N);
+    let mut b = Bins {
+        authored: &mut levels,
         selected: Some(4),
         ..Bins::default()
     };
@@ -162,44 +169,51 @@ fn the_arrows_select_and_nudge_the_selected_bin() {
         ..Input::default()
     };
     let mut ui = Ui::new(Theme::DEFAULT);
-    frame(&mut ui, &b, PointerInput::default());
+    frame(&mut ui, &mut b, PointerInput::default());
     ui.focus("spec");
     assert_eq!(
-        frame(&mut ui, &b, key(Key::Right, false)),
+        frame(&mut ui, &mut b, key(Key::Right, false)),
         None,
         "next frame"
     );
     assert_eq!(
-        frame(&mut ui, &b, key(Key::Left, false)),
+        frame(&mut ui, &mut b, key(Key::Left, false)),
         Some(BinEdit::Select(5)),
         "Right moved it before Left was read"
     );
     assert_eq!(
-        frame(&mut ui, &b, key(Key::End, false)),
-        Some(BinEdit::Select(3))
+        frame(&mut ui, &mut b, key(Key::End, false)),
+        Some(BinEdit::Select(4)),
+        "Left stepped back from 5"
     );
     assert_eq!(
-        frame(&mut ui, &b, key(Key::Up, false)),
+        frame(&mut ui, &mut b, key(Key::Up, false)),
         Some(BinEdit::Select(N - 1))
     );
-    // Bin 4 of a 1/n saw is 0.2; one nudge is a hundredth, Shift a tenth of that.
+    assert_eq!(b.selected, Some(N - 1));
+    // The last bin of a 1/n saw is 1/16; one nudge is a hundredth, Shift a
+    // tenth of that, each from the level the one before left.
     let nudged = |e: Option<BinEdit>| match e {
         Some(BinEdit::Paint(p)) => {
             assert_eq!(p.len(), 1, "one bin");
-            assert_eq!(p[0].0, 4, "the selected one");
+            assert_eq!(p[0].0, N - 1, "the selected one");
             f64::from(p[0].1)
         }
         other => panic!("a nudge paints: {other:?}"),
     };
-    let base = f64::from(levels[4]);
-    let up = nudged(frame(&mut ui, &b, key(Key::Down, false)));
-    let down = nudged(frame(&mut ui, &b, key(Key::Up, true)));
-    let fine = nudged(frame(&mut ui, &b, PointerInput::default()));
+    let base = 1.0 / N as f64;
+    let up = nudged(frame(&mut ui, &mut b, key(Key::Down, false)));
+    let down = nudged(frame(&mut ui, &mut b, key(Key::Up, true)));
+    let fine = nudged(frame(&mut ui, &mut b, PointerInput::default()));
     assert!((up - (base + 0.01)).abs() < 1e-6, "{up} vs {base}");
-    assert!((down - (base - 0.01)).abs() < 1e-6, "{down} vs {base}");
+    assert!((down - base).abs() < 1e-6, "{down} vs {base}");
     assert!(
         (fine - (base + 0.001)).abs() < 1e-6,
         "Shift is finer: {fine}"
+    );
+    assert!(
+        (f64::from(b.authored[N - 1]) - fine).abs() < 1e-6,
+        "applied"
     );
 }
 
@@ -208,15 +222,15 @@ fn the_arrows_select_and_nudge_the_selected_bin() {
 /// the box rather than the size of the model.
 #[test]
 fn a_thousand_bins_at_two_hundred_pixels_draw_one_bar_per_column() {
-    let levels = saw(1024);
+    let mut levels = saw(1024);
     let mut ui = Ui::new(Theme::DEFAULT);
     let live: Vec<f32> = levels.iter().map(|v| v * 0.5).collect();
-    let b = Bins {
-        authored: &levels,
+    let mut b = Bins {
+        authored: &mut levels,
         live: Some(&live),
         ..Bins::default()
     };
-    let Response { el, .. } = bins(&mut ui, "spec", &mut b);
+    let el = bins(&mut ui, "spec", &mut b).el;
     let Content::Canvas(f) = &el.payload().content else {
         panic!("a canvas")
     };
@@ -233,9 +247,9 @@ fn a_thousand_bins_at_two_hundred_pixels_draw_one_bar_per_column() {
 /// whatever the bin count.
 #[test]
 fn the_log_axis_puts_an_octave_between_a_partial_and_its_double() {
-    let levels = saw(64);
+    let mut levels = saw(64);
     let b = Bins {
-        authored: &levels,
+        authored: &mut levels,
         x: BinAxis::Log,
         ..Bins::default()
     };
@@ -251,7 +265,7 @@ fn the_log_axis_puts_an_octave_between_a_partial_and_its_double() {
     }
     // Linear is the other claim: evenly spaced, whatever the harmonic.
     let lin = Bins {
-        authored: &levels,
+        authored: &mut levels,
         ..Bins::default()
     };
     assert!((lin.x_of(1) - lin.x_of(0) - (lin.x_of(31) - lin.x_of(30))).abs() < 1e-12);

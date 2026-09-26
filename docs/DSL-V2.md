@@ -159,15 +159,16 @@ Every widget returns `#[must_use] Response<C = bool>`:
 pub struct Response<C = bool> { pub el: El, pub changed: C }
 ```
 
-`C` is `bool` for value widgets and `Option<Edit>` for curve/bins. Widgets
-that used to return `Control` take their size token as part of the call or
-through a `Look` option so the caller never reaches into `.0`. Every widget
+`C` is `bool` for value widgets and `Option<Edit>` for curve/bins. Controls
+return `Response<bool, Control>` (the struct has a second parameter,
+`E = El`): `.el` is the `Control`, still taking its look, so the caller never
+reaches into `.0`. Every widget
 takes `id: impl Into<Id>`. Positional bools (`color_picker(.., alpha)`)
 become option structs or builder methods. `Ui::state` returns
 `Interaction { hover, press }`. `bins` and `curve` agree on one mutation
 model (`&mut` value in, `changed` out).
 
-`mui-truce::Bridge::bind(ui, P::Gain, |ui, id, v| knob(ui, id, "Gain", v, 0.0..=1.0).el)`
+`mui-truce::Bridge::bind(ui, P::Gain, |ui, id, v| knob(ui, id, "Gain", v, 0.0..=1.0))`
 — the id is derived from the parameter and handed to the closure, so it
 cannot be typed twice. `bind_bool` exists for toggles.
 
@@ -225,7 +226,16 @@ col![
 | `.gpu_weld(w)` backend | only `SceneSpec::weld_backend(..)` (and `Ui::gpu_welding` in `mui`) | principle 8 |
 | `material_symbols::codepoint("10k")` | `sym::_10K` | a name starting with a digit gets a `_` prefix to be an identifier |
 | dangling-ref errors | `SceneError::MissingId { what, id }` | one variant for `join_border`, `inset_surface_of`, border-ramp anchors |
-| widget renames | `mui-migrate --widgets` (opt-in); docs mode on by default, `--no-docs` turns it off | widget rules touch common names; doc code blocks must migrate with the code |
+| widget renames | `mui-migrate` widget rules on by default (`--no-widgets` opts out); docs mode on by default, `--no-docs` turns it off; a code block with a `// old` / `// before` line is left as written | the widget API exists now; before/after examples document the old API on purpose |
+| `Control` in a `Response` | `Response<C = bool, E = El>`; controls return `Response<bool, Control>`, everything else `Response<C>` with an `El`; `Response: IntoEl` | the look (`.size`, `.variant`, `.role`, `.value_text`, `.px`) stays a builder on `.el` instead of a positional argument on every call; a `Response` drops into `row![..]` whole |
+| `Bridge::bind` closure `-> El` | `-> impl IntoEl`: `\|ui, id, v\| knob(ui, id, "Gain", v, 0.0..=1.0)` | no `.el` to type; a hand-built tree still works |
+| widget argument order | `ui, id, label (controls), &mut value, range / options`; `toggle` and `drag_value` gain a label (their accessible name, not drawn) | every control is named for a screen reader; `button`/`slider`/`knob` already took one |
+| `color_picker(.., alpha: bool)` | `ColorOpts { alpha }` (`Default` is opaque) | the `TextOpts` shape |
+| `bins` mutation | `&mut Bins`, `Bins::authored: &mut [f32]`; paint, reset and select are applied (a paint moves the selection); `BinEdit` reports what | `curve`'s model: `&mut` value in, what changed out |
+| `stepped(ui, id, v, &range)` | unchanged | a keyboard helper for custom controls, not a widget |
+| `Ui::state` | `Interaction { hover, press }` (in `mui`, apart from `mui_input`'s pointer `Interaction`, which `ui.rs` imports as `Pointer`) | |
+| `mui` surface | the prelude lists every name (no glob); the six crates stay as named modules, `mui::scene` .. `mui::vello`, each its crate's own curated `lib.rs` | nothing arrives in the prelude because a crate underneath grew it, and no downstream path changes |
+| `one_line` / `many_lines` args | a `Layers` struct (shown text, caret, selection, preedit, blink, line height) | the `too_many_arguments` expects are gone |
 | `.disabled(bool)` rewrite | only on builder chains in mui files | `Palette::disabled(color)` has the same shape |
 | size budget | `Element` ≤ 360 B (was 352), `El` ≤ 688 B (was 680) | `text_role`, `a11y` and the `segmented` flag |
 | playground DSL `leaf` / `join` | `block` / `segmented` | the text DSL follows the Rust names |

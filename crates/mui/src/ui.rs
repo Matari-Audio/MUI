@@ -491,7 +491,7 @@ impl Ui {
     ///     Some(Edit::End) => { /* host.end_gesture(CUTOFF) */ }
     ///     None => {}
     /// }
-    /// let Response { el, .. } = slider(&mut ui, "cutoff", "Cutoff", &mut cutoff, 0.0..=1.0);
+    /// let el = slider(&mut ui, "cutoff", "Cutoff", &mut cutoff, 0.0..=1.0).el;
     /// ```
     pub fn edit(&self, id: &str) -> Option<Edit> {
         self.delivered
@@ -3168,7 +3168,7 @@ mod tests {
                 .iter()
                 .any(|k| k.key == Key::Function(1) || k.key == Key::Space)
         };
-        let tree = |ui: &mut Ui, v: &mut String| widgets::text_input(ui, "f", v).0;
+        let tree = |ui: &mut Ui, v: &mut String| widgets::text_input(ui, "f", v).el;
 
         let root = tree(&mut ui, &mut value);
         ui.frame(root, None, key(Key::Function(1)), 0.016).unwrap();
@@ -3206,7 +3206,7 @@ mod tests {
     #[test]
     fn a_button_can_be_focused_and_activated_from_the_keyboard() {
         fn tree(ui: &mut Ui) -> El {
-            widgets::button(ui, "button", "Save").0.el()
+            widgets::button(ui, "button", "Save").el.into_el()
         }
 
         let mut ui = Ui::new(Theme::DEFAULT);
@@ -3221,7 +3221,7 @@ mod tests {
         // mouse edges are, so the widget sees the same activation boundary.
         let root = tree(&mut ui);
         ui.frame(root, None, key(Key::Enter), 0.016).unwrap();
-        let (_, activated) = widgets::button(&mut ui, "button", "Save");
+        let activated = widgets::button(&mut ui, "button", "Save").changed;
         assert!(activated, "Enter activates the focused button");
     }
 
@@ -3330,7 +3330,7 @@ mod tests {
     fn typing_reaches_the_focused_field() {
         let mut ui = Ui::new(Theme::DEFAULT);
         let mut value = String::new();
-        let tree = |ui: &mut Ui, v: &mut String| widgets::text_input(ui, "f", v).0;
+        let tree = |ui: &mut Ui, v: &mut String| widgets::text_input(ui, "f", v).el;
         let root = tree(&mut ui, &mut value);
         ui.frame(root, None, PointerInput::default(), 0.016)
             .unwrap();
@@ -3355,7 +3355,7 @@ mod tests {
     fn a_field_reports_its_selection_and_carets_and_a_reader_can_select() {
         let mut ui = Ui::new(Theme::DEFAULT);
         let mut value = String::from("héllo");
-        let tree = |ui: &mut Ui, v: &mut String| widgets::text_input(ui, "f", v).0;
+        let tree = |ui: &mut Ui, v: &mut String| widgets::text_input(ui, "f", v).el;
         let text = |ui: &Ui| match &ui.scene().unwrap().surface("f").unwrap().semantics {
             Some(mui_scene::Semantics {
                 role: A11y::TextInput {
@@ -3395,7 +3395,7 @@ mod tests {
     fn a_composition_paints_without_editing_the_value_and_the_commit_inserts() {
         let mut ui = Ui::new(Theme::DEFAULT);
         let mut value = "ab".to_owned();
-        let tree = |ui: &mut Ui, v: &mut String| widgets::text_input(ui, "f", v).0;
+        let tree = |ui: &mut Ui, v: &mut String| widgets::text_input(ui, "f", v).el;
         let ime = |e: mui_input::Ime| Input {
             ime: vec![e],
             ..Input::default()
@@ -3451,7 +3451,7 @@ mod tests {
         let mut ui = Ui::new(Theme::DEFAULT);
         let mut value = "x".repeat(60);
         let win = Some(Size::new(200., 60.));
-        let tree = |ui: &mut Ui, v: &mut String| widgets::text_input(ui, "f", v).0;
+        let tree = |ui: &mut Ui, v: &mut String| widgets::text_input(ui, "f", v).el;
         let root = tree(&mut ui, &mut value);
         ui.frame(root, win, PointerInput::default(), 0.016).unwrap();
         ui.set_sel("f", 60, 60);
@@ -3477,7 +3477,7 @@ mod tests {
         let mut ui = Ui::new(Theme::DEFAULT);
         let mut value = String::from("hello");
         let run = |ui: &mut Ui, v: &mut String, input: Input| {
-            let root = widgets::text_input(ui, "f", v).0;
+            let root = widgets::text_input(ui, "f", v).el;
             ui.frame(root, None, input, 0.016).unwrap();
         };
         run(&mut ui, &mut value, Input::default());
@@ -3504,7 +3504,7 @@ mod tests {
         let mut ui = Ui::new(Theme::DEFAULT);
         let mut value = String::from("hi");
         let run = |ui: &mut Ui, v: &mut String, input: Input| {
-            let root = widgets::text_input(ui, "f", v).0;
+            let root = widgets::text_input(ui, "f", v).el;
             ui.frame(root, None, input, 0.016)
                 .unwrap()
                 .clipboard
@@ -4124,14 +4124,14 @@ mod tests {
         let mut ui = Ui::new(Theme::DEFAULT);
         let mut v = 1.0;
         let el = widgets::slider(&mut ui, "fixed", "Fixed", &mut v, 1.0..=1.0)
-            .0
-            .el();
+            .el
+            .into_el();
         ui.frame(el, None, PointerInput::default(), 0.016)
             .expect("a fixed parameter is still a tree");
         let mut down = 0.5;
         let el = widgets::slider(&mut ui, "down", "Down", &mut down, 1.0..=0.0)
-            .0
-            .el();
+            .el
+            .into_el();
         ui.frame(el, None, PointerInput::default(), 0.016)
             .expect("and so is a downward one");
     }
@@ -4508,9 +4508,12 @@ mod tests {
         let mut v = 0.5;
         let mut clicks = 0;
         let mut tree = |ui: &mut Ui| {
-            let (b, clicked) = widgets::button(ui, "b", "Go");
+            let widgets::Response {
+                el: b,
+                changed: clicked,
+            } = widgets::button(ui, "b", "Go");
             clicks += usize::from(clicked);
-            let (s, _) = widgets::slider(ui, "s", "S", &mut v, 0.0..=1.0);
+            let s = widgets::slider(ui, "s", "S", &mut v, 0.0..=1.0).el;
             col([b.el(), s.el()]).width(200.)
         };
         let root = tree(&mut ui);
@@ -4547,7 +4550,11 @@ mod tests {
         );
         assert_eq!(clicks, 1);
         assert!((v - 0.409).abs() < 1e-9, "+0.01, -0.001, -0.1: {v}");
-        let mut tree = |ui: &mut Ui| widgets::slider(ui, "s", "S", &mut v, 0.0..=1.0).0.el();
+        let mut tree = |ui: &mut Ui| {
+            widgets::slider(ui, "s", "S", &mut v, 0.0..=1.0)
+                .el
+                .into_el()
+        };
         let root = tree(&mut ui);
         ui.frame(root, None, Input::default(), 0.016).unwrap();
         assert_eq!(v, 1.0, "End goes to the end");
@@ -4558,7 +4565,9 @@ mod tests {
     fn increment_and_decrement_step_like_the_arrow_keys() {
         let mut ui = Ui::new(Theme::DEFAULT);
         let mut v = 0.5;
-        let root = widgets::slider(&mut ui, "s", "S", &mut v, 0.0..=1.0).0.el();
+        let root = widgets::slider(&mut ui, "s", "S", &mut v, 0.0..=1.0)
+            .el
+            .into_el();
         ui.frame(root, None, Input::default(), 0.016).unwrap();
         assert!(ui.request_action(SemanticAction::increment("s")));
         assert!(ui.request_action(SemanticAction::increment("s")));
@@ -4582,7 +4591,7 @@ mod tests {
         let mut ui = Ui::new(Theme::DEFAULT);
         let mut value = "x".repeat(60);
         let win = Some(Size::new(200., 60.));
-        let tree = |ui: &mut Ui, v: &mut String| widgets::text_input(ui, "f", v).0;
+        let tree = |ui: &mut Ui, v: &mut String| widgets::text_input(ui, "f", v).el;
         let root = tree(&mut ui, &mut value);
         ui.frame(root, win, PointerInput::default(), 0.016).unwrap();
         ui.set_sel("f", 60, 60);

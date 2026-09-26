@@ -97,7 +97,10 @@ fn blocks(src: &str, md: bool) -> Vec<Block> {
         let fence = text.trim_start();
         match &mut open {
             Some((start, shadow, close, rust)) if fence.starts_with(*close) && fence[close.len()..].trim().is_empty() => {
-                if *rust {
+                // A before/after example (`// old` .. `// new`) documents the old
+                // API on purpose: it is left as written.
+                let frozen = shadow.lines().any(|l| matches!(l.trim(), "// old" | "// before"));
+                if *rust && !frozen {
                     out.push(Block { lo: *start, shadow: std::mem::take(shadow) });
                 }
                 open = None;

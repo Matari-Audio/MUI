@@ -13,7 +13,7 @@ struct Knob {
 impl View for Knob {
     fn build(&mut self, ui: &mut Ui) -> El {
         self.builds += 1;
-        knob(ui, "k", "K", &mut self.value, 0.0..=1.0).el.into()
+        knob(ui, "k", "K", &mut self.value, 0.0..=1.0).into()
     }
     fn changed(&mut self) -> bool {
         std::mem::take(&mut self.changed)
