@@ -934,7 +934,8 @@ mod seam {
 #[cfg(all(test, feature = "cpu"))]
 mod snapshot {
     use super::*;
-    use mui_scene::{ResolvedScene, TextGlyph, prelude::*};
+    use mui_material::prelude::*;
+    use mui_scene::{ResolvedScene, TextGlyph};
     use vello_common::pixmap::Pixmap;
 
     /// The whole stack on the CPU: a filled card reaches the pixels, its ink

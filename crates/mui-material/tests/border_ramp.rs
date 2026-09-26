@@ -1,5 +1,5 @@
 use mui_geometry::Error::InvalidOptions;
-use mui_scene::prelude::*;
+use mui_material::prelude::*;
 use mui_scene::{Layer, Paint, SceneError};
 
 #[test]

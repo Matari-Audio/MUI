@@ -1,6 +1,6 @@
 //! cargo run -p mui-scene --example shape_layout > shape-layout.svg
 //! SVG uses the resolved contours directly; no independently drawn demo geometry.
-use mui_scene::prelude::*;
+use mui_material::prelude::*;
 fn cell(id: &str) -> El {
     stack![].flex(1.).fill(Role::Primary).id(id)
 }

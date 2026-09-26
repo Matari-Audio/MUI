@@ -200,7 +200,7 @@ fn path_words(path: &Path, key: &mut Vec<u64>) {
 }
 
 /// The radius `style` resolves to: square for a child of a
-/// [`segmented`](crate::Styled::segmented) container.
+/// `segmented` (`mui_material::Material`) container.
 fn radius(style: &crate::Style, square: bool) -> Radius {
     if square {
         Radius::Px(0.)

@@ -42,6 +42,12 @@ pub use capture::{CaptureError, CaptureLayer, resize_capture};
 mod scene;
 pub use external::{ExternalWeld, WeldBackend};
 mod weld_dsl;
+// The material verbs live in mui-material, which depends on this crate; the
+// unit-test fixtures here still build with them, so the tests compile the
+// same file in (a dev-dependency would bring a second copy of these types).
+#[cfg(test)]
+#[path = "../../mui-material/src/verbs.rs"]
+mod material;
 
 pub use mui_weld::{Channel as WeldChannel, Quality as WeldQuality, Weld, WeldCache};
 
@@ -71,6 +77,8 @@ pub use scene::{
 /// Everything a scene file needs, including the spacing tokens as bare
 /// names: `.gap(M).pad(L)`.
 pub mod prelude {
+    #[cfg(test)]
+    pub use crate::material::Material;
     pub use crate::{
         A11y, Align, Appear, Area, Axes, BorderAlign, BorderRamp, CanvasCache, Color, Corner,
         Cursor, Draw, Ease, El, Elevation, Fill, Fit, Font, Gradient, Id, Image, IntoEl, Justify,

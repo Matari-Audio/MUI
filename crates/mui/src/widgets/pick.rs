@@ -1,6 +1,6 @@
 //! A colour picker: a saturation-value square, a hue strip, an optional
 //! alpha strip and a hex field, all over one [`Color`].
-use mui_scene::prelude::*;
+use mui_material::prelude::*;
 
 use crate::Ui;
 use crate::widgets::{Response, stepped, text_input};

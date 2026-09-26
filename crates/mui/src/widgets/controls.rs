@@ -3,7 +3,7 @@
 use std::ops::RangeInclusive;
 
 use mui_input::{FINE_DRAG, Key};
-use mui_scene::prelude::*;
+use mui_material::prelude::*;
 use mui_scene::{Palette, SpacingToken, Spring, Stroke};
 
 use crate::Ui;

@@ -13,6 +13,7 @@ cpu-threads = ["mui-vello/cpu-threads"]
 
 [dependencies]
 mui-scene.workspace = true
+mui-material.workspace = true
 mui-motion.workspace = true
 mui-layout.workspace = true
 mui-geometry.workspace = true

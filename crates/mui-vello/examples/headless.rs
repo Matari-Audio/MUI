@@ -8,8 +8,8 @@
 //! file instead of opening a window only because a window is a separate
 //! problem: a surface would get the same pixels.
 
+use mui_material::prelude::*;
 use mui_scene::Corners;
-use mui_scene::prelude::*;
 use mui_vello::effects::{Budget, GpuRenderer};
 use mui_vello::kurbo::Affine;
 #[expect(dead_code, reason = "shared by several examples; each calls a subset")]

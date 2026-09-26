@@ -27,6 +27,7 @@
 pub use mui_geometry as geometry;
 pub use mui_input as input;
 pub use mui_layout as layout;
+pub use mui_material as material;
 pub use mui_motion as motion;
 pub use mui_scene as scene;
 pub use mui_vello as vello;
@@ -54,6 +55,7 @@ pub mod prelude {
     pub use mui_input::{
         Axis, Button, Buttons, FINE_DRAG, Ime, Input, Key, KeyPress, Mods, PointerInput,
     };
+    pub use mui_material::Material;
     pub use mui_scene::prelude::{
         A11y, Align, Appear, Area, Axes, BorderAlign, BorderRamp, CanvasCache, Color, Corner,
         CornerStyle, Cursor, Draw, Ease, El, Elevation, Fill, Fit, Font, Gradient, Id, Image,

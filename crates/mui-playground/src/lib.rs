@@ -1,6 +1,7 @@
 //! A bounded expression interpreter for the browser playground, not a Rust compiler.
 #![forbid(unsafe_code)]
-use mui_scene::{Role::*, prelude::*};
+use mui_material::prelude::*;
+use mui_scene::Role::*;
 use std::sync::LazyLock;
 use syn::{Expr, Lit, Token, parse::Parser, punctuated::Punctuated, spanned::Spanned};
 use wasm_bindgen::prelude::*;

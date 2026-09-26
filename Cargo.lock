@@ -1505,6 +1505,7 @@ dependencies = [
  "mui-geometry",
  "mui-input",
  "mui-layout",
+ "mui-material",
  "mui-motion",
  "mui-scene",
  "mui-text",
@@ -1561,6 +1562,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "mui-material"
+version = "0.4.0"
+dependencies = [
+ "mui-geometry",
+ "mui-layout",
+ "mui-scene",
+]
+
+[[package]]
 name = "mui-motion"
 version = "0.4.0"
 
@@ -1569,6 +1579,7 @@ name = "mui-playground"
 version = "0.4.0"
 dependencies = [
  "epaint_default_fonts",
+ "mui-material",
  "mui-scene",
  "mui-symbols",
  "mui-text",
@@ -1600,6 +1611,7 @@ dependencies = [
  "epaint_default_fonts",
  "mui-geometry",
  "mui-layout",
+ "mui-material",
  "mui-motion",
  "mui-style",
  "mui-symbols",
@@ -1663,6 +1675,7 @@ dependencies = [
  "mui",
  "mui-geometry",
  "mui-layout",
+ "mui-material",
  "mui-scene",
  "mui-text",
  "mui-weld",

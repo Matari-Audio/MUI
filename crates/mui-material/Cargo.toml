@@ -1,0 +1,17 @@
+[package]
+name = "mui-material"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Material and surface verbs (union, segmented, cut, keep, join_border, inset surfaces, shells, border ramps) for MUI's element tree."
+
+[dependencies]
+mui-scene.workspace = true
+
+[dev-dependencies]
+mui-geometry.workspace = true
+mui-layout.workspace = true
+
+[lints]
+workspace = true

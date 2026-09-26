@@ -1,4 +1,4 @@
-use mui_scene::prelude::*;
+use mui_material::prelude::*;
 use mui_scene::{Layer, Paint, Resolver, SceneError};
 use std::sync::Arc;
 

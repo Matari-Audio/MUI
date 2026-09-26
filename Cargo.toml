@@ -6,6 +6,7 @@ members = [
   "crates/mui-motion",
   "crates/mui-layout",
   "crates/mui-scene",
+  "crates/mui-material",
   "crates/mui",
   "crates/mui-preview",
   "crates/mui-playground",
@@ -35,6 +36,7 @@ mui-access = { path = "crates/mui-access" }
 mui-geometry = { path = "crates/mui-geometry" }
 mui-input = { path = "crates/mui-input" }
 mui-layout = { path = "crates/mui-layout" }
+mui-material = { path = "crates/mui-material" }
 mui-motion = { path = "crates/mui-motion" }
 mui-playground = { path = "crates/mui-playground" }
 mui-preview = { path = "crates/mui-preview" }

@@ -1,6 +1,6 @@
 //! A node that has shrunk to nothing paints nothing; it does not fail the
 //! frame. A level meter at silence is `block(200. * level, 8.).pill()`.
-use mui_scene::prelude::*;
+use mui_material::prelude::*;
 
 #[test]
 fn a_zero_sized_filled_node_resolves() {

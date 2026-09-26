@@ -16,6 +16,7 @@ mui-text.workspace = true
 rustc-hash.workspace = true
 
 [dev-dependencies]
+mui-material.workspace = true
 mui-symbols.workspace = true
 epaint_default_fonts.workspace = true
 ttf-inter.workspace = true

@@ -96,7 +96,7 @@ fn subtree_sizes(n: &El, sizes: &mut Vec<usize>) -> usize {
 }
 
 /// Per pre-order index, whether the node's parent is
-/// [`segmented`](crate::Styled::segmented). Read at resolve time, so a child
+/// `segmented` (`mui_material::Material`). Read at resolve time, so a child
 /// pushed after `.segmented()` is squared too.
 fn squared(n: &El, parent: bool, out: &mut Vec<bool>) {
     out.push(parent);
