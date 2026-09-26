@@ -23,10 +23,10 @@
 pub use mui_geometry::Point;
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use mui_geometry::kurbo::{self, BezPath, Rect, Shape as _, Vec2};
-use mui_geometry::{Bounds, Error, Path};
+use mui_geometry::{Bounds, Error, Path, PathCommand};
 
 /// How far the pointer may travel between press and release and still count as
 /// a click. Past this, the gesture is a drag and [`Response::clicked`] never
@@ -56,7 +56,10 @@ type Clips = Arc<[(Arc<Converted>, Vec2)]>;
 
 /// A path as the queries want it.
 struct Converted {
-    path: BezPath,
+    /// Made on the first query that gets past `bounds`: a map is rebuilt
+    /// every frame a shape changes, and the pointer is over few of them.
+    path: OnceLock<BezPath>,
+    source: Option<Arc<Path>>,
     /// Cheap reject. Most pointer positions miss most targets, and a winding
     /// number costs a walk over every segment.
     bounds: Rect,
@@ -66,11 +69,42 @@ impl Converted {
         let path = mui_geometry::bez_path(path, mui_geometry::ARC_TOLERANCE)?;
         Ok(Arc::new(Self {
             bounds: path.bounding_box(),
-            path,
+            path: path.into(),
+            source: None,
         }))
     }
+    /// Validated now, so a malformed shape still fails at registration, and
+    /// bounded by its control points and arc circles, which hold the curve.
+    fn lazy(path: &Arc<Path>) -> Result<Arc<Self>, Error> {
+        path.validate(250_000)?;
+        let mut b: Option<Rect> = None;
+        let mut add = |p: Point, r: f64| {
+            let r = Rect::new(p.x - r, p.y - r, p.x + r, p.y + r);
+            b = Some(b.map_or(r, |b| b.union(r)));
+        };
+        for c in &path.commands {
+            match *c {
+                PathCommand::MoveTo(p) | PathCommand::LineTo(p) => add(p, 0.),
+                PathCommand::CubicTo(a, b, p) => [a, b, p].into_iter().for_each(|p| add(p, 0.)),
+                PathCommand::ArcTo(a) => add(a.center, a.radius),
+                PathCommand::Close => {}
+            }
+        }
+        Ok(Arc::new(Self {
+            path: OnceLock::new(),
+            source: Some(path.clone()),
+            bounds: b.unwrap_or(Rect::ZERO),
+        }))
+    }
+    fn path(&self) -> &BezPath {
+        self.path.get_or_init(|| {
+            let p = self.source.as_deref().expect("an eager path is set");
+            // Validated when made, so this cannot fail.
+            mui_geometry::bez_path(p, mui_geometry::ARC_TOLERANCE).unwrap_or_default()
+        })
+    }
     fn winds(&self, q: kurbo::Point) -> bool {
-        self.bounds.contains(q) && self.path.winding(q) != 0
+        self.bounds.contains(q) && self.path().winding(q) != 0
     }
 }
 
@@ -238,7 +272,7 @@ impl Hit {
             e.2 = true;
             return Ok(e.1.clone());
         }
-        let c = Converted::new(path)?;
+        let c = Converted::lazy(path)?;
         self.placed.insert(key, (path.clone(), c.clone(), true));
         Ok(c)
     }
@@ -332,7 +366,7 @@ impl Hit {
                     && t.path.bounds.contains(q - t.at)
                     && t.clip_paths.iter().all(|(c, at)| c.winds(q - *at))
                     && contains(&t.id, t.tag.as_deref(), p)
-                        .unwrap_or_else(|| t.path.path.winding(q - t.at) != 0)
+                        .unwrap_or_else(|| t.path.path().winding(q - t.at) != 0)
             })
             .map(|t| (t.id.as_str(), t.tag.as_deref()))
     }
