@@ -97,7 +97,9 @@ pub enum Edge {
     /// Positive sweep, at most pi/2. This bound permits an atan-free nearest
     /// point: `from` and `to` are the unit vectors at `start` and
     /// `start + sweep`, fixed at construction ([`Edge::arc`]) so sampling
-    /// is sin/cos-free, as the GPU uniforms are.
+    /// is sin/cos-free, as the GPU uniforms are. Non-exhaustive so only
+    /// [`Edge::arc`] builds one and `from`/`to` always agree with the angles.
+    #[non_exhaustive]
     Arc {
         center: Point,
         radius: f64,
@@ -183,7 +185,13 @@ impl Edge {
                 // With sweep <= pi/2, "between the ends" is two crosses; the
                 // slack is the angle `parameter` allows (sin x ~ x).
                 let slack = -EPS * 64.0 * n;
-                if n > EPS && from.cross(v) >= slack && v.cross(to) >= slack {
+                // The dot guard rejects the antipode, which passes both
+                // crosses when the sweep is a hairline (slice() makes them).
+                if n > EPS
+                    && from.cross(v) >= slack
+                    && v.cross(to) >= slack
+                    && (from.dot(v) > 0.0 || to.dot(v) > 0.0)
+                {
                     return center + v * (radius / n);
                 }
                 let (a, b) = (center + from * radius, center + to * radius);
@@ -447,6 +455,12 @@ mod tests {
             radius: 4.0,
             angle: 0.0,
         }
+    }
+    #[test]
+    fn a_hairline_arc_is_nearest_at_an_end_not_its_antipode() {
+        let arc = Edge::arc(Point::new(0.0, 0.0), 1.0, 0.0, 1e-8);
+        let q = arc.closest(Point::new(-2.0, 0.0));
+        assert!((q - Point::new(1.0, 0.0)).length() < 1e-6, "{q:?}");
     }
     #[test]
     fn isolated_plate_distance_is_unchanged() {
