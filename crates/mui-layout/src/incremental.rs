@@ -474,10 +474,10 @@ mod tests {
     }
     fn fixture() -> Node<Text> {
         Node::row([
-            Node::column([label("a", "A short label"), label("b", "Another label")])
+            Node::col([label("a", "A short label"), label("b", "Another label")])
                 .id("left")
                 .grow(1.),
-            Node::column([label("c", "Static right panel"), label("d", "Stable")])
+            Node::col([label("c", "Static right panel"), label("d", "Stable")])
                 .id("right")
                 .grow(1.),
         ])
@@ -620,7 +620,7 @@ mod tests {
     }
     #[test]
     fn pin_dependencies_never_use_stale_frames() {
-        let mut n = Node::overlay([
+        let mut n = Node::stack([
             label("anchor", "Hello"),
             label("tip", "Tip").pin(Pin::to("anchor")),
         ]);
@@ -634,9 +634,9 @@ mod tests {
     /// subtree must all still be seen on a warm cache.
     #[test]
     fn hashed_addresses_see_moves_pins_and_nested_duplicates() {
-        let mut n = Node::overlay([
-            Node::row([label("x", "One"), Node::leaf(30., 10.)]),
-            Node::row([Node::leaf(50., 10.), label("y", "Two")]),
+        let mut n = Node::stack([
+            Node::row([label("x", "One"), Node::block(30., 10.)]),
+            Node::row([Node::block(50., 10.), label("y", "Two")]),
             label("tip", "Tip").pin(Pin::to("x")),
         ]);
         let mut c = LayoutCache::default();

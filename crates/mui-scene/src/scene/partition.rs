@@ -340,18 +340,18 @@ mod tests {
     fn inside_regions_past_the_old_flush_limit_stay_cached() {
         // Three region entries per row: past the 256 the cache used to
         // clear at, which refilled and flushed it every frame.
-        let tree = column((0..100).map(|_| {
-            row([leaf(10., 10.).grow(1.), leaf(10., 10.).grow(1.)])
+        let tree = col((0..100).map(|_| {
+            row([block(10., 10.).grow(1.), block(10., 10.).grow(1.)])
                 .inside(2.)
                 .w(40.)
                 .h(20.)
         }));
         let spec = SceneSpec::new(tree).offered(Size::new(40., 2000.));
-        let mut text = TextCache::default();
-        resolve_scene_with(&spec, &mut text).unwrap();
+        let mut text = Resolver::default();
+        text.resolve(&spec).unwrap();
         let held = text.region_cache.len();
         assert!(held > 256, "{held}");
-        resolve_scene_with(&spec, &mut text).unwrap();
+        text.resolve(&spec).unwrap();
         assert_eq!(text.region_cache.len(), held);
     }
 }

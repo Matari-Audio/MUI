@@ -6,12 +6,12 @@
 //! let mut cutoff = 0.5;
 //! // One frame: build the tree, hand it in with the input, draw what comes back.
 //! let root = col![
-//!     label("Filter"),
+//!     body("Filter"),
 //!     slider(&mut ui, "cutoff", "Cutoff", &mut cutoff, 0.0..=1.0).0,
 //! ]
 //! .gap(S)
 //! .pad(M)
-//! .fill(Surface);
+//! .fill(Role::Surface);
 //! let frame = ui.frame(root, Some(Size::new(240.0, 96.0)), Input::default(), 1.0 / 60.0).unwrap();
 //! assert!(frame.scene.paint.len() > 3);
 //! // frame.cursor is what to set; frame.tip is the tooltip that came due;

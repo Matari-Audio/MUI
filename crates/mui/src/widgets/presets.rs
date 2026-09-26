@@ -16,7 +16,7 @@ use mui_scene::prelude::*;
 /// ```
 pub fn panel() -> Style {
     Style {
-        fill: Surface.into(),
+        fill: Role::Surface.into(),
         radius: 16.0.into(),
         ..Style::default()
     }
@@ -32,7 +32,7 @@ pub fn panel() -> Style {
 /// ```
 pub fn card() -> Style {
     Style {
-        fill: Raised.into(),
+        fill: Role::Raised.into(),
         radius: 12.0.into(),
         shadow: vec![Shadow::soft(12.0)],
         ..Style::default()
@@ -83,7 +83,7 @@ pub fn glass() -> Style {
 /// assert_eq!(tags.children().len(), 2);
 /// ```
 pub fn chip(s: &str) -> El {
-    row![caption(s)].pad_xy(10.0, 4.0).pill().fill(Field)
+    row![caption(s)].pad_xy(10.0, 4.0).pill().fill(Role::Field)
 }
 
 /// A cell in a bank: centred, padded, raised, rounded. Hands `el` back
@@ -91,7 +91,7 @@ pub fn chip(s: &str) -> El {
 ///
 /// ```
 /// use mui::prelude::*;
-/// let cell = tile(col![leaf(40., 40.).pill().fill(Primary), caption("cut")]);
+/// let cell = tile(col![block(40., 40.).pill().fill(Role::Primary), caption("cut")]);
 /// assert_eq!(cell.children().len(), 2);
 /// ```
 pub fn tile(el: El) -> El {
@@ -99,5 +99,5 @@ pub fn tile(el: El) -> El {
         .align(Align::Center)
         .pad(S)
         .radius(10.0)
-        .fill(Raised)
+        .fill(Role::Raised)
 }

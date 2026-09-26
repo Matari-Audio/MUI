@@ -6,7 +6,7 @@ fn has(path: &Path, x: f64, y: f64) -> bool {
     bez_path(path, 0.01).unwrap().winding(KPoint::new(x, y)) != 0
 }
 fn cell(id: &str) -> El {
-    stack![].flex(1.).fill(Primary).id(id)
+    stack![].flex(1.).fill(Role::Primary).id(id)
 }
 fn octagon(s: Size) -> Path {
     let (w, h) = (s.width, s.height);
@@ -37,7 +37,7 @@ fn octagon_split_nests_and_keeps_exact_padding_and_total_gap() {
     .w(200.)
     .h(160.)
     .id("root");
-    let scene = resolve_scene(&SceneSpec::new(root)).unwrap();
+    let scene = resolve(&SceneSpec::new(root)).unwrap();
     let a = scene.surface("a").unwrap();
     let right = scene.surface("right").unwrap();
     assert!((right.frame.x - a.frame.right() - 2.).abs() < 0.01);
@@ -72,8 +72,8 @@ fn inward_ramp_padding_follows_the_actual_sloped_border() {
             .radius(0.)
             .w(200.)
             .h(100.)
-            .border_ramp(BorderRamp::horizontal((Primary, 20.), (Dim, 1.)).align(align));
-        let scene = resolve_scene(&SceneSpec::new(root)).unwrap();
+            .border_ramp(BorderRamp::horizontal((Role::Primary, 20.), (Role::Dim, 1.)).align(align));
+        let scene = resolve(&SceneSpec::new(root)).unwrap();
         let p = &scene.surface("child").unwrap().path;
         assert!(!has(p, 20. * factor + 1., 50.));
         assert!(has(p, 20. * factor + 2.5, 50.));
@@ -89,7 +89,7 @@ fn inward_ramp_padding_follows_the_actual_sloped_border() {
 #[test]
 fn curved_split_has_a_real_gap_and_reverses_direction() {
     for bend in [-0.2, 0.2] {
-        let scene = resolve_scene(&SceneSpec::new(
+        let scene = resolve(&SceneSpec::new(
             row![cell("a"), cell("b")]
                 .inside(4.)
                 .bend(bend)
@@ -126,7 +126,7 @@ fn holes_survive_and_consumed_regions_disappear() {
         );
         p
     };
-    let scene = resolve_scene(&SceneSpec::new(
+    let scene = resolve(&SceneSpec::new(
         stack![cell("child")]
             .inside(2.)
             .outline(ring)
@@ -138,7 +138,7 @@ fn holes_survive_and_consumed_regions_disappear() {
     assert!(!has(p, 100., 80.));
     assert!(!has(p, 69., 80.));
     assert!(has(p, 67., 80.));
-    let scene = resolve_scene(&SceneSpec::new(
+    let scene = resolve(&SceneSpec::new(
         stack![cell("child")].inside(100.).w(40.).h(40.),
     ))
     .unwrap();
@@ -149,7 +149,7 @@ fn invalid_padding_bend_and_border_fail_before_publication() {
     // `.inside(pad)` is also the gap, so layout refuses it first.
     for pad in [-1., f64::NAN, f64::INFINITY] {
         assert!(matches!(
-            resolve_scene(&SceneSpec::new(
+            resolve(&SceneSpec::new(
                 row![cell("a"), cell("b")].inside(pad).w(100.).h(100.)
             )),
             Err(SceneError::Layout(mui_layout::Error::InvalidValue))
@@ -157,7 +157,7 @@ fn invalid_padding_bend_and_border_fail_before_publication() {
     }
     for bend in [0.5, f64::NAN] {
         assert!(matches!(
-            resolve_scene(&SceneSpec::new(
+            resolve(&SceneSpec::new(
                 row![cell("a"), cell("b")]
                     .inside(2.)
                     .bend(bend)
@@ -179,12 +179,12 @@ fn ordinary_alignment_reserves_only_the_inward_share() {
     ] {
         let root = stack![cell("child")]
             .inside(2.)
-            .border(Primary, 20.)
+            .border(Role::Primary, 20.)
             .border_align(align)
             .w(100.)
             .h(100.)
             .radius(0.);
-        let scene = resolve_scene(&SceneSpec::new(root)).unwrap();
+        let scene = resolve(&SceneSpec::new(root)).unwrap();
         let b = Bounds::from_points(
             scene
                 .surface("child")
@@ -201,7 +201,7 @@ fn ordinary_alignment_reserves_only_the_inward_share() {
 
 #[test]
 fn morph_resize_and_cached_resolution_agree() {
-    let mut cache = mui_scene::TextCache::default();
+    let mut cache = mui_scene::Resolver::default();
     let mut previous = None;
     for (pad, width, scale, bend) in [(2., 200., 1., 0.), (8., 240., 2., 0.2), (2., 200., 1., 0.)] {
         let root = row![cell("a"), cell("b")]
@@ -210,12 +210,12 @@ fn morph_resize_and_cached_resolution_agree() {
             .outline(octagon)
             .w(width)
             .h(160.)
-            .border_ramp(BorderRamp::horizontal((Primary, pad * 2.), (Dim, 1.)));
+            .border_ramp(BorderRamp::horizontal((Role::Primary, pad * 2.), (Role::Dim, 1.)));
         let mut spec = SceneSpec::new(root);
         spec.device_scale = Some(scale);
-        let fresh = resolve_scene(&spec).unwrap();
-        let cached = mui_scene::resolve_scene_with(&spec, &mut cache).unwrap();
-        let again = mui_scene::resolve_scene_with(&spec, &mut cache).unwrap();
+        let fresh = resolve(&spec).unwrap();
+        let cached = cache.resolve(&spec).unwrap();
+        let again = cache.resolve(&spec).unwrap();
         assert_eq!(
             fresh.surface("a").unwrap().path,
             cached.surface("a").unwrap().path
@@ -245,12 +245,12 @@ fn shaped_canvases_clip_their_own_draws() {
                 .map(|(x, y)| Point::new(x, y)),
                 true,
             ),
-            Primary,
+            Role::Primary,
         )]
     })
     .flex(1.)
     .id("canvas");
-    let scene = resolve_scene(&SceneSpec::new(
+    let scene = resolve(&SceneSpec::new(
         stack![child].inside(2.).outline(octagon).w(200.).h(160.),
     ))
     .unwrap();
@@ -274,13 +274,13 @@ fn vector_weld_is_partitioned_after_the_union() {
         stack![].w(100.).h(120.).id("b")
     ]
     .align(Align::Center)
-    .union(Surface)
+    .union(Role::Surface)
     .radius((0., 0.))
     .inside(2.)
     .w(200.)
     .h(120.)
     .id("root");
-    let scene = resolve_scene(&SceneSpec::new(root)).unwrap();
+    let scene = resolve(&SceneSpec::new(root)).unwrap();
     let root = scene
         .surface("root")
         .unwrap()
@@ -305,10 +305,10 @@ fn vector_weld_is_partitioned_after_the_union() {
 #[test]
 fn outward_child_borders_preserve_the_allocated_gap() {
     for alignment in [BorderAlign::Outside, BorderAlign::Center] {
-        let scene = resolve_scene(&SceneSpec::new(
+        let scene = resolve(&SceneSpec::new(
             row![
-                cell("a").border(Primary, 10.).border_align(alignment),
-                cell("b").border(Primary, 10.).border_align(alignment),
+                cell("a").border(Role::Primary, 10.).border_align(alignment),
+                cell("b").border(Role::Primary, 10.).border_align(alignment),
             ]
             .inside(2.)
             .radius(0.)

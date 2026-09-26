@@ -88,6 +88,7 @@ pub const RULES: &[Rule] = &[
     // Accessibility.
     Type { old: "Kind", new: "A11y" },
     Call { chain: &[("role", &[Has("Kind::")])], to: ".a11y($1)", gate: Mui, needs: &[] },
+    Call { chain: &[("role", &[Has("A11y::")])], to: ".a11y($1)", gate: Mui, needs: &[] },
     Call { chain: &[("label", &[A])], to: ".named($1)", gate: Mui, needs: &[] },
     Qualify {
         names: &["Background", "Surface", "Raised", "Field", "Level", "Primary", "Secondary", "Tertiary", "Success", "Warning", "Danger", "Ink", "Dim"],
@@ -106,6 +107,9 @@ pub const RULES: &[Rule] = &[
     Method { old: "layout_transition", new: "animate_layout_with", gate: G },
     // Weld and material.
     Method { old: "weld_with", new: "weld", gate: G },
+    // `.weld_morph(p)` / `.weld_quality(q)` kept the weld set before them:
+    // once both sides are `.weld(..)`, the second folds into the first.
+    Call { chain: &[("weld", &[A]), ("weld", &[After("Weld::default()")])], to: ".weld($1$2)", gate: G, needs: &[] },
     Call { chain: &[("weld_shape", &[])], to: ".weld(Weld::shape())", gate: G, needs: &["Weld"] },
     Call { chain: &[("weld_borders", &[])], to: ".weld(Weld::borders())", gate: G, needs: &["Weld"] },
     Call { chain: &[("weld_morph", &[A])], to: ".weld(Weld::default().morph($1))", gate: G, needs: &["Weld"] },
@@ -128,10 +132,9 @@ pub const RULES: &[Rule] = &[
     DropImport { name: "resolve_scene_cached" },
     DropImport { name: "resolve_scene_animated" },
     DropImport { name: "resolve_scene_retained" },
-    Manual { pattern: "resolve_scene_with", note: "use `Resolver` (`Resolver::new()` then `r.resolve(&spec)`)" },
-    Manual { pattern: "resolve_scene_cached", note: "use `Resolver`: `let mut r = Resolver::new(); r.resolve(&spec)`" },
-    Manual { pattern: "resolve_scene_animated", note: "use `Resolver::resolve_animated(&spec, dt)`" },
-    Manual { pattern: "resolve_scene_retained", note: "use `Resolver`: `let mut r = Resolver::new(); r.resolve(&spec)`" },
+    Manual { pattern: "resolve_scene_cached", note: "use `Resolver`: `let mut r = Resolver::new(); r.resolve(&spec)`, `r.welds` is the weld cache" },
+    Manual { pattern: "resolve_scene_animated", note: "use `Resolver`: `r.resolve_animated(&spec, glide, None)`" },
+    Manual { pattern: "resolve_scene_retained", note: "use `Resolver`: `r.resolve_animated(&spec, glide, prev)`" },
     // mui-truce: `Bridge::bind` derives the widget id from the parameter.
     // ponytail: `args` splits the old `|ui, v|` closure at its comma ($4, $5), which is
     // what lets the rule insert `id`; if `args` learns closures, this becomes 4 args.

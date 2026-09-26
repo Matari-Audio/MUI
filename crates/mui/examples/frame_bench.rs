@@ -56,18 +56,18 @@ fn button(id: String, label: &str) -> El {
         Color::oklcha(0.4, 0.02, 250.0, 1.0),
         Color::oklcha(0.3, 0.02, 250.0, 1.0),
     );
-    row([text(label).text_size(12.0).fill(Ink)])
+    row([text(label).text_size(12.0).fill(Role::Ink)])
         .pad_xy(8.0, 3.0)
         .h(22.0)
         .align(Align::Center)
-        .fill(Raised)
+        .fill(Role::Raised)
         .radius(5.0)
         .on(State::Hover, move |s| {
-            s.fill(hover).border(Ink.alpha(0.3), 1.0)
+            s.fill(hover).border(Role::Ink.alpha(0.3), 1.0)
         })
         .on(State::Press, move |s| s.fill(press))
-        .role(Kind::Button)
-        .label(label)
+        .a11y(A11y::Button)
+        .named(label)
         .focusable()
         .tip("A button")
         .id(id)
@@ -80,7 +80,7 @@ fn wave(t: usize) -> El {
             let y = s.height * (0.5 + 0.4 * ((i + t) as f64 * 0.3).sin());
             Point::new(x, y)
         });
-        vec![Draw::stroke(Path::polyline(pts, false), Primary, 1.0)]
+        vec![Draw::stroke(Path::polyline(pts, false), Role::Primary, 1.0)]
     })
     .w(160.0)
     .h(40.0)
@@ -110,7 +110,7 @@ fn editor(ui: &mut Ui, values: &mut [f64]) -> El {
         let fader = slider(ui, format!("t{t}/f"), "Level", v.next().unwrap(), 0.0..=1.0)
             .0
             .el();
-        let head = column([
+        let head = col([
             text(format!("Track {t}"))
                 .id(format!("t{t}/name"))
                 .tip("Double-click to rename"),
@@ -124,10 +124,10 @@ fn editor(ui: &mut Ui, values: &mut [f64]) -> El {
             stack![text(format!("Clip {c}")).text_size(10.0)]
                 .w(48.0)
                 .h(40.0)
-                .fill(Primary.alpha(0.4))
-                .stroke(Ink.alpha(0.2))
+                .fill(Role::Primary.alpha(0.4))
+                .stroke(Role::Ink.alpha(0.2))
                 .radius(4.0)
-                .on(State::Hover, |s| s.stroke(Ink.alpha(0.6)))
+                .on(State::Hover, |s| s.stroke(Role::Ink.alpha(0.6)))
                 .id(format!("t{t}/c{c}"))
         }))
         .gap(2.0)
@@ -136,10 +136,10 @@ fn editor(ui: &mut Ui, values: &mut [f64]) -> El {
         row([head, wave(t), clips])
             .gap(8.0)
             .pad(6.0)
-            .fill(Raised)
+            .fill(Role::Raised)
             .radius(6.0)
     });
-    column([toolbar, ruler].into_iter().chain(tracks))
+    col([toolbar, ruler].into_iter().chain(tracks))
         .gap(4.0)
         .pad(8.0)
         .fill(Role::Background)

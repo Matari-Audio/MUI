@@ -133,8 +133,8 @@ fn element(e: &Expr, depth: usize, nodes: &mut usize) -> syn::Result<El> {
                 .collect::<syn::Result<Vec<_>>>()?;
             match name.as_str() {
                 "row" => Ok(row(children)),
-                "col" => Ok(column(children)),
-                "stack" => Ok(overlay(children)),
+                "col" => Ok(col(children)),
+                "stack" => Ok(stack(children)),
                 _ => Err(error(e, "supported macros: row!, col!, stack!")),
             }
         }
@@ -147,7 +147,7 @@ fn element(e: &Expr, depth: usize, nodes: &mut usize) -> syn::Result<El> {
             match name.as_deref() {
                 Some("leaf") => {
                     count(&c.args, 2)?;
-                    Ok(leaf(number(&c.args[0])?, number(&c.args[1])?))
+                    Ok(block(number(&c.args[0])?, number(&c.args[1])?))
                 }
                 Some("text") => {
                     count(&c.args, 1)?;
@@ -282,13 +282,13 @@ pub fn render(source: &str, width: u16, height: u16) -> Result<Frame, String> {
     if !(64..=1024).contains(&width) || !(64..=1024).contains(&height) {
         return Err("Canvas dimensions must be between 64 and 1024.".into());
     }
-    let root = overlay([parse(source)?]).center().pad(32.).fill(Background);
+    let root = stack([parse(source)?]).center().pad(32.).fill(Background);
     let mut spec = SceneSpec::new(root).offered(Size::new(width.into(), height.into()));
     spec.font = Some(TEXT.clone());
     spec.theme.palette =
         mui_scene::Palette::from_seed(Color::oklch(0.75, 0.14, 260.), mui_scene::Mode::Dark);
     spec.theme.palette.neutral = mui_scene::Palette::NEUTRAL.neutral;
-    let scene = resolve_scene(&spec).map_err(|e| e.to_string())?;
+    let scene = resolve(&spec).map_err(|e| e.to_string())?;
     let mut ctx = vello_cpu::RenderContext::new(width, height);
     let mut resources = vello_cpu::Resources::default();
     mui_vello::paint(

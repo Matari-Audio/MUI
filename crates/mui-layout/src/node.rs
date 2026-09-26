@@ -168,11 +168,11 @@ impl<P: Default> Node<P> {
     /// size on never rejects a candidate; the last one is the fallback.
     ///
     /// ```
-    /// use mui_layout::{leaf, resolve, Node, Size};
+    /// use mui_layout::{block, resolve, Node, Size};
     /// let bar = Node::fits([
-    ///     leaf(300., 20.).id("wide"),
-    ///     leaf(120., 20.).id("mid"),
-    ///     leaf(40., 20.).id("thin"),
+    ///     block(300., 20.).id("wide"),
+    ///     block(120., 20.).id("mid"),
+    ///     block(40., 20.).id("thin"),
     /// ]);
     /// let shown = |w: f64| {
     ///     let l = resolve(&bar, Some(Size::new(w, 20.)), Default::default()).unwrap();
@@ -200,8 +200,8 @@ impl<P> Node<P> {
     /// Name this node, so `Layout::frame` can find it. Structural nodes need no
     /// name and cost nothing unnamed.
     /// ```
-    /// use mui_layout::{leaf, Id};
-    /// assert_eq!(leaf(1., 1.).id(Id::of("osc").slot(3)).key(), Some("osc/3"));
+    /// use mui_layout::{block, Id};
+    /// assert_eq!(block(1., 1.).id(Id::of("osc").slot(3)).key(), Some("osc/3"));
     /// ```
     pub fn id(mut self, id: impl Into<Id>) -> Self {
         self.id = Some(id.into());
@@ -445,9 +445,9 @@ impl<P> Node<P> {
     /// apply. Keep [`offset`](Node::offset) for a nudge no region can name.
     ///
     /// ```
-    /// use mui_layout::{leaf, overlay, resolve, Area, Pin, Size};
-    /// let menu = leaf(10., 20.).pin(Pin::to("field").area(Area::Bottom).match_width()).id("m");
-    /// let l = resolve(&overlay([leaf(90., 24.).id("field"), menu]),
+    /// use mui_layout::{block, stack, resolve, Area, Pin, Size};
+    /// let menu = block(10., 20.).pin(Pin::to("field").area(Area::Bottom).match_width()).id("m");
+    /// let l = resolve(&stack([block(90., 24.).id("field"), menu]),
     ///                 Some(Size::new(200., 200.)), Default::default()).unwrap();
     /// assert_eq!(l.frame("m").unwrap().size.width, 90.);
     /// ```
@@ -464,10 +464,10 @@ impl<P> Node<P> {
     /// a float, and with no scrolling ancestor it does nothing.
     ///
     /// ```
-    /// use mui_layout::{column, leaf, resolve, Size};
-    /// let section = |k: &str| column([leaf(80., 20.).id(k).sticky(), leaf(80., 200.)]);
+    /// use mui_layout::{col, block, resolve, Size};
+    /// let section = |k: &str| col([block(80., 20.).id(k).sticky(), block(80., 200.)]);
     /// let header_y = |dy: f64| {
-    ///     let list = column([section("a"), section("b")]).scroll().scrolled(0., dy);
+    ///     let list = col([section("a"), section("b")]).scroll().scrolled(0., dy);
     ///     let l = resolve(&list, Some(Size::new(80., 100.)), Default::default()).unwrap();
     ///     l.frame("a").unwrap().y
     /// };
@@ -496,7 +496,7 @@ impl<P> Node<P> {
     ///
     /// ```
     /// use mui_layout::{resolve, Node, Size};
-    /// let chips = Node::<()>::row((0..4).map(|i| Node::leaf(40., 20.).id(format!("c{i}"))))
+    /// let chips = Node::<()>::row((0..4).map(|i| Node::block(40., 20.).id(format!("c{i}"))))
     ///     .gap(8.)
     ///     .line_gap(2.)
     ///     .wrap();
@@ -521,8 +521,8 @@ impl<P> Node<P> {
     /// itself to the minimum instead of squeezing a column under it.
     ///
     /// ```
-    /// use mui_layout::{grid, leaf, resolve, Size};
-    /// let cells = (0..6).map(|i| leaf(20., 20.).id(format!("c{i}")));
+    /// use mui_layout::{grid, block, resolve, Size};
+    /// let cells = (0..6).map(|i| block(20., 20.).id(format!("c{i}")));
     /// let g = grid(3, cells).gap(10.).min_col(120.).id("g");
     /// let cols = |w: f64| {
     ///     let l = resolve(&g, Some(Size::new(w, 300.)), Default::default()).unwrap();
@@ -567,9 +567,9 @@ impl<P> Node<P> {
     /// sticky child paints after the siblings that scroll under it.
     ///
     /// ```
-    /// use mui_layout::leaf;
-    /// assert!(leaf(10., 10.).sticky().is_sticky());
-    /// assert!(!leaf(10., 10.).is_sticky());
+    /// use mui_layout::block;
+    /// assert!(block(10., 10.).sticky().is_sticky());
+    /// assert!(!block(10., 10.).is_sticky());
     /// ```
     pub fn is_sticky(&self) -> bool {
         self.sticky

@@ -44,14 +44,14 @@ fn ms(mut f: impl FnMut()) -> f64 {
 }
 
 fn pill() -> El {
-    let control = |id: &str| leaf(28.0, 28.0).pill().fill(Role::Primary).id(id);
-    let tab = column([control("plus"), control("phase"), control("warp")])
+    let control = |id: &str| block(28.0, 28.0).pill().fill(Role::Primary).id(id);
+    let tab = col([control("plus"), control("phase"), control("warp")])
         .gap(10.0)
         .pad(22.0)
         .min_width(92.0)
         .id("tab")
         .shell(12.0, Role::Raised);
-    column([
+    col([
         tab,
         row([text("welded")]).size(520.0, 230.0).pad(L).id("panel"),
     ])
@@ -64,13 +64,13 @@ fn what_a_frame_costs() {
     let font = epaint_default_fonts::HACK_REGULAR;
     let spec = SceneSpec::new(pill()).font(Font::new(font).unwrap());
     let resolve = ms(|| {
-        black_box(resolve_scene(black_box(&spec)).unwrap());
+        black_box(resolve(black_box(&spec)).unwrap());
     });
     println!("pill resolve (union + shell + text) {resolve:8.3} ms");
     let mut ui = Ui::new(Theme::DEFAULT).font(Font::new(font).unwrap());
     let mut v = 0.3;
     let frame = ms(|| {
-        let root = column([
+        let root = col([
             slider(&mut ui, "a", "A", &mut v, 0.0..=1.0).0.el(),
             knob(&mut ui, "k", "K", &mut v, 0.0..=1.0).0.el(),
         ])
@@ -89,7 +89,7 @@ fn what_a_frame_costs() {
         );
     });
     println!("Ui::frame, sliders + knob         {frame:8.3} ms");
-    let resolved = resolve_scene(&spec).unwrap();
+    let resolved = resolve(&spec).unwrap();
     // `paint` is what mui-preview calls, so it is what is timed.
     let walk = ms(|| {
         mui::vello::paint(&mut Sink, &resolved, mui::vello::kurbo::Affine::IDENTITY).unwrap();

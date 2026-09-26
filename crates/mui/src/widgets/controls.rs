@@ -110,7 +110,7 @@ impl Look {
 /// let mut ui = Ui::new(Theme::DEFAULT);
 /// let mut cutoff = 0.5;
 /// let (dial, _) = knob(&mut ui, "cut", "Cutoff", &mut cutoff, 0.0..=1.0);
-/// let strip = row![dial.size(L), label("post")];
+/// let strip = row![dial.size(L), body("post")];
 /// ```
 pub struct Control {
     look: Look,
@@ -154,9 +154,9 @@ impl Control {
     /// use mui::prelude::*;
     /// let mut ui = Ui::new(Theme::DEFAULT);
     /// let (clear, _) = button(&mut ui, "clear", "Clear");
-    /// let el = clear.role(Danger).variant(Variant::Outline).el();
+    /// let el = clear.role(Role::Danger).variant(Variant::Outline).el();
     /// let ring = el.payload().style.stroke.clone().map(|s| s.fill);
-    /// assert_eq!(ring, Some(Fill::Role(Danger)));
+    /// assert_eq!(ring, Some(Fill::Role(Role::Danger)));
     /// ```
     pub fn role(mut self, r: Role) -> Self {
         self.look.role = r;
@@ -377,20 +377,20 @@ pub fn slider(
         // The rail is a fraction of the control's height, so one size token
         // moves the track, the thumb and the row together.
         let (track, thumb, lane) = (look.px * 0.15, look.px * THUMB, look.px * LANE);
-        let grip = leaf(thumb + 2.0 * h, thumb + 2.0 * h)
+        let grip = block(thumb + 2.0 * h, thumb + 2.0 * h)
             .pill()
             .fill(look.role);
-        column([
+        col([
             row([
                 text(label.clone()),
                 spacer(),
                 readout(look.text.clone(), value, min, max).fill(Role::Dim),
             ])
             .gap(S),
-            overlay([
+            stack([
                 row([
-                    leaf(0.0, track).grow(t).pill().fill(look.role),
-                    leaf(0.0, track).grow(1.0 - t),
+                    block(0.0, track).grow(t).pill().fill(look.role),
+                    block(0.0, track).grow(1.0 - t),
                 ])
                 .anchor(Align::Stretch, Align::Center)
                 .pill()
@@ -399,8 +399,8 @@ pub fn slider(
                     .anchor(Align::Stretch, Align::Center),
             ])
             .height(lane)
-            .role(Kind::Slider { value, min, max })
-            .label(label)
+            .a11y(A11y::Slider { value, min, max })
+            .named(label)
             .focusable()
             .id(id),
         ])
@@ -453,23 +453,22 @@ pub fn knob(
         let size = look.px * 1.8;
         let a = (135.0 + 270.0 * t).to_radians();
         let r = size / 2.0 - size / 12.0;
-        column([
-            overlay([
-                leaf(size, size)
+        col([
+            stack([
+                block(size, size)
                     .pill()
                     .preset(look.face(Role::Raised))
                     .shell(size / 24.0 + 1.0 * h, Role::Field)
-                    .role(Kind::Slider { value, min, max })
-                    .label(label.clone())
+                    .a11y(A11y::Slider { value, min, max })
+                    .named(label.clone())
                     .focusable()
                     .id(id),
                 // The pointer is the reading, so it keeps the role at full
                 // strength whatever the variant does to the face.
-                leaf(size / 12.0, size / 12.0)
+                block(size / 12.0, size / 12.0)
                     .pill()
                     .fill(look.role)
-                    .anchor(Align::Center, Align::Center)
-                    .offset(r * a.cos(), r * a.sin()),
+                    .centered_at(r * a.cos(), r * a.sin()),
             ]),
             text(look.text.clone().unwrap_or(label)).fill(Role::Dim),
         ])
@@ -501,8 +500,8 @@ pub fn button(ui: &mut Ui, id: impl Into<Id>, label: &str) -> (Control, bool) {
             .preset(look.style())
             .on(State::Hover, look.hover())
             .animate()
-            .role(Kind::Button)
-            .label(label)
+            .a11y(A11y::Button)
+            .named(label)
             .focusable()
             .id(id)
     });
@@ -535,7 +534,7 @@ pub fn toggle(ui: &mut Ui, id: impl Into<Id>, on: &mut bool) -> (Control, bool) 
         row([
             spacer().grow(t),
             // The knob's side is a flex share; its frame glides between them.
-            leaf(h * 0.73, h * 0.73)
+            block(h * 0.73, h * 0.73)
                 .pill()
                 .fill(Role::Ink)
                 .animate_layout(),
@@ -550,7 +549,7 @@ pub fn toggle(ui: &mut Ui, id: impl Into<Id>, on: &mut bool) -> (Control, bool) 
             look.face(Role::Field)
         })
         .animate()
-        .role(Kind::Toggle { on })
+        .a11y(A11y::Toggle { on })
         .focusable()
         .id(id)
     });
@@ -642,7 +641,7 @@ pub fn drag_value(
             .radius(4.0)
             .preset(look.face(Role::Field))
             .cursor(Cursor::ResizeH)
-            .role(Kind::Slider { value, min, max })
+            .a11y(A11y::Slider { value, min, max })
             .focusable()
             .id(id)
     });

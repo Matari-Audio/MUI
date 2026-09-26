@@ -941,14 +941,14 @@ mod snapshot {
     /// reads against it, and the rounded corner stays clear.
     #[test]
     fn a_card_lands_on_the_pixmap() {
-        let root = column([text("hi").id("t")])
+        let root = col([text("hi").id("t")])
             .pad(20.)
             .fill(Role::Primary)
             .stroke(Role::Ink)
             .id("card");
         let mut spec = SceneSpec::new(root).offered(Size::new(120., 60.));
         spec.font = Some(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
-        let scene = resolve_scene(&spec).unwrap();
+        let scene = resolve(&spec).unwrap();
         assert!(
             scene
                 .paint
@@ -983,7 +983,7 @@ mod snapshot {
 
     /// Render `spec` on the CPU and hand back the pixels.
     fn pixels(spec: &SceneSpec, w: u16, h: u16) -> Pixmap {
-        let scene = resolve_scene(spec).unwrap();
+        let scene = resolve(spec).unwrap();
         pixels_scene(&scene, w, h)
     }
 
@@ -1013,7 +1013,7 @@ mod snapshot {
         let mut spec =
             SceneSpec::new(text("HI").fill(Role::Ink).id("t")).offered(Size::new(80., 40.));
         spec.font = Some(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
-        let scene = resolve_scene(&spec).unwrap();
+        let scene = resolve(&spec).unwrap();
         assert!(
             scene.paint.iter().any(|p| p.text.is_some()),
             "no glyphs to draw"
@@ -1027,7 +1027,7 @@ mod snapshot {
         let mut spec =
             SceneSpec::new(text("ש\u{05b8}").fill(Role::Ink).id("t")).offered(Size::new(80., 40.));
         spec.font = Some(Font::new(ttf_inter::REGULAR).unwrap());
-        let scene = resolve_scene(&spec).unwrap();
+        let scene = resolve(&spec).unwrap();
         let text = scene
             .paint
             .iter()
@@ -1066,7 +1066,7 @@ mod snapshot {
         with_fallback
             .fallback_fonts
             .push(Font::new(epaint_default_fonts::NOTO_EMOJI_REGULAR).unwrap());
-        let fallback_scene = resolve_scene(&with_fallback).unwrap();
+        let fallback_scene = resolve(&with_fallback).unwrap();
         let glyphs = fallback_scene
             .paint
             .iter()
@@ -1081,7 +1081,7 @@ mod snapshot {
 
         let mut primary_only = with_fallback.clone();
         primary_only.fallback_fonts.clear();
-        let primary_scene = resolve_scene(&primary_only).unwrap();
+        let primary_scene = resolve(&primary_only).unwrap();
         assert_ne!(
             pixels_scene(&fallback_scene, 100, 40).data(),
             pixels_scene(&primary_scene, 100, 40).data(),
@@ -1095,7 +1095,7 @@ mod snapshot {
     #[test]
     fn a_gradient_shadow_does_not_paint_black() {
         let faint = mui_scene::Color::oklcha(0.0, 0.0, 0.0, 0.1);
-        let root = leaf(20., 20.)
+        let root = block(20., 20.)
             .fill(Role::Primary)
             .shadow(Shadow {
                 dy: 8.,
@@ -1113,7 +1113,7 @@ mod snapshot {
     /// outline's own alpha -- which is what a sharp copy would have given.
     #[test]
     fn a_welded_shadow_blurs() {
-        let root = row([leaf(20., 20.).id("a"), leaf(20., 40.).id("b")])
+        let root = row([block(20., 20.).id("a"), block(20., 40.).id("b")])
             .union(Role::Surface)
             .shadow(Shadow::soft(12.))
             .id("weld");
@@ -1133,9 +1133,9 @@ mod snapshot {
     #[test]
     fn a_multiply_layer_darkens_what_is_under_it() {
         let grey = Color::oklcha(0.7, 0., 0., 1.);
-        let root = overlay([
-            leaf(40., 40.).fill(grey).radius(0.).id("ground"),
-            leaf(20., 20.)
+        let root = stack([
+            block(40., 40.).fill(grey).radius(0.).id("ground"),
+            block(20., 20.)
                 .fill(grey)
                 .radius(0.)
                 .blend(Mix::Multiply)
@@ -1163,7 +1163,7 @@ mod snapshot {
             0, 0, 255, 255,  255, 255, 255, 255,
         ];
         let img = std::sync::Arc::new(mui_scene::Image::rgba(2, 2, px).unwrap());
-        let root = leaf(20., 20.)
+        let root = block(20., 20.)
             .fill(Fill::Image(img.clone(), Fit::Fill))
             .radius(6.)
             .id("img");
@@ -1183,7 +1183,7 @@ mod snapshot {
 
         // Contain letterboxes rather than smearing the edge pixels: a 2x2
         // image in a 40x20 box leaves the sides clear.
-        let wide = leaf(40., 20.)
+        let wide = block(40., 20.)
             .fill(Fill::Image(img, Fit::Contain))
             .radius(0.)
             .id("wide");
@@ -1229,15 +1229,15 @@ mod snapshot {
     /// A clip layer actually clips: the oversized child stops at its parent.
     #[test]
     fn a_clipped_child_stays_inside_its_parent() {
-        let child = leaf(200., 200.).fill(Role::Ink).id("child");
-        let boxed = column([child])
+        let child = block(200., 200.).fill(Role::Ink).id("child");
+        let boxed = col([child])
             .size(40., 40.)
             .clip()
             .fill(Role::Surface)
             .anchor(Align::Start, Align::Start)
             .id("box");
-        let spec = SceneSpec::new(overlay([boxed])).offered(Size::new(80., 80.));
-        let scene = resolve_scene(&spec).unwrap();
+        let spec = SceneSpec::new(stack([boxed])).offered(Size::new(80., 80.));
+        let scene = resolve(&spec).unwrap();
         let c = scene.surface("child").expect("child").frame;
         assert!(c.x < 0. && c.right() > 40., "no overflow to clip: {c:?}");
         let pix = pixels(&spec, 80, 80);

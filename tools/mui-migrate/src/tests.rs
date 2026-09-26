@@ -112,7 +112,7 @@ fn anchor_offset() {
 fn weld() {
     check(
         &with_prelude("fn f() { e.weld_shape().weld_borders().weld_morph(p).weld_quality(q).without_weld().exclude_from_weld().weld_with(w).gpu_weld(w); weld_morph![0.5; a, b] }\n"),
-        &with_prelude("fn f() { e.weld(Weld::shape()).weld(Weld::borders()).weld(Weld::default().morph(p)).weld(Weld::default().quality(q)).weld(Weld::off()).unwelded().weld(w).weld(w); weld![Weld::default().morph(0.5); a, b] }\n"),
+        &with_prelude("fn f() { e.weld(Weld::shape()).weld(Weld::borders().morph(p).quality(q)).weld(Weld::off()).unwelded().weld(w).weld(w); weld![Weld::default().morph(0.5); a, b] }\n"),
     );
     let out = run("use mui::scene::El;\nfn f(e: El) -> El { e.weld_shape() }\n");
     assert!(out.warnings.iter().any(|(_, w)| w.contains("`Weld`")), "{:?}", out.warnings);

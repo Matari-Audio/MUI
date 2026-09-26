@@ -8,8 +8,8 @@
 //! use mui_access::tree_update;
 //! use mui_scene::prelude::*;
 //!
-//! let ok = leaf(40., 20.).role(Kind::Button).label("OK").id("ok").focusable();
-//! let scene = resolve_scene(&SceneSpec::new(ok)).unwrap();
+//! let ok = block(40., 20.).a11y(A11y::Button).named("OK").id("ok").focusable();
+//! let scene = resolve(&SceneSpec::new(ok)).unwrap();
 //! let update = tree_update(&scene, Some("ok"), 1.0);
 //! assert_eq!(update.nodes.len(), 2); // window + button
 //! ```
@@ -28,7 +28,7 @@ use accesskit::{
     Action, Affine, Node, NodeId, Rect, Role, TextDirection, TextPosition, TextSelection, Tree,
     TreeId, TreeUpdate,
 };
-pub use mui_scene::{Kind, Semantics};
+pub use mui_scene::{A11y, Semantics};
 use mui_scene::{ResolvedScene, ResolvedSurface};
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
@@ -108,24 +108,24 @@ fn text_run(
 
 fn node(s: &ResolvedSurface, sem: Option<&Semantics>, runs: &mut Vec<(NodeId, Node)>) -> Node {
     let default = Semantics::new(if s.text_value.is_some() {
-        Kind::Label
+        A11y::Label
     } else {
-        Kind::Group
+        A11y::Group
     });
     let sem = sem.unwrap_or(&default);
     let mut n = Node::new(match &sem.role {
-        Kind::Button => Role::Button,
-        Kind::Slider { .. } => Role::Slider,
-        Kind::Toggle { .. } => Role::Switch,
-        Kind::TextInput { .. } => Role::TextInput,
-        Kind::Label => Role::Label,
-        Kind::Group => Role::Group,
-        Kind::Scroll => Role::ScrollView,
-        Kind::Image => Role::Image,
+        A11y::Button => Role::Button,
+        A11y::Slider { .. } => Role::Slider,
+        A11y::Toggle { .. } => Role::Switch,
+        A11y::TextInput { .. } => Role::TextInput,
+        A11y::Label => Role::Label,
+        A11y::Group => Role::Group,
+        A11y::Scroll => Role::ScrollView,
+        A11y::Image => Role::Image,
     });
     match &sem.role {
-        Kind::Button if !s.disabled => n.add_action(Action::Click),
-        Kind::Slider { value, min, max } => {
+        A11y::Button if !s.disabled => n.add_action(Action::Click),
+        A11y::Slider { value, min, max } => {
             n.set_numeric_value(*value);
             n.set_min_numeric_value(*min);
             n.set_max_numeric_value(*max);
@@ -138,13 +138,13 @@ fn node(s: &ResolvedSurface, sem: Option<&Semantics>, runs: &mut Vec<(NodeId, No
                 n.add_action(Action::Decrement);
             }
         }
-        Kind::Toggle { on } => {
+        A11y::Toggle { on } => {
             n.set_toggled((*on).into());
             if !s.disabled {
                 n.add_action(Action::Click);
             }
         }
-        Kind::TextInput {
+        A11y::TextInput {
             value,
             selection,
             carets,
@@ -165,7 +165,7 @@ fn node(s: &ResolvedSurface, sem: Option<&Semantics>, runs: &mut Vec<(NodeId, No
     // id: an unnamed switch is worse than a noisy one.
     let control = !matches!(
         sem.role,
-        Kind::Label | Kind::Group | Kind::Scroll | Kind::Image
+        A11y::Label | A11y::Group | A11y::Scroll | A11y::Image
     );
     let name = sem.label.clone().or_else(|| s.text_value.clone());
     if let Some(name) = name.or_else(|| control.then(|| s.key.to_string())) {
@@ -277,7 +277,7 @@ impl Publisher {
     /// use mui_access::Publisher;
     /// use mui_scene::prelude::*;
     ///
-    /// let scene = resolve_scene(&SceneSpec::new(leaf(4., 4.).id("a"))).unwrap();
+    /// let scene = resolve(&SceneSpec::new(block(4., 4.).id("a"))).unwrap();
     /// let mut p = Publisher::default();
     /// assert_eq!(p.update(&scene, None, 1.0).nodes.len(), 2);
     /// assert!(p.update(&scene, None, 1.0).nodes.is_empty());
@@ -341,10 +341,10 @@ mod tests {
     #[test]
     fn nests_by_containment_and_ids_are_stable() {
         let root = col![
-            leaf(40., 20.).id("a").focusable(),
-            row![leaf(30., 10.).id("b")].id("r"),
+            block(40., 20.).id("a").focusable(),
+            row![block(30., 10.).id("b")].id("r"),
         ];
-        let scene = resolve_scene(&SceneSpec::new(root)).unwrap();
+        let scene = resolve(&SceneSpec::new(root)).unwrap();
         let u = tree_update(&scene, Some("a"), 1.0);
         let by = |k: &str| {
             u.nodes
@@ -363,15 +363,15 @@ mod tests {
 
     #[test]
     fn the_window_scales_to_device_pixels_and_a_slider_steps() {
-        let fader = leaf(100., 20.)
-            .role(Kind::Slider {
+        let fader = block(100., 20.)
+            .a11y(A11y::Slider {
                 value: 0.5,
                 min: -24.,
                 max: 6.,
             })
-            .label("Gain")
+            .named("Gain")
             .id("gain");
-        let scene = resolve_scene(&SceneSpec::new(row![fader].pad(10.))).unwrap();
+        let scene = resolve(&SceneSpec::new(row![fader].pad(10.))).unwrap();
         let u = tree_update(&scene, None, 2.0);
         let (_, window) = u.nodes.iter().find(|(id, _)| *id == WINDOW).unwrap();
         assert_eq!(window.transform(), Some(&Affine::scale(2.0)));
@@ -392,17 +392,17 @@ mod tests {
     #[test]
     fn a_text_field_carries_its_run_and_selection() {
         let field = |disabled: bool| {
-            leaf(80., 20.)
-                .role(Kind::TextInput {
+            block(80., 20.)
+                .a11y(A11y::TextInput {
                     value: "aéc".into(),
                     selection: (3, 1),
                     carets: vec![8., 16., 26., 34.],
                 })
                 .focusable()
-                .disabled(disabled)
+                .when(disabled, |e| e.disabled())
                 .id("name")
         };
-        let scene = resolve_scene(&SceneSpec::new(row![field(false)].pad(10.))).unwrap();
+        let scene = resolve(&SceneSpec::new(row![field(false)].pad(10.))).unwrap();
         let u = tree_update(&scene, Some("name"), 1.0);
         let by = |id: NodeId| &u.nodes.iter().find(|(k, _)| *k == id).unwrap().1;
         let (input, run) = (by(node_id("name")), by(run_id("name")));
@@ -424,7 +424,7 @@ mod tests {
         assert_eq!(run.character_widths(), Some(&[8., 10., 8.][..]));
         assert_eq!(run.bounds(), input.bounds());
 
-        let scene = resolve_scene(&SceneSpec::new(row![field(true)])).unwrap();
+        let scene = resolve(&SceneSpec::new(row![field(true)])).unwrap();
         let u = tree_update(&scene, None, 1.0);
         let (_, input) = u.nodes.iter().find(|(k, _)| *k == node_id("name")).unwrap();
         assert!(!input.supports_action(Action::SetTextSelection), "off");
@@ -433,16 +433,16 @@ mod tests {
     #[test]
     fn an_unlabelled_control_is_named_by_its_id() {
         let root = row![
-            leaf(40., 20.).role(Kind::Toggle { on: true }).id("bypass"),
-            leaf(40., 20.)
-                .role(Kind::TextInput {
+            block(40., 20.).a11y(A11y::Toggle { on: true }).id("bypass"),
+            block(40., 20.)
+                .a11y(A11y::TextInput {
                     value: "x".into(),
                     selection: (0, 0),
                     carets: Vec::new(),
                 })
                 .id("preset"),
         ];
-        let scene = resolve_scene(&SceneSpec::new(root)).unwrap();
+        let scene = resolve(&SceneSpec::new(root)).unwrap();
         let u = tree_update(&scene, None, 1.0);
         let label = |k: &str| {
             let (_, n) = u.nodes.iter().find(|(id, _)| *id == node_id(k)).unwrap();

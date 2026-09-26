@@ -584,7 +584,7 @@ mod tests {
     fn a_cut_child_leaves_a_hole_and_paints_nothing() {
         // Signed, so a hole subtracts: the rings come back wound apart.
         let area = |el: El| {
-            let s = resolve_scene(&SceneSpec::new(stack![el.id("card")])).unwrap();
+            let s = resolve(&SceneSpec::new(stack![el.id("card")])).unwrap();
             let rings = s
                 .surface("card")
                 .unwrap()
@@ -603,7 +603,7 @@ mod tests {
                 .sum();
             (signed.abs(), s.paint.len())
         };
-        let square = |w: f64, h: f64| leaf(w, h).radius(Radius::Px(0.)).center();
+        let square = |w: f64, h: f64| block(w, h).radius(Radius::Px(0.)).center();
         let plain = stack![]
             .square(100.)
             .radius(Radius::Px(0.))
@@ -623,11 +623,11 @@ mod tests {
         // With a square parent radius, the only way for the first contour to
         // miss the origin is for the child's rounded outline to participate in
         // the weld. The old frame-only union produced a sharp (0, 0) corner.
-        let root = row([leaf(20., 20.).radius(8.)])
+        let root = row([block(20., 20.).radius(8.)])
             .radius(0.)
             .union(Role::Surface)
             .id("weld");
-        let s = resolve_scene(&SceneSpec::new(root).offered(Size::new(20., 20.))).unwrap();
+        let s = resolve(&SceneSpec::new(root).offered(Size::new(20., 20.))).unwrap();
         let points = s
             .surface("weld")
             .unwrap()
@@ -644,23 +644,23 @@ mod tests {
     #[test]
     fn weld_cache_reuses_only_matching_geometry_inputs() {
         let base = SceneSpec::new(
-            row([leaf(20., 20.).radius(6.), leaf(18., 24.).radius(8.)])
+            row([block(20., 20.).radius(6.), block(18., 24.).radius(8.)])
                 .radius(0.)
                 .union(Role::Surface),
         );
-        let mut text = TextCache::default();
-        resolve_scene_with(&base, &mut text).unwrap();
+        let mut text = Resolver::default();
+        text.resolve(&base).unwrap();
         let first_misses = text.outlines.misses;
         assert!(first_misses > 0, "the welded outline was not cached");
 
-        resolve_scene_with(&base, &mut text).unwrap();
+        text.resolve(&base).unwrap();
         assert_eq!(text.outlines.misses, first_misses);
         assert!(text.outlines.hits > 0, "the unchanged weld was not reused");
 
         let mut changed = base.clone();
         changed.root = changed.root.radius(3.);
         let misses = text.outlines.misses;
-        resolve_scene_with(&changed, &mut text).unwrap();
+        text.resolve(&changed).unwrap();
         assert!(
             text.outlines.misses > misses,
             "a style change reused stale geometry"
@@ -668,7 +668,7 @@ mod tests {
 
         changed.theme.corners.box_ += 1.;
         let misses = text.outlines.misses;
-        resolve_scene_with(&changed, &mut text).unwrap();
+        text.resolve(&changed).unwrap();
         assert!(
             text.outlines.misses > misses,
             "a theme change reused stale geometry"
@@ -676,7 +676,7 @@ mod tests {
 
         changed.device_scale = Some(2.);
         let misses = text.outlines.misses;
-        resolve_scene_with(&changed, &mut text).unwrap();
+        text.resolve(&changed).unwrap();
         assert!(
             text.outlines.misses > misses,
             "a scale change reused stale geometry"
@@ -687,7 +687,7 @@ mod tests {
     /// cached outline always equals a fresh resolve of the same spec.
     fn same_as_fresh(spec: &SceneSpec, text: &mut TextCache) {
         let cached = resolve_scene_with(spec, text).unwrap();
-        let fresh = resolve_scene(spec).unwrap();
+        let fresh = resolve(spec).unwrap();
         assert_eq!(
             cached.surface("weld").unwrap().path,
             fresh.surface("weld").unwrap().path,
@@ -698,15 +698,15 @@ mod tests {
     #[test]
     fn a_weld_reshapes_when_a_childs_custom_outline_changes() {
         let spec = |w: f64| {
-            let child = leaf(40., 20.).outline(move |s| {
+            let child = block(40., 20.).outline(move |s| {
                 let p = [(0., 0.), (s.width * w, 0.), (0., s.height)];
                 Path::polyline(p.map(|(x, y)| Point::new(x, y)), true)
             });
-            SceneSpec::new(row([child, leaf(20., 20.)]).union(Role::Surface).id("weld"))
+            SceneSpec::new(row([child, block(20., 20.)]).union(Role::Surface).id("weld"))
                 .offered(Size::new(60., 20.))
         };
-        let mut text = TextCache::default();
-        resolve_scene_with(&spec(1.), &mut text).unwrap();
+        let mut text = Resolver::default();
+        text.resolve(&spec(1.)).unwrap();
         // Same frames, same radii: only the closure differs.
         same_as_fresh(&spec(0.5), &mut text);
     }
@@ -717,7 +717,7 @@ mod tests {
     #[test]
     fn a_custom_outline_weld_is_cached_while_its_drawing_stays() {
         fn send<T: Send>() {}
-        send::<TextCache>();
+        send::<Resolver>();
         let triangle = |w: f64| {
             move |s: Size| {
                 let p = [(0., 0.), (s.width * w, 0.), (0., s.height)];
@@ -725,21 +725,21 @@ mod tests {
             }
         };
         let spec = |child: El| {
-            SceneSpec::new(row([child, leaf(20., 20.)]).union(Role::Surface).id("weld"))
+            SceneSpec::new(row([child, block(20., 20.)]).union(Role::Surface).id("weld"))
                 .offered(Size::new(60., 20.))
         };
-        let kept = spec(leaf(40., 20.).outline(triangle(1.)));
-        let mut text = TextCache::default();
-        resolve_scene_with(&kept, &mut text).unwrap();
+        let kept = spec(block(40., 20.).outline(triangle(1.)));
+        let mut text = Resolver::default();
+        text.resolve(&kept).unwrap();
         let misses = text.outlines.misses;
-        resolve_scene_with(&kept, &mut text).unwrap();
-        let rebuilt = spec(leaf(40., 20.).outline(triangle(1.)));
-        resolve_scene_with(&rebuilt, &mut text).unwrap();
+        text.resolve(&kept).unwrap();
+        let rebuilt = spec(block(40., 20.).outline(triangle(1.)));
+        text.resolve(&rebuilt).unwrap();
         assert_eq!(
             text.outlines.misses, misses,
             "an unchanged drawing reshaped the weld"
         );
-        let swapped = spec(leaf(40., 20.).outline(triangle(0.5)));
+        let swapped = spec(block(40., 20.).outline(triangle(0.5)));
         same_as_fresh(&swapped, &mut text);
         assert!(text.outlines.misses > misses, "a new drawing hit the cache");
     }
@@ -749,7 +749,7 @@ mod tests {
         // The old 64-bit key hashed `Token(Box)` and `Pill` to the same word.
         let spec = |r: Radius| {
             SceneSpec::new(
-                row([leaf(40., 20.), leaf(20., 20.)])
+                row([block(40., 20.), block(20., 20.)])
                     .radius(r)
                     .union(Role::Surface)
                     .id("weld"),
@@ -763,8 +763,8 @@ mod tests {
                 ..Theme::default()
             })
         };
-        let mut text = TextCache::default();
-        resolve_scene_with(&spec(Radius::Token(Corner::Box)), &mut text).unwrap();
+        let mut text = Resolver::default();
+        text.resolve(&spec(Radius::Token(Corner::Box))).unwrap();
         same_as_fresh(&spec(Radius::Pill), &mut text);
     }
 
@@ -774,29 +774,29 @@ mod tests {
     #[test]
     fn a_steady_or_moved_frame_runs_no_boolean_pass() {
         let spec = |shift: f64| {
-            let tab = column([leaf(20., 20.).pill()])
+            let tab = col([block(20., 20.).pill()])
                 .pad(8.)
                 .shell(4., Role::Raised);
-            let body = row([leaf(40., 24.).stroke(Role::Dim), leaf(40., 24.)])
+            let body = row([block(40., 24.).stroke(Role::Dim), block(40., 24.)])
                 .inside(4.)
                 .stroke(Role::Dim)
-                .cut(leaf(8., 8.).center());
-            let weld = column([tab, body])
+                .cut(block(8., 8.).center());
+            let weld = col([tab, body])
                 .align(Align::Start)
                 .union(Role::Surface)
                 .stroke(Role::Dim)
                 .shell(3., Role::Raised)
                 .id("weld");
-            SceneSpec::new(column([weld]).pad(Spacing::Px(8. + shift)))
+            SceneSpec::new(col([weld]).pad(Spacing::Px(8. + shift)))
                 .offered(Size::new(400. + 2. * shift, 300. + 2. * shift))
         };
-        let mut text = TextCache::default();
-        resolve_scene_with(&spec(0.), &mut text).unwrap();
+        let mut text = Resolver::default();
+        text.resolve(&spec(0.)).unwrap();
         for shift in [0., 13., 13.25, 0.5] {
             let before = mui_geometry::boolean_passes();
-            let cached = resolve_scene_with(&spec(shift), &mut text).unwrap();
+            let cached = text.resolve(&spec(shift)).unwrap();
             assert_eq!(mui_geometry::boolean_passes(), before, "shift {shift}");
-            let fresh = resolve_scene(&spec(shift)).unwrap();
+            let fresh = resolve(&spec(shift)).unwrap();
             let flat = |s: &ResolvedScene| s.surface("weld").unwrap().path.flatten(0.1, 20_000);
             for (a, b) in flat(&cached)
                 .unwrap()
@@ -811,22 +811,22 @@ mod tests {
 
     #[test]
     fn weld_ignores_zero_area_children() {
-        let root = row([leaf(0., 20.), leaf(20., 20.)])
+        let root = row([block(0., 20.), block(20., 20.)])
             .union(Role::Surface)
             .id("weld");
-        let s = resolve_scene(&SceneSpec::new(root).offered(Size::new(20., 20.))).unwrap();
+        let s = resolve(&SceneSpec::new(root).offered(Size::new(20., 20.))).unwrap();
         assert!(!s.surface("weld").unwrap().path.commands.is_empty());
     }
 
     #[test]
     fn tokens_pill_and_gradient() {
-        let root = row([leaf(40., 20.)
+        let root = row([block(40., 20.)
             .pill()
             .fill(Gradient::vertical(Role::Raised, Role::Surface))
             .id("k")])
         .gap(M)
         .pad(S);
-        let s = resolve_scene(&SceneSpec::new(root)).unwrap();
+        let s = resolve(&SceneSpec::new(root)).unwrap();
         assert_eq!(s.layout.frame("k").unwrap().x, 8.);
         assert_eq!(s.surface("k").unwrap().rect.unwrap().radius(), 10.);
         assert!(matches!(
@@ -839,7 +839,7 @@ mod tests {
     /// A square port tab next to a square body welds into one contour; a
     /// rounded tab is a pill that only kisses the body and the union splits.
     fn a_square_tab_welds_into_one_contour_with_its_body() {
-        let tab = column([leaf(24., 24.)])
+        let tab = col([block(24., 24.)])
             .w(36.)
             .h(36.)
             .pad(6.)
@@ -848,7 +848,7 @@ mod tests {
             .fill(Role::Surface)
             .radius(0.)
             .align(Align::End);
-        let body = leaf(400., 200.)
+        let body = block(400., 200.)
             .grow(1.)
             .shrink(1.)
             .min_width(0.)
@@ -863,7 +863,7 @@ mod tests {
             .stroke_width(1.5)
             .radius(20.)
             .id("weld");
-        let s = resolve_scene(&SceneSpec::new(root).offered(Size::new(500., 200.))).unwrap();
+        let s = resolve(&SceneSpec::new(root).offered(Size::new(500., 200.))).unwrap();
         let pts = s
             .surface("weld")
             .unwrap()

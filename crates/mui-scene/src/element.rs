@@ -2,7 +2,7 @@
 //!
 //! ```
 //! use mui_scene::prelude::*;
-//! let card = column([text("Cutoff"), text("1.2 kHz").fill(Role::Dim)])
+//! let card = col([text("Cutoff"), text("1.2 kHz").fill(Role::Dim)])
 //!     .gap(S)
 //!     .pad(M)
 //!     .fill(Role::Raised)
@@ -99,7 +99,7 @@ impl Draw {
     /// use mui_scene::prelude::*;
     /// # use mui_scene::Draw;
     /// let tri = [(0., 0.), (20., 0.), (10., 16.)].map(|(x, y)| Point::new(x, y));
-    /// let ring = Draw::fill(Path::polyline(tri, true), Primary).tag("ring");
+    /// let ring = Draw::fill(Path::polyline(tri, true), Role::Primary).tag("ring");
     /// assert_eq!(ring.tag.as_deref(), Some("ring"));
     /// ```
     pub fn tag(mut self, tag: impl Into<Arc<str>>) -> Self {
@@ -154,7 +154,7 @@ impl<K> Default for CanvasCache<K> {
 ///
 /// ```
 /// use mui_scene::prelude::*;
-/// let tab = leaf(64., 28.).fill(Field).on(State::Focus, |s| s.stroke(Ink)).id("tab");
+/// let tab = block(64., 28.).fill(Role::Field).on(State::Focus, |s| s.stroke(Role::Ink)).id("tab");
 /// assert_eq!(tab.payload().states.len(), 1);
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -176,7 +176,7 @@ pub enum State {
 /// use mui_scene::prelude::*;
 /// # use mui_scene::StateStyle;
 /// # use std::sync::Arc;
-/// let lift = StateStyle(Arc::new(|s: Style| s.fill(Primary)));
+/// let lift = StateStyle(Arc::new(|s: Style| s.fill(Role::Primary)));
 /// assert_eq!(lift.0(Style::default()).fill, Fill::Role(Role::Primary));
 /// ```
 #[derive(Clone)]
@@ -199,7 +199,7 @@ impl PartialEq for StateStyle {
 /// ```
 /// use mui_scene::prelude::*;
 /// # use mui_scene::Carve;
-/// let ring = stack![].square(64.).pill().fill(Primary).cut(leaf(40., 40.).pill());
+/// let ring = stack![].square(64.).pill().fill(Role::Primary).cut(block(40., 40.).pill());
 /// assert_eq!(ring.children()[0].payload().carve, Some(Carve::Cut));
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -488,7 +488,7 @@ pub fn grid(cols: usize, children: impl IntoIterator<Item = El>) -> El {
 ///
 /// ```
 /// use mui_scene::prelude::*;
-/// let bar = fits([text("Save changes"), text("Save"), leaf(8., 8.)]);
+/// let bar = fits([text("Save changes"), text("Save"), block(8., 8.)]);
 /// assert_eq!(bar.children().len(), 3);
 /// ```
 pub fn fits(candidates: impl IntoIterator<Item = El>) -> El {
@@ -574,8 +574,8 @@ impl IntoEl for String {
 ///
 /// ```
 /// use mui_scene::prelude::*;
-/// let bare = Style::default().fill(Raised).radius(12.);
-/// let mut node = leaf(80., 24.).preset(bare);
+/// let bare = Style::default().fill(Role::Raised).radius(12.);
+/// let mut node = block(80., 24.).preset(bare);
 /// assert_eq!(node.style_mut().radius, Radius::Px(12.));
 /// ```
 pub trait Paints: Sized {
@@ -641,7 +641,7 @@ pub trait Paints: Sized {
     ///
     /// ```
     /// use mui_scene::prelude::*;
-    /// let mut card = leaf(80., 48.).radius(16.).corners(CornerStyle::Squircle);
+    /// let mut card = block(80., 48.).radius(16.).corners(CornerStyle::Squircle);
     /// assert_eq!(card.style_mut().corners, CornerStyle::Squircle);
     /// ```
     fn corners(mut self, c: CornerStyle) -> Self {
@@ -653,7 +653,7 @@ pub trait Paints: Sized {
     ///
     /// ```
     /// use mui_scene::prelude::*;
-    /// let mut el = leaf(80., 24.).shadow(Shadow::soft(2.)).shadow(Shadow::soft(12.));
+    /// let mut el = block(80., 24.).shadow(Shadow::soft(2.)).shadow(Shadow::soft(12.));
     /// assert_eq!(el.style_mut().shadow.len(), 2);
     /// ```
     fn shadow(mut self, s: Shadow) -> Self {
@@ -664,7 +664,7 @@ pub trait Paints: Sized {
     ///
     /// ```
     /// use mui_scene::prelude::*;
-    /// let mut el = leaf(80., 24.).shadow(Shadow::soft(12.)).shadows([]);
+    /// let mut el = block(80., 24.).shadow(Shadow::soft(12.)).shadows([]);
     /// assert!(el.style_mut().shadow.is_empty());
     /// ```
     fn shadows(mut self, s: impl IntoIterator<Item = Shadow>) -> Self {
@@ -675,7 +675,7 @@ pub trait Paints: Sized {
     ///
     /// ```
     /// use mui_scene::prelude::*;
-    /// let mut el = leaf(80., 24.).elevation(Elevation::Floating);
+    /// let mut el = block(80., 24.).elevation(Elevation::Floating);
     /// assert_eq!(el.style_mut().shadow.len(), 2);
     /// ```
     fn elevation(self, e: Elevation) -> Self {
@@ -703,7 +703,7 @@ pub trait Paints: Sized {
     ///
     /// ```
     /// use mui_scene::prelude::*;
-    /// let mut el = leaf(10., 10.).blend(Mix::Multiply).opacity(0.5);
+    /// let mut el = block(10., 10.).blend(Mix::Multiply).opacity(0.5);
     /// assert_eq!(el.style_mut().layer, Some((Mix::Multiply, 0.5)));
     /// ```
     fn opacity(mut self, o: f32) -> Self {
@@ -723,7 +723,7 @@ pub trait Paints: Sized {
     /// ```
     /// use mui_scene::prelude::*;
     /// # use mui_scene::Fill;
-    /// let fade = Gradient::linear(180., [(0.8, Surface.alpha(0.)), (1., Surface.into())]);
+    /// let fade = Gradient::linear(180., [(0.8, Role::Surface.alpha(0.)), (1., Role::Surface.into())]);
     /// let mut list = col!["one", "two"].scroll().mask(fade);
     /// assert!(!list.style_mut().mask.is_none());
     /// ```
@@ -770,7 +770,7 @@ pub trait Paints: Sized {
     /// use mui_scene::prelude::*;
     /// # use mui_scene::Style;
     /// let card = Style { radius: Radius::Px(12.), ..Style::default() };
-    /// let mut el = leaf(80., 24.).fill(Primary).preset(card);
+    /// let mut el = block(80., 24.).fill(Role::Primary).preset(card);
     /// assert_eq!(el.style_mut().radius, Radius::Px(12.));
     /// assert_eq!(el.style_mut().fill, Fill::Role(Role::Primary));
     /// ```
@@ -786,7 +786,7 @@ pub trait Paints: Sized {
     /// use mui_scene::prelude::*;
     /// # use mui_scene::Style;
     /// let card = Style { fill: Role::Raised.into(), ..Style::default() };
-    /// let mut el = leaf(80., 24.).fill(Role::Danger).base(card);
+    /// let mut el = block(80., 24.).fill(Role::Danger).base(card);
     /// assert_eq!(el.style_mut().fill, Fill::Role(Role::Danger));
     /// ```
     fn base(mut self, s: Style) -> Self {
@@ -798,8 +798,8 @@ pub trait Paints: Sized {
     ///
     /// ```
     /// use mui_scene::prelude::*;
-    /// let outlined = |e: El| e.stroke(Ink).radius(8.);
-    /// let mut el = leaf(80., 24.).apply(outlined);
+    /// let outlined = |e: El| e.stroke(Role::Ink).radius(8.);
+    /// let mut el = block(80., 24.).apply(outlined);
     /// assert_eq!(el.style_mut().radius, Radius::Px(8.));
     /// ```
     fn apply(self, f: impl FnOnce(Self) -> Self) -> Self {
@@ -828,7 +828,7 @@ impl Paints for Style {
 ///
 /// ```
 /// use mui_scene::prelude::*;
-/// let save = leaf(64., 28.).role(Kind::Button).label("Save").tip("Write it out").id("save");
+/// let save = block(64., 28.).a11y(A11y::Button).named("Save").tip("Write it out").id("save");
 /// assert!(save.payload().extras().tip.is_some());
 /// ```
 pub trait Styled: Paints {
@@ -966,9 +966,9 @@ pub trait Styled: Paints {
     /// ```
     /// use mui_scene::prelude::*;
     /// let spec = SceneSpec::new(row![text("0.0 dB").reserve("-88.8 dB").id("gain")]);
-    /// let wide = resolve_scene(&spec).unwrap().surface("gain").unwrap().frame.size.width;
+    /// let wide = resolve(&spec).unwrap().surface("gain").unwrap().frame.size.width;
     /// let bare = SceneSpec::new(row![text("0.0 dB").id("gain")]);
-    /// let bare = resolve_scene(&bare).unwrap().surface("gain").unwrap().frame.size.width;
+    /// let bare = resolve(&bare).unwrap().surface("gain").unwrap().frame.size.width;
     /// assert!(wide > bare);
     /// ```
     fn reserve(mut self, s: impl Into<String>) -> Self {
@@ -987,7 +987,7 @@ pub trait Styled: Paints {
     ///
     /// ```
     /// use mui_scene::prelude::*;
-    /// let mut el = leaf(80., 24.).fill(Field).on(State::Hover, |s| s.radius(4.)).id("b");
+    /// let mut el = block(80., 24.).fill(Role::Field).on(State::Hover, |s| s.radius(4.)).id("b");
     /// assert_eq!(el.element_mut().states.len(), 1);
     /// ```
     fn on(mut self, state: State, f: impl Fn(Style) -> Style + 'static) -> Self {
@@ -1046,10 +1046,10 @@ pub trait Styled: Paints {
     ///
     /// ```
     /// use mui_scene::prelude::*;
-    /// let bypassed = leaf(64., 28.)
-    ///     .fill(Primary)
-    ///     .on(State::Disabled, |s| s.fill(Ink.alpha(0.2)))
-    ///     .disabled(true)
+    /// let bypassed = block(64., 28.)
+    ///     .fill(Role::Primary)
+    ///     .on(State::Disabled, |s| s.fill(Role::Ink.alpha(0.2)))
+    ///     .disabled()
     ///     .id("osc-2");
     /// assert!(bypassed.payload().disabled);
     /// ```
@@ -1115,7 +1115,7 @@ pub trait Styled: Paints {
     ///
     /// ```
     /// use mui_scene::prelude::*;
-    /// let knob = leaf(16., 16.).pill().animate_layout();
+    /// let knob = block(16., 16.).pill().animate_layout();
     /// assert!(knob.payload().extras().layout_transition.is_some());
     /// ```
     fn animate_layout(self) -> Self {
@@ -1158,7 +1158,7 @@ pub trait Styled: Paints {
     /// ```
     /// use mui_scene::prelude::*;
     /// let module_uid = 7u64;
-    /// let slot = leaf(80., 40.).animate_layout().identity(module_uid).id("osc/3");
+    /// let slot = block(80., 40.).animate_layout().identity(module_uid).id("osc/3");
     /// assert!(slot.payload().extras().identity.is_some());
     /// ```
     fn identity(mut self, what: impl std::hash::Hash) -> Self {
@@ -1177,7 +1177,7 @@ pub trait Styled: Paints {
     /// ```
     /// use mui_scene::prelude::*;
     /// let playing = true;
-    /// let icon = leaf(24., 24.).morph(if playing { "pause" } else { "play" }).id("transport");
+    /// let icon = block(24., 24.).morph(if playing { "pause" } else { "play" }).id("transport");
     /// assert!(icon.payload().extras().morph.is_some());
     /// ```
     fn morph(mut self, shape: impl std::hash::Hash) -> Self {
@@ -1263,7 +1263,7 @@ mod tests {
 
     fn card() -> Style {
         Style {
-            fill: Raised.into(),
+            fill: Role::Raised.into(),
             radius: Radius::Px(12.),
             ..Style::default()
         }
@@ -1275,7 +1275,7 @@ mod tests {
         let calls = Rc::new(Cell::new(0));
         let make = |key| {
             let calls = Rc::clone(&calls);
-            canvas_cached(&cache, key, move |size| {
+            canvas_keyed(&cache, key, move |size| {
                 calls.set(calls.get() + 1);
                 vec![Draw::fill(
                     Path::polyline(
@@ -1287,7 +1287,7 @@ mod tests {
                         ],
                         true,
                     ),
-                    Primary,
+                    Role::Primary,
                 )]
             })
         };
@@ -1323,14 +1323,14 @@ mod tests {
     /// and which side that is depends only on which method was called.
     #[test]
     fn preset_wins_per_field_and_base_loses_per_field() {
-        let mut over = leaf(10., 10.).fill(Primary).stroke(Ink).preset(card());
+        let mut over = block(10., 10.).fill(Role::Primary).stroke(Role::Ink).preset(card());
         let s = over.style_mut();
         assert_eq!((s.fill.clone(), s.radius), (card().fill, card().radius));
         assert!(s.stroke.is_some(), "a field the preset left unset survives");
 
-        let mut under = leaf(10., 10.).fill(Primary).base(card());
+        let mut under = block(10., 10.).fill(Role::Primary).base(card());
         let s = under.style_mut();
-        assert_eq!((s.fill.clone(), s.radius), (Primary.into(), card().radius));
+        assert_eq!((s.fill.clone(), s.radius), (Role::Primary.into(), card().radius));
     }
 
     /// One slot per concept: a second spelling of the same thing replaces
@@ -1338,25 +1338,25 @@ mod tests {
     #[test]
     fn radius_and_stroke_keep_one_slot_each() {
         assert_eq!(
-            leaf(10., 10.).pill().radius(8.).style_mut().radius,
+            block(10., 10.).pill().radius(8.).style_mut().radius,
             Radius::Px(8.)
         );
         assert_eq!(
-            leaf(10., 10.).radius(8.).pill().style_mut().radius,
+            block(10., 10.).radius(8.).pill().style_mut().radius,
             Radius::Pill
         );
-        let mut el = leaf(10., 10.).stroke_width(2.).stroke(Ink);
+        let mut el = block(10., 10.).stroke_width(2.).stroke(Role::Ink);
         let stroke = el.style_mut().stroke.clone().expect("set");
-        assert_eq!((stroke.fill, stroke.width), (Ink.into(), Some(2.)));
+        assert_eq!((stroke.fill, stroke.width), (Role::Ink.into(), Some(2.)));
     }
 
     /// A joined strip says it once, on the container: the children go
     /// square and its own corner is what rounds the two ends.
     #[test]
     fn join_squares_every_inner_corner_and_keeps_the_strips_own() {
-        let mut strip = row![leaf(60., 28.), leaf(60., 28.), leaf(60., 28.)]
+        let mut strip = row![block(60., 28.), block(60., 28.), block(60., 28.)]
             .radius(12.)
-            .join();
+            .segmented();
         assert_eq!(strip.style_mut().radius, Radius::Px(12.));
         assert!(strip.is_clip(), "the ends are rounded by the clip");
         for c in strip.children_mut() {
@@ -1370,7 +1370,7 @@ mod tests {
     fn a_faded_role_resolves_through_the_palette() {
         let p = crate::Palette::NEUTRAL;
         let under = p.surface();
-        let Some(crate::Paint::Solid(c)) = Ink.alpha(0.12).paint(&p, under) else {
+        let Some(crate::Paint::Solid(c)) = Role::Ink.alpha(0.12).paint(&p, under) else {
             panic!("a faded role paints solid");
         };
         assert!((c.alpha() - 0.12).abs() < 1e-6);

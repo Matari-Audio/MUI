@@ -341,8 +341,8 @@ mod tests {
             view_formats: &[],
         });
         let scope = gpu2.device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let root = leaf(16., 16.).fill(Role::Primary);
-        let scene = resolve_scene(&SceneSpec::new(root).offered(Size::new(16., 16.))).unwrap();
+        let root = block(16., 16.).fill(Role::Primary);
+        let scene = resolve(&SceneSpec::new(root).offered(Size::new(16., 16.))).unwrap();
         let view = target.create_view(&wgpu::TextureViewDescriptor::default());
         gpu2.renderer
             .render(&scene, Affine::IDENTITY, &view)

@@ -227,7 +227,7 @@ struct Pad;
 
 impl View for Pad {
     fn build(&mut self, _: &mut Ui) -> El {
-        mui::prelude::leaf(100.0, 100.0).id("pad")
+        mui::prelude::block(100.0, 100.0).id("pad")
     }
     fn changed(&mut self) -> bool {
         false
@@ -273,7 +273,7 @@ impl View for Keys {
             .filter(|k| k.key == Key::Enter)
             .count();
         let side = if self.refuse { f64::NAN } else { 100.0 };
-        mui::prelude::leaf(side, side).id("pad")
+        mui::prelude::block(side, side).id("pad")
     }
     fn changed(&mut self) -> bool {
         false

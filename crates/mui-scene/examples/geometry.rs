@@ -2,11 +2,11 @@
 //! standing still, sliding a pixel per frame, and from cold caches. Prints
 //! the median time and the Boolean passes each frame ran.
 use mui_scene::prelude::*;
-use mui_scene::{TextCache, resolve_scene_with};
+use mui_scene::{Resolver};
 use std::time::Instant;
 
 fn panel(i: usize) -> El {
-    let tab = column([leaf(20., 20.)
+    let tab = col([block(20., 20.)
         .pill()
         .fill(Role::Primary)
         .id(format!("k{i}"))])
@@ -14,7 +14,7 @@ fn panel(i: usize) -> El {
     .id(format!("tab{i}"))
     .shell(4., Role::Raised);
     let body = row((0..4).map(|j| {
-        leaf(40., 24.)
+        block(40., 24.)
             .radius(6.)
             .fill(Role::Field)
             .stroke(Role::Dim)
@@ -23,7 +23,7 @@ fn panel(i: usize) -> El {
     .gap(6.)
     .pad(10.)
     .id(format!("body{i}"));
-    column([tab, body])
+    col([tab, body])
         .align(Align::Start)
         .union(Role::Surface)
         .stroke(Role::Dim)
@@ -33,7 +33,7 @@ fn panel(i: usize) -> El {
 }
 
 fn tree(shift: f64) -> El {
-    column((0..24).map(panel))
+    col((0..24).map(panel))
         .gap(8.)
         .pad(Spacing::Px(8. + shift))
         .fill(Role::Background)
@@ -46,20 +46,20 @@ fn main() {
             .offered(Size::new(1280. + 2. * shift, 4000. + 2. * shift))
             .font(font.clone())
     };
-    let mut cache = TextCache::default();
+    let mut cache = Resolver::default();
     let still = spec(0.);
-    resolve_scene_with(&still, &mut cache).unwrap();
+    cache.resolve(&still).unwrap();
     let mut run = |label: &str, specs: &mut dyn FnMut(usize) -> SceneSpec, cold: bool| {
         let mut times = Vec::new();
         let mut passes = 0;
         for k in 0..41 {
             let s = specs(k);
             if cold {
-                cache = TextCache::default();
+                cache = Resolver::default();
             }
             let before = mui_geometry::boolean_passes();
             let t = Instant::now();
-            std::hint::black_box(resolve_scene_with(&s, &mut cache).unwrap());
+            std::hint::black_box(cache.resolve(&s).unwrap());
             times.push(t.elapsed().as_secs_f64() * 1e3);
             passes += mui_geometry::boolean_passes() - before;
         }

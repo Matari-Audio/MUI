@@ -11,11 +11,11 @@ use mui_input::{
 };
 use mui_layout::SpacingToken::{S, Xs};
 use mui_scene::Keys;
-use mui_scene::prelude::{Paints as _, Role, overlay, text};
+use mui_scene::prelude::{Paints as _, Role, stack, text};
 use mui_scene::{
-    Appear, Area, Color, Cursor, El, Element, Fill, Font, Kind, Layer, Mix, Paint, Painted,
+    Appear, Area, Color, Cursor, El, Element, Fill, Font, A11y, Layer, Mix, Paint, Painted,
     Palette, Pin, Radius, ResolvedScene, SceneError, SceneSpec, Size, Spacing, Spring, State,
-    TextCache, Theme, bar, push_index,
+    Resolver, Theme, bar, push_index,
 };
 use std::sync::Arc;
 
@@ -139,7 +139,7 @@ pub struct Ui {
     plays: BTreeMap<String, (bool, f64)>,
     /// The runtime clock at which the last playing key lands.
     play_until: f64,
-    text_cache: TextCache,
+    text_cache: Resolver,
     weld_cache: mui_scene::WeldCache,
     /// Per scroll node, per axis: the spring's target is where the wheel
     /// clamped it, its value how far the children are drawn slid.
@@ -310,7 +310,7 @@ impl Ui {
             tweens: BTreeMap::new(),
             plays: BTreeMap::new(),
             play_until: 0.0,
-            text_cache: TextCache::default(),
+            text_cache: Resolver::default(),
             weld_cache: mui_scene::WeldCache::default(),
             scrolls: BTreeMap::new(),
             path: String::new(),
@@ -580,7 +580,7 @@ impl Ui {
     /// for _ in 0..3 {
     ///     let side = ui.memo("side", 7, |_| {
     ///         built += 1;
-    ///         column([leaf(40., 40.).id("a"), leaf(40., 40.).id("b")])
+    ///         col([block(40., 40.).id("a"), block(40., 40.).id("b")])
     ///     });
     ///     ui.frame(row([side]), Some(Size::new(100., 100.)), PointerInput::default(), 0.016)
     ///         .unwrap();
@@ -718,7 +718,7 @@ impl Ui {
                 true
             }
             SemanticAction::Activate { id }
-                if matches!(role, Some(Kind::Button | Kind::Toggle { .. })) =>
+                if matches!(role, Some(A11y::Button | A11y::Toggle { .. })) =>
             {
                 // One activation per control per frame, matching `Response::clicked`.
                 if !self
@@ -731,7 +731,7 @@ impl Ui {
                 true
             }
             SemanticAction::SetValue { id, value } if value.is_finite() => {
-                let Some(Kind::Slider { min, max, .. }) = role else {
+                let Some(A11y::Slider { min, max, .. }) = role else {
                     return false;
                 };
                 if !(min.is_finite() && max.is_finite()) {
@@ -746,7 +746,7 @@ impl Ui {
                 true
             }
             SemanticAction::Increment { id } | SemanticAction::Decrement { id } => {
-                let Some(&Kind::Slider { value, min, max }) = role else {
+                let Some(&A11y::Slider { value, min, max }) = role else {
                     return false;
                 };
                 // Two steps in one frame are two steps: step from the value
@@ -768,7 +768,7 @@ impl Ui {
             // Lands straight in the field's selection, which its next build
             // reads: nothing about it is an edit a host brackets.
             SemanticAction::SetSelection { id, anchor, caret } => {
-                let Some(Kind::TextInput { value, .. }) = role else {
+                let Some(A11y::TextInput { value, .. }) = role else {
                     return false;
                 };
                 if anchor.max(caret) > value.chars().count() {
@@ -817,7 +817,7 @@ impl Ui {
     /// # let mut ui = Ui::new(Theme::DEFAULT);
     /// let plot = canvas(|size| {
     ///     let box_ = [(0., 0.), (size.width, 0.), (size.width, size.height)];
-    ///     vec![Draw::fill(Path::polyline(box_.map(|(x, y)| Point::new(x, y)), true), Primary)
+    ///     vec![Draw::fill(Path::polyline(box_.map(|(x, y)| Point::new(x, y)), true), Role::Primary)
     ///         .tag("wedge")]
     /// })
     /// .square(80.)
@@ -874,7 +874,7 @@ impl Ui {
     /// ```
     /// # use mui::Ui; use mui::prelude::*;
     /// # let mut ui = Ui::new(Theme::DEFAULT);
-    /// # let root = leaf(10., 10.).id("root");
+    /// # let root = block(10., 10.).id("root");
     /// # ui.frame(root, None, PointerInput::default(), 0.016).unwrap();
     /// let undo = ui
     ///     .shortcuts()
@@ -890,7 +890,7 @@ impl Ui {
                 .is_some_and(|s| {
                     matches!(
                         s.semantics.as_ref().map(|s| &s.role),
-                        Some(Kind::TextInput { .. })
+                        Some(A11y::TextInput { .. })
                     )
                 })
         });
@@ -1074,7 +1074,7 @@ impl Ui {
     /// ```
     /// # use mui::Ui; use mui::prelude::*;
     /// # let mut ui = Ui::new(Theme::DEFAULT);
-    /// # let tree = col![leaf(40., 30.).min_size(Size::new(40., 30.))].pad(8.);
+    /// # let tree = col![block(40., 30.).min_size(Size::new(40., 30.))].pad(8.);
     /// # ui.frame(tree, Some(Size::new(400., 300.)), PointerInput::default(), 0.016).unwrap();
     /// assert_eq!(ui.min_size(), Some(Size::new(56., 46.)));
     /// ```
@@ -1955,7 +1955,7 @@ impl Ui {
         }
         // A leaf has no children to take it. Its own key is the only one
         // the wrapper moves, and for the frames the tip is up.
-        overlay([root, float])
+        stack([root, float])
     }
 
     /// Style the tree by state and step every transition and tween. Returns
@@ -2282,7 +2282,7 @@ impl Ui {
                     !surface.disabled
                         && matches!(
                             surface.semantics.as_ref().map(|sem| &sem.role),
-                            Some(Kind::TextInput { .. })
+                            Some(A11y::TextInput { .. })
                         )
                 });
         self.resolved = true;
@@ -2713,7 +2713,7 @@ fn at_rest(s: &Spring) -> bool {
 /// What [`Ui::memo`] hands back for a subtree it kept: the frame puts the
 /// kept one in its place.
 fn placeholder(id: u64) -> El {
-    let mut el = mui_scene::leaf(0.0, 0.0);
+    let mut el = mui_scene::block(0.0, 0.0);
     el.payload_mut().extras_mut().memo = Some(mui_scene::Memo { id, reused: true });
     el
 }
@@ -2741,8 +2741,8 @@ fn keyed_edit(scene: Option<&ResolvedScene>, id: &str, keys: &[KeyPress]) -> boo
         .and_then(|s| s.semantics.as_ref())
         .map(|s| &s.role);
     keys.iter().any(|k| match role {
-        Some(Kind::Button | Kind::Toggle { .. }) => matches!(k.key, Key::Enter | Key::Space),
-        Some(Kind::Slider { .. }) => matches!(
+        Some(A11y::Button | A11y::Toggle { .. }) => matches!(k.key, Key::Enter | Key::Space),
+        Some(A11y::Slider { .. }) => matches!(
             k.key,
             Key::Left
                 | Key::Right
@@ -2785,7 +2785,7 @@ fn interactive(e: &Element) -> bool {
     e.semantics.as_ref().is_some_and(|s| {
         matches!(
             &s.role,
-            Kind::Button | Kind::Slider { .. } | Kind::Toggle { .. } | Kind::TextInput { .. }
+            A11y::Button | A11y::Slider { .. } | A11y::Toggle { .. } | A11y::TextInput { .. }
         )
     })
 }
@@ -2861,7 +2861,7 @@ fn state(
         .map(|s| s.map(|s| s.value))
     {
         // `scrolled` is a builder and a built node cannot be reopened.
-        let node = std::mem::replace(n, mui_scene::leaf(0.0, 0.0));
+        let node = std::mem::replace(n, mui_scene::block(0.0, 0.0));
         *n = node.scrolled(x, y);
     }
     if n.is_scroll() {
@@ -2964,8 +2964,8 @@ mod tests {
     /// A source and a target side by side, 50 px each.
     fn two() -> El {
         row([
-            leaf(50., 50.).fill(Role::Field).id("src"),
-            leaf(50., 50.).fill(Role::Field).id("dst"),
+            block(50., 50.).fill(Role::Field).id("src"),
+            block(50., 50.).fill(Role::Field).id("dst"),
         ])
     }
 
@@ -3080,13 +3080,13 @@ mod tests {
     fn a_disabled_node_paints_its_off_look_and_hits_nothing() {
         let mut ui = Ui::new(Theme::DEFAULT);
         let tree = |off: bool| {
-            leaf(100., 100.)
+            block(100., 100.)
                 .fill(Role::Field)
                 .on(State::Hover, |s| s.fill(Role::Primary))
                 .on(State::Disabled, |s| s.fill(Role::Dim))
-                .disabled(off)
+                .when(off, |e| e.disabled())
                 .focusable()
-                .role(Kind::Button)
+                .a11y(A11y::Button)
                 .id("bypass")
         };
         let fill = |f: &Frame<'_>| {
@@ -3165,10 +3165,10 @@ mod tests {
     fn tab_walks_the_focusable_surfaces_in_scene_order() {
         let mut ui = Ui::new(Theme::DEFAULT);
         let tree = || {
-            column([
-                leaf(20., 20.).focusable().id("a"),
-                leaf(20., 20.).id("plain"),
-                leaf(20., 20.).focusable().id("b"),
+            col([
+                block(20., 20.).focusable().id("a"),
+                block(20., 20.).id("plain"),
+                block(20., 20.).focusable().id("b"),
             ])
         };
         ui.frame(tree(), None, PointerInput::default(), 0.016)
@@ -3209,12 +3209,12 @@ mod tests {
     fn nested_scrollers_yield_and_shorter_content_clamps_the_offset() {
         let mut ui = Ui::new(Theme::DEFAULT);
         let tree = |tall| {
-            column([
-                row([leaf(100., 20.)])
+            col([
+                row([block(100., 20.)])
                     .size(30., 20.)
                     .scroll()
                     .id("horizontal"),
-                leaf(30., if tall { 150. } else { 10. }),
+                block(30., if tall { 150. } else { 10. }),
             ])
             .size(30., 40.)
             .scroll()
@@ -3241,13 +3241,13 @@ mod tests {
     #[test]
     fn nested_and_floating_content_does_not_extend_the_outer_scroll() {
         let mut ui = Ui::new(Theme::DEFAULT);
-        let tree = column([
-            column([leaf(30., 1000.)])
+        let tree = col([
+            col([block(30., 1000.)])
                 .size(30., 40.)
                 .scroll()
                 .id("inner"),
-            leaf(30., 20.),
-            leaf(30., 900.).float(),
+            block(30., 20.),
+            block(30., 900.).float(),
         ])
         .gap(0.)
         .size(30., 50.)
@@ -3265,9 +3265,9 @@ mod tests {
     fn an_exhausted_inner_scroll_yields_to_its_parent() {
         let mut ui = Ui::new(Theme::DEFAULT);
         let tree = || {
-            column([
-                column([leaf(30., 80.)]).size(30., 40.).scroll().id("inner"),
-                leaf(30., 100.),
+            col([
+                col([block(30., 80.)]).size(30., 40.).scroll().id("inner"),
+                block(30., 100.),
             ])
             .size(30., 60.)
             .scroll()
@@ -3288,7 +3288,7 @@ mod tests {
     fn the_wheel_scrolls_a_column_and_stops_at_its_end() {
         let mut ui = Ui::new(Theme::DEFAULT);
         let tree = || {
-            column([leaf(20., 100.), leaf(20., 100.)])
+            col([block(20., 100.), block(20., 100.)])
                 .height(50.)
                 .scroll()
                 .id("list")
@@ -3341,7 +3341,7 @@ mod tests {
         let tree = |ui: &mut Ui, v: &mut String| widgets::text_input(ui, "f", v).0;
         let text = |ui: &Ui| match &ui.scene().unwrap().surface("f").unwrap().semantics {
             Some(mui_scene::Semantics {
-                role: Kind::TextInput {
+                role: A11y::TextInput {
                     selection, carets, ..
                 },
                 ..
@@ -3519,9 +3519,9 @@ mod tests {
     fn a_move_is_inert_only_on_the_same_target_away_from_raw_pointer_readers() {
         let tree = || {
             row([
-                leaf(50., 50.).fill(Role::Field).id("src"),
-                leaf(50., 50.).fill(Role::Field).id("dst"),
-                leaf(50., 50.).fill(Role::Field).tracks_pointer().id("xy"),
+                block(50., 50.).fill(Role::Field).id("src"),
+                block(50., 50.).fill(Role::Field).id("dst"),
+                block(50., 50.).fill(Role::Field).tracks_pointer().id("xy"),
             ])
         };
         let mut ui = Ui::new(Theme::DEFAULT);
@@ -3557,7 +3557,7 @@ mod tests {
     #[test]
     fn a_new_hover_target_is_owed_one_more_tree() {
         // Plain surfaces: no hover spring to keep frames coming.
-        let tree = || row([leaf(50., 50.).id("a"), leaf(50., 50.).id("b")]);
+        let tree = || row([block(50., 50.).id("a"), block(50., 50.).id("b")]);
         let mut ui = Ui::new(Theme::DEFAULT);
         ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
         ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
@@ -3571,7 +3571,7 @@ mod tests {
 
     #[test]
     fn an_inert_move_keeps_the_tip_counting_and_a_release_is_not_inert() {
-        let tree = || leaf(40., 40.).fill(Role::Raised).tip("why").id("b");
+        let tree = || block(40., 40.).fill(Role::Raised).tip("why").id("b");
         let mut ui = Ui::new(Theme::DEFAULT);
         ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
         ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
@@ -3589,7 +3589,7 @@ mod tests {
     #[test]
     fn a_tip_comes_due_after_half_a_second_of_hover() {
         let mut ui = Ui::new(Theme::DEFAULT);
-        let tree = || leaf(40., 40.).fill(Role::Raised).tip("why").id("b");
+        let tree = || block(40., 40.).fill(Role::Raised).tip("why").id("b");
         // In a window, not hugging: a float is kept inside the box it floats
         // in, so the room under the surface has to exist.
         let win = || Some(Size::new(240., 300.));
@@ -3615,7 +3615,7 @@ mod tests {
     #[test]
     fn a_tip_lands_where_it_was_measured_even_under_a_padded_root() {
         let mut ui = Ui::new(Theme::DEFAULT);
-        let tree = || column([leaf(40., 40.).fill(Role::Raised).tip("why").id("b")]).pad(L);
+        let tree = || col([block(40., 40.).fill(Role::Raised).tip("why").id("b")]).pad(L);
         let win = || Some(Size::new(240., 300.));
         let p = at(110., 30., false);
         ui.frame(tree(), win(), p, 0.016).unwrap();
@@ -3638,7 +3638,7 @@ mod tests {
     fn a_transition_lands_between_the_two_fills_and_settles() {
         let mut ui = Ui::new(Theme::DEFAULT);
         let tree = |on: bool| {
-            leaf(40., 40.)
+            block(40., 40.)
                 .fill(if on { Role::Primary } else { Role::Field })
                 .animate()
                 .id("b")
@@ -3672,8 +3672,8 @@ mod tests {
     #[test]
     fn a_transitioning_weld_morph_springs_between_its_declarations() {
         let tree = |p: f64| {
-            mui_scene::weld_morph![p; leaf(20., 20.), leaf(20., 20.)]
-                .transition(Spring::new(0.3, 0.6))
+            mui_scene::weld![Weld::default().morph(p); block(20., 20.), block(20., 20.)]
+                .animate_with(Spring::new(0.3, 0.6))
                 .id("w")
         };
         let (pal, mut motion) = (Theme::DEFAULT.palette, BTreeMap::new());
@@ -3700,7 +3700,7 @@ mod tests {
     fn retargeting_mid_flight_does_not_jump() {
         let mut ui = Ui::new(Theme::DEFAULT);
         let tree = |on: bool| {
-            leaf(40., 40.)
+            block(40., 40.)
                 .fill(if on { Role::Primary } else { Role::Field })
                 .animate()
                 .id("b")
@@ -3727,7 +3727,7 @@ mod tests {
         assert_eq!(ui.tween("cutoff", 0.0), 0.0, "it starts where it is told");
         let mut prev = 0.0;
         for _ in 0..180 {
-            ui.frame(leaf(1., 1.), None, Input::default(), 0.016)
+            ui.frame(block(1., 1.), None, Input::default(), 0.016)
                 .unwrap();
             let v = ui.tween("cutoff", 1.0);
             assert!(v >= prev, "went backwards: {v} after {prev}");
@@ -3740,7 +3740,7 @@ mod tests {
     #[test]
     fn a_press_and_its_release_bracket_the_gesture() {
         let mut ui = Ui::new(Theme::DEFAULT);
-        let tree = || leaf(40., 40.).fill(Role::Raised).id("b");
+        let tree = || block(40., 40.).fill(Role::Raised).id("b");
         ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
         let f = ui.frame(tree(), None, at(10., 10., true), 0.016).unwrap();
         assert_eq!(f.edits, vec![("b".to_owned(), Edit::Begin)]);
@@ -3758,7 +3758,7 @@ mod tests {
     fn a_declared_hover_style_is_applied_while_hovered() {
         let mut ui = Ui::new(Theme::DEFAULT);
         let tree = || {
-            leaf(40., 40.)
+            block(40., 40.)
                 .fill(Role::Raised)
                 .on(State::Hover, |s| s.radius(3.))
                 .id("b")
@@ -3790,9 +3790,9 @@ mod tests {
     #[test]
     fn a_named_layout_surface_stays_cold_while_an_interactive_child_warms() {
         let tree = || {
-            column([leaf(40., 40.)
+            col([block(40., 40.)
                 .fill(Role::Raised)
-                .role(Kind::Button)
+                .a11y(A11y::Button)
                 .focusable()
                 .id("child")])
             .size(100., 100.)
@@ -3851,7 +3851,7 @@ mod tests {
     #[test]
     fn a_rounded_clip_rejects_a_child_corner() {
         let tree = || {
-            overlay([leaf(40., 40.)
+            stack([block(40., 40.)
                 .fill(Role::Primary)
                 .anchor(Align::Start, Align::Start)
                 .id("child")])
@@ -3878,7 +3878,7 @@ mod tests {
     #[test]
     fn nested_rounded_clips_intersect_for_hit_testing() {
         let tree = || {
-            overlay([overlay([leaf(80., 80.)
+            stack([stack([block(80., 80.)
                 .fill(Role::Primary)
                 .anchor(Align::Center, Align::Center)
                 .id("target")])
@@ -3912,9 +3912,9 @@ mod tests {
     fn an_explicit_hover_look_is_applied_once() {
         let mut ui = Ui::new(Theme::DEFAULT);
         let tree = || {
-            leaf(40., 40.)
+            block(40., 40.)
                 .fill(Role::Field)
-                .role(Kind::Button)
+                .a11y(A11y::Button)
                 .on(State::Hover, |s| s.fill(Role::Primary))
                 .id("button")
         };
@@ -3936,7 +3936,7 @@ mod tests {
     #[test]
     fn shift_drags_a_value_fine_and_a_secondary_click_is_distinguishable() {
         let mut ui = Ui::new(Theme::DEFAULT);
-        let tree = || leaf(40., 40.).fill(Role::Raised).id("b");
+        let tree = || block(40., 40.).fill(Role::Raised).id("b");
         let drag = |ui: &mut Ui, mods: Mods| {
             // The hit map is last frame's, so a press needs a frame to land on.
             ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
@@ -3981,7 +3981,7 @@ mod tests {
     #[test]
     fn a_cancelled_gesture_still_ends() {
         let mut ui = Ui::new(Theme::DEFAULT);
-        let tree = || leaf(40., 40.).fill(Role::Raised).id("b");
+        let tree = || block(40., 40.).fill(Role::Raised).id("b");
         ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
         ui.frame(tree(), None, at(10., 10., true), 0.016).unwrap();
         ui.cancel();
@@ -3992,7 +3992,7 @@ mod tests {
     #[test]
     fn hover_warms_the_fill_and_a_press_is_reported_next_frame() {
         let mut ui = Ui::new(Theme::DEFAULT);
-        let tree = || leaf(40., 40.).fill(Role::Raised).role(Kind::Button).id("b");
+        let tree = || block(40., 40.).fill(Role::Raised).a11y(A11y::Button).id("b");
         let base = ui
             .frame(tree(), None, PointerInput::default(), 0.016)
             .unwrap()
@@ -4012,12 +4012,12 @@ mod tests {
     fn a_bouncy_transition_never_undershoots_a_channel_below_zero() {
         let mut ui = Ui::new(Theme::DEFAULT);
         let tree = |r: f64| {
-            leaf(40., 40.)
+            block(40., 40.)
                 .fill(Role::Raised)
                 .radius(r)
                 .stroke(Role::Primary)
                 .stroke_width(r / 4.)
-                .transition(Spring::new(0.3, 0.6))
+                .animate_with(Spring::new(0.3, 0.6))
                 .id("card")
         };
         ui.frame(tree(24.), None, PointerInput::default(), 0.016)
@@ -4032,10 +4032,10 @@ mod tests {
     fn a_transitioning_node_seeds_each_channel_from_its_own_declaration() {
         let mut ui = Ui::new(Theme::DEFAULT);
         let stroked = || {
-            leaf(40., 40.)
+            block(40., 40.)
                 .stroke(Role::Primary)
                 .stroke_width(12.)
-                .transition(Spring::DEFAULT)
+                .animate_with(Spring::DEFAULT)
                 .id("n")
         };
         ui.frame(stroked(), None, PointerInput::default(), 0.016)
@@ -4063,7 +4063,7 @@ mod tests {
     #[test]
     fn a_gesture_edge_survives_a_frame_that_failed_to_resolve() {
         let mut ui = Ui::new(Theme::DEFAULT);
-        let good = || leaf(40., 40.).fill(Role::Raised).id("b");
+        let good = || block(40., 40.).fill(Role::Raised).id("b");
         let bad = || good().radius(-1.);
         ui.frame(good(), None, at(10., 10., false), 0.016).unwrap();
         assert!(
@@ -4078,7 +4078,7 @@ mod tests {
     fn a_non_finite_wheel_delta_is_ignored() {
         let mut ui = Ui::new(Theme::DEFAULT);
         let tree = || {
-            column([leaf(20., 100.), leaf(20., 100.)])
+            col([block(20., 100.), block(20., 100.)])
                 .height(50.)
                 .scroll()
                 .id("list")
@@ -4169,7 +4169,7 @@ mod tests {
             ui.set_text("gain", "1"),
             Err(SceneError::NoTextLayer)
         ));
-        let tree = row![leaf(20., 20.).id("box")];
+        let tree = row![block(20., 20.).id("box")];
         ui.frame(tree, Some(Size::new(80., 40.)), Input::default(), 0.016)
             .unwrap();
         assert!(matches!(
@@ -4202,7 +4202,7 @@ mod tests {
     fn a_wheel_scroll_glides_onto_its_target() {
         let mut ui = Ui::new(Theme::DEFAULT);
         let tree = || {
-            column([leaf(20., 100.).id("top"), leaf(20., 100.)])
+            col([block(20., 100.).id("top"), block(20., 100.)])
                 .height(50.)
                 .scroll()
                 .id("list")
@@ -4237,11 +4237,11 @@ mod tests {
         let mut ui = Ui::new(Theme::DEFAULT);
         let tree = || {
             row![
-                column((0..6).map(|_| leaf(20., 40.)))
+                col((0..6).map(|_| block(20., 40.)))
                     .gap(S)
                     .scroll()
                     .w(200),
-                leaf(40., 40.),
+                block(40., 40.),
             ]
             .height(100.)
         };
@@ -4266,15 +4266,15 @@ mod tests {
         let mut ui = Ui::new(Theme::DEFAULT);
         let tree = || {
             col![
-                column([
-                    leaf(20., 40.).tip("why").id("item"),
-                    leaf(20., 40.),
-                    leaf(20., 40.),
+                col([
+                    block(20., 40.).tip("why").id("item"),
+                    block(20., 40.),
+                    block(20., 40.),
                 ])
                 .gap(0.)
                 .scroll()
                 .height(50.),
-                leaf(20., 200.),
+                block(20., 200.),
             ]
             .gap(0.)
         };
@@ -4310,7 +4310,7 @@ mod tests {
         let mut ui = Ui::new(Theme::DEFAULT);
         let tree = |on: bool| {
             row![
-                leaf(40., 40.)
+                block(40., 40.)
                     .fill(if on { Role::Primary } else { Role::Field })
                     .animate()
             ]
@@ -4332,10 +4332,10 @@ mod tests {
 
         let off = || {
             row![
-                leaf(40., 40.)
+                block(40., 40.)
                     .fill(Role::Primary)
                     .on(State::Disabled, |s| s.fill(Role::Field))
-                    .disabled(true)
+                    .disabled()
             ]
         };
         let f = ui.frame(off(), None, Input::default(), 0.016).unwrap();
@@ -4356,7 +4356,7 @@ mod tests {
     fn an_unnamed_node_takes_its_hover_and_press_looks() {
         let tree = || {
             row![
-                leaf(40., 40.)
+                block(40., 40.)
                     .fill(Role::Raised)
                     .on(State::Hover, |s| s.radius(3.))
                     .on(State::Press, |s| s.radius(5.))
@@ -4384,8 +4384,8 @@ mod tests {
     fn press_stack(under: &El, top: &El) -> (Option<String>, bool) {
         let tree = |under: &El, top: &El| {
             col![
-                overlay([under.clone(), top.clone()]),
-                leaf(40., 20.).focusable().id("field"),
+                stack([under.clone(), top.clone()]),
+                block(40., 20.).focusable().id("field"),
             ]
         };
         let mut ui = Ui::new(Theme::DEFAULT);
@@ -4407,9 +4407,9 @@ mod tests {
     /// does not. Plain decoration stays transparent to the pointer.
     #[test]
     fn an_unnamed_stateful_node_routes_like_a_named_one_and_decoration_not_at_all() {
-        let control = || leaf(40., 40.).role(Kind::Button).id("c");
-        let lit = || leaf(40., 40.).on(State::Hover, |s| s.radius(3.));
-        let plain = || leaf(40., 40.).fill(Role::Raised);
+        let control = || block(40., 40.).a11y(A11y::Button).id("c");
+        let lit = || block(40., 40.).on(State::Hover, |s| s.radius(3.));
+        let plain = || block(40., 40.).fill(Role::Raised);
 
         // Over the control.
         assert_eq!(
@@ -4443,7 +4443,7 @@ mod tests {
     fn empty_background_is_no_target_and_a_press_on_it_drops_the_focus() {
         let tree = || {
             // The field sits centred along the top: x 80..120, y 0..20.
-            col![leaf(40., 20.).focusable().id("field")]
+            col![block(40., 20.).focusable().id("field")]
                 .size(200., 200.)
                 .fill(Role::Background)
         };
@@ -4476,7 +4476,7 @@ mod tests {
     fn to_paint(r: Role) -> mui_scene::Paint {
         let mut ui = Ui::new(Theme::DEFAULT);
         solid(
-            &ui.frame(leaf(40., 40.).fill(r), None, Input::default(), 0.016)
+            &ui.frame(block(40., 40.).fill(r), None, Input::default(), 0.016)
                 .unwrap(),
         )
     }
@@ -4492,7 +4492,7 @@ mod tests {
             let (b, clicked) = widgets::button(ui, "b", "Go");
             clicks += usize::from(clicked);
             let (s, _) = widgets::slider(ui, "s", "S", &mut v, 0.0..=1.0);
-            column([b.el(), s.el()]).width(200.)
+            col([b.el(), s.el()]).width(200.)
         };
         let root = tree(&mut ui);
         ui.frame(root, None, Input::default(), 0.016).unwrap();
@@ -4547,7 +4547,7 @@ mod tests {
         let _ = widgets::slider(&mut ui, "s", "S", &mut v, 0.0..=1.0);
         assert!((v - 0.51).abs() < 1e-12, "+0.01 +0.01 -0.01: {v}");
         let f = ui
-            .frame(leaf(1., 1.), None, Input::default(), 0.016)
+            .frame(block(1., 1.), None, Input::default(), 0.016)
             .unwrap();
         assert_eq!(
             f.edits,
@@ -4583,19 +4583,19 @@ mod tests {
     fn memo_tree(ui: &mut Ui, deps: u64, lead: f64, built: &mut usize) -> El {
         let panel = ui.memo("panel", deps, |_| {
             *built += 1;
-            column([
-                leaf(40., 40.)
+            col([
+                block(40., 40.)
                     .fill(Role::Raised)
-                    .role(Kind::Button)
+                    .a11y(A11y::Button)
                     .id("m.a"),
-                leaf(40., 40.)
+                block(40., 40.)
                     .fill(Role::Raised)
-                    .role(Kind::Button)
+                    .a11y(A11y::Button)
                     .id("m.b"),
             ])
             .id("m")
         });
-        row([leaf(lead, 10.).fill(Role::Surface), panel]).align(Align::Start)
+        row([block(lead, 10.).fill(Role::Surface), panel]).align(Align::Start)
     }
     /// The same tree built plainly, for what a memo must paint like.
     fn plain_tree(lead: f64) -> El {
@@ -4684,7 +4684,7 @@ mod tests {
         let t = memo_tree(&mut ui, 1, 90., &mut built);
         let f = ui.frame(t, ROOM, PointerInput::default(), 0.016).unwrap();
         assert_eq!(built, 1);
-        let walked = mui_scene::resolve_scene(
+        let walked = mui_scene::resolve(
             &SceneSpec::new(plain_tree(90.)).offered(Size::new(300., 200.)),
         )
         .unwrap();
@@ -4708,12 +4708,12 @@ mod tests {
                 n.0 += 1;
                 let kid = ui.memo("inner", 0, |_| {
                     n.1 += 1;
-                    leaf(40., 40.)
+                    block(40., 40.)
                         .fill(Role::Raised)
-                        .role(Kind::Button)
+                        .a11y(A11y::Button)
                         .id("in.b")
                 });
-                column([leaf(40., 40.).fill(Role::Raised).id("out.a"), kid])
+                col([block(40., 40.).fill(Role::Raised).id("out.a"), kid])
             });
             ui.frame(row([t]), ROOM, p, 0.016)
                 .unwrap()

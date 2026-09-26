@@ -6,21 +6,21 @@ use mui_scene::{Layer, Paint, SceneError};
 fn named_anchor_keeps_the_outline_and_emits_one_vector_border() {
     for width in [240.0, 640.0] {
         let root = row![
-            leaf(20., 40.),
-            leaf(width, 180.).id("header"),
-            leaf(20., 40.)
+            block(20., 40.),
+            block(width, 180.).id("header"),
+            block(20., 40.)
         ]
         .gap(0.)
-        .union(Surface)
+        .union(Role::Surface)
         .radius(12.)
         .id("card");
-        let plain = resolve_scene(&SceneSpec::new(root.clone())).unwrap();
+        let plain = resolve(&SceneSpec::new(root.clone())).unwrap();
         let tree = root.border_ramp(
-            BorderRamp::horizontal((Primary, 6.), (Dim, 1.))
+            BorderRamp::horizontal((Role::Primary, 6.), (Role::Dim, 1.))
                 .over("header")
                 .transition(0.35, 0.65),
         );
-        let ramp = resolve_scene(&SceneSpec::new(tree)).unwrap();
+        let ramp = resolve(&SceneSpec::new(tree)).unwrap();
         assert_eq!(
             plain.surface("card").unwrap().path,
             ramp.surface("card").unwrap().path
@@ -57,20 +57,20 @@ fn named_anchor_keeps_the_outline_and_emits_one_vector_border() {
 fn invalid_fields_and_missing_anchors_are_errors() {
     for (ramp, why) in [
         (
-            BorderRamp::horizontal((Primary, -1.), (Dim, 1.)),
+            BorderRamp::horizontal((Role::Primary, -1.), (Role::Dim, 1.)),
             "border ramp widths/interval",
         ),
         (
-            BorderRamp::horizontal((Primary, 6.), (Dim, 1.)).transition(0.5, 0.5),
+            BorderRamp::horizontal((Role::Primary, 6.), (Role::Dim, 1.)).transition(0.5, 0.5),
             "border ramp widths/interval",
         ),
         (
-            BorderRamp::horizontal((Primary, 6.), (Dim, 1.)).over("missing"),
+            BorderRamp::horizontal((Role::Primary, 6.), (Role::Dim, 1.)).over("missing"),
             "border ramp descendant missing",
         ),
     ] {
         assert!(matches!(
-            resolve_scene(&SceneSpec::new(leaf(100., 100.).border_ramp(ramp))),
+            resolve(&SceneSpec::new(block(100., 100.).border_ramp(ramp))),
             Err(SceneError::Geometry(InvalidOptions(m))) if m == why
         ));
     }

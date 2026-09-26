@@ -27,7 +27,7 @@ fn tree(ui: &mut Ui, s: &mut State) -> El {
     let after = s.after;
     s.bypass = after;
     let (sw, _) = toggle(ui, "bypass", &mut s.bypass);
-    let transport = leaf(28.0, 28.0)
+    let transport = block(28.0, 28.0)
         .outline(move |sz| {
             let p = |x: f64, y: f64| Point::new(x * sz.width, y * sz.height);
             if after {
@@ -56,7 +56,7 @@ fn tree(ui: &mut Ui, s: &mut State) -> El {
                 .appear(Appear::Slide(0.0, 14.0))
                 .id(id)
         } else {
-            leaf(0.0, 0.0)
+            block(0.0, 0.0)
         }
     };
     let order: [u64; 3] = if after { [2, 3, 1] } else { [1, 2, 3] };
@@ -80,15 +80,15 @@ fn tree(ui: &mut Ui, s: &mut State) -> El {
         } else {
             0.2
         };
-        leaf(12.0, 12.0)
+        block(12.0, 12.0)
             .pill()
             .fill(Role::Primary)
             .opacity(v as f32)
     }))
     .gap(S);
-    let card = column([
+    let card = col([
         row([
-            leaf(if after { 220.0 } else { 90.0 }, 30.0)
+            block(if after { 220.0 } else { 90.0 }, 30.0)
                 .radius(15.0)
                 .fill(Role::Raised)
                 .animate_layout()
@@ -113,7 +113,7 @@ fn tree(ui: &mut Ui, s: &mut State) -> El {
     .radius(18.0)
     .fill(Role::Surface)
     .w(SIZE.width - 20.0);
-    overlay([card.anchor(Align::Center, Align::Center)]).fill(Role::Background)
+    stack([card.anchor(Align::Center, Align::Center)]).fill(Role::Background)
 }
 
 fn main() {

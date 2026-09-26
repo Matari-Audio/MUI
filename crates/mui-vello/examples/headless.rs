@@ -18,8 +18,8 @@ mod gpu_support;
 const SIZE: [u32; 2] = [640, 360];
 
 fn spec() -> SceneSpec {
-    let control = |id: &str| leaf(28.0, 28.0).pill().fill(Role::Primary).id(id);
-    let tab = column([control("plus"), control("phase"), control("warp")])
+    let control = |id: &str| block(28.0, 28.0).pill().fill(Role::Primary).id(id);
+    let tab = col([control("plus"), control("phase"), control("warp")])
         .gap(10.0)
         .pad(22.0)
         .min_width(92.0)
@@ -30,7 +30,7 @@ fn spec() -> SceneSpec {
         .size(520.0, 230.0)
         .pad(L)
         .id("panel");
-    let root = column([tab, panel])
+    let root = col([tab, panel])
         .align(Align::Start)
         .id("root")
         .union(Role::Surface);
@@ -48,7 +48,7 @@ fn spec() -> SceneSpec {
 
 fn main() -> gpu_support::Result<()> {
     let out = std::env::args().nth(1).unwrap_or("mui-vello.png".into());
-    let resolved = resolve_scene(&spec()).expect("scene resolves");
+    let resolved = resolve(&spec()).expect("scene resolves");
     let rgba = pollster::block_on(rasterise(&resolved))?;
     gpu_support::save(out.as_ref(), SIZE, &rgba)?;
     println!(

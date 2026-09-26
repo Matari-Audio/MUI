@@ -33,13 +33,13 @@ fn card(ui: &mut Ui, t: f64) -> El {
     let mut on = t > 2.2;
     let (sw, _) = toggle(ui, "drive", &mut on);
     let meter = (gain * 180.).max(6.);
-    column([
+    col([
         row([text("SATURN").text_size(20.), spacer(), sw.el()]).align(Align::Center),
         row([
             dial.size(Xl).el(),
-            column([
+            col([
                 text(format!("{:+.1} dB", -24. + gain * 30.)).text_size(15.),
-                leaf(meter, 8.).pill().fill(Role::Primary).animate_layout(),
+                block(meter, 8.).pill().fill(Role::Primary).animate_layout(),
             ])
             .gap(S),
         ])

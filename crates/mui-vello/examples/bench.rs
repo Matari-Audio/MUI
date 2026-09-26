@@ -125,7 +125,7 @@ fn editor(ui: &mut Ui, app: &mut App) -> El {
     let labels: Vec<El> = (0..200).map(|i| caption(format!("p{i:03}"))).collect();
     let list: Vec<El> = (0..60)
         .map(|i| {
-            row![label(format!("step {i:02}")), spacer(), caption("0.00")]
+            row![body(format!("step {i:02}")), spacer(), caption("0.00")]
                 .pad(Xs)
                 .id(format!("row{i}"))
         })
@@ -134,13 +134,13 @@ fn editor(ui: &mut Ui, app: &mut App) -> El {
     // 20 wrapped paragraphs: each is narrower than its text, so the scene
     // resolver breaks lines and solves the layout a second time.
     let blurbs: Vec<El> = (0..20)
-        .map(|i| label(format!("{i}. {BLURB}")).w(150.0).lines(4))
+        .map(|i| body(format!("{i}. {BLURB}")).w(150.0).lines(4))
         .collect();
     // 4 image-filled pills, all sharing one 2x2 buffer.
     let img = app.swatch.clone();
     let pills: Vec<El> = [Fit::Cover, Fit::Contain, Fit::Fill, Fit::Cover]
         .into_iter()
-        .map(|fit| leaf(120.0, 40.0).pill().fill(Fill::Image(img.clone(), fit)))
+        .map(|fit| block(120.0, 40.0).pill().fill(Fill::Image(img.clone(), fit)))
         .collect();
     // 6 cards carrying a transition, so every frame walks their spring
     // channels whether or not the colour moved.
@@ -158,9 +158,9 @@ fn editor(ui: &mut Ui, app: &mut App) -> El {
     let body = col![
         row![title("Kurv"), spacer(), caption("48 kHz")].pad(S),
         grid(8, knobs).gap(M).pad(M).shell(10.0, Role::Raised),
-        column(sliders).gap(S).pad(M),
+        col(sliders).gap(S).pad(M),
         grid(20, labels).gap(Xs).pad(S),
-        column(list).gap(2.0).scroll().height(240.0).pad(Xs),
+        col(list).gap(2.0).scroll().height(240.0).pad(Xs),
         row![curve(0.0), curve(1.3)].gap(M).pad(M),
         grid(5, blurbs).gap(S).pad(S),
         row(pills).gap(S).pad(S),

@@ -357,7 +357,7 @@ impl App {
         // The list grows with the gallery, so it takes the slack and scrolls;
         // the switches below it stay put instead of being squeezed to nothing.
         side.push(
-            column((0..self.scenes.len()).map(|i| {
+            col((0..self.scenes.len()).map(|i| {
                 let on = i == self.selected;
                 let (item, _) = button(ui, format!("scene-{i}"), self.scenes[i].name());
                 item.variant(if on { Variant::Solid } else { Variant::Soft })
@@ -383,19 +383,18 @@ impl App {
         side.push(switch("light", "light", &mut self.light));
         side.push(switch("frames", "frames", &mut self.frames));
         side.extend(scene.controls(ui));
-        let sidebar = column(side)
+        let sidebar = col(side)
             .gap(S)
             .pad(M)
             .width(SIDEBAR)
             .fill(Role::Surface);
         let specimen = scene
             .specimen(ui)
-            .anchor(Align::Center, Align::Center)
-            .offset(self.pan.x, self.pan.y);
+            .centered_at(self.pan.x, self.pan.y);
         // Panning is unbounded by design -- drag the specimen wherever -- so
         // the stage clips it instead; without this it paints over the sidebar,
         // which is drawn first.
-        let stage = overlay([specimen])
+        let stage = stack([specimen])
             .grow(1.0)
             .clip()
             .fill(Role::Background)
@@ -1004,7 +1003,7 @@ mod tests {
         let gain = |app: &App| {
             let s = app.ui.scene().unwrap().surface("gain").unwrap();
             match s.semantics.as_ref().map(|s| &s.role) {
-                Some(mui::scene::Kind::Slider { value, .. }) => *value,
+                Some(mui::scene::A11y::Slider { value, .. }) => *value,
                 _ => panic!("gain is a slider"),
             }
         };

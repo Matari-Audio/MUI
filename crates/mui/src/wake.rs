@@ -1,7 +1,7 @@
 //! Deadline requests are separate from spring animation. The host does not need
 //! to redraw 60/160 times per second just to blink a caret or show a tooltip.
 use crate::Ui;
-use mui_scene::Kind;
+use mui_scene::A11y;
 use std::time::Duration;
 const HALF_CARET_PERIOD: f64 = 0.625;
 impl Ui {
@@ -27,7 +27,7 @@ impl Ui {
                 !s.disabled
                     && matches!(
                         s.semantics.as_ref().map(|s| &s.role),
-                        Some(Kind::TextInput { .. })
+                        Some(A11y::TextInput { .. })
                     )
             })
             .map(|_| (HALF_CARET_PERIOD - self.time.rem_euclid(HALF_CARET_PERIOD)).max(0.001));
@@ -46,17 +46,17 @@ mod tests {
     #[test]
     fn idle_has_no_deadline() {
         let mut u = Ui::new(Theme::DEFAULT);
-        u.frame(leaf(20., 20.), None, Input::default(), 0.).unwrap();
+        u.frame(block(20., 20.), None, Input::default(), 0.).unwrap();
         assert!(u.repaint_after().is_none());
     }
     #[test]
     fn focused_input_gets_a_deadline_not_continuous_animation() {
         let mut u = Ui::new(Theme::DEFAULT);
         let tree = || {
-            leaf(100., 30.)
+            block(100., 30.)
                 .id("edit")
                 .focusable()
-                .role(Kind::TextInput {
+                .a11y(A11y::TextInput {
                     value: "".into(),
                     selection: (0, 0),
                     carets: Vec::new(),
@@ -73,10 +73,10 @@ mod tests {
     fn real_elapsed_time_crosses_blink_boundary() {
         let mut u = Ui::new(Theme::DEFAULT);
         let tree = || {
-            leaf(100., 30.)
+            block(100., 30.)
                 .id("edit")
                 .focusable()
-                .role(Kind::TextInput {
+                .a11y(A11y::TextInput {
                     value: "".into(),
                     selection: (0, 0),
                     carets: Vec::new(),

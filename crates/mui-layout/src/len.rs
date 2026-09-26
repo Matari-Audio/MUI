@@ -120,9 +120,9 @@ pub enum Len {
     /// sometimes 240 px wide and sometimes 2000.
     ///
     /// ```
-    /// use mui_layout::{leaf, resolve, row, Len, Size};
+    /// use mui_layout::{block, resolve, row, Len, Size};
     /// let rail = Len::Clamp { min: 64.0, pct: 30.0, max: 220.0 };
-    /// let tree = || row([leaf(0., 0.).width(rail).id("rail"), leaf(0., 0.).grow(1.)]);
+    /// let tree = || row([block(0., 0.).width(rail).id("rail"), block(0., 0.).grow(1.)]);
     /// let at = |w: f64| {
     ///     resolve(&tree(), Some(Size::new(w, 40.)), Default::default())
     ///         .unwrap()
@@ -144,10 +144,10 @@ pub enum Len {
     /// share of the box that actually has a size.
     ///
     /// ```
-    /// use mui_layout::{leaf, resolve, row, Len, Size};
+    /// use mui_layout::{block, resolve, row, Len, Size};
     /// // The row hugs, so it is no one's container: the bar takes half of
     /// // the 400 px panel above it, not half of the row around it.
-    /// let bar = leaf(0., 8.).width(Len::Container(50.)).id("bar");
+    /// let bar = block(0., 8.).width(Len::Container(50.)).id("bar");
     /// let tree = row([row([bar])]).width(Len::Px(400.));
     /// let l = resolve(&tree, Some(Size::new(400., 8.)), Default::default()).unwrap();
     /// assert_eq!(l.frame("bar").unwrap().size.width, 200.);

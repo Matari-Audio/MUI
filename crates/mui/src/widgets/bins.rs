@@ -386,7 +386,7 @@ pub fn bins(ui: &mut Ui, id: &str, b: &Bins) -> (El, Option<BinEdit>) {
     })
     .cursor(Cursor::Crosshair)
     .focusable()
-    .label("Partial levels")
+    .named("Partial levels")
     .id(id);
     (el, edit)
 }

@@ -813,7 +813,7 @@ impl Stage {
         let size = Size::new(run.advance + 2. * pad, run.ascent + run.descent + 2. * pad);
         let shape = Arc::new(path);
         let spec = filled(size, shape.clone(), color);
-        self.layer(id, &mui_scene::resolve_scene(&spec)?, size, supersample)?;
+        self.layer(id, &mui_scene::resolve(&spec)?, size, supersample)?;
         Ok(Plane::new(id, size.width as f32, size.height as f32).outline(shape))
     }
 
@@ -1211,7 +1211,7 @@ impl Stage {
 fn filled(size: Size, shape: Arc<Path>, color: mui_scene::Color) -> mui_scene::SceneSpec {
     use mui_scene::prelude::*;
     SceneSpec::new(
-        leaf(size.width, size.height)
+        block(size.width, size.height)
             .outline(move |_| (*shape).clone())
             .fill(color),
     )

@@ -244,8 +244,8 @@ mod tests {
     #[test]
     fn automatic_parts_and_pixel_cache_follow_real_scene_changes() {
         let make = |width| {
-            resolve_scene(&SceneSpec::new(
-                column([leaf(width, 60.).fill(Ink).id("panel")])
+            resolve(&SceneSpec::new(
+                col([block(width, 60.).fill(Ink).id("panel")])
                     .size(300., 200.)
                     .id("root"),
             ))

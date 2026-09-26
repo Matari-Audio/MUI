@@ -27,7 +27,7 @@ unsafe impl GlobalAlloc for Counting {
 static A: Counting = Counting;
 
 use mui_scene::prelude::*;
-use mui_scene::{Limits, TextCache, resolve_scene_with};
+use mui_scene::{Limits, Resolver};
 
 const PARA: &str = "A compact CSS-like DSL where everything aligns automatically and nothing is placed absolutely.";
 
@@ -36,9 +36,9 @@ fn count(n: &El) -> usize {
 }
 
 fn cell(i: usize) -> El {
-    column([
+    col([
         text(format!("p{i}")).text_size(11.0),
-        leaf(12.0, 12.0).fill(Role::Field).radius(3.0),
+        block(12.0, 12.0).fill(Role::Field).radius(3.0),
     ])
     .gap(4.0)
     .pad(4.0)
@@ -52,7 +52,7 @@ fn block(depth: usize, i: usize) -> El {
             .gap(6.0)
             .wrap();
     }
-    column([
+    col([
         row((0..3).map(|k| cell(i * 7 + k))).gap(6.0).wrap(),
         grid(3, (0..6).map(|k| cell(i * 11 + k))).gap(4.0),
         block(depth - 1, i + 1),
@@ -63,7 +63,7 @@ fn block(depth: usize, i: usize) -> El {
 }
 
 fn tree() -> El {
-    column((0..4).map(|i| block(7, i)))
+    col((0..4).map(|i| block(7, i)))
         .gap(8.0)
         .pad(8.0)
         .fill(Role::Background)
@@ -117,22 +117,22 @@ fn main() {
             depth: 256,
             ..Limits::default()
         };
-        let mut cache = TextCache::default();
+        let mut cache = Resolver::default();
         let t = Instant::now();
-        let first = resolve_scene_with(&spec, &mut cache);
+        let first = cache.resolve(&spec);
         let cold = t.elapsed().as_secs_f64() * 1e3;
         match &first {
             Ok(s) => println!("  paint {} keys {}", s.paint.len(), s.surfaces().count()),
             Err(e) => println!("  error: {e}"),
         }
         for _ in 0..5 {
-            let _ = resolve_scene_with(&spec, &mut cache);
+            let _ = cache.resolve(&spec);
         }
         let (a0, b0) = (
             ALLOCS.load(Ordering::Relaxed),
             BYTES.load(Ordering::Relaxed),
         );
-        let _ = resolve_scene_with(&spec, &mut cache);
+        let _ = cache.resolve(&spec);
         println!(
             "  one warm resolve: {} allocations, {} KiB",
             ALLOCS.load(Ordering::Relaxed) - a0,
@@ -168,7 +168,7 @@ fn main() {
         let full: Vec<f64> = (0..30)
             .map(|_| {
                 let t = Instant::now();
-                let r = resolve_scene_with(&spec, &mut cache);
+                let r = cache.resolve(&spec);
                 let ms = t.elapsed().as_secs_f64() * 1e3;
                 std::hint::black_box(r.is_ok());
                 ms

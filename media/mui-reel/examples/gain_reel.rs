@@ -43,12 +43,12 @@ fn editor(ui: &mut Ui, m: &mut Gain) -> El {
     } else {
         "-inf dB".into()
     };
-    let meter = row([leaf((220.0 * m.peak).clamp(8.0, 220.0), 8.0)
+    let meter = row([block((220.0 * m.peak).clamp(8.0, 220.0), 8.0)
         .pill()
-        .fill(Primary)])
+        .fill(Role::Primary)])
     .size(220.0, 8.0)
     .pill()
-    .fill(Field);
+    .fill(Role::Field);
     let card = col![
         row![
             col![gain].id("gain-panel"),
@@ -66,12 +66,12 @@ fn editor(ui: &mut Ui, m: &mut Gain) -> El {
     .gap(M)
     .pad(L)
     .radius(20.0)
-    .fill(Surface)
+    .fill(Role::Surface)
     .shadow(Shadow::soft(16.0))
     .id("card")
     .anchor(Align::Center, Align::Center);
     // Square: a filled node takes the theme radius, and a take has no window corners.
-    overlay([card]).fill(Background).radius(0.0)
+    stack([card]).fill(Role::Background).radius(0.0)
 }
 
 /// One video frame of audio: a sine at `tone`, gated by the script's notes,

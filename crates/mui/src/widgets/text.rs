@@ -447,7 +447,7 @@ pub fn text_edit(ui: &mut Ui, id: &str, value: &mut String, opts: TextOpts) -> (
         .when(multi, |e| {
             e.height(opts.rows.max(1) as f64 * lh + 2.0 * PAD_Y)
         })
-        .role(Kind::TextInput {
+        .a11y(A11y::TextInput {
             value: value.clone(),
             selection: (anchor, caret),
             carets: reader,
@@ -470,7 +470,7 @@ pub fn text_edit(ui: &mut Ui, id: &str, value: &mut String, opts: TextOpts) -> (
 // selection's edge may land a hair off the run's; shape once and split the
 // glyphs if a script ever shows it.
 fn reinked(selected: &str, x0: f64, x1: f64, lh: f64) -> El {
-    overlay([text(selected.to_owned())
+    stack([text(selected.to_owned())
         .width(x1 - x0)
         .lines(1)
         .anchor(Align::Start, Align::Center)])
@@ -524,7 +524,7 @@ fn one_line(
         .map(|b| PAD - shift + x(if b < base { b } else { b + tail }))
         .collect();
     let mut children = vec![
-        leaf(hi - lo, size)
+        block(hi - lo, size)
             .anchor(Align::Start, Align::Center)
             .offset(lo - shift, 0.0)
             .when(hi > lo, |e| e.fill(Role::Primary)),
@@ -533,11 +533,11 @@ fn one_line(
             .lines(1)
             .anchor(Align::Start, Align::Center)
             .offset(-shift, 0.0),
-        leaf(2.0, size)
+        block(2.0, size)
             .anchor(Align::Start, Align::Center)
             .offset(caret_x - shift, 0.0)
             .when(on, |e| e.fill(Role::Ink)),
-        leaf(phi - plo, 2.0)
+        block(phi - plo, 2.0)
             .anchor(Align::Start, Align::End)
             .offset(plo - shift, 0.0)
             .when(phi > plo, |e| e.fill(Role::Ink)),
@@ -549,7 +549,7 @@ fn one_line(
                 .offset(lo - shift, 0.0),
         );
     }
-    (overlay(children), Point::new(caret_x - shift, 0.0), reader)
+    (stack(children), Point::new(caret_x - shift, 0.0), reader)
 }
 
 /// Many lines, only the rows in view built: a line's run, the re-inked
@@ -586,8 +586,7 @@ fn many_lines(
             text(line.to_owned())
                 .width(run)
                 .lines(1)
-                .anchor(Align::Start, Align::Start)
-                .offset(0.0, y),
+                .at(0.0, y),
         );
         // A selection running on past this line's end takes a sliver more,
         // so a selected newline is visible.
@@ -602,8 +601,7 @@ fn many_lines(
                 let (b0, b1) = (sel.start.max(l.start), sel.end.min(l.end));
                 children.push(
                     reinked(&shown[b0..b1], x0, x1, lh)
-                        .anchor(Align::Start, Align::Start)
-                        .offset(x0, y),
+                        .at(x0, y),
                 );
             }
         }
@@ -612,9 +610,8 @@ fn many_lines(
             let (plo, phi) = (x(pre.start), x(pre.end));
             if phi > plo {
                 children.push(
-                    leaf(phi - plo, 2.0)
-                        .anchor(Align::Start, Align::Start)
-                        .offset(plo, y + lh - 2.0)
+                    block(phi - plo, 2.0)
+                        .at(plo, y + lh - 2.0)
                         .fill(Role::Ink),
                 );
             }
@@ -622,10 +619,9 @@ fn many_lines(
     }
     let caret_y = caret_row as f64 * lh - scroll;
     children.push(
-        leaf(2.0, lh)
-            .anchor(Align::Start, Align::Start)
-            .offset(caret_x, caret_y)
+        block(2.0, lh)
+            .at(caret_x, caret_y)
             .when(on, |e| e.fill(Role::Ink)),
     );
-    (overlay(children), caret_x)
+    (stack(children), caret_x)
 }

@@ -512,14 +512,14 @@ mod fixtures {
     /// The canonical union: a tab welded to its panel, with a pill shell inside
     /// the tab.
     pub fn welded_tab() -> SceneSpec {
-        let tab = column([leaf(28., 28.), leaf(28., 28.), leaf(28., 28.)])
+        let tab = col([block(28., 28.), block(28., 28.), block(28., 28.)])
             .gap(10.)
             .pad(22.)
             .min_width(92.)
             .align(Align::Center)
             .id("tab")
             .shell(12., Role::Raised);
-        let root = column([tab, leaf(520., 230.).id("panel")])
+        let root = col([tab, block(520., 230.).id("panel")])
             .align(Align::Start)
             .id("root")
             .union(Role::Surface);

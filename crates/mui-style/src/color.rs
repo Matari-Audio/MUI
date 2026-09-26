@@ -979,7 +979,7 @@ mod tests {
     fn alpha_survives_every_derivation() {
         let p = designed();
         let c = p.primary().with_alpha(0.4);
-        for got in [p.hover(c), p.pressed(c), p.disabled(c)] {
+        for got in [p.hover(c), p.pressed(c), p.when(c, |e| e.disabled())] {
             assert!((got.alpha() - 0.4).abs() < 1e-6, "alpha lost: {got:?}");
         }
         assert!((c.to_srgb().components[3] - 0.4).abs() < 1e-6);
@@ -1021,7 +1021,7 @@ mod tests {
     #[test]
     fn a_disabled_control_is_duller_and_closer_to_the_ground() {
         let p = designed();
-        let off = p.disabled(p.primary());
+        let off = p.when(p.primary(), |e| e.disabled());
         assert!(off.chroma() < p.primary().chroma() * 0.3);
         let toward_ground = (off.lightness() - p.background().lightness()).abs();
         assert!(toward_ground < (p.primary().lightness() - p.background().lightness()).abs());

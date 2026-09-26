@@ -47,20 +47,20 @@ fn target(device: &wgpu::Device) -> wgpu::TextureView {
 }
 
 fn welded() -> ResolvedScene {
-    let plate = |id: &str| leaf(80., 60.).radius(12.).fill(Role::Primary).id(id);
+    let plate = |id: &str| block(80., 60.).radius(12.).fill(Role::Primary).id(id);
     let root = row![plate("a"), plate("b")]
         .gap(16.)
-        .gpu_weld(Weld::all().reach(24.).blend(60.))
+        .weld(Weld::all().reach(24.).blend(60.))
         .id("join")
         .anchor(Align::Start, Align::Start);
-    resolve_scene(&SceneSpec::new(root).offered(Size::new(320., 200.))).unwrap()
+    resolve(&SceneSpec::new(root).offered(Size::new(320., 200.))).unwrap()
 }
 
 fn pictured(v: u8) -> (ResolvedScene, std::sync::Weak<[u8]>) {
     let image = Arc::new(Image::rgba(2, 2, vec![v; 16]).unwrap());
     let buffer = Arc::downgrade(&image.rgba);
-    let root = leaf(40., 40.).fill(Fill::Image(image, Fit::Fill)).id("img");
-    let scene = resolve_scene(&SceneSpec::new(root).offered(Size::new(40., 40.))).unwrap();
+    let root = block(40., 40.).fill(Fill::Image(image, Fit::Fill)).id("img");
+    let scene = resolve(&SceneSpec::new(root).offered(Size::new(40., 40.))).unwrap();
     (scene, buffer)
 }
 
@@ -225,8 +225,8 @@ fn a_host_texture_paints_and_refreshes_without_a_new_scene() {
         );
     };
     let image = Arc::new(Image::texture(7, 4, 4));
-    let root = leaf(320., 200.).fill(Fill::Image(image, Fit::Fill)).id("t");
-    let scene = resolve_scene(&SceneSpec::new(root).offered(Size::new(320., 200.))).unwrap();
+    let root = block(320., 200.).fill(Fill::Image(image, Fit::Fill)).id("t");
+    let scene = resolve(&SceneSpec::new(root).offered(Size::new(320., 200.))).unwrap();
     fill([255, 0, 0, 255]);
     r.set_texture(7, &host);
     r.render(&scene, Affine::IDENTITY, &view).unwrap();
@@ -254,13 +254,13 @@ fn a_backdrop_blurs_the_edge_under_it() {
     let out = readable(&device);
     let view = out.create_view(&wgpu::TextureViewDescriptor::default());
     let mut r = pollster::block_on(hybrid(&device, &queue));
-    let half = |c: Color| leaf(160., 200.).fill(Fill::Color(c));
+    let half = |c: Color| block(160., 200.).fill(Fill::Color(c));
     let root = stack![
         row![half(Color::srgb(1., 0., 0.)), half(Color::srgb(0., 0., 1.))],
-        leaf(320., 100.).backdrop_blur(8.).id("glass"),
+        block(320., 100.).backdrop_blur(8.).id("glass"),
     ]
     .id("root");
-    let scene = resolve_scene(&SceneSpec::new(root).offered(Size::new(320., 200.))).unwrap();
+    let scene = resolve(&SceneSpec::new(root).offered(Size::new(320., 200.))).unwrap();
     r.render(&scene, Affine::IDENTITY, &view).unwrap();
     let p = pixels(&device, &queue, &out);
     let (inside, outside) = (at(&p, 157, 75), at(&p, 157, 25));
@@ -298,7 +298,7 @@ fn board(hot: Option<usize>, tip: bool, panel: f32, bg: Role) -> ResolvedScene {
     // One face, as an app holds it: a fresh `Font` is a different font.
     static FONT: std::sync::OnceLock<Font> = std::sync::OnceLock::new();
     let button = |i: usize| {
-        overlay([text(format!("B{i}")).text_size(12.).fill(Role::Ink)])
+        stack([text(format!("B{i}")).text_size(12.).fill(Role::Ink)])
             .size(60., 28.)
             .radius(8.)
             .fill(if hot == Some(i) {
@@ -311,7 +311,7 @@ fn board(hot: Option<usize>, tip: bool, panel: f32, bg: Role) -> ResolvedScene {
             .shadow(Shadow::soft(4.))
             .id(format!("b{i}"))
     };
-    let panel = overlay([leaf(200., 30.).fill(Role::Success).offset(-20., 20.)])
+    let panel = stack([block(200., 30.).fill(Role::Success).offset(-20., 20.)])
         .size(150., 60.)
         .radius(12.)
         .clip()
@@ -319,7 +319,7 @@ fn board(hot: Option<usize>, tip: bool, panel: f32, bg: Role) -> ResolvedScene {
         .opacity(panel)
         .id("panel");
     let mut kids = vec![
-        column([
+        col([
             row((0..4).map(button)).gap(10.).fill(Gradient::linear(
                 100.,
                 [(0., Role::Surface), (1., Role::Warning)],
@@ -331,7 +331,7 @@ fn board(hot: Option<usize>, tip: bool, panel: f32, bg: Role) -> ResolvedScene {
     ];
     if tip {
         kids.push(
-            overlay([text("a tip").text_size(11.).fill(Role::Ink)])
+            stack([text("a tip").text_size(11.).fill(Role::Ink)])
                 .size(60., 20.)
                 .radius(4.)
                 .fill(Role::Raised)
@@ -340,12 +340,12 @@ fn board(hot: Option<usize>, tip: bool, panel: f32, bg: Role) -> ResolvedScene {
                 .id("tip"),
         );
     }
-    let mut spec = SceneSpec::new(overlay(kids).fill(bg).id("root")).offered(Size::new(320., 200.));
+    let mut spec = SceneSpec::new(stack(kids).fill(bg).id("root")).offered(Size::new(320., 200.));
     spec.font = Some(
         FONT.get_or_init(|| Font::new(epaint_default_fonts::HACK_REGULAR).unwrap())
             .clone(),
     );
-    resolve_scene(&spec).unwrap()
+    resolve(&spec).unwrap()
 }
 
 /// `after` rendered over `before`'s frame, and by a renderer that never saw
@@ -439,7 +439,7 @@ fn a_tooltip_coming_and_going_renders_only_its_box() {
 #[test]
 fn a_moved_card_renders_only_its_boxes_and_matches_a_whole_render() {
     let card = |x: f64| {
-        let card = overlay([text("moved").text_size(11.).fill(Role::Ink)])
+        let card = stack([text("moved").text_size(11.).fill(Role::Ink)])
             .size(70., 30.)
             .radius(6.)
             .fill(Gradient::linear(
@@ -451,10 +451,10 @@ fn a_moved_card_renders_only_its_boxes_and_matches_a_whole_render() {
             .offset(x, 40.)
             .float()
             .id("card");
-        let mut spec = SceneSpec::new(overlay([card]).fill(Role::Background).id("root"))
+        let mut spec = SceneSpec::new(stack([card]).fill(Role::Background).id("root"))
             .offered(Size::new(320., 200.));
         spec.font = Some(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
-        resolve_scene(&spec).unwrap()
+        resolve(&spec).unwrap()
     };
     let (before, after) = (card(20.), card(150.));
     let fill = |s: &ResolvedScene| {
@@ -529,14 +529,14 @@ fn big_changes_the_first_frame_and_a_resize_render_everything() {
 fn a_change_under_a_backdrop_renders_everything() {
     let glass = |c: Color| {
         let root = stack![
-            leaf(40., 40.).fill(Fill::Color(c)).id("swatch"),
-            leaf(100., 100.)
+            block(40., 40.).fill(Fill::Color(c)).id("swatch"),
+            block(100., 100.)
                 .backdrop_blur(4.)
                 .offset(200., 0.)
                 .id("glass"),
         ]
         .id("root");
-        resolve_scene(&SceneSpec::new(root).offered(Size::new(320., 200.))).unwrap()
+        resolve(&SceneSpec::new(root).offered(Size::new(320., 200.))).unwrap()
     };
     let Some((part, whole, stats)) = damaged(
         &glass(Color::srgb(1., 0., 0.)),

@@ -71,9 +71,9 @@ impl SceneSpec {
     ///
     /// ```
     /// use mui_scene::prelude::*;
-    /// let row = row![leaf(0., 20.).grow(1.).id("a"), leaf(0., 20.).grow(1.)];
+    /// let row = row![block(0., 20.).grow(1.).id("a"), block(0., 20.).grow(1.)];
     /// let spec = SceneSpec::new(row).offered(Size::new(41., 20.)).scale(1.);
-    /// let a = resolve_scene(&spec).unwrap();
+    /// let a = resolve(&spec).unwrap();
     /// let edge = a.surface("a").unwrap().rect.unwrap().bounds().max.x;
     /// assert_eq!(edge, edge.round());
     /// ```
@@ -176,9 +176,9 @@ mod tests {
     #[test]
     fn a_device_scale_that_is_not_finite_and_positive_is_refused() {
         for scale in [0., -1., f64::NAN, f64::INFINITY] {
-            let spec = SceneSpec::new(leaf(10., 10.)).scale(scale);
+            let spec = SceneSpec::new(block(10., 10.)).scale(scale);
             assert!(
-                matches!(resolve_scene(&spec), Err(SceneError::InvalidScale)),
+                matches!(resolve(&spec), Err(SceneError::InvalidScale)),
                 "{scale}"
             );
         }
@@ -186,7 +186,7 @@ mod tests {
 
     #[test]
     fn errors_expose_their_source() {
-        let e = resolve_scene(&SceneSpec::new(leaf(f64::NAN, 1.))).unwrap_err();
+        let e = resolve(&SceneSpec::new(block(f64::NAN, 1.))).unwrap_err();
         assert!(
             std::error::Error::source(&e)
                 .unwrap()
@@ -194,7 +194,7 @@ mod tests {
         );
         let mut bad = welded_tab();
         bad.geometry.epsilon = f64::NAN;
-        let e = resolve_scene(&bad).unwrap_err();
+        let e = resolve(&bad).unwrap_err();
         assert!(
             std::error::Error::source(&e)
                 .unwrap()
@@ -205,7 +205,7 @@ mod tests {
 
     #[test]
     fn errors_read_as_sentences_not_as_debug() {
-        let e = resolve_scene(&SceneSpec::new(leaf(f64::NAN, 1.))).unwrap_err();
+        let e = resolve(&SceneSpec::new(block(f64::NAN, 1.))).unwrap_err();
         let s = e.to_string();
         assert!(!s.contains("Layout("), "{s}");
         assert_eq!(s, mui_layout::Error::InvalidValue.to_string());

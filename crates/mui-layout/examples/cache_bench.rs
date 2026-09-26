@@ -34,7 +34,7 @@ fn text(s: impl Into<String>) -> N {
     Node::content().with(s.into())
 }
 fn cell(i: usize) -> N {
-    N::column([text(format!("p{i}")), N::leaf(12., 12.)])
+    N::col([text(format!("p{i}")), N::block(12., 12.)])
         .gap(4.)
         .pad(4.)
         .id(format!("c{i}"))
@@ -45,7 +45,7 @@ fn block(depth: usize, i: usize) -> N {
             .gap(6.)
             .wrap();
     }
-    N::column([
+    N::col([
         N::row((0..3).map(|k| cell(i * 1000 + depth * 10 + k)))
             .gap(6.)
             .wrap(),
@@ -56,7 +56,7 @@ fn block(depth: usize, i: usize) -> N {
     .pad(4.)
 }
 fn tree() -> N {
-    N::column((0..4).map(|i| block(7, i + 1)))
+    N::col((0..4).map(|i| block(7, i + 1)))
         .gap(8.)
         .pad(8.)
         .scroll()

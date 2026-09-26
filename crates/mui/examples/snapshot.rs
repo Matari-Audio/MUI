@@ -15,7 +15,7 @@ use mui::vello::vello_cpu::{Pixmap, RenderContext, Resources};
 fn gallery(ui: &mut Ui, state: &mut (f64, f64, f64, bool)) -> El {
     let (cutoff, res, gain, on) = state;
     let (go, _) = button(ui, "go", "Trigger");
-    let card = column([
+    let card = col([
         row([
             knob(ui, "cutoff", "Cutoff", cutoff, 0.0..=1.0).0.el(),
             knob(ui, "res", "Res", res, 0.0..=1.0).0.el(),
@@ -38,7 +38,7 @@ fn gallery(ui: &mut Ui, state: &mut (f64, f64, f64, bool)) -> El {
     .fill(Role::Surface)
     .shadow(Shadow::soft(16.0))
     .anchor(Align::Center, Align::Center);
-    overlay([card]).fill(Role::Background)
+    stack([card]).fill(Role::Background)
 }
 
 /// The logical size of the gallery, at every scale.

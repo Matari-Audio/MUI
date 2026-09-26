@@ -65,7 +65,7 @@ impl Role {
     ///
     /// ```
     /// use mui_style::{Role::*, *};
-    /// let hairline = Ink.alpha(0.12);
+    /// let hairline = Role::Ink.alpha(0.12);
     /// let p = Palette::NEUTRAL;
     /// let under = p.surface();
     /// assert_eq!(hairline.paint(&p, under), Fill::from(p.on(under).with_alpha(0.12)).paint(&p, under));
@@ -79,7 +79,7 @@ impl Role {
 ///
 /// ```
 /// use mui_style::{Role::*, *};
-/// let arc = Gradient::conic(-135., [(0., Primary), (1., Field)]);
+/// let arc = Gradient::conic(-135., [(0., Role::Primary), (1., Role::Field)]);
 /// assert_eq!(arc.kind, GradientKind::Conic { angle: -135. });
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -103,7 +103,7 @@ pub enum GradientKind {
 ///
 /// ```
 /// use mui_style::{Role::*, *};
-/// let ramp = Gradient::linear(90., [(0., Primary), (1., Surface)]);
+/// let ramp = Gradient::linear(90., [(0., Role::Primary), (1., Role::Surface)]);
 /// assert_eq!(ramp.stops.len(), 2);
 /// ```
 #[derive(Clone, Debug, PartialEq)]
@@ -116,7 +116,7 @@ impl Gradient {
     ///
     /// ```
     /// use mui_style::{Role::*, *};
-    /// let sky = Gradient::linear(180., [(0., Raised), (1., Surface)]);
+    /// let sky = Gradient::linear(180., [(0., Role::Raised), (1., Role::Surface)]);
     /// assert_eq!(sky.stops.len(), 2);
     /// ```
     pub fn linear<F: Into<Fill>>(angle: f64, stops: impl IntoIterator<Item = (f32, F)>) -> Self {
@@ -127,7 +127,7 @@ impl Gradient {
     ///
     /// ```
     /// use mui_style::{Role::*, *};
-    /// let led = Gradient::radial((0.3, 0.3), 0.6, [(0., Raised), (1., Surface)]);
+    /// let led = Gradient::radial((0.3, 0.3), 0.6, [(0., Role::Raised), (1., Role::Surface)]);
     /// assert_eq!(led.stops.len(), 2);
     /// ```
     pub fn radial<F: Into<Fill>>(
@@ -141,7 +141,7 @@ impl Gradient {
     ///
     /// ```
     /// use mui_style::{Role::*, *};
-    /// let arc = Gradient::conic(-135., [(0., Primary), (0.7, Primary), (0.7, Field)]);
+    /// let arc = Gradient::conic(-135., [(0., Role::Primary), (0.7, Role::Primary), (0.7, Role::Field)]);
     /// assert_eq!(arc.stops.len(), 3);
     /// ```
     pub fn conic<F: Into<Fill>>(angle: f64, stops: impl IntoIterator<Item = (f32, F)>) -> Self {
@@ -151,7 +151,7 @@ impl Gradient {
     ///
     /// ```
     /// use mui_style::{Role::*, *};
-    /// let card = Gradient::vertical(Raised, Surface);
+    /// let card = Gradient::vertical(Role::Raised, Role::Surface);
     /// assert_eq!(card.stops.len(), 2);
     /// ```
     pub fn vertical<F: Into<Fill>>(top: F, bottom: F) -> Self {
@@ -543,7 +543,7 @@ impl Style {
     /// ```
     /// use mui_style::{Role::*, *};
     /// let card = Style { radius: Some(Radius::Px(12.)), ..Style::default() };
-    /// let mine = Style { fill: Some(Primary.into()), ..Style::default() };
+    /// let mine = Style { fill: Some(Role::Primary.into()), ..Style::default() };
     /// let both = mine.clone().over(card.clone());
     /// assert_eq!(both.fill, mine.fill);   // card states no fill
     /// assert_eq!(both.radius, card.radius);

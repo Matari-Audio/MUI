@@ -340,8 +340,8 @@ fn motion_blur_averages_light_not_bytes() {
 
 #[test]
 fn the_cursor_paints_into_the_scene_on_top() {
-    let scene = mui::scene::resolve_scene(&mui::scene::SceneSpec::new(
-        leaf(40.0, 40.0).fill(Role::Surface),
+    let scene = mui::scene::resolve(&mui::scene::SceneSpec::new(
+        block(40.0, 40.0).fill(Role::Surface),
     ))
     .unwrap();
     let with = with_cursor(&scene, Point::new(10.0, 10.0), false);

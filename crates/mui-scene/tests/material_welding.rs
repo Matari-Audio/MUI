@@ -1,18 +1,18 @@
 use mui_scene::prelude::*;
-use mui_scene::{Layer, Paint, SceneError, TextCache, WeldCache, resolve_scene_cached};
+use mui_scene::{Layer, Paint, SceneError, Resolver, WeldCache};
 use std::sync::Arc;
 
 fn plate(id: &str, fill: impl Into<Fill>, width: f64) -> El {
-    leaf(24., 24.)
+    block(24., 24.)
         .radius(5.)
         .fill(fill)
-        .border(Ink, width)
+        .border(Role::Ink, width)
         .id(id)
 }
 fn tree(options: Weld) -> El {
-    row![plate("a", Primary, 1.), plate("b", Secondary, 4.)]
+    row![plate("a", Role::Primary, 1.), plate("b", Role::Secondary, 4.)]
         .gap(2.)
-        .weld_with(options)
+        .weld(options)
         .id("group")
 }
 fn image(scene: &mui_scene::ResolvedScene) -> Arc<mui_scene::Image> {
@@ -28,7 +28,7 @@ fn image(scene: &mui_scene::ResolvedScene) -> Arc<mui_scene::Image> {
 
 #[test]
 fn default_dsl_welds_body_and_border_without_replacing_identity() {
-    let scene = resolve_scene(&SceneSpec::new(tree(Weld::default()))).unwrap();
+    let scene = resolve(&SceneSpec::new(tree(Weld::default()))).unwrap();
     for key in ["a", "b", "group"] {
         assert!(scene.surface(key).is_some());
     }
@@ -43,17 +43,17 @@ fn default_dsl_welds_body_and_border_without_replacing_identity() {
 }
 #[test]
 fn shape_only_is_not_border_omission() {
-    let keep = resolve_scene(&SceneSpec::new(tree(Weld::shape()))).unwrap();
-    let omit = resolve_scene(&SceneSpec::new(tree(Weld::all().border(WeldChannel::Omit)))).unwrap();
+    let keep = resolve(&SceneSpec::new(tree(Weld::shape()))).unwrap();
+    let omit = resolve(&SceneSpec::new(tree(Weld::all().border(WeldChannel::Omit)))).unwrap();
     assert_ne!(&*image(&keep).rgba, &*image(&omit).rgba);
 }
 #[test]
 fn default_and_explicit_macros_construct_the_same_policy() {
-    let a = weld![plate("a", Primary, 1.), plate("b", Secondary, 2.)];
-    let b = weld![Weld::all(); plate("a", Primary, 1.), plate("b", Secondary, 2.)];
+    let a = weld![plate("a", Role::Primary, 1.), plate("b", Role::Secondary, 2.)];
+    let b = weld![Weld::all(); plate("a", Role::Primary, 1.), plate("b", Role::Secondary, 2.)];
     assert_eq!(a.payload().extras().welding, b.payload().extras().welding);
     assert_eq!(
-        weld_morph![0.25; plate("a", Primary, 1.)]
+        weld![Weld::default().morph(0.25); plate("a", Role::Primary, 1.)]
             .payload()
             .extras()
             .welding
@@ -62,7 +62,7 @@ fn default_and_explicit_macros_construct_the_same_policy() {
         0.25
     );
     assert_eq!(
-        weld_morph![Weld::shape(), 0.75; plate("a", Primary, 1.)]
+        weld![Weld::default().morph(Weld::shape(), 0.75); plate("a", Role::Primary, 1.)]
             .payload()
             .extras()
             .welding
@@ -73,7 +73,7 @@ fn default_and_explicit_macros_construct_the_same_policy() {
 }
 #[test]
 fn unchanged_weld_reuses_the_pixel_buffer() {
-    let mut text = TextCache::default();
+    let mut text = Resolver::default();
     let mut weld = WeldCache::default();
     let a = resolve_scene_cached(&SceneSpec::new(tree(Weld::all())), &mut text, &mut weld).unwrap();
     let b = resolve_scene_cached(&SceneSpec::new(tree(Weld::all())), &mut text, &mut weld).unwrap();
@@ -82,7 +82,7 @@ fn unchanged_weld_reuses_the_pixel_buffer() {
 }
 #[test]
 fn style_changes_invalidate_pixels() {
-    let mut text = TextCache::default();
+    let mut text = Resolver::default();
     let mut weld = WeldCache::default();
     let a = resolve_scene_cached(&SceneSpec::new(tree(Weld::all())), &mut text, &mut weld).unwrap();
     let b = resolve_scene_cached(
@@ -96,14 +96,14 @@ fn style_changes_invalidate_pixels() {
 }
 #[test]
 fn descendants_are_not_consumed_with_the_source_plate() {
-    let a = col![leaf(5., 5.).fill(Danger).id("child")]
+    let a = col![block(5., 5.).fill(Role::Danger).id("child")]
         .pad(8.)
-        .fill(Primary)
-        .border(Ink, 2.)
+        .fill(Role::Primary)
+        .border(Role::Ink, 2.)
         .id("a");
-    let scene = resolve_scene(&SceneSpec::new(
-        row![a, plate("b", Secondary, 1.)]
-            .weld_with(Weld::all())
+    let scene = resolve(&SceneSpec::new(
+        row![a, plate("b", Role::Secondary, 1.)]
+            .weld(Weld::all())
             .id("group"),
     ))
     .unwrap();
@@ -117,12 +117,12 @@ fn descendants_are_not_consumed_with_the_source_plate() {
 }
 #[test]
 fn excluded_members_keep_their_paints() {
-    let scene = resolve_scene(&SceneSpec::new(
+    let scene = resolve(&SceneSpec::new(
         row![
-            plate("a", Primary, 1.),
-            plate("excluded", Danger, 2.).exclude_from_weld(),
+            plate("a", Role::Primary, 1.),
+            plate("excluded", Role::Danger, 2.).unwelded(),
         ]
-        .weld_with(Weld::all())
+        .weld(Weld::all())
         .id("group"),
     ))
     .unwrap();
@@ -135,7 +135,7 @@ fn excluded_members_keep_their_paints() {
 }
 #[test]
 fn custom_outline_is_not_a_rectangular_hit_proxy() {
-    let shape = leaf(24., 24.)
+    let shape = block(24., 24.)
         .outline(|s| {
             Path::polyline(
                 [
@@ -146,23 +146,23 @@ fn custom_outline_is_not_a_rectangular_hit_proxy() {
                 true,
             )
         })
-        .fill(Primary)
+        .fill(Role::Primary)
         .id("triangle");
-    let scene = resolve_scene(&SceneSpec::new(shape)).unwrap();
+    let scene = resolve(&SceneSpec::new(shape)).unwrap();
     assert!(scene.surface("triangle").unwrap().rect.is_none());
     assert_eq!(scene.surface("triangle").unwrap().path.commands.len(), 4);
 }
 #[test]
 fn unsupported_effects_are_not_silently_lost() {
-    let root = row![plate("a", Primary, 1.).shadow(Shadow::soft(4.))].weld_with(Weld::all());
+    let root = row![plate("a", Role::Primary, 1.).shadow(Shadow::soft(4.))].weld(Weld::all());
     assert!(matches!(
-        resolve_scene(&SceneSpec::new(root)),
+        resolve(&SceneSpec::new(root)),
         Err(SceneError::UnsupportedWeld(_))
     ));
 }
 #[test]
 fn explicit_off_returns_to_ordinary_painting() {
-    let scene = resolve_scene(&SceneSpec::new(tree(Weld::all()).without_weld())).unwrap();
+    let scene = resolve(&SceneSpec::new(tree(Weld::all()).weld(Weld::off()))).unwrap();
     assert!(
         scene
             .paint
@@ -178,19 +178,19 @@ fn explicit_off_returns_to_ordinary_painting() {
 }
 #[test]
 fn morph_does_not_change_intrinsic_layout() {
-    let a = resolve_scene(&SceneSpec::new(tree(Weld::all().morph(0.)))).unwrap();
-    let b = resolve_scene(&SceneSpec::new(tree(Weld::all().morph(1.)))).unwrap();
+    let a = resolve(&SceneSpec::new(tree(Weld::all().morph(0.)))).unwrap();
+    let b = resolve(&SceneSpec::new(tree(Weld::all().morph(1.)))).unwrap();
     assert_eq!(a.layout, b.layout);
     assert_ne!(&*image(&a).rgba, &*image(&b).rgba);
 }
 #[test]
 fn baked_weld_clip_is_carried_as_its_actual_shape() {
-    let child = plate("a", Primary, 1.);
-    let root = row![child, plate("b", Secondary, 2.)]
-        .weld_with(Weld::all())
+    let child = plate("a", Role::Primary, 1.);
+    let root = row![child, plate("b", Role::Secondary, 2.)]
+        .weld(Weld::all())
         .clip()
         .id("group");
-    let s = resolve_scene(&SceneSpec::new(root)).unwrap();
+    let s = resolve(&SceneSpec::new(root)).unwrap();
     let group = s.surface("group").unwrap();
     let a = s.surface("a").unwrap();
     assert!(
@@ -200,8 +200,8 @@ fn baked_weld_clip_is_carried_as_its_actual_shape() {
 }
 #[test]
 fn a_union_is_a_vector_operation() {
-    let union = row![leaf(24., 24.), leaf(24., 24.)].union(Surface);
-    let s = resolve_scene(&SceneSpec::new(union)).unwrap();
+    let union = row![block(24., 24.), block(24., 24.)].union(Role::Surface);
+    let s = resolve(&SceneSpec::new(union)).unwrap();
     assert!(
         s.paint
             .iter()
@@ -223,10 +223,10 @@ fn a_custom_outline_is_not_silently_reinterpreted_as_solid_when_carved() {
                 true,
             )
         })
-        .fill(Primary)
-        .cut(leaf(4., 4.));
+        .fill(Role::Primary)
+        .cut(block(4., 4.));
     assert!(matches!(
-        resolve_scene(&SceneSpec::new(root)),
+        resolve(&SceneSpec::new(root)),
         Err(SceneError::Geometry(mui_geometry::Error::InvalidOptions(m)))
             if m.starts_with("cut/keep on a custom outline")
     ));
@@ -235,7 +235,7 @@ fn a_custom_outline_is_not_silently_reinterpreted_as_solid_when_carved() {
 #[test]
 fn fractional_layout_origin_does_not_shift_the_baked_device_grid() {
     let root = stack![tree(Weld::all()).offset(0.3, 0.25)].pad(20.);
-    let s = resolve_scene(&SceneSpec::new(root).scale(1.5)).unwrap();
+    let s = resolve(&SceneSpec::new(root).scale(1.5)).unwrap();
     let p = s
         .paint
         .iter()

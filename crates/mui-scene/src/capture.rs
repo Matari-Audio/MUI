@@ -237,20 +237,20 @@ mod tests {
     #[test]
     fn resizing_reflows_children_without_stretching_their_geometry() {
         let tree = row![
-            leaf(20., 20.).id("fixed"),
-            leaf(20., 20.).grow(1.).id("fluid")
+            block(20., 20.).id("fixed"),
+            block(20., 20.).grow(1.).id("fluid")
         ]
         .size(100., 40.)
         .id("panel");
         let resized = resize_capture(&tree, "panel", Size::new(200., 40.)).unwrap();
-        let before = resolve_scene(&SceneSpec::new(tree)).unwrap();
-        let after = resolve_scene(&SceneSpec::new(resized)).unwrap();
+        let before = resolve(&SceneSpec::new(tree)).unwrap();
+        let after = resolve(&SceneSpec::new(resized)).unwrap();
         assert_eq!(before.surface("panel").unwrap().frame.size.width, 100.);
         assert_eq!(after.surface("panel").unwrap().frame.size.width, 200.);
         assert_eq!(after.surface("fixed").unwrap().frame.size.width, 20.);
         assert_eq!(after.surface("fluid").unwrap().frame.size.width, 180.);
         assert!(matches!(
-            resize_capture(&leaf(1., 1.), "x", Size::new(f64::NAN, 1.)),
+            resize_capture(&block(1., 1.), "x", Size::new(f64::NAN, 1.)),
             Err(CaptureError::InvalidSize)
         ));
     }
@@ -258,19 +258,19 @@ mod tests {
     #[test]
     fn extraction_follows_ancestry_and_keeps_clip_pairs() {
         let tree = row![
-            column([
-                leaf(20., 20.).fill(Primary).id("unrelated-name"),
+            col([
+                block(20., 20.).fill(Role::Primary).id("unrelated-name"),
                 text("label")
             ])
             .id("card")
             .size(50., 50.)
             .clip(),
-            leaf(20., 20.).fill(Danger).id("card/sibling")
+            block(20., 20.).fill(Role::Danger).id("card/sibling")
         ]
         .id("root")
         .size(100., 60.)
         .clip();
-        let s = resolve_scene(&SceneSpec::new(tree)).unwrap();
+        let s = resolve(&SceneSpec::new(tree)).unwrap();
         let isolated = s.isolate(&["card"]).unwrap();
         assert!(isolated.paint.iter().any(|p| &*p.key == "unrelated-name"));
         assert!(!isolated.paint.iter().any(|p| &*p.key == "card/sibling"));
@@ -302,10 +302,10 @@ mod tests {
 
     #[test]
     fn composites_must_be_extracted_atomically() {
-        let s = resolve_scene(&SceneSpec::new(
+        let s = resolve(&SceneSpec::new(
             row![
-                leaf(20., 20.).fill(Primary).id("a"),
-                leaf(20., 20.).fill(Danger).id("b")
+                block(20., 20.).fill(Role::Primary).id("a"),
+                block(20., 20.).fill(Role::Danger).id("b")
             ]
             .id("group")
             .opacity(0.5),

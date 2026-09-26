@@ -3,7 +3,7 @@ use mui_input::{Button, Buttons};
 use mui_scene::prelude::*;
 
 fn gain() -> El {
-    leaf(120.0, 40.0).id("gain").focusable().role(Kind::Slider {
+    block(120.0, 40.0).id("gain").focusable().a11y(A11y::Slider {
         value: 0.5,
         min: 0.0,
         max: 1.0,
@@ -34,7 +34,7 @@ fn press(ui: &mut Ui) -> Vec<(String, Edit)> {
 fn rounded_clip_rejects_an_invisible_child_corner() {
     let mut ui = Ui::new(Theme::DEFAULT);
     let tree = || {
-        stack![leaf(100.0, 100.0).id("child")]
+        stack![block(100.0, 100.0).id("child")]
             .square(100.0)
             .pill()
             .clip()
@@ -64,7 +64,7 @@ fn removing_a_held_control_ends_its_gesture_in_that_frame() {
     assert_eq!(press(&mut ui), vec![("gain".into(), Edit::Begin)]);
     let edits = step(
         &mut ui,
-        leaf(120.0, 40.0),
+        block(120.0, 40.0),
         Some(Point::new(20.0, 20.0)),
         Buttons::PRIMARY,
     );
@@ -80,7 +80,7 @@ fn disabling_a_held_control_ends_it_without_waiting_for_another_frame() {
     press(&mut ui);
     let edits = step(
         &mut ui,
-        gain().disabled(true),
+        gain().disabled(),
         Some(Point::new(20.0, 20.0)),
         Buttons::PRIMARY,
     );
@@ -150,7 +150,7 @@ fn incompatible_disabled_and_nonfinite_actions_are_rejected() {
     assert!(!ui.request_action(SemanticAction::activate("gain")));
     assert!(!ui.request_action(SemanticAction::set_value("absent", 0.8)));
     assert!(!ui.request_action(SemanticAction::set_value("gain", f64::NAN)));
-    idle(&mut ui, gain().disabled(true));
+    idle(&mut ui, gain().disabled());
     assert!(!ui.request_action(SemanticAction::set_value("gain", 0.8)));
     assert!(!ui.request_action(SemanticAction::focus("gain")));
 }
@@ -158,7 +158,7 @@ fn incompatible_disabled_and_nonfinite_actions_are_rejected() {
 #[test]
 fn semantic_activation_does_not_synthesize_pointer_capture() {
     let mut ui = Ui::new(Theme::DEFAULT);
-    let tree = || leaf(100.0, 40.0).id("go").role(Kind::Button);
+    let tree = || block(100.0, 40.0).id("go").a11y(A11y::Button);
     idle(&mut ui, tree());
     assert!(ui.request_action(SemanticAction::activate("go")));
     assert!(ui.get("go").clicked_with(Button::Primary));
@@ -171,12 +171,12 @@ fn semantic_activation_does_not_synthesize_pointer_capture() {
 #[test]
 fn failed_layout_does_not_replay_a_consumed_activation() {
     let mut ui = Ui::new(Theme::DEFAULT);
-    let tree = || leaf(100.0, 40.0).id("go").role(Kind::Button);
+    let tree = || block(100.0, 40.0).id("go").a11y(A11y::Button);
     idle(&mut ui, tree());
     assert!(ui.request_action(SemanticAction::activate("go")));
     assert!(ui.get("go").clicked);
     assert!(
-        ui.frame(leaf(-1.0, 10.0), None, Input::default(), 0.016)
+        ui.frame(block(-1.0, 10.0), None, Input::default(), 0.016)
             .is_err()
     );
     assert!(!ui.get("go").clicked);
@@ -191,13 +191,13 @@ fn transient_tweens_and_removed_field_state_do_not_accumulate() {
     let mut ui = Ui::new(Theme::DEFAULT);
     for i in 0..256 {
         ui.tween(&format!("temporary-{i}"), i as f64);
-        idle(&mut ui, leaf(20.0, 20.0));
+        idle(&mut ui, block(20.0, 20.0));
         assert!(ui.tweens.len() <= 1);
     }
     ui.sel.insert("gone".into(), (3, 8));
     ui.scrolls
         .insert("gone".into(), [Spring::at(5.0), Spring::at(9.0)]);
-    idle(&mut ui, leaf(20.0, 20.0));
+    idle(&mut ui, block(20.0, 20.0));
     assert!(ui.tweens.is_empty());
     assert!(ui.sel.is_empty());
     assert!(ui.scrolls.is_empty());
@@ -208,7 +208,7 @@ fn model_identity_survives_reorder_and_display_rename() {
     let mut ui = Ui::new(Theme::DEFAULT);
     let a = Id::of("osc").entity(42).field("gain");
     let b = Id::of("osc").entity(77).field("gain");
-    let control = |id: &Id, name: &str| leaf(60.0, 30.0).id(id).label(name).focusable();
+    let control = |id: &Id, name: &str| block(60.0, 30.0).id(id).named(name).focusable();
     idle(&mut ui, row![control(&a, "Saw"), control(&b, "Sine")]);
     ui.focus(a.as_str());
     ui.tween(a.as_str(), 0.4);

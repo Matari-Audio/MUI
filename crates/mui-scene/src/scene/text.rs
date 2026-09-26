@@ -449,10 +449,10 @@ mod tests {
     #[test]
     fn caches_keep_only_what_the_last_resolve_used() {
         let tree = |n: usize, tag: &str| {
-            column((0..n).map(|i| {
+            col((0..n).map(|i| {
                 row([
                     // Each its own height: equal welds share one entry.
-                    leaf(12., 12. + i as f64 / 4.),
+                    block(12., 12. + i as f64 / 4.),
                     text(format!("{tag}{i}")).id(format!("{tag}{i}")),
                 ])
                 .union(Role::Surface)
@@ -464,13 +464,13 @@ mod tests {
                 .font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap())
         };
         let mut text = TextCache::default();
-        resolve_scene_with(&spec(300, "a"), &mut text).unwrap();
+        text.resolve(&spec(300, "a")).unwrap();
         assert_eq!(
             text.outlines.entries.len(),
             300,
             "no cap flushes a big tree"
         );
-        resolve_scene_with(&spec(1, "b"), &mut text).unwrap();
+        text.resolve(&spec(1, "b")).unwrap();
         assert_eq!(text.outlines.entries.len(), 1);
         assert_eq!(text.len(), 1, "only b0's run is left");
         assert_eq!(text.last_coords.len(), 1, "only b0's hinting state is left");
@@ -483,28 +483,28 @@ mod tests {
             .font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
         let mut text = TextCache::default();
         let lines = |s: &ResolvedScene| s.paint.iter().filter(|p| p.layer == Layer::Text).count();
-        assert!(lines(&resolve_scene_with(&spec, &mut text).unwrap()) > 1);
+        assert!(lines(&text.resolve(&spec).unwrap()) > 1);
         // Doctor the cached breaks: a resolve that re-broke would not see it.
         for ((ranges, _), _) in text.breaks.values_mut().flat_map(|m| m.values_mut()) {
             *ranges = std::iter::once(0..para.len()).collect();
         }
-        assert_eq!(lines(&resolve_scene_with(&spec, &mut text).unwrap()), 1);
+        assert_eq!(lines(&text.resolve(&spec).unwrap()), 1);
     }
 
     #[test]
     fn a_wrapped_paragraph_fills_its_column_instead_of_its_longest_line() {
         let long = "wrap ".repeat(40);
         let root = row([
-            column([text("About").text_size(18.).id("h"), text(long).id("p")])
+            col([text("About").text_size(18.).id("h"), text(long).id("p")])
                 .gap(6.)
                 .flex(1.)
                 .id("col"),
-            leaf(90., 40.).shrink(0.),
+            block(90., 40.).shrink(0.),
         ])
         .gap(10.);
         let mut sp = SceneSpec::new(root).offered(Size::new(320., 200.));
         sp.font = Some(font());
-        let s = resolve_scene(&sp).unwrap();
+        let s = resolve(&sp).unwrap();
         let (col, p) = (s.layout.frame("col").unwrap(), s.layout.frame("p").unwrap());
         assert_eq!(
             (p.x, p.size.width),
@@ -519,9 +519,9 @@ mod tests {
         // Two copies of one string in two widths: each wraps to its own,
         // so the wider one is shorter. A third beside a sibling in a
         // definite row gets its flex share, narrower than the row.
-        let root = column([
-            column([text(long.clone()).id("a")]).w(120),
-            column([text(long.clone()).id("b")]).w(240),
+        let root = col([
+            col([text(long.clone()).id("a")]).w(120),
+            col([text(long.clone()).id("b")]).w(240),
             row([
                 text(long.clone()).id("c").shrink(1.0),
                 text(long).id("d").shrink(1.0),
@@ -530,7 +530,7 @@ mod tests {
         ]);
         let mut sp = SceneSpec::new(root);
         sp.font = Some(font());
-        let s = resolve_scene(&sp).unwrap();
+        let s = resolve(&sp).unwrap();
         let f = |k| s.layout.frame(k).unwrap().size;
         assert!(
             f("a").width <= 120.1 && f("b").width <= 240.1,
@@ -567,9 +567,9 @@ mod tests {
     #[test]
     fn a_row_squeezed_below_its_words_keeps_them_whole() {
         let word = |t: &str| {
-            let mut sp = SceneSpec::new(column([text(t).id("w")]));
+            let mut sp = SceneSpec::new(col([text(t).id("w")]));
             sp.font = Some(font());
-            resolve_scene(&sp)
+            resolve(&sp)
                 .unwrap()
                 .layout
                 .frame("w")
@@ -582,7 +582,7 @@ mod tests {
         let mut sp =
             SceneSpec::new(row([text("Record Button").id("a"), text("Loop Region").id("b")]).w(40));
         sp.font = Some(font());
-        let s = resolve_scene(&sp).unwrap();
+        let s = resolve(&sp).unwrap();
         let f = |k| s.layout.frame(k).unwrap();
         let lines = |k| {
             s.paint
@@ -600,13 +600,13 @@ mod tests {
     fn a_narrow_column_wraps_a_paragraph_and_grows_taller() {
         let long = "wrap ".repeat(40);
         let one = {
-            let mut sp = SceneSpec::new(column([text(long.clone()).id("t")]));
+            let mut sp = SceneSpec::new(col([text(long.clone()).id("t")]));
             sp.font = Some(font());
-            resolve_scene(&sp).unwrap().layout.frame("t").unwrap().size
+            resolve(&sp).unwrap().layout.frame("t").unwrap().size
         };
-        let mut sp = SceneSpec::new(column([text(long.clone()).id("t")]).w(120));
+        let mut sp = SceneSpec::new(col([text(long.clone()).id("t")]).w(120));
         sp.font = Some(font());
-        let s = resolve_scene(&sp).unwrap();
+        let s = resolve(&sp).unwrap();
         let lines = s
             .paint
             .iter()
@@ -616,8 +616,8 @@ mod tests {
         let f = s.layout.frame("t").unwrap().size;
         assert!(f.width <= 120.1 && f.height > one.height * 3., "{f:?}");
         let mut capped = sp.clone();
-        capped.root = column([text(long).id("t").lines(2)]).w(120);
-        let c = resolve_scene(&capped).unwrap();
+        capped.root = col([text(long).id("t").lines(2)]).w(120);
+        let c = resolve(&capped).unwrap();
         assert_eq!(
             c.paint
                 .iter()
@@ -636,7 +636,7 @@ mod tests {
             text("hi").text_size(24.).id("b"),
         ]));
         sp.font = Some(font());
-        resolve_scene_with(&sp, &mut cache).unwrap();
+        cache.resolve(&sp).unwrap();
         assert_eq!(cache.len(), 2, "one string, two sizes");
     }
 
@@ -648,17 +648,17 @@ mod tests {
             text("hi").text_weight(Weight::BOLD).id("b")
         ]);
         sp.font = Some(Font::new(ttf_inter::REGULAR).unwrap());
-        resolve_scene_with(&sp, &mut cache).unwrap();
+        cache.resolve(&sp).unwrap();
         // Same string, two weights of a variable face: two shaped runs, not
         // one reused at the wrong instance.
         assert_eq!(cache.len(), 2);
         // A static face shapes the same at any weight, so it shares one.
         let mut hack = TextCache::default();
         sp.font = Some(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
-        resolve_scene_with(&sp, &mut hack).unwrap();
+        hack.resolve(&sp).unwrap();
         assert_eq!(hack.len(), 1);
         sp.font = Some(Font::new(ttf_inter::REGULAR).unwrap());
-        let s = resolve_scene_with(&sp, &mut cache).unwrap();
+        let s = cache.resolve(&sp).unwrap();
         let w: Vec<Option<f32>> = s
             .paint
             .iter()
@@ -691,7 +691,7 @@ mod tests {
         let mut cache = TextCache::default();
         let mut sp = SceneSpec::new(row([text("hi").id("t")]));
         sp.font = Some(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
-        let s = resolve_scene_with(&sp, &mut cache).unwrap();
+        let s = cache.resolve(&sp).unwrap();
         assert_eq!(cache.len(), 1);
         let t = s
             .paint
@@ -703,7 +703,7 @@ mod tests {
             .unwrap();
         assert_eq!(t.glyphs.len(), 2);
         assert!(t.glyphs[1].x > 0.);
-        let next = resolve_scene_with(&sp, &mut cache).unwrap();
+        let next = cache.resolve(&sp).unwrap();
         let next_text = next.paint.iter().find_map(|p| p.text.as_ref()).unwrap();
         assert!(Arc::ptr_eq(&t.glyphs, &next_text.glyphs));
         assert_eq!(cache.len(), 1);

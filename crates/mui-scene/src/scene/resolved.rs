@@ -314,7 +314,7 @@ impl ResolvedScene {
     /// # use mui_scene::{Layer, SceneSpec};
     /// let root = row![text("0.0 dB").reserve("-88.8 dB").id("gain")];
     /// let spec = SceneSpec::new(root).font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
-    /// let mut scene = resolve_scene(&spec).unwrap();
+    /// let mut scene = resolve(&spec).unwrap();
     /// let before = scene.surface("gain").unwrap().frame;
     /// scene.set_text("gain", "-12.4 dB").unwrap();
     /// assert_eq!(scene.surface("gain").unwrap().frame, before, "the frame is kept");
@@ -376,7 +376,7 @@ mod tests {
     fn a_swapped_readout_keeps_the_reserved_box() {
         let mut sp = SceneSpec::new(row![text("0.0").reserve("-88.8").id("gain")]);
         sp.font = Some(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
-        let mut s = resolve_scene(&sp).unwrap();
+        let mut s = resolve(&sp).unwrap();
         let frame = s.surface("gain").unwrap().frame;
         s.set_text("gain", "-88.8").unwrap();
         assert_eq!(s.surface("gain").unwrap().frame, frame);
@@ -398,9 +398,9 @@ mod tests {
 
     #[test]
     fn set_text_updates_only_an_implicit_accessibility_label() {
-        let mut implicit = SceneSpec::new(text("before").role(Kind::Label).id("implicit"));
+        let mut implicit = SceneSpec::new(text("before").a11y(A11y::Label).id("implicit"));
         implicit.font = Some(font());
-        let mut implicit = resolve_scene(&implicit).unwrap();
+        let mut implicit = resolve(&implicit).unwrap();
         assert_eq!(
             implicit
                 .surface("implicit")
@@ -423,12 +423,12 @@ mod tests {
 
         let mut explicit = SceneSpec::new(
             text("before")
-                .role(Kind::Label)
-                .label("Stable name")
+                .a11y(A11y::Label)
+                .named("Stable name")
                 .id("explicit"),
         );
         explicit.font = Some(font());
-        let mut explicit = resolve_scene(&explicit).unwrap();
+        let mut explicit = resolve(&explicit).unwrap();
         explicit.set_text("explicit", "after").unwrap();
         assert_eq!(
             explicit
@@ -446,7 +446,7 @@ mod tests {
         let mut spec = SceneSpec::new(text("one two three four").lines(2).id("paragraph"))
             .offered(Size::new(72., 80.));
         spec.font = Some(font());
-        let mut scene = resolve_scene(&spec).unwrap();
+        let mut scene = resolve(&spec).unwrap();
         let frame = scene.surface("paragraph").unwrap().frame;
         let before = scene
             .paint

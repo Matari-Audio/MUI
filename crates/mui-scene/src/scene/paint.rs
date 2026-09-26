@@ -474,13 +474,13 @@ mod tests {
     /// is the whole difference from a drop shadow: same call, opposite side.
     #[test]
     fn an_inset_shadow_paints_over_the_fill_and_clipped_to_the_outline() {
-        let root = leaf(40., 40.)
+        let root = block(40., 40.)
             .radius(8.)
             .fill(Role::Surface)
             .shadow(Shadow::soft(6.))
             .shadow(Shadow::inset(4.))
             .id("box");
-        let s = resolve_scene(&SceneSpec::new(root).offered(Size::new(40., 40.))).unwrap();
+        let s = resolve(&SceneSpec::new(root).offered(Size::new(40., 40.))).unwrap();
         let at = |l: Layer| s.paint.iter().position(|p| p.layer == l).expect("layer");
         let (drop, fill) = (at(Layer::Shadow(ShadowKind::Drop)), at(Layer::Fill));
         let inset = at(Layer::Shadow(ShadowKind::Inset));
@@ -497,11 +497,11 @@ mod tests {
     /// blurred rect per welded child instead of a single dropped entry.
     #[test]
     fn a_welded_shadow_is_one_blurred_rect_per_child() {
-        let root = row([leaf(20., 20.).id("a"), leaf(20., 40.).id("b")])
+        let root = row([block(20., 20.).id("a"), block(20., 40.).id("b")])
             .union(Role::Surface)
             .shadow(Shadow::soft(12.))
             .id("weld");
-        let s = resolve_scene(&SceneSpec::new(root).offered(Size::new(40., 40.))).unwrap();
+        let s = resolve(&SceneSpec::new(root).offered(Size::new(40., 40.))).unwrap();
         let sh: Vec<_> = s
             .paint
             .iter()
@@ -521,7 +521,7 @@ mod tests {
 
     #[test]
     fn shells_are_parallel_and_paint_in_z_order() {
-        let s = resolve_scene(&welded_tab()).unwrap();
+        let s = resolve(&welded_tab()).unwrap();
         let tab = s.surface("tab").unwrap().rect.unwrap();
         let shell = s.paint.iter().find(|p| p.layer == Layer::Shell(0)).unwrap();
         let r = shell.rect.unwrap();
@@ -545,12 +545,12 @@ mod tests {
 
     #[test]
     fn welded_stroke_paints_after_child_fills() {
-        let root = row([leaf(20., 20.).fill(Role::Primary).id("child")])
+        let root = row([block(20., 20.).fill(Role::Primary).id("child")])
             .union(Role::Surface)
             .stroke(Role::Ink)
             .stroke_width(2.)
             .id("weld");
-        let s = resolve_scene(&SceneSpec::new(root).offered(Size::new(20., 20.))).unwrap();
+        let s = resolve(&SceneSpec::new(root).offered(Size::new(20., 20.))).unwrap();
         let order: Vec<_> = s.paint.iter().map(|p| (&*p.key, p.layer)).collect();
         let at = |key: &str, layer: Layer| order.iter().position(|x| *x == (key, layer)).unwrap();
         assert!(
@@ -564,7 +564,7 @@ mod tests {
     fn a_shell_on_a_weld_follows_the_concave_outline() {
         let mut sp = welded_tab();
         sp.root = sp.root.shell(6., Role::Field);
-        let r = resolve_scene(&sp).unwrap();
+        let r = resolve(&sp).unwrap();
         let outer = r.surface("root").unwrap();
         assert!(outer.rect.is_none());
         let inner = &r
@@ -584,10 +584,10 @@ mod tests {
 
     #[test]
     fn roles_resolve_against_the_palette_and_ink_reads_on_its_ground() {
-        let root = column([text("hi").id("t")]).fill(Role::Primary).id("card");
+        let root = col([text("hi").id("t")]).fill(Role::Primary).id("card");
         let mut sp = SceneSpec::new(root);
         sp.font = Some(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
-        let s = resolve_scene(&sp).unwrap();
+        let s = resolve(&sp).unwrap();
         let th = Theme::default();
         let card = &s.paint[0];
         assert_eq!(card.paint, Paint::Solid(th.palette.primary()));
@@ -598,8 +598,8 @@ mod tests {
 
     #[test]
     fn a_stroke_paints_inside_the_frame_it_was_given() {
-        let root = overlay([leaf(20., 20.).radius(0.).stroke(Role::Ink).id("k")]);
-        let s = resolve_scene(&SceneSpec::new(root).offered(Size::new(20., 20.))).unwrap();
+        let root = stack([block(20., 20.).radius(0.).stroke(Role::Ink).id("k")]);
+        let s = resolve(&SceneSpec::new(root).offered(Size::new(20., 20.))).unwrap();
         let st = s.paint.iter().find(|p| p.layer == Layer::Stroke).unwrap();
         let b = Bounds::from_points(st.path.flatten(0.01, 100_000).unwrap().concat()).unwrap();
         let w = st.width / 2.0;

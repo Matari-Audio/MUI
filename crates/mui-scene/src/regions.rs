@@ -13,11 +13,11 @@ pub trait ShapeLayout: Sized {
     /// ```
     /// use mui_scene::prelude::*;
     /// let panel = row![
-    ///     stack![].flex(1.).fill(Primary),
+    ///     stack![].flex(1.).fill(Role::Primary),
     ///     col![stack![].flex(1.), stack![].flex(1.)]
-    ///         .inside(2.).flex(1.).fill(Secondary),
+    ///         .inside(2.).flex(1.).fill(Role::Secondary),
     /// ].inside(2.).radius(20.).w(200.).h(100.);
-    /// resolve_scene(&SceneSpec::new(panel)).unwrap();
+    /// resolve(&SceneSpec::new(panel)).unwrap();
     /// ```
     fn inside(self, padding: impl Into<Spacing>) -> Self;
     /// Bow a two-way split. Signed fraction of the cross-divider extent;

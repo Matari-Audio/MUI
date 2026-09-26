@@ -11,10 +11,10 @@ fn stage(w: u32, h: u32) -> Option<Stage> {
 /// Left half white, right half black, `size` logical.
 fn halves(size: Size) -> ResolvedScene {
     let root = row([
-        leaf(size.width / 2., size.height).fill(Color::srgb(1., 1., 1.)),
-        leaf(size.width / 2., size.height).fill(Color::srgb(0., 0., 0.)),
+        block(size.width / 2., size.height).fill(Color::srgb(1., 1., 1.)),
+        block(size.width / 2., size.height).fill(Color::srgb(0., 0., 0.)),
     ]);
-    resolve_scene(&SceneSpec::new(root)).expect("resolves")
+    resolve(&SceneSpec::new(root)).expect("resolves")
 }
 
 #[test]
@@ -98,13 +98,13 @@ fn a_background_that_does_not_compile_is_an_error_not_a_panic() {
 /// `n` one-unit stripes, white and black, a square `n` units a side.
 fn stripes(n: usize) -> ResolvedScene {
     let root = row((0..n).map(|i| {
-        leaf(1., n as f64).radius(0.).fill(if i % 2 == 0 {
+        block(1., n as f64).radius(0.).fill(if i % 2 == 0 {
             Color::srgb(1., 1., 1.)
         } else {
             Color::srgb(0., 0., 0.)
         })
     }));
-    resolve_scene(&SceneSpec::new(root)).expect("resolves")
+    resolve(&SceneSpec::new(root)).expect("resolves")
 }
 
 #[test]
@@ -135,8 +135,8 @@ fn the_floor_mirrors_a_slab_standing_on_it() {
     let Some(mut stage) = stage(96, 96) else {
         return;
     };
-    let red = resolve_scene(&SceneSpec::new(
-        leaf(40., 40.).radius(0.).fill(Color::srgb(1., 0., 0.)),
+    let red = resolve(&SceneSpec::new(
+        block(40., 40.).radius(0.).fill(Color::srgb(1., 0., 0.)),
     ))
     .unwrap();
     stage.layer("r", &red, Size::new(40., 40.), 1.).unwrap();
@@ -254,8 +254,8 @@ fn layers_of_different_sizes_share_one_renderer() {
     let Some(mut stage) = stage(320, 180) else {
         return;
     };
-    let red = resolve_scene(&SceneSpec::new(
-        leaf(40., 40.).radius(0.).fill(Color::srgb(1., 0., 0.)),
+    let red = resolve(&SceneSpec::new(
+        block(40., 40.).radius(0.).fill(Color::srgb(1., 0., 0.)),
     ))
     .unwrap();
     let size = Size::new(160., 90.);

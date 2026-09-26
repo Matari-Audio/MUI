@@ -69,7 +69,7 @@ impl PurePluginLogic for Gain {
             });
             let bypass = bridge.bind_bool(ui, P::Bypass, |ui, id, on| toggle(ui, id, on).0.el());
             let level = f64::from(bridge.meter(bridge.params().level.id()));
-            let meter = row([leaf(200.0 * level.clamp(0.0, 1.0), 8.0)
+            let meter = row([block(200.0 * level.clamp(0.0, 1.0), 8.0)
                 .pill()
                 .fill(Primary)])
             .size(200.0, 8.0)

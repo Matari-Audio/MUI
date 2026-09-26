@@ -12,10 +12,10 @@ use super::*;
 /// dropdown under a field wants. [`Area::Center`] sits over the anchor.
 ///
 /// ```
-/// use mui_layout::{leaf, overlay, resolve, Align, Area, Pin, Size};
-/// let field = leaf(40., 40.).anchor(Align::Start, Align::Start).id("f");
-/// let menu = leaf(30., 20.).pin(Pin::to("f").area(Area::End)).id("menu");
-/// let l = resolve(&overlay([field, menu]),
+/// use mui_layout::{block, stack, resolve, Align, Area, Pin, Size};
+/// let field = block(40., 40.).anchor(Align::Start, Align::Start).id("f");
+/// let menu = block(30., 20.).pin(Pin::to("f").area(Area::End)).id("menu");
+/// let l = resolve(&stack([field, menu]),
 ///                 Some(Size::new(200., 200.)), Default::default()).unwrap();
 /// // Past the anchor's right edge, centred on its height.
 /// assert_eq!((l.frame("menu").unwrap().x, l.frame("menu").unwrap().y), (40., 10.));
@@ -39,9 +39,9 @@ pub enum Area {
 /// [`Pin::match_width`] and [`Pin::match_height`].
 ///
 /// ```
-/// use mui_layout::{leaf, overlay, resolve, Pin, Size};
-/// let menu = leaf(10., 20.).pin(Pin::to("f").match_width()).id("menu");
-/// let l = resolve(&overlay([leaf(90., 24.).id("f"), menu]),
+/// use mui_layout::{block, stack, resolve, Pin, Size};
+/// let menu = block(10., 20.).pin(Pin::to("f").match_width()).id("menu");
+/// let l = resolve(&stack([block(90., 24.).id("f"), menu]),
 ///                 Some(Size::new(200., 200.)), Default::default()).unwrap();
 /// assert_eq!(l.frame("menu").unwrap().size.width, 90.);
 /// ```
@@ -60,10 +60,10 @@ pub enum Match {
 /// back inside.
 ///
 /// ```
-/// use mui_layout::{leaf, overlay, resolve, Align, Pin, Size, SpacingToken::Xs};
-/// let tip = leaf(30., 20.).pin(Pin::to("knob").gap(Xs)).id("tip");
-/// let knob = leaf(40., 40.).anchor(Align::Start, Align::Start).id("knob");
-/// let tree = overlay([knob, tip]);
+/// use mui_layout::{block, stack, resolve, Align, Pin, Size, SpacingToken::Xs};
+/// let tip = block(30., 20.).pin(Pin::to("knob").gap(Xs)).id("tip");
+/// let knob = block(40., 40.).anchor(Align::Start, Align::Start).id("knob");
+/// let tree = stack([knob, tip]);
 /// let l = resolve(&tree, Some(Size::new(200., 200.)), Default::default()).unwrap();
 /// // No room above at the top of the window, so it flips under the knob.
 /// assert_eq!(l.frame("tip").unwrap().y, 44.);

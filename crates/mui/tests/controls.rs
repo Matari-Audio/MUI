@@ -40,7 +40,7 @@ fn a_variant_paints_the_role_without_naming_a_second_colour() {
 #[test]
 fn the_size_scale_steps_every_control_off_the_theme_unit() {
     let width = |c: Control| {
-        let scene = resolve_scene(&SceneSpec::new(c.el())).expect("resolves");
+        let scene = resolve(&SceneSpec::new(c.el())).expect("resolves");
         scene.surface("sw").expect("the toggle").frame.size.width
     };
     let mut ui = Ui::new(Theme::DEFAULT);
@@ -60,7 +60,7 @@ fn the_size_scale_steps_every_control_off_the_theme_unit() {
 /// The glyph runs a control resolves to, in paint order.
 fn runs(c: Control) -> Vec<usize> {
     let spec = SceneSpec::new(c.el()).font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
-    resolve_scene(&spec)
+    resolve(&spec)
         .expect("resolves")
         .paint
         .iter()
@@ -99,7 +99,7 @@ fn a_slider_takes_a_track_press_and_drags_across_its_width() {
     let mut ui = Ui::new(Theme::DEFAULT);
     let mut v = 0.0;
     let step = |ui: &mut Ui, v: &mut f64, pointer: PointerInput| {
-        let tree = column([slider(ui, "s", "S", v, 0.0..=1.0).0.el()]).width(400.);
+        let tree = col([slider(ui, "s", "S", v, 0.0..=1.0).0.el()]).width(400.);
         ui.frame(tree, None, pointer, 0.016).unwrap();
     };
     let at = |x: f64, y: f64, down: bool| PointerInput {
@@ -131,7 +131,7 @@ fn a_slider_thumb_glides_to_a_value_set_from_outside() {
     let frame = |ui: &mut Ui, mut v: f64| {
         let (fader, changed) = slider(ui, "s", "S", &mut v, 0.0..=1.0);
         assert!(!changed && (v == 0.0 || v == 1.0), "the value is untouched");
-        let tree = column([fader.el()]).width(400.);
+        let tree = col([fader.el()]).width(400.);
         let animating = ui
             .frame(tree, None, Input::default(), 0.016)
             .unwrap()
@@ -185,7 +185,7 @@ fn a_widget_reports_a_change_only_when_its_value_moved() {
     let mut step = |ui: &mut Ui, focus: &str, input: Input| {
         let (field, typed) = text_input(ui, "f", &mut s);
         let (fader, moved) = slider(ui, "s", "S", &mut v, 0.0..=1.0);
-        ui.frame(column([field, fader.el()]), None, input, 0.016)
+        ui.frame(col([field, fader.el()]), None, input, 0.016)
             .unwrap();
         ui.focus(focus);
         (typed, moved)

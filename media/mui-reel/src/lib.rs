@@ -819,8 +819,8 @@ impl Reel {
                 }
                 for s in frame.scene.surfaces() {
                     let value = match s.semantics.as_ref().map(|m| &m.role) {
-                        Some(Kind::Slider { value, .. }) => *value,
-                        Some(Kind::Toggle { on }) => f64::from(u8::from(*on)),
+                        Some(A11y::Slider { value, .. }) => *value,
+                        Some(A11y::Toggle { on }) => f64::from(u8::from(*on)),
                         _ => continue,
                     };
                     match values.insert(s.key.to_string(), value) {

@@ -63,12 +63,12 @@ fn main() -> Result<(), String> {
                 .el()
                 .size(100., 100.);
             *level.lock().unwrap() = gain as f32;
-            let tree = column([
+            let tree = col([
                 text("MUI TONE / LIVE").text_size(32.),
-                column([
+                col([
                     text("Sine + native 1 Hz tremolo"),
                     control,
-                    row([leaf(f64::from(phase) * 400. + 1., 12.).fill(Primary)])
+                    row([block(f64::from(phase) * 400. + 1., 12.).fill(Role::Primary)])
                         .size(410., 24.)
                         .id("phase"),
                     text(format!("LFO phase {phase:.3}")),
@@ -76,14 +76,14 @@ fn main() -> Result<(), String> {
                 .pad(24.)
                 .gap(18.)
                 .size(500., 310.)
-                .fill(Surface)
+                .fill(Role::Surface)
                 .radius(14.)
                 .id("voice"),
             ])
             .pad(28.)
             .gap(20.)
             .size(640., 460.)
-            .fill(Background)
+            .fill(Role::Background)
             .id("root");
             ui.frame(
                 mui_motion_bridge::Editor::layout(tree, sizes)?,

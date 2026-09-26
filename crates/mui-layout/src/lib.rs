@@ -107,9 +107,9 @@ impl Layout {
     /// window can scale by `offered / min_size()` or refuse to go smaller.
     ///
     /// ```
-    /// use mui_layout::{column, leaf, resolve, Size};
-    /// let fixed = leaf(40., 30.).min_size(Size::new(40., 30.));
-    /// let tree = column([fixed, leaf(40., 30.)]).pad(8.);
+    /// use mui_layout::{col, block, resolve, Size};
+    /// let fixed = block(40., 30.).min_size(Size::new(40., 30.));
+    /// let tree = col([fixed, block(40., 30.)]).pad(8.);
     /// let l = resolve(&tree, Some(Size::new(400., 300.)), Default::default()).unwrap();
     /// // The second leaf states no minimum, so it may be squeezed to nothing.
     /// assert_eq!(l.min_size(), Size::new(56., 46.));
@@ -232,8 +232,8 @@ pub fn resolve_with<P, M: Into<Intrinsic>>(
 /// region other geometry decided, without cloning it to restyle its root.
 ///
 /// ```
-/// use mui_layout::{column, resolve_boxed_with, row, Insets, Size};
-/// let tree = column([row([]).grow(1.)]).size(500., 500.).pad(40.);
+/// use mui_layout::{col, resolve_boxed_with, row, Insets, Size};
+/// let tree = col([row([]).grow(1.)]).size(500., 500.).pad(40.);
 /// let size = Size::new(100., 60.);
 /// let unpadded = Insets::ZERO;
 /// let l = resolve_boxed_with(&tree, size, unpadded, Default::default(), Default::default(), |_, _| {

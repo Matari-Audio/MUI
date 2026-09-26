@@ -8,7 +8,7 @@ fn wrapped_text_aligns_its_first_line_without_collapsing_later_lines() {
     ]
     .baseline()
     .gap(8.);
-    let scene = resolve_scene(
+    let scene = resolve(
         &SceneSpec::new(root).font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap()),
     )
     .unwrap();

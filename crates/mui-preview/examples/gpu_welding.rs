@@ -54,15 +54,15 @@ impl Lab {
         }
     }
     fn tree(&self) -> El {
-        let a = leaf(150., 110.)
+        let a = block(150., 110.)
             .fill(Color::oklcha(0.68, 0.22, 25., 1.))
-            .stroke(Warning)
+            .stroke(Role::Warning)
             .stroke_width(2.)
             .radius(22.)
             .id("left");
-        let b = leaf(150., 110.)
+        let b = block(150., 110.)
             .fill(Color::oklcha(0.65, 0.2, 270., 0.85))
-            .stroke(Ink)
+            .stroke(Role::Ink)
             .stroke_width(4.)
             .radius(35.)
             .offset(self.offset.0, self.offset.1)
@@ -73,7 +73,7 @@ impl Lab {
             ),
             row![a, b]
                 .gap(25.)
-                .gpu_weld(
+                .weld(
                     self.policy
                         .reach(if self.crisp { 0. } else { 45. })
                         .blend(95.)
@@ -84,7 +84,7 @@ impl Lab {
         .gap(L)
         .center()
         .full()
-        .fill(Background)
+        .fill(Role::Background)
     }
     fn draw(&mut self) {
         if !self.visible {

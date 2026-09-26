@@ -17,7 +17,7 @@
 //! ```
 //! use mui_scene::prelude::*;
 //! # let _before =
-//! column([row([text("Filter"), spacer(), text("on")])
+//! col([row([text("Filter"), spacer(), text("on")])
 //!     .align(Align::Center)
 //!     .justify(Justify::SpaceBetween)
 //!     .width(Len::Px(240.))])
@@ -103,9 +103,9 @@ pub mod prelude {
     ///
     /// ```
     /// use mui_scene::prelude::*;
-    /// let badge = leaf(0., 12.).w(cq(20.)).id("badge");
+    /// let badge = block(0., 12.).w(cq(20.)).id("badge");
     /// let panel = col![row![badge]].w(400.);
-    /// let scene = resolve_scene(&SceneSpec::new(panel)).unwrap();
+    /// let scene = resolve(&SceneSpec::new(panel)).unwrap();
     /// assert_eq!(scene.surface("badge").unwrap().frame.size.width, 80.);
     /// ```
     pub fn cq(p: f64) -> Len {
@@ -119,9 +119,9 @@ pub mod prelude {
     /// ```
     /// use mui_scene::prelude::*;
     /// let rail = col![text("Filters")].w(clamp(64., 30., 220.)).id("rail");
-    /// let row = row![rail, leaf(0., 0.).grow(1.)];
+    /// let row = row![rail, block(0., 0.).grow(1.)];
     /// let scene =
-    ///     resolve_scene(&SceneSpec::new(row).offered(Size::new(240., 80.))).unwrap();
+    ///     resolve(&SceneSpec::new(row).offered(Size::new(240., 80.))).unwrap();
     /// assert_eq!(scene.surface("rail").unwrap().frame.size.width, 72.);
     /// ```
     pub fn clamp(min: f64, pct: f64, max: f64) -> Len {

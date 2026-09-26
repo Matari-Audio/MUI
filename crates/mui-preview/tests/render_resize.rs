@@ -41,9 +41,9 @@ fn a_resized_renderer_paints_its_whole_target() {
     // What `Gpu::resize` does.
     renderer.resize([WIDE, TALL]).expect("resize");
 
-    let root = leaf(f64::from(WIDE), f64::from(TALL)).fill(Fill::Color(Color::srgb(1., 1., 1.)));
+    let root = block(f64::from(WIDE), f64::from(TALL)).fill(Fill::Color(Color::srgb(1., 1., 1.)));
     let spec = SceneSpec::new(root).offered(Size::new(f64::from(WIDE), f64::from(TALL)));
-    let scene = resolve_scene(&spec).expect("scene");
+    let scene = resolve(&spec).expect("scene");
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("resize target"),
         size: wgpu::Extent3d {

@@ -54,7 +54,7 @@ fn panel(ui: &mut Ui, v: &mut [f64; 20], on: &mut [bool; 10]) -> El {
         let (k, _) = knob(ui, &*a.field("k"), "Cut", &mut v[10 + i], 0.0..=1.0);
         rows.push(row![b0, b1, t, s, k]);
     }
-    column(rows)
+    col(rows)
 }
 
 /// A widget built with the same id every frame allocates nothing for the id:

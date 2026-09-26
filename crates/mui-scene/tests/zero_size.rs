@@ -5,19 +5,19 @@ use mui_scene::prelude::*;
 #[test]
 fn a_zero_sized_filled_node_resolves() {
     for el in [
-        leaf(0., 8.).pill().fill(Role::Primary),
-        leaf(0., 0.).fill(Role::Primary).shadow(Shadow::soft(8.)),
-        leaf(20., 0.)
+        block(0., 8.).pill().fill(Role::Primary),
+        block(0., 0.).fill(Role::Primary).shadow(Shadow::soft(8.)),
+        block(20., 0.)
             .radius(4.)
             .fill(Role::Primary)
             .stroke(Role::Primary)
             .stroke_width(1.),
-        leaf(0., 8.)
+        block(0., 8.)
             .pill()
             .fill(Role::Primary)
             .shell(4., Role::Raised),
     ] {
-        let s = resolve_scene(&SceneSpec::new(row([el.id("m"), leaf(10., 10.)])));
+        let s = resolve(&SceneSpec::new(row([el.id("m"), block(10., 10.)])));
         assert!(s.is_ok(), "{:?}", s.err());
     }
 }

@@ -84,7 +84,7 @@ impl PreviewScene for Frosted {
                 .radius(8.0)
                 .fill(fill)
         };
-        let dialog = column([
+        let dialog = col([
             text("Discard this take?"),
             text("Everything since the last save is lost.").fill(Role::Dim),
             row([
@@ -99,13 +99,13 @@ impl PreviewScene for Frosted {
         .fill(Role::Surface)
         .elevation(Elevation::Floating)
         .id("dialog");
-        let dim = overlay([dialog])
+        let dim = stack([dialog])
             .full()
             .center()
             .fill(Color::oklcha(0.0, 0.0, 0.0, 0.45))
             .backdrop_blur(8.0)
             .id("dim");
-        overlay([busy, dim]).id("frosted")
+        stack([busy, dim]).id("frosted")
     }
 }
 
@@ -120,15 +120,15 @@ impl PreviewScene for PillTab {
         "Boolean union first, fillets second. The inner shell is a parallel offset of the merged outline."
     }
     fn specimen(&mut self, _: &mut Ui) -> El {
-        let control = |id: &str| leaf(28.0, 28.0).pill().fill(Role::Primary).id(id);
-        let tab = column([control("plus"), control("phase"), control("warp")])
+        let control = |id: &str| block(28.0, 28.0).pill().fill(Role::Primary).id(id);
+        let tab = col([control("plus"), control("phase"), control("warp")])
             .gap(10.0)
             .pad(22.0)
             .min_width(92.0)
             .align(Align::Center)
             .id("tab")
             .shell(12.0, Role::Raised);
-        column([tab, leaf(520.0, 230.0).id("panel")])
+        col([tab, block(520.0, 230.0).id("panel")])
             .align(Align::Start)
             .id("pill")
             .union(Role::Surface)
@@ -146,7 +146,7 @@ impl PreviewScene for ConstantThickness {
         "Each ring is a parallel offset of the ring outside it."
     }
     fn specimen(&mut self, _: &mut Ui) -> El {
-        leaf(320.0, 220.0)
+        block(320.0, 220.0)
             .radius(28.0)
             .fill(Role::Raised)
             .shell(12.0, Role::Field)
@@ -168,12 +168,12 @@ impl PreviewScene for SegmentedRow {
     }
     fn specimen(&mut self, _: &mut Ui) -> El {
         row((0..4).map(|i| {
-            leaf(70.0, 44.0)
+            block(70.0, 44.0)
                 .fill(if i == 1 { Role::Primary } else { Role::Raised })
                 .id(format!("cell-{i}"))
         }))
         .radius(22.0)
-        .join()
+        .segmented()
         .id("strip")
     }
 }
@@ -197,7 +197,7 @@ impl PreviewScene for Widgets {
     fn specimen(&mut self, ui: &mut Ui) -> El {
         let (go, clicked) = button(ui, "go", "Trigger");
         self.clicks += usize::from(clicked);
-        column([
+        col([
             row([
                 knob(ui, "cutoff", "Cutoff", &mut self.cutoff, 0.0..=1.0)
                     .0
@@ -296,7 +296,7 @@ impl PreviewScene for GlyphAxes {
         "A variable-font outline rebuilt as geometry at every axis position. Type to change the glyph."
     }
     fn specimen(&mut self, _: &mut Ui) -> El {
-        leaf(Self::CARD, Self::CARD)
+        block(Self::CARD, Self::CARD)
             .radius(24.0)
             .fill(Role::Raised)
             .id("glyph-card")
@@ -378,12 +378,12 @@ impl PreviewScene for Scrolling {
                     .0
                     .el()
                 });
-                let head = label(format!("octave {s}"))
+                let head = body(format!("octave {s}"))
                     .w(Len::Pct(100.))
                     .pad_xy(0., 4.)
                     .fill(Role::Surface)
                     .sticky();
-                column(std::iter::once(head).chain(rows)).gap(S)
+                col(std::iter::once(head).chain(rows)).gap(S)
             })
             .collect();
         // Source-atop, so the ramp paints the surface colour back over the
@@ -395,7 +395,7 @@ impl PreviewScene for Scrolling {
                 (1.0, Role::Surface.into()),
             ],
         );
-        let bands = column(sections)
+        let bands = col(sections)
             .gap(M)
             .pad(M)
             .scroll()
@@ -406,7 +406,7 @@ impl PreviewScene for Scrolling {
             .id("scroll");
         // No fade here, so the bar reads the whole way down; and a row, whose
         // bar runs along the bottom edge.
-        let presets = column((0..30).map(|i| text(format!("preset {i:02}")).pad_xy(8.0, 4.0)))
+        let presets = col((0..30).map(|i| text(format!("preset {i:02}")).pad_xy(8.0, 4.0)))
             .pad(S)
             .scroll()
             .size(160.0, 340.0)
@@ -427,7 +427,7 @@ impl PreviewScene for Scrolling {
         .radius(12.0)
         .fill(Role::Surface)
         .id("tags");
-        column([row([bands, presets]).gap(M), tags]).gap(M)
+        col([row([bands, presets]).gap(M), tags]).gap(M)
     }
 }
 
@@ -459,12 +459,12 @@ impl PreviewScene for Fields {
         };
         let (notes, edit) = text_edit(ui, "field-notes", notes, opts);
         self.submits += usize::from(edit.submitted);
-        column([
-            label("name"),
+        col([
+            body("name"),
             name,
-            label("note"),
+            body("note"),
             note,
-            label("notes"),
+            body("notes"),
             notes,
             text(format!("name = {}, submitted {}x", self.name, self.submits)).fill(Role::Dim),
         ])
@@ -504,9 +504,9 @@ impl PreviewScene for Picker {
         let (bpm, _) = drag_value(ui, "pick-bpm", &mut self.bpm, 20.0..=300.0);
         let bpm = bpm.value_text(format!("{:.1} BPM", self.bpm));
         let (gain, _) = drag_value(ui, "pick-gain", &mut self.gain, -60.0..=12.0);
-        column([
+        col([
             picker,
-            row([label("tempo"), bpm.el(), label("gain"), gain.el()])
+            row([body("tempo"), bpm.el(), body("gain"), gain.el()])
                 .gap(S)
                 .align(Align::Center),
         ])
@@ -541,14 +541,14 @@ impl PreviewScene for Tips {
         // The menu is an ordinary child under the button that opened it, not a
         // float at a hand-measured offset: .gap(M) supplies the distance, so a
         // fourth button or a different spacing scale reflows it.
-        let card = column([
+        let card = col([
             save.tip("Write the preset to disk"),
             revert.tip("Throw away every edit since the last save"),
             more,
         ])
         .when(held, |c| {
             c.push(
-                column([text("Rename"), text("Duplicate"), text("Delete")])
+                col([text("Rename"), text("Duplicate"), text("Delete")])
                     .gap(S)
                     .pad(M)
                     .radius(12.0)
@@ -562,7 +562,7 @@ impl PreviewScene for Tips {
         .radius(16.0)
         .fill(Role::Surface)
         .id("tips-card");
-        overlay([card]).id("tips")
+        stack([card]).id("tips")
     }
 }
 
@@ -605,7 +605,7 @@ impl PreviewScene for Curve {
         .size(320.0, 160.0)
         .radius(12.0)
         .fill(Role::Field);
-        column([
+        col([
             plot,
             slider(ui, "knee", "Cutoff", &mut self.cutoff, 0.0..=1.0)
                 .0
@@ -643,7 +643,7 @@ impl PreviewScene for CurveEditor {
             (None, Some(CurveEdit::Tension(j, h))) => format!("last bent segment {j} ({h:?})"),
             (None, None) => "drag a knot".to_owned(),
         };
-        column([
+        col([
             plot.size(320.0, 180.0).radius(12.0).fill(Role::Field),
             row([
                 text(readout).fill(Role::Dim),
@@ -752,7 +752,7 @@ impl PreviewScene for BinSpectrum {
             shown + 1,
             110.0 * (shown + 1) as f64
         );
-        column([
+        col([
             plot.size(360.0, 150.0).radius(12.0).fill(Role::Field),
             row([
                 text(readout).fill(Role::Dim),
@@ -845,7 +845,7 @@ impl PreviewScene for Hits {
         .square(200.0)
         .radius(100.0)
         .id("dial");
-        column([
+        col([
             dial,
             text(match (&tag, self.held) {
                 (Some(t), _) => format!("over {t}"),
@@ -959,15 +959,15 @@ impl PreviewScene for Images {
         .square(72)
         .radius(16.0)
         .fill(Role::Field);
-        column([
+        col([
             row([text("from_svg_data").fill(Role::Dim), spacer(), glyph])
                 .gap(M)
                 .align(Align::Center),
-            leaf(260.0, 64.0)
+            block(260.0, 64.0)
                 .pill()
                 .fill(Fill::Image(self.image.clone(), Fit::Cover))
                 .id("img-pill"),
-            leaf(260.0, 120.0)
+            block(260.0, 120.0)
                 .radius(16.0)
                 .fill(Fill::Image(self.image.clone(), Fit::Contain))
                 .id("img-card"),
@@ -1014,7 +1014,7 @@ impl PreviewScene for Wrapping {
                 .pill()
                 .fill(Role::Raised)
         });
-        column([
+        col([
             para,
             row(pills).gap(S).wrap().id("wrap-row"),
             row([caption("12 px").fill(Role::Dim), title("24 px")])
@@ -1071,7 +1071,7 @@ impl PreviewScene for Motion {
             .map(|i| {
                 let id = format!("card-{i}");
                 self.on[i] ^= ui.get(&id).clicked;
-                leaf(64.0, 64.0)
+                block(64.0, 64.0)
                     .radius(14.0)
                     .fill(if self.on[i] {
                         Role::Primary
@@ -1110,7 +1110,7 @@ impl PreviewScene for Motion {
         // A panel whose solved frame changes size: it grows, rounded, rather
         // than cutting to the new rectangle.
         self.wide ^= ui.get("mot-panel").clicked;
-        let panel = leaf(if self.wide { 260.0 } else { 120.0 }, 44.0)
+        let panel = block(if self.wide { 260.0 } else { 120.0 }, 44.0)
             .radius(22.0)
             .fill(Role::Raised)
             .animate_layout()
@@ -1121,7 +1121,7 @@ impl PreviewScene for Motion {
         // morphs between them.
         self.playing ^= ui.get("mot-transport").clicked;
         let playing = self.playing;
-        let transport = leaf(36.0, 36.0)
+        let transport = block(36.0, 36.0)
             .outline(move |s| {
                 let (w, h) = (s.width, s.height);
                 let p = |x: f64, y: f64| Point::new(x * w, y * h);
@@ -1163,7 +1163,7 @@ impl PreviewScene for Motion {
                 .appear(Appear::Slide(0.0, 16.0))
                 .id("mot-toast")
         } else {
-            leaf(0.0, 0.0)
+            block(0.0, 0.0)
         };
 
         // A rack named by slot index, reordered on click: each module keeps
@@ -1194,7 +1194,7 @@ impl PreviewScene for Motion {
                 .to(1.1, 0.3, Ease::IN_OUT)
                 .delay(f64::from(i) * 0.08);
             let v = ui.play(&format!("mot-dot-{i}"), &k);
-            leaf(14.0, 14.0)
+            block(14.0, 14.0)
                 .pill()
                 .fill(Role::Primary)
                 .opacity(v as f32)
@@ -1206,7 +1206,7 @@ impl PreviewScene for Motion {
             }
         }
 
-        column([
+        col([
             row(cards).gap(M).justify(Justify::Center),
             row([
                 pie,
@@ -1270,12 +1270,12 @@ impl PreviewScene for Cells {
             cell("first", Role::Field).order(-1),
             cell("e", Role::Raised),
         ];
-        column([
+        col([
             // min_col makes the declared 3 a ceiling: the same tree is three
             // columns on a wide window and one at 240.
             grid(3, cells).gap(S).min_col(120.0).id("grid"),
             row((0..3).map(|i| {
-                leaf(44.0, 24.0)
+                block(44.0, 24.0)
                     .pill()
                     .fill(Role::Raised)
                     .id(format!("ev-{i}"))
@@ -1287,7 +1287,7 @@ impl PreviewScene for Cells {
             // 90 px wide and its columns are 140, because `min_col` is a
             // minimum whether or not there is a window to drop columns
             // against -- the card grows, the cells do not shrink.
-            column([
+            col([
                 caption("hugging card, min_col(140)"),
                 grid(
                     2,
@@ -1337,8 +1337,8 @@ impl PreviewScene for Select {
     }
     fn specimen(&mut self, ui: &mut Ui) -> El {
         let field = text_input(ui, "sel-field", &mut self.value).0;
-        column([
-            label("field"),
+        col([
+            body("field"),
             field,
             text(format!("clipboard = {}", self.clipboard)).fill(Role::Dim),
         ])
@@ -1423,7 +1423,7 @@ impl PreviewScene for Gestures {
             })
             .collect();
 
-        column([
+        col([
             knob(ui, "g-cutoff", "Cutoff", &mut self.cutoff, 0.0..=1.0)
                 .0
                 .el(),
@@ -1489,12 +1489,12 @@ impl PreviewScene for Switched {
         .radius(12.0)
         .fill(Role::Field)
         // One call for both halves: the look and the gate.
-        .on(State::Disabled, |s| s.fill(Ink.alpha(0.04)))
-        .disabled(self.bypassed)
+        .on(State::Disabled, |s| s.fill(Role::Ink.alpha(0.04)))
+        .when(self.bypassed, |e| e.disabled())
         .opacity(if self.bypassed { 0.4 } else { 1.0 })
         .id("sw-rack");
-        column([
-            row([label("bypass"), spacer(), bypass])
+        col([
+            row([body("bypass"), spacer(), bypass])
                 .gap(S)
                 .align(Align::Center),
             rack,
@@ -1537,12 +1537,12 @@ pub fn editor() -> El {
             .w(clamp(64.0, 18.0, 120.0))
             .pad_xy(0.0, 8.0)
             .radius(8.0)
-            .on(State::Hover, |s| s.stroke(Ink.alpha(0.12)))
+            .on(State::Hover, |s| s.stroke(Role::Ink.alpha(0.12)))
             .id(format!("tab-{n}"))
     };
     let knob = |i: usize| {
         tile(col![
-            leaf(40.0, 40.0).pill().fill(Primary).id(format!("k{i}")),
+            block(40.0, 40.0).pill().fill(Role::Primary).id(format!("k{i}")),
             caption(["cut", "res", "drv", "mix"][i]),
         ])
     };
@@ -1598,31 +1598,31 @@ impl PreviewScene for Effects {
 pub fn effects() -> El {
     // A knob arc is a conic gradient and nothing else: no path, no per-frame
     // geometry, and the value is the stop position.
-    let knob = leaf(96.0, 96.0)
+    let knob = block(96.0, 96.0)
         .pill()
         .fill(Gradient::conic(
             -135.0,
-            [(0.0, Primary), (0.7, Primary), (0.7, Field), (1.0, Field)],
+            [(0.0, Role::Primary), (0.7, Role::Primary), (0.7, Role::Field), (1.0, Role::Field)],
         ))
         .id("knob");
-    let glow = leaf(96.0, 96.0)
+    let glow = block(96.0, 96.0)
         .pill()
         .fill(Gradient::radial(
             (0.35, 0.3),
             0.7,
-            [(0.0, Primary), (1.0, Surface)],
+            [(0.0, Role::Primary), (1.0, Role::Surface)],
         ))
         .id("glow");
-    let key = leaf(96.0, 96.0)
+    let key = block(96.0, 96.0)
         .radius(12.0)
-        .fill(Field)
+        .fill(Role::Field)
         .elevation(Elevation::Raised)
         .id("key");
-    let pane = leaf(96.0, 96.0).preset(glass()).id("glass");
+    let pane = block(96.0, 96.0).preset(glass()).id("glass");
     row![knob, glow, key, pane]
         .gap(L)
         .pad(L)
-        .fill(Surface)
+        .fill(Role::Surface)
         .id("effects")
 }
 
@@ -1651,7 +1651,7 @@ mod tests {
         use mui::vello::vello_cpu::{Pixmap, RenderContext, Resources};
         let (w, h) = (620u16, 160u16);
         let scene =
-            resolve_scene(&SceneSpec::new(effects()).offered(Size::new(w.into(), h.into())))
+            resolve(&SceneSpec::new(effects()).offered(Size::new(w.into(), h.into())))
                 .unwrap();
         let mut ctx = RenderContext::new(w, h);
         let mut res = Resources::default();
@@ -1743,7 +1743,7 @@ mod tests {
             let tree = editor();
             let mut spec = SceneSpec::new(editor()).offered(Size::new(w, h));
             spec.font = Some(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
-            let scene = resolve_scene(&spec).unwrap();
+            let scene = resolve(&spec).unwrap();
             let frames = scene.layout.all();
             walk(&tree, frames, &mut 0, None);
             let top = scene.layout.frame("k0").unwrap().y;

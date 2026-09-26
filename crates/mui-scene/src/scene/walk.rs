@@ -885,7 +885,7 @@ mod tests {
         let spec = |gap: f64| {
             SceneSpec::new(
                 row((0..2).map(|i| {
-                    leaf(40., 20.)
+                    block(40., 20.)
                         .radius(6.)
                         .fill(Role::Primary)
                         .id(format!("b{i}"))
@@ -901,12 +901,12 @@ mod tests {
                 .map(|p| (p.path.clone(), p.offset))
                 .unwrap()
         };
-        let mut cache = TextCache::default();
-        let first = resolve_scene_with(&spec(4.), &mut cache).unwrap();
+        let mut cache = Resolver::default();
+        let first = cache.resolve(&spec(4.)).unwrap();
         let ((a, at_a), (b, at_b)) = (fill(&first, "b0"), fill(&first, "b1"));
         assert!(Arc::ptr_eq(&a, &b), "one path for both buttons");
         assert_eq!((at_a, at_b), (Point::new(4., 4.), Point::new(48., 4.)));
-        let moved = resolve_scene_with(&spec(10.), &mut cache).unwrap();
+        let moved = cache.resolve(&spec(10.)).unwrap();
         let (c, at_c) = fill(&moved, "b1");
         assert!(Arc::ptr_eq(&a, &c), "a move keeps the path");
         assert_eq!(at_c, Point::new(60., 10.));
@@ -928,11 +928,11 @@ mod tests {
             180.,
             [(0.7, Role::Surface.alpha(0.)), (1., Role::Surface.into())],
         );
-        let row = col![leaf(40., 20.).fill(Role::Primary)]
+        let row = col![block(40., 20.).fill(Role::Primary)]
             .pad(8.)
             .mask(fade)
             .id("list");
-        let s = resolve_scene(&SceneSpec::new(row)).unwrap();
+        let s = resolve(&SceneSpec::new(row)).unwrap();
         let at = |l: Layer| s.paint.iter().position(|p| p.layer == l).unwrap();
         let blend = at(Layer::Blend {
             mix: Mix::Normal,
@@ -950,13 +950,13 @@ mod tests {
     /// A blended node's whole subtree, clip included, sits between the pair.
     #[test]
     fn a_blended_node_is_wrapped_in_a_layer_pair() {
-        let dim = column([leaf(10., 10.).fill(Role::Ink).id("kid")])
+        let dim = col([block(10., 10.).fill(Role::Ink).id("kid")])
             .fill(Role::Surface)
             .blend(Mix::Multiply)
             .opacity(0.5)
             .id("dim");
-        let root = row([dim, leaf(10., 10.).fill(Role::Surface).id("plain")]).id("root");
-        let s = resolve_scene(&SceneSpec::new(root).offered(Size::new(60., 20.))).unwrap();
+        let root = row([dim, block(10., 10.).fill(Role::Surface).id("plain")]).id("root");
+        let s = resolve(&SceneSpec::new(root).offered(Size::new(60., 20.))).unwrap();
         let layers: Vec<_> = s.paint.iter().map(|p| (&*p.key, p.layer)).collect();
         let at = |k, l| layers.iter().position(|x| *x == (k, l)).unwrap();
         let open = at(
@@ -981,13 +981,13 @@ mod tests {
         // A square tab welded to a rounded body: the tab's own fill must not
         // paint the corner the fillet rounded off, so the weld clips.
         let root = row([
-            leaf(36., 60.).fill(Role::Surface).radius(0.).id("tab"),
-            leaf(200., 120.).id("body"),
+            block(36., 60.).fill(Role::Surface).radius(0.).id("tab"),
+            block(200., 120.).id("body"),
         ])
         .radius(20.)
         .union(Role::Surface)
         .id("weld");
-        let s = resolve_scene(&SceneSpec::new(root).offered(Size::new(236., 120.))).unwrap();
+        let s = resolve(&SceneSpec::new(root).offered(Size::new(236., 120.))).unwrap();
         let order: Vec<_> = s.paint.iter().map(|p| (&*p.key, p.layer)).collect();
         let at = |key: &str, layer: Layer| order.iter().position(|x| *x == (key, layer)).unwrap();
         assert!(
@@ -1006,14 +1006,14 @@ mod tests {
 
     #[test]
     fn clip_floats_canvas_cursor_and_content() {
-        let list = column([leaf(50., 30.).id("a"), leaf(50., 30.), leaf(50., 30.)])
+        let list = col([block(50., 30.).id("a"), block(50., 30.), block(50., 30.)])
             .gap(10.)
             .scroll()
             .scrolled(0., 25.)
             .size(60., 60.)
             .cursor(Cursor::Hand)
             .id("list");
-        let tip = leaf(10., 10.).fill(Primary).float().id("tip");
+        let tip = block(10., 10.).fill(Role::Primary).float().id("tip");
         let draw = canvas(|s| {
             vec![Draw::stroke(
                 Path::default().move_to(Point::new(0., s.height)).cubic_to(
@@ -1021,14 +1021,14 @@ mod tests {
                     Point::new(s.width / 2., 0.),
                     Point::new(s.width, s.height),
                 ),
-                Primary,
+                Role::Primary,
                 2.,
             )]
         })
         .size(40., 40.)
         .id("curve");
-        let root = column([list, tip, draw]).id("root");
-        let s = resolve_scene(&SceneSpec::new(root)).unwrap();
+        let root = col([list, tip, draw]).id("root");
+        let s = resolve(&SceneSpec::new(root)).unwrap();
         let layers: Vec<_> = s.paint.iter().map(|p| (&*p.key, p.layer)).collect();
         let at = |k: &str, l: Layer| layers.iter().position(|x| *x == (k, l)).unwrap();
         assert!(at("list", Layer::Clip) < at("list", Layer::Unclip));
@@ -1053,12 +1053,12 @@ mod tests {
 
     #[test]
     fn rounded_clip_exposes_cached_path_alongside_rect_bounds() {
-        let clip = column([leaf(20., 20.).id("a"), leaf(20., 20.).id("b")])
+        let clip = col([block(20., 20.).id("a"), block(20., 20.).id("b")])
             .size(40., 40.)
             .radius(10.)
             .clip()
             .id("clip");
-        let s = resolve_scene(&SceneSpec::new(clip)).unwrap();
+        let s = resolve(&SceneSpec::new(clip)).unwrap();
         let parent = s.surface("clip").unwrap();
         let child = s.surface("a").unwrap();
         let sibling = s.surface("b").unwrap();
@@ -1086,17 +1086,17 @@ mod tests {
 
     #[test]
     fn nested_rounded_clips_keep_every_cached_path() {
-        let inner = column([leaf(30., 30.).id("leaf")])
+        let inner = col([block(30., 30.).id("leaf")])
             .size(30., 30.)
             .radius(6.)
             .clip()
             .id("inner");
-        let outer = column([inner])
+        let outer = col([inner])
             .size(40., 40.)
             .radius(10.)
             .clip()
             .id("outer");
-        let s = resolve_scene(&SceneSpec::new(outer)).unwrap();
+        let s = resolve(&SceneSpec::new(outer)).unwrap();
         let paths = s.surface("leaf").unwrap().clip_path.as_ref().unwrap();
         assert_eq!(
             paths.len(),
@@ -1120,13 +1120,13 @@ mod tests {
     /// inside the scroll's clip -- a float would escape it.
     #[test]
     fn a_sticky_header_paints_over_its_section_and_keeps_the_clip() {
-        let section = column([
-            leaf(60., 20.).fill(Role::Surface).id("head").sticky(),
-            leaf(60., 60.).id("row"),
+        let section = col([
+            block(60., 20.).fill(Role::Surface).id("head").sticky(),
+            block(60., 60.).id("row"),
         ])
         .id("section");
-        let list = column([section]).scroll().size(60., 40.).id("list");
-        let s = resolve_scene(&SceneSpec::new(list)).unwrap();
+        let list = col([section]).scroll().size(60., 40.).id("list");
+        let s = resolve(&SceneSpec::new(list)).unwrap();
         let order: Vec<_> = s.surfaces().map(|s| &*s.key).collect();
         assert_eq!(
             order,
@@ -1149,14 +1149,14 @@ mod tests {
         };
         let plot = canvas(move |s| {
             vec![
-                Draw::fill(box_(s.width, s.height), Primary),
+                Draw::fill(box_(s.width, s.height), Role::Primary),
                 Draw::hit(box_(s.width / 2., s.height), "left"),
             ]
         })
         .size(40., 20.)
         .id("plot");
-        let root = column([leaf(40., 30.), plot]);
-        let s = resolve_scene(&SceneSpec::new(root)).unwrap();
+        let root = col([block(40., 30.), plot]);
+        let s = resolve(&SceneSpec::new(root)).unwrap();
         let surface = s.surface("plot").unwrap();
         let [(tag, path)] = &surface.hits[..] else {
             panic!("one tagged draw, got {:?}", surface.hits.len())
@@ -1182,7 +1182,7 @@ mod tests {
         .baseline();
         let mut sp = SceneSpec::new(root);
         sp.font = Some(font());
-        let s = resolve_scene(&sp).unwrap();
+        let s = resolve(&sp).unwrap();
         let y = |k: &str| {
             s.paint
                 .iter()
@@ -1200,7 +1200,7 @@ mod tests {
             text("a").text_size(12.).id("small"),
             text("b").text_size(24.).id("big"),
         ]);
-        let p = resolve_scene(&plain).unwrap();
+        let p = resolve(&plain).unwrap();
         let py = |k: &str| {
             p.paint
                 .iter()
@@ -1229,13 +1229,13 @@ mod tests {
         let root = row([
             text("Kurv").text_size(22.).id("title"),
             text("v1.0").text_size(11.).id("ver"),
-            leaf(80., 40.).id("btn"),
+            block(80., 40.).id("btn"),
         ])
         .baseline()
         .gap(10.);
         let mut sp = SceneSpec::new(root).offered(Size::new(400., 60.));
         sp.font = Some(font());
-        let s = resolve_scene(&sp).unwrap();
+        let s = resolve(&sp).unwrap();
         let t = s.layout.frame("title").unwrap();
         let b = baselines(&s, "title")[0];
         assert_eq!(b, baselines(&s, "ver")[0], "one baseline, two sizes");
@@ -1257,7 +1257,7 @@ mod tests {
         .gap(8.);
         let mut sp = SceneSpec::new(root).offered(Size::new(120., 200.));
         sp.font = Some(font());
-        let s = resolve_scene(&sp).unwrap();
+        let s = resolve(&sp).unwrap();
         let (a, c) = (baselines(&s, "a")[0], baselines(&s, "c")[0]);
         assert_eq!(a, baselines(&s, "b")[0], "line one shares a baseline");
         assert!(a < c, "line two sits below line one: {a} {c}");
@@ -1269,14 +1269,14 @@ mod tests {
     fn a_device_scale_puts_every_edge_and_every_baseline_on_the_grid() {
         let long = "wrap ".repeat(40);
         let row = row![
-            leaf(0., 20.).grow(1.).id("a"),
-            leaf(0., 20.).grow(1.).id("b"),
-            leaf(0., 20.).grow(1.).id("c"),
+            block(0., 20.).grow(1.).id("a"),
+            block(0., 20.).grow(1.).id("b"),
+            block(0., 20.).grow(1.).id("c"),
         ];
-        let root = column([row, column([text(long).id("p")]).w(120)]);
+        let root = col([row, col([text(long).id("p")]).w(120)]);
         let mut sp = SceneSpec::new(root).offered(Size::new(41., 300.)).scale(1.);
         sp.font = Some(font());
-        let s = resolve_scene(&sp).unwrap();
+        let s = resolve(&sp).unwrap();
         let edges: Vec<[f64; 2]> = ["a", "b", "c"]
             .iter()
             .map(|k| {
@@ -1302,12 +1302,12 @@ mod tests {
     /// Fill, clip, mask and surface all hold the node's one outline.
     #[test]
     fn a_filled_clipping_node_shares_one_outline() {
-        let card = column([leaf(10., 10.)])
+        let card = col([block(10., 10.)])
             .fill(Role::Surface)
             .clip()
             .mask(Role::Surface)
             .id("card");
-        let s = resolve_scene(&SceneSpec::new(card)).unwrap();
+        let s = resolve(&SceneSpec::new(card)).unwrap();
         let outline = &s.surface("card").unwrap().path;
         for layer in [Layer::Fill, Layer::Clip, Layer::Mask] {
             let p = s.paint.iter().find(|p| p.layer == layer).unwrap();
@@ -1318,10 +1318,10 @@ mod tests {
     /// A warm resolve hands every node the key it had last frame.
     #[test]
     fn a_warm_resolve_reuses_every_key() {
-        let spec = SceneSpec::new(column([leaf(10., 10.).id("named"), leaf(10., 10.)]));
-        let mut text = TextCache::default();
-        let cold = resolve_scene_with(&spec, &mut text).unwrap();
-        let warm = resolve_scene_with(&spec, &mut text).unwrap();
+        let spec = SceneSpec::new(col([block(10., 10.).id("named"), block(10., 10.)]));
+        let mut text = Resolver::default();
+        let cold = text.resolve(&spec).unwrap();
+        let warm = text.resolve(&spec).unwrap();
         assert_eq!(cold.surfaces().count(), 3);
         for (a, b) in cold.surfaces().zip(warm.surfaces()) {
             assert!(Arc::ptr_eq(&a.key, &b.key), "{} was allocated again", a.key);
@@ -1330,17 +1330,17 @@ mod tests {
 
     #[test]
     fn a_rect_surface_reads_its_bounds_off_the_rect() {
-        let s = resolve_scene(&SceneSpec::new(column([leaf(40., 20.).id("k")]))).unwrap();
+        let s = resolve(&SceneSpec::new(col([block(40., 20.).id("k")]))).unwrap();
         let k = s.surface("k").unwrap();
         assert_eq!(k.bounds.unwrap(), k.rect.unwrap().bounds());
     }
 
     #[test]
     fn a_text_node_keeps_no_fill_layer_and_no_glyph_path() {
-        let root = column([text("hi").fill(Role::Primary).id("t")]);
+        let root = col([text("hi").fill(Role::Primary).id("t")]);
         let mut sp = SceneSpec::new(root);
         sp.font = Some(font());
-        let s = resolve_scene(&sp).unwrap();
+        let s = resolve(&sp).unwrap();
         assert!(
             !s.paint
                 .iter()
@@ -1366,7 +1366,7 @@ mod tests {
             Vec::new()
         })
         .size(10., 10.);
-        resolve_scene(&SceneSpec::new(root)).unwrap();
+        resolve(&SceneSpec::new(root)).unwrap();
         assert_eq!(seen.get(), 1);
     }
     /// A cached draw list paints the very same paths every frame, where it
@@ -1375,7 +1375,7 @@ mod tests {
     fn a_cached_canvas_reuses_its_placed_paths() {
         let cache = crate::CanvasCache::new();
         let spec = |pad: f64| {
-            let draw = crate::canvas_cached(&cache, 1, |s| {
+            let draw = crate::canvas_keyed(&cache, 1, |s| {
                 vec![crate::Draw::fill(
                     Path::polyline(
                         [
@@ -1390,17 +1390,17 @@ mod tests {
             })
             .size(20., 20.)
             .id("c");
-            SceneSpec::new(column([draw]).pad(Spacing::Px(pad)))
+            SceneSpec::new(col([draw]).pad(Spacing::Px(pad)))
         };
         let path = |s: &ResolvedScene| {
             let p = s.paint.iter().find(|p| p.layer == Layer::Draw(0)).unwrap();
             (p.path.clone(), p.placed())
         };
-        let mut text = TextCache::default();
-        let (a, _) = path(&resolve_scene_with(&spec(4.), &mut text).unwrap());
-        let (b, _) = path(&resolve_scene_with(&spec(4.), &mut text).unwrap());
+        let mut text = Resolver::default();
+        let (a, _) = path(&text.resolve(&spec(4.)).unwrap());
+        let (b, _) = path(&text.resolve(&spec(4.)).unwrap());
         assert!(Arc::ptr_eq(&a, &b), "a still canvas re-placed its paths");
-        let (moved, placed) = path(&resolve_scene_with(&spec(9.), &mut text).unwrap());
+        let (moved, placed) = path(&text.resolve(&spec(9.)).unwrap());
         assert!(
             Arc::ptr_eq(&a, &moved),
             "a moved canvas re-placed its paths"
@@ -1420,8 +1420,8 @@ mod tests {
     ) -> SceneSpec {
         static FONT: std::sync::LazyLock<Font> = std::sync::LazyLock::new(super::super::font);
         let count = draws.clone();
-        let mut panel = column([
-            leaf(40., 20.).fill(Role::Primary).radius(6.).id("m.a"),
+        let mut panel = col([
+            block(40., 20.).fill(Role::Primary).radius(6.).id("m.a"),
             text("kept").id("m.t"),
             canvas(move |s| {
                 count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -1436,7 +1436,7 @@ mod tests {
         .fill(Role::Surface)
         .id("m");
         panel.payload_mut().extras_mut().memo = Some(crate::Memo { id: 7, reused });
-        let lead = leaf(lead, 10.).fill(Role::Raised);
+        let lead = block(lead, 10.).fill(Role::Raised);
         let mut spec =
             SceneSpec::new(row([lead, panel]).align(Align::Start)).offered(Size::new(300., 100.));
         spec.font = Some(FONT.clone());
@@ -1468,7 +1468,7 @@ mod tests {
     #[test]
     fn a_reused_memo_copies_last_resolves_paint() {
         let d = draws();
-        let mut text = TextCache::default();
+        let mut text = Resolver::default();
         let a = retained(&memo_spec(50., false, &d), &mut text, None);
         let b = retained(&memo_spec(50., true, &d), &mut text, Some(&a));
         assert_eq!(count(&d), 1, "the reused canvas was drawn again");
@@ -1491,12 +1491,12 @@ mod tests {
     #[test]
     fn a_moved_memo_translates_its_paint_and_surfaces() {
         let d = draws();
-        let mut text = TextCache::default();
+        let mut text = Resolver::default();
         let a = retained(&memo_spec(50., false, &d), &mut text, None);
         let b = retained(&memo_spec(70., true, &d), &mut text, Some(&a));
         assert_eq!(count(&d), 1, "a moved memo was walked instead of copied");
         let walked =
-            resolve_scene_with(&memo_spec(70., false, &draws()), &mut TextCache::default())
+            Resolver::default().resolve(&memo_spec(70., false, &draws()))
                 .unwrap();
         assert_eq!(b.paint, walked.paint);
         for k in ["m", "m.a", "m.t", "m.c"] {
@@ -1510,7 +1510,7 @@ mod tests {
     #[test]
     fn a_copied_memo_keeps_its_cache_entries() {
         let d = draws();
-        let mut text = TextCache::default();
+        let mut text = Resolver::default();
         let mut prev = retained(&memo_spec(50., false, &d), &mut text, None);
         for i in 0..MEMO_AGE + 3 {
             prev = retained(&memo_spec(50., true, &d), &mut text, Some(&prev));

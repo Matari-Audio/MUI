@@ -253,15 +253,15 @@ mod tests {
 
     #[test]
     fn internal_divider_shares_the_outer_border_material_and_width() {
-        let object = column([leaf(200., 60.), leaf(200., 60.).id("lower")])
-            .union(Surface)
+        let object = col([block(200., 60.), block(200., 60.).id("lower")])
+            .union(Role::Surface)
             .radius(12.)
             .border_ramp(
-                BorderRamp::horizontal((Primary, 4.), (Dim, 1.)).dividers([Id::of("lower")]),
+                BorderRamp::horizontal((Role::Primary, 4.), (Role::Dim, 1.)).dividers([Id::of("lower")]),
             )
             .id("object");
         let scene =
-            crate::resolve_scene(&SceneSpec::new(object).offered(Size::new(200., 120.))).unwrap();
+            crate::resolve(&SceneSpec::new(object).offered(Size::new(200., 120.))).unwrap();
         let bands: Vec<_> = scene
             .paint
             .iter()
@@ -294,18 +294,18 @@ mod tests {
 
     #[test]
     fn edge_tabs_share_one_material_below_controls() {
-        let tab = leaf(32., 36.).radius((0., 0.)).id("tab");
-        let plate = row![tab, leaf(180., 140.).radius((0., 0.))]
+        let tab = block(32., 36.).radius((0., 0.)).id("tab");
+        let plate = row![tab, block(180., 140.).radius((0., 0.))]
             .align(Align::Center)
             .union(Fill::None)
             .radius((0., 0.));
-        let object = column([plate])
-            .union(Surface)
+        let object = col([plate])
+            .union(Role::Surface)
             .radius((12., 10.))
-            .border_ramp(BorderRamp::horizontal((Primary, 4.), (Dim, 1.)).tabs([Id::of("tab")]))
+            .border_ramp(BorderRamp::horizontal((Role::Primary, 4.), (Role::Dim, 1.)).tabs([Id::of("tab")]))
             .id("object");
         let scene =
-            crate::resolve_scene(&SceneSpec::new(object).offered(Size::new(212., 140.))).unwrap();
+            crate::resolve(&SceneSpec::new(object).offered(Size::new(212., 140.))).unwrap();
         let bands: Vec<_> = scene
             .paint
             .iter()
@@ -335,7 +335,7 @@ mod tests {
 
     #[test]
     fn widths_follow_the_anchor_and_vector_band_matches_the_ramp() {
-        let ramp = BorderRamp::horizontal((Primary, 6.0), (Dim, 1.0)).transition(0.35, 0.65);
+        let ramp = BorderRamp::horizontal((Role::Primary, 6.0), (Role::Dim, 1.0)).transition(0.35, 0.65);
         let frame = Frame {
             x: 0.0,
             y: 0.0,
@@ -398,9 +398,9 @@ mod tests {
             .unwrap()
             .path();
         let mut cache = BorderCache::default();
-        let mut ramp = BorderRamp::horizontal((Primary, 6.0), (Dim, 1.0));
+        let mut ramp = BorderRamp::horizontal((Role::Primary, 6.0), (Role::Dim, 1.0));
         let before = cache.band("card", &outline, &ramp, frame, 0.1).unwrap();
-        ramp.from.0 = Fill::Role(Secondary);
+        ramp.from.0 = Fill::Role(Role::Secondary);
         assert_eq!(
             before,
             cache.band("card", &outline, &ramp, frame, 0.1).unwrap()
