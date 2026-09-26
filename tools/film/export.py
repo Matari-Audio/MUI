@@ -34,12 +34,12 @@ def export_film(session,record,root):
     data={'version':1,'plugin':record['plugin'],'sampleRate':48000,'start':record['start'],'duration':duration,'events':events,'scopes':scopes}
     (assets/'take.mjs').write_text('export default '+json.dumps(data,separators=(',',':'))+';\n')
     (folder/'take.json').write_text(json.dumps({k:v for k,v in data.items() if k!='scopes'},indent=2)+'\n')
-    for name in ['gsap.min.js','Inter-V.otf','Inter-LICENSE.txt']:shutil.copyfile(root/'tools/mui-motion/assets'/name,assets/name)
-    shutil.copyfile(root/'tools/mui-motion/layers.mjs',assets/'layers.mjs')
-    template=(root/'tools/mui-motion/film.html').read_text().replace('__DURATION__',str(duration))
+    for name in ['Inter-V.otf','Inter-LICENSE.txt']:shutil.copyfile(root/'tools/film/assets'/name,assets/name)
+    shutil.copyfile(root/'tools/film/layers.mjs',assets/'layers.mjs')
+    template=(root/'tools/film/film.html').read_text().replace('__DURATION__',str(duration))
     (folder/'index.html').write_text(template)
     (folder/'package.json').write_text(json.dumps({'private':True,'type':'module','scripts':{'dev':'npx --yes hyperframes@0.8.66 preview','check':'npx --yes hyperframes@0.8.66 check','render':'npx --yes hyperframes@0.8.66 render'}},indent=2)+'\n')
     (folder/'hyperframes.json').write_text('{}\n')
     (folder/'BRIEF.md').write_text('workflow: general-video\nflow: companion\n\nRecorded MUI instrument proof. Native PCM audio, note states, native scene revisions, and presentation poses share a sample clock. The scope derives from the exported WAV. No synthesis occurs at video-render time.\n')
-    (folder/'assets/PROVENANCE.md').write_text('Audio: native plugin PCM captured by mui-motion-bridge, quantized to stereo PCM16 at48kHz. Scope: exact exported WAV. UI: native MUI scene capture from the same session. Fonts and GSAP retain the bundled upstream licenses.\n')
+    (folder/'assets/PROVENANCE.md').write_text('Audio: native plugin PCM captured by mui-motion-bridge, quantized to stereo PCM16 at48kHz. Scope: exact exported WAV. UI: native MUI scene capture from the same session. Fonts retain the bundled upstream license; GSAP loads from a pinned CDN URL under its own license.\n')
     return folder

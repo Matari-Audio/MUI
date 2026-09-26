@@ -1,13 +1,13 @@
-# MUI Motion
+# MUI Film (tools/film)
 
-MUI Motion exposes a **running native MUI editor** as discoverable, independently transformable surfaces while its original audio engine keeps running. The optional Rust host is `mui-motion-bridge`; the existing `mui-motion` crate remains MUI's spring/curve mathematics. Normal plugin builds gain no browser or audio-host dependency.
+The film pipeline (formerly `tools/mui-motion`) exposes a **running native MUI editor** as discoverable, independently transformable surfaces while its original audio engine keeps running. The optional Rust host is `mui-motion-bridge`; the existing `mui-motion` crate remains MUI's spring/curve mathematics. Normal plugin builds gain no browser or audio-host dependency.
 
 ## Run
 
 ```sh
-python3 -m pip install -r tools/mui-motion/requirements.txt
-cargo build -p mui-motion-bridge --example tone
-python3 tools/mui-motion/server.py --binary target/debug/examples/tone --port 3022
+python3 -m pip install -r tools/film/requirements.txt
+cargo build --manifest-path media/Cargo.toml -p mui-motion-bridge --example tone
+python3 tools/film/server.py --binary media/target/debug/examples/tone --port 3022
 ```
 
 Open the page and click **Connect & enable audio**. Play notes, drag the actual native controls, or choose **Arrange** to move presentation planes. The component catalog comes from the native scene. **Extract**, **Highlight**, **Fill view**, and proportional zoom work on selected components. Native layout size rebuilds the component through MUI layout; it does not stretch its pixels.
@@ -16,8 +16,8 @@ Kurv uses the same host, browser, input mapping, discovery, and recording path:
 
 ```sh
 # Initialize the isolated export checkout first: videos/kurv-unfold/README.md.
-CARGO_TARGET_DIR=/tmp/kurv-motion-target python3 tools/kurv-live/build.py --build-dir /tmp/kurv-motion-build
-python3 tools/mui-motion/server.py --binary /tmp/kurv-motion-target/debug/kurv-motion-live --port 3020
+CARGO_TARGET_DIR=/tmp/kurv-motion-target python3 media/tools/kurv-live/build.py --build-dir /tmp/kurv-motion-build
+python3 tools/film/server.py --binary /tmp/kurv-motion-target/debug/kurv-motion-live --port 3020
 ```
 
 Its working source checkout is never patched. The adapter supplies advancing host transport, the real Truce meter store, and a real LFO-to-oscillator-level route. Native LFO playheads and modulation displays consume the processor's telemetry. The independent Tone instrument demonstrates the same live-editor contract with a native knob and DSP-driven tremolo phase.
@@ -56,7 +56,7 @@ await motion.perform([
 Commands are acknowledged on the engine clock; script waits are browser scheduling, not sample-accurate automation. Record the resulting audio/visual performance. Saved takes can be rendered with the page's **Render MP4** button or:
 
 ```sh
-python3 tools/mui-motion/render.py /path/to/film --output performance.mp4
+python3 tools/film/render.py /path/to/film --output performance.mp4
 ```
 
 ## Integrate another MUI plugin
@@ -96,11 +96,11 @@ Wire: native stdin is newline JSON; stdout is one `J`/`A` byte, little-endian u3
 ## Checks
 
 ```sh
-cargo test -p mui-motion-bridge -p mui-scene
+cargo test --manifest-path media/Cargo.toml -p mui-motion-bridge && cargo test -p mui-scene
 PUPPETEER_MODULE=/path/to/puppeteer-core.js CHROME=/path/to/chrome \
-  node tools/mui-motion/live-check.mjs http://localhost:3022
+  node tools/film/live-check.mjs http://localhost:3022
 # Same check against Kurv on 3020.
-python3 tools/mui-motion/check-recording.py /path/to/film
+python3 tools/film/check-recording.py /path/to/film
 ```
 
 The browser check exercises DSP-driven native pixel changes without edits, inverse-projected native control dragging, component selection/highlighting/animation, Tone layout reflow without stretching its knob, audio health, recording, and history-independent visual seeking.

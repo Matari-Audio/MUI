@@ -173,7 +173,7 @@ def main():
     app.router.add_get('/ws',gateway.socket)
     files={'/':'index.html','/input.mjs':'input.mjs','/client.mjs':'client.mjs','/stream-worklet.mjs':'stream-worklet.mjs'}
     for route,file in files.items():app.router.add_get(route,lambda request,file=file:web.FileResponse(HERE/file))
-    app.router.add_get('/layers.mjs',lambda r:web.FileResponse(ROOT/'tools/mui-motion/layers.mjs'))
+    app.router.add_get('/layers.mjs',lambda r:web.FileResponse(ROOT/'tools/film/layers.mjs'))
     app.router.add_get('/Inter-V.otf',lambda r:web.FileResponse(HERE/'assets/Inter-V.otf'))
     app.router.add_static('/sessions/',a.sessions.resolve(),show_index=False)
     async def cleanup(app):gateway.exports.shutdown(wait=False,cancel_futures=True)
