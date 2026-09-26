@@ -1490,7 +1490,7 @@ impl PreviewScene for Switched {
         .fill(Role::Field)
         // One call for both halves: the look and the gate.
         .on(State::Disabled, |s| s.fill(Role::Ink.alpha(0.04)))
-        .when(self.bypassed, |e| e.disabled())
+        .when(self.bypassed, Styled::disabled)
         .opacity(if self.bypassed { 0.4 } else { 1.0 })
         .id("sw-rack");
         col([

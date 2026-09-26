@@ -3085,7 +3085,7 @@ mod tests {
                 .fill(Role::Field)
                 .on(State::Hover, |s| s.fill(Role::Primary))
                 .on(State::Disabled, |s| s.fill(Role::Dim))
-                .when(off, |e| e.disabled())
+                .when(off, Styled::disabled)
                 .focusable()
                 .a11y(A11y::Button)
                 .id("bypass")

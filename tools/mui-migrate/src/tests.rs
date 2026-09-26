@@ -95,7 +95,7 @@ fn methods_and_call_shapes() {
             "fn f() {\n    e.label(name).role(Kind::Slider { v })\n        .disabled(false)\n        .disabled(!on)\n        .transition(s)\n        .layout_transition(s)\n        .scroll_bar(false)\n        .scroll_bar(show)\n        .scroll_bar(a && b);\n    ramp.transition(0.3, 0.6);\n    a.role(accent.role());\n    pal.disabled(c);\n}\n",
         ),
         &with_prelude(
-            "fn f() {\n    e.named(name).a11y(A11y::Slider { v })\n        .when(!on, |e| e.disabled())\n        .animate_with(s)\n        .animate_layout_with(s)\n        .no_scrollbar()\n        .when(!show, |e| e.no_scrollbar())\n        .when(!(a && b), |e| e.no_scrollbar());\n    ramp.transition(0.3, 0.6);\n    a.role(accent.role());\n    pal.disabled(c);\n}\n",
+            "fn f() {\n    e.named(name).a11y(A11y::Slider { v })\n        .when(!on, Styled::disabled)\n        .animate_with(s)\n        .animate_layout_with(s)\n        .no_scrollbar()\n        .when(!show, Styled::no_scrollbar)\n        .when(!(a && b), Styled::no_scrollbar);\n    ramp.transition(0.3, 0.6);\n    a.role(accent.role());\n    pal.disabled(c);\n}\n",
         ),
     );
 }

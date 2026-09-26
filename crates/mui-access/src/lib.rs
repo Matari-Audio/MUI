@@ -398,7 +398,7 @@ mod tests {
                     carets: vec![8., 16., 26., 34.],
                 })
                 .focusable()
-                .when(disabled, |e| e.disabled())
+                .when(disabled, Styled::disabled)
                 .id("name")
         };
         let scene = resolve(&SceneSpec::new(row![field(false)].pad(10.))).unwrap();

@@ -99,11 +99,11 @@ pub const RULES: &[Rule] = &[
     // On builder chains only: `palette.disabled(color)` is a colour, not a switch.
     Call { chain: &[("disabled", &[Is("true")])], to: ".disabled()", gate: MuiChain, needs: &[] },
     Call { chain: &[("disabled", &[Is("false")])], to: "", gate: MuiChain, needs: &[] },
-    Call { chain: &[("disabled", &[A])], to: ".when($1, |e| e.disabled())", gate: MuiChain, needs: &[] },
+    Call { chain: &[("disabled", &[A])], to: ".when($1, Styled::disabled)", gate: MuiChain, needs: &["Styled"] },
     // The overlay scrollbar is on by default, so the switch is `no_scrollbar`.
     Call { chain: &[("scroll_bar", &[Is("true")])], to: "", gate: G, needs: &[] },
     Call { chain: &[("scroll_bar", &[Is("false")])], to: ".no_scrollbar()", gate: G, needs: &[] },
-    Call { chain: &[("scroll_bar", &[A])], to: ".when($!1, |e| e.no_scrollbar())", gate: G, needs: &[] },
+    Call { chain: &[("scroll_bar", &[A])], to: ".when($!1, Styled::no_scrollbar)", gate: G, needs: &["Styled"] },
     // Motion.
     Call { chain: &[("transition", &[A])], to: ".animate_with($1)", gate: Mui, needs: &[] },
     Method { old: "layout_transition", new: "animate_layout_with", gate: G },

@@ -1043,7 +1043,7 @@ pub trait Styled: Paints {
     /// hit testing and out of Tab, and it paints whatever it declared for
     /// [`State::Disabled`]. A greyed control that still drags is worse than
     /// no grey at all, so the look and the gate are one call. A condition
-    /// goes through [`Paints::when`]: `.when(!module.enabled, |e| e.disabled())`.
+    /// goes through [`Paints::when`]: `.when(!module.enabled, Styled::disabled)`.
     ///
     /// ```
     /// use mui_scene::prelude::*;
