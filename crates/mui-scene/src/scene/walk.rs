@@ -421,22 +421,21 @@ impl<'a> Walk<'a> {
                 self.text(e, t, frame, key, under)?;
             }
             Content::Canvas(c) => {
-                // Local to the outline, as the surface's hits are: the frame
-                // corner is the canvas origin, the snapped one the outline's.
-                let d = Point::new(frame.x, frame.y) - contour.offset;
+                // Local to the frame corner, where the canvas draws from.
+                let origin = Point::new(frame.x, frame.y);
                 let draws = (c.0)(frame.size);
                 let generation = self.outlines.generation;
                 let paths = match self.outlines.canvases.get_mut(key) {
                     // A plain canvas draws a fresh list every frame, most
                     // often the same shapes: those keep last frame's paths,
-                    // unvalidated, uncopied and equal downstream by pointer.
-                    Some((old, placed, paths, seen))
-                        if *placed == d
-                            && (Arc::ptr_eq(old, &draws)
-                                || old
-                                    .iter()
-                                    .map(|d| &d.path)
-                                    .eq(draws.iter().map(|d| &d.path))) =>
+                    // wherever it moved, unvalidated, uncopied and equal
+                    // downstream by pointer.
+                    Some((old, paths, seen))
+                        if Arc::ptr_eq(old, &draws)
+                            || old
+                                .iter()
+                                .map(|d| &d.path)
+                                .eq(draws.iter().map(|d| &d.path)) =>
                     {
                         *old = draws.clone();
                         *seen = generation;
@@ -447,26 +446,32 @@ impl<'a> Walk<'a> {
                             .iter()
                             .map(|draw| {
                                 draw.path.validate(100_000)?;
-                                let mut p = draw.path.clone();
-                                if d != Point::ZERO {
-                                    p.translate(d);
-                                }
-                                Ok(Arc::new(p))
+                                Ok(Arc::new(draw.path.clone()))
                             })
                             .collect::<Result<Vec<_>, SceneError>>()?;
                         self.outlines
                             .canvases
-                            .insert(key.clone(), (draws.clone(), d, paths.clone(), generation));
+                            .insert(key.clone(), (draws.clone(), paths.clone(), generation));
                         paths
                     }
                 };
+                // Hits are local to the surface's offset, the outline's.
+                let d = origin - contour.offset;
                 for ((k, draw), local) in draws.iter().enumerate().zip(paths) {
                     if let Some(tag) = &draw.tag {
-                        hits.push((Arc::clone(tag), local.clone()));
+                        let hit = match d == Point::ZERO {
+                            true => local.clone(),
+                            false => {
+                                let mut p = Path::clone(&local);
+                                p.translate(d);
+                                Arc::new(p)
+                            }
+                        };
+                        hits.push((Arc::clone(tag), hit));
                     }
                     if let Some(p) = self.push(Layer::Draw(k), local, None, &draw.fill, *bg) {
                         p.width = draw.width;
-                        p.offset = contour.offset;
+                        p.offset = origin;
                     }
                 }
             }

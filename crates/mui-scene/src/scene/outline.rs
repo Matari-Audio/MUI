@@ -102,8 +102,7 @@ pub(super) struct OutlineCache {
     pub(super) generation: u64,
     pub(super) hits: u64,
     pub(super) misses: u64,
-    /// Each canvas's last draw list, how far its origin sat from its
-    /// outline's, and its paths moved by that: a
+    /// Each canvas's last draw list and its paths: a
     /// [`canvas_cached`](crate::canvas_cached) list is painted from the same
     /// paths every frame, wherever it moves. Holding the list keeps its
     /// address from being reused.
@@ -118,7 +117,7 @@ pub(super) struct OutlineCache {
 /// The outline a stroke ran along, its width and alignment, the band, and
 /// the resolve that last used it.
 pub(super) type Band = (Arc<Path>, f64, crate::BorderAlign, Arc<Path>, u64);
-pub(super) type PlacedDraws = (Arc<[crate::Draw]>, Point, Vec<Arc<Path>>, u64);
+pub(super) type PlacedDraws = (Arc<[crate::Draw]>, Vec<Arc<Path>>, u64);
 
 #[derive(Debug)]
 pub(super) struct Entry {
@@ -166,7 +165,7 @@ impl OutlineCache {
         let generation = self.generation;
         let live = |seen: u64| generation.wrapping_sub(seen) <= age;
         self.entries.retain(|_, e| live(e.seen));
-        self.canvases.retain(|_, c| live(c.3));
+        self.canvases.retain(|_, c| live(c.2));
         self.rects.retain(|_, r| live(r.1));
         self.bands.retain(|_, b| live(b.4));
         self.generation = generation.wrapping_add(1);
