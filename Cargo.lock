@@ -1629,6 +1629,7 @@ version = "0.3.2"
 dependencies = [
  "i_overlay",
  "kurbo",
+ "rustc-hash",
 ]
 
 [[package]]
@@ -1638,6 +1639,7 @@ dependencies = [
  "mui-geometry",
  "mui-layout",
  "mui-scene",
+ "rustc-hash",
 ]
 
 [[package]]

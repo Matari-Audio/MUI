@@ -22,7 +22,7 @@
 
 pub use mui_geometry::Point;
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 use std::sync::{Arc, OnceLock};
 
 use mui_geometry::kurbo::{self, BezPath, Rect, Shape as _, Vec2};
@@ -35,10 +35,10 @@ use mui_geometry::{Bounds, Error, Path, PathCommand};
 pub const DRAG_THRESHOLD: f64 = 4.0;
 
 struct Target {
-    id: String,
+    id: Arc<str>,
     /// Which of the target's own shapes this is, for a canvas that named
     /// its draws. `None` for an ordinary surface.
-    tag: Option<String>,
+    tag: Option<Arc<str>>,
     /// Local to `at`; shared by every target of the same `Arc`.
     path: Arc<Converted>,
     at: Vec2,
@@ -133,7 +133,7 @@ impl Hit {
     ///
     /// Returns the same error the renderer would: if geometry is malformed it
     /// is better to fail at registration than to leave a region silently dead.
-    pub fn push(&mut self, id: impl Into<String>, path: &Path) -> Result<(), Error> {
+    pub fn push(&mut self, id: impl Into<Arc<str>>, path: &Path) -> Result<(), Error> {
         self.push_clipped(id, path, None)
     }
 
@@ -142,7 +142,7 @@ impl Hit {
     /// responding once it has slid out of its viewport.
     pub fn push_clipped(
         &mut self,
-        id: impl Into<String>,
+        id: impl Into<Arc<str>>,
         path: &Path,
         clip: Option<Bounds>,
     ) -> Result<(), Error> {
@@ -154,7 +154,7 @@ impl Hit {
     /// never during pointer queries.
     pub fn push_clipped_paths(
         &mut self,
-        id: impl Into<String>,
+        id: impl Into<Arc<str>>,
         path: &Path,
         clip: Option<Bounds>,
         clips: Option<&[Arc<Path>]>,
@@ -186,8 +186,8 @@ impl Hit {
     /// ```
     pub fn push_tagged(
         &mut self,
-        id: impl Into<String>,
-        tag: impl Into<String>,
+        id: impl Into<Arc<str>>,
+        tag: impl Into<Arc<str>>,
         path: &Path,
         clip: Option<Bounds>,
     ) -> Result<(), Error> {
@@ -199,8 +199,8 @@ impl Hit {
     /// [`Hit::push_clipped_paths`].
     pub fn push_tagged_paths(
         &mut self,
-        id: impl Into<String>,
-        tag: impl Into<String>,
+        id: impl Into<Arc<str>>,
+        tag: impl Into<Arc<str>>,
         path: &Path,
         clip: Option<Bounds>,
         clips: Option<&[Arc<Path>]>,
@@ -229,8 +229,8 @@ impl Hit {
     /// ```
     pub fn push_placed(
         &mut self,
-        id: impl Into<String>,
-        tag: Option<String>,
+        id: impl Into<Arc<str>>,
+        tag: Option<Arc<str>>,
         path: &Arc<Path>,
         at: Point,
         clip: Option<Bounds>,
@@ -279,8 +279,8 @@ impl Hit {
 
     fn add(
         &mut self,
-        id: String,
-        tag: Option<String>,
+        id: Arc<str>,
+        tag: Option<Arc<str>>,
         path: Arc<Converted>,
         at: Vec2,
         clip: Option<Bounds>,
@@ -368,7 +368,7 @@ impl Hit {
                     && contains(&t.id, t.tag.as_deref(), p)
                         .unwrap_or_else(|| t.path.path().winding(q - t.at) != 0)
             })
-            .map(|t| (t.id.as_str(), t.tag.as_deref()))
+            .map(|t| (&*t.id, t.tag.as_deref()))
     }
 }
 

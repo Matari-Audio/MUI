@@ -7,3 +7,5 @@ license.workspace = true
 [dependencies]
 i_overlay.workspace = true
 kurbo = "0.13.1"
+# Hot maps keyed by addresses and hashes, not attacker input.
+rustc-hash = "1.1"

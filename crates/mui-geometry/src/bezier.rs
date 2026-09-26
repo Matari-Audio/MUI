@@ -1,8 +1,8 @@
 //! Canonical MUI-path to cubic-Bezier conversion, shared by painting and input.
 use crate::{Error, Path, PathCommand};
 use kurbo::{BezPath, PathEl, Vec2};
+use rustc_hash::FxHashMap as HashMap;
 use std::cell::RefCell;
-use std::collections::HashMap;
 
 /// Maximum arc-to-cubic error in logical scene units.
 pub const ARC_TOLERANCE: f64 = 0.01;

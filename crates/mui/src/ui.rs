@@ -2073,14 +2073,14 @@ impl Ui {
                 .surfaces()
                 .filter(|s| (named(&s.key) || s.pointer_states) && !s.disabled)
             {
-                let key = || s.key.to_string();
+                let key = || s.key.clone();
                 if s.hits.is_empty() {
                     hit.push_placed(key(), None, &s.path, s.offset, s.clip, s.clip_paths())?;
                 }
                 // A canvas that named its draws is hit by those shapes instead
                 // of by its frame, so a ring responds in the ring, not its hole.
                 for (tag, path) in &s.hits {
-                    let tag = Some(tag.to_string());
+                    let tag = Some(tag.clone());
                     hit.push_placed(key(), tag, path, s.offset, s.clip, s.clip_paths())?;
                 }
             }
