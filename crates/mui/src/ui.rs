@@ -205,6 +205,8 @@ pub struct Ui {
     bar_grab: f64,
     /// [`Ui::memo`] subtrees, by id.
     kept: HashMap<u64, Kept>,
+    /// This `Ui`'s key in [`TREES`].
+    me: u64,
     /// Memos the next build must run again, because something inside them
     /// moved; `hot_all` for every one.
     hot: BTreeSet<u64>,
@@ -218,13 +220,29 @@ pub struct Ui {
     read: Vec<String>,
 }
 
+thread_local! {
+    /// The kept [`Ui::memo`] subtrees by `(Ui::me, memo id)`. An `El` holds
+    /// closures that need not be `Send` and a `Ui` must be: the trees stay
+    /// on the thread that built them, and a `Ui` that moves thread builds
+    /// its memos over.
+    static TREES: std::cell::RefCell<HashMap<(u64, u64), El>> =
+        std::cell::RefCell::new(HashMap::new());
+}
+static NEXT_UI: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+impl Drop for Ui {
+    fn drop(&mut self) {
+        let me = self.me;
+        let _ = TREES.try_with(|t| t.borrow_mut().retain(|(ui, _), _| *ui != me));
+    }
+}
+
 /// One [`Ui::memo`] subtree between frames.
 struct Kept {
     deps: u64,
-    /// The styled subtree last frame resolved; `None` while it is in the
-    /// tree. Memos nested in it are kept on their own, and it holds
+    /// Its styled subtree, last frame's, sits in [`TREES`] while it is out
+    /// of the tree. Memos nested in it are kept on their own, and it holds
     /// placeholders where they go: their paths below it, and ids.
-    tree: Option<El>,
     nested: Vec<(Vec<usize>, u64)>,
     /// The tweens and plays its closure read, and whether every one of them
     /// was at rest when it did.
@@ -317,6 +335,7 @@ impl Ui {
             board: None,
             bar_grab: 0.0,
             kept: HashMap::new(),
+            me: NEXT_UI.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             hot: BTreeSet::new(),
             hot_all: false,
             issued: 0,
@@ -540,7 +559,9 @@ impl Ui {
     /// `build` reads: the model, sizes, the clock, the raw pointer, and the
     /// enclosing subtree's disabled state. A cheap hash of generation
     /// counters is the idea; a missed input paints last frame's subtree.
-    /// `id` must be unique among the frame's memos. Memos nest. A memo
+    /// What the caller does to the returned element (a size, a cursor) is
+    /// kept with the subtree: fold it into `deps` too, or do it inside
+    /// `build`. `id` must be unique among the frame's memos. Memos nest. A memo
     /// whose subtree floats a node (a popup) is built every frame: memoise
     /// what is under the float instead.
     ///
@@ -567,7 +588,9 @@ impl Ui {
         self.issued += 1;
         let cold = self.hot_all || self.hot.contains(&key);
         if let Some(k) = self.kept.get_mut(&key) {
-            if !cold && k.deps == deps && k.still && k.tree.is_some() {
+            let me = self.me;
+            let kept = TREES.with(|t| t.borrow().contains_key(&(me, key)));
+            if !cold && k.deps == deps && k.still && kept {
                 k.live = true;
                 let read = std::mem::take(&mut k.read);
                 // What it read is still read, as the closure would have.
@@ -602,11 +625,12 @@ impl Ui {
             id: key,
             reused: false,
         });
+        let me = self.me;
+        TREES.with(|t| t.borrow_mut().remove(&(me, key)));
         self.kept.insert(
             key,
             Kept {
                 deps,
-                tree: None,
                 nested: Vec::new(),
                 read,
                 still,
@@ -1426,7 +1450,8 @@ impl Ui {
         let Some(k) = self.kept.get_mut(&id) else {
             return;
         };
-        let Some(tree) = k.tree.take() else {
+        let me = self.me;
+        let Some(tree) = TREES.with(|t| t.borrow_mut().remove(&(me, id))) else {
             return;
         };
         k.live = true;
@@ -1466,8 +1491,8 @@ impl Ui {
                 .map(|((q, c), _)| (q[path.len()..].to_vec(), *c))
                 .collect();
             if let Some(k) = self.kept.get_mut(id) {
-                k.tree = Some(tree);
                 k.nested = nested;
+                TREES.with(|t| t.borrow_mut().insert((self.me, *id), tree));
             }
         }
     }
@@ -1476,7 +1501,14 @@ impl Ui {
     /// `was` is the hovered, held and tagged keys before this frame.
     fn heat(&mut self, scene: &ResolvedScene, was: [Option<String>; 3], buttons: bool) {
         self.hot.clear();
-        self.kept.retain(|_, k| std::mem::take(&mut k.live));
+        let me = self.me;
+        self.kept.retain(|id, k| {
+            let live = std::mem::take(&mut k.live);
+            if !live {
+                TREES.with(|t| t.borrow_mut().remove(&(me, *id)));
+            }
+            live
+        });
         self.hot_all = buttons
             || !self.keys.is_empty()
             || !self.typed.is_empty()
@@ -4549,6 +4581,12 @@ mod tests {
         t
     }
     const ROOM: Option<Size> = Some(Size::new(300., 200.));
+
+    #[test]
+    fn a_ui_with_kept_memos_stays_send() {
+        fn send<T: Send>() {}
+        send::<Ui>();
+    }
 
     #[test]
     fn a_memo_builds_once_while_its_deps_hold_and_again_when_they_change() {
