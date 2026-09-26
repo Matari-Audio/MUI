@@ -154,8 +154,7 @@ pub(crate) struct FontData {
     pub(crate) shaper: OnceLock<ShaperData>,
     /// Compiled feature maps, one per (script, direction, feature-variation)
     /// the face has shaped. Reusing one took Inter caret_x from 18.3 to 15.9 us.
-    // ponytail: never evicted; bounded by the scripts and FeatureVariations
-    // records a face declares, not by the text shaped with it.
+    /// LRU, capped at `shape::PLAN_CAP`.
     pub(crate) plans: Mutex<Vec<Arc<ShapePlan>>>,
 }
 

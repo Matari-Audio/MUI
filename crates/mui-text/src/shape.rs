@@ -16,6 +16,12 @@ use crate::lines::{advances_of, visual_segments};
 use crate::outline::PathPen;
 use crate::{Axis, Error, Font, min_content_width};
 
+/// Most plans a face keeps. `ShapePlanKey` matches on the FeatureVariations
+/// record an instance selects, not its coordinates, so an animated axis
+/// reuses one plan per record; the cap only bites on a face shaped in dozens
+/// of scripts. Linear search is cheaper than hashing at this size.
+const PLAN_CAP: usize = 64;
+
 /// One string laid out as a single [`Path`], plus the numbers a caller needs to
 /// put a box around it.
 ///
@@ -319,12 +325,25 @@ fn plan(face: &Face<'_>, shaper: &harfrust::Shaper<'_>, buffer: &UnicodeBuffer) 
         .plans
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if let Some(plan) = plans.iter().find(|plan| key.matches(plan)) {
-        return plan.clone();
+    lru(
+        &mut plans,
+        |plan| key.matches(plan),
+        || Arc::new(ShapePlan::new(shaper, direction, script, None, &[])),
+    )
+}
+
+/// Most recently used last: a hit rotates to the back, a miss evicts the
+/// front once `PLAN_CAP` entries are held.
+fn lru<T: Clone>(list: &mut Vec<T>, hit: impl Fn(&T) -> bool, make: impl FnOnce() -> T) -> T {
+    if let Some(i) = list.iter().position(hit) {
+        list[i..].rotate_left(1);
+    } else {
+        if list.len() >= PLAN_CAP {
+            list.remove(0);
+        }
+        list.push(make());
     }
-    let plan = Arc::new(ShapePlan::new(shaper, direction, script, None, &[]));
-    plans.push(plan.clone());
-    plan
+    list[list.len() - 1].clone()
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -546,5 +565,40 @@ mod tests {
         assert_eq!(run.glyphs[0].font, 0);
         assert_eq!(run.glyphs.last().unwrap().font, 1);
         assert!(run.advance > 0.);
+    }
+
+    #[test]
+    fn animating_an_axis_keeps_the_plan_cache_bounded() {
+        let font = symbols();
+        let fonts = [font.clone()];
+        for i in 0..1000 {
+            let t = i as f32 / 999.;
+            shape_run(
+                &fonts,
+                "\u{E88A}",
+                24.,
+                &[("FILL", t), ("wght", 100. + 600. * t)],
+            )
+            .unwrap();
+        }
+        let plans = font.0.plans.lock().unwrap().len();
+        // One plan per FeatureVariations record the tween crosses, not one
+        // per position: Material Symbols has two, either side of FILL 0.99.
+        assert!(plans <= 2, "{plans} plans");
+        assert!(plans <= PLAN_CAP);
+    }
+
+    #[test]
+    fn the_plan_cache_evicts_the_least_recently_used() {
+        let mut list = Vec::new();
+        for i in 0..PLAN_CAP {
+            lru(&mut list, |&x| x == i, || i);
+        }
+        lru(&mut list, |&x| x == 0, || unreachable!("0 is cached"));
+        lru(&mut list, |&x| x == PLAN_CAP, || PLAN_CAP);
+        assert_eq!(list.len(), PLAN_CAP);
+        assert!(list.contains(&0), "a hit refreshed it");
+        assert!(!list.contains(&1), "the oldest went");
+        assert_eq!(list.last(), Some(&PLAN_CAP));
     }
 }
