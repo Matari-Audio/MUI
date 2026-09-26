@@ -7,7 +7,7 @@
 //! // One frame: build the tree, hand it in with the input, draw what comes back.
 //! let root = col![
 //!     body("Filter"),
-//!     slider(&mut ui, "cutoff", "Cutoff", &mut cutoff, 0.0..=1.0).0,
+//!     slider(&mut ui, "cutoff", "Cutoff", &mut cutoff, 0.0..=1.0),
 //! ]
 //! .gap(S)
 //! .pad(M)
@@ -21,6 +21,9 @@
 //! ```
 #![forbid(unsafe_code)]
 
+// The crates underneath, each by name and each its own curated surface: a
+// renderer, a layout engine or a pointer model is reached as
+// `mui::vello::..`, `mui::layout::..`, never flattened into `mui::`.
 pub use mui_geometry as geometry;
 pub use mui_input as input;
 pub use mui_layout as layout;
@@ -34,20 +37,32 @@ pub mod widgets;
 pub use actions::SemanticAction;
 pub use widgets::presets;
 
-pub use ui::{Clipboard, Edit, Frame, Ui};
+pub use ui::{Clipboard, Edit, Frame, Interaction, Ui};
 
+/// What a MUI app writes against, named one by one: the widgets, the DSL,
+/// the input a host hands in. No globs, so nothing arrives here because a
+/// crate underneath grew it. `Response` is the widgets'; a pointer's
+/// per-target report is `mui::input::Response`.
 pub mod prelude {
     pub use crate::widgets::presets::{card, chip, glass, panel, tile};
     pub use crate::widgets::{
-        BinAxis, BinEdit, Bins, Control, CurveEdit, Newline, TextEdit, TextOpts, Variant, bins,
-        bins_hover, button, color_picker, curve, drag_value, knob, slider, stepped, text_edit,
-        text_input, toggle,
+        BinAxis, BinEdit, Bins, ColorOpts, Control, CurveEdit, Newline, Response, TextEdit,
+        TextOpts, Variant, bins, bins_hover, button, color_picker, curve, drag_value, knob,
+        slider, stepped, text_edit, text_input, toggle,
     };
-    pub use crate::{Edit, Frame, SemanticAction, Ui};
+    pub use crate::{Edit, Frame, Interaction, SemanticAction, Ui};
     pub use mui_input::{
-        Axis, Button, Buttons, FINE_DRAG, Ime, Input, Key, KeyPress, Mods, PointerInput, Response,
+        Axis, Button, Buttons, FINE_DRAG, Ime, Input, Key, KeyPress, Mods, PointerInput,
     };
-    pub use mui_scene::prelude::*;
+    pub use mui_scene::prelude::{
+        A11y, Align, Appear, Area, Axes, BorderAlign, BorderRamp, CanvasCache, Color, Corner,
+        CornerStyle, Cursor, Draw, Ease, El, Elevation, Fill, Fit, Font, Gradient, Id, Image,
+        IntoEl, Justify, Keys, L, Len, M, Match, Mix, Paints, Path, Pin, Point, Radius,
+        Resolver, Role, S, SceneSpec, Shadow, ShapeLayout, Size, Spacing, State, Style, Styled,
+        Theme, Weight, Weld, WeldBackend, WeldChannel, WeldQuality, Xl, Xs, block, body, canvas,
+        canvas_keyed, caption, clamp, col, cq, fits, grid, icon, pct, resolve, row, spacer,
+        stack, step, text, title, weld,
+    };
     pub use mui_scene::{Corners, Mode, Palette, Pigment, SpacingToken, Spring};
 }
 

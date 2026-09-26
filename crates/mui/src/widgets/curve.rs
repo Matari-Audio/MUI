@@ -10,6 +10,7 @@ use mui_scene::curve::{Curve, CurvePoint, Handle};
 use mui_scene::prelude::*;
 
 use crate::Ui;
+use crate::widgets::Response;
 
 /// The knot radius, and the inset the plot keeps on every side so an end
 /// knot sits inside the frame instead of half outside it.
@@ -149,11 +150,13 @@ fn dragged(ui: &Ui, id: &str, c: &mut Curve) -> Option<CurveEdit> {
 /// use mui::scene::curve::Curve;
 /// let mut ui = Ui::new(Theme::DEFAULT);
 /// let mut env = Curve::default();
-/// let (plot, edit) = curve(&mut ui, "env", &mut env);
-/// assert_eq!(edit, None, "nothing is dragging");
-/// let _ = plot.size(240.0, 120.0);
+/// let plot = curve(&mut ui, "env", &mut env);
+/// assert_eq!(plot.changed, None, "nothing is dragging");
+/// let _ = plot.el.size(240.0, 120.0);
 /// ```
-pub fn curve(ui: &mut Ui, id: &str, c: &mut Curve) -> (El, Option<CurveEdit>) {
+pub fn curve(ui: &mut Ui, id: impl Into<Id>, c: &mut Curve) -> Response<Option<CurveEdit>> {
+    let id: Id = id.into();
+    let id = id.as_str();
     let edit = dragged(ui, id, c);
     let (points, handles) = (c.points().to_vec(), c.handles().to_vec());
     let lit = ui.tag(id).map(str::to_owned);
@@ -195,5 +198,5 @@ pub fn curve(ui: &mut Ui, id: &str, c: &mut Curve) -> (El, Option<CurveEdit>) {
     })
     .cursor(Cursor::Grab)
     .id(id);
-    (el, edit)
+    Response { el, changed: edit }
 }

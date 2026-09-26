@@ -7,7 +7,7 @@ use mui_scene::prelude::*;
 use mui_scene::{Palette, SpacingToken, Spring, Stroke};
 
 use crate::Ui;
-use crate::widgets::{TextOpts, text_edit};
+use crate::widgets::{Response, TextOpts, text_edit};
 
 /// How solid a control looks. daisyUI's four button styles, resolved from
 /// the role and the palette rather than from a table of colours.
@@ -15,7 +15,7 @@ use crate::widgets::{TextOpts, text_edit};
 /// ```
 /// use mui::prelude::*;
 /// let mut ui = Ui::new(Theme::DEFAULT);
-/// let (quiet, _) = button(&mut ui, "bypass", "Bypass");
+/// let quiet = button(&mut ui, "bypass", "Bypass").el;
 /// // Ink only: the resting box paints nothing.
 /// assert_eq!(quiet.variant(Variant::Ghost).el().payload().style.fill, None);
 /// ```
@@ -113,7 +113,7 @@ impl Look {
 /// use mui::prelude::*;
 /// let mut ui = Ui::new(Theme::DEFAULT);
 /// let mut cutoff = 0.5;
-/// let (dial, _) = knob(&mut ui, "cut", "Cutoff", &mut cutoff, 0.0..=1.0);
+/// let dial = knob(&mut ui, "cut", "Cutoff", &mut cutoff, 0.0..=1.0).el;
 /// let strip = row![dial.size(L), body("post")];
 /// ```
 pub struct Control {
@@ -143,7 +143,7 @@ impl Control {
     /// use mui::prelude::*;
     /// let mut ui = Ui::new(Theme::DEFAULT);
     /// let mut on = false;
-    /// let (sw, _) = toggle(&mut ui, "bypass", &mut on);
+    /// let sw = toggle(&mut ui, "bypass", "Bypass", &mut on).el;
     /// let sw = sw.variant(Variant::Outline);
     /// assert!(sw.el().payload().style.stroke.is_some(), "outlined");
     /// ```
@@ -157,7 +157,7 @@ impl Control {
     /// ```
     /// use mui::prelude::*;
     /// let mut ui = Ui::new(Theme::DEFAULT);
-    /// let (clear, _) = button(&mut ui, "clear", "Clear");
+    /// let clear = button(&mut ui, "clear", "Clear").el;
     /// let el = clear.role(Role::Danger).variant(Variant::Outline).el();
     /// let ring = el.payload().style.stroke.clone().map(|s| s.fill);
     /// assert_eq!(ring, Some(Fill::Role(Role::Danger)));
@@ -173,8 +173,7 @@ impl Control {
     /// use mui::prelude::*;
     /// let mut ui = Ui::new(Theme::DEFAULT);
     /// let mut on = false;
-    /// let (small, _) = toggle(&mut ui, "bypass", &mut on);
-    /// let small = small.size(Xs);
+    /// let small = toggle(&mut ui, "bypass", "Bypass", &mut on).el.size(Xs);
     /// ```
     pub fn size(mut self, s: SpacingToken) -> Self {
         self.size = s;
@@ -188,7 +187,7 @@ impl Control {
     /// use mui::prelude::*;
     /// let mut ui = Ui::new(Theme::DEFAULT);
     /// let mut cutoff = 440.0;
-    /// let (dial, _) = knob(&mut ui, "cut", "Cutoff", &mut cutoff, 20.0..=20_000.0);
+    /// let dial = knob(&mut ui, "cut", "Cutoff", &mut cutoff, 20.0..=20_000.0).el;
     /// let dial = dial.value_text(format!("{cutoff:.0} Hz"));
     /// ```
     pub fn value_text(mut self, s: impl Into<String>) -> Self {
@@ -202,8 +201,7 @@ impl Control {
     /// use mui::prelude::*;
     /// let mut ui = Ui::new(Theme::DEFAULT);
     /// let mut v = 0.5;
-    /// let (dial, _) = knob(&mut ui, "cut", "Cutoff", &mut v, 0.0..=1.0);
-    /// let dial = dial.px(37.0);
+    /// let dial = knob(&mut ui, "cut", "Cutoff", &mut v, 0.0..=1.0).el.px(37.0);
     /// ```
     pub fn px(mut self, px: f64) -> Self {
         self.px = Some(px);
@@ -214,8 +212,7 @@ impl Control {
     /// ```
     /// use mui::prelude::*;
     /// let mut ui = Ui::new(Theme::DEFAULT);
-    /// let (go, _clicked) = button(&mut ui, "go", "Go");
-    /// let el: El = go.el();
+    /// let el: El = button(&mut ui, "go", "Go").el.el();
     /// ```
     pub fn el(mut self) -> El {
         // Ten units at M, two either side: daisyUI's -xs .. -xl scale, so one
@@ -335,9 +332,9 @@ const LANE: f64 = 0.45;
 /// use mui::prelude::*;
 /// let mut ui = Ui::new(Theme::DEFAULT);
 /// let mut gain = 0.5;
-/// let (fader, changed) = slider(&mut ui, "gain", "Gain", &mut gain, 0.0..=1.0);
-/// assert!(!changed && gain == 0.5, "no gesture, no change");
-/// let fader = fader.size(S);
+/// let fader = slider(&mut ui, "gain", "Gain", &mut gain, 0.0..=1.0);
+/// assert!(!fader.changed && gain == 0.5, "no gesture, no change");
+/// let fader = fader.el.size(S);
 /// ```
 pub fn slider(
     ui: &mut Ui,
@@ -345,10 +342,10 @@ pub fn slider(
     label: &str,
     value: &mut f64,
     range: RangeInclusive<f64>,
-) -> (Control, bool) {
+) -> Response<bool, Control> {
     let id: Id = id.into();
     let before = *value;
-    let (h, _) = ui.state(&id);
+    let h = ui.state(&id).hover;
     // Last frame's lane, less the thumb riding it, is the travel a
     // full-range drag covers; before the first frame nothing can drag.
     let (grip, travel) = ui
@@ -410,7 +407,10 @@ pub fn slider(
         ])
         .gap(Xs)
     });
-    (control, changed)
+    Response {
+        el: control,
+        changed,
+    }
 }
 
 /// A dial: vertical drag, pointer on a 270° sweep; returns the control and
@@ -426,9 +426,9 @@ pub fn slider(
 /// use mui::prelude::*;
 /// let mut ui = Ui::new(Theme::DEFAULT);
 /// let mut cutoff = 0.5;
-/// let (dial, changed) = knob(&mut ui, "cut", "Cutoff", &mut cutoff, 0.0..=1.0);
-/// assert!(!changed && cutoff == 0.5, "no gesture, no change");
-/// let dial = dial.size(Xl);
+/// let dial = knob(&mut ui, "cut", "Cutoff", &mut cutoff, 0.0..=1.0);
+/// assert!(!dial.changed && cutoff == 0.5, "no gesture, no change");
+/// let dial = dial.el.size(Xl);
 /// ```
 pub fn knob(
     ui: &mut Ui,
@@ -436,7 +436,7 @@ pub fn knob(
     label: &str,
     value: &mut f64,
     range: RangeInclusive<f64>,
-) -> (Control, bool) {
+) -> Response<bool, Control> {
     let id: Id = id.into();
     let before = *value;
     // Unlike a slider's, a dial's travel is a hand distance, not a geometry:
@@ -448,7 +448,7 @@ pub fn knob(
     // Fast enough that a drag still feels direct, slow enough that a
     // preset change is a glide.
     let t = ui.tween_with(&id, unit(*value, &range), Spring::new(0.12, 1.0));
-    let (h, _) = ui.state(&id);
+    let h = ui.state(&id).hover;
     let (label, value) = (label.to_owned(), *value);
     let (min, max) = (*range.start(), *range.end());
     let control = Control::new(ui, move |look| {
@@ -479,7 +479,10 @@ pub fn knob(
         .gap(Xs)
         .align(Align::Center)
     });
-    (control, changed)
+    Response {
+        el: control,
+        changed,
+    }
 }
 
 /// A labelled action. Returns the control and whether it was clicked last
@@ -488,11 +491,11 @@ pub fn knob(
 /// ```
 /// use mui::prelude::*;
 /// let mut ui = Ui::new(Theme::DEFAULT);
-/// let (save, clicked) = button(&mut ui, "save", "Save");
-/// assert!(!clicked, "nothing pressed it last frame");
-/// let save = save.variant(Variant::Soft).size(S);
+/// let save = button(&mut ui, "save", "Save");
+/// assert!(!save.changed, "nothing pressed it last frame");
+/// let save = save.el.variant(Variant::Soft).size(S);
 /// ```
-pub fn button(ui: &mut Ui, id: impl Into<Id>, label: &str) -> (Control, bool) {
+pub fn button(ui: &mut Ui, id: impl Into<Id>, label: &str) -> Response<bool, Control> {
     let id: Id = id.into();
     let clicked = activated(ui, &id);
     let label = label.to_owned();
@@ -509,27 +512,36 @@ pub fn button(ui: &mut Ui, id: impl Into<Id>, label: &str) -> (Control, bool) {
             .focusable()
             .id(id)
     });
-    (el, clicked)
+    Response {
+        el,
+        changed: clicked,
+    }
 }
 
 /// A switch: the knob's side is a flex share it slides between, the click
-/// flips it. Returns the control and whether it flipped.
+/// flips it. Returns the control and whether it flipped. The label is the
+/// switch's accessible name; the caption beside it is the caller's to draw.
 ///
 /// ```
 /// use mui::prelude::*;
 /// let mut ui = Ui::new(Theme::DEFAULT);
 /// let mut bypass = false;
-/// let (sw, flipped) = toggle(&mut ui, "bypass", &mut bypass);
-/// assert!(!flipped && !bypass, "nothing clicked it, so it did not flip");
-/// let sw = sw.size(Xs);
+/// let sw = toggle(&mut ui, "bypass", "Bypass", &mut bypass);
+/// assert!(!sw.changed && !bypass, "nothing clicked it, so it did not flip");
+/// let sw = sw.el.size(Xs);
 /// ```
-pub fn toggle(ui: &mut Ui, id: impl Into<Id>, on: &mut bool) -> (Control, bool) {
+pub fn toggle(
+    ui: &mut Ui,
+    id: impl Into<Id>,
+    label: &str,
+    on: &mut bool,
+) -> Response<bool, Control> {
     let id: Id = id.into();
     let flipped = activated(ui, &id);
     if flipped {
         *on = !*on;
     }
-    let on = *on;
+    let (on, label) = (*on, label.to_owned());
     let t = f64::from(on);
     let control = Control::new(ui, move |look| {
         // A track is as wide as the control's height and a bit over half as
@@ -554,10 +566,14 @@ pub fn toggle(ui: &mut Ui, id: impl Into<Id>, on: &mut bool) -> (Control, bool) 
         })
         .animate()
         .a11y(A11y::Toggle { on })
+        .when(!label.is_empty(), |e| e.named(label))
         .focusable()
         .id(id)
     });
-    (control, flipped)
+    Response {
+        el: control,
+        changed: flipped,
+    }
 }
 
 /// How far a [`drag_value`] is dragged to sweep its whole range.
@@ -568,21 +584,22 @@ const DRAG_TRAVEL: f64 = 200.0;
 /// is focused -- turns it into a field to type the number into. Enter or a
 /// click away takes what was typed, Escape leaves the value alone. Returns
 /// the control and whether the value changed. `.value_text(..)` says it
-/// in units, as for a [`slider`].
+/// in units, as for a [`slider`]. The label is its accessible name.
 ///
 /// ```
 /// use mui::prelude::*;
 /// let mut ui = Ui::new(Theme::DEFAULT);
 /// let mut bpm = 120.0;
-/// let (tempo, changed) = drag_value(&mut ui, "bpm", &mut bpm, 20.0..=300.0);
-/// assert!(!changed, "no gesture, no change");
+/// let tempo = drag_value(&mut ui, "bpm", "Tempo", &mut bpm, 20.0..=300.0);
+/// assert!(!tempo.changed, "no gesture, no change");
 /// ```
 pub fn drag_value(
     ui: &mut Ui,
     id: impl Into<Id>,
+    label: &str,
     value: &mut f64,
     range: RangeInclusive<f64>,
-) -> (Control, bool) {
+) -> Response<bool, Control> {
     let id: Id = id.into();
     let before = *value;
     let (lo, hi) = (
@@ -616,7 +633,7 @@ pub fn drag_value(
                 blur_on_submit: true,
                 ..TextOpts::default()
             };
-            let (el, e) = text_edit(ui, &field, &mut s, opts);
+            let Response { el, changed: e } = text_edit(ui, field.as_str(), &mut s, opts);
             if opening {
                 ui.set_sel(&field, 0, s.chars().count());
                 ui.focus(field.clone());
@@ -624,7 +641,10 @@ pub fn drag_value(
             if !e.submitted {
                 ui.set_stash(&field, Some((s, width)));
                 let control = Control::new(ui, move |_| el.w(width));
-                return (control, false);
+                return Response {
+                    el: control,
+                    changed: false,
+                };
             }
             take(&s, value);
         } else if !ui.shortcuts().iter().any(|k| k.key == Key::Escape) {
@@ -637,7 +657,7 @@ pub fn drag_value(
         stepped(ui, &id, value, &range);
     }
     let changed = moved(before, *value);
-    let (value, min, max) = (*value, *range.start(), *range.end());
+    let (value, min, max, label) = (*value, *range.start(), *range.end(), label.to_owned());
     let control = Control::new(ui, move |look| {
         let pad_y = ((look.px - 14.0) / 2.0).max(2.0);
         row([readout(look.text.clone(), value, min, max)])
@@ -646,8 +666,12 @@ pub fn drag_value(
             .preset(look.face(Role::Field))
             .cursor(Cursor::ResizeH)
             .a11y(A11y::Slider { value, min, max })
+            .when(!label.is_empty(), |e| e.named(label))
             .focusable()
             .id(id)
     });
-    (control, changed)
+    Response {
+        el: control,
+        changed,
+    }
 }

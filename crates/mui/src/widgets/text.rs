@@ -8,6 +8,7 @@ use mui_scene::prelude::*;
 
 use super::grapheme;
 use crate::Ui;
+use crate::widgets::Response;
 
 /// What Enter does in a [`text_edit`] field, and so whether it is one line
 /// or many.
@@ -286,13 +287,16 @@ fn edit_keys(
 /// use mui::prelude::*;
 /// let mut ui = Ui::new(Theme::DEFAULT);
 /// let mut name = String::from("Init");
-/// let (field, changed) = text_input(&mut ui, "name", &mut name);
-/// assert!(!changed, "nothing is focused, so nothing was typed");
-/// let field = field.w(140);
+/// let field = text_input(&mut ui, "name", &mut name);
+/// assert!(!field.changed, "nothing is focused, so nothing was typed");
+/// let field = field.el.w(140);
 /// ```
-pub fn text_input(ui: &mut Ui, id: &str, value: &mut String) -> (El, bool) {
-    let (el, e) = text_edit(ui, id, value, TextOpts::default());
-    (el, e.changed)
+pub fn text_input(ui: &mut Ui, id: impl Into<Id>, value: &mut String) -> Response {
+    let r = text_edit(ui, id, value, TextOpts::default());
+    Response {
+        el: r.el,
+        changed: r.changed.changed,
+    }
 }
 
 /// A text field, one line or many as [`TextOpts::newline`] says. Many lines
@@ -307,10 +311,17 @@ pub fn text_input(ui: &mut Ui, id: &str, value: &mut String) -> (El, bool) {
 /// let mut ui = Ui::new(Theme::DEFAULT);
 /// let mut notes = String::from("first\nsecond");
 /// let opts = TextOpts { newline: Newline::Enter, rows: 6, ..TextOpts::default() };
-/// let (field, edit) = text_edit(&mut ui, "notes", &mut notes, opts);
-/// assert!(!edit.changed && !edit.submitted, "nothing is focused");
+/// let field = text_edit(&mut ui, "notes", &mut notes, opts);
+/// assert!(!field.changed.changed && !field.changed.submitted, "nothing is focused");
 /// ```
-pub fn text_edit(ui: &mut Ui, id: &str, value: &mut String, opts: TextOpts) -> (El, TextEdit) {
+pub fn text_edit(
+    ui: &mut Ui,
+    id: impl Into<Id>,
+    value: &mut String,
+    opts: TextOpts,
+) -> Response<TextEdit> {
+    let id: Id = id.into();
+    let id = id.as_str();
     let multi = opts.newline != Newline::None;
     let size = ui.theme.text;
     let lh = ui.line_height(size);
@@ -414,7 +425,18 @@ pub fn text_edit(ui: &mut Ui, id: &str, value: &mut String, opts: TextOpts) -> (
     let on = focused && ui.blink();
 
     let (body, caret_at_px, reader) = match &rows {
-        None => one_line(ui, &shown, at, sel, pre_range, room, on, lh, value, base),
+        None => {
+            let layers = Layers {
+                ui,
+                shown: &shown,
+                at,
+                sel,
+                pre: pre_range,
+                on,
+                lh,
+            };
+            one_line(layers, room, value, base)
+        }
         Some(rows) => {
             let lines = rows.lines(ui, &shown);
             let row = row_of(&lines, at);
@@ -427,7 +449,16 @@ pub fn text_edit(ui: &mut Ui, id: &str, value: &mut String, opts: TextOpts) -> (
             let content = lines.len() as f64 * lh;
             scroll = scroll.clamp(0.0, (content - view).max(0.0));
             ui.set_text_scroll(id, scroll);
-            let (el, x) = many_lines(ui, &shown, &lines, at, sel, pre_range, scroll, view, on, lh);
+            let layers = Layers {
+                ui,
+                shown: &shown,
+                at,
+                sel,
+                pre: pre_range,
+                on,
+                lh,
+            };
+            let (el, x) = many_lines(layers, &lines, scroll, view);
             let el = el.when(content > view, mui_scene::Styled::captures_wheel);
             // ponytail: no per-character carets for a reader across lines;
             // the value and the selection are still reported.
@@ -460,7 +491,21 @@ pub fn text_edit(ui: &mut Ui, id: &str, value: &mut String, opts: TextOpts) -> (
             lh,
         );
     }
-    (el, edit)
+    Response { el, changed: edit }
+}
+
+/// What a field's layers are built from, one line or many: the shown text
+/// (the value with any preedit spliced in at the caret), the caret's byte,
+/// the selection and preedit as byte ranges of it, whether the caret is lit
+/// this frame, and the line height.
+struct Layers<'a> {
+    ui: &'a Ui,
+    shown: &'a str,
+    at: usize,
+    sel: Range<usize>,
+    pre: Range<usize>,
+    on: bool,
+    lh: f64,
 }
 
 /// The selected part of a run, re-inked: the selected text on its own, in
@@ -484,22 +529,16 @@ fn reinked(selected: &str, x0: f64, x1: f64, lh: f64) -> El {
 /// children keep the keys the single-line field always had -- `/0`
 /// selection, `/1` value, `/2` caret, `/3` preedit underline -- and the
 /// re-inked selection comes last, over the value.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "argument struct lands with the widget API pass (docs/DSL-V2.md)"
-)]
-fn one_line(
-    ui: &Ui,
-    shown: &str,
-    at: usize,
-    sel: Range<usize>,
-    pre: Range<usize>,
-    room: Option<f64>,
-    on: bool,
-    lh: f64,
-    value: &str,
-    base: usize,
-) -> (El, Point, Vec<f64>) {
+fn one_line(layers: Layers, room: Option<f64>, value: &str, base: usize) -> (El, Point, Vec<f64>) {
+    let Layers {
+        ui,
+        shown,
+        at,
+        sel,
+        pre,
+        on,
+        lh,
+    } = layers;
     let size = ui.theme.text;
     let carets = ui.carets(shown, size);
     let x = |b: usize| caret_at(&carets, b);
@@ -554,22 +593,16 @@ fn one_line(
 
 /// Many lines, only the rows in view built: a line's run, the re-inked
 /// selection over it, then the caret and the preedit underline on top.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "argument struct lands with the widget API pass (docs/DSL-V2.md)"
-)]
-fn many_lines(
-    ui: &Ui,
-    shown: &str,
-    lines: &[Range<usize>],
-    at: usize,
-    sel: Range<usize>,
-    pre: Range<usize>,
-    scroll: f64,
-    view: f64,
-    on: bool,
-    lh: f64,
-) -> (El, f64) {
+fn many_lines(layers: Layers, lines: &[Range<usize>], scroll: f64, view: f64) -> (El, f64) {
+    let Layers {
+        ui,
+        shown,
+        at,
+        sel,
+        pre,
+        on,
+        lh,
+    } = layers;
     let size = ui.theme.text;
     let first = (scroll / lh).floor().max(0.0) as usize;
     let last = (((scroll + view) / lh).ceil().max(0.0) as usize).min(lines.len());

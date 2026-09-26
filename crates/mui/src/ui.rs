@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use mui_geometry::Point;
 use mui_input::{
-    Button, Buttons, FINE_DRAG, Hit, Ime, Input, Interaction, Key, KeyPress, PointerInput, Response,
+    Button, Buttons, FINE_DRAG, Hit, Ime, Input, Interaction as Pointer, Key, KeyPress, PointerInput, Response,
 };
 use mui_layout::SpacingToken::{S, Xs};
 use mui_scene::Keys;
@@ -86,6 +86,14 @@ pub struct Frame<'a> {
     pub ime: Option<(Point, Size)>,
 }
 
+/// How hovered and how pressed a target is, each 0..1 and spring-smoothed,
+/// for a control that eases its look in and out: [`Ui::state`].
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Interaction {
+    pub hover: f64,
+    pub press: f64,
+}
+
 /// A parameter gesture's two edges. A slider or knob drag is one `Begin`, a
 /// run of value changes, and one `End`: exactly the bracket a plugin host
 /// wants around touched automation.
@@ -109,7 +117,7 @@ pub struct Ui {
     /// Seconds between two presses on one target that still make a double
     /// click. [`DOUBLE_CLICK`] unless the host matches a platform setting.
     pub double_click: f64,
-    interaction: Interaction,
+    interaction: Pointer,
     actions: Vec<SemanticAction>,
     hit: Hit,
     scene: Option<ResolvedScene>,
@@ -295,7 +303,7 @@ impl Ui {
             fallback_fonts: Vec::new(),
             scale: None,
             weld_backend: mui_scene::WeldBackend::Reference,
-            interaction: Interaction::new(),
+            interaction: Pointer::new(),
             actions: Vec::new(),
             hit: Hit::default(),
             scene: None,
@@ -828,10 +836,20 @@ impl Ui {
         (k == id).then_some(t.as_str())
     }
     /// Hover and press amounts for `id`, 0..1 and spring-smoothed.
-    pub fn state(&self, id: &str) -> (f64, f64) {
+    ///
+    /// ```
+    /// use mui::prelude::*;
+    /// let ui = Ui::new(Theme::DEFAULT);
+    /// let Interaction { hover, press } = ui.state("go");
+    /// assert_eq!((hover, press), (0.0, 0.0), "nothing has touched it");
+    /// ```
+    pub fn state(&self, id: &str) -> Interaction {
         self.springs
             .get(id)
-            .map_or((0.0, 0.0), |[h, p]| (h.value, p.value))
+            .map_or(Interaction::default(), |[h, p]| Interaction {
+                hover: h.value,
+                press: p.value,
+            })
     }
     /// The id that holds the keyboard focus, for a host reporting it.
     pub fn focus_key(&self) -> Option<&str> {
