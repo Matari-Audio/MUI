@@ -192,6 +192,9 @@ fn rows<T: Send>(
             });
         }
     }
+    // wasm32 has no threads to size a pass for.
+    #[cfg(target_arch = "wasm32")]
+    let _ = per;
     out.chunks_mut(len)
         .enumerate()
         .try_for_each(|(y, row)| f(y, row))
