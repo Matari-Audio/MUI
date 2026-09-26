@@ -6,6 +6,7 @@ use mui_layout::{Frame, Size};
 
 use super::bar::{self, BAR_MARGIN, BAR_STRIP, BAR_THIN, BAR_WIDE};
 use super::outline::Contour;
+use super::paint::LateStroke;
 use super::text::Face;
 use super::{
     Ancestors, Deferred, Layer, MEMO_AGE, MemoSpan, Painted, ResolvedSurface, SceneError, Text,
@@ -16,7 +17,28 @@ use crate::{Color, Content, El, Element, Fill, Mix, ShadowKind, State};
 /// A canvas's tagged draws: the surface's hit shapes.
 type Hits = Vec<(Arc<str>, Arc<Path>)>;
 
+/// What painting a node opened, for [`Walk::finish`] to close in reverse
+/// once its children are painted.
+struct Opened {
+    /// The memo span this node records; see [`Walk::open`].
+    memo: Option<(usize, usize, usize)>,
+    /// The paint index this node's own paint starts at.
+    start: usize,
+    /// The paint index a border ramp's band paints under.
+    border_background: usize,
+    /// A region envelope clip is open.
+    enveloped: bool,
+    /// A blend layer is open, and whether it ends in a mask.
+    blend: Option<bool>,
+    /// The children clip is open.
+    clips: bool,
+    late_stroke: Option<LateStroke>,
+}
+
 impl<'a> Walk<'a> {
+    /// Paint node `n` and its subtree: enter it, lay out what its material
+    /// hands down, paint its own layers, record its surface, walk its
+    /// children, then close what it opened.
     pub(super) fn node<'n: 'a>(
         &mut self,
         n: &'n El,
@@ -24,8 +46,8 @@ impl<'a> Walk<'a> {
         under: Color,
         ancestors: &Ancestors,
     ) -> Result<(), SceneError> {
-        let frame = self.tree.frames[self.i];
         let at = self.i;
+        let frame = self.tree.frames[at];
         self.i += 1;
         if frame.size.width <= 0.0 || frame.size.height <= 0.0 {
             // A flex share that collapsed to nothing: invisible, and so are
@@ -49,20 +71,13 @@ impl<'a> Walk<'a> {
         // Before the outline: its cache names the node by it.
         self.key = key.clone();
         let e = n.payload();
-        let s = &e.style;
         let mut inner = ancestors.clone();
-        inner.cursor = s.cursor.or(ancestors.cursor);
+        inner.cursor = e.style.cursor.or(ancestors.cursor);
         // A switched-off card switches off what it contains: nothing inside
         // it may be reached while its own frame cannot be.
         inner.disabled = ancestors.disabled || e.disabled;
-        if (e.extras().inset_surface.is_some() && !self.plan.regions.contains(at))
-            || (e.extras().border_join.is_some() && !self.plan.joined_nodes.contains(at))
-        {
-            return Err(mui_geometry::Error::InvalidOptions(
-                "material requires a surface-layout owner",
-            )
-            .into());
-        }
+        self.check_owned(e, at)?;
+
         let start = self.out.paint.len();
         let material = self.material_weld(n, frame, path, under)?;
         let mut contour = match &material {
@@ -72,16 +87,102 @@ impl<'a> Walk<'a> {
             },
             None => self.outline(n, frame, self.i)?,
         };
+        self.plan_below(n, &contour, frame, at, (&key, path))?;
+        // Each envelope belongs to exactly one node, visited once.
+        let enveloped = match self.plan.region_envelopes.remove(at) {
+            Some(p) => {
+                self.mark(Layer::Clip, p, None);
+                true
+            }
+            None => false,
+        };
+        let blend = self.open_layers(e, &contour, under)?;
+        let bg = self.fill(e, material.as_ref(), &contour, under);
+        let border_background = self.out.paint.len();
+        let mut bg = self.shells(&e.style, &mut contour, bg)?;
+        self.inset_shadows(&e.style, &contour, bg)?;
+        let late_stroke = match &e.style.stroke {
+            Some(st) if material.is_none() && e.extras().border_ramp.is_none() => {
+                self.stroke(st, e, &contour, bg)?
+            }
+            _ => None,
+        };
+        let hits = self.content(e, at, &key, &contour, &mut bg, under)?;
+        let (shape_bounds, content) =
+            self.surface(n, (&key, at), frame, &contour, hits, (&inner, ancestors))?;
+        if n.key().is_some_and(crate::Id::is_named) {
+            inner.parent = Some(key.clone());
+        }
 
+        // A union is one contour, so its children paint inside it: a square
+        // tab's own fill stops at the filleted corner instead of poking past
+        // the shared outline.
+        let clips = n.is_clip()
+            || e.style.union.unwrap_or_default()
+            || e.extras().inside.is_some()
+            || self.plan.regions.contains(at);
+        if clips {
+            let image = material.as_ref().map(|m| m.image_rect.bounds());
+            let image = image.or(shape_bounds);
+            self.clip(image, &contour, frame, &mut inner)?;
+        }
+        self.children(n, at, path, bg, &inner)?;
+
+        // Everything from here on closes this node, whatever its children
+        // left the key at.
+        self.key = key;
+        if let Some(heat) = e
+            .scroll_bar_heat
+            .filter(|_| n.is_scroll() && !e.scroll_bar_off)
+        {
+            self.scroll_bars(n, heat, frame, content, bg, &inner)?;
+        }
+        let opened = Opened {
+            memo,
+            start,
+            border_background,
+            enveloped,
+            blend,
+            clips,
+            late_stroke,
+        };
+        self.finish(n, at, &contour, material.as_ref(), bg, opened)
+    }
+
+    /// `.inset_surface(..)` and `.join_border(..)` take what a surface-layout
+    /// owner above planned for this node; without one they are an error.
+    fn check_owned(&self, e: &Element, at: usize) -> Result<(), SceneError> {
+        if (e.extras().inset_surface.is_some() && !self.plan.regions.contains(at))
+            || (e.extras().border_join.is_some() && !self.plan.joined_nodes.contains(at))
+        {
+            return Err(mui_geometry::Error::InvalidOptions(
+                "material requires a surface-layout owner",
+            )
+            .into());
+        }
+        Ok(())
+    }
+
+    /// Lay out what `n`'s material hands its descendants -- region shares
+    /// and surface panels -- against its outline, for them to pick up from
+    /// [`Walk::plan`] when the walk reaches them.
+    fn plan_below(
+        &mut self,
+        n: &El,
+        contour: &Contour,
+        frame: Frame,
+        at: usize,
+        (key, path): (&crate::Id, &str),
+    ) -> Result<(), SceneError> {
+        let x = n.payload().extras();
         // Regions and surfaces are laid out against frames: scene space.
-        let world = (e.extras().inside.is_some() || e.extras().surface_padding.is_some())
-            .then(|| contour.world());
+        let world = (x.inside.is_some() || x.surface_padding.is_some()).then(|| contour.world());
         let world = world.as_ref().unwrap_or(&contour.path);
-        self.partition(n, world, frame, at, (&key, path.as_str()))?;
-        if e.extras().surface_padding.is_some() {
+        self.partition(n, world, frame, at, (key, path))?;
+        if x.surface_padding.is_some() {
             let geometry = self.caches.surfaces.resolve(
                 n,
-                (&key, at),
+                (key, at),
                 &self.tree.frames,
                 world,
                 self.spec,
@@ -96,14 +197,19 @@ impl<'a> Walk<'a> {
             }
             self.plan.surface_joins.insert(at, geometry.joins);
         }
-        // Each envelope belongs to exactly one node, visited once.
-        let enveloped = match self.plan.region_envelopes.remove(at) {
-            Some(p) => {
-                self.mark(Layer::Clip, p, None);
-                true
-            }
-            None => false,
-        };
+        Ok(())
+    }
+
+    /// Open the layers the node's paint sits in -- a blend group, a backdrop
+    /// blur -- and paint its drop shadows under it. Returns whether a blend
+    /// layer opened, and if so whether it ends in a mask.
+    fn open_layers(
+        &mut self,
+        e: &Element,
+        contour: &Contour,
+        under: Color,
+    ) -> Result<Option<bool>, SceneError> {
+        let s = &e.style;
         // A mask composites against what the subtree drew, so the subtree
         // needs a layer of its own even when nothing asked to blend.
         let masked = s.mask.as_ref().is_some_and(|m| !m.is_none());
@@ -129,24 +235,27 @@ impl<'a> Walk<'a> {
             .flatten()
             .filter(|sh| sh.kind == ShadowKind::Drop)
         {
-            self.shadow(sh, &contour, under)?;
+            self.shadow(sh, contour, under)?;
         }
-        let bg = self.fill(e, material.as_ref(), &contour, under);
-        let border_background = self.out.paint.len();
-        let mut bg = self.shells(s, &mut contour, bg)?;
-        self.inset_shadows(s, &contour, bg)?;
-        let late_stroke = match &s.stroke {
-            Some(st) if material.is_none() && e.extras().border_ramp.is_none() => {
-                self.stroke(st, e, &contour, bg)?
-            }
-            _ => None,
-        };
-        let hits = self.content(e, at, &key, &contour, &mut bg, under)?;
-        let content = self.content_size(n, at, frame);
-        let shape_bounds = contour.bounds()?.map(|b| b + contour.offset.to_vec2());
+        Ok(blended.map(|_| masked))
+    }
 
-        let surface = self.out.surfaces.len();
-        self.out.at.insert(key.clone(), surface);
+    /// Record `n`'s surface: its outline, hit shapes, semantics and
+    /// everything input reads back. Returns its shape's bounds in scene
+    /// space and its content extent.
+    fn surface(
+        &mut self,
+        n: &El,
+        (key, at): (&crate::Id, usize),
+        frame: Frame,
+        contour: &Contour,
+        hits: Hits,
+        (inner, ancestors): (&Ancestors, &Ancestors),
+    ) -> Result<(Option<Rect>, Size), SceneError> {
+        let e = n.payload();
+        let content = self.content_size(n, at, frame);
+        let bounds = contour.bounds()?.map(|b| b + contour.offset.to_vec2());
+        self.out.at.insert(key.clone(), self.out.surfaces.len());
         let (semantics, semantic_label_implicit) = match (&e.semantics, &e.content) {
             (Some(semantics), Content::Text(text)) if semantics.label.is_none() => {
                 let mut semantics = crate::Semantics::clone(semantics);
@@ -158,7 +267,7 @@ impl<'a> Walk<'a> {
         self.out.surfaces.push(ResolvedSurface {
             key: key.clone(),
             frame,
-            bounds: shape_bounds,
+            bounds,
             path: contour.path.clone(),
             rect: contour.rect,
             offset: contour.offset,
@@ -185,36 +294,26 @@ impl<'a> Walk<'a> {
             content,
             hits,
         });
-        if n.key().is_some_and(crate::Id::is_named) {
-            inner.parent = Some(key.clone());
-        }
-        // A union is one contour, so its children paint inside it: a square
-        // tab's own fill stops at the filleted corner instead of poking past
-        // the shared outline.
-        let clips = n.is_clip()
-            || s.union.unwrap_or_default()
-            || e.extras().inside.is_some()
-            || self.plan.regions.contains(at);
-        if clips {
-            let image = material.as_ref().map(|m| m.image_rect.bounds());
-            let image = image.or(shape_bounds);
-            self.clip(image, &contour, frame, &mut inner)?;
-        }
-        self.children(n, at, path, bg, &inner)?;
+        Ok((bounds, content))
+    }
 
-        // Everything from here on closes this node, whatever its children
-        // left the key at.
-        self.key = key;
-        if let Some(heat) = e
-            .scroll_bar_heat
-            .filter(|_| n.is_scroll() && !e.scroll_bar_off)
-        {
-            self.scroll_bars(n, heat, frame, content, bg, &inner)?;
-        }
-        if clips {
+    /// Close what [`Walk::node`] opened, innermost first, and paint what
+    /// goes over the children: the late stroke, the border ramp; then let a
+    /// material weld take the plates it fused.
+    fn finish(
+        &mut self,
+        n: &El,
+        at: usize,
+        contour: &Contour,
+        material: Option<&crate::material_weld::MaterialWeld>,
+        bg: Color,
+        o: Opened,
+    ) -> Result<(), SceneError> {
+        let e = n.payload();
+        if o.clips {
             self.mark(Layer::Unclip, empty(), None);
         }
-        if let Some((stroke_path, stroke_rect, fill, width, clipped)) = late_stroke {
+        if let Some((stroke_path, stroke_rect, fill, width, clipped)) = o.late_stroke {
             let at = contour.offset;
             if clipped {
                 self.mark_at(Layer::Clip, stroke_path.clone(), None, at);
@@ -234,13 +333,14 @@ impl<'a> Walk<'a> {
                     "border ramp requires a fixed outline, not material welding",
                 ));
             }
-            self.border_ramp(n, ramp, at, &contour, bg, border_background)?;
+            self.border_ramp(n, ramp, at, contour, bg, o.border_background)?;
         }
-        if let Some(m) = &material {
+        if let Some(m) = material {
             // Consume only immediate source plates. Text, canvases, children,
             // clips and semantics keep their own authoring and painter order.
             // The plates painted inside this node, so only its entries are
             // scanned, not everything painted before it.
+            let start = o.start;
             let own = self.out.paint.split_off(start);
             let all = own.len();
             self.out
@@ -258,13 +358,13 @@ impl<'a> Walk<'a> {
                 }
             }
         }
-        if blended.is_some() {
+        if let Some(masked) = o.blend {
             if masked
                 && let Some(p) = self.push(
                     Layer::Mask,
                     contour.path.clone(),
                     contour.rect,
-                    s.mask.as_ref().unwrap_or(&Fill::None),
+                    e.style.mask.as_ref().unwrap_or(&Fill::None),
                     bg,
                 )
             {
@@ -272,10 +372,10 @@ impl<'a> Walk<'a> {
             }
             self.mark(Layer::Unblend, empty(), None);
         }
-        if enveloped {
+        if o.enveloped {
             self.mark(Layer::Unclip, empty(), None);
         }
-        if let Some(open) = memo {
+        if let Some(open) = o.memo {
             self.close(open);
         }
         Ok(())
