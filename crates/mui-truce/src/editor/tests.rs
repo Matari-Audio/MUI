@@ -450,3 +450,20 @@ fn a_reopened_editor_keeps_the_host_scale() {
     let reopened = editor(&params);
     assert_eq!(reopened.scale.get(), Some(1.5));
 }
+
+#[test]
+fn a_changed_callback_wakes_an_idle_editor() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let params = Arc::new(Synth::default());
+    let dirty = Arc::new(AtomicBool::new(false));
+    let d = dirty.clone();
+    let editor = editor(&params).changed(move || d.swap(false, Ordering::Relaxed));
+    let (_editor, mut h, _) = open_with(&params, editor);
+    for _ in 0..600 {
+        h.step();
+    }
+    assert!(!h.step(), "settled");
+    dirty.store(true, Ordering::Relaxed);
+    assert!(h.step(), "a meter outside the params is a frame");
+    assert!(!h.step(), "and only one");
+}
