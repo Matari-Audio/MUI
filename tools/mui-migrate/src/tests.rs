@@ -241,6 +241,9 @@ fn own_crate_names() {
     ctx.index(&node, node_src);
     let out = migrate(lib_src, Some(&lib), &ctx).unwrap();
     assert_eq!(out.text, "mod node;\npub(crate) use node::Kind;\npub fn f() { crate::block(1.0, 1.0); Self::col([]); stack([]); let k: Kind = Kind::A; let a: crate::A11y = x; }\n");
+    let tests = dir.join("src/tests.rs");
+    let out = migrate("use super::*;\nfn t() { Node::<u8>::column([]); }\n", Some(&tests), &ctx).unwrap();
+    assert_eq!(out.text, "use super::*;\nfn t() { Node::<u8>::col([]); }\n");
     std::fs::remove_dir_all(&dir).ok();
 }
 

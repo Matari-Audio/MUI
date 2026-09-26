@@ -1,5 +1,8 @@
 use mui_scene::prelude::*;
-use mui_scene::{Layer, SceneError, Resolver, WeldCache};
+use mui_scene::{Layer, Resolver, SceneError};
+fn gpu(root: El) -> SceneSpec {
+    SceneSpec::new(root).weld_backend(WeldBackend::AnalyticGpu)
+}
 fn tree() -> El {
     row![
         block(80., 60.)
@@ -21,9 +24,9 @@ fn tree() -> El {
 }
 #[test]
 fn gpu_resolution_never_populates_the_cpu_bake_cache() {
-    let mut text = Resolver::default();
-    let mut welds = WeldCache::default();
-    let scene = resolve_scene_cached(&SceneSpec::new(tree()), &mut text, &mut welds).unwrap();
+    let mut r = Resolver::default();
+    let scene = r.resolve(&gpu(tree())).unwrap();
+    let welds = &r.welds;
     // Analytic boundary slots are retained by design; a CPU bake would count as a miss.
     assert!(welds.bytes() <= 64 * 1024, "no CPU bake retained");
     assert_eq!(welds.stats(), (0, 0));
@@ -31,7 +34,7 @@ fn gpu_resolution_never_populates_the_cpu_bake_cache() {
 }
 #[test]
 fn morph_is_transactional_and_does_not_relayout() {
-    let mut scene = resolve(&SceneSpec::new(tree())).unwrap();
+    let mut scene = resolve(&gpu(tree())).unwrap();
     let before = scene.clone();
     assert!(matches!(
         scene.set_weld_morph("join", f64::NAN),
@@ -46,7 +49,7 @@ fn morph_is_transactional_and_does_not_relayout() {
 }
 #[test]
 fn ids_and_original_plate_surfaces_survive() {
-    let scene = resolve(&SceneSpec::new(tree())).unwrap();
+    let scene = resolve(&gpu(tree())).unwrap();
     assert!(scene.surface("a").is_some());
     assert!(scene.surface("b").is_some());
     assert!(
@@ -59,7 +62,7 @@ fn ids_and_original_plate_surfaces_survive() {
 #[test]
 fn changing_union_is_not_misrepresented_as_a_clip_rectangle() {
     assert!(matches!(
-        resolve(&SceneSpec::new(tree().clip())),
+        resolve(&gpu(tree().clip())),
         Err(SceneError::UnsupportedWeld(m)) if m.starts_with("GPU weld cannot itself clip")
     ));
 }
@@ -67,13 +70,13 @@ fn changing_union_is_not_misrepresented_as_a_clip_rectangle() {
 fn fourth_source_is_rejected_not_cpu_baked() {
     let root = row((0..4).map(|_| block(20., 20.).fill(Role::Primary))).weld(Weld::all());
     assert!(matches!(
-        resolve(&SceneSpec::new(root)),
+        resolve(&gpu(root)),
         Err(SceneError::UnsupportedWeld(m)) if m.starts_with("analytic GPU weld requires at most three")
     ));
 }
 #[test]
 fn material_only_update_preserves_the_geometry() {
-    let mut scene = resolve(&SceneSpec::new(tree())).unwrap();
+    let mut scene = resolve(&gpu(tree())).unwrap();
     let before = scene.clone();
     scene
         .set_weld_solid_material(

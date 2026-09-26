@@ -17,23 +17,23 @@ fn face(v: Variant) -> Style {
 /// Each variant is arithmetic on one role: filled, faded, stroked, bare.
 #[test]
 fn a_variant_paints_the_role_without_naming_a_second_colour() {
-    assert_eq!(face(Variant::Solid).fill, Fill::Role(Role::Primary));
-    assert_eq!(face(Variant::Soft).fill, Fill::Faded(Role::Primary, 0.18));
+    assert_eq!(face(Variant::Solid).fill, Some(Fill::Role(Role::Primary)));
+    assert_eq!(face(Variant::Soft).fill, Some(Fill::Faded(Role::Primary, 0.18)));
     let outline = face(Variant::Outline);
-    assert_eq!(outline.fill, Fill::None);
+    assert_eq!(outline.fill, Some(Fill::None));
     assert_eq!(
         outline.stroke.map(|s| s.fill),
         Some(Fill::Role(Role::Primary))
     );
-    assert_eq!(face(Variant::Ghost).fill, Fill::None);
+    assert_eq!(face(Variant::Ghost).fill, Some(Fill::None));
     // A filled face carries contrast ink; the rest speak as the role.
     let ink = |v: Variant| {
         let mut ui = Ui::new(Theme::DEFAULT);
         let el = button(&mut ui, "b", "Save").0.variant(v).el();
         el.children()[0].payload().style.fill.clone()
     };
-    assert_eq!(ink(Variant::Solid), Fill::Role(Role::Ink));
-    assert_eq!(ink(Variant::Ghost), Fill::Role(Role::Primary));
+    assert_eq!(ink(Variant::Solid), Some(Fill::Role(Role::Ink)));
+    assert_eq!(ink(Variant::Ghost), Some(Fill::Role(Role::Primary)));
 }
 
 /// One `Theme.control` unit, five steps, and pixels as the escape hatch.

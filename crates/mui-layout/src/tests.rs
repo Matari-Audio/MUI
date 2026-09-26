@@ -330,7 +330,7 @@ fn space_around_and_evenly() {
 
 #[test]
 fn content_leaves_are_measured_by_the_caller() {
-    let t = Node::<&str>::column([Node::content().with("hello").id("t")]).id("c");
+    let t = Node::<&str>::col([Node::content().with("hello").id("t")]).id("c");
     let l = resolve_with(
         &t,
         None,
@@ -349,10 +349,10 @@ fn content_leaves_are_measured_by_the_caller() {
 fn content_is_told_the_room_it_has_and_a_scroll_withholds_it() {
     // A definite column pads 10 a side: 80 of room. The grid splits that
     // into two 35 columns. The scroll's child gets none.
-    let t = Node::<&str>::column([
+    let t = Node::<&str>::col([
         Node::content().with("a").id("a"),
         Node::<&str>::grid(2, [Node::content().with("g").id("g")]).gap(10.),
-        Node::<&str>::column([Node::content().with("s").id("s")]).scroll(),
+        Node::<&str>::col([Node::content().with("s").id("s")]).scroll(),
     ])
     .width(Len::Px(100.))
     .pad(10.);
@@ -494,8 +494,8 @@ fn a_content_leaf_never_keeps_a_cross_extent_wider_than_its_parent() {
     // Both columns take half the row; the text measured at the row's width
     // must be clamped to its own column, not centred half outside it.
     let t = Node::<&str>::row([
-        Node::<&str>::column([Node::content().with("p").id("a")]).id("ca"),
-        Node::<&str>::column([Node::content().with("p")]).id("cb"),
+        Node::<&str>::col([Node::content().with("p").id("a")]).id("ca"),
+        Node::<&str>::col([Node::content().with("p")]).id("cb"),
     ]);
     let l = resolve_with(
         &t,
@@ -534,13 +534,13 @@ fn grid_columns_never_go_negative_when_the_gaps_outgrow_the_grid() {
     // 21 wide less 15.4 of padding leaves 5.6 for two columns and an 8.4
     // gap. The column is zero-wide, not -1.4, so the percentage child is
     // offered a valid width and the grid overflows the squeeze it really is.
-    let t = col([grid(2, [Node::leaf(0., 0.).width(Len::Pct(98.8))]).gap(8.4)]).pad(7.7);
+    let t = col([grid(2, [Node::block(0., 0.).width(Len::Pct(98.8))]).gap(8.4)]).pad(7.7);
     assert!(resolve(&t, Some(Size::new(21., 174.4)), Limits::default()).is_ok());
 }
 
 #[test]
 fn room_handed_to_the_measurer_leaves_out_the_nodes_own_padding() {
-    let t = Node::<&str>::overlay([Node::content().with("t").id("t").pad(4.6)]);
+    let t = Node::<&str>::stack([Node::content().with("t").id("t").pad(4.6)]);
     let l = resolve_with(
         &t,
         Some(Size::new(170., 340.)),

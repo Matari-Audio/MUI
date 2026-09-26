@@ -1,5 +1,5 @@
 use mui_scene::prelude::*;
-use mui_scene::{Layer, Paint, SceneError, Resolver, WeldCache};
+use mui_scene::{Layer, Paint, Resolver, SceneError};
 use std::sync::Arc;
 
 fn plate(id: &str, fill: impl Into<Fill>, width: f64) -> El {

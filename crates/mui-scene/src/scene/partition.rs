@@ -347,7 +347,7 @@ mod tests {
                 .h(20.)
         }));
         let spec = SceneSpec::new(tree).offered(Size::new(40., 2000.));
-        let mut text = Resolver::default();
+        let mut text = TextCache::default();
         text.resolve(&spec).unwrap();
         let held = text.region_cache.len();
         assert!(held > 256, "{held}");

@@ -648,37 +648,37 @@ mod tests {
                 .radius(0.)
                 .union(Role::Surface),
         );
-        let mut text = Resolver::default();
+        let mut text = TextCache::default();
         text.resolve(&base).unwrap();
-        let first_misses = text.text.outlines.misses;
+        let first_misses = text.outlines.misses;
         assert!(first_misses > 0, "the welded outline was not cached");
 
         text.resolve(&base).unwrap();
-        assert_eq!(text.text.outlines.misses, first_misses);
-        assert!(text.text.outlines.hits > 0, "the unchanged weld was not reused");
+        assert_eq!(text.outlines.misses, first_misses);
+        assert!(text.outlines.hits > 0, "the unchanged weld was not reused");
 
         let mut changed = base.clone();
         changed.root = changed.root.radius(3.);
-        let misses = text.text.outlines.misses;
+        let misses = text.outlines.misses;
         text.resolve(&changed).unwrap();
         assert!(
-            text.text.outlines.misses > misses,
+            text.outlines.misses > misses,
             "a style change reused stale geometry"
         );
 
         changed.theme.corners.box_ += 1.;
-        let misses = text.text.outlines.misses;
+        let misses = text.outlines.misses;
         text.resolve(&changed).unwrap();
         assert!(
-            text.text.outlines.misses > misses,
+            text.outlines.misses > misses,
             "a theme change reused stale geometry"
         );
 
         changed.device_scale = Some(2.);
-        let misses = text.text.outlines.misses;
+        let misses = text.outlines.misses;
         text.resolve(&changed).unwrap();
         assert!(
-            text.text.outlines.misses > misses,
+            text.outlines.misses > misses,
             "a scale change reused stale geometry"
         );
     }
@@ -686,7 +686,7 @@ mod tests {
     /// A cached weld is only reused when every input matches, so the
     /// cached outline always equals a fresh resolve of the same spec.
     fn same_as_fresh(spec: &SceneSpec, text: &mut TextCache) {
-        let cached = resolve_scene_with(spec, text).unwrap();
+        let cached = text.resolve(spec).unwrap();
         let fresh = resolve(spec).unwrap();
         assert_eq!(
             cached.surface("weld").unwrap().path,
@@ -705,7 +705,7 @@ mod tests {
             SceneSpec::new(row([child, block(20., 20.)]).union(Role::Surface).id("weld"))
                 .offered(Size::new(60., 20.))
         };
-        let mut text = Resolver::default();
+        let mut text = TextCache::default();
         text.resolve(&spec(1.)).unwrap();
         // Same frames, same radii: only the closure differs.
         same_as_fresh(&spec(0.5), &mut text);
@@ -729,19 +729,19 @@ mod tests {
                 .offered(Size::new(60., 20.))
         };
         let kept = spec(block(40., 20.).outline(triangle(1.)));
-        let mut text = Resolver::default();
+        let mut text = TextCache::default();
         text.resolve(&kept).unwrap();
-        let misses = text.text.outlines.misses;
+        let misses = text.outlines.misses;
         text.resolve(&kept).unwrap();
         let rebuilt = spec(block(40., 20.).outline(triangle(1.)));
         text.resolve(&rebuilt).unwrap();
         assert_eq!(
-            text.text.outlines.misses, misses,
+            text.outlines.misses, misses,
             "an unchanged drawing reshaped the weld"
         );
         let swapped = spec(block(40., 20.).outline(triangle(0.5)));
         same_as_fresh(&swapped, &mut text);
-        assert!(text.text.outlines.misses > misses, "a new drawing hit the cache");
+        assert!(text.outlines.misses > misses, "a new drawing hit the cache");
     }
 
     #[test]
@@ -763,7 +763,7 @@ mod tests {
                 ..Theme::default()
             })
         };
-        let mut text = Resolver::default();
+        let mut text = TextCache::default();
         text.resolve(&spec(Radius::Token(Corner::Box))).unwrap();
         same_as_fresh(&spec(Radius::Pill), &mut text);
     }
@@ -790,7 +790,7 @@ mod tests {
             SceneSpec::new(col([weld]).pad(Spacing::Px(8. + shift)))
                 .offered(Size::new(400. + 2. * shift, 300. + 2. * shift))
         };
-        let mut text = Resolver::default();
+        let mut text = TextCache::default();
         text.resolve(&spec(0.)).unwrap();
         for shift in [0., 13., 13.25, 0.5] {
             let before = mui_geometry::boolean_passes();

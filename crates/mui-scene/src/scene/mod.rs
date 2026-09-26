@@ -370,6 +370,15 @@ impl Resolver {
     }
 }
 
+// The internal tests read the text caches' insides, so they resolve
+// against a bare `TextCache` with a cold weld cache.
+#[cfg(test)]
+impl TextCache {
+    pub(crate) fn resolve(&mut self, spec: &SceneSpec) -> Result<ResolvedScene, SceneError> {
+        resolve_with(spec, self, &mut crate::WeldCache::default(), &mut |_, _, f| f, None)
+    }
+}
+
 fn resolve_with(
     spec: &SceneSpec,
     text: &mut TextCache,

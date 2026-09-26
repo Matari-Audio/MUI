@@ -568,8 +568,13 @@ impl<'a> File<'a> {
             }
         }
         let s = self.t[j].text.as_str();
-        // A bare name, or a type root (`Node::leaf`) resolved like one.
-        if j == i || (s != "Self" && s.starts_with(char::is_uppercase) && !self.defined.contains(s)) {
+        // A type root (`Node::leaf`) resolves like a bare name; inside a mui
+        // crate every type is the crate's own.
+        let ty = j != i && s != "Self" && s.starts_with(char::is_uppercase) && !self.defined.contains(s);
+        if ty && self.own {
+            return true;
+        }
+        if j == i || ty {
             if self.defined.contains(s) {
                 return false;
             }

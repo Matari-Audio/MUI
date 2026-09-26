@@ -674,7 +674,7 @@ mod tests {
         let hint_at = |w: f32, cache: &mut TextCache| {
             let mut sp = SceneSpec::new(row([text("hi").text_axis("wght", w).id("t")]));
             sp.font = Some(inter.clone());
-            let s = resolve_scene_with(&sp, cache).unwrap();
+            let s = cache.resolve(&sp).unwrap();
             s.paint.iter().find_map(|p| p.text.as_ref()).unwrap().hint
         };
         let mut cache = TextCache::default();

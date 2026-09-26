@@ -1262,11 +1262,7 @@ mod tests {
     use std::sync::Arc;
 
     fn card() -> Style {
-        Style {
-            fill: Role::Raised.into(),
-            radius: Radius::Px(12.),
-            ..Style::default()
-        }
+        Style::default().fill(Role::Raised).radius(12.)
     }
 
     #[test]
@@ -1330,7 +1326,7 @@ mod tests {
 
         let mut under = block(10., 10.).fill(Role::Primary).base(card());
         let s = under.style_mut();
-        assert_eq!((s.fill.clone(), s.radius), (Role::Primary.into(), card().radius));
+        assert_eq!((s.fill.clone(), s.radius), (Some(Role::Primary.into()), card().radius));
     }
 
     /// One slot per concept: a second spelling of the same thing replaces
@@ -1339,29 +1335,31 @@ mod tests {
     fn radius_and_stroke_keep_one_slot_each() {
         assert_eq!(
             block(10., 10.).pill().radius(8.).style_mut().radius,
-            Radius::Px(8.)
+            Some(Radius::Px(8.))
         );
         assert_eq!(
             block(10., 10.).radius(8.).pill().style_mut().radius,
-            Radius::Pill
+            Some(Radius::Pill)
         );
         let mut el = block(10., 10.).stroke_width(2.).stroke(Role::Ink);
         let stroke = el.style_mut().stroke.clone().expect("set");
         assert_eq!((stroke.fill, stroke.width), (Role::Ink.into(), Some(2.)));
     }
 
-    /// A joined strip says it once, on the container: the children go
-    /// square and its own corner is what rounds the two ends.
+    /// A segmented strip says it once, on the container: the children go
+    /// square when the scene resolves, so one pushed after `.segmented()`
+    /// is squared too, and the strip's own corner rounds the two ends.
     #[test]
-    fn join_squares_every_inner_corner_and_keeps_the_strips_own() {
-        let mut strip = row![block(60., 28.), block(60., 28.), block(60., 28.)]
+    fn segmented_squares_children_pushed_after_it() {
+        let strip = row![block(60., 28.).radius(8.).id("a")]
             .radius(12.)
-            .segmented();
-        assert_eq!(strip.style_mut().radius, Radius::Px(12.));
+            .segmented()
+            .push(block(60., 28.).radius(8.).id("b"))
+            .id("strip");
         assert!(strip.is_clip(), "the ends are rounded by the clip");
-        for c in strip.children_mut() {
-            assert_eq!(c.style_mut().radius, Radius::Px(0.));
-        }
+        let s = resolve(&SceneSpec::new(strip)).unwrap();
+        let r = |k: &str| s.surface(k).unwrap().rect.unwrap().radius();
+        assert_eq!((r("a"), r("b"), r("strip")), (0., 0., 12.));
     }
 
     /// A role at an alpha is still the role: it tracks the palette, and it
