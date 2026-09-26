@@ -212,7 +212,10 @@ const FONT_FRAMES: u64 = 64;
 
 enum Stored {
     /// Only the CPU canvas stores pixmaps.
-    #[cfg_attr(not(feature = "cpu"), allow(dead_code))]
+    #[cfg_attr(
+        not(feature = "cpu"),
+        expect(dead_code, reason = "only the CPU canvas builds it")
+    )]
     Pixmap(Arc<Pixmap>),
     /// Only the GPU canvas stores these.
     #[cfg(feature = "gpu-effects")]
@@ -419,7 +422,10 @@ fn srgb(c: mui_scene::Color) -> AlphaColor<Srgb> {
 /// The premultiplied [`Pixmap`] of an image. MUI hands over straight RGBA --
 /// what a decoder produces -- and premultiplying a photo is far too much work
 /// to redo every frame, so each renderer's [`Cache`] keeps the result.
-#[cfg_attr(not(any(test, feature = "cpu")), allow(dead_code))]
+#[cfg_attr(
+    not(any(test, feature = "cpu")),
+    expect(dead_code, reason = "only the CPU renderer and tests call it")
+)]
 fn premultiply(img: &mui_scene::Image) -> Option<Pixmap> {
     size(img).map(|(w, h)| premultiplied(img, w, h))
 }
