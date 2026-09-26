@@ -547,6 +547,9 @@ per-parameter wrapper.
 - new: `MuiEditor::new(params, ui, size, build).resizable(min).into_editor()`
   is a truce `Editor`, and `mui_truce::window` is the host-agnostic window
   (`View`, `Shared`, `Requests`, `open`).
+- `mui_truce::window` -> the `mui-baseview` crate, re-exported under the same
+  name, so every `mui_truce::window::..` path still compiles. New there:
+  `run(title, size, shared, requests)`, a standalone app window.
 
 ## Removed crates and packages
 

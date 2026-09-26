@@ -10,11 +10,11 @@ a slider thumb sits where two flex weights put it; explicit offsets are availabl
 strings**: there is no `.class("btn btn-sm")` and there will not be one --
 every value in the DSL is a Rust expression the compiler already checks.
 
-Every crate is `#![forbid(unsafe_code)]` except `mui-truce`, which denies it
-and allows two blocks: the wgpu surface on the host's child window and `Send`
-for the window handle. Every library crate compiles to
-`wasm32-unknown-unknown`; the native preview host, `mui-truce`'s editor
-window and the example plugin do not. The
+Every crate is `#![forbid(unsafe_code)]` except `mui-baseview` and
+`mui-truce`, which deny it and allow a few blocks: the wgpu surface on the
+native window, `Send` for the window handle and the host's parent handle.
+Every library crate compiles to `wasm32-unknown-unknown`; the native preview
+host, `mui-baseview`'s window and the example plugin do not. The
 geometry, layout, style and motion crates stay small -- `mui-motion` has no
 dependencies at all -- but the renderer, text and accessibility stack does
 not: Vello, wgpu, harfrust, accesskit and truce put about 440 packages in
@@ -338,6 +338,17 @@ the build commands and the clap-validator and pluginval results.
 Build plugins with `--profile plugin` (release with `panic = "unwind"`), not
 `--release`: release aborts on panic, so a bug in the editor would take the
 DAW down instead of being caught at the FFI edge.
+
+## Hosts
+
+- `mui-baseview`: the native window, for apps (`run`) and for any plugin
+  framework (`open`, parented under the host's window). A `View` trait, the
+  event queue, the GPU surface, clipboard and AT-SPI.
+  `cargo run --example app -p mui-baseview` is a knob in a window.
+- `mui-truce`: truce's `Editor` over that window, plus the `Bridge` from widget
+  ids to truce parameters.
+- `mui-vello::host`: bring your own window and surface; `Host` presents a
+  resolved scene to it.
 
 ## Motion
 

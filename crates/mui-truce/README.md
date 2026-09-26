@@ -9,9 +9,10 @@ store, the audio runtime and the state format. This crate adds the editor:
 - `Bridge` binds widget ids to truce parameters. A drag, a key step or a click
   becomes the host's begin/perform/end, and host automation or a state load is
   the value that the next tree reads.
-- `window` is the half that knows no plugin framework: a `View` trait, the
-  native event queue and the GPU surface. An adapter for another framework can
-  open the same window with its own `View`.
+- `window` is the half that knows no plugin framework: the `mui-baseview`
+  crate, re-exported. A `View` trait, the native event queue and the GPU
+  surface. An adapter for another framework can open the same window with its
+  own `View`, and an app can `run` it top-level.
 
 ```rust
 fn editor(params: Arc<GainParams>) -> Box<dyn Editor> {
@@ -143,7 +144,7 @@ this crate does without:
 
 ## Tests
 
-`cargo test -p mui-truce` runs the tests. None of them needs a window or a GPU.
+`cargo test -p mui-truce -p mui-baseview` runs the tests (the handler tests live in mui-baseview). None of them needs a window or a GPU.
 
 - The handler tests cover logical and physical sizes, modifiers, coalescing,
   the cancel on focus loss, idle skipping and minimised windows.
