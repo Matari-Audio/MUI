@@ -106,12 +106,12 @@ pub(super) struct OutlineCache {
     /// [`canvas_keyed`](crate::canvas_keyed) list is painted from the same
     /// paths every frame, wherever it moves. Holding the list keeps its
     /// address from being reused.
-    pub(super) canvases: HashMap<Arc<str>, PlacedDraws>,
+    pub(super) canvases: HashMap<crate::Id, PlacedDraws>,
     /// Every local rounded-rect path, by the rect's words and corner style:
     /// one `Arc` for every node, and every frame, of that shape.
     pub(super) rects: HashMap<[u64; 6], (Arc<Path>, u64)>,
     /// The band each node's stroke paints along its outline.
-    pub(super) bands: HashMap<Arc<str>, Band>,
+    pub(super) bands: HashMap<crate::Id, Band>,
 }
 
 /// The outline a stroke ran along, its width and alignment, the band, and

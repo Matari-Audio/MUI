@@ -11,11 +11,11 @@ pub(crate) struct MaterialWeld {
     pub outline: Arc<Path>,
     pub image_fill: Fill,
     pub image_rect: RoundedRect,
-    pub members: HashSet<Arc<str>>,
+    pub members: HashSet<crate::Id>,
     pub external: Option<crate::ExternalWeld>,
 }
 impl MaterialWeld {
-    pub fn consumes(&self, key: &Arc<str>, layer: Layer) -> bool {
+    pub fn consumes(&self, key: &crate::Id, layer: Layer) -> bool {
         self.members.contains(key) && matches!(layer, Layer::Fill | Layer::Stroke)
     }
 }
@@ -177,7 +177,7 @@ pub(crate) fn source(plate: Plate, origin: Point, tolerance: f64) -> Result<Sour
 pub(crate) fn finish(
     baked: &mui_weld::Baked,
     origin: Point,
-    members: HashSet<Arc<str>>,
+    members: HashSet<crate::Id>,
 ) -> Result<MaterialWeld, SceneError> {
     let mut outline = Path::default();
     for ring in &baked.contours {

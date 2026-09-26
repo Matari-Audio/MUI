@@ -219,7 +219,7 @@ col![
 | old | new | why |
 |---|---|---|
 | `'/'` checks by hand | `Id::is_named(&str)` (associated fn), `Id::runtime(name)` for reserved ids | the rule is checked on keys that are `&str` (a11y tree, motion bridge), so no `Id` has to be built first |
-| `glide` callback key | stays `&str` | it is handed the stored key; wrapping it in an `Id` per node per frame buys nothing |
+| `glide` callback key | `&Id` | the scene keys nodes by `Id` (a tree path is `Id::runtime("/0/2")`, inline, no allocation), so the key is handed over as stored; the interned `Arc<str>` per node is gone |
 | `resolve_scene_animated(spec, dt)` / `_retained` | `Resolver::resolve_animated(&spec, glide, prev)` | the animated path needs the glide callback and the previous scene, not a `dt` |
 | `TextCache` | `Resolver` (`recycle`, `layout_stats`, `len`, `is_empty` delegate); the text cache is crate-private | one public cache type; `Resolver::welds` stays public for weld stats |
 | `.without_weld()` | `Weld::off()` = fill and border both `Keep`; `.weld(Weld::off())` clears the weld | an off weld is a value, not a separate verb |

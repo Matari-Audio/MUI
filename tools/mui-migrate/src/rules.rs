@@ -142,6 +142,7 @@ pub const RULES: &[Rule] = &[
     Manual { pattern: "resolve_scene_cached", note: "use `Resolver`: `let mut r = Resolver::new(); r.resolve(&spec)`, `r.welds` is the weld cache" },
     Manual { pattern: "resolve_scene_animated", note: "use `Resolver`: `r.resolve_animated(&spec, glide, None)`" },
     Manual { pattern: "resolve_scene_retained", note: "use `Resolver`: `r.resolve_animated(&spec, glide, prev)`" },
+    Manual { pattern: ". resolve_animated (", note: "the glide callback's key is `&Id` (was `&str`): an explicit `|key: &str, ..|` becomes `|key: &Id, ..|`, `key.as_str()` where a `&str` is needed" },
     // mui-truce: `Bridge::bind` derives the widget id from the parameter.
     // ponytail: `args` splits the old `|ui, v|` closure at its comma ($4, $5), which is
     // what lets the rule insert `id`; if `args` learns closures, this becomes 4 args.

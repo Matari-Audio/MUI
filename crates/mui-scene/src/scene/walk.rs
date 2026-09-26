@@ -40,7 +40,12 @@ impl<'a> Walk<'a> {
             Some(m) => Some(self.open(m, at, frame, path, under, ancestors)),
             None => None,
         };
-        let key = self.intern(n.key().unwrap_or(path));
+        // ponytail: a tree path past 46 bytes (about 15 levels deep) spills to
+        // one allocation per frame; name deep nodes, or intern if one shows up.
+        let key = n
+            .ident()
+            .cloned()
+            .unwrap_or_else(|| crate::Id::runtime(path));
         // Before the outline: its cache names the node by it.
         self.key = key.clone();
         let e = n.payload();
@@ -415,7 +420,7 @@ impl<'a> Walk<'a> {
         &mut self,
         e: &Element,
         at: usize,
-        key: &Arc<str>,
+        key: &crate::Id,
         contour: &Contour,
         bg: &mut Color,
         under: Color,
@@ -500,7 +505,7 @@ impl<'a> Walk<'a> {
         e: &Element,
         t: &str,
         frame: Frame,
-        key: &Arc<str>,
+        key: &crate::Id,
         under: Color,
     ) -> Result<(), SceneError> {
         let th = self.spec.theme;
@@ -647,7 +652,7 @@ impl<'a> Walk<'a> {
             let scale = self.spec.device_scale;
             let rr = RoundedRect::new(bounds(thumb, scale), thick / 2.0)?;
             let hit = RoundedRect::new(bounds(strip, scale), 0.0)?;
-            let bar_key: Arc<str> = bar::bar_key(&key, vertical).into();
+            let bar_key = crate::Id::runtime(&bar::bar_key(&key, vertical));
             self.key = bar_key.clone();
             self.push(Layer::Fill, rr.path(), Some(rr), &ink, under);
             self.at.insert(bar_key.clone(), self.surfaces.len());
@@ -1321,17 +1326,20 @@ mod tests {
         }
     }
 
-    /// A warm resolve hands every node the key it had last frame.
+    /// A warm resolve hands every node the key it had last frame: its id,
+    /// or its tree path.
     #[test]
-    fn a_warm_resolve_reuses_every_key() {
+    fn a_warm_resolve_gives_every_node_the_same_key() {
         let spec = SceneSpec::new(col([block(10., 10.).id("named"), block(10., 10.)]));
         let mut text = TextState::default();
         let cold = text.resolve(&spec).unwrap();
         let warm = text.resolve(&spec).unwrap();
         assert_eq!(cold.surfaces().count(), 3);
         for (a, b) in cold.surfaces().zip(warm.surfaces()) {
-            assert!(Arc::ptr_eq(&a.key, &b.key), "{} was allocated again", a.key);
+            assert_eq!(a.key, b.key);
         }
+        let keys: Vec<&str> = warm.surfaces().map(|s| s.key.as_str()).collect();
+        assert_eq!(keys, ["", "named", "/1"]);
     }
 
     #[test]

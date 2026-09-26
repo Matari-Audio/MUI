@@ -52,7 +52,7 @@ pub(crate) struct Geometry {
 /// owner compares against comes from the identity-keyed region cache.
 #[derive(Debug, Default)]
 pub(crate) struct Cache {
-    entries: HashMap<Arc<str>, (Inputs, Geometry)>,
+    entries: HashMap<crate::Id, (Inputs, Geometry)>,
     borders: crate::border_ramp::BorderCache,
 }
 
@@ -76,7 +76,7 @@ impl Cache {
     pub fn resolve(
         &mut self,
         root: &El,
-        (key, at): (&Arc<str>, usize),
+        (key, at): (&crate::Id, usize),
         frames: &[Frame],
         outline: &Path,
         spec: &SceneSpec,

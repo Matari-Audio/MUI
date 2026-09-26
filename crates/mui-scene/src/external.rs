@@ -107,7 +107,7 @@ pub(crate) fn finish_gpu(
     weld: mui_weld::Weld,
     quality: mui_weld::Quality,
     origin: Point,
-    members: std::collections::HashSet<Arc<str>>,
+    members: std::collections::HashSet<crate::Id>,
     cache: &mut mui_weld::WeldCache,
 ) -> Result<crate::material_weld::MaterialWeld, SceneError> {
     let material = cache.analytic(sources, weld, quality.scale)?;

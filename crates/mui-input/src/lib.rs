@@ -22,6 +22,7 @@
 
 pub use mui_geometry::{Point, Vec2};
 
+use mui_layout::Id;
 use rustc_hash::FxHashMap as HashMap;
 use std::sync::{Arc, OnceLock};
 
@@ -35,7 +36,7 @@ use mui_geometry::{Error, Path, PathCommand};
 pub const DRAG_THRESHOLD: f64 = 4.0;
 
 struct Target {
-    id: Arc<str>,
+    id: Id,
     /// Which of the target's own shapes this is, for a canvas that named
     /// its draws. `None` for an ordinary surface.
     tag: Option<Arc<str>>,
@@ -129,7 +130,7 @@ impl Hit {
     ///
     /// Returns the same error the renderer would: if geometry is malformed it
     /// is better to fail at registration than to leave a region silently dead.
-    pub fn push(&mut self, id: impl Into<Arc<str>>, path: &Path) -> Result<(), Error> {
+    pub fn push(&mut self, id: impl Into<Id>, path: &Path) -> Result<(), Error> {
         self.push_clipped(id, path, None)
     }
 
@@ -138,7 +139,7 @@ impl Hit {
     /// responding once it has slid out of its viewport.
     pub fn push_clipped(
         &mut self,
-        id: impl Into<Arc<str>>,
+        id: impl Into<Id>,
         path: &Path,
         clip: Option<Rect>,
     ) -> Result<(), Error> {
@@ -150,7 +151,7 @@ impl Hit {
     /// never during pointer queries.
     pub fn push_clipped_paths(
         &mut self,
-        id: impl Into<Arc<str>>,
+        id: impl Into<Id>,
         path: &Path,
         clip: Option<Rect>,
         clips: Option<&[Arc<Path>]>,
@@ -182,7 +183,7 @@ impl Hit {
     /// ```
     pub fn push_tagged(
         &mut self,
-        id: impl Into<Arc<str>>,
+        id: impl Into<Id>,
         tag: impl Into<Arc<str>>,
         path: &Path,
         clip: Option<Rect>,
@@ -195,7 +196,7 @@ impl Hit {
     /// [`Hit::push_clipped_paths`].
     pub fn push_tagged_paths(
         &mut self,
-        id: impl Into<Arc<str>>,
+        id: impl Into<Id>,
         tag: impl Into<Arc<str>>,
         path: &Path,
         clip: Option<Rect>,
@@ -225,7 +226,7 @@ impl Hit {
     /// ```
     pub fn push_placed(
         &mut self,
-        id: impl Into<Arc<str>>,
+        id: impl Into<Id>,
         tag: Option<Arc<str>>,
         path: &Arc<Path>,
         at: Point,
@@ -274,7 +275,7 @@ impl Hit {
 
     fn add(
         &mut self,
-        id: Arc<str>,
+        id: Id,
         tag: Option<Arc<str>>,
         path: Arc<Converted>,
         at: Vec2,

@@ -20,11 +20,10 @@ pub(crate) use text::TextState;
 
 use rustc_hash::FxHashMap as HashMap;
 use std::borrow::Cow;
-use std::hash::BuildHasher;
 use std::sync::{Arc, LazyLock};
 
 use mui_geometry::{OffsetOptions, Path, PlacedShape, Rect};
-use mui_layout::Frame;
+use mui_layout::{Frame, Id};
 
 use crate::{Color, Cursor, El, Size};
 use outline::OutlineCache;
@@ -32,6 +31,16 @@ use text::{Runs, fit, layout_key};
 
 /// Append child `j`'s step to a tree path, the `/0/2` key the scene gives a
 /// node without an id. By hand: `write!` is most of a walk's cost.
+/// The key `node` gives child `j` of the node at `parent`: its id, or its
+/// tree path.
+fn child_key(c: &El, parent: &str, j: usize) -> Id {
+    c.ident().cloned().unwrap_or_else(|| {
+        let mut p = parent.to_owned();
+        push_index(&mut p, j);
+        Id::runtime(&p)
+    })
+}
+
 pub fn push_index(path: &mut String, mut j: usize) {
     path.push('/');
     let at = path.len();
@@ -131,7 +140,7 @@ fn missing(what: &'static str, id: &mui_layout::Id) -> SceneError {
 /// What a node inherits from the nodes above it.
 #[derive(Clone, Debug, Default)]
 struct Ancestors {
-    parent: Option<Arc<str>>,
+    parent: Option<Id>,
     clip: Option<Rect>,
     clip_paths: Option<Arc<[PlacedPath]>>,
     cursor: Option<Cursor>,
@@ -226,13 +235,11 @@ struct Walk<'a> {
     ramp_frames: HashMap<(usize, mui_layout::Id), Frame>,
     weld_cache: &'a mut crate::WeldCache,
     i: usize,
-    key: Arc<str>,
-    /// Last frame's node keys by hash; see [`Walk::intern`].
-    keys: &'a mut HashMap<u64, (Arc<str>, u64)>,
+    key: Id,
     paint: Vec<Painted>,
     surfaces: Vec<ResolvedSurface>,
-    at: HashMap<Arc<str>, usize>,
-    pub(crate) external_welds: HashMap<Arc<str>, crate::ExternalWeld>,
+    at: HashMap<Id, usize>,
+    pub(crate) external_welds: HashMap<Id, crate::ExternalWeld>,
     deferred: Vec<Deferred<'a>>,
     /// The baseline a `.baseline()` parent asks its text children to sit on.
     base_y: Option<f64>,
@@ -245,33 +252,6 @@ struct Walk<'a> {
     age: u64,
 }
 
-/// The key a walk starts from, before it meets the root.
-fn empty_key() -> Arc<str> {
-    static EMPTY: LazyLock<Arc<str>> = LazyLock::new(|| Arc::from(""));
-    EMPTY.clone()
-}
-
-impl Walk<'_> {
-    /// `s` as an `Arc<str>`, the same one every frame it stays in the tree,
-    /// so a warm walk allocates no keys.
-    fn intern(&mut self, s: &str) -> Arc<str> {
-        let hash = self.keys.hasher().hash_one(s);
-        let generation = self.runs.generation;
-        match self.keys.get_mut(&hash) {
-            Some((key, seen)) if **key == *s => {
-                *seen = generation;
-                key.clone()
-            }
-            // New, or a 64-bit collision: the newer string takes the slot.
-            _ => {
-                let key: Arc<str> = Arc::from(s);
-                self.keys.insert(hash, (key.clone(), generation));
-                key
-            }
-        }
-    }
-}
-
 /// Walk the tree in layout order handing each animating node's frame to
 /// `glide`. `anchor` is the nearest animating ancestor's solved and shown
 /// origin, `[tx, ty, sx, sy]`; everything under it is offset by the
@@ -282,7 +262,7 @@ fn glide_frames(
     path: &mut String,
     anchor: [f64; 4],
     frames: &mut Cow<'_, [Frame]>,
-    glide: &mut dyn FnMut(&str, &crate::Element, Frame) -> Frame,
+    glide: &mut dyn FnMut(&Id, &crate::Element, Frame) -> Frame,
 ) {
     let i = *at;
     *at += 1;
@@ -297,7 +277,14 @@ fn glide_frames(
             y: target.y - ty,
             ..target
         };
-        let got = glide(n.key().unwrap_or(path), n.payload(), rel);
+        let anonymous;
+        let key = if let Some(id) = n.ident() {
+            id
+        } else {
+            anonymous = Id::runtime(path);
+            &anonymous
+        };
+        let got = glide(key, n.payload(), rel);
         let ok = [got.x, got.y, got.size.width, got.size.height]
             .iter()
             .all(|v| v.is_finite());
@@ -382,7 +369,7 @@ impl Resolver {
     pub fn resolve_animated(
         &mut self,
         spec: &SceneSpec,
-        glide: &mut dyn FnMut(&str, &crate::Element, Frame) -> Frame,
+        glide: &mut dyn FnMut(&Id, &crate::Element, Frame) -> Frame,
         prev: Option<&ResolvedScene>,
     ) -> Result<ResolvedScene, SceneError> {
         let (text, weld_cache) = (&mut self.text, &mut self.welds);
@@ -409,7 +396,7 @@ fn resolve_with(
     spec: &SceneSpec,
     text: &mut TextState,
     weld_cache: &mut crate::WeldCache,
-    glide: &mut dyn FnMut(&str, &crate::Element, Frame) -> Frame,
+    glide: &mut dyn FnMut(&Id, &crate::Element, Frame) -> Frame,
     prev: Option<&ResolvedScene>,
 ) -> Result<ResolvedScene, SceneError> {
     spec.validate()?;
@@ -477,8 +464,7 @@ fn resolve_with(
         ramp_frames: HashMap::default(),
         weld_cache,
         i: 0,
-        key: empty_key(),
-        keys: &mut text.keys,
+        key: Id::runtime(""),
         paint,
         surfaces,
         at,

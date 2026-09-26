@@ -3,7 +3,7 @@ use rustc_hash::FxHashMap as HashMap;
 use std::sync::Arc;
 
 use mui_geometry::{Path, Point, Rect, RoundedRect};
-use mui_layout::{Frame, Layout, Size};
+use mui_layout::{Frame, Id, Layout, Size};
 use mui_text::{Axes, Font};
 
 use super::SceneError;
@@ -94,7 +94,7 @@ pub struct Text {
 /// when it has none: hit-testing and state keep working without names.
 #[derive(Clone, Debug)]
 pub struct Painted {
-    pub key: Arc<str>,
+    pub key: Id,
     pub layer: Layer,
     /// Shared with the node's surface and every other layer drawn along the
     /// same outline, so a filled, clipped node holds one path. In the
@@ -162,7 +162,7 @@ impl PartialEq for Painted {
             blur,
             text,
         } = self;
-        same(key, &o.key)
+        *key == o.key
             && *layer == o.layer
             && same(path, &o.path)
             && *paint == o.paint
@@ -195,7 +195,7 @@ pub type PlacedPath = (Arc<Path>, Point);
 /// A node's outline, for hit-testing and for anything that derives from it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ResolvedSurface {
-    pub key: Arc<str>,
+    pub key: Id,
     pub frame: Frame,
     /// The outline in the surface's own space; [`Self::offset`] places it,
     /// as it does a [`Painted::path`].
@@ -247,7 +247,7 @@ pub struct ResolvedSurface {
     pub clip_path: Option<Arc<[PlacedPath]>>,
     /// Nearest explicitly named ancestor in the authored tree, not a containing
     /// rectangle. A floating node keeps this parent even when it escapes clipping.
-    pub parent: Option<Arc<str>>,
+    pub parent: Option<Id>,
     /// A scroll node's children extent inside its padding, unscrolled;
     /// the frame size otherwise.
     pub content: Size,
@@ -275,8 +275,8 @@ pub struct ResolvedScene {
     pub paint: Vec<Painted>,
     /// Every surface in paint order, which is also z-order.
     pub(super) surfaces: Vec<ResolvedSurface>,
-    pub(super) at: HashMap<Arc<str>, usize>,
-    pub(crate) external_welds: HashMap<Arc<str>, crate::ExternalWeld>,
+    pub(super) at: HashMap<Id, usize>,
+    pub(crate) external_welds: HashMap<Id, crate::ExternalWeld>,
     /// Where each memoised subtree landed, in pre-order.
     pub(crate) memos: Vec<super::MemoSpan>,
 }

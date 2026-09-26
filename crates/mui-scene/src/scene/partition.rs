@@ -19,7 +19,7 @@ impl Walk<'_> {
         outline: &Path,
         frame: Frame,
         at: usize,
-        (key, parent): (&Arc<str>, &str),
+        (key, parent): (&crate::Id, &str),
     ) -> Result<(), SceneError> {
         let e = n.payload();
         let Some(padding) = e.extras().inside else {
@@ -59,9 +59,7 @@ impl Walk<'_> {
         let masks = self.masks(e, key, b, &children)?;
         for ((i, child, j), mask) in children.into_iter().zip(masks) {
             // The same identity `node` gives this child when it walks it.
-            let id: Arc<str> = child
-                .key()
-                .map_or_else(|| Arc::from(format!("{parent}/{j}")), Arc::from);
+            let id = super::child_key(child, parent, j);
             self.region((i, &id), child, &interior, mask)?;
         }
         Ok(())
@@ -74,7 +72,7 @@ impl Walk<'_> {
         n: &El,
         outline: &Path,
         frame: Frame,
-        (key, at): (&Arc<str>, usize),
+        (key, at): (&crate::Id, usize),
         padding: f64,
     ) -> Result<Path, SceneError> {
         let e = n.payload();
@@ -143,7 +141,7 @@ impl Walk<'_> {
     fn masks(
         &mut self,
         e: &Element,
-        key: &Arc<str>,
+        key: &crate::Id,
         b: Rect,
         children: &[(usize, &El, usize)],
     ) -> Result<Vec<Path>, SceneError> {
@@ -202,7 +200,7 @@ impl Walk<'_> {
     /// draws outward. The child is laid out again inside the region.
     fn region(
         &mut self,
-        (i, id): (usize, &Arc<str>),
+        (i, id): (usize, &crate::Id),
         child: &El,
         interior: &Path,
         mask: Path,
@@ -323,7 +321,7 @@ impl Walk<'_> {
     /// Region geometry for step `key`, reused while its inputs match.
     pub(super) fn cached_region(
         &mut self,
-        key: (Arc<str>, u8),
+        key: (crate::Id, u8),
         op: Operation,
     ) -> Result<Path, SceneError> {
         self.region_cache

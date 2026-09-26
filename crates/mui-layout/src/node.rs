@@ -210,6 +210,10 @@ impl<P> Node<P> {
     pub fn key(&self) -> Option<&str> {
         self.id.as_deref()
     }
+    /// The node's [`Id`], when it has one; [`Node::key`] as a `&str`.
+    pub fn ident(&self) -> Option<&Id> {
+        self.id.as_ref()
+    }
     pub fn with(mut self, payload: P) -> Self {
         self.payload = payload;
         self

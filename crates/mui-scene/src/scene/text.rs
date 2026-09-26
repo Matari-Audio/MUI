@@ -80,9 +80,7 @@ pub struct TextState {
     /// borrows them.
     pub(super) coords: CoordsCache,
     /// The coordinates each text key drew with last frame, for `Text::hint`.
-    pub(super) last_coords: HashMap<Arc<str>, (Coords, u64)>,
-    /// Node keys by hash, reused while the node stays in the tree.
-    pub(super) keys: HashMap<u64, (Arc<str>, u64)>,
+    pub(super) last_coords: HashMap<crate::Id, (Coords, u64)>,
     pub(super) outlines: OutlineCache,
     pub(super) borders: crate::border_ramp::BorderCache,
     pub(super) region_cache: crate::regions::RegionCache,
@@ -93,7 +91,7 @@ pub struct TextState {
 pub(super) type Spare = (
     Vec<super::Painted>,
     Vec<super::ResolvedSurface>,
-    HashMap<Arc<str>, usize>,
+    HashMap<crate::Id, usize>,
 );
 impl TextState {
     /// Hand a scene you are done with back, so the next resolve fills its
@@ -146,7 +144,6 @@ impl TextState {
         self.breaks.retain(|_, m| keep(m, g, age));
         self.coords.retain(|_, m| keep(m, g, age));
         keep(&mut self.last_coords, g, age);
-        keep(&mut self.keys, g, age);
         self.generation = g.wrapping_add(1);
         self.outlines.sweep(age);
         self.borders.sweep(age);
@@ -184,7 +181,7 @@ pub(super) struct Runs<'a> {
     pub(super) cache: &'a mut PerText<RunKey, CachedRun>,
     pub(super) breaks: &'a mut PerText<BreakKey, Breaks>,
     pub(super) coords: &'a mut CoordsCache,
-    pub(super) last_coords: &'a mut HashMap<Arc<str>, (Coords, u64)>,
+    pub(super) last_coords: &'a mut HashMap<crate::Id, (Coords, u64)>,
 }
 impl<'a> Runs<'a> {
     /// The faces a node shapes with: its own first, then the scene's.
@@ -227,7 +224,7 @@ impl<'a> Runs<'a> {
     /// Whether `key` drew at these coordinates last frame too. False only
     /// for the frame after an axis moved, which is what turns hinting off
     /// mid-tween; text seen for the first time counts as settled.
-    pub(super) fn settled(&mut self, key: &Arc<str>, coords: &Coords) -> bool {
+    pub(super) fn settled(&mut self, key: &crate::Id, coords: &Coords) -> bool {
         match self
             .last_coords
             .insert(key.clone(), (coords.clone(), self.generation))

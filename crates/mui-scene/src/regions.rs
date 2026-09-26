@@ -110,13 +110,13 @@ type Entry = (Operation, OffsetOptions, GeometryOptions, Path, bool, u64);
 /// resolve that does not use it.
 #[derive(Debug, Default)]
 pub(crate) struct RegionCache {
-    entries: rustc_hash::FxHashMap<(std::sync::Arc<str>, u8), Entry>,
+    entries: rustc_hash::FxHashMap<(crate::Id, u8), Entry>,
     generation: u64,
 }
 impl RegionCache {
     pub(crate) fn resolve(
         &mut self,
-        key: (std::sync::Arc<str>, u8),
+        key: (crate::Id, u8),
         op: Operation,
         o: OffsetOptions,
         g: GeometryOptions,
@@ -126,7 +126,7 @@ impl RegionCache {
     /// [`RegionCache::resolve`], and whether an inset changed ring counts.
     pub(crate) fn resolve_counted(
         &mut self,
-        key: (std::sync::Arc<str>, u8),
+        key: (crate::Id, u8),
         mut op: Operation,
         o: OffsetOptions,
         g: GeometryOptions,
@@ -172,7 +172,7 @@ impl RegionCache {
     }
     /// Keep `key`'s entry through this resolve's sweep without resolving it:
     /// its caller reused what the entry made.
-    pub(crate) fn keep(&mut self, key: &(std::sync::Arc<str>, u8)) {
+    pub(crate) fn keep(&mut self, key: &(crate::Id, u8)) {
         if let Some(e) = self.entries.get_mut(key) {
             e.5 = self.generation;
         }

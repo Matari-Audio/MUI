@@ -1,5 +1,4 @@
 //! A material weld's plates, baked or handed to the GPU.
-use std::sync::Arc;
 
 use mui_geometry::{CornerStyle, Point};
 use mui_layout::Frame;
@@ -117,10 +116,7 @@ impl Walk<'_> {
                 origin,
                 0.25 / quality.scale,
             )?);
-            members.insert(
-                c.key()
-                    .map_or_else(|| Arc::from(format!("{path}/{j}")), Arc::from),
-            );
+            members.insert(super::child_key(c, path, j));
         }
         if sources.is_empty() {
             return Err(SceneError::UnsupportedWeld(
