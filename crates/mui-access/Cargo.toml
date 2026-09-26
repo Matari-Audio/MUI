@@ -8,3 +8,6 @@ license.workspace = true
 [dependencies]
 accesskit = "0.24"
 mui-scene.workspace = true
+
+[lints]
+workspace = true

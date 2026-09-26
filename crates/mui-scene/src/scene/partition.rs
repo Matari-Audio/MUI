@@ -155,7 +155,8 @@ impl Walk<'_> {
                 if self.frames[*i].size.width <= 0. || self.frames[*i].size.height <= 0. {
                     Ok(Path::default())
                 } else {
-                    RoundedRect::new(bounds(self.frames[*i], None), 0.).map(|r| r.path())
+                    RoundedRect::new(bounds(self.frames[*i], None), 0.)
+                        .map(mui_geometry::RoundedRect::path)
                 }
             })
             .collect::<Result<_, _>>()?;

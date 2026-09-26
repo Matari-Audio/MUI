@@ -239,12 +239,11 @@ impl<'a> Walk<'a> {
             }
         }
         if blended.is_some() {
-            if masked {
-                if let Some(p) =
+            if masked
+                && let Some(p) =
                     self.push(Layer::Mask, contour.path.clone(), contour.rect, &s.mask, bg)
-                {
-                    p.offset = contour.offset;
-                }
+            {
+                p.offset = contour.offset;
             }
             self.mark(Layer::Unblend, empty(), None);
         }
@@ -461,13 +460,12 @@ impl<'a> Walk<'a> {
                 for ((k, draw), local) in draws.iter().enumerate().zip(paths) {
                     let d = d + draw.at;
                     if let Some(tag) = &draw.tag {
-                        let hit = match d == Point::ZERO {
-                            true => local.clone(),
-                            false => {
-                                let mut p = Path::clone(&local);
-                                p.translate(d);
-                                Arc::new(p)
-                            }
+                        let hit = if d == Point::ZERO {
+                            local.clone()
+                        } else {
+                            let mut p = Path::clone(&local);
+                            p.translate(d);
+                            Arc::new(p)
                         };
                         hits.push((Arc::clone(tag), hit));
                     }
@@ -860,13 +858,12 @@ impl Shift {
         if let Some(list) = &s.clip_path {
             let at = Arc::as_ptr(list);
             s.clip_path = Some(
-                match self.lists.iter().find(|(p, _)| std::ptr::eq(*p, at)) {
-                    Some((_, moved)) => moved.clone(),
-                    None => {
-                        let moved: Clips = list.iter().map(|(p, o)| (p.clone(), *o + d)).collect();
-                        self.lists.push((at, moved.clone()));
-                        moved
-                    }
+                if let Some((_, moved)) = self.lists.iter().find(|(p, _)| std::ptr::eq(*p, at)) {
+                    moved.clone()
+                } else {
+                    let moved: Clips = list.iter().map(|(p, o)| (p.clone(), *o + d)).collect();
+                    self.lists.push((at, moved.clone()));
+                    moved
                 },
             );
         }
@@ -1421,6 +1418,7 @@ mod tests {
         reused: bool,
         draws: &Arc<std::sync::atomic::AtomicUsize>,
     ) -> SceneSpec {
+        static FONT: std::sync::LazyLock<Font> = std::sync::LazyLock::new(super::super::font);
         let count = draws.clone();
         let mut panel = column([
             leaf(40., 20.).fill(Role::Primary).radius(6.).id("m.a"),
@@ -1441,7 +1439,6 @@ mod tests {
         let lead = leaf(lead, 10.).fill(Role::Raised);
         let mut spec =
             SceneSpec::new(row([lead, panel]).align(Align::Start)).offered(Size::new(300., 100.));
-        static FONT: std::sync::LazyLock<Font> = std::sync::LazyLock::new(super::super::font);
         spec.font = Some(FONT.clone());
         spec
     }

@@ -103,6 +103,7 @@ impl Gpu {
         transform: Affine,
         overlay: Option<F>,
     ) -> Result<Option<EffectStats>, String> {
+        use wgpu::CurrentSurfaceTexture as Acquired;
         if !self.drawable {
             return Ok(None);
         }
@@ -115,7 +116,6 @@ impl Gpu {
             return Ok(None);
         }
         let (device, Device { config, renderer }) = (&self.gpu.device, &mut self.gpu.state);
-        use wgpu::CurrentSurfaceTexture as Acquired;
         let frame = match self.surface.get_current_texture() {
             Acquired::Success(frame) | Acquired::Suboptimal(frame) => frame,
             Acquired::Outdated => {
@@ -143,7 +143,9 @@ impl Gpu {
             }
             _ => return Ok(None), // Occluded/validation: do not spin while hidden.
         };
-        let view = frame.texture.create_view(&Default::default());
+        let view = frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
         let stats = match overlay {
             Some(draw) => renderer.render_with_overlay(scene, transform, &view, draw),
             None => renderer.render(scene, transform, &view),

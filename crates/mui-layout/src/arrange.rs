@@ -248,7 +248,7 @@ pub(crate) fn arrange<P>(
             let mut y = 0.0;
             for (row, h) in grid.iter().zip(heights) {
                 let mut col = 0;
-                for c in row.iter() {
+                for c in *row {
                     let span = c.node.span.clamp(1, cols.max(1));
                     let cell_size =
                         Size::new(col_w * span as f64 + m.gap * (span - 1) as f64, h + surplus);
@@ -316,13 +316,12 @@ pub(crate) fn arrange<P>(
                     - m.gap * (count - 1.0).max(0.0))
                 .max(0.0);
                 let (mut cursor, extra) = match n.justify {
-                    Justify::Start => (0.0, 0.0),
-                    Justify::Center => (residual * 0.5, 0.0),
-                    Justify::End => (residual, 0.0),
                     Justify::SpaceBetween if count > 1.0 => (0.0, residual / (count - 1.0)),
                     // CSS: `space-between` on one item is `flex-start`, so a
                     // header row does not jump when its second child is gone.
-                    Justify::SpaceBetween => (0.0, 0.0),
+                    Justify::Start | Justify::SpaceBetween => (0.0, 0.0),
+                    Justify::Center => (residual * 0.5, 0.0),
+                    Justify::End => (residual, 0.0),
                     Justify::SpaceAround => (residual / count * 0.5, residual / count),
                     Justify::SpaceEvenly => (residual / (count + 1.0), residual / (count + 1.0)),
                 };

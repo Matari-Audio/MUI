@@ -15,12 +15,12 @@ const AWAY: Affine = Affine::new([1., 0., 0., 1., 5000., 0.]);
 fn device() -> Option<(wgpu::Device, wgpu::Queue)> {
     pollster::block_on(async {
         let adapter = wgpu::Instance::default()
-            .request_adapter(&Default::default())
+            .request_adapter(&wgpu::RequestAdapterOptions::default())
             .await
             .map_err(|e| eprintln!("SKIPPED: no wgpu adapter ({e})"))
             .ok()?;
         adapter
-            .request_device(&Default::default())
+            .request_device(&wgpu::DeviceDescriptor::default())
             .await
             .map_err(|e| eprintln!("SKIPPED: no wgpu device ({e})"))
             .ok()
@@ -43,7 +43,7 @@ fn target(device: &wgpu::Device) -> wgpu::TextureView {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             view_formats: &[],
         })
-        .create_view(&Default::default())
+        .create_view(&wgpu::TextureViewDescriptor::default())
 }
 
 fn welded() -> ResolvedScene {
@@ -162,7 +162,7 @@ fn pixels(device: &wgpu::Device, queue: &wgpu::Queue, t: &wgpu::Texture) -> Vec<
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         mapped_at_creation: false,
     });
-    let mut encoder = device.create_command_encoder(&Default::default());
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
     encoder.copy_texture_to_buffer(
         t.as_image_copy(),
         wgpu::TexelCopyBufferInfo {
@@ -178,8 +178,8 @@ fn pixels(device: &wgpu::Device, queue: &wgpu::Queue, t: &wgpu::Texture) -> Vec<
     queue.submit([encoder.finish()]);
     buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
     device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
-    let out = buffer.slice(..).get_mapped_range().unwrap().to_vec();
-    out
+
+    buffer.slice(..).get_mapped_range().unwrap().to_vec()
 }
 
 fn at(p: &[u8], x: u32, y: u32) -> [u8; 4] {
@@ -196,7 +196,7 @@ fn a_host_texture_paints_and_refreshes_without_a_new_scene() {
         return;
     };
     let out = readable(&device);
-    let view = out.create_view(&Default::default());
+    let view = out.create_view(&wgpu::TextureViewDescriptor::default());
     let mut r = pollster::block_on(hybrid(&device, &queue));
     let host = device.create_texture(&wgpu::TextureDescriptor {
         label: None,
@@ -222,7 +222,7 @@ fn a_host_texture_paints_and_refreshes_without_a_new_scene() {
                 rows_per_image: None,
             },
             host.size(),
-        )
+        );
     };
     let image = Arc::new(Image::texture(7, 4, 4));
     let root = leaf(320., 200.).fill(Fill::Image(image, Fit::Fill)).id("t");
@@ -252,7 +252,7 @@ fn a_backdrop_blurs_the_edge_under_it() {
         return;
     };
     let out = readable(&device);
-    let view = out.create_view(&Default::default());
+    let view = out.create_view(&wgpu::TextureViewDescriptor::default());
     let mut r = pollster::block_on(hybrid(&device, &queue));
     let half = |c: Color| leaf(160., 200.).fill(Fill::Color(c));
     let root = stack![
@@ -295,6 +295,8 @@ fn a_removed_weld_frees_its_texture() {
 /// shadows, strokes and labels, a translucent clipped panel at `panel`
 /// opacity, and a floating tooltip when `tip`.
 fn board(hot: Option<usize>, tip: bool, panel: f32, bg: Role) -> ResolvedScene {
+    // One face, as an app holds it: a fresh `Font` is a different font.
+    static FONT: std::sync::OnceLock<Font> = std::sync::OnceLock::new();
     let button = |i: usize| {
         overlay([text(format!("B{i}")).text_size(12.).fill(Role::Ink)])
             .size(60., 28.)
@@ -339,8 +341,6 @@ fn board(hot: Option<usize>, tip: bool, panel: f32, bg: Role) -> ResolvedScene {
         );
     }
     let mut spec = SceneSpec::new(overlay(kids).fill(bg).id("root")).offered(Size::new(320., 200.));
-    // One face, as an app holds it: a fresh `Font` is a different font.
-    static FONT: std::sync::OnceLock<Font> = std::sync::OnceLock::new();
     spec.font = Some(
         FONT.get_or_init(|| Font::new(epaint_default_fonts::HACK_REGULAR).unwrap())
             .clone(),
@@ -364,7 +364,7 @@ fn damaged_at(
 ) -> Option<(Vec<u8>, Vec<u8>, mui_vello::effects::EffectStats)> {
     let (device, queue) = device()?;
     let out = readable(&device);
-    let view = out.create_view(&Default::default());
+    let view = out.create_view(&wgpu::TextureViewDescriptor::default());
     let mut r = pollster::block_on(hybrid(&device, &queue));
     r.render(before, xf, &view).unwrap();
     let stats = r.render(after, xf, &view).unwrap();
@@ -506,7 +506,7 @@ fn big_changes_the_first_frame_and_a_resize_render_everything() {
         return;
     };
     let out = readable(&device);
-    let view = out.create_view(&Default::default());
+    let view = out.create_view(&wgpu::TextureViewDescriptor::default());
     let mut r = pollster::block_on(hybrid(&device, &queue));
     let a = board(None, false, 0.6, Role::Background);
     let first = r.render(&a, Affine::IDENTITY, &view).unwrap();

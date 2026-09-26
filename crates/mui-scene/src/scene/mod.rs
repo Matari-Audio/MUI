@@ -416,7 +416,7 @@ pub fn resolve_scene_retained(
         region_cache: &mut text.region_cache,
         surface_cache: &mut text.surface_cache,
         surface_joins: HashMap::default(),
-        joined_nodes: Default::default(),
+        joined_nodes: rustc_hash::FxHashSet::default(),
         ramp_anchors: HashMap::default(),
         ramp_frames: HashMap::default(),
         weld_cache,

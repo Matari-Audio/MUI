@@ -140,11 +140,13 @@ impl RegionCache {
             p.translate(origin);
             p
         };
-        if let Some((old, offsets, geometry, path, changed, seen)) = self.entries.get_mut(&key) {
-            if old.near(&op) && *offsets == o && *geometry == g {
-                *seen = self.generation;
-                return Ok((world(path.clone()), *changed));
-            }
+        if let Some((old, offsets, geometry, path, changed, seen)) = self.entries.get_mut(&key)
+            && old.near(&op)
+            && *offsets == o
+            && *geometry == g
+        {
+            *seen = self.generation;
+            return Ok((world(path.clone()), *changed));
         }
         let (path, changed) = match &op {
             Operation::Inset(p, d) => {

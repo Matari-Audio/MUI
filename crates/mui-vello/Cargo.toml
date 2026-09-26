@@ -58,3 +58,6 @@ required-features = ["gpu-effects"]
 [[example]]
 name = "bench"
 required-features = ["cpu", "gpu-effects"]
+
+[lints]
+workspace = true

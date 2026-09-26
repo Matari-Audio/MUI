@@ -213,7 +213,7 @@ fn inspect(
                 font: g.font,
             })
             .collect(),
-        axes: Default::default(),
+        axes: Axes::default(),
         hint: true,
         font_coords: vec![Arc::from(&[][..])].into(),
     });
@@ -618,22 +618,22 @@ impl App {
         let extra = self.scenes[self.selected].overlay();
         let wants_overlay = self.frames || extra.is_some();
         let draw_extra = |canvas: &mut mui::vello::Classic<'_>| {
-            if let Some((key, path)) = extra {
-                if let (Some(s), Ok(bez)) = (
+            if let Some((key, path)) = extra
+                && let (Some(s), Ok(bez)) = (
                     scene.surface(key),
                     mui::vello::bez_path(&path, mui::vello::ARC_TOLERANCE),
-                ) {
-                    canvas.set_transform(xf * Affine::translate((s.frame.x, s.frame.y)));
-                    canvas.set_paint(
-                        self.ui
-                            .theme
-                            .palette
-                            .on(self.ui.theme.palette.raised())
-                            .to_srgb()
-                            .into(),
-                    );
-                    canvas.fill_path(&bez);
-                }
+                )
+            {
+                canvas.set_transform(xf * Affine::translate((s.frame.x, s.frame.y)));
+                canvas.set_paint(
+                    self.ui
+                        .theme
+                        .palette
+                        .on(self.ui.theme.palette.raised())
+                        .to_srgb()
+                        .into(),
+                );
+                canvas.fill_path(&bez);
             }
             if self.frames {
                 let pointer = self
@@ -744,10 +744,10 @@ impl ApplicationHandler<AccessEvent> for App {
                 gpu.window().request_redraw();
             }
         }
-        if self.reload() {
-            if let Some(gpu) = &self.gpu {
-                gpu.window().request_redraw();
-            }
+        if self.reload()
+            && let Some(gpu) = &self.gpu
+        {
+            gpu.window().request_redraw();
         }
         let theme = self
             .theme_path
@@ -773,7 +773,7 @@ impl ApplicationHandler<AccessEvent> for App {
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
-                self.queue(Some(Some(Point::new(position.x, position.y))), None)
+                self.queue(Some(Some(Point::new(position.x, position.y))), None);
             }
             WindowEvent::CursorLeft { .. } => self.queue(Some(None), None),
             WindowEvent::Focused(false) => self.cancel(),
@@ -842,15 +842,16 @@ impl ApplicationHandler<AccessEvent> for App {
                         self.keys.extend(s.chars().map(|c| KeyPress {
                             key: mui::prelude::Key::Char(c),
                             mods,
-                        }))
+                        }));
                     }
                     _ => {}
                 }
-                if !mods.ctrl && !mods.cmd {
-                    if let Some(t) = event.text.as_ref() {
-                        self.text.extend(t.chars().filter(|c| !c.is_control()));
-                        self.typed = t.chars().find(|c| !c.is_control());
-                    }
+                if !mods.ctrl
+                    && !mods.cmd
+                    && let Some(t) = event.text.as_ref()
+                {
+                    self.text.extend(t.chars().filter(|c| !c.is_control()));
+                    self.typed = t.chars().find(|c| !c.is_control());
                 }
             }
             WindowEvent::Occluded(hidden) => {
@@ -879,10 +880,8 @@ impl ApplicationHandler<AccessEvent> for App {
                     gpu.window().set_cursor(icon(self.cursor));
                 }
                 self.apply_ime(scale);
-                if animating {
-                    if let Some(gpu) = &self.gpu {
-                        gpu.window().request_redraw();
-                    }
+                if animating && let Some(gpu) = &self.gpu {
+                    gpu.window().request_redraw();
                 }
                 return;
             }

@@ -12,7 +12,7 @@ use mui_scene::Corners;
 use mui_scene::prelude::*;
 use mui_vello::effects::{Budget, GpuRenderer};
 use mui_vello::kurbo::Affine;
-#[allow(dead_code)]
+#[expect(dead_code, reason = "shared by several examples; each calls a subset")]
 mod gpu_support;
 
 const SIZE: [u32; 2] = [640, 360];
@@ -64,7 +64,7 @@ async fn rasterise(resolved: &mui_scene::ResolvedScene) -> gpu_support::Result<V
     let texture = gpu_support::target(&device, SIZE);
     let format = texture.format();
     let mut renderer = GpuRenderer::new(&device, &queue, format, SIZE, Budget::default()).await?;
-    let view = texture.create_view(&Default::default());
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
     renderer.render(resolved, Affine::translate((32.0, 32.0)), &view)?;
     gpu_support::readback(&device, &queue, &texture, SIZE)
 }

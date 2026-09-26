@@ -7,3 +7,6 @@ license.workspace = true
 description = "Bounded, renderer-independent distance-field material welding for MUI"
 
 [dependencies]
+
+[lints]
+workspace = true

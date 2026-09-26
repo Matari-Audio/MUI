@@ -36,3 +36,6 @@ required-features = ["cpu"]
 # The scale contract is asserted where it is demonstrated, so the example and
 # the test cannot drift apart.
 test = true
+
+[lints]
+workspace = true

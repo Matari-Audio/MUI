@@ -4,7 +4,6 @@ use mui_vello::{
     effects::{Budget, GpuRenderer},
     kurbo::Affine,
 };
-#[allow(dead_code)]
 mod gpu_support;
 fn main() -> gpu_support::Result<()> {
     pollster::block_on(run())
@@ -27,7 +26,7 @@ async fn run() -> gpu_support::Result<()> {
         let layout = scene.layout.clone();
         let paint = scene.paint.clone();
         let texture = gpu_support::target(&device, size);
-        let view = texture.create_view(&Default::default());
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let mut renderer = GpuRenderer::new(
             &device,
             &queue,

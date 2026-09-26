@@ -304,12 +304,11 @@ fn unit(value: f64, range: &RangeInclusive<f64>) -> f64 {
 /// ponytail: a caller's own text is its own reserve -- one string is all the
 /// widget is told -- so pad it to its widest form if the units change width.
 fn readout(given: Option<String>, value: f64, min: f64, max: f64) -> El {
-    match given {
-        Some(t) => text(t.clone()).reserve(t),
-        None => {
-            let (lo, hi) = (format!("{min:.2}"), format!("{max:.2}"));
-            text(format!("{value:.2}")).reserve(if hi.len() > lo.len() { hi } else { lo })
-        }
+    if let Some(t) = given {
+        text(t.clone()).reserve(t)
+    } else {
+        let (lo, hi) = (format!("{min:.2}"), format!("{max:.2}"));
+        text(format!("{value:.2}")).reserve(if hi.len() > lo.len() { hi } else { lo })
     }
 }
 
@@ -355,14 +354,15 @@ pub fn slider(
             let grip = s.frame.size.height * THUMB / LANE + 2.0 * h;
             (grip, s.frame.size.width - grip)
         });
-    if ui.get(&id).pressed && travel > 0.0 {
-        if let Some(p) = ui.local(&id) {
-            // Off the thumb, a press puts the thumb's centre under it.
-            let at = unit(*value, &range) * travel + grip / 2.0;
-            if (p.x - at).abs() > grip / 2.0 {
-                let t = ((p.x - grip / 2.0) / travel).clamp(0.0, 1.0);
-                *value = range.start() + t * (range.end() - range.start());
-            }
+    if ui.get(&id).pressed
+        && travel > 0.0
+        && let Some(p) = ui.local(&id)
+    {
+        // Off the thumb, a press puts the thumb's centre under it.
+        let at = unit(*value, &range) * travel + grip / 2.0;
+        if (p.x - at).abs() > grip / 2.0 {
+            let t = ((p.x - grip / 2.0) / travel).clamp(0.0, 1.0);
+            *value = range.start() + t * (range.end() - range.start());
         }
     }
     ui.drag(&id, value, range.clone(), travel, false);
@@ -602,10 +602,10 @@ pub fn drag_value(
     }
     if let Some((mut s, width)) = typing {
         let take = |s: &str, value: &mut f64| {
-            if let Ok(v) = s.trim().parse::<f64>() {
-                if v.is_finite() {
-                    *value = v.clamp(lo, hi);
-                }
+            if let Ok(v) = s.trim().parse::<f64>()
+                && v.is_finite()
+            {
+                *value = v.clamp(lo, hi);
             }
         };
         if opening || ui.focused(&field) {

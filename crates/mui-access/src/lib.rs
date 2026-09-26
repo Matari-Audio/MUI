@@ -233,8 +233,7 @@ pub fn tree_update(scene: &ResolvedScene, focus: Option<&str>, scale: f64) -> Tr
                     && !k.starts_with('/')
                     && scene.surface(k).is_some_and(|s| s.focusable && !s.disabled)
             })
-            .map(node_id)
-            .unwrap_or(WINDOW),
+            .map_or(WINDOW, node_id),
     }
 }
 

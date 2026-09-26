@@ -439,7 +439,7 @@ async fn gpu() -> Option<(wgpu::AdapterInfo, Vec<Row>)> {
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
         view_formats: &[],
     });
-    let view = texture.create_view(&Default::default());
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
     let mut renderer = mui_vello::effects::GpuRenderer::new(
         &device,
         &queue,

@@ -338,26 +338,23 @@ pub fn text_edit(ui: &mut Ui, id: &str, value: &mut String, opts: TextOpts) -> (
     // ponytail: a composition shown last frame is not in that shift; a click
     // mid-composition lands as if the preedit were not there.
     let r = ui.get(id);
-    if r.pressed || r.dragged {
-        if let Some(p) = ui.local(id) {
-            caret = match &rows {
-                Some(rows) => {
-                    let lines = rows.lines(ui, value);
-                    let row = ((p.y - PAD_Y + scroll) / lh).floor().max(0.0) as usize;
-                    let l = &lines[row.min(lines.len() - 1)];
-                    chars(value, l.start) + ui.hit(&value[l.clone()], size, p.x - PAD)
-                }
-                None => {
-                    let shift = room.map_or(0.0, |room| {
-                        (caret_at(&ui.carets(value, size), byte(value, caret)) - room).max(0.0)
-                    });
-                    ui.hit(value, size, p.x - PAD + shift)
-                }
-            };
-            caret = grapheme::floor(value, caret);
-            if r.pressed {
-                anchor = caret;
-            }
+    if (r.pressed || r.dragged)
+        && let Some(p) = ui.local(id)
+    {
+        caret = if let Some(rows) = &rows {
+            let lines = rows.lines(ui, value);
+            let row = ((p.y - PAD_Y + scroll) / lh).floor().max(0.0) as usize;
+            let l = &lines[row.min(lines.len() - 1)];
+            chars(value, l.start) + ui.hit(&value[l.clone()], size, p.x - PAD)
+        } else {
+            let shift = room.map_or(0.0, |room| {
+                (caret_at(&ui.carets(value, size), byte(value, caret)) - room).max(0.0)
+            });
+            ui.hit(value, size, p.x - PAD + shift)
+        };
+        caret = grapheme::floor(value, caret);
+        if r.pressed {
+            anchor = caret;
         }
     }
     if r.double_clicked {
@@ -431,7 +428,7 @@ pub fn text_edit(ui: &mut Ui, id: &str, value: &mut String, opts: TextOpts) -> (
             scroll = scroll.clamp(0.0, (content - view).max(0.0));
             ui.set_text_scroll(id, scroll);
             let (el, x) = many_lines(ui, &shown, &lines, at, sel, pre_range, scroll, view, on, lh);
-            let el = el.when(content > view, |e| e.captures_wheel());
+            let el = el.when(content > view, mui_scene::Styled::captures_wheel);
             // ponytail: no per-character carets for a reader across lines;
             // the value and the selection are still reported.
             (el, Point::new(x, row as f64 * lh - scroll), Vec::new())
@@ -487,7 +484,10 @@ fn reinked(selected: &str, x0: f64, x1: f64, lh: f64) -> El {
 /// children keep the keys the single-line field always had -- `/0`
 /// selection, `/1` value, `/2` caret, `/3` preedit underline -- and the
 /// re-inked selection comes last, over the value.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "argument struct lands with the widget API pass (docs/DSL-V2.md)"
+)]
 fn one_line(
     ui: &Ui,
     shown: &str,
@@ -554,7 +554,10 @@ fn one_line(
 
 /// Many lines, only the rows in view built: a line's run, the re-inked
 /// selection over it, then the caret and the preedit underline on top.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "argument struct lands with the widget API pass (docs/DSL-V2.md)"
+)]
 fn many_lines(
     ui: &Ui,
     shown: &str,

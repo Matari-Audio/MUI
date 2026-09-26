@@ -181,10 +181,10 @@ pub(crate) fn validate_node<P>(node: &Node<P>, l: Limits) -> Result<(), Error> {
     {
         return Err(Error::InvalidValue);
     }
-    if let Some(max) = node.rare().maximum {
-        if max.width + 1e-9 < node.minimum.width || max.height + 1e-9 < node.minimum.height {
-            return Err(Error::InvalidValue);
-        }
+    if let Some(max) = node.rare().maximum
+        && (max.width + 1e-9 < node.minimum.width || max.height + 1e-9 < node.minimum.height)
+    {
+        return Err(Error::InvalidValue);
     }
     Ok(())
 }
@@ -301,10 +301,9 @@ pub(crate) fn measure_uncached<'a, P>(
         .id
         .as_deref()
         .filter(|_| !pass.redo && pass.cache.is_none())
+        && !pass.keys.insert(id)
     {
-        if !pass.keys.insert(id) {
-            return Err(Error::DuplicateKey(id.to_string()));
-        }
+        return Err(Error::DuplicateKey(id.to_string()));
     }
     let here = node.id.as_deref().unwrap_or(ancestor);
     // Aspect is width-first, like CSS: a definite width settles the height,

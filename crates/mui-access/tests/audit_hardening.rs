@@ -30,7 +30,12 @@ fn float_keeps_authored_parent_while_escaping_the_clip() {
     let scene = resolve_scene(&SceneSpec::new(tree)).unwrap();
     let popup = scene.surface("popup").unwrap();
     assert_eq!(popup.parent.as_deref(), Some("panel"));
-    assert!(popup.clip_paths().is_none_or(|p| p.is_empty()));
+    assert!(popup.clip_paths().is_none_or(
+        <[(
+            std::sync::Arc<mui_scene::prelude::Path>,
+            mui_scene::prelude::Point
+        )]>::is_empty
+    ));
     let update = tree_update(&scene, None, 1.0);
     let panel = &update
         .nodes

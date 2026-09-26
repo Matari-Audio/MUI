@@ -3,7 +3,7 @@
 #[test]
 fn javascript_reference_vectors_match_the_rust_kernel() {
     let r = request();
-    #[allow(clippy::type_complexity)]
+    #[expect(clippy::type_complexity, reason = "a literal table of reference vectors")]
     let cases: &[(f64, f64, f64, f64, f64, [u8; 4])] = &[
         (0.0, -1.0, 12.0, 1.0, 1.0, [0, 0, 0, 0]),
         (0.0, 0.0, 12.0, 0.0, 1.0, [255, 255, 255, 128]),

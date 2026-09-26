@@ -57,7 +57,7 @@ pub fn note_event(v: &Value) -> Result<NoteEvent, String> {
 /// render the given stereo slice at SAMPLE_RATE, consuming events at its start.
 /// Compatibility entry point for command-driven, static adapters.
 pub fn run(
-    describe: Value,
+    describe: &Value,
     audio: impl FnMut(&[NoteEvent], &mut [[f32; 2]]) + Send + 'static,
     edit: impl FnMut(&Value) -> Result<(), String>,
     mut snapshot: impl FnMut(u64) -> Result<Value, String>,
@@ -81,11 +81,11 @@ pub fn run_live(
     frame: impl FnMut(u64, u64, &[Value]) -> Result<Value, String>,
 ) -> Result<(), String> {
     describe["liveEditor"] = json!(true);
-    host(describe, audio, edit, frame, true)
+    host(&describe, audio, edit, frame, true)
 }
 
 fn host(
-    describe: Value,
+    describe: &Value,
     mut audio: impl FnMut(&[NoteEvent], &mut [[f32; 2]]) + Send + 'static,
     mut edit: impl FnMut(&Value) -> Result<(), String>,
     mut snapshot: impl FnMut(u64, u64, &[Value]) -> Result<Value, String>,

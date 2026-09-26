@@ -131,35 +131,32 @@ pub(crate) fn source(plate: Plate, origin: Point, tolerance: f64) -> Result<Sour
         width,
     } = plate;
     let delta = Point::new(-origin.x, -origin.y);
-    let shape = match rr {
-        Some(r) => {
-            let b = r.bounds();
-            Geometry::RoundedRect {
-                bounds: Rect::new(
-                    b.min.x - origin.x,
-                    b.min.y - origin.y,
-                    b.max.x - origin.x,
-                    b.max.y - origin.y,
-                ),
-                radius: r.radius(),
-            }
+    let shape = if let Some(r) = rr {
+        let b = r.bounds();
+        Geometry::RoundedRect {
+            bounds: Rect::new(
+                b.min.x - origin.x,
+                b.min.y - origin.y,
+                b.max.x - origin.x,
+                b.max.y - origin.y,
+            ),
+            radius: r.radius(),
         }
-        None => {
-            let local = path.rigid_transform(delta, 0.0)?;
-            let rings = local.flatten(tolerance, 250_000)?;
-            Geometry::Contours(
-                rings
-                    .into_iter()
-                    .filter(|r| r.len() >= 3)
-                    .map(|mut ring| {
-                        if ring.len() > 1 && ring.first() == ring.last() {
-                            ring.pop();
-                        }
-                        ring.into_iter().map(|p| WPoint::new(p.x, p.y)).collect()
-                    })
-                    .collect(),
-            )
-        }
+    } else {
+        let local = path.rigid_transform(delta, 0.0)?;
+        let rings = local.flatten(tolerance, 250_000)?;
+        Geometry::Contours(
+            rings
+                .into_iter()
+                .filter(|r| r.len() >= 3)
+                .map(|mut ring| {
+                    if ring.len() > 1 && ring.first() == ring.last() {
+                        ring.pop();
+                    }
+                    ring.into_iter().map(|p| WPoint::new(p.x, p.y)).collect()
+                })
+                .collect(),
+        )
     };
     // Paint remains anchored to the original source's own geometry. Moving a
     // whole group therefore changes neither its material nor its cache key.

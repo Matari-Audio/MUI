@@ -86,7 +86,7 @@ impl<'a> Classic<'a> {
                 id,
                 may_have_transparency: true,
             },
-            sampler: Default::default(),
+            sampler: vello::peniko::ImageSampler::default(),
         }
         .into()
     }
@@ -142,19 +142,18 @@ impl Canvas for Classic<'_> {
             return Some(self.hand_out(image));
         }
         self.cache.sweep();
-        let image = match self.cache.find(&img.rgba) {
-            Some(Stored::Image(i)) => i.clone(),
-            _ => {
-                let expected = (img.width as usize)
-                    .checked_mul(img.height as usize)?
-                    .checked_mul(4)?;
-                if expected == 0 || img.rgba.len() != expected {
-                    return None;
-                }
-                let i = image_data(img);
-                self.cache.remember(&img.rgba, Stored::Image(i.clone()));
-                i
+        let image = if let Some(Stored::Image(i)) = self.cache.find(&img.rgba) {
+            i.clone()
+        } else {
+            let expected = (img.width as usize)
+                .checked_mul(img.height as usize)?
+                .checked_mul(4)?;
+            if expected == 0 || img.rgba.len() != expected {
+                return None;
             }
+            let i = image_data(img);
+            self.cache.remember(&img.rgba, Stored::Image(i.clone()));
+            i
         };
         Some(self.hand_out(image))
     }

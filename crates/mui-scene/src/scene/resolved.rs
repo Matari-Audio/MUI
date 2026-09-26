@@ -349,10 +349,11 @@ impl ResolvedScene {
             self.surfaces[i].text_value = Some(s.to_owned());
         }
         for surface in &mut self.surfaces {
-            if &*surface.key == key && surface.semantic_label_implicit {
-                if let Some(semantics) = surface.semantics.as_mut() {
-                    semantics.label = Some(s.to_owned());
-                }
+            if &*surface.key == key
+                && surface.semantic_label_implicit
+                && let Some(semantics) = surface.semantics.as_mut()
+            {
+                semantics.label = Some(s.to_owned());
             }
         }
         Ok(())

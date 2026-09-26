@@ -198,15 +198,14 @@ impl BorderCache {
             p.translate(origin);
             p
         };
-        if let Some(e) = self.entries.get_mut(key) {
-            if e.outline.near(&outline, 1e-9)
-                && e.frame == frame
-                && e.widths == widths
-                && e.tolerance == tolerance
-            {
-                e.seen = self.generation;
-                return Ok(world(e.band.clone()));
-            }
+        if let Some(e) = self.entries.get_mut(key)
+            && e.outline.near(&outline, 1e-9)
+            && e.frame == frame
+            && e.widths == widths
+            && e.tolerance == tolerance
+        {
+            e.seen = self.generation;
+            return Ok(world(e.band.clone()));
         }
         let band = band(&outline, ramp, frame, tolerance)?;
         self.entries.insert(

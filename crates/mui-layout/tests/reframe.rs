@@ -2,7 +2,7 @@ use mui_layout::*;
 #[test]
 fn reframe_validates_tree_and_updates_named_frames() {
     let root = row([leaf(10., 10.).id("a"), leaf(10., 10.).id("b")]);
-    let layout = resolve(&root, None, Default::default()).unwrap();
+    let layout = resolve(&root, None, Limits::default()).unwrap();
     let mut frames = layout.all().to_vec();
     frames[1].x = 3.;
     let updated = layout.clone().reframe(&root, frames.clone()).unwrap();

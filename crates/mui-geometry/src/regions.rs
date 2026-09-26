@@ -205,7 +205,7 @@ fn overlay(
         if topology
             .rings()
             .iter()
-            .flat_map(|r| r.points())
+            .flat_map(super::boolean::Ring::points)
             .any(|p| p.x.abs() > g.coordinate_limit || p.y.abs() > g.coordinate_limit)
         {
             return Err(Error::CoordinateLimit);

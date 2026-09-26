@@ -53,7 +53,9 @@ pub fn bez_path_into(path: &Path, tolerance: f64, out: &mut BezPath) -> Result<(
                         );
                         k.append_iter(tolerance)
                             .filter_map(|el| match el {
-                                PathEl::CurveTo(a, b, p) => Some([a, b, p].map(|q| q.to_vec2())),
+                                PathEl::CurveTo(a, b, p) => {
+                                    Some([a, b, p].map(kurbo::Point::to_vec2))
+                                }
                                 _ => None,
                             })
                             .collect()

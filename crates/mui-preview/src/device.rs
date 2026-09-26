@@ -105,7 +105,7 @@ mod tests {
         let scope = gpu.device.push_error_scope(wgpu::ErrorFilter::Validation);
         let spec = SceneSpec::new(leaf(16., 16.).fill(Role::Primary)).offered(Size::new(16., 16.));
         let scene = resolve_scene(&spec).unwrap();
-        let view = target.create_view(&Default::default());
+        let view = target.create_view(&wgpu::TextureViewDescriptor::default());
         gpu.state.render(&scene, Affine::IDENTITY, &view).unwrap();
         assert!(pollster::block_on(scope.pop()).is_none());
         assert!(!gpu.recover(&instance, None, build).unwrap());

@@ -192,10 +192,10 @@ impl<'a> Runs<'a> {
         let Some(own) = face.font else {
             return self.fonts.clone();
         };
-        if let Some((id, fonts)) = &self.own_fonts {
-            if *id == own.id() {
-                return fonts.clone();
-            }
+        if let Some((id, fonts)) = &self.own_fonts
+            && *id == own.id()
+        {
+            return fonts.clone();
         }
         let fonts: Arc<[Font]> = std::iter::once(own).chain(&*self.fonts).cloned().collect();
         self.own_fonts = Some((own.id(), fonts.clone()));

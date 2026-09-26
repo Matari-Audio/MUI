@@ -12,3 +12,6 @@ description = "Theme data for MUI: Oklch colours, palettes, roles, fills, gradie
 color = "0.3"
 # Only for CornerStyle and the spacing vocabulary a shell's thickness is stated in.
 mui-geometry.workspace = true
+
+[lints]
+workspace = true

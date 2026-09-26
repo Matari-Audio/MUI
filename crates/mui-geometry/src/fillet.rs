@@ -70,17 +70,13 @@ impl CornerStyle {
                     ));
                     at = a.to;
                 }
-                PathCommand::MoveTo(p) | PathCommand::LineTo(p) => {
+                PathCommand::MoveTo(p) | PathCommand::LineTo(p) | PathCommand::CubicTo(_, _, p) => {
                     commands.push(*c);
                     at = p;
                 }
                 PathCommand::ArcTo(a) => {
                     commands.push(*c);
                     at = a.to;
-                }
-                PathCommand::CubicTo(_, _, p) => {
-                    commands.push(*c);
-                    at = p;
                 }
                 PathCommand::Close => commands.push(*c),
             }

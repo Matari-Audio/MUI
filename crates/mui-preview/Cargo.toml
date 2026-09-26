@@ -25,3 +25,6 @@ pollster.workspace = true
 epaint_default_fonts.workspace = true
 mui-access.workspace = true
 accesskit_winit = "0.33"
+
+[lints]
+workspace = true

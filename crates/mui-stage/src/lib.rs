@@ -426,7 +426,7 @@ fn target(
     })
 }
 fn view(t: &wgpu::Texture) -> wgpu::TextureView {
-    t.create_view(&Default::default())
+    t.create_view(&wgpu::TextureViewDescriptor::default())
 }
 const RT: wgpu::TextureUsages =
     wgpu::TextureUsages::RENDER_ATTACHMENT.union(wgpu::TextureUsages::TEXTURE_BINDING);
@@ -700,7 +700,9 @@ impl Stage {
         layer
             .renderer
             .render(scene, Affine::scale(supersample), &target)?;
-        let mut enc = self.device.create_command_encoder(&Default::default());
+        let mut enc = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
         // Linearise into mip 0, then halve down the chain.
         let layer = &self.layers[id];
         let level = |i: u32| {
@@ -739,7 +741,10 @@ impl Stage {
     /// and a plane whose walls are the glyphs' own contours, so `.depth(..)`
     /// extrudes real 3D letters. The plane is the run's ink box plus `pad`
     /// on every side, centred on its origin.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "an options struct comes with the media/ split (docs/DSL-V2.md)"
+    )]
     pub fn text_layer(
         &mut self,
         id: &str,
@@ -805,7 +810,9 @@ impl Stage {
             let at = t - shutter * f64::from(n - 1 - i) / f64::from(n);
             let s = shot(at);
             self.scene(&s, at, aspect)?;
-            let mut enc = self.device.create_command_encoder(&Default::default());
+            let mut enc = self
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
             {
                 let hdr = self.tex_group(&self.hdr, &self.hdr);
                 let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -947,7 +954,9 @@ impl Stage {
         // The background samples nothing, but its layout still has a
         // group 2: bind the frame's own HDR input.
         let none = self.tex_group(&self.accum, &self.accum);
-        let mut enc = self.device.create_command_encoder(&Default::default());
+        let mut enc = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
         {
             let mut pass = self.scene_pass(&mut enc, &none, true, s.floor.is_none());
             pass.set_pipeline(&self.pipes.bg);
@@ -1057,7 +1066,9 @@ impl Stage {
         ];
         self.queue
             .write_buffer(&self.post, 0, bytemuck::cast_slice(&u));
-        let mut enc = self.device.create_command_encoder(&Default::default());
+        let mut enc = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
         let pass = |enc: &mut wgpu::CommandEncoder,
                     to: &wgpu::TextureView,
                     clear: bool,
@@ -1169,16 +1180,15 @@ fn attach(
 fn wall_mesh(p: &Plane) -> Vec<f32> {
     let [w, h] = p.size;
     let rect;
-    let outline = match &p.outline {
-        Some(o) => &**o,
-        None => {
-            rect = Path::polyline(
-                [(0., 0.), (w, 0.), (w, h), (0., h)]
-                    .map(|(x, y)| mui_geometry::Point::new(f64::from(x), f64::from(y))),
-                true,
-            );
-            &rect
-        }
+    let outline = if let Some(o) = &p.outline {
+        &**o
+    } else {
+        rect = Path::polyline(
+            [(0., 0.), (w, 0.), (w, h), (0., h)]
+                .map(|(x, y)| mui_geometry::Point::new(f64::from(x), f64::from(y))),
+            true,
+        );
+        &rect
     };
     let Ok(contours) = outline.flatten(0.25, 1 << 14) else {
         return Vec::new();
@@ -1281,13 +1291,13 @@ fn pipelines(
             vertex: wgpu::VertexState {
                 module: &module,
                 entry_point: Some(vs),
-                compilation_options: Default::default(),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
                 buffers,
             },
             fragment: Some(wgpu::FragmentState {
                 module: &module,
                 entry_point: Some(fs),
-                compilation_options: Default::default(),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
                 // A scene draw also writes its eye distance, unblended: the
                 // nearest opaque-enough surface is what depth of field sees.
                 targets: &[
@@ -1312,8 +1322,8 @@ fn pipelines(
                 } else {
                     wgpu::CompareFunction::Always
                 }),
-                stencil: Default::default(),
-                bias: Default::default(),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
             }),
             multisample: wgpu::MultisampleState {
                 count: if scene { SAMPLES } else { 1 },

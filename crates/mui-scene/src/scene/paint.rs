@@ -103,25 +103,22 @@ impl Walk<'_> {
             if !(d.is_finite() && d >= 0.0) {
                 return Err(SceneError::InvalidRadius);
             }
-            let shell = match cur_rect {
-                Some(rr) => {
-                    let i2 = rr.inset(d)?;
-                    contour.changed |= i2.corner_collapsed;
-                    let Some(child) = i2.shape else { break };
-                    cur_rect = Some(child);
-                    self.rect_path(child, mui_geometry::CornerStyle::Round)
-                }
-                None => {
-                    let from = (**cur.as_ref().unwrap_or(&contour.path)).clone();
-                    let (path, changed) = self.region_cache.resolve_counted(
-                        (self.key.clone(), SHELL.wrapping_add(i as u8)),
-                        Operation::Inset(from, d),
-                        self.spec.offsets,
-                        self.spec.geometry,
-                    )?;
-                    contour.changed |= changed;
-                    cur.insert(Arc::new(path)).clone()
-                }
+            let shell = if let Some(rr) = cur_rect {
+                let i2 = rr.inset(d)?;
+                contour.changed |= i2.corner_collapsed;
+                let Some(child) = i2.shape else { break };
+                cur_rect = Some(child);
+                self.rect_path(child, mui_geometry::CornerStyle::Round)
+            } else {
+                let from = (**cur.as_ref().unwrap_or(&contour.path)).clone();
+                let (path, changed) = self.region_cache.resolve_counted(
+                    (self.key.clone(), SHELL.wrapping_add(i as u8)),
+                    Operation::Inset(from, d),
+                    self.spec.offsets,
+                    self.spec.geometry,
+                )?;
+                contour.changed |= changed;
+                cur.insert(Arc::new(path)).clone()
             };
             let mut p = self.push(Layer::Shell(i), shell, cur_rect, f, bg);
             if let Some(p) = p.as_deref_mut() {
@@ -275,13 +272,13 @@ impl Walk<'_> {
                 let generation = self.outlines.generation;
                 if let Some((outline, width, _, band, seen)) =
                     self.outlines.bands.get_mut(&self.key)
+                    && Arc::ptr_eq(outline, &contour.path)
+                    && *width == w
                 {
-                    if Arc::ptr_eq(outline, &contour.path) && *width == w {
-                        *seen = generation;
-                        let band = band.clone();
-                        self.region_cache.keep(&(self.key.clone(), STROKE_BAND));
-                        return Ok(Some((band, None, st.fill.clone(), 0., false)));
-                    }
+                    *seen = generation;
+                    let band = band.clone();
+                    self.region_cache.keep(&(self.key.clone(), STROKE_BAND));
+                    return Ok(Some((band, None, st.fill.clone(), 0., false)));
                 }
                 // Shared with a surface owner's clearance: one entry per node.
                 let band = Arc::new(self.cached_region(
@@ -359,7 +356,7 @@ impl Walk<'_> {
         };
         crate::border_ramp::decorate(&mut band, ramp, anchor, shoulder, named_frame)?;
         if let Some(joins) = self.surface_joins.get(&at) {
-            band.commands.extend(joins.commands.iter().cloned());
+            band.commands.extend(joins.commands.iter().copied());
         }
         if ramp.align == crate::BorderAlign::Outside {
             let merged = self.cached_region((self.key.clone(), 7), Operation::Sweep(band))?;

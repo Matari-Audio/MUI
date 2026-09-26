@@ -236,18 +236,18 @@ impl<V: View> Handler<V> {
         let shared = Arc::clone(&self.shared);
         let mut s = lock(&shared);
         self.unpainted |= self.advance(&mut s, now);
-        if self.unpainted {
-            if let (Some(gpu), Some(scene)) = (self.gpu.as_mut(), s.ui.scene()) {
-                match gpu.present(self.size, scene, Affine::scale(self.scale)) {
-                    Present::Done => self.unpainted = false,
-                    Present::Retry => {}
-                    Present::Rebuild => {
-                        eprintln!("mui-truce: GPU lost; rebuilding");
-                        self.gpu = None;
-                        // A surface that keeps failing must not rebuild a
-                        // device every tick.
-                        self.gpu_retry_at = now + GPU_RETRY;
-                    }
+        if self.unpainted
+            && let (Some(gpu), Some(scene)) = (self.gpu.as_mut(), s.ui.scene())
+        {
+            match gpu.present(self.size, scene, Affine::scale(self.scale)) {
+                Present::Done => self.unpainted = false,
+                Present::Retry => {}
+                Present::Rebuild => {
+                    eprintln!("mui-truce: GPU lost; rebuilding");
+                    self.gpu = None;
+                    // A surface that keeps failing must not rebuild a
+                    // device every tick.
+                    self.gpu_retry_at = now + GPU_RETRY;
                 }
             }
         }
@@ -265,8 +265,8 @@ impl<V: View> Handler<V> {
     pub(crate) fn step(&mut self) -> bool {
         let shared = Arc::clone(&self.shared);
         let now = self.last_frame + Duration::from_millis(16);
-        let painted = self.advance(&mut lock(&shared), now);
-        painted
+
+        self.advance(&mut lock(&shared), now)
     }
 
     /// Run the queued events and whatever else is due through `Ui::frame`.
@@ -446,11 +446,11 @@ impl<V: View> Handler<V> {
     /// same modifiers. Drag samples all stay, for freehand curves.
     fn push_move(&mut self, input: Input) {
         if input.pointer.buttons.is_empty() {
-            if let Some(Pending::Move(previous)) = self.pending.back_mut() {
-                if previous.pointer.mods == input.pointer.mods {
-                    *previous = input;
-                    return;
-                }
+            if let Some(Pending::Move(previous)) = self.pending.back_mut()
+                && previous.pointer.mods == input.pointer.mods
+            {
+                *previous = input;
+                return;
             }
             self.pending.push_back(Pending::Move(input));
         } else {
@@ -724,7 +724,7 @@ impl Gpu {
             wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
         // SAFETY: the surface comes from this window's live native handle,
         // and baseview drops the handler that owns it before the window.
-        #[allow(unsafe_code)]
+        #[expect(unsafe_code, reason = "calls the unsafe surface constructor")]
         let surface = unsafe { surface::create(&instance, window) }
             .ok_or("native surface creation failed")?;
         // A desktop with an iGPU enumerates it first; paint on the card.
@@ -781,6 +781,7 @@ impl Gpu {
     }
 
     fn present(&mut self, size: (u32, u32), scene: &ResolvedScene, xf: Affine) -> Present {
+        use wgpu::CurrentSurfaceTexture as Acquired;
         if self.lost.load(Ordering::Acquire) {
             return Present::Rebuild;
         }
@@ -798,7 +799,6 @@ impl Gpu {
             self.config.height = height;
             self.surface.configure(&self.device, &self.config);
         }
-        use wgpu::CurrentSurfaceTexture as Acquired;
         let frame = match self.surface.get_current_texture() {
             Acquired::Success(f) | Acquired::Suboptimal(f) => f,
             Acquired::Outdated => {

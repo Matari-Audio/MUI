@@ -513,10 +513,11 @@ pub fn canvas_cached<K: Clone + PartialEq + 'static>(
     let cache = cache.clone();
     Node::overlay([]).with(Element {
         content: Content::Canvas(Canvas(Arc::new(move |size| {
-            if let Some((old_key, old_size, draws)) = cache.0.borrow().as_ref() {
-                if *old_key == key && *old_size == size {
-                    return Arc::clone(draws);
-                }
+            if let Some((old_key, old_size, draws)) = cache.0.borrow().as_ref()
+                && *old_key == key
+                && *old_size == size
+            {
+                return Arc::clone(draws);
             }
             let draws: Arc<[Draw]> = f(size).into();
             *cache.0.borrow_mut() = Some((key.clone(), size, Arc::clone(&draws)));
@@ -597,7 +598,7 @@ pub trait Paints: Sized {
                 *none = Some(Stroke {
                     fill: Fill::None,
                     width: Some(w),
-                })
+                });
             }
         }
         self

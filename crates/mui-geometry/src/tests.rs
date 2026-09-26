@@ -248,7 +248,7 @@ fn invalid_values_fail() {
     assert!(
         union(
             &[r(0., 0., 20., 20.).transformed(Affine::translation(f64::NAN, 0.))],
-            Default::default()
+            GeometryOptions::default()
         )
         .is_err()
     );
@@ -258,19 +258,19 @@ fn intersection_and_difference() {
     let a = [r(0., 0., 100., 100.)];
     let b = [r(50., 0., 100., 100.)];
     near(
-        boolean(&a, &b, BooleanOp::Intersection, Default::default())
+        boolean(&a, &b, BooleanOp::Intersection, GeometryOptions::default())
             .unwrap()
             .area(),
         5000.,
     );
     near(
-        boolean(&a, &b, BooleanOp::Difference, Default::default())
+        boolean(&a, &b, BooleanOp::Difference, GeometryOptions::default())
             .unwrap()
             .area(),
         5000.,
     );
     near(
-        boolean(&a, &b, BooleanOp::Xor, Default::default())
+        boolean(&a, &b, BooleanOp::Xor, GeometryOptions::default())
             .unwrap()
             .area(),
         10000.,
@@ -304,7 +304,7 @@ fn randomized_rectangles_have_finite_safe_arcs() {
         let b = r(x, y, 20. + rand() * 150., 20. + rand() * 150.)
             .transformed(Affine::rotation_about(a, Point::new(x, y)));
         let t = u(&[r(0., 0., 250., 130.), b]);
-        let s = fillet(&t, Default::default()).unwrap();
+        let s = fillet(&t, Fillet::default()).unwrap();
         assert!(s.path.flatten(0.2, 100000).is_ok());
         for c in s.corners.iter().flatten() {
             assert!(c.effective_radius.is_finite() && c.effective_radius >= 0.);
@@ -419,13 +419,13 @@ fn erosion_can_split_a_narrow_neck() {
         r(100., 0., 60., 60.),
         r(60., 25., 40., 10.),
     ]);
-    let i = inset_path(&t.to_path(), 6., Default::default()).unwrap();
+    let i = inset_path(&t.to_path(), 6., OffsetOptions::default()).unwrap();
     assert_eq!(i.topology.components(), 2);
     assert!(i.counts_changed);
 }
 #[test]
 fn erosion_can_empty_a_shape() {
-    let i = inset_path(&rr(20., 20., 4.).path(), 20., Default::default()).unwrap();
+    let i = inset_path(&rr(20., 20., 4.).path(), 20., OffsetOptions::default()).unwrap();
     assert_eq!(i.topology.components(), 0);
     assert!(i.counts_changed);
 }
@@ -435,7 +435,7 @@ fn holes_expand_on_inset() {
         .unwrap()
         .with_hole(Polygon::rectangle(40., 40., 20., 20.).unwrap().exterior)
         .into()]);
-    let i = inset_path(&t.to_path(), 5., Default::default()).unwrap();
+    let i = inset_path(&t.to_path(), 5., OffsetOptions::default()).unwrap();
     let hole = i
         .topology
         .rings()
@@ -449,13 +449,20 @@ fn holes_expand_on_inset() {
 fn offset_is_repeatable() {
     let p = rr(92., 170., 28.).path();
     assert_eq!(
-        inset_path(&p, 12., Default::default()).unwrap(),
-        inset_path(&p, 12., Default::default()).unwrap()
+        inset_path(&p, 12., OffsetOptions::default()).unwrap(),
+        inset_path(&p, 12., OffsetOptions::default()).unwrap()
     );
 }
 #[test]
 fn invalid_offset_inputs_rejected() {
-    assert!(inset_path(&rr(100., 100., 20.).path(), f64::NAN, Default::default()).is_err());
+    assert!(
+        inset_path(
+            &rr(100., 100., 20.).path(),
+            f64::NAN,
+            OffsetOptions::default()
+        )
+        .is_err()
+    );
     assert!(
         inset_path(
             &rr(100., 100., 20.).path(),
@@ -496,7 +503,7 @@ fn self_intersection_rejected() {
         Point::new(100., 100.),
     ]);
     assert!(matches!(
-        union(&[p.into()], Default::default()),
+        union(&[p.into()], GeometryOptions::default()),
         Err(Error::SelfIntersection)
     ));
 }
@@ -591,10 +598,10 @@ fn randomized_inset_boundary_clearance() {
             )
             .transformed(Affine::rotation(rand() * PI)),
         ]);
-        let p = fillet(&t, Default::default()).unwrap().path;
+        let p = fillet(&t, Fillet::default()).unwrap().path;
         let source = p.flatten(0.002, 50000).unwrap();
         let d = 2. + rand() * 8.;
-        let inner = inset_path(&p, d, Default::default()).unwrap();
+        let inner = inset_path(&p, d, OffsetOptions::default()).unwrap();
         for q in inner
             .path
             .flatten(0.1, 50000)

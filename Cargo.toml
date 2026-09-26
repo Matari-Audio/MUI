@@ -63,6 +63,38 @@ vello_cpu = { version = "0.2", default-features = false, features = ["std", "u8_
 unicode-segmentation = "1.13"
 truce = { version = "6.3", default-features = false }
 
+# Every member opts in with `[lints] workspace = true`. The vendored vello keeps
+# upstream's own table. Pedantic is a curated slice: the lints that catch a real
+# mistake or a real simplification, not the ones that argue about taste.
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+unused_must_use = "deny"
+
+[workspace.lints.clippy]
+undocumented_unsafe_blocks = "deny"
+allow_attributes_without_reason = "warn"
+allow_attributes = "warn"
+dbg_macro = "deny"
+todo = "deny"
+semicolon_if_nothing_returned = "warn"
+redundant_closure_for_method_calls = "warn"
+manual_let_else = "warn"
+needless_pass_by_value = "warn"
+cloned_instead_of_copied = "warn"
+explicit_iter_loop = "warn"
+map_unwrap_or = "warn"
+inefficient_to_string = "warn"
+implicit_clone = "warn"
+unnested_or_patterns = "warn"
+default_trait_access = "warn"
+uninlined_format_args = "warn"
+single_match_else = "warn"
+match_same_arms = "warn"
+redundant_else = "warn"
+if_not_else = "warn"
+items_after_statements = "warn"
+unreadable_literal = "allow"
+
 # Comparable speed-oriented benchmark profile; release's size policy is unchanged.
 [profile.perf]
 inherits = "release"

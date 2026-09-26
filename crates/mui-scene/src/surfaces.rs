@@ -257,10 +257,10 @@ impl Cache {
             g.join_nodes.iter_mut().for_each(|i| *i += at);
             g
         };
-        if let Some((old, result)) = self.entries.get(key) {
-            if old.near(&input) {
-                return Ok(placed(result.clone()));
-            }
+        if let Some((old, result)) = self.entries.get(key)
+            && old.near(&input)
+        {
+            return Ok(placed(result.clone()));
         }
         let result = resolve(&input)?;
         // Bounded per-scene cache; colors do not affect geometry.

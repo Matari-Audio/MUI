@@ -15,7 +15,14 @@ fn empty_sets_have_boolean_semantics_in_both_orders() {
     for (a, b) in [(&p, &empty), (&empty, &p)] {
         for op in [BooleanOp::Union, BooleanOp::Xor] {
             assert!(has(
-                &boolean_paths(a, b, op, Default::default(), Default::default()).unwrap(),
+                &boolean_paths(
+                    a,
+                    b,
+                    op,
+                    OffsetOptions::default(),
+                    GeometryOptions::default()
+                )
+                .unwrap(),
                 50.,
                 50.
             ));
@@ -25,8 +32,8 @@ fn empty_sets_have_boolean_semantics_in_both_orders() {
                 a,
                 b,
                 BooleanOp::Intersection,
-                Default::default(),
-                Default::default()
+                OffsetOptions::default(),
+                GeometryOptions::default()
             )
             .unwrap()
             .commands
@@ -38,8 +45,8 @@ fn empty_sets_have_boolean_semantics_in_both_orders() {
             &empty,
             &p,
             BooleanOp::Difference,
-            Default::default(),
-            Default::default()
+            OffsetOptions::default(),
+            GeometryOptions::default()
         )
         .unwrap()
         .commands
@@ -50,8 +57,8 @@ fn empty_sets_have_boolean_semantics_in_both_orders() {
             &p,
             &empty,
             BooleanOp::Difference,
-            Default::default(),
-            Default::default()
+            OffsetOptions::default(),
+            GeometryOptions::default()
         )
         .unwrap(),
         50.,
@@ -69,11 +76,11 @@ fn ramp_alignments_leave_the_correct_interior_and_outside_band() {
             &rect(),
             WidthProfile::horizontal(20., 1., 0., 200.),
             align,
-            Default::default(),
-            Default::default(),
+            OffsetOptions::default(),
+            GeometryOptions::default(),
         )
         .unwrap();
-        let padded = inset_path(&border.interior, 2., Default::default())
+        let padded = inset_path(&border.interior, 2., OffsetOptions::default())
             .unwrap()
             .path;
         for x in [50., 100., 150.] {
@@ -102,21 +109,23 @@ fn partition_inherits_star_and_hole_and_can_be_split_again() {
         &star,
         &hole,
         BooleanOp::Difference,
-        Default::default(),
-        Default::default(),
+        OffsetOptions::default(),
+        GeometryOptions::default(),
     )
     .unwrap();
-    let inner = inset_path(&ring, 2., Default::default()).unwrap().path;
+    let inner = inset_path(&ring, 2., OffsetOptions::default())
+        .unwrap()
+        .path;
     let halves = ShapeSplit::new(SplitAxis::X, 0.5)
         .gap(2.)
-        .regions(&inner, Default::default(), Default::default())
+        .regions(&inner, OffsetOptions::default(), GeometryOptions::default())
         .unwrap();
     let source = ring.flatten(0.01, 10000).unwrap();
     for half in halves {
         assert!(!has(&half, 100., 100.));
         for part in ShapeSplit::new(SplitAxis::Y, 0.5)
             .gap(2.)
-            .regions(&half, Default::default(), Default::default())
+            .regions(&half, OffsetOptions::default(), GeometryOptions::default())
             .unwrap()
         {
             for ring in part.flatten(0.01, 10000).unwrap() {
@@ -134,7 +143,11 @@ fn curved_partition_measures_gap_normally_on_both_axes() {
             let parts = ShapeSplit::new(axis, 0.5)
                 .gap(4.)
                 .bend(bend)
-                .regions(&rect(), Default::default(), Default::default())
+                .regions(
+                    &rect(),
+                    OffsetOptions::default(),
+                    GeometryOptions::default(),
+                )
                 .unwrap();
             let rings = parts[1].flatten(0.01, 10000).unwrap();
             for ring in parts[0].flatten(0.01, 10000).unwrap() {
@@ -153,15 +166,19 @@ fn geometry_limits_and_invalid_inputs_are_errors() {
                 &rect(),
                 WidthProfile::uniform(value),
                 BorderAlign::Inside,
-                Default::default(),
-                Default::default()
+                OffsetOptions::default(),
+                GeometryOptions::default()
             )
             .is_err()
         );
         assert!(
             ShapeSplit::new(SplitAxis::X, 0.5)
                 .gap(value)
-                .regions(&rect(), Default::default(), Default::default())
+                .regions(
+                    &rect(),
+                    OffsetOptions::default(),
+                    GeometryOptions::default()
+                )
                 .is_err()
         );
     }
@@ -175,7 +192,7 @@ fn geometry_limits_and_invalid_inputs_are_errors() {
                     max_points: 100,
                     ..Default::default()
                 },
-                Default::default()
+                GeometryOptions::default()
             )
             .is_err()
     );
@@ -192,9 +209,20 @@ fn geometry_limits_and_invalid_inputs_are_errors() {
         ],
         true,
     );
-    assert!(boundary_band(&invalid, WidthProfile::uniform(1.), Default::default()).is_err());
+    assert!(
+        boundary_band(
+            &invalid,
+            WidthProfile::uniform(1.),
+            OffsetOptions::default()
+        )
+        .is_err()
+    );
     let empty = ShapeSplit::new(SplitAxis::X, 0.5)
-        .regions(&Path::default(), Default::default(), Default::default())
+        .regions(
+            &Path::default(),
+            OffsetOptions::default(),
+            GeometryOptions::default(),
+        )
         .unwrap();
     assert!(empty.iter().all(|p| p.commands.is_empty()));
 }

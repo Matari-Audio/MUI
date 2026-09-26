@@ -13,3 +13,6 @@ rustc-hash.workspace = true
 [dev-dependencies]
 mui-scene.workspace = true
 mui-layout.workspace = true
+
+[lints]
+workspace = true

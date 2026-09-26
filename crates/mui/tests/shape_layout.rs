@@ -41,7 +41,10 @@ fn padding_gap_and_border_morph_together_and_settle() {
 /// not an ambiguous name.
 #[test]
 fn the_prelude_and_widgets_globs_do_not_collide() {
-    #[allow(unused_imports)]
+    #[expect(
+        unused_imports,
+        reason = "imported only to prove the glob leaves `step` unambiguous"
+    )]
     use mui::widgets::*;
-    assert_eq!(step(2.).resolve(Default::default()), 8.);
+    assert_eq!(step(2.).resolve(mui::scene::SpacingScale::default()), 8.);
 }

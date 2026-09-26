@@ -348,13 +348,12 @@ macro_rules! wrapper {
 impl Canvas for Cpu<'_> {
     fn image(&mut self, img: &mui_scene::Image) -> Option<PaintType> {
         self.cache.sweep();
-        let p = match self.cache.find(&img.rgba) {
-            Some(Stored::Pixmap(p)) => p.clone(),
-            _ => {
-                let p = Arc::new(premultiply(img)?);
-                self.cache.remember(&img.rgba, Stored::Pixmap(p.clone()));
-                p
-            }
+        let p = if let Some(Stored::Pixmap(p)) = self.cache.find(&img.rgba) {
+            p.clone()
+        } else {
+            let p = Arc::new(premultiply(img)?);
+            self.cache.remember(&img.rgba, Stored::Pixmap(p.clone()));
+            p
         };
         Some(
             vello_common::paint::Image {
@@ -886,7 +885,7 @@ mod seam {
             path: Path::default().into(),
             paint: Paint::Solid(mui_scene::Color::oklch(0.5, 0., 0.)),
             rect: None,
-            offset: Default::default(),
+            offset: mui_geometry::Point::default(),
             width: 0.,
             blur: 0.,
             text: Some(Text {
@@ -911,7 +910,7 @@ mod seam {
                         },
                     ][..],
                 ),
-                axes: Default::default(),
+                axes: mui_scene::Axes::default(),
                 hint: true,
                 font_coords: Arc::from(&[][..]),
             }),

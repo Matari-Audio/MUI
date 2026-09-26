@@ -38,13 +38,6 @@ pub struct CaptureLayer {
 /// Normal intrinsic/min/max constraints still apply. This does not mutate the
 /// plugin's live tree or state. Resolve the result before extracting its paint.
 pub fn resize_capture(root: &El, key: &str, size: Size) -> Result<El, CaptureError> {
-    if !size.width.is_finite() || !size.height.is_finite() || size.width <= 0. || size.height <= 0.
-    {
-        return Err(CaptureError::InvalidSize);
-    }
-    if key.is_empty() || key.starts_with('/') {
-        return Err(CaptureError::UnnamedSurface(key.into()));
-    }
     fn visit(node: &mut El, key: &str, size: Size) -> usize {
         let own = usize::from(node.key() == Some(key));
         if own == 1 {
@@ -55,6 +48,13 @@ pub fn resize_capture(root: &El, key: &str, size: Size) -> Result<El, CaptureErr
             .iter_mut()
             .map(|n| visit(n, key, size))
             .sum::<usize>()
+    }
+    if !size.width.is_finite() || !size.height.is_finite() || size.width <= 0. || size.height <= 0.
+    {
+        return Err(CaptureError::InvalidSize);
+    }
+    if key.is_empty() || key.starts_with('/') {
+        return Err(CaptureError::UnnamedSurface(key.into()));
     }
     let mut result = root.clone();
     match visit(&mut result, key, size) {

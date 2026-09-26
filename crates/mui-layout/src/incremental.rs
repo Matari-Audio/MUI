@@ -392,10 +392,10 @@ pub fn resolve_cached_with<P, M: Into<Intrinsic>>(
         return Ok(layout);
     }
     let revision = cache.prepare(root, limits, scale, &mut key)?;
-    if let Some((r, o, layout)) = &cache.last {
-        if (*r, *o) == (revision, offered_bits) {
-            return Ok(layout.clone());
-        }
+    if let Some((r, o, layout)) = &cache.last
+        && (*r, *o) == (revision, offered_bits)
+    {
+        return Ok(layout.clone());
     }
     let layout = super::resolve_impl(root, offered, limits, scale, measurer, Some(cache), None)?;
     cache.stats.arranged_nodes = layout.all().len();

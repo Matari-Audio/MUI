@@ -669,19 +669,19 @@ impl Ui {
             .keys(id)
             .iter()
             .any(|k| matches!(k.key, Key::Enter | Key::Space));
-        if self.wheel != Point::ZERO {
-            if let (Some(p), Some(s)) = (
+        if self.wheel != Point::ZERO
+            && let (Some(p), Some(s)) = (
                 self.pointer.pos,
                 self.scene.as_ref().and_then(|s| s.surface(id)),
-            ) {
-                let f = s.frame;
-                let inside = p.x >= f.x && p.x <= f.right() && p.y >= f.y && p.y <= f.bottom();
-                let clipped = s.clip.is_some_and(|c| {
-                    p.x < c.min.x || p.x > c.max.x || p.y < c.min.y || p.y > c.max.y
-                });
-                if inside && !clipped {
-                    response.wheel = self.wheel;
-                }
+            )
+        {
+            let f = s.frame;
+            let inside = p.x >= f.x && p.x <= f.right() && p.y >= f.y && p.y <= f.bottom();
+            let clipped = s
+                .clip
+                .is_some_and(|c| p.x < c.min.x || p.x > c.max.x || p.y < c.min.y || p.y > c.max.y);
+            if inside && !clipped {
+                response.wheel = self.wheel;
             }
         }
         if self
@@ -1228,10 +1228,10 @@ impl Ui {
     /// `'\n'` always breaks and is in no range. What a multi-line field lays
     /// its rows out by.
     pub(crate) fn lines(&self, s: &str, size: f64, width: f64) -> Vec<std::ops::Range<usize>> {
-        if let (Some(fonts), true) = (self.fonts(), width.is_finite() && width > 0.0) {
-            if let Ok(lines) = mui_text::break_lines(&fonts, s, size, &[], width) {
-                return lines.into_iter().map(|l| l.text_range).collect();
-            }
+        if let (Some(fonts), true) = (self.fonts(), width.is_finite() && width > 0.0)
+            && let Ok(lines) = mui_text::break_lines(&fonts, s, size, &[], width)
+        {
+            return lines.into_iter().map(|l| l.text_range).collect();
         }
         // ponytail: without a font, hard breaks only; set a font to wrap.
         let mut at = 0;
@@ -1428,7 +1428,7 @@ impl Ui {
         animating |= glided;
         animating |= self.after_motion(&mut scene, shaped, dt);
         animating |= self.settle(&scene, wheel);
-        self.heat(&scene, before, self.pointer.buttons != was_buttons);
+        self.heat(&scene, &before, self.pointer.buttons != was_buttons);
         Ok(self.commit(scene, hovered, tip, previous_blink, animating))
     }
 
@@ -1523,7 +1523,7 @@ impl Ui {
     /// Which memos the next build must run again: the ones holding a key
     /// whose state moved this frame, or all of them after discrete input.
     /// `was` is the hovered, held and tagged keys before this frame.
-    fn heat(&mut self, scene: &ResolvedScene, was: [Option<String>; 3], buttons: bool) {
+    fn heat(&mut self, scene: &ResolvedScene, was: &[Option<String>; 3], buttons: bool) {
         self.hot.clear();
         let me = self.me;
         self.kept.retain(|id, k| {
@@ -1548,7 +1548,7 @@ impl Ui {
             self.tagged.as_ref().map(|t| t.0.as_str()),
         ];
         let mut keys: Vec<&str> = Vec::new();
-        for (a, b) in now.iter().zip(&was) {
+        for (a, b) in now.iter().zip(was) {
             if *a != b.as_deref() {
                 keys.extend(a.iter().copied().chain(b.as_deref()));
             }
@@ -1706,6 +1706,12 @@ impl Ui {
     /// pointer has been matched against last frame's names, so a drag that
     /// caused the reorder keeps its capture under the new name.
     fn follow_identities(&mut self, root: &El) {
+        fn remap<V>(m: &mut BTreeMap<String, V>, to: &dyn Fn(&str) -> Option<String>) {
+            *m = std::mem::take(m)
+                .into_iter()
+                .map(|(k, v)| (to(&k).unwrap_or(k), v))
+                .collect();
+        }
         // Child indices down to here: a path is spelled out only for a node
         // that has an identity, and most trees have none.
         fn visit(n: &El, at: &mut Vec<usize>, out: &mut HashMap<u64, (Option<String>, String)>) {
@@ -1727,10 +1733,10 @@ impl Ui {
             let Some((was_key, was_path)) = self.identities.get(id) else {
                 continue;
             };
-            if let (Some(a), Some(b)) = (was_key, key) {
-                if a != b {
-                    moves.push((a.clone(), b.clone()));
-                }
+            if let (Some(a), Some(b)) = (was_key, key)
+                && a != b
+            {
+                moves.push((a.clone(), b.clone()));
             }
             if was_path != path {
                 moves.push((was_path.clone(), path.clone()));
@@ -1753,12 +1759,6 @@ impl Ui {
                 rest.starts_with('/').then(|| format!("{b}{rest}"))
             })
         };
-        fn remap<V>(m: &mut BTreeMap<String, V>, to: &dyn Fn(&str) -> Option<String>) {
-            *m = std::mem::take(m)
-                .into_iter()
-                .map(|(k, v)| (to(&k).unwrap_or(k), v))
-                .collect();
-        }
         remap(&mut self.springs, &to);
         remap(&mut self.motion, &to);
         remap(&mut self.glides, &to);
@@ -1796,12 +1796,8 @@ impl Ui {
         // or an explicitly declared hover/press look earns springs. Resolve
         // the two possible active targets directly so idle frames do not
         // allocate a policy table for the whole tree.
-        let hovered_policy = hovered
-            .map(|id| state_policy(root, id))
-            .unwrap_or([false, false]);
-        let held_policy = held
-            .map(|id| state_policy(root, id))
-            .unwrap_or([false, false]);
+        let hovered_policy = hovered.map_or([false, false], |id| state_policy(root, id));
+        let held_policy = held.map_or([false, false], |id| state_policy(root, id));
         for (k, [h, p]) in &mut self.springs {
             let hovered = hovered == Some(k.as_str());
             let held = held == Some(k.as_str());
@@ -1846,10 +1842,11 @@ impl Ui {
         }
         self.press_at = self.pointer.pos.filter(|_| went_down);
         if let Some(id) = self.interaction.pressed().map(str::to_owned) {
-            if let Some((prev, t)) = self.last_press.take() {
-                if prev == id && self.time - t < self.double_click {
-                    self.double = Some(id.clone());
-                }
+            if let Some((prev, t)) = self.last_press.take()
+                && prev == id
+                && self.time - t < self.double_click
+            {
+                self.double = Some(id.clone());
             }
             self.last_press = Some((id.clone(), self.time));
             let keeps = self
@@ -2471,13 +2468,13 @@ fn scroll_spring() -> Spring {
 /// `ch(id, declared, is_angle)`. Shape padding/bend and border widths share
 /// this clock. Colours spring in Oklch, one channel per component.
 fn channels(e: &mut Element, pal: &Palette, ch: &mut impl FnMut(u32, f64, bool) -> f64) {
-    let under = pal.background();
     fn color(c: Color, base: u32, ch: &mut impl FnMut(u32, f64, bool) -> f64) -> Color {
         let v = [c.lightness(), c.chroma(), c.hue(), c.alpha()];
         let o: [f32; 4] =
             std::array::from_fn(|i| ch(base + i as u32, f64::from(v[i]), i == 2) as f32);
         Color::oklcha(o[0].clamp(0., 1.), o[1].max(0.), o[2], o[3].clamp(0., 1.))
     }
+    let under = pal.background();
     match &mut e.style.fill {
         Fill::Gradient(g) => {
             for (i, (at, f)) in g.stops.iter_mut().enumerate() {
@@ -2534,10 +2531,11 @@ fn channels(e: &mut Element, pal: &Palette, ch: &mut impl FnMut(u32, f64, bool) 
     if e.style.layer.is_some() || o < 0.999 {
         e.style.layer = Some((mix, o));
     }
-    if let Some(Spacing::Px(pad)) = e.extras.as_deref_mut().and_then(|x| x.inside.as_mut()) {
-        if pad.is_finite() && *pad >= 0. {
-            *pad = ch(INSIDE, *pad, false).max(0.);
-        }
+    if let Some(Spacing::Px(pad)) = e.extras.as_deref_mut().and_then(|x| x.inside.as_mut())
+        && pad.is_finite()
+        && *pad >= 0.
+    {
+        *pad = ch(INSIDE, *pad, false).max(0.);
     }
     if e.bend.is_finite() && e.bend.abs() <= 0.45 {
         e.bend = ch(BEND, e.bend, false).clamp(-0.45, 0.45);
@@ -2586,17 +2584,16 @@ fn transitions(
             .inside
             .is_some_and(|p| p == *n.gap_mut());
         channels(n.payload_mut(), pal, &mut |id, declared, angle| {
-            let i = match list.iter().position(|(k, _)| *k == id) {
-                Some(i) => i,
-                None => {
-                    let seed = if from_clear && id == OPACITY {
-                        0.
-                    } else {
-                        declared
-                    };
-                    list.push((id, spring.seeded(seed)));
-                    list.len() - 1
-                }
+            let i = if let Some(i) = list.iter().position(|(k, _)| *k == id) {
+                i
+            } else {
+                let seed = if from_clear && id == OPACITY {
+                    0.
+                } else {
+                    declared
+                };
+                list.push((id, spring.seeded(seed)));
+                list.len() - 1
             };
             let s = &mut list[i].1;
             // Hue is an angle: take the short way round rather than
@@ -3772,7 +3769,7 @@ mod tests {
                 .scene
                 .paint
                 .iter()
-                .find_map(|p| p.rect.map(|r| r.radius()))
+                .find_map(|p| p.rect.map(mui_geometry::RoundedRect::radius))
                 .expect("the box paints a rounded rect")
         };
         let cold = corner(&mut ui, PointerInput::default());
@@ -4349,7 +4346,7 @@ mod tests {
         f.scene
             .paint
             .iter()
-            .find_map(|p| p.rect.map(|r| r.radius()))
+            .find_map(|p| p.rect.map(mui_geometry::RoundedRect::radius))
             .expect("a rounded rect")
     }
 
@@ -4384,7 +4381,7 @@ mod tests {
 
     /// Which of `top` and `under`, stacked, a press on both takes -- and
     /// whether a named field focused beforehand keeps the focus.
-    fn press_stack(under: El, top: El) -> (Option<String>, bool) {
+    fn press_stack(under: &El, top: &El) -> (Option<String>, bool) {
         let tree = |under: &El, top: &El| {
             col![
                 overlay([under.clone(), top.clone()]),
@@ -4392,11 +4389,11 @@ mod tests {
             ]
         };
         let mut ui = Ui::new(Theme::DEFAULT);
-        ui.frame(tree(&under, &top), None, Input::default(), 0.016)
+        ui.frame(tree(under, top), None, Input::default(), 0.016)
             .unwrap();
         ui.focus("field");
         for down in [false, true] {
-            ui.frame(tree(&under, &top), None, at(10., 10., down), 0.016)
+            ui.frame(tree(under, top), None, at(10., 10., down), 0.016)
                 .unwrap();
         }
         (
@@ -4415,22 +4412,25 @@ mod tests {
         let plain = || leaf(40., 40.).fill(Role::Raised);
 
         // Over the control.
-        assert_eq!(press_stack(control(), lit()), (Some("/0/1".into()), false));
         assert_eq!(
-            press_stack(control(), lit().id("top")),
+            press_stack(&control(), &lit()),
+            (Some("/0/1".into()), false)
+        );
+        assert_eq!(
+            press_stack(&control(), &lit().id("top")),
             (Some("top".into()), false)
         );
         // Under it.
-        assert_eq!(press_stack(lit(), control()), (Some("c".into()), false));
+        assert_eq!(press_stack(&lit(), &control()), (Some("c".into()), false));
         assert_eq!(
-            press_stack(lit().id("under"), control()),
+            press_stack(&lit().id("under"), &control()),
             (Some("c".into()), false)
         );
         // Decoration over the control is not there as far as the pointer is
         // concerned; with an id it would be.
-        assert_eq!(press_stack(control(), plain()), (Some("c".into()), false));
+        assert_eq!(press_stack(&control(), &plain()), (Some("c".into()), false));
         assert_eq!(
-            press_stack(control(), plain().id("top")),
+            press_stack(&control(), &plain().id("top")),
             (Some("top".into()), false)
         );
     }

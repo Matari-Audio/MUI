@@ -8,3 +8,6 @@ description = "Motion maths for MUI: the Spring every animated property chases, 
 
 # Time in, a number out. Nothing to depend on.
 [dependencies]
+
+[lints]
+workspace = true

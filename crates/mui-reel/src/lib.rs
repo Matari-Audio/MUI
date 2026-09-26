@@ -250,12 +250,12 @@ impl<S> Script<S> {
     /// Also render these named parts, and the rest, as alpha layers aligned
     /// with the take.
     pub fn layers(mut self, ids: &[&str]) -> Self {
-        self.layers = ids.iter().map(|s| s.to_string()).collect();
+        self.layers = ids.iter().map(std::string::ToString::to_string).collect();
         self
     }
     /// Only these surfaces in `track.json`. Default: every named surface.
     pub fn track(mut self, ids: &[&str]) -> Self {
-        self.track = Some(ids.iter().map(|s| s.to_string()).collect());
+        self.track = Some(ids.iter().map(std::string::ToString::to_string).collect());
         self
     }
 }

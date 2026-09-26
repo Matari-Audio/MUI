@@ -831,7 +831,6 @@ mod tests {
     #[test]
     /// A square port tab next to a square body welds into one contour; a
     /// rounded tab is a pill that only kisses the body and the union splits.
-    #[allow(clippy::float_cmp)]
     fn a_square_tab_welds_into_one_contour_with_its_body() {
         let tab = column([leaf(24., 24.)])
             .w(36.)

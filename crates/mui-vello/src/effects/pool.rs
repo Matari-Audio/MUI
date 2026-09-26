@@ -154,16 +154,16 @@ impl WeldTextures {
             vertex: wgpu::VertexState {
                 module: &module,
                 entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
                 buffers: &[],
             },
-            primitive: Default::default(),
+            primitive: wgpu::PrimitiveState::default(),
             depth_stencil: None,
-            multisample: Default::default(),
+            multisample: wgpu::MultisampleState::default(),
             fragment: Some(wgpu::FragmentState {
                 module: &module,
                 entry_point: Some("fs_hybrid"),
-                compilation_options: Default::default(),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: wgpu::TextureFormat::Rgba8Unorm,
                     blend: None,
@@ -262,7 +262,7 @@ impl WeldTextures {
             self.epoch = 0;
         }
         self.epoch += 1;
-        for (key, _) in wanted.clone() {
+        for (key, _) in wanted {
             if let Some(s) = self.slots.get_mut(key) {
                 s.seen = self.epoch;
             }
@@ -366,7 +366,7 @@ impl WeldTextures {
                     | wgpu::TextureUsages::COPY_SRC,
                 view_formats: &[],
             });
-            let view = texture.create_view(&Default::default());
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
             let uniform = self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("MUI weld parameters"),
                 size: PARAM_BYTES as u64,
@@ -407,7 +407,7 @@ impl WeldTextures {
                     used: size,
                     texture,
                     id,
-                    state: Default::default(),
+                    state: ContentState::default(),
                     seen: self.epoch,
                     present: self.epoch,
                     encoded_epoch: 0,

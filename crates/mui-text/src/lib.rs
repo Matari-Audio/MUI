@@ -708,7 +708,10 @@ fn plan(face: &Face<'_>, shaper: &harfrust::Shaper<'_>, buffer: &UnicodeBuffer) 
     let script = Some(buffer.script()).filter(|&s| s != harfrust::script::UNKNOWN);
     let direction = buffer.direction();
     let key = ShapePlanKey::new(script, direction).instance(Some(&face.instance));
-    let mut plans = face.plans.lock().unwrap_or_else(|e| e.into_inner());
+    let mut plans = face
+        .plans
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if let Some(plan) = plans.iter().find(|plan| key.matches(plan)) {
         return plan.clone();
     }
@@ -1016,25 +1019,22 @@ pub fn break_lines_from_advances(
         // Only a cluster start can overflow: a mark inside a cluster wider
         // than the line rides with its base instead of starting a line.
         if at_cluster_start && x + a > max_width && i > start {
-            match brk.filter(|&(bi, _)| bi > start) {
-                Some((bi, advance)) => {
-                    lines.push(Line {
-                        text_range: start..bi,
-                        advance,
-                    });
-                    start = bi;
-                    x = word;
-                }
+            if let Some((bi, advance)) = brk.filter(|&(bi, _)| bi > start) {
+                lines.push(Line {
+                    text_range: start..bi,
+                    advance,
+                });
+                start = bi;
+                x = word;
+            } else {
                 // The word itself does not fit: break at the overflowing
                 // cluster.
-                None => {
-                    lines.push(Line {
-                        text_range: start..i,
-                        advance: x,
-                    });
-                    start = i;
-                    (x, word) = (0., 0.);
-                }
+                lines.push(Line {
+                    text_range: start..i,
+                    advance: x,
+                });
+                start = i;
+                (x, word) = (0., 0.);
             }
             brk = None;
         }
@@ -1232,8 +1232,8 @@ mod tests {
         let path = glyph_path(&hack(), 'H', 64., &[], 0.05).unwrap();
         let rings = path.flatten(0.05, 250_000).unwrap();
         let ys: Vec<f64> = rings.iter().flatten().map(|p| p.y).collect();
-        let top = ys.iter().cloned().fold(f64::INFINITY, f64::min);
-        let bottom = ys.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        let top = ys.iter().copied().fold(f64::INFINITY, f64::min);
+        let bottom = ys.iter().copied().fold(f64::NEG_INFINITY, f64::max);
         assert!(top < 0., "cap height is above the baseline");
         assert!(bottom.abs() < 1., "'H' rests on the baseline, got {bottom}");
     }

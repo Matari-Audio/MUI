@@ -290,7 +290,7 @@ fn resolve_impl<P, M: Into<Intrinsic>>(
         // resize -- one id per keyed node: room for a window's worth at once.
         keys: rustc_hash::FxHashSet::with_capacity_and_hasher(
             limits.nodes.min(256),
-            Default::default(),
+            rustc_hash::FxBuildHasher,
         ),
         redo: false,
         pinned: false,

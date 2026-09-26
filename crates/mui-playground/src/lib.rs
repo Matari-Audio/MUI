@@ -47,10 +47,10 @@ fn number(e: &Expr) -> syn::Result<f64> {
     }
 }
 fn string(e: &Expr) -> syn::Result<String> {
-    if let Expr::Lit(l) = e {
-        if let Lit::Str(s) = &l.lit {
-            return Ok(s.value());
-        }
+    if let Expr::Lit(l) = e
+        && let Lit::Str(s) = &l.lit
+    {
+        return Ok(s.value());
     }
     Err(error(e, "expected a quoted string"))
 }
@@ -83,27 +83,27 @@ fn paint(e: &Expr) -> syn::Result<Fill> {
             return Ok(role.into());
         }
     }
-    if let Expr::Call(c) = e {
-        if let Expr::Path(p) = c.func.as_ref() {
-            let names: Vec<_> = p
-                .path
-                .segments
-                .iter()
-                .map(|s| s.ident.to_string())
-                .collect();
-            if names == ["Color", "oklch"] {
-                count(&c.args, 3)?;
-                return Ok(Color::oklch(
-                    number(&c.args[0])? as f32,
-                    number(&c.args[1])? as f32,
-                    number(&c.args[2])? as f32,
-                )
-                .into());
-            }
-            if names == ["Gradient", "vertical"] {
-                count(&c.args, 2)?;
-                return Ok(Gradient::vertical(paint(&c.args[0])?, paint(&c.args[1])?).into());
-            }
+    if let Expr::Call(c) = e
+        && let Expr::Path(p) = c.func.as_ref()
+    {
+        let names: Vec<_> = p
+            .path
+            .segments
+            .iter()
+            .map(|s| s.ident.to_string())
+            .collect();
+        if names == ["Color", "oklch"] {
+            count(&c.args, 3)?;
+            return Ok(Color::oklch(
+                number(&c.args[0])? as f32,
+                number(&c.args[1])? as f32,
+                number(&c.args[2])? as f32,
+            )
+            .into());
+        }
+        if names == ["Gradient", "vertical"] {
+            count(&c.args, 2)?;
+            return Ok(Gradient::vertical(paint(&c.args[0])?, paint(&c.args[1])?).into());
         }
     }
     Err(error(

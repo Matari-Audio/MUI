@@ -30,3 +30,6 @@ arboard = { version = "3.6", default-features = false }
 
 [dev-dependencies]
 truce.workspace = true
+
+[lints]
+workspace = true

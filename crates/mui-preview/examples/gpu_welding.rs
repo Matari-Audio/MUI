@@ -13,8 +13,10 @@ use winit::{
 };
 #[path = "../src/device.rs"]
 mod device;
-// Shared gallery host has optional debug-overlay methods unused by this lab.
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "the shared gallery host has debug-overlay methods this lab never calls"
+)]
 #[path = "../src/host.rs"]
 mod host;
 
@@ -188,12 +190,12 @@ impl ApplicationHandler for Lab {
             WindowEvent::CursorMoved { position, .. } => {
                 let scale = self.gpu.as_ref().map_or(1., |g| g.window().scale_factor());
                 let p = (position.x / scale, position.y / scale);
-                if self.down {
-                    if let Some(old) = self.pointer {
-                        self.offset.0 = (self.offset.0 + p.0 - old.0).clamp(-300., 300.);
-                        self.offset.1 = (self.offset.1 + p.1 - old.1).clamp(-160., 160.);
-                        self.dirty = true;
-                    }
+                if self.down
+                    && let Some(old) = self.pointer
+                {
+                    self.offset.0 = (self.offset.0 + p.0 - old.0).clamp(-300., 300.);
+                    self.offset.1 = (self.offset.1 + p.1 - old.1).clamp(-160., 160.);
+                    self.dirty = true;
                 }
                 self.pointer = Some(p);
                 if !self.down {
@@ -239,10 +241,10 @@ impl ApplicationHandler for Lab {
             }
             _ => return,
         }
-        if self.visible {
-            if let Some(g) = &self.gpu {
-                g.window().request_redraw();
-            }
+        if self.visible
+            && let Some(g) = &self.gpu
+        {
+            g.window().request_redraw();
         }
     }
 }

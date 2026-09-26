@@ -21,3 +21,6 @@ bytemuck = "1"
 mui.workspace = true
 epaint_default_fonts.workspace = true
 png.workspace = true
+
+[lints]
+workspace = true

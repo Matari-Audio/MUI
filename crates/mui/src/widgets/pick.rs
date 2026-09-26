@@ -63,13 +63,11 @@ pub fn color_picker(ui: &mut Ui, id: &str, value: &mut Color, alpha: bool) -> (E
         _ => to_hex(srgba(*value), alpha),
     };
     let (field, typed) = text_input(ui, &hex, &mut text);
-    if typed {
-        if let Some(([r, g, b], ta)) = parse_hex(&text) {
-            let ta = if alpha { ta.unwrap_or(a) } else { a };
-            *value = Color::srgba(r, g, b, ta);
-            hsv = to_hsv([r, g, b, ta]);
-            changed = true;
-        }
+    if typed && let Some(([r, g, b], ta)) = parse_hex(&text) {
+        let ta = if alpha { ta.unwrap_or(a) } else { a };
+        *value = Color::srgba(r, g, b, ta);
+        hsv = to_hsv([r, g, b, ta]);
+        changed = true;
     }
     let focused = ui.focused(&hex);
     ui.set_stash(&hex, focused.then_some(text));

@@ -25,7 +25,7 @@ impl Editor {
             pointer: PointerInput::default(),
             sample_frame: 0,
             selection: Vec::new(),
-            sizes: Default::default(),
+            sizes: std::collections::BTreeMap::default(),
         }
     }
     /// Run every input edge in order, then a neutral frame to consume edits.
@@ -129,7 +129,7 @@ fn decode(v: &Value, mut pointer: PointerInput) -> Result<Input, String> {
                 .set(Button::Middle, buttons & 4 != 0);
         }
         Some("wheel") => {
-            input.wheel = Point::new(number(v, "dx", 10000.)?, number(v, "dy", 10000.)?)
+            input.wheel = Point::new(number(v, "dx", 10000.)?, number(v, "dy", 10000.)?);
         }
         Some("key") => {
             let key = v["key"].as_str().ok_or("Missing key")?;

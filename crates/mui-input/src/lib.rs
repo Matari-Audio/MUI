@@ -240,17 +240,16 @@ impl Hit {
             None => Arc::from([]),
             Some(list) => {
                 let key = (list.as_ptr() as usize, list.len());
-                match self.clip_cache.get(&key) {
-                    Some(c) => c.clone(),
-                    None => {
-                        let c: Arc<[_]> = list
-                            .iter()
-                            .map(|(p, o)| Ok((self.converted(p)?, vec(*o))))
-                            .collect::<Result<Vec<_>, Error>>()?
-                            .into();
-                        self.clip_cache.insert(key, c.clone());
-                        c
-                    }
+                if let Some(c) = self.clip_cache.get(&key) {
+                    c.clone()
+                } else {
+                    let c: Arc<[_]> = list
+                        .iter()
+                        .map(|(p, o)| Ok((self.converted(p)?, vec(*o))))
+                        .collect::<Result<Vec<_>, Error>>()?
+                        .into();
+                    self.clip_cache.insert(key, c.clone());
+                    c
                 }
             }
         };
