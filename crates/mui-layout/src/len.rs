@@ -122,7 +122,7 @@ pub enum Len {
     /// ```
     /// use mui_layout::{block, resolve, row, Len, Size};
     /// let rail = Len::Clamp { min: 64.0, pct: 30.0, max: 220.0 };
-    /// let tree = || row([block(0., 0.).width(rail).id("rail"), block(0., 0.).grow(1.)]);
+    /// let tree = || row([block(0., 0.).w(rail).id("rail"), block(0., 0.).grow(1.)]);
     /// let at = |w: f64| {
     ///     resolve(&tree(), Some(Size::new(w, 40.)), Default::default())
     ///         .unwrap()
@@ -147,27 +147,35 @@ pub enum Len {
     /// use mui_layout::{block, resolve, row, Len, Size};
     /// // The row hugs, so it is no one's container: the bar takes half of
     /// // the 400 px panel above it, not half of the row around it.
-    /// let bar = block(0., 8.).width(Len::Container(50.)).id("bar");
-    /// let tree = row([row([bar])]).width(Len::Px(400.));
+    /// let bar = block(0., 8.).w(Len::Container(50.)).id("bar");
+    /// let tree = row([row([bar])]).w(Len::Px(400.));
     /// let l = resolve(&tree, Some(Size::new(400., 8.)), Default::default()).unwrap();
     /// assert_eq!(l.frame("bar").unwrap().size.width, 200.);
     /// ```
     Container(f64),
 }
-/// A bare number is pixels: `.width(120)`, `.w(12.5)`.
-impl From<f64> for Len {
-    fn from(v: f64) -> Self {
-        Self::Px(v)
-    }
+/// A plain number in the DSL: pixels, a weight or a nudge. Every builder
+/// argument that is a number takes `impl Px`, so `.at(8, 4)`, `.grow(1)`
+/// and `.text_size(12.5)` all compile without a `.0` or a cast.
+pub trait Px: Copy {
+    fn px(self) -> f64;
 }
-impl From<f32> for Len {
-    fn from(v: f32) -> Self {
-        Self::Px(v.into())
-    }
+macro_rules! px {
+    ($($t:ty),*) => {$(
+        impl Px for $t {
+            #[allow(clippy::cast_precision_loss, clippy::cast_lossless, reason = "a pixel count is far below 2^52")]
+            fn px(self) -> f64 {
+                self as f64
+            }
+        }
+    )*};
 }
-impl From<i32> for Len {
-    fn from(v: i32) -> Self {
-        Self::Px(v.into())
+px!(f64, f32, i32, u32, usize);
+
+/// A bare number is pixels: `.w(120)`, `.w(12.5)`.
+impl<T: Px> From<T> for Len {
+    fn from(v: T) -> Self {
+        Self::Px(v.px())
     }
 }
 impl Len {

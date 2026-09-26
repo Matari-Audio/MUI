@@ -126,7 +126,7 @@ impl<P: Default> Node<P> {
         }
     }
     /// Content whose size is already known: an icon cell, a spacer.
-    pub fn block(width: f64, height: f64) -> Self {
+    pub fn block(width: impl Into<Len>, height: impl Into<Len>) -> Self {
         Self::new(Kind::Leaf).size(width, height)
     }
     /// Content measured by the callback given to [`resolve_with`].
@@ -261,24 +261,21 @@ impl<P> Node<P> {
     /// The same on all four sides: `.pad(12.0)`, `.pad(M)` or
     /// `.pad(Spacing::step(3.))`. One slot per concept: the last call wins,
     /// whichever spelling it used.
-    pub fn pad(mut self, padding: impl Into<Spacing>) -> Self {
+    ///
+    /// `.pad((16, 8))` is 16 px left and right, 8 top and bottom;
+    /// `.pad(Insets { .. })` sets each side.
+    pub fn pad(mut self, padding: impl Into<Pad>) -> Self {
         match padding.into() {
-            Spacing::Px(v) => {
+            Pad::All(Spacing::Px(v)) => {
                 self.padding = Insets::all(v);
                 self.pad = None;
             }
-            scaled => self.pad = Some(scaled),
+            Pad::All(scaled) => self.pad = Some(scaled),
+            Pad::Insets(i) => {
+                self.padding = i;
+                self.pad = None;
+            }
         }
-        self
-    }
-    pub fn pad_xy(mut self, horizontal: f64, vertical: f64) -> Self {
-        self.padding = Insets::symmetric(horizontal, vertical);
-        self.pad = None;
-        self
-    }
-    pub fn insets(mut self, insets: Insets) -> Self {
-        self.padding = insets;
-        self.pad = None;
         self
     }
     /// What the padding comes to under `scale`.
@@ -293,26 +290,20 @@ impl<P> Node<P> {
         self.height = height.into();
         self
     }
-    pub fn width(mut self, width: impl Into<Len>) -> Self {
-        self.width = width.into();
-        self
-    }
-    pub fn height(mut self, height: impl Into<Len>) -> Self {
-        self.height = height.into();
-        self
-    }
     /// `width / height`. Fills in whichever axis was left `Auto` -- at measure
     /// from a fixed sibling axis, at arrange from the allocated one.
-    pub fn aspect(mut self, ratio: f64) -> Self {
-        self.rare_mut().aspect = Some(ratio);
+    pub fn aspect(mut self, ratio: impl Px) -> Self {
+        self.rare_mut().aspect = Some(ratio.px());
         self
     }
-    pub fn min_width(mut self, width: f64) -> Self {
-        self.minimum.width = width;
+    /// The floor on the width.
+    pub fn min_w(mut self, width: impl Px) -> Self {
+        self.minimum.width = width.px();
         self
     }
-    pub fn min_height(mut self, height: f64) -> Self {
-        self.minimum.height = height;
+    /// The floor on the height.
+    pub fn min_h(mut self, height: impl Px) -> Self {
+        self.minimum.height = height.px();
         self
     }
     pub fn min_size(mut self, size: impl Into<Size>) -> Self {
@@ -324,12 +315,14 @@ impl<P> Node<P> {
         self
     }
     /// Width: `.w(120)`, `.w(Len::Pct(50.))`.
-    pub fn w(self, len: impl Into<Len>) -> Self {
-        self.width(len)
+    pub fn w(mut self, len: impl Into<Len>) -> Self {
+        self.width = len.into();
+        self
     }
-    /// Height.
-    pub fn h(self, len: impl Into<Len>) -> Self {
-        self.height(len)
+    /// Height: `.h(24)`.
+    pub fn h(mut self, len: impl Into<Len>) -> Self {
+        self.height = len.into();
+        self
     }
     /// Both axes: `.square(32)`.
     pub fn square(self, len: impl Into<Len>) -> Self {
@@ -356,33 +349,30 @@ impl<P> Node<P> {
     pub fn full(self) -> Self {
         self.size(Len::Pct(100.), Len::Pct(100.))
     }
-    pub fn grow(mut self, weight: f64) -> Self {
-        self.grow = weight;
+    /// Take a share of the surplus, by weight: `.grow(1)`.
+    pub fn grow(mut self, weight: impl Px) -> Self {
+        self.grow = weight.px();
         self
-    }
-    /// `grow(1.0)`: take a share of the surplus.
-    pub fn expand(self) -> Self {
-        self.grow(1.0)
     }
     /// Start from this main-axis size instead of the measured one, before any
     /// growth or shrink. `basis(0.0)` is the only way to get equal *shares* of
     /// an axis rather than equal shares of the surplus: CSS `flex-basis: 0`,
     /// what `1fr` means.
-    pub fn basis(mut self, basis: f64) -> Self {
-        self.basis = Some(basis);
+    pub fn basis(mut self, basis: impl Px) -> Self {
+        self.basis = Some(basis.px());
         self
     }
     /// Weight for absorbing a deficit, scaled by basis the way flexbox scales
     /// it. Defaults to 1; `shrink(0.0)` opts out, and `minimum` is the floor
     /// either way.
-    pub fn shrink(mut self, weight: f64) -> Self {
-        self.shrink = weight;
+    pub fn shrink(mut self, weight: impl Px) -> Self {
+        self.shrink = weight.px();
         self
     }
     /// `grow(weight).basis(0.0)`: an equal share of the axis per unit of
     /// weight, regardless of what the child measured. CSS `flex: <weight>`.
-    pub fn flex(self, weight: f64) -> Self {
-        self.grow(weight).basis(0.0)
+    pub fn flex(self, weight: impl Px) -> Self {
+        self.grow(weight).basis(0)
     }
     /// Override the parent's `align` for this child alone. CSS `align-self`.
     pub fn align_self(mut self, align: Align) -> Self {
@@ -406,8 +396,8 @@ impl<P> Node<P> {
     }
     /// A nudge from the anchored position. The only coordinates in the system,
     /// and relative ones at that.
-    pub fn offset(mut self, dx: f64, dy: f64) -> Self {
-        self.offset = [dx, dy];
+    pub fn offset(mut self, dx: impl Px, dy: impl Px) -> Self {
+        self.offset = [dx.px(), dy.px()];
         self
     }
     /// Placed `(dx, dy)` from the top-left of the parent's box: `anchor` at
@@ -419,14 +409,27 @@ impl<P> Node<P> {
     /// let l = resolve(&stack([dot]), Some(Size::new(100., 100.)), Default::default()).unwrap();
     /// assert_eq!((l.frame("dot").unwrap().x, l.frame("dot").unwrap().y), (10., 20.));
     /// ```
-    pub fn at(mut self, dx: f64, dy: f64) -> Self {
+    pub fn at(mut self, dx: impl Px, dy: impl Px) -> Self {
         self.anchor = Some((Align::Start, Align::Start));
         self.offset(dx, dy)
     }
     /// Centred in the parent's box, then nudged by `(dx, dy)`.
-    pub fn centered_at(mut self, dx: f64, dy: f64) -> Self {
+    pub fn centered_at(mut self, dx: impl Px, dy: impl Px) -> Self {
         self.anchor = Some((Align::Center, Align::Center));
         self.offset(dx, dy)
+    }
+    /// Centred in the parent's box (a stack or grid cell).
+    ///
+    /// ```
+    /// use mui_layout::{block, resolve, stack, Size};
+    /// let dot = block(4, 4).centered().id("dot");
+    /// let l = resolve(&stack([dot]), Some(Size::new(100., 100.)), Default::default()).unwrap();
+    /// assert_eq!(l.frame("dot").unwrap().x, 48.);
+    /// ```
+    pub fn centered(mut self) -> Self {
+        self.anchor = Some((Align::Center, Align::Center));
+        self.offset = [0.0, 0.0];
+        self
     }
     /// Let the children overflow the main axis behind a clip. The node's
     /// floor on that axis drops to its padding, so it can be squeezed. A
@@ -442,8 +445,8 @@ impl<P> Node<P> {
         self
     }
     /// How far the children are slid, in pixels; the runtime sets this.
-    pub fn scrolled(mut self, x: f64, y: f64) -> Self {
-        self.scrolled = [x, y];
+    pub fn scrolled(mut self, x: impl Px, y: impl Px) -> Self {
+        self.scrolled = [x.px(), y.px()];
         self
     }
     /// Place this node against another node by name rather than inside its
@@ -537,8 +540,8 @@ impl<P> Node<P> {
     /// };
     /// assert_eq!((cols(800.), cols(260.), cols(240.)), (3, 2, 1));
     /// ```
-    pub fn min_col(mut self, px: f64) -> Self {
-        self.rare_mut().min_col = Some(px);
+    pub fn min_col(mut self, px: impl Px) -> Self {
+        self.rare_mut().min_col = Some(px.px());
         self
     }
     /// Place this child as if it were declared at `order`; its frame keeps
@@ -597,7 +600,7 @@ impl<P> Node<P> {
     }
 }
 
-pub fn block(width: f64, height: f64) -> Node {
+pub fn block(width: impl Into<Len>, height: impl Into<Len>) -> Node {
     Node::block(width, height)
 }
 pub fn row(children: impl IntoIterator<Item = Node>) -> Node {

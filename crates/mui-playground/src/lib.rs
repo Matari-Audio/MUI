@@ -185,18 +185,19 @@ fn element(e: &Expr, depth: usize, nodes: &mut usize) -> syn::Result<El> {
             let args = &m.args;
             let arity = match name.as_str() {
                 "pill" | "center" | "start" | "end" | "between" | "clip" | "wrap" | "full"
-                | "segmented" | "no_fill" | "no_border" => 0,
-                "offset" | "border" | "shell" | "pad_xy" => 2,
+                | "segmented" | "no_fill" | "no_stroke" => 0,
+                "offset" | "shell" => 2,
+                "pad" if args.len() == 2 => 2,
                 _ => 1,
             };
             count(args, arity)?;
             Ok(match name.as_str() {
-                "w" | "width" => el.width(number(&args[0])?),
-                "h" | "height" => el.height(number(&args[0])?),
+                "w" => el.w(number(&args[0])?),
+                "h" => el.h(number(&args[0])?),
                 "square" => el.square(number(&args[0])?),
                 "gap" => el.gap(number(&args[0])?),
+                "pad" if args.len() == 2 => el.pad((number(&args[0])?, number(&args[1])?)),
                 "pad" => el.pad(number(&args[0])?),
-                "pad_xy" => el.pad_xy(number(&args[0])?, number(&args[1])?),
                 "flex" => el.flex(number(&args[0])?),
                 "grow" => el.grow(number(&args[0])?),
                 "inside" => el.inside(number(&args[0])?),
@@ -206,7 +207,7 @@ fn element(e: &Expr, depth: usize, nodes: &mut usize) -> syn::Result<El> {
                 "fill" => el.fill(paint(&args[0])?),
                 "union" => el.union(paint(&args[0])?),
                 "stroke" => el.stroke(paint(&args[0])?),
-                "border" => el.border(paint(&args[0])?, number(&args[1])?),
+                "stroke_width" => el.stroke_width(number(&args[0])?),
                 "shell" => el.shell(number(&args[0])?, paint(&args[1])?),
                 "opacity" => el.opacity(number(&args[0])? as f32),
                 "offset" => el.offset(number(&args[0])?, number(&args[1])?),
@@ -226,7 +227,7 @@ fn element(e: &Expr, depth: usize, nodes: &mut usize) -> syn::Result<El> {
                 "full" => el.full(),
                 "segmented" => el.segmented(),
                 "no_fill" => el.no_fill(),
-                "no_border" => el.no_border(),
+                "no_stroke" => el.no_stroke(),
                 _ => {
                     return Err(error(
                         e,

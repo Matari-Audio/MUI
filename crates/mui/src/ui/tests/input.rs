@@ -472,7 +472,7 @@ fn keyboard_edits_are_bracketed_and_a_slider_steps() {
         } = widgets::button(ui, "b", "Go");
         clicks += usize::from(clicked);
         let s = widgets::slider(ui, "s", "S", &mut v, 0.0..=1.0).el;
-        col([b.el(), s.el()]).width(200.)
+        col([b.el(), s.el()]).w(200.)
     };
     let root = tree(&mut ui);
     ui.frame(root, None, Input::default(), 0.016).unwrap();

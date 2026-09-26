@@ -467,7 +467,7 @@ pub fn text_edit(
     };
     let el = body
         .clip()
-        .pad_xy(PAD, PAD_Y)
+        .pad((PAD, PAD_Y))
         .radius(6.0)
         .fill(Role::Field)
         // The ring is declared beside the resting look rather than rebuilt
@@ -476,7 +476,7 @@ pub fn text_edit(
         .cursor(Cursor::Text)
         .focusable()
         .when(multi, |e| {
-            e.height(opts.rows.max(1) as f64 * lh + 2.0 * PAD_Y)
+            e.h(opts.rows.max(1) as f64 * lh + 2.0 * PAD_Y)
         })
         .a11y(A11y::TextInput {
             value: value.as_str().into(),
@@ -516,11 +516,11 @@ struct Layers<'a> {
 // glyphs if a script ever shows it.
 fn reinked(selected: &str, x0: f64, x1: f64, lh: f64) -> El {
     stack([text(selected.to_owned())
-        .width(x1 - x0)
+        .w(x1 - x0)
         .lines(1)
         .anchor(Align::Start, Align::Center)])
-    .width(x1 - x0)
-    .height(lh)
+    .w(x1 - x0)
+    .h(lh)
     .radius(2.0)
     .fill(Role::Primary)
 }
@@ -568,7 +568,7 @@ fn one_line(layers: Layers, room: Option<f64>, value: &str, base: usize) -> (El,
             .offset(lo - shift, 0.0)
             .when(hi > lo, |e| e.fill(Role::Primary)),
         text(shown.to_owned())
-            .width(run)
+            .w(run)
             .lines(1)
             .anchor(Align::Start, Align::Center)
             .offset(-shift, 0.0),
@@ -615,7 +615,7 @@ fn many_lines(layers: Layers, lines: &[Range<usize>], scroll: f64, view: f64) ->
         let x = |b: usize| caret_at(&carets, b.clamp(l.start, l.end) - l.start);
         let run = x(l.end);
         let y = row as f64 * lh - scroll;
-        children.push(text(line.to_owned()).width(run).lines(1).at(0.0, y));
+        children.push(text(line.to_owned()).w(run).lines(1).at(0.0, y));
         // A selection running on past this line's end takes a sliver more,
         // so a selected newline is visible.
         if sel.start < l.end.max(l.start + 1) && sel.end > l.start {

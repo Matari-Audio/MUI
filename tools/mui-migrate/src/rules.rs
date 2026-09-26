@@ -250,6 +250,22 @@ pub const RULES: &[Rule] = &[
     Manual { pattern: "ui . weld_backend", note: "`Ui::weld_backend` is private: build with `.gpu_welding()`" },
     // The wheel is a delta, not a place.
     Retype { field: "wheel", from: "Point", to: "Vec2", on: &["Input", "PointerInput", "Response"] },
+    // v2.1, one way to say a thing: `w`/`h`, `min_w`/`min_h`, `grow(1)`, one `pad`,
+    // `stroke` + `stroke_width`, `centered()`.
+    Call { chain: &[("width", &[A])], to: ".w($1)", gate: MuiChain, needs: &[] },
+    Call { chain: &[("height", &[A])], to: ".h($1)", gate: MuiChain, needs: &[] },
+    Call { chain: &[("min_width", &[A])], to: ".min_w($1)", gate: MuiChain, needs: &[] },
+    Call { chain: &[("min_height", &[A])], to: ".min_h($1)", gate: MuiChain, needs: &[] },
+    Call { chain: &[("expand", &[])], to: ".grow(1)", gate: MuiChain, needs: &[] },
+    Call { chain: &[("pad_xy", &[A, A])], to: ".pad(($1, $2))", gate: MuiChain, needs: &[] },
+    Call { chain: &[("insets", &[A])], to: ".pad($1)", gate: MuiChain, needs: &[] },
+    Call { chain: &[("border", &[A, A])], to: ".stroke($1).stroke_width($2)", gate: Mui, needs: &[] },
+    Method { old: "no_border", new: "no_stroke", gate: Mui },
+    Call { chain: &[("centered_at", &[Is("0."), Is("0.")])], to: ".centered()", gate: Mui, needs: &[] },
+    Call { chain: &[("centered_at", &[Is("0.0"), Is("0.0")])], to: ".centered()", gate: Mui, needs: &[] },
+    Call { chain: &[("centered_at", &[Is("0"), Is("0")])], to: ".centered()", gate: Mui, needs: &[] },
+    Call { chain: &[("anchor", &[Is(CC), Is(CC)])], to: ".centered()", gate: Mui, needs: &[] },
+    Call { chain: &[("apply", &[A])], to: ".when(true, $1)", gate: MuiChain, needs: &[] },
 ];
 
 /// The widget phase of the spec (`Response`, option structs, argument
@@ -299,10 +315,10 @@ pub const TUPLES: &[Tuple] = &[
 pub const BUILDERS: &[&str] = &[
     "a11y", "align", "align_self", "anchor", "animate", "animate_layout", "animate_layout_with", "animate_with", "appear", "apply", "area",
     "aspect", "at", "backdrop_blur", "baseline", "basis", "border", "border_align", "border_ramp", "captures_wheel", "center",
-    "centered_at", "clip", "corners", "cursor", "delay", "disabled", "dividers", "el", "elevation", "end", "exclude_from_weld", "expand",
+    "centered", "centered_at", "clip", "corners", "cursor", "delay", "disabled", "dividers", "el", "elevation", "end", "exclude_from_weld", "expand",
     "fill", "flex", "float", "focusable", "full", "gap", "gpu_weld", "grow", "h", "height", "hold", "icon_fill", "id", "insets",
     "inset_surface", "inset_surface_of", "into_el", "join", "join_border", "justify", "keep", "label", "line_gap", "lines", "match_height",
-    "match_width", "max_size", "min_height", "min_size", "min_width", "named", "no_border", "no_fill", "no_scrollbar", "offset", "opacity",
+    "match_width", "max_size", "min_h", "min_height", "min_size", "min_w", "min_width", "named", "no_border", "no_fill", "no_stroke", "no_scrollbar", "offset", "opacity",
     "order", "pad", "pad_xy", "pill", "pin", "placed_at", "preset", "radius", "reference_weld", "reserve", "role", "scale", "scroll",
     "scrolled", "segmented", "shadow", "shadows", "sharp", "shrink", "size", "span", "square", "start", "sticky", "stroke", "stroke_width",
     "surface_layout", "tag", "text_axis", "text_size", "text_weight", "tip", "tracks_pointer", "transition", "unwelded", "value_text",
@@ -331,6 +347,11 @@ pub const TYPED_NOTES: &[(&str, &[&str], &str)] = &[
 /// Notes for `MuiChain` calls whose receiver's type is not resolved.
 pub const CHAIN_NOTES: &[(&str, &str)] = &[
     ("label", "`.label(name)` on an element is `.named(name)` (receiver type not resolved: check it is an `El`)"),
+    ("width", "`.width(l)` on an element is `.w(l)` (receiver type not resolved: check it is an `El`)"),
+    ("height", "`.height(l)` on an element is `.h(l)` (receiver type not resolved: check it is an `El`)"),
+    ("min_width", "`.min_width(l)` on an element is `.min_w(l)` (receiver type not resolved: check it is an `El`)"),
+    ("min_height", "`.min_height(l)` on an element is `.min_h(l)` (receiver type not resolved: check it is an `El`)"),
+    ("insets", "`.insets(i)` on an element is `.pad(i)` (receiver type not resolved: check it is an `El`)"),
     ("disabled", "`.disabled(on)` on an element is `.disabled()` / `.when(on, Styled::disabled)` (receiver type not resolved: check it is an `El`)"),
 ];
 

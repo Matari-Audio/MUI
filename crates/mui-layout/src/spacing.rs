@@ -87,13 +87,46 @@ impl Spacing {
         }
     }
 }
-impl From<f64> for Spacing {
-    fn from(v: f64) -> Self {
-        Self::Px(v)
+impl<T: crate::Px> From<T> for Spacing {
+    fn from(v: T) -> Self {
+        Self::Px(v.px())
     }
 }
 impl From<SpacingToken> for Spacing {
     fn from(t: SpacingToken) -> Self {
         Self::Token(t)
+    }
+}
+
+/// What `.pad(..)` takes: one spacing on all four sides (`12`, `M`), an
+/// `(x, y)` pair of pixels, or whole [`Insets`](crate::Insets).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Pad {
+    All(Spacing),
+    Insets(crate::Insets),
+}
+impl<T: crate::Px> From<T> for Pad {
+    fn from(v: T) -> Self {
+        Self::All(Spacing::Px(v.px()))
+    }
+}
+impl From<Spacing> for Pad {
+    fn from(s: Spacing) -> Self {
+        Self::All(s)
+    }
+}
+impl From<SpacingToken> for Pad {
+    fn from(t: SpacingToken) -> Self {
+        Self::All(Spacing::Token(t))
+    }
+}
+impl From<crate::Insets> for Pad {
+    fn from(i: crate::Insets) -> Self {
+        Self::Insets(i)
+    }
+}
+impl<X: crate::Px, Y: crate::Px> From<(X, Y)> for Pad {
+    fn from((x, y): (X, Y)) -> Self {
+        Self::Insets(crate::Insets::symmetric(x.px(), y.px()))
     }
 }

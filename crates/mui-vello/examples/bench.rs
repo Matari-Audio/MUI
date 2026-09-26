@@ -82,7 +82,7 @@ fn curve(seed: f64) -> El {
         }
         vec![Draw::stroke(p, Role::Primary, 2.0)]
     })
-    .height(90.0)
+    .h(90.0)
 }
 
 const BLURB: &str = "the filter tracks the key and the envelope follows it, \
@@ -95,7 +95,7 @@ fn editor(ui: &mut Ui, app: &mut App) -> El {
     if vectors() {
         return grid(
             8,
-            (0..96).map(|i| curve(f64::from(i) * 0.13 + app.knobs[7] * 2.0).height(50.0)),
+            (0..96).map(|i| curve(f64::from(i) * 0.13 + app.knobs[7] * 2.0).h(50.0)),
         )
         .gap(2.0)
         .pad(4.0)
@@ -164,7 +164,7 @@ fn editor(ui: &mut Ui, app: &mut App) -> El {
         grid(8, knobs).gap(M).pad(M).shell(10.0, Role::Raised),
         col(sliders).gap(S).pad(M),
         grid(20, labels).gap(Xs).pad(S),
-        col(list).gap(2.0).scroll().height(240.0).pad(Xs),
+        col(list).gap(2.0).scroll().h(240.0).pad(Xs),
         row![curve(0.0), curve(1.3)].gap(M).pad(M),
         grid(5, blurbs).gap(S).pad(S),
         row(pills).gap(S).pad(S),

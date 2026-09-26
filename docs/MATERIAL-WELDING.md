@@ -49,7 +49,7 @@ function. `weld!` uses an ordinary stack. Use `row!`, `col!` or `grid!` with
 `Keep` does not mean invisible. `Omit` does not disable interaction. A border-only
 weld can intentionally outline a connection whose body remains transparent.
 
-New convenience DSL: `.border(paint, width)`, `.no_border()`, `.no_fill()`,
+New convenience DSL: `.stroke(paint).stroke_width(w)`, `.no_stroke()`, `.no_fill()`,
 `.weld(Weld::shape())`, `.weld(Weld::borders())`, `.weld(w.morph(t))`,
 `.weld(Weld::off())`, `.unwelded()`, `.weld(w.quality(q))`, and
 `.outline(|size| path)`.
@@ -57,7 +57,7 @@ New convenience DSL: `.border(paint, width)`, `.no_border()`, `.no_fill()`,
 A shared vector outline is a different operation, `.union(fill)`: it unions
 the children's outlines and leaves each child's paint alone. `.weld(Weld::off())`
 removes the material weld only.
-`no_fill()` and `no_border()` clear the current style; a later preset can restore
+`no_fill()` and `no_stroke()` clear the current style; a later preset can restore
 it. They are not hidden inheritance/reset sentinels.
 
 ### Three independent controls

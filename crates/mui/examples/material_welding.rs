@@ -7,14 +7,14 @@ fn panel(progress: f64) -> El {
         .pad(L)
         .size(130., 80.)
         .fill(Gradient::vertical(Role::Primary, Role::Raised))
-        .border(Role::Ink, 2.)
+        .stroke(Role::Ink).stroke_width(2.)
         .radius(18.)
         .id("a");
     let b = col![text("Filter")]
         .pad(L)
         .size(110., 80.)
         .fill(Role::Secondary)
-        .border(Role::Warning, 7.)
+        .stroke(Role::Warning).stroke_width(7.)
         .radius(26.)
         .id("b");
     row![a, b]

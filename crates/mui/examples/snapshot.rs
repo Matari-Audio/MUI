@@ -37,7 +37,7 @@ fn gallery(ui: &mut Ui, state: &mut (f64, f64, f64, bool)) -> El {
     .radius(20.0)
     .fill(Role::Surface)
     .shadow(Shadow::soft(16.0))
-    .anchor(Align::Center, Align::Center);
+    .centered();
     stack([card]).fill(Role::Background)
 }
 

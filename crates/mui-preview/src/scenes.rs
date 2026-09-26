@@ -124,7 +124,7 @@ impl PreviewScene for PillTab {
         let tab = col([control("plus"), control("phase"), control("warp")])
             .gap(10.0)
             .pad(22.0)
-            .min_width(92.0)
+            .min_w(92.0)
             .align(Align::Center)
             .id("tab")
             .shell(12.0, Role::Raised);
@@ -229,7 +229,7 @@ impl PreviewScene for Widgets {
         ])
         .gap(M)
         .pad(L)
-        .width(300.0)
+        .w(300.0)
         .radius(20.0)
         .fill(Role::Surface)
         .id("widgets")
@@ -385,7 +385,7 @@ impl PreviewScene for Scrolling {
                 });
                 let head = body(format!("octave {s}"))
                     .w(Len::Pct(100.))
-                    .pad_xy(0., 4.)
+                    .pad((0., 4.))
                     .fill(Role::Surface)
                     .sticky();
                 col(std::iter::once(head).chain(rows)).gap(S)
@@ -411,7 +411,7 @@ impl PreviewScene for Scrolling {
             .id("scroll");
         // No fade here, so the bar reads the whole way down; and a row, whose
         // bar runs along the bottom edge.
-        let presets = col((0..30).map(|i| text(format!("preset {i:02}")).pad_xy(8.0, 4.0)))
+        let presets = col((0..30).map(|i| text(format!("preset {i:02}")).pad((8.0, 4.0))))
             .pad(S)
             .scroll()
             .size(160.0, 340.0)
@@ -478,7 +478,7 @@ impl PreviewScene for Fields {
         ])
         .gap(S)
         .pad(L)
-        .width(320.0)
+        .w(320.0)
         .radius(16.0)
         .fill(Role::Surface)
         .id("fields")
@@ -566,7 +566,7 @@ impl PreviewScene for Tips {
         })
         .gap(M)
         .pad(L)
-        .width(260.0)
+        .w(260.0)
         .radius(16.0)
         .fill(Role::Surface)
         .id("tips-card");
@@ -664,7 +664,7 @@ impl PreviewScene for CurveEditor {
         ])
         .gap(M)
         .pad(L)
-        .width(360.0)
+        .w(360.0)
         .radius(16.0)
         .fill(Role::Surface)
         .id("curve-editor")
@@ -767,7 +767,7 @@ impl PreviewScene for BinSpectrum {
         ])
         .gap(M)
         .pad(L)
-        .width(400.0)
+        .w(400.0)
         .radius(16.0)
         .fill(Role::Surface)
         .id("bin-spectrum")
@@ -1010,7 +1010,7 @@ impl PreviewScene for Wrapping {
         let para = text(PARA).when(cap > 0, |t| t.lines(cap));
         let pills = (0..12).map(|i| {
             row([text(format!("band {i}"))])
-                .pad_xy(12.0, 6.0)
+                .pad((12.0, 6.0))
                 .pill()
                 .fill(Role::Raised)
         });
@@ -1024,7 +1024,7 @@ impl PreviewScene for Wrapping {
         ])
         .gap(M)
         .pad(L)
-        .width(self.width)
+        .w(self.width)
         .radius(20.0)
         .fill(Role::Surface)
         .id("wrap")
@@ -1282,7 +1282,7 @@ impl PreviewScene for Cells {
                     .id(format!("ev-{i}"))
             }))
             .justify(Justify::SpaceEvenly)
-            .width(320.0)
+            .w(320.0)
             .id("evenly"),
             // A modal: nothing offers it a width, so it hugs. Its cells are
             // 90 px wide and its columns are 140, because `min_col` is a
@@ -1345,7 +1345,7 @@ impl PreviewScene for Select {
         ])
         .gap(S)
         .pad(L)
-        .width(320.0)
+        .w(320.0)
         .radius(16.0)
         .fill(Role::Surface)
         .id("select")
@@ -1451,7 +1451,7 @@ impl PreviewScene for Gestures {
         ])
         .gap(M)
         .pad(L)
-        .width(300.0)
+        .w(300.0)
         .radius(20.0)
         .fill(Role::Surface)
         .id("gestures")
@@ -1507,7 +1507,7 @@ impl PreviewScene for Switched {
         ])
         .gap(M)
         .pad(L)
-        .width(300.0)
+        .w(300.0)
         .radius(20.0)
         .fill(Role::Surface)
         .id("switched")
@@ -1539,7 +1539,7 @@ pub fn editor() -> El {
         chip(n)
             .justify(Justify::Center)
             .w(clamp(64.0, 18.0, 120.0))
-            .pad_xy(0.0, 8.0)
+            .pad((0.0, 8.0))
             .radius(8.0)
             .on(State::Hover, |s| s.stroke(Role::Ink.alpha(0.12)))
             .id(format!("tab-{n}"))

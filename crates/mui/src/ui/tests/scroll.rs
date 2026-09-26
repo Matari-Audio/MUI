@@ -81,7 +81,7 @@ fn the_wheel_scrolls_a_column_and_stops_at_its_end() {
     let mut ui = Ui::new(Theme::DEFAULT);
     let tree = || {
         col([block(20., 100.), block(20., 100.)])
-            .height(50.)
+            .h(50.)
             .scroll()
             .id("list")
     };
@@ -106,7 +106,7 @@ fn a_non_finite_wheel_delta_is_ignored() {
     let mut ui = Ui::new(Theme::DEFAULT);
     let tree = || {
         col([block(20., 100.), block(20., 100.)])
-            .height(50.)
+            .h(50.)
             .scroll()
             .id("list")
     };
@@ -131,7 +131,7 @@ fn a_wheel_scroll_glides_onto_its_target() {
     let mut ui = Ui::new(Theme::DEFAULT);
     let tree = || {
         col([block(20., 100.).id("top"), block(20., 100.)])
-            .height(50.)
+            .h(50.)
             .scroll()
             .id("list")
     };
@@ -168,7 +168,7 @@ fn an_unnamed_scroller_scrolls() {
             col((0..6).map(|_| block(20., 40.))).gap(S).scroll().w(200),
             block(40., 40.),
         ]
-        .height(100.)
+        .h(100.)
     };
     let wheel = Input {
         pointer: at(10., 10., false),
@@ -198,7 +198,7 @@ fn an_unnamed_scroller_keeps_its_offset_while_a_tip_is_up() {
             ])
             .gap(0.)
             .scroll()
-            .height(50.),
+            .h(50.),
             block(20., 200.),
         ]
         .gap(0.)

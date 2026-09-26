@@ -102,7 +102,7 @@ fn a_slider_takes_a_track_press_and_drags_across_its_width() {
     let mut ui = Ui::new(Theme::DEFAULT);
     let mut v = 0.0;
     let step = |ui: &mut Ui, v: &mut f64, pointer: PointerInput| {
-        let tree = col([slider(ui, "s", "S", v, 0.0..=1.0).el.into_el()]).width(400.);
+        let tree = col([slider(ui, "s", "S", v, 0.0..=1.0).el.into_el()]).w(400.);
         ui.frame(tree, None, pointer, 0.016).unwrap();
     };
     let at = |x: f64, y: f64, down: bool| PointerInput {
@@ -134,7 +134,7 @@ fn a_slider_thumb_glides_to_a_value_set_from_outside() {
     let frame = |ui: &mut Ui, mut v: f64| {
         let Response { el: fader, changed } = slider(ui, "s", "S", &mut v, 0.0..=1.0);
         assert!(!changed && (v == 0.0 || v == 1.0), "the value is untouched");
-        let tree = col([fader.el()]).width(400.);
+        let tree = col([fader.el()]).w(400.);
         let animating = ui
             .frame(tree, None, Input::default(), 0.016)
             .unwrap()

@@ -356,11 +356,16 @@ pub enum Radius {
     /// Half the short side, whatever that turns out to be.
     Pill,
 }
-impl From<f64> for Radius {
-    fn from(v: f64) -> Self {
-        Self::Px(v)
-    }
+macro_rules! radius_px {
+    ($($t:ty),*) => {$(
+        impl From<$t> for Radius {
+            fn from(v: $t) -> Self {
+                Self::Px(mui_layout::Px::px(v))
+            }
+        }
+    )*};
 }
+radius_px!(f64, f32, i32, u32, usize);
 impl From<(f64, f64)> for Radius {
     fn from((convex, concave): (f64, f64)) -> Self {
         Self::Pair(convex, concave)

@@ -20,7 +20,7 @@
 //! col([row([text("Filter"), spacer(), text("on")])
 //!     .align(Align::Center)
 //!     .justify(Justify::SpaceBetween)
-//!     .width(Len::Px(240.))])
+//!     .w(Len::Px(240.))])
 //! # ; let _after =
 //! col![row!["Filter", spacer(), "on"].between().w(240)]
 //! # ;
@@ -57,8 +57,8 @@ pub use element::{
 };
 pub use mui_geometry::CornerStyle;
 pub use mui_layout::{
-    Align, Area, Frame, Id, Insets, Justify, Layout, Len, Limits, Match, Node, Pin, Size, Spacing,
-    SpacingScale, SpacingToken,
+    Align, Area, Frame, Id, Insets, Justify, Layout, Len, Limits, Match, Node, Pad, Pin, Px, Size,
+    Spacing, SpacingScale, SpacingToken,
 };
 pub use mui_motion::{Ease, Keys, Spring, curve};
 pub use mui_style::{
@@ -96,12 +96,12 @@ pub mod prelude {
     /// let row = row!["a", "b"].gap(step(2.));
     /// assert_eq!(step(2.).resolve(Default::default()), 8.);
     /// ```
-    pub fn step(n: f64) -> Spacing {
-        Spacing::step(n)
+    pub fn step(n: impl crate::Px) -> Spacing {
+        Spacing::step(n.px())
     }
-    /// A percentage length: `.width(pct(50.))`.
-    pub fn pct(p: f64) -> Len {
-        Len::Pct(p)
+    /// A percentage length: `.w(pct(50))`.
+    pub fn pct(p: impl crate::Px) -> Len {
+        Len::Pct(p.px())
     }
     /// A share of the nearest ancestor with a definite size on that axis --
     /// CSS `cqw`/`cqh`, without having to declare the container. The badge
@@ -114,8 +114,8 @@ pub mod prelude {
     /// let scene = resolve(&SceneSpec::new(panel)).unwrap();
     /// assert_eq!(scene.surface("badge").unwrap().frame.size.width, 80.);
     /// ```
-    pub fn cq(p: f64) -> Len {
-        Len::Container(p)
+    pub fn cq(p: impl crate::Px) -> Len {
+        Len::Container(p.px())
     }
     /// A fluid length with two stops -- CSS `clamp(min, pct%, max)`. The rail
     /// tracks the window between 64 and 220 px and neither collapses at 240
@@ -130,7 +130,7 @@ pub mod prelude {
     ///     resolve(&SceneSpec::new(row).offered(Size::new(240., 80.))).unwrap();
     /// assert_eq!(scene.surface("rail").unwrap().frame.size.width, 72.);
     /// ```
-    pub fn clamp(min: f64, pct: f64, max: f64) -> Len {
-        Len::Clamp { min, pct, max }
+    pub fn clamp(min: impl crate::Px, pct: impl crate::Px, max: impl crate::Px) -> Len {
+        Len::Clamp { min: min.px(), pct: pct.px(), max: max.px() }
     }
 }

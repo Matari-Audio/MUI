@@ -111,7 +111,7 @@ let control = |id: &str| block(28.0, 28.0).pill().fill(Role::Primary).id(id).cur
 let tab = col![control("plus"), control("phase"), control("warp")]
     .gap(10.0)
     .pad(22.0)
-    .min_width(92.0)
+    .min_w(92.0)
     .center()
     .id("tab")
     .shell(12.0, Role::Raised);
@@ -131,9 +131,9 @@ assert_eq!(scene.surface("tab").unwrap().frame.size.width, 92.0);
 | `row([..])`, `col([..])`, `stack([..])`, `grid(3, [..])` | the same four, taking an iterator |
 | `block(w, h)`, `spacer()`, `text("..")` | a sized box, a `grow(1)` gap, a measured text run |
 | `title("..")`, `body("..")`, `caption("..")` | text at the theme's `type_scale`: 18, 13 and 11 px by default |
-| `.gap(M)`, `.pad(S)`, `.pad(12.0)`, `.gap(step(1.5))` | spacing tokens `Xs S M L Xl` from the theme, `n` units of its grid, or pixels |
-| `.grow(w)`, `.shrink(w)`, `.basis(px)`, `.expand()` | flexbox weights |
-| `.width(Len::Pct(50.0))`, `.aspect(16.0 / 9.0)` | percentage and ratio sizes |
+| `.gap(M)`, `.pad(S)`, `.pad(12)`, `.pad((16, 8))`, `.gap(step(1.5))` | spacing tokens `Xs S M L Xl` from the theme, `n` units of its grid, or pixels; a pair is `(x, y)`, `Insets` sets each side |
+| `.grow(w)`, `.shrink(w)`, `.basis(px)` | flexbox weights: `.grow(1)` takes a share of the surplus |
+| `.w(Len::Pct(50))`, `.aspect(16.0 / 9.0)` | percentage and ratio sizes |
 | `.w(clamp(64.0, 30.0, 220.0))` | CSS `clamp(min, pct%, max)`: fluid between two pixel stops |
 | `.w(cq(40.0))` | a share of the nearest ancestor with a definite size on that axis -- CSS `cqw`/`cqh`, with no `container-type` to declare |
 | `fits![wide, mid, thin]`, `fits([..])` | SwiftUI's `ViewThatFits`: the first candidate that measures inside the room on offer is the one that lays out and paints, no second build pass |
@@ -280,7 +280,7 @@ let editor = || {
         row![title("Kurv"), spacer(), caption("v1.0")].baseline(),
         // Three tabs, fluid between 64 and 120 px, wrapping when they run out.
         row(["Osc", "Filter", "Env"].map(|n| {
-            row![caption(n)].w(clamp(64.0, 18.0, 120.0)).pad_xy(0.0, 8.0)
+            row![caption(n)].w(clamp(64.0, 18.0, 120.0)).pad((0.0, 8.0))
         }))
         .gap(S)
         .wrap(),

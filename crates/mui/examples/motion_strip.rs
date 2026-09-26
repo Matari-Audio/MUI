@@ -113,7 +113,7 @@ fn tree(ui: &mut Ui, s: &mut State) -> El {
     .radius(18.0)
     .fill(Role::Surface)
     .w(SIZE.width - 20.0);
-    stack([card.anchor(Align::Center, Align::Center)]).fill(Role::Background)
+    stack([card.centered()]).fill(Role::Background)
 }
 
 fn main() {

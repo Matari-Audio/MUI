@@ -648,7 +648,7 @@ mod fixtures {
         let tab = col([block(28., 28.), block(28., 28.), block(28., 28.)])
             .gap(10.)
             .pad(22.)
-            .min_width(92.)
+            .min_w(92.)
             .align(Align::Center)
             .id("tab")
             .shell(12., Role::Raised);

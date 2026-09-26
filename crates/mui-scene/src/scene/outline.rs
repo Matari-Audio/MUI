@@ -887,7 +887,7 @@ mod tests {
         let body = block(400., 200.)
             .grow(1.)
             .shrink(1.)
-            .min_width(0.)
+            .min_w(0.)
             .radius(0.)
             .id("body");
         let root = row([tab, body])

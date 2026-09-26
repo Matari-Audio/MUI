@@ -57,13 +57,13 @@ fn button(id: String, label: &str) -> El {
         Color::oklcha(0.3, 0.02, 250.0, 1.0),
     );
     row([text(label).text_size(12.0).fill(Role::Ink)])
-        .pad_xy(8.0, 3.0)
+        .pad((8.0, 3.0))
         .h(22.0)
         .align(Align::Center)
         .fill(Role::Raised)
         .radius(5.0)
         .on(State::Hover, move |s| {
-            s.fill(hover).border(Role::Ink.alpha(0.3), 1.0)
+            s.fill(hover).stroke(Role::Ink.alpha(0.3)).stroke_width(1.0)
         })
         .on(State::Press, move |s| s.fill(press))
         .a11y(A11y::Button)
@@ -116,7 +116,7 @@ fn editor(ui: &mut Ui, values: &mut [f64]) -> El {
                 .tip("Double-click to rename"),
             row(["M", "S", "R", "Fx", "Arm"].map(|b| button(format!("t{t}/{b}"), b))).gap(2.0),
             row(knobs).gap(8.0),
-            fader.width(200.0),
+            fader.w(200.0),
         ])
         .gap(4.0)
         .w(260.0);

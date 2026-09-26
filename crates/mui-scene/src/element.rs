@@ -13,7 +13,7 @@
 use crate::{Cursor, Elevation, Fill, Fit, Image, Mix, Radius, Shadow, Stroke, Style};
 use mui_geometry::CornerStyle;
 use mui_geometry::{Path, Point};
-use mui_layout::{Id, Node, Size, Spacing};
+use mui_layout::{Id, Node, Px, Size, Spacing};
 use mui_motion::Spring;
 use mui_text::{Axes, Weight};
 use std::cell::RefCell;
@@ -607,17 +607,8 @@ impl IntoEl for String {
 pub trait Paints: Sized {
     fn style_mut(&mut self) -> &mut Style;
 
-    /// Set border paint and logical inside width together. Equivalent to
-    /// `.stroke(paint).stroke_width(width)`; later calls still win.
-    fn border(mut self, paint: impl Into<Fill>, width: f64) -> Self {
-        self.style_mut().stroke = Some(Stroke {
-            fill: Some(paint.into()),
-            width: Some(width),
-        });
-        self
-    }
-    /// Clear the border now. Apply after presets that should not restore it.
-    fn no_border(mut self) -> Self {
+    /// Clear the stroke now. Apply after presets that should not restore it.
+    fn no_stroke(mut self) -> Self {
         self.style_mut().stroke = None;
         self
     }
@@ -639,7 +630,8 @@ pub trait Paints: Sized {
         });
         self
     }
-    fn stroke_width(mut self, w: f64) -> Self {
+    fn stroke_width(mut self, w: impl Px) -> Self {
+        let w = w.px();
         match &mut self.style_mut().stroke {
             Some(s) => s.width = Some(w),
             none => {
@@ -764,8 +756,8 @@ pub trait Paints: Sized {
     /// let mut dim = stack![text("Save?")].fill(scrim).backdrop_blur(8.);
     /// assert_eq!(dim.style_mut().backdrop_blur, Some(8.));
     /// ```
-    fn backdrop_blur(mut self, radius: f64) -> Self {
-        self.style_mut().backdrop_blur = Some(radius);
+    fn backdrop_blur(mut self, radius: impl Px) -> Self {
+        self.style_mut().backdrop_blur = Some(radius.px());
         self
     }
     /// Merge a prepared style *over* this one: `.preset(card())`. Every
@@ -800,17 +792,6 @@ pub trait Paints: Sized {
         *slot = s.over(std::mem::take(slot));
         self
     }
-    /// Hand the node to `f`: a reusable run of builders, without a trait.
-    ///
-    /// ```
-    /// use mui_scene::prelude::*;
-    /// let outlined = |e: El| e.stroke(Role::Ink).radius(8.);
-    /// let mut el = block(80., 24.).apply(outlined);
-    /// assert_eq!(el.style_mut().radius, Some(Radius::Px(8.)));
-    /// ```
-    fn apply(self, f: impl FnOnce(Self) -> Self) -> Self {
-        f(self)
-    }
     /// Pointer shape over this node and, unless they say otherwise, its
     /// children.
     fn cursor(mut self, c: Cursor) -> Self {
@@ -818,6 +799,7 @@ pub trait Paints: Sized {
         self
     }
     /// Apply `f` only when `cond`: `.when(selected, |e| e.fill(Primary))`.
+    /// `.when(true, outlined)` hands the node to a reusable run of builders.
     fn when(self, cond: bool, f: impl FnOnce(Self) -> Self) -> Self {
         if cond { f(self) } else { self }
     }
@@ -878,8 +860,8 @@ pub trait Styled: Paints {
         self
     }
 
-    fn text_size(mut self, px: f64) -> Self {
-        self.element_mut().text_size = Some(px);
+    fn text_size(mut self, px: impl Px) -> Self {
+        self.element_mut().text_size = Some(px.px());
         self
     }
     /// How heavy this label's glyphs are, as a position on the font's `wght`

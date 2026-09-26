@@ -17,7 +17,7 @@ fn intrinsic_chain() {
 }
 #[test]
 fn asymmetric_padding() {
-    let t = col([block(10., 20.).id("c")]).id("p").insets(Insets {
+    let t = col([block(10., 20.).id("c")]).id("p").pad(Insets {
         left: 1.,
         right: 2.,
         top: 3.,
@@ -254,7 +254,7 @@ fn containers_stretch_and_content_centres_without_being_told() {
 #[test]
 fn percent_is_a_share_of_the_parent_and_auto_while_hugging() {
     let t = row([
-        row([block(10., 10.)]).id("a").width(Len::Pct(25.)),
+        row([block(10., 10.)]).id("a").w(Len::Pct(25.)),
         block(10., 10.).id("b"),
     ])
     .id("r");
@@ -271,7 +271,7 @@ fn aspect_derives_the_missing_axis() {
     // Width first: a column child takes the column's width, a row child its
     // allocated share, and the height follows either way.
     let knob = || Node::content().id("k").aspect(2.);
-    let l = resolve(&col([knob()]).width(100.), None, Limits::default()).unwrap();
+    let l = resolve(&col([knob()]).w(100.), None, Limits::default()).unwrap();
     assert_eq!(l.frame("k").unwrap().size, Size::new(100., 50.));
     let l = resolve(
         &row([knob().flex(1.), knob().id("j").flex(1.)]),
@@ -284,8 +284,8 @@ fn aspect_derives_the_missing_axis() {
     let l = resolve(
         &row([block(0., 0.)
             .id("h")
-            .height(30.)
-            .width(Len::Auto)
+            .h(30.)
+            .w(Len::Auto)
             .aspect(0.5)]),
         None,
         Limits::default(),
@@ -364,7 +364,7 @@ fn content_is_told_the_room_it_has_and_a_scroll_withholds_it() {
         Node::<&str>::grid(2, [Node::content().with("g").id("g")]).gap(10.),
         Node::<&str>::col([Node::content().with("s").id("s")]).scroll(),
     ])
-    .width(Len::Px(100.))
+    .w(Len::Px(100.))
     .pad(10.);
     let mut seen = std::collections::BTreeMap::new();
     let wrap = |s: &&str, room: Option<f64>| {
@@ -522,7 +522,7 @@ fn a_content_leaf_never_keeps_a_cross_extent_wider_than_its_parent() {
 
 #[test]
 fn a_percentage_below_the_childs_own_floor_squeezes_instead_of_erroring() {
-    let t = row([block(0., 0.).pad(5.4).height(Len::Pct(84.6))]);
+    let t = row([block(0., 0.).pad(5.4).h(Len::Pct(84.6))]);
     assert!(resolve(&t, None, Limits::default()).is_ok());
 }
 
@@ -544,7 +544,7 @@ fn grid_columns_never_go_negative_when_the_gaps_outgrow_the_grid() {
     // 21 wide less 15.4 of padding leaves 5.6 for two columns and an 8.4
     // gap. The column is zero-wide, not -1.4, so the percentage child is
     // offered a valid width and the grid overflows the squeeze it really is.
-    let t = col([grid(2, [Node::block(0., 0.).width(Len::Pct(98.8))]).gap(8.4)]).pad(7.7);
+    let t = col([grid(2, [Node::block(0., 0.).w(Len::Pct(98.8))]).gap(8.4)]).pad(7.7);
     assert!(resolve(&t, Some(Size::new(21., 174.4)), Limits::default()).is_ok());
 }
 
@@ -565,7 +565,7 @@ fn room_handed_to_the_measurer_leaves_out_the_nodes_own_padding() {
 
 #[test]
 fn a_grid_cell_never_outgrows_its_column() {
-    let t = grid(3, [col([]).width(Len::Px(108.5)).id("c")]).id("g");
+    let t = grid(3, [col([]).w(Len::Px(108.5)).id("c")]).id("g");
     let l = resolve(&t, Some(Size::new(135.5, 62.4)), Limits::default()).unwrap();
     let c = l.frame("c").unwrap();
     // The declared width is wider than the track: it starts at the track and
@@ -620,8 +620,8 @@ fn a_squeezed_wrapping_row_overflows_its_cross_axis() {
 
 #[test]
 fn an_over_constrained_tree_overflows_and_says_what_it_needed() {
-    let panel = || col([]).min_width(120.).min_height(30.).id("p2");
-    let t = row([col([]).min_width(120.).min_height(30.), panel()])
+    let panel = || col([]).min_w(120.).min_h(30.).id("p2");
+    let t = row([col([]).min_w(120.).min_h(30.), panel()])
         .gap(10.)
         .id("bar");
     // 240 is ten short of the two panels and their gap: it lays out anyway,
@@ -745,18 +745,18 @@ fn a_flex_overlay_with_percentage_body_is_remeasured_at_its_share() {
     // by percentage, so its first intrinsic pass must not pin the rack to the
     // whole row's width before flex distribution gives it a share.
     let rack = |id: &str, minimum: f64| {
-        stack([col([block(32., 30.).width(Len::Pct(100.))])
-            .width(Len::Pct(100.))
-            .height(Len::Pct(100.))
+        stack([col([block(32., 30.).w(Len::Pct(100.))])
+            .w(Len::Pct(100.))
+            .h(Len::Pct(100.))
             .scroll()])
         .flex(1.0)
-        .min_width(minimum)
+        .min_w(minimum)
         .id(id)
     };
     let tree = row([rack("warps", 120.), rack("synth", 120.)])
         .gap(8.)
-        .width(Len::Pct(100.))
-        .height(30.);
+        .w(Len::Pct(100.))
+        .h(30.);
     let layout = resolve(&tree, Some(Size::new(300., 30.)), Limits::default())
         .expect("percentage bodies must follow their flex share");
     assert_eq!(layout.frame("warps").unwrap().size.width, 146.);
@@ -771,14 +771,14 @@ fn a_zero_basis_flex_rack_remeasures_wrapped_controls_at_its_final_width() {
     let controls = row((0..6).map(|i| block(80., 44.7).id(format!("control-{i}"))))
         .wrap()
         .gap(4.)
-        .width(Len::Pct(100.))
+        .w(Len::Pct(100.))
         .id("controls");
-    let rack = stack([col([controls]).width(Len::Pct(100.))])
-        .width(Len::Px(0.))
+    let rack = stack([col([controls]).w(Len::Pct(100.))])
+        .w(Len::Px(0.))
         .flex(1.)
-        .height(Len::Pct(100.))
+        .h(Len::Pct(100.))
         .id("rack");
-    let root = row([rack]).width(Len::Pct(100.)).height(Len::Pct(100.));
+    let root = row([rack]).w(Len::Pct(100.)).h(Len::Pct(100.));
     let layout = resolve(&root, Some(Size::new(300., 400.)), Limits::default())
         .expect("the flex rack resolves");
     let row = layout.frame("controls").expect("wrapped controls");
@@ -797,15 +797,15 @@ fn a_sized_flex_rack_remeasures_wrapped_controls_after_growth_and_shrink() {
         let controls = row((0..6).map(|i| block(80., 44.7).id(format!("control-{i}"))))
             .wrap()
             .gap(4.)
-            .width(Len::Pct(100.))
+            .w(Len::Pct(100.))
             .id("controls");
-        let rack = stack([col([controls]).width(Len::Pct(100.))])
-            .width(Len::Px(basis))
+        let rack = stack([col([controls]).w(Len::Pct(100.))])
+            .w(Len::Px(basis))
             .grow(1.)
             .shrink(1.)
-            .height(Len::Pct(100.))
+            .h(Len::Pct(100.))
             .id("rack");
-        let root = row([rack]).width(Len::Pct(100.)).height(Len::Pct(100.));
+        let root = row([rack]).w(Len::Pct(100.)).h(Len::Pct(100.));
         resolve(&root, Some(Size::new(300., 400.)), Limits::default())
             .expect("the sized flex rack resolves")
     };
@@ -898,7 +898,7 @@ fn fits_keeps_the_first_candidate_that_clears_the_offered_width() {
 /// number until the parent stops having a size of its own.
 #[test]
 fn a_container_share_skips_the_hugging_parent_between() {
-    let bar = |len: Len| row([row([block(0., 8.).width(len).id("bar")]).id("hug")]).width(200.);
+    let bar = |len: Len| row([row([block(0., 8.).w(len).id("bar")]).id("hug")]).w(200.);
     let at = |len: Len| {
         resolve(&bar(len), Some(Size::new(200., 8.)), Limits::default())
             .unwrap()
@@ -912,7 +912,7 @@ fn a_container_share_skips_the_hugging_parent_between() {
     assert_eq!(at(Len::Pct(50.)), 0.);
     // With a definite parent the two agree: the parent is the container.
     let sized = |len: Len| {
-        let t = row([row([block(0., 8.).width(len).id("bar")]).width(80.)]).width(200.);
+        let t = row([row([block(0., 8.).w(len).id("bar")]).w(80.)]).w(200.);
         resolve(&t, Some(Size::new(200., 8.)), Limits::default())
             .unwrap()
             .frame("bar")

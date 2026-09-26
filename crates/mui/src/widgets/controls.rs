@@ -477,7 +477,7 @@ fn slider_el(look: &Look, id: Id, label: Arc<str>, d: Dial) -> El {
             row([spacer().grow(t), grip, spacer().grow(1.0 - t)])
                 .anchor(Align::Stretch, Align::Center),
         ])
-        .height(lane)
+        .h(lane)
         .a11y(d.a11y())
         .named(label)
         .focusable()
@@ -575,7 +575,7 @@ pub fn button(ui: &mut Ui, id: impl Into<Id>, label: &str) -> Response<bool, Con
 
 fn button_el(look: &Look, id: Id, label: Arc<str>) -> El {
     row([text(label.clone()).fill(look.ink())])
-        .pad_xy(look.px * 0.4, look.pad_y())
+        .pad((look.px * 0.4, look.pad_y()))
         .pill()
         .preset(look.style())
         .on(State::Hover, look.hover())
@@ -733,7 +733,7 @@ pub fn drag_value(
 
 fn drag_el(look: &Look, id: Id, label: Arc<str>, d: Dial) -> El {
     row([d.readout(look)])
-        .pad_xy(look.px * 0.3, look.pad_y())
+        .pad((look.px * 0.3, look.pad_y()))
         .radius(4.0)
         .preset(look.face(Role::Field))
         .cursor(Cursor::ResizeH)

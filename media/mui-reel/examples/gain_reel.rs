@@ -72,7 +72,7 @@ fn editor(ui: &mut Ui, m: &mut Gain) -> El {
     .fill(Role::Surface)
     .shadow(Shadow::soft(16.0))
     .id("card")
-    .anchor(Align::Center, Align::Center);
+    .centered();
     // Square: a filled node takes the theme radius, and a take has no window corners.
     stack([card]).fill(Role::Background).radius(0.0)
 }

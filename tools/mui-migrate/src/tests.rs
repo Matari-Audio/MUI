@@ -515,3 +515,32 @@ fn resolver_len_and_notes() {
     let out = run(&with_prelude("fn f(s: &mut SceneSpec) { s.scroll_bars.insert(k, 1.0); let k = Stroke { width: 1.0, fill: f }; }\n"));
     assert_eq!(out.warnings.len(), 2, "{:?}", out.warnings);
 }
+
+#[test]
+fn one_way_to_say_a_thing() {
+    check(
+        &with_prelude("fn f() -> El { block(1., 2.).width(3.).height(Len::Pct(5.)).min_width(4.).min_height(2.).expand().pad_xy(8., 4.).insets(i) }\n"),
+        &with_prelude("fn f() -> El { block(1., 2.).w(3.).h(Len::Pct(5.)).min_w(4.).min_h(2.).grow(1).pad((8., 4.)).pad(i) }\n"),
+    );
+    check(
+        &with_prelude("fn f() -> El { block(1., 2.).border(Role::Ink, 2.).no_border().apply(card) }\n"),
+        &with_prelude("fn f() -> El { block(1., 2.).stroke(Role::Ink).stroke_width(2.).no_stroke().when(true, card) }\n"),
+    );
+    // A `Rect`'s `width()`, a size's `.width(w)` of another type and a weld's `border(c)` stay.
+    let other = with_prelude("fn f(r: Rect, b: Builder) -> f64 { let w = Weld::all().border(c); b.width(3.); r.width() }\n");
+    check(&other, &other);
+    let no_mui = "fn f() { x.pad_xy(1., 2.).border(a, b).no_border(); }\n";
+    check(no_mui, no_mui);
+}
+
+#[test]
+fn centered() {
+    check(
+        &with_prelude("fn f() -> El { stack![block(1., 1.).centered_at(0., 0.), block(1., 1.).centered_at(0.0, 0.0), block(1., 1.).anchor(Align::Center, Align::Center), block(1., 1.).centered_at(2., 0.)] }\n"),
+        &with_prelude("fn f() -> El { stack![block(1., 1.).centered(), block(1., 1.).centered(), block(1., 1.).centered(), block(1., 1.).centered_at(2., 0.)] }\n"),
+    );
+    check(
+        &with_prelude("fn f() -> El { block(1., 1.).anchor(Align::Center, Align::Center).offset(0., 0.) }\n"),
+        &with_prelude("fn f() -> El { block(1., 1.).centered() }\n"),
+    );
+}

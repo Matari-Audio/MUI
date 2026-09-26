@@ -22,7 +22,7 @@ fn spec() -> SceneSpec {
     let tab = col([control("plus"), control("phase"), control("warp")])
         .gap(10.0)
         .pad(22.0)
-        .min_width(92.0)
+        .min_w(92.0)
         .align(Align::Center)
         .id("tab")
         .shell(12.0, Role::Raised);

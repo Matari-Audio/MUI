@@ -73,7 +73,7 @@ pub fn glass() -> Style {
 /// assert_eq!(tags.children().len(), 2);
 /// ```
 pub fn chip(s: &str) -> El {
-    row![caption(s)].pad_xy(10.0, 4.0).pill().fill(Role::Field)
+    row![caption(s)].pad((10.0, 4.0)).pill().fill(Role::Field)
 }
 
 /// A cell in a bank: centred, padded, raised, rounded. Hands `el` back
