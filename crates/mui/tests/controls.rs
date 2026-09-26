@@ -208,3 +208,18 @@ fn a_widget_reports_a_change_only_when_its_value_moved() {
     assert_eq!(s, "b");
     assert!((v - 0.51).abs() < 1e-12, "{v}");
 }
+
+/// Every control takes a label; a switch and a drag number, which draw no
+/// text of their own, still carry it as their accessible name.
+#[test]
+fn a_toggle_and_a_drag_value_are_named_by_their_label() {
+    let mut ui = Ui::new(Theme::DEFAULT);
+    let (mut on, mut bpm) = (false, 120.0);
+    let name = |el: El| el.payload().semantics.as_ref().and_then(|s| s.label.clone());
+    let sw = toggle(&mut ui, "sw", "Bypass", &mut on).el.el();
+    assert_eq!(name(sw).as_deref(), Some("Bypass"));
+    let tempo = drag_value(&mut ui, "bpm", "Tempo", &mut bpm, 20.0..=300.0).el.el();
+    assert_eq!(name(tempo).as_deref(), Some("Tempo"));
+    let unnamed = toggle(&mut ui, "sw2", "", &mut on).el.el();
+    assert_eq!(name(unnamed), None, "an empty label names nothing");
+}
