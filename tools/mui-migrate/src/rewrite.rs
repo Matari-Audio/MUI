@@ -241,6 +241,8 @@ pub(crate) fn apply(src: &str, mut edits: Vec<Edit>) -> (String, usize) {
 enum Frame {
     Impl,
     Enum,
+    /// An inline `mod name { .. }`.
+    Mod,
     Other,
 }
 
@@ -253,7 +255,8 @@ struct UseEntry {
     start: usize,
     end: usize,
     in_brace: bool,
-    /// The `use` sits inside a block (`mod tests { use super::*; }`).
+    /// The `use` sits inside an inline module (`mod tests { use super::*; }`),
+    /// so a `super::` path means this file.
     nested: bool,
     /// For a top-level entry: the `use` item's first token and its `;`.
     item: (usize, usize),
@@ -285,8 +288,10 @@ pub(crate) struct File<'a> {
     opaque_glob: bool,
     /// `(params open, body open)` of every `fn` with a body.
     fns: Vec<(usize, usize)>,
-    /// Whether the `use` being parsed is inside a block.
+    /// Whether the `use` being parsed is inside an inline module.
     nested: bool,
+    /// Brace spans of inline modules.
+    mods: Vec<(usize, usize)>,
     /// Modules glob-imported with a relative path (`use super::*`).
     glob_mods: Vec<PathBuf>,
     /// Token ranges of `use` items.
@@ -315,6 +320,7 @@ impl<'a> File<'a> {
             opaque_glob: false,
             fns: Vec::new(),
             nested: false,
+            mods: Vec::new(),
             glob_mods: Vec::new(),
             items: Vec::new(),
             is_mui: own,
@@ -396,7 +402,11 @@ impl<'a> File<'a> {
             self.frame[i] = *stack.last().unwrap_or(&Frame::Other);
             match &t[i].k {
                 K::Open('{') => {
-                    stack.push(pending.take().unwrap_or(Frame::Other));
+                    let frame = pending.take().unwrap_or(Frame::Other);
+                    if frame == Frame::Mod {
+                        self.mods.push((i, t[i].pair));
+                    }
+                    stack.push(frame);
                     opens.push(i);
                 }
                 K::Close('}') => {
@@ -413,8 +423,9 @@ impl<'a> File<'a> {
                     match s {
                         "impl" | "trait" if item_start => pending = Some(Frame::Impl),
                         "enum" if not_path => pending = Some(Frame::Enum),
+                        "mod" if item_start && t.get(i + 1).is_some_and(|n| n.k == K::Ident) && self.open(i + 2, '{') => pending = Some(Frame::Mod),
                         "use" if item_start => {
-                            self.nested = !stack.is_empty();
+                            self.nested = stack.contains(&Frame::Mod);
                             i = self.parse_use(i);
                             continue;
                         }
@@ -476,6 +487,8 @@ impl<'a> File<'a> {
                 || self.path.is_some_and(|p| u.path.len() > 1 && self.ctx.module(p, &u.path[..1]).is_some());
             let own = self.own && relative;
             let mui = match (&u.local, self.path) {
+                // `mod tests { use super::X; }`: this file's `X`.
+                (Some(_), _) if u.nested && u.path.len() == 2 && u.path[0] == "super" => self.file_level(&u.path[1]),
                 (None, p) => root_mui || (own && p.and_then(|p| self.ctx.module(p, &u.path)).is_none()),
                 (Some(_), None) => root_mui || own,
                 (Some(_), Some(p)) => self.ctx.resolve_path(p, &u.path, &self.defined, 0).unwrap_or(own),
@@ -614,6 +627,10 @@ impl<'a> File<'a> {
             }
         }
         let s = self.t[j].text.as_str();
+        // `super::X` in `mod tests { .. }` is this file's `X`.
+        if s == "super" && j + 3 == i && self.mods.iter().any(|&(a, b)| a < i && i < b) {
+            return Some(self.file_level(&self.t[i].text));
+        }
         // A type root (`Node::leaf`) resolves like a bare name; inside a mui
         // crate every type is the crate's own.
         let ty = j != i && s != "Self" && s.starts_with(char::is_uppercase) && !self.defined.contains(s);
@@ -652,6 +669,12 @@ impl<'a> File<'a> {
             return Some(m);
         }
         Some((self.own && matches!(s, "Self" | "crate" | "self" | "super")) || self.ctx.roots.contains(s))
+    }
+
+    /// Whether `name` at this file's top level is mui's (imported so, or
+    /// from a mui glob and not defined here).
+    fn file_level(&self, name: &str) -> bool {
+        self.locals.get(name).copied().unwrap_or(self.mui_glob && !self.defined.contains(name))
     }
 
     fn gate(&self, g: Gate, dot: usize) -> bool {
@@ -1165,6 +1188,16 @@ impl<'a> File<'a> {
     /// type's name; `None` for any other binding (a pattern, a closure
     /// parameter, an untyped `let`) or none at all.
     fn var_type(&self, v: usize) -> Option<usize> {
+        match self.binding(v)? {
+            Ok(ty) => Some(ty),
+            Err(init) => self.ctor_head(init),
+        }
+    }
+
+    /// The last binding of the variable used at `v` in the enclosing fn:
+    /// `Ok(type name token)` for a typed one, `Err(start of the value)` for
+    /// `let x = value`, `None` for any other (or none).
+    fn binding(&self, v: usize) -> Option<Result<usize, usize>> {
         let t = self.t;
         let name = t[v].text.as_str();
         let &(params, body) = self.fns.iter().filter(|&&(_, b)| b < v && v < t[b].pair).max_by_key(|&&(_, b)| b)?;
@@ -1177,13 +1210,16 @@ impl<'a> File<'a> {
             let at = if self.ident(k - 1, "mut") { k - 1 } else { k };
             if k < t[params].pair {
                 if typed && matches!(t[at - 1].k, K::Open('(') | K::Punct(',')) {
-                    ty = self.type_head(k + 2);
+                    ty = self.type_head(k + 2).map(Ok);
                 }
             } else if k > body && self.ident(at - 1, "let") {
+                if self.stmt_end(k) > v {
+                    continue; // `let x = .. x ..;`: not bound yet at `v`
+                }
                 ty = if typed {
-                    self.type_head(k + 2)
+                    self.type_head(k + 2).map(Ok)
                 } else if self.punct(k + 1, '=') && !t[k + 1].joint {
-                    self.ctor_head(k + 2)
+                    Some(Err(k + 2))
                 } else {
                     None
                 };
@@ -1192,12 +1228,25 @@ impl<'a> File<'a> {
                 || self.punct(k + 1, '@')
                 || self.ident(at - 1, "for")
                 || self.ident(at - 1, "ref")
-                || (matches!(t[at - 1].k, K::Open(_) | K::Punct(',')) && matches!(t[k + 1].k, K::Close(_) | K::Punct(',' | ':')))
+                || (matches!(t[at - 1].k, K::Open(_) | K::Punct(',')) && matches!(t[k + 1].k, K::Close(_) | K::Punct(',' | ':')) && self.in_pattern(k))
             {
                 ty = None; // a pattern or closure binding (or an argument: unknown either way)
             }
         }
         ty
+    }
+
+    /// Whether the group around `k` is a pattern: `let (..)`, `Some(..)`,
+    /// `Foo { .. }` (or a tuple-struct / variant call: unknown either way).
+    fn in_pattern(&self, k: usize) -> bool {
+        let t = self.t;
+        let mut j = k - 1;
+        while !matches!(t[j].k, K::Open(_)) {
+            j = if let K::Close(_) = t[j].k { t[j].pair } else { j };
+            let Some(p) = j.checked_sub(1) else { return false };
+            j = p;
+        }
+        j > 0 && (self.ident(j - 1, "let") || (t[j - 1].k == K::Ident && t[j - 1].text.starts_with(char::is_uppercase)))
     }
 
     /// The name token of the type written at `k` (`&'a mut mui::Rect` -> `Rect`).
@@ -1277,46 +1326,70 @@ impl<'a> File<'a> {
     }
 
     /// Whether the receiver before the dot at `dot` is an element builder
-    /// chain: every call on it is one of `BUILDERS`, and it starts at a mui
-    /// `CONSTRUCTORS` call / macro, or at a variable of an `ELEMENT_TYPES`
-    /// type, or has a builder call. `Some(false)` when it clearly is not
-    /// (`handle.join()` after `spawn(..)`, `ui.palette().disabled(c)`);
-    /// `None` for a bare variable whose type is not known.
+    /// chain: every call on it is one of `BUILDERS`, and it has one, or it
+    /// starts at a mui `CONSTRUCTORS` call / macro, a widget's `.el`, a fn of
+    /// this file returning an `ELEMENT_TYPES` type, or a variable of one.
+    /// `Some(false)` when it clearly is not (`ui.palette().disabled(c)`);
+    /// `None` when its start is not known (a variable, another file's fn).
     fn builder_chain(&self, dot: usize) -> Option<bool> {
         let t = self.t;
         let mut j = dot.checked_sub(1)?;
         let mut builders = 0;
-        loop {
-            match t[j].k {
-                K::Close(c @ (')' | ']')) => {
-                    let open = t[j].pair;
-                    let Some(n) = open.checked_sub(1) else { return Some(false) };
-                    if self.punct(n, '!') && n > 0 && t[n - 1].k == K::Ident {
-                        return Some(CONSTRUCTORS.contains(&t[n - 1].text.as_str()) && self.is_mui_name(n - 1));
-                    }
-                    if c != ')' || t[n].k != K::Ident {
-                        return Some(false);
-                    }
-                    if n > 0 && self.dot(n - 1) {
-                        if !BUILDERS.contains(&t[n].text.as_str()) {
-                            return Some(false);
-                        }
-                        builders += 1;
-                        j = n.checked_sub(2)?;
-                        continue;
-                    }
-                    return Some(CONSTRUCTORS.contains(&t[n].text.as_str()) && self.is_mui_name(n));
-                }
-                K::Ident if self.recv_var(j + 1) == Some(j) => {
-                    if builders > 0 {
-                        return Some(true);
-                    }
-                    let ty = self.var_type(j)?;
-                    return Some(self.is_type(ty, ELEMENT_TYPES, false));
-                }
-                _ => return if builders > 0 { None } else { Some(false) },
+        // Back over `.m(..)` links to the chain's start.
+        while self.close_any(j) && t[j].pair >= 2 && t[t[j].pair - 1].k == K::Ident && self.dot(t[j].pair - 2) && self.open(t[j].pair, '(') {
+            let n = t[j].pair - 1;
+            if !BUILDERS.contains(&t[n].text.as_str()) {
+                // `self.canvas(..)`: this file's method, by its return type.
+                return if n >= 2 && self.ident(n - 2, "self") { self.returns_el(n) } else { Some(false) };
             }
+            builders += 1;
+            j = n.checked_sub(2)?;
         }
+        if builders > 0 {
+            return Some(true);
+        }
+        let el = |ty: usize| self.is_type(ty, ELEMENT_TYPES, false);
+        match t[j].k {
+            K::Close(')' | ']') => {
+                let n = t[j].pair.checked_sub(1)?;
+                if self.punct(n, '!') && n > 0 && t[n - 1].k == K::Ident {
+                    return Some(CONSTRUCTORS.contains(&t[n - 1].text.as_str()) && self.is_mui_name(n - 1));
+                }
+                if t[n].k != K::Ident || !self.open(n + 1, '(') {
+                    return Some(false);
+                }
+                let name = t[n].text.as_str();
+                if CONSTRUCTORS.contains(&name) && self.is_mui_name(n) {
+                    return Some(true);
+                }
+                if self.sep_before(n) { None } else { self.returns_el(n) }
+            }
+            K::Ident if self.recv_var(j + 1) == Some(j) => match self.binding(j)? {
+                Ok(ty) => Some(el(ty)),
+                // `let e = row(..).fill(..);`: the value's chain decides.
+                Err(init) => {
+                    let end = self.stmt_end(init);
+                    if self.punct(end, ';') { self.builder_chain(end) } else { None }
+                }
+            },
+            // A widget's element: `button(..).el` (or the old `.0`).
+            K::Ident | K::Lit if (t[j].text == "el" || t[j].text == "0") && j >= 2 && self.dot(j - 1) && self.close_any(j - 2) => {
+                let open = t[j - 2].pair;
+                (open > 0 && TUPLES.iter().any(|s| !s.method && self.ident(open - 1, s.name)) && self.is_mui_name(open - 1)).then_some(true)
+            }
+            K::Ident | K::Close('}') => None,
+            _ => Some(false),
+        }
+    }
+
+    /// Whether the fn this file defines with the name at `n` returns an
+    /// element; `None` when the file has no such fn.
+    fn returns_el(&self, n: usize) -> Option<bool> {
+        let t = self.t;
+        let f = (0..t.len()).find(|&k| self.ident(k, "fn") && self.ident(k + 1, &t[n].text))?;
+        let (params, _) = self.fn_sig(f)?;
+        let ret = t[params].pair + 1;
+        Some(self.punct(ret, '-') && self.punct(ret + 1, '>') && self.type_head(ret + 2).is_some_and(|ty| self.is_type(ty, ELEMENT_TYPES, false)))
     }
 
     /// For a `Retype` of the field named at `i` to apply, the struct literal

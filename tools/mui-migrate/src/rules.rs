@@ -285,16 +285,16 @@ pub const TUPLES: &[Tuple] = &[
 /// Methods that build an element (old and new names): a receiver chain made of
 /// these, from a variable or a `CONSTRUCTORS` call, is a builder chain.
 pub const BUILDERS: &[&str] = &[
-    "a11y", "align", "align_self", "anchor", "animate", "animate_layout", "animate_layout_with", "animate_with", "appear", "aspect", "at",
-    "backdrop_blur", "baseline", "basis", "border", "border_align", "border_ramp", "captures_wheel", "centered_at", "clip", "corners",
-    "cursor", "disabled", "dividers", "elevation", "exclude_from_weld", "fill", "flex", "float", "focusable", "gap", "gpu_weld", "grow", "h",
-    "height", "icon_fill", "id", "inset_surface", "inset_surface_of", "insets", "join", "join_border", "justify", "label", "line_gap",
-    "match_height", "match_width", "max_size", "min_col", "min_height", "min_size", "min_width", "named", "no_border", "no_fill",
-    "no_scrollbar", "offset", "opacity", "order", "pad", "pad_xy", "pill", "pin", "placed_at", "preset", "radius", "reference_weld",
-    "reserve", "role", "scale", "scroll", "scrolled", "segmented", "shadow", "shadows", "sharp", "shrink", "size", "square", "sticky",
-    "stroke", "stroke_width", "surface_layout", "tag", "text_axis", "text_size", "text_weight", "tip", "tracks_pointer", "transition",
-    "unwelded", "w", "weld", "weld_borders", "weld_morph", "weld_quality", "weld_shape", "weld_with", "when", "width", "without_weld",
-    "wrap",
+    "a11y", "align", "align_self", "anchor", "animate", "animate_layout", "animate_layout_with", "animate_with", "appear", "apply", "area",
+    "aspect", "at", "backdrop_blur", "baseline", "basis", "border", "border_align", "border_ramp", "captures_wheel", "center",
+    "centered_at", "clip", "corners", "cursor", "delay", "disabled", "dividers", "el", "elevation", "end", "exclude_from_weld", "expand",
+    "fill", "flex", "float", "focusable", "full", "gap", "gpu_weld", "grow", "h", "height", "hold", "icon_fill", "id", "insets",
+    "inset_surface", "inset_surface_of", "into_el", "join", "join_border", "justify", "keep", "label", "line_gap", "lines", "match_height",
+    "match_width", "max_size", "min_height", "min_size", "min_width", "named", "no_border", "no_fill", "no_scrollbar", "offset", "opacity",
+    "order", "pad", "pad_xy", "pill", "pin", "placed_at", "preset", "radius", "reference_weld", "reserve", "role", "scale", "scroll",
+    "scrolled", "segmented", "shadow", "shadows", "sharp", "shrink", "size", "span", "square", "start", "sticky", "stroke", "stroke_width",
+    "surface_layout", "tag", "text_axis", "text_size", "text_weight", "tip", "tracks_pointer", "transition", "unwelded", "value_text",
+    "variant", "w", "weld", "weld_borders", "weld_morph", "weld_quality", "weld_shape", "weld_with", "when", "width", "without_weld", "wrap",
 ];
 
 /// Free functions and macros (`row![..]`) that make an element.

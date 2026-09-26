@@ -467,6 +467,12 @@ fn retype_needs_a_mui_target() {
         &with_prelude("fn f(p: &mut Input) { let pl = Plate { center, half: Point::new(w, h) }; let mut input = Input::default(); input.wheel = if n == 1 { Point::new(0.0, 30.0) } else if n == 2 { super::Point::default() } else { Point::ZERO }; p.wheel = Point::ZERO; }\n"),
         &with_prelude("fn f(p: &mut Input) { let pl = Plate { center, half: Vec2::new(w, h) }; let mut input = Input::default(); input.wheel = if n == 1 { Vec2::new(0.0, 30.0) } else if n == 2 { super::Vec2::default() } else { Vec2::ZERO }; p.wheel = Vec2::ZERO; }\n"),
     );
+    // KURV's gallery: `Input` through a test module's `use super::{Input}`, and
+    // the variable passed to a call before the write.
+    check(
+        "use mui2::prelude::{Input, Point};\nmod tests {\n    use super::{Input, Point};\n    fn t() { let mut input = Input::default(); ui.frame(root, input, 1.0); input.wheel = if n == 1 { Point::new(0.0, 30.0) } else { Point::default() }; }\n    fn u() { let mut input = super::Input::default(); input.wheel = super::Point::ZERO; }\n}\n",
+        "use mui2::prelude::{Input, Point};\nmod tests {\n    use super::{Input, Point};\n    fn t() { let mut input = Input::default(); ui.frame(root, input, 1.0); input.wheel = if n == 1 { Vec2::new(0.0, 30.0) } else { Vec2::default() }; }\n    fn u() { let mut input = super::Input::default(); input.wheel = super::Vec2::ZERO; }\n}\n",
+    );
     // An unknown receiver gets a note; an `if` without `else` is not touched.
     let out = run(&with_prelude("fn f() { self.input.wheel = Point::ZERO; }\n"));
     assert!(out.warnings.iter().any(|(_, n)| n.contains("`Input::wheel` is a `Vec2`")), "{:?}", out.warnings);
