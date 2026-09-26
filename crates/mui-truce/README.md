@@ -56,6 +56,27 @@ What the window does:
 - Cursor shapes.
 - GPU recovery: a lost device or surface is rebuilt on the next tick.
 
+## Accessibility
+
+On Linux the editor publishes its tree over AT-SPI with `accesskit_unix`,
+which needs no window handle: names, roles, values and focus reach Orca, and
+a reader's click, focus, set-value, step and text-selection requests become
+`Ui` actions. A frame that did not change the tree sends an empty update
+(`mui_access::Publisher`). Bounds are window-relative, because baseview does
+not report the child window's screen position.
+
+Windows and macOS are not wired:
+
+- Windows: `accesskit_windows::SubclassingAdapter` refuses a window that is
+  already visible, and baseview creates the child `WS_VISIBLE` before any
+  editor code runs. The plain `accesskit_windows::Adapter` needs the window
+  procedure's `WM_GETOBJECT`, and baseview has no hook for raw messages.
+  Either fix belongs in baseview: create hidden, or forward `WM_GETOBJECT`.
+- macOS: `accesskit_macos::SubclassingAdapter` over baseview's `NSView`
+  looks workable, but it cannot be built or tried from this repo's Linux CI,
+  and an untested subclass of the host's view hierarchy is a crash inside a
+  DAW. It is the next step when there is a Mac to test on.
+
 ## Example plugin
 
 `examples/gain-plugin` is a gain knob, a bypass toggle and an output meter.

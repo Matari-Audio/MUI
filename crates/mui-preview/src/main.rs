@@ -235,6 +235,8 @@ struct App {
     /// Both are `None` in a test: no event loop, no window, no adapter.
     proxy: Option<EventLoopProxy<AccessEvent>>,
     access: Option<Adapter>,
+    /// Skips the tree when a frame did not change it.
+    published: mui_access::Publisher,
 }
 
 impl App {
@@ -285,6 +287,7 @@ impl App {
             gpu: None,
             proxy: None,
             access: None,
+            published: mui_access::Publisher::default(),
         }
     }
 
@@ -552,7 +555,8 @@ impl App {
             return;
         };
         let (focus, scale) = (self.ui.focus_key(), self.ui.scale.unwrap_or(1.0));
-        a.update_if_active(|| mui_access::tree_update(scene, focus, scale));
+        let published = &mut self.published;
+        a.update_if_active(|| published.update(scene, focus, scale));
     }
 
     /// The surface behind an accesskit node id.
@@ -629,7 +633,10 @@ impl ApplicationHandler<AccessEvent> for App {
         match event.window_event {
             // Activation can land before the first frame, when `publish` has
             // no scene yet; the redraw is what gets the reader a real tree.
-            AccessWindowEvent::InitialTreeRequested => self.publish(),
+            AccessWindowEvent::InitialTreeRequested => {
+                self.published.reset();
+                self.publish();
+            }
             AccessWindowEvent::ActionRequested(r) => {
                 if let Some(key) = self.key_of(r.target_node) {
                     match r.action {

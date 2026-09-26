@@ -27,6 +27,9 @@ wgpu = { workspace = true, features = ["wgsl", "vulkan", "gles", "metal", "dx12"
 # baseview does not own an X11 selection; arboard keeps one alive.
 [target.'cfg(target_os = "linux")'.dependencies]
 arboard = { version = "3.6", default-features = false }
+# The editor's accessibility tree over AT-SPI; needs no window handle.
+accesskit_unix = "0.22"
+mui-access.workspace = true
 
 [dev-dependencies]
 truce.workspace = true

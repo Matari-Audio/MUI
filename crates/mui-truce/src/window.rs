@@ -16,6 +16,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
+use a11y::A11y;
 use baseview::{
     Event, EventStatus, MouseButton, MouseCursor, MouseEvent, Window, WindowEvent, WindowHandle,
     WindowHandler, WindowOpenOptions, WindowScalePolicy,
@@ -110,7 +111,9 @@ pub fn open<V: View>(
         (f64::from(size.1) * initial_scale).round() as u32,
     );
     Window::open_parented(parent, options, move |_: &mut Window| {
-        Handler::new(shared, requests, physical, initial_scale)
+        let mut handler = Handler::new(shared, requests, physical, initial_scale);
+        handler.a11y = Some(A11y::new());
+        handler
     })
 }
 
@@ -134,6 +137,8 @@ pub(crate) struct Handler<V> {
     applied_cursor: Option<MouseCursor>,
     /// The current scene is not on screen yet: paint it.
     unpainted: bool,
+    /// A screen reader's side; only a real window has one.
+    a11y: Option<A11y>,
     driver: Driver,
 }
 
@@ -175,6 +180,7 @@ impl<V: View> Handler<V> {
             gpu_retry_at: now,
             applied_cursor: None,
             unpainted: true,
+            a11y: None,
             driver: Driver {
                 requests,
                 pointer: PointerInput::default(),
@@ -239,7 +245,24 @@ impl<V: View> Handler<V> {
         // `Arc<ResolvedScene>` if it shows in a profile.
         let scene = {
             let mut s = lock(&self.shared);
-            self.unpainted |= self.driver.advance(&mut s, now);
+            let a11y = self.a11y.as_mut();
+            if let Some(a11y) = &a11y
+                && a11y.wants_tree()
+            {
+                self.driver.dirty = true;
+            }
+            if let Some(a11y) = a11y
+                && a11y.apply(&mut s.ui)
+            {
+                self.driver.dirty = true;
+            }
+            let fresh = self.driver.advance(&mut s, now);
+            if let Some(a11y) = self.a11y.as_mut()
+                && (fresh || a11y.wants_tree())
+            {
+                a11y.publish(&s.ui);
+            }
+            self.unpainted |= fresh;
             if self.unpainted && self.gpu.is_some() {
                 s.ui.scene().cloned()
             } else {
@@ -292,6 +315,11 @@ impl<V: View> Handler<V> {
 
     pub(crate) fn on_event_inner(&mut self, event: &Event) -> EventStatus {
         let status = self.driver.on_event(event);
+        if let (Some(a11y), Event::Window(e @ (WindowEvent::Focused | WindowEvent::Unfocused))) =
+            (self.a11y.as_mut(), event)
+        {
+            a11y.focus(matches!(e, WindowEvent::Focused));
+        }
         // A key nothing here has focus for goes back to the host too, so
         // Space still starts its transport.
         // ponytail: a global shortcut read from `Ui::shortcuts` also reaches
@@ -708,6 +736,7 @@ fn open_gpu(window: &Window, size: (u32, u32)) -> Result<Host, String> {
     .map_err(|_| "panic while creating GPU resources".to_owned())?
 }
 
+mod a11y;
 mod surface;
 #[cfg(test)]
 mod tests;
