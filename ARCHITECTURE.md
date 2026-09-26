@@ -54,7 +54,7 @@ El tree  (row! / col! / stack! / grid! / fits!, Paints fills, presets merged
    |     carve  -> boolean(outline, a .cut/.keep child's shape, Difference |
    |               Intersection); the child is placed by layout and never paints
    |     shell  -> inset(previous outline, d)        exact or parallel offset
-   |     text   -> shaped run from the TextCache      mui-text, kept across frames
+   |     text   -> shaped run the Resolver keeps      mui-text, kept across frames
    |               wrapped to the room its parent has, one Painted a line,
    |               keyed on (string, size, weight) and carrying the face's
    |               normalized coords so the renderer draws the instance that

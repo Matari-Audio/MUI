@@ -2,6 +2,48 @@
 
 Every entry is `old -> new`. Crates are listed in dependency order.
 
+## v0.4 (DSL v2)
+
+The vocabulary in [`docs/DSL-V2.md`](docs/DSL-V2.md) is applied by a tool.
+Run it over your code before fixing anything by hand:
+
+```sh
+cargo run --release --manifest-path tools/mui-migrate/Cargo.toml -- --dry-run --diff path/to/crate
+cargo run --release --manifest-path tools/mui-migrate/Cargo.toml -- path/to/crate
+```
+
+It rewrites `.rs` files, the Rust code blocks in doc comments and `.md`
+files (`--no-docs` skips them) and moved crates in `Cargo.toml`. The widget
+renames are opt-in: add `--widgets`. A second run changes nothing. See
+[`tools/mui-migrate/README.md`](tools/mui-migrate/README.md).
+
+It prints `file:line: note` where a human has to look:
+
+- `.gpu_weld(w)` / `.reference_weld(w)` become `.weld(w)`; choose the backend
+  with `SceneSpec::weld_backend(WeldBackend::..)` (or `Ui::gpu_welding`).
+- `resolve_scene_cached` / `_animated` / `_retained`: keep one `Resolver`
+  across frames and call `resolve` or `resolve_animated(&spec, glide, prev)`.
+- `Bridge::bind`: the closure now receives the id; pass it to the widget.
+- Bare `Role` variants (`Surface`, `Primary`, ...) are qualified only in files
+  whose one glob import is mui's; with another glob (`truce::prelude::*`) write
+  `Role::X` yourself. `Role::*` left the prelude.
+- A local item named like a new name (`block`, `col`, `stack`, `resolve`, ...)
+  collides with the prelude; rename yours.
+
+Changes the tool cannot express:
+
+- `TextCache` -> `Resolver`. `recycle`, `layout_stats`, `len` and `is_empty`
+  are on the `Resolver`; its weld cache is `Resolver::welds`.
+- `Style` fields that may be unset are `Option<T>` (`fill`, `stroke`, `radius`,
+  `corners`, `shadow`, `shells`, `union`, `mask`, `backdrop_blur`, ...).
+  Build styles with the builder
+  (`Style::default().fill(Role::Raised)`); readers write `s.fill.as_ref()`
+  or `unwrap_or_default()`. Watch `s.fill.is_none()`: it now asks whether the
+  field is unset, not whether it is `Fill::None`.
+- `material_symbols::codepoint("home")` -> `mui_symbols::sym::HOME` (crate
+  `mui-symbols`; `codepoint(name)` stays there for runtime names).
+- A dangling cross-reference is `SceneError::MissingId { what, id }`.
+
 ## mui-text
 
 Fonts are a type now. `Font::new` parses the bytes once and returns an error

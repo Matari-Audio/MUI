@@ -217,3 +217,18 @@ col![
 
 | old | new | why |
 |---|---|---|
+| `'/'` checks by hand | `Id::is_named(&str)` (associated fn), `Id::runtime(name)` for reserved ids | the rule is checked on keys that are `&str` (a11y tree, motion bridge), so no `Id` has to be built first |
+| `glide` callback key | stays `&str` | it is handed the stored key; wrapping it in an `Id` per node per frame buys nothing |
+| `resolve_scene_animated(spec, dt)` / `_retained` | `Resolver::resolve_animated(&spec, glide, prev)` | the animated path needs the glide callback and the previous scene, not a `dt` |
+| `TextCache` | `Resolver` (`recycle`, `layout_stats`, `len`, `is_empty` delegate); the text cache is crate-private | one public cache type; `Resolver::welds` stays public for weld stats |
+| `.without_weld()` | `Weld::off()` = fill and border both `Keep`; `.weld(Weld::off())` clears the weld | an off weld is a value, not a separate verb |
+| `.gpu_weld(w)` backend | only `SceneSpec::weld_backend(..)` (and `Ui::gpu_welding` in `mui`) | principle 8 |
+| `material_symbols::codepoint("10k")` | `sym::_10K` | a name starting with a digit gets a `_` prefix to be an identifier |
+| dangling-ref errors | `SceneError::MissingId { what, id }` | one variant for `join_border`, `inset_surface_of`, border-ramp anchors |
+| widget renames | `mui-migrate --widgets` (opt-in); docs mode on by default, `--no-docs` turns it off | widget rules touch common names; doc code blocks must migrate with the code |
+| `.disabled(bool)` rewrite | only on builder chains in mui files | `Palette::disabled(color)` has the same shape |
+| size budget | `Element` ≤ 360 B (was 352), `El` ≤ 688 B (was 680) | `text_role`, `a11y` and the `segmented` flag |
+| playground DSL `leaf` / `join` | `block` / `segmented` | the text DSL follows the Rust names |
+| `.cut`/`.keep` on a leaf | pushing a child onto a `block` turns it into a `stack` of its own size | covers `cut`, `keep` and any push, no wrapper node |
+| motion-bridge key names | `" "` stays `Key::Space`, one char is `Key::Char`, else `Key::from_name` | keeps the editor's existing spelling |
+| material verbs in `mui-material` | still on `Styled` in mui-scene | the crate split is a structure change outside this pass |
