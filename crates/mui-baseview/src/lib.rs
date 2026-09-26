@@ -175,13 +175,13 @@ impl<V: View> Handler<V> {
         // A hidden or detached editor cannot present, and on Windows this is
         // the host's GUI thread: a blocking present there freezes the host.
         let handle = window.raw_window_handle();
-        if truce_gui_utils::should_skip_frame(handle) {
+        if platform::should_skip_frame(handle) {
             return;
         }
         // macOS: keep the child pinned to the parent's top as it resizes.
         // A top-level window's view is its content view: leave it be.
         if self.parented {
-            truce_gui_utils::reanchor_to_superview_top(handle);
+            platform::reanchor_to_superview_top(handle);
         }
         let now = Instant::now();
         let size = self.driver.size();
@@ -514,6 +514,7 @@ fn open_gpu(window: &Window, size: (u32, u32)) -> Result<Host, String> {
 }
 
 mod a11y;
+mod platform;
 mod surface;
 #[cfg(test)]
 mod tests;

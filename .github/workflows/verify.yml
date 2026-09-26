@@ -67,4 +67,8 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       # fmt, clippy and wasm are platform-independent and already gated on Linux.
-      - run: cargo test --workspace --all-features --locked
+      # mui-baseview's `keyboard-capture` needs a baseview-truce with
+      # `Window::set_keyboard_capture`, which the locked stock one lacks: the
+      # window crates run on their default features.
+      - run: cargo test --workspace --all-features --locked --exclude mui-baseview --exclude mui-truce
+      - run: cargo test -p mui-baseview -p mui-truce --locked
