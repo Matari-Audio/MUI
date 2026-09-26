@@ -10,7 +10,7 @@
 //! - `MacroHead { old, new, head }`  `old![a; ..]` -> `new![<head with $1 = a>; ..]`
 //! - `Call { chain, to, gate, needs }` call-shape rewrite: match `.m(args)` (or a
 //!   chain of them) with arg patterns, replace with template `to` (`$1`.. are
-//!   captured args in order, `$!1` is the logical negation of `$1`). `needs`
+//!   the `Any`/`Has` args in order, `$!1` is the logical negation of `$1`). `needs`
 //!   names idents the output uses so a missing import is warned about.
 //! - `DropImport { name }`           remove `name` from `use <mui>::..` lists
 //! - `Qualify { names, prefix }`     bare glob-imported `Name` -> `prefix` + `Name`
@@ -46,6 +46,7 @@ pub enum Rule {
     Method { old: &'static str, new: &'static str, gate: Gate },
     Function { old: &'static str, new: &'static str },
     Type { old: &'static str, new: &'static str },
+    #[allow(dead_code)] // no plain macro renames in the spec yet
     Macro { old: &'static str, new: &'static str },
     MacroHead { old: &'static str, new: &'static str, head: &'static str },
     Call { chain: &'static [(&'static str, &'static [Arg])], to: &'static str, gate: Gate, needs: &'static [&'static str] },
