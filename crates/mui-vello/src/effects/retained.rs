@@ -4,7 +4,8 @@ use crate::{
     kurbo::{Affine, Rect, Shape as _},
     Cache, Canvas as _,
 };
-use mui_scene::{ExternalWeld, Layer, Painted, ResolvedScene};
+use mui_geometry::PathCommand;
+use mui_scene::{ExternalWeld, Layer, Painted, ResolvedScene, ShadowKind};
 use std::collections::HashMap;
 use std::sync::Arc;
 use vello::peniko::{self, Blob, ImageAlphaType, ImageData, ImageFormat};
@@ -42,8 +43,13 @@ pub struct GpuRenderer {
     /// Bumped by anything that changes which image an entry samples.
     mapping: (u64, u64),
     local_mapping: u64,
-    /// The encoding matches `retained` under `transform`.
+    /// The target holds `retained` under `transform`.
     valid: bool,
+    /// The encoding is the whole frame, not a damaged corner of it.
+    whole: bool,
+    /// Where a partial frame renders before it is copied into `target`.
+    // ponytail: grows only, like `target`.
+    patch: Option<wgpu::Texture>,
     /// A texture this renderer samples changed since the last render.
     stale: bool,
     /// The view the target was last presented to.
@@ -57,6 +63,7 @@ pub struct GpuRenderer {
 /// dragged smaller and back allocates nothing.
 // ponytail: never shrinks; the largest size seen stays allocated.
 struct Target {
+    texture: wgpu::Texture,
     view: wgpu::TextureView,
     bind: wgpu::BindGroup,
     size: [u32; 2],
@@ -265,6 +272,92 @@ fn visible(e: &ExternalWeld, xf: Affine, size: [u32; 2]) -> bool {
     r.x1 > 0. && r.y1 > 0. && r.x0 < f64::from(size[0]) && r.y0 < f64::from(size[1])
 }
 
+fn render(
+    vello: &mut vello::Renderer,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    scene: &vello::Scene,
+    view: &wgpu::TextureView,
+    [width, height]: [u32; 2],
+) -> Result<(), Error> {
+    vello
+        .render_to_texture(
+            device,
+            queue,
+            scene,
+            view,
+            &vello::RenderParams {
+                base_color: peniko::Color::TRANSPARENT,
+                width,
+                height,
+                antialiasing_method: vello::AaConfig::Area,
+            },
+        )
+        .map_err(|e| Error::Render(e.to_string()))
+}
+
+/// What changed since the frame the target holds.
+enum Change {
+    None,
+    /// Only `[x, y, w, h]`, in device pixels.
+    Part([u32; 4]),
+    Full,
+}
+
+/// A change past this share of the target renders the whole frame: the
+/// render is mostly per pixel, and the copy would come on top.
+const PARTIAL: f64 = 0.5;
+
+/// The empty box: what `Rect::union` leaves unchanged.
+const NOTHING: Rect = Rect::new(
+    f64::INFINITY,
+    f64::INFINITY,
+    f64::NEG_INFINITY,
+    f64::NEG_INFINITY,
+);
+
+/// Everything `p` can paint on, in scene units, or `None` when that is not
+/// bounded short of the frame: a backdrop reads all under it, a weld may
+/// animate, and an inset shadow fills its clip, which it does not carry.
+/// Clip and layer bookkeeping paints nothing of its own.
+fn reach(p: &Painted) -> Option<Rect> {
+    let path = || {
+        let mut r = NOTHING;
+        for c in &p.path.commands {
+            match *c {
+                PathCommand::MoveTo(a) | PathCommand::LineTo(a) => r = r.union_pt((a.x, a.y)),
+                PathCommand::CubicTo(a, b, c) => {
+                    for q in [a, b, c] {
+                        r = r.union_pt((q.x, q.y));
+                    }
+                }
+                PathCommand::ArcTo(a) => {
+                    let d = 2. * a.radius;
+                    r = r.union(Rect::from_center_size((a.center.x, a.center.y), (d, d)));
+                }
+                PathCommand::Close => {}
+            }
+        }
+        r
+    };
+    let r = match p.layer {
+        Layer::Backdrop | Layer::External | Layer::Shadow(ShadowKind::Inset) => return None,
+        Layer::Blend { .. } | Layer::Unblend | Layer::Unclip => return Some(NOTHING),
+        Layer::Clip | Layer::Mask => path(),
+        // Vello's blurred rect stops at 2.5 standard deviations.
+        Layer::Shadow(_) => path().inflate(3. * p.blur, 3. * p.blur),
+        _ => match &p.text {
+            // As `replay` culls a run: its box is an estimate.
+            Some(t) => {
+                let pad = p.width + f64::from(t.size);
+                crate::paint_box(p, &crate::kurbo::BezPath::new()).inflate(pad, pad)
+            }
+            None => path().inflate(p.width, p.width),
+        },
+    };
+    (r == NOTHING || [r.x0, r.y0, r.x1, r.y1].iter().all(|v| v.is_finite())).then_some(r)
+}
+
 impl GpuRenderer {
     pub async fn new(
         device: &wgpu::Device,
@@ -313,21 +406,25 @@ impl GpuRenderer {
             mapping: (0, 0),
             local_mapping: 0,
             valid: false,
+            whole: false,
+            patch: None,
             stale: false,
             presented: None,
         })
     }
 
     fn target(device: &wgpu::Device, passes: &Passes, size: [u32; 2]) -> Target {
-        let view = texture(
+        use wgpu::TextureUsages as U;
+        let texture = texture(
             device,
             "MUI frame",
             size,
-            wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
-        )
-        .create_view(&Default::default());
+            U::STORAGE_BINDING | U::TEXTURE_BINDING | U::COPY_DST,
+        );
+        let view = texture.create_view(&Default::default());
         Target {
             bind: bind(device, &passes.layout, &view, &passes.idle),
+            texture,
             view,
             size,
         }
@@ -524,35 +621,87 @@ impl GpuRenderer {
         }
 
         let mapping = (self.effects.mapping_revision(), self.local_mapping);
-        let needs_encode = overlay.is_some()
+        let change = if overlay.is_some()
             || !self.valid
             || self.transform != Some(xf)
             || self.mapping != mapping
-            || self.retained != resolved.paint;
-        if needs_encode {
-            self.valid = false; // a partial encoding must never be reused
-            self.presented = None;
-            self.encode(resolved, xf, overlay)?;
-            stats.encoded_scenes += 1;
-        }
-        if needs_encode || self.stale {
-            self.vello
-                .render_to_texture(
+        {
+            Change::Full
+        } else {
+            match self.damage(&resolved.paint, xf) {
+                // A host texture that changed may be sampled anywhere, and
+                // a partial encoding cannot render the frame again.
+                Change::Part(_) if self.stale => Change::Full,
+                Change::None if self.stale && !self.whole => Change::Full,
+                c => c,
+            }
+        };
+        let mut copy = None;
+        match change {
+            Change::Full => {
+                self.valid = false; // a partial encoding must never be reused
+                self.presented = None;
+                self.encode(resolved, xf, overlay, None)?;
+                stats.encoded_scenes += 1;
+            }
+            Change::Part([.., 0] | [.., 0, _]) => {
+                // Changed only off the target.
+                self.retained.clone_from(&resolved.paint);
+            }
+            Change::Part(r @ [.., w, h]) => {
+                self.valid = false;
+                self.presented = None;
+                self.encode(resolved, xf, overlay, Some(r))?;
+                stats.encoded_scenes += 1;
+                let limit = self.target.size;
+                if self
+                    .patch
+                    .as_ref()
+                    .is_none_or(|t| t.width() < w || t.height() < h)
+                {
+                    let have = self
+                        .patch
+                        .as_ref()
+                        .map_or([0, 0], |t| [t.width(), t.height()]);
+                    let grown =
+                        [0, 1].map(|i| [w, h][i].max(have[i]).next_multiple_of(256).min(limit[i]));
+                    use wgpu::TextureUsages as U;
+                    self.patch = Some(texture(
+                        &self.device,
+                        "MUI damage",
+                        grown,
+                        U::STORAGE_BINDING | U::COPY_SRC,
+                    ));
+                }
+                let patch = self.patch.as_ref().expect("allocated above");
+                let view = patch.create_view(&Default::default());
+                render(
+                    &mut self.vello,
                     &self.device,
                     &self.queue,
                     &self.scene,
-                    &self.target.view,
-                    &vello::RenderParams {
-                        base_color: peniko::Color::TRANSPARENT,
-                        width: size[0],
-                        height: size[1],
-                        antialiasing_method: vello::AaConfig::Area,
-                    },
-                )
-                .map_err(|e| Error::Render(e.to_string()))?;
+                    &view,
+                    [w, h],
+                )?;
+                stats.renders += 1;
+                stats.rendered_pixels += u64::from(w) * u64::from(h);
+                copy = Some(r);
+            }
+            Change::None => {}
+        }
+        if matches!(change, Change::Full) || (self.stale && copy.is_none()) {
+            render(
+                &mut self.vello,
+                &self.device,
+                &self.queue,
+                &self.scene,
+                &self.target.view,
+                size,
+            )?;
             self.stale = false;
             self.presented = None;
             stats.renders += 1;
+            stats.rendered_pixels += u64::from(size[0]) * u64::from(size[1]);
         }
         if self.presented.as_ref() != Some(target) {
             let mut encoder = self
@@ -560,6 +709,20 @@ impl GpuRenderer {
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("MUI present"),
                 });
+            if let (Some([x, y, w, h]), Some(patch)) = (copy, &self.patch) {
+                encoder.copy_texture_to_texture(
+                    patch.as_image_copy(),
+                    wgpu::TexelCopyTextureInfo {
+                        origin: wgpu::Origin3d { x, y, z: 0 },
+                        ..self.target.texture.as_image_copy()
+                    },
+                    wgpu::Extent3d {
+                        width: w,
+                        height: h,
+                        depth_or_array_layers: 1,
+                    },
+                );
+            }
             self.passes.draw(
                 &mut encoder,
                 &self.passes.present,
@@ -574,30 +737,116 @@ impl GpuRenderer {
         Ok(())
     }
 
+    /// What `paint` changed of the frame the target holds: the entries
+    /// between the run it shares with `retained` at the front and the one at
+    /// the back, old and new, as the device box they can paint on -- padded
+    /// past the anti-aliasing and out to Vello's 16 px tiles, so each tile
+    /// covers what it did in the whole frame.
+    fn damage(&self, paint: &[Painted], xf: Affine) -> Change {
+        let old = &self.retained[..];
+        let head = old.iter().zip(paint).take_while(|(a, b)| a == b).count();
+        if head == old.len() && head == paint.len() {
+            return Change::None;
+        }
+        // Any backdrop may blur what changed, and a part renders none.
+        if paint.iter().any(|p| p.layer == Layer::Backdrop) {
+            return Change::Full;
+        }
+        let tail = old[head..]
+            .iter()
+            .rev()
+            .zip(paint[head..].iter().rev())
+            .take_while(|(a, b)| a == b)
+            .count();
+        let mut r = NOTHING;
+        for list in [old, paint] {
+            for (i, p) in list.iter().enumerate().take(list.len() - tail).skip(head) {
+                let Some(b) = reach(p) else {
+                    return Change::Full;
+                };
+                r = r.union(b);
+                // A layer's blend or opacity reaches everything inside it.
+                if matches!(p.layer, Layer::Blend { .. }) {
+                    let mut depth = 0;
+                    for q in &list[i..] {
+                        let Some(b) = reach(q) else {
+                            return Change::Full;
+                        };
+                        r = r.union(b);
+                        match q.layer {
+                            Layer::Blend { .. } => depth += 1,
+                            Layer::Unblend => {
+                                depth -= 1;
+                                if depth == 0 {
+                                    break;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+        if !(r.x0 < r.x1 && r.y0 < r.y1) {
+            return Change::Part([0; 4]);
+        }
+        let d = xf.transform_rect_bbox(r).inflate(2., 2.);
+        let [w, h] = self.size.map(f64::from);
+        let snap = |v: f64, up: bool, max: f64| {
+            let t = v / 16.;
+            (if up { t.ceil() } else { t.floor() } * 16.).clamp(0., max)
+        };
+        let (x0, y0) = (snap(d.x0, false, w), snap(d.y0, false, h));
+        let (x1, y1) = (snap(d.x1, true, w), snap(d.y1, true, h));
+        if (x1 - x0) * (y1 - y0) > PARTIAL * w * h {
+            return Change::Full;
+        }
+        Change::Part([x0, y0, x1 - x0, y1 - y0].map(|v| v as u32))
+    }
+
+    /// The frame, or with `part` only what reaches `[x, y, w, h]` of it,
+    /// moved to the corner. A part never holds a backdrop or a weld.
     fn encode<F: FnOnce(&mut Classic<'_>)>(
         &mut self,
         resolved: &ResolvedScene,
         xf: Affine,
         overlay: Option<F>,
+        part: Option<[u32; 4]>,
     ) -> Result<(), Error> {
         let size = self.size;
         self.paths.resize(resolved.paint.len());
         // Backdrops first: each is a render of its own that the frame samples.
         let mut blurred = Vec::new();
-        let mut k = 0;
-        for (i, p) in resolved.paint.iter().enumerate() {
-            if p.layer == Layer::Backdrop && p.blur.is_finite() && p.blur > 0.0 {
-                let outline = self.paths.get(i, &p.path)?.clone();
-                blurred.push(self.backdrop(k, &resolved.paint[..i], p.blur, &outline, xf)?);
-                k += 1;
+        if part.is_none() {
+            let mut k = 0;
+            for (i, p) in resolved.paint.iter().enumerate() {
+                if p.layer == Layer::Backdrop && p.blur.is_finite() && p.blur > 0.0 {
+                    let outline = self.paths.get(i, &p.path)?.clone();
+                    blurred.push(self.backdrop(k, &resolved.paint[..i], p.blur, &outline, xf)?);
+                    k += 1;
+                }
             }
+            self.backdrops.truncate(k);
         }
-        self.backdrops.truncate(k);
 
+        let (size, to_device, cull) = match part.map(|r| r.map(f64::from)) {
+            Some([x, y, w, h]) => (
+                [w as u32, h as u32],
+                Affine::translate((-x, -y)) * xf,
+                Some(
+                    xf.inverse()
+                        .transform_rect_bbox(Rect::new(x, y, x + w, y + h)),
+                ),
+            ),
+            None => (size, xf, None),
+        };
         self.scene.reset();
         let mut canvas = Classic::new(&mut self.scene, &mut self.cache, &self.textures, size);
-        canvas.begin_frame();
-        canvas.set_transform(xf);
+        // A part is no frame: what it culled must not age out of the cache.
+        if part.is_none() {
+            canvas.begin_frame();
+        }
+        canvas.set_transform(to_device);
         let mut blurred = blurred.into_iter();
         for (i, p) in resolved.paint.iter().enumerate() {
             match p.layer {
@@ -605,7 +854,7 @@ impl GpuRenderer {
                     let e = resolved
                         .external_weld(&p.key)
                         .ok_or_else(|| Error::Missing(p.key.to_string()))?;
-                    if !visible(e, xf, size) {
+                    if !visible(e, xf, self.size) {
                         continue;
                     }
                     let image = self
@@ -643,9 +892,15 @@ impl GpuRenderer {
                     canvas.reset_paint_transform();
                 }
                 _ => {
-                    if !crate::layered(&mut canvas, p) {
-                        crate::one(&mut canvas, p, self.paths.get(i, &p.path)?)?;
+                    if crate::layered(&mut canvas, p) {
+                        continue;
                     }
+                    // Clips stay: the pops that close them are not culled.
+                    let off = |c: Rect| reach(p).is_some_and(|r| !r.overlaps(c));
+                    if p.layer != Layer::Clip && cull.is_some_and(off) {
+                        continue;
+                    }
+                    crate::one(&mut canvas, p, self.paths.get(i, &p.path)?)?;
                 }
             }
         }
@@ -656,6 +911,7 @@ impl GpuRenderer {
             self.transform = Some(xf);
             self.mapping = (self.effects.mapping_revision(), self.local_mapping);
             self.valid = true;
+            self.whole = part.is_none();
         }
         Ok(())
     }
@@ -711,20 +967,14 @@ impl GpuRenderer {
             self.local_mapping += 1;
         }
         let b = &self.backdrops[k];
-        self.vello
-            .render_to_texture(
-                &self.device,
-                &self.queue,
-                &self.prefix,
-                &b.prefix,
-                &vello::RenderParams {
-                    base_color: peniko::Color::TRANSPARENT,
-                    width: size[0],
-                    height: size[1],
-                    antialiasing_method: vello::AaConfig::Area,
-                },
-            )
-            .map_err(|e| Error::Render(e.to_string()))?;
+        render(
+            &mut self.vello,
+            &self.device,
+            &self.queue,
+            &self.prefix,
+            &b.prefix,
+            size,
+        )?;
         let sigma = (sigma_device / scale) as f32;
         let radius = (3. * sigma).ceil() as i32;
         for (pass, dir) in [[1i32, 0], [0, 1]].into_iter().enumerate() {
