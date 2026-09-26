@@ -290,3 +290,211 @@ fn a_removed_weld_frees_its_texture() {
     }
     assert_eq!(last.resident_texture_bytes, 0, "the weld texture stayed");
 }
+
+/// Most of its paint stays put from one call to the next: buttons with
+/// shadows, strokes and labels, a translucent clipped panel at `panel`
+/// opacity, and a floating tooltip when `tip`.
+fn board(hot: Option<usize>, tip: bool, panel: f32, bg: Role) -> ResolvedScene {
+    let button = |i: usize| {
+        overlay([text(format!("B{i}")).text_size(12.).fill(Role::Ink)])
+            .size(60., 28.)
+            .radius(8.)
+            .fill(if hot == Some(i) {
+                Role::Danger
+            } else {
+                Role::Primary
+            })
+            .stroke(Role::Ink)
+            .stroke_width(1.)
+            .shadow(Shadow::soft(4.))
+            .id(format!("b{i}"))
+    };
+    let panel = overlay([leaf(200., 30.).fill(Role::Success).offset(-20., 20.)])
+        .size(150., 60.)
+        .radius(12.)
+        .clip()
+        .fill(Role::Surface)
+        .opacity(panel)
+        .id("panel");
+    let mut kids = vec![column([
+        row((0..4).map(button)).gap(10.).fill(Gradient::linear(
+            100.,
+            [(0., Role::Surface), (1., Role::Warning)],
+        )),
+        panel,
+    ])
+    .gap(12.)
+    .pad(10.)];
+    if tip {
+        kids.push(
+            overlay([text("a tip").text_size(11.).fill(Role::Ink)])
+                .size(60., 20.)
+                .radius(4.)
+                .fill(Role::Raised)
+                .offset(70., 44.)
+                .float()
+                .id("tip"),
+        );
+    }
+    let mut spec = SceneSpec::new(overlay(kids).fill(bg).id("root")).offered(Size::new(320., 200.));
+    // One face, as an app holds it: a fresh `Font` is a different font.
+    static FONT: std::sync::OnceLock<Font> = std::sync::OnceLock::new();
+    spec.font = Some(
+        FONT.get_or_init(|| Font::new(epaint_default_fonts::HACK_REGULAR).unwrap())
+            .clone(),
+    );
+    resolve_scene(&spec).unwrap()
+}
+
+/// `after` rendered over `before`'s frame, and by a renderer that never saw
+/// `before`: both targets' pixels, and the stats of the changed frame.
+fn damaged(
+    before: &ResolvedScene,
+    after: &ResolvedScene,
+) -> Option<(Vec<u8>, Vec<u8>, mui_vello::effects::EffectStats)> {
+    damaged_at(before, after, Affine::IDENTITY)
+}
+
+fn damaged_at(
+    before: &ResolvedScene,
+    after: &ResolvedScene,
+    xf: Affine,
+) -> Option<(Vec<u8>, Vec<u8>, mui_vello::effects::EffectStats)> {
+    let (device, queue) = device()?;
+    let out = readable(&device);
+    let view = out.create_view(&Default::default());
+    let mut r = pollster::block_on(hybrid(&device, &queue));
+    r.render(before, xf, &view).unwrap();
+    let stats = r.render(after, xf, &view).unwrap();
+    let part = pixels(&device, &queue, &out);
+    let mut fresh = pollster::block_on(hybrid(&device, &queue));
+    fresh.render(after, xf, &view).unwrap();
+    Some((part, pixels(&device, &queue, &out), stats))
+}
+
+fn same_pixels(part: &[u8], whole: &[u8]) {
+    let off = part.iter().zip(whole).filter(|(a, b)| a != b).count();
+    let worst = part
+        .iter()
+        .zip(whole)
+        .map(|(a, b)| a.abs_diff(*b))
+        .max()
+        .unwrap_or(0);
+    assert_eq!(
+        off, 0,
+        "{off} channels differ from a whole render, by up to {worst}"
+    );
+}
+
+const AREA: u64 = SIZE[0] as u64 * SIZE[1] as u64;
+
+/// One hovered button re-renders the box around it -- shadow, stroke and
+/// label included -- and the frame matches a render of the whole.
+#[test]
+fn a_hover_renders_only_its_box_and_matches_a_whole_render() {
+    // A fractional scale puts the edges between pixels, as on a HiDPI host.
+    for xf in [Affine::IDENTITY, Affine::scale(1.37)] {
+        let Some((part, whole, stats)) = damaged_at(
+            &board(None, false, 0.6, Role::Background),
+            &board(Some(1), false, 0.6, Role::Background),
+            xf,
+        ) else {
+            return;
+        };
+        assert_eq!((stats.encoded_scenes, stats.renders), (1, 1));
+        assert!(
+            stats.rendered_pixels < AREA / 4,
+            "{}",
+            stats.rendered_pixels
+        );
+        same_pixels(&part, &whole);
+    }
+}
+
+/// A float appended to the list, and taken away again, is damage too.
+#[test]
+fn a_tooltip_coming_and_going_renders_only_its_box() {
+    let (plain, tip) = (
+        board(None, false, 0.6, Role::Background),
+        board(None, true, 0.6, Role::Background),
+    );
+    for (before, after) in [(&plain, &tip), (&tip, &plain)] {
+        let Some((part, whole, stats)) = damaged(before, after) else {
+            return;
+        };
+        assert!(
+            stats.rendered_pixels < AREA / 4,
+            "{}",
+            stats.rendered_pixels
+        );
+        same_pixels(&part, &whole);
+    }
+}
+
+/// An opacity layer that changes repaints everything inside it, clipped
+/// children included, and nothing else.
+#[test]
+fn a_fading_layer_renders_what_it_holds() {
+    let Some((part, whole, stats)) = damaged(
+        &board(None, false, 0.6, Role::Background),
+        &board(None, false, 0.3, Role::Background),
+    ) else {
+        return;
+    };
+    assert!(
+        stats.rendered_pixels < AREA / 2,
+        "{}",
+        stats.rendered_pixels
+    );
+    same_pixels(&part, &whole);
+}
+
+/// A change to most of the frame renders all of it, as does the first
+/// frame and one after a resize.
+#[test]
+fn big_changes_the_first_frame_and_a_resize_render_everything() {
+    let Some((device, queue)) = device() else {
+        return;
+    };
+    let out = readable(&device);
+    let view = out.create_view(&Default::default());
+    let mut r = pollster::block_on(hybrid(&device, &queue));
+    let a = board(None, false, 0.6, Role::Background);
+    let first = r.render(&a, Affine::IDENTITY, &view).unwrap();
+    assert_eq!(first.rendered_pixels, AREA);
+    let b = board(None, false, 0.6, Role::Surface);
+    assert_eq!(
+        r.render(&b, Affine::IDENTITY, &view)
+            .unwrap()
+            .rendered_pixels,
+        AREA
+    );
+    r.resize([SIZE[0], SIZE[1] - 8]).unwrap();
+    let c = board(Some(0), false, 0.6, Role::Surface);
+    let resized = r.render(&c, Affine::IDENTITY, &view).unwrap();
+    assert_eq!(resized.rendered_pixels, AREA - u64::from(SIZE[0]) * 8);
+}
+
+/// A backdrop blurs whatever is under it, so no change is local to it.
+#[test]
+fn a_change_under_a_backdrop_renders_everything() {
+    let glass = |c: Color| {
+        let root = stack![
+            leaf(40., 40.).fill(Fill::Color(c)).id("swatch"),
+            leaf(100., 100.)
+                .backdrop_blur(4.)
+                .offset(200., 0.)
+                .id("glass"),
+        ]
+        .id("root");
+        resolve_scene(&SceneSpec::new(root).offered(Size::new(320., 200.))).unwrap()
+    };
+    let Some((part, whole, stats)) = damaged(
+        &glass(Color::srgb(1., 0., 0.)),
+        &glass(Color::srgb(0., 0., 1.)),
+    ) else {
+        return;
+    };
+    assert_eq!(stats.rendered_pixels, AREA);
+    same_pixels(&part, &whole);
+}

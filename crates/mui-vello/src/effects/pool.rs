@@ -31,6 +31,9 @@ pub struct EffectStats {
     /// Vello render passes recorded: 0 on a frame that left the target as
     /// the previous one did.
     pub renders: u64,
+    /// The pixels those renders drew of the frame: all of it, or the box
+    /// around what changed.
+    pub rendered_pixels: u64,
     pub resident_texture_bytes: u64,
     pub peak_texture_bytes: u64,
 }
