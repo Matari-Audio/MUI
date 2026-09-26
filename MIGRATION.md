@@ -36,8 +36,28 @@ It prints `file:line: note` where a human has to look:
 
 Changes the tool cannot express:
 
-- `TextCache` -> `Resolver`. `recycle`, `layout_stats`, `len` and `is_empty`
-  are on the `Resolver`; its weld cache is `Resolver::welds`.
+- `TextCache` -> `Resolver`. `recycle` and `layout_stats` are on the
+  `Resolver`, `len` is `text_runs()` (`is_empty` is gone); its weld cache is
+  `Resolver::welds`. `Resolver::resolve` returns `&ResolvedScene` and keeps
+  it for the next call's memo reuse: `.clone()` one you hold across calls.
+- `Element`'s switches are one `flags: u16`: `e.focusable`, `e.disabled`,
+  `e.captures_wheel`, `e.tracks_pointer`, `e.baseline`, `e.segmented`,
+  `e.weld_excluded`, `e.scroll_bar_off` -> `e.has(Element::FOCUSABLE)` (and
+  `DISABLED`, `CAPTURES_WHEEL`, `TRACKS_POINTER`, `BASELINE`, `SEGMENTED`,
+  `WELD_EXCLUDED`, `SCROLL_BAR_OFF`); writes are `e.set(Element::X, on)`.
+  The builders (`.focusable()`, `.disabled(..)`, ...) are unchanged.
+- The scrollbar heat left the tree: `SceneSpec::scroll_bars:
+  Option<FxHashMap<Id, f64>>`, by scroll node key (0 rest, 1 hot). `None`
+  paints no bars. `mui::Ui` fills it; a host resolving by hand sets it.
+- The material verbs moved to the `mui-material` crate as the `Material`
+  extension trait: `.union`, `.shell`, `.border_ramp`, `.surface_layout`,
+  `.inset_surface`, `.inset_surface_of`, `.join_border`, `.segmented`,
+  `.cut`, `.keep`. The `mui` prelude re-exports it; with `mui-scene` alone,
+  add `mui-material` and `use mui_material::Material` (or its prelude).
+- The `glide` callback of `Resolver::resolve_after` takes `&Id`, not
+  `&str`: `|key: &Id, e, f| ..` (an `Id` derefs to `&str`).
+- `Stroke::fill` is `Option<Fill>`; `None` is unset and `Style::over` merges
+  a stroke's paint and width per field.
 - `Style` fields that may be unset are `Option<T>` (`fill`, `stroke`, `radius`,
   `corners`, `shadow`, `shells`, `union`, `mask`, `backdrop_blur`, ...).
   Build styles with the builder
@@ -68,7 +88,7 @@ Widgets (`mui`), rewritten by the tool unless `--no-widgets`:
 - `bins(ui, id, &Bins)` -> `bins(ui, id, &mut Bins)`, `Bins::authored` is
   `&mut [f32]`: the widget applies the paint, reset and selection itself, as
   `curve` does, and `changed` says what it did. An old caller's own apply
-  code is now redundant (and harmless); delete it.
+  code now applies every edit a second time; delete it.
 - `text_input`, `text_edit`, `bins`, `bins_hover`, `curve` and
   `color_picker` take `id: impl Into<Id>` (a `&str` still works).
 - `mui::prelude::Response` is the widget `Response`; the pointer's

@@ -27,7 +27,7 @@ pub trait Material: Styled {
         self
     }
     /// Transform width and color on this node's single, fixed inside border.
-    /// Supports ordinary, custom and [`Paints::union`] contours on every
+    /// Supports ordinary, custom and [`union`](Material::union) contours on every
     /// renderer.
     fn border_ramp(mut self, ramp: BorderRamp) -> Self {
         self.style_mut().stroke = None;

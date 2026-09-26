@@ -243,7 +243,7 @@ let root = col![
         title("Kurv"),
         text_input(&mut ui, "preset", &mut preset).el.w(140),
         spacer(),
-        toggle(&mut ui, "bypass", "Bypass", &mut bypass).el.into_el().tip("Bypass"),
+        toggle(&mut ui, "bypass", "Bypass", &mut bypass).into_el().tip("Bypass"),
     ]
     .gap(S)
     .center(),

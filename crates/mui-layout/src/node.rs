@@ -11,7 +11,7 @@ pub(crate) enum Kind<P> {
     /// Opaque content of a declared size.
     Leaf,
     /// Content the solver cannot size itself -- text, mostly. Measured by the
-    /// callback handed to [`resolve_with`]. Children pushed onto it overlay
+    /// callback handed to [`resolve_with`]. Children pushed onto it sit over
     /// it, as on a stack: a carve, a badge.
     Content(Vec<Node<P>>),
     Branch {
@@ -55,7 +55,7 @@ pub struct Node<P = ()> {
     /// Pinned to the enclosing scroll viewport's leading edge; see
     /// [`Node::sticky`]. Stays in flow, unlike a float.
     pub(crate) sticky: bool,
-    /// Out of flow: takes no space in its parent and sits like an overlay
+    /// Out of flow: takes no space in its parent and sits like a stack
     /// child, anchored and offset within the parent's padding box. Tooltips,
     /// popups, drag ghosts.
     pub(crate) float: bool,
@@ -397,7 +397,7 @@ impl<P> Node<P> {
         self.justify = justify;
         self
     }
-    /// Where this child sits inside an overlay or grid cell, per axis. Defaults
+    /// Where this child sits inside a stack or grid cell, per axis. Defaults
     /// to the parent's `align` on both axes, or `justify` for y once that is
     /// set.
     pub fn anchor(mut self, x: Align, y: Align) -> Self {
@@ -548,7 +548,7 @@ impl<P> Node<P> {
         self
     }
     /// Append a child to a container. A block becomes a stack of its own
-    /// size holding the child; on a content node the child overlays the
+    /// size holding the child; on a content node the child sits over the
     /// content, as it would on a stack, and the node is at least as big as
     /// its in-flow children.
     pub fn push(mut self, child: Self) -> Self {

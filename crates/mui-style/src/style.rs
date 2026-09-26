@@ -518,7 +518,7 @@ pub struct Style {
     pub shells: Option<Vec<(Spacing, Fill)>>,
     /// Outline is the union of the children's outlines, filleted, instead
     /// of this node's own rectangle: a tab joined to its panel. See
-    /// `Paints::union` in `mui-scene`.
+    /// `Material::union` in `mui-material`.
     pub union: Option<bool>,
     /// Pointer shape over the node; inherited by children that set none.
     pub cursor: Option<Cursor>,

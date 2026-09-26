@@ -65,7 +65,7 @@ impl PurePluginLogic for Gain {
         }
         MuiEditor::new(params, ui, (300, 200), |ui, bridge| {
             let gain = bridge.bind(ui, P::Gain, |ui, id, v| {
-                knob(ui, id, "Gain", v, 0.0..=1.0).el.size(L).el()
+                knob(ui, id, "Gain", v, 0.0..=1.0).el.size(L)
             });
             let bypass = bridge.bind_bool(ui, P::Bypass, |ui, id, on| toggle(ui, id, "Bypass", on));
             let level = f64::from(bridge.meter(bridge.params().level.id()));
