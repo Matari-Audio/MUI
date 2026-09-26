@@ -122,7 +122,7 @@ fn a_welded_port_outline_can_own_the_same_surfaces() {
     let mut body = card(24.);
     body.payload_mut().extras_mut().surface_padding = None;
     body.payload_mut().extras_mut().border_ramp = None;
-    body.payload_mut().style.radius = Radius::Pair(0., 0.);
+    body.payload_mut().style.radius = Some(Radius::Pair(0., 0.));
     let root = row![
         block(36., 36.)
             .radius(0.)
@@ -182,7 +182,7 @@ fn an_attached_footer_does_not_pull_panels_past_the_body_inset() {
     let mut body = card(24.);
     body.payload_mut().extras_mut().surface_padding = None;
     body.payload_mut().extras_mut().border_ramp = None;
-    body.payload_mut().style.radius = Radius::Pair(0., 0.);
+    body.payload_mut().style.radius = Some(Radius::Pair(0., 0.));
     let root = col![body, block(24., 24.).align_self(Align::Center)]
         .gap(0.)
         .w(400.)

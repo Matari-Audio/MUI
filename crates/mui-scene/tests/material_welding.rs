@@ -62,7 +62,7 @@ fn default_and_explicit_macros_construct_the_same_policy() {
         0.25
     );
     assert_eq!(
-        weld![Weld::default().morph(Weld::shape(), 0.75); plate("a", Role::Primary, 1.)]
+        weld![Weld::shape().morph(0.75); plate("a", Role::Primary, 1.)]
             .payload()
             .extras()
             .welding
@@ -73,26 +73,19 @@ fn default_and_explicit_macros_construct_the_same_policy() {
 }
 #[test]
 fn unchanged_weld_reuses_the_pixel_buffer() {
-    let mut text = Resolver::default();
-    let mut weld = WeldCache::default();
-    let a = resolve_scene_cached(&SceneSpec::new(tree(Weld::all())), &mut text, &mut weld).unwrap();
-    let b = resolve_scene_cached(&SceneSpec::new(tree(Weld::all())), &mut text, &mut weld).unwrap();
+    let mut r = Resolver::default();
+    let a = r.resolve(&SceneSpec::new(tree(Weld::all()))).unwrap();
+    let b = r.resolve(&SceneSpec::new(tree(Weld::all()))).unwrap();
     assert!(Arc::ptr_eq(&image(&a).rgba, &image(&b).rgba));
-    assert_eq!(weld.stats(), (1, 1));
+    assert_eq!(r.welds.stats(), (1, 1));
 }
 #[test]
 fn style_changes_invalidate_pixels() {
-    let mut text = Resolver::default();
-    let mut weld = WeldCache::default();
-    let a = resolve_scene_cached(&SceneSpec::new(tree(Weld::all())), &mut text, &mut weld).unwrap();
-    let b = resolve_scene_cached(
-        &SceneSpec::new(tree(Weld::all().blend(3.))),
-        &mut text,
-        &mut weld,
-    )
-    .unwrap();
+    let mut r = Resolver::default();
+    let a = r.resolve(&SceneSpec::new(tree(Weld::all()))).unwrap();
+    let b = r.resolve(&SceneSpec::new(tree(Weld::all().blend(3.)))).unwrap();
     assert!(!Arc::ptr_eq(&image(&a).rgba, &image(&b).rgba));
-    assert_eq!(weld.stats(), (0, 2));
+    assert_eq!(r.welds.stats(), (0, 2));
 }
 #[test]
 fn descendants_are_not_consumed_with_the_source_plate() {

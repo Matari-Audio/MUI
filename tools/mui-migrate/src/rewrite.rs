@@ -547,15 +547,29 @@ impl<'a> File<'a> {
         while self.sep_before(j) {
             if j >= 3 && self.t[j - 3].k == K::Ident {
                 j -= 3;
-            } else if j >= 3 && (self.punct(j - 3, '>') || self.close_any(j - 3)) {
-                return false; // `<T as X>::name`, `Vec::<T>::name`
+            } else if j >= 3 && self.punct(j - 3, '>') {
+                // `Node::<T>::name` walks on to `Node`; `<T as X>::name` stops.
+                let (mut k, mut depth) = (j - 3, 0i32);
+                loop {
+                    depth += i32::from(self.punct(k, '>')) - i32::from(self.punct(k, '<'));
+                    if depth == 0 || k == 0 {
+                        break;
+                    }
+                    k -= 1;
+                }
+                if depth != 0 || !self.sep_before(k) || k < 3 || self.t[k - 3].k != K::Ident {
+                    return false;
+                }
+                j = k - 3;
+            } else if j >= 3 && self.close_any(j - 3) {
+                return false;
             } else {
                 break; // absolute `::root::name`
             }
         }
         let s = self.t[j].text.as_str();
-        if j == i {
-            // Bare name.
+        // A bare name, or a type root (`Node::leaf`) resolved like one.
+        if j == i || (s != "Self" && s.starts_with(char::is_uppercase) && !self.defined.contains(s)) {
             if self.defined.contains(s) {
                 return false;
             }
@@ -599,12 +613,14 @@ impl<'a> File<'a> {
         if !self.is_mui {
             return out;
         }
+        // A `let` of the new name shadows the renamed function as surely as an item does.
+        let bound = |n: &str| (0..self.t.len()).any(|i| self.ident(i, "let") && (self.ident(i + 1, n) || (self.ident(i + 1, "mut") && self.ident(i + 2, n))));
         for r in self.ctx.rules() {
             if let Rule::Function { old, new } | Rule::Type { old, new } = *r
-                && self.defined.contains(new)
+                && (self.defined.contains(new) || bound(new))
                 && let Some(i) = (0..self.t.len()).find(|&i| self.ident(i, old) && self.is_mui_name(i))
             {
-                out.push((self.line(i), format!("`{old}` becomes `{new}`, which this file also defines: rename the local one")));
+                out.push((self.line(i), format!("`{old}` becomes `{new}`, which this file also defines or binds: rename the local one")));
             }
         }
         for r in self.ctx.rules() {
@@ -713,7 +729,7 @@ impl<'a> File<'a> {
                         Rule::Macro { old, new } if old == name && self.is_mui => {
                             edit(t[i].lo, t[i].hi, new.to_string());
                         }
-                        Rule::MacroHead { old, new, head } if old == name && self.is_mui => {
+                        Rule::MacroHead { old, new, heads } if old == name && self.is_mui => {
                             let open = i + 2;
                             if !matches!(t.get(open).map(|t| t.k), Some(K::Open(_))) {
                                 continue;
@@ -729,9 +745,23 @@ impl<'a> File<'a> {
                             if j == close || j == open + 1 {
                                 continue;
                             }
-                            let arg = self.text(open + 1, j - 1).to_string();
+                            // The head's top-level comma-separated parts pick the template.
+                            let (mut parts, mut a, mut k) = (Vec::new(), open + 1, open + 1);
+                            while k < j {
+                                match t[k].k {
+                                    K::Open(_) => k = t[k].pair + 1,
+                                    K::Punct(',') => {
+                                        parts.push(self.text(a, k - 1).to_string());
+                                        k += 1;
+                                        a = k;
+                                    }
+                                    _ => k += 1,
+                                }
+                            }
+                            parts.push(self.text(a, j - 1).to_string());
+                            let Some(head) = heads.get(parts.len() - 1) else { continue };
                             edit(t[i].lo, t[i].hi, new.to_string());
-                            edit(t[open + 1].lo, t[j - 1].hi, expand(head, &[arg]));
+                            edit(t[open + 1].lo, t[j - 1].hi, expand(head, &parts));
                             needs.push((self.line(i), "Weld"));
                         }
                         _ => {}

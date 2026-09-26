@@ -15,11 +15,7 @@ use mui_scene::prelude::*;
 /// assert_eq!(editor.children().len(), 1);
 /// ```
 pub fn panel() -> Style {
-    Style {
-        fill: Role::Surface.into(),
-        radius: 16.0.into(),
-        ..Style::default()
-    }
+    Style::default().fill(Role::Surface).radius(16.0)
 }
 
 /// A raised block on the panel, with a shadow to lift it.
@@ -28,15 +24,10 @@ pub fn panel() -> Style {
 /// use mui::prelude::*;
 /// # use mui::scene::Style;
 /// let mut dialog = col!["Save?"].pad(M).preset(card());
-/// assert_eq!(dialog.style_mut().radius, Radius::Px(12.));
+/// assert_eq!(dialog.style_mut().radius, Some(Radius::Px(12.)));
 /// ```
 pub fn card() -> Style {
-    Style {
-        fill: Role::Raised.into(),
-        radius: 12.0.into(),
-        shadow: vec![Shadow::soft(12.0)],
-        ..Style::default()
-    }
+    Style::default().fill(Role::Raised).radius(12.0).shadow(Shadow::soft(12.0))
 }
 
 /// Glass, at plugin scale: a translucent fill, a bright one-pixel top edge
@@ -50,29 +41,25 @@ pub fn card() -> Style {
 /// ```
 /// use mui::prelude::*;
 /// let mut overlay = col!["Preset browser"].pad(M).preset(glass());
-/// assert_eq!(overlay.style_mut().shadow.len(), 2);
+/// assert_eq!(overlay.style_mut().shadow.as_ref().map(Vec::len), Some(2));
 /// ```
 pub fn glass() -> Style {
     let edge = |l: f32, a: f32| Fill::Color(Color::oklcha(l, 0.0, 0.0, a));
-    Style {
-        fill: edge(1.0, 0.10),
-        radius: 14.0.into(),
-        shadow: vec![
-            Shadow {
-                blur: 0.5,
-                dy: 1.0,
-                fill: edge(1.0, 0.35),
-                ..Shadow::inset(0.5)
-            },
-            Shadow {
-                blur: 6.0,
-                dy: -3.0,
-                fill: edge(0.0, 0.25),
-                ..Shadow::inset(6.0)
-            },
-        ],
-        ..Style::default()
-    }
+    Style::default()
+        .fill(edge(1.0, 0.10))
+        .radius(14.0)
+        .shadow(Shadow {
+            blur: 0.5,
+            dy: 1.0,
+            fill: edge(1.0, 0.35),
+            ..Shadow::inset(0.5)
+        })
+        .shadow(Shadow {
+            blur: 6.0,
+            dy: -3.0,
+            fill: edge(0.0, 0.25),
+            ..Shadow::inset(6.0)
+        })
 }
 
 /// A small labelled pill: a tab, a tag, a segment.

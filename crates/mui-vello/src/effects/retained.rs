@@ -539,7 +539,7 @@ impl GpuRenderer {
         let wanted = resolved
             .external_welds()
             .filter(move |(_, e)| visible(e, xf, size))
-            .map(|(k, e)| (k, &e.material));
+            .map(|(k, e)| (k, &*e.material));
         let mut stats = self.effects.begin(wanted)?;
         self.effects
             .forget_absent(|k| resolved.external_weld(k).is_some());

@@ -39,7 +39,7 @@ fn cell(i: usize) -> N {
         .pad(4.)
         .id(format!("c{i}"))
 }
-fn block(depth: usize, i: usize) -> N {
+fn section(depth: usize, i: usize) -> N {
     if depth == 0 {
         return N::row([cell(i * 100), cell(i * 100 + 1), text(PARA).shrink(1.)])
             .gap(6.)
@@ -50,13 +50,13 @@ fn block(depth: usize, i: usize) -> N {
             .gap(6.)
             .wrap(),
         N::grid(3, (0..6).map(|k| cell(i * 1000 + depth * 10 + 3 + k))).gap(4.),
-        block(depth - 1, i),
+        section(depth - 1, i),
     ])
     .gap(6.)
     .pad(4.)
 }
 fn tree() -> N {
-    N::col((0..4).map(|i| block(7, i + 1)))
+    N::col((0..4).map(|i| section(7, i + 1)))
         .gap(8.)
         .pad(8.)
         .scroll()

@@ -139,8 +139,7 @@ pub struct Ui {
     plays: BTreeMap<String, (bool, f64)>,
     /// The runtime clock at which the last playing key lands.
     play_until: f64,
-    text_cache: Resolver,
-    weld_cache: mui_scene::WeldCache,
+    resolver: Resolver,
     /// Per scroll node, per axis: the spring's target is where the wheel
     /// clamped it, its value how far the children are drawn slid.
     scrolls: BTreeMap<String, [Spring; 2]>,
@@ -310,8 +309,7 @@ impl Ui {
             tweens: BTreeMap::new(),
             plays: BTreeMap::new(),
             play_until: 0.0,
-            text_cache: Resolver::default(),
-            weld_cache: mui_scene::WeldCache::default(),
+            resolver: Resolver::default(),
             scrolls: BTreeMap::new(),
             path: String::new(),
             sel: BTreeMap::new(),
@@ -414,16 +412,16 @@ impl Ui {
     /// What the last frame resolved to, for anything drawn on top of it.
     /// Cache hits, misses, and conservative retained bytes for material welding.
     pub fn weld_cache_stats(&self) -> (u64, u64, usize) {
-        let (hits, misses) = self.weld_cache.stats();
-        (hits, misses, self.weld_cache.bytes())
+        let (hits, misses) = self.resolver.welds.stats();
+        (hits, misses, self.resolver.welds.bytes())
     }
     /// Drop retained weld assets without changing live interaction state.
     pub fn clear_weld_cache(&mut self) {
-        self.weld_cache.clear();
+        self.resolver.welds.clear();
     }
 
     pub fn layout_stats(&self) -> mui_layout::LayoutStats {
-        self.text_cache.layout_stats()
+        self.resolver.text.layout_stats()
     }
     pub fn scene(&self) -> Option<&ResolvedScene> {
         self.scene.as_ref()
@@ -2014,10 +2012,8 @@ impl Ui {
         spec.weld_backend = self.weld_backend;
         let mut glided = false;
         let glides = &mut self.glides;
-        let scene = mui_scene::resolve_scene_retained(
+        let scene = self.resolver.resolve_animated(
             &spec,
-            &mut self.text_cache,
-            &mut self.weld_cache,
             &mut |key, e, target| {
                 let spring = e.extras().layout_transition.unwrap_or(Spring::DEFAULT);
                 let t = [target.x, target.y, target.size.width, target.size.height];
@@ -2267,7 +2263,7 @@ impl Ui {
         self.plays.retain(|_, (seen, _)| std::mem::take(seen));
         self.delivered = std::mem::take(&mut self.edits);
         if let Some(old) = self.scene.replace(scene) {
-            self.text_cache.recycle(old);
+            self.resolver.text.recycle(old);
         }
         let repaint_after = self.repaint_after();
         // Widgets read the clock while constructing the tree, before this frame
@@ -2476,7 +2472,8 @@ fn channels(e: &mut Element, pal: &Palette, ch: &mut impl FnMut(u32, f64, bool) 
     }
     let under = pal.background();
     match &mut e.style.fill {
-        Fill::Gradient(g) => {
+        None => {}
+        Some(Fill::Gradient(g)) => {
             for (i, (at, f)) in g.stops.iter_mut().enumerate() {
                 let base = STOPS + 8 * i as u32;
                 if let Some(Paint::Solid(c)) = f.paint(pal, under) {
@@ -2485,7 +2482,7 @@ fn channels(e: &mut Element, pal: &Palette, ch: &mut impl FnMut(u32, f64, bool) 
                 *at = (ch(base, f64::from(*at), false) as f32).clamp(0., 1.);
             }
         }
-        fill => {
+        Some(fill) => {
             if let Some(Paint::Solid(c)) = fill.paint(pal, under) {
                 *fill = Fill::Color(color(c, FILL, ch));
             }
@@ -2499,7 +2496,7 @@ fn channels(e: &mut Element, pal: &Palette, ch: &mut impl FnMut(u32, f64, bool) 
             *w = ch(STROKE_WIDTH, *w, false).max(0.0);
         }
     }
-    for (i, s) in e.style.shadow.iter_mut().enumerate() {
+    for (i, s) in e.style.shadow.iter_mut().flatten().enumerate() {
         let base = SHADOWS + 8 * i as u32;
         s.blur = ch(base, s.blur, false).max(0.0);
         s.dx = ch(base + 1, s.dx, false);
@@ -2509,7 +2506,7 @@ fn channels(e: &mut Element, pal: &Palette, ch: &mut impl FnMut(u32, f64, bool) 
             s.fill = Fill::Color(color(c, base + 4, ch));
         }
     }
-    for (i, (d, f)) in e.style.shells.iter_mut().enumerate() {
+    for (i, (d, f)) in e.style.shells.iter_mut().flatten().enumerate() {
         let base = SHELLS + 8 * i as u32;
         if let Spacing::Px(v) = d {
             *v = ch(base, *v, false).max(0.0);
@@ -2518,7 +2515,7 @@ fn channels(e: &mut Element, pal: &Palette, ch: &mut impl FnMut(u32, f64, bool) 
             *f = Fill::Color(color(c, base + 1, ch));
         }
     }
-    if let Radius::Px(r) = &mut e.style.radius {
+    if let Some(Radius::Px(r)) = &mut e.style.radius {
         *r = ch(RADIUS, *r, false).max(0.0);
     }
     if let Some(t) = e.text_size.as_mut() {
@@ -2879,7 +2876,7 @@ fn state(
         };
         let e = n.payload_mut();
         if e.style.fill.as_ref().is_some_and(|f| !f.is_none()) && ((auto_hover && h > 0.0) || (auto_press && p > 0.0)) {
-            e.style.fill = e.style.fill.map(pal, bg, |c| {
+            e.style.fill = e.style.fill.as_ref().map(|f| f.map(pal, bg, |c| {
                 let c = if auto_hover {
                     c.mix(pal.hover(c), h as f32)
                 } else {
@@ -2890,7 +2887,7 @@ fn state(
                 } else {
                     c
                 }
-            });
+            }));
         }
     }
 }

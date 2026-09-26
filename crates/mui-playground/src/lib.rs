@@ -1,6 +1,6 @@
 //! A bounded expression interpreter for the browser playground, not a Rust compiler.
 #![forbid(unsafe_code)]
-use mui_scene::prelude::*;
+use mui_scene::{Role::*, prelude::*};
 use std::sync::LazyLock;
 use syn::{Expr, Lit, Token, parse::Parser, punctuated::Punctuated, spanned::Spanned};
 use wasm_bindgen::prelude::*;
@@ -223,7 +223,7 @@ fn element(e: &Expr, depth: usize, nodes: &mut usize) -> syn::Result<El> {
                 "clip" => el.clip(),
                 "wrap" => el.wrap(),
                 "full" => el.full(),
-                "join" => el.join(),
+                "segmented" => el.segmented(),
                 "no_fill" => el.no_fill(),
                 "no_border" => el.no_border(),
                 _ => {

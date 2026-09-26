@@ -9,7 +9,8 @@
 //!   mui path to it) becomes template `to`, with `$n` as for `Call`
 //! - `Type { old, new }`             path/type ident, only where it resolves to a mui crate
 //! - `Macro { old, new }`            `old!` -> `new!`
-//! - `MacroHead { old, new, head }`  `old![a; ..]` -> `new![<head with $1 = a>; ..]`
+//! - `MacroHead { old, new, heads }` `old![a, b; ..]` -> `new![<heads[n-1] with $1 = a, $2 = b>; ..]`,
+//!   the template picked by the head's argument count n
 //! - `Call { chain, to, gate, needs }` call-shape rewrite: match `.m(args)` (or a
 //!   chain of them) with arg patterns, replace with template `to` (`$1`.. are
 //!   the `Any`/`Has` args in order, `$!1` is the logical negation of `$1`). `needs`
@@ -54,7 +55,7 @@ pub enum Rule {
     Type { old: &'static str, new: &'static str },
     #[expect(dead_code, reason = "no plain macro renames in the spec yet")]
     Macro { old: &'static str, new: &'static str },
-    MacroHead { old: &'static str, new: &'static str, head: &'static str },
+    MacroHead { old: &'static str, new: &'static str, heads: &'static [&'static str] },
     Call { chain: &'static [(&'static str, &'static [Arg])], to: &'static str, gate: Gate, needs: &'static [&'static str] },
     DropImport { name: &'static str },
     Qualify { names: &'static [&'static str], prefix: &'static str },
@@ -95,9 +96,10 @@ pub const RULES: &[Rule] = &[
         prefix: "Role::",
     },
     // Switches.
-    Call { chain: &[("disabled", &[Is("true")])], to: ".disabled()", gate: Mui, needs: &[] },
-    Call { chain: &[("disabled", &[Is("false")])], to: "", gate: Mui, needs: &[] },
-    Call { chain: &[("disabled", &[A])], to: ".when($1, |e| e.disabled())", gate: Mui, needs: &[] },
+    // On builder chains only: `palette.disabled(color)` is a colour, not a switch.
+    Call { chain: &[("disabled", &[Is("true")])], to: ".disabled()", gate: MuiChain, needs: &[] },
+    Call { chain: &[("disabled", &[Is("false")])], to: "", gate: MuiChain, needs: &[] },
+    Call { chain: &[("disabled", &[A])], to: ".when($1, |e| e.disabled())", gate: MuiChain, needs: &[] },
     // The overlay scrollbar is on by default, so the switch is `no_scrollbar`.
     Call { chain: &[("scroll_bar", &[Is("true")])], to: "", gate: G, needs: &[] },
     Call { chain: &[("scroll_bar", &[Is("false")])], to: ".no_scrollbar()", gate: G, needs: &[] },
@@ -120,7 +122,7 @@ pub const RULES: &[Rule] = &[
     Manual { pattern: ". reference_weld", note: "`.reference_weld(w)` became `.weld(w)`: pick the backend with `SceneSpec::weld_backend(WeldBackend::..)`" },
     Method { old: "gpu_weld", new: "weld", gate: G },
     Method { old: "reference_weld", new: "weld", gate: G },
-    MacroHead { old: "weld_morph", new: "weld", head: "Weld::default().morph($1)" },
+    MacroHead { old: "weld_morph", new: "weld", heads: &["Weld::default().morph($1)", "$1.morph($2)"] },
     Call { chain: &[("join", &[])], to: ".segmented()", gate: MuiChain, needs: &[] },
     // Icons.
     Manual { pattern: "material_symbols :: codepoint", note: "use the `mui_symbols::sym::NAME` char consts instead of `codepoint(\"name\")`" },

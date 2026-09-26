@@ -63,10 +63,10 @@ fn pill() -> El {
 fn what_a_frame_costs() {
     let font = epaint_default_fonts::HACK_REGULAR;
     let spec = SceneSpec::new(pill()).font(Font::new(font).unwrap());
-    let resolve = ms(|| {
+    let resolve_ms = ms(|| {
         black_box(resolve(black_box(&spec)).unwrap());
     });
-    println!("pill resolve (union + shell + text) {resolve:8.3} ms");
+    println!("pill resolve (union + shell + text) {resolve_ms:8.3} ms");
     let mut ui = Ui::new(Theme::DEFAULT).font(Font::new(font).unwrap());
     let mut v = 0.3;
     let frame = ms(|| {

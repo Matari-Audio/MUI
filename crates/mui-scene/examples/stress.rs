@@ -46,7 +46,7 @@ fn cell(i: usize) -> El {
     .id(format!("c{}", COUNTER.fetch_add(1, Ordering::Relaxed)))
 }
 
-fn block(depth: usize, i: usize) -> El {
+fn section(depth: usize, i: usize) -> El {
     if depth == 0 {
         return row([cell(i), cell(i + 1), text(PARA).lines(3).shrink(1.0)])
             .gap(6.0)
@@ -55,7 +55,7 @@ fn block(depth: usize, i: usize) -> El {
     col([
         row((0..3).map(|k| cell(i * 7 + k))).gap(6.0).wrap(),
         grid(3, (0..6).map(|k| cell(i * 11 + k))).gap(4.0),
-        block(depth - 1, i + 1),
+        section(depth - 1, i + 1),
     ])
     .gap(6.0)
     .pad(4.0)
@@ -63,7 +63,7 @@ fn block(depth: usize, i: usize) -> El {
 }
 
 fn tree() -> El {
-    col((0..4).map(|i| block(7, i)))
+    col((0..4).map(|i| section(7, i)))
         .gap(8.0)
         .pad(8.0)
         .fill(Role::Background)

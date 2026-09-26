@@ -66,8 +66,8 @@ fn strings_and_comments_untouched() {
 #[test]
 fn macro_bodies_rewritten() {
     check(
-        &with_prelude("fn f() { row![leaf(1.0, 1.0).disabled(true), column(vec![leaf(2.0, 2.0)])] }\n"),
-        &with_prelude("fn f() { row![block(1.0, 1.0).disabled(), col(vec![block(2.0, 2.0)])] }\n"),
+        &with_prelude("fn f() { row![leaf(1.0, 1.0).disabled(true), column(vec![leaf(2.0, 2.0)])]; Node::<u8>::overlay([]); }\n"),
+        &with_prelude("fn f() { row![block(1.0, 1.0).disabled(), col(vec![block(2.0, 2.0)])]; Node::<u8>::stack([]); }\n"),
     );
 }
 
@@ -92,10 +92,10 @@ fn type_guard() {
 fn methods_and_call_shapes() {
     check(
         &with_prelude(
-            "fn f() {\n    e.label(name).role(Kind::Slider { v })\n        .disabled(false)\n        .disabled(!on)\n        .transition(s)\n        .layout_transition(s)\n        .scroll_bar(false)\n        .scroll_bar(show)\n        .scroll_bar(a && b);\n    ramp.transition(0.3, 0.6);\n    a.role(accent.role());\n}\n",
+            "fn f() {\n    e.label(name).role(Kind::Slider { v })\n        .disabled(false)\n        .disabled(!on)\n        .transition(s)\n        .layout_transition(s)\n        .scroll_bar(false)\n        .scroll_bar(show)\n        .scroll_bar(a && b);\n    ramp.transition(0.3, 0.6);\n    a.role(accent.role());\n    pal.disabled(c);\n}\n",
         ),
         &with_prelude(
-            "fn f() {\n    e.named(name).a11y(A11y::Slider { v })\n        .when(!on, |e| e.disabled())\n        .animate_with(s)\n        .animate_layout_with(s)\n        .no_scrollbar()\n        .when(!show, |e| e.no_scrollbar())\n        .when(!(a && b), |e| e.no_scrollbar());\n    ramp.transition(0.3, 0.6);\n    a.role(accent.role());\n}\n",
+            "fn f() {\n    e.named(name).a11y(A11y::Slider { v })\n        .when(!on, |e| e.disabled())\n        .animate_with(s)\n        .animate_layout_with(s)\n        .no_scrollbar()\n        .when(!show, |e| e.no_scrollbar())\n        .when(!(a && b), |e| e.no_scrollbar());\n    ramp.transition(0.3, 0.6);\n    a.role(accent.role());\n    pal.disabled(c);\n}\n",
         ),
     );
 }
@@ -111,8 +111,8 @@ fn anchor_offset() {
 #[test]
 fn weld() {
     check(
-        &with_prelude("fn f() { e.weld_shape().weld_borders().weld_morph(p).weld_quality(q).without_weld().exclude_from_weld().weld_with(w).gpu_weld(w); weld_morph![0.5; a, b] }\n"),
-        &with_prelude("fn f() { e.weld(Weld::shape()).weld(Weld::borders().morph(p).quality(q)).weld(Weld::off()).unwelded().weld(w).weld(w); weld![Weld::default().morph(0.5); a, b] }\n"),
+        &with_prelude("fn f() { e.weld_shape().weld_borders().weld_morph(p).weld_quality(q).without_weld().exclude_from_weld().weld_with(w).gpu_weld(w); weld_morph![0.5; a, b]; weld_morph![Weld::shape(), 0.75; a] }\n"),
+        &with_prelude("fn f() { e.weld(Weld::shape()).weld(Weld::borders().morph(p).quality(q)).weld(Weld::off()).unwelded().weld(w).weld(w); weld![Weld::default().morph(0.5); a, b]; weld![Weld::shape().morph(0.75); a] }\n"),
     );
     let out = run("use mui::scene::El;\nfn f(e: El) -> El { e.weld_shape() }\n");
     assert!(out.warnings.iter().any(|(_, w)| w.contains("`Weld`")), "{:?}", out.warnings);
@@ -275,4 +275,6 @@ fn markdown_blocks() {
 fn new_name_collides_with_a_local_definition() {
     let out = run("use mui_layout::{leaf, row};\nfn block(i: usize) -> u8 { 0 }\nfn f() { row([leaf(1., 1.)]); }\n");
     assert!(out.warnings.iter().any(|(l, w)| *l == 1 && w.contains("`block`")), "{:?}", out.warnings);
+    let out = run("use mui_scene::resolve_scene;\nfn f(s: &S) { let resolve = 1; resolve_scene(s); }\n");
+    assert!(out.warnings.iter().any(|(_, w)| w.contains("`resolve`")), "{:?}", out.warnings);
 }

@@ -71,10 +71,10 @@ impl PurePluginLogic for Gain {
             let level = f64::from(bridge.meter(bridge.params().level.id()));
             let meter = row([block(200.0 * level.clamp(0.0, 1.0), 8.0)
                 .pill()
-                .fill(Primary)])
+                .fill(Role::Primary)])
             .size(200.0, 8.0)
             .pill()
-            .fill(Field);
+            .fill(Role::Field);
             col![
                 row![
                     gain,
@@ -90,7 +90,7 @@ impl PurePluginLogic for Gain {
             ]
             .gap(M)
             .pad(L)
-            .fill(Surface)
+            .fill(Role::Surface)
         })
         .resizable((260, 180))
         .into_editor()

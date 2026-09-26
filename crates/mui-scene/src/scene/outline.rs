@@ -650,35 +650,35 @@ mod tests {
         );
         let mut text = Resolver::default();
         text.resolve(&base).unwrap();
-        let first_misses = text.outlines.misses;
+        let first_misses = text.text.outlines.misses;
         assert!(first_misses > 0, "the welded outline was not cached");
 
         text.resolve(&base).unwrap();
-        assert_eq!(text.outlines.misses, first_misses);
-        assert!(text.outlines.hits > 0, "the unchanged weld was not reused");
+        assert_eq!(text.text.outlines.misses, first_misses);
+        assert!(text.text.outlines.hits > 0, "the unchanged weld was not reused");
 
         let mut changed = base.clone();
         changed.root = changed.root.radius(3.);
-        let misses = text.outlines.misses;
+        let misses = text.text.outlines.misses;
         text.resolve(&changed).unwrap();
         assert!(
-            text.outlines.misses > misses,
+            text.text.outlines.misses > misses,
             "a style change reused stale geometry"
         );
 
         changed.theme.corners.box_ += 1.;
-        let misses = text.outlines.misses;
+        let misses = text.text.outlines.misses;
         text.resolve(&changed).unwrap();
         assert!(
-            text.outlines.misses > misses,
+            text.text.outlines.misses > misses,
             "a theme change reused stale geometry"
         );
 
         changed.device_scale = Some(2.);
-        let misses = text.outlines.misses;
+        let misses = text.text.outlines.misses;
         text.resolve(&changed).unwrap();
         assert!(
-            text.outlines.misses > misses,
+            text.text.outlines.misses > misses,
             "a scale change reused stale geometry"
         );
     }
@@ -731,17 +731,17 @@ mod tests {
         let kept = spec(block(40., 20.).outline(triangle(1.)));
         let mut text = Resolver::default();
         text.resolve(&kept).unwrap();
-        let misses = text.outlines.misses;
+        let misses = text.text.outlines.misses;
         text.resolve(&kept).unwrap();
         let rebuilt = spec(block(40., 20.).outline(triangle(1.)));
         text.resolve(&rebuilt).unwrap();
         assert_eq!(
-            text.outlines.misses, misses,
+            text.text.outlines.misses, misses,
             "an unchanged drawing reshaped the weld"
         );
         let swapped = spec(block(40., 20.).outline(triangle(0.5)));
         same_as_fresh(&swapped, &mut text);
-        assert!(text.outlines.misses > misses, "a new drawing hit the cache");
+        assert!(text.text.outlines.misses > misses, "a new drawing hit the cache");
     }
 
     #[test]
