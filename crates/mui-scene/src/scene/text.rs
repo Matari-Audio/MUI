@@ -115,10 +115,6 @@ impl TextState {
     pub fn len(&self) -> usize {
         self.runs.values().map(HashMap::len).sum()
     }
-    pub fn is_empty(&self) -> bool {
-        // An inner map is never left empty, so no strings means no runs.
-        self.runs.is_empty()
-    }
     /// Start of a resolve: drop every shaped run when the faces they were
     /// shaped with changed.
     pub(super) fn retain_for(&mut self, spec: &SceneSpec) {

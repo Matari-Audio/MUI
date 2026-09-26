@@ -47,7 +47,7 @@ fn title_joins_and_panel_clearance_follow_the_owner() {
     let mut previous = None;
     for radius in [16., 24., 32.] {
         let spec = SceneSpec::new(card(radius));
-        let scene = cache.resolve(&spec).unwrap();
+        let scene = cache.resolve(&spec).unwrap().clone();
         let border = scene
             .paint
             .iter()
@@ -89,7 +89,7 @@ fn title_joins_and_panel_clearance_follow_the_owner() {
                 .iter()
                 .any(|p| p.key.as_ref() == "title" && p.layer == Layer::Fill)
         );
-        let again = cache.resolve(&spec).unwrap();
+        let again = cache.resolve(&spec).unwrap().clone();
         assert_eq!(other.path, again.surface("other").unwrap().path);
     }
 }
@@ -262,9 +262,9 @@ fn stroked_weld() -> El {
 fn steady_and_tooltip_frames_run_no_boolean_pass() {
     for root in [card(24.), stroked_weld()] {
         let mut cache = Resolver::default();
-        let cold = cache.resolve(&SceneSpec::new(root.clone())).unwrap();
+        let cold = cache.resolve(&SceneSpec::new(root.clone())).unwrap().clone();
         let passes = mui_geometry::boolean_passes();
-        let steady = cache.resolve(&SceneSpec::new(root.clone())).unwrap();
+        let steady = cache.resolve(&SceneSpec::new(root.clone())).unwrap().clone();
         assert_eq!(
             mui_geometry::boolean_passes(),
             passes,
@@ -280,7 +280,7 @@ fn steady_and_tooltip_frames_run_no_boolean_pass() {
                 .pin(Pin::to(anchor).area(Area::BottomStart))
                 .id("tip"),
         ]);
-        let tipped = cache.resolve(&SceneSpec::new(tip)).unwrap();
+        let tipped = cache.resolve(&SceneSpec::new(tip)).unwrap().clone();
         assert_eq!(
             mui_geometry::boolean_passes(),
             passes,
@@ -311,7 +311,7 @@ fn a_moved_owner_reuses_its_surfaces() {
     cache.resolve(&spec(0.)).unwrap();
     for pad in [0., 7., 7.5] {
         let before = mui_geometry::boolean_passes();
-        let moved = cache.resolve(&spec(pad)).unwrap();
+        let moved = cache.resolve(&spec(pad)).unwrap().clone();
         assert_eq!(mui_geometry::boolean_passes(), before, "pad {pad}");
         let well = &moved.surface("well").unwrap().path;
         assert!(has(well, pad + 20., pad + 20.), "the well stayed behind");

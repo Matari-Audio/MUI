@@ -1666,6 +1666,17 @@ mod tests {
         assert_eq!(b.surface("m.a"), a.surface("m.a"));
     }
 
+    /// `Resolver::resolve` keeps its last scene, so a reused memo is copied
+    /// out of it with no `prev` to thread by hand.
+    #[test]
+    fn resolver_resolve_reuses_memos() {
+        let d = draws();
+        let mut r = Resolver::default();
+        r.resolve(&memo_spec(50., false, &d)).unwrap();
+        r.resolve(&memo_spec(50., true, &d)).unwrap();
+        assert_eq!(count(&d), 1, "the reused memo was walked again");
+    }
+
     /// Moved by its neighbour, a reused memo is copied translated: paint
     /// and surfaces land exactly where a walk puts them.
     #[test]
@@ -1675,9 +1686,7 @@ mod tests {
         let a = retained(&memo_spec(50., false, &d), &mut text, None);
         let b = retained(&memo_spec(70., true, &d), &mut text, Some(&a));
         assert_eq!(count(&d), 1, "a moved memo was walked instead of copied");
-        let walked = Resolver::default()
-            .resolve(&memo_spec(70., false, &draws()))
-            .unwrap();
+        let walked = resolve(&memo_spec(70., false, &draws())).unwrap();
         assert_eq!(b.paint, walked.paint);
         for k in ["m", "m.a", "m.t", "m.c"] {
             assert_eq!(b.surface(k), walked.surface(k), "{k}");

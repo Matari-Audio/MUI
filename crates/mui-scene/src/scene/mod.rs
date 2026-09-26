@@ -403,22 +403,27 @@ fn glide_frames(
 /// Resolve `spec` once, with cold caches. Anything that resolves every
 /// frame keeps a [`Resolver`] instead.
 pub fn resolve(spec: &SceneSpec) -> Result<ResolvedScene, SceneError> {
-    Resolver::default().resolve(spec)
+    let mut r = Resolver::default();
+    r.resolve(spec)?;
+    Ok(r.prev.take().expect("resolve keeps its scene"))
 }
 
-/// The caches a resolve reuses across calls: shaped text, layout, outlines
-/// and material welds. Keep one per window.
+/// The caches a resolve reuses across calls: shaped text, layout, outlines,
+/// material welds and the last scene, which reused [`Memo`](crate::Memo)
+/// subtrees are copied from. Keep one per window.
 #[derive(Default)]
 pub struct Resolver {
     pub(crate) text: TextState,
     pub welds: crate::WeldCache,
+    prev: Option<ResolvedScene>,
 }
 impl Resolver {
     pub fn new() -> Self {
         Self::default()
     }
     /// Hand a scene you are done with back, so the next resolve fills its
-    /// buffers instead of growing new ones.
+    /// buffers instead of growing new ones. Only for scenes from
+    /// [`Resolver::resolve_after`]: [`Resolver::resolve`] recycles its own.
     pub fn recycle(&mut self, scene: ResolvedScene) {
         self.text.recycle(scene);
     }
@@ -426,16 +431,28 @@ impl Resolver {
         self.text.layout_stats()
     }
     /// Shaped text runs held: one per (string, size, face, axes) variant.
-    pub fn len(&self) -> usize {
+    pub fn text_runs(&self) -> usize {
         self.text.len()
     }
-    pub fn is_empty(&self) -> bool {
-        self.text.is_empty()
+    /// Solve, shape and paint `spec`. The scene is kept until the next
+    /// call, which copies every reused [`Memo`](crate::Memo) subtree out of
+    /// it instead of walking it again; clone it to keep it longer.
+    pub fn resolve(&mut self, spec: &SceneSpec) -> Result<&ResolvedScene, SceneError> {
+        let prev = self.prev.take();
+        let (text, welds) = (&mut self.text, &mut self.welds);
+        let scene = match resolve_with(spec, text, welds, &mut |_, _, f| f, prev.as_ref()) {
+            Ok(scene) => scene,
+            Err(e) => {
+                self.prev = prev;
+                return Err(e);
+            }
+        };
+        if let Some(old) = prev {
+            self.text.recycle(old);
+        }
+        Ok(self.prev.insert(scene))
     }
-    /// Solve, shape and paint `spec`.
-    pub fn resolve(&mut self, spec: &SceneSpec) -> Result<ResolvedScene, SceneError> {
-        self.resolve_animated(spec, &mut |_, _, f| f, None)
-    }
+    /// The frame after `prev`, for a runtime that keeps its scenes itself:
     /// [`Resolver::resolve`] with every
     /// [`animate_layout`](crate::Styled::animate_layout) node's frame handed
     /// to `glide` between the solve and the walk: `glide(key, element,
@@ -451,8 +468,9 @@ impl Resolver {
     /// returned, when nothing it depended on from outside moved --
     /// translated when only its origin did. The copy keeps every `Arc`, so a
     /// renderer comparing by pointer sees it unchanged, and it keeps the
-    /// caches' entries the subtree used alive.
-    pub fn resolve_animated(
+    /// caches' entries the subtree used alive. This does not touch the scene
+    /// [`Resolver::resolve`] keeps.
+    pub fn resolve_after(
         &mut self,
         spec: &SceneSpec,
         glide: &mut dyn FnMut(&Id, &crate::Element, Frame) -> Frame,

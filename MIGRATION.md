@@ -24,7 +24,8 @@ It prints `file:line: note` where a human has to look:
 - `.gpu_weld(w)` / `.reference_weld(w)` become `.weld(w)`; choose the backend
   with `SceneSpec::weld_backend(WeldBackend::..)` (or `Ui::gpu_welding`).
 - `resolve_scene_cached` / `_animated` / `_retained`: keep one `Resolver`
-  across frames and call `resolve` or `resolve_animated(&spec, glide, prev)`.
+  across frames and call `resolve` (it keeps the last scene and reuses memos
+  from it) or `resolve_after(&spec, glide, prev)` if you keep scenes yourself.
 - `Bridge::bind(`: the closure now receives the id; pass it to the widget.
   It may return the widget's whole `Response` (anything `IntoEl`).
 - Bare `Role` variants (`Surface`, `Primary`, ...) are qualified only in files

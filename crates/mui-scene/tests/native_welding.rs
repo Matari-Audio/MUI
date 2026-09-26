@@ -25,12 +25,17 @@ fn tree() -> El {
 #[test]
 fn gpu_resolution_never_populates_the_cpu_bake_cache() {
     let mut r = Resolver::default();
-    let scene = r.resolve(&gpu(tree())).unwrap();
+    let external = r
+        .resolve(&gpu(tree()))
+        .unwrap()
+        .paint
+        .iter()
+        .any(|p| p.layer == Layer::External);
     let welds = &r.welds;
     // Analytic boundary slots are retained by design; a CPU bake would count as a miss.
     assert!(welds.bytes() <= 64 * 1024, "no CPU bake retained");
     assert_eq!(welds.stats(), (0, 0));
-    assert!(scene.paint.iter().any(|p| p.layer == Layer::External));
+    assert!(external);
 }
 #[test]
 fn morph_is_transactional_and_does_not_relayout() {

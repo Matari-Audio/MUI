@@ -12,7 +12,7 @@ fn an_animated_label_keeps_only_the_run_it_drew() {
     for i in 0..100 {
         let spec = SceneSpec::new(text("x").text_size(10.0 + i as f64 * 0.001)).font(font.clone());
         cache.resolve(&spec).unwrap();
-        assert_eq!(cache.len(), 1);
+        assert_eq!(cache.text_runs(), 1);
     }
 }
 

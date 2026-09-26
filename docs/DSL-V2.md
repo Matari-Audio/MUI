@@ -139,8 +139,8 @@ one `Resolver` that owns the caches:
 
 ```rust
 let mut r = Resolver::new();          // caches live here
-let scene = r.resolve(&spec)?;        // was resolve_scene_cached/_retained
-let scene = r.resolve_animated(&spec, dt)?; // only if the animated path needs dt
+let scene = r.resolve(&spec)?;        // &ResolvedScene, kept for the next call's memos
+let scene = r.resolve_after(&spec, glide, prev)?; // a runtime that keeps its own scenes
 resolve(&spec)?                       // free fn for the uncached one-shot
 ```
 
@@ -220,8 +220,8 @@ col![
 |---|---|---|
 | `'/'` checks by hand | `Id::is_named(&str)` (associated fn), `Id::runtime(name)` for reserved ids | the rule is checked on keys that are `&str` (a11y tree, motion bridge), so no `Id` has to be built first |
 | `glide` callback key | `&Id` | the scene keys nodes by `Id` (a tree path is `Id::runtime("/0/2")`, inline, no allocation), so the key is handed over as stored; the interned `Arc<str>` per node is gone |
-| `resolve_scene_animated(spec, dt)` / `_retained` | `Resolver::resolve_animated(&spec, glide, prev)` | the animated path needs the glide callback and the previous scene, not a `dt` |
-| `TextCache` | `Resolver` (`recycle`, `layout_stats`, `len`, `is_empty` delegate); the text cache is crate-private | one public cache type; `Resolver::welds` stays public for weld stats |
+| `resolve_scene_animated(spec, dt)` / `_retained` | `Resolver::resolve_after(&spec, glide, prev)` | the animated path needs the glide callback and the previous scene, not a `dt`; plain `Resolver::resolve` keeps its own previous scene |
+| `TextCache` | `Resolver` (`recycle`, `layout_stats`, `text_runs` delegate); the text cache is crate-private | one public cache type; `Resolver::welds` stays public for weld stats |
 | `.without_weld()` | `Weld::off()` = fill and border both `Keep`; `.weld(Weld::off())` clears the weld | an off weld is a value, not a separate verb |
 | `.gpu_weld(w)` backend | only `SceneSpec::weld_backend(..)` (and `Ui::gpu_welding` in `mui`) | principle 8 |
 | `material_symbols::codepoint("10k")` | `sym::_10K` | a name starting with a digit gets a `_` prefix to be an identifier |

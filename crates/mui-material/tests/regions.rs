@@ -219,8 +219,8 @@ fn morph_resize_and_cached_resolution_agree() {
         let mut spec = SceneSpec::new(root);
         spec.device_scale = Some(scale);
         let fresh = resolve(&spec).unwrap();
-        let cached = cache.resolve(&spec).unwrap();
-        let again = cache.resolve(&spec).unwrap();
+        let cached = cache.resolve(&spec).unwrap().clone();
+        let again = cache.resolve(&spec).unwrap().clone();
         assert_eq!(
             fresh.surface("a").unwrap().path,
             cached.surface("a").unwrap().path

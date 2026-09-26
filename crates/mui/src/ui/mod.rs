@@ -995,7 +995,7 @@ impl Ui {
         spec.scroll_bars = Some(heats);
         let mut glided = false;
         let nodes = &mut self.nodes;
-        let scene = self.resolver.resolve_animated(
+        let scene = self.resolver.resolve_after(
             &spec,
             &mut |key, e, target| {
                 let spring = e.extras().layout_transition.unwrap_or(Spring::DEFAULT);
