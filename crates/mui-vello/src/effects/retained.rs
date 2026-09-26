@@ -1,7 +1,7 @@
 use super::{Budget, Converted, EffectStats, Error, WeldTextures};
 use crate::classic::{Classic, Textures};
 use crate::{
-    kurbo::{Affine, Rect, Shape as _},
+    kurbo::{Affine, Rect, Shape as _, Stroke},
     Cache, Canvas as _,
 };
 use mui_geometry::PathCommand;
@@ -39,6 +39,8 @@ pub struct GpuRenderer {
     size: [u32; 2],
     retained: Vec<Painted>,
     paths: Converted,
+    /// Where a short canvas path is converted on its way into the scene.
+    short: crate::kurbo::BezPath,
     transform: Option<Affine>,
     /// Bumped by anything that changes which image an entry samples.
     mapping: (u64, u64),
@@ -409,6 +411,7 @@ impl GpuRenderer {
             size,
             retained: Vec::new(),
             paths: Converted::default(),
+            short: Default::default(),
             transform: None,
             mapping: (0, 0),
             local_mapping: 0,
@@ -913,10 +916,28 @@ impl GpuRenderer {
                     if p.layer != Layer::Clip && cull.is_some_and(off) {
                         continue;
                     }
-                    if let Some(color) = crate::plain_fill(p) {
-                        let fill = self.paths.fill(&p.path, color)?;
-                        canvas.scene.append(fill, Some(crate::placed(xf, p)));
-                        continue;
+                    if let Some(color) = crate::plain(p) {
+                        let at = crate::placed(xf, p);
+                        let long = p.path.commands.len() >= super::REPLAYED;
+                        let stroke = p.width > 0.0;
+                        // A glyph run or an icon only moves: encoded once.
+                        if long && !stroke {
+                            let fill = self.paths.fill(&p.path, color)?;
+                            canvas.scene.append(fill, Some(at));
+                            continue;
+                        }
+                        // A canvas draws fresh short paths most frames:
+                        // converted in place, never kept.
+                        if !long && matches!(p.layer, Layer::Draw(_)) {
+                            let path = &mut self.short;
+                            crate::bez_path_into(&p.path, crate::ARC_TOLERANCE, path)?;
+                            let scene = &mut *canvas.scene;
+                            match stroke {
+                                true => scene.stroke(&Stroke::new(p.width), at, color, None, path),
+                                false => scene.fill(peniko::Fill::NonZero, at, color, None, path),
+                            }
+                            continue;
+                        }
                     }
                     crate::one(&mut canvas, p, self.paths.get(&p.path)?)?;
                 }
