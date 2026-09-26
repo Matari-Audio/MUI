@@ -883,7 +883,7 @@ impl Reel {
                 }
                 // The track samples the frame's own time, subframe 0.
                 for s in frame.scene.surfaces() {
-                    let named = mui_scene::Id::is_named(&s.key);
+                    let named = Id::is_named(&s.key);
                     let wanted = script
                         .track
                         .as_ref()
