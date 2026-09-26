@@ -519,12 +519,14 @@ fn a_percentage_below_the_childs_own_floor_squeezes_instead_of_erroring() {
 #[test]
 fn a_declared_size_smaller_than_its_own_padding_is_not_a_squeeze() {
     assert!(resolve(&leaf(10., 10.).pad(6.), None, Default::default()).is_ok());
-    assert!(resolve(
-        &row([leaf(0., 0.).pad(5.9)]),
-        Some(Size::new(354., 231.6)),
-        Default::default()
-    )
-    .is_ok());
+    assert!(
+        resolve(
+            &row([leaf(0., 0.).pad(5.9)]),
+            Some(Size::new(354., 231.6)),
+            Default::default()
+        )
+        .is_ok()
+    );
 }
 
 #[test]

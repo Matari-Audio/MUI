@@ -23,10 +23,10 @@ use vello_common::filter_effects::{EdgeMode, Filter, FilterPrimitive};
 /// The brush type [`Canvas::set_paint`] takes, so the trait can be
 /// implemented outside this crate.
 pub use vello_common::paint::PaintType;
-use vello_common::peniko::color::PremulRgba8;
-use vello_common::peniko::color::{AlphaColor, DynamicColor, Srgb};
 #[cfg(feature = "cpu")]
 use vello_common::peniko::ImageSampler;
+use vello_common::peniko::color::PremulRgba8;
+use vello_common::peniko::color::{AlphaColor, DynamicColor, Srgb};
 use vello_common::peniko::{Blob, ColorStop, ColorStops, FontData, Gradient};
 use vello_common::pixmap::Pixmap;
 pub use vello_common::{kurbo, peniko};
@@ -40,7 +40,7 @@ pub use classic::Classic;
 pub mod effects;
 
 /// The path conversion painting uses, the same one input hit-tests with.
-pub use mui_geometry::{bez_path, bez_path_into, ARC_TOLERANCE};
+pub use mui_geometry::{ARC_TOLERANCE, bez_path, bez_path_into};
 
 #[cfg(test)]
 mod tests {
@@ -927,7 +927,7 @@ mod seam {
 #[cfg(all(test, feature = "cpu"))]
 mod snapshot {
     use super::*;
-    use mui_scene::{prelude::*, ResolvedScene, TextGlyph};
+    use mui_scene::{ResolvedScene, TextGlyph, prelude::*};
     use vello_common::pixmap::Pixmap;
 
     /// The whole stack on the CPU: a filled card reaches the pixels, its ink
@@ -942,10 +942,12 @@ mod snapshot {
         let mut spec = SceneSpec::new(root).offered(Size::new(120., 60.));
         spec.font = Some(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
         let scene = resolve_scene(&spec).unwrap();
-        assert!(scene
-            .paint
-            .iter()
-            .any(|p| p.layer == mui_scene::Layer::Text));
+        assert!(
+            scene
+                .paint
+                .iter()
+                .any(|p| p.layer == mui_scene::Layer::Text)
+        );
 
         let mut ctx = vello_cpu::RenderContext::new(120, 60);
         let mut res = vello_cpu::Resources::default();

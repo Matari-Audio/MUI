@@ -188,11 +188,13 @@ mod tests {
             )
             .unwrap();
         assert_eq!(frames, vec![(false, 0.), (true, 0.), (true, 1. / 30.)]);
-        assert!(decode(
-            &json!({"kind":"pointer","x":1e30,"y":0,"buttons":1}),
-            PointerInput::default()
-        )
-        .is_err());
+        assert!(
+            decode(
+                &json!({"kind":"pointer","x":1e30,"y":0,"buttons":1}),
+                PointerInput::default()
+            )
+            .is_err()
+        );
         editor
             .advance(&[json!({"kind":"cancel"})], 3200, |_, i, _, _| {
                 assert!(i.pointer.buttons.is_empty());

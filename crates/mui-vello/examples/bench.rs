@@ -13,8 +13,8 @@ use std::time::Instant;
 
 use std::sync::Arc;
 
-use mui::prelude::*;
 use mui::Ui;
+use mui::prelude::*;
 use mui_scene::{Layer, ResolvedScene};
 use mui_vello::kurbo::Affine;
 use mui_vello::{Cache, Cpu};

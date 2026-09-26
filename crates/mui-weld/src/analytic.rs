@@ -4,7 +4,7 @@
 //! absent from the uniform block. The domain includes the maximum join reach, so
 //! changing morph progress cannot resize a texture. Unsupported brushes/contours
 //! return an error; this path never silently invokes the CPU rasterizer.
-use crate::boundary::{Boundary, Plate, BOUNDARY_BYTES};
+use crate::boundary::{BOUNDARY_BYTES, Boundary, Plate};
 use crate::{Brush, Channel, Color, Error, Geometry, Point, Rect, Source, Weld};
 use std::sync::Arc;
 
@@ -67,7 +67,7 @@ impl AnalyticSource {
             _ => {
                 return Err(Error::Invalid(
                     "GPU fill supports solid or two-stop 0..1 linear gradient",
-                ))
+                ));
             }
         };
         let border = match &source.border {
@@ -76,7 +76,7 @@ impl AnalyticSource {
             _ => {
                 return Err(Error::Invalid(
                     "GPU border currently requires a solid paint",
-                ))
+                ));
             }
         };
         let value = Self {
@@ -496,9 +496,10 @@ mod tests {
     fn material_update_cannot_move_geometry() {
         let mut a = request();
         let before = a.clone();
-        assert!(a
-            .set_source_material(0, AnalyticSource::from_source(&source(5.)).unwrap())
-            .is_err());
+        assert!(
+            a.set_source_material(0, AnalyticSource::from_source(&source(5.)).unwrap())
+                .is_err()
+        );
         assert_eq!(a, before);
     }
     #[test]
@@ -520,12 +521,14 @@ mod tests {
     #[test]
     fn source_count_is_explicitly_bounded() {
         assert!(AnalyticWeld::from_sources(&[], Weld::all(), 1.).is_err());
-        assert!(AnalyticWeld::from_sources(
-            &[source(0.), source(30.), source(60.), source(90.)],
-            Weld::all(),
-            1.
-        )
-        .is_err());
+        assert!(
+            AnalyticWeld::from_sources(
+                &[source(0.), source(30.), source(60.), source(90.)],
+                Weld::all(),
+                1.
+            )
+            .is_err()
+        );
     }
     #[test]
     fn unsupported_gradient_is_not_silently_baked() {

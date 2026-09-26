@@ -52,9 +52,10 @@ fn malformed_clip_cannot_publish_a_partial_target() {
     let mut invalid = square.clone();
     invalid.commands[0] = mui_geometry::PathCommand::MoveTo(Point::new(f64::NAN, 0.0));
     let mut hit = Hit::default();
-    assert!(hit
-        .push_clipped_paths("bad", &square, None, Some(&[invalid.into()]))
-        .is_err());
+    assert!(
+        hit.push_clipped_paths("bad", &square, None, Some(&[invalid.into()]))
+            .is_err()
+    );
     assert!(hit.is_empty());
 }
 

@@ -1,7 +1,7 @@
 use mui_geometry::kurbo::{Point as KPoint, Shape};
-use mui_geometry::{bez_path, boundary_distance, Bounds};
-use mui_scene::prelude::*;
+use mui_geometry::{Bounds, bez_path, boundary_distance};
 use mui_scene::SceneError;
+use mui_scene::prelude::*;
 fn has(path: &Path, x: f64, y: f64) -> bool {
     bez_path(path, 0.01).unwrap().winding(KPoint::new(x, y)) != 0
 }

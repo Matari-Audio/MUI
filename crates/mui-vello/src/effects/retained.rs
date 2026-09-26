@@ -1,8 +1,8 @@
 use super::{Budget, Converted, EffectStats, Error, WeldTextures};
 use crate::classic::{Classic, Textures};
 use crate::{
-    kurbo::{Affine, Rect, Shape as _, Stroke},
     Cache, Canvas as _,
+    kurbo::{Affine, Rect, Shape as _, Stroke},
 };
 use mui_geometry::PathCommand;
 use mui_scene::{ExternalWeld, Layer, Painted, ResolvedScene, ShadowKind};

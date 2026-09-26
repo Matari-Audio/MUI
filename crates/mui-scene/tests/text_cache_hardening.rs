@@ -1,5 +1,5 @@
 use mui_scene::prelude::*;
-use mui_scene::{resolve_scene_with, TextCache};
+use mui_scene::{TextCache, resolve_scene_with};
 
 fn font() -> Font {
     Font::new(epaint_default_fonts::HACK_REGULAR).unwrap()

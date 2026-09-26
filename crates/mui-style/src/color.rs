@@ -1040,36 +1040,48 @@ mod tests {
     #[test]
     fn an_invalid_pigment_is_caught() {
         assert!(Palette::NEUTRAL.is_valid());
-        assert!(!Palette {
-            primary: Pigment::new(f32::NAN, 0.1),
-            ..Palette::NEUTRAL
-        }
-        .is_valid());
-        assert!(!Palette {
-            step: f32::INFINITY,
-            ..Palette::NEUTRAL
-        }
-        .is_valid());
-        assert!(!Palette {
-            step: 0.0,
-            ..Palette::NEUTRAL
-        }
-        .is_valid());
-        assert!(!Palette {
-            hover: 0.0,
-            ..Palette::NEUTRAL
-        }
-        .is_valid());
-        assert!(!Palette {
-            step: -0.045,
-            ..Palette::NEUTRAL
-        }
-        .is_valid());
-        assert!(!Palette {
-            hover: -0.11,
-            ..Palette::NEUTRAL
-        }
-        .is_valid());
+        assert!(
+            !Palette {
+                primary: Pigment::new(f32::NAN, 0.1),
+                ..Palette::NEUTRAL
+            }
+            .is_valid()
+        );
+        assert!(
+            !Palette {
+                step: f32::INFINITY,
+                ..Palette::NEUTRAL
+            }
+            .is_valid()
+        );
+        assert!(
+            !Palette {
+                step: 0.0,
+                ..Palette::NEUTRAL
+            }
+            .is_valid()
+        );
+        assert!(
+            !Palette {
+                hover: 0.0,
+                ..Palette::NEUTRAL
+            }
+            .is_valid()
+        );
+        assert!(
+            !Palette {
+                step: -0.045,
+                ..Palette::NEUTRAL
+            }
+            .is_valid()
+        );
+        assert!(
+            !Palette {
+                hover: -0.11,
+                ..Palette::NEUTRAL
+            }
+            .is_valid()
+        );
     }
 
     #[test]

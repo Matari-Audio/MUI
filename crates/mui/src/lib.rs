@@ -39,13 +39,13 @@ pub use ui::{Clipboard, Edit, Frame, Ui};
 pub mod prelude {
     pub use crate::widgets::presets::{card, chip, glass, panel, tile};
     pub use crate::widgets::{
-        bins, bins_hover, button, color_picker, curve, drag_value, knob, slider, stepped,
-        text_edit, text_input, toggle, BinAxis, BinEdit, Bins, Control, CurveEdit, Newline,
-        TextEdit, TextOpts, Variant,
+        BinAxis, BinEdit, Bins, Control, CurveEdit, Newline, TextEdit, TextOpts, Variant, bins,
+        bins_hover, button, color_picker, curve, drag_value, knob, slider, stepped, text_edit,
+        text_input, toggle,
     };
     pub use crate::{Edit, Frame, SemanticAction, Ui};
     pub use mui_input::{
-        Axis, Button, Buttons, Ime, Input, Key, KeyPress, Mods, PointerInput, Response, FINE_DRAG,
+        Axis, Button, Buttons, FINE_DRAG, Ime, Input, Key, KeyPress, Mods, PointerInput, Response,
     };
     pub use mui_scene::prelude::*;
     pub use mui_scene::{Corners, Mode, Palette, Pigment, SpacingToken, Spring};

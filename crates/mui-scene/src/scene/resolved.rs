@@ -6,8 +6,8 @@ use mui_geometry::{Bounds, Path, Point, RoundedRect};
 use mui_layout::{Frame, Layout, Size};
 use mui_text::{Axes, Font};
 
-use super::text::CachedRun;
 use super::SceneError;
+use super::text::CachedRun;
 use crate::{Cursor, Mix, Paint, Semantics, ShadowKind};
 
 /// Which layer of a node's style a [`Painted`] entry is.
@@ -283,7 +283,7 @@ pub struct ResolvedScene {
 impl ResolvedScene {
     /// The memoised subtrees `key`'s surface is in, outermost first, each
     /// with whether this resolve reused it.
-    pub fn memos_at(&self, key: &str) -> impl Iterator<Item = (u64, bool)> + '_ {
+    pub fn memos_at(&self, key: &str) -> impl Iterator<Item = (u64, bool)> + use<'_> {
         let at = self.at.get(key).copied();
         self.memos
             .iter()

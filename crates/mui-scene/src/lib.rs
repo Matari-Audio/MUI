@@ -38,25 +38,25 @@ mod dsl;
 mod element;
 mod external;
 mod material_weld;
-pub use capture::{resize_capture, CaptureError, CaptureLayer};
+pub use capture::{CaptureError, CaptureLayer, resize_capture};
 mod scene;
 pub use external::{ExternalWeld, WeldBackend};
 mod weld_dsl;
 
 pub use mui_weld::{Channel as WeldChannel, Quality as WeldQuality, Weld, WeldCache};
 
-pub use dsl::{caption, label, title, IntoLen, Sugar};
+pub use dsl::{IntoLen, Sugar, caption, label, title};
 pub use element::{
-    canvas, canvas_cached, column, fits, grid, icon, leaf, overlay, row, spacer, text, Appear,
-    Canvas, CanvasCache, Carve, Content, Draw, El, Element, Extras, IntoEl, Kind, Memo, Outline,
-    Paints, Semantics, State, StateStyle, Styled,
+    Appear, Canvas, CanvasCache, Carve, Content, Draw, El, Element, Extras, IntoEl, Kind, Memo,
+    Outline, Paints, Semantics, State, StateStyle, Styled, canvas, canvas_cached, column, fits,
+    grid, icon, leaf, overlay, row, spacer, text,
 };
 pub use mui_geometry::CornerStyle;
 pub use mui_layout::{
     Align, Area, Frame, Id, Insets, Justify, Layout, Len, Limits, Match, Node, Pin, Size, Spacing,
     SpacingScale, SpacingToken,
 };
-pub use mui_motion::{curve, Ease, Keys, Spring};
+pub use mui_motion::{Ease, Keys, Spring, curve};
 pub use mui_style::{
     Color, Corner, Corners, Cursor, Elevation, Fill, Fit, Gradient, GradientKind, Image, Mix, Mode,
     Paint, Palette, Pigment, Radius, Role, Shadow, ShadowKind, Stroke, Style, Theme,
@@ -65,9 +65,9 @@ pub use mui_text::{Axes, Font, Weight};
 pub mod material_symbols;
 pub use scene::bar;
 pub use scene::{
-    push_index, resolve_scene, resolve_scene_animated, resolve_scene_cached,
-    resolve_scene_retained, resolve_scene_with, Layer, Painted, PlacedPath, ResolvedScene,
-    ResolvedSurface, SceneError, SceneSpec, Text, TextCache, TextGlyph,
+    Layer, Painted, PlacedPath, ResolvedScene, ResolvedSurface, SceneError, SceneSpec, Text,
+    TextCache, TextGlyph, push_index, resolve_scene, resolve_scene_animated, resolve_scene_cached,
+    resolve_scene_retained, resolve_scene_with,
 };
 
 /// Everything a scene file needs, including the spacing tokens as bare
@@ -75,16 +75,16 @@ pub use scene::{
 pub mod prelude {
     pub use crate::Role::*;
     pub use crate::{
-        canvas, canvas_cached, caption, col, column, fits, grid, icon, label, leaf, overlay,
-        resolve_scene, row, spacer, stack, text, title, weld, weld_morph, Align, Appear, Area,
-        Axes, BorderAlign, BorderRamp, CanvasCache, Color, Corner, Cursor, Draw, Ease, El,
-        Elevation, Fill, Fit, Font, Gradient, Id, Image, IntoEl, IntoLen, Justify, Keys, Kind, Len,
-        Match, Mix, Paints, Pin, Radius, Role, SceneSpec, Shadow, ShapeLayout, Size, State, Style,
-        Styled, Sugar, Theme, Weight, Weld, WeldBackend, WeldChannel, WeldQuality,
+        Align, Appear, Area, Axes, BorderAlign, BorderRamp, CanvasCache, Color, Corner, Cursor,
+        Draw, Ease, El, Elevation, Fill, Fit, Font, Gradient, Id, Image, IntoEl, IntoLen, Justify,
+        Keys, Kind, Len, Match, Mix, Paints, Pin, Radius, Role, SceneSpec, Shadow, ShapeLayout,
+        Size, State, Style, Styled, Sugar, Theme, Weight, Weld, WeldBackend, WeldChannel,
+        WeldQuality, canvas, canvas_cached, caption, col, column, fits, grid, icon, label, leaf,
+        overlay, resolve_scene, row, spacer, stack, text, title, weld, weld_morph,
     };
     pub use mui_geometry::{CornerStyle, Path, Point};
     pub use mui_layout::Spacing;
-    pub use mui_layout::SpacingToken::{Xl, Xs, L, M, S};
+    pub use mui_layout::SpacingToken::{L, M, S, Xl, Xs};
     /// `n` steps of the theme's spacing unit: `.gap(step(1.5))`, for the
     /// values between `Xs` and `Xl`.
     ///

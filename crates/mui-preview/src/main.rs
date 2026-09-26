@@ -21,8 +21,8 @@ use accesskit_winit::{Adapter, Event as AccessEvent, WindowEvent as AccessWindow
 use host::Gpu;
 use mui::geometry::Point;
 use mui::prelude::*;
-use mui::vello::kurbo::{Affine, Rect, Shape as _, Stroke};
 use mui::vello::Canvas as _;
+use mui::vello::kurbo::{Affine, Rect, Shape as _, Stroke};
 use mui_access::accesskit::{Action as AccessAction, NodeId};
 use scenes::PreviewScene;
 use winit::application::ApplicationHandler;
@@ -80,7 +80,7 @@ fn named(k: NamedKey) -> Option<mui::prelude::Key> {
             return FUNCTION
                 .iter()
                 .position(|f| *f == k)
-                .map(|i| K::Function(i as u8 + 1))
+                .map(|i| K::Function(i as u8 + 1));
         }
     })
 }

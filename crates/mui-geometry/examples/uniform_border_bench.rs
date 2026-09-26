@@ -49,5 +49,10 @@ fn main() {
     }
     before.sort_by(f64::total_cmp);
     after.sort_by(f64::total_cmp);
-    println!("uniform rounded border: sweep {:.3} ms, offsets {:.3} ms, {:.2}x; median of 51 warmed samples", before[25]*1000., after[25]*1000., before[25]/after[25]);
+    println!(
+        "uniform rounded border: sweep {:.3} ms, offsets {:.3} ms, {:.2}x; median of 51 warmed samples",
+        before[25] * 1000.,
+        after[25] * 1000.,
+        before[25] / after[25]
+    );
 }

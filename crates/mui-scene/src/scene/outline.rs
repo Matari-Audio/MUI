@@ -4,12 +4,12 @@ use rustc_hash::FxHashMap as HashMap;
 use std::sync::Arc;
 
 use mui_geometry::{
-    boolean, fillet, union, BooleanOp, Bounds, CornerStyle, Fillet, Path, Point, Polygon,
-    RoundedRect, Topology,
+    BooleanOp, Bounds, CornerStyle, Fillet, Path, Point, Polygon, RoundedRect, Topology, boolean,
+    fillet, union,
 };
 use mui_layout::Frame;
 
-use super::{bounds, polygons, SceneError, Walk};
+use super::{SceneError, Walk, bounds, polygons};
 use crate::{Carve, El, Radius};
 
 /// A node's resolved outline, and what else its shape knows. Its geometry

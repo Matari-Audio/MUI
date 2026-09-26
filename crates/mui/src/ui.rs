@@ -7,15 +7,15 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use mui_geometry::Point;
 use mui_input::{
-    Button, Buttons, Hit, Ime, Input, Interaction, Key, KeyPress, PointerInput, Response, FINE_DRAG,
+    Button, Buttons, FINE_DRAG, Hit, Ime, Input, Interaction, Key, KeyPress, PointerInput, Response,
 };
-use mui_layout::SpacingToken::{Xs, S};
-use mui_scene::prelude::{overlay, text, Paints as _, Role};
+use mui_layout::SpacingToken::{S, Xs};
 use mui_scene::Keys;
+use mui_scene::prelude::{Paints as _, Role, overlay, text};
 use mui_scene::{
-    bar, push_index, Appear, Area, Color, Cursor, El, Element, Fill, Font, Kind, Layer, Mix, Paint,
-    Painted, Palette, Pin, Radius, ResolvedScene, SceneError, SceneSpec, Size, Spacing, Spring,
-    State, TextCache, Theme,
+    Appear, Area, Color, Cursor, El, Element, Fill, Font, Kind, Layer, Mix, Paint, Painted,
+    Palette, Pin, Radius, ResolvedScene, SceneError, SceneSpec, Size, Spacing, Spring, State,
+    TextCache, Theme, bar, push_index,
 };
 use std::sync::Arc;
 
@@ -859,11 +859,7 @@ impl Ui {
     /// The keys this frame, if `id` is focused. Empty otherwise, so a widget
     /// may loop over it unconditionally.
     pub fn keys(&self, id: &str) -> &[KeyPress] {
-        if self.focused(id) {
-            &self.keys
-        } else {
-            &[]
-        }
+        if self.focused(id) { &self.keys } else { &[] }
     }
     /// Every key this frame, whatever holds the focus: the stream a global
     /// shortcut reads. `Ui` has already taken Tab and Escape for focus, and
@@ -898,19 +894,11 @@ impl Ui {
                     )
                 })
         });
-        if typing {
-            &[]
-        } else {
-            &self.keys
-        }
+        if typing { &[] } else { &self.keys }
     }
     /// The text typed this frame, if `id` is focused.
     pub fn text(&self, id: &str) -> &str {
-        if self.focused(id) {
-            &self.typed
-        } else {
-            ""
-        }
+        if self.focused(id) { &self.typed } else { "" }
     }
     /// The pointer relative to `id`'s frame origin, if both exist.
     pub fn local(&self, id: &str) -> Option<Point> {
@@ -4324,9 +4312,11 @@ mod tests {
     fn an_unnamed_node_transitions_and_takes_its_declared_states() {
         let mut ui = Ui::new(Theme::DEFAULT);
         let tree = |on: bool| {
-            row![leaf(40., 40.)
-                .fill(if on { Role::Primary } else { Role::Field })
-                .animate()]
+            row![
+                leaf(40., 40.)
+                    .fill(if on { Role::Primary } else { Role::Field })
+                    .animate()
+            ]
         };
         let from = solid(
             &ui.frame(tree(false), None, Input::default(), 0.016)
@@ -4344,10 +4334,12 @@ mod tests {
         assert!(mid != from && mid != to, "between the two fills");
 
         let off = || {
-            row![leaf(40., 40.)
-                .fill(Role::Primary)
-                .on(State::Disabled, |s| s.fill(Role::Field))
-                .disabled(true)]
+            row![
+                leaf(40., 40.)
+                    .fill(Role::Primary)
+                    .on(State::Disabled, |s| s.fill(Role::Field))
+                    .disabled(true)
+            ]
         };
         let f = ui.frame(off(), None, Input::default(), 0.016).unwrap();
         assert_eq!(solid(&f), to_paint(Role::Field));
@@ -4366,10 +4358,12 @@ mod tests {
     #[test]
     fn an_unnamed_node_takes_its_hover_and_press_looks() {
         let tree = || {
-            row![leaf(40., 40.)
-                .fill(Role::Raised)
-                .on(State::Hover, |s| s.radius(3.))
-                .on(State::Press, |s| s.radius(5.))]
+            row![
+                leaf(40., 40.)
+                    .fill(Role::Raised)
+                    .on(State::Hover, |s| s.radius(3.))
+                    .on(State::Press, |s| s.radius(5.))
+            ]
         };
         let mut ui = Ui::new(Theme::DEFAULT);
         let cold = corner(&ui.frame(tree(), None, Input::default(), 0.016).unwrap());

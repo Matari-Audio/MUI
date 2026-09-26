@@ -56,11 +56,13 @@ fn a_turned_slab_shows_its_wall_and_blur_is_deterministic() {
     let size = Size::new(80., 45.);
     stage.layer("l", &halves(size), size, 1.).unwrap();
     let shot = |t: f64| Shot {
-        planes: vec![Plane::new("l", 80., 45.)
-            .scale(0.5)
-            .rotate(0., 40. + t as f32 * 60., 0.)
-            .depth(30.)
-            .edge([1., 0., 0.])],
+        planes: vec![
+            Plane::new("l", 80., 45.)
+                .scale(0.5)
+                .rotate(0., 40. + t as f32 * 60., 0.)
+                .depth(30.)
+                .edge([1., 0., 0.]),
+        ],
         post: Post::NONE,
         ..Shot::new(Camera::front(45., 30.))
     };
@@ -83,9 +85,11 @@ fn a_turned_slab_shows_its_wall_and_blur_is_deterministic() {
 #[test]
 fn a_background_that_does_not_compile_is_an_error_not_a_panic() {
     let Some(mut stage) = stage(8, 8) else { return };
-    assert!(stage
-        .background("fn background(uv: vec2f, t: f32) -> vec3f { oops }")
-        .is_err());
+    assert!(
+        stage
+            .background("fn background(uv: vec2f, t: f32) -> vec3f { oops }")
+            .is_err()
+    );
     stage
         .background("fn background(uv: vec2f, t: f32) -> vec3f { return vec3f(uv, 0.); }")
         .unwrap();
@@ -214,11 +218,13 @@ fn text_extrudes_from_its_own_glyphs() {
     let [w, h] = plane.size;
     let f = stage
         .render(0., 0., 1, &|_| Shot {
-            planes: vec![plane
-                .clone()
-                .depth(12.)
-                .rotate(0., 35., 0.)
-                .edge([0., 0., 1.])],
+            planes: vec![
+                plane
+                    .clone()
+                    .depth(12.)
+                    .rotate(0., 35., 0.)
+                    .edge([0., 0., 1.]),
+            ],
             post: Post::NONE,
             ..Shot::new(Camera::front(h * 1.4, 30.))
         })

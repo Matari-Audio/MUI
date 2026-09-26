@@ -4,9 +4,9 @@
 //! One canvas, one hit shape. The 1024 bars are *not* 1024 tagged draws --
 //! the pointer's x is mapped to a bin arithmetically, which is why a drag
 //! across the whole display costs one hit test rather than a thousand.
-use mui_input::{Button, Key, FINE_DRAG};
-use mui_scene::prelude::*;
+use mui_input::{Button, FINE_DRAG, Key};
 use mui_scene::Size;
+use mui_scene::prelude::*;
 
 use crate::Ui;
 

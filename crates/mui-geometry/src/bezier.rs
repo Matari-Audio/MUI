@@ -122,10 +122,11 @@ mod tests {
     fn preserves_curves_and_capsule_bounds() {
         let p = Path::capsule(48.0, 120.0).unwrap();
         let b = bez_path(&p, ARC_TOLERANCE).unwrap();
-        assert!(b
-            .elements()
-            .iter()
-            .any(|e| matches!(e, PathEl::CurveTo(..))));
+        assert!(
+            b.elements()
+                .iter()
+                .any(|e| matches!(e, PathEl::CurveTo(..)))
+        );
         let bounds = b.bounding_box();
         assert!((bounds.width() - 48.0).abs() < 0.05);
         assert!((bounds.height() - 120.0).abs() < 0.05);

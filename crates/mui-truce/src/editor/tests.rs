@@ -5,7 +5,7 @@ use super::*;
 use crate::window::Handler;
 use baseview::{Event, MouseEvent};
 use keyboard_types::{Key as HostKey, KeyState, KeyboardEvent, Modifiers};
-use mui::prelude::{knob, toggle, Point, Theme};
+use mui::prelude::{Point, Theme, knob, toggle};
 use mui::scene::prelude::row;
 use std::sync::Mutex;
 use truce::prelude::*;

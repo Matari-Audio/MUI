@@ -5,9 +5,9 @@
 //! responds in that disc -- so nothing here keeps a second radius in step
 //! with the first.
 use mui_input::{Axis, FINE_DRAG};
+use mui_scene::Size;
 use mui_scene::curve::{Curve, CurvePoint, Handle};
 use mui_scene::prelude::*;
-use mui_scene::Size;
 
 use crate::Ui;
 

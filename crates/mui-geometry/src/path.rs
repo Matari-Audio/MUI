@@ -321,11 +321,7 @@ impl Path {
         for q in it {
             p = p.line_to(q);
         }
-        if closed {
-            p.close()
-        } else {
-            p
-        }
+        if closed { p.close() } else { p }
     }
     /// A centered, exact vertical capsule. This is a widget shape, not an
     /// automatically merged tab; its radius is exactly width/2.
@@ -446,10 +442,12 @@ mod cubic_tests {
         let svg = p.to_svg_data().unwrap();
         assert!(svg.starts_with("M 0"), "{svg}");
         assert!(svg.contains(" C "), "{svg}");
-        assert!(Path::default()
-            .cubic_to(Point::new(0., 0.), Point::new(0., 0.), Point::new(0., 0.))
-            .validate(10)
-            .is_err());
+        assert!(
+            Path::default()
+                .cubic_to(Point::new(0., 0.), Point::new(0., 0.), Point::new(0., 0.))
+                .validate(10)
+                .is_err()
+        );
     }
 }
 
@@ -736,10 +734,11 @@ mod svg_tests {
         for (x, y) in fa.iter().flatten().zip(fb.iter().flatten()) {
             assert!(x.distance(*y) < 1e-6, "{x:?} vs {y:?}");
         }
-        assert!(a
-            .commands
-            .iter()
-            .any(|c| matches!(c, PathCommand::CubicTo(..))));
+        assert!(
+            a.commands
+                .iter()
+                .any(|c| matches!(c, PathCommand::CubicTo(..)))
+        );
 
         // The arc really bows: the half-circle from (130,20) to (150,130)
         // bulges past both endpoints' x.

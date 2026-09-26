@@ -20,27 +20,31 @@ fn empty_sets_have_boolean_semantics_in_both_orders() {
                 50.
             ));
         }
-        assert!(boolean_paths(
-            a,
-            b,
-            BooleanOp::Intersection,
+        assert!(
+            boolean_paths(
+                a,
+                b,
+                BooleanOp::Intersection,
+                Default::default(),
+                Default::default()
+            )
+            .unwrap()
+            .commands
+            .is_empty()
+        );
+    }
+    assert!(
+        boolean_paths(
+            &empty,
+            &p,
+            BooleanOp::Difference,
             Default::default(),
             Default::default()
         )
         .unwrap()
         .commands
-        .is_empty());
-    }
-    assert!(boolean_paths(
-        &empty,
-        &p,
-        BooleanOp::Difference,
-        Default::default(),
-        Default::default()
-    )
-    .unwrap()
-    .commands
-    .is_empty());
+        .is_empty()
+    );
     assert!(has(
         &boolean_paths(
             &p,
@@ -144,34 +148,42 @@ fn curved_partition_measures_gap_normally_on_both_axes() {
 #[test]
 fn geometry_limits_and_invalid_inputs_are_errors() {
     for value in [f64::NAN, f64::INFINITY, -1.] {
-        assert!(border_geometry(
-            &rect(),
-            WidthProfile::uniform(value),
-            BorderAlign::Inside,
-            Default::default(),
-            Default::default()
-        )
-        .is_err());
-        assert!(ShapeSplit::new(SplitAxis::X, 0.5)
-            .gap(value)
-            .regions(&rect(), Default::default(), Default::default())
-            .is_err());
+        assert!(
+            border_geometry(
+                &rect(),
+                WidthProfile::uniform(value),
+                BorderAlign::Inside,
+                Default::default(),
+                Default::default()
+            )
+            .is_err()
+        );
+        assert!(
+            ShapeSplit::new(SplitAxis::X, 0.5)
+                .gap(value)
+                .regions(&rect(), Default::default(), Default::default())
+                .is_err()
+        );
     }
-    assert!(ShapeSplit::new(SplitAxis::X, 0.5)
-        .bend(0.2)
-        .regions(
-            &rect(),
-            OffsetOptions {
-                flatten_tolerance: 1e-12,
-                max_points: 100,
-                ..Default::default()
-            },
-            Default::default()
-        )
-        .is_err());
-    assert!(WidthProfile::horizontal(1., 2., -f64::MAX, f64::MAX)
-        .at(0.)
-        .is_err());
+    assert!(
+        ShapeSplit::new(SplitAxis::X, 0.5)
+            .bend(0.2)
+            .regions(
+                &rect(),
+                OffsetOptions {
+                    flatten_tolerance: 1e-12,
+                    max_points: 100,
+                    ..Default::default()
+                },
+                Default::default()
+            )
+            .is_err()
+    );
+    assert!(
+        WidthProfile::horizontal(1., 2., -f64::MAX, f64::MAX)
+            .at(0.)
+            .is_err()
+    );
     let invalid = Path::polyline(
         [
             Point::new(0., 0.),

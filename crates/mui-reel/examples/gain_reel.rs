@@ -12,7 +12,7 @@
 //! gated sine through the gain stage, run per video frame on the same model
 //! the UI edits: the knob drag you see is the level you hear, sample-locked.
 use mui::prelude::*;
-use mui_reel::{beat, beats, Ease, Reel, ReelEvent, Script};
+use mui_reel::{Ease, Reel, ReelEvent, Script, beat, beats};
 
 struct Gain {
     gain: f64,

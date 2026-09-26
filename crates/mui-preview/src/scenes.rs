@@ -688,12 +688,14 @@ impl PreviewScene for BinSpectrum {
         "bins(ui, id, &Bins): draw across the bars to paint an additive spectrum. Shift is fine, a secondary click resets one, and with the focus here the arrows select and nudge. The cap line is the live level an operator chain would produce."
     }
     fn controls(&mut self, ui: &mut Ui) -> Vec<El> {
-        vec![row![
-            caption("Log axis"),
-            spacer(),
-            toggle(ui, "bins-log", &mut self.log).0.size(S).el(),
+        vec![
+            row![
+                caption("Log axis"),
+                spacer(),
+                toggle(ui, "bins-log", &mut self.log).0.size(S).el(),
+            ]
+            .align(Align::Center),
         ]
-        .align(Align::Center)]
     }
     fn specimen(&mut self, ui: &mut Ui) -> El {
         // A tween that flips its target on arrival: the ripple never settles,
@@ -814,15 +816,17 @@ impl PreviewScene for Hits {
         let dial = canvas(move |size| {
             let c = Point::new(size.width / 2.0, size.height / 2.0);
             let band = ring(c, 70.0, 44.0);
-            let mut draws = vec![Draw::fill(
-                band,
-                if lit.as_deref() == Some("band") {
-                    Role::Primary
-                } else {
-                    Role::Field
-                },
-            )
-            .tag("band")];
+            let mut draws = vec![
+                Draw::fill(
+                    band,
+                    if lit.as_deref() == Some("band") {
+                        Role::Primary
+                    } else {
+                        Role::Field
+                    },
+                )
+                .tag("band"),
+            ];
             for i in 0..3usize {
                 let a = std::f64::consts::TAU * i as f64 / 3.0;
                 let at = Point::new(c.x + 57.0 * a.cos(), c.y + 57.0 * a.sin());
@@ -1232,9 +1236,11 @@ impl PreviewScene for Motion {
         .id("motion")
     }
     fn controls(&mut self, ui: &mut Ui) -> Vec<El> {
-        vec![slider(ui, "sweep", "sweep", &mut self.sweep, 0.0..=1.0)
-            .0
-            .el()]
+        vec![
+            slider(ui, "sweep", "sweep", &mut self.sweep, 0.0..=1.0)
+                .0
+                .el(),
+        ]
     }
 }
 
@@ -1624,7 +1630,7 @@ pub fn effects() -> El {
 mod tests {
     #[cfg(feature = "cpu")]
     use super::effects;
-    use super::{editor, GlyphAxes};
+    use super::{GlyphAxes, editor};
     use mui::prelude::*;
     use mui::scene::Frame as LayoutFrame;
 

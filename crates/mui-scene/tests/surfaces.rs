@@ -2,7 +2,7 @@ use mui_geometry::{
     bez_path, boundary_distance,
     kurbo::{Point as KPoint, Shape},
 };
-use mui_scene::{prelude::*, resolve_scene_with, Layer, TextCache};
+use mui_scene::{Layer, TextCache, prelude::*, resolve_scene_with};
 
 fn has(path: &Path, x: f64, y: f64) -> bool {
     bez_path(path, 0.01).unwrap().winding(KPoint::new(x, y)) != 0
@@ -92,10 +92,12 @@ fn title_joins_and_panel_clearance_follow_the_owner() {
         let title = scene.surface("title").unwrap();
         assert!(title.focusable);
         assert_eq!(title.frame.size, Size::new(40., 80.));
-        assert!(!scene
-            .paint
-            .iter()
-            .any(|p| p.key.as_ref() == "title" && p.layer == Layer::Fill));
+        assert!(
+            !scene
+                .paint
+                .iter()
+                .any(|p| p.key.as_ref() == "title" && p.layer == Layer::Fill)
+        );
         let again = resolve_scene_with(&spec, &mut cache).unwrap();
         assert_eq!(other.path, again.surface("other").unwrap().path);
     }

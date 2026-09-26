@@ -1,8 +1,8 @@
 //! Shape-aware layout: ordinary rows, columns and stacks inherit an inset contour.
 use crate::{BorderAlign, El, SceneError, Spacing};
 use mui_geometry::{
-    boolean_paths, inset_path, union_contours, BooleanOp, Bounds, GeometryOptions, OffsetOptions,
-    Path, PathCommand, Point, ShapeSplit,
+    BooleanOp, Bounds, GeometryOptions, OffsetOptions, Path, PathCommand, Point, ShapeSplit,
+    boolean_paths, inset_path, union_contours,
 };
 
 pub trait ShapeLayout: Sized {

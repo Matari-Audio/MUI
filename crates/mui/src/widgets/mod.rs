@@ -23,10 +23,10 @@ pub mod presets;
 mod text;
 pub mod visualization;
 
-pub use bins::{bins, bins_hover, BinAxis, BinEdit, Bins};
+pub use bins::{BinAxis, BinEdit, Bins, bins, bins_hover};
 pub(crate) use controls::step;
-pub use controls::{button, drag_value, knob, slider, stepped, toggle, Control, Variant};
-pub use curve::{curve, CurveEdit};
+pub use controls::{Control, Variant, button, drag_value, knob, slider, stepped, toggle};
+pub use curve::{CurveEdit, curve};
 pub use pick::color_picker;
 pub use presets::{card, chip, glass, panel, tile};
-pub use text::{text_edit, text_input, Newline, TextEdit, TextOpts};
+pub use text::{Newline, TextEdit, TextOpts, text_edit, text_input};

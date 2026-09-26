@@ -2,7 +2,7 @@
 #![forbid(unsafe_code)]
 use mui_scene::{material_symbols, prelude::*};
 use std::sync::LazyLock;
-use syn::{parse::Parser, punctuated::Punctuated, spanned::Spanned, Expr, Lit, Token};
+use syn::{Expr, Lit, Token, parse::Parser, punctuated::Punctuated, spanned::Spanned};
 use wasm_bindgen::prelude::*;
 
 /// Material Symbols Outlined, cut down to the icons `icon("name")` accepts;
@@ -230,7 +230,7 @@ fn element(e: &Expr, depth: usize, nodes: &mut usize) -> syn::Result<El> {
                     return Err(error(
                         e,
                         "method is not in the playground subset; see Syntax",
-                    ))
+                    ));
                 }
             })
         }
@@ -331,12 +331,14 @@ mod tests {
             let frame = render(source, 640, 480).expect(source);
             assert_eq!(frame.pixels.len(), 640 * 480 * 4);
             assert!(frame.surfaces > 1);
-            assert!(frame
-                .pixels
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .any(|p| p != &frame.pixels[..4]));
+            assert!(
+                frame
+                    .pixels
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .any(|p| p != &frame.pixels[..4])
+            );
         }
         let a = render("leaf(100., 100.).fill(Primary)", 320, 240).unwrap();
         let b = render("leaf(100., 100.).fill(Secondary)", 320, 240).unwrap();

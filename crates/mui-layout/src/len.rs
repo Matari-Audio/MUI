@@ -15,18 +15,10 @@ impl Size {
         Self { width, height }
     }
     pub(crate) fn main(self, vertical: bool) -> f64 {
-        if vertical {
-            self.height
-        } else {
-            self.width
-        }
+        if vertical { self.height } else { self.width }
     }
     pub(crate) fn cross(self, vertical: bool) -> f64 {
-        if vertical {
-            self.width
-        } else {
-            self.height
-        }
+        if vertical { self.width } else { self.height }
     }
     pub(crate) fn axes(main: f64, cross: f64, vertical: bool) -> Self {
         if vertical {

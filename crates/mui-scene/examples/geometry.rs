@@ -2,7 +2,7 @@
 //! standing still, sliding a pixel per frame, and from cold caches. Prints
 //! the median time and the Boolean passes each frame ran.
 use mui_scene::prelude::*;
-use mui_scene::{resolve_scene_with, TextCache};
+use mui_scene::{TextCache, resolve_scene_with};
 use std::time::Instant;
 
 fn panel(i: usize) -> El {

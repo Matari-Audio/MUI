@@ -1,5 +1,5 @@
-use super::pool::{bucket, ContentState};
-use mui_weld::analytic::{dirty_ranges, PARAM_BYTES};
+use super::pool::{ContentState, bucket};
+use mui_weld::analytic::{PARAM_BYTES, dirty_ranges};
 #[test]
 fn aborted_encoder_does_not_mark_texture_rendered() {
     let a = [1; PARAM_BYTES];

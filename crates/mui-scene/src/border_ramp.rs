@@ -314,10 +314,12 @@ mod tests {
             .collect();
         assert_eq!(bands.len(), 1);
         assert!(matches!(bands[0].paint, crate::Paint::Gradient { .. }));
-        assert!(!scene
-            .paint
-            .iter()
-            .any(|p| p.key.as_ref() == "tab" && p.layer == crate::Layer::Fill));
+        assert!(
+            !scene
+                .paint
+                .iter()
+                .any(|p| p.key.as_ref() == "tab" && p.layer == crate::Layer::Fill)
+        );
         let tab = scene.surface("tab").unwrap().frame;
         let rings = bands[0].path.flatten(0.1, 250_000).unwrap();
         assert!(

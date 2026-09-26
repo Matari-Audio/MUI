@@ -1,4 +1,4 @@
-use crate::{bake, Baked, Error, Request};
+use crate::{Baked, Error, Request, bake};
 use std::collections::VecDeque;
 use std::sync::Arc;
 
@@ -230,8 +230,9 @@ mod analytic_tests {
     fn invalid_morph_cannot_bypass_a_hit() {
         let mut c = WeldCache::default();
         c.get_analytic(&sources(), Weld::crisp(), 1.).unwrap();
-        assert!(c
-            .get_analytic(&sources(), Weld::crisp().morph(f64::NAN), 1.)
-            .is_err());
+        assert!(
+            c.get_analytic(&sources(), Weld::crisp().morph(f64::NAN), 1.)
+                .is_err()
+        );
     }
 }

@@ -1,6 +1,6 @@
 //! Render the actual resolved material paths, with three owner radii.
 //! cargo run -p mui-scene --example surfaces > surfaces.svg
-use mui_scene::{prelude::*, Layer};
+use mui_scene::{Layer, prelude::*};
 fn card(radius: f64) -> El {
     stack![
         leaf(220., 244.)

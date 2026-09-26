@@ -1,5 +1,5 @@
 use crate::brush::Premul;
-use crate::{Brush, Channel, Color, Error, Weld, MAX_SOURCES};
+use crate::{Brush, Channel, Color, Error, MAX_SOURCES, Weld};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Point {
@@ -141,11 +141,7 @@ impl Geometry {
                         }
                     }
                 }
-                if winding == 0 {
-                    distance
-                } else {
-                    -distance
-                }
+                if winding == 0 { distance } else { -distance }
             }
         }
     }

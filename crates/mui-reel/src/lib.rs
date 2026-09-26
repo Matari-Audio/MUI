@@ -24,7 +24,7 @@ use std::process::{Child, Command, Stdio};
 use mui::prelude::*;
 use mui::vello::kurbo::{Affine, BezPath, Rect, Stroke};
 use mui::vello::vello_cpu::{Pixmap, RenderContext, Resources};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 pub type Error = Box<dyn std::error::Error>;
 

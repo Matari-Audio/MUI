@@ -175,9 +175,10 @@ fn failed_layout_does_not_replay_a_consumed_activation() {
     idle(&mut ui, tree());
     assert!(ui.request_action(SemanticAction::activate("go")));
     assert!(ui.get("go").clicked);
-    assert!(ui
-        .frame(leaf(-1.0, 10.0), None, Input::default(), 0.016)
-        .is_err());
+    assert!(
+        ui.frame(leaf(-1.0, 10.0), None, Input::default(), 0.016)
+            .is_err()
+    );
     assert!(!ui.get("go").clicked);
     assert_eq!(
         ui.close(),

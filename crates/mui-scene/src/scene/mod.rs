@@ -28,7 +28,7 @@ use mui_layout::Frame;
 
 use crate::{Color, Cursor, El, Size};
 use outline::OutlineCache;
-use text::{fit, layout_key, Runs};
+use text::{Runs, fit, layout_key};
 
 /// Append child `j`'s step to a tree path, the `/0/2` key the scene gives a
 /// node without an id. By hand: `write!` is most of a walk's cost.
@@ -485,8 +485,8 @@ pub fn resolve_scene_retained(
 use fixtures::{font, welded_tab};
 #[cfg(test)]
 mod fixtures {
-    use crate::prelude::*;
     use crate::Corners;
+    use crate::prelude::*;
 
     /// The canonical union: a tab welded to its panel, with a pill shell inside
     /// the tab.

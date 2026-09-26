@@ -107,12 +107,13 @@ fn only_concave() {
         },
     )
     .unwrap();
-    assert!(s
-        .corners
-        .iter()
-        .flatten()
-        .filter(|c| !c.concave)
-        .all(|c| c.effective_radius == 0.));
+    assert!(
+        s.corners
+            .iter()
+            .flatten()
+            .filter(|c| !c.concave)
+            .all(|c| c.effective_radius == 0.)
+    );
 }
 #[test]
 fn hole_classification_uses_material() {
@@ -231,22 +232,26 @@ fn shared_edge_budget() {
 }
 #[test]
 fn negative_options_fail() {
-    assert!(fillet(
-        &u(&[r(0., 0., 10., 10.)]),
-        Fillet {
-            convex_radius: -1.,
-            ..Default::default()
-        }
-    )
-    .is_err());
+    assert!(
+        fillet(
+            &u(&[r(0., 0., 10., 10.)]),
+            Fillet {
+                convex_radius: -1.,
+                ..Default::default()
+            }
+        )
+        .is_err()
+    );
 }
 #[test]
 fn invalid_values_fail() {
-    assert!(union(
-        &[r(0., 0., 20., 20.).transformed(Affine::translation(f64::NAN, 0.))],
-        Default::default()
-    )
-    .is_err());
+    assert!(
+        union(
+            &[r(0., 0., 20., 20.).transformed(Affine::translation(f64::NAN, 0.))],
+            Default::default()
+        )
+        .is_err()
+    );
 }
 #[test]
 fn intersection_and_difference() {
@@ -451,15 +456,17 @@ fn offset_is_repeatable() {
 #[test]
 fn invalid_offset_inputs_rejected() {
     assert!(inset_path(&rr(100., 100., 20.).path(), f64::NAN, Default::default()).is_err());
-    assert!(inset_path(
-        &rr(100., 100., 20.).path(),
-        5.,
-        OffsetOptions {
-            flatten_tolerance: 0.,
-            ..Default::default()
-        }
-    )
-    .is_err());
+    assert!(
+        inset_path(
+            &rr(100., 100., 20.).path(),
+            5.,
+            OffsetOptions {
+                flatten_tolerance: 0.,
+                ..Default::default()
+            }
+        )
+        .is_err()
+    );
 }
 #[test]
 fn randomized_analytic_insets() {
@@ -529,15 +536,17 @@ fn ring_validation_finds_far_touches_and_crossings() {
 }
 #[test]
 fn tight_offset_quality_is_rejected_not_faked() {
-    assert!(inset_path(
-        &rr(100000., 100000., 20000.).path(),
-        10000.,
-        OffsetOptions {
-            flatten_tolerance: 0.00001,
-            ..Default::default()
-        }
-    )
-    .is_err());
+    assert!(
+        inset_path(
+            &rr(100000., 100000., 20000.).path(),
+            10000.,
+            OffsetOptions {
+                flatten_tolerance: 0.00001,
+                ..Default::default()
+            }
+        )
+        .is_err()
+    );
 }
 
 #[test]

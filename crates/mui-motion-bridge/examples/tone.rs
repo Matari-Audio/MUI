@@ -1,6 +1,6 @@
 //! A second, independent adapter proving the framework does not require Kurv.
 use mui::prelude::*;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 fn main() -> Result<(), String> {

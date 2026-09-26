@@ -1,10 +1,10 @@
 //! Container-owned materials: authored footprints, derived corners and clearance.
 //! Keeps layout/controls separate from a material that can wrap around their holes.
-use crate::regions::{Operation, RegionCache, RAMP_BAND, STROKE_BAND};
+use crate::regions::{Operation, RAMP_BAND, RegionCache, STROKE_BAND};
 use crate::{El, Frame, Id, Radius, SceneError, SceneSpec};
 use mui_geometry::{
-    boolean_paths, fillet, inset_path, union, union_contours, BooleanOp, CornerStyle, Fillet,
-    GeometryOptions, OffsetOptions, Path, PlacedShape, Point, Polygon,
+    BooleanOp, CornerStyle, Fillet, GeometryOptions, OffsetOptions, Path, PlacedShape, Point,
+    Polygon, boolean_paths, fillet, inset_path, union, union_contours,
 };
 use rustc_hash::FxHashMap as HashMap;
 use std::sync::Arc;

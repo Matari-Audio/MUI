@@ -5,7 +5,7 @@ use std::sync::Arc;
 use mui_geometry::{BooleanOp, Bounds, Path, Point, RoundedRect};
 use mui_layout::{Frame, Insets, Size};
 
-use super::{bounds, find, fit, SceneError, Walk};
+use super::{SceneError, Walk, bounds, find, fit};
 use crate::regions::Operation;
 use crate::{El, Element, Radius};
 

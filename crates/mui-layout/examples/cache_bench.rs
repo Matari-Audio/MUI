@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 use mui_layout::{
-    resolve_cached_with, resolve_with, LayoutCache, Limits, Node, Size, SpacingScale,
+    LayoutCache, Limits, Node, Size, SpacingScale, resolve_cached_with, resolve_with,
 };
 
 static ALLOCS: AtomicUsize = AtomicUsize::new(0);

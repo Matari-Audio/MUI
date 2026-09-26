@@ -1,8 +1,8 @@
 #![cfg(feature = "cpu")]
-use mui_scene::{prelude::*, ResolvedScene};
+use mui_scene::{ResolvedScene, prelude::*};
 use mui_vello::{
-    vello_cpu::{Pixmap, RenderContext, Resources},
     Cache, Cpu,
+    vello_cpu::{Pixmap, RenderContext, Resources},
 };
 
 fn raster(scene: &ResolvedScene) -> Vec<[u8; 4]> {

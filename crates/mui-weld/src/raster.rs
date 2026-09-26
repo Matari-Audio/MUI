@@ -131,11 +131,7 @@ pub fn bake(request: &Request) -> Result<Baked, Error> {
 
 type Edge = (usize, usize);
 fn edge(a: usize, b: usize) -> Edge {
-    if a < b {
-        (a, b)
-    } else {
-        (b, a)
-    }
+    if a < b { (a, b) } else { (b, a) }
 }
 
 /// Split every cell along the same diagonal. Unlike a naive marching-squares

@@ -2,8 +2,8 @@
 //! alpha strip and a hex field, all over one [`Color`].
 use mui_scene::prelude::*;
 
-use crate::widgets::{stepped, text_input};
 use crate::Ui;
+use crate::widgets::{stepped, text_input};
 
 /// Straight sRGB and alpha, each `0..1`.
 type Rgba = [f32; 4];

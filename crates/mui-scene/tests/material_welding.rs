@@ -1,5 +1,5 @@
 use mui_scene::prelude::*;
-use mui_scene::{resolve_scene_cached, Layer, Paint, SceneError, TextCache, WeldCache};
+use mui_scene::{Layer, Paint, SceneError, TextCache, WeldCache, resolve_scene_cached};
 use std::sync::Arc;
 
 fn plate(id: &str, fill: impl Into<Fill>, width: f64) -> El {
@@ -32,11 +32,13 @@ fn default_dsl_welds_body_and_border_without_replacing_identity() {
     for key in ["a", "b", "group"] {
         assert!(scene.surface(key).is_some());
     }
-    assert!(scene
-        .paint
-        .iter()
-        .all(|p| !(p.key.as_ref() == "a" || p.key.as_ref() == "b")
-            || !matches!(p.layer, Layer::Fill | Layer::Stroke)));
+    assert!(
+        scene
+            .paint
+            .iter()
+            .all(|p| !(p.key.as_ref() == "a" || p.key.as_ref() == "b")
+                || !matches!(p.layer, Layer::Fill | Layer::Stroke))
+    );
     assert!(image(&scene).width > 50);
 }
 #[test]
@@ -105,10 +107,12 @@ fn descendants_are_not_consumed_with_the_source_plate() {
             .id("group"),
     ))
     .unwrap();
-    assert!(scene
-        .paint
-        .iter()
-        .any(|p| p.key.as_ref() == "child" && p.layer == Layer::Fill));
+    assert!(
+        scene
+            .paint
+            .iter()
+            .any(|p| p.key.as_ref() == "child" && p.layer == Layer::Fill)
+    );
     assert_eq!(scene.surface("child").unwrap().parent.as_deref(), Some("a"));
 }
 #[test]
@@ -122,10 +126,12 @@ fn excluded_members_keep_their_paints() {
         .id("group"),
     ))
     .unwrap();
-    assert!(scene
-        .paint
-        .iter()
-        .any(|p| p.key.as_ref() == "excluded" && p.layer == Layer::Stroke));
+    assert!(
+        scene
+            .paint
+            .iter()
+            .any(|p| p.key.as_ref() == "excluded" && p.layer == Layer::Stroke)
+    );
 }
 #[test]
 fn custom_outline_is_not_a_rectangular_hit_proxy() {
@@ -157,14 +163,18 @@ fn unsupported_effects_are_not_silently_lost() {
 #[test]
 fn explicit_off_returns_to_ordinary_painting() {
     let scene = resolve_scene(&SceneSpec::new(tree(Weld::all()).without_weld())).unwrap();
-    assert!(scene
-        .paint
-        .iter()
-        .any(|p| p.key.as_ref() == "a" && p.layer == Layer::Stroke));
-    assert!(scene
-        .paint
-        .iter()
-        .all(|p| !matches!(&p.paint, Paint::Image { .. })));
+    assert!(
+        scene
+            .paint
+            .iter()
+            .any(|p| p.key.as_ref() == "a" && p.layer == Layer::Stroke)
+    );
+    assert!(
+        scene
+            .paint
+            .iter()
+            .all(|p| !matches!(&p.paint, Paint::Image { .. }))
+    );
 }
 #[test]
 fn morph_does_not_change_intrinsic_layout() {
@@ -183,18 +193,20 @@ fn baked_weld_clip_is_carried_as_its_actual_shape() {
     let s = resolve_scene(&SceneSpec::new(root)).unwrap();
     let group = s.surface("group").unwrap();
     let a = s.surface("a").unwrap();
-    assert!(a
-        .clip_paths()
-        .is_some_and(|paths| paths.contains(&(group.path.clone(), group.offset))));
+    assert!(
+        a.clip_paths()
+            .is_some_and(|paths| paths.contains(&(group.path.clone(), group.offset)))
+    );
 }
 #[test]
 fn a_union_is_a_vector_operation() {
     let union = row![leaf(24., 24.), leaf(24., 24.)].union(Surface);
     let s = resolve_scene(&SceneSpec::new(union)).unwrap();
-    assert!(s
-        .paint
-        .iter()
-        .all(|p| !matches!(&p.paint, Paint::Image { .. })));
+    assert!(
+        s.paint
+            .iter()
+            .all(|p| !matches!(&p.paint, Paint::Image { .. }))
+    );
 }
 
 #[test]

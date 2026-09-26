@@ -9,8 +9,8 @@
 //!     .w(pct(100.));
 //! assert_eq!(bar.children().len(), 3);
 //! ```
-use crate::element::{text, Carve, El, Styled};
 use crate::Radius;
+use crate::element::{Carve, El, Styled, text};
 use mui_layout::{Align, Justify, Len};
 
 /// A length argument: a `Len`, or a bare number in pixels. `Len` lives in
@@ -206,7 +206,7 @@ macro_rules! fits {
 #[cfg(test)]
 mod dsl_tests {
     use crate::prelude::*;
-    use crate::{resolve_scene, Len, SceneSpec};
+    use crate::{Len, SceneSpec, resolve_scene};
 
     #[test]
     fn macros_take_strings_and_els() {

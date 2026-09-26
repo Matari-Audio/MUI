@@ -3,8 +3,8 @@
 //! drawn is the cubic the DSP side samples.
 use mui::input::{Button, Buttons, Mods};
 use mui::prelude::*;
-use mui::scene::curve::Curve;
 use mui::scene::Content;
+use mui::scene::curve::Curve;
 
 const SIZE: f64 = 200.0;
 /// The widget's own inset: a knot's radius, so an end knot sits inside the

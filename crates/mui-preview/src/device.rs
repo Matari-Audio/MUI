@@ -2,8 +2,8 @@
 //! -- pipelines, atlases, weld textures, retained encodings -- dies with it,
 //! so a host keeps all of that in `T` and [`OnDevice::recover`] rebuilds the
 //! lot on a fresh device. The window and surface survive; `T` does not.
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 pub struct OnDevice<T> {
     pub device: wgpu::Device,

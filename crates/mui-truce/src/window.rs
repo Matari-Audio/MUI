@@ -21,11 +21,11 @@ use baseview::{
     WindowHandler, WindowOpenOptions, WindowScalePolicy,
 };
 use keyboard_types::{Key as HostKey, KeyState, Modifiers};
+use mui::Ui;
 use mui::prelude::{Button, Cursor, El, Input, Key, KeyPress, Mods, Point, PointerInput, Size};
 use mui::scene::ResolvedScene;
 use mui::vello::effects::{Budget, GpuRenderer};
 use mui::vello::kurbo::Affine;
-use mui::Ui;
 use raw_window_handle::HasRawWindowHandle;
 
 /// A frame after a stall advances time by at most this. Springs are closed

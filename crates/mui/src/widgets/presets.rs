@@ -4,8 +4,8 @@
 //! an `El` you finish (`chip("A").id("chip-A")`). No registry, no trait, no
 //! variant table: a preset that needs a variant is a function with an
 //! argument.
-use mui_scene::prelude::*;
 use mui_scene::Style;
+use mui_scene::prelude::*;
 
 /// The window's own ground: the surface colour and the big corner.
 ///

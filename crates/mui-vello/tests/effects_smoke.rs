@@ -316,15 +316,17 @@ fn board(hot: Option<usize>, tip: bool, panel: f32, bg: Role) -> ResolvedScene {
         .fill(Role::Surface)
         .opacity(panel)
         .id("panel");
-    let mut kids = vec![column([
-        row((0..4).map(button)).gap(10.).fill(Gradient::linear(
-            100.,
-            [(0., Role::Surface), (1., Role::Warning)],
-        )),
-        panel,
-    ])
-    .gap(12.)
-    .pad(10.)];
+    let mut kids = vec![
+        column([
+            row((0..4).map(button)).gap(10.).fill(Gradient::linear(
+                100.,
+                [(0., Role::Surface), (1., Role::Warning)],
+            )),
+            panel,
+        ])
+        .gap(12.)
+        .pad(10.),
+    ];
     if tip {
         kids.push(
             overlay([text("a tip").text_size(11.).fill(Role::Ink)])

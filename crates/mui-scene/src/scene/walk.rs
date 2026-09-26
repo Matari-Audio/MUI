@@ -8,8 +8,8 @@ use super::bar::{self, BAR_MARGIN, BAR_STRIP, BAR_THIN, BAR_WIDE};
 use super::outline::Contour;
 use super::text::Face;
 use super::{
-    bounds, empty, snap, Ancestors, Deferred, Layer, MemoSpan, Painted, ResolvedSurface,
-    SceneError, Text, Walk, MEMO_AGE,
+    Ancestors, Deferred, Layer, MEMO_AGE, MemoSpan, Painted, ResolvedSurface, SceneError, Text,
+    Walk, bounds, empty, snap,
 };
 use crate::{Color, Content, El, Element, Fill, Mix, ShadowKind, State};
 
@@ -877,8 +877,8 @@ impl Shift {
 #[cfg(test)]
 mod tests {
     use super::super::*;
-    use crate::prelude::*;
     use crate::Paint;
+    use crate::prelude::*;
 
     /// Paths are local: two same-sized buttons paint one outline `Arc`, each
     /// at its own offset, and a button that only moved keeps it -- its
@@ -1036,10 +1036,11 @@ mod tests {
         let at = |k: &str, l: Layer| layers.iter().position(|x| *x == (k, l)).unwrap();
         assert!(at("list", Layer::Clip) < at("list", Layer::Unclip));
         assert_eq!(*layers.last().unwrap(), ("tip", Layer::Fill), "{layers:?}");
-        assert!(s
-            .paint
-            .iter()
-            .any(|p| &*p.key == "curve" && p.layer == Layer::Draw(0) && p.width == 2.));
+        assert!(
+            s.paint
+                .iter()
+                .any(|p| &*p.key == "curve" && p.layer == Layer::Draw(0) && p.width == 2.)
+        );
         let list = s.surface("list").unwrap();
         assert_eq!(
             list.content,

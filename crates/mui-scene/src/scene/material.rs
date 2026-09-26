@@ -4,7 +4,7 @@ use std::sync::Arc;
 use mui_geometry::{CornerStyle, Point};
 use mui_layout::Frame;
 
-use super::{snap, SceneError, Walk};
+use super::{SceneError, Walk, snap};
 use crate::{Color, Content, El, Paint};
 
 impl Walk<'_> {

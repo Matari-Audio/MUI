@@ -1,7 +1,7 @@
 //! Contour regions, variable borders and shape partitions without UI dependencies.
 use crate::{
-    boolean, inset_path, offset_path, BooleanOp, Bounds, Error, GeometryOptions, OffsetOptions,
-    Path, PathCommand, Point, RoundedRect,
+    BooleanOp, Bounds, Error, GeometryOptions, OffsetOptions, Path, PathCommand, Point,
+    RoundedRect, boolean, inset_path, offset_path,
 };
 
 /// Which side of the authored outline the border occupies. Default preserves MUI.

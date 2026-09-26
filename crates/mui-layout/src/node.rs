@@ -532,11 +532,7 @@ impl<P> Node<P> {
         }
     }
     pub(crate) fn len(&self, vertical: bool) -> Len {
-        if vertical {
-            self.height
-        } else {
-            self.width
-        }
+        if vertical { self.height } else { self.width }
     }
 }
 

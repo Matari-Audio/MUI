@@ -3,14 +3,15 @@
 //! This is not a DAW audio backend. Plugins retain ownership of DSP and models.
 #![deny(unsafe_code)]
 mod capture;
-pub use capture::{capture, capture_frame, discover_parts, CaptureStream};
+pub use capture::{CaptureStream, capture, capture_frame, discover_parts};
 mod editor;
 pub use editor::Editor;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::io::{BufRead, Write};
 use std::sync::{
+    Arc,
     atomic::{AtomicBool, AtomicU64, Ordering},
-    mpsc, Arc,
+    mpsc,
 };
 use std::time::{Duration, Instant};
 

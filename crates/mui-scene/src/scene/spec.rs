@@ -178,15 +178,19 @@ mod tests {
     #[test]
     fn errors_expose_their_source() {
         let e = resolve_scene(&SceneSpec::new(leaf(f64::NAN, 1.))).unwrap_err();
-        assert!(std::error::Error::source(&e)
-            .unwrap()
-            .is::<mui_layout::Error>());
+        assert!(
+            std::error::Error::source(&e)
+                .unwrap()
+                .is::<mui_layout::Error>()
+        );
         let mut bad = welded_tab();
         bad.geometry.epsilon = f64::NAN;
         let e = resolve_scene(&bad).unwrap_err();
-        assert!(std::error::Error::source(&e)
-            .unwrap()
-            .is::<mui_geometry::Error>());
+        assert!(
+            std::error::Error::source(&e)
+                .unwrap()
+                .is::<mui_geometry::Error>()
+        );
         let _ = Spacing::px(1.);
     }
 

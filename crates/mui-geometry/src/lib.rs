@@ -14,7 +14,7 @@
 
 mod bezier;
 mod boolean;
-pub use bezier::{bez_path, bez_path_into, ARC_TOLERANCE};
+pub use bezier::{ARC_TOLERANCE, bez_path, bez_path_into};
 pub use kurbo;
 mod fillet;
 mod math;
@@ -22,8 +22,8 @@ mod nesting;
 mod offset;
 mod regions;
 pub use regions::{
-    boolean_paths, border_band, border_geometry, boundary_band, union_contours, BorderAlign,
-    BorderGeometry, ShapeSplit, SplitAxis, WidthProfile,
+    BorderAlign, BorderGeometry, ShapeSplit, SplitAxis, WidthProfile, boolean_paths, border_band,
+    border_geometry, boundary_band, union_contours,
 };
 mod morph;
 pub use morph::morph;
@@ -31,14 +31,14 @@ mod path;
 mod spacing;
 pub use nesting::{InsetRect, RoundedRect};
 pub use offset::{
-    boundary_distance, inset_path, offset_path, outset_path, InsetShape, OffsetOptions, OffsetShape,
+    InsetShape, OffsetOptions, OffsetShape, boundary_distance, inset_path, offset_path, outset_path,
 };
 
 pub use boolean::{
-    boolean, boolean_passes, union, BooleanOp, GeometryOptions, PlacedShape, Polygon, Ring,
-    RingKind, Topology,
+    BooleanOp, GeometryOptions, PlacedShape, Polygon, Ring, RingKind, Topology, boolean,
+    boolean_passes, union,
 };
-pub use fillet::{fillet, Corner, CornerStyle, Fillet, RoundedShape};
+pub use fillet::{Corner, CornerStyle, Fillet, RoundedShape, fillet};
 pub use math::{Affine, Bounds, Point};
 pub use path::{Arc, Path, PathCommand};
 pub use spacing::{Spacing, SpacingScale, SpacingToken};

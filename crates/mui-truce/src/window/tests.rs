@@ -1,7 +1,7 @@
 //! Headless: the handler without a window or a GPU.
 use super::*;
 use keyboard_types::KeyboardEvent;
-use mui::prelude::{knob, Theme};
+use mui::prelude::{Theme, knob};
 
 /// A knob and a count of the trees built.
 struct Knob {

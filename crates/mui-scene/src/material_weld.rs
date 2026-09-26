@@ -90,7 +90,9 @@ pub(crate) fn check_plate(n: &El, nested: bool) -> Result<(), SceneError> {
         ));
     }
     if !s.shells.is_empty() || !s.shadow.is_empty() || !s.mask.is_none() {
-        return Err(SceneError::UnsupportedWeld("shell, shadow, or mask on a welded plate; keep the effect on an excluded wrapper/descendant"));
+        return Err(SceneError::UnsupportedWeld(
+            "shell, shadow, or mask on a welded plate; keep the effect on an excluded wrapper/descendant",
+        ));
     }
     if nested
         && s.layer

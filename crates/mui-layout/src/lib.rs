@@ -14,7 +14,7 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 mod incremental;
-pub use incremental::{resolve_cached_with, LayoutCache, LayoutStats};
+pub use incremental::{LayoutCache, LayoutStats, resolve_cached_with};
 mod arrange;
 mod id;
 mod len;
@@ -25,7 +25,7 @@ mod pin;
 pub use id::Id;
 pub use len::{Align, Insets, Justify, Len, Size};
 pub use mui_geometry::{Spacing, SpacingScale, SpacingToken};
-pub use node::{column, fits, grid, leaf, overlay, row, Node};
+pub use node::{Node, column, fits, grid, leaf, overlay, row};
 
 /// What a measurer says about a content leaf: its size in the room it was
 /// given, and the narrowest a flex parent may squeeze it to -- for text, its
@@ -47,9 +47,9 @@ impl From<Size> for Intrinsic {
 pub use pin::{Area, Match, Pin};
 
 pub(crate) use arrange::{arrange, distribute};
-pub(crate) use measure::{cell_default, grid_rows, measure, place, wrap_lines, Measured, Pass};
+pub(crate) use measure::{Measured, Pass, cell_default, grid_rows, measure, place, wrap_lines};
 pub(crate) use node::{Kind, Rare};
-pub(crate) use pin::{inside, Pins, Viewport};
+pub(crate) use pin::{Pins, Viewport, inside};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Frame {

@@ -15,7 +15,7 @@ mod retained;
 #[cfg(test)]
 mod tests;
 
-pub use pool::{Budget, EffectStats, WeldTextures, ABSENT_FRAMES};
+pub use pool::{ABSENT_FRAMES, Budget, EffectStats, WeldTextures};
 pub use retained::GpuRenderer;
 pub const WELD_SHADER: &str = include_str!("weld.wgsl");
 

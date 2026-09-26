@@ -1,5 +1,5 @@
 //! Parallel offsets of FINAL rendered boundaries.
-use crate::boolean::{topology, BackendMulti};
+use crate::boolean::{BackendMulti, topology};
 use crate::{Error, GeometryOptions, Path, PathCommand, Point, Topology};
 use i_overlay::{
     core::{fill_rule::FillRule, overlay_rule::OverlayRule},

@@ -45,10 +45,11 @@ fn named_anchor_keeps_the_outline_and_emits_one_vector_border() {
             let x = bounds.min.x + f64::from(stop.0) * bounds.width();
             assert!((x - header.x - header.size.width * fraction).abs() < 0.001);
         }
-        assert!(ramp
-            .paint
-            .iter()
-            .all(|p| !matches!(p.paint, Paint::Image { .. })));
+        assert!(
+            ramp.paint
+                .iter()
+                .all(|p| !matches!(p.paint, Paint::Image { .. }))
+        );
     }
 }
 

@@ -1,14 +1,14 @@
 //! truce's `Editor` over the window in [`crate::window`].
 use std::sync::{Arc, Mutex};
 
-use mui::scene::El;
 use mui::Ui;
+use mui::scene::El;
 use truce_core::editor::{Editor, PluginContext, RawWindowHandle};
-use truce_gui::platform::{editor_window_scale, ParentWindow};
+use truce_gui::platform::{ParentWindow, editor_window_scale};
 use truce_params::Params;
 
-use crate::window::{self, lock, Requests, Shared, View};
 use crate::Bridge;
+use crate::window::{self, Requests, Shared, View, lock};
 
 type Build<P> = Box<dyn FnMut(&mut Ui, &mut Bridge<P>) -> El + Send>;
 

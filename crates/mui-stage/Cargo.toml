@@ -2,6 +2,7 @@
 name = "mui-stage"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 description = "GPU trailer stage for MUI: layers on lit, extruded 3D slabs, WGSL backgrounds, bloom and film post, subframe motion blur."
 

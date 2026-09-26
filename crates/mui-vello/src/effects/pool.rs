@@ -1,5 +1,5 @@
 use super::Error;
-use mui_weld::analytic::{dirty_ranges, AnalyticWeld, PARAM_BYTES};
+use mui_weld::analytic::{AnalyticWeld, PARAM_BYTES, dirty_ranges};
 use mui_weld::boundary::BOUNDARY_BYTES;
 use std::{collections::BTreeMap, num::NonZeroU64, sync::Arc};
 
@@ -421,7 +421,9 @@ impl WeldTextures {
             .get_mut(key)
             .ok_or_else(|| Error::Missing(key.into()))?;
         if slot.encoded_epoch == self.epoch {
-            return Err(Error::Unsupported("encode each effect only once per submission; repeated UBO writes would change earlier draws"));
+            return Err(Error::Unsupported(
+                "encode each effect only once per submission; repeated UBO writes would change earlier draws",
+            ));
         }
         slot.encoded_epoch = self.epoch;
         if slot.seen != self.epoch {

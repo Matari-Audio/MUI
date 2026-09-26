@@ -61,12 +61,14 @@ fn shot(t: f64) -> Shot {
     let mut cam = Camera::front(360., 35.).orbit(-14. * u, 8. * u);
     cam.roll = 3. * (1. - f);
     Shot {
-        planes: vec![Plane::new("card", CARD.width as f32, CARD.height as f32)
-            .at(0., 0., -1400. * (1. - f))
-            .rotate(25. * (1. - f), -60. * (1. - f) + 22. * u, 0.)
-            .depth(22.)
-            .edge([0.08, 0.06, 0.2])
-            .glow(1.25)],
+        planes: vec![
+            Plane::new("card", CARD.width as f32, CARD.height as f32)
+                .at(0., 0., -1400. * (1. - f))
+                .rotate(25. * (1. - f), -60. * (1. - f) + 22. * u, 0.)
+                .depth(22.)
+                .edge([0.08, 0.06, 0.2])
+                .glow(1.25),
+        ],
         floor: Some(Floor::at(-CARD.height as f32 / 2. - 30.)),
         post: Post {
             bloom: 0.8,

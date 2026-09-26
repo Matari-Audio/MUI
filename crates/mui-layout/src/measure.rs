@@ -386,11 +386,7 @@ pub(crate) fn measure_uncached<'a, P>(
                     align == Align::Stretch,
                 );
                 let main = offer(c, v, inner[v as usize], sub[v as usize], false);
-                if v {
-                    [cross, main]
-                } else {
-                    [main, cross]
-                }
+                if v { [cross, main] } else { [main, cross] }
             }
             Kind::Overlay(_) => {
                 let (ax, ay) = c.anchor.unwrap_or(cell_default(node));

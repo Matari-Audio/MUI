@@ -787,11 +787,7 @@ pub trait Paints: Sized {
     }
     /// Apply `f` only when `cond`: `.when(selected, |e| e.fill(Primary))`.
     fn when(self, cond: bool, f: impl FnOnce(Self) -> Self) -> Self {
-        if cond {
-            f(self)
-        } else {
-            self
-        }
+        if cond { f(self) } else { self }
     }
 }
 impl Paints for Style {

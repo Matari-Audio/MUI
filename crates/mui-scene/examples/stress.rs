@@ -22,7 +22,7 @@ unsafe impl GlobalAlloc for Counting {
 static A: Counting = Counting;
 
 use mui_scene::prelude::*;
-use mui_scene::{resolve_scene_with, Limits, TextCache};
+use mui_scene::{Limits, TextCache, resolve_scene_with};
 
 const PARA: &str = "A compact CSS-like DSL where everything aligns automatically and nothing is placed absolutely.";
 

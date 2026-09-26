@@ -1,5 +1,5 @@
 use mui_scene::prelude::*;
-use mui_scene::{resolve_scene_cached, Layer, SceneError, TextCache, WeldCache};
+use mui_scene::{Layer, SceneError, TextCache, WeldCache, resolve_scene_cached};
 fn tree() -> El {
     row![
         leaf(80., 60.)
@@ -49,10 +49,12 @@ fn ids_and_original_plate_surfaces_survive() {
     let scene = resolve_scene(&SceneSpec::new(tree())).unwrap();
     assert!(scene.surface("a").is_some());
     assert!(scene.surface("b").is_some());
-    assert!(!scene
-        .paint
-        .iter()
-        .any(|p| p.key.as_ref() == "a" && matches!(p.layer, Layer::Fill | Layer::Stroke)));
+    assert!(
+        !scene
+            .paint
+            .iter()
+            .any(|p| p.key.as_ref() == "a" && matches!(p.layer, Layer::Fill | Layer::Stroke))
+    );
 }
 #[test]
 fn changing_union_is_not_misrepresented_as_a_clip_rectangle() {

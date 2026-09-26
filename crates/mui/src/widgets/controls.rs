@@ -2,12 +2,12 @@
 //! where two flex weights put it, a knob's pointer is an anchored offset.
 use std::ops::RangeInclusive;
 
-use mui_input::{Key, FINE_DRAG};
+use mui_input::{FINE_DRAG, Key};
 use mui_scene::prelude::*;
 use mui_scene::{Palette, SpacingToken, Spring, Stroke};
 
-use crate::widgets::{text_edit, TextOpts};
 use crate::Ui;
+use crate::widgets::{TextOpts, text_edit};
 
 /// How solid a control looks. daisyUI's four button styles, resolved from
 /// the role and the palette rather than from a table of colours.
@@ -84,7 +84,7 @@ impl Look {
     }
     /// The state closure that lifts whatever the control is filled with, so
     /// a hover is the palette's own step and not a second colour.
-    fn hover(&self) -> impl Fn(Style) -> Style + 'static {
+    fn hover(&self) -> impl Fn(Style) -> Style + use<> {
         let (p, role, variant) = (self.palette, self.role, self.variant);
         move |s: Style| {
             let ground = p.surface();

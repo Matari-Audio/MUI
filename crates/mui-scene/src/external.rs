@@ -2,7 +2,7 @@
 //! the scene owns placement, authored identity, and the validated material spec.
 use crate::{ResolvedScene, SceneError};
 use mui_geometry::{Bounds, Point, RoundedRect};
-use mui_weld::{analytic::AnalyticWeld, Point as WeldPoint};
+use mui_weld::{Point as WeldPoint, analytic::AnalyticWeld};
 use std::sync::Arc;
 
 /// Execution is selected by the host, not inferred from animation state.

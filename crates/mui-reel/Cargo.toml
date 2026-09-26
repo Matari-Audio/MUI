@@ -2,6 +2,7 @@
 name = "mui-reel"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 description = "Deterministic offline trailer renderer for MUI editors: scripted input, springed camera, sample-locked audio, HyperFrames/Remotion handoff."
 

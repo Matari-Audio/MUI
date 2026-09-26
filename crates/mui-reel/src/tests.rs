@@ -75,9 +75,11 @@ fn beats_land_on_the_frame_at_the_tempo() {
     // 120 bpm: a beat is half a second, 15 frames at 30 fps.
     assert_eq!(r.frame_of(beat(1.0)).unwrap(), 15);
     assert_eq!(r.frame_of(At::Secs(0.5)).unwrap(), 15);
-    assert!(Reel::new(Size::new(10.0, 10.0))
-        .frame_of(beat(1.0))
-        .is_err());
+    assert!(
+        Reel::new(Size::new(10.0, 10.0))
+            .frame_of(beat(1.0))
+            .is_err()
+    );
     let s = Script::new()
         .at(beat(1.0))
         .note_on(60, 100)
@@ -237,10 +239,12 @@ fn motion_blur_averages_subframes_without_changing_the_gesture() {
     // slop is crossed in smaller steps and swallows a little more travel,
     // which is what a 120 Hz mouse does to the real editor as well.
     assert!(m.gain > 0.95 && m.on, "gain {} on {}", m.gain, m.on);
-    assert!(heard
-        .iter()
-        .flatten()
-        .any(|e| matches!(e, ReelEvent::Edit { begin: false, .. })));
+    assert!(
+        heard
+            .iter()
+            .flatten()
+            .any(|e| matches!(e, ReelEvent::Edit { begin: false, .. }))
+    );
 }
 
 #[test]
@@ -306,8 +310,8 @@ fn a_look_draws_the_take_and_sees_every_subframe_time() {
     assert!(frames.iter().all(|f| f.iter().all(|&b| b == 200)));
     // The wrong size is an error, not a garbled stream.
     let mut short = |_: &Take| Ok(vec![0; 4]);
-    assert!(r
-        .run(
+    assert!(
+        r.run(
             &Script::new().end(0.1),
             &mut m,
             build,
@@ -315,7 +319,8 @@ fn a_look_draws_the_take_and_sees_every_subframe_time() {
             &mut Some(&mut short),
             &mut |_| Ok(())
         )
-        .is_err());
+        .is_err()
+    );
 }
 
 #[test]

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use mui_geometry::{BooleanOp, Bounds, Path, Point, RoundedRect};
 
 use super::outline::Contour;
-use super::{empty, find, Layer, Painted, SceneError, Walk};
+use super::{Layer, Painted, SceneError, Walk, empty, find};
 use crate::material_weld::MaterialWeld;
 use crate::regions::{Operation, RAMP_OUTSIDE, SHELL, STROKE_BAND};
 use crate::{
