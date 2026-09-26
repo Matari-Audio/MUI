@@ -809,7 +809,7 @@ impl Stage {
         let run = mui_text::text_run(fonts, text, size_px, &[], 0.05)?;
         let path = run
             .path
-            .rigid_transform(mui_geometry::Point::new(pad, pad + run.ascent), 0.)?;
+            .rigid_transform(mui_geometry::Vec2::new(pad, pad + run.ascent), 0.)?;
         let size = Size::new(run.advance + 2. * pad, run.ascent + run.descent + 2. * pad);
         let shape = Arc::new(path);
         let spec = filled(size, shape.clone(), color);
