@@ -31,6 +31,8 @@ Additions (nothing to migrate):
   focused, so typing does not hit the DAW's shortcuts. Needs a
   baseview-truce with `Window::set_keyboard_capture`; stock builds lack it.
 - `CanvasCache<K>` is `Send` for a `Send` key.
+- `Ui::text_run(font, text, size) -> Option<Arc<TextRun>>`: a canvas label
+  shaped once and kept by the `Ui` (bounded), instead of reshaped per frame.
 
 Behaviour:
 
