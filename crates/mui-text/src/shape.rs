@@ -294,6 +294,7 @@ pub(crate) fn shape(faces: &[Face<'_>], text: &str, size_px: f64) -> ShapedText 
             // FILL) hang off.
             let shaped = shaper.shape(buffer, ShapeOptions::new().plan(Some(&plan)));
             let scale = size_px / f64::from(shaper.units_per_em());
+            out.glyphs.reserve(shaped.len());
             for (info, position) in shaped.glyph_infos().iter().zip(shaped.glyph_positions()) {
                 let advance = f64::from(position.x_advance) * scale;
                 out.glyphs.push(ShapedGlyph {

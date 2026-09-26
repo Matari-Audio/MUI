@@ -14,26 +14,27 @@ pub fn caret_positions(
 ) -> Result<Vec<(usize, f64)>, Error> {
     let faces = open(fonts, size_px, axes)?;
     let clusters = clusters(text, &shape(&faces, text, size_px));
-    let boundaries: Vec<usize> = text
+    // One allocation: boundaries and their x filled in place, NaN until set.
+    let mut carets: Vec<(usize, f64)> = text
         .char_indices()
-        .map(|(byte, _)| byte)
-        .chain(std::iter::once(text.len()))
+        .map(|(byte, _)| (byte, f64::NAN))
+        .chain(std::iter::once((text.len(), f64::NAN)))
         .collect();
-    let mut positions = vec![f64::NAN; boundaries.len()];
+    let last_index = carets.len() - 1;
     for cluster in clusters {
-        let first = boundaries
-            .partition_point(|&byte| byte < cluster.start)
-            .min(boundaries.len() - 1);
-        let last = boundaries
-            .partition_point(|&byte| byte < cluster.end)
-            .min(boundaries.len() - 1);
+        let first = carets
+            .partition_point(|&(byte, _)| byte < cluster.start)
+            .min(last_index);
+        let last = carets
+            .partition_point(|&(byte, _)| byte < cluster.end)
+            .min(last_index);
         let (leading, trailing) = if cluster.rtl {
             (cluster.right, cluster.left)
         } else {
             (cluster.left, cluster.right)
         };
-        for position in first..=last {
-            positions[position] = if boundaries[position] == cluster.end {
+        for (byte, x) in &mut carets[first..=last] {
+            *x = if *byte == cluster.end {
                 trailing
             } else {
                 leading
@@ -41,14 +42,14 @@ pub fn caret_positions(
         }
     }
     let mut previous = 0.;
-    for position in &mut positions {
-        if position.is_finite() {
-            previous = *position;
+    for (_, x) in &mut carets {
+        if x.is_finite() {
+            previous = *x;
         } else {
-            *position = previous;
+            *x = previous;
         }
     }
-    Ok(boundaries.into_iter().zip(positions).collect())
+    Ok(carets)
 }
 
 /// Pen x of the caret sitting *before* the char at `byte_index`, which must be
