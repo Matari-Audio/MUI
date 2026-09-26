@@ -322,15 +322,22 @@ fn plan(face: &Face<'_>, shaper: &harfrust::Shaper<'_>, buffer: &UnicodeBuffer) 
     let script = Some(buffer.script()).filter(|&s| s != harfrust::script::UNKNOWN);
     let direction = buffer.direction();
     let key = ShapePlanKey::new(script, direction).instance(Some(&face.instance));
-    let mut plans = face
-        .plans
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    lru(
-        &mut plans,
-        |plan| key.matches(plan),
-        || Arc::new(ShapePlan::new(shaper, direction, script, None, &[])),
-    )
+    let lock = || {
+        face.plans
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    };
+    let hit = |plan: &Arc<ShapePlan>| key.matches(plan);
+    {
+        let mut plans = lock();
+        if plans.iter().any(hit) {
+            return lru(&mut plans, hit, || unreachable!("a hit"));
+        }
+    }
+    // Compiled outside the lock: other threads shaping this face never wait
+    // on a compile. A racing compile of the same key keeps the first plan.
+    let made = Arc::new(ShapePlan::new(shaper, direction, script, None, &[]));
+    lru(&mut lock(), hit, || made)
 }
 
 /// Most recently used last: a hit rotates to the back, a miss evicts the
