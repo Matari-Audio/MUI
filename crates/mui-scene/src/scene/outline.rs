@@ -635,6 +635,15 @@ mod tests {
         assert!((kept - 2_500.).abs() < 1.0, "{kept}");
         // The carve child added no paint of its own.
         assert_eq!(layers, carved);
+        // Content nodes hold the carve too, instead of dropping it.
+        let label = text("x")
+            .square(100.)
+            .radius(Radius::Px(0.))
+            .fill(Role::Primary);
+        let (label_whole, _) = area(label.clone());
+        let (label_holed, _) = area(label.cut(square(50., 50.)));
+        assert!((label_whole - 10_000.).abs() < 1.0, "{label_whole}");
+        assert!((label_holed - 7_500.).abs() < 1.0, "{label_holed}");
     }
 
     #[test]

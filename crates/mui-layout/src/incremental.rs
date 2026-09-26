@@ -315,7 +315,7 @@ fn projection<P>(n: &Node<P>, payload: Vec<u8>) -> Node<Vec<u8>> {
     } = n;
     let kind = match kind {
         Kind::Leaf => Kind::Leaf,
-        Kind::Content => Kind::Content,
+        Kind::Content(_) => Kind::Content(Vec::new()),
         Kind::Branch { vertical, .. } => Kind::Branch {
             vertical: *vertical,
             children: Vec::new(),

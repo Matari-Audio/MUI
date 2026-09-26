@@ -11,8 +11,9 @@ pub(crate) enum Kind<P> {
     /// Opaque content of a declared size.
     Leaf,
     /// Content the solver cannot size itself -- text, mostly. Measured by the
-    /// callback handed to [`resolve_with`].
-    Content,
+    /// callback handed to [`resolve_with`]. Children pushed onto it overlay
+    /// it, as on a stack: a carve, a badge.
+    Content(Vec<Node<P>>),
     Branch {
         vertical: bool,
         children: Vec<Node<P>>,
@@ -130,7 +131,7 @@ impl<P: Default> Node<P> {
     }
     /// Content measured by the callback given to [`resolve_with`].
     pub fn content() -> Self {
-        Self::new(Kind::Content)
+        Self::new(Kind::Content(Vec::new()))
     }
     /// Children laid out left to right.
     pub fn row(children: impl IntoIterator<Item = Self>) -> Self {
@@ -228,24 +229,26 @@ impl<P> Node<P> {
         match &self.kind {
             Kind::Branch { children, .. }
             | Kind::Overlay(children)
+            | Kind::Content(children)
             | Kind::Grid { children, .. }
             | Kind::Fits(children) => children,
-            _ => &[],
+            Kind::Leaf => &[],
         }
     }
     pub fn children_mut(&mut self) -> &mut [Self] {
         match &mut self.kind {
             Kind::Branch { children, .. }
             | Kind::Overlay(children)
+            | Kind::Content(children)
             | Kind::Grid { children, .. }
             | Kind::Fits(children) => children,
-            _ => &mut [],
+            Kind::Leaf => &mut [],
         }
     }
     /// Containers stretch; content centres. This is what `Align::Stretch`
     /// consults.
     pub fn is_container(&self) -> bool {
-        !matches!(self.kind, Kind::Leaf | Kind::Content)
+        !matches!(self.kind, Kind::Leaf | Kind::Content(_))
     }
     /// Mutable spacing for retained animation of a coupled shape gap.
     pub fn gap_mut(&mut self) -> &mut Spacing {
@@ -545,16 +548,17 @@ impl<P> Node<P> {
         self
     }
     /// Append a child to a container. A block becomes a stack of its own
-    /// size holding the child; a content node has no children and is
-    /// returned unchanged.
+    /// size holding the child; on a content node the child overlays the
+    /// content, as it would on a stack, and the node is at least as big as
+    /// its in-flow children.
     pub fn push(mut self, child: Self) -> Self {
         match &mut self.kind {
             Kind::Branch { children, .. }
             | Kind::Overlay(children)
+            | Kind::Content(children)
             | Kind::Grid { children, .. }
             | Kind::Fits(children) => children.push(child),
             Kind::Leaf => self.kind = Kind::Overlay(vec![child]),
-            Kind::Content => {}
         }
         self
     }

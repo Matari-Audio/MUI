@@ -204,8 +204,8 @@ pub(crate) fn arrange<P>(
     // overlay child, unscrolled.
     let mut placed: Vec<Option<([f64; 2], Size)>> = vec![None; m.children.len()];
     match &n.kind {
-        Kind::Leaf | Kind::Content => {}
-        Kind::Overlay(_) => {
+        Kind::Leaf => {}
+        Kind::Overlay(_) | Kind::Content(_) => {
             // A scrolling stack lays its children into their own extent,
             // like a scrolling column does on its main axis; placed in the
             // viewport instead they were squeezed to it, and a viewport-sized

@@ -78,7 +78,8 @@ pub trait Material: Styled {
     /// `.w(..)` and the rest position the hole, and then it is never
     /// painted. The shell, the border and the clip all follow the result,
     /// exactly as they follow a [`union`](Material::union). On a block,
-    /// the block becomes a stack of its own size to hold the hole.
+    /// the block becomes a stack of its own size to hold the hole; a text,
+    /// icon or canvas node holds it over its content.
     ///
     /// ```
     /// use mui_material::prelude::*;
