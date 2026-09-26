@@ -40,6 +40,34 @@ pub fn surface_format(formats: &[wgpu::TextureFormat]) -> Option<wgpu::TextureFo
     })
 }
 
+/// The present mode for a window surface. Windows: `AutoNoVsync`, because
+/// an embedded editor presents on the DAW's GUI thread and a backed-up
+/// Fifo blocks it. Elsewhere the first of Mailbox, FifoRelaxed, Fifo.
+fn present_mode(modes: &[wgpu::PresentMode]) -> wgpu::PresentMode {
+    use wgpu::PresentMode as P;
+    if cfg!(windows) {
+        return P::AutoNoVsync;
+    }
+    [P::Mailbox, P::FifoRelaxed]
+        .into_iter()
+        .find(|m| modes.contains(m))
+        .unwrap_or(P::Fifo)
+}
+
+/// The swapchain extent for a `v`-pixel side. Linux steps it up to a
+/// multiple of 256 so a live resize reconfigures every 256 px, not every
+/// pixel; the renderer keeps the exact size and the present writes only
+/// its corner. Elsewhere the exact size.
+// ponytail: X11 crops the oversized buffer to the window; a Wayland
+// surface takes its size from the buffer, so gate on X11 if one shows it.
+fn surface_extent(v: u32, limit: u32) -> u32 {
+    if cfg!(target_os = "linux") {
+        v.next_multiple_of(256).min(limit)
+    } else {
+        v
+    }
+}
+
 /// What one [`Host::present`] did.
 #[derive(Debug)]
 pub enum Frame {
@@ -48,6 +76,9 @@ pub enum Frame {
     /// Nothing reached the screen (no size, occluded, outdated, timed out,
     /// or the device was just rebuilt): paint the same scene next frame.
     Skipped,
+    /// The screen already shows this scene under this transform and no
+    /// texture changed: nothing was acquired or drawn. Not a retry.
+    Current,
     /// The surface is gone. Make a new one from the same window, pass it to
     /// [`Host::replace_surface`], and paint again.
     SurfaceLost,
@@ -91,6 +122,8 @@ struct OnDevice {
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
+    /// The renderer's exact size; the surface may be larger (Linux steps).
+    size: (u32, u32),
     renderer: GpuRenderer,
     /// Raised by wgpu's device-lost callback, on whatever thread wgpu calls it.
     lost: Arc<AtomicBool>,
@@ -126,12 +159,16 @@ impl OnDevice {
         let (width, height) = target_size(size.0.min(limit), size.1.min(limit)).unwrap_or((1, 1));
         let config = match surface {
             Some(surface) => {
-                let format = surface_format(&surface.get_capabilities(&adapter).formats)
+                let caps = surface.get_capabilities(&adapter);
+                let format = surface_format(&caps.formats)
                     .ok_or(HostError::Surface("no non-sRGB UNORM surface format"))?;
+                let (sw, sh) = (surface_extent(width, limit), surface_extent(height, limit));
                 let config = wgpu::SurfaceConfiguration {
                     format,
+                    present_mode: present_mode(&caps.present_modes),
+                    desired_maximum_frame_latency: 1,
                     ..surface
-                        .get_default_config(&adapter, width, height)
+                        .get_default_config(&adapter, sw, sh)
                         .ok_or(HostError::Surface("no default configuration"))?
                 };
                 surface.configure(&device, &config);
@@ -162,6 +199,7 @@ impl OnDevice {
             device,
             queue,
             config,
+            size: (width, height),
             renderer,
             lost,
         })
@@ -189,6 +227,8 @@ pub struct Host {
     /// configures. `None` while there is nothing to draw into.
     wanted: Option<(u32, u32)>,
     retry_at: Option<Instant>,
+    /// Bumped on every device rebuild: what lives on the old device is gone.
+    generation: u64,
 }
 
 impl Host {
@@ -206,6 +246,7 @@ impl Host {
             gpu,
             wanted: target_size(size.0, size.1),
             retry_at: None,
+            generation: 0,
         })
     }
 
@@ -214,9 +255,29 @@ impl Host {
         &self.instance
     }
 
-    /// The configured surface size, physical pixels.
+    /// The rendered size, physical pixels. The configured surface can be
+    /// larger (Linux steps it to 256 px).
     pub fn size(&self) -> (u32, u32) {
-        (self.gpu.config.width, self.gpu.config.height)
+        self.gpu.size
+    }
+
+    /// The device and queue painting the surface, for textures a caller
+    /// draws itself. Rebuilt on loss: check [`Host::generation`].
+    pub fn device(&self) -> (&wgpu::Device, &wgpu::Queue) {
+        (&self.gpu.device, &self.gpu.queue)
+    }
+
+    /// Bumped each time a lost device is rebuilt; anything made on the old
+    /// [`Host::device`] must be made again.
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// Paint `texture` where the scene has an image texture `key`; see
+    /// [`GpuRenderer::set_texture`]. The next present paints even if the
+    /// scene did not change.
+    pub fn set_texture(&mut self, key: u64, texture: &wgpu::Texture) {
+        self.gpu.renderer.set_texture(key, texture);
     }
 
     /// The device was lost; the next [`Host::present`] rebuilds it. An idle
@@ -242,15 +303,19 @@ impl Host {
         let OnDevice {
             device,
             config,
+            size,
             renderer,
             ..
         } = &mut self.gpu;
         renderer
             .resize([width, height])
             .map_err(HostError::Render)?;
-        config.width = width;
-        config.height = height;
-        self.surface.configure(device, config);
+        *size = (width, height);
+        let extent = (surface_extent(width, limit), surface_extent(height, limit));
+        if extent != (config.width, config.height) {
+            (config.width, config.height) = extent;
+            self.surface.configure(device, config);
+        }
         Ok(())
     }
 
@@ -297,6 +362,7 @@ impl Host {
             match OnDevice::open(&self.instance, Some(&self.surface), size) {
                 Ok(gpu) => {
                     self.gpu = gpu;
+                    self.generation += 1;
                     self.retry_at = None;
                     return Ok(Frame::Skipped);
                 }
@@ -313,10 +379,14 @@ impl Host {
             renderer,
             ..
         } = &mut self.gpu;
+        if overlay.is_none() && renderer.is_current(scene, xf) {
+            return Ok(Frame::Current);
+        }
         let frame = match self.surface.get_current_texture() {
             Acquired::Success(frame) | Acquired::Suboptimal(frame) => frame,
             Acquired::Outdated => {
                 self.surface.configure(device, config);
+                renderer.invalidate();
                 return Ok(Frame::Skipped);
             }
             Acquired::Occluded | Acquired::Timeout => return Ok(Frame::Skipped),
@@ -356,6 +426,23 @@ mod tests {
             Some(F::Bgra8Unorm)
         );
         assert_eq!(surface_format(&[F::Rgba8UnormSrgb]), None);
+    }
+
+    #[test]
+    fn present_mode_and_swapchain_steps_follow_the_platform() {
+        use wgpu::PresentMode as P;
+        let mode = present_mode(&[P::Fifo, P::FifoRelaxed]);
+        if cfg!(windows) {
+            assert_eq!(mode, P::AutoNoVsync);
+            assert_eq!(surface_extent(300, 8192), 300);
+        } else {
+            assert_eq!(mode, P::FifoRelaxed);
+            assert_eq!(present_mode(&[P::Fifo]), P::Fifo);
+        }
+        if cfg!(target_os = "linux") {
+            assert_eq!(surface_extent(300, 8192), 512);
+            assert_eq!(surface_extent(8000, 8192), 8192);
+        }
     }
 
     /// A real loss, not a flag flipped by hand: `Device::destroy` fires the

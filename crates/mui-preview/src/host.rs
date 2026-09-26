@@ -70,6 +70,7 @@ impl Gpu {
     fn after(&mut self, frame: &Frame) -> Result<Option<EffectStats>, String> {
         match frame {
             Frame::Presented(stats) => return Ok(Some(*stats)),
+            Frame::Current => return Ok(None),
             Frame::Skipped => {}
             Frame::SurfaceLost => {
                 let surface = surface(self.host.instance(), &self.window)?;
