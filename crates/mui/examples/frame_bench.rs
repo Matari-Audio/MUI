@@ -17,12 +17,17 @@ use mui::prelude::*;
 
 static ALLOCS: AtomicUsize = AtomicUsize::new(0);
 struct Counting;
+// SAFETY: every method forwards to `System` with the caller's arguments
+// unchanged; the counter never allocates, so the GlobalAlloc contract is
+// System's.
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, l: AllocLayout) -> *mut u8 {
         ALLOCS.fetch_add(1, Ordering::Relaxed);
+        // SAFETY: the caller upholds `GlobalAlloc::alloc`'s contract; forwarded as is.
         unsafe { System.alloc(l) }
     }
     unsafe fn dealloc(&self, p: *mut u8, l: AllocLayout) {
+        // SAFETY: the caller upholds `GlobalAlloc::dealloc`'s contract; forwarded as is.
         unsafe { System.dealloc(p, l) }
     }
 }
@@ -36,6 +41,7 @@ fn cpu_ms() -> f64 {
         tv_sec: 0,
         tv_nsec: 0,
     };
+    // SAFETY: `t` is a live, writable timespec for the call's duration.
     unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut t) };
     t.tv_sec as f64 * 1e3 + t.tv_nsec as f64 * 1e-6
 }

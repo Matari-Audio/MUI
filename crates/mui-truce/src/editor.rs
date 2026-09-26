@@ -57,16 +57,19 @@ pub struct MuiEditor<P: Params> {
     min: Option<(u32, u32)>,
     system_scale: bool,
     host_scale: Option<f64>,
-    window: Option<baseview::WindowHandle>,
+    window: Option<Handle>,
 }
+
+/// The one field of [`MuiEditor`] that is not auto-`Send`.
+struct Handle(baseview::WindowHandle);
 
 // SAFETY: `baseview::WindowHandle` wraps a native window pointer and is not
 // auto-`Send`. truce calls `open`, `set_size` and `close` from one GUI
 // thread, never concurrently, so the handle never leaves the thread that
 // made it; `Send` is only what `Box<dyn Editor>` asks for. truce_gui's own
 // `GpuEditor` makes the same argument.
-#[allow(unsafe_code)]
-unsafe impl<P: Params> Send for MuiEditor<P> {}
+#[expect(unsafe_code, reason = "vouches Send for the baseview handle alone")]
+unsafe impl Send for Handle {}
 
 impl<P: Params> MuiEditor<P> {
     /// A fixed-size editor, `size` logical points.
@@ -99,7 +102,7 @@ impl<P: Params> MuiEditor<P> {
     }
 
     fn close_window(&mut self) {
-        if let Some(mut window) = self.window.take() {
+        if let Some(Handle(mut window)) = self.window.take() {
             window.close();
         }
     }
@@ -139,14 +142,14 @@ impl<P: Params> Editor for MuiEditor<P> {
             Some(s) => baseview::WindowScalePolicy::ScaleFactor(s),
             None => baseview::WindowScalePolicy::SystemScaleFactor,
         };
-        self.window = Some(window::open(
+        self.window = Some(Handle(window::open(
             &ParentWindow(parent),
             "MUI",
             self.size,
             scale,
             Arc::clone(&self.shared),
             Arc::clone(&self.requests),
-        ));
+        )));
     }
 
     fn close(&mut self) {

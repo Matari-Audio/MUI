@@ -8,13 +8,18 @@ static ALLOCS: AtomicUsize = AtomicUsize::new(0);
 static COUNTER: AtomicUsize = AtomicUsize::new(0);
 static BYTES: AtomicUsize = AtomicUsize::new(0);
 struct Counting;
+// SAFETY: every method forwards to `System` with the caller's arguments
+// unchanged; the counter never allocates, so the GlobalAlloc contract is
+// System's.
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, l: AllocLayout) -> *mut u8 {
         ALLOCS.fetch_add(1, Ordering::Relaxed);
         BYTES.fetch_add(l.size(), Ordering::Relaxed);
+        // SAFETY: the caller upholds `GlobalAlloc::alloc`'s contract; forwarded as is.
         unsafe { System.alloc(l) }
     }
     unsafe fn dealloc(&self, p: *mut u8, l: AllocLayout) {
+        // SAFETY: the caller upholds `GlobalAlloc::dealloc`'s contract; forwarded as is.
         unsafe { System.dealloc(p, l) }
     }
 }
@@ -181,7 +186,7 @@ fn main() {
                     |_e, _room| Size::new(40.0, 14.0),
                 );
                 let ms = t.elapsed().as_secs_f64() * 1e3;
-                std::hint::black_box(l.map(|l| l.all().len()).unwrap_or(0));
+                std::hint::black_box(l.map_or(0, |l| l.all().len()));
                 ms
             })
             .collect();

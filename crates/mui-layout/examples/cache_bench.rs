@@ -10,12 +10,17 @@ use mui_layout::{
 
 static ALLOCS: AtomicUsize = AtomicUsize::new(0);
 struct Counting;
+// SAFETY: every method forwards to `System` with the caller's arguments
+// unchanged; the counter never allocates, so the GlobalAlloc contract is
+// System's.
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, l: AllocLayout) -> *mut u8 {
         ALLOCS.fetch_add(1, Ordering::Relaxed);
+        // SAFETY: the caller upholds `GlobalAlloc::alloc`'s contract; forwarded as is.
         unsafe { System.alloc(l) }
     }
     unsafe fn dealloc(&self, p: *mut u8, l: AllocLayout) {
+        // SAFETY: the caller upholds `GlobalAlloc::dealloc`'s contract; forwarded as is.
         unsafe { System.dealloc(p, l) }
     }
 }
@@ -56,8 +61,10 @@ fn tree() -> N {
         .pad(8.)
         .scroll()
 }
-// The measurer callback hands over `&P`, and `P` here is `String`.
-#[allow(clippy::ptr_arg)]
+#[expect(
+    clippy::ptr_arg,
+    reason = "the measurer callback hands over `&P`, and `P` here is `String`"
+)]
 fn metric(s: &String, room: Option<f64>) -> Size {
     let full = s.len() as f64 * 6.;
     let w = room.unwrap_or(full).max(6.);

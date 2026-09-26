@@ -7,7 +7,10 @@ use wgpu::rwh;
 
 /// # Safety
 /// The window must outlive the returned surface.
-#[allow(unsafe_code)]
+#[expect(
+    unsafe_code,
+    reason = "wgpu takes raw native handles only through an unsafe constructor"
+)]
 pub unsafe fn create(
     instance: &wgpu::Instance,
     window: &baseview::Window,
@@ -34,9 +37,13 @@ pub unsafe fn create(
                 rwh::Win32WindowHandle::new(std::num::NonZeroIsize::new(w.hwnd as isize)?);
             // Vulkan's `vkCreateWin32SurfaceKHR` rejects a null HINSTANCE,
             // and baseview leaves it null.
+            // SAFETY: the declaration matches kernel32's `GetModuleHandleW`
+            // (LPCWSTR in, HMODULE out, stdcall), which std already links.
             unsafe extern "system" {
                 fn GetModuleHandleW(name: *const u16) -> isize;
             }
+            // SAFETY: a null name reads no memory and returns the process's
+            // executable module, which is loaded for as long as we run.
             win32.hinstance =
                 std::num::NonZeroIsize::new(unsafe { GetModuleHandleW(std::ptr::null()) });
             (
@@ -46,6 +53,9 @@ pub unsafe fn create(
         }
         _ => return None,
     };
+    // SAFETY: both handles were just read from the live `window`, and this
+    // function's own contract makes the caller keep that window alive for as
+    // long as the returned surface.
     unsafe {
         instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
             raw_display_handle: Some(display),

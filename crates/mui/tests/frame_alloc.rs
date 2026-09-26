@@ -11,16 +11,22 @@ thread_local! {
     static ALLOCATIONS: Cell<usize> = const { Cell::new(0) };
 }
 
+// SAFETY: every method forwards to `System` with the caller's arguments
+// unchanged; the counter never allocates, so the GlobalAlloc contract is
+// System's.
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         ALLOCATIONS.with(|n| n.set(n.get() + 1));
+        // SAFETY: the caller upholds `GlobalAlloc::alloc`'s contract; forwarded as is.
         unsafe { System.alloc(layout) }
     }
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        // SAFETY: the caller upholds `GlobalAlloc::dealloc`'s contract; forwarded as is.
         unsafe { System.dealloc(ptr, layout) }
     }
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, size: usize) -> *mut u8 {
         ALLOCATIONS.with(|n| n.set(n.get() + 1));
+        // SAFETY: the caller upholds `GlobalAlloc::realloc`'s contract; forwarded as is.
         unsafe { System.realloc(ptr, layout, size) }
     }
 }
@@ -66,6 +72,7 @@ fn a_widget_id_costs_the_allocator_nothing() {
 #[test]
 #[ignore = "a measurement, not a check"]
 fn fifty_widgets_per_frame() {
+    const N: usize = 20;
     let mut ui =
         Ui::new(Theme::DEFAULT).font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
     let (mut v, mut on) = ([0.5; 20], [false; 10]);
@@ -76,13 +83,12 @@ fn fifty_widgets_per_frame() {
             .unwrap();
     }
     let (mut build, mut frame) = (0, 0);
-    const N: usize = 20;
     for _ in 0..N {
         let (b, tree) = allocations(|| panel(&mut ui, &mut v, &mut on));
         let (f, _) = allocations(|| {
             ui.frame(tree, size, PointerInput::default(), 0.016)
                 .map(|_| ())
-                .unwrap()
+                .unwrap();
         });
         build += b;
         frame += f;
