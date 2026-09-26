@@ -8,12 +8,16 @@ impl Ui {
     /// `ui.tween("cutoff", v)` glides when a preset changes it and still
     /// tracks a drag, because the spring is retargeted, never restarted.
     /// First call returns `target`, so nothing flies in from zero.
-    pub fn tween(&mut self, id: &str, target: f64) -> f64 {
+    pub fn tween(&mut self, id: impl Into<Id>, target: f64) -> f64 {
+        let id: Id = id.into();
+        let id = id.as_str();
         self.tween_with(id, target, Spring::DEFAULT)
     }
     /// [`Ui::tween`] with your own spring. The spring's shape is taken on
     /// the first call for `id`.
-    pub fn tween_with(&mut self, id: &str, target: f64, spring: Spring) -> f64 {
+    pub fn tween_with(&mut self, id: impl Into<Id>, target: f64, spring: Spring) -> f64 {
+        let id: Id = id.into();
+        let id = id.as_str();
         let (seen, s) = node(&mut self.nodes, id)
             .tween
             .get_or_insert_with(|| (false, spring.seeded(target)));
@@ -41,11 +45,13 @@ impl Ui {
     ///
     /// ```
     /// use mui::prelude::*;
-    /// let mut ui = Ui::new(Theme::DEFAULT);
+    /// let mut ui = Ui::default();
     /// let intro = Keys::new(0.).to(0.5, 1., Ease::OUT);
     /// assert_eq!(ui.play("intro", &intro), 0.);
     /// ```
-    pub fn play(&mut self, id: &str, keys: &Keys) -> f64 {
+    pub fn play(&mut self, id: impl Into<Id>, keys: &Keys) -> f64 {
+        let id: Id = id.into();
+        let id = id.as_str();
         let now = self.time;
         let (seen, start) = node(&mut self.nodes, id).play.get_or_insert((false, now));
         *seen = true;
@@ -58,7 +64,9 @@ impl Ui {
         value
     }
     /// Start `id`'s [`Ui::play`] over from its first key on the next frame.
-    pub fn replay(&mut self, id: &str) {
+    pub fn replay(&mut self, id: impl Into<Id>) {
+        let id: Id = id.into();
+        let id = id.as_str();
         if let Some(n) = self.nodes.get_mut(id) {
             n.play = None;
         }

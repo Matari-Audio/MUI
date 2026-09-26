@@ -56,7 +56,7 @@ pub const DOUBLE_CLICK: f64 = 0.4;
 ///     fn get(&mut self) -> Option<String> { Some(self.0.clone()) }
 ///     fn set(&mut self, text: &str) { self.0 = text.to_owned(); }
 /// }
-/// let mut ui = Ui::new(Theme::DEFAULT).clipboard(Memory("saw".into()));
+/// let mut ui = Ui::default().clipboard(Memory("saw".into()));
 /// assert_eq!(ui.paste().as_deref(), Some("saw"));
 /// ```
 pub trait Clipboard: Send {
@@ -242,6 +242,12 @@ fn same_hit_geometry(a: &ResolvedScene, b: &ResolvedScene) -> bool {
         }
     }
 }
+/// `Ui::new(Theme::DEFAULT)`.
+impl Default for Ui {
+    fn default() -> Self {
+        Self::new(Theme::DEFAULT)
+    }
+}
 impl Ui {
     pub fn new(theme: Theme) -> Self {
         Self {
@@ -317,7 +323,7 @@ impl Ui {
     ///
     /// ```
     /// # use mui::prelude::*;
-    /// let mut ui = Ui::new(Theme::DEFAULT);
+    /// let mut ui = Ui::default();
     /// ui.set_scale(Some(2.0));
     /// assert_eq!(ui.scale(), Some(2.0));
     /// ```
@@ -357,7 +363,9 @@ impl Ui {
     /// Morph-only render update: keep the application declaration synchronized.
     /// Input reads the live scene's analytic predicate, so no hit-mask or closure
     /// has to be recreated on every animation tick.
-    pub fn set_weld_morph(&mut self, id: &str, progress: f64) -> Result<bool, SceneError> {
+    pub fn set_weld_morph(&mut self, id: impl Into<Id>, progress: f64) -> Result<bool, SceneError> {
+        let id: Id = id.into();
+        let id = id.as_str();
         self.scene
             .as_mut()
             .ok_or(SceneError::UnsupportedWeld("no resolved scene"))?
@@ -365,18 +373,22 @@ impl Ui {
     }
     pub fn set_weld_solid_material(
         &mut self,
-        id: &str,
+        id: impl Into<Id>,
         index: usize,
         fill: Option<Color>,
         border: Option<Color>,
         width: f64,
     ) -> Result<bool, SceneError> {
+        let id: Id = id.into();
+        let id = id.as_str();
         self.scene
             .as_mut()
             .ok_or(SceneError::UnsupportedWeld("no resolved scene"))?
             .set_weld_solid_material(id, index, fill, border, width)
     }
-    pub fn set_weld_material_blend(&mut self, id: &str, blend: f64) -> Result<bool, SceneError> {
+    pub fn set_weld_material_blend(&mut self, id: impl Into<Id>, blend: f64) -> Result<bool, SceneError> {
+        let id: Id = id.into();
+        let id = id.as_str();
         self.scene
             .as_mut()
             .ok_or(SceneError::UnsupportedWeld("no resolved scene"))?
@@ -414,12 +426,14 @@ impl Ui {
     ///
     /// ```
     /// # use mui::prelude::*;
-    /// let mut ui = Ui::new(Theme::DEFAULT).font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
+    /// let mut ui = Ui::default().font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
     /// let tree = row![text("0.0").reserve("-88.8").id("gain")];
     /// ui.frame(tree, Some(Size::new(200., 40.)), PointerInput::default(), 0.016).unwrap();
     /// ui.set_text("gain", "-12.4").unwrap();
     /// ```
-    pub fn set_text(&mut self, id: &str, s: impl AsRef<str>) -> Result<(), mui_scene::SceneError> {
+    pub fn set_text(&mut self, id: impl Into<Id>, s: impl AsRef<str>) -> Result<(), mui_scene::SceneError> {
+        let id: Id = id.into();
+        let id = id.as_str();
         self.scene
             .as_mut()
             .ok_or(mui_scene::SceneError::NoTextLayer)?
@@ -448,7 +462,7 @@ impl Ui {
     ///
     /// ```
     /// # use mui::{Edit, Ui}; use mui::prelude::*;
-    /// # let mut ui = Ui::new(Theme::DEFAULT);
+    /// # let mut ui = Ui::default();
     /// # let mut cutoff = 0.5;
     /// match ui.edit("cutoff") {
     ///     Some(Edit::Begin) => { /* host.begin_gesture(CUTOFF) */ }
@@ -457,7 +471,9 @@ impl Ui {
     /// }
     /// let el = slider(&mut ui, "cutoff", "Cutoff", &mut cutoff, 0.0..=1.0).el;
     /// ```
-    pub fn edit(&self, id: &str) -> Option<Edit> {
+    pub fn edit(&self, id: impl Into<Id>) -> Option<Edit> {
+        let id: Id = id.into();
+        let id = id.as_str();
         self.delivered
             .iter()
             .find(|(k, _)| k == id)
@@ -473,13 +489,15 @@ impl Ui {
     ///
     /// ```
     /// # use mui::Ui; use mui::prelude::*;
-    /// # let ui = Ui::new(Theme::DEFAULT);
+    /// # let ui = Ui::default();
     /// let r = ui.get("lane");
     /// let zoom = 1.0 - r.wheel.y * 0.01;
     /// if r.double_clicked { /* reset */ }
     /// # assert_eq!(zoom, 1.0);
     /// ```
-    pub fn get(&self, id: &str) -> Response {
+    pub fn get(&self, id: impl Into<Id>) -> Response {
+        let id: Id = id.into();
+        let id = id.as_str();
         let mut response = self.interaction.get(id);
         response.double_clicked = self.double.as_deref() == Some(id);
         response.key_activated = self
@@ -600,10 +618,11 @@ impl Ui {
 
     /// All gesture edges for a control. Unlike `edit`, this preserves an atomic
     /// Begin/End pair, such as one accessibility value change in one frame.
-    pub fn edits_for<'a>(&'a self, id: &'a str) -> impl Iterator<Item = Edit> + 'a {
+    pub fn edits_for(&self, id: impl Into<Id>) -> impl Iterator<Item = Edit> + '_ {
+        let id: Id = id.into();
         self.delivered
             .iter()
-            .filter(move |(k, _)| k == id)
+            .filter(move |(k, _)| *k == *id)
             .map(|(_, e)| *e)
     }
 
@@ -627,7 +646,7 @@ impl Ui {
     ///
     /// ```
     /// # use mui::Ui; use mui::prelude::*;
-    /// # let mut ui = Ui::new(Theme::DEFAULT);
+    /// # let mut ui = Ui::default();
     /// # let tree = col![block(40., 30.).min_size(Size::new(40., 30.))].pad(8.);
     /// # ui.frame(tree, Some(Size::new(400., 300.)), PointerInput::default(), 0.016).unwrap();
     /// assert_eq!(ui.min_size(), Some(Size::new(56., 46.)));

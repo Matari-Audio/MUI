@@ -162,7 +162,7 @@ mod tests {
     use serde_json::json;
     #[test]
     fn ordered_edges_time_and_validation() {
-        let mut editor = Editor::new(Ui::new(Theme::DEFAULT));
+        let mut editor = Editor::new(Ui::default());
         let mut frames = Vec::new();
         editor
             .advance(

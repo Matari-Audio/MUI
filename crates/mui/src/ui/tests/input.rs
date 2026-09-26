@@ -5,7 +5,7 @@ use super::*;
 /// not, and the pointer sitting on it produces no gesture at all.
 #[test]
 fn a_disabled_node_paints_its_off_look_and_hits_nothing() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let tree = |off: bool| {
         block(100., 100.)
             .fill(Role::Field)
@@ -68,7 +68,7 @@ fn a_disabled_node_paints_its_off_look_and_hits_nothing() {
 /// A shortcut is not focus-gated -- except by a field that is typing.
 #[test]
 fn a_shortcut_fires_unfocused_and_never_while_a_field_has_the_focus() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let mut value = String::new();
     let undo = |ui: &Ui| {
         ui.shortcuts()
@@ -90,7 +90,7 @@ fn a_shortcut_fires_unfocused_and_never_while_a_field_has_the_focus() {
 
 #[test]
 fn tab_walks_the_focusable_surfaces_in_scene_order() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let tree = || {
         col([
             block(20., 20.).focusable().id("a"),
@@ -116,7 +116,7 @@ fn a_button_can_be_focused_and_activated_from_the_keyboard() {
         widgets::button(ui, "button", "Save").el.into_el()
     }
 
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let root = tree(&mut ui);
     ui.frame(root, None, PointerInput::default(), 0.016)
         .unwrap();
@@ -134,7 +134,7 @@ fn a_button_can_be_focused_and_activated_from_the_keyboard() {
 
 #[test]
 fn typing_reaches_the_focused_field() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let mut value = String::new();
     let tree = |ui: &mut Ui, v: &mut String| widgets::text_input(ui, "f", v).el;
     let root = tree(&mut ui, &mut value);
@@ -159,7 +159,7 @@ fn typing_reaches_the_focused_field() {
 /// character sits, and a reader's `SetTextSelection` moves it.
 #[test]
 fn a_field_reports_its_selection_and_carets_and_a_reader_can_select() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let mut value = String::from("héllo");
     let tree = |ui: &mut Ui, v: &mut String| widgets::text_input(ui, "f", v).el;
     let text = |ui: &Ui| match &ui.scene().unwrap().surface("f").unwrap().semantics {
@@ -199,7 +199,7 @@ fn a_field_reports_its_selection_and_carets_and_a_reader_can_select() {
 
 #[test]
 fn a_composition_paints_without_editing_the_value_and_the_commit_inserts() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let mut value = "ab".to_owned();
     let tree = |ui: &mut Ui, v: &mut String| widgets::text_input(ui, "f", v).el;
     let ime = |e: mui_input::Ime| Input {
@@ -254,7 +254,7 @@ fn a_composition_paints_without_editing_the_value_and_the_commit_inserts() {
 
 #[test]
 fn a_long_value_scrolls_under_the_clip_instead_of_wrapping() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let mut value = "x".repeat(60);
     let win = Some(Size::new(200., 60.));
     let tree = |ui: &mut Ui, v: &mut String| widgets::text_input(ui, "f", v).el;
@@ -280,7 +280,7 @@ fn a_long_value_scrolls_under_the_clip_instead_of_wrapping() {
 
 #[test]
 fn a_selection_is_extended_by_shift_and_deleted_as_one() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let mut value = String::from("hello");
     let run = |ui: &mut Ui, v: &mut String, input: Input| {
         let root = widgets::text_input(ui, "f", v).el;
@@ -307,7 +307,7 @@ fn a_selection_is_extended_by_shift_and_deleted_as_one() {
 
 #[test]
 fn copy_asks_the_host_for_the_clipboard_and_paste_takes_it_back() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let mut value = String::from("hi");
     let run = |ui: &mut Ui, v: &mut String, input: Input| {
         let root = widgets::text_input(ui, "f", v).el;
@@ -357,7 +357,7 @@ fn a_live_readout_swaps_its_glyphs_without_resolving_again() {
         ]
     };
     let mut ui =
-        Ui::new(Theme::DEFAULT).font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
+        Ui::default().font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
     ui.frame(tree(), Some(Size::new(300., 40.)), Input::default(), 0.016)
         .unwrap();
     assert_eq!(seen.get(), 1, "the one resolve");
@@ -388,7 +388,7 @@ fn a_live_readout_swaps_its_glyphs_without_resolving_again() {
 #[test]
 fn set_text_says_so_when_there_is_nothing_to_set() {
     let mut ui =
-        Ui::new(Theme::DEFAULT).font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
+        Ui::default().font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
     assert!(matches!(
         ui.set_text("gain", "1"),
         Err(SceneError::NoTextLayer)
@@ -408,7 +408,7 @@ fn set_text_says_so_when_there_is_nothing_to_set() {
 
 #[test]
 fn fallback_text_input_caret_uses_the_fallback_advance() {
-    let ui = Ui::new(Theme::DEFAULT)
+    let ui = Ui::default()
         .font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap())
         .fallback_font(Font::new(epaint_default_fonts::NOTO_EMOJI_REGULAR).unwrap());
     let value = "A😀";
@@ -432,7 +432,7 @@ fn empty_background_is_no_target_and_a_press_on_it_drops_the_focus() {
             .size(200., 200.)
             .fill(Role::Background)
     };
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     ui.frame(tree(), None, Input::default(), 0.016).unwrap();
     ui.frame(tree(), None, at(100., 10., true), 0.016).unwrap();
     assert!(ui.focused("field"), "a press on the field focuses it");
@@ -462,7 +462,7 @@ fn empty_background_is_no_target_and_a_press_on_it_drops_the_focus() {
 /// has to see bracketed, on the frame the tree applied them.
 #[test]
 fn keyboard_edits_are_bracketed_and_a_slider_steps() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let mut v = 0.5;
     let mut clicks = 0;
     let mut tree = |ui: &mut Ui| {
@@ -521,7 +521,7 @@ fn keyboard_edits_are_bracketed_and_a_slider_steps() {
 /// A platform's Increment takes the arrow keys' step, as a `SetValue`.
 #[test]
 fn increment_and_decrement_step_like_the_arrow_keys() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let mut v = 0.5;
     let root = widgets::slider(&mut ui, "s", "S", &mut v, 0.0..=1.0)
         .el
@@ -546,7 +546,7 @@ fn increment_and_decrement_step_like_the_arrow_keys() {
 /// painted, not where it would be unscrolled.
 #[test]
 fn a_click_in_a_scrolled_field_lands_on_the_painted_character() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let mut value = "x".repeat(60);
     let win = Some(Size::new(200., 60.));
     let tree = |ui: &mut Ui, v: &mut String| widgets::text_input(ui, "f", v).el;

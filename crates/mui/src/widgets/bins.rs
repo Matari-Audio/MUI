@@ -288,7 +288,7 @@ fn bar(x: f64, w: f64, h: f64, v: f64) -> Path {
 ///
 /// ```
 /// use mui::prelude::*;
-/// let ui = Ui::new(Theme::DEFAULT);
+/// let ui = Ui::default();
 /// let mut saw: Vec<f32> = (1..=16).map(|n| 1.0 / n as f32).collect();
 /// let b = Bins { authored: &mut saw, ..Bins::default() };
 /// assert_eq!(bins_hover(&ui, "spectrum", &b), None, "nothing resolved yet");
@@ -323,11 +323,11 @@ pub fn bins_hover(ui: &Ui, id: impl Into<Id>, b: &Bins) -> Option<usize> {
 ///
 /// ```
 /// use mui::prelude::*;
-/// let mut ui = Ui::new(Theme::DEFAULT);
+/// let mut ui = Ui::default();
 /// let mut saw: Vec<f32> = (1..=64).map(|n| 1.0 / n as f32).collect();
 /// let plot = bins(&mut ui, "spectrum", &mut Bins { authored: &mut saw, ..Bins::default() });
 /// assert_eq!(plot.changed, None, "nothing is dragging");
-/// let _ = plot.el.size(320.0, 140.0);
+/// let _ = plot.size(320, 140);
 /// ```
 pub fn bins(ui: &mut Ui, id: impl Into<Id>, b: &mut Bins) -> Response<Option<BinEdit>> {
     let id: Id = id.into();

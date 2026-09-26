@@ -9,7 +9,7 @@ fn a_move_is_inert_only_on_the_same_target_away_from_raw_pointer_readers() {
             block(50., 50.).fill(Role::Field).tracks_pointer().id("xy"),
         ])
     };
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     for _ in 0..2 {
         ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
     }
@@ -43,7 +43,7 @@ fn a_move_is_inert_only_on_the_same_target_away_from_raw_pointer_readers() {
 fn a_new_hover_target_is_owed_one_more_tree() {
     // Plain surfaces: no hover spring to keep frames coming.
     let tree = || row([block(50., 50.).id("a"), block(50., 50.).id("b")]);
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
     ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
     let f = ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
@@ -57,7 +57,7 @@ fn a_new_hover_target_is_owed_one_more_tree() {
 #[test]
 fn an_inert_move_keeps_the_tip_counting_and_a_release_is_not_inert() {
     let tree = || block(40., 40.).fill(Role::Raised).tip("why").id("b");
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
     ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
     assert!(ui.inert(&at(12., 12., false).into()), "the tip counts on");
@@ -73,7 +73,7 @@ fn an_inert_move_keeps_the_tip_counting_and_a_release_is_not_inert() {
 
 #[test]
 fn a_tip_comes_due_after_half_a_second_of_hover() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let tree = || block(40., 40.).fill(Role::Raised).tip("why").id("b");
     // In a window, not hugging: a float is kept inside the box it floats
     // in, so the room under the surface has to exist.
@@ -99,7 +99,7 @@ fn a_tip_comes_due_after_half_a_second_of_hover() {
 
 #[test]
 fn a_tip_lands_where_it_was_measured_even_under_a_padded_root() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let tree = || col([block(40., 40.).fill(Role::Raised).tip("why").id("b")]).pad(L);
     let win = || Some(Size::new(240., 300.));
     let p = at(110., 30., false);
@@ -117,7 +117,7 @@ fn a_tip_lands_where_it_was_measured_even_under_a_padded_root() {
 
 #[test]
 fn a_press_and_its_release_bracket_the_gesture() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let tree = || block(40., 40.).fill(Role::Raised).id("b");
     ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
     let f = ui.frame(tree(), None, at(10., 10., true), 0.016).unwrap();
@@ -134,7 +134,7 @@ fn a_press_and_its_release_bracket_the_gesture() {
 /// knows which node the pointer is on -- no `ui.state` in the tree.
 #[test]
 fn a_declared_hover_style_is_applied_while_hovered() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let tree = || {
         block(40., 40.)
             .fill(Role::Raised)
@@ -178,7 +178,7 @@ fn a_named_layout_surface_stays_cold_while_an_interactive_child_warms() {
         .id("panel")
     };
 
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let cold = ui
         .frame(tree(), None, PointerInput::default(), 0.016)
         .unwrap();
@@ -210,7 +210,7 @@ fn a_named_layout_surface_stays_cold_while_an_interactive_child_warms() {
 
     // Resting on the empty part of the named parent remains interactive
     // for hit testing, without starting a useless animation loop.
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     ui.frame(tree(), None, PointerInput::default(), 0.016)
         .unwrap();
     let (panel_warm, animating) = {
@@ -239,7 +239,7 @@ fn a_rounded_clip_rejects_a_child_corner() {
         .clip()
         .id("panel")
     };
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     ui.frame(tree(), None, PointerInput::default(), 0.016)
         .unwrap();
     ui.frame(tree(), None, at(5., 5., false), 0.016).unwrap();
@@ -272,7 +272,7 @@ fn nested_rounded_clips_intersect_for_hit_testing() {
         .clip()
         .id("outer")
     };
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     ui.frame(tree(), None, PointerInput::default(), 0.016)
         .unwrap();
     ui.frame(tree(), None, at(21., 21., false), 0.016).unwrap();
@@ -288,7 +288,7 @@ fn nested_rounded_clips_intersect_for_hit_testing() {
 /// fallback must not remap that already-resolved color a second time.
 #[test]
 fn an_explicit_hover_look_is_applied_once() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let tree = || {
         block(40., 40.)
             .fill(Role::Field)
@@ -313,7 +313,7 @@ fn an_explicit_hover_look_is_applied_once() {
 /// secondary click is a click the caller can tell apart.
 #[test]
 fn shift_drags_a_value_fine_and_a_secondary_click_is_distinguishable() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let tree = || block(40., 40.).fill(Role::Raised).id("b");
     let drag = |ui: &mut Ui, mods: Mods| {
         // The hit map is last frame's, so a press needs a frame to land on.
@@ -358,7 +358,7 @@ fn shift_drags_a_value_fine_and_a_secondary_click_is_distinguishable() {
 
 #[test]
 fn a_cancelled_gesture_still_ends() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let tree = || block(40., 40.).fill(Role::Raised).id("b");
     ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
     ui.frame(tree(), None, at(10., 10., true), 0.016).unwrap();
@@ -369,7 +369,7 @@ fn a_cancelled_gesture_still_ends() {
 
 #[test]
 fn hover_warms_the_fill_and_a_press_is_reported_next_frame() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let tree = || {
         block(40., 40.)
             .fill(Role::Raised)
@@ -393,7 +393,7 @@ fn hover_warms_the_fill_and_a_press_is_reported_next_frame() {
 
 #[test]
 fn a_gesture_edge_survives_a_frame_that_failed_to_resolve() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let good = || block(40., 40.).fill(Role::Raised).id("b");
     let bad = || good().radius(-1.);
     ui.frame(good(), None, at(10., 10., false), 0.016).unwrap();
@@ -407,7 +407,7 @@ fn a_gesture_edge_survives_a_frame_that_failed_to_resolve() {
 
 #[test]
 fn a_degenerate_or_inverted_range_resolves_and_clamps() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let mut v = 1.0;
     let el = widgets::slider(&mut ui, "fixed", "Fixed", &mut v, 1.0..=1.0)
         .el

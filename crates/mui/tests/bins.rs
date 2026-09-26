@@ -56,7 +56,7 @@ fn a_drag_paints_every_bin_it_crossed_with_interpolated_levels() {
         authored: &mut levels,
         ..Bins::default()
     };
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     press(&mut ui, &mut b, at(3, 0.25), false);
     // One frame's jump of six bins and half the height.
     frame(
@@ -99,7 +99,7 @@ fn shift_paints_fine_from_the_press_level() {
             authored: &mut levels,
             ..Bins::default()
         };
-        let mut ui = Ui::new(Theme::DEFAULT);
+        let mut ui = Ui::default();
         press(&mut ui, &mut b, at(5, 0.2), shift);
         let to = || pointer(at(5, 0.9), Some(Button::Primary), shift);
         frame(&mut ui, &mut b, to());
@@ -126,7 +126,7 @@ fn a_secondary_click_resets_the_bin_under_the_pointer() {
         authored: &mut levels,
         ..Bins::default()
     };
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let p = at(11, 0.5);
     for _ in 0..2 {
         frame(&mut ui, &mut b, pointer(p, None, false));
@@ -168,7 +168,7 @@ fn the_arrows_select_and_nudge_the_selected_bin() {
         }],
         ..Input::default()
     };
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     frame(&mut ui, &mut b, PointerInput::default());
     ui.focus("spec");
     assert_eq!(
@@ -223,7 +223,7 @@ fn the_arrows_select_and_nudge_the_selected_bin() {
 #[test]
 fn a_thousand_bins_at_two_hundred_pixels_draw_one_bar_per_column() {
     let mut levels = saw(1024);
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let live: Vec<f32> = levels.iter().map(|v| v * 0.5).collect();
     let mut b = Bins {
         authored: &mut levels,

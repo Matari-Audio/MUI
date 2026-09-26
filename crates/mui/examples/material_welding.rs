@@ -23,7 +23,7 @@ fn panel(progress: f64) -> El {
         .id("rack")
 }
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     for _ in 0..2 {
         ui.frame(panel(1.), None, Input::default(), 1. / 60.)?;
     }

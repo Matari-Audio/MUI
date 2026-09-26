@@ -5,7 +5,7 @@ use super::*;
 use crate::window::Handler;
 use baseview::{Event, MouseEvent};
 use keyboard_types::{Key as HostKey, KeyState, KeyboardEvent, Modifiers};
-use mui::prelude::{Point, Theme, knob, toggle};
+use mui::prelude::{Point, knob, toggle};
 use mui::scene::prelude::row;
 use std::sync::Mutex;
 use truce::prelude::*;
@@ -61,7 +61,7 @@ fn context(params: &Arc<Synth>) -> (PluginContext, Log) {
 fn editor(params: &Arc<Synth>) -> MuiEditor<Synth> {
     MuiEditor::new(
         params.clone(),
-        Ui::new(Theme::DEFAULT),
+        Ui::default(),
         (400, 300),
         |ui, bridge| {
             let gain = bridge.bind(ui, 10u32, |ui, id, v| knob(ui, id, "Gain", v, 0.0..=1.0));
@@ -305,7 +305,7 @@ fn a_control_that_leaves_the_tree_mid_drag_ends_its_gesture() {
     let hide = hidden.clone();
     let editor = MuiEditor::new(
         params.clone(),
-        Ui::new(Theme::DEFAULT),
+        Ui::default(),
         (400, 300),
         move |ui, bridge| {
             if hide.load(std::sync::atomic::Ordering::Relaxed) {
@@ -344,7 +344,7 @@ fn one_parameter_bound_twice_still_paints_and_brackets_by_parameter() {
     let params = Arc::new(Synth::default());
     let editor = MuiEditor::new(
         params.clone(),
-        Ui::new(Theme::DEFAULT),
+        Ui::default(),
         (400, 300),
         |ui, bridge| {
             let a = bridge.bind(ui, 10u32, |ui, id, v| knob(ui, id, "Gain", v, 0.0..=1.0));
@@ -427,7 +427,7 @@ fn a_read_only_parameter_never_reaches_the_host() {
     };
     let mut bridge = Bridge::new(params.clone());
     bridge.attach(context.with_params(params));
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let el = bridge.bind(&mut ui, 1u32, |ui, id, v| {
         *v = 0.7;
         knob(ui, id, "Level", v, 0.0..=1.0)

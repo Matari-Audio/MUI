@@ -148,11 +148,11 @@ fn dragged(ui: &Ui, id: &str, c: &mut Curve) -> Option<CurveEdit> {
 /// ```
 /// use mui::prelude::*;
 /// use mui::scene::curve::Curve;
-/// let mut ui = Ui::new(Theme::DEFAULT);
+/// let mut ui = Ui::default();
 /// let mut env = Curve::default();
 /// let plot = curve(&mut ui, "env", &mut env);
 /// assert_eq!(plot.changed, None, "nothing is dragging");
-/// let _ = plot.el.size(240.0, 120.0);
+/// let _ = plot.size(240, 120);
 /// ```
 pub fn curve(ui: &mut Ui, id: impl Into<Id>, c: &mut Curve) -> Response<Option<CurveEdit>> {
     let id: Id = id.into();

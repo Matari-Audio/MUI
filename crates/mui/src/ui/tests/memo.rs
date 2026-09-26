@@ -21,7 +21,7 @@ fn memo_tree(ui: &mut Ui, deps: u64, lead: f64, built: &mut usize) -> El {
 }
 /// The same tree built plainly, for what a memo must paint like.
 fn plain_tree(lead: f64) -> El {
-    let mut t = memo_tree(&mut Ui::new(Theme::DEFAULT), 0, lead, &mut 0);
+    let mut t = memo_tree(&mut Ui::default(), 0, lead, &mut 0);
     t.children_mut()[1].payload_mut().extras_mut().memo = None;
     t
 }
@@ -35,7 +35,7 @@ fn a_ui_with_kept_memos_stays_send() {
 
 #[test]
 fn a_memo_builds_once_while_its_deps_hold_and_again_when_they_change() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let mut built = 0;
     for _ in 0..4 {
         let t = memo_tree(&mut ui, 1, 50., &mut built);
@@ -58,7 +58,7 @@ fn a_memo_builds_once_while_its_deps_hold_and_again_when_they_change() {
 /// one, and the memo rests again once the spring does.
 #[test]
 fn a_hovered_button_in_a_memo_is_restyled() {
-    let (mut ui, mut plain) = (Ui::new(Theme::DEFAULT), Ui::new(Theme::DEFAULT));
+    let (mut ui, mut plain) = (Ui::default(), Ui::default());
     let mut built = 0;
     let step = |ui: &mut Ui, plain: &mut Ui, p: PointerInput, built: &mut usize| {
         ui.anticipate(p.pos);
@@ -97,7 +97,7 @@ fn a_hovered_button_in_a_memo_is_restyled() {
 /// it paints and is hit where it now stands.
 #[test]
 fn a_moved_memo_paints_and_hits_where_it_went() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let mut built = 0;
     for _ in 0..2 {
         let t = memo_tree(&mut ui, 1, 50., &mut built);
@@ -123,7 +123,7 @@ fn a_moved_memo_paints_and_hits_where_it_went() {
 /// one's hover rebuilds both, since the outer one holds it.
 #[test]
 fn nested_memos_rebuild_only_what_changed() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let frame = |ui: &mut Ui, deps: u64, p: PointerInput, n: &mut (usize, usize)| {
         let t = ui.memo("outer", deps, |ui| {
             n.0 += 1;

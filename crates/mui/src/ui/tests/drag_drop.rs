@@ -14,7 +14,7 @@ struct Wave(&'static str);
 /// Drag `src` out and back to `x`, then let go, attaching a payload once
 /// the gesture is a drag. Returns the `Ui` on the frame the drop is reported in.
 fn drag_to(x: f64) -> Ui {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     for _ in 0..2 {
         ui.frame(two(), None, at(25., 25., false), 0.016).unwrap();
     }
@@ -64,7 +64,7 @@ fn a_release_elsewhere_delivers_nothing() {
 /// leaves does not, and the tag says which draw was hit.
 #[test]
 fn a_tagged_canvas_responds_in_its_drawn_ring_only() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let tree = || {
         canvas(|s| {
             let c = Point::new(s.width / 2., s.height / 2.);
@@ -92,7 +92,7 @@ fn a_tagged_canvas_responds_in_its_drawn_ring_only() {
 /// The tag a press grabbed survives a drag that leaves the shape.
 #[test]
 fn the_tag_is_latched_for_the_length_of_the_gesture() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let tree = || {
         canvas(|s| {
             let c = Point::new(s.width / 2., s.height / 2.);

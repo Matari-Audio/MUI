@@ -27,7 +27,7 @@ fn slider(right: bool) -> El {
 
 #[test]
 fn a_moved_frame_glides_and_carries_its_children() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let at = |ui: &mut Ui, right| {
         let f = ui
             .frame(slider(right), Some(SIZE), Input::default(), DT)
@@ -65,7 +65,7 @@ fn a_child_that_animates_too_is_not_chased_twice() {
             spacer().grow(if right { 0. } else { 1. }),
         ]
     };
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let f = ui
         .frame(tree(false), Some(SIZE), Input::default(), DT)
         .unwrap();
@@ -110,7 +110,7 @@ fn an_appearing_node_slides_in_fades_in_and_fades_out_where_it_stood() {
             .appear(Appear::Slide(0., 12.))
             .id("toast")
     };
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let shown = |on: bool| stack![if on { toast() } else { block(1., 1.) }];
     let f = ui
         .frame(shown(true), Some(SIZE), Input::default(), DT)
@@ -167,7 +167,7 @@ fn a_renamed_shape_morphs_and_lands_on_the_exact_outline() {
             .path
             .clone()
     };
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let f = ui
         .frame(icon(false), Some(SIZE), Input::default(), DT)
         .unwrap();
@@ -212,7 +212,7 @@ fn a_new_shadow_does_not_steal_the_shells_spring() {
             c
         }
     };
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     for _ in 0..3 {
         ui.frame(card(false), Some(SIZE), Input::default(), DT)
             .unwrap();
@@ -241,7 +241,7 @@ fn opacity_and_gradient_stops_spring() {
             .animate()
             .id("n")
     };
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     ui.frame(node(false), Some(SIZE), Input::default(), DT)
         .unwrap();
     let f = ui
@@ -272,7 +272,7 @@ fn a_reordered_slot_keeps_its_state_and_glides_to_its_new_place() {
         }))
         .gap(20.)
     };
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let f = ui
         .frame(rack([7, 9]), Some(SIZE), Input::default(), DT)
         .unwrap();

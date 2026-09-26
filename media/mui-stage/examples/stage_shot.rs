@@ -86,7 +86,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let dir = std::path::PathBuf::from(std::env::args().nth(1).unwrap_or("stage".into()));
     std::fs::create_dir_all(&dir)?;
     let mut stage = Stage::new(W, H)?;
-    let mut ui = Ui::new(Theme::DEFAULT).font(Font::new(epaint_default_fonts::HACK_REGULAR)?);
+    let mut ui = Ui::default().font(Font::new(epaint_default_fonts::HACK_REGULAR)?);
     let mut ffmpeg = Command::new("ffmpeg")
         .args([
             "-y",

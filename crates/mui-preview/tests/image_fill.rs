@@ -41,7 +41,7 @@ fn render() -> [u8; 4] {
             .radius(8.0)
             .fill(Fill::Image(img, Fit::Contain)),
     ]);
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let frame = ui
         .frame(
             root,

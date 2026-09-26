@@ -58,23 +58,19 @@ impl PurePluginLogic for Gain {
     }
 
     fn editor(params: Arc<GainParams>) -> Box<dyn Editor> {
-        let mut ui = Ui::new(mui::prelude::Theme::DEFAULT);
+        // Both preludes export a `Theme`; the default one is `Ui::default()`,
+        // so neither is named here. Name it as `mui::prelude::Theme` if needed.
+        let mut ui = Ui::default();
         // Bundled, so this cannot fail short of a corrupt build.
         if let Ok(font) = Font::new(epaint_default_fonts::HACK_REGULAR) {
             ui = ui.font(font);
         }
         MuiEditor::new(params, ui, (300, 200), |ui, bridge| {
             let gain = bridge.bind(ui, P::Gain, |ui, id, v| {
-                knob(ui, id, "Gain", v, 0.0..=1.0).el.size(L)
+                knob(ui, id, "Gain", v, 0.0..=1.0).size(L)
             });
             let bypass = bridge.bind_bool(ui, P::Bypass, |ui, id, on| toggle(ui, id, "Bypass", on));
-            let level = f64::from(bridge.meter(bridge.params().level.id()));
-            let meter = row([block(200.0 * level.clamp(0.0, 1.0), 8.0)
-                .pill()
-                .fill(Role::Primary)])
-            .size(200.0, 8.0)
-            .pill()
-            .fill(Role::Field);
+            let level = meter(ui, "level", bridge.meter(P::Level)).w(200);
             col![
                 row![
                     gain,
@@ -86,7 +82,7 @@ impl PurePluginLogic for Gain {
                 ]
                 .gap(L)
                 .center(),
-                meter,
+                level,
             ]
             .gap(M)
             .pad(L)

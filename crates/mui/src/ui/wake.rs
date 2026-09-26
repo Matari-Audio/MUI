@@ -45,14 +45,14 @@ mod tests {
     use mui_scene::prelude::*;
     #[test]
     fn idle_has_no_deadline() {
-        let mut u = Ui::new(Theme::DEFAULT);
+        let mut u = Ui::default();
         u.frame(block(20., 20.), None, Input::default(), 0.)
             .unwrap();
         assert!(u.repaint_after().is_none());
     }
     #[test]
     fn focused_input_gets_a_deadline_not_continuous_animation() {
-        let mut u = Ui::new(Theme::DEFAULT);
+        let mut u = Ui::default();
         let tree = || {
             block(100., 30.)
                 .id("edit")
@@ -72,7 +72,7 @@ mod tests {
     }
     #[test]
     fn real_elapsed_time_crosses_blink_boundary() {
-        let mut u = Ui::new(Theme::DEFAULT);
+        let mut u = Ui::default();
         let tree = || {
             block(100., 30.)
                 .id("edit")

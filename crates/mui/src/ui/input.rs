@@ -21,7 +21,7 @@ impl Ui {
     ///
     /// ```
     /// # use mui::Ui; use mui::prelude::*;
-    /// # let mut ui = Ui::new(Theme::DEFAULT);
+    /// # let mut ui = Ui::default();
     /// let plot = canvas(|size| {
     ///     let box_ = [(0., 0.), (size.width, 0.), (size.width, size.height)];
     ///     vec![Draw::fill(Path::polyline(box_.map(|(x, y)| Point::new(x, y)), true), Role::Primary)
@@ -32,7 +32,9 @@ impl Ui {
     /// ui.frame(plot, None, PointerInput::default(), 0.016).unwrap();
     /// assert_eq!(ui.tag("plot"), None, "the pointer is nowhere");
     /// ```
-    pub fn tag(&self, id: &str) -> Option<&str> {
+    pub fn tag(&self, id: impl Into<Id>) -> Option<&str> {
+        let id: Id = id.into();
+        let id = id.as_str();
         let (k, t) = self.tagged.as_ref()?;
         (k == id).then_some(t.as_str())
     }
@@ -40,11 +42,13 @@ impl Ui {
     ///
     /// ```
     /// use mui::prelude::*;
-    /// let ui = Ui::new(Theme::DEFAULT);
+    /// let ui = Ui::default();
     /// let Interaction { hover, press } = ui.state("go");
     /// assert_eq!((hover, press), (0.0, 0.0), "nothing has touched it");
     /// ```
-    pub fn state(&self, id: &str) -> Interaction {
+    pub fn state(&self, id: impl Into<Id>) -> Interaction {
+        let id: Id = id.into();
+        let id = id.as_str();
         (self.nodes.get(id).and_then(|n| n.springs)).map_or(Interaction::default(), |[h, p]| {
             Interaction {
                 hover: h.value,
@@ -57,7 +61,9 @@ impl Ui {
         self.focus.as_deref()
     }
     /// Whether `id` holds the keyboard focus.
-    pub fn focused(&self, id: &str) -> bool {
+    pub fn focused(&self, id: impl Into<Id>) -> bool {
+        let id: Id = id.into();
+        let id = id.as_str();
         self.focus.as_deref() == Some(id)
     }
     /// Drop the keyboard focus from code: a field that submits on Enter
@@ -68,14 +74,16 @@ impl Ui {
     }
     /// Focus `id` from code. No check that it exists: it may not have been
     /// built yet.
-    pub fn focus(&mut self, id: impl Into<String>) {
+    pub fn focus(&mut self, id: impl Into<Id>) {
         // A composition belongs to the field that started it.
         self.preedit = None;
-        self.focus = Some(id.into());
+        self.focus = Some(id.into().as_str().to_owned());
     }
     /// The keys this frame, if `id` is focused. Empty otherwise, so a widget
     /// may loop over it unconditionally.
-    pub fn keys(&self, id: &str) -> &[KeyPress] {
+    pub fn keys(&self, id: impl Into<Id>) -> &[KeyPress] {
+        let id: Id = id.into();
+        let id = id.as_str();
         if self.focused(id) { &self.keys } else { &[] }
     }
     /// Every key this frame, whatever holds the focus: the stream a global
@@ -90,7 +98,7 @@ impl Ui {
     ///
     /// ```
     /// # use mui::Ui; use mui::prelude::*;
-    /// # let mut ui = Ui::new(Theme::DEFAULT);
+    /// # let mut ui = Ui::default();
     /// # let root = block(10., 10.).id("root");
     /// # ui.frame(root, None, PointerInput::default(), 0.016).unwrap();
     /// let undo = ui
@@ -114,11 +122,15 @@ impl Ui {
         if typing { &[] } else { &self.keys }
     }
     /// The text typed this frame, if `id` is focused.
-    pub fn text(&self, id: &str) -> &str {
+    pub fn text(&self, id: impl Into<Id>) -> &str {
+        let id: Id = id.into();
+        let id = id.as_str();
         if self.focused(id) { &self.typed } else { "" }
     }
     /// The pointer relative to `id`'s frame origin, if both exist.
-    pub fn local(&self, id: &str) -> Option<Point> {
+    pub fn local(&self, id: impl Into<Id>) -> Option<Point> {
+        let id: Id = id.into();
+        let id = id.as_str();
         let p = self.pointer.pos?;
         let s = self.scene.as_ref()?.surface(id)?;
         Some(Point::new(p.x - s.frame.x, p.y - s.frame.y))
@@ -226,14 +238,16 @@ impl Ui {
     ///
     /// ```
     /// # use mui::Ui; use mui::prelude::*;
-    /// # let mut ui = Ui::new(Theme::DEFAULT);
+    /// # let mut ui = Ui::default();
     /// struct Wave(&'static str);
     /// if ui.get("saw").dragged {
     ///     ui.start_drag("saw", Wave("saw"));
     /// }
     /// assert!(ui.dragging::<Wave>().is_none(), "nothing is dragging");
     /// ```
-    pub fn start_drag(&mut self, id: &str, payload: impl Any + Send) {
+    pub fn start_drag(&mut self, id: impl Into<Id>, payload: impl Any + Send) {
+        let id: Id = id.into();
+        let id = id.as_str();
         self.drag = Some((id.to_owned(), Box::new(payload)));
     }
     /// The payload of the drag in flight, for anything that wants to look
@@ -243,7 +257,7 @@ impl Ui {
     ///
     /// ```
     /// # use mui::Ui; use mui::prelude::*;
-    /// # let ui = Ui::new(Theme::DEFAULT);
+    /// # let ui = Ui::default();
     /// struct Wave(&'static str);
     /// assert!(ui.dragging::<Wave>().is_none());
     /// ```
@@ -258,7 +272,7 @@ impl Ui {
     ///
     /// ```
     /// # use mui::Ui; use mui::prelude::*;
-    /// # let mut ui = Ui::new(Theme::DEFAULT);
+    /// # let mut ui = Ui::default();
     /// struct Wave(&'static str);
     /// let mut slot: Option<&'static str> = None;
     /// if let Some(Wave(w)) = ui.dropped_on::<Wave>("slot-0") {
@@ -266,7 +280,9 @@ impl Ui {
     /// }
     /// assert_eq!(slot, None, "nothing was dropped");
     /// ```
-    pub fn dropped_on<T: Any>(&mut self, id: &str) -> Option<T> {
+    pub fn dropped_on<T: Any>(&mut self, id: impl Into<Id>) -> Option<T> {
+        let id: Id = id.into();
+        let id = id.as_str();
         let from = self.drag.as_ref().map(|(k, _)| k.as_str());
         if !self
             .interaction
@@ -295,7 +311,7 @@ impl Ui {
     ///
     /// ```
     /// # use mui::Ui; use mui::prelude::*;
-    /// # let ui = Ui::new(Theme::DEFAULT);
+    /// # let ui = Ui::default();
     /// let mut open = true;
     /// if ui.dismissed(&["menu", "menu-button"]) {
     ///     open = false;
@@ -366,7 +382,9 @@ impl Ui {
         self.pasted.as_deref()
     }
     /// Whether the last press on `id` was the second of a double click.
-    pub fn double_click(&self, id: &str) -> bool {
+    pub fn double_click(&self, id: impl Into<Id>) -> bool {
+        let id: Id = id.into();
+        let id = id.as_str();
         self.double.as_deref() == Some(id)
     }
     /// The text the input method is composing, for the focused field to
@@ -377,7 +395,9 @@ impl Ui {
     /// Tell the host where this field's caret is, in the field's own space,
     /// so the IME candidate window lands under it. Comes back on
     /// [`Frame::ime`].
-    pub fn set_ime_caret(&mut self, id: &str, at: Point, height: f64) {
+    pub fn set_ime_caret(&mut self, id: impl Into<Id>, at: Point, height: f64) {
+        let id: Id = id.into();
+        let id = id.as_str();
         self.ime_caret = Some((id.to_owned(), at, height));
     }
     /// Put `s` on the clipboard: what an app's own Copy button calls. It
@@ -422,19 +442,21 @@ impl Ui {
     ///
     /// ```
     /// # use mui::Ui; use mui::prelude::*;
-    /// # let ui = Ui::new(Theme::DEFAULT);
+    /// # let ui = Ui::default();
     /// let mut cutoff = 0.5;
     /// // Nothing is dragging, so nothing moves.
     /// assert!(!ui.drag("cutoff", &mut cutoff, 0.0..=1.0, 160.0, false));
     /// ```
     pub fn drag(
         &self,
-        id: &str,
+        id: impl Into<Id>,
         value: &mut f64,
         range: std::ops::RangeInclusive<f64>,
         px: f64,
         vertical: bool,
     ) -> bool {
+        let id: Id = id.into();
+        let id = id.as_str();
         if !(range.start().is_finite() && range.end().is_finite()) {
             return false;
         }

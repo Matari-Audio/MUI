@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn a_transition_lands_between_the_two_fills_and_settles() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let tree = |on: bool| {
         block(40., 40.)
             .fill(if on { Role::Primary } else { Role::Field })
@@ -26,7 +26,7 @@ fn a_transition_lands_between_the_two_fills_and_settles() {
         }
     };
     assert_ne!(mid, to, "and the middle was not the end");
-    let mut fresh = Ui::new(Theme::DEFAULT);
+    let mut fresh = Ui::default();
     let want = solid(
         &fresh
             .frame(tree(true), None, Input::default(), 0.016)
@@ -64,7 +64,7 @@ fn a_transitioning_weld_morph_springs_between_its_declarations() {
 
 #[test]
 fn retargeting_mid_flight_does_not_jump() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let tree = |on: bool| {
         block(40., 40.)
             .fill(if on { Role::Primary } else { Role::Field })
@@ -89,7 +89,7 @@ fn retargeting_mid_flight_does_not_jump() {
 
 #[test]
 fn a_tween_walks_to_its_target_and_never_back() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     assert_eq!(ui.tween("cutoff", 0.0), 0.0, "it starts where it is told");
     let mut prev = 0.0;
     for _ in 0..180 {
@@ -105,7 +105,7 @@ fn a_tween_walks_to_its_target_and_never_back() {
 
 #[test]
 fn a_bouncy_transition_never_undershoots_a_channel_below_zero() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let tree = |r: f64| {
         block(40., 40.)
             .fill(Role::Raised)
@@ -125,7 +125,7 @@ fn a_bouncy_transition_never_undershoots_a_channel_below_zero() {
 
 #[test]
 fn a_transitioning_node_seeds_each_channel_from_its_own_declaration() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let stroked = || {
         block(40., 40.)
             .stroke(Role::Primary)
@@ -158,7 +158,7 @@ fn a_transitioning_node_seeds_each_channel_from_its_own_declaration() {
 /// `.animate()` and `.on(..)` need no id: the tree path keys them.
 #[test]
 fn an_unnamed_node_transitions_and_takes_its_declared_states() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let tree = |on: bool| {
         row![
             block(40., 40.)
@@ -173,7 +173,7 @@ fn an_unnamed_node_transitions_and_takes_its_declared_states() {
     let f = ui.frame(tree(true), None, Input::default(), 0.016).unwrap();
     assert!(f.animating, "it springs");
     let mid = solid(&f);
-    let mut fresh = Ui::new(Theme::DEFAULT);
+    let mut fresh = Ui::default();
     let to = solid(
         &fresh
             .frame(tree(true), None, Input::default(), 0.016)
@@ -213,7 +213,7 @@ fn an_unnamed_node_takes_its_hover_and_press_looks() {
                 .on(State::Press, |s| s.radius(5.))
         ]
     };
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let cold = corner(&ui.frame(tree(), None, Input::default(), 0.016).unwrap());
     let mut look = cold;
     for _ in 0..12 {
@@ -239,7 +239,7 @@ fn press_stack(under: &El, top: &El) -> (Option<String>, bool) {
             block(40., 20.).focusable().id("field"),
         ]
     };
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     ui.frame(tree(under, top), None, Input::default(), 0.016)
         .unwrap();
     ui.focus("field");

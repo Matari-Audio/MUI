@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use mui_input::{FINE_DRAG, Key};
 use mui_material::prelude::*;
-use mui_scene::{Palette, SpacingToken, Spring, Stroke};
+use mui_scene::{Palette, Px, SpacingToken, Spring, Stroke};
 
 use crate::Ui;
 use crate::widgets::{Response, TextOpts, text_edit};
@@ -15,7 +15,7 @@ use crate::widgets::{Response, TextOpts, text_edit};
 ///
 /// ```
 /// use mui::prelude::*;
-/// let mut ui = Ui::new(Theme::DEFAULT);
+/// let mut ui = Ui::default();
 /// let quiet = button(&mut ui, "bypass", "Bypass").el;
 /// // Ink only: the resting box paints nothing.
 /// assert_eq!(quiet.variant(Variant::Ghost).el().payload().style.fill, None);
@@ -117,7 +117,7 @@ impl Look {
 ///
 /// ```
 /// use mui::prelude::*;
-/// let mut ui = Ui::new(Theme::DEFAULT);
+/// let mut ui = Ui::default();
 /// let mut cutoff = 0.5;
 /// let dial = knob(&mut ui, "cut", "Cutoff", &mut cutoff, 0.0..=1.0).el;
 /// let strip = row![dial.size(L), body("post")];
@@ -211,7 +211,7 @@ impl Control {
     ///
     /// ```
     /// use mui::prelude::*;
-    /// let mut ui = Ui::new(Theme::DEFAULT);
+    /// let mut ui = Ui::default();
     /// let mut on = false;
     /// let sw = toggle(&mut ui, "bypass", "Bypass", &mut on).el;
     /// let sw = sw.variant(Variant::Outline);
@@ -226,7 +226,7 @@ impl Control {
     ///
     /// ```
     /// use mui::prelude::*;
-    /// let mut ui = Ui::new(Theme::DEFAULT);
+    /// let mut ui = Ui::default();
     /// let clear = button(&mut ui, "clear", "Clear").el;
     /// let el = clear.role(Role::Danger).variant(Variant::Outline).el();
     /// let ring = el.payload().style.stroke.clone().and_then(|s| s.fill);
@@ -241,9 +241,9 @@ impl Control {
     ///
     /// ```
     /// use mui::prelude::*;
-    /// let mut ui = Ui::new(Theme::DEFAULT);
+    /// let mut ui = Ui::default();
     /// let mut on = false;
-    /// let small = toggle(&mut ui, "bypass", "Bypass", &mut on).el.size(Xs);
+    /// let small = toggle(&mut ui, "bypass", "Bypass", &mut on).size(Xs);
     /// ```
     pub fn size(mut self, s: SpacingToken) -> Self {
         self.size = s;
@@ -255,7 +255,7 @@ impl Control {
     ///
     /// ```
     /// use mui::prelude::*;
-    /// let mut ui = Ui::new(Theme::DEFAULT);
+    /// let mut ui = Ui::default();
     /// let mut cutoff = 440.0;
     /// let dial = knob(&mut ui, "cut", "Cutoff", &mut cutoff, 20.0..=20_000.0).el;
     /// let dial = dial.value_text(format!("{cutoff:.0} Hz"));
@@ -269,19 +269,19 @@ impl Control {
     ///
     /// ```
     /// use mui::prelude::*;
-    /// let mut ui = Ui::new(Theme::DEFAULT);
+    /// let mut ui = Ui::default();
     /// let mut v = 0.5;
-    /// let dial = knob(&mut ui, "cut", "Cutoff", &mut v, 0.0..=1.0).el.px(37.0);
+    /// let dial = knob(&mut ui, "cut", "Cutoff", &mut v, 0.0..=1.0).px(37);
     /// ```
-    pub fn px(mut self, px: f64) -> Self {
-        self.px = Some(px);
+    pub fn px(mut self, px: impl Px) -> Self {
+        self.px = Some(px.px());
         self
     }
     /// The tree, finished.
     ///
     /// ```
     /// use mui::prelude::*;
-    /// let mut ui = Ui::new(Theme::DEFAULT);
+    /// let mut ui = Ui::default();
     /// let el: El = button(&mut ui, "go", "Go").el.el();
     /// ```
     pub fn el(mut self) -> El {
@@ -333,7 +333,7 @@ pub(crate) fn step(range: &RangeInclusive<f64>) -> f64 {
 ///
 /// ```
 /// use mui::prelude::*;
-/// let ui = Ui::new(Theme::DEFAULT);
+/// let ui = Ui::default();
 /// let mut trim = 0.0;
 /// assert!(!stepped(&ui, "trim", &mut trim, &(-12.0..=12.0)), "nothing is focused");
 /// ```
@@ -408,11 +408,11 @@ const LANE: f64 = 0.45;
 ///
 /// ```
 /// use mui::prelude::*;
-/// let mut ui = Ui::new(Theme::DEFAULT);
+/// let mut ui = Ui::default();
 /// let mut gain = 0.5;
 /// let fader = slider(&mut ui, "gain", "Gain", &mut gain, 0.0..=1.0);
 /// assert!(!fader.changed && gain == 0.5, "no gesture, no change");
-/// let fader = fader.el.size(S);
+/// let fader = fader.size(S);
 /// ```
 pub fn slider(
     ui: &mut Ui,
@@ -497,11 +497,11 @@ fn slider_el(look: &Look, id: Id, label: Arc<str>, d: Dial) -> El {
 ///
 /// ```
 /// use mui::prelude::*;
-/// let mut ui = Ui::new(Theme::DEFAULT);
+/// let mut ui = Ui::default();
 /// let mut cutoff = 0.5;
 /// let dial = knob(&mut ui, "cut", "Cutoff", &mut cutoff, 0.0..=1.0);
 /// assert!(!dial.changed && cutoff == 0.5, "no gesture, no change");
-/// let dial = dial.el.size(Xl);
+/// let dial = dial.size(Xl);
 /// ```
 pub fn knob(
     ui: &mut Ui,
@@ -560,10 +560,10 @@ fn knob_el(look: &Look, id: Id, label: Arc<str>, d: Dial) -> El {
 ///
 /// ```
 /// use mui::prelude::*;
-/// let mut ui = Ui::new(Theme::DEFAULT);
+/// let mut ui = Ui::default();
 /// let save = button(&mut ui, "save", "Save");
 /// assert!(!save.changed, "nothing pressed it last frame");
-/// let save = save.el.variant(Variant::Soft).size(S);
+/// let save = save.variant(Variant::Soft).size(S);
 /// ```
 pub fn button(ui: &mut Ui, id: impl Into<Id>, label: &str) -> Response<bool, Control> {
     let id: Id = id.into();
@@ -592,11 +592,11 @@ fn button_el(look: &Look, id: Id, label: Arc<str>) -> El {
 ///
 /// ```
 /// use mui::prelude::*;
-/// let mut ui = Ui::new(Theme::DEFAULT);
+/// let mut ui = Ui::default();
 /// let mut bypass = false;
 /// let sw = toggle(&mut ui, "bypass", "Bypass", &mut bypass);
 /// assert!(!sw.changed && !bypass, "nothing clicked it, so it did not flip");
-/// let sw = sw.el.size(Xs);
+/// let sw = sw.size(Xs);
 /// ```
 pub fn toggle(
     ui: &mut Ui,
@@ -656,7 +656,7 @@ const DRAG_TRAVEL: f64 = 200.0;
 ///
 /// ```
 /// use mui::prelude::*;
-/// let mut ui = Ui::new(Theme::DEFAULT);
+/// let mut ui = Ui::default();
 /// let mut bpm = 120.0;
 /// let tempo = drag_value(&mut ui, "bpm", "Tempo", &mut bpm, 20.0..=300.0);
 /// assert!(!tempo.changed, "no gesture, no change");

@@ -50,7 +50,7 @@ fn main() -> Result<(), String> {
         *edit_level.lock().unwrap() = value as f32;
         Ok(())
     };
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     ui.set_font(Some(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap()));
     let mut editor = mui_motion_bridge::Editor::new(ui);
     let mut capture = mui_motion_bridge::CaptureStream::default();

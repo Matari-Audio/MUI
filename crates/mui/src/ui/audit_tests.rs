@@ -36,7 +36,7 @@ fn press(ui: &mut Ui) -> Vec<(String, Edit)> {
 
 #[test]
 fn rounded_clip_rejects_an_invisible_child_corner() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let tree = || {
         stack![block(100.0, 100.0).id("child")]
             .square(100.0)
@@ -63,7 +63,7 @@ fn rounded_clip_rejects_an_invisible_child_corner() {
 
 #[test]
 fn removing_a_held_control_ends_its_gesture_in_that_frame() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     idle(&mut ui, gain());
     assert_eq!(press(&mut ui), vec![("gain".into(), Edit::Begin)]);
     let edits = step(
@@ -79,7 +79,7 @@ fn removing_a_held_control_ends_its_gesture_in_that_frame() {
 
 #[test]
 fn disabling_a_held_control_ends_it_without_waiting_for_another_frame() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     idle(&mut ui, gain());
     press(&mut ui);
     let edits = step(
@@ -94,7 +94,7 @@ fn disabling_a_held_control_ends_it_without_waiting_for_another_frame() {
 
 #[test]
 fn repeated_cancel_does_not_erase_the_owed_end() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     idle(&mut ui, gain());
     press(&mut ui);
     ui.cancel();
@@ -105,7 +105,7 @@ fn repeated_cancel_does_not_erase_the_owed_end() {
 
 #[test]
 fn close_balances_capture_without_another_frame() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     idle(&mut ui, gain());
     press(&mut ui);
     assert_eq!(ui.close(), vec![("gain".into(), Edit::End)]);
@@ -114,7 +114,7 @@ fn close_balances_capture_without_another_frame() {
 
 #[test]
 fn invalid_time_does_not_poison_the_runtime() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     idle(&mut ui, gain());
     let before = ui.time;
     for dt in [f64::NAN, f64::INFINITY, -0.001] {
@@ -130,7 +130,7 @@ fn invalid_time_does_not_poison_the_runtime() {
 
 #[test]
 fn semantic_set_value_is_clamped_and_bracketed() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     idle(&mut ui, gain());
     assert!(ui.request_action(SemanticAction::set_value("gain", 5.0)));
     let mut value = 0.5;
@@ -149,7 +149,7 @@ fn semantic_set_value_is_clamped_and_bracketed() {
 
 #[test]
 fn incompatible_disabled_and_nonfinite_actions_are_rejected() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     idle(&mut ui, gain());
     assert!(!ui.request_action(SemanticAction::activate("gain")));
     assert!(!ui.request_action(SemanticAction::set_value("absent", 0.8)));
@@ -161,7 +161,7 @@ fn incompatible_disabled_and_nonfinite_actions_are_rejected() {
 
 #[test]
 fn semantic_activation_does_not_synthesize_pointer_capture() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let tree = || block(100.0, 40.0).id("go").a11y(A11y::Button);
     idle(&mut ui, tree());
     assert!(ui.request_action(SemanticAction::activate("go")));
@@ -174,7 +174,7 @@ fn semantic_activation_does_not_synthesize_pointer_capture() {
 
 #[test]
 fn failed_layout_does_not_replay_a_consumed_activation() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let tree = || block(100.0, 40.0).id("go").a11y(A11y::Button);
     idle(&mut ui, tree());
     assert!(ui.request_action(SemanticAction::activate("go")));
@@ -192,7 +192,7 @@ fn failed_layout_does_not_replay_a_consumed_activation() {
 
 #[test]
 fn transient_tweens_and_removed_field_state_do_not_accumulate() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     for i in 0..256 {
         ui.tween(&format!("temporary-{i}"), i as f64);
         idle(&mut ui, block(20.0, 20.0));
@@ -206,7 +206,7 @@ fn transient_tweens_and_removed_field_state_do_not_accumulate() {
 
 #[test]
 fn model_identity_survives_reorder_and_display_rename() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let a = Id::of("osc").entity(42).field("gain");
     let b = Id::of("osc").entity(77).field("gain");
     let control = |id: &Id, name: &str| block(60.0, 30.0).id(id).named(name).focusable();

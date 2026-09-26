@@ -151,7 +151,7 @@ fn count(n: &El) -> usize {
 
 fn main() {
     let font = Font::new(epaint_default_fonts::HACK_REGULAR).unwrap();
-    let mut ui = Ui::new(Theme::DEFAULT).font(font);
+    let mut ui = Ui::default().font(font);
     let mut values = vec![0.5; TRACKS * 5];
     let size = |w: f64| Some(Size::new(w, 1400.0));
     let away = PointerInput {

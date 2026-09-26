@@ -35,9 +35,10 @@ impl Size {
 }
 
 /// `(width, height)`: `.min_size((40., 30.))`.
-impl From<(f64, f64)> for Size {
-    fn from((width, height): (f64, f64)) -> Self {
-        Self::new(width, height)
+/// `(300, 200)`, `(12.5, 8.)`: any pair of numbers.
+impl<W: Px, H: Px> From<(W, H)> for Size {
+    fn from((width, height): (W, H)) -> Self {
+        Self::new(width.px(), height.px())
     }
 }
 

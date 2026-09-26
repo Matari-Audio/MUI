@@ -14,7 +14,7 @@ fn tree(pad: f64, width: f64) -> mui::scene::El {
 }
 #[test]
 fn padding_gap_and_border_morph_together_and_settle() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let mut sample = |pad, width| {
         let frame = ui
             .frame(

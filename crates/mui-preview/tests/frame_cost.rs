@@ -67,7 +67,7 @@ fn what_a_frame_costs() {
         black_box(resolve(black_box(&spec)).unwrap());
     });
     println!("pill resolve (union + shell + text) {resolve_ms:8.3} ms");
-    let mut ui = Ui::new(Theme::DEFAULT).font(Font::new(font).unwrap());
+    let mut ui = Ui::default().font(Font::new(font).unwrap());
     let mut v = 0.3;
     let frame = ms(|| {
         let root = col([

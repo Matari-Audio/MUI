@@ -2,7 +2,7 @@
 use std::sync::{Arc, Mutex};
 
 use mui::Ui;
-use mui::scene::El;
+use mui::scene::{El, Size};
 use truce_core::editor::{Editor, PluginContext, RawWindowHandle};
 use truce_params::Params;
 
@@ -41,7 +41,7 @@ impl<P: Params> View for Session<P> {
 ///
 /// ```ignore
 /// fn editor(params: Arc<GainParams>) -> Box<dyn Editor> {
-///     let ui = Ui::new(Theme::DEFAULT).font(font);
+///     let ui = Ui::default().font(font);
 ///     MuiEditor::new(params, ui, (320, 200), |ui, bridge| {
 ///         bridge.bind(ui, P::Gain, |ui, id, v| knob(ui, id, "Gain", v, 0.0..=1.0))
 ///     })
@@ -67,6 +67,12 @@ pub struct MuiEditor<P: Params> {
     window: Option<Handle>,
 }
 
+/// Whole logical points, as the host's window API takes them.
+#[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "a window is a few thousand points, never negative")]
+fn points(s: Size) -> (u32, u32) {
+    (s.width.round().max(0.0) as u32, s.height.round().max(0.0) as u32)
+}
+
 /// The one field of [`MuiEditor`] that is not auto-`Send`.
 struct Handle(baseview::WindowHandle);
 
@@ -83,7 +89,7 @@ impl<P: Params> MuiEditor<P> {
     pub fn new(
         params: Arc<P>,
         ui: Ui,
-        size: (u32, u32),
+        size: impl Into<Size>,
         build: impl FnMut(&mut Ui, &mut Bridge<P>) -> El + Send + 'static,
     ) -> Self {
         let session = Session {
@@ -94,7 +100,7 @@ impl<P: Params> MuiEditor<P> {
             shared: Arc::new(Mutex::new(Shared { ui, view: session })),
             requests: Arc::default(),
             params,
-            size,
+            size: points(size.into()),
             min: None,
             system_scale: false,
             host_scale: None,
@@ -103,8 +109,8 @@ impl<P: Params> MuiEditor<P> {
     }
 
     /// Let the host resize the window, down to `min` logical points.
-    pub fn resizable(mut self, min: (u32, u32)) -> Self {
-        self.min = Some(min);
+    pub fn resizable(mut self, min: impl Into<Size>) -> Self {
+        self.min = Some(points(min.into()));
         self
     }
 

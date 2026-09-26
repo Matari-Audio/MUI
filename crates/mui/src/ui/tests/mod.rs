@@ -60,7 +60,7 @@ fn solid(f: &Frame) -> mui_scene::Paint {
 }
 
 fn to_paint(r: Role) -> mui_scene::Paint {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     solid(
         &ui.frame(block(40., 40.).fill(r), None, Input::default(), 0.016)
             .unwrap(),

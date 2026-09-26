@@ -285,7 +285,7 @@ fn edit_keys(
 ///
 /// ```
 /// use mui::prelude::*;
-/// let mut ui = Ui::new(Theme::DEFAULT);
+/// let mut ui = Ui::default();
 /// let mut name = String::from("Init");
 /// let field = text_input(&mut ui, "name", &mut name);
 /// assert!(!field.changed, "nothing is focused, so nothing was typed");
@@ -308,7 +308,7 @@ pub fn text_input(ui: &mut Ui, id: impl Into<Id>, value: &mut String) -> Respons
 ///
 /// ```
 /// use mui::prelude::*;
-/// let mut ui = Ui::new(Theme::DEFAULT);
+/// let mut ui = Ui::default();
 /// let mut notes = String::from("first\nsecond");
 /// let opts = TextOpts { newline: Newline::Enter, rows: 6, ..TextOpts::default() };
 /// let field = text_edit(&mut ui, "notes", &mut notes, opts);

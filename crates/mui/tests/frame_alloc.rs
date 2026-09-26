@@ -61,7 +61,7 @@ fn panel(ui: &mut Ui, v: &mut [f64; 20], on: &mut [bool; 10]) -> El {
 /// the one allocation left is the label, shared by its text and its name.
 #[test]
 fn a_widget_id_costs_the_allocator_nothing() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let id = Id::of("rack").slot(3).field("go");
     let (n, _) = allocations(|| button(&mut ui, &*id, ""));
     assert_eq!(n, 1, "only the label is allocated");
@@ -74,7 +74,7 @@ fn a_widget_id_costs_the_allocator_nothing() {
 fn fifty_widgets_per_frame() {
     const N: usize = 20;
     let mut ui =
-        Ui::new(Theme::DEFAULT).font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
+        Ui::default().font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
     let (mut v, mut on) = ([0.5; 20], [false; 10]);
     let size = Some(Size::new(1200., 800.));
     for _ in 0..3 {

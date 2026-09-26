@@ -15,7 +15,7 @@ store, the audio runtime and the state format. This crate adds the editor:
 
 ```rust
 fn editor(params: Arc<GainParams>) -> Box<dyn Editor> {
-    MuiEditor::new(params, Ui::new(Theme::DEFAULT), (300, 200), |ui, bridge| {
+    MuiEditor::new(params, Ui::default(), (300, 200), |ui, bridge| {
         let gain = bridge.bind(ui, P::Gain, |ui, id, v| {
             knob(ui, id, "Gain", v, 0.0..=1.0)
         });

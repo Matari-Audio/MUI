@@ -1,4 +1,5 @@
 //! [`Ui::memo`]: subtrees kept between frames.
+use mui_scene::Id;
 use super::*;
 
 impl Ui {
@@ -28,7 +29,7 @@ impl Ui {
     ///
     /// ```
     /// # use mui::prelude::*;
-    /// let mut ui = Ui::new(Theme::DEFAULT);
+    /// let mut ui = Ui::default();
     /// let mut built = 0;
     /// for _ in 0..3 {
     ///     let side = ui.memo("side", 7, |_| {
@@ -42,10 +43,12 @@ impl Ui {
     /// ```
     pub fn memo(
         &mut self,
-        id: &str,
+        id: impl Into<Id>,
         deps: impl std::hash::Hash,
         build: impl FnOnce(&mut Self) -> El,
     ) -> El {
+        let id: Id = id.into();
+        let id = id.as_str();
         // ponytail: `deps` compares by its SipHash, so two deps that collide
         // share a subtree; pass something `Eq` and store it if that matters.
         let deps = {

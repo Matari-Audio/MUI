@@ -37,7 +37,7 @@ impl Lab {
     fn new() -> Self {
         Self {
             gpu: None,
-            ui: Ui::new(Theme::DEFAULT)
+            ui: Ui::default()
                 .gpu_welding()
                 .font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap()),
             dirty: true,

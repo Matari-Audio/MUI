@@ -60,17 +60,17 @@ composable examples; the browser playground supports a smaller, explicit subset.
 ```rust
 use mui::prelude::*;
 
-let mut ui = Ui::new(Theme::DEFAULT);
+let mut ui = Ui::default();
 let mut cutoff = 0.5;
 let mut bypass = false;
 
 // Built every frame, like an immediate-mode tree. Widgets read last frame's
 // gesture on their id, so state lives in your own variables.
 let root = col![
-    row![title("Filter"), spacer(), toggle(&mut ui, "bypass", "Bypass", &mut bypass).el.size(S)]
+    row![title("Filter"), spacer(), toggle(&mut ui, "bypass", "Bypass", &mut bypass).size(S)]
         .center()
         .tip("Bypass the filter"),
-    slider(&mut ui, "cutoff", "Cutoff", &mut cutoff, 0.0..=1.0).el,
+    slider(&mut ui, "cutoff", "Cutoff", &mut cutoff, 0.0..=1.0),
 ]
 .gap(M)
 .pad(L)
@@ -181,8 +181,8 @@ assert_eq!(scene.surface("tab").unwrap().frame.size.width, 92.0);
 | `.cursor(Cursor::Hand)`, `.tip("..")`, `.focusable()` | the pointer, a tooltip after half a second, Tab stops here |
 | `.captures_wheel()` | a node that uses the wheel itself: over it, no enclosing `.scroll()` moves |
 | `let Response { el, changed } = slider(&mut ui, "cut", "Cutoff", &mut hz, 20.0..=20e3)` | the one widget shape: `&mut Ui`, the id, the label (controls), what it edits by `&mut`, then its range or options; a `Response` out, the element and what happened last frame. `button` says whether it was clicked, `toggle`, `slider`, `knob`, `drag_value`, `text_input` and `color_picker` whether the value changed, `curve` and `bins` which part the gesture edited. A `Response` drops into `row![..]` whole |
-| `button(&mut ui, "save", "Save").el.variant(Variant::Soft).size(S)` | a control's look and size: `Solid`, `Soft`, `Outline`, `Ghost`, and the same five sizes everywhere. `.role(Role::Danger)` recolours it, `.px(72.0)` is the hatch, `.el()` finishes it |
-| `slider(&mut ui, "cut", "Cutoff", &mut hz, 20.0..=20e3).el.value_text(format!("{hz:.0} Hz"))` | what the readout says, in the parameter's own units, instead of the default two decimals. The string is also what the readout is measured for, so nothing shuffles as digits come and go; a knob has no header, so it says this under the dial in place of its label |
+| `button(&mut ui, "save", "Save").variant(Variant::Soft).size(S).tip("Save")` | a control's look and size: `Solid`, `Soft`, `Outline`, `Ghost`, and the same five sizes everywhere. `.role(Role::Danger)` recolours it, `.px(72)` is the hatch. The look goes on the response, then any element verb (`.tip`, `.w`, `.grow`, ..) finishes the control and keeps `.changed` |
+| `slider(&mut ui, "cut", "Cutoff", &mut hz, 20.0..=20e3).value_text(format!("{hz:.0} Hz"))` | what the readout says, in the parameter's own units, instead of the default two decimals. The string is also what the readout is measured for, so nothing shuffles as digits come and go; a knob has no header, so it says this under the dial in place of its label |
 | `text_edit(&mut ui, "notes", &mut s, TextOpts { newline: Newline::Enter, rows: 6, .. })` | a field of many lines: wraps to its width, Up/Down/Page move the caret by line, the lines scroll inside it. `Newline::ShiftEnter` keeps Enter for submit; `TextEdit { changed, submitted }` says what it did, `blur_on_submit` lets go of the focus |
 | `drag_value(&mut ui, "bpm", "Tempo", &mut bpm, 20.0..=300.0)` | a number to drag sideways, 200 px across the range; a double click or Enter opens a field to type it, Escape cancels. A `Control`, so `.value_text(..)` applies |
 | `color_picker(&mut ui, "tint", &mut color, ColorOpts { alpha: true })` | a saturation-value square, a hue strip, an alpha strip when asked, and a hex field |
@@ -219,7 +219,7 @@ them the tree itself, and not one coordinate:
 ```rust
 use mui::prelude::*;
 
-let mut ui = Ui::new(Theme::DEFAULT);
+let mut ui = Ui::default();
 let (mut bypass, mut preset) = (false, "Init".to_owned());
 let mut values = [0.4, 0.5, 0.8, 0.2, 0.6];
 const NAMES: [&str; 5] = ["Drive", "Tilt", "Mix", "Air", "Floor"];
@@ -320,7 +320,7 @@ is the value the next tree reads:
 
 ```rust,ignore
 fn editor(params: Arc<GainParams>) -> Box<dyn Editor> {
-    MuiEditor::new(params, Ui::new(Theme::DEFAULT), (300, 200), |ui, bridge| {
+    MuiEditor::new(params, Ui::default(), (300, 200), |ui, bridge| {
         let gain = bridge.bind(ui, P::Gain, |ui, id, v| knob(ui, id, "Gain", v, 0.0..=1.0));
         col![gain, title(bridge.text(P::Gain))].pad(L).fill(Role::Surface)
     })
@@ -360,7 +360,7 @@ one), which is exactly a plugin parameter's begin/end-edit bracket.
 ```rust
 use mui::prelude::*;
 
-let mut ui = Ui::new(Theme::DEFAULT);
+let mut ui = Ui::default();
 let mut gain = 0.5;
 let sweep = ui.tween("sweep", gain);
 let root = col![

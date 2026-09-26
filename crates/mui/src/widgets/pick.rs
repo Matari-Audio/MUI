@@ -30,7 +30,7 @@ type Rgba = [f32; 4];
 ///
 /// ```
 /// use mui::prelude::*;
-/// let mut ui = Ui::new(Theme::DEFAULT);
+/// let mut ui = Ui::default();
 /// let mut tint = Color::srgb(0.2, 0.5, 0.9);
 /// let picker = color_picker(&mut ui, "tint", &mut tint, ColorOpts { alpha: true });
 /// assert!(!picker.changed, "nothing dragged or typed");

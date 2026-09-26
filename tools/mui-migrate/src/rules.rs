@@ -266,6 +266,9 @@ pub const RULES: &[Rule] = &[
     Call { chain: &[("centered_at", &[Is("0"), Is("0")])], to: ".centered()", gate: Mui, needs: &[] },
     Call { chain: &[("anchor", &[Is(CC), Is(CC)])], to: ".centered()", gate: Mui, needs: &[] },
     Call { chain: &[("apply", &[A])], to: ".when(true, $1)", gate: MuiChain, needs: &[] },
+    // `Ui::default()` is the default theme.
+    Assoc { ty: "Ui", name: "new", args: &[Is("Theme::DEFAULT")], to: "$pathUi::default()", bare: "" },
+    Assoc { ty: "Ui", name: "new", args: &[Is("mui::prelude::Theme::DEFAULT")], to: "$pathUi::default()", bare: "" },
 ];
 
 /// The widget phase of the spec (`Response`, option structs, argument

@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn nested_scrollers_yield_and_shorter_content_clamps_the_offset() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let tree = |tall| {
         col([
             row([block(100., 20.)])
@@ -35,7 +35,7 @@ fn nested_scrollers_yield_and_shorter_content_clamps_the_offset() {
 
 #[test]
 fn nested_and_floating_content_does_not_extend_the_outer_scroll() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let tree = col([
         col([block(30., 1000.)]).size(30., 40.).scroll().id("inner"),
         block(30., 20.),
@@ -55,7 +55,7 @@ fn nested_and_floating_content_does_not_extend_the_outer_scroll() {
 
 #[test]
 fn an_exhausted_inner_scroll_yields_to_its_parent() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let tree = || {
         col([
             col([block(30., 80.)]).size(30., 40.).scroll().id("inner"),
@@ -78,7 +78,7 @@ fn an_exhausted_inner_scroll_yields_to_its_parent() {
 
 #[test]
 fn the_wheel_scrolls_a_column_and_stops_at_its_end() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let tree = || {
         col([block(20., 100.), block(20., 100.)])
             .h(50.)
@@ -103,7 +103,7 @@ fn the_wheel_scrolls_a_column_and_stops_at_its_end() {
 
 #[test]
 fn a_non_finite_wheel_delta_is_ignored() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let tree = || {
         col([block(20., 100.), block(20., 100.)])
             .h(50.)
@@ -128,7 +128,7 @@ fn a_non_finite_wheel_delta_is_ignored() {
 /// it, never back, and lands on it exactly.
 #[test]
 fn a_wheel_scroll_glides_onto_its_target() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let tree = || {
         col([block(20., 100.).id("top"), block(20., 100.)])
             .h(50.)
@@ -162,7 +162,7 @@ fn a_wheel_scroll_glides_onto_its_target() {
 /// offset is keyed by the tree path, and the tree applies it by the same.
 #[test]
 fn an_unnamed_scroller_scrolls() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let tree = || {
         row![
             col((0..6).map(|_| block(20., 40.))).gap(S).scroll().w(200),
@@ -188,7 +188,7 @@ fn an_unnamed_scroller_scrolls() {
 /// scroller keeps its offset through it, and after it.
 #[test]
 fn an_unnamed_scroller_keeps_its_offset_while_a_tip_is_up() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let tree = || {
         col![
             col([

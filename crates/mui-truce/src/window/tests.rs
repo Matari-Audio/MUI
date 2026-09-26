@@ -1,7 +1,7 @@
 //! Headless: the handler without a window or a GPU.
 use super::*;
 use keyboard_types::KeyboardEvent;
-use mui::prelude::{Theme, knob};
+use mui::prelude::knob;
 
 /// A knob and a count of the trees built.
 struct Knob {
@@ -30,7 +30,7 @@ fn handler(size: (u32, u32), scale: f64) -> Handler<Knob> {
         changed: false,
     };
     let shared = Arc::new(Mutex::new(Shared {
-        ui: Ui::new(Theme::DEFAULT),
+        ui: Ui::default(),
         view,
     }));
     Handler::new(shared, Arc::default(), size, scale)
@@ -240,7 +240,7 @@ impl View for Pad {
 #[test]
 fn a_delivered_edge_gets_the_tree_that_dispatches_it() {
     let shared = Arc::new(Mutex::new(Shared {
-        ui: Ui::new(Theme::DEFAULT),
+        ui: Ui::default(),
         view: Pad,
     }));
     let mut h = Handler::new(Arc::clone(&shared), Arc::default(), (200, 200), 1.0);
@@ -286,7 +286,7 @@ impl View for Keys {
 #[test]
 fn a_refused_layout_does_not_replay_the_keys_it_took() {
     let shared = Arc::new(Mutex::new(Shared {
-        ui: Ui::new(Theme::DEFAULT),
+        ui: Ui::default(),
         view: Keys {
             enters: 0,
             refuse: false,

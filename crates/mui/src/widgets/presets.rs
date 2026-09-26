@@ -4,7 +4,7 @@
 //! an `El` you finish (`chip("A").id("chip-A")`). No registry, no trait, no
 //! variant table: a preset that needs a variant is a function with an
 //! argument.
-use mui_scene::Style;
+use mui_scene::{Px, Style};
 use mui_scene::prelude::*;
 
 /// The window's own ground: the surface colour and the big corner.
@@ -90,4 +90,27 @@ pub fn tile(el: El) -> El {
         .pad(S)
         .radius(10.0)
         .fill(Role::Raised)
+}
+
+/// The standard level bar: a pill track in `Field`, filled to `level`
+/// (clamped to 0..1) in `Primary`. The fill follows a spring, so a meter
+/// polled once a frame does not flicker. It fills its parent's width;
+/// `.w(200)` fixes it.
+///
+/// ```
+/// use mui::prelude::*;
+/// let mut ui = Ui::default();
+/// let bar = meter(&mut ui, "level", 0.5).w(200);
+/// let frame = ui.frame(bar, Some(Size::new(300., 20.)), Input::default(), 0.016).unwrap();
+/// assert!(frame.scene.surface("level").is_some());
+/// ```
+pub fn meter(ui: &mut crate::Ui, id: impl Into<Id>, level: impl Px) -> El {
+    let id = id.into();
+    let level = ui.tween(id.field("level"), level.px().clamp(0.0, 1.0));
+    row([block(Len::Pct(level * 100.0), Len::Pct(100.0)).pill().fill(Role::Primary)])
+        .w(Len::Pct(100.0))
+        .h(8)
+        .pill()
+        .fill(Role::Field)
+        .id(id)
 }

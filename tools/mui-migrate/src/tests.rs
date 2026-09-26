@@ -544,3 +544,13 @@ fn centered() {
         &with_prelude("fn f() -> El { block(1., 1.).centered() }\n"),
     );
 }
+
+#[test]
+fn ui_default() {
+    check(
+        &with_prelude("fn f() { let a = Ui::new(Theme::DEFAULT); let b = mui::Ui::new(mui::prelude::Theme::DEFAULT); let c = Ui::new(dark); }\n"),
+        &with_prelude("fn f() { let a = Ui::default(); let b = mui::Ui::default(); let c = Ui::new(dark); }\n"),
+    );
+    let foreign = "use egui::Ui;\nfn f() { Ui::new(Theme::DEFAULT); }\n";
+    check(foreign, foreign);
+}

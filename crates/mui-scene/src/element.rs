@@ -489,7 +489,7 @@ impl Element {
 pub type El = Node<Element>;
 
 /// A box of a known size: an icon cell, a swatch, a spacer.
-pub fn block(width: f64, height: f64) -> El {
+pub fn block(width: impl Into<mui_layout::Len>, height: impl Into<mui_layout::Len>) -> El {
     Node::block(width, height)
 }
 /// An empty, growing block: pushes its siblings apart.

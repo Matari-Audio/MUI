@@ -4,7 +4,7 @@
 use mui::prelude::*;
 
 fn face(v: Variant) -> Style {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     button(&mut ui, "b", "Save")
         .el
         .variant(v)
@@ -31,7 +31,7 @@ fn a_variant_paints_the_role_without_naming_a_second_colour() {
     assert_eq!(face(Variant::Ghost).fill, None);
     // A filled face carries contrast ink; the rest speak as the role.
     let ink = |v: Variant| {
-        let mut ui = Ui::new(Theme::DEFAULT);
+        let mut ui = Ui::default();
         let el = button(&mut ui, "b", "Save").el.variant(v).el();
         el.children()[0].payload().style.fill.clone()
     };
@@ -46,7 +46,7 @@ fn the_size_scale_steps_every_control_off_the_theme_unit() {
         let scene = resolve(&SceneSpec::new(c.el())).expect("resolves");
         scene.surface("sw").expect("the toggle").frame.size.width
     };
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let mut sw = |size: SpacingToken| {
         let mut on = false;
         toggle(&mut ui, "sw", "Switch", &mut on).el.size(size)
@@ -75,7 +75,7 @@ fn runs(c: Control) -> Vec<usize> {
 /// caller says nothing.
 #[test]
 fn a_control_prints_the_value_text_it_is_given() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let mut hz = 440.0;
     let bare = runs(slider(&mut ui, "cut", "Cutoff", &mut hz, 20.0..=20_000.0).el);
     // Label, then readout: the default is `{value:.2}`, so "440.00".
@@ -99,7 +99,7 @@ fn a_control_prints_the_value_text_it_is_given() {
 /// there, and a drag sweeps the range across the lane's own width.
 #[test]
 fn a_slider_takes_a_track_press_and_drags_across_its_width() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let mut v = 0.0;
     let step = |ui: &mut Ui, v: &mut f64, pointer: PointerInput| {
         let tree = col([slider(ui, "s", "S", v, 0.0..=1.0).el.into_el()]).w(400.);
@@ -130,7 +130,7 @@ fn a_slider_takes_a_track_press_and_drags_across_its_width() {
 /// and what the slider reports, are exact from the first frame.
 #[test]
 fn a_slider_thumb_glides_to_a_value_set_from_outside() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let frame = |ui: &mut Ui, mut v: f64| {
         let Response { el: fader, changed } = slider(ui, "s", "S", &mut v, 0.0..=1.0);
         assert!(!changed && (v == 0.0 || v == 1.0), "the value is untouched");
@@ -182,7 +182,7 @@ fn a_widget_reports_a_change_only_when_its_value_moved() {
         }],
         ..Input::default()
     };
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let (mut s, mut v) = (String::from("ab"), 0.5);
     // One tree and one frame; the tree reads the keys of the frame before.
     let mut step = |ui: &mut Ui, focus: &str, input: Input| {
@@ -213,7 +213,7 @@ fn a_widget_reports_a_change_only_when_its_value_moved() {
 /// text of their own, still carry it as their accessible name.
 #[test]
 fn a_toggle_and_a_drag_value_are_named_by_their_label() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let (mut on, mut bpm) = (false, 120.0);
     let name = |el: El| {
         el.payload()

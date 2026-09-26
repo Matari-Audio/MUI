@@ -2,7 +2,7 @@
 //!
 //! ```
 //! use mui::prelude::*;
-//! let mut ui = Ui::new(Theme::DEFAULT);
+//! let mut ui = Ui::default();
 //! let mut cutoff = 0.5;
 //! // One frame: build the tree, hand it in with the input, draw what comes back.
 //! let root = col![
@@ -45,7 +45,7 @@ pub use ui::{Clipboard, Edit, Frame, Interaction, Ui};
 /// crate underneath grew it. `Response` is the widgets'; a pointer's
 /// per-target report is `mui::input::Response`.
 pub mod prelude {
-    pub use crate::widgets::presets::{card, chip, glass, panel, tile};
+    pub use crate::widgets::presets::{card, chip, glass, meter, panel, tile};
     pub use crate::widgets::{
         BinAxis, BinEdit, Bins, ColorOpts, Control, CurveEdit, Newline, Response, TextEdit,
         TextOpts, Variant, bins, bins_hover, button, color_picker, curve, drag_value, knob, slider,

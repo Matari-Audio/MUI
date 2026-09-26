@@ -1,10 +1,13 @@
 //! Wheel scrolling, scrollbar drags and their heats.
+use mui_scene::Id;
 use super::*;
 
 impl Ui {
     /// How far `id`'s children are scrolled to: the settled offset, which
     /// the drawn one springs toward.
-    pub fn scroll(&self, id: &str) -> [f64; 2] {
+    pub fn scroll(&self, id: impl Into<Id>) -> [f64; 2] {
+        let id: Id = id.into();
+        let id = id.as_str();
         (self.nodes.get(id).and_then(|n| n.scroll)).map_or([0.0, 0.0], |s| s.map(|s| s.target))
     }
 

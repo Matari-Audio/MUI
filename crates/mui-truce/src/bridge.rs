@@ -215,7 +215,7 @@ impl<P: Params + ?Sized> Bridge<P> {
         };
         // At most a cancel's End, an End and a Begin reach one id per frame.
         let mut edges = [None; 4];
-        for (slot, edit) in edges.iter_mut().zip(ui.edits_for(widget.as_str())) {
+        for (slot, edit) in edges.iter_mut().zip(ui.edits_for(&widget)) {
             *slot = Some(edit);
         }
         let atomic = edges == [Some(Edit::Begin), Some(Edit::End), None, None] && !self.is_open(id);
