@@ -10,11 +10,17 @@ Breaking (by hand; `mui-migrate` has no rule for it):
   `window` is the logical window size before zoom, so a view can fit its
   design to the window (`window.width / 800.0`). A fixed zoom ignores it:
   `fn zoom(&self, _: Size) -> f64 { self.zoom }`.
+- `mui_scene::State` gains `FocusVisible`: an exhaustive `match` on `State`
+  needs an arm for it.
 
 Additions (nothing to migrate):
 
 - `Ui::wheel(id) -> Option<Vec2>`: the wheel over `id`, claimed, so an
   enclosing scroll node does not also scroll.
+- `Ui::focus_visible(id)` and `State::FocusVisible`: focused by Tab or
+  `Ui::focus`, not by a click. Put focus rings on `FocusVisible` so a click
+  does not light one. (The text field keeps `State::Focus`: like CSS
+  `:focus-visible`, a text input shows its focus however it got it.)
 - `Ui::edits() -> &[(String, Edit)]`: every gesture edge the last frame
   delivered.
 - `mui_text::Weight::{THIN, EXTRA_LIGHT, LIGHT}`.

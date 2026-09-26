@@ -182,6 +182,10 @@ pub enum State {
     Hover,
     Press,
     Focus,
+    /// Focused by the keyboard (Tab) or from code (`Ui::focus`), not by a
+    /// click: where a focus ring goes, so a click does not light one. Like
+    /// CSS `:focus-visible`.
+    FocusVisible,
     /// Switched off: see [`Styled::disabled`]. Unlike the other three it is
     /// declared by the tree rather than discovered by the runtime, and the
     /// node it is on responds to nothing.

@@ -138,6 +138,7 @@ impl Ui {
         let mut sweep = Sweep {
             pal: &pal,
             focus: self.focus.as_deref(),
+            focus_visible: self.focus_visible,
             nodes: &mut self.nodes,
             dt,
             shaped: Shapes::default(),
@@ -490,6 +491,8 @@ pub(super) struct Sweep<'a> {
     pub(super) pal: &'a Palette,
     /// Who holds the keyboard focus.
     pub(super) focus: Option<&'a str>,
+    /// ... and whether it came from the keyboard or code.
+    pub(super) focus_visible: bool,
     pub(super) nodes: &'a mut Nodes,
     pub(super) dt: f64,
     /// What morphs, gathered on the way past.
@@ -515,7 +518,7 @@ impl Sweep<'_> {
             self.nodes.get_mut(key)
         };
         let springs = st.as_ref().and_then(|s| s.springs);
-        declared_states(n, springs, focused, off);
+        declared_states(n, springs, [focused, focused && self.focus_visible], off);
         let mut animating = st
             .as_mut()
             .is_some_and(|s| transitions(n, &mut s.motion, self.pal, self.dt));

@@ -108,6 +108,50 @@ fn tab_walks_the_focusable_surfaces_in_scene_order() {
     assert!(!ui.focused("a") && !ui.focused("b"));
 }
 
+/// A click focuses without a ring; Tab and `Ui::focus` focus with one.
+#[test]
+fn focus_is_visible_from_the_keyboard_and_code_not_from_a_click() {
+    let mut ui = Ui::default();
+    let tree = || {
+        col([block(20., 20.)
+            .fill(Role::Field)
+            .on(State::FocusVisible, |s| s.stroke(Role::Primary))
+            .focusable()
+            .id("a")])
+    };
+    let ring = |f: &Frame<'_>| {
+        f.scene
+            .paint
+            .iter()
+            .any(|p| &*p.key == "a" && p.layer == Layer::Stroke)
+    };
+    ui.frame(tree(), None, PointerInput::default(), 0.016)
+        .unwrap();
+    ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
+    let lit = ring(&ui.frame(tree(), None, at(10., 10., true), 0.016).unwrap());
+    assert!(!lit);
+    ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
+    let lit = ring(&ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap());
+    assert!(
+        ui.focused("a") && !ui.focus_visible("a"),
+        "clicked: no ring"
+    );
+    assert!(!lit);
+    ui.frame(tree(), None, key(Key::Tab), 0.016).unwrap();
+    let lit = ring(
+        &ui.frame(tree(), None, PointerInput::default(), 0.016)
+            .unwrap(),
+    );
+    assert!(ui.focus_visible("a") && lit, "tabbed: a ring");
+    ui.blur();
+    ui.focus("a");
+    let lit = ring(
+        &ui.frame(tree(), None, PointerInput::default(), 0.016)
+            .unwrap(),
+    );
+    assert!(ui.focus_visible("a") && lit, "focused from code: a ring");
+}
+
 /// A shipped button is a real Tab stop and Enter reaches the same action
 /// path as a primary click.
 #[test]

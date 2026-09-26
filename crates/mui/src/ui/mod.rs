@@ -167,6 +167,9 @@ pub struct Ui {
     /// [`Ui::clicked_outside`].
     press_at: Option<Point>,
     focus: Option<String>,
+    /// The focus came from the keyboard or from code, not a pointer press:
+    /// see [`Ui::focus_visible`].
+    focus_visible: bool,
     /// Gesture edges waiting for a frame that resolves. A frame that errors
     /// leaves them queued rather than dropping a host's `End`.
     edits: Vec<(String, Edit)>,
@@ -281,6 +284,7 @@ impl Ui {
             press_at: None,
             last_press: None,
             focus: None,
+            focus_visible: false,
             edits: Vec::new(),
             delivered: Vec::new(),
             cancelled: None,
