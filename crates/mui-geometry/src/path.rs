@@ -180,7 +180,9 @@ impl Path {
                     // second difference), and kurbo needs no more than that.
                     let budget = max_points.saturating_sub(count);
                     let [v0, v1, v2, v3] = [p0, a, b, p].map(Point::to_vec2);
-                    let bow = (v0 - v1 * 2. + v2).length().max((v1 - v2 * 2. + v3).length());
+                    let bow = (v0 - v1 * 2. + v2)
+                        .length()
+                        .max((v1 - v2 * 2. + v3).length());
                     let uniform = (0.75 * bow / tolerance).sqrt().ceil();
                     if uniform.is_nan() || uniform > budget as f64 {
                         return Err(Error::TooManySegments);

@@ -688,9 +688,16 @@ fn clean_ring_drops_a_dense_diameter_in_one_pass() {
 fn a_tiny_cubic_tolerance_is_refused_not_looped() {
     let p = Path::default()
         .move_to(Point::new(0., 0.))
-        .cubic_to(Point::new(0., 100.), Point::new(100., 100.), Point::new(100., 0.))
+        .cubic_to(
+            Point::new(0., 100.),
+            Point::new(100., 100.),
+            Point::new(100., 0.),
+        )
         .close();
-    assert!(matches!(p.flatten(1e-300, 100_000), Err(Error::TooManySegments)));
+    assert!(matches!(
+        p.flatten(1e-300, 100_000),
+        Err(Error::TooManySegments)
+    ));
     // A straight cubic has no bow: any tolerance is met by its end point.
     let line = Path::default()
         .move_to(Point::new(0., 0.))

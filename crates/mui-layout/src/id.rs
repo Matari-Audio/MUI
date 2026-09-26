@@ -141,7 +141,10 @@ impl Id {
                 break;
             }
         }
-        Self::joined(parent, std::str::from_utf8(&digits[i..]).unwrap_or_default())
+        Self::joined(
+            parent,
+            std::str::from_utf8(&digits[i..]).unwrap_or_default(),
+        )
     }
 
     /// One more segment from a permanent, non-reused model entity ID.

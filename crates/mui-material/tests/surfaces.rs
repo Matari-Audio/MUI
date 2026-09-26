@@ -262,9 +262,15 @@ fn stroked_weld() -> El {
 fn steady_and_tooltip_frames_run_no_boolean_pass() {
     for root in [card(24.), stroked_weld()] {
         let mut cache = Resolver::default();
-        let cold = cache.resolve(&SceneSpec::new(root.clone())).unwrap().clone();
+        let cold = cache
+            .resolve(&SceneSpec::new(root.clone()))
+            .unwrap()
+            .clone();
         let passes = mui_geometry::boolean_passes();
-        let steady = cache.resolve(&SceneSpec::new(root.clone())).unwrap().clone();
+        let steady = cache
+            .resolve(&SceneSpec::new(root.clone()))
+            .unwrap()
+            .clone();
         assert_eq!(
             mui_geometry::boolean_passes(),
             passes,

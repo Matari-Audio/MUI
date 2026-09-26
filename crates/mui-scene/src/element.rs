@@ -1265,7 +1265,10 @@ mod tests {
         );
         let mut el = block(10., 10.).stroke_width(2.).stroke(Role::Ink);
         let stroke = el.style_mut().stroke.clone().expect("set");
-        assert_eq!((stroke.fill, stroke.width), (Some(Role::Ink.into()), Some(2.)));
+        assert_eq!(
+            (stroke.fill, stroke.width),
+            (Some(Role::Ink.into()), Some(2.))
+        );
         // A width over a bordered base keeps the base's colour.
         let bordered = Style {
             stroke: Some(crate::Stroke {
@@ -1276,12 +1279,17 @@ mod tests {
         };
         let mut el = block(10., 10.).base(bordered.clone()).stroke_width(2.);
         let stroke = el.style_mut().stroke.clone().expect("set");
-        assert_eq!((stroke.fill, stroke.width), (Some(Role::Danger.into()), Some(2.)));
+        assert_eq!(
+            (stroke.fill, stroke.width),
+            (Some(Role::Danger.into()), Some(2.))
+        );
         let mut el = block(10., 10.).stroke_width(2.).base(bordered);
         let stroke = el.style_mut().stroke.clone().expect("set");
-        assert_eq!((stroke.fill, stroke.width), (Some(Role::Danger.into()), Some(2.)));
+        assert_eq!(
+            (stroke.fill, stroke.width),
+            (Some(Role::Danger.into()), Some(2.))
+        );
     }
-
 
     /// A segmented strip says it once, on the container: the children go
     /// square when the scene resolves, so one pushed after `.segmented()`

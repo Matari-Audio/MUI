@@ -248,13 +248,7 @@ impl Walk<'_> {
         }
         if let (crate::BorderAlign::Inside, Some(rr)) = (e.border_align, contour.rect) {
             let Some(rr) = rr.inset(w / 2.)?.shape else {
-                return Ok(Some((
-                    contour.path.clone(),
-                    None,
-                    fill.clone(),
-                    0.,
-                    false,
-                )));
+                return Ok(Some((contour.path.clone(), None, fill.clone(), 0., false)));
             };
             let path = self.rect_path(rr, mui_geometry::CornerStyle::Round);
             if e.style.union.unwrap_or_default() {
@@ -271,13 +265,9 @@ impl Walk<'_> {
         // inside stroke is a centred one twice as wide, clipped to the outline.
         match e.border_align {
             _ if w == 0. => Ok(None),
-            crate::BorderAlign::Center => Ok(Some((
-                contour.path.clone(),
-                None,
-                fill.clone(),
-                w,
-                false,
-            ))),
+            crate::BorderAlign::Center => {
+                Ok(Some((contour.path.clone(), None, fill.clone(), w, false)))
+            }
             crate::BorderAlign::Inside => Ok(Some((
                 contour.path.clone(),
                 None,

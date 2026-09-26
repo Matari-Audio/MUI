@@ -80,7 +80,10 @@ fn default_and_explicit_macros_construct_the_same_policy() {
 #[test]
 fn unchanged_weld_reuses_the_pixel_buffer() {
     let mut r = Resolver::default();
-    let a = r.resolve(&SceneSpec::new(tree(Weld::all()))).unwrap().clone();
+    let a = r
+        .resolve(&SceneSpec::new(tree(Weld::all())))
+        .unwrap()
+        .clone();
     let b = r.resolve(&SceneSpec::new(tree(Weld::all()))).unwrap();
     assert!(Arc::ptr_eq(&image(&a).rgba, &image(b).rgba));
     assert_eq!(r.welds.stats(), (1, 1));
@@ -88,7 +91,10 @@ fn unchanged_weld_reuses_the_pixel_buffer() {
 #[test]
 fn style_changes_invalidate_pixels() {
     let mut r = Resolver::default();
-    let a = r.resolve(&SceneSpec::new(tree(Weld::all()))).unwrap().clone();
+    let a = r
+        .resolve(&SceneSpec::new(tree(Weld::all())))
+        .unwrap()
+        .clone();
     let b = r
         .resolve(&SceneSpec::new(tree(Weld::all().blend(3.))))
         .unwrap();

@@ -372,7 +372,10 @@ fn one_parameter_bound_twice_still_paints_and_brackets_by_parameter() {
     h.step();
     let c = calls(&log);
     assert!(
-        matches!(c.as_slice(), [Call::Begin(10), .., Call::Set(10, _), Call::End(10)]),
+        matches!(
+            c.as_slice(),
+            [Call::Begin(10), .., Call::Set(10, _), Call::End(10)]
+        ),
         "{c:?}"
     );
 }
