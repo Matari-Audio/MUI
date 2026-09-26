@@ -32,7 +32,7 @@ pub struct SceneSpec {
     /// Runtime state, so it rides beside the tree, not in it. `None`, a scene
     /// resolved without a runtime, paints no bars, since nothing could drag
     /// one.
-    pub scroll_bars: Option<std::collections::BTreeMap<String, f64>>,
+    pub scroll_bars: Option<rustc_hash::FxHashMap<crate::Id, f64>>,
 }
 impl SceneSpec {
     pub fn new(root: El) -> Self {

@@ -2,7 +2,7 @@
 use std::any::Any;
 mod wake;
 use crate::SemanticAction;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap};
 
 use mui_geometry::{Point, Vec2};
 use mui_input::{
@@ -984,7 +984,7 @@ impl Ui {
         root: El,
         offered: Option<Size>,
         dt: f64,
-        heats: BTreeMap<String, f64>,
+        heats: rustc_hash::FxHashMap<Id, f64>,
     ) -> Result<(ResolvedScene, bool, El), SceneError> {
         let mut spec = SceneSpec::new(root).theme(self.theme);
         spec.offered = offered;

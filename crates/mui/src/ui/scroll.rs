@@ -97,8 +97,8 @@ impl Ui {
     /// Per scroll node that showed a bar last frame, how hot its bar is:
     /// resting, the pointer over the list, or the bar itself under the
     /// pointer or held. Each rides a runtime-owned tween, so it eases.
-    pub(super) fn bar_heats(&mut self) -> BTreeMap<String, f64> {
-        let mut targets = BTreeMap::new();
+    pub(super) fn bar_heats(&mut self) -> rustc_hash::FxHashMap<Id, f64> {
+        let mut targets = rustc_hash::FxHashMap::default();
         let Some(scene) = self.scene.as_ref() else {
             return targets;
         };
@@ -116,7 +116,7 @@ impl Ui {
             } else {
                 0.0
             };
-            let t: &mut f64 = targets.entry(key.to_owned()).or_default();
+            let t: &mut f64 = targets.entry(Id::runtime(key)).or_default();
             *t = t.max(target);
         }
         for (key, target) in &mut targets {
