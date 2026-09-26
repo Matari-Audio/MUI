@@ -19,6 +19,12 @@ pub fn aliases(manifest: &str) -> Vec<String> {
     out
 }
 
+/// `[package] name`, if the manifest has one.
+pub fn package(manifest: &str) -> Option<String> {
+    let doc = manifest.parse::<DocumentMut>().ok()?;
+    Some(doc.get("package")?.get("name")?.as_str()?.to_string())
+}
+
 /// Rewrite moved path deps. Returns the new text and the number of edits.
 pub fn rewrite(manifest: &str, dir: &Path) -> Result<(String, usize), String> {
     let mut doc = manifest.parse::<DocumentMut>().map_err(|e| e.to_string())?;

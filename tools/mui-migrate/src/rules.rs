@@ -5,6 +5,8 @@
 //!
 //! - `Method { old, new, gate }`     `.old(` / `.old::<` -> `.new(`
 //! - `Function { old, new }`         `old(` (free fn, `mui::old(`, `use mui::{old}`) -> `new`
+//! - `FnCall { name, args, to }`     call-shape rewrite of a free fn: `name(args)` (or a
+//!   mui path to it) becomes template `to`, with `$n` as for `Call`
 //! - `Type { old, new }`             path/type ident, only where it resolves to a mui crate
 //! - `Macro { old, new }`            `old!` -> `new!`
 //! - `MacroHead { old, new, head }`  `old![a; ..]` -> `new![<head with $1 = a>; ..]`
@@ -12,6 +14,7 @@
 //!   chain of them) with arg patterns, replace with template `to` (`$1`.. are
 //!   the `Any`/`Has` args in order, `$!1` is the logical negation of `$1`). `needs`
 //!   names idents the output uses so a missing import is warned about.
+//!   `Arg::After(p)` matches an argument starting with `p` and captures the rest.
 //! - `DropImport { name }`           remove `name` from `use <mui>::..` lists
 //! - `Qualify { names, prefix }`     bare glob-imported `Name` -> `prefix` + `Name`
 //! - `Manual { pattern, note }`      report `file:line: note` wherever the token
@@ -39,14 +42,17 @@ pub enum Arg {
     Is(&'static str),
     /// Argument text contains this (whitespace-insensitive).
     Has(&'static str),
+    /// Argument starts with this (whitespace-insensitive); the rest is captured.
+    After(&'static str),
 }
 
 #[derive(Clone, Copy, Debug)]
 pub enum Rule {
     Method { old: &'static str, new: &'static str, gate: Gate },
     Function { old: &'static str, new: &'static str },
+    FnCall { name: &'static str, args: &'static [Arg], to: &'static str },
     Type { old: &'static str, new: &'static str },
-    #[allow(dead_code)] // no plain macro renames in the spec yet
+    #[expect(dead_code, reason = "no plain macro renames in the spec yet")]
     Macro { old: &'static str, new: &'static str },
     MacroHead { old: &'static str, new: &'static str, head: &'static str },
     Call { chain: &'static [(&'static str, &'static [Arg])], to: &'static str, gate: Gate, needs: &'static [&'static str] },
@@ -55,7 +61,7 @@ pub enum Rule {
     Manual { pattern: &'static str, note: &'static str },
 }
 
-use Arg::{Any as A, Has, Is};
+use Arg::{After, Any as A, Has, Is};
 use Gate::{Any as G, Mui, MuiChain};
 use Rule::*;
 
@@ -116,17 +122,28 @@ pub const RULES: &[Rule] = &[
     Manual { pattern: "material_symbols :: codepoint", note: "use the `mui_symbols::sym::NAME` char consts instead of `codepoint(\"name\")`" },
     // Resolving.
     Function { old: "resolve_scene", new: "resolve" },
+    Type { old: "TextCache", new: "Resolver" },
+    FnCall { name: "resolve_scene_with", args: &[A, After("&mut")], to: "$2.resolve($1)" },
+    DropImport { name: "resolve_scene_with" },
+    DropImport { name: "resolve_scene_cached" },
+    DropImport { name: "resolve_scene_animated" },
+    DropImport { name: "resolve_scene_retained" },
     Manual { pattern: "resolve_scene_with", note: "use `Resolver` (`Resolver::new()` then `r.resolve(&spec)`)" },
     Manual { pattern: "resolve_scene_cached", note: "use `Resolver`: `let mut r = Resolver::new(); r.resolve(&spec)`" },
     Manual { pattern: "resolve_scene_animated", note: "use `Resolver::resolve_animated(&spec, dt)`" },
     Manual { pattern: "resolve_scene_retained", note: "use `Resolver`: `let mut r = Resolver::new(); r.resolve(&spec)`" },
-    // Widgets.
-    Manual { pattern: "color_picker (", note: "`color_picker`'s positional `alpha: bool` became an option; check the call" },
     // mui-truce: `Bridge::bind` derives the widget id from the parameter.
     // ponytail: `args` splits the old `|ui, v|` closure at its comma ($4, $5), which is
     // what lets the rule insert `id`; if `args` learns closures, this becomes 4 args.
     Call { chain: &[("bind", &[A, Has("\""), A, A, A])], to: ".bind($1, $3, $4, id, $5)", gate: Mui, needs: &[] },
     Manual { pattern: ".bind", note: "`Bridge::bind`'s closure is `|ui, id, v|`: pass `id` to the widget; a toggle can use `bind_bool(ui, P, |ui, id, on| ..)`" },
+];
+
+/// The widget phase of the spec (`Response`, option structs). Applied, with
+/// [`TUPLES`], only under `--widgets`: the core DSL v2 release does not have
+/// the new widget API yet.
+pub const WIDGET_RULES: &[Rule] = &[
+    Manual { pattern: "color_picker (", note: "`color_picker`'s positional `alpha: bool` became an option; check the call" },
 ];
 
 /// Calls whose tuple result became a named struct. `f(..).0` -> `.el`,

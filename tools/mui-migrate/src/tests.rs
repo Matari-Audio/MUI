@@ -1,9 +1,19 @@
+use crate::docs::migrate_docs;
 use crate::rewrite::{Ctx, Outcome, migrate};
 
 fn run(src: &str) -> Outcome {
-    let ctx = Ctx::with_roots([]);
-    let out = migrate(src, None, &ctx).expect("migrates");
-    let again = migrate(&out.text, None, &ctx).expect("migrates twice");
+    run_in(src, &Ctx::with_roots([]))
+}
+
+fn widgets() -> Ctx {
+    let mut ctx = Ctx::with_roots([]);
+    ctx.widgets = true;
+    ctx
+}
+
+fn run_in(src: &str, ctx: &Ctx) -> Outcome {
+    let out = migrate(src, None, ctx).expect("migrates");
+    let again = migrate(&out.text, None, ctx).expect("migrates twice");
     assert_eq!(again.text, out.text, "not idempotent");
     assert_eq!(again.edits, 0);
     out
@@ -118,6 +128,11 @@ fn join_only_on_chains() {
 
 #[test]
 fn tuple_fields() {
+    let check = |before: &str, after: &str| assert_eq!(run_in(before, &widgets()).text, after);
+    let run = |src: &str| run_in(src, &widgets());
+    // The widget phase is opt-in.
+    let tuple = with_prelude("fn f() { let a = knob(ui, id, \"G\", &mut v, r).0; }\n");
+    assert_eq!(super::tests::run(&tuple).text, tuple);
     check(
         &with_prelude("fn f() {\n    let a = knob(ui, id, \"G\", &mut v, 0.0..=1.0).0;\n    let hit = button(ui, id, \"Go\").1;\n    let (el, changed) = toggle(ui, id, &mut on);\n    let (field, _) = mui::widgets::text_input(ui, id, &mut s);\n    let (h, p) = ui.state(&id);\n    let (x, y) = kit::button(ui, id, \"a\", accent);\n}\n"),
         &with_prelude("fn f() {\n    let a = knob(ui, id, \"G\", &mut v, 0.0..=1.0).el;\n    let hit = button(ui, id, \"Go\").changed;\n    let Response { el, changed } = toggle(ui, id, &mut on);\n    let Response { el: field, .. } = mui::widgets::text_input(ui, id, &mut s);\n    let Interaction { hover: h, press: p } = ui.state(&id);\n    let (x, y) = kit::button(ui, id, \"a\", accent);\n}\n"),
@@ -189,4 +204,69 @@ fn cross_file_super_imports() {
     // Without the index the child is not recognisably mui.
     assert_eq!(migrate(child_src, None, &ctx).unwrap().text, child_src);
     std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn manual_pattern_with_an_open_paren() {
+    let src = with_prelude("fn f() {\n    color_picker (ui, id, &mut c, true);\n}\n");
+    let out = run_in(&src, &widgets());
+    assert_eq!(out.warnings.iter().map(|w| w.0).collect::<Vec<_>>(), [3], "{:?}", out.warnings);
+    assert!(run(&src).warnings.is_empty(), "widget rules are opt-in");
+}
+
+#[test]
+fn free_fn_call_shape() {
+    check(
+        "use mui_scene::{TextCache, resolve_scene_with};\nfn f() { let mut c = TextCache::default(); let s = resolve_scene_with(&spec, &mut c); mui_scene::resolve_scene_with(&a, &mut self.c); }\n",
+        "use mui_scene::{Resolver};\nfn f() { let mut c = Resolver::default(); let s = c.resolve(&spec); self.c.resolve(&a); }\n",
+    );
+}
+
+#[test]
+fn own_crate_names() {
+    // Inside a mui crate, the crate's own names are mui names: `crate::`,
+    // `Self::`, bare names with no visible source. A name the crate defines
+    // (here its own `Kind`) is still left alone.
+    let dir = std::env::temp_dir().join(format!("mui-migrate-own-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    let lib = dir.join("src/lib.rs");
+    let node = dir.join("src/node.rs");
+    let lib_src = "mod node;\npub(crate) use node::Kind;\npub fn f() { crate::leaf(1.0, 1.0); Self::column([]); overlay([]); let k: Kind = Kind::A; let a: crate::Kind = x; }\n";
+    let node_src = "pub(crate) enum Kind { A }\n";
+    std::fs::write(&lib, lib_src).unwrap();
+    std::fs::write(&node, node_src).unwrap();
+    let mut ctx = Ctx::with_roots([]);
+    ctx.own_crate(&dir);
+    ctx.index(&lib, lib_src);
+    ctx.index(&node, node_src);
+    let out = migrate(lib_src, Some(&lib), &ctx).unwrap();
+    assert_eq!(out.text, "mod node;\npub(crate) use node::Kind;\npub fn f() { crate::block(1.0, 1.0); Self::col([]); stack([]); let k: Kind = Kind::A; let a: crate::A11y = x; }\n");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn doc_comment_examples() {
+    let ctx = Ctx::with_roots([]);
+    let src = "/// A card.\n///\n/// ```\n/// # use mui::prelude::*;\n/// let c = leaf(1., 1.)\n///     .disabled(false)\n///     .role(Kind::Button);\n/// ```\n///\n/// ```text\n/// leaf(1., 1.)\n/// ```\n//! ```rust,ignore\n//! column([]);\n//! ```\nfn leaf() {}\n";
+    let out = migrate_docs(src, None, &ctx, false, false).unwrap();
+    assert_eq!(
+        out.text,
+        "/// A card.\n///\n/// ```\n/// # use mui::prelude::*;\n/// let c = block(1., 1.)\n///     .a11y(A11y::Button);\n/// ```\n///\n/// ```text\n/// leaf(1., 1.)\n/// ```\n//! ```rust,ignore\n//! column([]);\n//! ```\nfn leaf() {}\n",
+        "the second rust block has no mui import and the host file does not use mui"
+    );
+    assert_eq!(migrate_docs(&out.text, None, &ctx, false, false).unwrap().edits, 0);
+    let hosted = migrate_docs(src, None, &ctx, false, true).unwrap();
+    assert!(hosted.text.contains("//! col([]);"));
+}
+
+#[test]
+fn markdown_blocks() {
+    let ctx = Ctx::with_roots([]);
+    let src = "# Title\n\n`leaf(1., 1.)` in prose stays.\n\n```rust\nlet t = overlay([label(\"x\")]);\n```\n\n```sh\nleaf(1)\n```\n\n```rust,ignore\nbridge.bind(ui, \"gain\", P::Gain, |ui, v| knob(ui, \"gain\", v))\n```\n";
+    let out = migrate_docs(src, None, &ctx, true, true).unwrap();
+    assert_eq!(
+        out.text,
+        "# Title\n\n`leaf(1., 1.)` in prose stays.\n\n```rust\nlet t = stack([body(\"x\")]);\n```\n\n```sh\nleaf(1)\n```\n\n```rust,ignore\nbridge.bind(ui, P::Gain, |ui, id, v| knob(ui, \"gain\", v))\n```\n"
+    );
+    assert_eq!(out.warnings.iter().map(|w| w.0).collect::<Vec<_>>(), [14]);
 }

@@ -44,6 +44,27 @@ pub fn lex(src: &str) -> Result<Vec<Tok>, String> {
     Ok(out)
 }
 
+/// Lex a pattern that may stop mid-group (`"color_picker ("`): close the
+/// open delimiters, lex, and drop the closers again.
+pub fn lex_fragment(pattern: &str) -> Result<Vec<Tok>, String> {
+    let mut open = Vec::new();
+    for c in pattern.chars() {
+        match c {
+            '(' => open.push(')'),
+            '[' => open.push(']'),
+            '{' => open.push('}'),
+            ')' | ']' | '}' => {
+                open.pop();
+            }
+            _ => {}
+        }
+    }
+    let closers = open.len();
+    let mut toks = lex(&format!("{pattern}{}", open.iter().rev().collect::<String>()))?;
+    toks.truncate(toks.len() - closers);
+    Ok(toks)
+}
+
 fn flatten(ts: TokenStream, out: &mut Vec<Tok>) {
     for tt in ts {
         match tt {

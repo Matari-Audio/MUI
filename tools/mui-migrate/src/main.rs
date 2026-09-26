@@ -1,9 +1,11 @@
-//! `mui-migrate [--dry-run] [--diff] [--include-vendored] <paths...>`
+//! `mui-migrate [--dry-run] [--diff] [--include-vendored] [--no-docs] [--widgets] <paths...>`
 //!
-//! Rewrites Rust sources and Cargo.toml files to the MUI DSL v2 API.
+//! Rewrites Rust sources, their doc examples, Markdown code blocks and
+//! Cargo.toml files to the MUI DSL v2 API.
 //! See README.md and `src/rules.rs`.
 
 mod cargo;
+mod docs;
 mod lex;
 mod rewrite;
 mod rules;
@@ -13,15 +15,18 @@ mod tests;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: mui-migrate [--dry-run] [--diff] [--include-vendored] <paths...>";
+const USAGE: &str = "usage: mui-migrate [--dry-run] [--diff] [--include-vendored] [--no-docs] [--widgets] <paths...>";
 
 fn main() -> ExitCode {
     let (mut dry, mut diff, mut vendored, mut paths) = (false, false, false, Vec::new());
+    let (mut docs, mut widgets) = (true, false);
     for a in std::env::args().skip(1) {
         match a.as_str() {
             "--dry-run" | "-n" => dry = true,
             "--diff" => diff = true,
             "--include-vendored" => vendored = true,
+            "--no-docs" => docs = false,
+            "--widgets" => widgets = true,
             "-h" | "--help" => {
                 println!("{USAGE}");
                 return ExitCode::SUCCESS;
@@ -40,7 +45,7 @@ fn main() -> ExitCode {
 
     let mut files = Vec::new();
     for p in &paths {
-        walk(p, vendored, &mut files);
+        walk(p, vendored, docs, &mut files);
     }
     // Crate aliases (`mui2 = { package = "mui" }`) from every manifest we
     // walk plus the ancestors of each argument.
@@ -51,7 +56,17 @@ fn main() -> ExitCode {
     }
     let aliases = manifests.iter().filter_map(|m| std::fs::read_to_string(m).ok()).flat_map(|s| cargo::aliases(&s));
     let mut ctx = rewrite::Ctx::with_roots(aliases);
+    ctx.widgets = widgets;
     let sources: Vec<Option<String>> = files.iter().map(|f| std::fs::read_to_string(f).ok()).collect();
+    for (f, src) in files.iter().zip(&sources) {
+        if f.ends_with("Cargo.toml")
+            && let Some(name) = src.as_deref().and_then(cargo::package)
+            && rules::MUI_CRATES.contains(&name.as_str())
+            && let Some(dir) = f.parent()
+        {
+            ctx.own_crate(dir);
+        }
+    }
     for (f, src) in files.iter().zip(&sources) {
         if let Some(src) = src
             && f.extension().is_some_and(|e| e == "rs")
@@ -70,8 +85,21 @@ fn main() -> ExitCode {
         let result = if f.ends_with("Cargo.toml") {
             let dir = std::fs::canonicalize(f).ok().and_then(|p| p.parent().map(Path::to_path_buf)).unwrap_or_default();
             cargo::rewrite(&src, &dir).map(|(text, edits)| rewrite::Outcome { text, edits, warnings: Vec::new() })
+        } else if f.extension().is_some_and(|e| e == "md") {
+            docs::migrate_docs(&src, Some(f), &ctx, true, true)
         } else {
-            rewrite::migrate(&src, Some(f), &ctx)
+            rewrite::migrate(&src, Some(f), &ctx).and_then(|code| {
+                if !docs {
+                    return Ok(code);
+                }
+                let host = rewrite::uses_mui(&code.text, Some(f), &ctx);
+                let mut d = docs::migrate_docs(&code.text, Some(f), &ctx, false, host)?;
+                d.edits += code.edits;
+                d.warnings.extend(code.warnings);
+                d.warnings.sort();
+                d.warnings.dedup();
+                Ok(d)
+            })
         };
         let out = match result {
             Ok(o) => o,
@@ -108,9 +136,9 @@ fn main() -> ExitCode {
     if errors > 0 { ExitCode::FAILURE } else { ExitCode::SUCCESS }
 }
 
-fn walk(p: &Path, vendored: bool, out: &mut Vec<PathBuf>) {
+fn walk(p: &Path, vendored: bool, docs: bool, out: &mut Vec<PathBuf>) {
     if p.is_file() {
-        if p.extension().is_some_and(|e| e == "rs") || p.ends_with("Cargo.toml") {
+        if p.extension().is_some_and(|e| e == "rs" || (docs && e == "md")) || p.ends_with("Cargo.toml") {
             out.push(p.to_path_buf());
         }
         return;
@@ -123,6 +151,6 @@ fn walk(p: &Path, vendored: bool, out: &mut Vec<PathBuf>) {
         if e.is_dir() && (matches!(name, "target" | ".git") || (!vendored && matches!(name, "vendor" | ".build-inputs"))) {
             continue;
         }
-        walk(&e, vendored, out);
+        walk(&e, vendored, docs, out);
     }
 }

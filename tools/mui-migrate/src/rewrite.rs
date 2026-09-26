@@ -2,7 +2,7 @@
 //! byte-range edits on the original text, repeat until nothing changes.
 
 use crate::lex::{K, Tok, lex};
-use crate::rules::{Arg, Gate, RULES, Rule, TUPLES};
+use crate::rules::{Arg, Gate, RULES, Rule, TUPLES, WIDGET_RULES};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -12,6 +12,11 @@ pub struct Ctx {
     /// Per-file names and imports, so `use super::{Kind}` can be traced to
     /// the parent module's `use mui2::prelude::*`.
     summaries: HashMap<PathBuf, Summary>,
+    /// Directories of the mui crates themselves: inside one, the crate's own
+    /// `crate::`/`super::` names are mui names.
+    own: Vec<PathBuf>,
+    /// Also apply the widget phase (`WIDGET_RULES`, `TUPLES`).
+    pub widgets: bool,
 }
 
 #[derive(Default)]
@@ -26,14 +31,27 @@ impl Ctx {
         let mut roots: HashSet<String> = crate::rules::MUI_CRATES.iter().map(|c| c.replace('-', "_")).collect();
         roots.extend(crate::rules::EXTRA_ROOTS.iter().map(|s| s.to_string()));
         roots.extend(extra);
-        Ctx { roots, summaries: HashMap::new() }
+        Ctx { roots, summaries: HashMap::new(), own: Vec::new(), widgets: false }
+    }
+
+    /// Mark `dir` as the root of a mui crate.
+    pub fn own_crate(&mut self, dir: &Path) {
+        self.own.push(dir.to_path_buf());
+    }
+
+    fn is_own(&self, file: &Path) -> bool {
+        self.own.iter().any(|d| file.starts_with(d))
+    }
+
+    fn rules(&self) -> impl Iterator<Item = &'static Rule> {
+        RULES.iter().chain(if self.widgets { WIDGET_RULES } else { &[] })
     }
 
     /// Record a file's definitions and imports for cross-file resolution.
     /// Call for every file before migrating any of them.
     pub fn index(&mut self, path: &Path, src: &str) {
         let Ok(toks) = lex(src) else { return };
-        let f = File::new(src, &toks, self, None);
+        let f = File::new(src, &toks, self, None, false);
         let s = Summary { defined: f.defined.clone(), entries: f.uses.iter().map(|u| (u.path.clone(), u.local.clone())).collect() };
         self.summaries.insert(path.to_path_buf(), s);
     }
@@ -45,7 +63,7 @@ impl Ctx {
             return Some(false);
         }
         if let Some((path, _)) = s.entries.iter().find(|(_, l)| l.as_deref() == Some(name)) {
-            return Some(self.resolve_path(file, path, &s.defined, depth + 1));
+            return self.resolve_path(file, path, &s.defined, depth + 1);
         }
         for (path, _) in s.entries.iter().filter(|(_, l)| l.is_none()) {
             if path.first().is_some_and(|r| self.roots.contains(r)) {
@@ -60,15 +78,16 @@ impl Ctx {
         None
     }
 
-    /// Does the imported item `path` (last segment = the item) come from mui?
-    fn resolve_path(&self, file: &Path, path: &[String], defined: &HashSet<String>, depth: usize) -> bool {
-        let Some(root) = path.first() else { return false };
+    /// Does the imported item `path` (last segment = the item) come from
+    /// mui? `None` when it leads into a module that is not indexed.
+    fn resolve_path(&self, file: &Path, path: &[String], defined: &HashSet<String>, depth: usize) -> Option<bool> {
+        let root = path.first()?;
         if self.roots.contains(root) && !defined.contains(root) {
-            return true;
+            return Some(true);
         }
         match self.module(file, &path[..path.len() - 1]) {
-            Some(m) if path.len() > 1 => self.resolve(&m, &path[path.len() - 1], depth) == Some(true),
-            _ => false,
+            Some(m) if path.len() > 1 => self.resolve(&m, &path[path.len() - 1], depth),
+            _ => None,
         }
     }
 
@@ -84,6 +103,8 @@ impl Ctx {
                 rest = &path[1..];
             }
             Some("self") => rest = &path[1..],
+            // `use node::X` from the parent of `node.rs`.
+            Some(seg) if self.file_for(&module_dir(file).join(seg)).is_some() => {}
             Some("super") => {
                 while rest.first().map(String::as_str) == Some("super") {
                     m = self.file_for(module_dir(&m).parent()?)?;
@@ -121,6 +142,11 @@ pub struct Outcome {
     pub warnings: Vec<(usize, String)>,
 }
 
+/// Whether the file uses mui at all (imports it, or is part of it).
+pub fn uses_mui(src: &str, path: Option<&Path>, ctx: &Ctx) -> bool {
+    lex(src).is_ok_and(|toks| File::new(src, &toks, ctx, path, false).is_mui)
+}
+
 pub fn migrate(src: &str, path: Option<&Path>, ctx: &Ctx) -> Result<Outcome, String> {
     let mut out = Outcome { text: src.to_string(), ..Default::default() };
     let mut seen = HashSet::new();
@@ -131,7 +157,7 @@ pub fn migrate(src: &str, path: Option<&Path>, ctx: &Ctx) -> Result<Outcome, Str
     };
     {
         let toks = lex(src)?;
-        let f = File::new(src, &toks, ctx, path);
+        let f = File::new(src, &toks, ctx, path, false);
         for w in f.manual() {
             push(&mut out, w);
         }
@@ -140,7 +166,7 @@ pub fn migrate(src: &str, path: Option<&Path>, ctx: &Ctx) -> Result<Outcome, Str
     // converge in a couple of passes.
     for _ in 0..16 {
         let toks = lex(&out.text)?;
-        let f = File::new(&out.text, &toks, ctx, path);
+        let f = File::new(&out.text, &toks, ctx, path, false);
         let (edits, warns) = f.pass();
         if edits.is_empty() {
             out.warnings.sort();
@@ -157,15 +183,27 @@ pub fn migrate(src: &str, path: Option<&Path>, ctx: &Ctx) -> Result<Outcome, Str
 }
 
 #[derive(Debug)]
-struct Edit {
-    lo: usize,
-    hi: usize,
-    text: String,
+pub(crate) struct Edit {
+    pub(crate) lo: usize,
+    pub(crate) hi: usize,
+    pub(crate) text: String,
     /// A whole-construct removal: may take its now-blank line with it.
-    remove: bool,
+    pub(crate) remove: bool,
 }
 
-fn apply(src: &str, mut edits: Vec<Edit>) -> (String, usize) {
+/// A removed chain link on its own line takes its line with it: widen the
+/// removal back to the end of the previous line's content, but not before `at`.
+pub(crate) fn widen(src: &str, at: usize, e: &mut Edit) -> bool {
+    let before = &src[at..e.lo];
+    let trimmed = before.trim_end_matches([' ', '\t']);
+    if trimmed.ends_with('\n') {
+        e.lo = at + trimmed.trim_end().len();
+        return true;
+    }
+    false
+}
+
+pub(crate) fn apply(src: &str, mut edits: Vec<Edit>) -> (String, usize) {
     edits.sort_by_key(|e| (e.lo, e.hi));
     let mut out = String::with_capacity(src.len());
     let mut at = 0;
@@ -174,13 +212,9 @@ fn apply(src: &str, mut edits: Vec<Edit>) -> (String, usize) {
         if e.lo < at {
             continue; // overlaps an earlier edit; next pass
         }
-        if e.remove {
-            // A removed chain link on its own line takes its line with it.
-            let before = &src[at..e.lo];
-            let trimmed = before.trim_end_matches([' ', '\t']);
-            if trimmed.ends_with('\n') {
-                e.lo = at + trimmed.trim_end().len();
-            } else if trimmed.is_empty() && at == 0 {
+        if e.remove && !widen(src, at, &mut e) {
+            let trimmed = src[at..e.lo].trim_end_matches([' ', '\t']);
+            if trimmed.is_empty() && at == 0 {
                 // Start of file: take the following newline instead.
                 let rest = &src[e.hi..];
                 let ws = rest.len() - rest.trim_start_matches([' ', '\t']).len();
@@ -218,8 +252,11 @@ struct UseEntry {
     item: (usize, usize),
 }
 
-struct File<'a> {
+pub(crate) struct File<'a> {
     path: Option<&'a Path>,
+    /// Inside a mui crate (or a doc example assumed to be mui): names that
+    /// come from the crate itself, or from nowhere this tool can see, are mui.
+    own: bool,
     src: &'a str,
     t: &'a [Tok],
     ctx: &'a Ctx,
@@ -241,9 +278,11 @@ struct File<'a> {
 }
 
 impl<'a> File<'a> {
-    fn new(src: &'a str, t: &'a [Tok], ctx: &'a Ctx, path: Option<&'a Path>) -> File<'a> {
+    pub(crate) fn new(src: &'a str, t: &'a [Tok], ctx: &'a Ctx, path: Option<&'a Path>, assume: bool) -> File<'a> {
+        let own = assume || path.is_some_and(|p| ctx.is_own(p));
         let mut f = File {
             path,
+            own,
             src,
             t,
             ctx,
@@ -256,7 +295,7 @@ impl<'a> File<'a> {
             foreign_glob: false,
             glob_mods: Vec::new(),
             items: Vec::new(),
-            is_mui: false,
+            is_mui: own,
             line_starts: std::iter::once(0).chain(src.match_indices('\n').map(|(i, _)| i + 1)).collect(),
         };
         f.scan();
@@ -397,14 +436,18 @@ impl<'a> File<'a> {
         for k in 0..self.uses.len() {
             let u = &self.uses[k];
             let root_mui = u.path.first().is_some_and(|r| self.ctx.roots.contains(r));
+            let relative = u.path.first().is_some_and(|r| matches!(r.as_str(), "crate" | "self" | "super"))
+                || self.path.is_some_and(|p| u.path.len() > 1 && self.ctx.module(p, &u.path[..1]).is_some());
+            let own = self.own && relative;
             let mui = match (&u.local, self.path) {
-                (None, _) | (_, None) => root_mui,
-                (Some(_), Some(p)) => self.ctx.resolve_path(p, &u.path, &self.defined, 0),
+                (None, p) => root_mui || (own && p.and_then(|p| self.ctx.module(p, &u.path)).is_none()),
+                (Some(_), None) => root_mui || own,
+                (Some(_), Some(p)) => self.ctx.resolve_path(p, &u.path, &self.defined, 0).unwrap_or(own),
             };
             match &u.local {
                 None if mui => self.mui_glob = true,
                 None => {
-                    self.foreign_glob = true;
+                    self.foreign_glob |= !own;
                     if let Some(m) = self.path.and_then(|p| self.ctx.module(p, &u.path)) {
                         self.glob_mods.push(m);
                     }
@@ -519,15 +562,26 @@ impl<'a> File<'a> {
             if let Some(&m) = self.locals.get(s) {
                 return m;
             }
-            return self.mui_glob || self.glob_mods.iter().any(|m| self.ctx.resolve(m, s, 1) == Some(true));
+            if self.mui_glob {
+                return true;
+            }
+            let mut found = None;
+            for m in &self.glob_mods {
+                match self.ctx.resolve(m, s, 1) {
+                    Some(true) => return true,
+                    Some(false) => found = Some(false),
+                    None => {}
+                }
+            }
+            return found.unwrap_or(self.own);
         }
         if self.defined.contains(s) {
-            return false;
+            return self.own;
         }
         if let Some(&m) = self.locals.get(s) {
             return m;
         }
-        self.ctx.roots.contains(s)
+        (self.own && matches!(s, "Self" | "crate" | "self" | "super")) || self.ctx.roots.contains(s)
     }
 
     fn gate(&self, g: Gate, dot: usize) -> bool {
@@ -540,14 +594,14 @@ impl<'a> File<'a> {
 
     // ---- rules ----
 
-    fn manual(&self) -> Vec<(usize, String)> {
+    pub(crate) fn manual(&self) -> Vec<(usize, String)> {
         let mut out = Vec::new();
         if !self.is_mui {
             return out;
         }
-        for r in RULES {
+        for r in self.ctx.rules() {
             let Rule::Manual { pattern, note } = r else { continue };
-            let Ok(pat) = lex(pattern) else { continue };
+            let Ok(pat) = crate::lex::lex_fragment(pattern) else { continue };
             'at: for i in 0..self.t.len() {
                 if self.use_tok.contains_key(&i) {
                     continue;
@@ -564,7 +618,7 @@ impl<'a> File<'a> {
         out
     }
 
-    fn pass(&self) -> (Vec<Edit>, Vec<(usize, String)>) {
+    pub(crate) fn pass(&self) -> (Vec<Edit>, Vec<(usize, String)>) {
         let t = self.t;
         let mut edits = Vec::new();
         let mut needs: Vec<(usize, &str)> = Vec::new();
@@ -576,8 +630,8 @@ impl<'a> File<'a> {
                 continue;
             }
             let name = u.path.last().map(String::as_str).unwrap_or("");
-            let mut drop = RULES.iter().any(|r| matches!(r, Rule::DropImport { name: n } if *n == name));
-            for r in RULES {
+            let mut drop = self.ctx.rules().any(|r| matches!(r, Rule::DropImport { name: n } if *n == name));
+            for r in self.ctx.rules() {
                 if let Rule::Function { old, new } | Rule::Type { old, new } | Rule::Macro { old, new } | Rule::MacroHead { old, new, .. } = *r
                     && old == name
                 {
@@ -617,7 +671,7 @@ impl<'a> File<'a> {
             if method {
                 let dot = i - 1;
                 let mut done = false;
-                for r in RULES {
+                for r in self.ctx.rules() {
                     match *r {
                         Rule::Call { chain, to, gate, needs: nd } if chain[0].0 == name && self.gate(gate, dot) => {
                             if let Some((end, caps)) = self.chain(dot, chain) {
@@ -646,7 +700,7 @@ impl<'a> File<'a> {
                 continue; // handled per use entry above
             }
             if macro_call {
-                for r in RULES {
+                for r in self.ctx.rules() {
                     match *r {
                         Rule::Macro { old, new } if old == name && self.is_mui => {
                             edit(t[i].lo, t[i].hi, new.to_string());
@@ -696,11 +750,21 @@ impl<'a> File<'a> {
                 continue;
             }
 
-            for r in RULES {
+            for r in self.ctx.rules() {
                 match *r {
                     Rule::Function { old, new } if old == name && called && !field => {
                         if self.is_mui_name(i) {
                             edit(t[i].lo, t[i].hi, new.to_string());
+                        }
+                    }
+                    Rule::FnCall { name: n, args, to } if n == name && self.open(i + 1, '(') && !field => {
+                        let mut caps = Vec::new();
+                        if self.is_mui_name(i) && self.match_args(i + 1, args, &mut caps) {
+                            let mut s = i;
+                            while self.sep_before(s) && s >= 3 && t[s - 3].k == K::Ident {
+                                s -= 3;
+                            }
+                            edit(t[s].lo, t[t[i + 1].pair].hi, expand(to, &caps));
                         }
                     }
                     Rule::Type { old, new } if old == name && !field => {
@@ -751,23 +815,8 @@ impl<'a> File<'a> {
             if !self.dot(j) || !self.ident(j + 1, name) || !self.open(j + 2, '(') {
                 return None;
             }
-            let args = self.args(j + 2);
-            if args.len() != pats.len() {
+            if !self.match_args(j + 2, pats, &mut caps) {
                 return None;
-            }
-            for (&(a, b), p) in args.iter().zip(pats.iter()) {
-                let norm = self.norm(a, b);
-                let ok = match p {
-                    Arg::Any => true,
-                    Arg::Is(s) => norm == strip_ws(s),
-                    Arg::Has(s) => norm.contains(&strip_ws(s)),
-                };
-                if !ok {
-                    return None;
-                }
-                if !matches!(p, Arg::Is(_)) {
-                    caps.push(self.text(a, b).to_string());
-                }
             }
             end = self.t[j + 2].pair;
             j = end + 1;
@@ -775,9 +824,36 @@ impl<'a> File<'a> {
         Some((end, caps))
     }
 
+    /// Match the args of the group opened at `open` against `pats`,
+    /// pushing the captures.
+    fn match_args(&self, open: usize, pats: &[Arg], caps: &mut Vec<String>) -> bool {
+        let args = self.args(open);
+        if args.len() != pats.len() {
+            return false;
+        }
+        for (&(a, b), p) in args.iter().zip(pats) {
+            let norm = self.norm(a, b);
+            let text = self.text(a, b);
+            match p {
+                Arg::Any => caps.push(text.to_string()),
+                Arg::Is(s) if norm == strip_ws(s) => {}
+                Arg::Has(s) if norm.contains(&strip_ws(s)) => caps.push(text.to_string()),
+                Arg::After(s) => match strip_prefix_ws(text, s) {
+                    Some(rest) => caps.push(rest.to_string()),
+                    None => return false,
+                },
+                _ => return false,
+            }
+        }
+        true
+    }
+
     /// Tuple-result rewrites for the call whose name is at `i`.
     fn tuple(&self, i: usize, method: bool, edit: &mut impl FnMut(usize, usize, String), needs: &mut Vec<(usize, &'static str)>) {
         let t = self.t;
+        if !self.ctx.widgets {
+            return;
+        }
         let Some(spec) = TUPLES.iter().find(|s| s.name == t[i].text && s.method == method) else { return };
         if !self.open(i + 1, '(') || (!method && !self.is_mui_name(i)) {
             return;
@@ -863,6 +939,23 @@ fn minimal(src: &str, mut lo: usize, mut hi: usize, text: String) -> Edit {
 
 fn strip_ws(s: &str) -> String {
     s.chars().filter(|c| !c.is_whitespace()).collect()
+}
+
+/// `text` without `prefix`, whitespace-insensitively: `"&mut  x"` less `"&mut"` is `"x"`.
+fn strip_prefix_ws<'s>(text: &'s str, prefix: &str) -> Option<&'s str> {
+    let mut want = prefix.chars().filter(|c| !c.is_whitespace()).peekable();
+    for (i, c) in text.char_indices() {
+        if want.peek().is_none() {
+            return Some(text[i..].trim_start());
+        }
+        if c.is_whitespace() {
+            continue;
+        }
+        if want.next() != Some(c) {
+            return None;
+        }
+    }
+    want.peek().is_none().then_some("")
 }
 
 /// Expand `$n` / `$!n` in a template.
