@@ -1162,3 +1162,38 @@ fn a_wrap_row_under_a_flex_share_arranges_the_lines_it_measured() {
         assert!(port.size.width > 23., "{}", port.size.width);
     }
 }
+/// KURV's unison panel: a `min_col` grid and a wrapping row in a flex item.
+/// The grid can drop columns down to one, so that is its floor: held at its
+/// hugging (all-columns) floor the item overflowed its row, and each
+/// re-measure at a new share moved the floor and the share again, so the
+/// wrap broke its lines at one width and was arranged at another.
+#[test]
+fn a_min_col_grid_floors_at_one_column_and_a_wrap_beside_it_follows() {
+    fn cells(n: usize, id: &'static str) -> impl Iterator<Item = Node> {
+        (0..n).map(move |i| block(60., 30.).min_w(60.).id(format!("{id}{i}")))
+    }
+    let knobs = grid(6, cells(6, "k")).min_col(64.).gap(4.);
+    let pan = Node::row(cells(4, "p").map(|c| c.grow(1.)))
+        .wrap()
+        .gap(4.)
+        .id("pan");
+    let left = col([knobs, pan]).gap(4.).id("left");
+    let tree = row([
+        left.grow(1.).shrink(1.).min_w(0.),
+        block(100., 50.).grow(1.).id("right"),
+    ])
+    .gap(8.)
+    .w(300.);
+    let l = resolve(&tree, Some(Size::new(300., 400.)), Limits::default()).unwrap();
+    let (left, right) = (l.frame("left").unwrap(), l.frame("right").unwrap());
+    assert!(left.right() + 8. <= right.x + 1e-9 && right.right() <= 300. + 1e-9);
+    let pan = l.frame("pan").unwrap();
+    for i in 0..4 {
+        let c = l.frame(&format!("p{i}")).unwrap();
+        assert!(
+            c.x >= left.x - 1e-9 && c.right() <= left.right() + 1e-9,
+            "p{i} outside"
+        );
+        assert!(c.bottom() <= pan.bottom() + 1e-9, "p{i} below the row");
+    }
+}

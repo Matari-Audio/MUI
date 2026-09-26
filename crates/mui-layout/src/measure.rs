@@ -440,59 +440,76 @@ pub(crate) fn measure_uncached<'a, P>(
         false,
     ) = (&node.kind, inner[0], node.wrap)
     {
-        let shares: Vec<(usize, f64)> = {
-            let flow = flow_of(&children);
-            if flow.iter().any(|c| c.fluid) {
-                // A scrolling row deals what arrange will lay it into: its
-                // content where that overflows, so nothing is squeezed to
-                // the viewport and wrapped a letter a line.
-                let avail = if node.scroll {
-                    let bases = flow.iter().map(|c| c.base(false, None)).sum::<f64>();
-                    avail.max(bases + gap * flow.len().saturating_sub(1) as f64)
+        // Per child: the width it was last measured at, once re-measured.
+        let mut at: Vec<Option<f64>> = vec![None; children.len()];
+        // A re-measure can change what a child may be squeezed to -- a
+        // `min_col` grid drops columns and its floor with them -- so the row
+        // is dealt again until no share moves: arrange deals it once more
+        // from the same bases and floors and must land where measure did.
+        // ponytail: bounded at three rounds; a row still moving after that
+        // arranges within a round's drift of what it measured.
+        for _ in 0..3 {
+            let shares: Vec<(usize, f64)> = {
+                let flow = flow_of(&children);
+                if flow.iter().any(|c| c.fluid) {
+                    // A scrolling row deals what arrange will lay it into: its
+                    // content where that overflows, so nothing is squeezed to
+                    // the viewport and wrapped a letter a line.
+                    let avail = if node.scroll {
+                        let bases = flow.iter().map(|c| c.base(false, None)).sum::<f64>();
+                        avail.max(bases + gap * flow.len().saturating_sub(1) as f64)
+                    } else {
+                        avail
+                    };
+                    let inner = Size::new(avail, inner[1].unwrap_or(0.0));
+                    let main = distribute(&flow, gap, false, inner);
+                    flow.iter().map(|c| c.index).zip(main).collect()
                 } else {
-                    avail
-                };
-                let inner = Size::new(avail, inner[1].unwrap_or(0.0));
-                let main = distribute(&flow, gap, false, inner);
-                flow.iter().map(|c| c.index).zip(main).collect()
-            } else {
-                Vec::new()
+                    Vec::new()
+                }
+            };
+            let mut moved = false;
+            for (index, main) in shares {
+                let c = &node.children()[index];
+                let main = c.rare().maximum.map_or(main, |m| main.min(m.width));
+                // Half a pixel more is not worth a re-measure: nothing breaks
+                // differently in more room than it measured in. Any less is,
+                // or a wrapping row arranges a line its measured height has
+                // no room for.
+                let basis = children[index].size.width;
+                let was_at = at[index].unwrap_or(basis);
+                if !children[index].fluid || (0.0..=0.5).contains(&(main - was_at)) {
+                    continue;
+                }
+                let align = c.align_self.unwrap_or(node.align);
+                let cross = offer(c, true, inner[1], sub[1], align == Align::Stretch);
+                let was = std::mem::replace(&mut pass.redo, true);
+                let m = measure(
+                    c,
+                    here,
+                    [Some(main), cross],
+                    Some(main),
+                    sub,
+                    depth + 1,
+                    pass,
+                );
+                pass.redo = was;
+                // The re-measure settles what is inside, the cross size and
+                // the floor; the basis stays the first pass's. Dealt from the
+                // share instead, a shrinking row squeezes the item a second
+                // time, narrower than anything under it was measured at.
+                let slot = &mut children[index];
+                *slot = m?;
+                let m = slot;
+                (m.size.width, m.index) = (basis, index);
+                // The cached snapshot is the re-measure's own; this one differs.
+                m.frozen = None;
+                at[index] = Some(main);
+                moved = true;
             }
-        };
-        for (index, main) in shares {
-            let c = &node.children()[index];
-            let main = c.rare().maximum.map_or(main, |m| main.min(m.width));
-            // Half a pixel more is not worth a re-measure: nothing breaks
-            // differently in more room than it measured in. Any less is, or a
-            // wrapping row arranges a line its measured height has no room for.
-            let (basis, floor) = (children[index].size.width, children[index].floor.width);
-            if !children[index].fluid || (0.0..=0.5).contains(&(main - basis)) {
-                continue;
+            if !moved {
+                break;
             }
-            let align = c.align_self.unwrap_or(node.align);
-            let cross = offer(c, true, inner[1], sub[1], align == Align::Stretch);
-            let was = std::mem::replace(&mut pass.redo, true);
-            let m = measure(
-                c,
-                here,
-                [Some(main), cross],
-                Some(main),
-                sub,
-                depth + 1,
-                pass,
-            );
-            pass.redo = was;
-            // The re-measure settles what is inside and the cross size; the
-            // flex inputs stay the first pass's. Arrange deals the row again
-            // from them and must land on the share measured here: dealt from
-            // the share instead, a shrinking row squeezes the item a second
-            // time, narrower than anything under it was measured at.
-            let slot = &mut children[index];
-            *slot = m?;
-            let m = slot;
-            (m.size.width, m.floor.width, m.index) = (basis, floor, index);
-            // The cached snapshot is the re-measure's own; this one differs.
-            m.frozen = None;
         }
     }
     let flow = flow_of(&children);
@@ -628,7 +645,13 @@ pub(crate) fn measure_uncached<'a, P>(
                     tall + (rows.len() as f64 - 1.0).max(0.0) * line_gap,
                 )
             };
-            (hug(|c| c.size, col_min), hug(|c| c.floor, 0.0))
+            // A `min_col` grid drops columns as it is squeezed, down to one:
+            // its widest cell is how narrow it gets, whatever it has now.
+            let mut floor = hug(|c| c.floor, 0.0);
+            if node.rare().min_col.is_some() {
+                floor.width = max_of(&|c| c.floor.width);
+            }
+            (hug(|c| c.size, col_min), floor)
         }
     };
     let pad = |s: Size| {
