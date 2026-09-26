@@ -67,7 +67,7 @@ impl Look {
             Variant::Soft => Style::default().fill(self.role.alpha(0.18)),
             Variant::Outline => Style {
                 stroke: Some(Stroke {
-                    fill: self.role.into(),
+                    fill: Some(self.role.into()),
                     width: None,
                 }),
                 ..Style::default()
@@ -229,7 +229,7 @@ impl Control {
     /// let mut ui = Ui::new(Theme::DEFAULT);
     /// let clear = button(&mut ui, "clear", "Clear").el;
     /// let el = clear.role(Role::Danger).variant(Variant::Outline).el();
-    /// let ring = el.payload().style.stroke.clone().map(|s| s.fill);
+    /// let ring = el.payload().style.stroke.clone().and_then(|s| s.fill);
     /// assert_eq!(ring, Some(Fill::Role(Role::Danger)));
     /// ```
     pub fn role(mut self, r: Role) -> Self {

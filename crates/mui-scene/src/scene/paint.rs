@@ -241,6 +241,8 @@ impl Walk<'_> {
         bg: Color,
     ) -> Result<Option<LateStroke>, SceneError> {
         let w = st.width.unwrap_or(self.spec.theme.stroke_width);
+        // An unset paint (a width with no colour anywhere) paints nothing.
+        let fill = st.fill.clone().unwrap_or(crate::Fill::None);
         if !(w.is_finite() && w >= 0.0) {
             return Err(SceneError::InvalidRadius);
         }
@@ -249,16 +251,16 @@ impl Walk<'_> {
                 return Ok(Some((
                     contour.path.clone(),
                     None,
-                    st.fill.clone(),
+                    fill.clone(),
                     0.,
                     false,
                 )));
             };
             let path = self.rect_path(rr, mui_geometry::CornerStyle::Round);
             if e.style.union.unwrap_or_default() {
-                return Ok(Some((path, Some(rr), st.fill.clone(), w, false)));
+                return Ok(Some((path, Some(rr), fill.clone(), w, false)));
             }
-            if let Some(p) = self.push(Layer::Stroke, path, Some(rr), &st.fill, bg) {
+            if let Some(p) = self.push(Layer::Stroke, path, Some(rr), &fill, bg) {
                 p.width = w;
                 p.offset = contour.offset;
             }
@@ -272,14 +274,14 @@ impl Walk<'_> {
             crate::BorderAlign::Center => Ok(Some((
                 contour.path.clone(),
                 None,
-                st.fill.clone(),
+                fill.clone(),
                 w,
                 false,
             ))),
             crate::BorderAlign::Inside => Ok(Some((
                 contour.path.clone(),
                 None,
-                st.fill.clone(),
+                fill.clone(),
                 2. * w,
                 true,
             ))),
@@ -295,7 +297,7 @@ impl Walk<'_> {
                     *seen = generation;
                     let band = band.clone();
                     self.caches.regions.keep(&(self.key.clone(), STROKE_BAND));
-                    return Ok(Some((band, None, st.fill.clone(), 0., false)));
+                    return Ok(Some((band, None, fill.clone(), 0., false)));
                 }
                 // Shared with a surface owner's clearance: one entry per node.
                 let band = Arc::new(self.cached_region(
@@ -312,7 +314,7 @@ impl Walk<'_> {
                         generation,
                     ),
                 );
-                Ok(Some((band, None, st.fill.clone(), 0., false)))
+                Ok(Some((band, None, fill.clone(), 0., false)))
             }
         }
     }

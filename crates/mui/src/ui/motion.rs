@@ -311,8 +311,8 @@ pub(super) fn channels(e: &mut Element, pal: &Palette, ch: &mut impl FnMut(u32, 
         }
     }
     if let Some(s) = e.style.stroke.as_mut() {
-        if let Some(Paint::Solid(c)) = s.fill.paint(pal, under) {
-            s.fill = Fill::Color(color(c, STROKE, ch));
+        if let Some(Paint::Solid(c)) = s.fill.as_ref().and_then(|f| f.paint(pal, under)) {
+            s.fill = Some(Fill::Color(color(c, STROKE, ch)));
         }
         if let Some(w) = s.width.as_mut() {
             *w = ch(STROKE_WIDTH, *w, false).max(0.0);

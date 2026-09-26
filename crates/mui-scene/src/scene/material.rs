@@ -102,7 +102,7 @@ impl Walk<'_> {
             let fill_paint = fill.paint(&th.palette, under);
             let ground = fill_paint.as_ref().map_or(under, Paint::solid);
             let stroke = parent.stroke.as_ref().or(e.style.stroke.as_ref());
-            let border = stroke.and_then(|s| s.fill.paint(&th.palette, ground));
+            let border = stroke.and_then(|s| s.fill.as_ref()?.paint(&th.palette, ground));
             let width = stroke.map_or(0.0, |s| s.width.unwrap_or(th.stroke_width));
             sources.push(crate::material_weld::source(
                 crate::material_weld::Plate {

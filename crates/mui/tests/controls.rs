@@ -25,7 +25,7 @@ fn a_variant_paints_the_role_without_naming_a_second_colour() {
     let outline = face(Variant::Outline);
     assert_eq!(outline.fill, None);
     assert_eq!(
-        outline.stroke.map(|s| s.fill),
+        outline.stroke.and_then(|s| s.fill),
         Some(Fill::Role(Role::Primary))
     );
     assert_eq!(face(Variant::Ghost).fill, None);

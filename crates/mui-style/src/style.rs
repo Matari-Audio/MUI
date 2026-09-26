@@ -375,7 +375,9 @@ impl From<Corner> for Radius {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Stroke {
-    pub fill: Fill,
+    /// `None` is unset: [`Style::over`] keeps the base's paint, and a stroke
+    /// with no paint anywhere draws nothing.
+    pub fill: Option<Fill>,
     /// `None` takes the theme's stroke width.
     pub width: Option<f64>,
 }
@@ -551,7 +553,15 @@ impl Style {
     pub fn over(self, other: Style) -> Style {
         Style {
             fill: other.fill.or(self.fill),
-            stroke: other.stroke.or(self.stroke),
+            // Per field, like the rest: a width over a bordered base keeps
+            // the base's paint.
+            stroke: match (self.stroke, other.stroke) {
+                (Some(base), Some(top)) => Some(Stroke {
+                    fill: top.fill.or(base.fill),
+                    width: top.width.or(base.width),
+                }),
+                (base, top) => top.or(base),
+            },
             radius: other.radius.or(self.radius),
             corners: other.corners.or(self.corners),
             shadow: other.shadow.or(self.shadow),
