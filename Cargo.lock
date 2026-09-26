@@ -1634,11 +1634,12 @@ dependencies = [
 name = "mui-truce"
 version = "0.3.2"
 dependencies = [
+ "accesskit_unix",
  "arboard",
  "baseview-truce",
  "keyboard-types",
  "mui",
- "pollster",
+ "mui-access",
  "raw-window-handle 0.5.2",
  "truce",
  "truce-core",
