@@ -23,8 +23,7 @@ use baseview::{
 use keyboard_types::{Key as HostKey, KeyState, Modifiers};
 use mui::Ui;
 use mui::prelude::{Button, Cursor, El, Input, Key, KeyPress, Mods, Point, PointerInput, Size};
-use mui::scene::ResolvedScene;
-use mui::vello::effects::{Budget, GpuRenderer};
+use mui::vello::host::{Frame, Host, target_size};
 use mui::vello::kurbo::Affine;
 use raw_window_handle::HasRawWindowHandle;
 
@@ -128,19 +127,21 @@ enum Pending {
     Cancel(PointerInput),
 }
 
-enum Present {
-    Done,
-    /// Nothing reached the screen; paint the same scene next tick.
-    Retry,
-    /// Device or surface gone: rebuild the GPU side and paint again.
-    Rebuild,
-}
-
 pub(crate) struct Handler<V> {
     shared: Arc<Mutex<Shared<V>>>,
-    requests: Arc<Requests>,
-    gpu: Option<Gpu>,
+    gpu: Option<Host>,
     gpu_retry_at: Instant,
+    applied_cursor: Option<MouseCursor>,
+    /// The current scene is not on screen yet: paint it.
+    unpainted: bool,
+    driver: Driver,
+}
+
+/// Everything but the model and the GPU: the event queue and the frame
+/// schedule. Its own struct so a frame can borrow it next to the locked
+/// model.
+pub(crate) struct Driver {
+    requests: Arc<Requests>,
     pointer: PointerInput,
     pending: VecDeque<Pending>,
     clipboard: Clipboard,
@@ -150,12 +151,9 @@ pub(crate) struct Handler<V> {
     /// A wheel line in scene units: the theme's text size, as of last frame.
     line: f64,
     cursor: Cursor,
-    applied_cursor: Option<MouseCursor>,
     last_frame: Instant,
     /// The model changed: rebuild.
     dirty: bool,
-    /// The current scene is not on screen yet: paint it.
-    unpainted: bool,
     animating: bool,
     wake_at: Option<Instant>,
     asked_to_grow: bool,
@@ -173,34 +171,37 @@ impl<V: View> Handler<V> {
         let now = Instant::now();
         Self {
             shared,
-            requests,
             gpu: None,
             gpu_retry_at: now,
-            pointer: PointerInput::default(),
-            pending: VecDeque::new(),
-            clipboard: Clipboard::default(),
-            size,
-            scale,
-            line: 16.0,
-            cursor: Cursor::Arrow,
             applied_cursor: None,
-            last_frame: now,
-            dirty: true,
             unpainted: true,
-            animating: false,
-            wake_at: None,
-            asked_to_grow: false,
-            failing: false,
+            driver: Driver {
+                requests,
+                pointer: PointerInput::default(),
+                pending: VecDeque::new(),
+                clipboard: Clipboard::default(),
+                size,
+                scale,
+                line: 16.0,
+                cursor: Cursor::Arrow,
+                last_frame: now,
+                dirty: true,
+                animating: false,
+                wake_at: None,
+                asked_to_grow: false,
+                failing: false,
+            },
         }
     }
 
     fn tick(&mut self, window: &mut Window) {
-        let packed = self.requests.size.swap(0, Ordering::AcqRel);
+        let requests = &self.driver.requests;
+        let packed = requests.size.swap(0, Ordering::AcqRel);
         if packed != 0 {
             let (w, h) = (packed >> 32, packed & u64::from(u32::MAX));
             window.resize(baseview::Size::new(w as f64, h as f64));
         }
-        let bits = self.requests.scale.swap(0, Ordering::AcqRel);
+        let bits = requests.scale.swap(0, Ordering::AcqRel);
         if bits != 0 {
             window.set_scale_factor(f64::from_bits(bits));
         }
@@ -213,16 +214,14 @@ impl<V: View> Handler<V> {
         // macOS: keep the child pinned to the parent's top as it resizes.
         crate::platform::reanchor_to_superview_top(handle);
         let now = Instant::now();
-        // Lost between presents: an idle editor would never find out.
-        if self
-            .gpu
-            .as_ref()
-            .is_some_and(|gpu| gpu.lost.load(Ordering::Acquire))
-        {
-            self.gpu = None;
+        let size = self.driver.size;
+        // Lost between presents: an idle editor would never find out. The
+        // next present rebuilds the device.
+        if self.gpu.as_ref().is_some_and(Host::device_lost) {
+            self.unpainted = true;
         }
-        if self.gpu.is_none() && target_size(self.size).is_some() && now >= self.gpu_retry_at {
-            match Gpu::new(window, self.size) {
+        if self.gpu.is_none() && target_size(size.0, size.1).is_some() && now >= self.gpu_retry_at {
+            match open_gpu(window, size) {
                 Ok(gpu) => {
                     self.gpu = Some(gpu);
                     self.unpainted = true;
@@ -233,26 +232,50 @@ impl<V: View> Handler<V> {
                 }
             }
         }
-        let shared = Arc::clone(&self.shared);
-        let mut s = lock(&shared);
-        self.unpainted |= self.advance(&mut s, now);
-        if self.unpainted
-            && let (Some(gpu), Some(scene)) = (self.gpu.as_mut(), s.ui.scene())
-        {
-            match gpu.present(self.size, scene, Affine::scale(self.scale)) {
-                Present::Done => self.unpainted = false,
-                Present::Retry => {}
-                Present::Rebuild => {
-                    eprintln!("mui-truce: GPU lost; rebuilding");
-                    self.gpu = None;
-                    // A surface that keeps failing must not rebuild a
-                    // device every tick.
-                    self.gpu_retry_at = now + GPU_RETRY;
+        // The lock covers the frame and a snapshot of its scene, not the
+        // present: acquiring a surface texture can wait out a vsync, and a
+        // host-thread close() or state load must not wait with it.
+        // ponytail: one scene clone per painted frame; have `Ui` hand out an
+        // `Arc<ResolvedScene>` if it shows in a profile.
+        let scene = {
+            let mut s = lock(&self.shared);
+            self.unpainted |= self.driver.advance(&mut s, now);
+            if self.unpainted && self.gpu.is_some() {
+                s.ui.scene().cloned()
+            } else {
+                None
+            }
+        };
+        if let (Some(gpu), Some(scene)) = (self.gpu.as_mut(), scene) {
+            if let Err(e) = gpu.resize(size.0, size.1) {
+                eprintln!("mui-truce: {e}");
+            }
+            match gpu.present(&scene, Affine::scale(self.driver.scale)) {
+                Ok(Frame::Presented(_)) => self.unpainted = false,
+                Ok(Frame::Skipped) => {}
+                Ok(Frame::SurfaceLost) => {
+                    // SAFETY: the surface comes from this window's live
+                    // native handle, and baseview drops the handler that owns
+                    // it before the window.
+                    #[expect(unsafe_code, reason = "calls the unsafe surface constructor")]
+                    let surface = unsafe { surface::create(gpu.instance(), window) };
+                    if let Some(surface) = surface {
+                        gpu.replace_surface(surface);
+                    } else {
+                        eprintln!("mui-truce: surface lost; rebuilding");
+                        self.gpu = None;
+                        self.gpu_retry_at = now + GPU_RETRY;
+                    }
+                }
+                Err(e) => {
+                    // Not a lost surface: painting it again would fail
+                    // again. A lost device rebuilds on its own schedule.
+                    eprintln!("mui-truce: {e}");
+                    self.unpainted = false;
                 }
             }
         }
-        drop(s);
-        let cursor = native_cursor(self.cursor);
+        let cursor = native_cursor(self.driver.cursor);
         if self.applied_cursor != Some(cursor) {
             window.set_mouse_cursor(cursor);
             self.applied_cursor = Some(cursor);
@@ -263,18 +286,30 @@ impl<V: View> Handler<V> {
     /// last: what the headless tests drive.
     #[cfg(test)]
     pub(crate) fn step(&mut self) -> bool {
-        let shared = Arc::clone(&self.shared);
-        let now = self.last_frame + Duration::from_millis(16);
-
-        self.advance(&mut lock(&shared), now)
+        let now = self.driver.last_frame + Duration::from_millis(16);
+        self.driver.advance(&mut lock(&self.shared), now)
     }
 
+    pub(crate) fn on_event_inner(&mut self, event: &Event) -> EventStatus {
+        let status = self.driver.on_event(event);
+        // A key nothing here has focus for goes back to the host too, so
+        // Space still starts its transport.
+        // ponytail: a global shortcut read from `Ui::shortcuts` also reaches
+        // the host; claiming it needs the tree to say which keys it used.
+        if matches!(event, Event::Keyboard(_)) && lock(&self.shared).ui.focus_key().is_none() {
+            return EventStatus::Ignored;
+        }
+        status
+    }
+}
+
+impl Driver {
     /// Run the queued events and whatever else is due through `Ui::frame`.
     /// Returns whether there is a new scene to paint.
-    pub(crate) fn advance(&mut self, s: &mut Shared<V>, now: Instant) -> bool {
+    pub(crate) fn advance<V: View>(&mut self, s: &mut Shared<V>, now: Instant) -> bool {
         self.dirty |= self.requests.redraw.swap(false, Ordering::AcqRel);
         self.dirty |= s.view.changed();
-        if target_size(self.size).is_none() {
+        if target_size(self.size.0, self.size.1).is_none() {
             // Minimised: hold the input edges until there is a size again.
             return false;
         }
@@ -325,7 +360,7 @@ impl<V: View> Handler<V> {
         true
     }
 
-    fn resolve(
+    fn resolve<V: View>(
         &mut self,
         s: &mut Shared<V>,
         input: Input,
@@ -364,7 +399,7 @@ impl<V: View> Handler<V> {
     /// The tree's measured floor, once per window, to the host: `min_size`
     /// is a hint a host may ignore, so a window opened below the floor gets
     /// one polite request to grow.
-    fn ask_to_grow(&mut self, s: &mut Shared<V>) {
+    fn ask_to_grow<V: View>(&mut self, s: &mut Shared<V>) {
         if std::mem::replace(&mut self.asked_to_grow, true) {
             return;
         }
@@ -379,7 +414,7 @@ impl<V: View> Handler<V> {
         }
     }
 
-    pub(crate) fn on_event_inner(&mut self, event: &Event) -> EventStatus {
+    fn on_event(&mut self, event: &Event) -> EventStatus {
         match event {
             Event::Mouse(mouse) => {
                 let mut input = Input::default();
@@ -409,14 +444,6 @@ impl<V: View> Handler<V> {
                 }
                 input.pointer = self.pointer;
                 self.pending.push_back(Pending::Input(input));
-                // A key nothing here has focus for goes back to the host too,
-                // so Space still starts its transport.
-                // ponytail: a global shortcut read from `Ui::shortcuts` also
-                // reaches the host; claiming it needs the tree to say which
-                // keys it used.
-                if lock(&self.shared).ui.focus_key().is_none() {
-                    return EventStatus::Ignored;
-                }
             }
             Event::Window(WindowEvent::Resized(info)) => {
                 let physical = info.physical_size();
@@ -639,18 +666,6 @@ fn logical_size(physical: (u32, u32), scale: f64) -> Size {
     Size::new(f64::from(physical.0) / scale, f64::from(physical.1) / scale)
 }
 
-/// The surface size clamped to what a vello `Scene` holds (`u16`), or
-/// `None` when there is nothing to draw into: a minimised window reports
-/// 0x0, and configuring a zero-sized surface is undefined.
-fn target_size((width, height): (u32, u32)) -> Option<(u32, u32)> {
-    (width > 0 && height > 0).then(|| {
-        (
-            width.min(u32::from(u16::MAX)),
-            height.min(u32::from(u16::MAX)),
-        )
-    })
-}
-
 /// X11 drops a selection when its owner goes, so Linux keeps an arboard
 /// owner alive. baseview writes the clipboard elsewhere but cannot read it:
 /// there, a paste gets what this editor copied last.
@@ -702,29 +717,11 @@ impl Clipboard {
     }
 }
 
-/// The surface, its device and the retained renderer. Everything here
-/// dies together: a lost device or surface drops the whole `Gpu` and the
-/// next tick builds a new one.
-struct Gpu {
-    surface: wgpu::Surface<'static>,
-    device: wgpu::Device,
-    queue: wgpu::Queue,
-    config: wgpu::SurfaceConfiguration,
-    renderer: GpuRenderer,
-    /// Raised by wgpu's device-lost callback, on whatever thread wgpu calls it.
-    lost: Arc<AtomicBool>,
-}
-
-impl Gpu {
-    fn new(window: &Window, size: (u32, u32)) -> Result<Self, String> {
-        // A driver panic becomes an error the editor can show, when the
-        // plugin unwinds; under `panic = "abort"` it is the host's crash.
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| Self::try_new(window, size)))
-            .map_err(|_| "panic while creating GPU resources".to_owned())?
-    }
-
-    fn try_new(window: &Window, size: (u32, u32)) -> Result<Self, String> {
-        let (width, height) = target_size(size).ok_or("no drawable size")?;
+/// A device and renderer for this window's surface. A driver panic becomes
+/// an error the editor can show, when the plugin unwinds; under
+/// `panic = "abort"` it is the host's crash.
+fn open_gpu(window: &Window, size: (u32, u32)) -> Result<Host, String> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let instance =
             wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
         // SAFETY: the surface comes from this window's live native handle,
@@ -732,102 +729,9 @@ impl Gpu {
         #[expect(unsafe_code, reason = "calls the unsafe surface constructor")]
         let surface = unsafe { surface::create(&instance, window) }
             .ok_or("native surface creation failed")?;
-        // A desktop with an iGPU enumerates it first; paint on the card.
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            compatible_surface: Some(&surface),
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            ..Default::default()
-        }))
-        .map_err(|e| e.to_string())?;
-        let (device, queue) =
-            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
-                .map_err(|e| e.to_string())?;
-        let lost = Arc::new(AtomicBool::new(false));
-        let flag = Arc::clone(&lost);
-        device.set_device_lost_callback(move |_, _| flag.store(true, Ordering::Release));
-        let limit = device.limits().max_texture_dimension_2d;
-        let (width, height) = (width.min(limit), height.min(limit));
-        // MUI's alpha contract wants a non-sRGB UNORM target: vello writes
-        // sRGB values, and an `_Srgb` surface would encode them twice.
-        let format = surface
-            .get_capabilities(&adapter)
-            .formats
-            .into_iter()
-            .find(|f| {
-                matches!(
-                    f,
-                    wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Rgba8Unorm
-                )
-            })
-            .ok_or("no non-sRGB UNORM surface format")?;
-        let config = wgpu::SurfaceConfiguration {
-            format,
-            ..surface
-                .get_default_config(&adapter, width, height)
-                .ok_or("surface has no default configuration")?
-        };
-        surface.configure(&device, &config);
-        let renderer = pollster::block_on(GpuRenderer::new(
-            &device,
-            &queue,
-            format,
-            [width, height],
-            Budget::default(),
-        ))
-        .map_err(|e| e.to_string())?;
-        Ok(Self {
-            surface,
-            device,
-            queue,
-            config,
-            renderer,
-            lost,
-        })
-    }
-
-    fn present(&mut self, size: (u32, u32), scene: &ResolvedScene, xf: Affine) -> Present {
-        use wgpu::CurrentSurfaceTexture as Acquired;
-        if self.lost.load(Ordering::Acquire) {
-            return Present::Rebuild;
-        }
-        let Some((width, height)) = target_size(size) else {
-            return Present::Retry;
-        };
-        let limit = self.device.limits().max_texture_dimension_2d;
-        let (width, height) = (width.min(limit), height.min(limit));
-        if (width, height) != (self.config.width, self.config.height) {
-            if let Err(e) = self.renderer.resize([width, height]) {
-                eprintln!("mui-truce: resize to {width}x{height}: {e}");
-                return Present::Done;
-            }
-            self.config.width = width;
-            self.config.height = height;
-            self.surface.configure(&self.device, &self.config);
-        }
-        let frame = match self.surface.get_current_texture() {
-            Acquired::Success(f) | Acquired::Suboptimal(f) => f,
-            Acquired::Outdated => {
-                self.surface.configure(&self.device, &self.config);
-                return Present::Retry;
-            }
-            Acquired::Occluded | Acquired::Timeout => return Present::Retry,
-            Acquired::Lost | Acquired::Validation => return Present::Rebuild,
-        };
-        let view = frame
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-        match self.renderer.render(scene, xf, &view) {
-            Ok(_) => {
-                self.queue.present(frame);
-                Present::Done
-            }
-            Err(e) => {
-                // Not a device fault: painting it again would fail again.
-                eprintln!("mui-truce: render: {e}");
-                Present::Done
-            }
-        }
-    }
+        Host::new(instance, surface, size)
+    }))
+    .map_err(|_| "panic while creating GPU resources".to_owned())?
 }
 
 mod surface;

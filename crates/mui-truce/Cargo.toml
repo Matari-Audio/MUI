@@ -21,7 +21,6 @@ truce-gui-utils = "6.3"
 keyboard-types = { version = "0.7", default-features = false }
 # baseview's parent handle is raw-window-handle 0.5.
 raw-window-handle = "0.5"
-pollster.workspace = true
 # mui-vello picks no backend; the window that owns the device does.
 wgpu = { workspace = true, features = ["wgsl", "vulkan", "gles", "metal", "dx12"] }
 

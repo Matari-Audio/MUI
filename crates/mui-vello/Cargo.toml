@@ -7,7 +7,7 @@ license.workspace = true
 
 [features]
 default = []
-gpu-effects = ["wgpu/wgsl", "dep:vello"]
+gpu-effects = ["wgpu/wgsl", "dep:vello", "dep:pollster"]
 # A CPU rasteriser: snapshot tests, thumbnails, hosts with no GPU.
 cpu = ["dep:vello_cpu", "dep:glifo"]
 # Rasterise on a rayon pool instead of one core. Off by default: a snapshot-
@@ -26,6 +26,8 @@ rustc-hash.workspace = true
 # renderer. Rasterises in compute shaders, so a changed frame costs the CPU
 # its serialisation only.
 vello = { path = "../../vendor/vello", default-features = false, features = ["wgpu"], optional = true }
+# `host` opens and, after a loss, reopens a device from a frame callback.
+pollster = { workspace = true, optional = true }
 # `Glyph` is the one glyph type `vello_cpu` does not re-export, so it comes
 # straight from the crate it builds on.
 glifo = { version = "0.3", default-features = false, optional = true }

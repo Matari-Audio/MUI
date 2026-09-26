@@ -11,8 +11,6 @@ use winit::{
     keyboard::{Key as WinitKey, NamedKey},
     window::{Window, WindowId},
 };
-#[path = "../src/device.rs"]
-mod device;
 #[expect(
     dead_code,
     reason = "the shared gallery host has debug-overlay methods this lab never calls"
@@ -150,10 +148,7 @@ impl ApplicationHandler for Lab {
                 )
                 .expect("window"),
         );
-        let gpu = pollster::block_on(host::Gpu::new(
-            window,
-            Box::new(event_loop.owned_display_handle()),
-        ));
+        let gpu = host::Gpu::new(window, Box::new(event_loop.owned_display_handle()));
         gpu.window().request_redraw();
         self.gpu = Some(gpu);
     }

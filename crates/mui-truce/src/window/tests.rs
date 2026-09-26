@@ -66,22 +66,14 @@ fn key(key: HostKey, state: KeyState, modifiers: Modifiers) -> Event {
 }
 
 fn inputs(h: &Handler<Knob>) -> Vec<&Input> {
-    h.pending
+    h.driver
+        .pending
         .iter()
         .map(|p| match p {
             Pending::Input(i) | Pending::Move(i) => i,
             Pending::Cancel(_) => panic!("unexpected cancel"),
         })
         .collect()
-}
-
-/// The two ways a resize breaks: the `as u16` wrap, and a minimised
-/// window configuring a zero-sized surface.
-#[test]
-fn target_size_clamps_and_refuses_nothing_to_draw_into() {
-    assert_eq!(target_size((0, 600)), None);
-    assert_eq!(target_size((800, 0)), None);
-    assert_eq!(target_size((99_999, 600)), Some((65_535, 600)));
 }
 
 #[test]
@@ -91,21 +83,21 @@ fn layout_is_logical_when_the_surface_is_physical() {
     h.on_event_inner(&Event::Window(WindowEvent::Resized(
         baseview::WindowInfo::from_logical_size(baseview::Size::new(320.0, 200.0), 2.0),
     )));
-    assert_eq!((h.size, h.scale), ((640, 400), 2.0));
-    assert!(h.dirty);
+    assert_eq!((h.driver.size, h.driver.scale), ((640, 400), 2.0));
+    assert!(h.driver.dirty);
 }
 
 #[test]
 fn pointer_stays_logical_and_keyboard_modifiers_track_their_own_edges() {
     let mut h = handler((2560, 1600), 2.0);
     h.on_event_inner(&moved(10.0, 20.0, Modifiers::default()));
-    assert_eq!(h.pointer.pos, Some(Point::new(10.0, 20.0)));
+    assert_eq!(h.driver.pointer.pos, Some(Point::new(10.0, 20.0)));
     // X11 samples a press's state before the modifier is set...
     h.on_event_inner(&key(HostKey::Alt, KeyState::Down, Modifiers::default()));
-    assert!(h.pointer.mods.alt);
+    assert!(h.driver.pointer.mods.alt);
     // ...and a release's while it is still held.
     h.on_event_inner(&key(HostKey::Alt, KeyState::Up, Modifiers::ALT));
-    assert!(!h.pointer.mods.alt);
+    assert!(!h.driver.pointer.mods.alt);
 }
 
 #[test]
@@ -153,16 +145,16 @@ fn hover_bursts_coalesce_but_drag_samples_and_modifier_changes_survive() {
     for x in 0..1000 {
         h.on_event_inner(&moved(f64::from(x), 20.0, Modifiers::default()));
     }
-    assert_eq!(h.pending.len(), 1);
+    assert_eq!(h.driver.pending.len(), 1);
     assert_eq!(inputs(&h)[0].pointer.pos, Some(Point::new(999.0, 20.0)));
     h.on_event_inner(&moved(1000.0, 20.0, Modifiers::SHIFT));
-    assert_eq!(h.pending.len(), 2);
+    assert_eq!(h.driver.pending.len(), 2);
     h.on_event_inner(&button(true));
     for x in 0..10 {
         h.on_event_inner(&moved(f64::from(x), 30.0, Modifiers::SHIFT));
     }
     h.on_event_inner(&button(false));
-    assert_eq!(h.pending.len(), 14);
+    assert_eq!(h.driver.pending.len(), 14);
 }
 
 #[test]
@@ -170,11 +162,11 @@ fn focus_loss_queues_a_cancel_after_the_pressed_snapshot() {
     let mut h = handler((200, 200), 1.0);
     h.on_event_inner(&button(true));
     h.on_event_inner(&Event::Window(WindowEvent::Unfocused));
-    assert!(h.pointer.buttons.is_empty());
+    assert!(h.driver.pointer.buttons.is_empty());
     assert!(
-        matches!(h.pending.front(), Some(Pending::Input(i)) if i.pointer.buttons.contains(Button::Primary))
+        matches!(h.driver.pending.front(), Some(Pending::Input(i)) if i.pointer.buttons.contains(Button::Primary))
     );
-    assert!(matches!(h.pending.get(1), Some(Pending::Cancel(p)) if p.buttons.is_empty()));
+    assert!(matches!(h.driver.pending.get(1), Some(Pending::Cancel(p)) if p.buttons.is_empty()));
 }
 
 #[test]
@@ -193,7 +185,7 @@ fn an_idle_tick_builds_nothing_until_something_changes() {
 
     lock(&h.shared).view.changed = true;
     assert!(h.step(), "a model change is a frame");
-    h.requests.redraw();
+    h.driver.requests.redraw();
     assert!(h.step(), "so is a redraw request");
     h.on_event_inner(&moved(1.0, 1.0, Modifiers::default()));
     assert!(h.step(), "and an event");
@@ -209,7 +201,7 @@ fn a_press_and_release_between_two_ticks_are_two_frames() {
     h.on_event_inner(&button(false));
     assert!(h.step());
     assert_eq!(builds(&h) - before, 3, "one frame per queued event");
-    assert!(h.pending.is_empty());
+    assert!(h.driver.pending.is_empty());
 }
 
 #[test]
@@ -221,12 +213,12 @@ fn a_minimised_window_holds_its_input_until_it_has_a_size() {
     )));
     h.on_event_inner(&button(true));
     assert!(!h.step());
-    assert_eq!(h.pending.len(), 1, "the press is kept, not dropped");
+    assert_eq!(h.driver.pending.len(), 1, "the press is kept, not dropped");
     h.on_event_inner(&Event::Window(WindowEvent::Resized(
         baseview::WindowInfo::from_logical_size(baseview::Size::new(400.0, 300.0), 1.0),
     )));
     assert!(h.step());
-    assert!(h.pending.is_empty());
+    assert!(h.driver.pending.is_empty());
 }
 
 /// A plain surface: no springs, so nothing but its gesture edges asks for
@@ -323,7 +315,11 @@ fn a_key_goes_back_to_the_host_unless_something_here_has_focus() {
         Modifiers::default(),
     );
     assert_eq!(h.on_event_inner(&space), EventStatus::Ignored);
-    assert_eq!(h.pending.len(), 1, "still read, for global shortcuts");
+    assert_eq!(
+        h.driver.pending.len(),
+        1,
+        "still read, for global shortcuts"
+    );
     lock(&h.shared).ui.focus("k");
     assert_eq!(h.on_event_inner(&space), EventStatus::Captured);
 }

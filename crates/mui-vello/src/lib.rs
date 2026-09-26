@@ -38,6 +38,8 @@ mod classic;
 pub use classic::Classic;
 #[cfg(feature = "gpu-effects")]
 pub mod effects;
+#[cfg(feature = "gpu-effects")]
+pub mod host;
 
 /// The path conversion painting uses, the same one input hit-tests with.
 pub use mui_geometry::{ARC_TOLERANCE, bez_path, bez_path_into};

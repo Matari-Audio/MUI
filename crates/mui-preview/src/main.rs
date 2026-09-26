@@ -8,7 +8,6 @@
 //! Run: `cargo run -p mui-preview`
 #![forbid(unsafe_code)]
 
-mod device;
 mod host;
 mod scenes;
 mod skin;
@@ -727,7 +726,7 @@ impl ApplicationHandler<AccessEvent> for App {
         }
         window.set_visible(true);
         let display = Box::new(event_loop.owned_display_handle());
-        self.gpu = Some(pollster::block_on(Gpu::new(window, display)));
+        self.gpu = Some(Gpu::new(window, display));
     }
 
     /// The theme file is the only thing that changes with no event behind it,
