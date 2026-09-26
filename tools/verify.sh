@@ -23,7 +23,7 @@ cargo check --workspace --all-features --exclude mui-preview --exclude mui-gain-
 # mui-stage's default `backends` feature is the only feature; --all-features
 # keeps it on. No wasm check: these crates own a native device or ffmpeg.
 # ---------------------------------------------------------------------------
-cargo fmt --manifest-path media/Cargo.toml --all -- --check
+cargo fmt --manifest-path media/Cargo.toml -p mui-stage -p mui-reel -p mui-motion-bridge -- --check
 cargo test --manifest-path media/Cargo.toml --workspace --all-features --locked --offline
 cargo clippy --manifest-path media/Cargo.toml --workspace --all-features --all-targets --locked --offline -- -D warnings
 cargo check --manifest-path media/Cargo.toml -p mui-stage --no-default-features --locked --offline

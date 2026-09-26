@@ -1,6 +1,6 @@
 //! A beat-synced take of a gain-plugin editor, with its sound.
 //!
-//!     cargo run -p mui-reel --example gain_reel -- /tmp/gain-reel [--master]
+//!     cargo run --manifest-path media/Cargo.toml -p mui-reel --example gain_reel -- /tmp/gain-reel [--master]
 //!
 //! `--master` adds a ProRes 4444 `take.mov` and writes the layers as ProRes
 //! with alpha instead of VP9 WebM. `--stage` shoots the card on the GPU as a

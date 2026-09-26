@@ -35,7 +35,7 @@ Timing rules:
 
 ## 1. Render a take
 
-    cargo run -p mui-reel --example gain_reel -- videos/mui-reel-demo/take [--master]
+    cargo run --manifest-path media/Cargo.toml -p mui-reel --example gain_reel -- videos/mui-reel-demo/take [--master]
 
 The output folder is the handoff:
 

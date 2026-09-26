@@ -3,7 +3,7 @@
 //! a WGSL background and a glossy floor that mirrors it, with depth of
 //! field, bloom, grain and 8-subframe motion blur.
 //!
-//!     cargo run -p mui-stage --example stage_shot --release -- /tmp/stage
+//!     cargo run --manifest-path media/Cargo.toml -p mui-stage --example stage_shot --release -- /tmp/stage
 //!
 //! Writes `take.mp4` (BT.709, converted and tagged) when ffmpeg is on PATH,
 //! and `sheet.png`, five frames stacked, either way.

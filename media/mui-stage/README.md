@@ -44,8 +44,8 @@ ffmpeg_stdin.write_all(&frame.rgba8())?;                  // or rgba16() for a 1
   every scripted subframe to a look closure as a `Take`: the scene, the
   time, the script's camera and the pointer. `mui_reel::with_cursor` paints
   the pointer into the layer, so it rides the slab. See
-  `cargo run -p mui-reel --example gain_reel -- /tmp/out --stage`.
-- **Standalone.** `cargo run -p mui-stage --example stage_shot -- /tmp/stage`
+  `cargo run --manifest-path media/Cargo.toml -p mui-reel --example gain_reel -- /tmp/out --stage`.
+- **Standalone.** `cargo run --manifest-path media/Cargo.toml -p mui-stage --example stage_shot -- /tmp/stage`
   renders a four-second fly-in with a live knob and toggle.
 
 Needs a GPU adapter that can do 4x MSAA on `Rgba16Float`; `Stage::new` says
