@@ -338,7 +338,11 @@ impl<'a> Walk<'a> {
         }
         let d = Point::new(frame.x - old.origin.x, frame.y - old.origin.y);
         let moved = d != Point::ZERO;
-        let grid = |v: f64| self.spec.device_scale.is_none_or(|s| (v * s).fract() == 0.0);
+        let grid = |v: f64| {
+            self.spec
+                .device_scale
+                .is_none_or(|s| (v * s).fract() == 0.0)
+        };
         // A moved span's clips are its own, so they move with it; an
         // ancestor's would not.
         if moved && (ancestors.clip.is_some() || !grid(d.x) || !grid(d.y)) {
@@ -357,8 +361,11 @@ impl<'a> Walk<'a> {
         }
         let (paint, surfaces) = (self.paint.len(), self.surfaces.len());
         let mut shift = Shift::new(d);
-        self.paint
-            .extend(prev.paint[old.paint.clone()].iter().map(|p| shift.painted(p)));
+        self.paint.extend(
+            prev.paint[old.paint.clone()]
+                .iter()
+                .map(|p| shift.painted(p)),
+        );
         for s in &prev.surfaces[old.surfaces.clone()] {
             self.at.insert(s.key.clone(), self.surfaces.len());
             self.surfaces.push(shift.surface(s));
@@ -367,7 +374,8 @@ impl<'a> Walk<'a> {
             let mut s = s.clone();
             s.reused = true;
             s.at = s.at - old.at + at;
-            s.paint = s.paint.start - old.paint.start + paint..s.paint.end - old.paint.start + paint;
+            s.paint =
+                s.paint.start - old.paint.start + paint..s.paint.end - old.paint.start + paint;
             s.surfaces = s.surfaces.start - old.surfaces.start + surfaces
                 ..s.surfaces.end - old.surfaces.start + surfaces;
             s.origin = s.origin + d;
@@ -843,14 +851,16 @@ impl Shift {
         s.clip = s.clip.map(|b| b.translated(d));
         if let Some(list) = &s.clip_path {
             let at = Arc::as_ptr(list);
-            s.clip_path = Some(match self.lists.iter().find(|(p, _)| std::ptr::eq(*p, at)) {
-                Some((_, moved)) => moved.clone(),
-                None => {
-                    let moved: Arc<[Arc<Path>]> = list.iter().map(|p| self.path(p)).collect();
-                    self.lists.push((at, moved.clone()));
-                    moved
-                }
-            });
+            s.clip_path = Some(
+                match self.lists.iter().find(|(p, _)| std::ptr::eq(*p, at)) {
+                    Some((_, moved)) => moved.clone(),
+                    None => {
+                        let moved: Arc<[Arc<Path>]> = list.iter().map(|p| self.path(p)).collect();
+                        self.lists.push((at, moved.clone()));
+                        moved
+                    }
+                },
+            );
         }
         for (_, p) in &mut s.hits {
             *p = self.path(p);
@@ -1351,5 +1361,121 @@ mod tests {
             moved.commands[0],
             mui_geometry::PathCommand::MoveTo(Point::new(9., 9.))
         );
+    }
+
+    /// A memoised panel after a lead of width `lead`: a rounded button, a
+    /// label and a canvas that counts its draws.
+    fn memo_spec(
+        lead: f64,
+        reused: bool,
+        draws: &Arc<std::sync::atomic::AtomicUsize>,
+    ) -> SceneSpec {
+        let count = draws.clone();
+        let mut panel = column([
+            leaf(40., 20.).fill(Role::Primary).radius(6.).id("m.a"),
+            text("kept").id("m.t"),
+            canvas(move |s| {
+                count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                vec![crate::Draw::fill(
+                    Path::polyline([Point::ZERO, Point::new(s.width, s.height)], true),
+                    Role::Ink,
+                )]
+            })
+            .size(10., 10.)
+            .id("m.c"),
+        ])
+        .fill(Role::Surface)
+        .id("m");
+        panel.payload_mut().extras_mut().memo = Some(crate::Memo { id: 7, reused });
+        let lead = leaf(lead, 10.).fill(Role::Raised);
+        let mut spec =
+            SceneSpec::new(row([lead, panel]).align(Align::Start)).offered(Size::new(300., 100.));
+        static FONT: std::sync::LazyLock<Font> = std::sync::LazyLock::new(super::super::font);
+        spec.font = Some(FONT.clone());
+        spec
+    }
+    fn draws() -> Arc<std::sync::atomic::AtomicUsize> {
+        Arc::default()
+    }
+    fn count(d: &Arc<std::sync::atomic::AtomicUsize>) -> usize {
+        d.load(std::sync::atomic::Ordering::Relaxed)
+    }
+    fn retained(
+        spec: &SceneSpec,
+        text: &mut TextCache,
+        prev: Option<&ResolvedScene>,
+    ) -> ResolvedScene {
+        resolve_scene_retained(
+            spec,
+            text,
+            &mut crate::WeldCache::default(),
+            &mut |_, _, f| f,
+            prev,
+        )
+        .unwrap()
+    }
+
+    /// A reused memo is copied, not walked: its canvas is not drawn again,
+    /// and what it paints is what a walk would, down to the same `Arc`s.
+    #[test]
+    fn a_reused_memo_copies_last_resolves_paint() {
+        let d = draws();
+        let mut text = TextCache::default();
+        let a = retained(&memo_spec(50., false, &d), &mut text, None);
+        let b = retained(&memo_spec(50., true, &d), &mut text, Some(&a));
+        assert_eq!(count(&d), 1, "the reused canvas was drawn again");
+        assert_eq!(a.paint, b.paint);
+        let shared = a
+            .paint
+            .iter()
+            .zip(&b.paint)
+            .filter(|(x, y)| Arc::ptr_eq(&x.path, &y.path));
+        assert_eq!(
+            shared.count(),
+            a.paint.len(),
+            "a copy keeps every path by pointer"
+        );
+        assert_eq!(b.surface("m.a"), a.surface("m.a"));
+    }
+
+    /// Moved by its neighbour, a reused memo is copied translated: paint
+    /// and surfaces land exactly where a walk puts them.
+    #[test]
+    fn a_moved_memo_translates_its_paint_and_surfaces() {
+        let d = draws();
+        let mut text = TextCache::default();
+        let a = retained(&memo_spec(50., false, &d), &mut text, None);
+        let b = retained(&memo_spec(70., true, &d), &mut text, Some(&a));
+        assert_eq!(count(&d), 1, "a moved memo was walked instead of copied");
+        let walked =
+            resolve_scene_with(&memo_spec(70., false, &draws()), &mut TextCache::default())
+                .unwrap();
+        assert_eq!(b.paint, walked.paint);
+        for k in ["m", "m.a", "m.t", "m.c"] {
+            assert_eq!(b.surface(k), walked.surface(k), "{k}");
+        }
+        assert_eq!(b.surface("m.a").unwrap().frame.x, 70.);
+    }
+
+    /// The caches a copied memo used stay warm while it is copied, and its
+    /// walk renews them once they are [`MEMO_AGE`] resolves old.
+    #[test]
+    fn a_copied_memo_keeps_its_cache_entries() {
+        let d = draws();
+        let mut text = TextCache::default();
+        let mut prev = retained(&memo_spec(50., false, &d), &mut text, None);
+        let key: Arc<str> = "m.a".into();
+        for i in 0..MEMO_AGE + 3 {
+            prev = retained(&memo_spec(50., true, &d), &mut text, Some(&prev));
+            assert!(
+                text.runs.contains_key("kept"),
+                "the label's run was swept at {i}"
+            );
+            assert!(
+                text.outlines.rects.contains_key(&key),
+                "the button's rect was swept at {i}"
+            );
+        }
+        assert_eq!(count(&d), 2, "walked once when first built, once to renew");
     }
 }

@@ -184,7 +184,8 @@ impl RegionCache {
     }
     pub(crate) fn sweep(&mut self, age: u64) {
         let generation = self.generation;
-        self.entries.retain(|_, e| generation.wrapping_sub(e.5) <= age);
+        self.entries
+            .retain(|_, e| generation.wrapping_sub(e.5) <= age);
         self.generation = generation.wrapping_add(1);
     }
 }
