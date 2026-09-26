@@ -1511,6 +1511,31 @@ mod tests {
         );
     }
 
+    /// Like a canvas, an outline or a state style may capture an `Rc`.
+    #[test]
+    fn outline_and_state_closures_may_capture_a_non_send_handle() {
+        let seen = std::rc::Rc::new(std::cell::Cell::new(0));
+        let (c, d) = (seen.clone(), seen.clone());
+        let root = block(10., 10.)
+            .outline(move |s| {
+                c.set(c.get() + 1);
+                Path::polyline(
+                    [
+                        Point::ZERO,
+                        Point::new(s.width, 0.),
+                        Point::new(0., s.height),
+                    ],
+                    true,
+                )
+            })
+            .on(State::Hover, move |st| {
+                d.set(d.get() + 1);
+                st
+            });
+        resolve(&SceneSpec::new(root)).unwrap();
+        assert!(seen.get() >= 1);
+    }
+
     #[test]
     fn a_canvas_closure_may_capture_a_non_send_handle() {
         let seen = std::rc::Rc::new(std::cell::Cell::new(0));

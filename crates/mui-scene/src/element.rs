@@ -115,6 +115,16 @@ impl Draw {
 }
 
 /// Custom drawing: called with the node's size every frame, in the walk.
+///
+/// The tree's closures ([`Canvas`], [`StateStyle`], [`Outline`]) are not
+/// `Send`: a tree is built and resolved on one thread every frame, and a
+/// closure may capture an `Rc` or a `Cell`. Nothing that outlives the frame
+/// (the [`Resolver`](crate::Resolver)'s caches, `mui::Ui`) keeps a closure,
+/// only what it drew, so those stay `Send` without asking it of the tree.
+///
+/// Equality is identity: two are equal when they are the same `Arc`. A
+/// rebuilt closure compares unequal even when it draws the same thing, so
+/// `==` on a tree can say "changed" when nothing did, never the reverse.
 #[derive(Clone)]
 pub struct Canvas(pub Arc<dyn Fn(Size) -> Arc<[Draw]>>);
 impl std::fmt::Debug for Canvas {
@@ -180,6 +190,8 @@ pub enum State {
 /// let lift = StateStyle(Arc::new(|s: Style| s.fill(Role::Primary)));
 /// assert_eq!(lift.0(Style::default()).fill, Some(Fill::Role(Role::Primary)));
 /// ```
+///
+/// Not `Send`, and equality is identity; see [`Canvas`].
 #[derive(Clone)]
 pub struct StateStyle(pub Arc<dyn Fn(Style) -> Style>);
 impl std::fmt::Debug for StateStyle {
@@ -268,11 +280,10 @@ impl Semantics {
 /// merely drawn on top of a rectangular hit target. Its callback is evaluated at
 /// the layout size; it must return closed, consistently wound contours.
 ///
-/// `Send + Sync` so a weld's cached outline can hold it by identity: the
-/// same `Outline` at the same size is the same shape, and reusing the node
-/// across frames skips the boolean.
+/// Not `Send`, like [`Canvas`] and [`StateStyle`]: see [`Canvas`].
+/// Equality is identity; see [`Canvas`].
 #[derive(Clone)]
-pub struct Outline(pub Arc<dyn Fn(Size) -> Path + Send + Sync>);
+pub struct Outline(pub Arc<dyn Fn(Size) -> Path>);
 impl std::fmt::Debug for Outline {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("Outline(..)")
@@ -421,8 +432,9 @@ impl Default for Extras {
 impl Element {
     /// The rare fields, all unset when none was ever written.
     pub fn extras(&self) -> &Extras {
-        static NONE: Extras = Extras::NONE;
-        self.extras.as_deref().unwrap_or(&NONE)
+        // A promoted constant, not a `static`: no `Sync` asked of the
+        // closures an `Extras` can hold.
+        self.extras.as_deref().unwrap_or(&Extras::NONE)
     }
     pub fn extras_mut(&mut self) -> &mut Extras {
         self.extras.get_or_insert_default()
@@ -849,7 +861,7 @@ pub trait Styled: Paints {
     }
     /// A custom closed shape in local logical units. Use opposite contour
     /// winding for holes. The shape becomes paint, clip and hit geometry.
-    fn outline(mut self, shape: impl Fn(Size) -> Path + Send + Sync + 'static) -> Self {
+    fn outline(mut self, shape: impl Fn(Size) -> Path + 'static) -> Self {
         self.element_mut().extras_mut().outline = Some(Outline(Arc::new(shape)));
         self
     }
