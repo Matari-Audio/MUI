@@ -102,19 +102,18 @@ impl Request {
 }
 
 /// Hashed LRU: key -> bucket (collisions share a bucket), generation order.
+/// The generation clock is the caller's, so two Lrus can share one order.
 #[derive(Debug)]
 struct Lru<T> {
     map: FxHashMap<u64, Vec<(u64, T)>>,
     /// Generation -> key, oldest first.
     order: BTreeMap<u64, u64>,
-    tick: u64,
 }
 impl<T> Lru<T> {
     fn new() -> Self {
         Self {
             map: FxHashMap::default(),
             order: BTreeMap::new(),
-            tick: 0,
         }
     }
     fn len(&self) -> usize {
@@ -124,29 +123,47 @@ impl<T> Lru<T> {
         self.map.clear();
         self.order.clear();
     }
-    /// Find by key and full equality, and mark it most recently used.
-    fn get(&mut self, key: u64, eq: impl Fn(&T) -> bool) -> Option<&mut T> {
+    /// The generation `pop_oldest` would evict.
+    fn oldest(&self) -> Option<u64> {
+        self.order.first_key_value().map(|(g, _)| *g)
+    }
+    /// Find by key and full equality, and stamp it with `tick`.
+    fn get(&mut self, tick: u64, key: u64, eq: impl Fn(&T) -> bool) -> Option<&mut T> {
         let (generation, value) = self.map.get_mut(&key)?.iter_mut().find(|(_, v)| eq(v))?;
         self.order.remove(generation);
-        self.tick += 1;
-        *generation = self.tick;
-        self.order.insert(self.tick, key);
+        *generation = tick;
+        self.order.insert(tick, key);
         Some(value)
     }
-    fn insert(&mut self, key: u64, value: T) {
-        self.tick += 1;
-        self.order.insert(self.tick, key);
-        self.map.entry(key).or_default().push((self.tick, value));
+    fn insert(&mut self, tick: u64, key: u64, value: T) {
+        self.order.insert(tick, key);
+        self.map.entry(key).or_default().push((tick, value));
     }
+    /// The least recently used value. A broken map/order invariant is a bug
+    /// (debug builds stop), but release keeps evicting past it: stopping
+    /// early would overrun the byte budget for good.
     fn pop_oldest(&mut self) -> Option<T> {
-        let (generation, key) = self.order.pop_first()?;
-        let bucket = self.map.get_mut(&key)?;
-        let i = bucket.iter().position(|e| e.0 == generation)?;
-        let (_, value) = bucket.swap_remove(i);
-        if bucket.is_empty() {
-            self.map.remove(&key);
+        while let Some((generation, key)) = self.order.pop_first() {
+            if let Some(bucket) = self.map.get_mut(&key)
+                && let Some(i) = bucket.iter().position(|e| e.0 == generation)
+            {
+                let (_, value) = bucket.swap_remove(i);
+                if bucket.is_empty() {
+                    self.map.remove(&key);
+                }
+                return Some(value);
+            }
+            debug_assert!(false, "LRU order names a missing entry");
         }
-        Some(value)
+        // Order is empty: anything still mapped is orphaned. Evict it anyway.
+        debug_assert!(self.map.is_empty(), "LRU entry missing from its order");
+        let key = *self.map.keys().next()?;
+        let mut bucket = self.map.remove(&key)?;
+        let value = bucket.pop().map(|(_, v)| v);
+        if !bucket.is_empty() {
+            self.map.insert(key, bucket);
+        }
+        value.or_else(|| self.pop_oldest())
     }
 }
 
@@ -167,6 +184,8 @@ pub struct WeldCache {
     analytic_hits: u64,
     analytic_builds: u64,
     entries: Lru<Entry>,
+    /// One generation clock for both sides, so eviction is LRU across them.
+    tick: u64,
     limit: usize,
     bytes: usize,
     hits: u64,
@@ -184,6 +203,7 @@ impl WeldCache {
             analytic_hits: 0,
             analytic_builds: 0,
             entries: Lru::new(),
+            tick: 0,
             limit: bytes,
             bytes: 0,
             hits: 0,
@@ -204,6 +224,23 @@ impl WeldCache {
     // Conservative fixed payload accounting: up to 128 edges, uniforms, sources,
     // and Vec/Arc headers. Allocator/driver overhead is not represented.
     const ANALYTIC_SLOT_BYTES: usize = 32 * 1024;
+    fn tick(&mut self) -> u64 {
+        self.tick += 1;
+        self.tick
+    }
+    /// Evict the least recently used entry of either side; false when empty.
+    fn evict_oldest(&mut self) -> bool {
+        let analytic = self.analytic.oldest().unwrap_or(u64::MAX);
+        let bitmap = self.entries.oldest().unwrap_or(u64::MAX);
+        if analytic < bitmap {
+            self.analytic.pop_oldest().is_some()
+        } else if let Some(e) = self.entries.pop_oldest() {
+            self.bytes -= e.bytes;
+            true
+        } else {
+            self.analytic.pop_oldest().is_some()
+        }
+    }
     pub fn analytic_stats(&self) -> (u64, u64) {
         (self.analytic_hits, self.analytic_builds)
     }
@@ -224,9 +261,10 @@ impl WeldCache {
             .map(AnalyticSource::from_source)
             .collect::<Result<Vec<_>, _>>()?;
         let key = crate::analytic::geometry_key(&shapes, weld, scale);
+        let tick = self.tick();
         if let Some(a) = self
             .analytic
-            .get(key, |a| a.same_geometry(&shapes, weld, scale))
+            .get(tick, key, |a| a.same_geometry(&shapes, weld, scale))
         {
             Arc::make_mut(a).retarget(shapes, weld)?;
             self.analytic_hits += 1;
@@ -235,16 +273,8 @@ impl WeldCache {
         let a = Arc::new(AnalyticWeld::new(shapes, weld, scale)?);
         self.analytic_builds += 1;
         if Self::ANALYTIC_SLOT_BYTES <= self.limit {
-            while self.bytes() + Self::ANALYTIC_SLOT_BYTES > self.limit {
-                if self.analytic.pop_oldest().is_none() {
-                    if let Some(e) = self.entries.pop_oldest() {
-                        self.bytes -= e.bytes;
-                    } else {
-                        break;
-                    }
-                }
-            }
-            self.analytic.insert(key, a.clone());
+            while self.bytes() + Self::ANALYTIC_SLOT_BYTES > self.limit && self.evict_oldest() {}
+            self.analytic.insert(tick, key, a.clone());
         }
         Ok(a)
     }
@@ -252,7 +282,8 @@ impl WeldCache {
         // A cache never bypasses validation for a mutated request or quality.
         request.validate()?;
         let key = request.key();
-        if let Some(e) = self.entries.get(key, |e| e.request == *request) {
+        let tick = self.tick();
+        if let Some(e) = self.entries.get(tick, key, |e| e.request == *request) {
             self.hits = self.hits.saturating_add(1);
             return Ok(e.baked.clone());
         }
@@ -266,18 +297,11 @@ impl WeldCache {
             .ok_or(Error::Budget)?;
         // Oversized outputs can be used for this frame without evicting the whole
         // useful cache. The caller still owns its frame's Arc after an eviction.
-        let available = self
-            .limit
-            .saturating_sub(self.analytic.len() * Self::ANALYTIC_SLOT_BYTES);
-        if bytes <= available {
-            while self.bytes > available - bytes {
-                let Some(e) = self.entries.pop_oldest() else {
-                    break;
-                };
-                self.bytes -= e.bytes;
-            }
+        if bytes <= self.limit {
+            while self.bytes() > self.limit - bytes && self.evict_oldest() {}
             self.bytes += bytes;
             self.entries.insert(
+                tick,
                 key,
                 Entry {
                     request: request.clone(),
@@ -345,6 +369,32 @@ mod analytic_tests {
         let mut c = WeldCache::with_limit(0);
         c.analytic(&sources(), Weld::crisp(), 1.).unwrap();
         assert_eq!(c.bytes(), 0);
+    }
+    #[test]
+    fn a_full_analytic_side_yields_to_a_newer_bake() {
+        let mut c = WeldCache::with_limit(2 * WeldCache::ANALYTIC_SLOT_BYTES);
+        let at = |w: f64| {
+            let mut s = sources();
+            s[0].shape = Geometry::RoundedRect {
+                bounds: Rect::new(0., 0., w, 25.),
+                radius: 4.,
+            };
+            s
+        };
+        c.analytic(&at(40.), Weld::crisp(), 1.).unwrap();
+        c.analytic(&at(41.), Weld::crisp(), 1.).unwrap();
+        let request = Request {
+            sources: sources(),
+            weld: Weld::crisp(),
+            quality: crate::Quality::at_scale(0.25),
+        };
+        c.get(&request).unwrap();
+        c.get(&request).unwrap();
+        assert_eq!(c.stats(), (1, 1), "the bake was never retained");
+        assert!(c.bytes() <= 2 * WeldCache::ANALYTIC_SLOT_BYTES);
+        // The oldest analytic weld paid for it; the newer one stayed.
+        c.analytic(&at(41.), Weld::crisp(), 1.).unwrap();
+        assert_eq!(c.analytic_stats(), (1, 2));
     }
     #[test]
     fn invalid_morph_cannot_bypass_a_hit() {
