@@ -4,6 +4,47 @@ The spec every change in this pass follows. Where a builder has to choose a
 name not listed here, it follows the principles, adds a migration rule, and
 records the name in the "Decided during implementation" table at the bottom.
 
+## Before / after
+
+A knob with a readout and an icon, in the v1 DSL:
+
+```rust,ignore
+// before
+let (knob_el, changed) = knob(ui, "gain", v, 0.0..=1.0);
+column([
+    row([
+        icon(icons.clone(), sym::VOLUME_UP).text_size(20.0),
+        knob_el.size(L).el().tip("Gain"),
+    ])
+    .pad_xy(16.0, 8.0)
+    .border(Role::Dim, 1.0),
+    leaf(dot, dot).pill().fill(Role::Primary)
+        .anchor(Align::Center, Align::Center).offset(0.0, 0.0),
+    label(caption).fill(Role::Dim).min_width(120.0).expand(),
+])
+.gap(Xs)
+```
+
+and now (this block is compiled by `cargo test --doc -p mui`):
+
+```rust
+# use mui::prelude::*;
+# let (mut ui, mut v, dot, caption) = (Ui::default(), 0.5, 6, "-6 dB");
+# let ui = &mut ui;
+let gain = knob(ui, "gain", "Gain", &mut v, 0.0..=1.0).size(L).tip("Gain");
+let changed = gain.changed;
+col![
+    row![icon(sym::VOLUME_UP).text_size(20), gain]
+        .pad((16, 8))
+        .stroke(Role::Dim)
+        .stroke_width(1),
+    block(dot, dot).pill().fill(Role::Primary).centered(),
+    body(caption).fill(Role::Dim).min_w(120).grow(1),
+]
+.gap(Xs)
+# ;
+```
+
 ## Principles
 
 1. **One way to say a thing.** No alias verbs, no parallel constructor and
@@ -137,7 +178,7 @@ error. Icons: `mui_symbols::sym::HOME` generated `char` consts replace
 `resolve_scene_animated`, `resolve_scene_retained` →
 one `Resolver` that owns the caches:
 
-```rust
+```rust,ignore
 let mut r = Resolver::new();          // caches live here
 let scene = r.resolve(&spec)?;        // &ResolvedScene, kept for the next call's memos
 let scene = r.resolve_after(&spec, glide, prev)?; // a runtime that keeps its own scenes
@@ -155,7 +196,7 @@ resolve(&spec)?                       // free fn for the uncached one-shot
 
 Every widget returns `#[must_use] Response<C = bool>`:
 
-```rust
+```rust,ignore
 pub struct Response<C = bool> { pub el: El, pub changed: C }
 ```
 
@@ -171,33 +212,6 @@ model (`&mut` value in, `changed` out).
 `mui-truce::Bridge::bind(ui, P::Gain, |ui, id, v| knob(ui, id, "Gain", v, 0.0..=1.0))`
 — the id is derived from the parameter and handed to the closure, so it
 cannot be typed twice. `bind_bool` exists for toggles.
-
-### Before / after
-
-```rust
-// before
-column([
-    overlay([
-        leaf(size, size).pill().preset(look.face(Role::Raised))
-            .role(Kind::Slider { value, min, max }).label(label.clone())
-            .focusable().id(id),
-        leaf(dot, dot).pill().fill(look.role)
-            .anchor(Align::Center, Align::Center).offset(x, y),
-    ]),
-    text(caption).fill(Role::Dim),
-]).gap(Xs).align(Align::Center)
-
-// after
-col![
-    stack![
-        block(size, size).pill().preset(look.face(Role::Raised))
-            .a11y(A11y::Slider { value, min, max }).named(&label)
-            .focusable().id(id),
-        block(dot, dot).pill().fill(look.role).centered_at(x, y),
-    ],
-    body(caption).fill(Role::Dim),
-].gap(Xs).align(Align::Center)
-```
 
 ## Structure changes
 

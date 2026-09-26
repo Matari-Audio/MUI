@@ -63,10 +63,15 @@ pub mod prelude {
         Role, S, SceneSpec, Shadow, ShapeLayout, Size, Spacing, State, Style, Styled, Theme,
         Weight, Weld, WeldBackend, WeldChannel, WeldQuality, Xl, Xs, block, body, canvas,
         canvas_keyed, caption, clamp, col, cq, fits, grid, icon, pct, resolve, row, spacer, stack,
-        step, text, title, weld,
+        step, sym, text, title, weld,
     };
     pub use mui_scene::{Corners, Mode, Palette, Pigment, SpacingToken, Spring};
 }
+
+/// The before/after example in `docs/DSL-V2.md`, compiled.
+#[cfg(doctest)]
+#[doc = include_str!("../../../docs/DSL-V2.md")]
+struct DslDoctests;
 
 /// Every runnable `rust` block in the README, compiled and run by
 /// `cargo test --doc`; `rust,ignore` blocks remain illustrative by design.

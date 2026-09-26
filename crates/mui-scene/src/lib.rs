@@ -88,6 +88,8 @@ pub mod prelude {
     pub use mui_geometry::{CornerStyle, Path, Point};
     pub use mui_layout::Spacing;
     pub use mui_layout::SpacingToken::{L, M, S, Xl, Xs};
+    /// The icon codepoints: `icon(sym::HOME)`.
+    pub use mui_symbols::sym;
     /// `n` steps of the theme's spacing unit: `.gap(step(1.5))`, for the
     /// values between `Xs` and `Xl`.
     ///

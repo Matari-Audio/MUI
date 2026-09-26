@@ -66,15 +66,15 @@ let mut bypass = false;
 
 // Built every frame, like an immediate-mode tree. Widgets read last frame's
 // gesture on their id, so state lives in your own variables.
+let bypassed = toggle(&mut ui, "bypass", "Bypass", &mut bypass).size(S).tip("Bypass the filter");
 let root = col![
-    row![title("Filter"), spacer(), toggle(&mut ui, "bypass", "Bypass", &mut bypass).size(S)]
-        .center()
-        .tip("Bypass the filter"),
-    slider(&mut ui, "cutoff", "Cutoff", &mut cutoff, 0.0..=1.0),
+    row![title("Filter"), spacer(), bypassed].center(),
+    slider(&mut ui, "cutoff", "Cutoff", &mut cutoff, 0.0..=1.0).value_text(format!("{:.0} Hz", cutoff * 20e3)),
+    meter(&mut ui, "level", cutoff),
 ]
 .gap(M)
 .pad(L)
-.radius(20.0)
+.radius(20)
 .fill(Role::Surface)
 .shadow(Shadow::soft(12.0));
 
@@ -131,6 +131,8 @@ assert_eq!(scene.surface("tab").unwrap().frame.size.width, 92.0);
 | `row([..])`, `col([..])`, `stack([..])`, `grid(3, [..])` | the same four, taking an iterator |
 | `block(w, h)`, `spacer()`, `text("..")` | a sized box, a `grow(1)` gap, a measured text run |
 | `title("..")`, `body("..")`, `caption("..")` | text at the theme's `type_scale`: 18, 13 and 11 px by default |
+| `icon(sym::HOME)` | a Material Symbols glyph in `Theme::icon_font`; `.font(f)` for another face |
+| `.at(8, 4)`, `.offset(dx, dy)`, `.centered()`, `.centered_at(dx, dy)` | placement in a stack or grid cell: from the top-left, a nudge, or centred. Any number type works in every numeric argument |
 | `.gap(M)`, `.pad(S)`, `.pad(12)`, `.pad((16, 8))`, `.gap(step(1.5))` | spacing tokens `Xs S M L Xl` from the theme, `n` units of its grid, or pixels; a pair is `(x, y)`, `Insets` sets each side |
 | `.grow(w)`, `.shrink(w)`, `.basis(px)` | flexbox weights: `.grow(1)` takes a share of the surplus |
 | `.w(Len::Pct(50))`, `.aspect(16.0 / 9.0)` | percentage and ratio sizes |
