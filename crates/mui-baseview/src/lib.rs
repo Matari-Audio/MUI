@@ -58,7 +58,7 @@ impl Requests {
 }
 
 /// Open the window under `parent`, `size` logical points.
-pub fn open<V: View>(
+pub fn open<V: View + Send + 'static>(
     parent: &impl HasRawWindowHandle,
     title: &str,
     size: (u32, u32),
@@ -72,7 +72,7 @@ pub fn open<V: View>(
 
 /// Run a top-level window of `size` logical points at the system scale, until
 /// it closes: an app's main loop.
-pub fn run<V: View>(
+pub fn run<V: View + Send + 'static>(
     title: &str,
     size: (u32, u32),
     shared: Arc<Mutex<Shared<V>>>,
@@ -84,7 +84,7 @@ pub fn run<V: View>(
 }
 
 /// The window options and the handler constructor `open` and `run` share.
-fn prepare<V: View>(
+fn prepare<V: View + Send + 'static>(
     title: &str,
     size: (u32, u32),
     scale: WindowScalePolicy,

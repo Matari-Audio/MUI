@@ -613,6 +613,7 @@ dependencies = [
 name = "mui"
 version = "0.4.0"
 dependencies = [
+ "color",
  "mui-geometry",
  "mui-input",
  "mui-layout",

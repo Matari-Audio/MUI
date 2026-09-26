@@ -399,3 +399,33 @@ fn a_refused_layout_does_not_replay_the_keys_it_took() {
     }
     assert_eq!(r.s.view.enters, 1, "one press, read once");
 }
+
+/// A plain surface that draws the pointer: every hover over it is a frame.
+struct Tracker;
+
+impl View for Tracker {
+    fn build(&mut self, ui: &mut Ui, input: &Input) -> El {
+        Pad.build(ui, input)
+    }
+    fn changed(&mut self) -> bool {
+        false
+    }
+    fn request_resize(&mut self, _: u32, _: u32) -> bool {
+        false
+    }
+    fn still(&self, _: &Ui, from: Option<Point>, to: Option<Point>) -> bool {
+        from == to
+    }
+}
+
+#[test]
+fn a_view_that_draws_the_pointer_rebuilds_on_an_inert_hover() {
+    let mut r = Rig::new(Tracker, (200, 200), 1.0);
+    r.step();
+    r.d.pointer_moved(at(50.0, 50.0), none());
+    r.step();
+    while r.step() {}
+    r.d.pointer_moved(at(51.0, 50.0), none());
+    assert!(r.step(), "Ui::inert says skip, the view says it moved");
+    assert_eq!(r.d.framed, Some(at(51.0, 50.0)));
+}

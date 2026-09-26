@@ -30,7 +30,10 @@ use crate::{Clipboard, Ui};
 const MAX_DT: f64 = 1.0;
 
 /// What the window asks of whoever owns the model.
-pub trait View: Send + 'static {
+///
+/// No `Send` or `'static` here: a window crate that moves the model to its
+/// window thread asks for them where it does.
+pub trait View {
     /// This frame's tree, and the input the frame is about to take.
     fn build(&mut self, ui: &mut Ui, input: &Input) -> El;
     /// Whether the model moved outside the `Ui` since the last call --
@@ -46,6 +49,14 @@ pub trait View: Send + 'static {
     /// The gesture in flight was cancelled: focus left, or the window closes.
     fn cancel(&mut self, ui: &Ui) {
         let _ = ui;
+    }
+    /// Whether a hover from `from` to `to` (scene units) leaves the view
+    /// unchanged. The driver skips a hover `Ui::inert` passes only if this
+    /// agrees: a canvas that draws a hover line or a hovered note returns
+    /// `false` when either point is over it.
+    fn still(&self, ui: &Ui, from: Option<Point>, to: Option<Point>) -> bool {
+        let _ = (ui, from, to);
+        true
     }
     /// A UI zoom on top of the window's scale: 2 draws everything twice as
     /// big and offers the tree half the logical size. Read once per tick.
@@ -174,6 +185,8 @@ pub struct Driver {
     failing: bool,
     /// Keys down, and whether the window kept each press.
     held: Vec<(u64, bool)>,
+    /// The pointer the last laid-out frame saw.
+    framed: Option<Point>,
     /// At most one frame per this, when set: events wait for the next.
     pub min_interval: Option<Duration>,
 }
@@ -197,6 +210,7 @@ impl Driver {
             asked_to_grow: false,
             failing: false,
             held: Vec::new(),
+            framed: None,
             min_interval: None,
         }
     }
@@ -393,13 +407,13 @@ impl Driver {
         }
         let due = self.wake_at.is_some_and(|at| now >= at);
         if s.ui.scene().is_some() && !self.dirty && !self.animating && !due {
-            // A hover that lands on what it already hovers changes nothing.
-            let ui = &mut s.ui;
-            if self
-                .pending
-                .iter()
-                .all(|p| matches!(p, Pending::Move(i) if ui.inert(i)))
-            {
+            // A hover that lands on what it already hovers changes nothing,
+            // unless the view draws the pointer itself.
+            let (ui, view, framed) = (&mut s.ui, &s.view, self.framed);
+            if self.pending.iter().all(|p| {
+                matches!(p, Pending::Move(i)
+                    if ui.inert(i) && view.still(ui, framed, i.pointer.pos))
+            }) {
                 self.pending.clear();
                 return false;
             }
@@ -473,9 +487,11 @@ impl Driver {
         self.line = s.ui.theme().text;
         let root = s.view.build(&mut s.ui, &input);
         let offered = logical_size(self.size, self.ui_scale());
+        let pos = input.pointer.pos;
         match s.ui.frame(root, Some(offered), input, dt) {
             Ok(frame) => {
                 self.failing = false;
+                self.framed = pos;
                 self.cursor = frame.cursor;
                 // An edge is dispatched by the tree after the frame that
                 // delivered it: that tree has to come even if nothing moves.
