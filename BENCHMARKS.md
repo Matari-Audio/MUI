@@ -25,6 +25,28 @@ lattice pass, one sqrt per contour/boundary query. Output checksums unchanged.
 | crisp, 3 rects, 516x196 | 193.4 ms | 21.0 ms | 163.4 ms |
 | blend, rect + 40-gon, 488x308 | 133.1 ms | 10.6 ms | 62.7 ms |
 
+## v0.4 cleanup (2026-09-26)
+
+After the per-key state table, fewer per-frame allocations, memos keyed by
+id and `Ui` settings as accessors (`bb1f7f8`..`53eb014`). Load average ~15
+on 16 threads, so treat the times as upper bounds; allocation counts are exact.
+
+`cargo run -p mui --profile perf --example frame_bench` (2191 nodes, thread
+CPU time of `Ui::frame` alone):
+
+| frame | median | min | allocations |
+|---|---:|---:|---:|
+| steady | 1.159 ms | 1.101 ms | 7087 |
+| hover | 1.154 ms | 1.111 ms | 7107 |
+| resize | 2.002 ms | 1.856 ms | 18606 |
+| tooltip | 1.450 ms | 1.137 ms | 7102 |
+
+`cargo test -p mui --test frame_alloc -- --nocapture --ignored` (fifty
+widgets): build 353 + frame 60 = 413 allocations per frame.
+
+No baseline: `frame_bench` existed at `bb916f1` but no numbers from it were
+recorded here or in its PR, and old trees are not re-run.
+
 ## Since `780c3f4`: render-perf, scene-copies, interaction-access, daw-host
 
 Base `780c3f4` against the merge of the four branches, run alternately
