@@ -123,6 +123,7 @@ fn a_press_and_its_release_bracket_the_gesture() {
     let f = ui.frame(tree(), None, at(10., 10., true), 0.016).unwrap();
     assert_eq!(f.edits, vec![("b".to_owned(), Edit::Begin)]);
     assert_eq!(ui.edit("b"), Some(Edit::Begin));
+    assert_eq!(ui.edits(), [("b".to_owned(), Edit::Begin)]);
     let f = ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
     assert_eq!(f.edits, vec![("b".to_owned(), Edit::End)]);
     assert_eq!(ui.edit("b"), Some(Edit::End));

@@ -638,6 +638,13 @@ impl Ui {
             .map(|(_, e)| *e)
     }
 
+    /// Every gesture edge the last frame delivered, in order, for a host
+    /// that dispatches them all rather than asking per control.
+    pub fn edits(&self) -> &[(String, Edit)] {
+        // `edits` is the queue still to deliver; this is what went out.
+        self.delivered.as_slice()
+    }
+
     /// End an editor session without requiring another successful layout/frame.
     /// The host must dispatch the returned edges before destroying its editor.
     /// Calling this again returns no duplicate End events.
