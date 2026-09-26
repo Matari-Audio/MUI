@@ -733,6 +733,7 @@ dependencies = [
  "mui-geometry",
  "mui-scene",
  "mui-weld",
+ "pollster",
  "rustc-hash 2.1.3",
  "vello",
  "vello_common",

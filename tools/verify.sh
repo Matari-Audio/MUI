@@ -22,8 +22,11 @@ cargo check --workspace --all-features --exclude mui-preview --exclude mui-gain-
 # of the root so plugin builds never compile it. Same gate, its own lockfile.
 # mui-stage's default `backends` feature is the only feature; --all-features
 # keeps it on. No wasm check: these crates own a native device or ffmpeg.
+# ponytail: no --locked here. media/Cargo.lock also pins the root crates'
+# dependencies, so --locked would fail on every root dependency change; the
+# gate refreshes it instead and git status shows the diff.
 # ---------------------------------------------------------------------------
 cargo fmt --manifest-path media/Cargo.toml -p mui-stage -p mui-reel -p mui-motion-bridge -- --check
-cargo test --manifest-path media/Cargo.toml --workspace --all-features --locked --offline
-cargo clippy --manifest-path media/Cargo.toml --workspace --all-features --all-targets --locked --offline -- -D warnings
-cargo check --manifest-path media/Cargo.toml -p mui-stage --no-default-features --locked --offline
+cargo test --manifest-path media/Cargo.toml --workspace --all-features --offline
+cargo clippy --manifest-path media/Cargo.toml --workspace --all-features --all-targets --offline -- -D warnings
+cargo check --manifest-path media/Cargo.toml -p mui-stage --no-default-features --offline
