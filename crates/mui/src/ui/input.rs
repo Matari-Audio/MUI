@@ -84,7 +84,7 @@ impl Ui {
     pub fn keys(&self, id: impl Into<Id>) -> &[KeyPress] {
         let id: Id = id.into();
         let id = id.as_str();
-        if self.focused(id) { &self.keys } else { &[] }
+        if self.focused(Id::runtime(id)) { &self.keys } else { &[] }
     }
     /// Every key this frame, whatever holds the focus: the stream a global
     /// shortcut reads. `Ui` has already taken Tab and Escape for focus, and
@@ -125,7 +125,7 @@ impl Ui {
     pub fn text(&self, id: impl Into<Id>) -> &str {
         let id: Id = id.into();
         let id = id.as_str();
-        if self.focused(id) { &self.typed } else { "" }
+        if self.focused(Id::runtime(id)) { &self.typed } else { "" }
     }
     /// The pointer relative to `id`'s frame origin, if both exist.
     pub fn local(&self, id: impl Into<Id>) -> Option<Point> {
@@ -472,7 +472,7 @@ impl Ui {
             *value = next;
             return changed;
         }
-        let r = self.get(id);
+        let r = self.get(Id::runtime(id));
         if !r.dragged || !px.is_finite() || px <= 0.0 || !value.is_finite() {
             return false;
         }
@@ -544,7 +544,7 @@ impl Ui {
                 keys.push(k);
             }
             // A scrollbar's heat is the runtime's own tween, under its node's key.
-            if let (Some(bar), Some((_, s))) = (k.strip_prefix("/bar"), &n.tween)
+            if let (Some(bar), Some((_, s))) = (k.strip_prefix("/bar/"), &n.tween)
                 && !at_rest(s)
             {
                 keys.push(bar);

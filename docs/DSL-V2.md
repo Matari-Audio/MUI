@@ -261,3 +261,5 @@ col![
 | `icon(font, sym)` | `icon(sym)`, drawn in `Theme::icon_font` (an `Option<Font>`, `None` by default); `.font(f)` overrides it. Rule: `icon(f, s)` -> `icon(s).font(f)`, with a note to move a shared face into the theme | one argument per icon; the icon face is set once. An icon is marked by the `Element::ICON` flag, read at resolve time |
 | `Theme: Copy` | `Theme: Clone` (it holds the icon `Font`, an `Arc`) | `ui.theme().clone()` where a copy was taken; the resolver borrows it |
 | playground `border(c, w)`, `width`, `height`, `pad_xy`, `no_border` | `stroke(c).stroke_width(w)`, `w`, `h`, `pad(x, y)`, `no_stroke` | the text DSL follows the Rust names |
+| scrollbar heat tween key `format!("/bar{key}")` | `Id::runtime("/bar").field(key)`, `/bar/<key>`, built in place (inline for short keys) | no `String` per bar per frame |
+| a runtime key read through `Ui` (`ui.scroll("/0")`) | `ui.scroll(Id::runtime("/0"))` | a `&str` converts through `Id::of`, which refuses `/` names in debug builds (principle 6) |

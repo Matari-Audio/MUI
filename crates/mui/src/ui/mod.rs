@@ -549,7 +549,7 @@ impl Ui {
         };
         match action {
             SemanticAction::Focus { id } if surface.focusable => {
-                self.focus(id);
+                self.focus(Id::runtime(&id));
                 true
             }
             SemanticAction::Activate { id }

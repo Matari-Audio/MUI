@@ -178,7 +178,7 @@ fn an_unnamed_scroller_scrolls() {
     ui.frame(tree(), None, PointerInput::default(), 0.016)
         .unwrap();
     ui.frame(tree(), None, wheel, 0.016).unwrap();
-    assert_eq!(ui.scroll("/0"), [0., 30.]);
+    assert_eq!(ui.scroll(Id::runtime("/0")), [0., 30.]);
     // Long enough for the glide to land.
     let f = ui.frame(tree(), None, Input::default(), 1.0).unwrap();
     assert_eq!(f.scene.surface("/0/0").unwrap().frame.y, -30.);

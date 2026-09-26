@@ -11,7 +11,7 @@ impl Ui {
     pub fn tween(&mut self, id: impl Into<Id>, target: f64) -> f64 {
         let id: Id = id.into();
         let id = id.as_str();
-        self.tween_with(id, target, Spring::DEFAULT)
+        self.tween_with(Id::runtime(id), target, Spring::DEFAULT)
     }
     /// [`Ui::tween`] with your own spring. The spring's shape is taken on
     /// the first call for `id`.

@@ -122,8 +122,10 @@ impl Ui {
             let t: &mut f64 = targets.entry(Id::runtime(key)).or_default();
             *t = t.max(target);
         }
+        // The heat's tween is `/bar/<key>`, a runtime id built in place.
+        let bar = Id::runtime("/bar");
         for (key, target) in &mut targets {
-            *target = self.tween(&format!("/bar{key}"), *target);
+            *target = self.tween(bar.field(key), *target);
         }
         targets
     }
