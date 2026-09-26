@@ -16,9 +16,7 @@ use mui_geometry::{Path, Point};
 use mui_layout::{Id, Node, Px, Size, Spacing};
 use mui_motion::Spring;
 use mui_text::{Axes, Weight};
-use std::cell::RefCell;
-use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 /// One stroke or fill a canvas hands back, in the canvas's own pixels.
 ///
@@ -142,16 +140,27 @@ impl PartialEq for Canvas {
 ///
 /// The key must cover everything the drawing closure reads. Reusing a key at
 /// the same size deliberately reuses the old immutable draw list.
-type CacheSlot<K> = Rc<RefCell<Option<(K, Size, Arc<[Draw]>)>>>;
+///
+/// `Send` (for a `Send` key), so a view that keeps one can go to a window
+/// thread; only the canvas painting it ever locks it.
+type Drawn<K> = Option<(K, Size, Arc<[Draw]>)>;
+type CacheSlot<K> = Arc<Mutex<Drawn<K>>>;
 pub struct CanvasCache<K>(CacheSlot<K>);
 impl<K> CanvasCache<K> {
     pub fn new() -> Self {
-        Self(Rc::new(RefCell::new(None)))
+        Self(Arc::new(Mutex::new(None)))
+    }
+    /// The slot, through a poisoned lock: the memo is only ever a whole
+    /// draw list or none.
+    fn slot(&self) -> std::sync::MutexGuard<'_, Drawn<K>> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 impl<K> Clone for CanvasCache<K> {
     fn clone(&self) -> Self {
-        Self(Rc::clone(&self.0))
+        Self(Arc::clone(&self.0))
     }
 }
 impl<K> Default for CanvasCache<K> {
@@ -582,14 +591,14 @@ pub fn canvas_keyed<K: Clone + PartialEq + 'static>(
     let cache = cache.clone();
     Node::stack([]).with(Element {
         content: Content::Canvas(Canvas(Arc::new(move |size| {
-            if let Some((old_key, old_size, draws)) = cache.0.borrow().as_ref()
+            if let Some((old_key, old_size, draws)) = cache.slot().as_ref()
                 && *old_key == key
                 && *old_size == size
             {
                 return Arc::clone(draws);
             }
             let draws: Arc<[Draw]> = f(size).into();
-            *cache.0.borrow_mut() = Some((key.clone(), size, Arc::clone(&draws)));
+            *cache.slot() = Some((key.clone(), size, Arc::clone(&draws)));
             draws
         }))),
         ..Element::default()

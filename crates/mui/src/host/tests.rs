@@ -429,3 +429,17 @@ fn a_view_that_draws_the_pointer_rebuilds_on_an_inert_hover() {
     assert!(r.step(), "Ui::inert says skip, the view says it moved");
     assert_eq!(r.d.framed, Some(at(51.0, 50.0)));
 }
+
+/// A plugin view keeps its canvas caches and goes to the window thread
+/// behind `Arc<Mutex<Shared<V>>>`, so all of it must be `Send`. The tree
+/// (`El`) is not, by design: it is built and painted on one thread.
+#[test]
+fn shared_state_with_canvas_caches_is_send() {
+    fn send<T: Send>() {}
+    fn shared<T: Send + Sync>() {}
+    type Cache = crate::prelude::CanvasCache<u64>;
+    send::<Ui>();
+    send::<Cache>();
+    // A view that is nothing but a cache stands in for one that keeps some.
+    shared::<std::sync::Arc<Mutex<Shared<Cache>>>>();
+}
