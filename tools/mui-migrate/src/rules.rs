@@ -147,6 +147,28 @@ pub const RULES: &[Rule] = &[
     // what lets the rule insert `id`; if `args` learns closures, this becomes 4 args.
     Call { chain: &[("bind", &[A, Has("\""), A, A, A])], to: ".bind($1, $3, $4, id, $5)", gate: Mui, needs: &[] },
     Manual { pattern: ". bind (", note: "`Bridge::bind`'s closure is `|ui, id, v|`: pass `id` to the widget; a toggle can use `bind_bool(ui, P, |ui, id, on| ..)`" },
+    // Geometry: kurbo is the one Point/Vec2/Rect/Affine (mui-geometry, mui-weld re-export it).
+    // `Rect::from_points` is kurbo's two-corner constructor, so the ring form is flagged too.
+    Manual { pattern: "Bounds :: from_points", note: "`Bounds::from_points(ring)` is `mui_geometry::bounds(ring)` (kurbo's `Rect::from_points` takes two corners)" },
+    Type { old: "Bounds", new: "Rect" },
+    Manual { pattern: ". min . x", note: "`Bounds { min, max }` became kurbo `Rect { x0, y0, x1, y1 }`: `.min.x` -> `.x0`, `.min.y` -> `.y0`, `.min` -> `.origin()`" },
+    Manual { pattern: ". max . x", note: "`Bounds { min, max }` became kurbo `Rect { x0, y0, x1, y1 }`: `.max.x` -> `.x1`, `.max.y` -> `.y1`" },
+    Manual { pattern: ". translated (", note: "`Bounds::translated(d)` is `rect + d`; `RoundedRect::translated` takes a `Vec2`" },
+    Method { old: "finite", new: "is_finite", gate: Mui },
+    Method { old: "perpendicular", new: "turn_90", gate: Mui },
+    Manual { pattern: ". rotated (", note: "`Point::rotated(a)` is gone: `Vec2::from_angle(a) * r`, or `Affine::rotate(a) * p`" },
+    Manual { pattern: "Affine :: translation", note: "kurbo `Affine`: `translation(x, y)` -> `translate((x, y))`, `a.then(b)` -> `b * a`, `t.apply(p)` -> `t * p`" },
+    Manual { pattern: "Affine :: rotation", note: "kurbo `Affine`: `rotation(a)` -> `rotate(a)`, `rotation_about(a, p)` -> `rotate_about(a, p)`, `a.then(b)` -> `b * a`" },
+    Manual { pattern: "Affine :: scale (", note: "kurbo `Affine::scale` is uniform: `scale(x, y)` -> `scale_non_uniform(x, y)`" },
+    Manual { pattern: ". rigid_transform (", note: "`Path::rigid_transform` and `Path::translate` take a `Vec2` (`p.to_vec2()`)" },
+    Manual { pattern: "drag_delta : Point", note: "`Response::drag_delta` and `drag_total` are `Vec2` (a kurbo `Point` has no `+ Point`)" },
+    Manual { pattern: "drag_total : Point", note: "`Response::drag_total` is a `Vec2`" },
+    Manual { pattern: "Edge :: Arc {", note: "build a weld arc with `Edge::arc(center, radius, start, sweep)`; the variant also carries unit `from`/`to` vectors, so match it with `..`" },
+    // Spacing tokens moved crates. ponytail: reported, not rewritten -- the tool has no
+    // path-move rule yet (see PENDING-RULES-geometry.md).
+    Manual { pattern: "mui_geometry :: Spacing", note: "`Spacing` lives in `mui_layout` (and `mui::prelude`)" },
+    Manual { pattern: "mui_geometry :: SpacingScale", note: "`SpacingScale` lives in `mui_layout`" },
+    Manual { pattern: "mui_geometry :: SpacingToken", note: "`SpacingToken` lives in `mui_layout`" },
 ];
 
 /// The widget phase of the spec (`Response`, option structs, argument
