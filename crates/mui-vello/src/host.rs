@@ -53,6 +53,38 @@ pub enum Frame {
     SurfaceLost,
 }
 
+/// Why a [`Host`] could not paint.
+#[derive(Debug)]
+pub enum HostError {
+    /// No adapter can present to the surface.
+    Adapter(wgpu::RequestAdapterError),
+    /// The adapter refused a device.
+    Device(wgpu::RequestDeviceError),
+    /// The surface offers nothing MUI can paint into.
+    Surface(&'static str),
+    /// The renderer failed: creating it, resizing it, or a frame.
+    Render(crate::effects::Error),
+    /// Acquiring the surface texture failed validation. Acquiring again
+    /// would fail the same way, so this is not a lost surface.
+    Validation,
+    /// The device was lost, and opening a new one failed with this. The
+    /// next [`Host::present`] after a short wait tries again.
+    DeviceLost(Box<HostError>),
+}
+impl std::fmt::Display for HostError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Adapter(e) => write!(f, "GPU adapter: {e}"),
+            Self::Device(e) => write!(f, "GPU device: {e}"),
+            Self::Surface(s) => write!(f, "GPU surface: {s}"),
+            Self::Render(e) => write!(f, "{e}"),
+            Self::Validation => f.write_str("GPU surface texture failed validation"),
+            Self::DeviceLost(e) => write!(f, "rebuilding a lost device: {e}"),
+        }
+    }
+}
+impl std::error::Error for HostError {}
+
 /// Everything that lives on one device, rebuilt whole when it is lost:
 /// pipelines, atlases, weld textures and retained encodings die with it.
 struct OnDevice {
@@ -71,31 +103,36 @@ impl OnDevice {
         instance: &wgpu::Instance,
         surface: Option<&wgpu::Surface<'_>>,
         size: (u32, u32),
-    ) -> Result<Self, String> {
+    ) -> Result<Self, HostError> {
         // A desktop with an iGPU enumerates it first; paint on the card.
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             compatible_surface: surface,
             power_preference: wgpu::PowerPreference::HighPerformance,
             ..Default::default()
         }))
-        .map_err(|e| e.to_string())?;
+        .map_err(HostError::Adapter)?;
         let (device, queue) =
             pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
-                .map_err(|e| e.to_string())?;
+                .map_err(HostError::Device)?;
         let lost = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&lost);
         device.set_device_lost_callback(move |_, _| flag.store(true, Ordering::Release));
+        // wgpu's default panics, which in a plugin is the host's crash. An
+        // error no scope caught is logged; a loss is still seen above.
+        device.on_uncaptured_error(Arc::new(|e| {
+            eprintln!("mui-vello: uncaptured GPU error: {e}");
+        }));
         let limit = device.limits().max_texture_dimension_2d;
         let (width, height) = target_size(size.0.min(limit), size.1.min(limit)).unwrap_or((1, 1));
         let config = match surface {
             Some(surface) => {
                 let format = surface_format(&surface.get_capabilities(&adapter).formats)
-                    .ok_or("no non-sRGB UNORM surface format")?;
+                    .ok_or(HostError::Surface("no non-sRGB UNORM surface format"))?;
                 let config = wgpu::SurfaceConfiguration {
                     format,
                     ..surface
                         .get_default_config(&adapter, width, height)
-                        .ok_or("surface has no default configuration")?
+                        .ok_or(HostError::Surface("no default configuration"))?
                 };
                 surface.configure(&device, &config);
                 config
@@ -120,7 +157,7 @@ impl OnDevice {
             [width, height],
             Budget::default(),
         ))
-        .map_err(|e| e.to_string())?;
+        .map_err(HostError::Render)?;
         Ok(Self {
             device,
             queue,
@@ -132,6 +169,14 @@ impl OnDevice {
 
     fn lost(&self) -> bool {
         self.lost.load(Ordering::Acquire)
+    }
+
+    /// [`OnDevice::lost`] after polling the device, which is where wgpu
+    /// runs the lost callback: an idle window submits nothing that would.
+    fn poll_lost(&self) -> bool {
+        // A lost device errors here; the flag is what answers.
+        let _ = self.device.poll(wgpu::PollType::Poll);
+        self.lost()
     }
 }
 
@@ -153,7 +198,7 @@ impl Host {
         instance: wgpu::Instance,
         surface: wgpu::Surface<'static>,
         size: (u32, u32),
-    ) -> Result<Self, String> {
+    ) -> Result<Self, HostError> {
         let gpu = OnDevice::open(&instance, Some(&surface), size)?;
         Ok(Self {
             instance,
@@ -175,15 +220,16 @@ impl Host {
     }
 
     /// The device was lost; the next [`Host::present`] rebuilds it. An idle
-    /// window polls this so it does not wait for an event to find out.
+    /// window polls this so it does not wait for an event to find out: it
+    /// polls the device, which is where wgpu runs its lost callback.
     pub fn device_lost(&self) -> bool {
-        self.gpu.lost()
+        self.gpu.poll_lost()
     }
 
     /// Resize to `width` x `height` physical pixels, clamped to what the
     /// device and a vello scene hold. Zero hides: presents skip until a
     /// real size comes back.
-    pub fn resize(&mut self, width: u32, height: u32) -> Result<(), String> {
+    pub fn resize(&mut self, width: u32, height: u32) -> Result<(), HostError> {
         self.wanted = target_size(width, height);
         let Some((width, height)) = self.wanted else {
             return Ok(());
@@ -201,7 +247,7 @@ impl Host {
         } = &mut self.gpu;
         renderer
             .resize([width, height])
-            .map_err(|e| format!("resize to {width}x{height}: {e}"))?;
+            .map_err(HostError::Render)?;
         config.width = width;
         config.height = height;
         self.surface.configure(device, config);
@@ -219,7 +265,7 @@ impl Host {
     /// Paint `scene` under `xf` and present it. `Err` is a render or
     /// device-rebuild failure, not a lost surface; painting the same scene
     /// again would fail the same way.
-    pub fn present(&mut self, scene: &ResolvedScene, xf: Affine) -> Result<Frame, String> {
+    pub fn present(&mut self, scene: &ResolvedScene, xf: Affine) -> Result<Frame, HostError> {
         self.present_inner::<fn(&mut Classic<'_>)>(scene, xf, None)
     }
 
@@ -229,7 +275,7 @@ impl Host {
         scene: &ResolvedScene,
         xf: Affine,
         overlay: F,
-    ) -> Result<Frame, String> {
+    ) -> Result<Frame, HostError> {
         self.present_inner(scene, xf, Some(overlay))
     }
 
@@ -238,7 +284,7 @@ impl Host {
         scene: &ResolvedScene,
         xf: Affine,
         overlay: Option<F>,
-    ) -> Result<Frame, String> {
+    ) -> Result<Frame, HostError> {
         use wgpu::CurrentSurfaceTexture as Acquired;
         let Some(size) = self.wanted else {
             return Ok(Frame::Skipped);
@@ -256,7 +302,7 @@ impl Host {
                 }
                 Err(e) => {
                     self.retry_at = Some(now + RETRY);
-                    return Err(format!("rebuilding a lost device: {e}"));
+                    return Err(HostError::DeviceLost(Box::new(e)));
                 }
             }
         }
@@ -274,7 +320,8 @@ impl Host {
                 return Ok(Frame::Skipped);
             }
             Acquired::Occluded | Acquired::Timeout => return Ok(Frame::Skipped),
-            Acquired::Lost | Acquired::Validation => return Ok(Frame::SurfaceLost),
+            Acquired::Lost => return Ok(Frame::SurfaceLost),
+            Acquired::Validation => return Err(HostError::Validation),
         };
         let view = frame
             .texture
@@ -283,7 +330,7 @@ impl Host {
             Some(draw) => renderer.render_with_overlay(scene, xf, &view, draw),
             None => renderer.render(scene, xf, &view),
         }
-        .map_err(|e| e.to_string())?;
+        .map_err(HostError::Render)?;
         queue.present(frame);
         Ok(Frame::Presented(stats))
     }
@@ -322,8 +369,7 @@ mod tests {
         };
         assert!(!gpu.lost());
         gpu.device.destroy();
-        let _ = gpu.device.poll(wgpu::PollType::Poll);
-        assert!(gpu.lost(), "loss unseen");
+        assert!(gpu.poll_lost(), "loss unseen");
         let mut gpu2 = OnDevice::open(&instance, None, (16, 16)).unwrap();
         assert_ne!(gpu2.device, gpu.device);
         let target = gpu2.device.create_texture(&wgpu::TextureDescriptor {

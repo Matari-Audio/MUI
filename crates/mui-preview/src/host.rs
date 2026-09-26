@@ -26,7 +26,8 @@ impl Gpu {
         );
         let surface = surface(&instance, &window)?;
         let size = window.inner_size();
-        let host = Host::new(instance, surface, (size.width, size.height))?;
+        let host =
+            Host::new(instance, surface, (size.width, size.height)).map_err(|e| e.to_string())?;
         Ok(Self { window, host })
     }
     pub fn window(&self) -> &Window {
@@ -46,7 +47,10 @@ impl Gpu {
         transform: Affine,
     ) -> Result<Option<EffectStats>, String> {
         self.window.pre_present_notify();
-        let frame = self.host.present(scene, transform)?;
+        let frame = self
+            .host
+            .present(scene, transform)
+            .map_err(|e| e.to_string())?;
         self.after(&frame)
     }
     pub fn present_with_overlay<F: FnOnce(&mut mui::vello::Classic<'_>)>(
@@ -56,7 +60,10 @@ impl Gpu {
         overlay: F,
     ) -> Result<Option<EffectStats>, String> {
         self.window.pre_present_notify();
-        let frame = self.host.present_with_overlay(scene, transform, overlay)?;
+        let frame = self
+            .host
+            .present_with_overlay(scene, transform, overlay)
+            .map_err(|e| e.to_string())?;
         self.after(&frame)
     }
     /// A frame that did not reach the screen asks for another.

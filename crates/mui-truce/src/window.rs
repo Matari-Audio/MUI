@@ -733,7 +733,7 @@ fn open_gpu(window: &Window, size: (u32, u32)) -> Result<Host, String> {
         #[expect(unsafe_code, reason = "calls the unsafe surface constructor")]
         let surface = unsafe { surface::create(&instance, window) }
             .ok_or("native surface creation failed")?;
-        Host::new(instance, surface, size)
+        Host::new(instance, surface, size).map_err(|e| e.to_string())
     }))
     .map_err(|_| "panic while creating GPU resources".to_owned())?
 }
