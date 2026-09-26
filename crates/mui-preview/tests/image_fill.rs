@@ -19,7 +19,8 @@ use mui::vello::effects::{Budget, GpuRenderer};
 const N: u32 = 200;
 
 fn render() -> [u8; 4] {
-    let instance = wgpu::Instance::default();
+    let instance =
+        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
     let adapter =
         pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
             .expect("adapter");

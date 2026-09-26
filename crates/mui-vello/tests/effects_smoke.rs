@@ -14,11 +14,12 @@ const AWAY: Affine = Affine::new([1., 0., 0., 1., 5000., 0.]);
 
 fn device() -> Option<(wgpu::Device, wgpu::Queue)> {
     pollster::block_on(async {
-        let adapter = wgpu::Instance::default()
-            .request_adapter(&wgpu::RequestAdapterOptions::default())
-            .await
-            .map_err(|e| eprintln!("SKIPPED: no wgpu adapter ({e})"))
-            .ok()?;
+        let adapter =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env())
+                .request_adapter(&wgpu::RequestAdapterOptions::default())
+                .await
+                .map_err(|e| eprintln!("SKIPPED: no wgpu adapter ({e})"))
+                .ok()?;
         adapter
             .request_device(&wgpu::DeviceDescriptor::default())
             .await

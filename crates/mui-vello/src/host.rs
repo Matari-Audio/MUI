@@ -447,13 +447,10 @@ mod tests {
 
     /// A real loss, not a flag flipped by hand: `Device::destroy` fires the
     /// lost callback, and a device opened again renders.
-    // ponytail: not on Windows -- wgpu's DX12 backend (WARP on CI) faults
-    // inside `Device::destroy`. MUI never calls it; a driver loss takes the
-    // same `poll_lost` path. Re-enable when wgpu's DX12 destroy is sound.
-    #[cfg_attr(windows, ignore = "wgpu DX12 faults in Device::destroy")]
     #[test]
     fn a_destroyed_device_is_seen_and_a_new_one_renders() {
-        let instance = wgpu::Instance::default();
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
         let gpu = match OnDevice::open(&instance, None, (16, 16)) {
             Ok(gpu) => gpu,
             Err(e) => return eprintln!("SKIPPED: no wgpu device ({e})"),
