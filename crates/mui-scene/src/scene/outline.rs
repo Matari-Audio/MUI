@@ -381,12 +381,10 @@ impl Walk<'_> {
     /// and the origin its frames are relative to: the node's own, floored to
     /// the device grid when there is one so snapping moves with it.
     fn geometry_key(&mut self, n: &El, first: usize, key: &mut Vec<u64>) -> Point {
-        use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher};
+        // No identity: the words are every input, so two nodes that match
+        // share one outline -- and a union's child, shaped for its parent
+        // first, is a hit when the walk reaches it.
         key.clear();
-        // Identity is the walk's key (the id, or the tree path) and the
-        // node's own, not its pre-order index: a tooltip or menu wrapping
-        // the root shifts every index but no key or geometry.
-        key.push(BuildHasherDefault::<DefaultHasher>::default().hash_one((&*self.key, n.key())));
         for value in [
             self.spec.theme.corners.selector,
             self.spec.theme.corners.field,

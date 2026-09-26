@@ -451,7 +451,8 @@ mod tests {
         let tree = |n: usize, tag: &str| {
             column((0..n).map(|i| {
                 row([
-                    leaf(12., 12.),
+                    // Each its own height: equal welds share one entry.
+                    leaf(12., 12. + i as f64 / 4.),
                     text(format!("{tag}{i}")).id(format!("{tag}{i}")),
                 ])
                 .union(Role::Surface)
