@@ -1,3 +1,4 @@
+use mui_geometry::kurbo::{self, PathEl};
 use mui_geometry::{Path, PathCommand, Point};
 use skrifa::MetadataProvider as _;
 use skrifa::outline::{DrawSettings, OutlinePen};
@@ -43,7 +44,8 @@ pub fn glyph_path(
     Ok(path)
 }
 
-/// Collects `skrifa` pen calls into MUI path commands, flattening as it goes.
+/// Collects `skrifa` pen calls into MUI path commands, flattening curves
+/// adaptively (kurbo) as it goes: `PathCommand` has no bezier to carry them.
 pub(crate) struct PathPen {
     commands: Vec<PathCommand>,
     cursor: Point,
@@ -83,14 +85,20 @@ impl PathPen {
             self.open = false;
         }
     }
-    /// Uniform subdivision counts from the standard flatness bounds: the error
-    /// of an n-segment polyline is bounded by the second difference of the
-    /// control points over n squared, so invert that for n.
-    fn steps(&self, second_difference: f64, numerator: f64) -> usize {
-        let n = (second_difference * numerator / self.tolerance)
-            .sqrt()
-            .ceil();
-        (n.max(1.) as usize).min(64)
+    /// Flattens one curve from the cursor with kurbo's adaptive subdivision.
+    ///
+    /// `bow` is the largest second difference of the control points and `k`
+    /// the flatness-bound constant for the degree: `bow * k / n^2` bounds the
+    /// error of n uniform segments. ponytail: tolerance is loosened so no
+    /// segment needs more than 64 lines, which only bites for glyphs
+    /// thousands of pixels tall; raise the cap if those must stay exact.
+    fn flatten(&mut self, seg: PathEl, bow: f64, k: f64) {
+        let tolerance = self.tolerance.max(bow * k / (64. * 64.));
+        kurbo::flatten([PathEl::MoveTo(self.cursor), seg], tolerance, |el| {
+            if let PathEl::LineTo(p) = el {
+                self.line(p);
+            }
+        });
     }
     pub(crate) fn finish(mut self) -> Path {
         self.close_open_contour();
@@ -116,38 +124,18 @@ impl OutlinePen for PathPen {
     }
 
     fn quad_to(&mut self, cx: f32, cy: f32, x: f32, y: f32) {
-        let [p0, c, p1] = [self.cursor, self.point(cx, cy), self.point(x, y)].map(Point::to_vec2);
-        let n = self.steps((p0 - c * 2. + p1).length(), 0.125);
-        for i in 1..=n {
-            let t = i as f64 / n as f64;
-            let u = 1. - t;
-            self.line((p0 * (u * u) + c * (2. * u * t) + p1 * (t * t)).to_point());
-        }
+        let (c, p1) = (self.point(cx, cy), self.point(x, y));
+        let bow = (self.cursor.to_vec2() - c.to_vec2() * 2. + p1.to_vec2()).length();
+        self.flatten(PathEl::QuadTo(c, p1), bow, 0.125);
     }
 
     fn curve_to(&mut self, cx0: f32, cy0: f32, cx1: f32, cy1: f32, x: f32, y: f32) {
-        let [p0, c0, c1, p1] = [
-            self.cursor,
-            self.point(cx0, cy0),
-            self.point(cx1, cy1),
-            self.point(x, y),
-        ]
-        .map(Point::to_vec2);
-        let bow = (p0 - c0 * 2. + c1)
+        let (c0, c1, p1) = (self.point(cx0, cy0), self.point(cx1, cy1), self.point(x, y));
+        let [p0, v0, v1, v2] = [self.cursor, c0, c1, p1].map(Point::to_vec2);
+        let bow = (p0 - v0 * 2. + v1)
             .length()
-            .max((c0 - c1 * 2. + p1).length());
-        let n = self.steps(bow, 0.75);
-        for i in 1..=n {
-            let t = i as f64 / n as f64;
-            let u = 1. - t;
-            self.line(
-                (p0 * (u * u * u)
-                    + c0 * (3. * u * u * t)
-                    + c1 * (3. * u * t * t)
-                    + p1 * (t * t * t))
-                    .to_point(),
-            );
-        }
+            .max((v0 - v1 * 2. + v2).length());
+        self.flatten(PathEl::CurveTo(c0, c1, p1), bow, 0.75);
     }
 
     fn close(&mut self) {
@@ -214,6 +202,31 @@ mod tests {
         // Both describe the same glyph, so the area must not drift with it.
         let (fine, coarse) = (area(&fine).abs(), area(&coarse).abs());
         assert!((fine - coarse).abs() / fine < 0.05, "{fine} vs {coarse}");
+    }
+
+    #[test]
+    fn a_large_glyph_stays_within_tolerance() {
+        use mui_geometry::kurbo::{Line, ParamCurveNearest as _};
+        // At 1000 px a fixed segment count would sag visibly; adaptive
+        // flattening keeps every chord midpoint within tolerance of the curve,
+        // here stood in for by a far finer flattening of the same glyph.
+        let tolerance = 0.25;
+        let coarse = glyph_path(&hack(), 'O', 1000., &[], tolerance).unwrap();
+        let fine = glyph_path(&hack(), 'O', 1000., &[], 0.01).unwrap();
+        let fine: Vec<Vec<Point>> = fine.flatten(0.01, 250_000).unwrap();
+        let distance = |p: Point| {
+            fine.iter()
+                .flat_map(|r| r.iter().zip(r.iter().cycle().skip(1)))
+                .map(|(&a, &b)| Line::new(a, b).nearest(p, 1e-9).distance_sq.sqrt())
+                .fold(f64::INFINITY, f64::min)
+        };
+        for ring in coarse.flatten(tolerance, 250_000).unwrap() {
+            assert!(ring.len() > 16, "curves were flattened");
+            for (a, b) in ring.iter().zip(ring.iter().cycle().skip(1)) {
+                let d = distance(a.midpoint(*b));
+                assert!(d <= tolerance + 0.05, "chord sags {d} px");
+            }
+        }
     }
 
     #[test]
