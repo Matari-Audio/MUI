@@ -37,7 +37,9 @@ pub fn fixture(scale: f64) -> mui_scene::ResolvedScene {
     // The theme rounds a filled box by default; the contract reads the corners.
     .radius(0.)
     .fill(Color::oklcha(0., 0., 0., 1.));
-    mui_scene::resolve(&SceneSpec::new(root).scale(scale)).expect("GPU fixture resolves")
+    let spec = SceneSpec::new(root).scale(scale);
+    mui_scene::resolve(&spec.weld_backend(mui_scene::WeldBackend::AnalyticGpu))
+        .expect("GPU fixture resolves")
 }
 pub async fn device() -> Result<(wgpu::AdapterInfo, wgpu::Device, wgpu::Queue)> {
     let instance = wgpu::Instance::default();

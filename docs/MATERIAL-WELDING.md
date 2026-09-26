@@ -27,11 +27,11 @@ let group = weld![Weld::all().border(WeldChannel::Omit); shape_a, shape_b];
 // A layout container and a material-weld policy are orthogonal.
 let group = row![shape_a, shape_b]
     .gap(10.)
-    .weld_with(Weld::all().reach(24.).blend(72.).morph(progress));
+    .weld(Weld::all().reach(24.).blend(72.).morph(progress));
 
 // Same policies, explicit animation input.
-let group = weld_morph![progress; shape_a, shape_b];
-let group = weld_morph![Weld::shape(), progress; shape_a, shape_b];
+let group = weld![Weld::default().morph(progress); shape_a, shape_b];
+let group = weld![Weld::shape().morph(progress); shape_a, shape_b];
 ```
 
 Examples above are alternatives; they do not reuse moved Rust values in one

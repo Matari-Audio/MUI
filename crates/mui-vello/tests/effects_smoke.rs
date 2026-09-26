@@ -53,7 +53,8 @@ fn welded() -> ResolvedScene {
         .weld(Weld::all().reach(24.).blend(60.))
         .id("join")
         .anchor(Align::Start, Align::Start);
-    resolve(&SceneSpec::new(root).offered(Size::new(320., 200.))).unwrap()
+    let spec = SceneSpec::new(root).offered(Size::new(320., 200.));
+    resolve(&spec.weld_backend(mui_scene::WeldBackend::AnalyticGpu)).unwrap()
 }
 
 fn pictured(v: u8) -> (ResolvedScene, std::sync::Weak<[u8]>) {

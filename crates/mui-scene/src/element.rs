@@ -177,7 +177,7 @@ pub enum State {
 /// # use mui_scene::StateStyle;
 /// # use std::sync::Arc;
 /// let lift = StateStyle(Arc::new(|s: Style| s.fill(Role::Primary)));
-/// assert_eq!(lift.0(Style::default()).fill, Fill::Role(Role::Primary));
+/// assert_eq!(lift.0(Style::default()).fill, Some(Fill::Role(Role::Primary)));
 /// ```
 #[derive(Clone)]
 pub struct StateStyle(pub Arc<dyn Fn(Style) -> Style>);
@@ -576,7 +576,7 @@ impl IntoEl for String {
 /// use mui_scene::prelude::*;
 /// let bare = Style::default().fill(Role::Raised).radius(12.);
 /// let mut node = block(80., 24.).preset(bare);
-/// assert_eq!(node.style_mut().radius, Radius::Px(12.));
+/// assert_eq!(node.style_mut().radius, Some(Radius::Px(12.)));
 /// ```
 pub trait Paints: Sized {
     fn style_mut(&mut self) -> &mut Style;
@@ -642,7 +642,7 @@ pub trait Paints: Sized {
     /// ```
     /// use mui_scene::prelude::*;
     /// let mut card = block(80., 48.).radius(16.).corners(CornerStyle::Squircle);
-    /// assert_eq!(card.style_mut().corners, CornerStyle::Squircle);
+    /// assert_eq!(card.style_mut().corners, Some(CornerStyle::Squircle));
     /// ```
     fn corners(mut self, c: CornerStyle) -> Self {
         self.style_mut().corners = Some(c);
@@ -654,7 +654,7 @@ pub trait Paints: Sized {
     /// ```
     /// use mui_scene::prelude::*;
     /// let mut el = block(80., 24.).shadow(Shadow::soft(2.)).shadow(Shadow::soft(12.));
-    /// assert_eq!(el.style_mut().shadow.len(), 2);
+    /// assert_eq!(el.style_mut().shadow.as_ref().map(Vec::len), Some(2));
     /// ```
     fn shadow(mut self, s: Shadow) -> Self {
         self.style_mut().shadow.get_or_insert_default().push(s);
@@ -665,7 +665,7 @@ pub trait Paints: Sized {
     /// ```
     /// use mui_scene::prelude::*;
     /// let mut el = block(80., 24.).shadow(Shadow::soft(12.)).shadows([]);
-    /// assert!(el.style_mut().shadow.is_empty());
+    /// assert_eq!(el.style_mut().shadow, Some(vec![]));
     /// ```
     fn shadows(mut self, s: impl IntoIterator<Item = Shadow>) -> Self {
         self.style_mut().shadow = Some(s.into_iter().collect());
@@ -676,7 +676,7 @@ pub trait Paints: Sized {
     /// ```
     /// use mui_scene::prelude::*;
     /// let mut el = block(80., 24.).elevation(Elevation::Floating);
-    /// assert_eq!(el.style_mut().shadow.len(), 2);
+    /// assert_eq!(el.style_mut().shadow.as_deref(), Some(Elevation::Floating.shadows()));
     /// ```
     fn elevation(self, e: Elevation) -> Self {
         self.shadows(e.shadows().iter().cloned())
@@ -745,7 +745,7 @@ pub trait Paints: Sized {
     /// use mui_scene::prelude::*;
     /// let scrim = Color::oklcha(0., 0., 0., 0.6);
     /// let mut dim = stack![text("Save?")].fill(scrim).backdrop_blur(8.);
-    /// assert_eq!(dim.style_mut().backdrop_blur, 8.);
+    /// assert_eq!(dim.style_mut().backdrop_blur, Some(8.));
     /// ```
     fn backdrop_blur(mut self, radius: f64) -> Self {
         self.style_mut().backdrop_blur = Some(radius);
@@ -769,10 +769,10 @@ pub trait Paints: Sized {
     /// ```
     /// use mui_scene::prelude::*;
     /// # use mui_scene::Style;
-    /// let card = Style { radius: Radius::Px(12.), ..Style::default() };
+    /// let card = Style::default().radius(12.);
     /// let mut el = block(80., 24.).fill(Role::Primary).preset(card);
-    /// assert_eq!(el.style_mut().radius, Radius::Px(12.));
-    /// assert_eq!(el.style_mut().fill, Fill::Role(Role::Primary));
+    /// assert_eq!(el.style_mut().radius, Some(Radius::Px(12.)));
+    /// assert_eq!(el.style_mut().fill, Some(Fill::Role(Role::Primary)));
     /// ```
     fn preset(mut self, s: Style) -> Self {
         let slot = self.style_mut();
@@ -785,9 +785,9 @@ pub trait Paints: Sized {
     /// ```
     /// use mui_scene::prelude::*;
     /// # use mui_scene::Style;
-    /// let card = Style { fill: Role::Raised.into(), ..Style::default() };
+    /// let card = Style::default().fill(Role::Raised);
     /// let mut el = block(80., 24.).fill(Role::Danger).base(card);
-    /// assert_eq!(el.style_mut().fill, Fill::Role(Role::Danger));
+    /// assert_eq!(el.style_mut().fill, Some(Fill::Role(Role::Danger)));
     /// ```
     fn base(mut self, s: Style) -> Self {
         let slot = self.style_mut();
@@ -800,7 +800,7 @@ pub trait Paints: Sized {
     /// use mui_scene::prelude::*;
     /// let outlined = |e: El| e.stroke(Role::Ink).radius(8.);
     /// let mut el = block(80., 24.).apply(outlined);
-    /// assert_eq!(el.style_mut().radius, Radius::Px(8.));
+    /// assert_eq!(el.style_mut().radius, Some(Radius::Px(8.)));
     /// ```
     fn apply(self, f: impl FnOnce(Self) -> Self) -> Self {
         f(self)
@@ -1312,8 +1312,8 @@ mod tests {
     #[test]
     fn nodes_stay_small() {
         use std::mem::size_of;
-        assert!(size_of::<Element>() <= 352, "{}", size_of::<Element>());
-        assert!(size_of::<El>() <= 680, "{}", size_of::<El>());
+        assert!(size_of::<Element>() <= 360, "{}", size_of::<Element>());
+        assert!(size_of::<El>() <= 688, "{}", size_of::<El>());
     }
 
     /// The whole merge rule: per field, the side that states something wins,

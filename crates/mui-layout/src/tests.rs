@@ -495,8 +495,8 @@ fn push_appends_a_child_and_keeps_pre_order_frames() {
     assert_eq!(l.all().len(), 3);
     assert_eq!(l.all()[0], l.frame("c").unwrap());
     assert_eq!(l.all()[2], l.frame("b").unwrap());
-    // a leaf has nowhere to put one.
-    assert_eq!(block(1., 1.).push(block(1., 1.)).children().len(), 0);
+    // A block becomes a stack of its own size to hold one.
+    assert_eq!(block(1., 1.).push(block(1., 1.)).children().len(), 1);
 }
 
 #[test]

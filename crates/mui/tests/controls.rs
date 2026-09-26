@@ -23,12 +23,12 @@ fn a_variant_paints_the_role_without_naming_a_second_colour() {
         Some(Fill::Faded(Role::Primary, 0.18))
     );
     let outline = face(Variant::Outline);
-    assert_eq!(outline.fill, Some(Fill::None));
+    assert_eq!(outline.fill, None);
     assert_eq!(
         outline.stroke.map(|s| s.fill),
         Some(Fill::Role(Role::Primary))
     );
-    assert_eq!(face(Variant::Ghost).fill, Some(Fill::None));
+    assert_eq!(face(Variant::Ghost).fill, None);
     // A filled face carries contrast ink; the rest speak as the role.
     let ink = |v: Variant| {
         let mut ui = Ui::new(Theme::DEFAULT);

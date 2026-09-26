@@ -75,7 +75,7 @@ let root = col![
 .gap(M)
 .pad(L)
 .radius(20.0)
-.fill(Surface)
+.fill(Role::Surface)
 .shadow(Shadow::soft(12.0));
 
 let frame = ui
@@ -105,7 +105,7 @@ in a search box is a `z` and not an undo.
 ```rust
 use mui::prelude::*;
 
-let control = |id: &str| leaf(28.0, 28.0).pill().fill(Primary).id(id).cursor(Cursor::Hand);
+let control = |id: &str| block(28.0, 28.0).pill().fill(Role::Primary).id(id).cursor(Cursor::Hand);
 
 // A tab whose shell is a parallel inset of its own rounded outline.
 let tab = col![control("plus"), control("phase"), control("warp")]
@@ -114,14 +114,14 @@ let tab = col![control("plus"), control("phase"), control("warp")]
     .min_width(92.0)
     .center()
     .id("tab")
-    .shell(12.0, Raised);
+    .shell(12.0, Role::Raised);
 
 // The tab and the panel unioned into one filleted shape.
-let root = row![tab, leaf(520.0, 230.0).id("panel")]
+let root = row![tab, block(520.0, 230.0).id("panel")]
     .start()
-    .union(Surface);
+    .union(Role::Surface);
 
-let scene = resolve_scene(&SceneSpec::new(root)).unwrap();
+let scene = resolve(&SceneSpec::new(root)).unwrap();
 assert_eq!(scene.surface("tab").unwrap().frame.size.width, 92.0);
 ```
 
@@ -234,7 +234,7 @@ let curve = canvas(|size| {
         let t = f64::from(i) / 48.0;
         Point::new(t * size.width, size.height * (1.0 - t * t))
     });
-    vec![Draw::stroke(Path::polyline(pts, false), Primary, 2.0)]
+    vec![Draw::stroke(Path::polyline(pts, false), Role::Primary, 2.0)]
 });
 
 let root = col![
@@ -247,8 +247,8 @@ let root = col![
     .gap(S)
     .center(),
     row![
-        column(params).gap(S).scroll().w(200),
-        curve.grow(1.0).fill(Raised).radius(12.0).cursor(Cursor::Crosshair),
+        col(params).gap(S).scroll().w(200),
+        curve.grow(1.0).fill(Role::Raised).radius(12.0).cursor(Cursor::Crosshair),
     ]
     .gap(M)
     .grow(1.0),
@@ -256,7 +256,7 @@ let root = col![
 ]
 .gap(M)
 .pad(L)
-.fill(Surface);
+.fill(Role::Surface);
 
 let frame = ui
     .frame(root, Some(Size::new(560.0, 340.0)), Input::default(), 1.0 / 60.0)
@@ -284,7 +284,7 @@ let editor = || {
         .gap(S)
         .wrap(),
         // Four knobs, as many across as fit at 120 px a column.
-        grid(4, ["a", "b", "c", "d"].map(|k| leaf(40.0, 40.0).id(k)))
+        grid(4, ["a", "b", "c", "d"].map(|k| block(40.0, 40.0).id(k)))
             .gap(S)
             .min_col(120.0),
     ]
@@ -296,7 +296,7 @@ let editor = || {
 
 let stacked = |w: f64, h: f64| {
     let spec = SceneSpec::new(editor()).offered(Size::new(w, h));
-    let scene = resolve_scene(&spec).unwrap();
+    let scene = resolve(&spec).unwrap();
     let y = |k: &str| scene.surface(k).unwrap().frame.y;
     y("a") != y("b")
 };
@@ -320,10 +320,10 @@ is the value the next tree reads:
 ```rust,ignore
 fn editor(params: Arc<GainParams>) -> Box<dyn Editor> {
     MuiEditor::new(params, Ui::new(Theme::DEFAULT), (300, 200), |ui, bridge| {
-        let gain = bridge.bind(ui, "gain", P::Gain, |ui, v| {
-            knob(ui, "gain", "Gain", v, 0.0..=1.0).0.el()
+        let gain = bridge.bind(ui, P::Gain, |ui, id, v| {
+            knob(ui, id, "Gain", v, 0.0..=1.0).0.el()
         });
-        col![gain, title(bridge.text(P::Gain))].pad(L).fill(Surface)
+        col![gain, title(bridge.text(P::Gain))].pad(L).fill(Role::Surface)
     })
     .resizable((260, 180))
     .into_editor()
@@ -365,7 +365,7 @@ let mut ui = Ui::new(Theme::DEFAULT);
 let mut gain = 0.5;
 let sweep = ui.tween("sweep", gain);
 let root = col![
-    leaf(60.0, 60.0).fill(Primary).animate().id("lamp"),
+    block(60.0, 60.0).fill(Role::Primary).animate().id("lamp"),
     knob(&mut ui, "gain", "Gain", &mut gain, 0.0..=1.0).0.el(),
 ];
 let frame = ui.frame(root, Some(Size::new(200.0, 200.0)), Input::default(), 1.0 / 60.0).unwrap();

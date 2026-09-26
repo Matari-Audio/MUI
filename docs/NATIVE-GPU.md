@@ -48,7 +48,7 @@ on a frame-by-frame basis.
 let mut ui = Ui::new(theme).gpu_welding();
 let plates = row![a, b]
     .gap(8.)
-    .weld_with(Weld::all().reach(24.).blend(72.).morph(progress))
+    .weld(Weld::all().reach(24.).blend(72.).morph(progress))
     .id("joined-plates");
 // Initial resolve with the real host's size/scale/input...
 

@@ -17,7 +17,7 @@ use crate::widgets::{TextOpts, text_edit};
 /// let mut ui = Ui::new(Theme::DEFAULT);
 /// let (quiet, _) = button(&mut ui, "bypass", "Bypass");
 /// // Ink only: the resting box paints nothing.
-/// assert_eq!(quiet.variant(Variant::Ghost).el().payload().style.fill, Fill::None);
+/// assert_eq!(quiet.variant(Variant::Ghost).el().payload().style.fill, None);
 /// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Variant {

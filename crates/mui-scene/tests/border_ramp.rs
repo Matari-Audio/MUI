@@ -64,14 +64,15 @@ fn invalid_fields_and_missing_anchors_are_errors() {
             BorderRamp::horizontal((Role::Primary, 6.), (Role::Dim, 1.)).transition(0.5, 0.5),
             "border ramp widths/interval",
         ),
-        (
-            BorderRamp::horizontal((Role::Primary, 6.), (Role::Dim, 1.)).over("missing"),
-            "border ramp descendant missing",
-        ),
     ] {
         assert!(matches!(
             resolve(&SceneSpec::new(block(100., 100.).border_ramp(ramp))),
             Err(SceneError::Geometry(InvalidOptions(m))) if m == why
         ));
     }
+    let ramp = BorderRamp::horizontal((Role::Primary, 6.), (Role::Dim, 1.)).over("missing");
+    assert!(matches!(
+        resolve(&SceneSpec::new(block(100., 100.).border_ramp(ramp))),
+        Err(SceneError::MissingId { id, .. }) if id.as_str() == "missing"
+    ));
 }
