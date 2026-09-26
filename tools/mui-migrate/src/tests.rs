@@ -344,3 +344,36 @@ fn new_name_collides_with_a_local_definition() {
     let out = run("use mui::prelude::*;\nfn f() { let body = 1; let g = |label: &str| label.len(); }\n");
     assert!(out.warnings.is_empty(), "{:?}", out.warnings);
 }
+
+#[test]
+fn geometry_moves_and_associated_calls() {
+    check(
+        "use mui_geometry::Spacing;\nfn f() -> mui_geometry::SpacingToken { mui_geometry::SpacingToken::M }\n",
+        "use mui_layout::Spacing;\nfn f() -> mui_layout::SpacingToken { mui_layout::SpacingToken::M }\n",
+    );
+    check("use mui_geometry::{Spacing, SpacingToken};\n", "use mui_layout::{Spacing, SpacingToken};\n");
+    check(
+        "use mui_geometry::{Point, Spacing};\nfn f() {}\n",
+        "use mui_layout::Spacing;\nuse mui_geometry::{Point};\nfn f() {}\n",
+    );
+    check(
+        "use mui_geometry::{Affine, Bounds};\nfn f() { let b = Bounds::from_points(ps); Affine::translation(1.0, 2.0); Affine::scale(2.0, 3.0); Affine::scale(2.0); Affine::rotation_about(a, p); }\n",
+        "use mui_geometry::{Affine, Rect};\nfn f() { let b = mui_geometry::bounds(ps); Affine::translate((1.0, 2.0)); Affine::scale_non_uniform(2.0, 3.0); Affine::scale(2.0); Affine::rotate_about(a, p); }\n",
+    );
+    check(
+        "use mui_geometry::Bounds;\nfn f(b: &Bounds, q: Q) -> f64 { b.min.x + b.max.y + p.bounds().min.y + q.min.x }\n",
+        "use mui_geometry::Rect;\nfn f(b: &Rect, q: Q) -> f64 { b.x0 + b.y1 + p.bounds().y0 + q.min.x }\n",
+    );
+}
+
+#[test]
+fn ui_fields_become_accessors_and_the_wheel_a_vec2() {
+    check(
+        &with_prelude("fn f(ui: &mut Ui) { ui.scale = Some(2.0); let s = self.ui.scale.unwrap_or(1.0); let c = ui.theme.control; ui.theme = t; ui.font = Some(f); other.scale = 3.0; }\n"),
+        &with_prelude("fn f(ui: &mut Ui) { ui.set_scale(Some(2.0)); let s = self.ui.scale().unwrap_or(1.0); let c = ui.theme().control; ui.set_theme(t); ui.set_font(Some(f)); other.scale = 3.0; }\n"),
+    );
+    check(
+        &with_prelude("fn f() { let p = PointerInput { wheel: Point::new(0.0, 3.0), ..Default::default() }; if r.wheel != Point::ZERO {} let at: Point = Point::ZERO; }\n"),
+        &with_prelude("fn f() { let p = PointerInput { wheel: Vec2::new(0.0, 3.0), ..Default::default() }; if r.wheel != Vec2::ZERO {} let at: Point = Point::ZERO; }\n"),
+    );
+}

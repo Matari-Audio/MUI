@@ -19,6 +19,19 @@
 //!   `Arg::After(p)` matches an argument starting with `p` and captures the rest.
 //! - `DropImport { name }`           remove `name` from `use <mui>::..` lists
 //! - `Qualify { names, prefix }`     bare glob-imported `Name` -> `prefix` + `Name`
+//! - `Assoc { ty, name, args, to, bare }` call-shape rewrite of an associated fn
+//!   `Ty::name(args)` (optionally path-qualified) into template `to`; `$path` is
+//!   the path before `Ty`, or `bare` when `Ty` was named bare
+//! - `Moved { names, from, to }`     `from::Name` -> `to::Name` for each moved `Name`,
+//!   in paths and `use` trees (a mixed brace list is split into two `use`s)
+//! - `Field { recv, name, read, write }` a public field that became accessors:
+//!   `<recv>.name = e` -> `<recv>` + `write` (`$1` = e), any other `<recv>.name`
+//!   -> `<recv>` + `read` (`""`: reads are left for rustc to report); the
+//!   receiver's last segment must be one of `recv`
+//! - `Corner { field, axis, to }`    `.field.axis` -> `.to` where the receiver is
+//!   clearly a `Rect`/`Bounds` (see `rect_receiver`)
+//! - `Retype { field, from, to }`    `field: From::..`, `field = From::..` and
+//!   `field ==/!= From::..` -> `To::..`: a field whose type changed
 //! - `Manual { pattern, note }`      report `file:line: note` wherever the token
 //!   sequence `pattern` appears in a file that uses mui (no rewrite)
 //!
@@ -64,6 +77,11 @@ pub enum Rule {
     Call { chain: &'static [(&'static str, &'static [Arg])], to: &'static str, gate: Gate, needs: &'static [&'static str] },
     DropImport { name: &'static str },
     Qualify { names: &'static [&'static str], prefix: &'static str },
+    Assoc { ty: &'static str, name: &'static str, args: &'static [Arg], to: &'static str, bare: &'static str },
+    Moved { names: &'static [&'static str], from: &'static str, to: &'static str },
+    Field { recv: &'static [&'static str], name: &'static str, read: &'static str, write: &'static str },
+    Corner { field: &'static str, axis: &'static str, to: &'static str },
+    Retype { field: &'static str, from: &'static str, to: &'static str },
     Manual { pattern: &'static str, note: &'static str },
 }
 
@@ -150,25 +168,31 @@ pub const RULES: &[Rule] = &[
     Manual { pattern: ". bind (", note: "`Bridge::bind`'s closure is `|ui, id, v|`: pass `id` to the widget; a toggle can use `bind_bool(ui, P, |ui, id, on| ..)`" },
     // Geometry: kurbo is the one Point/Vec2/Rect/Affine (mui-geometry, mui-weld re-export it).
     // `Rect::from_points` is kurbo's two-corner constructor, so the ring form is flagged too.
-    Manual { pattern: "Bounds :: from_points", note: "`Bounds::from_points(ring)` is `mui_geometry::bounds(ring)` (kurbo's `Rect::from_points` takes two corners)" },
+    Assoc { ty: "Bounds", name: "from_points", args: &[A], to: "$pathbounds($1)", bare: "mui_geometry::" },
     Type { old: "Bounds", new: "Rect" },
+    Corner { field: "min", axis: "x", to: "x0" },
+    Corner { field: "min", axis: "y", to: "y0" },
+    Corner { field: "max", axis: "x", to: "x1" },
+    Corner { field: "max", axis: "y", to: "y1" },
     Manual { pattern: ". min . x", note: "`Bounds { min, max }` became kurbo `Rect { x0, y0, x1, y1 }`: `.min.x` -> `.x0`, `.min.y` -> `.y0`, `.min` -> `.origin()`" },
     Manual { pattern: ". max . x", note: "`Bounds { min, max }` became kurbo `Rect { x0, y0, x1, y1 }`: `.max.x` -> `.x1`, `.max.y` -> `.y1`" },
     Manual { pattern: ". translated (", note: "`Bounds::translated(d)` is `rect + d`; `RoundedRect::translated` takes a `Vec2`" },
     Method { old: "finite", new: "is_finite", gate: Mui },
     Method { old: "perpendicular", new: "turn_90", gate: Mui },
     Manual { pattern: ". rotated (", note: "`Point::rotated(a)` is gone: `Vec2::from_angle(a) * r`, or `Affine::rotate(a) * p`" },
-    Manual { pattern: "Affine :: translation", note: "kurbo `Affine`: `translation(x, y)` -> `translate((x, y))`, `scale(x, y)` -> `scale_non_uniform(x, y)`, `a.then(b)` -> `b * a`, `t.apply(p)` -> `t * p`" },
-    Manual { pattern: "Affine :: rotation", note: "kurbo `Affine`: `rotation(a)` -> `rotate(a)`, `rotation_about(a, p)` -> `rotate_about(a, p)`, `a.then(b)` -> `b * a`" },
+    Assoc { ty: "Affine", name: "translation", args: &[A, A], to: "$pathAffine::translate(($1, $2))", bare: "" },
+    Assoc { ty: "Affine", name: "scale", args: &[A, A], to: "$pathAffine::scale_non_uniform($1, $2)", bare: "" },
+    Assoc { ty: "Affine", name: "rotation", args: &[A], to: "$pathAffine::rotate($1)", bare: "" },
+    Assoc { ty: "Affine", name: "rotation_about", args: &[A, A], to: "$pathAffine::rotate_about($1, $2)", bare: "" },
+    // `.then` and `.apply` are too common a name to rewrite without the receiver's type.
+    Manual { pattern: "Affine :: translation", note: "kurbo `Affine`: `a.then(b)` -> `b * a`, `t.apply(p)` -> `t * p`" },
+    Manual { pattern: "Affine :: rotation", note: "kurbo `Affine`: `a.then(b)` -> `b * a`, `t.apply(p)` -> `t * p`" },
     Manual { pattern: ". rigid_transform (", note: "`Path::rigid_transform` and `Path::translate` take a `Vec2` (`p.to_vec2()`)" },
     Manual { pattern: "drag_delta : Point", note: "`Response::drag_delta` and `drag_total` are `Vec2` (a kurbo `Point` has no `+ Point`)" },
     Manual { pattern: "drag_total : Point", note: "`Response::drag_total` is a `Vec2`" },
     Manual { pattern: "Edge :: Arc {", note: "build a weld arc with `Edge::arc(center, radius, start, sweep)`; the variant also carries unit `from`/`to` vectors, so match it with `..`" },
-    // Spacing tokens moved crates. ponytail: reported, not rewritten -- the tool has no
-    // path-move rule yet (see PENDING-RULES-geometry.md).
-    Manual { pattern: "mui_geometry :: Spacing", note: "`Spacing` lives in `mui_layout` (and `mui::prelude`)" },
-    Manual { pattern: "mui_geometry :: SpacingScale", note: "`SpacingScale` lives in `mui_layout`" },
-    Manual { pattern: "mui_geometry :: SpacingToken", note: "`SpacingToken` lives in `mui_layout`" },
+    // Spacing tokens moved crates.
+    Moved { names: &["Spacing", "SpacingScale", "SpacingToken"], from: "mui_geometry", to: "mui_layout" },
     // Element's switches are one `flags` field; a surface's are unchanged, so only
     // reads through `payload()` / `payload_mut()` are flagged.
     Manual { pattern: "payload ( ) . focusable", note: "`Element::focusable` is a flag: `e.has(Element::FOCUSABLE)`" },
@@ -196,6 +220,15 @@ pub const RULES: &[Rule] = &[
     Manual { pattern: "scene :: resize_capture", note: "`mui::scene::resize_capture` is `mui::material::resize_capture`" },
     Manual { pattern: "scene :: CaptureError", note: "`mui::scene::CaptureError` is `mui::material::CaptureError`" },
     Manual { pattern: "scene :: CaptureLayer", note: "`mui::scene::CaptureLayer` is `mui::material::CaptureLayer`" },
+    // `Ui`'s settings are accessors; the builders (`.font(f)`, `.gpu_welding()`) stay.
+    Field { recv: &["ui"], name: "theme", read: ".theme()", write: ".set_theme($1)" },
+    Field { recv: &["ui"], name: "scale", read: ".scale()", write: ".set_scale($1)" },
+    Field { recv: &["ui"], name: "font", read: "", write: ".set_font($1)" },
+    Field { recv: &["ui"], name: "double_click", read: "", write: ".set_double_click($1)" },
+    Manual { pattern: "ui . fallback_fonts", note: "`Ui::fallback_fonts` is private: add faces with the `.fallback_font(f)` builder" },
+    Manual { pattern: "ui . weld_backend", note: "`Ui::weld_backend` is private: build with `.gpu_welding()`" },
+    // The wheel is a delta, not a place.
+    Retype { field: "wheel", from: "Point", to: "Vec2" },
 ];
 
 /// The widget phase of the spec (`Response`, option structs, argument

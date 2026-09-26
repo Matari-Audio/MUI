@@ -676,6 +676,28 @@ impl<'a> File<'a> {
             if !u.mui || u.local.is_none() {
                 continue;
             }
+            if let Some((from, to)) = self.moved(u) {
+                // The item's other entries from the same root: all moving means
+                // only the root changes; a mixed list loses this entry to a `use` of its own.
+                let all = self
+                    .uses
+                    .iter()
+                    .filter(|v| v.item == u.item && v.path.first().is_some_and(|p| p == from))
+                    .all(|v| self.moved(v).is_some());
+                if !u.in_brace || all {
+                    if let Some(k) = (u.item.0..=u.item.1).find(|&k| self.ident(k, from)) {
+                        edit(t[k].lo, t[k].hi, to.to_string());
+                    }
+                } else if let Some(kw) = (u.item.0..=u.item.1).find(|&k| self.ident(k, "use")) {
+                    let at = t[u.item.0].lo;
+                    let indent = &src[src[..at].rfind('\n').map_or(0, |n| n + 1)..at];
+                    let head = self.text(u.item.0, kw);
+                    edit(at, at, format!("{head} {to}::{};\n{indent}", self.text(u.start, u.end)));
+                    let (lo, hi) = self.entry_span(u);
+                    edit(lo, hi, String::new());
+                }
+                continue;
+            }
             let name = u.path.last().map(String::as_str).unwrap_or("");
             let mut drop = self.ctx.rules().any(|r| matches!(r, Rule::DropImport { name: n } if *n == name));
             for r in self.ctx.rules() {
@@ -694,16 +716,8 @@ impl<'a> File<'a> {
             if !drop {
                 continue;
             }
-            if !u.in_brace {
-                let (a, b) = u.item;
-                edit(t[a].lo, t[b].hi, String::new());
-            } else if self.punct(u.end + 1, ',') {
-                edit(t[u.start].lo, t[u.end + 2].lo, String::new());
-            } else if self.punct(u.start - 1, ',') {
-                edit(t[u.start - 1].lo, t[u.end].hi, String::new());
-            } else {
-                edit(t[u.start].lo, t[u.end].hi, String::new());
-            }
+            let (lo, hi) = self.entry_span(u);
+            edit(lo, hi, String::new());
         }
 
         for i in 0..t.len() {
@@ -715,11 +729,55 @@ impl<'a> File<'a> {
             let called = self.open(i + 1, '(') || (self.sep(i + 1) && self.punct(i + 3, '<'));
             let in_use = self.use_tok.contains_key(&i);
 
+            for r in self.ctx.rules() {
+                if let Rule::Retype { field: f, from, to } = *r
+                    && f == name
+                    && self.is_mui
+                    && !called
+                    && !in_use
+                    && let Some(k) = self.value_at(i)
+                    && self.ident(k, from)
+                    && (self.sep(k + 1) || self.open(k + 1, '{'))
+                {
+                    edit(t[k].lo, t[k].hi, to.to_string());
+                    needs.push((self.line(i), to));
+                }
+            }
+
             if method {
                 let dot = i - 1;
                 let mut done = false;
                 for r in self.ctx.rules() {
                     match *r {
+                        Rule::Field { recv, name: n, read, write }
+                            if n == name && !called && self.is_mui && dot > 0 && t[dot - 1].k == K::Ident && recv.contains(&t[dot - 1].text.as_str()) =>
+                        {
+                            if self.punct(i + 1, '=') && !t[i + 1].joint {
+                                // The assigned expression runs to the statement's end.
+                                let mut j = i + 2;
+                                while j < t.len() && !matches!(t[j].k, K::Punct(';' | ',') | K::Close(_)) {
+                                    if let K::Open(_) = t[j].k {
+                                        j = t[j].pair;
+                                    }
+                                    j += 1;
+                                }
+                                if j > i + 2 {
+                                    edit(t[dot].lo, t[j - 1].hi, expand(write, &[self.text(i + 2, j - 1).to_string()]));
+                                }
+                            } else if !read.is_empty() && !(self.dot(i + 1) && self.punct(i + 3, '=') && !t[i + 3].joint) {
+                                // A write through it (`ui.theme.text = ..`) is left for rustc.
+                                edit(t[dot].lo, t[i].hi, read.to_string());
+                            }
+                            done = true;
+                            break;
+                        }
+                        Rule::Corner { field: f, axis, to }
+                            if f == name && !called && self.dot(i + 1) && self.ident(i + 2, axis) && !self.open(i + 3, '(') && self.rect_receiver(dot) =>
+                        {
+                            edit(t[dot].lo, t[i + 2].hi, format!(".{to}"));
+                            done = true;
+                            break;
+                        }
                         Rule::Call { chain, to, gate, needs: nd } if chain[0].0 == name && self.gate(gate, dot) => {
                             if let Some((end, caps)) = self.chain(dot, chain) {
                                 edit(t[dot].lo, t[end].hi, expand(to, &caps));
@@ -745,6 +803,16 @@ impl<'a> File<'a> {
             let macro_call = self.punct(i + 1, '!') && !self.punct(i + 2, '=');
             if in_use {
                 continue; // handled per use entry above
+            }
+            for r in self.ctx.rules() {
+                if let Rule::Moved { names, from, to } = *r
+                    && from == name
+                    && !self.sep_before(i)
+                    && self.sep(i + 1)
+                    && t.get(i + 3).is_some_and(|n| n.k == K::Ident && names.contains(&n.text.as_str()))
+                {
+                    edit(t[i].lo, t[i].hi, to.to_string());
+                }
             }
             if macro_call {
                 for r in self.ctx.rules() {
@@ -810,6 +878,25 @@ impl<'a> File<'a> {
             if variant_pos {
                 continue;
             }
+            // An associated-fn shape replaces its type's path, so it runs
+            // before (and instead of) a rename of the type.
+            let assoc = self.ctx.rules().find_map(|r| {
+                let Rule::Assoc { ty, name: n, args, to, bare } = *r else { return None };
+                if ty != name || !self.is_mui || field || !self.sep(i + 1) || !self.ident(i + 3, n) || !self.open(i + 4, '(') {
+                    return None;
+                }
+                let mut caps = Vec::new();
+                self.match_args(i + 4, args, &mut caps).then_some((to, bare, caps))
+            });
+            if let Some((to, bare, caps)) = assoc {
+                let mut s = i;
+                while self.sep_before(s) && s >= 3 && t[s - 3].k == K::Ident {
+                    s -= 3;
+                }
+                let path = if s == i { bare } else { &src[t[s].lo..t[i].lo] };
+                edit(t[s].lo, t[t[i + 4].pair].hi, expand(&to.replace("$path", path), &caps));
+                continue;
+            }
 
             let mut shaped = false;
             for r in self.ctx.rules() {
@@ -870,6 +957,69 @@ impl<'a> File<'a> {
             warns.push((line, format!("the rewrite uses `{n}`: import it from mui (e.g. `use mui::prelude::{n};`)")));
         }
         (edits, warns)
+    }
+
+    /// The source span that removes use entry `u`: the whole item, or the
+    /// entry and one comma beside it in a brace list.
+    fn entry_span(&self, u: &UseEntry) -> (usize, usize) {
+        let t = self.t;
+        if !u.in_brace {
+            (t[u.item.0].lo, t[u.item.1].hi)
+        } else if self.punct(u.end + 1, ',') {
+            (t[u.start].lo, t[u.end + 2].lo)
+        } else if self.punct(u.start - 1, ',') {
+            (t[u.start - 1].lo, t[u.end].hi)
+        } else {
+            (t[u.start].lo, t[u.end].hi)
+        }
+    }
+
+    /// The `Moved` rule use entry `u` falls under: `from::Name`, exactly.
+    fn moved(&self, u: &UseEntry) -> Option<(&'static str, &'static str)> {
+        self.ctx.rules().find_map(|r| match *r {
+            Rule::Moved { names, from, to } if u.path.len() == 2 && u.path[0] == from && names.contains(&u.path[1].as_str()) => Some((from, to)),
+            _ => None,
+        })
+    }
+
+    /// Where the value given to the name at `i` starts: after `name:` (a
+    /// struct literal field, not a path), `name =`, or `name ==` / `!=`.
+    fn value_at(&self, i: usize) -> Option<usize> {
+        let t = self.t;
+        if self.punct(i + 1, ':') && !self.sep(i + 1) {
+            return Some(i + 2);
+        }
+        if self.punct(i + 1, '=') && !t[i + 1].joint {
+            return Some(i + 2);
+        }
+        ((self.punct(i + 1, '=') || self.punct(i + 1, '!')) && t[i + 1].joint && self.punct(i + 2, '=')).then_some(i + 3)
+    }
+
+    /// Whether the receiver ending just before the dot at `dot` is clearly a
+    /// `Rect` (or the `Bounds` it replaced): a call to a function named in
+    /// `RECT_FNS`, or a name this file declares `: Rect` / `: &Rect` or binds
+    /// to `Rect::..`.
+    fn rect_receiver(&self, dot: usize) -> bool {
+        const RECT_FNS: &[&str] = &["bounds", "bounding_box"];
+        const RECT: &[&str] = &["Rect", "Bounds"];
+        let t = self.t;
+        let Some(j) = dot.checked_sub(1) else { return false };
+        let rect = |k: usize| RECT.iter().any(|r| self.ident(k, r));
+        match t[j].k {
+            K::Close(')') => {
+                let open = t[j].pair;
+                open > 0 && t[open - 1].k == K::Ident && RECT_FNS.contains(&t[open - 1].text.as_str())
+            }
+            K::Ident if !self.dot(j.wrapping_sub(1)) || self.ident(j - 2, "self") => {
+                let v = t[j].text.as_str();
+                (0..t.len()).any(|k| {
+                    self.ident(k, v)
+                        && ((self.punct(k + 1, ':') && !self.sep(k + 1) && (rect(k + 2) || (self.punct(k + 2, '&') && rect(k + 3))))
+                            || (self.ident(k.wrapping_sub(1), "let") && self.punct(k + 1, '=') && rect(k + 2) && self.sep(k + 3)))
+                })
+            }
+            _ => false,
+        }
     }
 
     /// Match a chain of `.m(args)` calls starting at the dot `dot`.
