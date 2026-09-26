@@ -149,7 +149,7 @@ fn node(s: &ResolvedSurface, sem: Option<&Semantics>, runs: &mut Vec<(NodeId, No
             selection,
             carets,
         } => {
-            n.set_value(value.clone());
+            n.set_value(&**value);
             runs.push((
                 run_id(&s.key),
                 text_run(&mut n, s, value, *selection, carets),
@@ -167,8 +167,8 @@ fn node(s: &ResolvedSurface, sem: Option<&Semantics>, runs: &mut Vec<(NodeId, No
         sem.role,
         A11y::Label | A11y::Group | A11y::Scroll | A11y::Image
     );
-    let name = sem.label.clone().or_else(|| s.text_value.clone());
-    if let Some(name) = name.or_else(|| control.then(|| s.key.to_string())) {
+    let name = sem.label.as_deref().or(s.text_value.as_deref());
+    if let Some(name) = name.or_else(|| control.then(|| s.key.as_str())) {
         n.set_label(name);
     }
     let f = s.frame;

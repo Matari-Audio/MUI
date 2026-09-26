@@ -623,7 +623,7 @@ impl Ui {
         &mut self,
         hovered: Option<&str>,
         dt: f64,
-    ) -> (Option<(String, String)>, bool) {
+    ) -> (Option<(Arc<str>, String)>, bool) {
         // A tip is pinned to its anchor by id, and a positional key moves
         // when the tip wraps the root: only a named surface has one.
         let hovered = hovered.filter(|k| named(k));
@@ -659,7 +659,7 @@ impl Ui {
     }
 
     /// Float a due tip over the caller's root.
-    pub(super) fn wrap_tip(root: El, tip: Option<&(String, String)>) -> El {
+    pub(super) fn wrap_tip(root: El, tip: Option<&(Arc<str>, String)>) -> El {
         let Some((t, anchor)) = tip else {
             return root;
         };

@@ -10,21 +10,21 @@
 //! ```
 use crate::element::{El, TextRole, text};
 
-fn role(s: impl Into<String>, r: TextRole) -> El {
+fn role(s: impl Into<std::sync::Arc<str>>, r: TextRole) -> El {
     let mut e = text(s);
     e.payload_mut().text_role = Some(r);
     e
 }
 /// A heading: the theme's `type_scale.title`, 18 px by default.
-pub fn title(s: impl Into<String>) -> El {
+pub fn title(s: impl Into<std::sync::Arc<str>>) -> El {
     role(s, TextRole::Title)
 }
 /// Body text and field names: `type_scale.body`, 13 px by default.
-pub fn body(s: impl Into<String>) -> El {
+pub fn body(s: impl Into<std::sync::Arc<str>>) -> El {
     role(s, TextRole::Body)
 }
 /// A footnote: `type_scale.caption`, 11 px by default.
-pub fn caption(s: impl Into<String>) -> El {
+pub fn caption(s: impl Into<std::sync::Arc<str>>) -> El {
     role(s, TextRole::Caption)
 }
 

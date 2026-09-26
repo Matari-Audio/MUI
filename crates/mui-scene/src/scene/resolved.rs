@@ -209,7 +209,7 @@ pub struct ResolvedSurface {
     /// A shell collapsed or a merge changed ring counts.
     pub topology_changed: bool,
     pub cursor: Option<Cursor>,
-    pub tip: Option<String>,
+    pub tip: Option<Arc<str>>,
     pub focusable: bool,
     /// Keeps the wheel from the scrollers around it.
     pub captures_wheel: bool,
@@ -231,7 +231,7 @@ pub struct ResolvedSurface {
     pub(super) semantic_label_implicit: bool,
     /// Current authored text, used as the accessible name unless explicitly
     /// overridden by semantics. Live readout updates change this too.
-    pub text_value: Option<String>,
+    pub text_value: Option<Arc<str>>,
     /// The nearest clipping ancestor's frame, for hit-testing.
     ///
     /// This is kept as a rectangle for compatibility with the input adapter.
@@ -352,14 +352,14 @@ impl ResolvedScene {
             self.paint.remove(i);
         }
         if let Some(&i) = self.at.get(key) {
-            self.surfaces[i].text_value = Some(s.to_owned());
+            self.surfaces[i].text_value = Some(s.into());
         }
         for surface in &mut self.surfaces {
             if &*surface.key == key
                 && surface.semantic_label_implicit
                 && let Some(semantics) = surface.semantics.as_mut()
             {
-                semantics.label = Some(s.to_owned());
+                semantics.label = Some(s.into());
             }
         }
         Ok(())

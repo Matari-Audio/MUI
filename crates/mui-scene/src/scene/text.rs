@@ -414,7 +414,7 @@ pub(super) fn fit(runs: &mut Runs, th: Theme, e: &crate::Element, room: Option<f
     let Content::Text(t) = &e.content else {
         return Size::ZERO.into();
     };
-    let (t, face) = (t.as_str(), Face::of(e, th));
+    let (t, face) = (&**t, Face::of(e, th));
     let (one_line, word) = runs.measured(t, face);
     let min_width = if e.lines.is_some() { 0.0 } else { word };
     // A room narrower than a word is overflowed, not broken mid-word.

@@ -216,7 +216,7 @@ pub enum Carve {
 pub enum Content {
     #[default]
     None,
-    Text(String),
+    Text(Arc<str>),
     Canvas(Canvas),
 }
 
@@ -238,7 +238,7 @@ pub enum A11y {
     /// field's own space -- one more entry than `value` has characters --
     /// or empty when the field did not measure them.
     TextInput {
-        value: String,
+        value: Arc<str>,
         selection: (usize, usize),
         carets: Vec<f64>,
     },
@@ -256,7 +256,7 @@ pub enum A11y {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Semantics {
     pub role: A11y,
-    pub label: Option<String>,
+    pub label: Option<Arc<str>>,
 }
 impl Semantics {
     pub fn new(role: A11y) -> Self {
@@ -351,7 +351,7 @@ pub struct Extras {
     /// says. See [`Styled::reserve`].
     pub reserve: Option<String>,
     /// Shown after the pointer rests on the node.
-    pub tip: Option<String>,
+    pub tip: Option<Arc<str>>,
     /// The spring this node's paint chases when its declared style changes.
     /// Only meaningful on a node with an id: the runtime has nothing to
     /// compare an anonymous node against. See [`Styled::animate_with`].
@@ -498,7 +498,7 @@ pub fn fits(candidates: impl IntoIterator<Item = El>) -> El {
 }
 /// A label, measured from the scene's font. Ink defaults to whatever reads on
 /// the nearest painted ancestor; `.fill(..)` overrides it.
-pub fn text(s: impl Into<String>) -> El {
+pub fn text(s: impl Into<Arc<str>>) -> El {
     Node::content().with(Element {
         content: Content::Text(s.into()),
         ..Element::default()
@@ -518,7 +518,7 @@ pub fn text(s: impl Into<String>) -> El {
 /// assert!(home.payload().font.is_some());
 /// ```
 pub fn icon(font: mui_text::Font, symbol: char) -> El {
-    text(symbol).font(font)
+    text(symbol.encode_utf8(&mut [0; 4]) as &str).font(font)
 }
 /// Your own paths, painted inside the node's frame. Sized like any
 /// container: give it `.size(..)`, `.aspect(..)` or let it stretch.
@@ -943,7 +943,7 @@ pub trait Styled: Paints {
             .push((state, StateStyle(Arc::new(f))));
         self
     }
-    fn tip(mut self, s: impl Into<String>) -> Self {
+    fn tip(mut self, s: impl Into<Arc<str>>) -> Self {
         self.element_mut().extras_mut().tip = Some(s.into());
         self
     }
@@ -958,7 +958,7 @@ pub trait Styled: Paints {
         self
     }
     /// The name read out with the role; the id otherwise.
-    fn named(mut self, name: impl Into<String>) -> Self {
+    fn named(mut self, name: impl Into<Arc<str>>) -> Self {
         let e = self.element_mut();
         let s = e
             .semantics

@@ -479,7 +479,7 @@ pub fn text_edit(
             e.height(opts.rows.max(1) as f64 * lh + 2.0 * PAD_Y)
         })
         .a11y(A11y::TextInput {
-            value: value.clone(),
+            value: value.as_str().into(),
             selection: (anchor, caret),
             carets: reader,
         })

@@ -1062,7 +1062,7 @@ impl Ui {
         &mut self,
         scene: ResolvedScene,
         hovered: Option<String>,
-        tip: Option<(String, String)>,
+        tip: Option<(Arc<str>, String)>,
         previous_blink: bool,
         mut animating: bool,
     ) -> Frame<'_> {
@@ -1086,7 +1086,7 @@ impl Ui {
         // window agrees with the one in the scene.
         let tip = tip.and_then(|(t, _)| {
             let f = scene.surface(TIP_KEY)?.frame;
-            Some((t, Point::new(f.x, f.y)))
+            Some((t.to_string(), Point::new(f.x, f.y)))
         });
         // A reused memo's nodes were not visited, and are still there.
         let kept = |k: &str| scene.memos_at(k).any(|(_, reused)| reused);
