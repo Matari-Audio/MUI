@@ -302,6 +302,7 @@ pub fn with_cursor(
             path: arrow.clone(),
             paint: Paint::Solid(color),
             rect: None,
+            offset: Point::ZERO,
             width,
             blur: 0.0,
             text: None,

@@ -54,29 +54,39 @@ impl From<mui_geometry::Error> for Error {
     }
 }
 
-/// Each paint entry's path as a `BezPath`, kept across frames beside the
-/// path it came from: an entry whose path did not change -- the same `Arc`,
-/// or an equal path -- is not converted again. Index `i` is paint entry `i`.
+/// Each path as a `BezPath`, by the `Arc` it came from: an outline shared
+/// by same-sized nodes, or kept by one that only moved, converts once. The
+/// entry holds its `Arc`, so the address cannot be reused while it is a key;
+/// a path no frame asked for in [`AGE`] frames goes.
 #[derive(Default)]
-pub(crate) struct Converted(Vec<(Arc<Path>, crate::kurbo::BezPath)>);
+pub(crate) struct Converted {
+    map: rustc_hash::FxHashMap<usize, (Arc<Path>, crate::kurbo::BezPath, u64)>,
+    frame: u64,
+}
+
+/// Frames a conversion outlives its last use; see [`Converted`].
+const AGE: u64 = 32;
+
 impl Converted {
-    pub fn resize(&mut self, len: usize) {
-        self.0.resize_with(len, Default::default);
-    }
-    pub fn get(&mut self, i: usize, path: &Arc<Path>) -> Result<&crate::kurbo::BezPath, Error> {
-        let (source, bez) = &mut self.0[i];
-        if !Arc::ptr_eq(source, path) {
-            if **source != **path {
-                if let Err(e) = crate::bez_path_into(path, crate::ARC_TOLERANCE, bez) {
-                    // Leave a pair that still matches: the empty path, empty.
-                    *source = Arc::default();
-                    bez.truncate(0);
-                    return Err(e.into());
-                }
-            }
-            *source = Arc::clone(path);
+    /// Start a frame; every [`AGE`] frames, drop what went unused.
+    pub fn tick(&mut self) {
+        self.frame += 1;
+        if self.frame.is_multiple_of(AGE) {
+            let now = self.frame;
+            self.map.retain(|_, e| now - e.2 <= AGE);
         }
-        Ok(bez)
+    }
+    pub fn get(&mut self, path: &Arc<Path>) -> Result<&crate::kurbo::BezPath, Error> {
+        use std::collections::hash_map::Entry;
+        let e = match self.map.entry(Arc::as_ptr(path) as usize) {
+            Entry::Occupied(e) => e.into_mut(),
+            Entry::Vacant(v) => {
+                let bez = crate::bez_path(path, crate::ARC_TOLERANCE)?;
+                v.insert((path.clone(), bez, 0))
+            }
+        };
+        e.2 = self.frame;
+        Ok(&e.1)
     }
 }
 

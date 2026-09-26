@@ -121,28 +121,29 @@ fn naga_validates_crisp_boundary_uniform_stride() {
     assert_eq!(*stride, 48);
 }
 
-/// A path converts once; asked again unchanged -- the same `Arc` or an
-/// equal path -- it is not converted again, and a changed path is. A failed
-/// conversion leaves no stale pair behind.
+/// A path converts once per `Arc`, however many entries share it; a
+/// failed conversion leaves nothing behind, and an unused one ages out.
 #[test]
-fn an_unchanged_path_is_not_converted_again() {
+fn a_shared_path_is_converted_once() {
     use mui_geometry::Path;
     use std::sync::Arc;
     let mut c = super::Converted::default();
-    c.resize(1);
     let pill = Arc::new(Path::capsule(20., 60.).unwrap());
-    let first = c.get(0, &pill).unwrap().clone();
-    // Poison the kept conversion: an unchanged path must come back as is.
-    c.0[0].1.truncate(0);
-    assert!(c.get(0, &pill).unwrap().elements().is_empty());
-    let equal = Arc::new((*pill).clone());
-    assert!(c.get(0, &equal).unwrap().elements().is_empty(), "equal");
+    let first = c.get(&pill).unwrap().clone();
+    // Poison the kept conversion: the same `Arc` must come back as is.
+    c.map.values_mut().next().unwrap().1.truncate(0);
+    assert!(c.get(&pill.clone()).unwrap().elements().is_empty());
     let wider = Arc::new(Path::capsule(20., 80.).unwrap());
-    assert_ne!(c.get(0, &wider).unwrap(), &first);
+    assert_ne!(c.get(&wider).unwrap(), &first);
     let mut bad = (*pill).clone();
     if let mui_geometry::PathCommand::ArcTo(arc) = &mut bad.commands[1] {
         arc.radius *= 2.;
     }
-    assert!(c.get(0, &Arc::new(bad)).is_err());
-    assert_eq!(c.get(0, &pill).unwrap(), &first);
+    assert!(c.get(&Arc::new(bad)).is_err());
+    assert_eq!(c.map.len(), 2);
+    for _ in 0..=2 * super::AGE {
+        c.tick();
+        c.get(&wider).unwrap();
+    }
+    assert_eq!(c.map.len(), 1, "the unused pill aged out");
 }

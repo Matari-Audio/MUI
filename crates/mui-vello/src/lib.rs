@@ -527,20 +527,34 @@ pub fn paint(
         return Err(Error::InvalidPath);
     }
     canvas.begin_frame();
-    canvas.set_transform(transform);
     let mut bez = BezPath::new();
     for (i, p) in scene.paint.iter().enumerate() {
         if layered(canvas, p) {
             continue;
         }
         bez_path_into(&p.path, ARC_TOLERANCE, &mut bez)?;
+        canvas.set_transform(placed(transform, p));
         if p.layer == Layer::Backdrop {
-            backdrop(canvas, &scene.paint[..i], p, &bez)?;
+            backdrop(canvas, &scene.paint[..i], p, &bez, transform)?;
         } else {
             one(canvas, p, &bez)?;
         }
     }
     Ok(())
+}
+
+/// `base` moved to where `p` stands: its paths are local to
+/// [`Painted::offset`].
+pub(crate) fn placed(base: Affine, p: &Painted) -> Affine {
+    match p.offset {
+        o if o.x == 0. && o.y == 0. => base,
+        o => base * Affine::translate((o.x, o.y)),
+    }
+}
+
+/// `p`'s paint box where it stands in the scene.
+pub(crate) fn scene_box(p: &Painted, path: &BezPath) -> Rect {
+    paint_box(p, path) + kurbo::Vec2::new(p.offset.x, p.offset.y)
 }
 
 /// A [`Layer::Backdrop`]: `below` -- everything the list painted before it
@@ -559,27 +573,29 @@ fn backdrop(
     below: &[Painted],
     p: &Painted,
     outline: &BezPath,
+    base: Affine,
 ) -> Result<(), Error> {
     // NaN and negatives say nothing, as a zero does.
     if p.blur.is_nan() || p.blur <= 0.0 {
         return Ok(());
     }
     // What the blur can pull in: three standard deviations past the outline.
-    let reach = outline.bounding_box().inflate(3. * p.blur, 3. * p.blur);
+    let reach = scene_box(p, outline).inflate(3. * p.blur, 3. * p.blur);
     if canvas.push_blur(outline, p.blur as f32) {
-        replay(canvas, below, reach)?;
+        replay(canvas, below, reach, base)?;
         canvas.pop_layer();
         canvas.pop_layer();
     }
     Ok(())
 }
 
-/// `below` painted again as far as it can reach `reach`, bar what an open
-/// ancestor already applies.
+/// `below` painted again under `base` as far as it can reach `reach`, bar
+/// what an open ancestor already applies.
 pub(crate) fn replay(
     canvas: &mut impl Canvas,
     below: &[Painted],
     reach: Rect,
+    base: Affine,
 ) -> Result<(), Error> {
     // A clip or layer the prefix opens and never closes is an ancestor's:
     // its clip already bounds this node and its layer composites it, so
@@ -612,11 +628,12 @@ pub(crate) fn replay(
         );
         let em = q.text.as_ref().map_or(0., |t| f64::from(t.size));
         let reaches = || {
-            paint_box(q, &bez)
+            scene_box(q, &bez)
                 .inflate(q.width + em, q.width + em)
                 .overlaps(reach)
         };
         if !plain || reaches() {
+            canvas.set_transform(placed(base, q));
             one(canvas, q, &bez)?;
         }
     }
@@ -840,6 +857,7 @@ mod seam {
             path: Path::default().into(),
             paint: Paint::Solid(mui_scene::Color::oklch(0.5, 0., 0.)),
             rect: None,
+            offset: Default::default(),
             width: 0.,
             blur: 0.,
             text: Some(Text {

@@ -14,7 +14,7 @@ mod spec;
 mod text;
 mod walk;
 
-pub use resolved::{Layer, Painted, ResolvedScene, ResolvedSurface, Text, TextGlyph};
+pub use resolved::{Layer, Painted, PlacedPath, ResolvedScene, ResolvedSurface, Text, TextGlyph};
 pub use spec::{SceneError, SceneSpec};
 pub use text::TextCache;
 
@@ -113,7 +113,7 @@ fn find(n: &El, id: &str, at: usize, sizes: &[usize]) -> Option<usize> {
 struct Ancestors {
     parent: Option<Arc<str>>,
     clip: Option<Bounds>,
-    clip_paths: Option<Arc<[Arc<Path>]>>,
+    clip_paths: Option<Arc<[PlacedPath]>>,
     cursor: Option<Cursor>,
     disabled: bool,
 }

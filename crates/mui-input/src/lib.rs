@@ -25,7 +25,7 @@ pub use mui_geometry::Point;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use mui_geometry::kurbo::{BezPath, Rect, Shape as _};
+use mui_geometry::kurbo::{self, BezPath, Rect, Shape as _, Vec2};
 use mui_geometry::{Bounds, Error, Path};
 
 /// How far the pointer may travel between press and release and still count as
@@ -39,16 +39,43 @@ struct Target {
     /// Which of the target's own shapes this is, for a canvas that named
     /// its draws. `None` for an ordinary surface.
     tag: Option<String>,
+    /// Local to `at`; shared by every target of the same `Arc`.
+    path: Arc<Converted>,
+    at: Vec2,
+    /// The nearest clipping ancestor's rect: outside it, the target is not
+    /// drawn, so it must not respond either.
+    clip: Option<Bounds>,
+    /// Cached exact clipping contours, outermost first, each local to its
+    /// offset. Pointer queries only run winding tests over these
+    /// already-converted paths.
+    clip_paths: Clips,
+}
+
+/// Converted clip contours, each with its offset.
+type Clips = Arc<[(Arc<Converted>, Vec2)]>;
+
+/// A path as the queries want it.
+struct Converted {
     path: BezPath,
     /// Cheap reject. Most pointer positions miss most targets, and a winding
     /// number costs a walk over every segment.
     bounds: Rect,
-    /// The nearest clipping ancestor's rect: outside it, the target is not
-    /// drawn, so it must not respond either.
-    clip: Option<Bounds>,
-    /// Cached exact clipping contours, outermost first. Pointer queries only
-    /// run winding tests over these already-converted paths.
-    clip_paths: Arc<[BezPath]>,
+}
+impl Converted {
+    fn new(path: &Path) -> Result<Arc<Self>, Error> {
+        let path = mui_geometry::bez_path(path, mui_geometry::ARC_TOLERANCE)?;
+        Ok(Arc::new(Self {
+            bounds: path.bounding_box(),
+            path,
+        }))
+    }
+    fn winds(&self, q: kurbo::Point) -> bool {
+        self.bounds.contains(q) && self.path.winding(q) != 0
+    }
+}
+
+fn vec(p: Point) -> Vec2 {
+    Vec2::new(p.x, p.y)
 }
 
 /// The targets under the pointer, in paint order.
@@ -60,7 +87,11 @@ pub struct Hit {
     /// The scene shares one `Arc<[Arc<Path>]>` among all descendants of a clip.
     /// Cache its Bézier conversion by slice identity so tagged draws on one
     /// surface do not repeat validation or curve conversion.
-    clip_cache: HashMap<(usize, usize), Arc<[BezPath]>>,
+    clip_cache: HashMap<(usize, usize), Clips>,
+    /// Placed paths' conversions by their `Arc`, which the entry holds so
+    /// the address stays its own, and whether this build used it: kept
+    /// across [`Hit::clear`], so a rebuilt map converts only new shapes.
+    placed: HashMap<usize, (Arc<Path>, Arc<Converted>, bool)>,
 }
 
 impl Hit {
@@ -95,7 +126,14 @@ impl Hit {
         clips: Option<&[Arc<Path>]>,
     ) -> Result<(), Error> {
         let clips = self.bez_clips(clips)?;
-        self.add(id.into(), None, path, clip, clips)
+        self.add(
+            id.into(),
+            None,
+            Converted::new(path)?,
+            Vec2::ZERO,
+            clip,
+            clips,
+        )
     }
 
     /// Add one named shape of a target: a canvas's drawn ring, a knot, a
@@ -134,30 +172,98 @@ impl Hit {
         clips: Option<&[Arc<Path>]>,
     ) -> Result<(), Error> {
         let clips = self.bez_clips(clips)?;
-        self.add(id.into(), Some(tag.into()), path, clip, clips)
+        let path = Converted::new(path)?;
+        self.add(id.into(), Some(tag.into()), path, Vec2::ZERO, clip, clips)
+    }
+
+    /// Add a target, or with `tag` one named shape of it, whose `path` is
+    /// local to `at` and whose clips are each local to their own offset: a
+    /// scene surface as it resolved. The pointer is moved into the path's
+    /// space instead of the path into the scene's, and each `Arc` converts
+    /// once, however many targets share it and however many maps since.
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use mui_geometry::{Path, Point};
+    /// # use mui_input::Hit;
+    /// let square = [(0., 0.), (10., 0.), (10., 10.), (0., 10.)];
+    /// let path = Arc::new(Path::polyline(square.map(|(x, y)| Point::new(x, y)), true));
+    /// let mut hit = Hit::default();
+    /// hit.push_placed("a", None, &path, Point::new(100., 0.), None, None).unwrap();
+    /// assert_eq!(hit.at(Point::new(105., 5.)), Some("a"));
+    /// assert_eq!(hit.at(Point::new(5., 5.)), None);
+    /// ```
+    pub fn push_placed(
+        &mut self,
+        id: impl Into<String>,
+        tag: Option<String>,
+        path: &Arc<Path>,
+        at: Point,
+        clip: Option<Bounds>,
+        clips: Option<&[(Arc<Path>, Point)]>,
+    ) -> Result<(), Error> {
+        let clips = match clips.filter(|c| !c.is_empty()) {
+            None => Arc::from([]),
+            Some(list) => {
+                let key = (list.as_ptr() as usize, list.len());
+                match self.clip_cache.get(&key) {
+                    Some(c) => c.clone(),
+                    None => {
+                        let c: Arc<[_]> = list
+                            .iter()
+                            .map(|(p, o)| Ok((self.converted(p)?, vec(*o))))
+                            .collect::<Result<Vec<_>, Error>>()?
+                            .into();
+                        self.clip_cache.insert(key, c.clone());
+                        c
+                    }
+                }
+            }
+        };
+        let path = self.converted(path)?;
+        self.add(id.into(), tag, path, vec(at), clip, clips)
+    }
+
+    /// Empty the map for a rebuild, keeping the conversions the last build
+    /// used for [`Hit::push_placed`] to find again.
+    pub fn clear(&mut self) {
+        self.targets.clear();
+        self.clip_cache.clear();
+        self.placed.retain(|_, e| std::mem::take(&mut e.2));
+    }
+
+    fn converted(&mut self, path: &Arc<Path>) -> Result<Arc<Converted>, Error> {
+        let key = Arc::as_ptr(path) as usize;
+        if let Some(e) = self.placed.get_mut(&key) {
+            e.2 = true;
+            return Ok(e.1.clone());
+        }
+        let c = Converted::new(path)?;
+        self.placed.insert(key, (path.clone(), c.clone(), true));
+        Ok(c)
     }
 
     fn add(
         &mut self,
         id: String,
         tag: Option<String>,
-        path: &Path,
+        path: Arc<Converted>,
+        at: Vec2,
         clip: Option<Bounds>,
-        clip_paths: Arc<[BezPath]>,
+        clip_paths: Clips,
     ) -> Result<(), Error> {
-        let path = mui_geometry::bez_path(path, mui_geometry::ARC_TOLERANCE)?;
         self.targets.push(Target {
             id,
             tag,
-            bounds: path.bounding_box(),
             path,
+            at,
             clip,
             clip_paths,
         });
         Ok(())
     }
 
-    fn bez_clips(&mut self, paths: Option<&[Arc<Path>]>) -> Result<Arc<[BezPath]>, Error> {
+    fn bez_clips(&mut self, paths: Option<&[Arc<Path>]>) -> Result<Clips, Error> {
         let Some(paths) = paths.filter(|paths| !paths.is_empty()) else {
             return Ok(Arc::from([]));
         };
@@ -165,10 +271,10 @@ impl Hit {
         if let Some(clips) = self.clip_cache.get(&key) {
             return Ok(clips.clone());
         }
-        let clips: Arc<[BezPath]> = paths
+        let clips: Arc<[_]> = paths
             .iter()
-            .map(|path| mui_geometry::bez_path(path, mui_geometry::ARC_TOLERANCE))
-            .collect::<Result<Vec<_>, _>>()?
+            .map(|path| Ok((Converted::new(path)?, Vec2::ZERO)))
+            .collect::<Result<Vec<_>, Error>>()?
             .into();
         self.clip_cache.insert(key, clips.clone());
         Ok(clips)
@@ -223,10 +329,10 @@ impl Hit {
             .rev()
             .find(|t| {
                 inside(&t.clip)
-                    && t.bounds.contains(q)
-                    && t.clip_paths.iter().all(|clip| clip.winding(q) != 0)
+                    && t.path.bounds.contains(q - t.at)
+                    && t.clip_paths.iter().all(|(c, at)| c.winds(q - *at))
                     && contains(&t.id, t.tag.as_deref(), p)
-                        .unwrap_or_else(|| t.path.winding(q) != 0)
+                        .unwrap_or_else(|| t.path.path.winding(q - t.at) != 0)
             })
             .map(|t| (t.id.as_str(), t.tag.as_deref()))
     }

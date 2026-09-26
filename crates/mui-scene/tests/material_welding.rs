@@ -185,7 +185,7 @@ fn baked_weld_clip_is_carried_as_its_actual_shape() {
     let a = s.surface("a").unwrap();
     assert!(a
         .clip_paths()
-        .is_some_and(|paths| paths.contains(&group.path)));
+        .is_some_and(|paths| paths.contains(&(group.path.clone(), group.offset))));
 }
 #[test]
 fn a_union_is_a_vector_operation() {
