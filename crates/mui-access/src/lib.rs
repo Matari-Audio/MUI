@@ -2,7 +2,7 @@
 //!
 //! The scene knows where every named surface is and whether it takes focus;
 //! it does not know that one of them is a slider. So a node says what it is
-//! with `.role(..)` and `.label(..)`, and the surface carries it here:
+//! with `.a11y(..)` and `.named(..)`, and the surface carries it here:
 //!
 //! ```
 //! use mui_access::tree_update;

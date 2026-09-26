@@ -225,7 +225,7 @@ pub struct ResolvedSurface {
     pub disabled: bool,
     /// The role and name this surface reports to a screen reader.
     pub semantics: Option<Semantics>,
-    /// The name came from this node's text because no explicit `.label(..)`
+    /// The name came from this node's text because no explicit `.named(..)`
     /// was supplied. Live text swaps update this name; an explicit label does
     /// not move with the paint.
     pub(super) semantic_label_implicit: bool,

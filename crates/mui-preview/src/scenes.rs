@@ -164,7 +164,7 @@ impl PreviewScene for SegmentedRow {
         "Segmented row"
     }
     fn about(&self) -> &'static str {
-        "One .join(): the gap closes, every seam goes square, and the strip's own corner rounds the two ends."
+        "One .segmented(): the gap closes, every seam goes square, and the strip's own corner rounds the two ends."
     }
     fn specimen(&mut self, _: &mut Ui) -> El {
         row((0..4).map(|i| {

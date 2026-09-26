@@ -1,7 +1,7 @@
 //! A styled element tree lowered to a resolved, paint-ordered scene.
 //!
 //! The [`El`] DSL and its `row!`/`col!`/`stack!`/`grid!` sugar build the tree,
-//! [`Styled`] and [`Paints`] decorate it, and [`resolve_scene`] walks it once
+//! [`Styled`] and [`Paints`] decorate it, and [`resolve`] walks it once
 //! against a [`Theme`] into a z-ordered [`ResolvedScene`] paint list.
 //!
 //! Renderer-independent, `forbid(unsafe_code)`. Layout frames and painted
@@ -65,7 +65,7 @@ pub use mui_text::{Axes, Font, Weight};
 pub use scene::bar;
 pub use scene::{
     Layer, Painted, PlacedPath, ResolvedScene, ResolvedSurface, Resolver, SceneError, SceneSpec,
-    Text, TextCache, TextGlyph, push_index, resolve,
+    Text, TextGlyph, push_index, resolve,
 };
 
 /// Everything a scene file needs, including the spacing tokens as bare

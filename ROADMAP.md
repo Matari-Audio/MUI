@@ -36,7 +36,7 @@ public function and a test behind it.
       leading edge for the length of its section, through the same second
       placement pass as a pin, and `Layout::min_size` / `Ui::min_size` report
       the intrinsic floor a host sizes its window against.
-- [x] Text-run cache across frames (`resolve_scene_with`, owned by `Ui`).
+- [x] Text-run cache across frames (the `Resolver` `Ui` owns).
 - [x] Glyph runs: text reaches Vello as a hinted run, not a filled outline;
       the font blob is interned so Vello's hinted-outline cache survives.
 - [x] Input: `Input` carries wheel, key presses and typed text; hits are
@@ -51,7 +51,7 @@ public function and a test behind it.
       rows, and text metrics (`ascent`, `x_height`, caret hit testing).
 - [x] Selection, copy, cut and paste in `text_input`, through
       `Frame::clipboard` / `Input::clipboard`.
-- [x] Motion: springs by response and damping, `.animate()`/`.transition()`
+- [x] Motion: springs by response and damping, `.animate()`/`.animate_with()`
       transitions that retarget mid-flight, and `Ui::tween`.
 - [x] Plugin parameter gestures: `Ui::edit` / `Frame::edits` bracket every
       capture, cancelled ones included.
@@ -115,7 +115,7 @@ public function and a test behind it.
       `unicode-linebreak`, so CJK breaks between ideographs and a no-break
       space or an emoji ZWJ sequence holds together. A word wider than the
       line still overflows at a char, not a grapheme cluster.
-- [x] Real semantic roles: `.role(Kind::..)` / `.label(..)` on any node, set
+- [x] Real semantic roles: `.a11y(A11y::..)` / `.named(..)` on any node, set
       by every widget, so `mui-access` reports a named button and a slider
       with its range instead of a pile of groups, and the preview keeps an
       `accesskit_winit::Adapter` that publishes after each frame and serves
@@ -135,7 +135,7 @@ public function and a test behind it.
       `Xs..Xl` size scale off `Theme.control`, every widget returning a
       `Control` (`.variant .role .size .px .el`), faces derived from the
       palette rather than a colour table, `knob`'s raw `f64` size gone, and
-      `.join()` on a row or column.
+      `.segmented()` on a row or column.
 - [x] Corners as a theme vocabulary: `Corners { selector, field, box_,
       concave }` with `.radius(Corner::Field)`, and `CornerStyle::Squircle`
       restyling welds, shells and strokes alike (it gives up the analytic

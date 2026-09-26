@@ -145,7 +145,7 @@ fn element(e: &Expr, depth: usize, nodes: &mut usize) -> syn::Result<El> {
                 None
             };
             match name.as_deref() {
-                Some("leaf") => {
+                Some("block") => {
                     count(&c.args, 2)?;
                     Ok(block(number(&c.args[0])?, number(&c.args[1])?))
                 }
@@ -174,7 +174,7 @@ fn element(e: &Expr, depth: usize, nodes: &mut usize) -> syn::Result<El> {
                 }
                 _ => Err(error(
                     e,
-                    "supported constructors: leaf(w, h), text(\"…\"), icon(\"home\"), spacer()",
+                    "supported constructors: block(w, h), text(\"…\"), icon(\"home\"), spacer()",
                 )),
             }
         }
@@ -184,7 +184,7 @@ fn element(e: &Expr, depth: usize, nodes: &mut usize) -> syn::Result<El> {
             let args = &m.args;
             let arity = match name.as_str() {
                 "pill" | "center" | "start" | "end" | "between" | "clip" | "wrap" | "full"
-                | "join" | "no_fill" | "no_border" => 0,
+                | "segmented" | "no_fill" | "no_border" => 0,
                 "offset" | "border" | "shell" | "pad_xy" => 2,
                 _ => 1,
             };
@@ -340,8 +340,8 @@ mod tests {
                     .any(|p| p != &frame.pixels[..4])
             );
         }
-        let a = render("leaf(100., 100.).fill(Primary)", 320, 240).unwrap();
-        let b = render("leaf(100., 100.).fill(Secondary)", 320, 240).unwrap();
+        let a = render("block(100., 100.).fill(Primary)", 320, 240).unwrap();
+        let b = render("block(100., 100.).fill(Secondary)", 320, 240).unwrap();
         assert_ne!(a.pixels, b.pixels);
     }
     #[test]
@@ -369,16 +369,16 @@ mod tests {
         for source in [
             "loop {}",
             "std::process::exit(0)",
-            "leaf(2.)",
-            "leaf(2., 3.).unknown(0.)",
-            "leaf(1e99, 20.)",
-            "leaf(2., 3.).fill(Unknown)",
-            "leaf(2., 3.).fill(Primary).offset(0.)",
+            "block(2.)",
+            "block(2., 3.).unknown(0.)",
+            "block(1e99, 20.)",
+            "block(2., 3.).fill(Unknown)",
+            "block(2., 3.).fill(Primary).offset(0.)",
         ] {
             assert!(parse(source).is_err(), "accepted {source}");
         }
         assert!(parse(&"(".repeat(100)).is_err());
         assert!(parse(&"x".repeat(17_000)).is_err());
-        assert!(render("leaf(10., 10.)", 65535, 65535).is_err());
+        assert!(render("block(10., 10.)", 65535, 65535).is_err());
     }
 }

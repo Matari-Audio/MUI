@@ -1,5 +1,5 @@
 //! A ~1000-node stress tree: nested 8 deep, grids, wrapping rows, paragraphs.
-//! Times `resolve_scene_with` against the layout solve alone, at three shapes.
+//! Times `Resolver::resolve` against the layout solve alone, at three shapes.
 use std::alloc::{GlobalAlloc, Layout as AllocLayout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;

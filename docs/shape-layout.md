@@ -54,7 +54,7 @@ inward share, **then offsets the resulting inner boundary by padding**. A
 Named ramp anchors and material tabs/dividers resolve against the authored
 layout before shape fitting, avoiding geometry/layout feedback.
 
-Named nodes with `.transition(Spring::DEFAULT)` spring pixel padding, its
+Named nodes with `.animate_with(Spring::DEFAULT)` spring pixel padding, its
 matching gap, bend and ramp widths together. Independently specified gaps keep
 their own declared value. Spacing tokens resolve from the theme; they are not
 pixel spring channels. Changed outlines and host sizes are re-evaluated normally.

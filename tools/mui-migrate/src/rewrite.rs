@@ -623,7 +623,9 @@ impl<'a> File<'a> {
         for r in self.ctx.rules() {
             if let Rule::Function { old, new } | Rule::Type { old, new } = *r
                 && (self.defined.contains(new) || bound(new))
-                && let Some(i) = (0..self.t.len()).find(|&i| self.ident(i, old) && self.is_mui_name(i))
+                // A function only collides where it is called.
+                && let fun = matches!(r, Rule::Function { .. })
+                && let Some(i) = (0..self.t.len()).find(|&i| self.ident(i, old) && (!fun || self.open(i + 1, '(')) && self.is_mui_name(i))
             {
                 out.push((self.line(i), format!("`{old}` becomes `{new}`, which this file also defines or binds: rename the local one")));
             }
@@ -815,8 +817,9 @@ impl<'a> File<'a> {
                             edit(t[i].lo, t[i].hi, new.to_string());
                         }
                     }
-                    Rule::Qualify { names, prefix } if names.contains(&name) => {
-                        if !in_use
+                    Rule::Qualify { names, prefix }
+                        if names.contains(&name)
+                            && !in_use
                             && !field
                             && !self.sep_before(i)
                             && !self.sep(i + 1)
@@ -825,10 +828,9 @@ impl<'a> File<'a> {
                             && self.mui_glob
                             && !self.foreign_glob
                             && !self.defined.contains(name)
-                            && !self.locals.contains_key(name)
-                        {
-                            edit(t[i].lo, t[i].lo, prefix.to_string());
-                        }
+                            && !self.locals.contains_key(name) =>
+                    {
+                        edit(t[i].lo, t[i].lo, prefix.to_string());
                     }
                     _ => {}
                 }

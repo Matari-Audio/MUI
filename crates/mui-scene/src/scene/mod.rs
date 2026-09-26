@@ -16,7 +16,7 @@ mod walk;
 
 pub use resolved::{Layer, Painted, PlacedPath, ResolvedScene, ResolvedSurface, Text, TextGlyph};
 pub use spec::{SceneError, SceneSpec};
-pub use text::TextCache;
+pub(crate) use text::TextState;
 
 use rustc_hash::FxHashMap as HashMap;
 use std::borrow::Cow;
@@ -335,12 +335,27 @@ pub fn resolve(spec: &SceneSpec) -> Result<ResolvedScene, SceneError> {
 /// and material welds. Keep one per window.
 #[derive(Default)]
 pub struct Resolver {
-    pub text: TextCache,
+    pub(crate) text: TextState,
     pub welds: crate::WeldCache,
 }
 impl Resolver {
     pub fn new() -> Self {
         Self::default()
+    }
+    /// Hand a scene you are done with back, so the next resolve fills its
+    /// buffers instead of growing new ones.
+    pub fn recycle(&mut self, scene: ResolvedScene) {
+        self.text.recycle(scene);
+    }
+    pub fn layout_stats(&self) -> mui_layout::LayoutStats {
+        self.text.layout_stats()
+    }
+    /// Shaped text runs held: one per (string, size, face, axes) variant.
+    pub fn len(&self) -> usize {
+        self.text.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.text.is_empty()
     }
     /// Solve, shape and paint `spec`.
     pub fn resolve(&mut self, spec: &SceneSpec) -> Result<ResolvedScene, SceneError> {
@@ -374,9 +389,9 @@ impl Resolver {
 }
 
 // The internal tests read the text caches' insides, so they resolve
-// against a bare `TextCache` with a cold weld cache.
+// against a bare `TextState` with a cold weld cache.
 #[cfg(test)]
-impl TextCache {
+impl TextState {
     pub(crate) fn resolve(&mut self, spec: &SceneSpec) -> Result<ResolvedScene, SceneError> {
         resolve_with(
             spec,
@@ -390,7 +405,7 @@ impl TextCache {
 
 fn resolve_with(
     spec: &SceneSpec,
-    text: &mut TextCache,
+    text: &mut TextState,
     weld_cache: &mut crate::WeldCache,
     glide: &mut dyn FnMut(&str, &crate::Element, Frame) -> Frame,
     prev: Option<&ResolvedScene>,

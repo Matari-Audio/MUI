@@ -277,7 +277,10 @@ fn markdown_blocks() {
 #[test]
 fn new_name_collides_with_a_local_definition() {
     let out = run("use mui_layout::{leaf, row};\nfn block(i: usize) -> u8 { 0 }\nfn f() { row([leaf(1., 1.)]); }\n");
-    assert!(out.warnings.iter().any(|(l, w)| *l == 1 && w.contains("`block`")), "{:?}", out.warnings);
+    assert!(out.warnings.iter().any(|(l, w)| *l == 3 && w.contains("`block`")), "{:?}", out.warnings);
     let out = run("use mui_scene::resolve_scene;\nfn f(s: &S) { let resolve = 1; resolve_scene(s); }\n");
     assert!(out.warnings.iter().any(|(_, w)| w.contains("`resolve`")), "{:?}", out.warnings);
+    // A closure parameter named like the old function is not a call.
+    let out = run("use mui::prelude::*;\nfn f() { let body = 1; let g = |label: &str| label.len(); }\n");
+    assert!(out.warnings.is_empty(), "{:?}", out.warnings);
 }

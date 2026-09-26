@@ -1,5 +1,5 @@
 //! A node shrunk to nothing paints nothing; it does not fail the frame. A
-//! level meter at silence is `leaf(200. * level, 8.).pill()`.
+//! level meter at silence is `block(200. * level, 8.).pill()`.
 use mui::prelude::*;
 
 #[test]

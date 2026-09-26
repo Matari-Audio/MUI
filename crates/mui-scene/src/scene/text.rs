@@ -10,7 +10,7 @@ use super::outline::OutlineCache;
 use super::{SceneSpec, TextGlyph};
 use crate::{Content, Element, Theme};
 
-/// One shaped string, kept in [`TextCache`] while the font stays the same.
+/// One shaped string, kept in [`TextState`] while the font stays the same.
 #[derive(Debug, Clone)]
 pub(super) struct CachedRun {
     pub(super) advance: f64,
@@ -62,12 +62,12 @@ pub(super) type PerText<K, V> = HashMap<String, HashMap<K, (V, u64)>>;
 /// Normalized coordinates per axes, then per (size bits, primary face id).
 pub(super) type CoordsCache = HashMap<Axes, HashMap<(u64, Option<u64>), (Coords, u64)>>;
 
-/// Everything shaped, broken and bent across frames. Own one in your runtime
-/// and pass it to [`resolve_scene_with`](crate::resolve_scene_with). Nothing is flushed wholesale: an
+/// Everything shaped, broken and bent across frames: the text half of a
+/// [`Resolver`](crate::Resolver). Nothing is flushed wholesale: an
 /// entry the last resolve did not use is dropped at its end, so memory tracks
 /// the live tree and a steady frame reshapes nothing.
 #[derive(Debug, Default)]
-pub struct TextCache {
+pub struct TextState {
     pub(super) layout: mui_layout::LayoutCache,
     /// The ids of the spec's faces the cache was filled with.
     pub(super) fonts: Vec<u64>,
@@ -95,7 +95,7 @@ pub(super) type Spare = (
     Vec<super::ResolvedSurface>,
     HashMap<Arc<str>, usize>,
 );
-impl TextCache {
+impl TextState {
     /// Hand a scene you are done with back, so the next resolve fills its
     /// buffers instead of growing new ones.
     pub fn recycle(&mut self, scene: super::ResolvedScene) {
@@ -463,7 +463,7 @@ mod tests {
                 .offered(Size::new(200., 8192.))
                 .font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap())
         };
-        let mut text = TextCache::default();
+        let mut text = TextState::default();
         text.resolve(&spec(300, "a")).unwrap();
         assert_eq!(
             text.outlines.entries.len(),
@@ -481,7 +481,7 @@ mod tests {
         let para = "one two three four five six seven eight nine ten";
         let spec = SceneSpec::new(col![text(para).id("p")].w(80.))
             .font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
-        let mut text = TextCache::default();
+        let mut text = TextState::default();
         let lines = |s: &ResolvedScene| s.paint.iter().filter(|p| p.layer == Layer::Text).count();
         assert!(lines(&text.resolve(&spec).unwrap()) > 1);
         // Doctor the cached breaks: a resolve that re-broke would not see it.
@@ -624,7 +624,7 @@ mod tests {
 
     #[test]
     fn text_cache_keys_on_size_as_well_as_string() {
-        let mut cache = TextCache::default();
+        let mut cache = TextState::default();
         let mut sp = SceneSpec::new(row([
             text("hi").text_size(12.).id("a"),
             text("hi").text_size(24.).id("b"),
@@ -636,7 +636,7 @@ mod tests {
 
     #[test]
     fn weight_reaches_the_run_and_keys_the_cache() {
-        let mut cache = TextCache::default();
+        let mut cache = TextState::default();
         let mut sp = SceneSpec::new(row![
             text("hi").id("a"),
             text("hi").text_weight(Weight::BOLD).id("b")
@@ -647,7 +647,7 @@ mod tests {
         // one reused at the wrong instance.
         assert_eq!(cache.len(), 2);
         // A static face shapes the same at any weight, so it shares one.
-        let mut hack = TextCache::default();
+        let mut hack = TextState::default();
         sp.font = Some(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
         hack.resolve(&sp).unwrap();
         assert_eq!(hack.len(), 1);
@@ -665,13 +665,13 @@ mod tests {
     #[test]
     fn hinting_pauses_for_the_frame_after_an_axis_moves() {
         let inter = Font::new(ttf_inter::REGULAR).unwrap();
-        let hint_at = |w: f32, cache: &mut TextCache| {
+        let hint_at = |w: f32, cache: &mut TextState| {
             let mut sp = SceneSpec::new(row([text("hi").text_axis("wght", w).id("t")]));
             sp.font = Some(inter.clone());
             let s = cache.resolve(&sp).unwrap();
             s.paint.iter().find_map(|p| p.text.as_ref()).unwrap().hint
         };
-        let mut cache = TextCache::default();
+        let mut cache = TextState::default();
         assert!(hint_at(400., &mut cache), "first frame is settled");
         assert!(hint_at(400., &mut cache));
         assert!(!hint_at(500., &mut cache), "the frame it moved on");
@@ -682,7 +682,7 @@ mod tests {
 
     #[test]
     fn text_cache_survives_frames_and_carries_glyphs() {
-        let mut cache = TextCache::default();
+        let mut cache = TextState::default();
         let mut sp = SceneSpec::new(row([text("hi").id("t")]));
         sp.font = Some(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
         let s = cache.resolve(&sp).unwrap();

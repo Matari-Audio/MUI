@@ -2,11 +2,11 @@
 col![
     text("MAKE IT YOURS").text_size(24.).fill(Ink),
     row![
-        leaf(92., 92.).pill().fill(Primary),
-        leaf(92., 92.).radius(24.).fill(Secondary),
-        leaf(92., 92.).radius(8.).fill(Tertiary),
+        block(92., 92.).pill().fill(Primary),
+        block(92., 92.).radius(24.).fill(Secondary),
+        block(92., 92.).radius(8.).fill(Tertiary),
     ].gap(16.),
-    leaf(320., 20.).pill()
+    block(320., 20.).pill()
         .fill(Gradient::vertical(Primary, Secondary)),
 ]
 .gap(24.).pad(32.).center()

@@ -1,5 +1,4 @@
-//! The compact spelling: container macros, length and alignment sugar, and
-//! the three text roles.
+//! The compact spelling: container macros and the three text roles.
 //!
 //! ```
 //! use mui_scene::prelude::*;

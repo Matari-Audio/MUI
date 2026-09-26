@@ -911,7 +911,7 @@ mod tests {
                 .map(|p| (p.path.clone(), p.offset))
                 .unwrap()
         };
-        let mut cache = TextCache::default();
+        let mut cache = TextState::default();
         let first = cache.resolve(&spec(4.)).unwrap();
         let ((a, at_a), (b, at_b)) = (fill(&first, "b0"), fill(&first, "b1"));
         assert!(Arc::ptr_eq(&a, &b), "one path for both buttons");
@@ -1325,7 +1325,7 @@ mod tests {
     #[test]
     fn a_warm_resolve_reuses_every_key() {
         let spec = SceneSpec::new(col([block(10., 10.).id("named"), block(10., 10.)]));
-        let mut text = TextCache::default();
+        let mut text = TextState::default();
         let cold = text.resolve(&spec).unwrap();
         let warm = text.resolve(&spec).unwrap();
         assert_eq!(cold.surfaces().count(), 3);
@@ -1402,7 +1402,7 @@ mod tests {
             let p = s.paint.iter().find(|p| p.layer == Layer::Draw(0)).unwrap();
             (p.path.clone(), p.placed())
         };
-        let mut text = TextCache::default();
+        let mut text = TextState::default();
         let (a, _) = path(&text.resolve(&spec(4.)).unwrap());
         let (b, _) = path(&text.resolve(&spec(4.)).unwrap());
         assert!(Arc::ptr_eq(&a, &b), "a still canvas re-placed its paths");
@@ -1456,7 +1456,7 @@ mod tests {
     }
     fn retained(
         spec: &SceneSpec,
-        text: &mut TextCache,
+        text: &mut TextState,
         prev: Option<&ResolvedScene>,
     ) -> ResolvedScene {
         super::super::resolve_with(
@@ -1474,7 +1474,7 @@ mod tests {
     #[test]
     fn a_reused_memo_copies_last_resolves_paint() {
         let d = draws();
-        let mut text = TextCache::default();
+        let mut text = TextState::default();
         let a = retained(&memo_spec(50., false, &d), &mut text, None);
         let b = retained(&memo_spec(50., true, &d), &mut text, Some(&a));
         assert_eq!(count(&d), 1, "the reused canvas was drawn again");
@@ -1497,7 +1497,7 @@ mod tests {
     #[test]
     fn a_moved_memo_translates_its_paint_and_surfaces() {
         let d = draws();
-        let mut text = TextCache::default();
+        let mut text = TextState::default();
         let a = retained(&memo_spec(50., false, &d), &mut text, None);
         let b = retained(&memo_spec(70., true, &d), &mut text, Some(&a));
         assert_eq!(count(&d), 1, "a moved memo was walked instead of copied");
@@ -1516,7 +1516,7 @@ mod tests {
     #[test]
     fn a_copied_memo_keeps_its_cache_entries() {
         let d = draws();
-        let mut text = TextCache::default();
+        let mut text = TextState::default();
         let mut prev = retained(&memo_spec(50., false, &d), &mut text, None);
         for i in 0..MEMO_AGE + 3 {
             prev = retained(&memo_spec(50., true, &d), &mut text, Some(&prev));

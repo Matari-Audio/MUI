@@ -375,8 +375,8 @@ impl Ui {
         self.fallback_fonts.push(font);
         self
     }
-    /// Use the analytic GPU backend for `.weld_with` / `weld!` by default.
-    /// A node may opt into `.reference_weld` for offline-only general contours.
+    /// Run `.weld(..)` / `weld!` on the analytic GPU backend: this `Ui`'s
+    /// [`SceneSpec::weld_backend`](mui_scene::SceneSpec::weld_backend).
     pub fn gpu_welding(mut self) -> Self {
         self.weld_backend = mui_scene::WeldBackend::AnalyticGpu;
         self
@@ -421,7 +421,7 @@ impl Ui {
     }
 
     pub fn layout_stats(&self) -> mui_layout::LayoutStats {
-        self.resolver.text.layout_stats()
+        self.resolver.layout_stats()
     }
     pub fn scene(&self) -> Option<&ResolvedScene> {
         self.scene.as_ref()
@@ -2263,7 +2263,7 @@ impl Ui {
         self.plays.retain(|_, (seen, _)| std::mem::take(seen));
         self.delivered = std::mem::take(&mut self.edits);
         if let Some(old) = self.scene.replace(scene) {
-            self.resolver.text.recycle(old);
+            self.resolver.recycle(old);
         }
         let repaint_after = self.repaint_after();
         // Widgets read the clock while constructing the tree, before this frame

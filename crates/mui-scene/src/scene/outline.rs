@@ -103,7 +103,7 @@ pub(super) struct OutlineCache {
     pub(super) hits: u64,
     pub(super) misses: u64,
     /// Each canvas's last draw list and its paths: a
-    /// [`canvas_cached`](crate::canvas_cached) list is painted from the same
+    /// [`canvas_keyed`](crate::canvas_keyed) list is painted from the same
     /// paths every frame, wherever it moves. Holding the list keeps its
     /// address from being reused.
     pub(super) canvases: HashMap<Arc<str>, PlacedDraws>,
@@ -667,7 +667,7 @@ mod tests {
                 .radius(0.)
                 .union(Role::Surface),
         );
-        let mut text = TextCache::default();
+        let mut text = TextState::default();
         text.resolve(&base).unwrap();
         let first_misses = text.outlines.misses;
         assert!(first_misses > 0, "the welded outline was not cached");
@@ -704,7 +704,7 @@ mod tests {
 
     /// A cached weld is only reused when every input matches, so the
     /// cached outline always equals a fresh resolve of the same spec.
-    fn same_as_fresh(spec: &SceneSpec, text: &mut TextCache) {
+    fn same_as_fresh(spec: &SceneSpec, text: &mut TextState) {
         let cached = text.resolve(spec).unwrap();
         let fresh = resolve(spec).unwrap();
         assert_eq!(
@@ -728,7 +728,7 @@ mod tests {
             )
             .offered(Size::new(60., 20.))
         };
-        let mut text = TextCache::default();
+        let mut text = TextState::default();
         text.resolve(&spec(1.)).unwrap();
         // Same frames, same radii: only the closure differs.
         same_as_fresh(&spec(0.5), &mut text);
@@ -756,7 +756,7 @@ mod tests {
             .offered(Size::new(60., 20.))
         };
         let kept = spec(block(40., 20.).outline(triangle(1.)));
-        let mut text = TextCache::default();
+        let mut text = TextState::default();
         text.resolve(&kept).unwrap();
         let misses = text.outlines.misses;
         text.resolve(&kept).unwrap();
@@ -790,7 +790,7 @@ mod tests {
                 ..Theme::default()
             })
         };
-        let mut text = TextCache::default();
+        let mut text = TextState::default();
         text.resolve(&spec(Radius::Token(Corner::Box))).unwrap();
         same_as_fresh(&spec(Radius::Pill), &mut text);
     }
@@ -817,7 +817,7 @@ mod tests {
             SceneSpec::new(col([weld]).pad(Spacing::Px(8. + shift)))
                 .offered(Size::new(400. + 2. * shift, 300. + 2. * shift))
         };
-        let mut text = TextCache::default();
+        let mut text = TextState::default();
         text.resolve(&spec(0.)).unwrap();
         for shift in [0., 13., 13.25, 0.5] {
             let before = mui_geometry::boolean_passes();

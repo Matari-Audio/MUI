@@ -86,7 +86,7 @@ pub(crate) fn check_plate(n: &El, nested: bool) -> Result<(), SceneError> {
     let s = &n.payload().style;
     if nested && n.payload().extras().welding.is_some() {
         return Err(SceneError::UnsupportedWeld(
-            "nested material-weld members; mark the nested group .exclude_from_weld()",
+            "nested material-weld members; mark the nested group .unwelded()",
         ));
     }
     if !s.shells.as_deref().unwrap_or_default().is_empty()

@@ -91,8 +91,8 @@ even though the snapshot it pins already shipped it.
 
 | Snapshot spelling | Main equivalent | Gap |
 | --- | --- | --- |
-| `item("id")` / `container([..])` (`item.rs:121,145`) | `leaf(w,h)` / `row![]` `col![]` `stack![]` `grid![n;]` (`mui-scene/src/dsl.rs:158-185`) | **rename**, plus id is now optional (`.id()`) instead of mandatory |
-| `Item` (owns `Ui` build, `item.rs:376 build()`) | `El` = `Node<Element>` (`element.rs:35`) | rename; `build()` → `resolve_scene(&SceneSpec)` |
+| `item("id")` / `container([..])` (`item.rs:121,145`) | `block(w,h)` / `row![]` `col![]` `stack![]` `grid![n;]` (`mui-scene/src/dsl.rs`) | **rename**, plus id is now optional (`.id()`) instead of mandatory |
+| `Item` (owns `Ui` build, `item.rs:376 build()`) | `El` = `Node<Element>` (`element.rs:35`) | rename; `build()` → `resolve(&SceneSpec)` |
 | `.size(Fill, Hug)` (`item.rs:158`), `Sizing::{Hug,Fill,Fixed,Percent}` (`mui-layout/src/lib.rs:139`) | `.w(len)/.h(len)/.square()` + `Len::{Auto,Px,Pct,Clamp}` (`mui-layout/src/len.rs:114`), `Fill`→`.grow(1.)`, `Hug`→`Len::Auto` | **rename + strictly better**: `Len::Clamp{min,pct,max}` has no snapshot equivalent |
 | `.pack(SpaceBetween)` (`item.rs:337`) | `.between()` (`dsl.rs:110`), `.center()`, `.start()`, `.end()`, or `.justify(Justify::…)` | rename |
 | `.round((20., XL))` → `Rounding::separate(outer,inner)` (`item.rs:58,280`) | `.radius(r)` / `.pill()` (`element.rs` `Styled::radius`), `Corner::{Selector,Field,Box,Concave}` on `Theme::corners` (`mui-style/src/theme.rs:16-88`) | **rename + redesign.** Outer/inner pairs are gone; main gets nesting from `.shell(d, fill)` parallel insets instead |
@@ -315,7 +315,7 @@ lines faking, and the README's "Kurv on MUI" sketch
 | Snapshot concept | Main equivalent | Gap |
 | --- | --- | --- |
 | `mui-core` | `mui-scene` + `mui-style` + `mui-motion` | rename (split) |
-| `Item`, `item()`, `container()` | `El`, `leaf()`, `row!/col!/stack!/grid!` | rename |
+| `Item`, `item()`, `container()` | `El`, `block()`, `row!/col!/stack!/grid!` | rename |
 | `.size(Fill, Hug)` | `.grow(1.)` / `Len::Auto`, `.w()/.h()` | rename |
 | `.pack(SpaceBetween)` | `.between()` | rename |
 | `.round((20., XL))` | `.radius()` / `Corner` + `.shell()` | rename + redesign |
