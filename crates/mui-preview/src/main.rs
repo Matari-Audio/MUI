@@ -59,7 +59,7 @@ fn icon(c: Cursor) -> CursorIcon {
 /// The named keys MUI has a word for; everything else is the host's business.
 fn named(k: NamedKey) -> Option<mui::prelude::Key> {
     // winit's variants carry the W3C names `Key::from_name` reads.
-    mui::prelude::Key::from_name(&format!("{k:?}"))
+    mui::prelude::Key::from_fmt(format_args!("{k:?}"))
 }
 
 /// A theme file: `key = value` a line, `#` starts a comment, everything
@@ -134,7 +134,11 @@ fn inspect(
     canvas.set_transform(xf);
     canvas.set_paint(primary.with_alpha(0.45).into());
     for s in scene.surfaces() {
-        canvas.set_stroke(Stroke::new(if s.key.starts_with('/') { 0.5 } else { 1.0 }));
+        canvas.set_stroke(Stroke::new(if mui::layout::Id::is_named(&s.key) {
+            1.0
+        } else {
+            0.5
+        }));
         canvas.stroke_path(&outline(s.frame));
     }
     // `keys` is tree order, which is z-order, so the last frame containing the

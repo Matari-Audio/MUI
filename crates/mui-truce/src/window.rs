@@ -650,7 +650,7 @@ fn is_paste(key: &HostKey, modifiers: Modifiers) -> bool {
 
 /// keyboard-types prints the W3C name `Key::from_name` reads.
 fn named_key(key: &HostKey) -> Option<Key> {
-    Key::from_name(&key.to_string())
+    Key::from_fmt(format_args!("{key}"))
 }
 
 const fn native_cursor(cursor: Cursor) -> MouseCursor {

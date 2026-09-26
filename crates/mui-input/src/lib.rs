@@ -539,6 +539,34 @@ impl Key {
             }
         })
     }
+
+    /// [`Key::from_name`] of a name a host formats (winit's `Debug`,
+    /// keyboard-types' `Display`), written into a stack buffer, not a
+    /// `String`: a key event allocates nothing. A name too long for any key
+    /// MUI knows is `None`.
+    ///
+    /// ```
+    /// # use mui_input::Key;
+    /// assert_eq!(Key::from_fmt(format_args!("{}", "PageDown")), Some(Key::PageDown));
+    /// assert_eq!(Key::from_fmt(format_args!("{}", "AudioVolumeMute")), None);
+    /// ```
+    pub fn from_fmt(name: std::fmt::Arguments<'_>) -> Option<Self> {
+        struct Buf([u8; 16], usize);
+        impl std::fmt::Write for Buf {
+            fn write_str(&mut self, s: &str) -> std::fmt::Result {
+                let end = self.1 + s.len();
+                self.0
+                    .get_mut(self.1..end)
+                    .ok_or(std::fmt::Error)?
+                    .copy_from_slice(s.as_bytes());
+                self.1 = end;
+                Ok(())
+            }
+        }
+        let mut buf = Buf([0; 16], 0);
+        std::fmt::write(&mut buf, name).ok()?;
+        Self::from_name(std::str::from_utf8(&buf.0[..buf.1]).ok()?)
+    }
 }
 
 /// The modifier keys held. Shared by [`KeyPress`] and [`PointerInput`]: a
