@@ -787,21 +787,16 @@ pub(super) fn state(
     path: &str,
     pal: &Palette,
     of: &dyn Fn(&str) -> Option<(f64, f64)>,
-    scrolls: (&BTreeMap<String, [Spring; 2]>, &BTreeMap<String, f64>),
+    scrolls: &BTreeMap<String, [Spring; 2]>,
     off: bool,
 ) {
     if let Some([x, y]) = scrolls
-        .0
         .get(n.key().unwrap_or(path))
         .map(|s| s.map(|s| s.value))
     {
         // `scrolled` is a builder and a built node cannot be reopened.
         let node = std::mem::replace(n, mui_scene::block(0.0, 0.0));
         *n = node.scrolled(x, y);
-    }
-    if n.is_scroll() {
-        let heat = scrolls.1.get(n.key().unwrap_or(path)).copied();
-        n.payload_mut().scroll_bar_heat = Some(heat.unwrap_or(0.0));
     }
     if let Some((h, p)) = of(n.key().unwrap_or(path)).filter(|_| !off) {
         let bg = pal.background();

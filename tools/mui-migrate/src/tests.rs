@@ -171,6 +171,13 @@ fn manual_warnings() {
 }
 
 #[test]
+fn element_flags() {
+    let src = "use mui::prelude::*;\nfn f(n: &mut El) { let a = n.payload().focusable; n.payload_mut().disabled = true; n.payload_mut().scroll_bar_heat = None; }\n";
+    let out = run(src);
+    assert_eq!(out.warnings.len(), 3, "{:?}", out.warnings);
+}
+
+#[test]
 fn capture_moved_to_material() {
     let src = "use mui::prelude::*;\nfn f(e: mui::scene::CaptureError) { mui_scene::resize_capture(&t, k, s); }\n";
     let out = run(src);

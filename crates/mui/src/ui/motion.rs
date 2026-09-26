@@ -104,7 +104,6 @@ impl Ui {
     /// whether one is still moving, and the shapes the styled tree declares.
     pub(super) fn sweep(&mut self, root: &mut El, dt: f64) -> (bool, Shapes) {
         let pal = self.theme.palette;
-        let heats = self.bar_heats();
         // Scrolls step before the walk slides the tree by them.
         let mut animating = false;
         for (_, s) in self.tweens.values_mut() {
@@ -130,7 +129,7 @@ impl Ui {
                 State::Disabled => false,
             },
             of: &|k| springs.get(k).map(|[h, p]| (h.value, p.value)),
-            scrolls: (&self.scrolls, &heats),
+            scrolls: &self.scrolls,
             motion: &mut self.motion,
             dt,
             shaped: Shapes::default(),
@@ -483,7 +482,7 @@ pub(super) struct Sweep<'a> {
     pub(super) pal: &'a Palette,
     pub(super) is: &'a dyn Fn(&str, State) -> bool,
     pub(super) of: &'a dyn Fn(&str) -> Option<(f64, f64)>,
-    pub(super) scrolls: (&'a BTreeMap<String, [Spring; 2]>, &'a BTreeMap<String, f64>),
+    pub(super) scrolls: &'a BTreeMap<String, [Spring; 2]>,
     pub(super) motion: &'a mut BTreeMap<String, Channels>,
     pub(super) dt: f64,
     /// What appears and what morphs, gathered on the way past.
@@ -497,7 +496,7 @@ impl Sweep<'_> {
         if n.payload().extras().memo.is_some_and(|m| m.reused) {
             return false;
         }
-        let off = off || n.payload().disabled;
+        let off = off || n.payload().has(Element::DISABLED);
         declared_states(n, path, self.is, off);
         let mut animating = transitions(n, path, self.pal, self.motion, self.dt);
         state(n, path, self.pal, self.of, self.scrolls, off);

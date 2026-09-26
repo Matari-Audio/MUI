@@ -237,7 +237,7 @@ col![
 | `mui` surface | the prelude lists every name (no glob); the six crates stay as named modules, `mui::scene` .. `mui::vello`, each its crate's own curated `lib.rs` | nothing arrives in the prelude because a crate underneath grew it, and no downstream path changes |
 | `one_line` / `many_lines` args | a `Layers` struct (shown text, caret, selection, preedit, blink, line height) | the `too_many_arguments` expects are gone |
 | `.disabled(bool)` rewrite | only on builder chains in mui files | `Palette::disabled(color)` has the same shape |
-| size budget | `Element` ≤ 360 B (was 352), `El` ≤ 688 B (was 680) | `text_role`, `a11y` and the `segmented` flag |
+| size budget | `Element` ≤ 336 B, `El` ≤ 664 B (were 360 / 688) | eight switches are one `flags: u16` (`Element::FOCUSABLE` .. `SCROLL_BAR_OFF`, read with `has`), and the scrollbar heat, runtime state, moved to `SceneSpec::scroll_bars` |
 | playground DSL `leaf` / `join` | `block` / `segmented` | the text DSL follows the Rust names |
 | `.cut`/`.keep` on a leaf | pushing a child onto a `block` turns it into a `stack` of its own size | covers `cut`, `keep` and any push, no wrapper node |
 | motion-bridge key names | `" "` stays `Key::Space`, one char is `Key::Char`, else `Key::from_name` | keeps the editor's existing spelling |

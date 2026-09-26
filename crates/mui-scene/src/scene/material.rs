@@ -57,7 +57,7 @@ impl Walk<'_> {
             if c.is_float()
                 || c.is_sticky()
                 || e.carve.is_some()
-                || e.weld_excluded
+                || e.has(crate::Element::WELD_EXCLUDED)
                 || matches!(&e.content, Content::Text(_))
                 || f.size.width <= 0.0
                 || f.size.height <= 0.0

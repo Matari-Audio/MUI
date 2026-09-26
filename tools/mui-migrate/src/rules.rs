@@ -169,6 +169,25 @@ pub const RULES: &[Rule] = &[
     Manual { pattern: "mui_geometry :: Spacing", note: "`Spacing` lives in `mui_layout` (and `mui::prelude`)" },
     Manual { pattern: "mui_geometry :: SpacingScale", note: "`SpacingScale` lives in `mui_layout`" },
     Manual { pattern: "mui_geometry :: SpacingToken", note: "`SpacingToken` lives in `mui_layout`" },
+    // Element's switches are one `flags` field; a surface's are unchanged, so only
+    // reads through `payload()` / `payload_mut()` are flagged.
+    Manual { pattern: "payload ( ) . focusable", note: "`Element::focusable` is a flag: `e.has(Element::FOCUSABLE)`" },
+    Manual { pattern: "payload_mut ( ) . focusable", note: "`Element::focusable` is a flag: `e.set(Element::FOCUSABLE, on)`" },
+    Manual { pattern: "payload ( ) . captures_wheel", note: "`Element::captures_wheel` is a flag: `e.has(Element::CAPTURES_WHEEL)`" },
+    Manual { pattern: "payload_mut ( ) . captures_wheel", note: "`Element::captures_wheel` is a flag: `e.set(Element::CAPTURES_WHEEL, on)`" },
+    Manual { pattern: "payload ( ) . tracks_pointer", note: "`Element::tracks_pointer` is a flag: `e.has(Element::TRACKS_POINTER)`" },
+    Manual { pattern: "payload_mut ( ) . tracks_pointer", note: "`Element::tracks_pointer` is a flag: `e.set(Element::TRACKS_POINTER, on)`" },
+    Manual { pattern: "payload ( ) . disabled", note: "`Element::disabled` is a flag: `e.has(Element::DISABLED)`" },
+    Manual { pattern: "payload_mut ( ) . disabled", note: "`Element::disabled` is a flag: `e.set(Element::DISABLED, on)`" },
+    Manual { pattern: "payload ( ) . baseline", note: "`Element::baseline` is a flag: `e.has(Element::BASELINE)`" },
+    Manual { pattern: "payload_mut ( ) . baseline", note: "`Element::baseline` is a flag: `e.set(Element::BASELINE, on)`" },
+    Manual { pattern: "payload ( ) . segmented", note: "`Element::segmented` is a flag: `e.has(Element::SEGMENTED)`" },
+    Manual { pattern: "payload_mut ( ) . segmented", note: "`Element::segmented` is a flag: `e.set(Element::SEGMENTED, on)`" },
+    Manual { pattern: "payload ( ) . weld_excluded", note: "`Element::weld_excluded` is a flag: `e.has(Element::WELD_EXCLUDED)`" },
+    Manual { pattern: "payload_mut ( ) . weld_excluded", note: "`Element::weld_excluded` is a flag: `e.set(Element::WELD_EXCLUDED, on)`" },
+    Manual { pattern: "payload ( ) . scroll_bar_off", note: "`Element::scroll_bar_off` is a flag: `e.has(Element::SCROLL_BAR_OFF)`" },
+    Manual { pattern: "payload_mut ( ) . scroll_bar_off", note: "`Element::scroll_bar_off` is a flag: `e.set(Element::SCROLL_BAR_OFF, on)`" },
+    Manual { pattern: ". scroll_bar_heat", note: "scrollbar heat is runtime state: `SceneSpec::scroll_bars` holds it by node key" },
     // Capture moved to mui-material (reported, not rewritten, as above). The
     // `Material` / `Capture` methods need no rule: rustc names the trait to import.
     Manual { pattern: "mui_scene :: resize_capture", note: "`resize_capture` lives in `mui_material` (`mui::material`)" },

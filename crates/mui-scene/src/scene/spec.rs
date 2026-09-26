@@ -27,6 +27,12 @@ pub struct SceneSpec {
     pub device_scale: Option<f64>,
     /// Selected by the host. CPU reference remains available for snapshots.
     pub weld_backend: crate::WeldBackend,
+    /// How hot each `.scroll()` node's overlay scrollbar is, by node key: 0
+    /// at rest (and for a key not listed), 1 under the pointer or in a drag.
+    /// Runtime state, so it rides beside the tree, not in it. `None`, a scene
+    /// resolved without a runtime, paints no bars, since nothing could drag
+    /// one.
+    pub scroll_bars: Option<std::collections::BTreeMap<String, f64>>,
 }
 impl SceneSpec {
     pub fn new(root: El) -> Self {
@@ -41,6 +47,7 @@ impl SceneSpec {
             fallback_fonts: Vec::new(),
             device_scale: None,
             weld_backend: crate::WeldBackend::Reference,
+            scroll_bars: None,
         }
     }
     /// Where material welds run: the CPU reference (default) or the GPU.

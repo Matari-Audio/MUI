@@ -110,7 +110,7 @@ fn subtree_sizes(n: &El, sizes: &mut Vec<usize>) -> usize {
 fn squared(n: &El, parent: bool, out: &mut Vec<bool>) {
     out.push(parent);
     for c in n.children() {
-        squared(c, n.payload().segmented, out);
+        squared(c, n.payload().has(crate::Element::SEGMENTED), out);
     }
 }
 

@@ -2,7 +2,7 @@
 // fixtures use these verbs: a dev-dependency on this crate would hand them a
 // second, incompatible copy of mui-scene's types. So: names come from the
 // parent module only, never from `mui_scene::` or `crate::` directly.
-use super::{BorderRamp, Carve, El, Fill, Id, Spacing, Styled};
+use super::{BorderRamp, Carve, El, Element, Fill, Id, Spacing, Styled};
 
 /// Outline, surface and border-material verbs on an [`El`].
 pub trait Material: Styled {
@@ -70,7 +70,7 @@ pub trait Material: Styled {
     /// ```
     /// use mui_material::prelude::*;
     /// let strip = row![block(60., 28.), block(60., 28.)].radius(Corner::Field).segmented();
-    /// assert!(strip.payload().segmented && strip.is_clip());
+    /// assert!(strip.payload().has(mui_scene::Element::SEGMENTED) && strip.is_clip());
     /// ```
     fn segmented(self) -> Self;
     /// Takes `el`'s shape out of this node's outline: boolean difference.
@@ -101,7 +101,7 @@ impl Material for El {
         // The container's own outline is what rounds the two ends: a clip,
         // not four per-corner radii the rest of the system would have to
         // learn.
-        self.payload_mut().segmented = true;
+        self.payload_mut().set(Element::SEGMENTED, true);
         self.gap(0.).clip()
     }
     fn cut(self, el: El) -> Self {

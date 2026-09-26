@@ -10,7 +10,7 @@
 //! scene ([`Capture`], [`resize_capture`]), which needs nothing from the walk.
 #![forbid(unsafe_code)]
 
-use mui_scene::{BorderRamp, Carve, El, Fill, Id, Spacing, Styled};
+use mui_scene::{BorderRamp, Carve, El, Element, Fill, Id, Spacing, Styled};
 
 mod capture;
 mod verbs;

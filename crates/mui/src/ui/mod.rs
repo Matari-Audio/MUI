@@ -784,9 +784,10 @@ impl Ui {
             memos.iter_mut().for_each(|(p, _)| p.insert(0, 0));
         }
         let mut root = Self::wrap_tip(root, tip.as_ref());
+        let heats = self.bar_heats();
         let (moving, shaped) = self.sweep(&mut root, dt);
         animating |= moving;
-        let (mut scene, glided, root) = self.resolve(root, offered, dt)?;
+        let (mut scene, glided, root) = self.resolve(root, offered, dt, heats)?;
         self.capture(root, &memos);
         animating |= glided;
         animating |= self.after_motion(&mut scene, shaped, dt);
@@ -988,6 +989,7 @@ impl Ui {
         root: El,
         offered: Option<Size>,
         dt: f64,
+        heats: BTreeMap<String, f64>,
     ) -> Result<(ResolvedScene, bool, El), SceneError> {
         let mut spec = SceneSpec::new(root).theme(self.theme);
         spec.offered = offered;
@@ -995,6 +997,7 @@ impl Ui {
         spec.fallback_fonts = self.fallback_fonts.clone();
         spec.device_scale = self.scale;
         spec.weld_backend = self.weld_backend;
+        spec.scroll_bars = Some(heats);
         let mut glided = false;
         let glides = &mut self.glides;
         let scene = self.resolver.resolve_animated(

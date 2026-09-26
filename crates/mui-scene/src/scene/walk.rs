@@ -89,7 +89,7 @@ impl<'a> Walk<'a> {
         inner.cursor = e.style.cursor.or(ancestors.cursor);
         // A switched-off card switches off what it contains: nothing inside
         // it may be reached while its own frame cannot be.
-        inner.disabled = ancestors.disabled || e.disabled;
+        inner.disabled = ancestors.disabled || e.has(Element::DISABLED);
         self.check_owned(e, at)?;
 
         let start = self.out.paint.len();
@@ -145,10 +145,11 @@ impl<'a> Walk<'a> {
         // Everything from here on closes this node, whatever its children
         // left the key at.
         self.key = key;
-        if let Some(heat) = e
-            .scroll_bar_heat
-            .filter(|_| n.is_scroll() && !e.scroll_bar_off)
+        if let Some(heats) = &self.spec.scroll_bars
+            && n.is_scroll()
+            && !e.has(Element::SCROLL_BAR_OFF)
         {
+            let heat = heats.get(self.key.as_str()).copied().unwrap_or(0.0);
             self.scroll_bars(n, heat, frame, content, bg, &inner)?;
         }
         let opened = Opened {
@@ -288,9 +289,9 @@ impl<'a> Walk<'a> {
             topology_changed: contour.changed,
             cursor: inner.cursor,
             tip: e.extras().tip.clone(),
-            focusable: e.focusable,
-            captures_wheel: e.captures_wheel,
-            tracks_pointer: e.tracks_pointer,
+            focusable: e.has(Element::FOCUSABLE),
+            captures_wheel: e.has(Element::CAPTURES_WHEEL),
+            tracks_pointer: e.has(Element::TRACKS_POINTER),
             pointer_states: e
                 .states
                 .iter()
@@ -908,7 +909,7 @@ impl<'a> Walk<'a> {
     /// ponytail: O(n^2) over direct children, which is a handful.
     fn baselines(&mut self, n: &El, at: usize) -> Result<Vec<Option<(f64, Frame)>>, SceneError> {
         let mut bases: Vec<Option<(f64, Frame)>> = Vec::new();
-        if !n.payload().baseline {
+        if !n.payload().has(Element::BASELINE) {
             return Ok(bases);
         }
         let th = self.spec.theme;

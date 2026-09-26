@@ -312,20 +312,6 @@ pub struct Element {
     /// A face for this node alone, tried before the scene's font and its
     /// fallbacks: an icon font on an icon. See [`Styled::font`].
     pub font: Option<mui_text::Font>,
-    /// Takes keyboard focus on click and on Tab.
-    pub focusable: bool,
-    /// The wheel over this node is its own: an enclosing `.scroll()` does
-    /// not slide. See [`Styled::captures_wheel`].
-    pub captures_wheel: bool,
-    /// Reads the raw pointer while building, so a move over it is never
-    /// inert. See [`Styled::tracks_pointer`].
-    pub tracks_pointer: bool,
-    /// Switched off: no hit testing, no focus, and the look declared for
-    /// [`State::Disabled`]. Inherited by the subtree. See
-    /// [`Styled::disabled`].
-    pub disabled: bool,
-    /// A row whose text children share one baseline. See [`Styled::baseline`].
-    pub baseline: bool,
     /// Cap a wrapped label at this many lines. See [`Styled::lines`].
     pub lines: Option<usize>,
     /// What this node means: the role and name mui-access reports.
@@ -336,20 +322,11 @@ pub struct Element {
     /// Set on a child pushed by `Material::cut` or `Material::keep` (mui-material): the
     /// child shapes its parent's outline instead of painting itself.
     pub carve: Option<Carve>,
-    /// Square every child's corners when resolved. See `mui_material::Material::segmented`.
-    pub segmented: bool,
-    /// Exclude this immediate child from its parent's weld, not from layout.
-    pub weld_excluded: bool,
     pub bend: f64,
     pub border_align: crate::BorderAlign,
-    /// A `.scroll()` node paints no overlay scrollbar. See
-    /// [`Styled::no_scrollbar`].
-    pub scroll_bar_off: bool,
-    /// How hot the overlay scrollbar is: 0 at rest, 1 under the pointer or
-    /// in a drag. The runtime sets it every frame, as it does the offset;
-    /// `None`, a scene resolved without it, paints no bar, since nothing
-    /// could drag one.
-    pub scroll_bar_heat: Option<f64>,
+    /// The on/off switches, one bit each: [`Element::FOCUSABLE`] ..
+    /// [`Element::SCROLL_BAR_OFF`]. Read with [`Element::has`].
+    pub flags: u16,
     /// Everything most nodes never set, boxed on first write so every
     /// builder call moves a small node. Read it through [`Element::extras`].
     pub extras: Option<Box<Extras>>,
@@ -430,6 +407,41 @@ impl Default for Extras {
     }
 }
 impl Element {
+    /// Takes keyboard focus on click and on Tab.
+    pub const FOCUSABLE: u16 = 1 << 0;
+    /// The wheel over this node is its own: an enclosing `.scroll()` does
+    /// not slide. See [`Styled::captures_wheel`].
+    pub const CAPTURES_WHEEL: u16 = 1 << 1;
+    /// Reads the raw pointer while building, so a move over it is never
+    /// inert. See [`Styled::tracks_pointer`].
+    pub const TRACKS_POINTER: u16 = 1 << 2;
+    /// Switched off: no hit testing, no focus, and the look declared for
+    /// [`State::Disabled`]. Inherited by the subtree. See
+    /// [`Styled::disabled`].
+    pub const DISABLED: u16 = 1 << 3;
+    /// A row whose text children share one baseline. See [`Styled::baseline`].
+    pub const BASELINE: u16 = 1 << 4;
+    /// Square every child's corners when resolved. See
+    /// `mui_material::Material::segmented`.
+    pub const SEGMENTED: u16 = 1 << 5;
+    /// Exclude this immediate child from its parent's weld, not from layout.
+    pub const WELD_EXCLUDED: u16 = 1 << 6;
+    /// A `.scroll()` node paints no overlay scrollbar. See
+    /// [`Styled::no_scrollbar`].
+    pub const SCROLL_BAR_OFF: u16 = 1 << 7;
+
+    /// Whether the switch `flag` is on: `e.has(Element::FOCUSABLE)`.
+    pub fn has(&self, flag: u16) -> bool {
+        self.flags & flag != 0
+    }
+    /// Turn the switch `flag` on or off.
+    pub fn set(&mut self, flag: u16, on: bool) {
+        if on {
+            self.flags |= flag;
+        } else {
+            self.flags &= !flag;
+        }
+    }
     /// The rare fields, all unset when none was ever written.
     pub fn extras(&self) -> &Extras {
         // A promoted constant, not a `static`: no `Sync` asked of the
@@ -856,7 +868,7 @@ pub trait Styled: Paints {
     /// Keep this child independent from its immediate parent's weld. Text and
     /// floating children are excluded automatically; layout is never removed.
     fn unwelded(mut self) -> Self {
-        self.element_mut().weld_excluded = true;
+        self.element_mut().set(Element::WELD_EXCLUDED, true);
         self
     }
     /// A custom closed shape in local logical units. Use opposite contour
@@ -979,7 +991,7 @@ pub trait Styled: Paints {
         self
     }
     fn focusable(mut self) -> Self {
-        self.element_mut().focusable = true;
+        self.element_mut().set(Element::FOCUSABLE, true);
         self
     }
     /// Keep the wheel for this node: a timeline that zooms on the wheel
@@ -987,14 +999,14 @@ pub trait Styled: Paints {
     /// column does not scroll under it. Without this, every node under the
     /// pointer sees the wheel *and* the innermost scroller slides.
     fn captures_wheel(mut self) -> Self {
-        self.element_mut().captures_wheel = true;
+        self.element_mut().set(Element::CAPTURES_WHEEL, true);
         self
     }
     /// This node's tree reads the raw pointer (`Ui::local`, the host's own
     /// input), not just its hover: a hover readout, a crosshair. A move over
     /// it is never `Ui::inert`, so the host frames it.
     fn tracks_pointer(mut self) -> Self {
-        self.element_mut().tracks_pointer = true;
+        self.element_mut().set(Element::TRACKS_POINTER, true);
         self
     }
     /// Switch this node -- and everything under it -- off: it drops out of
@@ -1010,10 +1022,10 @@ pub trait Styled: Paints {
     ///     .on(State::Disabled, |s| s.fill(Role::Ink.alpha(0.2)))
     ///     .disabled()
     ///     .id("osc-2");
-    /// assert!(bypassed.payload().disabled);
+    /// assert!(bypassed.payload().has(mui_scene::Element::DISABLED));
     /// ```
     fn disabled(mut self) -> Self {
-        self.element_mut().disabled = true;
+        self.element_mut().set(Element::DISABLED, true);
         self
     }
     /// Spring this node's paint toward whatever it is next declared to be,
@@ -1038,7 +1050,7 @@ pub trait Styled: Paints {
     /// ascent can push a shifted line past the frame; give the row a height
     /// if that shows.
     fn baseline(mut self) -> Self {
-        self.element_mut().baseline = true;
+        self.element_mut().set(Element::BASELINE, true);
         self
     }
     /// Cap a wrapping label at `n` lines; the last one ends in an ellipsis.
@@ -1053,7 +1065,7 @@ pub trait Styled: Paints {
     /// where the list draws its own position, or where a `.mask()` fade
     /// already says there is more.
     fn no_scrollbar(mut self) -> Self {
-        self.element_mut().scroll_bar_off = true;
+        self.element_mut().set(Element::SCROLL_BAR_OFF, true);
         self
     }
     /// [`Styled::animate_with`] with the default spring.
@@ -1215,8 +1227,8 @@ mod tests {
     #[test]
     fn nodes_stay_small() {
         use std::mem::size_of;
-        assert!(size_of::<Element>() <= 360, "{}", size_of::<Element>());
-        assert!(size_of::<El>() <= 688, "{}", size_of::<El>());
+        assert!(size_of::<Element>() <= 336, "{}", size_of::<Element>());
+        assert!(size_of::<El>() <= 664, "{}", size_of::<El>());
     }
 
     /// The whole merge rule: per field, the side that states something wins,
