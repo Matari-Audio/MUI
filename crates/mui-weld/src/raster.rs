@@ -97,7 +97,7 @@ pub fn bake(request: &Request) -> Result<Baked, Error> {
     let n = request.sources.len();
     let k = 2.0 * request.weld.reach * request.weld.amount();
     let mut values = vec![0.0; vertices];
-    rows(&mut values, w + 1, |y, row| {
+    rows(&mut values, w + 1, 1, |y, row| {
         let py = y0 + y as f64 * px;
         for (x, v) in row.iter_mut().enumerate() {
             let p = Point::new(x0 + x as f64 * px, py);
@@ -117,7 +117,7 @@ pub fn bake(request: &Request) -> Result<Baked, Error> {
     })?;
     let contours = contours(&values, w, h, bounds)?;
     let mut rgba = vec![0u8; pixels.checked_mul(4).ok_or(Error::Budget)?];
-    rows(&mut rgba, 4 * w, |y, row| {
+    rows(&mut rgba, 4 * w, 4, |y, row| {
         let py = y0 + (y as f64 + 0.5) * px;
         for (x, out) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
             let p = Point::new(x0 + (x as f64 + 0.5) * px, py);
@@ -134,35 +134,56 @@ pub fn bake(request: &Request) -> Result<Baked, Error> {
     })
 }
 
-/// Fill `out` one row of `len` items at a time, rows spread over every core.
+/// Fill `out` one row of `len` elements at a time, rows spread over every
+/// core. `per` elements make one sample (4 for rgba), which is what the
+/// threading threshold counts.
 /// Workers pull a few rows at a time so the busy middle of a weld balances.
 // ponytail: spawns threads per bake; a persistent pool if many tiny bakes show
-// up in a profile (tiny ones already stay serial).
+// up in a profile (small ones stay serial).
 fn rows<T: Send>(
     out: &mut [T],
     len: usize,
+    per: usize,
     f: impl Fn(usize, &mut [T]) -> Result<(), Error> + Sync,
 ) -> Result<(), Error> {
     #[cfg(not(target_arch = "wasm32"))]
     {
+        use std::sync::OnceLock;
+        use std::sync::atomic::{AtomicBool, Ordering};
         const BAND: usize = 4;
-        let threads = std::thread::available_parallelism().map_or(1, usize::from);
-        if threads > 1 && out.len() >= 16 * 1024 {
+        static THREADS: OnceLock<usize> = OnceLock::new();
+        let threads =
+            *THREADS.get_or_init(|| std::thread::available_parallelism().map_or(1, usize::from));
+        if threads > 1 && out.len() / per >= PARALLEL_MIN {
+            let out_len = out.len();
             let bands = std::sync::Mutex::new(out.chunks_mut(len * BAND).enumerate());
-            let work = || loop {
-                let next = bands
-                    .lock()
-                    .map_err(|_| Error::Invalid("bake worker"))?
-                    .next();
-                let Some((band, chunk)) = next else {
-                    return Ok(());
-                };
-                for (i, row) in chunk.chunks_mut(len).enumerate() {
-                    f(band * BAND + i, row)?;
+            // The first error stops every worker at its next band.
+            let failed = AtomicBool::new(false);
+            let work = || {
+                let r = (|| loop {
+                    if failed.load(Ordering::Relaxed) {
+                        return Ok(());
+                    }
+                    let next = bands
+                        .lock()
+                        .map_err(|_| Error::Invalid("bake worker"))?
+                        .next();
+                    let Some((band, chunk)) = next else {
+                        return Ok(());
+                    };
+                    for (i, row) in chunk.chunks_mut(len).enumerate() {
+                        f(band * BAND + i, row)?;
+                    }
+                })();
+                if r.is_err() {
+                    failed.store(true, Ordering::Relaxed);
                 }
+                r
             };
             return std::thread::scope(|s| {
-                let workers: Vec<_> = (1..threads).map(|_| s.spawn(work)).collect();
+                // No more workers than bands: the rest would only spawn.
+                let n = threads.min(out_len.div_ceil(len * BAND));
+                let workers: Vec<_> = (1..n).map(|_| s.spawn(work)).collect();
                 let mine = work();
                 workers.into_iter().fold(mine, |r, h| {
                     let theirs = h.join().unwrap_or_else(|e| std::panic::resume_unwind(e));
@@ -175,6 +196,12 @@ fn rows<T: Send>(
         .enumerate()
         .try_for_each(|(y, row)| f(y, row))
 }
+/// Samples below which a pass stays on one thread. Measured on 16 cores
+/// (one bordered rounded rect, whole bake): serial wins below ~3600 px
+/// (270 us vs 520 us at 44x44), threads win from ~4600 px (0.63 ms vs
+/// 0.94 ms at 68x68).
+#[cfg(not(target_arch = "wasm32"))]
+const PARALLEL_MIN: usize = 4096;
 
 type Edge = (usize, usize);
 fn edge(a: usize, b: usize) -> Edge {
