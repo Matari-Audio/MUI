@@ -273,12 +273,11 @@ impl LayoutCache {
         self.pointers.insert(n as *const Node<P> as usize, address);
         Ok(revision)
     }
-    /// The stamp `scan` gave this node.
-    fn stamp<P>(&mut self, n: &Node<P>) -> &mut Stamp {
-        let address = self.pointers[&(n as *const Node<P> as usize)];
-        self.stamps
-            .get_mut(&address)
-            .expect("scan stamped every node")
+    /// The stamp `scan` gave this node. `None` for a node `scan` did not
+    /// visit: it is measured uncached rather than panicking.
+    fn stamp<P>(&mut self, n: &Node<P>) -> Option<&mut Stamp> {
+        let address = self.pointers.get(&(n as *const Node<P> as usize))?;
+        self.stamps.get_mut(address)
     }
 }
 /// Complete shallow layout projection; destructuring without `..` makes adding
@@ -422,7 +421,9 @@ pub(crate) fn measure_cached<'a, P>(
         room: room.map(f64::to_bits),
         container: container.map(|v| v.map(f64::to_bits)),
     };
-    let hit = cache.stamp(node).measured.iter().find(|(k, _)| *k == key);
+    let hit = cache
+        .stamp(node)
+        .and_then(|s| s.measured.iter().find(|(k, _)| *k == key));
     if let Some(snapshot) = hit.map(|(_, f)| f.clone()) {
         if !pass.redo {
             if snapshot.cost > pass.left {
@@ -439,18 +440,27 @@ pub(crate) fn measure_cached<'a, P>(
     let mut m = measure::measure_uncached(node, ancestor, definite, room, container, depth, pass)?;
     let frozen = Frozen::freeze(&m, before - pass.left);
     m.frozen = Some(frozen.clone());
-    let cache = pass.cache.as_deref_mut().expect("checked above");
-    let measured = &mut cache.stamp(node).measured;
-    if measured.len() >= LayoutCache::VARIANTS {
-        measured.remove(0);
+    if let Some(stamp) = pass.cache.as_deref_mut().and_then(|c| c.stamp(node)) {
+        let measured = &mut stamp.measured;
+        if measured.len() >= LayoutCache::VARIANTS {
+            measured.remove(0);
+        }
+        measured.push((key, frozen));
     }
-    measured.push((key, frozen));
     Ok(m)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A node the scan never stamped has no stamp: the measure runs
+    /// uncached instead of panicking on a missing map entry.
+    #[test]
+    fn an_unscanned_node_has_no_stamp() {
+        let mut cache = LayoutCache::default();
+        assert!(cache.stamp(&label("a", "x")).is_none());
+    }
     #[derive(Clone, Debug, Default)]
     struct Text {
         value: String,

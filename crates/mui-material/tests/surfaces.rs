@@ -94,6 +94,21 @@ fn title_joins_and_panel_clearance_follow_the_owner() {
     }
 }
 
+/// An owner with no surfaces, or only collapsed ones, has an empty set of
+/// panel frames to bound: it resolves instead of panicking.
+#[test]
+fn an_owner_with_no_panel_area_resolves() {
+    for root in [
+        stack![block(20., 20.)].w(100.).h(100.).surface_layout(2.),
+        stack![block(0., 0.).inset_surface().id("flat")]
+            .w(100.)
+            .h(100.)
+            .surface_layout(2.),
+    ] {
+        resolve(&SceneSpec::new(root)).unwrap();
+    }
+}
+
 #[test]
 fn invalid_surface_declarations_fail_instead_of_drawing_an_unrelated_box() {
     for root in [

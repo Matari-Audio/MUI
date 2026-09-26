@@ -17,6 +17,20 @@ use crate::{Color, Content, El, Element, Fill, Mix, ShadowKind, State};
 /// A canvas's tagged draws: the surface's hit shapes.
 type Hits = Vec<(Arc<str>, Arc<Path>)>;
 
+/// Whether `v` is a whole number of device pixels at `scale`, give or take
+/// float noise: `0.1 * 3.0` px at 10x is 3 pixels, though not exactly.
+fn on_grid(v: f64, scale: Option<f64>) -> bool {
+    scale.is_none_or(|s| {
+        let px = v * s;
+        (px - px.round()).abs() <= 1e-6
+    })
+}
+
+/// A flex share that collapsed to nothing, or a size that is not a number.
+fn collapsed(f: Frame) -> bool {
+    !(f.size.width > 0.0 && f.size.height > 0.0)
+}
+
 /// What painting a node opened, for [`Walk::finish`] to close in reverse
 /// once its children are painted.
 struct Opened {
@@ -49,7 +63,7 @@ impl<'a> Walk<'a> {
         let at = self.i;
         let frame = self.tree.frames[at];
         self.i += 1;
-        if frame.size.width <= 0.0 || frame.size.height <= 0.0 {
+        if collapsed(frame) {
             // A flex share that collapsed to nothing: invisible, and so are
             // its children.
             self.i = at + self.tree.sizes[at];
@@ -179,9 +193,9 @@ impl<'a> Walk<'a> {
         let world = (x.inside.is_some() || x.surface_padding.is_some()).then(|| contour.world());
         let world = world.as_ref().unwrap_or(&contour.path);
         self.partition(n, world, frame, at, (key, path))?;
-        if x.surface_padding.is_some() {
+        if let Some(padding) = x.surface_padding {
             let geometry = self.caches.surfaces.resolve(
-                n,
+                (n, padding),
                 (key, at),
                 &self.tree.frames,
                 world,
@@ -468,11 +482,7 @@ impl<'a> Walk<'a> {
         }
         let d = Vec2::new(frame.x - old.origin.x, frame.y - old.origin.y);
         let moved = d != Vec2::ZERO;
-        let grid = |v: f64| {
-            self.spec
-                .device_scale
-                .is_none_or(|s| (v * s).fract() == 0.0)
-        };
+        let grid = |v: f64| on_grid(v, self.spec.device_scale);
         // A moved span's clips are its own, so they move with it; an
         // ancestor's would not.
         if moved && (ancestors.clip.is_some() || !grid(d.x) || !grid(d.y)) {
@@ -1443,6 +1453,33 @@ mod tests {
         }
         let keys: Vec<&str> = warm.surfaces().map(|s| s.key.as_str()).collect();
         assert_eq!(keys, ["", "named", "/1"]);
+    }
+
+    /// A memo moved by a whole number of device pixels is copied, even when
+    /// float noise keeps the product off the exact integer.
+    #[test]
+    fn a_move_is_on_the_grid_up_to_float_noise() {
+        assert_ne!((0.1 * 3.0 * 10.0_f64).fract(), 0.0);
+        assert!(super::on_grid(0.1 * 3.0, Some(10.)));
+        assert!(super::on_grid(0.25, None));
+        assert!(!super::on_grid(0.25, Some(1.)));
+        assert!(!super::on_grid(f64::NAN, Some(1.)));
+    }
+
+    /// A NaN size is no size: the node is skipped like a collapsed one,
+    /// not painted with a NaN outline. (The layout refuses NaN input, so
+    /// this is the walk's own guard, tested on its predicate.)
+    #[test]
+    fn a_nan_frame_is_collapsed() {
+        let f = |w, h| Frame {
+            x: 0.,
+            y: 0.,
+            size: Size::new(w, h),
+        };
+        assert!(super::collapsed(f(f64::NAN, 10.)));
+        assert!(super::collapsed(f(10., f64::NAN)));
+        assert!(super::collapsed(f(0., 10.)));
+        assert!(!super::collapsed(f(10., 10.)));
     }
 
     #[test]

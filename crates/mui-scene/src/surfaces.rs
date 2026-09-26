@@ -75,7 +75,7 @@ fn collect<'a>(n: &'a El, at: usize, nodes: &mut Vec<(usize, &'a El)>) -> usize 
 impl Cache {
     pub fn resolve(
         &mut self,
-        root: &El,
+        (root, padding): (&El, crate::Spacing),
         (key, at): (&crate::Id, usize),
         frames: &[Frame],
         outline: &Path,
@@ -83,11 +83,7 @@ impl Cache {
         regions: &mut RegionCache,
     ) -> Result<Geometry, SceneError> {
         let e = root.payload();
-        let padding = e
-            .extras()
-            .surface_padding
-            .unwrap()
-            .resolve(spec.theme.spacing);
+        let padding = padding.resolve(spec.theme.spacing);
         if !padding.is_finite() || padding < 0. {
             return Err(mui_geometry::Error::InvalidOptions("surface padding").into());
         }
@@ -362,12 +358,14 @@ fn resolve(i: &Inputs) -> Result<Geometry, SceneError> {
         // Border labels own their cutout. Reserve their footprint here so a
         // merged well follows that one boundary instead of inventing a second
         // independently rounded notch around it.
-        let bounds = mui_geometry::bounds(
+        let Some(bounds) = mui_geometry::bounds(
             frames
                 .iter()
                 .flat_map(|f| [Point::new(f.x, f.y), Point::new(f.right(), f.bottom())]),
-        )
-        .unwrap();
+        ) else {
+            panels.push((*index, Arc::default()));
+            continue;
+        };
         for (_, tab, _, _) in &i.joins {
             if tab.x >= bounds.x0
                 && tab.right() <= bounds.x1
