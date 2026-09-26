@@ -99,6 +99,28 @@ Widgets (`mui`), rewritten by the tool unless `--no-widgets`:
   crates stay reachable by name: `mui::scene`, `mui::layout`, `mui::input`,
   `mui::motion`, `mui::vello`, `mui::geometry`.
 
+DSL v2.1 (the ergonomics pass), rewritten by the tool:
+
+- `.width(l)` / `.height(l)` -> `.w(l)` / `.h(l)`; `.min_width` /
+  `.min_height` -> `.min_w` / `.min_h`; `.expand()` -> `.grow(1)`.
+- `.pad_xy(x, y)` -> `.pad((x, y))`, `.insets(i)` -> `.pad(i)`.
+- `.border(paint, w)` -> `.stroke(paint).stroke_width(w)`, `.no_border()` ->
+  `.no_stroke()`; `.apply(f)` -> `.when(true, f)`.
+- `.centered_at(0., 0.)` and `.anchor(Align::Center, Align::Center)` ->
+  `.centered()`.
+- `icon(font, sym)` -> `icon(sym).font(font)`; set `Theme::icon_font` once
+  instead where every icon uses the same face (the tool notes the call).
+- `Ui::new(Theme::DEFAULT)` -> `Ui::default()`.
+
+Not rewritten, because the old spelling still compiles or the change is a
+type: every numeric builder argument takes any number (`.at(8, 4)`,
+`block(28, 28)`); a widget's `Response` takes its control's look and the
+common element verbs (`knob(..).size(L).tip("Gain")`, no `.el`); every `Ui`
+method naming a node takes `impl Into<Id>` (a runtime key is
+`Id::runtime("/0")`, a `&str` starting with `/` is refused in debug);
+`Theme` is `Clone`, not `Copy`; `MuiEditor::new` and `.resizable` take
+`impl Into<Size>`; `sym` is in the prelude.
+
 ## mui-text
 
 Fonts are a type now. `Font::new` parses the bytes once and returns an error

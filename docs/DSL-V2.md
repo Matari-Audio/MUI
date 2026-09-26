@@ -277,3 +277,5 @@ cannot be typed twice. `bind_bool` exists for toggles.
 | playground `border(c, w)`, `width`, `height`, `pad_xy`, `no_border` | `stroke(c).stroke_width(w)`, `w`, `h`, `pad(x, y)`, `no_stroke` | the text DSL follows the Rust names |
 | scrollbar heat tween key `format!("/bar{key}")` | `Id::runtime("/bar").field(key)`, `/bar/<key>`, built in place (inline for short keys) | no `String` per bar per frame |
 | a runtime key read through `Ui` (`ui.scroll("/0")`) | `ui.scroll(Id::runtime("/0"))` | a `&str` converts through `Id::of`, which refuses `/` names in debug builds (principle 6) |
+| `mui_symbols::sym` | in the prelude as `sym` (mui-scene depends on mui-symbols) | `icon(sym::HOME)` with no extra import |
+| token pairs for `pad` | not supported: `(x, y)` is pixels; `.pad(M)` scales all four sides | the scaled padding is one `Spacing`; a per-axis token pair would need a second slot on `Node` for no caller yet |
