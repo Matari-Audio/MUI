@@ -136,7 +136,7 @@ fn the_drawn_spine_is_the_models_cubic_and_matches_the_sampler() {
         );
     }
     assert_eq!(
-        draws[0].path, want,
+        *draws[0].path, want,
         "the path is the model's control points"
     );
     // And the sampler those control points belong to: every knot is on the

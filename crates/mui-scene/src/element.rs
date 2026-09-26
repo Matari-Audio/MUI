@@ -25,29 +25,36 @@ use std::sync::Arc;
 /// see [`Draw::hit`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct Draw {
-    pub path: Path,
+    /// Shared, so a canvas that keeps its shapes hands the walk the same
+    /// `Arc` and the walk never copies one.
+    pub path: Arc<Path>,
     pub fill: Fill,
     /// Stroke width; `0` fills.
     pub width: f64,
     /// Names this shape as a hit target of the canvas node. The runtime
     /// reports it as the node's own gesture, tagged with this name.
     pub tag: Option<Arc<str>>,
+    /// Where the path's origin sits in the canvas: a shape drawn once and
+    /// placed, like a cached run of glyphs, moves without a copy.
+    pub at: Point,
 }
 impl Draw {
-    pub fn fill(path: Path, fill: impl Into<Fill>) -> Self {
+    pub fn fill(path: impl Into<Arc<Path>>, fill: impl Into<Fill>) -> Self {
         Self {
-            path,
+            path: path.into(),
             fill: fill.into(),
             width: 0.0,
             tag: None,
+            at: Point::ZERO,
         }
     }
-    pub fn stroke(path: Path, fill: impl Into<Fill>, width: f64) -> Self {
+    pub fn stroke(path: impl Into<Arc<Path>>, fill: impl Into<Fill>, width: f64) -> Self {
         Self {
-            path,
+            path: path.into(),
             fill: fill.into(),
             width,
             tag: None,
+            at: Point::ZERO,
         }
     }
     /// `image` stretched over the rectangle at `(x, y)`, `w` by `h`: a logo,
@@ -72,12 +79,13 @@ impl Draw {
     /// let grab = Draw::hit(Path::polyline(square.map(|(x, y)| Point::new(x, y)), true), "knot-0");
     /// assert!(grab.fill.is_none());
     /// ```
-    pub fn hit(path: Path, tag: impl Into<Arc<str>>) -> Self {
+    pub fn hit(path: impl Into<Arc<Path>>, tag: impl Into<Arc<str>>) -> Self {
         Self {
-            path,
+            path: path.into(),
             fill: Fill::None,
             width: 0.0,
             tag: Some(tag.into()),
+            at: Point::ZERO,
         }
     }
     /// Name this drawn shape, so the pointer inside it -- and nowhere else
@@ -96,6 +104,11 @@ impl Draw {
     /// ```
     pub fn tag(mut self, tag: impl Into<Arc<str>>) -> Self {
         self.tag = Some(tag.into());
+        self
+    }
+    /// Place the path's origin at `p` in the canvas.
+    pub fn at(mut self, p: Point) -> Self {
+        self.at = p;
         self
     }
 }

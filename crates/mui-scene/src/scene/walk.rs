@@ -433,10 +433,10 @@ impl<'a> Walk<'a> {
                     // downstream by pointer.
                     Some((old, paths, seen))
                         if Arc::ptr_eq(old, &draws)
-                            || old
-                                .iter()
-                                .map(|d| &d.path)
-                                .eq(draws.iter().map(|d| &d.path)) =>
+                            || old.len() == draws.len()
+                                && old.iter().zip(draws.iter()).all(|(a, b)| {
+                                    Arc::ptr_eq(&a.path, &b.path) || a.path == b.path
+                                }) =>
                     {
                         *old = draws.clone();
                         *seen = generation;
@@ -447,7 +447,7 @@ impl<'a> Walk<'a> {
                             .iter()
                             .map(|draw| {
                                 draw.path.validate(100_000)?;
-                                Ok(Arc::new(draw.path.clone()))
+                                Ok(draw.path.clone())
                             })
                             .collect::<Result<Vec<_>, SceneError>>()?;
                         self.outlines
@@ -459,6 +459,7 @@ impl<'a> Walk<'a> {
                 // Hits are local to the surface's offset, the outline's.
                 let d = origin - contour.offset;
                 for ((k, draw), local) in draws.iter().enumerate().zip(paths) {
+                    let d = d + draw.at;
                     if let Some(tag) = &draw.tag {
                         let hit = match d == Point::ZERO {
                             true => local.clone(),
@@ -472,7 +473,7 @@ impl<'a> Walk<'a> {
                     }
                     if let Some(p) = self.push(Layer::Draw(k), local, None, &draw.fill, *bg) {
                         p.width = draw.width;
-                        p.offset = origin;
+                        p.offset = origin + draw.at;
                     }
                 }
             }
