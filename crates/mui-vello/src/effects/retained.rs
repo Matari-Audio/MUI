@@ -47,7 +47,8 @@ pub struct GpuRenderer {
     valid: bool,
     /// The encoding is the whole frame, not a damaged corner of it.
     whole: bool,
-    /// Where a partial frame renders before it is copied into `target`.
+    /// Where a partial frame renders, up to its far corner, before its box
+    /// is copied into `target`.
     // ponytail: grows only, like `target`.
     patch: Option<wgpu::Texture>,
     /// A texture this renderer samples changed since the last render.
@@ -648,12 +649,15 @@ impl GpuRenderer {
                 // Changed only off the target.
                 self.retained.clone_from(&resolved.paint);
             }
-            Change::Part(r @ [.., w, h]) => {
+            Change::Part(r @ [x, y, w, h]) => {
                 self.valid = false;
                 self.presented = None;
                 self.encode(resolved, xf, overlay, Some(r))?;
                 stats.encoded_scenes += 1;
                 let limit = self.target.size;
+                // Rendered where the frame has it, from the corner: moved,
+                // gradients and strokes would round differently.
+                let (w, h) = (x + w, y + h);
                 if self
                     .patch
                     .as_ref()
@@ -684,7 +688,7 @@ impl GpuRenderer {
                     [w, h],
                 )?;
                 stats.renders += 1;
-                stats.rendered_pixels += u64::from(w) * u64::from(h);
+                stats.rendered_pixels += u64::from(r[2]) * u64::from(r[3]);
                 copy = Some(r);
             }
             Change::None => {}
@@ -710,10 +714,14 @@ impl GpuRenderer {
                     label: Some("MUI present"),
                 });
             if let (Some([x, y, w, h]), Some(patch)) = (copy, &self.patch) {
+                let origin = wgpu::Origin3d { x, y, z: 0 };
                 encoder.copy_texture_to_texture(
-                    patch.as_image_copy(),
                     wgpu::TexelCopyTextureInfo {
-                        origin: wgpu::Origin3d { x, y, z: 0 },
+                        origin,
+                        ..patch.as_image_copy()
+                    },
+                    wgpu::TexelCopyTextureInfo {
+                        origin,
                         ..self.target.texture.as_image_copy()
                     },
                     wgpu::Extent3d {
@@ -804,8 +812,8 @@ impl GpuRenderer {
         Change::Part([x0, y0, x1 - x0, y1 - y0].map(|v| v as u32))
     }
 
-    /// The frame, or with `part` only what reaches `[x, y, w, h]` of it,
-    /// moved to the corner. A part never holds a backdrop or a weld.
+    /// The frame, or with `part` only what reaches `[x, y, w, h]` of it.
+    /// A part never holds a backdrop or a weld.
     fn encode<F: FnOnce(&mut Classic<'_>)>(
         &mut self,
         resolved: &ResolvedScene,
@@ -829,16 +837,15 @@ impl GpuRenderer {
             self.backdrops.truncate(k);
         }
 
-        let (size, to_device, cull) = match part.map(|r| r.map(f64::from)) {
+        let (size, cull) = match part.map(|r| r.map(f64::from)) {
             Some([x, y, w, h]) => (
-                [w as u32, h as u32],
-                Affine::translate((-x, -y)) * xf,
+                [(x + w) as u32, (y + h) as u32],
                 Some(
                     xf.inverse()
                         .transform_rect_bbox(Rect::new(x, y, x + w, y + h)),
                 ),
             ),
-            None => (size, xf, None),
+            None => (size, None),
         };
         self.scene.reset();
         let mut canvas = Classic::new(&mut self.scene, &mut self.cache, &self.textures, size);
@@ -846,7 +853,7 @@ impl GpuRenderer {
         if part.is_none() {
             canvas.begin_frame();
         }
-        canvas.set_transform(to_device);
+        canvas.set_transform(xf);
         let mut blurred = blurred.into_iter();
         for (i, p) in resolved.paint.iter().enumerate() {
             match p.layer {
