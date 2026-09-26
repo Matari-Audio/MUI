@@ -97,7 +97,7 @@ impl Cache {
             ));
         }
         let th = spec.theme.corners;
-        let (convex, concave) = match e.style.radius {
+        let (convex, concave) = match e.style.radius.unwrap_or_default() {
             Radius::Theme => (th.box_, th.concave),
             Radius::Px(r) => (r, th.concave),
             Radius::Pair(a, b) => (a, b),
@@ -117,9 +117,10 @@ impl Cache {
             .filter_map(|(i, n)| Some((n.key()?, *i)))
             .collect();
         let named = |id: &Id| -> Result<Frame, SceneError> {
-            keyed.get(id.as_str()).map(|i| frames[*i]).ok_or_else(|| {
-                mui_geometry::Error::InvalidOptions("surface footprint missing").into()
-            })
+            keyed
+                .get(id.as_str())
+                .map(|i| frames[*i])
+                .ok_or_else(|| SceneError::MissingId { what: "surface member", id: id.clone() })
         };
         let mut panels = Vec::new();
         let mut joins = Vec::new();
@@ -241,7 +242,7 @@ impl Cache {
                 concave_radius: concave,
                 ..Fillet::default()
             },
-            corners: e.style.corners,
+            corners: e.style.corners.unwrap_or_default(),
             offsets: spec.offsets,
             geometry: spec.geometry,
             device_scale: spec.device_scale,

@@ -600,6 +600,14 @@ impl<'a> File<'a> {
             return out;
         }
         for r in self.ctx.rules() {
+            if let Rule::Function { old, new } | Rule::Type { old, new } = *r
+                && self.defined.contains(new)
+                && let Some(i) = (0..self.t.len()).find(|&i| self.ident(i, old) && self.is_mui_name(i))
+            {
+                out.push((self.line(i), format!("`{old}` becomes `{new}`, which this file also defines: rename the local one")));
+            }
+        }
+        for r in self.ctx.rules() {
             let Rule::Manual { pattern, note } = r else { continue };
             let Ok(pat) = crate::lex::lex_fragment(pattern) else { continue };
             'at: for i in 0..self.t.len() {

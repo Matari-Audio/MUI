@@ -5,7 +5,7 @@ use std::sync::Arc;
 use mui_geometry::{BooleanOp, Bounds, Path, Point, RoundedRect};
 use mui_layout::{Frame, Insets, Size};
 
-use super::{SceneError, Walk, bounds, find, fit};
+use super::{SceneError, Walk, bounds, find, fit, missing};
 use crate::regions::Operation;
 use crate::{El, Element, Radius};
 
@@ -84,9 +84,8 @@ impl Walk<'_> {
             let anchor = match &ramp.anchor {
                 None => frame,
                 Some(id) => {
-                    self.frames[find(n, id.as_str(), at, &self.sizes).ok_or(
-                        mui_geometry::Error::InvalidOptions("border ramp descendant missing"),
-                    )?]
+                    self.frames[find(n, id.as_str(), at, &self.sizes)
+                        .ok_or_else(|| missing("border ramp anchor", id))?]
                 }
             };
             if anchor.size.width <= 0. {
@@ -96,9 +95,8 @@ impl Walk<'_> {
             }
             let anchor = *self.ramp_anchors.entry(at).or_insert(anchor);
             for id in ramp.tabs.iter().chain(&ramp.dividers) {
-                let index = find(n, id.as_str(), at, &self.sizes).ok_or(
-                    mui_geometry::Error::InvalidOptions("border ramp descendant missing"),
-                )?;
+                let index =
+                    find(n, id.as_str(), at, &self.sizes).ok_or_else(|| missing("border ramp tab", id))?;
                 self.ramp_frames
                     .insert((at, id.clone()), self.frames[index]);
             }
@@ -113,7 +111,7 @@ impl Walk<'_> {
                     anchor,
                     0.1 / self.spec.device_scale.unwrap_or(1.),
                 )?;
-                let shoulder = match e.style.radius {
+                let shoulder = match e.style.radius.unwrap_or_default() {
                     Radius::Pair(_, r) => r,
                     Radius::Scale(k) => self.spec.theme.corners.concave * k,
                     _ => self.spec.theme.corners.concave,

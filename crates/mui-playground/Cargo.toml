@@ -11,6 +11,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 mui-scene.workspace = true
+mui-symbols.workspace = true
 mui-text.workspace = true
 mui-vello = { workspace = true, features = ["cpu"] }
 vello_cpu.workspace = true

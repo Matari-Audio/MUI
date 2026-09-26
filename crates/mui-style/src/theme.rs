@@ -86,6 +86,39 @@ pub enum Corner {
     Box,
 }
 
+/// The sizes the text roles resolve to, in pixels: `title(..)`, `body(..)`
+/// and `caption(..)` in `mui-scene` read these at resolve time, so a theme
+/// that re-tunes them re-tunes every heading.
+///
+/// ```
+/// use mui_style::{Theme, TypeScale};
+/// let big = Theme { type_scale: TypeScale { title: 24.0, ..TypeScale::DEFAULT }, ..Theme::DEFAULT };
+/// assert_eq!(big.type_scale.body, 13.0);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TypeScale {
+    pub title: f64,
+    pub body: f64,
+    pub caption: f64,
+}
+impl TypeScale {
+    pub const DEFAULT: Self = Self {
+        title: 18.0,
+        body: 13.0,
+        caption: 11.0,
+    };
+    fn is_valid(self) -> bool {
+        [self.title, self.body, self.caption]
+            .iter()
+            .all(|v| v.is_finite() && *v > 0.0)
+    }
+}
+impl Default for TypeScale {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Theme {
     pub corners: Corners,
@@ -94,6 +127,8 @@ pub struct Theme {
     pub stroke_width: f64,
     /// Default text size in pixels.
     pub text: f64,
+    /// The text roles' sizes.
+    pub type_scale: TypeScale,
     /// The unit every control size multiplies: daisyUI's `--size-field`. One
     /// number rescales every button, knob, toggle and slider in the tree.
     pub control: f64,
@@ -127,6 +162,7 @@ impl Theme {
         palette: Palette::NEUTRAL,
         stroke_width: 1.5,
         text: 14.0,
+        type_scale: TypeScale::DEFAULT,
         control: 4.0,
     };
 
@@ -138,6 +174,7 @@ impl Theme {
             && self.stroke_width >= 0.0
             && self.text.is_finite()
             && self.text > 0.0
+            && self.type_scale.is_valid()
             && self.control.is_finite()
             && self.control > 0.0
     }

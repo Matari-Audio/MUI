@@ -125,7 +125,7 @@ impl<P: Default> Node<P> {
         }
     }
     /// Content whose size is already known: an icon cell, a spacer.
-    pub fn leaf(width: f64, height: f64) -> Self {
+    pub fn block(width: f64, height: f64) -> Self {
         Self::new(Kind::Leaf).size(width, height)
     }
     /// Content measured by the callback given to [`resolve_with`].
@@ -140,14 +140,14 @@ impl<P: Default> Node<P> {
         })
     }
     /// Children laid out top to bottom.
-    pub fn column(children: impl IntoIterator<Item = Self>) -> Self {
+    pub fn col(children: impl IntoIterator<Item = Self>) -> Self {
         Self::new(Kind::Branch {
             vertical: true,
             children: children.into_iter().collect(),
         })
     }
     /// Children sharing one rect, back to front. Each may `anchor` itself.
-    pub fn overlay(children: impl IntoIterator<Item = Self>) -> Self {
+    pub fn stack(children: impl IntoIterator<Item = Self>) -> Self {
         Self::new(Kind::Overlay(children.into_iter().collect()))
     }
     /// Children flowed into `cols` equal columns, row by row. Rows take the
@@ -308,13 +308,46 @@ impl<P> Node<P> {
         self.minimum.height = height;
         self
     }
-    pub fn min_size(mut self, size: Size) -> Self {
-        self.minimum = size;
+    pub fn min_size(mut self, size: impl Into<Size>) -> Self {
+        self.minimum = size.into();
         self
     }
-    pub fn max_size(mut self, size: Size) -> Self {
-        self.rare_mut().maximum = Some(size);
+    pub fn max_size(mut self, size: impl Into<Size>) -> Self {
+        self.rare_mut().maximum = Some(size.into());
         self
+    }
+    /// Width: `.w(120)`, `.w(Len::Pct(50.))`.
+    pub fn w(self, len: impl Into<Len>) -> Self {
+        self.width(len)
+    }
+    /// Height.
+    pub fn h(self, len: impl Into<Len>) -> Self {
+        self.height(len)
+    }
+    /// Both axes: `.square(32)`.
+    pub fn square(self, len: impl Into<Len>) -> Self {
+        let l = len.into();
+        self.size(l, l)
+    }
+    /// Centred on both axes.
+    pub fn center(self) -> Self {
+        self.align(Align::Center).justify(Justify::Center)
+    }
+    /// Packed at the start of both axes.
+    pub fn start(self) -> Self {
+        self.align(Align::Start).justify(Justify::Start)
+    }
+    /// Packed at the end of both axes.
+    pub fn end(self) -> Self {
+        self.align(Align::End).justify(Justify::End)
+    }
+    /// Children pushed to the two ends, cross-axis centred.
+    pub fn between(self) -> Self {
+        self.align(Align::Center).justify(Justify::SpaceBetween)
+    }
+    /// All of the parent, both axes: `.w(Len::Pct(100.)).h(Len::Pct(100.))`.
+    pub fn full(self) -> Self {
+        self.size(Len::Pct(100.), Len::Pct(100.))
     }
     pub fn grow(mut self, weight: f64) -> Self {
         self.grow = weight;
@@ -369,6 +402,24 @@ impl<P> Node<P> {
     pub fn offset(mut self, dx: f64, dy: f64) -> Self {
         self.offset = [dx, dy];
         self
+    }
+    /// Placed `(dx, dy)` from the top-left of the parent's box: `anchor` at
+    /// the start of both axes, then `offset`.
+    ///
+    /// ```
+    /// use mui_layout::{block, resolve, stack, Size};
+    /// let dot = block(4., 4.).at(10., 20.).id("dot");
+    /// let l = resolve(&stack([dot]), Some(Size::new(100., 100.)), Default::default()).unwrap();
+    /// assert_eq!((l.frame("dot").unwrap().x, l.frame("dot").unwrap().y), (10., 20.));
+    /// ```
+    pub fn at(mut self, dx: f64, dy: f64) -> Self {
+        self.anchor = Some((Align::Start, Align::Start));
+        self.offset(dx, dy)
+    }
+    /// Centred in the parent's box, then nudged by `(dx, dy)`.
+    pub fn centered_at(mut self, dx: f64, dy: f64) -> Self {
+        self.anchor = Some((Align::Center, Align::Center));
+        self.offset(dx, dy)
     }
     /// Let the children overflow the main axis behind a clip. The node's
     /// floor on that axis drops to its padding, so it can be squeezed. A
@@ -489,15 +540,17 @@ impl<P> Node<P> {
         self.order = order;
         self
     }
-    /// Append a child to a container. A leaf or content node has no children
-    /// and is returned unchanged.
+    /// Append a child to a container. A block becomes a stack of its own
+    /// size holding the child; a content node has no children and is
+    /// returned unchanged.
     pub fn push(mut self, child: Self) -> Self {
         match &mut self.kind {
             Kind::Branch { children, .. }
             | Kind::Overlay(children)
             | Kind::Grid { children, .. }
             | Kind::Fits(children) => children.push(child),
-            Kind::Leaf | Kind::Content => {}
+            Kind::Leaf => self.kind = Kind::Overlay(vec![child]),
+            Kind::Content => {}
         }
         self
     }
@@ -536,17 +589,17 @@ impl<P> Node<P> {
     }
 }
 
-pub fn leaf(width: f64, height: f64) -> Node {
-    Node::leaf(width, height)
+pub fn block(width: f64, height: f64) -> Node {
+    Node::block(width, height)
 }
 pub fn row(children: impl IntoIterator<Item = Node>) -> Node {
     Node::row(children)
 }
-pub fn column(children: impl IntoIterator<Item = Node>) -> Node {
-    Node::column(children)
+pub fn col(children: impl IntoIterator<Item = Node>) -> Node {
+    Node::col(children)
 }
-pub fn overlay(children: impl IntoIterator<Item = Node>) -> Node {
-    Node::overlay(children)
+pub fn stack(children: impl IntoIterator<Item = Node>) -> Node {
+    Node::stack(children)
 }
 pub fn grid(cols: usize, children: impl IntoIterator<Item = Node>) -> Node {
     Node::grid(cols, children)

@@ -98,7 +98,7 @@ impl<'a> Walk<'a> {
         };
         // A mask composites against what the subtree drew, so the subtree
         // needs a layer of its own even when nothing asked to blend.
-        let masked = !s.mask.is_none();
+        let masked = s.mask.as_ref().is_some_and(|m| !m.is_none());
         let blended = match s.layer {
             Some((mix, opacity)) if !(mix == Mix::Normal && opacity == 1.0) => Some((mix, opacity)),
             _ if masked => Some((Mix::Normal, 1.0)),
@@ -107,14 +107,15 @@ impl<'a> Walk<'a> {
         if let Some((mix, opacity)) = blended {
             self.mark(Layer::Blend { mix, opacity }, empty(), None);
         }
-        if s.backdrop_blur > 0.0 {
+        let blur = s.backdrop_blur.unwrap_or_default();
+        if blur > 0.0 {
             // In scene space: the renderer samples the backdrop there.
             self.mark(Layer::Backdrop, contour.world(), contour.world_rect());
             if let Some(p) = self.paint.last_mut() {
-                p.blur = s.backdrop_blur;
+                p.blur = blur;
             }
         }
-        for sh in s.shadow.iter().filter(|sh| sh.kind == ShadowKind::Drop) {
+        for sh in s.shadow.iter().flatten().filter(|sh| sh.kind == ShadowKind::Drop) {
             self.shadow(sh, &contour, under)?;
         }
         let bg = self.fill(e, material.as_ref(), &contour, under);
@@ -180,7 +181,7 @@ impl<'a> Walk<'a> {
         // tab's own fill stops at the filleted corner instead of poking past
         // the shared outline.
         let clips =
-            n.is_clip() || s.union || e.extras().inside.is_some() || self.regions.contains_key(&at);
+            n.is_clip() || s.union.unwrap_or_default() || e.extras().inside.is_some() || self.regions.contains_key(&at);
         if clips {
             let image = material.as_ref().map(|m| m.image_rect.bounds());
             let image = image.or(shape_bounds);
@@ -241,7 +242,7 @@ impl<'a> Walk<'a> {
         if blended.is_some() {
             if masked
                 && let Some(p) =
-                    self.push(Layer::Mask, contour.path.clone(), contour.rect, &s.mask, bg)
+                    self.push(Layer::Mask, contour.path.clone(), contour.rect, s.mask.as_ref().unwrap_or(&Fill::None), bg)
             {
                 p.offset = contour.offset;
             }
@@ -493,12 +494,11 @@ impl<'a> Walk<'a> {
         under: Color,
     ) -> Result<(), SceneError> {
         let th = self.spec.theme;
-        let size = e.text_size.unwrap_or(th.text);
+        let size = e.text_px(&th);
         // Text's own fill is its ink, not a box behind it.
-        let ink = if e.style.fill.is_none() {
-            Fill::Role(crate::Role::Ink)
-        } else {
-            e.style.fill.clone()
+        let ink = match &e.style.fill {
+            Some(f) if !f.is_none() => f.clone(),
+            _ => Fill::Role(crate::Role::Ink),
         };
         let face = Face::of(e, th);
         let lines = self.runs.lines(t, face, frame.size.width, e.lines);

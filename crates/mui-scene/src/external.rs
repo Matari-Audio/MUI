@@ -19,7 +19,8 @@ pub enum WeldBackend {
 pub struct ExternalWeld {
     /// Local source origin in scene coordinates. Not part of uploaded uniforms.
     pub origin: Point,
-    pub material: AnalyticWeld,
+    /// Shared with the `WeldCache`; a live update copies on write.
+    pub material: Arc<AnalyticWeld>,
 }
 impl ExternalWeld {
     pub fn bounds(&self) -> Bounds {
@@ -46,6 +47,12 @@ impl ResolvedScene {
     pub fn external_welds(&self) -> impl Iterator<Item = (&str, &ExternalWeld)> + Clone {
         self.external_welds.iter().map(|(k, v)| (k.as_ref(), v))
     }
+    fn weld_mut(&mut self, key: &str) -> Result<&mut AnalyticWeld, SceneError> {
+        let w = self.external_welds.get_mut(key).ok_or(SceneError::UnsupportedWeld(
+            "key is not a GPU material weld",
+        ))?;
+        Ok(Arc::make_mut(&mut w.material))
+    }
     pub fn set_weld_solid_material(
         &mut self,
         key: &str,
@@ -54,12 +61,7 @@ impl ResolvedScene {
         border: Option<crate::Color>,
         width: f64,
     ) -> Result<bool, SceneError> {
-        self.external_welds
-            .get_mut(key)
-            .ok_or(SceneError::UnsupportedWeld(
-                "key is not a GPU material weld",
-            ))?
-            .material
+        self.weld_mut(key)?
             .set_solid_material(
                 index,
                 fill.map(crate::material_weld::color),
@@ -75,12 +77,7 @@ impl ResolvedScene {
         index: usize,
         source: mui_weld::analytic::AnalyticSource,
     ) -> Result<bool, SceneError> {
-        self.external_welds
-            .get_mut(key)
-            .ok_or(SceneError::UnsupportedWeld(
-                "key is not a GPU material weld",
-            ))?
-            .material
+        self.weld_mut(key)?
             .set_source_material(index, source)
             .map_err(SceneError::MaterialWeld)
     }
@@ -88,22 +85,12 @@ impl ResolvedScene {
     /// extraction, or CPU image baking. Keep the application model in sync: a
     /// later tree resolve intentionally replaces this value with its declaration.
     pub fn set_weld_morph(&mut self, key: &str, progress: f64) -> Result<bool, SceneError> {
-        self.external_welds
-            .get_mut(key)
-            .ok_or(SceneError::UnsupportedWeld(
-                "key is not a GPU material weld",
-            ))?
-            .material
+        self.weld_mut(key)?
             .set_morph(progress)
             .map_err(SceneError::MaterialWeld)
     }
     pub fn set_weld_material_blend(&mut self, key: &str, blend: f64) -> Result<bool, SceneError> {
-        self.external_welds
-            .get_mut(key)
-            .ok_or(SceneError::UnsupportedWeld(
-                "key is not a GPU material weld",
-            ))?
-            .material
+        self.weld_mut(key)?
             .set_material_blend(blend)
             .map_err(SceneError::MaterialWeld)
     }
@@ -120,7 +107,7 @@ pub(crate) fn finish_gpu(
     members: std::collections::HashSet<Arc<str>>,
     cache: &mut mui_weld::WeldCache,
 ) -> Result<crate::material_weld::MaterialWeld, SceneError> {
-    let material = cache.get_analytic(sources, weld, quality.scale)?;
+    let material = cache.analytic(sources, weld, quality.scale)?;
     let [w, h] = material.pixels();
     let pixels = u64::from(w) * u64::from(h);
     let work = pixels

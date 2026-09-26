@@ -43,6 +43,11 @@ impl SceneSpec {
             weld_backend: crate::WeldBackend::Reference,
         }
     }
+    /// Where material welds run: the CPU reference (default) or the GPU.
+    pub fn weld_backend(mut self, backend: crate::WeldBackend) -> Self {
+        self.weld_backend = backend;
+        self
+    }
     pub fn theme(mut self, theme: Theme) -> Self {
         self.theme = theme;
         self
@@ -107,6 +112,9 @@ pub enum SceneError {
     NoTextLayer,
     /// [`SceneSpec::device_scale`] is not a finite, positive number.
     InvalidScale,
+    /// A cross-reference (a surface member, a border ramp's tab or anchor)
+    /// names an id no node in the subtree has.
+    MissingId { what: &'static str, id: mui_layout::Id },
 }
 impl std::fmt::Display for SceneError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -125,6 +133,7 @@ impl std::fmt::Display for SceneError {
             Self::Text(e) => write!(f, "{e}"),
             Self::NoTextLayer => f.write_str("that key resolved no text layer"),
             Self::InvalidScale => f.write_str("the device scale must be finite and positive"),
+            Self::MissingId { what, id } => write!(f, "{what} `{}` is not in the subtree", id.as_str()),
         }
     }
 }

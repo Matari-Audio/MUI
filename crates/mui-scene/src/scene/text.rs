@@ -165,7 +165,7 @@ pub(super) struct Face<'a> {
 impl<'a> Face<'a> {
     pub(super) fn of(e: &'a crate::Element, th: Theme) -> Self {
         Self {
-            size: e.text_size.unwrap_or(th.text),
+            size: e.text_px(&th),
             axes: &e.axes,
             font: e.font.as_ref(),
         }
@@ -401,7 +401,7 @@ pub(super) fn layout_key(e: &Element, th: Theme, scale: Option<f64>, out: &mut V
         out.extend_from_slice(tag.as_bytes());
         out.extend_from_slice(&value.to_bits().to_le_bytes());
     }
-    out.extend_from_slice(&e.text_size.unwrap_or(th.text).to_bits().to_le_bytes());
+    out.extend_from_slice(&e.text_px(&th).to_bits().to_le_bytes());
     // 0 is "no face of its own"; ids shift up one past it.
     out.extend_from_slice(&e.font.as_ref().map_or(0, |f| f.id() + 1).to_le_bytes());
     // usize::MAX is "no cap".

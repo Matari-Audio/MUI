@@ -93,6 +93,16 @@ fn subtree_sizes(n: &El, sizes: &mut Vec<usize>) -> usize {
     size
 }
 
+/// Per pre-order index, whether the node's parent is
+/// [`segmented`](crate::Styled::segmented). Read at resolve time, so a child
+/// pushed after `.segmented()` is squared too.
+fn squared(n: &El, parent: bool, out: &mut Vec<bool>) {
+    out.push(parent);
+    for c in n.children() {
+        squared(c, n.payload().segmented, out);
+    }
+}
+
 /// The pre-order index of the node keyed `id` in the subtree `n` rooted at `at`.
 fn find(n: &El, id: &str, at: usize, sizes: &[usize]) -> Option<usize> {
     if n.key() == Some(id) {
@@ -106,6 +116,11 @@ fn find(n: &El, id: &str, at: usize, sizes: &[usize]) -> Option<usize> {
         next += sizes[next];
     }
     None
+}
+
+/// The error for a cross-reference `find` did not resolve.
+fn missing(what: &'static str, id: &mui_layout::Id) -> SceneError {
+    SceneError::MissingId { what, id: id.clone() }
 }
 
 /// What a node inherits from the nodes above it.
@@ -192,6 +207,8 @@ struct Walk<'a> {
     runs: Runs<'a>,
     /// Subtree size per pre-order index; see [`subtree_sizes`].
     sizes: Vec<usize>,
+    /// Per pre-order index: the parent is segmented, so the corners are square.
+    squared: Vec<bool>,
     outlines: &'a mut OutlineCache,
     borders: &'a mut crate::border_ramp::BorderCache,
     region_cache: &'a mut crate::regions::RegionCache,
@@ -305,54 +322,55 @@ fn glide_frames(
     }
 }
 
-pub fn resolve_scene(spec: &SceneSpec) -> Result<ResolvedScene, SceneError> {
-    resolve_scene_with(spec, &mut TextCache::default())
+/// Resolve `spec` once, with cold caches. Anything that resolves every
+/// frame keeps a [`Resolver`] instead.
+pub fn resolve(spec: &SceneSpec) -> Result<ResolvedScene, SceneError> {
+    Resolver::default().resolve(spec)
 }
 
-/// [`resolve_scene`] with text shaped once per (string, size) across calls.
-/// Material welds still start cold every call; see [`resolve_scene_cached`].
-pub fn resolve_scene_with(
-    spec: &SceneSpec,
-    text: &mut TextCache,
-) -> Result<ResolvedScene, SceneError> {
-    resolve_scene_cached(spec, text, &mut crate::WeldCache::default())
+/// The caches a resolve reuses across calls: shaped text, layout, outlines
+/// and material welds. Keep one per window.
+#[derive(Default)]
+pub struct Resolver {
+    pub text: TextCache,
+    pub welds: crate::WeldCache,
+}
+impl Resolver {
+    pub fn new() -> Self {
+        Self::default()
+    }
+    /// Solve, shape and paint `spec`.
+    pub fn resolve(&mut self, spec: &SceneSpec) -> Result<ResolvedScene, SceneError> {
+        self.resolve_animated(spec, &mut |_, _, f| f, None)
+    }
+    /// [`Resolver::resolve`] with every
+    /// [`animate_layout`](crate::Styled::animate_layout) node's frame handed
+    /// to `glide` between the solve and the walk: `glide(key, element,
+    /// target)` returns the frame to paint, clip and hit it at. `target` is
+    /// relative to the nearest animating ancestor's *solved* origin
+    /// (absolute for the outermost), and so is the answer, so a nested glide
+    /// is never chased twice. A node that does not animate moves with its
+    /// nearest animating ancestor. The runtime's springs live in `glide`;
+    /// this only places them.
+    ///
+    /// Every reused [`Memo`](crate::Memo) subtree is painted by copying its
+    /// paint and surfaces out of `prev`, the scene the previous call
+    /// returned, when nothing it depended on from outside moved --
+    /// translated when only its origin did. The copy keeps every `Arc`, so a
+    /// renderer comparing by pointer sees it unchanged, and it keeps the
+    /// caches' entries the subtree used alive.
+    pub fn resolve_animated(
+        &mut self,
+        spec: &SceneSpec,
+        glide: &mut dyn FnMut(&str, &crate::Element, Frame) -> Frame,
+        prev: Option<&ResolvedScene>,
+    ) -> Result<ResolvedScene, SceneError> {
+        let (text, weld_cache) = (&mut self.text, &mut self.welds);
+        resolve_with(spec, text, weld_cache, glide, prev)
+    }
 }
 
-/// Resolve with persistent text and material-weld caches. A runtime keeps
-/// both; [`resolve_scene`] and [`resolve_scene_with`] make a fresh
-/// [`WeldCache`](crate::WeldCache) per call.
-pub fn resolve_scene_cached(
-    spec: &SceneSpec,
-    text: &mut TextCache,
-    weld_cache: &mut crate::WeldCache,
-) -> Result<ResolvedScene, SceneError> {
-    resolve_scene_animated(spec, text, weld_cache, &mut |_, _, f| f)
-}
-
-/// [`resolve_scene_cached`] with every
-/// [`animate_layout`](crate::Styled::animate_layout) node's frame handed to
-/// `glide` between the solve and the walk: `glide(key, element, target)`
-/// returns the frame to paint, clip and hit it at. `target` is relative to
-/// the nearest animating ancestor's *solved* origin (absolute for the
-/// outermost), and so is the answer, so a nested glide is never chased
-/// twice. A node that does not animate moves with its nearest animating
-/// ancestor. The runtime's springs live in `glide`; this only places them.
-pub fn resolve_scene_animated(
-    spec: &SceneSpec,
-    text: &mut TextCache,
-    weld_cache: &mut crate::WeldCache,
-    glide: &mut dyn FnMut(&str, &crate::Element, Frame) -> Frame,
-) -> Result<ResolvedScene, SceneError> {
-    resolve_scene_retained(spec, text, weld_cache, glide, None)
-}
-
-/// [`resolve_scene_animated`] that paints every reused
-/// [`Memo`](crate::Memo) subtree by copying its paint and surfaces out of
-/// `prev`, the scene the previous call returned, when nothing it depended
-/// on from outside moved -- translated when only its origin did. The copy
-/// keeps every `Arc`, so a renderer comparing by pointer sees it unchanged,
-/// and it keeps the caches' entries the subtree used alive.
-pub fn resolve_scene_retained(
+fn resolve_with(
     spec: &SceneSpec,
     text: &mut TextCache,
     weld_cache: &mut crate::WeldCache,
@@ -392,6 +410,8 @@ pub fn resolve_scene_retained(
     let nodes = layout.all().len();
     let mut sizes = Vec::with_capacity(nodes);
     subtree_sizes(&spec.root, &mut sizes);
+    let mut square = Vec::with_capacity(nodes);
+    squared(&spec.root, false, &mut square);
     let mut frames = Cow::Borrowed(layout.all());
     glide_frames(
         &spec.root,
@@ -411,6 +431,7 @@ pub fn resolve_scene_retained(
         region_envelopes: HashMap::default(),
         runs,
         sizes,
+        squared: square,
         outlines: &mut text.outlines,
         borders: &mut text.borders,
         region_cache: &mut text.region_cache,

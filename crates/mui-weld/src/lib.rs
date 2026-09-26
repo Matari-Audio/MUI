@@ -41,6 +41,8 @@ pub struct Weld {
     pub blend: f64,
     /// 0 = original components; 1 = the complete weld. No implicit clock.
     pub progress: f64,
+    /// Raster budget for the backends that bake; `None` is `Quality::default()`.
+    pub quality: Option<Quality>,
 }
 impl Default for Weld {
     fn default() -> Self {
@@ -66,7 +68,21 @@ impl Weld {
             reach: 16.0,
             blend: 32.0,
             progress: 1.0,
+            quality: None,
         }
+    }
+    /// No weld: every source keeps its own fill and border. `.weld(Weld::off())`
+    /// removes a weld set earlier.
+    pub const fn off() -> Self {
+        Self::all().fill(Channel::Keep).border(Channel::Keep)
+    }
+    /// Whether this is [`Weld::off`]: both channels kept, nothing shared.
+    pub fn is_off(&self) -> bool {
+        self.fill == Channel::Keep && self.border == Channel::Keep
+    }
+    pub const fn quality(mut self, quality: Quality) -> Self {
+        self.quality = Some(quality);
+        self
     }
     pub const fn shape() -> Self {
         Self {

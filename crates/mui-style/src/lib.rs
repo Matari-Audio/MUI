@@ -21,4 +21,4 @@ pub use style::{
     Cursor, Elevation, Fill, Fit, Gradient, GradientKind, Image, Mix, Paint, Radius, Role, Shadow,
     ShadowKind, Stroke, Style,
 };
-pub use theme::{Corner, Corners, Theme};
+pub use theme::{Corner, Corners, Theme, TypeScale};

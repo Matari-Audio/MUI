@@ -5,7 +5,7 @@ use std::sync::Arc;
 use mui_geometry::{BooleanOp, Bounds, Path, Point, RoundedRect};
 
 use super::outline::Contour;
-use super::{Layer, Painted, SceneError, Walk, empty, find};
+use super::{Layer, Painted, SceneError, Walk, empty, find, missing};
 use crate::material_weld::MaterialWeld;
 use crate::regions::{Operation, RAMP_OUTSIDE, SHELL, STROKE_BAND};
 use crate::{
@@ -69,16 +69,16 @@ impl Walk<'_> {
             // Text's own fill is its ink, not a box behind it: never pushed,
             // though its colour still grounds the shells as before.
             None if matches!(e.content, Content::Text(_)) => self
-                .paint_of(&e.style.fill, under)
+                .paint_of(e.style.fill.as_ref().unwrap_or(&Fill::None), under)
                 .map_or(under, |p| p.solid()),
             // A joined tab takes the owner's border material; its fill only
             // grounds its content.
             None if e.extras().border_join.is_some() => self
-                .paint_of(&e.style.fill, under)
+                .paint_of(e.style.fill.as_ref().unwrap_or(&Fill::None), under)
                 .map_or(under, |p| p.solid()),
             None => {
                 let path = contour.path.clone();
-                let mut p = self.push(Layer::Fill, path, contour.rect, &e.style.fill, under);
+                let mut p = self.push(Layer::Fill, path, contour.rect, e.style.fill.as_ref().unwrap_or(&Fill::None), under);
                 if let Some(p) = p.as_deref_mut() {
                     p.offset = contour.offset;
                 }
@@ -98,7 +98,7 @@ impl Walk<'_> {
         // The shell before this one: an analytic rect insets as one, and
         // only a path shell needs the previous path kept.
         let (mut cur, mut cur_rect) = (None::<Arc<Path>>, contour.rect);
-        for (i, (d, f)) in s.shells.iter().enumerate() {
+        for (i, (d, f)) in s.shells.iter().flatten().enumerate() {
             let d = d.resolve(self.spec.theme.spacing);
             if !(d.is_finite() && d >= 0.0) {
                 return Err(SceneError::InvalidRadius);
@@ -138,11 +138,11 @@ impl Walk<'_> {
         contour: &Contour,
         bg: Color,
     ) -> Result<(), SceneError> {
-        if !s.shadow.iter().any(|sh| sh.kind == ShadowKind::Inset) {
+        if !s.shadow.iter().flatten().any(|sh| sh.kind == ShadowKind::Inset) {
             return Ok(());
         }
         self.mark_on(Layer::Clip, contour);
-        for sh in s.shadow.iter().filter(|sh| sh.kind == ShadowKind::Inset) {
+        for sh in s.shadow.iter().flatten().filter(|sh| sh.kind == ShadowKind::Inset) {
             self.shadow(sh, contour, bg)?;
         }
         self.mark(Layer::Unclip, empty(), None);
@@ -238,7 +238,7 @@ impl Walk<'_> {
                 )));
             };
             let path = self.rect_path(rr, mui_geometry::CornerStyle::Round);
-            if e.style.union {
+            if e.style.union.unwrap_or_default() {
                 return Ok(Some((path, Some(rr), st.fill.clone(), w, false)));
             }
             if let Some(p) = self.push(Layer::Stroke, path, Some(rr), &st.fill, bg) {
@@ -316,9 +316,8 @@ impl Walk<'_> {
             if let Some(frame) = self.ramp_frames.get(&(at, id.clone())) {
                 return Ok(*frame);
             }
-            let index = find(n, id.as_str(), at, &self.sizes).ok_or(
-                mui_geometry::Error::InvalidOptions("border ramp descendant missing"),
-            )?;
+            let index =
+                find(n, id.as_str(), at, &self.sizes).ok_or_else(|| missing("border ramp tab", id))?;
             Ok(self.frames[index])
         };
         let anchor = match self.ramp_anchors.get(&at) {
@@ -349,7 +348,7 @@ impl Walk<'_> {
         )?;
         // Extend the same material into the tabs and their concave shoulders.
         // The final welded outline supplies all corners through the clip.
-        let shoulder = match n.payload().style.radius {
+        let shoulder = match n.payload().style.radius.unwrap_or_default() {
             Radius::Pair(_, concave) => concave,
             Radius::Scale(k) => th.corners.concave * k,
             _ => th.corners.concave,

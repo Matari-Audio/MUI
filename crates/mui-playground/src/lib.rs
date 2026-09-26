@@ -1,6 +1,6 @@
 //! A bounded expression interpreter for the browser playground, not a Rust compiler.
 #![forbid(unsafe_code)]
-use mui_scene::{material_symbols, prelude::*};
+use mui_scene::prelude::*;
 use std::sync::LazyLock;
 use syn::{Expr, Lit, Token, parse::Parser, punctuated::Punctuated, spanned::Spanned};
 use wasm_bindgen::prelude::*;
@@ -164,7 +164,7 @@ fn element(e: &Expr, depth: usize, nodes: &mut usize) -> syn::Result<El> {
                     // name it lacks would draw .notdef, so refuse it here.
                     let in_subset =
                         |ch: &char| mui_text::glyph_path(&ICONS, *ch, 24., &[], 1.).is_ok();
-                    match material_symbols::codepoint(&name).filter(in_subset) {
+                    match mui_symbols::codepoint(&name).filter(in_subset) {
                         Some(ch) => Ok(icon(ICONS.clone(), ch)),
                         None => Err(error(
                             &c.args[0],

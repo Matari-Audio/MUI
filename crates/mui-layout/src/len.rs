@@ -34,6 +34,13 @@ impl Size {
     }
 }
 
+/// `(width, height)`: `.min_size((40., 30.))`.
+impl From<(f64, f64)> for Size {
+    fn from((width, height): (f64, f64)) -> Self {
+        Self::new(width, height)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Insets {
     pub left: f64,
@@ -147,9 +154,20 @@ pub enum Len {
     /// ```
     Container(f64),
 }
+/// A bare number is pixels: `.width(120)`, `.w(12.5)`.
 impl From<f64> for Len {
     fn from(v: f64) -> Self {
         Self::Px(v)
+    }
+}
+impl From<f32> for Len {
+    fn from(v: f32) -> Self {
+        Self::Px(v.into())
+    }
+}
+impl From<i32> for Len {
+    fn from(v: i32) -> Self {
+        Self::Px(v.into())
     }
 }
 impl Len {

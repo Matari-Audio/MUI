@@ -270,3 +270,9 @@ fn markdown_blocks() {
     );
     assert_eq!(out.warnings.iter().map(|w| w.0).collect::<Vec<_>>(), [14]);
 }
+
+#[test]
+fn new_name_collides_with_a_local_definition() {
+    let out = run("use mui_layout::{leaf, row};\nfn block(i: usize) -> u8 { 0 }\nfn f() { row([leaf(1., 1.)]); }\n");
+    assert!(out.warnings.iter().any(|(l, w)| *l == 1 && w.contains("`block`")), "{:?}", out.warnings);
+}

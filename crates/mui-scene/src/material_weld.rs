@@ -89,7 +89,7 @@ pub(crate) fn check_plate(n: &El, nested: bool) -> Result<(), SceneError> {
             "nested material-weld members; mark the nested group .exclude_from_weld()",
         ));
     }
-    if !s.shells.is_empty() || !s.shadow.is_empty() || !s.mask.is_none() {
+    if !s.shells.as_deref().unwrap_or_default().is_empty() || !s.shadow.as_deref().unwrap_or_default().is_empty() || s.mask.as_ref().is_some_and(|m| !m.is_none()) {
         return Err(SceneError::UnsupportedWeld(
             "shell, shadow, or mask on a welded plate; keep the effect on an excluded wrapper/descendant",
         ));

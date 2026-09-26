@@ -199,6 +199,12 @@ fn path_words(path: &Path, key: &mut Vec<u64>) {
     }
 }
 
+/// The radius `style` resolves to: square for a child of a
+/// [`segmented`](crate::Styled::segmented) container.
+fn radius(style: &crate::Style, square: bool) -> Radius {
+    if square { Radius::Px(0.) } else { style.radius.unwrap_or_default() }
+}
+
 /// `n`'s own outline inputs as key words: its snapped bounds relative to
 /// `origin`, which sits on the device grid, and its size. A custom
 /// `.outline(..)` is keyed by the local path it draws and where that lands,
@@ -208,6 +214,7 @@ fn geometry_shallow(
     frames: &[Frame],
     at: usize,
     g: (Point, Option<f64>),
+    square: bool,
     key: &mut Vec<u64>,
 ) {
     let (origin, scale) = g;
@@ -233,7 +240,7 @@ fn geometry_shallow(
         .map(f64::to_bits),
     );
     let style = &n.payload().style;
-    match style.radius {
+    match radius(style, square) {
         Radius::Theme => key.push(0),
         Radius::Px(value) => key.extend([1, value.to_bits()]),
         Radius::Token(corner) => key.extend([2, corner as u64]),
@@ -241,11 +248,11 @@ fn geometry_shallow(
         Radius::Pill => key.push(4),
         Radius::Pair(convex, concave) => key.extend([5, convex.to_bits(), concave.to_bits()]),
     }
-    key.push(match style.corners {
+    key.push(match style.corners.unwrap_or_default() {
         CornerStyle::Round => 0,
         CornerStyle::Squircle => 1,
     });
-    key.push(u64::from(style.union));
+    key.push(u64::from(style.union.unwrap_or_default()));
     key.push(match n.payload().carve {
         None => 0,
         Some(Carve::Cut) => 1,
@@ -257,27 +264,27 @@ fn geometry_shallow(
 fn geometry_node(
     n: &El,
     frames: &[Frame],
-    sizes: &[usize],
+    (sizes, squared): (&[usize], &[bool]),
     at: usize,
     g: (Point, Option<f64>),
     key: &mut Vec<u64>,
 ) {
-    geometry_shallow(n, frames, at, g, key);
+    geometry_shallow(n, frames, at, g, squared[at], key);
     let mut child_at = at + 1;
     for child in n.children() {
         // A plain child contributes only its own rounded frame to a weld.
         // Descendants matter when this child welds them or carves one out;
         // skipping unrelated descendants keeps the cache key cheaper than
         // the boolean work it avoids.
-        let complex = child.payload().style.union
+        let complex = child.payload().style.union.unwrap_or_default()
             || child
                 .children()
                 .iter()
                 .any(|grandchild| grandchild.payload().carve.is_some());
         if complex {
-            geometry_node(child, frames, sizes, child_at, g, key);
+            geometry_node(child, frames, (sizes, squared), child_at, g, key);
         } else {
-            geometry_shallow(child, frames, child_at, g, key);
+            geometry_shallow(child, frames, child_at, g, squared[child_at], key);
         }
         child_at += sizes[child_at];
     }
@@ -312,7 +319,7 @@ impl Walk<'_> {
             )
             .into());
         }
-        let cacheable = n.payload().style.union
+        let cacheable = n.payload().style.union.unwrap_or_default()
             || n.children()
                 .iter()
                 .any(|child| child.payload().carve.is_some());
@@ -369,7 +376,7 @@ impl Walk<'_> {
         )?;
         let outline = Contour {
             changed: true,
-            ..Contour::path(n.payload().style.corners.shape(&rounded.path))
+            ..Contour::path(n.payload().style.corners.unwrap_or_default().shape(&rounded.path))
         };
         match key {
             Some((key, origin)) => self.outlines.insert(key, origin, outline),
@@ -407,7 +414,7 @@ impl Walk<'_> {
             None => Point::new(f.x, f.y),
             Some(s) => Point::new((f.x * s).floor() / s, (f.y * s).floor() / s),
         };
-        geometry_node(n, &self.frames, &self.sizes, at, (origin, scale), key);
+        geometry_node(n, &self.frames, (&self.sizes, &self.squared), at, (origin, scale), key);
         origin
     }
 
@@ -439,7 +446,7 @@ impl Walk<'_> {
         let th = &self.spec.theme;
         let s = &n.payload().style;
         if let Some(shape) = &n.payload().extras().outline {
-            if !s.shadow.is_empty() {
+            if !s.shadow.as_deref().unwrap_or_default().is_empty() {
                 return Err(mui_geometry::Error::InvalidOptions(
                     "custom-path shadows require a path-filter renderer; use an outer wrapper",
                 )
@@ -452,7 +459,7 @@ impl Walk<'_> {
                 ..Contour::path(path)
             });
         }
-        let (convex, concave) = match s.radius {
+        let (convex, concave) = match radius(s, self.squared[first.saturating_sub(1)]) {
             Radius::Theme => (th.corners.box_, th.corners.concave),
             // A pixel radius names the outer (convex) corner. The inner
             // (concave) corner remains the theme contract; a pair such as
@@ -472,17 +479,17 @@ impl Walk<'_> {
         if !(convex.is_finite() && convex >= 0.0 && concave.is_finite() && concave >= 0.0) {
             return Err(SceneError::InvalidRadius);
         }
-        if !s.union || n.children().is_empty() {
+        if !s.union.unwrap_or_default() || n.children().is_empty() {
             // Local to its snapped corner, so a move keeps the path.
             let b = bounds(frame, self.spec.device_scale);
             let size = Bounds::new(0., 0., b.max.x - b.min.x, b.max.y - b.min.y);
             let rr = RoundedRect::new(size, convex)?;
-            let path = self.rect_path(rr, s.corners);
+            let path = self.rect_path(rr, s.corners.unwrap_or_default());
             let offset = b.min;
             // A squircle is no longer a rounded rectangle, so it gives up the
             // analytic blur and the analytic shell inset with it; the path
             // route below draws both from the outline itself.
-            if s.corners != CornerStyle::Round {
+            if s.corners.unwrap_or_default() != CornerStyle::Round {
                 return Ok(Contour {
                     shadow_rects: vec![rr],
                     offset,
@@ -535,7 +542,7 @@ impl Walk<'_> {
             // convex radius.
             match child_rect {
                 Some(r) => rects.push(r),
-                None if c.payload().style.union && !child.shadow_rects.is_empty() => {
+                None if c.payload().style.union.unwrap_or_default() && !child.shadow_rects.is_empty() => {
                     rects.extend(child_rects);
                 }
                 None => rects.push(RoundedRect::new(bounds(f, self.spec.device_scale), convex)?),
@@ -560,7 +567,7 @@ impl Walk<'_> {
         Ok(Contour {
             changed: merged.components() != participants,
             shadow_rects: rects,
-            ..Contour::path(s.corners.shape(&rounded.path))
+            ..Contour::path(s.corners.unwrap_or_default().shape(&rounded.path))
         })
     }
 }

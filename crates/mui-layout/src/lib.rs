@@ -25,7 +25,7 @@ mod pin;
 pub use id::Id;
 pub use len::{Align, Insets, Justify, Len, Size};
 pub use mui_geometry::{Spacing, SpacingScale, SpacingToken};
-pub use node::{Node, column, fits, grid, leaf, overlay, row};
+pub use node::{Node, block, col, fits, grid, row, stack};
 
 /// What a measurer says about a content leaf: its size in the room it was
 /// given, and the narrowest a flex parent may squeeze it to -- for text, its
@@ -141,11 +141,11 @@ impl Layout {
         let (mut named, mut seen) = (Vec::new(), rustc_hash::FxHashSet::default());
         for at in 0..frames.len() {
             let node = nodes.pop().ok_or(Error::InvalidValue)?;
-            if let Some(key) = node.key() {
-                if !seen.insert(key) {
-                    return Err(Error::DuplicateKey(key.to_owned()));
+            if let Some(id) = &node.id {
+                if !seen.insert(id.as_str()) {
+                    return Err(Error::DuplicateKey(id.to_string()));
                 }
-                named.push((Id::of(key), at as u32));
+                named.push((id.clone(), at as u32));
             }
             nodes.extend(node.children().iter().rev());
         }

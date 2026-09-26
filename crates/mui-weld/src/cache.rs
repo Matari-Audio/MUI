@@ -207,16 +207,6 @@ impl WeldCache {
     pub fn analytic_stats(&self) -> (u64, u64) {
         (self.analytic_hits, self.analytic_builds)
     }
-    /// Owned copy of [`Self::analytic`] for holders that store the value.
-    pub fn get_analytic(
-        &mut self,
-        sources: &[crate::Source],
-        weld: crate::Weld,
-        scale: f64,
-    ) -> Result<AnalyticWeld, Error> {
-        self.analytic(sources, weld, scale)
-            .map(Arc::unwrap_or_clone)
-    }
     /// The cached surface, shared. Materials and morph are retargeted in place
     /// (copy-on-write if a caller still holds last frame's Arc).
     pub fn analytic(
@@ -319,8 +309,8 @@ mod analytic_tests {
     fn materials_reuse_prepared_boundary() {
         let mut c = WeldCache::default();
         let src = sources();
-        let a = c.get_analytic(&src, Weld::crisp(), 1.).unwrap();
-        let b = c.get_analytic(&src, Weld::crisp().morph(0.5), 1.).unwrap();
+        let a = c.analytic(&src, Weld::crisp(), 1.).unwrap();
+        let b = c.analytic(&src, Weld::crisp().morph(0.5), 1.).unwrap();
         assert!(Arc::ptr_eq(a.boundary_bytes(), b.boundary_bytes()));
         assert_eq!(c.analytic_stats(), (1, 1));
     }
@@ -337,7 +327,7 @@ mod analytic_tests {
         };
         for _ in 0..2 {
             for i in 0..40 {
-                c.get_analytic(&at(i), Weld::crisp(), 1.).unwrap();
+                c.analytic(&at(i), Weld::crisp(), 1.).unwrap();
             }
         }
         assert_eq!(c.analytic_stats(), (40, 40), "the second frame rebuilt");
@@ -345,7 +335,7 @@ mod analytic_tests {
     #[test]
     fn clear_releases_boundary_cache() {
         let mut c = WeldCache::default();
-        c.get_analytic(&sources(), Weld::crisp(), 1.).unwrap();
+        c.analytic(&sources(), Weld::crisp(), 1.).unwrap();
         assert!(c.bytes() > 0);
         c.clear();
         assert_eq!(c.bytes(), 0);
@@ -353,15 +343,15 @@ mod analytic_tests {
     #[test]
     fn zero_budget_never_retains_boundary() {
         let mut c = WeldCache::with_limit(0);
-        c.get_analytic(&sources(), Weld::crisp(), 1.).unwrap();
+        c.analytic(&sources(), Weld::crisp(), 1.).unwrap();
         assert_eq!(c.bytes(), 0);
     }
     #[test]
     fn invalid_morph_cannot_bypass_a_hit() {
         let mut c = WeldCache::default();
-        c.get_analytic(&sources(), Weld::crisp(), 1.).unwrap();
+        c.analytic(&sources(), Weld::crisp(), 1.).unwrap();
         assert!(
-            c.get_analytic(&sources(), Weld::crisp().morph(f64::NAN), 1.)
+            c.analytic(&sources(), Weld::crisp().morph(f64::NAN), 1.)
                 .is_err()
         );
     }

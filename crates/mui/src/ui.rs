@@ -2878,7 +2878,7 @@ fn state(
             )
         };
         let e = n.payload_mut();
-        if !e.style.fill.is_none() && ((auto_hover && h > 0.0) || (auto_press && p > 0.0)) {
+        if e.style.fill.as_ref().is_some_and(|f| !f.is_none()) && ((auto_hover && h > 0.0) || (auto_press && p > 0.0)) {
             e.style.fill = e.style.fill.map(pal, bg, |c| {
                 let c = if auto_hover {
                     c.mix(pal.hover(c), h as f32)
