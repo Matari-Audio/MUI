@@ -13,7 +13,7 @@ use mui_layout::SpacingToken::{S, Xs};
 use mui_scene::Keys;
 use mui_scene::prelude::{Paints as _, Role, stack, text};
 use mui_scene::{
-    A11y, Appear, Area, Color, Cursor, El, Element, Fill, Font, Layer, Mix, Paint, Painted,
+    A11y, Appear, Area, Color, Cursor, El, Element, Fill, Font, Id, Layer, Mix, Paint, Painted,
     Palette, Pin, Radius, ResolvedScene, Resolver, SceneError, SceneSpec, Size, Spacing, Spring,
     State, Theme, bar, push_index,
 };
@@ -83,7 +83,7 @@ pub struct Frame<'a> {
     pub cursor: Cursor,
     /// Every gesture that began or ended this frame, for a host that brackets
     /// automation. [`Ui::edit`] asks about one id.
-    pub edits: Vec<(String, Edit)>,
+    pub edits: &'a [(String, Edit)],
     /// A copy or cut asked for this: put it on the host's clipboard. Always
     /// `None` for a [`Ui`] given a [`Clipboard`], which already has it.
     pub clipboard: Option<String>,
@@ -719,11 +719,11 @@ impl Ui {
         // when nothing is moving.
         // A key still to land wants the frame that shows it; the clock that
         // decides is the one this frame advances to.
-        let was_hovered = self.interaction.hovered().map(str::to_owned);
+        // Inline ids: no heap copy for a key under 47 bytes.
         let before = [
-            was_hovered.clone(),
-            self.interaction.held().map(str::to_owned),
-            self.tagged.as_ref().map(|t| t.0.clone()),
+            self.interaction.hovered().map(Id::runtime),
+            self.interaction.held().map(Id::runtime),
+            self.tagged.as_ref().map(|t| Id::runtime(&t.0)),
         ];
         // The kept memo subtrees go back in first: everything below reads
         // the whole tree.
@@ -732,12 +732,12 @@ impl Ui {
         let mut animating = self.reconcile() | (self.time < self.play_until);
         // The tree just built read last frame's hover: a new target is owed
         // the tree that knows it, even with no spring to carry it there.
-        animating |= self.interaction.hovered() != was_hovered.as_deref();
+        animating |= self.interaction.hovered() != before[0].as_deref();
         animating |= self.drag_bar();
         self.follow_identities(&root);
         animating |= self.hover_springs(&root, dt);
         self.intake_focus(was, keys, text, ime);
-        let hovered = self.interaction.hovered().map(str::to_owned);
+        let hovered = self.interaction.hovered().map(Id::runtime);
         let (tip, tip_pending) = self.tip_due(hovered.as_deref(), dt);
         animating |= tip_pending;
         if tip.is_some() && !root.is_container() {
@@ -754,7 +754,7 @@ impl Ui {
         animating |= self.after_motion(&mut scene, shaped, dt);
         animating |= self.settle(&scene, wheel);
         self.heat(&scene, &before, self.pointer.buttons != was_buttons);
-        Ok(self.commit(scene, hovered, tip, previous_blink, animating))
+        Ok(self.commit(scene, hovered.as_deref(), tip, previous_blink, animating))
     }
 
     /// The caller has now built its tree and consumed these commands. Drain
@@ -1023,16 +1023,15 @@ impl Ui {
     fn commit(
         &mut self,
         scene: ResolvedScene,
-        hovered: Option<String>,
+        hovered: Option<&str>,
         tip: Option<(Arc<str>, String)>,
         previous_blink: bool,
         mut animating: bool,
     ) -> Frame<'_> {
-        let held = self.interaction.held().map(str::to_owned);
+        let held = self.interaction.held();
         let cursor = held
-            .clone()
             .or(hovered)
-            .and_then(|k| scene.surface(&k).and_then(|s| s.cursor))
+            .and_then(|k| scene.surface(k).and_then(|s| s.cursor))
             .unwrap_or(Cursor::Arrow);
         let cursor = match cursor {
             Cursor::Grab if held.is_some() => Cursor::Grabbing,
@@ -1084,7 +1083,7 @@ impl Ui {
             repaint_after,
             tip,
             cursor,
-            edits: self.delivered.clone(),
+            edits: &self.delivered,
             clipboard: match (self.copied.take(), self.board.as_mut()) {
                 (Some(s), Some(b)) => {
                     b.set(&s);

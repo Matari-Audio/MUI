@@ -58,13 +58,13 @@ fn panel(ui: &mut Ui, v: &mut [f64; 20], on: &mut [bool; 10]) -> El {
 }
 
 /// A widget built with the same id every frame allocates nothing for the id:
-/// the one allocation left is the boxed build closure.
+/// the one allocation left is the label, shared by its text and its name.
 #[test]
 fn a_widget_id_costs_the_allocator_nothing() {
     let mut ui = Ui::new(Theme::DEFAULT);
     let id = Id::of("rack").slot(3).field("go");
     let (n, _) = allocations(|| button(&mut ui, &*id, ""));
-    assert_eq!(n, 1, "only the build closure is boxed");
+    assert_eq!(n, 1, "only the label is allocated");
 }
 
 /// `cargo test -p mui --test frame_alloc -- --nocapture --ignored`: the

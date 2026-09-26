@@ -474,7 +474,7 @@ impl Ui {
     /// Which memos the next build must run again: the ones holding a key
     /// whose state moved this frame, or all of them after discrete input.
     /// `was` is the hovered, held and tagged keys before this frame.
-    pub(super) fn heat(&mut self, scene: &ResolvedScene, was: &[Option<String>; 3], buttons: bool) {
+    pub(super) fn heat(&mut self, scene: &ResolvedScene, was: &[Option<Id>; 3], buttons: bool) {
         self.hot.clear();
         let me = self.me;
         self.kept.retain(|id, k| {
@@ -730,7 +730,7 @@ pub(super) fn state_policy(root: &El, ids: [Option<&str>; 2]) -> [[bool; 2]; 2] 
     for (i, id) in ids.into_iter().enumerate() {
         match id {
             Some(id) if !named(id) => {
-                out[i] = find(root, id).map_or([false; 2], |n| policy(n.payload()))
+                out[i] = find(root, id).map_or([false; 2], |n| policy(n.payload()));
             }
             Some(_) => left += 1,
             None => {}

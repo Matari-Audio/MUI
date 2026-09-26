@@ -809,7 +809,7 @@ impl Reel {
                 let frame = ui
                     .frame(root, Some(self.size), input, dt)
                     .map_err(|e| Error::Script(format!("frame {i}: {e}")))?;
-                for (id, e) in &frame.edits {
+                for (id, e) in frame.edits {
                     let e = ReelEvent::Edit {
                         id: id.clone(),
                         begin: *e == Edit::Begin,

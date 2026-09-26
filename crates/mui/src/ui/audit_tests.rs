@@ -25,6 +25,7 @@ fn step(ui: &mut Ui, tree: El, pos: Option<Point>, buttons: Buttons) -> Vec<(Str
     )
     .unwrap()
     .edits
+    .to_vec()
 }
 fn idle(ui: &mut Ui, tree: El) -> Vec<(String, Edit)> {
     step(ui, tree, None, Buttons::default())
