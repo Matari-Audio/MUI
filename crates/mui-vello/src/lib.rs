@@ -202,6 +202,10 @@ pub struct Cache {
     images: Vec<(Weak<[u8]>, Stored)>,
 }
 
+#[cfg_attr(
+    not(any(feature = "cpu", feature = "gpu-effects", test)),
+    expect(dead_code, reason = "no canvas feature, nothing keeps fonts or images")
+)]
 #[derive(Clone, Copy)]
 struct Frames {
     born: u64,
@@ -210,6 +214,10 @@ struct Frames {
 
 /// How long an unused font keeps its [`FontData`], and with it Vello's
 /// hinted outlines: glifo's own glyph atlas ages entries out after as many.
+#[cfg_attr(
+    not(any(feature = "cpu", feature = "gpu-effects", test)),
+    expect(dead_code, reason = "no canvas feature, nothing keeps fonts or images")
+)]
 const FONT_FRAMES: u64 = 64;
 
 enum Stored {
@@ -224,6 +232,10 @@ enum Stored {
     Image(vello::peniko::ImageData),
 }
 
+#[cfg_attr(
+    not(any(feature = "cpu", feature = "gpu-effects")),
+    expect(dead_code, reason = "no canvas feature, nothing keeps fonts or images")
+)]
 impl Cache {
     /// Start a frame: fonts unused for [`FONT_FRAMES`] frames go.
     fn tick(&mut self) {
