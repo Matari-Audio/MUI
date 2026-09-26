@@ -1830,6 +1830,7 @@ dependencies = [
 name = "mui"
 version = "0.3.2"
 dependencies = [
+ "color",
  "epaint_default_fonts",
  "mui-geometry",
  "mui-input",

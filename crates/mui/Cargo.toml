@@ -11,6 +11,7 @@ cpu = ["mui-vello/cpu"]
 cpu-threads = ["mui-vello/cpu-threads"]
 
 [dependencies]
+color = "0.3.3"
 mui-scene = { path = "../mui-scene" }
 mui-motion = { path = "../mui-motion" }
 mui-layout = { path = "../mui-layout" }

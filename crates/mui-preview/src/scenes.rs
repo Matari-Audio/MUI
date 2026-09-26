@@ -35,6 +35,7 @@ pub fn all() -> Vec<Box<dyn PreviewScene>> {
         Box::new(ConstantThickness),
         Box::new(SegmentedRow),
         Box::new(Widgets::default()),
+        Box::new(ColorPickerScene::default()),
         Box::new(GlyphAxes::new()),
         Box::new(Scrolling::default()),
         Box::new(Fields::default()),
@@ -175,6 +176,22 @@ impl PreviewScene for Widgets {
         .radius(20.0)
         .fill(Role::Surface)
         .id("widgets")
+    }
+}
+
+#[derive(Default)]
+pub struct ColorPickerScene {
+    picker: ColorPicker,
+}
+impl PreviewScene for ColorPickerScene {
+    fn name(&self) -> &'static str {
+        "Color picker"
+    }
+    fn about(&self) -> &'static str {
+        "Four layouts, five formats, one OKLCH color."
+    }
+    fn specimen(&mut self, ui: &mut Ui) -> El {
+        color_picker(ui, "color-picker", &mut self.picker).0
     }
 }
 

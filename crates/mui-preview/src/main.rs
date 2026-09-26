@@ -1048,11 +1048,16 @@ mod tests {
     fn the_scene_list_selects_and_a_typed_key_reaches_the_glyph_scene() {
         let mut app = App::new();
         app.tick(SIZE, 1.0, PointerInput::default());
-        click(&mut app, "scene-4");
-        assert_eq!(app.selected, 4);
+        let glyph = app
+            .scenes
+            .iter()
+            .position(|s| s.name() == "Glyph axes")
+            .unwrap();
+        click(&mut app, &format!("scene-{glyph}"));
+        assert_eq!(app.selected, glyph);
         app.typed = Some('g');
         app.tick(SIZE, 1.0, PointerInput::default());
-        assert!(app.scenes[4].overlay().is_some());
+        assert!(app.scenes[glyph].overlay().is_some());
     }
 
     #[test]

@@ -15,6 +15,7 @@
 //! and nothing here rasterizes.
 
 mod bins;
+mod color_picker;
 mod controls;
 mod curve;
 mod grapheme;
@@ -22,6 +23,7 @@ pub mod presets;
 pub mod visualization;
 
 pub use bins::{bins, bins_hover, BinAxis, BinEdit, Bins};
+pub use color_picker::{color_picker, ColorFormat, ColorPicker, PickerShape};
 pub(crate) use controls::step;
 pub use controls::{button, knob, slider, text_input, toggle, Control, Variant};
 pub use curve::{curve, CurveEdit};
