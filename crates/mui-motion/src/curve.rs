@@ -447,12 +447,14 @@ mod tests {
         assert!(!curve.remove(0));
         assert!(curve.remove(i));
         let prior = curve.clone();
-        assert!(curve
-            .insert(CurvePoint {
-                phase: f32::NAN,
-                value: 0.
-            })
-            .is_none());
+        assert!(
+            curve
+                .insert(CurvePoint {
+                    phase: f32::NAN,
+                    value: 0.
+                })
+                .is_none()
+        );
         curve.move_handle(
             0,
             Handle::Incoming,

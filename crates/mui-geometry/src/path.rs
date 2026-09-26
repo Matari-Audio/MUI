@@ -1,4 +1,5 @@
-use crate::{Error, Point};
+use crate::{Error, Point, Vec2};
+use kurbo::PathEl;
 use std::f64::consts::{FRAC_PI_2, PI, TAU};
 use std::fmt::Write;
 
@@ -15,11 +16,11 @@ pub struct Arc {
 impl Arc {
     pub fn point_at(self, t: f64) -> Point {
         let a = self.start_angle + self.sweep * t;
-        self.center + Point::new(a.cos(), a.sin()) * self.radius
+        self.center + Vec2::from_angle(a) * self.radius
     }
     fn validate(self, current: Point) -> Result<(), Error> {
-        if !self.center.finite()
-            || !self.to.finite()
+        if !self.center.is_finite()
+            || !self.to.is_finite()
             || ![self.radius, self.start_angle, self.sweep]
                 .iter()
                 .all(|v| v.is_finite())
@@ -62,7 +63,7 @@ impl Path {
             match *command {
                 PathCommand::MoveTo(p) => {
                     // An open contour (a stroked curve) simply ends here.
-                    if !p.finite() {
+                    if !p.is_finite() {
                         return Err(Error::NonFinite);
                     }
                     current = Some(p);
@@ -71,7 +72,7 @@ impl Path {
                     if current.is_none() {
                         return Err(Error::InvalidPath);
                     }
-                    if !p.finite() {
+                    if !p.is_finite() {
                         return Err(Error::NonFinite);
                     }
                     current = Some(p);
@@ -84,7 +85,7 @@ impl Path {
                     if current.is_none() {
                         return Err(Error::InvalidPath);
                     }
-                    if !(a.finite() && b.finite() && p.finite()) {
+                    if !(a.is_finite() && b.is_finite() && p.is_finite()) {
                         return Err(Error::NonFinite);
                     }
                     current = Some(p);
@@ -99,29 +100,41 @@ impl Path {
         Ok(())
     }
 
-    /// Flatten at a maximum arc chord error measured in logical units. Use
+    /// Flatten at a maximum chord error measured in logical units. Use
     /// 0.2 / pixels_per_point for the egui adapter. Budget is for the WHOLE path.
     pub fn flatten(&self, tolerance: f64, max_points: usize) -> Result<Vec<Vec<Point>>, Error> {
         if !tolerance.is_finite() || tolerance <= 0. {
             return Err(Error::InvalidOptions("flatten tolerance"));
         }
-        let mut contours = Vec::new();
+        let moves = self
+            .commands
+            .iter()
+            .filter(|c| matches!(c, PathCommand::MoveTo(_)));
+        let mut contours = Vec::with_capacity(moves.count());
         let mut active: Option<Vec<Point>> = None;
         let mut count = 0;
-        for command in &self.commands {
+        for (i, command) in self.commands.iter().enumerate() {
             match *command {
                 PathCommand::MoveTo(p) => {
-                    if !p.finite() {
+                    if !p.is_finite() {
                         return Err(Error::NonFinite);
                     }
                     if let Some(ring) = active.take() {
                         contours.push(ring);
                     }
                     count += 1;
-                    active = Some(vec![p]);
+                    // One point per command up to the next contour: exact
+                    // for polygons; arcs and cubics reserve their own.
+                    let rest = self.commands[i + 1..]
+                        .iter()
+                        .take_while(|c| !matches!(c, PathCommand::MoveTo(_)))
+                        .count();
+                    let mut ring = Vec::with_capacity(rest + 1);
+                    ring.push(p);
+                    active = Some(ring);
                 }
                 PathCommand::LineTo(p) => {
-                    if !p.finite() {
+                    if !p.is_finite() {
                         return Err(Error::NonFinite);
                     }
                     let ring = active.as_mut().ok_or(Error::InvalidPath)?;
@@ -142,41 +155,57 @@ impl Path {
                         return Err(Error::TooManySegments);
                     }
                     let n = needed as usize;
-                    for i in 1..=n {
-                        ring.push(if i == n {
-                            arc.to
-                        } else {
-                            arc.point_at(i as f64 / n as f64)
-                        });
+                    ring.reserve(n);
+                    // A rotation recurrence: one sin_cos per arc, not per point.
+                    // The drift over n <= max_points steps is n ulps of the radius.
+                    let (s, c) = (arc.sweep / n as f64).sin_cos();
+                    let mut v = Vec2::from_angle(arc.start_angle) * arc.radius;
+                    for _ in 1..n {
+                        v = Vec2::new(c * v.x - s * v.y, s * v.x + c * v.y);
+                        ring.push(arc.center + v);
                     }
+                    ring.push(arc.to);
                     count += n;
                 }
                 PathCommand::CubicTo(a, b, p) => {
-                    if !(a.finite() && b.finite() && p.finite()) {
+                    if !(a.is_finite() && b.is_finite() && p.is_finite()) {
                         return Err(Error::NonFinite);
                     }
                     let ring = active.as_mut().ok_or(Error::InvalidPath)?;
                     let p0 = *ring.last().ok_or(Error::InvalidPath)?;
-                    // Standard flatness bound: an n-piece polyline errs by at
-                    // most the largest second difference times 3/4 over n².
-                    let bow = (p0 - a * 2. + b).length().max((a - b * 2. + p).length());
-                    let n = ((bow * 0.75 / tolerance).sqrt().ceil().max(1.) as usize).min(256);
-                    if n > max_points.saturating_sub(count) {
+                    // kurbo's adaptive, error-bounded flattening. kurbo sizes
+                    // its walk from the tolerance with no cap, so check the
+                    // budget first, as the glyph pen does: n uniform segments
+                    // deviate at most 0.75 * bow / n^2 (bow = the largest
+                    // second difference), and kurbo needs no more than that.
+                    let budget = max_points.saturating_sub(count);
+                    let [v0, v1, v2, v3] = [p0, a, b, p].map(Point::to_vec2);
+                    let bow = (v0 - v1 * 2. + v2)
+                        .length()
+                        .max((v1 - v2 * 2. + v3).length());
+                    let uniform = (0.75 * bow / tolerance).sqrt().ceil();
+                    if uniform.is_nan() || uniform > budget as f64 {
                         return Err(Error::TooManySegments);
                     }
-                    for i in 1..=n {
-                        let t = i as f64 / n as f64;
-                        let u = 1. - t;
-                        ring.push(if i == n {
-                            p
-                        } else {
-                            p0 * (u * u * u)
-                                + a * (3. * u * u * t)
-                                + b * (3. * u * t * t)
-                                + p * (t * t * t)
-                        });
+                    let start = ring.len();
+                    let els = [PathEl::MoveTo(p0), PathEl::CurveTo(a, b, p)];
+                    kurbo::flatten(els, tolerance, |el| {
+                        if let PathEl::LineTo(q) = el
+                            && ring.len() - start <= budget
+                        {
+                            ring.push(q);
+                        }
+                    });
+                    let n = ring.len() - start;
+                    if n > budget {
+                        return Err(Error::TooManySegments);
                     }
-                    count += n;
+                    // Land on the recorded end, bit for bit.
+                    match ring.last_mut() {
+                        Some(last) if n > 0 => *last = p,
+                        _ => ring.push(p),
+                    }
+                    count += n.max(1);
                 }
                 PathCommand::Close => {
                     let mut ring = active.take().ok_or(Error::InvalidPath)?;
@@ -203,8 +232,8 @@ impl Path {
     }
     /// Only a rigid transform is offered here. Non-uniform scaling would turn
     /// circular arcs into ellipses; never pretend the radius is still circular.
-    pub fn rigid_transform(&self, translation: Point, radians: f64) -> Result<Self, Error> {
-        if !translation.finite() || !radians.is_finite() {
+    pub fn rigid_transform(&self, translation: Vec2, radians: f64) -> Result<Self, Error> {
+        if !translation.is_finite() || !radians.is_finite() {
             return Err(Error::NonFinite);
         }
         self.validate(100_000)?;
@@ -235,18 +264,18 @@ impl Path {
     /// Move by `d` in place, unvalidated: a translation cannot make a valid
     /// path invalid, so geometry cached in local space goes back to where it
     /// is painted without re-checking every arc.
-    pub fn translate(&mut self, d: Point) {
+    pub fn translate(&mut self, d: Vec2) {
         for c in &mut self.commands {
             match c {
-                PathCommand::MoveTo(p) | PathCommand::LineTo(p) => *p = *p + d,
+                PathCommand::MoveTo(p) | PathCommand::LineTo(p) => *p += d,
                 PathCommand::ArcTo(a) => {
-                    a.center = a.center + d;
-                    a.to = a.to + d;
+                    a.center += d;
+                    a.to += d;
                 }
                 PathCommand::CubicTo(a, b, p) => {
-                    *a = *a + d;
-                    *b = *b + d;
-                    *p = *p + d;
+                    *a += d;
+                    *b += d;
+                    *p += d;
                 }
                 PathCommand::Close => {}
             }
@@ -321,11 +350,7 @@ impl Path {
         for q in it {
             p = p.line_to(q);
         }
-        if closed {
-            p.close()
-        } else {
-            p
-        }
+        if closed { p.close() } else { p }
     }
     /// A centered, exact vertical capsule. This is a widget shape, not an
     /// automatically merged tab; its radius is exactly width/2.
@@ -419,11 +444,54 @@ mod cubic_tests {
             .move_to(Point::new(0., 0.))
             .line_to(Point::new(10., 0.))
             .close();
-        let moved = p.rigid_transform(Point::new(1., 2.), 0.).unwrap();
+        let moved = p.rigid_transform(Vec2::new(1., 2.), 0.).unwrap();
         assert_eq!(moved.commands[0], PathCommand::MoveTo(Point::new(1., 2.)));
         // The entry validate is the only guard left: it must still fire.
         let bad = Path::default().line_to(Point::new(1., 1.));
-        assert!(bad.rigid_transform(Point::new(1., 0.), 0.).is_err());
+        assert!(bad.rigid_transform(Vec2::new(1., 0.), 0.).is_err());
+    }
+
+    /// The old uniform subdivision capped at 256 pieces, so a cubic this
+    /// size bowed metres past a 0.05 tolerance. Every dense sample of the
+    /// curve must sit within tolerance of the polyline.
+    #[test]
+    fn a_huge_cubic_stays_within_tolerance() {
+        let (p0, a, b, p) = (
+            Point::new(0., 0.),
+            Point::new(0., 200_000.),
+            Point::new(300_000., -150_000.),
+            Point::new(100_000., 50_000.),
+        );
+        let tol = 0.05;
+        let rings = Path::default()
+            .move_to(p0)
+            .cubic_to(a, b, p)
+            .flatten(tol, 1_000_000)
+            .unwrap();
+        let ring = &rings[0];
+        assert!(ring.len() > 257, "{}", ring.len());
+        assert_eq!(*ring.last().unwrap(), p);
+        let curve = kurbo::CubicBez::new(p0, a, b, p);
+        let seg = |i: usize, q: Point| {
+            let (s0, s1) = (ring[i], ring[i + 1]);
+            let v = s1 - s0;
+            let t = ((q - s0).dot(v) / v.dot(v)).clamp(0., 1.);
+            q.distance(s0 + v * t)
+        };
+        // Samples and polyline both run start to end: a window suffices.
+        let mut j = 0;
+        let mut worst: f64 = 0.;
+        for k in 0..=200_000 {
+            let q = kurbo::ParamCurve::eval(&curve, f64::from(k) / 200_000.);
+            let hi = (j + 16).min(ring.len() - 1);
+            let (best, at) = (j..hi)
+                .map(|i| (seg(i, q), i))
+                .min_by(|x, y| x.0.total_cmp(&y.0))
+                .unwrap();
+            j = at;
+            worst = worst.max(best);
+        }
+        assert!(worst <= tol * 1.01, "worst {worst}");
     }
 
     #[test]
@@ -446,10 +514,12 @@ mod cubic_tests {
         let svg = p.to_svg_data().unwrap();
         assert!(svg.starts_with("M 0"), "{svg}");
         assert!(svg.contains(" C "), "{svg}");
-        assert!(Path::default()
-            .cubic_to(Point::new(0., 0.), Point::new(0., 0.), Point::new(0., 0.))
-            .validate(10)
-            .is_err());
+        assert!(
+            Path::default()
+                .cubic_to(Point::new(0., 0.), Point::new(0., 0.), Point::new(0., 0.))
+                .validate(10)
+                .is_err()
+        );
     }
 }
 
@@ -556,14 +626,14 @@ fn arc_cubics(
         k = -k;
     }
     let (cx1, cy1) = (k * rx * y1 / ry, -k * ry * x1 / rx);
-    let center = Point::new(cp * cx1 - sp * cy1, sp * cx1 + cp * cy1) + (from + to) * 0.5;
-    let angle = |u: Point, v: Point| {
+    let center = from.midpoint(to) + Vec2::new(cp * cx1 - sp * cy1, sp * cx1 + cp * cy1);
+    let angle = |u: Vec2, v: Vec2| {
         let c = u.dot(v) / (u.length() * v.length());
         u.cross(v).signum() * c.clamp(-1., 1.).acos()
     };
-    let u = Point::new((x1 - cx1) / rx, (y1 - cy1) / ry);
-    let v = Point::new((-x1 - cx1) / rx, (-y1 - cy1) / ry);
-    let theta = angle(Point::new(1., 0.), u);
+    let u = Vec2::new((x1 - cx1) / rx, (y1 - cy1) / ry);
+    let v = Vec2::new((-x1 - cx1) / rx, (-y1 - cy1) / ry);
+    let theta = angle(Vec2::new(1., 0.), u);
     let mut sweep_angle = angle(u, v) % TAU;
     if !sweep && sweep_angle > 0. {
         sweep_angle -= TAU;
@@ -576,11 +646,11 @@ fn arc_cubics(
     let hand = 4. / 3. * (step / 4.).tan();
     let at = |t: f64| {
         let (c, s) = (t.cos(), t.sin());
-        center + Point::new(cp * rx * c - sp * ry * s, sp * rx * c + cp * ry * s)
+        center + Vec2::new(cp * rx * c - sp * ry * s, sp * rx * c + cp * ry * s)
     };
     let tangent = |t: f64| {
         let (c, s) = (t.cos(), t.sin());
-        Point::new(-cp * rx * s - sp * ry * c, -sp * rx * s + cp * ry * c)
+        Vec2::new(-cp * rx * s - sp * ry * c, -sp * rx * s + cp * ry * c)
     };
     for i in 0..n {
         let (t0, t1) = (theta + step * i as f64, theta + step * (i + 1) as f64);
@@ -636,9 +706,9 @@ impl Path {
                 return Err(Error::InvalidPath);
             }
             let o = if cmd.is_ascii_lowercase() {
-                cur
+                cur.to_vec2()
             } else {
-                Point::new(0., 0.)
+                Vec2::ZERO
             };
             macro_rules! num {
                 () => {
@@ -648,7 +718,7 @@ impl Path {
             macro_rules! pt {
                 () => {{
                     let x = num!();
-                    o + Point::new(x, num!())
+                    (o + Vec2::new(x, num!())).to_point()
                 }};
             }
             let (mut next_cubic, mut next_quad) = (None, None);
@@ -674,7 +744,7 @@ impl Path {
                     let a = if cmd.eq_ignore_ascii_case(&b'C') {
                         pt!()
                     } else {
-                        cubic_ctrl.map_or(cur, |c: Point| cur * 2. - c)
+                        cubic_ctrl.map_or(cur, |c: Point| cur + (cur - c))
                     };
                     let b = pt!();
                     let p = pt!();
@@ -685,7 +755,7 @@ impl Path {
                     let c = if cmd.eq_ignore_ascii_case(&b'Q') {
                         pt!()
                     } else {
-                        quad_ctrl.map_or(cur, |q: Point| cur * 2. - q)
+                        quad_ctrl.map_or(cur, |q: Point| cur + (cur - q))
                     };
                     let p = pt!();
                     out.push(quad(cur, c, p));
@@ -736,15 +806,16 @@ mod svg_tests {
         for (x, y) in fa.iter().flatten().zip(fb.iter().flatten()) {
             assert!(x.distance(*y) < 1e-6, "{x:?} vs {y:?}");
         }
-        assert!(a
-            .commands
-            .iter()
-            .any(|c| matches!(c, PathCommand::CubicTo(..))));
+        assert!(
+            a.commands
+                .iter()
+                .any(|c| matches!(c, PathCommand::CubicTo(..)))
+        );
 
         // The arc really bows: the half-circle from (130,20) to (150,130)
         // bulges past both endpoints' x.
-        let bounds = crate::Bounds::from_points(fa.iter().flatten().copied()).unwrap();
-        assert!(bounds.max.x > 155., "arc did not bow: {bounds:?}");
+        let bounds = crate::bounds(fa.iter().flatten().copied()).unwrap();
+        assert!(bounds.x1 > 155., "arc did not bow: {bounds:?}");
         // A relative lineto is relative, and `h40` lands at x=50.
         assert_eq!(a.commands[1], PathCommand::LineTo(Point::new(50., 80.)));
         // Implicit repeats and flag packing.

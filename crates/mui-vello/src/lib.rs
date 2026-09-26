@@ -23,10 +23,10 @@ use vello_common::filter_effects::{EdgeMode, Filter, FilterPrimitive};
 /// The brush type [`Canvas::set_paint`] takes, so the trait can be
 /// implemented outside this crate.
 pub use vello_common::paint::PaintType;
-use vello_common::peniko::color::PremulRgba8;
-use vello_common::peniko::color::{AlphaColor, DynamicColor, Srgb};
 #[cfg(feature = "cpu")]
 use vello_common::peniko::ImageSampler;
+use vello_common::peniko::color::PremulRgba8;
+use vello_common::peniko::color::{AlphaColor, DynamicColor, Srgb};
 use vello_common::peniko::{Blob, ColorStop, ColorStops, FontData, Gradient};
 use vello_common::pixmap::Pixmap;
 pub use vello_common::{kurbo, peniko};
@@ -38,9 +38,11 @@ mod classic;
 pub use classic::Classic;
 #[cfg(feature = "gpu-effects")]
 pub mod effects;
+#[cfg(feature = "gpu-effects")]
+pub mod host;
 
 /// The path conversion painting uses, the same one input hit-tests with.
-pub use mui_geometry::{bez_path, bez_path_into, ARC_TOLERANCE};
+pub use mui_geometry::{ARC_TOLERANCE, bez_path, bez_path_into};
 
 #[cfg(test)]
 mod tests {
@@ -200,6 +202,10 @@ pub struct Cache {
     images: Vec<(Weak<[u8]>, Stored)>,
 }
 
+#[cfg_attr(
+    not(any(feature = "cpu", feature = "gpu-effects", test)),
+    expect(dead_code, reason = "no canvas feature, nothing keeps fonts or images")
+)]
 #[derive(Clone, Copy)]
 struct Frames {
     born: u64,
@@ -208,17 +214,28 @@ struct Frames {
 
 /// How long an unused font keeps its [`FontData`], and with it Vello's
 /// hinted outlines: glifo's own glyph atlas ages entries out after as many.
+#[cfg_attr(
+    not(any(feature = "cpu", feature = "gpu-effects", test)),
+    expect(dead_code, reason = "no canvas feature, nothing keeps fonts or images")
+)]
 const FONT_FRAMES: u64 = 64;
 
 enum Stored {
     /// Only the CPU canvas stores pixmaps.
-    #[cfg_attr(not(feature = "cpu"), allow(dead_code))]
+    #[cfg_attr(
+        not(feature = "cpu"),
+        expect(dead_code, reason = "only the CPU canvas builds it")
+    )]
     Pixmap(Arc<Pixmap>),
     /// Only the GPU canvas stores these.
     #[cfg(feature = "gpu-effects")]
     Image(vello::peniko::ImageData),
 }
 
+#[cfg_attr(
+    not(any(feature = "cpu", feature = "gpu-effects")),
+    expect(dead_code, reason = "no canvas feature, nothing keeps fonts or images")
+)]
 impl Cache {
     /// Start a frame: fonts unused for [`FONT_FRAMES`] frames go.
     fn tick(&mut self) {
@@ -348,13 +365,12 @@ macro_rules! wrapper {
 impl Canvas for Cpu<'_> {
     fn image(&mut self, img: &mui_scene::Image) -> Option<PaintType> {
         self.cache.sweep();
-        let p = match self.cache.find(&img.rgba) {
-            Some(Stored::Pixmap(p)) => p.clone(),
-            _ => {
-                let p = Arc::new(premultiply(img)?);
-                self.cache.remember(&img.rgba, Stored::Pixmap(p.clone()));
-                p
-            }
+        let p = if let Some(Stored::Pixmap(p)) = self.cache.find(&img.rgba) {
+            p.clone()
+        } else {
+            let p = Arc::new(premultiply(img)?);
+            self.cache.remember(&img.rgba, Stored::Pixmap(p.clone()));
+            p
         };
         Some(
             vello_common::paint::Image {
@@ -420,7 +436,10 @@ fn srgb(c: mui_scene::Color) -> AlphaColor<Srgb> {
 /// The premultiplied [`Pixmap`] of an image. MUI hands over straight RGBA --
 /// what a decoder produces -- and premultiplying a photo is far too much work
 /// to redo every frame, so each renderer's [`Cache`] keeps the result.
-#[cfg_attr(not(any(test, feature = "cpu")), allow(dead_code))]
+#[cfg_attr(
+    not(any(test, feature = "cpu")),
+    expect(dead_code, reason = "only the CPU renderer and tests call it")
+)]
 fn premultiply(img: &mui_scene::Image) -> Option<Pixmap> {
     size(img).map(|(w, h)| premultiplied(img, w, h))
 }
@@ -805,7 +824,7 @@ fn one(canvas: &mut impl Canvas, p: &Painted, path: &BezPath) -> Result<(), Erro
             }
             let b = rr.bounds();
             canvas.fill_blurred_rounded_rect(
-                &Rect::new(b.min.x, b.min.y, b.max.x, b.max.y),
+                &b,
                 rr.radius() as f32,
                 p.blur as f32,
                 // The inverse coverage is the inset shadow; the walk has
@@ -886,7 +905,7 @@ mod seam {
             path: Path::default().into(),
             paint: Paint::Solid(mui_scene::Color::oklch(0.5, 0., 0.)),
             rect: None,
-            offset: Default::default(),
+            offset: mui_geometry::Point::default(),
             width: 0.,
             blur: 0.,
             text: Some(Text {
@@ -911,7 +930,7 @@ mod seam {
                         },
                     ][..],
                 ),
-                axes: Default::default(),
+                axes: mui_scene::Axes::default(),
                 hint: true,
                 font_coords: Arc::from(&[][..]),
             }),
@@ -927,25 +946,28 @@ mod seam {
 #[cfg(all(test, feature = "cpu"))]
 mod snapshot {
     use super::*;
-    use mui_scene::{prelude::*, ResolvedScene, TextGlyph};
+    use mui_material::prelude::*;
+    use mui_scene::{ResolvedScene, TextGlyph};
     use vello_common::pixmap::Pixmap;
 
     /// The whole stack on the CPU: a filled card reaches the pixels, its ink
     /// reads against it, and the rounded corner stays clear.
     #[test]
     fn a_card_lands_on_the_pixmap() {
-        let root = column([text("hi").id("t")])
+        let root = col([text("hi").id("t")])
             .pad(20.)
             .fill(Role::Primary)
             .stroke(Role::Ink)
             .id("card");
         let mut spec = SceneSpec::new(root).offered(Size::new(120., 60.));
         spec.font = Some(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
-        let scene = resolve_scene(&spec).unwrap();
-        assert!(scene
-            .paint
-            .iter()
-            .any(|p| p.layer == mui_scene::Layer::Text));
+        let scene = resolve(&spec).unwrap();
+        assert!(
+            scene
+                .paint
+                .iter()
+                .any(|p| p.layer == mui_scene::Layer::Text)
+        );
 
         let mut ctx = vello_cpu::RenderContext::new(120, 60);
         let mut res = vello_cpu::Resources::default();
@@ -974,7 +996,7 @@ mod snapshot {
 
     /// Render `spec` on the CPU and hand back the pixels.
     fn pixels(spec: &SceneSpec, w: u16, h: u16) -> Pixmap {
-        let scene = resolve_scene(spec).unwrap();
+        let scene = resolve(spec).unwrap();
         pixels_scene(&scene, w, h)
     }
 
@@ -1004,7 +1026,7 @@ mod snapshot {
         let mut spec =
             SceneSpec::new(text("HI").fill(Role::Ink).id("t")).offered(Size::new(80., 40.));
         spec.font = Some(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
-        let scene = resolve_scene(&spec).unwrap();
+        let scene = resolve(&spec).unwrap();
         assert!(
             scene.paint.iter().any(|p| p.text.is_some()),
             "no glyphs to draw"
@@ -1018,7 +1040,7 @@ mod snapshot {
         let mut spec =
             SceneSpec::new(text("ש\u{05b8}").fill(Role::Ink).id("t")).offered(Size::new(80., 40.));
         spec.font = Some(Font::new(ttf_inter::REGULAR).unwrap());
-        let scene = resolve_scene(&spec).unwrap();
+        let scene = resolve(&spec).unwrap();
         let text = scene
             .paint
             .iter()
@@ -1057,7 +1079,7 @@ mod snapshot {
         with_fallback
             .fallback_fonts
             .push(Font::new(epaint_default_fonts::NOTO_EMOJI_REGULAR).unwrap());
-        let fallback_scene = resolve_scene(&with_fallback).unwrap();
+        let fallback_scene = resolve(&with_fallback).unwrap();
         let glyphs = fallback_scene
             .paint
             .iter()
@@ -1072,7 +1094,7 @@ mod snapshot {
 
         let mut primary_only = with_fallback.clone();
         primary_only.fallback_fonts.clear();
-        let primary_scene = resolve_scene(&primary_only).unwrap();
+        let primary_scene = resolve(&primary_only).unwrap();
         assert_ne!(
             pixels_scene(&fallback_scene, 100, 40).data(),
             pixels_scene(&primary_scene, 100, 40).data(),
@@ -1086,7 +1108,7 @@ mod snapshot {
     #[test]
     fn a_gradient_shadow_does_not_paint_black() {
         let faint = mui_scene::Color::oklcha(0.0, 0.0, 0.0, 0.1);
-        let root = leaf(20., 20.)
+        let root = block(20., 20.)
             .fill(Role::Primary)
             .shadow(Shadow {
                 dy: 8.,
@@ -1104,7 +1126,7 @@ mod snapshot {
     /// outline's own alpha -- which is what a sharp copy would have given.
     #[test]
     fn a_welded_shadow_blurs() {
-        let root = row([leaf(20., 20.).id("a"), leaf(20., 40.).id("b")])
+        let root = row([block(20., 20.).id("a"), block(20., 40.).id("b")])
             .union(Role::Surface)
             .shadow(Shadow::soft(12.))
             .id("weld");
@@ -1124,9 +1146,9 @@ mod snapshot {
     #[test]
     fn a_multiply_layer_darkens_what_is_under_it() {
         let grey = Color::oklcha(0.7, 0., 0., 1.);
-        let root = overlay([
-            leaf(40., 40.).fill(grey).radius(0.).id("ground"),
-            leaf(20., 20.)
+        let root = stack([
+            block(40., 40.).fill(grey).radius(0.).id("ground"),
+            block(20., 20.)
                 .fill(grey)
                 .radius(0.)
                 .blend(Mix::Multiply)
@@ -1154,7 +1176,7 @@ mod snapshot {
             0, 0, 255, 255,  255, 255, 255, 255,
         ];
         let img = std::sync::Arc::new(mui_scene::Image::rgba(2, 2, px).unwrap());
-        let root = leaf(20., 20.)
+        let root = block(20., 20.)
             .fill(Fill::Image(img.clone(), Fit::Fill))
             .radius(6.)
             .id("img");
@@ -1174,7 +1196,7 @@ mod snapshot {
 
         // Contain letterboxes rather than smearing the edge pixels: a 2x2
         // image in a 40x20 box leaves the sides clear.
-        let wide = leaf(40., 20.)
+        let wide = block(40., 20.)
             .fill(Fill::Image(img, Fit::Contain))
             .radius(0.)
             .id("wide");
@@ -1220,15 +1242,15 @@ mod snapshot {
     /// A clip layer actually clips: the oversized child stops at its parent.
     #[test]
     fn a_clipped_child_stays_inside_its_parent() {
-        let child = leaf(200., 200.).fill(Role::Ink).id("child");
-        let boxed = column([child])
+        let child = block(200., 200.).fill(Role::Ink).id("child");
+        let boxed = col([child])
             .size(40., 40.)
             .clip()
             .fill(Role::Surface)
             .anchor(Align::Start, Align::Start)
             .id("box");
-        let spec = SceneSpec::new(overlay([boxed])).offered(Size::new(80., 80.));
-        let scene = resolve_scene(&spec).unwrap();
+        let spec = SceneSpec::new(stack([boxed])).offered(Size::new(80., 80.));
+        let scene = resolve(&spec).unwrap();
         let c = scene.surface("child").expect("child").frame;
         assert!(c.x < 0. && c.right() > 40., "no overflow to clip: {c:?}");
         let pix = pixels(&spec, 80, 80);

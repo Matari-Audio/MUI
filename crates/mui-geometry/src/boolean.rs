@@ -1,5 +1,5 @@
 use crate::math::{clean_ring, signed_area};
-use crate::{Affine, Bounds, Error, Point};
+use crate::{Affine, Error, Point, Rect};
 use i_overlay::{
     core::{fill_rule::FillRule, overlay_rule::OverlayRule},
     float::single::SingleFloatOverlay,
@@ -63,7 +63,7 @@ impl From<Polygon> for PlacedShape {
 }
 impl PlacedShape {
     pub fn transformed(mut self, t: Affine) -> Self {
-        self.transform = self.transform.then(t);
+        self.transform = t * self.transform;
         self
     }
 }
@@ -141,8 +141,8 @@ impl Topology {
     pub fn area(&self) -> f64 {
         self.rings.iter().map(Ring::signed_area).sum()
     }
-    pub fn bounds(&self) -> Option<Bounds> {
-        Bounds::from_points(self.rings.iter().flat_map(|r| r.points.iter().copied()))
+    pub fn bounds(&self) -> Option<Rect> {
+        crate::bounds(self.rings.iter().flat_map(|r| r.points.iter().copied()))
     }
     pub fn vertex_count(&self) -> usize {
         self.rings.iter().map(|r| r.points.len()).sum()
@@ -194,11 +194,11 @@ impl BooleanOp {
     }
 }
 fn prepared_ring(p: &[Point], t: Affine, o: GeometryOptions) -> Result<Vec<[f64; 2]>, Error> {
-    if !t.finite() {
+    if !t.is_finite() {
         return Err(Error::NonFinite);
     }
-    let transformed: Vec<_> = p.iter().map(|&v| t.apply(v)).collect();
-    if transformed.iter().any(|p| !p.finite()) {
+    let transformed: Vec<_> = p.iter().map(|&v| t * v).collect();
+    if transformed.iter().any(|p| !p.is_finite()) {
         return Err(Error::NonFinite);
     }
     if transformed

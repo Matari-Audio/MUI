@@ -6,24 +6,26 @@ fn panel(progress: f64) -> El {
     let a = col![text("Oscillator")]
         .pad(L)
         .size(130., 80.)
-        .fill(Gradient::vertical(Primary, Raised))
-        .border(Ink, 2.)
+        .fill(Gradient::vertical(Role::Primary, Role::Raised))
+        .stroke(Role::Ink)
+        .stroke_width(2.)
         .radius(18.)
         .id("a");
     let b = col![text("Filter")]
         .pad(L)
         .size(110., 80.)
-        .fill(Secondary)
-        .border(Warning, 7.)
+        .fill(Role::Secondary)
+        .stroke(Role::Warning)
+        .stroke_width(7.)
         .radius(26.)
         .id("b");
     row![a, b]
         .gap(10.)
-        .weld_with(Weld::all().reach(20.).blend(70.).morph(progress))
+        .weld(Weld::all().reach(20.).blend(70.).morph(progress))
         .id("rack")
 }
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     for _ in 0..2 {
         ui.frame(panel(1.), None, Input::default(), 1. / 60.)?;
     }

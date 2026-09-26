@@ -91,8 +91,8 @@ even though the snapshot it pins already shipped it.
 
 | Snapshot spelling | Main equivalent | Gap |
 | --- | --- | --- |
-| `item("id")` / `container([..])` (`item.rs:121,145`) | `leaf(w,h)` / `row![]` `col![]` `stack![]` `grid![n;]` (`mui-scene/src/dsl.rs:158-185`) | **rename**, plus id is now optional (`.id()`) instead of mandatory |
-| `Item` (owns `Ui` build, `item.rs:376 build()`) | `El` = `Node<Element>` (`element.rs:35`) | rename; `build()` → `resolve_scene(&SceneSpec)` |
+| `item("id")` / `container([..])` (`item.rs:121,145`) | `block(w,h)` / `row![]` `col![]` `stack![]` `grid![n;]` (`mui-scene/src/dsl.rs`) | **rename**, plus id is now optional (`.id()`) instead of mandatory |
+| `Item` (owns `Ui` build, `item.rs:376 build()`) | `El` = `Node<Element>` (`element.rs:35`) | rename; `build()` → `resolve(&SceneSpec)` |
 | `.size(Fill, Hug)` (`item.rs:158`), `Sizing::{Hug,Fill,Fixed,Percent}` (`mui-layout/src/lib.rs:139`) | `.w(len)/.h(len)/.square()` + `Len::{Auto,Px,Pct,Clamp}` (`mui-layout/src/len.rs:114`), `Fill`→`.grow(1.)`, `Hug`→`Len::Auto` | **rename + strictly better**: `Len::Clamp{min,pct,max}` has no snapshot equivalent |
 | `.pack(SpaceBetween)` (`item.rs:337`) | `.between()` (`dsl.rs:110`), `.center()`, `.start()`, `.end()`, or `.justify(Justify::…)` | rename |
 | `.round((20., XL))` → `Rounding::separate(outer,inner)` (`item.rs:58,280`) | `.radius(r)` / `.pill()` (`element.rs` `Styled::radius`), `Corner::{Selector,Field,Box,Concave}` on `Theme::corners` (`mui-style/src/theme.rs:16-88`) | **rename + redesign.** Outer/inner pairs are gone; main gets nesting from `.shell(d, fill)` parallel insets instead |
@@ -255,7 +255,7 @@ all of them.
 | **Native slots** — `slot(id, child)`, `element(..)` | `dsl.rs:119,130`; 56 call sites in KURV | `canvas()` only | **Redundant.** Artefact of two layout systems. Do not port. |
 | **Responsive contract** — `Resolved::responsive()` vs `::new()`, `minimum_width` computed from an intrinsic `Hug` pass | `dsl.rs:41-95`; 2 KURV call sites | `Len::Clamp` (`len.rs:137`), `.min_col` (`node.rs:402`), `.wrap()`, `fits!` | **Mostly covered, one gap: main has no "what is the smallest this tree can be" query.** A plugin window has a minimum size the host must be told. Worth adding to main: `ResolvedScene`/`resolve` should expose the hug-pass extent. |
 | **Sticky positioning** — `sticky_slot(id, scroll, stack_top, child)`, `struct Sticky` | `dsl.rs:109`, `:715-717`; 1 KURV call site | nothing (`grep sticky` = 0) | **Missing, and main needs it.** `Pin`/`Area`/`Match` (`mui-layout/src/pin.rs:20,49`) solve anchored floats, not scroll-pinned headers, and a scrolling parameter list with group headers is the exact shape of a synth editor. One flag on `Node` inside the scroll pass. |
-| **Live projected values** — `.reserve_text("widest value")` (`item.rs:184`) + `set_text(id, s)` (`dsl.rs:105`), update a readout without re-resolving geometry | 2 + 5 KURV call sites | nothing | **Missing, and main needs it.** A modulated parameter readout changes every frame at 60 Hz; re-running `resolve_scene` to change "1.2 kHz" to "1.3 kHz" is the wrong shape and the jitter from a re-measured label is a visible bug. Reserve-widest-then-substitute is the correct fix and it is small. |
+| **Live projected values** — `.reserve_text("widest value")` (`item.rs:184`) + `set_text(id, s)` (`dsl.rs:105`), update a readout without re-resolving geometry | 2 + 5 KURV call sites | nothing | **Missing, and main needs it.** A modulated parameter readout changes every frame at 60 Hz; re-resolving the scene to change "1.2 kHz" to "1.3 kHz" is the wrong shape and the jitter from a re-measured label is a visible bug. Reserve-widest-then-substitute is the correct fix and it is small. |
 | **HSV picker** — `color_picker(id, [u8;3], change)` with hue and SV planes, keyboard, `Role::Slider`, aria labels, and a round-trip test (`hsv_preserves_rgb_and_wraps_hue`) | `dsl.rs:600-663`; 1 KURV call site | nothing | **Missing, low priority.** 64 lines, one call site, entirely paintable with `canvas()` + two `Interaction` regions. Belongs in KURV, not in `mui-widgets`, until a second product wants it. |
 
 Also snapshot-only and worth a verdict:
@@ -315,7 +315,7 @@ lines faking, and the README's "Kurv on MUI" sketch
 | Snapshot concept | Main equivalent | Gap |
 | --- | --- | --- |
 | `mui-core` | `mui-scene` + `mui-style` + `mui-motion` | rename (split) |
-| `Item`, `item()`, `container()` | `El`, `leaf()`, `row!/col!/stack!/grid!` | rename |
+| `Item`, `item()`, `container()` | `El`, `block()`, `row!/col!/stack!/grid!` | rename |
 | `.size(Fill, Hug)` | `.grow(1.)` / `Len::Auto`, `.w()/.h()` | rename |
 | `.pack(SpaceBetween)` | `.between()` | rename |
 | `.round((20., XL))` | `.radius()` / `Corner` + `.shell()` | rename + redesign |

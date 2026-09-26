@@ -54,7 +54,7 @@ El tree  (row! / col! / stack! / grid! / fits!, Paints fills, presets merged
    |     carve  -> boolean(outline, a .cut/.keep child's shape, Difference |
    |               Intersection); the child is placed by layout and never paints
    |     shell  -> inset(previous outline, d)        exact or parallel offset
-   |     text   -> shaped run from the TextCache      mui-text, kept across frames
+   |     text   -> shaped run the Resolver keeps      mui-text, kept across frames
    |               wrapped to the room its parent has, one Painted a line,
    |               keyed on (string, size, weight) and carrying the face's
    |               normalized coords so the renderer draws the instance that
@@ -189,17 +189,40 @@ mui-scene            El DSL, Styled/Paints, Theme resolution, the scene walk
    +--> mui-style    colours, roles, fills, shadows, Style, Theme (+ color)
    +--> mui-motion   Spring, curve (std only)
    +--> mui-text     glyph and string outlines
-   +--> mui-layout   the flex solve
-         |
-         v
-      mui-geometry   Booleans, fillets, offsets, and the Spacing scale
+   +--> mui-layout   the flex solve and the Spacing scale
+   +--> mui-geometry Booleans, fillets, offsets over kurbo's Point/Rect/Affine
 ```
 
-`Spacing`/`SpacingScale` live in `mui-geometry` because both `mui-style` (a
-shell's thickness, a theme's scale) and `mui-layout` (`gap`, `pad`) are
-written in them; putting them in either would point an edge sideways.
+`Spacing`/`SpacingScale` live in `mui-layout`, which resolves them;
+`mui-style` (a shell's thickness, a theme's scale) depends on it for them, and
+the solver knows nothing of style, so the edge points one way.
 `mui-playground` is the browser playground's DSL, straight over `mui-scene` and
 `mui-vello`.
+
+`vendor/vello` is classic Vello 0.10 ported to wgpu 30 with MUI's patches
+(`vendor/vello/PATCHES.md`); `mui-vello`'s `gpu-effects` renders through it.
+
+### media/: a second workspace
+
+The offline trailer and film crates own their GPU device, shell out to ffmpeg
+and hand off to browser pipelines, so they live in `media/`, their own
+workspace (own `Cargo.lock`, same lints), depending on `../crates/*` by path.
+Nothing in the root workspace depends on them, and a plugin build never
+compiles them. `media/MOVED.md` lists their old paths.
+
+```text
+media/mui-reel            scripted, deterministic takes of a real editor
+   |                      (over mui with `cpu`): video, audio, track, handoffs
+   +--> media/mui-stage   GPU trailer stage: layers on lit 3D slabs, post
+                          (over mui-vello `gpu-effects`; wgpu backends on
+                          its default `backends` feature)
+media/mui-motion-bridge   a live editor as browser-transformable surfaces,
+                          for `tools/film` (over mui, mui-vello `cpu`)
+media/tools/kurv-*        scripts that adapt a Kurv checkout to the bridge
+```
+
+`tools/film` is the JS/Python film pipeline driving `mui-motion-bridge`; it is
+unrelated to the `mui-motion` spring crate.
 
 `mui-truce` is two halves. `window` knows no plugin framework: a `View`
 trait (build a tree, report outside changes, ask for a size), the native

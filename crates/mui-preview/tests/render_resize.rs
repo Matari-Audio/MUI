@@ -24,7 +24,8 @@ const TALL: u32 = 300;
 fn a_resized_renderer_paints_its_whole_target() {
     let instance = wgpu::Instance::default();
     let adapter =
-        pollster::block_on(instance.request_adapter(&Default::default())).expect("adapter");
+        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+            .expect("adapter");
     let (device, queue) =
         pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
             .expect("device");
@@ -40,9 +41,9 @@ fn a_resized_renderer_paints_its_whole_target() {
     // What `Gpu::resize` does.
     renderer.resize([WIDE, TALL]).expect("resize");
 
-    let root = leaf(f64::from(WIDE), f64::from(TALL)).fill(Fill::Color(Color::srgb(1., 1., 1.)));
+    let root = block(f64::from(WIDE), f64::from(TALL)).fill(Fill::Color(Color::srgb(1., 1., 1.)));
     let spec = SceneSpec::new(root).offered(Size::new(f64::from(WIDE), f64::from(TALL)));
-    let scene = resolve_scene(&spec).expect("scene");
+    let scene = resolve(&spec).expect("scene");
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("resize target"),
         size: wgpu::Extent3d {
@@ -57,7 +58,7 @@ fn a_resized_renderer_paints_its_whole_target() {
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
         view_formats: &[],
     });
-    let view = texture.create_view(&Default::default());
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
     renderer
         .render(&scene, Affine::IDENTITY, &view)
         .expect("render");
@@ -70,7 +71,7 @@ fn a_resized_renderer_paints_its_whole_target() {
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         mapped_at_creation: false,
     });
-    let mut encoder = device.create_command_encoder(&Default::default());
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
     encoder.copy_texture_to_buffer(
         texture.as_image_copy(),
         wgpu::TexelCopyBufferInfo {

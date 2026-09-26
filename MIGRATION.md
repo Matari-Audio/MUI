@@ -2,6 +2,125 @@
 
 Every entry is `old -> new`. Crates are listed in dependency order.
 
+## v0.4 (DSL v2)
+
+The vocabulary in [`docs/DSL-V2.md`](docs/DSL-V2.md) is applied by a tool.
+Run it over your code before fixing anything by hand:
+
+```sh
+cargo run --release --manifest-path tools/mui-migrate/Cargo.toml -- --dry-run --diff path/to/crate
+cargo run --release --manifest-path tools/mui-migrate/Cargo.toml -- path/to/crate
+```
+
+It rewrites `.rs` files, the Rust code blocks in doc comments and `.md`
+files (`--no-docs` skips them) and moved crates in `Cargo.toml`. The widget
+rules are on too (`--no-widgets` skips them). A code block holding a
+`// old` or `// before` line is a before/after example and is left alone. A
+second run changes nothing. See
+[`tools/mui-migrate/README.md`](tools/mui-migrate/README.md).
+
+It prints `file:line: note` where a human has to look:
+
+- `.gpu_weld(w)` / `.reference_weld(w)` become `.weld(w)`; choose the backend
+  with `SceneSpec::weld_backend(WeldBackend::..)` (or `Ui::gpu_welding`).
+- `resolve_scene_cached` / `_animated` / `_retained`: keep one `Resolver`
+  across frames and call `resolve` (it keeps the last scene and reuses memos
+  from it) or `resolve_after(&spec, glide, prev)` if you keep scenes yourself.
+- `Bridge::bind(`: the closure now receives the id; pass it to the widget.
+  It may return the widget's whole `Response` (anything `IntoEl`).
+- Bare `Role` variants (`Surface`, `Primary`, ...) are qualified only in files
+  whose one glob import is mui's; with another glob (`truce::prelude::*`) write
+  `Role::X` yourself. `Role::*` left the prelude.
+- A local item named like a new name (`block`, `col`, `stack`, `resolve`, ...)
+  collides with the prelude; rename yours.
+
+Changes the tool cannot express:
+
+- `TextCache` -> `Resolver`. `recycle` and `layout_stats` are on the
+  `Resolver`, `len` is `text_runs()` (`is_empty` is gone); its weld cache is
+  `Resolver::welds`. `Resolver::resolve` returns `&ResolvedScene` and keeps
+  it for the next call's memo reuse: `.clone()` one you hold across calls.
+- `Element`'s switches are one `flags: u16`: `e.focusable`, `e.disabled`,
+  `e.captures_wheel`, `e.tracks_pointer`, `e.baseline`, `e.segmented`,
+  `e.weld_excluded`, `e.scroll_bar_off` -> `e.has(Element::FOCUSABLE)` (and
+  `DISABLED`, `CAPTURES_WHEEL`, `TRACKS_POINTER`, `BASELINE`, `SEGMENTED`,
+  `WELD_EXCLUDED`, `SCROLL_BAR_OFF`); writes are `e.set(Element::X, on)`.
+  The builders (`.focusable()`, `.disabled(..)`, ...) are unchanged.
+- The scrollbar heat left the tree: `SceneSpec::scroll_bars:
+  Option<FxHashMap<Id, f64>>`, by scroll node key (0 rest, 1 hot). `None`
+  paints no bars. `mui::Ui` fills it; a host resolving by hand sets it.
+- The material verbs moved to the `mui-material` crate as the `Material`
+  extension trait: `.union`, `.shell`, `.border_ramp`, `.surface_layout`,
+  `.inset_surface`, `.inset_surface_of`, `.join_border`, `.segmented`,
+  `.cut`, `.keep`. The `mui` prelude re-exports it; with `mui-scene` alone,
+  add `mui-material` and `use mui_material::Material` (or its prelude).
+- The `glide` callback of `Resolver::resolve_after` takes `&Id`, not
+  `&str`: `|key: &Id, e, f| ..` (an `Id` derefs to `&str`).
+- `Stroke::fill` is `Option<Fill>`; `None` is unset and `Style::over` merges
+  a stroke's paint and width per field.
+- `Style` fields that may be unset are `Option<T>` (`fill`, `stroke`, `radius`,
+  `corners`, `shadow`, `shells`, `union`, `mask`, `backdrop_blur`, ...).
+  Build styles with the builder
+  (`Style::default().fill(Role::Raised)`); readers write `s.fill.as_ref()`
+  or `unwrap_or_default()`. Watch `s.fill.is_none()`: it now asks whether the
+  field is unset, not whether it is `Fill::None`.
+- `material_symbols::codepoint("home")` -> `mui_symbols::sym::HOME` (crate
+  `mui-symbols`; `codepoint(name)` stays there for runtime names).
+- A dangling cross-reference is `SceneError::MissingId { what, id }`.
+
+Widgets (`mui`), rewritten by the tool unless `--no-widgets`:
+
+- Every widget returns `Response<C = bool, E = El> { el, changed }`:
+  `f(..).0` -> `.el`, `.1` -> `.changed`, `let (a, _) = f(..)` ->
+  `let a = f(..).el`, `let (a, b) = f(..)` -> `let Response { el: a,
+  changed: b } = f(..)`, `.0.el()` / `.0.into()` -> `.el.into_el()`. A
+  control's (`button`, `toggle`, `slider`, `knob`, `drag_value`) `el` is the
+  `Control`, still taking `.size`/`.variant`/`.role`; a `Response` drops into
+  `row![..]` whole. `text_edit`'s `changed` is the `TextEdit`, `curve`'s and
+  `bins`' the `Option<CurveEdit/BinEdit>`.
+- `Ui::state(id)` returns `Interaction { hover, press }`; `.0`/`.1` and
+  `let (h, p) =` are rewritten.
+- `toggle(ui, id, on)` -> `toggle(ui, id, label, on)` and
+  `drag_value(ui, id, v, range)` -> `drag_value(ui, id, label, v, range)`:
+  every control takes a label (its accessible name). The tool inserts `""`;
+  give it a real one.
+- `color_picker(.., alpha: bool)` -> `color_picker(.., ColorOpts { alpha })`.
+- `bins(ui, id, &Bins)` -> `bins(ui, id, &mut Bins)`, `Bins::authored` is
+  `&mut [f32]`: the widget applies the paint, reset and selection itself, as
+  `curve` does, and `changed` says what it did. An old caller's own apply
+  code now applies every edit a second time; delete it.
+- `text_input`, `text_edit`, `bins`, `bins_hover`, `curve` and
+  `color_picker` take `id: impl Into<Id>` (a `&str` still works).
+- `mui::prelude::Response` is the widget `Response`; the pointer's
+  per-target report is `mui::input::Response`. A file importing both names
+  by hand has to qualify one.
+- The `mui` prelude lists its names instead of globbing
+  `mui_scene::prelude`; the names are the same, so nothing to rewrite. The
+  crates stay reachable by name: `mui::scene`, `mui::layout`, `mui::input`,
+  `mui::motion`, `mui::vello`, `mui::geometry`.
+
+DSL v2.1 (the ergonomics pass), rewritten by the tool:
+
+- `.width(l)` / `.height(l)` -> `.w(l)` / `.h(l)`; `.min_width` /
+  `.min_height` -> `.min_w` / `.min_h`; `.expand()` -> `.grow(1)`.
+- `.pad_xy(x, y)` -> `.pad((x, y))`, `.insets(i)` -> `.pad(i)`.
+- `.border(paint, w)` -> `.stroke(paint).stroke_width(w)`, `.no_border()` ->
+  `.no_stroke()`; `.apply(f)` -> `.when(true, f)`.
+- `.centered_at(0., 0.)` and `.anchor(Align::Center, Align::Center)` ->
+  `.centered()`.
+- `icon(font, sym)` -> `icon(sym).font(font)`; set `Theme::icon_font` once
+  instead where every icon uses the same face (the tool notes the call).
+- `Ui::new(Theme::DEFAULT)` -> `Ui::default()`.
+
+Not rewritten, because the old spelling still compiles or the change is a
+type: every numeric builder argument takes any number (`.at(8, 4)`,
+`block(28, 28)`); a widget's `Response` takes its control's look and the
+common element verbs (`knob(..).size(L).tip("Gain")`, no `.el`); every `Ui`
+method naming a node takes `impl Into<Id>` (a runtime key is
+`Id::runtime("/0")`, a `&str` starting with `/` is refused in debug);
+`Theme` is `Clone`, not `Copy`; `MuiEditor::new` and `.resizable` take
+`impl Into<Size>`; `sym` is in the prelude.
+
 ## mui-text
 
 Fonts are a type now. `Font::new` parses the bytes once and returns an error
@@ -199,14 +318,21 @@ let scene = resolve_scene(&spec)?;
 
 ## mui-input
 
+- `Input` gained `trail: Vec<Point>` (folded drag samples); a struct
+  literal needs `..Default::default()`.
 - `Hit::push_clipped_paths(.., clips: Option<&[Path]>)` and
   `push_tagged_paths(..)` -> `clips: Option<&[Arc<Path>]>`, which is what
   `ResolvedSurface::clip_paths()` returns.
 
 ## mui-vello
 
+- `host::Frame` gained `Current` (the screen already shows the scene;
+  nothing acquired): match it like `Presented`. New on `Host`: `device()`,
+  `generation()`, `set_texture(key, texture)`.
 The process-global font and image caches are gone. Each renderer owns a
-`mui_vello::Cache` and hands it to every `Gpu`/`Cpu` canvas it builds. Keep
+`mui_vello::Cache` and hands it to every `Cpu` canvas it builds
+(`GpuRenderer` owns its own; the `Gpu` canvas is gone with `vello_hybrid`,
+below). Keep
 one per renderer and drop it with that renderer: an atlas id means nothing to
 another one. It holds only a `Weak` to each image buffer and frees a dropped
 buffer's pixmap or atlas slot on the next image lookup.
@@ -217,16 +343,17 @@ let mut ids = ImageIds::default();
 let mut canvas = Gpu { scene: &mut scene, resources: &mut res,
     atlas: Some(Atlas { renderer: &mut r, device: &d, queue: &q, ids: &mut ids }) };
 mui_vello::paint_cached(&mut canvas, &resolved, xf, &mut paths)?;
-// new
-let mut cache = mui_vello::Cache::default(); // beside the renderer
-let mut canvas = Gpu { scene: &mut scene, resources: &mut res, cache: &mut cache,
-    atlas: Some(Atlas { renderer: &mut r, device: &d, queue: &q }) };
-mui_vello::paint(&mut canvas, &resolved, xf)?;
+// new: classic Vello, retained, owning its cache
+let mut gpu = GpuRenderer::new(&d, &q, format, size, Budget::default()).await?;
+gpu.render(&resolved, xf, &target_view)?;
+// new: the CPU canvas takes a cache kept beside it
+let mut cache = mui_vello::Cache::default();
+mui_vello::paint(&mut Cpu { ctx: &mut ctx, resources: &mut res, cache: &mut cache }, &resolved, xf)?;
 ```
 
-- `Gpu { scene, resources, atlas }` -> `Gpu { scene, resources, cache: &mut Cache, atlas }`
+- `Gpu { scene, resources, atlas }` -> removed; `effects::GpuRenderer`
 - `Cpu { ctx, resources }` -> `Cpu { ctx, resources, cache: &mut Cache }`
-- `Atlas { renderer, device, queue, ids }` -> `Atlas { renderer, device, queue }`
+- `Atlas { renderer, device, queue, ids }` -> removed with `Gpu`
 - `ImageIds` -> `Cache`
 - `PathCache` -> removed
 - `paint_cached(canvas, scene, xf, &mut PathCache)` -> `paint(canvas, scene, xf)`
@@ -360,6 +487,9 @@ let (field, edited) = text_input(&mut ui, "name", &mut name);
 
 ## mui
 
+- new: `mui::host`, the window-framework-free host: `View`, `Shared`,
+  `Driver` (queue, schedule, zoom, key routing). A window crate translates
+  its events into `Driver` calls; mui-baseview is one.
 - `Ui.font: Option<Arc<[u8]>>` -> `Option<Font>`
 - `Ui.fallback_fonts: Vec<Arc<[u8]>>` -> `Vec<Font>`
 - `Ui::font(impl Into<Arc<[u8]>>)` / `fallback_font(..)` -> `font(Font)` /
@@ -425,6 +555,17 @@ per-parameter wrapper.
 - new: `MuiEditor::new(params, ui, size, build).resizable(min).into_editor()`
   is a truce `Editor`, and `mui_truce::window` is the host-agnostic window
   (`View`, `Shared`, `Requests`, `open`).
+- `mui_truce::window` -> the `mui-baseview` crate, re-exported under the same
+  name, so every `mui_truce::window::..` path still compiles. New there:
+  `run(title, size, shared, requests)`, a standalone app window.
+- `View::build(&mut self, ui)` -> `build(&mut self, ui, input: &Input)`.
+  `View`, `Shared` and `lock` now live in `mui::host` (re-exported from
+  `mui_baseview`); new default hooks: `after_frame`, `cancel`, `zoom`,
+  `drop_files`, `claims_key`, `log`.
+- keys: a focused control keeps only Enter/Tab/arrows/Home/End/PgUp/PgDn/
+  Delete/Backspace and a focused field every key; Space and the rest go to
+  the host unless `View::claims_key` takes them.
+- new: `HostScale` and `ParentWindow` are public in `mui_truce`.
 
 ## Removed crates and packages
 

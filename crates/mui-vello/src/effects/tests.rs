@@ -1,5 +1,5 @@
-use super::pool::{bucket, ContentState};
-use mui_weld::analytic::{dirty_ranges, PARAM_BYTES};
+use super::pool::{ContentState, bucket};
+use mui_weld::analytic::{PARAM_BYTES, dirty_ranges};
 #[test]
 fn aborted_encoder_does_not_mark_texture_rendered() {
     let a = [1; PARAM_BYTES];
@@ -131,7 +131,7 @@ fn a_shared_path_is_converted_once() {
     let pill = Arc::new(Path::capsule(20., 60.).unwrap());
     let first = c.get(&pill).unwrap().clone();
     // Poison the kept conversion: the same `Arc` must come back as is.
-    c.map.values_mut().next().unwrap().1.truncate(0);
+    c.map.values_mut().next().unwrap().bez.truncate(0);
     assert!(c.get(&pill.clone()).unwrap().elements().is_empty());
     let wider = Arc::new(Path::capsule(20., 80.).unwrap());
     assert_ne!(c.get(&wider).unwrap(), &first);

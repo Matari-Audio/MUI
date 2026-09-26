@@ -107,12 +107,13 @@ fn only_concave() {
         },
     )
     .unwrap();
-    assert!(s
-        .corners
-        .iter()
-        .flatten()
-        .filter(|c| !c.concave)
-        .all(|c| c.effective_radius == 0.));
+    assert!(
+        s.corners
+            .iter()
+            .flatten()
+            .filter(|c| !c.concave)
+            .all(|c| c.effective_radius == 0.)
+    );
 }
 #[test]
 fn hole_classification_uses_material() {
@@ -145,14 +146,14 @@ fn overlapping_holes_are_subtractions_not_xor() {
 fn reflection_does_not_cancel_union() {
     let a = r(0., 0., 100., 100.);
     let b = r(0., 0., 100., 100.)
-        .transformed(Affine::scale(-1., 1.).then(Affine::translation(100., 0.)));
+        .transformed(Affine::translate((100., 0.)) * Affine::scale_non_uniform(-1., 1.));
     near(u(&[a, b]).area(), 10000.);
 }
 #[test]
 fn arbitrary_rotation() {
     let a = r(0., 0., 300., 120.);
-    let b = r(30., -50., 100., 80.)
-        .transformed(Affine::rotation_about(PI * 0.2, Point::new(80., -10.)));
+    let b =
+        r(30., -50., 100., 80.).transformed(Affine::rotate_about(PI * 0.2, Point::new(80., -10.)));
     let s = rounded(&[a, b]);
     assert!(!s.path.flatten(0.1, 100000).unwrap().is_empty());
 }
@@ -231,41 +232,45 @@ fn shared_edge_budget() {
 }
 #[test]
 fn negative_options_fail() {
-    assert!(fillet(
-        &u(&[r(0., 0., 10., 10.)]),
-        Fillet {
-            convex_radius: -1.,
-            ..Default::default()
-        }
-    )
-    .is_err());
+    assert!(
+        fillet(
+            &u(&[r(0., 0., 10., 10.)]),
+            Fillet {
+                convex_radius: -1.,
+                ..Default::default()
+            }
+        )
+        .is_err()
+    );
 }
 #[test]
 fn invalid_values_fail() {
-    assert!(union(
-        &[r(0., 0., 20., 20.).transformed(Affine::translation(f64::NAN, 0.))],
-        Default::default()
-    )
-    .is_err());
+    assert!(
+        union(
+            &[r(0., 0., 20., 20.).transformed(Affine::translate((f64::NAN, 0.)))],
+            GeometryOptions::default()
+        )
+        .is_err()
+    );
 }
 #[test]
 fn intersection_and_difference() {
     let a = [r(0., 0., 100., 100.)];
     let b = [r(50., 0., 100., 100.)];
     near(
-        boolean(&a, &b, BooleanOp::Intersection, Default::default())
+        boolean(&a, &b, BooleanOp::Intersection, GeometryOptions::default())
             .unwrap()
             .area(),
         5000.,
     );
     near(
-        boolean(&a, &b, BooleanOp::Difference, Default::default())
+        boolean(&a, &b, BooleanOp::Difference, GeometryOptions::default())
             .unwrap()
             .area(),
         5000.,
     );
     near(
-        boolean(&a, &b, BooleanOp::Xor, Default::default())
+        boolean(&a, &b, BooleanOp::Xor, GeometryOptions::default())
             .unwrap()
             .area(),
         10000.,
@@ -297,27 +302,20 @@ fn randomized_rectangles_have_finite_safe_arcs() {
         let y = rand() * 300. - 100.;
         let a = rand() * TAU;
         let b = r(x, y, 20. + rand() * 150., 20. + rand() * 150.)
-            .transformed(Affine::rotation_about(a, Point::new(x, y)));
+            .transformed(Affine::rotate_about(a, Point::new(x, y)));
         let t = u(&[r(0., 0., 250., 130.), b]);
-        let s = fillet(&t, Default::default()).unwrap();
+        let s = fillet(&t, Fillet::default()).unwrap();
         assert!(s.path.flatten(0.2, 100000).is_ok());
         for c in s.corners.iter().flatten() {
             assert!(c.effective_radius.is_finite() && c.effective_radius >= 0.);
-            assert!(c.start.finite() && c.end.finite());
+            assert!(c.start.is_finite() && c.end.is_finite());
         }
     }
 }
 const TAU: f64 = PI * 2.;
 
 fn rr(w: f64, h: f64, r: f64) -> RoundedRect {
-    RoundedRect::new(
-        Bounds {
-            min: Point::ZERO,
-            max: Point::new(w, h),
-        },
-        r,
-    )
-    .unwrap()
+    RoundedRect::new(Rect::new(0., 0., w, h), r).unwrap()
 }
 #[test]
 fn concentric_inset_preserves_arc_centers() {
@@ -368,10 +366,10 @@ fn rectangle_offset_matches_analytic() {
     let p = rr(180., 120., 28.).path();
     let i = inset_path(&p, 12., OffsetOptions::default()).unwrap();
     let b = i.topology.bounds().unwrap();
-    near(b.min.x, 12.);
-    near(b.min.y, 12.);
-    near(b.max.x, 168.);
-    near(b.max.y, 108.);
+    near(b.x0, 12.);
+    near(b.y0, 12.);
+    near(b.x1, 168.);
+    near(b.y1, 108.);
     let expected = (180. - 24.) * (120. - 24.) - (4. - PI) * 16_f64.powi(2);
     assert!(
         (i.topology.area() - expected).abs() < 8.,
@@ -414,13 +412,13 @@ fn erosion_can_split_a_narrow_neck() {
         r(100., 0., 60., 60.),
         r(60., 25., 40., 10.),
     ]);
-    let i = inset_path(&t.to_path(), 6., Default::default()).unwrap();
+    let i = inset_path(&t.to_path(), 6., OffsetOptions::default()).unwrap();
     assert_eq!(i.topology.components(), 2);
     assert!(i.counts_changed);
 }
 #[test]
 fn erosion_can_empty_a_shape() {
-    let i = inset_path(&rr(20., 20., 4.).path(), 20., Default::default()).unwrap();
+    let i = inset_path(&rr(20., 20., 4.).path(), 20., OffsetOptions::default()).unwrap();
     assert_eq!(i.topology.components(), 0);
     assert!(i.counts_changed);
 }
@@ -430,7 +428,7 @@ fn holes_expand_on_inset() {
         .unwrap()
         .with_hole(Polygon::rectangle(40., 40., 20., 20.).unwrap().exterior)
         .into()]);
-    let i = inset_path(&t.to_path(), 5., Default::default()).unwrap();
+    let i = inset_path(&t.to_path(), 5., OffsetOptions::default()).unwrap();
     let hole = i
         .topology
         .rings()
@@ -444,22 +442,31 @@ fn holes_expand_on_inset() {
 fn offset_is_repeatable() {
     let p = rr(92., 170., 28.).path();
     assert_eq!(
-        inset_path(&p, 12., Default::default()).unwrap(),
-        inset_path(&p, 12., Default::default()).unwrap()
+        inset_path(&p, 12., OffsetOptions::default()).unwrap(),
+        inset_path(&p, 12., OffsetOptions::default()).unwrap()
     );
 }
 #[test]
 fn invalid_offset_inputs_rejected() {
-    assert!(inset_path(&rr(100., 100., 20.).path(), f64::NAN, Default::default()).is_err());
-    assert!(inset_path(
-        &rr(100., 100., 20.).path(),
-        5.,
-        OffsetOptions {
-            flatten_tolerance: 0.,
-            ..Default::default()
-        }
-    )
-    .is_err());
+    assert!(
+        inset_path(
+            &rr(100., 100., 20.).path(),
+            f64::NAN,
+            OffsetOptions::default()
+        )
+        .is_err()
+    );
+    assert!(
+        inset_path(
+            &rr(100., 100., 20.).path(),
+            5.,
+            OffsetOptions {
+                flatten_tolerance: 0.,
+                ..Default::default()
+            }
+        )
+        .is_err()
+    );
 }
 #[test]
 fn randomized_analytic_insets() {
@@ -489,7 +496,7 @@ fn self_intersection_rejected() {
         Point::new(100., 100.),
     ]);
     assert!(matches!(
-        union(&[p.into()], Default::default()),
+        union(&[p.into()], GeometryOptions::default()),
         Err(Error::SelfIntersection)
     ));
 }
@@ -500,8 +507,7 @@ fn ring_validation_finds_far_touches_and_crossings() {
     use crate::math::validate_simple;
     let circle: Vec<_> = (0..400)
         .map(|i| {
-            Point::new(0., 0.)
-                + Point::new(1., 0.).rotated(i as f64 / 400. * std::f64::consts::TAU) * 100.
+            Point::new(0., 0.) + Vec2::from_angle(i as f64 / 400. * std::f64::consts::TAU) * 100.
         })
         .collect();
     assert!(validate_simple(&circle, 1e-7).is_ok());
@@ -529,15 +535,17 @@ fn ring_validation_finds_far_touches_and_crossings() {
 }
 #[test]
 fn tight_offset_quality_is_rejected_not_faked() {
-    assert!(inset_path(
-        &rr(100000., 100000., 20000.).path(),
-        10000.,
-        OffsetOptions {
-            flatten_tolerance: 0.00001,
-            ..Default::default()
-        }
-    )
-    .is_err());
+    assert!(
+        inset_path(
+            &rr(100000., 100000., 20000.).path(),
+            10000.,
+            OffsetOptions {
+                flatten_tolerance: 0.00001,
+                ..Default::default()
+            }
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -580,12 +588,12 @@ fn randomized_inset_boundary_clearance() {
                 40. + rand() * 90.,
                 50. + rand() * 80.,
             )
-            .transformed(Affine::rotation(rand() * PI)),
+            .transformed(Affine::rotate(rand() * PI)),
         ]);
-        let p = fillet(&t, Default::default()).unwrap().path;
+        let p = fillet(&t, Fillet::default()).unwrap().path;
         let source = p.flatten(0.002, 50000).unwrap();
         let d = 2. + rand() * 8.;
-        let inner = inset_path(&p, d, Default::default()).unwrap();
+        let inner = inset_path(&p, d, OffsetOptions::default()).unwrap();
         for q in inner
             .path
             .flatten(0.1, 50000)
@@ -604,7 +612,7 @@ fn randomized_inset_boundary_clearance() {
 /// out than the arc it replaced.
 #[test]
 fn a_squircle_corner_stays_in_the_box_and_bulges_past_the_arc() {
-    let b = Bounds::new(0., 0., 100., 100.);
+    let b = Rect::new(0., 0., 100., 100.);
     let round = RoundedRect::new(b, 25.).unwrap().path();
     let squircle = CornerStyle::Squircle.shape(&round);
     // The corner's 45-degree point is the extreme of `x + y` toward (0, 0).
@@ -615,10 +623,10 @@ fn a_squircle_corner_stays_in_the_box_and_bulges_past_the_arc() {
             .flatten()
             .inspect(|q| {
                 assert!(
-                    q.x >= b.min.x - 1e-9
-                        && q.y >= b.min.y - 1e-9
-                        && q.x <= b.max.x + 1e-9
-                        && q.y <= b.max.y + 1e-9,
+                    q.x >= b.x0 - 1e-9
+                        && q.y >= b.y0 - 1e-9
+                        && q.x <= b.x1 + 1e-9
+                        && q.y <= b.y1 + 1e-9,
                     "{q:?} left the rounded rect's own box"
                 );
             })
@@ -669,10 +677,31 @@ fn inset_treats_overlapping_subpaths_as_nonzero() {
 #[test]
 fn clean_ring_drops_a_dense_diameter_in_one_pass() {
     let m = 20_000;
-    let arc = (0..=m).map(|i| Point::new(1000., 0.).rotated(PI * i as f64 / m as f64));
+    let arc = (0..=m).map(|i| (Vec2::from_angle(PI * i as f64 / m as f64) * 1000.).to_point());
     let diameter = (1..m).map(|j| Point::new(-1000. + 2000. * j as f64 / m as f64, 0.));
     let ring: Vec<_> = arc.chain(diameter).collect();
     let clean = crate::math::clean_ring(&ring, 1e-7).unwrap();
     assert_eq!(clean.len(), m + 1);
     assert!((signed_area(&clean) - PI * 1e6 / 2.).abs() < 1.);
+}
+#[test]
+fn a_tiny_cubic_tolerance_is_refused_not_looped() {
+    let p = Path::default()
+        .move_to(Point::new(0., 0.))
+        .cubic_to(
+            Point::new(0., 100.),
+            Point::new(100., 100.),
+            Point::new(100., 0.),
+        )
+        .close();
+    assert!(matches!(
+        p.flatten(1e-300, 100_000),
+        Err(Error::TooManySegments)
+    ));
+    // A straight cubic has no bow: any tolerance is met by its end point.
+    let line = Path::default()
+        .move_to(Point::new(0., 0.))
+        .cubic_to(Point::new(1., 0.), Point::new(2., 0.), Point::new(3., 0.))
+        .close();
+    assert!(line.flatten(1e-300, 16).is_ok());
 }

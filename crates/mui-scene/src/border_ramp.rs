@@ -1,6 +1,6 @@
 //! A spatial border material on a fixed outline. Geometry is independent of paint.
 use crate::{Fill, Gradient, SceneError};
-use mui_geometry::{Bounds, Path, Point};
+use mui_geometry::{Path, Point, Rect};
 #[cfg(test)]
 use mui_geometry::{PathCommand, RoundedRect};
 use mui_layout::{Frame, Id};
@@ -50,12 +50,12 @@ impl BorderRamp {
         self.anchor = Some(id.into());
         self
     }
-    pub fn tabs(mut self, ids: impl IntoIterator<Item = Id>) -> Self {
-        self.tabs = ids.into_iter().collect();
+    pub fn tabs(mut self, ids: impl IntoIterator<Item = impl Into<Id>>) -> Self {
+        self.tabs = ids.into_iter().map(Into::into).collect();
         self
     }
-    pub fn dividers(mut self, ids: impl IntoIterator<Item = Id>) -> Self {
-        self.dividers = ids.into_iter().collect();
+    pub fn dividers(mut self, ids: impl IntoIterator<Item = impl Into<Id>>) -> Self {
+        self.dividers = ids.into_iter().map(Into::into).collect();
         self
     }
     pub(crate) fn validate(&self) -> Result<(), SceneError> {
@@ -83,10 +83,9 @@ impl BorderRamp {
     pub(crate) fn width(&self, x: f64, frame: Frame) -> Result<f64, SceneError> {
         Ok(self.profile(frame).at(x)?)
     }
-    pub(crate) fn fill(&self, frame: Frame, bounds: Bounds) -> Fill {
-        let stop = |t| {
-            ((frame.x + frame.size.width * t - bounds.min.x) / (bounds.max.x - bounds.min.x)) as f32
-        };
+    pub(crate) fn fill(&self, frame: Frame, bounds: Rect) -> Fill {
+        let stop =
+            |t| ((frame.x + frame.size.width * t - bounds.x0) / (bounds.x1 - bounds.x0)) as f32;
         Gradient::linear(
             90.0,
             [
@@ -188,25 +187,24 @@ impl BorderCache {
         // Local to the anchor's origin, so a moved card still hits.
         let origin = Point::new(frame.x, frame.y);
         let mut outline = outline.clone();
-        outline.translate(-origin);
+        outline.translate(-origin.to_vec2());
         let frame = Frame {
             x: frame.x - origin.x,
             y: frame.y - origin.y,
             ..frame
         };
         let world = |mut p: Path| {
-            p.translate(origin);
+            p.translate(origin.to_vec2());
             p
         };
-        if let Some(e) = self.entries.get_mut(key) {
-            if e.outline.near(&outline, 1e-9)
-                && e.frame == frame
-                && e.widths == widths
-                && e.tolerance == tolerance
-            {
-                e.seen = self.generation;
-                return Ok(world(e.band.clone()));
-            }
+        if let Some(e) = self.entries.get_mut(key)
+            && e.outline.near(&outline, 1e-9)
+            && e.frame == frame
+            && e.widths == widths
+            && e.tolerance == tolerance
+        {
+            e.seen = self.generation;
+            return Ok(world(e.band.clone()));
         }
         let band = band(&outline, ramp, frame, tolerance)?;
         self.entries.insert(
@@ -254,15 +252,15 @@ mod tests {
 
     #[test]
     fn internal_divider_shares_the_outer_border_material_and_width() {
-        let object = column([leaf(200., 60.), leaf(200., 60.).id("lower")])
-            .union(Surface)
+        let object = col([block(200., 60.), block(200., 60.).id("lower")])
+            .union(Role::Surface)
             .radius(12.)
             .border_ramp(
-                BorderRamp::horizontal((Primary, 4.), (Dim, 1.)).dividers([Id::of("lower")]),
+                BorderRamp::horizontal((Role::Primary, 4.), (Role::Dim, 1.))
+                    .dividers([Id::of("lower")]),
             )
             .id("object");
-        let scene =
-            crate::resolve_scene(&SceneSpec::new(object).offered(Size::new(200., 120.))).unwrap();
+        let scene = crate::resolve(&SceneSpec::new(object).offered(Size::new(200., 120.))).unwrap();
         let bands: Vec<_> = scene
             .paint
             .iter()
@@ -295,18 +293,19 @@ mod tests {
 
     #[test]
     fn edge_tabs_share_one_material_below_controls() {
-        let tab = leaf(32., 36.).radius((0., 0.)).id("tab");
-        let plate = row![tab, leaf(180., 140.).radius((0., 0.))]
+        let tab = block(32., 36.).radius((0., 0.)).id("tab");
+        let plate = row![tab, block(180., 140.).radius((0., 0.))]
             .align(Align::Center)
             .union(Fill::None)
             .radius((0., 0.));
-        let object = column([plate])
-            .union(Surface)
+        let object = col([plate])
+            .union(Role::Surface)
             .radius((12., 10.))
-            .border_ramp(BorderRamp::horizontal((Primary, 4.), (Dim, 1.)).tabs([Id::of("tab")]))
+            .border_ramp(
+                BorderRamp::horizontal((Role::Primary, 4.), (Role::Dim, 1.)).tabs([Id::of("tab")]),
+            )
             .id("object");
-        let scene =
-            crate::resolve_scene(&SceneSpec::new(object).offered(Size::new(212., 140.))).unwrap();
+        let scene = crate::resolve(&SceneSpec::new(object).offered(Size::new(212., 140.))).unwrap();
         let bands: Vec<_> = scene
             .paint
             .iter()
@@ -314,19 +313,21 @@ mod tests {
             .collect();
         assert_eq!(bands.len(), 1);
         assert!(matches!(bands[0].paint, crate::Paint::Gradient { .. }));
-        assert!(!scene
-            .paint
-            .iter()
-            .any(|p| p.key.as_ref() == "tab" && p.layer == crate::Layer::Fill));
+        assert!(
+            !scene
+                .paint
+                .iter()
+                .any(|p| p.key.as_ref() == "tab" && p.layer == crate::Layer::Fill)
+        );
         let tab = scene.surface("tab").unwrap().frame;
         let rings = bands[0].path.flatten(0.1, 250_000).unwrap();
         assert!(
             rings.iter().any(|ring| {
-                let bounds = Bounds::from_points(ring.clone()).unwrap();
-                bounds.min.x <= tab.x
-                    && bounds.max.x >= tab.x + tab.size.width
-                    && bounds.min.y < tab.y
-                    && bounds.max.y > tab.y + tab.size.height
+                let bounds = mui_geometry::bounds(ring.clone()).unwrap();
+                bounds.x0 <= tab.x
+                    && bounds.x1 >= tab.x + tab.size.width
+                    && bounds.y0 < tab.y
+                    && bounds.y1 > tab.y + tab.size.height
             }),
             "tab material must reach both concave shoulders"
         );
@@ -334,7 +335,8 @@ mod tests {
 
     #[test]
     fn widths_follow_the_anchor_and_vector_band_matches_the_ramp() {
-        let ramp = BorderRamp::horizontal((Primary, 6.0), (Dim, 1.0)).transition(0.35, 0.65);
+        let ramp =
+            BorderRamp::horizontal((Role::Primary, 6.0), (Role::Dim, 1.0)).transition(0.35, 0.65);
         let frame = Frame {
             x: 0.0,
             y: 0.0,
@@ -349,7 +351,7 @@ mod tests {
         ] {
             assert!((ramp.width(x, frame).unwrap() - w).abs() < 1e-9);
         }
-        let outline = RoundedRect::new(Bounds::new(0.0, 0.0, 400.0, 80.0), 8.0)
+        let outline = RoundedRect::new(Rect::new(0.0, 0.0, 400.0, 80.0), 8.0)
             .unwrap()
             .path();
         let path = band(&outline, &ramp, frame, 0.05).unwrap();
@@ -393,13 +395,13 @@ mod tests {
             y: 0.0,
             size: Size::new(400.0, 80.0),
         };
-        let outline = RoundedRect::new(Bounds::new(0.0, 0.0, 400.0, 80.0), 8.0)
+        let outline = RoundedRect::new(Rect::new(0.0, 0.0, 400.0, 80.0), 8.0)
             .unwrap()
             .path();
         let mut cache = BorderCache::default();
-        let mut ramp = BorderRamp::horizontal((Primary, 6.0), (Dim, 1.0));
+        let mut ramp = BorderRamp::horizontal((Role::Primary, 6.0), (Role::Dim, 1.0));
         let before = cache.band("card", &outline, &ramp, frame, 0.1).unwrap();
-        ramp.from.0 = Fill::Role(Secondary);
+        ramp.from.0 = Fill::Role(Role::Secondary);
         assert_eq!(
             before,
             cache.band("card", &outline, &ramp, frame, 0.1).unwrap()
@@ -409,7 +411,9 @@ mod tests {
             before,
             cache.band("card", &outline, &ramp, frame, 0.1).unwrap()
         );
-        let moved = outline.rigid_transform(Point::new(10.0, 0.0), 0.0).unwrap();
+        let moved = outline
+            .rigid_transform(mui_geometry::Vec2::new(10.0, 0.0), 0.0)
+            .unwrap();
         assert_ne!(
             before,
             cache.band("card", &moved, &ramp, frame, 0.1).unwrap()

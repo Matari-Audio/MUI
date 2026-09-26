@@ -4,7 +4,7 @@ fn has(path: &Path, x: f64, y: f64) -> bool {
     bez_path(path, 0.01).unwrap().winding(KPoint::new(x, y)) != 0
 }
 fn rect() -> Path {
-    RoundedRect::new(Bounds::new(0., 0., 200., 100.), 0.)
+    RoundedRect::new(Rect::new(0., 0., 200., 100.), 0.)
         .unwrap()
         .path()
 }
@@ -15,39 +15,50 @@ fn empty_sets_have_boolean_semantics_in_both_orders() {
     for (a, b) in [(&p, &empty), (&empty, &p)] {
         for op in [BooleanOp::Union, BooleanOp::Xor] {
             assert!(has(
-                &boolean_paths(a, b, op, Default::default(), Default::default()).unwrap(),
+                &boolean_paths(
+                    a,
+                    b,
+                    op,
+                    OffsetOptions::default(),
+                    GeometryOptions::default()
+                )
+                .unwrap(),
                 50.,
                 50.
             ));
         }
-        assert!(boolean_paths(
-            a,
-            b,
-            BooleanOp::Intersection,
-            Default::default(),
-            Default::default()
+        assert!(
+            boolean_paths(
+                a,
+                b,
+                BooleanOp::Intersection,
+                OffsetOptions::default(),
+                GeometryOptions::default()
+            )
+            .unwrap()
+            .commands
+            .is_empty()
+        );
+    }
+    assert!(
+        boolean_paths(
+            &empty,
+            &p,
+            BooleanOp::Difference,
+            OffsetOptions::default(),
+            GeometryOptions::default()
         )
         .unwrap()
         .commands
-        .is_empty());
-    }
-    assert!(boolean_paths(
-        &empty,
-        &p,
-        BooleanOp::Difference,
-        Default::default(),
-        Default::default()
-    )
-    .unwrap()
-    .commands
-    .is_empty());
+        .is_empty()
+    );
     assert!(has(
         &boolean_paths(
             &p,
             &empty,
             BooleanOp::Difference,
-            Default::default(),
-            Default::default()
+            OffsetOptions::default(),
+            GeometryOptions::default()
         )
         .unwrap(),
         50.,
@@ -65,11 +76,11 @@ fn ramp_alignments_leave_the_correct_interior_and_outside_band() {
             &rect(),
             WidthProfile::horizontal(20., 1., 0., 200.),
             align,
-            Default::default(),
-            Default::default(),
+            OffsetOptions::default(),
+            GeometryOptions::default(),
         )
         .unwrap();
-        let padded = inset_path(&border.interior, 2., Default::default())
+        let padded = inset_path(&border.interior, 2., OffsetOptions::default())
             .unwrap()
             .path;
         for x in [50., 100., 150.] {
@@ -91,28 +102,30 @@ fn partition_inherits_star_and_hole_and_can_be_split_again() {
         Point::new(100. + radius * angle.cos(), 100. + radius * angle.sin())
     });
     let star = Path::polyline(vertices, true);
-    let hole = RoundedRect::new(Bounds::new(90., 90., 110., 110.), 4.)
+    let hole = RoundedRect::new(Rect::new(90., 90., 110., 110.), 4.)
         .unwrap()
         .path();
     let ring = boolean_paths(
         &star,
         &hole,
         BooleanOp::Difference,
-        Default::default(),
-        Default::default(),
+        OffsetOptions::default(),
+        GeometryOptions::default(),
     )
     .unwrap();
-    let inner = inset_path(&ring, 2., Default::default()).unwrap().path;
+    let inner = inset_path(&ring, 2., OffsetOptions::default())
+        .unwrap()
+        .path;
     let halves = ShapeSplit::new(SplitAxis::X, 0.5)
         .gap(2.)
-        .regions(&inner, Default::default(), Default::default())
+        .regions(&inner, OffsetOptions::default(), GeometryOptions::default())
         .unwrap();
     let source = ring.flatten(0.01, 10000).unwrap();
     for half in halves {
         assert!(!has(&half, 100., 100.));
         for part in ShapeSplit::new(SplitAxis::Y, 0.5)
             .gap(2.)
-            .regions(&half, Default::default(), Default::default())
+            .regions(&half, OffsetOptions::default(), GeometryOptions::default())
             .unwrap()
         {
             for ring in part.flatten(0.01, 10000).unwrap() {
@@ -130,7 +143,11 @@ fn curved_partition_measures_gap_normally_on_both_axes() {
             let parts = ShapeSplit::new(axis, 0.5)
                 .gap(4.)
                 .bend(bend)
-                .regions(&rect(), Default::default(), Default::default())
+                .regions(
+                    &rect(),
+                    OffsetOptions::default(),
+                    GeometryOptions::default(),
+                )
                 .unwrap();
             let rings = parts[1].flatten(0.01, 10000).unwrap();
             for ring in parts[0].flatten(0.01, 10000).unwrap() {
@@ -144,34 +161,46 @@ fn curved_partition_measures_gap_normally_on_both_axes() {
 #[test]
 fn geometry_limits_and_invalid_inputs_are_errors() {
     for value in [f64::NAN, f64::INFINITY, -1.] {
-        assert!(border_geometry(
-            &rect(),
-            WidthProfile::uniform(value),
-            BorderAlign::Inside,
-            Default::default(),
-            Default::default()
-        )
-        .is_err());
-        assert!(ShapeSplit::new(SplitAxis::X, 0.5)
-            .gap(value)
-            .regions(&rect(), Default::default(), Default::default())
-            .is_err());
+        assert!(
+            border_geometry(
+                &rect(),
+                WidthProfile::uniform(value),
+                BorderAlign::Inside,
+                OffsetOptions::default(),
+                GeometryOptions::default()
+            )
+            .is_err()
+        );
+        assert!(
+            ShapeSplit::new(SplitAxis::X, 0.5)
+                .gap(value)
+                .regions(
+                    &rect(),
+                    OffsetOptions::default(),
+                    GeometryOptions::default()
+                )
+                .is_err()
+        );
     }
-    assert!(ShapeSplit::new(SplitAxis::X, 0.5)
-        .bend(0.2)
-        .regions(
-            &rect(),
-            OffsetOptions {
-                flatten_tolerance: 1e-12,
-                max_points: 100,
-                ..Default::default()
-            },
-            Default::default()
-        )
-        .is_err());
-    assert!(WidthProfile::horizontal(1., 2., -f64::MAX, f64::MAX)
-        .at(0.)
-        .is_err());
+    assert!(
+        ShapeSplit::new(SplitAxis::X, 0.5)
+            .bend(0.2)
+            .regions(
+                &rect(),
+                OffsetOptions {
+                    flatten_tolerance: 1e-12,
+                    max_points: 100,
+                    ..Default::default()
+                },
+                GeometryOptions::default()
+            )
+            .is_err()
+    );
+    assert!(
+        WidthProfile::horizontal(1., 2., -f64::MAX, f64::MAX)
+            .at(0.)
+            .is_err()
+    );
     let invalid = Path::polyline(
         [
             Point::new(0., 0.),
@@ -180,9 +209,20 @@ fn geometry_limits_and_invalid_inputs_are_errors() {
         ],
         true,
     );
-    assert!(boundary_band(&invalid, WidthProfile::uniform(1.), Default::default()).is_err());
+    assert!(
+        boundary_band(
+            &invalid,
+            WidthProfile::uniform(1.),
+            OffsetOptions::default()
+        )
+        .is_err()
+    );
     let empty = ShapeSplit::new(SplitAxis::X, 0.5)
-        .regions(&Path::default(), Default::default(), Default::default())
+        .regions(
+            &Path::default(),
+            OffsetOptions::default(),
+            GeometryOptions::default(),
+        )
         .unwrap();
     assert!(empty.iter().all(|p| p.commands.is_empty()));
 }
@@ -191,7 +231,7 @@ fn geometry_limits_and_invalid_inputs_are_errors() {
 fn uniform_offsets_match_sweep_for_holes_and_all_alignments() {
     let o = OffsetOptions::default();
     let g = GeometryOptions::default();
-    let hole = RoundedRect::new(Bounds::new(60., 30., 80., 40.), 8.)
+    let hole = RoundedRect::new(Rect::new(60., 30., 80., 40.), 8.)
         .unwrap()
         .path();
     let outline = boolean_paths(&rect(), &hole, BooleanOp::Difference, o, g).unwrap();

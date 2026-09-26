@@ -1,7 +1,7 @@
 // A real boolean cut. Move the hole with offset(x, y).
-stack![leaf(380., 260.)]
+stack![block(380., 260.)]
 .fill(Primary)
 .radius(42.)
-.cut(leaf(140., 140.).pill().offset(120., 60.))
-.border(Ink, 2.)
+.cut(block(140., 140.).pill().offset(120., 60.))
+.stroke(Ink).stroke_width(2.)
 .shell(10., Secondary)

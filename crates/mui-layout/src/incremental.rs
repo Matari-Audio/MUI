@@ -273,12 +273,11 @@ impl LayoutCache {
         self.pointers.insert(n as *const Node<P> as usize, address);
         Ok(revision)
     }
-    /// The stamp `scan` gave this node.
-    fn stamp<P>(&mut self, n: &Node<P>) -> &mut Stamp {
-        let address = self.pointers[&(n as *const Node<P> as usize)];
-        self.stamps
-            .get_mut(&address)
-            .expect("scan stamped every node")
+    /// The stamp `scan` gave this node. `None` for a node `scan` did not
+    /// visit: it is measured uncached rather than panicking.
+    fn stamp<P>(&mut self, n: &Node<P>) -> Option<&mut Stamp> {
+        let address = self.pointers.get(&(n as *const Node<P> as usize))?;
+        self.stamps.get_mut(address)
     }
 }
 /// Complete shallow layout projection; destructuring without `..` makes adding
@@ -316,7 +315,7 @@ fn projection<P>(n: &Node<P>, payload: Vec<u8>) -> Node<Vec<u8>> {
     } = n;
     let kind = match kind {
         Kind::Leaf => Kind::Leaf,
-        Kind::Content => Kind::Content,
+        Kind::Content(_) => Kind::Content(Vec::new()),
         Kind::Branch { vertical, .. } => Kind::Branch {
             vertical: *vertical,
             children: Vec::new(),
@@ -392,10 +391,10 @@ pub fn resolve_cached_with<P, M: Into<Intrinsic>>(
         return Ok(layout);
     }
     let revision = cache.prepare(root, limits, scale, &mut key)?;
-    if let Some((r, o, layout)) = &cache.last {
-        if (*r, *o) == (revision, offered_bits) {
-            return Ok(layout.clone());
-        }
+    if let Some((r, o, layout)) = &cache.last
+        && (*r, *o) == (revision, offered_bits)
+    {
+        return Ok(layout.clone());
     }
     let layout = super::resolve_impl(root, offered, limits, scale, measurer, Some(cache), None)?;
     cache.stats.arranged_nodes = layout.all().len();
@@ -422,7 +421,9 @@ pub(crate) fn measure_cached<'a, P>(
         room: room.map(f64::to_bits),
         container: container.map(|v| v.map(f64::to_bits)),
     };
-    let hit = cache.stamp(node).measured.iter().find(|(k, _)| *k == key);
+    let hit = cache
+        .stamp(node)
+        .and_then(|s| s.measured.iter().find(|(k, _)| *k == key));
     if let Some(snapshot) = hit.map(|(_, f)| f.clone()) {
         if !pass.redo {
             if snapshot.cost > pass.left {
@@ -439,18 +440,27 @@ pub(crate) fn measure_cached<'a, P>(
     let mut m = measure::measure_uncached(node, ancestor, definite, room, container, depth, pass)?;
     let frozen = Frozen::freeze(&m, before - pass.left);
     m.frozen = Some(frozen.clone());
-    let cache = pass.cache.as_deref_mut().expect("checked above");
-    let measured = &mut cache.stamp(node).measured;
-    if measured.len() >= LayoutCache::VARIANTS {
-        measured.remove(0);
+    if let Some(stamp) = pass.cache.as_deref_mut().and_then(|c| c.stamp(node)) {
+        let measured = &mut stamp.measured;
+        if measured.len() >= LayoutCache::VARIANTS {
+            measured.remove(0);
+        }
+        measured.push((key, frozen));
     }
-    measured.push((key, frozen));
     Ok(m)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A node the scan never stamped has no stamp: the measure runs
+    /// uncached instead of panicking on a missing map entry.
+    #[test]
+    fn an_unscanned_node_has_no_stamp() {
+        let mut cache = LayoutCache::default();
+        assert!(cache.stamp(&label("a", "x")).is_none());
+    }
     #[derive(Clone, Debug, Default)]
     struct Text {
         value: String,
@@ -474,10 +484,10 @@ mod tests {
     }
     fn fixture() -> Node<Text> {
         Node::row([
-            Node::column([label("a", "A short label"), label("b", "Another label")])
+            Node::col([label("a", "A short label"), label("b", "Another label")])
                 .id("left")
                 .grow(1.),
-            Node::column([label("c", "Static right panel"), label("d", "Stable")])
+            Node::col([label("c", "Static right panel"), label("d", "Stable")])
                 .id("right")
                 .grow(1.),
         ])
@@ -620,7 +630,7 @@ mod tests {
     }
     #[test]
     fn pin_dependencies_never_use_stale_frames() {
-        let mut n = Node::overlay([
+        let mut n = Node::stack([
             label("anchor", "Hello"),
             label("tip", "Tip").pin(Pin::to("anchor")),
         ]);
@@ -634,9 +644,9 @@ mod tests {
     /// subtree must all still be seen on a warm cache.
     #[test]
     fn hashed_addresses_see_moves_pins_and_nested_duplicates() {
-        let mut n = Node::overlay([
-            Node::row([label("x", "One"), Node::leaf(30., 10.)]),
-            Node::row([Node::leaf(50., 10.), label("y", "Two")]),
+        let mut n = Node::stack([
+            Node::row([label("x", "One"), Node::block(30., 10.)]),
+            Node::row([Node::block(50., 10.), label("y", "Two")]),
             label("tip", "Tip").pin(Pin::to("x")),
         ]);
         let mut c = LayoutCache::default();

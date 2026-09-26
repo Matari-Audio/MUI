@@ -2,7 +2,8 @@
 //! not from a smooth minimum. Distance is measured to the resulting boundary.
 //! Geometry is prepared only when plates move/resize; materials and morphs do not
 //! rebuild it. Coincident seams are classified using an outward probe.
-use crate::{Error, Point};
+use crate::field::Checked;
+use crate::{Error, Point, Vec2};
 use std::f64::consts::{FRAC_PI_2, TAU};
 
 pub const MAX_BOUNDARY_SEGMENTS: usize = 128;
@@ -12,7 +13,7 @@ const EPS: f64 = 1e-8;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Plate {
     pub center: Point,
-    pub half: Point,
+    pub half: Vec2,
     pub radius: f64,
     pub angle: f64,
 }
@@ -30,34 +31,34 @@ impl Plate {
         }
         Ok(())
     }
-    fn transform(self, p: Point) -> Point {
+    fn transform(self, p: Vec2) -> Point {
         let (s, c) = self.angle.sin_cos();
-        self.center + Point::new(c * p.x - s * p.y, s * p.x + c * p.y)
+        self.center + Vec2::new(c * p.x - s * p.y, s * p.x + c * p.y)
     }
     pub fn distance(self, p: Point) -> f64 {
         let (s, c) = self.angle.sin_cos();
         let v = p - self.center;
         let r = self.radius.min(self.half.x).min(self.half.y);
-        let q = Point::new(
+        let q = Vec2::new(
             (c * v.x + s * v.y).abs() - self.half.x + r,
             (-s * v.x + c * v.y).abs() - self.half.y + r,
         );
-        Point::new(q.x.max(0.0), q.y.max(0.0)).length() + q.x.max(q.y).min(0.0) - r
+        Vec2::new(q.x.max(0.0), q.y.max(0.0)).length() + q.x.max(q.y).min(0.0) - r
     }
     fn pieces(self, owner: usize) -> Vec<Piece> {
         let (x, y) = (self.half.x, self.half.y);
         let r = self.radius.min(x).min(y);
         let points = [
-            (Point::new(-x + r, -y), Point::new(x - r, -y)),
-            (Point::new(x, -y + r), Point::new(x, y - r)),
-            (Point::new(x - r, y), Point::new(-x + r, y)),
-            (Point::new(-x, y - r), Point::new(-x, -y + r)),
+            (Vec2::new(-x + r, -y), Vec2::new(x - r, -y)),
+            (Vec2::new(x, -y + r), Vec2::new(x, y - r)),
+            (Vec2::new(x - r, y), Vec2::new(-x + r, y)),
+            (Vec2::new(-x, y - r), Vec2::new(-x, -y + r)),
         ];
         let centers = [
-            Point::new(x - r, -y + r),
-            Point::new(x - r, y - r),
-            Point::new(-x + r, y - r),
-            Point::new(-x + r, -y + r),
+            Vec2::new(x - r, -y + r),
+            Vec2::new(x - r, y - r),
+            Vec2::new(-x + r, y - r),
+            Vec2::new(-x + r, -y + r),
         ];
         let mut result = Vec::with_capacity(8);
         for i in 0..4 {
@@ -74,12 +75,12 @@ impl Plate {
             if r > EPS {
                 result.push(Piece {
                     owner,
-                    edge: Edge::Arc {
-                        center: self.transform(centers[i]),
-                        radius: r,
-                        start: (i as f64 - 1.0) * FRAC_PI_2 + self.angle,
-                        sweep: FRAC_PI_2,
-                    },
+                    edge: Edge::arc(
+                        self.transform(centers[i]),
+                        r,
+                        (i as f64 - 1.0) * FRAC_PI_2 + self.angle,
+                        FRAC_PI_2,
+                    ),
                 });
             }
         }
@@ -93,15 +94,32 @@ pub enum Edge {
         a: Point,
         b: Point,
     },
-    /// Positive sweep, at most pi/2. This bound permits an atan-free GPU nearest point.
+    /// Positive sweep, at most pi/2. This bound permits an atan-free nearest
+    /// point: `from` and `to` are the unit vectors at `start` and
+    /// `start + sweep`, fixed at construction ([`Edge::arc`]) so sampling
+    /// is sin/cos-free, as the GPU uniforms are. Non-exhaustive so only
+    /// [`Edge::arc`] builds one and `from`/`to` always agree with the angles.
+    #[non_exhaustive]
     Arc {
         center: Point,
         radius: f64,
         start: f64,
         sweep: f64,
+        from: Vec2,
+        to: Vec2,
     },
 }
 impl Edge {
+    pub fn arc(center: Point, radius: f64, start: f64, sweep: f64) -> Self {
+        Self::Arc {
+            center,
+            radius,
+            start,
+            sweep,
+            from: Vec2::from_angle(start),
+            to: Vec2::from_angle(start + sweep),
+        }
+    }
     pub fn point(self, t: f64) -> Point {
         match self {
             Self::Line { a, b } => a + (b - a) * t,
@@ -110,10 +128,8 @@ impl Edge {
                 radius,
                 start,
                 sweep,
-            } => {
-                let (s, c) = (start + sweep * t).sin_cos();
-                center + Point::new(c, s) * radius
-            }
+                ..
+            } => center + Vec2::from_angle(start + sweep * t) * radius,
         }
     }
     fn parameter(self, p: Point) -> Option<f64> {
@@ -137,6 +153,7 @@ impl Edge {
                 radius,
                 start,
                 sweep,
+                ..
             } => {
                 let q = p - center;
                 if (q.length() - radius).abs() > EPS * 64.0 * radius.max(1.0) {
@@ -156,16 +173,28 @@ impl Edge {
                 let v = b - a;
                 a + v * ((p - a).dot(v) / v.dot(v)).clamp(0.0, 1.0)
             }
-            Self::Arc { center, radius, .. } => {
+            Self::Arc {
+                center,
+                radius,
+                from,
+                to,
+                ..
+            } => {
                 let v = p - center;
                 let n = v.length();
-                if n > EPS {
-                    let q = center + v * (radius / n);
-                    if self.parameter(q).is_some() {
-                        return q;
-                    }
+                // With sweep <= pi/2, "between the ends" is two crosses; the
+                // slack is the angle `parameter` allows (sin x ~ x).
+                let slack = -EPS * 64.0 * n;
+                // The dot guard rejects the antipode, which passes both
+                // crosses when the sweep is a hairline (slice() makes them).
+                if n > EPS
+                    && from.cross(v) >= slack
+                    && v.cross(to) >= slack
+                    && (from.dot(v) > 0.0 || to.dot(v) > 0.0)
+                {
+                    return center + v * (radius / n);
                 }
-                let (a, b) = (self.point(0.0), self.point(1.0));
+                let (a, b) = (center + from * radius, center + to * radius);
                 if (p - a).length() <= (p - b).length() {
                     a
                 } else {
@@ -185,23 +214,16 @@ impl Edge {
                 radius,
                 start,
                 sweep,
-            } => Self::Arc {
-                center,
-                radius,
-                start: start + sweep * a,
-                sweep: sweep * (b - a),
-            },
+                ..
+            } => Self::arc(center, radius, start + sweep * a, sweep * (b - a)),
         }
     }
-    fn outward(self, t: f64) -> Point {
+    fn outward(self, t: f64) -> Vec2 {
         let tangent = match self {
             Self::Line { a, b } => b - a,
-            Self::Arc { start, sweep, .. } => {
-                let (s, c) = (start + sweep * t).sin_cos();
-                Point::new(-s, c)
-            }
+            Self::Arc { start, sweep, .. } => Vec2::from_angle(start + sweep * t).turn_90(),
         };
-        Point::new(tangent.y, -tangent.x) * (1.0 / tangent.length())
+        Vec2::new(tangent.y, -tangent.x) * (1.0 / tangent.length())
     }
 }
 #[derive(Clone, Copy)]
@@ -275,7 +297,7 @@ fn intersections(a: Edge, b: Edge) -> Vec<Point> {
                 let x = (ra * ra - rb * rb + d * d) / (2.0 * d);
                 let h = (ra * ra - x * x).max(0.0).sqrt();
                 let base = a0 + v * (x / d);
-                let off = Point::new(-v.y, v.x) * (h / d);
+                let off = v.turn_90() * (h / d);
                 push(base + off);
                 push(base - off);
             }
@@ -356,12 +378,14 @@ impl Boundary {
         let mut d = f64::INFINITY;
         for e in &self.edges {
             let q = e.closest(p);
-            let n = (q - p).length();
+            let n = (q - p).dot(q - p);
             if n < d {
                 d = n;
                 closest = q;
             }
         }
+        // Squared compare, one sqrt: the same distance (sqrt is monotone).
+        d = d.sqrt();
         if self.plates.iter().any(|s| s.distance(p) <= 0.0) {
             d = -d;
         }
@@ -394,17 +418,18 @@ impl Boundary {
                 Edge::Arc {
                     center,
                     radius,
-                    start,
-                    sweep,
+                    from,
+                    to,
+                    ..
                 } => [
                     center.x - origin.x,
                     center.y - origin.y,
                     radius,
                     1.0,
-                    start.cos(),
-                    start.sin(),
-                    (start + sweep).cos(),
-                    (start + sweep).sin(),
+                    from.x,
+                    from.y,
+                    to.x,
+                    to.y,
                     1.0,
                     0.0,
                     0.0,
@@ -426,10 +451,16 @@ mod tests {
     fn plate(x: f64) -> Plate {
         Plate {
             center: Point::new(x, 0.0),
-            half: Point::new(20.0, 12.0),
+            half: Vec2::new(20.0, 12.0),
             radius: 4.0,
             angle: 0.0,
         }
+    }
+    #[test]
+    fn a_hairline_arc_is_nearest_at_an_end_not_its_antipode() {
+        let arc = Edge::arc(Point::new(0.0, 0.0), 1.0, 0.0, 1e-8);
+        let q = arc.closest(Point::new(-2.0, 0.0));
+        assert!((q - Point::new(1.0, 0.0)).length() < 1e-6, "{q:?}");
     }
     #[test]
     fn isolated_plate_distance_is_unchanged() {
@@ -461,7 +492,7 @@ mod tests {
     fn contained_shape_has_no_interior_edge() {
         let a = plate(0.0);
         let b = Plate {
-            half: Point::new(3.0, 2.0),
+            half: Vec2::new(3.0, 2.0),
             radius: 1.0,
             ..a
         };
@@ -480,6 +511,18 @@ mod tests {
         for i in -25..25 {
             let p = Point::new(i as f64, 2.31);
             assert!((x.sample(p).distance - y.sample(p).distance).abs() < 1e-6);
+        }
+    }
+    #[test]
+    fn arc_closest_matches_a_dense_scan() {
+        let e = Edge::arc(Point::new(3.0, -2.0), 5.0, 0.7, FRAC_PI_2 * 0.9);
+        for i in 0..200 {
+            let p = Point::new(3.0, -2.0) + Vec2::from_angle(f64::from(i) * 0.0314) * 7.5;
+            let brute = (0..=4000)
+                .map(|k| e.point(f64::from(k) / 4000.0))
+                .min_by(|a, b| a.distance(p).total_cmp(&b.distance(p)))
+                .unwrap();
+            assert!(e.closest(p).distance(p) - brute.distance(p) < 1e-6, "{p:?}");
         }
     }
     #[test]

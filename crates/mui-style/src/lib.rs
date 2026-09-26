@@ -8,8 +8,8 @@
 //!
 //! It is not the element DSL (that is `mui-scene`), not a renderer (that is
 //! `mui-vello`), and not the layout solver (that is `mui-layout`). It shares
-//! only the [`Spacing`](mui_geometry::Spacing) vocabulary with the solver,
-//! and reads it from below, in `mui-geometry`.
+//! only the [`Spacing`](mui_layout::Spacing) vocabulary with the solver,
+//! and reads it from the solver crate, which knows nothing of style.
 #![forbid(unsafe_code)]
 
 mod color;
@@ -21,4 +21,4 @@ pub use style::{
     Cursor, Elevation, Fill, Fit, Gradient, GradientKind, Image, Mix, Paint, Radius, Role, Shadow,
     ShadowKind, Stroke, Style,
 };
-pub use theme::{Corner, Corners, Theme};
+pub use theme::{Corner, Corners, Theme, TypeScale};

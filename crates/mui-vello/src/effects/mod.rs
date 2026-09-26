@@ -15,7 +15,7 @@ mod retained;
 #[cfg(test)]
 mod tests;
 
-pub use pool::{Budget, EffectStats, WeldTextures, ABSENT_FRAMES};
+pub use pool::{ABSENT_FRAMES, Budget, EffectStats, WeldTextures};
 pub use retained::GpuRenderer;
 pub const WELD_SHADER: &str = include_str!("weld.wgsl");
 
@@ -64,14 +64,15 @@ pub(crate) struct Converted {
     frame: u64,
 }
 
-/// The path, as a `BezPath`, the frame it was last asked for, and its last
-/// [`Converted::fill`] in the colour that was asked for.
-type Conversion = (
-    Arc<Path>,
-    crate::kurbo::BezPath,
-    u64,
-    Option<(vello::peniko::Color, vello::Scene)>,
-);
+struct Conversion {
+    /// Held so the pointer key cannot be reused while the entry lives.
+    _path: Arc<Path>,
+    bez: crate::kurbo::BezPath,
+    /// The frame it was last asked for.
+    used: u64,
+    /// Its last [`Converted::fill`], in the colour that was asked for.
+    fill: Option<(vello::peniko::Color, vello::Scene)>,
+}
 
 /// Commands from which a plain fill is encoded once and copied after: a
 /// glyph run or an icon. A rect costs less to encode than to copy.
@@ -86,11 +87,11 @@ impl Converted {
         self.frame += 1;
         if self.frame.is_multiple_of(AGE) {
             let now = self.frame;
-            self.map.retain(|_, e| now - e.2 <= AGE);
+            self.map.retain(|_, e| now - e.used <= AGE);
         }
     }
     pub fn get(&mut self, path: &Arc<Path>) -> Result<&crate::kurbo::BezPath, Error> {
-        Ok(&self.entry(path)?.1)
+        Ok(&self.entry(path)?.bez)
     }
 
     fn entry(&mut self, path: &Arc<Path>) -> Result<&mut Conversion, Error> {
@@ -99,10 +100,15 @@ impl Converted {
             Entry::Occupied(e) => e.into_mut(),
             Entry::Vacant(v) => {
                 let bez = crate::bez_path(path, crate::ARC_TOLERANCE)?;
-                v.insert((path.clone(), bez, 0, None))
+                v.insert(Conversion {
+                    _path: path.clone(),
+                    bez,
+                    used: 0,
+                    fill: None,
+                })
             }
         };
-        e.2 = self.frame;
+        e.used = self.frame;
         Ok(e)
     }
 
@@ -115,13 +121,13 @@ impl Converted {
         color: vello::peniko::Color,
     ) -> Result<&vello::Scene, Error> {
         let e = self.entry(path)?;
-        if e.3.as_ref().is_none_or(|(c, _)| *c != color) {
+        if e.fill.as_ref().is_none_or(|(c, _)| *c != color) {
             let mut scene = vello::Scene::new();
             let fill = vello::peniko::Fill::NonZero;
-            scene.fill(fill, crate::kurbo::Affine::IDENTITY, color, None, &e.1);
-            e.3 = Some((color, scene));
+            scene.fill(fill, crate::kurbo::Affine::IDENTITY, color, None, &e.bez);
+            e.fill = Some((color, scene));
         }
-        Ok(&e.3.as_ref().expect("filled above").1)
+        Ok(&e.fill.as_ref().expect("filled above").1)
     }
 }
 

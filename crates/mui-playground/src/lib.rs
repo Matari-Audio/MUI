@@ -1,8 +1,9 @@
 //! A bounded expression interpreter for the browser playground, not a Rust compiler.
 #![forbid(unsafe_code)]
-use mui_scene::{material_symbols, prelude::*};
+use mui_material::prelude::*;
+use mui_scene::Role::*;
 use std::sync::LazyLock;
-use syn::{parse::Parser, punctuated::Punctuated, spanned::Spanned, Expr, Lit, Token};
+use syn::{Expr, Lit, Token, parse::Parser, punctuated::Punctuated, spanned::Spanned};
 use wasm_bindgen::prelude::*;
 
 /// Material Symbols Outlined, cut down to the icons `icon("name")` accepts;
@@ -47,10 +48,10 @@ fn number(e: &Expr) -> syn::Result<f64> {
     }
 }
 fn string(e: &Expr) -> syn::Result<String> {
-    if let Expr::Lit(l) = e {
-        if let Lit::Str(s) = &l.lit {
-            return Ok(s.value());
-        }
+    if let Expr::Lit(l) = e
+        && let Lit::Str(s) = &l.lit
+    {
+        return Ok(s.value());
     }
     Err(error(e, "expected a quoted string"))
 }
@@ -83,27 +84,27 @@ fn paint(e: &Expr) -> syn::Result<Fill> {
             return Ok(role.into());
         }
     }
-    if let Expr::Call(c) = e {
-        if let Expr::Path(p) = c.func.as_ref() {
-            let names: Vec<_> = p
-                .path
-                .segments
-                .iter()
-                .map(|s| s.ident.to_string())
-                .collect();
-            if names == ["Color", "oklch"] {
-                count(&c.args, 3)?;
-                return Ok(Color::oklch(
-                    number(&c.args[0])? as f32,
-                    number(&c.args[1])? as f32,
-                    number(&c.args[2])? as f32,
-                )
-                .into());
-            }
-            if names == ["Gradient", "vertical"] {
-                count(&c.args, 2)?;
-                return Ok(Gradient::vertical(paint(&c.args[0])?, paint(&c.args[1])?).into());
-            }
+    if let Expr::Call(c) = e
+        && let Expr::Path(p) = c.func.as_ref()
+    {
+        let names: Vec<_> = p
+            .path
+            .segments
+            .iter()
+            .map(|s| s.ident.to_string())
+            .collect();
+        if names == ["Color", "oklch"] {
+            count(&c.args, 3)?;
+            return Ok(Color::oklch(
+                number(&c.args[0])? as f32,
+                number(&c.args[1])? as f32,
+                number(&c.args[2])? as f32,
+            )
+            .into());
+        }
+        if names == ["Gradient", "vertical"] {
+            count(&c.args, 2)?;
+            return Ok(Gradient::vertical(paint(&c.args[0])?, paint(&c.args[1])?).into());
         }
     }
     Err(error(
@@ -133,8 +134,8 @@ fn element(e: &Expr, depth: usize, nodes: &mut usize) -> syn::Result<El> {
                 .collect::<syn::Result<Vec<_>>>()?;
             match name.as_str() {
                 "row" => Ok(row(children)),
-                "col" => Ok(column(children)),
-                "stack" => Ok(overlay(children)),
+                "col" => Ok(col(children)),
+                "stack" => Ok(stack(children)),
                 _ => Err(error(e, "supported macros: row!, col!, stack!")),
             }
         }
@@ -145,9 +146,9 @@ fn element(e: &Expr, depth: usize, nodes: &mut usize) -> syn::Result<El> {
                 None
             };
             match name.as_deref() {
-                Some("leaf") => {
+                Some("block") => {
                     count(&c.args, 2)?;
-                    Ok(leaf(number(&c.args[0])?, number(&c.args[1])?))
+                    Ok(block(number(&c.args[0])?, number(&c.args[1])?))
                 }
                 Some("text") => {
                     count(&c.args, 1)?;
@@ -164,8 +165,8 @@ fn element(e: &Expr, depth: usize, nodes: &mut usize) -> syn::Result<El> {
                     // name it lacks would draw .notdef, so refuse it here.
                     let in_subset =
                         |ch: &char| mui_text::glyph_path(&ICONS, *ch, 24., &[], 1.).is_ok();
-                    match material_symbols::codepoint(&name).filter(in_subset) {
-                        Some(ch) => Ok(icon(ICONS.clone(), ch)),
+                    match mui_symbols::codepoint(&name).filter(in_subset) {
+                        Some(ch) => Ok(icon(ch).font(ICONS.clone())),
                         None => Err(error(
                             &c.args[0],
                             "not an icon in the playground's Material Symbols subset; see crates/mui-playground/fonts/README.md",
@@ -174,7 +175,7 @@ fn element(e: &Expr, depth: usize, nodes: &mut usize) -> syn::Result<El> {
                 }
                 _ => Err(error(
                     e,
-                    "supported constructors: leaf(w, h), text(\"…\"), icon(\"home\"), spacer()",
+                    "supported constructors: block(w, h), text(\"…\"), icon(\"home\"), spacer()",
                 )),
             }
         }
@@ -184,18 +185,19 @@ fn element(e: &Expr, depth: usize, nodes: &mut usize) -> syn::Result<El> {
             let args = &m.args;
             let arity = match name.as_str() {
                 "pill" | "center" | "start" | "end" | "between" | "clip" | "wrap" | "full"
-                | "join" | "no_fill" | "no_border" => 0,
-                "offset" | "border" | "shell" | "pad_xy" => 2,
+                | "segmented" | "no_fill" | "no_stroke" => 0,
+                "offset" | "shell" => 2,
+                "pad" if args.len() == 2 => 2,
                 _ => 1,
             };
             count(args, arity)?;
             Ok(match name.as_str() {
-                "w" | "width" => el.width(number(&args[0])?),
-                "h" | "height" => el.height(number(&args[0])?),
+                "w" => el.w(number(&args[0])?),
+                "h" => el.h(number(&args[0])?),
                 "square" => el.square(number(&args[0])?),
                 "gap" => el.gap(number(&args[0])?),
+                "pad" if args.len() == 2 => el.pad((number(&args[0])?, number(&args[1])?)),
                 "pad" => el.pad(number(&args[0])?),
-                "pad_xy" => el.pad_xy(number(&args[0])?, number(&args[1])?),
                 "flex" => el.flex(number(&args[0])?),
                 "grow" => el.grow(number(&args[0])?),
                 "inside" => el.inside(number(&args[0])?),
@@ -205,7 +207,7 @@ fn element(e: &Expr, depth: usize, nodes: &mut usize) -> syn::Result<El> {
                 "fill" => el.fill(paint(&args[0])?),
                 "union" => el.union(paint(&args[0])?),
                 "stroke" => el.stroke(paint(&args[0])?),
-                "border" => el.border(paint(&args[0])?, number(&args[1])?),
+                "stroke_width" => el.stroke_width(number(&args[0])?),
                 "shell" => el.shell(number(&args[0])?, paint(&args[1])?),
                 "opacity" => el.opacity(number(&args[0])? as f32),
                 "offset" => el.offset(number(&args[0])?, number(&args[1])?),
@@ -223,14 +225,14 @@ fn element(e: &Expr, depth: usize, nodes: &mut usize) -> syn::Result<El> {
                 "clip" => el.clip(),
                 "wrap" => el.wrap(),
                 "full" => el.full(),
-                "join" => el.join(),
+                "segmented" => el.segmented(),
                 "no_fill" => el.no_fill(),
-                "no_border" => el.no_border(),
+                "no_stroke" => el.no_stroke(),
                 _ => {
                     return Err(error(
                         e,
                         "method is not in the playground subset; see Syntax",
-                    ))
+                    ));
                 }
             })
         }
@@ -282,13 +284,13 @@ pub fn render(source: &str, width: u16, height: u16) -> Result<Frame, String> {
     if !(64..=1024).contains(&width) || !(64..=1024).contains(&height) {
         return Err("Canvas dimensions must be between 64 and 1024.".into());
     }
-    let root = overlay([parse(source)?]).center().pad(32.).fill(Background);
+    let root = stack([parse(source)?]).center().pad(32.).fill(Background);
     let mut spec = SceneSpec::new(root).offered(Size::new(width.into(), height.into()));
     spec.font = Some(TEXT.clone());
     spec.theme.palette =
         mui_scene::Palette::from_seed(Color::oklch(0.75, 0.14, 260.), mui_scene::Mode::Dark);
     spec.theme.palette.neutral = mui_scene::Palette::NEUTRAL.neutral;
-    let scene = resolve_scene(&spec).map_err(|e| e.to_string())?;
+    let scene = resolve(&spec).map_err(|e| e.to_string())?;
     let mut ctx = vello_cpu::RenderContext::new(width, height);
     let mut resources = vello_cpu::Resources::default();
     mui_vello::paint(
@@ -331,15 +333,17 @@ mod tests {
             let frame = render(source, 640, 480).expect(source);
             assert_eq!(frame.pixels.len(), 640 * 480 * 4);
             assert!(frame.surfaces > 1);
-            assert!(frame
-                .pixels
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .any(|p| p != &frame.pixels[..4]));
+            assert!(
+                frame
+                    .pixels
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .any(|p| p != &frame.pixels[..4])
+            );
         }
-        let a = render("leaf(100., 100.).fill(Primary)", 320, 240).unwrap();
-        let b = render("leaf(100., 100.).fill(Secondary)", 320, 240).unwrap();
+        let a = render("block(100., 100.).fill(Primary)", 320, 240).unwrap();
+        let b = render("block(100., 100.).fill(Secondary)", 320, 240).unwrap();
         assert_ne!(a.pixels, b.pixels);
     }
     #[test]
@@ -367,16 +371,16 @@ mod tests {
         for source in [
             "loop {}",
             "std::process::exit(0)",
-            "leaf(2.)",
-            "leaf(2., 3.).unknown(0.)",
-            "leaf(1e99, 20.)",
-            "leaf(2., 3.).fill(Unknown)",
-            "leaf(2., 3.).fill(Primary).offset(0.)",
+            "block(2.)",
+            "block(2., 3.).unknown(0.)",
+            "block(1e99, 20.)",
+            "block(2., 3.).fill(Unknown)",
+            "block(2., 3.).fill(Primary).offset(0.)",
         ] {
             assert!(parse(source).is_err(), "accepted {source}");
         }
         assert!(parse(&"(".repeat(100)).is_err());
         assert!(parse(&"x".repeat(17_000)).is_err());
-        assert!(render("leaf(10., 10.)", 65535, 65535).is_err());
+        assert!(render("block(10., 10.)", 65535, 65535).is_err());
     }
 }

@@ -2,6 +2,7 @@
 name = "mui-preview"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 publish = false
 
@@ -12,15 +13,18 @@ default = []
 cpu = ["mui/cpu"]
 
 [dependencies]
-mui = { path = "../mui", features = ["gpu-effects"] }
-mui-text = { path = "../mui-text" }
+mui = { workspace = true, features = ["gpu-effects"] }
+mui-text.workspace = true
 # The gallery owns the window and the device, which is exactly the split a
 # plugin wrapper has. The library crates above pick no backend of their own.
-wgpu = "30"
+wgpu = { workspace = true, features = ["default"] }
 winit = "0.30"
-pollster = "0.4"
+pollster.workspace = true
 # Fallback face so the glyph scene has something to draw without a system font.
 # Zero dependencies of its own -- no egui reaches the graph through it.
-epaint_default_fonts = "0.36"
-mui-access = { path = "../mui-access" }
+epaint_default_fonts.workspace = true
+mui-access.workspace = true
 accesskit_winit = "0.33"
+
+[lints]
+workspace = true

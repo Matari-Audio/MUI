@@ -13,8 +13,8 @@ use std::time::Instant;
 
 use std::sync::Arc;
 
-use mui::prelude::*;
 use mui::Ui;
+use mui::prelude::*;
 use mui_scene::{Layer, ResolvedScene};
 use mui_vello::kurbo::Affine;
 use mui_vello::{Cache, Cpu};
@@ -82,7 +82,7 @@ fn curve(seed: f64) -> El {
         }
         vec![Draw::stroke(p, Role::Primary, 2.0)]
     })
-    .height(90.0)
+    .h(90.0)
 }
 
 const BLURB: &str = "the filter tracks the key and the envelope follows it, \
@@ -95,7 +95,7 @@ fn editor(ui: &mut Ui, app: &mut App) -> El {
     if vectors() {
         return grid(
             8,
-            (0..96).map(|i| curve(f64::from(i) * 0.13 + app.knobs[7] * 2.0).height(50.0)),
+            (0..96).map(|i| curve(f64::from(i) * 0.13 + app.knobs[7] * 2.0).h(50.0)),
         )
         .gap(2.0)
         .pad(4.0)
@@ -104,7 +104,7 @@ fn editor(ui: &mut Ui, app: &mut App) -> El {
     let knobs: Vec<El> = (0..40)
         .map(|i| {
             knob(ui, format!("k{i}"), "cut", &mut app.knobs[i], 0.0..=1.0)
-                .0
+                .el
                 .size(S)
                 .el()
         })
@@ -118,14 +118,14 @@ fn editor(ui: &mut Ui, app: &mut App) -> El {
                 &mut app.sliders[i],
                 0.0..=1.0,
             )
-            .0
-            .el()
+            .el
+            .into_el()
         })
         .collect();
     let labels: Vec<El> = (0..200).map(|i| caption(format!("p{i:03}"))).collect();
     let list: Vec<El> = (0..60)
         .map(|i| {
-            row![label(format!("step {i:02}")), spacer(), caption("0.00")]
+            row![body(format!("step {i:02}")), spacer(), caption("0.00")]
                 .pad(Xs)
                 .id(format!("row{i}"))
         })
@@ -134,13 +134,17 @@ fn editor(ui: &mut Ui, app: &mut App) -> El {
     // 20 wrapped paragraphs: each is narrower than its text, so the scene
     // resolver breaks lines and solves the layout a second time.
     let blurbs: Vec<El> = (0..20)
-        .map(|i| label(format!("{i}. {BLURB}")).w(150.0).lines(4))
+        .map(|i| body(format!("{i}. {BLURB}")).w(150.0).lines(4))
         .collect();
     // 4 image-filled pills, all sharing one 2x2 buffer.
     let img = app.swatch.clone();
     let pills: Vec<El> = [Fit::Cover, Fit::Contain, Fit::Fill, Fit::Cover]
         .into_iter()
-        .map(|fit| leaf(120.0, 40.0).pill().fill(Fill::Image(img.clone(), fit)))
+        .map(|fit| {
+            block(120.0, 40.0)
+                .pill()
+                .fill(Fill::Image(img.clone(), fit))
+        })
         .collect();
     // 6 cards carrying a transition, so every frame walks their spring
     // channels whether or not the colour moved.
@@ -158,9 +162,9 @@ fn editor(ui: &mut Ui, app: &mut App) -> El {
     let body = col![
         row![title("Kurv"), spacer(), caption("48 kHz")].pad(S),
         grid(8, knobs).gap(M).pad(M).shell(10.0, Role::Raised),
-        column(sliders).gap(S).pad(M),
+        col(sliders).gap(S).pad(M),
         grid(20, labels).gap(Xs).pad(S),
-        column(list).gap(2.0).scroll().height(240.0).pad(Xs),
+        col(list).gap(2.0).scroll().h(240.0).pad(Xs),
         row![curve(0.0), curve(1.3)].gap(M).pad(M),
         grid(5, blurbs).gap(S).pad(S),
         row(pills).gap(S).pad(S),
@@ -244,13 +248,13 @@ fn run(
     font: &[u8],
     mut draw: impl FnMut(&ResolvedScene) -> (f64, f64),
 ) -> Row {
-    let mut ui = Ui::new(Theme::DEFAULT).font(Font::new(font).unwrap());
+    let mut ui = Ui::default().font(Font::new(font).unwrap());
     let mut app = App::new();
     let (mut r, mut e, mut d) = (vec![], vec![], vec![]);
     let (mut b, mut totals) = (vec![], vec![]);
     for i in 0..WARM + N {
         if case == Case::Cold {
-            ui = Ui::new(Theme::DEFAULT).font(Font::new(font).unwrap());
+            ui = Ui::default().font(Font::new(font).unwrap());
         }
         if case == Case::Knob {
             app.knobs[7] = f64::from(i as u32 % 100) / 100.0;
@@ -315,7 +319,7 @@ fn main() {
     let font = epaint_default_fonts::HACK_REGULAR;
     let mut rows = Vec::new();
     {
-        let mut ui = Ui::new(Theme::DEFAULT).font(Font::new(font).unwrap());
+        let mut ui = Ui::default().font(Font::new(font).unwrap());
         let mut app = App::new();
         let root = editor(&mut ui, &mut app);
         let f = ui
@@ -439,7 +443,7 @@ async fn gpu() -> Option<(wgpu::AdapterInfo, Vec<Row>)> {
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
         view_formats: &[],
     });
-    let view = texture.create_view(&Default::default());
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
     let mut renderer = mui_vello::effects::GpuRenderer::new(
         &device,
         &queue,

@@ -1,5 +1,5 @@
 use super::Error;
-use mui_weld::analytic::{dirty_ranges, AnalyticWeld, PARAM_BYTES};
+use mui_weld::analytic::{AnalyticWeld, PARAM_BYTES, dirty_ranges};
 use mui_weld::boundary::BOUNDARY_BYTES;
 use std::{collections::BTreeMap, num::NonZeroU64, sync::Arc};
 
@@ -154,16 +154,16 @@ impl WeldTextures {
             vertex: wgpu::VertexState {
                 module: &module,
                 entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
                 buffers: &[],
             },
-            primitive: Default::default(),
+            primitive: wgpu::PrimitiveState::default(),
             depth_stencil: None,
-            multisample: Default::default(),
+            multisample: wgpu::MultisampleState::default(),
             fragment: Some(wgpu::FragmentState {
                 module: &module,
                 entry_point: Some("fs_hybrid"),
-                compilation_options: Default::default(),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: wgpu::TextureFormat::Rgba8Unorm,
                     blend: None,
@@ -262,7 +262,7 @@ impl WeldTextures {
             self.epoch = 0;
         }
         self.epoch += 1;
-        for (key, _) in wanted.clone() {
+        for (key, _) in wanted {
             if let Some(s) = self.slots.get_mut(key) {
                 s.seen = self.epoch;
             }
@@ -366,7 +366,7 @@ impl WeldTextures {
                     | wgpu::TextureUsages::COPY_SRC,
                 view_formats: &[],
             });
-            let view = texture.create_view(&Default::default());
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
             let uniform = self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("MUI weld parameters"),
                 size: PARAM_BYTES as u64,
@@ -407,7 +407,7 @@ impl WeldTextures {
                     used: size,
                     texture,
                     id,
-                    state: Default::default(),
+                    state: ContentState::default(),
                     seen: self.epoch,
                     present: self.epoch,
                     encoded_epoch: 0,
@@ -421,7 +421,9 @@ impl WeldTextures {
             .get_mut(key)
             .ok_or_else(|| Error::Missing(key.into()))?;
         if slot.encoded_epoch == self.epoch {
-            return Err(Error::Unsupported("encode each effect only once per submission; repeated UBO writes would change earlier draws"));
+            return Err(Error::Unsupported(
+                "encode each effect only once per submission; repeated UBO writes would change earlier draws",
+            ));
         }
         slot.encoded_epoch = self.epoch;
         if slot.seen != self.epoch {

@@ -3,8 +3,12 @@ use mui_scene::prelude::*;
 
 #[test]
 fn overlapping_siblings_do_not_become_each_others_children() {
-    let tree = stack![leaf(100.0, 100.0).id("back"), leaf(20.0, 20.0).id("front"),].id("root");
-    let scene = resolve_scene(&SceneSpec::new(tree)).unwrap();
+    let tree = stack![
+        block(100.0, 100.0).id("back"),
+        block(20.0, 20.0).id("front"),
+    ]
+    .id("root");
+    let scene = resolve(&SceneSpec::new(tree)).unwrap();
     let update = tree_update(&scene, None, 1.0);
     let find = |id: &str| {
         &update
@@ -23,14 +27,19 @@ fn overlapping_siblings_do_not_become_each_others_children() {
 
 #[test]
 fn float_keeps_authored_parent_while_escaping_the_clip() {
-    let tree = stack![leaf(20.0, 20.0).id("popup").float().offset(150.0, 0.0),]
+    let tree = stack![block(20.0, 20.0).id("popup").float().offset(150.0, 0.0),]
         .size(100.0, 100.0)
         .id("panel")
         .clip();
-    let scene = resolve_scene(&SceneSpec::new(tree)).unwrap();
+    let scene = resolve(&SceneSpec::new(tree)).unwrap();
     let popup = scene.surface("popup").unwrap();
     assert_eq!(popup.parent.as_deref(), Some("panel"));
-    assert!(popup.clip_paths().is_none_or(|p| p.is_empty()));
+    assert!(popup.clip_paths().is_none_or(
+        <[(
+            std::sync::Arc<mui_scene::prelude::Path>,
+            mui_scene::prelude::Point
+        )]>::is_empty
+    ));
     let update = tree_update(&scene, None, 1.0);
     let panel = &update
         .nodes
@@ -43,16 +52,16 @@ fn float_keeps_authored_parent_while_escaping_the_clip() {
 
 #[test]
 fn disabled_controls_advertise_no_mutating_actions_or_focus() {
-    let tree = leaf(100.0, 40.0)
+    let tree = block(100.0, 40.0)
         .id("gain")
         .focusable()
-        .disabled(true)
-        .role(Kind::Slider {
+        .disabled()
+        .a11y(A11y::Slider {
             value: 0.5,
             min: 0.0,
             max: 1.0,
         });
-    let scene = resolve_scene(&SceneSpec::new(tree)).unwrap();
+    let scene = resolve(&SceneSpec::new(tree)).unwrap();
     let update = tree_update(&scene, Some("gain"), 1.0);
     let gain = &update
         .nodes
@@ -69,9 +78,9 @@ fn disabled_controls_advertise_no_mutating_actions_or_focus() {
 fn text_is_an_accessible_label_unless_explicitly_overridden() {
     let tree = col![
         text("440 Hz").id("value"),
-        text("880 Hz").label("Reference").id("explicit")
+        text("880 Hz").named("Reference").id("explicit")
     ];
-    let scene = resolve_scene(&SceneSpec::new(tree)).unwrap();
+    let scene = resolve(&SceneSpec::new(tree)).unwrap();
     let update = tree_update(&scene, None, 1.0);
     let label = |id: &str| {
         update

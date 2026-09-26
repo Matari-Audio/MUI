@@ -39,16 +39,16 @@ unchanged frame into the view presented last submits nothing; into a new
 view (a swapchain) it is one present pass of the texture already holding
 the frame. Nothing is read back to the CPU.
 
-`Ui::gpu_welding()` selects the analytic backend for new material welds.
-`.gpu_weld(options)` and `.reference_weld(options)` are explicit per-node
-choices. The vector `.union(fill)` outline is a separate operation. No renderer is swapped
+`Ui::gpu_welding()` selects the analytic backend for material welds; without
+a `Ui`, `SceneSpec::weld_backend(WeldBackend::AnalyticGpu)` does. The backend
+is the host's choice for the whole scene, not a per-node one. The vector `.union(fill)` outline is a separate operation. No renderer is swapped
 on a frame-by-frame basis.
 
 ```rust,ignore
 let mut ui = Ui::new(theme).gpu_welding();
 let plates = row![a, b]
     .gap(8.)
-    .weld_with(Weld::all().reach(24.).blend(72.).morph(progress))
+    .weld(Weld::all().reach(24.).blend(72.).morph(progress))
     .id("joined-plates");
 // Initial resolve with the real host's size/scale/input...
 
@@ -70,7 +70,7 @@ refresh those dependent values explicitly when needed.
   CPU point containment using the same smooth-min policy.
 - `mui-scene`: explicit execution backend. GPU lowering skips CPU
   rasterization, but it still goes through `WeldCache`: `finish_gpu` in
-  `external.rs` calls `cache.get_analytic` to reuse the analytic material. An external paint marker preserves z order, surrounding
+  `external.rs` calls `cache.analytic` to share the analytic material. An external paint marker preserves z order, surrounding
   clips, group opacity and authored child identity. Morph/material setters leave
   layout and the ordinary paint list unchanged.
 - `mui-input`: analytic containment override after normal broad rejection and

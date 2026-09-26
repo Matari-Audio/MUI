@@ -10,11 +10,11 @@ a slider thumb sits where two flex weights put it; explicit offsets are availabl
 strings**: there is no `.class("btn btn-sm")` and there will not be one --
 every value in the DSL is a Rust expression the compiler already checks.
 
-Every crate is `#![forbid(unsafe_code)]` except `mui-truce`, which denies it
-and allows two blocks: the wgpu surface on the host's child window and `Send`
-for the window handle. Every library crate compiles to
-`wasm32-unknown-unknown`; the native preview host, `mui-truce`'s editor
-window and the example plugin do not. The
+Every crate is `#![forbid(unsafe_code)]` except `mui-baseview` and
+`mui-truce`, which deny it and allow a few blocks: the wgpu surface on the
+native window, `Send` for the window handle and the host's parent handle.
+Every library crate compiles to `wasm32-unknown-unknown`; the native preview
+host, `mui-baseview`'s window and the example plugin do not. The
 geometry, layout, style and motion crates stay small -- `mui-motion` has no
 dependencies at all -- but the renderer, text and accessibility stack does
 not: Vello, wgpu, harfrust, accesskit and truce put about 440 packages in
@@ -41,9 +41,10 @@ alive between frames to benefit from its caches. An unchanged
 frame into the view they presented last records no GPU pass; a swapchain hands
 out a new view per frame, so there the host saves the pass by not asking.
 
-Classic Vello compute and Hybrid comparisons live in the
-[rendering investigation](docs/rendering-investigation.md), including measured
-results and their limits.
+The classic-versus-Hybrid measurements that led here (history: MUI shipped on
+`vello_hybrid` first) live in the
+[rendering investigation](docs/rendering-investigation.md), including their
+limits.
 
 ## Contours are layout too
 
@@ -59,22 +60,22 @@ composable examples; the browser playground supports a smaller, explicit subset.
 ```rust
 use mui::prelude::*;
 
-let mut ui = Ui::new(Theme::DEFAULT);
+let mut ui = Ui::default();
 let mut cutoff = 0.5;
 let mut bypass = false;
 
 // Built every frame, like an immediate-mode tree. Widgets read last frame's
 // gesture on their id, so state lives in your own variables.
+let bypassed = toggle(&mut ui, "bypass", "Bypass", &mut bypass).size(S).tip("Bypass the filter");
 let root = col![
-    row![title("Filter"), spacer(), toggle(&mut ui, "bypass", &mut bypass).0.size(S)]
-        .center()
-        .tip("Bypass the filter"),
-    slider(&mut ui, "cutoff", "Cutoff", &mut cutoff, 0.0..=1.0).0,
+    row![title("Filter"), spacer(), bypassed].center(),
+    slider(&mut ui, "cutoff", "Cutoff", &mut cutoff, 0.0..=1.0).value_text(format!("{:.0} Hz", cutoff * 20e3)),
+    meter(&mut ui, "level", cutoff),
 ]
 .gap(M)
 .pad(L)
-.radius(20.0)
-.fill(Surface)
+.radius(20)
+.fill(Role::Surface)
 .shadow(Shadow::soft(12.0));
 
 let frame = ui
@@ -104,41 +105,44 @@ in a search box is a `z` and not an undo.
 ```rust
 use mui::prelude::*;
 
-let control = |id: &str| leaf(28.0, 28.0).pill().fill(Primary).id(id).cursor(Cursor::Hand);
+let control = |id: &str| block(28.0, 28.0).pill().fill(Role::Primary).id(id).cursor(Cursor::Hand);
 
 // A tab whose shell is a parallel inset of its own rounded outline.
 let tab = col![control("plus"), control("phase"), control("warp")]
     .gap(10.0)
     .pad(22.0)
-    .min_width(92.0)
+    .min_w(92.0)
     .center()
     .id("tab")
-    .shell(12.0, Raised);
+    .shell(12.0, Role::Raised);
 
 // The tab and the panel unioned into one filleted shape.
-let root = row![tab, leaf(520.0, 230.0).id("panel")]
+let root = row![tab, block(520.0, 230.0).id("panel")]
     .start()
-    .union(Surface);
+    .union(Role::Surface);
 
-let scene = resolve_scene(&SceneSpec::new(root)).unwrap();
+let scene = resolve(&SceneSpec::new(root)).unwrap();
 assert_eq!(scene.surface("tab").unwrap().frame.size.width, 92.0);
 ```
 
 | you write | it means |
 |---|---|
 | `row![..]`, `col![..]`, `stack![..]`, `grid![3; ..]` | flex axis, stack, cells; each arg goes through `IntoEl`, so `&str` is a text run |
-| `row([..])`, `column([..])`, `overlay([..])`, `grid(3, [..])` | the same four, taking an iterator |
-| `leaf(w, h)`, `spacer()`, `text("..")` | a sized box, a `grow(1)` gap, a measured text run |
-| `title("..")`, `label("..")`, `caption("..")` | text at 18, 13 and 11 px |
-| `.gap(M)`, `.pad(S)`, `.pad(12.0)`, `.gap(step(1.5))` | spacing tokens `Xs S M L Xl` from the theme, `n` units of its grid, or pixels |
-| `.grow(w)`, `.shrink(w)`, `.basis(px)`, `.expand()` | flexbox weights |
-| `.width(Len::Pct(50.0))`, `.aspect(16.0 / 9.0)` | percentage and ratio sizes |
+| `row([..])`, `col([..])`, `stack([..])`, `grid(3, [..])` | the same four, taking an iterator |
+| `block(w, h)`, `spacer()`, `text("..")` | a sized box, a `grow(1)` gap, a measured text run |
+| `title("..")`, `body("..")`, `caption("..")` | text at the theme's `type_scale`: 18, 13 and 11 px by default |
+| `icon(sym::HOME)` | a Material Symbols glyph in `Theme::icon_font`; `.font(f)` for another face |
+| `.at(8, 4)`, `.offset(dx, dy)`, `.centered()`, `.centered_at(dx, dy)` | placement in a stack or grid cell: from the top-left, a nudge, or centred. Any number type works in every numeric argument |
+| `.gap(M)`, `.pad(S)`, `.pad(12)`, `.pad((16, 8))`, `.gap(step(1.5))` | spacing tokens `Xs S M L Xl` from the theme, `n` units of its grid, or pixels; a pair is `(x, y)`, `Insets` sets each side |
+| `.grow(w)`, `.shrink(w)`, `.basis(px)` | flexbox weights: `.grow(1)` takes a share of the surplus |
+| `.w(Len::Pct(50))`, `.aspect(16.0 / 9.0)` | percentage and ratio sizes |
 | `.w(clamp(64.0, 30.0, 220.0))` | CSS `clamp(min, pct%, max)`: fluid between two pixel stops |
 | `.w(cq(40.0))` | a share of the nearest ancestor with a definite size on that axis -- CSS `cqw`/`cqh`, with no `container-type` to declare |
 | `fits![wide, mid, thin]`, `fits([..])` | SwiftUI's `ViewThatFits`: the first candidate that measures inside the room on offer is the one that lays out and paints, no second build pass |
 | `SceneSpec::new(root).scale(2.0)`, `Ui::scale` | the host's device pixels per unit: every edge and baseline the walk paints lands on the device grid, so abutting fills have no seam |
 | `.w(120)`, `.h(40)`, `.square(28)` | the same sizes taking a bare integer |
-| `.align(..)`, `.justify(..)`, `.anchor(x, y)`, `.offset(dx, dy)` | cross axis, main axis, overlay placement, nudge |
+| `.align(..)`, `.justify(..)`, `.anchor(x, y)`, `.offset(dx, dy)` | cross axis, main axis, stack placement, nudge |
+| `.at(dx, dy)`, `.centered_at(dx, dy)` | placed from the parent's top-left corner, or from its centre |
 | `.center()`, `.start()`, `.end()`, `.between()` | the four alignments worth a word |
 | `.justify(Justify::SpaceAround)`, `.justify(Justify::SpaceEvenly)` | the other two CSS distributions |
 | `.wrap()` | a row or column that breaks into lines instead of overflowing |
@@ -146,48 +150,48 @@ assert_eq!(scene.surface("tab").unwrap().frame.size.width, 92.0);
 | `.span(2)`, `.order(-1)` | a grid cell two columns wide; placed before its declaration slot |
 | `.min_col(120.0)` | `repeat(auto-fit, minmax(120px, 1fr))`: the grid drops columns until each clears 120 px, and a hugging grid widens to it rather than squeezing a column under it |
 | `.push(child)`, `.baseline()`, `.lines(2)` | append to a container, sit text children on one baseline, cap a wrapped label |
-| `.fill(Primary)`, `.fill(Color::..)`, `.fill(Gradient::vertical(a, b))` | a palette role, a literal, a gradient |
+| `.fill(Role::Primary)`, `.fill(Color::..)`, `.fill(Gradient::vertical(a, b))` | a palette role, a literal, a gradient |
 | `Gradient::linear(180., ..)`, `::radial((0.3, 0.3), 0.6, ..)`, `::conic(-135., ..)` | the three ramps, stops as roles or colours: a knob arc is a conic gradient and no geometry |
 | `.fill(Fill::Image(img, Fit::Cover))` | an RGBA buffer as a fill: `Cover`, `Contain` or `Fill` (`vello_cpu` paints the pixmap, `GpuRenderer` hands Vello the image once per buffer) |
-| `.stroke(Ink)`, `.radius(8.0)`, `.pill()`, `.shadow(Shadow::soft(12.0))` | outline, corners, a shadow appended to the list |
+| `.stroke(Role::Ink)`, `.radius(8.0)`, `.pill()`, `.shadow(Shadow::soft(12.0))` | outline, corners, a shadow appended to the list |
 | `.radius(Corner::Field)` | the theme's radius for this kind of thing: `Selector` (toggle, badge), `Field` (button, input, tab), `Box` (card, panel) |
 | `.corners(CornerStyle::Squircle)` | the curve the corners turn through, apart from how big they are: a continuous superellipse instead of a circular arc, through welds, shells and strokes alike |
-| `.join()` | butt a row's or column's children into one strip: the gap closes, every seam goes square, the container's own corner rounds the two ends |
+| `.segmented()` | butt a row's or column's children into one strip: the gap closes, every seam goes square (children pushed later too), the container's own corner rounds the two ends |
 | `.shadows([a, b])`, `.elevation(Elevation::Raised)` | replace the list; a contact and an ambient shadow, from the theme's steps |
 | `.shadow(Shadow::inset(4.0))` | cast inward instead, clipped to the outline: a recess, a floor under glass |
 | `.backdrop_blur(8.0)` | before the node paints, blur what is already painted behind it, clipped to its outline: a modal's frosted dim. Both renderers paint the scene under it once more through a real Gaussian; a canvas without filter layers shows the fill alone |
-| `.stroke(Ink.alpha(0.12))` | a role at an alpha: a hairline that still tracks the palette |
+| `.stroke(Role::Ink.alpha(0.12))` | a role at an alpha: a hairline that still tracks the palette |
 | `.preset(card())`, `.base(panel())` | merge a prepared `Style` over or under this one, field by field: the side that states something wins. Both are moved, not copied |
 | `panel()`, `card()`, `glass()`, `chip("A")`, `tile(el)` | the presets in `mui::presets`: three styles to merge, two elements to finish. `glass()` is a translucent fill, a bright 1 px edge and an inner floor; add `.backdrop_blur(r)` to frost what is under it |
 | `.apply(f)`, `.when(cond, f)` | hand the node to a builder run, conditionally or not |
-| `.on(State::Hover, \|s\| s.stroke(Ink))` | the look for a state, declared beside the resting one; `Hover`, `Press`, `Focus`, `Disabled` |
-| `.disabled(bypassed)` | switch this node and its subtree off: the `State::Disabled` look, out of the hit map, out of Tab, and `disabled` to a screen reader. A gesture in flight on it is cancelled |
+| `.on(State::Hover, \|s\| s.stroke(Role::Ink))` | the look for a state, declared beside the resting one; `Hover`, `Press`, `Focus`, `Disabled` |
+| `.disabled()`, `.when(bypassed, Styled::disabled)` | switch this node and its subtree off: the `State::Disabled` look, out of the hit map, out of Tab, and `disabled` to a screen reader. A gesture in flight on it is cancelled |
 | `.full()` | all of the parent, both axes |
-| `.animate()`, `.transition(Spring::new(0.3, 1.0))` | this node's fill, stroke, radius, text size and shadow spring to their new values |
+| `.animate()`, `.animate_with(Spring::new(0.3, 1.0))` | this node's fill, stroke, radius, text size and shadow spring to their new values |
 | `.shell(d, fill)` | a parallel inset of the outline before it, cumulative |
 | `.inside(2.)`, `.bend(0.2)` | [shape-aware layout](docs/shape-layout.md): nested regions inherit their parent's contour, with border-aware padding and normal-clearance split gaps |
-| `.union(fill)` | paint the union of the children's outlines as one filleted vector shape; its shadow is the union of their blurs. `.weld_with(Weld)` / `weld![..]` blend the children's paint across the seam instead |
-| `.cut(el)`, `.keep(el)` | boolean difference and intersection against a child placed like any floating one: a hole, or only the overlap. The shell, the stroke and the clip all follow the result, as they do a union. A leaf has no children, so wrap one in `stack![..]` to carve it |
+| `.union(fill)` | paint the union of the children's outlines as one filleted vector shape; its shadow is the union of their blurs. `.weld(Weld::default())` / `weld![..]` blend the children's paint across the seam instead |
+| `.cut(el)`, `.keep(el)` | boolean difference and intersection against a child placed like any floating one: a hole, or only the overlap. The shell, the stroke and the clip all follow the result, as they do a union. On a block, the block becomes a stack of its own size to hold the carve |
 | `.mask(fill)` | paint `fill` source-atop the node's own subtree: a scroll fade is a ramp from transparent to the surface colour. It paints onto the shape, it cannot erase alpha -- an alpha mask layer is CPU-only in vello |
 | `.blend(Mix::Multiply)`, `.opacity(0.5)` | composite this node's whole subtree as one layer |
 | `.scroll()`, `.clip()`, `.float()` | overflow the wheel slides, overflow cut off, a child painted over everything |
-| `.scroll_bar(false)` | drop the overlay scrollbar a `.scroll()` node otherwise shows while it overflows: a thin `Ink` thumb over the far edge of the viewport (and the bottom one, for a row) that thickens under the pointer, drags, and jumps to a press on its track. The `Ui` paints and drags it; a scene resolved without one paints none |
+| `.no_scrollbar()` | drop the overlay scrollbar a `.scroll()` node otherwise shows while it overflows: a thin `Ink` thumb over the far edge of the viewport (and the bottom one, for a row) that thickens under the pointer, drags, and jumps to a press on its track. The `Ui` paints and drags it; a scene resolved without one paints none |
 | `.sticky()` | hold the leading edge of the enclosing `.scroll()` viewport -- the top of a column, the start of a row -- while this node's section (its own parent) is in view, then let the next section push it off. It keeps its slot in the flow and paints over the siblings that scroll under it, inside the same clip. `ui.min_size()` (and `Layout::min_size`) is the other half of a scrolling shell: the floor a plugin host refuses to resize below |
 | `.pin(Pin::to("field").area(Area::Bottom).gap(Xs).match_width().fallback(Area::Top))` | a float placed against another node by name: one of nine named regions around it, a gap, a size taken from it, and areas tried in order until one fits the window. `.tip("..")` is this. Keep `.offset(dx, dy)` for the nudge no region can name |
-| `canvas(\|size\| vec![Draw::fill(path, Ink)])` | your own paths, in the node's own space |
-| `Draw::fill(path, Ink).tag("band")`, `Draw::hit(path, "knot-0")` | a drawn shape that is also the node's hit shape, by name, and hit geometry that paints nothing. Tag one draw and the node responds inside its tagged paths only: `ui.tag("dial")` says which, latched for the length of a drag |
+| `canvas(\|size\| vec![Draw::fill(path, Role::Ink)])` | your own paths, in the node's own space |
+| `Draw::fill(path, Role::Ink).tag("band")`, `Draw::hit(path, "knot-0")` | a drawn shape that is also the node's hit shape, by name, and hit geometry that paints nothing. Tag one draw and the node responds inside its tagged paths only: `ui.tag("dial")` says which, latched for the length of a drag |
 | `.cursor(Cursor::Hand)`, `.tip("..")`, `.focusable()` | the pointer, a tooltip after half a second, Tab stops here |
 | `.captures_wheel()` | a node that uses the wheel itself: over it, no enclosing `.scroll()` moves |
-| `let (el, changed) = slider(&mut ui, "cut", "Cutoff", &mut hz, 20.0..=20e3)` | the one widget shape: `&mut Ui`, the id, and what it edits in; the element and what happened last frame out. `button` says whether it was clicked, `toggle`, `slider`, `knob` and `text_input` whether the value changed, `curve` and `bins` which part the gesture edited |
-| `button(&mut ui, "save", "Save").0.variant(Variant::Soft).size(S)` | a control's look and size: `Solid`, `Soft`, `Outline`, `Ghost`, and the same five sizes everywhere. `.role(Danger)` recolours it, `.px(72.0)` is the hatch, `.el()` finishes it |
-| `slider(&mut ui, "cut", "Cutoff", &mut hz, 20.0..=20e3).0.value_text(format!("{hz:.0} Hz"))` | what the readout says, in the parameter's own units, instead of the default two decimals. The string is also what the readout is measured for, so nothing shuffles as digits come and go; a knob has no header, so it says this under the dial in place of its label |
+| `let Response { el, changed } = slider(&mut ui, "cut", "Cutoff", &mut hz, 20.0..=20e3)` | the one widget shape: `&mut Ui`, the id, the label (controls), what it edits by `&mut`, then its range or options; a `Response` out, the element and what happened last frame. `button` says whether it was clicked, `toggle`, `slider`, `knob`, `drag_value`, `text_input` and `color_picker` whether the value changed, `curve` and `bins` which part the gesture edited. A `Response` drops into `row![..]` whole |
+| `button(&mut ui, "save", "Save").variant(Variant::Soft).size(S).tip("Save")` | a control's look and size: `Solid`, `Soft`, `Outline`, `Ghost`, and the same five sizes everywhere. `.role(Role::Danger)` recolours it, `.px(72)` is the hatch. The look goes on the response, then any element verb (`.tip`, `.w`, `.grow`, ..) finishes the control and keeps `.changed` |
+| `slider(&mut ui, "cut", "Cutoff", &mut hz, 20.0..=20e3).value_text(format!("{hz:.0} Hz"))` | what the readout says, in the parameter's own units, instead of the default two decimals. The string is also what the readout is measured for, so nothing shuffles as digits come and go; a knob has no header, so it says this under the dial in place of its label |
 | `text_edit(&mut ui, "notes", &mut s, TextOpts { newline: Newline::Enter, rows: 6, .. })` | a field of many lines: wraps to its width, Up/Down/Page move the caret by line, the lines scroll inside it. `Newline::ShiftEnter` keeps Enter for submit; `TextEdit { changed, submitted }` says what it did, `blur_on_submit` lets go of the focus |
-| `drag_value(&mut ui, "bpm", &mut bpm, 20.0..=300.0)` | a number to drag sideways, 200 px across the range; a double click or Enter opens a field to type it, Escape cancels. A `Control`, so `.value_text(..)` applies |
-| `color_picker(&mut ui, "tint", &mut color, true)` | a saturation-value square, a hue strip, an alpha strip when asked, and a hex field |
+| `drag_value(&mut ui, "bpm", "Tempo", &mut bpm, 20.0..=300.0)` | a number to drag sideways, 200 px across the range; a double click or Enter opens a field to type it, Escape cancels. A `Control`, so `.value_text(..)` applies |
+| `color_picker(&mut ui, "tint", &mut color, ColorOpts { alpha: true })` | a saturation-value square, a hue strip, an alpha strip when asked, and a hex field |
 | `stepped(&ui, id, &mut v, &range)` | the arrow, Page and Home/End keys of a slider, for a control of your own |
-| `curve(&mut ui, "env", &mut env)` | an envelope over `mui::scene::curve::Curve`: the model's own cubics as one stroked path, a knot per point and two tension handles per segment, each its own hit shape. Returns the tree and a `CurveEdit` saying what the drag moved -- Shift drags fine, Alt at the press locks an axis, `ui.tag("env")` names the shape under the pointer |
-| `bins(&mut ui, "spectrum", &Bins { authored, .. })` | an additive spectrum: a bar per partial in the accent, the engine's live levels as a cap line over them, and a faint level grid. One canvas and one hit shape -- pointer x becomes a bin index, so a drag paints every bin it crossed with no gaps, Shift refines from the press level, a secondary click resets one, and the arrows select and nudge. Over ~one bar a pixel the bins coalesce per column at their maximum, so 1024 partials still draw 200 bars. `bins_hover` is the index under the pointer, for a readout in your own units |
-| `.role(Kind::Button)`, `.label("OK")` | what a screen reader hears: `mui-access` reads both off the surface. `.role(Kind::Image).label("BUFFR logo")` is a picture with alt text; unlabelled, it is decoration |
+| `curve(&mut ui, "env", &mut env)` | an envelope over `mui::scene::curve::Curve`: the model's own cubics as one stroked path, a knot per point and two tension handles per segment, each its own hit shape. Edits `env` in place; `changed` is a `CurveEdit` saying what the drag moved -- Shift drags fine, Alt at the press locks an axis, `ui.tag("env")` names the shape under the pointer |
+| `bins(&mut ui, "spectrum", &mut Bins { authored: &mut levels, .. })` | an additive spectrum: a bar per partial in the accent, the engine's live levels as a cap line over them, and a faint level grid. Edits the levels and the selection in place, as `curve` does; `changed` is a `BinEdit` saying what. One canvas and one hit shape -- pointer x becomes a bin index, so a drag paints every bin it crossed with no gaps, Shift refines from the press level, a secondary click resets one, and the arrows select and nudge. Over ~one bar a pixel the bins coalesce per column at their maximum, so 1024 partials still draw 200 bars. `bins_hover` is the index under the pointer, for a readout in your own units |
+| `.a11y(A11y::Button)`, `.named("OK")` | what a screen reader hears: `mui-access` reads both off the surface. `.a11y(A11y::Image).named("BUFFR logo")` is a picture with alt text; unlabelled, it is decoration |
 | `.reserve("-88.8 dB")`, `ui.set_text("gain", v)` | measure a readout for the widest value it can show, then swap what it says without resolving the tree again: the frame stands, one glyph run re-shapes |
 | `.text_weight(Weight::BOLD)` | the run's `wght` axis. A variable face moves; a static one has one weight and draws it |
 | `Palette::from_seed(accent, Mode::Dark)` | a whole palette from one colour: brand roles around the seed's hue, greys tinted by it, signal hues left alone. Every role clears 3:1 on the background and the surface |
@@ -217,7 +221,7 @@ them the tree itself, and not one coordinate:
 ```rust
 use mui::prelude::*;
 
-let mut ui = Ui::new(Theme::DEFAULT);
+let mut ui = Ui::default();
 let (mut bypass, mut preset) = (false, "Init".to_owned());
 let mut values = [0.4, 0.5, 0.8, 0.2, 0.6];
 const NAMES: [&str; 5] = ["Drive", "Tilt", "Mix", "Air", "Floor"];
@@ -225,7 +229,7 @@ const NAMES: [&str; 5] = ["Drive", "Tilt", "Mix", "Air", "Floor"];
 let params: Vec<El> = NAMES
     .iter()
     .zip(&mut values)
-    .map(|(n, v)| slider(&mut ui, *n, n, v, 0.0..=1.0).0.el())
+    .map(|(n, v)| slider(&mut ui, *n, n, v, 0.0..=1.0).el.into_el())
     .collect();
 
 let curve = canvas(|size| {
@@ -233,21 +237,21 @@ let curve = canvas(|size| {
         let t = f64::from(i) / 48.0;
         Point::new(t * size.width, size.height * (1.0 - t * t))
     });
-    vec![Draw::stroke(Path::polyline(pts, false), Primary, 2.0)]
+    vec![Draw::stroke(Path::polyline(pts, false), Role::Primary, 2.0)]
 });
 
 let root = col![
     row![
         title("Kurv"),
-        text_input(&mut ui, "preset", &mut preset).0.w(140),
+        text_input(&mut ui, "preset", &mut preset).el.w(140),
         spacer(),
-        toggle(&mut ui, "bypass", &mut bypass).0.el().tip("Bypass"),
+        toggle(&mut ui, "bypass", "Bypass", &mut bypass).into_el().tip("Bypass"),
     ]
     .gap(S)
     .center(),
     row![
-        column(params).gap(S).scroll().w(200),
-        curve.grow(1.0).fill(Raised).radius(12.0).cursor(Cursor::Crosshair),
+        col(params).gap(S).scroll().w(200),
+        curve.grow(1.0).fill(Role::Raised).radius(12.0).cursor(Cursor::Crosshair),
     ]
     .gap(M)
     .grow(1.0),
@@ -255,7 +259,7 @@ let root = col![
 ]
 .gap(M)
 .pad(L)
-.fill(Surface);
+.fill(Role::Surface);
 
 let frame = ui
     .frame(root, Some(Size::new(560.0, 340.0)), Input::default(), 1.0 / 60.0)
@@ -278,12 +282,12 @@ let editor = || {
         row![title("Kurv"), spacer(), caption("v1.0")].baseline(),
         // Three tabs, fluid between 64 and 120 px, wrapping when they run out.
         row(["Osc", "Filter", "Env"].map(|n| {
-            row![caption(n)].w(clamp(64.0, 18.0, 120.0)).pad_xy(0.0, 8.0)
+            row![caption(n)].w(clamp(64.0, 18.0, 120.0)).pad((0.0, 8.0))
         }))
         .gap(S)
         .wrap(),
         // Four knobs, as many across as fit at 120 px a column.
-        grid(4, ["a", "b", "c", "d"].map(|k| leaf(40.0, 40.0).id(k)))
+        grid(4, ["a", "b", "c", "d"].map(|k| block(40.0, 40.0).id(k)))
             .gap(S)
             .min_col(120.0),
     ]
@@ -295,7 +299,7 @@ let editor = || {
 
 let stacked = |w: f64, h: f64| {
     let spec = SceneSpec::new(editor()).offered(Size::new(w, h));
-    let scene = resolve_scene(&spec).unwrap();
+    let scene = resolve(&spec).unwrap();
     let y = |k: &str| scene.surface(k).unwrap().frame.y;
     y("a") != y("b")
 };
@@ -318,11 +322,9 @@ is the value the next tree reads:
 
 ```rust,ignore
 fn editor(params: Arc<GainParams>) -> Box<dyn Editor> {
-    MuiEditor::new(params, Ui::new(Theme::DEFAULT), (300, 200), |ui, bridge| {
-        let gain = bridge.bind(ui, "gain", P::Gain, |ui, v| {
-            knob(ui, "gain", "Gain", v, 0.0..=1.0).0.el()
-        });
-        col![gain, title(bridge.text(P::Gain))].pad(L).fill(Surface)
+    MuiEditor::new(params, Ui::default(), (300, 200), |ui, bridge| {
+        let gain = bridge.bind(ui, P::Gain, |ui, id, v| knob(ui, id, "Gain", v, 0.0..=1.0));
+        col![gain, title(bridge.text(P::Gain))].pad(L).fill(Role::Surface)
     })
     .resizable((260, 180))
     .into_editor()
@@ -333,13 +335,28 @@ fn editor(params: Arc<GainParams>) -> Box<dyn Editor> {
 an output meter. [crates/mui-truce/README.md](crates/mui-truce/README.md) has
 the build commands and the clap-validator and pluginval results.
 
+Build plugins with `--profile plugin` (release with `panic = "unwind"`), not
+`--release`: release aborts on panic, so a bug in the editor would take the
+DAW down instead of being caught at the FFI edge.
+
+## Hosts
+
+- `mui-baseview`: the native window, for apps (`run`) and for any plugin
+  framework (`open`, parented under the host's window). A `View` trait, the
+  event queue, the GPU surface, clipboard and AT-SPI.
+  `cargo run --example app -p mui-baseview` is a knob in a window.
+- `mui-truce`: truce's `Editor` over that window, plus the `Bridge` from widget
+  ids to truce parameters.
+- `mui-vello::host`: bring your own window and surface; `Host` presents a
+  resolved scene to it.
+
 ## Motion
 
 Nothing is keyframed. `.animate()` puts a spring on a node's own visual
 channels -- fill (in Oklch, hue the short way round), stroke width, radius,
 text size, shadow blur, shell depths -- and a new declared value **retargets**
 the live spring instead of restarting it, so a colour changed mid-flight
-keeps its velocity. `.transition(s)` is the same with your own spring;
+keeps its velocity. `.animate_with(s)` is the same with your own spring;
 `Spring::new(response_s, damping)` is the tuning you want (`1.0` is critical,
 below that overshoots), `Spring::instant()` turns one off.
 
@@ -356,12 +373,12 @@ one), which is exactly a plugin parameter's begin/end-edit bracket.
 ```rust
 use mui::prelude::*;
 
-let mut ui = Ui::new(Theme::DEFAULT);
+let mut ui = Ui::default();
 let mut gain = 0.5;
 let sweep = ui.tween("sweep", gain);
 let root = col![
-    leaf(60.0, 60.0).fill(Primary).animate().id("lamp"),
-    knob(&mut ui, "gain", "Gain", &mut gain, 0.0..=1.0).0.el(),
+    block(60.0, 60.0).fill(Role::Primary).animate().id("lamp"),
+    knob(&mut ui, "gain", "Gain", &mut gain, 0.0..=1.0),
 ];
 let frame = ui.frame(root, Some(Size::new(200.0, 200.0)), Input::default(), 1.0 / 60.0).unwrap();
 assert!(sweep <= gain && frame.edits.is_empty());
@@ -388,7 +405,7 @@ so a panel handing over a fresh frame buffer every frame does not grow it.
 `mui-access` turns a `ResolvedScene` into an `accesskit::TreeUpdate`:
 `tree_update(&scene, focus, scale)`, where `scale` is the window's device
 pixels per scene unit. A node says what it is in the tree itself --
-`.role(Kind::Button).label("OK")` -- and the walk carries that onto the
+`.a11y(A11y::Button).named("OK")` -- and the walk carries that onto the
 surface; a node with no role reports as a group, and a control with no
 label is named by its id (a group with none stays unnamed). A `text_input` reports its line
 as a `TextRun` with each character's position and its selection, so a reader

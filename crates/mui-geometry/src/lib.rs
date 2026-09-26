@@ -3,9 +3,6 @@
 //! Coordinates are group-local logical units. Apply input affine transforms BEFORE
 //! the Boolean operation; radii are measured in the resulting coordinate space.
 //! Nothing in this crate knows about egui, wgpu, windowing, input or colors.
-//! It also holds the [`Spacing`] scale, the unit both the style crate and the
-//! layout solver state a gap or a pad in; it is the shared floor, not a
-//! theme.
 //!
 //! Supported input: closed polygon exteriors with optional polygon holes. A hole
 //! means subtraction from its exterior; it is not an independent negative shape.
@@ -14,7 +11,7 @@
 
 mod bezier;
 mod boolean;
-pub use bezier::{bez_path, bez_path_into, ARC_TOLERANCE};
+pub use bezier::{ARC_TOLERANCE, bez_path, bez_path_into};
 pub use kurbo;
 mod fillet;
 mod math;
@@ -22,26 +19,24 @@ mod nesting;
 mod offset;
 mod regions;
 pub use regions::{
-    boolean_paths, border_band, border_geometry, boundary_band, union_contours, BorderAlign,
-    BorderGeometry, ShapeSplit, SplitAxis, WidthProfile,
+    BorderAlign, BorderGeometry, ShapeSplit, SplitAxis, WidthProfile, boolean_paths, border_band,
+    border_geometry, boundary_band, union_contours,
 };
 mod morph;
 pub use morph::morph;
 mod path;
-mod spacing;
 pub use nesting::{InsetRect, RoundedRect};
 pub use offset::{
-    boundary_distance, inset_path, offset_path, outset_path, InsetShape, OffsetOptions, OffsetShape,
+    InsetShape, OffsetOptions, OffsetShape, boundary_distance, inset_path, offset_path, outset_path,
 };
 
 pub use boolean::{
-    boolean, boolean_passes, union, BooleanOp, GeometryOptions, PlacedShape, Polygon, Ring,
-    RingKind, Topology,
+    BooleanOp, GeometryOptions, PlacedShape, Polygon, Ring, RingKind, Topology, boolean,
+    boolean_passes, union,
 };
-pub use fillet::{fillet, Corner, CornerStyle, Fillet, RoundedShape};
-pub use math::{Affine, Bounds, Point};
+pub use fillet::{Corner, CornerStyle, Fillet, RoundedShape, fillet};
+pub use math::{Affine, Point, Rect, Vec2, bounds};
 pub use path::{Arc, Path, PathCommand};
-pub use spacing::{Spacing, SpacingScale, SpacingToken};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Error {

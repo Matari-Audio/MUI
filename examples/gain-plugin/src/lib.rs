@@ -1,5 +1,10 @@
 //! The smallest real plugin with a MUI editor: a gain knob and a bypass
 //! switch bound to truce parameters, and an output meter.
+//!
+//! Build it with `cargo build --profile plugin -p mui-gain-plugin`, or with
+//! `CARGO_PROFILE_RELEASE_PANIC=unwind cargo truce build` for bundles: the
+//! release profile aborts on panic, and a plugin must unwind so a UI panic
+//! stays in the editor instead of killing the host.
 #![forbid(unsafe_code)]
 use mui::prelude::*;
 use mui_truce::MuiEditor;
@@ -53,28 +58,19 @@ impl PurePluginLogic for Gain {
     }
 
     fn editor(params: Arc<GainParams>) -> Box<dyn Editor> {
-        let mut ui = Ui::new(mui::prelude::Theme::DEFAULT);
+        // Both preludes export a `Theme`; the default one is `Ui::default()`,
+        // so neither is named here. Name it as `mui::prelude::Theme` if needed.
+        let mut ui = Ui::default();
         // Bundled, so this cannot fail short of a corrupt build.
         if let Ok(font) = Font::new(epaint_default_fonts::HACK_REGULAR) {
             ui = ui.font(font);
         }
         MuiEditor::new(params, ui, (300, 200), |ui, bridge| {
-            let gain = bridge.bind(ui, "gain", P::Gain, |ui, v| {
-                knob(ui, "gain", "Gain", v, 0.0..=1.0).0.size(L).el()
+            let gain = bridge.bind(ui, P::Gain, |ui, id, v| {
+                knob(ui, id, "Gain", v, 0.0..=1.0).size(L)
             });
-            let bypass = bridge.bind(ui, "bypass", P::Bypass, |ui, v| {
-                let mut on = *v >= 0.5;
-                let el = toggle(ui, "bypass", &mut on).0.el();
-                *v = f64::from(u8::from(on));
-                el
-            });
-            let level = f64::from(bridge.meter(bridge.params().level.id()));
-            let meter = row([leaf(200.0 * level.clamp(0.0, 1.0), 8.0)
-                .pill()
-                .fill(Primary)])
-            .size(200.0, 8.0)
-            .pill()
-            .fill(Field);
+            let bypass = bridge.bind_bool(ui, P::Bypass, |ui, id, on| toggle(ui, id, "Bypass", on));
+            let level = meter(ui, "level", bridge.meter(P::Level)).w(200);
             col![
                 row![
                     gain,
@@ -86,11 +82,11 @@ impl PurePluginLogic for Gain {
                 ]
                 .gap(L)
                 .center(),
-                meter,
+                level,
             ]
             .gap(M)
             .pad(L)
-            .fill(Surface)
+            .fill(Role::Surface)
         })
         .resizable((260, 180))
         .into_editor()

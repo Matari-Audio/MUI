@@ -2,6 +2,7 @@
 name = "mui-gain-plugin"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 publish = false
 
@@ -15,10 +16,13 @@ clap = ["dep:truce-clap", "dep:clap-sys"]
 vst3 = ["dep:truce-vst3"]
 
 [dependencies]
-truce = { version = "6.3", default-features = false }
+truce.workspace = true
 truce-clap = { version = "6.3", optional = true }
 truce-vst3 = { version = "6.3", optional = true }
 clap-sys = { version = "0.5", optional = true }
-mui = { path = "../../crates/mui" }
-mui-truce = { path = "../../crates/mui-truce" }
-epaint_default_fonts = "0.36"
+mui.workspace = true
+mui-truce.workspace = true
+epaint_default_fonts.workspace = true
+
+[lints]
+workspace = true

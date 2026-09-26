@@ -1,7 +1,7 @@
 //! A styled element tree lowered to a resolved, paint-ordered scene.
 //!
 //! The [`El`] DSL and its `row!`/`col!`/`stack!`/`grid!` sugar build the tree,
-//! [`Styled`] and [`Paints`] decorate it, and [`resolve_scene`] walks it once
+//! [`Styled`] and [`Paints`] decorate it, and [`resolve`] walks it once
 //! against a [`Theme`] into a z-ordered [`ResolvedScene`] paint list.
 //!
 //! Renderer-independent, `forbid(unsafe_code)`. Layout frames and painted
@@ -17,10 +17,10 @@
 //! ```
 //! use mui_scene::prelude::*;
 //! # let _before =
-//! column([row([text("Filter"), spacer(), text("on")])
+//! col([row([text("Filter"), spacer(), text("on")])
 //!     .align(Align::Center)
 //!     .justify(Justify::SpaceBetween)
-//!     .width(Len::Px(240.))])
+//!     .w(Len::Px(240.))])
 //! # ; let _after =
 //! col![row!["Filter", spacer(), "on"].between().w(240)]
 //! # ;
@@ -33,58 +33,63 @@ pub use mui_geometry::BorderAlign;
 pub use regions::ShapeLayout;
 mod border_ramp;
 pub use border_ramp::BorderRamp;
-mod capture;
 mod dsl;
 mod element;
 mod external;
 mod material_weld;
-pub use capture::{resize_capture, CaptureError, CaptureLayer};
 mod scene;
 pub use external::{ExternalWeld, WeldBackend};
 mod weld_dsl;
+// The material verbs live in mui-material, which depends on this crate; the
+// unit-test fixtures here still build with them, so the tests compile the
+// same file in (a dev-dependency would bring a second copy of these types).
+#[cfg(test)]
+#[path = "../../mui-material/src/verbs.rs"]
+mod material;
 
 pub use mui_weld::{Channel as WeldChannel, Quality as WeldQuality, Weld, WeldCache};
 
-pub use dsl::{caption, label, title, IntoLen, Sugar};
+pub use dsl::{body, caption, title};
 pub use element::{
-    canvas, canvas_cached, column, fits, grid, icon, leaf, overlay, row, spacer, text, Appear,
-    Canvas, CanvasCache, Carve, Content, Draw, El, Element, Extras, IntoEl, Kind, Memo, Outline,
-    Paints, Semantics, State, StateStyle, Styled,
+    A11y, Appear, Canvas, CanvasCache, Carve, Content, Draw, El, Element, Extras, IntoEl, Memo,
+    Outline, Paints, Semantics, State, StateStyle, Styled, TextRole, block, canvas, canvas_keyed,
+    col, fits, grid, icon, row, spacer, stack, text,
 };
 pub use mui_geometry::CornerStyle;
 pub use mui_layout::{
-    Align, Area, Frame, Id, Insets, Justify, Layout, Len, Limits, Match, Node, Pin, Size, Spacing,
-    SpacingScale, SpacingToken,
+    Align, Area, Frame, Id, Insets, Justify, Layout, Len, Limits, Match, Node, Pad, Pin, Px, Size,
+    Spacing, SpacingScale, SpacingToken,
 };
-pub use mui_motion::{curve, Ease, Keys, Spring};
+pub use mui_motion::{Ease, Keys, Spring, curve};
 pub use mui_style::{
     Color, Corner, Corners, Cursor, Elevation, Fill, Fit, Gradient, GradientKind, Image, Mix, Mode,
-    Paint, Palette, Pigment, Radius, Role, Shadow, ShadowKind, Stroke, Style, Theme,
+    Paint, Palette, Pigment, Radius, Role, Shadow, ShadowKind, Stroke, Style, Theme, TypeScale,
 };
 pub use mui_text::{Axes, Font, Weight};
-pub mod material_symbols;
 pub use scene::bar;
 pub use scene::{
-    push_index, resolve_scene, resolve_scene_animated, resolve_scene_cached,
-    resolve_scene_retained, resolve_scene_with, Layer, Painted, PlacedPath, ResolvedScene,
-    ResolvedSurface, SceneError, SceneSpec, Text, TextCache, TextGlyph,
+    Layer, Painted, PlacedPath, ResolvedScene, ResolvedSurface, Resolver, SceneError, SceneSpec,
+    Text, TextGlyph, push_index, resolve,
 };
 
 /// Everything a scene file needs, including the spacing tokens as bare
 /// names: `.gap(M).pad(L)`.
 pub mod prelude {
-    pub use crate::Role::*;
+    #[cfg(test)]
+    pub use crate::material::Material;
     pub use crate::{
-        canvas, canvas_cached, caption, col, column, fits, grid, icon, label, leaf, overlay,
-        resolve_scene, row, spacer, stack, text, title, weld, weld_morph, Align, Appear, Area,
-        Axes, BorderAlign, BorderRamp, CanvasCache, Color, Corner, Cursor, Draw, Ease, El,
-        Elevation, Fill, Fit, Font, Gradient, Id, Image, IntoEl, IntoLen, Justify, Keys, Kind, Len,
-        Match, Mix, Paints, Pin, Radius, Role, SceneSpec, Shadow, ShapeLayout, Size, State, Style,
-        Styled, Sugar, Theme, Weight, Weld, WeldBackend, WeldChannel, WeldQuality,
+        A11y, Align, Appear, Area, Axes, BorderAlign, BorderRamp, CanvasCache, Color, Corner,
+        Cursor, Draw, Ease, El, Elevation, Fill, Fit, Font, Gradient, Id, Image, IntoEl, Justify,
+        Keys, Len, Match, Mix, Paints, Pin, Radius, Resolver, Role, SceneSpec, Shadow, ShapeLayout,
+        Size, State, Style, Styled, Theme, Weight, Weld, WeldBackend, WeldChannel, WeldQuality,
+        block, body, canvas, canvas_keyed, caption, col, fits, grid, icon, resolve, row, spacer,
+        stack, text, title, weld,
     };
     pub use mui_geometry::{CornerStyle, Path, Point};
     pub use mui_layout::Spacing;
-    pub use mui_layout::SpacingToken::{Xl, Xs, L, M, S};
+    pub use mui_layout::SpacingToken::{L, M, S, Xl, Xs};
+    /// The icon codepoints: `icon(sym::HOME)`.
+    pub use mui_symbols::sym;
     /// `n` steps of the theme's spacing unit: `.gap(step(1.5))`, for the
     /// values between `Xs` and `Xl`.
     ///
@@ -93,12 +98,12 @@ pub mod prelude {
     /// let row = row!["a", "b"].gap(step(2.));
     /// assert_eq!(step(2.).resolve(Default::default()), 8.);
     /// ```
-    pub fn step(n: f64) -> Spacing {
-        Spacing::step(n)
+    pub fn step(n: impl crate::Px) -> Spacing {
+        Spacing::step(n.px())
     }
-    /// A percentage length: `.width(pct(50.))`.
-    pub fn pct(p: f64) -> Len {
-        Len::Pct(p)
+    /// A percentage length: `.w(pct(50))`.
+    pub fn pct(p: impl crate::Px) -> Len {
+        Len::Pct(p.px())
     }
     /// A share of the nearest ancestor with a definite size on that axis --
     /// CSS `cqw`/`cqh`, without having to declare the container. The badge
@@ -106,13 +111,13 @@ pub mod prelude {
     ///
     /// ```
     /// use mui_scene::prelude::*;
-    /// let badge = leaf(0., 12.).w(cq(20.)).id("badge");
+    /// let badge = block(0., 12.).w(cq(20.)).id("badge");
     /// let panel = col![row![badge]].w(400.);
-    /// let scene = resolve_scene(&SceneSpec::new(panel)).unwrap();
+    /// let scene = resolve(&SceneSpec::new(panel)).unwrap();
     /// assert_eq!(scene.surface("badge").unwrap().frame.size.width, 80.);
     /// ```
-    pub fn cq(p: f64) -> Len {
-        Len::Container(p)
+    pub fn cq(p: impl crate::Px) -> Len {
+        Len::Container(p.px())
     }
     /// A fluid length with two stops -- CSS `clamp(min, pct%, max)`. The rail
     /// tracks the window between 64 and 220 px and neither collapses at 240
@@ -122,12 +127,16 @@ pub mod prelude {
     /// ```
     /// use mui_scene::prelude::*;
     /// let rail = col![text("Filters")].w(clamp(64., 30., 220.)).id("rail");
-    /// let row = row![rail, leaf(0., 0.).grow(1.)];
+    /// let row = row![rail, block(0., 0.).grow(1.)];
     /// let scene =
-    ///     resolve_scene(&SceneSpec::new(row).offered(Size::new(240., 80.))).unwrap();
+    ///     resolve(&SceneSpec::new(row).offered(Size::new(240., 80.))).unwrap();
     /// assert_eq!(scene.surface("rail").unwrap().frame.size.width, 72.);
     /// ```
-    pub fn clamp(min: f64, pct: f64, max: f64) -> Len {
-        Len::Clamp { min, pct, max }
+    pub fn clamp(min: impl crate::Px, pct: impl crate::Px, max: impl crate::Px) -> Len {
+        Len::Clamp {
+            min: min.px(),
+            pct: pct.px(),
+            max: max.px(),
+        }
     }
 }

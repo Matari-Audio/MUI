@@ -1,10 +1,10 @@
 //! Container-owned materials: authored footprints, derived corners and clearance.
 //! Keeps layout/controls separate from a material that can wrap around their holes.
-use crate::regions::{Operation, RegionCache, RAMP_BAND, STROKE_BAND};
+use crate::regions::{Operation, RAMP_BAND, RegionCache, STROKE_BAND};
 use crate::{El, Frame, Id, Radius, SceneError, SceneSpec};
 use mui_geometry::{
-    boolean_paths, fillet, inset_path, union, union_contours, BooleanOp, CornerStyle, Fillet,
-    GeometryOptions, OffsetOptions, Path, PlacedShape, Point, Polygon,
+    BooleanOp, CornerStyle, Fillet, GeometryOptions, OffsetOptions, Path, PlacedShape, Point,
+    Polygon, boolean_paths, fillet, inset_path, union, union_contours,
 };
 use rustc_hash::FxHashMap as HashMap;
 use std::sync::Arc;
@@ -52,7 +52,7 @@ pub(crate) struct Geometry {
 /// owner compares against comes from the identity-keyed region cache.
 #[derive(Debug, Default)]
 pub(crate) struct Cache {
-    entries: HashMap<Arc<str>, (Inputs, Geometry)>,
+    entries: HashMap<crate::Id, (Inputs, Geometry)>,
     borders: crate::border_ramp::BorderCache,
 }
 
@@ -75,19 +75,15 @@ fn collect<'a>(n: &'a El, at: usize, nodes: &mut Vec<(usize, &'a El)>) -> usize 
 impl Cache {
     pub fn resolve(
         &mut self,
-        root: &El,
-        (key, at): (&Arc<str>, usize),
+        (root, padding): (&El, crate::Spacing),
+        (key, at): (&crate::Id, usize),
         frames: &[Frame],
         outline: &Path,
         spec: &SceneSpec,
         regions: &mut RegionCache,
     ) -> Result<Geometry, SceneError> {
         let e = root.payload();
-        let padding = e
-            .extras()
-            .surface_padding
-            .unwrap()
-            .resolve(spec.theme.spacing);
+        let padding = padding.resolve(spec.theme.spacing);
         if !padding.is_finite() || padding < 0. {
             return Err(mui_geometry::Error::InvalidOptions("surface padding").into());
         }
@@ -97,7 +93,7 @@ impl Cache {
             ));
         }
         let th = spec.theme.corners;
-        let (convex, concave) = match e.style.radius {
+        let (convex, concave) = match e.style.radius.unwrap_or_default() {
             Radius::Theme => (th.box_, th.concave),
             Radius::Px(r) => (r, th.concave),
             Radius::Pair(a, b) => (a, b),
@@ -117,9 +113,13 @@ impl Cache {
             .filter_map(|(i, n)| Some((n.key()?, *i)))
             .collect();
         let named = |id: &Id| -> Result<Frame, SceneError> {
-            keyed.get(id.as_str()).map(|i| frames[*i]).ok_or_else(|| {
-                mui_geometry::Error::InvalidOptions("surface footprint missing").into()
-            })
+            keyed
+                .get(id.as_str())
+                .map(|i| frames[*i])
+                .ok_or_else(|| SceneError::MissingId {
+                    what: "surface member",
+                    id: id.clone(),
+                })
         };
         let mut panels = Vec::new();
         let mut joins = Vec::new();
@@ -220,8 +220,8 @@ impl Cache {
             local(body);
         }
         let mut outline = outline.clone();
-        outline.translate(-origin);
-        border.translate(-origin);
+        outline.translate(-origin.to_vec2());
+        border.translate(-origin.to_vec2());
         let input = Inputs {
             outline,
             border,
@@ -241,7 +241,7 @@ impl Cache {
                 concave_radius: concave,
                 ..Fillet::default()
             },
-            corners: e.style.corners,
+            corners: e.style.corners.unwrap_or_default(),
             offsets: spec.offsets,
             geometry: spec.geometry,
             device_scale: spec.device_scale,
@@ -253,14 +253,14 @@ impl Cache {
                 *i += at;
             }
             g.origin = origin;
-            g.joins.translate(origin);
+            g.joins.translate(origin.to_vec2());
             g.join_nodes.iter_mut().for_each(|i| *i += at);
             g
         };
-        if let Some((old, result)) = self.entries.get(key) {
-            if old.near(&input) {
-                return Ok(placed(result.clone()));
-            }
+        if let Some((old, result)) = self.entries.get(key)
+            && old.near(&input)
+        {
+            return Ok(placed(result.clone()));
         }
         let result = resolve(&input)?;
         // Bounded per-scene cache; colors do not affect geometry.
@@ -358,17 +358,19 @@ fn resolve(i: &Inputs) -> Result<Geometry, SceneError> {
         // Border labels own their cutout. Reserve their footprint here so a
         // merged well follows that one boundary instead of inventing a second
         // independently rounded notch around it.
-        let bounds = mui_geometry::Bounds::from_points(
+        let Some(bounds) = mui_geometry::bounds(
             frames
                 .iter()
                 .flat_map(|f| [Point::new(f.x, f.y), Point::new(f.right(), f.bottom())]),
-        )
-        .unwrap();
+        ) else {
+            panels.push((*index, Arc::default()));
+            continue;
+        };
         for (_, tab, _, _) in &i.joins {
-            if tab.x >= bounds.min.x
-                && tab.right() <= bounds.max.x
-                && tab.y >= bounds.min.y
-                && tab.bottom() <= bounds.max.y
+            if tab.x >= bounds.x0
+                && tab.right() <= bounds.x1
+                && tab.y >= bounds.y0
+                && tab.bottom() <= bounds.y1
             {
                 shapes.push(
                     Polygon::rectangle(
@@ -386,10 +388,10 @@ fn resolve(i: &Inputs) -> Result<Geometry, SceneError> {
         // also includes ports or footer tabs. Those attachments must not pull
         // an interior material beyond the body's reserved border clearance.
         if let Some((_, _, body, _)) = i.joins.iter().find(|(_, _, body, _)| {
-            bounds.min.x >= body.x
-                && bounds.max.x <= body.right()
-                && bounds.min.y >= body.y
-                && bounds.max.y <= body.bottom()
+            bounds.x0 >= body.x
+                && bounds.x1 <= body.right()
+                && bounds.y0 >= body.y
+                && bounds.y1 <= body.bottom()
         }) {
             let body_path = Polygon::rectangle(body.x, body.y, body.size.width, body.size.height)?;
             let body_path = union(&[body_path.into()], i.geometry)?.to_path();

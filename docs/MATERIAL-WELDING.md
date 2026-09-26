@@ -27,16 +27,16 @@ let group = weld![Weld::all().border(WeldChannel::Omit); shape_a, shape_b];
 // A layout container and a material-weld policy are orthogonal.
 let group = row![shape_a, shape_b]
     .gap(10.)
-    .weld_with(Weld::all().reach(24.).blend(72.).morph(progress));
+    .weld(Weld::all().reach(24.).blend(72.).morph(progress));
 
 // Same policies, explicit animation input.
-let group = weld_morph![progress; shape_a, shape_b];
-let group = weld_morph![Weld::shape(), progress; shape_a, shape_b];
+let group = weld![Weld::default().morph(progress); shape_a, shape_b];
+let group = weld![Weld::shape().morph(progress); shape_a, shape_b];
 ```
 
 Examples above are alternatives; they do not reuse moved Rust values in one
-function. `weld!` uses an ordinary overlay. Use `row!`, `col!` or `grid!` with
-`.weld_with(...)` to arrange the source plates instead.
+function. `weld!` uses an ordinary stack. Use `row!`, `col!` or `grid!` with
+`.weld(...)` to arrange the source plates instead.
 
 | Policy | Body | Border |
 |---|---|---|
@@ -49,14 +49,15 @@ function. `weld!` uses an ordinary overlay. Use `row!`, `col!` or `grid!` with
 `Keep` does not mean invisible. `Omit` does not disable interaction. A border-only
 weld can intentionally outline a connection whose body remains transparent.
 
-New convenience DSL: `.border(paint, width)`, `.no_border()`, `.no_fill()`,
-`.weld_shape()`, `.weld_borders()`, `.weld_morph(t)`, `.without_weld()`,
-`.exclude_from_weld()`, `.weld_quality(...)`, and `.outline(|size| path)`.
+New convenience DSL: `.stroke(paint).stroke_width(w)`, `.no_stroke()`, `.no_fill()`,
+`.weld(Weld::shape())`, `.weld(Weld::borders())`, `.weld(w.morph(t))`,
+`.weld(Weld::off())`, `.unwelded()`, `.weld(w.quality(q))`, and
+`.outline(|size| path)`.
 
 A shared vector outline is a different operation, `.union(fill)`: it unions
-the children's outlines and leaves each child's paint alone. `without_weld()`
+the children's outlines and leaves each child's paint alone. `.weld(Weld::off())`
 removes the material weld only.
-`no_fill()` and `no_border()` clear the current style; a later preset can restore
+`no_fill()` and `no_stroke()` clear the current style; a later preset can restore
 it. They are not hidden inheritance/reset sentinels.
 
 ### Three independent controls
@@ -134,8 +135,8 @@ retention is 32 MiB and at most 32 entries, with exact request equality and LRU
 replacement. Accounting conservatively includes retained source and result data;
 it is not a measurement of allocator RSS or GPU memory. Oversize bakes may be used
 without being retained. `Ui::weld_cache_stats()` and `clear_weld_cache()` expose
-this behavior. The new `resolve_scene_cached` accepts persistent text/weld caches;
-the compatibility resolver uses a temporary welding cache.
+this behavior. A `Resolver` keeps persistent text/weld caches; the one-shot
+`resolve(&spec)` uses a temporary welding cache.
 
 Default raster limits are 1,048,576 pixels, 100,000,000 estimated work units,
 1–64 sources and no image axis over 4096 pixels. The host's device scale wins over

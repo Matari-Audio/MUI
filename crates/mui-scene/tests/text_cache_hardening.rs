@@ -1,5 +1,5 @@
+use mui_scene::Resolver;
 use mui_scene::prelude::*;
-use mui_scene::{resolve_scene_with, TextCache};
 
 fn font() -> Font {
     Font::new(epaint_default_fonts::HACK_REGULAR).unwrap()
@@ -8,11 +8,11 @@ fn font() -> Font {
 #[test]
 fn an_animated_label_keeps_only_the_run_it_drew() {
     let font = font();
-    let mut cache = TextCache::default();
+    let mut cache = Resolver::default();
     for i in 0..100 {
         let spec = SceneSpec::new(text("x").text_size(10.0 + i as f64 * 0.001)).font(font.clone());
-        resolve_scene_with(&spec, &mut cache).unwrap();
-        assert_eq!(cache.len(), 1);
+        cache.resolve(&spec).unwrap();
+        assert_eq!(cache.text_runs(), 1);
     }
 }
 
@@ -20,9 +20,9 @@ fn an_animated_label_keeps_only_the_run_it_drew() {
 fn live_text_updates_preserve_frames_and_explicit_labels() {
     let tree = text("0.0 dB")
         .reserve("-88.8 dB")
-        .label("Gain readout")
+        .named("Gain readout")
         .id("readout");
-    let mut scene = resolve_scene(&SceneSpec::new(tree).font(font())).unwrap();
+    let mut scene = resolve(&SceneSpec::new(tree).font(font())).unwrap();
     let before = scene.surface("readout").unwrap().frame;
     scene.set_text("readout", "-12.4 dB").unwrap();
     let after = scene.surface("readout").unwrap();

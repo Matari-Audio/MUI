@@ -1,0 +1,32 @@
+[package]
+name = "mui-baseview"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# A native window: nothing here builds for wasm.
+[dependencies]
+mui = { workspace = true, features = ["gpu-effects"] }
+baseview = { package = "baseview-truce", version = "0.1.1-truce.13" }
+# Frame skipping and macOS view anchoring. Despite the name it knows no truce:
+# its only deps are raw-window-handle 0.5, objc (macOS) and windows-sys.
+truce-gui-utils = "6.3"
+keyboard-types = { version = "0.7", default-features = false }
+# baseview's handles are raw-window-handle 0.5.
+raw-window-handle = "0.5"
+# mui-vello picks no backend; the window that owns the device does.
+wgpu = { workspace = true, features = ["wgsl", "vulkan", "gles", "metal", "dx12"] }
+
+# baseview does not own an X11 selection; arboard keeps one alive.
+[target.'cfg(target_os = "linux")'.dependencies]
+arboard = { version = "3.6", default-features = false }
+# The window's accessibility tree over AT-SPI; needs no window handle.
+accesskit_unix = "0.22"
+mui-access.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+epaint_default_fonts.workspace = true

@@ -1,5 +1,15 @@
 # MUI rendering investigation — 2026-09-20
 
+> **History.** Written when MUI's GPU path was `vello_hybrid`. It no longer
+> is: the GPU path is now classic Vello (vendored at `vendor/vello`, wgpu 30)
+> behind `mui_vello::effects::GpuRenderer`, and the CPU path is `vello_cpu`.
+> The measurements below are kept as taken; "production backend" and "Pinned
+> Hybrid" mean the backend of that time.
+>
+> `docs/render-lab/` (about 4 MB of GPUI-versus-Vello fixtures, PNGs and
+> their RESULTS.md write-ups, nothing in code or tests read them) was deleted
+> after `693f6d2`. Recover it with `git checkout 693f6d2 -- docs/render-lab`.
+
 ## Decision
 
 Aim for order-of-magnitude savings by avoiding repeated work and choosing the appropriate rendering pipeline for the workload. A global renderer substitution alone is not sufficient. Keep the production backend until visual parity, device support, and actual KURV workloads justify changing it.
@@ -8,7 +18,7 @@ Target: a four-core laptop, integrated graphics, 8 GB RAM, 1080p at 60 Hz, with 
 
 ## Repository and evidence state
 
-The investigation starts from MUI `5942d19` (0.3.2), after the shape/layout integration and first optimization pass. KURV was integrated at `8aa6e8a`, using that MUI revision. MUI's relevant production path is Vello Hybrid; old GPUI experiments do not describe KURV's active renderer. Current KURV work must be audited separately before changing its pin.
+The investigation starts from MUI `5942d19` (0.3.2), after the shape/layout integration and first optimization pass. KURV was integrated at `8aa6e8a`, using that MUI revision. MUI's relevant production path was then Vello Hybrid; old GPUI experiments do not describe KURV's active renderer. Current KURV work must be audited separately before changing its pin.
 
 A temporary research worktree and its raw logs disappeared during this investigation. This persistent branch restores the root-cause fix and the core benchmark improvements. Earlier retention/atlas/readout measurements are explicitly provisional below: they survive in investigation notes, but their original logs and patches are unavailable. New evidence in `rendering-evidence/` is reproducible from this branch. Do not mix those evidence levels.
 

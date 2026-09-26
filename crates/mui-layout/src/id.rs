@@ -42,13 +42,26 @@ enum Repr {
 pub struct Id(Repr);
 
 impl Id {
-    /// Name a root: `Id::of("osc")`.
+    /// Name a root: `Id::of("osc")`. Names starting with `/` belong to the
+    /// runtime (tree paths, `/tip`); a debug build refuses them here. The
+    /// `From` conversions don't: a string can be a runtime id read back
+    /// from the scene (`ui.get(&surface.key)`), and it must reach its node.
     ///
     /// ```
     /// use mui_layout::Id;
     /// assert_eq!(&*Id::of("osc"), "osc");
     /// ```
     pub fn of(name: &str) -> Self {
+        debug_assert!(
+            !name.starts_with('/'),
+            "{name:?}: ids starting with `/` are reserved for the runtime"
+        );
+        Self::runtime(name)
+    }
+
+    /// A name the runtime owns, which may start with `/`: the tooltip's
+    /// `/tip`. Application code names nodes with [`Id::of`].
+    pub fn runtime(name: &str) -> Self {
         if name.len() <= INLINE {
             let mut buf = [0u8; INLINE];
             buf[..name.len()].copy_from_slice(name.as_bytes());
@@ -59,6 +72,19 @@ impl Id {
         } else {
             Self(Repr::Long(Arc::from(name)))
         }
+    }
+
+    /// Whether `key` is an application's id rather than a tree path (`/0/2`,
+    /// or `""` for the root) or a name the runtime owns (`/tip`). The one
+    /// copy of the rule.
+    ///
+    /// ```
+    /// use mui_layout::Id;
+    /// assert!(Id::is_named("osc/3"));
+    /// assert!(!Id::is_named("/0/2") && !Id::is_named(""));
+    /// ```
+    pub fn is_named(key: &str) -> bool {
+        !(key.is_empty() || key.starts_with('/'))
     }
 
     /// The whole name, `/`-joined.
@@ -94,6 +120,17 @@ impl Id {
     /// assert_eq!(&*rack.slot(12), "rack/12");
     /// ```
     pub fn slot(&self, n: usize) -> Self {
+        Self::runtime_slot(self, n)
+    }
+
+    /// The runtime key of unnamed child `n` of the node keyed `parent`:
+    /// `parent/n`, built in place (`/0/2` under an unnamed root).
+    ///
+    /// ```
+    /// use mui_layout::Id;
+    /// assert_eq!(&*Id::runtime_slot("/0", 12), "/0/12");
+    /// ```
+    pub fn runtime_slot(parent: &str, n: usize) -> Self {
         // usize::MAX is 20 digits.
         let mut digits = [0u8; 20];
         let mut i = digits.len();
@@ -106,13 +143,16 @@ impl Id {
                 break;
             }
         }
-        self.join(std::str::from_utf8(&digits[i..]).unwrap_or_default())
+        Self::joined(
+            parent,
+            std::str::from_utf8(&digits[i..]).unwrap_or_default(),
+        )
     }
 
     /// One more segment from a permanent, non-reused model entity ID.
     /// Unlike a display index, this value must remain unchanged on reorder,
     /// reparent or rename. The caller owns allocation/generation of entity IDs.
-    /// Keep display names in `.label(..)`, not in this identity path.
+    /// Keep display names in `.named(..)`, not in this identity path.
     ///
     /// ```
     /// use mui_layout::Id;
@@ -145,7 +185,10 @@ impl Id {
     }
 
     fn join(&self, part: &str) -> Self {
-        let head = self.as_str();
+        Self::joined(self, part)
+    }
+
+    fn joined(head: &str, part: &str) -> Self {
         let len = head.len() + 1 + part.len();
         if len <= INLINE {
             let mut buf = [0u8; INLINE];
@@ -207,17 +250,17 @@ impl std::hash::Hash for Id {
 }
 impl From<&str> for Id {
     fn from(s: &str) -> Self {
-        Self::of(s)
+        Self::runtime(s)
     }
 }
 impl From<&String> for Id {
     fn from(s: &String) -> Self {
-        Self::of(s)
+        Self::runtime(s)
     }
 }
 impl From<String> for Id {
     fn from(s: String) -> Self {
-        Self::of(&s)
+        Self::runtime(&s)
     }
 }
 impl From<&Id> for Id {
@@ -244,6 +287,23 @@ mod tests {
         assert_ne!(Id::of("osc").slot(3), Id::of("osc").slot(30));
         assert_ne!(Id::of("osc").field("3"), Id::of("osc3"));
         assert_eq!(Id::of("osc").slot(0).slot(10).as_str(), "osc/0/10");
+    }
+
+    /// `/` names are the runtime's: `Id::of` refuses one, `Id::runtime`
+    /// makes one.
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "reserved for the runtime")]
+    fn a_leading_slash_is_the_runtimes() {
+        assert_eq!(Id::runtime("/tip").as_str(), "/tip");
+        let _ = Id::of("/tip");
+    }
+
+    #[test]
+    fn a_runtime_id_read_back_as_a_string_converts() {
+        let key = Id::runtime_slot("/0", 0).as_str().to_owned();
+        assert_eq!(Id::from(&key), Id::runtime(&key));
+        assert_eq!(Id::from(key.as_str()), Id::runtime(&key));
     }
 
     /// The whole point: the hot path -- one id per slot per field, every

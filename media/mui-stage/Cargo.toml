@@ -1,0 +1,31 @@
+[package]
+name = "mui-stage"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "GPU trailer stage for MUI: layers on lit, extruded 3D slabs, WGSL backgrounds, bloom and film post, subframe motion blur."
+
+# An offline renderer picks its own backends (the default `backends` feature),
+# unlike mui-vello, which renders into whatever device a plugin host made. A
+# library consumer that owns wgpu turns defaults off and picks its own.
+[features]
+default = ["backends"]
+backends = ["wgpu/vulkan", "wgpu/gles", "wgpu/metal", "wgpu/dx12"]
+
+[dependencies]
+mui-scene.workspace = true
+mui-geometry.workspace = true
+mui-text.workspace = true
+mui-vello = { workspace = true, features = ["gpu-effects"] }
+wgpu = { workspace = true, features = ["wgsl"] }
+pollster.workspace = true
+bytemuck = "1"
+
+[dev-dependencies]
+mui.workspace = true
+epaint_default_fonts.workspace = true
+png.workspace = true
+
+[lints]
+workspace = true

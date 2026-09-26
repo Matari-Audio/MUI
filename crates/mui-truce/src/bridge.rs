@@ -3,10 +3,18 @@
 //! the next tree reads.
 use std::sync::Arc;
 
-use mui::scene::El;
+use mui::layout::Id;
+use mui::scene::{El, IntoEl};
 use mui::{Edit, Ui};
 use truce_core::editor::PluginContext;
 use truce_params::{ParamFlags, ParamInfo, ParamRange, Params};
+
+/// The widget id [`Bridge::bind`] gives parameter `param`: `param/<id>`.
+/// Derived, never typed, so the gesture a widget reports is always the one
+/// its parameter listens for.
+pub fn widget_id(param: impl Into<u32>) -> Id {
+    Id::of("param").entity(u64::from(param.into()))
+}
 
 /// The editor's side of the plugin: its parameter store, the host's gesture
 /// channel while the window is open, and the gestures that channel owes an
@@ -147,12 +155,14 @@ impl<P: Params + ?Sized> Bridge<P> {
         changed
     }
 
-    /// Build `widget` bound to parameter `param`: `control` gets the
-    /// normalized value to draw and edit, and whatever it leaves there goes
-    /// to the host inside the gesture `Ui` reported for `widget`.
+    /// Build the widget bound to parameter `param`: `control` gets the
+    /// widget id ([`widget_id`]) and the normalized value to draw and edit,
+    /// and whatever it leaves there goes to the host inside the gesture
+    /// `Ui` reported for that id. It returns anything that becomes an `El`:
+    /// a widget's whole `Response`, or a tree of its own.
     ///
     /// ```ignore
-    /// let gain = bridge.bind(ui, "gain", P::Gain, |ui, v| knob(ui, "gain", "Gain", v, 0.0..=1.0).0.into());
+    /// let gain = bridge.bind(ui, P::Gain, |ui, id, v| knob(ui, id, "Gain", v, 0.0..=1.0));
     /// ```
     ///
     /// A drag is `Begin` .. values .. `End`. A change with no gesture open --
@@ -161,12 +171,36 @@ impl<P: Params + ?Sized> Bridge<P> {
     /// a frame later is dropped. Read-only and unknown parameters draw but
     /// never reach the host. A gesture whose parameter no `bind` of a build
     /// names -- its control dropped out of the tree -- ends with that build.
-    pub fn bind(
+    ///
+    /// One parameter bound twice (a knob and a value field) needs two widget
+    /// ids: give the second one its own with [`Bridge::bind_as`].
+    pub fn bind<R: IntoEl>(
         &mut self,
         ui: &mut Ui,
-        widget: &str,
         param: impl Into<u32>,
-        control: impl FnOnce(&mut Ui, &mut f64) -> El,
+        control: impl FnOnce(&mut Ui, Id, &mut f64) -> R,
+    ) -> El {
+        let id = param.into();
+        self.bind_as(ui, id, widget_id(id), control)
+    }
+
+    /// [`Bridge::bind`] under the widget id `widget` instead of
+    /// [`widget_id`]`(param)`, for a second control on the same parameter:
+    /// two widgets under one id are a duplicate key, and the tree stops
+    /// resolving. Gestures still bracket by parameter, whichever control
+    /// made them.
+    ///
+    /// ```ignore
+    /// let knob = bridge.bind(ui, P::Gain, |ui, id, v| knob(ui, id, "Gain", v, 0.0..=1.0));
+    /// let field = widget_id(P::Gain).field("value");
+    /// let entry = bridge.bind_as(ui, P::Gain, field, |ui, id, v| number(ui, id, v));
+    /// ```
+    pub fn bind_as<R: IntoEl>(
+        &mut self,
+        ui: &mut Ui,
+        param: impl Into<u32>,
+        widget: Id,
+        control: impl FnOnce(&mut Ui, Id, &mut f64) -> R,
     ) -> El {
         let id = param.into();
         self.bound.push(id);
@@ -177,11 +211,11 @@ impl<P: Params + ?Sized> Bridge<P> {
             .filter(|info| !info.flags.contains(ParamFlags::READONLY))
             .map(|info| info.range)
         else {
-            return control(ui, &mut value);
+            return control(ui, widget, &mut value).into_el();
         };
         // At most a cancel's End, an End and a Begin reach one id per frame.
         let mut edges = [None; 4];
-        for (slot, edit) in edges.iter_mut().zip(ui.edits_for(widget)) {
+        for (slot, edit) in edges.iter_mut().zip(ui.edits_for(&widget)) {
             *slot = Some(edit);
         }
         let atomic = edges == [Some(Edit::Begin), Some(Edit::End), None, None] && !self.is_open(id);
@@ -202,7 +236,7 @@ impl<P: Params + ?Sized> Bridge<P> {
                 }
             }
         }
-        let el = control(ui, &mut value);
+        let el = control(ui, widget, &mut value).into_el();
         if value.to_bits() != before.to_bits() && value.is_finite() {
             if self.is_open(id) {
                 self.set(id, range, value);
@@ -221,9 +255,30 @@ impl<P: Params + ?Sized> Bridge<P> {
         el
     }
 
-    /// After a build: end the gestures no `bind` in it named.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn end_unbound(&mut self) {
+    /// [`Bridge::bind`] for a switch: `control` edits a `bool`, sent as
+    /// normalized 0 or 1.
+    ///
+    /// ```ignore
+    /// let bypass = bridge.bind_bool(ui, P::Bypass, |ui, id, on| toggle(ui, id, "Bypass", on));
+    /// ```
+    pub fn bind_bool<R: IntoEl>(
+        &mut self,
+        ui: &mut Ui,
+        param: impl Into<u32>,
+        control: impl FnOnce(&mut Ui, Id, &mut bool) -> R,
+    ) -> El {
+        self.bind(ui, param, |ui, id, v| {
+            let mut on = *v >= 0.5;
+            let el = control(ui, id, &mut on).into_el();
+            *v = f64::from(u8::from(on));
+            el
+        })
+    }
+
+    /// After a build: end the gestures no `bind` in it named. `MuiEditor`
+    /// calls it; a host that drives the bridge itself calls it after every
+    /// build, or a gesture whose control left the tree never ends.
+    pub fn end_unbound(&mut self) {
         while let Some(&(id, ..)) = self.open.iter().find(|(id, ..)| !self.bound.contains(id)) {
             self.end(id);
         }

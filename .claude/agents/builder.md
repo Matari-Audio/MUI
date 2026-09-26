@@ -19,13 +19,19 @@ Environment:
   any, for every cargo command.
 - Prefer Bash (cat, sed -n, grep, python3 heredoc scripts) for reading and
   editing. The shell errors on unquoted globs: quote them.
-- Vello sources for reference are under
-  ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ (vello_hybrid-0.2.0,
-  vello_cpu-0.2.0, vello_common-0.2.0, glifo-0.3.0, vello-0.10.0).
+- The GPU path is classic Vello, vendored and patched at `vendor/vello`
+  (0.10.0 ported to wgpu 30; `vendor/vello/PATCHES.md` lists the MUI
+  patches). Read that, not the registry copy. The CPU path's sources are
+  under ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ (vello_cpu-0.2.0,
+  vello_common-0.2.0, glifo-0.3.0). `vello_hybrid` is no longer used.
+- `media/` (mui-stage, mui-reel, mui-motion-bridge) is its own workspace:
+  `cargo test --manifest-path media/Cargo.toml`.
 - Other builders work in the SAME worktree at the same time on other crates.
   Touch only the files your task names. Never run git commands that discard
   work (reset --hard, checkout --, restore, clean, stash drop). Commit only
-  your own paths with `git add <paths> && git commit -m ...`; if
+  your own paths with `git commit -m ... -- <paths>` (new files: `git add`
+  them in the same command). Never leave anything staged: the index is
+  shared and another builder's commit sweeps it in. If
   `.git/index.lock` exists, wait a few seconds and retry. Commit early and
   often. Commit messages end with the line
   `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`.

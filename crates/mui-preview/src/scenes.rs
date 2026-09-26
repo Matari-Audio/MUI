@@ -39,6 +39,7 @@ pub fn all() -> Vec<Box<dyn PreviewScene>> {
         Box::new(Scrolling::default()),
         Box::new(Fields::default()),
         Box::new(Picker::default()),
+        Box::new(OklchScene::default()),
         Box::new(Tips),
         Box::new(Curve::default()),
         Box::new(CurveEditor::default()),
@@ -84,7 +85,7 @@ impl PreviewScene for Frosted {
                 .radius(8.0)
                 .fill(fill)
         };
-        let dialog = column([
+        let dialog = col([
             text("Discard this take?"),
             text("Everything since the last save is lost.").fill(Role::Dim),
             row([
@@ -99,13 +100,13 @@ impl PreviewScene for Frosted {
         .fill(Role::Surface)
         .elevation(Elevation::Floating)
         .id("dialog");
-        let dim = overlay([dialog])
+        let dim = stack([dialog])
             .full()
             .center()
             .fill(Color::oklcha(0.0, 0.0, 0.0, 0.45))
             .backdrop_blur(8.0)
             .id("dim");
-        overlay([busy, dim]).id("frosted")
+        stack([busy, dim]).id("frosted")
     }
 }
 
@@ -120,15 +121,15 @@ impl PreviewScene for PillTab {
         "Boolean union first, fillets second. The inner shell is a parallel offset of the merged outline."
     }
     fn specimen(&mut self, _: &mut Ui) -> El {
-        let control = |id: &str| leaf(28.0, 28.0).pill().fill(Role::Primary).id(id);
-        let tab = column([control("plus"), control("phase"), control("warp")])
+        let control = |id: &str| block(28.0, 28.0).pill().fill(Role::Primary).id(id);
+        let tab = col([control("plus"), control("phase"), control("warp")])
             .gap(10.0)
             .pad(22.0)
-            .min_width(92.0)
+            .min_w(92.0)
             .align(Align::Center)
             .id("tab")
             .shell(12.0, Role::Raised);
-        column([tab, leaf(520.0, 230.0).id("panel")])
+        col([tab, block(520.0, 230.0).id("panel")])
             .align(Align::Start)
             .id("pill")
             .union(Role::Surface)
@@ -146,7 +147,7 @@ impl PreviewScene for ConstantThickness {
         "Each ring is a parallel offset of the ring outside it."
     }
     fn specimen(&mut self, _: &mut Ui) -> El {
-        leaf(320.0, 220.0)
+        block(320.0, 220.0)
             .radius(28.0)
             .fill(Role::Raised)
             .shell(12.0, Role::Field)
@@ -164,16 +165,16 @@ impl PreviewScene for SegmentedRow {
         "Segmented row"
     }
     fn about(&self) -> &'static str {
-        "One .join(): the gap closes, every seam goes square, and the strip's own corner rounds the two ends."
+        "One .segmented(): the gap closes, every seam goes square, and the strip's own corner rounds the two ends."
     }
     fn specimen(&mut self, _: &mut Ui) -> El {
         row((0..4).map(|i| {
-            leaf(70.0, 44.0)
+            block(70.0, 44.0)
                 .fill(if i == 1 { Role::Primary } else { Role::Raised })
                 .id(format!("cell-{i}"))
         }))
         .radius(22.0)
-        .join()
+        .segmented()
         .id("strip")
     }
 }
@@ -195,26 +196,31 @@ impl PreviewScene for Widgets {
         "Knob, slider, toggle, button. No thumb is placed: it sits where two flex weights put it."
     }
     fn specimen(&mut self, ui: &mut Ui) -> El {
-        let (go, clicked) = button(ui, "go", "Trigger");
+        let Response {
+            el: go,
+            changed: clicked,
+        } = button(ui, "go", "Trigger");
         self.clicks += usize::from(clicked);
-        column([
+        col([
             row([
                 knob(ui, "cutoff", "Cutoff", &mut self.cutoff, 0.0..=1.0)
-                    .0
-                    .el(),
+                    .el
+                    .into_el(),
                 knob(ui, "res", "Res", &mut self.res, 0.0..=1.0)
-                    .0
+                    .el
                     .variant(Variant::Soft)
                     .el(),
             ])
             .gap(L)
             .justify(Justify::Center),
             slider(ui, "gain", "Gain", &mut self.gain, -24.0..=6.0)
-                .0
-                .el(),
+                .el
+                .into_el(),
             row([
                 text("Bypass").fill(Role::Dim),
-                toggle(ui, "bypass", &mut self.bypass).0.el(),
+                toggle(ui, "bypass", "Bypass", &mut self.bypass)
+                    .el
+                    .into_el(),
                 spacer(),
                 text(format!("{}×", self.clicks)).fill(Role::Dim),
                 go.variant(Variant::Solid).el(),
@@ -224,7 +230,7 @@ impl PreviewScene for Widgets {
         ])
         .gap(M)
         .pad(L)
-        .width(300.0)
+        .w(300.0)
         .radius(20.0)
         .fill(Role::Surface)
         .id("widgets")
@@ -296,7 +302,7 @@ impl PreviewScene for GlyphAxes {
         "A variable-font outline rebuilt as geometry at every axis position. Type to change the glyph."
     }
     fn specimen(&mut self, _: &mut Ui) -> El {
-        leaf(Self::CARD, Self::CARD)
+        block(Self::CARD, Self::CARD)
             .radius(24.0)
             .fill(Role::Raised)
             .id("glyph-card")
@@ -305,14 +311,14 @@ impl PreviewScene for GlyphAxes {
         let mut rows = vec![
             text(self.source.clone()).fill(Role::Dim),
             slider(ui, "size", "size", &mut self.size, 24.0..=400.0)
-                .0
-                .el(),
+                .el
+                .into_el(),
         ];
         if self.axes.is_empty() {
             rows.push(text("no variation axes").fill(Role::Dim));
         }
         for (tag, min, max, value) in &mut self.axes {
-            rows.push(slider(ui, &**tag, tag, value, *min..=*max).0.el());
+            rows.push(slider(ui, &**tag, tag, value, *min..=*max).el.into_el());
         }
         rows
     }
@@ -330,10 +336,10 @@ impl PreviewScene for GlyphAxes {
             .map(|(t, _, _, v)| (t.as_str(), *v as f32))
             .collect();
         let path = mui_text::glyph_path(&self.font, self.glyph, self.size, &settings, 0.05).ok()?;
-        let b = mui::geometry::Bounds::from_points(path.flatten(0.05, 250_000).ok()?.concat())?;
-        let centre = mui::geometry::Point::new(
-            Self::CARD / 2.0 - (b.min.x + b.max.x) / 2.0,
-            Self::CARD / 2.0 - (b.min.y + b.max.y) / 2.0,
+        let b = mui::geometry::bounds(path.flatten(0.05, 250_000).ok()?.concat())?;
+        let centre = mui::geometry::Vec2::new(
+            Self::CARD / 2.0 - (b.x0 + b.x1) / 2.0,
+            Self::CARD / 2.0 - (b.y0 + b.y1) / 2.0,
         );
         Some(("glyph-card", path.rigid_transform(centre, 0.0).ok()?))
     }
@@ -375,15 +381,15 @@ impl PreviewScene for Scrolling {
                         g,
                         -24.0..=6.0,
                     )
-                    .0
-                    .el()
+                    .el
+                    .into_el()
                 });
-                let head = label(format!("octave {s}"))
+                let head = body(format!("octave {s}"))
                     .w(Len::Pct(100.))
-                    .pad_xy(0., 4.)
+                    .pad((0., 4.))
                     .fill(Role::Surface)
                     .sticky();
-                column(std::iter::once(head).chain(rows)).gap(S)
+                col(std::iter::once(head).chain(rows)).gap(S)
             })
             .collect();
         // Source-atop, so the ramp paints the surface colour back over the
@@ -395,7 +401,7 @@ impl PreviewScene for Scrolling {
                 (1.0, Role::Surface.into()),
             ],
         );
-        let bands = column(sections)
+        let bands = col(sections)
             .gap(M)
             .pad(M)
             .scroll()
@@ -406,7 +412,7 @@ impl PreviewScene for Scrolling {
             .id("scroll");
         // No fade here, so the bar reads the whole way down; and a row, whose
         // bar runs along the bottom edge.
-        let presets = column((0..30).map(|i| text(format!("preset {i:02}")).pad_xy(8.0, 4.0)))
+        let presets = col((0..30).map(|i| text(format!("preset {i:02}")).pad((8.0, 4.0))))
             .pad(S)
             .scroll()
             .size(160.0, 340.0)
@@ -427,7 +433,7 @@ impl PreviewScene for Scrolling {
         .radius(12.0)
         .fill(Role::Surface)
         .id("tags");
-        column([row([bands, presets]).gap(M), tags]).gap(M)
+        col([row([bands, presets]).gap(M), tags]).gap(M)
     }
 }
 
@@ -447,8 +453,8 @@ impl PreviewScene for Fields {
         "Type, select, edit. Notes wrap; ctrl+Enter submits."
     }
     fn specimen(&mut self, ui: &mut Ui) -> El {
-        let name = text_input(ui, "field-name", &mut self.name).0;
-        let note = text_input(ui, "field-note", &mut self.note).0;
+        let name = text_input(ui, "field-name", &mut self.name).el;
+        let note = text_input(ui, "field-note", &mut self.note).el;
         let notes = self.notes.get_or_insert_with(|| {
             "A take recorded at 120 BPM, trimmed to the second chorus.\n\nWrapped lines, Up and Down between them, and the wheel scrolls past the fourth row once there is more to read than fits.".to_owned()
         });
@@ -457,20 +463,23 @@ impl PreviewScene for Fields {
             rows: 4,
             ..TextOpts::default()
         };
-        let (notes, edit) = text_edit(ui, "field-notes", notes, opts);
+        let Response {
+            el: notes,
+            changed: edit,
+        } = text_edit(ui, "field-notes", notes, opts);
         self.submits += usize::from(edit.submitted);
-        column([
-            label("name"),
+        col([
+            body("name"),
             name,
-            label("note"),
+            body("note"),
             note,
-            label("notes"),
+            body("notes"),
             notes,
             text(format!("name = {}, submitted {}x", self.name, self.submits)).fill(Role::Dim),
         ])
         .gap(S)
         .pad(L)
-        .width(320.0)
+        .w(320.0)
         .radius(16.0)
         .fill(Role::Surface)
         .id("fields")
@@ -492,6 +501,22 @@ impl Default for Picker {
         }
     }
 }
+#[derive(Default)]
+pub struct OklchScene {
+    picker: OklchPicker,
+}
+impl PreviewScene for OklchScene {
+    fn name(&self) -> &'static str {
+        "OKLCH picker"
+    }
+    fn about(&self) -> &'static str {
+        "Four layouts, four formats, one OKLCH color."
+    }
+    fn specimen(&mut self, ui: &mut Ui) -> El {
+        oklch_picker(ui, "oklch", &mut self.picker).el
+    }
+}
+
 impl PreviewScene for Picker {
     fn name(&self) -> &'static str {
         "Picker"
@@ -500,13 +525,13 @@ impl PreviewScene for Picker {
         "Drag the square and strips. Drag a number, double-click to type."
     }
     fn specimen(&mut self, ui: &mut Ui) -> El {
-        let (picker, _) = color_picker(ui, "pick-tint", &mut self.tint, true);
-        let (bpm, _) = drag_value(ui, "pick-bpm", &mut self.bpm, 20.0..=300.0);
+        let picker = color_picker(ui, "pick-tint", &mut self.tint, ColorOpts { alpha: true }).el;
+        let bpm = drag_value(ui, "pick-bpm", "Tempo", &mut self.bpm, 20.0..=300.0).el;
         let bpm = bpm.value_text(format!("{:.1} BPM", self.bpm));
-        let (gain, _) = drag_value(ui, "pick-gain", &mut self.gain, -60.0..=12.0);
-        column([
+        let gain = drag_value(ui, "pick-gain", "Gain", &mut self.gain, -60.0..=12.0).el;
+        col([
             picker,
-            row([label("tempo"), bpm.el(), label("gain"), gain.el()])
+            row([body("tempo"), bpm.el(), body("gain"), gain.el()])
                 .gap(S)
                 .align(Align::Center),
         ])
@@ -529,9 +554,9 @@ impl PreviewScene for Tips {
         "Rest on a button for a tip. Hold the last one and the menu drops in under it -- nothing is placed."
     }
     fn specimen(&mut self, ui: &mut Ui) -> El {
-        let (save, _) = button(ui, "tip-save", "Save");
-        let (revert, _) = button(ui, "tip-revert", "Revert");
-        let (more, _) = button(ui, "tip-more", "Hold for more");
+        let save = button(ui, "tip-save", "Save").el;
+        let revert = button(ui, "tip-revert", "Revert").el;
+        let more = button(ui, "tip-more", "Hold for more").el;
         let (save, revert, more) = (
             save.el(),
             revert.variant(Variant::Outline).el(),
@@ -541,14 +566,14 @@ impl PreviewScene for Tips {
         // The menu is an ordinary child under the button that opened it, not a
         // float at a hand-measured offset: .gap(M) supplies the distance, so a
         // fourth button or a different spacing scale reflows it.
-        let card = column([
+        let card = col([
             save.tip("Write the preset to disk"),
             revert.tip("Throw away every edit since the last save"),
             more,
         ])
         .when(held, |c| {
             c.push(
-                column([text("Rename"), text("Duplicate"), text("Delete")])
+                col([text("Rename"), text("Duplicate"), text("Delete")])
                     .gap(S)
                     .pad(M)
                     .radius(12.0)
@@ -558,11 +583,11 @@ impl PreviewScene for Tips {
         })
         .gap(M)
         .pad(L)
-        .width(260.0)
+        .w(260.0)
         .radius(16.0)
         .fill(Role::Surface)
         .id("tips-card");
-        overlay([card]).id("tips")
+        stack([card]).id("tips")
     }
 }
 
@@ -605,11 +630,11 @@ impl PreviewScene for Curve {
         .size(320.0, 160.0)
         .radius(12.0)
         .fill(Role::Field);
-        column([
+        col([
             plot,
             slider(ui, "knee", "Cutoff", &mut self.cutoff, 0.0..=1.0)
-                .0
-                .el(),
+                .el
+                .into_el(),
         ])
         .gap(M)
         .pad(L)
@@ -634,7 +659,10 @@ impl PreviewScene for CurveEditor {
         "curve(ui, id, &mut Curve): drag a knot or a tension handle. Shift is the fine drag, Alt at the press locks an axis, and a knot clamps between its neighbours."
     }
     fn specimen(&mut self, ui: &mut Ui) -> El {
-        let (plot, edit) = curve(ui, "env", &mut self.env);
+        let Response {
+            el: plot,
+            changed: edit,
+        } = curve(ui, "env", &mut self.env);
         self.last = edit.or(self.last);
         let over = ui.tag("env").map(str::to_owned);
         let readout = match (&over, self.last) {
@@ -643,7 +671,7 @@ impl PreviewScene for CurveEditor {
             (None, Some(CurveEdit::Tension(j, h))) => format!("last bent segment {j} ({h:?})"),
             (None, None) => "drag a knot".to_owned(),
         };
-        column([
+        col([
             plot.size(320.0, 180.0).radius(12.0).fill(Role::Field),
             row([
                 text(readout).fill(Role::Dim),
@@ -653,7 +681,7 @@ impl PreviewScene for CurveEditor {
         ])
         .gap(M)
         .pad(L)
-        .width(360.0)
+        .w(360.0)
         .radius(16.0)
         .fill(Role::Surface)
         .id("curve-editor")
@@ -685,15 +713,20 @@ impl PreviewScene for BinSpectrum {
         "Bins"
     }
     fn about(&self) -> &'static str {
-        "bins(ui, id, &Bins): draw across the bars to paint an additive spectrum. Shift is fine, a secondary click resets one, and with the focus here the arrows select and nudge. The cap line is the live level an operator chain would produce."
+        "bins(ui, id, &mut Bins): draw across the bars to paint an additive spectrum. Shift is fine, a secondary click resets one, and with the focus here the arrows select and nudge. The cap line is the live level an operator chain would produce."
     }
     fn controls(&mut self, ui: &mut Ui) -> Vec<El> {
-        vec![row![
-            caption("Log axis"),
-            spacer(),
-            toggle(ui, "bins-log", &mut self.log).0.size(S).el(),
+        vec![
+            row![
+                caption("Log axis"),
+                spacer(),
+                toggle(ui, "bins-log", "Log axis", &mut self.log)
+                    .el
+                    .size(S)
+                    .el(),
+            ]
+            .align(Align::Center),
         ]
-        .align(Align::Center)]
     }
     fn specimen(&mut self, ui: &mut Ui) -> El {
         // A tween that flips its target on arrival: the ripple never settles,
@@ -711,8 +744,8 @@ impl PreviewScene for BinSpectrum {
                 (f64::from(*v) * (0.2 + 0.8 * w)) as f32
             })
             .collect();
-        let model = Bins {
-            authored: &self.authored,
+        let mut model = Bins {
+            authored: &mut self.authored,
             live: Some(&live),
             x: if self.log {
                 BinAxis::Log
@@ -723,24 +756,10 @@ impl PreviewScene for BinSpectrum {
             ..Bins::default()
         };
         let hovered = bins_hover(ui, "spectrum", &model);
-        let (plot, edit) = bins(ui, "spectrum", &model);
-        match edit {
-            Some(BinEdit::Paint(painted)) => {
-                for (i, v) in painted {
-                    if let Some(slot) = self.authored.get_mut(i) {
-                        *slot = v;
-                        self.selected = i;
-                    }
-                }
-            }
-            Some(BinEdit::Reset(i)) => {
-                if let Some(slot) = self.authored.get_mut(i) {
-                    *slot = 0.0;
-                }
-            }
-            Some(BinEdit::Select(i)) => self.selected = i,
-            None => {}
-        }
+        // The widget paints, resets and selects in `model`; the selection
+        // comes back out for the readout.
+        let plot = bins(ui, "spectrum", &mut model).el;
+        self.selected = model.selected.unwrap_or(self.selected);
         // The readout is the caller's: the widget hands back an index and
         // this scene knows the partials are harmonics of 110 Hz.
         let shown = hovered.unwrap_or(self.selected);
@@ -750,7 +769,7 @@ impl PreviewScene for BinSpectrum {
             shown + 1,
             110.0 * (shown + 1) as f64
         );
-        column([
+        col([
             plot.size(360.0, 150.0).radius(12.0).fill(Role::Field),
             row([
                 text(readout).fill(Role::Dim),
@@ -765,7 +784,7 @@ impl PreviewScene for BinSpectrum {
         ])
         .gap(M)
         .pad(L)
-        .width(400.0)
+        .w(400.0)
         .radius(16.0)
         .fill(Role::Surface)
         .id("bin-spectrum")
@@ -814,15 +833,17 @@ impl PreviewScene for Hits {
         let dial = canvas(move |size| {
             let c = Point::new(size.width / 2.0, size.height / 2.0);
             let band = ring(c, 70.0, 44.0);
-            let mut draws = vec![Draw::fill(
-                band,
-                if lit.as_deref() == Some("band") {
-                    Role::Primary
-                } else {
-                    Role::Field
-                },
-            )
-            .tag("band")];
+            let mut draws = vec![
+                Draw::fill(
+                    band,
+                    if lit.as_deref() == Some("band") {
+                        Role::Primary
+                    } else {
+                        Role::Field
+                    },
+                )
+                .tag("band"),
+            ];
             for i in 0..3usize {
                 let a = std::f64::consts::TAU * i as f64 / 3.0;
                 let at = Point::new(c.x + 57.0 * a.cos(), c.y + 57.0 * a.sin());
@@ -841,7 +862,7 @@ impl PreviewScene for Hits {
         .square(200.0)
         .radius(100.0)
         .id("dial");
-        column([
+        col([
             dial,
             text(match (&tag, self.held) {
                 (Some(t), _) => format!("over {t}"),
@@ -892,7 +913,7 @@ impl PreviewScene for Swap {
         let pills = (0..3).map(|i| {
             let id = format!("pill-{i}");
             let target = ui.get(&id).drop_target;
-            let (pill, _) = button(ui, &id, &self.labels[i]);
+            let pill = button(ui, &id, &self.labels[i]).el;
             pill.variant(if target {
                 Variant::Solid
             } else {
@@ -955,15 +976,15 @@ impl PreviewScene for Images {
         .square(72)
         .radius(16.0)
         .fill(Role::Field);
-        column([
+        col([
             row([text("from_svg_data").fill(Role::Dim), spacer(), glyph])
                 .gap(M)
                 .align(Align::Center),
-            leaf(260.0, 64.0)
+            block(260.0, 64.0)
                 .pill()
                 .fill(Fill::Image(self.image.clone(), Fit::Cover))
                 .id("img-pill"),
-            leaf(260.0, 120.0)
+            block(260.0, 120.0)
                 .radius(16.0)
                 .fill(Fill::Image(self.image.clone(), Fit::Contain))
                 .id("img-card"),
@@ -1006,11 +1027,11 @@ impl PreviewScene for Wrapping {
         let para = text(PARA).when(cap > 0, |t| t.lines(cap));
         let pills = (0..12).map(|i| {
             row([text(format!("band {i}"))])
-                .pad_xy(12.0, 6.0)
+                .pad((12.0, 6.0))
                 .pill()
                 .fill(Role::Raised)
         });
-        column([
+        col([
             para,
             row(pills).gap(S).wrap().id("wrap-row"),
             row([caption("12 px").fill(Role::Dim), title("24 px")])
@@ -1020,7 +1041,7 @@ impl PreviewScene for Wrapping {
         ])
         .gap(M)
         .pad(L)
-        .width(self.width)
+        .w(self.width)
         .radius(20.0)
         .fill(Role::Surface)
         .id("wrap")
@@ -1028,11 +1049,11 @@ impl PreviewScene for Wrapping {
     fn controls(&mut self, ui: &mut Ui) -> Vec<El> {
         vec![
             slider(ui, "wrap-w", "width", &mut self.width, 160.0..=520.0)
-                .0
-                .el(),
+                .el
+                .into_el(),
             slider(ui, "wrap-n", "lines (0 = all)", &mut self.lines, 0.0..=6.0)
-                .0
-                .el(),
+                .el
+                .into_el(),
         ]
     }
 }
@@ -1067,7 +1088,7 @@ impl PreviewScene for Motion {
             .map(|i| {
                 let id = format!("card-{i}");
                 self.on[i] ^= ui.get(&id).clicked;
-                leaf(64.0, 64.0)
+                block(64.0, 64.0)
                     .radius(14.0)
                     .fill(if self.on[i] {
                         Role::Primary
@@ -1106,7 +1127,7 @@ impl PreviewScene for Motion {
         // A panel whose solved frame changes size: it grows, rounded, rather
         // than cutting to the new rectangle.
         self.wide ^= ui.get("mot-panel").clicked;
-        let panel = leaf(if self.wide { 260.0 } else { 120.0 }, 44.0)
+        let panel = block(if self.wide { 260.0 } else { 120.0 }, 44.0)
             .radius(22.0)
             .fill(Role::Raised)
             .animate_layout()
@@ -1117,7 +1138,7 @@ impl PreviewScene for Motion {
         // morphs between them.
         self.playing ^= ui.get("mot-transport").clicked;
         let playing = self.playing;
-        let transport = leaf(36.0, 36.0)
+        let transport = block(36.0, 36.0)
             .outline(move |s| {
                 let (w, h) = (s.width, s.height);
                 let p = |x: f64, y: f64| Point::new(x * w, y * h);
@@ -1142,7 +1163,7 @@ impl PreviewScene for Motion {
 
         // A toast that enters from below and fades out where it stood.
         self.toast ^= ui.get("mot-toast-btn").clicked;
-        let (toast_btn, _) = button(
+        let toast_btn = button(
             ui,
             "mot-toast-btn",
             if self.toast {
@@ -1150,7 +1171,8 @@ impl PreviewScene for Motion {
             } else {
                 "Show toast"
             },
-        );
+        )
+        .el;
         let toast = if self.toast {
             text("Saved to preset A")
                 .pad(S)
@@ -1159,7 +1181,7 @@ impl PreviewScene for Motion {
                 .appear(Appear::Slide(0.0, 16.0))
                 .id("mot-toast")
         } else {
-            leaf(0.0, 0.0)
+            block(0.0, 0.0)
         };
 
         // A rack named by slot index, reordered on click: each module keeps
@@ -1167,7 +1189,7 @@ impl PreviewScene for Motion {
         if ui.get("mot-rack-shuffle").clicked {
             self.rack.rotate_left(1);
         }
-        let (shuffle, _) = button(ui, "mot-rack-shuffle", "Rotate rack");
+        let shuffle = button(ui, "mot-rack-shuffle", "Rotate rack").el;
         let rack = row(self.rack.iter().enumerate().map(|(slot, &module)| {
             text(format!("M{module}"))
                 .pad(S)
@@ -1189,8 +1211,8 @@ impl PreviewScene for Motion {
                 .to(0.35, 1.0, Ease::EMPHASIZED)
                 .to(1.1, 0.3, Ease::IN_OUT)
                 .delay(f64::from(i) * 0.08);
-            let v = ui.play(&format!("mot-dot-{i}"), &k);
-            leaf(14.0, 14.0)
+            let v = ui.play(format!("mot-dot-{i}"), &k);
+            block(14.0, 14.0)
                 .pill()
                 .fill(Role::Primary)
                 .opacity(v as f32)
@@ -1198,17 +1220,17 @@ impl PreviewScene for Motion {
         .gap(S);
         if ui.get("mot-dots").clicked {
             for i in 0..5 {
-                ui.replay(&format!("mot-dot-{i}"));
+                ui.replay(format!("mot-dot-{i}"));
             }
         }
 
-        column([
+        col([
             row(cards).gap(M).justify(Justify::Center),
             row([
                 pie,
                 knob(ui, "mot-gain", "Gain", &mut self.gain, 0.0..=1.0)
-                    .0
-                    .el(),
+                    .el
+                    .into_el(),
                 transport,
             ])
             .gap(L)
@@ -1232,9 +1254,11 @@ impl PreviewScene for Motion {
         .id("motion")
     }
     fn controls(&mut self, ui: &mut Ui) -> Vec<El> {
-        vec![slider(ui, "sweep", "sweep", &mut self.sweep, 0.0..=1.0)
-            .0
-            .el()]
+        vec![
+            slider(ui, "sweep", "sweep", &mut self.sweep, 0.0..=1.0)
+                .el
+                .into_el(),
+        ]
     }
 }
 
@@ -1264,24 +1288,24 @@ impl PreviewScene for Cells {
             cell("first", Role::Field).order(-1),
             cell("e", Role::Raised),
         ];
-        column([
+        col([
             // min_col makes the declared 3 a ceiling: the same tree is three
             // columns on a wide window and one at 240.
             grid(3, cells).gap(S).min_col(120.0).id("grid"),
             row((0..3).map(|i| {
-                leaf(44.0, 24.0)
+                block(44.0, 24.0)
                     .pill()
                     .fill(Role::Raised)
                     .id(format!("ev-{i}"))
             }))
             .justify(Justify::SpaceEvenly)
-            .width(320.0)
+            .w(320.0)
             .id("evenly"),
             // A modal: nothing offers it a width, so it hugs. Its cells are
             // 90 px wide and its columns are 140, because `min_col` is a
             // minimum whether or not there is a window to drop columns
             // against -- the card grows, the cells do not shrink.
-            column([
+            col([
                 caption("hugging card, min_col(140)"),
                 grid(
                     2,
@@ -1330,15 +1354,15 @@ impl PreviewScene for Select {
         self.clipboard = s.to_owned();
     }
     fn specimen(&mut self, ui: &mut Ui) -> El {
-        let field = text_input(ui, "sel-field", &mut self.value).0;
-        column([
-            label("field"),
+        let field = text_input(ui, "sel-field", &mut self.value).el;
+        col([
+            body("field"),
             field,
             text(format!("clipboard = {}", self.clipboard)).fill(Role::Dim),
         ])
         .gap(S)
         .pad(L)
-        .width(320.0)
+        .w(320.0)
         .radius(16.0)
         .fill(Role::Surface)
         .id("select")
@@ -1417,13 +1441,13 @@ impl PreviewScene for Gestures {
             })
             .collect();
 
-        column([
+        col([
             knob(ui, "g-cutoff", "Cutoff", &mut self.cutoff, 0.0..=1.0)
-                .0
-                .el(),
+                .el
+                .into_el(),
             slider(ui, "g-gain", "Gain", &mut self.gain, -24.0..=6.0)
-                .0
-                .el(),
+                .el
+                .into_el(),
             row(chips).gap(S),
             row(slots).gap(S),
             row([
@@ -1444,7 +1468,7 @@ impl PreviewScene for Gestures {
         ])
         .gap(M)
         .pad(L)
-        .width(300.0)
+        .w(300.0)
         .radius(20.0)
         .fill(Role::Surface)
         .id("gestures")
@@ -1475,29 +1499,32 @@ impl PreviewScene for Switched {
         {
             self.fired += 1;
         }
-        let bypass = toggle(ui, "sw-bypass", &mut self.bypassed).0.size(S).el();
+        let bypass = toggle(ui, "sw-bypass", "Bypass", &mut self.bypassed)
+            .el
+            .size(S)
+            .el();
         let rack = row([knob(ui, "sw-cut", "Cutoff", &mut self.cutoff, 0.0..=1.0)
-            .0
-            .el()])
+            .el
+            .into_el()])
         .pad(M)
         .radius(12.0)
         .fill(Role::Field)
         // One call for both halves: the look and the gate.
-        .on(State::Disabled, |s| s.fill(Ink.alpha(0.04)))
-        .disabled(self.bypassed)
+        .on(State::Disabled, |s| s.fill(Role::Ink.alpha(0.04)))
+        .when(self.bypassed, Styled::disabled)
         .opacity(if self.bypassed { 0.4 } else { 1.0 })
         .id("sw-rack");
-        column([
-            row([label("bypass"), spacer(), bypass])
+        col([
+            row([body("bypass"), spacer(), bypass])
                 .gap(S)
                 .align(Align::Center),
             rack,
-            text_input(ui, "sw-query", &mut self.query).0,
+            text_input(ui, "sw-query", &mut self.query).el,
             caption(format!("shortcut fired {} times", self.fired)),
         ])
         .gap(M)
         .pad(L)
-        .width(300.0)
+        .w(300.0)
         .radius(20.0)
         .fill(Role::Surface)
         .id("switched")
@@ -1529,14 +1556,17 @@ pub fn editor() -> El {
         chip(n)
             .justify(Justify::Center)
             .w(clamp(64.0, 18.0, 120.0))
-            .pad_xy(0.0, 8.0)
+            .pad((0.0, 8.0))
             .radius(8.0)
-            .on(State::Hover, |s| s.stroke(Ink.alpha(0.12)))
+            .on(State::Hover, |s| s.stroke(Role::Ink.alpha(0.12)))
             .id(format!("tab-{n}"))
     };
     let knob = |i: usize| {
         tile(col![
-            leaf(40.0, 40.0).pill().fill(Primary).id(format!("k{i}")),
+            block(40.0, 40.0)
+                .pill()
+                .fill(Role::Primary)
+                .id(format!("k{i}")),
             caption(["cut", "res", "drv", "mix"][i]),
         ])
     };
@@ -1592,31 +1622,36 @@ impl PreviewScene for Effects {
 pub fn effects() -> El {
     // A knob arc is a conic gradient and nothing else: no path, no per-frame
     // geometry, and the value is the stop position.
-    let knob = leaf(96.0, 96.0)
+    let knob = block(96.0, 96.0)
         .pill()
         .fill(Gradient::conic(
             -135.0,
-            [(0.0, Primary), (0.7, Primary), (0.7, Field), (1.0, Field)],
+            [
+                (0.0, Role::Primary),
+                (0.7, Role::Primary),
+                (0.7, Role::Field),
+                (1.0, Role::Field),
+            ],
         ))
         .id("knob");
-    let glow = leaf(96.0, 96.0)
+    let glow = block(96.0, 96.0)
         .pill()
         .fill(Gradient::radial(
             (0.35, 0.3),
             0.7,
-            [(0.0, Primary), (1.0, Surface)],
+            [(0.0, Role::Primary), (1.0, Role::Surface)],
         ))
         .id("glow");
-    let key = leaf(96.0, 96.0)
+    let key = block(96.0, 96.0)
         .radius(12.0)
-        .fill(Field)
+        .fill(Role::Field)
         .elevation(Elevation::Raised)
         .id("key");
-    let pane = leaf(96.0, 96.0).preset(glass()).id("glass");
+    let pane = block(96.0, 96.0).preset(glass()).id("glass");
     row![knob, glow, key, pane]
         .gap(L)
         .pad(L)
-        .fill(Surface)
+        .fill(Role::Surface)
         .id("effects")
 }
 
@@ -1624,7 +1659,7 @@ pub fn effects() -> El {
 mod tests {
     #[cfg(feature = "cpu")]
     use super::effects;
-    use super::{editor, GlyphAxes};
+    use super::{GlyphAxes, editor};
     use mui::prelude::*;
     use mui::scene::Frame as LayoutFrame;
 
@@ -1645,8 +1680,7 @@ mod tests {
         use mui::vello::vello_cpu::{Pixmap, RenderContext, Resources};
         let (w, h) = (620u16, 160u16);
         let scene =
-            resolve_scene(&SceneSpec::new(effects()).offered(Size::new(w.into(), h.into())))
-                .unwrap();
+            resolve(&SceneSpec::new(effects()).offered(Size::new(w.into(), h.into()))).unwrap();
         let mut ctx = RenderContext::new(w, h);
         let mut res = Resources::default();
         mui::vello::paint(
@@ -1737,7 +1771,7 @@ mod tests {
             let tree = editor();
             let mut spec = SceneSpec::new(editor()).offered(Size::new(w, h));
             spec.font = Some(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
-            let scene = resolve_scene(&spec).unwrap();
+            let scene = resolve(&spec).unwrap();
             let frames = scene.layout.all();
             walk(&tree, frames, &mut 0, None);
             let top = scene.layout.frame("k0").unwrap().y;

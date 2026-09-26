@@ -1,84 +1,35 @@
 use crate::brush::Premul;
-use crate::{Brush, Channel, Color, Error, Weld, MAX_SOURCES};
+use crate::{Brush, Channel, Color, Error, MAX_SOURCES, Weld};
 
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct Point {
-    pub x: f64,
-    pub y: f64,
+pub use kurbo::{Point, Rect, Vec2};
+
+/// Finite and inside the ±1e7 range every weld coordinate is bounded to.
+pub(crate) trait Checked {
+    fn validate(self) -> Result<(), Error>;
 }
-impl Point {
-    pub const fn new(x: f64, y: f64) -> Self {
-        Self { x, y }
-    }
-    pub(crate) fn dot(self, b: Self) -> f64 {
-        self.x * b.x + self.y * b.y
-    }
-    pub(crate) fn cross(self, b: Self) -> f64 {
-        self.x * b.y - self.y * b.x
-    }
-    pub(crate) fn length(self) -> f64 {
-        self.dot(self).sqrt()
-    }
-    pub(crate) fn validate(self) -> Result<(), Error> {
-        if !self.x.is_finite() || !self.y.is_finite() || self.x.abs() > 1e7 || self.y.abs() > 1e7 {
+impl Checked for Vec2 {
+    fn validate(self) -> Result<(), Error> {
+        if !self.is_finite() || self.x.abs() > 1e7 || self.y.abs() > 1e7 {
             Err(Error::Invalid("shape coordinate"))
         } else {
             Ok(())
         }
     }
 }
-impl std::ops::Sub for Point {
-    type Output = Self;
-    fn sub(self, b: Self) -> Self {
-        Self::new(self.x - b.x, self.y - b.y)
+impl Checked for Point {
+    fn validate(self) -> Result<(), Error> {
+        self.to_vec2().validate()
     }
 }
-impl std::ops::Add for Point {
-    type Output = Self;
-    fn add(self, b: Self) -> Self {
-        Self::new(self.x + b.x, self.y + b.y)
-    }
-}
-impl std::ops::Mul<f64> for Point {
-    type Output = Self;
-    fn mul(self, b: f64) -> Self {
-        Self::new(self.x * b, self.y * b)
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Rect {
-    pub x0: f64,
-    pub y0: f64,
-    pub x1: f64,
-    pub y1: f64,
-}
-impl Rect {
-    pub const fn new(x0: f64, y0: f64, x1: f64, y1: f64) -> Self {
-        Self { x0, y0, x1, y1 }
-    }
-    pub fn width(self) -> f64 {
-        self.x1 - self.x0
-    }
-    pub fn height(self) -> f64 {
-        self.y1 - self.y0
-    }
-    pub(crate) fn validate(self) -> Result<(), Error> {
-        Point::new(self.x0, self.y0).validate()?;
+impl Checked for Rect {
+    fn validate(self) -> Result<(), Error> {
+        self.origin().validate()?;
         Point::new(self.x1, self.y1).validate()?;
         if self.width() <= 0.0 || self.height() <= 0.0 {
             Err(Error::Invalid("empty shape bounds"))
         } else {
             Ok(())
         }
-    }
-    pub(crate) fn union(self, b: Self) -> Self {
-        Self::new(
-            self.x0.min(b.x0),
-            self.y0.min(b.y0),
-            self.x1.max(b.x1),
-            self.y1.max(b.y1),
-        )
     }
 }
 
@@ -99,9 +50,7 @@ impl Geometry {
             Self::Contours(rings) => {
                 let mut points = rings.iter().flatten();
                 let p = *points.next()?;
-                Some(points.fold(Rect::new(p.x, p.y, p.x, p.y), |b, p| {
-                    Rect::new(b.x0.min(p.x), b.y0.min(p.y), b.x1.max(p.x), b.y1.max(p.y))
-                }))
+                Some(points.fold(Rect::from_points(p, p), |b, p| b.union_pt(*p)))
             }
         }
     }
@@ -110,42 +59,37 @@ impl Geometry {
             Self::RoundedRect { bounds: b, radius } => {
                 let (hx, hy) = (b.width() / 2.0, b.height() / 2.0);
                 let r = radius.min(hx).min(hy).max(0.0);
-                let q = Point::new(
+                let q = Vec2::new(
                     (p.x - (b.x0 + hx)).abs() - hx + r,
                     (p.y - (b.y0 + hy)).abs() - hy + r,
                 );
-                Point::new(q.x.max(0.0), q.y.max(0.0)).length() + q.x.max(q.y).min(0.0) - r
+                Vec2::new(q.x.max(0.0), q.y.max(0.0)).length() + q.x.max(q.y).min(0.0) - r
             }
             Self::Contours(rings) => {
-                let (mut distance, mut winding) = (f64::INFINITY, 0i64);
+                // Branch-free over edges so it vectorises: squared distances,
+                // one sqrt at the end (sqrt is monotone, so bit-identical).
+                let (mut d2, mut winding) = (f64::INFINITY, 0i64);
                 for ring in rings {
-                    for (a, b) in ring
-                        .iter()
-                        .zip(ring.iter().cycle().skip(1))
-                        .take(ring.len())
-                    {
-                        let v = *b - *a;
+                    let Some(&last) = ring.last() else { continue };
+                    let mut a = last;
+                    for &b in ring {
+                        let v = b - a;
                         let len = v.dot(v);
                         let t = if len > 0.0 {
-                            ((p - *a).dot(v) / len).clamp(0.0, 1.0)
+                            ((p - a).dot(v) / len).clamp(0.0, 1.0)
                         } else {
                             0.0
                         };
-                        distance = distance.min((p - (*a + v * t)).length());
-                        let cross = v.cross(p - *a);
-                        if a.y <= p.y && b.y > p.y && cross > 0.0 {
-                            winding += 1;
-                        }
-                        if a.y > p.y && b.y <= p.y && cross < 0.0 {
-                            winding -= 1;
-                        }
+                        let e = p - (a + v * t);
+                        d2 = d2.min(e.dot(e));
+                        let cross = v.cross(p - a);
+                        winding += i64::from((a.y <= p.y) & (b.y > p.y) & (cross > 0.0))
+                            - i64::from((a.y > p.y) & (b.y <= p.y) & (cross < 0.0));
+                        a = b;
                     }
                 }
-                if winding == 0 {
-                    distance
-                } else {
-                    -distance
-                }
+                let distance = d2.sqrt();
+                if winding == 0 { distance } else { -distance }
             }
         }
     }
@@ -164,7 +108,7 @@ impl Geometry {
                     if ring.len() < 3 {
                         return Err(Error::Invalid("contour needs at least three vertices"));
                     }
-                    for p in ring {
+                    for &p in ring {
                         p.validate()?;
                     }
                 }

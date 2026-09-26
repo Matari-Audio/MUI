@@ -1,5 +1,5 @@
 //! A ~1000-node stress tree: nested 8 deep, grids, wrapping rows, paragraphs.
-//! Times `resolve_scene_with` against the layout solve alone, at three shapes.
+//! Times `Resolver::resolve` against the layout solve alone, at three shapes.
 use std::alloc::{GlobalAlloc, Layout as AllocLayout, System};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
@@ -8,13 +8,18 @@ static ALLOCS: AtomicUsize = AtomicUsize::new(0);
 static COUNTER: AtomicUsize = AtomicUsize::new(0);
 static BYTES: AtomicUsize = AtomicUsize::new(0);
 struct Counting;
+// SAFETY: every method forwards to `System` with the caller's arguments
+// unchanged; the counter never allocates, so the GlobalAlloc contract is
+// System's.
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, l: AllocLayout) -> *mut u8 {
         ALLOCS.fetch_add(1, Ordering::Relaxed);
         BYTES.fetch_add(l.size(), Ordering::Relaxed);
+        // SAFETY: the caller upholds `GlobalAlloc::alloc`'s contract; forwarded as is.
         unsafe { System.alloc(l) }
     }
     unsafe fn dealloc(&self, p: *mut u8, l: AllocLayout) {
+        // SAFETY: the caller upholds `GlobalAlloc::dealloc`'s contract; forwarded as is.
         unsafe { System.dealloc(p, l) }
     }
 }
@@ -22,7 +27,7 @@ unsafe impl GlobalAlloc for Counting {
 static A: Counting = Counting;
 
 use mui_scene::prelude::*;
-use mui_scene::{resolve_scene_with, Limits, TextCache};
+use mui_scene::{Limits, Resolver};
 
 const PARA: &str = "A compact CSS-like DSL where everything aligns automatically and nothing is placed absolutely.";
 
@@ -31,9 +36,9 @@ fn count(n: &El) -> usize {
 }
 
 fn cell(i: usize) -> El {
-    column([
+    col([
         text(format!("p{i}")).text_size(11.0),
-        leaf(12.0, 12.0).fill(Role::Field).radius(3.0),
+        block(12.0, 12.0).fill(Role::Field).radius(3.0),
     ])
     .gap(4.0)
     .pad(4.0)
@@ -41,16 +46,16 @@ fn cell(i: usize) -> El {
     .id(format!("c{}", COUNTER.fetch_add(1, Ordering::Relaxed)))
 }
 
-fn block(depth: usize, i: usize) -> El {
+fn section(depth: usize, i: usize) -> El {
     if depth == 0 {
         return row([cell(i), cell(i + 1), text(PARA).lines(3).shrink(1.0)])
             .gap(6.0)
             .wrap();
     }
-    column([
+    col([
         row((0..3).map(|k| cell(i * 7 + k))).gap(6.0).wrap(),
         grid(3, (0..6).map(|k| cell(i * 11 + k))).gap(4.0),
-        block(depth - 1, i + 1),
+        section(depth - 1, i + 1),
     ])
     .gap(6.0)
     .pad(4.0)
@@ -58,7 +63,7 @@ fn block(depth: usize, i: usize) -> El {
 }
 
 fn tree() -> El {
-    column((0..4).map(|i| block(7, i)))
+    col((0..4).map(|i| section(7, i)))
         .gap(8.0)
         .pad(8.0)
         .fill(Role::Background)
@@ -112,22 +117,22 @@ fn main() {
             depth: 256,
             ..Limits::default()
         };
-        let mut cache = TextCache::default();
+        let mut cache = Resolver::default();
         let t = Instant::now();
-        let first = resolve_scene_with(&spec, &mut cache);
+        let first = cache.resolve(&spec);
         let cold = t.elapsed().as_secs_f64() * 1e3;
         match &first {
             Ok(s) => println!("  paint {} keys {}", s.paint.len(), s.surfaces().count()),
             Err(e) => println!("  error: {e}"),
         }
         for _ in 0..5 {
-            let _ = resolve_scene_with(&spec, &mut cache);
+            let _ = cache.resolve(&spec);
         }
         let (a0, b0) = (
             ALLOCS.load(Ordering::Relaxed),
             BYTES.load(Ordering::Relaxed),
         );
-        let _ = resolve_scene_with(&spec, &mut cache);
+        let _ = cache.resolve(&spec);
         println!(
             "  one warm resolve: {} allocations, {} KiB",
             ALLOCS.load(Ordering::Relaxed) - a0,
@@ -163,7 +168,7 @@ fn main() {
         let full: Vec<f64> = (0..30)
             .map(|_| {
                 let t = Instant::now();
-                let r = resolve_scene_with(&spec, &mut cache);
+                let r = cache.resolve(&spec);
                 let ms = t.elapsed().as_secs_f64() * 1e3;
                 std::hint::black_box(r.is_ok());
                 ms
@@ -181,7 +186,7 @@ fn main() {
                     |_e, _room| Size::new(40.0, 14.0),
                 );
                 let ms = t.elapsed().as_secs_f64() * 1e3;
-                std::hint::black_box(l.map(|l| l.all().len()).unwrap_or(0));
+                std::hint::black_box(l.map_or(0, |l| l.all().len()));
                 ms
             })
             .collect();

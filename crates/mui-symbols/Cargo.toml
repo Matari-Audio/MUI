@@ -1,0 +1,10 @@
+[package]
+name = "mui-symbols"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Material Symbols codepoints: generated char consts and a name lookup."
+
+[lints]
+workspace = true

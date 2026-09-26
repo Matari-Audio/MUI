@@ -240,6 +240,35 @@ fn cache_reuses_pixels_and_invalidates_material_changes() {
     assert_eq!(c.stats(), (1, 2));
 }
 #[test]
+fn many_live_bakes_all_stay_cached() {
+    // The old 32-entry cap rebuilt all 40 of these every frame.
+    let mut c = WeldCache::default();
+    let at = |i: usize| {
+        let mut r = request();
+        r.sources[1] = source(26.0 + i as f64, blue(), 4.0);
+        r
+    };
+    for _ in 0..3 {
+        for i in 0..40 {
+            c.get(&at(i)).unwrap();
+        }
+    }
+    assert_eq!(c.stats(), (80, 40), "a warm frame rebuilt");
+}
+#[test]
+fn a_hash_collision_is_a_miss_not_the_wrong_bake() {
+    let a = request();
+    let mut b = request();
+    b.sources[0].width += 1e-6; // same quantised key, different request
+    assert_eq!(a.key(), b.key());
+    let mut c = WeldCache::default();
+    let (x, y) = (c.get(&a).unwrap(), c.get(&b).unwrap());
+    assert!(!Arc::ptr_eq(&x, &y));
+    assert!(Arc::ptr_eq(&x, &c.get(&a).unwrap()));
+    assert!(Arc::ptr_eq(&y, &c.get(&b).unwrap()));
+    assert_eq!(c.stats(), (2, 2));
+}
+#[test]
 fn tiny_cache_never_retains_an_oversize_bake() {
     let mut c = WeldCache::with_limit(1);
     let _ = c.get(&request()).unwrap();
@@ -324,4 +353,15 @@ fn first_nonzero_morph_frame_cannot_pop_overlapping_antialias_edges() {
     for i in 0..4 {
         assert!((zero.0[i] - tiny.0[i]).abs() < 1e-7);
     }
+}
+
+#[test]
+fn colour_round_trips_through_the_color_crate() {
+    let c = Color::srgb(0.2, 0.6, 0.9, 0.5);
+    let peniko_like: color::AlphaColor<color::Srgb> = c.into();
+    let back = Color::from(peniko_like);
+    assert!(
+        c.0.iter().zip(back.0).all(|(a, b)| (a - b).abs() < 1e-5),
+        "{back:?}"
+    );
 }

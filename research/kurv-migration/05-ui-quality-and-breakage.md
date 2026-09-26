@@ -307,7 +307,7 @@ focus; **Bad** on nothing in this section.
   style. B's three hover sites become a preset.
 - Focus & keyboard: `.focusable()` and `Ui`'s Tab/Shift+Tab/Escape focus walk.
 - Accessibility: `mui-access` turns the resolved scene into an
-  `accesskit::TreeUpdate`, and `.role(Kind::Slider).label("Cutoff")` is on the
+  `accesskit::TreeUpdate`, and `.a11y(A11y::Slider).named("Cutoff")` is on the
   node, not a parallel annotation. Every widget sets it already.
 - IME: `Input::ime` carries the platform's four events, the preedit paints
   under the caret without joining the value, and `Frame::ime` places the
@@ -481,7 +481,7 @@ Do not let the rewrite lose these; B already lost most of them once.
     are 1,058 / 1,173 / 769 characters on single lines. Whatever those three
     lines mean is the curve editor's entire keyboard and pointer contract, and
     it cannot be reviewed in that shape.
-11. **Set roles and labels as you build.** `.role(Kind::Slider).label(..)` on
+11. **Set roles and labels as you build.** `.a11y(A11y::Slider).named(..)` on
     every parameter node, so `mui-access` publishes a real tree. The pinned
     stack had zero `accesskit`; there is no reason to ship that twice. Watch
     ROADMAP's node-identity hole: KURV renames and reorders constantly, so key

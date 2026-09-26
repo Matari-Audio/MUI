@@ -17,8 +17,10 @@ public function and a test behind it.
       Oklch palette with checked legibility, the tree walk to a z-ordered
       paint list, `Spring`.
 - [x] Input: hit testing against painted paths, capture, hover, click, drag.
-- [x] Vello: one `Canvas` trait over `vello_hybrid` and `vello_cpu`, CSS-angle
-      gradients, analytic blurred shadows, a CPU pixel snapshot test.
+- [x] Vello: one `Canvas` trait over classic `vello` (vendored, wgpu 30,
+      `effects::GpuRenderer`) and `vello_cpu`, CSS-angle gradients, analytic
+      blurred shadows, a CPU pixel snapshot test. (Shipped first over
+      `vello_hybrid`; that backend is gone, see MIGRATION.md.)
 - [x] `mui::Ui`: the per-frame runtime with spring-smoothed hover and press;
       `slider`, `knob`, `toggle`, `button` as compositions of flex shares.
 - [x] Preview: the gallery is one `mui` tree, sidebar included, its text
@@ -34,7 +36,7 @@ public function and a test behind it.
       leading edge for the length of its section, through the same second
       placement pass as a pin, and `Layout::min_size` / `Ui::min_size` report
       the intrinsic floor a host sizes its window against.
-- [x] Text-run cache across frames (`resolve_scene_with`, owned by `Ui`).
+- [x] Text-run cache across frames (the `Resolver` `Ui` owns).
 - [x] Glyph runs: text reaches Vello as a hinted run, not a filled outline;
       the font blob is interned so Vello's hinted-outline cache survives.
 - [x] Input: `Input` carries wheel, key presses and typed text; hits are
@@ -49,7 +51,7 @@ public function and a test behind it.
       rows, and text metrics (`ascent`, `x_height`, caret hit testing).
 - [x] Selection, copy, cut and paste in `text_input`, through
       `Frame::clipboard` / `Input::clipboard`.
-- [x] Motion: springs by response and damping, `.animate()`/`.transition()`
+- [x] Motion: springs by response and damping, `.animate()`/`.animate_with()`
       transitions that retarget mid-flight, and `Ui::tween`.
 - [x] Plugin parameter gestures: `Ui::edit` / `Frame::edits` bracket every
       capture, cancelled ones included.
@@ -60,8 +62,8 @@ public function and a test behind it.
       begin/set/end. `examples/gain-plugin` passes pluginval's editor tests.
 - [x] Images: `Image::rgba` + `Fill::Image` with `Cover`/`Contain`/`Fill`,
       and `Path::from_svg_data` for an icon's `d` attribute. `vello_cpu`
-      paints the pixmap; `vello_hybrid` uploads it once through `Gpu`'s
-      `Atlas` and paints by id.
+      paints the pixmap; classic `vello` uploads it into its image atlas
+      once and paints by id.
 - [x] AccessKit: `mui-access` turns a `ResolvedScene` into a `TreeUpdate`,
       and the preview feeds it to an `accesskit_winit::Adapter`.
 - [x] `mui_vello::PathCache` / `paint_cached`: measured at ~0.08 ms a frame
@@ -113,7 +115,7 @@ public function and a test behind it.
       `unicode-linebreak`, so CJK breaks between ideographs and a no-break
       space or an emoji ZWJ sequence holds together. A word wider than the
       line still overflows at a char, not a grapheme cluster.
-- [x] Real semantic roles: `.role(Kind::..)` / `.label(..)` on any node, set
+- [x] Real semantic roles: `.a11y(A11y::..)` / `.named(..)` on any node, set
       by every widget, so `mui-access` reports a named button and a slider
       with its range instead of a pile of groups, and the preview keeps an
       `accesskit_winit::Adapter` that publishes after each frame and serves
@@ -133,7 +135,7 @@ public function and a test behind it.
       `Xs..Xl` size scale off `Theme.control`, every widget returning a
       `Control` (`.variant .role .size .px .el`), faces derived from the
       palette rather than a colour table, `knob`'s raw `f64` size gone, and
-      `.join()` on a row or column.
+      `.segmented()` on a row or column.
 - [x] Corners as a theme vocabulary: `Corners { selector, field, box_,
       concave }` with `.radius(Corner::Field)`, and `CornerStyle::Squircle`
       restyling welds, shells and strokes alike (it gives up the analytic
@@ -289,8 +291,8 @@ public function and a test behind it.
 - [ ] No fuzzing or property campaigns over layout, welding or text input.
 - [ ] Kurv rewritten on MUI: the first real plugin editor on this stack, and
       the only honest test of whether the DSL survives a product.
-- [ ] `vello_hybrid` against classic `vello`, re-measured on Windows — the
-      hybrid choice was made on Linux numbers only.
+- [ ] Classic `vello` (the GPU path since `vello_hybrid` was dropped)
+      re-measured on Windows: the switch was made on Linux numbers only.
 - [ ] A welded shadow is the union of the children's blurred rects, not the
       blur of the welded outline: the seams are rounded where the outline is
       straight or concave-filleted. A blur filter layer

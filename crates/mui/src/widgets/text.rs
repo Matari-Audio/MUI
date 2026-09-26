@@ -8,6 +8,7 @@ use mui_scene::prelude::*;
 
 use super::grapheme;
 use crate::Ui;
+use crate::widgets::Response;
 
 /// What Enter does in a [`text_edit`] field, and so whether it is one line
 /// or many.
@@ -284,15 +285,18 @@ fn edit_keys(
 ///
 /// ```
 /// use mui::prelude::*;
-/// let mut ui = Ui::new(Theme::DEFAULT);
+/// let mut ui = Ui::default();
 /// let mut name = String::from("Init");
-/// let (field, changed) = text_input(&mut ui, "name", &mut name);
-/// assert!(!changed, "nothing is focused, so nothing was typed");
-/// let field = field.w(140);
+/// let field = text_input(&mut ui, "name", &mut name);
+/// assert!(!field.changed, "nothing is focused, so nothing was typed");
+/// let field = field.el.w(140);
 /// ```
-pub fn text_input(ui: &mut Ui, id: &str, value: &mut String) -> (El, bool) {
-    let (el, e) = text_edit(ui, id, value, TextOpts::default());
-    (el, e.changed)
+pub fn text_input(ui: &mut Ui, id: impl Into<Id>, value: &mut String) -> Response {
+    let r = text_edit(ui, id, value, TextOpts::default());
+    Response {
+        el: r.el,
+        changed: r.changed.changed,
+    }
 }
 
 /// A text field, one line or many as [`TextOpts::newline`] says. Many lines
@@ -304,15 +308,22 @@ pub fn text_input(ui: &mut Ui, id: &str, value: &mut String) -> (El, bool) {
 ///
 /// ```
 /// use mui::prelude::*;
-/// let mut ui = Ui::new(Theme::DEFAULT);
+/// let mut ui = Ui::default();
 /// let mut notes = String::from("first\nsecond");
 /// let opts = TextOpts { newline: Newline::Enter, rows: 6, ..TextOpts::default() };
-/// let (field, edit) = text_edit(&mut ui, "notes", &mut notes, opts);
-/// assert!(!edit.changed && !edit.submitted, "nothing is focused");
+/// let field = text_edit(&mut ui, "notes", &mut notes, opts);
+/// assert!(!field.changed.changed && !field.changed.submitted, "nothing is focused");
 /// ```
-pub fn text_edit(ui: &mut Ui, id: &str, value: &mut String, opts: TextOpts) -> (El, TextEdit) {
+pub fn text_edit(
+    ui: &mut Ui,
+    id: impl Into<Id>,
+    value: &mut String,
+    opts: TextOpts,
+) -> Response<TextEdit> {
+    let id: Id = id.into();
+    let id = id.as_str();
     let multi = opts.newline != Newline::None;
-    let size = ui.theme.text;
+    let size = ui.theme().text;
     let lh = ui.line_height(size);
     let focused = ui.focused(id);
     let n = value.chars().count();
@@ -338,26 +349,23 @@ pub fn text_edit(ui: &mut Ui, id: &str, value: &mut String, opts: TextOpts) -> (
     // ponytail: a composition shown last frame is not in that shift; a click
     // mid-composition lands as if the preedit were not there.
     let r = ui.get(id);
-    if r.pressed || r.dragged {
-        if let Some(p) = ui.local(id) {
-            caret = match &rows {
-                Some(rows) => {
-                    let lines = rows.lines(ui, value);
-                    let row = ((p.y - PAD_Y + scroll) / lh).floor().max(0.0) as usize;
-                    let l = &lines[row.min(lines.len() - 1)];
-                    chars(value, l.start) + ui.hit(&value[l.clone()], size, p.x - PAD)
-                }
-                None => {
-                    let shift = room.map_or(0.0, |room| {
-                        (caret_at(&ui.carets(value, size), byte(value, caret)) - room).max(0.0)
-                    });
-                    ui.hit(value, size, p.x - PAD + shift)
-                }
-            };
-            caret = grapheme::floor(value, caret);
-            if r.pressed {
-                anchor = caret;
-            }
+    if (r.pressed || r.dragged)
+        && let Some(p) = ui.local(id)
+    {
+        caret = if let Some(rows) = &rows {
+            let lines = rows.lines(ui, value);
+            let row = ((p.y - PAD_Y + scroll) / lh).floor().max(0.0) as usize;
+            let l = &lines[row.min(lines.len() - 1)];
+            chars(value, l.start) + ui.hit(&value[l.clone()], size, p.x - PAD)
+        } else {
+            let shift = room.map_or(0.0, |room| {
+                (caret_at(&ui.carets(value, size), byte(value, caret)) - room).max(0.0)
+            });
+            ui.hit(value, size, p.x - PAD + shift)
+        };
+        caret = grapheme::floor(value, caret);
+        if r.pressed {
+            anchor = caret;
         }
     }
     if r.double_clicked {
@@ -417,7 +425,18 @@ pub fn text_edit(ui: &mut Ui, id: &str, value: &mut String, opts: TextOpts) -> (
     let on = focused && ui.blink();
 
     let (body, caret_at_px, reader) = match &rows {
-        None => one_line(ui, &shown, at, sel, pre_range, room, on, lh, value, base),
+        None => {
+            let layers = Layers {
+                ui,
+                shown: &shown,
+                at,
+                sel,
+                pre: pre_range,
+                on,
+                lh,
+            };
+            one_line(layers, room, value, base)
+        }
         Some(rows) => {
             let lines = rows.lines(ui, &shown);
             let row = row_of(&lines, at);
@@ -430,8 +449,17 @@ pub fn text_edit(ui: &mut Ui, id: &str, value: &mut String, opts: TextOpts) -> (
             let content = lines.len() as f64 * lh;
             scroll = scroll.clamp(0.0, (content - view).max(0.0));
             ui.set_text_scroll(id, scroll);
-            let (el, x) = many_lines(ui, &shown, &lines, at, sel, pre_range, scroll, view, on, lh);
-            let el = el.when(content > view, |e| e.captures_wheel());
+            let layers = Layers {
+                ui,
+                shown: &shown,
+                at,
+                sel,
+                pre: pre_range,
+                on,
+                lh,
+            };
+            let (el, x) = many_lines(layers, &lines, scroll, view);
+            let el = el.when(content > view, mui_scene::Styled::captures_wheel);
             // ponytail: no per-character carets for a reader across lines;
             // the value and the selection are still reported.
             (el, Point::new(x, row as f64 * lh - scroll), Vec::new())
@@ -439,7 +467,7 @@ pub fn text_edit(ui: &mut Ui, id: &str, value: &mut String, opts: TextOpts) -> (
     };
     let el = body
         .clip()
-        .pad_xy(PAD, PAD_Y)
+        .pad((PAD, PAD_Y))
         .radius(6.0)
         .fill(Role::Field)
         // The ring is declared beside the resting look rather than rebuilt
@@ -447,11 +475,9 @@ pub fn text_edit(ui: &mut Ui, id: &str, value: &mut String, opts: TextOpts) -> (
         .on(State::Focus, |s| s.stroke(Role::Primary))
         .cursor(Cursor::Text)
         .focusable()
-        .when(multi, |e| {
-            e.height(opts.rows.max(1) as f64 * lh + 2.0 * PAD_Y)
-        })
-        .role(Kind::TextInput {
-            value: value.clone(),
+        .when(multi, |e| e.h(opts.rows.max(1) as f64 * lh + 2.0 * PAD_Y))
+        .a11y(A11y::TextInput {
+            value: value.as_str().into(),
             selection: (anchor, caret),
             carets: reader,
         })
@@ -463,7 +489,21 @@ pub fn text_edit(ui: &mut Ui, id: &str, value: &mut String, opts: TextOpts) -> (
             lh,
         );
     }
-    (el, edit)
+    Response { el, changed: edit }
+}
+
+/// What a field's layers are built from, one line or many: the shown text
+/// (the value with any preedit spliced in at the caret), the caret's byte,
+/// the selection and preedit as byte ranges of it, whether the caret is lit
+/// this frame, and the line height.
+struct Layers<'a> {
+    ui: &'a Ui,
+    shown: &'a str,
+    at: usize,
+    sel: Range<usize>,
+    pre: Range<usize>,
+    on: bool,
+    lh: f64,
 }
 
 /// The selected part of a run, re-inked: the selected text on its own, in
@@ -473,12 +513,12 @@ pub fn text_edit(ui: &mut Ui, id: &str, value: &mut String, opts: TextOpts) -> (
 // selection's edge may land a hair off the run's; shape once and split the
 // glyphs if a script ever shows it.
 fn reinked(selected: &str, x0: f64, x1: f64, lh: f64) -> El {
-    overlay([text(selected.to_owned())
-        .width(x1 - x0)
+    stack([text(selected.to_owned())
+        .w(x1 - x0)
         .lines(1)
         .anchor(Align::Start, Align::Center)])
-    .width(x1 - x0)
-    .height(lh)
+    .w(x1 - x0)
+    .h(lh)
     .radius(2.0)
     .fill(Role::Primary)
 }
@@ -487,20 +527,17 @@ fn reinked(selected: &str, x0: f64, x1: f64, lh: f64) -> El {
 /// children keep the keys the single-line field always had -- `/0`
 /// selection, `/1` value, `/2` caret, `/3` preedit underline -- and the
 /// re-inked selection comes last, over the value.
-#[allow(clippy::too_many_arguments)]
-fn one_line(
-    ui: &Ui,
-    shown: &str,
-    at: usize,
-    sel: Range<usize>,
-    pre: Range<usize>,
-    room: Option<f64>,
-    on: bool,
-    lh: f64,
-    value: &str,
-    base: usize,
-) -> (El, Point, Vec<f64>) {
-    let size = ui.theme.text;
+fn one_line(layers: Layers, room: Option<f64>, value: &str, base: usize) -> (El, Point, Vec<f64>) {
+    let Layers {
+        ui,
+        shown,
+        at,
+        sel,
+        pre,
+        on,
+        lh,
+    } = layers;
+    let size = ui.theme().text;
     let carets = ui.carets(shown, size);
     let x = |b: usize| caret_at(&carets, b);
     let (lo, hi) = (x(sel.start), x(sel.end));
@@ -524,20 +561,20 @@ fn one_line(
         .map(|b| PAD - shift + x(if b < base { b } else { b + tail }))
         .collect();
     let mut children = vec![
-        leaf(hi - lo, size)
+        block(hi - lo, size)
             .anchor(Align::Start, Align::Center)
             .offset(lo - shift, 0.0)
             .when(hi > lo, |e| e.fill(Role::Primary)),
         text(shown.to_owned())
-            .width(run)
+            .w(run)
             .lines(1)
             .anchor(Align::Start, Align::Center)
             .offset(-shift, 0.0),
-        leaf(2.0, size)
+        block(2.0, size)
             .anchor(Align::Start, Align::Center)
             .offset(caret_x - shift, 0.0)
             .when(on, |e| e.fill(Role::Ink)),
-        leaf(phi - plo, 2.0)
+        block(phi - plo, 2.0)
             .anchor(Align::Start, Align::End)
             .offset(plo - shift, 0.0)
             .when(phi > plo, |e| e.fill(Role::Ink)),
@@ -549,25 +586,22 @@ fn one_line(
                 .offset(lo - shift, 0.0),
         );
     }
-    (overlay(children), Point::new(caret_x - shift, 0.0), reader)
+    (stack(children), Point::new(caret_x - shift, 0.0), reader)
 }
 
 /// Many lines, only the rows in view built: a line's run, the re-inked
 /// selection over it, then the caret and the preedit underline on top.
-#[allow(clippy::too_many_arguments)]
-fn many_lines(
-    ui: &Ui,
-    shown: &str,
-    lines: &[Range<usize>],
-    at: usize,
-    sel: Range<usize>,
-    pre: Range<usize>,
-    scroll: f64,
-    view: f64,
-    on: bool,
-    lh: f64,
-) -> (El, f64) {
-    let size = ui.theme.text;
+fn many_lines(layers: Layers, lines: &[Range<usize>], scroll: f64, view: f64) -> (El, f64) {
+    let Layers {
+        ui,
+        shown,
+        at,
+        sel,
+        pre,
+        on,
+        lh,
+    } = layers;
+    let size = ui.theme().text;
     let first = (scroll / lh).floor().max(0.0) as usize;
     let last = (((scroll + view) / lh).ceil().max(0.0) as usize).min(lines.len());
     let caret_row = row_of(lines, at);
@@ -579,13 +613,7 @@ fn many_lines(
         let x = |b: usize| caret_at(&carets, b.clamp(l.start, l.end) - l.start);
         let run = x(l.end);
         let y = row as f64 * lh - scroll;
-        children.push(
-            text(line.to_owned())
-                .width(run)
-                .lines(1)
-                .anchor(Align::Start, Align::Start)
-                .offset(0.0, y),
-        );
+        children.push(text(line.to_owned()).w(run).lines(1).at(0.0, y));
         // A selection running on past this line's end takes a sliver more,
         // so a selected newline is visible.
         if sel.start < l.end.max(l.start + 1) && sel.end > l.start {
@@ -597,32 +625,22 @@ fn many_lines(
             };
             if x1 > x0 {
                 let (b0, b1) = (sel.start.max(l.start), sel.end.min(l.end));
-                children.push(
-                    reinked(&shown[b0..b1], x0, x1, lh)
-                        .anchor(Align::Start, Align::Start)
-                        .offset(x0, y),
-                );
+                children.push(reinked(&shown[b0..b1], x0, x1, lh).at(x0, y));
             }
         }
         if row == caret_row {
             caret_x = x(at);
             let (plo, phi) = (x(pre.start), x(pre.end));
             if phi > plo {
-                children.push(
-                    leaf(phi - plo, 2.0)
-                        .anchor(Align::Start, Align::Start)
-                        .offset(plo, y + lh - 2.0)
-                        .fill(Role::Ink),
-                );
+                children.push(block(phi - plo, 2.0).at(plo, y + lh - 2.0).fill(Role::Ink));
             }
         }
     }
     let caret_y = caret_row as f64 * lh - scroll;
     children.push(
-        leaf(2.0, lh)
-            .anchor(Align::Start, Align::Start)
-            .offset(caret_x, caret_y)
+        block(2.0, lh)
+            .at(caret_x, caret_y)
             .when(on, |e| e.fill(Role::Ink)),
     );
-    (overlay(children), caret_x)
+    (stack(children), caret_x)
 }

@@ -20,13 +20,14 @@
 //! purpose, because only the caller knows which of several scenes was clicked.
 #![forbid(unsafe_code)]
 
-pub use mui_geometry::Point;
+pub use mui_geometry::{Point, Vec2};
 
+use mui_layout::Id;
 use rustc_hash::FxHashMap as HashMap;
 use std::sync::{Arc, OnceLock};
 
-use mui_geometry::kurbo::{self, BezPath, Rect, Shape as _, Vec2};
-use mui_geometry::{Bounds, Error, Path, PathCommand};
+use mui_geometry::kurbo::{self, BezPath, Rect, Shape as _};
+use mui_geometry::{Error, Path, PathCommand};
 
 /// How far the pointer may travel between press and release and still count as
 /// a click. Past this, the gesture is a drag and [`Response::clicked`] never
@@ -35,7 +36,7 @@ use mui_geometry::{Bounds, Error, Path, PathCommand};
 pub const DRAG_THRESHOLD: f64 = 4.0;
 
 struct Target {
-    id: Arc<str>,
+    id: Id,
     /// Which of the target's own shapes this is, for a canvas that named
     /// its draws. `None` for an ordinary surface.
     tag: Option<Arc<str>>,
@@ -44,7 +45,7 @@ struct Target {
     at: Vec2,
     /// The nearest clipping ancestor's rect: outside it, the target is not
     /// drawn, so it must not respond either.
-    clip: Option<Bounds>,
+    clip: Option<Rect>,
     /// Cached exact clipping contours, outermost first, each local to its
     /// offset. Pointer queries only run winding tests over these
     /// already-converted paths.
@@ -108,10 +109,6 @@ impl Converted {
     }
 }
 
-fn vec(p: Point) -> Vec2 {
-    Vec2::new(p.x, p.y)
-}
-
 /// The targets under the pointer, in paint order.
 ///
 /// Push in the order you draw: later entries sit on top and win ties.
@@ -133,7 +130,7 @@ impl Hit {
     ///
     /// Returns the same error the renderer would: if geometry is malformed it
     /// is better to fail at registration than to leave a region silently dead.
-    pub fn push(&mut self, id: impl Into<Arc<str>>, path: &Path) -> Result<(), Error> {
+    pub fn push(&mut self, id: impl Into<Id>, path: &Path) -> Result<(), Error> {
         self.push_clipped(id, path, None)
     }
 
@@ -142,9 +139,9 @@ impl Hit {
     /// responding once it has slid out of its viewport.
     pub fn push_clipped(
         &mut self,
-        id: impl Into<Arc<str>>,
+        id: impl Into<Id>,
         path: &Path,
-        clip: Option<Bounds>,
+        clip: Option<Rect>,
     ) -> Result<(), Error> {
         self.push_clipped_paths(id, path, clip, None)
     }
@@ -154,9 +151,9 @@ impl Hit {
     /// never during pointer queries.
     pub fn push_clipped_paths(
         &mut self,
-        id: impl Into<Arc<str>>,
+        id: impl Into<Id>,
         path: &Path,
-        clip: Option<Bounds>,
+        clip: Option<Rect>,
         clips: Option<&[Arc<Path>]>,
     ) -> Result<(), Error> {
         let clips = self.bez_clips(clips)?;
@@ -186,10 +183,10 @@ impl Hit {
     /// ```
     pub fn push_tagged(
         &mut self,
-        id: impl Into<Arc<str>>,
+        id: impl Into<Id>,
         tag: impl Into<Arc<str>>,
         path: &Path,
-        clip: Option<Bounds>,
+        clip: Option<Rect>,
     ) -> Result<(), Error> {
         self.push_tagged_paths(id, tag, path, clip, None)
     }
@@ -199,10 +196,10 @@ impl Hit {
     /// [`Hit::push_clipped_paths`].
     pub fn push_tagged_paths(
         &mut self,
-        id: impl Into<Arc<str>>,
+        id: impl Into<Id>,
         tag: impl Into<Arc<str>>,
         path: &Path,
-        clip: Option<Bounds>,
+        clip: Option<Rect>,
         clips: Option<&[Arc<Path>]>,
     ) -> Result<(), Error> {
         let clips = self.bez_clips(clips)?;
@@ -229,33 +226,32 @@ impl Hit {
     /// ```
     pub fn push_placed(
         &mut self,
-        id: impl Into<Arc<str>>,
+        id: impl Into<Id>,
         tag: Option<Arc<str>>,
         path: &Arc<Path>,
         at: Point,
-        clip: Option<Bounds>,
+        clip: Option<Rect>,
         clips: Option<&[(Arc<Path>, Point)]>,
     ) -> Result<(), Error> {
         let clips = match clips.filter(|c| !c.is_empty()) {
             None => Arc::from([]),
             Some(list) => {
                 let key = (list.as_ptr() as usize, list.len());
-                match self.clip_cache.get(&key) {
-                    Some(c) => c.clone(),
-                    None => {
-                        let c: Arc<[_]> = list
-                            .iter()
-                            .map(|(p, o)| Ok((self.converted(p)?, vec(*o))))
-                            .collect::<Result<Vec<_>, Error>>()?
-                            .into();
-                        self.clip_cache.insert(key, c.clone());
-                        c
-                    }
+                if let Some(c) = self.clip_cache.get(&key) {
+                    c.clone()
+                } else {
+                    let c: Arc<[_]> = list
+                        .iter()
+                        .map(|(p, o)| Ok((self.converted(p)?, o.to_vec2())))
+                        .collect::<Result<Vec<_>, Error>>()?
+                        .into();
+                    self.clip_cache.insert(key, c.clone());
+                    c
                 }
             }
         };
         let path = self.converted(path)?;
-        self.add(id.into(), tag, path, vec(at), clip, clips)
+        self.add(id.into(), tag, path, at.to_vec2(), clip, clips)
     }
 
     /// Empty the map for a rebuild, keeping the conversions the last build
@@ -279,11 +275,11 @@ impl Hit {
 
     fn add(
         &mut self,
-        id: Arc<str>,
+        id: Id,
         tag: Option<Arc<str>>,
         path: Arc<Converted>,
         at: Vec2,
-        clip: Option<Bounds>,
+        clip: Option<Rect>,
         clip_paths: Clips,
     ) -> Result<(), Error> {
         self.targets.push(Target {
@@ -354,9 +350,9 @@ impl Hit {
         if !(p.x.is_finite() && p.y.is_finite()) {
             return None;
         }
-        let q = mui_geometry::kurbo::Point::new(p.x, p.y);
-        let inside = |c: &Option<Bounds>| {
-            c.is_none_or(|b| p.x >= b.min.x && p.x <= b.max.x && p.y >= b.min.y && p.y <= b.max.y)
+        let q = p;
+        let inside = |c: &Option<Rect>| {
+            c.is_none_or(|b| p.x >= b.x0 && p.x <= b.x1 && p.y >= b.y0 && p.y <= b.y1)
         };
         self.targets
             .iter()
@@ -507,6 +503,72 @@ pub enum Key {
     Function(u8),
 }
 
+impl Key {
+    /// The named key a W3C `KeyboardEvent.key` value stands for: the one
+    /// keymap every host shares. keyboard-types' `Key` (baseview) prints
+    /// this name, and winit's `NamedKey` variants are named after it.
+    /// Characters are not names: they arrive as [`Key::Char`] or text.
+    ///
+    /// ```
+    /// # use mui_input::Key;
+    /// assert_eq!(Key::from_name("ArrowLeft"), Some(Key::Left));
+    /// assert_eq!(Key::from_name("F12"), Some(Key::Function(12)));
+    /// assert_eq!(Key::from_name("F0"), None);
+    /// assert_eq!(Key::from_name("CapsLock"), None);
+    /// ```
+    pub fn from_name(name: &str) -> Option<Self> {
+        Some(match name {
+            "Enter" => Self::Enter,
+            "Escape" => Self::Escape,
+            "Tab" => Self::Tab,
+            "Backspace" => Self::Backspace,
+            "Delete" => Self::Delete,
+            "ArrowLeft" => Self::Left,
+            "ArrowRight" => Self::Right,
+            "ArrowUp" => Self::Up,
+            "ArrowDown" => Self::Down,
+            "Home" => Self::Home,
+            "End" => Self::End,
+            "PageUp" => Self::PageUp,
+            "PageDown" => Self::PageDown,
+            // W3C's space bar is the character " "; winit names it.
+            "Space" => Self::Space,
+            _ => {
+                let n: u8 = name.strip_prefix('F')?.parse().ok()?;
+                return (1..=24).contains(&n).then_some(Self::Function(n));
+            }
+        })
+    }
+
+    /// [`Key::from_name`] of a name a host formats (winit's `Debug`,
+    /// keyboard-types' `Display`), written into a stack buffer, not a
+    /// `String`: a key event allocates nothing. A name too long for any key
+    /// MUI knows is `None`.
+    ///
+    /// ```
+    /// # use mui_input::Key;
+    /// assert_eq!(Key::from_fmt(format_args!("{}", "PageDown")), Some(Key::PageDown));
+    /// assert_eq!(Key::from_fmt(format_args!("{}", "AudioVolumeMute")), None);
+    /// ```
+    pub fn from_fmt(name: std::fmt::Arguments<'_>) -> Option<Self> {
+        struct Buf([u8; 16], usize);
+        impl std::fmt::Write for Buf {
+            fn write_str(&mut self, s: &str) -> std::fmt::Result {
+                let end = self.1 + s.len();
+                self.0
+                    .get_mut(self.1..end)
+                    .ok_or(std::fmt::Error)?
+                    .copy_from_slice(s.as_bytes());
+                self.1 = end;
+                Ok(())
+            }
+        }
+        let mut buf = Buf([0; 16], 0);
+        std::fmt::write(&mut buf, name).ok()?;
+        Self::from_name(std::str::from_utf8(&buf.0[..buf.1]).ok()?)
+    }
+}
+
 /// The modifier keys held. Shared by [`KeyPress`] and [`PointerInput`]: a
 /// gesture and a shortcut ask the same question.
 ///
@@ -554,7 +616,7 @@ pub enum Ime {
 pub struct Input {
     pub pointer: PointerInput,
     /// Scroll delta in scene units, positive right and down.
-    pub wheel: Point,
+    pub wheel: Vec2,
     pub keys: Vec<KeyPress>,
     /// Composed text this frame -- not derivable from `keys`, which is why
     /// both exist.
@@ -565,6 +627,10 @@ pub struct Input {
     pub clipboard: Option<String>,
     /// Input-method events since the last frame, in order.
     pub ime: Vec<Ime>,
+    /// Pointer positions a host folded into this frame, oldest first, all
+    /// before `pointer.pos`: the samples of a fast drag, for a freehand
+    /// stroke. Empty when every sample got its own frame.
+    pub trail: Vec<Point>,
 }
 impl From<PointerInput> for Input {
     fn from(pointer: PointerInput) -> Self {
@@ -592,7 +658,7 @@ pub struct Response {
     pub dragged: bool,
     /// Pointer movement since the previous frame while dragging. Zero
     /// otherwise, so a caller may add it unconditionally.
-    pub drag_delta: Point,
+    pub drag_delta: Vec2,
     /// A drag started elsewhere is in flight and the pointer is over this
     /// target: highlight yourself, something is about to land.
     pub drop_target: bool,
@@ -609,7 +675,7 @@ pub struct Response {
     pub press_mods: Mods,
     /// Pointer travel since the press, zero unless dragging. Distinct from
     /// [`Response::drag_delta`], which is this frame alone.
-    pub drag_total: Point,
+    pub drag_total: Vec2,
     /// This frame's press was the second of a double click on this target.
     /// [`Interaction`] has no clock, so it never sets this; the runtime that
     /// owns one (`mui::Ui::get`) does.
@@ -618,7 +684,7 @@ pub struct Response {
     /// the pointer is inside this target's frame. Zero otherwise, so a zoom
     /// may add it unconditionally. Filled in by the runtime, like
     /// [`Response::double_clicked`].
-    pub wheel: Point,
+    pub wheel: Vec2,
     /// Enter or Space reached this target while it held the keyboard focus:
     /// the keyboard's click. Filled in by the runtime.
     pub key_activated: bool,
@@ -636,16 +702,16 @@ impl Response {
     /// pass [`FINE_DRAG`] unless the control wants its own ratio.
     ///
     /// ```
-    /// # use mui_input::{Mods, Point, Response, FINE_DRAG};
+    /// # use mui_input::{Mods, Response, Vec2, FINE_DRAG};
     /// let r = Response {
-    ///     drag_delta: Point::new(10.0, 0.0),
+    ///     drag_delta: Vec2::new(10.0, 0.0),
     ///     mods: Mods { shift: true, ..Mods::default() },
     ///     ..Response::default()
     /// };
     /// assert_eq!(r.drag_fine(FINE_DRAG).x, 1.0);
     /// ```
     #[must_use]
-    pub fn drag_fine(&self, fine: f64) -> Point {
+    pub fn drag_fine(&self, fine: f64) -> Vec2 {
         self.drag_delta * if self.mods.shift { fine } else { 1.0 }
     }
 
@@ -654,10 +720,10 @@ impl Response {
     /// a lock never picks an axis from a single noisy frame.
     ///
     /// ```
-    /// # use mui_input::{Axis, Point, Response};
+    /// # use mui_input::{Axis, Response, Vec2};
     /// let r = Response {
     ///     dragged: true,
-    ///     drag_total: Point::new(2.0, 40.0),
+    ///     drag_total: Vec2::new(2.0, 40.0),
     ///     ..Response::default()
     /// };
     /// assert_eq!(r.drag_axis(), Some(Axis::Y));
@@ -720,7 +786,7 @@ pub struct Interaction {
     clicked: Option<String>,
     press_pos: Option<Point>,
     last_pos: Option<Point>,
-    drag_delta: Point,
+    drag_delta: Vec2,
     dragging: bool,
     /// The buttons that were down last frame, for edge detection.
     was: Buttons,
@@ -743,7 +809,7 @@ impl Default for Interaction {
             clicked: None,
             press_pos: None,
             last_pos: None,
-            drag_delta: Point::new(0., 0.),
+            drag_delta: Vec2::ZERO,
             dragging: false,
             was: Buttons::default(),
             press_button: None,
@@ -831,7 +897,7 @@ impl Interaction {
         self.released = None;
         self.clicked = None;
         self.dropped = None;
-        self.drag_delta = Point::new(0., 0.);
+        self.drag_delta = Vec2::ZERO;
 
         let over = input
             .pos
@@ -917,7 +983,7 @@ impl Interaction {
             drag_delta: if held && self.dragging {
                 self.drag_delta
             } else {
-                Point::new(0., 0.)
+                Vec2::ZERO
             },
             drop_target: self.dragging && !held && is(&self.over),
             dropped_on: self.dropped.as_ref().is_some_and(|(_, t)| t == id),
@@ -930,10 +996,10 @@ impl Interaction {
             },
             drag_total: match (held && self.dragging, self.last_pos, self.press_pos) {
                 (true, Some(now), Some(origin)) => now - origin,
-                _ => Point::ZERO,
+                _ => Vec2::ZERO,
             },
             double_clicked: false,
-            wheel: Point::ZERO,
+            wheel: Vec2::ZERO,
             key_activated: false,
         }
     }

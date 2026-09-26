@@ -53,7 +53,9 @@ pub fn bez_path_into(path: &Path, tolerance: f64, out: &mut BezPath) -> Result<(
                         );
                         k.append_iter(tolerance)
                             .filter_map(|el| match el {
-                                PathEl::CurveTo(a, b, p) => Some([a, b, p].map(|q| q.to_vec2())),
+                                PathEl::CurveTo(a, b, p) => {
+                                    Some([a, b, p].map(kurbo::Point::to_vec2))
+                                }
                                 _ => None,
                             })
                             .collect()
@@ -122,10 +124,11 @@ mod tests {
     fn preserves_curves_and_capsule_bounds() {
         let p = Path::capsule(48.0, 120.0).unwrap();
         let b = bez_path(&p, ARC_TOLERANCE).unwrap();
-        assert!(b
-            .elements()
-            .iter()
-            .any(|e| matches!(e, PathEl::CurveTo(..))));
+        assert!(
+            b.elements()
+                .iter()
+                .any(|e| matches!(e, PathEl::CurveTo(..)))
+        );
         let bounds = b.bounding_box();
         assert!((bounds.width() - 48.0).abs() < 0.05);
         assert!((bounds.height() - 120.0).abs() < 0.05);

@@ -22,10 +22,10 @@ No new layout language or renderer is required:
 use mui::prelude::*;
 
 let panel = row![
-    stack![].flex(1.).fill(Primary),
+    stack![].flex(1.).fill(Role::Primary),
     col![
-        stack![].flex(1.).fill(Secondary),
-        stack![].flex(1.).fill(Dim),
+        stack![].flex(1.).fill(Role::Secondary),
+        stack![].flex(1.).fill(Role::Dim),
     ].flex(1.).inside(2.),
 ]
 .inside(2.)
@@ -54,7 +54,7 @@ inward share, **then offsets the resulting inner boundary by padding**. A
 Named ramp anchors and material tabs/dividers resolve against the authored
 layout before shape fitting, avoiding geometry/layout feedback.
 
-Named nodes with `.transition(Spring::DEFAULT)` spring pixel padding, its
+Named nodes with `.animate_with(Spring::DEFAULT)` spring pixel padding, its
 matching gap, bend and ramp widths together. Independently specified gaps keep
 their own declared value. Spacing tokens resolve from the theme; they are not
 pixel spring channels. Changed outlines and host sizes are re-evaluated normally.
@@ -116,18 +116,18 @@ with `.inside(...)`:
 
 ```rust
 use mui::prelude::*;
-let body = row![
+let owner = row![
     col![
         stack!["remove"].grow(1.).id("above"),
-        stack![label("OSC")].h(60.).fill(Primary).join_border("body"),
+        stack![body("OSC")].h(60.).fill(Role::Primary).join_border("body"),
         stack!["power"].grow(1.).id("below"),
     ].w(48.),
-    stack!["wave"].grow(1.).fill(Field).inset_surface(),
-    stack!["unison"].grow(1.).fill(Field).inset_surface(),
+    stack!["wave"].grow(1.).fill(Role::Field).inset_surface(),
+    stack!["unison"].grow(1.).fill(Role::Field).inset_surface(),
 ].gap(8.).pad(8.).w(400.).h(240.).id("body")
  .radius((20., 14.)).surface_layout(8.)
- .border_ramp(BorderRamp::horizontal((Primary, 4.), (Dim, 1.5)));
-resolve_scene(&SceneSpec::new(body)).unwrap();
+ .border_ramp(BorderRamp::horizontal((Role::Primary, 4.), (Role::Dim, 1.5)));
+resolve(&SceneSpec::new(owner)).unwrap();
 ```
 
 - The owner supplies convex/concave radii and the actual border contour.

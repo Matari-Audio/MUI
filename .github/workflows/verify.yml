@@ -42,6 +42,8 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo fetch --locked
+      # media/ is its own workspace with its own lock; verify.sh runs it offline too.
+      - run: cargo fetch --manifest-path media/Cargo.toml
       # fmt, test, clippy and the wasm library check: the same gate as local.
       - run: ./tools/verify.sh
 

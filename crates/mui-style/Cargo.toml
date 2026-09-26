@@ -2,12 +2,21 @@
 name = "mui-style"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 description = "Theme data for MUI: Oklch colours, palettes, roles, fills, gradients, shadows and the Style a node paints by."
 
 [dependencies]
 # The renderer reaches us through the same crate, so colour types cannot
 # version-skew with what vello paints. No transitive dependencies of its own.
-color = "0.3"
-# Only for CornerStyle and the spacing vocabulary a shell's thickness is stated in.
-mui-geometry = { path = "../mui-geometry" }
+color.workspace = true
+# Only for CornerStyle.
+mui-geometry.workspace = true
+# Only for the spacing vocabulary a shell's thickness is stated in; the
+# solver does not depend on style, so no cycle.
+mui-layout.workspace = true
+# Only for the theme's icon font.
+mui-text.workspace = true
+
+[lints]
+workspace = true

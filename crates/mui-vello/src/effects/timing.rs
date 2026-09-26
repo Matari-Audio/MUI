@@ -2,8 +2,8 @@
 //! The host must request both timestamp features before creating its device.
 use super::Error;
 use std::sync::{
-    atomic::{AtomicU8, Ordering},
     Arc,
+    atomic::{AtomicU8, Ordering},
 };
 const SLOTS: usize = 4;
 #[derive(Clone, Copy, Debug)]

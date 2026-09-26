@@ -2,12 +2,12 @@
 use rustc_hash::FxHashMap as HashMap;
 use std::sync::Arc;
 
-use mui_geometry::{Bounds, Path, Point, RoundedRect};
-use mui_layout::{Frame, Layout, Size};
+use mui_geometry::{Path, Point, Rect, RoundedRect};
+use mui_layout::{Frame, Id, Layout, Size};
 use mui_text::{Axes, Font};
 
-use super::text::CachedRun;
 use super::SceneError;
+use super::text::CachedRun;
 use crate::{Cursor, Mix, Paint, Semantics, ShadowKind};
 
 /// Which layer of a node's style a [`Painted`] entry is.
@@ -94,7 +94,7 @@ pub struct Text {
 /// when it has none: hit-testing and state keep working without names.
 #[derive(Clone, Debug)]
 pub struct Painted {
-    pub key: Arc<str>,
+    pub key: Id,
     pub layer: Layer,
     /// Shared with the node's surface and every other layer drawn along the
     /// same outline, so a filled, clipped node holds one path. In the
@@ -162,7 +162,7 @@ impl PartialEq for Painted {
             blur,
             text,
         } = self;
-        same(key, &o.key)
+        *key == o.key
             && *layer == o.layer
             && same(path, &o.path)
             && *paint == o.paint
@@ -184,7 +184,7 @@ impl Painted {
 fn placed(p: &Path, d: Point) -> Path {
     let mut p = p.clone();
     if d != Point::ZERO {
-        p.translate(d);
+        p.translate(d.to_vec2());
     }
     p
 }
@@ -195,13 +195,13 @@ pub type PlacedPath = (Arc<Path>, Point);
 /// A node's outline, for hit-testing and for anything that derives from it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ResolvedSurface {
-    pub key: Arc<str>,
+    pub key: Id,
     pub frame: Frame,
     /// The outline in the surface's own space; [`Self::offset`] places it,
     /// as it does a [`Painted::path`].
     pub path: Arc<Path>,
     /// The outline's bounds, in scene space.
-    pub bounds: Option<Bounds>,
+    pub bounds: Option<Rect>,
     /// Exact rounded rectangle when the outline is one (not welded). Local.
     pub rect: Option<RoundedRect>,
     /// Where `path`, `rect` and `hits` stand in the scene.
@@ -209,7 +209,7 @@ pub struct ResolvedSurface {
     /// A shell collapsed or a merge changed ring counts.
     pub topology_changed: bool,
     pub cursor: Option<Cursor>,
-    pub tip: Option<String>,
+    pub tip: Option<Arc<str>>,
     pub focusable: bool,
     /// Keeps the wheel from the scrollers around it.
     pub captures_wheel: bool,
@@ -225,19 +225,19 @@ pub struct ResolvedSurface {
     pub disabled: bool,
     /// The role and name this surface reports to a screen reader.
     pub semantics: Option<Semantics>,
-    /// The name came from this node's text because no explicit `.label(..)`
+    /// The name came from this node's text because no explicit `.named(..)`
     /// was supplied. Live text swaps update this name; an explicit label does
     /// not move with the paint.
     pub(super) semantic_label_implicit: bool,
     /// Current authored text, used as the accessible name unless explicitly
     /// overridden by semantics. Live readout updates change this too.
-    pub text_value: Option<String>,
+    pub text_value: Option<Arc<str>>,
     /// The nearest clipping ancestor's frame, for hit-testing.
     ///
     /// This is kept as a rectangle for compatibility with the input adapter.
     /// [`Self::clip_path`] carries the same ancestor's actual outline for
     /// adapters that need corner-accurate filtering.
-    pub clip: Option<Bounds>,
+    pub clip: Option<Rect>,
     /// The clipping ancestors' outlines, cached during scene resolution from
     /// outermost to innermost. This is the path counterpart to [`Self::clip`];
     /// it avoids making every pointer query tessellate a rounded or welded
@@ -247,7 +247,7 @@ pub struct ResolvedSurface {
     pub clip_path: Option<Arc<[PlacedPath]>>,
     /// Nearest explicitly named ancestor in the authored tree, not a containing
     /// rectangle. A floating node keeps this parent even when it escapes clipping.
-    pub parent: Option<Arc<str>>,
+    pub parent: Option<Id>,
     /// A scroll node's children extent inside its padding, unscrolled;
     /// the frame size otherwise.
     pub content: Size,
@@ -275,15 +275,15 @@ pub struct ResolvedScene {
     pub paint: Vec<Painted>,
     /// Every surface in paint order, which is also z-order.
     pub(super) surfaces: Vec<ResolvedSurface>,
-    pub(super) at: HashMap<Arc<str>, usize>,
-    pub(crate) external_welds: HashMap<Arc<str>, crate::ExternalWeld>,
+    pub(super) at: HashMap<Id, usize>,
+    pub(crate) external_welds: HashMap<Id, crate::ExternalWeld>,
     /// Where each memoised subtree landed, in pre-order.
     pub(crate) memos: Vec<super::MemoSpan>,
 }
 impl ResolvedScene {
     /// The memoised subtrees `key`'s surface is in, outermost first, each
     /// with whether this resolve reused it.
-    pub fn memos_at(&self, key: &str) -> impl Iterator<Item = (u64, bool)> + '_ {
+    pub fn memos_at(&self, key: &str) -> impl Iterator<Item = (u64, bool)> + use<'_> {
         let at = self.at.get(key).copied();
         self.memos
             .iter()
@@ -294,6 +294,12 @@ impl ResolvedScene {
     /// land outside what the memo is known to hold.
     pub fn memos_floating(&self) -> impl Iterator<Item = u64> + '_ {
         self.memos.iter().filter(|m| m.floats).map(|m| m.id)
+    }
+    /// Forget which paint came from memoised subtrees. Call it after editing
+    /// `paint` by hand, so no later resolve copies the edited paint as if it
+    /// were what the tree says.
+    pub fn forget_memos(&mut self) {
+        self.memos.clear();
     }
     /// Swap what one text node says, keeping every frame this scene already
     /// solved: only that node's glyph run is shaped again.
@@ -314,7 +320,7 @@ impl ResolvedScene {
     /// # use mui_scene::{Layer, SceneSpec};
     /// let root = row![text("0.0 dB").reserve("-88.8 dB").id("gain")];
     /// let spec = SceneSpec::new(root).font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
-    /// let mut scene = resolve_scene(&spec).unwrap();
+    /// let mut scene = resolve(&spec).unwrap();
     /// let before = scene.surface("gain").unwrap().frame;
     /// scene.set_text("gain", "-12.4 dB").unwrap();
     /// assert_eq!(scene.surface("gain").unwrap().frame, before, "the frame is kept");
@@ -346,13 +352,14 @@ impl ResolvedScene {
             self.paint.remove(i);
         }
         if let Some(&i) = self.at.get(key) {
-            self.surfaces[i].text_value = Some(s.to_owned());
+            self.surfaces[i].text_value = Some(s.into());
         }
         for surface in &mut self.surfaces {
-            if &*surface.key == key && surface.semantic_label_implicit {
-                if let Some(semantics) = surface.semantics.as_mut() {
-                    semantics.label = Some(s.to_owned());
-                }
+            if &*surface.key == key
+                && surface.semantic_label_implicit
+                && let Some(semantics) = surface.semantics.as_mut()
+            {
+                semantics.label = Some(s.into());
             }
         }
         Ok(())
@@ -375,7 +382,7 @@ mod tests {
     fn a_swapped_readout_keeps_the_reserved_box() {
         let mut sp = SceneSpec::new(row![text("0.0").reserve("-88.8").id("gain")]);
         sp.font = Some(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
-        let mut s = resolve_scene(&sp).unwrap();
+        let mut s = resolve(&sp).unwrap();
         let frame = s.surface("gain").unwrap().frame;
         s.set_text("gain", "-88.8").unwrap();
         assert_eq!(s.surface("gain").unwrap().frame, frame);
@@ -397,9 +404,9 @@ mod tests {
 
     #[test]
     fn set_text_updates_only_an_implicit_accessibility_label() {
-        let mut implicit = SceneSpec::new(text("before").role(Kind::Label).id("implicit"));
+        let mut implicit = SceneSpec::new(text("before").a11y(A11y::Label).id("implicit"));
         implicit.font = Some(font());
-        let mut implicit = resolve_scene(&implicit).unwrap();
+        let mut implicit = resolve(&implicit).unwrap();
         assert_eq!(
             implicit
                 .surface("implicit")
@@ -422,12 +429,12 @@ mod tests {
 
         let mut explicit = SceneSpec::new(
             text("before")
-                .role(Kind::Label)
-                .label("Stable name")
+                .a11y(A11y::Label)
+                .named("Stable name")
                 .id("explicit"),
         );
         explicit.font = Some(font());
-        let mut explicit = resolve_scene(&explicit).unwrap();
+        let mut explicit = resolve(&explicit).unwrap();
         explicit.set_text("explicit", "after").unwrap();
         assert_eq!(
             explicit
@@ -445,7 +452,7 @@ mod tests {
         let mut spec = SceneSpec::new(text("one two three four").lines(2).id("paragraph"))
             .offered(Size::new(72., 80.));
         spec.font = Some(font());
-        let mut scene = resolve_scene(&spec).unwrap();
+        let mut scene = resolve(&spec).unwrap();
         let frame = scene.surface("paragraph").unwrap().frame;
         let before = scene
             .paint

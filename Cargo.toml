@@ -6,29 +6,96 @@ members = [
   "crates/mui-motion",
   "crates/mui-layout",
   "crates/mui-scene",
-  "crates/mui-motion-bridge",
-  "crates/mui-reel",
+  "crates/mui-material",
   "crates/mui",
   "crates/mui-preview",
   "crates/mui-playground",
   "crates/mui-text",
   "crates/mui-vello",
-  "crates/mui-stage",
   "crates/mui-truce",
+  "crates/mui-baseview",
   "crates/mui-input",
   "crates/mui-access",
+  "crates/mui-symbols",
   "examples/gain-plugin",
   "vendor/vello",
 ]
 resolver = "2"
+# The trailer/film crates (mui-stage, mui-reel, mui-motion-bridge) live in
+# media/, their own workspace: `cargo test --manifest-path media/Cargo.toml`.
 
 [workspace.package]
-version = "0.3.2"
-edition = "2021"
+version = "0.4.0"
+edition = "2024"
+rust-version = "1.98"
 license = "MIT"
 
 [workspace.dependencies]
+# Internal crates.
+mui = { path = "crates/mui" }
+mui-access = { path = "crates/mui-access" }
+mui-baseview = { path = "crates/mui-baseview" }
+mui-geometry = { path = "crates/mui-geometry" }
+mui-input = { path = "crates/mui-input" }
+mui-layout = { path = "crates/mui-layout" }
+mui-material = { path = "crates/mui-material" }
+mui-motion = { path = "crates/mui-motion" }
+mui-playground = { path = "crates/mui-playground" }
+mui-preview = { path = "crates/mui-preview" }
+mui-scene = { path = "crates/mui-scene" }
+mui-style = { path = "crates/mui-style" }
+mui-symbols = { path = "crates/mui-symbols" }
+mui-text = { path = "crates/mui-text" }
+mui-truce = { path = "crates/mui-truce" }
+mui-vello = { path = "crates/mui-vello" }
+mui-weld = { path = "crates/mui-weld" }
+
+# External versions shared by two or more members. Members add features;
+# wgpu picks no backend here, the host that owns the device does.
+color = "0.3"
 i_overlay = "8.1"
+rustc-hash = "2"
+kurbo = "0.13.1"
+wgpu = { version = "30", default-features = false }
+pollster = "0.4"
+png = "0.18"
+epaint_default_fonts = "0.36"
+ttf-inter = { version = "0.1", default-features = false, features = ["v"] }
+vello_cpu = { version = "0.2", default-features = false, features = ["std", "u8_pipeline", "text"] }
+unicode-segmentation = "1.13"
+truce = { version = "6.3", default-features = false }
+
+# Every member opts in with `[lints] workspace = true`. The vendored vello keeps
+# upstream's own table. Pedantic is a curated slice: the lints that catch a real
+# mistake or a real simplification, not the ones that argue about taste.
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+unused_must_use = "deny"
+
+[workspace.lints.clippy]
+undocumented_unsafe_blocks = "deny"
+allow_attributes_without_reason = "warn"
+allow_attributes = "warn"
+dbg_macro = "deny"
+todo = "deny"
+semicolon_if_nothing_returned = "warn"
+redundant_closure_for_method_calls = "warn"
+manual_let_else = "warn"
+needless_pass_by_value = "warn"
+cloned_instead_of_copied = "warn"
+explicit_iter_loop = "warn"
+map_unwrap_or = "warn"
+inefficient_to_string = "warn"
+implicit_clone = "warn"
+unnested_or_patterns = "warn"
+default_trait_access = "warn"
+uninlined_format_args = "warn"
+single_match_else = "warn"
+match_same_arms = "warn"
+redundant_else = "warn"
+if_not_else = "warn"
+items_after_statements = "warn"
+unreadable_literal = "allow"
 
 # Comparable speed-oriented benchmark profile; release's size policy is unchanged.
 [profile.perf]
@@ -43,6 +110,13 @@ lto = true
 codegen-units = 1
 panic = "abort"
 strip = "symbols"
+
+# Plugins: release, but panics unwind. Under abort the `catch_unwind` guards at
+# mui-truce's FFI edge are dead code and a UI panic takes the whole DAW down.
+# `cargo build --profile plugin -p <plugin>`.
+[profile.plugin]
+inherits = "release"
+panic = "unwind"
 
 # A dev build of this workspace is a GUI that has to hold 60 fps while you drag a
 # slider. Unoptimised dependencies cost ~25x: measured 8.4 ms per frame just to

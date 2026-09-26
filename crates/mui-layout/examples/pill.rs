@@ -1,17 +1,17 @@
-use mui_layout::{column, leaf, resolve, Align, Limits, Size};
+use mui_layout::{Align, Limits, Size, block, col, resolve};
 fn main() -> Result<(), mui_layout::Error> {
     let d = 28.;
     let gap = 10.;
     let inset = 12.;
-    let controls = column([
-        leaf(d, d).id("plus"),
-        leaf(d, d).id("pie-a"),
-        leaf(d, d).id("pie-b"),
+    let controls = col([
+        block(d, d).id("plus"),
+        block(d, d).id("pie-a"),
+        block(d, d).id("pie-b"),
     ])
     .id("controls")
     .gap(gap);
-    let pill = column([controls]).id("pill").pad(10.);
-    let tab = column([pill])
+    let pill = col([controls]).id("pill").pad(10.);
+    let tab = col([pill])
         .id("tab")
         .pad(inset)
         .min_size(Size::new(92., 0.))

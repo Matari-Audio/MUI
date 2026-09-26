@@ -1,8 +1,8 @@
 //! Shape-aware layout: ordinary rows, columns and stacks inherit an inset contour.
 use crate::{BorderAlign, El, SceneError, Spacing};
 use mui_geometry::{
-    boolean_paths, inset_path, union_contours, BooleanOp, Bounds, GeometryOptions, OffsetOptions,
-    Path, PathCommand, Point, ShapeSplit,
+    BooleanOp, GeometryOptions, OffsetOptions, Path, PathCommand, Point, Rect, ShapeSplit, Vec2,
+    boolean_paths, inset_path, union_contours,
 };
 
 pub trait ShapeLayout: Sized {
@@ -13,11 +13,11 @@ pub trait ShapeLayout: Sized {
     /// ```
     /// use mui_scene::prelude::*;
     /// let panel = row![
-    ///     stack![].flex(1.).fill(Primary),
+    ///     stack![].flex(1.).fill(Role::Primary),
     ///     col![stack![].flex(1.), stack![].flex(1.)]
-    ///         .inside(2.).flex(1.).fill(Secondary),
+    ///         .inside(2.).flex(1.).fill(Role::Secondary),
     /// ].inside(2.).radius(20.).w(200.).h(100.);
-    /// resolve_scene(&SceneSpec::new(panel)).unwrap();
+    /// resolve(&SceneSpec::new(panel)).unwrap();
     /// ```
     fn inside(self, padding: impl Into<Spacing>) -> Self;
     /// Bow a two-way split. Signed fraction of the cross-divider extent;
@@ -47,7 +47,7 @@ pub(crate) enum Operation {
     Combine(Path, Path, BooleanOp),
     /// A nonzero sweep consists of overlapping solid pieces, not even-odd holes.
     Sweep(Path),
-    SplitMask(Bounds, ShapeSplit, bool),
+    SplitMask(Rect, ShapeSplit, bool),
     /// The band of a uniform stroke on a path outline.
     Border(Path, f64, BorderAlign),
 }
@@ -64,7 +64,7 @@ impl Operation {
             Self::Inset(p, _) | Self::Combine(p, ..) | Self::Sweep(p) | Self::Border(p, ..) => {
                 first(p)
             }
-            Self::SplitMask(b, ..) => b.min,
+            Self::SplitMask(b, ..) => b.origin(),
         }
     }
     /// Equal but for the last bits a translation rounds away: one input
@@ -81,17 +81,14 @@ impl Operation {
             (a, b) => a == b,
         }
     }
-    fn translate(&mut self, d: Point) {
+    fn translate(&mut self, d: Vec2) {
         match self {
             Self::Inset(p, _) | Self::Sweep(p) | Self::Border(p, ..) => p.translate(d),
             Self::Combine(a, b, _) => {
                 a.translate(d);
                 b.translate(d);
             }
-            Self::SplitMask(b, ..) => {
-                b.min = b.min + d;
-                b.max = b.max + d;
-            }
+            Self::SplitMask(b, ..) => *b = *b + d,
         }
     }
 }
@@ -113,13 +110,13 @@ type Entry = (Operation, OffsetOptions, GeometryOptions, Path, bool, u64);
 /// resolve that does not use it.
 #[derive(Debug, Default)]
 pub(crate) struct RegionCache {
-    entries: rustc_hash::FxHashMap<(std::sync::Arc<str>, u8), Entry>,
+    entries: rustc_hash::FxHashMap<(crate::Id, u8), Entry>,
     generation: u64,
 }
 impl RegionCache {
     pub(crate) fn resolve(
         &mut self,
-        key: (std::sync::Arc<str>, u8),
+        key: (crate::Id, u8),
         op: Operation,
         o: OffsetOptions,
         g: GeometryOptions,
@@ -129,22 +126,24 @@ impl RegionCache {
     /// [`RegionCache::resolve`], and whether an inset changed ring counts.
     pub(crate) fn resolve_counted(
         &mut self,
-        key: (std::sync::Arc<str>, u8),
+        key: (crate::Id, u8),
         mut op: Operation,
         o: OffsetOptions,
         g: GeometryOptions,
     ) -> Result<(Path, bool), SceneError> {
-        let origin = op.origin();
+        let origin = op.origin().to_vec2();
         op.translate(-origin);
         let world = |mut p: Path| {
             p.translate(origin);
             p
         };
-        if let Some((old, offsets, geometry, path, changed, seen)) = self.entries.get_mut(&key) {
-            if old.near(&op) && *offsets == o && *geometry == g {
-                *seen = self.generation;
-                return Ok((world(path.clone()), *changed));
-            }
+        if let Some((old, offsets, geometry, path, changed, seen)) = self.entries.get_mut(&key)
+            && old.near(&op)
+            && *offsets == o
+            && *geometry == g
+        {
+            *seen = self.generation;
+            return Ok((world(path.clone()), *changed));
         }
         let (path, changed) = match &op {
             Operation::Inset(p, d) => {
@@ -173,7 +172,7 @@ impl RegionCache {
     }
     /// Keep `key`'s entry through this resolve's sweep without resolving it:
     /// its caller reused what the entry made.
-    pub(crate) fn keep(&mut self, key: &(std::sync::Arc<str>, u8)) {
+    pub(crate) fn keep(&mut self, key: &(crate::Id, u8)) {
         if let Some(e) = self.entries.get_mut(key) {
             e.5 = self.generation;
         }

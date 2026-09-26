@@ -33,15 +33,15 @@ fn render() -> [u8; 4] {
     let img = Arc::new(Image::rgba(2, 2, px).expect("2x2 rgba"));
     // Both fits: `Contain` also pushes a clip, which is the arm that has to
     // stay balanced when the image paint is swapped for its stand-in.
-    let root = column([
-        leaf(100.0, 60.0)
+    let root = col([
+        block(100.0, 60.0)
             .pill()
             .fill(Fill::Image(img.clone(), Fit::Cover)),
-        leaf(100.0, 60.0)
+        block(100.0, 60.0)
             .radius(8.0)
             .fill(Fill::Image(img, Fit::Contain)),
     ]);
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let frame = ui
         .frame(
             root,
@@ -85,7 +85,7 @@ fn render() -> [u8; 4] {
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         mapped_at_creation: false,
     });
-    let mut encoder = device.create_command_encoder(&Default::default());
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
     encoder.copy_texture_to_buffer(
         wgpu::TexelCopyTextureInfo {
             texture: &texture,

@@ -4,9 +4,9 @@
 use mui::prelude::*;
 
 fn face(v: Variant) -> Style {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     button(&mut ui, "b", "Save")
-        .0
+        .el
         .variant(v)
         .el()
         .payload()
@@ -17,36 +17,39 @@ fn face(v: Variant) -> Style {
 /// Each variant is arithmetic on one role: filled, faded, stroked, bare.
 #[test]
 fn a_variant_paints_the_role_without_naming_a_second_colour() {
-    assert_eq!(face(Variant::Solid).fill, Fill::Role(Role::Primary));
-    assert_eq!(face(Variant::Soft).fill, Fill::Faded(Role::Primary, 0.18));
-    let outline = face(Variant::Outline);
-    assert_eq!(outline.fill, Fill::None);
+    assert_eq!(face(Variant::Solid).fill, Some(Fill::Role(Role::Primary)));
     assert_eq!(
-        outline.stroke.map(|s| s.fill),
+        face(Variant::Soft).fill,
+        Some(Fill::Faded(Role::Primary, 0.18))
+    );
+    let outline = face(Variant::Outline);
+    assert_eq!(outline.fill, None);
+    assert_eq!(
+        outline.stroke.and_then(|s| s.fill),
         Some(Fill::Role(Role::Primary))
     );
-    assert_eq!(face(Variant::Ghost).fill, Fill::None);
+    assert_eq!(face(Variant::Ghost).fill, None);
     // A filled face carries contrast ink; the rest speak as the role.
     let ink = |v: Variant| {
-        let mut ui = Ui::new(Theme::DEFAULT);
-        let el = button(&mut ui, "b", "Save").0.variant(v).el();
+        let mut ui = Ui::default();
+        let el = button(&mut ui, "b", "Save").el.variant(v).el();
         el.children()[0].payload().style.fill.clone()
     };
-    assert_eq!(ink(Variant::Solid), Fill::Role(Role::Ink));
-    assert_eq!(ink(Variant::Ghost), Fill::Role(Role::Primary));
+    assert_eq!(ink(Variant::Solid), Some(Fill::Role(Role::Ink)));
+    assert_eq!(ink(Variant::Ghost), Some(Fill::Role(Role::Primary)));
 }
 
 /// One `Theme.control` unit, five steps, and pixels as the escape hatch.
 #[test]
 fn the_size_scale_steps_every_control_off_the_theme_unit() {
     let width = |c: Control| {
-        let scene = resolve_scene(&SceneSpec::new(c.el())).expect("resolves");
+        let scene = resolve(&SceneSpec::new(c.el())).expect("resolves");
         scene.surface("sw").expect("the toggle").frame.size.width
     };
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let mut sw = |size: SpacingToken| {
         let mut on = false;
-        toggle(&mut ui, "sw", &mut on).0.size(size)
+        toggle(&mut ui, "sw", "Switch", &mut on).el.size(size)
     };
     let (xs, m, xl) = (width(sw(Xs)), width(sw(M)), width(sw(Xl)));
     assert!(xs < m && m < xl, "{xs} {m} {xl}");
@@ -60,7 +63,7 @@ fn the_size_scale_steps_every_control_off_the_theme_unit() {
 /// The glyph runs a control resolves to, in paint order.
 fn runs(c: Control) -> Vec<usize> {
     let spec = SceneSpec::new(c.el()).font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
-    resolve_scene(&spec)
+    resolve(&spec)
         .expect("resolves")
         .paint
         .iter()
@@ -72,21 +75,21 @@ fn runs(c: Control) -> Vec<usize> {
 /// caller says nothing.
 #[test]
 fn a_control_prints_the_value_text_it_is_given() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let mut hz = 440.0;
-    let bare = runs(slider(&mut ui, "cut", "Cutoff", &mut hz, 20.0..=20_000.0).0);
+    let bare = runs(slider(&mut ui, "cut", "Cutoff", &mut hz, 20.0..=20_000.0).el);
     // Label, then readout: the default is `{value:.2}`, so "440.00".
     assert_eq!(bare, vec!["Cutoff".len(), "440.00".len()], "{bare:?}");
     let with = runs(
         slider(&mut ui, "cut", "Cutoff", &mut hz, 20.0..=20_000.0)
-            .0
+            .el
             .value_text("440 Hz"),
     );
     assert_eq!(with, vec!["Cutoff".len(), "440 Hz".len()], "{with:?}");
     // A knob has no header, so the text lands under the dial.
     let dial = runs(
         knob(&mut ui, "cut", "Cutoff", &mut hz, 20.0..=20_000.0)
-            .0
+            .el
             .value_text("440 Hz"),
     );
     assert_eq!(dial, vec!["440 Hz".len()], "{dial:?}");
@@ -96,10 +99,10 @@ fn a_control_prints_the_value_text_it_is_given() {
 /// there, and a drag sweeps the range across the lane's own width.
 #[test]
 fn a_slider_takes_a_track_press_and_drags_across_its_width() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let mut v = 0.0;
     let step = |ui: &mut Ui, v: &mut f64, pointer: PointerInput| {
-        let tree = column([slider(ui, "s", "S", v, 0.0..=1.0).0.el()]).width(400.);
+        let tree = col([slider(ui, "s", "S", v, 0.0..=1.0).el.into_el()]).w(400.);
         ui.frame(tree, None, pointer, 0.016).unwrap();
     };
     let at = |x: f64, y: f64, down: bool| PointerInput {
@@ -127,11 +130,11 @@ fn a_slider_takes_a_track_press_and_drags_across_its_width() {
 /// and what the slider reports, are exact from the first frame.
 #[test]
 fn a_slider_thumb_glides_to_a_value_set_from_outside() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let frame = |ui: &mut Ui, mut v: f64| {
-        let (fader, changed) = slider(ui, "s", "S", &mut v, 0.0..=1.0);
+        let Response { el: fader, changed } = slider(ui, "s", "S", &mut v, 0.0..=1.0);
         assert!(!changed && (v == 0.0 || v == 1.0), "the value is untouched");
-        let tree = column([fader.el()]).width(400.);
+        let tree = col([fader.el()]).w(400.);
         let animating = ui
             .frame(tree, None, Input::default(), 0.016)
             .unwrap()
@@ -179,13 +182,19 @@ fn a_widget_reports_a_change_only_when_its_value_moved() {
         }],
         ..Input::default()
     };
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let (mut s, mut v) = (String::from("ab"), 0.5);
     // One tree and one frame; the tree reads the keys of the frame before.
     let mut step = |ui: &mut Ui, focus: &str, input: Input| {
-        let (field, typed) = text_input(ui, "f", &mut s);
-        let (fader, moved) = slider(ui, "s", "S", &mut v, 0.0..=1.0);
-        ui.frame(column([field, fader.el()]), None, input, 0.016)
+        let Response {
+            el: field,
+            changed: typed,
+        } = text_input(ui, "f", &mut s);
+        let Response {
+            el: fader,
+            changed: moved,
+        } = slider(ui, "s", "S", &mut v, 0.0..=1.0);
+        ui.frame(col([field, fader.el()]), None, input, 0.016)
             .unwrap();
         ui.focus(focus);
         (typed, moved)
@@ -198,4 +207,26 @@ fn a_widget_reports_a_change_only_when_its_value_moved() {
     assert_eq!(step(&mut ui, "s", Input::default()), (false, false));
     assert_eq!(s, "b");
     assert!((v - 0.51).abs() < 1e-12, "{v}");
+}
+
+/// Every control takes a label; a switch and a drag number, which draw no
+/// text of their own, still carry it as their accessible name.
+#[test]
+fn a_toggle_and_a_drag_value_are_named_by_their_label() {
+    let mut ui = Ui::default();
+    let (mut on, mut bpm) = (false, 120.0);
+    let name = |el: El| {
+        el.payload()
+            .semantics
+            .as_ref()
+            .and_then(|s| s.label.clone())
+    };
+    let sw = toggle(&mut ui, "sw", "Bypass", &mut on).el.el();
+    assert_eq!(name(sw).as_deref(), Some("Bypass"));
+    let tempo = drag_value(&mut ui, "bpm", "Tempo", &mut bpm, 20.0..=300.0)
+        .el
+        .el();
+    assert_eq!(name(tempo).as_deref(), Some("Tempo"));
+    let unnamed = toggle(&mut ui, "sw2", "", &mut on).el.el();
+    assert_eq!(name(unnamed), None, "an empty label names nothing");
 }

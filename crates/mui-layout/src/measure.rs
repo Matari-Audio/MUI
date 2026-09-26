@@ -181,10 +181,10 @@ pub(crate) fn validate_node<P>(node: &Node<P>, l: Limits) -> Result<(), Error> {
     {
         return Err(Error::InvalidValue);
     }
-    if let Some(max) = node.rare().maximum {
-        if max.width + 1e-9 < node.minimum.width || max.height + 1e-9 < node.minimum.height {
-            return Err(Error::InvalidValue);
-        }
+    if let Some(max) = node.rare().maximum
+        && (max.width + 1e-9 < node.minimum.width || max.height + 1e-9 < node.minimum.height)
+    {
+        return Err(Error::InvalidValue);
     }
     Ok(())
 }
@@ -301,10 +301,9 @@ pub(crate) fn measure_uncached<'a, P>(
         .id
         .as_deref()
         .filter(|_| !pass.redo && pass.cache.is_none())
+        && !pass.keys.insert(id)
     {
-        if !pass.keys.insert(id) {
-            return Err(Error::DuplicateKey(id.to_string()));
-        }
+        return Err(Error::DuplicateKey(id.to_string()));
     }
     let here = node.id.as_deref().unwrap_or(ancestor);
     // Aspect is width-first, like CSS: a definite width settles the height,
@@ -386,13 +385,9 @@ pub(crate) fn measure_uncached<'a, P>(
                     align == Align::Stretch,
                 );
                 let main = offer(c, v, inner[v as usize], sub[v as usize], false);
-                if v {
-                    [cross, main]
-                } else {
-                    [main, cross]
-                }
+                if v { [cross, main] } else { [main, cross] }
             }
-            Kind::Overlay(_) => {
+            Kind::Overlay(_) | Kind::Content(_) => {
                 let (ax, ay) = c.anchor.unwrap_or(cell_default(node));
                 [
                     offer(c, false, inner[0], sub[0], ax == Align::Stretch),
@@ -492,16 +487,22 @@ pub(crate) fn measure_uncached<'a, P>(
         |g: &dyn Fn(&Measured<'_, P>) -> f64| flow.iter().map(|c| g(c)).fold(0.0, f64::max);
     let (content, sunk) = match &node.kind {
         Kind::Leaf => (Size::ZERO, Size::ZERO),
-        Kind::Content => {
+        Kind::Content(_) => {
             let Intrinsic { size, min_width } = (pass.measurer)(&node.payload, room);
             if !size.valid(l.extent) || !(0.0..=l.extent).contains(&min_width) {
                 return Err(Error::InvalidValue);
             }
             // Never narrower than it may be squeezed to: a word wider than the
-            // room overflows it.
+            // room overflows it. In-flow children overlay it, as on a stack.
             (
-                Size::new(size.width.max(min_width), size.height),
-                Size::new(min_width, 0.0),
+                Size::new(
+                    size.width.max(min_width).max(max_of(&|c| c.size.width)),
+                    size.height.max(max_of(&|c| c.size.height)),
+                ),
+                Size::new(
+                    min_width.max(max_of(&|c| c.floor.width)),
+                    max_of(&|c| c.floor.height),
+                ),
             )
         }
         Kind::Branch { vertical: v, .. } => {
@@ -671,7 +672,7 @@ pub(crate) fn measure_uncached<'a, P>(
             ..
         }
     ) && node.wrap;
-    let fluid = matches!(node.kind, Kind::Content | Kind::Fits(_))
+    let fluid = matches!(node.kind, Kind::Content(_) | Kind::Fits(_))
         || (node.rare().min_col.is_some()
             && inner[0].is_none()
             && matches!(node.kind, Kind::Grid { .. }))

@@ -1,0 +1,42 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Kurv · Motion workbench</title>
+<style>
+@font-face{font-family:Inter;src:url('../../../videos/kurv-unfold/assets/Inter-V.otf') format('opentype');font-weight:100 900;font-display:swap}
+:root{font-family:Inter,sans-serif;color:#202320;background:#eeeae2;accent-color:#a53d23;color-scheme:light}*{box-sizing:border-box}body{margin:0}::selection{background:#e6b29e}button,input,select{font:inherit}button,select{min-height:42px;border:1px solid #a9a99e;background:transparent;color:inherit;border-radius:6px;padding:8px 12px}button{cursor:pointer}button:hover{background:#dedbd2}button:focus-visible,select:focus-visible,input:focus-visible,a:focus-visible{outline:3px solid #a53d23;outline-offset:3px}a{color:#84341e;text-underline-offset:4px}header{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:24px 30px;border-bottom:1px solid #c3c3b6}h1{font-size:25px;letter-spacing:-.03em;margin:0}header p{margin:6px 0 0;color:#53574e;font-size:14px}main{display:grid;grid-template-columns:minmax(0,1fr) 300px;min-height:calc(100svh - 105px)}#viewport{position:relative;height:calc(100svh - 105px);min-height:640px;overflow:hidden;perspective:1800px;display:flex;align-items:center;justify-content:center}#fit{flex:none;transform-style:preserve-3d}#mount{transform-style:preserve-3d}.mui-plane{cursor:pointer}.mui-plane[data-selected=true]{outline:2px solid #c24f2d;outline-offset:4px}aside{border-left:1px solid #c3c3b6;padding:26px 24px;background:#e7e4da}h2{font-size:18px;margin:0 0 20px}label{display:block;font-size:14px;font-weight:550;margin:19px 0 6px}select,input[type=range]{width:100%}.measure{display:flex;justify-content:space-between;align-items:center}output{font-size:13px;font-variant-numeric:tabular-nums;color:#55594f}.section{border-top:1px solid #c3c3b6;margin-top:24px;padding-top:6px}.actions{display:flex;gap:8px;margin-top:24px}.actions button{flex:1}.note{font-size:13px;line-height:1.5;color:#53574e;margin:24px 0 0}.status{position:absolute;left:30px;bottom:22px;right:30px;font-size:13px;line-height:1.5;color:#53574e}#error{color:#a12f21;white-space:pre-wrap}.layout-row{display:flex;gap:16px;align-items:center;font-size:14px}.layout-row a{white-space:nowrap}@media(max-width:800px){main{grid-template-columns:1fr}#viewport{height:430px;min-height:430px}aside{border-left:0;border-top:1px solid #c3c3b6;display:grid;grid-template-columns:1fr 1fr;gap:0 22px}h2,.section,.actions,.note{grid-column:1/-1}header{padding:20px;align-items:flex-start}header .layout-row{flex-direction:column;align-items:flex-end}#viewport .status{left:20px}}@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto}}
+</style></head><body><header><div><h1>KURV / Motion workbench</h1><p>Real MUI parts. A new perspective.</p></div><div class="layout-row"><a href="../../../videos/kurv-unfold/kurv-unfold.mp4">Watch the trailer</a><button id="download">Save poses</button></div></header>
+<main><section id="viewport" aria-label="Exploded Kurv preview"><div id="fit"><div id="mount"></div></div><div class="status" role="status" id="status">Loading native MUI captures…</div><p id="error" role="alert"></p></section><aside>
+<h2>Compose the instrument</h2><div><label for="part">Selected part</label><select id="part" disabled></select></div>
+<div><div class="measure"><label for="explode">Separate layers</label><output id="explode-out">0%</output></div><input id="explode" type="range" min="0" max="100" value="0"></div>
+<div><div class="measure"><label for="camera">Viewing angle</label><output id="camera-out">0°</output></div><input id="camera" type="range" min="-50" max="50" value="0"></div>
+<div class="section"><h2>Move the selected part</h2></div>
+<div><div class="measure"><label for="scaleX">Width stretch</label><output id="scaleX-out">1.00×</output></div><input id="scaleX" type="range" min="50" max="160" value="100"></div>
+<div><div class="measure"><label for="scaleY">Height stretch</label><output id="scaleY-out">1.00×</output></div><input id="scaleY" type="range" min="50" max="160" value="100"></div>
+<div><div class="measure"><label for="z">Depth</label><output id="z-out">0</output></div><input id="z" type="range" min="-200" max="500" value="0"></div>
+<div><div class="measure"><label for="x">Horizontal</label><output id="x-out">0</output></div><input id="x" type="range" min="-300" max="300" value="0"></div>
+<div><div class="measure"><label for="y">Vertical</label><output id="y-out">0</output></div><input id="y" type="range" min="-300" max="300" value="0"></div>
+<div><div class="measure"><label for="rotateY">Rotation</label><output id="rotateY-out">0°</output></div><input id="rotateY" type="range" min="-70" max="70" value="0"></div>
+<div class="actions"><button id="reset">Reset all</button><button id="demo">Explode</button></div>
+<p class="note">Stretch changes a captured part’s shape. Native resize recalculates the MUI layout; compare the <a href="../../../videos/kurv-unfold/assets/kurv/full.png">original</a> and <a href="../../../videos/kurv-unfold/assets/kurv-compact/full.png">compact native render</a>, or the <a href="../../../videos/kurv-unfold/assets/kurv-resized/full.png">natively resized oscillator</a>. The exploded view is a presentation effect, not a plugin feature.</p>
+</aside></main>
+<script type="module">
+import scene from './../../../videos/kurv-unfold/assets/scene.mjs';import{mountLayers}from'../../../tools/film/layers.mjs';
+const $=id=>document.getElementById(id),keys=['scaleX','scaleY','z','x','y','rotateY'],poses=new Map();let capture;
+const defaults=()=>({scaleX:1,scaleY:1,z:0,x:0,y:0,rotateY:0});
+function fit(){const v=$('viewport');const s=Math.min((v.clientWidth-100)/scene.width,(v.clientHeight-140)/scene.height);$('fit').style.transform=`scale(${Math.max(.1,s*(1-.35*(+$('explode').value/100)))})`;}
+function paint(){if(!capture)return;const e=+$('explode').value/100,angle=+$('camera').value;
+ capture.world.style.transform=`rotateX(${e*26}deg) rotateY(${angle}deg)`;
+ [...capture.layers.keys()].forEach((id,i)=>{const pose=poses.get(id);capture.setPose(id,{...pose,z:pose.z+(i?e*(90+i*48):0),x:pose.x+(i?e*(i%2?32:-32):0),y:pose.y+(i?e*(i%2?-20:20):0)});for(const plane of capture.layers.get(id))plane.dataset.selected=String(id===$('part').value);});
+ $('explode-out').value=`${Math.round(e*100)}%`;$('camera-out').value=`${angle}°`;fit();
+}
+function select(){const pose=poses.get($('part').value);for(const k of keys){$(k).value=k.startsWith('scale')?pose[k]*100:pose[k];$(k+'-out').value=k.startsWith('scale')?pose[k].toFixed(2)+'×':pose[k]+(k==='rotateY'?'°':'');}paint();}
+try{
+ capture=mountLayers($('mount'),scene,new URL('./../../../videos/kurv-unfold/assets/kurv/',document.baseURI));await capture.ready;
+ for(const[id,planes]of capture.layers){poses.set(id,defaults());const opt=document.createElement('option');opt.value=id;opt.textContent=id==='background'?'Editor chassis':id;$('part').append(opt);for(const plane of planes)plane.addEventListener('click',()=>{$('part').value=id;select();});}
+ $('part').disabled=false;$('part').selectedIndex=Math.min(1,$('part').length-1);$('part').addEventListener('change',select);
+ for(const k of keys)$(k).addEventListener('input',()=>{poses.get($('part').value)[k]=+$(k).value/(k.startsWith('scale')?100:1);select();});
+ for(const k of ['explode','camera'])$(k).addEventListener('input',paint);
+ $('reset').onclick=()=>{for(const id of poses.keys())poses.set(id,defaults());$('explode').value=0;$('camera').value=0;select();};
+ $('demo').onclick=()=>{$('explode').value=100;$('camera').value=-28;paint();};
+ $('download').onclick=()=>{const blob=new Blob([JSON.stringify({version:1,scene:scene.source_revision,camera:+$('camera').value,explode:+$('explode').value/100,poses:Object.fromEntries(poses)},null,2)],{type:'application/json'});const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='kurv-poses.json';a.click();URL.revokeObjectURL(url);};
+ new ResizeObserver(fit).observe($('viewport'));fit();select();$('status').textContent=`${capture.layers.size} independent parts / ${scene.layers.length} ordered fragments · ${scene.width} × ${scene.height} native layout · select a part or use the controls`;
+}catch(error){$('status').textContent='';$('error').textContent=`Could not load the capture. Serve this folder over HTTP and reload.\n${error.message}`;}
+</script></body></html>

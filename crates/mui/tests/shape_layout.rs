@@ -2,16 +2,19 @@ use mui::prelude::*;
 fn tree(pad: f64, width: f64) -> mui::scene::El {
     row![stack![].flex(1.).id("a"), stack![].flex(1.).id("b")]
         .inside(pad)
-        .border_ramp(BorderRamp::horizontal((Primary, width), (Dim, 1.)))
+        .border_ramp(BorderRamp::horizontal(
+            (Role::Primary, width),
+            (Role::Dim, 1.),
+        ))
         .radius(0.)
         .w(200.)
         .h(100.)
         .id("root")
-        .transition(Spring::DEFAULT)
+        .animate_with(Spring::DEFAULT)
 }
 #[test]
 fn padding_gap_and_border_morph_together_and_settle() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let mut sample = |pad, width| {
         let frame = ui
             .frame(
@@ -41,7 +44,10 @@ fn padding_gap_and_border_morph_together_and_settle() {
 /// not an ambiguous name.
 #[test]
 fn the_prelude_and_widgets_globs_do_not_collide() {
-    #[allow(unused_imports)]
+    #[expect(
+        unused_imports,
+        reason = "imported only to prove the glob leaves `step` unambiguous"
+    )]
     use mui::widgets::*;
-    assert_eq!(step(2.).resolve(Default::default()), 8.);
+    assert_eq!(step(2.).resolve(mui::scene::SpacingScale::default()), 8.);
 }

@@ -2,11 +2,12 @@
 name = "mui-vello"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 
 [features]
 default = []
-gpu-effects = ["wgpu/wgsl", "dep:vello"]
+gpu-effects = ["wgpu/wgsl", "dep:vello", "dep:pollster"]
 # A CPU rasteriser: snapshot tests, thumbnails, hosts with no GPU.
 cpu = ["dep:vello_cpu", "dep:glifo"]
 # Rasterise on a rayon pool instead of one core. Off by default: a snapshot-
@@ -14,10 +15,10 @@ cpu = ["dep:vello_cpu", "dep:glifo"]
 cpu-threads = ["cpu", "vello_cpu/multithreading"]
 
 [dependencies]
-mui-scene = { path = "../mui-scene" }
-mui-weld = { path = "../mui-weld" }
-mui-geometry = { path = "../mui-geometry" }
-rustc-hash = "1.1"
+mui-scene.workspace = true
+mui-weld.workspace = true
+mui-geometry.workspace = true
+rustc-hash.workspace = true
 # No wgpu backend features: a plugin renders into the device its host wrapper
 # already created, so this crate must not choose the backend. Hosts turn on
 # `wgpu_default` (desktop) or `webgl` (browser) themselves.
@@ -25,26 +26,29 @@ rustc-hash = "1.1"
 # renderer. Rasterises in compute shaders, so a changed frame costs the CPU
 # its serialisation only.
 vello = { path = "../../vendor/vello", default-features = false, features = ["wgpu"], optional = true }
+# `host` opens and, after a loss, reopens a device from a frame callback.
+pollster = { workspace = true, optional = true }
 # `Glyph` is the one glyph type `vello_cpu` does not re-export, so it comes
 # straight from the crate it builds on.
 glifo = { version = "0.3", default-features = false, optional = true }
 # kurbo and peniko reach us through vello_common so the types cannot version-skew.
 vello_common = { version = "0.2", default-features = false, features = ["std"] }
 # Types only (`Device`, `Queue`) for the image atlas upload; still no backend.
-wgpu = { version = "30", default-features = false }
-vello_cpu = { version = "0.2", optional = true, default-features = false, features = ["std", "u8_pipeline", "text"] }
+wgpu.workspace = true
+vello_cpu = { workspace = true, optional = true }
 
 [dev-dependencies]
 naga = { version = "30", features = ["wgsl-in"] }
-mui-layout = { path = "../mui-layout" }
-epaint_default_fonts = "0.36"
-mui-text = { path = "../mui-text" }
-ttf-inter = { version = "0.1", default-features = false, features = ["v"] }
-png = "0.17"
+mui-layout.workspace = true
+mui-material.workspace = true
+epaint_default_fonts.workspace = true
+mui-text.workspace = true
+ttf-inter.workspace = true
+png.workspace = true
 # The example builds its own headless device.
-wgpu = { version = "30", default-features = false, features = ["wgsl", "vulkan", "gles", "metal", "dx12"] }
-pollster = "0.4"
-mui = { path = "../mui" }
+wgpu = { workspace = true, features = ["wgsl", "vulkan", "gles", "metal", "dx12"] }
+pollster.workspace = true
+mui.workspace = true
 
 [[example]]
 name = "gpu_contract"
@@ -57,3 +61,6 @@ required-features = ["gpu-effects"]
 [[example]]
 name = "bench"
 required-features = ["cpu", "gpu-effects"]
+
+[lints]
+workspace = true

@@ -1,8 +1,8 @@
 use super::{Budget, Converted, EffectStats, Error, WeldTextures};
 use crate::classic::{Classic, Textures};
 use crate::{
-    kurbo::{Affine, Rect, Shape as _, Stroke},
     Cache, Canvas as _,
+    kurbo::{Affine, Rect, Shape as _, Stroke},
 };
 use mui_geometry::PathCommand;
 use mui_scene::{ExternalWeld, Layer, Painted, ResolvedScene, ShadowKind};
@@ -208,18 +208,18 @@ impl Passes {
                 vertex: wgpu::VertexState {
                     module: &module,
                     entry_point: Some("vs"),
-                    compilation_options: Default::default(),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
                     buffers: &[],
                 },
                 fragment: Some(wgpu::FragmentState {
                     module: &module,
                     entry_point: Some(entry),
-                    compilation_options: Default::default(),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
                     targets: &[Some(format.into())],
                 }),
-                primitive: Default::default(),
+                primitive: wgpu::PrimitiveState::default(),
                 depth_stencil: None,
-                multisample: Default::default(),
+                multisample: wgpu::MultisampleState::default(),
                 multiview_mask: None,
                 cache: None,
             })
@@ -271,7 +271,7 @@ fn checked_size(device: &wgpu::Device, size: [u32; 2]) -> Result<(), Error> {
 
 fn visible(e: &ExternalWeld, xf: Affine, size: [u32; 2]) -> bool {
     let b = e.bounds();
-    let r = xf.transform_rect_bbox(Rect::new(b.min.x, b.min.y, b.max.x, b.max.y));
+    let r = xf.transform_rect_bbox(b);
     r.x1 > 0. && r.y1 > 0. && r.x0 < f64::from(size[0]) && r.y0 < f64::from(size[1])
 }
 
@@ -411,7 +411,7 @@ impl GpuRenderer {
             size,
             retained: Vec::new(),
             paths: Converted::default(),
-            short: Default::default(),
+            short: crate::kurbo::BezPath::default(),
             transform: None,
             mapping: (0, 0),
             local_mapping: 0,
@@ -431,7 +431,7 @@ impl GpuRenderer {
             size,
             U::STORAGE_BINDING | U::TEXTURE_BINDING | U::COPY_DST,
         );
-        let view = texture.create_view(&Default::default());
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         Target {
             bind: bind(device, &passes.layout, &view, &passes.idle),
             texture,
@@ -539,7 +539,7 @@ impl GpuRenderer {
         let wanted = resolved
             .external_welds()
             .filter(move |(_, e)| visible(e, xf, size))
-            .map(|(k, e)| (k, &e.material));
+            .map(|(k, e)| (k, &*e.material));
         let mut stats = self.effects.begin(wanted)?;
         self.effects
             .forget_absent(|k| resolved.external_weld(k).is_some());
@@ -672,13 +672,13 @@ impl GpuRenderer {
                     .as_ref()
                     .is_none_or(|t| t.width() < w || t.height() < h)
                 {
+                    use wgpu::TextureUsages as U;
                     let have = self
                         .patch
                         .as_ref()
                         .map_or([0, 0], |t| [t.width(), t.height()]);
                     let grown =
                         [0, 1].map(|i| [w, h][i].max(have[i]).next_multiple_of(256).min(limit[i]));
-                    use wgpu::TextureUsages as U;
                     self.patch = Some(texture(
                         &self.device,
                         "MUI damage",
@@ -687,7 +687,7 @@ impl GpuRenderer {
                     ));
                 }
                 let patch = self.patch.as_ref().expect("allocated above");
-                let view = patch.create_view(&Default::default());
+                let view = patch.create_view(&wgpu::TextureViewDescriptor::default());
                 render(
                     &mut self.vello,
                     &self.device,
@@ -880,7 +880,7 @@ impl GpuRenderer {
                         .ok_or_else(|| Error::Missing(p.key.to_string()))?
                         .clone();
                     let b = e.bounds();
-                    let r = Rect::new(b.min.x, b.min.y, b.max.x, b.max.y);
+                    let r = b;
                     let local = Affine::translate((r.x0, r.y0))
                         * Affine::scale_non_uniform(
                             r.width() / f64::from(image.width),
@@ -1051,14 +1051,14 @@ impl GpuRenderer {
             size,
             U::STORAGE_BINDING | U::TEXTURE_BINDING,
         )
-        .create_view(&Default::default());
+        .create_view(&wgpu::TextureViewDescriptor::default());
         let tmp = texture(
             d,
             "MUI backdrop",
             size,
             U::RENDER_ATTACHMENT | U::TEXTURE_BINDING,
         )
-        .create_view(&Default::default());
+        .create_view(&wgpu::TextureViewDescriptor::default());
         let out = texture(d, "MUI backdrop", size, U::RENDER_ATTACHMENT | U::COPY_SRC);
         let image = stand_in(size, ImageAlphaType::AlphaPremultiplied);
         self.vello.override_image(&image, Some(whole(&out)));
@@ -1071,7 +1071,7 @@ impl GpuRenderer {
             size,
             prefix,
             tmp,
-            out: out.create_view(&Default::default()),
+            out: out.create_view(&wgpu::TextureViewDescriptor::default()),
             image,
             uniforms,
             binds,

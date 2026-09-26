@@ -8,7 +8,6 @@
 //! Run: `cargo run -p mui-preview`
 #![forbid(unsafe_code)]
 
-mod device;
 mod host;
 mod scenes;
 mod skin;
@@ -19,10 +18,10 @@ use std::time::{Duration, Instant, SystemTime};
 
 use accesskit_winit::{Adapter, Event as AccessEvent, WindowEvent as AccessWindowEvent};
 use host::Gpu;
-use mui::geometry::Point;
+use mui::geometry::{Point, Vec2};
 use mui::prelude::*;
-use mui::vello::kurbo::{Affine, Rect, Shape as _, Stroke};
 use mui::vello::Canvas as _;
+use mui::vello::kurbo::{Affine, Rect, Shape as _, Stroke};
 use mui_access::accesskit::{Action as AccessAction, NodeId};
 use scenes::PreviewScene;
 use winit::application::ApplicationHandler;
@@ -59,47 +58,9 @@ fn icon(c: Cursor) -> CursorIcon {
 
 /// The named keys MUI has a word for; everything else is the host's business.
 fn named(k: NamedKey) -> Option<mui::prelude::Key> {
-    use mui::prelude::Key as K;
-    Some(match k {
-        NamedKey::Enter => K::Enter,
-        NamedKey::Escape => K::Escape,
-        NamedKey::Tab => K::Tab,
-        NamedKey::Backspace => K::Backspace,
-        NamedKey::Delete => K::Delete,
-        NamedKey::ArrowLeft => K::Left,
-        NamedKey::ArrowRight => K::Right,
-        NamedKey::ArrowUp => K::Up,
-        NamedKey::ArrowDown => K::Down,
-        NamedKey::Home => K::Home,
-        NamedKey::End => K::End,
-        NamedKey::Space => K::Space,
-        NamedKey::PageUp => K::PageUp,
-        NamedKey::PageDown => K::PageDown,
-        // F1..F12 by position: twelve match arms would say the same thing.
-        _ => {
-            return FUNCTION
-                .iter()
-                .position(|f| *f == k)
-                .map(|i| K::Function(i as u8 + 1))
-        }
-    })
+    // winit's variants carry the W3C names `Key::from_name` reads.
+    mui::prelude::Key::from_fmt(format_args!("{k:?}"))
 }
-
-/// winit's function keys, in order, so `F3` is `Function(3)`.
-const FUNCTION: [NamedKey; 12] = [
-    NamedKey::F1,
-    NamedKey::F2,
-    NamedKey::F3,
-    NamedKey::F4,
-    NamedKey::F5,
-    NamedKey::F6,
-    NamedKey::F7,
-    NamedKey::F8,
-    NamedKey::F9,
-    NamedKey::F10,
-    NamedKey::F11,
-    NamedKey::F12,
-];
 
 /// A theme file: `key = value` a line, `#` starts a comment, everything
 /// unstated stays [`skin::SKIN`]'s. Returns what failed to parse so the caller
@@ -173,7 +134,11 @@ fn inspect(
     canvas.set_transform(xf);
     canvas.set_paint(primary.with_alpha(0.45).into());
     for s in scene.surfaces() {
-        canvas.set_stroke(Stroke::new(if s.key.starts_with('/') { 0.5 } else { 1.0 }));
+        canvas.set_stroke(Stroke::new(if mui::layout::Id::is_named(&s.key) {
+            1.0
+        } else {
+            0.5
+        }));
         canvas.stroke_path(&outline(s.frame));
     }
     // `keys` is tree order, which is z-order, so the last frame containing the
@@ -213,7 +178,7 @@ fn inspect(
                 font: g.font,
             })
             .collect(),
-        axes: Default::default(),
+        axes: Axes::default(),
         hint: true,
         font_coords: vec![Arc::from(&[][..])].into(),
     });
@@ -249,7 +214,7 @@ struct App {
     pointer: PointerInput,
     /// Everything non-pointer collected since the last frame: it rides on the
     /// last pointer sample of the batch.
-    wheel: Point,
+    wheel: Vec2,
     keys: Vec<KeyPress>,
     text: String,
     ime: Vec<Ime>,
@@ -274,6 +239,8 @@ struct App {
     /// Both are `None` in a test: no event loop, no window, no adapter.
     proxy: Option<EventLoopProxy<AccessEvent>>,
     access: Option<Adapter>,
+    /// Skips the tree when a frame did not change it.
+    published: mui_access::Publisher,
 }
 
 impl App {
@@ -308,7 +275,7 @@ impl App {
             counted_at: Instant::now(),
             events: Vec::new(),
             pointer: PointerInput::default(),
-            wheel: Point::new(0.0, 0.0),
+            wheel: Vec2::new(0.0, 0.0),
             keys: Vec::new(),
             text: String::new(),
             ime: Vec::new(),
@@ -324,6 +291,7 @@ impl App {
             gpu: None,
             proxy: None,
             access: None,
+            published: mui_access::Publisher::default(),
         }
     }
 
@@ -363,21 +331,21 @@ impl App {
         let ui = &mut self.ui;
         // A theme file, once one has parsed, replaces the compiled-in skin
         // wholesale; the mode is still the sidebar's to say.
-        let theme = self.theme.unwrap_or(skin::SKIN);
-        ui.theme = Theme {
-            palette: match self.theme {
+        let theme = self.theme.clone().unwrap_or(skin::SKIN);
+        ui.set_theme(Theme {
+            palette: match &self.theme {
                 Some(t) => t
                     .palette
                     .with_mode(if self.light { Mode::Light } else { Mode::Dark }),
                 None => skin::skin(self.light),
             },
             ..theme
-        };
+        });
         if let Some(c) = self.typed.take() {
             self.scenes[self.selected].key(c);
         }
         for i in 0..self.scenes.len() {
-            if ui.get(&format!("scene-{i}")).clicked {
+            if ui.get(format!("scene-{i}")).clicked {
                 self.selected = i;
                 self.pan = Point::new(0.0, 0.0);
             }
@@ -393,9 +361,9 @@ impl App {
         // The list grows with the gallery, so it takes the slack and scrolls;
         // the switches below it stay put instead of being squeezed to nothing.
         side.push(
-            column((0..self.scenes.len()).map(|i| {
+            col((0..self.scenes.len()).map(|i| {
                 let on = i == self.selected;
-                let (item, _) = button(ui, format!("scene-{i}"), self.scenes[i].name());
+                let item = button(ui, format!("scene-{i}"), self.scenes[i].name()).el;
                 item.variant(if on { Variant::Solid } else { Variant::Soft })
                     .size(S)
                     .el()
@@ -412,26 +380,19 @@ impl App {
             row([
                 text(label).fill(Role::Dim),
                 spacer(),
-                toggle(ui, id, v).0.el(),
+                toggle(ui, id, label, v).el.into_el(),
             ])
             .align(Align::Center)
         };
         side.push(switch("light", "light", &mut self.light));
         side.push(switch("frames", "frames", &mut self.frames));
         side.extend(scene.controls(ui));
-        let sidebar = column(side)
-            .gap(S)
-            .pad(M)
-            .width(SIDEBAR)
-            .fill(Role::Surface);
-        let specimen = scene
-            .specimen(ui)
-            .anchor(Align::Center, Align::Center)
-            .offset(self.pan.x, self.pan.y);
+        let sidebar = col(side).gap(S).pad(M).w(SIDEBAR).fill(Role::Surface);
+        let specimen = scene.specimen(ui).centered_at(self.pan.x, self.pan.y);
         // Panning is unbounded by design -- drag the specimen wherever -- so
         // the stage clips it instead; without this it paints over the sidebar,
         // which is drawn first.
-        let stage = overlay([specimen])
+        let stage = stack([specimen])
             .grow(1.0)
             .clip()
             .fill(Role::Background)
@@ -452,7 +413,7 @@ impl App {
         let dt = now.duration_since(self.last).as_secs_f64();
         self.last = now;
         input.clipboard = Some(self.clipboard.clone());
-        self.ui.scale = Some(scale);
+        self.ui.set_scale(Some(scale));
         let root = self.tree(w, h);
         let (animating, cursor) = match self.ui.frame(root, Some(Size::new(w, h)), input, dt) {
             // Destructured first: `f` borrows `self.ui`, and handing the
@@ -590,17 +551,15 @@ impl App {
         let (Some(a), Some(scene)) = (&mut self.access, self.ui.scene()) else {
             return;
         };
-        let (focus, scale) = (self.ui.focus_key(), self.ui.scale.unwrap_or(1.0));
-        a.update_if_active(|| mui_access::tree_update(scene, focus, scale));
+        let (focus, scale) = (self.ui.focus_key(), self.ui.scale().unwrap_or(1.0));
+        let published = &mut self.published;
+        a.update_if_active(|| published.update(scene, focus, scale));
     }
 
     /// The surface behind an accesskit node id.
     fn key_of(&self, target: NodeId) -> Option<String> {
         let scene = self.ui.scene()?;
-        scene
-            .surfaces()
-            .find(|s| mui_access::node_id(&s.key) == target)
-            .map(|s| s.key.to_string())
+        mui_access::surface_of(scene, target).map(|s| s.key.to_string())
     }
 
     /// A semantic activation targets the requested control, even when its
@@ -618,22 +577,22 @@ impl App {
         let extra = self.scenes[self.selected].overlay();
         let wants_overlay = self.frames || extra.is_some();
         let draw_extra = |canvas: &mut mui::vello::Classic<'_>| {
-            if let Some((key, path)) = extra {
-                if let (Some(s), Ok(bez)) = (
+            if let Some((key, path)) = extra
+                && let (Some(s), Ok(bez)) = (
                     scene.surface(key),
                     mui::vello::bez_path(&path, mui::vello::ARC_TOLERANCE),
-                ) {
-                    canvas.set_transform(xf * Affine::translate((s.frame.x, s.frame.y)));
-                    canvas.set_paint(
-                        self.ui
-                            .theme
-                            .palette
-                            .on(self.ui.theme.palette.raised())
-                            .to_srgb()
-                            .into(),
-                    );
-                    canvas.fill_path(&bez);
-                }
+                )
+            {
+                canvas.set_transform(xf * Affine::translate((s.frame.x, s.frame.y)));
+                canvas.set_paint(
+                    self.ui
+                        .theme()
+                        .palette
+                        .on(self.ui.theme().palette.raised())
+                        .to_srgb()
+                        .into(),
+                );
+                canvas.fill_path(&bez);
             }
             if self.frames {
                 let pointer = self
@@ -644,7 +603,7 @@ impl App {
                     canvas,
                     scene,
                     xf,
-                    &self.ui.theme.palette,
+                    &self.ui.theme().palette,
                     &self.font,
                     pointer,
                     height,
@@ -668,7 +627,10 @@ impl ApplicationHandler<AccessEvent> for App {
         match event.window_event {
             // Activation can land before the first frame, when `publish` has
             // no scene yet; the redraw is what gets the reader a real tree.
-            AccessWindowEvent::InitialTreeRequested => self.publish(),
+            AccessWindowEvent::InitialTreeRequested => {
+                self.published.reset();
+                self.publish();
+            }
             AccessWindowEvent::ActionRequested(r) => {
                 if let Some(key) = self.key_of(r.target_node) {
                     match r.action {
@@ -727,7 +689,7 @@ impl ApplicationHandler<AccessEvent> for App {
         }
         window.set_visible(true);
         let display = Box::new(event_loop.owned_display_handle());
-        self.gpu = Some(pollster::block_on(Gpu::new(window, display)));
+        self.gpu = Some(Gpu::new(window, display));
     }
 
     /// The theme file is the only thing that changes with no event behind it,
@@ -744,10 +706,10 @@ impl ApplicationHandler<AccessEvent> for App {
                 gpu.window().request_redraw();
             }
         }
-        if self.reload() {
-            if let Some(gpu) = &self.gpu {
-                gpu.window().request_redraw();
-            }
+        if self.reload()
+            && let Some(gpu) = &self.gpu
+        {
+            gpu.window().request_redraw();
         }
         let theme = self
             .theme_path
@@ -773,7 +735,7 @@ impl ApplicationHandler<AccessEvent> for App {
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
-                self.queue(Some(Some(Point::new(position.x, position.y))), None)
+                self.queue(Some(Some(Point::new(position.x, position.y))), None);
             }
             WindowEvent::CursorLeft { .. } => self.queue(Some(None), None),
             WindowEvent::Focused(false) => self.cancel(),
@@ -816,7 +778,7 @@ impl ApplicationHandler<AccessEvent> for App {
                     }
                     MouseScrollDelta::PixelDelta(p) => Point::new(-p.x, -p.y),
                 };
-                self.wheel = Point::new(self.wheel.x + d.x, self.wheel.y + d.y);
+                self.wheel = Vec2::new(self.wheel.x + d.x, self.wheel.y + d.y);
             }
             WindowEvent::KeyboardInput { ref event, .. } if event.state.is_pressed() => {
                 let mods = self.mods;
@@ -842,15 +804,16 @@ impl ApplicationHandler<AccessEvent> for App {
                         self.keys.extend(s.chars().map(|c| KeyPress {
                             key: mui::prelude::Key::Char(c),
                             mods,
-                        }))
+                        }));
                     }
                     _ => {}
                 }
-                if !mods.ctrl && !mods.cmd {
-                    if let Some(t) = event.text.as_ref() {
-                        self.text.extend(t.chars().filter(|c| !c.is_control()));
-                        self.typed = t.chars().find(|c| !c.is_control());
-                    }
+                if !mods.ctrl
+                    && !mods.cmd
+                    && let Some(t) = event.text.as_ref()
+                {
+                    self.text.extend(t.chars().filter(|c| !c.is_control()));
+                    self.typed = t.chars().find(|c| !c.is_control());
                 }
             }
             WindowEvent::Occluded(hidden) => {
@@ -879,10 +842,8 @@ impl ApplicationHandler<AccessEvent> for App {
                     gpu.window().set_cursor(icon(self.cursor));
                 }
                 self.apply_ime(scale);
-                if animating {
-                    if let Some(gpu) = &self.gpu {
-                        gpu.window().request_redraw();
-                    }
+                if animating && let Some(gpu) = &self.gpu {
+                    gpu.window().request_redraw();
                 }
                 return;
             }
@@ -1037,7 +998,7 @@ mod tests {
         let gain = |app: &App| {
             let s = app.ui.scene().unwrap().surface("gain").unwrap();
             match s.semantics.as_ref().map(|s| &s.role) {
-                Some(mui::scene::Kind::Slider { value, .. }) => *value,
+                Some(mui::scene::A11y::Slider { value, .. }) => *value,
                 _ => panic!("gain is a slider"),
             }
         };
@@ -1075,7 +1036,7 @@ mod tests {
             1.0,
             Input {
                 pointer: at(c.x, c.y, false),
-                wheel: Point::new(0.0, 120.0),
+                wheel: Vec2::new(0.0, 120.0),
                 ..Input::default()
             },
         );

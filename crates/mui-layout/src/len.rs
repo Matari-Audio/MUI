@@ -15,18 +15,10 @@ impl Size {
         Self { width, height }
     }
     pub(crate) fn main(self, vertical: bool) -> f64 {
-        if vertical {
-            self.height
-        } else {
-            self.width
-        }
+        if vertical { self.height } else { self.width }
     }
     pub(crate) fn cross(self, vertical: bool) -> f64 {
-        if vertical {
-            self.width
-        } else {
-            self.height
-        }
+        if vertical { self.width } else { self.height }
     }
     pub(crate) fn axes(main: f64, cross: f64, vertical: bool) -> Self {
         if vertical {
@@ -39,6 +31,14 @@ impl Size {
         [self.width, self.height]
             .iter()
             .all(|n| n.is_finite() && *n >= 0.0 && *n <= limit)
+    }
+}
+
+/// `(width, height)`: `.min_size((40., 30.))`.
+/// `(300, 200)`, `(12.5, 8.)`: any pair of numbers.
+impl<W: Px, H: Px> From<(W, H)> for Size {
+    fn from((width, height): (W, H)) -> Self {
+        Self::new(width.px(), height.px())
     }
 }
 
@@ -121,9 +121,9 @@ pub enum Len {
     /// sometimes 240 px wide and sometimes 2000.
     ///
     /// ```
-    /// use mui_layout::{leaf, resolve, row, Len, Size};
+    /// use mui_layout::{block, resolve, row, Len, Size};
     /// let rail = Len::Clamp { min: 64.0, pct: 30.0, max: 220.0 };
-    /// let tree = || row([leaf(0., 0.).width(rail).id("rail"), leaf(0., 0.).grow(1.)]);
+    /// let tree = || row([block(0., 0.).w(rail).id("rail"), block(0., 0.).grow(1.)]);
     /// let at = |w: f64| {
     ///     resolve(&tree(), Some(Size::new(w, 40.)), Default::default())
     ///         .unwrap()
@@ -145,19 +145,46 @@ pub enum Len {
     /// share of the box that actually has a size.
     ///
     /// ```
-    /// use mui_layout::{leaf, resolve, row, Len, Size};
+    /// use mui_layout::{block, resolve, row, Len, Size};
     /// // The row hugs, so it is no one's container: the bar takes half of
     /// // the 400 px panel above it, not half of the row around it.
-    /// let bar = leaf(0., 8.).width(Len::Container(50.)).id("bar");
-    /// let tree = row([row([bar])]).width(Len::Px(400.));
+    /// let bar = block(0., 8.).w(Len::Container(50.)).id("bar");
+    /// let tree = row([row([bar])]).w(Len::Px(400.));
     /// let l = resolve(&tree, Some(Size::new(400., 8.)), Default::default()).unwrap();
     /// assert_eq!(l.frame("bar").unwrap().size.width, 200.);
     /// ```
     Container(f64),
 }
-impl From<f64> for Len {
-    fn from(v: f64) -> Self {
-        Self::Px(v)
+/// A plain number in the DSL: pixels, a weight or a nudge. Every builder
+/// argument that is a number takes `impl Px`, so `.at(8, 4)`, `.grow(1)`
+/// and `.text_size(12.5)` all compile without a `.0` or a cast.
+pub trait Px: Copy {
+    fn px(self) -> f64;
+}
+macro_rules! px {
+    ($($t:ty),*) => {$(
+        impl Px for $t {
+            fn px(self) -> f64 {
+                f64::from(self)
+            }
+        }
+    )*};
+}
+px!(f64, f32, i32, u32);
+impl Px for usize {
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a pixel count is far below 2^52"
+    )]
+    fn px(self) -> f64 {
+        self as f64
+    }
+}
+
+/// A bare number is pixels: `.w(120)`, `.w(12.5)`.
+impl<T: Px> From<T> for Len {
+    fn from(v: T) -> Self {
+        Self::Px(v.px())
     }
 }
 impl Len {

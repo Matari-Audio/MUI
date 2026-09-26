@@ -3,8 +3,8 @@
 //! drawn is the cubic the DSP side samples.
 use mui::input::{Button, Buttons, Mods};
 use mui::prelude::*;
-use mui::scene::curve::Curve;
 use mui::scene::Content;
+use mui::scene::curve::Curve;
 
 const SIZE: f64 = 200.0;
 /// The widget's own inset: a knot's radius, so an end knot sits inside the
@@ -23,7 +23,7 @@ fn pointer(x: f64, y: f64, down: bool, shift: bool) -> PointerInput {
 }
 /// One frame of the widget at 200x200.
 fn frame(ui: &mut Ui, c: &mut Curve, p: PointerInput) -> Option<CurveEdit> {
-    let (el, edit) = curve(ui, "env", c);
+    let Response { el, changed: edit } = curve(ui, "env", c);
     ui.frame(el.square(SIZE), Some(Size::new(SIZE, SIZE)), p, 0.016)
         .expect("resolves");
     edit
@@ -42,7 +42,7 @@ fn knot(c: &Curve, i: usize) -> Point {
 /// nothing; a knot's disc is the only grab.
 #[test]
 fn the_knot_is_hit_and_the_line_between_knots_is_not() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let mut c = Curve::linear();
     let (a, b) = (knot(&c, 0), knot(&c, 1));
     let mid = Point::new((a.x + b.x) / 2.0, (a.y + b.y) / 2.0);
@@ -61,7 +61,7 @@ fn the_knot_is_hit_and_the_line_between_knots_is_not() {
 /// neighbours however far the pointer goes.
 #[test]
 fn a_drag_moves_only_the_grabbed_knot_and_clamps_it_to_its_neighbours() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let mut c = Curve::default();
     let others: Vec<_> = c.points()[2..].to_vec();
     let start = knot(&c, 1);
@@ -85,7 +85,7 @@ fn a_drag_moves_only_the_grabbed_knot_and_clamps_it_to_its_neighbours() {
 #[test]
 fn shift_drags_fine() {
     let travel = |shift: bool| {
-        let mut ui = Ui::new(Theme::DEFAULT);
+        let mut ui = Ui::default();
         let mut c = Curve::linear();
         let start = knot(&c, 0);
         for _ in 0..2 {
@@ -113,9 +113,9 @@ fn shift_drags_fine() {
 /// the model's own, and `Curve::evaluate` agrees at the knots.
 #[test]
 fn the_drawn_spine_is_the_models_cubic_and_matches_the_sampler() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let mut c = Curve::default();
-    let (el, _) = curve(&mut ui, "env", &mut c);
+    let el = curve(&mut ui, "env", &mut c).el;
     let draws = match &el.payload().content {
         Content::Canvas(f) => f.0(Size::new(SIZE, SIZE)),
         _ => panic!("a canvas"),

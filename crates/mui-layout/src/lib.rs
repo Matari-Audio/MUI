@@ -14,7 +14,7 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 mod incremental;
-pub use incremental::{resolve_cached_with, LayoutCache, LayoutStats};
+pub use incremental::{LayoutCache, LayoutStats, resolve_cached_with};
 mod arrange;
 mod id;
 mod len;
@@ -23,9 +23,10 @@ mod node;
 mod pin;
 
 pub use id::Id;
-pub use len::{Align, Insets, Justify, Len, Size};
-pub use mui_geometry::{Spacing, SpacingScale, SpacingToken};
-pub use node::{column, fits, grid, leaf, overlay, row, Node};
+pub use len::{Align, Insets, Justify, Len, Px, Size};
+mod spacing;
+pub use node::{Node, block, col, fits, grid, row, stack};
+pub use spacing::{Pad, Spacing, SpacingScale, SpacingToken};
 
 /// What a measurer says about a content leaf: its size in the room it was
 /// given, and the narrowest a flex parent may squeeze it to -- for text, its
@@ -47,9 +48,9 @@ impl From<Size> for Intrinsic {
 pub use pin::{Area, Match, Pin};
 
 pub(crate) use arrange::{arrange, distribute};
-pub(crate) use measure::{cell_default, grid_rows, measure, place, wrap_lines, Measured, Pass};
+pub(crate) use measure::{Measured, Pass, cell_default, grid_rows, measure, place, wrap_lines};
 pub(crate) use node::{Kind, Rare};
-pub(crate) use pin::{inside, Pins, Viewport};
+pub(crate) use pin::{Pins, Viewport, inside};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Frame {
@@ -107,9 +108,9 @@ impl Layout {
     /// window can scale by `offered / min_size()` or refuse to go smaller.
     ///
     /// ```
-    /// use mui_layout::{column, leaf, resolve, Size};
-    /// let fixed = leaf(40., 30.).min_size(Size::new(40., 30.));
-    /// let tree = column([fixed, leaf(40., 30.)]).pad(8.);
+    /// use mui_layout::{col, block, resolve, Size};
+    /// let fixed = block(40., 30.).min_size(Size::new(40., 30.));
+    /// let tree = col([fixed, block(40., 30.)]).pad(8.);
     /// let l = resolve(&tree, Some(Size::new(400., 300.)), Default::default()).unwrap();
     /// // The second leaf states no minimum, so it may be squeezed to nothing.
     /// assert_eq!(l.min_size(), Size::new(56., 46.));
@@ -141,11 +142,11 @@ impl Layout {
         let (mut named, mut seen) = (Vec::new(), rustc_hash::FxHashSet::default());
         for at in 0..frames.len() {
             let node = nodes.pop().ok_or(Error::InvalidValue)?;
-            if let Some(key) = node.key() {
-                if !seen.insert(key) {
-                    return Err(Error::DuplicateKey(key.to_owned()));
+            if let Some(id) = &node.id {
+                if !seen.insert(id.as_str()) {
+                    return Err(Error::DuplicateKey(id.to_string()));
                 }
-                named.push((Id::of(key), at as u32));
+                named.push((id.clone(), at as u32));
             }
             nodes.extend(node.children().iter().rev());
         }
@@ -232,8 +233,8 @@ pub fn resolve_with<P, M: Into<Intrinsic>>(
 /// region other geometry decided, without cloning it to restyle its root.
 ///
 /// ```
-/// use mui_layout::{column, resolve_boxed_with, row, Insets, Size};
-/// let tree = column([row([]).grow(1.)]).size(500., 500.).pad(40.);
+/// use mui_layout::{col, resolve_boxed_with, row, Insets, Size};
+/// let tree = col([row([]).grow(1.)]).size(500., 500.).pad(40.);
 /// let size = Size::new(100., 60.);
 /// let unpadded = Insets::ZERO;
 /// let l = resolve_boxed_with(&tree, size, unpadded, Default::default(), Default::default(), |_, _| {
@@ -290,7 +291,7 @@ fn resolve_impl<P, M: Into<Intrinsic>>(
         // resize -- one id per keyed node: room for a window's worth at once.
         keys: rustc_hash::FxHashSet::with_capacity_and_hasher(
             limits.nodes.min(256),
-            Default::default(),
+            rustc_hash::FxBuildHasher,
         ),
         redo: false,
         pinned: false,

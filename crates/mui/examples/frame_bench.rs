@@ -17,12 +17,17 @@ use mui::prelude::*;
 
 static ALLOCS: AtomicUsize = AtomicUsize::new(0);
 struct Counting;
+// SAFETY: every method forwards to `System` with the caller's arguments
+// unchanged; the counter never allocates, so the GlobalAlloc contract is
+// System's.
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, l: AllocLayout) -> *mut u8 {
         ALLOCS.fetch_add(1, Ordering::Relaxed);
+        // SAFETY: the caller upholds `GlobalAlloc::alloc`'s contract; forwarded as is.
         unsafe { System.alloc(l) }
     }
     unsafe fn dealloc(&self, p: *mut u8, l: AllocLayout) {
+        // SAFETY: the caller upholds `GlobalAlloc::dealloc`'s contract; forwarded as is.
         unsafe { System.dealloc(p, l) }
     }
 }
@@ -36,6 +41,7 @@ fn cpu_ms() -> f64 {
         tv_sec: 0,
         tv_nsec: 0,
     };
+    // SAFETY: `t` is a live, writable timespec for the call's duration.
     unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut t) };
     t.tv_sec as f64 * 1e3 + t.tv_nsec as f64 * 1e-6
 }
@@ -50,18 +56,18 @@ fn button(id: String, label: &str) -> El {
         Color::oklcha(0.4, 0.02, 250.0, 1.0),
         Color::oklcha(0.3, 0.02, 250.0, 1.0),
     );
-    row([text(label).text_size(12.0).fill(Ink)])
-        .pad_xy(8.0, 3.0)
+    row([text(label).text_size(12.0).fill(Role::Ink)])
+        .pad((8.0, 3.0))
         .h(22.0)
         .align(Align::Center)
-        .fill(Raised)
+        .fill(Role::Raised)
         .radius(5.0)
         .on(State::Hover, move |s| {
-            s.fill(hover).border(Ink.alpha(0.3), 1.0)
+            s.fill(hover).stroke(Role::Ink.alpha(0.3)).stroke_width(1.0)
         })
         .on(State::Press, move |s| s.fill(press))
-        .role(Kind::Button)
-        .label(label)
+        .a11y(A11y::Button)
+        .named(label)
         .focusable()
         .tip("A button")
         .id(id)
@@ -74,7 +80,7 @@ fn wave(t: usize) -> El {
             let y = s.height * (0.5 + 0.4 * ((i + t) as f64 * 0.3).sin());
             Point::new(x, y)
         });
-        vec![Draw::stroke(Path::polyline(pts, false), Primary, 1.0)]
+        vec![Draw::stroke(Path::polyline(pts, false), Role::Primary, 1.0)]
     })
     .w(160.0)
     .h(40.0)
@@ -97,20 +103,20 @@ fn editor(ui: &mut Ui, values: &mut [f64]) -> El {
                     v.next().unwrap(),
                     0.0..=1.0,
                 )
-                .0
-                .el()
+                .el
+                .into_el()
             })
             .collect();
         let fader = slider(ui, format!("t{t}/f"), "Level", v.next().unwrap(), 0.0..=1.0)
-            .0
-            .el();
-        let head = column([
+            .el
+            .into_el();
+        let head = col([
             text(format!("Track {t}"))
                 .id(format!("t{t}/name"))
                 .tip("Double-click to rename"),
             row(["M", "S", "R", "Fx", "Arm"].map(|b| button(format!("t{t}/{b}"), b))).gap(2.0),
             row(knobs).gap(8.0),
-            fader.width(200.0),
+            fader.w(200.0),
         ])
         .gap(4.0)
         .w(260.0);
@@ -118,10 +124,10 @@ fn editor(ui: &mut Ui, values: &mut [f64]) -> El {
             stack![text(format!("Clip {c}")).text_size(10.0)]
                 .w(48.0)
                 .h(40.0)
-                .fill(Primary.alpha(0.4))
-                .stroke(Ink.alpha(0.2))
+                .fill(Role::Primary.alpha(0.4))
+                .stroke(Role::Ink.alpha(0.2))
                 .radius(4.0)
-                .on(State::Hover, |s| s.stroke(Ink.alpha(0.6)))
+                .on(State::Hover, |s| s.stroke(Role::Ink.alpha(0.6)))
                 .id(format!("t{t}/c{c}"))
         }))
         .gap(2.0)
@@ -130,10 +136,10 @@ fn editor(ui: &mut Ui, values: &mut [f64]) -> El {
         row([head, wave(t), clips])
             .gap(8.0)
             .pad(6.0)
-            .fill(Raised)
+            .fill(Role::Raised)
             .radius(6.0)
     });
-    column([toolbar, ruler].into_iter().chain(tracks))
+    col([toolbar, ruler].into_iter().chain(tracks))
         .gap(4.0)
         .pad(8.0)
         .fill(Role::Background)
@@ -145,7 +151,7 @@ fn count(n: &El) -> usize {
 
 fn main() {
     let font = Font::new(epaint_default_fonts::HACK_REGULAR).unwrap();
-    let mut ui = Ui::new(Theme::DEFAULT).font(font);
+    let mut ui = Ui::default().font(font);
     let mut values = vec![0.5; TRACKS * 5];
     let size = |w: f64| Some(Size::new(w, 1400.0));
     let away = PointerInput {

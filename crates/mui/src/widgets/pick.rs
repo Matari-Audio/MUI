@@ -1,15 +1,27 @@
 //! A colour picker: a saturation-value square, a hue strip, an optional
 //! alpha strip and a hex field, all over one [`Color`].
-use mui_scene::prelude::*;
+use mui_material::prelude::*;
 
-use crate::widgets::{stepped, text_input};
 use crate::Ui;
+use crate::widgets::{Response, stepped, text_input};
+
+/// How a [`color_picker`] behaves. The default is an opaque colour.
+///
+/// ```
+/// use mui::prelude::*;
+/// assert!(!ColorOpts::default().alpha);
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ColorOpts {
+    /// Show the opacity strip and take `#rrggbbaa` in the hex field.
+    pub alpha: bool,
+}
 
 /// Straight sRGB and alpha, each `0..1`.
 type Rgba = [f32; 4];
 
 /// A picker: drag in the square for saturation and value, along the strips
-/// for hue and (with `alpha`) opacity, or type a hex colour -- `#rrggbb`,
+/// for hue and (with [`ColorOpts::alpha`]) opacity, or type a hex colour -- `#rrggbb`,
 /// or `#rrggbbaa` with alpha. The strips step with the arrow keys when
 /// focused. Returns the picker and whether the colour changed.
 ///
@@ -18,12 +30,18 @@ type Rgba = [f32; 4];
 ///
 /// ```
 /// use mui::prelude::*;
-/// let mut ui = Ui::new(Theme::DEFAULT);
+/// let mut ui = Ui::default();
 /// let mut tint = Color::srgb(0.2, 0.5, 0.9);
-/// let (picker, changed) = color_picker(&mut ui, "tint", &mut tint, true);
-/// assert!(!changed, "nothing dragged or typed");
+/// let picker = color_picker(&mut ui, "tint", &mut tint, ColorOpts { alpha: true });
+/// assert!(!picker.changed, "nothing dragged or typed");
 /// ```
-pub fn color_picker(ui: &mut Ui, id: &str, value: &mut Color, alpha: bool) -> (El, bool) {
+pub fn color_picker(
+    ui: &mut Ui,
+    id: impl Into<Id>,
+    value: &mut Color,
+    opts: ColorOpts,
+) -> Response {
+    let (id, alpha): (Id, bool) = (id.into(), opts.alpha);
     let [sv, hue, opacity, hex] = ["sv", "hue", "alpha", "hex"].map(|k| format!("{id}/{k}"));
     let rgba = srgba(*value);
     // The hue and saturation a grey no longer carries: last frame's, if the
@@ -62,40 +80,42 @@ pub fn color_picker(ui: &mut Ui, id: &str, value: &mut Color, alpha: bool) -> (E
         Some(t) if ui.focused(&hex) => t.clone(),
         _ => to_hex(srgba(*value), alpha),
     };
-    let (field, typed) = text_input(ui, &hex, &mut text);
-    if typed {
-        if let Some(([r, g, b], ta)) = parse_hex(&text) {
-            let ta = if alpha { ta.unwrap_or(a) } else { a };
-            *value = Color::srgba(r, g, b, ta);
-            hsv = to_hsv([r, g, b, ta]);
-            changed = true;
-        }
+    let Response {
+        el: field,
+        changed: typed,
+    } = text_input(ui, hex.as_str(), &mut text);
+    if typed && let Some(([r, g, b], ta)) = parse_hex(&text) {
+        let ta = if alpha { ta.unwrap_or(a) } else { a };
+        *value = Color::srgba(r, g, b, ta);
+        hsv = to_hsv([r, g, b, ta]);
+        changed = true;
     }
     let focused = ui.focused(&hex);
     ui.set_stash(&hex, focused.then_some(text));
     ui.set_stash(&sv, Some((hsv, srgba(*value))));
 
-    let w = ui.theme.control * 48.0;
-    let (sh, bar) = (w * 0.7, ui.theme.control * 4.0);
+    let w = ui.theme().control * 48.0;
+    let (sh, bar) = (w * 0.7, ui.theme().control * 4.0);
     let [r, g, b] = to_rgb([hsv[0], 1.0, 1.0]);
     let pure = Color::srgb(r, g, b);
     let white = Color::srgb(1.0, 1.0, 1.0);
     let black = Color::srgb(0.0, 0.0, 0.0);
     let ring = |d: f64| {
-        leaf(d, d)
+        block(d, d)
             .pill()
-            .border(white, 2.0)
+            .stroke(white)
+            .stroke_width(2.0)
             .shell(1.0, black.with_alpha(0.5))
     };
-    let square = overlay([
-        leaf(w, sh)
+    let square = stack([
+        block(w, sh)
             .radius(4.0)
             .fill(Gradient::linear(90.0, [(0.0, white), (1.0, pure)])),
-        leaf(w, sh).radius(4.0).fill(Gradient::linear(
+        block(w, sh).radius(4.0).fill(Gradient::linear(
             180.0,
             [(0.0, black.with_alpha(0.0)), (1.0, black)],
         )),
-        ring(12.0).anchor(Align::Start, Align::Start).offset(
+        ring(12.0).at(
             f64::from(hsv[1]) * w - 6.0,
             (1.0 - f64::from(hsv[2])) * sh - 6.0,
         ),
@@ -104,19 +124,19 @@ pub fn color_picker(ui: &mut Ui, id: &str, value: &mut Color, alpha: bool) -> (E
     .cursor(Cursor::Crosshair)
     .id(sv);
     let strip = |key: String, label: &str, t: f32, v: f64, max: f64, fill: Gradient| {
-        overlay([
-            leaf(w, bar).pill().fill(fill),
+        stack([
+            block(w, bar).pill().fill(fill),
             ring(bar + 4.0)
                 .anchor(Align::Start, Align::Center)
                 .offset(f64::from(t) * (w - bar - 4.0), 0.0),
         ])
         .size(w, bar + 4.0)
-        .role(Kind::Slider {
+        .a11y(A11y::Slider {
             value: v,
             min: 0.0,
             max,
         })
-        .label(label)
+        .named(label)
         .focusable()
         .id(key)
     };
@@ -148,16 +168,20 @@ pub fn color_picker(ui: &mut Ui, id: &str, value: &mut Color, alpha: bool) -> (E
     }
     parts.push(
         row([
-            leaf(bar * 2.0, bar * 2.0)
+            block(bar * 2.0, bar * 2.0)
                 .radius(4.0)
                 .fill(*value)
-                .border(Role::Ink.alpha(0.3), 1.0),
+                .stroke(Role::Ink.alpha(0.3))
+                .stroke_width(1.0),
             field.grow(1.0),
         ])
         .gap(S)
         .align(Align::Center),
     );
-    (column(parts).gap(S).width(w).id(id), changed)
+    Response {
+        el: col(parts).gap(S).w(w).id(id),
+        changed,
+    }
 }
 
 /// Where the press holding `id` is, as shares of its box, clamped to it.

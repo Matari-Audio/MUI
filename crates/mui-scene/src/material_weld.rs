@@ -2,10 +2,8 @@
 //! There is no Vello dependency here. The backend image rides the existing image
 //! paint path; geometry and hit testing use its companion field contour.
 use crate::{Color, El, Fill, Fit, Frame, GradientKind, Image, Layer, Paint, SceneError};
-use mui_geometry::{Bounds, Path, Point, RoundedRect};
-use mui_weld::{
-    Brush, Color as WeldColor, Geometry, ImageFit, Point as WPoint, Rect, Source, Stop,
-};
+use mui_geometry::{Path, Point, Rect, RoundedRect};
+use mui_weld::{Brush, Color as WeldColor, Geometry, ImageFit, Source, Stop};
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -13,17 +11,16 @@ pub(crate) struct MaterialWeld {
     pub outline: Arc<Path>,
     pub image_fill: Fill,
     pub image_rect: RoundedRect,
-    pub members: HashSet<Arc<str>>,
+    pub members: HashSet<crate::Id>,
     pub external: Option<crate::ExternalWeld>,
 }
 impl MaterialWeld {
-    pub fn consumes(&self, key: &Arc<str>, layer: Layer) -> bool {
+    pub fn consumes(&self, key: &crate::Id, layer: Layer) -> bool {
         self.members.contains(key) && matches!(layer, Layer::Fill | Layer::Stroke)
     }
 }
 pub(crate) fn color(c: Color) -> WeldColor {
-    let [r, g, b, a] = c.to_srgb().components;
-    WeldColor::srgb(f64::from(r), f64::from(g), f64::from(b), f64::from(a))
+    c.to_srgb().into()
 }
 pub(crate) fn paint(p: Paint, b: Rect) -> Brush {
     match p {
@@ -49,15 +46,15 @@ pub(crate) fn paint(p: Paint, b: Rect) -> Brush {
                     color: color(c),
                 })
                 .collect();
-            let center = WPoint::new((b.x0 + b.x1) / 2.0, (b.y0 + b.y1) / 2.0);
+            let center = Point::new((b.x0 + b.x1) / 2.0, (b.y0 + b.y1) / 2.0);
             match kind {
                 GradientKind::Linear { angle } => {
                     let a = angle.to_radians();
-                    let d = WPoint::new(a.sin(), -a.cos());
+                    let d = Point::new(a.sin(), -a.cos());
                     let half = (d.x.abs() * b.width() + d.y.abs() * b.height()) / 2.0;
                     Brush::Linear {
-                        from: WPoint::new(center.x - d.x * half, center.y - d.y * half),
-                        to: WPoint::new(center.x + d.x * half, center.y + d.y * half),
+                        from: Point::new(center.x - d.x * half, center.y - d.y * half),
+                        to: Point::new(center.x + d.x * half, center.y + d.y * half),
                         stops,
                     }
                 }
@@ -65,7 +62,7 @@ pub(crate) fn paint(p: Paint, b: Rect) -> Brush {
                     center: (x, y),
                     radius,
                 } => Brush::Radial {
-                    center: WPoint::new(b.x0 + x * b.width(), b.y0 + y * b.height()),
+                    center: Point::new(b.x0 + x * b.width(), b.y0 + y * b.height()),
                     radius: radius * b.width().max(b.height()),
                     stops,
                 },
@@ -86,11 +83,16 @@ pub(crate) fn check_plate(n: &El, nested: bool) -> Result<(), SceneError> {
     let s = &n.payload().style;
     if nested && n.payload().extras().welding.is_some() {
         return Err(SceneError::UnsupportedWeld(
-            "nested material-weld members; mark the nested group .exclude_from_weld()",
+            "nested material-weld members; mark the nested group .unwelded()",
         ));
     }
-    if !s.shells.is_empty() || !s.shadow.is_empty() || !s.mask.is_none() {
-        return Err(SceneError::UnsupportedWeld("shell, shadow, or mask on a welded plate; keep the effect on an excluded wrapper/descendant"));
+    if !s.shells.as_deref().unwrap_or_default().is_empty()
+        || !s.shadow.as_deref().unwrap_or_default().is_empty()
+        || s.mask.as_ref().is_some_and(|m| !m.is_none())
+    {
+        return Err(SceneError::UnsupportedWeld(
+            "shell, shadow, or mask on a welded plate; keep the effect on an excluded wrapper/descendant",
+        ));
     }
     if nested
         && s.layer
@@ -128,36 +130,33 @@ pub(crate) fn source(plate: Plate, origin: Point, tolerance: f64) -> Result<Sour
         border,
         width,
     } = plate;
-    let delta = Point::new(-origin.x, -origin.y);
-    let shape = match rr {
-        Some(r) => {
-            let b = r.bounds();
-            Geometry::RoundedRect {
-                bounds: Rect::new(
-                    b.min.x - origin.x,
-                    b.min.y - origin.y,
-                    b.max.x - origin.x,
-                    b.max.y - origin.y,
-                ),
-                radius: r.radius(),
-            }
+    let delta = -origin.to_vec2();
+    let shape = if let Some(r) = rr {
+        let b = r.bounds();
+        Geometry::RoundedRect {
+            bounds: Rect::new(
+                b.x0 - origin.x,
+                b.y0 - origin.y,
+                b.x1 - origin.x,
+                b.y1 - origin.y,
+            ),
+            radius: r.radius(),
         }
-        None => {
-            let local = path.rigid_transform(delta, 0.0)?;
-            let rings = local.flatten(tolerance, 250_000)?;
-            Geometry::Contours(
-                rings
-                    .into_iter()
-                    .filter(|r| r.len() >= 3)
-                    .map(|mut ring| {
-                        if ring.len() > 1 && ring.first() == ring.last() {
-                            ring.pop();
-                        }
-                        ring.into_iter().map(|p| WPoint::new(p.x, p.y)).collect()
-                    })
-                    .collect(),
-            )
-        }
+    } else {
+        let local = path.rigid_transform(delta, 0.0)?;
+        let rings = local.flatten(tolerance, 250_000)?;
+        Geometry::Contours(
+            rings
+                .into_iter()
+                .filter(|r| r.len() >= 3)
+                .map(|mut ring| {
+                    if ring.len() > 1 && ring.first() == ring.last() {
+                        ring.pop();
+                    }
+                    ring.into_iter().map(|p| Point::new(p.x, p.y)).collect()
+                })
+                .collect(),
+        )
     };
     // Paint remains anchored to the original source's own geometry. Moving a
     // whole group therefore changes neither its material nor its cache key.
@@ -178,7 +177,7 @@ pub(crate) fn source(plate: Plate, origin: Point, tolerance: f64) -> Result<Sour
 pub(crate) fn finish(
     baked: &mui_weld::Baked,
     origin: Point,
-    members: HashSet<Arc<str>>,
+    members: HashSet<crate::Id>,
 ) -> Result<MaterialWeld, SceneError> {
     let mut outline = Path::default();
     for ring in &baked.contours {
@@ -191,7 +190,7 @@ pub(crate) fn finish(
     }
     let b = baked.bounds;
     let image_rect = RoundedRect::new(
-        Bounds::new(
+        Rect::new(
             b.x0 + origin.x,
             b.y0 + origin.y,
             b.x1 + origin.x,

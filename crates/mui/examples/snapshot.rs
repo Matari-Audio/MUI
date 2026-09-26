@@ -14,18 +14,18 @@ use mui::vello::vello_cpu::{Pixmap, RenderContext, Resources};
 /// The gallery card: two knobs, a slider and a toggle row.
 fn gallery(ui: &mut Ui, state: &mut (f64, f64, f64, bool)) -> El {
     let (cutoff, res, gain, on) = state;
-    let (go, _) = button(ui, "go", "Trigger");
-    let card = column([
+    let go = button(ui, "go", "Trigger").el;
+    let card = col([
         row([
-            knob(ui, "cutoff", "Cutoff", cutoff, 0.0..=1.0).0.el(),
-            knob(ui, "res", "Res", res, 0.0..=1.0).0.el(),
+            knob(ui, "cutoff", "Cutoff", cutoff, 0.0..=1.0).el.into_el(),
+            knob(ui, "res", "Res", res, 0.0..=1.0).el.into_el(),
         ])
         .gap(L)
         .justify(Justify::Center),
-        slider(ui, "gain", "Gain", gain, -24.0..=6.0).0.el(),
+        slider(ui, "gain", "Gain", gain, -24.0..=6.0).el.into_el(),
         row([
             text("Bypass").fill(Role::Dim),
-            toggle(ui, "bypass", on).0.el(),
+            toggle(ui, "bypass", "Bypass", on).el.into_el(),
             spacer(),
             go.el(),
         ])
@@ -37,8 +37,8 @@ fn gallery(ui: &mut Ui, state: &mut (f64, f64, f64, bool)) -> El {
     .radius(20.0)
     .fill(Role::Surface)
     .shadow(Shadow::soft(16.0))
-    .anchor(Align::Center, Align::Center);
-    overlay([card]).fill(Role::Background)
+    .centered();
+    stack([card]).fill(Role::Background)
 }
 
 /// The logical size of the gallery, at every scale.
@@ -68,9 +68,8 @@ fn shot(scale: f64) -> Shot {
         (SIZE.width * scale).round() as u16,
         (SIZE.height * scale).round() as u16,
     );
-    let mut ui =
-        Ui::new(Theme::DEFAULT).font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
-    ui.scale = Some(scale);
+    let mut ui = Ui::default().font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
+    ui.set_scale(Some(scale));
     let mut state = (0.35, 0.7, -6.0, true);
     // Two frames: the first has no gesture state, the second is what a real
     // host draws every frame.
@@ -115,7 +114,7 @@ fn shot(scale: f64) -> Shot {
                     Some((
                         s.key.to_string(),
                         [s.frame.x, s.frame.y, s.frame.right(), s.frame.bottom()],
-                        [b.min.x, b.min.y, b.max.x, b.max.y],
+                        [b.x0, b.y0, b.x1, b.y1],
                     ))
                 })
                 .collect(),

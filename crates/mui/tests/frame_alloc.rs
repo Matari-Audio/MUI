@@ -11,16 +11,22 @@ thread_local! {
     static ALLOCATIONS: Cell<usize> = const { Cell::new(0) };
 }
 
+// SAFETY: every method forwards to `System` with the caller's arguments
+// unchanged; the counter never allocates, so the GlobalAlloc contract is
+// System's.
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         ALLOCATIONS.with(|n| n.set(n.get() + 1));
+        // SAFETY: the caller upholds `GlobalAlloc::alloc`'s contract; forwarded as is.
         unsafe { System.alloc(layout) }
     }
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        // SAFETY: the caller upholds `GlobalAlloc::dealloc`'s contract; forwarded as is.
         unsafe { System.dealloc(ptr, layout) }
     }
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, size: usize) -> *mut u8 {
         ALLOCATIONS.with(|n| n.set(n.get() + 1));
+        // SAFETY: the caller upholds `GlobalAlloc::realloc`'s contract; forwarded as is.
         unsafe { System.realloc(ptr, layout, size) }
     }
 }
@@ -41,24 +47,24 @@ fn panel(ui: &mut Ui, v: &mut [f64; 20], on: &mut [bool; 10]) -> El {
     let mut rows = Vec::new();
     for i in 0..10 {
         let a = root.slot(i);
-        let (b0, _) = button(ui, &*a.field("a"), "Go");
-        let (b1, _) = button(ui, &*a.field("b"), "Stop");
-        let (t, _) = toggle(ui, &*a.field("t"), &mut on[i]);
-        let (s, _) = slider(ui, &*a.field("s"), "Gain", &mut v[i], 0.0..=1.0);
-        let (k, _) = knob(ui, &*a.field("k"), "Cut", &mut v[10 + i], 0.0..=1.0);
+        let b0 = button(ui, &*a.field("a"), "Go").el;
+        let b1 = button(ui, &*a.field("b"), "Stop").el;
+        let t = toggle(ui, &*a.field("t"), "On", &mut on[i]).el;
+        let s = slider(ui, &*a.field("s"), "Gain", &mut v[i], 0.0..=1.0).el;
+        let k = knob(ui, &*a.field("k"), "Cut", &mut v[10 + i], 0.0..=1.0).el;
         rows.push(row![b0, b1, t, s, k]);
     }
-    column(rows)
+    col(rows)
 }
 
 /// A widget built with the same id every frame allocates nothing for the id:
-/// the one allocation left is the boxed build closure.
+/// the one allocation left is the label, shared by its text and its name.
 #[test]
 fn a_widget_id_costs_the_allocator_nothing() {
-    let mut ui = Ui::new(Theme::DEFAULT);
+    let mut ui = Ui::default();
     let id = Id::of("rack").slot(3).field("go");
     let (n, _) = allocations(|| button(&mut ui, &*id, ""));
-    assert_eq!(n, 1, "only the build closure is boxed");
+    assert_eq!(n, 1, "only the label is allocated");
 }
 
 /// `cargo test -p mui --test frame_alloc -- --nocapture --ignored`: the
@@ -66,8 +72,8 @@ fn a_widget_id_costs_the_allocator_nothing() {
 #[test]
 #[ignore = "a measurement, not a check"]
 fn fifty_widgets_per_frame() {
-    let mut ui =
-        Ui::new(Theme::DEFAULT).font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
+    const N: usize = 20;
+    let mut ui = Ui::default().font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
     let (mut v, mut on) = ([0.5; 20], [false; 10]);
     let size = Some(Size::new(1200., 800.));
     for _ in 0..3 {
@@ -76,13 +82,12 @@ fn fifty_widgets_per_frame() {
             .unwrap();
     }
     let (mut build, mut frame) = (0, 0);
-    const N: usize = 20;
     for _ in 0..N {
         let (b, tree) = allocations(|| panel(&mut ui, &mut v, &mut on));
         let (f, _) = allocations(|| {
             ui.frame(tree, size, PointerInput::default(), 0.016)
                 .map(|_| ())
-                .unwrap()
+                .unwrap();
         });
         build += b;
         frame += f;

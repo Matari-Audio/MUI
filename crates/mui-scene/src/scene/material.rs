@@ -1,11 +1,10 @@
 //! A material weld's plates, baked or handed to the GPU.
-use std::sync::Arc;
 
 use mui_geometry::{CornerStyle, Point};
 use mui_layout::Frame;
 
-use super::{snap, SceneError, Walk};
-use crate::{Color, Content, El, Paint};
+use super::{SceneError, Walk, snap};
+use crate::{Color, Content, El, Fill, Paint};
 
 impl Walk<'_> {
     /// Bake the plates in group-local coordinates, before clips and the parent
@@ -20,20 +19,19 @@ impl Walk<'_> {
         let Some(weld) = n.payload().extras().welding else {
             return Ok(None);
         };
-        let gpu = n.payload().weld_backend.unwrap_or(self.spec.weld_backend)
-            == crate::WeldBackend::AnalyticGpu;
+        let gpu = self.spec.weld_backend == crate::WeldBackend::AnalyticGpu;
         if gpu && n.is_clip() {
             return Err(SceneError::UnsupportedWeld(
                 "GPU weld cannot itself clip children to its changing union; put a normal clipping viewport above it",
             ));
         }
         crate::material_weld::check_plate(n, false)?;
-        if n.payload().extras().outline.is_some() || n.payload().style.union {
+        if n.payload().extras().outline.is_some() || n.payload().style.union.unwrap_or_default() {
             return Err(SceneError::UnsupportedWeld(
                 "custom or union outline on the group; put it on a source child",
             ));
         }
-        let mut quality = n.payload().extras().weld_quality.unwrap_or_default();
+        let mut quality = weld.quality.unwrap_or_default();
         if let Some(scale) = self.spec.device_scale {
             quality.scale = scale;
         }
@@ -46,20 +44,21 @@ impl Walk<'_> {
             snap(frame.x, Some(quality.scale)),
             snap(frame.y, Some(quality.scale)),
         );
-        let th = self.spec.theme;
+        let spec = self.spec;
+        let th = &spec.theme;
         let parent = &n.payload().style;
         let mut sources = Vec::new();
         let mut members = std::collections::HashSet::new();
         let mut at = self.i;
         for (j, c) in n.children().iter().enumerate() {
             let first = at;
-            let f = self.frames[first];
-            at += self.sizes[first];
+            let f = self.tree.frames[first];
+            at += self.tree.sizes[first];
             let e = c.payload();
             if c.is_float()
                 || c.is_sticky()
                 || e.carve.is_some()
-                || e.weld_excluded
+                || e.has(crate::Element::WELD_EXCLUDED)
                 || matches!(&e.content, Content::Text(_))
                 || f.size.width <= 0.0
                 || f.size.height <= 0.0
@@ -68,9 +67,9 @@ impl Walk<'_> {
             }
             // Empty spacers affect layout, never material. A group fill can
             // explicitly give otherwise unpainted child outlines material.
-            if parent.fill.is_none()
+            if parent.fill.as_ref().is_none_or(Fill::is_none)
                 && parent.stroke.is_none()
-                && e.style.fill.is_none()
+                && e.style.fill.as_ref().is_none_or(Fill::is_none)
                 && e.style.stroke.is_none()
             {
                 continue;
@@ -79,8 +78,8 @@ impl Walk<'_> {
             if gpu
                 && (sources.len() >= mui_weld::analytic::ANALYTIC_SOURCES
                     || e.extras().outline.is_some()
-                    || e.style.union
-                    || e.style.corners != CornerStyle::Round
+                    || e.style.union.unwrap_or_default()
+                    || e.style.corners.unwrap_or_default() != CornerStyle::Round
                     || c.children()
                         .iter()
                         .any(|child| child.payload().carve.is_some()))
@@ -97,15 +96,14 @@ impl Walk<'_> {
                     "GPU participant is not an analytic rounded rectangle",
                 ));
             }
-            let fill = if parent.fill.is_none() {
-                &e.style.fill
-            } else {
-                &parent.fill
+            let fill = match &parent.fill {
+                Some(f) if !f.is_none() => f,
+                _ => e.style.fill.as_ref().unwrap_or(&Fill::None),
             };
             let fill_paint = fill.paint(&th.palette, under);
             let ground = fill_paint.as_ref().map_or(under, Paint::solid);
             let stroke = parent.stroke.as_ref().or(e.style.stroke.as_ref());
-            let border = stroke.and_then(|s| s.fill.paint(&th.palette, ground));
+            let border = stroke.and_then(|s| s.fill.as_ref()?.paint(&th.palette, ground));
             let width = stroke.map_or(0.0, |s| s.width.unwrap_or(th.stroke_width));
             sources.push(crate::material_weld::source(
                 crate::material_weld::Plate {
@@ -119,10 +117,7 @@ impl Walk<'_> {
                 origin,
                 0.25 / quality.scale,
             )?);
-            members.insert(
-                c.key()
-                    .map_or_else(|| Arc::from(format!("{path}/{j}")), Arc::from),
-            );
+            members.insert(super::child_key(c, path, j));
         }
         if sources.is_empty() {
             return Err(SceneError::UnsupportedWeld(
@@ -136,7 +131,7 @@ impl Walk<'_> {
                 quality,
                 origin,
                 members,
-                self.weld_cache,
+                self.caches.welds,
             )?));
         }
         let request = mui_weld::Request {
@@ -144,7 +139,7 @@ impl Walk<'_> {
             weld,
             quality,
         };
-        let baked = self.weld_cache.get(&request)?;
+        let baked = self.caches.welds.get(&request)?;
         Ok(Some(crate::material_weld::finish(&baked, origin, members)?))
     }
 }

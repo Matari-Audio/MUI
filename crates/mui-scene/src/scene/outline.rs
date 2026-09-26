@@ -4,12 +4,12 @@ use rustc_hash::FxHashMap as HashMap;
 use std::sync::Arc;
 
 use mui_geometry::{
-    boolean, fillet, union, BooleanOp, Bounds, CornerStyle, Fillet, Path, Point, Polygon,
-    RoundedRect, Topology,
+    BooleanOp, CornerStyle, Fillet, Path, Point, Polygon, Rect, RoundedRect, Topology, Vec2,
+    boolean, fillet, union,
 };
 use mui_layout::Frame;
 
-use super::{bounds, polygons, SceneError, Walk};
+use super::{SceneError, Walk, bounds, polygons};
 use crate::{Carve, El, Radius};
 
 /// A node's resolved outline, and what else its shape knows. Its geometry
@@ -27,7 +27,7 @@ pub(super) struct Contour {
     /// casts a shadow: one per welded child, or a squircle's own frame.
     pub(super) shadow_rects: Vec<RoundedRect>,
     /// The path's bounds when already known; see [`Contour::bounds`].
-    pub(super) known_bounds: Option<Bounds>,
+    pub(super) known_bounds: Option<Rect>,
     /// Where all of the above stands in the scene.
     pub(super) offset: Point,
 }
@@ -45,14 +45,14 @@ impl Contour {
     }
 
     /// The outline's local bounds: the rect's, the cached ones, or flattened.
-    pub(super) fn bounds(&self) -> Result<Option<Bounds>, SceneError> {
+    pub(super) fn bounds(&self) -> Result<Option<Rect>, SceneError> {
         if let Some(r) = self.rect {
             return Ok(Some(r.bounds()));
         }
         if self.known_bounds.is_some() {
             return Ok(self.known_bounds);
         }
-        Ok(Bounds::from_points(
+        Ok(mui_geometry::bounds(
             self.path.flatten(0.5, 100_000)?.concat(),
         ))
     }
@@ -63,24 +63,24 @@ impl Contour {
             return self.path.clone();
         }
         let mut p = (*self.path).clone();
-        p.translate(self.offset);
+        p.translate(self.offset.to_vec2());
         Arc::new(p)
     }
 
     pub(super) fn world_rect(&self) -> Option<RoundedRect> {
-        self.rect.map(|r| r.translated(self.offset))
+        self.rect.map(|r| r.translated(self.offset.to_vec2()))
     }
 
     /// The same outline, local to `origin` instead.
     fn placed_at(mut self, origin: Point) -> Self {
         let d = self.offset - origin;
-        if d != Point::ZERO {
+        if d != Vec2::ZERO {
             Arc::make_mut(&mut self.path).translate(d);
             self.rect = self.rect.map(|r| r.translated(d));
             for r in &mut self.shadow_rects {
                 *r = r.translated(d);
             }
-            self.known_bounds = self.known_bounds.map(|b| b.translated(d));
+            self.known_bounds = self.known_bounds.map(|b| b + d);
         }
         self.offset = origin;
         self
@@ -103,15 +103,15 @@ pub(super) struct OutlineCache {
     pub(super) hits: u64,
     pub(super) misses: u64,
     /// Each canvas's last draw list and its paths: a
-    /// [`canvas_cached`](crate::canvas_cached) list is painted from the same
+    /// [`canvas_keyed`](crate::canvas_keyed) list is painted from the same
     /// paths every frame, wherever it moves. Holding the list keeps its
     /// address from being reused.
-    pub(super) canvases: HashMap<Arc<str>, PlacedDraws>,
+    pub(super) canvases: HashMap<crate::Id, PlacedDraws>,
     /// Every local rounded-rect path, by the rect's words and corner style:
     /// one `Arc` for every node, and every frame, of that shape.
     pub(super) rects: HashMap<[u64; 6], (Arc<Path>, u64)>,
     /// The band each node's stroke paints along its outline.
-    pub(super) bands: HashMap<Arc<str>, Band>,
+    pub(super) bands: HashMap<crate::Id, Band>,
 }
 
 /// The outline a stroke ran along, its width and alignment, the band, and
@@ -199,6 +199,16 @@ fn path_words(path: &Path, key: &mut Vec<u64>) {
     }
 }
 
+/// The radius `style` resolves to: square for a child of a
+/// `segmented` (`mui_material::Material`) container.
+fn radius(style: &crate::Style, square: bool) -> Radius {
+    if square {
+        Radius::Px(0.)
+    } else {
+        style.radius.unwrap_or_default()
+    }
+}
+
 /// `n`'s own outline inputs as key words: its snapped bounds relative to
 /// `origin`, which sits on the device grid, and its size. A custom
 /// `.outline(..)` is keyed by the local path it draws and where that lands,
@@ -208,6 +218,7 @@ fn geometry_shallow(
     frames: &[Frame],
     at: usize,
     g: (Point, Option<f64>),
+    square: bool,
     key: &mut Vec<u64>,
 ) {
     let (origin, scale) = g;
@@ -223,17 +234,17 @@ fn geometry_shallow(
     let b = bounds(frame, scale);
     key.extend(
         [
-            b.min.x - origin.x,
-            b.min.y - origin.y,
-            b.max.x - origin.x,
-            b.max.y - origin.y,
+            b.x0 - origin.x,
+            b.y0 - origin.y,
+            b.x1 - origin.x,
+            b.y1 - origin.y,
             frame.size.width,
             frame.size.height,
         ]
         .map(f64::to_bits),
     );
     let style = &n.payload().style;
-    match style.radius {
+    match radius(style, square) {
         Radius::Theme => key.push(0),
         Radius::Px(value) => key.extend([1, value.to_bits()]),
         Radius::Token(corner) => key.extend([2, corner as u64]),
@@ -241,11 +252,11 @@ fn geometry_shallow(
         Radius::Pill => key.push(4),
         Radius::Pair(convex, concave) => key.extend([5, convex.to_bits(), concave.to_bits()]),
     }
-    key.push(match style.corners {
+    key.push(match style.corners.unwrap_or_default() {
         CornerStyle::Round => 0,
         CornerStyle::Squircle => 1,
     });
-    key.push(u64::from(style.union));
+    key.push(u64::from(style.union.unwrap_or_default()));
     key.push(match n.payload().carve {
         None => 0,
         Some(Carve::Cut) => 1,
@@ -257,27 +268,27 @@ fn geometry_shallow(
 fn geometry_node(
     n: &El,
     frames: &[Frame],
-    sizes: &[usize],
+    (sizes, squared): (&[usize], &[bool]),
     at: usize,
     g: (Point, Option<f64>),
     key: &mut Vec<u64>,
 ) {
-    geometry_shallow(n, frames, at, g, key);
+    geometry_shallow(n, frames, at, g, squared[at], key);
     let mut child_at = at + 1;
     for child in n.children() {
         // A plain child contributes only its own rounded frame to a weld.
         // Descendants matter when this child welds them or carves one out;
         // skipping unrelated descendants keeps the cache key cheaper than
         // the boolean work it avoids.
-        let complex = child.payload().style.union
+        let complex = child.payload().style.union.unwrap_or_default()
             || child
                 .children()
                 .iter()
                 .any(|grandchild| grandchild.payload().carve.is_some());
         if complex {
-            geometry_node(child, frames, sizes, child_at, g, key);
+            geometry_node(child, frames, (sizes, squared), child_at, g, key);
         } else {
-            geometry_shallow(child, frames, child_at, g, key);
+            geometry_shallow(child, frames, child_at, g, squared[child_at], key);
         }
         child_at += sizes[child_at];
     }
@@ -298,7 +309,7 @@ impl Walk<'_> {
         frame: Frame,
         first: usize,
     ) -> Result<Contour, SceneError> {
-        if let Some((path, offset)) = self.regions.get(&first.saturating_sub(1)) {
+        if let Some((path, offset)) = self.plan.regions.get(first.saturating_sub(1)) {
             return Ok(Contour {
                 offset: *offset,
                 ..Contour::path(path.clone())
@@ -312,16 +323,16 @@ impl Walk<'_> {
             )
             .into());
         }
-        let cacheable = n.payload().style.union
+        let cacheable = n.payload().style.union.unwrap_or_default()
             || n.children()
                 .iter()
                 .any(|child| child.payload().carve.is_some());
         let mut key = None;
         if cacheable {
-            let mut words = std::mem::take(&mut self.outlines.scratch);
+            let mut words = std::mem::take(&mut self.caches.outlines.scratch);
             let origin = self.geometry_key(n, first, &mut words);
-            if let Some(outline) = self.outlines.get(&words, origin) {
-                self.outlines.scratch = words;
+            if let Some(outline) = self.caches.outlines.get(&words, origin) {
+                self.caches.outlines.scratch = words;
                 return Ok(outline);
             }
             key = Some((words, origin));
@@ -330,9 +341,9 @@ impl Walk<'_> {
         let (mut at, mut topo): (usize, Option<Topology>) = (first, None);
         let mut shapes = Vec::new();
         for c in n.children() {
-            let (f, carve) = (self.frames[at], c.payload().carve);
+            let (f, carve) = (self.tree.frames[at], c.payload().carve);
             let child_first = at + 1;
-            at += self.sizes[at];
+            at += self.tree.sizes[at];
             let Some(carve) = carve.filter(|_| f.size.width > 0.0 && f.size.height > 0.0) else {
                 continue;
             };
@@ -353,7 +364,7 @@ impl Walk<'_> {
         }
         let Some(topo) = topo else {
             return match key {
-                Some((key, origin)) => self.outlines.insert(key, origin, base),
+                Some((key, origin)) => self.caches.outlines.insert(key, origin, base),
                 None => Ok(base),
             };
         };
@@ -369,10 +380,16 @@ impl Walk<'_> {
         )?;
         let outline = Contour {
             changed: true,
-            ..Contour::path(n.payload().style.corners.shape(&rounded.path))
+            ..Contour::path(
+                n.payload()
+                    .style
+                    .corners
+                    .unwrap_or_default()
+                    .shape(&rounded.path),
+            )
         };
         match key {
-            Some((key, origin)) => self.outlines.insert(key, origin, outline),
+            Some((key, origin)) => self.caches.outlines.insert(key, origin, outline),
             None => Ok(outline),
         }
     }
@@ -401,13 +418,20 @@ impl Walk<'_> {
             Some(scale) => key.extend([1, scale.to_bits()]),
         }
         let at = first.saturating_sub(1);
-        let f = self.frames[at];
+        let f = self.tree.frames[at];
         let scale = self.spec.device_scale;
         let origin = match scale {
             None => Point::new(f.x, f.y),
             Some(s) => Point::new((f.x * s).floor() / s, (f.y * s).floor() / s),
         };
-        geometry_node(n, &self.frames, &self.sizes, at, (origin, scale), key);
+        geometry_node(
+            n,
+            &self.tree.frames,
+            (&self.tree.sizes, &self.tree.squared),
+            at,
+            (origin, scale),
+            key,
+        );
         origin
     }
 
@@ -416,15 +440,15 @@ impl Walk<'_> {
     pub(super) fn rect_path(&mut self, rr: RoundedRect, corners: CornerStyle) -> Arc<Path> {
         let b = rr.bounds();
         let key = [
-            b.min.x.to_bits(),
-            b.min.y.to_bits(),
-            b.max.x.to_bits(),
-            b.max.y.to_bits(),
+            b.x0.to_bits(),
+            b.y0.to_bits(),
+            b.x1.to_bits(),
+            b.y1.to_bits(),
             rr.radius().to_bits(),
             corners as u64,
         ];
-        let generation = self.outlines.generation;
-        let (p, seen) = self.outlines.rects.entry(key).or_insert_with(|| {
+        let generation = self.caches.outlines.generation;
+        let (p, seen) = self.caches.outlines.rects.entry(key).or_insert_with(|| {
             let p = match corners {
                 CornerStyle::Round => rr.path(),
                 _ => corners.shape(&rr.path()),
@@ -439,7 +463,7 @@ impl Walk<'_> {
         let th = &self.spec.theme;
         let s = &n.payload().style;
         if let Some(shape) = &n.payload().extras().outline {
-            if !s.shadow.is_empty() {
+            if !s.shadow.as_deref().unwrap_or_default().is_empty() {
                 return Err(mui_geometry::Error::InvalidOptions(
                     "custom-path shadows require a path-filter renderer; use an outer wrapper",
                 )
@@ -452,7 +476,7 @@ impl Walk<'_> {
                 ..Contour::path(path)
             });
         }
-        let (convex, concave) = match s.radius {
+        let (convex, concave) = match radius(s, self.tree.squared[first.saturating_sub(1)]) {
             Radius::Theme => (th.corners.box_, th.corners.concave),
             // A pixel radius names the outer (convex) corner. The inner
             // (concave) corner remains the theme contract; a pair such as
@@ -472,17 +496,17 @@ impl Walk<'_> {
         if !(convex.is_finite() && convex >= 0.0 && concave.is_finite() && concave >= 0.0) {
             return Err(SceneError::InvalidRadius);
         }
-        if !s.union || n.children().is_empty() {
+        if !s.union.unwrap_or_default() || n.children().is_empty() {
             // Local to its snapped corner, so a move keeps the path.
             let b = bounds(frame, self.spec.device_scale);
-            let size = Bounds::new(0., 0., b.max.x - b.min.x, b.max.y - b.min.y);
+            let size = Rect::new(0., 0., b.x1 - b.x0, b.y1 - b.y0);
             let rr = RoundedRect::new(size, convex)?;
-            let path = self.rect_path(rr, s.corners);
-            let offset = b.min;
+            let path = self.rect_path(rr, s.corners.unwrap_or_default());
+            let offset = b.origin();
             // A squircle is no longer a rounded rectangle, so it gives up the
             // analytic blur and the analytic shell inset with it; the path
             // route below draws both from the outline itself.
-            if s.corners != CornerStyle::Round {
+            if s.corners.unwrap_or_default() != CornerStyle::Round {
                 return Ok(Contour {
                     shadow_rects: vec![rr],
                     offset,
@@ -504,8 +528,8 @@ impl Walk<'_> {
         for c in n.children() {
             let child_at = at;
             let child_first = child_at + 1;
-            let f = self.frames[child_at];
-            at += self.sizes[at];
+            let f = self.tree.frames[child_at];
+            at += self.tree.sizes[at];
             if c.payload().carve.is_some() || f.size.width <= 0.0 || f.size.height <= 0.0 {
                 continue;
             }
@@ -515,7 +539,7 @@ impl Walk<'_> {
             let child_rects = child
                 .shadow_rects
                 .iter()
-                .map(|r| r.translated(child.offset));
+                .map(|r| r.translated(child.offset.to_vec2()));
             // A rounded rect is one simple ring already: no normalizing pass.
             let child_shapes = match child_rect {
                 Some(r) => {
@@ -535,7 +559,9 @@ impl Walk<'_> {
             // convex radius.
             match child_rect {
                 Some(r) => rects.push(r),
-                None if c.payload().style.union && !child.shadow_rects.is_empty() => {
+                None if c.payload().style.union.unwrap_or_default()
+                    && !child.shadow_rects.is_empty() =>
+                {
                     rects.extend(child_rects);
                 }
                 None => rects.push(RoundedRect::new(bounds(f, self.spec.device_scale), convex)?),
@@ -560,7 +586,7 @@ impl Walk<'_> {
         Ok(Contour {
             changed: merged.components() != participants,
             shadow_rects: rects,
-            ..Contour::path(s.corners.shape(&rounded.path))
+            ..Contour::path(s.corners.unwrap_or_default().shape(&rounded.path))
         })
     }
 }
@@ -577,7 +603,7 @@ mod tests {
     fn a_cut_child_leaves_a_hole_and_paints_nothing() {
         // Signed, so a hole subtracts: the rings come back wound apart.
         let area = |el: El| {
-            let s = resolve_scene(&SceneSpec::new(stack![el.id("card")])).unwrap();
+            let s = resolve(&SceneSpec::new(stack![el.id("card")])).unwrap();
             let rings = s
                 .surface("card")
                 .unwrap()
@@ -596,7 +622,7 @@ mod tests {
                 .sum();
             (signed.abs(), s.paint.len())
         };
-        let square = |w: f64, h: f64| leaf(w, h).radius(Radius::Px(0.)).center();
+        let square = |w: f64, h: f64| block(w, h).radius(Radius::Px(0.)).center();
         let plain = stack![]
             .square(100.)
             .radius(Radius::Px(0.))
@@ -609,6 +635,15 @@ mod tests {
         assert!((kept - 2_500.).abs() < 1.0, "{kept}");
         // The carve child added no paint of its own.
         assert_eq!(layers, carved);
+        // Content nodes hold the carve too, instead of dropping it.
+        let label = text("x")
+            .square(100.)
+            .radius(Radius::Px(0.))
+            .fill(Role::Primary);
+        let (label_whole, _) = area(label.clone());
+        let (label_holed, _) = area(label.cut(square(50., 50.)));
+        assert!((label_whole - 10_000.).abs() < 1.0, "{label_whole}");
+        assert!((label_holed - 7_500.).abs() < 1.0, "{label_holed}");
     }
 
     #[test]
@@ -616,11 +651,11 @@ mod tests {
         // With a square parent radius, the only way for the first contour to
         // miss the origin is for the child's rounded outline to participate in
         // the weld. The old frame-only union produced a sharp (0, 0) corner.
-        let root = row([leaf(20., 20.).radius(8.)])
+        let root = row([block(20., 20.).radius(8.)])
             .radius(0.)
             .union(Role::Surface)
             .id("weld");
-        let s = resolve_scene(&SceneSpec::new(root).offered(Size::new(20., 20.))).unwrap();
+        let s = resolve(&SceneSpec::new(root).offered(Size::new(20., 20.))).unwrap();
         let points = s
             .surface("weld")
             .unwrap()
@@ -637,23 +672,23 @@ mod tests {
     #[test]
     fn weld_cache_reuses_only_matching_geometry_inputs() {
         let base = SceneSpec::new(
-            row([leaf(20., 20.).radius(6.), leaf(18., 24.).radius(8.)])
+            row([block(20., 20.).radius(6.), block(18., 24.).radius(8.)])
                 .radius(0.)
                 .union(Role::Surface),
         );
-        let mut text = TextCache::default();
-        resolve_scene_with(&base, &mut text).unwrap();
+        let mut text = TextState::default();
+        text.resolve(&base).unwrap();
         let first_misses = text.outlines.misses;
         assert!(first_misses > 0, "the welded outline was not cached");
 
-        resolve_scene_with(&base, &mut text).unwrap();
+        text.resolve(&base).unwrap();
         assert_eq!(text.outlines.misses, first_misses);
         assert!(text.outlines.hits > 0, "the unchanged weld was not reused");
 
         let mut changed = base.clone();
         changed.root = changed.root.radius(3.);
         let misses = text.outlines.misses;
-        resolve_scene_with(&changed, &mut text).unwrap();
+        text.resolve(&changed).unwrap();
         assert!(
             text.outlines.misses > misses,
             "a style change reused stale geometry"
@@ -661,7 +696,7 @@ mod tests {
 
         changed.theme.corners.box_ += 1.;
         let misses = text.outlines.misses;
-        resolve_scene_with(&changed, &mut text).unwrap();
+        text.resolve(&changed).unwrap();
         assert!(
             text.outlines.misses > misses,
             "a theme change reused stale geometry"
@@ -669,7 +704,7 @@ mod tests {
 
         changed.device_scale = Some(2.);
         let misses = text.outlines.misses;
-        resolve_scene_with(&changed, &mut text).unwrap();
+        text.resolve(&changed).unwrap();
         assert!(
             text.outlines.misses > misses,
             "a scale change reused stale geometry"
@@ -678,9 +713,9 @@ mod tests {
 
     /// A cached weld is only reused when every input matches, so the
     /// cached outline always equals a fresh resolve of the same spec.
-    fn same_as_fresh(spec: &SceneSpec, text: &mut TextCache) {
-        let cached = resolve_scene_with(spec, text).unwrap();
-        let fresh = resolve_scene(spec).unwrap();
+    fn same_as_fresh(spec: &SceneSpec, text: &mut TextState) {
+        let cached = text.resolve(spec).unwrap();
+        let fresh = resolve(spec).unwrap();
         assert_eq!(
             cached.surface("weld").unwrap().path,
             fresh.surface("weld").unwrap().path,
@@ -691,15 +726,19 @@ mod tests {
     #[test]
     fn a_weld_reshapes_when_a_childs_custom_outline_changes() {
         let spec = |w: f64| {
-            let child = leaf(40., 20.).outline(move |s| {
+            let child = block(40., 20.).outline(move |s| {
                 let p = [(0., 0.), (s.width * w, 0.), (0., s.height)];
                 Path::polyline(p.map(|(x, y)| Point::new(x, y)), true)
             });
-            SceneSpec::new(row([child, leaf(20., 20.)]).union(Role::Surface).id("weld"))
-                .offered(Size::new(60., 20.))
+            SceneSpec::new(
+                row([child, block(20., 20.)])
+                    .union(Role::Surface)
+                    .id("weld"),
+            )
+            .offered(Size::new(60., 20.))
         };
-        let mut text = TextCache::default();
-        resolve_scene_with(&spec(1.), &mut text).unwrap();
+        let mut text = TextState::default();
+        text.resolve(&spec(1.)).unwrap();
         // Same frames, same radii: only the closure differs.
         same_as_fresh(&spec(0.5), &mut text);
     }
@@ -710,7 +749,7 @@ mod tests {
     #[test]
     fn a_custom_outline_weld_is_cached_while_its_drawing_stays() {
         fn send<T: Send>() {}
-        send::<TextCache>();
+        send::<Resolver>();
         let triangle = |w: f64| {
             move |s: Size| {
                 let p = [(0., 0.), (s.width * w, 0.), (0., s.height)];
@@ -718,21 +757,25 @@ mod tests {
             }
         };
         let spec = |child: El| {
-            SceneSpec::new(row([child, leaf(20., 20.)]).union(Role::Surface).id("weld"))
-                .offered(Size::new(60., 20.))
+            SceneSpec::new(
+                row([child, block(20., 20.)])
+                    .union(Role::Surface)
+                    .id("weld"),
+            )
+            .offered(Size::new(60., 20.))
         };
-        let kept = spec(leaf(40., 20.).outline(triangle(1.)));
-        let mut text = TextCache::default();
-        resolve_scene_with(&kept, &mut text).unwrap();
+        let kept = spec(block(40., 20.).outline(triangle(1.)));
+        let mut text = TextState::default();
+        text.resolve(&kept).unwrap();
         let misses = text.outlines.misses;
-        resolve_scene_with(&kept, &mut text).unwrap();
-        let rebuilt = spec(leaf(40., 20.).outline(triangle(1.)));
-        resolve_scene_with(&rebuilt, &mut text).unwrap();
+        text.resolve(&kept).unwrap();
+        let rebuilt = spec(block(40., 20.).outline(triangle(1.)));
+        text.resolve(&rebuilt).unwrap();
         assert_eq!(
             text.outlines.misses, misses,
             "an unchanged drawing reshaped the weld"
         );
-        let swapped = spec(leaf(40., 20.).outline(triangle(0.5)));
+        let swapped = spec(block(40., 20.).outline(triangle(0.5)));
         same_as_fresh(&swapped, &mut text);
         assert!(text.outlines.misses > misses, "a new drawing hit the cache");
     }
@@ -742,7 +785,7 @@ mod tests {
         // The old 64-bit key hashed `Token(Box)` and `Pill` to the same word.
         let spec = |r: Radius| {
             SceneSpec::new(
-                row([leaf(40., 20.), leaf(20., 20.)])
+                row([block(40., 20.), block(20., 20.)])
                     .radius(r)
                     .union(Role::Surface)
                     .id("weld"),
@@ -756,8 +799,8 @@ mod tests {
                 ..Theme::default()
             })
         };
-        let mut text = TextCache::default();
-        resolve_scene_with(&spec(Radius::Token(Corner::Box)), &mut text).unwrap();
+        let mut text = TextState::default();
+        text.resolve(&spec(Radius::Token(Corner::Box))).unwrap();
         same_as_fresh(&spec(Radius::Pill), &mut text);
     }
 
@@ -767,29 +810,29 @@ mod tests {
     #[test]
     fn a_steady_or_moved_frame_runs_no_boolean_pass() {
         let spec = |shift: f64| {
-            let tab = column([leaf(20., 20.).pill()])
+            let tab = col([block(20., 20.).pill()])
                 .pad(8.)
                 .shell(4., Role::Raised);
-            let body = row([leaf(40., 24.).stroke(Role::Dim), leaf(40., 24.)])
+            let body = row([block(40., 24.).stroke(Role::Dim), block(40., 24.)])
                 .inside(4.)
                 .stroke(Role::Dim)
-                .cut(leaf(8., 8.).center());
-            let weld = column([tab, body])
+                .cut(block(8., 8.).center());
+            let weld = col([tab, body])
                 .align(Align::Start)
                 .union(Role::Surface)
                 .stroke(Role::Dim)
                 .shell(3., Role::Raised)
                 .id("weld");
-            SceneSpec::new(column([weld]).pad(Spacing::Px(8. + shift)))
+            SceneSpec::new(col([weld]).pad(Spacing::Px(8. + shift)))
                 .offered(Size::new(400. + 2. * shift, 300. + 2. * shift))
         };
-        let mut text = TextCache::default();
-        resolve_scene_with(&spec(0.), &mut text).unwrap();
+        let mut text = TextState::default();
+        text.resolve(&spec(0.)).unwrap();
         for shift in [0., 13., 13.25, 0.5] {
             let before = mui_geometry::boolean_passes();
-            let cached = resolve_scene_with(&spec(shift), &mut text).unwrap();
+            let cached = text.resolve(&spec(shift)).unwrap();
             assert_eq!(mui_geometry::boolean_passes(), before, "shift {shift}");
-            let fresh = resolve_scene(&spec(shift)).unwrap();
+            let fresh = resolve(&spec(shift)).unwrap();
             let flat = |s: &ResolvedScene| s.surface("weld").unwrap().path.flatten(0.1, 20_000);
             for (a, b) in flat(&cached)
                 .unwrap()
@@ -804,22 +847,22 @@ mod tests {
 
     #[test]
     fn weld_ignores_zero_area_children() {
-        let root = row([leaf(0., 20.), leaf(20., 20.)])
+        let root = row([block(0., 20.), block(20., 20.)])
             .union(Role::Surface)
             .id("weld");
-        let s = resolve_scene(&SceneSpec::new(root).offered(Size::new(20., 20.))).unwrap();
+        let s = resolve(&SceneSpec::new(root).offered(Size::new(20., 20.))).unwrap();
         assert!(!s.surface("weld").unwrap().path.commands.is_empty());
     }
 
     #[test]
     fn tokens_pill_and_gradient() {
-        let root = row([leaf(40., 20.)
+        let root = row([block(40., 20.)
             .pill()
             .fill(Gradient::vertical(Role::Raised, Role::Surface))
             .id("k")])
         .gap(M)
         .pad(S);
-        let s = resolve_scene(&SceneSpec::new(root)).unwrap();
+        let s = resolve(&SceneSpec::new(root)).unwrap();
         assert_eq!(s.layout.frame("k").unwrap().x, 8.);
         assert_eq!(s.surface("k").unwrap().rect.unwrap().radius(), 10.);
         assert!(matches!(
@@ -831,9 +874,8 @@ mod tests {
     #[test]
     /// A square port tab next to a square body welds into one contour; a
     /// rounded tab is a pill that only kisses the body and the union splits.
-    #[allow(clippy::float_cmp)]
     fn a_square_tab_welds_into_one_contour_with_its_body() {
-        let tab = column([leaf(24., 24.)])
+        let tab = col([block(24., 24.)])
             .w(36.)
             .h(36.)
             .pad(6.)
@@ -842,10 +884,10 @@ mod tests {
             .fill(Role::Surface)
             .radius(0.)
             .align(Align::End);
-        let body = leaf(400., 200.)
+        let body = block(400., 200.)
             .grow(1.)
             .shrink(1.)
-            .min_width(0.)
+            .min_w(0.)
             .radius(0.)
             .id("body");
         let root = row([tab, body])
@@ -857,7 +899,7 @@ mod tests {
             .stroke_width(1.5)
             .radius(20.)
             .id("weld");
-        let s = resolve_scene(&SceneSpec::new(root).offered(Size::new(500., 200.))).unwrap();
+        let s = resolve(&SceneSpec::new(root).offered(Size::new(500., 200.))).unwrap();
         let pts = s
             .surface("weld")
             .unwrap()

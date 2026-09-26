@@ -5,17 +5,22 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 use mui_layout::{
-    resolve_cached_with, resolve_with, LayoutCache, Limits, Node, Size, SpacingScale,
+    LayoutCache, Limits, Node, Size, SpacingScale, resolve_cached_with, resolve_with,
 };
 
 static ALLOCS: AtomicUsize = AtomicUsize::new(0);
 struct Counting;
+// SAFETY: every method forwards to `System` with the caller's arguments
+// unchanged; the counter never allocates, so the GlobalAlloc contract is
+// System's.
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, l: AllocLayout) -> *mut u8 {
         ALLOCS.fetch_add(1, Ordering::Relaxed);
+        // SAFETY: the caller upholds `GlobalAlloc::alloc`'s contract; forwarded as is.
         unsafe { System.alloc(l) }
     }
     unsafe fn dealloc(&self, p: *mut u8, l: AllocLayout) {
+        // SAFETY: the caller upholds `GlobalAlloc::dealloc`'s contract; forwarded as is.
         unsafe { System.dealloc(p, l) }
     }
 }
@@ -29,35 +34,37 @@ fn text(s: impl Into<String>) -> N {
     Node::content().with(s.into())
 }
 fn cell(i: usize) -> N {
-    N::column([text(format!("p{i}")), N::leaf(12., 12.)])
+    N::col([text(format!("p{i}")), N::block(12., 12.)])
         .gap(4.)
         .pad(4.)
         .id(format!("c{i}"))
 }
-fn block(depth: usize, i: usize) -> N {
+fn section(depth: usize, i: usize) -> N {
     if depth == 0 {
         return N::row([cell(i * 100), cell(i * 100 + 1), text(PARA).shrink(1.)])
             .gap(6.)
             .wrap();
     }
-    N::column([
+    N::col([
         N::row((0..3).map(|k| cell(i * 1000 + depth * 10 + k)))
             .gap(6.)
             .wrap(),
         N::grid(3, (0..6).map(|k| cell(i * 1000 + depth * 10 + 3 + k))).gap(4.),
-        block(depth - 1, i),
+        section(depth - 1, i),
     ])
     .gap(6.)
     .pad(4.)
 }
 fn tree() -> N {
-    N::column((0..4).map(|i| block(7, i + 1)))
+    N::col((0..4).map(|i| section(7, i + 1)))
         .gap(8.)
         .pad(8.)
         .scroll()
 }
-// The measurer callback hands over `&P`, and `P` here is `String`.
-#[allow(clippy::ptr_arg)]
+#[expect(
+    clippy::ptr_arg,
+    reason = "the measurer callback hands over `&P`, and `P` here is `String`"
+)]
 fn metric(s: &String, room: Option<f64>) -> Size {
     let full = s.len() as f64 * 6.;
     let w = room.unwrap_or(full).max(6.);

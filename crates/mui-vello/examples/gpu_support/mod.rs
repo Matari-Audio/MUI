@@ -5,7 +5,7 @@ pub const W: u32 = 384;
 pub const H: u32 = 256;
 pub fn fixture(scale: f64) -> mui_scene::ResolvedScene {
     let plate = |id: &str, fill: Color, width: f64| {
-        leaf(96., 64.)
+        block(96., 64.)
             .radius(14.)
             .fill(fill)
             .stroke(Color::oklcha(1., 0., 0., 0.7))
@@ -17,30 +17,29 @@ pub fn fixture(scale: f64) -> mui_scene::ResolvedScene {
         plate("b", Color::oklcha(0.65, 0.2, 260., 0.8), 8.)
     ]
     .gap(20.)
-    .gpu_weld(Weld::all().reach(35.).blend(80.))
+    .weld(Weld::all().reach(35.).blend(80.))
     .id("join")
-    .anchor(Align::Start, Align::Start)
-    .offset(16., 26.);
+    .at(16., 26.);
     let root = stack![
         stack![joined]
             .size(250., 150.)
             .clip()
             .radius(18.)
             .id("viewport")
-            .anchor(Align::Start, Align::Start)
-            .offset(20., 30.),
-        leaf(24., 24.)
+            .at(20., 30.),
+        block(24., 24.)
             .fill(Color::oklcha(1., 0., 0., 1.))
             .float()
             .id("front")
-            .anchor(Align::Start, Align::Start)
-            .offset(100., 74.),
+            .at(100., 74.),
     ]
     .size(f64::from(W), f64::from(H))
     // The theme rounds a filled box by default; the contract reads the corners.
     .radius(0.)
     .fill(Color::oklcha(0., 0., 0., 1.));
-    mui_scene::resolve_scene(&SceneSpec::new(root).scale(scale)).expect("GPU fixture resolves")
+    let spec = SceneSpec::new(root).scale(scale);
+    mui_scene::resolve(&spec.weld_backend(mui_scene::WeldBackend::AnalyticGpu))
+        .expect("GPU fixture resolves")
 }
 pub async fn device() -> Result<(wgpu::AdapterInfo, wgpu::Device, wgpu::Queue)> {
     let instance = wgpu::Instance::default();
@@ -95,7 +94,7 @@ pub fn readback(
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         mapped_at_creation: false,
     });
-    let mut encoder = device.create_command_encoder(&Default::default());
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
     encoder.copy_texture_to_buffer(
         wgpu::TexelCopyTextureInfo {
             texture,

@@ -1,0 +1,21 @@
+[package]
+name = "mui-reel"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Deterministic offline trailer renderer for MUI editors: scripted input, springed camera, sample-locked audio, HyperFrames/Remotion handoff."
+
+# ffmpeg is a child process found on PATH, not a dependency: without it the
+# take falls back to a PNG sequence.
+[dependencies]
+mui = { workspace = true, features = ["cpu"] }
+png.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+epaint_default_fonts.workspace = true
+mui-stage.workspace = true
+
+[lints]
+workspace = true

@@ -5,7 +5,7 @@ use super::*;
 use crate::window::Handler;
 use baseview::{Event, MouseEvent};
 use keyboard_types::{Key as HostKey, KeyState, KeyboardEvent, Modifiers};
-use mui::prelude::{knob, toggle, Point, Theme};
+use mui::prelude::{Point, knob, toggle};
 use mui::scene::prelude::row;
 use std::sync::Mutex;
 use truce::prelude::*;
@@ -59,26 +59,12 @@ fn context(params: &Arc<Synth>) -> (PluginContext, Log) {
 
 /// A gain knob, a voices knob and a bypass toggle, each bound.
 fn editor(params: &Arc<Synth>) -> MuiEditor<Synth> {
-    MuiEditor::new(
-        params.clone(),
-        Ui::new(Theme::DEFAULT),
-        (400, 300),
-        |ui, bridge| {
-            let gain = bridge.bind(ui, "gain", 10u32, |ui, v| {
-                knob(ui, "gain", "Gain", v, 0.0..=1.0).0.into()
-            });
-            let voices = bridge.bind(ui, "voices", 20u32, |ui, v| {
-                knob(ui, "voices", "Voices", v, 0.0..=1.0).0.into()
-            });
-            let bypass = bridge.bind(ui, "bypass", 30u32, |ui, v| {
-                let mut on = *v >= 0.5;
-                let el = toggle(ui, "bypass", &mut on).0.into();
-                *v = f64::from(u8::from(on));
-                el
-            });
-            row([gain, voices, bypass])
-        },
-    )
+    MuiEditor::new(params.clone(), Ui::default(), (400, 300), |ui, bridge| {
+        let gain = bridge.bind(ui, 10u32, |ui, id, v| knob(ui, id, "Gain", v, 0.0..=1.0));
+        let voices = bridge.bind(ui, 20u32, |ui, id, v| knob(ui, id, "Voices", v, 0.0..=1.0));
+        let bypass = bridge.bind_bool(ui, 30u32, |ui, id, on| toggle(ui, id, "Bypass", on));
+        row([gain, voices, bypass])
+    })
 }
 
 /// The editor opened on a recording host, and the window handler over it.
@@ -105,9 +91,14 @@ fn open_with(
     (editor, h, log)
 }
 
-fn centre(editor: &MuiEditor<Synth>, id: &str) -> Point {
+fn centre(editor: &MuiEditor<Synth>, param: u32) -> Point {
     let s = lock(&editor.shared);
-    let f = s.ui.scene().unwrap().surface(id).unwrap().frame;
+    let f =
+        s.ui.scene()
+            .unwrap()
+            .surface(&crate::widget_id(param))
+            .unwrap()
+            .frame;
     Point::new(f.x + f.size.width / 2.0, f.y + f.size.height / 2.0)
 }
 
@@ -169,7 +160,7 @@ fn bracketed(calls: &[Call], id: u32) -> bool {
 fn a_drag_is_one_host_gesture_and_the_value_lands_inside_it() {
     let params = Arc::new(Synth::default());
     let (editor, mut h, log) = open(&params);
-    let p = centre(&editor, "gain");
+    let p = centre(&editor, 10);
     at(&mut h, p);
     press(&mut h, true);
     h.step();
@@ -192,7 +183,7 @@ fn a_drag_is_one_host_gesture_and_the_value_lands_inside_it() {
 fn a_key_step_is_one_bracket_and_the_late_pair_is_not_a_second_one() {
     let params = Arc::new(Synth::default());
     let (editor, mut h, log) = open(&params);
-    lock(&editor.shared).ui.focus("gain");
+    lock(&editor.shared).ui.focus(crate::widget_id(10u32));
     h.step();
     for state in [KeyState::Down, KeyState::Up] {
         h.on_event_inner(&Event::Keyboard(KeyboardEvent {
@@ -216,7 +207,7 @@ fn a_key_step_is_one_bracket_and_the_late_pair_is_not_a_second_one() {
 fn a_toggle_click_sets_the_bool_inside_its_press_release_bracket() {
     let params = Arc::new(Synth::default());
     let (editor, mut h, log) = open(&params);
-    at(&mut h, centre(&editor, "bypass"));
+    at(&mut h, centre(&editor, 30));
     press(&mut h, true);
     press(&mut h, false);
     for _ in 0..3 {
@@ -231,7 +222,7 @@ fn a_toggle_click_sets_the_bool_inside_its_press_release_bracket() {
 fn a_discrete_drag_sends_only_whole_steps_and_accumulates_between_them() {
     let params = Arc::new(Synth::default());
     let (editor, mut h, log) = open(&params);
-    let p = centre(&editor, "voices");
+    let p = centre(&editor, 20);
     at(&mut h, p);
     press(&mut h, true);
     h.step();
@@ -266,7 +257,7 @@ fn a_discrete_drag_sends_only_whole_steps_and_accumulates_between_them() {
 fn closing_mid_drag_ends_the_gesture_without_another_frame() {
     let params = Arc::new(Synth::default());
     let (mut editor, mut h, log) = open(&params);
-    at(&mut h, centre(&editor, "gain"));
+    at(&mut h, centre(&editor, 10));
     press(&mut h, true);
     // The press frame delivers the edge; the next tree dispatches it.
     h.step();
@@ -282,7 +273,7 @@ fn closing_mid_drag_ends_the_gesture_without_another_frame() {
 fn a_state_load_ends_the_gesture_in_flight() {
     let params = Arc::new(Synth::default());
     let (mut editor, mut h, log) = open(&params);
-    let p = centre(&editor, "gain");
+    let p = centre(&editor, 10);
     at(&mut h, p);
     press(&mut h, true);
     h.step();
@@ -309,19 +300,17 @@ fn a_control_that_leaves_the_tree_mid_drag_ends_its_gesture() {
     let hide = hidden.clone();
     let editor = MuiEditor::new(
         params.clone(),
-        Ui::new(Theme::DEFAULT),
+        Ui::default(),
         (400, 300),
         move |ui, bridge| {
             if hide.load(std::sync::atomic::Ordering::Relaxed) {
                 return row([]);
             }
-            bridge.bind(ui, "gain", 10u32, |ui, v| {
-                knob(ui, "gain", "Gain", v, 0.0..=1.0).0.into()
-            })
+            bridge.bind(ui, 10u32, |ui, id, v| knob(ui, id, "Gain", v, 0.0..=1.0))
         },
     );
     let (editor, mut h, log) = open_with(&params, editor);
-    let p = centre(&editor, "gain");
+    let p = centre(&editor, 10);
     at(&mut h, p);
     press(&mut h, true);
     h.step();
@@ -342,6 +331,42 @@ fn a_control_that_leaves_the_tree_mid_drag_ends_its_gesture() {
         s.view.bridge.value(10u32),
         params.get_normalized(10).unwrap(),
         "the store's value, not the drag's"
+    );
+}
+
+#[test]
+fn one_parameter_bound_twice_still_paints_and_brackets_by_parameter() {
+    let params = Arc::new(Synth::default());
+    let editor = MuiEditor::new(params.clone(), Ui::default(), (400, 300), |ui, bridge| {
+        let a = bridge.bind(ui, 10u32, |ui, id, v| knob(ui, id, "Gain", v, 0.0..=1.0));
+        let field = crate::widget_id(10u32).field("fine");
+        let b = bridge.bind_as(ui, 10u32, field, |ui, id, v| {
+            knob(ui, id, "Fine", v, 0.0..=1.0)
+        });
+        row([a, b])
+    });
+    let (editor, mut h, log) = open_with(&params, editor);
+    let fine = {
+        let s = lock(&editor.shared);
+        let scene = s.ui.scene().expect("the tree resolved");
+        let f = scene.surface("param/10/fine").expect("both controls").frame;
+        Point::new(f.x + f.size.width / 2.0, f.y + f.size.height / 2.0)
+    };
+    at(&mut h, fine);
+    press(&mut h, true);
+    h.step();
+    at(&mut h, Point::new(fine.x, fine.y - 30.0));
+    h.step();
+    press(&mut h, false);
+    h.step();
+    h.step();
+    let c = calls(&log);
+    assert!(
+        matches!(
+            c.as_slice(),
+            [Call::Begin(10), .., Call::Set(10, _), Call::End(10)]
+        ),
+        "{c:?}"
     );
 }
 
@@ -392,10 +417,10 @@ fn a_read_only_parameter_never_reaches_the_host() {
     };
     let mut bridge = Bridge::new(params.clone());
     bridge.attach(context.with_params(params));
-    let mut ui = Ui::new(Theme::DEFAULT);
-    let el = bridge.bind(&mut ui, "level", 1u32, |ui, v| {
+    let mut ui = Ui::default();
+    let el = bridge.bind(&mut ui, 1u32, |ui, id, v| {
         *v = 0.7;
-        knob(ui, "level", "Level", v, 0.0..=1.0).0.into()
+        knob(ui, id, "Level", v, 0.0..=1.0)
     });
     ui.frame(el, None, mui::prelude::Input::default(), 0.0)
         .unwrap();
@@ -422,5 +447,5 @@ fn a_reopened_editor_keeps_the_host_scale() {
     let params = Arc::new(Synth::new());
     editor(&params).set_scale_factor(1.5);
     let reopened = editor(&params);
-    assert_eq!(reopened.host_scale(), Some(1.5));
+    assert_eq!(reopened.scale.get(), Some(1.5));
 }

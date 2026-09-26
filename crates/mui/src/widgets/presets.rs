@@ -5,7 +5,7 @@
 //! variant table: a preset that needs a variant is a function with an
 //! argument.
 use mui_scene::prelude::*;
-use mui_scene::Style;
+use mui_scene::{Px, Style};
 
 /// The window's own ground: the surface colour and the big corner.
 ///
@@ -15,11 +15,7 @@ use mui_scene::Style;
 /// assert_eq!(editor.children().len(), 1);
 /// ```
 pub fn panel() -> Style {
-    Style {
-        fill: Surface.into(),
-        radius: 16.0.into(),
-        ..Style::default()
-    }
+    Style::default().fill(Role::Surface).radius(16.0)
 }
 
 /// A raised block on the panel, with a shadow to lift it.
@@ -28,15 +24,13 @@ pub fn panel() -> Style {
 /// use mui::prelude::*;
 /// # use mui::scene::Style;
 /// let mut dialog = col!["Save?"].pad(M).preset(card());
-/// assert_eq!(dialog.style_mut().radius, Radius::Px(12.));
+/// assert_eq!(dialog.style_mut().radius, Some(Radius::Px(12.)));
 /// ```
 pub fn card() -> Style {
-    Style {
-        fill: Raised.into(),
-        radius: 12.0.into(),
-        shadow: vec![Shadow::soft(12.0)],
-        ..Style::default()
-    }
+    Style::default()
+        .fill(Role::Raised)
+        .radius(12.0)
+        .shadow(Shadow::soft(12.0))
 }
 
 /// Glass, at plugin scale: a translucent fill, a bright one-pixel top edge
@@ -50,29 +44,25 @@ pub fn card() -> Style {
 /// ```
 /// use mui::prelude::*;
 /// let mut overlay = col!["Preset browser"].pad(M).preset(glass());
-/// assert_eq!(overlay.style_mut().shadow.len(), 2);
+/// assert_eq!(overlay.style_mut().shadow.as_ref().map(Vec::len), Some(2));
 /// ```
 pub fn glass() -> Style {
     let edge = |l: f32, a: f32| Fill::Color(Color::oklcha(l, 0.0, 0.0, a));
-    Style {
-        fill: edge(1.0, 0.10),
-        radius: 14.0.into(),
-        shadow: vec![
-            Shadow {
-                blur: 0.5,
-                dy: 1.0,
-                fill: edge(1.0, 0.35),
-                ..Shadow::inset(0.5)
-            },
-            Shadow {
-                blur: 6.0,
-                dy: -3.0,
-                fill: edge(0.0, 0.25),
-                ..Shadow::inset(6.0)
-            },
-        ],
-        ..Style::default()
-    }
+    Style::default()
+        .fill(edge(1.0, 0.10))
+        .radius(14.0)
+        .shadow(Shadow {
+            blur: 0.5,
+            dy: 1.0,
+            fill: edge(1.0, 0.35),
+            ..Shadow::inset(0.5)
+        })
+        .shadow(Shadow {
+            blur: 6.0,
+            dy: -3.0,
+            fill: edge(0.0, 0.25),
+            ..Shadow::inset(6.0)
+        })
 }
 
 /// A small labelled pill: a tab, a tag, a segment.
@@ -83,7 +73,7 @@ pub fn glass() -> Style {
 /// assert_eq!(tags.children().len(), 2);
 /// ```
 pub fn chip(s: &str) -> El {
-    row![caption(s)].pad_xy(10.0, 4.0).pill().fill(Field)
+    row![caption(s)].pad((10.0, 4.0)).pill().fill(Role::Field)
 }
 
 /// A cell in a bank: centred, padded, raised, rounded. Hands `el` back
@@ -91,7 +81,7 @@ pub fn chip(s: &str) -> El {
 ///
 /// ```
 /// use mui::prelude::*;
-/// let cell = tile(col![leaf(40., 40.).pill().fill(Primary), caption("cut")]);
+/// let cell = tile(col![block(40., 40.).pill().fill(Role::Primary), caption("cut")]);
 /// assert_eq!(cell.children().len(), 2);
 /// ```
 pub fn tile(el: El) -> El {
@@ -99,5 +89,30 @@ pub fn tile(el: El) -> El {
         .align(Align::Center)
         .pad(S)
         .radius(10.0)
-        .fill(Raised)
+        .fill(Role::Raised)
+}
+
+/// The standard level bar: a pill track in `Field`, filled to `level`
+/// (clamped to 0..1) in `Primary`. The fill follows a spring, so a meter
+/// polled once a frame does not flicker. It fills its parent's width;
+/// `.w(200)` fixes it.
+///
+/// ```
+/// use mui::prelude::*;
+/// let mut ui = Ui::default();
+/// let bar = meter(&mut ui, "level", 0.5).w(200);
+/// let frame = ui.frame(bar, Some(Size::new(300., 20.)), Input::default(), 0.016).unwrap();
+/// assert!(frame.scene.surface("level").is_some());
+/// ```
+pub fn meter(ui: &mut crate::Ui, id: impl Into<Id>, level: impl Px) -> El {
+    let id = id.into();
+    let level = ui.tween(id.field("level"), level.px().clamp(0.0, 1.0));
+    row([block(Len::Pct(level * 100.0), Len::Pct(100.0))
+        .pill()
+        .fill(Role::Primary)])
+    .w(Len::Pct(100.0))
+    .h(8)
+    .pill()
+    .fill(Role::Field)
+    .id(id)
 }

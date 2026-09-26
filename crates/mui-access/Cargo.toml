@@ -2,8 +2,12 @@
 name = "mui-access"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
 accesskit = "0.24"
-mui-scene = { path = "../mui-scene" }
+mui-scene.workspace = true
+
+[lints]
+workspace = true

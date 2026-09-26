@@ -9,15 +9,16 @@ store, the audio runtime and the state format. This crate adds the editor:
 - `Bridge` binds widget ids to truce parameters. A drag, a key step or a click
   becomes the host's begin/perform/end, and host automation or a state load is
   the value that the next tree reads.
-- `window` is the half that knows no plugin framework: a `View` trait, the
-  native event queue and the GPU surface. An adapter for another framework can
-  open the same window with its own `View`.
+- `window` is the half that knows no plugin framework: the `mui-baseview`
+  crate, re-exported. A `View` trait, the native event queue and the GPU
+  surface. An adapter for another framework can open the same window with its
+  own `View`, and an app can `run` it top-level.
 
 ```rust
 fn editor(params: Arc<GainParams>) -> Box<dyn Editor> {
-    MuiEditor::new(params, Ui::new(Theme::DEFAULT), (300, 200), |ui, bridge| {
-        let gain = bridge.bind(ui, "gain", P::Gain, |ui, v| {
-            knob(ui, "gain", "Gain", v, 0.0..=1.0).0.el()
+    MuiEditor::new(params, Ui::default(), (300, 200), |ui, bridge| {
+        let gain = bridge.bind(ui, P::Gain, |ui, id, v| {
+            knob(ui, id, "Gain", v, 0.0..=1.0)
         });
         col![gain, title(bridge.text(P::Gain))].pad(L).fill(Surface)
     })
@@ -26,7 +27,11 @@ fn editor(params: Arc<GainParams>) -> Box<dyn Editor> {
 }
 ```
 
-The `v` that `bind` passes in is the parameter's **normalized** value. The
+`bind` derives the widget id from the parameter (`widget_id(P::Gain)`, which
+is `param/0`) and hands it to the closure, so the id the widget reports its
+gesture under cannot differ from the one the parameter listens for. The `v`
+it passes in is the parameter's **normalized** value. `bind_bool` is the same
+for a switch, with a `&mut bool`. The
 bridge handles gestures as follows:
 
 - A gesture (`Edit::Begin` .. `Edit::End`) is one host begin/end bracket, with
@@ -52,6 +57,27 @@ What the window does:
 - Cursor shapes.
 - GPU recovery: a lost device or surface is rebuilt on the next tick.
 
+## Accessibility
+
+On Linux the editor publishes its tree over AT-SPI with `accesskit_unix`,
+which needs no window handle: names, roles, values and focus reach Orca, and
+a reader's click, focus, set-value, step and text-selection requests become
+`Ui` actions. A frame that did not change the tree sends an empty update
+(`mui_access::Publisher`). Bounds are window-relative, because baseview does
+not report the child window's screen position.
+
+Windows and macOS are not wired:
+
+- Windows: `accesskit_windows::SubclassingAdapter` refuses a window that is
+  already visible, and baseview creates the child `WS_VISIBLE` before any
+  editor code runs. The plain `accesskit_windows::Adapter` needs the window
+  procedure's `WM_GETOBJECT`, and baseview has no hook for raw messages.
+  Either fix belongs in baseview: create hidden, or forward `WM_GETOBJECT`.
+- macOS: `accesskit_macos::SubclassingAdapter` over baseview's `NSView`
+  looks workable, but it cannot be built or tried from this repo's Linux CI,
+  and an untested subclass of the host's view hierarchy is a crash inside a
+  DAW. It is the next step when there is a Mac to test on.
+
 ## Example plugin
 
 `examples/gain-plugin` is a gain knob, a bypass toggle and an output meter.
@@ -64,10 +90,20 @@ CARGO_PROFILE_RELEASE_PANIC=unwind cargo truce build --clap --vst3 -p mui-gain-p
 ```
 
 The bundles land in `$CARGO_TARGET_DIR/bundles` (`target/bundles` by default):
-`MUI Gain.clap` and `MUI Gain.vst3`. The workspace release profile sets
-`panic = "abort"`. The `CARGO_PROFILE_RELEASE_PANIC=unwind` override keeps
-truce's FFI `catch_unwind` working, so a panic in the plugin is contained
-instead of aborting the host. For a quicker unoptimised build, add `--debug`.
+`MUI Gain.clap` and `MUI Gain.vst3`. For a quicker unoptimised build, add `--debug`.
+
+A plugin must be built with panics that unwind. The workspace release profile
+sets `panic = "abort"`, which turns every `catch_unwind` at the FFI edge (truce's
+and `mui-truce`'s window callbacks) into dead code: a panic in the editor then
+aborts the host and the user's session with it. The workspace has a `plugin`
+profile for this, release with `panic = "unwind"`:
+
+```sh
+cargo build --profile plugin -p mui-gain-plugin   # the bare cdylib
+```
+
+`cargo truce build` always builds `release`, hence the
+`CARGO_PROFILE_RELEASE_PANIC=unwind` override on the bundle command above.
 
 Validate the bundles (the commands and results below are from 2026-09-23,
 Linux, X11 display, clap-validator 0.4.1, pluginval 1.0.4):
@@ -108,7 +144,7 @@ this crate does without:
 
 ## Tests
 
-`cargo test -p mui-truce` runs the tests. None of them needs a window or a GPU.
+`cargo test -p mui-truce -p mui-baseview` runs the tests (the handler tests live in mui-baseview). None of them needs a window or a GPU.
 
 - The handler tests cover logical and physical sizes, modifiers, coalescing,
   the cancel on focus loss, idle skipping and minimised windows.

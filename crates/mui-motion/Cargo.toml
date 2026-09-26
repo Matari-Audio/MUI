@@ -2,8 +2,12 @@
 name = "mui-motion"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 description = "Motion maths for MUI: the Spring every animated property chases, and editable normalized cubic Bezier curves."
 
 # Time in, a number out. Nothing to depend on.
 [dependencies]
+
+[lints]
+workspace = true

@@ -1,8 +1,8 @@
 //! cargo run -p mui-scene --example shape_layout > shape-layout.svg
 //! SVG uses the resolved contours directly; no independently drawn demo geometry.
-use mui_scene::prelude::*;
+use mui_material::prelude::*;
 fn cell(id: &str) -> El {
-    stack![].flex(1.).fill(Primary).id(id)
+    stack![].flex(1.).fill(Role::Primary).id(id)
 }
 fn octagon(s: Size) -> Path {
     let (w, h) = (s.width, s.height);
@@ -43,11 +43,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "20 → 1 BORDER + 8 PADDING",
             row![cell("a"), cell("b")]
                 .inside(8.)
-                .border_ramp(BorderRamp::horizontal((Primary, 20.), (Dim, 1.))),
+                .border_ramp(BorderRamp::horizontal(
+                    (Role::Primary, 20.),
+                    (Role::Dim, 1.),
+                )),
         ),
     ];
     for (i, (title, root)) in examples.into_iter().enumerate() {
-        let scene = resolve_scene(&SceneSpec::new(
+        let scene = resolve(&SceneSpec::new(
             root.outline(octagon).w(280.).h(230.).id("root"),
         ))?;
         println!(

@@ -27,6 +27,12 @@ pub struct SceneSpec {
     pub device_scale: Option<f64>,
     /// Selected by the host. CPU reference remains available for snapshots.
     pub weld_backend: crate::WeldBackend,
+    /// How hot each `.scroll()` node's overlay scrollbar is, by node key: 0
+    /// at rest (and for a key not listed), 1 under the pointer or in a drag.
+    /// Runtime state, so it rides beside the tree, not in it. `None`, a scene
+    /// resolved without a runtime, paints no bars, since nothing could drag
+    /// one.
+    pub scroll_bars: Option<rustc_hash::FxHashMap<crate::Id, f64>>,
 }
 impl SceneSpec {
     pub fn new(root: El) -> Self {
@@ -41,7 +47,13 @@ impl SceneSpec {
             fallback_fonts: Vec::new(),
             device_scale: None,
             weld_backend: crate::WeldBackend::Reference,
+            scroll_bars: None,
         }
+    }
+    /// Where material welds run: the CPU reference (default) or the GPU.
+    pub fn weld_backend(mut self, backend: crate::WeldBackend) -> Self {
+        self.weld_backend = backend;
+        self
     }
     pub fn theme(mut self, theme: Theme) -> Self {
         self.theme = theme;
@@ -66,10 +78,10 @@ impl SceneSpec {
     ///
     /// ```
     /// use mui_scene::prelude::*;
-    /// let row = row![leaf(0., 20.).grow(1.).id("a"), leaf(0., 20.).grow(1.)];
+    /// let row = row![block(0., 20.).grow(1.).id("a"), block(0., 20.).grow(1.)];
     /// let spec = SceneSpec::new(row).offered(Size::new(41., 20.)).scale(1.);
-    /// let a = resolve_scene(&spec).unwrap();
-    /// let edge = a.surface("a").unwrap().rect.unwrap().bounds().max.x;
+    /// let a = resolve(&spec).unwrap();
+    /// let edge = a.surface("a").unwrap().rect.unwrap().bounds().x1;
     /// assert_eq!(edge, edge.round());
     /// ```
     pub fn scale(mut self, device_scale: f64) -> Self {
@@ -107,6 +119,12 @@ pub enum SceneError {
     NoTextLayer,
     /// [`SceneSpec::device_scale`] is not a finite, positive number.
     InvalidScale,
+    /// A cross-reference (a surface member, a border ramp's tab or anchor)
+    /// names an id no node in the subtree has.
+    MissingId {
+        what: &'static str,
+        id: mui_layout::Id,
+    },
 }
 impl std::fmt::Display for SceneError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -125,6 +143,9 @@ impl std::fmt::Display for SceneError {
             Self::Text(e) => write!(f, "{e}"),
             Self::NoTextLayer => f.write_str("that key resolved no text layer"),
             Self::InvalidScale => f.write_str("the device scale must be finite and positive"),
+            Self::MissingId { what, id } => {
+                write!(f, "{what} `{}` is not in the subtree", id.as_str())
+            }
         }
     }
 }
@@ -167,9 +188,9 @@ mod tests {
     #[test]
     fn a_device_scale_that_is_not_finite_and_positive_is_refused() {
         for scale in [0., -1., f64::NAN, f64::INFINITY] {
-            let spec = SceneSpec::new(leaf(10., 10.)).scale(scale);
+            let spec = SceneSpec::new(block(10., 10.)).scale(scale);
             assert!(
-                matches!(resolve_scene(&spec), Err(SceneError::InvalidScale)),
+                matches!(resolve(&spec), Err(SceneError::InvalidScale)),
                 "{scale}"
             );
         }
@@ -177,22 +198,26 @@ mod tests {
 
     #[test]
     fn errors_expose_their_source() {
-        let e = resolve_scene(&SceneSpec::new(leaf(f64::NAN, 1.))).unwrap_err();
-        assert!(std::error::Error::source(&e)
-            .unwrap()
-            .is::<mui_layout::Error>());
+        let e = resolve(&SceneSpec::new(block(f64::NAN, 1.))).unwrap_err();
+        assert!(
+            std::error::Error::source(&e)
+                .unwrap()
+                .is::<mui_layout::Error>()
+        );
         let mut bad = welded_tab();
         bad.geometry.epsilon = f64::NAN;
-        let e = resolve_scene(&bad).unwrap_err();
-        assert!(std::error::Error::source(&e)
-            .unwrap()
-            .is::<mui_geometry::Error>());
+        let e = resolve(&bad).unwrap_err();
+        assert!(
+            std::error::Error::source(&e)
+                .unwrap()
+                .is::<mui_geometry::Error>()
+        );
         let _ = Spacing::px(1.);
     }
 
     #[test]
     fn errors_read_as_sentences_not_as_debug() {
-        let e = resolve_scene(&SceneSpec::new(leaf(f64::NAN, 1.))).unwrap_err();
+        let e = resolve(&SceneSpec::new(block(f64::NAN, 1.))).unwrap_err();
         let s = e.to_string();
         assert!(!s.contains("Layout("), "{s}");
         assert_eq!(s, mui_layout::Error::InvalidValue.to_string());

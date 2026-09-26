@@ -4,11 +4,12 @@
 //! One canvas, one hit shape. The 1024 bars are *not* 1024 tagged draws --
 //! the pointer's x is mapped to a bin arithmetically, which is why a drag
 //! across the whole display costs one hit test rather than a thousand.
-use mui_input::{Button, Key, FINE_DRAG};
-use mui_scene::prelude::*;
+use mui_input::{Button, FINE_DRAG, Key};
 use mui_scene::Size;
+use mui_scene::prelude::*;
 
 use crate::Ui;
+use crate::widgets::Response;
 
 /// One arrow press, as a fraction of the full level range. Shift takes
 /// [`FINE_DRAG`] of it, the same ratio every other parameter here uses.
@@ -18,8 +19,8 @@ const NUDGE: f64 = 0.01;
 ///
 /// ```
 /// use mui::prelude::*;
-/// let saw: Vec<f32> = (1..=8).map(|n| 1.0 / n as f32).collect();
-/// let log = Bins { authored: &saw, x: BinAxis::Log, ..Bins::default() };
+/// let mut saw: Vec<f32> = (1..=8).map(|n| 1.0 / n as f32).collect();
+/// let log = Bins { authored: &mut saw, x: BinAxis::Log, ..Bins::default() };
 /// // Partial 1 sits at the left edge, partial 8 at the right.
 /// assert_eq!((log.x_of(0), log.x_of(7)), (0.0, 1.0));
 /// ```
@@ -34,24 +35,25 @@ pub enum BinAxis {
     Log,
 }
 
-/// What a [`bins`] display is showing: the spectrum the patch authored, the
-/// levels the operator chain actually produced, and where the bins sit.
+/// What a [`bins`] display edits and shows: the spectrum the patch
+/// authored and the selection (both edited in place), the levels the
+/// operator chain actually produced, and where the bins sit.
 ///
 /// Every field but `authored` has a sensible nothing, so a plain harmonic
 /// display is one struct-update from [`Bins::default`].
 ///
 /// ```
 /// use mui::prelude::*;
-/// let saw: Vec<f32> = (1..=64).map(|n| 1.0 / n as f32).collect();
+/// let mut saw: Vec<f32> = (1..=64).map(|n| 1.0 / n as f32).collect();
 /// let live: Vec<f32> = saw.iter().map(|v| v * 0.5).collect();
-/// let b = Bins { authored: &saw, live: Some(&live), selected: Some(3), ..Bins::default() };
+/// let b = Bins { authored: &mut saw, live: Some(&live), selected: Some(3), ..Bins::default() };
 /// assert_eq!(b.authored.len(), 64);
 /// ```
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Debug, Default)]
 pub struct Bins<'a> {
-    /// The level the patch stores per partial, 0..1. Its length is the bin
-    /// count; everything else here is measured against it.
-    pub authored: &'a [f32],
+    /// The level the patch stores per partial, 0..1, painted in place. Its
+    /// length is the bin count; everything else here is measured against it.
+    pub authored: &'a mut [f32],
     /// The level the engine is producing right now -- `Plan::magnitudes` in
     /// Kurv's additive oscillator -- drawn as a cap line over the bars, so
     /// the operator chain's effect is visible over what was authored.
@@ -63,7 +65,8 @@ pub struct Bins<'a> {
     /// unless it is the same length as `authored`; `None` spaces them by
     /// [`Bins::x`].
     pub positions: Option<&'a [f32]>,
-    /// The bin the arrow keys move and nudge, drawn in the ink colour.
+    /// The bin the arrow keys move and nudge, drawn in the ink colour. The
+    /// arrows and a paint move it.
     pub selected: Option<usize>,
 }
 
@@ -73,8 +76,8 @@ impl Bins<'_> {
     ///
     /// ```
     /// use mui::prelude::*;
-    /// let saw: Vec<f32> = (1..=9).map(|n| 1.0 / n as f32).collect();
-    /// let log = Bins { authored: &saw, x: BinAxis::Log, ..Bins::default() };
+    /// let mut saw: Vec<f32> = (1..=9).map(|n| 1.0 / n as f32).collect();
+    /// let log = Bins { authored: &mut saw, x: BinAxis::Log, ..Bins::default() };
     /// // One octave is one step, wherever it falls: 1 -> 2 -> 4 -> 8.
     /// let step = log.x_of(1) - log.x_of(0);
     /// assert!((log.x_of(3) - log.x_of(1) - step).abs() < 1e-12);
@@ -86,9 +89,9 @@ impl Bins<'_> {
     }
 }
 
-/// What a gesture on a [`bins`] display asks the caller to do. Nothing here
-/// is applied for you: the model is the caller's, and a partial's level may
-/// not even be a plain number on its side.
+/// What a gesture on a [`bins`] display did this frame. It has already been
+/// applied to [`Bins::authored`] and [`Bins::selected`] -- this says which
+/// part, for a caller keeping history or mirroring the levels elsewhere.
 ///
 /// ```
 /// use mui::prelude::*;
@@ -97,12 +100,11 @@ impl Bins<'_> {
 /// ```
 #[derive(Clone, Debug, PartialEq)]
 pub enum BinEdit {
-    /// Set these bins to these levels. A drag paints every bin the pointer
-    /// crossed since the last frame, interpolated, so a fast sweep leaves no
-    /// gaps.
+    /// These bins were set to these levels. A drag paints every bin the
+    /// pointer crossed since the last frame, interpolated, so a fast sweep
+    /// leaves no gaps. The last one painted becomes the selection.
     Paint(Vec<(usize, f32)>),
-    /// A secondary click: put this bin back to whatever the caller calls
-    /// nothing.
+    /// A secondary click put this bin back to 0.
     Reset(usize),
     /// The arrow keys moved the selection here.
     Select(usize),
@@ -286,13 +288,15 @@ fn bar(x: f64, w: f64, h: f64, v: f64) -> Path {
 ///
 /// ```
 /// use mui::prelude::*;
-/// let ui = Ui::new(Theme::DEFAULT);
-/// let saw: Vec<f32> = (1..=16).map(|n| 1.0 / n as f32).collect();
-/// let b = Bins { authored: &saw, ..Bins::default() };
+/// let ui = Ui::default();
+/// let mut saw: Vec<f32> = (1..=16).map(|n| 1.0 / n as f32).collect();
+/// let b = Bins { authored: &mut saw, ..Bins::default() };
 /// assert_eq!(bins_hover(&ui, "spectrum", &b), None, "nothing resolved yet");
 /// ```
 #[must_use]
-pub fn bins_hover(ui: &Ui, id: &str, b: &Bins) -> Option<usize> {
+pub fn bins_hover(ui: &Ui, id: impl Into<Id>, b: &Bins) -> Option<usize> {
+    let id: Id = id.into();
+    let id = id.as_str();
     let n = b.authored.len();
     let r = ui.get(id);
     if n == 0 || !(r.hovered || r.held) {
@@ -305,8 +309,9 @@ pub fn bins_hover(ui: &Ui, id: &str, b: &Bins) -> Option<usize> {
 
 /// An additive spectrum: a bar per partial, painted with the pointer.
 ///
-/// The returned [`BinEdit`] is what the gesture asked for -- the caller
-/// applies it, because the levels belong to the caller's model. A press-drag
+/// The gesture is applied to `b` before the tree is built, as [`curve`]
+/// applies its drag, and the returned [`BinEdit`] says what changed --
+/// `None` when nothing did. A press-drag
 /// paints every bin the pointer crossed between the last frame and this one,
 /// Shift refines from the level the press landed on, a secondary click
 /// resets the bin under the pointer, and with the focus here Left/Right move
@@ -318,17 +323,36 @@ pub fn bins_hover(ui: &Ui, id: &str, b: &Bins) -> Option<usize> {
 ///
 /// ```
 /// use mui::prelude::*;
-/// let mut ui = Ui::new(Theme::DEFAULT);
-/// let saw: Vec<f32> = (1..=64).map(|n| 1.0 / n as f32).collect();
-/// let (plot, edit) = bins(&mut ui, "spectrum", &Bins { authored: &saw, ..Bins::default() });
-/// assert_eq!(edit, None, "nothing is dragging");
-/// let _ = plot.size(320.0, 140.0);
+/// let mut ui = Ui::default();
+/// let mut saw: Vec<f32> = (1..=64).map(|n| 1.0 / n as f32).collect();
+/// let plot = bins(&mut ui, "spectrum", &mut Bins { authored: &mut saw, ..Bins::default() });
+/// assert_eq!(plot.changed, None, "nothing is dragging");
+/// let _ = plot.size(320, 140);
 /// ```
-pub fn bins(ui: &mut Ui, id: &str, b: &Bins) -> (El, Option<BinEdit>) {
+pub fn bins(ui: &mut Ui, id: impl Into<Id>, b: &mut Bins) -> Response<Option<BinEdit>> {
+    let id: Id = id.into();
+    let id = id.as_str();
     let n = b.authored.len();
     let edit = (n > 0)
         .then(|| pointed(ui, id, b, n).or_else(|| typed(ui, id, b, n)))
         .flatten();
+    match &edit {
+        Some(BinEdit::Paint(painted)) => {
+            for &(i, v) in painted {
+                if let Some(slot) = b.authored.get_mut(i) {
+                    *slot = v;
+                    b.selected = Some(i);
+                }
+            }
+        }
+        Some(BinEdit::Reset(i)) => {
+            if let Some(slot) = b.authored.get_mut(*i) {
+                *slot = 0.0;
+            }
+        }
+        Some(BinEdit::Select(i)) => b.selected = Some(*i),
+        None => {}
+    }
     // The closure outlives the borrow, so it takes copies. 1024 f32 is 4 KB
     // a frame, which is the same order as the draw list it produces.
     let (authored, live) = (b.authored.to_vec(), b.live.map(<[f32]>::to_vec));
@@ -386,7 +410,7 @@ pub fn bins(ui: &mut Ui, id: &str, b: &Bins) -> (El, Option<BinEdit>) {
     })
     .cursor(Cursor::Crosshair)
     .focusable()
-    .label("Partial levels")
+    .named("Partial levels")
     .id(id);
-    (el, edit)
+    Response { el, changed: edit }
 }

@@ -11,10 +11,10 @@ use winit::{
     keyboard::{Key as WinitKey, NamedKey},
     window::{Window, WindowId},
 };
-#[path = "../src/device.rs"]
-mod device;
-// Shared gallery host has optional debug-overlay methods unused by this lab.
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "the shared gallery host has debug-overlay methods this lab never calls"
+)]
 #[path = "../src/host.rs"]
 mod host;
 
@@ -37,7 +37,7 @@ impl Lab {
     fn new() -> Self {
         Self {
             gpu: None,
-            ui: Ui::new(Theme::DEFAULT)
+            ui: Ui::default()
                 .gpu_welding()
                 .font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap()),
             dirty: true,
@@ -54,15 +54,15 @@ impl Lab {
         }
     }
     fn tree(&self) -> El {
-        let a = leaf(150., 110.)
+        let a = block(150., 110.)
             .fill(Color::oklcha(0.68, 0.22, 25., 1.))
-            .stroke(Warning)
+            .stroke(Role::Warning)
             .stroke_width(2.)
             .radius(22.)
             .id("left");
-        let b = leaf(150., 110.)
+        let b = block(150., 110.)
             .fill(Color::oklcha(0.65, 0.2, 270., 0.85))
-            .stroke(Ink)
+            .stroke(Role::Ink)
             .stroke_width(4.)
             .radius(35.)
             .offset(self.offset.0, self.offset.1)
@@ -73,7 +73,7 @@ impl Lab {
             ),
             row![a, b]
                 .gap(25.)
-                .gpu_weld(
+                .weld(
                     self.policy
                         .reach(if self.crisp { 0. } else { 45. })
                         .blend(95.)
@@ -84,7 +84,7 @@ impl Lab {
         .gap(L)
         .center()
         .full()
-        .fill(Background)
+        .fill(Role::Background)
     }
     fn draw(&mut self) {
         if !self.visible {
@@ -100,7 +100,7 @@ impl Lab {
         }
         let mut layout_work = mui::layout::LayoutStats::default();
         if self.dirty {
-            self.ui.scale = Some(scale);
+            self.ui.set_scale(Some(scale));
             let root = self.tree();
             if let Err(e) = self.ui.frame(
                 root,
@@ -148,10 +148,7 @@ impl ApplicationHandler for Lab {
                 )
                 .expect("window"),
         );
-        let gpu = pollster::block_on(host::Gpu::new(
-            window,
-            Box::new(event_loop.owned_display_handle()),
-        ));
+        let gpu = host::Gpu::new(window, Box::new(event_loop.owned_display_handle()));
         gpu.window().request_redraw();
         self.gpu = Some(gpu);
     }
@@ -188,12 +185,12 @@ impl ApplicationHandler for Lab {
             WindowEvent::CursorMoved { position, .. } => {
                 let scale = self.gpu.as_ref().map_or(1., |g| g.window().scale_factor());
                 let p = (position.x / scale, position.y / scale);
-                if self.down {
-                    if let Some(old) = self.pointer {
-                        self.offset.0 = (self.offset.0 + p.0 - old.0).clamp(-300., 300.);
-                        self.offset.1 = (self.offset.1 + p.1 - old.1).clamp(-160., 160.);
-                        self.dirty = true;
-                    }
+                if self.down
+                    && let Some(old) = self.pointer
+                {
+                    self.offset.0 = (self.offset.0 + p.0 - old.0).clamp(-300., 300.);
+                    self.offset.1 = (self.offset.1 + p.1 - old.1).clamp(-160., 160.);
+                    self.dirty = true;
                 }
                 self.pointer = Some(p);
                 if !self.down {
@@ -239,10 +236,10 @@ impl ApplicationHandler for Lab {
             }
             _ => return,
         }
-        if self.visible {
-            if let Some(g) = &self.gpu {
-                g.window().request_redraw();
-            }
+        if self.visible
+            && let Some(g) = &self.gpu
+        {
+            g.window().request_redraw();
         }
     }
 }

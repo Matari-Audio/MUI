@@ -6,6 +6,47 @@ caches and shims, the scene and runtime split, `mui-widgets` folded into
 `mui`). Every number is a median. No row is a sum of per-phase medians and
 there is no FPS column (see `docs/rendering-investigation.md`).
 
+**History note.** Every row labelled `vello_hybrid`, and the
+`--features cpu,bench-classic` table, is history: measured while the GPU
+canvas was `vello_hybrid`. That backend is gone. The GPU path is now classic
+Vello (vendored at `vendor/vello`, wgpu 30) behind `effects::GpuRenderer`, and
+`bench` runs `vello_cpu` plus the `gpu-effects` rows. The old rows stay as
+measured, not re-run.
+
+## mui-weld CPU bake (2026-09-26)
+
+`cargo run -p mui-weld --profile perf --example bake_timing`, median of 15, 16
+threads, load average ~20 (other builders). Row-parallel bake, distance-only
+lattice pass, one sqrt per contour/boundary query. Output checksums unchanged.
+
+| weld (2x scale) | before | after | after, 1 core |
+|---|---:|---:|---:|
+| blend, 2 rects, 468x260 | 48.0 ms | 6.0 ms | 34.5 ms |
+| crisp, 3 rects, 516x196 | 193.4 ms | 21.0 ms | 163.4 ms |
+| blend, rect + 40-gon, 488x308 | 133.1 ms | 10.6 ms | 62.7 ms |
+
+## v0.4 cleanup (2026-09-26)
+
+After the per-key state table, fewer per-frame allocations, memos keyed by
+id and `Ui` settings as accessors (`bb1f7f8`..`53eb014`). Load average ~15
+on 16 threads, so treat the times as upper bounds; allocation counts are exact.
+
+`cargo run -p mui --profile perf --example frame_bench` (2191 nodes, thread
+CPU time of `Ui::frame` alone):
+
+| frame | median | min | allocations |
+|---|---:|---:|---:|
+| steady | 1.159 ms | 1.101 ms | 7087 |
+| hover | 1.154 ms | 1.111 ms | 7107 |
+| resize | 2.002 ms | 1.856 ms | 18606 |
+| tooltip | 1.450 ms | 1.137 ms | 7102 |
+
+`cargo test -p mui --test frame_alloc -- --nocapture --ignored` (fifty
+widgets): build 353 + frame 60 = 413 allocations per frame.
+
+No baseline: `frame_bench` existed at `bb916f1` but no numbers from it were
+recorded here or in its PR, and old trees are not re-run.
+
 ## Since `780c3f4`: render-perf, scene-copies, interaction-access, daw-host
 
 Base `780c3f4` against the merge of the four branches, run alternately
@@ -148,7 +189,7 @@ the win to individual stage A/B commits. Stage C (the scene and runtime split, t
 stress warm resolve before and after its refactor (0.894 -> 0.878 ms at
 1280x800) and got identical allocation counts, and it claimed no speedup.
 
-## Current numbers
+## Numbers at the 2026-09-23 overhaul (hybrid rows are history)
 
 ### bench, `--features cpu` (median of 6 runs)
 
@@ -162,7 +203,7 @@ stress warm resolve before and after its refactor (0.894 -> 0.878 ms at
 | vello_hybrid | static | 0.082 | 1.433 | 3.371 | 0.725 | 5.938 | 6.704 |
 | vello_hybrid | one knob turning | 0.077 | 1.315 | 3.359 | 0.649 | 5.809 | 6.627 |
 
-### bench, `--features cpu,bench-classic` (median of 4 runs)
+### bench, `--features cpu,bench-classic` (history: median of 4 runs)
 
 | backend | case | resolve | encode | render | total | p95 |
 |---|---|---:|---:|---:|---:|---:|
@@ -177,7 +218,9 @@ strips on the CPU during the walk and then renders one ordinary pass. Totals
 are a wash (5.9 to 6.3 ms either way under this load), so the choice is made on
 what the table does not show: classic needs compute shaders, and MUI has to
 render inside a plugin host's device. `vello_cpu` shares hybrid's pipeline, so
-the no-GPU path is a real renderer and not a fallback. Classic reported a
+the no-GPU path is a real renderer and not a fallback. (That was the call at
+the time; MUI later moved its GPU path to classic, which renders into the
+host's device through `GpuRenderer`. See MIGRATION.md.) Classic reported a
 2.5 MiB peak GPU buffer estimate.
 
 ### bench, `--features cpu-threads` (median of 3 runs)

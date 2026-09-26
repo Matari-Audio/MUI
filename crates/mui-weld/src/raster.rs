@@ -1,4 +1,4 @@
-use crate::field::{field, pixel_prepared};
+use crate::field::{distances, pixel_prepared, smooth_min};
 use crate::{Error, Point, Rect, Request};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -48,7 +48,7 @@ pub fn bake(request: &Request) -> Result<Baked, Error> {
                         (bounds.x0 + bounds.x1) * 0.5,
                         (bounds.y0 + bounds.y1) * 0.5,
                     ),
-                    half: Point::new(bounds.width() * 0.5, bounds.height() * 0.5),
+                    half: crate::Vec2::new(bounds.width() * 0.5, bounds.height() * 0.5),
                     radius: *radius,
                     angle: 0.0,
                 }),
@@ -94,12 +94,16 @@ pub fn bake(request: &Request) -> Result<Baked, Error> {
         return Err(Error::Budget);
     }
     let bounds = Rect::new(x0, y0, x0 + w as f64 * px, y0 + h as f64 * px);
+    let n = request.sources.len();
+    let k = 2.0 * request.weld.reach * request.weld.amount();
     let mut values = vec![0.0; vertices];
-    for y in 0..=h {
-        for x in 0..=w {
-            let p = Point::new(x0 + x as f64 * px, y0 + y as f64 * px);
+    rows(&mut values, w + 1, 1, |y, row| {
+        let py = y0 + y as f64 * px;
+        for (x, v) in row.iter_mut().enumerate() {
+            let p = Point::new(x0 + x as f64 * px, py);
+            // Distance only: the lattice never reads the material weights.
             let d = boundary.as_ref().map_or_else(
-                || field(&request.sources, p, request.weld).distance,
+                || smooth_min(&distances(&request.sources, p)[..n], k).0,
                 |b| b.sample(p).distance,
             );
             if !d.is_finite() {
@@ -107,19 +111,20 @@ pub fn bake(request: &Request) -> Result<Baked, Error> {
             }
             // Symbolic outside perturbation at exact zeros gives each lattice edge
             // a distinct crossing key. No equality-dependent saddle cracks.
-            values[y * (w + 1) + x] = if d == 0.0 { px * 1e-10 } else { d };
+            *v = if d == 0.0 { px * 1e-10 } else { d };
         }
-    }
+        Ok(())
+    })?;
     let contours = contours(&values, w, h, bounds)?;
     let mut rgba = vec![0u8; pixels.checked_mul(4).ok_or(Error::Budget)?];
-    for y in 0..h {
-        for x in 0..w {
-            let p = Point::new(x0 + (x as f64 + 0.5) * px, y0 + (y as f64 + 0.5) * px);
-            let c =
-                pixel_prepared(&request.sources, p, request.weld, px, boundary.as_ref()).rgba8();
-            rgba[4 * (y * w + x)..4 * (y * w + x) + 4].copy_from_slice(&c);
+    rows(&mut rgba, 4 * w, 4, |y, row| {
+        let py = y0 + (y as f64 + 0.5) * px;
+        for (x, out) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+            let p = Point::new(x0 + (x as f64 + 0.5) * px, py);
+            *out = pixel_prepared(&request.sources, p, request.weld, px, boundary.as_ref()).rgba8();
         }
-    }
+        Ok(())
+    })?;
     Ok(Baked {
         bounds,
         width: w as u32,
@@ -129,13 +134,81 @@ pub fn bake(request: &Request) -> Result<Baked, Error> {
     })
 }
 
+/// Fill `out` one row of `len` elements at a time, rows spread over every
+/// core. `per` elements make one sample (4 for rgba), which is what the
+/// threading threshold counts.
+/// Workers pull a few rows at a time so the busy middle of a weld balances.
+// ponytail: spawns threads per bake; a persistent pool if many tiny bakes show
+// up in a profile (small ones stay serial).
+fn rows<T: Send>(
+    out: &mut [T],
+    len: usize,
+    per: usize,
+    f: impl Fn(usize, &mut [T]) -> Result<(), Error> + Sync,
+) -> Result<(), Error> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use std::sync::OnceLock;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        const BAND: usize = 4;
+        static THREADS: OnceLock<usize> = OnceLock::new();
+        let threads =
+            *THREADS.get_or_init(|| std::thread::available_parallelism().map_or(1, usize::from));
+        if threads > 1 && out.len() / per >= PARALLEL_MIN {
+            let out_len = out.len();
+            let bands = std::sync::Mutex::new(out.chunks_mut(len * BAND).enumerate());
+            // The first error stops every worker at its next band.
+            let failed = AtomicBool::new(false);
+            let work = || {
+                let r = (|| loop {
+                    if failed.load(Ordering::Relaxed) {
+                        return Ok(());
+                    }
+                    let next = bands
+                        .lock()
+                        .map_err(|_| Error::Invalid("bake worker"))?
+                        .next();
+                    let Some((band, chunk)) = next else {
+                        return Ok(());
+                    };
+                    for (i, row) in chunk.chunks_mut(len).enumerate() {
+                        f(band * BAND + i, row)?;
+                    }
+                })();
+                if r.is_err() {
+                    failed.store(true, Ordering::Relaxed);
+                }
+                r
+            };
+            return std::thread::scope(|s| {
+                // No more workers than bands: the rest would only spawn.
+                let n = threads.min(out_len.div_ceil(len * BAND));
+                let workers: Vec<_> = (1..n).map(|_| s.spawn(work)).collect();
+                let mine = work();
+                workers.into_iter().fold(mine, |r, h| {
+                    let theirs = h.join().unwrap_or_else(|e| std::panic::resume_unwind(e));
+                    r.and(theirs)
+                })
+            });
+        }
+    }
+    // wasm32 has no threads to size a pass for.
+    #[cfg(target_arch = "wasm32")]
+    let _ = per;
+    out.chunks_mut(len)
+        .enumerate()
+        .try_for_each(|(y, row)| f(y, row))
+}
+/// Samples below which a pass stays on one thread. Measured on 16 cores
+/// (one bordered rounded rect, whole bake): serial wins below ~3600 px
+/// (270 us vs 520 us at 44x44), threads win from ~4600 px (0.63 ms vs
+/// 0.94 ms at 68x68).
+#[cfg(not(target_arch = "wasm32"))]
+const PARALLEL_MIN: usize = 4096;
+
 type Edge = (usize, usize);
 fn edge(a: usize, b: usize) -> Edge {
-    if a < b {
-        (a, b)
-    } else {
-        (b, a)
-    }
+    if a < b { (a, b) } else { (b, a) }
 }
 
 /// Split every cell along the same diagonal. Unlike a naive marching-squares
