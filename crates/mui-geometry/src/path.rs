@@ -208,7 +208,8 @@ impl Path {
             return Err(Error::NonFinite);
         }
         self.validate(100_000)?;
-        let map = |p: Point| p.rotated(radians) + translation;
+        let (s, c) = radians.sin_cos();
+        let map = |p: Point| Point::new(c * p.x - s * p.y, s * p.x + c * p.y) + translation;
         let commands = self
             .commands
             .iter()

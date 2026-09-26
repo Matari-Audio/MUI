@@ -18,7 +18,8 @@ thread_local! {
 
 /// Validate and convert without selecting a renderer or creating GPU resources.
 pub fn bez_path(path: &Path, tolerance: f64) -> Result<BezPath, Error> {
-    let mut out = BezPath::new();
+    // An arc is a curve or two and a line: room for most paths at once.
+    let mut out = BezPath::with_capacity(2 * path.commands.len());
     bez_path_into(path, tolerance, &mut out)?;
     Ok(out)
 }
