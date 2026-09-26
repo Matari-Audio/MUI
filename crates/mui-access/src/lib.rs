@@ -30,7 +30,9 @@ use accesskit::{
 };
 pub use mui_scene::{Kind, Semantics};
 use mui_scene::{ResolvedScene, ResolvedSurface};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::fmt::Write as _;
+use std::hash::{DefaultHasher, Hash as _, Hasher};
 
 /// FNV-1a: a node id that is the same on every frame for the same surface id.
 pub fn node_id(key: &str) -> NodeId {
@@ -197,10 +199,29 @@ pub fn tree_update(scene: &ResolvedScene, focus: Option<&str>, scale: f64) -> Tr
         .filter(|s| !s.key.is_empty() && !s.key.starts_with('/'))
         .collect();
 
+    // Two keys hashing alike would make one node of two surfaces. Never
+    // seen at 63 bits, so a debug build says so and a release build salts
+    // the second id: its node stays in the tree, only a lookup by
+    // `node_id(key)` (an action's target) misses it.
+    let mut seen = HashSet::with_capacity(named.len());
+    let ids: Vec<NodeId> = named
+        .iter()
+        .map(|s| {
+            let mut id = node_id(&s.key);
+            let mut salt = 0u32;
+            while !seen.insert(id) {
+                debug_assert!(salt > 0, "node id collision at {:?}", s.key);
+                salt += 1;
+                id = fnv(s.key.bytes().chain(*b"\0dup").chain(salt.to_le_bytes()));
+            }
+            id
+        })
+        .collect();
     let mut runs = Vec::new();
     let mut nodes: Vec<(NodeId, Node)> = named
         .iter()
-        .map(|s| (node_id(&s.key), node(s, s.semantics.as_ref(), &mut runs)))
+        .zip(&ids)
+        .map(|(s, &id)| (id, node(s, s.semantics.as_ref(), &mut runs)))
         .collect();
 
     let indices: HashMap<&str, usize> = named
@@ -209,11 +230,11 @@ pub fn tree_update(scene: &ResolvedScene, focus: Option<&str>, scale: f64) -> Tr
         .map(|(i, s)| (s.key.as_ref(), i))
         .collect();
     let mut root_kids = Vec::new();
-    for s in &named {
+    for (s, &id) in named.iter().zip(&ids) {
         let parent = s.parent.as_deref().and_then(|p| indices.get(p)).copied();
         match parent {
-            Some(p) => nodes[p].1.push_child(node_id(&s.key)),
-            None => root_kids.push(node_id(&s.key)),
+            Some(p) => nodes[p].1.push_child(id),
+            None => root_kids.push(id),
         }
     }
 
@@ -227,14 +248,89 @@ pub fn tree_update(scene: &ResolvedScene, focus: Option<&str>, scale: f64) -> Tr
         nodes,
         tree: Some(Tree::new(WINDOW)),
         tree_id: TreeId::ROOT,
-        focus: focus
-            .filter(|k| {
-                !k.is_empty()
-                    && !k.starts_with('/')
-                    && scene.surface(k).is_some_and(|s| s.focusable && !s.disabled)
-            })
-            .map_or(WINDOW, node_id),
+        focus: tree_update_focus(scene, focus),
     }
+}
+
+fn tree_update_focus(scene: &ResolvedScene, focus: Option<&str>) -> NodeId {
+    focus
+        .filter(|k| {
+            !k.is_empty()
+                && !k.starts_with('/')
+                && scene.surface(k).is_some_and(|s| s.focusable && !s.disabled)
+        })
+        .map_or(WINDOW, node_id)
+}
+
+/// [`tree_update`] for a host that publishes every frame: a frame whose tree
+/// would come out the same as the last one sent gets an empty update (the
+/// focus only), so a screen reader costs a hash per frame, not a tree.
+#[derive(Debug, Default)]
+pub struct Publisher {
+    last: Option<u64>,
+}
+
+impl Publisher {
+    /// This frame's update: the whole tree, or nothing new.
+    ///
+    /// ```
+    /// use mui_access::Publisher;
+    /// use mui_scene::prelude::*;
+    ///
+    /// let scene = resolve_scene(&SceneSpec::new(leaf(4., 4.).id("a"))).unwrap();
+    /// let mut p = Publisher::default();
+    /// assert_eq!(p.update(&scene, None, 1.0).nodes.len(), 2);
+    /// assert!(p.update(&scene, None, 1.0).nodes.is_empty());
+    /// p.reset();
+    /// assert_eq!(p.update(&scene, None, 1.0).nodes.len(), 2);
+    /// ```
+    pub fn update(&mut self, scene: &ResolvedScene, focus: Option<&str>, scale: f64) -> TreeUpdate {
+        let hash = tree_hash(scene, focus, scale);
+        if self.last.replace(hash) == Some(hash) {
+            return TreeUpdate {
+                nodes: Vec::new(),
+                tree: None,
+                tree_id: TreeId::ROOT,
+                focus: tree_update_focus(scene, focus),
+            };
+        }
+        tree_update(scene, focus, scale)
+    }
+
+    /// Forget what was sent: the next update is whole. Call it when a
+    /// reader (re)activates and asks for the initial tree.
+    pub fn reset(&mut self) {
+        self.last = None;
+    }
+}
+
+/// Everything [`tree_update`] reads, hashed without building a node.
+fn tree_hash(scene: &ResolvedScene, focus: Option<&str>, scale: f64) -> u64 {
+    struct W<'a>(&'a mut DefaultHasher);
+    impl std::fmt::Write for W<'_> {
+        fn write_str(&mut self, s: &str) -> std::fmt::Result {
+            self.0.write(s.as_bytes());
+            Ok(())
+        }
+    }
+    let mut h = DefaultHasher::new();
+    focus.hash(&mut h);
+    scale.to_bits().hash(&mut h);
+    for s in scene.surfaces() {
+        // Debug prints every float exactly: two values, two strings.
+        let _ = write!(
+            W(&mut h),
+            "{:?}{:?}{:?}{}{}{:?}{:?}",
+            s.key,
+            s.frame,
+            s.parent,
+            s.focusable,
+            s.disabled,
+            s.text_value,
+            s.semantics
+        );
+    }
+    h.finish()
 }
 
 #[cfg(test)]
