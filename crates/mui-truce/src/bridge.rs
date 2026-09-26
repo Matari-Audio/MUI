@@ -171,6 +171,9 @@ impl<P: Params + ?Sized> Bridge<P> {
     /// a frame later is dropped. Read-only and unknown parameters draw but
     /// never reach the host. A gesture whose parameter no `bind` of a build
     /// names -- its control dropped out of the tree -- ends with that build.
+    ///
+    /// One parameter bound twice (a knob and a value field) needs two widget
+    /// ids: give the second one its own with [`Bridge::bind_as`].
     pub fn bind<R: IntoEl>(
         &mut self,
         ui: &mut Ui,
@@ -178,7 +181,28 @@ impl<P: Params + ?Sized> Bridge<P> {
         control: impl FnOnce(&mut Ui, Id, &mut f64) -> R,
     ) -> El {
         let id = param.into();
-        let widget = widget_id(id);
+        self.bind_as(ui, id, widget_id(id), control)
+    }
+
+    /// [`Bridge::bind`] under the widget id `widget` instead of
+    /// [`widget_id`]`(param)`, for a second control on the same parameter:
+    /// two widgets under one id are a duplicate key, and the tree stops
+    /// resolving. Gestures still bracket by parameter, whichever control
+    /// made them.
+    ///
+    /// ```ignore
+    /// let knob = bridge.bind(ui, P::Gain, |ui, id, v| knob(ui, id, "Gain", v, 0.0..=1.0));
+    /// let field = widget_id(P::Gain).field("value");
+    /// let entry = bridge.bind_as(ui, P::Gain, field, |ui, id, v| number(ui, id, v));
+    /// ```
+    pub fn bind_as<R: IntoEl>(
+        &mut self,
+        ui: &mut Ui,
+        param: impl Into<u32>,
+        widget: Id,
+        control: impl FnOnce(&mut Ui, Id, &mut f64) -> R,
+    ) -> El {
+        let id = param.into();
         self.bound.push(id);
         let before = self.value(id);
         let mut value = before;
@@ -251,9 +275,10 @@ impl<P: Params + ?Sized> Bridge<P> {
         })
     }
 
-    /// After a build: end the gestures no `bind` in it named.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn end_unbound(&mut self) {
+    /// After a build: end the gestures no `bind` in it named. `MuiEditor`
+    /// calls it; a host that drives the bridge itself calls it after every
+    /// build, or a gesture whose control left the tree never ends.
+    pub fn end_unbound(&mut self) {
         while let Some(&(id, ..)) = self.open.iter().find(|(id, ..)| !self.bound.contains(id)) {
             self.end(id);
         }

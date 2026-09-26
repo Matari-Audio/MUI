@@ -340,6 +340,44 @@ fn a_control_that_leaves_the_tree_mid_drag_ends_its_gesture() {
 }
 
 #[test]
+fn one_parameter_bound_twice_still_paints_and_brackets_by_parameter() {
+    let params = Arc::new(Synth::default());
+    let editor = MuiEditor::new(
+        params.clone(),
+        Ui::new(Theme::DEFAULT),
+        (400, 300),
+        |ui, bridge| {
+            let a = bridge.bind(ui, 10u32, |ui, id, v| knob(ui, id, "Gain", v, 0.0..=1.0));
+            let field = crate::widget_id(10u32).field("fine");
+            let b = bridge.bind_as(ui, 10u32, field, |ui, id, v| {
+                knob(ui, id, "Fine", v, 0.0..=1.0)
+            });
+            row([a, b])
+        },
+    );
+    let (editor, mut h, log) = open_with(&params, editor);
+    let fine = {
+        let s = lock(&editor.shared);
+        let scene = s.ui.scene().expect("the tree resolved");
+        let f = scene.surface("param/10/fine").expect("both controls").frame;
+        Point::new(f.x + f.size.width / 2.0, f.y + f.size.height / 2.0)
+    };
+    at(&mut h, fine);
+    press(&mut h, true);
+    h.step();
+    at(&mut h, Point::new(fine.x, fine.y - 30.0));
+    h.step();
+    press(&mut h, false);
+    h.step();
+    h.step();
+    let c = calls(&log);
+    assert!(
+        matches!(c.as_slice(), [Call::Begin(10), .., Call::Set(10, _), Call::End(10)]),
+        "{c:?}"
+    );
+}
+
+#[test]
 fn host_automation_wakes_an_idle_editor_and_is_what_the_tree_reads() {
     let params = Arc::new(Synth::default());
     let (_editor, mut h, log) = open(&params);
