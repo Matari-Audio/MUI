@@ -2,7 +2,7 @@
 //! byte-range edits on the original text, repeat until nothing changes.
 
 use crate::lex::{K, Tok, lex};
-use crate::rules::{Arg, BUILDERS, CHAIN_NOTES, CONSTRUCTORS, ELEMENT_TYPES, Gate, MUI_SHAPES, RULES, Rule, TUPLES, WIDGET_RULES};
+use crate::rules::{Arg, BUILDERS, CHAIN_NOTES, CONSTRUCTORS, ELEMENT_TYPES, Gate, MUI_SHAPES, RULES, Rule, TUPLES, TYPED_NOTES, WIDGET_RULES};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -671,6 +671,14 @@ impl<'a> File<'a> {
         Some((self.own && matches!(s, "Self" | "crate" | "self" | "super")) || self.ctx.roots.contains(s))
     }
 
+    /// The name at `i` is being defined or bound (`fn x`, `let mut x`), not
+    /// used (`&mut X` is a use).
+    fn is_def(&self, i: usize) -> bool {
+        i > 0
+            && (["fn", "struct", "enum", "trait", "type", "mod", "const", "static", "let", "macro_rules"].iter().any(|k| self.ident(i - 1, k))
+                || (self.ident(i - 1, "mut") && !(i > 1 && (self.punct(i - 2, '&') || self.punct(i - 2, '*')))))
+    }
+
     /// Whether `name` at this file's top level is mui's (imported so, or
     /// from a mui glob and not defined here).
     fn file_level(&self, name: &str) -> bool {
@@ -682,7 +690,7 @@ impl<'a> File<'a> {
             && match g {
                 Gate::Mui => true,
                 Gate::MuiChain => self.builder_chain(dot) == Some(true),
-                Gate::Point => self.point_receiver(dot) == Some(true),
+                Gate::Typed { on, .. } => self.typed_receiver(dot, on) == Some(true),
             }
     }
 
@@ -729,16 +737,15 @@ impl<'a> File<'a> {
     /// is not known here.
     fn unresolved(&self, out: &mut Vec<(usize, String)>) {
         const UNRESOLVED: &str = "the receiver's type is not resolved";
-        let t = self.t;
-        for i in 0..t.len() {
-            if t[i].k != K::Ident || self.use_tok.contains_key(&i) {
+        for (i, tok) in self.t.iter().enumerate() {
+            if tok.k != K::Ident || self.use_tok.contains_key(&i) {
                 continue;
             }
-            let name = t[i].text.as_str();
+            let name = tok.text.as_str();
             let called = self.open(i + 1, '(');
             let line = self.line(i);
             let mut note = |n: String| out.push((line, n));
-            if called && matches!(name, "resolve_animated" | "resolve_scene_animated" | "resolve_scene_retained") && self.glide(i).is_none() {
+            if called && matches!(name, "resolve_animated" | "resolve_after" | "resolve_scene_animated" | "resolve_scene_retained") && self.glide(i).is_none() {
                 note("the glide callback's key is `&Id` (was `&str`): a glide passed by name needs `|key: &Id, ..|`, and `key.as_str()` where a `&str` is needed".into());
             }
             for r in self.ctx.rules() {
@@ -761,14 +768,20 @@ impl<'a> File<'a> {
                         Rule::Corner { field, axis, .. } if field == name && self.dot(i + 1) && self.ident(i + 2, axis) && !self.open(i + 3, '(') && self.rect_receiver(dot).is_none() => {
                             note(format!("`Bounds {{ min, max }}` became kurbo `Rect {{ x0, y0, x1, y1 }}`: `.min.x` -> `.x0`, `.min.y` -> `.y0`, `.max.x` -> `.x1`, `.max.y` -> `.y1` ({UNRESOLVED}: check it is a mui `Bounds`)"));
                         }
-                        Rule::Method { old, new, gate: Gate::Point } if old == name && called && self.point_receiver(dot).is_none() => {
-                            note(format!("`Point::{old}()` is kurbo `{new}()` ({UNRESOLVED}: check it is a mui `Point`/`Vec2`)"));
+                        Rule::Method { old, new, gate: Gate::Typed { on, note: true } } if old == name && called && self.typed_receiver(dot, on).is_none() => {
+                            note(format!("`{}::{old}()` is `{new}()` ({UNRESOLVED}: check it is a mui `{}`)", on[0], on.join("`/`")));
                         }
                         Rule::Flag { name: n, flag } if n == name && self.payload_mut(dot) && !self.flag_write(i) => {
                             note(format!("`Element::{n}` is a flag: `e.has(Element::{flag})`, `e.set(Element::{flag}, on)`"));
                         }
                         _ => {}
                     }
+                }
+                if let Some((_, on, n)) = TYPED_NOTES.iter().find(|(m, ..)| *m == name)
+                    && called
+                    && self.typed_receiver(dot, on) == Some(true)
+                {
+                    note(n.to_string());
                 }
                 if let Some((_, n)) = CHAIN_NOTES.iter().find(|(n, _)| *n == name)
                     && called
@@ -780,7 +793,7 @@ impl<'a> File<'a> {
                 continue;
             }
             // A bare name a foreign glob may supply as well as mui's.
-            let def = i > 0 && ["fn", "struct", "enum", "trait", "type", "mod", "const", "static", "let", "mut", "macro_rules"].iter().any(|k| self.ident(i - 1, k));
+            let def = self.is_def(i);
             let field = self.punct(i + 1, ':') && !self.sep(i + 1);
             if def || field || self.sep_before(i) || self.punct(i + 1, '!') || self.origin(i).is_some() {
                 continue;
@@ -1012,11 +1025,7 @@ impl<'a> File<'a> {
             }
 
             // Definitions and bindings are never renamed.
-            if i > 0
-                && ["fn", "struct", "enum", "trait", "type", "mod", "const", "static", "let", "mut", "macro_rules"]
-                    .iter()
-                    .any(|k| self.ident(i - 1, k))
-            {
+            if self.is_def(i) {
                 continue;
             }
             // A struct field or named argument `name: ..` outside a path.
@@ -1312,11 +1321,11 @@ impl<'a> File<'a> {
         Some(self.is_type(ty, &["Rect", "Bounds"], false))
     }
 
-    /// Whether the receiver before the dot at `dot` is a mui (or kurbo)
-    /// `Point` / `Vec2`; `None` when its type is not known.
-    fn point_receiver(&self, dot: usize) -> Option<bool> {
+    /// Whether the receiver before the dot at `dot` is a variable of a mui
+    /// (or kurbo) type in `on`; `None` when its type is not known.
+    fn typed_receiver(&self, dot: usize, on: &[&str]) -> Option<bool> {
         let ty = self.var_type(self.recv_var(dot)?)?;
-        Some(self.is_type(ty, &["Point", "Vec2"], true))
+        Some(self.is_type(ty, on, true))
     }
 
     /// Whether the receiver before the dot at `dot` is the `Ui`: named `ui`
@@ -1492,7 +1501,7 @@ impl<'a> File<'a> {
     /// `str` tokens of closure keys typed `&str`, which become `&Id`. `None`
     /// when no argument is a closure literal (the glide is passed by name).
     fn glide(&self, i: usize) -> Option<Vec<usize>> {
-        if !matches!(self.t[i].text.as_str(), "resolve_animated" | "resolve_scene_animated" | "resolve_scene_retained") || !self.open(i + 1, '(') {
+        if !matches!(self.t[i].text.as_str(), "resolve_animated" | "resolve_after" | "resolve_scene_animated" | "resolve_scene_retained") || !self.open(i + 1, '(') {
             return None;
         }
         let mut found = None;

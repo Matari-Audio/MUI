@@ -41,7 +41,9 @@
 //! `Gate::Mui` applies only in files that import a mui crate;
 //! `Gate::MuiChain` additionally needs the receiver to be a builder chain (see
 //! `BUILDERS`: not `handle.join()` or `ui.palette().disabled(c)`);
-//! `Gate::Point` needs the receiver to be a mui/kurbo `Point`/`Vec2` by its type.
+//! `Gate::Typed { on, note }` needs the receiver to be a variable of a mui (or
+//! kurbo) type in `on`, by its binding in the enclosing fn; with `note`, an
+//! unresolved receiver gets a manual note.
 //!
 //! Tuple results that became named structs: add a line to `TUPLES`.
 //! Moved crates: add `(old path suffix, new path suffix)` to `CARGO_MOVES`.
@@ -50,7 +52,7 @@
 pub enum Gate {
     Mui,
     MuiChain,
-    Point,
+    Typed { on: &'static [&'static str], note: bool },
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -91,7 +93,11 @@ pub enum Rule {
 }
 
 use Arg::{After, Any as A, Has, Is, Not, Shared};
-use Gate::{Mui, MuiChain, Point as Pt};
+use Gate::{Mui, MuiChain, Typed};
+
+const PT: Gate = Typed { on: &["Point", "Vec2"], note: true };
+const RESOLVER: Gate = Typed { on: &["Resolver", "TextCache"], note: false };
+const RESOLVE_REF: &str = "`Resolver::resolve(&spec)` returns `&ResolvedScene` now (kept for the next call's memo reuse): `.clone()` it where the scene must outlive the next resolve, and drop `recycle` calls for scenes it returned";
 use Rule::*;
 
 const SS: &str = "Align::Start";
@@ -163,9 +169,15 @@ pub const RULES: &[Rule] = &[
     DropImport { name: "resolve_scene_animated" },
     DropImport { name: "resolve_scene_retained" },
     Manual { pattern: "resolve_scene_cached", note: "use `Resolver`: `let mut r = Resolver::new(); r.resolve(&spec)`, `r.welds` is the weld cache" },
-    Manual { pattern: "resolve_scene_animated", note: "use `Resolver`: `r.resolve_animated(&spec, glide, None)`" },
-    Manual { pattern: "resolve_scene_retained", note: "use `Resolver`: `r.resolve_animated(&spec, glide, prev)`" },
-    // `.resolve_animated(..)`'s glide closure: `|key: &str, ..|` is rewritten to
+    Manual { pattern: "resolve_scene_animated", note: "use `Resolver`: `r.resolve_after(&spec, glide, None)`" },
+    Manual { pattern: "resolve_scene_retained", note: "use `Resolver`: `r.resolve_after(&spec, glide, prev)`" },
+    Manual { pattern: "resolve_scene_with (", note: RESOLVE_REF },
+    Method { old: "resolve_animated", new: "resolve_after", gate: Mui },
+    Method { old: "len", new: "text_runs", gate: RESOLVER },
+    Manual { pattern: ". scroll_bars", note: "`SceneSpec::scroll_bars` is an `FxHashMap<Id, f64>` (was `BTreeMap<String, f64>`): key it with `Id::runtime(key)`" },
+    Manual { pattern: "Stroke {", note: "`Stroke::fill` is an `Option<Fill>` (`None` = unset, merged per field by `Style::over`): wrap literals in `Some(..)`" },
+    Manual { pattern: ". stroke . fill", note: "`Stroke::fill` is an `Option<Fill>`: read it with `.and_then(|s| s.fill)`" },
+    // `.resolve_after(..)`'s glide closure: `|key: &str, ..|` is rewritten to
     // `&Id` in code; a glide passed by name gets a note (see `rewrite::glide`).
     // mui-truce: `Bridge::bind` derives the widget id from the parameter.
     // ponytail: `args` splits the old `|ui, v|` closure at its comma ($4, $5), which is
@@ -181,8 +193,8 @@ pub const RULES: &[Rule] = &[
     Corner { field: "max", axis: "x", to: "x1" },
     Corner { field: "max", axis: "y", to: "y1" },
     Manual { pattern: ". translated (", note: "`Bounds::translated(d)` is `rect + d`; `RoundedRect::translated` takes a `Vec2`" },
-    Method { old: "finite", new: "is_finite", gate: Pt },
-    Method { old: "perpendicular", new: "turn_90", gate: Pt },
+    Method { old: "finite", new: "is_finite", gate: PT },
+    Method { old: "perpendicular", new: "turn_90", gate: PT },
     Manual { pattern: ". rotated (", note: "`Point::rotated(a)` is gone: `Vec2::from_angle(a) * r`, or `Affine::rotate(a) * p`" },
     Assoc { ty: "Affine", name: "translation", args: &[A, A], to: "$pathAffine::translate(($1, $2))", bare: "" },
     Assoc { ty: "Affine", name: "scale", args: &[A, A], to: "$pathAffine::scale_non_uniform($1, $2)", bare: "" },
@@ -309,6 +321,12 @@ pub const ELEMENT_TYPES: &[&str] = &["El", "Node", "Element"];
 /// A bare name that a foreign glob could also supply is left alone, unless
 /// the call has a shape only mui's has: `(name, argument count)`.
 pub const MUI_SHAPES: &[(&str, usize)] = &[("label", 1)];
+
+/// Notes for `.method(` calls on a variable of a mui type: `(method, types, note)`.
+pub const TYPED_NOTES: &[(&str, &[&str], &str)] = &[
+    ("is_empty", &["Resolver", "TextCache"], "`Resolver::is_empty()` is gone: `r.text_runs() == 0`"),
+    ("resolve", &["Resolver", "TextCache"], RESOLVE_REF),
+];
 
 /// Notes for `MuiChain` calls whose receiver's type is not resolved.
 pub const CHAIN_NOTES: &[(&str, &str)] = &[

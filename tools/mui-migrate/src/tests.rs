@@ -498,6 +498,20 @@ fn point_methods_need_a_point() {
 #[test]
 fn glide_keys_become_ids() {
     let out = run(&with_prelude("fn f(r: &mut Resolver) { r.resolve_animated(&spec, &mut |key: &str, e, f| f, None); r.resolve_animated(&spec, &mut glide, None); }\n"));
-    assert_eq!(out.text, with_prelude("fn f(r: &mut Resolver) { r.resolve_animated(&spec, &mut |key: &Id, e, f| f, None); r.resolve_animated(&spec, &mut glide, None); }\n"));
+    assert_eq!(out.text, with_prelude("fn f(r: &mut Resolver) { r.resolve_after(&spec, &mut |key: &Id, e, f| f, None); r.resolve_after(&spec, &mut glide, None); }\n"));
     assert_eq!(out.warnings.iter().filter(|(_, n)| n.contains("glide passed by name")).count(), 1, "{:?}", out.warnings);
+}
+
+#[test]
+fn resolver_len_and_notes() {
+    // `.len()` only on a `Resolver`; a Vec's stays.
+    let src = with_prelude("fn f(r: &Resolver, v: &Vec<u8>, t: &mut TextCache) -> usize { if r.is_empty() {} let s = t.resolve(&spec); r.len() + v.len() + t.len() }\n");
+    let out = run(&src);
+    assert_eq!(out.text, with_prelude("fn f(r: &Resolver, v: &Vec<u8>, t: &mut Resolver) -> usize { if r.is_empty() {} let s = t.resolve(&spec); r.text_runs() + v.len() + t.text_runs() }\n"));
+    assert!(out.warnings.iter().any(|(_, n)| n.contains("`Resolver::is_empty()` is gone")), "{:?}", out.warnings);
+    assert!(out.warnings.iter().any(|(_, n)| n.contains("returns `&ResolvedScene`")), "{:?}", out.warnings);
+    let out = run(&with_prelude("fn f(v: &Vec<u8>) -> bool { v.is_empty() }\n"));
+    assert!(out.warnings.is_empty(), "{:?}", out.warnings);
+    let out = run(&with_prelude("fn f(s: &mut SceneSpec) { s.scroll_bars.insert(k, 1.0); let k = Stroke { width: 1.0, fill: f }; }\n"));
+    assert_eq!(out.warnings.len(), 2, "{:?}", out.warnings);
 }
