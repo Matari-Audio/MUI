@@ -2,6 +2,32 @@
 
 Every entry is `old -> new`. Crates are listed in dependency order.
 
+## v0.4.1
+
+Breaking (by hand; `mui-migrate` has no rule for it):
+
+- `mui::host::View::zoom(&self) -> f64` -> `zoom(&self, window: Size) -> f64`.
+  `window` is the logical window size before zoom, so a view can fit its
+  design to the window (`window.width / 800.0`). A fixed zoom ignores it:
+  `fn zoom(&self, _: Size) -> f64 { self.zoom }`.
+
+Additions (nothing to migrate):
+
+- `Ui::wheel(id) -> Option<Vec2>`: the wheel over `id`, claimed, so an
+  enclosing scroll node does not also scroll.
+- `Ui::edits() -> &[(String, Edit)]`: every gesture edge the last frame
+  delivered.
+- `mui_text::Weight::{THIN, EXTRA_LIGHT, LIGHT}`.
+- `mui_baseview::baseview`: the baseview it runs on, re-exported.
+- `CanvasCache<K>` is `Send` for a `Send` key.
+
+Behaviour:
+
+- A wrapping row with no width of its own breaks against the room and is as
+  wide as its longest line (it used to measure as one line), and one inside a
+  flex share arranges the lines it measured.
+- The tooltip is an opaque box; it used to paint no background.
+
 ## v0.4 (DSL v2)
 
 The vocabulary in [`docs/DSL-V2.md`](docs/DSL-V2.md) is applied by a tool.

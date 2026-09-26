@@ -43,8 +43,13 @@ impl View for Knob {
     fn request_resize(&mut self, _: u32, _: u32) -> bool {
         false
     }
-    fn zoom(&self) -> f64 {
-        self.zoom
+    fn zoom(&self, window: Size) -> f64 {
+        // Negative: fit a 200-point-wide design to the window.
+        if self.zoom < 0.0 {
+            window.width / 200.0
+        } else {
+            self.zoom
+        }
     }
     fn claims_key(&self, key: &Key, _: Mods) -> bool {
         *key == Key::Escape
@@ -178,6 +183,18 @@ fn zoom_scales_the_paint_and_divides_the_pointer_and_pixel_wheel() {
     assert_eq!(r.d.pointer().pos, Some(at(50.0, 30.0)));
     r.d.wheel(Wheel::Pixels(0.0, 10.0), none());
     assert_eq!(inputs(&r.d).last().unwrap().wheel, Vec2::new(0.0, -5.0));
+}
+
+/// A view that fits its design to the window is handed the logical size.
+#[test]
+fn zoom_reads_the_logical_window_size() {
+    let fit = || Knob {
+        zoom: -1.0,
+        ..Knob::default()
+    };
+    let mut r = Rig::new(fit(), (800, 600), 2.0);
+    r.step();
+    assert_eq!(r.d.ui_scale(), 4.0, "400 logical wide is a zoom of 2");
 }
 
 #[test]
