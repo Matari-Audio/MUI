@@ -227,6 +227,9 @@ impl<V: View> Handler<V> {
                 self.driver.redraw();
             }
             let fresh = self.driver.advance(&mut s, now);
+            // Keys typed into a field must not reach the host's shortcuts.
+            #[cfg(all(windows, feature = "keyboard-capture"))]
+            window.set_keyboard_capture(s.ui.focus_is_text());
             if let Some(a11y) = self.a11y.as_mut()
                 && (fresh || a11y.wants_tree())
             {
@@ -286,8 +289,6 @@ impl<V: View> Handler<V> {
     }
 
     /// One native event, as baseview delivers it.
-    // ponytail: Windows hosts also want `set_keyboard_capture` while a text
-    // field is focused; upstream baseview-truce has no such call yet.
     pub fn on_event_inner(&mut self, event: &Event) -> EventStatus {
         let d = &mut self.driver;
         match event {

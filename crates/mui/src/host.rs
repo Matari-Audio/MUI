@@ -20,7 +20,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use mui_input::{Button, Input, Key, KeyPress, Mods, PointerInput, Vec2};
-use mui_scene::prelude::{A11y, Cursor, El, Point, Size};
+use mui_scene::prelude::{Cursor, El, Point, Size};
 
 use crate::{Clipboard, Ui};
 
@@ -546,15 +546,9 @@ pub fn logical_size(physical: (u32, u32), scale: f64) -> Size {
 }
 
 fn key_owner(ui: &Ui) -> KeyOwner {
-    let Some(id) = ui.focus_key() else {
-        return KeyOwner::Host;
-    };
-    let text = ui
-        .scene()
-        .and_then(|s| s.surface(id))
-        .and_then(|s| s.semantics.as_ref())
-        .is_some_and(|sem| matches!(sem.role, A11y::TextInput { .. }));
-    if text {
+    if ui.focus_key().is_none() {
+        KeyOwner::Host
+    } else if ui.focus_is_text() {
         KeyOwner::Text
     } else {
         KeyOwner::Control

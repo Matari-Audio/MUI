@@ -120,18 +120,23 @@ impl Ui {
     /// assert!(!undo, "nothing was pressed");
     /// ```
     pub fn shortcuts(&self) -> &[KeyPress] {
-        let typing = self.focus.as_deref().is_some_and(|k| {
+        if self.focus_is_text() {
+            &[]
+        } else {
+            &self.keys
+        }
+    }
+    /// Whether the focus is on a text field (in the last scene): the keys
+    /// are typing, not shortcuts. A host routes keys, or takes the keyboard
+    /// from its parent window, by it.
+    pub fn focus_is_text(&self) -> bool {
+        self.focus.as_deref().is_some_and(|k| {
             self.scene
                 .as_ref()
                 .and_then(|s| s.surface(k))
-                .is_some_and(|s| {
-                    matches!(
-                        s.semantics.as_ref().map(|s| &s.role),
-                        Some(A11y::TextInput { .. })
-                    )
-                })
-        });
-        if typing { &[] } else { &self.keys }
+                .and_then(|s| s.semantics.as_ref())
+                .is_some_and(|s| matches!(s.role, A11y::TextInput { .. }))
+        })
     }
     /// The text typed this frame, if `id` is focused.
     pub fn text(&self, id: impl Into<Id>) -> &str {

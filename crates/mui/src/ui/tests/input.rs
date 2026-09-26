@@ -80,11 +80,13 @@ fn a_shortcut_fires_unfocused_and_never_while_a_field_has_the_focus() {
     let root = tree(&mut ui, &mut value);
     ui.frame(root, None, key(Key::Function(1)), 0.016).unwrap();
     assert!(undo(&ui), "nothing is focused, so the shortcut is ours");
+    assert!(!ui.focus_is_text());
 
     ui.focus("f");
     let root = tree(&mut ui, &mut value);
     ui.frame(root, None, key(Key::Space), 0.016).unwrap();
     assert!(!undo(&ui), "the field is typing: the key is its own");
+    assert!(ui.focus_is_text());
     assert_eq!(ui.keys("f").len(), 1, "and it still gets it");
 }
 

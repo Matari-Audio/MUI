@@ -5,6 +5,11 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[features]
+# See mui-baseview's `keyboard-capture`: Windows only, and needs a
+# baseview-truce with `Window::set_keyboard_capture`.
+keyboard-capture = ["mui-baseview/keyboard-capture"]
+
 [dependencies]
 mui = { workspace = true, features = ["gpu-effects"] }
 truce-core = "6.3"

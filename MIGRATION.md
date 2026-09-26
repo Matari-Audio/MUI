@@ -25,6 +25,11 @@ Additions (nothing to migrate):
   delivered.
 - `mui_text::Weight::{THIN, EXTRA_LIGHT, LIGHT}`.
 - `mui_baseview::baseview`: the baseview it runs on, re-exported.
+- `Ui::focus_is_text()`: the focus is on a text field (keys are typing).
+- Feature `keyboard-capture` on mui-baseview (passed through by mui-truce):
+  on Windows, takes the keyboard from the host window while a text field is
+  focused, so typing does not hit the DAW's shortcuts. Needs a
+  baseview-truce with `Window::set_keyboard_capture`; stock builds lack it.
 - `CanvasCache<K>` is `Send` for a `Send` key.
 
 Behaviour:
