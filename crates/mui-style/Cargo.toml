@@ -11,4 +11,4 @@ description = "Theme data for MUI: Oklch colours, palettes, roles, fills, gradie
 # version-skew with what vello paints. No transitive dependencies of its own.
 color = "0.3"
 # Only for CornerStyle and the spacing vocabulary a shell's thickness is stated in.
-mui-geometry = { path = "../mui-geometry" }
+mui-geometry.workspace = true

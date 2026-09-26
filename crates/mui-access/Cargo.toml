@@ -7,4 +7,4 @@ license.workspace = true
 
 [dependencies]
 accesskit = "0.24"
-mui-scene = { path = "../mui-scene" }
+mui-scene.workspace = true

@@ -12,18 +12,18 @@ cpu = ["mui-vello/cpu"]
 cpu-threads = ["mui-vello/cpu-threads"]
 
 [dependencies]
-mui-scene = { path = "../mui-scene" }
-mui-motion = { path = "../mui-motion" }
-mui-layout = { path = "../mui-layout" }
-mui-geometry = { path = "../mui-geometry" }
-mui-input = { path = "../mui-input" }
-mui-text = { path = "../mui-text" }
-mui-vello = { path = "../mui-vello" }
-unicode-segmentation = "1.12"
+mui-scene.workspace = true
+mui-motion.workspace = true
+mui-layout.workspace = true
+mui-geometry.workspace = true
+mui-input.workspace = true
+mui-text.workspace = true
+mui-vello.workspace = true
+unicode-segmentation.workspace = true
 
 [dev-dependencies]
-epaint_default_fonts = "0.36"
-png = "0.17"
+epaint_default_fonts.workspace = true
+png.workspace = true
 libc = "0.2"
 
 [[example]]

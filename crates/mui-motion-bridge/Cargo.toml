@@ -6,13 +6,13 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-mui = { path = "../mui" }
+mui.workspace = true
 base64 = "0.22"
 sha2 = "0.10"
-mui-scene = { path = "../mui-scene" }
-mui-vello = { path = "../mui-vello", features = ["cpu"] }
-serde_json = "1"
-png = "0.17"
+mui-scene.workspace = true
+mui-vello = { workspace = true, features = ["cpu"] }
+serde_json.workspace = true
+png.workspace = true
 
 [dev-dependencies]
-epaint_default_fonts = "0.36"
+epaint_default_fonts.workspace = true

@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-mui = { path = "../mui", features = ["gpu-effects"] }
+mui = { workspace = true, features = ["gpu-effects"] }
 truce-core = "6.3"
 truce-params = "6.3"
 
@@ -20,13 +20,13 @@ truce-gui = { version = "6.3", default-features = false }
 keyboard-types = { version = "0.7", default-features = false }
 # baseview's parent handle is raw-window-handle 0.5.
 raw-window-handle = "0.5"
-pollster = "0.4"
+pollster.workspace = true
 # mui-vello picks no backend; the window that owns the device does.
-wgpu = { version = "30", default-features = false, features = ["wgsl", "vulkan", "gles", "metal", "dx12"] }
+wgpu = { workspace = true, features = ["wgsl", "vulkan", "gles", "metal", "dx12"] }
 
 # baseview does not own an X11 selection; arboard keeps one alive.
 [target.'cfg(target_os = "linux")'.dependencies]
 arboard = { version = "3.6", default-features = false }
 
 [dev-dependencies]
-truce = { version = "6.3", default-features = false }
+truce.workspace = true

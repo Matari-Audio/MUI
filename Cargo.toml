@@ -29,7 +29,39 @@ rust-version = "1.98"
 license = "MIT"
 
 [workspace.dependencies]
+# Internal crates.
+mui = { path = "crates/mui" }
+mui-access = { path = "crates/mui-access" }
+mui-geometry = { path = "crates/mui-geometry" }
+mui-input = { path = "crates/mui-input" }
+mui-layout = { path = "crates/mui-layout" }
+mui-motion = { path = "crates/mui-motion" }
+mui-motion-bridge = { path = "crates/mui-motion-bridge" }
+mui-playground = { path = "crates/mui-playground" }
+mui-preview = { path = "crates/mui-preview" }
+mui-reel = { path = "crates/mui-reel" }
+mui-scene = { path = "crates/mui-scene" }
+mui-stage = { path = "crates/mui-stage" }
+mui-style = { path = "crates/mui-style" }
+mui-text = { path = "crates/mui-text" }
+mui-truce = { path = "crates/mui-truce" }
+mui-vello = { path = "crates/mui-vello" }
+mui-weld = { path = "crates/mui-weld" }
+
+# External versions shared by two or more members. Members add features;
+# wgpu picks no backend here, the host that owns the device does.
 i_overlay = "8.1"
+rustc-hash = "2"
+kurbo = "0.13.1"
+wgpu = { version = "30", default-features = false }
+pollster = "0.4"
+png = "0.17"
+serde_json = "1"
+epaint_default_fonts = "0.36"
+ttf-inter = { version = "0.1", default-features = false, features = ["v"] }
+vello_cpu = { version = "0.2", default-features = false, features = ["std", "u8_pipeline", "text"] }
+unicode-segmentation = "1.13"
+truce = { version = "6.3", default-features = false }
 
 # Comparable speed-oriented benchmark profile; release's size policy is unchanged.
 [profile.perf]

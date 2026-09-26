@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-mui-geometry = { path = "../mui-geometry" }
+mui-geometry.workspace = true
 # Bump these two together: skrifa 0.46 and harfrust 0.13 share read-fonts
 # 0.43, so one parse serves both outlines and shaping. (skrifa 0.47 moved to
 # read-fonts 0.44 ahead of harfrust; glifo/vello still carry their own 0.44.)
@@ -14,10 +14,10 @@ skrifa = "0.46"
 harfrust = "0.13"
 unicode-bidi = "0.3"
 unicode-linebreak = "0.1.5"
-unicode-segmentation = "1.13"
+unicode-segmentation.workspace = true
 
 [dev-dependencies]
 # Font bytes for the tests only. Nothing in the crate reads a file or a system
 # font; callers hand it bytes, which is what keeps it usable on wasm.
-epaint_default_fonts = "0.36"
-ttf-inter = { version = "0.1", default-features = false, features = ["v"] }
+epaint_default_fonts.workspace = true
+ttf-inter.workspace = true

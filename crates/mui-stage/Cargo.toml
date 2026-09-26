@@ -9,15 +9,15 @@ description = "GPU trailer stage for MUI: layers on lit, extruded 3D slabs, WGSL
 # An offline renderer picks its own backend, unlike mui-vello, which renders
 # into whatever device a plugin host made.
 [dependencies]
-mui-scene = { path = "../mui-scene" }
-mui-geometry = { path = "../mui-geometry" }
-mui-text = { path = "../mui-text" }
-mui-vello = { path = "../mui-vello", features = ["gpu-effects"] }
-wgpu = { version = "30", default-features = false, features = ["wgsl", "vulkan", "gles", "metal", "dx12"] }
-pollster = "0.4"
+mui-scene.workspace = true
+mui-geometry.workspace = true
+mui-text.workspace = true
+mui-vello = { workspace = true, features = ["gpu-effects"] }
+wgpu = { workspace = true, features = ["wgsl", "vulkan", "gles", "metal", "dx12"] }
+pollster.workspace = true
 bytemuck = "1"
 
 [dev-dependencies]
-mui = { path = "../mui" }
-epaint_default_fonts = "0.36"
-png = "0.17"
+mui.workspace = true
+epaint_default_fonts.workspace = true
+png.workspace = true
