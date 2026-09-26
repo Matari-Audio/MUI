@@ -103,13 +103,13 @@ fn editor(ui: &mut Ui, values: &mut [f64]) -> El {
                     v.next().unwrap(),
                     0.0..=1.0,
                 )
-                .0
-                .el()
+                .el
+                .into_el()
             })
             .collect();
         let fader = slider(ui, format!("t{t}/f"), "Level", v.next().unwrap(), 0.0..=1.0)
-            .0
-            .el();
+            .el
+            .into_el();
         let head = col([
             text(format!("Track {t}"))
                 .id(format!("t{t}/name"))

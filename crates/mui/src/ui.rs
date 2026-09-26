@@ -7,7 +7,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use mui_geometry::Point;
 use mui_input::{
-    Button, Buttons, FINE_DRAG, Hit, Ime, Input, Interaction as Pointer, Key, KeyPress, PointerInput, Response,
+    Button, Buttons, FINE_DRAG, Hit, Ime, Input, Interaction as Pointer, Key, KeyPress,
+    PointerInput, Response,
 };
 use mui_layout::SpacingToken::{S, Xs};
 use mui_scene::Keys;
@@ -490,7 +491,7 @@ impl Ui {
     ///     Some(Edit::End) => { /* host.end_gesture(CUTOFF) */ }
     ///     None => {}
     /// }
-    /// let (el, _) = slider(&mut ui, "cutoff", "Cutoff", &mut cutoff, 0.0..=1.0);
+    /// let Response { el, .. } = slider(&mut ui, "cutoff", "Cutoff", &mut cutoff, 0.0..=1.0);
     /// ```
     pub fn edit(&self, id: &str) -> Option<Edit> {
         self.delivered

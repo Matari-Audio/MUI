@@ -104,7 +104,7 @@ fn editor(ui: &mut Ui, app: &mut App) -> El {
     let knobs: Vec<El> = (0..40)
         .map(|i| {
             knob(ui, format!("k{i}"), "cut", &mut app.knobs[i], 0.0..=1.0)
-                .0
+                .el
                 .size(S)
                 .el()
         })
@@ -118,8 +118,7 @@ fn editor(ui: &mut Ui, app: &mut App) -> El {
                 &mut app.sliders[i],
                 0.0..=1.0,
             )
-            .0
-            .el()
+            .el.into_el()
         })
         .collect();
     let labels: Vec<El> = (0..200).map(|i| caption(format!("p{i:03}"))).collect();

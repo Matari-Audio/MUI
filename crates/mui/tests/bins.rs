@@ -32,7 +32,7 @@ fn pointer(p: Point, button: Option<Button>, shift: bool) -> PointerInput {
 /// One frame of the display at 200x100. The widget reads *last* frame's
 /// gesture, so every step here is one call.
 fn frame(ui: &mut Ui, b: &Bins, input: impl Into<Input>) -> Option<BinEdit> {
-    let (el, edit) = bins(ui, "spec", b);
+    let Response { el, changed: edit } = bins(ui, "spec", b);
     ui.frame(el.size(W, H), Some(Size::new(W, H)), input, 0.016)
         .expect("resolves");
     edit
@@ -216,7 +216,7 @@ fn a_thousand_bins_at_two_hundred_pixels_draw_one_bar_per_column() {
         live: Some(&live),
         ..Bins::default()
     };
-    let (el, _) = bins(&mut ui, "spec", &b);
+    let Response { el, .. } = bins(&mut ui, "spec", &mut b);
     let Content::Canvas(f) = &el.payload().content else {
         panic!("a canvas")
     };

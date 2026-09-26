@@ -27,14 +27,13 @@ struct Gain {
 
 fn editor(ui: &mut Ui, m: &mut Gain) -> El {
     let gain = knob(ui, "gain", "Gain", &mut m.gain, 0.0..=1.0)
-        .0
+        .el
         .size(L)
         .el();
-    let bypass = toggle(ui, "bypass", &mut m.bypass).0.el();
+    let bypass = toggle(ui, "bypass", "", &mut m.bypass).el.into_el();
     let tone = slider(ui, "tone", "Tone", &mut m.tone, 110.0..=880.0)
-        .0
-        .el();
-    let (a4, clicked) = button(ui, "a4", "A4");
+        .el.into_el();
+    let Response { el: a4, changed: clicked } = button(ui, "a4", "A4");
     if clicked {
         m.tone = 440.0;
     }

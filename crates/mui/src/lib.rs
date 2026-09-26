@@ -47,8 +47,8 @@ pub mod prelude {
     pub use crate::widgets::presets::{card, chip, glass, panel, tile};
     pub use crate::widgets::{
         BinAxis, BinEdit, Bins, ColorOpts, Control, CurveEdit, Newline, Response, TextEdit,
-        TextOpts, Variant, bins, bins_hover, button, color_picker, curve, drag_value, knob,
-        slider, stepped, text_edit, text_input, toggle,
+        TextOpts, Variant, bins, bins_hover, button, color_picker, curve, drag_value, knob, slider,
+        stepped, text_edit, text_input, toggle,
     };
     pub use crate::{Edit, Frame, Interaction, SemanticAction, Ui};
     pub use mui_input::{
@@ -57,11 +57,11 @@ pub mod prelude {
     pub use mui_scene::prelude::{
         A11y, Align, Appear, Area, Axes, BorderAlign, BorderRamp, CanvasCache, Color, Corner,
         CornerStyle, Cursor, Draw, Ease, El, Elevation, Fill, Fit, Font, Gradient, Id, Image,
-        IntoEl, Justify, Keys, L, Len, M, Match, Mix, Paints, Path, Pin, Point, Radius,
-        Resolver, Role, S, SceneSpec, Shadow, ShapeLayout, Size, Spacing, State, Style, Styled,
-        Theme, Weight, Weld, WeldBackend, WeldChannel, WeldQuality, Xl, Xs, block, body, canvas,
-        canvas_keyed, caption, clamp, col, cq, fits, grid, icon, pct, resolve, row, spacer,
-        stack, step, text, title, weld,
+        IntoEl, Justify, Keys, L, Len, M, Match, Mix, Paints, Path, Pin, Point, Radius, Resolver,
+        Role, S, SceneSpec, Shadow, ShapeLayout, Size, Spacing, State, Style, Styled, Theme,
+        Weight, Weld, WeldBackend, WeldChannel, WeldQuality, Xl, Xs, block, body, canvas,
+        canvas_keyed, caption, clamp, col, cq, fits, grid, icon, pct, resolve, row, spacer, stack,
+        step, text, title, weld,
     };
     pub use mui_scene::{Corners, Mode, Palette, Pigment, SpacingToken, Spring};
 }

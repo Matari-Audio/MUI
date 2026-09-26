@@ -5,8 +5,9 @@
 //!
 //! - `Method { old, new, gate }`     `.old(` / `.old::<` -> `.new(`
 //! - `Function { old, new }`         `old(` (free fn, `mui::old(`, `use mui::{old}`) -> `new`
-//! - `FnCall { name, args, to }`     call-shape rewrite of a free fn: `name(args)` (or a
-//!   mui path to it) becomes template `to`, with `$n` as for `Call`
+//! - `FnCall { name, args, to, needs }` call-shape rewrite of a free fn: `name(args)` (or a
+//!   mui path to it) becomes template `to`, with `$n` as for `Call` and `$path` the
+//!   path before the name (`mui::widgets::`); the first matching shape wins
 //! - `Type { old, new }`             path/type ident, only where it resolves to a mui crate
 //! - `Macro { old, new }`            `old!` -> `new!`
 //! - `MacroHead { old, new, heads }` `old![a, b; ..]` -> `new![<heads[n-1] with $1 = a, $2 = b>; ..]`,
@@ -45,13 +46,17 @@ pub enum Arg {
     Has(&'static str),
     /// Argument starts with this (whitespace-insensitive); the rest is captured.
     After(&'static str),
+    /// Any argument that does not contain this (whitespace-insensitive), captured.
+    Not(&'static str),
+    /// A shared borrow `&x` (not `&mut x`); `x` is captured.
+    Shared,
 }
 
 #[derive(Clone, Copy, Debug)]
 pub enum Rule {
     Method { old: &'static str, new: &'static str, gate: Gate },
     Function { old: &'static str, new: &'static str },
-    FnCall { name: &'static str, args: &'static [Arg], to: &'static str },
+    FnCall { name: &'static str, args: &'static [Arg], to: &'static str, needs: &'static [&'static str] },
     Type { old: &'static str, new: &'static str },
     #[expect(dead_code, reason = "no plain macro renames in the spec yet")]
     Macro { old: &'static str, new: &'static str },
@@ -62,7 +67,7 @@ pub enum Rule {
     Manual { pattern: &'static str, note: &'static str },
 }
 
-use Arg::{After, Any as A, Has, Is};
+use Arg::{After, Any as A, Has, Is, Not, Shared};
 use Gate::{Any as G, Mui, MuiChain};
 use Rule::*;
 
@@ -129,7 +134,7 @@ pub const RULES: &[Rule] = &[
     // Resolving.
     Function { old: "resolve_scene", new: "resolve" },
     Type { old: "TextCache", new: "Resolver" },
-    FnCall { name: "resolve_scene_with", args: &[A, After("&mut")], to: "$2.resolve($1)" },
+    FnCall { name: "resolve_scene_with", args: &[A, After("&mut")], to: "$2.resolve($1)", needs: &[] },
     DropImport { name: "resolve_scene_with" },
     DropImport { name: "resolve_scene_cached" },
     DropImport { name: "resolve_scene_animated" },
@@ -141,14 +146,21 @@ pub const RULES: &[Rule] = &[
     // ponytail: `args` splits the old `|ui, v|` closure at its comma ($4, $5), which is
     // what lets the rule insert `id`; if `args` learns closures, this becomes 4 args.
     Call { chain: &[("bind", &[A, Has("\""), A, A, A])], to: ".bind($1, $3, $4, id, $5)", gate: Mui, needs: &[] },
-    Manual { pattern: ".bind", note: "`Bridge::bind`'s closure is `|ui, id, v|`: pass `id` to the widget; a toggle can use `bind_bool(ui, P, |ui, id, on| ..)`" },
+    Manual { pattern: ". bind (", note: "`Bridge::bind`'s closure is `|ui, id, v|`: pass `id` to the widget; a toggle can use `bind_bool(ui, P, |ui, id, on| ..)`" },
 ];
 
-/// The widget phase of the spec (`Response`, option structs). Applied, with
-/// [`TUPLES`], only under `--widgets`: the core DSL v2 release does not have
-/// the new widget API yet.
+/// The widget phase of the spec (`Response`, option structs, argument
+/// order). Applied, with [`TUPLES`], unless `--no-widgets`.
 pub const WIDGET_RULES: &[Rule] = &[
-    Manual { pattern: "color_picker (", note: "`color_picker`'s positional `alpha: bool` became an option; check the call" },
+    // Every control takes a label after its id (its accessible name).
+    FnCall { name: "toggle", args: &[A, A, A], to: "$pathtoggle($1, $2, \"\", $3)", needs: &[] },
+    FnCall { name: "drag_value", args: &[A, A, A, A], to: "$pathdrag_value($1, $2, \"\", $3, $4)", needs: &[] },
+    // Positional options became option structs.
+    FnCall { name: "color_picker", args: &[A, A, A, Is("true")], to: "$pathcolor_picker($1, $2, $3, ColorOpts { alpha: true })", needs: &["ColorOpts"] },
+    FnCall { name: "color_picker", args: &[A, A, A, Is("false")], to: "$pathcolor_picker($1, $2, $3, ColorOpts::default())", needs: &["ColorOpts"] },
+    FnCall { name: "color_picker", args: &[A, A, A, Not("ColorOpts")], to: "$pathcolor_picker($1, $2, $3, ColorOpts { alpha: $4 })", needs: &["ColorOpts"] },
+    // `bins` edits in place, as `curve` does.
+    FnCall { name: "bins", args: &[A, A, Shared], to: "$pathbins($1, $2, &mut $3)", needs: &[] },
 ];
 
 /// Calls whose tuple result became a named struct. `f(..).0` -> `.el`,

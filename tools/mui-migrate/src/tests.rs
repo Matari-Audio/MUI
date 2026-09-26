@@ -5,9 +5,9 @@ fn run(src: &str) -> Outcome {
     run_in(src, &Ctx::with_roots([]))
 }
 
-fn widgets() -> Ctx {
+fn no_widgets() -> Ctx {
     let mut ctx = Ctx::with_roots([]);
-    ctx.widgets = true;
+    ctx.widgets = false;
     ctx
 }
 
@@ -128,14 +128,12 @@ fn join_only_on_chains() {
 
 #[test]
 fn tuple_fields() {
-    let check = |before: &str, after: &str| assert_eq!(run_in(before, &widgets()).text, after);
-    let run = |src: &str| run_in(src, &widgets());
-    // The widget phase is opt-in.
+    // `--no-widgets` turns the widget phase off.
     let tuple = with_prelude("fn f() { let a = knob(ui, id, \"G\", &mut v, r).0; }\n");
-    assert_eq!(super::tests::run(&tuple).text, tuple);
+    assert_eq!(run_in(&tuple, &no_widgets()).text, tuple);
     check(
-        &with_prelude("fn f() {\n    let a = knob(ui, id, \"G\", &mut v, 0.0..=1.0).0;\n    let hit = button(ui, id, \"Go\").1;\n    let (el, changed) = toggle(ui, id, &mut on);\n    let (field, _) = mui::widgets::text_input(ui, id, &mut s);\n    let (h, p) = ui.state(&id);\n    let (x, y) = kit::button(ui, id, \"a\", accent);\n}\n"),
-        &with_prelude("fn f() {\n    let a = knob(ui, id, \"G\", &mut v, 0.0..=1.0).el;\n    let hit = button(ui, id, \"Go\").changed;\n    let Response { el, changed } = toggle(ui, id, &mut on);\n    let Response { el: field, .. } = mui::widgets::text_input(ui, id, &mut s);\n    let Interaction { hover: h, press: p } = ui.state(&id);\n    let (x, y) = kit::button(ui, id, \"a\", accent);\n}\n"),
+        &with_prelude("fn f() {\n    let a = knob(ui, id, \"G\", &mut v, 0.0..=1.0).0;\n    let hit = button(ui, id, \"Go\").1;\n    let (el, changed) = toggle(ui, id, \"On\", &mut on);\n    let (field, _) = mui::widgets::text_input(ui, id, &mut s);\n    let (h, p) = ui.state(&id);\n    let (x, y) = kit::button(ui, id, \"a\", accent);\n}\n"),
+        &with_prelude("fn f() {\n    let a = knob(ui, id, \"G\", &mut v, 0.0..=1.0).el;\n    let hit = button(ui, id, \"Go\").changed;\n    let Response { el, changed } = toggle(ui, id, \"On\", &mut on);\n    let Response { el: field, .. } = mui::widgets::text_input(ui, id, &mut s);\n    let Interaction { hover: h, press: p } = ui.state(&id);\n    let (x, y) = kit::button(ui, id, \"a\", accent);\n}\n"),
     );
     // Explicit imports: no glob, so the new type needs an import.
     let out = run("use mui::widgets::knob;\nfn f() { let (el, c) = knob(ui, id, \"G\", &mut v, r); }\n");
@@ -208,10 +206,21 @@ fn cross_file_super_imports() {
 
 #[test]
 fn manual_pattern_with_an_open_paren() {
-    let src = with_prelude("fn f() {\n    color_picker (ui, id, &mut c, true);\n}\n");
-    let out = run_in(&src, &widgets());
-    assert_eq!(out.warnings.iter().map(|w| w.0).collect::<Vec<_>>(), [3], "{:?}", out.warnings);
-    assert!(run(&src).warnings.is_empty(), "widget rules are opt-in");
+    // `Bridge::bind(` is a call; a wgpu `.bind` field is not.
+    let src = with_prelude("fn f() {\n    let g = desc.bind;\n    bridge.bind (ui, P::Gain, |ui, id, v| knob(ui, id, \"G\", v, r));\n}\n");
+    let out = run(&src);
+    assert_eq!(out.warnings.iter().map(|w| w.0).collect::<Vec<_>>(), [4], "{:?}", out.warnings);
+}
+
+#[test]
+fn widget_calls() {
+    check(
+        &with_prelude("fn f() {\n    let s = toggle(ui, \"b\", &mut on).0.size(S).el();\n    row![drag_value(ui, \"bpm\", &mut bpm, 20.0..=300.0).0];\n    mui::widgets::toggle(ui, id, &mut on);\n    color_picker(ui, \"a\", &mut c, true);\n    color_picker(ui, \"b\", &mut c, false);\n    color_picker(ui, \"c\", &mut c, self.alpha);\n    color_picker(ui, \"d\", &mut c, ColorOpts::default());\n    let (plot, edit) = bins(ui, \"spec\", &model);\n    bins(ui, \"spec\", &mut model);\n    let el = knob(ui, id, \"G\", v, r).0.el();\n    let h = ui.state(&id).0;\n}\n"),
+        &with_prelude("fn f() {\n    let s = toggle(ui, \"b\", \"\", &mut on).el.size(S).el();\n    row![drag_value(ui, \"bpm\", \"\", &mut bpm, 20.0..=300.0).el];\n    mui::widgets::toggle(ui, id, \"\", &mut on);\n    color_picker(ui, \"a\", &mut c, ColorOpts { alpha: true });\n    color_picker(ui, \"b\", &mut c, ColorOpts::default());\n    color_picker(ui, \"c\", &mut c, ColorOpts { alpha: self.alpha });\n    color_picker(ui, \"d\", &mut c, ColorOpts::default());\n    let Response { el: plot, changed: edit } = bins(ui, \"spec\", &mut model);\n    bins(ui, \"spec\", &mut model);\n    let el = knob(ui, id, \"G\", v, r).el.into_el();\n    let h = ui.state(&id).hover;\n}\n"),
+    );
+    // A project's own `toggle` keeps its shape.
+    let own = "use mui::prelude::*;\nfn toggle(a: u8, b: u8, c: u8) {}\nfn f() { toggle(1, 2, 3); }\n";
+    check(own, own);
 }
 
 #[test]

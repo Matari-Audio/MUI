@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use mui::layout::Id;
-use mui::scene::El;
+use mui::scene::{El, IntoEl};
 use mui::{Edit, Ui};
 use truce_core::editor::PluginContext;
 use truce_params::{ParamFlags, ParamInfo, ParamRange, Params};
@@ -158,10 +158,11 @@ impl<P: Params + ?Sized> Bridge<P> {
     /// Build the widget bound to parameter `param`: `control` gets the
     /// widget id ([`widget_id`]) and the normalized value to draw and edit,
     /// and whatever it leaves there goes to the host inside the gesture
-    /// `Ui` reported for that id.
+    /// `Ui` reported for that id. It returns anything that becomes an `El`:
+    /// a widget's whole `Response`, or a tree of its own.
     ///
     /// ```ignore
-    /// let gain = bridge.bind(ui, P::Gain, |ui, id, v| knob(ui, id, "Gain", v, 0.0..=1.0).0.el());
+    /// let gain = bridge.bind(ui, P::Gain, |ui, id, v| knob(ui, id, "Gain", v, 0.0..=1.0));
     /// ```
     ///
     /// A drag is `Begin` .. values .. `End`. A change with no gesture open --
@@ -170,11 +171,11 @@ impl<P: Params + ?Sized> Bridge<P> {
     /// a frame later is dropped. Read-only and unknown parameters draw but
     /// never reach the host. A gesture whose parameter no `bind` of a build
     /// names -- its control dropped out of the tree -- ends with that build.
-    pub fn bind(
+    pub fn bind<R: IntoEl>(
         &mut self,
         ui: &mut Ui,
         param: impl Into<u32>,
-        control: impl FnOnce(&mut Ui, Id, &mut f64) -> El,
+        control: impl FnOnce(&mut Ui, Id, &mut f64) -> R,
     ) -> El {
         let id = param.into();
         let widget = widget_id(id);
@@ -186,7 +187,7 @@ impl<P: Params + ?Sized> Bridge<P> {
             .filter(|info| !info.flags.contains(ParamFlags::READONLY))
             .map(|info| info.range)
         else {
-            return control(ui, widget, &mut value);
+            return control(ui, widget, &mut value).into_el();
         };
         // At most a cancel's End, an End and a Begin reach one id per frame.
         let mut edges = [None; 4];
@@ -211,7 +212,7 @@ impl<P: Params + ?Sized> Bridge<P> {
                 }
             }
         }
-        let el = control(ui, widget, &mut value);
+        let el = control(ui, widget, &mut value).into_el();
         if value.to_bits() != before.to_bits() && value.is_finite() {
             if self.is_open(id) {
                 self.set(id, range, value);
@@ -234,17 +235,17 @@ impl<P: Params + ?Sized> Bridge<P> {
     /// normalized 0 or 1.
     ///
     /// ```ignore
-    /// let bypass = bridge.bind_bool(ui, P::Bypass, |ui, id, on| toggle(ui, id, on).0.el());
+    /// let bypass = bridge.bind_bool(ui, P::Bypass, |ui, id, on| toggle(ui, id, "Bypass", on));
     /// ```
-    pub fn bind_bool(
+    pub fn bind_bool<R: IntoEl>(
         &mut self,
         ui: &mut Ui,
         param: impl Into<u32>,
-        control: impl FnOnce(&mut Ui, Id, &mut bool) -> El,
+        control: impl FnOnce(&mut Ui, Id, &mut bool) -> R,
     ) -> El {
         self.bind(ui, param, |ui, id, v| {
             let mut on = *v >= 0.5;
-            let el = control(ui, id, &mut on);
+            let el = control(ui, id, &mut on).into_el();
             *v = f64::from(u8::from(on));
             el
         })

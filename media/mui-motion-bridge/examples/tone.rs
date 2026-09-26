@@ -59,8 +59,7 @@ fn main() -> Result<(), String> {
         editor.advance(commands, frame, |ui, input, dt, sizes| {
             let mut gain = f64::from(*level.lock().unwrap());
             let control = knob(ui, "gain", "Level", &mut gain, 0.0..=0.5)
-                .0
-                .el()
+                .el.into_el()
                 .size(100., 100.);
             *level.lock().unwrap() = gain as f32;
             let tree = col([

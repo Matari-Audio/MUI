@@ -6,7 +6,7 @@ use mui::prelude::*;
 fn face(v: Variant) -> Style {
     let mut ui = Ui::new(Theme::DEFAULT);
     button(&mut ui, "b", "Save")
-        .0
+        .el
         .variant(v)
         .el()
         .payload()
@@ -32,7 +32,7 @@ fn a_variant_paints_the_role_without_naming_a_second_colour() {
     // A filled face carries contrast ink; the rest speak as the role.
     let ink = |v: Variant| {
         let mut ui = Ui::new(Theme::DEFAULT);
-        let el = button(&mut ui, "b", "Save").0.variant(v).el();
+        let el = button(&mut ui, "b", "Save").el.variant(v).el();
         el.children()[0].payload().style.fill.clone()
     };
     assert_eq!(ink(Variant::Solid), Some(Fill::Role(Role::Ink)));
@@ -49,7 +49,7 @@ fn the_size_scale_steps_every_control_off_the_theme_unit() {
     let mut ui = Ui::new(Theme::DEFAULT);
     let mut sw = |size: SpacingToken| {
         let mut on = false;
-        toggle(&mut ui, "sw", &mut on).0.size(size)
+        toggle(&mut ui, "sw", "", &mut on).el.size(size)
     };
     let (xs, m, xl) = (width(sw(Xs)), width(sw(M)), width(sw(Xl)));
     assert!(xs < m && m < xl, "{xs} {m} {xl}");
@@ -77,19 +77,19 @@ fn runs(c: Control) -> Vec<usize> {
 fn a_control_prints_the_value_text_it_is_given() {
     let mut ui = Ui::new(Theme::DEFAULT);
     let mut hz = 440.0;
-    let bare = runs(slider(&mut ui, "cut", "Cutoff", &mut hz, 20.0..=20_000.0).0);
+    let bare = runs(slider(&mut ui, "cut", "Cutoff", &mut hz, 20.0..=20_000.0).el);
     // Label, then readout: the default is `{value:.2}`, so "440.00".
     assert_eq!(bare, vec!["Cutoff".len(), "440.00".len()], "{bare:?}");
     let with = runs(
         slider(&mut ui, "cut", "Cutoff", &mut hz, 20.0..=20_000.0)
-            .0
+            .el
             .value_text("440 Hz"),
     );
     assert_eq!(with, vec!["Cutoff".len(), "440 Hz".len()], "{with:?}");
     // A knob has no header, so the text lands under the dial.
     let dial = runs(
         knob(&mut ui, "cut", "Cutoff", &mut hz, 20.0..=20_000.0)
-            .0
+            .el
             .value_text("440 Hz"),
     );
     assert_eq!(dial, vec!["440 Hz".len()], "{dial:?}");
@@ -102,7 +102,7 @@ fn a_slider_takes_a_track_press_and_drags_across_its_width() {
     let mut ui = Ui::new(Theme::DEFAULT);
     let mut v = 0.0;
     let step = |ui: &mut Ui, v: &mut f64, pointer: PointerInput| {
-        let tree = col([slider(ui, "s", "S", v, 0.0..=1.0).0.el()]).width(400.);
+        let tree = col([slider(ui, "s", "S", v, 0.0..=1.0).el.into_el()]).width(400.);
         ui.frame(tree, None, pointer, 0.016).unwrap();
     };
     let at = |x: f64, y: f64, down: bool| PointerInput {
@@ -132,7 +132,7 @@ fn a_slider_takes_a_track_press_and_drags_across_its_width() {
 fn a_slider_thumb_glides_to_a_value_set_from_outside() {
     let mut ui = Ui::new(Theme::DEFAULT);
     let frame = |ui: &mut Ui, mut v: f64| {
-        let (fader, changed) = slider(ui, "s", "S", &mut v, 0.0..=1.0);
+        let Response { el: fader, changed } = slider(ui, "s", "S", &mut v, 0.0..=1.0);
         assert!(!changed && (v == 0.0 || v == 1.0), "the value is untouched");
         let tree = col([fader.el()]).width(400.);
         let animating = ui
@@ -186,8 +186,14 @@ fn a_widget_reports_a_change_only_when_its_value_moved() {
     let (mut s, mut v) = (String::from("ab"), 0.5);
     // One tree and one frame; the tree reads the keys of the frame before.
     let mut step = |ui: &mut Ui, focus: &str, input: Input| {
-        let (field, typed) = text_input(ui, "f", &mut s);
-        let (fader, moved) = slider(ui, "s", "S", &mut v, 0.0..=1.0);
+        let Response {
+            el: field,
+            changed: typed,
+        } = text_input(ui, "f", &mut s);
+        let Response {
+            el: fader,
+            changed: moved,
+        } = slider(ui, "s", "S", &mut v, 0.0..=1.0);
         ui.frame(col([field, fader.el()]), None, input, 0.016)
             .unwrap();
         ui.focus(focus);

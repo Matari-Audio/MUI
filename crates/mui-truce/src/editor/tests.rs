@@ -65,12 +65,12 @@ fn editor(params: &Arc<Synth>) -> MuiEditor<Synth> {
         (400, 300),
         |ui, bridge| {
             let gain = bridge.bind(ui, 10u32, |ui, id, v| {
-                knob(ui, id, "Gain", v, 0.0..=1.0).0.into()
+                knob(ui, id, "Gain", v, 0.0..=1.0).el.into()
             });
             let voices = bridge.bind(ui, 20u32, |ui, id, v| {
-                knob(ui, id, "Voices", v, 0.0..=1.0).0.into()
+                knob(ui, id, "Voices", v, 0.0..=1.0).el.into()
             });
-            let bypass = bridge.bind_bool(ui, 30u32, |ui, id, on| toggle(ui, id, on).0.into());
+            let bypass = bridge.bind_bool(ui, 30u32, |ui, id, on| toggle(ui, id, "", on).el.into());
             row([gain, voices, bypass])
         },
     )
@@ -316,7 +316,7 @@ fn a_control_that_leaves_the_tree_mid_drag_ends_its_gesture() {
                 return row([]);
             }
             bridge.bind(ui, 10u32, |ui, id, v| {
-                knob(ui, id, "Gain", v, 0.0..=1.0).0.into()
+                knob(ui, id, "Gain", v, 0.0..=1.0).el.into()
             })
         },
     );
@@ -395,7 +395,7 @@ fn a_read_only_parameter_never_reaches_the_host() {
     let mut ui = Ui::new(Theme::DEFAULT);
     let el = bridge.bind(&mut ui, 1u32, |ui, id, v| {
         *v = 0.7;
-        knob(ui, id, "Level", v, 0.0..=1.0).0.into()
+        knob(ui, id, "Level", v, 0.0..=1.0).el.into()
     });
     ui.frame(el, None, mui::prelude::Input::default(), 0.0)
         .unwrap();

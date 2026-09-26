@@ -26,7 +26,7 @@ struct State {
 fn tree(ui: &mut Ui, s: &mut State) -> El {
     let after = s.after;
     s.bypass = after;
-    let (sw, _) = toggle(ui, "bypass", &mut s.bypass);
+    let Response { el: sw, .. } = toggle(ui, "bypass", "", &mut s.bypass);
     let transport = block(28.0, 28.0)
         .outline(move |sz| {
             let p = |x: f64, y: f64| Point::new(x * sz.width, y * sz.height);

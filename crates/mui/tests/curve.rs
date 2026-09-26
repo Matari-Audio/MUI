@@ -23,7 +23,7 @@ fn pointer(x: f64, y: f64, down: bool, shift: bool) -> PointerInput {
 }
 /// One frame of the widget at 200x200.
 fn frame(ui: &mut Ui, c: &mut Curve, p: PointerInput) -> Option<CurveEdit> {
-    let (el, edit) = curve(ui, "env", c);
+    let Response { el, changed: edit } = curve(ui, "env", c);
     ui.frame(el.square(SIZE), Some(Size::new(SIZE, SIZE)), p, 0.016)
         .expect("resolves");
     edit
@@ -115,7 +115,7 @@ fn shift_drags_fine() {
 fn the_drawn_spine_is_the_models_cubic_and_matches_the_sampler() {
     let mut ui = Ui::new(Theme::DEFAULT);
     let mut c = Curve::default();
-    let (el, _) = curve(&mut ui, "env", &mut c);
+    let Response { el, .. } = curve(&mut ui, "env", &mut c);
     let draws = match &el.payload().content {
         Content::Canvas(f) => f.0(Size::new(SIZE, SIZE)),
         _ => panic!("a canvas"),

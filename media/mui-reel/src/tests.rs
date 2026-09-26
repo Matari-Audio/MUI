@@ -7,8 +7,8 @@ struct Model {
 }
 
 fn build(ui: &mut Ui, m: &mut Model) -> El {
-    let k = knob(ui, "gain", "Gain", &mut m.gain, 0.0..=1.0).0.el();
-    let t = toggle(ui, "bypass", &mut m.on).0.el();
+    let k = knob(ui, "gain", "Gain", &mut m.gain, 0.0..=1.0).el.into_el();
+    let t = toggle(ui, "bypass", "", &mut m.on).el.into_el();
     row([k, t]).gap(M).pad(M).fill(Role::Surface)
 }
 

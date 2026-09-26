@@ -29,9 +29,9 @@ fn card(ui: &mut Ui, t: f64) -> El {
         .hold(1.3)
         .to(2.6, 0.9, Ease::EMPHASIZED)
         .at(t);
-    let (dial, _) = knob(ui, "gain", "Gain", &mut gain, 0.0..=1.0);
+    let Response { el: dial, .. } = knob(ui, "gain", "Gain", &mut gain, 0.0..=1.0);
     let mut on = t > 2.2;
-    let (sw, _) = toggle(ui, "drive", &mut on);
+    let Response { el: sw, .. } = toggle(ui, "drive", "", &mut on);
     let meter = (gain * 180.).max(6.);
     col([
         row([text("SATURN").text_size(20.), spacer(), sw.el()]).align(Align::Center),

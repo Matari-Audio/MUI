@@ -15,7 +15,7 @@ pub struct Ctx {
     /// Directories of the mui crates themselves: inside one, the crate's own
     /// `crate::`/`super::` names are mui names.
     own: Vec<PathBuf>,
-    /// Also apply the widget phase (`WIDGET_RULES`, `TUPLES`).
+    /// Also apply the widget phase (`WIDGET_RULES`, `TUPLES`); on unless `--no-widgets`.
     pub widgets: bool,
 }
 
@@ -31,7 +31,7 @@ impl Ctx {
         let mut roots: HashSet<String> = crate::rules::MUI_CRATES.iter().map(|c| c.replace('-', "_")).collect();
         roots.extend(crate::rules::EXTRA_ROOTS.iter().map(|s| s.to_string()));
         roots.extend(extra);
-        Ctx { roots, summaries: HashMap::new(), own: Vec::new(), widgets: false }
+        Ctx { roots, summaries: HashMap::new(), own: Vec::new(), widgets: true }
     }
 
     /// Mark `dir` as the root of a mui crate.
@@ -795,6 +795,7 @@ impl<'a> File<'a> {
                 continue;
             }
 
+            let mut shaped = false;
             for r in self.ctx.rules() {
                 match *r {
                     Rule::Function { old, new } if old == name && called && !field => {
@@ -802,14 +803,18 @@ impl<'a> File<'a> {
                             edit(t[i].lo, t[i].hi, new.to_string());
                         }
                     }
-                    Rule::FnCall { name: n, args, to } if n == name && self.open(i + 1, '(') && !field => {
+                    // The first call shape that matches wins.
+                    Rule::FnCall { name: n, args, to, needs: nd } if n == name && !shaped && self.open(i + 1, '(') && !field => {
                         let mut caps = Vec::new();
                         if self.is_mui_name(i) && self.match_args(i + 1, args, &mut caps) {
                             let mut s = i;
                             while self.sep_before(s) && s >= 3 && t[s - 3].k == K::Ident {
                                 s -= 3;
                             }
-                            edit(t[s].lo, t[t[i + 1].pair].hi, expand(to, &caps));
+                            let to = to.replace("$path", &src[t[s].lo..t[i].lo]);
+                            edit(t[s].lo, t[t[i + 1].pair].hi, expand(&to, &caps));
+                            needs.extend(nd.iter().map(|n| (self.line(i), *n)));
+                            shaped = true;
                         }
                     }
                     Rule::Type { old, new } if old == name && !field => {
@@ -887,6 +892,11 @@ impl<'a> File<'a> {
                     Some(rest) => caps.push(rest.to_string()),
                     None => return false,
                 },
+                Arg::Not(s) if !norm.contains(&strip_ws(s)) => caps.push(text.to_string()),
+                Arg::Shared => match strip_prefix_ws(text, "&") {
+                    Some(rest) if !rest.strip_prefix("mut").is_some_and(|r| r.starts_with(char::is_whitespace)) => caps.push(rest.to_string()),
+                    _ => return false,
+                },
                 _ => return false,
             }
         }
@@ -911,6 +921,12 @@ impl<'a> File<'a> {
             && let Ok(n) = lit.text.parse::<usize>()
             && let Some(field) = spec.fields.get(n)
         {
+            // A control finished on the spot: `.0.el()` is `.el.into_el()`.
+            if *field == "el" && self.dot(close + 3) && self.ident(close + 4, "el") && self.open(close + 5, '(') && t[close + 5].pair == close + 6 {
+                edit(lit.lo, t[close + 6].hi, "el.into_el()".into());
+                needs.push((self.line(i), "IntoEl"));
+                return;
+            }
             edit(lit.lo, lit.hi, field.to_string());
             return;
         }

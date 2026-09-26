@@ -1,4 +1,4 @@
-//! `mui-migrate [--dry-run] [--diff] [--include-vendored] [--no-docs] [--widgets] <paths...>`
+//! `mui-migrate [--dry-run] [--diff] [--include-vendored] [--no-docs] [--no-widgets] <paths...>`
 //!
 //! Rewrites Rust sources, their doc examples, Markdown code blocks and
 //! Cargo.toml files to the MUI DSL v2 API.
@@ -15,18 +15,18 @@ mod tests;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: mui-migrate [--dry-run] [--diff] [--include-vendored] [--no-docs] [--widgets] <paths...>";
+const USAGE: &str = "usage: mui-migrate [--dry-run] [--diff] [--include-vendored] [--no-docs] [--no-widgets] <paths...>";
 
 fn main() -> ExitCode {
     let (mut dry, mut diff, mut vendored, mut paths) = (false, false, false, Vec::new());
-    let (mut docs, mut widgets) = (true, false);
+    let (mut docs, mut widgets) = (true, true);
     for a in std::env::args().skip(1) {
         match a.as_str() {
             "--dry-run" | "-n" => dry = true,
             "--diff" => diff = true,
             "--include-vendored" => vendored = true,
             "--no-docs" => docs = false,
-            "--widgets" => widgets = true,
+            "--no-widgets" => widgets = false,
             "-h" | "--help" => {
                 println!("{USAGE}");
                 return ExitCode::SUCCESS;

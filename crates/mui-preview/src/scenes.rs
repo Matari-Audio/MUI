@@ -210,11 +210,11 @@ impl PreviewScene for Widgets {
             .gap(L)
             .justify(Justify::Center),
             slider(ui, "gain", "Gain", &mut self.gain, -24.0..=6.0)
-                .0
-                .el(),
+                .el
+                .into_el(),
             row([
                 text("Bypass").fill(Role::Dim),
-                toggle(ui, "bypass", &mut self.bypass).0.el(),
+                toggle(ui, "bypass", "", &mut self.bypass).el.into_el(),
                 spacer(),
                 text(format!("{}×", self.clicks)).fill(Role::Dim),
                 go.variant(Variant::Solid).el(),
@@ -305,14 +305,14 @@ impl PreviewScene for GlyphAxes {
         let mut rows = vec![
             text(self.source.clone()).fill(Role::Dim),
             slider(ui, "size", "size", &mut self.size, 24.0..=400.0)
-                .0
-                .el(),
+                .el
+                .into_el(),
         ];
         if self.axes.is_empty() {
             rows.push(text("no variation axes").fill(Role::Dim));
         }
         for (tag, min, max, value) in &mut self.axes {
-            rows.push(slider(ui, &**tag, tag, value, *min..=*max).0.el());
+            rows.push(slider(ui, &**tag, tag, value, *min..=*max).el.into_el());
         }
         rows
     }
@@ -375,8 +375,8 @@ impl PreviewScene for Scrolling {
                         g,
                         -24.0..=6.0,
                     )
-                    .0
-                    .el()
+                    .el
+                    .into_el()
                 });
                 let head = body(format!("octave {s}"))
                     .w(Len::Pct(100.))
@@ -447,8 +447,8 @@ impl PreviewScene for Fields {
         "Type, select, edit. Notes wrap; ctrl+Enter submits."
     }
     fn specimen(&mut self, ui: &mut Ui) -> El {
-        let name = text_input(ui, "field-name", &mut self.name).0;
-        let note = text_input(ui, "field-note", &mut self.note).0;
+        let name = text_input(ui, "field-name", &mut self.name).el;
+        let note = text_input(ui, "field-note", &mut self.note).el;
         let notes = self.notes.get_or_insert_with(|| {
             "A take recorded at 120 BPM, trimmed to the second chorus.\n\nWrapped lines, Up and Down between them, and the wheel scrolls past the fourth row once there is more to read than fits.".to_owned()
         });
@@ -457,7 +457,10 @@ impl PreviewScene for Fields {
             rows: 4,
             ..TextOpts::default()
         };
-        let (notes, edit) = text_edit(ui, "field-notes", notes, opts);
+        let Response {
+            el: notes,
+            changed: edit,
+        } = text_edit(ui, "field-notes", notes, opts);
         self.submits += usize::from(edit.submitted);
         col([
             body("name"),
@@ -500,10 +503,12 @@ impl PreviewScene for Picker {
         "Drag the square and strips. Drag a number, double-click to type."
     }
     fn specimen(&mut self, ui: &mut Ui) -> El {
-        let (picker, _) = color_picker(ui, "pick-tint", &mut self.tint, true);
-        let (bpm, _) = drag_value(ui, "pick-bpm", &mut self.bpm, 20.0..=300.0);
+        let Response { el: picker, .. } =
+            color_picker(ui, "pick-tint", &mut self.tint, ColorOpts { alpha: true });
+        let Response { el: bpm, .. } = drag_value(ui, "pick-bpm", "", &mut self.bpm, 20.0..=300.0);
         let bpm = bpm.value_text(format!("{:.1} BPM", self.bpm));
-        let (gain, _) = drag_value(ui, "pick-gain", &mut self.gain, -60.0..=12.0);
+        let Response { el: gain, .. } =
+            drag_value(ui, "pick-gain", "", &mut self.gain, -60.0..=12.0);
         col([
             picker,
             row([body("tempo"), bpm.el(), body("gain"), gain.el()])
@@ -608,8 +613,8 @@ impl PreviewScene for Curve {
         col([
             plot,
             slider(ui, "knee", "Cutoff", &mut self.cutoff, 0.0..=1.0)
-                .0
-                .el(),
+                .el
+                .into_el(),
         ])
         .gap(M)
         .pad(L)
@@ -634,7 +639,10 @@ impl PreviewScene for CurveEditor {
         "curve(ui, id, &mut Curve): drag a knot or a tension handle. Shift is the fine drag, Alt at the press locks an axis, and a knot clamps between its neighbours."
     }
     fn specimen(&mut self, ui: &mut Ui) -> El {
-        let (plot, edit) = curve(ui, "env", &mut self.env);
+        let Response {
+            el: plot,
+            changed: edit,
+        } = curve(ui, "env", &mut self.env);
         self.last = edit.or(self.last);
         let over = ui.tag("env").map(str::to_owned);
         let readout = match (&over, self.last) {
@@ -692,7 +700,7 @@ impl PreviewScene for BinSpectrum {
             row![
                 caption("Log axis"),
                 spacer(),
-                toggle(ui, "bins-log", &mut self.log).0.size(S).el(),
+                toggle(ui, "bins-log", "", &mut self.log).el.size(S).el(),
             ]
             .align(Align::Center),
         ]
@@ -725,7 +733,10 @@ impl PreviewScene for BinSpectrum {
             ..Bins::default()
         };
         let hovered = bins_hover(ui, "spectrum", &model);
-        let (plot, edit) = bins(ui, "spectrum", &model);
+        let Response {
+            el: plot,
+            changed: edit,
+        } = bins(ui, "spectrum", &mut model);
         match edit {
             Some(BinEdit::Paint(painted)) => {
                 for (i, v) in painted {
@@ -1032,11 +1043,11 @@ impl PreviewScene for Wrapping {
     fn controls(&mut self, ui: &mut Ui) -> Vec<El> {
         vec![
             slider(ui, "wrap-w", "width", &mut self.width, 160.0..=520.0)
-                .0
-                .el(),
+                .el
+                .into_el(),
             slider(ui, "wrap-n", "lines (0 = all)", &mut self.lines, 0.0..=6.0)
-                .0
-                .el(),
+                .el
+                .into_el(),
         ]
     }
 }
@@ -1238,8 +1249,8 @@ impl PreviewScene for Motion {
     fn controls(&mut self, ui: &mut Ui) -> Vec<El> {
         vec![
             slider(ui, "sweep", "sweep", &mut self.sweep, 0.0..=1.0)
-                .0
-                .el(),
+                .el
+                .into_el(),
         ]
     }
 }
@@ -1336,7 +1347,7 @@ impl PreviewScene for Select {
         self.clipboard = s.to_owned();
     }
     fn specimen(&mut self, ui: &mut Ui) -> El {
-        let field = text_input(ui, "sel-field", &mut self.value).0;
+        let field = text_input(ui, "sel-field", &mut self.value).el;
         col([
             body("field"),
             field,
@@ -1428,8 +1439,8 @@ impl PreviewScene for Gestures {
                 .0
                 .el(),
             slider(ui, "g-gain", "Gain", &mut self.gain, -24.0..=6.0)
-                .0
-                .el(),
+                .el
+                .into_el(),
             row(chips).gap(S),
             row(slots).gap(S),
             row([
@@ -1481,7 +1492,10 @@ impl PreviewScene for Switched {
         {
             self.fired += 1;
         }
-        let bypass = toggle(ui, "sw-bypass", &mut self.bypassed).0.size(S).el();
+        let bypass = toggle(ui, "sw-bypass", "", &mut self.bypassed)
+            .el
+            .size(S)
+            .el();
         let rack = row([knob(ui, "sw-cut", "Cutoff", &mut self.cutoff, 0.0..=1.0)
             .0
             .el()])
@@ -1498,7 +1512,7 @@ impl PreviewScene for Switched {
                 .gap(S)
                 .align(Align::Center),
             rack,
-            text_input(ui, "sw-query", &mut self.query).0,
+            text_input(ui, "sw-query", &mut self.query).el,
             caption(format!("shortcut fired {} times", self.fired)),
         ])
         .gap(M)

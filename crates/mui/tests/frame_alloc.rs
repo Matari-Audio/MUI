@@ -47,11 +47,11 @@ fn panel(ui: &mut Ui, v: &mut [f64; 20], on: &mut [bool; 10]) -> El {
     let mut rows = Vec::new();
     for i in 0..10 {
         let a = root.slot(i);
-        let (b0, _) = button(ui, &*a.field("a"), "Go");
-        let (b1, _) = button(ui, &*a.field("b"), "Stop");
-        let (t, _) = toggle(ui, &*a.field("t"), &mut on[i]);
-        let (s, _) = slider(ui, &*a.field("s"), "Gain", &mut v[i], 0.0..=1.0);
-        let (k, _) = knob(ui, &*a.field("k"), "Cut", &mut v[10 + i], 0.0..=1.0);
+        let Response { el: b0, .. } = button(ui, &*a.field("a"), "Go");
+        let Response { el: b1, .. } = button(ui, &*a.field("b"), "Stop");
+        let Response { el: t, .. } = toggle(ui, &*a.field("t"), "", &mut on[i]);
+        let Response { el: s, .. } = slider(ui, &*a.field("s"), "Gain", &mut v[i], 0.0..=1.0);
+        let Response { el: k, .. } = knob(ui, &*a.field("k"), "Cut", &mut v[10 + i], 0.0..=1.0);
         rows.push(row![b0, b1, t, s, k]);
     }
     col(rows)
