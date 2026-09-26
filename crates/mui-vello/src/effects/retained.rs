@@ -356,6 +356,12 @@ fn reach(p: &Painted) -> Option<Rect> {
             None => path().inflate(p.width, p.width),
         },
     };
+    // Local paths, placed; a text run's box is in scene space already.
+    let r = match &p.text {
+        Some(_) => r,
+        None if r == NOTHING => r,
+        None => r + crate::kurbo::Vec2::new(p.offset.x, p.offset.y),
+    };
     (r == NOTHING || [r.x0, r.y0, r.x1, r.y1].iter().all(|v| v.is_finite())).then_some(r)
 }
 
@@ -822,15 +828,15 @@ impl GpuRenderer {
         part: Option<[u32; 4]>,
     ) -> Result<(), Error> {
         let size = self.size;
-        self.paths.resize(resolved.paint.len());
+        self.paths.tick();
         // Backdrops first: each is a render of its own that the frame samples.
         let mut blurred = Vec::new();
         if part.is_none() {
             let mut k = 0;
             for (i, p) in resolved.paint.iter().enumerate() {
                 if p.layer == Layer::Backdrop && p.blur.is_finite() && p.blur > 0.0 {
-                    let outline = self.paths.get(i, &p.path)?.clone();
-                    blurred.push(self.backdrop(k, &resolved.paint[..i], p.blur, &outline, xf)?);
+                    let outline = self.paths.get(&p.path)?.clone();
+                    blurred.push(self.backdrop(k, &resolved.paint[..i], p, &outline, xf)?);
                     k += 1;
                 }
             }
@@ -853,9 +859,9 @@ impl GpuRenderer {
         if part.is_none() {
             canvas.begin_frame();
         }
-        canvas.set_transform(xf);
         let mut blurred = blurred.into_iter();
-        for (i, p) in resolved.paint.iter().enumerate() {
+        for p in &resolved.paint {
+            canvas.set_transform(crate::placed(xf, p));
             match p.layer {
                 Layer::External => {
                     let e = resolved
@@ -895,7 +901,7 @@ impl GpuRenderer {
                     let brush = canvas.hand_out(image);
                     canvas.set_paint(brush);
                     canvas.set_paint_transform(brush_transform);
-                    canvas.fill_path(self.paths.get(i, &p.path)?);
+                    canvas.fill_path(self.paths.get(&p.path)?);
                     canvas.reset_paint_transform();
                 }
                 _ => {
@@ -907,7 +913,7 @@ impl GpuRenderer {
                     if p.layer != Layer::Clip && cull.is_some_and(off) {
                         continue;
                     }
-                    crate::one(&mut canvas, p, self.paths.get(i, &p.path)?)?;
+                    crate::one(&mut canvas, p, self.paths.get(&p.path)?)?;
                 }
             }
         }
@@ -923,9 +929,10 @@ impl GpuRenderer {
         Ok(())
     }
 
-    /// Backdrop `k`: `below` rendered on its own around `outline`, blurred
-    /// by `sigma` scene units, as the image and the brush transform that
-    /// put it back where it was. `None` when none of it is on the target.
+    /// Backdrop `k`: `below` rendered on its own around `p`'s `outline`,
+    /// blurred by its `blur` scene units, as the image and the brush
+    /// transform that put it back where it was, under `p`'s own placement.
+    /// `None` when none of it is on the target.
     ///
     /// The prefix renders at a power-of-two fraction of the device -- a
     /// Gaussian that wide has nothing left at full resolution -- so the two
@@ -934,14 +941,15 @@ impl GpuRenderer {
         &mut self,
         k: usize,
         below: &[Painted],
-        sigma: f64,
+        p: &Painted,
         outline: &crate::kurbo::BezPath,
         xf: Affine,
     ) -> Result<Option<(ImageData, Affine)>, Error> {
+        let sigma = p.blur;
         let sigma_device = sigma * xf.determinant().abs().sqrt();
         let scale = (sigma_device / 4.).ceil().max(1.) as u32;
         let scale = f64::from(scale.next_power_of_two());
-        let reach = outline.bounding_box().inflate(3. * sigma, 3. * sigma);
+        let reach = crate::scene_box(p, outline).inflate(3. * sigma, 3. * sigma);
         let device = xf.transform_rect_bbox(reach).intersect(Rect::new(
             0.,
             0.,
@@ -960,8 +968,7 @@ impl GpuRenderer {
 
         self.prefix.reset();
         let mut canvas = Classic::new(&mut self.prefix, &mut self.cache, &self.textures, size);
-        canvas.set_transform(to_prefix);
-        crate::replay(&mut canvas, below, reach)?;
+        crate::replay(&mut canvas, below, reach, to_prefix)?;
 
         if self.backdrops.get(k).is_none_or(|b| b.size != size) {
             let b = self.new_backdrop(size);
@@ -1004,7 +1011,8 @@ impl GpuRenderer {
             .draw(&mut encoder, &self.passes.blur, &b.binds[1], &b.out);
         self.queue.submit([encoder.finish()]);
         self.vello.mark_override_image_dirty(&b.image);
-        let brush = xf.inverse() * Affine::translate(origin) * Affine::scale(scale);
+        let brush =
+            crate::placed(xf, p).inverse() * Affine::translate(origin) * Affine::scale(scale);
         Ok(Some((b.image.clone(), brush)))
     }
 

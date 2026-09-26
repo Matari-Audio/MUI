@@ -49,6 +49,7 @@ impl Walk<'_> {
                     path: Arc::new(image_rect.path()),
                     paint: Paint::Solid(under),
                     rect: Some(*image_rect),
+                    offset: Point::ZERO,
                     width: 0.0,
                     blur: 0.0,
                     text: None,
@@ -75,16 +76,14 @@ impl Walk<'_> {
             None if e.extras().border_join.is_some() => self
                 .paint_of(&e.style.fill, under)
                 .map_or(under, |p| p.solid()),
-            None => solid(
-                self.push(
-                    Layer::Fill,
-                    contour.path.clone(),
-                    contour.rect,
-                    &e.style.fill,
-                    under,
-                ),
-                under,
-            ),
+            None => {
+                let path = contour.path.clone();
+                let mut p = self.push(Layer::Fill, path, contour.rect, &e.style.fill, under);
+                if let Some(p) = p.as_deref_mut() {
+                    p.offset = contour.offset;
+                }
+                solid(p, under)
+            }
         }
     }
 
@@ -110,7 +109,7 @@ impl Walk<'_> {
                     contour.changed |= i2.corner_collapsed;
                     let Some(child) = i2.shape else { break };
                     cur_rect = Some(child);
-                    Arc::new(child.path())
+                    self.rect_path(child, mui_geometry::CornerStyle::Round)
                 }
                 None => {
                     let from = (**cur.as_ref().unwrap_or(&contour.path)).clone();
@@ -124,7 +123,11 @@ impl Walk<'_> {
                     cur.insert(Arc::new(path)).clone()
                 }
             };
-            bg = solid(self.push(Layer::Shell(i), shell, cur_rect, f, bg), bg);
+            let mut p = self.push(Layer::Shell(i), shell, cur_rect, f, bg);
+            if let Some(p) = p.as_deref_mut() {
+                p.offset = contour.offset;
+            }
+            bg = solid(p, bg);
         }
         Ok(bg)
     }
@@ -141,7 +144,7 @@ impl Walk<'_> {
         if !s.shadow.iter().any(|sh| sh.kind == ShadowKind::Inset) {
             return Ok(());
         }
-        self.mark(Layer::Clip, contour.path.clone(), contour.rect);
+        self.mark_on(Layer::Clip, contour);
         for sh in s.shadow.iter().filter(|sh| sh.kind == ShadowKind::Inset) {
             self.shadow(sh, contour, bg)?;
         }
@@ -190,22 +193,20 @@ impl Walk<'_> {
             // ponytail: no analytic rect and no welds -- the shape travels
             // as a path, and the spread with it is dropped.
             None => {
-                if let Some(p) = self.push(
-                    Layer::Shadow(sh.kind),
-                    contour.path.rigid_transform(d, 0.0)?,
-                    None,
-                    &sh.fill,
-                    under,
-                ) {
+                let path = contour.path.clone();
+                if let Some(p) = self.push(Layer::Shadow(sh.kind), path, None, &sh.fill, under) {
                     p.blur = sh.blur;
+                    p.offset = contour.offset + d;
                 }
                 return Ok(());
             }
         };
         for &r in rects {
             let r = moved(r)?;
-            if let Some(p) = self.push(Layer::Shadow(sh.kind), r.path(), Some(r), &sh.fill, under) {
+            let path = self.rect_path(r, mui_geometry::CornerStyle::Round);
+            if let Some(p) = self.push(Layer::Shadow(sh.kind), path, Some(r), &sh.fill, under) {
                 p.blur = sh.blur;
+                p.offset = contour.offset;
             }
         }
         Ok(())
@@ -239,17 +240,13 @@ impl Walk<'_> {
                     false,
                 )));
             };
+            let path = self.rect_path(rr, mui_geometry::CornerStyle::Round);
             if e.style.union {
-                return Ok(Some((
-                    Arc::new(rr.path()),
-                    Some(rr),
-                    st.fill.clone(),
-                    w,
-                    false,
-                )));
+                return Ok(Some((path, Some(rr), st.fill.clone(), w, false)));
             }
-            if let Some(p) = self.push(Layer::Stroke, rr.path(), Some(rr), &st.fill, bg) {
+            if let Some(p) = self.push(Layer::Stroke, path, Some(rr), &st.fill, bg) {
                 p.width = w;
+                p.offset = contour.offset;
             }
             return Ok(None);
         }
@@ -344,9 +341,11 @@ impl Walk<'_> {
             sweep.from.1 *= 0.5;
             sweep.to.1 *= 0.5;
         }
+        // Anchors are frames, so the band is made in scene space.
+        let world = contour.world();
         let mut band = self.borders.band(
             &self.key,
-            &contour.path,
+            &world,
             &sweep,
             anchor,
             0.1 / self.spec.device_scale.unwrap_or(1.0),
@@ -366,7 +365,7 @@ impl Walk<'_> {
             let merged = self.cached_region((self.key.clone(), 7), Operation::Sweep(band))?;
             band = self.cached_region(
                 (self.key.clone(), RAMP_OUTSIDE),
-                Operation::Combine(merged, (*contour.path).clone(), BooleanOp::Difference),
+                Operation::Combine(merged, (*world).clone(), BooleanOp::Difference),
             )?;
         }
         let Some(bounds) = Bounds::from_points(band.flatten(0.1, 250_000)?.concat()) else {
@@ -374,7 +373,7 @@ impl Walk<'_> {
         };
         let start = self.paint.len();
         if ramp.align == crate::BorderAlign::Inside {
-            self.mark(Layer::Clip, contour.path.clone(), contour.rect);
+            self.mark_on(Layer::Clip, contour);
         }
         self.push(Layer::Stroke, band, None, &ramp.fill(anchor, bounds), bg);
         if ramp.align == crate::BorderAlign::Inside {
@@ -391,12 +390,29 @@ impl Walk<'_> {
     /// A structural entry -- a clip, a blend, or the one closing it -- whose
     /// paint is meaningless.
     pub(super) fn mark(&mut self, layer: Layer, path: Arc<Path>, rect: Option<RoundedRect>) {
+        self.mark_at(layer, path, rect, Point::ZERO);
+    }
+
+    /// [`Walk::mark`] along `c`, where it stands.
+    pub(super) fn mark_on(&mut self, layer: Layer, c: &Contour) {
+        self.mark_at(layer, c.path.clone(), c.rect, c.offset);
+    }
+
+    /// [`Walk::mark`] of a local path placed at `offset`.
+    pub(super) fn mark_at(
+        &mut self,
+        layer: Layer,
+        path: Arc<Path>,
+        rect: Option<RoundedRect>,
+        offset: Point,
+    ) {
         self.paint.push(Painted {
             key: self.key.clone(),
             layer,
             path,
             paint: Paint::Solid(CLEAR),
             rect,
+            offset,
             width: 0.0,
             blur: 0.0,
             text: None,
@@ -443,6 +459,7 @@ impl Walk<'_> {
             path: path.into(),
             paint,
             rect,
+            offset: Point::ZERO,
             width: 0.0,
             blur: 0.0,
             text: None,
@@ -498,7 +515,9 @@ mod tests {
         for (p, k) in sh.iter().zip(["a", "b"]) {
             assert_eq!(p.blur, 12.);
             let r = p.rect.expect("a rect the renderer can blur").bounds();
-            let child = s.surface(k).unwrap().rect.unwrap().bounds();
+            let r = r.translated(p.offset);
+            let child = s.surface(k).unwrap();
+            let child = child.rect.unwrap().bounds().translated(child.offset);
             assert!((r.min.x - child.min.x).abs() < 1e-9);
             assert!((r.min.y - child.min.y - Shadow::soft(12.).dy).abs() < 1e-9);
         }

@@ -271,11 +271,17 @@ fn same_hit_geometry(a: &ResolvedScene, b: &ResolvedScene) -> bool {
                     && a.disabled == b.disabled
                     && a.pointer_states == b.pointer_states
                     && same([&a.path].into_iter(), [&b.path].into_iter())
+                    && a.offset == b.offset
                     && a.clip == b.clip
                     && same(
-                        a.clip_paths().unwrap_or(&[]).iter(),
-                        b.clip_paths().unwrap_or(&[]).iter(),
+                        a.clip_paths().unwrap_or(&[]).iter().map(|c| &c.0),
+                        b.clip_paths().unwrap_or(&[]).iter().map(|c| &c.0),
                     )
+                    && a.clip_paths().unwrap_or(&[]).iter().map(|c| c.1).eq(b
+                        .clip_paths()
+                        .unwrap_or(&[])
+                        .iter()
+                        .map(|c| c.1))
                     && a.hits.iter().map(|h| &h.0).eq(b.hits.iter().map(|h| &h.0))
                     && same(a.hits.iter().map(|h| &h.1), b.hits.iter().map(|h| &h.1)) => {}
             _ => return false,
@@ -2059,24 +2065,23 @@ impl Ui {
             // wraps or unwraps the root keeps its old path; it releases
             // normally but reports no click. Key positional targets by
             // something stabler than the path if that ever shows.
-            let mut hit = Hit::default();
+            // The last map's conversions stay: a moved outline is the same
+            // `Arc`, so only new shapes convert.
+            let mut hit = std::mem::take(&mut self.hit);
+            hit.clear();
             for s in scene
                 .surfaces()
                 .filter(|s| (named(&s.key) || s.pointer_states) && !s.disabled)
             {
+                let key = || s.key.to_string();
                 if s.hits.is_empty() {
-                    hit.push_clipped_paths(s.key.to_string(), &s.path, s.clip, s.clip_paths())?;
+                    hit.push_placed(key(), None, &s.path, s.offset, s.clip, s.clip_paths())?;
                 }
                 // A canvas that named its draws is hit by those shapes instead
                 // of by its frame, so a ring responds in the ring, not its hole.
                 for (tag, path) in &s.hits {
-                    hit.push_tagged_paths(
-                        s.key.to_string(),
-                        tag.to_string(),
-                        path,
-                        s.clip,
-                        s.clip_paths(),
-                    )?;
+                    let tag = Some(tag.to_string());
+                    hit.push_placed(key(), tag, path, s.offset, s.clip, s.clip_paths())?;
                 }
             }
             self.hit = hit;
@@ -2093,14 +2098,9 @@ impl Ui {
             let Some(surface) = scene.surface(&key) else {
                 continue;
             };
-            let (origin, target) = (surface.frame, surface.path.clone());
-            let local = |p: &mui_geometry::Path, sign: f64| {
-                p.rigid_transform(Point::new(sign * origin.x, sign * origin.y), 0.)
-                    .ok()
-            };
-            let Some(target_local) = local(&target, -1.) else {
-                continue;
-            };
+            // Local to the surface's offset, as every layer along it is.
+            let target = surface.path.clone();
+            let target_local = mui_geometry::Path::clone(&target);
             let m = slot(&mut self.morphs, &key, || Morph {
                 seen: false,
                 shape,
@@ -2131,9 +2131,7 @@ impl Ui {
             if m.from.is_none() {
                 continue;
             }
-            let Some(world) = local(&m.shown, 1.).map(Arc::new) else {
-                continue;
-            };
+            let world = Arc::new(m.shown.clone());
             // ponytail: the hit shape and any analytic shadow stay the target's
             // for the few frames a morph lasts; shells, being offsets of the
             // outline, snap. Offset them per frame if a morph ever lingers.
@@ -2189,6 +2187,7 @@ impl Ui {
                 path: Arc::default(),
                 paint: Paint::Solid(Color::oklcha(0., 0., 0., 0.)),
                 rect: None,
+                offset: Point::ZERO,
                 width: 0.,
                 blur: 0.,
                 text: None,

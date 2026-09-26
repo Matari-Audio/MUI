@@ -66,8 +66,8 @@ pub mod material_symbols;
 pub use scene::bar;
 pub use scene::{
     push_index, resolve_scene, resolve_scene_animated, resolve_scene_cached,
-    resolve_scene_retained, resolve_scene_with, Layer, Painted, ResolvedScene, ResolvedSurface,
-    SceneError, SceneSpec, Text, TextCache, TextGlyph,
+    resolve_scene_retained, resolve_scene_with, Layer, Painted, PlacedPath, ResolvedScene,
+    ResolvedSurface, SceneError, SceneSpec, Text, TextCache, TextGlyph,
 };
 
 /// Everything a scene file needs, including the spacing tokens as bare

@@ -4,7 +4,6 @@ use std::sync::Arc;
 use mui_geometry::{CornerStyle, Point};
 use mui_layout::Frame;
 
-use super::outline::Contour;
 use super::{snap, SceneError, Walk};
 use crate::{Color, Content, El, Paint};
 
@@ -90,11 +89,9 @@ impl Walk<'_> {
                     "analytic GPU weld requires at most three ordinary rounded-rectangle plates; custom/carved/nested outlines need an explicit reference backend",
                 ));
             }
-            let Contour {
-                path: outline,
-                rect,
-                ..
-            } = self.outline(c, f, first + 1)?;
+            // Plates are placed by their frames: scene space.
+            let contour = self.outline(c, f, first + 1)?;
+            let (outline, rect) = (contour.world(), contour.world_rect());
             if gpu && rect.is_none() {
                 return Err(SceneError::UnsupportedWeld(
                     "GPU participant is not an analytic rounded rectangle",

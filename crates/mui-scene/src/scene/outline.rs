@@ -12,7 +12,9 @@ use mui_layout::Frame;
 use super::{bounds, polygons, SceneError, Walk};
 use crate::{Carve, El, Radius};
 
-/// A node's resolved outline, and what else its shape knows.
+/// A node's resolved outline, and what else its shape knows. Its geometry
+/// is local: `offset` places it, so an outline that only moved is the same
+/// `Arc`, and same-sized rects share one.
 #[derive(Clone, Debug)]
 pub(super) struct Contour {
     /// Shared by every layer, clip and surface drawn along it.
@@ -26,9 +28,11 @@ pub(super) struct Contour {
     pub(super) shadow_rects: Vec<RoundedRect>,
     /// The path's bounds when already known; see [`Contour::bounds`].
     pub(super) known_bounds: Option<Bounds>,
+    /// Where all of the above stands in the scene.
+    pub(super) offset: Point,
 }
 impl Contour {
-    /// A plain path: no analytic form, nothing changed.
+    /// A plain path in scene space: no analytic form, nothing changed.
     pub(super) fn path(path: impl Into<Arc<Path>>) -> Self {
         Self {
             path: path.into(),
@@ -36,10 +40,11 @@ impl Contour {
             changed: false,
             shadow_rects: Vec::new(),
             known_bounds: None,
+            offset: Point::ZERO,
         }
     }
 
-    /// The outline's bounds: the rect's, the cached ones, or flattened.
+    /// The outline's local bounds: the rect's, the cached ones, or flattened.
     pub(super) fn bounds(&self) -> Result<Option<Bounds>, SceneError> {
         if let Some(r) = self.rect {
             return Ok(Some(r.bounds()));
@@ -52,24 +57,42 @@ impl Contour {
         ))
     }
 
-    fn translated(&self, d: Point) -> Self {
-        let mut path = (*self.path).clone();
-        path.translate(d);
-        Self {
-            path: Arc::new(path),
-            rect: self.rect.map(|r| r.translated(d)),
-            changed: self.changed,
-            shadow_rects: self.shadow_rects.iter().map(|r| r.translated(d)).collect(),
-            known_bounds: self.known_bounds.map(|b| b.translated(d)),
+    /// The path in scene space, for the geometry that mixes it with frames.
+    pub(super) fn world(&self) -> Arc<Path> {
+        if self.offset == Point::ZERO {
+            return self.path.clone();
         }
+        let mut p = (*self.path).clone();
+        p.translate(self.offset);
+        Arc::new(p)
+    }
+
+    pub(super) fn world_rect(&self) -> Option<RoundedRect> {
+        self.rect.map(|r| r.translated(self.offset))
+    }
+
+    /// The same outline, local to `origin` instead.
+    fn placed_at(mut self, origin: Point) -> Self {
+        let d = self.offset - origin;
+        if d != Point::ZERO {
+            Arc::make_mut(&mut self.path).translate(d);
+            self.rect = self.rect.map(|r| r.translated(d));
+            for r in &mut self.shadow_rects {
+                *r = r.translated(d);
+            }
+            self.known_bounds = self.known_bounds.map(|b| b.translated(d));
+        }
+        self.offset = origin;
+        self
     }
 }
 
 /// Weld and carve outlines, the walk's most expensive geometry, keyed by
 /// every input word that shaped them and compared in full: a hash match
 /// alone is never trusted. Frames enter the key relative to the node's own
-/// origin, so a weld that moves or scrolls is a hit, translated. Entries no
-/// resolve used are swept at its end.
+/// origin, and the contour is kept local to it, so a weld that moves or
+/// scrolls is a hit, the same `Arc`s. Entries no resolve used are swept at
+/// its end.
 #[derive(Debug, Default)]
 pub(super) struct OutlineCache {
     pub(super) entries: HashMap<Vec<u64>, Entry>,
@@ -79,28 +102,27 @@ pub(super) struct OutlineCache {
     pub(super) generation: u64,
     pub(super) hits: u64,
     pub(super) misses: u64,
-    /// Each canvas's last draw list, where it stood, and its paths moved
-    /// there: a [`canvas_cached`](crate::canvas_cached) list that stays put
-    /// is painted from the same paths every frame. Holding the list keeps its
+    /// Each canvas's last draw list and its paths: a
+    /// [`canvas_cached`](crate::canvas_cached) list is painted from the same
+    /// paths every frame, wherever it moves. Holding the list keeps its
     /// address from being reused.
     pub(super) canvases: HashMap<Arc<str>, PlacedDraws>,
-    /// Each node's rounded-rect outline, and the band its stroke paints
-    /// along it: handed back as the same `Arc` while the rect holds, so a
-    /// still node builds no path and compares by pointer downstream.
-    pub(super) rects: HashMap<Arc<str>, (RoundedRect, Arc<Path>, u64)>,
+    /// Every local rounded-rect path, by the rect's words and corner style:
+    /// one `Arc` for every node, and every frame, of that shape.
+    pub(super) rects: HashMap<[u64; 6], (Arc<Path>, u64)>,
+    /// The band each node's stroke paints along its outline.
     pub(super) bands: HashMap<Arc<str>, Band>,
 }
 
 /// The outline a stroke ran along, its width and alignment, the band, and
 /// the resolve that last used it.
 pub(super) type Band = (Arc<Path>, f64, crate::BorderAlign, Arc<Path>, u64);
-pub(super) type PlacedDraws = (Arc<[crate::Draw]>, Point, Vec<Arc<Path>>, u64);
+pub(super) type PlacedDraws = (Arc<[crate::Draw]>, Vec<Arc<Path>>, u64);
 
 #[derive(Debug)]
 pub(super) struct Entry {
+    /// Local to the key's origin.
     contour: Contour,
-    /// Where the contour stands: the key's origin when it was last used.
-    origin: Point,
     seen: u64,
 }
 
@@ -110,21 +132,21 @@ impl OutlineCache {
             self.misses += 1;
             return None;
         };
-        if e.origin != origin {
-            e.contour = e.contour.translated(origin - e.origin);
-            e.origin = origin;
-        }
         e.seen = self.generation;
         self.hits += 1;
-        Some(e.contour.clone())
+        Some(Contour {
+            offset: origin,
+            ..e.contour.clone()
+        })
     }
 
     fn insert(
         &mut self,
         key: Vec<u64>,
         origin: Point,
-        mut contour: Contour,
+        contour: Contour,
     ) -> Result<Contour, SceneError> {
+        let mut contour = contour.placed_at(origin);
         // Flattened once here rather than by every frame that hits.
         contour.known_bounds = contour.bounds()?;
         let seen = self.generation;
@@ -132,7 +154,6 @@ impl OutlineCache {
             key,
             Entry {
                 contour: contour.clone(),
-                origin,
                 seen,
             },
         );
@@ -144,8 +165,8 @@ impl OutlineCache {
         let generation = self.generation;
         let live = |seen: u64| generation.wrapping_sub(seen) <= age;
         self.entries.retain(|_, e| live(e.seen));
-        self.canvases.retain(|_, c| live(c.3));
-        self.rects.retain(|_, r| live(r.2));
+        self.canvases.retain(|_, c| live(c.2));
+        self.rects.retain(|_, r| live(r.1));
         self.bands.retain(|_, b| live(b.4));
         self.generation = generation.wrapping_add(1);
     }
@@ -277,8 +298,11 @@ impl Walk<'_> {
         frame: Frame,
         first: usize,
     ) -> Result<Contour, SceneError> {
-        if let Some(path) = self.regions.get(&first.saturating_sub(1)) {
-            return Ok(Contour::path(path.clone()));
+        if let Some((path, offset)) = self.regions.get(&first.saturating_sub(1)) {
+            return Ok(Contour {
+                offset: *offset,
+                ..Contour::path(path.clone())
+            });
         }
         if n.payload().extras().outline.is_some()
             && n.children().iter().any(|c| c.payload().carve.is_some())
@@ -313,9 +337,9 @@ impl Walk<'_> {
                 continue;
             };
             if topo.is_none() {
-                shapes = polygons(&base.path)?;
+                shapes = polygons(&base.world())?;
             }
-            let rhs = polygons(&self.outline(c, f, child_first)?.path)?;
+            let rhs = polygons(&self.outline(c, f, child_first)?.world())?;
             if rhs.is_empty() {
                 continue;
             }
@@ -389,22 +413,28 @@ impl Walk<'_> {
         origin
     }
 
-    /// `rr`'s path, the same one last frame's walk built when the node's
-    /// rect has not changed. A weld's children share their owner's slot,
-    /// which only costs them the reuse.
-    pub(super) fn rect_path(&mut self, rr: RoundedRect) -> Arc<Path> {
+    /// `rr`'s path in `corners`, the one `Arc` every node of that shape
+    /// shares, this frame and the next.
+    pub(super) fn rect_path(&mut self, rr: RoundedRect, corners: CornerStyle) -> Arc<Path> {
+        let b = rr.bounds();
+        let key = [
+            b.min.x.to_bits(),
+            b.min.y.to_bits(),
+            b.max.x.to_bits(),
+            b.max.y.to_bits(),
+            rr.radius().to_bits(),
+            corners as u64,
+        ];
         let generation = self.outlines.generation;
-        if let Some((r, p, seen)) = self.outlines.rects.get_mut(&self.key) {
-            if *r == rr {
-                *seen = generation;
-                return p.clone();
-            }
-        }
-        let p = Arc::new(rr.path());
-        self.outlines
-            .rects
-            .insert(self.key.clone(), (rr, p.clone(), generation));
-        p
+        let (p, seen) = self.outlines.rects.entry(key).or_insert_with(|| {
+            let p = match corners {
+                CornerStyle::Round => rr.path(),
+                _ => corners.shape(&rr.path()),
+            };
+            (Arc::new(p), generation)
+        });
+        *seen = generation;
+        p.clone()
     }
 
     fn shape(&mut self, n: &El, frame: Frame, first: usize) -> Result<Contour, SceneError> {
@@ -417,10 +447,12 @@ impl Walk<'_> {
                 )
                 .into());
             }
-            let mut path = (shape.0)(frame.size);
+            let path = (shape.0)(frame.size);
             path.validate(250_000)?;
-            path.translate(Point::new(frame.x, frame.y));
-            return Ok(Contour::path(path));
+            return Ok(Contour {
+                offset: Point::new(frame.x, frame.y),
+                ..Contour::path(path)
+            });
         }
         let (convex, concave) = match s.radius {
             Radius::Theme => (th.corners.box_, th.corners.concave),
@@ -443,19 +475,26 @@ impl Walk<'_> {
             return Err(SceneError::InvalidRadius);
         }
         if !s.union || n.children().is_empty() {
-            let rr = RoundedRect::new(bounds(frame, self.spec.device_scale), convex)?;
+            // Local to its snapped corner, so a move keeps the path.
+            let b = bounds(frame, self.spec.device_scale);
+            let size = Bounds::new(0., 0., b.max.x - b.min.x, b.max.y - b.min.y);
+            let rr = RoundedRect::new(size, convex)?;
+            let path = self.rect_path(rr, s.corners);
+            let offset = b.min;
             // A squircle is no longer a rounded rectangle, so it gives up the
             // analytic blur and the analytic shell inset with it; the path
             // route below draws both from the outline itself.
             if s.corners != CornerStyle::Round {
                 return Ok(Contour {
                     shadow_rects: vec![rr],
-                    ..Contour::path(s.corners.shape(&rr.path()))
+                    offset,
+                    ..Contour::path(path)
                 });
             }
             return Ok(Contour {
                 rect: Some(rr),
-                ..Contour::path(self.rect_path(rr))
+                offset,
+                ..Contour::path(path)
             });
         }
         // Children's outlines sit right after this node in pre-order, each
@@ -472,19 +511,20 @@ impl Walk<'_> {
             if c.payload().carve.is_some() || f.size.width <= 0.0 || f.size.height <= 0.0 {
                 continue;
             }
-            let Contour {
-                path,
-                rect: child_rect,
-                shadow_rects: child_rects,
-                ..
-            } = self.outline(c, f, child_first)?;
+            // The weld is made in scene space, and the cache localises it.
+            let child = self.outline(c, f, child_first)?;
+            let child_rect = child.world_rect();
+            let child_rects = child
+                .shadow_rects
+                .iter()
+                .map(|r| r.translated(child.offset));
             // A rounded rect is one simple ring already: no normalizing pass.
             let child_shapes = match child_rect {
                 Some(r) => {
                     let ring = r.path().flatten(0.25, 100_000)?.swap_remove(0);
                     vec![Polygon::new(ring).into()]
                 }
-                None => polygons(&path)?,
+                None => polygons(&child.world())?,
             };
             if child_shapes.is_empty() {
                 continue;
@@ -497,7 +537,7 @@ impl Walk<'_> {
             // convex radius.
             match child_rect {
                 Some(r) => rects.push(r),
-                None if c.payload().style.union && !child_rects.is_empty() => {
+                None if c.payload().style.union && !child.shadow_rects.is_empty() => {
                     rects.extend(child_rects);
                 }
                 None => rects.push(RoundedRect::new(bounds(f, self.spec.device_scale), convex)?),

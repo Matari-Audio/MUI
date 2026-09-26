@@ -431,6 +431,53 @@ fn a_tooltip_coming_and_going_renders_only_its_box() {
     }
 }
 
+/// A card that only moved keeps its paths and changes its offset: the
+/// damaged box renders it at the new place, gradient, shadow and label
+/// included, exactly as a whole render does.
+#[test]
+fn a_moved_card_renders_only_its_boxes_and_matches_a_whole_render() {
+    let card = |x: f64| {
+        let card = overlay([text("moved").text_size(11.).fill(Role::Ink)])
+            .size(70., 30.)
+            .radius(6.)
+            .fill(Gradient::linear(
+                90.,
+                [(0., Role::Primary), (1., Role::Warning)],
+            ))
+            .stroke(Role::Ink)
+            .shadow(Shadow::soft(3.))
+            .offset(x, 40.)
+            .float()
+            .id("card");
+        let mut spec = SceneSpec::new(overlay([card]).fill(Role::Background).id("root"))
+            .offered(Size::new(320., 200.));
+        spec.font = Some(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
+        resolve_scene(&spec).unwrap()
+    };
+    let (before, after) = (card(20.), card(150.));
+    let fill = |s: &ResolvedScene| {
+        s.paint
+            .iter()
+            .find(|p| p.layer == mui_scene::Layer::Fill && &*p.key == "card")
+            .map(|p| (p.path.clone(), p.offset))
+            .unwrap()
+    };
+    let ((a, at_a), (b, at_b)) = (fill(&before), fill(&after));
+    assert_eq!(*a, *b, "a move keeps the local path");
+    assert!(at_b.x > at_a.x, "{at_a:?} {at_b:?}");
+    for xf in [Affine::IDENTITY, Affine::scale(1.37)] {
+        let Some((part, whole, stats)) = damaged_at(&before, &after, xf) else {
+            return;
+        };
+        assert!(
+            stats.rendered_pixels < AREA / 2,
+            "{}",
+            stats.rendered_pixels
+        );
+        same_pixels(&part, &whole);
+    }
+}
+
 /// An opacity layer that changes repaints everything inside it, clipped
 /// children included, and nothing else.
 #[test]

@@ -58,7 +58,7 @@ fn octagon_split_nests_and_keeps_exact_padding_and_total_gap() {
     let c = scene.surface("c").unwrap();
     assert!((c.frame.y - b.frame.bottom() - 2.).abs() < 0.01);
     assert_eq!(scene.layout.frame("b"), Some(b.frame));
-    assert!(b.clip_paths().unwrap().iter().any(|p| p == &right.path));
+    assert!(b.clip_paths().unwrap().iter().any(|p| p.0 == right.path));
 }
 #[test]
 fn inward_ramp_padding_follows_the_actual_sloped_border() {

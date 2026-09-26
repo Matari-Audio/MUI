@@ -1790,6 +1790,7 @@ dependencies = [
  "naga 30.0.1",
  "png 0.17.16",
  "pollster",
+ "rustc-hash",
  "ttf-inter",
  "vello",
  "vello_common",

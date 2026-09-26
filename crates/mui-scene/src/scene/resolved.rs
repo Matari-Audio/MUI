@@ -97,12 +97,19 @@ pub struct Painted {
     pub key: Arc<str>,
     pub layer: Layer,
     /// Shared with the node's surface and every other layer drawn along the
-    /// same outline, so a filled, clipped node holds one path.
+    /// same outline, so a filled, clipped node holds one path. In the
+    /// entry's own space: [`Self::offset`] puts it in the scene, so a node
+    /// that only moved keeps its path, and same-sized nodes share one.
     pub path: Arc<Path>,
     pub paint: Paint,
     /// Analytic form when the path is a plain rounded rectangle: a renderer
-    /// with a fast path (blurred rects, say) can take it.
+    /// with a fast path (blurred rects, say) can take it. Local, like `path`.
     pub rect: Option<RoundedRect>,
+    /// Where `path` and `rect` stand in the scene: added to every point. A
+    /// renderer paints the entry under this translation; gradients and
+    /// images are fitted to the local path, so they travel with it. Text
+    /// keeps its [`Text::origin`] in scene space and this at zero.
+    pub offset: Point,
     /// Stroke width; `0` fills.
     pub width: f64,
     /// Gaussian blur radius: a shadow's, or a [`Layer::Backdrop`]'s.
@@ -150,6 +157,7 @@ impl PartialEq for Painted {
             path,
             paint,
             rect,
+            offset,
             width,
             blur,
             text,
@@ -159,21 +167,45 @@ impl PartialEq for Painted {
             && same(path, &o.path)
             && *paint == o.paint
             && *rect == o.rect
+            && *offset == o.offset
             && *width == o.width
             && *blur == o.blur
             && *text == o.text
     }
 }
 
+impl Painted {
+    /// `path` where it stands in the scene: a translated copy.
+    pub fn placed(&self) -> Path {
+        placed(&self.path, self.offset)
+    }
+}
+
+fn placed(p: &Path, d: Point) -> Path {
+    let mut p = p.clone();
+    if d != Point::ZERO {
+        p.translate(d);
+    }
+    p
+}
+
+/// A local path and the offset that places it in the scene.
+pub type PlacedPath = (Arc<Path>, Point);
+
 /// A node's outline, for hit-testing and for anything that derives from it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ResolvedSurface {
     pub key: Arc<str>,
     pub frame: Frame,
+    /// The outline in the surface's own space; [`Self::offset`] places it,
+    /// as it does a [`Painted::path`].
     pub path: Arc<Path>,
+    /// The outline's bounds, in scene space.
     pub bounds: Option<Bounds>,
-    /// Exact rounded rectangle when the outline is one (not welded).
+    /// Exact rounded rectangle when the outline is one (not welded). Local.
     pub rect: Option<RoundedRect>,
+    /// Where `path`, `rect` and `hits` stand in the scene.
+    pub offset: Point,
     /// A shell collapsed or a merge changed ring counts.
     pub topology_changed: bool,
     pub cursor: Option<Cursor>,
@@ -210,24 +242,30 @@ pub struct ResolvedSurface {
     /// outermost to innermost. This is the path counterpart to [`Self::clip`];
     /// it avoids making every pointer query tessellate a rounded or welded
     /// clip and preserves every nested clip boundary. Each path is the
-    /// clipping ancestor's own outline, shared, not a copy.
-    pub clip_path: Option<Arc<[Arc<Path>]>>,
+    /// clipping ancestor's own outline, shared, not a copy, with the offset
+    /// that places it.
+    pub clip_path: Option<Arc<[PlacedPath]>>,
     /// Nearest explicitly named ancestor in the authored tree, not a containing
     /// rectangle. A floating node keeps this parent even when it escapes clipping.
     pub parent: Option<Arc<str>>,
     /// A scroll node's children extent inside its padding, unscrolled;
     /// the frame size otherwise.
     pub content: Size,
-    /// The tagged shapes a `canvas` drew, in scene space. Non-empty means
+    /// The tagged shapes a `canvas` drew, placed by [`Self::offset`]. Non-empty means
     /// *these* are the surface's hit geometry, not its outline: the pointer
     /// outside all of them is outside the node. See [`Draw::tag`](crate::Draw::tag).
     pub hits: Vec<(Arc<str>, Arc<Path>)>,
 }
 impl ResolvedSurface {
     /// Borrow the cached clip outlines without exposing their shared
-    /// allocation. Paths are ordered outermost to innermost.
-    pub fn clip_paths(&self) -> Option<&[Arc<Path>]> {
+    /// allocation. Paths are ordered outermost to innermost, each with the
+    /// offset that places it.
+    pub fn clip_paths(&self) -> Option<&[PlacedPath]> {
         self.clip_path.as_deref()
+    }
+    /// `path` where it stands in the scene: a translated copy.
+    pub fn placed(&self) -> Path {
+        placed(&self.path, self.offset)
     }
 }
 

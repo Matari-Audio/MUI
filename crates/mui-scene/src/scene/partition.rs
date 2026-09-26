@@ -2,7 +2,7 @@
 use std::ops::Range;
 use std::sync::Arc;
 
-use mui_geometry::{BooleanOp, Bounds, Path, RoundedRect};
+use mui_geometry::{BooleanOp, Bounds, Path, Point, RoundedRect};
 use mui_layout::{Frame, Insets, Size};
 
 use super::{bounds, find, fit, SceneError, Walk};
@@ -270,7 +270,7 @@ impl Walk<'_> {
             }
             None => self.collapse(i..end),
         }
-        self.regions.insert(i, path);
+        self.regions.insert(i, (path, Point::ZERO));
         Ok(())
     }
 

@@ -68,18 +68,23 @@ impl<'a> Walk<'a> {
             None => self.outline(n, frame, self.i)?,
         };
 
-        self.partition(n, &contour.path, frame, at, (&key, path.as_str()))?;
+        // Regions and surfaces are laid out against frames: scene space.
+        let world = (e.extras().inside.is_some() || e.extras().surface_padding.is_some())
+            .then(|| contour.world());
+        let world = world.as_ref().unwrap_or(&contour.path);
+        self.partition(n, world, frame, at, (&key, path.as_str()))?;
         if e.extras().surface_padding.is_some() {
             let geometry = self.surface_cache.resolve(
                 n,
                 (&key, at),
                 &self.frames,
-                &contour.path,
+                world,
                 self.spec,
                 self.region_cache,
             )?;
+            let origin = geometry.origin;
             self.regions
-                .extend(geometry.panels.into_iter().map(|(i, p)| (i, Arc::new(p))));
+                .extend(geometry.panels.into_iter().map(|(i, p)| (i, (p, origin))));
             self.joined_nodes.extend(geometry.join_nodes);
             self.surface_joins.insert(at, geometry.joins);
         }
@@ -103,7 +108,8 @@ impl<'a> Walk<'a> {
             self.mark(Layer::Blend { mix, opacity }, empty(), None);
         }
         if s.backdrop_blur > 0.0 {
-            self.mark(Layer::Backdrop, contour.path.clone(), contour.rect);
+            // In scene space: the renderer samples the backdrop there.
+            self.mark(Layer::Backdrop, contour.world(), contour.world_rect());
             if let Some(p) = self.paint.last_mut() {
                 p.blur = s.backdrop_blur;
             }
@@ -123,7 +129,7 @@ impl<'a> Walk<'a> {
         };
         let hits = self.content(e, at, &key, &contour, &mut bg, under)?;
         let content = self.content_size(n, at, frame);
-        let shape_bounds = contour.bounds()?;
+        let shape_bounds = contour.bounds()?.map(|b| b.translated(contour.offset));
 
         let surface = self.surfaces.len();
         self.at.insert(key.clone(), surface);
@@ -141,6 +147,7 @@ impl<'a> Walk<'a> {
             bounds: shape_bounds,
             path: contour.path.clone(),
             rect: contour.rect,
+            offset: contour.offset,
             topology_changed: contour.changed,
             cursor: inner.cursor,
             tip: e.extras().tip.clone(),
@@ -194,11 +201,13 @@ impl<'a> Walk<'a> {
             self.mark(Layer::Unclip, empty(), None);
         }
         if let Some((stroke_path, stroke_rect, fill, width, clipped)) = late_stroke {
+            let at = contour.offset;
             if clipped {
-                self.mark(Layer::Clip, stroke_path.clone(), None);
+                self.mark_at(Layer::Clip, stroke_path.clone(), None, at);
             }
             if let Some(p) = self.push(Layer::Stroke, stroke_path, stroke_rect, &fill, bg) {
                 p.width = width;
+                p.offset = at;
             }
             if clipped {
                 self.mark(Layer::Unclip, empty(), None);
@@ -231,7 +240,11 @@ impl<'a> Walk<'a> {
         }
         if blended.is_some() {
             if masked {
-                self.push(Layer::Mask, contour.path.clone(), contour.rect, &s.mask, bg);
+                if let Some(p) =
+                    self.push(Layer::Mask, contour.path.clone(), contour.rect, &s.mask, bg)
+                {
+                    p.offset = contour.offset;
+                }
             }
             self.mark(Layer::Unblend, empty(), None);
         }
@@ -400,7 +413,7 @@ impl<'a> Walk<'a> {
         let mut hits = Vec::new();
         let shaped = self.regions.contains_key(&at) && !matches!(e.content, Content::None);
         if shaped {
-            self.mark(Layer::Clip, contour.path.clone(), contour.rect);
+            self.mark_on(Layer::Clip, contour);
         }
         let frame = self.frames[at];
         match &e.content {
@@ -409,16 +422,18 @@ impl<'a> Walk<'a> {
                 self.text(e, t, frame, key, under)?;
             }
             Content::Canvas(c) => {
+                // Local to the frame corner, where the canvas draws from.
                 let origin = Point::new(frame.x, frame.y);
                 let draws = (c.0)(frame.size);
                 let generation = self.outlines.generation;
                 let paths = match self.outlines.canvases.get_mut(key) {
                     // A plain canvas draws a fresh list every frame, most
                     // often the same shapes: those keep last frame's paths,
-                    // unvalidated, uncopied and equal downstream by pointer.
-                    Some((old, placed, paths, seen))
-                        if *placed == origin
-                            && old
+                    // wherever it moved, unvalidated, uncopied and equal
+                    // downstream by pointer.
+                    Some((old, paths, seen))
+                        if Arc::ptr_eq(old, &draws)
+                            || old
                                 .iter()
                                 .map(|d| &d.path)
                                 .eq(draws.iter().map(|d| &d.path)) =>
@@ -427,40 +442,37 @@ impl<'a> Walk<'a> {
                         *seen = generation;
                         paths.clone()
                     }
-                    Some((old, placed, paths, seen)) if Arc::ptr_eq(old, &draws) => {
-                        if *placed != origin {
-                            let d = origin - *placed;
-                            for p in paths.iter_mut() {
-                                Arc::make_mut(p).translate(d);
-                            }
-                            *placed = origin;
-                        }
-                        *seen = generation;
-                        paths.clone()
-                    }
                     _ => {
                         let paths = draws
                             .iter()
-                            .map(|d| {
-                                d.path.validate(100_000)?;
-                                let mut p = d.path.clone();
-                                p.translate(origin);
-                                Ok(Arc::new(p))
+                            .map(|draw| {
+                                draw.path.validate(100_000)?;
+                                Ok(Arc::new(draw.path.clone()))
                             })
                             .collect::<Result<Vec<_>, SceneError>>()?;
-                        self.outlines.canvases.insert(
-                            key.clone(),
-                            (draws.clone(), origin, paths.clone(), generation),
-                        );
+                        self.outlines
+                            .canvases
+                            .insert(key.clone(), (draws.clone(), paths.clone(), generation));
                         paths
                     }
                 };
-                for ((k, d), moved) in draws.iter().enumerate().zip(paths) {
-                    if let Some(tag) = &d.tag {
-                        hits.push((Arc::clone(tag), moved.clone()));
+                // Hits are local to the surface's offset, the outline's.
+                let d = origin - contour.offset;
+                for ((k, draw), local) in draws.iter().enumerate().zip(paths) {
+                    if let Some(tag) = &draw.tag {
+                        let hit = match d == Point::ZERO {
+                            true => local.clone(),
+                            false => {
+                                let mut p = Path::clone(&local);
+                                p.translate(d);
+                                Arc::new(p)
+                            }
+                        };
+                        hits.push((Arc::clone(tag), hit));
                     }
-                    if let Some(p) = self.push(Layer::Draw(k), moved, None, &d.fill, *bg) {
-                        p.width = d.width;
+                    if let Some(p) = self.push(Layer::Draw(k), local, None, &draw.fill, *bg) {
+                        p.width = draw.width;
+                        p.offset = origin;
                     }
                 }
             }
@@ -636,6 +648,7 @@ impl<'a> Walk<'a> {
                 bounds: Some(hit.bounds()),
                 path: Arc::new(hit.path()),
                 rect: Some(hit),
+                offset: Point::ZERO,
                 topology_changed: false,
                 cursor: None,
                 tip: None,
@@ -678,7 +691,7 @@ impl<'a> Walk<'a> {
                 b.max.y.min(c.max.y),
             )
         });
-        self.mark(Layer::Clip, contour.path.clone(), contour.rect);
+        self.mark_on(Layer::Clip, contour);
         inner.clip = Some(b);
         // Every exact outline in one allocation all descendants share.
         // `clip` remains the rectangular fast path used by existing input
@@ -689,8 +702,8 @@ impl<'a> Walk<'a> {
         inner.clip_paths = Some(
             outer
                 .iter()
-                .chain(std::iter::once(&contour.path))
                 .cloned()
+                .chain(std::iter::once((contour.path.clone(), contour.offset)))
                 .collect(),
         );
         Ok(())
@@ -806,13 +819,14 @@ impl<'a> Walk<'a> {
 }
 
 /// A clip list, and the same list moved.
-type Clips = Arc<[Arc<Path>]>;
+type Clips = Arc<[super::PlacedPath]>;
 
-/// A copied span moved by `d`: every path, rect, origin and clip in it.
-/// Clip lists shared between surfaces are moved once and stay shared.
+/// A copied span moved by `d`: every offset, frame, origin and clip in it;
+/// the paths are local and stay the same `Arc`s. Clip lists shared between
+/// surfaces are moved once and stay shared.
 struct Shift {
     d: Point,
-    lists: Vec<(*const [Arc<Path>], Clips)>,
+    lists: Vec<(*const [super::PlacedPath], Clips)>,
 }
 impl Shift {
     fn new(d: Point) -> Self {
@@ -821,21 +835,12 @@ impl Shift {
             lists: Vec::new(),
         }
     }
-    fn path(&self, p: &Arc<Path>) -> Arc<Path> {
-        if self.d == Point::ZERO || p.commands.is_empty() {
-            return p.clone();
-        }
-        let mut q = Path::clone(p);
-        q.translate(self.d);
-        Arc::new(q)
-    }
     fn painted(&mut self, p: &Painted) -> Painted {
         let mut p = p.clone();
         if self.d != Point::ZERO {
-            p.path = self.path(&p.path);
-            p.rect = p.rect.map(|r| r.translated(self.d));
-            if let Some(t) = &mut p.text {
-                t.origin = t.origin + self.d;
+            match &mut p.text {
+                Some(t) => t.origin = t.origin + self.d,
+                None => p.offset = p.offset + self.d,
             }
         }
         p
@@ -849,8 +854,7 @@ impl Shift {
         s.frame.x += d.x;
         s.frame.y += d.y;
         s.bounds = s.bounds.map(|b| b.translated(d));
-        s.path = self.path(&s.path);
-        s.rect = s.rect.map(|r| r.translated(d));
+        s.offset = s.offset + d;
         s.clip = s.clip.map(|b| b.translated(d));
         if let Some(list) = &s.clip_path {
             let at = Arc::as_ptr(list);
@@ -858,15 +862,12 @@ impl Shift {
                 match self.lists.iter().find(|(p, _)| std::ptr::eq(*p, at)) {
                     Some((_, moved)) => moved.clone(),
                     None => {
-                        let moved: Arc<[Arc<Path>]> = list.iter().map(|p| self.path(p)).collect();
+                        let moved: Clips = list.iter().map(|(p, o)| (p.clone(), *o + d)).collect();
                         self.lists.push((at, moved.clone()));
                         moved
                     }
                 },
             );
-        }
-        for (_, p) in &mut s.hits {
-            *p = self.path(p);
         }
         s
     }
@@ -877,6 +878,49 @@ mod tests {
     use super::super::*;
     use crate::prelude::*;
     use crate::Paint;
+
+    /// Paths are local: two same-sized buttons paint one outline `Arc`, each
+    /// at its own offset, and a button that only moved keeps it -- its
+    /// surface too, so the hit map converts nothing new.
+    #[test]
+    fn same_shapes_share_one_path_and_a_move_keeps_it() {
+        let spec = |gap: f64| {
+            SceneSpec::new(
+                row((0..2).map(|i| {
+                    leaf(40., 20.)
+                        .radius(6.)
+                        .fill(Role::Primary)
+                        .id(format!("b{i}"))
+                }))
+                .gap(gap)
+                .pad(gap),
+            )
+        };
+        let fill = |s: &ResolvedScene, k: &str| {
+            s.paint
+                .iter()
+                .find(|p| p.layer == Layer::Fill && &*p.key == k)
+                .map(|p| (p.path.clone(), p.offset))
+                .unwrap()
+        };
+        let mut cache = TextCache::default();
+        let first = resolve_scene_with(&spec(4.), &mut cache).unwrap();
+        let ((a, at_a), (b, at_b)) = (fill(&first, "b0"), fill(&first, "b1"));
+        assert!(Arc::ptr_eq(&a, &b), "one path for both buttons");
+        assert_eq!((at_a, at_b), (Point::new(4., 4.), Point::new(48., 4.)));
+        let moved = resolve_scene_with(&spec(10.), &mut cache).unwrap();
+        let (c, at_c) = fill(&moved, "b1");
+        assert!(Arc::ptr_eq(&a, &c), "a move keeps the path");
+        assert_eq!(at_c, Point::new(60., 10.));
+        let s = moved.surface("b1").unwrap();
+        assert!(Arc::ptr_eq(&s.path, &a) && s.offset == at_c);
+        let placed = moved.surface("b1").unwrap().placed();
+        let first_point = match placed.commands[0] {
+            mui_geometry::PathCommand::MoveTo(p) => p,
+            ref c => panic!("{c:?}"),
+        };
+        assert!(first_point.x >= 60. && first_point.y >= 10.);
+    }
 
     /// The fade paints last, source-atop, and only inside the layer the node
     /// opened for it.
@@ -1026,6 +1070,7 @@ mod tests {
         assert_eq!(paths.len(), 1);
         assert!(
             paths[0]
+                .0
                 .commands
                 .iter()
                 .any(|c| matches!(c, mui_geometry::PathCommand::ArcTo(_))),
@@ -1061,12 +1106,12 @@ mod tests {
         );
         for (p, k) in paths.iter().zip(["outer", "inner"]) {
             assert!(
-                Arc::ptr_eq(p, &s.surface(k).unwrap().path),
+                Arc::ptr_eq(&p.0, &s.surface(k).unwrap().path),
                 "{k}'s clip is a copy of its outline"
             );
         }
         assert!(paths.iter().all(|p| {
-            p.commands
+            p.0.commands
                 .iter()
                 .any(|c| matches!(c, mui_geometry::PathCommand::ArcTo(_)))
         }));
@@ -1120,7 +1165,7 @@ mod tests {
         assert_eq!(&**tag, "left");
         let pts = path.flatten(0.1, 1000).unwrap().concat();
         let top = pts.iter().map(|p| p.y).fold(f64::MAX, f64::min);
-        assert_eq!(top, 30., "moved into the node's frame");
+        assert_eq!(top + surface.offset.y, 30., "placed in the node's frame");
         assert!(
             !s.paint
                 .iter()
@@ -1236,7 +1281,8 @@ mod tests {
         let edges: Vec<[f64; 2]> = ["a", "b", "c"]
             .iter()
             .map(|k| {
-                let b = s.surface(k).unwrap().rect.unwrap().bounds();
+                let s = s.surface(k).unwrap();
+                let b = s.rect.unwrap().bounds().translated(s.offset);
                 [b.min.x, b.max.x]
             })
             .collect();
@@ -1324,8 +1370,8 @@ mod tests {
         resolve_scene(&SceneSpec::new(root)).unwrap();
         assert_eq!(seen.get(), 1);
     }
-    /// A cached draw list that stays put paints the very same paths every
-    /// frame; one that moves paints them moved.
+    /// A cached draw list paints the very same paths every frame, where it
+    /// stays and where it moves: only its offset follows it.
     #[test]
     fn a_cached_canvas_reuses_its_placed_paths() {
         let cache = crate::CanvasCache::new();
@@ -1348,20 +1394,20 @@ mod tests {
             SceneSpec::new(column([draw]).pad(Spacing::Px(pad)))
         };
         let path = |s: &ResolvedScene| {
-            s.paint
-                .iter()
-                .find(|p| p.layer == Layer::Draw(0))
-                .unwrap()
-                .path
-                .clone()
+            let p = s.paint.iter().find(|p| p.layer == Layer::Draw(0)).unwrap();
+            (p.path.clone(), p.placed())
         };
         let mut text = TextCache::default();
-        let a = path(&resolve_scene_with(&spec(4.), &mut text).unwrap());
-        let b = path(&resolve_scene_with(&spec(4.), &mut text).unwrap());
+        let (a, _) = path(&resolve_scene_with(&spec(4.), &mut text).unwrap());
+        let (b, _) = path(&resolve_scene_with(&spec(4.), &mut text).unwrap());
         assert!(Arc::ptr_eq(&a, &b), "a still canvas re-placed its paths");
-        let moved = path(&resolve_scene_with(&spec(9.), &mut text).unwrap());
+        let (moved, placed) = path(&resolve_scene_with(&spec(9.), &mut text).unwrap());
+        assert!(
+            Arc::ptr_eq(&a, &moved),
+            "a moved canvas re-placed its paths"
+        );
         assert_eq!(
-            moved.commands[0],
+            placed.commands[0],
             mui_geometry::PathCommand::MoveTo(Point::new(9., 9.))
         );
     }
@@ -1467,7 +1513,6 @@ mod tests {
         let d = draws();
         let mut text = TextCache::default();
         let mut prev = retained(&memo_spec(50., false, &d), &mut text, None);
-        let key: Arc<str> = "m.a".into();
         for i in 0..MEMO_AGE + 3 {
             prev = retained(&memo_spec(50., true, &d), &mut text, Some(&prev));
             assert!(
@@ -1475,7 +1520,7 @@ mod tests {
                 "the label's run was swept at {i}"
             );
             assert!(
-                text.outlines.rects.contains_key(&key),
+                !text.outlines.rects.is_empty(),
                 "the button's rect was swept at {i}"
             );
         }
