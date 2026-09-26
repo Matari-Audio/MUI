@@ -206,7 +206,9 @@ let scene = resolve_scene(&spec)?;
 ## mui-vello
 
 The process-global font and image caches are gone. Each renderer owns a
-`mui_vello::Cache` and hands it to every `Gpu`/`Cpu` canvas it builds. Keep
+`mui_vello::Cache` and hands it to every `Cpu` canvas it builds
+(`GpuRenderer` owns its own; the `Gpu` canvas is gone with `vello_hybrid`,
+below). Keep
 one per renderer and drop it with that renderer: an atlas id means nothing to
 another one. It holds only a `Weak` to each image buffer and frees a dropped
 buffer's pixmap or atlas slot on the next image lookup.
@@ -217,16 +219,17 @@ let mut ids = ImageIds::default();
 let mut canvas = Gpu { scene: &mut scene, resources: &mut res,
     atlas: Some(Atlas { renderer: &mut r, device: &d, queue: &q, ids: &mut ids }) };
 mui_vello::paint_cached(&mut canvas, &resolved, xf, &mut paths)?;
-// new
-let mut cache = mui_vello::Cache::default(); // beside the renderer
-let mut canvas = Gpu { scene: &mut scene, resources: &mut res, cache: &mut cache,
-    atlas: Some(Atlas { renderer: &mut r, device: &d, queue: &q }) };
-mui_vello::paint(&mut canvas, &resolved, xf)?;
+// new: classic Vello, retained, owning its cache
+let mut gpu = GpuRenderer::new(&d, &q, format, size, Budget::default()).await?;
+gpu.render(&resolved, xf, &target_view)?;
+// new: the CPU canvas takes a cache kept beside it
+let mut cache = mui_vello::Cache::default();
+mui_vello::paint(&mut Cpu { ctx: &mut ctx, resources: &mut res, cache: &mut cache }, &resolved, xf)?;
 ```
 
-- `Gpu { scene, resources, atlas }` -> `Gpu { scene, resources, cache: &mut Cache, atlas }`
+- `Gpu { scene, resources, atlas }` -> removed; `effects::GpuRenderer`
 - `Cpu { ctx, resources }` -> `Cpu { ctx, resources, cache: &mut Cache }`
-- `Atlas { renderer, device, queue, ids }` -> `Atlas { renderer, device, queue }`
+- `Atlas { renderer, device, queue, ids }` -> removed with `Gpu`
 - `ImageIds` -> `Cache`
 - `PathCache` -> removed
 - `paint_cached(canvas, scene, xf, &mut PathCache)` -> `paint(canvas, scene, xf)`

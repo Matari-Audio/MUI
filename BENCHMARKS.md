@@ -6,6 +6,13 @@ caches and shims, the scene and runtime split, `mui-widgets` folded into
 `mui`). Every number is a median. No row is a sum of per-phase medians and
 there is no FPS column (see `docs/rendering-investigation.md`).
 
+**History note.** Every row labelled `vello_hybrid`, and the
+`--features cpu,bench-classic` table, is history: measured while the GPU
+canvas was `vello_hybrid`. That backend is gone. The GPU path is now classic
+Vello (vendored at `vendor/vello`, wgpu 30) behind `effects::GpuRenderer`, and
+`bench` runs `vello_cpu` plus the `gpu-effects` rows. The old rows stay as
+measured, not re-run.
+
 ## mui-weld CPU bake (2026-09-26)
 
 `cargo run -p mui-weld --profile perf --example bake_timing`, median of 15, 16
@@ -160,7 +167,7 @@ the win to individual stage A/B commits. Stage C (the scene and runtime split, t
 stress warm resolve before and after its refactor (0.894 -> 0.878 ms at
 1280x800) and got identical allocation counts, and it claimed no speedup.
 
-## Current numbers
+## Numbers at the 2026-09-23 overhaul (hybrid rows are history)
 
 ### bench, `--features cpu` (median of 6 runs)
 
@@ -174,7 +181,7 @@ stress warm resolve before and after its refactor (0.894 -> 0.878 ms at
 | vello_hybrid | static | 0.082 | 1.433 | 3.371 | 0.725 | 5.938 | 6.704 |
 | vello_hybrid | one knob turning | 0.077 | 1.315 | 3.359 | 0.649 | 5.809 | 6.627 |
 
-### bench, `--features cpu,bench-classic` (median of 4 runs)
+### bench, `--features cpu,bench-classic` (history: median of 4 runs)
 
 | backend | case | resolve | encode | render | total | p95 |
 |---|---|---:|---:|---:|---:|---:|
@@ -189,7 +196,9 @@ strips on the CPU during the walk and then renders one ordinary pass. Totals
 are a wash (5.9 to 6.3 ms either way under this load), so the choice is made on
 what the table does not show: classic needs compute shaders, and MUI has to
 render inside a plugin host's device. `vello_cpu` shares hybrid's pipeline, so
-the no-GPU path is a real renderer and not a fallback. Classic reported a
+the no-GPU path is a real renderer and not a fallback. (That was the call at
+the time; MUI later moved its GPU path to classic, which renders into the
+host's device through `GpuRenderer`. See MIGRATION.md.) Classic reported a
 2.5 MiB peak GPU buffer estimate.
 
 ### bench, `--features cpu-threads` (median of 3 runs)

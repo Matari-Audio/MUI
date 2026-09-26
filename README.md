@@ -41,9 +41,10 @@ alive between frames to benefit from its caches. An unchanged
 frame into the view they presented last records no GPU pass; a swapchain hands
 out a new view per frame, so there the host saves the pass by not asking.
 
-Classic Vello compute and Hybrid comparisons live in the
-[rendering investigation](docs/rendering-investigation.md), including measured
-results and their limits.
+The classic-versus-Hybrid measurements that led here (history: MUI shipped on
+`vello_hybrid` first) live in the
+[rendering investigation](docs/rendering-investigation.md), including their
+limits.
 
 ## Contours are layout too
 
