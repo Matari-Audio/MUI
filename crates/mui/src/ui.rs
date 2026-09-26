@@ -155,7 +155,7 @@ pub struct Ui {
     /// Per surface: what a widget keeps between frames that is not the
     /// caller's value -- a picker's hue at zero saturation, a drag value's
     /// half-typed text. Dropped with the surface.
-    memo: BTreeMap<String, Box<dyn Any + Send>>,
+    stash: BTreeMap<String, Box<dyn Any + Send>>,
     /// The host's clipboard, handed in with a paste key; and what a copy or
     /// cut asked to put back on it.
     pasted: Option<String>,
@@ -203,6 +203,35 @@ pub struct Ui {
     /// Where along a held scrollbar's thumb the pointer took it, so the
     /// thumb follows the pointer from that point instead of jumping to it.
     bar_grab: f64,
+    /// [`Ui::memo`] subtrees, by id.
+    kept: HashMap<u64, Kept>,
+    /// Memos the next build must run again, because something inside them
+    /// moved; `hot_all` for every one.
+    hot: BTreeSet<u64>,
+    hot_all: bool,
+    /// Memo roots the build under way has handed out.
+    issued: usize,
+    /// The memos whose closures are running, innermost last, each with where
+    /// its reads start in `read`, and whether all it read was at rest.
+    building: Vec<(u64, usize, bool)>,
+    /// The tween and play ids the running closures read.
+    read: Vec<String>,
+}
+
+/// One [`Ui::memo`] subtree between frames.
+struct Kept {
+    deps: u64,
+    /// The styled subtree last frame resolved; `None` while it is in the
+    /// tree. Memos nested in it are kept on their own, and it holds
+    /// placeholders where they go: their paths below it, and ids.
+    tree: Option<El>,
+    nested: Vec<(Vec<usize>, u64)>,
+    /// The tweens and plays its closure read, and whether every one of them
+    /// was at rest when it did.
+    read: Vec<String>,
+    still: bool,
+    /// Handed out, or brought back inside one that was, this frame.
+    live: bool,
 }
 
 fn same_hit_geometry(a: &ResolvedScene, b: &ResolvedScene) -> bool {
@@ -263,7 +292,7 @@ impl Ui {
             path: String::new(),
             sel: BTreeMap::new(),
             text_scroll: BTreeMap::new(),
-            memo: BTreeMap::new(),
+            stash: BTreeMap::new(),
             pasted: None,
             copied: None,
             preedit: None,
@@ -287,6 +316,12 @@ impl Ui {
             resolved: false,
             board: None,
             bar_grab: 0.0,
+            kept: HashMap::new(),
+            hot: BTreeSet::new(),
+            hot_all: false,
+            issued: 0,
+            building: Vec::new(),
+            read: Vec::new(),
         }
     }
     /// Read and write the host's clipboard through `board`: copy, cut and
@@ -447,7 +482,19 @@ impl Ui {
         let (seen, s) = slot(&mut self.tweens, id, || (false, spring.seeded(target)));
         *seen = true;
         s.to(target);
-        s.value
+        let (value, rest) = (s.value, at_rest(s));
+        self.reads(id, rest);
+        value
+    }
+    /// A running memo closure read `id`; `rest` is whether what it read
+    /// will still be true next frame.
+    fn reads(&mut self, id: &str, rest: bool) {
+        if !self.building.is_empty() {
+            self.read.push(id.to_owned());
+            for b in &mut self.building {
+                b.2 &= rest;
+            }
+        }
     }
     /// `keys` played on the runtime's clock from the first frame `id` is
     /// read: an entrance, an onboarding reveal, a pulse on a beat. The frame
@@ -469,11 +516,104 @@ impl Ui {
         if now < end {
             self.play_until = self.play_until.max(end);
         }
-        keys.at(now - *start)
+        let value = keys.at(now - *start);
+        self.reads(id, now >= end);
+        value
     }
     /// Start `id`'s [`Ui::play`] over from its first key on the next frame.
     pub fn replay(&mut self, id: &str) {
         self.plays.remove(id);
+    }
+    /// A subtree built only when `deps` changes: while `deps` equals what
+    /// it was last frame, and nothing inside moved, `build` does not run
+    /// and the runtime reuses the subtree it kept -- styled, laid out and
+    /// painted -- without walking it again.
+    ///
+    /// "Moved" is the runtime's own state, tracked by the keys the subtree
+    /// painted: a hover, press, capture or focus arriving or leaving, the
+    /// canvas shape under the pointer, a spring, transition, glide, morph or
+    /// scroll still in flight, a tween or play it read still running, and
+    /// any button, key, text or wheel input, which every tree reads. The
+    /// frame after one of those the closure runs again.
+    ///
+    /// `deps` is the caller's side of it and must cover everything else
+    /// `build` reads: the model, sizes, the clock, the raw pointer, and the
+    /// enclosing subtree's disabled state. A cheap hash of generation
+    /// counters is the idea; a missed input paints last frame's subtree.
+    /// `id` must be unique among the frame's memos. Memos nest. A memo
+    /// whose subtree floats a node (a popup) is built every frame: memoise
+    /// what is under the float instead.
+    ///
+    /// ```
+    /// # use mui::prelude::*;
+    /// let mut ui = Ui::new(Theme::DEFAULT);
+    /// let mut built = 0;
+    /// for _ in 0..3 {
+    ///     let side = ui.memo("side", 7, |_| {
+    ///         built += 1;
+    ///         column([leaf(40., 40.).id("a"), leaf(40., 40.).id("b")])
+    ///     });
+    ///     ui.frame(row([side]), Some(Size::new(100., 100.)), PointerInput::default(), 0.016)
+    ///         .unwrap();
+    /// }
+    /// assert_eq!(built, 1);
+    /// ```
+    pub fn memo(&mut self, id: &str, deps: u64, build: impl FnOnce(&mut Self) -> El) -> El {
+        let key = {
+            let mut h = std::hash::DefaultHasher::new();
+            std::hash::Hash::hash(id, &mut h);
+            std::hash::Hasher::finish(&h)
+        };
+        self.issued += 1;
+        let cold = self.hot_all || self.hot.contains(&key);
+        if let Some(k) = self.kept.get_mut(&key) {
+            if !cold && k.deps == deps && k.still && k.tree.is_some() {
+                k.live = true;
+                let read = std::mem::take(&mut k.read);
+                // What it read is still read, as the closure would have.
+                for id in &read {
+                    if let Some((seen, _)) = self.tweens.get_mut(id.as_str()) {
+                        *seen = true;
+                    }
+                    if let Some((seen, _)) = self.plays.get_mut(id.as_str()) {
+                        *seen = true;
+                    }
+                }
+                // Reads stay on the building ones around it too.
+                if !self.building.is_empty() {
+                    self.read.extend(read.iter().cloned());
+                }
+                self.kept.get_mut(&key).expect("just read").read = read;
+                return placeholder(key);
+            }
+        }
+        self.building.push((key, self.read.len(), true));
+        let mut el = build(self);
+        let (_, from, still) = self.building.pop().expect("pushed above");
+        let read = self.read[from..].to_vec();
+        if self.building.is_empty() {
+            self.read.clear();
+        }
+        debug_assert!(
+            el.payload().extras().memo.is_none(),
+            "a memo's root cannot be another memo's root"
+        );
+        el.payload_mut().extras_mut().memo = Some(mui_scene::Memo {
+            id: key,
+            reused: false,
+        });
+        self.kept.insert(
+            key,
+            Kept {
+                deps,
+                tree: None,
+                nested: Vec::new(),
+                read,
+                still,
+                live: true,
+            },
+        );
+        el
     }
     /// Last frame's gesture on `id`. Widgets read this while building the
     /// next tree, so a drag lands one frame late and nobody notices.
@@ -956,16 +1096,16 @@ impl Ui {
     pub(crate) fn set_text_scroll(&mut self, id: &str, y: f64) {
         *slot(&mut self.text_scroll, id, || 0.0) = y;
     }
-    pub(crate) fn memo<T: Any>(&self, id: &str) -> Option<&T> {
-        self.memo.get(id)?.downcast_ref()
+    pub(crate) fn stash<T: Any>(&self, id: &str) -> Option<&T> {
+        self.stash.get(id)?.downcast_ref()
     }
-    pub(crate) fn set_memo<T: Any + Send>(&mut self, id: &str, v: Option<T>) {
+    pub(crate) fn set_stash<T: Any + Send>(&mut self, id: &str, v: Option<T>) {
         match v {
             Some(v) => {
-                self.memo.insert(id.to_owned(), Box::new(v));
+                self.stash.insert(id.to_owned(), Box::new(v));
             }
             None => {
-                self.memo.remove(id);
+                self.stash.remove(id);
             }
         }
     }
@@ -1185,6 +1325,7 @@ impl Ui {
             ime,
         } = input.into();
         let was = std::mem::replace(&mut self.pointer, pointer).buttons;
+        let was_buttons = was;
         // A non-finite delta reaches no widget, as it reaches no scroller.
         self.wheel = if wheel.x.is_finite() && wheel.y.is_finite() {
             wheel
@@ -1207,6 +1348,15 @@ impl Ui {
         // A key still to land wants the frame that shows it; the clock that
         // decides is the one this frame advances to.
         let was_hovered = self.interaction.hovered().map(str::to_owned);
+        let before = [
+            was_hovered.clone(),
+            self.interaction.held().map(str::to_owned),
+            self.tagged.as_ref().map(|t| t.0.clone()),
+        ];
+        // The kept memo subtrees go back in first: everything below reads
+        // the whole tree.
+        let mut root = root;
+        let mut memos = self.splice(&mut root);
         let mut animating = self.reconcile() | (self.time < self.play_until);
         // The tree just built read last frame's hover: a new target is owed
         // the tree that knows it, even with no spring to carry it there.
@@ -1218,14 +1368,159 @@ impl Ui {
         let hovered = self.interaction.hovered().map(str::to_owned);
         let (tip, tip_pending) = self.tip_due(hovered.as_deref(), dt);
         animating |= tip_pending;
+        if tip.is_some() && !root.is_container() {
+            // The tip is about to wrap this leaf: everything moves down one.
+            memos.iter_mut().for_each(|(p, _)| p.insert(0, 0));
+        }
         let mut root = Self::wrap_tip(root, tip.as_ref());
         let (moving, shaped) = self.sweep(&mut root, dt);
         animating |= moving;
-        let (mut scene, glided) = self.resolve(root, offered, dt)?;
+        let (mut scene, glided, root) = self.resolve(root, offered, dt)?;
+        self.capture(root, &memos);
         animating |= glided;
         animating |= self.after_motion(&mut scene, shaped, dt);
         animating |= self.settle(&scene, wheel);
+        self.heat(&scene, before, self.pointer.buttons != was_buttons);
         Ok(self.commit(scene, hovered, tip, previous_blink, animating))
+    }
+
+    /// Put every kept memo subtree back where the build left its
+    /// placeholder, and return where each memo's root is, by child-index
+    /// path. Walks only until it has met every root the build handed out.
+    fn splice(&mut self, root: &mut El) -> Vec<(Vec<usize>, u64)> {
+        let mut found = Vec::new();
+        let mut left = std::mem::take(&mut self.issued);
+        if left > 0 {
+            self.seek(root, &mut Vec::new(), &mut found, &mut left);
+        }
+        found
+    }
+    /// [`Ui::splice`] below `n`. Returns whether every root has been met.
+    fn seek(
+        &mut self,
+        n: &mut El,
+        path: &mut Vec<usize>,
+        found: &mut Vec<(Vec<usize>, u64)>,
+        left: &mut usize,
+    ) -> bool {
+        if let Some(m) = n.payload().extras().memo {
+            *left -= 1;
+            if m.reused {
+                self.fill(n, path, m.id, found);
+                return *left == 0;
+            }
+            found.push((path.clone(), m.id));
+        }
+        for (j, c) in n.children_mut().iter_mut().enumerate() {
+            if *left == 0 {
+                break;
+            }
+            path.push(j);
+            self.seek(c, path, found, left);
+            path.pop();
+        }
+        *left == 0
+    }
+    /// Swap placeholder `n` for kept memo `id`, and its nested ones into it.
+    fn fill(&mut self, n: &mut El, path: &[usize], id: u64, found: &mut Vec<(Vec<usize>, u64)>) {
+        let Some(k) = self.kept.get_mut(&id) else {
+            return;
+        };
+        let Some(tree) = k.tree.take() else {
+            return;
+        };
+        k.live = true;
+        let nested = std::mem::take(&mut k.nested);
+        *n = tree;
+        if let Some(m) = &mut n.payload_mut().extras_mut().memo {
+            m.reused = true;
+        }
+        found.push((path.to_vec(), id));
+        for (rel, inner) in nested {
+            let at: Vec<usize> = path.iter().chain(&rel).copied().collect();
+            self.fill(node_at(n, &rel), &at, inner, found);
+        }
+    }
+    /// Take every memo's styled subtree back out of the resolved tree,
+    /// innermost first, leaving placeholders for nested ones.
+    fn capture(&mut self, mut root: El, found: &[(Vec<usize>, u64)]) {
+        // Each root's nearest enclosing root.
+        let parent = |p: &[usize]| {
+            found
+                .iter()
+                .enumerate()
+                .filter(|(_, (q, _))| q.len() < p.len() && p.starts_with(q))
+                .max_by_key(|(_, (q, _))| q.len())
+                .map(|(i, _)| i)
+        };
+        let parents: Vec<Option<usize>> = found.iter().map(|(p, _)| parent(p)).collect();
+        let mut order: Vec<usize> = (0..found.len()).collect();
+        order.sort_by_key(|&i| std::cmp::Reverse(found[i].0.len()));
+        for i in order {
+            let (path, id) = &found[i];
+            let tree = std::mem::replace(node_at(&mut root, path), placeholder(*id));
+            let nested = found
+                .iter()
+                .zip(&parents)
+                .filter(|(_, p)| **p == Some(i))
+                .map(|((q, c), _)| (q[path.len()..].to_vec(), *c))
+                .collect();
+            if let Some(k) = self.kept.get_mut(id) {
+                k.tree = Some(tree);
+                k.nested = nested;
+            }
+        }
+    }
+    /// Which memos the next build must run again: the ones holding a key
+    /// whose state moved this frame, or all of them after discrete input.
+    /// `was` is the hovered, held and tagged keys before this frame.
+    fn heat(&mut self, scene: &ResolvedScene, was: [Option<String>; 3], buttons: bool) {
+        self.hot.clear();
+        self.kept.retain(|_, k| std::mem::take(&mut k.live));
+        self.hot_all = buttons
+            || !self.keys.is_empty()
+            || !self.typed.is_empty()
+            || self.pasted.is_some()
+            || self.preedit.is_some()
+            || !self.delivered.is_empty();
+        if self.kept.is_empty() || self.hot_all {
+            return;
+        }
+        let now = [
+            self.interaction.hovered(),
+            self.interaction.held(),
+            self.tagged.as_ref().map(|t| t.0.as_str()),
+        ];
+        let mut keys: Vec<&str> = Vec::new();
+        for (a, b) in now.iter().zip(&was) {
+            if *a != b.as_deref() {
+                keys.extend(a.iter().copied().chain(b.as_deref()));
+            }
+        }
+        keys.extend(self.interaction.held());
+        keys.extend(self.focus.as_deref());
+        if self.wheel != Point::ZERO {
+            keys.extend(self.interaction.hovered());
+        }
+        let moving = |s: &[Spring]| s.iter().any(|s| !at_rest(s));
+        keys.extend(self.springs.iter().filter(|(_, s)| moving(&s[..])).map(|(k, _)| k.as_str()));
+        keys.extend(
+            self.motion
+                .iter()
+                .filter(|(_, (_, l))| l.iter().any(|(_, s)| !at_rest(s)))
+                .map(|(k, _)| k.as_str()),
+        );
+        keys.extend(self.glides.iter().filter(|(_, (_, s))| moving(s)).map(|(k, _)| k.as_str()));
+        keys.extend(self.scrolls.iter().filter(|(_, s)| moving(&s[..])).map(|(k, _)| k.as_str()));
+        keys.extend(self.morphs.iter().filter(|(_, m)| m.from.is_some()).map(|(k, _)| k.as_str()));
+        // A scrollbar's heat is the runtime's own tween, under its node's key.
+        keys.extend(self.tweens.iter().filter_map(|(k, (_, s))| {
+            k.strip_prefix("/bar").filter(|_| !at_rest(s))
+        }));
+        for k in keys {
+            self.hot.extend(scene.memos_at(k).map(|(id, _)| id));
+        }
+        self.hot.extend(scene.memos_floating());
     }
 
     /// The caller has now built its tree and consumed these commands. Drain
@@ -1635,7 +1930,7 @@ impl Ui {
         root: El,
         offered: Option<Size>,
         dt: f64,
-    ) -> Result<(ResolvedScene, bool), SceneError> {
+    ) -> Result<(ResolvedScene, bool, El), SceneError> {
         let mut spec = SceneSpec::new(root).theme(self.theme);
         spec.offered = offered;
         spec.font = self.font.clone();
@@ -1644,7 +1939,7 @@ impl Ui {
         spec.weld_backend = self.weld_backend;
         let mut glided = false;
         let glides = &mut self.glides;
-        let scene = mui_scene::resolve_scene_animated(
+        let scene = mui_scene::resolve_scene_retained(
             &spec,
             &mut self.text_cache,
             &mut self.weld_cache,
@@ -1663,6 +1958,7 @@ impl Ui {
                     size: Size::new(s[2].value, s[3].value),
                 }
             },
+            self.scene.as_ref(),
         )?;
         if self
             .scene
@@ -1701,7 +1997,7 @@ impl Ui {
             }
             self.hit = hit;
         }
-        Ok((scene, glided))
+        Ok((scene, glided, spec.root))
     }
 
     /// What motion does to a resolved scene: shapes that changed name morph,
@@ -1770,7 +2066,9 @@ impl Ui {
                 }
             }
         }
-        self.morphs.retain(|_, m| std::mem::take(&mut m.seen));
+        let kept = |k: &str| scene.memos_at(k).any(|(_, reused)| reused);
+        self.morphs
+            .retain(|k, m| std::mem::take(&mut m.seen) || kept(k));
 
         // Gone this frame: last frame's paint of every appearing node that
         // left, kept to fade. One that came back is simply there again.
@@ -1788,7 +2086,9 @@ impl Ui {
                 }
             }
         }
-        self.appearing = shaped.appearing;
+        let appearing = std::mem::replace(&mut self.appearing, shaped.appearing);
+        self.appearing
+            .extend(appearing.into_iter().filter(|(k, _)| kept(k)));
         self.ghosts.retain(|g| scene.surface(&g.key).is_none());
         for g in &mut self.ghosts {
             g.fade.to(0.);
@@ -1852,7 +2152,7 @@ impl Ui {
         });
         self.sel.retain(|id, _| scene.surface(id).is_some());
         self.text_scroll.retain(|id, _| scene.surface(id).is_some());
-        self.memo.retain(|id, _| scene.surface(id).is_some());
+        self.stash.retain(|id, _| scene.surface(id).is_some());
         animating | self.wheel(scene, wheel)
     }
 
@@ -1889,8 +2189,12 @@ impl Ui {
             let f = scene.surface(TIP_KEY)?.frame;
             Some((t, Point::new(f.x, f.y)))
         });
-        self.motion.retain(|_, (seen, _)| std::mem::take(seen));
-        self.glides.retain(|_, (seen, _)| std::mem::take(seen));
+        // A reused memo's nodes were not visited, and are still there.
+        let kept = |k: &str| scene.memos_at(k).any(|(_, reused)| reused);
+        self.motion
+            .retain(|k, (seen, _)| std::mem::take(seen) || kept(k));
+        self.glides
+            .retain(|k, (seen, _)| std::mem::take(seen) || kept(k));
         self.tweens.retain(|_, (seen, _)| std::mem::take(seen));
         self.plays.retain(|_, (seen, _)| std::mem::take(seen));
         self.delivered = std::mem::take(&mut self.edits);
@@ -2305,6 +2609,11 @@ struct Sweep<'a> {
 impl Sweep<'_> {
     /// Returns whether a transition is still moving.
     fn node(&mut self, n: &mut El, path: &mut String, off: bool) -> bool {
+        // A reused memo is last frame's styled subtree, and nothing in it
+        // moved: styling it again would apply its states twice.
+        if n.payload().extras().memo.is_some_and(|m| m.reused) {
+            return false;
+        }
         let off = off || n.payload().disabled;
         declared_states(n, path, self.is, off);
         let mut animating = transitions(n, path, self.pal, self.motion, self.dt);
@@ -2326,6 +2635,24 @@ impl Sweep<'_> {
         }
         animating
     }
+}
+
+/// A spring that will not move again until something retargets it.
+fn at_rest(s: &Spring) -> bool {
+    s.value == s.target && s.velocity == 0.0
+}
+
+/// What [`Ui::memo`] hands back for a subtree it kept: the frame puts the
+/// kept one in its place.
+fn placeholder(id: u64) -> El {
+    let mut el = mui_scene::leaf(0.0, 0.0);
+    el.payload_mut().extras_mut().memo = Some(mui_scene::Memo { id, reused: true });
+    el
+}
+
+/// The node at child-index `path` below `n`.
+fn node_at<'a>(n: &'a mut El, path: &[usize]) -> &'a mut El {
+    path.iter().fold(n, |n, &j| &mut n.children_mut()[j])
 }
 
 /// `map[k]`, inserted by `new` when absent: the key reaches the heap once, on

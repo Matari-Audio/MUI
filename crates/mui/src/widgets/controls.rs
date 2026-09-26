@@ -588,7 +588,7 @@ pub fn drag_value(
     );
     let field = format!("{id}/edit");
     // What was typed, and the width the number had when typing started.
-    let mut typing = ui.memo::<(String, f64)>(&field).cloned();
+    let mut typing = ui.stash::<(String, f64)>(&field).cloned();
     let r = ui.get(&id);
     // Focus moves to the field only once it is built: this frame's keys --
     // the Enter that opened it -- are not the field's to type.
@@ -619,7 +619,7 @@ pub fn drag_value(
                 ui.focus(field.clone());
             }
             if !e.submitted {
-                ui.set_memo(&field, Some((s, width)));
+                ui.set_stash(&field, Some((s, width)));
                 let control = Control::new(ui, move |_| el.w(width));
                 return (control, false);
             }
@@ -628,7 +628,7 @@ pub fn drag_value(
             // The focus went elsewhere: a click away keeps what was typed.
             take(&s, value);
         }
-        ui.set_memo::<(String, f64)>(&field, None);
+        ui.set_stash::<(String, f64)>(&field, None);
     } else {
         ui.drag(&id, value, range.clone(), DRAG_TRAVEL, false);
         stepped(ui, &id, value, &range);

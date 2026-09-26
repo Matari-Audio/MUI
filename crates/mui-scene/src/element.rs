@@ -366,6 +366,17 @@ pub struct Extras {
     pub inset_surface: Option<Vec<Id>>,
     /// Join this frame to the nearest horizontal edge of the named body.
     pub border_join: Option<Id>,
+    /// Set by the runtime on the root of a memoised subtree (`Ui::memo`).
+    pub memo: Option<Memo>,
+}
+
+/// The root of a memoised subtree. A resolve records where each memo's
+/// paint and surfaces land; a `reused` one -- the very subtree last frame
+/// resolved, handed back unchanged -- is painted by copying those.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Memo {
+    pub id: u64,
+    pub reused: bool,
 }
 impl Extras {
     const NONE: Self = Self {
@@ -384,6 +395,7 @@ impl Extras {
         surface_padding: None,
         inset_surface: None,
         border_join: None,
+        memo: None,
     };
 }
 impl Default for Extras {

@@ -48,7 +48,7 @@ pub use mui_weld::{Channel as WeldChannel, Quality as WeldQuality, Weld, WeldCac
 pub use dsl::{caption, label, title, IntoLen, Sugar};
 pub use element::{
     canvas, canvas_cached, column, fits, grid, icon, leaf, overlay, row, spacer, text, Appear,
-    Canvas, CanvasCache, Carve, Content, Draw, El, Element, Extras, IntoEl, Kind, Outline, Paints,
+    Canvas, CanvasCache, Carve, Content, Draw, El, Element, Extras, IntoEl, Kind, Memo, Outline, Paints,
     Semantics, State, StateStyle, Styled,
 };
 pub use mui_geometry::CornerStyle;
@@ -65,7 +65,8 @@ pub use mui_text::{Axes, Font, Weight};
 pub mod material_symbols;
 pub use scene::bar;
 pub use scene::{
-    push_index, resolve_scene, resolve_scene_animated, resolve_scene_cached, resolve_scene_with,
+    push_index, resolve_scene, resolve_scene_animated, resolve_scene_cached, resolve_scene_retained,
+    resolve_scene_with,
     Layer, Painted, ResolvedScene, ResolvedSurface, SceneError, SceneSpec, Text, TextCache,
     TextGlyph,
 };

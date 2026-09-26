@@ -182,9 +182,9 @@ impl RegionCache {
     pub(crate) fn len(&self) -> usize {
         self.entries.len()
     }
-    pub(crate) fn sweep(&mut self) {
+    pub(crate) fn sweep(&mut self, age: u64) {
         let generation = self.generation;
-        self.entries.retain(|_, e| e.5 == generation);
+        self.entries.retain(|_, e| generation.wrapping_sub(e.5) <= age);
         self.generation = generation.wrapping_add(1);
     }
 }

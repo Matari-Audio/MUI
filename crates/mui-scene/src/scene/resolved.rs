@@ -239,8 +239,24 @@ pub struct ResolvedScene {
     pub(super) surfaces: Vec<ResolvedSurface>,
     pub(super) at: HashMap<Arc<str>, usize>,
     pub(crate) external_welds: HashMap<Arc<str>, crate::ExternalWeld>,
+    /// Where each memoised subtree landed, in pre-order.
+    pub(crate) memos: Vec<super::MemoSpan>,
 }
 impl ResolvedScene {
+    /// The memoised subtrees `key`'s surface is in, outermost first, each
+    /// with whether this resolve reused it.
+    pub fn memos_at(&self, key: &str) -> impl Iterator<Item = (u64, bool)> + '_ {
+        let at = self.at.get(key).copied();
+        self.memos
+            .iter()
+            .filter(move |m| at.is_some_and(|i| m.surfaces.contains(&i)))
+            .map(|m| (m.id, m.reused))
+    }
+    /// The memoised subtrees that floated a node, whose paint and surface
+    /// land outside what the memo is known to hold.
+    pub fn memos_floating(&self) -> impl Iterator<Item = u64> + '_ {
+        self.memos.iter().filter(|m| m.floats).map(|m| m.id)
+    }
     /// Swap what one text node says, keeping every frame this scene already
     /// solved: only that node's glyph run is shaped again.
     ///
@@ -275,6 +291,8 @@ impl ResolvedScene {
             .filter(|(_, p)| &*p.key == key && p.layer == Layer::Text)
             .map(|(i, _)| i);
         let first = at.next().ok_or(SceneError::NoTextLayer)?;
+        // The paint no longer says what the tree does: nothing may copy it.
+        self.memos.clear();
         // A wrapped label's later lines have no string to re-break against,
         // so the swap collapses it to the one run it now says.
         let rest: Vec<usize> = at.collect();

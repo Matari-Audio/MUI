@@ -134,22 +134,23 @@ impl TextCache {
             self.layout.clear();
         }
     }
-    /// End of a resolve: keep exactly what it used.
-    pub(super) fn sweep(&mut self) {
-        fn keep<K, V>(m: &mut HashMap<K, (V, u64)>, g: u64) -> bool {
-            m.retain(|_, (_, seen)| *seen == g);
+    /// End of a resolve: keep exactly what it used -- and, for the subtrees
+    /// it copied rather than walked, what the last `age` resolves used.
+    pub(super) fn sweep(&mut self, age: u64) {
+        fn keep<K, V>(m: &mut HashMap<K, (V, u64)>, g: u64, age: u64) -> bool {
+            m.retain(|_, (_, seen)| g.wrapping_sub(*seen) <= age);
             !m.is_empty()
         }
         let g = self.generation;
-        self.runs.retain(|_, m| keep(m, g));
-        self.breaks.retain(|_, m| keep(m, g));
-        self.coords.retain(|_, m| keep(m, g));
-        keep(&mut self.last_coords, g);
-        keep(&mut self.keys, g);
+        self.runs.retain(|_, m| keep(m, g, age));
+        self.breaks.retain(|_, m| keep(m, g, age));
+        self.coords.retain(|_, m| keep(m, g, age));
+        keep(&mut self.last_coords, g, age);
+        keep(&mut self.keys, g, age);
         self.generation = g.wrapping_add(1);
-        self.outlines.sweep();
-        self.borders.sweep();
-        self.region_cache.sweep();
+        self.outlines.sweep(age);
+        self.borders.sweep(age);
+        self.region_cache.sweep(age);
     }
 }
 

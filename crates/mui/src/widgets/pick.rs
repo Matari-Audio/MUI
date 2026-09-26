@@ -28,7 +28,7 @@ pub fn color_picker(ui: &mut Ui, id: &str, value: &mut Color, alpha: bool) -> (E
     let rgba = srgba(*value);
     // The hue and saturation a grey no longer carries: last frame's, if the
     // colour is still the one that frame made.
-    let mut hsv = match ui.memo::<([f32; 3], Rgba)>(&sv) {
+    let mut hsv = match ui.stash::<([f32; 3], Rgba)>(&sv) {
         Some((hsv, was)) if near(*was, rgba) => *hsv,
         _ => to_hsv(rgba),
     };
@@ -58,7 +58,7 @@ pub fn color_picker(ui: &mut Ui, id: &str, value: &mut Color, alpha: bool) -> (E
     }
     // Typing: the field holds its own text while focused, so a half-typed
     // `#3a` is not overwritten by the colour it does not yet make.
-    let mut text = match ui.memo::<String>(&hex) {
+    let mut text = match ui.stash::<String>(&hex) {
         Some(t) if ui.focused(&hex) => t.clone(),
         _ => to_hex(srgba(*value), alpha),
     };
@@ -72,8 +72,8 @@ pub fn color_picker(ui: &mut Ui, id: &str, value: &mut Color, alpha: bool) -> (E
         }
     }
     let focused = ui.focused(&hex);
-    ui.set_memo(&hex, focused.then_some(text));
-    ui.set_memo(&sv, Some((hsv, srgba(*value))));
+    ui.set_stash(&hex, focused.then_some(text));
+    ui.set_stash(&sv, Some((hsv, srgba(*value))));
 
     let w = ui.theme.control * 48.0;
     let (sh, bar) = (w * 0.7, ui.theme.control * 4.0);

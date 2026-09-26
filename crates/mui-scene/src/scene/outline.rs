@@ -140,12 +140,13 @@ impl OutlineCache {
     }
 
     /// Drop what this resolve did not use: memory follows the live tree.
-    pub(super) fn sweep(&mut self) {
+    pub(super) fn sweep(&mut self, age: u64) {
         let generation = self.generation;
-        self.entries.retain(|_, e| e.seen == generation);
-        self.canvases.retain(|_, c| c.3 == generation);
-        self.rects.retain(|_, r| r.2 == generation);
-        self.bands.retain(|_, b| b.4 == generation);
+        let live = |seen: u64| generation.wrapping_sub(seen) <= age;
+        self.entries.retain(|_, e| live(e.seen));
+        self.canvases.retain(|_, c| live(c.3));
+        self.rects.retain(|_, r| live(r.2));
+        self.bands.retain(|_, b| live(b.4));
         self.generation = generation.wrapping_add(1);
     }
 }
