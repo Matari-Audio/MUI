@@ -4,10 +4,21 @@
 use crate::lex::{K, Tok, lex};
 use crate::rules::{Arg, Gate, RULES, Rule, TUPLES};
 use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 
 pub struct Ctx {
     /// Path roots that name a mui crate (`mui`, `mui2`, `mui_scene`, ..).
     pub roots: HashSet<String>,
+    /// Per-file names and imports, so `use super::{Kind}` can be traced to
+    /// the parent module's `use mui2::prelude::*`.
+    summaries: HashMap<PathBuf, Summary>,
+}
+
+#[derive(Default)]
+struct Summary {
+    defined: HashSet<String>,
+    /// `(path, local name or None for a glob)`.
+    entries: Vec<(Vec<String>, Option<String>)>,
 }
 
 impl Ctx {
@@ -15,7 +26,90 @@ impl Ctx {
         let mut roots: HashSet<String> = crate::rules::MUI_CRATES.iter().map(|c| c.replace('-', "_")).collect();
         roots.extend(crate::rules::EXTRA_ROOTS.iter().map(|s| s.to_string()));
         roots.extend(extra);
-        Ctx { roots }
+        Ctx { roots, summaries: HashMap::new() }
+    }
+
+    /// Record a file's definitions and imports for cross-file resolution.
+    /// Call for every file before migrating any of them.
+    pub fn index(&mut self, path: &Path, src: &str) {
+        let Ok(toks) = lex(src) else { return };
+        let f = File::new(src, &toks, self, None);
+        let s = Summary { defined: f.defined.clone(), entries: f.uses.iter().map(|u| (u.path.clone(), u.local.clone())).collect() };
+        self.summaries.insert(path.to_path_buf(), s);
+    }
+
+    /// Does `name`, used bare in `file`, come from a mui crate?
+    fn resolve(&self, file: &Path, name: &str, depth: usize) -> Option<bool> {
+        let s = self.summaries.get(file)?;
+        if depth > 8 || s.defined.contains(name) {
+            return Some(false);
+        }
+        if let Some((path, _)) = s.entries.iter().find(|(_, l)| l.as_deref() == Some(name)) {
+            return Some(self.resolve_path(file, path, &s.defined, depth + 1));
+        }
+        for (path, _) in s.entries.iter().filter(|(_, l)| l.is_none()) {
+            if path.first().is_some_and(|r| self.roots.contains(r)) {
+                return Some(true);
+            }
+            if let Some(m) = self.module(file, path)
+                && self.resolve(&m, name, depth + 1) == Some(true)
+            {
+                return Some(true);
+            }
+        }
+        None
+    }
+
+    /// Does the imported item `path` (last segment = the item) come from mui?
+    fn resolve_path(&self, file: &Path, path: &[String], defined: &HashSet<String>, depth: usize) -> bool {
+        let Some(root) = path.first() else { return false };
+        if self.roots.contains(root) && !defined.contains(root) {
+            return true;
+        }
+        match self.module(file, &path[..path.len() - 1]) {
+            Some(m) if path.len() > 1 => self.resolve(&m, &path[path.len() - 1], depth) == Some(true),
+            _ => false,
+        }
+    }
+
+    /// The file of the module named by a `crate::` / `self::` / `super::`
+    /// path, if it is one of the indexed files.
+    fn module(&self, file: &Path, path: &[String]) -> Option<PathBuf> {
+        let mut m = file.to_path_buf();
+        let mut rest = path;
+        match path.first().map(String::as_str) {
+            Some("crate") => {
+                let root = file.ancestors().find(|d| d.join("Cargo.toml").is_file())?;
+                m = ["src/lib.rs", "src/main.rs"].iter().map(|f| root.join(f)).find(|f| self.summaries.contains_key(f))?;
+                rest = &path[1..];
+            }
+            Some("self") => rest = &path[1..],
+            Some("super") => {
+                while rest.first().map(String::as_str) == Some("super") {
+                    m = self.file_for(module_dir(&m).parent()?)?;
+                    rest = &rest[1..];
+                }
+            }
+            _ => return None,
+        }
+        for seg in rest {
+            m = self.file_for(&module_dir(&m).join(seg))?;
+        }
+        Some(m)
+    }
+
+    fn file_for(&self, dir: &Path) -> Option<PathBuf> {
+        [dir.with_extension("rs"), dir.join("mod.rs"), dir.join("lib.rs"), dir.join("main.rs")]
+            .into_iter()
+            .find(|f| self.summaries.contains_key(f))
+    }
+}
+
+/// The directory a module file's children live in.
+fn module_dir(file: &Path) -> PathBuf {
+    match file.file_name().and_then(|n| n.to_str()) {
+        Some("mod.rs" | "lib.rs" | "main.rs") => file.parent().map(Path::to_path_buf).unwrap_or_default(),
+        _ => file.with_extension(""),
     }
 }
 
@@ -27,7 +121,7 @@ pub struct Outcome {
     pub warnings: Vec<(usize, String)>,
 }
 
-pub fn migrate(src: &str, ctx: &Ctx) -> Result<Outcome, String> {
+pub fn migrate(src: &str, path: Option<&Path>, ctx: &Ctx) -> Result<Outcome, String> {
     let mut out = Outcome { text: src.to_string(), ..Default::default() };
     let mut seen = HashSet::new();
     let mut push = |out: &mut Outcome, w: (usize, String)| {
@@ -37,7 +131,7 @@ pub fn migrate(src: &str, ctx: &Ctx) -> Result<Outcome, String> {
     };
     {
         let toks = lex(src)?;
-        let f = File::new(src, &toks, ctx);
+        let f = File::new(src, &toks, ctx, path);
         for w in f.manual() {
             push(&mut out, w);
         }
@@ -46,7 +140,7 @@ pub fn migrate(src: &str, ctx: &Ctx) -> Result<Outcome, String> {
     // converge in a couple of passes.
     for _ in 0..16 {
         let toks = lex(&out.text)?;
-        let f = File::new(&out.text, &toks, ctx);
+        let f = File::new(&out.text, &toks, ctx, path);
         let (edits, warns) = f.pass();
         if edits.is_empty() {
             out.warnings.sort();
@@ -125,6 +219,7 @@ struct UseEntry {
 }
 
 struct File<'a> {
+    path: Option<&'a Path>,
     src: &'a str,
     t: &'a [Tok],
     ctx: &'a Ctx,
@@ -137,13 +232,18 @@ struct File<'a> {
     locals: HashMap<String, bool>,
     mui_glob: bool,
     foreign_glob: bool,
+    /// Modules glob-imported with a relative path (`use super::*`).
+    glob_mods: Vec<PathBuf>,
+    /// Token ranges of `use` items.
+    items: Vec<(usize, usize)>,
     is_mui: bool,
     line_starts: Vec<usize>,
 }
 
 impl<'a> File<'a> {
-    fn new(src: &'a str, t: &'a [Tok], ctx: &'a Ctx) -> File<'a> {
+    fn new(src: &'a str, t: &'a [Tok], ctx: &'a Ctx, path: Option<&'a Path>) -> File<'a> {
         let mut f = File {
+            path,
             src,
             t,
             ctx,
@@ -154,6 +254,8 @@ impl<'a> File<'a> {
             locals: HashMap::new(),
             mui_glob: false,
             foreign_glob: false,
+            glob_mods: Vec::new(),
+            items: Vec::new(),
             is_mui: false,
             line_starts: std::iter::once(0).chain(src.match_indices('\n').map(|(i, _)| i + 1)).collect(),
         };
@@ -287,21 +389,35 @@ impl<'a> File<'a> {
             }
             i += 1;
         }
-        for u in &self.uses {
+        for &(a, b) in &self.items {
+            for j in a..=b {
+                self.use_tok.insert(j, false);
+            }
+        }
+        for k in 0..self.uses.len() {
+            let u = &self.uses[k];
+            let root_mui = u.path.first().is_some_and(|r| self.ctx.roots.contains(r));
+            let mui = match (&u.local, self.path) {
+                (None, _) | (_, None) => root_mui,
+                (Some(_), Some(p)) => self.ctx.resolve_path(p, &u.path, &self.defined, 0),
+            };
             match &u.local {
-                None if u.mui => self.mui_glob = true,
+                None if mui => self.mui_glob = true,
                 None => {
-                    // `use super::*` in a test module and enum-variant
-                    // globs are foreign globs too.
-                    self.foreign_glob = true
+                    self.foreign_glob = true;
+                    if let Some(m) = self.path.and_then(|p| self.ctx.module(p, &u.path)) {
+                        self.glob_mods.push(m);
+                    }
                 }
                 Some(l) => {
-                    self.locals.insert(l.clone(), u.mui);
+                    self.locals.insert(l.clone(), mui);
                 }
             }
-            if u.mui {
-                self.is_mui = true;
+            self.is_mui |= mui;
+            for j in u.start..=u.end {
+                self.use_tok.insert(j, mui);
             }
+            self.uses[k].mui = mui;
         }
     }
 
@@ -323,15 +439,8 @@ impl<'a> File<'a> {
         } else if i > 1 && matches!(self.t[i - 1].k, K::Close(')')) && self.ident(self.t[i - 1].pair.wrapping_sub(1), "pub") {
             start = self.t[i - 1].pair - 1;
         }
-        let first = self.uses.len();
         self.tree(i + 1, Vec::new(), false, (start, semi));
-        let mui = self.uses[first..].first().is_some_and(|u| u.path.first().is_some_and(|r| self.ctx.roots.contains(r)));
-        for u in &mut self.uses[first..] {
-            u.mui = mui;
-        }
-        for j in i..=semi {
-            self.use_tok.insert(j, mui);
-        }
+        self.items.push((i, semi));
         semi + 1
     }
 
@@ -410,7 +519,7 @@ impl<'a> File<'a> {
             if let Some(&m) = self.locals.get(s) {
                 return m;
             }
-            return self.mui_glob;
+            return self.mui_glob || self.glob_mods.iter().any(|m| self.ctx.resolve(m, s, 1) == Some(true));
         }
         if self.defined.contains(s) {
             return false;
@@ -463,11 +572,25 @@ impl<'a> File<'a> {
         let mut edit = |lo: usize, hi: usize, text: String| edits.push(minimal(src, lo, hi, text));
 
         for u in &self.uses {
-            if !u.mui {
+            if !u.mui || u.local.is_none() {
                 continue;
             }
             let name = u.path.last().map(String::as_str).unwrap_or("");
-            if !RULES.iter().any(|r| matches!(r, Rule::DropImport { name: n } if *n == name)) || u.local.is_none() {
+            let mut drop = RULES.iter().any(|r| matches!(r, Rule::DropImport { name: n } if *n == name));
+            for r in RULES {
+                if let Rule::Function { old, new } | Rule::Type { old, new } | Rule::Macro { old, new } | Rule::MacroHead { old, new, .. } = *r
+                    && old == name
+                {
+                    if self.locals.contains_key(new) {
+                        drop = true; // already imported under the new name
+                    } else {
+                        // The name token is the last ident before any `as`.
+                        let k = (u.start..=u.end).rev().find(|&k| self.ident(k, name)).unwrap_or(u.end);
+                        edit(t[k].lo, t[k].hi, new.to_string());
+                    }
+                }
+            }
+            if !drop {
                 continue;
             }
             if !u.in_brace {
@@ -519,7 +642,10 @@ impl<'a> File<'a> {
             }
 
             let macro_call = self.punct(i + 1, '!') && !self.punct(i + 2, '=');
-            if macro_call && !in_use {
+            if in_use {
+                continue; // handled per use entry above
+            }
+            if macro_call {
                 for r in RULES {
                     match *r {
                         Rule::Macro { old, new } if old == name && self.is_mui => {
@@ -551,18 +677,6 @@ impl<'a> File<'a> {
                 }
                 continue;
             }
-            if macro_call {
-                if let Some(true) = self.use_tok.get(&i) {
-                    for r in RULES {
-                        if let Rule::Macro { old, new } | Rule::MacroHead { old, new, .. } = *r
-                            && old == name
-                        {
-                            edit(t[i].lo, t[i].hi, new.to_string());
-                        }
-                    }
-                }
-                continue;
-            }
 
             // Definitions and bindings are never renamed.
             if i > 0
@@ -584,7 +698,7 @@ impl<'a> File<'a> {
 
             for r in RULES {
                 match *r {
-                    Rule::Function { old, new } if old == name && (called || in_use) && !field => {
+                    Rule::Function { old, new } if old == name && called && !field => {
                         if self.is_mui_name(i) {
                             edit(t[i].lo, t[i].hi, new.to_string());
                         }

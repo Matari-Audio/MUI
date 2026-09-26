@@ -2,8 +2,8 @@ use crate::rewrite::{Ctx, Outcome, migrate};
 
 fn run(src: &str) -> Outcome {
     let ctx = Ctx::with_roots([]);
-    let out = migrate(src, &ctx).expect("migrates");
-    let again = migrate(&out.text, &ctx).expect("migrates twice");
+    let out = migrate(src, None, &ctx).expect("migrates");
+    let again = migrate(&out.text, None, &ctx).expect("migrates twice");
     assert_eq!(again.text, out.text, "not idempotent");
     assert_eq!(again.edits, 0);
     out
@@ -167,4 +167,26 @@ fn doc_example_before_after() {
         "fn f() -> El {\ncol([\n    stack([\n        block(size, size).pill().preset(look.face(Role::Raised))\n            .a11y(A11y::Slider { value, min, max }).named(label.clone())\n            .focusable().id(id),\n        block(dot, dot).pill().fill(look.role)\n            .centered_at(x, y),\n    ]),\n    text(caption).fill(Role::Dim),\n]).gap(Xs).align(Align::Center)\n}\n",
     );
     check(&before, &after);
+}
+
+#[test]
+fn cross_file_super_imports() {
+    // `child.rs` imports mui names through its parent's glob; the parent
+    // also defines its own `button`, which is not the widget.
+    let dir = std::env::temp_dir().join(format!("mui-migrate-test-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("ui")).unwrap();
+    let parent = dir.join("ui.rs");
+    let child = dir.join("ui/child.rs");
+    let parent_src = "mod child;\nuse mui2::prelude::*;\npub fn button(a: u8) -> (El, bool) { todo!() }\n";
+    let child_src = "use super::{Kind, Sugar, El, button, col, column};\nfn f() -> El { let (a, b) = button(1); column([a]).role(Kind::Group) }\n";
+    std::fs::write(&parent, parent_src).unwrap();
+    std::fs::write(&child, child_src).unwrap();
+    let mut ctx = Ctx::with_roots([]);
+    ctx.index(&parent, parent_src);
+    ctx.index(&child, child_src);
+    let out = migrate(child_src, Some(&child), &ctx).unwrap();
+    assert_eq!(out.text, "use super::{A11y, El, button, col};\nfn f() -> El { let (a, b) = button(1); col([a]).a11y(A11y::Group) }\n");
+    // Without the index the child is not recognisably mui.
+    assert_eq!(migrate(child_src, None, &ctx).unwrap().text, child_src);
+    std::fs::remove_dir_all(&dir).ok();
 }

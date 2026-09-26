@@ -50,11 +50,19 @@ fn main() -> ExitCode {
         manifests.extend(abs.ancestors().map(|a| a.join("Cargo.toml")).filter(|m| m.is_file()));
     }
     let aliases = manifests.iter().filter_map(|m| std::fs::read_to_string(m).ok()).flat_map(|s| cargo::aliases(&s));
-    let ctx = rewrite::Ctx::with_roots(aliases);
+    let mut ctx = rewrite::Ctx::with_roots(aliases);
+    let sources: Vec<Option<String>> = files.iter().map(|f| std::fs::read_to_string(f).ok()).collect();
+    for (f, src) in files.iter().zip(&sources) {
+        if let Some(src) = src
+            && f.extension().is_some_and(|e| e == "rs")
+        {
+            ctx.index(f, src);
+        }
+    }
 
     let (mut changed, mut edits, mut warnings, mut errors) = (0, 0, 0, 0);
-    for f in &files {
-        let Ok(src) = std::fs::read_to_string(f) else {
+    for (f, src) in files.iter().zip(sources) {
+        let Some(src) = src else {
             eprintln!("{}: unreadable", f.display());
             errors += 1;
             continue;
@@ -63,7 +71,7 @@ fn main() -> ExitCode {
             let dir = std::fs::canonicalize(f).ok().and_then(|p| p.parent().map(Path::to_path_buf)).unwrap_or_default();
             cargo::rewrite(&src, &dir).map(|(text, edits)| rewrite::Outcome { text, edits, warnings: Vec::new() })
         } else {
-            rewrite::migrate(&src, &ctx)
+            rewrite::migrate(&src, Some(f), &ctx)
         };
         let out = match result {
             Ok(o) => o,
