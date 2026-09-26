@@ -72,7 +72,9 @@ fn inward_ramp_padding_follows_the_actual_sloped_border() {
             .radius(0.)
             .w(200.)
             .h(100.)
-            .border_ramp(BorderRamp::horizontal((Role::Primary, 20.), (Role::Dim, 1.)).align(align));
+            .border_ramp(
+                BorderRamp::horizontal((Role::Primary, 20.), (Role::Dim, 1.)).align(align),
+            );
         let scene = resolve(&SceneSpec::new(root)).unwrap();
         let p = &scene.surface("child").unwrap().path;
         assert!(!has(p, 20. * factor + 1., 50.));
@@ -210,7 +212,10 @@ fn morph_resize_and_cached_resolution_agree() {
             .outline(octagon)
             .w(width)
             .h(160.)
-            .border_ramp(BorderRamp::horizontal((Role::Primary, pad * 2.), (Role::Dim, 1.)));
+            .border_ramp(BorderRamp::horizontal(
+                (Role::Primary, pad * 2.),
+                (Role::Dim, 1.),
+            ));
         let mut spec = SceneSpec::new(root);
         spec.device_scale = Some(scale);
         let fresh = resolve(&spec).unwrap();

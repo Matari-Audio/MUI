@@ -207,7 +207,7 @@ impl CaptureStream {
 pub fn discover_parts(scene: &mui_scene::ResolvedScene, width: f64, height: f64) -> Vec<String> {
     let surfaces: Vec<_> = scene
         .surfaces()
-        .filter(|s| !s.key.starts_with('/'))
+        .filter(|s| mui_scene::Id::is_named(&s.key))
         .collect();
     let candidates: Vec<_> = surfaces
         .iter()
@@ -245,7 +245,7 @@ mod tests {
     fn automatic_parts_and_pixel_cache_follow_real_scene_changes() {
         let make = |width| {
             resolve(&SceneSpec::new(
-                col([block(width, 60.).fill(Ink).id("panel")])
+                col([block(width, 60.).fill(Role::Ink).id("panel")])
                     .size(300., 200.)
                     .id("root"),
             ))

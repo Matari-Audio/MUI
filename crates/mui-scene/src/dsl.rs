@@ -90,9 +90,15 @@ mod dsl_tests {
     #[test]
     fn lengths_and_alignment() {
         assert_eq!(block(1., 1.).w(120), block(1., 1.).width(Len::Px(120.)));
-        assert_eq!(block(1., 1.).w(pct(50.)), block(1., 1.).width(Len::Pct(50.)));
+        assert_eq!(
+            block(1., 1.).w(pct(50.)),
+            block(1., 1.).width(Len::Pct(50.))
+        );
         assert_eq!(block(1., 1.).square(8), block(1., 1.).size(8., 8.));
-        assert_eq!(block(1., 1.).full(), block(1., 1.).w(pct(100.)).h(pct(100.)));
+        assert_eq!(
+            block(1., 1.).full(),
+            block(1., 1.).w(pct(100.)).h(pct(100.))
+        );
         let c = row![].center();
         assert_eq!(c, row![].align(Align::Center).justify(Justify::Center));
     }

@@ -13,15 +13,9 @@ fn card(radius: f64) -> El {
             .inset_surface()
             .fill(Role::Field)
             .id("other"),
-        block(48., 82.)
-            .at(8., 8.)
-            .id("above"),
-        block(48., 82.)
-            .at(8., 170.)
-            .id("below"),
-        block(172., 244.)
-            .at(56., 8.)
-            .id("main"),
+        block(48., 82.).at(8., 8.).id("above"),
+        block(48., 82.).at(8., 170.).id("below"),
+        block(172., 244.).at(56., 8.).id("main"),
         block(40., 80.)
             .at(8., 90.)
             .join_border("body")
@@ -35,7 +29,9 @@ fn card(radius: f64) -> El {
     .fill(Role::Surface)
     .radius((radius, radius * 0.7))
     .surface_layout(8.)
-    .border_ramp(BorderRamp::horizontal((Role::Primary, 4.), (Role::Dim, 1.5)).transition(0.35, 0.65))
+    .border_ramp(
+        BorderRamp::horizontal((Role::Primary, 4.), (Role::Dim, 1.5)).transition(0.35, 0.65),
+    )
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

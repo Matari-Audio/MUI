@@ -27,7 +27,10 @@ pub fn panel() -> Style {
 /// assert_eq!(dialog.style_mut().radius, Some(Radius::Px(12.)));
 /// ```
 pub fn card() -> Style {
-    Style::default().fill(Role::Raised).radius(12.0).shadow(Shadow::soft(12.0))
+    Style::default()
+        .fill(Role::Raised)
+        .radius(12.0)
+        .shadow(Shadow::soft(12.0))
 }
 
 /// Glass, at plugin scale: a translucent fill, a bright one-pixel top edge

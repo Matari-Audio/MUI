@@ -59,7 +59,9 @@ fn welded() -> ResolvedScene {
 fn pictured(v: u8) -> (ResolvedScene, std::sync::Weak<[u8]>) {
     let image = Arc::new(Image::rgba(2, 2, vec![v; 16]).unwrap());
     let buffer = Arc::downgrade(&image.rgba);
-    let root = block(40., 40.).fill(Fill::Image(image, Fit::Fill)).id("img");
+    let root = block(40., 40.)
+        .fill(Fill::Image(image, Fit::Fill))
+        .id("img");
     let scene = resolve(&SceneSpec::new(root).offered(Size::new(40., 40.))).unwrap();
     (scene, buffer)
 }
@@ -225,7 +227,9 @@ fn a_host_texture_paints_and_refreshes_without_a_new_scene() {
         );
     };
     let image = Arc::new(Image::texture(7, 4, 4));
-    let root = block(320., 200.).fill(Fill::Image(image, Fit::Fill)).id("t");
+    let root = block(320., 200.)
+        .fill(Fill::Image(image, Fit::Fill))
+        .id("t");
     let scene = resolve(&SceneSpec::new(root).offered(Size::new(320., 200.))).unwrap();
     fill([255, 0, 0, 255]);
     r.set_texture(7, &host);

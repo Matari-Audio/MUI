@@ -115,7 +115,12 @@ impl<'a> Walk<'a> {
                 p.blur = blur;
             }
         }
-        for sh in s.shadow.iter().flatten().filter(|sh| sh.kind == ShadowKind::Drop) {
+        for sh in s
+            .shadow
+            .iter()
+            .flatten()
+            .filter(|sh| sh.kind == ShadowKind::Drop)
+        {
             self.shadow(sh, &contour, under)?;
         }
         let bg = self.fill(e, material.as_ref(), &contour, under);
@@ -172,16 +177,16 @@ impl<'a> Walk<'a> {
             content,
             hits,
         });
-        if n.key()
-            .is_some_and(|k| !k.is_empty() && !k.starts_with('/'))
-        {
+        if n.key().is_some_and(crate::Id::is_named) {
             inner.parent = Some(key.clone());
         }
         // A union is one contour, so its children paint inside it: a square
         // tab's own fill stops at the filleted corner instead of poking past
         // the shared outline.
-        let clips =
-            n.is_clip() || s.union.unwrap_or_default() || e.extras().inside.is_some() || self.regions.contains_key(&at);
+        let clips = n.is_clip()
+            || s.union.unwrap_or_default()
+            || e.extras().inside.is_some()
+            || self.regions.contains_key(&at);
         if clips {
             let image = material.as_ref().map(|m| m.image_rect.bounds());
             let image = image.or(shape_bounds);
@@ -241,8 +246,13 @@ impl<'a> Walk<'a> {
         }
         if blended.is_some() {
             if masked
-                && let Some(p) =
-                    self.push(Layer::Mask, contour.path.clone(), contour.rect, s.mask.as_ref().unwrap_or(&Fill::None), bg)
+                && let Some(p) = self.push(
+                    Layer::Mask,
+                    contour.path.clone(),
+                    contour.rect,
+                    s.mask.as_ref().unwrap_or(&Fill::None),
+                    bg,
+                )
             {
                 p.offset = contour.offset;
             }
@@ -1091,11 +1101,7 @@ mod tests {
             .radius(6.)
             .clip()
             .id("inner");
-        let outer = col([inner])
-            .size(40., 40.)
-            .radius(10.)
-            .clip()
-            .id("outer");
+        let outer = col([inner]).size(40., 40.).radius(10.).clip().id("outer");
         let s = resolve(&SceneSpec::new(outer)).unwrap();
         let paths = s.surface("leaf").unwrap().clip_path.as_ref().unwrap();
         assert_eq!(
@@ -1495,9 +1501,9 @@ mod tests {
         let a = retained(&memo_spec(50., false, &d), &mut text, None);
         let b = retained(&memo_spec(70., true, &d), &mut text, Some(&a));
         assert_eq!(count(&d), 1, "a moved memo was walked instead of copied");
-        let walked =
-            Resolver::default().resolve(&memo_spec(70., false, &draws()))
-                .unwrap();
+        let walked = Resolver::default()
+            .resolve(&memo_spec(70., false, &draws()))
+            .unwrap();
         assert_eq!(b.paint, walked.paint);
         for k in ["m", "m.a", "m.t", "m.c"] {
             assert_eq!(b.surface(k), walked.surface(k), "{k}");

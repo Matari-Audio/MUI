@@ -13,9 +13,9 @@ use mui_layout::SpacingToken::{S, Xs};
 use mui_scene::Keys;
 use mui_scene::prelude::{Paints as _, Role, stack, text};
 use mui_scene::{
-    Appear, Area, Color, Cursor, El, Element, Fill, Font, A11y, Layer, Mix, Paint, Painted,
-    Palette, Pin, Radius, ResolvedScene, SceneError, SceneSpec, Size, Spacing, Spring, State,
-    Resolver, Theme, bar, push_index,
+    A11y, Appear, Area, Color, Cursor, El, Element, Fill, Font, Layer, Mix, Paint, Painted,
+    Palette, Pin, Radius, ResolvedScene, Resolver, SceneError, SceneSpec, Size, Spacing, Spring,
+    State, Theme, bar, push_index,
 };
 use std::sync::Arc;
 
@@ -1947,7 +1947,7 @@ impl Ui {
                     .gap(Xs)
                     .fallback(Area::TopStart),
             )
-            .id(TIP_KEY);
+            .id(mui_scene::Id::runtime(TIP_KEY));
         if root.is_container() {
             return root.push(float);
         }
@@ -2757,7 +2757,7 @@ fn keyed_edit(scene: Option<&ResolvedScene>, id: &str, keys: &[KeyPress]) -> boo
 /// Whether `k` is an id rather than a tree path (`/0/2`, or `""` for the
 /// root) or a key the runtime owns (`/tip`).
 fn named(k: &str) -> bool {
-    !(k.is_empty() || k.starts_with('/'))
+    mui_scene::Id::is_named(k)
 }
 
 /// The node `key` names in `root`: an id anywhere in the tree, or a tree
@@ -2875,19 +2875,23 @@ fn state(
             )
         };
         let e = n.payload_mut();
-        if e.style.fill.as_ref().is_some_and(|f| !f.is_none()) && ((auto_hover && h > 0.0) || (auto_press && p > 0.0)) {
-            e.style.fill = e.style.fill.as_ref().map(|f| f.map(pal, bg, |c| {
-                let c = if auto_hover {
-                    c.mix(pal.hover(c), h as f32)
-                } else {
-                    c
-                };
-                if auto_press {
-                    c.mix(pal.pressed(c), p as f32)
-                } else {
-                    c
-                }
-            }));
+        if e.style.fill.as_ref().is_some_and(|f| !f.is_none())
+            && ((auto_hover && h > 0.0) || (auto_press && p > 0.0))
+        {
+            e.style.fill = e.style.fill.as_ref().map(|f| {
+                f.map(pal, bg, |c| {
+                    let c = if auto_hover {
+                        c.mix(pal.hover(c), h as f32)
+                    } else {
+                        c
+                    };
+                    if auto_press {
+                        c.mix(pal.pressed(c), p as f32)
+                    } else {
+                        c
+                    }
+                })
+            });
         }
     }
 }
@@ -3239,10 +3243,7 @@ mod tests {
     fn nested_and_floating_content_does_not_extend_the_outer_scroll() {
         let mut ui = Ui::new(Theme::DEFAULT);
         let tree = col([
-            col([block(30., 1000.)])
-                .size(30., 40.)
-                .scroll()
-                .id("inner"),
+            col([block(30., 1000.)]).size(30., 40.).scroll().id("inner"),
             block(30., 20.),
             block(30., 900.).float(),
         ])
@@ -3989,7 +3990,12 @@ mod tests {
     #[test]
     fn hover_warms_the_fill_and_a_press_is_reported_next_frame() {
         let mut ui = Ui::new(Theme::DEFAULT);
-        let tree = || block(40., 40.).fill(Role::Raised).a11y(A11y::Button).id("b");
+        let tree = || {
+            block(40., 40.)
+                .fill(Role::Raised)
+                .a11y(A11y::Button)
+                .id("b")
+        };
         let base = ui
             .frame(tree(), None, PointerInput::default(), 0.016)
             .unwrap()
@@ -4234,10 +4240,7 @@ mod tests {
         let mut ui = Ui::new(Theme::DEFAULT);
         let tree = || {
             row![
-                col((0..6).map(|_| block(20., 40.)))
-                    .gap(S)
-                    .scroll()
-                    .w(200),
+                col((0..6).map(|_| block(20., 40.))).gap(S).scroll().w(200),
                 block(40., 40.),
             ]
             .height(100.)
@@ -4681,10 +4684,9 @@ mod tests {
         let t = memo_tree(&mut ui, 1, 90., &mut built);
         let f = ui.frame(t, ROOM, PointerInput::default(), 0.016).unwrap();
         assert_eq!(built, 1);
-        let walked = mui_scene::resolve(
-            &SceneSpec::new(plain_tree(90.)).offered(Size::new(300., 200.)),
-        )
-        .unwrap();
+        let walked =
+            mui_scene::resolve(&SceneSpec::new(plain_tree(90.)).offered(Size::new(300., 200.)))
+                .unwrap();
         assert_eq!(f.scene.paint, walked.paint);
         assert_eq!(f.scene.surface("m.b").unwrap().frame.x, 90.);
         let t = memo_tree(&mut ui, 1, 90., &mut built);

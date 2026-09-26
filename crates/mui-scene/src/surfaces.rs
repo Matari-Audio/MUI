@@ -120,7 +120,10 @@ impl Cache {
             keyed
                 .get(id.as_str())
                 .map(|i| frames[*i])
-                .ok_or_else(|| SceneError::MissingId { what: "surface member", id: id.clone() })
+                .ok_or_else(|| SceneError::MissingId {
+                    what: "surface member",
+                    id: id.clone(),
+                })
         };
         let mut panels = Vec::new();
         let mut joins = Vec::new();

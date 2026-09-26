@@ -202,7 +202,11 @@ fn path_words(path: &Path, key: &mut Vec<u64>) {
 /// The radius `style` resolves to: square for a child of a
 /// [`segmented`](crate::Styled::segmented) container.
 fn radius(style: &crate::Style, square: bool) -> Radius {
-    if square { Radius::Px(0.) } else { style.radius.unwrap_or_default() }
+    if square {
+        Radius::Px(0.)
+    } else {
+        style.radius.unwrap_or_default()
+    }
 }
 
 /// `n`'s own outline inputs as key words: its snapped bounds relative to
@@ -376,7 +380,13 @@ impl Walk<'_> {
         )?;
         let outline = Contour {
             changed: true,
-            ..Contour::path(n.payload().style.corners.unwrap_or_default().shape(&rounded.path))
+            ..Contour::path(
+                n.payload()
+                    .style
+                    .corners
+                    .unwrap_or_default()
+                    .shape(&rounded.path),
+            )
         };
         match key {
             Some((key, origin)) => self.outlines.insert(key, origin, outline),
@@ -414,7 +424,14 @@ impl Walk<'_> {
             None => Point::new(f.x, f.y),
             Some(s) => Point::new((f.x * s).floor() / s, (f.y * s).floor() / s),
         };
-        geometry_node(n, &self.frames, (&self.sizes, &self.squared), at, (origin, scale), key);
+        geometry_node(
+            n,
+            &self.frames,
+            (&self.sizes, &self.squared),
+            at,
+            (origin, scale),
+            key,
+        );
         origin
     }
 
@@ -542,7 +559,9 @@ impl Walk<'_> {
             // convex radius.
             match child_rect {
                 Some(r) => rects.push(r),
-                None if c.payload().style.union.unwrap_or_default() && !child.shadow_rects.is_empty() => {
+                None if c.payload().style.union.unwrap_or_default()
+                    && !child.shadow_rects.is_empty() =>
+                {
                     rects.extend(child_rects);
                 }
                 None => rects.push(RoundedRect::new(bounds(f, self.spec.device_scale), convex)?),
@@ -702,8 +721,12 @@ mod tests {
                 let p = [(0., 0.), (s.width * w, 0.), (0., s.height)];
                 Path::polyline(p.map(|(x, y)| Point::new(x, y)), true)
             });
-            SceneSpec::new(row([child, block(20., 20.)]).union(Role::Surface).id("weld"))
-                .offered(Size::new(60., 20.))
+            SceneSpec::new(
+                row([child, block(20., 20.)])
+                    .union(Role::Surface)
+                    .id("weld"),
+            )
+            .offered(Size::new(60., 20.))
         };
         let mut text = TextCache::default();
         text.resolve(&spec(1.)).unwrap();
@@ -725,8 +748,12 @@ mod tests {
             }
         };
         let spec = |child: El| {
-            SceneSpec::new(row([child, block(20., 20.)]).union(Role::Surface).id("weld"))
-                .offered(Size::new(60., 20.))
+            SceneSpec::new(
+                row([child, block(20., 20.)])
+                    .union(Role::Surface)
+                    .id("weld"),
+            )
+            .offered(Size::new(60., 20.))
         };
         let kept = spec(block(40., 20.).outline(triangle(1.)));
         let mut text = TextCache::default();

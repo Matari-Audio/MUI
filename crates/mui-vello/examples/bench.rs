@@ -140,7 +140,11 @@ fn editor(ui: &mut Ui, app: &mut App) -> El {
     let img = app.swatch.clone();
     let pills: Vec<El> = [Fit::Cover, Fit::Contain, Fit::Fill, Fit::Cover]
         .into_iter()
-        .map(|fit| block(120.0, 40.0).pill().fill(Fill::Image(img.clone(), fit)))
+        .map(|fit| {
+            block(120.0, 40.0)
+                .pill()
+                .fill(Fill::Image(img.clone(), fit))
+        })
         .collect();
     // 6 cards carrying a transition, so every frame walks their spring
     // channels whether or not the colour moved.

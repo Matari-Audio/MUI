@@ -3,11 +3,14 @@ use mui_input::{Button, Buttons};
 use mui_scene::prelude::*;
 
 fn gain() -> El {
-    block(120.0, 40.0).id("gain").focusable().a11y(A11y::Slider {
-        value: 0.5,
-        min: 0.0,
-        max: 1.0,
-    })
+    block(120.0, 40.0)
+        .id("gain")
+        .focusable()
+        .a11y(A11y::Slider {
+            value: 0.5,
+            min: 0.0,
+            max: 1.0,
+        })
 }
 fn step(ui: &mut Ui, tree: El, pos: Option<Point>, buttons: Buttons) -> Vec<(String, Edit)> {
     ui.frame(

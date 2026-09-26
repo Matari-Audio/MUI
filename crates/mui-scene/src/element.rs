@@ -857,8 +857,9 @@ pub trait Styled: Paints {
     }
     /// One recessed material made from several named layout footprints.
     /// Use a background sibling when controls occupy holes in the material.
-    fn inset_surface_of(mut self, members: impl IntoIterator<Item = Id>) -> Self {
-        self.element_mut().extras_mut().inset_surface = Some(members.into_iter().collect());
+    fn inset_surface_of(mut self, members: impl IntoIterator<Item = impl Into<Id>>) -> Self {
+        self.element_mut().extras_mut().inset_surface =
+            Some(members.into_iter().map(Into::into).collect());
         self
     }
     /// Extend the owner's border material into this frame. The named body
@@ -1319,14 +1320,20 @@ mod tests {
     /// and which side that is depends only on which method was called.
     #[test]
     fn preset_wins_per_field_and_base_loses_per_field() {
-        let mut over = block(10., 10.).fill(Role::Primary).stroke(Role::Ink).preset(card());
+        let mut over = block(10., 10.)
+            .fill(Role::Primary)
+            .stroke(Role::Ink)
+            .preset(card());
         let s = over.style_mut();
         assert_eq!((s.fill.clone(), s.radius), (card().fill, card().radius));
         assert!(s.stroke.is_some(), "a field the preset left unset survives");
 
         let mut under = block(10., 10.).fill(Role::Primary).base(card());
         let s = under.style_mut();
-        assert_eq!((s.fill.clone(), s.radius), (Some(Role::Primary.into()), card().radius));
+        assert_eq!(
+            (s.fill.clone(), s.radius),
+            (Some(Role::Primary.into()), card().radius)
+        );
     }
 
     /// One slot per concept: a second spelling of the same thing replaces

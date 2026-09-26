@@ -92,7 +92,11 @@ impl Look {
                 // Nothing to lift: the hover is the role, arriving.
                 Variant::Outline | Variant::Ghost => s.fill(role.alpha(0.12)),
                 _ => {
-                    let lifted = s.fill.as_ref().unwrap_or(&Fill::None).map(&p, ground, |c| p.hover(c));
+                    let lifted = s
+                        .fill
+                        .as_ref()
+                        .unwrap_or(&Fill::None)
+                        .map(&p, ground, |c| p.hover(c));
                     s.fill(lifted)
                 }
             }

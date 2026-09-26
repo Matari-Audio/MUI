@@ -46,7 +46,8 @@ mod tests {
     #[test]
     fn idle_has_no_deadline() {
         let mut u = Ui::new(Theme::DEFAULT);
-        u.frame(block(20., 20.), None, Input::default(), 0.).unwrap();
+        u.frame(block(20., 20.), None, Input::default(), 0.)
+            .unwrap();
         assert!(u.repaint_after().is_none());
     }
     #[test]

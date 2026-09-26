@@ -78,7 +78,13 @@ impl Walk<'_> {
                 .map_or(under, |p| p.solid()),
             None => {
                 let path = contour.path.clone();
-                let mut p = self.push(Layer::Fill, path, contour.rect, e.style.fill.as_ref().unwrap_or(&Fill::None), under);
+                let mut p = self.push(
+                    Layer::Fill,
+                    path,
+                    contour.rect,
+                    e.style.fill.as_ref().unwrap_or(&Fill::None),
+                    under,
+                );
                 if let Some(p) = p.as_deref_mut() {
                     p.offset = contour.offset;
                 }
@@ -138,11 +144,21 @@ impl Walk<'_> {
         contour: &Contour,
         bg: Color,
     ) -> Result<(), SceneError> {
-        if !s.shadow.iter().flatten().any(|sh| sh.kind == ShadowKind::Inset) {
+        if !s
+            .shadow
+            .iter()
+            .flatten()
+            .any(|sh| sh.kind == ShadowKind::Inset)
+        {
             return Ok(());
         }
         self.mark_on(Layer::Clip, contour);
-        for sh in s.shadow.iter().flatten().filter(|sh| sh.kind == ShadowKind::Inset) {
+        for sh in s
+            .shadow
+            .iter()
+            .flatten()
+            .filter(|sh| sh.kind == ShadowKind::Inset)
+        {
             self.shadow(sh, contour, bg)?;
         }
         self.mark(Layer::Unclip, empty(), None);
@@ -316,8 +332,8 @@ impl Walk<'_> {
             if let Some(frame) = self.ramp_frames.get(&(at, id.clone())) {
                 return Ok(*frame);
             }
-            let index =
-                find(n, id.as_str(), at, &self.sizes).ok_or_else(|| missing("border ramp tab", id))?;
+            let index = find(n, id.as_str(), at, &self.sizes)
+                .ok_or_else(|| missing("border ramp tab", id))?;
             Ok(self.frames[index])
         };
         let anchor = match self.ramp_anchors.get(&at) {

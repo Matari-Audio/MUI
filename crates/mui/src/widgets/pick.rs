@@ -93,7 +93,10 @@ pub fn color_picker(ui: &mut Ui, id: &str, value: &mut Color, alpha: bool) -> (E
             180.0,
             [(0.0, black.with_alpha(0.0)), (1.0, black)],
         )),
-        ring(12.0).at(f64::from(hsv[1]) * w - 6.0, (1.0 - f64::from(hsv[2])) * sh - 6.0),
+        ring(12.0).at(
+            f64::from(hsv[1]) * w - 6.0,
+            (1.0 - f64::from(hsv[2])) * sh - 6.0,
+        ),
     ])
     .size(w, sh)
     .cursor(Cursor::Crosshair)

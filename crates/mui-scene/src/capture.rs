@@ -53,7 +53,7 @@ pub fn resize_capture(root: &El, key: &str, size: Size) -> Result<El, CaptureErr
     {
         return Err(CaptureError::InvalidSize);
     }
-    if key.is_empty() || key.starts_with('/') {
+    if !crate::Id::is_named(key) {
         return Err(CaptureError::UnnamedSurface(key.into()));
     }
     let mut result = root.clone();
@@ -160,7 +160,7 @@ impl ResolvedScene {
             if self.surface(root).is_none() {
                 return Err(CaptureError::MissingSurface((*root).into()));
             }
-            if root.is_empty() || root.starts_with('/') {
+            if !crate::Id::is_named(root) {
                 return Err(CaptureError::UnnamedSurface((*root).into()));
             }
         }

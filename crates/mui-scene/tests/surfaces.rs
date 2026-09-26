@@ -19,15 +19,9 @@ fn card(radius: f64) -> El {
             .inset_surface()
             .fill(Role::Field)
             .id("other"),
-        block(48., 82.)
-            .at(8., 8.)
-            .id("above"),
-        block(48., 82.)
-            .at(8., 170.)
-            .id("below"),
-        block(172., 244.)
-            .at(56., 8.)
-            .id("main"),
+        block(48., 82.).at(8., 8.).id("above"),
+        block(48., 82.).at(8., 170.).id("below"),
+        block(172., 244.).at(56., 8.).id("main"),
         block(40., 80.)
             .at(8., 90.)
             .join_border("body")
@@ -41,7 +35,9 @@ fn card(radius: f64) -> El {
     .fill(Role::Surface)
     .radius((radius, radius * 0.7))
     .surface_layout(8.)
-    .border_ramp(BorderRamp::horizontal((Role::Primary, 4.), (Role::Dim, 1.5)).transition(0.35, 0.65))
+    .border_ramp(
+        BorderRamp::horizontal((Role::Primary, 4.), (Role::Dim, 1.5)).transition(0.35, 0.65),
+    )
 }
 
 #[test]
@@ -115,6 +111,13 @@ fn invalid_surface_declarations_fail_instead_of_drawing_an_unrelated_box() {
     ] {
         assert!(resolve(&SceneSpec::new(root)).is_err());
     }
+    // A dangling reference names the id it could not find.
+    let root = stack![block(20., 20.).inset_surface_of(["missing"])]
+        .w(100.)
+        .h(100.)
+        .surface_layout(2.);
+    let e = resolve(&SceneSpec::new(root)).unwrap_err().to_string();
+    assert!(e.contains("`missing`"), "{e}");
 }
 
 #[test]
@@ -160,14 +163,19 @@ fn a_welded_port_outline_can_own_the_same_surfaces() {
 
 #[test]
 fn a_uniform_border_preserves_the_panel_interior() {
-    let root = stack![block(180., 80.).inset_surface().fill(Role::Field).id("panel")]
-        .w(200.)
-        .h(100.)
-        .fill(Role::Surface)
-        .radius(20.)
-        .stroke(Role::Dim)
-        .stroke_width(1.5)
-        .surface_layout(8.);
+    let root = stack![
+        block(180., 80.)
+            .inset_surface()
+            .fill(Role::Field)
+            .id("panel")
+    ]
+    .w(200.)
+    .h(100.)
+    .fill(Role::Surface)
+    .radius(20.)
+    .stroke(Role::Dim)
+    .stroke_width(1.5)
+    .surface_layout(8.);
     let scene = resolve(&SceneSpec::new(root)).unwrap();
     let panel = scene.surface("panel").unwrap();
     assert!(has(&panel.path, 100., 50.));
@@ -216,9 +224,14 @@ fn stroked_weld() -> El {
             .radius(0.)
             .align_self(Align::Center)
             .id("port"),
-        stack![block(180., 80.).inset_surface().fill(Role::Field).id("panel")]
-            .radius(0.)
-            .id("module"),
+        stack![
+            block(180., 80.)
+                .inset_surface()
+                .fill(Role::Field)
+                .id("panel")
+        ]
+        .radius(0.)
+        .id("module"),
     ]
     .gap(0.)
     .union(Role::Surface)

@@ -120,7 +120,10 @@ fn find(n: &El, id: &str, at: usize, sizes: &[usize]) -> Option<usize> {
 
 /// The error for a cross-reference `find` did not resolve.
 fn missing(what: &'static str, id: &mui_layout::Id) -> SceneError {
-    SceneError::MissingId { what, id: id.clone() }
+    SceneError::MissingId {
+        what,
+        id: id.clone(),
+    }
 }
 
 /// What a node inherits from the nodes above it.
@@ -375,7 +378,13 @@ impl Resolver {
 #[cfg(test)]
 impl TextCache {
     pub(crate) fn resolve(&mut self, spec: &SceneSpec) -> Result<ResolvedScene, SceneError> {
-        resolve_with(spec, self, &mut crate::WeldCache::default(), &mut |_, _, f| f, None)
+        resolve_with(
+            spec,
+            self,
+            &mut crate::WeldCache::default(),
+            &mut |_, _, f| f,
+            None,
+        )
     }
 }
 

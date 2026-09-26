@@ -2,7 +2,10 @@ use mui::prelude::*;
 fn tree(pad: f64, width: f64) -> mui::scene::El {
     row![stack![].flex(1.).id("a"), stack![].flex(1.).id("b")]
         .inside(pad)
-        .border_ramp(BorderRamp::horizontal((Role::Primary, width), (Role::Dim, 1.)))
+        .border_ramp(BorderRamp::horizontal(
+            (Role::Primary, width),
+            (Role::Dim, 1.),
+        ))
         .radius(0.)
         .w(200.)
         .h(100.)

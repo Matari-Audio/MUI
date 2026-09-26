@@ -196,7 +196,7 @@ fn node(s: &ResolvedSurface, sem: Option<&Semantics>, runs: &mut Vec<(NodeId, No
 pub fn tree_update(scene: &ResolvedScene, focus: Option<&str>, scale: f64) -> TreeUpdate {
     let named: Vec<&ResolvedSurface> = scene
         .surfaces()
-        .filter(|s| !s.key.is_empty() && !s.key.starts_with('/'))
+        .filter(|s| mui_scene::Id::is_named(&s.key))
         .collect();
 
     // Two keys hashing alike would make one node of two surfaces. Never
@@ -255,8 +255,7 @@ pub fn tree_update(scene: &ResolvedScene, focus: Option<&str>, scale: f64) -> Tr
 fn tree_update_focus(scene: &ResolvedScene, focus: Option<&str>) -> NodeId {
     focus
         .filter(|k| {
-            !k.is_empty()
-                && !k.starts_with('/')
+            mui_scene::Id::is_named(k)
                 && scene.surface(k).is_some_and(|s| s.focusable && !s.disabled)
         })
         .map_or(WINDOW, node_id)

@@ -582,12 +582,7 @@ fn many_lines(
         let x = |b: usize| caret_at(&carets, b.clamp(l.start, l.end) - l.start);
         let run = x(l.end);
         let y = row as f64 * lh - scroll;
-        children.push(
-            text(line.to_owned())
-                .width(run)
-                .lines(1)
-                .at(0.0, y),
-        );
+        children.push(text(line.to_owned()).width(run).lines(1).at(0.0, y));
         // A selection running on past this line's end takes a sliver more,
         // so a selected newline is visible.
         if sel.start < l.end.max(l.start + 1) && sel.end > l.start {
@@ -599,21 +594,14 @@ fn many_lines(
             };
             if x1 > x0 {
                 let (b0, b1) = (sel.start.max(l.start), sel.end.min(l.end));
-                children.push(
-                    reinked(&shown[b0..b1], x0, x1, lh)
-                        .at(x0, y),
-                );
+                children.push(reinked(&shown[b0..b1], x0, x1, lh).at(x0, y));
             }
         }
         if row == caret_row {
             caret_x = x(at);
             let (plo, phi) = (x(pre.start), x(pre.end));
             if phi > plo {
-                children.push(
-                    block(phi - plo, 2.0)
-                        .at(plo, y + lh - 2.0)
-                        .fill(Role::Ink),
-                );
+                children.push(block(phi - plo, 2.0).at(plo, y + lh - 2.0).fill(Role::Ink));
             }
         }
     }

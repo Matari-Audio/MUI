@@ -10,10 +10,13 @@ fn plate(id: &str, fill: impl Into<Fill>, width: f64) -> El {
         .id(id)
 }
 fn tree(options: Weld) -> El {
-    row![plate("a", Role::Primary, 1.), plate("b", Role::Secondary, 4.)]
-        .gap(2.)
-        .weld(options)
-        .id("group")
+    row![
+        plate("a", Role::Primary, 1.),
+        plate("b", Role::Secondary, 4.)
+    ]
+    .gap(2.)
+    .weld(options)
+    .id("group")
 }
 fn image(scene: &mui_scene::ResolvedScene) -> Arc<mui_scene::Image> {
     scene
@@ -49,7 +52,10 @@ fn shape_only_is_not_border_omission() {
 }
 #[test]
 fn default_and_explicit_macros_construct_the_same_policy() {
-    let a = weld![plate("a", Role::Primary, 1.), plate("b", Role::Secondary, 2.)];
+    let a = weld![
+        plate("a", Role::Primary, 1.),
+        plate("b", Role::Secondary, 2.)
+    ];
     let b = weld![Weld::all(); plate("a", Role::Primary, 1.), plate("b", Role::Secondary, 2.)];
     assert_eq!(a.payload().extras().welding, b.payload().extras().welding);
     assert_eq!(
@@ -83,7 +89,9 @@ fn unchanged_weld_reuses_the_pixel_buffer() {
 fn style_changes_invalidate_pixels() {
     let mut r = Resolver::default();
     let a = r.resolve(&SceneSpec::new(tree(Weld::all()))).unwrap();
-    let b = r.resolve(&SceneSpec::new(tree(Weld::all().blend(3.)))).unwrap();
+    let b = r
+        .resolve(&SceneSpec::new(tree(Weld::all().blend(3.))))
+        .unwrap();
     assert!(!Arc::ptr_eq(&image(&a).rgba, &image(&b).rgba));
     assert_eq!(r.welds.stats(), (0, 2));
 }

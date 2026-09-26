@@ -50,12 +50,12 @@ impl BorderRamp {
         self.anchor = Some(id.into());
         self
     }
-    pub fn tabs(mut self, ids: impl IntoIterator<Item = Id>) -> Self {
-        self.tabs = ids.into_iter().collect();
+    pub fn tabs(mut self, ids: impl IntoIterator<Item = impl Into<Id>>) -> Self {
+        self.tabs = ids.into_iter().map(Into::into).collect();
         self
     }
-    pub fn dividers(mut self, ids: impl IntoIterator<Item = Id>) -> Self {
-        self.dividers = ids.into_iter().collect();
+    pub fn dividers(mut self, ids: impl IntoIterator<Item = impl Into<Id>>) -> Self {
+        self.dividers = ids.into_iter().map(Into::into).collect();
         self
     }
     pub(crate) fn validate(&self) -> Result<(), SceneError> {
@@ -257,11 +257,11 @@ mod tests {
             .union(Role::Surface)
             .radius(12.)
             .border_ramp(
-                BorderRamp::horizontal((Role::Primary, 4.), (Role::Dim, 1.)).dividers([Id::of("lower")]),
+                BorderRamp::horizontal((Role::Primary, 4.), (Role::Dim, 1.))
+                    .dividers([Id::of("lower")]),
             )
             .id("object");
-        let scene =
-            crate::resolve(&SceneSpec::new(object).offered(Size::new(200., 120.))).unwrap();
+        let scene = crate::resolve(&SceneSpec::new(object).offered(Size::new(200., 120.))).unwrap();
         let bands: Vec<_> = scene
             .paint
             .iter()
@@ -302,10 +302,11 @@ mod tests {
         let object = col([plate])
             .union(Role::Surface)
             .radius((12., 10.))
-            .border_ramp(BorderRamp::horizontal((Role::Primary, 4.), (Role::Dim, 1.)).tabs([Id::of("tab")]))
+            .border_ramp(
+                BorderRamp::horizontal((Role::Primary, 4.), (Role::Dim, 1.)).tabs([Id::of("tab")]),
+            )
             .id("object");
-        let scene =
-            crate::resolve(&SceneSpec::new(object).offered(Size::new(212., 140.))).unwrap();
+        let scene = crate::resolve(&SceneSpec::new(object).offered(Size::new(212., 140.))).unwrap();
         let bands: Vec<_> = scene
             .paint
             .iter()
@@ -335,7 +336,8 @@ mod tests {
 
     #[test]
     fn widths_follow_the_anchor_and_vector_band_matches_the_ramp() {
-        let ramp = BorderRamp::horizontal((Role::Primary, 6.0), (Role::Dim, 1.0)).transition(0.35, 0.65);
+        let ramp =
+            BorderRamp::horizontal((Role::Primary, 6.0), (Role::Dim, 1.0)).transition(0.35, 0.65);
         let frame = Frame {
             x: 0.0,
             y: 0.0,

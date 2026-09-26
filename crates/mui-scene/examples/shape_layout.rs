@@ -43,7 +43,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "20 → 1 BORDER + 8 PADDING",
             row![cell("a"), cell("b")]
                 .inside(8.)
-                .border_ramp(BorderRamp::horizontal((Role::Primary, 20.), (Role::Dim, 1.))),
+                .border_ramp(BorderRamp::horizontal(
+                    (Role::Primary, 20.),
+                    (Role::Dim, 1.),
+                )),
         ),
     ];
     for (i, (title, root)) in examples.into_iter().enumerate() {

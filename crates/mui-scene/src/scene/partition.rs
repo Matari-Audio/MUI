@@ -95,8 +95,8 @@ impl Walk<'_> {
             }
             let anchor = *self.ramp_anchors.entry(at).or_insert(anchor);
             for id in ramp.tabs.iter().chain(&ramp.dividers) {
-                let index =
-                    find(n, id.as_str(), at, &self.sizes).ok_or_else(|| missing("border ramp tab", id))?;
+                let index = find(n, id.as_str(), at, &self.sizes)
+                    .ok_or_else(|| missing("border ramp tab", id))?;
                 self.ramp_frames
                     .insert((at, id.clone()), self.frames[index]);
             }

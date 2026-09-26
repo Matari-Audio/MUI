@@ -78,7 +78,8 @@ impl Editor {
                     if size.width < 8. || size.height < 8. {
                         return Err("Size must be at least 8".into());
                     }
-                    if id.starts_with('/') || self.ui.scene().and_then(|s| s.surface(id)).is_none()
+                    if !mui_scene::Id::is_named(id)
+                        || self.ui.scene().and_then(|s| s.surface(id)).is_none()
                     {
                         return Err("Resize requires a named native surface".into());
                     }
@@ -133,23 +134,12 @@ fn decode(v: &Value, mut pointer: PointerInput) -> Result<Input, String> {
         }
         Some("key") => {
             let key = v["key"].as_str().ok_or("Missing key")?;
-            let key = match key {
-                "Enter" => Key::Enter,
-                "Escape" => Key::Escape,
-                "Tab" => Key::Tab,
-                "Backspace" => Key::Backspace,
-                "Delete" => Key::Delete,
-                "ArrowLeft" => Key::Left,
-                "ArrowRight" => Key::Right,
-                "ArrowUp" => Key::Up,
-                "ArrowDown" => Key::Down,
-                "Home" => Key::Home,
-                "End" => Key::End,
-                " " => Key::Space,
-                "PageUp" => Key::PageUp,
-                "PageDown" => Key::PageDown,
-                s if s.chars().count() == 1 => Key::Char(s.chars().next().unwrap()),
-                _ => return Err("Unsupported key".into()),
+            // The W3C key name, except that its space bar is the character " ".
+            let mut chars = key.chars();
+            let key = match (key, chars.next(), chars.next()) {
+                (" ", ..) => Key::Space,
+                (_, Some(c), None) => Key::Char(c),
+                _ => Key::from_name(key).ok_or("Unsupported key")?,
             };
             input.keys.push(KeyPress {
                 key,

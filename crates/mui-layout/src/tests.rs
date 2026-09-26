@@ -115,7 +115,11 @@ fn basis_zero_shares_the_axis_rather_than_the_surplus() {
         row([
             shape(row([block(50., 20.).id("li")]).id("l")),
             block(30., 20.).id("m"),
-            shape(row([block(20., 20.).id("ri")]).id("r").justify(Justify::End)),
+            shape(
+                row([block(20., 20.).id("ri")])
+                    .id("r")
+                    .justify(Justify::End),
+            ),
         ])
         .id("bar")
     };
@@ -176,7 +180,10 @@ fn a_deficit_comes_back_by_shrink_and_stops_at_each_minimum() {
     );
     // `shrink(0.0)` opts out entirely.
     assert_eq!(
-        row(block(100., 20.).id("a").shrink(0.), block(100., 20.).id("b")),
+        row(
+            block(100., 20.).id("a").shrink(0.),
+            block(100., 20.).id("b")
+        ),
         (100., 50.)
     );
 }
@@ -232,7 +239,10 @@ fn align_self_overrides_the_parent_for_one_child() {
 #[test]
 fn containers_stretch_and_content_centres_without_being_told() {
     let l = resolve(
-        &col([block(20., 10.).id("label"), row([block(10., 10.)]).id("bar")]),
+        &col([
+            block(20., 10.).id("label"),
+            row([block(10., 10.)]).id("bar"),
+        ]),
         Some(Size::new(100., 20.)),
         Limits::default(),
     )
@@ -572,12 +582,7 @@ fn a_grid_cell_never_outgrows_its_column() {
 
 #[test]
 fn a_float_is_pulled_back_inside_a_thin_window() {
-    let menu = || {
-        block(120., 40.)
-            .float()
-            .at(200., 120.)
-            .id("menu")
-    };
+    let menu = || block(120., 40.).float().at(200., 120.).id("menu");
     let t = col([block(10., 10.)]).push(menu()).id("root");
     let l = resolve(&t, Some(Size::new(240., 300.)), Limits::default()).unwrap();
     let f = l.frame("menu").unwrap();
@@ -651,10 +656,12 @@ fn the_gallery_grid_reflows_from_240_to_2000_without_leaving_the_window() {
     // min_col grid, resolved at the three window shapes a plugin editor is
     // actually dragged to.
     let tree = || {
-        col([grid(3, (0..6).map(|i| block(90., 54.).id(format!("c{i}"))))
-            .gap(10.)
-            .min_col(120.)
-            .id("grid")])
+        col(
+            [grid(3, (0..6).map(|i| block(90., 54.).id(format!("c{i}"))))
+                .gap(10.)
+                .min_col(120.)
+                .id("grid")],
+        )
         .pad(16.)
     };
     let cols = |w: f64, h: f64| {
@@ -1025,10 +1032,12 @@ fn min_col_widens_a_hugging_grid_instead_of_squeezing_its_columns() {
     // declared columns at the width of their narrowest content and ignore the
     // minimum entirely. Hugging is not a licence to go under a declared floor.
     let modal = |min: f64| {
-        col([grid(2, (0..4).map(|i| block(90., 40.).id(format!("c{i}"))))
-            .gap(10.)
-            .min_col(min)
-            .id("grid")])
+        col(
+            [grid(2, (0..4).map(|i| block(90., 40.).id(format!("c{i}"))))
+                .gap(10.)
+                .min_col(min)
+                .id("grid")],
+        )
         .pad(12.)
         .id("modal")
     };

@@ -3,7 +3,11 @@ use mui_scene::prelude::*;
 
 #[test]
 fn overlapping_siblings_do_not_become_each_others_children() {
-    let tree = stack![block(100.0, 100.0).id("back"), block(20.0, 20.0).id("front"),].id("root");
+    let tree = stack![
+        block(100.0, 100.0).id("back"),
+        block(20.0, 20.0).id("front"),
+    ]
+    .id("root");
     let scene = resolve(&SceneSpec::new(tree)).unwrap();
     let update = tree_update(&scene, None, 1.0);
     let find = |id: &str| {

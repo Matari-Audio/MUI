@@ -48,9 +48,12 @@ impl ResolvedScene {
         self.external_welds.iter().map(|(k, v)| (k.as_ref(), v))
     }
     fn weld_mut(&mut self, key: &str) -> Result<&mut AnalyticWeld, SceneError> {
-        let w = self.external_welds.get_mut(key).ok_or(SceneError::UnsupportedWeld(
-            "key is not a GPU material weld",
-        ))?;
+        let w = self
+            .external_welds
+            .get_mut(key)
+            .ok_or(SceneError::UnsupportedWeld(
+                "key is not a GPU material weld",
+            ))?;
         Ok(Arc::make_mut(&mut w.material))
     }
     pub fn set_weld_solid_material(

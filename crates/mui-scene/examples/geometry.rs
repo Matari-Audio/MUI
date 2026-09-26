@@ -1,8 +1,8 @@
 //! Warm resolves of an editor-like tree of welded, stroked, shelled panels:
 //! standing still, sliding a pixel per frame, and from cold caches. Prints
 //! the median time and the Boolean passes each frame ran.
+use mui_scene::Resolver;
 use mui_scene::prelude::*;
-use mui_scene::{Resolver};
 use std::time::Instant;
 
 fn panel(i: usize) -> El {

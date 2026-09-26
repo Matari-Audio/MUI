@@ -1,5 +1,5 @@
+use mui_scene::Resolver;
 use mui_scene::prelude::*;
-use mui_scene::{Resolver};
 
 fn font() -> Font {
     Font::new(epaint_default_fonts::HACK_REGULAR).unwrap()

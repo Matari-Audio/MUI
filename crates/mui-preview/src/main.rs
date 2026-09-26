@@ -383,14 +383,8 @@ impl App {
         side.push(switch("light", "light", &mut self.light));
         side.push(switch("frames", "frames", &mut self.frames));
         side.extend(scene.controls(ui));
-        let sidebar = col(side)
-            .gap(S)
-            .pad(M)
-            .width(SIDEBAR)
-            .fill(Role::Surface);
-        let specimen = scene
-            .specimen(ui)
-            .centered_at(self.pan.x, self.pan.y);
+        let sidebar = col(side).gap(S).pad(M).width(SIDEBAR).fill(Role::Surface);
+        let specimen = scene.specimen(ui).centered_at(self.pan.x, self.pan.y);
         // Panning is unbounded by design -- drag the specimen wherever -- so
         // the stage clips it instead; without this it paints over the sidebar,
         // which is drawn first.

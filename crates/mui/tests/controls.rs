@@ -18,7 +18,10 @@ fn face(v: Variant) -> Style {
 #[test]
 fn a_variant_paints_the_role_without_naming_a_second_colour() {
     assert_eq!(face(Variant::Solid).fill, Some(Fill::Role(Role::Primary)));
-    assert_eq!(face(Variant::Soft).fill, Some(Fill::Faded(Role::Primary, 0.18)));
+    assert_eq!(
+        face(Variant::Soft).fill,
+        Some(Fill::Faded(Role::Primary, 0.18))
+    );
     let outline = face(Variant::Outline);
     assert_eq!(outline.fill, Some(Fill::None));
     assert_eq!(

@@ -611,7 +611,7 @@ dependencies = [
 
 [[package]]
 name = "mui"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "mui-geometry",
  "mui-input",
@@ -625,7 +625,7 @@ dependencies = [
 
 [[package]]
 name = "mui-geometry"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "i_overlay",
  "kurbo",
@@ -634,7 +634,7 @@ dependencies = [
 
 [[package]]
 name = "mui-input"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "mui-geometry",
  "rustc-hash 2.1.3",
@@ -642,7 +642,7 @@ dependencies = [
 
 [[package]]
 name = "mui-layout"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "mui-geometry",
  "rustc-hash 2.1.3",
@@ -650,7 +650,7 @@ dependencies = [
 
 [[package]]
 name = "mui-motion"
-version = "0.3.2"
+version = "0.4.0"
 
 [[package]]
 name = "mui-motion-bridge"
@@ -678,7 +678,7 @@ dependencies = [
 
 [[package]]
 name = "mui-scene"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "mui-geometry",
  "mui-layout",
@@ -707,7 +707,7 @@ dependencies = [
 
 [[package]]
 name = "mui-style"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "color",
  "mui-geometry",
@@ -715,7 +715,7 @@ dependencies = [
 
 [[package]]
 name = "mui-text"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "harfrust",
  "mui-geometry",
@@ -727,7 +727,7 @@ dependencies = [
 
 [[package]]
 name = "mui-vello"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "glifo",
  "mui-geometry",
@@ -743,7 +743,7 @@ dependencies = [
 
 [[package]]
 name = "mui-weld"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "rustc-hash 2.1.3",
 ]

@@ -76,7 +76,10 @@ fn ordered_fragments_preserve_late_floats_over_other_parts() {
         ])
         .size(60., 40.)
         .id("panel"),
-        block(90., 8.).fill(Role::Success).offset(0., 15.).id("cable"),
+        block(90., 8.)
+            .fill(Role::Success)
+            .offset(0., 15.)
+            .id("cable"),
     ])
     .size(120., 80.)
     .fill(Role::Background)

@@ -1542,7 +1542,10 @@ pub fn editor() -> El {
     };
     let knob = |i: usize| {
         tile(col![
-            block(40.0, 40.0).pill().fill(Role::Primary).id(format!("k{i}")),
+            block(40.0, 40.0)
+                .pill()
+                .fill(Role::Primary)
+                .id(format!("k{i}")),
             caption(["cut", "res", "drv", "mix"][i]),
         ])
     };
@@ -1602,7 +1605,12 @@ pub fn effects() -> El {
         .pill()
         .fill(Gradient::conic(
             -135.0,
-            [(0.0, Role::Primary), (0.7, Role::Primary), (0.7, Role::Field), (1.0, Role::Field)],
+            [
+                (0.0, Role::Primary),
+                (0.7, Role::Primary),
+                (0.7, Role::Field),
+                (1.0, Role::Field),
+            ],
         ))
         .id("knob");
     let glow = block(96.0, 96.0)
@@ -1651,8 +1659,7 @@ mod tests {
         use mui::vello::vello_cpu::{Pixmap, RenderContext, Resources};
         let (w, h) = (620u16, 160u16);
         let scene =
-            resolve(&SceneSpec::new(effects()).offered(Size::new(w.into(), h.into())))
-                .unwrap();
+            resolve(&SceneSpec::new(effects()).offered(Size::new(w.into(), h.into()))).unwrap();
         let mut ctx = RenderContext::new(w, h);
         let mut res = Resources::default();
         mui::vello::paint(

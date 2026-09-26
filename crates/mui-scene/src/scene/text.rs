@@ -569,13 +569,7 @@ mod tests {
         let word = |t: &str| {
             let mut sp = SceneSpec::new(col([text(t).id("w")]));
             sp.font = Some(font());
-            resolve(&sp)
-                .unwrap()
-                .layout
-                .frame("w")
-                .unwrap()
-                .size
-                .width
+            resolve(&sp).unwrap().layout.frame("w").unwrap().size.width
         };
         // Far narrower than "Record" and "Region" side by side: each label
         // wraps between its words, not inside one, and the row overflows.
