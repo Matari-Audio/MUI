@@ -277,6 +277,11 @@ impl Path {
     /// Chainable construction for hand-drawn geometry: a response curve, a
     /// grid line. `quad_to` is stored as the exact equivalent cubic.
     pub fn move_to(mut self, p: Point) -> Self {
+        // A rounded rectangle, the commonest shape, is ten commands: room
+        // for it at once instead of growing through four and eight.
+        if self.commands.capacity() == 0 {
+            self.commands.reserve_exact(10);
+        }
         self.commands.push(PathCommand::MoveTo(p));
         self
     }
