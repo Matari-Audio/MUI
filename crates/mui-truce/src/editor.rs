@@ -4,10 +4,10 @@ use std::sync::{Arc, Mutex};
 use mui::Ui;
 use mui::scene::El;
 use truce_core::editor::{Editor, PluginContext, RawWindowHandle};
-use truce_gui::platform::{ParentWindow, editor_window_scale};
 use truce_params::Params;
 
 use crate::Bridge;
+use crate::platform::{ParentWindow, editor_window_scale};
 use crate::window::{self, Requests, Shared, View, lock};
 
 type Build<P> = Box<dyn FnMut(&mut Ui, &mut Bridge<P>) -> El + Send>;
@@ -73,7 +73,7 @@ struct Handle(baseview::WindowHandle);
 // SAFETY: `baseview::WindowHandle` wraps a native window pointer and is not
 // auto-`Send`. truce calls `open`, `set_size` and `close` from one GUI
 // thread, never concurrently, so the handle never leaves the thread that
-// made it; `Send` is only what `Box<dyn Editor>` asks for. truce_gui's own
+// made it; `Send` is only what `Box<dyn Editor>` asks for. truce-gui's own
 // `GpuEditor` makes the same argument.
 #[expect(unsafe_code, reason = "vouches Send for the baseview handle alone")]
 unsafe impl Send for Handle {}

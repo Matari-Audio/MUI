@@ -15,8 +15,9 @@ truce-params = "6.3"
 # none of it.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 baseview = { package = "baseview-truce", version = "0.1.1-truce.13" }
-# Only `platform`: truce's parent handle and macOS view anchoring.
-truce-gui = { version = "6.3", default-features = false }
+# Frame skipping and macOS view anchoring. Not truce-gui: it links wgpu 29
+# unconditionally; the rest of what we used from it lives in `platform.rs`.
+truce-gui-utils = "6.3"
 keyboard-types = { version = "0.7", default-features = false }
 # baseview's parent handle is raw-window-handle 0.5.
 raw-window-handle = "0.5"

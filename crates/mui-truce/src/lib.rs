@@ -12,6 +12,8 @@ pub use bridge::Bridge;
 #[cfg(not(target_arch = "wasm32"))]
 mod editor;
 #[cfg(not(target_arch = "wasm32"))]
+mod platform;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod window;
 #[cfg(not(target_arch = "wasm32"))]
 pub use editor::MuiEditor;

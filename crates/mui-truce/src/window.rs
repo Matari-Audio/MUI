@@ -207,11 +207,11 @@ impl<V: View> Handler<V> {
         // A hidden or detached editor cannot present, and on Windows this is
         // the host's GUI thread: a blocking present there freezes the host.
         let handle = window.raw_window_handle();
-        if truce_gui::platform::should_skip_frame(handle) {
+        if crate::platform::should_skip_frame(handle) {
             return;
         }
         // macOS: keep the child pinned to the parent's top as it resizes.
-        truce_gui::platform::reanchor_to_superview_top(handle);
+        crate::platform::reanchor_to_superview_top(handle);
         let now = Instant::now();
         // Lost between presents: an idle editor would never find out.
         if self
