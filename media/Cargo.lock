@@ -621,6 +621,7 @@ dependencies = [
  "mui-scene",
  "mui-text",
  "mui-vello",
+ "rustc-hash 2.1.3",
  "unicode-segmentation",
 ]
 

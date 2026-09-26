@@ -19,7 +19,7 @@ fn nested_scrollers_yield_and_shorter_content_clamps_the_offset() {
         .unwrap();
     let input = Input {
         pointer: at(10., 10., false),
-        wheel: Point::new(0., 80.),
+        wheel: Vec2::new(0., 80.),
         ..Input::default()
     };
     let frame = ui.frame(tree(true), None, input, 0.016).unwrap();
@@ -67,7 +67,7 @@ fn an_exhausted_inner_scroll_yields_to_its_parent() {
     };
     let input = || Input {
         pointer: at(10., 10., false),
-        wheel: Point::new(0., 100.),
+        wheel: Vec2::new(0., 100.),
         ..Input::default()
     };
     ui.frame(tree(), None, input(), 0.016).unwrap();
@@ -87,7 +87,7 @@ fn the_wheel_scrolls_a_column_and_stops_at_its_end() {
     };
     let wheel = |y: f64| Input {
         pointer: at(10., 10., false),
-        wheel: Point::new(0., y),
+        wheel: Vec2::new(0., y),
         ..Input::default()
     };
     ui.frame(tree(), None, PointerInput::default(), 0.016)
@@ -112,7 +112,7 @@ fn a_non_finite_wheel_delta_is_ignored() {
     };
     let wheel = |y: f64| Input {
         pointer: at(10., 10., false),
-        wheel: Point::new(0., y),
+        wheel: Vec2::new(0., y),
         ..Input::default()
     };
     ui.frame(tree(), None, PointerInput::default(), 0.016)
@@ -137,7 +137,7 @@ fn a_wheel_scroll_glides_onto_its_target() {
     };
     let wheel = Input {
         pointer: at(10., 10., false),
-        wheel: Point::new(0., 60.),
+        wheel: Vec2::new(0., 60.),
         ..Input::default()
     };
     ui.frame(tree(), None, PointerInput::default(), 0.016)
@@ -172,7 +172,7 @@ fn an_unnamed_scroller_scrolls() {
     };
     let wheel = Input {
         pointer: at(10., 10., false),
-        wheel: Point::new(0., 30.),
+        wheel: Vec2::new(0., 30.),
         ..Input::default()
     };
     ui.frame(tree(), None, PointerInput::default(), 0.016)
@@ -208,7 +208,7 @@ fn an_unnamed_scroller_keeps_its_offset_while_a_tip_is_up() {
         .unwrap();
     let wheel = Input {
         pointer: at(120., 20., false),
-        wheel: Point::new(0., 10.),
+        wheel: Vec2::new(0., 10.),
         ..Input::default()
     };
     ui.frame(tree(), win(), wheel, 0.016).unwrap();

@@ -196,10 +196,10 @@ impl Control {
     fn new(ui: &Ui, kind: Kind) -> Self {
         Self {
             look: Look {
-                px: ui.theme.control,
+                px: ui.theme().control,
                 variant: Variant::Solid,
                 role: Role::Primary,
-                palette: ui.theme.palette,
+                palette: ui.theme().palette,
                 text: None,
             },
             size: SpacingToken::M,
@@ -685,7 +685,7 @@ pub fn drag_value(
         let width = ui
             .scene()
             .and_then(|s| s.surface(&id))
-            .map_or(ui.theme.control * 16.0, |s| s.frame.size.width);
+            .map_or(ui.theme().control * 16.0, |s| s.frame.size.width);
         typing = Some((format!("{value}"), width));
     }
     if let Some((mut s, width)) = typing {

@@ -124,7 +124,7 @@ fn main() {
     );
     let mut ui =
         Ui::new(Theme::DEFAULT).font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
-    ui.scale = Some(SCALE);
+    ui.set_scale(Some(SCALE));
     let mut s = State::default();
     // Frames after the change to keep: its first frame, then 50, 120, 250
     // and 600 ms on.

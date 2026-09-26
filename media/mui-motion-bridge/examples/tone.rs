@@ -51,7 +51,7 @@ fn main() -> Result<(), String> {
         Ok(())
     };
     let mut ui = Ui::new(Theme::DEFAULT);
-    ui.font = Some(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
+    ui.set_font(Some(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap()));
     let mut editor = mui_motion_bridge::Editor::new(ui);
     let mut capture = mui_motion_bridge::CaptureStream::default();
     let snapshot = move |_revision: u64, frame: u64, commands: &[Value]| {

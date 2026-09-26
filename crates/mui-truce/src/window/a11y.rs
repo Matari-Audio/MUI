@@ -97,7 +97,7 @@ mod linux {
             if self.asked.swap(false, Ordering::AcqRel) {
                 self.publisher.reset();
             }
-            let (focus, scale) = (ui.focus_key(), ui.scale.unwrap_or(1.0));
+            let (focus, scale) = (ui.focus_key(), ui.scale().unwrap_or(1.0));
             let publisher = &mut self.publisher;
             self.adapter
                 .update_if_active(|| publisher.update(scene, focus, scale));

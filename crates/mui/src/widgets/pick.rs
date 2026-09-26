@@ -94,8 +94,8 @@ pub fn color_picker(
     ui.set_stash(&hex, focused.then_some(text));
     ui.set_stash(&sv, Some((hsv, srgba(*value))));
 
-    let w = ui.theme.control * 48.0;
-    let (sh, bar) = (w * 0.7, ui.theme.control * 4.0);
+    let w = ui.theme().control * 48.0;
+    let (sh, bar) = (w * 0.7, ui.theme().control * 4.0);
     let [r, g, b] = to_rgb([hsv[0], 1.0, 1.0]);
     let pure = Color::srgb(r, g, b);
     let white = Color::srgb(1.0, 1.0, 1.0);

@@ -53,7 +53,7 @@ pub mod prelude {
     };
     pub use crate::{Edit, Frame, Interaction, SemanticAction, Ui};
     pub use mui_input::{
-        Axis, Button, Buttons, FINE_DRAG, Ime, Input, Key, KeyPress, Mods, PointerInput,
+        Axis, Button, Buttons, FINE_DRAG, Ime, Input, Key, KeyPress, Mods, PointerInput, Vec2,
     };
     pub use mui_material::{Capture, Material};
     pub use mui_scene::prelude::{

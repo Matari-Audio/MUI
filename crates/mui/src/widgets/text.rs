@@ -323,7 +323,7 @@ pub fn text_edit(
     let id: Id = id.into();
     let id = id.as_str();
     let multi = opts.newline != Newline::None;
-    let size = ui.theme.text;
+    let size = ui.theme().text;
     let lh = ui.line_height(size);
     let focused = ui.focused(id);
     let n = value.chars().count();
@@ -539,7 +539,7 @@ fn one_line(layers: Layers, room: Option<f64>, value: &str, base: usize) -> (El,
         on,
         lh,
     } = layers;
-    let size = ui.theme.text;
+    let size = ui.theme().text;
     let carets = ui.carets(shown, size);
     let x = |b: usize| caret_at(&carets, b);
     let (lo, hi) = (x(sel.start), x(sel.end));
@@ -603,7 +603,7 @@ fn many_lines(layers: Layers, lines: &[Range<usize>], scroll: f64, view: f64) ->
         on,
         lh,
     } = layers;
-    let size = ui.theme.text;
+    let size = ui.theme().text;
     let first = (scroll / lh).floor().max(0.0) as usize;
     let last = (((scroll + view) / lh).ceil().max(0.0) as usize).min(lines.len());
     let caret_row = row_of(lines, at);

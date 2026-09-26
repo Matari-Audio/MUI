@@ -689,7 +689,7 @@ impl Reel {
         if let Some(f) = &self.font {
             ui = ui.font(f.clone());
         }
-        ui.scale = Some(self.scale);
+        ui.set_scale(Some(self.scale));
         let (lw, lh) = (self.size.width, self.size.height);
         let home = [lw / 2.0, lh / 2.0, 1.0];
         let mut cam = home.map(Spring::at);
@@ -738,7 +738,7 @@ impl Reel {
                             last: first(t0 + secs, sub).max(i * n),
                         });
                         if let Some(dy) = wheel {
-                            input.wheel = Point::new(0.0, *dy);
+                            input.wheel = Vec2::new(0.0, *dy);
                         }
                     }
                     Action::Key(key) => input.keys.push(KeyPress {

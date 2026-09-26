@@ -12,7 +12,7 @@ impl Ui {
     /// whose target is gone ends, scroll offsets clamp to their content,
     /// selections of vanished fields drop, and the wheel lands. Returns
     /// whether an offset moved.
-    pub(super) fn settle(&mut self, scene: &ResolvedScene, wheel: Point) -> bool {
+    pub(super) fn settle(&mut self, scene: &ResolvedScene, wheel: Vec2) -> bool {
         let live = |id: &str| scene.surface(id).is_some_and(|s| !s.disabled);
         if self.interaction.held().is_some_and(|id| !live(id)) {
             self.cancel();
@@ -127,7 +127,7 @@ impl Ui {
 
     /// Send the wheel to the innermost scrollable surface under the pointer.
     /// It lands on the next frame's tree, the same frame late a release is.
-    pub(super) fn wheel(&mut self, scene: &ResolvedScene, wheel: Point) -> bool {
+    pub(super) fn wheel(&mut self, scene: &ResolvedScene, wheel: Vec2) -> bool {
         // A non-finite delta would land in `self.scrolls` for good: `clamp`
         // returns a NaN receiver unchanged, and every later frame would fail
         // validation on the offset.

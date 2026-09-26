@@ -269,7 +269,7 @@ fn a_long_value_scrolls_under_the_clip_instead_of_wrapping() {
     let text = f.scene.surface("/1").expect("value").frame;
     let caret = f.scene.surface("/2").expect("caret").frame;
     assert!(
-        text.size.height < 2. * ui.theme.text,
+        text.size.height < 2. * ui.theme().text,
         "one line, not wrapped: {text:?}"
     );
     assert!(

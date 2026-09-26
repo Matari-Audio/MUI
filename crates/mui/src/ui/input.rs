@@ -137,7 +137,7 @@ impl Ui {
         };
         if !(self.resolved
             && (p.buttons, p.mods) == (self.pointer.buttons, self.pointer.mods)
-            && input.wheel == Point::ZERO
+            && input.wheel == Vec2::ZERO
             && input.keys.is_empty()
             && input.text.is_empty()
             && input.clipboard.is_none()
@@ -150,7 +150,7 @@ impl Ui {
             // What the last frame took in is read by the next tree.
             && self.keys.is_empty()
             && self.typed.is_empty()
-            && self.wheel == Point::ZERO
+            && self.wheel == Vec2::ZERO
             && self.press_at.is_none())
         {
             return false;
@@ -508,7 +508,7 @@ impl Ui {
         }
         keys.extend(self.interaction.held());
         keys.extend(self.focus.as_deref());
-        if self.wheel != Point::ZERO {
+        if self.wheel != Vec2::ZERO {
             keys.extend(self.interaction.hovered());
         }
         let moving = |s: &[Spring]| s.iter().any(|s| !at_rest(s));

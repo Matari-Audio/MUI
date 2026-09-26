@@ -4,7 +4,7 @@ mod wake;
 use crate::SemanticAction;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use mui_geometry::Point;
+use mui_geometry::{Point, Vec2};
 use mui_input::{
     Button, Buttons, FINE_DRAG, Hit, Ime, Input, Interaction as Pointer, Key, KeyPress,
     PointerInput, Response,
@@ -113,17 +113,15 @@ pub enum Edit {
 /// Retained state for an immediate tree. Build the tree every frame; the
 /// runtime remembers what is hovered, held, and mid-animation.
 pub struct Ui {
-    pub theme: Theme,
-    pub font: Option<Font>,
+    theme: Theme,
+    font: Option<Font>,
     /// Optional faces tried per grapheme after [`Self::font`].
-    pub fallback_fonts: Vec<Font>,
-    /// The window's device pixels per logical unit. Set it and every painted
-    /// edge lands on a device pixel; `None` paints on layout's raw f64.
-    pub scale: Option<f64>,
-    pub weld_backend: mui_scene::WeldBackend,
-    /// Seconds between two presses on one target that still make a double
-    /// click. [`DOUBLE_CLICK`] unless the host matches a platform setting.
-    pub double_click: f64,
+    fallback_fonts: Vec<Font>,
+    /// See [`Ui::set_scale`].
+    scale: Option<f64>,
+    weld_backend: mui_scene::WeldBackend,
+    /// See [`Ui::set_double_click`].
+    double_click: f64,
     interaction: Pointer,
     actions: Vec<SemanticAction>,
     hit: Hit,
@@ -161,7 +159,7 @@ pub struct Ui {
     double: Option<String>,
     last_press: Option<(String, f64)>,
     /// This frame's wheel, for [`Response::wheel`].
-    wheel: Point,
+    wheel: Vec2,
     /// Where a button went down this frame, on a target or on nothing, for
     /// [`Ui::clicked_outside`].
     press_at: Option<Point>,
@@ -269,7 +267,7 @@ impl Ui {
             drag: None,
             double: None,
             double_click: DOUBLE_CLICK,
-            wheel: Point::ZERO,
+            wheel: Vec2::ZERO,
             press_at: None,
             last_press: None,
             focus: None,
@@ -295,6 +293,41 @@ impl Ui {
             building: Vec::new(),
             read: Vec::new(),
         }
+    }
+    /// The theme every frame resolves with.
+    pub fn theme(&self) -> &Theme {
+        &self.theme
+    }
+    /// Resolve the next frame with `theme`: a light/dark switch, a new
+    /// control size.
+    pub fn set_theme(&mut self, theme: Theme) {
+        self.theme = theme;
+    }
+    /// Swap the primary font after construction; `None` measures with the
+    /// 0.6em guess. [`Ui::font`] is the builder form.
+    pub fn set_font(&mut self, font: Option<Font>) {
+        self.font = font;
+    }
+    /// The window's device pixels per logical unit, if the host set one.
+    pub fn scale(&self) -> Option<f64> {
+        self.scale
+    }
+    /// Set the device pixels per logical unit, and every painted edge lands
+    /// on a device pixel; `None` paints on layout's raw f64.
+    ///
+    /// ```
+    /// # use mui::prelude::*;
+    /// let mut ui = Ui::new(Theme::DEFAULT);
+    /// ui.set_scale(Some(2.0));
+    /// assert_eq!(ui.scale(), Some(2.0));
+    /// ```
+    pub fn set_scale(&mut self, scale: Option<f64>) {
+        self.scale = scale;
+    }
+    /// Seconds between two presses on one target that still make a double
+    /// click: [`DOUBLE_CLICK`] unless the host matches a platform setting.
+    pub fn set_double_click(&mut self, seconds: f64) {
+        self.double_click = seconds;
     }
     /// Read and write the host's clipboard through `board`: copy, cut and
     /// paste in a text field then need nothing from the host. See
@@ -453,7 +486,7 @@ impl Ui {
             .keys(id)
             .iter()
             .any(|k| matches!(k.key, Key::Enter | Key::Space));
-        if self.wheel != Point::ZERO
+        if self.wheel != Vec2::ZERO
             && let (Some(p), Some(s)) = (
                 self.pointer.pos,
                 self.scene.as_ref().and_then(|s| s.surface(id)),
@@ -707,7 +740,7 @@ impl Ui {
         self.wheel = if wheel.x.is_finite() && wheel.y.is_finite() {
             wheel
         } else {
-            Point::ZERO
+            Vec2::ZERO
         };
         // A paste key with no text handed in reads the host's clipboard, if
         // it gave one: nothing here reads it speculatively.

@@ -130,7 +130,7 @@ fn decode(v: &Value, mut pointer: PointerInput) -> Result<Input, String> {
                 .set(Button::Middle, buttons & 4 != 0);
         }
         Some("wheel") => {
-            input.wheel = Point::new(number(v, "dx", 10000.)?, number(v, "dy", 10000.)?);
+            input.wheel = Vec2::new(number(v, "dx", 10000.)?, number(v, "dy", 10000.)?);
         }
         Some("key") => {
             let key = v["key"].as_str().ok_or("Missing key")?;

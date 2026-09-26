@@ -100,7 +100,7 @@ impl Lab {
         }
         let mut layout_work = mui::layout::LayoutStats::default();
         if self.dirty {
-            self.ui.scale = Some(scale);
+            self.ui.set_scale(Some(scale));
             let root = self.tree();
             if let Err(e) = self.ui.frame(
                 root,

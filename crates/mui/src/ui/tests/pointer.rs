@@ -22,7 +22,7 @@ fn a_move_is_inert_only_on_the_same_target_away_from_raw_pointer_readers() {
     assert!(!ui.inert(&at(60., 10., false).into()), "a new target");
     assert!(!ui.inert(&at(20., 20., true).into()), "a button");
     let wheel = Input {
-        wheel: Point::new(0., 1.),
+        wheel: Vec2::new(0., 1.),
         ..at(20., 20., false).into()
     };
     assert!(!ui.inert(&wheel), "the wheel");

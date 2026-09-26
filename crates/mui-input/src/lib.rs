@@ -588,7 +588,7 @@ pub enum Ime {
 pub struct Input {
     pub pointer: PointerInput,
     /// Scroll delta in scene units, positive right and down.
-    pub wheel: Point,
+    pub wheel: Vec2,
     pub keys: Vec<KeyPress>,
     /// Composed text this frame -- not derivable from `keys`, which is why
     /// both exist.
@@ -652,7 +652,7 @@ pub struct Response {
     /// the pointer is inside this target's frame. Zero otherwise, so a zoom
     /// may add it unconditionally. Filled in by the runtime, like
     /// [`Response::double_clicked`].
-    pub wheel: Point,
+    pub wheel: Vec2,
     /// Enter or Space reached this target while it held the keyboard focus:
     /// the keyboard's click. Filled in by the runtime.
     pub key_activated: bool,
@@ -967,7 +967,7 @@ impl Interaction {
                 _ => Vec2::ZERO,
             },
             double_clicked: false,
-            wheel: Point::ZERO,
+            wheel: Vec2::ZERO,
             key_activated: false,
         }
     }

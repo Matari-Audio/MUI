@@ -18,7 +18,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use accesskit_winit::{Adapter, Event as AccessEvent, WindowEvent as AccessWindowEvent};
 use host::Gpu;
-use mui::geometry::Point;
+use mui::geometry::{Point, Vec2};
 use mui::prelude::*;
 use mui::vello::Canvas as _;
 use mui::vello::kurbo::{Affine, Rect, Shape as _, Stroke};
@@ -210,7 +210,7 @@ struct App {
     pointer: PointerInput,
     /// Everything non-pointer collected since the last frame: it rides on the
     /// last pointer sample of the batch.
-    wheel: Point,
+    wheel: Vec2,
     keys: Vec<KeyPress>,
     text: String,
     ime: Vec<Ime>,
@@ -271,7 +271,7 @@ impl App {
             counted_at: Instant::now(),
             events: Vec::new(),
             pointer: PointerInput::default(),
-            wheel: Point::new(0.0, 0.0),
+            wheel: Vec2::new(0.0, 0.0),
             keys: Vec::new(),
             text: String::new(),
             ime: Vec::new(),
@@ -328,7 +328,7 @@ impl App {
         // A theme file, once one has parsed, replaces the compiled-in skin
         // wholesale; the mode is still the sidebar's to say.
         let theme = self.theme.unwrap_or(skin::SKIN);
-        ui.theme = Theme {
+        ui.set_theme(Theme {
             palette: match self.theme {
                 Some(t) => t
                     .palette
@@ -336,7 +336,7 @@ impl App {
                 None => skin::skin(self.light),
             },
             ..theme
-        };
+        });
         if let Some(c) = self.typed.take() {
             self.scenes[self.selected].key(c);
         }
@@ -409,7 +409,7 @@ impl App {
         let dt = now.duration_since(self.last).as_secs_f64();
         self.last = now;
         input.clipboard = Some(self.clipboard.clone());
-        self.ui.scale = Some(scale);
+        self.ui.set_scale(Some(scale));
         let root = self.tree(w, h);
         let (animating, cursor) = match self.ui.frame(root, Some(Size::new(w, h)), input, dt) {
             // Destructured first: `f` borrows `self.ui`, and handing the
@@ -547,7 +547,7 @@ impl App {
         let (Some(a), Some(scene)) = (&mut self.access, self.ui.scene()) else {
             return;
         };
-        let (focus, scale) = (self.ui.focus_key(), self.ui.scale.unwrap_or(1.0));
+        let (focus, scale) = (self.ui.focus_key(), self.ui.scale().unwrap_or(1.0));
         let published = &mut self.published;
         a.update_if_active(|| published.update(scene, focus, scale));
     }
@@ -585,9 +585,9 @@ impl App {
                 canvas.set_transform(xf * Affine::translate((s.frame.x, s.frame.y)));
                 canvas.set_paint(
                     self.ui
-                        .theme
+                        .theme()
                         .palette
-                        .on(self.ui.theme.palette.raised())
+                        .on(self.ui.theme().palette.raised())
                         .to_srgb()
                         .into(),
                 );
@@ -602,7 +602,7 @@ impl App {
                     canvas,
                     scene,
                     xf,
-                    &self.ui.theme.palette,
+                    &self.ui.theme().palette,
                     &self.font,
                     pointer,
                     height,
@@ -777,7 +777,7 @@ impl ApplicationHandler<AccessEvent> for App {
                     }
                     MouseScrollDelta::PixelDelta(p) => Point::new(-p.x, -p.y),
                 };
-                self.wheel = Point::new(self.wheel.x + d.x, self.wheel.y + d.y);
+                self.wheel = Vec2::new(self.wheel.x + d.x, self.wheel.y + d.y);
             }
             WindowEvent::KeyboardInput { ref event, .. } if event.state.is_pressed() => {
                 let mods = self.mods;
@@ -1035,7 +1035,7 @@ mod tests {
             1.0,
             Input {
                 pointer: at(c.x, c.y, false),
-                wheel: Point::new(0.0, 120.0),
+                wheel: Vec2::new(0.0, 120.0),
                 ..Input::default()
             },
         );

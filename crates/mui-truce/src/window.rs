@@ -23,7 +23,9 @@ use baseview::{
 };
 use keyboard_types::{Key as HostKey, KeyState, Modifiers};
 use mui::Ui;
-use mui::prelude::{Button, Cursor, El, Input, Key, KeyPress, Mods, Point, PointerInput, Size};
+use mui::prelude::{
+    Button, Cursor, El, Input, Key, KeyPress, Mods, Point, PointerInput, Size, Vec2,
+};
 use mui::vello::host::{Frame, Host, target_size};
 use mui::vello::kurbo::Affine;
 use raw_window_handle::HasRawWindowHandle;
@@ -395,8 +397,8 @@ impl Driver {
         dt: f64,
         now: Instant,
     ) -> Result<(), ()> {
-        s.ui.scale = Some(self.scale);
-        self.line = s.ui.theme.text;
+        s.ui.set_scale(Some(self.scale));
+        self.line = s.ui.theme().text;
         let root = s.view.build(&mut s.ui);
         let offered = logical_size(self.size, self.scale);
         match s.ui.frame(root, Some(offered), input, dt) {
@@ -553,7 +555,7 @@ impl Driver {
                     }
                     baseview::ScrollDelta::Pixels { x, y } => (f64::from(x), f64::from(y)),
                 };
-                input.wheel = Point::new(x, -y);
+                input.wheel = Vec2::new(x, -y);
                 self.pointer.mods = mods(modifiers);
             }
             MouseEvent::CursorLeft | MouseEvent::DragLeft => self.pointer.pos = None,
