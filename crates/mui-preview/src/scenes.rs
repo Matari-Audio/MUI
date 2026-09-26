@@ -39,6 +39,7 @@ pub fn all() -> Vec<Box<dyn PreviewScene>> {
         Box::new(Scrolling::default()),
         Box::new(Fields::default()),
         Box::new(Picker::default()),
+        Box::new(OklchScene::default()),
         Box::new(Tips),
         Box::new(Curve::default()),
         Box::new(CurveEditor::default()),
@@ -500,6 +501,22 @@ impl Default for Picker {
         }
     }
 }
+#[derive(Default)]
+pub struct OklchScene {
+    picker: OklchPicker,
+}
+impl PreviewScene for OklchScene {
+    fn name(&self) -> &'static str {
+        "OKLCH picker"
+    }
+    fn about(&self) -> &'static str {
+        "Four layouts, four formats, one OKLCH color."
+    }
+    fn specimen(&mut self, ui: &mut Ui) -> El {
+        oklch_picker(ui, "oklch", &mut self.picker).el
+    }
+}
+
 impl PreviewScene for Picker {
     fn name(&self) -> &'static str {
         "Picker"

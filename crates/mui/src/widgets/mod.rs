@@ -5,7 +5,7 @@
 //! by `&mut`, then its range or options. Every one returns a [`Response`]:
 //! the element and what happened last frame -- `changed: bool` for
 //! [`button`] (clicked), [`toggle`], [`slider`], [`knob`], [`drag_value`],
-//! [`text_input`] and [`color_picker`], [`TextEdit`] for [`text_edit`], and
+//! [`text_input`], [`color_picker`] and [`oklch_picker`], [`TextEdit`] for [`text_edit`], and
 //! `Option<edit>` for [`curve`] and [`bins`], whose edit says which part
 //! moved. A control's `el` is a [`Control`], finished with its look
 //! (`.variant`, `.size`, `.role`) or dropped straight into a `row![..]`.
@@ -119,6 +119,7 @@ impl<C, E: IntoEl> Response<C, E> {
 }
 
 mod bins;
+mod color_picker;
 mod controls;
 mod curve;
 mod grapheme;
@@ -128,6 +129,7 @@ mod text;
 pub mod visualization;
 
 pub use bins::{BinAxis, BinEdit, Bins, bins, bins_hover};
+pub use color_picker::{ColorFormat, OklchPicker, PickerShape, oklch_picker};
 pub(crate) use controls::step;
 pub use controls::{Control, Variant, button, drag_value, knob, slider, stepped, toggle};
 pub use curve::{CurveEdit, curve};
