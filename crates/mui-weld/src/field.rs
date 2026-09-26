@@ -117,30 +117,29 @@ impl Geometry {
                 Point::new(q.x.max(0.0), q.y.max(0.0)).length() + q.x.max(q.y).min(0.0) - r
             }
             Self::Contours(rings) => {
-                let (mut distance, mut winding) = (f64::INFINITY, 0i64);
+                // Branch-free over edges so it vectorises: squared distances,
+                // one sqrt at the end (sqrt is monotone, so bit-identical).
+                let (mut d2, mut winding) = (f64::INFINITY, 0i64);
                 for ring in rings {
-                    for (a, b) in ring
-                        .iter()
-                        .zip(ring.iter().cycle().skip(1))
-                        .take(ring.len())
-                    {
-                        let v = *b - *a;
+                    let Some(&last) = ring.last() else { continue };
+                    let mut a = last;
+                    for &b in ring {
+                        let v = b - a;
                         let len = v.dot(v);
                         let t = if len > 0.0 {
-                            ((p - *a).dot(v) / len).clamp(0.0, 1.0)
+                            ((p - a).dot(v) / len).clamp(0.0, 1.0)
                         } else {
                             0.0
                         };
-                        distance = distance.min((p - (*a + v * t)).length());
-                        let cross = v.cross(p - *a);
-                        if a.y <= p.y && b.y > p.y && cross > 0.0 {
-                            winding += 1;
-                        }
-                        if a.y > p.y && b.y <= p.y && cross < 0.0 {
-                            winding -= 1;
-                        }
+                        let e = p - (a + v * t);
+                        d2 = d2.min(e.dot(e));
+                        let cross = v.cross(p - a);
+                        winding += i64::from((a.y <= p.y) & (b.y > p.y) & (cross > 0.0))
+                            - i64::from((a.y > p.y) & (b.y <= p.y) & (cross < 0.0));
+                        a = b;
                     }
                 }
+                let distance = d2.sqrt();
                 if winding == 0 { distance } else { -distance }
             }
         }

@@ -6,6 +6,18 @@ caches and shims, the scene and runtime split, `mui-widgets` folded into
 `mui`). Every number is a median. No row is a sum of per-phase medians and
 there is no FPS column (see `docs/rendering-investigation.md`).
 
+## mui-weld CPU bake (2026-09-26)
+
+`cargo run -p mui-weld --profile perf --example bake_timing`, median of 15, 16
+threads, load average ~20 (other builders). Row-parallel bake, distance-only
+lattice pass, one sqrt per contour/boundary query. Output checksums unchanged.
+
+| weld (2x scale) | before | after | after, 1 core |
+|---|---:|---:|---:|
+| blend, 2 rects, 468x260 | 48.0 ms | 6.0 ms | 34.5 ms |
+| crisp, 3 rects, 516x196 | 193.4 ms | 21.0 ms | 163.4 ms |
+| blend, rect + 40-gon, 488x308 | 133.1 ms | 10.6 ms | 62.7 ms |
+
 ## Since `780c3f4`: render-perf, scene-copies, interaction-access, daw-host
 
 Base `780c3f4` against the merge of the four branches, run alternately

@@ -356,12 +356,14 @@ impl Boundary {
         let mut d = f64::INFINITY;
         for e in &self.edges {
             let q = e.closest(p);
-            let n = (q - p).length();
+            let n = (q - p).dot(q - p);
             if n < d {
                 d = n;
                 closest = q;
             }
         }
+        // Squared compare, one sqrt: the same distance (sqrt is monotone).
+        d = d.sqrt();
         if self.plates.iter().any(|s| s.distance(p) <= 0.0) {
             d = -d;
         }

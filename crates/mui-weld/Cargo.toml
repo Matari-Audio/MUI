@@ -7,6 +7,7 @@ license.workspace = true
 description = "Bounded, renderer-independent distance-field material welding for MUI"
 
 [dependencies]
+rustc-hash.workspace = true
 
 [lints]
 workspace = true

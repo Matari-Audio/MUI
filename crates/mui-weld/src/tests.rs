@@ -240,6 +240,35 @@ fn cache_reuses_pixels_and_invalidates_material_changes() {
     assert_eq!(c.stats(), (1, 2));
 }
 #[test]
+fn many_live_bakes_all_stay_cached() {
+    // The old 32-entry cap rebuilt all 40 of these every frame.
+    let mut c = WeldCache::default();
+    let at = |i: usize| {
+        let mut r = request();
+        r.sources[1] = source(26.0 + i as f64, blue(), 4.0);
+        r
+    };
+    for _ in 0..3 {
+        for i in 0..40 {
+            c.get(&at(i)).unwrap();
+        }
+    }
+    assert_eq!(c.stats(), (80, 40), "a warm frame rebuilt");
+}
+#[test]
+fn a_hash_collision_is_a_miss_not_the_wrong_bake() {
+    let a = request();
+    let mut b = request();
+    b.sources[0].width += 1e-6; // same quantised key, different request
+    assert_eq!(a.key(), b.key());
+    let mut c = WeldCache::default();
+    let (x, y) = (c.get(&a).unwrap(), c.get(&b).unwrap());
+    assert!(!Arc::ptr_eq(&x, &y));
+    assert!(Arc::ptr_eq(&x, &c.get(&a).unwrap()));
+    assert!(Arc::ptr_eq(&y, &c.get(&b).unwrap()));
+    assert_eq!(c.stats(), (2, 2));
+}
+#[test]
 fn tiny_cache_never_retains_an_oversize_bake() {
     let mut c = WeldCache::with_limit(1);
     let _ = c.get(&request()).unwrap();

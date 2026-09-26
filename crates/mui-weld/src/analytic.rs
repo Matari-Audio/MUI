@@ -139,6 +139,21 @@ impl AnalyticSource {
     }
 }
 
+/// Cache key over exactly what `AnalyticWeld::same_geometry` compares.
+pub(crate) fn geometry_key(sources: &[AnalyticSource], weld: Weld, scale: f64) -> u64 {
+    crate::cache::quantised_hash(
+        [scale, weld.reach]
+            .into_iter()
+            .chain(sources.iter().flat_map(|s| {
+                s.center
+                    .into_iter()
+                    .chain(s.half)
+                    .chain(s.rotation)
+                    .chain([s.radius])
+            })),
+    )
+}
+
 /// A validated local-space material surface. Fields are private so an update
 /// cannot inject NaN, increase reach beyond the cached domain, or overrun the ABI.
 #[derive(Clone, Debug, PartialEq)]

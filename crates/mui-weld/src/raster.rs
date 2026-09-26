@@ -1,4 +1,4 @@
-use crate::field::{field, pixel_prepared};
+use crate::field::{distances, pixel_prepared, smooth_min};
 use crate::{Error, Point, Rect, Request};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -94,12 +94,16 @@ pub fn bake(request: &Request) -> Result<Baked, Error> {
         return Err(Error::Budget);
     }
     let bounds = Rect::new(x0, y0, x0 + w as f64 * px, y0 + h as f64 * px);
+    let n = request.sources.len();
+    let k = 2.0 * request.weld.reach * request.weld.amount();
     let mut values = vec![0.0; vertices];
-    for y in 0..=h {
-        for x in 0..=w {
-            let p = Point::new(x0 + x as f64 * px, y0 + y as f64 * px);
+    rows(&mut values, w + 1, |y, row| {
+        let py = y0 + y as f64 * px;
+        for (x, v) in row.iter_mut().enumerate() {
+            let p = Point::new(x0 + x as f64 * px, py);
+            // Distance only: the lattice never reads the material weights.
             let d = boundary.as_ref().map_or_else(
-                || field(&request.sources, p, request.weld).distance,
+                || smooth_min(&distances(&request.sources, p)[..n], k).0,
                 |b| b.sample(p).distance,
             );
             if !d.is_finite() {
@@ -107,19 +111,20 @@ pub fn bake(request: &Request) -> Result<Baked, Error> {
             }
             // Symbolic outside perturbation at exact zeros gives each lattice edge
             // a distinct crossing key. No equality-dependent saddle cracks.
-            values[y * (w + 1) + x] = if d == 0.0 { px * 1e-10 } else { d };
+            *v = if d == 0.0 { px * 1e-10 } else { d };
         }
-    }
+        Ok(())
+    })?;
     let contours = contours(&values, w, h, bounds)?;
     let mut rgba = vec![0u8; pixels.checked_mul(4).ok_or(Error::Budget)?];
-    for y in 0..h {
-        for x in 0..w {
-            let p = Point::new(x0 + (x as f64 + 0.5) * px, y0 + (y as f64 + 0.5) * px);
-            let c =
-                pixel_prepared(&request.sources, p, request.weld, px, boundary.as_ref()).rgba8();
-            rgba[4 * (y * w + x)..4 * (y * w + x) + 4].copy_from_slice(&c);
+    rows(&mut rgba, 4 * w, |y, row| {
+        let py = y0 + (y as f64 + 0.5) * px;
+        for (x, out) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+            let p = Point::new(x0 + (x as f64 + 0.5) * px, py);
+            *out = pixel_prepared(&request.sources, p, request.weld, px, boundary.as_ref()).rgba8();
         }
-    }
+        Ok(())
+    })?;
     Ok(Baked {
         bounds,
         width: w as u32,
@@ -127,6 +132,48 @@ pub fn bake(request: &Request) -> Result<Baked, Error> {
         rgba: Arc::from(rgba),
         contours,
     })
+}
+
+/// Fill `out` one row of `len` items at a time, rows spread over every core.
+/// Workers pull a few rows at a time so the busy middle of a weld balances.
+// ponytail: spawns threads per bake; a persistent pool if many tiny bakes show
+// up in a profile (tiny ones already stay serial).
+fn rows<T: Send>(
+    out: &mut [T],
+    len: usize,
+    f: impl Fn(usize, &mut [T]) -> Result<(), Error> + Sync,
+) -> Result<(), Error> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        const BAND: usize = 4;
+        let threads = std::thread::available_parallelism().map_or(1, usize::from);
+        if threads > 1 && out.len() >= 16 * 1024 {
+            let bands = std::sync::Mutex::new(out.chunks_mut(len * BAND).enumerate());
+            let work = || loop {
+                let next = bands
+                    .lock()
+                    .map_err(|_| Error::Invalid("bake worker"))?
+                    .next();
+                let Some((band, chunk)) = next else {
+                    return Ok(());
+                };
+                for (i, row) in chunk.chunks_mut(len).enumerate() {
+                    f(band * BAND + i, row)?;
+                }
+            };
+            return std::thread::scope(|s| {
+                let workers: Vec<_> = (1..threads).map(|_| s.spawn(work)).collect();
+                let mine = work();
+                workers.into_iter().fold(mine, |r, h| {
+                    let theirs = h.join().unwrap_or_else(|e| std::panic::resume_unwind(e));
+                    r.and(theirs)
+                })
+            });
+        }
+    }
+    out.chunks_mut(len)
+        .enumerate()
+        .try_for_each(|(y, row)| f(y, row))
 }
 
 type Edge = (usize, usize);
