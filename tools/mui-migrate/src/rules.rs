@@ -29,24 +29,28 @@
 //!   -> `<recv>` + `read` (`""`: reads are left for rustc to report); the
 //!   receiver's last segment must be one of `recv`
 //! - `Corner { field, axis, to }`    `.field.axis` -> `.to` where the receiver is
-//!   clearly a `Rect`/`Bounds` (see `rect_receiver`)
-//! - `Retype { field, from, to }`    `field: From::..`, `field = From::..` and
-//!   `field ==/!= From::..` -> `To::..`: a field whose type changed
+//!   a mui `Rect`/`Bounds` by its type in the enclosing fn (see `rect_receiver`);
+//!   an unresolved receiver gets a manual note
+//! - `Retype { field, from, to, on }` `field: From::..`, `field = From::..` and
+//!   `field ==/!= From::..` -> `To::..`: a field whose type changed, where the
+//!   struct literal or the receiver is a mui type named in `on`
+//! - `Flag { name, flag }`           `.payload_mut().name = x` -> `.payload_mut().set(Element::flag, x)`
 //! - `Manual { pattern, note }`      report `file:line: note` wherever the token
 //!   sequence `pattern` appears in a file that uses mui (no rewrite)
 //!
-//! `Gate::Any` applies everywhere; `Gate::Mui` only in files that import a
-//! mui crate; `Gate::MuiChain` additionally needs the receiver to end in
-//! `)` / `]` (a builder chain, not `handle.join()`).
+//! `Gate::Mui` applies only in files that import a mui crate;
+//! `Gate::MuiChain` additionally needs the receiver to be a builder chain (see
+//! `BUILDERS`: not `handle.join()` or `ui.palette().disabled(c)`);
+//! `Gate::Point` needs the receiver to be a mui/kurbo `Point`/`Vec2` by its type.
 //!
 //! Tuple results that became named structs: add a line to `TUPLES`.
 //! Moved crates: add `(old path suffix, new path suffix)` to `CARGO_MOVES`.
 
 #[derive(Clone, Copy, Debug)]
 pub enum Gate {
-    Any,
     Mui,
     MuiChain,
+    Point,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -81,12 +85,13 @@ pub enum Rule {
     Moved { names: &'static [&'static str], from: &'static str, to: &'static str },
     Field { recv: &'static [&'static str], name: &'static str, read: &'static str, write: &'static str },
     Corner { field: &'static str, axis: &'static str, to: &'static str },
-    Retype { field: &'static str, from: &'static str, to: &'static str },
+    Retype { field: &'static str, from: &'static str, to: &'static str, on: &'static [&'static str] },
+    Flag { name: &'static str, flag: &'static str },
     Manual { pattern: &'static str, note: &'static str },
 }
 
 use Arg::{After, Any as A, Has, Is, Not, Shared};
-use Gate::{Any as G, Mui, MuiChain};
+use Gate::{Mui, MuiChain, Point as Pt};
 use Rule::*;
 
 const SS: &str = "Align::Start";
@@ -113,7 +118,7 @@ pub const RULES: &[Rule] = &[
     Type { old: "Kind", new: "A11y" },
     Call { chain: &[("role", &[Has("Kind::")])], to: ".a11y($1)", gate: Mui, needs: &[] },
     Call { chain: &[("role", &[Has("A11y::")])], to: ".a11y($1)", gate: Mui, needs: &[] },
-    Call { chain: &[("label", &[A])], to: ".named($1)", gate: Mui, needs: &[] },
+    Call { chain: &[("label", &[A])], to: ".named($1)", gate: MuiChain, needs: &[] },
     Qualify {
         names: &["Background", "Surface", "Raised", "Field", "Level", "Primary", "Secondary", "Tertiary", "Success", "Warning", "Danger", "Ink", "Dim"],
         prefix: "Role::",
@@ -124,27 +129,27 @@ pub const RULES: &[Rule] = &[
     Call { chain: &[("disabled", &[Is("false")])], to: "", gate: MuiChain, needs: &[] },
     Call { chain: &[("disabled", &[A])], to: ".when($1, Styled::disabled)", gate: MuiChain, needs: &["Styled"] },
     // The overlay scrollbar is on by default, so the switch is `no_scrollbar`.
-    Call { chain: &[("scroll_bar", &[Is("true")])], to: "", gate: G, needs: &[] },
-    Call { chain: &[("scroll_bar", &[Is("false")])], to: ".no_scrollbar()", gate: G, needs: &[] },
-    Call { chain: &[("scroll_bar", &[A])], to: ".when($!1, Styled::no_scrollbar)", gate: G, needs: &["Styled"] },
+    Call { chain: &[("scroll_bar", &[Is("true")])], to: "", gate: Mui, needs: &[] },
+    Call { chain: &[("scroll_bar", &[Is("false")])], to: ".no_scrollbar()", gate: Mui, needs: &[] },
+    Call { chain: &[("scroll_bar", &[A])], to: ".when($!1, Styled::no_scrollbar)", gate: Mui, needs: &["Styled"] },
     // Motion.
     Call { chain: &[("transition", &[A])], to: ".animate_with($1)", gate: Mui, needs: &[] },
-    Method { old: "layout_transition", new: "animate_layout_with", gate: G },
+    Method { old: "layout_transition", new: "animate_layout_with", gate: Mui },
     // Weld and material.
-    Method { old: "weld_with", new: "weld", gate: G },
+    Method { old: "weld_with", new: "weld", gate: Mui },
     // `.weld_morph(p)` / `.weld_quality(q)` kept the weld set before them:
     // once both sides are `.weld(..)`, the second folds into the first.
-    Call { chain: &[("weld", &[A]), ("weld", &[After("Weld::default()")])], to: ".weld($1$2)", gate: G, needs: &[] },
-    Call { chain: &[("weld_shape", &[])], to: ".weld(Weld::shape())", gate: G, needs: &["Weld"] },
-    Call { chain: &[("weld_borders", &[])], to: ".weld(Weld::borders())", gate: G, needs: &["Weld"] },
-    Call { chain: &[("weld_morph", &[A])], to: ".weld(Weld::default().morph($1))", gate: G, needs: &["Weld"] },
-    Call { chain: &[("weld_quality", &[A])], to: ".weld(Weld::default().quality($1))", gate: G, needs: &["Weld"] },
-    Call { chain: &[("without_weld", &[])], to: ".weld(Weld::off())", gate: G, needs: &["Weld"] },
-    Method { old: "exclude_from_weld", new: "unwelded", gate: G },
+    Call { chain: &[("weld", &[A]), ("weld", &[After("Weld::default()")])], to: ".weld($1$2)", gate: Mui, needs: &[] },
+    Call { chain: &[("weld_shape", &[])], to: ".weld(Weld::shape())", gate: Mui, needs: &["Weld"] },
+    Call { chain: &[("weld_borders", &[])], to: ".weld(Weld::borders())", gate: Mui, needs: &["Weld"] },
+    Call { chain: &[("weld_morph", &[A])], to: ".weld(Weld::default().morph($1))", gate: Mui, needs: &["Weld"] },
+    Call { chain: &[("weld_quality", &[A])], to: ".weld(Weld::default().quality($1))", gate: Mui, needs: &["Weld"] },
+    Call { chain: &[("without_weld", &[])], to: ".weld(Weld::off())", gate: Mui, needs: &["Weld"] },
+    Method { old: "exclude_from_weld", new: "unwelded", gate: Mui },
     Manual { pattern: ". gpu_weld", note: "`.gpu_weld(w)` became `.weld(w)`: pick the backend with `SceneSpec::weld_backend(WeldBackend::..)`" },
     Manual { pattern: ". reference_weld", note: "`.reference_weld(w)` became `.weld(w)`: pick the backend with `SceneSpec::weld_backend(WeldBackend::..)`" },
-    Method { old: "gpu_weld", new: "weld", gate: G },
-    Method { old: "reference_weld", new: "weld", gate: G },
+    Method { old: "gpu_weld", new: "weld", gate: Mui },
+    Method { old: "reference_weld", new: "weld", gate: Mui },
     MacroHead { old: "weld_morph", new: "weld", heads: &["Weld::default().morph($1)", "$1.morph($2)"] },
     Call { chain: &[("join", &[])], to: ".segmented()", gate: MuiChain, needs: &[] },
     // Icons.
@@ -160,7 +165,8 @@ pub const RULES: &[Rule] = &[
     Manual { pattern: "resolve_scene_cached", note: "use `Resolver`: `let mut r = Resolver::new(); r.resolve(&spec)`, `r.welds` is the weld cache" },
     Manual { pattern: "resolve_scene_animated", note: "use `Resolver`: `r.resolve_animated(&spec, glide, None)`" },
     Manual { pattern: "resolve_scene_retained", note: "use `Resolver`: `r.resolve_animated(&spec, glide, prev)`" },
-    Manual { pattern: ". resolve_animated (", note: "the glide callback's key is `&Id` (was `&str`): an explicit `|key: &str, ..|` becomes `|key: &Id, ..|`, `key.as_str()` where a `&str` is needed" },
+    // `.resolve_animated(..)`'s glide closure: `|key: &str, ..|` is rewritten to
+    // `&Id` in code; a glide passed by name gets a note (see `rewrite::glide`).
     // mui-truce: `Bridge::bind` derives the widget id from the parameter.
     // ponytail: `args` splits the old `|ui, v|` closure at its comma ($4, $5), which is
     // what lets the rule insert `id`; if `args` learns closures, this becomes 4 args.
@@ -174,11 +180,9 @@ pub const RULES: &[Rule] = &[
     Corner { field: "min", axis: "y", to: "y0" },
     Corner { field: "max", axis: "x", to: "x1" },
     Corner { field: "max", axis: "y", to: "y1" },
-    Manual { pattern: ". min . x", note: "`Bounds { min, max }` became kurbo `Rect { x0, y0, x1, y1 }`: `.min.x` -> `.x0`, `.min.y` -> `.y0`, `.min` -> `.origin()`" },
-    Manual { pattern: ". max . x", note: "`Bounds { min, max }` became kurbo `Rect { x0, y0, x1, y1 }`: `.max.x` -> `.x1`, `.max.y` -> `.y1`" },
     Manual { pattern: ". translated (", note: "`Bounds::translated(d)` is `rect + d`; `RoundedRect::translated` takes a `Vec2`" },
-    Method { old: "finite", new: "is_finite", gate: Mui },
-    Method { old: "perpendicular", new: "turn_90", gate: Mui },
+    Method { old: "finite", new: "is_finite", gate: Pt },
+    Method { old: "perpendicular", new: "turn_90", gate: Pt },
     Manual { pattern: ". rotated (", note: "`Point::rotated(a)` is gone: `Vec2::from_angle(a) * r`, or `Affine::rotate(a) * p`" },
     Assoc { ty: "Affine", name: "translation", args: &[A, A], to: "$pathAffine::translate(($1, $2))", bare: "" },
     Assoc { ty: "Affine", name: "scale", args: &[A, A], to: "$pathAffine::scale_non_uniform($1, $2)", bare: "" },
@@ -191,7 +195,7 @@ pub const RULES: &[Rule] = &[
     Call { chain: &[("translate", &[After("Point::new")])], to: ".translate(Vec2::new$1)", gate: Mui, needs: &["Vec2"] },
     Call { chain: &[("translated", &[After("Point::new")])], to: ".translated(Vec2::new$1)", gate: Mui, needs: &["Vec2"] },
     Call { chain: &[("rigid_transform", &[After("Point::new"), A])], to: ".rigid_transform(Vec2::new$1, $2)", gate: Mui, needs: &["Vec2"] },
-    Retype { field: "half", from: "Point", to: "Vec2" },
+    Retype { field: "half", from: "Point", to: "Vec2", on: &["Plate"] },
     Manual { pattern: ". rigid_transform (", note: "`Path::rigid_transform` and `Path::translate` take a `Vec2` (`p.to_vec2()`)" },
     Manual { pattern: "drag_delta : Point", note: "`Response::drag_delta` and `drag_total` are `Vec2` (a kurbo `Point` has no `+ Point`)" },
     Manual { pattern: "drag_total : Point", note: "`Response::drag_total` is a `Vec2`" },
@@ -201,21 +205,21 @@ pub const RULES: &[Rule] = &[
     // Element's switches are one `flags` field; a surface's are unchanged, so only
     // reads through `payload()` / `payload_mut()` are flagged.
     Manual { pattern: "payload ( ) . focusable", note: "`Element::focusable` is a flag: `e.has(Element::FOCUSABLE)`" },
-    Manual { pattern: "payload_mut ( ) . focusable", note: "`Element::focusable` is a flag: `e.set(Element::FOCUSABLE, on)`" },
+    Flag { name: "focusable", flag: "FOCUSABLE" },
     Manual { pattern: "payload ( ) . captures_wheel", note: "`Element::captures_wheel` is a flag: `e.has(Element::CAPTURES_WHEEL)`" },
-    Manual { pattern: "payload_mut ( ) . captures_wheel", note: "`Element::captures_wheel` is a flag: `e.set(Element::CAPTURES_WHEEL, on)`" },
+    Flag { name: "captures_wheel", flag: "CAPTURES_WHEEL" },
     Manual { pattern: "payload ( ) . tracks_pointer", note: "`Element::tracks_pointer` is a flag: `e.has(Element::TRACKS_POINTER)`" },
-    Manual { pattern: "payload_mut ( ) . tracks_pointer", note: "`Element::tracks_pointer` is a flag: `e.set(Element::TRACKS_POINTER, on)`" },
+    Flag { name: "tracks_pointer", flag: "TRACKS_POINTER" },
     Manual { pattern: "payload ( ) . disabled", note: "`Element::disabled` is a flag: `e.has(Element::DISABLED)`" },
-    Manual { pattern: "payload_mut ( ) . disabled", note: "`Element::disabled` is a flag: `e.set(Element::DISABLED, on)`" },
+    Flag { name: "disabled", flag: "DISABLED" },
     Manual { pattern: "payload ( ) . baseline", note: "`Element::baseline` is a flag: `e.has(Element::BASELINE)`" },
-    Manual { pattern: "payload_mut ( ) . baseline", note: "`Element::baseline` is a flag: `e.set(Element::BASELINE, on)`" },
+    Flag { name: "baseline", flag: "BASELINE" },
     Manual { pattern: "payload ( ) . segmented", note: "`Element::segmented` is a flag: `e.has(Element::SEGMENTED)`" },
-    Manual { pattern: "payload_mut ( ) . segmented", note: "`Element::segmented` is a flag: `e.set(Element::SEGMENTED, on)`" },
+    Flag { name: "segmented", flag: "SEGMENTED" },
     Manual { pattern: "payload ( ) . weld_excluded", note: "`Element::weld_excluded` is a flag: `e.has(Element::WELD_EXCLUDED)`" },
-    Manual { pattern: "payload_mut ( ) . weld_excluded", note: "`Element::weld_excluded` is a flag: `e.set(Element::WELD_EXCLUDED, on)`" },
+    Flag { name: "weld_excluded", flag: "WELD_EXCLUDED" },
     Manual { pattern: "payload ( ) . scroll_bar_off", note: "`Element::scroll_bar_off` is a flag: `e.has(Element::SCROLL_BAR_OFF)`" },
-    Manual { pattern: "payload_mut ( ) . scroll_bar_off", note: "`Element::scroll_bar_off` is a flag: `e.set(Element::SCROLL_BAR_OFF, on)`" },
+    Flag { name: "scroll_bar_off", flag: "SCROLL_BAR_OFF" },
     Manual { pattern: ". scroll_bar_heat", note: "scrollbar heat is runtime state: `SceneSpec::scroll_bars` holds it by node key" },
     // Capture moved to mui-material (reported, not rewritten, as above). The
     // `Material` / `Capture` methods need no rule: rustc names the trait to import.
@@ -233,7 +237,7 @@ pub const RULES: &[Rule] = &[
     Manual { pattern: "ui . fallback_fonts", note: "`Ui::fallback_fonts` is private: add faces with the `.fallback_font(f)` builder" },
     Manual { pattern: "ui . weld_backend", note: "`Ui::weld_backend` is private: build with `.gpu_welding()`" },
     // The wheel is a delta, not a place.
-    Retype { field: "wheel", from: "Point", to: "Vec2" },
+    Retype { field: "wheel", from: "Point", to: "Vec2", on: &["Input", "PointerInput", "Response"] },
 ];
 
 /// The widget phase of the spec (`Response`, option structs, argument
@@ -276,6 +280,40 @@ pub const TUPLES: &[Tuple] = &[
     widget("curve"),
     widget("drag_value"),
     Tuple { name: "state", method: true, ty: "Interaction", fields: &["hover", "press"] },
+];
+
+/// Methods that build an element (old and new names): a receiver chain made of
+/// these, from a variable or a `CONSTRUCTORS` call, is a builder chain.
+pub const BUILDERS: &[&str] = &[
+    "a11y", "align", "align_self", "anchor", "animate", "animate_layout", "animate_layout_with", "animate_with", "appear", "aspect", "at",
+    "backdrop_blur", "baseline", "basis", "border", "border_align", "border_ramp", "captures_wheel", "centered_at", "clip", "corners",
+    "cursor", "disabled", "dividers", "elevation", "exclude_from_weld", "fill", "flex", "float", "focusable", "gap", "gpu_weld", "grow", "h",
+    "height", "icon_fill", "id", "inset_surface", "inset_surface_of", "insets", "join", "join_border", "justify", "label", "line_gap",
+    "match_height", "match_width", "max_size", "min_col", "min_height", "min_size", "min_width", "named", "no_border", "no_fill",
+    "no_scrollbar", "offset", "opacity", "order", "pad", "pad_xy", "pill", "pin", "placed_at", "preset", "radius", "reference_weld",
+    "reserve", "role", "scale", "scroll", "scrolled", "segmented", "shadow", "shadows", "sharp", "shrink", "size", "square", "sticky",
+    "stroke", "stroke_width", "surface_layout", "tag", "text_axis", "text_size", "text_weight", "tip", "tracks_pointer", "transition",
+    "unwelded", "w", "weld", "weld_borders", "weld_morph", "weld_quality", "weld_shape", "weld_with", "when", "width", "without_weld",
+    "wrap",
+];
+
+/// Free functions and macros (`row![..]`) that make an element.
+pub const CONSTRUCTORS: &[&str] = &[
+    "block", "body", "canvas", "canvas_cached", "canvas_keyed", "caption", "chip", "col", "column", "grid", "icon", "image", "label", "leaf",
+    "overlay", "row", "spacer", "stack", "text", "tile", "title", "weld", "weld_morph",
+];
+
+/// Element types: a variable of one of these starts a builder chain.
+pub const ELEMENT_TYPES: &[&str] = &["El", "Node", "Element"];
+
+/// A bare name that a foreign glob could also supply is left alone, unless
+/// the call has a shape only mui's has: `(name, argument count)`.
+pub const MUI_SHAPES: &[(&str, usize)] = &[("label", 1)];
+
+/// Notes for `MuiChain` calls whose receiver's type is not resolved.
+pub const CHAIN_NOTES: &[(&str, &str)] = &[
+    ("label", "`.label(name)` on an element is `.named(name)` (receiver type not resolved: check it is an `El`)"),
+    ("disabled", "`.disabled(on)` on an element is `.disabled()` / `.when(on, Styled::disabled)` (receiver type not resolved: check it is an `El`)"),
 ];
 
 /// Crate package names that make an import a "mui" import. A dependency

@@ -1,4 +1,4 @@
-//! `mui-migrate [--dry-run] [--diff] [--include-vendored] [--no-docs] [--no-widgets] <paths...>`
+//! `mui-migrate [--dry-run] [--diff] [--include-vendored] [--no-docs] [--no-widgets] [--mui-root <dir>] <paths...>`
 //!
 //! Rewrites Rust sources, their doc examples, Markdown code blocks and
 //! Cargo.toml files to the MUI DSL v2 API.
@@ -15,13 +15,21 @@ mod tests;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: mui-migrate [--dry-run] [--diff] [--include-vendored] [--no-docs] [--no-widgets] <paths...>";
+const USAGE: &str = "usage: mui-migrate [--dry-run] [--diff] [--include-vendored] [--no-docs] [--no-widgets] [--mui-root <dir>] <paths...>";
 
 fn main() -> ExitCode {
     let (mut dry, mut diff, mut vendored, mut paths) = (false, false, false, Vec::new());
-    let (mut docs, mut widgets) = (true, true);
-    for a in std::env::args().skip(1) {
+    let (mut docs, mut widgets, mut mui_root) = (true, true, None);
+    let mut args = std::env::args().skip(1);
+    while let Some(a) = args.next() {
         match a.as_str() {
+            "--mui-root" => match args.next().map(|r| std::fs::canonicalize(&r).unwrap_or(PathBuf::from(r))) {
+                Some(r) => mui_root = Some(r),
+                None => {
+                    eprintln!("--mui-root needs a directory\n{USAGE}");
+                    return ExitCode::from(2);
+                }
+            },
             "--dry-run" | "-n" => dry = true,
             "--diff" => diff = true,
             "--include-vendored" => vendored = true,
@@ -47,15 +55,26 @@ fn main() -> ExitCode {
     for p in &paths {
         walk(p, vendored, docs, &mut files);
     }
-    // Crate aliases (`mui2 = { package = "mui" }`) from every manifest we
-    // walk plus the ancestors of each argument.
+    // Crate aliases (`mui2 = { package = "mui" }`) and v1 path deps from
+    // every manifest we walk plus the ancestors of each argument.
     let mut manifests: Vec<PathBuf> = files.iter().filter(|f| f.ends_with("Cargo.toml")).cloned().collect();
     for p in &paths {
         let abs = std::fs::canonicalize(p).unwrap_or(p.clone());
         manifests.extend(abs.ancestors().map(|a| a.join("Cargo.toml")).filter(|m| m.is_file()));
     }
-    let aliases = manifests.iter().filter_map(|m| std::fs::read_to_string(m).ok()).flat_map(|s| cargo::aliases(&s));
-    let mut ctx = rewrite::Ctx::with_roots(aliases);
+    let (mut v2, mut v1) = (Vec::new(), Vec::new());
+    for m in &manifests {
+        let dir = std::fs::canonicalize(m).ok().and_then(|p| p.parent().map(Path::to_path_buf)).unwrap_or_default();
+        if let Ok(s) = std::fs::read_to_string(m) {
+            let (a, b) = cargo::mui_deps(&s, &dir, mui_root.as_deref());
+            v2.extend(a);
+            v1.extend(b);
+        }
+    }
+    let mut ctx = rewrite::Ctx::with_roots(v2);
+    for k in &v1 {
+        ctx.roots.remove(k);
+    }
     ctx.widgets = widgets;
     let sources: Vec<Option<String>> = files.iter().map(|f| std::fs::read_to_string(f).ok()).collect();
     for (f, src) in files.iter().zip(&sources) {

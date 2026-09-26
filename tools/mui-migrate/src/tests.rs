@@ -92,10 +92,10 @@ fn type_guard() {
 fn methods_and_call_shapes() {
     check(
         &with_prelude(
-            "fn f() {\n    e.label(name).role(Kind::Slider { v })\n        .disabled(false)\n        .disabled(!on)\n        .transition(s)\n        .layout_transition(s)\n        .scroll_bar(false)\n        .scroll_bar(show)\n        .scroll_bar(a && b);\n    ramp.transition(0.3, 0.6);\n    a.role(accent.role());\n    pal.disabled(c);\n}\n",
+            "fn f(e: El) {\n    e.label(name).role(Kind::Slider { v })\n        .disabled(false)\n        .disabled(!on)\n        .transition(s)\n        .layout_transition(s)\n        .scroll_bar(false)\n        .scroll_bar(show)\n        .scroll_bar(a && b);\n    ramp.transition(0.3, 0.6);\n    a.role(accent.role());\n    pal.disabled(c);\n}\n",
         ),
         &with_prelude(
-            "fn f() {\n    e.named(name).a11y(A11y::Slider { v })\n        .when(!on, Styled::disabled)\n        .animate_with(s)\n        .animate_layout_with(s)\n        .no_scrollbar()\n        .when(!show, Styled::no_scrollbar)\n        .when(!(a && b), Styled::no_scrollbar);\n    ramp.transition(0.3, 0.6);\n    a.role(accent.role());\n    pal.disabled(c);\n}\n",
+            "fn f(e: El) {\n    e.named(name).a11y(A11y::Slider { v })\n        .when(!on, Styled::disabled)\n        .animate_with(s)\n        .animate_layout_with(s)\n        .no_scrollbar()\n        .when(!show, Styled::no_scrollbar)\n        .when(!(a && b), Styled::no_scrollbar);\n    ramp.transition(0.3, 0.6);\n    a.role(accent.role());\n    pal.disabled(c);\n}\n",
         ),
     );
 }
@@ -172,9 +172,14 @@ fn manual_warnings() {
 
 #[test]
 fn element_flags() {
-    let src = "use mui::prelude::*;\nfn f(n: &mut El) { let a = n.payload().focusable; n.payload_mut().disabled = true; n.payload_mut().scroll_bar_heat = None; }\n";
+    // Writes through `payload_mut()` become `set`; reads are flagged.
+    let src = "use mui::prelude::*;\nfn f(n: &mut El) { let a = n.payload().focusable; n.payload_mut().disabled = !on; n.payload_mut().scroll_bar_heat = None; let b = n.payload_mut().baseline; }\n";
     let out = run(src);
+    assert_eq!(out.text, "use mui::prelude::*;\nfn f(n: &mut El) { let a = n.payload().focusable; n.payload_mut().set(Element::DISABLED, !on); n.payload_mut().scroll_bar_heat = None; let b = n.payload_mut().baseline; }\n");
     assert_eq!(out.warnings.len(), 3, "{:?}", out.warnings);
+    // Not a payload: `state.disabled = x` is left alone.
+    let other = "use mui::prelude::*;\nfn f(s: &mut S) { s.disabled = true; s.payload.disabled = true; }\n";
+    check(other, other);
 }
 
 #[test]
@@ -362,7 +367,7 @@ fn geometry_moves_and_associated_calls() {
     );
     check(
         "use mui_geometry::Bounds;\nfn f(b: &Bounds, q: Q) -> f64 { b.min.x + b.max.y + p.bounds().min.y + q.min.x }\n",
-        "use mui_geometry::Rect;\nfn f(b: &Rect, q: Q) -> f64 { b.x0 + b.y1 + p.bounds().y0 + q.min.x }\n",
+        "use mui_geometry::Rect;\nfn f(b: &Rect, q: Q) -> f64 { b.x0 + b.y1 + p.bounds().min.y + q.min.x }\n",
     );
 }
 
@@ -373,11 +378,120 @@ fn ui_fields_become_accessors_and_the_wheel_a_vec2() {
         &with_prelude("fn f(ui: &mut Ui) { ui.set_scale(Some(2.0)); let s = self.ui.scale().unwrap_or(1.0); let c = ui.theme().control; ui.set_theme(t); ui.set_font(Some(f)); other.scale = 3.0; }\n"),
     );
     check(
-        &with_prelude("fn f() { let p = PointerInput { wheel: Point::new(0.0, 3.0), ..Default::default() }; if r.wheel != Point::ZERO {} let at: Point = Point::ZERO; }\n"),
-        &with_prelude("fn f() { let p = PointerInput { wheel: Vec2::new(0.0, 3.0), ..Default::default() }; if r.wheel != Vec2::ZERO {} let at: Point = Point::ZERO; }\n"),
+        &with_prelude("fn f() { let p = PointerInput { wheel: Point::new(0.0, 3.0), ..Default::default() }; if r.wheel != Point::ZERO {} let at: Point = Point::ZERO; }\n").replace("f()", "f(r: &Response)"),
+        &with_prelude("fn f(r: &Response) { let p = PointerInput { wheel: Vec2::new(0.0, 3.0), ..Default::default() }; if r.wheel != Vec2::ZERO {} let at: Point = Point::ZERO; }\n"),
     );
     check(
         &with_prelude("fn f() { p.translate(Point::new(1.0, 2.0)); p.rigid_transform(Point::new(x, y), a); r.translated(d); Plate { half: Point::new(w, h) }; }\n"),
         &with_prelude("fn f() { p.translate(Vec2::new(1.0, 2.0)); p.rigid_transform(Vec2::new(x, y), a); r.translated(d); Plate { half: Vec2::new(w, h) }; }\n"),
     );
+}
+
+#[test]
+fn corner_needs_a_mui_rect_in_the_enclosing_fn() {
+    // egui's Rect, in a file that never imports mui: untouched, no note.
+    let egui = "use egui::Rect;\nfn a(r: Rect) -> f32 { r.min.x }\n";
+    let out = run(egui);
+    assert_eq!((out.text.as_str(), out.warnings.len()), (egui, 0));
+    // A mixed file: the egui one stays, the mui one moves.
+    let mixed = "use egui::Rect;\nuse mui2::prelude::El;\nfn a(r: Rect) -> f32 { r.min.x }\nfn b(r: mui2::geometry::Bounds) -> f64 { r.min.x }\n";
+    let out = run(mixed);
+    assert_eq!(out.text, "use egui::Rect;\nuse mui2::prelude::El;\nfn a(r: Rect) -> f32 { r.min.x }\nfn b(r: mui2::geometry::Rect) -> f64 { r.x0 }\n");
+    assert!(out.warnings.is_empty(), "{:?}", out.warnings);
+    // `use mui::Bounds` next to `use egui::Rect`: the rename collides, and says so.
+    let out = run("use egui::Rect;\nuse mui2::geometry::Bounds;\nfn b(r: Bounds) {}\n");
+    assert!(out.text.contains("use mui2::geometry::Rect;"), "{}", out.text);
+    assert!(out.warnings.iter().any(|(_, n)| n.contains("`Bounds` becomes `Rect`")), "{:?}", out.warnings);
+    // Another fn's `b: Bounds` says nothing about this `b`; a closure
+    // parameter or a pattern shadows: notes, not rewrites.
+    let src = with_prelude("fn a(b: Bounds) {}\nfn c(b: Thing) -> f64 { b.min.x }\nfn d(b: Bounds) -> f64 { let f = |b| b.min.x; if let Some(b) = o { b.max.y } else { 0.0 } }\nfn e(s: S) -> f64 { let clip = s.clip.unwrap(); clip.min.y }\n");
+    let out = run(&src);
+    assert_eq!(out.text, src.replace("Bounds", "Rect"));
+    assert_eq!(out.warnings.iter().filter(|(_, n)| n.contains("x0")).count(), 2, "{:?}", out.warnings);
+    // `let r = Bounds::new(..);` and `let r: &Bounds = ..` are known.
+    check(
+        &with_prelude("fn f() -> f64 { let r = Bounds::new(a, b); let s: &Bounds = &r; r.min.x + s.max.y }\n"),
+        &with_prelude("fn f() -> f64 { let r = Rect::new(a, b); let s: &Rect = &r; r.x0 + s.y1 }\n"),
+    );
+}
+
+#[test]
+fn builder_chain_methods() {
+    // `.join()`: a thread handle, `Iterator::join`-like calls and unknown receivers stay.
+    let src = with_prelude("fn f(parts: Vec<String>) {\n    std::thread::spawn(g).join().unwrap();\n    handle.join();\n    parts.iter().join();\n    row![a, b].gap(4.0).join();\n    col([a]).join();\n    mui2::row([a]).fill(Role::Raised).join();\n}\n");
+    assert_eq!(
+        run(&src).text,
+        with_prelude("fn f(parts: Vec<String>) {\n    std::thread::spawn(g).join().unwrap();\n    handle.join();\n    parts.iter().join();\n    row![a, b].gap(4.0).segmented();\n    col([a]).segmented();\n    mui2::row([a]).fill(Role::Raised).segmented();\n}\n")
+    );
+    // `.disabled(..)` on a palette or a non-builder call stays; on an `El` it moves.
+    let src = with_prelude("fn f(ui: &mut Ui, e: El, t: &Theme) {\n    ui.palette().disabled(c);\n    t.colors().disabled(true);\n    e.disabled(true);\n    e.fill(x).disabled(on);\n}\n");
+    assert_eq!(
+        run(&src).text,
+        with_prelude("fn f(ui: &mut Ui, e: El, t: &Theme) {\n    ui.palette().disabled(c);\n    t.colors().disabled(true);\n    e.disabled();\n    e.fill(x).when(on, Styled::disabled);\n}\n")
+    );
+    // egui's `ui.label("x")` in a mixed file stays; an unresolved receiver gets a note.
+    let src = "use mui2::prelude::{El, row};\nfn f(ui: &mut egui::Ui, e: El, x: X) { ui.label(\"x\"); e.label(\"y\"); row([]).label(\"z\"); x.label(\"w\"); }\n";
+    let out = run(src);
+    assert_eq!(out.text, "use mui2::prelude::{El, row};\nfn f(ui: &mut egui::Ui, e: El, x: X) { ui.label(\"x\"); e.named(\"y\"); row([]).named(\"z\"); x.label(\"w\"); }\n");
+    assert_eq!(out.warnings.iter().filter(|(_, n)| n.contains(".named(name)")).count(), 0, "{:?}", out.warnings);
+    let out = run("use mui2::prelude::*;\nfn f() { let x = g(); x.label(\"w\"); }\n");
+    assert_eq!(out.warnings.iter().filter(|(_, n)| n.contains(".named(name)")).count(), 1, "{:?}", out.warnings);
+}
+
+#[test]
+fn any_gated_rules_need_mui() {
+    let src = "fn f() { e.scroll_bar(false).weld_with(w).gpu_weld(w).weld_shape().layout_transition(t); }\n";
+    check(src, src);
+}
+
+#[test]
+fn a_foreign_glob_makes_bare_names_ambiguous() {
+    let src = "use mui2::prelude::*;\nuse crate::helpers::*;\nfn f() -> Kind { label(ui, \"Gain\"); label(\"Gain\"); Kind::A }\n";
+    let out = run(src);
+    assert_eq!(out.text, "use mui2::prelude::*;\nuse crate::helpers::*;\nfn f() -> Kind { label(ui, \"Gain\"); body(\"Gain\"); Kind::A }\n");
+    assert_eq!(out.warnings.iter().filter(|(_, n)| n.contains("another glob")).count(), 2, "{:?}", out.warnings);
+    // `std` globs and a test module's `use super::*` are not foreign.
+    check(
+        "use mui2::prelude::*;\nuse std::f64::consts::*;\nfn f() { label(ui, \"G\"); }\nmod tests {\n    use super::*;\n    fn g() -> Kind { Kind::A }\n}\n",
+        "use mui2::prelude::*;\nuse std::f64::consts::*;\nfn f() { body(ui, \"G\"); }\nmod tests {\n    use super::*;\n    fn g() -> A11y { A11y::A }\n}\n",
+    );
+}
+
+#[test]
+fn retype_needs_a_mui_target() {
+    // Someone else's `half` / `wheel`, and a local variable: untouched.
+    let src = with_prelude("struct MyKnob { half: Point }\nfn f(ev: &Event) { let k = MyKnob { half: Point::new(1.0, 2.0) }; let mut half = Point::ZERO; half = Point::new(0.0, 1.0); if ev.wheel == Point::ZERO {} }\n");
+    check(&src, &src);
+    // mui's, through a struct literal, a typed variable, and `if` branches.
+    check(
+        &with_prelude("fn f(p: &mut Input) { let pl = Plate { center, half: Point::new(w, h) }; let mut input = Input::default(); input.wheel = if n == 1 { Point::new(0.0, 30.0) } else if n == 2 { super::Point::default() } else { Point::ZERO }; p.wheel = Point::ZERO; }\n"),
+        &with_prelude("fn f(p: &mut Input) { let pl = Plate { center, half: Vec2::new(w, h) }; let mut input = Input::default(); input.wheel = if n == 1 { Vec2::new(0.0, 30.0) } else if n == 2 { super::Vec2::default() } else { Vec2::ZERO }; p.wheel = Vec2::ZERO; }\n"),
+    );
+    // An unknown receiver gets a note; an `if` without `else` is not touched.
+    let out = run(&with_prelude("fn f() { self.input.wheel = Point::ZERO; }\n"));
+    assert!(out.warnings.iter().any(|(_, n)| n.contains("`Input::wheel` is a `Vec2`")), "{:?}", out.warnings);
+}
+
+#[test]
+fn state_tuple_only_on_the_ui() {
+    let src = with_prelude("fn f(fsm: &Fsm, ui: &Ui, u: &mut Ui) { let a = fsm.state(k).0; let (x, y) = fsm.state(k); let b = ui.state(&id).0; let c = u.state(&id).1; }\n");
+    assert_eq!(
+        run(&src).text,
+        with_prelude("fn f(fsm: &Fsm, ui: &Ui, u: &mut Ui) { let a = fsm.state(k).0; let (x, y) = fsm.state(k); let b = ui.state(&id).hover; let c = u.state(&id).press; }\n")
+    );
+}
+
+#[test]
+fn point_methods_need_a_point() {
+    let src = with_prelude("fn f(p: Point, v: kurbo::Vec2, s: Sample) -> bool { let q = p.perpendicular(); v.finite() && s.finite() && (p - q).finite() }\n");
+    let out = run(&src);
+    assert_eq!(out.text, with_prelude("fn f(p: Point, v: kurbo::Vec2, s: Sample) -> bool { let q = p.turn_90(); v.is_finite() && s.finite() && (p - q).finite() }\n"));
+    assert_eq!(out.warnings.iter().filter(|(_, n)| n.contains("is_finite")).count(), 1, "{:?}", out.warnings);
+}
+
+#[test]
+fn glide_keys_become_ids() {
+    let out = run(&with_prelude("fn f(r: &mut Resolver) { r.resolve_animated(&spec, &mut |key: &str, e, f| f, None); r.resolve_animated(&spec, &mut glide, None); }\n"));
+    assert_eq!(out.text, with_prelude("fn f(r: &mut Resolver) { r.resolve_animated(&spec, &mut |key: &Id, e, f| f, None); r.resolve_animated(&spec, &mut glide, None); }\n"));
+    assert_eq!(out.warnings.iter().filter(|(_, n)| n.contains("glide passed by name")).count(), 1, "{:?}", out.warnings);
 }

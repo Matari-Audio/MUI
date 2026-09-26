@@ -2,7 +2,7 @@
 //! byte-range edits on the original text, repeat until nothing changes.
 
 use crate::lex::{K, Tok, lex};
-use crate::rules::{Arg, Gate, RULES, Rule, TUPLES, WIDGET_RULES};
+use crate::rules::{Arg, BUILDERS, CHAIN_NOTES, CONSTRUCTORS, ELEMENT_TYPES, Gate, MUI_SHAPES, RULES, Rule, TUPLES, WIDGET_RULES};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -117,6 +117,11 @@ impl Ctx {
             m = self.file_for(&module_dir(&m).join(seg))?;
         }
         Some(m)
+    }
+
+    /// Whether the indexed `file` has a glob import (so it may re-export anything).
+    fn has_glob(&self, file: &Path) -> bool {
+        self.summaries.get(file).is_none_or(|s| s.entries.iter().any(|(_, l)| l.is_none()))
     }
 
     fn file_for(&self, dir: &Path) -> Option<PathBuf> {
@@ -248,6 +253,8 @@ struct UseEntry {
     start: usize,
     end: usize,
     in_brace: bool,
+    /// The `use` sits inside a block (`mod tests { use super::*; }`).
+    nested: bool,
     /// For a top-level entry: the `use` item's first token and its `;`.
     item: (usize, usize),
 }
@@ -273,6 +280,13 @@ pub(crate) struct File<'a> {
     locals: HashMap<String, bool>,
     mui_glob: bool,
     foreign_glob: bool,
+    /// A glob import from a crate or module this tool cannot see into
+    /// (`use egui::*`): it may supply any bare name.
+    opaque_glob: bool,
+    /// `(params open, body open)` of every `fn` with a body.
+    fns: Vec<(usize, usize)>,
+    /// Whether the `use` being parsed is inside a block.
+    nested: bool,
     /// Modules glob-imported with a relative path (`use super::*`).
     glob_mods: Vec<PathBuf>,
     /// Token ranges of `use` items.
@@ -298,6 +312,9 @@ impl<'a> File<'a> {
             locals: HashMap::new(),
             mui_glob: false,
             foreign_glob: false,
+            opaque_glob: false,
+            fns: Vec::new(),
+            nested: false,
             glob_mods: Vec::new(),
             items: Vec::new(),
             is_mui: own,
@@ -397,6 +414,7 @@ impl<'a> File<'a> {
                         "impl" | "trait" if item_start => pending = Some(Frame::Impl),
                         "enum" if not_path => pending = Some(Frame::Enum),
                         "use" if item_start => {
+                            self.nested = !stack.is_empty();
                             i = self.parse_use(i);
                             continue;
                         }
@@ -410,6 +428,12 @@ impl<'a> File<'a> {
                         if !(in_impl && matches!(s, "fn" | "type" | "const")) {
                             self.defined.insert(t[i + 1].text.clone());
                         }
+                    }
+                    if s == "fn"
+                        && not_path
+                        && let Some(sig) = self.fn_sig(i)
+                    {
+                        self.fns.push(sig);
                     }
                     if s == "macro_rules" && self.punct(i + 1, '!') && t.get(i + 2).is_some_and(|n| n.k == K::Ident) {
                         self.defined.insert(t[i + 2].text.clone());
@@ -458,10 +482,14 @@ impl<'a> File<'a> {
             };
             match &u.local {
                 None if mui => self.mui_glob = true,
+                // `mod tests { use super::*; }` sees this file's own names.
+                None if u.nested && u.path == ["super"] => {}
                 None => {
                     self.foreign_glob |= !own;
                     if let Some(m) = self.path.and_then(|p| self.ctx.module(p, &u.path)) {
                         self.glob_mods.push(m);
+                    } else if !own && !u.path.first().is_some_and(|r| matches!(r.as_str(), "std" | "core" | "alloc")) {
+                        self.opaque_glob = true;
                     }
                 }
                 Some(l) => {
@@ -524,11 +552,11 @@ impl<'a> File<'a> {
                         local = Some(self.t[j + 1].text.clone());
                         j += 2;
                     }
-                    self.uses.push(UseEntry { path, local, mui: false, start, end: j - 1, in_brace, item });
+                    self.uses.push(UseEntry { path, local, mui: false, start, end: j - 1, in_brace, nested: self.nested, item });
                     return j;
                 }
                 K::Punct('*') => {
-                    self.uses.push(UseEntry { path, local: None, mui: false, start, end: j, in_brace, item });
+                    self.uses.push(UseEntry { path, local: None, mui: false, start, end: j, in_brace, nested: self.nested, item });
                     return j + 1;
                 }
                 K::Open('{') => {
@@ -551,8 +579,14 @@ impl<'a> File<'a> {
 
     /// Does the name at token `i` (bare or path-qualified) resolve to mui?
     fn is_mui_name(&self, i: usize) -> bool {
+        self.origin(i) == Some(true)
+    }
+
+    /// Whether the name at token `i` resolves to mui; `None` when a bare
+    /// name could come from a mui glob or from another glob import.
+    fn origin(&self, i: usize) -> Option<bool> {
         if let Some(&m) = self.use_tok.get(&i) {
-            return m;
+            return Some(m);
         }
         // Walk back over `a::b::` to the first segment.
         let mut j = i;
@@ -570,11 +604,11 @@ impl<'a> File<'a> {
                     k -= 1;
                 }
                 if depth != 0 || !self.sep_before(k) || k < 3 || self.t[k - 3].k != K::Ident {
-                    return false;
+                    return Some(false);
                 }
                 j = k - 3;
             } else if j >= 3 && self.close_any(j - 3) {
-                return false;
+                return Some(false);
             } else {
                 break; // absolute `::root::name`
             }
@@ -584,47 +618,49 @@ impl<'a> File<'a> {
         // crate every type is the crate's own.
         let ty = j != i && s != "Self" && s.starts_with(char::is_uppercase) && !self.defined.contains(s);
         if ty && self.own {
-            return true;
+            return Some(true);
         }
         if j == i || ty {
             if self.defined.contains(s) || self.closures.iter().any(|(n, a, b)| n == s && (*a..=*b).contains(&j)) {
-                return false;
+                return Some(false);
             }
             if let Some(&m) = self.locals.get(s) {
-                return m;
+                return Some(m);
             }
-            if self.mui_glob {
-                return true;
-            }
-            let mut found = None;
+            // Another glob that may supply the name makes it ambiguous.
+            let (mut found, mut foreign) = (None, self.opaque_glob);
             for m in &self.glob_mods {
                 match self.ctx.resolve(m, s, 1) {
-                    Some(true) => return true,
-                    Some(false) => found = Some(false),
-                    None => {}
+                    Some(true) => return Some(true),
+                    Some(false) => (found, foreign) = (Some(false), true),
+                    None => foreign |= self.ctx.has_glob(m),
                 }
             }
-            return found.unwrap_or(self.own);
+            if self.mui_glob {
+                return if foreign { None } else { Some(true) };
+            }
+            return Some(found.unwrap_or(self.own));
         }
         if self.defined.contains(s) {
-            return self.own;
+            return Some(self.own);
         }
         // Inside a mui crate, an imported module (`use crate::widgets;`) is its own.
         if self.own && self.locals.contains_key(s) && s.starts_with(char::is_lowercase) {
-            return true;
+            return Some(true);
         }
         if let Some(&m) = self.locals.get(s) {
-            return m;
+            return Some(m);
         }
-        (self.own && matches!(s, "Self" | "crate" | "self" | "super")) || self.ctx.roots.contains(s)
+        Some((self.own && matches!(s, "Self" | "crate" | "self" | "super")) || self.ctx.roots.contains(s))
     }
 
     fn gate(&self, g: Gate, dot: usize) -> bool {
-        match g {
-            Gate::Any => true,
-            Gate::Mui => self.is_mui,
-            Gate::MuiChain => self.is_mui && dot > 0 && matches!(self.t[dot - 1].k, K::Close(')') | K::Close(']')),
-        }
+        self.is_mui
+            && match g {
+                Gate::Mui => true,
+                Gate::MuiChain => self.builder_chain(dot) == Some(true),
+                Gate::Point => self.point_receiver(dot) == Some(true),
+            }
     }
 
     // ---- rules ----
@@ -638,7 +674,7 @@ impl<'a> File<'a> {
         let bound = |n: &str| (0..self.t.len()).any(|i| self.ident(i, "let") && (self.ident(i + 1, n) || (self.ident(i + 1, "mut") && self.ident(i + 2, n))));
         for r in self.ctx.rules() {
             if let Rule::Function { old, new } | Rule::Type { old, new } = *r
-                && (self.defined.contains(new) || bound(new))
+                && (self.defined.contains(new) || bound(new) || (self.locals.get(new) == Some(&false) && self.locals.get(old) == Some(&true)))
                 // A function only collides where it is called.
                 && let fun = matches!(r, Rule::Function { .. })
                 && let Some(i) = (0..self.t.len()).find(|&i| self.ident(i, old) && (!fun || self.open(i + 1, '(')) && self.is_mui_name(i))
@@ -662,7 +698,81 @@ impl<'a> File<'a> {
                 out.push((self.line(i), note.to_string()));
             }
         }
+        self.unresolved(&mut out);
         out
+    }
+
+    /// Notes for rules that did not apply because a type or a name's origin
+    /// is not known here.
+    fn unresolved(&self, out: &mut Vec<(usize, String)>) {
+        const UNRESOLVED: &str = "the receiver's type is not resolved";
+        let t = self.t;
+        for i in 0..t.len() {
+            if t[i].k != K::Ident || self.use_tok.contains_key(&i) {
+                continue;
+            }
+            let name = t[i].text.as_str();
+            let called = self.open(i + 1, '(');
+            let line = self.line(i);
+            let mut note = |n: String| out.push((line, n));
+            if called && matches!(name, "resolve_animated" | "resolve_scene_animated" | "resolve_scene_retained") && self.glide(i).is_none() {
+                note("the glide callback's key is `&Id` (was `&str`): a glide passed by name needs `|key: &Id, ..|`, and `key.as_str()` where a `&str` is needed".into());
+            }
+            for r in self.ctx.rules() {
+                if let Rule::Retype { field, from, to, on } = *r
+                    && field == name
+                    && !called
+                    && let Some(k) = self.value_at(i)
+                {
+                    let target = self.retype_target(i, on);
+                    let sites = self.retype_sites(k, from);
+                    if (target.is_none() && sites.is_some()) || (target == Some(true) && sites.is_none() && (self.ident(k, "if") || self.ident(k, "match"))) {
+                        note(format!("`{}::{field}` is a `{to}` now (was `{from}`): retype the value by hand", on[0]));
+                    }
+                }
+            }
+            if i > 0 && self.dot(i - 1) {
+                let dot = i - 1;
+                for r in self.ctx.rules() {
+                    match *r {
+                        Rule::Corner { field, axis, .. } if field == name && self.dot(i + 1) && self.ident(i + 2, axis) && !self.open(i + 3, '(') && self.rect_receiver(dot).is_none() => {
+                            note(format!("`Bounds {{ min, max }}` became kurbo `Rect {{ x0, y0, x1, y1 }}`: `.min.x` -> `.x0`, `.min.y` -> `.y0`, `.max.x` -> `.x1`, `.max.y` -> `.y1` ({UNRESOLVED}: check it is a mui `Bounds`)"));
+                        }
+                        Rule::Method { old, new, gate: Gate::Point } if old == name && called && self.point_receiver(dot).is_none() => {
+                            note(format!("`Point::{old}()` is kurbo `{new}()` ({UNRESOLVED}: check it is a mui `Point`/`Vec2`)"));
+                        }
+                        Rule::Flag { name: n, flag } if n == name && self.payload_mut(dot) && !self.flag_write(i) => {
+                            note(format!("`Element::{n}` is a flag: `e.has(Element::{flag})`, `e.set(Element::{flag}, on)`"));
+                        }
+                        _ => {}
+                    }
+                }
+                if let Some((_, n)) = CHAIN_NOTES.iter().find(|(n, _)| *n == name)
+                    && called
+                    && self.args(i + 1).len() == 1
+                    && self.builder_chain(dot).is_none()
+                {
+                    note(n.to_string());
+                }
+                continue;
+            }
+            // A bare name a foreign glob may supply as well as mui's.
+            let def = i > 0 && ["fn", "struct", "enum", "trait", "type", "mod", "const", "static", "let", "mut", "macro_rules"].iter().any(|k| self.ident(i - 1, k));
+            let field = self.punct(i + 1, ':') && !self.sep(i + 1);
+            if def || field || self.sep_before(i) || self.punct(i + 1, '!') || self.origin(i).is_some() {
+                continue;
+            }
+            let renamed = self.ctx.rules().find_map(|r| match *r {
+                Rule::Function { old, new } if old == name && called && !self.mui_shape(i) => Some(format!("`{old}` -> `{new}`")),
+                Rule::Type { old, new } if old == name => Some(format!("`{old}` -> `{new}`")),
+                Rule::FnCall { name: n, .. } if n == name && called => Some("check the call against the v2 widget signature".into()),
+                _ => None,
+            });
+            let tuple = called && TUPLES.iter().any(|s| !s.method && s.name == name);
+            if let Some(what) = renamed.or_else(|| tuple.then(|| "its result is a `Response { el, changed }`, not a tuple".into())) {
+                note(format!("`{name}` may come from mui's glob import or from another glob import here: if it is mui's, {what}"));
+            }
+        }
     }
 
     pub(crate) fn pass(&self) -> (Vec<Edit>, Vec<(usize, String)>) {
@@ -704,7 +814,7 @@ impl<'a> File<'a> {
                 if let Rule::Function { old, new } | Rule::Type { old, new } | Rule::Macro { old, new } | Rule::MacroHead { old, new, .. } = *r
                     && old == name
                 {
-                    if self.locals.contains_key(new) {
+                    if self.locals.get(new) == Some(&true) {
                         drop = true; // already imported under the new name
                     } else {
                         // The name token is the last ident before any `as`.
@@ -730,17 +840,28 @@ impl<'a> File<'a> {
             let in_use = self.use_tok.contains_key(&i);
 
             for r in self.ctx.rules() {
-                if let Rule::Retype { field: f, from, to } = *r
+                if let Rule::Retype { field: f, from, to, on } = *r
                     && f == name
                     && self.is_mui
                     && !called
                     && !in_use
                     && let Some(k) = self.value_at(i)
-                    && self.ident(k, from)
-                    && (self.sep(k + 1) || self.open(k + 1, '{'))
+                    && let Some(sites) = self.retype_sites(k, from)
+                    && self.retype_target(i, on) == Some(true)
                 {
-                    edit(t[k].lo, t[k].hi, to.to_string());
+                    for k in sites {
+                        edit(t[k].lo, t[k].hi, to.to_string());
+                    }
                     needs.push((self.line(i), to));
+                }
+            }
+            if called
+                && self.is_mui
+                && let Some(keys) = self.glide(i)
+            {
+                for k in keys {
+                    edit(t[k].lo, t[k].hi, "Id".into());
+                    needs.push((self.line(k), "Id"));
                 }
             }
 
@@ -753,14 +874,7 @@ impl<'a> File<'a> {
                             if n == name && !called && self.is_mui && dot > 0 && t[dot - 1].k == K::Ident && recv.contains(&t[dot - 1].text.as_str()) =>
                         {
                             if self.punct(i + 1, '=') && !t[i + 1].joint {
-                                // The assigned expression runs to the statement's end.
-                                let mut j = i + 2;
-                                while j < t.len() && !matches!(t[j].k, K::Punct(';' | ',') | K::Close(_)) {
-                                    if let K::Open(_) = t[j].k {
-                                        j = t[j].pair;
-                                    }
-                                    j += 1;
-                                }
+                                let j = self.stmt_end(i + 2);
                                 if j > i + 2 {
                                     edit(t[dot].lo, t[j - 1].hi, expand(write, &[self.text(i + 2, j - 1).to_string()]));
                                 }
@@ -771,8 +885,21 @@ impl<'a> File<'a> {
                             done = true;
                             break;
                         }
+                        Rule::Flag { name: n, flag } if n == name && self.is_mui && self.flag_write(i) => {
+                            let j = self.stmt_end(i + 2);
+                            edit(t[i].lo, t[j - 1].hi, format!("set(Element::{flag}, {})", self.text(i + 2, j - 1)));
+                            needs.push((self.line(i), "Element"));
+                            done = true;
+                            break;
+                        }
                         Rule::Corner { field: f, axis, to }
-                            if f == name && !called && self.dot(i + 1) && self.ident(i + 2, axis) && !self.open(i + 3, '(') && self.rect_receiver(dot) =>
+                            if f == name
+                                && self.is_mui
+                                && !called
+                                && self.dot(i + 1)
+                                && self.ident(i + 2, axis)
+                                && !self.open(i + 3, '(')
+                                && self.rect_receiver(dot) == Some(true) =>
                         {
                             edit(t[dot].lo, t[i + 2].hi, format!(".{to}"));
                             done = true;
@@ -902,7 +1029,8 @@ impl<'a> File<'a> {
             for r in self.ctx.rules() {
                 match *r {
                     Rule::Function { old, new } if old == name && called && !field => {
-                        if self.is_mui_name(i) {
+                        let origin = self.origin(i);
+                        if origin == Some(true) || (origin.is_none() && self.mui_shape(i)) {
                             edit(t[i].lo, t[i].hi, new.to_string());
                         }
                     }
@@ -995,31 +1123,349 @@ impl<'a> File<'a> {
         ((self.punct(i + 1, '=') || self.punct(i + 1, '!')) && t[i + 1].joint && self.punct(i + 2, '=')).then_some(i + 3)
     }
 
-    /// Whether the receiver ending just before the dot at `dot` is clearly a
-    /// `Rect` (or the `Bounds` it replaced): a call to a function named in
-    /// `RECT_FNS`, or a name this file declares `: Rect` / `: &Rect` or binds
-    /// to `Rect::..`.
-    fn rect_receiver(&self, dot: usize) -> bool {
-        const RECT_FNS: &[&str] = &["bounds", "bounding_box"];
-        const RECT: &[&str] = &["Rect", "Bounds"];
+    /// `(params open, body open)` of the `fn` keyword at `i`, if it has a body.
+    fn fn_sig(&self, i: usize) -> Option<(usize, usize)> {
         let t = self.t;
-        let Some(j) = dot.checked_sub(1) else { return false };
-        let rect = |k: usize| RECT.iter().any(|r| self.ident(k, r));
-        match t[j].k {
-            K::Close(')') => {
-                let open = t[j].pair;
-                open > 0 && t[open - 1].k == K::Ident && RECT_FNS.contains(&t[open - 1].text.as_str())
+        let mut j = i + 2;
+        if self.punct(j, '<') {
+            let mut depth = 0i32;
+            while j < t.len() {
+                if self.punct(j, '<') {
+                    depth += 1;
+                } else if self.punct(j, '>') && !(self.punct(j - 1, '-') && t[j - 1].joint) {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                } else if let K::Open(_) = t[j].k {
+                    j = t[j].pair;
+                }
+                j += 1;
             }
-            K::Ident if !self.dot(j.wrapping_sub(1)) || self.ident(j - 2, "self") => {
-                let v = t[j].text.as_str();
-                (0..t.len()).any(|k| {
-                    self.ident(k, v)
-                        && ((self.punct(k + 1, ':') && !self.sep(k + 1) && (rect(k + 2) || (self.punct(k + 2, '&') && rect(k + 3))))
-                            || (self.ident(k.wrapping_sub(1), "let") && self.punct(k + 1, '=') && rect(k + 2) && self.sep(k + 3)))
-                })
-            }
-            _ => false,
+            j += 1;
         }
+        if !self.open(j, '(') {
+            return None;
+        }
+        let mut k = t[j].pair + 1;
+        while k < t.len() {
+            match t[k].k {
+                K::Open('{') => return Some((j, k)),
+                K::Punct(';') => return None,
+                K::Open(_) => k = t[k].pair + 1,
+                _ => k += 1,
+            }
+        }
+        None
+    }
+
+    /// The type of the variable used at token `v`, from its last binding
+    /// before `v` in the enclosing fn: a typed parameter or `let`, or
+    /// `let x = Ty::f(..);` / `let x = Ty { .. };`. Returns the token of the
+    /// type's name; `None` for any other binding (a pattern, a closure
+    /// parameter, an untyped `let`) or none at all.
+    fn var_type(&self, v: usize) -> Option<usize> {
+        let t = self.t;
+        let name = t[v].text.as_str();
+        let &(params, body) = self.fns.iter().filter(|&&(_, b)| b < v && v < t[b].pair).max_by_key(|&&(_, b)| b)?;
+        let mut ty = None;
+        for k in params + 1..v {
+            if !self.ident(k, name) || self.dot(k - 1) || self.sep_before(k) || self.sep(k + 1) {
+                continue;
+            }
+            let typed = self.punct(k + 1, ':') && !self.sep(k + 1);
+            let at = if self.ident(k - 1, "mut") { k - 1 } else { k };
+            if k < t[params].pair {
+                if typed && matches!(t[at - 1].k, K::Open('(') | K::Punct(',')) {
+                    ty = self.type_head(k + 2);
+                }
+            } else if k > body && self.ident(at - 1, "let") {
+                ty = if typed {
+                    self.type_head(k + 2)
+                } else if self.punct(k + 1, '=') && !t[k + 1].joint {
+                    self.ctor_head(k + 2)
+                } else {
+                    None
+                };
+            } else if self.punct(k - 1, '|')
+                || self.punct(k + 1, '|')
+                || self.punct(k + 1, '@')
+                || self.ident(at - 1, "for")
+                || self.ident(at - 1, "ref")
+                || (matches!(t[at - 1].k, K::Open(_) | K::Punct(',')) && matches!(t[k + 1].k, K::Close(_) | K::Punct(',' | ':')))
+            {
+                ty = None; // a pattern or closure binding (or an argument: unknown either way)
+            }
+        }
+        ty
+    }
+
+    /// The name token of the type written at `k` (`&'a mut mui::Rect` -> `Rect`).
+    fn type_head(&self, mut k: usize) -> Option<usize> {
+        while self.punct(k, '&') || self.ident(k, "mut") || self.punct(k, '\'') || (k > 0 && self.punct(k - 1, '\'')) {
+            k += 1;
+        }
+        if self.t.get(k)?.k != K::Ident {
+            return None;
+        }
+        while self.sep(k + 1) && self.t.get(k + 3).is_some_and(|t| t.k == K::Ident) {
+            k += 3;
+        }
+        Some(k)
+    }
+
+    /// The type built by the expression at `k`, when it is one whole
+    /// `Ty::f(..);` call or `Ty { .. };` literal.
+    fn ctor_head(&self, k: usize) -> Option<usize> {
+        let t = self.t;
+        let mut last = k;
+        if t.get(k)?.k != K::Ident {
+            return None;
+        }
+        while self.sep(last + 1) && t.get(last + 3).is_some_and(|t| t.k == K::Ident) {
+            last += 3;
+        }
+        let upper = |i: usize| t[i].text.starts_with(char::is_uppercase);
+        if self.open(last + 1, '{') && upper(last) && self.punct(t[last + 1].pair + 1, ';') {
+            return Some(last);
+        }
+        (last >= k + 3 && self.open(last + 1, '(') && upper(last - 3) && self.punct(t[last + 1].pair + 1, ';')).then_some(last - 3)
+    }
+
+    /// Whether the type named at token `k` is one of `names` from mui (or,
+    /// with `kurbo`, from kurbo, which mui's geometry types now are).
+    fn is_type(&self, k: usize, names: &[&str], kurbo: bool) -> bool {
+        if !names.contains(&self.t[k].text.as_str()) {
+            return false;
+        }
+        let mut j = k;
+        while self.sep_before(j) && j >= 3 && self.t[j - 3].k == K::Ident {
+            j -= 3;
+        }
+        let from_kurbo = if j == k {
+            self.uses.iter().any(|u| u.local.as_deref() == Some(&self.t[k].text) && u.path.first().is_some_and(|r| r == "kurbo"))
+        } else {
+            self.ident(j, "kurbo")
+        };
+        self.is_mui_name(k) || (kurbo && from_kurbo)
+    }
+
+    /// The simple variable (not a field, not `self`) just before the dot at `dot`.
+    fn recv_var(&self, dot: usize) -> Option<usize> {
+        let j = dot.checked_sub(1)?;
+        (self.t[j].k == K::Ident && !self.ident(j, "self") && !(j > 0 && self.dot(j - 1)) && !self.sep_before(j)).then_some(j)
+    }
+
+    /// Whether the receiver before the dot at `dot` is a mui `Rect` (or
+    /// the `Bounds` it replaced); `None` when its type is not known.
+    fn rect_receiver(&self, dot: usize) -> Option<bool> {
+        let ty = self.var_type(self.recv_var(dot)?)?;
+        Some(self.is_type(ty, &["Rect", "Bounds"], false))
+    }
+
+    /// Whether the receiver before the dot at `dot` is a mui (or kurbo)
+    /// `Point` / `Vec2`; `None` when its type is not known.
+    fn point_receiver(&self, dot: usize) -> Option<bool> {
+        let ty = self.var_type(self.recv_var(dot)?)?;
+        Some(self.is_type(ty, &["Point", "Vec2"], true))
+    }
+
+    /// Whether the receiver before the dot at `dot` is the `Ui`: named `ui`
+    /// (`ui`, `self.ui`), or a variable of mui's `Ui` type.
+    fn ui_receiver(&self, dot: usize) -> bool {
+        dot > 0 && (self.ident(dot - 1, "ui") || self.recv_var(dot).and_then(|v| self.var_type(v)).is_some_and(|ty| self.is_type(ty, &["Ui"], false)))
+    }
+
+    /// Whether the receiver before the dot at `dot` is an element builder
+    /// chain: every call on it is one of `BUILDERS`, and it starts at a mui
+    /// `CONSTRUCTORS` call / macro, or at a variable of an `ELEMENT_TYPES`
+    /// type, or has a builder call. `Some(false)` when it clearly is not
+    /// (`handle.join()` after `spawn(..)`, `ui.palette().disabled(c)`);
+    /// `None` for a bare variable whose type is not known.
+    fn builder_chain(&self, dot: usize) -> Option<bool> {
+        let t = self.t;
+        let mut j = dot.checked_sub(1)?;
+        let mut builders = 0;
+        loop {
+            match t[j].k {
+                K::Close(c @ (')' | ']')) => {
+                    let open = t[j].pair;
+                    let Some(n) = open.checked_sub(1) else { return Some(false) };
+                    if self.punct(n, '!') && n > 0 && t[n - 1].k == K::Ident {
+                        return Some(CONSTRUCTORS.contains(&t[n - 1].text.as_str()) && self.is_mui_name(n - 1));
+                    }
+                    if c != ')' || t[n].k != K::Ident {
+                        return Some(false);
+                    }
+                    if n > 0 && self.dot(n - 1) {
+                        if !BUILDERS.contains(&t[n].text.as_str()) {
+                            return Some(false);
+                        }
+                        builders += 1;
+                        j = n.checked_sub(2)?;
+                        continue;
+                    }
+                    return Some(CONSTRUCTORS.contains(&t[n].text.as_str()) && self.is_mui_name(n));
+                }
+                K::Ident if self.recv_var(j + 1) == Some(j) => {
+                    if builders > 0 {
+                        return Some(true);
+                    }
+                    let ty = self.var_type(j)?;
+                    return Some(self.is_type(ty, ELEMENT_TYPES, false));
+                }
+                _ => return if builders > 0 { None } else { Some(false) },
+            }
+        }
+    }
+
+    /// For a `Retype` of the field named at `i` to apply, the struct literal
+    /// it sits in, or the receiver of `recv.field = ..`, must be a mui type in
+    /// `on`. `None` when that type is not known.
+    fn retype_target(&self, i: usize, on: &[&str]) -> Option<bool> {
+        let t = self.t;
+        if self.punct(i + 1, ':') {
+            // The struct literal's `{`: back over sibling fields to it.
+            let mut j = i.checked_sub(1)?;
+            loop {
+                match t[j].k {
+                    K::Open('{') => break,
+                    K::Open(_) => return None,
+                    K::Close(_) => j = t[j].pair.checked_sub(1)?,
+                    _ => j = j.checked_sub(1)?,
+                }
+            }
+            let head = j.checked_sub(1)?;
+            return (t[head].k == K::Ident && t[head].text.starts_with(char::is_uppercase)).then(|| self.is_type(head, on, false));
+        }
+        if i == 0 || !self.dot(i - 1) {
+            return Some(false); // a local variable, not the field
+        }
+        let ty = self.var_type(self.recv_var(i - 1)?)?;
+        Some(self.is_type(ty, on, false))
+    }
+
+    /// The `From` tokens to retype in the value at `k`: a `From::..` /
+    /// `From { .. }` (after lowercase path segments: `super::Point::new`), or
+    /// each branch's tail of an `if .. { .. } else { .. }` chain. `None` when
+    /// the value is not of those shapes.
+    fn retype_sites(&self, k: usize, from: &str) -> Option<Vec<usize>> {
+        let t = self.t;
+        let direct = |mut j: usize| {
+            while t.get(j).is_some_and(|x| x.k == K::Ident && x.text.starts_with(char::is_lowercase)) && self.sep(j + 1) {
+                j += 3;
+            }
+            (self.ident(j, from) && (self.sep(j + 1) || self.open(j + 1, '{'))).then_some(j)
+        };
+        if !self.ident(k, "if") {
+            return direct(k).map(|j| vec![j]);
+        }
+        // The block's tail expression must be the constructor and nothing more.
+        let tail = |b: usize| {
+            let close = t[b].pair;
+            let (mut tail, mut x) = (b + 1, b + 1);
+            while x < close {
+                match t[x].k {
+                    K::Open(_) => x = t[x].pair + 1,
+                    K::Punct(';') => {
+                        x += 1;
+                        tail = x;
+                    }
+                    _ => x += 1,
+                }
+            }
+            let site = direct(tail)?;
+            let end = if self.open(site + 1, '{') { t[site + 1].pair } else { self.expr_end(site) };
+            (end + 1 == close).then_some(site)
+        };
+        let mut out = Vec::new();
+        let mut j = k;
+        loop {
+            // `if cond {`: the first `{` after the condition.
+            let mut b = j + 1;
+            while b < t.len() && !self.open(b, '{') {
+                if let K::Open(_) = t[b].k {
+                    b = t[b].pair;
+                }
+                b += 1;
+            }
+            if b >= t.len() {
+                return None;
+            }
+            out.push(tail(b)?);
+            let close = t[b].pair;
+            match (self.ident(close + 1, "else"), self.ident(close + 2, "if"), self.open(close + 2, '{')) {
+                (true, true, _) => j = close + 2,
+                (true, false, true) => {
+                    out.push(tail(close + 2)?);
+                    return Some(out);
+                }
+                _ => return None, // no `else`: not a value
+
+            }
+        }
+    }
+
+    /// Last token of the path-and-call expression starting at `k`
+    /// (`Point::new(..)`, `Point::ZERO`, `a::b::c(..)`).
+    fn expr_end(&self, mut k: usize) -> usize {
+        while self.sep(k + 1) && self.t.get(k + 3).is_some_and(|t| t.k == K::Ident) {
+            k += 3;
+        }
+        if self.open(k + 1, '(') { self.t[k + 1].pair } else { k }
+    }
+
+    /// For a call at `i` taking a glide closure (`resolve_animated`): the
+    /// `str` tokens of closure keys typed `&str`, which become `&Id`. `None`
+    /// when no argument is a closure literal (the glide is passed by name).
+    fn glide(&self, i: usize) -> Option<Vec<usize>> {
+        if !matches!(self.t[i].text.as_str(), "resolve_animated" | "resolve_scene_animated" | "resolve_scene_retained") || !self.open(i + 1, '(') {
+            return None;
+        }
+        let mut found = None;
+        for (a, _) in self.args(i + 1) {
+            let mut k = a;
+            while self.punct(k, '&') || self.ident(k, "mut") || self.ident(k, "move") {
+                k += 1;
+            }
+            if !self.punct(k, '|') || self.t[k].joint {
+                continue;
+            }
+            let keys = found.get_or_insert_with(Vec::new);
+            if self.t.get(k + 1).is_some_and(|t| t.k == K::Ident) && self.punct(k + 2, ':') && self.punct(k + 3, '&') && self.ident(k + 4, "str") {
+                keys.push(k + 4);
+            }
+        }
+        found
+    }
+
+    /// A call at `i` whose shape only mui's function has (`MUI_SHAPES`).
+    fn mui_shape(&self, i: usize) -> bool {
+        self.open(i + 1, '(') && MUI_SHAPES.contains(&(self.t[i].text.as_str(), self.args(i + 1).len()))
+    }
+
+    /// Where the expression starting at `k` ends: the index of the `;`, `,`
+    /// or closing delimiter after it.
+    fn stmt_end(&self, k: usize) -> usize {
+        let t = self.t;
+        let mut j = k;
+        while j < t.len() && !matches!(t[j].k, K::Punct(';' | ',') | K::Close(_)) {
+            if let K::Open(_) = t[j].k {
+                j = t[j].pair;
+            }
+            j += 1;
+        }
+        j
+    }
+
+    /// `.payload_mut().<name> = x` at the name token `i` (not `==`).
+    fn flag_write(&self, i: usize) -> bool {
+        self.payload_mut(i - 1) && self.punct(i + 1, '=') && !self.t[i + 1].joint && self.stmt_end(i + 2) > i + 2
+    }
+
+    /// The receiver before the dot at `dot` is `<..>.payload_mut()`.
+    fn payload_mut(&self, dot: usize) -> bool {
+        dot >= 4 && self.dot(dot) && self.punct(dot, '.') && self.t[dot - 1].k == K::Close(')') && self.t[dot - 1].pair == dot - 2 && self.ident(dot - 3, "payload_mut") && self.dot(dot - 4)
     }
 
     /// Match a chain of `.m(args)` calls starting at the dot `dot`.
@@ -1076,7 +1522,8 @@ impl<'a> File<'a> {
             return;
         }
         let Some(spec) = TUPLES.iter().find(|s| s.name == t[i].text && s.method == method) else { return };
-        if !self.open(i + 1, '(') || (!method && !self.is_mui_name(i)) {
+        // A method tuple (`ui.state(id)`) only on the `Ui`: `fsm.state(k)` is not it.
+        if !self.open(i + 1, '(') || (!method && !self.is_mui_name(i)) || (method && !self.ui_receiver(i - 1)) {
             return;
         }
         let close = t[i + 1].pair;

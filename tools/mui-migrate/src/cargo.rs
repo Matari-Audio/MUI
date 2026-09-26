@@ -4,19 +4,41 @@ use crate::rules::{CARGO_MOVES, MUI_CRATES};
 use std::path::{Component, Path, PathBuf};
 use toml_edit::{DocumentMut, Item, TableLike, Value};
 
-/// Dependency keys that name a mui crate under another name
-/// (`mui2 = { package = "mui", .. }` -> `mui2`), as Rust idents.
-pub fn aliases(manifest: &str) -> Vec<String> {
-    let Ok(doc) = manifest.parse::<DocumentMut>() else { return Vec::new() };
-    let mut out = Vec::new();
+/// A manifest's mui dependencies, as Rust idents: `v2` are the keys that
+/// name a mui crate under another name (`mui2 = { package = "mui", .. }` ->
+/// `mui2`), `v1` the keys of mui crates whose path points into a v1 checkout
+/// (no `crates/mui-scene` next to them, or under `.build-inputs/mui/`), which
+/// this tool must leave alone. With `root`, a path dep is v2 only inside it.
+pub fn mui_deps(manifest: &str, dir: &Path, root: Option<&Path>) -> (Vec<String>, Vec<String>) {
+    let Ok(doc) = manifest.parse::<DocumentMut>() else { return Default::default() };
+    let (mut v2, mut v1) = (Vec::new(), Vec::new());
     deps(doc.as_item(), false, &mut |key, entry| {
-        if let Some(pkg) = entry.get("package").and_then(Item::as_str)
-            && MUI_CRATES.contains(&pkg)
+        let pkg = entry.get("package").and_then(Item::as_str).unwrap_or(key);
+        if !MUI_CRATES.contains(&pkg) {
+            return;
+        }
+        let ident = key.replace('-', "_");
+        if let Some(path) = entry.get("path").and_then(Item::as_str)
+            && is_v1(&normalize(&dir.join(path)), root)
         {
-            out.push(key.replace('-', "_"));
+            v1.push(ident);
+        } else if key != pkg {
+            v2.push(ident);
         }
     });
-    out
+    (v2, v1)
+}
+
+/// Whether the crate at `dir` belongs to a v1 mui checkout.
+fn is_v1(dir: &Path, root: Option<&Path>) -> bool {
+    if let Some(root) = root {
+        return !dir.starts_with(normalize(root));
+    }
+    // The workspace root is the nearest ancestor with a `crates/` directory.
+    match dir.ancestors().find(|a| a.join("crates").is_dir()) {
+        Some(ws) => !ws.join("crates/mui-scene").is_dir(),
+        None => dir.components().collect::<Vec<_>>().windows(2).any(|w| w[0].as_os_str() == ".build-inputs" && w[1].as_os_str() == "mui"),
+    }
 }
 
 /// `[package] name`, if the manifest has one.
@@ -139,6 +161,24 @@ mod tests {
     #[test]
     fn finds_package_aliases() {
         let src = "[dependencies]\nmui2 = { package = \"mui\", path = \"x\" }\nmui2-vello = { package = \"mui-vello\", path = \"y\" }\nother = { package = \"mui-gpui-plugin-probe\", path = \"z\" }\n";
-        assert_eq!(aliases(src), ["mui2", "mui2_vello"]);
+        assert_eq!(mui_deps(src, Path::new("/nowhere"), None), (vec!["mui2".into(), "mui2_vello".into()], vec![]));
+    }
+
+    #[test]
+    fn v1_path_deps_are_not_mui() {
+        // KURV: `mui-truce` from the v1 checkout, `mui2` from the v2 one.
+        let tmp = std::env::temp_dir().join(format!("mui-migrate-v1-{}", std::process::id()));
+        std::fs::create_dir_all(tmp.join(".build-inputs/mui/crates/mui-truce")).unwrap();
+        std::fs::create_dir_all(tmp.join(".build-inputs/mui2/crates/mui-scene")).unwrap();
+        std::fs::create_dir_all(tmp.join(".build-inputs/mui2/crates/mui")).unwrap();
+        let src = "[dependencies]\nmui-truce = { path = \".build-inputs/mui/crates/mui-truce\" }\nmui2 = { package = \"mui\", path = \".build-inputs/mui2/crates/mui\" }\n";
+        assert_eq!(mui_deps(src, &tmp, None), (vec!["mui2".into()], vec!["mui_truce".into()]));
+        // Not checked out: the `.build-inputs/mui/` path alone says v1.
+        let missing = "[dependencies]\nmui-truce = { path = \"x/.build-inputs/mui/crates/mui-truce\" }\nmui = { path = \"y/crates/mui\" }\n";
+        assert_eq!(mui_deps(missing, Path::new("/nowhere"), None), (vec![], vec!["mui_truce".into()]));
+        // `--mui-root` decides alone.
+        let root = tmp.join(".build-inputs/mui");
+        assert_eq!(mui_deps(src, &tmp, Some(&root)), (vec![], vec!["mui2".into()]));
+        std::fs::remove_dir_all(&tmp).unwrap();
     }
 }
