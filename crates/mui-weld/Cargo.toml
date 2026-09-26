@@ -7,6 +7,10 @@ license.workspace = true
 description = "Bounded, renderer-independent distance-field material welding for MUI"
 
 [dependencies]
+# Colour interchange with mui-style and peniko (both `color` types).
+color.workspace = true
+# The one Point/Vec2/Rect the workspace uses.
+kurbo.workspace = true
 rustc-hash.workspace = true
 
 [lints]

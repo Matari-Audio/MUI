@@ -48,7 +48,7 @@ pub fn bake(request: &Request) -> Result<Baked, Error> {
                         (bounds.x0 + bounds.x1) * 0.5,
                         (bounds.y0 + bounds.y1) * 0.5,
                     ),
-                    half: Point::new(bounds.width() * 0.5, bounds.height() * 0.5),
+                    half: crate::Vec2::new(bounds.width() * 0.5, bounds.height() * 0.5),
                     radius: *radius,
                     angle: 0.0,
                 }),

@@ -354,3 +354,14 @@ fn first_nonzero_morph_frame_cannot_pop_overlapping_antialias_edges() {
         assert!((zero.0[i] - tiny.0[i]).abs() < 1e-7);
     }
 }
+
+#[test]
+fn colour_round_trips_through_the_color_crate() {
+    let c = Color::srgb(0.2, 0.6, 0.9, 0.5);
+    let peniko_like: color::AlphaColor<color::Srgb> = c.into();
+    let back = Color::from(peniko_like);
+    assert!(
+        c.0.iter().zip(back.0).all(|(a, b)| (a - b).abs() < 1e-5),
+        "{back:?}"
+    );
+}

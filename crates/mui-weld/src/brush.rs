@@ -1,3 +1,4 @@
+use crate::field::Checked;
 use crate::{Error, Point, Rect};
 use std::sync::Arc;
 
@@ -87,6 +88,20 @@ impl Color {
             return Self::TRANSPARENT;
         }
         Self::from_lab(lab.map(|x| x / alpha), alpha.clamp(0.0, 1.0))
+    }
+}
+
+/// From any `color` space (a peniko colour is `AlphaColor<Srgb>`, mui-style
+/// hands out `to_srgb()`): through sRGB, linearised in f64 as [`Color::srgb`].
+impl<CS: color::ColorSpace> From<color::AlphaColor<CS>> for Color {
+    fn from(c: color::AlphaColor<CS>) -> Self {
+        let [r, g, b, a] = c.convert::<color::Srgb>().components.map(f64::from);
+        Self::srgb(r, g, b, a)
+    }
+}
+impl<CS: color::ColorSpace> From<Color> for color::AlphaColor<CS> {
+    fn from(c: Color) -> Self {
+        color::AlphaColor::<color::LinearSrgb>::new(c.0.map(|v| v as f32)).convert()
     }
 }
 

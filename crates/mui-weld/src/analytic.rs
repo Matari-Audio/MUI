@@ -5,7 +5,7 @@
 //! changing morph progress cannot resize a texture. Unsupported brushes/contours
 //! return an error; this path never silently invokes the CPU rasterizer.
 use crate::boundary::{BOUNDARY_BYTES, Boundary, Plate};
-use crate::{Brush, Channel, Color, Error, Geometry, Point, Rect, Source, Weld};
+use crate::{Brush, Channel, Color, Error, Geometry, Point, Rect, Source, Vec2, Weld};
 use std::sync::Arc;
 
 pub const PARAM_BYTES: usize = 336;
@@ -208,7 +208,7 @@ impl AnalyticWeld {
                     .iter()
                     .map(|s| Plate {
                         center: Point::new(s.center[0], s.center[1]),
-                        half: Point::new(s.half[0], s.half[1]),
+                        half: Vec2::new(s.half[0], s.half[1]),
                         radius: s.radius,
                         angle: s.rotation[1].atan2(s.rotation[0]),
                     })

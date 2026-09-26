@@ -15,7 +15,7 @@ mod raster;
 
 pub use brush::{Brush, Color, Image, ImageFit, Stop};
 pub use cache::WeldCache;
-pub use field::{Geometry, Point, Rect, Sample, Source, sample_field};
+pub use field::{Geometry, Point, Rect, Sample, Source, Vec2, sample_field};
 pub use raster::{Baked, bake};
 
 /// Material policy, independently selected for the body and its inside border.

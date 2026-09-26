@@ -48,6 +48,7 @@ mui-weld = { path = "crates/mui-weld" }
 
 # External versions shared by two or more members. Members add features;
 # wgpu picks no backend here, the host that owns the device does.
+color = "0.3"
 i_overlay = "8.1"
 rustc-hash = "2"
 kurbo = "0.13.1"

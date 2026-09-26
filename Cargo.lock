@@ -1681,6 +1681,8 @@ dependencies = [
 name = "mui-weld"
 version = "0.4.0"
 dependencies = [
+ "color",
+ "kurbo",
  "rustc-hash 2.1.3",
 ]
 
