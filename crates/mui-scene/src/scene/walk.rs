@@ -622,7 +622,8 @@ impl<'a> Walk<'a> {
         key: &crate::Id,
         under: Color,
     ) -> Result<(), SceneError> {
-        let th = self.spec.theme;
+        let spec = self.spec;
+        let th = &spec.theme;
         let size = e.text_px(&th);
         // Text's own fill is its ink, not a box behind it.
         let ink = match &e.style.fill {
@@ -912,7 +913,8 @@ impl<'a> Walk<'a> {
         if !n.payload().has(Element::BASELINE) {
             return Ok(bases);
         }
-        let th = self.spec.theme;
+        let spec = self.spec;
+        let th = &spec.theme;
         let mut at2 = at + 1;
         for c in n.children() {
             let f = self.tree.frames[at2];

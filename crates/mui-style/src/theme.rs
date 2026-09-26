@@ -119,7 +119,7 @@ impl Default for TypeScale {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Theme {
     pub corners: Corners,
     pub spacing: SpacingScale,
@@ -132,6 +132,9 @@ pub struct Theme {
     /// The unit every control size multiplies: daisyUI's `--size-field`. One
     /// number rescales every button, knob, toggle and slider in the tree.
     pub control: f64,
+    /// The face [`icon`](../mui_scene/fn.icon.html) draws its symbol in,
+    /// unless the icon names its own with `.font(f)`.
+    pub icon_font: Option<mui_text::Font>,
 }
 impl Default for Theme {
     fn default() -> Self {
@@ -164,9 +167,10 @@ impl Theme {
         text: 14.0,
         type_scale: TypeScale::DEFAULT,
         control: 4.0,
+        icon_font: None,
     };
 
-    pub fn is_valid(self) -> bool {
+    pub fn is_valid(&self) -> bool {
         self.corners.is_valid()
             && self.spacing.is_valid()
             && self.palette.is_valid()

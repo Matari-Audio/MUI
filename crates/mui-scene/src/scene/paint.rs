@@ -320,7 +320,8 @@ impl Walk<'_> {
         bg: Color,
         border_background: usize,
     ) -> Result<(), SceneError> {
-        let th = self.spec.theme;
+        let spec = self.spec;
+        let th = &spec.theme;
         let named_frame = |id: &mui_layout::Id| -> Result<_, SceneError> {
             if let Some(frame) = self.plan.ramp_frames.get(&(at, id.clone())) {
                 return Ok(*frame);

@@ -283,7 +283,8 @@ impl Walk<'_> {
         skip: usize,
     ) -> Result<(), SceneError> {
         let size = Size::new(b.x1 - b.x0, b.y1 - b.y0);
-        let th = self.spec.theme;
+        let spec = self.spec;
+        let th = &spec.theme;
         let layout = mui_layout::resolve_boxed_with(
             root,
             size,

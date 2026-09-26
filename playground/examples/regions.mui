@@ -10,4 +10,4 @@ row![
 .radius(80.)
 .inside(8.)
 .bend(0.2)
-.border(Ink, 2.)
+.stroke(Ink).stroke_width(2.)

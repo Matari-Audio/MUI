@@ -520,7 +520,7 @@ fn resolve_with(
         coords: &mut text.coords,
         last_coords: &mut text.last_coords,
     };
-    let th = spec.theme;
+    let th = &spec.theme;
     // Every paragraph wraps in this one pass: mui-layout hands a flex item's
     // final main size back to the measurer, so there is no share left to learn
     // afterwards.

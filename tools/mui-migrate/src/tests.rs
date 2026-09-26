@@ -554,3 +554,12 @@ fn ui_default() {
     let foreign = "use egui::Ui;\nfn f() { Ui::new(Theme::DEFAULT); }\n";
     check(foreign, foreign);
 }
+
+#[test]
+fn icon_font_moves_to_a_builder() {
+    let out = run(&with_prelude("fn f() -> El { row![icon(font.clone(), sym::HOME), mui::scene::icon(ICONS, 'x'), icon(sym::A)] }\n"));
+    assert_eq!(out.text, with_prelude("fn f() -> El { row![icon(sym::HOME).font(font.clone()), mui::scene::icon('x').font(ICONS), icon(sym::A)] }\n"));
+    assert!(out.warnings.iter().any(|(_, n)| n.contains("Theme::icon_font")), "{:?}", out.warnings);
+    let local = "fn icon(a: u8, b: u8) {}\nfn f() { icon(1, 2); }\n";
+    check(local, local);
+}

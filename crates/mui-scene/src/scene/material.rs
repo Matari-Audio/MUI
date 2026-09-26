@@ -44,7 +44,8 @@ impl Walk<'_> {
             snap(frame.x, Some(quality.scale)),
             snap(frame.y, Some(quality.scale)),
         );
-        let th = self.spec.theme;
+        let spec = self.spec;
+        let th = &spec.theme;
         let parent = &n.payload().style;
         let mut sources = Vec::new();
         let mut members = std::collections::HashSet::new();

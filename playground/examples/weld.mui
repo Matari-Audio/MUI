@@ -8,5 +8,5 @@ row![
 .gap(0.)
 .union(Surface)
 .radius(30.)
-.border(Ink, 2.)
+.stroke(Ink).stroke_width(2.)
 .shell(8., Raised)

@@ -685,7 +685,7 @@ impl Reel {
             None => cues.last().map_or(0, |c| first(c.0, fps)) + self.fps as usize,
         };
         let (w, h) = self.pixels();
-        let mut ui = Ui::new(self.theme);
+        let mut ui = Ui::new(self.theme.clone());
         if let Some(f) = &self.font {
             ui = ui.font(f.clone());
         }

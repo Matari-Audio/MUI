@@ -3,5 +3,5 @@ stack![block(380., 260.)]
 .fill(Primary)
 .radius(42.)
 .cut(block(140., 140.).pill().offset(120., 60.))
-.border(Ink, 2.)
+.stroke(Ink).stroke_width(2.)
 .shell(10., Secondary)

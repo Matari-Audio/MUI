@@ -1005,7 +1005,7 @@ impl Ui {
         dt: f64,
         heats: rustc_hash::FxHashMap<Id, f64>,
     ) -> Result<(ResolvedScene, bool, El), SceneError> {
-        let mut spec = SceneSpec::new(root).theme(self.theme);
+        let mut spec = SceneSpec::new(root).theme(self.theme.clone());
         spec.offered = offered;
         spec.font = self.font.clone();
         spec.fallback_fonts = self.fallback_fonts.clone();

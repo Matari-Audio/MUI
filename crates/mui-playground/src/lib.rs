@@ -166,7 +166,7 @@ fn element(e: &Expr, depth: usize, nodes: &mut usize) -> syn::Result<El> {
                     let in_subset =
                         |ch: &char| mui_text::glyph_path(&ICONS, *ch, 24., &[], 1.).is_ok();
                     match mui_symbols::codepoint(&name).filter(in_subset) {
-                        Some(ch) => Ok(icon(ICONS.clone(), ch)),
+                        Some(ch) => Ok(icon(ch).font(ICONS.clone())),
                         None => Err(error(
                             &c.args[0],
                             "not an icon in the playground's Material Symbols subset; see crates/mui-playground/fonts/README.md",

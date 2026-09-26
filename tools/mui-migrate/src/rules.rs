@@ -266,6 +266,9 @@ pub const RULES: &[Rule] = &[
     Call { chain: &[("centered_at", &[Is("0"), Is("0")])], to: ".centered()", gate: Mui, needs: &[] },
     Call { chain: &[("anchor", &[Is(CC), Is(CC)])], to: ".centered()", gate: Mui, needs: &[] },
     Call { chain: &[("apply", &[A])], to: ".when(true, $1)", gate: MuiChain, needs: &[] },
+    // `icon(sym)` draws in `Theme::icon_font`; a font of its own is `.font(f)`.
+    FnCall { name: "icon", args: &[A, A], to: "$pathicon($2).font($1)", needs: &[] },
+    Manual { pattern: "icon ( font", note: "`icon(sym)` draws in `Theme::icon_font`: if this is the theme's icon font, set `Theme { icon_font: Some(f), .. }` once and drop the `.font(..)`" },
     // `Ui::default()` is the default theme.
     Assoc { ty: "Ui", name: "new", args: &[Is("Theme::DEFAULT")], to: "$pathUi::default()", bare: "" },
     Assoc { ty: "Ui", name: "new", args: &[Is("mui::prelude::Theme::DEFAULT")], to: "$pathUi::default()", bare: "" },

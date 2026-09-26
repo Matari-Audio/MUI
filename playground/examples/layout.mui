@@ -11,4 +11,4 @@ col![
 ]
 .gap(24.).pad(32.).center()
 .radius(32.).fill(Surface)
-.border(Dim, 1.)
+.stroke(Dim).stroke_width(1.)

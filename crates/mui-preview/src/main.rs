@@ -331,9 +331,9 @@ impl App {
         let ui = &mut self.ui;
         // A theme file, once one has parsed, replaces the compiled-in skin
         // wholesale; the mode is still the sidebar's to say.
-        let theme = self.theme.unwrap_or(skin::SKIN);
+        let theme = self.theme.clone().unwrap_or(skin::SKIN);
         ui.set_theme(Theme {
-            palette: match self.theme {
+            palette: match &self.theme {
                 Some(t) => t
                     .palette
                     .with_mode(if self.light { Mode::Light } else { Mode::Dark }),

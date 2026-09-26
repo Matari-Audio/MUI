@@ -429,6 +429,17 @@ impl Element {
     /// A `.scroll()` node paints no overlay scrollbar. See
     /// [`Styled::no_scrollbar`].
     pub const SCROLL_BAR_OFF: u16 = 1 << 7;
+    /// An [`icon`]: with no `.font(f)` of its own it draws in
+    /// [`Theme::icon_font`](crate::Theme::icon_font).
+    pub const ICON: u16 = 1 << 8;
+
+    /// The face this node shapes with, before the scene's fonts: its own, or
+    /// the theme's icon font for an icon.
+    pub(crate) fn face_font<'a>(&'a self, theme: &'a crate::Theme) -> Option<&'a mui_text::Font> {
+        self.font.as_ref().or_else(|| {
+            if self.has(Self::ICON) { theme.icon_font.as_ref() } else { None }
+        })
+    }
 
     /// Whether the switch `flag` is on: `e.has(Element::FOCUSABLE)`.
     pub fn has(&self, flag: u16) -> bool {
@@ -531,18 +542,24 @@ pub fn text(s: impl Into<Arc<str>>) -> El {
 /// One symbol from an icon font, drawn as text at the text size so `opsz`
 /// tracks it. `symbol` is the font's codepoint for it -- for Material
 /// Symbols, `mui_symbols::sym::HOME` is one, and `mui_symbols::codepoint`
-/// looks up a name that arrives at run time. Style it like a label: `.text_size(24.)`,
-/// `.icon_fill(1.)`, `.text_weight(..)`, `.grade(..)`, `.fill(..)` for ink.
+/// looks up a name that arrives at run time. The face is the theme's
+/// [`icon_font`](crate::Theme::icon_font); `.font(f)` overrides it. Style it
+/// like a label: `.text_size(24)`, `.icon_fill(1.)`, `.text_weight(..)`,
+/// `.grade(..)`, `.fill(..)` for ink.
 ///
 /// ```
 /// use mui_scene::prelude::*;
 /// # let font = Font::new(epaint_default_fonts::HACK_REGULAR).unwrap();
-/// let home = icon(font.clone(), mui_symbols::sym::HOME).text_size(24.).icon_fill(1.);
+/// let theme = Theme { icon_font: Some(font.clone()), ..Theme::DEFAULT };
+/// let home = icon(mui_symbols::sym::HOME).text_size(24).icon_fill(1.).id("home");
 /// assert_eq!(home.payload().axes.get("FILL"), Some(1.));
-/// assert!(home.payload().font.is_some());
+/// let scene = resolve(&SceneSpec::new(home).theme(theme)).unwrap();
+/// assert!(scene.surface("home").unwrap().text.is_some(), "shaped in the theme's icon font");
 /// ```
-pub fn icon(font: mui_text::Font, symbol: char) -> El {
-    text(symbol.encode_utf8(&mut [0; 4]) as &str).font(font)
+pub fn icon(symbol: char) -> El {
+    let mut el = text(symbol.encode_utf8(&mut [0; 4]) as &str);
+    el.payload_mut().set(Element::ICON, true);
+    el
 }
 /// Your own paths, painted inside the node's frame. Sized like any
 /// container: give it `.size(..)`, `.aspect(..)` or let it stretch.

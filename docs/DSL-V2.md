@@ -258,3 +258,6 @@ col![
 | `MuiEditor::new(.., (u32, u32), ..)`, `.resizable((u32, u32))` | `impl Into<Size>`; `Size` converts from any pair of numbers | `(300, 200)` still reads the same |
 | `bridge.meter(bridge.params().level.id())` | `bridge.meter(P::Level)` (the derived id enum already names meters) and `meter(ui, id, level)`, a preset drawing the standard level bar on a spring | the gain plugin's hand-built bar was the pattern every plugin copies |
 | truce's `Theme` vs ours | nothing renamed: with `Ui::default()` the gain plugin names neither; if a plugin needs ours, `mui::prelude::Theme` | both preludes are globs; the explicit path is the documented pattern (a comment in the gain plugin) |
+| `icon(font, sym)` | `icon(sym)`, drawn in `Theme::icon_font` (an `Option<Font>`, `None` by default); `.font(f)` overrides it. Rule: `icon(f, s)` -> `icon(s).font(f)`, with a note to move a shared face into the theme | one argument per icon; the icon face is set once. An icon is marked by the `Element::ICON` flag, read at resolve time |
+| `Theme: Copy` | `Theme: Clone` (it holds the icon `Font`, an `Arc`) | `ui.theme().clone()` where a copy was taken; the resolver borrows it |
+| playground `border(c, w)`, `width`, `height`, `pad_xy`, `no_border` | `stroke(c).stroke_width(w)`, `w`, `h`, `pad(x, y)`, `no_stroke` | the text DSL follows the Rust names |

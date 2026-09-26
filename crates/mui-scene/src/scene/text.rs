@@ -156,11 +156,11 @@ pub(super) struct Face<'a> {
     pub(super) font: Option<&'a Font>,
 }
 impl<'a> Face<'a> {
-    pub(super) fn of(e: &'a crate::Element, th: Theme) -> Self {
+    pub(super) fn of(e: &'a crate::Element, th: &'a Theme) -> Self {
         Self {
-            size: e.text_px(&th),
+            size: e.text_px(th),
             axes: &e.axes,
-            font: e.font.as_ref(),
+            font: e.face_font(th),
         }
     }
 }
@@ -375,7 +375,7 @@ impl<'a> Runs<'a> {
 /// Exactly the fields [`fit`] consumes, as bytes the layout cache compares
 /// in full. Strings carry their length, so no two payloads share an
 /// encoding, and nothing is formatted.
-pub(super) fn layout_key(e: &Element, th: Theme, scale: Option<f64>, out: &mut Vec<u8>) {
+pub(super) fn layout_key(e: &Element, th: &Theme, scale: Option<f64>, out: &mut Vec<u8>) {
     let Content::Text(t) = &e.content else {
         return;
     };
@@ -396,7 +396,7 @@ pub(super) fn layout_key(e: &Element, th: Theme, scale: Option<f64>, out: &mut V
     }
     out.extend_from_slice(&e.text_px(&th).to_bits().to_le_bytes());
     // 0 is "no face of its own"; ids shift up one past it.
-    out.extend_from_slice(&e.font.as_ref().map_or(0, |f| f.id() + 1).to_le_bytes());
+    out.extend_from_slice(&e.face_font(th).map_or(0, |f| f.id() + 1).to_le_bytes());
     // usize::MAX is "no cap".
     out.extend_from_slice(&e.lines.unwrap_or(usize::MAX).to_le_bytes());
     // Line heights snap to the device scale, so a scale change remeasures.
@@ -406,7 +406,7 @@ pub(super) fn layout_key(e: &Element, th: Theme, scale: Option<f64>, out: &mut V
 /// A content leaf's size: a paragraph wrapped to its room when it needs it.
 /// Its widest word is as far as a flex row may squeeze it, unless a line cap
 /// asked for an ellipsis instead.
-pub(super) fn fit(runs: &mut Runs, th: Theme, e: &crate::Element, room: Option<f64>) -> Intrinsic {
+pub(super) fn fit(runs: &mut Runs, th: &Theme, e: &crate::Element, room: Option<f64>) -> Intrinsic {
     let Content::Text(t) = &e.content else {
         return Size::ZERO.into();
     };
