@@ -16,3 +16,14 @@ cargo clippy --workspace --all-features --all-targets --locked --offline -- -D w
 # truce-clap wants a native parent window, so it has no wasm build at all.
 # mui-truce itself stays in: its window/GPU half is cfg'd out on wasm32.
 cargo check --workspace --all-features --exclude mui-preview --exclude mui-gain-plugin --target wasm32-unknown-unknown --locked --offline
+
+# ---------------------------------------------------------------------------
+# media/: its own workspace (mui-stage, mui-reel, mui-motion-bridge), kept out
+# of the root so plugin builds never compile it. Same gate, its own lockfile.
+# mui-stage's default `backends` feature is the only feature; --all-features
+# keeps it on. No wasm check: these crates own a native device or ffmpeg.
+# ---------------------------------------------------------------------------
+cargo fmt --manifest-path media/Cargo.toml --all -- --check
+cargo test --manifest-path media/Cargo.toml --workspace --all-features --locked --offline
+cargo clippy --manifest-path media/Cargo.toml --workspace --all-features --all-targets --locked --offline -- -D warnings
+cargo check --manifest-path media/Cargo.toml -p mui-stage --no-default-features --locked --offline

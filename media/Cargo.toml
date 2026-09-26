@@ -1,0 +1,71 @@
+# The media workspace: offline trailer, film and capture crates that own their
+# GPU device and pull in ffmpeg/browser handoffs. Kept out of the root
+# workspace so a plugin build never compiles them. Depends on ../crates/* by
+# path. Gate: tools/verify.sh (media section).
+[workspace]
+members = [
+  "mui-stage",
+  "mui-reel",
+  "mui-motion-bridge",
+]
+resolver = "2"
+
+# Copied from the root Cargo.toml; keep in sync.
+[workspace.package]
+version = "0.3.2"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT"
+
+[workspace.dependencies]
+# Root crates, by path.
+mui = { path = "../crates/mui" }
+mui-geometry = { path = "../crates/mui-geometry" }
+mui-scene = { path = "../crates/mui-scene" }
+mui-text = { path = "../crates/mui-text" }
+mui-vello = { path = "../crates/mui-vello" }
+# Media crates.
+mui-stage = { path = "mui-stage" }
+
+wgpu = { version = "30", default-features = false }
+pollster = "0.4"
+png = "0.18"
+serde_json = "1"
+epaint_default_fonts = "0.36"
+
+# Copied from the root Cargo.toml; keep in sync.
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+unused_must_use = "deny"
+
+[workspace.lints.clippy]
+undocumented_unsafe_blocks = "deny"
+allow_attributes_without_reason = "warn"
+allow_attributes = "warn"
+dbg_macro = "deny"
+todo = "deny"
+semicolon_if_nothing_returned = "warn"
+redundant_closure_for_method_calls = "warn"
+manual_let_else = "warn"
+needless_pass_by_value = "warn"
+cloned_instead_of_copied = "warn"
+explicit_iter_loop = "warn"
+map_unwrap_or = "warn"
+inefficient_to_string = "warn"
+implicit_clone = "warn"
+unnested_or_patterns = "warn"
+default_trait_access = "warn"
+uninlined_format_args = "warn"
+single_match_else = "warn"
+match_same_arms = "warn"
+redundant_else = "warn"
+if_not_else = "warn"
+items_after_statements = "warn"
+unreadable_literal = "allow"
+
+# Same dev profile trade as the root: optimised dependencies, -O1 for ours.
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.dev]
+opt-level = 1

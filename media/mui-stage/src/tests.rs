@@ -248,3 +248,42 @@ fn text_extrudes_from_its_own_glyphs() {
         "faces {white}, walls {wall} ({w}x{h})"
     );
 }
+
+#[test]
+fn layers_of_different_sizes_share_one_renderer() {
+    let Some(mut stage) = stage(320, 180) else {
+        return;
+    };
+    let red = resolve_scene(&SceneSpec::new(
+        leaf(40., 40.).radius(0.).fill(Color::srgb(1., 0., 0.)),
+    ))
+    .unwrap();
+    let size = Size::new(160., 90.);
+    // Small then large, then small again: each keeps its own pixels.
+    stage.layer("r", &red, Size::new(40., 40.), 1.).unwrap();
+    stage.layer("l", &halves(size), size, 2.).unwrap();
+    stage.layer("r", &red, Size::new(40., 40.), 1.).unwrap();
+    let front = |id: &'static str| {
+        move |_| Shot {
+            planes: vec![Plane::new(id, 160., 90.)],
+            post: Post::NONE,
+            ..Shot::new(Camera::front(90., 30.))
+        }
+    };
+    let r = stage.render(0., 0., 1, &front("r")).unwrap();
+    let l = stage.render(0., 0., 1, &front("l")).unwrap();
+    let at = |f: &Frame, x: usize, y: usize| -> [f32; 3] {
+        let i = (y * 320 + x) * 4;
+        [f.rgba[i], f.rgba[i + 1], f.rgba[i + 2]]
+    };
+    assert!(
+        at(&r, 160, 90)[0] > 0.9 && at(&r, 160, 90)[1] < 0.1,
+        "{:?}",
+        at(&r, 160, 90)
+    );
+    assert!(
+        at(&l, 80, 90)[1] > 0.99 && at(&l, 240, 90)[0] < 0.01,
+        "{:?}",
+        at(&l, 80, 90)
+    );
+}

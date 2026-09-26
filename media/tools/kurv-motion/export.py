@@ -9,7 +9,7 @@ import shutil
 import subprocess
 import tarfile
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 REVISION = '25f57dcefb2111bfae5fc1dd355b4eed65c56172'
 
 def run(args, **kw):
@@ -18,7 +18,7 @@ def run(args, **kw):
 def install_capture_runtime(dst):
     """Reuse the shared framework capture/transport crate in a pinned checkout."""
     shared = dst / '.build-inputs/mui2'
-    shutil.copytree(ROOT / 'crates/mui-motion-bridge', shared / 'crates/mui-motion-bridge', dirs_exist_ok=True)
+    shutil.copytree(ROOT / 'media/mui-motion-bridge', shared / 'crates/mui-motion-bridge', dirs_exist_ok=True)
     workspace = shared / 'Cargo.toml'
     text = workspace.read_text()
     if '"crates/mui-motion-bridge"' not in text:
@@ -94,7 +94,7 @@ def main():
     if text.count(marker) != 1: raise RuntimeError('Kurv gallery hook changed')
     text = text.replace(marker, marker + '\n        motion_export(scene, width, height, scale)?;')
     text = text.replace('let root = racks.tree(&mut ui, &input);', 'let root = racks.tree(&mut ui, &input);\n        let root = motion_resize(&root)?;')
-    text += '\n' + (ROOT / 'tools/kurv-motion/capture.rs').read_text()
+    text += '\n' + (ROOT / 'media/tools/kurv-motion/capture.rs').read_text()
     if gallery.read_text() != text: gallery.write_text(text)
     out.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ, MUI_MOTION_OUTPUT=str(out), MUI_MOTION_PARTS=json.dumps(a.parts))

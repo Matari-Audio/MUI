@@ -177,14 +177,18 @@ impl CaptureStream {
         scale: f64,
         roots: &[String],
     ) -> Result<serde_json::Value, String> {
-        use sha2::{Digest, Sha256};
+        use std::hash::{DefaultHasher, Hash, Hasher};
         let mut frame = capture_cached(scene, width, height, scale, roots, &mut self.cache)?;
         let source = frame["images"].take();
         let mut images = serde_json::Map::new();
         let mut current = std::collections::HashSet::new();
         for layer in frame["scene"]["layers"].as_array_mut().unwrap() {
             let data = source[layer["src"].as_str().unwrap()].as_str().unwrap();
-            let name = format!("{:x}.png", Sha256::digest(data.as_bytes()));
+            // ponytail: 64-bit std hash, not a digest; a collision in one
+            // session would reuse a stale texture. Names never leave the session.
+            let mut hash = DefaultHasher::new();
+            data.hash(&mut hash);
+            let name = format!("{:016x}-{}.png", hash.finish(), data.len());
             if !self.previous.contains(&name) {
                 images.insert(name.clone(), serde_json::Value::String(data.into()));
             }

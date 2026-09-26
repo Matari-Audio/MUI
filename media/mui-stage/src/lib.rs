@@ -34,7 +34,55 @@ use wgpu::util::DeviceExt;
 mod math;
 pub use math::Mat4;
 
-pub type Error = Box<dyn std::error::Error>;
+/// Why the stage could not render.
+#[derive(Debug)]
+pub enum Error {
+    /// The adapter, device, readback or a shader said no.
+    Gpu(String),
+    /// A shot names a layer [`Stage::layer`] never painted.
+    MissingLayer(String),
+    /// Vello could not paint a layer.
+    Render(mui_vello::effects::Error),
+    Text(mui_text::Error),
+    Geometry(mui_geometry::Error),
+    Scene(mui_scene::SceneError),
+}
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Gpu(s) => write!(f, "stage GPU: {s}"),
+            Self::MissingLayer(s) => write!(f, "no layer {s:?}: paint it with Stage::layer first"),
+            Self::Render(e) => write!(f, "stage layer: {e}"),
+            Self::Text(e) => write!(f, "stage text: {e}"),
+            Self::Geometry(e) => write!(f, "stage geometry: {e}"),
+            Self::Scene(e) => write!(f, "stage scene: {e}"),
+        }
+    }
+}
+impl std::error::Error for Error {}
+impl From<mui_vello::effects::Error> for Error {
+    fn from(e: mui_vello::effects::Error) -> Self {
+        Self::Render(e)
+    }
+}
+impl From<mui_text::Error> for Error {
+    fn from(e: mui_text::Error) -> Self {
+        Self::Text(e)
+    }
+}
+impl From<mui_geometry::Error> for Error {
+    fn from(e: mui_geometry::Error) -> Self {
+        Self::Geometry(e)
+    }
+}
+impl From<mui_scene::SceneError> for Error {
+    fn from(e: mui_scene::SceneError) -> Self {
+        Self::Scene(e)
+    }
+}
+fn gpu(e: impl std::fmt::Display) -> Error {
+    Error::Gpu(e.to_string())
+}
 
 const SHADER: &str = include_str!("stage.wgsl");
 /// Drifting light over a dark floor: something to see through the glass
@@ -354,7 +402,6 @@ struct Layer {
     /// The same, premultiplied linear light, with a full mip chain.
     texture: wgpu::Texture,
     group: wgpu::BindGroup,
-    renderer: GpuRenderer,
 }
 
 struct Pipelines {
@@ -400,6 +447,8 @@ pub struct Stage {
     out: wgpu::Texture,
     readback: wgpu::Buffer,
     layers: HashMap<String, Layer>,
+    /// One Vello pipeline set for every layer, resized to each in turn.
+    renderer: GpuRenderer,
 }
 
 fn target(
@@ -440,7 +489,8 @@ impl Stage {
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
             ..Default::default()
-        }))?;
+        }))
+        .map_err(gpu)?;
         // A bare GL or software adapter may lack these; say so instead of
         // failing validation halfway through a take.
         let hdr = adapter.get_texture_format_features(HDR);
@@ -451,14 +501,14 @@ impl Stage {
                 .allowed_usages
                 .contains(wgpu::TextureUsages::RENDER_ATTACHMENT)
         {
-            return Err(format!(
+            return Err(Error::Gpu(format!(
                 "{} cannot render the stage: needs {SAMPLES}x MSAA {HDR:?} and a {OUT:?} target",
                 adapter.get_info().name
-            )
-            .into());
+            )));
         }
         let (device, queue) =
-            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))?;
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
+                .map_err(gpu)?;
         Self::with_device(device, queue, width, height)
     }
 
@@ -549,6 +599,13 @@ impl Stage {
             ..Default::default()
         });
         let pipes = pipelines(&device, &layout, DEFAULT_BACKGROUND)?;
+        let renderer = pollster::block_on(GpuRenderer::new(
+            &device,
+            &queue,
+            wgpu::TextureFormat::Rgba8Unorm,
+            [1, 1],
+            Budget::default(),
+        ))?;
 
         let msaa = view(&target(
             &device,
@@ -620,6 +677,7 @@ impl Stage {
             out,
             readback,
             layers: HashMap::new(),
+            renderer,
         })
     }
 
@@ -633,8 +691,8 @@ impl Stage {
     }
 
     /// Paint `scene` into the texture named `id` at `supersample` pixels per
-    /// logical unit. Call it every frame the UI changes; the texture and its
-    /// Vello renderer are kept while the size is.
+    /// logical unit. Call it every frame the UI changes; the texture is
+    /// kept while the size is.
     pub fn layer(
         &mut self,
         id: &str,
@@ -678,27 +736,20 @@ impl Stage {
                 view_formats: &[],
             });
             let group = self.tex_group(&view(&texture), &view(&texture));
-            let renderer = pollster::block_on(GpuRenderer::new(
-                &self.device,
-                &self.queue,
-                wgpu::TextureFormat::Rgba8Unorm,
-                [w.into(), h.into()],
-                Budget::default(),
-            ))?;
             self.layers.insert(
                 id.into(),
                 Layer {
                     raw,
                     texture,
                     group,
-                    renderer,
                 },
             );
         }
-        let layer = self.layers.get_mut(id).expect("inserted above");
-        let target = view(&layer.raw);
-        layer
-            .renderer
+        let target = view(&self.layers[id].raw);
+        // Shared across layers: switching layers re-encodes (damage against
+        // the last layer drawn), which a layer call does anyway.
+        self.renderer.resize([w.into(), h.into()])?;
+        self.renderer
             .render(scene, Affine::scale(supersample), &target)?;
         let mut enc = self
             .device
@@ -859,7 +910,7 @@ impl Stage {
             .take(64)
             .collect();
         if let Some(p) = planes.iter().find(|p| !self.layers.contains_key(&p.layer)) {
-            return Err(format!("no layer {:?}: paint it with Stage::layer first", p.layer).into());
+            return Err(Error::MissingLayer(p.layer.clone()));
         }
         let n = planes.len();
         // Slots: planes 0..n, their reflections n..2n, the floor at 2n.
@@ -1135,10 +1186,16 @@ impl Stage {
         self.queue.submit([enc.finish()]);
         let slice = self.readback.slice(..);
         slice.map_async(wgpu::MapMode::Read, |_| {});
-        self.device.poll(wgpu::PollType::wait_indefinitely())?;
+        self.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .map_err(gpu)?;
         let stride = self.width as usize * 16;
         let mut rgba = Vec::with_capacity(self.width as usize * self.height as usize * 4);
-        for line in slice.get_mapped_range()?.chunks_exact(row as usize) {
+        for line in slice
+            .get_mapped_range()
+            .map_err(gpu)?
+            .chunks_exact(row as usize)
+        {
             rgba.extend_from_slice(bytemuck::cast_slice::<u8, f32>(&line[..stride]));
         }
         self.readback.unmap();
@@ -1357,7 +1414,7 @@ fn pipelines(
         dof: make("vs_full", "fs_dof", HDR, None, false, false, &[]),
     };
     match pollster::block_on(scope.pop()) {
-        Some(e) => Err(e.to_string().into()),
+        Some(e) => Err(gpu(e)),
         None => Ok(p),
     }
 }

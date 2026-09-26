@@ -6,14 +6,11 @@ members = [
   "crates/mui-motion",
   "crates/mui-layout",
   "crates/mui-scene",
-  "crates/mui-motion-bridge",
-  "crates/mui-reel",
   "crates/mui",
   "crates/mui-preview",
   "crates/mui-playground",
   "crates/mui-text",
   "crates/mui-vello",
-  "crates/mui-stage",
   "crates/mui-truce",
   "crates/mui-input",
   "crates/mui-access",
@@ -21,6 +18,8 @@ members = [
   "vendor/vello",
 ]
 resolver = "2"
+# The trailer/film crates (mui-stage, mui-reel, mui-motion-bridge) live in
+# media/, their own workspace: `cargo test --manifest-path media/Cargo.toml`.
 
 [workspace.package]
 version = "0.3.2"
@@ -36,12 +35,9 @@ mui-geometry = { path = "crates/mui-geometry" }
 mui-input = { path = "crates/mui-input" }
 mui-layout = { path = "crates/mui-layout" }
 mui-motion = { path = "crates/mui-motion" }
-mui-motion-bridge = { path = "crates/mui-motion-bridge" }
 mui-playground = { path = "crates/mui-playground" }
 mui-preview = { path = "crates/mui-preview" }
-mui-reel = { path = "crates/mui-reel" }
 mui-scene = { path = "crates/mui-scene" }
-mui-stage = { path = "crates/mui-stage" }
 mui-style = { path = "crates/mui-style" }
 mui-text = { path = "crates/mui-text" }
 mui-truce = { path = "crates/mui-truce" }
@@ -55,8 +51,7 @@ rustc-hash = "2"
 kurbo = "0.13.1"
 wgpu = { version = "30", default-features = false }
 pollster = "0.4"
-png = "0.17"
-serde_json = "1"
+png = "0.18"
 epaint_default_fonts = "0.36"
 ttf-inter = { version = "0.1", default-features = false, features = ["v"] }
 vello_cpu = { version = "0.2", default-features = false, features = ["std", "u8_pipeline", "text"] }

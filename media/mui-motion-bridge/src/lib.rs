@@ -50,7 +50,7 @@ pub fn note_event(v: &Value) -> Result<NoteEvent, String> {
 /// A plugin adapter. Audio is moved to its own thread; edits and snapshots run
 /// on the caller thread. Share the plugin's existing thread-safe parameter model.
 /// `describe` returns plugin name/capabilities; `snapshot` returns the capture
-/// manifest and optional editable modules. See tools/mui-motion/README.md.
+/// manifest and optional editable modules. See tools/film/README.md.
 ///
 /// The process's stdin/stdout are reserved for this versioned local protocol.
 /// No graphics work occurs on the audio thread. The supplied audio callback must

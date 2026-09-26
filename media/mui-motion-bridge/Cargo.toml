@@ -8,7 +8,6 @@ license.workspace = true
 [dependencies]
 mui.workspace = true
 base64 = "0.22"
-sha2 = "0.10"
 mui-scene.workspace = true
 mui-vello = { workspace = true, features = ["cpu"] }
 serde_json.workspace = true

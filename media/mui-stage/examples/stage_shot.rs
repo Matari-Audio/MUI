@@ -82,7 +82,7 @@ fn shot(t: f64) -> Shot {
     }
 }
 
-fn main() -> Result<(), mui_stage::Error> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let dir = std::path::PathBuf::from(std::env::args().nth(1).unwrap_or("stage".into()));
     std::fs::create_dir_all(&dir)?;
     let mut stage = Stage::new(W, H)?;

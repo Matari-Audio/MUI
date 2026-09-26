@@ -26,7 +26,52 @@ use mui::vello::kurbo::{Affine, BezPath, Rect, Stroke};
 use mui::vello::vello_cpu::{Pixmap, RenderContext, Resources};
 use serde_json::{Value, json};
 
-pub type Error = Box<dyn std::error::Error>;
+/// Why a take failed.
+#[derive(Debug)]
+pub enum Error {
+    Io(std::io::Error),
+    Json(serde_json::Error),
+    Png(png::EncodingError),
+    /// A layer split: a surface the script named cannot be isolated.
+    Capture(mui::scene::CaptureError),
+    /// The script, the UI or ffmpeg said no; the message says which.
+    Script(String),
+    /// The [`Look`] failed; its own error, untouched.
+    Look(Box<dyn std::error::Error>),
+}
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io(e) => write!(f, "reel io: {e}"),
+            Self::Json(e) => write!(f, "reel json: {e}"),
+            Self::Png(e) => write!(f, "reel png: {e}"),
+            Self::Capture(e) => write!(f, "reel layer: {e}"),
+            Self::Script(s) => write!(f, "reel: {s}"),
+            Self::Look(e) => write!(f, "reel look: {e}"),
+        }
+    }
+}
+impl std::error::Error for Error {}
+impl From<std::io::Error> for Error {
+    fn from(e: std::io::Error) -> Self {
+        Self::Io(e)
+    }
+}
+impl From<serde_json::Error> for Error {
+    fn from(e: serde_json::Error) -> Self {
+        Self::Json(e)
+    }
+}
+impl From<mui::scene::CaptureError> for Error {
+    fn from(e: mui::scene::CaptureError) -> Self {
+        Self::Capture(e)
+    }
+}
+impl From<png::EncodingError> for Error {
+    fn from(e: png::EncodingError) -> Self {
+        Self::Png(e)
+    }
+}
 
 /// A point on the script's clock: seconds, or beats at the reel's bpm.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -262,7 +307,7 @@ impl<S> Script<S> {
 
 /// Draws the take's picture for [`Reel::render_through`]: one subframe in,
 /// `Reel::pixels()` straight RGBA out.
-pub type Look<'a> = &'a mut dyn FnMut(&Take<'_>) -> Result<Vec<u8>, Error>;
+pub type Look<'a> = &'a mut dyn FnMut(&Take<'_>) -> Result<Vec<u8>, Box<dyn std::error::Error>>;
 
 /// One subframe, as a [`Look`] sees it.
 pub struct Take<'a> {
@@ -421,7 +466,7 @@ impl Reel {
             At::Secs(s) => Ok(s),
             At::Beats(b) => match self.bpm {
                 Some(bpm) if bpm > 0.0 => Ok(b * 60.0 / bpm),
-                _ => Err("a beat time needs Reel::bpm".into()),
+                _ => Err(Error::Script("a beat time needs Reel::bpm".into())),
             },
         }
     }
@@ -622,7 +667,7 @@ impl Reel {
         out: &mut dyn FnMut(Shot) -> Result<(), Error>,
     ) -> Result<Value, Error> {
         if self.fps == 0 || !(self.scale.is_finite() && self.scale > 0.0) {
-            return Err("fps and scale must be positive".into());
+            return Err(Error::Script("fps and scale must be positive".into()));
         }
         let fps = f64::from(self.fps);
         let n = self.blur.max(1) as usize;
@@ -763,7 +808,7 @@ impl Reel {
                 let root = build(&mut ui, state);
                 let frame = ui
                     .frame(root, Some(self.size), input, dt)
-                    .map_err(|e| format!("frame {i}: {e}"))?;
+                    .map_err(|e| Error::Script(format!("frame {i}: {e}")))?;
                 for (id, e) in &frame.edits {
                     let e = ReelEvent::Edit {
                         id: id.clone(),
@@ -802,13 +847,13 @@ impl Reel {
                             t,
                             camera: [cx, cy, zoom],
                             pointer: self.cursor.then_some(pos).flatten().map(|p| (p, down)),
-                        })?;
+                        })
+                        .map_err(Error::Look)?;
                         if rgba.len() != usize::from(w) * usize::from(h) * 4 {
-                            return Err(format!(
+                            return Err(Error::Script(format!(
                                 "the look returned {} bytes, not {w}x{h} RGBA",
                                 rgba.len()
-                            )
-                            .into());
+                            )));
                         }
                         rgba
                     }
@@ -970,7 +1015,9 @@ fn surface(ui: &Ui, id: &str, i: usize) -> Result<mui::layout::Frame, Error> {
         .and_then(|s| s.surface(id))
         .map(|s| s.frame)
         .ok_or_else(|| {
-            format!("frame {i}: no surface '{id}' (the first frame has no scene yet)").into()
+            Error::Script(format!(
+                "frame {i}: no surface '{id}' (the first frame has no scene yet)"
+            ))
         })
 }
 
@@ -1068,7 +1115,7 @@ impl Raster {
             scene,
             view,
         )
-        .map_err(|e| format!("paint: {e:?}"))?;
+        .map_err(|e| Error::Script(format!("paint: {e:?}")))?;
         if let Some(((p, down), s)) = cursor {
             // A classic arrow, tip at the pointer; it dips when pressed.
             let mut path = BezPath::new();
@@ -1219,7 +1266,7 @@ impl Sink {
             Sink::Ffmpeg(child, _) => child
                 .stdin
                 .as_mut()
-                .ok_or("ffmpeg stdin closed")?
+                .ok_or_else(|| Error::Script("ffmpeg stdin closed".into()))?
                 .write_all(rgba)?,
             Sink::Png(dir, w, h, n, _) => {
                 let file = std::fs::File::create(dir.join(format!("{n:05}.png")))?;
@@ -1237,7 +1284,7 @@ impl Sink {
             Sink::Ffmpeg(mut child, file) => {
                 drop(child.stdin.take());
                 if !child.wait()?.success() {
-                    return Err(format!("ffmpeg failed writing {file}").into());
+                    return Err(Error::Script(format!("ffmpeg failed writing {file}")));
                 }
                 Ok(file)
             }

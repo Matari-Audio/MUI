@@ -1,17 +1,17 @@
 /** Run against an already served project; uses HyperFrames' Puppeteer dependency.
  * PUPPETEER_MODULE=/absolute/path/to/puppeteer-core.js CHROME=/path/to/chrome \
- * node tools/kurv-motion/browser-check.mjs http://localhost:3018 http://localhost:3017
+ * node media/tools/kurv-motion/browser-check.mjs http://localhost:3018 http://localhost:3017
  */
 import assert from 'node:assert/strict';
 import {mkdir} from 'node:fs/promises';
 const {default:puppeteer}=await import(process.env.PUPPETEER_MODULE || 'puppeteer-core');
 const [base='http://localhost:3018',studio='http://localhost:3017']=process.argv.slice(2);
-const shots=new URL('../../videos/kurv-unfold/.impeccable/review/',import.meta.url);
+const shots=new URL('../../../videos/kurv-unfold/.impeccable/review/',import.meta.url);
 await mkdir(shots,{recursive:true});
 const browser=await puppeteer.launch({executablePath:process.env.CHROME,headless:true,args:['--no-sandbox']});
 try{
  const page=await browser.newPage();const errors=[];page.on('pageerror',e=>{errors.push(e.message);console.error(e.message);});
- await page.setViewport({width:1440,height:1000});await page.goto(base+'/tools/kurv-motion/lab.html');
+ await page.setViewport({width:1440,height:1000});await page.goto(base+'/media/tools/kurv-motion/lab.html');
  await page.waitForFunction(()=>!document.querySelector('#part').disabled);
  assert.equal(await page.$$eval('.mui-plane img',imgs=>imgs.every(i=>i.complete&&i.naturalWidth>0)),true);
  await page.select('#part','osc/0');

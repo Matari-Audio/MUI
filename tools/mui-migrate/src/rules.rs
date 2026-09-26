@@ -122,6 +122,11 @@ pub const RULES: &[Rule] = &[
     Manual { pattern: "resolve_scene_retained", note: "use `Resolver`: `let mut r = Resolver::new(); r.resolve(&spec)`" },
     // Widgets.
     Manual { pattern: "color_picker (", note: "`color_picker`'s positional `alpha: bool` became an option; check the call" },
+    // mui-truce: `Bridge::bind` derives the widget id from the parameter.
+    // ponytail: `args` splits the old `|ui, v|` closure at its comma ($4, $5), which is
+    // what lets the rule insert `id`; if `args` learns closures, this becomes 4 args.
+    Call { chain: &[("bind", &[A, Has("\""), A, A, A])], to: ".bind($1, $3, $4, id, $5)", gate: Mui, needs: &[] },
+    Manual { pattern: ".bind", note: "`Bridge::bind`'s closure is `|ui, id, v|`: pass `id` to the widget; a toggle can use `bind_bool(ui, P, |ui, id, on| ..)`" },
 ];
 
 /// Calls whose tuple result became a named struct. `f(..).0` -> `.el`,

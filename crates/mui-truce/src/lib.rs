@@ -7,7 +7,7 @@
 //! that knows no plugin framework.
 #![deny(unsafe_code)]
 pub mod bridge;
-pub use bridge::Bridge;
+pub use bridge::{Bridge, widget_id};
 
 #[cfg(not(target_arch = "wasm32"))]
 mod editor;

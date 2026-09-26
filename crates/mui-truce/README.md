@@ -16,8 +16,8 @@ store, the audio runtime and the state format. This crate adds the editor:
 ```rust
 fn editor(params: Arc<GainParams>) -> Box<dyn Editor> {
     MuiEditor::new(params, Ui::new(Theme::DEFAULT), (300, 200), |ui, bridge| {
-        let gain = bridge.bind(ui, "gain", P::Gain, |ui, v| {
-            knob(ui, "gain", "Gain", v, 0.0..=1.0).0.el()
+        let gain = bridge.bind(ui, P::Gain, |ui, id, v| {
+            knob(ui, id, "Gain", v, 0.0..=1.0).0.el()
         });
         col![gain, title(bridge.text(P::Gain))].pad(L).fill(Surface)
     })
@@ -26,7 +26,11 @@ fn editor(params: Arc<GainParams>) -> Box<dyn Editor> {
 }
 ```
 
-The `v` that `bind` passes in is the parameter's **normalized** value. The
+`bind` derives the widget id from the parameter (`widget_id(P::Gain)`, which
+is `param/0`) and hands it to the closure, so the id the widget reports its
+gesture under cannot differ from the one the parameter listens for. The `v`
+it passes in is the parameter's **normalized** value. `bind_bool` is the same
+for a switch, with a `&mut bool`. The
 bridge handles gestures as follows:
 
 - A gesture (`Edit::Begin` .. `Edit::End`) is one host begin/end bracket, with

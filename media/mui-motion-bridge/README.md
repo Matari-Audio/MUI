@@ -4,4 +4,4 @@ Optional development host for a persistent native MUI editor and its real audio 
 
 The independent `tone` example and Kurv adapter use the same infrastructure. Normal MUI builds do not depend on this crate. The existing `mui-motion` crate continues to own spring/curve mathematics.
 
-See [the integration and scripting guide](../../tools/mui-motion/README.md).
+See [the integration and scripting guide](../../tools/film/README.md).
