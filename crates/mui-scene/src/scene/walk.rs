@@ -805,11 +805,14 @@ impl<'a> Walk<'a> {
     }
 }
 
+/// A clip list, and the same list moved.
+type Clips = Arc<[Arc<Path>]>;
+
 /// A copied span moved by `d`: every path, rect, origin and clip in it.
 /// Clip lists shared between surfaces are moved once and stay shared.
 struct Shift {
     d: Point,
-    lists: Vec<(*const [Arc<Path>], Arc<[Arc<Path>]>)>,
+    lists: Vec<(*const [Arc<Path>], Clips)>,
 }
 impl Shift {
     fn new(d: Point) -> Self {
