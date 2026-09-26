@@ -1,98 +1,32 @@
-//! A native MUI window that knows no plugin framework: a baseview window,
-//! a wgpu surface on it, and `GpuRenderer` painting the resolved scene.
-//! [`open`] parents it under a plugin host's window (mui-truce's
-//! `MuiEditor` is one consumer; any other framework's adapter opens the same
-//! window with its own [`View`]); [`run`] is the same window as a standalone
-//! app.
+//! A native MUI window over baseview: [`open`] parents it under a plugin
+//! host's window (mui-truce's `MuiEditor` is one consumer; any other
+//! framework's adapter opens the same window with its own [`View`]), and
+//! [`run`] is the same window as a standalone app.
 //!
-//! The tree and the pointer are in **logical points**; the surface is
-//! physical, and the paint transform applies the window's scale once.
-//!
-//! Native events are queued and each gets its own `Ui::frame` on the next
-//! display tick, so a press and release that land between two ticks are
-//! still two frames. A tick with no event, no model change, no animation
-//! and no deadline due paints nothing.
+//! This crate only translates baseview's events into [`mui::host::Driver`]
+//! calls and presents through `mui::vello::host::Host`; the queue, the
+//! frame schedule, zoom and key routing are `mui::host`'s, so another
+//! window crate hosts the same [`View`] the same way.
 #![deny(unsafe_code)]
-use std::collections::VecDeque;
-use std::path::PathBuf;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use a11y::A11y;
 use baseview::{
-    DropData, DropEffect, Event, EventStatus, MouseButton, MouseCursor, MouseEvent, Window,
-    WindowEvent, WindowHandle, WindowHandler, WindowOpenOptions, WindowScalePolicy,
+    DropData, DropEffect, Event, EventStatus, MouseButton, MouseCursor, MouseEvent, ScrollDelta,
+    Window, WindowEvent, WindowHandle, WindowHandler, WindowOpenOptions, WindowScalePolicy,
 };
-use keyboard_types::{Code, Key as HostKey, KeyState, KeyboardEvent, Modifiers};
-use mui::Ui;
-use mui::prelude::{
-    Button, Cursor, El, Input, Key, KeyPress, Mods, Point, PointerInput, Size, Vec2,
-};
+use keyboard_types::{Key as HostKey, KeyState, KeyboardEvent, Modifiers};
+use mui::host::{Driver, KeyEvent, Modifier, NativeKey, Wheel};
+pub use mui::host::{Shared, View, lock};
+use mui::prelude::{Button, Cursor, Key, Mods, Point};
 use mui::vello::host::{Frame, Host, target_size};
 use mui::vello::kurbo::Affine;
 use raw_window_handle::HasRawWindowHandle;
 
-/// A frame after a stall advances time by at most this. Springs are closed
-/// form and do not need it; a tooltip timer should not jump a whole idle
-/// minute on the first hover after it.
-const MAX_DT: f64 = 1.0;
 const GPU_RETRY: Duration = Duration::from_millis(500);
-
-/// What the window asks of whoever owns the model.
-pub trait View: Send + 'static {
-    /// This frame's tree, and the input the frame is about to take.
-    fn build(&mut self, ui: &mut Ui, input: &Input) -> El;
-    /// Whether the model moved outside the `Ui` since the last call --
-    /// automation, a preset, a meter. Polled every display tick.
-    fn changed(&mut self) -> bool;
-    /// Ask the host for a new window size in logical points. A host may
-    /// refuse, and the window clips rather than overflowing.
-    fn request_resize(&mut self, width: u32, height: u32) -> bool;
-    /// After each frame that laid out: read what it dispatched.
-    fn after_frame(&mut self, ui: &mut Ui) {
-        let _ = ui;
-    }
-    /// The gesture in flight was cancelled: focus left, or the window closes.
-    fn cancel(&mut self, ui: &Ui) {
-        let _ = ui;
-    }
-    /// A UI zoom on top of the window's scale: 2 draws everything twice as
-    /// big and offers the tree half the logical size. Read once per tick.
-    fn zoom(&self) -> f64 {
-        1.0
-    }
-    /// Files dragged over the window at `at` (scene units); `dropped` on
-    /// release. `true` accepts them as a copy.
-    fn drop_files(&mut self, ui: &Ui, at: Point, paths: &[PathBuf], dropped: bool) -> bool {
-        let _ = (ui, at, paths, dropped);
-        false
-    }
-    /// An app-wide shortcut the window keeps even with no focused control
-    /// (undo, help, escape). Everything else unfocused goes to the host.
-    fn claims_key(&self, key: &Key, mods: Mods) -> bool {
-        let _ = (key, mods);
-        false
-    }
-    /// A line for the log: GPU failures, refused layouts, swallowed panics.
-    fn log(&mut self, line: &str) {
-        eprintln!("{line}");
-    }
-}
-
-/// The retained `Ui` and the model: shared between the window thread and
-/// the plugin's editor, which locks it to end gestures on close.
-pub struct Shared<V> {
-    pub ui: Ui,
-    pub view: V,
-}
-
-/// Lock the shared state, through a poisoned lock.
-pub fn lock<V>(shared: &Mutex<Shared<V>>) -> MutexGuard<'_, Shared<V>> {
-    // A panic caught at the FFI edge (unwinding builds only) poisons the
-    // lock; the state is still the last consistent frame's.
-    shared.lock().unwrap_or_else(PoisonError::into_inner)
-}
 
 /// Requests from the host's thread, applied by the window's next tick,
 /// which is the only place a baseview `Window` can be touched.
@@ -183,25 +117,13 @@ fn prepare<V: View>(
     (options, build)
 }
 
-/// A native event, as the frame it will become. Each carries its pointer
-/// snapshot, so a fast click is not coalesced into a motionless button.
-/// The queue is unbounded on purpose: dropping an edge loses an automation
-/// bracket, and the native event loop is already the bounded producer.
-#[derive(Debug)]
-enum Pending {
-    Input(Input),
-    /// Hover with no button: consecutive ones coalesce into the newest.
-    Move(Input),
-    /// Focus went away mid-gesture.
-    Cancel(PointerInput),
-}
-
 /// The window's event handler. Public so a framework adapter can drive it
 /// headless in its own tests ([`Handler::new`], [`Handler::step`],
 /// [`Handler::on_event_inner`]); a window gets one from [`open`] or [`run`].
 #[doc(hidden)]
 pub struct Handler<V> {
     shared: Arc<Mutex<Shared<V>>>,
+    requests: Arc<Requests>,
     gpu: Option<Host>,
     gpu_retry_at: Instant,
     applied_cursor: Option<MouseCursor>,
@@ -211,35 +133,8 @@ pub struct Handler<V> {
     a11y: Option<A11y>,
     /// A child of a host's window: keep it pinned to the parent's top.
     parented: bool,
-    driver: Driver,
-}
-
-/// Everything but the model and the GPU: the event queue and the frame
-/// schedule. Its own struct so a frame can borrow it next to the locked
-/// model.
-struct Driver {
-    requests: Arc<Requests>,
-    pointer: PointerInput,
-    pending: VecDeque<Pending>,
-    clipboard: Clipboard,
-    /// Physical pixels, and physical per logical.
-    size: (u32, u32),
-    scale: f64,
-    /// [`View::zoom`], as of the last tick.
-    zoom: f64,
-    /// A wheel line in scene units: the theme's text size, as of last frame.
-    line: f64,
-    cursor: Cursor,
-    last_frame: Instant,
-    /// The model changed: rebuild.
-    dirty: bool,
-    animating: bool,
-    wake_at: Option<Instant>,
-    asked_to_grow: bool,
-    /// A refused layout is reported once per run of refusals.
-    failing: bool,
-    /// Keys down, and whether the window kept each press.
-    held: Vec<(Code, bool)>,
+    /// The queue and the frame schedule.
+    pub driver: Driver,
 }
 
 impl<V: View> Handler<V> {
@@ -250,38 +145,21 @@ impl<V: View> Handler<V> {
         size: (u32, u32),
         scale: f64,
     ) -> Self {
-        let now = Instant::now();
         Self {
             shared,
+            requests,
             gpu: None,
-            gpu_retry_at: now,
+            gpu_retry_at: Instant::now(),
             applied_cursor: None,
             unpainted: true,
             a11y: None,
             parented: false,
-            driver: Driver {
-                requests,
-                pointer: PointerInput::default(),
-                pending: VecDeque::new(),
-                clipboard: Clipboard::default(),
-                size,
-                scale,
-                zoom: 1.0,
-                line: 16.0,
-                cursor: Cursor::Arrow,
-                last_frame: now,
-                dirty: true,
-                animating: false,
-                wake_at: None,
-                asked_to_grow: false,
-                failing: false,
-                held: Vec::new(),
-            },
+            driver: Driver::new(size, scale, Box::new(Clipboard::default())),
         }
     }
 
     fn tick(&mut self, window: &mut Window) {
-        let requests = &self.driver.requests;
+        let requests = &self.requests;
         let packed = requests.size.swap(0, Ordering::AcqRel);
         if packed != 0 {
             let (w, h) = (packed >> 32, packed & u64::from(u32::MAX));
@@ -303,7 +181,10 @@ impl<V: View> Handler<V> {
             truce_gui_utils::reanchor_to_superview_top(handle);
         }
         let now = Instant::now();
-        let size = self.driver.size;
+        let size = self.driver.size();
+        if self.requests.redraw.swap(false, Ordering::AcqRel) {
+            self.driver.redraw();
+        }
         // Lost between presents: an idle editor would never find out. The
         // next present rebuilds the device.
         if self.gpu.as_ref().is_some_and(Host::device_lost) {
@@ -335,12 +216,12 @@ impl<V: View> Handler<V> {
             if let Some(a11y) = &a11y
                 && a11y.wants_tree()
             {
-                self.driver.dirty = true;
+                self.driver.redraw();
             }
             if let Some(a11y) = a11y
                 && a11y.apply(&mut s.ui)
             {
-                self.driver.dirty = true;
+                self.driver.redraw();
             }
             let fresh = self.driver.advance(&mut s, now);
             if let Some(a11y) = self.a11y.as_mut()
@@ -384,7 +265,7 @@ impl<V: View> Handler<V> {
                 }
             }
         }
-        let cursor = native_cursor(self.driver.cursor);
+        let cursor = native_cursor(self.driver.cursor());
         if self.applied_cursor != Some(cursor) {
             window.set_mouse_cursor(cursor);
             self.applied_cursor = Some(cursor);
@@ -394,325 +275,91 @@ impl<V: View> Handler<V> {
     /// One display tick without a window or GPU, a frame's time after the
     /// last: what the headless tests drive.
     pub fn step(&mut self) -> bool {
-        let now = self.driver.last_frame + Duration::from_millis(16);
+        if self.requests.redraw.swap(false, Ordering::AcqRel) {
+            self.driver.redraw();
+        }
+        let now = self.driver.last_frame() + Duration::from_millis(16);
         self.driver.advance(&mut lock(&self.shared), now)
     }
 
     /// One native event, as baseview delivers it.
-    pub fn on_event_inner(&mut self, event: &Event) -> EventStatus {
-        if let Event::Keyboard(key) = event {
-            let captured = self.route_key(key);
-            self.driver.push_key(key, captured);
-            return if captured {
-                EventStatus::Captured
-            } else {
-                EventStatus::Ignored
-            };
-        }
-        let status = self.driver.on_event(event);
-        if let Event::Mouse(
-            MouseEvent::DragEntered { data, .. }
-            | MouseEvent::DragMoved { data, .. }
-            | MouseEvent::DragDropped { data, .. },
-        ) = event
-            && let (DropData::Files(paths), Some(at)) = (data, self.driver.pointer.pos)
-        {
-            let dropped = matches!(event, Event::Mouse(MouseEvent::DragDropped { .. }));
-            let s = &mut *lock(&self.shared);
-            if s.view.drop_files(&s.ui, at, paths, dropped) {
-                return EventStatus::AcceptDrop(DropEffect::Copy);
-            }
-        }
-        if matches!(event, Event::Window(WindowEvent::WillClose)) {
-            let s = &mut *lock(&self.shared);
-            s.view.cancel(&s.ui);
-        }
-        if let (Some(a11y), Event::Window(e @ (WindowEvent::Focused | WindowEvent::Unfocused))) =
-            (self.a11y.as_mut(), event)
-        {
-            a11y.focus(matches!(e, WindowEvent::Focused));
-        }
-        status
-    }
-
-    /// Whether the window keeps this key, or the host gets it: a focused
-    /// text field takes every key, a focused control only its navigation
-    /// keys, and nothing else but [`View::claims_key`] -- so Space still
-    /// starts the host's transport. A release goes where its press went.
     // ponytail: Windows hosts also want `set_keyboard_capture` while a text
     // field is focused; upstream baseview-truce has no such call yet.
-    fn route_key(&mut self, key: &KeyboardEvent) -> bool {
-        let held = &mut self.driver.held;
-        if let Some(i) = held.iter().position(|(code, _)| *code == key.code) {
-            let captured = held[i].1;
-            if key.state == KeyState::Up {
-                held.swap_remove(i);
-            }
-            return captured;
-        }
-        if key.state == KeyState::Up {
-            return false;
-        }
-        let s = lock(&self.shared);
-        let captured = captures(&key.key, key_owner(&s.ui))
-            || shortcut_key(&key.key).is_some_and(|k| s.view.claims_key(&k, mods(key.modifiers)));
-        drop(s);
-        self.driver.held.push((key.code, captured));
-        captured
-    }
-}
-
-impl Driver {
-    /// Physical pixels per scene unit: the window's scale times the zoom.
-    fn ui_scale(&self) -> f64 {
-        self.scale * self.zoom
-    }
-
-    /// Run the queued events and whatever else is due through `Ui::frame`.
-    /// Returns whether there is a new scene to paint.
-    fn advance<V: View>(&mut self, s: &mut Shared<V>, now: Instant) -> bool {
-        self.dirty |= self.requests.redraw.swap(false, Ordering::AcqRel);
-        self.dirty |= s.view.changed();
-        let zoom = s.view.zoom();
-        if zoom.is_finite() && zoom > 0.0 && zoom != self.zoom {
-            self.zoom = zoom;
-            self.dirty = true;
-        }
-        if target_size(self.size.0, self.size.1).is_none() {
-            // Minimised: hold the input edges until there is a size again.
-            return false;
-        }
-        let due = self.wake_at.is_some_and(|at| now >= at);
-        if s.ui.scene().is_some()
-            && self.pending.is_empty()
-            && !self.dirty
-            && !self.animating
-            && !due
-        {
-            return false;
-        }
-        let dt = (now - self.last_frame).as_secs_f64().min(MAX_DT);
-        self.last_frame = now;
-        // Hit testing needs a scene: the first frame is neutral, and the
-        // queued events then land on what it laid out.
-        if s.ui.scene().is_none() && self.resolve(s, Input::default(), 0.0, now).is_err() {
-            return false;
-        }
-        let mut timed = false;
-        let mut laid_out = true;
-        while let Some(event) = self.pending.pop_front() {
-            let last = self.pending.is_empty();
-            let input = match event {
-                Pending::Input(input) | Pending::Move(input) => input,
-                Pending::Cancel(pointer) => {
-                    s.ui.cancel();
-                    s.view.cancel(&s.ui);
-                    Input::from(pointer)
-                }
-            };
-            // Only the last event of the tick carries the elapsed time.
-            let event_dt = if last { dt } else { 0.0 };
-            // A refused layout has still taken the event's pointer edge,
-            // focus change and keys, and queued its gesture edges for the
-            // next frame that resolves: replaying it would press or type
-            // twice. Only its wheel is lost.
-            laid_out = self.resolve(s, input, event_dt, now).is_ok();
-            timed |= last;
-        }
-        if !timed {
-            laid_out = self.resolve(s, Input::from(self.pointer), dt, now).is_ok();
-        }
-        if !laid_out {
-            return false;
-        }
-        self.dirty = false;
-        self.ask_to_grow(s);
-        true
-    }
-
-    fn resolve<V: View>(
-        &mut self,
-        s: &mut Shared<V>,
-        input: Input,
-        dt: f64,
-        now: Instant,
-    ) -> Result<(), ()> {
-        s.ui.set_scale(Some(self.ui_scale()));
-        self.line = s.ui.theme().text;
-        let root = s.view.build(&mut s.ui, &input);
-        let offered = logical_size(self.size, self.ui_scale());
-        match s.ui.frame(root, Some(offered), input, dt) {
-            Ok(frame) => {
-                self.failing = false;
-                self.cursor = frame.cursor;
-                // An edge is dispatched by the tree after the frame that
-                // delivered it: that tree has to come even if nothing moves.
-                self.animating = frame.animating || !frame.edits.is_empty();
-                self.wake_at = frame.repaint_after.map(|after| now + after);
-                if let Some(text) = frame.clipboard {
-                    self.clipboard.write(&text);
-                }
-                // ponytail: `frame.ime` is dropped; baseview has no
-                // candidate-window API to hand it to.
-                s.view.after_frame(&mut s.ui);
-                Ok(())
-            }
-            Err(e) => {
-                if !self.failing {
-                    s.view
-                        .log(&format!("mui-baseview: layout refused at {offered:?}: {e}"));
-                }
-                self.failing = true;
-                Err(())
-            }
-        }
-    }
-
-    /// The tree's measured floor, once per window, to the host: `min_size`
-    /// is a hint a host may ignore, so a window opened below the floor gets
-    /// one polite request to grow.
-    fn ask_to_grow<V: View>(&mut self, s: &mut Shared<V>) {
-        if std::mem::replace(&mut self.asked_to_grow, true) {
-            return;
-        }
-        let (Some(floor), available) = (s.ui.min_size(), logical_size(self.size, self.scale))
-        else {
-            return;
-        };
-        // The floor is in scene units; the window is in points, zoom times.
-        let (fw, fh) = (floor.width * self.zoom, floor.height * self.zoom);
-        if available.width < fw || available.height < fh {
-            let w = fw.max(available.width).ceil() as u32;
-            let h = fh.max(available.height).ceil() as u32;
-            s.view.request_resize(w, h);
-        }
-    }
-
-    fn on_event(&mut self, event: &Event) -> EventStatus {
+    pub fn on_event_inner(&mut self, event: &Event) -> EventStatus {
+        let d = &mut self.driver;
         match event {
-            Event::Mouse(mouse) => {
-                let mut input = Input::default();
-                self.on_mouse(mouse, &mut input);
-                input.pointer = self.pointer;
-                match mouse {
-                    MouseEvent::CursorMoved { .. } => self.push_move(input),
-                    // A file drag has nothing to drop onto: MUI has no
-                    // payload for it. Its position still moves the hover.
-                    MouseEvent::DragEntered { .. }
-                    | MouseEvent::DragMoved { .. }
-                    | MouseEvent::DragDropped { .. } => {
-                        self.push_move(input);
-                        return EventStatus::Ignored;
-                    }
-                    _ => self.pending.push_back(Pending::Input(input)),
-                }
+            Event::Keyboard(key) => {
+                let kept = d.key(&lock(&self.shared), &key_event(key));
+                return if kept {
+                    EventStatus::Captured
+                } else {
+                    EventStatus::Ignored
+                };
             }
-            Event::Keyboard(key) => self.push_key(key, true),
+            Event::Mouse(mouse) => match *mouse {
+                MouseEvent::CursorMoved {
+                    position,
+                    modifiers,
+                } => d.pointer_moved(Point::new(position.x, position.y), mods(modifiers)),
+                MouseEvent::ButtonPressed { button, modifiers }
+                | MouseEvent::ButtonReleased { button, modifiers } => {
+                    if let Some(b) = mouse_button(button) {
+                        let down = matches!(mouse, MouseEvent::ButtonPressed { .. });
+                        d.button(b, down, mods(modifiers));
+                    }
+                }
+                MouseEvent::WheelScrolled { delta, modifiers } => {
+                    let wheel = match delta {
+                        ScrollDelta::Lines { x, y } => Wheel::Lines(f64::from(x), f64::from(y)),
+                        ScrollDelta::Pixels { x, y } => Wheel::Pixels(f64::from(x), f64::from(y)),
+                    };
+                    d.wheel(wheel, mods(modifiers));
+                }
+                MouseEvent::CursorLeft | MouseEvent::DragLeft => d.pointer_left(),
+                MouseEvent::CursorEntered => {}
+                MouseEvent::DragEntered {
+                    position,
+                    modifiers,
+                    ref data,
+                }
+                | MouseEvent::DragMoved {
+                    position,
+                    modifiers,
+                    ref data,
+                }
+                | MouseEvent::DragDropped {
+                    position,
+                    modifiers,
+                    ref data,
+                } => {
+                    let at = Point::new(position.x, position.y);
+                    let DropData::Files(paths) = data else {
+                        d.pointer_moved(at, mods(modifiers));
+                        return EventStatus::Ignored;
+                    };
+                    let dropped = matches!(mouse, MouseEvent::DragDropped { .. });
+                    let s = &mut *lock(&self.shared);
+                    return if d.drop_files(s, at, mods(modifiers), paths, dropped) {
+                        EventStatus::AcceptDrop(DropEffect::Copy)
+                    } else {
+                        EventStatus::Ignored
+                    };
+                }
+            },
             Event::Window(WindowEvent::Resized(info)) => {
                 let physical = info.physical_size();
-                self.size = (physical.width, physical.height);
-                self.scale = info.scale();
-                self.dirty = true;
+                d.resized((physical.width, physical.height), info.scale());
             }
-            Event::Window(WindowEvent::Unfocused) => {
-                self.held.clear();
-                self.pointer = PointerInput::default();
-                self.pending.push_back(Pending::Cancel(self.pointer));
+            Event::Window(e @ (WindowEvent::Focused | WindowEvent::Unfocused)) => {
+                let focused = matches!(e, WindowEvent::Focused);
+                d.focus(focused);
+                if let Some(a11y) = self.a11y.as_mut() {
+                    a11y.focus(focused);
+                }
             }
-            Event::Window(WindowEvent::Focused) => {
-                self.pending
-                    .push_back(Pending::Input(Input::from(self.pointer)));
-            }
-            Event::Window(WindowEvent::WillClose) => {
-                // No tree is built from here on; the editor's close ends the
-                // host's gestures itself.
-                self.pending.clear();
-                self.pointer = PointerInput::default();
-            }
+            Event::Window(WindowEvent::WillClose) => d.close(&mut lock(&self.shared)),
         }
         EventStatus::Captured
-    }
-
-    /// A key event as a frame. One the host gets still carries the
-    /// modifiers, so Shift or Alt reaches a drag, but no keys or text.
-    fn push_key(&mut self, key: &KeyboardEvent, captured: bool) {
-        self.pointer.mods = event_mods(&key.key, key.modifiers, key.state);
-        let mut input = Input::default();
-        if captured && key.state == KeyState::Down {
-            on_key(&mut input, &key.key, key.modifiers);
-            if is_paste(&key.key, key.modifiers) {
-                input.clipboard = self.clipboard.read();
-            }
-        }
-        input.pointer = self.pointer;
-        self.pending.push_back(Pending::Input(input));
-    }
-
-    /// Hover samples carry no edges: keep only the newest of a run with the
-    /// same modifiers. Drag samples all stay, for freehand curves.
-    fn push_move(&mut self, input: Input) {
-        if input.pointer.buttons.is_empty() {
-            if let Some(Pending::Move(previous)) = self.pending.back_mut()
-                && previous.pointer.mods == input.pointer.mods
-            {
-                *previous = input;
-                return;
-            }
-            self.pending.push_back(Pending::Move(input));
-        } else {
-            self.pending.push_back(Pending::Input(input));
-        }
-    }
-
-    fn on_mouse(&mut self, mouse: &MouseEvent, input: &mut Input) {
-        match *mouse {
-            MouseEvent::CursorMoved {
-                position,
-                modifiers,
-            }
-            | MouseEvent::DragEntered {
-                position,
-                modifiers,
-                ..
-            }
-            | MouseEvent::DragMoved {
-                position,
-                modifiers,
-                ..
-            }
-            | MouseEvent::DragDropped {
-                position,
-                modifiers,
-                ..
-            } => {
-                let z = self.zoom;
-                self.pointer.pos = Some(Point::new(position.x / z, position.y / z));
-                self.pointer.mods = mods(modifiers);
-            }
-            MouseEvent::ButtonPressed { button, modifiers }
-            | MouseEvent::ButtonReleased { button, modifiers } => {
-                if let Some(b) = mouse_button(button) {
-                    let down = matches!(mouse, MouseEvent::ButtonPressed { .. });
-                    self.pointer.buttons = self.pointer.buttons.set(b, down);
-                }
-                self.pointer.mods = mods(modifiers);
-            }
-            MouseEvent::WheelScrolled { delta, modifiers } => {
-                let (x, y) = match delta {
-                    // A line is one text row of scene units.
-                    baseview::ScrollDelta::Lines { x, y } => {
-                        (f64::from(x) * self.line, f64::from(y) * self.line)
-                    }
-                    baseview::ScrollDelta::Pixels { x, y } => {
-                        (f64::from(x) / self.zoom, f64::from(y) / self.zoom)
-                    }
-                };
-                input.wheel = Vec2::new(x, -y);
-                self.pointer.mods = mods(modifiers);
-            }
-            MouseEvent::CursorLeft | MouseEvent::DragLeft => self.pointer.pos = None,
-            MouseEvent::CursorEntered => {}
-        }
     }
 }
 
@@ -737,86 +384,25 @@ impl<V: View> WindowHandler for Handler<V> {
     }
 }
 
-/// Space is both streams: text for a focused field, a key for a shortcut.
-/// With Ctrl or Cmd held a character is a shortcut key; otherwise it is
-/// text, never both, or every character would type twice.
-fn on_key(input: &mut Input, key: &HostKey, modifiers: Modifiers) {
-    let mods = mods(modifiers);
-    if let HostKey::Character(s) = key {
-        if s == " " {
-            input.keys.push(KeyPress {
-                key: Key::Space,
-                mods,
-            });
-            if !mods.ctrl && !mods.cmd {
-                input.text.push(' ');
+/// A baseview key as `mui::host` names it.
+fn key_event(key: &KeyboardEvent) -> KeyEvent {
+    let mut code = DefaultHasher::new();
+    key.code.hash(&mut code);
+    KeyEvent {
+        code: code.finish(),
+        key: match &key.key {
+            HostKey::Character(s) => NativeKey::Text(s.clone()),
+            HostKey::Shift => NativeKey::Modifier(Modifier::Shift),
+            HostKey::Control => NativeKey::Modifier(Modifier::Ctrl),
+            HostKey::Alt | HostKey::AltGraph => NativeKey::Modifier(Modifier::Alt),
+            HostKey::Meta | HostKey::Super => NativeKey::Modifier(Modifier::Cmd),
+            // keyboard-types prints the W3C name `Key::from_name` reads.
+            other => {
+                Key::from_fmt(format_args!("{other}")).map_or(NativeKey::Other, NativeKey::Named)
             }
-        } else if mods.ctrl || mods.cmd {
-            input.keys.extend(s.chars().map(|c| KeyPress {
-                key: Key::Char(c),
-                mods,
-            }));
-        } else {
-            input.text.push_str(s);
-        }
-    } else if let Some(key) = named_key(key) {
-        input.keys.push(KeyPress { key, mods });
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum KeyOwner {
-    Host,
-    Control,
-    Text,
-}
-
-fn key_owner(ui: &Ui) -> KeyOwner {
-    let Some(id) = ui.focus_key() else {
-        return KeyOwner::Host;
-    };
-    let text = ui
-        .scene()
-        .and_then(|s| s.surface(id))
-        .and_then(|s| s.semantics.as_ref())
-        .is_some_and(|sem| matches!(sem.role, mui::scene::A11y::TextInput { .. }));
-    if text {
-        KeyOwner::Text
-    } else {
-        KeyOwner::Control
-    }
-}
-
-/// The generic policy; app shortcuts are [`View::claims_key`].
-fn captures(key: &HostKey, owner: KeyOwner) -> bool {
-    match owner {
-        KeyOwner::Text => true,
-        KeyOwner::Control => matches!(
-            key,
-            HostKey::Enter
-                | HostKey::Tab
-                | HostKey::ArrowLeft
-                | HostKey::ArrowRight
-                | HostKey::ArrowUp
-                | HostKey::ArrowDown
-                | HostKey::Home
-                | HostKey::End
-                | HostKey::PageUp
-                | HostKey::PageDown
-                | HostKey::Delete
-                | HostKey::Backspace
-        ),
-        KeyOwner::Host => false,
-    }
-}
-
-/// A native key as MUI names it for [`View::claims_key`]: a named key, or
-/// a character as `Key::Char` (lowercase, so Ctrl+Shift+Z is `z`).
-fn shortcut_key(key: &HostKey) -> Option<Key> {
-    match key {
-        HostKey::Character(s) if s == " " => Some(Key::Space),
-        HostKey::Character(s) => s.chars().next().map(|c| Key::Char(c.to_ascii_lowercase())),
-        key => named_key(key),
+        },
+        down: key.state == KeyState::Down,
+        mods: mods(key.modifiers),
     }
 }
 
@@ -838,32 +424,6 @@ const fn mods(m: Modifiers) -> Mods {
     }
 }
 
-/// X11 reports a key press without the modifier being pressed and a release
-/// still with it: make the edge explicit, so Shift or Alt alone works
-/// without a mouse event in between.
-fn event_mods(key: &HostKey, modifiers: Modifiers, state: KeyState) -> Mods {
-    let mut m = mods(modifiers);
-    let down = state == KeyState::Down;
-    match key {
-        HostKey::Shift => m.shift = down,
-        HostKey::Control => m.ctrl = down,
-        HostKey::Alt | HostKey::AltGraph => m.alt = down,
-        HostKey::Meta | HostKey::Super => m.cmd = down,
-        _ => {}
-    }
-    m
-}
-
-fn is_paste(key: &HostKey, modifiers: Modifiers) -> bool {
-    modifiers.intersects(Modifiers::CONTROL | Modifiers::META)
-        && matches!(key, HostKey::Character(s) if s.eq_ignore_ascii_case("v"))
-}
-
-/// keyboard-types prints the W3C name `Key::from_name` reads.
-fn named_key(key: &HostKey) -> Option<Key> {
-    Key::from_fmt(format_args!("{key}"))
-}
-
 const fn native_cursor(cursor: Cursor) -> MouseCursor {
     match cursor {
         Cursor::Arrow => MouseCursor::Default,
@@ -875,10 +435,6 @@ const fn native_cursor(cursor: Cursor) -> MouseCursor {
         Cursor::Crosshair => MouseCursor::Crosshair,
         Cursor::Forbidden => MouseCursor::NotAllowed,
     }
-}
-
-fn logical_size(physical: (u32, u32), scale: f64) -> Size {
-    Size::new(f64::from(physical.0) / scale, f64::from(physical.1) / scale)
 }
 
 /// X11 drops a selection when its owner goes, so Linux keeps an arboard

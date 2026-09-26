@@ -318,12 +318,17 @@ let scene = resolve_scene(&spec)?;
 
 ## mui-input
 
+- `Input` gained `trail: Vec<Point>` (folded drag samples); a struct
+  literal needs `..Default::default()`.
 - `Hit::push_clipped_paths(.., clips: Option<&[Path]>)` and
   `push_tagged_paths(..)` -> `clips: Option<&[Arc<Path>]>`, which is what
   `ResolvedSurface::clip_paths()` returns.
 
 ## mui-vello
 
+- `host::Frame` gained `Current` (the screen already shows the scene;
+  nothing acquired): match it like `Presented`. New on `Host`: `device()`,
+  `generation()`, `set_texture(key, texture)`.
 The process-global font and image caches are gone. Each renderer owns a
 `mui_vello::Cache` and hands it to every `Cpu` canvas it builds
 (`GpuRenderer` owns its own; the `Gpu` canvas is gone with `vello_hybrid`,
@@ -482,6 +487,9 @@ let (field, edited) = text_input(&mut ui, "name", &mut name);
 
 ## mui
 
+- new: `mui::host`, the window-framework-free host: `View`, `Shared`,
+  `Driver` (queue, schedule, zoom, key routing). A window crate translates
+  its events into `Driver` calls; mui-baseview is one.
 - `Ui.font: Option<Arc<[u8]>>` -> `Option<Font>`
 - `Ui.fallback_fonts: Vec<Arc<[u8]>>` -> `Vec<Font>`
 - `Ui::font(impl Into<Arc<[u8]>>)` / `fallback_font(..)` -> `font(Font)` /
@@ -550,6 +558,14 @@ per-parameter wrapper.
 - `mui_truce::window` -> the `mui-baseview` crate, re-exported under the same
   name, so every `mui_truce::window::..` path still compiles. New there:
   `run(title, size, shared, requests)`, a standalone app window.
+- `View::build(&mut self, ui)` -> `build(&mut self, ui, input: &Input)`.
+  `View`, `Shared` and `lock` now live in `mui::host` (re-exported from
+  `mui_baseview`); new default hooks: `after_frame`, `cancel`, `zoom`,
+  `drop_files`, `claims_key`, `log`.
+- keys: a focused control keeps only Enter/Tab/arrows/Home/End/PgUp/PgDn/
+  Delete/Backspace and a focused field every key; Space and the rest go to
+  the host unless `View::claims_key` takes them.
+- new: `HostScale` and `ParentWindow` are public in `mui_truce`.
 
 ## Removed crates and packages
 

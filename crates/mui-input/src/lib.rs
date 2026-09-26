@@ -627,6 +627,10 @@ pub struct Input {
     pub clipboard: Option<String>,
     /// Input-method events since the last frame, in order.
     pub ime: Vec<Ime>,
+    /// Pointer positions a host folded into this frame, oldest first, all
+    /// before `pointer.pos`: the samples of a fast drag, for a freehand
+    /// stroke. Empty when every sample got its own frame.
+    pub trail: Vec<Point>,
 }
 impl From<PointerInput> for Input {
     fn from(pointer: PointerInput) -> Self {

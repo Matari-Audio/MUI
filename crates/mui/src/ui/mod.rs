@@ -760,6 +760,8 @@ impl Ui {
             text,
             clipboard,
             ime,
+            // The view's, read in its build; the `Ui` hit-tests the newest.
+            trail: _,
         } = input.into();
         let was = std::mem::replace(&mut self.pointer, pointer).buttons;
         let was_buttons = was;

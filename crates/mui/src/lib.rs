@@ -33,6 +33,7 @@ pub use mui_scene as scene;
 pub use mui_vello as vello;
 
 mod actions;
+pub mod host;
 mod ui;
 pub mod widgets;
 pub use actions::SemanticAction;
