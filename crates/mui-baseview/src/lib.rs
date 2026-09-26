@@ -14,6 +14,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use a11y::A11y;
+/// The baseview this window runs on, so a consumer names `WindowHandle`,
+/// `WindowScalePolicy` and friends without depending on it itself.
+pub use baseview;
 use baseview::{
     DropData, DropEffect, Event, EventStatus, MouseButton, MouseCursor, MouseEvent, ScrollDelta,
     Window, WindowEvent, WindowHandle, WindowHandler, WindowOpenOptions, WindowScalePolicy,
