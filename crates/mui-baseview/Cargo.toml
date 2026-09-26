@@ -6,6 +6,13 @@ rust-version.workspace = true
 license.workspace = true
 
 # A native window: nothing here builds for wasm.
+[features]
+# Windows: while a text field is focused, ask the host window for the
+# keyboard, so typing does not trigger the DAW's shortcuts. Needs a
+# baseview-truce with `Window::set_keyboard_capture` (stock builds lack it,
+# hence opt-in). Off everywhere else.
+keyboard-capture = []
+
 [dependencies]
 mui = { workspace = true, features = ["gpu-effects"] }
 baseview = { package = "baseview-truce", version = "0.1.1-truce.13" }

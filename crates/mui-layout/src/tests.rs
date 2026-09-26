@@ -1096,3 +1096,69 @@ fn a_row_shrinks_content_only_down_to_its_min_content() {
     .unwrap();
     assert_eq!(w(&l, "a"), 100.);
 }
+/// KURV's parameter well: a wrapping row, width 100% through padded
+/// columns, in a hugging column beside a fixed port. Measure used to break
+/// the lines at one width and arrange at a narrower one, so a third line
+/// hung below the row's two-line height.
+#[test]
+fn a_wrap_row_under_a_flex_share_arranges_the_lines_it_measured() {
+    let ws = [65., 66.6, 66.6, 79.7, 70., 50., 52., 50., 48.];
+    // `above` adds a sibling outside the row, so a warm solve rebinds the
+    // whole row from the cache rather than measuring it.
+    let tree = |above: bool| {
+        let cells = ws
+            .iter()
+            .enumerate()
+            .map(|(i, w)| block(*w, 36.).id(format!("c{i}")).grow(1.));
+        let params = Node::row(cells)
+            .wrap()
+            .gap(8.)
+            .w(Len::Pct(100.))
+            .id("params");
+        let well = col([params]).pad(8.).w(Len::Pct(100.));
+        let body = col([block(10., 24.), col([well]).w(Len::Pct(100.))])
+            .pad(8.)
+            .id("body");
+        let port = block(24., 72.).id("port");
+        let row = row([body.grow(1.).shrink(1.).min_w(0.), port])
+            .gap(12.)
+            .w(Len::Pct(100.))
+            .id("row");
+        let above = above.then(|| block(10., 10.)).into_iter();
+        col(above.chain([row])).w(360.)
+    };
+    let offered = Some(Size::new(360., 650.));
+    let mut cache = LayoutCache::default();
+    let mut cached = |above: bool| {
+        let solve = |_: &(), _: Option<f64>| Size::ZERO;
+        let (limits, scale) = (Limits::default(), SpacingScale::DEFAULT);
+        resolve_cached_with(
+            &tree(above),
+            offered,
+            limits,
+            scale,
+            &mut cache,
+            |_, _| {},
+            solve,
+        )
+        .unwrap()
+    };
+    let layouts = [
+        resolve(&tree(false), offered, Limits::default()).unwrap(),
+        cached(false),
+        cached(false),
+        cached(true),
+    ];
+    assert!(cache.stats().measure_hits > 0);
+    for l in layouts {
+        let p = l.frame("params").unwrap();
+        for i in 0..ws.len() {
+            let c = l.frame(&format!("c{i}")).unwrap();
+            assert!(c.bottom() <= p.bottom() + 1e-9, "c{i} below the row");
+        }
+        let (body, port) = (l.frame("body").unwrap(), l.frame("port").unwrap());
+        assert!((body.size.width + 12. + port.size.width - 360.).abs() < 1e-9);
+        // Its longest line, not all nine cells, is the body's flex basis.
+        assert!(port.size.width > 23., "{}", port.size.width);
+    }
+}

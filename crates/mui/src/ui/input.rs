@@ -66,6 +66,13 @@ impl Ui {
         let id = id.as_str();
         self.focus.as_deref() == Some(id)
     }
+    /// Whether `id` holds the focus and got it from the keyboard or from
+    /// [`Ui::focus`], not from a click: whether to draw its focus ring.
+    /// [`State::FocusVisible`](mui_scene::State::FocusVisible) is the same
+    /// test on a node's look.
+    pub fn focus_visible(&self, id: impl Into<Id>) -> bool {
+        self.focus_visible && self.focused(id)
+    }
     /// Drop the keyboard focus from code: a field that submits on Enter
     /// lets go of the keys, as a click on the background would.
     pub fn blur(&mut self) {
@@ -78,6 +85,7 @@ impl Ui {
         // A composition belongs to the field that started it.
         self.preedit = None;
         self.focus = Some(id.into().as_str().to_owned());
+        self.focus_visible = true;
     }
     /// The keys this frame, if `id` is focused. Empty otherwise, so a widget
     /// may loop over it unconditionally.
@@ -112,18 +120,23 @@ impl Ui {
     /// assert!(!undo, "nothing was pressed");
     /// ```
     pub fn shortcuts(&self) -> &[KeyPress] {
-        let typing = self.focus.as_deref().is_some_and(|k| {
+        if self.focus_is_text() {
+            &[]
+        } else {
+            &self.keys
+        }
+    }
+    /// Whether the focus is on a text field (in the last scene): the keys
+    /// are typing, not shortcuts. A host routes keys, or takes the keyboard
+    /// from its parent window, by it.
+    pub fn focus_is_text(&self) -> bool {
+        self.focus.as_deref().is_some_and(|k| {
             self.scene
                 .as_ref()
                 .and_then(|s| s.surface(k))
-                .is_some_and(|s| {
-                    matches!(
-                        s.semantics.as_ref().map(|s| &s.role),
-                        Some(A11y::TextInput { .. })
-                    )
-                })
-        });
-        if typing { &[] } else { &self.keys }
+                .and_then(|s| s.semantics.as_ref())
+                .is_some_and(|s| matches!(s.role, A11y::TextInput { .. }))
+        })
     }
     /// The text typed this frame, if `id` is focused.
     pub fn text(&self, id: impl Into<Id>) -> &str {
@@ -439,6 +452,7 @@ impl Ui {
             (None, true) => stops.len() - 1,
         };
         self.focus = Some(stops[next].clone());
+        self.focus_visible = true;
     }
 
     /// Apply a horizontal or vertical drag on `id` to `value` across `range`,
@@ -597,6 +611,7 @@ impl Ui {
                 .and_then(|s| s.surface(&id))
                 .is_some_and(|s| s.focusable);
             self.focus = keeps.then_some(id);
+            self.focus_visible = false;
         }
         for k in &keys {
             match k.key {
@@ -685,7 +700,12 @@ impl Ui {
         // and every cache keyed by one stays warm while a tip comes and goes.
         // ponytail: a tip under a scrolling root is offered no room and does
         // not wrap; give tips a width cap if a long one ever runs off.
-        let float = text(t.clone())
+        // The box is a stack around the text: a text node's own fill is its
+        // ink, so `text(..).fill(..)` would paint no background at all and
+        // the tip would read as see-through. Anchored at the start so a
+        // stretching parent does not offer the box its whole size.
+        let float = stack([text(t.clone())])
+            .anchor(mui_layout::Align::Start, mui_layout::Align::Start)
             .pad(S)
             .fill(Role::Raised)
             .radius(6.0)
@@ -751,7 +771,7 @@ pub(super) fn state_policy(root: &El, ids: [Option<&str>; 2]) -> [[bool; 2]; 2] 
             match state {
                 State::Hover => policy[0] = true,
                 State::Press => policy[1] = true,
-                State::Focus | State::Disabled => {}
+                State::Focus | State::FocusVisible | State::Disabled => {}
             }
         }
         policy
@@ -797,11 +817,18 @@ fn find_each(n: &El, f: &mut dyn FnMut(&El) -> bool) -> bool {
 /// that switched itself off greys the controls inside it too, which is the same
 /// rule the hit gate uses. An unnamed node is keyed by its tree path, the key
 /// the hit map gives it when it declares a hover or press look.
-pub(super) fn declared_states(n: &mut El, springs: Option<[Spring; 2]>, focused: bool, off: bool) {
+/// `focused` is [focused, focused from the keyboard or code].
+pub(super) fn declared_states(
+    n: &mut El,
+    springs: Option<[Spring; 2]>,
+    focused: [bool; 2],
+    off: bool,
+) {
     let is = |st: State| match st {
         State::Hover => springs.is_some_and(|[h, _]| h.value > 0.5),
         State::Press => springs.is_some_and(|[_, p]| p.value > 0.5),
-        State::Focus => focused,
+        State::Focus => focused[0],
+        State::FocusVisible => focused[1],
         // Declared by the node and answered by `off` below.
         State::Disabled => false,
     };

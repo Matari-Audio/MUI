@@ -123,6 +123,7 @@ fn a_press_and_its_release_bracket_the_gesture() {
     let f = ui.frame(tree(), None, at(10., 10., true), 0.016).unwrap();
     assert_eq!(f.edits, vec![("b".to_owned(), Edit::Begin)]);
     assert_eq!(ui.edit("b"), Some(Edit::Begin));
+    assert_eq!(ui.edits(), [("b".to_owned(), Edit::Begin)]);
     let f = ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
     assert_eq!(f.edits, vec![("b".to_owned(), Edit::End)]);
     assert_eq!(ui.edit("b"), Some(Edit::End));
@@ -419,4 +420,31 @@ fn a_degenerate_or_inverted_range_resolves_and_clamps() {
         .into_el();
     ui.frame(el, None, PointerInput::default(), 0.016)
         .expect("and so is a downward one");
+}
+
+/// The tip is an opaque box from the frame it comes due: a text node's fill
+/// is its ink, so the box has to be a container around the text.
+#[test]
+fn a_due_tip_paints_an_opaque_box_at_once() {
+    let font = mui_scene::prelude::Font::new(epaint_default_fonts::HACK_REGULAR).unwrap();
+    let mut ui = Ui::default().font(font);
+    let tree = || col([block(40., 40.).fill(Role::Raised).tip("why").id("b")]);
+    let (win, p) = (Some(Size::new(240., 300.)), at(110., 10., false));
+    ui.frame(tree(), win, p, 0.016).unwrap();
+    ui.frame(tree(), win, p, 0.016).unwrap();
+    let f = ui.frame(tree(), win, p, 0.6).unwrap();
+    assert!(f.tip.is_some());
+    let fill = f
+        .scene
+        .paint
+        .iter()
+        .find(|p| p.key.as_str() == "/tip" && p.layer == mui_scene::Layer::Fill);
+    let fill = fill.expect("the tip has a box");
+    assert!(matches!(fill.paint, mui_scene::Paint::Solid(c) if c.alpha() == 1.0));
+    assert!(
+        !f.scene
+            .paint
+            .iter()
+            .any(|p| matches!(p.layer, mui_scene::Layer::Blend { .. }))
+    );
 }

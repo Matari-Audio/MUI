@@ -462,7 +462,11 @@ pub(crate) fn measure_uncached<'a, P>(
         for (index, main) in shares {
             let c = &node.children()[index];
             let main = c.rare().maximum.map_or(main, |m| main.min(m.width));
-            if !children[index].fluid || (children[index].size.width - main).abs() <= 0.5 {
+            // Half a pixel more is not worth a re-measure: nothing breaks
+            // differently in more room than it measured in. Any less is, or a
+            // wrapping row arranges a line its measured height has no room for.
+            let (basis, floor) = (children[index].size.width, children[index].floor.width);
+            if !children[index].fluid || (0.0..=0.5).contains(&(main - basis)) {
                 continue;
             }
             let align = c.align_self.unwrap_or(node.align);
@@ -478,8 +482,17 @@ pub(crate) fn measure_uncached<'a, P>(
                 pass,
             );
             pass.redo = was;
-            children[index] = m?;
-            children[index].index = index;
+            // The re-measure settles what is inside and the cross size; the
+            // flex inputs stay the first pass's. Arrange deals the row again
+            // from them and must land on the share measured here: dealt from
+            // the share instead, a shrinking row squeezes the item a second
+            // time, narrower than anything under it was measured at.
+            let slot = &mut children[index];
+            *slot = m?;
+            let m = slot;
+            (m.size.width, m.floor.width, m.index) = (basis, floor, index);
+            // The cached snapshot is the re-measure's own; this one differs.
+            m.frozen = None;
         }
     }
     let flow = flow_of(&children);
@@ -521,13 +534,30 @@ pub(crate) fn measure_uncached<'a, P>(
                 .map(|c| (c.size.main(v) - c.base(v, None)) * total_grow / c.node.grow)
                 .fold(0.0, f64::max);
             let floor_main = flow.iter().map(|c| c.floor.main(v)).sum::<f64>() + gaps;
-            // A wrapping row measured under an offered main axis is as tall as
-            // its lines. With nothing offered there is nothing to break
-            // against, so it stays one line.
+            // A wrapping row measured under an offered main axis (or, across,
+            // the room) is as tall as its lines. With neither there is
+            // nothing to break against, so it stays one line.
             // ponytail: the cross floor stays the single-line one, so a squeeze
             // past the measured width overflows instead of erroring.
-            if let Some(avail) = node.wrap.then(|| inner[v as usize]).flatten() {
+            // A row with no width of its own breaks against the room, as a
+            // paragraph does, and is as wide as its longest line: that is its
+            // flex basis, so a hugging ancestor never takes it as one line.
+            let offered = inner[v as usize];
+            if let Some(avail) = node
+                .wrap
+                .then_some(offered.or(room.filter(|_| !v)))
+                .flatten()
+            {
                 let lines = wrap_lines(&flow, gap, v, avail);
+                let main = offered.unwrap_or_else(|| {
+                    lines
+                        .iter()
+                        .map(|(a, b)| {
+                            flow[*a..*b].iter().map(|c| c.base(v, None)).sum::<f64>()
+                                + gap * (b - a - 1) as f64
+                        })
+                        .fold(0.0, f64::max)
+                });
                 let cross = lines
                     .iter()
                     .map(|(a, b)| {
@@ -544,7 +574,7 @@ pub(crate) fn measure_uncached<'a, P>(
                     max_of(&|c| c.floor.main(v))
                 };
                 (
-                    Size::axes(avail, cross, v),
+                    Size::axes(main, cross, v),
                     Size::axes(sunk_main, max_of(&|c| c.floor.cross(v)), v),
                 )
             } else {
