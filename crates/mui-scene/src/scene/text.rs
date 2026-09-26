@@ -394,7 +394,7 @@ pub(super) fn layout_key(e: &Element, th: &Theme, scale: Option<f64>, out: &mut 
         out.extend_from_slice(tag.as_bytes());
         out.extend_from_slice(&value.to_bits().to_le_bytes());
     }
-    out.extend_from_slice(&e.text_px(&th).to_bits().to_le_bytes());
+    out.extend_from_slice(&e.text_px(th).to_bits().to_le_bytes());
     // 0 is "no face of its own"; ids shift up one past it.
     out.extend_from_slice(&e.face_font(th).map_or(0, |f| f.id() + 1).to_le_bytes());
     // usize::MAX is "no cap".

@@ -624,7 +624,7 @@ impl<'a> Walk<'a> {
     ) -> Result<(), SceneError> {
         let spec = self.spec;
         let th = &spec.theme;
-        let size = e.text_px(&th);
+        let size = e.text_px(th);
         // Text's own fill is its ink, not a box behind it.
         let ink = match &e.style.fill {
             Some(f) if !f.is_none() => f.clone(),

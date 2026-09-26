@@ -194,7 +194,7 @@ fn failed_layout_does_not_replay_a_consumed_activation() {
 fn transient_tweens_and_removed_field_state_do_not_accumulate() {
     let mut ui = Ui::default();
     for i in 0..256 {
-        ui.tween(&format!("temporary-{i}"), i as f64);
+        ui.tween(format!("temporary-{i}"), i as f64);
         idle(&mut ui, block(20.0, 20.0));
         assert!(ui.nodes.len() <= 1);
     }

@@ -164,14 +164,22 @@ pub trait Px: Copy {
 macro_rules! px {
     ($($t:ty),*) => {$(
         impl Px for $t {
-            #[allow(clippy::cast_precision_loss, clippy::cast_lossless, reason = "a pixel count is far below 2^52")]
             fn px(self) -> f64 {
-                self as f64
+                f64::from(self)
             }
         }
     )*};
 }
-px!(f64, f32, i32, u32, usize);
+px!(f64, f32, i32, u32);
+impl Px for usize {
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a pixel count is far below 2^52"
+    )]
+    fn px(self) -> f64 {
+        self as f64
+    }
+}
 
 /// A bare number is pixels: `.w(120)`, `.w(12.5)`.
 impl<T: Px> From<T> for Len {

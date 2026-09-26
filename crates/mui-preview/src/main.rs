@@ -345,7 +345,7 @@ impl App {
             self.scenes[self.selected].key(c);
         }
         for i in 0..self.scenes.len() {
-            if ui.get(&format!("scene-{i}")).clicked {
+            if ui.get(format!("scene-{i}")).clicked {
                 self.selected = i;
                 self.pan = Point::new(0.0, 0.0);
             }

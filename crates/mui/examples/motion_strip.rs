@@ -76,7 +76,7 @@ fn tree(ui: &mut Ui, s: &mut State) -> El {
             .to(0.8, 0.2, Ease::IN_OUT)
             .delay(f64::from(i) * 0.06);
         let v = if after {
-            ui.play(&format!("dot-{i}"), &k)
+            ui.play(format!("dot-{i}"), &k)
         } else {
             0.2
         };

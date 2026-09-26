@@ -1194,7 +1194,7 @@ impl PreviewScene for Motion {
                 .to(0.35, 1.0, Ease::EMPHASIZED)
                 .to(1.1, 0.3, Ease::IN_OUT)
                 .delay(f64::from(i) * 0.08);
-            let v = ui.play(&format!("mot-dot-{i}"), &k);
+            let v = ui.play(format!("mot-dot-{i}"), &k);
             block(14.0, 14.0)
                 .pill()
                 .fill(Role::Primary)
@@ -1203,7 +1203,7 @@ impl PreviewScene for Motion {
         .gap(S);
         if ui.get("mot-dots").clicked {
             for i in 0..5 {
-                ui.replay(&format!("mot-dot-{i}"));
+                ui.replay(format!("mot-dot-{i}"));
             }
         }
 
