@@ -190,6 +190,9 @@ pub struct Ui {
     bar_grab: f64,
     /// [`Ui::memo`] subtrees, by id.
     kept: HashMap<u64, Kept>,
+    /// Each kept memo's id and the number the scene knows it by.
+    memo_ids: rustc_hash::FxHashMap<Id, u64>,
+    next_memo: u64,
     /// This `Ui`'s key in [`TREES`].
     me: u64,
     /// Memos the next build must run again, because something inside them
@@ -283,6 +286,8 @@ impl Ui {
             board: None,
             bar_grab: 0.0,
             kept: HashMap::new(),
+            memo_ids: rustc_hash::FxHashMap::default(),
+            next_memo: 0,
             me: NEXT_UI.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             hot: BTreeSet::new(),
             hot_all: false,

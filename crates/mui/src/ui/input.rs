@@ -477,10 +477,12 @@ impl Ui {
     pub(super) fn heat(&mut self, scene: &ResolvedScene, was: &[Option<Id>; 3], buttons: bool) {
         self.hot.clear();
         let me = self.me;
+        let ids = &mut self.memo_ids;
         self.kept.retain(|id, k| {
             let live = std::mem::take(&mut k.live);
             if !live {
                 TREES.with(|t| t.borrow_mut().remove(&(me, *id)));
+                ids.remove(&k.id);
             }
             live
         });

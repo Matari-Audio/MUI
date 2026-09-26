@@ -40,12 +40,28 @@ impl Ui {
     /// }
     /// assert_eq!(built, 1);
     /// ```
-    pub fn memo(&mut self, id: &str, deps: u64, build: impl FnOnce(&mut Self) -> El) -> El {
-        let key = {
+    pub fn memo(
+        &mut self,
+        id: &str,
+        deps: impl std::hash::Hash,
+        build: impl FnOnce(&mut Self) -> El,
+    ) -> El {
+        // ponytail: `deps` compares by its SipHash, so two deps that collide
+        // share a subtree; pass something `Eq` and store it if that matters.
+        let deps = {
             let mut h = std::hash::DefaultHasher::new();
-            std::hash::Hash::hash(id, &mut h);
+            deps.hash(&mut h);
             std::hash::Hasher::finish(&h)
         };
+        // The scene carries a memo as a number: each id gets its own for as
+        // long as its memo is kept, so two ids never share one.
+        let next = &mut self.next_memo;
+        let key = *(self.memo_ids)
+            .entry(mui_scene::Id::runtime(id))
+            .or_insert_with(|| {
+                *next += 1;
+                *next
+            });
         self.issued += 1;
         let cold = self.hot_all || self.hot.contains(&key);
         if let Some(k) = self.kept.get_mut(&key) {
@@ -89,6 +105,7 @@ impl Ui {
         self.kept.insert(
             key,
             Kept {
+                id: mui_scene::Id::runtime(id),
                 deps,
                 nested: Vec::new(),
                 read,
@@ -195,10 +212,14 @@ impl Ui {
 }
 
 thread_local! {
-    /// The kept [`Ui::memo`] subtrees by `(Ui::me, memo id)`. An `El` holds
-    /// closures that need not be `Send` and a `Ui` must be: the trees stay
+    /// The kept [`Ui::memo`] subtrees by `(Ui::me, memo number)`. An `El`
+    /// holds closures that are not `Send` and a `Ui` must be: the trees stay
     /// on the thread that built them, and a `Ui` that moves thread builds
     /// its memos over.
+    ///
+    /// ponytail: one table per thread, shared by every `Ui` on it and
+    /// probed per memo per frame. Move it onto `Ui` if `El` ever becomes
+    /// `Send`, or if a host runs many `Ui`s on one thread.
     pub(super) static TREES: std::cell::RefCell<HashMap<(u64, u64), El>> =
         std::cell::RefCell::new(HashMap::new());
 }
@@ -213,6 +234,8 @@ impl Drop for Ui {
 
 /// One [`Ui::memo`] subtree between frames.
 pub(super) struct Kept {
+    /// The id it was built under, whose number it holds in `memo_ids`.
+    pub(super) id: mui_scene::Id,
     pub(super) deps: u64,
     /// Its styled subtree, last frame's, sits in [`TREES`] while it is out
     /// of the tree. Memos nested in it are kept on their own, and it holds
