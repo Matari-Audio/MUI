@@ -723,8 +723,9 @@ pub(crate) fn plain(p: &Painted) -> Option<AlphaColor<Srgb>> {
     let Paint::Solid(c) = p.paint else {
         return None;
     };
-    let plain =
-        matches!(p.layer, Layer::Fill | Layer::Draw(_)) && p.text.is_none() && !(p.blur > 0.0);
+    // Sharp as `one` reads it: a NaN blur is none.
+    let sharp = p.blur.is_nan() || p.blur <= 0.0;
+    let plain = matches!(p.layer, Layer::Fill | Layer::Draw(_)) && p.text.is_none() && sharp;
     plain.then(|| srgb(c))
 }
 
