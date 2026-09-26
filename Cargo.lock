@@ -3598,6 +3598,7 @@ dependencies = [
  "log",
  "peniko",
  "png 0.18.1",
+ "rustc-hash",
  "skrifa 0.44.0",
  "static_assertions",
  "thiserror 2.0.20",

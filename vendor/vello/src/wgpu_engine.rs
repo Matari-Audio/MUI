@@ -4,7 +4,8 @@
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::hash_map::Entry;
-use std::collections::{HashMap, HashSet};
+// Keys are handles and small ids hashed every dispatch, never attacker input.
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 use wgpu::{
     BindGroup, BindGroupLayout, Buffer, BufferUsages, CommandEncoder, CommandEncoderDescriptor,
