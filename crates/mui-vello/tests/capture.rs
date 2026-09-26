@@ -1,4 +1,5 @@
 #![cfg(feature = "cpu")]
+use mui_material::Capture;
 use mui_scene::{ResolvedScene, prelude::*};
 use mui_vello::{
     Cache, Cpu,

@@ -715,8 +715,6 @@ pub(super) fn keyed_edit(scene: Option<&ResolvedScene>, id: &str, keys: &[KeyPre
     })
 }
 
-/// Whether `k` is an id rather than a tree path (`/0/2`, or `""` for the
-
 /// Whether a semantic role owns the runtime's default pointer looks.
 pub(super) fn interactive(e: &Element) -> bool {
     e.semantics.as_ref().is_some_and(|s| {

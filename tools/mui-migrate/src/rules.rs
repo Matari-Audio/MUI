@@ -168,6 +168,14 @@ pub const RULES: &[Rule] = &[
     Manual { pattern: "mui_geometry :: Spacing", note: "`Spacing` lives in `mui_layout` (and `mui::prelude`)" },
     Manual { pattern: "mui_geometry :: SpacingScale", note: "`SpacingScale` lives in `mui_layout`" },
     Manual { pattern: "mui_geometry :: SpacingToken", note: "`SpacingToken` lives in `mui_layout`" },
+    // Capture moved to mui-material (reported, not rewritten, as above). The
+    // `Material` / `Capture` methods need no rule: rustc names the trait to import.
+    Manual { pattern: "mui_scene :: resize_capture", note: "`resize_capture` lives in `mui_material` (`mui::material`)" },
+    Manual { pattern: "mui_scene :: CaptureError", note: "`CaptureError` lives in `mui_material` (`mui::material`)" },
+    Manual { pattern: "mui_scene :: CaptureLayer", note: "`CaptureLayer` lives in `mui_material` (`mui::material`)" },
+    Manual { pattern: "scene :: resize_capture", note: "`mui::scene::resize_capture` is `mui::material::resize_capture`" },
+    Manual { pattern: "scene :: CaptureError", note: "`mui::scene::CaptureError` is `mui::material::CaptureError`" },
+    Manual { pattern: "scene :: CaptureLayer", note: "`mui::scene::CaptureLayer` is `mui::material::CaptureLayer`" },
 ];
 
 /// The widget phase of the spec (`Response`, option structs, argument

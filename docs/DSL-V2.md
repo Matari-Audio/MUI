@@ -241,4 +241,4 @@ col![
 | playground DSL `leaf` / `join` | `block` / `segmented` | the text DSL follows the Rust names |
 | `.cut`/`.keep` on a leaf | pushing a child onto a `block` turns it into a `stack` of its own size | covers `cut`, `keep` and any push, no wrapper node |
 | motion-bridge key names | `" "` stays `Key::Space`, one char is `Key::Char`, else `Key::from_name` | keeps the editor's existing spelling |
-| material verbs in `mui-material` | still on `Styled` in mui-scene | the crate split is a structure change outside this pass |
+| material verbs in `mui-material` | the `Material` trait and capture (`Capture`: `isolate`, `without`, `capture_layers`; `resize_capture`) move; surfaces, regions, border ramps, material welds, partition and the GPU weld hand-off stay in mui-scene | the resolve half reads and writes the walk's frames, paint list and `Resolver` caches at a dozen points mid-walk, and its data (`Extras::border_ramp`, `SceneSpec::weld_backend`, `ResolvedScene::external_welds`) is stored in mui-scene types; a hook would be a dozen-method trait object for one implementation |

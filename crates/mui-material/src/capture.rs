@@ -1,7 +1,7 @@
 //! Paint-only subtree extraction for transparent product shots and motion layers.
 use std::collections::{HashMap, HashSet};
 
-use crate::{El, Layer, ResolvedScene, Size};
+use mui_scene::{El, Layer, ResolvedScene, Size};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CaptureError {
@@ -53,7 +53,7 @@ pub fn resize_capture(root: &El, key: &str, size: Size) -> Result<El, CaptureErr
     {
         return Err(CaptureError::InvalidSize);
     }
-    if !crate::Id::is_named(key) {
+    if !mui_scene::Id::is_named(key) {
         return Err(CaptureError::UnnamedSurface(key.into()));
     }
     let mut result = root.clone();
@@ -64,19 +64,29 @@ pub fn resize_capture(root: &El, key: &str, size: Size) -> Result<El, CaptureErr
     }
 }
 
-impl ResolvedScene {
+/// Paint-only extraction of named subtrees from a resolved scene.
+pub trait Capture: Sized {
+    /// See the impl on [`ResolvedScene`].
+    fn capture_layers(&self, roots: &[&str]) -> Result<Vec<CaptureLayer>, CaptureError>;
+    /// See the impl on [`ResolvedScene`].
+    fn isolate(&self, roots: &[&str]) -> Result<Self, CaptureError>;
+    /// Complement of [`Capture::isolate`].
+    fn without(&self, roots: &[&str]) -> Result<Self, CaptureError>;
+}
+
+impl Capture for ResolvedScene {
     /// Partition all paint into ordered fragments for lossless reassembly.
     /// Unlike one image per subtree, this preserves interleaved floats, cables
     /// and late strokes. Selected roots must not overlap in authored ancestry.
     /// Each compositing group must belong entirely to one part.
-    pub fn capture_layers(&self, roots: &[&str]) -> Result<Vec<CaptureLayer>, CaptureError> {
+    fn capture_layers(&self, roots: &[&str]) -> Result<Vec<CaptureLayer>, CaptureError> {
         // These also validate hierarchy, external paint, and atomic composites.
         let selections = roots
             .iter()
             .map(|root| self.isolate(&[*root]))
             .collect::<Result<Vec<_>, _>>()?;
         self.without(roots)?;
-        let structural = |p: &crate::Painted| {
+        let structural = |p: &mui_scene::Painted| {
             matches!(
                 p.layer,
                 Layer::Clip | Layer::Unclip | Layer::Blend { .. } | Layer::Unblend
@@ -144,89 +154,93 @@ impl ResolvedScene {
     /// at a new offered size for layout resizing; scaling this snapshot stretches it.
     /// Fused material plates are atomic: select their owning welded surface.
     /// Splitting a blend/mask group is rejected, as are backdrop-dependent blend modes and external GPU materials.
-    pub fn isolate(&self, roots: &[&str]) -> Result<Self, CaptureError> {
-        self.capture_selection(roots, false)
+    fn isolate(&self, roots: &[&str]) -> Result<Self, CaptureError> {
+        selection(self, roots, false)
     }
 
-    /// Complement of [`Self::isolate`], useful for the stationary background.
+    /// Complement of [`Capture::isolate`], useful for the stationary background.
     /// The same clipping and compositing restrictions apply.
-    pub fn without(&self, roots: &[&str]) -> Result<Self, CaptureError> {
-        self.capture_selection(roots, true)
+    fn without(&self, roots: &[&str]) -> Result<Self, CaptureError> {
+        selection(self, roots, true)
     }
+}
 
-    fn capture_selection(&self, roots: &[&str], invert: bool) -> Result<Self, CaptureError> {
-        let roots: HashSet<&str> = roots.iter().copied().collect();
-        for root in &roots {
-            if self.surface(root).is_none() {
-                return Err(CaptureError::MissingSurface((*root).into()));
-            }
-            if !crate::Id::is_named(root) {
-                return Err(CaptureError::UnnamedSurface((*root).into()));
-            }
+fn selection(
+    scene: &ResolvedScene,
+    roots: &[&str],
+    invert: bool,
+) -> Result<ResolvedScene, CaptureError> {
+    let roots: HashSet<&str> = roots.iter().copied().collect();
+    for root in &roots {
+        if scene.surface(root).is_none() {
+            return Err(CaptureError::MissingSurface((*root).into()));
         }
-        let mut selected = HashMap::new();
-        for surface in self.surfaces() {
-            let mut key = Some(surface.key.as_ref());
-            let mut seen = HashSet::new();
-            let mut found = false;
-            while let Some(id) = key {
-                if !seen.insert(id) {
-                    return Err(CaptureError::InvalidHierarchy(id.into()));
-                }
-                found |= roots.contains(id);
-                key = self
-                    .surface(id)
-                    .ok_or_else(|| CaptureError::InvalidHierarchy(id.into()))?
-                    .parent
-                    .as_deref();
-            }
-            selected.insert(surface.key.as_ref(), found != invert);
+        if !mui_scene::Id::is_named(root) {
+            return Err(CaptureError::UnnamedSurface((*root).into()));
         }
-        // Validate before cloning: a partially extracted opacity or mask group
-        // cannot in general be recomposited into the original image.
-        let mut stack: Vec<(bool, &str, u8)> = Vec::new();
-        for p in &self.paint {
-            match p.layer {
-                Layer::External => return Err(CaptureError::ExternalMaterial),
-                Layer::Clip => stack.push((false, &p.key, 0)),
-                Layer::Blend { mix, .. } => {
-                    if mix != crate::Mix::Normal {
-                        return Err(CaptureError::BackdropBlend);
-                    }
-                    stack.push((true, &p.key, 0));
-                }
-                Layer::Unclip | Layer::Unblend => {
-                    let (blend, key, bits) = stack.pop().ok_or(CaptureError::InvalidStack)?;
-                    if blend != matches!(p.layer, Layer::Unblend) {
-                        return Err(CaptureError::InvalidStack);
-                    }
-                    if blend && bits == 3 {
-                        return Err(CaptureError::SplitComposite(key.into()));
-                    }
-                }
-                _ => {
-                    let keep = *selected
-                        .get(p.key.as_ref())
-                        .ok_or_else(|| CaptureError::MissingSurface(p.key.to_string()))?;
-                    for (_, _, bits) in &mut stack {
-                        *bits |= if keep { 1 } else { 2 };
-                    }
-                }
-            }
-        }
-        if !stack.is_empty() {
-            return Err(CaptureError::InvalidStack);
-        }
-        let mut result = self.clone();
-        result.memos.clear();
-        result.paint.retain(|p| {
-            matches!(
-                p.layer,
-                Layer::Clip | Layer::Unclip | Layer::Blend { .. } | Layer::Unblend
-            ) || selected[p.key.as_ref()]
-        });
-        Ok(result)
     }
+    let mut selected = HashMap::new();
+    for surface in scene.surfaces() {
+        let mut key = Some(surface.key.as_ref());
+        let mut seen = HashSet::new();
+        let mut found = false;
+        while let Some(id) = key {
+            if !seen.insert(id) {
+                return Err(CaptureError::InvalidHierarchy(id.into()));
+            }
+            found |= roots.contains(id);
+            key = scene
+                .surface(id)
+                .ok_or_else(|| CaptureError::InvalidHierarchy(id.into()))?
+                .parent
+                .as_deref();
+        }
+        selected.insert(surface.key.as_ref(), found != invert);
+    }
+    // Validate before cloning: a partially extracted opacity or mask group
+    // cannot in general be recomposited into the original image.
+    let mut stack: Vec<(bool, &str, u8)> = Vec::new();
+    for p in &scene.paint {
+        match p.layer {
+            Layer::External => return Err(CaptureError::ExternalMaterial),
+            Layer::Clip => stack.push((false, &p.key, 0)),
+            Layer::Blend { mix, .. } => {
+                if mix != mui_scene::Mix::Normal {
+                    return Err(CaptureError::BackdropBlend);
+                }
+                stack.push((true, &p.key, 0));
+            }
+            Layer::Unclip | Layer::Unblend => {
+                let (blend, key, bits) = stack.pop().ok_or(CaptureError::InvalidStack)?;
+                if blend != matches!(p.layer, Layer::Unblend) {
+                    return Err(CaptureError::InvalidStack);
+                }
+                if blend && bits == 3 {
+                    return Err(CaptureError::SplitComposite(key.into()));
+                }
+            }
+            _ => {
+                let keep = *selected
+                    .get(p.key.as_ref())
+                    .ok_or_else(|| CaptureError::MissingSurface(p.key.to_string()))?;
+                for (_, _, bits) in &mut stack {
+                    *bits |= if keep { 1 } else { 2 };
+                }
+            }
+        }
+    }
+    if !stack.is_empty() {
+        return Err(CaptureError::InvalidStack);
+    }
+    let mut result = scene.clone();
+    result.forget_memos();
+    result.paint.retain(|p| {
+        matches!(
+            p.layer,
+            Layer::Clip | Layer::Unclip | Layer::Blend { .. } | Layer::Unblend
+        ) || selected[p.key.as_ref()]
+    });
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -324,7 +338,7 @@ mod tests {
         let mut backdrop = s;
         for paint in &mut backdrop.paint {
             if let Layer::Blend { mix, .. } = &mut paint.layer {
-                *mix = crate::Mix::Multiply;
+                *mix = mui_scene::Mix::Multiply;
             }
         }
         assert!(matches!(

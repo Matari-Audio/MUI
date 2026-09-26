@@ -171,6 +171,14 @@ fn manual_warnings() {
 }
 
 #[test]
+fn capture_moved_to_material() {
+    let src = "use mui::prelude::*;\nfn f(e: mui::scene::CaptureError) { mui_scene::resize_capture(&t, k, s); }\n";
+    let out = run(src);
+    assert_eq!(out.warnings.len(), 2, "{:?}", out.warnings);
+    assert_eq!(out.text, src);
+}
+
+#[test]
 fn doc_example_before_after() {
     // The spec's before/after, minus its `text` -> `body` inconsistency.
     let before = with_prelude(

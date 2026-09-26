@@ -1,5 +1,6 @@
 //! Springs, tweens, plays, glides, appearing, morphs and transitions.
 use super::*;
+use mui_material::Capture;
 
 impl Ui {
     /// A keyed spring anyone can read while building the tree: pass the value

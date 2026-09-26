@@ -295,6 +295,12 @@ impl ResolvedScene {
     pub fn memos_floating(&self) -> impl Iterator<Item = u64> + '_ {
         self.memos.iter().filter(|m| m.floats).map(|m| m.id)
     }
+    /// Forget which paint came from memoised subtrees. Call it after editing
+    /// `paint` by hand, so no later resolve copies the edited paint as if it
+    /// were what the tree says.
+    pub fn forget_memos(&mut self) {
+        self.memos.clear();
+    }
     /// Swap what one text node says, keeping every frame this scene already
     /// solved: only that node's glyph run is shaped again.
     ///

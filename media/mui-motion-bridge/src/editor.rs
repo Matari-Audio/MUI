@@ -15,7 +15,7 @@ impl Editor {
         sizes: &std::collections::BTreeMap<String, Size>,
     ) -> Result<El, String> {
         for (id, size) in sizes {
-            tree = mui_scene::resize_capture(&tree, id, *size).map_err(|e| e.to_string())?;
+            tree = mui::material::resize_capture(&tree, id, *size).map_err(|e| e.to_string())?;
         }
         Ok(tree)
     }

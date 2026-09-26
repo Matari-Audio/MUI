@@ -12,5 +12,5 @@ fn motion_export_to(scene: &mui2::scene::ResolvedScene, width: u16, height: u16,
 fn motion_resize(root: &mui2::prelude::El) -> Result<mui2::prelude::El, String> {
     let Ok(value) = std::env::var("MUI_MOTION_RESIZE") else { return Ok(root.clone()); };
     let (id, width, height): (String, f64, f64) = serde_json::from_str(&value).map_err(|e| e.to_string())?;
-    mui2::scene::resize_capture(root, &id, Size::new(width,height)).map_err(|e|e.to_string())
+    mui2::material::resize_capture(root, &id, Size::new(width,height)).map_err(|e|e.to_string())
 }

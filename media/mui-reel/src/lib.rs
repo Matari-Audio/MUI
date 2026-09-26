@@ -33,7 +33,7 @@ pub enum Error {
     Json(serde_json::Error),
     Png(png::EncodingError),
     /// A layer split: a surface the script named cannot be isolated.
-    Capture(mui::scene::CaptureError),
+    Capture(mui::material::CaptureError),
     /// The script, the UI or ffmpeg said no; the message says which.
     Script(String),
     /// The [`Look`] failed; its own error, untouched.
@@ -62,8 +62,8 @@ impl From<serde_json::Error> for Error {
         Self::Json(e)
     }
 }
-impl From<mui::scene::CaptureError> for Error {
-    fn from(e: mui::scene::CaptureError) -> Self {
+impl From<mui::material::CaptureError> for Error {
+    fn from(e: mui::material::CaptureError) -> Self {
         Self::Capture(e)
     }
 }

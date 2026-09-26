@@ -6,15 +6,18 @@
 //! and write the scene walk's frames, paint list and per-node caches at a
 //! dozen points mid-walk, so they stay beside it. This crate owns the
 //! vocabulary: the [`Material`] extension trait, re-exported by the `mui`
-//! prelude and by [`prelude`] here.
+//! prelude and by [`prelude`] here, plus paint-only capture of a resolved
+//! scene ([`Capture`], [`resize_capture`]), which needs nothing from the walk.
 #![forbid(unsafe_code)]
 
 use mui_scene::{BorderRamp, Carve, El, Fill, Id, Spacing, Styled};
 
+mod capture;
 mod verbs;
+pub use capture::{Capture, CaptureError, CaptureLayer, resize_capture};
 pub use verbs::Material;
 
 pub mod prelude {
-    pub use crate::Material;
+    pub use crate::{Capture, Material};
     pub use mui_scene::prelude::*;
 }
