@@ -61,7 +61,7 @@ python3 tools/film/render.py /path/to/film --output performance.mp4
 
 ## Integrate another MUI plugin
 
-Keep one real editor, model, and processor alive for the session. The [Tone example](../../crates/mui-motion-bridge/examples/tone.rs) is the complete small reference.
+Keep one real editor, model, and processor alive for the session. The [Tone example](../../media/mui-motion-bridge/examples/tone.rs) is the complete small reference.
 
 ```rust,ignore
 mui_motion_bridge::run_live(
