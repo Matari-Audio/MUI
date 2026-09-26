@@ -558,7 +558,7 @@ pub fn text(s: impl Into<Arc<str>>) -> El {
 /// let home = icon(mui_symbols::sym::HOME).text_size(24).icon_fill(1.).id("home");
 /// assert_eq!(home.payload().axes.get("FILL"), Some(1.));
 /// let scene = resolve(&SceneSpec::new(home).theme(theme)).unwrap();
-/// assert!(scene.surface("home").unwrap().text.is_some(), "shaped in the theme's icon font");
+/// assert!(scene.paint.iter().any(|p| p.text.is_some()), "shaped in the theme's icon font");
 /// ```
 pub fn icon(symbol: char) -> El {
     let mut el = text(symbol.encode_utf8(&mut [0; 4]) as &str);
