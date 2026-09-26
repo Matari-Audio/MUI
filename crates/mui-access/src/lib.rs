@@ -31,8 +31,7 @@ use accesskit::{
 pub use mui_scene::{A11y, Semantics};
 use mui_scene::{ResolvedScene, ResolvedSurface};
 use std::collections::{HashMap, HashSet};
-use std::fmt::Write as _;
-use std::hash::{DefaultHasher, Hash as _, Hasher};
+use std::hash::{DefaultHasher, Hash, Hasher};
 
 /// FNV-1a: a node id that is the same on every frame for the same surface id.
 pub fn node_id(key: &str) -> NodeId {
@@ -194,17 +193,24 @@ fn node(s: &ResolvedSurface, sem: Option<&Semantics>, runs: &mut Vec<(NodeId, No
 /// A text input carries its line as a `TextRun` child, [`run_id`], with the
 /// selection on the field, so a reader follows the caret.
 pub fn tree_update(scene: &ResolvedScene, focus: Option<&str>, scale: f64) -> TreeUpdate {
-    let named: Vec<&ResolvedSurface> = scene
+    build(scene, focus, scale).0
+}
+
+/// The surfaces that become nodes: named ones, in scene order.
+fn named(scene: &ResolvedScene) -> Vec<&ResolvedSurface> {
+    scene
         .surfaces()
         .filter(|s| mui_scene::Id::is_named(&s.key))
-        .collect();
+        .collect()
+}
 
-    // Two keys hashing alike would make one node of two surfaces. Never
-    // seen at 63 bits, so a debug build says so and a release build salts
-    // the second id: its node stays in the tree, only a lookup by
-    // `node_id(key)` (an action's target) misses it.
+/// Each named surface's node id: [`node_id`] of its key, unless two keys
+/// hash alike. Never seen at 63 bits, so a debug build says so and a release
+/// build salts the second id; focus and action targets go through these
+/// ids ([`surface_of`]), so the salted node is still reachable.
+fn ids(named: &[&ResolvedSurface]) -> Vec<NodeId> {
     let mut seen = HashSet::with_capacity(named.len());
-    let ids: Vec<NodeId> = named
+    named
         .iter()
         .map(|s| {
             let mut id = node_id(&s.key);
@@ -216,7 +222,26 @@ pub fn tree_update(scene: &ResolvedScene, focus: Option<&str>, scale: f64) -> Tr
             }
             id
         })
-        .collect();
+        .collect()
+}
+
+/// The surface behind accesskit node `target`, for routing a reader's
+/// action back to the scene. It follows the same (salted) ids a
+/// [`tree_update`] of this scene gave out.
+pub fn surface_of(scene: &ResolvedScene, target: NodeId) -> Option<&ResolvedSurface> {
+    let named = named(scene);
+    let i = ids(&named).iter().position(|&id| id == target)?;
+    Some(named[i])
+}
+
+/// [`tree_update`], and the ids that were salted, by key.
+fn build(
+    scene: &ResolvedScene,
+    focus: Option<&str>,
+    scale: f64,
+) -> (TreeUpdate, Vec<(Box<str>, NodeId)>) {
+    let named = named(scene);
+    let ids = ids(&named);
     let mut runs = Vec::new();
     let mut nodes: Vec<(NodeId, Node)> = named
         .iter()
@@ -244,21 +269,38 @@ pub fn tree_update(scene: &ResolvedScene, focus: Option<&str>, scale: f64) -> Tr
     nodes.push((WINDOW, window));
     nodes.extend(runs);
 
-    TreeUpdate {
+    let salted: Vec<(Box<str>, NodeId)> = named
+        .iter()
+        .zip(&ids)
+        .filter(|(s, id)| node_id(&s.key) != **id)
+        .map(|(s, &id)| (Box::from(s.key.as_str()), id))
+        .collect();
+    let update = TreeUpdate {
         nodes,
         tree: Some(Tree::new(WINDOW)),
         tree_id: TreeId::ROOT,
-        focus: tree_update_focus(scene, focus),
-    }
+        focus: tree_update_focus(scene, focus, &salted),
+    };
+    (update, salted)
 }
 
-fn tree_update_focus(scene: &ResolvedScene, focus: Option<&str>) -> NodeId {
+/// The focused surface's node, through `salted` for a key whose id was.
+fn tree_update_focus(
+    scene: &ResolvedScene,
+    focus: Option<&str>,
+    salted: &[(Box<str>, NodeId)],
+) -> NodeId {
     focus
         .filter(|k| {
             mui_scene::Id::is_named(k)
                 && scene.surface(k).is_some_and(|s| s.focusable && !s.disabled)
         })
-        .map_or(WINDOW, node_id)
+        .map_or(WINDOW, |k| {
+            salted
+                .iter()
+                .find(|(key, _)| **key == *k)
+                .map_or_else(|| node_id(k), |&(_, id)| id)
+        })
 }
 
 /// [`tree_update`] for a host that publishes every frame: a frame whose tree
@@ -267,6 +309,9 @@ fn tree_update_focus(scene: &ResolvedScene, focus: Option<&str>) -> NodeId {
 #[derive(Debug, Default)]
 pub struct Publisher {
     last: Option<u64>,
+    /// The last tree's salted ids (almost always none): an unchanged tree
+    /// still focuses through them.
+    salted: Vec<(Box<str>, NodeId)>,
 }
 
 impl Publisher {
@@ -290,10 +335,12 @@ impl Publisher {
                 nodes: Vec::new(),
                 tree: None,
                 tree_id: TreeId::ROOT,
-                focus: tree_update_focus(scene, focus),
+                focus: tree_update_focus(scene, focus, &self.salted),
             };
         }
-        tree_update(scene, focus, scale)
+        let (update, salted) = build(scene, focus, scale);
+        self.salted = salted;
+        update
     }
 
     /// Forget what was sent: the next update is whole. Call it when a
@@ -303,31 +350,50 @@ impl Publisher {
     }
 }
 
-/// Everything [`tree_update`] reads, hashed without building a node.
+/// Everything [`tree_update`] reads, hashed without building a node: the
+/// named surfaces only (an unnamed meter ticking is no tree change), and
+/// only the fields a node is built from.
 fn tree_hash(scene: &ResolvedScene, focus: Option<&str>, scale: f64) -> u64 {
-    struct W<'a>(&'a mut DefaultHasher);
-    impl std::fmt::Write for W<'_> {
-        fn write_str(&mut self, s: &str) -> std::fmt::Result {
-            self.0.write(s.as_bytes());
-            Ok(())
-        }
-    }
     let mut h = DefaultHasher::new();
     focus.hash(&mut h);
     scale.to_bits().hash(&mut h);
-    for s in scene.surfaces() {
-        // Debug prints every float exactly: two values, two strings.
-        let _ = write!(
-            W(&mut h),
-            "{:?}{:?}{:?}{}{}{:?}{:?}",
-            s.key,
-            s.frame,
-            s.parent,
-            s.focusable,
-            s.disabled,
-            s.text_value,
-            s.semantics
-        );
+    for s in scene.surfaces().filter(|s| mui_scene::Id::is_named(&s.key)) {
+        s.key.hash(&mut h);
+        let f = s.frame;
+        for v in [f.x, f.y, f.size.width, f.size.height] {
+            v.to_bits().hash(&mut h);
+        }
+        s.parent.as_deref().hash(&mut h);
+        (s.focusable, s.disabled).hash(&mut h);
+        s.text_value.as_deref().hash(&mut h);
+        let Some(sem) = &s.semantics else {
+            0u8.hash(&mut h);
+            continue;
+        };
+        sem.label.as_deref().hash(&mut h);
+        match &sem.role {
+            A11y::Slider { value, min, max } => {
+                1u8.hash(&mut h);
+                for v in [value, min, max] {
+                    v.to_bits().hash(&mut h);
+                }
+            }
+            A11y::Toggle { on } => (2u8, on).hash(&mut h),
+            A11y::TextInput {
+                value,
+                selection,
+                carets,
+            } => {
+                3u8.hash(&mut h);
+                (&**value, selection).hash(&mut h);
+                carets.iter().for_each(|c| c.to_bits().hash(&mut h));
+            }
+            A11y::Button => 4u8.hash(&mut h),
+            A11y::Label => 5u8.hash(&mut h),
+            A11y::Group => 6u8.hash(&mut h),
+            A11y::Scroll => 7u8.hash(&mut h),
+            A11y::Image => 8u8.hash(&mut h),
+        }
     }
     h.finish()
 }
@@ -336,6 +402,38 @@ fn tree_hash(scene: &ResolvedScene, focus: Option<&str>, scale: f64) -> u64 {
 mod tests {
     use super::*;
     use mui_scene::prelude::*;
+
+    #[test]
+    fn an_unnamed_surface_changing_sends_no_tree() {
+        let at = |w: f64| {
+            let tree = row([
+                block(4., 4.).id("a"),
+                block(w, 4.).fill(mui_scene::Role::Primary),
+            ]);
+            resolve(&SceneSpec::new(tree)).unwrap()
+        };
+        assert!(at(9.).surfaces().any(|s| !mui_scene::Id::is_named(&s.key)));
+        let mut p = Publisher::default();
+        assert!(!p.update(&at(4.), None, 1.0).nodes.is_empty());
+        assert!(
+            p.update(&at(9.), None, 1.0).nodes.is_empty(),
+            "a meter tick resent the tree"
+        );
+    }
+
+    #[test]
+    fn an_action_target_resolves_to_its_surface() {
+        let scene = resolve(&SceneSpec::new(row([
+            block(4., 4.).id("a"),
+            block(4., 4.).id("b"),
+        ])))
+        .unwrap();
+        assert_eq!(
+            surface_of(&scene, node_id("b")).map(|s| s.key.as_str()),
+            Some("b")
+        );
+        assert!(surface_of(&scene, WINDOW).is_none());
+    }
 
     #[test]
     fn nests_by_containment_and_ids_are_stable() {

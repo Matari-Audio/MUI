@@ -555,10 +555,7 @@ impl App {
     /// The surface behind an accesskit node id.
     fn key_of(&self, target: NodeId) -> Option<String> {
         let scene = self.ui.scene()?;
-        scene
-            .surfaces()
-            .find(|s| mui_access::node_id(&s.key) == target)
-            .map(|s| s.key.to_string())
+        mui_access::surface_of(scene, target).map(|s| s.key.to_string())
     }
 
     /// A semantic activation targets the requested control, even when its

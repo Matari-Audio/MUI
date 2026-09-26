@@ -16,7 +16,7 @@ mod linux {
         Action, ActionData, ActionHandler, ActionRequest, ActivationHandler, DeactivationHandler,
         TreeUpdate,
     };
-    use mui_access::{Publisher, node_id};
+    use mui_access::{Publisher, surface_of};
 
     pub(crate) struct A11y {
         adapter: accesskit_unix::Adapter,
@@ -75,11 +75,7 @@ mod linux {
             let mut landed = false;
             while let Ok(r) = self.actions.try_recv() {
                 if let Some(action) = ui.scene().and_then(|scene| {
-                    let key = scene
-                        .surfaces()
-                        .find(|s| node_id(&s.key) == r.target_node)?
-                        .key
-                        .to_string();
+                    let key = surface_of(scene, r.target_node)?.key.to_string();
                     semantic(key, &r)
                 }) {
                     landed |= ui.request_action(action);
