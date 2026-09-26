@@ -38,8 +38,9 @@ const PLAN_CAP: usize = 64;
 #[derive(Debug, Clone, PartialEq)]
 pub struct TextRun {
     /// Every glyph's contours, each already translated to its pen position.
-    /// Fill this **non-zero** -- see [`text_run`].
-    pub path: Path,
+    /// Fill this **non-zero** -- see [`text_run`]. Shared, so a cached run
+    /// draws every frame without copying its outlines.
+    pub path: Arc<Path>,
     /// Every glyph with its face and pen position, for a renderer with its
     /// own glyph cache and hinting; `path` is the same ink as plain geometry.
     pub glyphs: Vec<Glyph>,
@@ -171,7 +172,7 @@ pub fn text_run(
         }
         pen.close_open_contour();
     }
-    run.path = pen.finish();
+    run.path = Arc::new(pen.finish());
     run.path.validate(usize::MAX)?;
     Ok(run)
 }
@@ -204,7 +205,7 @@ fn shaped_run(faces: &[Face<'_>], text: &str, size_px: f64) -> Result<TextRun, E
     let shaped = shape(faces, text, size_px);
     let min_content = min_content_width(text, &advances_of(text, &clusters(text, &shaped))?);
     Ok(TextRun {
-        path: Path::default(),
+        path: Arc::default(),
         glyphs: shaped
             .glyphs
             .iter()
@@ -427,7 +428,7 @@ mod tests {
         assert_eq!(
             shaped,
             TextRun {
-                path: Path::default(),
+                path: Arc::default(),
                 ..drawn
             }
         );

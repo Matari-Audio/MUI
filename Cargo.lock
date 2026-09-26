@@ -1513,6 +1513,7 @@ dependencies = [
  "mui-vello",
  "png",
  "rustc-hash 2.1.3",
+ "ttf-inter",
  "unicode-segmentation",
 ]
 

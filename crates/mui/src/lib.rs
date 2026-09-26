@@ -39,7 +39,7 @@ pub mod widgets;
 pub use actions::SemanticAction;
 pub use widgets::presets;
 
-pub use ui::{Clipboard, Edit, Frame, Interaction, Ui};
+pub use ui::{Clipboard, Edit, Frame, Interaction, TextRuns, Ui};
 
 /// What a MUI app writes against, named one by one: the widgets, the DSL,
 /// the input a host hands in. No globs, so nothing arrives here because a
