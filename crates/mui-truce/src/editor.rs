@@ -20,6 +20,9 @@ pub(crate) struct Session<P: Params> {
     build: Build<P>,
     /// [`MuiEditor::changed`]: model state outside the bridge.
     changed: Option<Changed>,
+    /// The size `build` was designed at, fitted to the window; `None` is
+    /// [`MuiEditor::fixed_zoom`].
+    design: Option<Size>,
 }
 
 impl<P: Params> View for Session<P> {
@@ -31,6 +34,11 @@ impl<P: Params> View for Session<P> {
     fn changed(&mut self) -> bool {
         // Both run every tick: the bridge snapshots values as it compares.
         self.bridge.changed() | self.changed.as_mut().is_some_and(|f| f())
+    }
+    fn zoom(&self, window: Size) -> f64 {
+        self.design.map_or(1.0, |d| {
+            (window.width / d.width).min(window.height / d.height)
+        })
     }
     fn request_resize(&mut self, width: u32, height: u32) -> bool {
         self.bridge
@@ -48,6 +56,11 @@ impl<P: Params> View for Session<P> {
 /// Model state outside those -- meters, status, anything in the plugin's own
 /// atomics -- must report through [`MuiEditor::changed`], or it only repaints
 /// when the mouse moves; `.changed(|| true)` rebuilds every tick.
+///
+/// A resized window scales the whole tree to fit the `size` it was designed
+/// at (`min` of the two axes' ratios, so 1.0 at that size); the spare axis
+/// gets the extra room. [`MuiEditor::fixed_zoom`] keeps it at 1.0 instead,
+/// so the tree lays out into the new size unscaled.
 ///
 /// ```ignore
 /// fn editor(params: Arc<GainParams>) -> Box<dyn Editor> {
@@ -115,6 +128,7 @@ impl<P: Params> MuiEditor<P> {
             bridge: Bridge::new(Arc::clone(&params)),
             build: Box::new(build),
             changed: None,
+            design: Some(size),
         };
         Self {
             shared: Arc::new(Mutex::new(Shared { ui, view: session })),
@@ -137,6 +151,13 @@ impl<P: Params> MuiEditor<P> {
     /// the model moved (a meter, a status) and the tree rebuilds.
     pub fn changed(self, f: impl FnMut() -> bool + Send + 'static) -> Self {
         lock(&self.shared).view.changed = Some(Box::new(f));
+        self
+    }
+
+    /// Keep the zoom at 1.0 when the window resizes: the tree lays out into
+    /// the new size instead of scaling to fit its design size.
+    pub fn fixed_zoom(self) -> Self {
+        lock(&self.shared).view.design = None;
         self
     }
 

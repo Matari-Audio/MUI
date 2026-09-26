@@ -467,3 +467,31 @@ fn a_changed_callback_wakes_an_idle_editor() {
     assert!(h.step(), "a meter outside the params is a frame");
     assert!(!h.step(), "and only one");
 }
+
+/// The zoom a handler over `editor` settles at, `physical` pixels at `scale`.
+fn zoom_at(editor: &MuiEditor<Synth>, physical: (u32, u32), scale: f64) -> f64 {
+    let mut h = Handler::new(
+        editor.shared.clone(),
+        editor.requests.clone(),
+        physical,
+        scale,
+    );
+    h.step();
+    h.driver.ui_scale() / scale
+}
+
+#[test]
+fn a_resized_window_fits_the_design_size_unless_the_zoom_is_fixed() {
+    let params = Arc::new(Synth::default());
+    let fit = editor(&params).resizable((200, 150));
+    assert_eq!(zoom_at(&fit, (400, 300), 1.0), 1.0, "design size");
+    assert_eq!(
+        zoom_at(&fit, (600, 450), 1.5),
+        1.0,
+        "design size, host scale"
+    );
+    assert_eq!(zoom_at(&fit, (800, 600), 1.0), 2.0);
+    assert_eq!(zoom_at(&fit, (1600, 900), 2.0), 1.5, "the tighter axis");
+    let fixed = editor(&params).resizable((200, 150)).fixed_zoom();
+    assert_eq!(zoom_at(&fixed, (800, 600), 1.0), 1.0);
+}
