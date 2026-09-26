@@ -58,47 +58,9 @@ fn icon(c: Cursor) -> CursorIcon {
 
 /// The named keys MUI has a word for; everything else is the host's business.
 fn named(k: NamedKey) -> Option<mui::prelude::Key> {
-    use mui::prelude::Key as K;
-    Some(match k {
-        NamedKey::Enter => K::Enter,
-        NamedKey::Escape => K::Escape,
-        NamedKey::Tab => K::Tab,
-        NamedKey::Backspace => K::Backspace,
-        NamedKey::Delete => K::Delete,
-        NamedKey::ArrowLeft => K::Left,
-        NamedKey::ArrowRight => K::Right,
-        NamedKey::ArrowUp => K::Up,
-        NamedKey::ArrowDown => K::Down,
-        NamedKey::Home => K::Home,
-        NamedKey::End => K::End,
-        NamedKey::Space => K::Space,
-        NamedKey::PageUp => K::PageUp,
-        NamedKey::PageDown => K::PageDown,
-        // F1..F12 by position: twelve match arms would say the same thing.
-        _ => {
-            return FUNCTION
-                .iter()
-                .position(|f| *f == k)
-                .map(|i| K::Function(i as u8 + 1));
-        }
-    })
+    // winit's variants carry the W3C names `Key::from_name` reads.
+    mui::prelude::Key::from_name(&format!("{k:?}"))
 }
-
-/// winit's function keys, in order, so `F3` is `Function(3)`.
-const FUNCTION: [NamedKey; 12] = [
-    NamedKey::F1,
-    NamedKey::F2,
-    NamedKey::F3,
-    NamedKey::F4,
-    NamedKey::F5,
-    NamedKey::F6,
-    NamedKey::F7,
-    NamedKey::F8,
-    NamedKey::F9,
-    NamedKey::F10,
-    NamedKey::F11,
-    NamedKey::F12,
-];
 
 /// A theme file: `key = value` a line, `#` starts a comment, everything
 /// unstated stays [`skin::SKIN`]'s. Returns what failed to parse so the caller

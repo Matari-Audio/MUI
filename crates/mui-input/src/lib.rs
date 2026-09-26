@@ -506,6 +506,44 @@ pub enum Key {
     Function(u8),
 }
 
+impl Key {
+    /// The named key a W3C `KeyboardEvent.key` value stands for: the one
+    /// keymap every host shares. keyboard-types' `Key` (baseview) prints
+    /// this name, and winit's `NamedKey` variants are named after it.
+    /// Characters are not names: they arrive as [`Key::Char`] or text.
+    ///
+    /// ```
+    /// # use mui_input::Key;
+    /// assert_eq!(Key::from_name("ArrowLeft"), Some(Key::Left));
+    /// assert_eq!(Key::from_name("F12"), Some(Key::Function(12)));
+    /// assert_eq!(Key::from_name("F0"), None);
+    /// assert_eq!(Key::from_name("CapsLock"), None);
+    /// ```
+    pub fn from_name(name: &str) -> Option<Self> {
+        Some(match name {
+            "Enter" => Self::Enter,
+            "Escape" => Self::Escape,
+            "Tab" => Self::Tab,
+            "Backspace" => Self::Backspace,
+            "Delete" => Self::Delete,
+            "ArrowLeft" => Self::Left,
+            "ArrowRight" => Self::Right,
+            "ArrowUp" => Self::Up,
+            "ArrowDown" => Self::Down,
+            "Home" => Self::Home,
+            "End" => Self::End,
+            "PageUp" => Self::PageUp,
+            "PageDown" => Self::PageDown,
+            // W3C's space bar is the character " "; winit names it.
+            "Space" => Self::Space,
+            _ => {
+                let n: u8 = name.strip_prefix('F')?.parse().ok()?;
+                return (1..=24).contains(&n).then_some(Self::Function(n));
+            }
+        })
+    }
+}
+
 /// The modifier keys held. Shared by [`KeyPress`] and [`PointerInput`]: a
 /// gesture and a shortcut ask the same question.
 ///

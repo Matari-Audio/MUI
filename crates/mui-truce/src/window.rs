@@ -618,35 +618,9 @@ fn is_paste(key: &HostKey, modifiers: Modifiers) -> bool {
         && matches!(key, HostKey::Character(s) if s.eq_ignore_ascii_case("v"))
 }
 
+/// keyboard-types prints the W3C name `Key::from_name` reads.
 fn named_key(key: &HostKey) -> Option<Key> {
-    Some(match key {
-        HostKey::Enter => Key::Enter,
-        HostKey::Escape => Key::Escape,
-        HostKey::Tab => Key::Tab,
-        HostKey::Backspace => Key::Backspace,
-        HostKey::Delete => Key::Delete,
-        HostKey::ArrowLeft => Key::Left,
-        HostKey::ArrowRight => Key::Right,
-        HostKey::ArrowUp => Key::Up,
-        HostKey::ArrowDown => Key::Down,
-        HostKey::Home => Key::Home,
-        HostKey::End => Key::End,
-        HostKey::PageUp => Key::PageUp,
-        HostKey::PageDown => Key::PageDown,
-        HostKey::F1 => Key::Function(1),
-        HostKey::F2 => Key::Function(2),
-        HostKey::F3 => Key::Function(3),
-        HostKey::F4 => Key::Function(4),
-        HostKey::F5 => Key::Function(5),
-        HostKey::F6 => Key::Function(6),
-        HostKey::F7 => Key::Function(7),
-        HostKey::F8 => Key::Function(8),
-        HostKey::F9 => Key::Function(9),
-        HostKey::F10 => Key::Function(10),
-        HostKey::F11 => Key::Function(11),
-        HostKey::F12 => Key::Function(12),
-        _ => return None,
-    })
+    Key::from_name(&key.to_string())
 }
 
 const fn native_cursor(cursor: Cursor) -> MouseCursor {
