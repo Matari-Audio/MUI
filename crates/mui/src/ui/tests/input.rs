@@ -356,8 +356,7 @@ fn a_live_readout_swaps_its_glyphs_without_resolving_again() {
             .size(10., 10.)
         ]
     };
-    let mut ui =
-        Ui::default().font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
+    let mut ui = Ui::default().font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
     ui.frame(tree(), Some(Size::new(300., 40.)), Input::default(), 0.016)
         .unwrap();
     assert_eq!(seen.get(), 1, "the one resolve");
@@ -387,8 +386,7 @@ fn a_live_readout_swaps_its_glyphs_without_resolving_again() {
 
 #[test]
 fn set_text_says_so_when_there_is_nothing_to_set() {
-    let mut ui =
-        Ui::default().font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
+    let mut ui = Ui::default().font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
     assert!(matches!(
         ui.set_text("gain", "1"),
         Err(SceneError::NoTextLayer)

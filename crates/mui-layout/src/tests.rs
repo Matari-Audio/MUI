@@ -282,11 +282,7 @@ fn aspect_derives_the_missing_axis() {
     assert_eq!(l.frame("k").unwrap().size, Size::new(40., 20.));
     // A fixed height derives the width at measure, so hugging works too.
     let l = resolve(
-        &row([block(0., 0.)
-            .id("h")
-            .h(30.)
-            .w(Len::Auto)
-            .aspect(0.5)]),
+        &row([block(0., 0.).id("h").h(30.).w(Len::Auto).aspect(0.5)]),
         None,
         Limits::default(),
     )

@@ -133,6 +133,10 @@ pub mod prelude {
     /// assert_eq!(scene.surface("rail").unwrap().frame.size.width, 72.);
     /// ```
     pub fn clamp(min: impl crate::Px, pct: impl crate::Px, max: impl crate::Px) -> Len {
-        Len::Clamp { min: min.px(), pct: pct.px(), max: max.px() }
+        Len::Clamp {
+            min: min.px(),
+            pct: pct.px(),
+            max: max.px(),
+        }
     }
 }

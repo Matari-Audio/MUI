@@ -181,7 +181,8 @@ fn ordinary_alignment_reserves_only_the_inward_share() {
     ] {
         let root = stack![cell("child")]
             .inside(2.)
-            .stroke(Role::Primary).stroke_width(20.)
+            .stroke(Role::Primary)
+            .stroke_width(20.)
             .border_align(align)
             .w(100.)
             .h(100.)
@@ -312,8 +313,14 @@ fn outward_child_borders_preserve_the_allocated_gap() {
     for alignment in [BorderAlign::Outside, BorderAlign::Center] {
         let scene = resolve(&SceneSpec::new(
             row![
-                cell("a").stroke(Role::Primary).stroke_width(10.).border_align(alignment),
-                cell("b").stroke(Role::Primary).stroke_width(10.).border_align(alignment),
+                cell("a")
+                    .stroke(Role::Primary)
+                    .stroke_width(10.)
+                    .border_align(alignment),
+                cell("b")
+                    .stroke(Role::Primary)
+                    .stroke_width(10.)
+                    .border_align(alignment),
             ]
             .inside(2.)
             .radius(0.)

@@ -475,9 +475,7 @@ pub fn text_edit(
         .on(State::Focus, |s| s.stroke(Role::Primary))
         .cursor(Cursor::Text)
         .focusable()
-        .when(multi, |e| {
-            e.h(opts.rows.max(1) as f64 * lh + 2.0 * PAD_Y)
-        })
+        .when(multi, |e| e.h(opts.rows.max(1) as f64 * lh + 2.0 * PAD_Y))
         .a11y(A11y::TextInput {
             value: value.as_str().into(),
             selection: (anchor, caret),

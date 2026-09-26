@@ -437,7 +437,11 @@ impl Element {
     /// the theme's icon font for an icon.
     pub(crate) fn face_font<'a>(&'a self, theme: &'a crate::Theme) -> Option<&'a mui_text::Font> {
         self.font.as_ref().or_else(|| {
-            if self.has(Self::ICON) { theme.icon_font.as_ref() } else { None }
+            if self.has(Self::ICON) {
+                theme.icon_font.as_ref()
+            } else {
+                None
+            }
         })
     }
 

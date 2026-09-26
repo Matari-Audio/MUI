@@ -15,7 +15,9 @@
 //! it is handed; nothing here owns a frame, a spring table or an event loop,
 //! and nothing here rasterizes.
 
-use mui_scene::{Align, Appear, El, Fill, IntoEl, Len, Pad, Paints, Px, Role, SpacingToken, Styled};
+use mui_scene::{
+    Align, Appear, El, Fill, IntoEl, Len, Pad, Paints, Px, Role, SpacingToken, Styled,
+};
 use std::sync::Arc;
 
 /// What a widget hands back: its tree, and what happened to it last frame.

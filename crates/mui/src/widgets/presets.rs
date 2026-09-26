@@ -4,8 +4,8 @@
 //! an `El` you finish (`chip("A").id("chip-A")`). No registry, no trait, no
 //! variant table: a preset that needs a variant is a function with an
 //! argument.
-use mui_scene::{Px, Style};
 use mui_scene::prelude::*;
+use mui_scene::{Px, Style};
 
 /// The window's own ground: the surface colour and the big corner.
 ///
@@ -107,10 +107,12 @@ pub fn tile(el: El) -> El {
 pub fn meter(ui: &mut crate::Ui, id: impl Into<Id>, level: impl Px) -> El {
     let id = id.into();
     let level = ui.tween(id.field("level"), level.px().clamp(0.0, 1.0));
-    row([block(Len::Pct(level * 100.0), Len::Pct(100.0)).pill().fill(Role::Primary)])
-        .w(Len::Pct(100.0))
-        .h(8)
+    row([block(Len::Pct(level * 100.0), Len::Pct(100.0))
         .pill()
-        .fill(Role::Field)
-        .id(id)
+        .fill(Role::Primary)])
+    .w(Len::Pct(100.0))
+    .h(8)
+    .pill()
+    .fill(Role::Field)
+    .id(id)
 }

@@ -1,6 +1,6 @@
 //! Wheel scrolling, scrollbar drags and their heats.
-use mui_scene::Id;
 use super::*;
+use mui_scene::Id;
 
 impl Ui {
     /// How far `id`'s children are scrolled to: the settled offset, which

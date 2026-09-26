@@ -73,8 +73,7 @@ fn a_widget_id_costs_the_allocator_nothing() {
 #[ignore = "a measurement, not a check"]
 fn fifty_widgets_per_frame() {
     const N: usize = 20;
-    let mut ui =
-        Ui::default().font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
+    let mut ui = Ui::default().font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
     let (mut v, mut on) = ([0.5; 20], [false; 10]);
     let size = Some(Size::new(1200., 800.));
     for _ in 0..3 {

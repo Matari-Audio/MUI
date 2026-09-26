@@ -159,8 +159,7 @@ fn track_rects_are_surface_frames_at_scale() {
         gain: 0.5,
         on: false,
     };
-    let mut ui =
-        Ui::default().font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
+    let mut ui = Ui::default().font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
     ui.set_scale(Some(2.0));
     let root = build(&mut ui, &mut m);
     let f = ui

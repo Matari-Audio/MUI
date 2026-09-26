@@ -1,6 +1,6 @@
 //! [`Ui::memo`]: subtrees kept between frames.
-use mui_scene::Id;
 use super::*;
+use mui_scene::Id;
 
 impl Ui {
     /// A subtree built only when `deps` changes: while `deps` equals what

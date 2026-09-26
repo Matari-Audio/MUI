@@ -256,16 +256,15 @@ fn a_rounded_clip_rejects_a_child_corner() {
 #[test]
 fn nested_rounded_clips_intersect_for_hit_testing() {
     let tree = || {
-        stack([stack([block(80., 80.)
-            .fill(Role::Primary)
-            .centered()
-            .id("target")])
-        .size(60., 60.)
-        .fill(Role::Raised)
-        .radius(15.)
-        .clip()
-        .centered()
-        .id("inner")])
+        stack([
+            stack([block(80., 80.).fill(Role::Primary).centered().id("target")])
+                .size(60., 60.)
+                .fill(Role::Raised)
+                .radius(15.)
+                .clip()
+                .centered()
+                .id("inner"),
+        ])
         .size(100., 100.)
         .fill(Role::Field)
         .radius(20.)

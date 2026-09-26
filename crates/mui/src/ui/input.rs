@@ -84,7 +84,11 @@ impl Ui {
     pub fn keys(&self, id: impl Into<Id>) -> &[KeyPress] {
         let id: Id = id.into();
         let id = id.as_str();
-        if self.focused(Id::runtime(id)) { &self.keys } else { &[] }
+        if self.focused(Id::runtime(id)) {
+            &self.keys
+        } else {
+            &[]
+        }
     }
     /// Every key this frame, whatever holds the focus: the stream a global
     /// shortcut reads. `Ui` has already taken Tab and Escape for focus, and
@@ -125,7 +129,11 @@ impl Ui {
     pub fn text(&self, id: impl Into<Id>) -> &str {
         let id: Id = id.into();
         let id = id.as_str();
-        if self.focused(Id::runtime(id)) { &self.typed } else { "" }
+        if self.focused(Id::runtime(id)) {
+            &self.typed
+        } else {
+            ""
+        }
     }
     /// The pointer relative to `id`'s frame origin, if both exist.
     pub fn local(&self, id: impl Into<Id>) -> Option<Point> {

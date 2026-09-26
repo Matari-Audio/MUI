@@ -59,17 +59,12 @@ fn context(params: &Arc<Synth>) -> (PluginContext, Log) {
 
 /// A gain knob, a voices knob and a bypass toggle, each bound.
 fn editor(params: &Arc<Synth>) -> MuiEditor<Synth> {
-    MuiEditor::new(
-        params.clone(),
-        Ui::default(),
-        (400, 300),
-        |ui, bridge| {
-            let gain = bridge.bind(ui, 10u32, |ui, id, v| knob(ui, id, "Gain", v, 0.0..=1.0));
-            let voices = bridge.bind(ui, 20u32, |ui, id, v| knob(ui, id, "Voices", v, 0.0..=1.0));
-            let bypass = bridge.bind_bool(ui, 30u32, |ui, id, on| toggle(ui, id, "Bypass", on));
-            row([gain, voices, bypass])
-        },
-    )
+    MuiEditor::new(params.clone(), Ui::default(), (400, 300), |ui, bridge| {
+        let gain = bridge.bind(ui, 10u32, |ui, id, v| knob(ui, id, "Gain", v, 0.0..=1.0));
+        let voices = bridge.bind(ui, 20u32, |ui, id, v| knob(ui, id, "Voices", v, 0.0..=1.0));
+        let bypass = bridge.bind_bool(ui, 30u32, |ui, id, on| toggle(ui, id, "Bypass", on));
+        row([gain, voices, bypass])
+    })
 }
 
 /// The editor opened on a recording host, and the window handler over it.
@@ -342,19 +337,14 @@ fn a_control_that_leaves_the_tree_mid_drag_ends_its_gesture() {
 #[test]
 fn one_parameter_bound_twice_still_paints_and_brackets_by_parameter() {
     let params = Arc::new(Synth::default());
-    let editor = MuiEditor::new(
-        params.clone(),
-        Ui::default(),
-        (400, 300),
-        |ui, bridge| {
-            let a = bridge.bind(ui, 10u32, |ui, id, v| knob(ui, id, "Gain", v, 0.0..=1.0));
-            let field = crate::widget_id(10u32).field("fine");
-            let b = bridge.bind_as(ui, 10u32, field, |ui, id, v| {
-                knob(ui, id, "Fine", v, 0.0..=1.0)
-            });
-            row([a, b])
-        },
-    );
+    let editor = MuiEditor::new(params.clone(), Ui::default(), (400, 300), |ui, bridge| {
+        let a = bridge.bind(ui, 10u32, |ui, id, v| knob(ui, id, "Gain", v, 0.0..=1.0));
+        let field = crate::widget_id(10u32).field("fine");
+        let b = bridge.bind_as(ui, 10u32, field, |ui, id, v| {
+            knob(ui, id, "Fine", v, 0.0..=1.0)
+        });
+        row([a, b])
+    });
     let (editor, mut h, log) = open_with(&params, editor);
     let fine = {
         let s = lock(&editor.shared);

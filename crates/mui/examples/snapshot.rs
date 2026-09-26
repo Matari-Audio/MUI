@@ -68,8 +68,7 @@ fn shot(scale: f64) -> Shot {
         (SIZE.width * scale).round() as u16,
         (SIZE.height * scale).round() as u16,
     );
-    let mut ui =
-        Ui::default().font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
+    let mut ui = Ui::default().font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
     ui.set_scale(Some(scale));
     let mut state = (0.35, 0.7, -6.0, true);
     // Two frames: the first has no gesture state, the second is what a real

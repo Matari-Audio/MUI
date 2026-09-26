@@ -386,7 +386,11 @@ impl Ui {
             .ok_or(SceneError::UnsupportedWeld("no resolved scene"))?
             .set_weld_solid_material(id, index, fill, border, width)
     }
-    pub fn set_weld_material_blend(&mut self, id: impl Into<Id>, blend: f64) -> Result<bool, SceneError> {
+    pub fn set_weld_material_blend(
+        &mut self,
+        id: impl Into<Id>,
+        blend: f64,
+    ) -> Result<bool, SceneError> {
         let id: Id = id.into();
         let id = id.as_str();
         self.scene
@@ -431,7 +435,11 @@ impl Ui {
     /// ui.frame(tree, Some(Size::new(200., 40.)), PointerInput::default(), 0.016).unwrap();
     /// ui.set_text("gain", "-12.4").unwrap();
     /// ```
-    pub fn set_text(&mut self, id: impl Into<Id>, s: impl AsRef<str>) -> Result<(), mui_scene::SceneError> {
+    pub fn set_text(
+        &mut self,
+        id: impl Into<Id>,
+        s: impl AsRef<str>,
+    ) -> Result<(), mui_scene::SceneError> {
         let id: Id = id.into();
         let id = id.as_str();
         self.scene

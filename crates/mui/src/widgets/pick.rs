@@ -103,7 +103,8 @@ pub fn color_picker(
     let ring = |d: f64| {
         block(d, d)
             .pill()
-            .stroke(white).stroke_width(2.0)
+            .stroke(white)
+            .stroke_width(2.0)
             .shell(1.0, black.with_alpha(0.5))
     };
     let square = stack([
@@ -170,7 +171,8 @@ pub fn color_picker(
             block(bar * 2.0, bar * 2.0)
                 .radius(4.0)
                 .fill(*value)
-                .stroke(Role::Ink.alpha(0.3)).stroke_width(1.0),
+                .stroke(Role::Ink.alpha(0.3))
+                .stroke_width(1.0),
             field.grow(1.0),
         ])
         .gap(S)

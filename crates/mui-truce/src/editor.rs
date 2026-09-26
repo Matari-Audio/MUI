@@ -68,9 +68,16 @@ pub struct MuiEditor<P: Params> {
 }
 
 /// Whole logical points, as the host's window API takes them.
-#[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "a window is a few thousand points, never negative")]
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "a window is a few thousand points, never negative"
+)]
 fn points(s: Size) -> (u32, u32) {
-    (s.width.round().max(0.0) as u32, s.height.round().max(0.0) as u32)
+    (
+        s.width.round().max(0.0) as u32,
+        s.height.round().max(0.0) as u32,
+    )
 }
 
 /// The one field of [`MuiEditor`] that is not auto-`Send`.

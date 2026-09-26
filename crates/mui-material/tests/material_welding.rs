@@ -6,7 +6,8 @@ fn plate(id: &str, fill: impl Into<Fill>, width: f64) -> El {
     block(24., 24.)
         .radius(5.)
         .fill(fill)
-        .stroke(Role::Ink).stroke_width(width)
+        .stroke(Role::Ink)
+        .stroke_width(width)
         .id(id)
 }
 fn tree(options: Weld) -> El {
@@ -106,7 +107,8 @@ fn descendants_are_not_consumed_with_the_source_plate() {
     let a = col![block(5., 5.).fill(Role::Danger).id("child")]
         .pad(8.)
         .fill(Role::Primary)
-        .stroke(Role::Ink).stroke_width(2.)
+        .stroke(Role::Ink)
+        .stroke_width(2.)
         .id("a");
     let scene = resolve(&SceneSpec::new(
         row![a, plate("b", Role::Secondary, 1.)]
