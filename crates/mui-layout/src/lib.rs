@@ -24,8 +24,9 @@ mod pin;
 
 pub use id::Id;
 pub use len::{Align, Insets, Justify, Len, Size};
-pub use mui_geometry::{Spacing, SpacingScale, SpacingToken};
+mod spacing;
 pub use node::{Node, block, col, fits, grid, row, stack};
+pub use spacing::{Spacing, SpacingScale, SpacingToken};
 
 /// What a measurer says about a content leaf: its size in the room it was
 /// given, and the narrowest a flex parent may squeeze it to -- for text, its

@@ -5,7 +5,7 @@
 //! correctly in light and dark, on a chip and on the ground.
 use crate::{Color, Corner, Palette};
 use mui_geometry::CornerStyle;
-use mui_geometry::Spacing;
+use mui_layout::Spacing;
 use std::sync::Arc;
 
 /// The pointer's shape over a node.

@@ -1,8 +1,7 @@
 //! Spacing tokens: the scale a gap or a pad is stated in.
 //!
-//! Both the style crate (a shell's thickness, a theme's scale) and the layout
-//! crate (`gap`, `pad`, `resolve_with`) are written in these units, so they
-//! live below both rather than creating an edge between them.
+//! The layout crate (`gap`, `pad`, `resolve_with`) resolves them; the style
+//! crate (a shell's thickness, a theme's scale) depends on this crate for them.
 
 /// A step on the theme's spacing scale. `.gap(M)` reads like the CSS it
 /// replaces and re-tunes with the theme instead of with a search-and-replace.
@@ -74,7 +73,7 @@ impl Spacing {
     /// `n` units of the theme's spacing grid.
     ///
     /// ```
-    /// use mui_geometry::{Spacing, SpacingScale};
+    /// use mui_layout::{Spacing, SpacingScale};
     /// assert_eq!(Spacing::step(1.5).resolve(SpacingScale::DEFAULT), 6.0);
     /// ```
     pub const fn step(n: f64) -> Self {

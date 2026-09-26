@@ -189,15 +189,13 @@ mui-scene            El DSL, Styled/Paints, Theme resolution, the scene walk
    +--> mui-style    colours, roles, fills, shadows, Style, Theme (+ color)
    +--> mui-motion   Spring, curve (std only)
    +--> mui-text     glyph and string outlines
-   +--> mui-layout   the flex solve
-         |
-         v
-      mui-geometry   Booleans, fillets, offsets, and the Spacing scale
+   +--> mui-layout   the flex solve and the Spacing scale
+   +--> mui-geometry Booleans, fillets, offsets over kurbo's Point/Rect/Affine
 ```
 
-`Spacing`/`SpacingScale` live in `mui-geometry` because both `mui-style` (a
-shell's thickness, a theme's scale) and `mui-layout` (`gap`, `pad`) are
-written in them; putting them in either would point an edge sideways.
+`Spacing`/`SpacingScale` live in `mui-layout`, which resolves them;
+`mui-style` (a shell's thickness, a theme's scale) depends on it for them, and
+the solver knows nothing of style, so the edge points one way.
 `mui-playground` is the browser playground's DSL, straight over `mui-scene` and
 `mui-vello`.
 

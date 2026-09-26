@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 use crate::color::Palette;
-use mui_geometry::SpacingScale;
+use mui_layout::SpacingScale;
 
 /// The theme's radii, named by what kind of thing they round -- daisyUI's
 /// `--radius-selector` / `--radius-field` / `--radius-box` -- plus the one

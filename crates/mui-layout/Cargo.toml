@@ -6,8 +6,6 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-# The spacing vocabulary, shared with the style crate.
-mui-geometry.workspace = true
 # Hot maps keyed by addresses and hashes, not attacker input.
 rustc-hash.workspace = true
 

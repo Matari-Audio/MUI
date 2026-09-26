@@ -10,8 +10,11 @@ description = "Theme data for MUI: Oklch colours, palettes, roles, fills, gradie
 # The renderer reaches us through the same crate, so colour types cannot
 # version-skew with what vello paints. No transitive dependencies of its own.
 color.workspace = true
-# Only for CornerStyle and the spacing vocabulary a shell's thickness is stated in.
+# Only for CornerStyle.
 mui-geometry.workspace = true
+# Only for the spacing vocabulary a shell's thickness is stated in; the
+# solver does not depend on style, so no cycle.
+mui-layout.workspace = true
 
 [lints]
 workspace = true
