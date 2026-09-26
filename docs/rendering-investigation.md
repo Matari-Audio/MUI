@@ -5,6 +5,10 @@
 > behind `mui_vello::effects::GpuRenderer`, and the CPU path is `vello_cpu`.
 > The measurements below are kept as taken; "production backend" and "Pinned
 > Hybrid" mean the backend of that time.
+>
+> `docs/render-lab/` (about 4 MB of GPUI-versus-Vello fixtures, PNGs and
+> their RESULTS.md write-ups, nothing in code or tests read them) was deleted
+> after `693f6d2`. Recover it with `git checkout 693f6d2 -- docs/render-lab`.
 
 ## Decision
 

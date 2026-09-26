@@ -1,8 +1,0 @@
-{
-  "adapter": "AdapterInfo { name: \"AMD Radeon RX 6600 (RADV NAVI23)\", vendor: 4098, device: 29695, device_type: DiscreteGpu, device_pci_bus_id: \"0000:03:00.0\", driver: \"radv\", driver_info: \"Mesa 26.2.2-arch3.2\", backend: Vulkan, subgroup_min_size: 32, subgroup_max_size: 64, transient_saves_memory: false }",
-  "verified_parent_relationships": 2,
-  "shared_device": true,
-  "sibling_survives_close": true,
-  "resize_draws": 3,
-  "scope": "gpui_wgpu rendering in two winit X11 children of a synthetic parent; no GPUI App runtime, DAW, automation, focus or platform portability validation"
-}
