@@ -5,29 +5,21 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
-[features]
-# See mui-baseview's `keyboard-capture`: Windows only, and needs a
-# baseview-truce with `Window::set_keyboard_capture`.
-keyboard-capture = ["mui-baseview/keyboard-capture"]
-
 [dependencies]
 mui = { workspace = true, features = ["gpu-effects"] }
 truce-core = "6.3"
 truce-params = "6.3"
 
-# The native editor: a baseview child window under the host's parent, a wgpu
-# surface on it. None of it builds for wasm, and the parameter bridge needs
-# none of it.
 # The native editor: mui-baseview's window under the host's parent. None of
 # it builds for wasm, and the parameter bridge needs none of it.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 mui-baseview.workspace = true
-baseview = { package = "baseview-truce", version = "0.1.1-truce.13" }
-# baseview's parent handle is raw-window-handle 0.5.
-raw-window-handle = "0.5"
+# truce's parent handle as the raw-window-handle 0.6 baseview takes; baseview
+# itself comes through `mui_baseview::baseview`.
+raw-window-handle = "0.6"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-keyboard-types = { version = "0.7", default-features = false }
+keyboard-types = { version = "0.8", default-features = false }
 
 [dev-dependencies]
 truce.workspace = true

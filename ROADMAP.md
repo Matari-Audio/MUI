@@ -275,10 +275,9 @@ public function and a test behind it.
       plugin text field.
 - [ ] `mui-truce` has no AU or AAX: truce builds them, but only CLAP and VST3
       are wired and validated.
-- [ ] `mui-truce` swallows every key while focused: upstream baseview does not
-      forward unhandled keys to the host, so DAW shortcuts (space for
-      transport) stop while the editor has focus. Kurv's vendored baseview
-      has the forwarding.
+- [x] `mui-truce` swallowed every key while focused. On moose-baseview a key
+      the editor ignores goes to the host, and on Windows the editor takes
+      the keyboard only while a text field is focused.
 - [ ] The gain plugin fails three clap-validator state tests and Steinberg's
       `vst3 validator`: truce-clap 6.3 never requests a value rescan after a
       state load, and truce-vst3 6.3 declares the wrong

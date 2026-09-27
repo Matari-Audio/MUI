@@ -130,17 +130,20 @@ sets `needs_rescan` and calls `request_callback`; `vendor/truce-vst3-6.3.0`:
 the SDK IID). MUI does not vendor 12k lines of wrapper for two one-line
 fixes in an example; they belong upstream.
 
-## What Kurv's vendored baseview adds
+## The baseview
 
-The editor builds against upstream `baseview-truce`. Kurv's copy adds, and
-this crate does without:
+The window is [moose-baseview](https://github.com/Matari-Audio/moose)
+(upstream baseview 0.3.4 plus MOOSE patches), re-exported as
+`window::baseview`; depend on it through that, not directly, or the plugin
+links two baseviews.
 
-- A 4 ms X11 frame poll (upstream: 15 ms). Here an animation ticks at about
-  66 Hz on X11.
-- Forwarding of keys the editor ignores to the host's window, so DAW
-  shortcuts still work while the editor has focus. Upstream has no
-  forwarding, so the editor captures every key.
-- XDND file drops and a bounded-close detach for blocked renderer threads.
+- Keyboard: on Windows the editor takes the keyboard from the host only
+  while a text field is focused (`Ui::focus_is_text`); every other key goes
+  to the host, so DAW shortcuts work while the editor has focus. On macOS
+  and X11 a key the editor ignores goes to the host. Always on; there is no
+  feature to enable.
+- Scale: the host's scale is a scale override on Windows and X11 (macOS
+  follows its backing scale).
 
 ## Tests
 

@@ -9,7 +9,7 @@ use truce_params::Params;
 
 use crate::Bridge;
 use crate::platform::{HostScale, ParentWindow};
-use crate::window::{self, Requests, Shared, View, lock};
+use crate::window::{self, Requests, Shared, View, baseview, lock};
 
 type Build<P> = Box<dyn FnMut(&mut Ui, &mut Bridge<P>) -> El + Send>;
 
@@ -81,9 +81,9 @@ fn points(s: Size) -> (u32, u32) {
 }
 
 /// The one field of [`MuiEditor`] that is not auto-`Send`.
-struct Handle(baseview::WindowHandle);
+struct Handle(baseview::Window);
 
-// SAFETY: `baseview::WindowHandle` wraps a native window pointer and is not
+// SAFETY: `baseview::Window` wraps a native window pointer and is not
 // auto-`Send`. truce calls `open`, `set_size` and `close` from one GUI
 // thread, never concurrently, so the handle never leaves the thread that
 // made it; `Send` is only what `Box<dyn Editor>` asks for. truce-gui's own
@@ -121,7 +121,7 @@ impl<P: Params> MuiEditor<P> {
     }
 
     fn close_window(&mut self) {
-        if let Some(Handle(mut window)) = self.window.take() {
+        if let Some(Handle(window)) = self.window.take() {
             window.close();
         }
     }
@@ -150,14 +150,15 @@ impl<P: Params> Editor for MuiEditor<P> {
             .attach(context.with_params(Arc::clone(&self.params)));
         // A request made while closed was for the last window.
         self.requests = Arc::default();
-        self.window = Some(Handle(window::open(
+        self.window = window::open(
             &ParentWindow(parent),
             "MUI",
             self.size,
             self.scale.policy(),
             Arc::clone(&self.shared),
             Arc::clone(&self.requests),
-        )));
+        )
+        .map(Handle);
     }
 
     fn close(&mut self) {

@@ -8,31 +8,34 @@
 //! frame schedule, zoom and key routing are `mui::host`'s, so another
 //! window crate hosts the same [`View`] the same way.
 #![deny(unsafe_code)]
+use std::cell::{Cell, RefCell};
+use std::collections::VecDeque;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use a11y::A11y;
-/// The baseview this window runs on, so a consumer names `WindowHandle`,
-/// `WindowScalePolicy` and friends without depending on it itself.
+/// The baseview this window runs on (moose-baseview), so a consumer names
+/// `Window`, `WindowSettings` and friends without depending on it itself.
 pub use baseview;
+use baseview::dpi::{LogicalSize, PhysicalPosition};
 use baseview::{
-    DropData, DropEffect, Event, EventStatus, MouseButton, MouseCursor, MouseEvent, ScrollDelta,
-    Window, WindowEvent, WindowHandle, WindowHandler, WindowOpenOptions, WindowScalePolicy,
+    DropData, DropEffect, Event, EventStatus, HandlerError, MouseButton, MouseCursor, MouseEvent,
+    ScrollDelta, Window, WindowContext, WindowEvent, WindowHandler, WindowSettings, WindowSize,
 };
-use keyboard_types::{Key as HostKey, KeyState, KeyboardEvent, Modifiers};
+use keyboard_types::{Key as HostKey, KeyState, KeyboardEvent, Modifiers, NamedKey};
 use mui::host::{Driver, KeyEvent, Modifier, NativeKey, Wheel};
 pub use mui::host::{Shared, View, lock};
 use mui::prelude::{Button, Cursor, Key, Mods, Point};
 use mui::vello::host::{Frame, Host, target_size};
 use mui::vello::kurbo::Affine;
-use raw_window_handle::HasRawWindowHandle;
+use raw_window_handle::HasWindowHandle;
 
 const GPU_RETRY: Duration = Duration::from_millis(500);
 
 /// Requests from the host's thread, applied by the window's next tick,
-/// which is the only place a baseview `Window` can be touched.
+/// which is the only place baseview's `WindowContext` can be touched.
 #[derive(Default)]
 pub struct Requests {
     size: AtomicU64,
@@ -60,64 +63,81 @@ impl Requests {
     }
 }
 
-/// Open the window under `parent`, `size` logical points.
+/// Open the window under `parent`, `size` logical points. `scale` pins the
+/// window's scale factor (the host's content scale); `None` follows the OS.
+/// `None` back when the parent handle is unusable or the window could not be
+/// made; the reason goes to [`View::log`]. Dropping the window closes it.
 pub fn open<V: View + Send + 'static>(
-    parent: &impl HasRawWindowHandle,
+    parent: &impl HasWindowHandle,
     title: &str,
     size: (u32, u32),
-    scale: WindowScalePolicy,
+    scale: Option<f64>,
     shared: Arc<Mutex<Shared<V>>>,
     requests: Arc<Requests>,
-) -> WindowHandle {
-    let (options, build) = prepare(title, size, scale, shared, requests, true);
-    Window::open_parented(parent, options, build)
+) -> Option<Window> {
+    // baseview panics on a handle it cannot read.
+    if let Err(e) = parent.window_handle() {
+        log(&shared, &format!("mui-baseview: no parent window ({e})"));
+        return None;
+    }
+    let settings = settings(title, size)
+        .with_parent(parent)
+        .with_scale_factor_override(scale);
+    let sink = Arc::clone(&shared);
+    let window =
+        Window::create(settings, build(shared, requests, true)).and_then(|w| w.show().map(|()| w));
+    window
+        .map_err(|e| log(&sink, &format!("mui-baseview: window failed ({e})")))
+        .ok()
 }
 
 /// Run a top-level window of `size` logical points at the system scale, until
-/// it closes: an app's main loop.
+/// it closes: an app's main loop. Never call it from a plugin: it tells the
+/// OS this process is baseview's alone (Windows DPI awareness).
 pub fn run<V: View + Send + 'static>(
     title: &str,
     size: (u32, u32),
     shared: Arc<Mutex<Shared<V>>>,
     requests: Arc<Requests>,
 ) {
-    let scale = WindowScalePolicy::SystemScaleFactor;
-    let (options, build) = prepare(title, size, scale, shared, requests, false);
-    Window::open_blocking(options, build);
+    // SAFETY: `run` is an app's main loop, documented as never a plugin's:
+    // this process hosts no other windowing library.
+    #[expect(unsafe_code, reason = "baseview's standalone-process opt-in")]
+    unsafe {
+        baseview::assume_standalone_in_process();
+    }
+    let sink = Arc::clone(&shared);
+    let window = Window::create(settings(title, size), build(shared, requests, false));
+    if let Err(e) = window.and_then(Window::run_until_closed) {
+        log(&sink, &format!("mui-baseview: window failed ({e})"));
+    }
 }
 
-/// The window options and the handler constructor `open` and `run` share.
-fn prepare<V: View + Send + 'static>(
-    title: &str,
-    size: (u32, u32),
-    scale: WindowScalePolicy,
+fn settings(title: &str, size: (u32, u32)) -> WindowSettings {
+    WindowSettings::new()
+        .with_title(title)
+        .with_size(LogicalSize::new(f64::from(size.0), f64::from(size.1)))
+}
+
+/// The handler constructor `open` and `run` share.
+fn build<V: View + Send + 'static>(
     shared: Arc<Mutex<Shared<V>>>,
     requests: Arc<Requests>,
     parented: bool,
-) -> (
-    WindowOpenOptions,
-    impl FnOnce(&mut Window) -> Handler<V> + Send + 'static,
-) {
-    let options = WindowOpenOptions {
-        title: title.to_owned(),
-        size: baseview::Size::new(f64::from(size.0), f64::from(size.1)),
-        scale,
-    };
-    let initial_scale = match scale {
-        WindowScalePolicy::ScaleFactor(s) => s,
-        WindowScalePolicy::SystemScaleFactor => 1.0,
-    };
-    let physical = (
-        (f64::from(size.0) * initial_scale).round() as u32,
-        (f64::from(size.1) * initial_scale).round() as u32,
-    );
-    let build = move |_: &mut Window| {
-        let mut handler = Handler::new(shared, requests, physical, initial_scale);
+) -> impl FnOnce(WindowContext) -> Result<Adapter<V>, HandlerError> + Send + 'static {
+    move |cx: WindowContext| {
+        let size = cx.size();
+        let physical = (size.physical.width, size.physical.height);
+        let mut handler = Handler::new(shared, requests, physical, size.scale_factor);
         handler.a11y = Some(A11y::new());
         handler.parented = parented;
-        handler
-    };
-    (options, build)
+        Ok(Adapter {
+            cx,
+            handler: RefCell::new(handler),
+            pending_resize: Cell::new(None),
+            pending_events: RefCell::new(VecDeque::new()),
+        })
+    }
 }
 
 /// The window's event handler. Public so a framework adapter can drive it
@@ -136,6 +156,10 @@ pub struct Handler<V> {
     a11y: Option<A11y>,
     /// A child of a host's window: keep it pinned to the parent's top.
     parented: bool,
+    /// The window's scale factor: baseview's pointer is in pixels.
+    scale: f64,
+    /// The keyboard capture last asked of baseview.
+    captured: Option<bool>,
     /// The queue and the frame schedule.
     pub driver: Driver,
 }
@@ -157,24 +181,36 @@ impl<V: View> Handler<V> {
             unpainted: true,
             a11y: None,
             parented: false,
+            scale,
+            captured: None,
             driver: Driver::new(size, scale, Box::new(Clipboard::default())),
         }
     }
 
-    fn tick(&mut self, window: &mut Window) {
+    fn tick(&mut self, window: &WindowContext) {
         let requests = &self.requests;
         let packed = requests.size.swap(0, Ordering::AcqRel);
-        if packed != 0 {
-            let (w, h) = (packed >> 32, packed & u64::from(u32::MAX));
-            window.resize(baseview::Size::new(w as f64, h as f64));
-        }
         let bits = requests.scale.swap(0, Ordering::AcqRel);
-        if bits != 0 {
-            window.set_scale_factor(f64::from_bits(bits));
+        if packed != 0 || bits != 0 {
+            // Read before the override: it changes the logical size baseview
+            // reports, and a new scale keeps the window's points.
+            let logical = if packed != 0 {
+                LogicalSize::new((packed >> 32) as f64, (packed & u64::from(u32::MAX)) as f64)
+            } else {
+                window.size().logical
+            };
+            if bits != 0 {
+                let _ = window.set_scale_factor_override(Some(f64::from_bits(bits)));
+            }
+            let _ = window.resize(logical);
+            // Not every platform reports a resize it was asked for.
+            self.resized(window.size());
         }
         // A hidden or detached editor cannot present, and on Windows this is
         // the host's GUI thread: a blocking present there freezes the host.
-        let handle = window.raw_window_handle();
+        let Ok(handle) = window.window_handle().map(|h| h.as_raw()) else {
+            return;
+        };
         if platform::should_skip_frame(handle) {
             return;
         }
@@ -227,9 +263,15 @@ impl<V: View> Handler<V> {
                 self.driver.redraw();
             }
             let fresh = self.driver.advance(&mut s, now);
-            // Keys typed into a field must not reach the host's shortcuts.
-            #[cfg(all(windows, feature = "keyboard-capture"))]
-            window.set_keyboard_capture(s.ui.focus_is_text());
+            // Keys typed into a field must not reach the host's shortcuts;
+            // every other key does. Windows only; a no-op elsewhere, where an
+            // ignored key already goes to the host. Only on a change: each
+            // call also moves focus.
+            let capture = s.ui.focus_is_text();
+            if self.captured != Some(capture) {
+                window.set_keyboard_capture(capture);
+                self.captured = Some(capture);
+            }
             if let Some(a11y) = self.a11y.as_mut()
                 && (fresh || a11y.wants_tree())
             {
@@ -273,7 +315,7 @@ impl<V: View> Handler<V> {
         }
         let cursor = native_cursor(self.driver.cursor());
         if self.applied_cursor != Some(cursor) {
-            window.set_mouse_cursor(cursor);
+            let _ = window.set_mouse_cursor(cursor);
             self.applied_cursor = Some(cursor);
         }
     }
@@ -288,8 +330,17 @@ impl<V: View> Handler<V> {
         self.driver.advance(&mut lock(&self.shared), now)
     }
 
+    /// The window's new size, as baseview reports it.
+    pub fn resized(&mut self, size: WindowSize) {
+        self.scale = size.scale_factor;
+        let physical = (size.physical.width, size.physical.height);
+        self.driver.resized(physical, size.scale_factor);
+    }
+
     /// One native event, as baseview delivers it.
     pub fn on_event_inner(&mut self, event: &Event) -> EventStatus {
+        let scale = self.scale;
+        let points = |p: PhysicalPosition<f64>| Point::new(p.x / scale, p.y / scale);
         let d = &mut self.driver;
         match event {
             Event::Keyboard(key) => {
@@ -304,7 +355,7 @@ impl<V: View> Handler<V> {
                 MouseEvent::CursorMoved {
                     position,
                     modifiers,
-                } => d.pointer_moved(Point::new(position.x, position.y), mods(modifiers)),
+                } => d.pointer_moved(points(position), mods(modifiers)),
                 MouseEvent::ButtonPressed { button, modifiers }
                 | MouseEvent::ButtonReleased { button, modifiers } => {
                     if let Some(b) = mouse_button(button) {
@@ -320,7 +371,6 @@ impl<V: View> Handler<V> {
                     d.wheel(wheel, mods(modifiers));
                 }
                 MouseEvent::CursorLeft | MouseEvent::DragLeft => d.pointer_left(),
-                MouseEvent::CursorEntered => {}
                 MouseEvent::DragEntered {
                     position,
                     modifiers,
@@ -336,7 +386,7 @@ impl<V: View> Handler<V> {
                     modifiers,
                     ref data,
                 } => {
-                    let at = Point::new(position.x, position.y);
+                    let at = points(position);
                     let DropData::Files(paths) = data else {
                         d.pointer_moved(at, mods(modifiers));
                         return EventStatus::Ignored;
@@ -349,11 +399,8 @@ impl<V: View> Handler<V> {
                         EventStatus::Ignored
                     };
                 }
+                _ => {}
             },
-            Event::Window(WindowEvent::Resized(info)) => {
-                let physical = info.physical_size();
-                d.resized((physical.width, physical.height), info.scale());
-            }
             Event::Window(e @ (WindowEvent::Focused | WindowEvent::Unfocused)) => {
                 let focused = matches!(e, WindowEvent::Focused);
                 d.focus(focused);
@@ -362,29 +409,79 @@ impl<V: View> Handler<V> {
                 }
             }
             Event::Window(WindowEvent::WillClose) => d.close(&mut lock(&self.shared)),
+            // A scale change arrives as a resize too.
+            _ => {}
         }
         EventStatus::Captured
     }
 }
 
-impl<V: View> WindowHandler for Handler<V> {
-    fn on_frame(&mut self, window: &mut Window) {
-        // baseview calls this from a platform callback: a panic crossing it
-        // takes the host down, not just the editor. The guard only exists
-        // under `panic = "unwind"` (the `plugin` profile); under release's
-        // abort the panic kills the process before it gets here.
-        if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.tick(window))).is_err() {
-            log(
-                &self.shared,
-                "mui-baseview: panic in a frame, swallowed at the FFI edge",
-            );
+/// baseview calls its handler through `&self`, and a call can re-enter it
+/// (on Windows, a resize from inside a frame is reported before `resize`
+/// returns). A call that finds the handler busy is kept, the latest resize
+/// and every event, and delivered once the outer call returns.
+struct Adapter<V> {
+    cx: WindowContext,
+    handler: RefCell<Handler<V>>,
+    pending_resize: Cell<Option<WindowSize>>,
+    pending_events: RefCell<VecDeque<Event>>,
+}
+
+impl<V: View> Adapter<V> {
+    fn drain(&self, h: &mut Handler<V>) {
+        if let Some(size) = self.pending_resize.take() {
+            guard(h, |h| h.resized(size));
+        }
+        while let Some(event) = self.pending_events.borrow_mut().pop_front() {
+            guard(h, |h| h.on_event_inner(&event));
         }
     }
+}
 
-    fn on_event(&mut self, _window: &mut Window, event: Event) -> EventStatus {
-        // Same guard as `on_frame`, and only under an unwinding profile.
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.on_event_inner(&event)))
-            .unwrap_or(EventStatus::Ignored)
+/// baseview calls from a platform callback: a panic crossing it takes the
+/// host down, not just the editor. The guard only exists under
+/// `panic = "unwind"` (the `plugin` profile); under release's abort the
+/// panic kills the process before it gets here.
+fn guard<V: View, R>(h: &mut Handler<V>, f: impl FnOnce(&mut Handler<V>) -> R) -> Option<R> {
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(h))).ok();
+    if r.is_none() {
+        log(
+            &h.shared,
+            "mui-baseview: panic in the window, swallowed at the FFI edge",
+        );
+    }
+    r
+}
+
+impl<V: View + 'static> WindowHandler for Adapter<V> {
+    fn on_frame(&self) -> Result<(), HandlerError> {
+        if let Ok(mut h) = self.handler.try_borrow_mut() {
+            self.drain(&mut h);
+            guard(&mut h, |h| h.tick(&self.cx));
+            self.drain(&mut h);
+        }
+        Ok(())
+    }
+
+    fn resized(&self, size: WindowSize) -> Result<(), HandlerError> {
+        match self.handler.try_borrow_mut() {
+            Ok(mut h) => {
+                guard(&mut h, |h| h.resized(size));
+                self.drain(&mut h);
+            }
+            Err(_) => self.pending_resize.set(Some(size)),
+        }
+        Ok(())
+    }
+
+    fn on_event(&self, event: Event) -> EventStatus {
+        let Ok(mut h) = self.handler.try_borrow_mut() else {
+            self.pending_events.borrow_mut().push_back(event);
+            return EventStatus::Ignored;
+        };
+        let status = guard(&mut h, |h| h.on_event_inner(&event)).unwrap_or(EventStatus::Ignored);
+        self.drain(&mut h);
+        status
     }
 }
 
@@ -396,12 +493,14 @@ fn key_event(key: &KeyboardEvent) -> KeyEvent {
         code: code.finish(),
         key: match &key.key {
             HostKey::Character(s) => NativeKey::Text(s.clone()),
-            HostKey::Shift => NativeKey::Modifier(Modifier::Shift),
-            HostKey::Control => NativeKey::Modifier(Modifier::Ctrl),
-            HostKey::Alt | HostKey::AltGraph => NativeKey::Modifier(Modifier::Alt),
-            HostKey::Meta | HostKey::Super => NativeKey::Modifier(Modifier::Cmd),
+            HostKey::Named(NamedKey::Shift) => NativeKey::Modifier(Modifier::Shift),
+            HostKey::Named(NamedKey::Control) => NativeKey::Modifier(Modifier::Ctrl),
+            HostKey::Named(NamedKey::Alt | NamedKey::AltGraph) => {
+                NativeKey::Modifier(Modifier::Alt)
+            }
+            HostKey::Named(NamedKey::Meta) => NativeKey::Modifier(Modifier::Cmd),
             // keyboard-types prints the W3C name `Key::from_name` reads.
-            other => {
+            HostKey::Named(other) => {
                 Key::from_fmt(format_args!("{other}")).map_or(NativeKey::Other, NativeKey::Named)
             }
         },
@@ -499,7 +598,7 @@ fn log<V: View>(shared: &Mutex<Shared<V>>, line: &str) {
 /// A device and renderer for this window's surface. A driver panic becomes
 /// an error the editor can show, when the plugin unwinds; under
 /// `panic = "abort"` it is the host's crash.
-fn open_gpu(window: &Window, size: (u32, u32)) -> Result<Host, String> {
+fn open_gpu(window: &WindowContext, size: (u32, u32)) -> Result<Host, String> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let instance =
             wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());

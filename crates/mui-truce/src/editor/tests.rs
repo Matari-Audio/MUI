@@ -3,8 +3,8 @@
 //! come out.
 use super::*;
 use crate::window::Handler;
-use baseview::{Event, MouseEvent};
-use keyboard_types::{Key as HostKey, KeyState, KeyboardEvent, Modifiers};
+use crate::window::baseview::{self, Event, MouseEvent};
+use keyboard_types::{Key as HostKey, KeyState, KeyboardEvent, Modifiers, NamedKey};
 use mui::prelude::{Point, knob, toggle};
 use mui::scene::prelude::row;
 use std::sync::Mutex;
@@ -110,7 +110,8 @@ fn at(h: &mut Handler<Session<Synth>>, p: Point) {
     mouse(
         h,
         MouseEvent::CursorMoved {
-            position: baseview::Point::new(p.x, p.y),
+            // Scale 1: pixels are points.
+            position: baseview::dpi::PhysicalPosition::new(p.x, p.y),
             modifiers: Modifiers::default(),
         },
     );
@@ -188,7 +189,7 @@ fn a_key_step_is_one_bracket_and_the_late_pair_is_not_a_second_one() {
     for state in [KeyState::Down, KeyState::Up] {
         h.on_event_inner(&Event::Keyboard(KeyboardEvent {
             state,
-            key: HostKey::ArrowUp,
+            key: HostKey::Named(NamedKey::ArrowUp),
             modifiers: Modifiers::default(),
             ..KeyboardEvent::default()
         }));

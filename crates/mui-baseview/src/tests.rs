@@ -46,17 +46,19 @@ fn key(key: HostKey, code: Code, state: KeyState, modifiers: Modifiers) -> Event
 #[test]
 fn baseview_events_reach_the_driver_in_its_terms() {
     let mut h = handler((640, 400), 1.0);
-    h.on_event_inner(&Event::Window(WindowEvent::Resized(
-        baseview::WindowInfo::from_logical_size(baseview::Size::new(320.0, 200.0), 2.0),
-    )));
+    h.resized(WindowSize::from_logical(
+        LogicalSize::new(320.0, 200.0),
+        2.0,
+    ));
     assert_eq!((h.driver.size(), h.driver.ui_scale()), ((640, 400), 2.0));
     h.on_event_inner(&Event::Mouse(MouseEvent::CursorMoved {
-        position: baseview::Point::new(10.0, 20.0),
+        // baseview's pointer is in pixels.
+        position: PhysicalPosition::new(20.0, 40.0),
         modifiers: Modifiers::default(),
     }));
     assert_eq!(h.driver.pointer().pos, Some(Point::new(10.0, 20.0)));
     // X11 samples a press's state before the modifier is set...
-    let alt = |state, m| key(HostKey::Alt, Code::AltLeft, state, m);
+    let alt = |state, m| key(HostKey::Named(NamedKey::Alt), Code::AltLeft, state, m);
     h.on_event_inner(&alt(KeyState::Down, Modifiers::default()));
     assert!(h.driver.pointer().mods.alt);
     // ...and a release's while it is still held.
@@ -72,7 +74,7 @@ fn baseview_events_reach_the_driver_in_its_terms() {
     );
     assert_eq!(h.on_event_inner(&space), EventStatus::Ignored);
     let escape = key(
-        HostKey::Escape,
+        HostKey::Named(NamedKey::Escape),
         Code::Escape,
         KeyState::Down,
         Modifiers::default(),
@@ -80,7 +82,7 @@ fn baseview_events_reach_the_driver_in_its_terms() {
     assert_eq!(h.on_event_inner(&escape), EventStatus::Captured);
     lock(&h.shared).ui.focus("k");
     let up = key(
-        HostKey::ArrowUp,
+        HostKey::Named(NamedKey::ArrowUp),
         Code::ArrowUp,
         KeyState::Down,
         Modifiers::default(),
