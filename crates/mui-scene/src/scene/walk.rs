@@ -1401,7 +1401,11 @@ mod tests {
             block(0., 20.).grow(1.).id("c"),
         ];
         let root = col([row, col([text(long).id("p")]).w(120)]);
-        let mut sp = SceneSpec::new(root).offered(Size::new(41., 300.)).scale(1.);
+        // Tall enough for the paragraph: a column it overflows squeezes the
+        // row, whose blocks may be squeezed and text may not.
+        let mut sp = SceneSpec::new(root)
+            .offered(Size::new(41., 1000.))
+            .scale(1.);
         sp.font = Some(font());
         let s = resolve(&sp).unwrap();
         let edges: Vec<[f64; 2]> = ["a", "b", "c"]

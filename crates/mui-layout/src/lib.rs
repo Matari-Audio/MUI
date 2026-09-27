@@ -31,7 +31,8 @@ pub use spacing::{Pad, Spacing, SpacingScale, SpacingToken};
 /// What a measurer says about a content leaf: its size in the room it was
 /// given, and the narrowest a flex parent may squeeze it to -- for text, its
 /// widest word, the way CSS `min-width: auto` keeps a flex item at its
-/// min-content. A bare [`Size`] is squeezable to nothing.
+/// min-content. A bare [`Size`] is squeezable to nothing across. Its height
+/// is never squeezed: a paragraph is as tall as the lines it breaks into.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Intrinsic {
     pub size: Size,

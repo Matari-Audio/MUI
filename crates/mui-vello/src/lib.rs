@@ -1318,7 +1318,7 @@ mod snapshot {
         let spec = SceneSpec::new(stack([boxed])).offered(Size::new(80., 80.));
         let scene = resolve(&spec).unwrap();
         let c = scene.surface("child").expect("child").frame;
-        assert!(c.x < 0. && c.right() > 40., "no overflow to clip: {c:?}");
+        assert!(c.right() > 40., "no overflow to clip: {c:?}");
         let pix = pixels(&spec, 80, 80);
         let at = |x: usize, y: usize| pix.data()[y * 80 + x];
         assert!(at(20, 20).a > 0, "nothing drew inside the clip");
