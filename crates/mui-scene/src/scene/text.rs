@@ -583,6 +583,70 @@ mod tests {
         assert!(f("b").x >= f("a").right() - 1e-9);
     }
 
+    /// RELAY's about panel, in its 440x156 window: a column of small
+    /// wrapped notes beside the meters, more than the window holds. A
+    /// column squeezed that far overflows; it never squeezes a note below
+    /// the lines it paints, or the note paints over the one under it.
+    #[test]
+    fn a_squeezed_column_of_wrapped_notes_overflows_rather_than_overlapping() {
+        const NOTES: [&str; 9] = [
+            "Rewritten from scratch: one small core, one plugin, one worker.",
+            "Internet rooms over WebRTC with Opus up to 510 kbps, adapting to the slowest listener under a ceiling you pick; lossless on a LAN.",
+            "Anyone can listen in a browser at relay.matari-audio.com/<room>, with their own volume.",
+            "Browser listeners can talk back with their mic; the plugin plays it and shows who is talking.",
+            "Nothing is sent over the internet during silence.",
+            "The buffer sizes itself to the network and resyncs in silence.",
+            "IN and OUT meters, each with its own fader.",
+            "The editor keeps its scale when reopened.",
+            "Windows, macOS (signed and notarized, Universal) and Linux.",
+        ];
+        let notes: Vec<El> = NOTES
+            .iter()
+            .enumerate()
+            .map(|(i, n)| text(format!("·  {n}")).text_size(10.).id(format!("n{i}")))
+            .collect();
+        let about = col([
+            row([
+                text("Version 0.2.0").text_size(11.),
+                block(0., 0.).grow(1.),
+                text("Matari Audio · MPL-2.0").text_size(10.),
+            ])
+            .w(Len::Pct(100.)),
+            col(notes).gap(2.).align(Align::Start),
+            block(0., 0.).grow(1.),
+            text("Full changelog").text_size(10.),
+        ])
+        .gap(6.)
+        .align(Align::Start)
+        .pad(8.)
+        .grow(1.);
+        let left = col([block(0., 18.), about]).gap(6.).grow(1.);
+        let root = row([left, block(110., 100.).shrink(0.)]).gap(12.).pad(10.);
+        let mut sp = SceneSpec::new(root).offered(Size::new(440., 156.));
+        sp.font = Some(font());
+        let mut state = TextState::default();
+        for _ in 0..2 {
+            let s = state.resolve(&sp).unwrap();
+            let mut below = 0.0;
+            for i in 0..NOTES.len() {
+                let k = format!("n{i}");
+                let f = s.layout.frame(k.as_str()).unwrap();
+                let lines = s
+                    .paint
+                    .iter()
+                    .filter(|p| *p.key == *k && p.layer == Layer::Text)
+                    .count();
+                assert!(f.size.width <= 282.1, "{k} fits its column: {f:?}");
+                assert!(
+                    f.size.height >= lines as f64 * 10.,
+                    "{k}: {lines} lines in {f:?}"
+                );
+                assert!(f.y >= below - 1e-9, "{k} overlaps the note above: {f:?}");
+                below = f.y + f.size.height;
+            }
+        }
+    }
+
     #[test]
     fn a_narrow_column_wraps_a_paragraph_and_grows_taller() {
         let long = "wrap ".repeat(40);

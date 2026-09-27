@@ -153,6 +153,9 @@ pub(crate) fn cell_default<P>(n: &Node<P>) -> (Align, Align) {
 pub(crate) fn place(avail: f64, extent: f64, align: Align) -> f64 {
     match align {
         Align::Start => 0.0,
+        // Stretched past the room by its floor, it overflows the far edge
+        // like CSS: centred, its top would leave the window.
+        Align::Stretch if extent > avail => 0.0,
         Align::End => avail - extent,
         _ => (avail - extent) * 0.5,
     }
@@ -524,15 +527,16 @@ pub(crate) fn measure_uncached<'a, P>(
             }
             // Never narrower than it may be squeezed to: a word wider than the
             // room overflows it. In-flow children overlay it, as on a stack.
+            let content = Size::new(
+                size.width.max(min_width).max(max_of(&|c| c.size.width)),
+                size.height.max(max_of(&|c| c.size.height)),
+            );
+            // Nor shorter than it measured: its height is the lines it breaks
+            // into at this width, and a column squeezed past that overflows
+            // instead of painting each paragraph over the one below it.
             (
-                Size::new(
-                    size.width.max(min_width).max(max_of(&|c| c.size.width)),
-                    size.height.max(max_of(&|c| c.size.height)),
-                ),
-                Size::new(
-                    min_width.max(max_of(&|c| c.floor.width)),
-                    max_of(&|c| c.floor.height),
-                ),
+                content,
+                Size::new(min_width.max(max_of(&|c| c.floor.width)), content.height),
             )
         }
         Kind::Branch { vertical: v, .. } => {

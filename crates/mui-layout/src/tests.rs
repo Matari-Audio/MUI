@@ -1197,3 +1197,52 @@ fn a_min_col_grid_floors_at_one_column_and_a_wrap_beside_it_follows() {
         assert!(c.bottom() <= pan.bottom() + 1e-9, "p{i} below the row");
     }
 }
+
+/// RELAY's about panel: a start-aligned column of long notes that wrap, in a
+/// fixed-width column too short for them. The column overflows; it never
+/// squeezes a note below the lines it breaks into, or the note paints over
+/// the next.
+#[test]
+fn a_squeezed_column_of_wrapped_texts_overflows_rather_than_overlapping() {
+    // 5 per character, 12 per line, the longest word 30.
+    let text = |s: &String, room: Option<f64>| {
+        let one = s.len() as f64 * 5.;
+        let w = room.map_or(one, |r| one.min(r.max(30.)));
+        Intrinsic {
+            size: Size::new(w, 12. * (one / w).ceil()),
+            min_width: 30.,
+        }
+    };
+    let lines = |id: usize| "word ".repeat(20 + id * 7);
+    let notes: Vec<_> = (0..4)
+        .map(|i| Node::content().with(lines(i)).id(format!("n{i}")))
+        .collect();
+    let panel = Node::col([
+        Node::row([
+            Node::content().with("Version".to_string()),
+            Node::block(0., 0.).grow(1.),
+        ])
+        .w(Len::Pct(100.)),
+        Node::col(notes).gap(2.).align(Align::Start),
+        Node::block(0., 0.).grow(1.),
+    ])
+    .gap(6.)
+    .align(Align::Start)
+    .pad(8.)
+    .grow(1.);
+    let t = Node::col([panel]).w(300.);
+    let offered = Some(Size::new(300., 120.));
+    let l = resolve_with(&t, offered, Limits::default(), SpacingScale::DEFAULT, text).unwrap();
+    let mut below = 0.0;
+    for i in 0..4 {
+        let f = l.frame(format!("n{i}").as_str()).unwrap();
+        let need = text(&lines(i), Some(f.size.width)).size.height;
+        assert!(f.size.width <= 284., "n{i} fits the column: {f:?}");
+        assert!(
+            f.size.height >= need,
+            "n{i} holds its {need} of lines: {f:?}"
+        );
+        assert!(f.y >= below, "n{i} starts below n{}: {f:?}", i.max(1) - 1);
+        below = f.y + f.size.height;
+    }
+}
