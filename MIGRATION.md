@@ -6,6 +6,32 @@ Every entry is `old -> new`. Crates are listed in dependency order.
 
 Breaking (by hand):
 
+- mui-baseview and mui-truce run on
+  [moose-baseview](https://github.com/Matari-Audio/moose) (upstream baseview
+  0.3.4 plus MOOSE patches), no longer baseview-truce 0.1.1. Reach it through
+  `mui_truce::window::baseview` (or `mui_baseview::baseview`); a plugin that
+  also depends on baseview directly must depend on moose-baseview, or it
+  links two.
+  - `mui_baseview::open(parent: &impl HasRawWindowHandle, .., scale:
+    WindowScalePolicy, ..) -> WindowHandle` -> `open(parent: &impl
+    HasWindowHandle, .., scale: Option<f64>, ..) -> Option<baseview::Window>`.
+    `parent` is raw-window-handle 0.6; `scale` is the scale override (`None`
+    follows the OS); `None` back means no window, with the reason in
+    `View::log`. Dropping the `Window` closes it; `Window::close(self)` too.
+  - `HostScale::policy() -> WindowScalePolicy` -> `-> Option<f64>`.
+  - `ParentWindow` implements raw-window-handle 0.6 `HasWindowHandle`
+    (was 0.5 `HasRawWindowHandle`); a null parent is `Unavailable`.
+  - `Handler` (headless tests): a resize is `Handler::resized(WindowSize)`,
+    not `on_event_inner(&Event::Window(WindowEvent::Resized(info)))`, and
+    pointer positions are `baseview::dpi::PhysicalPosition` pixels, not
+    logical `Point`s. Keys are keyboard-types 0.8:
+    `Key::Escape` -> `Key::Named(NamedKey::Escape)`.
+- Feature `keyboard-capture` on mui-baseview and mui-truce: removed; drop it
+  from your `features`. Capture is always on: on Windows the window takes the
+  keyboard from the host while a text field is focused and hands every other
+  key to the host (DAW shortcuts keep working). On macOS and Linux an
+  ignored key already goes to the host.
+
 - `mui_text::TextRun::path: Path` -> `Arc<Path>`, so a cached run draws
   without copying its outlines. Reads deref as before; a caller that moved
   the path out takes `Arc::unwrap_or_clone(run.path)`.
@@ -51,6 +77,7 @@ Additions (nothing to migrate):
   on Windows, takes the keyboard from the host window while a text field is
   focused, so typing does not hit the DAW's shortcuts. Needs a
   baseview-truce with `Window::set_keyboard_capture`; stock builds lack it.
+  (Removed after 0.4.1: always on, see Unreleased.)
 - `CanvasCache<K>` is `Send` for a `Send` key.
 - `Ui::text_run(font, text, size) -> Option<Arc<TextRun>>`: a canvas label
   shaped once and kept by the `Ui` (bounded), instead of reshaped per frame.

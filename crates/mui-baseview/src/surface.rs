@@ -1,9 +1,5 @@
-//! baseview's raw-window-handle 0.5 as a wgpu surface. truce-gui carries
-//! the same bridge, but typed against its own wgpu; MUI renders on another.
-#[cfg(target_os = "linux")]
-use raw_window_handle::RawDisplayHandle;
-use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle, RawWindowHandle};
-use wgpu::rwh;
+//! baseview's window as a wgpu surface. Both speak raw-window-handle 0.6;
+//! moose-baseview fills the Win32 HINSTANCE Vulkan needs.
 
 /// # Safety
 /// The window must outlive the returned surface.
@@ -13,54 +9,13 @@ use wgpu::rwh;
 )]
 pub unsafe fn create(
     instance: &wgpu::Instance,
-    window: &baseview::Window,
+    window: &baseview::WindowContext,
 ) -> Option<wgpu::Surface<'static>> {
-    let (display, window) = match (window.raw_display_handle(), window.raw_window_handle()) {
-        #[cfg(target_os = "linux")]
-        (RawDisplayHandle::Xlib(d), RawWindowHandle::Xlib(w)) => (
-            rwh::RawDisplayHandle::Xlib(rwh::XlibDisplayHandle::new(
-                std::ptr::NonNull::new(d.display),
-                d.screen,
-            )),
-            rwh::RawWindowHandle::Xlib(rwh::XlibWindowHandle::new(w.window)),
-        ),
-        #[cfg(target_os = "macos")]
-        (_, RawWindowHandle::AppKit(w)) => (
-            rwh::RawDisplayHandle::AppKit(rwh::AppKitDisplayHandle::new()),
-            rwh::RawWindowHandle::AppKit(rwh::AppKitWindowHandle::new(std::ptr::NonNull::new(
-                w.ns_view,
-            )?)),
-        ),
-        #[cfg(target_os = "windows")]
-        (_, RawWindowHandle::Win32(w)) => {
-            let mut win32 =
-                rwh::Win32WindowHandle::new(std::num::NonZeroIsize::new(w.hwnd as isize)?);
-            // Vulkan's `vkCreateWin32SurfaceKHR` rejects a null HINSTANCE,
-            // and baseview leaves it null.
-            // SAFETY: the declaration matches kernel32's `GetModuleHandleW`
-            // (LPCWSTR in, HMODULE out, stdcall), which std already links.
-            unsafe extern "system" {
-                fn GetModuleHandleW(name: *const u16) -> isize;
-            }
-            // SAFETY: a null name reads no memory and returns the process's
-            // executable module, which is loaded for as long as we run.
-            win32.hinstance =
-                std::num::NonZeroIsize::new(unsafe { GetModuleHandleW(std::ptr::null()) });
-            (
-                rwh::RawDisplayHandle::Windows(rwh::WindowsDisplayHandle::new()),
-                rwh::RawWindowHandle::Win32(win32),
-            )
-        }
-        _ => return None,
-    };
-    // SAFETY: both handles were just read from the live `window`, and this
+    // SAFETY: both handles are read from the live `window`, and this
     // function's own contract makes the caller keep that window alive for as
     // long as the returned surface.
     unsafe {
-        instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
-            raw_display_handle: Some(display),
-            raw_window_handle: window,
-        })
+        let target = wgpu::SurfaceTargetUnsafe::from_display_and_window(window, window).ok()?;
+        instance.create_surface_unsafe(target).ok()
     }
-    .ok()
 }

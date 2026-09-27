@@ -6,19 +6,12 @@ rust-version.workspace = true
 license.workspace = true
 
 # A native window: nothing here builds for wasm.
-[features]
-# Windows: while a text field is focused, ask the host window for the
-# keyboard, so typing does not trigger the DAW's shortcuts. Needs a
-# baseview-truce with `Window::set_keyboard_capture` (stock builds lack it,
-# hence opt-in). Off everywhere else.
-keyboard-capture = []
-
 [dependencies]
 mui = { workspace = true, features = ["gpu-effects"] }
-baseview = { package = "baseview-truce", version = "0.1.1-truce.13" }
-keyboard-types = { version = "0.7", default-features = false }
-# baseview's handles are raw-window-handle 0.5.
-raw-window-handle = "0.5"
+baseview = { package = "moose-baseview", git = "https://github.com/Matari-Audio/moose" }
+keyboard-types = { version = "0.8", default-features = false }
+# baseview's handles; the same 0.6 wgpu takes.
+raw-window-handle = "0.6"
 # mui-vello picks no backend; the window that owns the device does.
 wgpu = { workspace = true, features = ["wgsl", "vulkan", "gles", "metal", "dx12"] }
 

@@ -3,7 +3,10 @@
 //! Copied from truce-gui-utils 6.3.0 (`should_skip_frame`,
 //! `reanchor_to_superview_top`; MIT/Apache-2.0, the truce authors) so this
 //! crate does not depend on it. The bodies are verbatim; only lint
-//! attributes and SAFETY comments were added. No-ops off macOS/Windows.
+//! attributes and SAFETY comments were added, and the handles moved to
+//! raw-window-handle 0.6, whose pointers are never null. No-ops off
+//! macOS/Windows.
+use raw_window_handle::RawWindowHandle;
 
 #[cfg(target_os = "macos")]
 #[repr(C)]
@@ -39,16 +42,13 @@ struct NsRect {
     unexpected_cfgs,
     reason = "objc 0.2's msg_send! tests the retired `cargo-clippy` feature"
 )]
-pub fn reanchor_to_superview_top(handle: raw_window_handle::RawWindowHandle) {
+pub fn reanchor_to_superview_top(handle: RawWindowHandle) {
     use objc::{msg_send, sel, sel_impl};
 
     let view_ptr = match handle {
-        raw_window_handle::RawWindowHandle::AppKit(h) => h.ns_view,
+        RawWindowHandle::AppKit(h) => h.ns_view.as_ptr(),
         _ => return,
     };
-    if view_ptr.is_null() {
-        return;
-    }
 
     // SAFETY: `view_ptr` is baseview's live, non-null NSView for this
     // window; `superview`, `frame` and `setFrameOrigin:` are plain AppKit
@@ -74,7 +74,7 @@ pub fn reanchor_to_superview_top(handle: raw_window_handle::RawWindowHandle) {
 }
 
 #[cfg(not(target_os = "macos"))]
-pub fn reanchor_to_superview_top(_handle: raw_window_handle::RawWindowHandle) {}
+pub fn reanchor_to_superview_top(_handle: RawWindowHandle) {}
 
 /// Whether this tick's frame should be skipped: the editor's view is
 /// detached from any window, or the host window is not visible (macOS
@@ -88,16 +88,13 @@ pub fn reanchor_to_superview_top(_handle: raw_window_handle::RawWindowHandle) {}
     unexpected_cfgs,
     reason = "objc 0.2's msg_send! tests the retired `cargo-clippy` feature"
 )]
-pub fn should_skip_frame(handle: raw_window_handle::RawWindowHandle) -> bool {
+pub fn should_skip_frame(handle: RawWindowHandle) -> bool {
     use objc::{msg_send, sel, sel_impl};
 
     let view_ptr = match handle {
-        raw_window_handle::RawWindowHandle::AppKit(h) => h.ns_view,
+        RawWindowHandle::AppKit(h) => h.ns_view.as_ptr(),
         _ => return false,
     };
-    if view_ptr.is_null() {
-        return true;
-    }
 
     // SAFETY: `view_ptr` is baseview's live, non-null NSView; `window` and
     // `occlusionState` are plain AppKit queries on the thread that owns it.
@@ -118,19 +115,16 @@ pub fn should_skip_frame(handle: raw_window_handle::RawWindowHandle) -> bool {
 #[cfg(target_os = "windows")]
 #[must_use]
 #[expect(unsafe_code, reason = "two Win32 window-state queries")]
-pub fn should_skip_frame(handle: raw_window_handle::RawWindowHandle) -> bool {
+pub fn should_skip_frame(handle: RawWindowHandle) -> bool {
     unsafe extern "system" {
         fn IsWindowVisible(hwnd: *mut std::ffi::c_void) -> i32;
         fn IsIconic(hwnd: *mut std::ffi::c_void) -> i32;
     }
 
     let hwnd = match handle {
-        raw_window_handle::RawWindowHandle::Win32(h) => h.hwnd,
+        RawWindowHandle::Win32(h) => h.hwnd.get() as *mut std::ffi::c_void,
         _ => return false,
     };
-    if hwnd.is_null() {
-        return true;
-    }
     // SAFETY: both are pure state queries on a window handle baseview
     // owns for the editor's lifetime; no aliasing or threading concerns,
     // and they're called from the GUI thread that owns the HWND.
@@ -139,6 +133,6 @@ pub fn should_skip_frame(handle: raw_window_handle::RawWindowHandle) -> bool {
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 #[must_use]
-pub fn should_skip_frame(_handle: raw_window_handle::RawWindowHandle) -> bool {
+pub fn should_skip_frame(_handle: RawWindowHandle) -> bool {
     false
 }
