@@ -498,6 +498,11 @@ impl Walk<'_> {
         if !s.union.unwrap_or_default() || n.children().is_empty() {
             // Local to its snapped corner, so a move keeps the path.
             let b = bounds(frame, self.spec.device_scale);
+            // A thin flex item may disappear after device-pixel snapping.
+            // It has no contour to paint or hit-test in that frame.
+            if b.x1 <= b.x0 || b.y1 <= b.y0 {
+                return Ok(Contour::path(Path::default()));
+            }
             let size = Rect::new(0., 0., b.x1 - b.x0, b.y1 - b.y0);
             let rr = RoundedRect::new(size, convex)?;
             let path = self.rect_path(rr, s.corners.unwrap_or_default());
@@ -911,6 +916,31 @@ mod tests {
             .id("weld");
         let s = resolve(&SceneSpec::new(root).offered(Size::new(20., 20.))).unwrap();
         assert!(!s.surface("weld").unwrap().path.commands.is_empty());
+    }
+
+    #[test]
+    fn subpixel_surface_that_snaps_to_zero_has_no_outline() {
+        let mut resolver = Resolver::default();
+        for (y, visible) in [(10.2, true), (11.6, false)] {
+            let rule = stack![]
+                .size(100., 0.7)
+                .fill(Role::Dim)
+                .float()
+                .at(10., y)
+                .id("rule");
+            let scene = resolver
+                .resolve(
+                    &SceneSpec::new(stack![rule])
+                        .offered(Size::new(200., 100.))
+                        .scale(1.),
+                )
+                .unwrap();
+            assert_eq!(
+                scene.surface("rule").unwrap().path.commands.is_empty(),
+                !visible,
+                "y={y}"
+            );
+        }
     }
 
     #[test]
