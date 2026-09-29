@@ -772,9 +772,16 @@ impl GpuRenderer {
             .zip(paint[head..].iter().rev())
             .take_while(|(a, b)| a == b)
             .count();
+        // Lists of one length line up entry for entry: one that is the same
+        // at the same place paints the same, so only the ones that differ
+        // count. Otherwise every entry between the shared ends does.
+        let aligned = old.len() == paint.len();
         let mut r = NOTHING;
         for list in [old, paint] {
             for (i, p) in list.iter().enumerate().take(list.len() - tail).skip(head) {
+                if aligned && old[i] == paint[i] {
+                    continue;
+                }
                 let Some(b) = reach(p) else {
                     return Change::Full;
                 };
