@@ -382,6 +382,9 @@ pub struct Palette {
     /// Deliberately more than `step`: a layer is depth and may be subtle, a
     /// hover has to be noticed.
     pub hover: f32,
+    /// The window's lightness, overriding [`Mode::ground`]. `None` is the
+    /// mode's own. See [`Self::with_ground`].
+    pub ground: Option<f32>,
 }
 
 impl Palette {
@@ -405,6 +408,7 @@ impl Palette {
         danger: Pigment::new(25.0, 0.16),
         step: 0.045,
         hover: 0.11,
+        ground: None,
     };
 
     /// WCAG 2.1 AA for body text.
@@ -469,8 +473,52 @@ impl Palette {
     }
 
     /// The same palette, lit the other way. This is the entire theme switch.
+    ///
+    /// A ground set with [`Self::with_ground`] belongs to the mode it was set
+    /// for, so switching drops it back to the new mode's own.
     pub const fn with_mode(self, mode: Mode) -> Self {
-        Self { mode, ..self }
+        Self {
+            mode,
+            ground: None,
+            ..self
+        }
+    }
+
+    /// The same palette on a window of `lightness` (Oklch, 0..1): an
+    /// application whose user picked a background keeps that background's
+    /// lightness, and every layer derives from it as it would from
+    /// [`Mode::ground`].
+    ///
+    /// The ground is held on the mode's side of [`Mode::limit`], so a dark
+    /// palette asked for a pale ground gets the palest ground its ink still
+    /// reads on at [`Self::AA_TEXT`]; pick the mode from the colour first.
+    /// A non-finite lightness falls back to the mode's own. The role
+    /// guarantee in [`Self::from_seed`] is measured at the mode's ground;
+    /// ink stays AA at any ground.
+    ///
+    /// ```
+    /// use mui_style::{Mode, Palette};
+    /// let p = Palette::NEUTRAL.with_ground(0.10);
+    /// assert!((p.background().lightness() - 0.10).abs() < 1e-3);
+    /// assert!(p.on(p.surface()).contrast(p.surface()) >= Palette::AA_TEXT);
+    /// // Past the limit it saturates rather than losing the ink.
+    /// assert_eq!(Palette::NEUTRAL.with_ground(0.9).ground(), Mode::Dark.limit());
+    /// ```
+    pub const fn with_ground(self, lightness: f32) -> Self {
+        Self {
+            ground: Some(lightness),
+            ..self
+        }
+    }
+
+    /// The lightness the window actually sits at: [`Self::ground`]'s field
+    /// when it is set, confined to the mode's band, else [`Mode::ground`].
+    pub fn ground(&self) -> f32 {
+        match self.ground.filter(|g| g.is_finite()) {
+            None => self.mode.ground(),
+            Some(g) if self.mode.sign() > 0.0 => g.clamp(0.0, self.mode.limit()),
+            Some(g) => g.clamp(self.mode.limit(), 1.0),
+        }
     }
 
     /// The same palette, flipped.
@@ -499,7 +547,7 @@ impl Palette {
     /// Levels past either end saturate rather than wrapping or escaping, so
     /// every colour this can return takes [`Self::ink`] at [`Self::AA_TEXT`].
     pub fn layer(&self, level: i32) -> Color {
-        let want = self.mode.ground() + self.step * level as f32 * self.mode.sign();
+        let want = self.ground() + self.step * level as f32 * self.mode.sign();
         // `sign` already says which side the ink is on, so one comparison
         // serves both modes.
         let held = if self.mode.sign() > 0.0 {
@@ -1120,6 +1168,32 @@ mod tests {
                 assert_eq!(p.primary.hue, hue as f32);
                 assert!(p.neutral.chroma <= 0.02, "the greys stay grey");
             }
+        }
+    }
+
+    #[test]
+    fn a_chosen_ground_is_honoured_and_its_ink_still_reads() {
+        assert_eq!(Palette::NEUTRAL.ground(), Mode::Dark.ground());
+        for mode in [Mode::Dark, Mode::Light] {
+            let base = designed().with_mode(mode);
+            for g in 0..=20 {
+                let want = g as f32 / 20.0;
+                let p = base.with_ground(want);
+                let held = p.ground();
+                let (lo, hi) = if mode == Mode::Dark {
+                    (0.0, mode.limit())
+                } else {
+                    (mode.limit(), 1.0)
+                };
+                assert!((held - want.clamp(lo, hi)).abs() < 1e-6);
+                assert!((p.background().lightness() - held).abs() < 1e-3);
+                for under in [p.field(), p.background(), p.surface(), p.raised()] {
+                    let ink = p.on(under).contrast(under);
+                    assert!(ink >= Palette::AA_TEXT - 0.01, "{mode:?} {want} {ink:.2}");
+                }
+            }
+            assert_eq!(base.with_ground(f32::NAN).ground(), mode.ground());
+            assert_eq!(base.with_ground(0.5).flipped().ground, None);
         }
     }
 
