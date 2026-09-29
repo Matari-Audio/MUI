@@ -658,15 +658,12 @@ impl GpuRenderer {
                 // Changed only off the target.
                 self.retained.clone_from(&resolved.paint);
             }
-            Change::Part(r @ [x, y, w, h]) => {
+            Change::Part(r @ [.., w, h]) => {
                 self.valid = false;
                 self.presented = None;
                 self.encode(resolved, xf, overlay, Some(r))?;
                 stats.encoded_scenes += 1;
                 let limit = self.target.size;
-                // Rendered where the frame has it, from the corner: moved,
-                // gradients and strokes would round differently.
-                let (w, h) = (x + w, y + h);
                 if self
                     .patch
                     .as_ref()
@@ -723,14 +720,10 @@ impl GpuRenderer {
                     label: Some("MUI present"),
                 });
             if let (Some([x, y, w, h]), Some(patch)) = (copy, &self.patch) {
-                let origin = wgpu::Origin3d { x, y, z: 0 };
                 encoder.copy_texture_to_texture(
+                    patch.as_image_copy(),
                     wgpu::TexelCopyTextureInfo {
-                        origin,
-                        ..patch.as_image_copy()
-                    },
-                    wgpu::TexelCopyTextureInfo {
-                        origin,
+                        origin: wgpu::Origin3d { x, y, z: 0 },
                         ..self.target.texture.as_image_copy()
                     },
                     wgpu::Extent3d {
@@ -861,15 +854,19 @@ impl GpuRenderer {
             self.backdrops.truncate(k);
         }
 
-        let (size, cull) = match part.map(|r| r.map(f64::from)) {
+        // A part renders its box alone, moved to the origin by whole
+        // pixels (and whole 16 px tiles): Vello's cost follows the target's
+        // extent, so a box near the far corner must not render the frame.
+        let (size, cull, draw) = match part.map(|r| r.map(f64::from)) {
             Some([x, y, w, h]) => (
-                [(x + w) as u32, (y + h) as u32],
+                [w as u32, h as u32],
                 Some(
                     xf.inverse()
                         .transform_rect_bbox(Rect::new(x, y, x + w, y + h)),
                 ),
+                Affine::translate((-x, -y)) * xf,
             ),
-            None => (size, None),
+            None => (size, None, xf),
         };
         self.scene.reset();
         let mut canvas = Classic::new(&mut self.scene, &mut self.cache, &self.textures, size);
@@ -879,7 +876,7 @@ impl GpuRenderer {
         }
         let mut blurred = blurred.into_iter();
         for p in &resolved.paint {
-            canvas.set_transform(crate::placed(xf, p));
+            canvas.set_transform(crate::placed(draw, p));
             match p.layer {
                 Layer::External => {
                     let e = resolved
@@ -943,7 +940,7 @@ impl GpuRenderer {
                         continue;
                     }
                     if let Some(color) = crate::plain(p) {
-                        let at = crate::placed(xf, p);
+                        let at = crate::placed(draw, p);
                         let long = p.path.commands.len() >= super::REPLAYED;
                         let stroke = p.width > 0.0;
                         // A glyph run or an icon only moves: encoded once.
