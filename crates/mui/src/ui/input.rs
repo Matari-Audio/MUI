@@ -824,9 +824,13 @@ pub(super) fn declared_states(
     focused: [bool; 2],
     off: bool,
 ) {
+    // A declared look follows the spring's target, not its value: gating on
+    // the value held every hover and press back ~84 ms (the default spring's
+    // half-rise) before `.animate()` even began its own fade, so a menu row
+    // lit several frames behind the pointer. `.animate()` still eases it.
     let is = |st: State| match st {
-        State::Hover => springs.is_some_and(|[h, _]| h.value > 0.5),
-        State::Press => springs.is_some_and(|[_, p]| p.value > 0.5),
+        State::Hover => springs.is_some_and(|[h, _]| h.target > 0.5),
+        State::Press => springs.is_some_and(|[_, p]| p.target > 0.5),
         State::Focus => focused[0],
         State::FocusVisible => focused[1],
         // Declared by the node and answered by `off` below.
