@@ -206,8 +206,10 @@ fn srgba(c: Color) -> Rgba {
     c.to_srgb().components
 }
 
+/// Within one 8-bit step: a host that stores the colour as bytes hands back
+/// a rounded copy, which must still count as the colour this picker made.
 fn near(a: Rgba, b: Rgba) -> bool {
-    a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-3)
+    a.iter().zip(b).all(|(x, y)| (x - y).abs() <= 1.0 / 255.0)
 }
 
 fn to_hsv([r, g, b, _]: Rgba) -> [f32; 3] {
@@ -255,4 +257,17 @@ fn parse_hex(s: &str) -> Option<([f32; 3], Option<f32>)> {
     };
     let a = if s.len() == 8 { Some(byte(6)?) } else { None };
     Some(([byte(0)?, byte(2)?, byte(4)?], a))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::near;
+
+    #[test]
+    fn a_byte_rounded_copy_is_still_the_colour_the_picker_made() {
+        let made = [0.2013, 0.2102, 0.1981, 1.0];
+        let stored = made.map(|x: f32| (x * 255.0).round() / 255.0);
+        assert!(near(made, stored), "hue memory survives 8-bit storage");
+        assert!(!near(made, [0.25, 0.21, 0.2, 1.0]), "a real change is not near");
+    }
 }
