@@ -230,6 +230,38 @@ fn an_unnamed_node_takes_its_hover_and_press_looks() {
     assert_eq!(ui.interaction.held(), Some("/0"));
 }
 
+/// A declared hover or press look lands on the frame the pointer arrives
+/// and leaves on the frame it goes: it follows the state, not the hover
+/// spring's rise, so a menu row does not light up frames behind the pointer.
+#[test]
+fn a_declared_look_follows_the_pointer_on_the_same_frame() {
+    let tree = || {
+        row![
+            block(40., 40.)
+                .fill(Role::Raised)
+                .on(State::Hover, |s| s.radius(3.))
+                .on(State::Press, |s| s.radius(5.)),
+            block(40., 40.)
+        ]
+    };
+    let mut ui = Ui::default();
+    let look =
+        |ui: &mut Ui, input: PointerInput| corner(&ui.frame(tree(), None, input, 0.016).unwrap());
+    assert_ne!(look(&mut ui, PointerInput::default()), 3.);
+    assert_eq!(look(&mut ui, at(10., 10., false)), 3., "hovered on arrival");
+    assert_eq!(
+        look(&mut ui, at(10., 10., true)),
+        5.,
+        "pressed on the press"
+    );
+    assert_eq!(look(&mut ui, at(10., 10., false)), 3., "released");
+    assert_ne!(
+        look(&mut ui, at(60., 10., false)),
+        3.,
+        "gone when it leaves"
+    );
+}
+
 /// Which of `top` and `under`, stacked, a press on both takes -- and
 /// whether a named field focused beforehand keeps the focus.
 fn press_stack(under: &El, top: &El) -> (Option<String>, bool) {
