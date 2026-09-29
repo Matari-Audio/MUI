@@ -2,8 +2,9 @@
 
 Upstream: [`vello` 0.10.0](https://crates.io/crates/vello/0.10.0), from
 linebender/vello at commit `fc0baddd06c63287ef516180d276333aa2401e6e`
-(the crate's `.cargo_vcs_info.json`; `path_in_vcs = "vello"`). The shader
-crates (`vello_encoding`, `vello_shaders`) are unpatched registry 0.10.0.
+(the crate's `.cargo_vcs_info.json`; `path_in_vcs = "vello"`). `vello_shaders`
+is unpatched registry 0.10.0; `vello_encoding` 0.10.0 (same commit) is vendored
+next door in `vendor/vello_encoding` for patch 5.
 
 Diff it against the registry copy:
 
@@ -47,3 +48,13 @@ Images a recording frees go into `pool.images` for the next recording to reuse
 (a gradient ramp is a fresh image every frame); whatever the next recording
 does not take is destroyed when it ends. Upstream destroyed and re-created
 them every frame (its own `TODO: have a pool`).
+
+## 5. Hint-instance cache (`vendor/vello_encoding/src/glyph_cache.rs`)
+
+`MAX_CACHED_HINT_INSTANCES` 8 -> 32. The LRU keys on (font, size, coords), and
+an editor frame draws 10-14 such combinations, so 8 slots rebuilt a skrifa
+autohint instance for nearly every run of every frame (~35-40% of a KURV
+frame's CPU). Vendored as a path dependency of `vendor/vello`, not a
+`[patch]`, so it reaches downstream workspaces that depend on MUI by git.
+`vello_shaders` (its `cpu` feature) still links the registry copy; it only
+shares plain buffer types with it, never glyph caches.

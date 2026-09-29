@@ -634,7 +634,9 @@ impl<'a> Walk<'a> {
         let lines = self.runs.lines(t, face, frame.size.width, e.lines);
         let fonts = self.runs.fonts_for(face);
         let font_coords = self.runs.coords(&fonts, face);
-        let hint = self.runs.settled(key, &font_coords);
+        // An icon font's Private Use Area glyphs have no stems worth
+        // snapping, and each icon size would hold a hinting instance of its own.
+        let hint = self.runs.settled(key, &font_coords) && !t.chars().all(private_use);
         let n = lines.len();
         let base = self.base_y;
         for (li, line) in lines.iter().enumerate() {
@@ -1000,6 +1002,12 @@ impl Shift {
         }
         s
     }
+}
+
+/// A Private Use Area code point: where icon fonts (Phosphor, Material
+/// Symbols) put their glyphs.
+fn private_use(c: char) -> bool {
+    matches!(c, '\u{E000}'..='\u{F8FF}' | '\u{F0000}'..='\u{10FFFF}')
 }
 
 #[cfg(test)]
