@@ -12,7 +12,7 @@
 [package]
 edition = "2024"
 rust-version = "1.88"
-name = "vello"
+name = "vello_encoding"
 version = "0.10.0"
 build = false
 autolib = false
@@ -20,7 +20,7 @@ autobins = false
 autoexamples = false
 autotests = false
 autobenches = false
-description = "A GPU compute-centric 2D renderer."
+description = "Vello types that represent the data that needs to be rendered."
 readme = "README.md"
 keywords = [
     "2d",
@@ -40,47 +40,24 @@ default-target = "x86_64-unknown-linux-gnu"
 targets = []
 
 [features]
-bump_estimate = ["vello_encoding/bump_estimate"]
-debug_layers = []
-default = [
-    "wgpu",
-    "wgpu_default",
-]
-hot_reload = ["vello_shaders/compile"]
-wgpu = [
-    "dep:wgpu",
-    "dep:vello_shaders",
-    "dep:futures-intrusive",
-]
-wgpu_default = [
-    "wgpu",
-    "wgpu/default",
-]
+bump_estimate = []
 
 [lib]
-name = "vello"
+name = "vello_encoding"
 path = "src/lib.rs"
 
 [dependencies.bytemuck]
 version = "1.25.0"
 features = ["derive"]
 
-[dependencies.futures-intrusive]
-version = "0.5.0"
-optional = true
-
-[dependencies.log]
-version = "0.4.29"
+[dependencies.guillotiere]
+version = "0.7.0"
+features = ["std"]
+default-features = false
 
 [dependencies.peniko]
 version = "0.6.1"
 default-features = true
-
-[dependencies.png]
-version = "0.18.1"
-
-[dependencies.rustc-hash]
-version = "1.1"
 
 [dependencies.skrifa]
 version = "0.44.0"
@@ -90,41 +67,15 @@ features = [
 ]
 default-features = false
 
-[dependencies.static_assertions]
-version = "1.1.0"
-
-[dependencies.thiserror]
-version = "2.0.18"
-default-features = false
-
-[dependencies.vello_encoding]
-# MUI patch: the vendored copy (hint-instance cache), see PATCHES.md.
-path = "../vello_encoding"
-version = "0.10.0"
-
-[dependencies.vello_shaders]
-version = "0.10.0"
-optional = true
-
-[dependencies.wgpu]
-version = "30.0.1"
-features = [
-    "std",
-    "wgsl",
-]
-optional = true
-default-features = false
+[dependencies.smallvec]
+version = "1.15.1"
 
 [lints.clippy]
-# Upstream's code, held to upstream's lints: newer clippy flags these.
+# Upstream's table trimmed as in vendor/vello: its `cargo` lints fire on
+# every workspace member.
 too_many_arguments = "allow"
-chunks_exact_to_as_chunks = "allow"
-manual_noop_waker = "allow"
 
 [lints.rust]
-# The profiler integration was cut when this copy moved to wgpu 30; its
-# cfgs stay in the source so upstream diffs stay small.
-unexpected_cfgs = "allow"
 unfulfilled_lint_expectations = "allow"
 elided_lifetimes_in_paths = "warn"
 keyword_idents_2024 = "forbid"
@@ -140,4 +91,3 @@ unused_import_braces = "warn"
 unused_lifetimes = "warn"
 unused_macro_rules = "warn"
 unused_qualifications = "warn"
-

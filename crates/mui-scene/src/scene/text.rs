@@ -738,6 +738,19 @@ mod tests {
     }
 
     #[test]
+    fn icon_runs_are_never_hinted() {
+        let inter = Font::new(ttf_inter::REGULAR).unwrap();
+        let hint_of = |s: &str| {
+            let mut sp = SceneSpec::new(row([text(s).id("t")]));
+            sp.font = Some(inter.clone());
+            let s = TextState::default().resolve(&sp).unwrap();
+            s.paint.iter().find_map(|p| p.text.as_ref()).unwrap().hint
+        };
+        assert!(hint_of("hi"));
+        assert!(!hint_of("\u{e3b4}"), "a Private Use Area glyph is an icon");
+    }
+
+    #[test]
     fn text_cache_survives_frames_and_carries_glyphs() {
         let mut cache = TextState::default();
         let mut sp = SceneSpec::new(row([text("hi").id("t")]));

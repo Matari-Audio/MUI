@@ -1351,7 +1351,7 @@ dependencies = [
  "skrifa 0.44.0",
  "static_assertions",
  "thiserror",
- "vello_encoding",
+ "vello_encoding 0.10.0",
  "vello_shaders",
  "wgpu",
 ]
@@ -1386,6 +1386,17 @@ dependencies = [
 [[package]]
 name = "vello_encoding"
 version = "0.10.0"
+dependencies = [
+ "bytemuck",
+ "guillotiere",
+ "peniko",
+ "skrifa 0.44.0",
+ "smallvec",
+]
+
+[[package]]
+name = "vello_encoding"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1e31cd622201690d8dfe9fd8fea8d1ae59db1bfeea414856a617d1d03438418c"
 dependencies = [
@@ -1406,7 +1417,7 @@ dependencies = [
  "log",
  "naga 29.0.4",
  "thiserror",
- "vello_encoding",
+ "vello_encoding 0.10.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
