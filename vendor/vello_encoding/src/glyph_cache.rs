@@ -54,17 +54,14 @@ impl GlyphCache {
         };
         let outlines = font.outline_glyphs();
         let size = Size::new(size);
+        // MUI patch: the hinting instance is found (or rebuilt) on the first
+        // glyph the cache misses, not per run: a steady frame hits every
+        // glyph, and more (face, size) runs than the LRU holds rebuilt an
+        // autohint instance per run, every frame, for glyphs already cached.
         let hinter = if hint {
-            let key = HintKey {
-                font_id,
-                font_index,
-                outlines: &outlines,
-                size,
-                coords,
-            };
-            self.hinting.get(&key)
+            Hinter::Wanted(&mut self.hinting)
         } else {
-            None
+            Hinter::Off
         };
         // TODO: we're ignoring dashing for now
         let style_bits = match style {
@@ -138,6 +135,14 @@ impl GlyphCache {
     }
 }
 
+/// A session's hinting instance, looked up on its first glyph miss.
+enum Hinter<'a> {
+    Off,
+    Wanted(&'a mut HintCache),
+    Ready(&'a HintingInstance),
+    Failed,
+}
+
 pub(crate) struct GlyphCacheSession<'a> {
     free_list: &'a mut Vec<Arc<Encoding>>,
     map: &'a mut GlyphMap,
@@ -150,7 +155,7 @@ pub(crate) struct GlyphCacheSession<'a> {
     style: &'a Style,
     style_bits: [u32; 2],
     outlines: OutlineGlyphCollection<'a>,
-    hinter: Option<&'a HintingInstance>,
+    hinter: Hinter<'a>,
     outline_buf: BezPath,
     serial: u64,
     cached_count: &'a mut usize,
@@ -172,7 +177,7 @@ impl GlyphCacheSession<'_> {
             embolden_miter_limit_bits: f32_bits(self.embolden.miter_limit),
             embolden_tolerance_bits: f32_bits(self.embolden.tolerance),
             style_bits: self.style_bits,
-            hint: self.hinter.is_some(),
+            hint: !matches!(self.hinter, Hinter::Off),
         };
         if let Some(entry) = self.map.get_mut(&key) {
             entry.serial = self.serial;
@@ -194,14 +199,25 @@ impl GlyphCacheSession<'_> {
             }
         };
         use skrifa::outline::DrawSettings;
-        let draw_settings = if key.hint {
-            if let Some(hinter) = self.hinter {
-                DrawSettings::hinted(hinter, false)
-            } else {
-                DrawSettings::unhinted(self.size, self.coords)
+        if matches!(self.hinter, Hinter::Wanted(_)) {
+            let Hinter::Wanted(cache) = std::mem::replace(&mut self.hinter, Hinter::Failed) else {
+                unreachable!()
+            };
+            let key = HintKey {
+                font_id: self.font_id,
+                font_index: self.font_index,
+                outlines: &self.outlines,
+                size: self.size,
+                coords: self.coords,
+            };
+            // A font that cannot be hinted draws unhinted, under the same key.
+            if let Some(instance) = cache.get(&key) {
+                self.hinter = Hinter::Ready(instance);
             }
-        } else {
-            DrawSettings::unhinted(self.size, self.coords)
+        }
+        let draw_settings = match self.hinter {
+            Hinter::Ready(hinter) => DrawSettings::hinted(hinter, false),
+            _ => DrawSettings::unhinted(self.size, self.coords),
         };
         let n_path_segments = if self.embolden.amount != peniko::kurbo::Diagonal2::new(0.0, 0.0) {
             self.outline_buf.truncate(0);

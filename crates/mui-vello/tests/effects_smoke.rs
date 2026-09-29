@@ -456,6 +456,42 @@ fn a_hover_renders_only_its_box_and_matches_a_whole_render() {
     }
 }
 
+/// Two changes with an unchanged entry painted between them: the box covers
+/// the two, not the one far away that sits between them in paint order.
+#[test]
+fn an_unchanged_entry_between_two_changes_is_not_damage() {
+    let scene = |hot: bool| {
+        let chip = |x: f64, id: &str| {
+            block(20., 20.)
+                .fill(if hot { Role::Danger } else { Role::Primary })
+                .offset(x, 10.)
+                .float()
+                .id(id)
+        };
+        let far = block(100., 40.)
+            .fill(Role::Warning)
+            .offset(200., 150.)
+            .float()
+            .id("far");
+        let spec = SceneSpec::new(
+            stack([chip(10., "a"), far, chip(40., "c")])
+                .fill(Role::Background)
+                .id("root"),
+        )
+        .offered(Size::new(320., 200.));
+        resolve(&spec).unwrap()
+    };
+    let Some((part, whole, stats)) = damaged(&scene(false), &scene(true)) else {
+        return;
+    };
+    assert!(
+        stats.rendered_pixels <= 64 * 48,
+        "{}",
+        stats.rendered_pixels
+    );
+    same_pixels(&part, &whole);
+}
+
 /// A float appended to the list, and taken away again, is damage too.
 #[test]
 fn a_tooltip_coming_and_going_renders_only_its_box() {
