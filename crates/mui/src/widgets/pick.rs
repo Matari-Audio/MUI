@@ -268,6 +268,9 @@ mod tests {
         let made = [0.2013, 0.2102, 0.1981, 1.0];
         let stored = made.map(|x: f32| (x * 255.0).round() / 255.0);
         assert!(near(made, stored), "hue memory survives 8-bit storage");
-        assert!(!near(made, [0.25, 0.21, 0.2, 1.0]), "a real change is not near");
+        assert!(
+            !near(made, [0.25, 0.21, 0.2, 1.0]),
+            "a real change is not near"
+        );
     }
 }
