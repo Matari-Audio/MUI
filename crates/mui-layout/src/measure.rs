@@ -347,9 +347,21 @@ pub(crate) fn measure_uncached<'a, P>(
     // share now counts: the flex pass re-measures its items) until a hugging
     // grid learns a width to drop columns against.
     let cols = match node.kind {
-        Kind::Grid { cols, .. } => match (node.rare().min_col, inner[0]) {
+        Kind::Grid { cols, ref children } => match (node.rare().min_col, inner[0]) {
             (Some(min), Some(w)) if min > 0.0 => {
-                (((w + gap) / (min + gap)).floor() as usize).clamp(1, cols)
+                let fit = (((w + gap) / (min + gap)).floor() as usize).clamp(1, cols);
+                // A dropped column count evens its rows out: six cells that
+                // fit four across wrap 3+3, not 4+2.
+                let slots: usize = children
+                    .iter()
+                    .filter(|c| !c.float)
+                    .map(|c| c.span.clamp(1, fit))
+                    .sum();
+                if fit < cols && slots > fit {
+                    slots.div_ceil(slots.div_ceil(fit))
+                } else {
+                    fit
+                }
             }
             _ => cols,
         },

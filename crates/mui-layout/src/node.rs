@@ -528,7 +528,9 @@ impl<P> Node<P> {
     /// tree is three columns in a wide window and one in a thin one. A
     /// hugging grid -- a modal, a popover, anything offered no width -- has
     /// nothing to drop columns against, so it keeps its count and widens
-    /// itself to the minimum instead of squeezing a column under it.
+    /// itself to the minimum instead of squeezing a column under it. A
+    /// dropped count balances its rows: six cells that fit four across wrap
+    /// three and three, never four and a straggling two.
     ///
     /// ```
     /// use mui_layout::{grid, block, resolve, Size};
@@ -539,6 +541,10 @@ impl<P> Node<P> {
     ///     (0..6).filter(|i| l.frame(&format!("c{i}")).unwrap().y == l.frame("c0").unwrap().y).count()
     /// };
     /// assert_eq!((cols(800.), cols(260.), cols(240.)), (3, 2, 1));
+    /// // Six cells, room for four: two even rows of three.
+    /// let g = grid(6, (0..6).map(|i| block(20., 20.).id(format!("c{i}")))).min_col(100.).id("g");
+    /// let l = resolve(&g, Some(Size::new(400., 300.)), Default::default()).unwrap();
+    /// assert_eq!(l.frame("c3").unwrap().x, l.frame("c0").unwrap().x);
     /// ```
     pub fn min_col(mut self, px: impl Px) -> Self {
         self.rare_mut().min_col = Some(px.px());
