@@ -5,8 +5,10 @@
 //   media/mui-cut/web/build.sh
 //   node media/mui-cut/web/e2e.mjs <path/to/mui-cut binary> <OUT_DIR>
 //
-// E2E_BACKEND=cpu runs Chrome without WebGPU and expects the CPU fallback;
-// the default expects the viewport on WebGPU.
+// E2E_BACKEND=cpu runs Chrome without WebGPU and expects the CPU renderer,
+// E2E_BACKEND=webgl2 without WebGPU and expects WebGL2 (vello_gpu); the
+// default expects the viewport on WebGPU. E2E_RENDERER=classic|gpu|...
+// forces the editor's `?renderer=`.
 import { spawn } from 'node:child_process';
 import { inflateSync } from 'node:zlib';
 import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -24,8 +26,15 @@ const read = () => JSON.parse(readFileSync(file, 'utf8'));
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const check = (ok, what) => { if (!ok) throw new Error('FAILED: ' + what); console.log('ok  ' + what); };
 
-const cpu = process.env.E2E_BACKEND === 'cpu';
-const gpuFlags = cpu ? ['--disable-features=WebGPU'] : ['--enable-unsafe-webgpu', '--enable-features=Vulkan', '--use-angle=vulkan', '--ignore-gpu-blocklist'];
+const mode = process.env.E2E_BACKEND ?? 'webgpu';
+const expected = { cpu: 'CPU', webgl2: 'WebGL2' }[mode] ?? 'WebGPU';
+const angle = ['--enable-features=Vulkan', '--use-angle=vulkan', '--ignore-gpu-blocklist'];
+const gpuFlags = { cpu: ['--disable-features=WebGPU'], webgl2: ['--disable-features=WebGPU,Vulkan', '--use-angle=vulkan', '--ignore-gpu-blocklist'] }[mode]
+  ?? ['--enable-unsafe-webgpu', ...angle];
+// Headless Chrome keeps WebGL2 in workers whatever the switches say, so the
+// CPU run asks the editor for its CPU renderer.
+const renderer = process.env.E2E_RENDERER ?? (mode === 'cpu' ? 'cpu' : '');
+const query = renderer ? `?renderer=${renderer}` : '';
 // E2E_PORT / E2E_CDP_PORT move them when another run holds the defaults.
 const port = +(process.env.E2E_PORT ?? 8790), cdpPort = +(process.env.E2E_CDP_PORT ?? 9339);
 
@@ -75,18 +84,20 @@ try {
 
   await send('Runtime.enable');
   await send('Emulation.setDeviceMetricsOverride', { width: 1600, height: 1000, deviceScaleFactor: 1, mobile: false });
-  await send('Page.navigate', { url: `http://127.0.0.1:${port}/` });
+  await send('Page.navigate', { url: `http://127.0.0.1:${port}/${query}` });
   for (let i = 0; i < 100 && (await js(`document.querySelector('#status')?.textContent`)) !== 'loaded'; i++) await sleep(100);
   check(await js(`document.querySelector('#status').textContent`) === 'loaded', 'the editor loads the project');
   const backend = await js(`document.querySelector('#backend').textContent`);
-  check(backend === (cpu ? 'CPU' : 'WebGPU'), `the viewport draws on ${backend}`);
+  const engine = await js(`document.querySelector('#backend').dataset.engine`);
+  check(backend === expected, `the viewport draws on ${backend} (${engine})`);
   await shot('editor-title.png');
 
   // Playback: frames the worker finished in two seconds.
   const draws = () => js(`+document.querySelector('#view').dataset.draws`);
-  const d0 = await draws();
-  await click('#play'); await sleep(2000); const d1 = await draws(); await click('#play'); await key('Home', 'Home');
-  console.log(`    playback: ${((d1 - d0) / 2).toFixed(0)} frames/s on ${backend}`);
+  const busy = () => js(`+document.querySelector('#view').dataset.ms`);
+  const [d0, b0] = [await draws(), await busy()];
+  await click('#play'); await sleep(2000); const [d1, b1] = [await draws(), await busy()]; await click('#play'); await key('Home', 'Home');
+  console.log(`    playback: ${((d1 - d0) / 2).toFixed(0)} frames/s on ${backend} (${engine}), ${((b1 - b0) / (d1 - d0)).toFixed(1)} ms per draw in the worker`);
   check(d1 - d0 > 20, 'playback keeps drawing');
 
   // The shapes scene, its card selected from the layer list and dragged.

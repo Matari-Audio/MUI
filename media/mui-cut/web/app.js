@@ -1,8 +1,8 @@
 // mui-cut web editor. The project lives here as plain JSON; every edit goes
 // through the WASM engine (`Cut.load`), which also draws the viewport and
 // samples the graph editor's curves, so what you see is what `mui-cut render`
-// writes. The viewport draws in worker.js (WebGPU when the browser has it,
-// else Vello CPU); this thread keeps a `Cut` for validation, the inspector
+// writes. The viewport draws in worker.js (WebGPU or WebGL2 when the browser
+// has it, else Vello CPU); this thread keeps a `Cut` for validation, the inspector
 // and the graph's samples.
 import init, { Cut } from './pkg/mui_cut.js';
 
@@ -326,15 +326,19 @@ const octx = over.getContext('2d');
 let vw = 2, vh = 2;       // the viewport's pixel size; the worker owns the canvas
 {
   const canvas = view.transferControlToOffscreen();
-  worker.postMessage({ type: 'init', canvas }, [canvas]);
-  const { backend, adapter } = await new Promise(ok => { worker.onmessage = e => ok(e.data); });
+  const renderer = new URLSearchParams(location.search).get('renderer');
+  worker.postMessage({ type: 'init', canvas, renderer }, [canvas]);
+  const { backend, adapter, engine } = await new Promise(ok => { worker.onmessage = e => ok(e.data); });
   $('#backend').textContent = backend;
-  $('#backend').title = backend === 'WebGPU' ? `Viewport on WebGPU (${adapter})` : 'Viewport on the CPU: this browser has no WebGPU';
+  $('#backend').dataset.engine = engine;
+  $('#backend').title = backend === 'CPU' ? 'Viewport on the CPU (Vello CPU): no WebGPU or WebGL2'
+    : `Viewport on ${backend}, Vello ${engine} (${adapter})`;
 }
 worker.onmessage = ({ data: m }) => {
   if (m.type !== 'drawn') { if (m.error) showError(m.error); return; }
   drawing = false;
   view.dataset.draws = +(view.dataset.draws ?? 0) + 1;   // e2e counts these
+  view.dataset.ms = +(view.dataset.ms ?? 0) + (m.ms ?? 0);  // and times them
   if (m.error) showError(m.error); else quads = JSON.parse(m.quads);
   drawOverlay();
 };
