@@ -1845,6 +1845,10 @@ impl Stage {
         if let Some(q) = q {
             g[252..256].copy_from_slice(&[shift[0], shift[1], q[6], q[7]]);
             g[198] = 1.;
+            // Roberts' R2: evenly spread in 2D for any count of samples.
+            let i = s.sample.unwrap_or(0) as f32;
+            g[38] = (0.5 + i * 0.754_877_7).fract();
+            g[39] = (0.5 + i * 0.569_840_3).fract();
         }
         g[199] = (self.chain.mip_level_count() - 1) as f32;
         self.queue
@@ -3000,3 +3004,5 @@ fn pipelines(
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_glass;

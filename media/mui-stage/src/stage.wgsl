@@ -22,7 +22,8 @@ struct Globals {
     floor: vec4f,
     // A solid background, linear; a: on.
     clear: vec4f,
-    // Fog colour, linear; a: on. fog_range: near, far.
+    // Fog colour, linear; a: on. fog_range: near, far; zw: a beauty
+    // sample's two numbers for rays (an R2 sequence).
     fog: vec4f,
     fog_range: vec4f,
     // Summed ambient light; a: 1 when the shot has lights at all.
@@ -749,10 +750,11 @@ fn scene_dist(uv: vec2f) -> f32 {
 fn px_size(w: f32) -> f32 {
     return 2. * g.cam_up.w * max(w, 1.) / g.time_res.z;
 }
-// Two uniform numbers per pixel, turned by the beauty sample.
+// Two uniform numbers per pixel: the beauty sample's low-discrepancy pair,
+// shifted by a per-pixel hash (Cranley-Patterson), so each pixel's samples
+// stratify and neighbours decorrelate.
 fn rand2(px: vec2f) -> vec2f {
-    let a = hash2(px + g.jitter.zw * 517.);
-    return vec2f(a, hash2(px.yx + a * 91. + g.jitter.wz * 311.));
+    return fract(vec2f(hash2(px), hash2(px.yx + 17.31)) + g.fog_range.zw);
 }
 // A GGX microfacet normal about `n` for a view `v` (Walter et al. 2007).
 fn ggx_normal(n: vec3f, rough: f32, u: vec2f) -> vec3f {
@@ -872,7 +874,13 @@ fn refracted(p: vec3f, n: vec3f, m: vec3f, ray: vec3f, eta: f32, thick: f32, sla
     if (dot(t, t) < 1e-6) { t = ray; }
     let path = thick / max(abs(dot(t, n)), 0.2);
     let exit = p + t * path;
-    let dir = select(t, ray, slab);
+    // A slab's far face is flat: through it the ray bends back, parallel
+    // to how it came when the near face is smooth too.
+    var dir = t;
+    if (slab) {
+        dir = refract(t, n, eta);
+        if (dot(dir, dir) < 1e-6) { dir = ray; }
+    }
     // How far behind the glass the opaque surface lies, refined twice.
     var along = max(scene_dist(screen(p).xy) - length(p - g.eye.xyz), 0.);
     var uv = screen(exit + dir * along);
