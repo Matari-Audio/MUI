@@ -7,7 +7,10 @@
 //!     mui-cut serve  demo.cut.json [--port 8740] [--web DIR]
 #![forbid(unsafe_code)]
 
+mod mcp;
+mod script;
 mod serve;
+mod tools;
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -25,6 +28,13 @@ const USAGE: &str = "usage:
     --stats: per-frame wall time (evaluate, draw, hand to ffmpeg) p50/p95/max
   mui-cut eval   PROJECT --t SECONDS [--scene NAME]
   mui-cut fmt    PROJECT
+  mui-cut schema                                   # the project JSON Schema
+  mui-cut mcp    [PROJECT]                         # MCP server on stdio
+  mui-cut gen    SCRIPT.rhai [-o OUT.cut.json] [--seed N] [--into PROJECT [--scene NAME]]
+  mui-cut check  PROJECT [--json]
+  mui-cut sheet  PROJECT [-o OUT.png] [--scene NAME] [--n 8] [--times 0,1.5] [--width 1600] [--cols 4] [--renderer R]
+  mui-cut strip  PROJECT --layer ID [-o OUT.png] [--scene NAME] [--n 8] [--width 1600] [--renderer R]
+  mui-cut diff   A B [-o OUT.png] [--n 6] [--width 1600] [--renderer R]
   mui-cut serve  PROJECT [--port 8740] [--web DIR]";
 
 /// `--name value` pairs after the command and project path.
@@ -59,18 +69,32 @@ fn main() {
 }
 
 fn run(argv: &[String]) -> Result<()> {
+    if argv.first().map(String::as_str) == Some("schema") {
+        let schema =
+            serde_json::to_string_pretty(&Project::json_schema()).map_err(|e| e.to_string())?;
+        println!("{schema}");
+        return Ok(());
+    }
+    if argv.first().map(String::as_str) == Some("mcp") {
+        return mcp::serve(argv.get(1).map(String::as_str));
+    }
     let (Some(cmd), Some(project)) = (argv.first(), argv.get(1)) else {
         return Err(USAGE.into());
     };
     let mut flags = Vec::new();
     let mut rest = argv[2..].iter();
+    // `diff A B`: the second project is positional.
+    if cmd == "diff" {
+        let b = rest.next().ok_or("diff needs two projects: diff A B")?;
+        flags.push(("against".to_owned(), b.clone()));
+    }
     while let Some(k) = rest.next() {
         let name = k
             .strip_prefix("--")
             .or_else(|| (k == "-o").then_some("o"))
             .ok_or_else(|| format!("unexpected `{k}`\n{USAGE}"))?;
         // The switches take no value.
-        if name == "cpu" || name == "stats" {
+        if matches!(name, "cpu" | "stats" | "json") {
             flags.push((name.to_owned(), String::new()));
             continue;
         }
@@ -84,6 +108,11 @@ fn run(argv: &[String]) -> Result<()> {
     match cmd.as_str() {
         "render" => render(&args),
         "still" => still(&args),
+        "check" => tools::check(&args),
+        "gen" => script::cmd(&args),
+        "sheet" => tools::sheet_cmd(&args),
+        "strip" => tools::strip_cmd(&args),
+        "diff" => tools::diff_cmd(&args),
         "eval" => {
             let p = load(&args.project)?;
             let s = scene(&p, &args)?;
@@ -147,6 +176,33 @@ fn size(p: &Project, args: &Args) -> Result<(u16, u16)> {
     Ok((even(w)?, even(h)?))
 }
 
+/// `--renderer`, with `--cpu` as its old spelling of `cpu`.
+fn renderer(args: &Args) -> Option<&str> {
+    if args.has("cpu") {
+        Some("cpu")
+    } else {
+        args.get("renderer")
+    }
+}
+
+/// Every file the project's layers name, read relative to the project;
+/// what failed, as messages.
+fn load_assets(p: &Project, project: &Path, assets: &mut Assets) -> Vec<String> {
+    let dir = project.parent().unwrap_or(Path::new("."));
+    let mut errs = Vec::new();
+    for l in p.scenes.iter().flat_map(|s| &s.layers) {
+        if let Some(path) = l.asset() {
+            let loaded = std::fs::read(dir.join(path))
+                .map_err(|e| e.to_string())
+                .and_then(|b| assets.add_asset(path, &b));
+            if let Err(e) = loaded {
+                errs.push(format!("`{path}`: {e}"));
+            }
+        }
+    }
+    errs
+}
+
 /// Where frames are drawn: a Vello engine on the GPU (classic by default),
 /// or Vello CPU with `--renderer cpu` or when no GPU adapter opens.
 enum Backend {
@@ -157,28 +213,28 @@ enum Backend {
 impl Backend {
     /// `workers` CPU frames at once; a lone frame rasterises on every core
     /// instead.
-    fn open(p: &Project, args: &Args, (w, h): (u16, u16), workers: usize) -> Result<Self> {
+    fn open(p: &Project, args: &Args, size: (u16, u16), workers: usize) -> Result<Self> {
+        Self::open_at(p, &args.project, renderer(args), size, workers)
+    }
+    /// [`Backend::open`] without the command line: `renderer` is
+    /// `classic` (the default), `gpu` or `cpu`.
+    fn open_at(
+        p: &Project,
+        project: &Path,
+        renderer: Option<&str>,
+        (w, h): (u16, u16),
+        workers: usize,
+    ) -> Result<Self> {
         let cores = std::thread::available_parallelism().map_or(1, usize::from);
-        let engine = match args.get("renderer") {
-            _ if args.has("cpu") => None,
+        let engine = match renderer {
             None | Some("classic") => Some(Engine::Classic),
             Some("gpu") => Some(Engine::Sparse),
             Some("cpu") => None,
             Some(r) => return Err(format!("--renderer: `{r}` is not classic, gpu or cpu")),
         };
         let mut assets = Assets::default();
-        let dir = args.project.parent().unwrap_or(Path::new("."));
-        for l in p.scenes.iter().flat_map(|s| &s.layers) {
-            if let Some(path) = l.asset() {
-                let loaded = std::fs::read(dir.join(path))
-                    .map_err(|e| e.to_string())
-                    .and_then(|b| assets.add_asset(path, &b));
-                if let Err(e) = loaded {
-                    eprintln!(
-                        "mui-cut: `{path}`: {e} (an image draws as its fill, the rest as nothing)"
-                    );
-                }
-            }
+        for e in load_assets(p, project, &mut assets) {
+            eprintln!("mui-cut: {e} (an image draws as its fill, the rest as nothing)");
         }
         if let Some(engine) = engine {
             match Offline::new([w.into(), h.into()], engine) {

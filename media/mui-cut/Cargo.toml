@@ -19,6 +19,10 @@ path = "src/main.rs"
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json.workspace = true
+# The project's JSON Schema (`mui-cut schema`), from the types themselves.
+schemars = "1"
+# Load errors name the JSON path that failed (`scenes[0].layers[2].x`).
+serde_path_to_error = "0.1"
 mui-scene = { path = "../../crates/mui-scene" }
 mui-vello = { workspace = true, features = ["cpu", "gpu-effects"] }
 pollster.workspace = true
@@ -56,9 +60,14 @@ mui-reel = { path = "../mui-reel" }
 # A still or a preview frame rasterises on several threads; export runs
 # several frames at once instead (src/pool.rs).
 vello_cpu = { version = "0.2", default-features = false, features = ["multithreading"] }
+# `mui-cut gen`: sandboxed, deterministic scripts that write projects. No
+# clock, no modules: a script's output depends on its text alone.
+rhai = { version = "1.26", features = ["serde", "no_time", "no_module"] }
 wgpu = { workspace = true, features = ["default"] }
 
 [dev-dependencies]
+# Checks the generated schema accepts the examples (no network resolving).
+jsonschema = { version = "0.58", default-features = false }
 serde_json.workspace = true
 png.workspace = true
 

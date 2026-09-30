@@ -141,6 +141,16 @@ try {
   k1 = read().scenes[1].layers.find(l => l.id === 'ball').y[1];
   check(k1.out[1] < -50, 'Ctrl+Shift+Z redoes it');
 
+  // What an agent sees (`mui-cut mcp` editor_state) and how it points.
+  await sleep(400);
+  const state = (await (await fetch(`http://127.0.0.1:${port}/state`)).json()).state;
+  check(state?.scene === 'shapes' && state.selection === 'ball' && state.prop === 'y', `the editor reports its state (${JSON.stringify(state)})`);
+  await fetch(`http://127.0.0.1:${port}/control`, { method: 'POST', body: JSON.stringify({ scene: 'title', t: 1.25, select: 'bar' }) });
+  await sleep(600);
+  check(await js(`document.querySelector('#time').textContent.startsWith('1.25 s')`), 'an agent moves the playhead');
+  check(await js(`document.querySelector('#layers button.on')?.textContent.includes('bar')`), 'and the selection and scene');
+  await click('#scenes button:nth-child(2)'); await key('Home', 'Home');
+
   // An agent edits the file: the open editor reloads it.
   writeFileSync(file, readFileSync(file, 'utf8').replace('"background": "#12131a"', '"background": "#401010"'));
   await sleep(1200);

@@ -712,11 +712,39 @@ function loop(ms) {
     drawTimeline(); drawGraph(); updateInspector();
     $('#time').textContent = `${t.toFixed(2)} s  ·  f${Math.round(t * doc.fps)}`;
   }
+  report(ms);
   requestAnimationFrame(loop);
+}
+
+// ---------- what an agent sees: the editor's state out, its moves in
+// The server keeps the last state for `mui-cut mcp` (editor_state), and
+// relays an agent's `control` messages (editor_goto) back here.
+let reported = '', reportedAt = 0;
+function report(ms) {
+  if (!doc || ms - reportedAt < (playing ? 500 : 150)) return;
+  const s = JSON.stringify({ scene: scene()?.name ?? null, scene_index: si, t: round(t), selection: sel, prop, playing, key: selKey ? { prop: selKey.p, t: selKey.k.t } : null });
+  if (s === reported) return;
+  reported = s; reportedAt = ms;
+  fetch('/state', { method: 'PUT', body: s }).catch(() => {});
+}
+function control(m) {
+  if (typeof m.scene === 'string') {
+    const i = doc.scenes.findIndex(s => s.name === m.scene);
+    if (i >= 0 && i !== si) { si = i; sel = null; selKey = null; }
+  }
+  if (typeof m.t === 'number') t = Math.max(0, Math.min(scene().duration, m.t));
+  if (typeof m.playing === 'boolean') setPlaying(m.playing);
+  if ('select' in m) {
+    if (m.select === null || scene().layers.some(l => l.id === m.select)) select(m.select);
+  }
+  if (typeof m.prop === 'string' && layer() && numPaths(layer()).includes(m.prop)) prop = m.prop;
+  refresh();
 }
 addEventListener('resize', () => { need = true; });
 
 $('#file').textContent = await (await fetch('/name')).text();
 await pull('loaded');
-new EventSource('/events').onmessage = () => pull('reloaded from disk');
+const events = new EventSource('/events');
+events.onmessage = () => pull('reloaded from disk');
+events.addEventListener('control', e => control(JSON.parse(e.data)));
 requestAnimationFrame(loop);
