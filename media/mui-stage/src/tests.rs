@@ -376,8 +376,11 @@ fn a_model_draws_and_lights_from_its_mesh() {
             mesh: "tri".into(),
             transform: Mat4::IDENTITY,
             color: [1., 0., 0., 1.],
-            metallic: 0.,
-            roughness: 1.,
+            material: Material {
+                metallic: 0.,
+                roughness: 1.,
+                ..Material::SLAB
+            },
             cast: true,
             receive: true,
         }],
@@ -488,8 +491,11 @@ fn a_metal_lit_only_by_the_environment_mirrors_it() {
             mesh: "quad".into(),
             transform: Mat4::IDENTITY,
             color: [1., 0.8, 0.4, 1.],
-            metallic: 1.,
-            roughness: 0.2,
+            material: Material {
+                metallic: 1.,
+                roughness: 0.2,
+                ..Material::SLAB
+            },
             cast: false,
             receive: false,
         }],
@@ -590,8 +596,11 @@ fn ambient_occlusion_darkens_a_contact_crease_not_an_open_floor() {
                 mesh: "cube".into(),
                 transform: Mat4::IDENTITY,
                 color: [0.5, 0.5, 0.5, 1.],
-                metallic: 0.,
-                roughness: 1.,
+                material: Material {
+                    metallic: 0.,
+                    roughness: 1.,
+                    ..Material::SLAB
+                },
                 cast: false,
                 receive: false,
             }],

@@ -49,6 +49,9 @@ struct Globals {
     // the turn of the occlusion's slices and steps.
     jitter: vec4f,
 };
+// env2.z: 1 in a beauty sample (rays jitter per sample); env2.w: the last
+// mip level of the scene colour chain (`aux` in the SSR and glass passes).
+fn beauty() -> bool { return g.env2.z > 0.5; }
 @group(0) @binding(0) var<uniform> g: Globals;
 // The environment's GGX mip chain (equirectangular) and the split-sum LUT.
 @group(0) @binding(1) var env_map: texture_2d<f32>;
@@ -66,8 +69,13 @@ struct Draw {
     mirror: vec4f,
     // The layer texture's part on the face: u0, v0, u1, v1.
     uv: vec4f,
-    // x: receives shadows; models: y metallic, z roughness.
+    // x: receives shadows; y metallic, z roughness.
     flags: vec4f,
+    // Glass: transmission, ior, thickness (world units), dispersion (20 / Abbe).
+    glass: vec4f,
+    // rgb: what is left of white light after `thickness` inside, linear;
+    // a: 1 on a slab (light leaves parallel to how it came), 0 on a solid.
+    tint: vec4f,
 };
 @group(1) @binding(0) var<uniform> d: Draw;
 
@@ -91,10 +99,13 @@ struct Post {
 // The eye distances, for `fs_ao_apply`.
 @group(2) @binding(4) var aux2: texture_2d<f32>;
 
-// Colour, and the distance from the eye for depth of field.
+// Colour; the distance from the eye (depth of field, occlusion, SSR) and the
+// surface's normal, octahedral; and what screen-space reflection reads: the
+// weight the surface's reflection carries (rgb) and its roughness.
 struct Out {
     @location(0) color: vec4f,
     @location(1) dist: vec4f,
+    @location(2) spec: vec4f,
 };
 fn out(c: vec4f, world: vec3f) -> Out {
     var o: Out;
@@ -112,7 +123,28 @@ fn out(c: vec4f, world: vec3f) -> Out {
         surf = dist * clamp((g.eye.y - d.mirror.x) / max(g.eye.y - world.y, 1e-4), 0., 1.);
     }
     o.dist = vec4f(dist, surf, 0., 1.);
+    o.spec = vec4f(0.);
     return o;
+}
+// `out`, and the normal and reflection weight SSR reads; a mirror image in
+// the floor takes no screen-space reflection of its own.
+fn out_spec(c: vec4f, world: vec3f, n: vec3f, weight: vec3f, rough: f32) -> Out {
+    var o = out(c, world);
+    o.dist = vec4f(o.dist.xy, oct_encode(n));
+    if (d.mirror.w <= 0.) { o.spec = vec4f(weight * c.a, rough); }
+    return o;
+}
+fn oct_encode(n: vec3f) -> vec2f {
+    let p = n.xy / (abs(n.x) + abs(n.y) + abs(n.z));
+    if (n.z < 0.) { return (1. - abs(p.yx)) * select(vec2f(-1.), vec2f(1.), p >= vec2f(0.)); }
+    return p;
+}
+fn oct_decode(e: vec2f) -> vec3f {
+    var n = vec3f(e, 1. - abs(e.x) - abs(e.y));
+    let t = max(-n.z, 0.);
+    n.x += select(t, -t, n.x >= 0.);
+    n.y += select(t, -t, n.y >= 0.);
+    return normalize(n);
 }
 
 @group(3) @binding(0) var shadow_map: texture_depth_2d_array;
@@ -194,7 +226,21 @@ fn env_spec(n: vec3f, v: vec3f, rough: f32, f0: vec3f) -> vec3f {
     let ab = textureSampleLevel(brdf_lut, samp, vec2f(nv, rough), 0.).rg;
     return env_radiance(reflect(-v, n), rough) * (f0 * ab.x + ab.y);
 }
-// Faces, walls and backs: a plain dielectric.
+// The weight a surface's mirrored light carries: the split sum's F0 scale
+// and bias, or with no environment F0 itself against the ambient light.
+fn spec_weight(n: vec3f, v: vec3f, rough: f32, f0: vec3f) -> vec3f {
+    if (!env_on()) { return f0; }
+    let nv = clamp(dot(n, v), 1e-3, 1.);
+    let ab = textureSampleLevel(brdf_lut, samp, vec2f(nv, rough), 0.).rg;
+    return f0 * ab.x + ab.y;
+}
+// The light a reflection off screen brings: the environment, else the
+// ambient light standing in for it.
+fn spec_fallback(r: vec3f, rough: f32) -> vec3f {
+    if (env_on()) { return env_radiance(r, rough); }
+    return g.ambient.rgb;
+}
+// Walls and backs: a plain dielectric.
 const SLAB_ROUGH: f32 = 0.42;
 
 struct Shade {
@@ -344,15 +390,20 @@ fn mirrored(c: vec4f, world: vec3f) -> vec4f {
 
 @fragment fn fs_front(i: Cap) -> Out {
     var c = textureSample(tex, samp, i.uv);
+    let n = face_normal(i.world);
+    var weight = vec3f(0.);
+    let metal = d.flags.y;
+    let rough = d.flags.z;
     if (lit_shot()) {
-        let n = face_normal(i.world);
         let v = normalize(g.eye.xyz - i.world);
-        c = vec4f(c.rgb * shade(i.world, n, d.flags.x, 0.).diffuse
-            + env_spec(n, v, SLAB_ROUGH, vec3f(0.04)) * c.a, c.a);
+        let base = c.rgb / max(c.a, 1e-4);
+        weight = spec_weight(n, v, rough, mix(vec3f(0.04), base, metal));
+        c = vec4f(c.rgb * (1. - metal) * shade(i.world, n, d.flags.x, 0.).diffuse
+            + weight * spec_fallback(reflect(-v, n), rough) * c.a, c.a);
     }
     let o = mirrored(vec4f(c.rgb * d.size.w, c.a) * d.edge.a, i.world);
     if (o.a < 0.004) { discard; }
-    return out(o, i.world);
+    return out_spec(o, i.world, n, weight * d.size.w, rough);
 }
 @fragment fn fs_back(i: Cap) -> Out {
     let a = textureSample(tex, samp, i.uv).a;
@@ -436,15 +487,15 @@ struct Wall {
     let shine = 2. / max(rough * rough * rough * rough, 1e-3) - 2.;
     let f0 = mix(vec3f(0.04), base, metal);
     var c: vec3f;
+    var weight = vec3f(0.);
     if (lit_shot()) {
         let s = shade(i.world, n, d.flags.x, shine);
+        let v = normalize(g.eye.xyz - i.world);
         c = base * (1. - metal) * s.diffuse + f0 * s.spec * (shine + 8.) / 25.;
-        if (env_on()) {
-            c += env_spec(n, normalize(g.eye.xyz - i.world), rough, f0);
-        } else {
-            // The ambient light stands in for the environment a metal mirrors.
-            c += f0 * g.ambient.rgb;
-        }
+        // With no environment the ambient light stands in for what a metal
+        // mirrors.
+        weight = spec_weight(n, v, rough, f0);
+        c += weight * spec_fallback(reflect(-v, n), rough);
     } else {
         let l = normalize(vec3f(-0.4, 0.6, 0.7));
         let v = normalize(g.eye.xyz - i.world);
@@ -455,7 +506,7 @@ struct Wall {
     }
     let o = mirrored(vec4f(c, 1.) * d.edge.a, i.world);
     if (o.a < 0.004) { discard; }
-    return out(o, i.world);
+    return out_spec(o, i.world, n, weight, rough);
 }
 
 // --- shadow maps ------------------------------------------------------------
@@ -673,6 +724,236 @@ fn nearer(c: vec3f, a: vec3f, b: vec3f) -> vec3f {
     }
     let ao = pow(clamp(sum / w, 0., 1.), g.ao.x);
     return vec4f(c.rgb * ao, c.a);
+}
+
+// --- screen-space reflection and refraction -------------------------------
+
+// The opaque frame, mip-chained for rough lookups (`aux` in these passes):
+// colour, and in alpha the eye distance to the surface at each pixel.
+@fragment fn fs_chain(i: Full) -> @location(0) vec4f {
+    let px = vec2i(i.pos.xy);
+    return vec4f(textureLoad(tex, px, 0).rgb, textureLoad(aux, px, 0).g);
+}
+
+// A world point on the screen: uv (y down) and its view depth.
+fn screen(p: vec3f) -> vec3f {
+    let c = g.view_proj * vec4f(p, 1.);
+    return vec3f(c.x / c.w * 0.5 + 0.5, 0.5 - c.y / c.w * 0.5, c.w);
+}
+// The opaque surface's eye distance at `uv`.
+fn scene_dist(uv: vec2f) -> f32 {
+    let size = vec2i(g.time_res.yz);
+    return textureLoad(aux, clamp(vec2i(uv * g.time_res.yz), vec2i(0), size - 1), 0).a;
+}
+// World units across one pixel at view depth `w`.
+fn px_size(w: f32) -> f32 {
+    return 2. * g.cam_up.w * max(w, 1.) / g.time_res.z;
+}
+// Two uniform numbers per pixel, turned by the beauty sample.
+fn rand2(px: vec2f) -> vec2f {
+    let a = hash2(px + g.jitter.zw * 517.);
+    return vec2f(a, hash2(px.yx + a * 91. + g.jitter.wz * 311.));
+}
+// A GGX microfacet normal about `n` for a view `v` (Walter et al. 2007).
+fn ggx_normal(n: vec3f, rough: f32, u: vec2f) -> vec3f {
+    let a = max(rough * rough, 1e-3);
+    let phi = 6.2831853 * u.x;
+    let ct = sqrt((1. - u.y) / (1. + (a * a - 1.) * u.y));
+    let st = sqrt(max(1. - ct * ct, 0.));
+    let up = select(vec3f(1., 0., 0.), vec3f(0., 1., 0.), abs(n.x) > 0.9);
+    let t = normalize(cross(up, n));
+    let b = cross(n, t);
+    return normalize(t * (st * cos(phi)) + b * (st * sin(phi)) + n * ct);
+}
+
+const SSR_STEPS: i32 = 48;
+const SSR_REACH: f32 = 4000.;
+// March from `p` along unit `r` against the opaque depths: the uv of the
+// first surface it passes behind (within a thickness), the hit's
+// confidence (0 missed; fading toward the frame's edge and the reach) and
+// the pixels travelled on screen.
+fn trace(p: vec3f, r: vec3f, jitter: f32) -> vec4f {
+    let w0 = dot(p - g.eye.xyz, g.cam_fwd.xyz);
+    let dw = dot(r, g.cam_fwd.xyz);
+    var reach = SSR_REACH;
+    if (dw < 0.) { reach = min(reach, (w0 - 2.) / -dw); }
+    if (reach <= 1.) { return vec4f(0.); }
+    let a = screen(p);
+    var prev = 0.;
+    for (var k = 0; k < SSR_STEPS; k++) {
+        var s = (f32(k) + jitter) / f32(SSR_STEPS);
+        s = s * s;
+        let t = reach * s;
+        let q = p + r * t;
+        let uv = screen(q);
+        if (any(uv.xy < vec2f(0.)) || any(uv.xy > vec2f(1.))) { return vec4f(0.); }
+        let ray = length(q - g.eye.xyz);
+        let surf = scene_dist(uv.xy);
+        let behind = ray - surf;
+        let thick = max(30., (t - prev) * 2.);
+        if (behind > 0.5 + surf * 0.002 && behind < thick && surf < 50000.) {
+            // Bisect to the crossing.
+            var lo = prev;
+            var hi = t;
+            for (var j = 0; j < 5; j++) {
+                let m = 0.5 * (lo + hi);
+                let qm = p + r * m;
+                let um = screen(qm);
+                if (length(qm - g.eye.xyz) > scene_dist(um.xy)) { hi = m; } else { lo = m; }
+            }
+            let hit = screen(p + r * hi).xy;
+            let edge = max(abs(hit.x * 2. - 1.), abs(hit.y * 2. - 1.));
+            let conf = (1. - smoothstep(0.85, 1., edge)) * (1. - smoothstep(0.7, 1., hi / reach));
+            return vec4f(hit, conf, length((hit - a.xy) * g.time_res.yz));
+        }
+        prev = t;
+    }
+    return vec4f(0.);
+}
+// The mip that blurs a lookup by a cone `rough` wide over `px` pixels.
+fn rough_lod(rough: f32, px: f32) -> f32 {
+    let spread = px * rough * rough * 1.2;
+    var lod = log2(max(spread, 1.));
+    if (beauty()) { lod *= 0.4; }
+    return clamp(lod, 0., g.env2.w);
+}
+// What a surface at `p` with normal `n` mirrors along `r`: the frame where
+// the ray meets it, else the environment.
+fn reflection(p: vec3f, n: vec3f, r: vec3f, rough: f32, jitter: f32) -> vec3f {
+    let fallback = spec_fallback(r, rough);
+    let w = dot(p - g.eye.xyz, g.cam_fwd.xyz);
+    let h = trace(p + n * (1. + px_size(w)), r, jitter);
+    if (h.z <= 0.) { return fallback; }
+    let c = textureSampleLevel(aux, samp, h.xy, rough_lod(rough, h.w)).rgb;
+    return mix(fallback, c, h.z);
+}
+
+// Screen-space reflection over the opaque frame, added to it: each pixel's
+// mirrored light (resolved `spec`: its weight and roughness) traced through
+// the frame instead of the environment it was lit by. In a beauty sample
+// the ray takes a GGX-sampled microfacet, so rough reflections converge.
+// tex: the distances and normals; aux: the chain; aux2: `spec`.
+@fragment fn fs_ssr(i: Full) -> @location(0) vec4f {
+    let px = vec2i(i.pos.xy);
+    let s = textureLoad(aux2, px, 0);
+    if (max(s.r, max(s.g, s.b)) <= 1e-4) { return vec4f(0.); }
+    let dn = textureLoad(tex, px, 0);
+    let ray = eye_ray((vec2f(px) + 0.5) / g.time_res.yz);
+    let p = g.eye.xyz + ray * dn.y;
+    let n = oct_decode(dn.zw);
+    let v = -ray;
+    let rough = s.a;
+    var m = n;
+    let u = rand2(vec2f(px));
+    if (beauty() && rough > 0.02) { m = ggx_normal(n, rough, u); }
+    var r = reflect(ray, m);
+    if (dot(r, n) <= 0.) { r = reflect(ray, n); }
+    let ign = fract(52.982918 * fract(dot(vec2f(px), vec2f(0.06711056, 0.00583715))));
+    let c = reflection(p, n, r, rough, fract(ign + u.x));
+    return vec4f(s.rgb * (c - spec_fallback(r, rough)), 0.);
+}
+
+// Refractive index at wavelength `nm` for glass of index `ior` at 587.6 nm
+// and dispersion `k` (20 / Abbe number): Cauchy's A + B / l^2 through
+// n_F - n_C = (ior - 1) / V.
+fn ior_at(ior: f32, k: f32, nm: f32) -> f32 {
+    let b = (ior - 1.) * k / 20. / (1. / (0.4861 * 0.4861) - 1. / (0.6563 * 0.6563));
+    let l = nm * 0.001;
+    return ior - b / (0.5876 * 0.5876) + b / (l * l);
+}
+
+// The opaque frame seen through glass at `p` (normal `n`, microfacet `m`,
+// eye ray `ray`) for index `eta`: refract in, cross `thick` inside, leave
+// (a slab sends it on parallel to how it came, a solid along the refracted
+// ray) and find the opaque surface it meets. xy its uv, z the path inside,
+// w the pixels of the blur footprint per unit of roughness.
+fn refracted(p: vec3f, n: vec3f, m: vec3f, ray: vec3f, eta: f32, thick: f32, slab: bool) -> vec4f {
+    var t = refract(ray, m, 1. / eta);
+    if (dot(t, t) < 1e-6) { t = ray; }
+    let path = thick / max(abs(dot(t, n)), 0.2);
+    let exit = p + t * path;
+    let dir = select(t, ray, slab);
+    // How far behind the glass the opaque surface lies, refined twice.
+    var along = max(scene_dist(screen(p).xy) - length(p - g.eye.xyz), 0.);
+    var uv = screen(exit + dir * along);
+    for (var k = 0; k < 2; k++) {
+        let q = exit + dir * along;
+        along = max(along + scene_dist(uv.xy) - length(q - g.eye.xyz), 0.);
+        uv = screen(exit + dir * along);
+    }
+    let behind = min(along, 3000.) / px_size(uv.z);
+    return vec4f(clamp(uv.xy, vec2f(0.), vec2f(1.)), path, behind);
+}
+
+// A transmissive surface: Fresnel-weighted reflection of the frame (or
+// the environment) over the refracted frame, tinted by the base colour
+// and absorbed along the path inside, blurred by roughness; dispersion
+// sends red, green and blue through their own indices (wavelengths
+// jittered within each band per beauty sample). `base` is the surface
+// colour, `body` its lit opaque share (1 - transmission of it shows).
+fn glass(p: vec3f, n: vec3f, base: vec3f, body: vec3f, px: vec2f) -> vec3f {
+    let trans = d.glass.x;
+    let ior = max(d.glass.y, 1.);
+    let thick = max(d.glass.z, 0.);
+    let k = max(d.glass.w, 0.);
+    let slab = d.tint.a > 0.5;
+    let rough = d.flags.z;
+    let metal = d.flags.y;
+    let ray = normalize(p - g.eye.xyz);
+    let v = -ray;
+    let u = rand2(px);
+    var m = n;
+    if (beauty() && rough > 0.02) { m = ggx_normal(n, rough, u); }
+    let f0 = mix(vec3f(pow((ior - 1.) / (ior + 1.), 2.)), base, metal);
+    let fr = f0 + (1. - f0) * pow(1. - clamp(dot(m, v), 0., 1.), 5.);
+    var r = reflect(ray, m);
+    if (dot(r, n) <= 0.) { r = reflect(ray, n); }
+    let ign = fract(52.982918 * fract(dot(px, vec2f(0.06711056, 0.00583715))));
+    let refl = reflection(p, n, r, rough, fract(ign + u.x));
+    // Beauty: one wavelength per band, anywhere in it; else its middle.
+    let w = select(vec3f(0.5), fract(vec3f(u.x, u.y, u.x + u.y) + g.jitter.zwz), beauty());
+    let nm = vec3f(580., 490., 400.) + w * vec3f(120., 90., 90.);
+    var seen = vec3f(0.);
+    var path = vec3f(thick);
+    if (k > 0.) {
+        for (var c = 0; c < 3; c++) {
+            let h = refracted(p, n, m, ray, ior_at(ior, k, nm[c]), thick, slab);
+            let lod = rough_lod(rough, h.w);
+            seen[c] = textureSampleLevel(aux, samp, h.xy, lod)[c];
+            path[c] = h.z;
+        }
+    } else {
+        let h = refracted(p, n, m, ray, ior, thick, slab);
+        seen = textureSampleLevel(aux, samp, h.xy, rough_lod(rough, h.w)).rgb;
+        path = vec3f(h.z);
+    }
+    // Beer-Lambert: `tint` is what is left after `thickness`.
+    let absorb = select(d.tint.rgb, pow(max(d.tint.rgb, vec3f(1e-4)), path / max(thick, 1e-3)), thick > 0.);
+    let through = seen * base * absorb * (1. - metal);
+    return (1. - fr) * mix(body, through, trans) + fr * refl;
+}
+
+// A glass face: its layer is the base colour and coverage.
+@fragment fn fs_glass(i: Cap) -> Out {
+    let c = textureSample(tex, samp, i.uv);
+    let a = c.a * d.edge.a;
+    if (a < 0.004) { discard; }
+    let base = c.rgb / max(c.a, 1e-4);
+    let n = face_normal(i.world);
+    var body = base;
+    if (lit_shot()) { body = base * shade(i.world, n, d.flags.x, 0.).diffuse; }
+    let rgb = glass(i.world, n, base, body, i.pos.xy) * d.size.w;
+    return out(vec4f(rgb * a, a), i.world);
+}
+// A glass wall or model: its colour is the base.
+@fragment fn fs_glass_solid(i: Wall) -> Out {
+    var n = normalize(i.normal);
+    if (dot(n, g.eye.xyz - i.world) < 0.) { n = -n; }
+    let base = d.edge.rgb;
+    var body = base;
+    if (lit_shot()) { body = base * shade(i.world, n, d.flags.x, 0.).diffuse; }
+    let rgb = glass(i.world, n, base, body, i.pos.xy);
+    return out(vec4f(rgb, 1.) * d.edge.a, i.world);
 }
 
 fn aces(x: vec3f) -> vec3f {
