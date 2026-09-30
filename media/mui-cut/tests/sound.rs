@@ -33,7 +33,7 @@ fn synth() -> PathBuf {
 }
 
 /// A one-scene project around one synth layer (`layer` merged in).
-fn project(name: &str, duration: f64, layer: Value) -> PathBuf {
+fn project(name: &str, duration: f64, layer: &Value) -> PathBuf {
     let mut l = json!({"id": "synth", "kind": "plugin", "source": {"bin": synth()}});
     for (k, v) in layer.as_object().unwrap() {
         l[k] = v.clone();
@@ -76,8 +76,10 @@ fn soundtrack(project: &Path) -> Vec<f32> {
     )
     .unwrap();
     bytes
-        .chunks_exact(4)
-        .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|b| f32::from_le_bytes(*b))
         .collect()
 }
 
@@ -104,7 +106,7 @@ fn capture(project: &Path, t: f64) -> mui_cut::Capture {
 fn notes_play_from_their_sample_and_the_same_every_time() {
     // 0.3104 s is not on a frame (30 fps) or a 480-sample block.
     let notes = json!([{"t": 0.3104, "dur": 0.3, "pitch": 69}, {"t": 0.7, "dur": 0.2, "pitch": 76, "vel": 60}]);
-    let project = project("sound-sample", 1.0, json!({"notes": notes}));
+    let project = project("sound-sample", 1.0, &json!({"notes": notes}));
     run(&project, &["capture"]);
     let a = soundtrack(&project);
     assert_eq!(a.len(), 2 * RATE as usize, "a second of stereo");
@@ -134,7 +136,7 @@ fn render_muxes_the_soundtrack_into_the_video() {
         return;
     }
     let notes = json!([{"t": 0.1, "dur": 0.6, "pitch": 60}, {"t": 0.5, "dur": 0.8, "pitch": 67}]);
-    let project = project("sound-mux", 1.5, json!({"notes": notes, "volume": 0.8}));
+    let project = project("sound-mux", 1.5, &json!({"notes": notes, "volume": 0.8}));
     let out = project.parent().unwrap().join("out.mp4");
     let o = Command::new(BIN)
         .args(["render"])
@@ -191,7 +193,7 @@ fn a_keyed_view_size_reflows_the_ui_and_captures_carry_the_patch() {
     let project = project(
         "sound-view",
         1.0,
-        json!({
+        &json!({
             "view_width": [{"t": 0.0, "v": 0.0, "interp": "hold"}, {"t": 0.5, "v": 1000.0, "interp": "hold"}],
             "view_height": [{"t": 0.0, "v": 0.0, "interp": "hold"}, {"t": 0.5, "v": 510.0, "interp": "hold"}],
             "params": [{"id": "filter", "field": "cutoff", "value": 0.2}],
@@ -261,13 +263,6 @@ fn http(port: u16, method: &str, path: &str, body: &str) -> Value {
 #[test]
 fn serve_plays_the_sound_in_time_with_the_playhead() {
     use std::io::{BufRead as _, Write as _};
-    let notes = json!([{"t": 0.0, "dur": 3.0, "pitch": 57}]);
-    let project = project("sound-live", 4.0, json!({"notes": notes}));
-    let port = std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port();
     struct Kill(std::process::Child);
     impl Drop for Kill {
         fn drop(&mut self) {
@@ -275,6 +270,13 @@ fn serve_plays_the_sound_in_time_with_the_playhead() {
             let _ = self.0.wait();
         }
     }
+    let notes = json!([{"t": 0.0, "dur": 3.0, "pitch": 57}]);
+    let project = project("sound-live", 4.0, &json!({"notes": notes}));
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
     let _serve = Kill(
         Command::new(BIN)
             .args(["serve"])

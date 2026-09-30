@@ -17,12 +17,12 @@ pub fn notes(bytes: &[u8], track: Option<usize>, at: f64) -> Result<Vec<Note>> {
             tick += u64::from(e.delta.as_int());
             match e.kind {
                 TrackEventKind::Meta(MetaMessage::Tempo(us)) => {
-                    tempo.push((tick, f64::from(us.as_int())))
+                    tempo.push((tick, f64::from(us.as_int())));
                 }
                 TrackEventKind::Midi { message, .. } if track.is_none_or(|n| n == i) => {
                     match message {
                         MidiMessage::NoteOn { key, vel } if vel > 0 => {
-                            events.push((tick, i, true, key.as_int(), vel.as_int()))
+                            events.push((tick, i, true, key.as_int(), vel.as_int()));
                         }
                         MidiMessage::NoteOn { key, .. } | MidiMessage::NoteOff { key, .. } => {
                             events.push((tick, i, false, key.as_int(), 0));

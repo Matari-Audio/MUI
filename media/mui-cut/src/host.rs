@@ -32,7 +32,9 @@ const PATIENCE: Duration = Duration::from_secs(60);
 
 /// Every plugin layer's steps in every scene, and its soundtrack's key
 /// and last advance when it plays notes: `(layer, steps, audio)`.
-fn plugins(p: &Project) -> Vec<(&Layer, Vec<mui_cut::Step>, Option<(String, Value)>)> {
+type Plugin<'a> = (&'a Layer, Vec<mui_cut::Step>, Option<(String, Value)>);
+
+fn plugins(p: &Project) -> Vec<Plugin<'_>> {
     p.scenes
         .iter()
         .flat_map(|s| {
@@ -73,8 +75,10 @@ pub fn layer_audio(
         .map_err(|e| format!("layer `{}`: its audio {}: {e}", l.id, file.display()))?;
     Ok(Some(
         bytes
-            .chunks_exact(4)
-            .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|b| f32::from_le_bytes(*b))
             .collect(),
     ))
 }
@@ -347,8 +351,10 @@ impl Session {
                     let samples = body
                         .get(8..)
                         .unwrap_or_default()
-                        .chunks_exact(4)
-                        .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .map(|b| f32::from_le_bytes(*b))
                         .collect();
                     let _ = heard.send(Sound::Samples(samples));
                     continue;

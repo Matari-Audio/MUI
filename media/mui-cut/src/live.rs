@@ -215,6 +215,7 @@ impl Live {
     /// The device thread: a cpal stream at the project's rate, else a
     /// null device that takes frames in real time.
     fn output(self: Arc<Self>) {
+        const TICK: usize = 240;
         use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
         let real = std::env::var("MUI_CUT_AUDIO").as_deref() != Ok("null");
         let stream = real
@@ -242,8 +243,7 @@ impl Live {
                 stream.play().ok()?;
                 let name = device
                     .description()
-                    .map(|d| d.name().to_owned())
-                    .unwrap_or_else(|_| "audio device".into());
+                    .map_or_else(|_| "audio device".into(), |d| d.name().to_owned());
                 Some((stream, name))
             })
             .flatten();
@@ -255,7 +255,6 @@ impl Live {
             }
         }
         *self.device.lock().expect("no panic holds it") = "null".into();
-        const TICK: usize = 240;
         self.device_frames.store(TICK as u64, Ordering::Release);
         let mut buf = vec![0f32; 2 * TICK];
         let start = Instant::now();
@@ -292,7 +291,7 @@ impl Live {
                 let now = std::fs::read_to_string(&self.project).map_err(|e| e.to_string())?;
                 if now != text {
                     text = now;
-                    let p = Project::load(&text).map_err(|e| e.to_string())?;
+                    let p = Project::load(&text)?;
                     mix.load(p, &self.project, s.scene)?;
                     *self.sessions.lock().expect("no panic holds it") = mix.sessions();
                     generation = u64::MAX;
@@ -423,25 +422,24 @@ impl Mix {
                 continue;
             };
             let key = serde_json::to_string(source).unwrap_or_default();
-            let v = match old.iter().position(|v| v.layer == l.id && v.source == key) {
-                Some(i) => old.swap_remove(i),
-                None => {
-                    let (exe, _) = crate::host::executable(source, dir)?;
-                    let mut session = Session::open(&exe, &source.args, dir, p.sample_rate)?;
-                    let sound = session.sound.take().ok_or("no sound")?;
-                    Voice {
-                        layer: l.id.clone(),
-                        source: key,
-                        writer: session.writer(),
-                        session: Arc::new(Mutex::new(session)),
-                        sound,
-                        clock: 0,
-                        offset: 0,
-                        events: Vec::new(),
-                        steps: Vec::new(),
-                        frame: usize::MAX,
-                        gain: l.clone(),
-                    }
+            let v = if let Some(i) = old.iter().position(|v| v.layer == l.id && v.source == key) {
+                old.swap_remove(i)
+            } else {
+                let (exe, _) = crate::host::executable(source, dir)?;
+                let mut session = Session::open(&exe, &source.args, dir, p.sample_rate)?;
+                let sound = session.sound.take().ok_or("no sound")?;
+                Voice {
+                    layer: l.id.clone(),
+                    source: key,
+                    writer: session.writer(),
+                    session: Arc::new(Mutex::new(session)),
+                    sound,
+                    clock: 0,
+                    offset: 0,
+                    events: Vec::new(),
+                    steps: Vec::new(),
+                    frame: usize::MAX,
+                    gain: l.clone(),
                 }
             };
             self.voices.push(Voice {
