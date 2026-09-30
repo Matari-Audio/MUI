@@ -1,0 +1,228 @@
+{
+  "size": [1920, 1080],
+  "fps": 30.0,
+  "scenes": [
+    {
+      "name": "synth",
+      "duration": 8.0,
+      "background": "#0e0e10",
+      "layers": [
+        {
+          "id": "synth",
+          "name": "MUI Synth (live plugin)",
+          "kind": "plugin",
+          "source": {
+            "cargo": "../Cargo.toml",
+            "example": "synth"
+          },
+          "params": [
+            {
+              "id": "filter",
+              "field": "cutoff",
+              "value": [
+                { "t": 0.8, "v": 0.6, "interp": "bezier" },
+                { "t": 1.5, "v": 0.12, "interp": "bezier" },
+                { "t": 2.2, "v": 0.95, "interp": "hold" }
+              ]
+            }
+          ],
+          "parts": {
+            "env": {
+              "opacity": [
+                { "t": 5.0, "v": 1.0, "interp": "bezier" },
+                { "t": 5.4, "v": 0.45, "interp": "bezier" },
+                { "t": 6.4, "v": 0.45, "interp": "bezier" },
+                { "t": 7.0, "v": 1.0, "interp": "bezier" }
+              ]
+            },
+            "filter": {
+              "y": [
+                { "t": 5.0, "v": 0.0, "interp": "bezier" },
+                { "t": 5.6, "v": -40.0, "interp": "bezier" },
+                { "t": 6.4, "v": -40.0, "interp": "bezier" },
+                { "t": 7.2, "v": 0.0, "interp": "bezier" }
+              ],
+              "scale": [
+                { "t": 5.0, "v": 1.0, "interp": "bezier" },
+                { "t": 5.6, "v": 1.25, "interp": "bezier" },
+                { "t": 6.4, "v": 1.25, "interp": "bezier" },
+                { "t": 7.2, "v": 1.0, "interp": "bezier" }
+              ],
+              "highlight": [
+                { "t": 4.9, "v": 0.0, "interp": "bezier" },
+                { "t": 5.2, "v": 1.0, "interp": "bezier" },
+                { "t": 6.6, "v": 1.0, "interp": "bezier" },
+                { "t": 7.0, "v": 0.0, "interp": "bezier" }
+              ]
+            },
+            "head": {
+              "opacity": [
+                { "t": 5.0, "v": 1.0, "interp": "bezier" },
+                { "t": 5.4, "v": 0.45, "interp": "bezier" },
+                { "t": 6.4, "v": 0.45, "interp": "bezier" },
+                { "t": 7.0, "v": 1.0, "interp": "bezier" }
+              ]
+            },
+            "osc": {
+              "opacity": [
+                { "t": 5.0, "v": 1.0, "interp": "bezier" },
+                { "t": 5.4, "v": 0.45, "interp": "bezier" },
+                { "t": 6.4, "v": 0.45, "interp": "bezier" },
+                { "t": 7.0, "v": 1.0, "interp": "bezier" }
+              ]
+            },
+            "out": {
+              "opacity": [
+                { "t": 5.0, "v": 1.0, "interp": "bezier" },
+                { "t": 5.4, "v": 0.45, "interp": "bezier" },
+                { "t": 6.4, "v": 0.45, "interp": "bezier" },
+                { "t": 7.0, "v": 1.0, "interp": "bezier" }
+              ]
+            }
+          },
+          "x": 960.0,
+          "y": 560.0,
+          "scale": [
+            { "t": 0.0, "v": 1.3, "interp": "bezier" },
+            { "t": 0.7, "v": 1.5, "interp": "bezier" }
+          ],
+          "opacity": [
+            { "t": 0.0, "v": 0.0, "interp": "bezier" },
+            { "t": 0.5, "v": 1.0, "interp": "bezier" }
+          ],
+          "explode": [
+            { "t": 3.9, "v": 0.0, "interp": "bezier" },
+            { "t": 4.8, "v": 0.45, "interp": "bezier" },
+            { "t": 6.4, "v": 0.45, "interp": "bezier" },
+            { "t": 7.4, "v": 0.0, "interp": "bezier" }
+          ],
+          "backdrop": [
+            { "t": 3.9, "v": 1.0, "interp": "bezier" },
+            { "t": 4.6, "v": 0.25, "interp": "bezier" },
+            { "t": 6.6, "v": 0.25, "interp": "bezier" },
+            { "t": 7.4, "v": 1.0, "interp": "bezier" }
+          ],
+          "pointer_x": [
+            { "t": 0.0, "v": -1.0, "interp": "hold" },
+            { "t": 2.3, "v": 541.3, "interp": "hold" }
+          ],
+          "pointer_y": [
+            { "t": 0.0, "v": -1.0, "interp": "hold" },
+            { "t": 2.3, "v": 331.5, "interp": "hold" },
+            { "t": 2.5, "v": 331.5, "interp": "bezier" },
+            { "t": 3.2, "v": 271.5, "interp": "bezier" },
+            { "t": 3.6, "v": 301.5, "interp": "hold" }
+          ],
+          "pointer_down": [
+            { "t": 0.0, "v": 0.0, "interp": "hold" },
+            { "t": 2.5, "v": 1.0, "interp": "hold" },
+            { "t": 3.7, "v": 0.0, "interp": "hold" }
+          ]
+        },
+        {
+          "id": "caption",
+          "kind": "text",
+          "text": "a live MUI plugin, keyed and exploded",
+          "x": 960.0,
+          "y": 1040.0,
+          "opacity": [
+            { "t": 0.2, "v": 0.0, "interp": "bezier" },
+            { "t": 0.8, "v": 1.0, "interp": "bezier" }
+          ],
+          "fill": "#9a9a9a",
+          "font_size": 30.0,
+          "weight": 500.0
+        }
+      ]
+    },
+    {
+      "name": "synth 3d",
+      "duration": 6.0,
+      "background": "#0e0e10",
+      "layers": [
+        {
+          "id": "cam",
+          "kind": "camera",
+          "x": 960.0,
+          "y": 540.0,
+          "rx": [
+            { "t": 0.0, "v": 6.0, "interp": "bezier" },
+            { "t": 6.0, "v": 16.0, "interp": "bezier" }
+          ],
+          "ry": [
+            { "t": 0.0, "v": -8.0, "interp": "bezier" },
+            { "t": 3.0, "v": -28.0, "interp": "bezier" },
+            { "t": 6.0, "v": 22.0, "interp": "bezier" }
+          ],
+          "distance": [
+            { "t": 0.0, "v": 1500.0, "interp": "bezier" },
+            { "t": 6.0, "v": 1700.0, "interp": "bezier" }
+          ],
+          "fov": 36.0
+        },
+        {
+          "id": "key",
+          "kind": "light",
+          "fill": "#f2f2f2",
+          "rx": 48.0,
+          "ry": -35.0,
+          "softness": 2.0
+        },
+        {
+          "id": "fill",
+          "kind": "light",
+          "type": "ambient",
+          "fill": "#c8c8d0",
+          "intensity": 0.45
+        },
+        {
+          "id": "deck",
+          "name": "MUI Synth (exploded in depth)",
+          "kind": "plugin",
+          "source": {
+            "cargo": "../Cargo.toml",
+            "example": "synth"
+          },
+          "parts": {
+            "filter": {
+              "z": [
+                { "t": 2.4, "v": 0.0, "interp": "bezier" },
+                { "t": 3.4, "v": -120.0, "interp": "bezier" },
+                { "t": 4.6, "v": -120.0, "interp": "bezier" },
+                { "t": 5.4, "v": 0.0, "interp": "bezier" }
+              ],
+              "highlight": [
+                { "t": 2.4, "v": 0.0, "interp": "bezier" },
+                { "t": 3.0, "v": 1.0, "interp": "bezier" },
+                { "t": 4.8, "v": 1.0, "interp": "bezier" },
+                { "t": 5.4, "v": 0.0, "interp": "bezier" }
+              ]
+            },
+            "head": {
+              "z": [
+                { "t": 0.0, "v": 0.0, "interp": "bezier" },
+                { "t": 2.4, "v": 60.0, "interp": "bezier" }
+              ]
+            }
+          },
+          "x": 960.0,
+          "y": 540.0,
+          "scale": 1.3,
+          "explode": [
+            { "t": 0.0, "v": 0.0, "interp": "bezier" },
+            { "t": 0.6, "v": 0.0, "interp": "bezier" },
+            { "t": 2.4, "v": 0.55, "interp": "bezier" },
+            { "t": 5.0, "v": 0.55, "interp": "bezier" },
+            { "t": 6.0, "v": 0.35, "interp": "bezier" }
+          ],
+          "backdrop": [
+            { "t": 0.0, "v": 1.0, "interp": "bezier" },
+            { "t": 2.4, "v": 0.55, "interp": "bezier" }
+          ],
+          "extrude": 4.0
+        }
+      ],
+      "mode": "3d"
+    }
+  ]
+}

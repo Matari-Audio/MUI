@@ -7,7 +7,7 @@
 import init, { Cut } from './pkg/mui_cut.js';
 
 const $ = s => document.querySelector(s);
-const KIND_ICON = { rect: '▭', ellipse: '◯', text: 'T', image: '▣', path: '〰', duplicator: '⁂', svg: 'S', lottie: 'L', camera: '⌖', light: '☀', model: '◈' };
+const KIND_ICON = { rect: '▭', ellipse: '◯', text: 'T', image: '▣', path: '〰', duplicator: '⁂', svg: 'S', lottie: 'L', camera: '⌖', light: '☀', model: '◈', plugin: '⧉' };
 const VECTOR = ['text', 'path', 'duplicator', 'svg', 'lottie'];
 // Graphite, as in style.css: greys only, state by value, weight and shape.
 const C = {
@@ -31,6 +31,7 @@ let saved = '';          // the file's text as last loaded or saved
 let si = 0;              // scene index
 let t = 0;               // playhead, seconds into the scene
 let sel = null;          // selected layer id
+let selPart = null;      // with a plugin layer: its selected part id
 let prop = 'x';          // property shown in the graph editor
 let selKey = null;       // { l, p, k }: the selected key object
 let quads = [];          // layer outlines from the last render, project px
@@ -46,6 +47,7 @@ const clock = { at: 0, t: 0 };
 // the project frame it showed; frames the playhead passed without drawing.
 const pacing = { shown: [], dropped: 0, last: -1, pending: -1 };
 globalThis.pacing = pacing;
+globalThis.cutQuads = () => quads; // the e2e aims at plugin parts with these
 const undo = [], redo = [];
 let base = null;         // the document before the gesture in progress
 const assets = new Set();
@@ -180,6 +182,28 @@ async function loadAssets() {
       if (r.ok) worker.postMessage({ type: 'asset', path: l.path, bytes: new Uint8Array(await r.arrayBuffer()) });
     } catch (e) { console.warn(l.path, e); }
   }
+  // Plugin captures: every state the project shows, each manifest with
+  // the images it names. A missing one is not captured yet; `serve` sends
+  // `plugin` when it is.
+  for (const path of JSON.parse(cut.plugin_states())) {
+    if (assets.has(path)) continue;
+    try {
+      const r = await fetch('/asset/' + path);
+      if (!r.ok) continue;
+      const bytes = new Uint8Array(await r.arrayBuffer());
+      for (const f of JSON.parse(new TextDecoder().decode(bytes)).layers) {
+        const img = '.cut-cache/' + f.src;
+        if (assets.has(img)) continue;
+        const ri = await fetch('/asset/' + img);
+        if (!ri.ok) continue;
+        assets.add(img);
+        worker.postMessage({ type: 'asset', path: img, bytes: new Uint8Array(await ri.arrayBuffer()) });
+      }
+      assets.add(path);
+      worker.postMessage({ type: 'asset', path, bytes });
+    } catch (e) { console.warn(path, e); }
+  }
+  need = true;
 }
 
 // ---------- scene and layer lists
@@ -196,16 +220,33 @@ function refreshLists() {
     const b = document.createElement('button');
     b.innerHTML = `<span class="kind">${KIND_ICON[l.kind] ?? '?'}</span>`;
     b.append(l.name || l.id);
-    b.className = l.id === sel ? 'on' : '';
+    b.className = l.id === sel && !selPart ? 'on' : '';
     b.onclick = () => select(l.id);
-    return b;
-  }));
+    // A plugin's parts, as the last frame drew them: child layers.
+    const parts = quads.filter(q => q.id.startsWith(l.id + '#')).map(q => q.id.slice(l.id.length + 1));
+    return [b, ...[...new Set(parts)].map(part => {
+      const c = document.createElement('button');
+      c.className = 'part' + (l.id === sel && part === selPart ? ' on' : '');
+      c.dataset.part = part;
+      c.innerHTML = '<span class="kind">└</span>';
+      c.append(part);
+      c.onclick = () => select(`${l.id}#${part}`);
+      return c;
+    })];
+  }).flat());
 }
+// `id` is a layer id, or `layer#part` for a plugin's part: selecting a
+// part tracks it (an empty `parts` entry), so it can be moved and keyed.
 function select(id) {
-  if (sel !== id) selKey = null;
-  sel = id;
-  const l = layer(), nums = numPaths(l);
-  if (l && !nums.includes(prop)) prop = 'x';
+  const hash = id ? id.indexOf('#') : -1;
+  const lid = hash < 0 ? id : id.slice(0, hash), part = hash < 0 ? null : id.slice(hash + 1);
+  if (sel !== lid || selPart !== part) selKey = null;
+  sel = lid; selPart = part;
+  const l = layer();
+  if (l && selPart && !l.parts?.[selPart]) edit(() => { (l.parts ??= {})[selPart] = {}; });
+  const nums = numPaths(l).filter(p => selPart ? p.startsWith(`parts.${selPart}.`) : !p.startsWith('parts.'));
+  if (l && selPart) prop = nums.includes(prop) ? prop : `parts.${selPart}.x`;
+  else if (l && !nums.includes(prop)) prop = 'x';
   if (l && !isKeys(getp(l, prop))) prop = nums.find(p => isKeys(getp(l, p))) ?? prop;
   refresh();
 }
@@ -288,6 +329,16 @@ function kindFields(l) {
     field('path', input(l.path ?? '', v => set('path', v, ''), 'area'));
   }
   if (l.kind === 'light') field('type', choice(l.type ?? 'directional', ['directional', 'spot', 'point', 'ambient'], v => set('type', v, 'directional')));
+  if (l.kind === 'plugin') {
+    const json = (v, k) => { try { const o = JSON.parse(v); edit(() => { l[k] = o; }); } catch (e) { showError(`${k}: ${e}`); } };
+    field('source', input(JSON.stringify(l.source), v => json(v, 'source'), 'area'));
+    field('select', input((l.select ?? []).join(', '), v => set('select', v.split(',').map(s => s.trim()).filter(Boolean), undefined)));
+    const b = document.createElement('button');
+    b.textContent = 'Explode / collapse'; b.dataset.explode = '';
+    b.title = 'Key explode at the playhead: 0.5 when collapsed, 0 when exploded';
+    b.onclick = () => edit(() => setValue(l, 'explode', (now(l, 'explode') ?? 0) > 0.01 ? 0 : 0.5));
+    field('parts', b);
+  }
   if (l.kind === 'duplicator') {
     field('shape', choice(l.shape ?? 'rect', ['rect', 'ellipse', 'path'], v => set('shape', v, 'rect')));
     if (l.shape === 'path') field('d', input(l.d ?? '', v => set('d', v, ''), 'area'));
@@ -369,14 +420,23 @@ function refreshInspector() {
     fxSection(s, () => frameNow()?.effects ?? []);
     return;
   }
-  $('#insp-title').textContent = `Layer · ${l.kind}`;
-  field('id', input(l.id, v => { if (v && !scene().layers.some(o => o.id === v)) edit(() => { l.id = v; sel = v; }); }));
-  kindFields(l);
+  $('#insp-title').textContent = selPart ? `Part · ${selPart}` : `Layer · ${l.kind}`;
+  if (!selPart) {
+    field('id', input(l.id, v => { if (v && !scene().layers.some(o => o.id === v)) edit(() => { l.id = v; sel = v; }); }));
+    kindFields(l);
+  }
   let group = '';
-  for (const { p, v } of propsOf(l)) {
+  // A plugin's part rows show when that part is selected, and only then.
+  const mine = p => selPart ? p.startsWith(`parts.${selPart}.`) : !p.startsWith('parts.');
+  for (const { p, v } of propsOf(l).filter(r => mine(r.p))) {
     const parts = p.split('.');
     const g = parts.length > 1 ? parts.slice(0, 2).join('.') : '';
-    if (g !== group) { group = g; if (g) groupHeader(l, parts[0], +parts[1]); }
+    if (g !== group) {
+      group = g;
+      if (parts[0] === 'parts') section(`Part ${selPart}`, [], () => edit(() => { delete l.parts[selPart]; if (!Object.keys(l.parts).length) delete l.parts; selPart = null; selKey = null; }));
+      else if (parts[0] === 'params') { const q = l.params[+parts[1]]; section(`${q.id} · ${q.field}`, [], () => edit(() => { l.params.splice(+parts[1], 1); if (!l.params.length) delete l.params; selKey = null; })); }
+      else if (g) groupHeader(l, parts[0], +parts[1]);
+    }
     const color = typeof v === 'string';
     const i = input(color ? v : round(v), x => edit(() => setValue(l, p, color ? x : Number(x))), color ? 'text' : 'number');
     i.dataset.prop = p;
@@ -490,7 +550,12 @@ worker.onmessage = ({ data: m }) => {
   pacing.pending = -1;
   view.dataset.draws = +(view.dataset.draws ?? 0) + 1;   // e2e counts these
   view.dataset.ms = +(view.dataset.ms ?? 0) + (m.ms ?? 0);  // and times them
-  if (m.error) showError(m.error); else quads = JSON.parse(m.quads);
+  if (m.error) showError(m.error);
+  else {
+    const partsBefore = quads.filter(q => q.id.includes('#')).map(q => q.id).join();
+    quads = JSON.parse(m.quads);
+    if (quads.filter(q => q.id.includes('#')).map(q => q.id).join() !== partsBefore) refreshLists();
+  }
   $('#notice').hidden = !m.notice; $('#notice').textContent = m.notice ?? '';
   $('#orbit').hidden = scene()?.mode !== '3d' || !!m.notice;
   drawOverlay();
@@ -520,7 +585,8 @@ function drawOverlay() {
   const k = over.width / R.size[0];
   octx.clearRect(0, 0, over.width, over.height);
   const dpr = devicePixelRatio;
-  for (const [id, width, color] of [[hover, 1, C.hover], [sel, 1.5, C.sel]]) {
+  const selId = selPart ? `${sel}#${selPart}` : sel;
+  for (const [id, width, color] of [[hover, 1, C.hover], [selId, 1.5, C.sel]]) {
     const q = quads.find(q => q.id === id);
     if (!q) continue;
     octx.beginPath();
@@ -529,7 +595,7 @@ function drawOverlay() {
     // A dark hairline under the light one keeps it legible on light scenes.
     octx.lineWidth = (width + 2) * dpr; octx.strokeStyle = C.halo; octx.stroke();
     octx.lineWidth = width * dpr; octx.strokeStyle = color; octx.stroke();
-    if (id === sel) for (const [x, y] of q.pts) { // corner squares mark the selection
+    if (id === selId) for (const [x, y] of q.pts) { // corner squares mark the selection
       octx.fillStyle = C.halo; octx.fillRect(x * k - 4 * dpr, y * k - 4 * dpr, 8 * dpr, 8 * dpr);
       octx.fillStyle = C.sel; octx.fillRect(x * k - 3 * dpr, y * k - 3 * dpr, 6 * dpr, 6 * dpr);
     }
@@ -569,7 +635,9 @@ over.onpointerdown = e => {
   select(id);
   if (!id) return;
   const l = layer();
-  drag = { p, l, x0: now(l, 'x'), y0: now(l, 'y') };
+  // A part moves in its plugin's pixels: the layer's scale divides.
+  const px = selPart ? `parts.${selPart}.` : '', k = selPart ? now(l, 'scale') || 1 : 1;
+  drag = { p, l, px, k, x0: now(l, px + 'x'), y0: now(l, px + 'y') };
   over.setPointerCapture(e.pointerId);
   begin();
 };
@@ -582,8 +650,8 @@ over.onpointermove = e => {
   }
   const p = toProject(e);
   if (!drag) { const h = hit(p); if (h !== hover) { hover = h; need = true; } over.style.cursor = h ? 'move' : 'default'; return; }
-  setValue(drag.l, 'x', round(drag.x0 + p[0] - drag.p[0]));
-  setValue(drag.l, 'y', round(drag.y0 + p[1] - drag.p[1]));
+  setValue(drag.l, drag.px + 'x', round(drag.x0 + (p[0] - drag.p[0]) / drag.k));
+  setValue(drag.l, drag.px + 'y', round(drag.y0 + (p[1] - drag.p[1]) / drag.k));
   changed();
 };
 over.onpointerup = () => { if (orbit.on) { orbit.from = null; return; } drag = null; end(); };
@@ -595,7 +663,8 @@ let tlRows = [], tlDrag = null;
 const tlX = time => LABEL + time / R.scenes[si].duration * (tl.clientWidth - LABEL - 12);
 const tlT = x => Math.max(0, Math.min(R.scenes[si].duration, (x - LABEL) / (tl.clientWidth - LABEL - 12) * R.scenes[si].duration));
 // `animators.0.offset` as `a1 offset`, to fit the label column.
-const short = p => p.replace(/^animators\.(\d+)\./, (_, i) => `a${+i + 1} `).replace(/^deformers\.(\d+)\./, (_, i) => `d${+i + 1} `);
+const short = p => p.replace(/^animators\.(\d+)\./, (_, i) => `a${+i + 1} `).replace(/^deformers\.(\d+)\./, (_, i) => `d${+i + 1} `)
+  .replace(/^parts\.([^.]+)\./, '$1 ').replace(/^params\.(\d+)\.value$/, (_, i) => `param ${+i + 1}`);
 function rows() {
   const out = [];
   for (const l of [...scene().layers].reverse()) {
@@ -956,7 +1025,7 @@ function loop(ms) {
 let reported = '', reportedAt = 0;
 function report(ms) {
   if (!doc || ms - reportedAt < (playing ? 500 : 150)) return;
-  const s = JSON.stringify({ scene: scene()?.name ?? null, scene_index: si, t: round(t), selection: sel, prop, playing, key: selKey ? { prop: selKey.p, t: selKey.k.t } : null });
+  const s = JSON.stringify({ scene: scene()?.name ?? null, scene_index: si, t: round(t), selection: selPart ? `${sel}#${selPart}` : sel, prop, playing, key: selKey ? { prop: selKey.p, t: selKey.k.t } : null });
   if (s === reported) return;
   reported = s; reportedAt = ms;
   fetch('/state', { method: 'PUT', body: s }).catch(() => {});
@@ -969,7 +1038,7 @@ function control(m) {
   if (typeof m.t === 'number') t = Math.max(0, Math.min(scene().duration, m.t));
   if (typeof m.playing === 'boolean') setPlaying(m.playing);
   if ('select' in m) {
-    if (m.select === null || scene().layers.some(l => l.id === m.select)) select(m.select);
+    if (m.select === null || scene().layers.some(l => l.id === m.select.split('#')[0])) select(m.select);
   }
   if (typeof m.prop === 'string' && layer() && numPaths(layer()).includes(m.prop)) prop = m.prop;
   refresh();
@@ -981,4 +1050,6 @@ await pull('loaded');
 const events = new EventSource('/events');
 events.onmessage = () => pull('reloaded from disk');
 events.addEventListener('control', e => control(JSON.parse(e.data)));
+// `serve` finished capturing plugin states: fetch the new ones.
+events.addEventListener('plugin', () => loadAssets());
 requestAnimationFrame(loop);

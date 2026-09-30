@@ -43,10 +43,21 @@ pub fn base_key(p: &Project, project: &Path, settings: &str) -> Fnv {
     let mut h = Fnv::default();
     let _ = write!(h, "{}|{settings}|", env!("CARGO_PKG_VERSION"));
     let dir = project.parent().unwrap_or(Path::new("."));
-    for l in p.scenes.iter().flat_map(|s| &s.layers) {
-        if let Kind::Image { path } = &l.kind {
-            let _ = write!(h, "{path}:");
-            let _ = h.write_all(&std::fs::read(dir.join(path)).unwrap_or_default());
+    for s in &p.scenes {
+        for l in &s.layers {
+            if let Kind::Image { path } = &l.kind {
+                let _ = write!(h, "{path}:");
+                let _ = h.write_all(&std::fs::read(dir.join(path)).unwrap_or_default());
+            }
+            // A plugin's states name what it was told, not what it drew:
+            // its manifests (content-named images, the adapter's stamp) do.
+            let last = mui_cut::plugin::frame_at(s.duration, p.fps);
+            for step in l.plugin_track(p.fps, last) {
+                let manifest = dir
+                    .join(mui_cut::plugin::CACHE)
+                    .join(format!("{}.json", step.key));
+                let _ = h.write_all(&std::fs::read(manifest).unwrap_or_default());
+            }
         }
     }
     h

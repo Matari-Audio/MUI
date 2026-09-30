@@ -1310,10 +1310,13 @@ dependencies = [
 name = "mui-cut"
 version = "0.4.0"
 dependencies = [
+ "base64 0.22.1",
  "glifo 0.3.0 (git+https://github.com/linebender/vello?rev=9dfe53e9d7c42ceaa169eec99b611920b270e6c3)",
  "gltf",
  "jsonschema",
+ "mui",
  "mui-geometry",
+ "mui-motion-bridge",
  "mui-reel",
  "mui-scene",
  "mui-stage",

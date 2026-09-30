@@ -381,6 +381,66 @@ mesh. Scenes without it render exactly as before.
 
 See `examples/stage3d.cut.json`.
 
+### Plugin layers
+
+A `plugin` layer films a running MUI plugin editor: its real UI, split into
+parts you can move, key, highlight and explode.
+
+```json
+{ "id": "synth", "kind": "plugin",
+  "source": { "cargo": "../Cargo.toml", "example": "synth" },
+  "params": [{ "id": "filter", "field": "cutoff", "value": [{ "t": 0.8, "v": 0.6 }, { "t": 2.2, "v": 0.95 }] }],
+  "pointer_x": 541.3, "pointer_y": 331.5, "pointer_down": 0,
+  "explode": [{ "t": 3.9, "v": 0 }, { "t": 4.8, "v": 0.45 }],
+  "parts": { "filter": { "y": -40, "z": -120, "scale": 1.25, "highlight": 1 } } }
+```
+
+- `source`: the editor as a mui-motion-bridge live adapter. Either a
+  prebuilt executable, `{"bin": path}`, or one built from source,
+  `{"cargo": Cargo.toml, "example"|"bin": name}`. Paths are relative to the
+  project. `args` are passed on. Any adapter that speaks the bridge's live
+  protocol works; `examples/synth.rs` is a small one (a synth panel of
+  real MUI knobs, sliders, a toggle and a meter).
+- `params`: keyed values sent as `{"op": "set", "id", "field", "value"}`
+  whenever they change on the frame grid. `pointer_x`/`pointer_y` (UI
+  pixels; -1 is off the UI) and `pointer_down` (>= 0.5 is pressed) drive
+  the pointer, so a keyed drag turns a knob the way a hand would. `select`
+  names the surface ids to split into parts; empty lets the bridge's
+  `discover_parts` choose.
+- `parts.<id>`: each part's own `x`, `y`, `scale`, `rotation`, `opacity`
+  and `highlight` (a flat light outline), in the UI's pixels, plus `z`
+  (depth, larger is farther). All of them are keyable, as `parts.<id>.x`
+  etc.
+- `explode` (0..1) pulls every part away from the UI's centre by that
+  fraction of its distance, and `explode × 160` UI pixels towards the
+  viewer. `backdrop` fades what is not a part.
+- Depth only shows in a 3D scene (`"mode": "3d"`). There, each part is its
+  own slab, placed where the 2D drawing puts it and turned with the layer,
+  at `explode` depth plus its `z`. `extrude` on the layer gives every part
+  a thickness. A 2D scene draws the same parts flat.
+- Captures: the CLI (`still`, `render`, `sheet`, `strip`, `diff`, `check`,
+  MCP) runs the adapter once for each state it does not have yet. A state
+  is the source plus every command sent so far, so its key only changes
+  when what the adapter was told changes. Each state is stored as
+  `.cut-cache/<key>.json` next to the project, with its images named by
+  content under `.cut-cache/img/`. Drawing then only reads files: `eval`
+  names a state and the renderer looks it up, which keeps renders
+  deterministic and fast. A rebuilt adapter (another size or mtime)
+  recaptures. The segment cache hashes the manifests, so a recapture
+  re-renders the spans it touches.
+- `mui-cut serve` captures missing states when the file changes and tells
+  the editor (SSE `plugin`), which reloads them. In the web editor a
+  plugin layer lists its parts as child layers. Pick one (in the list or
+  the viewport) to inspect, drag and key it. **Explode / collapse** keys
+  `explode` at the playhead.
+- MCP `plugin_parts` captures a state and lists its parts (rects and
+  motion) and every surface with its frame, for aiming the pointer and
+  `select`.
+
+See `examples/plugin.cut.json`: a flat scene (a keyed knob, a knob dragged
+by a keyed pointer, then exploded and highlighted) and a 3D one (the UI
+exploded into depth under an orbiting camera).
+
 ## The web editor
 
 - **Viewport**: the scene at the playhead, drawn in a worker on an
@@ -457,6 +517,10 @@ announces edits made by someone else.
   are converted.
 - `src/three.rs`, `src/gpu3d.rs`: 3D scenes: camera and light evaluation
   and glTF import; the atlas and mui-stage shot a frame becomes.
+- `src/plugin.rs`, `src/host.rs`: plugin layers. `plugin.rs` holds state
+  keys, explode and the capture manifest, and builds for wasm. `host.rs`
+  is the CLI's side: it builds or finds the adapter, replays commands and
+  writes the cache.
 - `src/pool.rs`: the frame-parallel CPU export.
 - `src/fx.rs`, `src/fx/`: the effect schema (`EFFECTS`), evaluation, and
   the GPU passes: one WGSL file per effect after a shared `prelude.wgsl`,
@@ -548,8 +612,8 @@ Tools: `open` (with `create`), `schema`, `list` (scenes, layers, animated
 properties with key times), `get` (a JSON Pointer), `patch` (RFC 6902, all
 or nothing), `set`, `key`, `add_layer`, `remove_layer`, `eval`, `check`,
 `still`, `sheet`, `strip`, `diff` (images come back as PNG image content),
-`gen`, `render` + `render_status` (a background job), `editor_state`,
-`editor_goto`. Pointers may name scenes and layers by name/id:
+`gen`, `render` + `render_status` (a background job), `plugin_parts`,
+`editor_state`, `editor_goto`. Pointers may name scenes and layers by name/id:
 `/scenes/intro/layers/title/x`.
 
 Every tool reads the file and every edit writes it: validated, refused if a
@@ -603,5 +667,15 @@ snapshots in the editor rather than `CurveHistory`, for the same reason.
   textured from the shared atlas, and the effect passes are full-frame, so
   a layer stack would need its own padded texture per layer (a blur or
   displacement spills past the atlas slot's gutter). A scene's stack runs.
+- Plugin layers: the web editor shows the captures `serve` made, not the
+  plugin running in WASM. A new state (a param or pointer edit) appears
+  once `serve` has captured it, which takes a few seconds for a Cargo
+  source; clicking the UI in the viewport moves parts rather than turning
+  knobs (key the pointer to do that). The adapter runs natively, so a
+  plugin must build as a bridge live adapter. KURV and the Modern theme are
+  not wired in yet: KURV's `media/tools/kurv-live` adapter needs its pinned
+  isolated build, and would then be `{"bin": path}`. A 3D scene composites
+  a translucent capture in linear light, so its soft edges read slightly
+  brighter than in 2D.
 - The browser CPU fallback is single-threaded: wasm threads need
   cross-origin isolation, which `serve` does not set up.

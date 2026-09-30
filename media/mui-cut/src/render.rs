@@ -11,6 +11,7 @@ use mui_vello::kurbo::{Affine, Point as KPoint, Rect, Shape as _};
 use serde::Serialize;
 use vello_cpu::{Pixmap, RenderContext, Resources};
 
+use crate::plugin::{CACHE, Capture, PluginAt, explode};
 use crate::{Drawn, Frame, Kind, Rgba, vector};
 
 /// Inter, variable in weight, is every text layer's face.
@@ -33,14 +34,20 @@ pub struct Assets {
     svgs: HashMap<String, Arc<Vec<vector::Piece>>>,
     lotties: HashMap<String, Arc<velato::Composition>>,
     models: HashMap<String, Arc<crate::three::Mesh>>,
+    captures: HashMap<String, Arc<Capture>>,
 }
 
 /// One frame's layers, ready to paint: each resolved tree with where it goes
-/// in project pixels, plus every layer's quad (drawn or not).
+/// in project pixels, plus every layer's quad (drawn or not), and every
+/// plugin part's quad, `layer#part`.
 pub struct Layers {
     pub scenes: Vec<(ResolvedScene, Affine)>,
     pub quads: Vec<Quad>,
+    pub parts: Vec<Quad>,
 }
+
+/// A plugin part's highlight: graphite, flat.
+const HIGHLIGHT: Rgba = Rgba([230, 230, 230, 255]);
 
 /// The CPU rasteriser, reused across frames.
 pub struct Renderer {
@@ -132,16 +139,23 @@ impl Renderer {
             .iter()
             .flat_map(|p| [p.r, p.g, p.b, p.a])
             .collect();
-        Ok((rgba, layers.quads))
+        Ok((rgba, layers.all_quads()))
     }
 }
 
 impl Assets {
     /// A file a layer names, by its extension: `.png` for image layers,
-    /// `.svg` for SVG layers, `.json` for Lottie layers.
+    /// `.svg` for SVG layers, `.json` for Lottie layers; a `.json` under
+    /// [`CACHE`] is a plugin capture (its images are PNGs under it too).
     pub fn add_asset(&mut self, path: &str, bytes: &[u8]) -> Result<(), String> {
         let ext = path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
         match ext.as_str() {
+            "json" if path.starts_with(CACHE) => {
+                let c: Capture =
+                    serde_json::from_slice(bytes).map_err(|e| format!("{path}: {e}"))?;
+                self.captures.insert(path.to_owned(), Arc::new(c));
+                Ok(())
+            }
             "svg" => {
                 let pieces =
                     vector::svg(bytes, ttf_inter::REGULAR).map_err(|e| format!("{path}: {e}"))?;
@@ -216,7 +230,8 @@ impl Assets {
             | Kind::Image { .. }
             | Kind::Camera { .. }
             | Kind::Light { .. }
-            | Kind::Model { .. } => Vec::new(),
+            | Kind::Model { .. }
+            | Kind::Plugin { .. } => Vec::new(),
         };
         vector::trim(&mut pieces, l.trim);
         vector::deform(&mut pieces, &l.deformers);
@@ -292,8 +307,13 @@ impl Assets {
         let mut out = Layers {
             scenes: Vec::with_capacity(frame.layers.len()),
             quads: Vec::with_capacity(frame.layers.len()),
+            parts: Vec::new(),
         };
         for l in &frame.layers {
+            if let Some(p) = &l.plugin {
+                self.plugin(l, p, &mut out)?;
+                continue;
+            }
             let (scene, size, corner) = self.element(l)?;
             let place = Affine::translate((l.x, l.y))
                 * Affine::rotate(l.rotation.to_radians())
@@ -317,5 +337,236 @@ impl Assets {
             }
         }
         Ok(out)
+    }
+}
+
+impl Layers {
+    /// Layer quads, then part quads: what the editor hit-tests (backwards,
+    /// so a part wins over its plugin).
+    pub fn all_quads(&self) -> Vec<Quad> {
+        self.quads.iter().chain(&self.parts).cloned().collect()
+    }
+}
+
+fn quad(id: String, place: Affine, w: f64, h: f64) -> Quad {
+    Quad {
+        id,
+        pts: [(0., 0.), (w, 0.), (w, h), (0., h)].map(|(x, y)| {
+            let p = place * KPoint::new(x, y);
+            [p.x, p.y]
+        }),
+    }
+}
+
+impl Assets {
+    /// A capture, if it has been added.
+    pub fn capture(&self, state: &str) -> Option<&Capture> {
+        self.captures
+            .get(&format!("{CACHE}/{state}.json"))
+            .map(|c| &**c)
+    }
+
+    /// A plugin layer: its captured fragments, each an image block where
+    /// the UI put it, parts moved by `explode` and their own tracks, with a
+    /// flat outline when highlighted. Before its capture is there, a faint
+    /// `width` x `height` box in its fill.
+    /// A 3D scene's plugin layer, as plain layers mui-stage sets on their
+    /// own slabs: the backdrop (the layer's id, so its quad), then each
+    /// part (`layer#part`) where the 2D drawing puts it, `explode` times
+    /// [`EXPLODE_DEPTH`](crate::plugin::EXPLODE_DEPTH) towards the viewer
+    /// plus its own `z`, all turned with the layer. A highlight is a flat
+    /// plate just behind its part (with the part's id too). Other layers come back as they are.
+    pub(crate) fn slabs(&self, l: &Drawn) -> Vec<Drawn> {
+        use mui_stage::Mat4;
+        let Some(p) = &l.plugin else {
+            return vec![l.clone()];
+        };
+        let Some(cap) = self.capture(&p.state) else {
+            // The 2D placeholder: a faint card of the layer's size.
+            let fill = Rgba([l.fill.0[0], l.fill.0[1], l.fill.0[2], l.fill.0[3] / 8]);
+            return vec![Drawn {
+                kind: Kind::Rect,
+                radius: 8.,
+                fill,
+                plugin: None,
+                ..l.clone()
+            }];
+        };
+        let (w, h) = (cap.width, cap.height);
+        let s = &l.space;
+        // The layer's turn, in mui-stage's y-up, z-towards-the-viewer
+        // world, as gpu3d poses a slab.
+        let turn = Mat4::rotate_y(s.ry.to_radians() as f32)
+            * Mat4::rotate_x(-s.rx.to_radians() as f32)
+            * Mat4::rotate_z(-l.rotation.to_radians() as f32);
+        // A point in the UI's pixels, `depth` towards the viewer from its
+        // face, to the project's x, y and z (larger is farther).
+        let place = |c: [f64; 2], depth: f64| {
+            let k = l.scale;
+            let local = [
+                ((c[0] - w / 2.) * k) as f32,
+                (-(c[1] - h / 2.) * k) as f32,
+                ((s.anchor_z + depth) * k) as f32,
+            ];
+            let [x, y, z] = turn.project(local).map(f64::from);
+            (l.x + x, l.y - y, s.z - z)
+        };
+        let mut out = Vec::new();
+        let mut slab = |id: String,
+                        kind: Kind,
+                        c: [f64; 2],
+                        depth,
+                        size: [f64; 2],
+                        look: (f64, f64, f64, Rgba)| {
+            let (scale, rotation, opacity, fill) = look;
+            let (x, y, z) = place(c, depth);
+            out.push(Drawn {
+                id,
+                kind,
+                x,
+                y,
+                scale: l.scale * scale,
+                rotation: l.rotation + rotation,
+                opacity: l.opacity * opacity,
+                width: size[0],
+                height: size[1],
+                radius: 0.,
+                fill,
+                plugin: None,
+                space: crate::three::Space {
+                    z,
+                    anchor_z: 0.,
+                    ..s.clone()
+                },
+                ..l.clone()
+            });
+        };
+        for f in &cap.fragments {
+            let [rx, ry, rw, rh] = f.rect;
+            let image = Kind::Image {
+                path: format!("{CACHE}/{}", f.src),
+            };
+            if f.group == "background" {
+                let c = [rx + rw / 2., ry + rh / 2.];
+                slab(
+                    l.id.clone(),
+                    image,
+                    c,
+                    0.,
+                    [rw, rh],
+                    (1., 0., p.backdrop, l.fill),
+                );
+                continue;
+            }
+            let c = [rx + rw / 2., ry + rh / 2.];
+            let [ex, ey, ez] = explode([w / 2., h / 2.], c, p.explode);
+            let own = p.parts.iter().find(|q| q.id == f.group);
+            let (dx, dy, dz, ps, r, o, hl) = own.map_or((0., 0., 0., 1., 0., 1., 0.), |q| {
+                (q.x, q.y, q.z, q.scale, q.rotation, q.opacity, q.highlight)
+            });
+            let c = [c[0] + ex + dx, c[1] + ey + dy];
+            // A pixel proud of the backdrop even when collapsed: coplanar
+            // slabs shadow each other in speckles.
+            let depth = ez - dz + 1.;
+            if hl > 0. {
+                let b = 2. / l.scale.abs().max(0.05) / ps.abs().max(0.05);
+                let [r0, g0, b0, _] = HIGHLIGHT.0;
+                let plate = Rgba([r0, g0, b0, (hl * 255.).round() as u8]);
+                let size = [rw + 2. * b, rh + 2. * b];
+                slab(
+                    format!("{}#{}", l.id, f.group),
+                    Kind::Rect,
+                    c,
+                    depth - 0.5,
+                    size,
+                    (ps, r, o, plate),
+                );
+            }
+            slab(
+                format!("{}#{}", l.id, f.group),
+                image,
+                c,
+                depth,
+                [rw, rh],
+                (ps, r, o, l.fill),
+            );
+        }
+        out
+    }
+
+    fn plugin(&self, l: &Drawn, p: &PluginAt, out: &mut Layers) -> Result<(), String> {
+        let cap = self.capture(&p.state);
+        let (w, h) = cap.map_or((l.width, l.height), |c| (c.width, c.height));
+        let place = Affine::translate((l.x, l.y))
+            * Affine::rotate(l.rotation.to_radians())
+            * Affine::scale(l.scale)
+            * Affine::translate((-w / 2., -h / 2.));
+        out.quads.push(quad(l.id.clone(), place, w, h));
+        let drawn = l.opacity > 0. && l.scale != 0.;
+        let mut push = |el: El, at: Affine| -> Result<(), String> {
+            let scene =
+                resolve(&SceneSpec::new(el)).map_err(|e| format!("layer `{}`: {e}", l.id))?;
+            out.scenes.push((scene, at));
+            Ok(())
+        };
+        let Some(cap) = cap else {
+            if drawn {
+                let faint = Rgba([l.fill.0[0], l.fill.0[1], l.fill.0[2], l.fill.0[3] / 8]);
+                push(
+                    block(w, h)
+                        .radius(8.)
+                        .fill(color(faint))
+                        .opacity(l.opacity as f32),
+                    place,
+                )?;
+            }
+            return Ok(());
+        };
+        for f in &cap.fragments {
+            let [rx, ry, rw, rh] = f.rect;
+            let (at, opacity, highlight) = if f.group == "background" {
+                (Affine::translate((rx, ry)), p.backdrop, 0.)
+            } else {
+                let c = [rx + rw / 2., ry + rh / 2.];
+                let [ex, ey, _depth] = explode([w / 2., h / 2.], c, p.explode);
+                let own = p.parts.iter().find(|q| q.id == f.group);
+                let (dx, dy, s, r, o, hl) = own.map_or((0., 0., 1., 0., 1., 0.), |q| {
+                    (q.x, q.y, q.scale, q.rotation, q.opacity, q.highlight)
+                });
+                let at = Affine::translate((c[0] + ex + dx, c[1] + ey + dy))
+                    * Affine::rotate(r.to_radians())
+                    * Affine::scale(s)
+                    * Affine::translate((-rw / 2., -rh / 2.));
+                out.parts
+                    .push(quad(format!("{}#{}", l.id, f.group), place * at, rw, rh));
+                (at, o, hl)
+            };
+            let Some(img) = self.images.get(&format!("{CACHE}/{}", f.src)) else {
+                continue;
+            };
+            if !drawn || opacity <= 0. {
+                continue;
+            }
+            let fill = Fill::Image(img.clone(), Fit::Fill);
+            push(
+                // Square: a capture's pixels are its corners.
+                block(rw, rh)
+                    .radius(0.)
+                    .fill(fill)
+                    .opacity((l.opacity * opacity) as f32),
+                place * at,
+            )?;
+            if highlight > 0. {
+                let a = (highlight * l.opacity * 255.).round() as u8;
+                let [r, g, b, _] = HIGHLIGHT.0;
+                let line = block(rw, rh)
+                    .radius(0.)
+                    .no_fill()
+                    .stroke(color(Rgba([r, g, b, a])))
+                    .stroke_width(2. / l.scale.abs().max(0.05));
+                push(line, place * at)?;
+            }
+        }
+        Ok(())
     }
 }

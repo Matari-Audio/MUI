@@ -33,7 +33,9 @@ pointers may name scenes and layers by name/id, e.g. /scenes/intro/layers/title/
 reloads it. Look with `still` (one frame), `sheet` (a grid of frames at every key) and `strip` \
 (one layer's motion); verify with `check` (lints with JSON paths, times and fixes) and `eval` \
 (numbers). `editor_state` shows what the person in the web editor is looking at, `editor_goto` \
-moves their playhead or selection. `schema` has every field.";
+moves their playhead or selection. `plugin_parts` captures a plugin layer's live UI and lists its \
+parts (animate them as `parts.<id>.x` etc.) and surfaces (aim `pointer_x`/`pointer_y` at their frames). \
+`schema` has every field.";
 
 pub fn serve(project: Option<&str>) -> Result<()> {
     let mut server = Server::default();
@@ -298,6 +300,18 @@ struct EditorGoto {
 }
 
 #[derive(Deserialize, JsonSchema)]
+struct PluginParts {
+    /// The plugin layer's id.
+    layer: String,
+    #[serde(default)]
+    scene: Option<String>,
+    /// Seconds into the scene (default 0): the state its keyed parameters
+    /// and pointer leave the UI in.
+    #[serde(default)]
+    t: f64,
+}
+
+#[derive(Deserialize, JsonSchema)]
 struct Nothing {}
 
 fn tool<T: JsonSchema>(name: &str, description: &str) -> Value {
@@ -369,6 +383,10 @@ fn tools() -> Vec<Value> {
             "Start rendering a video in the background; returns a job id for render_status.",
         ),
         tool::<JobArg>("render_status", "A render job's state and output."),
+        tool::<PluginParts>(
+            "plugin_parts",
+            "A plugin layer at a time: runs its adapter if that state is not captured yet, then lists its parts (id, rect in the UI's pixels, its own motion), every surface (id, parent, frame: what `select` and the pointer can aim at), the UI size, explode and pointer.",
+        ),
         tool::<EditorState>(
             "editor_state",
             "What the person in `mui-cut serve` sees: scene, playhead, selection, graphed property, playing.",
@@ -599,6 +617,49 @@ impl Server {
                     *raw = serde_json::from_str(&json).map_err(|e| e.to_string())?;
                     Ok(())
                 })
+            }
+            "plugin_parts" => {
+                let a: PluginParts = parse(args)?;
+                let path = self.path()?;
+                let p = crate::load(&path)?;
+                let s = pick(&p, a.scene.as_deref())?;
+                let at = eval(&p, s, a.t)
+                    .layers
+                    .into_iter()
+                    .find(|l| l.id == a.layer)
+                    .ok_or_else(|| format!("no layer `{}`", a.layer))?
+                    .plugin
+                    .ok_or_else(|| format!("layer `{}` is not a plugin", a.layer))?;
+                let errs = crate::host::capture_missing(&p, &path);
+                if !errs.is_empty() {
+                    return Err(errs.join("\n"));
+                }
+                let manifest = path
+                    .parent()
+                    .unwrap_or(Path::new("."))
+                    .join(mui_cut::plugin::CACHE)
+                    .join(format!("{}.json", at.state));
+                let cap: mui_cut::Capture = std::fs::read_to_string(&manifest)
+                    .map_err(|e| e.to_string())
+                    .and_then(|t| serde_json::from_str(&t).map_err(|e| e.to_string()))
+                    .map_err(|e| format!("{}: {e}", manifest.display()))?;
+                let parts: Vec<Value> = cap
+                    .fragments
+                    .iter()
+                    .filter(|f| f.group != "background")
+                    .map(|f| {
+                        let own = at.parts.iter().find(|q| q.id == f.group);
+                        json!({ "id": f.group, "rect": f.rect, "motion": own })
+                    })
+                    .collect();
+                Ok(vec![text(&pretty(&json!({
+                    "state": at.state,
+                    "size": [cap.width, cap.height],
+                    "explode": at.explode,
+                    "pointer": at.pointer,
+                    "parts": parts,
+                    "surfaces": cap.surfaces,
+                })))])
             }
             "render" => self.render(parse(args)?),
             "render_status" => {

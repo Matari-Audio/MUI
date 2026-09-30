@@ -322,6 +322,40 @@ try {
   await click('#layers button:nth-child(3)');
   check(await js(`document.querySelector('[data-prop="width"]').disabled`), 'a bound property is read-only');
 
+
+  // A plugin layer: the synth example's real UI, captured by `serve`, its
+  // parts in the layer list, one selected and dragged, then exploded.
+  const synth = join(dirname(bin), 'examples/synth');
+  const plug = JSON.parse(readFileSync(join(here, '../examples/plugin.cut.json'), 'utf8'));
+  for (const l of plug.scenes.flatMap(s => s.layers)) if (l.source) l.source = { bin: synth };
+  writeFileSync(file, JSON.stringify(plug));
+  let parts = 0;
+  for (let i = 0; i < 150 && parts < 5; i++) { await sleep(200); parts = await js(`document.querySelectorAll('#layers button.part').length`); }
+  check(parts === 5, `the plugin's parts are child layers (${parts})`);
+  await fetch(`http://127.0.0.1:${port}/control`, { method: 'POST', body: JSON.stringify({ t: 2 }) });
+  await sleep(800);
+  await click('#layers button.part[data-part="osc"]');
+  check(await js(`document.querySelector('#insp-title').textContent`) === 'Part · osc', 'selecting a part inspects it');
+  const q = await js(`cutQuads().find(q => q.id === 'synth#osc').pts`);
+  const [px0, py0] = await rect('#overlay');
+  const [pw] = await js(`(r => [r.width])(document.querySelector('#overlay').getBoundingClientRect())`);
+  const k = pw / 1920, mx = px0 + (q[0][0] + q[2][0]) / 2 * k, my = py0 + (q[0][1] + q[2][1]) / 2 * k;
+  // Inside the panel, off its controls: the panel's grey, not the scene's
+  // near-black showing through the hole the part leaves in the backdrop.
+  const sx = px0 + (q[0][0] + 24 * 1.5) * k, sy = py0 + (q[0][1] + 21 * 1.5) * k;
+  const lit = pixel(Buffer.from((await send('Page.captureScreenshot', { format: 'png', clip: { x: sx, y: sy, width: 1, height: 1, scale: 1 } })).data, 'base64'));
+  check(lit.every(c => c > 0x18), `the captured part is drawn where its quad is (${lit})`);
+  await drag(mx, my, mx + 90 * k * 1.5, my);
+  const osc = read().scenes[0].layers[0].parts.osc;
+  check(typeof osc.x === 'number' && Math.abs(osc.x - 90) < 3, `dragging a part moves it in plugin pixels (${JSON.stringify(osc)})`);
+  // The layer's own inspector (not the part's) has the explode button.
+  await js(`[...document.querySelectorAll('#layers button:not(.part)')].pop().click()`);
+  await sleep(250);
+  await click('[data-explode]');
+  const burst = read().scenes[0].layers[0].explode;
+  check(Array.isArray(burst) && burst.some(e => Math.abs(e.t - 2) < 0.02 && e.v === 0.5), `explode is keyed at the playhead (${JSON.stringify(burst)})`);
+  await sleep(600);
+  await shot('editor-plugin.png');
   check(errors.length === 0, 'no page exceptions ' + errors.join('; '));
   ws.close();
 } catch (e) {

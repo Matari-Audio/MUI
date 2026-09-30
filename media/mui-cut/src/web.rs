@@ -166,6 +166,27 @@ impl Cut {
             .and_then(|a| serde_json::to_string(&a).ok())
             .unwrap_or_default()
     }
+    /// Every plugin capture the project shows, as asset paths
+    /// (`.cut-cache/<state>.json`), JSON: what the editor fetches (after
+    /// `mui-cut serve` has captured them) and hands the viewport.
+    pub fn plugin_states(&self) -> String {
+        let Some(p) = &self.project else {
+            return "[]".into();
+        };
+        let mut paths: Vec<String> = p
+            .scenes
+            .iter()
+            .flat_map(|s| {
+                let last = crate::plugin::frame_at(s.duration, p.fps);
+                s.layers
+                    .iter()
+                    .flat_map(move |l| l.plugin_track(p.fps, last))
+            })
+            .map(|s| format!("{}/{}.json", crate::plugin::CACHE, s.key))
+            .collect();
+        paths.dedup();
+        serde_json::to_string(&paths).unwrap_or_default()
+    }
     /// The evaluated frame as JSON: what the inspector shows at the playhead.
     pub fn frame(&self, scene: usize, t: f64) -> String {
         self.project
