@@ -217,12 +217,67 @@ pub struct LayerS {
     /// Which variant shows; -1 none.
     pub v: i32,
     pub a: f32,
+    /// Its surface, every field set.
+    pub mat: MatS,
+}
+
+/// A surface for the Principled BSDF: `material` of a layer or a model.
+/// A model's sets only what its layer overrides; the rest is its glTF's.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct MatS {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metallic: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub roughness: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transmission: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ior: Option<f32>,
+    /// Object units the light crosses inside: the Material Output's
+    /// Thickness, which EEVEE reads in object space (a layer's are pixels).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thickness: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dispersion: Option<f32>,
+    /// Linear RGB multiplied into the base colour.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tint: Option<[f32; 3]>,
+}
+
+impl MatS {
+    fn full(m: mui_stage::Material) -> Self {
+        let f = |v: f32| Some(r(f64::from(v)));
+        Self {
+            metallic: f(m.metallic),
+            roughness: f(m.roughness),
+            transmission: f(m.transmission),
+            ior: f(m.ior),
+            thickness: f(m.thickness),
+            dispersion: f(m.dispersion),
+            tint: Some(r3(m.tint)),
+        }
+    }
+    /// Only what `s` sets; `scale` takes its thickness to object units.
+    fn over(s: &three::Surface, scale: f64) -> Self {
+        let f = |v: Option<f64>| v.map(r);
+        Self {
+            metallic: f(s.metallic),
+            roughness: f(s.roughness),
+            transmission: f(s.transmission),
+            ior: f(s.ior),
+            thickness: f(s.thickness.map(|t| t * scale)),
+            dispersion: f(s.dispersion),
+            tint: s.tint.map(|c| r3(linear(c))),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ModelS {
     pub m: [f32; 16],
     pub show: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mat: Option<MatS>,
 }
 
 /// mui-stage's built-in studio as an OpenEXR file, named by its content.
@@ -545,6 +600,7 @@ pub fn describe(
                         m: placed(Mat4::IDENTITY),
                         v: -1,
                         a: 0.,
+                        mat: MatS::full(mui_stage::Material::SLAB),
                     });
                 };
                 let key = serde_json::to_string(&content(d)).map_err(|e| e.to_string())?;
@@ -561,10 +617,19 @@ pub fn describe(
                     Mat4::scale(d.scale as f32) * Mat4::translate(offset),
                 );
                 let shown = d.opacity > 0. && d.scale != 0.;
+                // As the stage draws it: a slab's glass is its depth thick
+                // unless it says otherwise.
+                let mut mat = d.space.material.map_or(mui_stage::Material::SLAB, |s| {
+                    s.over(mui_stage::Material::SLAB)
+                });
+                if mat.thickness <= 0. {
+                    mat.thickness = d.space.extrude as f32;
+                }
                 Ok(LayerS {
                     m: placed(m),
                     v: if shown { n as i32 } else { -1 },
                     a: r(d.opacity),
+                    mat: MatS::full(mat),
                 })
             })
             .collect::<Result<_, String>>()?;
@@ -585,6 +650,12 @@ pub fn describe(
                 ModelS {
                     m: m.0.map(|v| r(f64::from(v))),
                     show: d.opacity > 0. && d.scale != 0.,
+                    // Pixels to the model's own units, as its glTF's.
+                    mat: d
+                        .space
+                        .material
+                        .as_ref()
+                        .map(|s| MatS::over(s, 1. / f64::from(k))),
                 }
             })
             .collect();
@@ -1078,6 +1149,64 @@ mod tests {
         }
         let want = std::fs::read_to_string(GOLDEN).expect("run with UPDATE_GOLDEN=1 once");
         assert!(got == want, "the Blender state drifted from {GOLDEN}");
+    }
+
+    /// A layer's surface goes to Blender whole, the stage's slab where it
+    /// says nothing; a model's only what its layer overrides.
+    #[test]
+    fn materials_reach_the_principled_bsdf() {
+        let golden = std::fs::read_to_string(GOLDEN).unwrap();
+        assert!(golden.contains("\"mat\"") && golden.contains("\"roughness\": 0.42"));
+        let p = Project::load(
+            r##"{"size":[640,360],"fps":30,"scenes":[{"name":"a","duration":1,"mode":"3d","layers":[
+            {"id":"pane","kind":"rect","width":200,"height":100,"extrude":10,"fill":"#ffffff",
+             "material":{"transmission":1,"ior":1.45,"tint":"#ff0000",
+                         "roughness":[{"t":0,"v":0},{"t":1,"v":0.5}]}},
+            {"id":"flat","kind":"rect","width":200,"height":100,"fill":"#ffffff",
+             "material":{"transmission":1,"thickness":0}},
+            {"id":"knot","kind":"model","path":"knot.glb","height":100,
+             "material":{"thickness":50,"metallic":0}}]}]}"##,
+        )
+        .unwrap();
+        let mut assets = Assets::default();
+        assets.add_asset("knot.glb", KNOT).unwrap();
+        let o = Options::new(None, None, 1, [640, 360]).unwrap();
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples");
+        let d = describe(&p, &p.scenes[0], &[0., 1.], &assets, &dir, &o)
+            .unwrap()
+            .0;
+        let mat = |f: usize, id: &str| {
+            let i = d.layers.iter().position(|l| l.id == id).unwrap();
+            d.frames[f][0].layers[i].mat.clone()
+        };
+        let pane = mat(0, "pane");
+        assert_eq!(
+            (pane.transmission, pane.ior, pane.metallic, pane.thickness),
+            (Some(1.), Some(1.45), Some(0.), Some(10.)),
+            "its depth, in object units"
+        );
+        assert_eq!(pane.tint, Some([1., 0., 0.]));
+        assert_eq!(
+            (pane.roughness, mat(1, "pane").roughness),
+            (Some(0.), Some(0.5))
+        );
+        assert_eq!(mat(0, "flat").thickness, Some(0.), "a thin wall");
+        let knot = d.frames[0][0].models[0].mat.clone().unwrap();
+        assert_eq!((knot.metallic, knot.roughness), (Some(0.), None));
+        let tall = {
+            let m = assets.model("knot.glb").unwrap();
+            f64::from(m.max[1] - m.min[1])
+        };
+        let want = 50. * tall / 100.;
+        assert!((f64::from(knot.thickness.unwrap()) - want).abs() < 1e-3);
+        // The script keys what it gets and turns EEVEE's refraction on.
+        for needle in [
+            "use_raytrace_refraction",
+            "Transmission Weight",
+            "Thin Wall",
+        ] {
+            assert!(SCRIPT.contains(needle), "{needle}");
+        }
     }
 
     /// Every key the script reads from the job is one mui-cut writes.

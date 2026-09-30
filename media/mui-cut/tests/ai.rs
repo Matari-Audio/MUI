@@ -553,6 +553,7 @@ fn every_example_fits_the_schema_and_checks_clean() {
     for want in [
         "variants.cut.json",
         "stage3d.cut.json",
+        "glass.cut.json",
         "effects.cut.json",
         "grid.cut.json",
     ] {

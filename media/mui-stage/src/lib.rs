@@ -115,9 +115,9 @@ const HDR: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const OUT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Float;
 const DEPTH: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 const SAMPLES: u32 = 4;
-/// Per-draw uniform slot: `Draw` is 144 bytes, dynamic offsets align to 256.
+/// Per-draw uniform slot: `Draw` is 176 bytes, dynamic offsets align to 256.
 const SLOT: u64 = 256;
-const DRAW: u64 = 144;
+const DRAW: u64 = 176;
 /// Most planes and most models a shot draws.
 pub const MAX_PLANES: usize = 64;
 pub const MAX_MODELS: usize = 64;
@@ -237,6 +237,47 @@ impl Camera {
     }
 }
 
+/// How a surface meets light, after glTF's metallic-roughness PBR and
+/// Blender's Principled BSDF. Anything with `transmission` above zero is
+/// glass: drawn after the opaque scene, which it reflects and refracts.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Material {
+    pub metallic: f32,
+    pub roughness: f32,
+    /// 0 opaque, 1 all the light that is not reflected passes through.
+    pub transmission: f32,
+    /// Index of refraction at 587.6 nm (glass 1.5, water 1.33).
+    pub ior: f32,
+    /// World units the light crosses inside. On a plane 0 is its depth.
+    pub thickness: f32,
+    /// 20 / the Abbe number (glTF's `KHR_materials_dispersion`): 0 none,
+    /// crown glass about 0.35, flint 0.6.
+    pub dispersion: f32,
+    /// Linear RGB left of white light after `thickness` inside.
+    pub tint: [f32; 3],
+}
+impl Material {
+    /// A slab's face: a plain, fairly rough dielectric.
+    pub const SLAB: Self = Self {
+        metallic: 0.,
+        roughness: 0.42,
+        transmission: 0.,
+        ior: 1.5,
+        thickness: 0.,
+        dispersion: 0.,
+        tint: [1.; 3],
+    };
+    /// Whether it is drawn as glass.
+    pub fn glass(&self) -> bool {
+        self.transmission > 0.
+    }
+}
+impl Default for Material {
+    fn default() -> Self {
+        Self::SLAB
+    }
+}
+
 /// One layer set in the world: a slab whose front face is the layer's
 /// pixels, whose walls follow `outline`, and whose back is its silhouette.
 #[derive(Clone, Debug)]
@@ -267,6 +308,7 @@ pub struct Plane {
     /// Multiplies the face's light: above 1 it feeds the bloom.
     pub glow: f32,
     pub opacity: f32,
+    pub material: Material,
 }
 impl Plane {
     pub fn new(layer: &str, width: f32, height: f32) -> Self {
@@ -285,6 +327,7 @@ impl Plane {
             edge: [0.05, 0.05, 0.07],
             glow: 1.,
             opacity: 1.,
+            material: Material::SLAB,
         }
     }
     pub fn at(mut self, x: f32, y: f32, z: f32) -> Self {
@@ -325,6 +368,10 @@ impl Plane {
     }
     pub fn opacity(mut self, o: f32) -> Self {
         self.opacity = o;
+        self
+    }
+    pub fn material(mut self, m: Material) -> Self {
+        self.material = m;
         self
     }
     /// Local slab space to the world.
@@ -491,8 +538,7 @@ pub struct Model {
     pub transform: Mat4,
     /// Base colour, linear RGB, and opacity.
     pub color: [f32; 4],
-    pub metallic: f32,
-    pub roughness: f32,
+    pub material: Material,
     pub cast: bool,
     pub receive: bool,
 }
@@ -565,6 +611,9 @@ pub struct Shot {
     /// [`sample`]`(i)`, so a mean of many is antialiased, with real
     /// penumbrae and converged occlusion. `None` is the plain instant.
     pub sample: Option<u32>,
+    /// Screen-space reflection: lit surfaces mirror what is on screen, not
+    /// only the environment. Glass always reflects and refracts the frame.
+    pub ssr: bool,
 }
 impl Shot {
     pub fn new(camera: Camera) -> Self {
@@ -580,6 +629,7 @@ impl Shot {
             ao: None,
             post: Post::default(),
             sample: None,
+            ssr: true,
         }
     }
 }
@@ -639,6 +689,14 @@ struct Pipelines {
     /// walls and meshes solid.
     shadow_face: wgpu::RenderPipeline,
     shadow_solid: wgpu::RenderPipeline,
+    /// The opaque frame and its distances into the chain's first level.
+    chain: wgpu::RenderPipeline,
+    /// Screen-space reflection, added onto the frame.
+    ssr: wgpu::RenderPipeline,
+    /// A premultiplied layer over the frame (the glass).
+    over: wgpu::RenderPipeline,
+    glass_face: wgpu::RenderPipeline,
+    glass_solid: wgpu::RenderPipeline,
 }
 
 struct Mesh {
@@ -673,9 +731,16 @@ pub struct Stage {
     sampler: wgpu::Sampler,
     pipes: Pipelines,
     msaa: wgpu::TextureView,
-    /// Eye distance per pixel, multisampled and resolved, for depth of field.
+    /// Eye distance and normal per pixel, multisampled and resolved, for
+    /// depth of field, occlusion and screen-space reflection.
     msaa_dist: wgpu::TextureView,
     dist: wgpu::TextureView,
+    /// Each pixel's reflection weight and roughness, for SSR.
+    msaa_spec: wgpu::TextureView,
+    spec: wgpu::TextureView,
+    /// The opaque frame, colour and eye distance, mip-chained: what SSR
+    /// and glass look up.
+    chain: wgpu::Texture,
     dof: wgpu::TextureView,
     depth: wgpu::TextureView,
     hdr: wgpu::TextureView,
@@ -957,6 +1022,34 @@ impl Stage {
             wgpu::TextureUsages::RENDER_ATTACHMENT,
         ));
         let dist = view(&target(&device, width, height, HDR, 1, RT));
+        let msaa_spec = view(&target(
+            &device,
+            width,
+            height,
+            HDR,
+            SAMPLES,
+            wgpu::TextureUsages::RENDER_ATTACHMENT,
+        ));
+        let spec = view(&target(&device, width, height, HDR, 1, RT));
+        let chain = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("mui-stage chain"),
+            size: wgpu::Extent3d {
+                width: width.max(1),
+                height: height.max(1),
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: wgpu::Extent3d {
+                width: width.max(1),
+                height: height.max(1),
+                depth_or_array_layers: 1,
+            }
+            .max_mips(wgpu::TextureDimension::D2),
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: HDR,
+            usage: RT,
+            view_formats: &[],
+        });
         let dof = view(&target(&device, width, height, HDR, 1, RT));
         let hdr = view(&target(&device, width, height, HDR, 1, RT));
         let lit = view(&target(&device, width, height, HDR, 1, RT));
@@ -994,6 +1087,9 @@ impl Stage {
             msaa,
             msaa_dist,
             dist,
+            msaa_spec,
+            spec,
+            chain,
             dof,
             depth,
             hdr,
@@ -1748,7 +1844,13 @@ impl Stage {
         // The sample's shift, which eye rays undo, and the occlusion's turn.
         if let Some(q) = q {
             g[252..256].copy_from_slice(&[shift[0], shift[1], q[6], q[7]]);
+            g[198] = 1.;
+            // Roberts' R2: evenly spread in 2D for any count of samples.
+            let i = s.sample.unwrap_or(0) as f32;
+            g[38] = (0.5 + i * 0.754_877_7).fract();
+            g[39] = (0.5 + i * 0.569_840_3).fract();
         }
+        g[199] = (self.chain.mip_level_count() - 1) as f32;
         self.queue
             .write_buffer(&self.globals, 0, bytemuck::cast_slice(&g));
 
@@ -1757,14 +1859,38 @@ impl Stage {
         // Slots: planes 0..n, models n..k, their reflections k..2k, the
         // floor at 2k.
         let mut slots = vec![0u8; SLOT as usize * SLOTS];
-        let mut put = |slot: usize, model: Mat4, rows: [[f32; 4]; 5]| {
-            let mut d = [0f32; 36];
+        let mut put = |slot: usize, model: Mat4, rows: [[f32; 4]; 7]| {
+            let mut d = [0f32; 44];
             d[..16].copy_from_slice(&model.0);
             for (i, r) in rows.iter().enumerate() {
                 d[16 + i * 4..][..4].copy_from_slice(r);
             }
             slots[slot * SLOT as usize..][..DRAW as usize]
                 .copy_from_slice(bytemuck::cast_slice(&d));
+        };
+        // A material's rows: receives shadows, metallic, roughness; the
+        // glass; the tint, and whether light leaves a slab as it came.
+        let material = |m: &Material, receive: bool, thickness: f32, slab: bool| {
+            [
+                [
+                    f32::from(u8::from(receive)),
+                    m.metallic.clamp(0., 1.),
+                    m.roughness.clamp(0.02, 1.),
+                    0.,
+                ],
+                [
+                    m.transmission.clamp(0., 1.),
+                    m.ior.max(1.),
+                    thickness.max(0.),
+                    m.dispersion.max(0.),
+                ],
+                [
+                    m.tint[0].clamp(0., 1.),
+                    m.tint[1].clamp(0., 1.),
+                    m.tint[2].clamp(0., 1.),
+                    f32::from(u8::from(slab)),
+                ],
+            ]
         };
         let flip = reflect.map(|f| {
             let mut m = Mat4::IDENTITY;
@@ -1776,13 +1902,22 @@ impl Stage {
         });
         let mut walls = Vec::new();
         for (i, p) in planes.iter().enumerate() {
+            // In the plane's own units, as its walls: scaled with it.
+            let thick = if p.material.thickness > 0. {
+                p.material.thickness
+            } else {
+                p.depth
+            } * p.scale.abs();
+            let [a, b, c] = material(&p.material, p.receive, thick, true);
             let rows = |mirror| {
                 [
                     [p.size[0], p.size[1], p.depth, p.glow],
                     [p.edge[0], p.edge[1], p.edge[2], p.opacity],
                     mirror,
                     p.uv,
-                    [f32::from(u8::from(p.receive)), 0., 0., 0.],
+                    a,
+                    b,
+                    c,
                 ]
             };
             put(i, p.model(), rows([0.; 4]));
@@ -1806,20 +1941,8 @@ impl Stage {
             });
         }
         for (i, m) in models.iter().enumerate() {
-            let rows = |mirror| {
-                [
-                    [0., 0., 0., 1.],
-                    m.color,
-                    mirror,
-                    [0., 0., 1., 1.],
-                    [
-                        f32::from(u8::from(m.receive)),
-                        m.metallic.clamp(0., 1.),
-                        m.roughness.clamp(0.02, 1.),
-                        0.,
-                    ],
-                ]
-            };
+            let [a, b, c] = material(&m.material, m.receive, m.material.thickness, false);
+            let rows = |mirror| [[0., 0., 0., 1.], m.color, mirror, [0., 0., 1., 1.], a, b, c];
             put(n + i, m.transform, rows([0.; 4]));
             if let Some((flip, mirror)) = flip {
                 put(k + n + i, flip * m.transform, rows(mirror));
@@ -1834,7 +1957,9 @@ impl Stage {
                     [f.color[0], f.color[1], f.color[2], 1.],
                     [f.y, 0., 0., 0.],
                     [0., 0., 1., 1.],
-                    [1., 0., 0., 0.],
+                    [1., 0., 0.5, 0.],
+                    [0., 1.5, 0., 0.],
+                    [1., 1., 1., 0.],
                 ],
             );
         }
@@ -1846,6 +1971,8 @@ impl Stage {
         let mut enc = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        // Glass lets most light through: it casts no shadow map.
+        let casts = |m: &Material| m.transmission < 0.5;
         if !maps.is_empty() {
             let shadow = self.shadow_maps().0.clone();
             for &layer in &maps {
@@ -1871,7 +1998,11 @@ impl Stage {
                 pass.set_bind_group(3, &self.no_shadows, &[]);
                 // The instance index picks the light's matrix.
                 let inst = layer..layer + 1;
-                for (i, p) in planes.iter().enumerate().filter(|(_, p)| p.cast) {
+                for (i, p) in planes
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, p)| p.cast && casts(&p.material))
+                {
                     pass.set_bind_group(1, &self.group1, &[(i as u64 * SLOT) as u32]);
                     pass.set_bind_group(2, &self.layers[&p.layer].group, &[]);
                     pass.set_pipeline(&self.pipes.shadow_face);
@@ -1883,7 +2014,11 @@ impl Stage {
                     }
                 }
                 pass.set_pipeline(&self.pipes.shadow_solid);
-                for (i, m) in models.iter().enumerate().filter(|(_, m)| m.cast) {
+                for (i, m) in models
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, m)| m.cast && casts(&m.material))
+                {
                     let mesh = &self.meshes[&m.mesh];
                     pass.set_bind_group(1, &self.group1, &[((n + i) as u64 * SLOT) as u32]);
                     pass.set_vertex_buffer(0, mesh.vertices.slice(..));
@@ -1893,18 +2028,78 @@ impl Stage {
             }
         }
 
-        // Faces far to near by the depth of each slab's centre.
-        let mut order: Vec<usize> = (0..n).collect();
-        let depth = |i: usize| {
-            let c = vp * planes[i].model();
+        // Opaque faces far to near by the depth of each slab's centre; glass
+        // waits for its own pass, back to front, over the finished opaque
+        // frame (and is not seen in the floor).
+        let depth = |m: Mat4| {
             // Clip-space w of the local origin: its distance along the view.
-            c.0[15]
+            (vp * m).0[15]
         };
-        order.sort_by(|&a, &b| depth(b).total_cmp(&depth(a)));
+        let mut order: Vec<usize> = (0..n).filter(|&i| !planes[i].material.glass()).collect();
+        order.sort_by(|&a, &b| depth(planes[b].model()).total_cmp(&depth(planes[a].model())));
+        let opaque: Vec<usize> = (0..models.len())
+            .filter(|&i| !models[i].material.glass())
+            .collect();
+        let mut glass: Vec<(f32, usize)> = (0..n)
+            .filter(|&i| planes[i].material.glass())
+            .map(|i| (depth(planes[i].model()), i))
+            .chain(
+                (0..models.len())
+                    .filter(|&i| models[i].material.glass())
+                    .map(|i| {
+                        let mesh = &self.meshes[&models[i].mesh];
+                        let c = std::array::from_fn(|a| (mesh.min[a] + mesh.max[a]) * 0.5);
+                        (depth(models[i].transform * Mat4::translate(c)), n + i)
+                    }),
+            )
+            .collect();
+        // An opaque plane in front of glass it overlaps on screen (a label
+        // on a frosted card) draws after that glass, in its pass: the glass
+        // would otherwise see it, blurred, behind itself. ponytail: planes
+        // only, by screen boxes; a model in front of glass still leaks.
+        let bounds = |p: &Plane| {
+            let m = vp * p.model();
+            let mut b = [f32::MAX, f32::MAX, f32::MIN, f32::MIN];
+            for [x, y] in [[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]] {
+                let l = [x * p.size[0], y * p.size[1], 0.];
+                let w = m.0[3] * l[0] + m.0[7] * l[1] + m.0[15];
+                if w <= 0. {
+                    return None;
+                }
+                let q = m.project(l);
+                b = [
+                    b[0].min(q[0]),
+                    b[1].min(q[1]),
+                    b[2].max(q[0]),
+                    b[3].max(q[1]),
+                ];
+            }
+            Some(b)
+        };
+        let panes: Vec<(f32, [f32; 4])> = glass
+            .iter()
+            .filter(|&&(_, i)| i < n)
+            .filter_map(|&(d, i)| Some((d, bounds(planes[i])?)))
+            .collect();
+        if !panes.is_empty() {
+            order.retain(|&i| {
+                let d = depth(planes[i].model());
+                let over = bounds(planes[i]).is_some_and(|b| {
+                    panes.iter().any(|&(pd, g)| {
+                        pd > d && b[0] < g[2] && g[0] < b[2] && b[1] < g[3] && g[1] < b[3]
+                    })
+                });
+                if over {
+                    glass.push((d, i));
+                }
+                !over
+            });
+        }
+        glass.sort_by(|a, b| b.0.total_cmp(&a.0));
         let draw = |pass: &mut wgpu::RenderPass<'_>, base: usize| {
             pass.set_pipeline(&self.pipes.mesh);
-            for (i, m) in models.iter().enumerate() {
-                let mesh = &self.meshes[&m.mesh];
+            for &i in &opaque {
+                let mesh = &self.meshes[&models[i].mesh];
                 pass.set_bind_group(1, &self.group1, &[((base + n + i) as u64 * SLOT) as u32]);
                 pass.set_vertex_buffer(0, mesh.vertices.slice(..));
                 pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
@@ -1931,8 +2126,9 @@ impl Stage {
                 pass.draw(0..6, 0..1);
             }
         };
+        let keep = !glass.is_empty();
         {
-            let mut pass = self.scene_pass(&mut enc, &none, true, reflect.is_none());
+            let mut pass = self.scene_pass(&mut enc, &none, true, reflect.is_none(), keep);
             pass.set_pipeline(&self.pipes.bg);
             pass.draw(0..3, 0..1);
             if s.floor.is_some() {
@@ -1949,7 +2145,7 @@ impl Stage {
             }
         }
         if reflect.is_some() {
-            let mut pass = self.scene_pass(&mut enc, &none, false, true);
+            let mut pass = self.scene_pass(&mut enc, &none, false, true, keep);
             draw(&mut pass, 0);
         }
         if ao.is_some() {
@@ -1968,30 +2164,147 @@ impl Stage {
                 ..Default::default()
             });
             self.full(&mut rp, &self.pipes.ao_apply, &group);
-        }
-        self.queue.submit([enc.finish()]);
-        if ao.is_some() {
+            drop(rp);
             std::mem::swap(&mut self.hdr, &mut self.lit);
         }
+        // Only a lit shot has any reflection to trace.
+        let ssr = s.ssr && (!s.lights.is_empty() || s.environment.is_some());
+        let chain = view(&self.chain);
+        if ssr {
+            self.build_chain(&mut enc);
+            let group = self.tex_group3(&self.dist, &chain, &self.spec);
+            let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                color_attachments: &[Some(attach(&self.hdr, None))],
+                ..Default::default()
+            });
+            self.full(&mut rp, &self.pipes.ssr, &group);
+        }
+        if !glass.is_empty() {
+            self.build_chain(&mut enc);
+            let groups: HashMap<&str, wgpu::BindGroup> = glass
+                .iter()
+                .filter(|(_, i)| *i < n)
+                .map(|(_, i)| {
+                    let l = planes[*i].layer.as_str();
+                    (
+                        l,
+                        self.tex_group3(&view(&self.layers[l].texture), &chain, &chain),
+                    )
+                })
+                .collect();
+            let solid = self.tex_group(&chain, &chain);
+            // The glass alone into `lit` (laid over the frame after), its
+            // distances over the opaque ones.
+            let resolve = |view, target, load: bool| wgpu::RenderPassColorAttachment {
+                view,
+                depth_slice: None,
+                resolve_target: target,
+                ops: wgpu::Operations {
+                    load: if load {
+                        wgpu::LoadOp::Load
+                    } else {
+                        wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
+                    },
+                    store: wgpu::StoreOp::Discard,
+                },
+            };
+            let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                color_attachments: &[
+                    Some(resolve(&self.msaa, Some(&self.lit), false)),
+                    Some(resolve(&self.msaa_dist, Some(&self.dist), true)),
+                    Some(resolve(&self.msaa_spec, None, false)),
+                ],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Discard,
+                    }),
+                    stencil_ops: None,
+                }),
+                ..Default::default()
+            });
+            pass.set_bind_group(0, &self.group0, &[]);
+            let shadows = self.shadows.as_ref().map_or(&self.no_shadows, |s| &s.1);
+            pass.set_bind_group(3, shadows, &[]);
+            for &(_, i) in &glass {
+                pass.set_bind_group(1, &self.group1, &[(i as u64 * SLOT) as u32]);
+                if i < n {
+                    pass.set_bind_group(2, &groups[planes[i].layer.as_str()], &[]);
+                    if let Some((buf, count)) = &walls[i] {
+                        pass.set_pipeline(&self.pipes.glass_solid);
+                        pass.set_vertex_buffer(0, buf.slice(..));
+                        pass.draw(0..*count, 0..1);
+                    }
+                    pass.set_pipeline(&self.pipes.glass_face);
+                    pass.draw(0..6, 0..1);
+                } else {
+                    let mesh = &self.meshes[&models[i - n].mesh];
+                    pass.set_bind_group(2, &solid, &[]);
+                    pass.set_pipeline(&self.pipes.glass_solid);
+                    pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+                    pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.draw_indexed(0..mesh.count, 0, 0..1);
+                }
+            }
+            drop(pass);
+            let group = self.tex_group(&self.lit, &self.lit);
+            let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                color_attachments: &[Some(attach(&self.hdr, None))],
+                ..Default::default()
+            });
+            self.full(&mut rp, &self.pipes.over, &group);
+        }
+        self.queue.submit([enc.finish()]);
         Ok(())
     }
 
+    /// The frame so far and its distances into the chain, then halved down
+    /// it.
+    fn build_chain(&self, enc: &mut wgpu::CommandEncoder) {
+        let level = |i: u32| {
+            self.chain.create_view(&wgpu::TextureViewDescriptor {
+                base_mip_level: i,
+                mip_level_count: Some(1),
+                ..Default::default()
+            })
+        };
+        let mut pass = |to: &wgpu::TextureView, pipe, group: &wgpu::BindGroup| {
+            let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                color_attachments: &[Some(attach(to, Some(wgpu::Color::TRANSPARENT)))],
+                ..Default::default()
+            });
+            self.full(&mut rp, pipe, group);
+        };
+        pass(
+            &level(0),
+            &self.pipes.chain,
+            &self.tex_group(&self.hdr, &self.dist),
+        );
+        for i in 1..self.chain.mip_level_count() {
+            let from = level(i - 1);
+            pass(&level(i), &self.pipes.mip, &self.tex_group(&from, &from));
+        }
+    }
+
     /// A pass into the multisampled scene targets. `first` clears them;
-    /// `last` resolves them into `hdr` and `dist`.
+    /// `last` resolves them into `hdr`, `dist` and `spec`; `keep` keeps the
+    /// distances and depth for the glass pass after.
     fn scene_pass<'a>(
         &'a self,
         enc: &'a mut wgpu::CommandEncoder,
         none: &'a wgpu::BindGroup,
         first: bool,
         last: bool,
+        keep: bool,
     ) -> wgpu::RenderPass<'a> {
-        let ops = |clear: wgpu::Color| wgpu::Operations {
+        let ops = |clear: wgpu::Color, keep: bool| wgpu::Operations {
             load: if first {
                 wgpu::LoadOp::Clear(clear)
             } else {
                 wgpu::LoadOp::Load
             },
-            store: if last {
+            store: if last && !keep {
                 wgpu::StoreOp::Discard
             } else {
                 wgpu::StoreOp::Store
@@ -2003,22 +2316,33 @@ impl Stage {
                     view: &self.msaa,
                     depth_slice: None,
                     resolve_target: last.then_some(&self.hdr),
-                    ops: ops(wgpu::Color::BLACK),
+                    ops: ops(wgpu::Color::BLACK, false),
                 }),
                 Some(wgpu::RenderPassColorAttachment {
                     view: &self.msaa_dist,
                     depth_slice: None,
                     resolve_target: last.then_some(&self.dist),
-                    ops: ops(wgpu::Color::BLACK),
+                    ops: ops(wgpu::Color::BLACK, keep),
+                }),
+                Some(wgpu::RenderPassColorAttachment {
+                    view: &self.msaa_spec,
+                    depth_slice: None,
+                    resolve_target: last.then_some(&self.spec),
+                    ops: ops(wgpu::Color::TRANSPARENT, false),
                 }),
             ],
             // Each pass starts with an empty depth buffer: a reflection
             // lies below the floor, and must not hide what stands on it.
+            // The last keeps it for the glass, which the opaque hides.
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                 view: &self.depth,
                 depth_ops: Some(wgpu::Operations {
                     load: wgpu::LoadOp::Clear(1.),
-                    store: wgpu::StoreOp::Discard,
+                    store: if last && keep {
+                        wgpu::StoreOp::Store
+                    } else {
+                        wgpu::StoreOp::Discard
+                    },
                 }),
                 stencil_ops: None,
             }),
@@ -2551,6 +2875,15 @@ fn pipelines(
             operation: wgpu::BlendOperation::Add,
         },
     };
+    // SSR adds its (signed) change to the colour and leaves alpha.
+    let add_rgb = wgpu::BlendState {
+        color: add.color,
+        alpha: wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::Zero,
+            dst_factor: wgpu::BlendFactor::One,
+            operation: wgpu::BlendOperation::Add,
+        },
+    };
     let wall_attrs = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
     let wall_buf = [Some(wgpu::VertexBufferLayout {
         array_stride: 24,
@@ -2578,8 +2911,9 @@ fn pipelines(
                 module: &module,
                 entry_point: Some(fs),
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
-                // A scene draw also writes its eye distance, unblended: the
-                // nearest opaque-enough surface is what depth of field sees.
+                // A scene draw also writes its eye distance and normal and
+                // its reflection's weight, unblended: the nearest
+                // opaque-enough surface is what depth of field and SSR see.
                 targets: &[
                     Some(wgpu::ColorTargetState {
                         format,
@@ -2591,7 +2925,12 @@ fn pipelines(
                         blend: None,
                         write_mask: wgpu::ColorWrites::ALL,
                     }),
-                ][..if scene { 2 } else { 1 }],
+                    scene.then_some(wgpu::ColorTargetState {
+                        format: HDR,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    }),
+                ][..if scene { 3 } else { 1 }],
             }),
             primitive: wgpu::PrimitiveState::default(),
             depth_stencil: scene.then(|| wgpu::DepthStencilState {
@@ -2684,6 +3023,19 @@ fn pipelines(
         ),
         shadow_face: shadow("vs_shadow_face", Some("fs_shadow_face"), &[]),
         shadow_solid: shadow("vs_shadow_solid", None, &wall_buf),
+        chain: make("vs_full", "fs_chain", HDR, None, false, false, &[]),
+        ssr: make("vs_full", "fs_ssr", HDR, Some(add_rgb), false, false, &[]),
+        over: make("vs_full", "fs_copy", HDR, Some(premul), false, false, &[]),
+        glass_face: make("vs_front", "fs_glass", HDR, Some(premul), true, true, &[]),
+        glass_solid: make(
+            "vs_wall",
+            "fs_glass_solid",
+            HDR,
+            Some(premul),
+            true,
+            true,
+            &wall_buf,
+        ),
     };
     // Waiting on the scope blocks, which a browser cannot: there a bad
     // shader shows up as an uncaptured error instead.
@@ -2698,3 +3050,5 @@ fn pipelines(
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_glass;

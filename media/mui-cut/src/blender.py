@@ -109,6 +109,8 @@ def build():
     e = scene.eevee
     setp(e, "taa_render_samples", O["samples"])
     setp(e, "use_raytracing", True)
+    # Frosted glass up to fairly rough still traces the screen behind it.
+    setp(e.ray_tracing_options, "trace_max_roughness", 0.8)
     setp(e, "use_shadows", True)
     setp(e, "shadow_ray_count", 2)
     setp(e, "shadow_step_count", 8)
@@ -303,7 +305,6 @@ def material(name, v, tex_dir):
     setp(m, "surface_render_method", "DITHERED")
     nt, N, Lk = nodes_of(m)
     bsdf = N["Principled BSDF"]
-    bsdf.inputs["Roughness"].default_value = 0.42
     tc = N.new("ShaderNodeTexCoord")
     mp = N.new("ShaderNodeMapping")
     sx, sy, ox, oy = v["uv"]
@@ -345,6 +346,58 @@ def material(name, v, tex_dir):
     return m, opacity
 
 
+SOCKETS = (
+    ("metallic", "Metallic"),
+    ("roughness", "Roughness"),
+    ("transmission", "Transmission Weight"),
+    ("ior", "IOR"),
+    ("dispersion", "Dispersion"),  # not in Blender 5.2's Principled BSDF
+)
+
+
+def surface(m, mats, slab):
+    """`mat` at each instant (all set on a layer; on a model only what its
+    layer overrides) on m's Principled BSDF. Returns its most transmission:
+    EEVEE refracts only with raytraced refraction on, through a thickness
+    the stage's (object space; 0 on a flat card: a thin wall)."""
+    nt, N, Lk = nodes_of(m)
+    bsdf = next((n for n in N if n.type == "BSDF_PRINCIPLED"), None)
+    out = next((n for n in N if n.type == "OUTPUT_MATERIAL"), None)
+    if bsdf is None or out is None:
+        return 0
+    first = mats[0][1] if mats else {}
+    tw = bsdf.inputs["Transmission Weight"]
+    most = max(v.get("transmission", tw.default_value) for _, v in mats) if mats else tw.default_value
+    if tw.is_linked:
+        most = 1
+    for k, name in SOCKETS:
+        if k in first and name in bsdf.inputs:
+            key_socket(bsdf.inputs[name], ((t, v[k]) for t, v in mats))
+    if "tint" in first:
+        mix = N.new("ShaderNodeMix")
+        mix.data_type = "RGBA"
+        mix.blend_type = "MULTIPLY"
+        socket(mix, "Factor_Float").default_value = 1
+        base = bsdf.inputs["Base Color"]
+        if base.is_linked:
+            Lk.new(base.links[0].from_socket, socket(mix, "A_Color"))
+        else:
+            socket(mix, "A_Color").default_value = base.default_value
+        Lk.new(socket(mix, "Result_Color"), base)
+        key_socket(socket(mix, "B_Color"), ((t, (*v["tint"], 1)) for t, v in mats))
+    thin = slab and all(v["thickness"] == 0 for _, v in mats)
+    if "thickness" in first and not thin:
+        th = N.new("ShaderNodeValue")
+        Lk.new(th.outputs[0], out.inputs["Thickness"])
+        key_socket(th.outputs[0], ((t, v["thickness"]) for t, v in mats))
+    if most > 0:
+        setp(bsdf.inputs["Thin Wall"], "default_value", thin)
+        setp(m, "thickness_mode", "SLAB" if slab else "SPHERE")
+        setp(m, "use_raytrace_refraction", True)
+        setp(m, "use_transparent_shadow", True)
+    return most
+
+
 def layers():
     tex = job["tex"]
     for n, L in enumerate(D["layers"]):
@@ -354,7 +407,9 @@ def layers():
             m, opacity = material(name, v, tex)
             me.materials.append(m)
             ob = link(bpy.data.objects.new(name, me))
-            setp(ob, "visible_shadow", L["shadow"])
+            glass = surface(m, [(t, s["layers"][n]["mat"]) for t, s in states()], True)
+            # As the stage: mostly clear glass casts no shadow.
+            setp(ob, "visible_shadow", L["shadow"] and glass < 0.5)
             prev = None
             alphas = []
             for t, s in states():
@@ -374,8 +429,14 @@ def models():
         bpy.ops.import_scene.gltf(filepath=M["path"])
         parts = [o for o in bpy.data.objects if o not in before]
         root = link(bpy.data.objects.new(M["id"], None))
+        over = [(t, s["models"][n]["mat"]) for t, s in states() if "mat" in s["models"][n]]
+        done = {}
         for o in parts:
-            setp(o, "visible_shadow", M["shadow"])
+            for slot in o.material_slots:
+                if slot.material and slot.material.name not in done:
+                    done[slot.material.name] = surface(slot.material, over, False)
+            glass = max((done.get(s.material.name, 0) for s in o.material_slots if s.material), default=0)
+            setp(o, "visible_shadow", M["shadow"] and glass < 0.5)
             if o.parent is None:
                 o.parent = root
         prev = None

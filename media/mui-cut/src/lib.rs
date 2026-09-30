@@ -483,6 +483,9 @@ pub struct Layer {
     pub cast_shadows: bool,
     #[serde(default = "yes", skip_serializing_if = "is_yes")]
     pub receive_shadows: bool,
+    /// 3D: the surface (metal, roughness, glass); see [`three::Material`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub material: Option<three::Material>,
     /// Camera: distance from its target (0: where a layer at z 0 is its 2D
     /// size), vertical field of view in degrees, the fraction of the way
     /// to the target it has moved in, depth of field's focus (pixels past
@@ -703,6 +706,7 @@ impl Layer {
                     num(n, a);
                 }
                 out.push(("fill".into(), Color(&self.fill)));
+                out.extend(self.material.iter().flat_map(three::Material::props));
                 return out;
             }
             _ => {}
@@ -802,6 +806,7 @@ impl Layer {
                 out.push((n.into(), Num(a)));
             }
             out.push(("edge".into(), Color(&self.edge)));
+            out.extend(self.material.iter().flat_map(three::Material::props));
         }
         out
     }
@@ -1272,6 +1277,7 @@ impl Layer {
                 feather: self.feather.at(t).clamp(0., 1.),
                 range: self.range.at(t).max(0.),
                 softness: self.softness.at(t).max(0.),
+                material: self.material.as_ref().map(|m| m.at(t)),
             },
             effects: fx::eval(&self.effects, t),
             plugin: None,
