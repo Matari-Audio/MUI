@@ -992,7 +992,8 @@ mod tests {
     fn the_schema_accepts_the_examples_and_names_what_is_wrong() {
         let schema = Project::json_schema();
         let v = jsonschema::validator_for(&schema).unwrap();
-        for src in [DEMO, SHOWCASE] {
+        let effects = include_str!("../examples/effects.cut.json");
+        for src in [DEMO, SHOWCASE, effects] {
             let doc: Value = serde_json::from_str(src).unwrap();
             let errs: Vec<String> = v.iter_errors(&doc).map(|e| e.to_string()).collect();
             assert!(errs.is_empty(), "{errs:?}");

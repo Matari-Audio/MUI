@@ -1292,7 +1292,10 @@ impl Project {
                     ));
                 }
             }
-            fx::check(&s.effects, &format!("scenes[{si}].effects: scene `{}`", s.name))?;
+            fx::check(
+                &s.effects,
+                &format!("scenes[{si}].effects: scene `{}`", s.name),
+            )?;
         }
         Ok(p)
     }
