@@ -358,3 +358,103 @@ fn a_3d_scene_runs_its_effects_on_the_3d_pass() {
         );
     }
 }
+
+#[test]
+fn a_material_round_trips_keys_binds_and_fits_the_schema() {
+    let layer = |roughness: &str| {
+        format!(
+            r##"{{"size":[640,360],"fps":30,{{VARS}}"scenes":[{{"name":"a","duration":2,"mode":"3d",
+            "layers":[{{"id":"pane","kind":"rect","extrude":8,"material":{{"metallic":0.1,
+            "roughness":{roughness},"transmission":[{{"t":0,"v":0}},{{"t":1,"v":1}}],
+            "ior":1.45,"thickness":12,"dispersion":0.4,"tint":"#e0f0ff"}}}}]}}]}}"##
+        )
+    };
+    let bound = layer(r#"{"var":"rough"}"#).replace(
+        "{VARS}",
+        r#""variables":{"rough":{"type":"number","value":0.3}},"#,
+    );
+    let plain = layer("0.3").replace("{VARS}", "");
+    let schema = Project::json_schema();
+    let v = jsonschema::validator_for(&schema).unwrap();
+    for src in [&bound, &plain] {
+        let doc: serde_json::Value = serde_json::from_str(src).unwrap();
+        let errs: Vec<String> = v.iter_errors(&doc).map(|e| e.to_string()).collect();
+        assert!(errs.is_empty(), "{errs:?}");
+    }
+    let p = Project::load(&bound).unwrap();
+    let again = Project::load(&Project::load(&plain).unwrap().to_json()).unwrap();
+    assert_eq!(again.scenes, Project::load(&plain).unwrap().scenes);
+    assert!(again.to_json().contains("\"material\""));
+    let l = &p.scenes[0].layers[0];
+    assert!(matches!(l.prop("material.transmission"), Some(Anim::Keys(_))));
+    assert!(l.props_in(true).iter().any(|(n, _)| n == "material.tint"));
+    let m = eval(&p, &p.scenes[0], 1.).layers[0].space.material.unwrap();
+    assert_eq!(m.roughness, Some(0.3), "bound");
+    assert_eq!(m.transmission, Some(1.), "keyed");
+    assert!(m.glass());
+    let stage = m.over(mui_stage::Material::SLAB);
+    assert_eq!(
+        (stage.ior, stage.thickness, stage.dispersion),
+        (1.45, 12., 0.4)
+    );
+    assert!(stage.tint[0] < stage.tint[2] && stage.tint[2] > 0.99);
+    // Left out is the slab's; a misspelling is an error that says where.
+    let bare = three::Surface::default().over(mui_stage::Material::SLAB);
+    assert_eq!(bare, mui_stage::Material::SLAB);
+    let e = Project::load(&plain.replace("\"ior\"", "\"iorr\"")).unwrap_err();
+    assert!(e.contains("material") && e.contains("iorr"), "{e}");
+    // Checks clean: a 3D layer's material is not an ignored property.
+    let issues = check::check(&bound, &mut Renderer::new(64, 36), &|_| true);
+    assert!(
+        !issues.iter().any(|i| i.path.contains("material")),
+        "{issues:?}"
+    );
+}
+
+/// A one-triangle glTF binary whose material uses `extensions`.
+fn glb_with(extensions: &str) -> Vec<u8> {
+    let json = format!(
+        r#"{{"asset":{{"version":"2.0"}},"scene":0,"scenes":[{{"nodes":[0]}}],
+        "nodes":[{{"mesh":0}}],"meshes":[{{"primitives":[{{"attributes":{{"POSITION":0}},"material":0}}]}}],
+        "materials":[{{"pbrMetallicRoughness":{{"metallicFactor":0,"roughnessFactor":0.1}},
+        "extensions":{{{extensions}}}}}],
+        "accessors":[{{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[1,1,0]}}],
+        "bufferViews":[{{"buffer":0,"byteLength":36}}],"buffers":[{{"byteLength":36}}]}}"#
+    );
+    let mut j = json.into_bytes();
+    j.resize(j.len().next_multiple_of(4), b' ');
+    let bin: Vec<u8> = [0f32, 0., 0., 1., 0., 0., 0., 1., 0.]
+        .iter()
+        .flat_map(|v| v.to_le_bytes())
+        .collect();
+    let mut out = Vec::new();
+    out.extend_from_slice(b"glTF");
+    out.extend_from_slice(&2u32.to_le_bytes());
+    out.extend_from_slice(&((12 + 8 + j.len() + 8 + bin.len()) as u32).to_le_bytes());
+    out.extend_from_slice(&(j.len() as u32).to_le_bytes());
+    out.extend_from_slice(b"JSON");
+    out.extend_from_slice(&j);
+    out.extend_from_slice(&(bin.len() as u32).to_le_bytes());
+    out.extend_from_slice(b"BIN\0");
+    out.extend_from_slice(&bin);
+    out
+}
+
+#[test]
+fn a_gltf_glass_material_reads_its_extensions() {
+    let m = three::glb(&glb_with(
+        r#""KHR_materials_transmission":{"transmissionFactor":1},
+        "KHR_materials_ior":{"ior":1.7},
+        "KHR_materials_volume":{"thicknessFactor":2,"attenuationDistance":4,"attenuationColor":[0.25,1,1]},
+        "KHR_materials_dispersion":{"dispersion":0.5}"#,
+    ))
+    .unwrap();
+    let g = m.parts[0].material;
+    assert_eq!((g.transmission, g.ior, g.thickness), (1., 1.7, 2.));
+    assert_eq!((g.dispersion, g.roughness), (0.5, 0.1));
+    // Half the attenuation distance keeps the square root of its colour.
+    assert!((g.tint[0] - 0.5).abs() < 1e-5 && g.tint[1] == 1., "{:?}", g.tint);
+    // Without them it is opaque, the stage's defaults.
+    let plain = three::glb(&glb_with("")).unwrap().parts[0].material;
+    assert_eq!((plain.transmission, plain.ior), (0., 1.5));
+}
