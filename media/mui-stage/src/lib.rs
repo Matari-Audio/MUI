@@ -118,8 +118,9 @@ const SAMPLES: u32 = 4;
 /// Per-draw uniform slot: `Draw` is 176 bytes, dynamic offsets align to 256.
 const SLOT: u64 = 256;
 const DRAW: u64 = 176;
-/// Most planes and most models a shot draws.
-pub const MAX_PLANES: usize = 64;
+/// Most planes and most models a shot draws. A plugin exploded four levels
+/// deep is ~90 slabs, each with a highlight plate.
+pub const MAX_PLANES: usize = 256;
 pub const MAX_MODELS: usize = 64;
 /// Most lights with a direction (ambient ones are summed and do not count).
 pub const MAX_LIGHTS: usize = 4;

@@ -1060,3 +1060,31 @@ fn a_point_light_casts_soft_shadows_from_its_cube() {
     assert!(hard <= 4, "a small lamp is nearly hard: {hard} px");
     assert!(soft >= 6 && soft >= 2 * hard, "{hard} px -> {soft} px");
 }
+
+#[test]
+fn a_shot_draws_more_than_64_planes() {
+    // A plugin exploded four levels deep is ~90 slabs; the cap used to be 64
+    // and silently dropped the rest.
+    let Some(mut stage) = stage(100, 100) else {
+        return;
+    };
+    let white = block(10., 10.).radius(0.).fill(Color::srgb(1., 1., 1.));
+    let white = resolve(&SceneSpec::new(white)).expect("resolves");
+    stage.layer("w", &white, Size::new(10., 10.), 1.).unwrap();
+    let f = stage
+        .render(0., 0., 1, &|_| Shot {
+            planes: (0..100)
+                .map(|i| {
+                    let mut p = Plane::new("w", 10., 10.);
+                    p.position = [(i % 10) as f32 * 10. - 45., 45. - (i / 10) as f32 * 10., 0.];
+                    p
+                })
+                .collect(),
+            post: Post::NONE,
+            ..Shot::new(Camera::front(100., 30.))
+        })
+        .unwrap();
+    // The last plane, bottom right.
+    let px = f.rgba[(95 * 100 + 95) * 4];
+    assert!(px > 0.9, "plane 100 is drawn: {px}");
+}
