@@ -292,7 +292,10 @@ fn a_3d_scene_runs_its_effects_on_the_3d_pass() {
         let b = frame(&mut g, &subs(&fx));
         assert!(g.canvas.notice().is_empty(), "{}", g.canvas.notice());
         let [r, gr, bl] = [0, 1, 2].map(|i| i32::from(a[centre + i]));
-        assert!(r > gr + 80 && r > bl + 80, "{engine:?}: the card is red: {r} {gr} {bl}");
+        assert!(
+            r > gr + 80 && r > bl + 80,
+            "{engine:?}: the card is red: {r} {gr} {bl}"
+        );
         let [r, gr, bl] = [0, 1, 2].map(|i| i32::from(b[centre + i]));
         assert!(
             (r - gr).abs() <= 3 && (gr - bl).abs() <= 3 && r > 20,

@@ -86,7 +86,12 @@ pub(crate) fn bindable(schema: &mut schemars::Schema) {
             wrap(extra);
         }
         for k in ["oneOf", "anyOf", "allOf"] {
-            for m in s.get_mut(k).and_then(Value::as_array_mut).into_iter().flatten() {
+            for m in s
+                .get_mut(k)
+                .and_then(Value::as_array_mut)
+                .into_iter()
+                .flatten()
+            {
                 if let Some(m) = m.as_object_mut() {
                     walk(m);
                 }

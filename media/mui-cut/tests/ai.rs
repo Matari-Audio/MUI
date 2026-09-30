@@ -541,19 +541,21 @@ fn every_example_fits_the_schema_and_checks_clean() {
     }
     for e in std::fs::read_dir(ex.join("gen")).unwrap() {
         let script = e.unwrap().path();
-        let out = d.join(script.file_stem().unwrap()).with_extension("cut.json");
-        let (ok, text) = run(&[
-            "gen",
-            script.to_str().unwrap(),
-            "-o",
-            out.to_str().unwrap(),
-        ]);
+        let out = d
+            .join(script.file_stem().unwrap())
+            .with_extension("cut.json");
+        let (ok, text) = run(&["gen", script.to_str().unwrap(), "-o", out.to_str().unwrap()]);
         assert!(ok, "{}: {text}", script.display());
         files.push(out);
     }
     files.sort();
     let names: Vec<_> = files.iter().map(|f| f.file_name().unwrap()).collect();
-    for want in ["variants.cut.json", "stage3d.cut.json", "effects.cut.json", "grid.cut.json"] {
+    for want in [
+        "variants.cut.json",
+        "stage3d.cut.json",
+        "effects.cut.json",
+        "grid.cut.json",
+    ] {
         assert!(names.iter().any(|n| *n == want), "{want} in {names:?}");
     }
     for f in &files {
