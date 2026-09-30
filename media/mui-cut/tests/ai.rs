@@ -572,3 +572,56 @@ fn every_example_fits_the_schema_and_checks_clean() {
         assert!(ok && json["errors"] == 0, "{}: {text}", f.display());
     }
 }
+
+/// An agent asks what a plugin layer is made of: the adapter runs, and it
+/// gets back the parts it can animate and the surfaces it can aim at.
+#[test]
+fn mcp_lists_a_plugin_layers_parts_and_surfaces() {
+    let synth = Path::new(BIN).parent().unwrap().join("examples/synth");
+    assert!(
+        synth.is_file(),
+        "run the whole `cargo test -p mui-cut`: it builds the synth example"
+    );
+    let d = scratch("mcp-plugin");
+    let src = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/examples/plugin.cut.json"
+    ))
+    .unwrap();
+    let mut v: serde_json::Value = serde_json::from_str(&src).unwrap();
+    v["scenes"][0]["layers"][0]["source"] = serde_json::json!({ "bin": synth });
+    let project = d.join("p.cut.json");
+    std::fs::write(&project, v.to_string()).unwrap();
+    let mut m = Mcp::start();
+    m.text("open", serde_json::json!({"path": project}));
+    let got: serde_json::Value = serde_json::from_str(&m.text(
+        "plugin_parts",
+        serde_json::json!({"layer": "synth", "t": 6.0}),
+    ))
+    .unwrap();
+    let ids: Vec<&str> = got["parts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["head", "osc", "filter", "env", "out"]);
+    assert_eq!(got["size"], serde_json::json!([720.0, 510.0]));
+    // The example moves `filter` up and highlights it by 6 s.
+    let filter = &got["parts"][2]["motion"];
+    assert_eq!(filter["y"], -40.0);
+    assert!(filter["highlight"].as_f64().unwrap() > 0.99);
+    let surfaces = got["surfaces"].as_array().unwrap();
+    assert!(
+        surfaces.iter().any(|s| s["id"] == "out-level"),
+        "{surfaces:?}"
+    );
+    assert!(
+        d.join(".cut-cache")
+            .join(format!("{}.json", got["state"].as_str().unwrap()))
+            .is_file()
+    );
+    // Not a plugin: a tool error.
+    let (c, err) = m.call("plugin_parts", serde_json::json!({"layer": "caption"}));
+    assert!(err && c[0]["text"].as_str().unwrap().contains("not a plugin"));
+}
