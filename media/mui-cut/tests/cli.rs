@@ -472,7 +472,8 @@ fn plugin_layers_capture_the_real_ui_once_and_draw_it() {
         &std::fs::read(cache.join(format!("{}.json", steps[0].key))).unwrap(),
     )
     .unwrap();
-    assert_eq!(cap.parts(), ["head", "osc", "filter", "env", "out"]);
+    let paths: Vec<String> = cap.tree().into_iter().map(|p| p.path).collect();
+    assert_eq!(paths, ["head", "osc", "filter", "env", "out"]);
     assert!(cap.surfaces.iter().any(|s| s.id == "filter-cutoff"));
     // The keyed cutoff turns the real knob: its part's pixels differ.
     let cutoff = |i: usize| {

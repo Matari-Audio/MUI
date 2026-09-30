@@ -193,6 +193,7 @@ impl Space {
             let r = 14.;
             Quad {
                 id: id.to_owned(),
+                ui: None,
                 pts: [
                     [x - r, y - r],
                     [x + r, y - r],
@@ -233,6 +234,7 @@ impl Space {
                     }
                     quads.push(Quad {
                         id: l.id.clone(),
+                        ui: None,
                         pts: [
                             [lo[0], lo[1]],
                             [hi[0], lo[1]],
@@ -277,6 +279,7 @@ impl Space {
                     let (x, y) = (pw / 2., ph / 2.);
                     quads.push(Quad {
                         id: l.id.clone(),
+                        ui: None,
                         pts: [[-x, y], [x, y], [x, -y], [-x, -y]]
                             .map(|[a, b]| to_px(&m, [a, b, 0.])),
                     });

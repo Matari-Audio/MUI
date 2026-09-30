@@ -15,7 +15,7 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::Duration;
 
 use base64::Engine as _;
-use mui_cut::plugin::{CACHE, Capture, FNV_OFFSET, Fragment, fnv, frame_at};
+use mui_cut::plugin::{CACHE, Capture, FNV_OFFSET, Fragment, Image, fnv, frame_at};
 use mui_cut::{Assets, Kind, Layer, Project, Source};
 use serde_json::{Value, json};
 
@@ -64,8 +64,12 @@ pub fn load(p: &Project, project: &Path, assets: &mut Assets) -> Vec<String> {
                 continue;
             }
             let cap: Capture = serde_json::from_slice(&bytes).expect("add_asset parsed it");
-            for f in cap.fragments {
-                let rel = format!("{CACHE}/{}", f.src);
+            let srcs = cap
+                .fragments
+                .into_iter()
+                .flat_map(|f| [Some(f.src), f.free.map(|i| i.src)]);
+            for src in srcs.flatten() {
+                let rel = format!("{CACHE}/{src}");
                 if seen.insert(rel.clone()) {
                     let added = std::fs::read(dir.join(&rel))
                         .map_err(|e| format!("{rel}: {e}"))
@@ -169,7 +173,11 @@ fn fresh(dir: &Path, key: &str, stamp: &str) -> bool {
         .ok()
         .and_then(|b| serde_json::from_slice::<Capture>(&b).ok())
         .is_some_and(|c| {
-            c.stamp == stamp && c.fragments.iter().all(|f| cache.join(&f.src).is_file())
+            c.stamp == stamp
+                && c.fragments.iter().all(|f| {
+                    cache.join(&f.src).is_file()
+                        && f.free.as_ref().is_none_or(|i| cache.join(&i.src).is_file())
+                })
         })
 }
 
@@ -313,12 +321,11 @@ fn save(
     textures: &HashMap<String, String>,
 ) -> Result<()> {
     let num = |v: &Value| v.as_f64().ok_or("a capture without its size");
-    let mut fragments = Vec::new();
-    for l in manifest["layers"]
-        .as_array()
-        .ok_or("a capture without layers")?
-    {
-        let name = l["src"].as_str().unwrap_or("");
+    let rect = |r: &Value| -> Result<[f64; 4]> {
+        Ok([num(&r[0])?, num(&r[1])?, num(&r[2])?, num(&r[3])?])
+    };
+    // A texture, renamed by its content, written once.
+    let store = |name: &str| -> Result<String> {
         let data = textures
             .get(name)
             .ok_or_else(|| format!("the adapter never sent texture `{name}`"))?;
@@ -330,11 +337,25 @@ fn save(
         if !file.is_file() {
             write_atomic(&file, &png)?;
         }
-        let r = &l["rect"];
+        Ok(src)
+    };
+    let mut fragments = Vec::new();
+    for l in manifest["layers"]
+        .as_array()
+        .ok_or("a capture without layers")?
+    {
+        let free = match l.get("free") {
+            Some(f) if f.is_object() => Some(Image {
+                src: store(f["src"].as_str().unwrap_or(""))?,
+                rect: rect(&f["rect"])?,
+            }),
+            _ => None,
+        };
         fragments.push(Fragment {
             group: l["group"].as_str().unwrap_or("background").to_owned(),
-            rect: [num(&r[0])?, num(&r[1])?, num(&r[2])?, num(&r[3])?],
-            src,
+            rect: rect(&l["rect"])?,
+            src: store(l["src"].as_str().unwrap_or(""))?,
+            free,
         });
     }
     let cap = Capture {
@@ -342,6 +363,7 @@ fn save(
         height: num(&manifest["height"])?,
         fragments,
         surfaces: serde_json::from_value(manifest["surfaces"].clone()).unwrap_or_default(),
+        parts: serde_json::from_value(manifest["parts"].clone()).unwrap_or_default(),
         stamp: stamp.to_owned(),
     };
     let json = serde_json::to_vec_pretty(&cap).map_err(|e| e.to_string())?;

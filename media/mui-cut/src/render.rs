@@ -11,7 +11,7 @@ use mui_vello::kurbo::{Affine, Point as KPoint, Rect, Shape as _};
 use serde::Serialize;
 use vello_cpu::{Pixmap, RenderContext, Resources};
 
-use crate::plugin::{CACHE, Capture, PluginAt, explode};
+use crate::plugin::{CACHE, Capture, PluginAt, poses};
 use crate::{Drawn, Frame, Kind, Rgba, vector};
 
 /// Inter, variable in weight, is every text layer's face.
@@ -24,6 +24,11 @@ static INTER: LazyLock<Font> =
 pub struct Quad {
     pub id: String,
     pub pts: [[f64; 2]; 4],
+    /// A plugin layer's and its parts' quads: the affine `[a, b, c, d, e,
+    /// f]` from the UI's pixels to project pixels, so the editor can aim
+    /// the pointer through a moved part and move a part in its parent's.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ui: Option<[f64; 6]>,
 }
 
 /// The decoded images, by the path the project names them with, and the
@@ -362,6 +367,7 @@ impl Assets {
             ];
             out.quads.push(Quad {
                 id: l.id.clone(),
+                ui: None,
                 pts: corners.map(|(x, y)| {
                     let p = place * KPoint::new(x, y);
                     [p.x, p.y]
@@ -386,6 +392,7 @@ impl Layers {
 fn quad(id: String, place: Affine, w: f64, h: f64) -> Quad {
     Quad {
         id,
+        ui: None,
         pts: [(0., 0.), (w, 0.), (w, h), (0., h)].map(|(x, y)| {
             let p = place * KPoint::new(x, y);
             [p.x, p.y]
@@ -476,12 +483,14 @@ impl Assets {
                 ..l.clone()
             });
         };
+        let posed = poses(cap, p);
+        let mut plated = std::collections::HashSet::new();
         for f in &cap.fragments {
-            let [rx, ry, rw, rh] = f.rect;
-            let image = Kind::Image {
-                path: format!("{CACHE}/{}", f.src),
-            };
             if f.group == "background" {
+                let [rx, ry, rw, rh] = f.rect;
+                let image = Kind::Image {
+                    path: format!("{CACHE}/{}", f.src),
+                };
                 let c = [rx + rw / 2., ry + rh / 2.];
                 slab(
                     l.id.clone(),
@@ -493,37 +502,38 @@ impl Assets {
                 );
                 continue;
             }
-            let c = [rx + rw / 2., ry + rh / 2.];
-            let [ex, ey, ez] = explode([w / 2., h / 2.], c, p.explode);
-            let own = p.parts.iter().find(|q| q.id == f.group);
-            let (dx, dy, dz, ps, r, o, hl) = own.map_or((0., 0., 0., 1., 0., 1., 0.), |q| {
-                (q.x, q.y, q.z, q.scale, q.rotation, q.opacity, q.highlight)
-            });
-            let c = [c[0] + ex + dx, c[1] + ey + dy];
-            // A pixel proud of the backdrop even when collapsed: coplanar
-            // slabs shadow each other in speckles.
-            let depth = ez - dz + 1.;
-            if hl > 0. {
-                let b = 2. / l.scale.abs().max(0.05) / ps.abs().max(0.05);
+            let Some((info, pose)) = posed.iter().find(|(i, _)| i.path == f.group) else {
+                continue;
+            };
+            let look = |fill| (pose.scale, pose.rotation, pose.opacity, fill);
+            let centre = |r: [f64; 4]| {
+                let c = pose.at * KPoint::new(r[0] + r[2] / 2., r[1] + r[3] / 2.);
+                [c.x, c.y]
+            };
+            if pose.highlight > 0. && plated.insert(&info.path) {
+                let b = 2. / l.scale.abs().max(0.05) / pose.scale.abs().max(0.05);
                 let [r0, g0, b0, _] = HIGHLIGHT.0;
-                let plate = Rgba([r0, g0, b0, (hl * 255.).round() as u8]);
-                let size = [rw + 2. * b, rh + 2. * b];
+                let plate = Rgba([r0, g0, b0, (pose.highlight * 255.).round() as u8]);
+                let [_, _, fw, fh] = info.frame;
                 slab(
                     format!("{}#{}", l.id, f.group),
                     Kind::Rect,
-                    c,
-                    depth - 0.5,
-                    size,
-                    (ps, r, o, plate),
+                    centre(info.frame),
+                    pose.depth - 0.5,
+                    [fw + 2. * b, fh + 2. * b],
+                    look(plate),
                 );
             }
+            let (src, rect) = f.image(pose.moved);
             slab(
                 format!("{}#{}", l.id, f.group),
-                image,
-                c,
-                depth,
-                [rw, rh],
-                (ps, r, o, l.fill),
+                Kind::Image {
+                    path: format!("{CACHE}/{src}"),
+                },
+                centre(rect),
+                pose.depth,
+                [rect[2], rect[3]],
+                look(l.fill),
             );
         }
         out
@@ -536,7 +546,10 @@ impl Assets {
             * Affine::rotate(l.rotation.to_radians())
             * Affine::scale(l.scale)
             * Affine::translate((-w / 2., -h / 2.));
-        out.quads.push(quad(l.id.clone(), place, w, h));
+        out.quads.push(Quad {
+            ui: Some(place.as_coeffs()),
+            ..quad(l.id.clone(), place, w, h)
+        });
         let drawn = l.opacity > 0. && l.scale != 0.;
         let mut push = |el: El, at: Affine| -> Result<(), String> {
             let scene =
@@ -557,26 +570,18 @@ impl Assets {
             }
             return Ok(());
         };
+        let posed = poses(cap, p);
         for f in &cap.fragments {
-            let [rx, ry, rw, rh] = f.rect;
-            let (at, opacity, highlight) = if f.group == "background" {
-                (Affine::translate((rx, ry)), p.backdrop, 0.)
+            let (src, [rx, ry, rw, rh], at, opacity) = if f.group == "background" {
+                (&*f.src, f.rect, Affine::IDENTITY, p.backdrop)
             } else {
-                let c = [rx + rw / 2., ry + rh / 2.];
-                let [ex, ey, _depth] = explode([w / 2., h / 2.], c, p.explode);
-                let own = p.parts.iter().find(|q| q.id == f.group);
-                let (dx, dy, s, r, o, hl) = own.map_or((0., 0., 1., 0., 1., 0.), |q| {
-                    (q.x, q.y, q.scale, q.rotation, q.opacity, q.highlight)
-                });
-                let at = Affine::translate((c[0] + ex + dx, c[1] + ey + dy))
-                    * Affine::rotate(r.to_radians())
-                    * Affine::scale(s)
-                    * Affine::translate((-rw / 2., -rh / 2.));
-                out.parts
-                    .push(quad(format!("{}#{}", l.id, f.group), place * at, rw, rh));
-                (at, o, hl)
+                let Some((_, pose)) = posed.iter().find(|(i, _)| i.path == f.group) else {
+                    continue;
+                };
+                let (src, rect) = f.image(pose.moved);
+                (src, rect, pose.at, pose.opacity)
             };
-            let Some(img) = self.images.get(&format!("{CACHE}/{}", f.src)) else {
+            let Some(img) = self.images.get(&format!("{CACHE}/{src}")) else {
                 continue;
             };
             if !drawn || opacity <= 0. {
@@ -589,17 +594,27 @@ impl Assets {
                     .radius(0.)
                     .fill(fill)
                     .opacity((l.opacity * opacity) as f32),
-                place * at,
+                place * at * Affine::translate((rx, ry)),
             )?;
-            if highlight > 0. {
-                let a = (highlight * l.opacity * 255.).round() as u8;
+        }
+        // Each part's quad (parents first, so a child wins a hit) and its
+        // highlight: a flat outline round its frame, over everything.
+        for (info, pose) in &posed {
+            let [fx, fy, fw, fh] = info.frame;
+            let at = place * pose.at * Affine::translate((fx, fy));
+            out.parts.push(Quad {
+                ui: Some((place * pose.at).as_coeffs()),
+                ..quad(format!("{}#{}", l.id, info.path), at, fw, fh)
+            });
+            if drawn && pose.highlight > 0. && pose.opacity > 0. {
+                let a = (pose.highlight * l.opacity * 255.).round() as u8;
                 let [r, g, b, _] = HIGHLIGHT.0;
-                let line = block(rw, rh)
+                let line = block(fw, fh)
                     .radius(0.)
                     .no_fill()
                     .stroke(color(Rgba([r, g, b, a])))
-                    .stroke_width(2. / l.scale.abs().max(0.05));
-                push(line, place * at)?;
+                    .stroke_width(2. / (l.scale * pose.scale).abs().max(0.05));
+                push(line, at)?;
             }
         }
         Ok(())
