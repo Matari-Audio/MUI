@@ -658,3 +658,228 @@ fn ambient_occlusion_darkens_a_contact_crease_not_an_open_floor() {
     );
     assert!(shiny < matte * 1.015, "matte {matte}, reflective {shiny}");
 }
+
+/// Every mip level of an `Rgba16Float` texture, as linear RGBA.
+fn read_levels(stage: &Stage, tex: &wgpu::Texture) -> Vec<(u32, u32, Vec<[f32; 4]>)> {
+    (0..tex.mip_level_count())
+        .map(|m| {
+            let (w, h) = ((tex.width() >> m).max(1), (tex.height() >> m).max(1));
+            let row = (w * 8).next_multiple_of(256);
+            let buf = stage.device.create_buffer(&wgpu::BufferDescriptor {
+                label: None,
+                size: u64::from(row * h),
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            let mut enc = stage
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+            enc.copy_texture_to_buffer(
+                wgpu::TexelCopyTextureInfo {
+                    texture: tex,
+                    mip_level: m,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &buf,
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(row),
+                        rows_per_image: None,
+                    },
+                },
+                wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
+            );
+            stage.queue.submit([enc.finish()]);
+            buf.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+            stage
+                .device
+                .poll(wgpu::PollType::wait_indefinitely())
+                .unwrap();
+            let bytes = buf.slice(..).get_mapped_range().unwrap();
+            let px = bytes
+                .chunks_exact(row as usize)
+                .flat_map(|r| r[..w as usize * 8].as_chunks::<8>().0.to_vec())
+                .map(|p| {
+                    std::array::from_fn(|i| {
+                        half::f16::from_le_bytes([p[2 * i], p[2 * i + 1]]).to_f32()
+                    })
+                })
+                .collect();
+            (w, h, px)
+        })
+        .collect()
+}
+
+#[test]
+fn the_gpu_prefilter_matches_the_cpu_reference() {
+    let Some(stage) = stage(8, 8) else { return };
+    // The studio, and a small hot sun over a sky: the hard case for a
+    // filtered-importance-sampled convolution.
+    let sun = EnvImage::from_fn(1024, 512, |d| {
+        let hot = d[0] * 0.6 + d[1] * 0.8 > 0.995;
+        [if hot { 40. } else { 0.1 + 0.3 * d[1].max(0.) }; 3]
+    });
+    for img in [EnvImage::studio(), sun] {
+        let cpu = env::prefilter(&img);
+        let (tex, sh) = stage.prefilter(&img);
+        assert_eq!(sh, cpu.sh);
+        let gpu = read_levels(&stage, &tex);
+        assert_eq!(gpu.len(), cpu.levels.len());
+        for (m, ((w, h, g), c)) in gpu.iter().zip(&cpu.levels).enumerate() {
+            assert_eq!((*w, *h), (c.width, c.height), "level {m}");
+            // Half floats, and the GPU's filtering weights: within a few
+            // percent of the level's own brightness scale.
+            let scale = c.rgb.iter().map(|p| p[0]).fold(0f32, f32::max).max(1e-3);
+            let (mut worst, mut sum) = (0f32, 0f32);
+            for (a, b) in g.iter().zip(&c.rgb) {
+                let e = (0..3).map(|i| (a[i] - b[i]).abs()).fold(0., f32::max) / scale;
+                worst = worst.max(e);
+                sum += e;
+            }
+            let mean = sum / c.rgb.len() as f32;
+            assert!(
+                worst < 0.05 && mean < 0.005,
+                "level {m}: worst {worst}, mean {mean}"
+            );
+        }
+    }
+}
+
+/// White, opaque, `size` logical.
+fn white(size: Size) -> ResolvedScene {
+    let root = block(size.width, size.height)
+        .radius(0.)
+        .fill(Color::srgb(1., 1., 1.));
+    resolve(&SceneSpec::new(root)).expect("resolves")
+}
+
+/// Pixels of a row whose value lies strictly between its two plateaus.
+fn ramp(row: &[f32]) -> usize {
+    let (lo, hi) = row
+        .iter()
+        .fold((f32::MAX, f32::MIN), |(a, b), &v| (a.min(v), b.max(v)));
+    let k = (hi - lo) * 0.1;
+    row.iter().filter(|&&v| v > lo + k && v < hi - k).count()
+}
+
+#[test]
+fn a_beauty_penumbra_widens_with_the_light_softness() {
+    let Some(mut stage) = stage(128, 128) else {
+        return;
+    };
+    stage
+        .layer("l", &white(Size::new(64., 64.)), Size::new(64., 64.), 1.)
+        .unwrap();
+    // A card 100 units over the floor covering x < 0, a sun leaning +x:
+    // the shadow's edge falls at x = 30, under the camera looking down.
+    let mut penumbra = |softness: f32| {
+        let f = stage
+            .beauty(0., 0., 32, &|_| {
+                let mut floor = Floor::at(0.);
+                floor.color = [0.5; 3];
+                floor.reflect = 0.;
+                let mut sun = Light::new(LightKind::Directional);
+                sun.direction = [0.3, -1., 0.];
+                sun.softness = softness;
+                Shot {
+                    planes: vec![
+                        Plane::new("l", 400., 400.)
+                            .rotate(-90., 0., 0.)
+                            .at(-200., 100., 0.),
+                    ],
+                    lights: vec![sun],
+                    floor: Some(floor),
+                    clear: Some([0.; 3]),
+                    post: Post::NONE,
+                    ..Shot::new(Camera {
+                        eye: [30., 300., 0.],
+                        target: [30., 0., 0.],
+                        fov: 30.,
+                        roll: 0.,
+                    })
+                }
+            })
+            .unwrap();
+        let row: Vec<f32> = (48..128).map(|x| f.rgba[(64 * 128 + x) * 4 + 1]).collect();
+        ramp(&row)
+    };
+    let (hard, soft) = (penumbra(0.5), penumbra(6.));
+    // A 9-degree sun 100 units up: ~16 units, ~13 pixels of penumbra, 10%
+    // to 90% of it about half that.
+    assert!(hard <= 3, "a small sun is nearly hard: {hard} px");
+    assert!(soft >= 6 && soft >= 3 * hard, "{hard} px -> {soft} px");
+}
+
+#[test]
+fn a_thin_lens_is_sharp_at_its_focus_and_blurs_off_it() {
+    let Some(mut stage) = stage(160, 90) else {
+        return;
+    };
+    let size = Size::new(80., 45.);
+    stage.layer("l", &halves(size), size, 2.).unwrap();
+    let mut seam = |focus: f32| {
+        let f = stage
+            .beauty(0., 0., 64, &|_| {
+                let cam = Camera::front(45., 30.);
+                Shot {
+                    planes: vec![Plane::new("l", 80., 45.)],
+                    post: Post {
+                        focus: cam.distance() * focus,
+                        aperture: 8.,
+                        max_blur: 8.,
+                        ..Post::NONE
+                    },
+                    ..Shot::new(cam)
+                }
+            })
+            .unwrap();
+        let row: Vec<f32> = (40..120).map(|x| f.rgba[(45 * 160 + x) * 4]).collect();
+        ramp(&row)
+    };
+    let sharp = seam(1.);
+    // Focused at half the distance: a blur radius of 8 * 0.5 / 1 = 4 px.
+    let blurred = seam(0.5);
+    assert!(sharp <= 2, "in focus: {sharp} px of ramp");
+    assert!((4..=10).contains(&blurred), "off focus: {blurred} px");
+}
+
+#[test]
+fn beauty_samples_antialias_an_edge_past_msaa() {
+    let Some(mut stage) = stage(96, 96) else {
+        return;
+    };
+    let size = Size::new(48., 48.);
+    stage.layer("l", &white(size), size, 1.).unwrap();
+    let shot = |_| Shot {
+        planes: vec![Plane::new("l", 48., 48.).rotate(0., 0., 12.)],
+        clear: Some([0.; 3]),
+        post: Post::NONE,
+        ..Shot::new(Camera::front(96., 30.))
+    };
+    let levels = |f: Frame| {
+        let mut v: Vec<u8> = f
+            .rgba8()
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|p| p[0])
+            .filter(|&v| v > 4 && v < 251)
+            .collect();
+        v.sort_unstable();
+        v.dedup();
+        v.len()
+    };
+    let msaa = levels(stage.render(0., 0., 1, &shot).unwrap());
+    let beauty = levels(stage.beauty(0., 0., 16, &shot).unwrap());
+    assert!(msaa <= 3, "4x MSAA alone: {msaa} edge levels");
+    assert!(beauty >= 8, "16 jittered samples: {beauty} edge levels");
+    // And the same every time.
+    let a = stage.beauty(0., 0., 16, &shot).unwrap().rgba;
+    assert_eq!(a, stage.beauty(0., 0., 16, &shot).unwrap().rgba);
+}

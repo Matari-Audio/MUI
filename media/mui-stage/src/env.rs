@@ -96,7 +96,7 @@ impl EnvImage {
     }
 
     /// Half the size, each texel the mean of four.
-    fn half(&self) -> Self {
+    pub(crate) fn half(&self) -> Self {
         let (w, h) = ((self.width / 2).max(1), (self.height / 2).max(1));
         let at = |x: u32, y: u32| {
             self.rgb[(y.min(self.height - 1) * self.width + x.min(self.width - 1)) as usize]
@@ -122,7 +122,10 @@ impl EnvImage {
 
     /// This image as the chain's level 0: halved while it is larger, then
     /// resampled to exactly [`WIDTH`] by half that.
-    fn base(&self) -> Self {
+    pub(crate) fn base(&self) -> Self {
+        if (self.width, self.height) == (WIDTH, WIDTH / 2) {
+            return self.clone();
+        }
         let mut img = self.clone();
         while img.width >= 2 * WIDTH {
             img = img.half();
@@ -301,6 +304,7 @@ fn studio(d: [f32; 3]) -> [f32; 3] {
 /// Level `m` of the chain from the source pyramid: GGX-filtered with the
 /// level's roughness, reading the pyramid at each sample's footprint
 /// (filtered importance sampling) so a few samples do not sparkle.
+#[cfg(test)]
 fn convolve(pyramid: &[EnvImage], m: u32) -> EnvImage {
     let rough = roughness_of_mip(m);
     let a = (rough * rough).max(1e-4);
@@ -358,6 +362,7 @@ fn convolve(pyramid: &[EnvImage], m: u32) -> EnvImage {
 fn radical_inverse(i: u32) -> f32 {
     i.reverse_bits() as f32 * 2.328_306_4e-10
 }
+#[cfg(test)]
 fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     [
         a[1] * b[2] - a[2] * b[1],
@@ -365,6 +370,7 @@ fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
         a[0] * b[1] - a[1] * b[0],
     ]
 }
+#[cfg(test)]
 fn normalize(v: [f32; 3]) -> [f32; 3] {
     let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt().max(1e-12);
     v.map(|c| c / l)
@@ -457,13 +463,20 @@ pub fn brdf_lut() -> Vec<[f32; 2]> {
     out
 }
 
-/// What the stage uploads for an environment: the specular chain, level 0
-/// first, and the irradiance SH.
+/// The specular chain, level 0 first, and the irradiance SH.
+#[cfg(test)]
 pub(crate) struct Prefiltered {
     pub levels: Vec<EnvImage>,
     pub sh: [[f32; 3]; 9],
 }
 
+/// The irradiance SH from a chain's level 0, as [`prefilter`] finds it.
+pub(crate) fn sh_of(base: &EnvImage) -> [[f32; 3]; 9] {
+    sh9(&base.half().half().half())
+}
+
+/// The CPU reference for the stage's GPU prefilter (`env.wgsl`).
+#[cfg(test)]
 pub(crate) fn prefilter(img: &EnvImage) -> Prefiltered {
     let mut pyramid = vec![img.base()];
     while pyramid.last().expect("one").width > 4 {
