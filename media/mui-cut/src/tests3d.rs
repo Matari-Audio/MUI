@@ -254,3 +254,18 @@ fn the_orbit_preview_swings_about_the_target_and_keeps_zero_as_is() {
     let up = cam.orbit(0.0, 30.0, 2.0).eye;
     assert!(up[1] < 0.0 && (up.iter().map(|v| v * v).sum::<f64>().sqrt() - 2000.0).abs() < 1e-6);
 }
+
+/// Where the 3D pass cannot run, the editor draws flat with a notice but an
+/// export stops instead of writing the wrong picture.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn an_export_refuses_to_draw_a_3d_shot_flat() {
+    let p = scene3d(r#"{"id":"a","kind":"rect","x":320,"y":180}"#);
+    let Some(mut g) = offline(&p, Engine::Classic) else {
+        return;
+    };
+    g.canvas.three_d = false;
+    let f = eval(&p, &p.scenes[0], 0.);
+    assert!(g.push(&[f]).is_err());
+    assert!(g.canvas.notice().contains("flat"));
+}

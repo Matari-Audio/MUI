@@ -269,7 +269,7 @@ mod offline {
     /// Offline frames on the GPU: subframes averaged in linear light, one
     /// readback per output frame through a ring of staging buffers.
     pub struct Offline {
-        canvas: GpuCanvas,
+        pub(crate) canvas: GpuCanvas,
         pub assets: Assets,
         pub adapter: String,
         size: [u32; 2],
@@ -531,6 +531,10 @@ mod offline {
             );
             for (i, f) in subframes.iter().enumerate() {
                 self.canvas.draw(&self.assets, f, &self.sub)?;
+                // An export never quietly flattens a 3D shot.
+                if f.view.is_some() && !self.canvas.notice().is_empty() {
+                    return Err(self.canvas.notice().to_owned());
+                }
                 let mut enc =
                     device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
                 let load = if i == 0 {
