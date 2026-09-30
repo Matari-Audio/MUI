@@ -71,7 +71,8 @@ struct Draw {
     mirror: vec4f,
     // The layer texture's part on the face: u0, v0, u1, v1.
     uv: vec4f,
-    // x: receives shadows; y metallic, z roughness.
+    // x: receives shadows; y metallic, z roughness; w lift: how many
+    // overlapping faces in its plane it is drawn in front of.
     flags: vec4f,
     // Glass: transmission, ior, thickness (world units), dispersion (20 / Abbe).
     glass: vec4f,
@@ -424,6 +425,8 @@ fn cap(i: u32, z: f32) -> Cap {
     let world = d.model * local;
     var o: Cap;
     o.pos = g.view_proj * world;
+    // A few ulps of depth per lift win the tie with a coplanar face.
+    o.pos.z -= d.flags.w * 5e-7 * o.pos.w;
     o.uv = mix(d.uv.xy, d.uv.zw, uv);
     o.world = world.xyz;
     return o;

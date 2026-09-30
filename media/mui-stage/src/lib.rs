@@ -2046,6 +2046,53 @@ impl Stage {
         self.queue
             .write_buffer(&self.globals, 0, bytemuck::cast_slice(&g));
 
+        let bounds = |p: &Plane| {
+            let m = vp * p.model();
+            let mut b = [f32::MAX, f32::MAX, f32::MIN, f32::MIN];
+            for [x, y] in [[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]] {
+                let l = [x * p.size[0], y * p.size[1], 0.];
+                let w = m.0[3] * l[0] + m.0[7] * l[1] + m.0[15];
+                if w <= 0. {
+                    return None;
+                }
+                let q = m.project(l);
+                b = [
+                    b[0].min(q[0]),
+                    b[1].min(q[1]),
+                    b[2].max(q[0]),
+                    b[3].max(q[1]),
+                ];
+            }
+            Some(b)
+        };
+        // Overlapping faces in one plane (sibling parts of a layer) tie in
+        // depth to a few ulps either way: each is lifted just in front of
+        // the earlier ones it overlaps, so the later wins, as it paints
+        // over in 2D. ponytail: O(n²) over at most MAX_PLANES.
+        let face = |p: &Plane| {
+            let m = p.model().0;
+            let l = (m[8] * m[8] + m[9] * m[9] + m[10] * m[10]).sqrt().max(1e-12);
+            let n = [m[8] / l, m[9] / l, m[10] / l];
+            (n, n[0] * m[12] + n[1] * m[13] + n[2] * m[14])
+        };
+        let faces: Vec<_> = planes.iter().map(|p| face(p)).collect();
+        let boxes: Vec<_> = planes.iter().map(|p| bounds(p)).collect();
+        let mut lift = vec![0f32; planes.len()];
+        for i in 0..planes.len() {
+            let ((n, d), Some(b)) = (faces[i], boxes[i]) else {
+                continue;
+            };
+            for j in 0..i {
+                let ((m, e), Some(c)) = (faces[j], boxes[j]) else {
+                    continue;
+                };
+                let coplanar = n[0] * m[0] + n[1] * m[1] + n[2] * m[2] > 1. - 1e-5 && (d - e).abs() < 0.05;
+                let over = b[0] < c[2] && c[0] < b[2] && b[1] < c[3] && c[1] < b[3];
+                if coplanar && over {
+                    lift[i] = lift[i].max(lift[j] + 1.);
+                }
+            }
+        }
         let (n, k) = (planes.len(), planes.len() + models.len());
         let reflect = s.floor.filter(|f| f.reflect > 0.);
         // Slots: planes 0..n, models n..k, their reflections k..2k, the
@@ -2060,15 +2107,15 @@ impl Stage {
             slots[slot * SLOT as usize..][..DRAW as usize]
                 .copy_from_slice(bytemuck::cast_slice(&d));
         };
-        // A material's rows: receives shadows, metallic, roughness; the
+        // A material's rows: receives shadows, metallic, roughness, the lift; the
         // glass; the tint, and whether light leaves a slab as it came.
-        let material = |m: &Material, receive: bool, thickness: f32, slab: bool| {
+        let material = |m: &Material, receive: bool, thickness: f32, slab: bool, lift: f32| {
             [
                 [
                     f32::from(u8::from(receive)),
                     m.metallic.clamp(0., 1.),
                     m.roughness.clamp(0.02, 1.),
-                    0.,
+                    lift,
                 ],
                 [
                     m.transmission.clamp(0., 1.),
@@ -2100,7 +2147,7 @@ impl Stage {
             } else {
                 p.depth
             } * p.scale.abs();
-            let [a, b, c] = material(&p.material, p.receive, thick, true);
+            let [a, b, c] = material(&p.material, p.receive, thick, true, lift[i]);
             let rows = |mirror| {
                 [
                     [p.size[0], p.size[1], p.depth, p.glow],
@@ -2120,7 +2167,7 @@ impl Stage {
         }
         self.walls.retain_mut(|w| std::mem::take(&mut w.used));
         for (i, m) in models.iter().enumerate() {
-            let [a, b, c] = material(&m.material, m.receive, m.material.thickness, false);
+            let [a, b, c] = material(&m.material, m.receive, m.material.thickness, false, 0.);
             // `size.x`: it has a normal map.
             let bumped = if m.maps[1]
                 .as_ref()
@@ -2266,25 +2313,6 @@ impl Stage {
         // on a frosted card) draws after that glass, in its pass: the glass
         // would otherwise see it, blurred, behind itself. ponytail: planes
         // only, by screen boxes; a model in front of glass still leaks.
-        let bounds = |p: &Plane| {
-            let m = vp * p.model();
-            let mut b = [f32::MAX, f32::MAX, f32::MIN, f32::MIN];
-            for [x, y] in [[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]] {
-                let l = [x * p.size[0], y * p.size[1], 0.];
-                let w = m.0[3] * l[0] + m.0[7] * l[1] + m.0[15];
-                if w <= 0. {
-                    return None;
-                }
-                let q = m.project(l);
-                b = [
-                    b[0].min(q[0]),
-                    b[1].min(q[1]),
-                    b[2].max(q[0]),
-                    b[3].max(q[1]),
-                ];
-            }
-            Some(b)
-        };
         let panes: Vec<(f32, [f32; 4])> = glass
             .iter()
             .filter(|&&(_, i)| i < n)

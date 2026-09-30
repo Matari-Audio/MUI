@@ -1088,3 +1088,32 @@ fn a_shot_draws_more_than_64_planes() {
     let px = f.rgba[(95 * 100 + 95) * 4];
     assert!(px > 0.9, "plane 100 is drawn: {px}");
 }
+
+#[test]
+fn coplanar_planes_keep_their_order_under_a_tilted_camera() {
+    // Sibling parts of a plugin share a plane: the one submitted later is
+    // painted later in 2D and must stay on top when the camera tilts, not
+    // lose to whichever centre happens to be nearer.
+    let Some(mut stage) = stage(100, 100) else {
+        return;
+    };
+    for (name, rgb) in [("g", (0., 1., 0.)), ("r", (1., 0., 0.))] {
+        let b = block(10., 10.).radius(0.).fill(Color::srgb(rgb.0, rgb.1, rgb.2));
+        let b = resolve(&SceneSpec::new(b)).expect("resolves");
+        stage.layer(name, &b, Size::new(10., 10.), 1.).unwrap();
+    }
+    let f = stage
+        .render(0., 0., 1, &|_| Shot {
+            // Green first and nearer to the camera below, red second and
+            // farther; they overlap about the origin.
+            planes: vec![
+                Plane::new("g", 60., 40.).at(0., 15., 0.),
+                Plane::new("r", 60., 40.).at(0., -15., 0.),
+            ],
+            post: Post::NONE,
+            ..Shot::new(Camera::front(100., 30.).orbit(0., -50.))
+        })
+        .unwrap();
+    let px = &f.rgba[(50 * 100 + 50) * 4..][..3];
+    assert!(px[0] > px[1], "the later plane is on top: {px:?}");
+}
