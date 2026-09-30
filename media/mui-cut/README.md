@@ -26,7 +26,8 @@ cargo run --manifest-path media/Cargo.toml -p mui-cut -- \
 
 ```sh
 mui-cut render PROJECT -o out.mp4|null [--scene NAME] [--mb N] [--size WxH]
-                      [--renderer classic|gpu|cpu] [--threads N] [--stats]
+                      [--renderer classic|gpu|cpu|blender] [--threads N] [--stats]
+                      [--engine eevee|cycles] [--samples N]   # blender only
                       [--codec h264|h265|av1] [--encoder auto|vaapi|software]
                       [--crf N | --bitrate 12M [--maxrate 20M]] [--preset P]
                       [--pix-fmt yuv420p|yuv420p10le] [--container mp4|mkv|mov]
@@ -381,6 +382,26 @@ mesh. Scenes without it render exactly as before.
 
 See `examples/stage3d.cut.json`.
 
+#### Beauty renders in Blender
+
+`--renderer blender` (on `render` and `still`) draws a 3D scene in Blender
+instead of mui-stage, for final frames with raytraced EEVEE (or Cycles):
+soft shadows, AO, bevelled slab edges. mui-cut writes a scene description
+and runs the `blender` binary headless as a separate process (Blender 4.2 or
+later; `MUI_CUT_BLENDER` names another binary). Nothing from Blender is
+linked. `--engine eevee|cycles` (default eevee), `--samples N` (default 64
+for EEVEE, 128 for Cycles). `--mb N` becomes Blender's own motion blur.
+Frames go through the usual encode path (codecs, segments, `--stats`).
+
+It maps the camera (DOF, `look_at`, `path`), sun/spot/point lights,
+ambient as the world, layers and plugin parts as PNG-textured extruded
+slabs, `.glb` models through Blender's glTF importer, the ground as a plane
+and fog as a mist pass. Layer textures, the `.blend` and every frame are
+cached by content hash under `.mui-cut-cache/blender/` next to the project;
+a re-run renders only frames whose content changed. A 2D scene or a
+missing Blender is an error. 1280x720 at 64 samples takes about 1-2 s per
+frame on an RX 6600, plus Blender's startup.
+
 ### Plugin layers
 
 A `plugin` layer films a running MUI plugin editor: its real UI, split into
@@ -677,5 +698,10 @@ snapshots in the editor rather than `CurveHistory`, for the same reason.
   isolated build, and would then be `{"bin": path}`. A 3D scene composites
   a translucent capture in linear light, so its soft edges read slightly
   brighter than in 2D.
+- `--renderer blender`: scene and layer `effects` are skipped (it says so);
+  a model's `fill` tint is ignored; frames are 8-bit PNG; point and spot
+  light strength is matched to mui-stage at the nearest subject the light
+  faces, so inverse-square falloff differs elsewhere; metals mirror the
+  plain world (no HDRI). `serve`, `open` and `retarget` do not use it.
 - The browser CPU fallback is single-threaded: wasm threads need
   cross-origin isolation, which `serve` does not set up.
