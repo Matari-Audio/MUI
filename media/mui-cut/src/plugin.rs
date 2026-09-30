@@ -478,6 +478,51 @@ pub fn poses(cap: &Capture, p: &PluginAt) -> Vec<(PartInfo, Pose)> {
     out
 }
 
+/// A plugin layer's parts at one time as a JSON tree, the one shape the
+/// editor, the MCP `plugin_parts` tool and a sources panel read: per part
+/// `id` (its path, keyed as `parts.<id>.x`), `surface`, `level`, `frame`
+/// and `rects` (UI pixels), `thumb` (its largest image, a project asset
+/// path), `motion` (its own tracks at the time) and `children`.
+pub fn tree_json(cap: &Capture, at: &PluginAt) -> Value {
+    fn nodes(
+        tree: &[PartInfo],
+        cap: &Capture,
+        at: &PluginAt,
+        parent: Option<&str>,
+        level: usize,
+    ) -> Vec<Value> {
+        tree.iter()
+            .filter(|p| p.parent.as_deref() == parent)
+            .map(|p| {
+                let own: Vec<&Fragment> =
+                    cap.fragments.iter().filter(|f| f.group == p.path).collect();
+                let thumb = own
+                    .iter()
+                    .max_by(|a, b| (a.rect[2] * a.rect[3]).total_cmp(&(b.rect[2] * b.rect[3])))
+                    .map(|f| format!("{CACHE}/{}", f.src));
+                json!({
+                    "id": p.path,
+                    "surface": p.id,
+                    "level": level,
+                    "frame": p.frame,
+                    "rects": own.iter().map(|f| f.rect).collect::<Vec<_>>(),
+                    "thumb": thumb,
+                    "motion": at.parts.iter().find(|q| q.id == p.path),
+                    "children": nodes(tree, cap, at, Some(&p.path), level + 1),
+                })
+            })
+            .collect()
+    }
+    json!({
+        "state": at.state,
+        "size": [cap.width, cap.height],
+        "explode": at.explode,
+        "pointer": at.pointer,
+        "parts": nodes(&cap.tree(), cap, at, None, 1),
+        "surfaces": cap.surfaces,
+    })
+}
+
 impl Fragment {
     /// The image to draw and where, for a part posed `moved` or not.
     pub fn image(&self, moved: bool) -> (&str, [f64; 4]) {

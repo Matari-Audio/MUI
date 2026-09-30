@@ -187,6 +187,27 @@ impl Cut {
         paths.dedup();
         serde_json::to_string(&paths).unwrap_or_default()
     }
+    /// A plugin layer's parts at `t` as [`tree_json`](crate::plugin::tree_json),
+    /// once its capture (`.cut-cache/<state>.json`) has been added; `""`
+    /// before, or for another kind of layer.
+    pub fn plugin_parts(&self, scene: usize, t: f64, layer: &str) -> String {
+        let Some(p) = &self.project else {
+            return String::new();
+        };
+        let Some(s) = p.scenes.get(scene) else {
+            return String::new();
+        };
+        eval(p, s, t)
+            .layers
+            .into_iter()
+            .find(|l| l.id == layer)
+            .and_then(|l| l.plugin)
+            .and_then(|at| {
+                let cap = self.renderer.assets.capture(&at.state)?;
+                Some(crate::plugin::tree_json(cap, &at).to_string())
+            })
+            .unwrap_or_default()
+    }
     /// The evaluated frame as JSON: what the inspector shows at the playhead.
     pub fn frame(&self, scene: usize, t: f64) -> String {
         self.project

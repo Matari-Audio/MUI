@@ -644,43 +644,7 @@ impl Server {
                     .map_err(|e| e.to_string())
                     .and_then(|t| serde_json::from_str(&t).map_err(|e| e.to_string()))
                     .map_err(|e| format!("{}: {e}", manifest.display()))?;
-                // The tree, children nested under their parents.
-                let tree = cap.tree();
-                fn node(
-                    tree: &[mui_cut::PartInfo],
-                    cap: &mui_cut::Capture,
-                    at: &mui_cut::PluginAt,
-                    parent: Option<&str>,
-                ) -> Vec<Value> {
-                    tree.iter()
-                        .filter(|p| p.parent.as_deref() == parent)
-                        .map(|p| {
-                            let rects: Vec<_> = cap
-                                .fragments
-                                .iter()
-                                .filter(|f| f.group == p.path)
-                                .map(|f| f.rect)
-                                .collect();
-                            json!({
-                                "id": p.path,
-                                "surface": p.id,
-                                "frame": p.frame,
-                                "rects": rects,
-                                "motion": at.parts.iter().find(|q| q.id == p.path),
-                                "children": node(tree, cap, at, Some(&p.path)),
-                            })
-                        })
-                        .collect()
-                }
-                let parts = node(&tree, &cap, &at, None);
-                Ok(vec![text(&pretty(&json!({
-                    "state": at.state,
-                    "size": [cap.width, cap.height],
-                    "explode": at.explode,
-                    "pointer": at.pointer,
-                    "parts": parts,
-                    "surfaces": cap.surfaces,
-                })))])
+                Ok(vec![text(&pretty(&mui_cut::plugin::tree_json(&cap, &at)))])
             }
             "render" => self.render(parse(args)?),
             "render_status" => {
