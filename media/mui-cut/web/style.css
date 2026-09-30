@@ -1,0 +1,64 @@
+:root {
+  color-scheme: dark;
+  /* Graphite: neutral greys only. State reads as value, weight and shape;
+     the only colour on screen is the scene's own. */
+  --bg: #111111;
+  --panel: #181818;
+  --raised: #222222;
+  --line: #2b2b2b;
+  --strong: #4a4a4a;
+  --ink: #e6e6e6;
+  --muted: #8a8a8a;
+  --hi: #ffffff;
+  font: 12px Inter, ui-sans-serif, system-ui, sans-serif;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--bg); color: var(--ink); overflow: hidden;
+  display: grid; grid-template: 40px minmax(0, 1fr) 380px / 190px minmax(0, 1fr) 270px;
+  grid-template-areas: "top top top" "left stage right" "bottom bottom bottom";
+}
+header { grid-area: top; display: flex; align-items: center; gap: 10px; padding: 0 12px; border-bottom: 1px solid var(--line); background: var(--panel); }
+.brand { display: flex; align-items: center; gap: 8px; font-weight: 650; font-size: 13px; }
+.mark { width: 20px; height: 20px; display: grid; place-items: center; border: 1px solid var(--strong); border-radius: 4px; color: var(--ink); }
+.grow { flex: 1; }
+.muted { color: var(--muted); }
+.mono { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+#status.bad { color: var(--hi); font-weight: 650; }
+#status.bad::before { content: '⚠ '; }
+#backend { font-size: 10px; padding: 1px 5px; border: 1px solid var(--line); border-radius: 3px; }
+#backend:empty { display: none; }
+button, select, input { font: inherit; color: inherit; background: var(--raised); border: 1px solid var(--line); border-radius: 4px; padding: 3px 7px; }
+button { cursor: pointer; }
+button:hover { border-color: var(--strong); color: var(--hi); }
+button[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+input { width: 100%; min-width: 0; }
+input:focus, select:focus, button:focus-visible { outline: 1px solid var(--muted); outline-offset: 1px; }
+h2 { display: flex; justify-content: space-between; align-items: center; margin: 12px 0 6px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+h2 button { padding: 0 6px; }
+aside { padding: 0 10px 10px; background: var(--panel); overflow: auto; }
+#left { grid-area: left; border-right: 1px solid var(--line); }
+#right { grid-area: right; border-left: 1px solid var(--line); }
+.list { display: flex; flex-direction: column; gap: 2px; }
+.list button { text-align: left; border-color: transparent; background: transparent; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.list button.on { background: var(--raised); border-color: var(--strong); color: var(--hi); font-weight: 600; }
+.list .kind { color: var(--muted); display: inline-block; width: 16px; }
+.row { display: flex; gap: 4px; margin-top: 8px; }
+#stage { grid-area: stage; display: grid; place-items: center; overflow: hidden; background: #0c0c0c; }
+#frame { position: relative; box-shadow: 0 0 0 1px var(--line); }
+#frame canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+#overlay { cursor: default; }
+#inspector { display: grid; grid-template-columns: 70px minmax(0, 1fr) 24px; gap: 4px 6px; align-items: center; }
+#inspector label { color: var(--muted); }
+#inspector .wide { grid-column: 2 / 4; }
+.key { padding: 0; width: 22px; height: 22px; color: var(--muted); border-color: transparent; background: transparent; }
+.key.animated { color: var(--ink); }
+.key.here { color: var(--bg); background: var(--ink); border-color: var(--ink); }
+#error { color: var(--ink); white-space: pre-wrap; font-size: 11px; border-left: 2px solid var(--ink); padding-left: 8px; }
+#bottom { grid-area: bottom; display: grid; grid-template-rows: 30px minmax(0, 1fr) 28px 190px; border-top: 1px solid var(--line); background: var(--panel); min-height: 0; }
+.transport, .graph-bar { display: flex; align-items: center; gap: 10px; padding: 0 10px; border-bottom: 1px solid var(--line); }
+.graph-bar { border-top: 1px solid var(--line); }
+#tl-wrap { overflow-y: auto; overflow-x: hidden; min-height: 0; }
+#timeline, #graph { display: block; width: 100%; }
+#graph { height: 190px; }

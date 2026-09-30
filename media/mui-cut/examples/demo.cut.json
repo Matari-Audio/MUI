@@ -1,0 +1,161 @@
+{
+  "size": [1280, 720],
+  "fps": 30.0,
+  "scenes": [
+    {
+      "name": "title",
+      "duration": 2.5,
+      "background": "#0f1016",
+      "layers": [
+        {
+          "id": "bar",
+          "kind": "rect",
+          "x": 640.0,
+          "y": 440.0,
+          "width": [
+            { "t": 0.2, "v": 0.0, "interp": "bezier", "out": [0.1, 0.0] },
+            { "t": 1.0, "v": 520.0, "interp": "hold", "in": [-0.5, 0.0] }
+          ],
+          "height": 6.0,
+          "radius": 3.0,
+          "fill": "#7c6cff"
+        },
+        {
+          "id": "title",
+          "kind": "text",
+          "text": "mui-cut",
+          "x": 640.0,
+          "y": [
+            { "t": 0.0, "v": 400.0, "interp": "bezier", "out": [0.15, 0.0] },
+            { "t": 0.9, "v": 350.0, "interp": "hold", "in": [-0.45, 0.0] }
+          ],
+          "scale": [
+            { "t": 0.0, "v": 0.8, "interp": "bezier", "out": [0.1, 0.4] },
+            { "t": 0.9, "v": 1.0, "interp": "hold", "in": [-0.3, 0.0] }
+          ],
+          "opacity": [
+            { "t": 0.0, "v": 0.0, "interp": "linear" },
+            { "t": 0.5, "v": 1.0, "interp": "hold" }
+          ],
+          "fill": "#f4f2ff",
+          "font_size": 120.0,
+          "weight": 800.0
+        },
+        {
+          "id": "subtitle",
+          "kind": "text",
+          "text": "keyframes, curves and a file an agent can edit",
+          "x": 640.0,
+          "y": 500.0,
+          "opacity": [
+            { "t": 0.8, "v": 0.0, "interp": "bezier" },
+            { "t": 1.4, "v": 1.0, "interp": "hold" }
+          ],
+          "fill": "#a9a4c8",
+          "font_size": 30.0,
+          "weight": 400.0
+        }
+      ]
+    },
+    {
+      "name": "shapes",
+      "duration": 3.0,
+      "background": "#12131a",
+      "layers": [
+        {
+          "id": "card",
+          "kind": "rect",
+          "x": [
+            { "t": 0.0, "v": 240.0, "interp": "bezier", "out": [0.6, 0.0] },
+            { "t": 1.5, "v": 1040.0, "interp": "bezier", "in": [-0.2, 60.0], "out": [0.3, 0.0] },
+            { "t": 3.0, "v": 640.0, "interp": "hold", "in": [-0.6, 0.0] }
+          ],
+          "y": 300.0,
+          "rotation": [
+            { "t": 0.0, "v": 0.0, "interp": "bezier" },
+            { "t": 1.5, "v": 180.0, "interp": "bezier" },
+            { "t": 3.0, "v": 360.0, "interp": "hold" }
+          ],
+          "width": 180.0,
+          "height": 180.0,
+          "radius": [
+            { "t": 0.0, "v": 12.0, "interp": "bezier" },
+            { "t": 1.5, "v": 90.0, "interp": "bezier" },
+            { "t": 3.0, "v": 12.0, "interp": "hold" }
+          ],
+          "fill": [
+            { "t": 0.0, "v": "#7c6cff", "interp": "linear" },
+            { "t": 3.0, "v": "#ff6c9a", "interp": "hold" }
+          ]
+        },
+        {
+          "id": "ball",
+          "kind": "ellipse",
+          "x": 640.0,
+          "y": [
+            { "t": 0.0, "v": 560.0, "interp": "bezier", "out": [0.25, -120.0] },
+            { "t": 0.75, "v": 360.0, "interp": "bezier", "in": [-0.25, 0.0], "out": [0.25, 0.0] },
+            { "t": 1.5, "v": 560.0, "interp": "bezier", "in": [-0.25, -120.0], "out": [0.25, -90.0] },
+            { "t": 2.25, "v": 420.0, "interp": "bezier", "in": [-0.25, 0.0], "out": [0.25, 0.0] },
+            { "t": 3.0, "v": 560.0, "interp": "hold", "in": [-0.25, -90.0] }
+          ],
+          "scale": [
+            { "t": 0.0, "v": 1.0, "interp": "linear" },
+            { "t": 1.5, "v": 1.3, "interp": "linear" },
+            { "t": 3.0, "v": 1.0, "interp": "hold" }
+          ],
+          "width": 120.0,
+          "height": 120.0,
+          "fill": "#4fd1c5"
+        },
+        {
+          "id": "label",
+          "kind": "text",
+          "text": "bezier handles in time + value",
+          "x": 640.0,
+          "y": 660.0,
+          "fill": "#8b88a6",
+          "font_size": 28.0,
+          "weight": 500.0
+        }
+      ]
+    },
+    {
+      "name": "outro",
+      "duration": 2.0,
+      "background": "#0f1016",
+      "layers": [
+        {
+          "id": "ring",
+          "kind": "ellipse",
+          "x": 640.0,
+          "y": 360.0,
+          "width": [
+            { "t": 0.0, "v": 0.0, "interp": "bezier", "out": [0.2, 500.0] },
+            { "t": 0.8, "v": 300.0, "interp": "hold", "in": [-0.3, 0.0] }
+          ],
+          "height": [
+            { "t": 0.0, "v": 0.0, "interp": "bezier", "out": [0.2, 500.0] },
+            { "t": 0.8, "v": 300.0, "interp": "hold", "in": [-0.3, 0.0] }
+          ],
+          "fill": "#7c6cff40"
+        },
+        {
+          "id": "end",
+          "kind": "text",
+          "text": "made with MUI",
+          "x": 640.0,
+          "y": 360.0,
+          "opacity": [
+            { "t": 0.4, "v": 0.0, "interp": "linear" },
+            { "t": 1.0, "v": 1.0, "interp": "linear" },
+            { "t": 1.6, "v": 1.0, "interp": "linear" },
+            { "t": 2.0, "v": 0.0, "interp": "hold" }
+          ],
+          "font_size": 56.0,
+          "weight": 700.0
+        }
+      ]
+    }
+  ]
+}
