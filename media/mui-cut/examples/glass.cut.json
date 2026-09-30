@@ -92,8 +92,8 @@
           "extrude": 10.0,
           "edge": "#dfe5ec",
           "material": {
-            "roughness": 0.35,
-            "transmission": 0.88,
+            "roughness": 0.28,
+            "transmission": 0.93,
             "ior": 1.5,
             "tint": "#e8f0f8"
           }
@@ -128,7 +128,7 @@
               { "t": 0.0, "v": 0.5, "interp": "bezier" },
               { "t": 6.0, "v": 0.2, "interp": "bezier" }
             ],
-            "transmission": 0.88,
+            "transmission": 0.93,
             "ior": 1.5
           }
         },
@@ -151,8 +151,8 @@
           "radius": 6.0,
           "z": -180.0,
           "ry": [
-            { "t": 0.0, "v": 20.0, "interp": "bezier" },
-            { "t": 6.0, "v": 48.0, "interp": "bezier" }
+            { "t": 0.0, "v": 32.0, "interp": "bezier" },
+            { "t": 6.0, "v": 58.0, "interp": "bezier" }
           ],
           "extrude": 28.0,
           "edge": "#eef2f6",

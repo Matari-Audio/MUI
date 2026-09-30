@@ -851,7 +851,7 @@ fn reflection(p: vec3f, n: vec3f, r: vec3f, rough: f32, jitter: f32) -> vec3f {
     var r = reflect(ray, m);
     if (dot(r, n) <= 0.) { r = reflect(ray, n); }
     let ign = fract(52.982918 * fract(dot(vec2f(px), vec2f(0.06711056, 0.00583715))));
-    let c = reflection(p, n, r, rough, fract(ign + u.x));
+    let c = reflection(p, n, r, rough, select(ign, fract(ign + u.x), beauty()));
     return vec4f(s.rgb * (c - spec_fallback(r, rough)), 0.);
 }
 
@@ -919,7 +919,7 @@ fn glass(p: vec3f, n: vec3f, base: vec3f, body: vec3f, px: vec2f) -> vec3f {
     // Opaque, drawn after glass it stands in front of: nothing to see through.
     if (trans <= 0.) { return (1. - fr) * body + fr * spec_fallback(r, rough); }
     let ign = fract(52.982918 * fract(dot(px, vec2f(0.06711056, 0.00583715))));
-    let refl = reflection(p, n, r, rough, fract(ign + u.x));
+    let refl = reflection(p, n, r, rough, select(ign, fract(ign + u.x), beauty()));
     // Beauty: one wavelength per band, anywhere in it; else its middle.
     let w = select(vec3f(0.5), fract(vec3f(u.x, u.y, u.x + u.y) + g.jitter.zwz), beauty());
     let nm = vec3f(580., 490., 400.) + w * vec3f(120., 90., 90.);
