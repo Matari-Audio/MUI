@@ -42,8 +42,9 @@ impl Cut {
             .map(Project::to_json)
             .unwrap_or_default()
     }
-    pub fn add_png(&mut self, path: &str, bytes: &[u8]) -> Result<(), String> {
-        self.renderer.add_png(path, bytes)
+    /// A file a layer names (PNG, SVG or Lottie JSON), by its path.
+    pub fn add_asset(&mut self, path: &str, bytes: &[u8]) -> Result<(), String> {
+        self.renderer.add_asset(path, bytes)
     }
     /// Scene `scene` at `t`, `w` by `h` straight RGBA. The layers' quads, in
     /// project pixels, are kept for [`Cut::quads`].
@@ -159,8 +160,8 @@ impl GpuView {
         self.project = Some(Project::load(json)?);
         Ok(())
     }
-    pub fn add_png(&mut self, path: &str, bytes: &[u8]) -> Result<(), String> {
-        self.assets.add_png(path, bytes)
+    pub fn add_asset(&mut self, path: &str, bytes: &[u8]) -> Result<(), String> {
+        self.assets.add_asset(path, bytes)
     }
     /// Scene `scene` at `t` presented at `w` by `h`; the layers' quads as
     /// JSON `[{id, pts}]` in project pixels.

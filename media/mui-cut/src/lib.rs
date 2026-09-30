@@ -9,13 +9,18 @@
 #![forbid(unsafe_code)]
 
 mod gpu;
+mod motion;
 mod render;
+mod vector;
 #[cfg(target_arch = "wasm32")]
 mod web;
 
 pub use gpu::GpuCanvas;
 #[cfg(not(target_arch = "wasm32"))]
 pub use gpu::Offline;
+pub use motion::{
+    ANIMATOR_PROPS, Animator, Deform, Deformer, Ease, Falloff, Fx, Order, Unit, text_units,
+};
 pub use render::{Assets, Layers, Quad, Renderer};
 
 use serde::{Deserialize, Serialize};
@@ -48,13 +53,102 @@ pub struct Scene {
 pub enum Kind {
     Rect,
     Ellipse,
+    /// Inter, one line per `\n`, drawn as outlines so each glyph can move.
     Text {
         text: String,
+        #[serde(default, skip_serializing_if = "is_default")]
+        align: Align,
     },
     /// A PNG, path relative to the project file.
     Image {
         path: String,
     },
+    /// SVG path data (`M 0 0 C ...`) in pixels around the layer's origin.
+    Path {
+        d: String,
+    },
+    /// `count` copies of a rect, an ellipse or path data `d`, laid out on a
+    /// grid, a ring, a line or along path data `along`.
+    Duplicator {
+        #[serde(default, skip_serializing_if = "is_default")]
+        shape: Shape,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        d: String,
+        #[serde(default, skip_serializing_if = "is_default")]
+        layout: Layout,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        along: String,
+        /// Turn each copy with the ring or path it sits on.
+        #[serde(default, skip_serializing_if = "is_default")]
+        orient: bool,
+    },
+    /// An SVG file (relative to the project), drawn as vectors, centred.
+    Svg {
+        path: String,
+    },
+    /// A Lottie JSON file (relative to the project), centred. It plays at
+    /// `speed` from the layer's `time` (seconds into the animation, a
+    /// keyable property, so keys on it remap time), looping unless
+    /// `"loop": false`.
+    Lottie {
+        path: String,
+        #[serde(default = "one_f", skip_serializing_if = "is_one_f")]
+        speed: f64,
+        #[serde(default = "yes", rename = "loop", skip_serializing_if = "is_yes")]
+        looped: bool,
+    },
+}
+
+/// Text line alignment.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Align {
+    Left,
+    #[default]
+    Center,
+    Right,
+}
+
+/// A duplicator's copy.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Shape {
+    #[default]
+    Rect,
+    Ellipse,
+    /// The duplicator's `d`.
+    Path,
+}
+
+/// Where a duplicator's copies go, centred on the layer's origin.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Layout {
+    /// `columns` wide, `spacing_x` by `spacing_y` apart.
+    #[default]
+    Grid,
+    /// Around a circle of `ring_radius`, the first at twelve o'clock.
+    Radial,
+    /// In a row `spacing_x` apart.
+    Linear,
+    /// Evenly along `along` by length, shifted by `path_offset` (0..1).
+    Path,
+}
+
+fn is_default<T: Default + PartialEq>(v: &T) -> bool {
+    *v == T::default()
+}
+fn one_f() -> f64 {
+    1.
+}
+fn is_one_f(v: &f64) -> bool {
+    *v == 1.
+}
+fn yes() -> bool {
+    true
+}
+fn is_yes(v: &bool) -> bool {
+    *v
 }
 
 /// One layer. Every property is either a plain value or a list of keys; `x`
@@ -91,6 +185,85 @@ pub struct Layer {
     pub font_size: Anim<f64>,
     #[serde(default = "weight", skip_serializing_if = "is_weight")]
     pub weight: Anim<f64>,
+    /// Text: line pitch as a multiple of `font_size`.
+    #[serde(default = "line_height", skip_serializing_if = "is_line_height")]
+    pub line_height: Anim<f64>,
+    /// Text: extra pixels after every glyph.
+    #[serde(default = "zero", skip_serializing_if = "is_zero")]
+    pub tracking: Anim<f64>,
+    /// Vector kinds: outline colour and width (0 draws none).
+    #[serde(default = "clear", skip_serializing_if = "is_clear")]
+    pub stroke: Anim<Rgba>,
+    #[serde(default = "zero", skip_serializing_if = "is_zero")]
+    pub stroke_width: Anim<f64>,
+    /// Vector kinds: keep only `trim_start..trim_end` (fractions of each
+    /// contour's length), shifted by `trim_offset`, wrapping.
+    #[serde(default = "zero", skip_serializing_if = "is_zero")]
+    pub trim_start: Anim<f64>,
+    #[serde(default = "one", skip_serializing_if = "is_one")]
+    pub trim_end: Anim<f64>,
+    #[serde(default = "zero", skip_serializing_if = "is_zero")]
+    pub trim_offset: Anim<f64>,
+    /// Duplicator: copies (rounded), grid columns, spacing, ring radius and
+    /// the shift along `along` (0..1).
+    #[serde(default = "count", skip_serializing_if = "is_count")]
+    pub count: Anim<f64>,
+    #[serde(default = "columns", skip_serializing_if = "is_columns")]
+    pub columns: Anim<f64>,
+    #[serde(default = "spacing", skip_serializing_if = "is_spacing")]
+    pub spacing_x: Anim<f64>,
+    #[serde(default = "spacing", skip_serializing_if = "is_spacing")]
+    pub spacing_y: Anim<f64>,
+    #[serde(default = "ring", skip_serializing_if = "is_ring")]
+    pub ring_radius: Anim<f64>,
+    #[serde(default = "zero", skip_serializing_if = "is_zero")]
+    pub path_offset: Anim<f64>,
+    /// Lottie: seconds into the animation at the scene's start.
+    #[serde(default = "zero", skip_serializing_if = "is_zero")]
+    pub time: Anim<f64>,
+    /// Text glyphs and duplicator copies, applied in order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub animators: Vec<Animator>,
+    /// Vector kinds, applied in order after everything else.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deformers: Vec<Deformer>,
+}
+
+fn line_height() -> Anim<f64> {
+    Anim::Value(1.2)
+}
+fn is_line_height(a: &Anim<f64>) -> bool {
+    *a == line_height()
+}
+fn clear() -> Anim<Rgba> {
+    Anim::Value(Rgba([0; 4]))
+}
+fn is_clear(a: &Anim<Rgba>) -> bool {
+    *a == clear()
+}
+fn count() -> Anim<f64> {
+    Anim::Value(12.)
+}
+fn is_count(a: &Anim<f64>) -> bool {
+    *a == count()
+}
+fn columns() -> Anim<f64> {
+    Anim::Value(4.)
+}
+fn is_columns(a: &Anim<f64>) -> bool {
+    *a == columns()
+}
+fn spacing() -> Anim<f64> {
+    Anim::Value(120.)
+}
+fn is_spacing(a: &Anim<f64>) -> bool {
+    *a == spacing()
+}
+fn ring() -> Anim<f64> {
+    Anim::Value(200.)
+}
+fn is_ring(a: &Anim<f64>) -> bool {
+    *a == ring()
 }
 
 fn zero() -> Anim<f64> {
@@ -130,46 +303,158 @@ fn is_weight(a: &Anim<f64>) -> bool {
     *a == weight()
 }
 
-/// The numeric properties, by their JSON names, in inspector order.
-pub const PROPS: [&str; 10] = [
-    "x",
-    "y",
-    "scale",
-    "rotation",
-    "opacity",
-    "width",
-    "height",
-    "radius",
-    "font_size",
-    "weight",
-];
+/// A keyable property: a number or a colour.
+#[derive(Clone, Copy, Debug)]
+pub enum Prop<'a> {
+    Num(&'a Anim<f64>),
+    Color(&'a Anim<Rgba>),
+}
 
 impl Layer {
-    /// A numeric property by its JSON name.
-    pub fn prop(&self, name: &str) -> Option<&Anim<f64>> {
-        Some(match name {
-            "x" => &self.x,
-            "y" => &self.y,
-            "scale" => &self.scale,
-            "rotation" => &self.rotation,
-            "opacity" => &self.opacity,
-            "width" => &self.width,
-            "height" => &self.height,
-            "radius" => &self.radius,
-            "font_size" => &self.font_size,
-            "weight" => &self.weight,
-            _ => return None,
+    /// Every property that means something for this layer's kind, by path
+    /// (`x`, `fill`, `animators.0.offset`, `deformers.1.angle`), in
+    /// inspector order. The editor's inspector, timeline and graph list
+    /// these, so a new property shows up there by being listed here.
+    pub fn props(&self) -> Vec<(String, Prop<'_>)> {
+        use Prop::{Color, Num};
+        let mut out: Vec<(String, Prop<'_>)> = Vec::new();
+        let mut num = |n: &str, a| out.push((n.to_owned(), Num(a)));
+        num("x", &self.x);
+        num("y", &self.y);
+        num("scale", &self.scale);
+        num("rotation", &self.rotation);
+        num("opacity", &self.opacity);
+        let sized = matches!(
+            self.kind,
+            Kind::Rect | Kind::Ellipse | Kind::Image { .. } | Kind::Duplicator { .. }
+        );
+        if sized {
+            num("width", &self.width);
+            num("height", &self.height);
+        }
+        if matches!(
+            self.kind,
+            Kind::Rect | Kind::Image { .. } | Kind::Duplicator { .. }
+        ) {
+            num("radius", &self.radius);
+        }
+        if let Kind::Text { .. } = self.kind {
+            num("font_size", &self.font_size);
+            num("weight", &self.weight);
+            num("line_height", &self.line_height);
+            num("tracking", &self.tracking);
+        }
+        if let Kind::Duplicator { .. } = self.kind {
+            num("count", &self.count);
+            num("columns", &self.columns);
+            num("spacing_x", &self.spacing_x);
+            num("spacing_y", &self.spacing_y);
+            num("ring_radius", &self.ring_radius);
+            num("path_offset", &self.path_offset);
+        }
+        if let Kind::Lottie { .. } = self.kind {
+            num("time", &self.time);
+        }
+        let vector = self.vector();
+        let own_paint = matches!(self.kind, Kind::Svg { .. } | Kind::Lottie { .. });
+        if vector && !own_paint {
+            num("stroke_width", &self.stroke_width);
+        }
+        if vector {
+            num("trim_start", &self.trim_start);
+            num("trim_end", &self.trim_end);
+            num("trim_offset", &self.trim_offset);
+        }
+        if !own_paint {
+            out.push(("fill".into(), Color(&self.fill)));
+        }
+        if vector && !own_paint {
+            out.push(("stroke".into(), Color(&self.stroke)));
+        }
+        if matches!(self.kind, Kind::Text { .. } | Kind::Duplicator { .. }) {
+            for (i, a) in self.animators.iter().enumerate() {
+                for n in ANIMATOR_PROPS {
+                    let a = a.num(n).expect("ANIMATOR_PROPS are props");
+                    out.push((format!("animators.{i}.{n}"), Num(a)));
+                }
+                out.push((format!("animators.{i}.fill"), Color(&a.fill)));
+            }
+        }
+        if vector {
+            for (i, d) in self.deformers.iter().enumerate() {
+                for (n, a) in d.nums() {
+                    out.push((format!("deformers.{i}.{n}"), Num(a)));
+                }
+            }
+        }
+        out
+    }
+
+    /// A numeric property by its path, as [`Layer::props`] names it.
+    pub fn prop(&self, path: &str) -> Option<&Anim<f64>> {
+        self.props().into_iter().find_map(|(n, p)| match p {
+            Prop::Num(a) if n == path => Some(a),
+            _ => None,
         })
+    }
+
+    /// Drawn as outlines through the vector pipeline (trim, deformers).
+    pub fn vector(&self) -> bool {
+        !matches!(self.kind, Kind::Rect | Kind::Ellipse | Kind::Image { .. })
+    }
+
+    /// The file this layer draws, relative to the project.
+    pub fn asset(&self) -> Option<&str> {
+        match &self.kind {
+            Kind::Image { path } | Kind::Svg { path } | Kind::Lottie { path, .. } => Some(path),
+            _ => None,
+        }
     }
 }
 
 /// A plain value, or keys to interpolate. In JSON: `"x": 640` or
 /// `"x": [{"t": 0, "v": 100, "interp": "bezier"}, ...]`.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+///
+/// Loading sorts keys by time and refuses an empty list or a non-finite
+/// number, wherever the property sits (a layer, an animator, a deformer).
+#[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(untagged)]
 pub enum Anim<T> {
     Value(T),
     Keys(Vec<Key<T>>),
+}
+
+impl<'de, T: Tween + Deserialize<'de>> Deserialize<'de> for Anim<T> {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        use serde::de::Error;
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw<T> {
+            Value(T),
+            Keys(Vec<Key<T>>),
+        }
+        let a = match Raw::<T>::deserialize(d)? {
+            Raw::Value(v) if !v.finite() => return Err(D::Error::custom("a non-finite value")),
+            Raw::Value(v) => Self::Value(v),
+            Raw::Keys(k) if k.is_empty() => return Err(D::Error::custom("an empty key list")),
+            Raw::Keys(mut k) => {
+                if k.iter().any(|k| {
+                    !k.t.is_finite()
+                        || !k.v.finite()
+                        || k.in_
+                            .into_iter()
+                            .chain(k.out)
+                            .flatten()
+                            .any(|x| !x.is_finite())
+                }) {
+                    return Err(D::Error::custom("a non-finite key"));
+                }
+                k.sort_by(|a, b| a.t.total_cmp(&b.t));
+                Self::Keys(k)
+            }
+        };
+        Ok(a)
+    }
 }
 
 /// How the segment *leaving* a key gets to the next one.
@@ -242,6 +527,9 @@ impl From<Rgba> for String {
 /// A value keys can move between.
 pub trait Tween: Clone + Default {
     fn mix(a: &Self, b: &Self, u: f64) -> Self;
+    fn finite(&self) -> bool {
+        true
+    }
     /// The value a bezier segment lands on. Numbers use the handles' value
     /// offsets; anything else eases along the handles' timing only.
     fn bezier(a: &Key<Self>, b: &Key<Self>, t: f64) -> Self {
@@ -253,6 +541,9 @@ pub trait Tween: Clone + Default {
 impl Tween for f64 {
     fn mix(a: &Self, b: &Self, u: f64) -> Self {
         a + (b - a) * u
+    }
+    fn finite(&self) -> bool {
+        self.is_finite()
     }
     fn bezier(a: &Key<Self>, b: &Key<Self>, t: f64) -> Self {
         cubic((a.t, a.v), a.out, b.in_, (b.t, b.v), t)
@@ -341,12 +632,6 @@ impl<T: Tween> Anim<T> {
             Interp::Bezier => T::bezier(a, b, t),
         }
     }
-    /// Sort keys by time, so a hand-edited file can list them in any order.
-    pub fn sort(&mut self) {
-        if let Self::Keys(k) = self {
-            k.sort_by(|a, b| a.t.total_cmp(&b.t));
-        }
-    }
 }
 
 /// One layer with every property evaluated at a time.
@@ -366,6 +651,24 @@ pub struct Drawn {
     pub fill: Rgba,
     pub font_size: f64,
     pub weight: f64,
+    pub line_height: f64,
+    pub tracking: f64,
+    pub stroke: Rgba,
+    pub stroke_width: f64,
+    /// `[start, end, offset]`.
+    pub trim: [f64; 3],
+    pub count: usize,
+    pub columns: usize,
+    pub spacing: [f64; 2],
+    pub ring_radius: f64,
+    pub path_offset: f64,
+    /// Lottie: seconds into the animation.
+    pub time: f64,
+    /// Per glyph (text, newlines skipped) or per copy (duplicator).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub fx: Vec<Fx>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub deformers: Vec<Deform>,
 }
 
 /// Everything a renderer needs for one instant of one scene.
@@ -376,37 +679,77 @@ pub struct Frame {
     pub layers: Vec<Drawn>,
 }
 
+/// Most copies a duplicator makes.
+pub const MAX_COPIES: usize = 10_000;
+
 /// Scene `scene` at `t` seconds: a pure function of its arguments, so any
 /// time can be sought in any order.
 pub fn eval(project: &Project, scene: &Scene, t: f64) -> Frame {
     Frame {
         size: project.size,
         background: scene.background,
-        layers: scene
-            .layers
-            .iter()
-            .map(|l| Drawn {
-                id: l.id.clone(),
-                kind: l.kind.clone(),
-                x: l.x.at(t),
-                y: l.y.at(t),
-                scale: l.scale.at(t),
-                rotation: l.rotation.at(t),
-                opacity: l.opacity.at(t).clamp(0., 1.),
-                width: l.width.at(t).max(0.),
-                height: l.height.at(t).max(0.),
-                radius: l.radius.at(t).max(0.),
-                fill: l.fill.at(t),
-                font_size: l.font_size.at(t).max(1.),
-                weight: l.weight.at(t).clamp(100., 900.),
-            })
-            .collect(),
+        layers: scene.layers.iter().map(|l| l.at(t)).collect(),
+    }
+}
+
+impl Layer {
+    /// Every property at `t`.
+    pub fn at(&self, t: f64) -> Drawn {
+        let fill = self.fill.at(t);
+        let count = self.count.at(t).round().clamp(0., MAX_COPIES as f64) as usize;
+        let fx = match &self.kind {
+            Kind::Text { text, .. } if !self.animators.is_empty() => {
+                let n = text.chars().filter(|&c| c != '\n').count();
+                motion::apply(&self.animators, n, fill, t, |by| text_units(text, by))
+            }
+            Kind::Duplicator { .. } => {
+                motion::apply(&self.animators, count, fill, t, |_| (0..count).collect())
+            }
+            _ => Vec::new(),
+        };
+        let time = match self.kind {
+            Kind::Lottie { speed, .. } => self.time.at(t) + t * speed,
+            _ => 0.,
+        };
+        Drawn {
+            id: self.id.clone(),
+            kind: self.kind.clone(),
+            x: self.x.at(t),
+            y: self.y.at(t),
+            scale: self.scale.at(t),
+            rotation: self.rotation.at(t),
+            opacity: self.opacity.at(t).clamp(0., 1.),
+            width: self.width.at(t).max(0.),
+            height: self.height.at(t).max(0.),
+            radius: self.radius.at(t).max(0.),
+            fill,
+            font_size: self.font_size.at(t).max(1.),
+            weight: self.weight.at(t).clamp(100., 900.),
+            line_height: self.line_height.at(t),
+            tracking: self.tracking.at(t),
+            stroke: self.stroke.at(t),
+            stroke_width: self.stroke_width.at(t).max(0.),
+            trim: [
+                self.trim_start.at(t),
+                self.trim_end.at(t),
+                self.trim_offset.at(t),
+            ],
+            count,
+            columns: self.columns.at(t).round().max(1.) as usize,
+            spacing: [self.spacing_x.at(t), self.spacing_y.at(t)],
+            ring_radius: self.ring_radius.at(t),
+            path_offset: self.path_offset.at(t),
+            time,
+            fx,
+            deformers: self.deformers.iter().map(|d| d.at(t)).collect(),
+        }
     }
 }
 
 impl Project {
     /// Parse and check a project: keys sorted by time, no empty key lists,
-    /// finite numbers, positive size, fps and durations, unique layer ids.
+    /// finite numbers, positive size, fps and durations, unique layer ids,
+    /// path data that parses.
     pub fn load(json: &str) -> Result<Self, String> {
         let mut p: Self = serde_json::from_str(json).map_err(|e| e.to_string())?;
         if p.size[0] == 0 || p.size[1] == 0 || p.size[0] > 8192 || p.size[1] > 8192 {
@@ -424,32 +767,23 @@ impl Project {
                 if !ids.insert(l.id.clone()) {
                     return Err(format!("scene `{}`: duplicate layer id `{}`", s.name, l.id));
                 }
-                let id = l.id.clone();
-                let empty = |n: &str| format!("layer `{id}`: `{n}` has an empty key list");
-                for name in PROPS {
-                    let a = l.prop_mut(name).expect("PROPS are props");
-                    a.sort();
-                    match a {
-                        Anim::Keys(k) if k.is_empty() => return Err(empty(name)),
-                        Anim::Keys(k)
-                            if k.iter().any(|k| {
-                                !k.t.is_finite()
-                                    || !k.v.is_finite()
-                                    || k.in_
-                                        .into_iter()
-                                        .chain(k.out)
-                                        .flatten()
-                                        .any(|x| !x.is_finite())
-                            }) =>
-                        {
-                            return Err(format!("layer `{id}`: `{name}` has a non-finite key"));
-                        }
-                        _ => {}
+                let id = &l.id;
+                let bad = |what: &str, d: &str| -> Result<(), String> {
+                    if !d.is_empty() && mui_vello::kurbo::BezPath::from_svg(d).is_err() {
+                        return Err(format!("layer `{id}`: `{what}` is not SVG path data"));
                     }
-                }
-                l.fill.sort();
-                if matches!(&l.fill, Anim::Keys(k) if k.is_empty()) {
-                    return Err(empty("fill"));
+                    Ok(())
+                };
+                match &l.kind {
+                    Kind::Path { d } => bad("d", d)?,
+                    Kind::Duplicator { d, along, .. } => {
+                        bad("d", d)?;
+                        bad("along", along)?;
+                    }
+                    Kind::Lottie { speed, .. } if !speed.is_finite() => {
+                        return Err(format!("layer `{id}`: `speed` must be finite"));
+                    }
+                    _ => {}
                 }
             }
         }
@@ -533,24 +867,6 @@ fn tidy(pretty: &str) -> String {
         }
     }
     out
-}
-
-impl Layer {
-    fn prop_mut(&mut self, name: &str) -> Option<&mut Anim<f64>> {
-        Some(match name {
-            "x" => &mut self.x,
-            "y" => &mut self.y,
-            "scale" => &mut self.scale,
-            "rotation" => &mut self.rotation,
-            "opacity" => &mut self.opacity,
-            "width" => &mut self.width,
-            "height" => &mut self.height,
-            "radius" => &mut self.radius,
-            "font_size" => &mut self.font_size,
-            "weight" => &mut self.weight,
-            _ => return None,
-        })
-    }
 }
 
 #[cfg(test)]

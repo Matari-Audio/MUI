@@ -11,7 +11,7 @@ use mui_vello::kurbo::{Affine, Point as KPoint, Rect};
 use serde::Serialize;
 use vello_cpu::{Pixmap, RenderContext, Resources};
 
-use crate::{Drawn, Frame, Kind, Rgba};
+use crate::{Drawn, Frame, Kind, Rgba, vector};
 
 /// Inter, variable in weight, is every text layer's face.
 static INTER: LazyLock<Font> =
@@ -30,6 +30,8 @@ pub struct Quad {
 #[derive(Default)]
 pub struct Assets {
     images: HashMap<String, Arc<Image>>,
+    svgs: HashMap<String, Arc<Vec<vector::Piece>>>,
+    lotties: HashMap<String, Arc<velato::Composition>>,
 }
 
 /// One frame's layers, ready to paint: each resolved tree with where it goes
@@ -83,8 +85,8 @@ impl Renderer {
     pub fn size(&self) -> (u16, u16) {
         (self.w, self.h)
     }
-    pub fn add_png(&mut self, path: &str, bytes: &[u8]) -> Result<(), String> {
-        self.assets.add_png(path, bytes)
+    pub fn add_asset(&mut self, path: &str, bytes: &[u8]) -> Result<(), String> {
+        self.assets.add_asset(path, bytes)
     }
 
     /// Straight RGBA at the renderer's size, and each layer's quad in project
@@ -124,6 +126,27 @@ impl Renderer {
 }
 
 impl Assets {
+    /// A file a layer names, by its extension: `.png` for image layers,
+    /// `.svg` for SVG layers, `.json` for Lottie layers.
+    pub fn add_asset(&mut self, path: &str, bytes: &[u8]) -> Result<(), String> {
+        let ext = path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+        match ext.as_str() {
+            "svg" => {
+                let pieces =
+                    vector::svg(bytes, ttf_inter::REGULAR).map_err(|e| format!("{path}: {e}"))?;
+                self.svgs.insert(path.to_owned(), Arc::new(pieces));
+                Ok(())
+            }
+            "json" => {
+                let comp =
+                    velato::Composition::from_slice(bytes).map_err(|e| format!("{path}: {e}"))?;
+                self.lotties.insert(path.to_owned(), Arc::new(comp));
+                Ok(())
+            }
+            _ => self.add_png(path, bytes),
+        }
+    }
+
     /// Decode a PNG for image layers naming `path`.
     pub fn add_png(&mut self, path: &str, bytes: &[u8]) -> Result<(), String> {
         let err = |e: png::DecodingError| format!("{path}: {e}");
@@ -148,18 +171,42 @@ impl Assets {
         Ok(())
     }
 
-    /// The layer as a MUI tree, and the size it lays out to.
-    fn element(&self, l: &Drawn) -> Result<(ResolvedScene, Size), String> {
+    /// A vector layer's pieces: built, trimmed and deformed.
+    fn pieces(&self, l: &Drawn) -> Result<Vec<vector::Piece>, String> {
+        let mut pieces = match &l.kind {
+            Kind::Text { text, align } => vector::text(l, text, *align, &INTER)?,
+            Kind::Path { d } => vector::path(l, d),
+            Kind::Duplicator {
+                shape,
+                d,
+                layout,
+                along,
+                orient,
+            } => vector::duplicator(l, *shape, d, *layout, along, *orient),
+            // A missing file draws nothing (the CLI warns when it loads).
+            Kind::Svg { path } => self.svgs.get(path).map(|p| p.to_vec()).unwrap_or_default(),
+            Kind::Lottie { path, looped, .. } => self
+                .lotties
+                .get(path)
+                .map(|c| vector::lottie(c, l.time, *looped))
+                .unwrap_or_default(),
+            Kind::Rect | Kind::Ellipse | Kind::Image { .. } => Vec::new(),
+        };
+        vector::trim(&mut pieces, l.trim);
+        vector::deform(&mut pieces, &l.deformers);
+        Ok(pieces)
+    }
+
+    /// The layer as a MUI tree, the size it lays out to, and where its top
+    /// left sits relative to the layer's origin (its pivot).
+    fn element(&self, l: &Drawn) -> Result<(ResolvedScene, Size, KPoint), String> {
         let fill = color(l.fill);
+        let centred = |size: Size| KPoint::new(-size.width / 2., -size.height / 2.);
         let el = match &l.kind {
             Kind::Rect => block(l.width, l.height).radius(l.radius).fill(fill),
             Kind::Ellipse => canvas(move |size| vec![Draw::fill(ellipse(size), fill)])
                 .w(l.width)
                 .h(l.height),
-            Kind::Text { text: s } => text(s.as_str())
-                .text_size(l.font_size)
-                .text_axis("wght", l.weight as f32)
-                .fill(fill),
             Kind::Image { path } => {
                 let paint: Fill = match self.images.get(path) {
                     Some(i) => Fill::Image(i.clone(), Fit::Cover),
@@ -168,12 +215,20 @@ impl Assets {
                 };
                 block(l.width, l.height).radius(l.radius).fill(paint)
             }
+            _ => {
+                let (draws, corner, (w, h)) = vector::draws(&self.pieces(l)?);
+                let el = canvas(move |_| draws.clone()).w(w).h(h);
+                let scene = resolve(&SceneSpec::new(el.opacity(l.opacity as f32)))
+                    .map_err(|e| format!("layer `{}`: {e}", l.id))?;
+                let size = scene.layout.size;
+                return Ok((scene, size, corner));
+            }
         };
         let mut spec = SceneSpec::new(el.opacity(l.opacity as f32));
         spec.font = Some(INTER.clone());
         let scene = resolve(&spec).map_err(|e| format!("layer `{}`: {e}", l.id))?;
         let size = scene.layout.size;
-        Ok((scene, size))
+        Ok((scene, size, centred(size)))
     }
 
     /// Every layer of `frame` resolved and placed, bottom first. A layer
@@ -184,11 +239,11 @@ impl Assets {
             quads: Vec::with_capacity(frame.layers.len()),
         };
         for l in &frame.layers {
-            let (scene, size) = self.element(l)?;
+            let (scene, size, corner) = self.element(l)?;
             let place = Affine::translate((l.x, l.y))
                 * Affine::rotate(l.rotation.to_radians())
                 * Affine::scale(l.scale)
-                * Affine::translate((-size.width / 2., -size.height / 2.));
+                * Affine::translate(corner.to_vec2());
             let corners = [
                 (0., 0.),
                 (size.width, 0.),
