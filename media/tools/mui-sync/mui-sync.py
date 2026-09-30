@@ -95,7 +95,7 @@ def git(repo, *args):
 
 def mui_packages(lock):
     """The `cargo update` specs of the MUI git packages in a lock: the name,
-    or `name@version` when crates.io has a package of that name in it too."""
+    or its full package ID when another source has a package of that name."""
     blocks = [b for b in lock.split('[[package]]')]
     count = {}
     for b in blocks:
@@ -107,7 +107,7 @@ def mui_packages(lock):
         if f'source = "git+{MUI_GIT}' in b:
             name = re.search(r'name = "([^"]+)"', b).group(1)
             version = re.search(r'version = "([^"]+)"', b).group(1)
-            spec = f'{name}@{version}' if count[name] > 1 else name
+            spec = f'git+{MUI_GIT}#{name}@{version}' if count[name] > 1 else name
             if spec not in specs:
                 specs.append(spec)
     return specs

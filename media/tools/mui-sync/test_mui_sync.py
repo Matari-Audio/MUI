@@ -79,4 +79,4 @@ name = "vello_encoding"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 '''
-        self.assertEqual(sync.mui_packages(lock), ['mui', 'vello_encoding@0.6.0'])
+        self.assertEqual(sync.mui_packages(lock), ['mui', 'git+https://github.com/Matari-Audio/MUI#vello_encoding@0.6.0'])
