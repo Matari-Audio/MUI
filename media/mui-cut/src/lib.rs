@@ -144,7 +144,7 @@ pub enum Kind {
 }
 
 /// What a light layer is.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum LightType {
     /// Parallel rays along `rx`/`ry`, with a shadow.

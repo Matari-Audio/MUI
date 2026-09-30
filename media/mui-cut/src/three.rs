@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::{Drawn, Kind, LightType, Rgba, Scene, vector};
 
 /// Flat composite, or layers in a lit 3D space.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum Mode {
     #[default]
     #[serde(rename = "2d")]
@@ -19,7 +19,7 @@ pub enum Mode {
 /// A floor at `y` project pixels, fading out `radius` pixels from the
 /// frame's centre, mirroring the layers by `reflect` (0..1) and darkening
 /// under what stands on it by `contact` (0..1).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Ground {
     pub y: f64,
     #[serde(default = "ground_color")]
@@ -42,7 +42,7 @@ fn contact() -> f64 {
 }
 
 /// Surfaces fade into `color` from `near` to `far` pixels from the camera.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Fog {
     pub color: Rgba,
     pub near: f64,

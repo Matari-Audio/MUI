@@ -87,7 +87,11 @@ pub fn check(src: &str, r: &mut Renderer, exists: &dyn Fn(&str) -> bool) -> Vec<
     }
     for (si, s) in p.scenes.iter().enumerate() {
         keys_and_assets(&p, si, s, exists, &mut out);
-        visual(&p, si, s, r, &mut out);
+        // The pixel lints measure the flat composite; a 3D scene's shot is
+        // somewhere else, so they would only mislead.
+        if s.mode != crate::Mode::ThreeD {
+            visual(&p, si, s, r, &mut out);
+        }
     }
     if p.scenes.is_empty() {
         out.add(
@@ -304,7 +308,8 @@ fn fields(raw: &Value, p: &Project, out: &mut Issues) {
             let at = Some((s, l.id.as_str()));
             let kind = rl["kind"].as_str().unwrap_or("");
             let mine = variant(&layer, kind);
-            let used: BTreeSet<String> = l.props().into_iter().map(|(n, _)| n).collect();
+            let three = s.mode == crate::Mode::ThreeD;
+            let used: BTreeSet<String> = l.props_in(three).into_iter().map(|(n, _)| n).collect();
             for k in rl.as_object().into_iter().flat_map(|o| o.keys()) {
                 let path = format!("{lp}.{k}");
                 if !all_layer.contains(k) {
@@ -325,6 +330,7 @@ fn fields(raw: &Value, p: &Project, out: &mut Issues) {
                         k.as_str(),
                         "id" | "name" | "kind" | "animators" | "deformers"
                     )
+                    && !(three && matches!(k.as_str(), "cast_shadows" | "receive_shadows"))
                 {
                     out.add(
                         Severity::Info,
@@ -459,7 +465,7 @@ fn keys_and_assets(
                 None,
             );
         }
-        for (name, prop) in l.props() {
+        for (name, prop) in l.props_in(true) {
             let path = format!("{lp}.{}", json_path(&name));
             let times: Vec<f64> = match prop {
                 Prop::Num(Anim::Keys(k)) => k.iter().map(|k| k.t).collect(),
@@ -562,7 +568,7 @@ fn overshoot(
 /// The time of every key of every property of `l`, unsorted.
 pub fn key_times(l: &crate::Layer) -> Vec<f64> {
     let mut ts = Vec::new();
-    for (_, prop) in l.props() {
+    for (_, prop) in l.props_in(true) {
         match prop {
             Prop::Num(Anim::Keys(k)) => ts.extend(k.iter().map(|k| k.t)),
             Prop::Color(Anim::Keys(k)) => ts.extend(k.iter().map(|k| k.t)),
@@ -825,6 +831,7 @@ fn contrast_at(r: &mut Renderer, f: &Frame, i: usize, b: Bbox) -> Option<(f64, b
         size: f.size,
         background: f.background,
         layers: f.layers[..i].to_vec(),
+        view: None,
     };
     let (px, _) = r.draw(&below).ok()?;
     let (rw, rh) = r.size();
@@ -869,6 +876,7 @@ mod tests {
 
     const DEMO: &str = include_str!("../examples/demo.cut.json");
     const SHOWCASE: &str = include_str!("../examples/showcase.cut.json");
+    const STAGE3D: &str = include_str!("../examples/stage3d.cut.json");
 
     fn run(src: &str) -> Vec<Issue> {
         let mut r = Renderer::new(320, 180);
@@ -882,7 +890,7 @@ mod tests {
 
     #[test]
     fn the_examples_have_no_warnings() {
-        for src in [DEMO, SHOWCASE] {
+        for src in [DEMO, SHOWCASE, STAGE3D] {
             let bad: Vec<String> = run(src)
                 .iter()
                 .filter(|i| i.severity >= Severity::Warning)
