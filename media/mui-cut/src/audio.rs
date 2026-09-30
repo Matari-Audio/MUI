@@ -186,3 +186,32 @@ pub fn mux(plan: &crate::encode::Plan, out: &str, pcm: &[f32], rate: u32) -> Res
     }
     std::fs::rename(&tmp, out).map_err(|e| format!("{out}: {e}"))
 }
+
+/// `scene` of `project` rendered with its sound (this binary's `render`),
+/// then cut to `[from, to]` seconds into `out`.
+// ponytail: renders the whole scene for a slice; render only the span's
+// frames if long scenes make previews slow.
+pub fn clip(project: &Path, scene: &str, from: f64, to: f64, out: &Path) -> Result<()> {
+    let full = out.with_extension("full.mp4");
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let o = Command::new(exe)
+        .arg("render")
+        .arg(project)
+        .args(["--scene", scene, "-o"])
+        .arg(&full)
+        .stdout(Stdio::null())
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !o.status.success() {
+        return Err(String::from_utf8_lossy(&o.stderr).into_owned());
+    }
+    let args: Vec<String> = ["-ss".into(), from.to_string(), "-to".into(), to.to_string(), "-i".into()]
+        .into_iter()
+        .chain([full.display().to_string()])
+        .chain(["-c:v", "libx264", "-crf", "20", "-c:a", "aac", "-b:a", "256k"].map(String::from))
+        .chain([out.display().to_string()])
+        .collect();
+    let ok = crate::ffmpeg(&args).status().map_err(|e| format!("ffmpeg: {e}"))?;
+    let _ = std::fs::remove_file(&full);
+    if ok.success() { Ok(()) } else { Err(format!("ffmpeg failed cutting {}", out.display())) }
+}
