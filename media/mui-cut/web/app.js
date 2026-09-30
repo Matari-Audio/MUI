@@ -33,6 +33,16 @@ let selKey = null;       // { l, p, k }: the selected key object
 let quads = [];          // layer outlines from the last render, project px
 let playing = false;
 let need = true;
+let locked = false;      // play on the project's frame grid only
+// Playback clock: while playing, project time is the monotonic clock since
+// `clock.at` (ms), plus the time `clock.t` it started from. It never
+// accumulates per-frame deltas, so it cannot drift; a slow draw drops
+// frames instead of slowing the clock.
+const clock = { at: 0, t: 0 };
+// Pacing, for the HUD and the e2e: when each drawn frame came back (ms) and
+// the project frame it showed; frames the playhead passed without drawing.
+const pacing = { shown: [], dropped: 0, last: -1, pending: -1 };
+globalThis.pacing = pacing;
 const undo = [], redo = [];
 let base = null;         // the document before the gesture in progress
 const assets = new Set();
@@ -337,6 +347,15 @@ let vw = 2, vh = 2;       // the viewport's pixel size; the worker owns the canv
 worker.onmessage = ({ data: m }) => {
   if (m.type !== 'drawn') { if (m.error) showError(m.error); return; }
   drawing = false;
+  if (playing && pacing.pending >= 0) {
+    // A frame the playhead skipped over is dropped; so is a whole pass.
+    const skipped = pacing.pending - pacing.last - 1;
+    if (pacing.last >= 0 && skipped > 0) pacing.dropped += skipped;
+    pacing.last = pacing.pending;
+    pacing.shown.push(performance.now());
+    if (pacing.shown.length > 240) pacing.shown.shift();
+  }
+  pacing.pending = -1;
   view.dataset.draws = +(view.dataset.draws ?? 0) + 1;   // e2e counts these
   view.dataset.ms = +(view.dataset.ms ?? 0) + (m.ms ?? 0);  // and times them
   if (m.error) showError(m.error); else quads = JSON.parse(m.quads);
@@ -360,6 +379,7 @@ function drawViewport() {
   if (drawing) return false;
   drawing = true;
   worker.postMessage({ type: 'draw', si, t, w: vw, h: vh });
+  pacing.pending = playing ? Math.floor(t * doc.fps + 1e-6) : -1;
   return true;
 }
 function drawOverlay() {
@@ -492,12 +512,12 @@ tl.onpointerdown = e => {
     tlDrag = { group, t0: h.key.k.t, x0: h.x };
     begin(); refresh(); return;
   }
-  tlDrag = { scrub: true }; t = snap(tlT(h.x)); need = true;
+  tlDrag = { scrub: true }; seek(snap(tlT(h.x)));
 };
 tl.onpointermove = e => {
   if (!tlDrag) return;
   const h = tlHit(e);
-  if (tlDrag.scrub) { t = snap(tlT(h.x)); need = true; return; }
+  if (tlDrag.scrub) { seek(snap(tlT(h.x))); return; }
   const nt = snap(tlT(tlX(tlDrag.t0) + h.x - tlDrag.x0));
   for (const { l, p, k } of tlDrag.group) { k.t = nt; getp(l, p).sort((a, b) => a.t - b.t); }
   changed();
@@ -640,7 +660,23 @@ document.querySelectorAll('[data-interp]').forEach(b => b.onclick = () => { if (
 $('#reset-handles').onclick = () => { if (selKey) edit(() => { delete selKey.k.in; delete selKey.k.out; }); };
 
 // ---------- transport, keys, loop
-function setPlaying(on) { playing = on; $('#play').textContent = on ? '❚❚' : '▶'; }
+function setPlaying(on) {
+  playing = on; $('#play').textContent = on ? '❚❚' : '▶';
+  Object.assign(clock, { at: performance.now(), t });
+  Object.assign(pacing, { shown: [], dropped: 0, last: -1 });
+}
+// A seek while playing restarts the clock from the new playhead.
+function seek(time) { t = time; clock.at = performance.now(); clock.t = t; need = true; }
+const toggle = (id, on) => { $(id).setAttribute('aria-pressed', String(on)); return on; };
+$('#lock').onclick = () => { locked = toggle('#lock', !locked); seek(t); };
+$('#hud-toggle').onclick = () => { $('#hud').hidden = !toggle('#hud-toggle', $('#hud').hidden); };
+const quantile = (xs, q) => xs.length ? [...xs].sort((a, b) => a - b)[Math.min(xs.length - 1, Math.floor(q * xs.length))] : 0;
+function drawHud() {
+  const d = pacing.shown.slice(1).map((v, i) => v - pacing.shown[i]);
+  const span = (pacing.shown.at(-1) - pacing.shown[0]) / 1000;
+  $('#hud').textContent = `${d.length && span > 0 ? (d.length / span).toFixed(1) : '–'} fps  ${pacing.dropped} dropped\n`
+    + `frame ${quantile(d, 0.5).toFixed(1)} / ${quantile(d, 0.95).toFixed(1)} ms p50/p95`;
+}
 $('#play').onclick = () => setPlaying(!playing);
 addEventListener('keydown', e => {
   if (e.target.closest('input, select, textarea')) return;
@@ -648,20 +684,28 @@ addEventListener('keydown', e => {
   if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); $(e.shiftKey ? '#redo' : '#undo').click(); }
   else if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); $('#redo').click(); }
   else if (e.key === ' ') { e.preventDefault(); setPlaying(!playing); }
-  else if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') { t = snap(Math.max(0, Math.min(scene().duration, t + (e.key === 'ArrowRight' ? 1 : -1) / doc.fps))); need = true; }
-  else if (e.key === 'Home') { t = 0; need = true; }
+  else if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') seek(snap(Math.max(0, Math.min(scene().duration, t + (e.key === 'ArrowRight' ? 1 : -1) / doc.fps))));
+  else if (e.key === 'Home') seek(0);
   else if ((e.key === 'Delete' || e.key === 'Backspace') && selKey) edit(() => deleteKey(selKey));
   else if (e.key.toLowerCase() === 'k' && layer()) edit(() => toggleKey(layer(), prop));
 });
 function refresh() { refreshLists(); refreshInspector(); range = null; need = true; }
-let last = performance.now();
+// rAF hands every callback of a display frame the same timestamp; the
+// frame drawn now is presented about one display frame later, so that is
+// the time it shows.
+let vsync = 1000 / 60, lastMs = 0;
 function loop(ms) {
+  if (lastMs) vsync += (Math.min(ms - lastMs, 100) - vsync) * 0.05;
+  lastMs = ms;
   if (playing && doc) {
-    t += (ms - last) / 1000;
-    if (t >= scene().duration) t %= scene().duration;
-    need = true;
+    const d = scene().duration;
+    let next = clock.t + (ms + vsync - clock.at) / 1000;
+    if (next >= d) { next %= d; Object.assign(clock, { at: ms + vsync, t: next }); pacing.last = -1; }
+    if (locked) next = Math.floor(next * doc.fps + 1e-6) / doc.fps;
+    // On the grid, a frame is drawn once; off it, every display frame.
+    if (next !== t || !locked) { t = next; need = true; }
   }
-  last = ms;
+  if (!$('#hud').hidden) drawHud();
   if (need && doc) {
     need = false;
     if (!drawViewport()) need = true;

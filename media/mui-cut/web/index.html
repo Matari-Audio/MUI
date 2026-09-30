@@ -33,7 +33,7 @@
     </div>
   </aside>
   <section id="stage">
-    <div id="frame"><canvas id="view"></canvas><canvas id="overlay"></canvas></div>
+    <div id="frame"><canvas id="view"></canvas><canvas id="overlay"></canvas><pre id="hud" class="mono" hidden></pre></div>
   </section>
   <aside id="right">
     <h2 id="insp-title">Inspector</h2>
@@ -44,6 +44,8 @@
     <div class="transport">
       <button id="play" title="Play / pause (Space)">▶</button>
       <span id="time" class="mono">0.00 s</span>
+      <button id="lock" aria-pressed="false" title="Play only on the project's frame grid">fps lock</button>
+      <button id="hud-toggle" aria-pressed="false" title="Show playback pacing: frames/s, dropped frames, frame time">HUD</button>
       <span class="muted">◆ key at playhead · K toggle key · Del delete key · ←/→ frame · double-click graph to add a key · Alt breaks tangents</span>
     </div>
     <div id="tl-wrap"><canvas id="timeline"></canvas></div>

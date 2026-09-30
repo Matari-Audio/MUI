@@ -18,10 +18,11 @@ use mui_cut::{Assets, CpuPool, Engine, Frame, Offline, Project, Scene, eval};
 type Result<T> = std::result::Result<T, String>;
 
 const USAGE: &str = "usage:
-  mui-cut render PROJECT -o OUT.mp4|null [--scene NAME] [--mb N] [--size WxH] [--renderer R] [--threads N]
+  mui-cut render PROJECT -o OUT.mp4|null [--scene NAME] [--mb N] [--size WxH] [--renderer R] [--threads N] [--stats]
   mui-cut still  PROJECT --t SECONDS -o OUT.png [--scene NAME] [--size WxH] [--renderer R]
     R: classic (default; Vello compute on the GPU), gpu (vello_gpu), cpu (Vello CPU);
-    --cpu is --renderer cpu. --threads: CPU frames drawn at once (default: one per core)
+    --cpu is --renderer cpu. --threads: CPU frames drawn at once (default: one per core).
+    --stats: per-frame wall time (evaluate, draw, hand to ffmpeg) p50/p95/max
   mui-cut eval   PROJECT --t SECONDS [--scene NAME]
   mui-cut fmt    PROJECT
   mui-cut serve  PROJECT [--port 8740] [--web DIR]";
@@ -69,7 +70,7 @@ fn run(argv: &[String]) -> Result<()> {
             .or_else(|| (k == "-o").then_some("o"))
             .ok_or_else(|| format!("unexpected `{k}`\n{USAGE}"))?;
         // The switches take no value.
-        if name == "cpu" {
+        if name == "cpu" || name == "stats" {
             flags.push((name.to_owned(), String::new()));
             continue;
         }
@@ -288,9 +289,13 @@ fn render(args: &Args) -> Result<()> {
     };
     let start = std::time::Instant::now();
     let mut frames = 0usize;
+    // Wall time per loop pass: a stall anywhere (a readback, a full pipe)
+    // shows up as a tail.
+    let mut times = Vec::new();
     for s in scenes {
         let n = (s.duration * p.fps).round().max(1.) as usize;
         for i in 0..n {
+            let pass = std::time::Instant::now();
             let t = i as f64 / p.fps;
             let subs: Vec<Frame> = (0..mb)
                 .map(|k| eval(&p, s, t + SHUTTER / p.fps * k as f64 / mb as f64))
@@ -299,6 +304,7 @@ fn render(args: &Args) -> Result<()> {
                 write(&px)?;
             }
             frames += 1;
+            times.push(pass.elapsed().as_secs_f64() * 1e3);
         }
     }
     for px in b.finish()? {
@@ -316,5 +322,22 @@ fn render(args: &Args) -> Result<()> {
         b.name(),
         frames as f64 / secs
     );
+    if args.has("stats") {
+        let mut slow: Vec<(usize, f64)> = times.iter().copied().enumerate().collect();
+        slow.sort_by(|a, b| b.1.total_cmp(&a.1));
+        let q = |f: f64| slow[((slow.len() - 1) as f64 * (1. - f)) as usize].1;
+        let worst: Vec<String> = slow
+            .iter()
+            .take(3)
+            .map(|(i, ms)| format!("#{i} {ms:.1}"))
+            .collect();
+        println!(
+            "frame time: p50 {:.2} ms, p95 {:.2} ms, max {:.2} ms; slowest {}",
+            q(0.5),
+            q(0.95),
+            q(1.),
+            worst.join(", ")
+        );
+    }
     Ok(())
 }

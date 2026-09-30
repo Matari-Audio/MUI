@@ -96,9 +96,23 @@ try {
   const draws = () => js(`+document.querySelector('#view').dataset.draws`);
   const busy = () => js(`+document.querySelector('#view').dataset.ms`);
   const [d0, b0] = [await draws(), await busy()];
-  await click('#play'); await sleep(2000); const [d1, b1] = [await draws(), await busy()]; await click('#play'); await key('Home', 'Home');
+  // Pacing: the gaps between frames coming back while playing.
+  const pacing = () => js(`(() => { const s = pacing.shown, d = s.slice(1).map((v, i) => v - s[i]), n = d.length || 1;
+    const m = d.reduce((a, b) => a + b, 0) / n, q = x => [...d].sort((a, b) => a - b)[Math.floor(x * (d.length - 1))] ?? 0;
+    return { n: d.length, mean: m, sd: Math.sqrt(d.reduce((a, b) => a + (b - m) ** 2, 0) / n), p50: q(0.5), p95: q(0.95), dropped: pacing.dropped }; })()`);
+  const report = (what, p) => console.log(`    ${what}: ${p.n} gaps, ${(1000 / p.mean).toFixed(1)} frames/s, gap ${p.mean.toFixed(1)} ± ${p.sd.toFixed(1)} ms (p50 ${p.p50.toFixed(1)}, p95 ${p.p95.toFixed(1)}), ${p.dropped} dropped`);
+  await click('#play'); await sleep(2000); const [d1, b1] = [await draws(), await busy()]; const free = await pacing(); await click('#play'); await key('Home', 'Home');
   console.log(`    playback: ${((d1 - d0) / 2).toFixed(0)} frames/s on ${backend} (${engine}), ${((b1 - b0) / (d1 - d0)).toFixed(1)} ms per draw in the worker`);
+  report('free-running', free);
   check(d1 - d0 > 20, 'playback keeps drawing');
+  // Locked to the project's 30 fps grid: each grid frame is drawn once.
+  await click('#lock'); await click('#hud-toggle');
+  await click('#play'); await sleep(2000); const locked = await pacing();
+  const hud = await js(`document.querySelector('#hud').textContent`);
+  await shot('editor-hud.png'); await click('#play'); await click('#lock'); await click('#hud-toggle'); await key('Home', 'Home');
+  report('fps-locked', locked);
+  check(locked.n > 40 && Math.abs(locked.mean - 1000 / 30) < 6, 'fps-locked playback lands on the 30 fps grid');
+  check(/fps .* dropped/.test(hud) && /p50\/p95/.test(hud), 'the pacing HUD shows fps, drops and frame times');
 
   // The shapes scene, its card selected from the layer list and dragged.
   await click('#scenes button:nth-child(2)');
