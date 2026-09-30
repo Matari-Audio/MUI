@@ -66,6 +66,10 @@ aside { padding: 0 10px 10px; background: var(--panel); overflow: auto; }
 .key.animated { color: var(--ink); }
 .key.here { color: var(--bg); background: var(--ink); border-color: var(--ink); }
 #error { color: var(--ink); white-space: pre-wrap; font-size: 11px; border-left: 2px solid var(--ink); padding-left: 8px; }
+#keys { display: inline-flex; gap: 1px; }
+#keys button { width: 16px; height: 22px; padding: 0; font-size: 0; border-radius: 2px; background: #d8d8dc; }
+#keys button.black { background: #202024; }
+#keys button.down { background: var(--accent, #8b7cff); }
 #bottom { grid-area: bottom; display: grid; grid-template-rows: 30px minmax(0, 1fr) 28px 190px; border-top: 1px solid var(--line); background: var(--panel); min-height: 0; }
 .transport, .graph-bar { display: flex; align-items: center; gap: 10px; padding: 0 10px; border-bottom: 1px solid var(--line); }
 .graph-bar { border-top: 1px solid var(--line); }
