@@ -379,4 +379,27 @@ fn render_segments_reuse_unchanged_spans_and_splice_losslessly() {
     // --range forces a span back through the encoder.
     let log = render("forced.mp4", &["--segment", "1", "--range", "0.2s-0.4s"]);
     assert!(log.contains("1 rendered, 7 cached"), "{log}");
+
+    // The CPU pool drains once per span and keeps going; --stats times
+    // every drawn frame across all of them.
+    let log = render(
+        "cpu.mp4",
+        &[
+            "--segment",
+            "1",
+            "--range",
+            "0s-7.5s",
+            "--renderer",
+            "cpu",
+            "--stats",
+        ],
+    );
+    assert!(log.contains("8 rendered, 0 cached"), "{log}");
+    assert!(log.contains("frame time: p50"), "{log}");
+    let cpu = luma(&dir.join("cpu.mp4"), size);
+    assert_eq!(cpu.len(), 225);
+    for i in [0, 97, 224] {
+        let d = mean_diff(&cpu[i], &straight[i]);
+        assert!(d < 1.5, "CPU frame {i} differs from the GPU by {d:.2}");
+    }
 }

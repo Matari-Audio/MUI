@@ -977,6 +977,39 @@ fn variables_bind_and_variants_resolve() {
 }
 
 #[test]
+fn variables_bind_duplicator_animator_and_deformer_params() {
+    // A number binds anywhere a number goes, even deep in a stack.
+    let json = r#"{"size": [64, 64], "fps": 30,
+        "variables": {"n": {"type": "number", "value": 3}, "gap": {"type": "number", "value": 10}},
+        "variants": [{"name": "big", "vars": {"n": 6, "gap": 20}}],
+        "scenes": [{"name": "a", "duration": 1, "layers": [
+            {"id": "row", "kind": "duplicator", "count": {"var": "n"},
+             "spacing_x": {"var": "gap"}, "spacing_y": {"var": "gap", "mul": 2}},
+            {"id": "word", "kind": "text", "text": "hi",
+             "animators": [{"stagger": {"var": "gap", "mul": 0.01}, "x": {"var": "gap"}}],
+             "deformers": [{"kind": "twist", "angle": {"var": "gap"}, "radius": {"var": "n", "mul": 10}}]}
+        ]}]}"#;
+    let check = |p: &Project, n: usize, gap: f64| {
+        let f = eval(p, &p.scenes[0], 0.5);
+        let row = drawn(&f, "row");
+        assert_eq!((row.count, row.spacing), (n, [gap, gap * 2.]));
+        let word = &p.scenes[0].layers[1];
+        assert!((word.animators[0].stagger.at(0.) - gap * 0.01).abs() < 1e-12);
+        assert_eq!(word.animators[0].x.at(0.), gap);
+        assert_eq!(
+            drawn(&f, "word").deformers,
+            vec![Deform::Twist {
+                angle: gap,
+                radius: n as f64 * 10.
+            }]
+        );
+    };
+    let p = Project::load(json).unwrap();
+    check(&p, 3, 10.);
+    check(&p.variant("big").unwrap(), 6, 20.);
+}
+
+#[test]
 fn variables_reject_what_does_not_fit() {
     let with = |vars: &str, variants: &str, bg: &str| {
         let json = format!(
