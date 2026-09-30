@@ -29,12 +29,16 @@ struct Shared {
     state: Mutex<(String, Option<std::time::Instant>)>,
     /// The project text whose plugin states were last captured.
     captured: Mutex<String>,
+    /// The sound, played as the editor plays (`/transport`).
+    live: std::sync::OnceLock<Arc<crate::live::Live>>,
 }
 
 pub fn serve(project: &Path, port: u16, web: PathBuf) -> Result<()> {
     let known =
         std::fs::read_to_string(project).map_err(|e| format!("{}: {e}", project.display()))?;
-    Project::load(&known).map_err(|e| format!("{}: {e}", project.display()))?;
+    let rate = Project::load(&known)
+        .map_err(|e| format!("{}: {e}", project.display()))?
+        .sample_rate;
     if !web.join("pkg").exists() {
         eprintln!(
             "mui-cut: {} has no pkg/; run media/mui-cut/web/build.sh first",
@@ -48,7 +52,16 @@ pub fn serve(project: &Path, port: u16, web: PathBuf) -> Result<()> {
         listeners: Mutex::new(Vec::new()),
         state: Mutex::new(("null".into(), None)),
         captured: Mutex::new(String::new()),
+        live: std::sync::OnceLock::new(),
     });
+    let weak = Arc::downgrade(&shared);
+    // ponytail: the device runs at the rate the project had when serve
+    // started; restart serve after changing `sample_rate`.
+    let _ = shared.live.set(crate::live::Live::new(project, rate, move |msg| {
+        if let Some(s) = weak.upgrade() {
+            s.broadcast(format!("event: live\ndata: {msg}\n\n").as_bytes());
+        }
+    }));
     let listener =
         TcpListener::bind(("127.0.0.1", port)).map_err(|e| format!("port {port}: {e}"))?;
     println!(
@@ -262,6 +275,34 @@ impl Shared {
                         respond(stream, "400 Bad Request", "text/plain", e.as_bytes()).map_err(io)
                     }
                 }
+            }
+            // The live transport: play, pause, seek, and where it is.
+            ("POST", "/transport" | "/live/note") => {
+                if length > 64 << 10 {
+                    return respond(stream, "413 Payload Too Large", "text/plain", b"too large")
+                        .map_err(io);
+                }
+                let mut body = vec![0; length];
+                r.read_exact(&mut body).map_err(io)?;
+                let Ok(v) = serde_json::from_slice::<serde_json::Value>(&body) else {
+                    return respond(stream, "400 Bad Request", "text/plain", b"not JSON")
+                        .map_err(io);
+                };
+                let live = self.live.get().ok_or("no transport")?;
+                let reply = if path == "/transport" {
+                    Ok(live.control(&v))
+                } else {
+                    live.note(&v).map(|()| live.report())
+                };
+                match reply {
+                    Ok(v) => respond(stream, "200 OK", "application/json", v.to_string().as_bytes()),
+                    Err(e) => respond(stream, "400 Bad Request", "text/plain", e.as_bytes()),
+                }
+                .map_err(io)
+            }
+            ("GET", "/transport") => {
+                let v = self.live.get().ok_or("no transport")?.report();
+                respond(stream, "200 OK", "application/json", v.to_string().as_bytes()).map_err(io)
             }
             ("GET", "/state") => {
                 let (state, at) = self.state.lock().expect("no panic holds it").clone();

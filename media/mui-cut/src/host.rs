@@ -280,6 +280,17 @@ fn fresh(dir: &Path, key: &str, stamp: &str) -> bool {
         })
 }
 
+/// An adapter's stdin, for more than one thread.
+pub type Writer = std::sync::Arc<std::sync::Mutex<ChildStdin>>;
+
+/// One command line to an adapter.
+pub fn write(w: &Writer, v: &Value) -> Result<()> {
+    let mut w = w.lock().map_err(|_| "adapter stdin poisoned")?;
+    writeln!(w, "{v}")
+        .and_then(|()| w.flush())
+        .map_err(|e| format!("adapter stdin: {e}"))
+}
+
 /// What comes back on the audio side of the wire: samples (stereo
 /// interleaved) and the end of an advance.
 pub enum Sound {
@@ -290,7 +301,8 @@ pub enum Sound {
 /// One adapter process: its stdin, its JSON packets, and its sound.
 pub struct Session {
     child: Child,
-    stdin: ChildStdin,
+    /// Shared with a live transport's audio thread ([`Session::writer`]).
+    stdin: Writer,
     packets: Receiver<Value>,
     /// Taken by a live transport that advances on its own thread.
     pub sound: Option<Receiver<Sound>>,
@@ -353,7 +365,7 @@ impl Session {
         });
         Ok(Self {
             child,
-            stdin,
+            stdin: std::sync::Arc::new(std::sync::Mutex::new(stdin)),
             packets,
             sound: Some(sound),
             textures: HashMap::new(),
@@ -378,10 +390,13 @@ impl Session {
         }
     }
 
+    /// Its stdin, for a thread that sends while another snapshots.
+    pub fn writer(&self) -> Writer {
+        self.stdin.clone()
+    }
+
     pub fn send(&mut self, v: &Value) -> Result<()> {
-        writeln!(self.stdin, "{v}")
-            .and_then(|()| self.stdin.flush())
-            .map_err(|e| format!("adapter stdin: {e}"))
+        write(&self.stdin, v)
     }
 
     /// Ask for a scene and wait for the one that follows the ask: every

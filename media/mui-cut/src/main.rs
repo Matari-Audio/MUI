@@ -12,6 +12,7 @@
 
 mod audio;
 mod build;
+mod live;
 mod midi;
 mod encode;
 mod host;

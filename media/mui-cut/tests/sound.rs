@@ -191,3 +191,93 @@ fn a_relative_adapter_path_resolves_from_the_project() {
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
     assert!(dir.join("sub/.cut-cache").read_dir().unwrap().count() > 1);
 }
+
+fn http(port: u16, method: &str, path: &str, body: &str) -> Value {
+    use std::io::{Read as _, Write as _};
+    let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    write!(s, "{method} {path} HTTP/1.1\r\nContent-Length: {}\r\n\r\n{body}", body.len()).unwrap();
+    let mut out = String::new();
+    s.read_to_string(&mut out).unwrap();
+    let body = out.split("\r\n\r\n").nth(1).unwrap();
+    serde_json::from_str(body).unwrap_or_else(|_| panic!("{out}"))
+}
+
+/// `serve` plays the scene: on the null device the audio clock runs in
+/// real time from where the editor started it, a key played live is heard
+/// within 50 ms, the plugin's UI is captured as it plays and announced,
+/// and pause stops the clock.
+#[test]
+fn serve_plays_the_sound_in_time_with_the_playhead() {
+    use std::io::{BufRead as _, Write as _};
+    let notes = json!([{"t": 0.0, "dur": 3.0, "pitch": 57}]);
+    let project = project("sound-live", 4.0, json!({"notes": notes}));
+    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    struct Kill(std::process::Child);
+    impl Drop for Kill {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let _serve = Kill(
+        Command::new(BIN)
+            .args(["serve"])
+            .arg(&project)
+            .args(["--port", &port.to_string()])
+            .env("MUI_CUT_AUDIO", "null")
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let start = std::time::Instant::now();
+    while std::net::TcpStream::connect(("127.0.0.1", port)).is_err() {
+        assert!(start.elapsed().as_secs() < 20, "serve did not start");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let mut sse = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    write!(sse, "GET /events HTTP/1.1\r\n\r\n").unwrap();
+    let r = http(port, "POST", "/transport", r#"{"playing": true, "t": 1.0, "scene": 0}"#);
+    assert_eq!((r["playing"].as_bool(), r["t"].as_f64()), (Some(true), Some(1.0)));
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    let a = http(port, "GET", "/transport", "");
+    let wall = std::time::Instant::now();
+    std::thread::sleep(std::time::Duration::from_millis(600));
+    let b = http(port, "GET", "/transport", "");
+    let ran = b["t"].as_f64().unwrap() - a["t"].as_f64().unwrap();
+    let real = wall.elapsed().as_secs_f64();
+    assert!((ran - real).abs() < 0.05, "the audio clock ran {ran} s in {real} s");
+    assert!(a["t"].as_f64().unwrap() > 1.0 && b["device"] == "null");
+    assert!(b["latency_ms"].as_f64().unwrap() < 50., "{b}");
+    http(port, "POST", "/live/note", r#"{"layer": "synth", "note": 72, "on": true}"#);
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    let c = http(port, "GET", "/transport", "");
+    let heard = c["note_ms"].as_f64().unwrap();
+    assert!(heard > 0. && heard < 50., "a live key took {heard} ms");
+    // The UI as it plays, announced to the editor.
+    let mut lines = std::io::BufReader::new(sse);
+    let mut line = String::new();
+    let mut state = None;
+    while state.is_none() {
+        line.clear();
+        assert!(lines.read_line(&mut line).unwrap() > 0);
+        if let Some(d) = line.strip_prefix("data: ").filter(|d| d.contains("\"layer\"")) {
+            let v: Value = serde_json::from_str(d).unwrap();
+            // The first ones may be gone: only the last few are kept.
+            state = v["state"]
+                .as_str()
+                .filter(|k| project.parent().unwrap().join(".cut-cache").join(format!("{k}.json")).is_file())
+                .map(str::to_owned);
+        }
+    }
+    let state = state.unwrap();
+    assert!(state.starts_with("live/synth-"), "{state}");
+    let cap: mui_cut::Capture = serde_json::from_slice(
+        &std::fs::read(project.parent().unwrap().join(".cut-cache").join(format!("{state}.json"))).unwrap(),
+    )
+    .unwrap();
+    assert!(!cap.fragments.is_empty());
+    let d = http(port, "POST", "/transport", r#"{"playing": false}"#);
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    let e = http(port, "GET", "/transport", "");
+    assert_eq!(d["t"], e["t"], "paused, the clock stands");
+}
