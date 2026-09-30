@@ -402,6 +402,37 @@ a re-run renders only frames whose content changed. A 2D scene or a
 missing Blender is an error. 1280x720 at 64 samples takes about 1-2 s per
 frame on an RX 6600, plus Blender's startup.
 
+### Sources
+
+`sources` lists what was imported into the project, for the editor's
+Sources panel: files (`image`, `svg`, `lottie`, `model`, `path` relative to
+the project) and plugins (`source` as a plugin layer names it).
+
+```json
+"sources": [
+  { "id": "logo", "kind": "svg", "path": "media/logo.svg" },
+  { "id": "synth", "kind": "plugin", "source": { "cargo": "../Cargo.toml", "example": "synth" } }
+]
+```
+
+The panel also shows the files and plugins layers use without listing them
+(greyed). A plugin is a folder of its parts, from its fresh capture (the
+source told nothing, `plugin::home`), which `serve` captures; nested part
+ids (`panel/knob`) nest in the tree. Audio and fonts are not sources:
+nothing plays or sets them yet.
+
+### Parenting
+
+`"parent": "card"` attaches a layer to another in its scene, Cavalry and
+After Effects style: its `x`, `y` (and `z` in 3D) are offsets in the
+parent's space, turned and scaled with it; rotation and scale add up and
+opacity multiplies. `eval` composes it, so every renderer (2D, 3D,
+Blender), `check` and the editor see world values. A parent that is
+missing, or a chain that loops, is a load error. Reparenting in the
+editor or with MCP `layer_parent` keeps the layer where it is on screen at
+the playhead by rewriting its local keys through both parents' transforms.
+3D turns (`rx`, `ry`) are not inherited.
+
 ### Plugin layers
 
 A `plugin` layer films a running MUI plugin editor: its real UI, split into
@@ -471,6 +502,11 @@ parts you can move, key, highlight and explode.
   `children`, plus every surface with its frame, for aiming the pointer
   and `select`.
 
+- `show: ["osc"]` makes a **component layer**: only those parts (and any
+  nested under them, `panel/knob` under `panel`) are drawn, no backdrop,
+  each where the whole UI puts it. Its outline is their captured rects.
+  Dragging a part in from the Sources panel makes one.
+
 See `examples/plugin.cut.json`: a flat scene (a keyed knob, a knob dragged
 by a keyed pointer, then exploded and highlighted) and a 3D one (the UI
 exploded into depth under an orbiting camera). `examples/deep.cut.json`
@@ -491,8 +527,27 @@ explodes two levels in 3D: panels, then their controls.
   Click a layer to select it (outlined),
   drag to move it: an animated `x`/`y` gets a key at the playhead, a plain one
   changes its value.
+- **Sources** (left, collapsible): every source the project uses or has
+  imported, with thumbnails. **Import** (or drop PNG, SVG, Lottie JSON or
+  `.glb` files on the left panel) copies files to `media/` beside the
+  project; **+ Plugin** adds a Cargo example/bin or a prebuilt adapter. A
+  plugin opens (▸) into its part tree. Drag a source, or any part, onto
+  the viewport or the layer list to make a layer; a part becomes a
+  component layer (`show`) at its spot in the plugin (on the scene's
+  whole plugin layer, if there is one). Clicking a row selects the layer
+  or part that shows it, and selecting in the viewport highlights the row.
 - **Scenes / Layers** (left): switch scene, add a scene, add a rect, ellipse
-  or text, reorder or delete layers.
+  or text, reorder or delete layers. Children nest under their parents:
+  drag a layer onto another to parent it, onto the list's empty space to
+  unparent it (or pick `parent` in the inspector); either keeps it where
+  it is. Deleting a parent hands its children to its own parent.
+- **Reset to default** (inspector): a part back where the plugin puts it;
+  a layer's transform keys and offsets cleared (to the frame's middle, or
+  onto its parent), and a plugin's explode and part offsets. Undoable.
+- **Scene mode** (scene inspector) switches 2D and 3D and keeps the layout:
+  into 3D nothing moves (the default camera sees the z = 0 plane as the 2D
+  frame); back to 2D, each layer goes where the camera shows it at the
+  playhead, scaled by its distance (`place::flatten`).
 - **Inspector** (right): the layer's settings (text, path data, layout, file),
   then every keyable property at the playhead, as the engine lists them
   (`Cut::props`), animators and deformers each under a header with their
@@ -556,6 +611,9 @@ announces edits made by someone else.
   keys, explode and the capture manifest, and builds for wasm. `host.rs`
   is the CLI's side: it builds or finds the adapter, replays commands and
   writes the cache.
+- `src/sources.rs`: the project's `sources` and `Project::all_sources`.
+  `src/place.rs`: parenting (`compose` in `eval`, `reparent`), reset to
+  default and `flatten` (3D to 2D through the camera).
 - `src/pool.rs`: the frame-parallel CPU export.
 - `src/fx.rs`, `src/fx/`: the effect schema (`EFFECTS`), evaluation, and
   the GPU passes: one WGSL file per effect after a shared `prelude.wgsl`,
@@ -648,7 +706,9 @@ properties with key times), `get` (a JSON Pointer), `patch` (RFC 6902, all
 or nothing), `set`, `key`, `add_layer`, `remove_layer`, `eval`, `check`,
 `still`, `sheet`, `strip`, `diff` (images come back as PNG image content),
 `gen`, `render` + `render_status` (a background job), `plugin_parts`,
-`editor_state`, `editor_goto`. Pointers may name scenes and layers by name/id:
+`sources_list` (sources with the layers using them and a plugin's part
+tree), `source_add`, `layer_parent` (parent or detach, keeping the screen
+position), `editor_state`, `editor_goto`. Pointers may name scenes and layers by name/id:
 `/scenes/intro/layers/title/x`.
 
 Every tool reads the file and every edit writes it: validated, refused if a
@@ -702,6 +762,13 @@ snapshots in the editor rather than `CurveHistory`, for the same reason.
   textured from the shared atlas, and the effect passes are full-frame, so
   a layer stack would need its own padded texture per layer (a blur or
   displacement spills past the atlas slot's gutter). A scene's stack runs.
+- Sources and parenting: parenting inherits `z` but not 3D turns; a
+  reparent through a turning parent keeps keyed positions exact only when
+  `x` and `y` are keyed at the same times (a plain one is solved at the
+  playhead). Back to 2D drops `rx`/`ry` foreshortening. Reset, reparent
+  and the 2D switch refuse layers with variable bindings (edit those in
+  the file). The part tree is flat until nested part discovery lands;
+  its code already nests `panel/child` ids.
 - Plugin layers: the web editor shows the captures `serve` made, not the
   plugin running in WASM. A new state (a param or pointer edit) appears
   once `serve` has captured it, which takes a few seconds for a Cargo

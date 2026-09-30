@@ -183,7 +183,11 @@ impl Cut {
                     .flat_map(move |l| l.plugin_track(p.fps, last))
             })
             .map(|s| s.key)
-            .chain(p.all_sources().iter().filter_map(|m| m.state()))
+            .chain(
+                p.all_sources()
+                    .iter()
+                    .filter_map(crate::sources::Media::state),
+            )
             .map(|k| format!("{}/{k}.json", crate::plugin::CACHE))
             .collect();
         paths.sort();

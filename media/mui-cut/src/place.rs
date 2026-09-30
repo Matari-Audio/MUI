@@ -100,31 +100,32 @@ pub fn compose(scene: &Scene, layers: &mut [Drawn]) {
         .collect();
     let local: Vec<Xf> = layers.iter().map(Xf::of).collect();
     let mut world: Vec<Option<Xf>> = vec![None; layers.len()];
-    fn resolve(
-        i: usize,
-        depth: usize,
-        parent: &[Option<usize>],
-        local: &[Xf],
-        world: &mut [Option<Xf>],
-    ) -> Xf {
-        if let Some(w) = world[i] {
-            return w;
-        }
-        let w = match parent[i] {
-            Some(p) if depth < parent.len() => {
-                resolve(p, depth + 1, parent, local, world).then(&local[i])
-            }
-            _ => local[i],
-        };
-        world[i] = Some(w);
-        w
-    }
-    for i in 0..layers.len() {
+    for (i, d) in layers.iter_mut().enumerate() {
         let w = resolve(i, 0, &parent, &local, &mut world);
-        let d = &mut layers[i];
         (d.x, d.y, d.space.z) = (w.x, w.y, w.z);
         (d.rotation, d.scale, d.opacity) = (w.rotation, w.scale, w.opacity);
     }
+}
+
+/// Layer `i`'s world transform, its parents' first, memoised in `world`.
+fn resolve(
+    i: usize,
+    depth: usize,
+    parent: &[Option<usize>],
+    local: &[Xf],
+    world: &mut [Option<Xf>],
+) -> Xf {
+    if let Some(w) = world[i] {
+        return w;
+    }
+    let w = match parent[i] {
+        Some(p) if depth < parent.len() => {
+            resolve(p, depth + 1, parent, local, world).then(&local[i])
+        }
+        _ => local[i],
+    };
+    world[i] = Some(w);
+    w
 }
 
 /// Every `parent` names another layer of the scene and no chain of them

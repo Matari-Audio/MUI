@@ -1,6 +1,19 @@
 {
   "size": [1280, 720],
   "fps": 30.0,
+  "sources": [
+    {
+      "id": "mark",
+      "name": "Mark",
+      "kind": "svg",
+      "path": "mark.svg"
+    },
+    {
+      "id": "spin",
+      "kind": "lottie",
+      "path": "spin.json"
+    }
+  ],
   "scenes": [
     {
       "name": "type",
