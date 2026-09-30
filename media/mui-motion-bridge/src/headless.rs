@@ -6,7 +6,7 @@ use mui::host::headless::Headless;
 use mui::prelude::Size;
 use serde_json::{Value, json};
 
-use crate::{CaptureStream, Editor, run_live};
+use crate::{CaptureStream, Editor, NoteEvent, run_live};
 
 /// Captured at twice the editor's points, so a part filmed up close stays
 /// sharp.
@@ -20,24 +20,40 @@ pub fn run_headless(
     view: Headless,
     edit: impl FnMut(&Value) -> Result<(), String>,
 ) -> Result<(), String> {
+    run_headless_with(describe, view, edit, |_, _| {}, || Value::Null)
+}
+
+/// [`run_headless`] with the plugin's DSP running: `audio` renders the
+/// host's notes (see [`run_live`]), and `patch` is the snapshot's `patch`
+/// (`null` leaves it out). The editor lays out at the host's `view` size
+/// when it sends one, as a window resize would.
+pub fn run_headless_with(
+    describe: Value,
+    view: Headless,
+    edit: impl FnMut(&Value) -> Result<(), String>,
+    audio: impl FnMut(&[NoteEvent], &mut [[f32; 2]]) + Send + 'static,
+    mut patch: impl FnMut() -> Value,
+) -> Result<(), String> {
     let Headless {
         ui,
         mut view,
         size: window,
     } = view;
-    // The tree lays out at the window's size over the view's zoom (a
-    // design size fitted to the window), as a window would.
-    let zoom = view.zoom(window);
-    let zoom = if zoom.is_finite() && zoom > 0. {
-        zoom
-    } else {
-        1.
-    };
-    let size = Size::new(window.width / zoom, window.height / zoom);
     let mut editor = Editor::new(ui);
     let mut capture = CaptureStream::default();
+    let mut size = window;
     let frame = move |_rev: u64, clock: u64, inputs: &[Value]| {
         editor.advance(inputs, clock, |ui, input, _dt, sizes| {
+            // The tree lays out at the window's size over the view's zoom
+            // (a design size fitted to the window), as a window would.
+            let window = Editor::viewport(sizes, window);
+            let zoom = view.zoom(window);
+            let zoom = if zoom.is_finite() && zoom > 0. {
+                zoom
+            } else {
+                1.
+            };
+            size = Size::new(window.width / zoom, window.height / zoom);
             let tree = view.build(ui, &input);
             // Every tween settled: the pixels depend on the model alone.
             ui.frame(Editor::layout(tree, sizes)?, Some(size), input, 1.)
@@ -53,9 +69,14 @@ pub fn run_headless(
             reason = "an editor is a few thousand points"
         )]
         let (w, h) = ((size.width * SCALE) as u16, (size.height * SCALE) as u16);
-        capture.frame(scene, w, h, SCALE, &roots)
+        let mut value = capture.frame(scene, w, h, SCALE, &roots)?;
+        let patch = patch();
+        if !patch.is_null() {
+            value["patch"] = patch;
+        }
+        Ok(value)
     };
-    run_live(describe, |_, _| {}, edit, frame)
+    run_live(describe, audio, edit, frame)
 }
 
 /// A parameter `set`, read: `{"op": "set", "id": .., "field": .., "value": ..}`

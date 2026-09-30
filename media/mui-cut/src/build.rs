@@ -719,7 +719,8 @@ fn absolute_paths(line: &str, root: &Path) -> String {
 /// The adapter's `main.rs` for `p`'s framework.
 fn main_rs(p: &Plugin) -> String {
     let body = match p.framework {
-        Framework::Moose | Framework::Truce => include_str!("adapter/moose.rs"),
+        Framework::Moose => include_str!("adapter/moose.rs"),
+        Framework::Truce => include_str!("adapter/truce.rs"),
         Framework::NicePlug => include_str!("adapter/nice.rs"),
         Framework::Mui => include_str!("adapter/mui.rs"),
     };

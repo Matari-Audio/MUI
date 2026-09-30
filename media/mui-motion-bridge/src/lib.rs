@@ -7,7 +7,7 @@ pub use capture::{CaptureStream, capture, capture_frame, discover_parts, discove
 mod editor;
 pub use editor::{Editor, VIEW};
 mod headless;
-pub use headless::{ParamSet, describe, param_set, run_headless};
+pub use headless::{ParamSet, describe, param_set, run_headless, run_headless_with};
 /// The MUI this bridge is built on: a generated adapter names it here, so
 /// Cargo loads it as the bridge's path dependency.
 pub use mui;
