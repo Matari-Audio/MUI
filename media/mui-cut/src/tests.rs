@@ -1297,7 +1297,7 @@ fn plugin_parts_are_slabs_at_their_depth_in_3d() {
     // Other layers pass through; a plugin with no capture is its placeholder.
     let rect = one_layer(r#"{"id":"r","kind":"rect"}"#);
     let r = &eval(&rect, &rect.scenes[0], 0.).layers[0];
-    assert_eq!(assets.slabs(r), [r.clone()]);
+    assert_eq!(assets.slabs(r), std::slice::from_ref(r));
     let none = Assets::default().slabs(d);
     assert_eq!(none.len(), 1);
     assert!(matches!(none[0].kind, Kind::Rect));
