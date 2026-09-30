@@ -122,13 +122,18 @@ fn executable(src: &Source, dir: &Path) -> Result<(PathBuf, String)> {
         } else {
             ("--example", &src.example)
         };
-        let out = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
+        let manifest = dir.join(&src.cargo);
+        // Built from its own directory, with its own toolchain file: not
+        // the one of wherever mui-cut was started, nor mui-cut's own.
+        let out = Command::new("cargo")
+            .current_dir(manifest.parent().unwrap_or(dir))
+            .env_remove("RUSTUP_TOOLCHAIN")
             .args([
                 "build",
                 "--message-format=json-render-diagnostics",
                 "--manifest-path",
             ])
-            .arg(dir.join(&src.cargo))
+            .arg(&manifest)
             .args([flag, name])
             .stderr(Stdio::inherit())
             .output()

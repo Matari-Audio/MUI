@@ -420,9 +420,16 @@ fn plugin_project(name: &str) -> PathBuf {
     ))
     .unwrap();
     let mut v: serde_json::Value = serde_json::from_str(&src).unwrap();
-    let source = &mut v["scenes"][0]["layers"][0]["source"];
-    assert_eq!(source["example"], "synth");
-    *source = serde_json::json!({ "bin": synth });
+    for l in v["scenes"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .flat_map(|s| s["layers"].as_array_mut().unwrap().iter_mut())
+        .filter(|l| l.get("source").is_some())
+    {
+        assert_eq!(l["source"]["example"], "synth");
+        l["source"] = serde_json::json!({ "bin": synth });
+    }
     let project = dir.join("plugin.cut.json");
     std::fs::write(&project, v.to_string()).unwrap();
     project
@@ -456,7 +463,10 @@ fn plugin_layers_capture_the_real_ui_once_and_draw_it() {
         .count();
     let p = mui_cut::Project::load(&std::fs::read_to_string(&project).unwrap()).unwrap();
     let steps = p.scenes[0].layers[0].plugin_track(p.fps, 240);
-    assert_eq!(manifests, steps.len());
+    // And the 3D scene's layer, told nothing, is one more.
+    let deck = p.scenes[1].layers[3].plugin_track(p.fps, 180);
+    assert_eq!(deck.len(), 1);
+    assert_eq!(manifests, steps.len() + 1);
     // The real UI split into its named panels.
     let cap: mui_cut::Capture = serde_json::from_slice(
         &std::fs::read(cache.join(format!("{}.json", steps[0].key))).unwrap(),
@@ -549,7 +559,15 @@ fn render_segments_redraw_when_a_plugin_capture_changes() {
         let o = Command::new(BIN)
             .arg("render")
             .arg(&project)
-            .args(["--size", "320x180", "--segment", "4", "-o"])
+            .args([
+                "--scene",
+                "synth",
+                "--size",
+                "320x180",
+                "--segment",
+                "4",
+                "-o",
+            ])
             .arg(project.with_file_name("out.mp4"))
             .output()
             .unwrap();
@@ -573,4 +591,64 @@ fn render_segments_redraw_when_a_plugin_capture_changes() {
     }
     let log = render();
     assert!(log.contains("2 rendered, 0 cached"), "{log}");
+}
+
+/// A Cargo source builds from its own directory with its own toolchain
+/// (rustup picks it from there), whatever directory and toolchain mui-cut
+/// itself runs under: `cargo` here is a stand-in that logs both.
+#[cfg(unix)]
+#[test]
+fn a_cargo_source_builds_with_its_own_toolchain() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = scratch("plugin-toolchain");
+    let src = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/examples/plugin.cut.json"
+    ))
+    .unwrap();
+    let mut v: serde_json::Value = serde_json::from_str(&src).unwrap();
+    for l in v["scenes"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .flat_map(|s| s["layers"].as_array_mut().unwrap().iter_mut())
+        .filter(|l| l.get("source").is_some())
+    {
+        l["source"]["cargo"] = concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml").into();
+    }
+    let project = dir.join("plugin.cut.json");
+    std::fs::write(&project, v.to_string()).unwrap();
+    let bin = dir.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let log = dir.join("cargo.log");
+    let fake = bin.join("cargo");
+    std::fs::write(
+        &fake,
+        format!(
+            "#!/bin/sh\necho \"$PWD|$RUSTUP_TOOLCHAIN\" >> '{}'\nexec '{}' \"$@\"\n",
+            log.display(),
+            env!("CARGO")
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
+    // The examples were built into the test's target dir; build there.
+    let target = Path::new(BIN).parent().unwrap().parent().unwrap();
+    let o = Command::new(BIN)
+        .current_dir(&dir)
+        .env("PATH", path)
+        .env("RUSTUP_TOOLCHAIN", "somebody-elses")
+        .env("CARGO_TARGET_DIR", target)
+        .args(["still"])
+        .arg(&project)
+        .args(["--t", "1", "--size", "320x180", "-o"])
+        .arg(dir.join("a.png"))
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    assert_eq!(
+        std::fs::read_to_string(&log).unwrap().trim(),
+        format!("{}|", env!("CARGO_MANIFEST_DIR"))
+    );
 }

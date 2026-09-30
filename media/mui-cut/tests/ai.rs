@@ -589,7 +589,15 @@ fn mcp_lists_a_plugin_layers_parts_and_surfaces() {
     ))
     .unwrap();
     let mut v: serde_json::Value = serde_json::from_str(&src).unwrap();
-    v["scenes"][0]["layers"][0]["source"] = serde_json::json!({ "bin": synth });
+    for l in v["scenes"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .flat_map(|s| s["layers"].as_array_mut().unwrap().iter_mut())
+        .filter(|l| l.get("source").is_some())
+    {
+        l["source"] = serde_json::json!({ "bin": synth });
+    }
     let project = d.join("p.cut.json");
     std::fs::write(&project, v.to_string()).unwrap();
     let mut m = Mcp::start();

@@ -327,7 +327,7 @@ try {
   // parts in the layer list, one selected and dragged, then exploded.
   const synth = join(dirname(bin), 'examples/synth');
   const plug = JSON.parse(readFileSync(join(here, '../examples/plugin.cut.json'), 'utf8'));
-  plug.scenes[0].layers[0].source = { bin: synth };
+  for (const l of plug.scenes.flatMap(s => s.layers)) if (l.source) l.source = { bin: synth };
   writeFileSync(file, JSON.stringify(plug));
   let parts = 0;
   for (let i = 0; i < 150 && parts < 5; i++) { await sleep(200); parts = await js(`document.querySelectorAll('#layers button.part').length`); }
