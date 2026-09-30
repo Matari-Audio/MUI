@@ -128,28 +128,26 @@ pub fn detect(dir: &Path) -> Result<Plugin> {
     let packages = meta["packages"].as_array().cloned().unwrap_or_default();
     let deps = |p: &Value| p["dependencies"].as_array().cloned().unwrap_or_default();
     // The package at `dir`, or the one plugin among the workspace's.
-    let pkg = match packages
+    let pkg = if let Some(p) = packages
         .iter()
         .find(|p| Path::new(p["manifest_path"].as_str().unwrap_or("")) == manifest)
     {
-        Some(p) => p.clone(),
-        None => {
-            let plugins: Vec<&Value> = packages
-                .iter()
-                .filter(|p| framework(&deps(p)).is_some())
-                .collect();
-            match plugins[..] {
-                [one] => one.clone(),
-                [] => return Err(format!("{}: no package uses MUI", dir.display())),
-                _ => {
-                    let names: Vec<&str> =
-                        plugins.iter().filter_map(|p| p["name"].as_str()).collect();
-                    return Err(format!(
-                        "{}: several plugins ({}); add one's folder",
-                        dir.display(),
-                        names.join(", ")
-                    ));
-                }
+        p.clone()
+    } else {
+        let plugins: Vec<&Value> = packages
+            .iter()
+            .filter(|p| framework(&deps(p)).is_some())
+            .collect();
+        match plugins[..] {
+            [one] => one.clone(),
+            [] => return Err(format!("{}: no package uses MUI", dir.display())),
+            _ => {
+                let names: Vec<&str> = plugins.iter().filter_map(|p| p["name"].as_str()).collect();
+                return Err(format!(
+                    "{}: several plugins ({}); add one's folder",
+                    dir.display(),
+                    names.join(", ")
+                ));
             }
         }
     };

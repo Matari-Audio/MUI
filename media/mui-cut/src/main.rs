@@ -193,20 +193,19 @@ fn add(argv: &[String]) -> Result<()> {
         }
     }
     let from = from.ok_or_else(|| format!("add needs a plugin folder or git URL\n{USAGE}"))?;
-    let project = match project {
-        Some(p) => p,
-        // The one project in this folder.
-        None => {
-            let found: Vec<PathBuf> = std::fs::read_dir(".")
-                .map_err(|e| e.to_string())?
-                .flatten()
-                .map(|e| e.path())
-                .filter(|p| p.to_string_lossy().ends_with(".cut.json"))
-                .collect();
-            match &found[..] {
-                [one] => one.clone(),
-                _ => return Err("which project? --project P.cut.json".into()),
-            }
+    // The one project in this folder, unless named.
+    let project = if let Some(p) = project {
+        p
+    } else {
+        let found: Vec<PathBuf> = std::fs::read_dir(".")
+            .map_err(|e| e.to_string())?
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.to_string_lossy().ends_with(".cut.json"))
+            .collect();
+        match &found[..] {
+            [one] => one.clone(),
+            _ => return Err("which project? --project P.cut.json".into()),
         }
     };
     let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
@@ -249,15 +248,17 @@ fn add(argv: &[String]) -> Result<()> {
             list("pinned")
         );
     }
-    fn walk(parts: &serde_json::Value, depth: usize) {
-        for p in parts.as_array().into_iter().flatten() {
-            println!("  {}{}", "  ".repeat(depth), p["id"].as_str().unwrap_or(""));
-            walk(&p["children"], depth + 1);
-        }
-    }
     println!("  parts:");
     walk(&r["parts"], 1);
     Ok(())
+}
+
+/// Print a parts tree, indented by depth.
+fn walk(parts: &serde_json::Value, depth: usize) {
+    for p in parts.as_array().into_iter().flatten() {
+        println!("  {}{}", "  ".repeat(depth), p["id"].as_str().unwrap_or(""));
+        walk(&p["children"], depth + 1);
+    }
 }
 
 /// Write through a sibling temp file, so a reader never sees half a project.
