@@ -57,11 +57,13 @@ pub fn serve(project: &Path, port: u16, web: PathBuf) -> Result<()> {
     let weak = Arc::downgrade(&shared);
     // ponytail: the device runs at the rate the project had when serve
     // started; restart serve after changing `sample_rate`.
-    let _ = shared.live.set(crate::live::Live::new(project, rate, move |msg| {
-        if let Some(s) = weak.upgrade() {
-            s.broadcast(format!("event: live\ndata: {msg}\n\n").as_bytes());
-        }
-    }));
+    let _ = shared
+        .live
+        .set(crate::live::Live::new(project, rate, move |msg| {
+            if let Some(s) = weak.upgrade() {
+                s.broadcast(format!("event: live\ndata: {msg}\n\n").as_bytes());
+            }
+        }));
     let listener =
         TcpListener::bind(("127.0.0.1", port)).map_err(|e| format!("port {port}: {e}"))?;
     println!(
@@ -295,14 +297,25 @@ impl Shared {
                     live.note(&v).map(|()| live.report())
                 };
                 match reply {
-                    Ok(v) => respond(stream, "200 OK", "application/json", v.to_string().as_bytes()),
+                    Ok(v) => respond(
+                        stream,
+                        "200 OK",
+                        "application/json",
+                        v.to_string().as_bytes(),
+                    ),
                     Err(e) => respond(stream, "400 Bad Request", "text/plain", e.as_bytes()),
                 }
                 .map_err(io)
             }
             ("GET", "/transport") => {
                 let v = self.live.get().ok_or("no transport")?.report();
-                respond(stream, "200 OK", "application/json", v.to_string().as_bytes()).map_err(io)
+                respond(
+                    stream,
+                    "200 OK",
+                    "application/json",
+                    v.to_string().as_bytes(),
+                )
+                .map_err(io)
             }
             ("GET", "/state") => {
                 let (state, at) = self.state.lock().expect("no panic holds it").clone();

@@ -71,7 +71,11 @@ pub struct Live {
 impl Live {
     /// A transport for `project` at `rate`; nothing runs until it plays.
     /// `announce` sends one SSE message to the editors.
-    pub fn new(project: &Path, rate: u32, announce: impl Fn(&str) + Send + Sync + 'static) -> Arc<Self> {
+    pub fn new(
+        project: &Path,
+        rate: u32,
+        announce: impl Fn(&str) + Send + Sync + 'static,
+    ) -> Arc<Self> {
         Arc::new(Self {
             project: project.to_owned(),
             rate,
@@ -104,7 +108,11 @@ impl Live {
         {
             let mut s = self.state.lock().expect("no panic holds it");
             let t = self.now(&s, duration);
-            s.t0 = v["t"].as_f64().filter(|t| t.is_finite()).unwrap_or(t).clamp(0., duration);
+            s.t0 = v["t"]
+                .as_f64()
+                .filter(|t| t.is_finite())
+                .unwrap_or(t)
+                .clamp(0., duration);
             if let Some(i) = v["scene"].as_u64() {
                 s.scene = i as usize;
             }
@@ -145,13 +153,17 @@ impl Live {
     /// A key played on the editor's keyboard (or MIDI) into `layer`.
     pub fn note(&self, v: &Value) -> Result<(), String> {
         let layer = v["layer"].as_str().ok_or("a note needs its `layer`")?;
-        let key = v["note"].as_u64().filter(|n| *n <= 127).ok_or("`note` is 0..127")? as u8;
+        let key = v["note"]
+            .as_u64()
+            .filter(|n| *n <= 127)
+            .ok_or("`note` is 0..127")? as u8;
         let on = v["on"].as_bool().ok_or("`on` is true or false")?;
         let vel = v["velocity"].as_u64().unwrap_or(100).clamp(1, 127) as u8;
-        self.notes
-            .lock()
-            .expect("no panic holds it")
-            .push((layer.to_owned(), key, on.then_some(vel)));
+        self.notes.lock().expect("no panic holds it").push((
+            layer.to_owned(),
+            key,
+            on.then_some(vel),
+        ));
         *self.heard.lock().expect("no panic holds it") = Some((Instant::now(), None));
         Ok(())
     }
@@ -218,7 +230,8 @@ impl Live {
                     .build_output_stream(
                         &config,
                         move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-                            me.device_frames.fetch_max((data.len() / 2) as u64, Ordering::AcqRel);
+                            me.device_frames
+                                .fetch_max((data.len() / 2) as u64, Ordering::AcqRel);
                             me.pull(data);
                         },
                         |e| eprintln!("mui-cut: audio device: {e}"),
@@ -227,7 +240,10 @@ impl Live {
                     .map_err(|e| eprintln!("mui-cut: audio device: {e}; playing to a null device"))
                     .ok()?;
                 stream.play().ok()?;
-                let name = device.description().map(|d| d.name().to_owned()).unwrap_or_else(|_| "audio device".into());
+                let name = device
+                    .description()
+                    .map(|d| d.name().to_owned())
+                    .unwrap_or_else(|_| "audio device".into());
                 Some((stream, name))
             })
             .flatten();
@@ -298,7 +314,8 @@ impl Live {
                 let start = self.played.load(Ordering::Acquire) + (q.len() / 2) as u64;
                 q.extend(chunk);
                 if !live.is_empty()
-                    && let Some((_, frame @ None)) = &mut *self.heard.lock().expect("no panic holds it")
+                    && let Some((_, frame @ None)) =
+                        &mut *self.heard.lock().expect("no panic holds it")
                 {
                     *frame = Some(start);
                 }
@@ -325,8 +342,9 @@ impl Live {
                     let mut errs = Vec::new();
                     let saved = {
                         let mut s = session.lock().expect("no panic holds it");
-                        s.snapshot(&mut errs)
-                            .and_then(|packet| crate::host::save(&cache, &key, "live", &packet, &s.textures))
+                        s.snapshot(&mut errs).and_then(|packet| {
+                            crate::host::save(&cache, &key, "live", &packet, &s.textures)
+                        })
                     };
                     match saved {
                         Ok(()) => {
@@ -387,7 +405,10 @@ struct Mix {
 
 impl Mix {
     fn sessions(&self) -> Vec<(String, Arc<Mutex<Session>>)> {
-        self.voices.iter().map(|v| (v.layer.clone(), v.session.clone())).collect()
+        self.voices
+            .iter()
+            .map(|v| (v.layer.clone(), v.session.clone()))
+            .collect()
     }
 
     /// The project as it is now: adapters kept for layers whose source
@@ -398,7 +419,9 @@ impl Mix {
         let last = frame_at(s.duration, p.fps);
         let mut old: Vec<Voice> = std::mem::take(&mut self.voices);
         for l in &s.layers {
-            let Kind::Plugin { source, notes, .. } = &l.kind else { continue };
+            let Kind::Plugin { source, notes, .. } = &l.kind else {
+                continue;
+            };
             let key = serde_json::to_string(source).unwrap_or_default();
             let v = match old.iter().position(|v| v.layer == l.id && v.source == key) {
                 Some(i) => old.swap_remove(i),
@@ -445,7 +468,9 @@ impl Mix {
     fn seek(&mut self, at: u64) -> Result<(), String> {
         self.panic();
         self.at = at;
-        let Some(p) = &self.project else { return Ok(()) };
+        let Some(p) = &self.project else {
+            return Ok(());
+        };
         let f = frame_at(at as f64 / f64::from(p.sample_rate), p.fps);
         for v in &mut self.voices {
             v.offset = v.clock.saturating_sub(at);
@@ -462,8 +487,12 @@ impl Mix {
     /// The next chunk of the scene's sound, stereo, `live` notes played
     /// at its start. Wraps at the scene's end.
     fn chunk(&mut self, rate: u32, live: &[LiveNote]) -> Result<Vec<f32>, String> {
-        let Some(p) = &self.project else { return Ok(vec![0.; 2 * CHUNK]) };
-        let Some(s) = p.scenes.get(self.scene) else { return Ok(vec![0.; 2 * CHUNK]) };
+        let Some(p) = &self.project else {
+            return Ok(vec![0.; 2 * CHUNK]);
+        };
+        let Some(s) = p.scenes.get(self.scene) else {
+            return Ok(vec![0.; 2 * CHUNK]);
+        };
         let end = p.samples(s);
         let n = CHUNK.min((end - self.at.min(end)) as usize).max(1);
         let (from, to) = (self.at, self.at + n as u64);
@@ -471,7 +500,11 @@ impl Mix {
         for v in &mut self.voices {
             let f = frame_at(from as f64 / f64::from(rate), p.fps);
             if f != v.frame {
-                for step in v.steps.iter().filter(|s| s.frame > v.frame.min(f) && s.frame <= f) {
+                for step in v
+                    .steps
+                    .iter()
+                    .filter(|s| s.frame > v.frame.min(f) && s.frame <= f)
+                {
                     for c in step.commands.iter().filter(|c| c["op"] != "advance") {
                         crate::host::write(&v.writer, c)?;
                     }
@@ -495,20 +528,30 @@ impl Mix {
                 });
             }
             let target = v.offset + to;
-            crate::host::write(&v.writer, &json!({"op": "advance", "to": target, "notes": notes}))?;
+            crate::host::write(
+                &v.writer,
+                &json!({"op": "advance", "to": target, "notes": notes}),
+            )?;
             let mut pcm = Vec::with_capacity(2 * n);
             loop {
                 match v.sound.recv_timeout(PATIENCE) {
                     Ok(Sound::Samples(x)) => pcm.extend(x),
                     Ok(Sound::Advanced) => break,
-                    Err(RecvTimeoutError::Timeout) => return Err(format!("`{}` stopped playing", v.layer)),
-                    Err(RecvTimeoutError::Disconnected) => return Err(format!("`{}` exited", v.layer)),
+                    Err(RecvTimeoutError::Timeout) => {
+                        return Err(format!("`{}` stopped playing", v.layer));
+                    }
+                    Err(RecvTimeoutError::Disconnected) => {
+                        return Err(format!("`{}` exited", v.layer));
+                    }
                 }
             }
             v.clock = target;
             crate::audio::add(&mut out, from as usize, rate, &v.gain, |i, _| {
                 let i = i - from as usize;
-                [pcm.get(2 * i).copied().unwrap_or(0.), pcm.get(2 * i + 1).copied().unwrap_or(0.)]
+                [
+                    pcm.get(2 * i).copied().unwrap_or(0.),
+                    pcm.get(2 * i + 1).copied().unwrap_or(0.),
+                ]
             });
         }
         for l in &s.layers {

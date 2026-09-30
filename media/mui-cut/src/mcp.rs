@@ -457,7 +457,10 @@ fn tools() -> Vec<Value> {
             "notes_set",
             "Replace a plugin layer's notes (the melody its DSP plays into the soundtrack and its UI follows).",
         ),
-        tool::<NotesArgs>("notes_add", "Add notes to a plugin layer, kept in time order."),
+        tool::<NotesArgs>(
+            "notes_add",
+            "Add notes to a plugin layer, kept in time order.",
+        ),
         tool::<PluginPlay>(
             "plugin_play",
             "Render a slice of a scene's sound (every plugin layer's notes and audio layer, mixed) to a WAV, or with an .mp4 `out` the frames with it; returns the file, its length and peak.",
@@ -802,7 +805,8 @@ impl Server {
                 if !errs.is_empty() {
                     return Err(errs.join("\n"));
                 }
-                let pcm = crate::audio::mix(&p, &path, &[s])?.ok_or("nothing in the scene sounds")?;
+                let pcm =
+                    crate::audio::mix(&p, &path, &[s])?.ok_or("nothing in the scene sounds")?;
                 let (from, to) = (a.from.max(0.), a.to.unwrap_or(s.duration).min(s.duration));
                 if to <= from {
                     return Err("`to` must come after `from`".into());

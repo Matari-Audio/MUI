@@ -1523,14 +1523,32 @@ fn each_level_stacks_deeper_in_3d() {
 #[test]
 fn notes_are_scheduled_to_sample_offsets() {
     let notes = [
-        Note { t: 0.5, dur: 0.25, pitch: 60, vel: 100 },
-        Note { t: 0.75, dur: 1e-9, pitch: 60, vel: 90 },
+        Note {
+            t: 0.5,
+            dur: 0.25,
+            pitch: 60,
+            vel: 100,
+        },
+        Note {
+            t: 0.75,
+            dur: 1e-9,
+            pitch: 60,
+            vel: 90,
+        },
     ];
     let ev = plugin::note_events(&notes, 44_100);
-    let at: Vec<(u64, &str)> = ev.iter().map(|(s, v)| (*s, v["op"].as_str().unwrap())).collect();
+    let at: Vec<(u64, &str)> = ev
+        .iter()
+        .map(|(s, v)| (*s, v["op"].as_str().unwrap()))
+        .collect();
     assert_eq!(
         at,
-        [(22_050, "note_on"), (33_075, "note_off"), (33_075, "note_on"), (33_076, "note_off")]
+        [
+            (22_050, "note_on"),
+            (33_075, "note_off"),
+            (33_075, "note_on"),
+            (33_076, "note_off")
+        ]
     );
     assert_eq!(ev[0].1["at"], 22_050);
     let p = one_layer(
@@ -1539,7 +1557,10 @@ fn notes_are_scheduled_to_sample_offsets() {
     let steps = p.scenes[0].layers[0].plugin_track(30., 48_000, 30);
     // Every frame after the first advances to its own sample.
     assert_eq!(steps.len(), 31);
-    assert_eq!(steps[15].commands[0], serde_json::json!({"op": "advance", "to": 24_000, "notes": []}));
+    assert_eq!(
+        steps[15].commands[0],
+        serde_json::json!({"op": "advance", "to": 24_000, "notes": []})
+    );
     // The note at 0.5 s is sample 24000: in frame 16's span [24000, 25600).
     assert_eq!(steps[16].commands[0]["to"], 25_600);
     assert_eq!(steps[16].commands[0]["notes"][0]["at"], 24_000);
@@ -1558,7 +1579,13 @@ fn segment_keys_change_with_the_notes() {
     let frame = |p: &Project| serde_json::to_string(&eval(p, &p.scenes[0], 1.)).unwrap();
     assert_ne!(frame(&a), frame(&b));
     // Before the notes differ in anything played, the state is shared.
-    let state = |p: &Project, t| eval(p, &p.scenes[0], t).layers[0].plugin.clone().unwrap().state;
+    let state = |p: &Project, t| {
+        eval(p, &p.scenes[0], t).layers[0]
+            .plugin
+            .clone()
+            .unwrap()
+            .state
+    };
     assert_eq!(state(&a, 0.1), state(&b, 0.1));
     assert_ne!(state(&a, 0.3), state(&b, 0.3));
 }

@@ -16,20 +16,29 @@ pub fn notes(bytes: &[u8], track: Option<usize>, at: f64) -> Result<Vec<Note>> {
         for e in t {
             tick += u64::from(e.delta.as_int());
             match e.kind {
-                TrackEventKind::Meta(MetaMessage::Tempo(us)) => tempo.push((tick, f64::from(us.as_int()))),
-                TrackEventKind::Midi { message, .. } if track.is_none_or(|n| n == i) => match message {
-                    MidiMessage::NoteOn { key, vel } if vel > 0 => events.push((tick, i, true, key.as_int(), vel.as_int())),
-                    MidiMessage::NoteOn { key, .. } | MidiMessage::NoteOff { key, .. } => {
-                        events.push((tick, i, false, key.as_int(), 0));
+                TrackEventKind::Meta(MetaMessage::Tempo(us)) => {
+                    tempo.push((tick, f64::from(us.as_int())))
+                }
+                TrackEventKind::Midi { message, .. } if track.is_none_or(|n| n == i) => {
+                    match message {
+                        MidiMessage::NoteOn { key, vel } if vel > 0 => {
+                            events.push((tick, i, true, key.as_int(), vel.as_int()))
+                        }
+                        MidiMessage::NoteOn { key, .. } | MidiMessage::NoteOff { key, .. } => {
+                            events.push((tick, i, false, key.as_int(), 0));
+                        }
+                        _ => {}
                     }
-                    _ => {}
-                },
+                }
                 _ => {}
             }
         }
     }
     if let Some(n) = track.filter(|n| *n >= smf.tracks.len()) {
-        return Err(format!("--track {n}: the file has {} tracks", smf.tracks.len()));
+        return Err(format!(
+            "--track {n}: the file has {} tracks",
+            smf.tracks.len()
+        ));
     }
     tempo.sort_by_key(|t| t.0);
     let seconds: Box<dyn Fn(u64) -> f64> = match smf.header.timing {
@@ -60,7 +69,12 @@ pub fn notes(bytes: &[u8], track: Option<usize>, at: f64) -> Result<Vec<Note>> {
             let t = seconds(from);
             let dur = seconds(tick) - t;
             if dur > 0. {
-                out.push(Note { t: t + at, dur, pitch: k, vel: v.max(1) });
+                out.push(Note {
+                    t: t + at,
+                    dur,
+                    pitch: k,
+                    vel: v.max(1),
+                });
             }
         }
         if on {

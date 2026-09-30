@@ -205,13 +205,30 @@ pub fn clip(project: &Path, scene: &str, from: f64, to: f64, out: &Path) -> Resu
     if !o.status.success() {
         return Err(String::from_utf8_lossy(&o.stderr).into_owned());
     }
-    let args: Vec<String> = ["-ss".into(), from.to_string(), "-to".into(), to.to_string(), "-i".into()]
-        .into_iter()
-        .chain([full.display().to_string()])
-        .chain(["-c:v", "libx264", "-crf", "20", "-c:a", "aac", "-b:a", "256k"].map(String::from))
-        .chain([out.display().to_string()])
-        .collect();
-    let ok = crate::ffmpeg(&args).status().map_err(|e| format!("ffmpeg: {e}"))?;
+    let args: Vec<String> = [
+        "-ss".into(),
+        from.to_string(),
+        "-to".into(),
+        to.to_string(),
+        "-i".into(),
+    ]
+    .into_iter()
+    .chain([full.display().to_string()])
+    .chain(
+        [
+            "-c:v", "libx264", "-crf", "20", "-c:a", "aac", "-b:a", "256k",
+        ]
+        .map(String::from),
+    )
+    .chain([out.display().to_string()])
+    .collect();
+    let ok = crate::ffmpeg(&args)
+        .status()
+        .map_err(|e| format!("ffmpeg: {e}"))?;
     let _ = std::fs::remove_file(&full);
-    if ok.success() { Ok(()) } else { Err(format!("ffmpeg failed cutting {}", out.display())) }
+    if ok.success() {
+        Ok(())
+    } else {
+        Err(format!("ffmpeg failed cutting {}", out.display()))
+    }
 }

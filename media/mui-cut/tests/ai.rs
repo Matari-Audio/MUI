@@ -673,22 +673,39 @@ fn mcp_plays_notes_into_a_plugin_and_reads_its_patch() {
     std::fs::write(&project, p.to_string()).unwrap();
     let mut m = Mcp::start();
     m.text("open", serde_json::json!({"path": project}));
-    m.text("notes_set", serde_json::json!({"layer": "syn", "notes": [{"t": 0.5, "dur": 0.2, "pitch": 64}]}));
+    m.text(
+        "notes_set",
+        serde_json::json!({"layer": "syn", "notes": [{"t": 0.5, "dur": 0.2, "pitch": 64}]}),
+    );
     m.text("notes_add", serde_json::json!({"layer": "syn", "notes": [{"t": 0.1, "dur": 0.2, "pitch": 60, "vel": 90}]}));
-    let saved: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&project).unwrap()).unwrap();
+    let saved: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&project).unwrap()).unwrap();
     let notes = &saved["scenes"][0]["layers"][0]["notes"];
     assert_eq!(notes[0]["pitch"], 60, "kept in time order: {notes}");
     assert_eq!(notes[1]["pitch"], 64);
     let patch: serde_json::Value =
-        serde_json::from_str(&m.text("patch_get", serde_json::json!({"layer": "syn", "t": 0.2}))).unwrap();
+        serde_json::from_str(&m.text("patch_get", serde_json::json!({"layer": "syn", "t": 0.2})))
+            .unwrap();
     assert_eq!(patch["plugin"], "MUI Synth");
-    let level = patch["params"].as_array().unwrap().iter().find(|p| p["id"] == "out.level").unwrap();
+    let level = patch["params"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == "out.level")
+        .unwrap();
     assert_eq!(level["value"], 0.5);
     let wav = d.join("slice.wav");
-    let said = m.text("plugin_play", serde_json::json!({"from": 0.05, "to": 0.45, "out": wav}));
+    let said = m.text(
+        "plugin_play",
+        serde_json::json!({"from": 0.05, "to": 0.45, "out": wav}),
+    );
     assert!(said.contains("0.40 s"), "{said}");
     // A float WAV: 44-byte header, then 0.4 s of stereo f32 at 48 kHz.
     let bytes = std::fs::read(&wav).unwrap();
     assert_eq!(bytes.len(), 44 + 19_200 * 8);
-    assert!(bytes[44..].chunks(4).any(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]).abs() > 0.01));
+    assert!(
+        bytes[44..]
+            .chunks(4)
+            .any(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]).abs() > 0.01)
+    );
 }

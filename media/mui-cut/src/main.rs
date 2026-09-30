@@ -12,11 +12,11 @@
 
 mod audio;
 mod build;
-mod live;
-mod midi;
 mod encode;
 mod host;
+mod live;
 mod mcp;
+mod midi;
 mod script;
 mod segments;
 mod serve;
@@ -27,7 +27,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use mui_cut::yuv::{self, Yuv};
-use mui_cut::{Assets, CpuPool, Engine, Frame, Kind, Offline, Project, Render, Scene, eval, subframes};
+use mui_cut::{
+    Assets, CpuPool, Engine, Frame, Kind, Offline, Project, Render, Scene, eval, subframes,
+};
 
 type Result<T> = std::result::Result<T, String>;
 
@@ -155,19 +157,35 @@ fn run(argv: &[String]) -> Result<()> {
         "capture" => {
             let p = load(&args.project)?;
             let errs = host::capture_missing(&p, &args.project);
-            if errs.is_empty() { Ok(()) } else { Err(errs.join("\n")) }
+            if errs.is_empty() {
+                Ok(())
+            } else {
+                Err(errs.join("\n"))
+            }
         }
         "midi" => {
             let mut p = load(&args.project)?;
             let file = args.get("file").ok_or("midi needs --file SONG.mid")?;
             let bytes = std::fs::read(file).map_err(|e| format!("{file}: {e}"))?;
-            let track = args.get("track").map(str::parse).transpose().map_err(|_| "--track: a number")?;
+            let track = args
+                .get("track")
+                .map(str::parse)
+                .transpose()
+                .map_err(|_| "--track: a number")?;
             let notes = midi::notes(&bytes, track, args.num("at", 0.)?)?;
             let n = notes.len();
             let layer = args.get("layer").ok_or("midi needs --layer ID")?;
             let names: Vec<String> = p.scenes.iter().map(|s| s.name.clone()).collect();
-            let scene = args.get("scene").map_or(0, |n| names.iter().position(|s| s == n).unwrap_or(usize::MAX));
-            let l = p.scenes.get_mut(scene).ok_or("no such scene")?.layers.iter_mut().find(|l| l.id == layer);
+            let scene = args.get("scene").map_or(0, |n| {
+                names.iter().position(|s| s == n).unwrap_or(usize::MAX)
+            });
+            let l = p
+                .scenes
+                .get_mut(scene)
+                .ok_or("no such scene")?
+                .layers
+                .iter_mut()
+                .find(|l| l.id == layer);
             match l.map(|l| &mut l.kind) {
                 Some(Kind::Plugin { notes: into, .. }) => *into = notes,
                 _ => return Err(format!("`{layer}` is not a plugin layer")),

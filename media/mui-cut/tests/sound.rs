@@ -24,7 +24,11 @@ fn has(tool: &str) -> bool {
 
 fn synth() -> PathBuf {
     let s = Path::new(BIN).parent().unwrap().join("examples/synth");
-    assert!(s.is_file(), "{} is missing: `cargo build -p mui-cut --example synth`", s.display());
+    assert!(
+        s.is_file(),
+        "{} is missing: `cargo build -p mui-cut --example synth`",
+        s.display()
+    );
     s
 }
 
@@ -60,19 +64,36 @@ fn soundtrack(project: &Path) -> Vec<f32> {
     let (s, l) = (&p.scenes[0], &p.scenes[0].layers[0]);
     let last = mui_cut::plugin::frame_at(s.duration, p.fps);
     let track = l.plugin_track(p.fps, p.sample_rate, last);
-    let (key, _) = l.plugin_audio(&track, p.fps, p.sample_rate, p.samples(s)).unwrap();
+    let (key, _) = l
+        .plugin_audio(&track, p.fps, p.sample_rate, p.samples(s))
+        .unwrap();
     let bytes = std::fs::read(
-        project.parent().unwrap().join(".cut-cache/audio").join(format!("{key}.f32")),
+        project
+            .parent()
+            .unwrap()
+            .join(".cut-cache/audio")
+            .join(format!("{key}.f32")),
     )
     .unwrap();
-    bytes.chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect()
+    bytes
+        .chunks_exact(4)
+        .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+        .collect()
 }
 
 fn capture(project: &Path, t: f64) -> mui_cut::Capture {
     let p = load(project);
     let l = &p.scenes[0].layers[0];
-    let key = &l.plugin_track(p.fps, p.sample_rate, mui_cut::plugin::frame_at(t, p.fps)).pop().unwrap().key;
-    let file = project.parent().unwrap().join(".cut-cache").join(format!("{key}.json"));
+    let key = &l
+        .plugin_track(p.fps, p.sample_rate, mui_cut::plugin::frame_at(t, p.fps))
+        .pop()
+        .unwrap()
+        .key;
+    let file = project
+        .parent()
+        .unwrap()
+        .join(".cut-cache")
+        .join(format!("{key}.json"));
     serde_json::from_slice(&std::fs::read(file).unwrap()).unwrap()
 }
 
@@ -91,7 +112,10 @@ fn notes_play_from_their_sample_and_the_same_every_time() {
     let first = a.chunks(2).position(|s| s[0] != 0.).unwrap();
     // The sine starts at phase 0: its first sample after the onset is the
     // first non-zero one.
-    assert!(first == on || first == on + 1, "sound from sample {first}, the note is at {on}");
+    assert!(
+        first == on || first == on + 1,
+        "sound from sample {first}, the note is at {on}"
+    );
     assert!(a[..2 * on].iter().all(|v| *v == 0.));
     let peak = a.iter().fold(0f32, |m, v| m.max(v.abs()));
     assert!(peak > 0.05, "peak {peak}");
@@ -122,14 +146,27 @@ fn render_muxes_the_soundtrack_into_the_video() {
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
     let probe = Command::new("ffprobe")
         .args(["-v", "error", "-select_streams", "a:0"])
-        .args(["-show_entries", "stream=codec_name,sample_rate,channels,duration", "-of", "default=nw=1"])
+        .args([
+            "-show_entries",
+            "stream=codec_name,sample_rate,channels,duration",
+            "-of",
+            "default=nw=1",
+        ])
         .arg(&out)
         .output()
         .unwrap();
     let text = String::from_utf8(probe.stdout).unwrap();
-    assert!(text.contains("codec_name=aac") && text.contains("channels=2"), "{text}");
+    assert!(
+        text.contains("codec_name=aac") && text.contains("channels=2"),
+        "{text}"
+    );
     assert!(text.contains(&format!("sample_rate={RATE}")), "{text}");
-    let dur: f64 = text.lines().find_map(|l| l.strip_prefix("duration=")).unwrap().parse().unwrap();
+    let dur: f64 = text
+        .lines()
+        .find_map(|l| l.strip_prefix("duration="))
+        .unwrap()
+        .parse()
+        .unwrap();
     assert!((dur - 1.5).abs() < 0.06, "audio {dur} s");
     let vol = Command::new("ffmpeg")
         .args(["-v", "info", "-i"])
@@ -164,7 +201,8 @@ fn a_keyed_view_size_reflows_the_ui_and_captures_carry_the_patch() {
     let (a, b) = (capture(&project, 0.), capture(&project, 0.8));
     assert_eq!([a.width, a.height], [720., 510.]);
     assert_eq!([b.width, b.height], [1000., 510.]);
-    let frame = |c: &mui_cut::Capture, id: &str| c.tree().into_iter().find(|p| p.path == id).unwrap().frame;
+    let frame =
+        |c: &mui_cut::Capture, id: &str| c.tree().into_iter().find(|p| p.path == id).unwrap().frame;
     let (ha, hb) = (frame(&a, "head"), frame(&b, "head"));
     // The header spans the new width; its height stays: a reflow.
     assert!(hb[2] > ha[2] + 200., "{ha:?} -> {hb:?}");
@@ -172,7 +210,12 @@ fn a_keyed_view_size_reflows_the_ui_and_captures_carry_the_patch() {
     let (oa, ob) = (frame(&a, "filter"), frame(&b, "filter"));
     assert!(ob[0] > oa[0] && ob[2] > oa[2], "{oa:?} -> {ob:?}");
     // The patch: the parameter the layer set, as the plugin reports it.
-    let cutoff = a.patch["params"].as_array().unwrap().iter().find(|p| p["id"] == "filter.cutoff").unwrap();
+    let cutoff = a.patch["params"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == "filter.cutoff")
+        .unwrap();
     assert_eq!(cutoff["value"], 0.2);
     assert_eq!(a.patch["plugin"], "MUI Synth");
 }
@@ -187,7 +230,11 @@ fn a_relative_adapter_path_resolves_from_the_project() {
     let p = json!({"size": [64, 64], "fps": 30.0, "scenes": [{"name": "s", "duration": 0.1,
         "layers": [{"id": "synth", "kind": "plugin", "source": {"bin": "../adapter"}}]}]});
     std::fs::write(dir.join("sub/p.cut.json"), p.to_string()).unwrap();
-    let o = Command::new(BIN).current_dir(&dir).args(["capture", "sub/p.cut.json"]).output().unwrap();
+    let o = Command::new(BIN)
+        .current_dir(&dir)
+        .args(["capture", "sub/p.cut.json"])
+        .output()
+        .unwrap();
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
     assert!(dir.join("sub/.cut-cache").read_dir().unwrap().count() > 1);
 }
@@ -195,7 +242,12 @@ fn a_relative_adapter_path_resolves_from_the_project() {
 fn http(port: u16, method: &str, path: &str, body: &str) -> Value {
     use std::io::{Read as _, Write as _};
     let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
-    write!(s, "{method} {path} HTTP/1.1\r\nContent-Length: {}\r\n\r\n{body}", body.len()).unwrap();
+    write!(
+        s,
+        "{method} {path} HTTP/1.1\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    )
+    .unwrap();
     let mut out = String::new();
     s.read_to_string(&mut out).unwrap();
     let body = out.split("\r\n\r\n").nth(1).unwrap();
@@ -211,7 +263,11 @@ fn serve_plays_the_sound_in_time_with_the_playhead() {
     use std::io::{BufRead as _, Write as _};
     let notes = json!([{"t": 0.0, "dur": 3.0, "pitch": 57}]);
     let project = project("sound-live", 4.0, json!({"notes": notes}));
-    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
     struct Kill(std::process::Child);
     impl Drop for Kill {
         fn drop(&mut self) {
@@ -236,8 +292,16 @@ fn serve_plays_the_sound_in_time_with_the_playhead() {
     }
     let mut sse = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
     write!(sse, "GET /events HTTP/1.1\r\n\r\n").unwrap();
-    let r = http(port, "POST", "/transport", r#"{"playing": true, "t": 1.0, "scene": 0}"#);
-    assert_eq!((r["playing"].as_bool(), r["t"].as_f64()), (Some(true), Some(1.0)));
+    let r = http(
+        port,
+        "POST",
+        "/transport",
+        r#"{"playing": true, "t": 1.0, "scene": 0}"#,
+    );
+    assert_eq!(
+        (r["playing"].as_bool(), r["t"].as_f64()),
+        (Some(true), Some(1.0))
+    );
     std::thread::sleep(std::time::Duration::from_millis(300));
     let a = http(port, "GET", "/transport", "");
     let wall = std::time::Instant::now();
@@ -245,10 +309,18 @@ fn serve_plays_the_sound_in_time_with_the_playhead() {
     let b = http(port, "GET", "/transport", "");
     let ran = b["t"].as_f64().unwrap() - a["t"].as_f64().unwrap();
     let real = wall.elapsed().as_secs_f64();
-    assert!((ran - real).abs() < 0.05, "the audio clock ran {ran} s in {real} s");
+    assert!(
+        (ran - real).abs() < 0.05,
+        "the audio clock ran {ran} s in {real} s"
+    );
     assert!(a["t"].as_f64().unwrap() > 1.0 && b["device"] == "null");
     assert!(b["latency_ms"].as_f64().unwrap() < 50., "{b}");
-    http(port, "POST", "/live/note", r#"{"layer": "synth", "note": 72, "on": true}"#);
+    http(
+        port,
+        "POST",
+        "/live/note",
+        r#"{"layer": "synth", "note": 72, "on": true}"#,
+    );
     std::thread::sleep(std::time::Duration::from_millis(200));
     let c = http(port, "GET", "/transport", "");
     let heard = c["note_ms"].as_f64().unwrap();
@@ -260,19 +332,36 @@ fn serve_plays_the_sound_in_time_with_the_playhead() {
     while state.is_none() {
         line.clear();
         assert!(lines.read_line(&mut line).unwrap() > 0);
-        if let Some(d) = line.strip_prefix("data: ").filter(|d| d.contains("\"layer\"")) {
+        if let Some(d) = line
+            .strip_prefix("data: ")
+            .filter(|d| d.contains("\"layer\""))
+        {
             let v: Value = serde_json::from_str(d).unwrap();
             // The first ones may be gone: only the last few are kept.
             state = v["state"]
                 .as_str()
-                .filter(|k| project.parent().unwrap().join(".cut-cache").join(format!("{k}.json")).is_file())
+                .filter(|k| {
+                    project
+                        .parent()
+                        .unwrap()
+                        .join(".cut-cache")
+                        .join(format!("{k}.json"))
+                        .is_file()
+                })
                 .map(str::to_owned);
         }
     }
     let state = state.unwrap();
     assert!(state.starts_with("live/synth-"), "{state}");
     let cap: mui_cut::Capture = serde_json::from_slice(
-        &std::fs::read(project.parent().unwrap().join(".cut-cache").join(format!("{state}.json"))).unwrap(),
+        &std::fs::read(
+            project
+                .parent()
+                .unwrap()
+                .join(".cut-cache")
+                .join(format!("{state}.json")),
+        )
+        .unwrap(),
     )
     .unwrap();
     assert!(!cap.fragments.is_empty());

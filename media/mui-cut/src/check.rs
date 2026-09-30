@@ -356,7 +356,13 @@ fn fields(raw: &Value, p: &Project, out: &mut Issues) {
                 if k == "notes" {
                     // Notes have a `t` like keys, but are notes.
                     for (ni, n) in rl[k].as_array().into_iter().flatten().enumerate() {
-                        unknown(out, n, &props_of(&def("Note")), &format!("{path}[{ni}]"), at);
+                        unknown(
+                            out,
+                            n,
+                            &props_of(&def("Note")),
+                            &format!("{path}[{ni}]"),
+                            at,
+                        );
                     }
                 } else {
                     keys_fields(out, &rl[k], &key, &path, at);
