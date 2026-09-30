@@ -441,6 +441,49 @@ controls in them under their panel, the same tree `plugin_parts` and
 capture (`explode_levels` 2). Audio is not a source: nothing plays it
 yet.
 
+### Adding a plugin
+
+```sh
+mui-cut add ../KORREKT --project demo.cut.json     # a folder
+mui-cut add https://github.com/Matari-Audio/KURV   # or a git URL (cloned to the cache)
+```
+
+`add` (the editor's **+ Plugin**, MCP `plugin_add`) needs no code in the
+plugin. It reads the crate with `cargo metadata` (a workspace's one plugin
+package is found), tells its framework from its dependencies, finds where
+its editor is made, writes `{"id": package, "kind": "plugin", "source":
+{"plugin": "../KORREKT"}}` into `sources`, and builds and captures it: the
+Sources panel shows its part tree, named by the editor's surface ids.
+
+The adapter is generated (`src/build.rs`, `src/adapter/`) under the cache
+(`$MUI_CUT_CACHE`, else `~/.cache/mui-cut`): a small workspace that depends
+on the plugin by path, opens its real editor as a host would, and serves it
+headless (`mui::host::headless`, `mui_motion_bridge::run_headless`).
+It builds against **this** MUI tree: `--config
+patch."https://github.com/Matari-Audio/MUI".<crate>.path=…` for every MUI
+crate the plugin uses (its dependencies and its `Cargo.lock`). It copies the
+plugin's lock (every other crate stays at the plugin's version), its
+toolchain file and its non-MUI `[patch]`es; the plugin's checkout, lock
+included, is only read.
+
+| Framework | What it finds | Needs in the plugin |
+|---|---|---|
+| moose, truce | `moose::plugin!` / `truce::plugin!` (its `crate::Plugin`); `editor()` opens a `MuiEditor` | nothing |
+| nice-plug | the type `nice_export_clap!(T)` names | `T` public at the crate root (`pub use …::T;`) |
+| plain MUI | `pub fn mui_editor() -> (Ui, (u32, u32), impl mui::host::View + Send + 'static)` | that one function |
+
+Every framework's editor opens its window through `mui_baseview::open`,
+which hands the view to a claiming headless host instead. A library that
+is not `rlib`, a missing `plugin!`, a private nice-plug type or a missing
+`mui_editor` is reported as the exact line to add. Params are `set` by
+parameter id or name, `field` `norm` (0..1) or `value` (plain units). The
+plugin's DSP does not run. A git source is pulled to its latest by `add`.
+
+Plugins follow MUI's main branch. `media/tools/mui-sync` unpins MUI in a
+plugin repo, updates it, checks it and opens a "Follow MUI main" PR;
+`mui-sync.py --check REPO…` fails on any `rev =` pin of a MUI crate, and
+`add` lists the ones it sees.
+
 ### Parenting
 
 `"parent": "card"` attaches a layer to another in its scene, Cavalry and
@@ -476,7 +519,8 @@ parts you can move, key, highlight and explode.
   "parts": { "filter": { "y": -40, "z": -120, "scale": 1.25, "highlight": 1 } } }
 ```
 
-- `source`: the editor as a mui-motion-bridge live adapter. Either a
+- `source`: the editor as a mui-motion-bridge live adapter. A plugin
+  crate, `{"plugin": folder or git URL}` (see "Adding a plugin"), a
   prebuilt executable, `{"bin": path}`, or one built from source,
   `{"cargo": Cargo.toml, "example"|"bin": name}`. Paths are relative to the
   project. `args` are passed on. Any adapter that speaks the bridge's live
@@ -559,7 +603,7 @@ explodes two levels in 3D: panels, then their controls.
 - **Sources** (left, collapsible): every source the project uses or has
   imported, with thumbnails. **Import** (or drop PNG, SVG, Lottie JSON,
   `.glb` or `.ttf`/`.otf` files on the left panel) copies files to `media/` beside the
-  project; **+ Plugin** adds a Cargo example/bin or a prebuilt adapter. A
+  project; **+ Plugin** adds a plugin crate by folder or git URL (or, under its fold, a Cargo example/bin or a prebuilt adapter). A
   plugin opens (▸) into its part tree. Drag a source, or any part, onto
   the viewport or the layer list to make a layer (a font makes a text
   layer in it; the inspector's `font` picks one); a part becomes a

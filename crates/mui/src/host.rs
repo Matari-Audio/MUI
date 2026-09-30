@@ -24,6 +24,8 @@ use mui_scene::prelude::{Cursor, El, Point, Size};
 
 use crate::{Clipboard, Ui};
 
+pub mod headless;
+
 /// A frame after a stall advances time by at most this. Springs are closed
 /// form and do not need it; a tooltip timer should not jump a whole idle
 /// minute on the first hover after it.

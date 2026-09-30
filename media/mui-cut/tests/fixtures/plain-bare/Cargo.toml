@@ -1,0 +1,11 @@
+# A MUI crate that does not export its editor yet (never built).
+[package]
+name = "fixture-plain-bare"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+mui = { git = "https://github.com/Matari-Audio/MUI" }
+
+[workspace]

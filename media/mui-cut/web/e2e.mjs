@@ -451,6 +451,19 @@ try {
     'a panel unfolds onto its controls, indented, with thumbnails');
   check(await js(`document.querySelector('${ctl} .label').textContent`) === 'filter-cutoff', 'named by the part');
   await shot('editor-sources.png');
+  // Zero config: a plugin crate's folder (a git-MUI crate, built against
+  // this MUI by the generic adapter) opens as its tree of parts.
+  const fixture = join(here, '../tests/fixtures/plain');
+  await click('#add-plugin');
+  await js(`(() => { document.querySelector('#pl-from').value = ${JSON.stringify(fixture)}; document.querySelector('#pl-id').value = 'knobs'; document.querySelector('#pl-add').click(); })()`);
+  let added = null;
+  for (let i = 0; i < 50 && !added; i++) { await sleep(200); added = read().sources?.find(s => s.id === 'knobs'); }
+  check(added?.kind === 'plugin' && added.source.plugin?.endsWith('tests/fixtures/plain'), `Add plugin by folder writes a plugin source (${JSON.stringify(added)})`);
+  const knobs = () => js(`[...document.querySelectorAll('#sources [data-source="knobs"][data-part]')].map(r => r.dataset.part)`);
+  let kparts = [];
+  // The first run builds the adapter.
+  for (let i = 0; i < 1500 && !kparts.includes('tone-color'); i++) { await sleep(200); kparts = await knobs(); }
+  check(kparts.includes('tone-color') && kparts.includes('space-mix'), `and its part tree appears (${kparts})`);
   // Drag the `osc` part onto the layer list.
   await js(`globalThis.e2eDrag = new DataTransfer()`);
   await fire('#sources [data-source="synth"][data-part="osc"]', ['dragstart']);

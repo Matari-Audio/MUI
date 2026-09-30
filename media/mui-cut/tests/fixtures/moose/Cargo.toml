@@ -1,0 +1,15 @@
+# A moose plugin's shape, for framework detection (never built).
+[package]
+name = "fixture-moose"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+moose = { git = "https://github.com/Matari-Audio/moose", default-features = false, features = ["mui"] }
+mui = { git = "https://github.com/Matari-Audio/MUI", features = ["cpu"] }
+
+[workspace]

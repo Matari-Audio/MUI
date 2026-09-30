@@ -38,3 +38,5 @@ cargo test --manifest-path media/Cargo.toml --workspace --all-features --offline
 cargo clippy --manifest-path media/Cargo.toml --workspace --all-features --all-targets --offline -- -D warnings
 cargo check --manifest-path media/Cargo.toml -p mui-stage --no-default-features --offline
 cargo clippy --manifest-path media/Cargo.toml -p mui-cut --lib --target wasm32-unknown-unknown --offline -- -D warnings
+# The plugin rev-pin guard (media/tools/mui-sync).
+python3 -m unittest discover -s media/tools/mui-sync

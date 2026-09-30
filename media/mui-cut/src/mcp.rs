@@ -37,7 +37,7 @@ moves their playhead or selection. `plugin_parts` captures a plugin layer's live
 parts as a tree (animate them as `parts.<path>.x` etc.; a control in a panel is `parts.osc/osc-shape.x`; \
 `explode_levels` 2 captures and explodes panels, then their controls) and surfaces (aim `pointer_x`/`pointer_y` at their frames). \
 `sources_list` lists the project's sources (files and plugins, a plugin with its part tree), \
-`source_add` imports one; drag a part in as a layer with a plugin layer's `show: [part]`. \
+`source_add` imports one (`plugin_add` onboards a plugin crate by folder or git URL, zero config); drag a part in as a layer with a plugin layer's `show: [part]`. \
 `layer_parent` parents a layer to another (Cavalry style: it inherits position, rotation, scale, \
 z and opacity) keeping it where it is on screen. `schema` has every field.";
 
@@ -325,6 +325,16 @@ struct SourceAdd {
 }
 
 #[derive(Deserialize, JsonSchema)]
+struct PluginAdd {
+    /// A MUI plugin crate's folder (relative to the project, or absolute)
+    /// or git URL.
+    from: String,
+    /// The source's id (default: the package name).
+    #[serde(default)]
+    id: Option<String>,
+}
+
+#[derive(Deserialize, JsonSchema)]
 struct LayerParent {
     #[serde(default)]
     scene: Option<String>,
@@ -422,6 +432,10 @@ fn tools() -> Vec<Value> {
         tool::<SourceAdd>(
             "source_add",
             "Import a file or plugin into the project's `sources` (the editor's Sources panel), validated.",
+        ),
+        tool::<PluginAdd>(
+            "plugin_add",
+            "Onboard a MUI plugin with no code in it: detects its crate, framework (moose, truce, nice-plug or plain MUI), MUI crates and editor, adds it to `sources`, builds a generic adapter for its real editor against this MUI (the plugin's checkout and Cargo.lock untouched) and captures it. Returns that report with the discovered part tree (ids for `show` and `parts.<id>.x`); if the plugin lacks something, the error says exactly what to add.",
         ),
         tool::<LayerParent>(
             "layer_parent",
@@ -736,6 +750,13 @@ impl Server {
                         .push(a.source);
                     Ok(())
                 })
+            }
+            "plugin_add" => {
+                let a: PluginAdd = parse(args)?;
+                let path = self.path()?;
+                let dir = path.parent().unwrap_or(Path::new("."));
+                let r = crate::build::add(&path, &a.from, dir, a.id.as_deref())?;
+                Ok(vec![text(&pretty(&r))])
             }
             "layer_parent" => {
                 let a: LayerParent = parse(args)?;

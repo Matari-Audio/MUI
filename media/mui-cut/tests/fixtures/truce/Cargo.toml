@@ -1,0 +1,16 @@
+# A truce plugin's shape, for framework detection (never built).
+[package]
+name = "fixture-truce"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+truce = { version = "6.3", default-features = false }
+mui = { git = "https://github.com/Matari-Audio/MUI" }
+mui-truce = { git = "https://github.com/Matari-Audio/MUI" }
+
+[workspace]

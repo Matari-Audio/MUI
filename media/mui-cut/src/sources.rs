@@ -118,7 +118,7 @@ impl Project {
                 continue;
             }
             let stem = match &kind {
-                MediaKind::Plugin { source } => [&source.example, &source.bin]
+                MediaKind::Plugin { source } => [&source.example, &source.bin, &source.plugin]
                     .into_iter()
                     .find(|s| !s.is_empty())
                     .map_or("plugin", |s| s.as_str()),
