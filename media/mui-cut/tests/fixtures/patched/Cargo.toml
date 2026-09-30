@@ -1,0 +1,14 @@
+# A MUI crate that path-patches a MUI crate, as KONTAKTO does (never built).
+[package]
+name = "fixture-patched"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+mui = { git = "https://github.com/Matari-Audio/MUI" }
+
+[patch."https://github.com/Matari-Audio/MUI"]
+mui-baseview = { path = "../../../../../crates/mui-baseview" }
+
+[workspace]

@@ -173,11 +173,22 @@ pub fn detect(dir: &Path) -> Result<Plugin> {
     let src = sources(&pkg_dir.join("src"));
     let (entry, editor) = entry(fw, &src, &mut missing);
     let lock = std::fs::read_to_string(workspace_root.join("Cargo.lock")).unwrap_or_default();
+    // Its MUI dependencies, the MUI crates its lock names, and those its
+    // workspace path-patches (a path source is not in the lock as MUI's)
+    // that this tree has, which the adapter builds from here.
+    let root_manifest =
+        std::fs::read_to_string(workspace_root.join("Cargo.toml")).unwrap_or_default();
+    let local = local_crates(&mui_root());
     let mut mui: Vec<String> = pkg_deps
         .iter()
         .filter(|d| is_mui(d["source"].as_str().unwrap_or("")))
         .filter_map(|d| d["name"].as_str().map(str::to_owned))
         .chain(locked_mui(&lock))
+        .chain(
+            mui_patches(&root_manifest)
+                .into_iter()
+                .filter(|c| local.contains_key(c)),
+        )
         .collect();
     mui.sort();
     mui.dedup();
@@ -486,16 +497,8 @@ pub fn adapter(plugin: &str, project_dir: &Path) -> Result<PathBuf> {
     let root = mui_root();
     let local = local_crates(&root);
     let mut used = p.mui.clone();
-    // The adapter's own MUI (the headless hook is in it), and whatever the
-    // plugin patches of MUI's that this tree has: this tree wins.
+    // The adapter's own MUI (the headless hook is in it): this tree wins.
     used.push("mui".into());
-    let root_manifest =
-        std::fs::read_to_string(p.workspace_root.join("Cargo.toml")).unwrap_or_default();
-    used.extend(
-        mui_patches(&root_manifest)
-            .into_iter()
-            .filter(|c| local.contains_key(c)),
-    );
     used.sort();
     used.dedup();
     let config = patch_config(&used, &local)?;
@@ -932,6 +935,10 @@ mui-truce = { git = "https://github.com/Matari-Audio/MUI", branch = "revamp" }
             "{:?}",
             p.missing
         );
+        // A MUI crate the plugin path-patches is one the adapter builds
+        // from this tree: it is in the list.
+        let p = detect(&fixture("patched")).unwrap();
+        assert!(p.mui.contains(&"mui-baseview".to_owned()), "{:?}", p.mui);
         let deps =
             |names: &[&str]| -> Vec<Value> { names.iter().map(|n| json!({"name": n})).collect() };
         assert_eq!(framework(&deps(&["serde"])), None);
