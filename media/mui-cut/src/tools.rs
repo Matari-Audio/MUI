@@ -319,7 +319,7 @@ pub fn strip(
         })
         .collect();
     for (i, &t) in ts.iter().enumerate() {
-        let mut d = l.at(t);
+        let mut d = l.eval_at(t, p.fps);
         d.opacity *= 0.2 + 0.8 * i as f64 / (n - 1) as f64;
         layers.push(d);
     }

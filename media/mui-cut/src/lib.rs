@@ -13,6 +13,7 @@ pub mod fx;
 mod gpu;
 mod gpu3d;
 mod motion;
+pub mod plugin;
 #[cfg(not(target_arch = "wasm32"))]
 mod pool;
 mod render;
@@ -33,6 +34,7 @@ pub use motion::{
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use pool::{CpuPool, shutter};
+pub use plugin::{Capture, Fragment, Param, Part, PartAt, PluginAt, Source, Step};
 pub use render::{Assets, Layers, Quad, Renderer};
 pub use shutter::Shutter;
 pub use three::{Cam, Fog, Ground, Lamp, Mode, View};
@@ -229,6 +231,21 @@ pub enum Kind {
     Model {
         path: String,
     },
+    /// A running MUI plugin editor (a mui-motion-bridge adapter), captured
+    /// into parts, centred. `params` and the pointer drive its UI; `parts`
+    /// move its pieces; `explode` pulls them apart. See `src/plugin.rs`.
+    Plugin {
+        source: Source,
+        /// Surface ids to split out as parts; empty lets the bridge's
+        /// `discover_parts` choose.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        select: Vec<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        params: Vec<Param>,
+        /// Per part id, its own motion.
+        #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+        parts: std::collections::BTreeMap<String, Part>,
+    },
 }
 
 /// What a light layer is.
@@ -377,6 +394,20 @@ pub struct Layer {
     /// Lottie: seconds into the animation at the scene's start.
     #[serde(default = "zero", skip_serializing_if = "is_zero")]
     pub time: Anim<f64>,
+    /// Plugin: 0..1 pulls the parts away from the UI's centre (1: twice as
+    /// far), `backdrop` is the opacity of everything that is not a part,
+    /// and the pointer (`pointer_down` >= 0.5 is pressed) is sent to the
+    /// plugin's own controls, in its pixels; (-1, -1) is off the UI.
+    #[serde(default = "zero", skip_serializing_if = "is_zero")]
+    pub explode: Anim<f64>,
+    #[serde(default = "one", skip_serializing_if = "is_one")]
+    pub backdrop: Anim<f64>,
+    #[serde(default = "off", skip_serializing_if = "is_off")]
+    pub pointer_x: Anim<f64>,
+    #[serde(default = "off", skip_serializing_if = "is_off")]
+    pub pointer_y: Anim<f64>,
+    #[serde(default = "zero", skip_serializing_if = "is_zero")]
+    pub pointer_down: Anim<f64>,
     /// Text glyphs and duplicator copies, applied in order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub animators: Vec<Animator>,
@@ -504,6 +535,12 @@ fn is_ring(a: &Anim<f64>) -> bool {
     *a == ring()
 }
 
+fn off() -> Anim<f64> {
+    Anim::Value(-1.)
+}
+fn is_off(a: &Anim<f64>) -> bool {
+    *a == off()
+}
 fn zero() -> Anim<f64> {
     Anim::Value(0.)
 }
@@ -659,8 +696,24 @@ impl Layer {
         if let Kind::Lottie { .. } = self.kind {
             num("time", &self.time);
         }
+        if let Kind::Plugin { params, parts, .. } = &self.kind {
+            num("explode", &self.explode);
+            num("backdrop", &self.backdrop);
+            num("pointer_x", &self.pointer_x);
+            num("pointer_y", &self.pointer_y);
+            num("pointer_down", &self.pointer_down);
+            for (i, p) in params.iter().enumerate() {
+                num(&format!("params.{i}.value"), &p.value);
+            }
+            for (n, a) in plugin::part_props(parts) {
+                num(&n, a);
+            }
+        }
         let vector = self.vector();
-        let own_paint = matches!(self.kind, Kind::Svg { .. } | Kind::Lottie { .. });
+        let own_paint = matches!(
+            self.kind,
+            Kind::Svg { .. } | Kind::Lottie { .. } | Kind::Plugin { .. }
+        );
         if vector && !own_paint {
             num("stroke_width", &self.stroke_width);
         }
@@ -724,6 +777,7 @@ impl Layer {
                 | Kind::Camera { .. }
                 | Kind::Light { .. }
                 | Kind::Model { .. }
+                | Kind::Plugin { .. }
         )
     }
 
@@ -1032,6 +1086,9 @@ pub struct Drawn {
     pub space: three::Space,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub effects: Vec<fx::Fx>,
+    /// Plugin layers: the capture to show and the parts' motion.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plugin: Option<PluginAt>,
 }
 
 /// Everything a renderer needs for one instant of one scene.
@@ -1065,7 +1122,7 @@ pub const MAX_COPIES: usize = 10_000;
 /// Scene `scene` at `t` seconds: a pure function of its arguments, so any
 /// time can be sought in any order.
 pub fn eval(project: &Project, scene: &Scene, t: f64) -> Frame {
-    let layers: Vec<Drawn> = scene.layers.iter().map(|l| l.at(t)).collect();
+    let layers: Vec<Drawn> = scene.layers.iter().map(|l| l.eval_at(t, project.fps)).collect();
     let view = (scene.mode == Mode::ThreeD).then(|| three::view(project.size, scene, &layers));
     Frame {
         size: project.size,
@@ -1080,7 +1137,17 @@ pub fn eval(project: &Project, scene: &Scene, t: f64) -> Frame {
 }
 
 impl Layer {
-    /// Every property at `t`.
+    /// Every property at `t` in a project running at `fps` (a plugin layer
+    /// reads its state on that frame grid).
+    pub fn eval_at(&self, t: f64, fps: f64) -> Drawn {
+        Drawn {
+            plugin: self.plugin_at(t, fps),
+            ..self.at(t)
+        }
+    }
+
+    /// Every property at `t`; a plugin layer's state needs the frame rate,
+    /// so [`Layer::eval_at`] fills it in.
     pub fn at(&self, t: f64) -> Drawn {
         let fill = self.fill.at(t);
         let count = self.count.at(t).round().clamp(0., MAX_COPIES as f64) as usize;
@@ -1150,6 +1217,7 @@ impl Layer {
                 softness: self.softness.at(t).max(0.),
             },
             effects: fx::eval(&self.effects, t),
+            plugin: None,
         }
     }
 }
@@ -1279,6 +1347,16 @@ impl Project {
                     Kind::Camera { path, .. } => bad("path", path)?,
                     Kind::Lottie { speed, .. } if !speed.is_finite() => {
                         return Err(format!("{at}.speed: layer `{id}`: `speed` must be finite"));
+                    }
+                    Kind::Plugin { source, parts, .. } => {
+                        source
+                            .check()
+                            .map_err(|e| format!("{at}.source: layer `{id}`: {e}"))?;
+                        if let Some(p) = parts.keys().find(|p| p.is_empty() || p.contains('.')) {
+                            return Err(format!(
+                                "{at}.parts: layer `{id}`: part id `{p}` must be non-empty, without `.`"
+                            ));
+                        }
                     }
                     _ => {}
                 }

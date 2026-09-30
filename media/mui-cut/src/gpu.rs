@@ -187,7 +187,7 @@ impl GpuCanvas {
             self.size,
             target,
         )?;
-        Ok(layers.quads)
+        Ok(layers.all_quads())
     }
 
     /// Paint `scenes` into `target`, `size` pixels, over `background` (a
