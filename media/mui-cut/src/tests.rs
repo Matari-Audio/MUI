@@ -1,4 +1,6 @@
 use super::*;
+use crate::motion;
+use mui_vello::kurbo::Shape as _;
 
 const DEMO: &str = include_str!("../examples/demo.cut.json");
 
@@ -203,4 +205,304 @@ fn gpu_frames_match_the_cpu_in_order() {
         // Antialiasing differs a little at edges; the frames must not.
         assert!(off < c.len() / 500, "{off} channels differ");
     }
+}
+
+const SHOWCASE: &str = include_str!("../examples/showcase.cut.json");
+
+fn one_layer(layer: &str) -> Project {
+    Project::load(&format!(
+        r#"{{"size":[400,200],"fps":30,"scenes":[{{"name":"a","duration":2,"layers":[{layer}]}}]}}"#
+    ))
+    .unwrap()
+}
+
+#[test]
+fn the_showcase_loads_round_trips_and_seeks() {
+    let p = Project::load(SHOWCASE).unwrap();
+    assert_eq!(p.to_json(), SHOWCASE);
+    for s in &p.scenes {
+        assert_eq!(eval(&p, s, 1.3), eval(&p, s, 1.3));
+    }
+}
+
+#[test]
+fn nested_properties_are_checked_listed_and_sampled() {
+    // An empty key list or bad path data is refused wherever it sits.
+    for bad in [
+        r#"{"id":"t","kind":"text","text":"a","animators":[{"offset":[]}]}"#,
+        r#"{"id":"p","kind":"path","d":"M 0 0 Q"}"#,
+        r#"{"id":"d","kind":"duplicator","layout":"path","along":"nonsense"}"#,
+        r#"{"id":"d","kind":"path","d":"M0 0","deformers":[{"kind":"melt"}]}"#,
+    ] {
+        let json = format!(
+            r#"{{"size":[64,64],"fps":30,"scenes":[{{"name":"a","duration":1,"layers":[{bad}]}}]}}"#
+        );
+        assert!(Project::load(&json).is_err(), "accepted {bad}");
+    }
+    let p = one_layer(
+        r#"{"id":"t","kind":"text","text":"ab","animators":[{"offset":[{"t":1,"v":1},{"t":0,"v":0,"interp":"linear"}]}],
+            "deformers":[{"kind":"wave"}]}"#,
+    );
+    let l = &p.scenes[0].layers[0];
+    let names: Vec<String> = l.props().into_iter().map(|(n, _)| n).collect();
+    for n in [
+        "font_size",
+        "tracking",
+        "animators.0.offset",
+        "animators.0.fill",
+        "deformers.0.amplitude",
+        "trim_end",
+    ] {
+        assert!(names.iter().any(|m| m == n), "{n} missing from {names:?}");
+    }
+    assert!(
+        !names.iter().any(|m| m == "width" || m == "count"),
+        "text has no width or count"
+    );
+    // Nested keys were sorted on load, like top-level ones.
+    assert_eq!(l.prop("animators.0.offset").unwrap().at(0.5), 0.5);
+}
+
+#[test]
+fn text_units_split_by_char_word_and_line() {
+    let s = "ab cd\nef";
+    assert_eq!(text_units(s, Unit::Char), [0, 1, 2, 3, 4, 5, 6]);
+    assert_eq!(text_units(s, Unit::Word), [0, 0, 0, 1, 1, 2, 2]);
+    assert_eq!(text_units(s, Unit::Line), [0, 0, 0, 0, 0, 1, 1]);
+}
+
+#[test]
+fn selectors_step_stagger_and_shuffle_deterministically() {
+    let fx = |a: &Animator, n: usize, t: f64| {
+        motion::apply(std::slice::from_ref(a), n, Rgba([255; 4]), t, |_| {
+            (0..n).collect()
+        })
+    };
+    // Typewriter: halfway through, the first half shows and the rest waits.
+    let tw = Animator::preset("typewriter", 0., 1.).unwrap();
+    let o: Vec<f64> = fx(&tw, 10, 0.5).iter().map(|f| f.opacity).collect();
+    assert_eq!(o, [1., 1., 1., 1., 1., 0., 0., 0., 0., 0.]);
+    // Cascade: each glyph runs the same curve a stagger after the last.
+    let c = Animator::preset("cascade", 0., 0.5).unwrap();
+    let at = fx(&c, 4, 0.3);
+    assert!(
+        at[0].y < at[1].y && at[1].y < at[3].y,
+        "later glyphs are further back"
+    );
+    assert!((fx(&c, 4, 0.3 + 0.04)[1].y - at[0].y).abs() < 1e-9);
+    assert_eq!(fx(&c, 4, 5.)[3].y, 0.);
+    // A seeded shuffle: a permutation, the same every time, another per seed.
+    let rank = |seed| {
+        let a = Animator {
+            order: Order::Random,
+            seed,
+            stagger: Anim::Value(1.),
+            amount: Anim::Keys(vec![key(0., 1., Interp::Hold), key(0.5, 0., Interp::Hold)]),
+            x: Anim::Value(1.),
+            ..Animator::default()
+        };
+        // At t = k + 0.75 exactly the units ranked above k are still selected.
+        (0..8)
+            .map(|u| {
+                (0..8)
+                    .filter(|&k| fx(&a, 8, f64::from(k) + 0.75)[u].x > 0.)
+                    .count()
+            })
+            .collect::<Vec<_>>()
+    };
+    let r = rank(1);
+    let mut sorted = r.clone();
+    sorted.sort_unstable();
+    assert_eq!(sorted, (0..8).collect::<Vec<_>>());
+    assert_eq!(r, rank(1));
+    assert_ne!(r, rank(2));
+    // Falloff shapes: a ramp across all units rises, a triangle peaks mid.
+    let ramp = Animator {
+        shape: Falloff::RampUp,
+        x: Anim::Value(1.),
+        ..Animator::default()
+    };
+    let xs: Vec<f64> = fx(&ramp, 4, 0.).iter().map(|f| f.x).collect();
+    assert_eq!(xs, [0.125, 0.375, 0.625, 0.875]);
+}
+
+#[test]
+fn trim_keeps_the_asked_part_of_each_contour() {
+    let piece = || vector::Piece {
+        path: vector::parse("M 0 0 L 100 0"),
+        fill: None,
+        stroke: None,
+    };
+    let bounds = |p: &[vector::Piece]| {
+        let b = p[0].path.bounding_box();
+        (b.x0.round(), b.x1.round())
+    };
+    let mut p = [piece()];
+    vector::trim(&mut p, [0.25, 0.75, 0.]);
+    assert_eq!(bounds(&p), (25., 75.));
+    // Past the end it wraps: 0.8..1 and 0..0.1, two open contours.
+    let mut p = [piece()];
+    vector::trim(&mut p, [0.3, 0.6, 0.5]);
+    let moves = p[0]
+        .path
+        .elements()
+        .iter()
+        .filter(|e| matches!(e, mui_vello::kurbo::PathEl::MoveTo(_)))
+        .count();
+    assert_eq!(moves, 2);
+    assert_eq!(bounds(&p), (0., 100.));
+    let mut p = [piece()];
+    vector::trim(&mut p, [0.5, 0.5, 0.]);
+    assert!(
+        p[0].path.elements().is_empty(),
+        "an empty range draws nothing"
+    );
+}
+
+#[test]
+fn deformers_are_deterministic_and_neutral_at_zero() {
+    let run = |d: Deform| {
+        let mut p = [vector::Piece {
+            path: vector::parse("M -100 0 L 100 0"),
+            fill: None,
+            stroke: None,
+        }];
+        vector::deform(&mut p, &[d]);
+        p[0].path.elements().to_vec()
+    };
+    let flat = run(Deform::Bend {
+        angle: 0.,
+        length: 100.,
+    });
+    assert!(flat.len() > 40, "subdivided so a straight edge can bend");
+    let still = |els: &[mui_vello::kurbo::PathEl]| {
+        els.iter().all(|e| match e {
+            mui_vello::kurbo::PathEl::MoveTo(p) | mui_vello::kurbo::PathEl::LineTo(p) => {
+                p.y.abs() < 1e-9
+            }
+            _ => true,
+        })
+    };
+    assert!(still(&flat));
+    let noise = |seed| {
+        run(Deform::Noise {
+            amount: 10.,
+            frequency: 0.013,
+            phase: 0.3,
+            seed,
+        })
+    };
+    assert_eq!(noise(4), noise(4));
+    assert_ne!(noise(4), noise(5));
+    assert!(!still(&noise(4)));
+    assert!(!still(&run(Deform::Wave {
+        amplitude: 5.,
+        wavelength: 50.,
+        phase: 0.1
+    })));
+    let bent = run(Deform::Bend {
+        angle: 90.,
+        length: 100.,
+    });
+    assert!(!still(&bent));
+}
+
+#[test]
+fn duplicators_lay_copies_out_and_stagger_them() {
+    let p = one_layer(
+        r#"{"id":"d","kind":"duplicator","x":200,"y":100,"width":10,"height":10,"count":6,"columns":3,"spacing_x":40,"spacing_y":20}"#,
+    );
+    let d = p.scenes[0].layers[0].at(0.);
+    assert_eq!((d.count, d.fx.len()), (6, 6));
+    let pieces = vector::duplicator(&d, Shape::Rect, "", Layout::Grid, "", false);
+    let centres: Vec<(f64, f64)> = pieces
+        .iter()
+        .map(|p| {
+            let b = p.path.bounding_box().center();
+            (b.x.round(), b.y.round())
+        })
+        .collect();
+    assert_eq!(
+        centres,
+        [
+            (-40., -10.),
+            (0., -10.),
+            (40., -10.),
+            (-40., 10.),
+            (0., 10.),
+            (40., 10.)
+        ]
+    );
+    // Radial starts at twelve o'clock; a path layout spaces copies by length.
+    let ring = vector::duplicator(&d, Shape::Ellipse, "", Layout::Radial, "", true);
+    let top = ring[0].path.bounding_box().center();
+    assert!((top.x.abs() < 1e-6) && (top.y + 200.).abs() < 1e-6);
+    let along = vector::duplicator(&d, Shape::Rect, "", Layout::Path, "M 0 0 L 100 0", false);
+    let xs: Vec<f64> = along
+        .iter()
+        .map(|p| p.path.bounding_box().center().x.round())
+        .collect();
+    assert_eq!(xs, [0., 20., 40., 60., 80., 100.]);
+    // The drawn copies are where the layout put them, in the project.
+    let mut r = Renderer::new(400, 200);
+    let (px, quads) = r.draw(&eval(&p, &p.scenes[0], 0.)).unwrap();
+    assert_eq!(quads[0].pts[0], [155., 85.]);
+    let at = |x: usize, y: usize| &px[(y * 400 + x) * 4..][..4];
+    assert_eq!(at(160, 90), [255; 4], "a copy");
+    assert_eq!(at(180, 90), [16, 16, 20, 255], "between copies");
+}
+
+#[test]
+fn text_is_multiline_and_its_glyphs_move() {
+    let p = one_layer(
+        r#"{"id":"t","kind":"text","text":"Hi\nthere","x":200,"y":100,"font_size":40,
+            "animators":[{"ease":"step","start":0.45,"y":30}]}"#,
+    );
+    let d = p.scenes[0].layers[0].at(0.);
+    assert_eq!(d.fx.len(), 7);
+    assert_eq!(
+        d.fx.iter().map(|f| f.y).collect::<Vec<_>>(),
+        [0., 0., 0., 30., 30., 30., 30.]
+    );
+    let r = Renderer::new(400, 200);
+    let two = r.assets.layers(&eval(&p, &p.scenes[0], 0.)).unwrap();
+    let q = &two.quads[0].pts;
+    assert!(q[2][1] - q[0][1] > 80., "two lines of 40 px text: {q:?}");
+    // Without the animator the block is shorter: the second line moved down.
+    let flat =
+        one_layer(r#"{"id":"t","kind":"text","text":"Hi\nthere","x":200,"y":100,"font_size":40}"#);
+    let q0 = r
+        .assets
+        .layers(&eval(&flat, &flat.scenes[0], 0.))
+        .unwrap()
+        .quads[0]
+        .pts;
+    assert!(q[2][1] - q[0][1] > q0[2][1] - q0[0][1] + 25.);
+}
+
+#[test]
+fn svg_and_lottie_layers_draw_their_files() {
+    let p = Project::load(SHOWCASE).unwrap();
+    let s = p.scene("import").unwrap();
+    let mut r = Renderer::new(1280, 720);
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/");
+    for f in ["mark.svg", "spin.json"] {
+        r.add_asset(f, &std::fs::read(format!("{dir}{f}")).unwrap())
+            .unwrap();
+    }
+    let (px, quads) = r.draw(&eval(&p, s, 1.)).unwrap();
+    let at = |x: usize, y: usize| px[(y * 1280 + x) * 4..][..4].to_vec();
+    // The SVG's yellow triangle, and the Lottie's pink dot, at their layers.
+    assert_eq!(at(330, 330), [0xff, 0xcf, 0x5c, 255]);
+    assert_eq!(at(760, 360), [0xff, 0x5c, 0x8a, 255]);
+    // The Lottie plays: its frame at another time differs.
+    let (later, _) = r.draw(&eval(&p, s, 1.5)).unwrap();
+    assert_ne!(px, later);
+    let spin = quads.iter().find(|q| q.id == "spin").unwrap();
+    assert!(spin.pts[1][0] - spin.pts[0][0] > 100.);
+    // Time maps to the file's frames: `time` + t * speed, clamped without loop.
+    let slow = s.layers.iter().find(|l| l.id == "spin-slow").unwrap();
+    assert_eq!(slow.at(1.).time, 1.);
+    assert!(r.add_asset("bad.json", b"{").is_err());
+    assert!(r.add_asset("bad.svg", b"<nope").is_err());
 }

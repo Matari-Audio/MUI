@@ -26,8 +26,8 @@ self.onmessage = async ({ data: m }) => {
       self.postMessage({ type: 'ready', backend, adapter: gpu ? gpu.adapter() : '' });
     } else if (m.type === 'load') {
       (gpu ?? cpu).load(m.json);
-    } else if (m.type === 'png') {
-      (gpu ?? cpu).add_png(m.path, m.bytes);
+    } else if (m.type === 'asset') {
+      (gpu ?? cpu).add_asset(m.path, m.bytes);
     } else if (m.type === 'draw') {
       const start = performance.now();
       let quads;

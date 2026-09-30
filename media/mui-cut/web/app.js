@@ -7,10 +7,8 @@
 import init, { Cut } from './pkg/mui_cut.js';
 
 const $ = s => document.querySelector(s);
-const PROPS = ['x', 'y', 'scale', 'rotation', 'opacity', 'width', 'height', 'radius', 'font_size', 'weight'];
-const KEYABLE = [...PROPS, 'fill'];
-const DEFAULTS = { x: 0, y: 0, scale: 1, rotation: 0, opacity: 1, width: 100, height: 100, radius: 0, font_size: 64, weight: 600, fill: '#ffffff' };
-const KIND_ICON = { rect: '▭', ellipse: '◯', text: 'T', image: '▣' };
+const KIND_ICON = { rect: '▭', ellipse: '◯', text: 'T', image: '▣', path: '〰', duplicator: '⁂', svg: 'S', lottie: 'L' };
+const VECTOR = ['text', 'path', 'duplicator', 'svg', 'lottie'];
 // Graphite, as in style.css: greys only, state by value, weight and shape.
 const C = {
   text: '#8a8a8a', textOn: '#e6e6e6', grid: '#262626', gridText: '#666666',
@@ -32,13 +30,12 @@ let t = 0;               // playhead, seconds into the scene
 let sel = null;          // selected layer id
 let prop = 'x';          // property shown in the graph editor
 let selKey = null;       // { l, p, k }: the selected key object
-let frame = null;        // evaluated frame at the playhead
 let quads = [];          // layer outlines from the last render, project px
 let playing = false;
 let need = true;
 const undo = [], redo = [];
 let base = null;         // the document before the gesture in progress
-const images = new Set();
+const assets = new Set();
 
 // ---------- document helpers
 const scene = () => doc.scenes[si];
@@ -47,33 +44,41 @@ const isKeys = v => Array.isArray(v);
 const snap = x => Math.round(x * doc.fps) / doc.fps;
 const round = v => Math.round(v * 1000) / 1000;
 const keyAt = (keys, time) => keys.findIndex(k => Math.abs(k.t - time) < 0.25 / doc.fps);
-function now(l, p) {
-  const d = frame?.layers.find(d => d.id === l.id);
-  return d && p in d ? d[p] : (l[p] ?? DEFAULTS[p]);
+// Properties are addressed by path: `x`, `fill`, `animators.0.offset`.
+const getp = (o, p) => p.split('.').reduce((o, k) => o?.[k], o);
+function setp(o, p, v) {
+  const ks = p.split('.'), last = ks.pop(), parent = ks.reduce((o, k) => o[k], o);
+  parent[last] = v;
 }
+// The engine says which properties a layer has and what they are at the
+// playhead: `[{p, v}]`, v a number or a colour string.
+const propsOf = (l, time = t) => l ? JSON.parse(cut.props(si, l.id, time)) : [];
+const keyPaths = l => propsOf(l, 0).map(r => r.p);
+const numPaths = l => propsOf(l, 0).filter(r => typeof r.v === 'number').map(r => r.p);
+const now = (l, p) => propsOf(l).find(r => r.p === p)?.v;
 function insertKey(keys, k) { keys.push(k); keys.sort((a, b) => a.t - b.t); return k; }
 // Write a value at the playhead: into the key there (or a new one) when the
 // property is animated, else as its plain value.
 function setValue(l, p, v) {
-  const cur = l[p];
-  if (!isKeys(cur)) { l[p] = v; return; }
+  const cur = getp(l, p);
+  if (!isKeys(cur)) { setp(l, p, v); return; }
   const i = keyAt(cur, snap(t));
   if (i >= 0) cur[i].v = v; else insertKey(cur, { t: snap(t), v, interp: 'bezier' });
 }
 // The ◆ button: add a key at the playhead, or remove the one there; the last
 // key removed leaves the property a plain value.
 function toggleKey(l, p) {
-  const cur = l[p], v = now(l, p);
-  if (!isKeys(cur)) { l[p] = [{ t: snap(t), v, interp: 'bezier' }]; return; }
+  const cur = getp(l, p), v = now(l, p);
+  if (!isKeys(cur)) { setp(l, p, [{ t: snap(t), v, interp: 'bezier' }]); return; }
   const i = keyAt(cur, snap(t));
   if (i < 0) selKey = { l, p, k: insertKey(cur, { t: snap(t), v, interp: 'bezier' }) };
-  else if (cur.length === 1) l[p] = v;
+  else if (cur.length === 1) setp(l, p, v);
   else cur.splice(i, 1);
 }
 function deleteKey({ l, p, k }) {
-  const keys = l[p];
+  const keys = getp(l, p);
   if (!isKeys(keys)) return;
-  if (keys.length === 1) l[p] = k.v; else keys.splice(keys.indexOf(k), 1);
+  if (keys.length === 1) setp(l, p, k.v); else keys.splice(keys.indexOf(k), 1);
   selKey = null;
 }
 
@@ -122,16 +127,17 @@ async function pull(why) {
   doc = JSON.parse(text); saved = text; selKey = null;
   si = Math.min(si, doc.scenes.length - 1);
   if (!layer()) sel = null;
-  await loadImages();
+  await loadAssets();
   status(why); refresh();
 }
-async function loadImages() {
+// The files image, SVG and Lottie layers name, each sent to the viewport once.
+async function loadAssets() {
   for (const l of doc.scenes.flatMap(s => s.layers)) {
-    if (l.kind !== 'image' || images.has(l.path)) continue;
-    images.add(l.path);
+    if (!['image', 'svg', 'lottie'].includes(l.kind) || !l.path || assets.has(l.path)) continue;
+    assets.add(l.path);
     try {
       const r = await fetch('/asset/' + l.path);
-      if (r.ok) worker.postMessage({ type: 'png', path: l.path, bytes: new Uint8Array(await r.arrayBuffer()) });
+      if (r.ok) worker.postMessage({ type: 'asset', path: l.path, bytes: new Uint8Array(await r.arrayBuffer()) });
     } catch (e) { console.warn(l.path, e); }
   }
 }
@@ -157,9 +163,9 @@ function refreshLists() {
 function select(id) {
   if (sel !== id) selKey = null;
   sel = id;
-  const l = layer();
-  if (l && !PROPS.includes(prop)) prop = 'x';
-  if (l && !isKeys(l[prop])) prop = PROPS.find(p => isKeys(l[p])) ?? prop;
+  const l = layer(), nums = numPaths(l);
+  if (l && !nums.includes(prop)) prop = 'x';
+  if (l && !isKeys(getp(l, prop))) prop = nums.find(p => isKeys(getp(l, p))) ?? prop;
   refresh();
 }
 $('#add-scene').onclick = () => edit(() => {
@@ -172,6 +178,8 @@ document.querySelectorAll('[data-add]').forEach(b => b.onclick = () => edit(() =
   const [w, h] = doc.size;
   const l = { id: `${kind}${n}`, kind, x: w / 2, y: h / 2 };
   if (kind === 'text') Object.assign(l, { text: 'Text' });
+  else if (kind === 'path') Object.assign(l, { d: 'M -150 0 C -75 -120 75 120 150 0', fill: '#00000000', stroke: '#8b7cff', stroke_width: 6 });
+  else if (kind === 'duplicator') Object.assign(l, { width: 40, height: 40, radius: 8, fill: '#8b7cff', count: 12, spacing_x: 60, spacing_y: 60 });
   else Object.assign(l, { width: 200, height: 200, fill: '#8b7cff' });
   ls.push(l); sel = l.id;
 }));
@@ -192,11 +200,73 @@ function field(label, input, keyBtn) {
   if (keyBtn) box.append(keyBtn); else input.classList.add('wide');
 }
 function input(value, onchange, type = 'text') {
-  const i = document.createElement('input');
-  i.type = type; i.value = value;
+  const i = document.createElement(type === 'area' ? 'textarea' : 'input');
+  if (type !== 'area') i.type = type;
+  i.value = value;
   if (type === 'number') i.step = 'any';
   i.onchange = () => onchange(i.value);
   return i;
+}
+function choice(value, options, onchange) {
+  const s = document.createElement('select');
+  s.replaceChildren(...options.map(o => new Option(o, o, false, o === String(value))));
+  s.onchange = () => onchange(s.value);
+  return s;
+}
+// A full-width header over an animator's or deformer's rows, with its
+// settings and a remove button.
+function section(title, controls, remove) {
+  const h = document.createElement('div'); h.className = 'section';
+  const n = document.createElement('span'); n.textContent = title;
+  const x = document.createElement('button'); x.textContent = '×'; x.title = 'Remove'; x.onclick = remove;
+  h.append(n, ...controls, x);
+  $('#inspector').append(h);
+}
+// The settings of a layer that are not keyable: its text, file, path data,
+// layout and so on, and how an animator or deformer selects and moves.
+function kindFields(l) {
+  const set = (k, v, dflt) => edit(() => { if (v === dflt) delete l[k]; else l[k] = v; });
+  if (l.kind === 'text') {
+    field('text', input(l.text, v => edit(() => { l.text = v; }), 'area'));
+    field('align', choice(l.align ?? 'center', ['left', 'center', 'right'], v => set('align', v, 'center')));
+  }
+  if (['image', 'svg', 'lottie'].includes(l.kind)) field('path', input(l.path, v => edit(() => { l.path = v; loadAssets(); })));
+  if (l.kind === 'lottie') {
+    field('speed', input(l.speed ?? 1, v => set('speed', Number(v), 1), 'number'));
+    field('loop', choice(l.loop ?? true, ['true', 'false'], v => set('loop', v === 'true', true)));
+  }
+  if (l.kind === 'path') field('d', input(l.d, v => edit(() => { l.d = v; }), 'area'));
+  if (l.kind === 'duplicator') {
+    field('shape', choice(l.shape ?? 'rect', ['rect', 'ellipse', 'path'], v => set('shape', v, 'rect')));
+    if (l.shape === 'path') field('d', input(l.d ?? '', v => set('d', v, ''), 'area'));
+    field('layout', choice(l.layout ?? 'grid', ['grid', 'radial', 'linear', 'path'], v => set('layout', v, 'grid')));
+    if (l.layout === 'path') field('along', input(l.along ?? '', v => set('along', v, ''), 'area'));
+    field('orient', choice(l.orient ?? false, ['false', 'true'], v => set('orient', v === 'true', false)));
+  }
+}
+function groupHeader(l, group, i) {
+  const list = l[group], item = list[i];
+  const remove = () => edit(() => { list.splice(i, 1); if (!list.length) delete l[group]; selKey = null; });
+  const set = (k, v, dflt) => edit(() => { if (v === dflt) delete item[k]; else item[k] = v; });
+  if (group === 'animators') {
+    const c = [];
+    if (l.kind === 'text') c.push(choice(item.by ?? 'char', ['char', 'word', 'line'], v => set('by', v, 'char')));
+    c.push(choice(item.shape ?? 'square', ['square', 'ramp_up', 'ramp_down', 'triangle', 'round', 'smooth'], v => set('shape', v, 'square')));
+    c.push(choice(item.ease ?? 'linear', ['linear', 'in', 'out', 'in_out', 'step'], v => set('ease', v, 'linear')));
+    c.push(choice(item.order ?? 'forward', ['forward', 'reverse', 'random'], v => set('order', v, 'forward')));
+    if (item.order === 'random') { const s = input(item.seed ?? 0, v => set('seed', Math.max(0, Math.round(Number(v))) || 0, 0), 'number'); s.title = 'seed'; c.push(s); }
+    section(`Animator ${i + 1}`, c, remove);
+  } else {
+    const c = [];
+    if (item.kind === 'noise') { const s = input(item.seed ?? 0, v => set('seed', Math.max(0, Math.round(Number(v))) || 0, 0), 'number'); s.title = 'seed'; c.push(s); }
+    section(`${item.kind} ${i + 1}`, c, remove);
+  }
+}
+function adder(label, options, add) {
+  const s = choice('', ['', ...options], v => { if (v) add(v); });
+  s.options[0].textContent = label;
+  s.classList.add('wide'); s.dataset.adder = label;
+  const box = $('#inspector'); box.append(document.createElement('span'), s);
 }
 function refreshInspector() {
   const box = $('#inspector'); box.replaceChildren();
@@ -212,32 +282,40 @@ function refreshInspector() {
   }
   $('#insp-title').textContent = `Layer · ${l.kind}`;
   field('id', input(l.id, v => { if (v && !scene().layers.some(o => o.id === v)) edit(() => { l.id = v; sel = v; }); }));
-  if (l.kind === 'text') field('text', input(l.text, v => edit(() => { l.text = v; })));
-  if (l.kind === 'image') field('path', input(l.path, v => edit(() => { l.path = v; loadImages(); })));
-  for (const p of KEYABLE) {
-    if (l.kind === 'text' && (p === 'width' || p === 'height' || p === 'radius')) continue;
-    if (l.kind !== 'text' && (p === 'font_size' || p === 'weight')) continue;
-    const i = input(p === 'fill' ? now(l, p) : round(now(l, p)), v => edit(() => setValue(l, p, p === 'fill' ? v : Number(v))), p === 'fill' ? 'text' : 'number');
+  kindFields(l);
+  let group = '';
+  for (const { p, v } of propsOf(l)) {
+    const parts = p.split('.');
+    const g = parts.length > 1 ? parts.slice(0, 2).join('.') : '';
+    if (g !== group) { group = g; if (g) groupHeader(l, parts[0], +parts[1]); }
+    const color = typeof v === 'string';
+    const i = input(color ? v : round(v), x => edit(() => setValue(l, p, color ? x : Number(x))), color ? 'text' : 'number');
     i.dataset.prop = p;
     const k = document.createElement('button');
     k.className = 'key'; k.textContent = '◆'; k.dataset.key = p;
     k.title = 'Add or remove a key at the playhead';
-    k.onclick = () => { edit(() => toggleKey(l, p)); if (PROPS.includes(p)) prop = p; refresh(); };
-    field(p, i, k);
+    k.onclick = () => { edit(() => toggleKey(l, p)); if (!color) prop = p; refresh(); };
+    field(parts.at(-1), i, k);
   }
+  if (l.kind === 'text' || l.kind === 'duplicator') adder('+ animator', ['plain', 'typewriter', 'cascade', 'pop'], v => edit(() => {
+    const a = v === 'plain' ? {} : JSON.parse(cut.preset(v, snap(t), 1));
+    (l.animators ??= []).push(a);
+  }));
+  if (VECTOR.includes(l.kind)) adder('+ deformer', ['noise', 'twist', 'bend', 'wave'], v => edit(() => { (l.deformers ??= []).push({ kind: v }); }));
   updateInspector();
 }
 // Values follow the playhead without rebuilding the panel.
 function updateInspector() {
   const l = layer();
   if (!l) return;
+  const vals = Object.fromEntries(propsOf(l).map(r => [r.p, r.v]));
   for (const i of document.querySelectorAll('#inspector input[data-prop]')) {
     if (document.activeElement === i) continue;
-    const p = i.dataset.prop;
-    i.value = p === 'fill' ? now(l, p) : round(now(l, p));
+    const v = vals[i.dataset.prop];
+    i.value = typeof v === 'string' ? v : round(v);
   }
   for (const b of document.querySelectorAll('#inspector [data-key]')) {
-    const v = l[b.dataset.key];
+    const v = getp(l, b.dataset.key);
     b.className = 'key' + (isKeys(v) ? (keyAt(v, snap(t)) >= 0 ? ' here' : ' animated') : '');
   }
 }
@@ -338,18 +416,20 @@ const LABEL = 150, RULER = 22, ROW = 20;
 let tlRows = [], tlDrag = null;
 const tlX = time => LABEL + time / scene().duration * (tl.clientWidth - LABEL - 12);
 const tlT = x => Math.max(0, Math.min(scene().duration, (x - LABEL) / (tl.clientWidth - LABEL - 12) * scene().duration));
+// `animators.0.offset` as `a1 offset`, to fit the label column.
+const short = p => p.replace(/^animators\.(\d+)\./, (_, i) => `a${+i + 1} `).replace(/^deformers\.(\d+)\./, (_, i) => `d${+i + 1} `);
 function rows() {
   const out = [];
   for (const l of [...scene().layers].reverse()) {
     out.push({ l });
-    if (l.id === sel) for (const p of KEYABLE) if (isKeys(l[p])) out.push({ l, p });
+    if (l.id === sel) for (const p of keyPaths(l)) if (isKeys(getp(l, p))) out.push({ l, p });
   }
   return out;
 }
 // The keys a row shows: one prop's, or every key of the layer.
 function rowKeys(r) {
-  const ps = r.p ? [r.p] : KEYABLE.filter(p => isKeys(r.l[p]));
-  return ps.flatMap(p => r.l[p].map(k => ({ l: r.l, p, k })));
+  const ps = r.p ? [r.p] : keyPaths(r.l).filter(p => isKeys(getp(r.l, p)));
+  return ps.flatMap(p => getp(r.l, p).map(k => ({ l: r.l, p, k })));
 }
 function diamond(c, x, y, s, fill, ring = false) {
   c.beginPath(); c.moveTo(x, y - s); c.lineTo(x + s, y); c.lineTo(x, y + s); c.lineTo(x - s, y); c.closePath();
@@ -382,7 +462,7 @@ function drawTimeline() {
     c.fillStyle = on ? C.rowOn : i % 2 ? C.rowAlt : C.row; c.fillRect(0, y, w, ROW);
     if (on) { c.fillStyle = C.textOn; c.fillRect(0, y, 2, ROW); }
     c.fillStyle = r.l.id === sel && (!r.p || on) ? C.textOn : C.text;
-    c.fillText(r.p ? `   ${r.p}` : `${KIND_ICON[r.l.kind] ?? ''} ${r.l.name || r.l.id}`, 8, y + ROW / 2);
+    c.fillText(r.p ? `   ${short(r.p)}` : `${KIND_ICON[r.l.kind] ?? ''} ${r.l.name || r.l.id}`, 8, y + ROW / 2);
     for (const key of rowKeys(r)) {
       const picked = selKey && selKey.k === key.k;
       diamond(c, tlX(key.k.t), y + ROW / 2, picked ? 6 : r.p ? 5 : 4, picked ? C.picked : r.p ? C.key : C.layerKey, picked);
@@ -399,12 +479,12 @@ function tlHit(e) {
 tl.onpointerdown = e => {
   const h = tlHit(e);
   tl.setPointerCapture(e.pointerId);
-  if (h.row && h.x < LABEL) { select(h.row.l.id); if (h.row.p && PROPS.includes(h.row.p)) prop = h.row.p; refresh(); return; }
+  if (h.row && h.x < LABEL) { select(h.row.l.id); if (h.row.p && numPaths(h.row.l).includes(h.row.p)) prop = h.row.p; refresh(); return; }
   if (h.key) {
     // A layer-row diamond carries every key of the layer at that time.
     const group = h.row.p ? [h.key] : rowKeys(h.row).filter(k => Math.abs(k.k.t - h.key.k.t) < 1e-9);
     select(h.row.l.id);
-    selKey = h.key; if (PROPS.includes(h.key.p)) prop = h.key.p;
+    selKey = h.key; if (numPaths(h.row.l).includes(h.key.p)) prop = h.key.p;
     tlDrag = { group, t0: h.key.k.t, x0: h.x };
     begin(); refresh(); return;
   }
@@ -415,7 +495,7 @@ tl.onpointermove = e => {
   const h = tlHit(e);
   if (tlDrag.scrub) { t = snap(tlT(h.x)); need = true; return; }
   const nt = snap(tlT(tlX(tlDrag.t0) + h.x - tlDrag.x0));
-  for (const { l, p, k } of tlDrag.group) { k.t = nt; l[p].sort((a, b) => a.t - b.t); }
+  for (const { l, p, k } of tlDrag.group) { k.t = nt; getp(l, p).sort((a, b) => a.t - b.t); }
   changed();
 };
 tl.onpointerup = () => { if (tlDrag && !tlDrag.scrub) end(); tlDrag = null; };
@@ -423,7 +503,7 @@ tl.onpointerup = () => { if (tlDrag && !tlDrag.scrub) end(); tlDrag = null; };
 // ---------- graph editor
 const gr = $('#graph'), gctx = gr.getContext('2d');
 let range = null, grDrag = null;
-function gKeys() { const l = layer(); return l && isKeys(l[prop]) ? l[prop] : null; }
+function gKeys() { const l = layer(), k = l && getp(l, prop); return isKeys(k) ? k : null; }
 // Where a key's handles sit, in (time, value), clamped into their segment
 // like the evaluator clamps them.
 function handles(keys, i) {
@@ -446,9 +526,10 @@ function drawGraph() {
   if (gr.width !== Math.round(w * dpr) || gr.height !== Math.round(h * dpr)) { gr.width = Math.round(w * dpr); gr.height = Math.round(h * dpr); }
   const c = gctx; c.setTransform(dpr, 0, 0, dpr, 0, 0); c.clearRect(0, 0, w, h);
   c.font = '11px Inter, sans-serif'; c.textBaseline = 'middle';
-  if (sel0.dataset.for !== (l?.id ?? '') + prop) {
-    sel0.dataset.for = (l?.id ?? '') + prop;
-    sel0.replaceChildren(...PROPS.map(p => new Option(p + (l && isKeys(l[p]) ? ' ◆' : ''), p, false, p === prop)));
+  const nums = l ? numPaths(l) : [];
+  if (sel0.dataset.for !== (l?.id ?? '') + prop + nums.length) {
+    sel0.dataset.for = (l?.id ?? '') + prop + nums.length;
+    sel0.replaceChildren(...nums.map(p => new Option(short(p) + (isKeys(getp(l, p)) ? ' ◆' : ''), p, false, p === prop)));
   }
   if (!l) { c.fillStyle = C.text; c.fillText('Select a layer to see its curves.', LABEL, h / 2); return; }
   const dur = scene().duration, n = Math.max(2, Math.round(w - LABEL - 12));
@@ -545,9 +626,9 @@ gr.ondblclick = e => {
   const time = snap(Math.max(0, Math.min(scene().duration, m.tOf(e.clientX - r.left))));
   const v = round(m.vOf(e.clientY - r.top));
   edit(() => {
-    if (!isKeys(l[prop])) l[prop] = [];
-    const i = keyAt(l[prop], time);
-    if (i >= 0) l[prop][i].v = v; else selKey = { l, p: prop, k: insertKey(l[prop], { t: time, v, interp: 'bezier' }) };
+    if (!isKeys(getp(l, prop))) setp(l, prop, []);
+    const keys = getp(l, prop), i = keyAt(keys, time);
+    if (i >= 0) keys[i].v = v; else selKey = { l, p: prop, k: insertKey(keys, { t: time, v, interp: 'bezier' }) };
   });
 };
 $('#graph-prop').onchange = e => { prop = e.target.value; selKey = null; range = null; refresh(); };
@@ -558,7 +639,7 @@ $('#reset-handles').onclick = () => { if (selKey) edit(() => { delete selKey.k.i
 function setPlaying(on) { playing = on; $('#play').textContent = on ? '❚❚' : '▶'; }
 $('#play').onclick = () => setPlaying(!playing);
 addEventListener('keydown', e => {
-  if (e.target.closest('input, select')) return;
+  if (e.target.closest('input, select, textarea')) return;
   const mod = e.ctrlKey || e.metaKey;
   if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); $(e.shiftKey ? '#redo' : '#undo').click(); }
   else if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); $('#redo').click(); }
@@ -579,7 +660,6 @@ function loop(ms) {
   last = ms;
   if (need && doc) {
     need = false;
-    frame = JSON.parse(cut.frame(si, t) || 'null');
     if (!drawViewport()) need = true;
     drawTimeline(); drawGraph(); updateInspector();
     $('#time').textContent = `${t.toFixed(2)} s  ·  f${Math.round(t * doc.fps)}`;

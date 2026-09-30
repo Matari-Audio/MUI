@@ -19,13 +19,15 @@ mkdirSync(out, { recursive: true });
 const here = dirname(fileURLToPath(import.meta.url));
 const file = join(out, 'e2e.cut.json');
 copyFileSync(join(here, '../examples/demo.cut.json'), file);
+for (const f of ['mark.svg', 'spin.json']) copyFileSync(join(here, '../examples', f), join(out, f));
 const read = () => JSON.parse(readFileSync(file, 'utf8'));
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const check = (ok, what) => { if (!ok) throw new Error('FAILED: ' + what); console.log('ok  ' + what); };
 
 const cpu = process.env.E2E_BACKEND === 'cpu';
 const gpuFlags = cpu ? ['--disable-features=WebGPU'] : ['--enable-unsafe-webgpu', '--enable-features=Vulkan', '--use-angle=vulkan', '--ignore-gpu-blocklist'];
-const port = 8790, cdpPort = 9339;
+// E2E_PORT / E2E_CDP_PORT move them when another run holds the defaults.
+const port = +(process.env.E2E_PORT ?? 8790), cdpPort = +(process.env.E2E_CDP_PORT ?? 9339);
 
 // The one pixel of a 1x1 PNG screenshot (8-bit RGB or RGBA, one IDAT run).
 function pixel(png) {
@@ -123,6 +125,32 @@ try {
   const px = pixel(Buffer.from((await send('Page.captureScreenshot', { format: 'png', clip })).data, 'base64'));
   check(px[0] === 0x40 && px[1] === 0x10, `the viewport shows it (${px})`);
   await shot('editor-reloaded.png');
+
+  // The showcase: SVG and Lottie files reach the viewport, and the inspector
+  // edits animators.
+  writeFileSync(file, readFileSync(join(here, '../examples/showcase.cut.json'), 'utf8'));
+  await sleep(1200);
+  await click('#scenes button:nth-child(3)'); await sleep(800);
+  const at = async (x, y) => {
+    const [ox, oy] = await rect('#view');
+    const [w, h] = await js(`(r => [r.width, r.height])(document.querySelector('#view').getBoundingClientRect())`);
+    return pixel(Buffer.from((await send('Page.captureScreenshot', { format: 'png', clip: { x: ox + x / 1280 * w, y: oy + y / 720 * h, width: 1, height: 1, scale: 1 } })).data, 'base64'));
+  };
+  const tri = await at(309, 372);
+  check(tri[0] > 0xf0 && tri[1] > 0xb0 && tri[2] < 0x80, `the SVG layer draws its file (${tri})`);
+  const dot = await at(760, 360);
+  check(dot[0] > 0xf0 && dot[1] < 0x80, `the Lottie layer draws its file (${dot})`);
+  await shot('editor-import.png');
+  await click('#scenes button:nth-child(1)');
+  await click('#layers button:nth-child(2)');
+  check(await js(`[...document.querySelectorAll('#inspector .section span')].map(s => s.textContent).join()`) === 'Animator 1', 'the inspector shows the animator');
+  check(await js(`[...document.querySelector('#graph-prop').options].some(o => o.value === 'animators.0.start')`), 'the graph offers animator properties');
+  await js(`(s => { s.value = 'cascade'; s.dispatchEvent(new Event('change')); })(document.querySelector('[data-adder="+ animator"]'))`);
+  await sleep(800);
+  const typed = read().scenes[0].layers.find(l => l.id === 'typed');
+  check(typed.animators.length === 2 && typed.animators[1].stagger === 0.04, 'a preset animator lands in the file');
+  await js(`document.querySelector('#right').scrollTop = 1e6`); await sleep(200);
+  await shot('editor-animators.png');
   check(errors.length === 0, 'no page exceptions ' + errors.join('; '));
   ws.close();
 } catch (e) {

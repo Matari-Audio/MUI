@@ -25,6 +25,14 @@ pollster.workspace = true
 vello_cpu = { version = "0.2", default-features = false, features = ["std", "u8_pipeline", "text"] }
 png.workspace = true
 ttf-inter = { version = "0.1", default-features = false, features = ["v"] }
+mui-text.workspace = true
+mui-geometry.workspace = true
+# Seeded gradient noise for the noise deformer: pure Rust, same on wasm.
+noise = { version = "0.9", default-features = false }
+# SVG and Lottie import through their backend-agnostic `RenderSink`s (no vello
+# feature): shapes come out as kurbo paths and draw through MUI like the rest.
+vello_svg = { version = "0.11", default-features = false }
+velato = { version = "0.12", default-features = false }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2.128"

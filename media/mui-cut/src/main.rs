@@ -13,7 +13,7 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use mui_cut::{Frame, Kind, Offline, Project, Renderer, Scene, eval};
+use mui_cut::{Frame, Offline, Project, Renderer, Scene, eval};
 
 type Result<T> = std::result::Result<T, String>;
 
@@ -170,12 +170,14 @@ impl Backend {
         };
         let dir = project.parent().unwrap_or(Path::new("."));
         for l in p.scenes.iter().flat_map(|s| &s.layers) {
-            if let Kind::Image { path } = &l.kind {
+            if let Some(path) = l.asset() {
                 let loaded = std::fs::read(dir.join(path))
                     .map_err(|e| e.to_string())
-                    .and_then(|b| assets.add_png(path, &b));
+                    .and_then(|b| assets.add_asset(path, &b));
                 if let Err(e) = loaded {
-                    eprintln!("mui-cut: image `{path}`: {e} (drawn as its fill)");
+                    eprintln!(
+                        "mui-cut: `{path}`: {e} (an image draws as its fill, the rest as nothing)"
+                    );
                 }
             }
         }
