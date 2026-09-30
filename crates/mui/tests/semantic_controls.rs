@@ -487,3 +487,20 @@ fn disabled_controls_have_a_visual_cue_in_both_themes() {
         ));
     }
 }
+
+#[test]
+fn supplied_value_text_retains_its_existing_width_floor() {
+    let mut ui = Ui::default();
+    let mut value = 440.0;
+    let tree = drag_value(&mut ui, "f", "Frequency", &mut value, 20.0..=20_000.0)
+        .value_text("440 Hz")
+        .value_reserve("20.0 kHz")
+        .el
+        .el();
+    let readout = tree.children()[0].payload().extras();
+    assert_eq!(readout.reserve.as_deref(), Some("440 Hz"));
+    assert_eq!(
+        readout.reserve_all.as_deref(),
+        Some(&[String::from("20.0 kHz")][..])
+    );
+}

@@ -447,7 +447,9 @@ fn unit(value: f64, range: &RangeInclusive<f64>) -> f64 {
 /// These are floors: an unanticipated wider value is never clipped.
 fn readout(given: Option<String>, value: f64, min: f64, max: f64) -> El {
     if let Some(t) = given {
-        text(t)
+        // Preserve the existing unwrapped width floor for supplied text;
+        // explicit candidates supplement it, including in constrained rows.
+        text(t.clone()).reserve(t)
     } else {
         text(format!("{value:.2}")).reserve_all(vec![format!("{min:.2}"), format!("{max:.2}")])
     }
