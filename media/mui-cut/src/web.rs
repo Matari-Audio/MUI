@@ -89,6 +89,35 @@ impl Cut {
             .map(|i| a.at(t0 + (t1 - t0) * i as f64 / (n - 1) as f64))
             .collect()
     }
+    /// Every keyable property of one layer at `t`, as JSON
+    /// `[{"p": path, "v": number or "#rrggbb"}]`: the inspector's rows,
+    /// the timeline's and the graph's choices.
+    pub fn props(&self, scene: usize, layer: &str, t: f64) -> String {
+        let Some(l) = self
+            .project
+            .as_ref()
+            .and_then(|p| p.scenes.get(scene))
+            .and_then(|s| s.layers.iter().find(|l| l.id == layer))
+        else {
+            return "[]".into();
+        };
+        let rows: Vec<serde_json::Value> = l
+            .props()
+            .into_iter()
+            .map(|(p, a)| match a {
+                crate::Prop::Num(a) => serde_json::json!({ "p": p, "v": a.at(t) }),
+                crate::Prop::Color(a) => serde_json::json!({ "p": p, "v": String::from(a.at(t)) }),
+            })
+            .collect();
+        serde_json::to_string(&rows).unwrap_or_default()
+    }
+    /// A preset animator (`typewriter`, `cascade`, `pop`) keyed from `t0`
+    /// over `dur` seconds, as JSON; empty for an unknown name.
+    pub fn preset(&self, name: &str, t0: f64, dur: f64) -> String {
+        crate::Animator::preset(name, t0, dur)
+            .and_then(|a| serde_json::to_string(&a).ok())
+            .unwrap_or_default()
+    }
     /// The evaluated frame as JSON: what the inspector shows at the playhead.
     pub fn frame(&self, scene: usize, t: f64) -> String {
         self.project
