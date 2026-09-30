@@ -272,6 +272,41 @@ impl Assets {
         Ok((scene, size, centred(size)))
     }
 
+    /// Layer `l`'s content alone, placement ignored, at `k` pixels per
+    /// project pixel on a clear ground: straight RGBA and its pixel size,
+    /// and the [`Assets::element`] box it fills.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn paint(
+        &self,
+        l: &Drawn,
+        k: f64,
+    ) -> Result<(Vec<u8>, [u16; 2], Size, KPoint), String> {
+        let (scene, size, corner) = self.element(l)?;
+        let side = |v: f64| (v * k).ceil().clamp(1., 8192.) as u16;
+        let (w, h) = (side(size.width), side(size.height));
+        let mut ctx = RenderContext::new(w, h);
+        let mut res = Resources::default();
+        mui_vello::paint(
+            &mut mui_vello::Cpu {
+                ctx: &mut ctx,
+                resources: &mut res,
+                cache: &mut mui_vello::Cache::default(),
+            },
+            &scene,
+            Affine::scale(k),
+        )
+        .map_err(|e| format!("paint: {e:?}"))?;
+        ctx.flush();
+        let mut pix = Pixmap::new(w, h);
+        ctx.render(&mut pix, &mut res);
+        let rgba = pix
+            .take_unpremultiplied()
+            .iter()
+            .flat_map(|p| [p.r, p.g, p.b, p.a])
+            .collect();
+        Ok((rgba, [w, h], size, corner))
+    }
+
     /// A model layer's mesh, once its file is loaded.
     pub(crate) fn model(&self, path: &str) -> Option<&Arc<crate::three::Mesh>> {
         self.models.get(path)

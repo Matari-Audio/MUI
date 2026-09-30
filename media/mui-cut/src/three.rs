@@ -183,6 +183,18 @@ pub fn stage_camera(size: [u32; 2], c: &Cam) -> mui_stage::Camera {
     }
 }
 
+/// Layer `l`'s placement in mui-stage's world: `offset` (in its own
+/// unrotated space) turned about its pivot and moved to it.
+pub fn pose(size: [u32; 2], l: &Drawn, offset: mui_stage::Mat4) -> mui_stage::Mat4 {
+    use mui_stage::Mat4;
+    let s = &l.space;
+    Mat4::translate(world(size, [l.x, l.y, s.z]))
+        * Mat4::rotate_y(s.ry.to_radians() as f32)
+        * Mat4::rotate_x(-s.rx.to_radians() as f32)
+        * Mat4::rotate_z(-l.rotation.to_radians() as f32)
+        * offset
+}
+
 /// The distance at which a `fov`-degree camera sees `height` pixels of the
 /// z = 0 plane edge to edge: there a flat layer is its 2D size.
 pub fn front_distance(height: f64, fov: f64) -> f64 {

@@ -1179,7 +1179,7 @@ fn plugin_layers_are_checked_and_list_their_part_tracks() {
 
 /// A capture of a 200x100 UI: a background and two parts, `a` left, `b` right.
 #[cfg(not(target_arch = "wasm32"))]
-fn capture_assets(p: &Project) -> Assets {
+pub(crate) fn capture_assets(p: &Project) -> Assets {
     let key = eval(p, &p.scenes[0], 0.).layers[0]
         .plugin
         .clone()

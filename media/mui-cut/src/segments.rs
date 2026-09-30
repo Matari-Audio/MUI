@@ -8,34 +8,7 @@ use std::path::{Path, PathBuf};
 
 use mui_cut::{Frame, Kind, Project};
 
-/// FNV-1a, 64 bits: stable across builds and platforms, unlike std's
-/// `DefaultHasher`. ponytail: 64-bit keys; a collision reuses a wrong chunk
-/// about once in 2^32 cached spans; widen to 128 if caches get that big.
-pub struct Fnv(u64);
-
-impl Default for Fnv {
-    fn default() -> Self {
-        Self(0xcbf2_9ce4_8422_2325)
-    }
-}
-
-impl std::io::Write for Fnv {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        for b in buf {
-            self.0 = (self.0 ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3);
-        }
-        Ok(buf.len())
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
-impl Fnv {
-    pub fn hex(&self) -> String {
-        format!("{:016x}", self.0)
-    }
-}
+pub use mui_cut::Fnv;
 
 /// The key every span of one render shares: the encode settings, the
 /// renderer and the bytes of every image the project draws.

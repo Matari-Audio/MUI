@@ -35,7 +35,7 @@ pub(crate) struct Space {
 }
 
 /// sRGB bytes to linear light.
-fn linear(c: Rgba) -> [f32; 3] {
+pub(crate) fn linear(c: Rgba) -> [f32; 3] {
     std::array::from_fn(|i| {
         let s = f32::from(c.0[i]) / 255.;
         if s <= 0.04045 {
@@ -204,13 +204,7 @@ impl Space {
         let mut models = Vec::new();
         for l in &layers {
             let s = &l.space;
-            let pose = |offset: Mat4| {
-                Mat4::translate(w([l.x, l.y, s.z]))
-                    * Mat4::rotate_y(s.ry.to_radians() as f32)
-                    * Mat4::rotate_x(-s.rx.to_radians() as f32)
-                    * Mat4::rotate_z(-l.rotation.to_radians() as f32)
-                    * offset
-            };
+            let pose = |offset: Mat4| crate::three::pose(frame.size, l, offset);
             match &l.kind {
                 Kind::Camera { .. } | Kind::Light { .. } => quads.push(marker(l, &l.id)),
                 Kind::Model { path } => {

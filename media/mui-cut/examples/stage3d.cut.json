@@ -178,8 +178,8 @@
           "y": [
             { "t": 0.0, "v": 300.0, "interp": "bezier" },
             { "t": 0.6799999999999999, "v": 300.0, "interp": "bezier" },
-            { "t": 2.28, "v": 150.0, "interp": "bezier" },
-            { "t": 6.0, "v": 140.0, "interp": "bezier" }
+            { "t": 2.28, "v": 260.0, "interp": "bezier" },
+            { "t": 6.0, "v": 250.0, "interp": "bezier" }
           ],
           "rotation": [
             { "t": 0.0, "v": 0.0, "interp": "bezier" },
@@ -225,8 +225,8 @@
           "y": [
             { "t": 0.0, "v": 300.0, "interp": "bezier" },
             { "t": 0.6799999999999999, "v": 300.0, "interp": "bezier" },
-            { "t": 2.28, "v": 150.0, "interp": "bezier" },
-            { "t": 6.0, "v": 140.0, "interp": "bezier" }
+            { "t": 2.28, "v": 260.0, "interp": "bezier" },
+            { "t": 6.0, "v": 250.0, "interp": "bezier" }
           ],
           "rotation": [
             { "t": 0.0, "v": 0.0, "interp": "bezier" },

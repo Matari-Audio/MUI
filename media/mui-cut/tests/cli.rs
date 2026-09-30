@@ -652,3 +652,105 @@ fn a_cargo_source_builds_with_its_own_toolchain() {
         format!("{}|", env!("CARGO_MANIFEST_DIR"))
     );
 }
+
+const STAGE3D: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/stage3d.cut.json");
+
+/// stage3d and its model in a scratch dir, so its cache lands there.
+fn stage3d(name: &str) -> PathBuf {
+    let d = scratch(name);
+    let ex = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples");
+    for f in ["stage3d.cut.json", "knot.glb"] {
+        std::fs::copy(ex.join(f), d.join(f)).unwrap();
+    }
+    d.join("stage3d.cut.json")
+}
+
+fn count(dir: &Path, ext: &str) -> usize {
+    std::fs::read_dir(dir).map_or(0, |d| {
+        d.filter(|e| {
+            e.as_ref()
+                .is_ok_and(|e| e.path().extension().is_some_and(|x| x == ext))
+        })
+        .count()
+    })
+}
+
+#[test]
+fn blender_renders_a_small_3d_still_and_then_reuses_it() {
+    let ok = Command::new("blender")
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if !ok {
+        eprintln!("skipped: no blender on PATH");
+        return;
+    }
+    let project = stage3d("blender-still");
+    let cache = project.parent().unwrap().join(".mui-cut-cache/blender");
+    let out = project.with_file_name("f.png");
+    let still = || {
+        Command::new(BIN)
+            .args(["still"])
+            .arg(&project)
+            .args([
+                "--renderer",
+                "blender",
+                "--samples",
+                "4",
+                "--t",
+                "3",
+                "--size",
+                "160x90",
+                "-o",
+            ])
+            .arg(&out)
+            .output()
+            .unwrap()
+    };
+    let first = still();
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let dec = png::Decoder::new(std::io::BufReader::new(std::fs::File::open(&out).unwrap()));
+    let mut r = dec.read_info().unwrap();
+    assert_eq!((r.info().width, r.info().height), (160, 90));
+    let mut buf = vec![0; r.output_buffer_size().unwrap()];
+    r.next_frame(&mut buf).unwrap();
+    // Cards, shadows and floor, not one flat colour.
+    let lo = buf.iter().step_by(4).min().unwrap();
+    let hi = buf.iter().step_by(4).max().unwrap();
+    assert!(hi - lo > 100, "{lo}..{hi}");
+    assert_eq!(count(&cache.join("frames"), "png"), 1);
+    assert_eq!(count(&cache, "blend"), 1);
+    // Nothing changed: the same frame, from the cache.
+    let again = still();
+    assert!(again.status.success());
+    assert!(!String::from_utf8_lossy(&again.stderr).contains("blender frame 1/1"));
+    assert_eq!(count(&cache.join("frames"), "png"), 1);
+    assert_eq!(count(&cache, "blend"), 1);
+}
+
+#[test]
+fn blender_refuses_2d_scenes_and_says_when_it_is_missing() {
+    let out = scratch("blender-errors").join("f.png");
+    let o = Command::new(BIN)
+        .args(["still", DEMO, "--renderer", "blender", "-o"])
+        .arg(&out)
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(!o.status.success() && err.contains("is 2D"), "{err}");
+    let o = Command::new(BIN)
+        .args(["still", STAGE3D, "--renderer", "blender", "-o"])
+        .arg(&out)
+        .env("MUI_CUT_BLENDER", "/nonexistent/blender")
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(
+        !o.status.success() && err.contains("MUI_CUT_BLENDER"),
+        "{err}"
+    );
+}
