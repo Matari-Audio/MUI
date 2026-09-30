@@ -5,7 +5,7 @@
 use wasm_bindgen::prelude::*;
 
 use crate::render::Assets;
-use crate::{Engine, GpuCanvas, Project, Renderer, eval};
+use crate::{Engine, GpuCanvas, Project, Renderer, Shutter, eval, subframes};
 
 #[wasm_bindgen]
 pub struct Cut {
@@ -155,6 +155,8 @@ pub struct GpuView {
     adapter: String,
     /// The orbit preview's yaw, pitch and zoom; never saved.
     orbit: Option<[f64; 3]>,
+    /// For exports with motion blur, made on the first one.
+    shutter: Option<Shutter>,
 }
 
 #[wasm_bindgen]
@@ -227,6 +229,7 @@ impl GpuView {
             assets: Assets::default(),
             adapter: adapter.get_info().name,
             orbit: None,
+            shutter: None,
         })
     }
     /// `classic` or `vello_gpu`.
@@ -255,6 +258,39 @@ impl GpuView {
     }
     pub fn add_asset(&mut self, path: &str, bytes: &[u8]) -> Result<(), String> {
         self.assets.add_asset(path, bytes)
+    }
+    /// An export frame: scene `scene`'s output frame at `t`, `mb` subframes
+    /// averaged by the shutter (as `mui-cut render --mb`), presented at the
+    /// canvas's size for a `VideoFrame` to take.
+    pub fn draw_frame(&mut self, scene: usize, t: f64, mb: usize) -> Result<(), String> {
+        use wgpu::CurrentSurfaceTexture as Acquired;
+        let p = self.project.as_ref().ok_or("no project loaded")?;
+        let s = p.scenes.get(scene).ok_or("no such scene")?;
+        let size = [self.config.width, self.config.height];
+        if self.canvas.size() != size {
+            self.canvas.resize(size)?;
+        }
+        if self.shutter.as_ref().is_none_or(|sh| sh.size() != size) {
+            let f = self.config.format;
+            self.shutter = Some(Shutter::new(&self.canvas.device, size, f, f));
+        }
+        let shutter = self.shutter.as_ref().expect("made above");
+        shutter.expose(&mut self.canvas, &self.assets, &subframes(p, s, t, mb))?;
+        let frame = match self.surface.get_current_texture() {
+            Acquired::Success(f) | Acquired::Suboptimal(f) => f,
+            other => return Err(format!("no canvas texture: {other:?}")),
+        };
+        let view = frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let mut enc = self
+            .canvas
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        shutter.resolve(&mut enc, &view);
+        self.canvas.queue.submit([enc.finish()]);
+        self.canvas.queue.present(frame);
+        Ok(())
     }
     /// Scene `scene` at `t` presented at `w` by `h`; the layers' quads as
     /// JSON `[{id, pts}]` in project pixels.

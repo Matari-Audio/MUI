@@ -9,7 +9,7 @@
 // E2E_BACKEND=webgl2 without WebGPU and expects WebGL2 (vello_gpu); the
 // default expects the viewport on WebGPU. E2E_RENDERER=classic|gpu|...
 // forces the editor's `?renderer=`.
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { inflateSync } from 'node:zlib';
 import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';

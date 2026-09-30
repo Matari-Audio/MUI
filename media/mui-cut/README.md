@@ -361,6 +361,13 @@ See `examples/stage3d.cut.json`.
   opposite handle follows to keep the tangent smooth unless Alt is held.
   Double-click to add a key. Hold / Linear / Bezier / Reset handles act on the
   selected key.
+- **Export** (header): renders every scene at project size in the viewport's
+  worker and saves an MP4. On WebGPU each frame goes through the same shutter
+  as `render --mb` (motion-blur samples in the dialog), effects included; on
+  the CPU, no effects or blur. A WebCodecs `VideoEncoder` encodes it (H.264,
+  H.265 or AV1, whichever `isConfigSupported` accepts at the project's size,
+  hardware preferred) and `web/mp4.js`, a ~100-line muxer, writes ftyp, moov
+  first, then one mdat. Progress and Cancel in the dialog. No audio.
 - Keys: Space play/pause, K toggle a key on the graphed property, Delete the
   selected key, arrows step a frame, Ctrl+Z / Ctrl+Shift+Z undo / redo.
 
@@ -404,7 +411,9 @@ announces edits made by someone else.
 - `src/tools.rs`, `src/mcp.rs`, `src/script.rs`: the agent's CLI pictures
   (`sheet`, `strip`, `diff`), the MCP server and `gen`'s Rhai sandbox.
 - `web/`: the editor shell (HTML/CSS/JS panels around the WASM viewport);
-  `worker.js` draws the viewport, one frame in flight at a time.
+  `worker.js` draws the viewport, one frame in flight at a time, and runs
+  exports; `mp4.js` muxes them.
+- `src/shutter.rs`: the float shutter, shared by `Offline` and the export.
 - `web/e2e.mjs`: the editor in headless Chrome over CDP, and its playback
   pacing (frame gap mean and deviation, free and fps-locked).
   `E2E_BACKEND=webgl2|cpu` runs it without WebGPU, `E2E_RENDERER` forces

@@ -73,3 +73,11 @@ aside { padding: 0 10px 10px; background: var(--panel); overflow: auto; }
 #timeline, #graph { display: block; width: 100%; }
 #graph { height: 190px; }
 #orbit.on { background: var(--raised); border-color: var(--strong); color: var(--hi); }
+
+#export-dialog { background: var(--raised); color: inherit; border: 1px solid var(--line); border-radius: 6px; padding: 16px 18px; min-width: 320px; }
+#export-dialog::backdrop { background: #0008; }
+#export-form { display: grid; gap: 10px; }
+#export-form h2 { margin: 0 0 4px; }
+#export-form label { display: grid; grid-template-columns: 1fr 140px; align-items: center; gap: 8px; }
+#export-form progress { width: 100%; }
+#export-form p { margin: 0; min-height: 1em; }

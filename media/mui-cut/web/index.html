@@ -16,6 +16,7 @@
     <span id="notice" class="muted" hidden></span>
     <button id="orbit" title="Orbit preview: drag to swing the camera, wheel to zoom; not saved" aria-pressed="false" hidden>Orbit</button>
     <span id="backend" class="muted mono" title="Viewport renderer"></span>
+    <button id="export" title="Render the project to an MP4 in the browser">Export</button>
     <button id="undo" title="Undo (Ctrl+Z)">Undo</button>
     <button id="redo" title="Redo (Ctrl+Shift+Z)">Redo</button>
   </header>
@@ -61,6 +62,21 @@
     </div>
     <canvas id="graph"></canvas>
   </section>
+  <dialog id="export-dialog">
+    <form method="dialog" id="export-form">
+      <h2>Export MP4</h2>
+      <label>Codec <select id="ex-codec"></select></label>
+      <label>Bitrate (Mbit/s) <input id="ex-bitrate" type="number" min="0.5" max="200" step="0.5"></label>
+      <label>Motion blur samples <input id="ex-mb" type="number" min="1" max="64" step="1" value="1"></label>
+      <p id="ex-note" class="muted"></p>
+      <progress id="ex-progress" max="1" value="0" hidden></progress>
+      <p id="ex-status" role="status" aria-live="polite"></p>
+      <div class="row">
+        <button id="ex-start" value="" type="button">Render</button>
+        <button id="ex-cancel" type="button">Close</button>
+      </div>
+    </form>
+  </dialog>
   <script type="module" src="app.js"></script>
 </body>
 </html>

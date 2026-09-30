@@ -16,6 +16,7 @@ mod motion;
 #[cfg(not(target_arch = "wasm32"))]
 mod pool;
 mod render;
+mod shutter;
 mod sparse;
 mod three;
 mod vector;
@@ -32,6 +33,7 @@ pub use motion::{
 #[cfg(not(target_arch = "wasm32"))]
 pub use pool::{CpuPool, shutter};
 pub use render::{Assets, Layers, Quad, Renderer};
+pub use shutter::Shutter;
 pub use three::{Cam, Fog, Ground, Lamp, Mode, View};
 
 use serde::{Deserialize, Serialize};
@@ -1137,6 +1139,24 @@ impl Layer {
             effects: fx::eval(&self.effects, t),
         }
     }
+}
+
+/// The fraction of a frame the shutter is open: 180 degrees.
+pub const SHUTTER: f64 = 0.5;
+
+/// The `mb` subframes of the output frame at `t`, spread over the open
+/// shutter; one is the frame itself.
+pub fn subframes(project: &Project, scene: &Scene, t: f64, mb: usize) -> Vec<Frame> {
+    let mb = mb.max(1);
+    (0..mb)
+        .map(|k| {
+            eval(
+                project,
+                scene,
+                t + SHUTTER / project.fps * k as f64 / mb as f64,
+            )
+        })
+        .collect()
 }
 
 impl Project {

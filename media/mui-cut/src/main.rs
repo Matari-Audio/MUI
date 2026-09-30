@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use mui_cut::yuv::{self, Yuv};
-use mui_cut::{Assets, CpuPool, Engine, Frame, Offline, Project, Render, Scene, eval};
+use mui_cut::{Assets, CpuPool, Engine, Frame, Offline, Project, Render, Scene, eval, subframes};
 
 type Result<T> = std::result::Result<T, String>;
 
@@ -333,9 +333,6 @@ fn still(args: &Args) -> Result<()> {
     Ok(())
 }
 
-/// The fraction of a frame the shutter is open: 180 degrees.
-const SHUTTER: f64 = 0.5;
-
 /// Encoder settings from the flags, over the project's `render`.
 fn settings(p: &Project, args: &Args) -> Result<Render> {
     let s = |k: &str| args.get(k).map(str::to_owned);
@@ -414,9 +411,7 @@ fn render(args: &Args) -> Result<()> {
         for i in 0..n {
             let pass = std::time::Instant::now();
             let t = i as f64 / p.fps;
-            let subs: Vec<Frame> = (0..mb)
-                .map(|k| eval(&p, s, t + SHUTTER / p.fps * k as f64 / mb as f64))
-                .collect();
+            let subs = subframes(&p, s, t, mb);
             if let Some(px) = b.push(subs)? {
                 write(&px)?;
             }
