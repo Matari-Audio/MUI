@@ -10,17 +10,22 @@
 
 mod gpu;
 mod motion;
+#[cfg(not(target_arch = "wasm32"))]
+mod pool;
 mod render;
+mod sparse;
 mod vector;
 #[cfg(target_arch = "wasm32")]
 mod web;
 
-pub use gpu::GpuCanvas;
 #[cfg(not(target_arch = "wasm32"))]
 pub use gpu::Offline;
+pub use gpu::{Engine, GpuCanvas};
 pub use motion::{
     ANIMATOR_PROPS, Animator, Deform, Deformer, Ease, Falloff, Fx, Order, Unit, text_units,
 };
+#[cfg(not(target_arch = "wasm32"))]
+pub use pool::{CpuPool, shutter};
 pub use render::{Assets, Layers, Quad, Renderer};
 
 use serde::{Deserialize, Serialize};

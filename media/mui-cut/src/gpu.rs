@@ -1,28 +1,52 @@
-//! Frames on the GPU: MUI's retained `GpuRenderer` (classic Vello on wgpu)
-//! draws each layer's tree under its affine as one overlay pass over the
+//! Frames on the GPU, on one of two Vello engines behind [`GpuCanvas`]:
+//! MUI's retained `GpuRenderer` (classic Vello, compute shaders) or
+//! `vello_gpu` (sparse strips, plain render passes, also on WebGL2; see
+//! `sparse.rs`). Each layer's tree is painted under its affine over the
 //! scene background. [`GpuCanvas`] draws into any texture view (the web
 //! editor's canvas surface); native [`Offline`] adds the shutter (subframes
 //! summed in an `Rgba16Float` target) and a ring of staging buffers, so the
 //! GPU renders the next frame while the last one is piped to ffmpeg.
-//!
-//! `GpuCanvas` is the seam: the renderer behind it is the only thing that
-//! knows it is classic Vello.
 use mui_scene::ResolvedScene;
 use mui_scene::prelude::*;
 use mui_vello::effects::{Budget, GpuRenderer};
-use mui_vello::kurbo::Affine;
+use mui_vello::kurbo::{Affine, Rect};
 
 use crate::render::{Assets, color};
+use crate::sparse::Sparse;
 use crate::{Frame, Quad, Rgba};
 
-/// A GPU renderer kept alive across frames, with the background scene of
-/// the last frame (it only changes with the scene).
+/// Which Vello draws on the GPU.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Engine {
+    /// Classic Vello through MUI's `GpuRenderer`: compute shaders, so
+    /// WebGPU/Vulkan/Metal/DX12 only.
+    Classic,
+    /// `vello_gpu`: CPU-side strips, GPU raster in render passes.
+    Sparse,
+}
+
+impl Engine {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Classic => "classic",
+            Self::Sparse => "vello_gpu",
+        }
+    }
+}
+
+enum Inner {
+    /// With the background scene of the last frame (it only changes with
+    /// the scene).
+    Classic(Box<GpuRenderer>, Option<(Rgba, [u32; 2], ResolvedScene)>),
+    Sparse(Box<Sparse>),
+}
+
+/// A GPU renderer kept alive across frames.
 pub struct GpuCanvas {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
-    renderer: GpuRenderer,
+    inner: Inner,
     size: [u32; 2],
-    base: Option<(Rgba, [u32; 2], ResolvedScene)>,
 }
 
 impl GpuCanvas {
@@ -32,24 +56,41 @@ impl GpuCanvas {
         queue: &wgpu::Queue,
         format: wgpu::TextureFormat,
         size: [u32; 2],
+        engine: Engine,
     ) -> Result<Self, String> {
-        let renderer = GpuRenderer::new(device, queue, format, size, Budget::default())
-            .await
-            .map_err(|e| e.to_string())?;
+        let inner = match engine {
+            Engine::Classic => Inner::Classic(
+                Box::new(
+                    GpuRenderer::new(device, queue, format, size, Budget::default())
+                        .await
+                        .map_err(|e| e.to_string())?,
+                ),
+                None,
+            ),
+            Engine::Sparse => Inner::Sparse(Box::new(Sparse::new(device, format, size)?)),
+        };
         Ok(Self {
             device: device.clone(),
             queue: queue.clone(),
-            renderer,
+            inner,
             size,
-            base: None,
         })
+    }
+    pub fn engine(&self) -> Engine {
+        match self.inner {
+            Inner::Classic(..) => Engine::Classic,
+            Inner::Sparse(_) => Engine::Sparse,
+        }
     }
     pub fn size(&self) -> [u32; 2] {
         self.size
     }
     pub fn resize(&mut self, size: [u32; 2]) -> Result<(), String> {
         self.size = size;
-        self.renderer.resize(size).map_err(|e| e.to_string())
+        match &mut self.inner {
+            Inner::Classic(r, _) => r.resize(size).map_err(|e| e.to_string()),
+            Inner::Sparse(s) => s.resize(&self.device, size),
+        }
     }
     /// `frame` scaled to fill `target` (at [`GpuCanvas::size`]); the layers'
     /// quads in project pixels. Submits its own work.
@@ -62,24 +103,48 @@ impl GpuCanvas {
         let [fw, fh] = frame.size.map(f64::from);
         let view =
             Affine::scale_non_uniform(f64::from(self.size[0]) / fw, f64::from(self.size[1]) / fh);
-        let key = (frame.background, frame.size);
-        if self.base.as_ref().is_none_or(|b| (b.0, b.1) != key) {
-            let bg = block(fw, fh).radius(0.).fill(color(frame.background));
-            let scene = resolve(&SceneSpec::new(bg)).map_err(|e| e.to_string())?;
-            self.base = Some((key.0, key.1, scene));
-        }
         let layers = assets.layers(frame)?;
-        let base = &self.base.as_ref().expect("set above").2;
         let mut failed = None;
-        self.renderer
-            .render_with_overlay(base, view, target, |c| {
-                for (scene, place) in &layers.scenes {
-                    if let Err(e) = mui_vello::paint(c, scene, view * *place) {
-                        failed = Some(format!("paint: {e:?}"));
-                    }
+        let mut paint = |c: &mut dyn FnMut(&ResolvedScene, Affine) -> Result<(), String>| {
+            for (scene, place) in &layers.scenes {
+                if let Err(e) = c(scene, view * *place) {
+                    failed = Some(e);
                 }
-            })
-            .map_err(|e| e.to_string())?;
+            }
+        };
+        match &mut self.inner {
+            Inner::Classic(renderer, base) => {
+                let key = (frame.background, frame.size);
+                if base.as_ref().is_none_or(|b| (b.0, b.1) != key) {
+                    let bg = block(fw, fh).radius(0.).fill(color(frame.background));
+                    let scene = resolve(&SceneSpec::new(bg)).map_err(|e| e.to_string())?;
+                    *base = Some((key.0, key.1, scene));
+                }
+                let base = &base.as_ref().expect("set above").2;
+                renderer
+                    .render_with_overlay(base, view, target, |c| {
+                        paint(&mut |s, t| {
+                            mui_vello::paint(c, s, t).map_err(|e| format!("paint: {e:?}"))
+                        });
+                    })
+                    .map_err(|e| e.to_string())?;
+            }
+            Inner::Sparse(sparse) => {
+                sparse.upload(&self.device, &self.queue, assets.images());
+                sparse.scene.reset();
+                sparse.scene.set_transform(view);
+                let [r, g, b, a] = frame.background.0;
+                sparse
+                    .scene
+                    .set_paint(mui_vello::peniko::Color::from_rgba8(r, g, b, a));
+                sparse.scene.fill_rect(&Rect::new(0., 0., fw, fh));
+                let mut c = sparse.canvas();
+                paint(&mut |s, t| {
+                    mui_vello::paint(&mut c, s, t).map_err(|e| format!("paint: {e:?}"))
+                });
+                sparse.render(&self.device, &self.queue, target)?;
+            }
+        }
         failed.map_or(Ok(layers.quads), Err)
     }
 }
@@ -92,7 +157,7 @@ mod offline {
     use std::collections::VecDeque;
     use std::sync::mpsc;
 
-    use super::GpuCanvas;
+    use super::{Engine, GpuCanvas};
     use crate::Frame;
     use crate::render::Assets;
 
@@ -176,11 +241,11 @@ mod offline {
 
     impl Offline {
         /// A headless device, the high-performance adapter if there are two.
-        pub fn new(size: [u32; 2]) -> Result<Self, String> {
-            pollster::block_on(Self::open(size))
+        pub fn new(size: [u32; 2], engine: Engine) -> Result<Self, String> {
+            pollster::block_on(Self::open(size, engine))
         }
 
-        async fn open(size: [u32; 2]) -> Result<Self, String> {
+        async fn open(size: [u32; 2], engine: Engine) -> Result<Self, String> {
             use wgpu::TextureFormat as F;
             use wgpu::TextureUsages as U;
             let instance = wgpu::Instance::default();
@@ -196,7 +261,7 @@ mod offline {
                 .request_device(&wgpu::DeviceDescriptor::default())
                 .await
                 .map_err(|e| e.to_string())?;
-            let canvas = GpuCanvas::new(&device, &queue, F::Rgba8Unorm, size).await?;
+            let canvas = GpuCanvas::new(&device, &queue, F::Rgba8Unorm, size, engine).await?;
             let sub = texture(
                 &device,
                 size,
@@ -331,7 +396,7 @@ mod offline {
             Ok(Self {
                 canvas,
                 assets: Assets::default(),
-                adapter: format!("{} ({:?})", info.name, info.backend),
+                adapter: format!("{}, {} ({:?})", engine.name(), info.name, info.backend),
                 size,
                 stride,
                 sub,

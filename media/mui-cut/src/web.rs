@@ -5,7 +5,7 @@
 use wasm_bindgen::prelude::*;
 
 use crate::render::Assets;
-use crate::{GpuCanvas, Project, Renderer, eval};
+use crate::{Engine, GpuCanvas, Project, Renderer, eval};
 
 #[wasm_bindgen]
 pub struct Cut {
@@ -172,7 +172,7 @@ impl GpuView {
                 .ok_or("canvas not supported by the adapter")?
         };
         surface.configure(&device, &config);
-        let canvas = GpuCanvas::new(&device, &queue, format, [w, h]).await?;
+        let canvas = GpuCanvas::new(&device, &queue, format, [w, h], Engine::Classic).await?;
         Ok(Self {
             canvas,
             surface,

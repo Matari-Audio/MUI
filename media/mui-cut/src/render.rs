@@ -27,7 +27,7 @@ pub struct Quad {
 
 /// The decoded images, by the path the project names them with, and the
 /// per-layer MUI trees every backend paints.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct Assets {
     images: HashMap<String, Arc<Image>>,
     svgs: HashMap<String, Arc<Vec<vector::Piece>>>,
@@ -72,11 +72,21 @@ fn ellipse(size: Size) -> Path {
 
 impl Renderer {
     /// Output pixels; frames are scaled to fit whatever their project size.
+    /// Rasterises on the calling thread.
     pub fn new(w: u16, h: u16) -> Self {
+        Self::with_threads(w, h, 0)
+    }
+    /// [`Renderer::new`] with `threads` extra rasteriser threads (native
+    /// only; ignored on the web). SIMD is picked at run time either way.
+    pub fn with_threads(w: u16, h: u16, threads: u16) -> Self {
+        let settings = vello_cpu::RenderSettings {
+            num_threads: threads,
+            ..vello_cpu::RenderSettings::default()
+        };
         Self {
             w: w.max(1),
             h: h.max(1),
-            ctx: RenderContext::new(w.max(1), h.max(1)),
+            ctx: RenderContext::new_with(w.max(1), h.max(1), settings),
             res: Resources::default(),
             cache: mui_vello::Cache::default(),
             assets: Assets::default(),
@@ -169,6 +179,11 @@ impl Assets {
         let image = Image::rgba(info.width, info.height, rgba).ok_or("empty png")?;
         self.images.insert(path.to_owned(), Arc::new(image));
         Ok(())
+    }
+
+    /// Every decoded image.
+    pub fn images(&self) -> impl Iterator<Item = &Image> {
+        self.images.values().map(|i| &**i)
     }
 
     /// A vector layer's pieces: built, trimmed and deformed.

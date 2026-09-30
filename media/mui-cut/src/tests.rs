@@ -165,46 +165,139 @@ fn the_renderer_draws_layers_where_eval_puts_them() {
     assert_ne!(px, later);
 }
 
-/// The GPU path (ring readback, float shutter) matches the CPU path, frame
-/// for frame and in order. Skips on a machine with no GPU adapter.
+/// A 16x8 PNG, left half red, right half half-transparent blue.
+#[cfg(not(target_arch = "wasm32"))]
+fn test_png() -> Vec<u8> {
+    let px: Vec<u8> = (0..8 * 16)
+        .flat_map(|i| {
+            if i % 16 < 8 {
+                [255, 0, 0, 255]
+            } else {
+                [0, 0, 255, 128]
+            }
+        })
+        .collect();
+    let mut out = Vec::new();
+    let mut enc = png::Encoder::new(&mut out, 16, 8);
+    enc.set_color(png::ColorType::Rgba);
+    enc.write_header().unwrap().write_image_data(&px).unwrap();
+    out
+}
+
+/// Every GPU engine (ring readback, float shutter) matches the CPU path,
+/// frame for frame and in order, on every demo scene (shapes and text) plus
+/// an image layer. Skips on a machine with no GPU adapter.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn gpu_frames_match_the_cpu_in_order() {
+    let mut p = Project::load(DEMO).unwrap();
+    p.scenes[0].layers.push(
+        serde_json::from_str(
+            r#"{"id": "pic", "kind": "image", "path": "t.png", "x": 900.0, "y": 500.0,
+                "width": 320.0, "height": 160.0, "radius": 20.0, "rotation": 10.0}"#,
+        )
+        .unwrap(),
+    );
+    let png = test_png();
+    // Five frames per scene through a ring of three, four subframes each.
+    let frames: Vec<Vec<Frame>> = p
+        .scenes
+        .iter()
+        .flat_map(|s| {
+            let p = &p;
+            (0..5).map(move |i| {
+                (0..4)
+                    .map(|k| eval(p, s, 0.5 + f64::from(i) * 0.1 + f64::from(k) * 0.02))
+                    .collect()
+            })
+        })
+        .collect();
+    let mut cpu = Renderer::new(320, 180);
+    cpu.add_asset("t.png", &png).unwrap();
+    let want: Vec<Vec<u8>> = frames
+        .iter()
+        .map(|subs| shutter(&mut cpu, &mut Vec::new(), subs).unwrap())
+        .collect();
+    let mut engines = Vec::new();
+    for engine in [Engine::Classic, Engine::Sparse] {
+        let mut gpu = match Offline::new([320, 180], engine) {
+            Ok(g) => g,
+            Err(e) => return eprintln!("skipped: no GPU ({e})"),
+        };
+        gpu.assets.add_png("t.png", &png).unwrap();
+        let mut got = Vec::new();
+        for subs in &frames {
+            got.extend(gpu.push(subs).unwrap());
+        }
+        got.extend(gpu.finish().unwrap());
+        assert_eq!(got.len(), frames.len());
+        // Antialiasing (text, image filtering) differs a little between
+        // CPU and GPU at edges; the frames must not.
+        for (i, (g, c)) in got.iter().zip(&want).enumerate() {
+            let off = differing(g, c);
+            assert!(
+                off < c.len() / 100,
+                "{engine:?} frame {i}: {off} channels differ from the CPU"
+            );
+        }
+        engines.push(got);
+    }
+    // vello_gpu is a drop-in for classic Vello.
+    for (i, (s, c)) in engines[1].iter().zip(&engines[0]).enumerate() {
+        let off = differing(s, c);
+        assert!(
+            off < c.len() / 1000,
+            "frame {i}: {off} channels differ from classic"
+        );
+    }
+}
+
+/// Channels further apart than 8 of 255.
+#[cfg(not(target_arch = "wasm32"))]
+fn differing(a: &[u8], b: &[u8]) -> usize {
+    assert_eq!(a.len(), b.len());
+    a.iter().zip(b).filter(|(a, b)| a.abs_diff(**b) > 8).count()
+}
+
+/// The frame-parallel CPU pool hands frames back in push order, the same
+/// pixels one renderer draws alone.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn the_cpu_pool_keeps_frames_in_order() {
     let p = Project::load(DEMO).unwrap();
     let s = p.scene("shapes").unwrap();
-    let mut gpu = match Offline::new([320, 180]) {
-        Ok(g) => g,
-        Err(e) => return eprintln!("skipped: no GPU ({e})"),
-    };
-    let mut cpu = Renderer::new(320, 180);
-    // Five frames through a ring of three, four subframes each, mid-motion.
-    let frames: Vec<Vec<Frame>> = (0..5)
+    let frames: Vec<Vec<Frame>> = (0..12)
         .map(|i| {
-            (0..4)
-                .map(|k| eval(&p, s, 0.5 + f64::from(i) * 0.1 + f64::from(k) * 0.02))
+            (0..1 + i % 3)
+                .map(|k| eval(&p, s, f64::from(i) * 0.2 + f64::from(k) * 0.01))
                 .collect()
         })
         .collect();
+    let mut one = Renderer::new(160, 90);
+    let want: Vec<Vec<u8>> = frames
+        .iter()
+        .map(|subs| shutter(&mut one, &mut Vec::new(), subs).unwrap())
+        .collect();
+    let mut pool = CpuPool::new(160, 90, 4, 0, &Assets::default());
     let mut got = Vec::new();
     for subs in &frames {
-        got.extend(gpu.push(subs).unwrap());
+        got.extend(pool.push(subs.clone()).unwrap());
     }
-    got.extend(gpu.finish().unwrap());
-    assert_eq!(got.len(), frames.len());
-    for (subs, g) in frames.iter().zip(&got) {
-        let mut acc = vec![0.; 320 * 180 * 4];
-        for f in subs {
-            mui_reel::accumulate(&mut acc, &cpu.draw(f).unwrap().0);
-        }
-        let c = mui_reel::resolve(&acc, subs.len());
-        let off = g
-            .iter()
-            .zip(&c)
-            .filter(|(a, b)| a.abs_diff(**b) > 8)
-            .count();
-        // Antialiasing differs a little at edges; the frames must not.
-        assert!(off < c.len() / 500, "{off} channels differ");
+    got.extend(pool.finish().unwrap());
+    // Each worker's glyph atlas warms up on its own, so text may differ by a
+    // hair; a frame out of order differs by whole shapes.
+    assert_eq!(got.len(), want.len());
+    for (i, (g, w)) in got.iter().zip(&want).enumerate() {
+        let off = differing(g, w);
+        assert!(off < w.len() / 500, "pool frame {i}: {off} channels differ");
     }
+    // A multithreaded rasteriser draws the same frame.
+    let mut mt = Renderer::with_threads(160, 90, 3);
+    let off = differing(
+        &shutter(&mut mt, &mut Vec::new(), &frames[4]).unwrap(),
+        &want[4],
+    );
+    assert!(off < want[4].len() / 500, "{off} channels differ");
 }
 
 const SHOWCASE: &str = include_str!("../examples/showcase.cut.json");
