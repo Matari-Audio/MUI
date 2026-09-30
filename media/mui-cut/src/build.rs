@@ -484,8 +484,9 @@ pub fn resolve(plugin: &str, project_dir: &Path) -> Result<PathBuf> {
     }
 }
 
-/// Build the generic adapter for the plugin a source names; its executable.
-pub fn adapter(plugin: &str, project_dir: &Path) -> Result<PathBuf> {
+/// Build the generic adapter for the plugin a source names, with the
+/// plugin's `features` on; its executable.
+pub fn adapter(plugin: &str, features: &[String], project_dir: &Path) -> Result<PathBuf> {
     let p = detect(&resolve(plugin, project_dir)?)?;
     if !p.missing.is_empty() {
         return Err(format!(
@@ -502,7 +503,7 @@ pub fn adapter(plugin: &str, project_dir: &Path) -> Result<PathBuf> {
     used.sort();
     used.dedup();
     let config = patch_config(&used, &local)?;
-    let dir = write_adapter(&p, &root, &used)?;
+    let dir = write_adapter(&p, &root, &used, features)?;
     let name = adapter_name(&p);
     let mut cmd = cargo(&dir);
     cmd.args([
@@ -562,7 +563,12 @@ fn adapter_name(p: &Plugin) -> String {
 }
 
 /// Write the adapter workspace for `p`; its directory.
-fn write_adapter(p: &Plugin, root: &Path, patched: &[String]) -> Result<PathBuf> {
+fn write_adapter(
+    p: &Plugin,
+    root: &Path,
+    patched: &[String],
+    features: &[String],
+) -> Result<PathBuf> {
     let dir = cache().join("adapters").join(adapter_name(p));
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let write = |name: &str, text: &str| {
@@ -573,7 +579,7 @@ fn write_adapter(p: &Plugin, root: &Path, patched: &[String]) -> Result<PathBuf>
         }
         std::fs::write(&f, text).map_err(|e| format!("{}: {e}", f.display()))
     };
-    write("Cargo.toml", &manifest(p, root, patched)?)?;
+    write("Cargo.toml", &manifest(p, root, patched, features)?)?;
     write("main.rs", &main_rs(p))?;
     // The plugin's versions for everything but MUI, and its toolchain.
     for f in ["Cargo.lock", "rust-toolchain.toml", "rust-toolchain"] {
@@ -593,13 +599,18 @@ fn toml_str(s: &str) -> String {
 }
 
 /// The adapter's Cargo.toml.
-fn manifest(p: &Plugin, root: &Path, patched: &[String]) -> Result<String> {
+fn manifest(p: &Plugin, root: &Path, patched: &[String], features: &[String]) -> Result<String> {
     let path = |d: &Path| toml_str(&d.to_string_lossy());
     let mut deps = vec![
         format!(
-            "plugin = {{ package = {}, path = {} }}",
+            "plugin = {{ package = {}, path = {}, features = [{}] }}",
             toml_str(&p.package),
-            path(&p.dir)
+            path(&p.dir),
+            features
+                .iter()
+                .map(|f| toml_str(f))
+                .collect::<Vec<_>>()
+                .join(", ")
         ),
         format!(
             "mui-motion-bridge = {{ path = {} }}",

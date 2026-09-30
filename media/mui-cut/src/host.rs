@@ -218,7 +218,7 @@ fn capture(jobs: Vec<Job>, project: &Path, rate: u32) -> Vec<String> {
 /// building it first when the source is a Cargo target.
 pub fn executable(src: &Source, dir: &Path) -> Result<(PathBuf, String)> {
     let exe = if !src.plugin.is_empty() {
-        crate::build::adapter(&src.plugin, dir)?
+        crate::build::adapter(&src.plugin, &src.features, dir)?
     } else if src.cargo.is_empty() {
         // Absolute: the adapter starts in `dir`, where a path relative to
         // mui-cut's own directory means something else.

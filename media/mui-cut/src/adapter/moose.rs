@@ -53,6 +53,7 @@ fn run() -> Result<(), String> {
         .position(|a| a == "--channel")
         .and_then(|i| args.get(i + 1))
         .map_or(Ok(0), |c| c.parse().ok().filter(|c| *c < 16).ok_or("--channel is 0..15"))?;
+    let name = <plugin::ENTRY as PluginRuntime>::info().name;
     mui_motion_bridge::mui::host::headless::claim();
     let mut plugin = <plugin::ENTRY as PluginExport>::create();
     let params = plugin.params_arc();
@@ -161,7 +162,7 @@ fn run() -> Result<(), String> {
             })
             .take(96)
             .collect();
-        serde_json::json!({"plugin": "NAME", "params": params, "routes": [], "held": held.notes()})
+        serde_json::json!({"plugin": name, "params": params, "routes": [], "held": held.notes()})
     };
 
     let infos = all.param_infos();
@@ -173,7 +174,7 @@ fn run() -> Result<(), String> {
         all.set_normalized(s.id, if s.norm { s.value } else { info.range.normalize(s.value) });
         Ok(())
     };
-    let mut describe = mui_motion_bridge::describe("NAME");
+    let mut describe = mui_motion_bridge::describe(name);
     describe["notes"] = true.into();
     describe["patch"] = true.into();
     let served = mui_motion_bridge::run_headless_with(describe, view, edit, audio, patch);

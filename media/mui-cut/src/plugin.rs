@@ -54,10 +54,17 @@ pub struct Source {
     /// builds against its MUI (`mui-cut add`). No code in the plugin.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub plugin: String,
+    /// With `plugin`: the plugin crate's Cargo features the adapter turns
+    /// on, for a build that runs its DSP headless (a lab build, say).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub features: Vec<String>,
 }
 
 impl Source {
     pub(crate) fn check(&self) -> Result<(), String> {
+        if !self.features.is_empty() && self.plugin.is_empty() {
+            return Err("`features` go with a `plugin` source".into());
+        }
         match (self.cargo.is_empty(), self.bin.is_empty(), self.example.is_empty(), self.plugin.is_empty()) {
             (true, false, true, true) | (true, true, true, false) => Ok(()),
             (false, b, e, true) if b != e => Ok(()),
