@@ -193,6 +193,13 @@ struct Session {
 
 impl Session {
     fn open(exe: &Path, args: &[String], dir: &Path) -> Result<Self> {
+        // A project named without a directory has an empty parent, which
+        // no process can start in.
+        let dir = if dir.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            dir
+        };
         let mut child = Command::new(exe)
             .args(args)
             .current_dir(dir)

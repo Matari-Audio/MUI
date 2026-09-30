@@ -86,11 +86,16 @@ fn capture_cached(
     let refs: Vec<&str> = roots.iter().map(String::as_str).collect();
     let surfaces: Vec<_> = scene.surfaces().map(|s| serde_json::json!({"id":s.key.as_ref(),"parent":s.parent.as_deref(),"frame":[s.frame.x,s.frame.y,s.frame.size.width,s.frame.size.height]})).collect();
     let tree = part_tree(scene, roots);
+    let (adopt, widget) = widgets(scene, roots);
+    let adopt: Vec<(&str, &str)> = adopt
+        .iter()
+        .map(|(a, b)| (a.as_str(), b.as_str()))
+        .collect();
     let path_of = |id: &str| tree.iter().find(|p| p.id == id).map(|p| p.path.clone());
     let mut layers = Vec::new();
     let mut fragment_count = 0;
     for (index, fragment) in scene
-        .capture_layers(&refs)
+        .capture_layers_adopting(&refs, &adopt)
         .map_err(|e| e.to_string())?
         .into_iter()
         .enumerate()
@@ -166,7 +171,7 @@ fn capture_cached(
     let parts: Vec<_> = tree
         .iter()
         .map(|p| {
-            let f = scene.surface(&p.id).map(|s| s.frame);
+            let f = widget.get(&p.id).copied().or_else(|| scene.surface(&p.id).map(|s| s.frame));
             serde_json::json!({"path": p.path, "id": p.id, "parent": p.parent.as_deref().and_then(path_of),
                 "frame": f.map(|f| [f.x, f.y, f.size.width, f.size.height])})
         })
@@ -325,6 +330,83 @@ fn part_tree(scene: &mui_scene::ResolvedScene, roots: &[String]) -> Vec<PartNode
     nodes.into_iter().map(|(_, n)| n).collect()
 }
 
+/// Each part's widget: the unnamed containers around it that hold no other
+/// named surface (a knob's column: its dial, the dial's pointer, its
+/// caption), when its name sits on an inner block. Unnamed surfaces are
+/// keyed by their tree path (`/1/0/2`), so a container holds what its path
+/// prefixes; where a named part sits among them comes from the surfaces'
+/// order (a node's surface before its children's). Each unnamed member with
+/// the part that adopts it, and each such part's widget frame.
+// ponytail: a named part that ends its widget (nothing unnamed after it
+// inside) cannot be placed and keeps its own frame; a scene that recorded
+// named surfaces' tree paths would not need the guess.
+#[expect(clippy::type_complexity, reason = "two plain maps")]
+fn widgets(
+    scene: &mui_scene::ResolvedScene,
+    roots: &[String],
+) -> (
+    Vec<(String, String)>,
+    std::collections::HashMap<String, mui_scene::Frame>,
+) {
+    let list: Vec<_> = scene.surfaces().collect();
+    let named = |s: &str| mui_scene::Id::is_named(s);
+    let under = |id: &str, top: &str| {
+        let mut up = Some(id);
+        while let Some(p) = up {
+            if p == top {
+                return true;
+            }
+            up = scene.surface(p).and_then(|s| s.parent.as_deref());
+        }
+        false
+    };
+    let mut adopt = Vec::new();
+    let mut frames = std::collections::HashMap::new();
+    for root in roots {
+        let Some(i) = list.iter().position(|s| &*s.key == root) else {
+            continue;
+        };
+        let scope = list[i].parent.as_deref();
+        // The first surface after the part and its own: where it is.
+        let Some(next) = list[i + 1..].iter().find(|s| !under(&s.key, root)) else {
+            continue;
+        };
+        if named(&next.key) {
+            continue;
+        }
+        let mut widget = None;
+        for u in list[..i].iter().rev() {
+            if named(&u.key) || !next.key.starts_with(&format!("{}/", u.key)) {
+                continue;
+            }
+            if u.parent.as_deref() != scope {
+                break;
+            }
+            let inside = |s: &str| s.starts_with(&format!("{}/", u.key));
+            let start = list.iter().position(|s| s.key == u.key).unwrap_or(0);
+            let end = list.iter().rposition(|s| inside(&s.key)).unwrap_or(start);
+            let crowded = list[start..=end]
+                .iter()
+                .any(|s| named(&s.key) && !under(&s.key, root));
+            if crowded {
+                break;
+            }
+            widget = Some(u);
+        }
+        let Some(w) = widget else {
+            continue;
+        };
+        frames.insert(root.clone(), w.frame);
+        for s in &list {
+            let member = s.key == w.key || s.key.starts_with(&format!("{}/", w.key));
+            if member && !named(&s.key) && s.parent.as_deref() == scope {
+                adopt.push((s.key.to_string(), root.clone()));
+            }
+        }
+    }
+    (adopt, frames)
+}
+
 /// [`discover_parts`], then `depth - 1` more levels inside each part: its
 /// topmost named descendants that are control-sized (at least 12 px each
 /// way, at most 60% of it) and can be taken out whole. Parents come first.
@@ -415,7 +497,17 @@ mod tests {
     /// a control that overflows its clipped panel also comes free of it.
     #[test]
     fn a_two_level_tree_names_controls_by_path_and_frees_them() {
-        let knob = |id: &str| block(30., 30.).fill(Role::Primary).id(id);
+        // As mui's knob: the name on the dial; its pointer and caption
+        // unnamed blocks beside it, in an unnamed column.
+        let knob = |id: &str| {
+            col([
+                stack([
+                    block(30., 30.).fill(Role::Primary).id(id),
+                    block(4., 4.).fill(Role::Ink),
+                ]),
+                block(30., 8.).fill(Role::Dim),
+            ])
+        };
         let scene = resolve(&SceneSpec::new(
             row![
                 row![knob("a-1"), knob("a-2"), text("A")]
@@ -464,6 +556,18 @@ mod tests {
                 .clone()
         };
         assert_eq!(layer("a/a-1")["part"], "a-1");
+        // The knob is its whole widget: dial, pointer and caption, framed
+        // together, and its panel keeps none of them.
+        let knob = m["parts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["path"] == "a/a-1")
+            .unwrap();
+        // (The panel row stretches the column to its height.)
+        assert_eq!(knob["frame"][2..], [30., 60.]);
+        let a1 = layer("a/a-1");
+        assert_eq!(a1["rect"][3], 38.);
         assert_eq!(layer("a/a-1")["parent"], "a");
         // The bar's clipped raster is `b`'s width; freed, it is its own.
         let bar = layer("b/b-bar");
@@ -472,5 +576,51 @@ mod tests {
         assert!(frame["images"][bar["free"]["src"].as_str().unwrap()].is_string());
         // A knob no clip cuts needs no second image.
         assert!(layer("a/a-1").get("free").is_none());
+    }
+
+    /// A knob named on its dial takes its pointer and caption along: the
+    /// unnamed column around it holds no other named surface.
+    #[test]
+    fn a_control_named_on_an_inner_block_takes_its_widget() {
+        let knob = |id: &str| {
+            col([
+                stack([
+                    block(30., 30.).fill(Role::Primary).id(id),
+                    block(4., 4.).fill(Role::Danger),
+                ]),
+                block(30., 6.).fill(Role::Dim),
+            ])
+        };
+        let scene = resolve(&SceneSpec::new(
+            col([row([knob("k1"), knob("k2")])
+                .size(160., 80.)
+                .fill(Role::Ink)
+                .id("p")])
+            .size(300., 200.)
+            .id("root"),
+        ))
+        .unwrap();
+        let roots = discover_tree(&scene, 300., 200., 2);
+        assert_eq!(roots, ["p", "k1", "k2"]);
+        let frame = capture_frame(&scene, 300, 200, 1., &roots).unwrap();
+        let m = &frame["scene"];
+        // The part's frame is its column's: dial and caption, 30 x 40ish.
+        let part = m["parts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["id"] == "k1")
+            .unwrap()
+            .clone();
+        assert!(part["frame"][3].as_f64().unwrap() > 30., "{part}");
+        // Its fragment covers the caption under the dial.
+        let rect = m["layers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|l| l["group"] == "p/k1")
+            .unwrap()["rect"]
+            .clone();
+        assert!(rect[3].as_f64().unwrap() > 30., "{rect}");
     }
 }

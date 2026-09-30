@@ -448,6 +448,59 @@ fn still(project: &Path, t: &str, out: &Path) -> String {
     err
 }
 
+/// Two levels deep, the real synth splits into its panels and then the
+/// controls in them, by path; each panel's leftover (its card and label,
+/// its knobs taken out) is a part of its own. Named without a directory,
+/// the project still runs its adapter.
+#[test]
+fn a_two_level_capture_of_the_real_ui_names_controls_by_path() {
+    let project = plugin_project("plugin-deep");
+    let dir = project.parent().unwrap();
+    let mut v: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&project).unwrap()).unwrap();
+    v["scenes"][0]["layers"][0]["explode_levels"] = 2.into();
+    std::fs::write(&project, v.to_string()).unwrap();
+    let o = Command::new(BIN)
+        .current_dir(dir)
+        .args([
+            "still",
+            "plugin.cut.json",
+            "--t",
+            "4.8",
+            "--size",
+            "480x270",
+        ])
+        .args(["--renderer", "cpu", "-o", "deep.png"])
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(o.status.success() && !err.contains("No such file"), "{err}");
+    let p = mui_cut::Project::load(&std::fs::read_to_string(&project).unwrap()).unwrap();
+    let key = &p.scenes[0].layers[0].plugin_track(p.fps, 0)[0].key;
+    let cap: mui_cut::Capture = serde_json::from_slice(
+        &std::fs::read(dir.join(".cut-cache").join(format!("{key}.json"))).unwrap(),
+    )
+    .unwrap();
+    let tree = cap.tree();
+    let paths: Vec<&str> = tree.iter().map(|p| p.path.as_str()).collect();
+    assert_eq!(paths[..5], ["head", "osc", "filter", "env", "out"]);
+    for control in [
+        "osc/osc-shape",
+        "osc/osc-sync",
+        "filter/filter-cutoff",
+        "env/env-release",
+        "out/out-level",
+    ] {
+        let part = tree.iter().find(|p| p.path == control);
+        assert!(part.is_some(), "{control} not in {paths:?}");
+        let parent = control.split('/').next();
+        assert_eq!(part.unwrap().parent.as_deref(), parent);
+    }
+    // The panel's own paint is still there, drawn as its own fragment.
+    assert!(cap.fragments.iter().any(|f| f.group == "osc"));
+    assert!(cap.fragments.iter().any(|f| f.group == "osc/osc-shape"));
+}
+
 #[test]
 fn plugin_layers_capture_the_real_ui_once_and_draw_it() {
     let project = plugin_project("plugin");
