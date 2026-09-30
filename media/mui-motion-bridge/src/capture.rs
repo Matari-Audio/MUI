@@ -340,7 +340,6 @@ fn part_tree(scene: &mui_scene::ResolvedScene, roots: &[String]) -> Vec<PartNode
 // ponytail: where a named part sits is inferred (surface order, and frames
 // when it ends its container); a scene that recorded named surfaces' tree
 // paths would not need the guess.
-#[expect(clippy::type_complexity, reason = "two plain maps")]
 fn widgets(
     scene: &mui_scene::ResolvedScene,
     roots: &[String],
