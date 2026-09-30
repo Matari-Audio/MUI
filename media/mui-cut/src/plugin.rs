@@ -28,7 +28,9 @@ pub const EXPLODE_DEPTH: f64 = 160.;
 
 /// Where the plugin editor comes from: an adapter executable, or one built
 /// from source with Cargo.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(
+    Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema,
+)]
 pub struct Source {
     /// A prebuilt adapter executable (relative to the project); with
     /// `cargo`, the package binary to build instead.
@@ -139,7 +141,8 @@ pub fn fnv(seed: u64, bytes: &[u8]) -> u64 {
         (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3)
     })
 }
-const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+/// FNV-1a's starting state.
+pub const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 
 /// The grid frame a time falls in: a plugin's UI changes once a frame.
 pub fn frame_at(t: f64, fps: f64) -> usize {

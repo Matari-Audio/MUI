@@ -1,0 +1,28 @@
+{
+  "size": [1920, 1080],
+  "fps": 30.0,
+  "scenes": [
+    {
+      "name": "synth",
+      "duration": 6.0,
+      "background": "#101012",
+      "layers": [
+        {
+          "id": "synth",
+          "kind": "plugin",
+          "source": { "cargo": "../Cargo.toml", "example": "synth" },
+          "params": [
+            { "id": "filter", "field": "cutoff", "value": [
+              { "t": 0.5, "v": 0.6 }, { "t": 1.5, "v": 0.1 }, { "t": 2.5, "v": 0.9 }
+            ] }
+          ],
+          "x": 960.0,
+          "y": 540.0,
+          "scale": 1.8,
+          "explode": [{ "t": 2.5, "v": 0.0 }, { "t": 3.5, "v": 0.6 }],
+          "parts": { "filter": { "highlight": [{ "t": 3.0, "v": 0.0 }, { "t": 3.5, "v": 1.0 }] } }
+        }
+      ]
+    }
+  ]
+}

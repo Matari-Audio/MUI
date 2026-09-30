@@ -67,10 +67,16 @@ mui-reel = { path = "../mui-reel" }
 vello_cpu = { version = "0.2", default-features = false, features = ["multithreading"] }
 # `mui-cut gen`: sandboxed, deterministic scripts that write projects. No
 # clock, no modules: a script's output depends on its text alone.
+# Plugin captures arrive as base64 PNGs over the bridge's wire.
+base64 = "0.22"
 rhai = { version = "1.26", features = ["serde", "no_time", "no_module"] }
 wgpu = { workspace = true, features = ["default"] }
 
 [dev-dependencies]
+# `examples/synth.rs`: a small plugin editor behind the bridge's live
+# protocol, for the plugin layer's example and tests.
+mui.workspace = true
+mui-motion-bridge = { path = "../mui-motion-bridge" }
 # Checks the generated schema accepts the examples (no network resolving).
 jsonschema = { version = "0.58", default-features = false }
 # The effects' WGSL, checked for WebGL2's uniform layout rules.

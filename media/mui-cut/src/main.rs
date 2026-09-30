@@ -9,6 +9,7 @@
 #![forbid(unsafe_code)]
 
 mod encode;
+mod host;
 mod mcp;
 mod script;
 mod segments;
@@ -218,6 +219,7 @@ fn load_assets(p: &Project, project: &Path, assets: &mut Assets) -> Vec<String> 
             }
         }
     }
+    errs.extend(host::load(p, project, assets));
     errs
 }
 
