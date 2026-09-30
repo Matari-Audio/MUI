@@ -10,7 +10,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use mui_cut::{Kind, Project};
+use mui_cut::Project;
 
 use crate::{Result, write_atomic};
 
@@ -95,6 +95,7 @@ fn kind(path: &Path) -> &'static str {
         Some("wasm") => "application/wasm",
         Some("json") => "application/json",
         Some("png") => "image/png",
+        Some("svg") => "image/svg+xml",
         _ => "application/octet-stream",
     }
 }
@@ -137,11 +138,13 @@ impl Shared {
         let Ok(p) = Project::load(&text) else {
             return;
         };
-        let mut layers = p.scenes.iter().flat_map(|s| &s.layers);
-        if !layers.any(|l| matches!(l.kind, Kind::Plugin { .. })) {
+        let all = p.all_sources();
+        if !all.iter().any(|m| m.state().is_some()) {
             return;
         }
-        for e in crate::host::capture_missing(&p, &self.project) {
+        let mut errs = crate::host::capture_missing(&p, &self.project);
+        errs.extend(crate::host::capture_sources(&p, &self.project));
+        for e in errs {
             eprintln!("mui-cut: {e}");
         }
         self.broadcast(b"event: plugin\ndata: ready\n\n");
@@ -257,6 +260,29 @@ impl Shared {
                 .map_err(io)?;
                 self.listeners.lock().expect("no panic holds it").push(s);
                 Ok(())
+            }
+            // An import: a file dropped on the editor, written beside the
+            // project (never over it).
+            ("PUT", p) if p.starts_with("/asset/") => {
+                if length > 256 << 20 {
+                    return respond(stream, "413 Payload Too Large", "text/plain", b"too large")
+                        .map_err(io);
+                }
+                let dir = self.project.parent().unwrap_or(Path::new("."));
+                let rel = &p["/asset/".len()..];
+                let Some(file) = under(dir, rel).filter(|f| {
+                    f.file_name() != self.project.file_name() || f.parent() != Some(dir)
+                }) else {
+                    return respond(stream, "400 Bad Request", "text/plain", b"bad path")
+                        .map_err(io);
+                };
+                let mut body = vec![0; length];
+                r.read_exact(&mut body).map_err(io)?;
+                if let Some(d) = file.parent() {
+                    std::fs::create_dir_all(d).map_err(io)?;
+                }
+                std::fs::write(&file, &body).map_err(|e| format!("{}: {e}", file.display()))?;
+                respond(stream, "200 OK", "text/plain", rel.as_bytes()).map_err(io)
             }
             ("GET", p) => {
                 let (root, rel) = match p.strip_prefix("/asset/") {

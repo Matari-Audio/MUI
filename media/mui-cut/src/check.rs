@@ -329,7 +329,7 @@ fn fields(raw: &Value, p: &Project, out: &mut Issues) {
                     && !used.contains(k)
                     && !matches!(
                         k.as_str(),
-                        "id" | "name" | "kind" | "animators" | "deformers"
+                        "id" | "name" | "parent" | "kind" | "animators" | "deformers"
                     )
                     && !(three && matches!(k.as_str(), "cast_shadows" | "receive_shadows"))
                     // Every kind runs its own effect stack in 2D; 3D skips it.

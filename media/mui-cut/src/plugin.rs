@@ -118,6 +118,9 @@ impl Part {
 pub struct PluginAt {
     /// The capture to show: `CACHE/<state>.json`.
     pub state: String,
+    /// A component layer's parts (see [`shows`]); empty for the whole UI.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub show: Vec<String>,
     /// `explode` for each level of parts, panels first: the layer's
     /// `explode`, each level `explode_stagger` seconds behind the last.
     pub explode: Vec<f64>,
@@ -125,6 +128,18 @@ pub struct PluginAt {
     /// `[x, y, down]` in the plugin's pixels.
     pub pointer: [f64; 3],
     pub parts: Vec<PartAt>,
+}
+
+impl PluginAt {
+    /// Whether it draws the fragments of `group`: a component layer draws
+    /// its parts alone, no backdrop.
+    pub fn draws(&self, group: &str) -> bool {
+        if group == "background" {
+            self.show.is_empty()
+        } else {
+            shows(&self.show, group)
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -158,6 +173,56 @@ pub fn fnv(seed: u64, bytes: &[u8]) -> u64 {
 /// FNV-1a's starting state.
 pub const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 
+/// How deep the Sources panel captures a plugin's parts: its panels and
+/// the controls in them.
+pub const HOME_DEPTH: usize = 2;
+
+/// The first step of a plugin fresh from its source, its parts captured
+/// [`HOME_DEPTH`] deep: what the Sources panel shows, and the first frame
+/// of a bare plugin layer with `explode_levels` 2.
+pub fn home_step(source: &Source) -> Step {
+    let select = json!({"op": "input", "kind": "select", "ids": [], "depth": HOME_DEPTH});
+    let h = fnv(home_hash(source), select.to_string().as_bytes());
+    Step {
+        frame: 0,
+        key: format!("{h:016x}"),
+        commands: vec![select],
+    }
+}
+
+/// The state [`home_step`] leaves.
+pub fn home(source: &Source) -> String {
+    home_step(source).key
+}
+
+/// A home capture's parts as [`tree_json`] shows them, nothing moved.
+pub fn home_tree(cap: &Capture, state: &str) -> Value {
+    let at = PluginAt {
+        state: state.into(),
+        show: Vec::new(),
+        explode: vec![0.],
+        backdrop: 1.,
+        pointer: NO_POINTER,
+        parts: Vec::new(),
+    };
+    tree_json(cap, &at)["parts"].take()
+}
+fn home_hash(source: &Source) -> u64 {
+    let src = serde_json::to_string(source).expect("a source serialises");
+    fnv(FNV_OFFSET, src.as_bytes())
+}
+
+/// Whether a component layer showing `show` draws part `id`: one it names,
+/// or one nested under it (`panel/knob` under `panel`). Everything shows
+/// when `show` is empty.
+pub fn shows(show: &[String], id: &str) -> bool {
+    show.is_empty()
+        || show.iter().any(|s| {
+            id.strip_prefix(s.as_str())
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+        })
+}
+
 /// The grid frame a time falls in: a plugin's UI changes once a frame.
 pub fn frame_at(t: f64, fps: f64) -> usize {
     (t * fps + 1e-6).floor().max(0.) as usize
@@ -181,6 +246,7 @@ impl Layer {
             params,
             parts,
             explode_levels,
+            show,
             ..
         } = &self.kind
         else {
@@ -191,12 +257,12 @@ impl Layer {
         // captures a level more than needed.
         let depth = parts
             .keys()
+            .chain(show)
             .map(|k| k.split('/').count())
             .chain([*explode_levels as usize])
             .max()
             .unwrap_or(1);
-        let src = serde_json::to_string(source).expect("a source serialises");
-        let mut h = fnv(FNV_OFFSET, src.as_bytes());
+        let mut h = home_hash(source);
         let mut steps = Vec::new();
         let mut last_params: Vec<f64> = Vec::new();
         let mut last_pointer = NO_POINTER;
@@ -253,6 +319,7 @@ impl Layer {
             parts,
             explode_levels,
             explode_stagger,
+            show,
             ..
         } = &self.kind
         else {
@@ -268,6 +335,7 @@ impl Layer {
         let tq = f as f64 / fps;
         Some(PluginAt {
             state,
+            show: show.clone(),
             explode: (0..*explode_levels)
                 .map(|i| self.explode.at(t - f64::from(i) * explode_stagger))
                 .collect(),

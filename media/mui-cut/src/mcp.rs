@@ -36,7 +36,10 @@ reloads it. Look with `still` (one frame), `sheet` (a grid of frames at every ke
 moves their playhead or selection. `plugin_parts` captures a plugin layer's live UI and lists its \
 parts as a tree (animate them as `parts.<path>.x` etc.; a control in a panel is `parts.osc/osc-shape.x`; \
 `explode_levels` 2 captures and explodes panels, then their controls) and surfaces (aim `pointer_x`/`pointer_y` at their frames). \
-`schema` has every field.";
+`sources_list` lists the project's sources (files and plugins, a plugin with its part tree), \
+`source_add` imports one; drag a part in as a layer with a plugin layer's `show: [part]`. \
+`layer_parent` parents a layer to another (Cavalry style: it inherits position, rotation, scale, \
+z and opacity) keeping it where it is on screen. `schema` has every field.";
 
 pub fn serve(project: Option<&str>) -> Result<()> {
     let mut server = Server::default();
@@ -313,6 +316,30 @@ struct PluginParts {
 }
 
 #[derive(Deserialize, JsonSchema)]
+struct SourceAdd {
+    /// The source: a file `{"id": "logo", "kind": "svg", "path": "logo.svg"}`
+    /// (`image`, `svg`, `lottie`, `model`; the path relative to the project)
+    /// or a plugin `{"id": "synth", "kind": "plugin", "source": {"cargo":
+    /// "../Cargo.toml", "example": "synth"}}` (or `"source": {"bin": path}`).
+    source: Value,
+}
+
+#[derive(Deserialize, JsonSchema)]
+struct LayerParent {
+    #[serde(default)]
+    scene: Option<String>,
+    /// The layer to attach.
+    layer: String,
+    /// The layer to attach it to; null or "" detaches it.
+    #[serde(default)]
+    parent: Option<String>,
+    /// Seconds into the scene at which it keeps its place on screen
+    /// (default 0).
+    #[serde(default)]
+    t: f64,
+}
+
+#[derive(Deserialize, JsonSchema)]
 struct Nothing {}
 
 fn tool<T: JsonSchema>(name: &str, description: &str) -> Value {
@@ -387,6 +414,18 @@ fn tools() -> Vec<Value> {
         tool::<PluginParts>(
             "plugin_parts",
             "A plugin layer at a time: runs its adapter if that state is not captured yet, then lists its parts as a tree (id: the path to key as `parts.<id>.x`, e.g. `osc/osc-shape`; its surface, frame and fragment rects in the UI's pixels, its own motion, children), as deep as the layer's `explode_levels` or its deepest keyed part; every surface (id, parent, frame: what `select` and the pointer can aim at), the UI size, explode and pointer.",
+        ),
+        tool::<Nothing>(
+            "sources_list",
+            "The project's sources: imported files and plugins (`listed`) and the ones layers use without importing, each with the layers that use it; a plugin's with its part tree (ids to put in a plugin layer's `show` or animate as `parts.<id>.x`), capturing it first if needed.",
+        ),
+        tool::<SourceAdd>(
+            "source_add",
+            "Import a file or plugin into the project's `sources` (the editor's Sources panel), validated.",
+        ),
+        tool::<LayerParent>(
+            "layer_parent",
+            "Parent a layer to another (or detach it), keeping it where it is on screen at `t`: its local x, y, z, rotation and scale keys are rewritten into the new parent's space. Children inherit position, rotation, scale, z and multiply opacity.",
         ),
         tool::<EditorState>(
             "editor_state",
@@ -646,6 +685,79 @@ impl Server {
                     .map_err(|e| format!("{}: {e}", manifest.display()))?;
                 Ok(vec![text(&pretty(&mui_cut::plugin::tree_json(&cap, &at)))])
             }
+            "sources_list" => {
+                let path = self.path()?;
+                let p = crate::load(&path)?;
+                let errs = crate::host::capture_sources(&p, &path);
+                let cache = path
+                    .parent()
+                    .unwrap_or(Path::new("."))
+                    .join(mui_cut::plugin::CACHE);
+                let rows: Vec<Value> = p
+                    .all_sources()
+                    .iter()
+                    .map(|m| {
+                        let mut v = serde_json::to_value(m).unwrap_or_default();
+                        v["listed"] = p.sources.iter().any(|s| s.id == m.id).into();
+                        let users: Vec<String> = p
+                            .scenes
+                            .iter()
+                            .flat_map(|s| s.layers.iter().map(move |l| (s, l)))
+                            .filter(|(_, l)| {
+                                mui_cut::sources::Media::of(&l.kind).as_ref() == Some(&m.kind)
+                            })
+                            .map(|(s, l)| format!("{}/{}", s.name, l.id))
+                            .collect();
+                        v["used_by"] = json!(users);
+                        if let Some((k, cap)) = m.state().and_then(|k| {
+                            let b = std::fs::read(cache.join(format!("{k}.json"))).ok()?;
+                            Some((k, serde_json::from_slice::<mui_cut::Capture>(&b).ok()?))
+                        }) {
+                            v["size"] = json!([cap.width, cap.height]);
+                            v["parts"] = mui_cut::plugin::home_tree(&cap, &k);
+                        }
+                        v
+                    })
+                    .collect();
+                Ok(vec![text(&pretty(
+                    &json!({ "sources": rows, "errors": errs }),
+                ))])
+            }
+            "source_add" => {
+                let a: SourceAdd = parse(args)?;
+                self.edit(|raw| {
+                    let list = raw
+                        .as_object_mut()
+                        .ok_or("the project is not an object")?
+                        .entry("sources")
+                        .or_insert_with(|| json!([]));
+                    list.as_array_mut()
+                        .ok_or("`sources` is not a list")?
+                        .push(a.source);
+                    Ok(())
+                })
+            }
+            "layer_parent" => {
+                let a: LayerParent = parse(args)?;
+                let p = self.load()?;
+                let si = self.scene_index(a.scene.as_deref())?;
+                let l = mui_cut::place::reparent(
+                    &p,
+                    &p.scenes[si],
+                    &a.layer,
+                    a.parent.as_deref(),
+                    a.t,
+                )?;
+                let new = serde_json::to_value(&l).map_err(|e| e.to_string())?;
+                let ptr = format!("/scenes/{si}/layers/{}", escape(&a.layer));
+                self.edit(|raw| {
+                    let tokens = resolve(raw, &ptr)?;
+                    if at(raw, &tokens).is_some_and(|v| v.to_string().contains("\"var\"")) {
+                        return Err("the layer has variable bindings: set `parent` with `set` and place it by hand".into());
+                    }
+                    apply(raw, &json!({ "op": "replace", "path": ptr, "value": new }))
+                })
+            }
             "render" => self.render(parse(args)?),
             "render_status" => {
                 let a: JobArg = parse(args)?;
@@ -747,6 +859,9 @@ impl Server {
                     .map(|l| {
                         let kind = serde_json::to_value(&l.kind).unwrap_or_default();
                         let mut o = json!({ "id": l.id, "kind": kind["kind"] });
+                        if !l.parent.is_empty() {
+                            o["parent"] = l.parent.clone().into();
+                        }
                         for k in ["text", "path"] {
                             if let Some(v) = kind.get(k) {
                                 o[k] = v.clone();

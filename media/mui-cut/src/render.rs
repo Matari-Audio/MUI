@@ -495,6 +495,9 @@ impl Assets {
         let posed = poses(cap, p);
         let mut plated = std::collections::HashSet::new();
         for f in &cap.fragments {
+            if !p.draws(&f.group) {
+                continue;
+            }
             if f.group == "background" {
                 let [rx, ry, rw, rh] = f.rect;
                 let image = Kind::Image {
@@ -555,9 +558,29 @@ impl Assets {
             * Affine::rotate(l.rotation.to_radians())
             * Affine::scale(l.scale)
             * Affine::translate((-w / 2., -h / 2.));
+        // A component layer's outline is its parts' captured rects.
+        let own = cap
+            .filter(|_| !p.show.is_empty())
+            .into_iter()
+            .flat_map(|c| &c.fragments)
+            .filter(|f| p.draws(&f.group))
+            .map(|f| {
+                let [x, y, w, h] = f.rect;
+                Rect::new(x, y, x + w, y + h)
+            })
+            .reduce(|a, b| a.union(b));
+        let outline = match own {
+            Some(r) => quad(
+                l.id.clone(),
+                place * Affine::translate((r.x0, r.y0)),
+                r.width(),
+                r.height(),
+            ),
+            None => quad(l.id.clone(), place, w, h),
+        };
         out.quads.push(Quad {
             ui: Some(place.as_coeffs()),
-            ..quad(l.id.clone(), place, w, h)
+            ..outline
         });
         let drawn = l.opacity > 0. && l.scale != 0.;
         let mut push = |el: El, at: Affine| -> Result<(), String> {
@@ -580,7 +603,7 @@ impl Assets {
             return Ok(());
         };
         let posed = poses(cap, p);
-        for f in &cap.fragments {
+        for f in cap.fragments.iter().filter(|f| p.draws(&f.group)) {
             let (src, [rx, ry, rw, rh], at, opacity) = if f.group == "background" {
                 (&*f.src, f.rect, Affine::IDENTITY, p.backdrop)
             } else {
@@ -608,7 +631,7 @@ impl Assets {
         }
         // Each part's quad (parents first, so a child wins a hit) and its
         // highlight: a flat outline round its frame, over everything.
-        for (info, pose) in &posed {
+        for (info, pose) in posed.iter().filter(|(i, _)| p.draws(&i.path)) {
             let [fx, fy, fw, fh] = info.frame;
             let at = place * pose.at * Affine::translate((fx, fy));
             out.parts.push(Quad {
