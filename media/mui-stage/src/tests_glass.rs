@@ -341,3 +341,39 @@ fn a_beauty_frame_converges_rough_glass() {
         noise(&one)
     );
 }
+
+/// A white label in front of frosted glass over black: the glass does not
+/// see it behind itself, so no blurred halo grows round it.
+#[test]
+fn a_label_in_front_of_frosted_glass_leaves_no_halo() {
+    let Some(mut stage) = stage(400, 240) else {
+        return;
+    };
+    solid(&mut stage, "black", 64., Color::srgb(0., 0., 0.));
+    solid(&mut stage, "white", 64., Color::srgb(1., 1., 1.));
+    let shot = Shot {
+        planes: vec![
+            Plane::new("black", 900., 900.).at(0., 0., -300.),
+            Plane::new("white", 300., 200.).material(Material {
+                roughness: 0.6,
+                ..glass(1.5, 20.)
+            }),
+            Plane::new("white", 40., 40.).at(0., 0., 20.),
+        ],
+        clear: Some([0.; 3]),
+        post: Post::NONE,
+        ..Shot::new(Pane::camera())
+    };
+    let f = stage.render(0., 0., 1, &|_| shot.clone()).unwrap();
+    let at = |x: usize| f.rgba[(120 * 400 + x) * 4 + 1];
+    let [x0, _, _] = Pane::camera()
+        .view_proj(400. / 240.)
+        .project([20., 0., 20.]);
+    let edge = ((x0 + 1.) * 0.5 * 400.) as usize;
+    let (near, far) = (at(edge + 8), at(330));
+    assert!(at(edge - 4) > 0.9, "the label: {}", at(edge - 4));
+    assert!(
+        (near - far).abs() < 0.03,
+        "beside the label {near}, far from it {far}"
+    );
+}

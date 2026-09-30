@@ -2053,6 +2053,48 @@ impl Stage {
                     }),
             )
             .collect();
+        // An opaque plane in front of glass it overlaps on screen (a label
+        // on a frosted card) draws after that glass, in its pass: the glass
+        // would otherwise see it, blurred, behind itself. ponytail: planes
+        // only, by screen boxes; a model in front of glass still leaks.
+        let bounds = |p: &Plane| {
+            let m = vp * p.model();
+            let mut b = [f32::MAX, f32::MAX, f32::MIN, f32::MIN];
+            for [x, y] in [[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]] {
+                let l = [x * p.size[0], y * p.size[1], 0.];
+                let w = m.0[3] * l[0] + m.0[7] * l[1] + m.0[15];
+                if w <= 0. {
+                    return None;
+                }
+                let q = m.project(l);
+                b = [
+                    b[0].min(q[0]),
+                    b[1].min(q[1]),
+                    b[2].max(q[0]),
+                    b[3].max(q[1]),
+                ];
+            }
+            Some(b)
+        };
+        let panes: Vec<(f32, [f32; 4])> = glass
+            .iter()
+            .filter(|&&(_, i)| i < n)
+            .filter_map(|&(d, i)| Some((d, bounds(planes[i])?)))
+            .collect();
+        if !panes.is_empty() {
+            order.retain(|&i| {
+                let d = depth(planes[i].model());
+                let over = bounds(planes[i]).is_some_and(|b| {
+                    panes.iter().any(|&(pd, g)| {
+                        pd > d && b[0] < g[2] && g[0] < b[2] && b[1] < g[3] && g[1] < b[3]
+                    })
+                });
+                if over {
+                    glass.push((d, i));
+                }
+                !over
+            });
+        }
         glass.sort_by(|a, b| b.0.total_cmp(&a.0));
         let draw = |pass: &mut wgpu::RenderPass<'_>, base: usize| {
             pass.set_pipeline(&self.pipes.mesh);

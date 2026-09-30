@@ -916,6 +916,8 @@ fn glass(p: vec3f, n: vec3f, base: vec3f, body: vec3f, px: vec2f) -> vec3f {
     let fr = f0 + (1. - f0) * pow(1. - clamp(dot(m, v), 0., 1.), 5.);
     var r = reflect(ray, m);
     if (dot(r, n) <= 0.) { r = reflect(ray, n); }
+    // Opaque, drawn after glass it stands in front of: nothing to see through.
+    if (trans <= 0.) { return (1. - fr) * body + fr * spec_fallback(r, rough); }
     let ign = fract(52.982918 * fract(dot(px, vec2f(0.06711056, 0.00583715))));
     let refl = reflection(p, n, r, rough, fract(ign + u.x));
     // Beauty: one wavelength per band, anywhere in it; else its middle.
