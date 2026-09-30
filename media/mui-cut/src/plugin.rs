@@ -350,14 +350,15 @@ impl Layer {
         };
         // Parts come as deep as explode reaches, or a keyed part's path.
         // ponytail: a surface id with a `/` in it counts as deeper; that only
-        // captures a level more than needed.
+        // captures a level more than needed, up to the 8 an adapter serves.
         let depth = parts
             .keys()
             .chain(show)
             .map(|k| k.split('/').count())
             .chain([*explode_levels as usize])
             .max()
-            .unwrap_or(1);
+            .unwrap_or(1)
+            .min(8);
         let mut h = home_hash(source);
         let mut steps = Vec::new();
         let mut last_params: Vec<f64> = Vec::new();

@@ -1457,6 +1457,12 @@ fn deeper_parts_ask_the_adapter_for_more_levels() {
     let depth = |extra: &str| first(extra)[0]["depth"].clone();
     assert_eq!(depth(r#","explode_levels":2"#), 2);
     assert_eq!(depth(r#","parts":{"osc/osc-shape":{"x":1}}"#), 2);
+    // Surface ids have slashes of their own: a deep path must not ask for
+    // more levels than the adapter serves (1..8), or the capture fails.
+    assert_eq!(
+        depth(r#","parts":{"group-frame/0/osc/0/panel/wave/osc/0/wave":{"x":1}}"#),
+        8
+    );
     assert_eq!(
         first(r#","explode_levels":3,"select":["a"]"#)[0]["ids"],
         serde_json::json!(["a"])
