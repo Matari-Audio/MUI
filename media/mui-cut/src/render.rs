@@ -7,7 +7,7 @@ use std::sync::{Arc, LazyLock};
 
 use mui_scene::ResolvedScene;
 use mui_scene::prelude::*;
-use mui_vello::kurbo::{Affine, Point as KPoint, Rect};
+use mui_vello::kurbo::{Affine, Point as KPoint, Rect, Shape as _};
 use serde::Serialize;
 use vello_cpu::{Pixmap, RenderContext, Resources};
 
@@ -32,6 +32,7 @@ pub struct Assets {
     images: HashMap<String, Arc<Image>>,
     svgs: HashMap<String, Arc<Vec<vector::Piece>>>,
     lotties: HashMap<String, Arc<velato::Composition>>,
+    models: HashMap<String, Arc<crate::three::Mesh>>,
 }
 
 /// One frame's layers, ready to paint: each resolved tree with where it goes
@@ -147,6 +148,11 @@ impl Assets {
                 self.svgs.insert(path.to_owned(), Arc::new(pieces));
                 Ok(())
             }
+            "glb" => {
+                let mesh = crate::three::glb(bytes).map_err(|e| format!("{path}: {e}"))?;
+                self.models.insert(path.to_owned(), Arc::new(mesh));
+                Ok(())
+            }
             "json" => {
                 let comp =
                     velato::Composition::from_slice(bytes).map_err(|e| format!("{path}: {e}"))?;
@@ -205,7 +211,12 @@ impl Assets {
                 .get(path)
                 .map(|c| vector::lottie(c, l.time, *looped))
                 .unwrap_or_default(),
-            Kind::Rect | Kind::Ellipse | Kind::Image { .. } => Vec::new(),
+            Kind::Rect
+            | Kind::Ellipse
+            | Kind::Image { .. }
+            | Kind::Camera { .. }
+            | Kind::Light { .. }
+            | Kind::Model { .. } => Vec::new(),
         };
         vector::trim(&mut pieces, l.trim);
         vector::deform(&mut pieces, &l.deformers);
@@ -214,7 +225,7 @@ impl Assets {
 
     /// The layer as a MUI tree, the size it lays out to, and where its top
     /// left sits relative to the layer's origin (its pivot).
-    fn element(&self, l: &Drawn) -> Result<(ResolvedScene, Size, KPoint), String> {
+    pub(crate) fn element(&self, l: &Drawn) -> Result<(ResolvedScene, Size, KPoint), String> {
         let fill = color(l.fill);
         let centred = |size: Size| KPoint::new(-size.width / 2., -size.height / 2.);
         let el = match &l.kind {
@@ -244,6 +255,35 @@ impl Assets {
         let scene = resolve(&spec).map_err(|e| format!("layer `{}`: {e}", l.id))?;
         let size = scene.layout.size;
         Ok((scene, size, centred(size)))
+    }
+
+    /// A model layer's mesh, once its file is loaded.
+    pub(crate) fn model(&self, path: &str) -> Option<&Arc<crate::three::Mesh>> {
+        self.models.get(path)
+    }
+
+    /// The outline an extruded layer's walls follow, in its own y-down
+    /// pixels from the top left of its [`Assets::element`] box; `None` is
+    /// that box.
+    pub(crate) fn outline(&self, l: &Drawn, size: Size, corner: KPoint) -> Option<Path> {
+        let rounded = |r: f64| {
+            let p =
+                mui_vello::kurbo::RoundedRect::new(0., 0., size.width, size.height, r).to_path(0.1);
+            vector::outline(
+                &[vector::Piece {
+                    path: p,
+                    fill: Some((Rgba([0; 4]), 1.)),
+                    stroke: None,
+                }],
+                KPoint::ZERO,
+            )
+        };
+        match &l.kind {
+            Kind::Rect | Kind::Image { .. } if l.radius > 0. => Some(rounded(l.radius)),
+            Kind::Rect | Kind::Image { .. } => None,
+            Kind::Ellipse => Some(ellipse(size)),
+            _ => Some(vector::outline(&self.pieces(l).ok()?, corner)),
+        }
     }
 
     /// Every layer of `frame` resolved and placed, bottom first. A layer

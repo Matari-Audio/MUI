@@ -195,11 +195,26 @@ impl Camera {
     }
     /// World to clip space for a frame `aspect` wide per unit high.
     pub fn view_proj(&self, aspect: f32) -> Mat4 {
-        let up = [
-            -self.roll.to_radians().sin(),
-            self.roll.to_radians().cos(),
-            0.,
+        // Rolled about the view axis: straight on, up leans left by `roll`.
+        let f: [f32; 3] = std::array::from_fn(|i| self.target[i] - self.eye[i]);
+        let f = normalize(f);
+        let world_up = if f[1].abs() > 0.999 {
+            [0., 0., -1.]
+        } else {
+            [0., 1., 0.]
+        };
+        let s = normalize([
+            f[1] * world_up[2] - f[2] * world_up[1],
+            f[2] * world_up[0] - f[0] * world_up[2],
+            f[0] * world_up[1] - f[1] * world_up[0],
+        ]);
+        let u = [
+            s[1] * f[2] - s[2] * f[1],
+            s[2] * f[0] - s[0] * f[2],
+            s[0] * f[1] - s[1] * f[0],
         ];
+        let (sin, cos) = self.roll.to_radians().sin_cos();
+        let up: [f32; 3] = std::array::from_fn(|i| u[i] * cos - s[i] * sin);
         Mat4::perspective(self.fov.to_radians(), aspect, 1., 100_000.)
             * Mat4::look_at(self.eye, self.target, up)
     }
@@ -1007,9 +1022,7 @@ impl Stage {
             let texture = self.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("mui-stage layer"),
                 size,
-                mip_level_count: size
-                    .max_mips(wgpu::TextureDimension::D2)
-                    .min(mips.max(1)),
+                mip_level_count: size.max_mips(wgpu::TextureDimension::D2).min(mips.max(1)),
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: HDR,
@@ -1709,10 +1722,22 @@ impl Stage {
         if p.bloom > 0. {
             pass(enc, &self.bloom[0], true, &self.pipes.prefilter, src);
             for i in 1..BLOOM_LEVELS {
-                pass(enc, &self.bloom[i], true, &self.pipes.down, &self.bloom[i - 1]);
+                pass(
+                    enc,
+                    &self.bloom[i],
+                    true,
+                    &self.pipes.down,
+                    &self.bloom[i - 1],
+                );
             }
             for i in (0..BLOOM_LEVELS - 1).rev() {
-                pass(enc, &self.bloom[i], false, &self.pipes.up, &self.bloom[i + 1]);
+                pass(
+                    enc,
+                    &self.bloom[i],
+                    false,
+                    &self.pipes.up,
+                    &self.bloom[i + 1],
+                );
             }
         }
         let group = self.tex_group(src, &self.bloom[0]);
@@ -1793,7 +1818,12 @@ fn caster_bounds(
     };
     for p in planes.iter().filter(|p| p.cast) {
         let (m, [w, h]) = (p.model(), p.size.map(|v| v * 0.5));
-        for [x, y, z] in [[-w, -h, 0.], [w, h, -p.depth], [-w, h, 0.], [w, -h, -p.depth]] {
+        for [x, y, z] in [
+            [-w, -h, 0.],
+            [w, h, -p.depth],
+            [-w, h, 0.],
+            [w, -h, -p.depth],
+        ] {
             add(&m, [x, y, z]);
             add(&m, [-x, -y, z]);
         }
@@ -1803,7 +1833,13 @@ fn caster_bounds(
             continue;
         };
         for i in 0..8 {
-            let pick = |a: usize| if i >> a & 1 == 0 { mesh.min[a] } else { mesh.max[a] };
+            let pick = |a: usize| {
+                if i >> a & 1 == 0 {
+                    mesh.min[a]
+                } else {
+                    mesh.max[a]
+                }
+            };
             add(&m.transform, [pick(0), pick(1), pick(2)]);
         }
     }

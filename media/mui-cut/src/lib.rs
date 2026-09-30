@@ -10,11 +10,13 @@
 
 pub mod check;
 mod gpu;
+mod gpu3d;
 mod motion;
 #[cfg(not(target_arch = "wasm32"))]
 mod pool;
 mod render;
 mod sparse;
+mod three;
 mod vector;
 #[cfg(target_arch = "wasm32")]
 mod web;
@@ -28,6 +30,7 @@ pub use motion::{
 #[cfg(not(target_arch = "wasm32"))]
 pub use pool::{CpuPool, shutter};
 pub use render::{Assets, Layers, Quad, Renderer};
+pub use three::{Cam, Fog, Ground, Lamp, Mode, View};
 
 use serde::{Deserialize, Serialize};
 
@@ -55,6 +58,16 @@ pub struct Scene {
     /// Bottom first: later layers paint over earlier ones.
     #[serde(default)]
     pub layers: Vec<Layer>,
+    /// `3d` sets every layer in a lit 3D space seen through the scene's
+    /// camera layer; `2d` (the default) is the flat composite.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub mode: Mode,
+    /// 3D: a floor under the layers, catching their shadows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ground: Option<Ground>,
+    /// 3D: distance fog.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fog: Option<Fog>,
 }
 
 /// What a layer draws.
@@ -107,6 +120,42 @@ pub enum Kind {
         #[serde(default = "yes", rename = "loop", skip_serializing_if = "is_yes")]
         looped: bool,
     },
+    /// 3D scenes: the camera. It orbits its target (`x`, `y`, `z`, or the
+    /// layer `look_at`) by `ry` (yaw) and `rx` (pitch) at `distance`, rolls
+    /// by `rotation`, and moves along `path` (SVG path data seen from
+    /// above: x across, y into depth) by `path_offset`. The last camera
+    /// with some opacity is the one that shoots.
+    Camera {
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        look_at: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        path: String,
+    },
+    /// 3D scenes: a light, coloured by `fill`.
+    Light {
+        #[serde(rename = "type", default, skip_serializing_if = "is_default")]
+        light: LightType,
+    },
+    /// 3D scenes: a glTF binary (`.glb`, relative to the project), scaled
+    /// to `height` pixels tall.
+    Model {
+        path: String,
+    },
+}
+
+/// What a light layer is.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LightType {
+    /// Parallel rays along `rx`/`ry`, with a shadow.
+    #[default]
+    Directional,
+    /// From its position, a cone along `rx`/`ry`, with a shadow.
+    Spot,
+    /// From its position every way, no shadow.
+    Point,
+    /// Everywhere, no shadow.
+    Ambient,
 }
 
 /// Text line alignment.
@@ -243,6 +292,85 @@ pub struct Layer {
     /// Vector kinds, applied in order after everything else.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub deformers: Vec<Deformer>,
+    /// 3D: depth in pixels (larger is farther), turns in degrees (`rx`
+    /// tips the top away, `ry` turns the right side away; `rotation` is
+    /// the turn about z), the pivot's depth behind the face, and the slab
+    /// thickness with its wall colour.
+    #[serde(default = "zero", skip_serializing_if = "is_zero")]
+    pub z: Anim<f64>,
+    #[serde(default = "zero", skip_serializing_if = "is_zero")]
+    pub rx: Anim<f64>,
+    #[serde(default = "zero", skip_serializing_if = "is_zero")]
+    pub ry: Anim<f64>,
+    #[serde(default = "zero", skip_serializing_if = "is_zero")]
+    pub anchor_z: Anim<f64>,
+    #[serde(default = "zero", skip_serializing_if = "is_zero")]
+    pub extrude: Anim<f64>,
+    #[serde(default = "edge", skip_serializing_if = "is_edge")]
+    pub edge: Anim<Rgba>,
+    /// 3D: this layer shadows others, and others shadow it. On a light:
+    /// it casts shadow maps at all.
+    #[serde(default = "yes", skip_serializing_if = "is_yes")]
+    pub cast_shadows: bool,
+    #[serde(default = "yes", skip_serializing_if = "is_yes")]
+    pub receive_shadows: bool,
+    /// Camera: distance from its target (0: where a layer at z 0 is its 2D
+    /// size), vertical field of view in degrees, the fraction of the way
+    /// to the target it has moved in, depth of field's focus (pixels past
+    /// the target) and aperture (blur pixels far out of focus; 0 none).
+    #[serde(default = "zero", skip_serializing_if = "is_zero")]
+    pub distance: Anim<f64>,
+    #[serde(default = "fov", skip_serializing_if = "is_fov")]
+    pub fov: Anim<f64>,
+    #[serde(default = "zero", skip_serializing_if = "is_zero")]
+    pub dolly: Anim<f64>,
+    #[serde(default = "zero", skip_serializing_if = "is_zero")]
+    pub focus: Anim<f64>,
+    #[serde(default = "zero", skip_serializing_if = "is_zero")]
+    pub aperture: Anim<f64>,
+    /// Light: brightness, a spot's half-angle and soft fraction, the
+    /// distance it fades out over (0: never) and the shadow's blur.
+    #[serde(default = "one", skip_serializing_if = "is_one")]
+    pub intensity: Anim<f64>,
+    #[serde(default = "cone", skip_serializing_if = "is_cone")]
+    pub cone: Anim<f64>,
+    #[serde(default = "feather", skip_serializing_if = "is_feather")]
+    pub feather: Anim<f64>,
+    #[serde(default = "zero", skip_serializing_if = "is_zero")]
+    pub range: Anim<f64>,
+    #[serde(default = "softness", skip_serializing_if = "is_softness")]
+    pub softness: Anim<f64>,
+}
+
+fn edge() -> Anim<Rgba> {
+    Anim::Value(Rgba([40, 41, 50, 255]))
+}
+fn is_edge(a: &Anim<Rgba>) -> bool {
+    *a == edge()
+}
+fn fov() -> Anim<f64> {
+    Anim::Value(40.)
+}
+fn is_fov(a: &Anim<f64>) -> bool {
+    *a == fov()
+}
+fn cone() -> Anim<f64> {
+    Anim::Value(30.)
+}
+fn is_cone(a: &Anim<f64>) -> bool {
+    *a == cone()
+}
+fn feather() -> Anim<f64> {
+    Anim::Value(0.3)
+}
+fn is_feather(a: &Anim<f64>) -> bool {
+    *a == feather()
+}
+fn softness() -> Anim<f64> {
+    Anim::Value(1.5)
+}
+fn is_softness(a: &Anim<f64>) -> bool {
+    *a == softness()
 }
 
 fn line_height() -> Anim<f64> {
@@ -332,9 +460,75 @@ impl Layer {
     /// inspector order. The editor's inspector, timeline and graph list
     /// these, so a new property shows up there by being listed here.
     pub fn props(&self) -> Vec<(String, Prop<'_>)> {
+        self.props_in(false)
+    }
+
+    /// [`Layer::props`], with the 3D placement ones (`z`, `rx`, ...) too
+    /// when the layer is in a 3D scene. Cameras, lights and models always
+    /// list theirs.
+    pub fn props_in(&self, three: bool) -> Vec<(String, Prop<'_>)> {
         use Prop::{Color, Num};
         let mut out: Vec<(String, Prop<'_>)> = Vec::new();
         let mut num = |n: &str, a| out.push((n.to_owned(), Num(a)));
+        match self.kind {
+            Kind::Camera { .. } => {
+                for (n, a) in [
+                    ("x", &self.x),
+                    ("y", &self.y),
+                    ("z", &self.z),
+                    ("rx", &self.rx),
+                    ("ry", &self.ry),
+                    ("rotation", &self.rotation),
+                    ("distance", &self.distance),
+                    ("fov", &self.fov),
+                    ("dolly", &self.dolly),
+                    ("path_offset", &self.path_offset),
+                    ("focus", &self.focus),
+                    ("aperture", &self.aperture),
+                    ("opacity", &self.opacity),
+                ] {
+                    num(n, a);
+                }
+                return out;
+            }
+            Kind::Light { .. } => {
+                for (n, a) in [
+                    ("x", &self.x),
+                    ("y", &self.y),
+                    ("z", &self.z),
+                    ("rx", &self.rx),
+                    ("ry", &self.ry),
+                    ("intensity", &self.intensity),
+                    ("cone", &self.cone),
+                    ("feather", &self.feather),
+                    ("range", &self.range),
+                    ("softness", &self.softness),
+                    ("opacity", &self.opacity),
+                ] {
+                    num(n, a);
+                }
+                out.push(("fill".into(), Color(&self.fill)));
+                return out;
+            }
+            Kind::Model { .. } => {
+                for (n, a) in [
+                    ("x", &self.x),
+                    ("y", &self.y),
+                    ("z", &self.z),
+                    ("rx", &self.rx),
+                    ("ry", &self.ry),
+                    ("rotation", &self.rotation),
+                    ("scale", &self.scale),
+                    ("height", &self.height),
+                    ("opacity", &self.opacity),
+                ] {
+                    num(n, a);
+                }
+                out.push(("fill".into(), Color(&self.fill)));
+                return out;
+            }
+            _ => {}
+        }
         num("x", &self.x);
         num("y", &self.y);
         num("scale", &self.scale);
@@ -403,12 +597,24 @@ impl Layer {
                 }
             }
         }
+        if three {
+            for (n, a) in [
+                ("z", &self.z),
+                ("rx", &self.rx),
+                ("ry", &self.ry),
+                ("anchor_z", &self.anchor_z),
+                ("extrude", &self.extrude),
+            ] {
+                out.push((n.into(), Num(a)));
+            }
+            out.push(("edge".into(), Color(&self.edge)));
+        }
         out
     }
 
     /// A numeric property by its path, as [`Layer::props`] names it.
     pub fn prop(&self, path: &str) -> Option<&Anim<f64>> {
-        self.props().into_iter().find_map(|(n, p)| match p {
+        self.props_in(true).into_iter().find_map(|(n, p)| match p {
             Prop::Num(a) if n == path => Some(a),
             _ => None,
         })
@@ -416,13 +622,24 @@ impl Layer {
 
     /// Drawn as outlines through the vector pipeline (trim, deformers).
     pub fn vector(&self) -> bool {
-        !matches!(self.kind, Kind::Rect | Kind::Ellipse | Kind::Image { .. })
+        !matches!(
+            self.kind,
+            Kind::Rect
+                | Kind::Ellipse
+                | Kind::Image { .. }
+                | Kind::Camera { .. }
+                | Kind::Light { .. }
+                | Kind::Model { .. }
+        )
     }
 
     /// The file this layer draws, relative to the project.
     pub fn asset(&self) -> Option<&str> {
         match &self.kind {
-            Kind::Image { path } | Kind::Svg { path } | Kind::Lottie { path, .. } => Some(path),
+            Kind::Image { path }
+            | Kind::Svg { path }
+            | Kind::Lottie { path, .. }
+            | Kind::Model { path } => Some(path),
             _ => None,
         }
     }
@@ -715,6 +932,9 @@ pub struct Drawn {
     pub fx: Vec<Fx>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub deformers: Vec<Deform>,
+    /// The 3D properties, left out while they are all their defaults.
+    #[serde(skip_serializing_if = "three::Space::is_flat")]
+    pub space: three::Space,
 }
 
 /// Everything a renderer needs for one instant of one scene.
@@ -723,6 +943,9 @@ pub struct Frame {
     pub size: [u32; 2],
     pub background: Rgba,
     pub layers: Vec<Drawn>,
+    /// A 3D scene's camera, lights, ground and fog; `None` in 2D.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub view: Option<View>,
 }
 
 /// Most copies a duplicator makes.
@@ -731,10 +954,13 @@ pub const MAX_COPIES: usize = 10_000;
 /// Scene `scene` at `t` seconds: a pure function of its arguments, so any
 /// time can be sought in any order.
 pub fn eval(project: &Project, scene: &Scene, t: f64) -> Frame {
+    let layers: Vec<Drawn> = scene.layers.iter().map(|l| l.at(t)).collect();
+    let view = (scene.mode == Mode::ThreeD).then(|| three::view(project.size, scene, &layers));
     Frame {
         size: project.size,
         background: scene.background,
-        layers: scene.layers.iter().map(|l| l.at(t)).collect(),
+        layers,
+        view,
     }
 }
 
@@ -788,6 +1014,26 @@ impl Layer {
             time,
             fx,
             deformers: self.deformers.iter().map(|d| d.at(t)).collect(),
+            space: three::Space {
+                z: self.z.at(t),
+                rx: self.rx.at(t),
+                ry: self.ry.at(t),
+                anchor_z: self.anchor_z.at(t),
+                extrude: self.extrude.at(t).max(0.),
+                edge: self.edge.at(t),
+                cast_shadows: self.cast_shadows,
+                receive_shadows: self.receive_shadows,
+                distance: self.distance.at(t).max(0.),
+                fov: self.fov.at(t).clamp(1., 170.),
+                dolly: self.dolly.at(t),
+                focus: self.focus.at(t),
+                aperture: self.aperture.at(t).max(0.),
+                intensity: self.intensity.at(t).max(0.),
+                cone: self.cone.at(t).clamp(0.1, 89.),
+                feather: self.feather.at(t).clamp(0., 1.),
+                range: self.range.at(t).max(0.),
+                softness: self.softness.at(t).max(0.),
+            },
         }
     }
 }
@@ -847,10 +1093,22 @@ impl Project {
                         bad("d", d)?;
                         bad("along", along)?;
                     }
+                    Kind::Camera { path, .. } => bad("path", path)?,
                     Kind::Lottie { speed, .. } if !speed.is_finite() => {
                         return Err(format!("{at}.speed: layer `{id}`: `speed` must be finite"));
                     }
                     _ => {}
+                }
+            }
+            for l in &s.layers {
+                if let Kind::Camera { look_at, .. } = &l.kind
+                    && !look_at.is_empty()
+                    && !ids.contains(look_at)
+                {
+                    return Err(format!(
+                        "scene `{}`: camera `{}` looks at no layer `{look_at}`",
+                        s.name, l.id
+                    ));
                 }
             }
         }
@@ -944,3 +1202,5 @@ fn tidy(pretty: &str) -> String {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests3d;

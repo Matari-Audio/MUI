@@ -46,6 +46,11 @@ noise = { version = "0.9", default-features = false }
 # feature): shapes come out as kurbo paths and draw through MUI like the rest.
 vello_svg = { version = "0.11", default-features = false }
 velato = { version = "0.12", default-features = false }
+# 3D scenes: layers on lit slabs with shadows, models, on the same device
+# (the GPU engines pick wgpu's backends).
+mui-stage = { path = "../mui-stage", default-features = false }
+# Model layers: glTF binaries, meshes and their base-colour materials only.
+gltf = { version = "1.4", default-features = false, features = ["utils"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2.128"

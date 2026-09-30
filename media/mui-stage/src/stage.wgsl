@@ -355,7 +355,8 @@ struct Wall {
     var c: vec3f;
     if (lit_shot()) {
         let s = shade(i.world, n, d.flags.x, shine);
-        c = base * (1. - metal) * s.diffuse + f0 * s.spec * (shine + 8.) / 25.;
+        // The ambient light stands in for the environment a metal mirrors.
+        c = base * (1. - metal) * s.diffuse + f0 * (s.spec * (shine + 8.) / 25. + g.ambient.rgb);
     } else {
         let l = normalize(vec3f(-0.4, 0.6, 0.7));
         let v = normalize(g.eye.xyz - i.world);

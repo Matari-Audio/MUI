@@ -345,9 +345,17 @@ fn a_lit_card_casts_a_shadow_on_the_floor_the_same_every_time() {
             .filter(|(s, l)| l[1] - s[1] > 0.1)
             .count()
     };
-    assert!(darker(&a) > 40, "the card shadows the floor: {}", darker(&a));
+    assert!(
+        darker(&a) > 40,
+        "the card shadows the floor: {}",
+        darker(&a)
+    );
     let contact = render(&mut stage, false, 1.);
-    assert!(darker(&contact) > 40, "contact shadow: {}", darker(&contact));
+    assert!(
+        darker(&contact) > 40,
+        "contact shadow: {}",
+        darker(&contact)
+    );
 }
 
 #[test]
@@ -358,7 +366,11 @@ fn a_model_draws_and_lights_from_its_mesh() {
     // One triangle facing the viewer.
     let n = [0., 0., 1.];
     let v = |x: f32, y: f32| [x, y, 0., n[0], n[1], n[2]];
-    stage.mesh("tri", &[v(-20., -20.), v(20., -20.), v(0., 20.)], &[0, 1, 2]);
+    stage.mesh(
+        "tri",
+        &[v(-20., -20.), v(20., -20.), v(0., 20.)],
+        &[0, 1, 2],
+    );
     let shot = |lights: Vec<Light>| Shot {
         models: vec![Model {
             mesh: "tri".into(),
