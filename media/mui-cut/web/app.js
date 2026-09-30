@@ -396,6 +396,34 @@ function adder(label, options, add) {
   s.classList.add('wide'); s.dataset.adder = label;
   const box = $('#inspector'); box.append(document.createElement('span'), s);
 }
+// A 3D scene's environment light and ambient occlusion, each switched on by
+// its box. Keyed or bound numbers show read-only; edit those in the JSON.
+function sceneLook(s) {
+  const toggle = (label, key, fresh) => {
+    const c = document.createElement('input'); c.type = 'checkbox';
+    c.checked = !!s[key]; c.dataset.look = key;
+    c.onchange = () => edit(() => { if (c.checked) s[key] = fresh(); else delete s[key]; });
+    field(label, c);
+    return s[key];
+  };
+  const num = (o, k, dflt, label) => {
+    const v = o[k] ?? dflt, fixed = typeof v === 'number';
+    const i = lock(input(fixed ? v : 'keyed', x => edit(() => { o[k] = Number(x); }), fixed ? 'number' : 'text'), v);
+    if (!fixed) i.disabled = true;
+    field(label, i);
+  };
+  const e = toggle('environment', 'environment', () => ({}));
+  if (e) {
+    field('hdri', input(e.hdri ?? '', v => edit(() => { if (v) e.hdri = v; else delete e.hdri; loadAssets(); })));
+    num(e, 'intensity', 1, 'intensity');
+    num(e, 'rotation', 0, 'rotation');
+    const b = document.createElement('input'); b.type = 'checkbox';
+    b.checked = !!e.background; b.onchange = () => edit(() => { e.background = b.checked; });
+    field('env background', b);
+  }
+  const a = toggle('occlusion', 'ao', () => ({}));
+  if (a) { num(a, 'strength', 1, 'ao strength'); num(a, 'radius', 60, 'ao radius'); }
+}
 // A bound field shows its value and stays read-only.
 function lock(i, v) {
   if (!isBind(v) && !(isKeys(v) && v.some(k => isBind(k.v)))) return i;
@@ -441,6 +469,7 @@ function refreshInspector() {
     bg.dataset.bg = '';
     field('background', bg);
     field('project', input(`${R.size[0]}×${R.size[1]} @ ${R.fps} fps`, () => {}));
+    if (s.mode === '3d') sceneLook(s);
     variablesSection();
     fxSection(s, () => frameNow()?.effects ?? []);
     return;
