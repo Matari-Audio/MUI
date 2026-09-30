@@ -429,6 +429,7 @@ fn widgets(
 /// [`discover_parts`], then `depth - 1` more levels inside each part: its
 /// topmost named descendants that are control-sized (at least 12 px each
 /// way, at most 60% of it) and can be taken out whole. Parents come first.
+/// A UI with no panel-sized part (a compact strip) starts at its controls.
 pub fn discover_tree(
     scene: &mui_scene::ResolvedScene,
     width: f64,
@@ -436,6 +437,9 @@ pub fn discover_tree(
     depth: usize,
 ) -> Vec<String> {
     let mut all = discover_parts(scene, width, height);
+    if all.is_empty() {
+        all = controls(scene, None, width * height);
+    }
     let mut level = all.clone();
     for _ in 1..depth {
         let mut next = Vec::new();
@@ -446,34 +450,7 @@ pub fn discover_tree(
             else {
                 continue;
             };
-            let under = |id: &str, top: &str| {
-                let mut up = scene.surface(id).and_then(|s| s.parent.as_deref());
-                while let Some(p) = up {
-                    if p == top {
-                        return true;
-                    }
-                    up = scene.surface(p).and_then(|s| s.parent.as_deref());
-                }
-                false
-            };
-            let candidates: Vec<&str> = scene
-                .surfaces()
-                .filter(|s| {
-                    mui_scene::Id::is_named(&s.key)
-                        && s.frame.size.width >= 12.
-                        && s.frame.size.height >= 12.
-                        && s.frame.size.width * s.frame.size.height <= area * 0.6
-                        && under(&s.key, part)
-                        && scene.isolate(&[&s.key]).is_ok()
-                })
-                .map(|s| s.key.as_ref())
-                .collect();
-            next.extend(
-                candidates
-                    .iter()
-                    .filter(|c| !candidates.iter().any(|o| o != *c && under(c, o)))
-                    .map(|c| (*c).to_owned()),
-            );
+            next.extend(controls(scene, Some(part), area));
         }
         if next.is_empty() {
             break;
@@ -482,6 +459,38 @@ pub fn discover_tree(
         level = next;
     }
     all
+}
+
+/// The topmost named, control-sized surfaces under `part` (anywhere for
+/// `None`) that can be taken out whole; `area` is the part's.
+fn controls(scene: &mui_scene::ResolvedScene, part: Option<&str>, area: f64) -> Vec<String> {
+    let under = |id: &str, top: &str| {
+        let mut up = scene.surface(id).and_then(|s| s.parent.as_deref());
+        while let Some(p) = up {
+            if p == top {
+                return true;
+            }
+            up = scene.surface(p).and_then(|s| s.parent.as_deref());
+        }
+        false
+    };
+    let candidates: Vec<&str> = scene
+        .surfaces()
+        .filter(|s| {
+            mui_scene::Id::is_named(&s.key)
+                && s.frame.size.width >= 12.
+                && s.frame.size.height >= 12.
+                && s.frame.size.width * s.frame.size.height <= area * 0.6
+                && part.is_none_or(|p| under(&s.key, p))
+                && scene.isolate(&[&s.key]).is_ok()
+        })
+        .map(|s| s.key.as_ref())
+        .collect();
+    candidates
+        .iter()
+        .filter(|c| !candidates.iter().any(|o| o != *c && under(c, o)))
+        .map(|c| (*c).to_owned())
+        .collect()
 }
 
 #[cfg(test)]
@@ -525,6 +534,22 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(discover_parts(&scene, 300., 200.), ["about", "settings"]);
+    }
+
+    /// A compact strip with no panel-sized part splits into its controls.
+    #[test]
+    fn a_strip_without_panels_starts_at_its_controls() {
+        let scene = resolve(&SceneSpec::new(
+            row([
+                block(40., 18.).fill(Role::Ink).id("share"),
+                block(24., 24.).fill(Role::Ink).id("roll"),
+                block(8., 8.).fill(Role::Ink).id("dot"),
+            ])
+            .size(300., 40.),
+        ))
+        .unwrap();
+        assert!(discover_parts(&scene, 300., 40.).is_empty());
+        assert_eq!(discover_tree(&scene, 300., 40., 1), ["share", "roll"]);
     }
 
     /// Two levels: panels, then the controls in them, addressed by path;
