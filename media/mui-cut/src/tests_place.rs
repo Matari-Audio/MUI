@@ -351,3 +351,50 @@ fn flattening_a_3d_scene_keeps_what_the_camera_shows() {
     let two = scene("2d", r#"{"id":"r","kind":"rect","x":5}"#);
     assert_eq!(flatten(&two, &two.scenes[0], 0.), two.scenes[0]);
 }
+
+/// Parenting carries into 3D renders: the stage's slabs and the Blender
+/// scene of a child are those of the same layer placed at its world
+/// transform with no parent.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn parented_layers_render_in_3d_and_blender_where_they_sit() {
+    let dad = r##"{"id":"dad","kind":"rect","x":300,"y":50,"z":40,"rotation":30,"scale":2,"opacity":0.5,"fill":"#ff0000"}"##;
+    let a = scene(
+        "3d",
+        &format!(
+            r##"{dad},{{"id":"kid","kind":"rect","parent":"dad","x":10,"y":5,"z":3,"width":20,"height":10,"fill":"#00ff00"}}"##
+        ),
+    );
+    let w = world(&a, "kid", 0.);
+    let b = scene(
+        "3d",
+        &format!(
+            r##"{dad},{{"id":"kid","kind":"rect","x":{},"y":{},"z":{},"rotation":{},"scale":{},"opacity":{},"width":20,"height":10,"fill":"#00ff00"}}"##,
+            w.x, w.y, w.space.z, w.rotation, w.scale, w.opacity
+        ),
+    );
+    assert!(
+        w.x != 10. && w.space.z != 3.,
+        "the child moved with its parent"
+    );
+    let assets = Assets::default();
+    let slab = |p: &Project| {
+        let f = eval(p, &p.scenes[0], 0.);
+        format!("{:?}", assets.slabs(&f.layers[1]))
+    };
+    assert_eq!(slab(&a), slab(&b), "stage slabs");
+    let o = crate::blender::Options::new(None, None, 1, [400, 200]).unwrap();
+    let desc = |p: &Project| {
+        let (d, _) = crate::blender::describe(
+            p,
+            &p.scenes[0],
+            &[0.],
+            &assets,
+            std::path::Path::new("."),
+            &o,
+        )
+        .unwrap();
+        serde_json::to_string(&d.frames).unwrap()
+    };
+    assert_eq!(desc(&a), desc(&b), "Blender objects");
+}
