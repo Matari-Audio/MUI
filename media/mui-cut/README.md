@@ -240,6 +240,41 @@ remap it), looping over its frames unless `"loop": false`, which holds the
 last frame. Both are centred on the layer's `x`, `y` at their own size;
 `scale` sizes them.
 
+### 3D scenes
+
+`"mode": "3d"` on a scene sets its layers in a lit 3D space, drawn by
+mui-stage (wgpu): each layer's 2D content is painted by the same Vello
+engine into one texture atlas and composited as a plane, extruded slab or
+mesh. Scenes without it render exactly as before.
+
+- Coordinates stay project pixels: `x` right, `y` down, `z` away from the
+  viewer. `rx`/`ry` pitch and yaw in degrees, `rotation` is the roll (`rz`).
+  `anchor_z` moves the pivot; `extrude` gives a layer depth with its sides
+  in `edge`. `cast_shadows` / `receive_shadows` (default true).
+- `camera` layer (the last visible one shoots): orbits its target by `rx`,
+  `ry` at `distance`, `fov` (vertical degrees), `rotation` rolls it, `dolly`
+  moves it toward the target, `path` (SVG path data, moved along by
+  `path_offset`) carries it in x/z, `look_at` aims it at a layer, `focus` and
+  `aperture` add depth of field. Without one, the default camera sees the
+  z=0 plane as the 2D frame. Every property is keyable like any other.
+- `light` layers, `"type"`: `directional` (default), `spot`, `point`,
+  `ambient`; `fill` is the colour, `intensity` times `opacity` the strength,
+  `rx`/`ry` aim it, `cone`/`feather` shape a spot, `range` fades point and
+  spot lights, `softness` widens the shadow filter. Directional and spot
+  lights cast PCF shadow maps. With no light at all a 3D scene is unlit and
+  faces show their exact pixels.
+- `model` layers: a `.glb` file (`path`), fitted to `height` times `scale`,
+  tinted by `fill`, lit with its materials' base colour, metallic and
+  roughness.
+- Scene `ground` (`y`, `color`, `radius`, `reflect`, `contact` shadow
+  strength) and `fog` (`color`, `near`, `far`); `background` is the clear.
+- Motion blur re-renders the 3D pass per subframe. The web editor draws
+  3D on WebGPU; WebGL2 and the CPU draw 3D scenes flat with a notice, and
+  an export refuses to. **Orbit** in the header swings the preview camera
+  (drag, wheel to zoom) without touching the file.
+
+See `examples/stage3d.cut.json`.
+
 ## The web editor
 
 - **Viewport**: the scene at the playhead, drawn in a worker on an
@@ -301,6 +336,8 @@ announces edits made by someone else.
   with its own `vello_common`: mui-vello cannot move to git main's without
   source changes, and kurbo/peniko are shared, so only brushes and image ids
   are converted.
+- `src/three.rs`, `src/gpu3d.rs`: 3D scenes: camera and light evaluation
+  and glTF import; the atlas and mui-stage shot a frame becomes.
 - `src/pool.rs`: the frame-parallel CPU export.
 - `src/web.rs`: the wasm-bindgen handles: `Cut` (validation, samples, CPU
   frames) and `GpuView` (the WebGPU/WebGL2 viewport).
@@ -428,5 +465,10 @@ snapshots in the editor rather than `CurveHistory`, for the same reason.
   It is pinned to Vello 9dfe53e; moving to newer main means following
   #1942 (`pop_clip_path` renamed) and #1944 (fallible glyph drawing) in
   `src/sparse.rs`.
+- 3D: point lights cast no shadows; glTF is `.glb` only, triangles and
+  material factors (no textures, skins or animation); a 3D scene has no 2D
+  overlay layer; walls of extruded layers are rebuilt every subframe;
+  `look_at` ignores the camera's own x/y/z; `check`'s pixel lints skip
+  3D scenes.
 - The browser CPU fallback is single-threaded: wasm threads need
   cross-origin isolation, which `serve` does not set up.

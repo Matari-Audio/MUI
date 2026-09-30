@@ -7,7 +7,9 @@ use serde::{Deserialize, Serialize};
 use crate::{Drawn, Kind, LightType, Rgba, Scene, vector};
 
 /// Flat composite, or layers in a lit 3D space.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
 pub enum Mode {
     #[default]
     #[serde(rename = "2d")]
