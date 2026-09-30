@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' blob: data:; connect-src 'self'; object-src 'none'; base-uri 'self'">
+  <title>mui-cut</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <span class="brand"><span class="mark">c</span>mui-cut</span>
+    <span id="file" class="muted"></span>
+    <span class="grow"></span>
+    <span id="status" role="status" aria-live="polite">loading engine</span>
+    <button id="undo" title="Undo (Ctrl+Z)">Undo</button>
+    <button id="redo" title="Redo (Ctrl+Shift+Z)">Redo</button>
+  </header>
+  <aside id="left">
+    <h2>Scenes <button id="add-scene" title="Add a scene">+</button></h2>
+    <div id="scenes" class="list"></div>
+    <h2>Layers
+      <span>
+        <button data-add="rect" title="Add a rectangle">▭</button><button data-add="ellipse" title="Add an ellipse">◯</button><button data-add="text" title="Add text">T</button>
+      </span>
+    </h2>
+    <div id="layers" class="list"></div>
+    <div class="row">
+      <button id="layer-up" title="Move the layer up (paints later)">▲</button>
+      <button id="layer-down" title="Move the layer down">▼</button>
+      <button id="layer-del" title="Delete the layer">Delete</button>
+    </div>
+  </aside>
+  <section id="stage">
+    <div id="frame"><canvas id="view"></canvas><canvas id="overlay"></canvas></div>
+  </section>
+  <aside id="right">
+    <h2 id="insp-title">Inspector</h2>
+    <div id="inspector"></div>
+    <pre id="error" hidden></pre>
+  </aside>
+  <section id="bottom">
+    <div class="transport">
+      <button id="play" title="Play / pause (Space)">▶</button>
+      <span id="time" class="mono">0.00 s</span>
+      <span class="muted">◆ key at playhead · K toggle key · Del delete key · ←/→ frame · double-click graph to add a key · Alt breaks tangents</span>
+    </div>
+    <div id="tl-wrap"><canvas id="timeline"></canvas></div>
+    <div class="graph-bar">
+      <span>Graph</span>
+      <select id="graph-prop" aria-label="Graph property"></select>
+      <span class="grow"></span>
+      <span class="muted">selected key:</span>
+      <button data-interp="hold">Hold</button><button data-interp="linear">Linear</button><button data-interp="bezier">Bezier</button>
+      <button id="reset-handles" title="Back to default ease handles">Reset handles</button>
+    </div>
+    <canvas id="graph"></canvas>
+  </section>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

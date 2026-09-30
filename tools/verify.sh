@@ -24,15 +24,17 @@ cargo clippy -p mui-vello --no-default-features --features gpu-effects --all-tar
 cargo check --workspace --all-features --exclude mui-preview --exclude mui-gain-plugin --exclude mui-baseview --target wasm32-unknown-unknown --locked --offline
 
 # ---------------------------------------------------------------------------
-# media/: its own workspace (mui-stage, mui-reel, mui-motion-bridge), kept out
+# media/: its own workspace (mui-stage, mui-reel, mui-motion-bridge, mui-cut), kept out
 # of the root so plugin builds never compile it. Same gate, its own lockfile.
 # mui-stage's default `backends` feature is the only feature; --all-features
-# keeps it on. No wasm check: these crates own a native device or ffmpeg.
+# keeps it on. Only mui-cut's library is checked for wasm (its web editor);
+# the rest own a native device or ffmpeg.
 # ponytail: no --locked here. media/Cargo.lock also pins the root crates'
 # dependencies, so --locked would fail on every root dependency change; the
 # gate refreshes it instead and git status shows the diff.
 # ---------------------------------------------------------------------------
-cargo fmt --manifest-path media/Cargo.toml -p mui-stage -p mui-reel -p mui-motion-bridge -- --check
+cargo fmt --manifest-path media/Cargo.toml -p mui-stage -p mui-reel -p mui-motion-bridge -p mui-cut -- --check
 cargo test --manifest-path media/Cargo.toml --workspace --all-features --offline
 cargo clippy --manifest-path media/Cargo.toml --workspace --all-features --all-targets --offline -- -D warnings
 cargo check --manifest-path media/Cargo.toml -p mui-stage --no-default-features --offline
+cargo clippy --manifest-path media/Cargo.toml -p mui-cut --lib --target wasm32-unknown-unknown --offline -- -D warnings

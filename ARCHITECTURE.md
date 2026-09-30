@@ -219,6 +219,9 @@ media/mui-reel            scripted, deterministic takes of a real editor
 media/mui-motion-bridge   a live editor as browser-transformable surfaces,
                           for `tools/film` (over mui, mui-vello `cpu`)
 media/tools/kurv-*        scripts that adapt a Kurv checkout to the bridge
+media/mui-cut             keyframe motion editor: a *.cut.json project, a pure
+                          evaluator, a render/still CLI and a WASM web editor
+                          (over mui-scene, mui-vello `cpu`; mui-reel's shutter)
 ```
 
 `tools/film` is the JS/Python film pipeline driving `mui-motion-bridge`; it is

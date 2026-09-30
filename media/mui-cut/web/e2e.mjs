@@ -1,0 +1,105 @@
+// The web editor end to end in headless Chrome, over the DevTools protocol
+// (Node >= 22, no packages): drag a layer, bend a bezier handle, undo/redo,
+// and see an outside edit of the file appear. Screenshots land in OUT_DIR.
+//
+//   media/mui-cut/web/build.sh
+//   node media/mui-cut/web/e2e.mjs <path/to/mui-cut binary> <OUT_DIR>
+import { spawn } from 'node:child_process';
+import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const [bin, out] = process.argv.slice(2);
+if (!bin || !out) { console.error('usage: node e2e.mjs <mui-cut binary> <out dir>'); process.exit(2); }
+mkdirSync(out, { recursive: true });
+const here = dirname(fileURLToPath(import.meta.url));
+const file = join(out, 'e2e.cut.json');
+copyFileSync(join(here, '../examples/demo.cut.json'), file);
+const read = () => JSON.parse(readFileSync(file, 'utf8'));
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const check = (ok, what) => { if (!ok) throw new Error('FAILED: ' + what); console.log('ok  ' + what); };
+
+const port = 8790, cdpPort = 9339;
+const server = spawn(bin, ['serve', file, '--port', String(port)], { stdio: 'inherit' });
+const chrome = spawn(process.env.CHROME ?? 'google-chrome-stable', [
+  '--headless=new', `--remote-debugging-port=${cdpPort}`, `--user-data-dir=${join(out, 'chrome-profile')}`,
+  '--no-first-run', '--window-size=1600,1000', 'about:blank'], { stdio: 'ignore' });
+let failed = false;
+try {
+  let targets;
+  for (let i = 0; i < 100 && !targets; i++) {
+    try { targets = await (await fetch(`http://127.0.0.1:${cdpPort}/json`)).json(); } catch { await sleep(100); }
+  }
+  const ws = new WebSocket(targets.find(t => t.type === 'page').webSocketDebuggerUrl);
+  await new Promise(r => ws.onopen = r);
+  let id = 0; const pending = new Map(), errors = [];
+  ws.onmessage = m => {
+    const d = JSON.parse(m.data);
+    if (pending.has(d.id)) { pending.get(d.id)(d.result); pending.delete(d.id); }
+    if (d.method === 'Runtime.exceptionThrown') errors.push(d.params.exceptionDetails.exception?.description);
+  };
+  const send = (method, params = {}) => new Promise(r => { pending.set(++id, r); ws.send(JSON.stringify({ id, method, params })); });
+  const js = async e => (await send('Runtime.evaluate', { expression: e, returnByValue: true, awaitPromise: true })).result.value;
+  const rect = s => js(`(r => [r.left, r.top])(document.querySelector(${JSON.stringify(s)}).getBoundingClientRect())`);
+  const mouse = (type, x, y, modifiers = 0) => send('Input.dispatchMouseEvent', { type, x, y, button: 'left', buttons: type === 'mouseReleased' ? 0 : 1, clickCount: 1, modifiers });
+  const click = async s => { const [x, y] = await rect(s); await mouse('mousePressed', x + 12, y + 8); await mouse('mouseReleased', x + 12, y + 8); await sleep(250); };
+  const drag = async (x0, y0, x1, y1) => {
+    await mouse('mousePressed', x0, y0);
+    for (let i = 1; i <= 8; i++) { await mouse('mouseMoved', x0 + (x1 - x0) * i / 8, y0 + (y1 - y0) * i / 8); await sleep(20); }
+    await mouse('mouseReleased', x1, y1); await sleep(600);
+  };
+  const key = async (key, code, modifiers = 0) => {
+    await send('Input.dispatchKeyEvent', { type: 'keyDown', key, code, modifiers });
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', key, code, modifiers }); await sleep(600);
+  };
+  const shot = async name => writeFileSync(join(out, name), Buffer.from((await send('Page.captureScreenshot', { format: 'png' })).data, 'base64'));
+
+  await send('Runtime.enable');
+  await send('Emulation.setDeviceMetricsOverride', { width: 1600, height: 1000, deviceScaleFactor: 1, mobile: false });
+  await send('Page.navigate', { url: `http://127.0.0.1:${port}/` });
+  for (let i = 0; i < 100 && (await js(`document.querySelector('#status')?.textContent`)) !== 'loaded'; i++) await sleep(100);
+  check(await js(`document.querySelector('#status').textContent`) === 'loaded', 'the editor loads the project');
+  await shot('editor-title.png');
+
+  // The shapes scene, its card selected from the layer list and dragged.
+  await click('#scenes button:nth-child(2)');
+  await click('#layers button:nth-child(3)');
+  const [vx, vy] = await rect('#overlay');
+  const [vw, vh] = await js(`(r => [r.width, r.height])(document.querySelector('#overlay').getBoundingClientRect())`);
+  const cx = vx + 240 / 1280 * vw, cy = vy + 300 / 720 * vh;
+  await drag(cx, cy, cx, cy + 100);
+  const card = read().scenes[1].layers.find(l => l.id === 'card');
+  check(card.y > 300 && !Array.isArray(card.y), `dragging a plain y sets its value (${card.y})`);
+  check(card.x[0].v === 240, 'dragging at a key leaves x on that key');
+
+  // The ball's y in the graph: bend key 1's out handle; the in handle follows.
+  await click('#layers button:nth-child(2)');
+  check(await js(`document.querySelector('#graph-prop').value`) === 'y', 'the graph shows the first animated property');
+  const [gx, gy] = await rect('#graph');
+  const [hx, hy, hy2] = await js(`(m => [m.gx(1.0), m.gy(360), m.gy(300)])(document.querySelector('#graph')._map)`);
+  await drag(gx + hx, gy + hy, gx + hx, gy + hy2);
+  let k1 = read().scenes[1].layers.find(l => l.id === 'ball').y[1];
+  check(k1.out[1] < -50 && k1.in[1] > 50, `a handle drag writes mirrored tangents (${JSON.stringify(k1)})`);
+  await shot('editor-graph.png');
+  await key('z', 'KeyZ', 2);
+  k1 = read().scenes[1].layers.find(l => l.id === 'ball').y[1];
+  check(k1.out[1] === 0, 'Ctrl+Z restores the file');
+  await key('z', 'KeyZ', 2 | 8);
+  k1 = read().scenes[1].layers.find(l => l.id === 'ball').y[1];
+  check(k1.out[1] < -50, 'Ctrl+Shift+Z redoes it');
+
+  // An agent edits the file: the open editor reloads it.
+  writeFileSync(file, readFileSync(file, 'utf8').replace('"background": "#12131a"', '"background": "#401010"'));
+  await sleep(1200);
+  check(await js(`document.querySelector('#status').textContent`) === 'reloaded from disk', 'an outside edit reloads the editor');
+  const px = await js(`Array.from(document.querySelector('#view').getContext('2d').getImageData(4, 4, 1, 1).data)`);
+  check(px[0] === 0x40 && px[1] === 0x10, `the viewport shows it (${px})`);
+  await shot('editor-reloaded.png');
+  check(errors.length === 0, 'no page exceptions ' + errors.join('; '));
+  ws.close();
+} catch (e) {
+  console.error(e.message); failed = true;
+} finally {
+  chrome.kill(); server.kill();
+}
+process.exit(failed ? 1 : 0);

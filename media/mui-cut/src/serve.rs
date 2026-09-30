@@ -58,7 +58,11 @@ pub fn serve(project: &Path, port: u16, web: PathBuf) -> Result<()> {
     for stream in listener.incoming().flatten() {
         let shared = shared.clone();
         std::thread::spawn(move || {
-            if let Err(e) = shared.handle(&stream) {
+            // A browser dropping a connection it no longer wants is not news.
+            if let Err(e) = shared.handle(&stream)
+                && !e.contains("Broken pipe")
+                && !e.contains("Connection reset")
+            {
                 eprintln!("mui-cut: {e}");
             }
         });
@@ -160,6 +164,20 @@ impl Shared {
                         respond(stream, "400 Bad Request", "text/plain", e.as_bytes()).map_err(io)
                     }
                 }
+            }
+            ("GET", "/name") => {
+                let name = self
+                    .project
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy();
+                respond(
+                    stream,
+                    "200 OK",
+                    "text/plain; charset=utf-8",
+                    name.as_bytes(),
+                )
+                .map_err(io)
             }
             ("GET", "/events") => {
                 let mut s = stream.try_clone().map_err(io)?;
