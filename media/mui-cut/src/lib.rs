@@ -260,7 +260,7 @@ pub enum Kind {
     /// into parts, centred. `params` and the pointer drive its UI; `parts`
     /// move its pieces; `explode` pulls them apart. See `src/plugin.rs`.
     Plugin {
-        source: Source,
+        source: Box<Source>,
         /// Surface ids to split out as parts; empty lets the bridge's
         /// `discover_parts` choose.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]

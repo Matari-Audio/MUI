@@ -71,7 +71,7 @@ impl Media {
     pub fn of(kind: &Kind) -> Option<MediaKind> {
         Some(match kind {
             Kind::Plugin { source, .. } => MediaKind::Plugin {
-                source: source.clone(),
+                source: (**source).clone(),
             },
             Kind::Image { path } => MediaKind::Image { path: path.clone() },
             Kind::Svg { path } => MediaKind::Svg { path: path.clone() },
