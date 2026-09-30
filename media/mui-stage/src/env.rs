@@ -163,8 +163,7 @@ impl EnvImage {
         let mut rgbe = vec![[0u8; 4]; (width * height) as usize];
         let short = || "hdr: pixel data ends early".to_owned();
         for row in rgbe.chunks_mut(width as usize) {
-            let rle = width >= 8
-                && width < 32768
+            let rle = (8..32768).contains(&width)
                 && data.len() >= 4
                 && data[0] == 2
                 && data[1] == 2
