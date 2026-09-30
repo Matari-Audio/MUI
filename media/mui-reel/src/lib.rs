@@ -1047,7 +1047,7 @@ fn linear(b: u8) -> f32 {
 /// Add one straight-alpha sRGB subframe to `acc` as premultiplied linear
 /// light, which is what a shutter integrates: a white edge sweeping over
 /// black blurs to the grey a camera sees, not a darker sRGB mean.
-fn accumulate(acc: &mut [f32], rgba: &[u8]) {
+pub fn accumulate(acc: &mut [f32], rgba: &[u8]) {
     for (a, p) in acc
         .as_chunks_mut::<4>()
         .0
@@ -1063,7 +1063,7 @@ fn accumulate(acc: &mut [f32], rgba: &[u8]) {
 }
 
 /// The sum of `n` subframes back to straight-alpha sRGB bytes.
-fn resolve(acc: &[f32], n: usize) -> Vec<u8> {
+pub fn resolve(acc: &[f32], n: usize) -> Vec<u8> {
     let mut out = Vec::with_capacity(acc.len());
     for a in acc.as_chunks::<4>().0 {
         let w = a[3];
