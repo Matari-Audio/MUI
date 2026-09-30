@@ -111,7 +111,15 @@ pub fn resize_capture(root: &El, key: &str, size: Size) -> Result<El, CaptureErr
 /// Paint-only extraction of named subtrees from a resolved scene.
 pub trait Capture: Sized {
     /// See the impl on [`ResolvedScene`].
-    fn capture_layers(&self, roots: &[&str]) -> Result<Vec<CaptureLayer>, CaptureError>;
+    fn capture_layers(&self, roots: &[&str]) -> Result<Vec<CaptureLayer>, CaptureError> {
+        self.capture_layers_adopting(roots, &[])
+    }
+    /// See the impl on [`ResolvedScene`].
+    fn capture_layers_adopting(
+        &self,
+        roots: &[&str],
+        adopt: &[(&str, &str)],
+    ) -> Result<Vec<CaptureLayer>, CaptureError>;
     /// See the impl on [`ResolvedScene`].
     fn isolate(&self, roots: &[&str]) -> Result<Self, CaptureError>;
     /// Complement of [`Capture::isolate`].
@@ -126,11 +134,24 @@ impl Capture for ResolvedScene {
     /// left of it with its selected children taken out, whole, never cropped.
     /// Each compositing group must belong entirely to one part.
     fn capture_layers(&self, roots: &[&str]) -> Result<Vec<CaptureLayer>, CaptureError> {
+        self.capture_layers_adopting(roots, &[])
+    }
+
+    /// [`Capture::capture_layers`] with some surfaces adopted: `(surface,
+    /// parent)` makes a surface belong to a named surface as if it were its
+    /// child. For a widget whose name sits on one inner block (a knob's
+    /// dial) while its pointer and caption are unnamed blocks beside it.
+    fn capture_layers_adopting(
+        &self,
+        roots: &[&str],
+        adopt: &[(&str, &str)],
+    ) -> Result<Vec<CaptureLayer>, CaptureError> {
+        let adopt: HashMap<&str, &str> = adopt.iter().copied().collect();
         // These also validate hierarchy, external paint, and atomic composites.
         for root in roots {
-            self.isolate(&[*root])?;
+            selection(self, &[*root], false, &adopt)?;
         }
-        self.without(roots)?;
+        selection(self, roots, true, &adopt)?;
         let structural = |p: &mui_scene::Painted| {
             matches!(
                 p.layer,
@@ -149,7 +170,7 @@ impl Capture for ResolvedScene {
                 if let Some(&i) = index.get(k) {
                     return Some(i);
                 }
-                id = self.surface(k).and_then(|s| s.parent.as_deref());
+                id = parent_of(self, &adopt, k);
             }
             None
         };
@@ -199,20 +220,33 @@ impl Capture for ResolvedScene {
     /// Fused material plates are atomic: select their owning welded surface.
     /// Splitting a blend/mask group is rejected, as are backdrop-dependent blend modes and external GPU materials.
     fn isolate(&self, roots: &[&str]) -> Result<Self, CaptureError> {
-        selection(self, roots, false)
+        selection(self, roots, false, &HashMap::new())
     }
 
     /// Complement of [`Capture::isolate`], useful for the stationary background.
     /// The same clipping and compositing restrictions apply.
     fn without(&self, roots: &[&str]) -> Result<Self, CaptureError> {
-        selection(self, roots, true)
+        selection(self, roots, true, &HashMap::new())
     }
+}
+
+/// A surface's parent: its adopter, or its nearest named ancestor.
+fn parent_of<'s>(
+    scene: &'s ResolvedScene,
+    adopt: &HashMap<&str, &'s str>,
+    id: &str,
+) -> Option<&'s str> {
+    adopt
+        .get(id)
+        .copied()
+        .or_else(|| scene.surface(id).and_then(|s| s.parent.as_deref()))
 }
 
 fn selection(
     scene: &ResolvedScene,
     roots: &[&str],
     invert: bool,
+    adopt: &HashMap<&str, &str>,
 ) -> Result<ResolvedScene, CaptureError> {
     let roots: HashSet<&str> = roots.iter().copied().collect();
     for root in &roots {
@@ -233,11 +267,10 @@ fn selection(
                 return Err(CaptureError::InvalidHierarchy(id.into()));
             }
             found |= roots.contains(id);
-            key = scene
-                .surface(id)
-                .ok_or_else(|| CaptureError::InvalidHierarchy(id.into()))?
-                .parent
-                .as_deref();
+            if scene.surface(id).is_none() {
+                return Err(CaptureError::InvalidHierarchy(id.into()));
+            }
+            key = parent_of(scene, adopt, id);
         }
         selected.insert(surface.key.as_ref(), found != invert);
     }
@@ -437,6 +470,41 @@ mod tests {
                 .filter(|l| l.part.is_none())
                 .all(|l| l.free().is_none())
         );
+    }
+
+    #[test]
+    fn adopted_surfaces_go_with_their_adopter() {
+        // A knob's name on its dial; its caption an unnamed block beside it.
+        let tree = row![
+            col([
+                block(20., 20.).fill(Role::Primary).id("dial"),
+                block(20., 4.).fill(Role::Danger)
+            ]),
+            block(20., 20.).fill(Role::Primary).id("other")
+        ]
+        .id("panel");
+        let s = resolve(&SceneSpec::new(tree)).unwrap();
+        let caption = s
+            .paint
+            .iter()
+            .find(|p| !mui_scene::Id::is_named(&p.key))
+            .map(|p| p.key.to_string())
+            .unwrap();
+        let owner = |layers: &[CaptureLayer]| {
+            layers
+                .iter()
+                .find(|l| l.scene.paint.iter().any(|p| p.key.as_ref() == caption))
+                .and_then(|l| l.part.clone())
+        };
+        let roots = ["panel", "dial"];
+        assert_eq!(
+            owner(&s.capture_layers(&roots).unwrap()).as_deref(),
+            Some("panel")
+        );
+        let adopted = s
+            .capture_layers_adopting(&roots, &[(caption.as_str(), "dial")])
+            .unwrap();
+        assert_eq!(owner(&adopted).as_deref(), Some("dial"));
     }
 
     #[test]
