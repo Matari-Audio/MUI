@@ -1117,3 +1117,41 @@ fn coplanar_planes_keep_their_order_under_a_tilted_camera() {
     let px = &f.rgba[(50 * 100 + 50) * 4..][..3];
     assert!(px[0] > px[1], "the later plane is on top: {px:?}");
 }
+
+#[test]
+fn a_fading_face_fades_its_shadow() {
+    // A backdrop fading out cast its whole shadow down to half opacity and
+    // none below: the floor under it jumped a stop in one frame. Across a
+    // beauty frame's samples the shadow now fades with the face.
+    let Some(mut stage) = stage(100, 100) else {
+        return;
+    };
+    let white = block(10., 10.).radius(0.).fill(Color::srgb(1., 1., 1.));
+    let white = resolve(&SceneSpec::new(white)).expect("resolves");
+    stage.layer("w", &white, Size::new(10., 10.), 1.).unwrap();
+    let mut key = Light::new(LightKind::Directional);
+    key.direction = [1., 0., -1.];
+    key.softness = 0.;
+    // The wall at x 0..20 in the shade of a card at x -30..-10, 30 in front.
+    let mut shade = |card: Option<f32>| {
+        let f = stage
+            .beauty(0., 0., 16, &|_| {
+                let mut planes = vec![Plane::new("w", 100., 100.)];
+                if let Some(o) = card {
+                    planes.push(Plane::new("w", 20., 20.).at(-20., 0., 30.).opacity(o));
+                }
+                Shot {
+                    planes,
+                    lights: vec![key],
+                    post: Post::NONE,
+                    ..Shot::new(Camera::front(100., 30.))
+                }
+            })
+            .unwrap();
+        f.rgba[(50 * 100 + 60) * 4]
+    };
+    let (lit, dark, half) = (shade(None), shade(Some(1.)), shade(Some(0.4)));
+    assert!(lit - dark > 0.1, "the card casts a shadow: {lit} {dark}");
+    let f = (lit - half) / (lit - dark);
+    assert!((0.2..0.6).contains(&f), "a 0.4 card casts {f} of its shadow");
+}

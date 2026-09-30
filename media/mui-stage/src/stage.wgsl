@@ -616,9 +616,16 @@ struct ShadowCap {
     o.uv = c.uv;
     return o;
 }
+// Where a caster's cover (a pixel's alpha times its opacity) falls below
+// this, it casts nothing. Each beauty sample cuts at its own level, so the
+// mean shadow fades with a fading face instead of dropping out at half.
+fn shadow_cut() -> f32 { return select(0.5, g.fog_range.z, beauty()); }
 // A face casts the shape of its pixels, not of its rectangle.
 @fragment fn fs_shadow_face(i: ShadowCap) {
-    if (textureSample(tex, samp, i.uv).a * d.edge.a < 0.5) { discard; }
+    if (textureSample(tex, samp, i.uv).a * d.edge.a <= shadow_cut()) { discard; }
+}
+@fragment fn fs_shadow_solid() {
+    if (d.edge.a <= shadow_cut()) { discard; }
 }
 @vertex fn vs_shadow_solid(@location(0) p: vec3f, @location(1) n: vec3f, @builtin(instance_index) k: u32) -> @builtin(position) vec4f {
     return shadow_clip(k, (d.model * vec4f(p, 1.)).xyz);

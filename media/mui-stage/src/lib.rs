@@ -3343,7 +3343,7 @@ fn pipelines(
             &mesh_buf,
         ),
         shadow_face: shadow("vs_shadow_face", Some("fs_shadow_face"), &[]),
-        shadow_solid: shadow("vs_shadow_solid", None, &wall_buf),
+        shadow_solid: shadow("vs_shadow_solid", Some("fs_shadow_solid"), &wall_buf),
         chain: make("vs_full", "fs_chain", HDR, None, false, false, &[]),
         ssr: make("vs_full", "fs_ssr", HDR, Some(add_rgb), false, false, &[]),
         over: make("vs_full", "fs_copy", HDR, Some(premul), false, false, &[]),
