@@ -45,6 +45,10 @@ pub enum MediaKind {
     Font {
         path: String,
     },
+    /// A sound file (anything ffmpeg reads), for audio layers.
+    Audio {
+        path: String,
+    },
 }
 
 impl Media {
@@ -67,13 +71,14 @@ impl Media {
     pub fn of(kind: &Kind) -> Option<MediaKind> {
         Some(match kind {
             Kind::Plugin { source, .. } => MediaKind::Plugin {
-                source: source.clone(),
+                source: (**source).clone(),
             },
             Kind::Image { path } => MediaKind::Image { path: path.clone() },
             Kind::Svg { path } => MediaKind::Svg { path: path.clone() },
             Kind::Lottie { path, .. } => MediaKind::Lottie { path: path.clone() },
             Kind::Model { path } => MediaKind::Model { path: path.clone() },
             Kind::Text { font, .. } if !font.is_empty() => MediaKind::Font { path: font.clone() },
+            Kind::Audio { path } => MediaKind::Audio { path: path.clone() },
             _ => return None,
         })
     }
@@ -149,7 +154,8 @@ impl MediaKind {
             | MediaKind::Svg { path }
             | MediaKind::Lottie { path }
             | MediaKind::Model { path }
-            | MediaKind::Font { path } => path,
+            | MediaKind::Font { path }
+            | MediaKind::Audio { path } => path,
         }
     }
 }

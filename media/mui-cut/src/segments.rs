@@ -30,7 +30,7 @@ pub fn base_key(p: &Project, project: &Path, settings: &str) -> Fnv {
             // A plugin's states name what it was told, not what it drew:
             // its manifests (content-named images, the adapter's stamp) do.
             let last = mui_cut::plugin::frame_at(s.duration, p.fps);
-            for step in l.plugin_track(p.fps, last) {
+            for step in l.plugin_track(p.fps, p.sample_rate, last) {
                 let manifest = dir
                     .join(mui_cut::plugin::CACHE)
                     .join(format!("{}.json", step.key));

@@ -200,7 +200,7 @@ impl Cut {
                 let last = crate::plugin::frame_at(s.duration, p.fps);
                 s.layers
                     .iter()
-                    .flat_map(move |l| l.plugin_track(p.fps, last))
+                    .flat_map(move |l| l.plugin_track(p.fps, p.sample_rate, last))
             })
             .map(|s| s.key)
             .chain(

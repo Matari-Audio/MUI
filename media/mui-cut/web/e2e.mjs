@@ -49,7 +49,8 @@ function pixel(png) {
   }
   return [...inflateSync(Buffer.concat(idat)).subarray(1, 4)];
 }
-const server = spawn(bin, ['serve', file, '--port', String(port)], { stdio: 'inherit' });
+// The live sound on the null device: a real clock, no speaker.
+const server = spawn(bin, ['serve', file, '--port', String(port)], { stdio: 'inherit', env: { ...process.env, MUI_CUT_AUDIO: 'null' } });
 const chrome = spawn(process.env.CHROME ?? 'google-chrome-stable', [
   '--headless=new', `--remote-debugging-port=${cdpPort}`, `--user-data-dir=${join(out, 'chrome-profile')}`,
   '--no-first-run', '--window-size=1600,1000', ...gpuFlags, 'about:blank'], { stdio: 'ignore' });
@@ -114,6 +115,20 @@ try {
   report('fps-locked', locked);
   check(locked.n > 40 && Math.abs(locked.mean - 1000 / 30) < 6, 'fps-locked playback lands on the 30 fps grid');
   check(/fps .* dropped/.test(hud) && /p50\/p95/.test(hud), 'the pacing HUD shows fps, drops and frame times');
+  // The sound: play starts `serve`'s audio clock where the playhead is,
+  // the editor's playhead follows it, and pause stops it.
+  const transport = async () => (await fetch(`http://127.0.0.1:${port}/transport`)).json();
+  await click('#play'); await sleep(400);
+  const [a0, e0] = [await transport(), await js('cutTime()')]; await sleep(1000);
+  const [a1, e1] = [await transport(), await js('cutTime()')];
+  await click('#play');
+  const ran = a1.t - a0.t;
+  check(a1.playing && a1.device === 'null' && Math.abs(ran - 1) < 0.08, `playing runs the audio clock (${ran.toFixed(3)} s in 1 s on ${a1.device})`);
+  check(Math.abs((e1 - a1.t) - (e0 - a0.t)) < 0.1 && Math.abs(e1 - a1.t) < 0.15, `the playhead keeps with it (editor ${e1.toFixed(3)}, audio ${a1.t.toFixed(3)})`);
+  check(a1.latency_ms < 50 && /null · \d+ ms/.test(await js(`document.querySelector('#audio-state').textContent`)), `the editor shows the latency (${a1.latency_ms.toFixed(1)} ms)`);
+  await sleep(300);
+  check(!(await transport()).playing, 'pause stops the audio clock');
+  await key('Home', 'Home');
 
   // The shapes scene, its card selected from the layer list and dragged.
   await click('#scenes button:nth-child(2)');

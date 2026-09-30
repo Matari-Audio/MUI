@@ -353,7 +353,20 @@ fn fields(raw: &Value, p: &Project, out: &mut Issues) {
                         )),
                     );
                 }
-                keys_fields(out, &rl[k], &key, &path, at);
+                if k == "notes" {
+                    // Notes have a `t` like keys, but are notes.
+                    for (ni, n) in rl[k].as_array().into_iter().flatten().enumerate() {
+                        unknown(
+                            out,
+                            n,
+                            &props_of(&def("Note")),
+                            &format!("{path}[{ni}]"),
+                            at,
+                        );
+                    }
+                } else {
+                    keys_fields(out, &rl[k], &key, &path, at);
+                }
             }
             for (ai, ra) in rl["animators"].as_array().into_iter().flatten().enumerate() {
                 let ap = format!("{lp}.animators[{ai}]");

@@ -316,6 +316,34 @@ struct PluginParts {
 }
 
 #[derive(Deserialize, JsonSchema)]
+struct NotesArgs {
+    /// The plugin layer's id.
+    layer: String,
+    #[serde(default)]
+    scene: Option<String>,
+    /// Notes, seconds from the scene's start: `{"t": 0.5, "dur": 0.25,
+    /// "pitch": 60, "vel": 100}` (MIDI pitch, 60 is middle C; vel 1..127,
+    /// default 100).
+    notes: Vec<mui_cut::Note>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+struct PluginPlay {
+    #[serde(default)]
+    scene: Option<String>,
+    /// Seconds into the scene to start (default 0).
+    #[serde(default)]
+    from: f64,
+    /// Seconds into the scene to end (default: its end).
+    #[serde(default)]
+    to: Option<f64>,
+    /// Where to write it (default `.cut-cache/preview.wav` next to the
+    /// project): `.wav` is the sound alone, `.mp4` the frames with it.
+    #[serde(default)]
+    out: Option<String>,
+}
+
+#[derive(Deserialize, JsonSchema)]
 struct SourceAdd {
     /// The source: a file `{"id": "logo", "kind": "svg", "path": "logo.svg"}`
     /// (`image`, `svg`, `lottie`, `model`; the path relative to the project)
@@ -424,6 +452,22 @@ fn tools() -> Vec<Value> {
         tool::<PluginParts>(
             "plugin_parts",
             "A plugin layer at a time: runs its adapter if that state is not captured yet, then lists its parts as a tree (id: the path to key as `parts.<id>.x`, e.g. `osc/osc-shape`; its surface, frame and fragment rects in the UI's pixels, its own motion, children), as deep as the layer's `explode_levels` or its deepest keyed part; every surface (id, parent, frame: what `select` and the pointer can aim at), the UI size, explode and pointer.",
+        ),
+        tool::<NotesArgs>(
+            "notes_set",
+            "Replace a plugin layer's notes (the melody its DSP plays into the soundtrack and its UI follows).",
+        ),
+        tool::<NotesArgs>(
+            "notes_add",
+            "Add notes to a plugin layer, kept in time order.",
+        ),
+        tool::<PluginPlay>(
+            "plugin_play",
+            "Render a slice of a scene's sound (every plugin layer's notes and audio layer, mixed) to a WAV, or with an .mp4 `out` the frames with it; returns the file, its length and peak.",
+        ),
+        tool::<PluginParts>(
+            "patch_get",
+            "A plugin layer's patch at a time, as the plugin reports it: parameters off their defaults (value, text, normalised), modulation routes (source, target, depth, live value) and held notes.",
         ),
         tool::<Nothing>(
             "sources_list",
@@ -698,6 +742,93 @@ impl Server {
                     .and_then(|t| serde_json::from_str(&t).map_err(|e| e.to_string()))
                     .map_err(|e| format!("{}: {e}", manifest.display()))?;
                 Ok(vec![text(&pretty(&mui_cut::plugin::tree_json(&cap, &at)))])
+            }
+            "notes_set" | "notes_add" => {
+                let a: NotesArgs = parse(args)?;
+                let ptr = self.prop_pointer(a.scene.as_deref(), &a.layer, "notes")?;
+                let add = name == "notes_add";
+                self.edit(|raw| {
+                    let mut notes = a.notes.clone();
+                    if add {
+                        let old = resolve(raw, &ptr)
+                            .ok()
+                            .and_then(|t| at_mut(raw, &t).cloned())
+                            .unwrap_or(json!([]));
+                        let old: Vec<mui_cut::Note> =
+                            serde_json::from_value(old).map_err(|e| e.to_string())?;
+                        notes.splice(0..0, old);
+                    }
+                    notes.sort_by(|x, y| x.t.total_cmp(&y.t).then(x.pitch.cmp(&y.pitch)));
+                    apply(raw, &json!({ "op": "add", "path": ptr, "value": notes }))
+                })
+            }
+            "patch_get" => {
+                let a: PluginParts = parse(args)?;
+                let path = self.path()?;
+                let p = crate::load(&path)?;
+                let s = pick(&p, a.scene.as_deref())?;
+                let at = eval(&p, s, a.t)
+                    .layers
+                    .into_iter()
+                    .find(|l| l.id == a.layer)
+                    .and_then(|l| l.plugin)
+                    .ok_or_else(|| format!("no plugin layer `{}`", a.layer))?;
+                let errs = crate::host::capture_missing(&p, &path);
+                if !errs.is_empty() {
+                    return Err(errs.join("\n"));
+                }
+                let manifest = path
+                    .parent()
+                    .unwrap_or(Path::new("."))
+                    .join(mui_cut::plugin::CACHE)
+                    .join(format!("{}.json", at.state));
+                let cap: mui_cut::Capture = std::fs::read(&manifest)
+                    .map_err(|e| e.to_string())
+                    .and_then(|b| serde_json::from_slice(&b).map_err(|e| e.to_string()))
+                    .map_err(|e| format!("{}: {e}", manifest.display()))?;
+                if cap.patch.is_null() {
+                    return Err(format!("`{}`'s plugin reports no patch", a.layer));
+                }
+                Ok(vec![text(&pretty(&cap.patch))])
+            }
+            "plugin_play" => {
+                let a: PluginPlay = parse(args)?;
+                let path = self.path()?;
+                let p = crate::load(&path)?;
+                let s = pick(&p, a.scene.as_deref())?;
+                let dir = path.parent().unwrap_or(Path::new("."));
+                let out = a.out.map_or_else(
+                    || dir.join(mui_cut::plugin::CACHE).join("preview.wav"),
+                    std::path::PathBuf::from,
+                );
+                let errs = crate::host::capture_missing(&p, &path);
+                if !errs.is_empty() {
+                    return Err(errs.join("\n"));
+                }
+                let pcm =
+                    crate::audio::mix(&p, &path, &[s])?.ok_or("nothing in the scene sounds")?;
+                let (from, to) = (a.from.max(0.), a.to.unwrap_or(s.duration).min(s.duration));
+                if to <= from {
+                    return Err("`to` must come after `from`".into());
+                }
+                let r = f64::from(p.sample_rate);
+                let slice = &pcm[2 * (from * r) as usize..(2 * (to * r) as usize).min(pcm.len())];
+                if out.extension().is_some_and(|e| e == "mp4") {
+                    crate::audio::clip(&path, &s.name, from, to, &out)?;
+                } else {
+                    if let Some(d) = out.parent() {
+                        std::fs::create_dir_all(d).map_err(|e| e.to_string())?;
+                    }
+                    std::fs::write(&out, crate::audio::wav(slice, p.sample_rate))
+                        .map_err(|e| format!("{}: {e}", out.display()))?;
+                }
+                let peak = slice.iter().fold(0f32, |m, v| m.max(v.abs()));
+                Ok(vec![text(&format!(
+                    "wrote {} ({:.2} s, peak {:.1} dBFS)",
+                    out.display(),
+                    to - from,
+                    20. * f64::from(peak.max(1e-9)).log10()
+                ))])
             }
             "sources_list" => {
                 let path = self.path()?;

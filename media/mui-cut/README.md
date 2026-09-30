@@ -36,7 +36,9 @@ mui-cut render PROJECT -o out.mp4|null [--scene NAME] [--mb N] [--size WxH]
 mui-cut still  PROJECT --t 1.5 -o f.png [--scene NAME] [--size WxH] [--renderer R] [--variant NAME]
 mui-cut eval   PROJECT --t 1.5 [--scene NAME] [--variant NAME]   # every layer's values, JSON
 mui-cut fmt    PROJECT                            # rewrite in canonical form
-mui-cut serve  PROJECT [--port 8740] [--web DIR]
+mui-cut serve  PROJECT [--port 8740] [--web DIR]    # plays the sound live
+mui-cut midi   PROJECT --file song.mid --layer ID [--scene NAME] [--track N] [--at SECONDS]
+mui-cut capture PROJECT                           # capture every missing plugin state
 # for agents, see "Using mui-cut from an AI agent"
 mui-cut schema | check | sheet | strip | diff | gen | mcp
 ```
@@ -420,8 +422,8 @@ frame on an RX 6600, plus Blender's startup.
 ### Sources
 
 `sources` lists what was imported into the project, for the editor's
-Sources panel: files (`image`, `svg`, `lottie`, `model`, `font`, `path`
-relative to the project) and plugins (`source` as a plugin layer names it).
+Sources panel: files (`image`, `svg`, `lottie`, `model`, `font`, `audio`,
+`path` relative to the project) and plugins (`source` as a plugin layer names it).
 A text layer's `font` names a font source by id (or a `.ttf`/`.otf` path);
 left out, it is Inter. Every renderer draws it, Blender's textures too.
 
@@ -438,8 +440,8 @@ The panel also shows the files and plugins layers use without listing them
 levels deep (`plugin::home`, which `serve` captures): panels, and the
 controls in them under their panel, the same tree `plugin_parts` and
 `cutParts` return. A bare plugin layer added from the panel starts in that
-capture (`explode_levels` 2). Audio is not a source: nothing plays it
-yet.
+capture (`explode_levels` 2). An audio source (wav, mp3, flac, ogg, m4a,
+anything ffmpeg decodes) dragged in makes an `audio` layer.
 
 ### Adding a plugin
 
@@ -580,6 +582,59 @@ parts you can move, key, highlight and explode.
   each where the whole UI puts it. Its outline is their captured rects.
   Dragging a part in from the Sources panel makes one.
 
+- `view_width`/`view_height` (keyable, 0 is the plugin's own size) lay
+  the editor out at that size, the way a host window resize would: the UI
+  reflows rather than scaling, and each size is its own capture.
+
+### Notes, sound and the patch
+
+A plugin layer's `notes` (`{"t", "dur", "pitch", "vel"}`, seconds from the
+scene's start, MIDI pitch, vel default 100) are played into the plugin:
+its UI is captured following them (a lit key, a moving meter), and its
+DSP renders them into the soundtrack. Notes go to the adapter with the
+frame's `advance` on its manual clock, each at its sample, so the sound
+is the same on every run and at any frame rate, and the segment keys
+change with the notes. `mui-cut midi` reads a `.mid` file's notes (with
+its tempo map) into a layer.
+
+An `audio` layer plays a file (`path`, `time` seconds into it at the
+scene's start, keyable to remap time) at `volume` (keyable, also on
+plugin layers). It draws nothing in the viewport; the timeline shows its
+waveform, and a plugin layer's notes.
+
+`render` mixes every audio and plugin layer at the project's
+`sample_rate` (default 48000) and muxes it into the video as AAC; a
+project with no sound writes a video with no audio track, as before. Each state's
+sound is kept beside its capture (`.cut-cache/audio/`).
+
+A `patch` layer (`"of": "<plugin layer id>"`, `width` x `height`) draws
+the plugin's patch as it plays: the parameters off their defaults and the
+modulation routes, from the adapter's snapshot (`patch`, see
+`HOST-PROTOCOL.md`).
+
+`mui-cut serve` plays the sound live while the editor plays: the adapter
+renders ahead of a cpal output stream at the project rate (256-frame
+buffers), and the editor's playhead follows that audio clock (`GET
+/transport`), so picture and sound stay in step. The header shows the
+device and the latency; measured from a live note to its first sample
+leaving, 16 to 25 ms (the bound is 26.7 ms at 48 kHz).
+`MUI_CUT_AUDIO=null`, or no output device, runs the same clock on a null
+device. **Keys** plays the selected plugin layer from the computer
+keyboard (`a w s e d f t g y h u j k`, Z/X for the octave), the on-screen
+keys or any Web MIDI input, and records what it plays into the layer's
+`notes` while the timeline plays. The viewport shows the live UI while
+it plays.
+
+The adapter's protocol, for writing one for another plugin, is in
+`HOST-PROTOCOL.md`. A moose plugin's generated adapter runs its real DSP
+too: the host's notes on the sample clock, meters and transport shared with
+the editor, and a `patch` of the parameters off their defaults and the notes
+held. A plugin source's `features` turn on the plugin crate's Cargo features
+for it (KURV sounds in its `process-lab` build). `examples/kurv.cut.json`
+(KURV checked out beside this repository) explodes KURV two
+levels deep in 3D while it plays a melody, resizes it, and shows its
+patch.
+
 See `examples/plugin.cut.json`: a flat scene (a keyed knob, a knob dragged
 by a keyed pointer, then exploded and highlighted) and a 3D one (the UI
 exploded into depth under an orbiting camera). `examples/deep.cut.json`
@@ -643,7 +698,8 @@ explodes two levels in 3D: panels, then their controls.
   the CPU, no effects or blur. A WebCodecs `VideoEncoder` encodes it (H.264,
   H.265 or AV1, whichever `isConfigSupported` accepts at the project's size,
   hardware preferred) and `web/mp4.js`, a ~100-line muxer, writes ftyp, moov
-  first, then one mdat. Progress and Cancel in the dialog. No audio.
+  first, then one mdat. Progress and Cancel in the dialog. No audio: the
+  browser export is picture only; `render` muxes the sound.
 - **Variants** (header): with `variants` in the file, a switcher previews any
   of them at its size. The scene inspector lists the variables as the chosen
   variant sets them (a select for an enum, a checkbox for a bool); an edit
@@ -781,7 +837,10 @@ or nothing), `set`, `key`, `add_layer`, `remove_layer`, `eval`, `check`,
 `still`, `sheet`, `strip`, `diff` (images come back as PNG image content),
 `gen`, `render` + `render_status` (a background job), `plugin_parts`,
 `sources_list` (sources with the layers using them and a plugin's part
-tree), `source_add`, `layer_parent` (parent or detach, keeping the screen
+tree), `source_add`, `notes_set`/`notes_add` (a plugin layer's notes),
+`plugin_play` (renders a span's sound to a wav, or with picture to an
+mp4, and says its length and peak), `patch_get` (the plugin's patch at a
+time), `layer_parent` (parent or detach, keeping the screen
 position), `editor_state`, `editor_goto`. Pointers may name scenes and layers by name/id:
 `/scenes/intro/layers/title/x`.
 
@@ -846,11 +905,17 @@ snapshots in the editor rather than `CurveHistory`, for the same reason.
   plugin running in WASM. A new state (a param or pointer edit) appears
   once `serve` has captured it, which takes a few seconds for a Cargo
   source. Interact needs a 2D scene; in 3D, clicks move parts. The adapter runs natively, so a
-  plugin must build as a bridge live adapter. KURV and the Modern theme are
-  not wired in yet: KURV's `media/tools/kurv-live` adapter needs its pinned
-  isolated build, and would then be `{"bin": path}`. A 3D scene composites
+  plugin must build as a bridge live adapter. A 3D scene composites
   a translucent capture in linear light, so its soft edges read slightly
   brighter than in 2D.
+- Sound: only moose plugins (and hand-written adapters) sound; truce,
+  nice-plug and plain MUI adapters are silent. A generated adapter's patch
+  lists parameters and held notes, not modulation routes (no framework
+  API names them), and a plugin's keyboard does not light the notes the
+  host plays unless the plugin draws them from its DSP. `serve` opens the device at the project's
+  rate when it starts; a rate change needs a restart. The live view's old
+  images are not freed in the viewport worker. `plugin_play` to an mp4
+  renders the whole scene and trims it. The web export has no sound.
 - `--renderer blender`: scene and layer `effects` are skipped (it says so);
   a model's `fill` tint is ignored; frames are 8-bit PNG; point and spot
   light strength is matched to mui-stage at the nearest subject the light

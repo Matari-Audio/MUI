@@ -173,11 +173,22 @@ pub fn detect(dir: &Path) -> Result<Plugin> {
     let src = sources(&pkg_dir.join("src"));
     let (entry, editor) = entry(fw, &src, &mut missing);
     let lock = std::fs::read_to_string(workspace_root.join("Cargo.lock")).unwrap_or_default();
+    // Its MUI dependencies, the MUI crates its lock names, and those its
+    // workspace path-patches (a path source is not in the lock as MUI's)
+    // that this tree has, which the adapter builds from here.
+    let root_manifest =
+        std::fs::read_to_string(workspace_root.join("Cargo.toml")).unwrap_or_default();
+    let local = local_crates(&mui_root());
     let mut mui: Vec<String> = pkg_deps
         .iter()
         .filter(|d| is_mui(d["source"].as_str().unwrap_or("")))
         .filter_map(|d| d["name"].as_str().map(str::to_owned))
         .chain(locked_mui(&lock))
+        .chain(
+            mui_patches(&root_manifest)
+                .into_iter()
+                .filter(|c| local.contains_key(c)),
+        )
         .collect();
     mui.sort();
     mui.dedup();
@@ -473,8 +484,9 @@ pub fn resolve(plugin: &str, project_dir: &Path) -> Result<PathBuf> {
     }
 }
 
-/// Build the generic adapter for the plugin a source names; its executable.
-pub fn adapter(plugin: &str, project_dir: &Path) -> Result<PathBuf> {
+/// Build the generic adapter for the plugin a source names, with the
+/// plugin's `features` on; its executable.
+pub fn adapter(plugin: &str, features: &[String], project_dir: &Path) -> Result<PathBuf> {
     let p = detect(&resolve(plugin, project_dir)?)?;
     if !p.missing.is_empty() {
         return Err(format!(
@@ -486,20 +498,12 @@ pub fn adapter(plugin: &str, project_dir: &Path) -> Result<PathBuf> {
     let root = mui_root();
     let local = local_crates(&root);
     let mut used = p.mui.clone();
-    // The adapter's own MUI (the headless hook is in it), and whatever the
-    // plugin patches of MUI's that this tree has: this tree wins.
+    // The adapter's own MUI (the headless hook is in it): this tree wins.
     used.push("mui".into());
-    let root_manifest =
-        std::fs::read_to_string(p.workspace_root.join("Cargo.toml")).unwrap_or_default();
-    used.extend(
-        mui_patches(&root_manifest)
-            .into_iter()
-            .filter(|c| local.contains_key(c)),
-    );
     used.sort();
     used.dedup();
     let config = patch_config(&used, &local)?;
-    let dir = write_adapter(&p, &root, &used)?;
+    let dir = write_adapter(&p, &root, &used, features)?;
     let name = adapter_name(&p);
     let mut cmd = cargo(&dir);
     cmd.args([
@@ -559,7 +563,12 @@ fn adapter_name(p: &Plugin) -> String {
 }
 
 /// Write the adapter workspace for `p`; its directory.
-fn write_adapter(p: &Plugin, root: &Path, patched: &[String]) -> Result<PathBuf> {
+fn write_adapter(
+    p: &Plugin,
+    root: &Path,
+    patched: &[String],
+    features: &[String],
+) -> Result<PathBuf> {
     let dir = cache().join("adapters").join(adapter_name(p));
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let write = |name: &str, text: &str| {
@@ -570,7 +579,7 @@ fn write_adapter(p: &Plugin, root: &Path, patched: &[String]) -> Result<PathBuf>
         }
         std::fs::write(&f, text).map_err(|e| format!("{}: {e}", f.display()))
     };
-    write("Cargo.toml", &manifest(p, root, patched)?)?;
+    write("Cargo.toml", &manifest(p, root, patched, features)?)?;
     write("main.rs", &main_rs(p))?;
     // The plugin's versions for everything but MUI, and its toolchain.
     for f in ["Cargo.lock", "rust-toolchain.toml", "rust-toolchain"] {
@@ -590,13 +599,18 @@ fn toml_str(s: &str) -> String {
 }
 
 /// The adapter's Cargo.toml.
-fn manifest(p: &Plugin, root: &Path, patched: &[String]) -> Result<String> {
+fn manifest(p: &Plugin, root: &Path, patched: &[String], features: &[String]) -> Result<String> {
     let path = |d: &Path| toml_str(&d.to_string_lossy());
     let mut deps = vec![
         format!(
-            "plugin = {{ package = {}, path = {} }}",
+            "plugin = {{ package = {}, path = {}, features = [{}] }}",
             toml_str(&p.package),
-            path(&p.dir)
+            path(&p.dir),
+            features
+                .iter()
+                .map(|f| toml_str(f))
+                .collect::<Vec<_>>()
+                .join(", ")
         ),
         format!(
             "mui-motion-bridge = {{ path = {} }}",
@@ -719,7 +733,8 @@ fn absolute_paths(line: &str, root: &Path) -> String {
 /// The adapter's `main.rs` for `p`'s framework.
 fn main_rs(p: &Plugin) -> String {
     let body = match p.framework {
-        Framework::Moose | Framework::Truce => include_str!("adapter/moose.rs"),
+        Framework::Moose => include_str!("adapter/moose.rs"),
+        Framework::Truce => include_str!("adapter/truce.rs"),
         Framework::NicePlug => include_str!("adapter/nice.rs"),
         Framework::Mui => include_str!("adapter/mui.rs"),
     };
@@ -820,6 +835,10 @@ pub fn add(project: &Path, from: &str, base: &Path, id: Option<&str>) -> Result<
     report["id"] = entry["id"].clone();
     report["source"] = entry["source"].clone();
     report["parts"] = parts(&p, project, entry["id"].as_str().unwrap_or(""))?;
+    // Built by now: its path, for a wall-clock host (tools/film).
+    let source: mui_cut::plugin::Source =
+        serde_json::from_value(entry["source"].clone()).map_err(|e| e.to_string())?;
+    report["adapter"] = json!(crate::host::executable(&source, dir)?.0);
     Ok(report)
 }
 
@@ -931,6 +950,10 @@ mui-truce = { git = "https://github.com/Matari-Audio/MUI", branch = "revamp" }
             "{:?}",
             p.missing
         );
+        // A MUI crate the plugin path-patches is one the adapter builds
+        // from this tree: it is in the list.
+        let p = detect(&fixture("patched")).unwrap();
+        assert!(p.mui.contains(&"mui-baseview".to_owned()), "{:?}", p.mui);
         let deps =
             |names: &[&str]| -> Vec<Value> { names.iter().map(|n| json!({"name": n})).collect() };
         assert_eq!(framework(&deps(&["serde"])), None);

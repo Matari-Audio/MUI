@@ -9,8 +9,8 @@ The media crates left the root workspace for `media/`, their own workspace
 | `crates/mui-stage` | `media/mui-stage` |
 | `crates/mui-reel` | `media/mui-reel` |
 | `crates/mui-motion-bridge` | `media/mui-motion-bridge` |
-| `tools/kurv-live` | `media/tools/kurv-live` |
-| `tools/kurv-motion` | `media/tools/kurv-motion` |
+| `tools/kurv-live` | removed: mui-cut's generated moose adapter (`mui-cut add ../KURV`) replaces it |
+| `tools/kurv-motion` | removed: as `tools/kurv-live` |
 | `tools/mui-motion` | `tools/film` |
 
 `tools/mui-motion` was renamed (not moved into media/) so it stops colliding

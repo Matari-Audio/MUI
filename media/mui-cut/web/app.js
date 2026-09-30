@@ -7,7 +7,7 @@
 import init, { Cut } from './pkg/mui_cut.js';
 
 const $ = s => document.querySelector(s);
-const KIND_ICON = { rect: '▭', ellipse: '◯', text: 'T', image: '▣', path: '〰', duplicator: '⁂', svg: 'S', lottie: 'L', camera: '⌖', light: '☀', model: '◈', plugin: '⧉' };
+const KIND_ICON = { rect: '▭', ellipse: '◯', text: 'T', image: '▣', path: '〰', duplicator: '⁂', svg: 'S', lottie: 'L', camera: '⌖', light: '☀', model: '◈', plugin: '⧉', audio: '♪', patch: '☰' };
 const VECTOR = ['text', 'path', 'duplicator', 'svg', 'lottie'];
 // Graphite, as in style.css: greys only, state by value, weight and shape.
 const C = {
@@ -61,6 +61,7 @@ const unfolded = new Set();  // open folders in the Sources tree: `id`, `id/part
 const sizes = new Map();     // imported images' natural sizes, by path
 let sourceList = [];         // the Sources panel's rows: `Cut.sources()`
 globalThis.cutSources = () => sourceList; // the e2e reads a plugin's capture path
+globalThis.cutTime = () => t; // the e2e checks the playhead keeps with the audio clock
 
 // ---------- document helpers
 const scene = () => doc.scenes[si];
@@ -304,7 +305,7 @@ function parentTo(id, parent) {
 }
 
 // ---------- sources: imported files and plugins, a plugin a folder of its parts
-const SOURCE_ICON = { image: '▣', svg: 'S', lottie: 'L', model: '◈', plugin: '⧉', font: 'Aa' };
+const SOURCE_ICON = { image: '▣', svg: 'S', lottie: 'L', model: '◈', plugin: '⧉', font: 'Aa', audio: '♪' };
 const sameSource = (m, rl) => m.kind === rl.kind && (m.kind === 'plugin'
   ? JSON.stringify(m.source) === JSON.stringify(rl.source) : m.path === rl.path);
 // The source and part a layer shows: what the tree highlights for it.
@@ -412,6 +413,8 @@ function layerFrom(m, part, at) {
     // A font makes a text layer in it, by the source's id once imported.
     const font = doc.sources?.some(s => s.id === m.id) ? m.id : m.path;
     Object.assign(l, { kind: 'text', text: 'Text', font, x: round(at?.[0] ?? w / 2), y: round(at?.[1] ?? h / 2) });
+  } else if (m.kind === 'audio') {
+    l.path = m.path;
   } else {
     l.path = m.path;
     Object.assign(l, { x: round(at?.[0] ?? w / 2), y: round(at?.[1] ?? h / 2) });
@@ -431,11 +434,11 @@ function dropSource(e, at) {
 }
 // Import: files from the button or dropped on the left panel are written
 // beside the project (`media/`) and listed as sources.
-const IMPORT_KIND = { png: 'image', svg: 'svg', json: 'lottie', glb: 'model', ttf: 'font', otf: 'font' };
+const IMPORT_KIND = { png: 'image', svg: 'svg', json: 'lottie', glb: 'model', ttf: 'font', otf: 'font', wav: 'audio', mp3: 'audio', ogg: 'audio', flac: 'audio', m4a: 'audio' };
 async function importFiles(files) {
   for (const f of files) {
     const kind = IMPORT_KIND[f.name.split('.').pop().toLowerCase()];
-    if (!kind) { status(`${f.name}: import PNG, SVG, Lottie JSON, glTF (.glb) or font (.ttf, .otf) files`, true); continue; }
+    if (!kind) { status(`${f.name}: import PNG, SVG, Lottie JSON, glTF (.glb), font (.ttf, .otf) or audio (.wav, .mp3, .ogg, .flac, .m4a) files`, true); continue; }
     const name = f.name.replace(/[^\w.-]+/g, '_'), path = 'media/' + name;
     const r = await fetch('/asset/' + path, { method: 'PUT', body: f });
     if (!r.ok) { status(`${f.name}: ${await r.text()}`, true); continue; }
@@ -530,6 +533,11 @@ document.querySelectorAll('[data-add]').forEach(b => b.onclick = () => edit(() =
   else if (kind === 'camera') Object.assign(l, { distance: Math.round(h / 2 / Math.tan(20 * Math.PI / 180)) });
   else if (kind === 'light') Object.assign(l, { rx: 50, ry: -30 });
   else if (kind === 'model') Object.assign(l, { path: 'model.glb', height: 200, fill: '#ffffff' });
+  else if (kind === 'patch') {
+    const of = keyLayer();
+    if (!of) { status('A patch view shows a plugin layer: add one first', true); return; }
+    Object.assign(l, { of: of.id, width: 420, height: 520 });
+  }
   else Object.assign(l, { width: 200, height: 200, fill: '#8b7cff' });
   if (name === 'shader') Object.assign(l, { width: w / 2, height: h / 2, effects: [{ type: 'plasma' }] });
   ls.push(l); sel = l.id;
@@ -601,7 +609,8 @@ function kindFields(l) {
     f.options[0].textContent = 'Inter'; f.dataset.font = ''; f.title = 'The font: Inter, or a font source';
     field('font', f);
   }
-  if (['image', 'svg', 'lottie', 'model'].includes(l.kind)) field('path', input(l.path, v => edit(() => { l.path = v; loadAssets(); })));
+  if (l.kind === 'patch') field('of', input(l.of, v => edit(() => { l.of = v; })));
+  if (['image', 'svg', 'lottie', 'model', 'audio'].includes(l.kind)) field('path', input(l.path, v => edit(() => { l.path = v; loadAssets(); })));
   if (l.kind === 'lottie') {
     field('speed', input(l.speed ?? 1, v => set('speed', Number(v), 1), 'number'));
     field('loop', choice(l.loop ?? true, ['true', 'false'], v => set('loop', v === 'true', true)));
@@ -1140,6 +1149,7 @@ function drawTimeline() {
     c.fillStyle = on ? C.rowOn : i % 2 ? C.rowAlt : C.row; c.fillRect(0, y, w, ROW);
     if (on) { c.fillStyle = C.textOn; c.fillRect(0, y, 2, ROW); }
     c.fillStyle = r.l.id === sel && (!r.p || on) ? C.textOn : C.text;
+    if (!r.p) drawSound(c, r.l, y);
     c.fillText(r.p ? `   ${short(r.p)}` : `${KIND_ICON[r.l.kind] ?? ''} ${r.l.name || r.l.id}`, 8, y + ROW / 2);
     for (const key of rowKeys(r)) {
       const picked = selKey && selKey.k === key.k;
@@ -1385,9 +1395,10 @@ function setPlaying(on) {
   playing = on; $('#play').textContent = on ? '❚❚' : '▶';
   Object.assign(clock, { at: performance.now(), t });
   Object.assign(pacing, { shown: [], dropped: 0, last: -1 });
+  transport();
 }
 // A seek while playing restarts the clock from the new playhead.
-function seek(time) { t = time; clock.at = performance.now(); clock.t = t; need = true; }
+function seek(time) { t = time; clock.at = performance.now(); clock.t = t; need = true; if (playing) transport(); }
 const toggle = (id, on) => { $(id).setAttribute('aria-pressed', String(on)); return on; };
 $('#lock').onclick = () => { locked = toggle('#lock', !locked); seek(t); };
 $('#hud-toggle').onclick = () => { $('#hud').hidden = !toggle('#hud-toggle', $('#hud').hidden); };
@@ -1452,6 +1463,155 @@ function loop(ms) {
   requestAnimationFrame(loop);
 }
 
+// ---------- sound: `serve` plays it, the playhead follows the device
+// Play, pause and seek go to `/transport`; while playing, the clock is
+// re-anchored to the audio clock (what is heard), so they never drift.
+let audioAt = 0;
+function transport() {
+  fetch('/transport', { method: 'POST', body: JSON.stringify({ playing, t, scene: si }) })
+    .then(r => r.ok ? r.json() : null).then(showTransport).catch(() => {});
+}
+function showTransport(r) {
+  if (!r) return;
+  $('#audio-state').textContent = `${r.device || 'no device'} · ${r.latency_ms.toFixed(0)} ms`;
+  if (!playing || !r.playing) return;
+  const ahead = clock.t + (performance.now() - clock.at) / 1000;
+  // Small differences are the request's own time: only a real drift moves it.
+  if (Math.abs(ahead - r.t) > 0.02) Object.assign(clock, { at: performance.now(), t: r.t });
+}
+setInterval(() => {
+  if (!playing || performance.now() - audioAt < 250) return;
+  audioAt = performance.now();
+  fetch('/transport').then(r => r.ok ? r.json() : null).then(showTransport).catch(() => {});
+}, 100);
+// A plugin layer's UI as it plays: its live capture drawn instead of the
+// one the playhead names (`live:<layer>`); null when playing stops.
+const liveShown = new Map();
+async function showLive(m) {
+  const post = (path, bytes) => worker.postMessage({ type: 'asset', path, bytes });
+  if (!m.state) { post('live:' + m.layer, new Uint8Array()); liveShown.delete(m.layer); need = true; return; }
+  if (!playing) return;
+  try {
+    const path = `.cut-cache/${m.state}.json`;
+    const r = await fetch('/asset/' + path);
+    if (!r.ok) return;
+    const bytes = new Uint8Array(await r.arrayBuffer());
+    const man = JSON.parse(new TextDecoder().decode(bytes));
+    for (const img of man.layers.flatMap(f => [f.src, f.free?.src]).filter(Boolean).map(s => '.cut-cache/' + s)) {
+      if (assets.has(img)) continue;
+      const ri = await fetch('/asset/' + img);
+      if (!ri.ok) return;
+      assets.add(img);
+      post(img, new Uint8Array(await ri.arrayBuffer()));
+    }
+    if (!playing) return;
+    post(path, bytes);
+    post('live:' + m.layer, new TextEncoder().encode(m.state));
+    // The one it replaces goes: a playing plugin makes many.
+    const old = liveShown.get(m.layer);
+    if (old) post(`.cut-cache/${old}.json`, new Uint8Array());
+    liveShown.set(m.layer, m.state);
+    need = true;
+  } catch (e) { console.warn(e); }
+}
+
+// Keys: on-screen, the computer keyboard and MIDI play the selected plugin
+// layer (else the scene's first); while playing, each note is recorded.
+const KEYMAP = 'awsedftgyhujk';
+let octave = 60, keysOn = false;
+const held = new Map();
+const keyLayer = () => (layer()?.kind === 'plugin' ? layer() : scene()?.layers.find(l => l.kind === 'plugin')) ?? null;
+function playKey(note, on, vel = 100) {
+  const l = keyLayer();
+  if (!l) { status('Keys play a plugin layer: add one', true); return; }
+  fetch('/live/note', { method: 'POST', body: JSON.stringify({ layer: l.id, note, on, velocity: vel }) }).catch(() => {});
+  $(`#keys [data-note="${note}"]`)?.classList.toggle('down', on);
+  if (on) { held.set(note, { t, vel, l }); return; }
+  const h = held.get(note);
+  held.delete(note);
+  if (!h || !playing) return;
+  const dur = Math.max(1 / R.fps, t >= h.t ? t - h.t : R.scenes[si].duration - h.t);
+  edit(() => {
+    h.l.notes = [...(h.l.notes ?? []), { t: round(h.t), dur: round(dur), pitch: note, ...(h.vel !== 100 && { vel: h.vel }) }]
+      .sort((a, b) => a.t - b.t || a.pitch - b.pitch);
+  });
+}
+function drawKeys() {
+  const k = $('#keys');
+  k.replaceChildren(...Array.from({ length: 25 }, (_, i) => {
+    const note = octave - 12 + i, b = document.createElement('button');
+    b.dataset.note = note;
+    b.className = [1, 3, 6, 8, 10].includes(note % 12) ? 'black' : '';
+    b.title = `MIDI ${note}`;
+    b.onpointerdown = e => { b.setPointerCapture(e.pointerId); playKey(note, true); };
+    b.onpointerup = () => playKey(note, false);
+    return b;
+  }));
+}
+$('#keys-toggle').onclick = async () => {
+  keysOn = toggle('#keys-toggle', !keysOn);
+  $('#keys').hidden = !keysOn;
+  if (!keysOn) return;
+  drawKeys();
+  try {
+    const midi = await navigator.requestMIDIAccess?.();
+    for (const input of midi?.inputs.values() ?? []) {
+      input.onmidimessage = ({ data: [s, n, v] }) => {
+        if ((s & 0xf0) === 0x90 && v > 0) playKey(n, true, v);
+        else if ((s & 0xf0) === 0x80 || (s & 0xf0) === 0x90) playKey(n, false);
+      };
+    }
+  } catch (e) { console.warn('MIDI', e); }
+};
+addEventListener('keydown', e => {
+  if (!keysOn || e.repeat || e.ctrlKey || e.metaKey || e.target.closest('input, select, textarea')) return;
+  const k = e.key.toLowerCase(), i = KEYMAP.indexOf(k);
+  if (k === 'z' || k === 'x') { octave = Math.max(24, Math.min(96, octave + (k === 'z' ? -12 : 12))); drawKeys(); }
+  else if (i >= 0) playKey(octave + i, true);
+  else return;
+  e.preventDefault(); e.stopImmediatePropagation();
+}, true);
+addEventListener('keyup', e => {
+  const i = KEYMAP.indexOf(e.key.toLowerCase());
+  if (keysOn && i >= 0) playKey(octave + i, false);
+}, true);
+
+// Audio layers' waveforms for the timeline, decoded once by the browser.
+const waves = new Map();
+function wave(path) {
+  if (waves.has(path)) return waves.get(path);
+  waves.set(path, null);
+  fetch('/asset/' + path).then(r => r.arrayBuffer())
+    .then(b => new OfflineAudioContext(1, 1, 48000).decodeAudioData(b))
+    .then(a => {
+      const d = a.getChannelData(0), n = Math.ceil(a.duration * 100), peaks = new Float32Array(n);
+      for (let i = 0; i < d.length; i++) { const j = Math.floor(i / a.sampleRate * 100); peaks[j] = Math.max(peaks[j], Math.abs(d[i])); }
+      waves.set(path, peaks); need = true;
+    }).catch(() => {});
+  return null;
+}
+// A layer row's sound: a plugin's notes as bars by pitch, an audio
+// layer's waveform (from `time` into the file).
+function drawSound(c, l, y) {
+  if (l.kind === 'plugin' && l.notes?.length) {
+    const ps = l.notes.map(n => n.pitch), lo = Math.min(...ps), span = Math.max(1, Math.max(...ps) - lo);
+    c.fillStyle = C.layerKey;
+    for (const n of l.notes) {
+      const x0 = tlX(n.t), x1 = tlX(n.t + n.dur);
+      c.fillRect(x0, y + ROW - 4 - (n.pitch - lo) / span * (ROW - 8), Math.max(1, x1 - x0), 2);
+    }
+  } else if (l.kind === 'audio') {
+    const peaks = wave(l.path);
+    if (!peaks) return;
+    const off = typeof l.time === 'number' ? l.time : 0;
+    c.fillStyle = C.tick;
+    for (let x = tlX(0); x < tlX(R.scenes[si].duration); x++) {
+      const p = peaks[Math.floor((tlT(x) + off) * 100)] ?? 0;
+      c.fillRect(x, y + ROW / 2 - p * ROW / 2, 1, Math.max(1, p * ROW));
+    }
+  }
+}
+
 // ---------- what an agent sees: the editor's state out, its moves in
 // The server keeps the last state for `mui-cut mcp` (editor_state), and
 // relays an agent's `control` messages (editor_goto) back here.
@@ -1485,4 +1645,5 @@ events.onmessage = () => pull('reloaded from disk');
 events.addEventListener('control', e => control(JSON.parse(e.data)));
 // `serve` finished capturing plugin states: fetch the new ones.
 events.addEventListener('plugin', () => loadAssets());
+events.addEventListener('live', e => showLive(JSON.parse(e.data)));
 requestAnimationFrame(loop);

@@ -7,6 +7,11 @@
 //! JSON in; out, a kind byte (`J` JSON, `A` audio), a little-endian u32
 //! length and the payload. Scene packets carry only textures that changed,
 //! so a session keeps every texture it has seen.
+//!
+//! Adapters run on the bridge's manual sample clock at the project's rate
+//! (`MUI_BRIDGE_CLOCK`): a layer with notes advances it frame by frame, and
+//! the samples that come back are its soundtrack, kept as raw stereo f32
+//! under `CACHE/audio/<key>.f32` ([`Layer::plugin_audio`]).
 use std::collections::{HashMap, HashSet};
 use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
@@ -25,17 +30,57 @@ use crate::Result;
 /// How long one capture may take before the adapter counts as hung.
 const PATIENCE: Duration = Duration::from_secs(60);
 
-/// Every plugin layer's steps in every scene: `(layer, steps)`.
-fn plugins(p: &Project) -> Vec<(&Layer, Vec<mui_cut::Step>)> {
+/// Every plugin layer's steps in every scene, and its soundtrack's key
+/// and last advance when it plays notes: `(layer, steps, audio)`.
+type Plugin<'a> = (&'a Layer, Vec<mui_cut::Step>, Option<(String, Value)>);
+
+fn plugins(p: &Project) -> Vec<Plugin<'_>> {
     p.scenes
         .iter()
         .flat_map(|s| {
             s.layers
                 .iter()
                 .filter(|l| matches!(l.kind, Kind::Plugin { .. }))
-                .map(|l| (l, l.plugin_track(p.fps, frame_at(s.duration, p.fps))))
+                .map(|l| {
+                    let steps = l.plugin_track(p.fps, p.sample_rate, frame_at(s.duration, p.fps));
+                    let audio = l.plugin_audio(&steps, p.fps, p.sample_rate, p.samples(s));
+                    (l, steps, audio)
+                })
         })
         .collect()
+}
+
+/// Where a plugin soundtrack is cached, relative to the project.
+pub fn audio_file(key: &str) -> String {
+    format!("{CACHE}/audio/{key}.f32")
+}
+
+/// Plugin layer `l`'s soundtrack in scene `s`, stereo interleaved, once
+/// [`capture_missing`] has rendered it; `None` for a layer without notes.
+pub fn layer_audio(
+    p: &Project,
+    project: &Path,
+    s: &mui_cut::Scene,
+    l: &Layer,
+) -> Result<Option<Vec<f32>>> {
+    let steps = l.plugin_track(p.fps, p.sample_rate, frame_at(s.duration, p.fps));
+    let Some((key, _)) = l.plugin_audio(&steps, p.fps, p.sample_rate, p.samples(s)) else {
+        return Ok(None);
+    };
+    let file = project
+        .parent()
+        .unwrap_or(Path::new("."))
+        .join(audio_file(&key));
+    let bytes = std::fs::read(&file)
+        .map_err(|e| format!("layer `{}`: its audio {}: {e}", l.id, file.display()))?;
+    Ok(Some(
+        bytes
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|b| f32::from_le_bytes(*b))
+            .collect(),
+    ))
 }
 
 fn source(l: &Layer) -> &Source {
@@ -51,7 +96,7 @@ pub fn load(p: &Project, project: &Path, assets: &mut Assets) -> Vec<String> {
     let dir = project.parent().unwrap_or(Path::new("."));
     let mut errs = capture_missing(p, project);
     let mut seen = HashSet::new();
-    for (_, steps) in plugins(p) {
+    for (_, steps, _) in plugins(p) {
         for s in steps {
             let rel = format!("{CACHE}/{}.json", s.key);
             if !seen.insert(rel.clone()) {
@@ -88,9 +133,14 @@ pub fn load(p: &Project, project: &Path, assets: &mut Assets) -> Vec<String> {
 pub fn capture_missing(p: &Project, project: &Path) -> Vec<String> {
     let jobs = plugins(p)
         .into_iter()
-        .map(|(l, steps)| (format!("layer `{}`", l.id), source(l), steps))
+        .map(|(l, steps, audio)| Job {
+            what: format!("layer `{}`", l.id),
+            source: source(l),
+            steps,
+            audio,
+        })
         .collect();
-    capture(jobs, project)
+    capture(jobs, project, p.sample_rate)
 }
 
 /// Capture every plugin source's fresh state ([`mui_cut::plugin::home`]),
@@ -100,24 +150,40 @@ pub fn capture_sources(p: &Project, project: &Path) -> Vec<String> {
     let jobs = all
         .iter()
         .filter_map(|m| match &m.kind {
-            MediaKind::Plugin { source } => Some((
-                format!("source `{}`", m.id),
+            MediaKind::Plugin { source } => Some(Job {
+                what: format!("source `{}`", m.id),
                 source,
-                vec![mui_cut::plugin::home_step(source)],
-            )),
+                steps: vec![mui_cut::plugin::home_step(source)],
+                audio: None,
+            }),
             _ => None,
         })
         .collect();
-    capture(jobs, project)
+    capture(jobs, project, p.sample_rate)
 }
 
-/// Replay each `(what, source, steps)` whose states are not all cached.
-fn capture(jobs: Vec<(String, &Source, Vec<mui_cut::Step>)>, project: &Path) -> Vec<String> {
+/// A plugin to replay: what it is (for messages), its adapter, the steps
+/// to capture, and its soundtrack's key and last advance.
+struct Job<'a> {
+    what: String,
+    source: &'a Source,
+    steps: Vec<mui_cut::Step>,
+    audio: Option<(String, Value)>,
+}
+
+/// Replay each job whose states (or soundtrack) are not all cached.
+fn capture(jobs: Vec<Job>, project: &Path, rate: u32) -> Vec<String> {
     let dir = project.parent().unwrap_or(Path::new("."));
     let mut built: HashMap<&Source, std::result::Result<(PathBuf, String), String>> =
         HashMap::new();
     let mut errs = Vec::new();
-    for (what, src, steps) in jobs {
+    for Job {
+        what,
+        source: src,
+        steps,
+        audio,
+    } in jobs
+    {
         let exe = built.entry(src).or_insert_with(|| executable(src, dir));
         let (exe, stamp) = match exe {
             Ok(e) => e.clone(),
@@ -126,7 +192,10 @@ fn capture(jobs: Vec<(String, &Source, Vec<mui_cut::Step>)>, project: &Path) -> 
                 continue;
             }
         };
-        if steps.iter().all(|s| fresh(dir, &s.key, &stamp)) {
+        let heard = audio
+            .as_ref()
+            .is_none_or(|(k, _)| dir.join(audio_file(k)).is_file());
+        if heard && steps.iter().all(|s| fresh(dir, &s.key, &stamp)) {
             continue;
         }
         eprintln!(
@@ -134,7 +203,11 @@ fn capture(jobs: Vec<(String, &Source, Vec<mui_cut::Step>)>, project: &Path) -> 
             steps.len(),
             exe.display()
         );
-        if let Err(e) = replay(&exe, &src.args, dir, &steps, &stamp, &mut errs) {
+        let clock = Clock {
+            rate,
+            audio: audio.as_ref(),
+        };
+        if let Err(e) = replay(&exe, &src.args, dir, &steps, &stamp, clock, &mut errs) {
             errs.push(format!("{what}: {e}"));
         }
     }
@@ -143,11 +216,13 @@ fn capture(jobs: Vec<(String, &Source, Vec<mui_cut::Step>)>, project: &Path) -> 
 
 /// The adapter to run and its build stamp (size and modification time),
 /// building it first when the source is a Cargo target.
-fn executable(src: &Source, dir: &Path) -> Result<(PathBuf, String)> {
+pub fn executable(src: &Source, dir: &Path) -> Result<(PathBuf, String)> {
     let exe = if !src.plugin.is_empty() {
-        crate::build::adapter(&src.plugin, dir)?
+        crate::build::adapter(&src.plugin, &src.features, dir)?
     } else if src.cargo.is_empty() {
-        dir.join(&src.bin)
+        // Absolute: the adapter starts in `dir`, where a path relative to
+        // mui-cut's own directory means something else.
+        std::path::absolute(dir.join(&src.bin)).map_err(|e| format!("{}: {e}", src.bin))?
     } else {
         let (flag, name) = if src.example.is_empty() {
             ("--bin", &src.bin)
@@ -209,18 +284,40 @@ fn fresh(dir: &Path, key: &str, stamp: &str) -> bool {
         })
 }
 
-/// One adapter process: its stdin, and its JSON packets.
-struct Session {
+/// An adapter's stdin, for more than one thread.
+pub type Writer = std::sync::Arc<std::sync::Mutex<ChildStdin>>;
+
+/// One command line to an adapter.
+pub fn write(w: &Writer, v: &Value) -> Result<()> {
+    let mut w = w.lock().map_err(|_| "adapter stdin poisoned")?;
+    writeln!(w, "{v}")
+        .and_then(|()| w.flush())
+        .map_err(|e| format!("adapter stdin: {e}"))
+}
+
+/// What comes back on the audio side of the wire: samples (stereo
+/// interleaved) and the end of an advance.
+pub enum Sound {
+    Samples(Vec<f32>),
+    Advanced,
+}
+
+/// One adapter process: its stdin, its JSON packets, and its sound.
+pub struct Session {
     child: Child,
-    stdin: ChildStdin,
+    /// Shared with a live transport's audio thread ([`Session::writer`]).
+    stdin: Writer,
     packets: Receiver<Value>,
+    /// Taken by a live transport that advances on its own thread.
+    pub sound: Option<Receiver<Sound>>,
     /// Every texture seen, by the adapter's name, base64 PNG.
-    textures: HashMap<String, String>,
+    pub textures: HashMap<String, String>,
     tag: u64,
 }
 
 impl Session {
-    fn open(exe: &Path, args: &[String], dir: &Path) -> Result<Self> {
+    /// Start `exe` on the manual sample clock at `rate`.
+    pub fn open(exe: &Path, args: &[String], dir: &Path, rate: u32) -> Result<Self> {
         // A project named without a directory has an empty parent, which
         // no process can start in.
         let dir = if dir.as_os_str().is_empty() {
@@ -231,6 +328,7 @@ impl Session {
         let mut child = Command::new(exe)
             .args(args)
             .current_dir(dir)
+            .env("MUI_BRIDGE_CLOCK", format!("manual:{rate}"))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
@@ -239,6 +337,7 @@ impl Session {
         let stdin = child.stdin.take().ok_or("no adapter stdin")?;
         let mut out = child.stdout.take().ok_or("no adapter stdout")?;
         let (tx, packets) = std::sync::mpsc::channel();
+        let (heard, sound) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let mut head = [0u8; 5];
             while out.read_exact(&mut head).is_ok() {
@@ -247,34 +346,69 @@ impl Session {
                 if out.read_exact(&mut body).is_err() {
                     break;
                 }
-                // Audio blocks are dropped: a capture is pictures.
-                if head[0] == b'J'
-                    && let Ok(v) = serde_json::from_slice::<Value>(&body)
-                    && tx.send(v).is_err()
-                {
+                // Audio: the block's first sample frame, then stereo f32.
+                if head[0] == b'A' {
+                    let samples = body
+                        .get(8..)
+                        .unwrap_or_default()
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .map(|b| f32::from_le_bytes(*b))
+                        .collect();
+                    let _ = heard.send(Sound::Samples(samples));
+                    continue;
+                }
+                let Ok(v) = serde_json::from_slice::<Value>(&body) else {
+                    continue;
+                };
+                if v["type"] == "advanced" {
+                    let _ = heard.send(Sound::Advanced);
+                } else if tx.send(v).is_err() {
                     break;
                 }
             }
         });
         Ok(Self {
             child,
-            stdin,
+            stdin: std::sync::Arc::new(std::sync::Mutex::new(stdin)),
             packets,
+            sound: Some(sound),
             textures: HashMap::new(),
             tag: 0,
         })
     }
 
-    fn send(&mut self, v: &Value) -> Result<()> {
-        writeln!(self.stdin, "{v}")
-            .and_then(|()| self.stdin.flush())
-            .map_err(|e| format!("adapter stdin: {e}"))
+    /// Run the clock to `{"op": "advance"}`'s sample: the sound up to it.
+    fn advance(&mut self, command: &Value) -> Result<Vec<f32>> {
+        self.send(command)?;
+        let sound = self.sound.as_ref().ok_or("the sound was taken")?;
+        let mut out = Vec::new();
+        loop {
+            match sound.recv_timeout(PATIENCE) {
+                Ok(Sound::Samples(s)) => out.extend(s),
+                Ok(Sound::Advanced) => return Ok(out),
+                Err(RecvTimeoutError::Timeout) => {
+                    return Err("the adapter stopped playing".into());
+                }
+                Err(RecvTimeoutError::Disconnected) => return Err("the adapter exited".into()),
+            }
+        }
+    }
+
+    /// Its stdin, for a thread that sends while another snapshots.
+    pub fn writer(&self) -> Writer {
+        self.stdin.clone()
+    }
+
+    pub fn send(&mut self, v: &Value) -> Result<()> {
+        write(&self.stdin, v)
     }
 
     /// Ask for a scene and wait for the one that follows the ask: every
     /// command sent before it has been applied. Adapter errors (a rejected
     /// parameter, say) go to `errs`.
-    fn snapshot(&mut self, errs: &mut Vec<String>) -> Result<Value> {
+    pub fn snapshot(&mut self, errs: &mut Vec<String>) -> Result<Value> {
         self.tag += 1;
         let tag = self.tag;
         self.send(&json!({"op": "snapshot", "tag": tag}))?;
@@ -320,41 +454,67 @@ impl Drop for Session {
     }
 }
 
-/// Run the adapter through every step, capturing each state.
+/// The sample clock a replay runs on: its rate, and the soundtrack to
+/// keep (its key and the advance that ends it), if any.
+#[derive(Clone, Copy)]
+struct Clock<'a> {
+    rate: u32,
+    audio: Option<&'a (String, Value)>,
+}
+
+/// Run the adapter through every step, capturing each state, and keep the
+/// soundtrack the advances played.
 fn replay(
     exe: &Path,
     args: &[String],
     dir: &Path,
     steps: &[mui_cut::Step],
     stamp: &str,
+    clock: Clock,
     errs: &mut Vec<String>,
 ) -> Result<()> {
     let cache = dir.join(CACHE);
     std::fs::create_dir_all(cache.join("img")).map_err(|e| format!("{}: {e}", cache.display()))?;
-    let mut s = Session::open(exe, args, dir)?;
+    let mut s = Session::open(exe, args, dir, clock.rate)?;
+    let mut sound = Vec::new();
     for step in steps {
         for c in &step.commands {
-            s.send(c)?;
+            // The clock first, and finished, so what follows (a parameter,
+            // the capture) lands after exactly those samples.
+            if c["op"] == "advance" {
+                sound.extend(s.advance(c)?);
+            } else {
+                s.send(c)?;
+            }
         }
         // Every step is captured, cached or not: the live host queues
         // input until a scene is taken, and only 256 of it.
         let scene = s.snapshot(errs)?;
         if !fresh(dir, &step.key, stamp) {
-            save(&cache, &step.key, stamp, &scene["scene"], &s.textures)?;
+            save(&cache, &step.key, stamp, &scene, &s.textures)?;
         }
+    }
+    if let Some((key, tail)) = clock.audio {
+        sound.extend(s.advance(tail)?);
+        let bytes: Vec<u8> = sound.iter().flat_map(|v| v.to_le_bytes()).collect();
+        let file = dir.join(audio_file(key));
+        std::fs::create_dir_all(cache.join("audio"))
+            .map_err(|e| format!("{}: {e}", cache.display()))?;
+        write_atomic(&file, &bytes)?;
     }
     Ok(())
 }
 
-/// One state's manifest, its images renamed by their content so states
-/// share them.
-fn save(
+/// One state's manifest (a scene packet's `scene`, with its `patch`), its
+/// images renamed by their content so states share them.
+pub fn save(
     cache: &Path,
     key: &str,
     stamp: &str,
-    manifest: &Value,
+    packet: &Value,
     textures: &HashMap<String, String>,
 ) -> Result<()> {
+    let manifest = &packet["scene"];
     let num = |v: &Value| v.as_f64().ok_or("a capture without its size");
     let rect = |r: &Value| -> Result<[f64; 4]> {
         Ok([num(&r[0])?, num(&r[1])?, num(&r[2])?, num(&r[3])?])
@@ -400,6 +560,7 @@ fn save(
         surfaces: serde_json::from_value(manifest["surfaces"].clone()).unwrap_or_default(),
         parts: serde_json::from_value(manifest["parts"].clone()).unwrap_or_default(),
         stamp: stamp.to_owned(),
+        patch: packet["patch"].clone(),
     };
     let json = serde_json::to_vec_pretty(&cap).map_err(|e| e.to_string())?;
     write_atomic(&cache.join(format!("{key}.json")), &json)

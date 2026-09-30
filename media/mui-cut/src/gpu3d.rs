@@ -97,7 +97,7 @@ impl Space {
         let shown = |l: &&Drawn| {
             !matches!(
                 l.kind,
-                Kind::Camera { .. } | Kind::Light { .. } | Kind::Model { .. }
+                Kind::Camera { .. } | Kind::Light { .. } | Kind::Model { .. } | Kind::Audio { .. }
             ) && l.opacity > 0.
                 && l.scale != 0.
         };

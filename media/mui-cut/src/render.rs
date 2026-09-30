@@ -42,6 +42,9 @@ pub struct Assets {
     envs: HashMap<String, Arc<mui_stage::EnvImage>>,
     captures: HashMap<String, Arc<Capture>>,
     fonts: HashMap<String, Font>,
+    /// Plugin layers shown live (`serve` playing): layer id to the state
+    /// drawn instead of the one the time names. See [`Assets::add_asset`].
+    live: HashMap<String, String>,
 }
 
 /// One frame's layers, ready to paint: each resolved tree with where it goes
@@ -154,7 +157,23 @@ impl Assets {
     /// A file a layer names, by its extension: `.png` for image layers,
     /// `.svg` for SVG layers, `.json` for Lottie layers; a `.json` under
     /// [`CACHE`] is a plugin capture (its images are PNGs under it too).
+    ///
+    /// `live:<layer>` with a state key as its bytes draws plugin layer
+    /// `layer` (and patches of it) from that capture whatever the time;
+    /// no bytes ends that. Empty bytes for any other path forget it.
     pub fn add_asset(&mut self, path: &str, bytes: &[u8]) -> Result<(), String> {
+        if let Some(layer) = path.strip_prefix("live:") {
+            match std::str::from_utf8(bytes) {
+                Ok("") | Err(_) => self.live.remove(layer),
+                Ok(state) => self.live.insert(layer.to_owned(), state.to_owned()),
+            };
+            return Ok(());
+        }
+        if bytes.is_empty() {
+            self.images.remove(path);
+            self.captures.remove(path);
+            return Ok(());
+        }
         let ext = path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
         match ext.as_str() {
             "json" if path.starts_with(CACHE) => {
@@ -252,7 +271,9 @@ impl Assets {
             | Kind::Camera { .. }
             | Kind::Light { .. }
             | Kind::Model { .. }
-            | Kind::Plugin { .. } => Vec::new(),
+            | Kind::Plugin { .. }
+            | Kind::Audio { .. }
+            | Kind::Patch { .. } => Vec::new(),
         };
         vector::trim(&mut pieces, l.trim);
         vector::deform(&mut pieces, &l.deformers);
@@ -276,6 +297,13 @@ impl Assets {
                     None => fill.into(),
                 };
                 block(l.width, l.height).radius(l.radius).fill(paint)
+            }
+            Kind::Patch { of } => {
+                let state = self.live.get(of).or(l.patch.as_ref());
+                let patch = state
+                    .and_then(|s| self.capture(s))
+                    .map_or(&serde_json::Value::Null, |c| &c.patch);
+                patch_panel(patch, l.width, l.height)
             }
             _ => {
                 let (draws, corner, (w, h)) = vector::draws(&self.pieces(l)?);
@@ -369,6 +397,9 @@ impl Assets {
             parts: Vec::new(),
         };
         for l in &frame.layers {
+            if let Kind::Audio { .. } = l.kind {
+                continue;
+            }
             if let Some(p) = &l.plugin {
                 self.plugin(l, p, &mut out)?;
                 continue;
@@ -420,6 +451,14 @@ fn quad(id: String, place: Affine, w: f64, h: f64) -> Quad {
 }
 
 impl Assets {
+    /// The capture plugin layer `l` shows: its live one, else its state's.
+    fn shown(&self, l: &Drawn, p: &PluginAt) -> Option<&Capture> {
+        self.live
+            .get(&l.id)
+            .and_then(|s| self.capture(s))
+            .or_else(|| self.capture(&p.state))
+    }
+
     /// A capture, if it has been added.
     pub fn capture(&self, state: &str) -> Option<&Capture> {
         self.captures
@@ -442,7 +481,7 @@ impl Assets {
         let Some(p) = &l.plugin else {
             return vec![l.clone()];
         };
-        let Some(cap) = self.capture(&p.state) else {
+        let Some(cap) = self.shown(l, p) else {
             // The 2D placeholder: a faint card of the layer's size.
             let fill = Rgba([l.fill.0[0], l.fill.0[1], l.fill.0[2], l.fill.0[3] / 8]);
             return vec![Drawn {
@@ -562,7 +601,7 @@ impl Assets {
     }
 
     fn plugin(&self, l: &Drawn, p: &PluginAt, out: &mut Layers) -> Result<(), String> {
-        let cap = self.capture(&p.state);
+        let cap = self.shown(l, p);
         let (w, h) = cap.map_or((l.width, l.height), |c| (c.width, c.height));
         let place = Affine::translate((l.x, l.y))
             * Affine::rotate(l.rotation.to_radians())
@@ -661,4 +700,112 @@ impl Assets {
         }
         Ok(())
     }
+}
+
+/// A patch layer: the plugin's parameters off their defaults and its
+/// modulation routes, graphite (neutral greys, one light accent), clipped
+/// to `w` x `h`. `patch` is what the adapter sent: `{plugin, routes:
+/// [{source, target, depth, live}], params: [{name, text, norm}], held}`.
+fn patch_panel(patch: &serde_json::Value, w: f64, h: f64) -> El {
+    const PANEL: Rgba = Rgba([27, 28, 32, 255]);
+    const WELL: Rgba = Rgba([44, 46, 52, 255]);
+    const INK: Rgba = Rgba([232, 233, 236, 255]);
+    const DIM: Rgba = Rgba([138, 141, 150, 255]);
+    const LIGHT: Rgba = Rgba([214, 217, 224, 255]);
+    const ROW: f64 = 24.;
+    let str_of = |v: &serde_json::Value| v.as_str().unwrap_or("").to_owned();
+    let num = |v: &serde_json::Value| v.as_f64().unwrap_or(0.);
+    let inner = (w - 36.).max(40.);
+    // A thin bar, `v` of the way along (from its middle when `signed`).
+    let bar = |v: f64, signed: bool| {
+        let bw = 72.;
+        let (a, b) = if signed {
+            let v = v.clamp(-1., 1.) * bw / 2.;
+            (bw / 2. + v.min(0.), v.abs())
+        } else {
+            (0., v.clamp(0., 1.) * bw)
+        };
+        row([
+            block(a, 4.).fill(color(WELL)),
+            block(b, 4.).fill(color(LIGHT)),
+            block(bw - a - b, 4.).fill(color(WELL)),
+        ])
+    };
+    let label = |s: &str| text(s.to_owned()).text_size(11.).fill(color(DIM));
+    let held: Vec<String> = patch["held"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(serde_json::Value::as_u64)
+                .map(|n| {
+                    const NAMES: [&str; 12] = [
+                        "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
+                    ];
+                    format!("{}{}", NAMES[(n % 12) as usize], n as i64 / 12 - 1)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let name = patch["plugin"].as_str().unwrap_or("PLUGIN").to_uppercase();
+    let mut rows = vec![
+        row([
+            text(format!("{name}  ·  PATCH"))
+                .text_size(13.)
+                .fill(color(INK)),
+            spacer(),
+            text(held.join(" ")).text_size(13.).fill(color(LIGHT)),
+        ])
+        .w(inner),
+    ];
+    // Rows until the panel is full: routes first, then parameters.
+    let mut room = ((h - 18. * 2. - ROW) / ROW).floor().max(0.) as usize;
+    let routes = patch["routes"].as_array().map_or(&[][..], Vec::as_slice);
+    if !routes.is_empty() && room > 1 {
+        rows.push(label("MODULATION"));
+        room -= 1;
+        for r in routes.iter().take(room) {
+            rows.push(
+                row([
+                    text(str_of(&r["source"])).text_size(12.).fill(color(LIGHT)),
+                    text("→".to_owned()).text_size(12.).fill(color(DIM)),
+                    text(str_of(&r["target"])).text_size(12.).fill(color(INK)),
+                    spacer(),
+                    bar(
+                        num(&r["depth"]) * (0.25 + 0.75 * num(&r["live"]).abs()),
+                        true,
+                    ),
+                ])
+                .gap(8.)
+                .w(inner),
+            );
+            room = room.saturating_sub(1);
+        }
+    }
+    let params = patch["params"].as_array().map_or(&[][..], Vec::as_slice);
+    if !params.is_empty() && room > 1 {
+        rows.push(label("PARAMETERS"));
+        room -= 1;
+        for p in params.iter().take(room) {
+            rows.push(
+                row([
+                    text(str_of(&p["name"])).text_size(12.).fill(color(DIM)),
+                    spacer(),
+                    text(str_of(&p["text"])).text_size(12.).fill(color(INK)),
+                    bar(num(&p["norm"]), false),
+                ])
+                .gap(8.)
+                .w(inner),
+            );
+        }
+    }
+    if patch.is_null() {
+        rows.push(label("waiting for the plugin's patch"));
+    }
+    col(rows)
+        .gap(6.)
+        .pad(18.)
+        .w(w)
+        .h(h)
+        .radius(14.)
+        .fill(color(PANEL))
 }

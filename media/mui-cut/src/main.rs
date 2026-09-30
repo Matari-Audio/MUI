@@ -10,10 +10,13 @@
 //!     mui-cut add    ../KORREKT [--project demo.cut.json]
 #![forbid(unsafe_code)]
 
+mod audio;
 mod build;
 mod encode;
 mod host;
+mod live;
 mod mcp;
+mod midi;
 mod script;
 mod segments;
 mod serve;
@@ -24,7 +27,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use mui_cut::yuv::{self, Yuv};
-use mui_cut::{Assets, CpuPool, Engine, Frame, Offline, Project, Render, Scene, eval, subframes};
+use mui_cut::{
+    Assets, CpuPool, Engine, Frame, Kind, Offline, Project, Render, Scene, eval, subframes,
+};
 
 type Result<T> = std::result::Result<T, String>;
 
@@ -56,7 +61,9 @@ const USAGE: &str = "usage:
   mui-cut sheet  PROJECT [-o OUT.png] [--scene NAME] [--n 8] [--times 0,1.5] [--width 1600] [--cols 4] [--renderer R]
   mui-cut strip  PROJECT --layer ID [-o OUT.png] [--scene NAME] [--n 8] [--width 1600] [--renderer R]
   mui-cut diff   A B [-o OUT.png] [--n 6] [--width 1600] [--renderer R]
-  mui-cut serve  PROJECT [--port 8740] [--web DIR]";
+  mui-cut serve  PROJECT [--port 8740] [--web DIR]   (MUI_CUT_AUDIO=null: no audio device)
+  mui-cut capture PROJECT                          # run plugin adapters: captures and soundtracks
+  mui-cut midi   PROJECT --file SONG.mid --layer ID [--scene NAME] [--track N] [--at SECONDS]";
 
 /// `--name value` pairs after the command and project path.
 struct Args {
@@ -145,6 +152,46 @@ fn run(argv: &[String]) -> Result<()> {
                 "{}",
                 serde_json::to_string_pretty(&f).map_err(|e| e.to_string())?
             );
+            Ok(())
+        }
+        "capture" => {
+            let p = load(&args.project)?;
+            let errs = host::capture_missing(&p, &args.project);
+            if errs.is_empty() {
+                Ok(())
+            } else {
+                Err(errs.join("\n"))
+            }
+        }
+        "midi" => {
+            let mut p = load(&args.project)?;
+            let file = args.get("file").ok_or("midi needs --file SONG.mid")?;
+            let bytes = std::fs::read(file).map_err(|e| format!("{file}: {e}"))?;
+            let track = args
+                .get("track")
+                .map(str::parse)
+                .transpose()
+                .map_err(|_| "--track: a number")?;
+            let notes = midi::notes(&bytes, track, args.num("at", 0.)?)?;
+            let n = notes.len();
+            let layer = args.get("layer").ok_or("midi needs --layer ID")?;
+            let names: Vec<String> = p.scenes.iter().map(|s| s.name.clone()).collect();
+            let scene = args.get("scene").map_or(0, |n| {
+                names.iter().position(|s| s == n).unwrap_or(usize::MAX)
+            });
+            let l = p
+                .scenes
+                .get_mut(scene)
+                .ok_or("no such scene")?
+                .layers
+                .iter_mut()
+                .find(|l| l.id == layer);
+            match l.map(|l| &mut l.kind) {
+                Some(Kind::Plugin { notes: into, .. }) => *into = notes,
+                _ => return Err(format!("`{layer}` is not a plugin layer")),
+            }
+            write_atomic(&args.project, &p.to_json())?;
+            eprintln!("{n} notes into `{layer}`");
             Ok(())
         }
         "fmt" => {
@@ -318,6 +365,8 @@ fn load_assets(p: &Project, project: &Path, assets: &mut Assets) -> Vec<String> 
         .scenes
         .iter()
         .flat_map(|s| &s.layers)
+        // Sound is read by the mix, not drawn.
+        .filter(|l| !matches!(l.kind, mui_cut::Kind::Audio { .. }))
         .filter_map(|l| p.asset_of(l))
         .chain(hdris)
     {
@@ -783,6 +832,17 @@ fn render_one(
             String::new()
         }
     };
+    let mut cache = cache;
+    if let Some(plan) = &plan
+        && let Some(pcm) = audio::mix(p, &args.project, &scenes)?
+    {
+        audio::mux(plan, out, &pcm, p.sample_rate)?;
+        cache.push_str(&format!(
+            ", {} s of sound at {} Hz",
+            pcm.len() / 2 / p.sample_rate as usize,
+            p.sample_rate
+        ));
+    }
     let secs = start.elapsed().as_secs_f64();
     let frames = jobs.len();
     println!(
