@@ -120,8 +120,7 @@ mod tests {
         let mut h = take().expect("parked");
         assert_eq!(h.size, Size::new(300., 200.));
         let tree = h.view.build(&mut h.ui, &Input::default());
-        h.ui
-            .frame(tree, Some(h.size), Input::default(), 0.)
+        h.ui.frame(tree, Some(h.size), Input::default(), 0.)
             .expect("frames");
         assert!(h.ui.scene().is_some_and(|s| s.surface("label").is_some()));
         assert!(take().is_none(), "taken once");

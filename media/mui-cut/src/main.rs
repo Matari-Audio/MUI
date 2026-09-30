@@ -212,12 +212,20 @@ fn add(argv: &[String]) -> Result<()> {
     let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
     let r = build::add(&project, &from, &cwd, id.as_deref())?;
     if as_json {
-        println!("{}", serde_json::to_string_pretty(&r).map_err(|e| e.to_string())?);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&r).map_err(|e| e.to_string())?
+        );
         return Ok(());
     }
     let list = |k: &str| {
         r[k].as_array()
-            .map(|a| a.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join(", "))
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
             .unwrap_or_default()
     };
     println!(
@@ -230,9 +238,16 @@ fn add(argv: &[String]) -> Result<()> {
     if let Some(e) = r["editor"].as_str() {
         println!("  editor: {e}");
     }
-    println!("  MUI crates, built from {}: {}", build::mui_root().display(), list("mui"));
+    println!(
+        "  MUI crates, built from {}: {}",
+        build::mui_root().display(),
+        list("mui")
+    );
     if !list("pinned").is_empty() {
-        println!("  pinned to an old MUI `rev` (tools/mui-sync unpins): {}", list("pinned"));
+        println!(
+            "  pinned to an old MUI `rev` (tools/mui-sync unpins): {}",
+            list("pinned")
+        );
     }
     fn walk(parts: &serde_json::Value, depth: usize) {
         for p in parts.as_array().into_iter().flatten() {

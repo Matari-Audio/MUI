@@ -3,6 +3,7 @@
 //! ([`mui::host::headless`]), has the plugin's framework open its editor as
 //! a host would, and hands the parked view to [`run_headless`].
 use mui::host::headless::Headless;
+use mui::prelude::Size;
 use serde_json::{Value, json};
 
 use crate::{CaptureStream, Editor, run_live};
@@ -22,8 +23,17 @@ pub fn run_headless(
     let Headless {
         ui,
         mut view,
-        size,
+        size: window,
     } = view;
+    // The tree lays out at the window's size over the view's zoom (a
+    // design size fitted to the window), as a window would.
+    let zoom = view.zoom(window);
+    let zoom = if zoom.is_finite() && zoom > 0. {
+        zoom
+    } else {
+        1.
+    };
+    let size = Size::new(window.width / zoom, window.height / zoom);
     let mut editor = Editor::new(ui);
     let mut capture = CaptureStream::default();
     let frame = move |_rev: u64, clock: u64, inputs: &[Value]| {
@@ -42,10 +52,7 @@ pub fn run_headless(
             clippy::cast_sign_loss,
             reason = "an editor is a few thousand points"
         )]
-        let (w, h) = (
-            (size.width * SCALE) as u16,
-            (size.height * SCALE) as u16,
-        );
+        let (w, h) = ((size.width * SCALE) as u16, (size.height * SCALE) as u16);
         capture.frame(scene, w, h, SCALE, &roots)
     };
     run_live(describe, |_, _| {}, edit, frame)

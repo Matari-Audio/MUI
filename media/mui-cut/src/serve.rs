@@ -250,8 +250,13 @@ impl Shared {
                 match crate::build::onboard(from, dir, dir, id, &taken) {
                     Ok((entry, report)) => {
                         let body = serde_json::json!({"entry": entry, "report": report});
-                        respond(stream, "200 OK", "application/json", body.to_string().as_bytes())
-                            .map_err(io)
+                        respond(
+                            stream,
+                            "200 OK",
+                            "application/json",
+                            body.to_string().as_bytes(),
+                        )
+                        .map_err(io)
                     }
                     Err(e) => {
                         respond(stream, "400 Bad Request", "text/plain", e.as_bytes()).map_err(io)

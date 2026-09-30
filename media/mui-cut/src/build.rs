@@ -107,7 +107,13 @@ pub fn detect(dir: &Path) -> Result<Plugin> {
         .map_err(|e| format!("{}: {e}", dir.display()))?;
     let manifest = dir.join("Cargo.toml");
     let out = cargo(&dir)
-        .args(["metadata", "--format-version", "1", "--no-deps", "--manifest-path"])
+        .args([
+            "metadata",
+            "--format-version",
+            "1",
+            "--no-deps",
+            "--manifest-path",
+        ])
         .arg(&manifest)
         .output()
         .map_err(|e| format!("cargo: {e}"))?;
@@ -156,15 +162,11 @@ pub fn detect(dir: &Path) -> Result<Plugin> {
         .to_path_buf();
     let workspace_root = PathBuf::from(meta["workspace_root"].as_str().unwrap_or(""));
     let mut missing = Vec::new();
-    let lib = pkg["targets"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .find(|t| {
-            t["kind"]
-                .as_array()
-                .is_some_and(|k| k.iter().any(|k| k == "lib" || k == "rlib"))
-        });
+    let lib = pkg["targets"].as_array().into_iter().flatten().find(|t| {
+        t["kind"]
+            .as_array()
+            .is_some_and(|k| k.iter().any(|k| k == "lib" || k == "rlib"))
+    });
     if lib.is_none() {
         missing.push(format!(
             "`{package}` has no linkable library: add `\"rlib\"` to `[lib] crate-type` in its Cargo.toml"
@@ -277,10 +279,19 @@ fn find(src: &[(String, String)], needles: &[&str]) -> Option<String> {
 
 /// The type the adapter opens, and where the editor is made; what is
 /// missing goes to `missing`.
-fn entry(fw: Framework, src: &[(String, String)], missing: &mut Vec<String>) -> (String, Option<String>) {
+fn entry(
+    fw: Framework,
+    src: &[(String, String)],
+    missing: &mut Vec<String>,
+) -> (String, Option<String>) {
     let editor = find(
         src,
-        &["MuiEditor::new", "mui_baseview::open", "fn mui_editor("],
+        &[
+            "MuiEditor::new",
+            "mui_baseview::open",
+            "window::open(",
+            "fn mui_editor(",
+        ],
     );
     let lib = src
         .iter()
@@ -328,9 +339,6 @@ fn entry(fw: Framework, src: &[(String, String)], missing: &mut Vec<String>) -> 
             "mui_editor".to_owned()
         }
     };
-    if editor.is_none() && fw != Framework::Mui {
-        missing.push("no MUI editor found (`MuiEditor::new` or `mui_baseview::open`)".into());
-    }
     (entry, editor)
 }
 
@@ -338,8 +346,11 @@ fn entry(fw: Framework, src: &[(String, String)], missing: &mut Vec<String>) -> 
 fn public(lib: &str, ty: &str) -> bool {
     lib.lines().map(str::trim).any(|l| {
         (l.starts_with("pub struct ") || l.starts_with("pub enum "))
-            && l.split_whitespace().nth(2).is_some_and(|n| n.trim_end_matches(['{', ';', '(']) == ty)
-            || l.starts_with("pub use ") && (l.ends_with(&format!(" as {ty};")) || l.ends_with(&format!("::{ty};")))
+            && l.split_whitespace()
+                .nth(2)
+                .is_some_and(|n| n.trim_end_matches(['{', ';', '(']) == ty)
+            || l.starts_with("pub use ")
+                && (l.ends_with(&format!(" as {ty};")) || l.ends_with(&format!("::{ty};")))
     })
 }
 
@@ -353,10 +364,11 @@ pub fn mui_root() -> PathBuf {
     root.canonicalize().unwrap_or(root)
 }
 
-/// Every package in the MUI tree, by name: `crates/*` and `media/*`.
+/// Every package in the MUI tree, by name: `crates/*`, `media/*` and
+/// `vendor/*` (a git dependency on MUI finds those too).
 pub fn local_crates(root: &Path) -> BTreeMap<String, PathBuf> {
     let mut out = BTreeMap::new();
-    for group in ["crates", "media"] {
+    for group in ["crates", "media", "vendor"] {
         let Ok(rd) = std::fs::read_dir(root.join(group)) else {
             continue;
         };
@@ -381,9 +393,9 @@ pub fn local_crates(root: &Path) -> BTreeMap<String, PathBuf> {
 pub fn patch_config(used: &[String], local: &BTreeMap<String, PathBuf>) -> Result<Vec<String>> {
     used.iter()
         .map(|c| {
-            let dir = local
-                .get(c)
-                .ok_or_else(|| format!("the plugin uses MUI crate `{c}`, which this MUI tree lacks"))?;
+            let dir = local.get(c).ok_or_else(|| {
+                format!("the plugin uses MUI crate `{c}`, which this MUI tree lacks")
+            })?;
             let dir = dir.canonicalize().unwrap_or_else(|_| dir.clone());
             Ok(format!(
                 "patch.\"{MUI_GIT}\".{c}.path={}",
@@ -395,7 +407,11 @@ pub fn patch_config(used: &[String], local: &BTreeMap<String, PathBuf>) -> Resul
 
 /// mui-cut's cache: `MUI_CUT_CACHE`, or `$XDG_CACHE_HOME/mui-cut`.
 pub fn cache() -> PathBuf {
-    let env = |k| std::env::var_os(k).filter(|v| !v.is_empty()).map(PathBuf::from);
+    let env = |k| {
+        std::env::var_os(k)
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+    };
     env("MUI_CUT_CACHE")
         .or_else(|| env("XDG_CACHE_HOME").map(|d| d.join("mui-cut")))
         .or_else(|| env("HOME").map(|d| d.join(".cache/mui-cut")))
@@ -439,7 +455,10 @@ pub fn checkout(url: &str, update: bool) -> Result<PathBuf> {
     if !dir.join(".git").is_dir() {
         std::fs::create_dir_all(dir.parent().unwrap_or(&dir)).map_err(|e| e.to_string())?;
         let d = dir.to_string_lossy();
-        git(&["clone", "--depth", "1", url, &d], dir.parent().unwrap_or(&dir))?;
+        git(
+            &["clone", "--depth", "1", url, &d],
+            dir.parent().unwrap_or(&dir),
+        )?;
     } else if update {
         git(&["pull", "--ff-only", "--depth", "1"], &dir)?;
     }
@@ -491,7 +510,11 @@ pub fn adapter(plugin: &str, project_dir: &Path) -> Result<PathBuf> {
     if std::env::var_os("CARGO_TARGET_DIR").is_none() {
         cmd.arg("--target-dir").arg(cache().join("target"));
     }
-    eprintln!("mui-cut: building the adapter for `{}` against {}", p.package, root.display());
+    eprintln!(
+        "mui-cut: building the adapter for `{}` against {}",
+        p.package,
+        root.display()
+    );
     let out = cmd
         .stderr(Stdio::piped())
         .output()
@@ -522,7 +545,10 @@ fn cargo(dir: &Path) -> Command {
 /// The adapter's package, binary and directory name: one per plugin
 /// folder, so adapters sharing a target directory never overwrite another.
 fn adapter_name(p: &Plugin) -> String {
-    let hash = mui_cut::plugin::fnv(mui_cut::plugin::FNV_OFFSET, p.dir.to_string_lossy().as_bytes());
+    let hash = mui_cut::plugin::fnv(
+        mui_cut::plugin::FNV_OFFSET,
+        p.dir.to_string_lossy().as_bytes(),
+    );
     format!("adapter-{}-{:08x}", p.package, hash as u32)
 }
 
@@ -573,7 +599,11 @@ fn manifest(p: &Plugin, root: &Path, patched: &[String]) -> Result<String> {
         "serde_json = \"1\"".into(),
     ];
     if let Some(d) = &p.framework_dep {
-        deps.push(format!("{} = {}", d["name"].as_str().unwrap_or(""), dep_spec(d, p)?));
+        deps.push(format!(
+            "{} = {}",
+            d["name"].as_str().unwrap_or(""),
+            dep_spec(d, p)?
+        ));
     }
     let root_manifest =
         std::fs::read_to_string(p.workspace_root.join("Cargo.toml")).unwrap_or_default();
@@ -601,7 +631,10 @@ fn dep_spec(d: &Value, p: &Plugin) -> Result<String> {
         kv.push(format!("path = {}", toml_str(path)));
     } else if let Some(git) = d["source"].as_str().and_then(|s| s.strip_prefix("git+")) {
         let (url, query) = git.split_once('?').unwrap_or((git, ""));
-        kv.push(format!("git = {}", toml_str(url.split('#').next().unwrap_or(url))));
+        kv.push(format!(
+            "git = {}",
+            toml_str(url.split('#').next().unwrap_or(url))
+        ));
         for q in query.split(['&', '#']).filter(|q| !q.is_empty()) {
             if let Some((k @ ("rev" | "branch" | "tag"), v)) = q.split_once('=') {
                 kv.push(format!("{k} = {}", toml_str(v)));
@@ -610,7 +643,10 @@ fn dep_spec(d: &Value, p: &Plugin) -> Result<String> {
     } else if let Some(req) = d["req"].as_str() {
         kv.push(format!("version = {}", toml_str(req)));
     } else {
-        return Err(format!("`{}`: cannot read its `{}` dependency", p.package, d["name"]));
+        return Err(format!(
+            "`{}`: cannot read its `{}` dependency",
+            p.package, d["name"]
+        ));
     }
     Ok(format!("{{ {} }}", kv.join(", ")))
 }
@@ -717,7 +753,10 @@ pub fn onboard(
 
 /// `to` from `from` (both folders), with `..` where needed.
 fn relative(to: &Path, from: &Path) -> Result<String> {
-    let abs = |p: &Path| p.canonicalize().map_err(|e| format!("{}: {e}", p.display()));
+    let abs = |p: &Path| {
+        p.canonicalize()
+            .map_err(|e| format!("{}: {e}", p.display()))
+    };
     let (to, from) = (abs(to)?, abs(from)?);
     let common = to
         .components()
@@ -737,9 +776,14 @@ fn relative(to: &Path, from: &Path) -> Result<String> {
 /// its adapter and capture it: the report, with the source's `id` and its
 /// discovered part tree (`parts`).
 pub fn add(project: &Path, from: &str, base: &Path, id: Option<&str>) -> Result<Value> {
-    let text = std::fs::read_to_string(project).map_err(|e| format!("{}: {e}", project.display()))?;
-    let mut raw: Value = serde_json::from_str(&text).map_err(|e| format!("{}: {e}", project.display()))?;
-    let dir = project.parent().unwrap_or(Path::new("."));
+    let text =
+        std::fs::read_to_string(project).map_err(|e| format!("{}: {e}", project.display()))?;
+    let mut raw: Value =
+        serde_json::from_str(&text).map_err(|e| format!("{}: {e}", project.display()))?;
+    let dir = project
+        .parent()
+        .filter(|d| !d.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
     let p = mui_cut::Project::load(&text)?;
     let all = p.all_sources();
     let taken: Vec<&str> = all.iter().map(|m| m.id.as_str()).collect();
@@ -763,7 +807,10 @@ pub fn add(project: &Path, from: &str, base: &Path, id: Option<&str>) -> Result<
 pub fn parts(p: &mui_cut::Project, project: &Path, id: &str) -> Result<Value> {
     let errs = crate::host::capture_sources(p, project);
     let all = p.all_sources();
-    let m = all.iter().find(|m| m.id == id).ok_or_else(|| format!("no source `{id}`"))?;
+    let m = all
+        .iter()
+        .find(|m| m.id == id)
+        .ok_or_else(|| format!("no source `{id}`"))?;
     let state = m.state().ok_or_else(|| format!("`{id}` is not a plugin"))?;
     let file = project
         .parent()
@@ -773,9 +820,7 @@ pub fn parts(p: &mui_cut::Project, project: &Path, id: &str) -> Result<Value> {
     let cap: mui_cut::Capture = std::fs::read(&file)
         .ok()
         .and_then(|b| serde_json::from_slice(&b).ok())
-        .ok_or_else(|| {
-            format!("`{id}` was added but not captured:\n{}", errs.join("\n"))
-        })?;
+        .ok_or_else(|| format!("`{id}` was added but not captured:\n{}", errs.join("\n")))?;
     Ok(mui_cut::plugin::home_tree(&cap, &state))
 }
 
@@ -831,7 +876,9 @@ mui-truce = { git = "https://github.com/Matari-Audio/MUI", branch = "revamp" }
     }
 
     fn fixture(name: &str) -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(name)
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures")
+            .join(name)
     }
 
     #[test]
@@ -853,13 +900,18 @@ mui-truce = { git = "https://github.com/Matari-Audio/MUI", branch = "revamp" }
         let p = detect(&fixture("nice-private")).unwrap();
         assert_eq!(
             p.missing,
-            ["make the plugin type public at the crate root: `pub use crate::synth::Synth;` in src/lib.rs"]
+            [
+                "make the plugin type public at the crate root: `pub use crate::synth::Synth;` in src/lib.rs"
+            ]
         );
         let p = detect(&fixture("plain-bare")).unwrap();
-        assert!(p.missing[0].contains("pub fn mui_editor()"), "{:?}", p.missing);
-        let deps = |names: &[&str]| -> Vec<Value> {
-            names.iter().map(|n| json!({"name": n})).collect()
-        };
+        assert!(
+            p.missing[0].contains("pub fn mui_editor()"),
+            "{:?}",
+            p.missing
+        );
+        let deps =
+            |names: &[&str]| -> Vec<Value> { names.iter().map(|n| json!({"name": n})).collect() };
         assert_eq!(framework(&deps(&["serde"])), None);
         assert_eq!(framework(&deps(&["mui", "truce"])), Some(Framework::Truce));
     }

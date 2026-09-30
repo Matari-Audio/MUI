@@ -853,25 +853,53 @@ fn add_builds_a_git_mui_plugin_against_this_tree_and_lists_its_parts() {
         .env("MUI_CUT_CACHE", dir.join("cache"))
         .output()
         .unwrap();
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let r: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(r["framework"], "mui");
     assert_eq!(r["id"], "fixture-plain");
     let parts = r["parts"].to_string();
-    assert!(parts.contains("tone-color") && parts.contains("space-mix"), "{parts}");
-    assert_eq!(std::fs::read(fixture.join("Cargo.lock")).unwrap(), lock, "the plugin's lock is untouched");
+    assert!(
+        parts.contains("tone-color") && parts.contains("space-mix"),
+        "{parts}"
+    );
+    assert_eq!(
+        std::fs::read(fixture.join("Cargo.lock")).unwrap(),
+        lock,
+        "the plugin's lock is untouched"
+    );
     // The adapter's lock: MUI from the local path (no git source).
     let adapters = std::fs::read_dir(dir.join("cache/adapters")).unwrap();
-    let built = std::fs::read_to_string(adapters.flatten().next().unwrap().path().join("Cargo.lock")).unwrap();
+    let built =
+        std::fs::read_to_string(adapters.flatten().next().unwrap().path().join("Cargo.lock"))
+            .unwrap();
     let mui = built
         .split("[[package]]")
         .find(|b| b.contains("\nname = \"mui\"\n"))
         .unwrap();
     assert!(!mui.contains("source ="), "mui came from git:\n{mui}");
-    let p: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&project).unwrap()).unwrap();
+    let p: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&project).unwrap()).unwrap();
     let src = &p["sources"][0];
     assert_eq!(src["kind"], "plugin");
-    assert!(src["source"]["plugin"].as_str().unwrap().ends_with("tests/fixtures/plain"), "{src}");
-    let check = Command::new(BIN).arg("check").arg(&project).output().unwrap();
-    assert!(check.status.success(), "{}", String::from_utf8_lossy(&check.stdout));
+    assert!(
+        src["source"]["plugin"]
+            .as_str()
+            .unwrap()
+            .ends_with("tests/fixtures/plain"),
+        "{src}"
+    );
+    let check = Command::new(BIN)
+        .arg("check")
+        .arg(&project)
+        .output()
+        .unwrap();
+    assert!(
+        check.status.success(),
+        "{}",
+        String::from_utf8_lossy(&check.stdout)
+    );
 }
