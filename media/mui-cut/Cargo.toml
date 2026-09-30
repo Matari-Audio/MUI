@@ -20,17 +20,22 @@ path = "src/main.rs"
 serde = { version = "1", features = ["derive"] }
 serde_json.workspace = true
 mui-scene = { path = "../../crates/mui-scene" }
-mui-vello = { workspace = true, features = ["cpu"] }
+mui-vello = { workspace = true, features = ["cpu", "gpu-effects"] }
+pollster.workspace = true
 vello_cpu = { version = "0.2", default-features = false, features = ["std", "u8_pipeline", "text"] }
 png.workspace = true
 ttf-inter = { version = "0.1", default-features = false, features = ["v"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2.128"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = ["OffscreenCanvas"] }
+wgpu = { workspace = true, features = ["webgpu", "wgsl"] }
 
 # Sub-frame shutter averaging comes from mui-reel.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 mui-reel = { path = "../mui-reel" }
+wgpu = { workspace = true, features = ["default"] }
 
 [dev-dependencies]
 serde_json.workspace = true

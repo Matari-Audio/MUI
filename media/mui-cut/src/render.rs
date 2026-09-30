@@ -1,4 +1,4 @@
-//! A [`Frame`] to pixels through MUI and Vello CPU. Each layer is its own
+//! A [`Frame`] to pixels through MUI and Vello. Each layer is its own
 //! small MUI tree (a block, a canvas ellipse, a text run, an image block),
 //! resolved and painted under the layer's affine: MUI has no rotation in the
 //! tree, and a per-layer paint transform is exactly what one needs.
@@ -25,18 +25,31 @@ pub struct Quad {
     pub pts: [[f64; 2]; 4],
 }
 
-/// The CPU rasteriser, reused across frames, and the decoded images by the
-/// path the project names them with.
+/// The decoded images, by the path the project names them with, and the
+/// per-layer MUI trees every backend paints.
+#[derive(Default)]
+pub struct Assets {
+    images: HashMap<String, Arc<Image>>,
+}
+
+/// One frame's layers, ready to paint: each resolved tree with where it goes
+/// in project pixels, plus every layer's quad (drawn or not).
+pub struct Layers {
+    pub scenes: Vec<(ResolvedScene, Affine)>,
+    pub quads: Vec<Quad>,
+}
+
+/// The CPU rasteriser, reused across frames.
 pub struct Renderer {
     w: u16,
     h: u16,
     ctx: RenderContext,
     res: Resources,
     cache: mui_vello::Cache,
-    images: HashMap<String, Arc<Image>>,
+    pub assets: Assets,
 }
 
-fn color(c: Rgba) -> Color {
+pub(crate) fn color(c: Rgba) -> Color {
     let [r, g, b, a] = c.0.map(|v| f32::from(v) / 255.);
     Color::srgba(r, g, b, a)
 }
@@ -64,16 +77,53 @@ impl Renderer {
             ctx: RenderContext::new(w.max(1), h.max(1)),
             res: Resources::default(),
             cache: mui_vello::Cache::default(),
-            images: HashMap::new(),
+            assets: Assets::default(),
         }
     }
     pub fn size(&self) -> (u16, u16) {
         (self.w, self.h)
     }
-    /// Keep another renderer's decoded images: a resize needs no re-decode.
-    pub fn take_images(&mut self, other: Self) {
-        self.images.extend(other.images);
+    pub fn add_png(&mut self, path: &str, bytes: &[u8]) -> Result<(), String> {
+        self.assets.add_png(path, bytes)
     }
+
+    /// Straight RGBA at the renderer's size, and each layer's quad in project
+    /// pixels.
+    pub fn draw(&mut self, frame: &Frame) -> Result<(Vec<u8>, Vec<Quad>), String> {
+        let [fw, fh] = frame.size.map(f64::from);
+        let view = Affine::scale_non_uniform(f64::from(self.w) / fw, f64::from(self.h) / fh);
+        self.ctx.reset();
+        self.ctx.set_transform(view);
+        let [r, g, b, a] = frame.background.0;
+        self.ctx
+            .set_paint(mui_vello::peniko::Color::from_rgba8(r, g, b, a));
+        self.ctx.fill_rect(&Rect::new(0., 0., fw, fh));
+        let layers = self.assets.layers(frame)?;
+        for (scene, place) in &layers.scenes {
+            mui_vello::paint(
+                &mut mui_vello::Cpu {
+                    ctx: &mut self.ctx,
+                    resources: &mut self.res,
+                    cache: &mut self.cache,
+                },
+                scene,
+                view * *place,
+            )
+            .map_err(|e| format!("paint: {e:?}"))?;
+        }
+        self.ctx.flush();
+        let mut pix = Pixmap::new(self.w, self.h);
+        self.ctx.render(&mut pix, &mut self.res);
+        let rgba = pix
+            .take_unpremultiplied()
+            .iter()
+            .flat_map(|p| [p.r, p.g, p.b, p.a])
+            .collect();
+        Ok((rgba, layers.quads))
+    }
+}
+
+impl Assets {
     /// Decode a PNG for image layers naming `path`.
     pub fn add_png(&mut self, path: &str, bytes: &[u8]) -> Result<(), String> {
         let err = |e: png::DecodingError| format!("{path}: {e}");
@@ -126,21 +176,13 @@ impl Renderer {
         Ok((scene, size))
     }
 
-    /// Straight RGBA at the renderer's size, and each layer's quad in project
-    /// pixels.
-    pub fn draw(&mut self, frame: &Frame) -> Result<(Vec<u8>, Vec<Quad>), String> {
-        let [fw, fh] = frame.size.map(f64::from);
-        let view = Affine::scale_non_uniform(f64::from(self.w) / fw, f64::from(self.h) / fh);
-        self.ctx.reset();
-        self.ctx.set_transform(view);
-        self.ctx.set_paint(mui_vello::peniko::Color::from_rgba8(
-            frame.background.0[0],
-            frame.background.0[1],
-            frame.background.0[2],
-            frame.background.0[3],
-        ));
-        self.ctx.fill_rect(&Rect::new(0., 0., fw, fh));
-        let mut quads = Vec::with_capacity(frame.layers.len());
+    /// Every layer of `frame` resolved and placed, bottom first. A layer
+    /// with no opacity or no scale keeps its quad but is not drawn.
+    pub fn layers(&self, frame: &Frame) -> Result<Layers, String> {
+        let mut out = Layers {
+            scenes: Vec::with_capacity(frame.layers.len()),
+            quads: Vec::with_capacity(frame.layers.len()),
+        };
         for l in &frame.layers {
             let (scene, size) = self.element(l)?;
             let place = Affine::translate((l.x, l.y))
@@ -153,35 +195,17 @@ impl Renderer {
                 (size.width, size.height),
                 (0., size.height),
             ];
-            quads.push(Quad {
+            out.quads.push(Quad {
                 id: l.id.clone(),
                 pts: corners.map(|(x, y)| {
                     let p = place * KPoint::new(x, y);
                     [p.x, p.y]
                 }),
             });
-            if l.opacity <= 0. || l.scale == 0. {
-                continue;
+            if l.opacity > 0. && l.scale != 0. {
+                out.scenes.push((scene, place));
             }
-            mui_vello::paint(
-                &mut mui_vello::Cpu {
-                    ctx: &mut self.ctx,
-                    resources: &mut self.res,
-                    cache: &mut self.cache,
-                },
-                &scene,
-                view * place,
-            )
-            .map_err(|e| format!("paint `{}`: {e:?}", l.id))?;
         }
-        self.ctx.flush();
-        let mut pix = Pixmap::new(self.w, self.h);
-        self.ctx.render(&mut pix, &mut self.res);
-        let rgba = pix
-            .take_unpremultiplied()
-            .iter()
-            .flat_map(|p| [p.r, p.g, p.b, p.a])
-            .collect();
-        Ok((rgba, quads))
+        Ok(out)
     }
 }

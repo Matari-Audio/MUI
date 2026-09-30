@@ -25,8 +25,8 @@ cargo run --manifest-path media/Cargo.toml -p mui-cut -- \
 ## Commands
 
 ```sh
-mui-cut render PROJECT -o out.mp4 [--scene NAME] [--mb N] [--size WxH]
-mui-cut still  PROJECT --t 1.5 -o f.png [--scene NAME] [--size WxH]
+mui-cut render PROJECT -o out.mp4|null [--scene NAME] [--mb N] [--size WxH] [--cpu]
+mui-cut still  PROJECT --t 1.5 -o f.png [--scene NAME] [--size WxH] [--cpu]
 mui-cut eval   PROJECT --t 1.5 [--scene NAME]     # every layer's values, JSON
 mui-cut fmt    PROJECT                            # rewrite in canonical form
 mui-cut serve  PROJECT [--port 8740] [--web DIR]
@@ -35,7 +35,15 @@ mui-cut serve  PROJECT [--port 8740] [--web DIR]
 - `render` plays every scene back to back (or just `--scene`), pipes frames
   to `ffmpeg` (H.264, CRF 16) and needs it on `PATH`. `--mb N` renders N
   subframes across a 180-degree shutter and averages them in linear light
-  (mui-reel's shutter). `--size` scales the whole frame.
+  (mui-reel's shutter). `--size` scales the whole frame. `-o null` renders
+  without writing a file (ffmpeg's null muxer), for benchmarks.
+- `render` and `still` draw on the GPU by default: MUI's Vello GPU renderer,
+  kept alive across frames. Motion blur adds each subframe into an
+  `Rgba16Float` texture (`src/shutter.wgsl`), one readback per output frame
+  through a ring of three staging buffers, so the GPU draws the next frame
+  while the last goes to ffmpeg. `--cpu` (or no GPU adapter) uses Vello CPU.
+  1920x1080 `--mb 8` on an RX 6600: about 45 frames/s on the GPU against
+  1.7 on the CPU.
 - `still` is the agent's eyes: one PNG of one scene at one time, seconds from
   the scene's start.
 - `eval` prints what the evaluator computes at a time, for checking numbers
@@ -153,6 +161,9 @@ announces edits made by someone else.
   `block`, a `canvas` ellipse, a `text`, an image `block`) resolved by
   mui-scene and painted by `mui_vello::paint` on Vello CPU under the layer's
   affine, since MUI trees have no rotation.
+- `src/gpu.rs`, `src/shutter.wgsl`: the same layers on MUI's `GpuRenderer`
+  (`GpuCanvas`, shared with the web), plus `Offline`: the float shutter and
+  readback ring behind `render`/`still`.
 - `src/web.rs`: the wasm-bindgen handle (`Cut`).
 - `src/main.rs`, `src/serve.rs`: the native CLI and the std-only local server.
 - `web/`: the editor shell (HTML/CSS/JS panels around the WASM viewport).

@@ -162,3 +162,45 @@ fn the_renderer_draws_layers_where_eval_puts_them() {
     let (later, _) = r.draw(&eval(&p, shapes, 1.)).unwrap();
     assert_ne!(px, later);
 }
+
+/// The GPU path (ring readback, float shutter) matches the CPU path, frame
+/// for frame and in order. Skips on a machine with no GPU adapter.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn gpu_frames_match_the_cpu_in_order() {
+    let p = Project::load(DEMO).unwrap();
+    let s = p.scene("shapes").unwrap();
+    let mut gpu = match Offline::new([320, 180]) {
+        Ok(g) => g,
+        Err(e) => return eprintln!("skipped: no GPU ({e})"),
+    };
+    let mut cpu = Renderer::new(320, 180);
+    // Five frames through a ring of three, four subframes each, mid-motion.
+    let frames: Vec<Vec<Frame>> = (0..5)
+        .map(|i| {
+            (0..4)
+                .map(|k| eval(&p, s, 0.5 + f64::from(i) * 0.1 + f64::from(k) * 0.02))
+                .collect()
+        })
+        .collect();
+    let mut got = Vec::new();
+    for subs in &frames {
+        got.extend(gpu.push(subs).unwrap());
+    }
+    got.extend(gpu.finish().unwrap());
+    assert_eq!(got.len(), frames.len());
+    for (subs, g) in frames.iter().zip(&got) {
+        let mut acc = vec![0.; 320 * 180 * 4];
+        for f in subs {
+            mui_reel::accumulate(&mut acc, &cpu.draw(f).unwrap().0);
+        }
+        let c = mui_reel::resolve(&acc, subs.len());
+        let off = g
+            .iter()
+            .zip(&c)
+            .filter(|(a, b)| a.abs_diff(**b) > 8)
+            .count();
+        // Antialiasing differs a little at edges; the frames must not.
+        assert!(off < c.len() / 500, "{off} channels differ");
+    }
+}

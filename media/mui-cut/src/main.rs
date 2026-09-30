@@ -1,7 +1,7 @@
 //! `mui-cut`: render, look at, tidy and serve a `*.cut.json` project.
 //!
-//!     mui-cut render demo.cut.json -o out.mp4 [--scene NAME] [--mb N] [--size WxH]
-//!     mui-cut still  demo.cut.json --t 1.5 -o f.png [--scene NAME] [--size WxH]
+//!     mui-cut render demo.cut.json -o out.mp4 [--scene NAME] [--mb N] [--size WxH] [--cpu]
+//!     mui-cut still  demo.cut.json --t 1.5 -o f.png [--scene NAME] [--size WxH] [--cpu]
 //!     mui-cut eval   demo.cut.json --t 1.5 [--scene NAME]
 //!     mui-cut fmt    demo.cut.json
 //!     mui-cut serve  demo.cut.json [--port 8740] [--web DIR]
@@ -13,13 +13,13 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use mui_cut::{Kind, Project, Renderer, Scene, eval};
+use mui_cut::{Frame, Kind, Offline, Project, Renderer, Scene, eval};
 
 type Result<T> = std::result::Result<T, String>;
 
 const USAGE: &str = "usage:
-  mui-cut render PROJECT -o OUT.mp4 [--scene NAME] [--mb N] [--size WxH]
-  mui-cut still  PROJECT --t SECONDS -o OUT.png [--scene NAME] [--size WxH]
+  mui-cut render PROJECT -o OUT.mp4|null [--scene NAME] [--mb N] [--size WxH] [--cpu]
+  mui-cut still  PROJECT --t SECONDS -o OUT.png [--scene NAME] [--size WxH] [--cpu]
   mui-cut eval   PROJECT --t SECONDS [--scene NAME]
   mui-cut fmt    PROJECT
   mui-cut serve  PROJECT [--port 8740] [--web DIR]";
@@ -35,6 +35,9 @@ impl Args {
             .iter()
             .find(|(k, _)| k == name)
             .map(|(_, v)| v.as_str())
+    }
+    fn has(&self, name: &str) -> bool {
+        self.get(name).is_some()
     }
     fn num<T: std::str::FromStr>(&self, name: &str, default: T) -> Result<T> {
         self.get(name).map_or(Ok(default), |v| {
@@ -63,6 +66,11 @@ fn run(argv: &[String]) -> Result<()> {
             .strip_prefix("--")
             .or_else(|| (k == "-o").then_some("o"))
             .ok_or_else(|| format!("unexpected `{k}`\n{USAGE}"))?;
+        // The switches take no value.
+        if name == "cpu" {
+            flags.push((name.to_owned(), String::new()));
+            continue;
+        }
         let v = rest.next().ok_or_else(|| format!("{k} needs a value"))?;
         flags.push((name.to_owned(), v.clone()));
     }
@@ -136,21 +144,73 @@ fn size(p: &Project, args: &Args) -> Result<(u16, u16)> {
     Ok((even(w)?, even(h)?))
 }
 
-/// A renderer with every image layer's PNG, read relative to the project.
-fn renderer(p: &Project, project: &Path, (w, h): (u16, u16)) -> Renderer {
-    let mut r = Renderer::new(w, h);
-    let dir = project.parent().unwrap_or(Path::new("."));
-    for l in p.scenes.iter().flat_map(|s| &s.layers) {
-        if let Kind::Image { path } = &l.kind {
-            let loaded = std::fs::read(dir.join(path))
-                .map_err(|e| e.to_string())
-                .and_then(|b| r.add_png(path, &b));
-            if let Err(e) = loaded {
-                eprintln!("mui-cut: image `{path}`: {e} (drawn as its fill)");
+/// Where frames are drawn: MUI's GPU renderer by default, Vello CPU with
+/// `--cpu` or when no GPU adapter opens.
+enum Backend {
+    Cpu(Box<Renderer>, Vec<f32>),
+    Gpu(Box<Offline>),
+}
+
+impl Backend {
+    fn open(p: &Project, project: &Path, (w, h): (u16, u16), cpu: bool) -> Self {
+        let mut b = if cpu {
+            Self::Cpu(Box::new(Renderer::new(w, h)), Vec::new())
+        } else {
+            match Offline::new([w.into(), h.into()]) {
+                Ok(g) => Self::Gpu(Box::new(g)),
+                Err(e) => {
+                    eprintln!("mui-cut: GPU unavailable ({e}); rendering on the CPU");
+                    Self::Cpu(Box::new(Renderer::new(w, h)), Vec::new())
+                }
+            }
+        };
+        let assets = match &mut b {
+            Self::Cpu(r, _) => &mut r.assets,
+            Self::Gpu(g) => &mut g.assets,
+        };
+        let dir = project.parent().unwrap_or(Path::new("."));
+        for l in p.scenes.iter().flat_map(|s| &s.layers) {
+            if let Kind::Image { path } = &l.kind {
+                let loaded = std::fs::read(dir.join(path))
+                    .map_err(|e| e.to_string())
+                    .and_then(|b| assets.add_png(path, &b));
+                if let Err(e) = loaded {
+                    eprintln!("mui-cut: image `{path}`: {e} (drawn as its fill)");
+                }
+            }
+        }
+        b
+    }
+    fn name(&self) -> String {
+        match self {
+            Self::Cpu(..) => "cpu (vello_cpu)".into(),
+            Self::Gpu(g) => format!("gpu ({})", g.adapter),
+        }
+    }
+    /// One output frame from its subframes; the GPU hands frames back a few
+    /// behind, the CPU at once.
+    fn push(&mut self, subs: &[Frame]) -> Result<Option<Vec<u8>>> {
+        match self {
+            Self::Gpu(g) => g.push(subs),
+            Self::Cpu(r, _) if subs.len() == 1 => Ok(Some(r.draw(&subs[0])?.0)),
+            Self::Cpu(r, acc) => {
+                // mui-reel's shutter: subframes averaged in linear light.
+                let (w, h) = r.size();
+                acc.clear();
+                acc.resize(usize::from(w) * usize::from(h) * 4, 0.);
+                for f in subs {
+                    mui_reel::accumulate(acc, &r.draw(f)?.0);
+                }
+                Ok(Some(mui_reel::resolve(acc, subs.len())))
             }
         }
     }
-    r
+    fn finish(&mut self) -> Result<Vec<Vec<u8>>> {
+        match self {
+            Self::Gpu(g) => g.finish(),
+            Self::Cpu(..) => Ok(Vec::new()),
+        }
+    }
 }
 
 fn still(args: &Args) -> Result<()> {
@@ -158,14 +218,19 @@ fn still(args: &Args) -> Result<()> {
     let s = scene(&p, args)?;
     let out = args.get("o").ok_or("still needs -o OUT.png")?;
     let (w, h) = size(&p, args)?;
-    let (px, _) = renderer(&p, &args.project, (w, h)).draw(&eval(&p, s, args.num("t", 0.)?))?;
+    let mut b = Backend::open(&p, &args.project, (w, h), args.has("cpu"));
+    let f = eval(&p, s, args.num("t", 0.)?);
+    let px = match b.push(std::slice::from_ref(&f))? {
+        Some(px) => px,
+        None => b.finish()?.pop().ok_or("no frame came back")?,
+    };
     let file = std::fs::File::create(out).map_err(|e| format!("{out}: {e}"))?;
     let mut enc = png::Encoder::new(std::io::BufWriter::new(file), w.into(), h.into());
     enc.set_color(png::ColorType::Rgba);
     enc.write_header()
         .and_then(|mut w| w.write_image_data(&px))
         .map_err(|e| format!("{out}: {e}"))?;
-    println!("wrote {out}");
+    println!("wrote {out} ({})", b.name());
     Ok(())
 }
 
@@ -182,59 +247,71 @@ fn render(args: &Args) -> Result<()> {
     let (w, h) = size(&p, args)?;
     let mb: usize = args.num("mb", 1)?;
     let mb = mb.clamp(1, 64);
-    let mut r = renderer(&p, &args.project, (w, h));
-    let mut ff = Command::new("ffmpeg")
-        .args([
-            "-y",
-            "-loglevel",
-            "error",
-            "-f",
-            "rawvideo",
-            "-pix_fmt",
-            "rgba",
-        ])
-        .args([
-            "-s",
-            &format!("{w}x{h}"),
-            "-r",
-            &p.fps.to_string(),
-            "-i",
-            "-",
-        ])
-        .args(["-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "16"])
-        .args(["-movflags", "+faststart", out])
+    let mut b = Backend::open(&p, &args.project, (w, h), args.has("cpu"));
+    let mut ff = Command::new("ffmpeg");
+    ff.args([
+        "-y",
+        "-loglevel",
+        "error",
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        "rgba",
+    ])
+    .args([
+        "-s",
+        &format!("{w}x{h}"),
+        "-r",
+        &p.fps.to_string(),
+        "-i",
+        "-",
+    ]);
+    // `-o null` renders and discards: the renderer's speed without x264's.
+    if out == "null" {
+        ff.args(["-f", "null", "-"]);
+    } else {
+        ff.args(["-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "16"])
+            .args(["-movflags", "+faststart", out]);
+    }
+    let mut ff = ff
         .stdin(Stdio::piped())
         .spawn()
         .map_err(|e| format!("ffmpeg: {e} (is it on PATH?)"))?;
     let stdin = ff.stdin.as_mut().ok_or("ffmpeg stdin")?;
+    let mut write = |px: &[u8]| {
+        stdin
+            .write_all(px)
+            .map_err(|e| format!("ffmpeg stdin: {e}"))
+    };
+    let start = std::time::Instant::now();
     let mut frames = 0usize;
-    let mut acc = vec![0f32; usize::from(w) * usize::from(h) * 4];
     for s in scenes {
         let n = (s.duration * p.fps).round().max(1.) as usize;
         for i in 0..n {
             let t = i as f64 / p.fps;
-            let px = if mb == 1 {
-                r.draw(&eval(&p, s, t))?.0
-            } else {
-                // mui-reel's shutter: subframes averaged in linear light.
-                acc.fill(0.);
-                for k in 0..mb {
-                    let sub = t + SHUTTER / p.fps * k as f64 / mb as f64;
-                    mui_reel::accumulate(&mut acc, &r.draw(&eval(&p, s, sub))?.0);
-                }
-                mui_reel::resolve(&acc, mb)
-            };
-            stdin
-                .write_all(&px)
-                .map_err(|e| format!("ffmpeg stdin: {e}"))?;
+            let subs: Vec<Frame> = (0..mb)
+                .map(|k| eval(&p, s, t + SHUTTER / p.fps * k as f64 / mb as f64))
+                .collect();
+            if let Some(px) = b.push(&subs)? {
+                write(&px)?;
+            }
             frames += 1;
         }
+    }
+    for px in b.finish()? {
+        write(&px)?;
     }
     drop(ff.stdin.take());
     let ok = ff.wait().map_err(|e| e.to_string())?.success();
     if !ok {
         return Err(format!("ffmpeg failed writing {out}"));
     }
-    println!("wrote {out}: {frames} frames, {w}x{h} at {} fps", p.fps);
+    let secs = start.elapsed().as_secs_f64();
+    println!(
+        "wrote {out}: {frames} frames, {w}x{h} at {} fps, mb {mb}, {} in {secs:.2} s = {:.1} frames/s",
+        p.fps,
+        b.name(),
+        frames as f64 / secs
+    );
     Ok(())
 }

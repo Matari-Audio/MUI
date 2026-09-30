@@ -8,11 +8,15 @@
 //! editor viewport are the same pixels.
 #![forbid(unsafe_code)]
 
+mod gpu;
 mod render;
 #[cfg(target_arch = "wasm32")]
 mod web;
 
-pub use render::{Quad, Renderer};
+pub use gpu::GpuCanvas;
+#[cfg(not(target_arch = "wasm32"))]
+pub use gpu::Offline;
+pub use render::{Assets, Layers, Quad, Renderer};
 
 use serde::{Deserialize, Serialize};
 

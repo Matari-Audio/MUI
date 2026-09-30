@@ -49,8 +49,9 @@ impl Cut {
         let p = self.project.as_ref().ok_or("no project loaded")?;
         let s = p.scenes.get(scene).ok_or("no such scene")?;
         if self.renderer.size() != (w, h) {
-            let images = std::mem::replace(&mut self.renderer, Renderer::new(w, h));
-            self.renderer.take_images(images);
+            let assets = std::mem::take(&mut self.renderer.assets);
+            self.renderer = Renderer::new(w, h);
+            self.renderer.assets = assets;
         }
         let (px, quads) = self.renderer.draw(&eval(p, s, t))?;
         self.quads = serde_json::to_string(&quads).map_err(|e| e.to_string())?;
