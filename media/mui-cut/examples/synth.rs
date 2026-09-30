@@ -13,7 +13,7 @@ use mui::prelude::*;
 use serde_json::{Value, json};
 
 const W: f64 = 720.;
-const H: f64 = 460.;
+const H: f64 = 510.;
 /// Captured at twice the UI's pixels, so a part filmed up close stays sharp.
 const SCALE: f64 = 2.;
 
@@ -127,15 +127,12 @@ fn view(ui: &mut Ui, m: &mut Model) -> El {
     );
     let filter = panel(
         "filter",
-        col([
-            row([
-                dial(ui, m, ("filter", "cutoff"), "Cutoff"),
-                dial(ui, m, ("filter", "res"), "Res"),
-            ])
-            .gap(18.),
-            fader(ui, m, ("filter", "drive"), "Drive"),
+        row([
+            dial(ui, m, ("filter", "cutoff"), "Cutoff"),
+            dial(ui, m, ("filter", "res"), "Res"),
+            dial(ui, m, ("filter", "drive"), "Drive"),
         ])
-        .gap(10.),
+        .gap(18.),
     );
     let env = panel(
         "env",

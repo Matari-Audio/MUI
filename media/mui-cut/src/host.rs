@@ -323,6 +323,7 @@ fn save(
         width: num(&manifest["width"])?,
         height: num(&manifest["height"])?,
         fragments,
+        surfaces: serde_json::from_value(manifest["surfaces"].clone()).unwrap_or_default(),
         stamp: stamp.to_owned(),
     };
     let json = serde_json::to_vec_pretty(&cap).map_err(|e| e.to_string())?;

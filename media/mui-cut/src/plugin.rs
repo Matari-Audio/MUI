@@ -277,9 +277,22 @@ pub struct Capture {
     pub height: f64,
     #[serde(rename = "layers")]
     pub fragments: Vec<Fragment>,
+    /// Every surface of the UI: what `select` and the pointer can aim at.
+    #[serde(default)]
+    pub surfaces: Vec<Surface>,
     /// The adapter build this came from; a rebuilt adapter recaptures.
     #[serde(default)]
     pub stamp: String,
+}
+
+/// A resolved surface of the plugin's UI.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Surface {
+    pub id: String,
+    #[serde(default)]
+    pub parent: Option<String>,
+    /// `[x, y, w, h]` in the UI's pixels.
+    pub frame: [f64; 4],
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

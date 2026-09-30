@@ -34,7 +34,7 @@ pub use motion::{
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use pool::{CpuPool, shutter};
-pub use plugin::{Capture, Fragment, Param, Part, PartAt, PluginAt, Source, Step};
+pub use plugin::{Capture, Fragment, Param, Part, PartAt, PluginAt, Source, Step, Surface};
 pub use render::{Assets, Layers, Quad, Renderer};
 pub use shutter::Shutter;
 pub use three::{Cam, Fog, Ground, Lamp, Mode, View};
