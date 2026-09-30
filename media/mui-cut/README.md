@@ -382,6 +382,21 @@ mesh. Scenes without it render exactly as before.
 
 See `examples/stage3d.cut.json`.
 
+#### Beauty renders in mui-stage
+
+`--quality beauty` (or `--samples N`) on `render` and `still` draws each 3D
+frame as the mean of N samples (64 by default) through the same shutter as
+motion blur. Each sample moves the pixel by a subpixel offset, the eye across
+a thin lens (depth of field from the camera's `focus` and `aperture`), every
+shadowing light across its area (the sizes Blender gives the same
+`softness`) and turns the occlusion's slices, from a fixed Halton sequence,
+so renders repeat exactly. With `--mb N` the samples are spread across the
+shutter instead of drawn N times per subframe. At 1080p on an RX 6600 the
+stage example takes ~135 ms a frame at 64 samples, against ~4 ms normal and
+~870 ms in EEVEE. **Beauty** in the editor's header does the same on
+WebGPU while paused: every draw folds in one more sample (up to 256), and
+any change or playing goes back to normal frames.
+
 #### Beauty renders in Blender
 
 `--renderer blender` (on `render` and `still`) draws a 3D scene in Blender

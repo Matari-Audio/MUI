@@ -36,6 +36,12 @@ ffmpeg_stdin.write_all(&frame.rgba8())?;                  // or rgba16() for a 1
   background from bleeding over a sharp edge.
 - **Reel camera.** `Camera::punch(canvas, centre, zoom)` is the reel's 2D
   punch-in in 3D; orbit after it and the subject stays centred.
+- **Beauty.** `Stage::beauty(t, shutter, n, shot)` is `render` with every
+  subframe also a sample (`Shot::sample`): a subpixel offset, a thin lens
+  instead of the post blur, lights moved across their area (soft shadows
+  with true penumbrae) and turned GTAO, from a fixed Halton sequence.
+- **Environment.** `Stage::environment` convolves the GGX chain on the GPU
+  (`env.wgsl`); `env::prefilter` is the CPU reference the tests hold it to.
 - **Background.** `Stage::background(wgsl)` replaces the background with
   `fn background(uv: vec2f, t: f32) -> vec3f`, with `noise`, `fbm` and
   `hash2` in scope. A shader that does not compile returns an error and
