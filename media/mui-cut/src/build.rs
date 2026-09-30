@@ -488,8 +488,16 @@ pub fn adapter(plugin: &str, project_dir: &Path) -> Result<PathBuf> {
     let root = mui_root();
     let local = local_crates(&root);
     let mut used = p.mui.clone();
-    // The adapter's own MUI (the headless hook is in it).
+    // The adapter's own MUI (the headless hook is in it), and whatever the
+    // plugin patches of MUI's that this tree has: this tree wins.
     used.push("mui".into());
+    let root_manifest =
+        std::fs::read_to_string(p.workspace_root.join("Cargo.toml")).unwrap_or_default();
+    used.extend(
+        mui_patches(&root_manifest)
+            .into_iter()
+            .filter(|c| local.contains_key(c)),
+    );
     used.sort();
     used.dedup();
     let config = patch_config(&used, &local)?;
@@ -673,6 +681,20 @@ fn patches(manifest: &str, root: &Path, patched: &[String]) -> String {
         }
         out.push_str(&absolute_paths(t, root));
         out.push('\n');
+    }
+    out
+}
+
+/// The crates a manifest's `[patch."<MUI>"]` table replaces.
+fn mui_patches(manifest: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut inside = false;
+    for t in manifest.lines().map(str::trim) {
+        if t.starts_with('[') {
+            inside = t.starts_with("[patch") && t.contains(MUI_GIT);
+        } else if inside && !t.is_empty() && !t.starts_with('#') {
+            out.extend(t.split('=').next().map(|k| k.trim().to_owned()));
+        }
     }
     out
 }
@@ -867,6 +889,7 @@ mui-truce = { git = "https://github.com/Matari-Audio/MUI", branch = "revamp" }
     fn copies_the_plugins_patches_but_not_over_local_mui() {
         let manifest = "[package]\nname = \"k\"\n\n[patch.\"https://github.com/Matari-Audio/moose\"]\nmoose-mui = { path = \"vendor/moose-mui\" }\n\n\
                         # a fork\n[patch.\"https://github.com/Matari-Audio/MUI\"]\nvello = { path = \"vendor/vello\" }\nmui-baseview = { path = \"vendor/mui-baseview\" }\n\n[workspace]\nmembers = [\".\"]\n";
+        assert_eq!(mui_patches(manifest), ["vello", "mui-baseview"]);
         let out = patches(manifest, Path::new("/k"), &["mui-baseview".into()]);
         assert_eq!(
             out,
