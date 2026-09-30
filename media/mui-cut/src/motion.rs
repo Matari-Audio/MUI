@@ -8,7 +8,9 @@ use crate::{Anim, Rgba};
 
 /// What one step of an animator's selector is, for text. A duplicator's
 /// steps are always its copies.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum Unit {
     #[default]
@@ -20,7 +22,9 @@ pub enum Unit {
 /// How a selector's weight falls off across its range, evaluated at each
 /// unit's centre (After Effects' range selector shapes). `square` instead
 /// weighs a unit by how much of it the range covers.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum Falloff {
     #[default]
@@ -34,7 +38,9 @@ pub enum Falloff {
 
 /// A curve on the selector's weight. `step` makes it all or nothing (a
 /// unit counts once the range covers half of it): the typewriter's cut.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum Ease {
     #[default]
@@ -47,7 +53,9 @@ pub enum Ease {
 
 /// The order units are ranked in: where each sits in the range, and how
 /// much of the stagger delay it gets.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum Order {
     #[default]
@@ -86,7 +94,7 @@ fn is_default<T: Default + PartialEq>(v: &T) -> bool {
 /// A unit's weight is `amount * ease(falloff)`, all read at the unit's own
 /// time `t - rank * stagger`. `start`, `end` and `offset` are fractions of
 /// the units, 0..1: the range is `[start + offset, end + offset]`.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Animator {
     #[serde(default, skip_serializing_if = "is_default")]
     pub by: Unit,
@@ -374,7 +382,7 @@ pub fn text_units(text: &str, by: Unit) -> Vec<usize> {
 /// A deformer: moves every point of the layer's shapes (after copies,
 /// animators and trim), in the layer's own pixels around its origin. Paths
 /// are subdivided first, so even a rectangle bends.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum Deformer {
     /// Seeded gradient noise: each point moves up to `amount` pixels;

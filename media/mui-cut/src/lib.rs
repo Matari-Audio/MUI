@@ -8,6 +8,7 @@
 //! editor viewport are the same pixels.
 #![forbid(unsafe_code)]
 
+pub mod check;
 mod gpu;
 mod motion;
 #[cfg(not(target_arch = "wasm32"))]
@@ -31,8 +32,12 @@ pub use render::{Assets, Layers, Quad, Renderer};
 use serde::{Deserialize, Serialize};
 
 /// The whole file.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Project {
+    /// The JSON Schema this file validates against (`mui-cut schema`), kept
+    /// as written so editors and agents can find it.
+    #[serde(rename = "$schema", default, skip_serializing_if = "Option::is_none")]
+    pub schema: Option<String>,
     /// Output pixels, `[width, height]`; layer coordinates are in these.
     pub size: [u32; 2],
     pub fps: f64,
@@ -40,7 +45,7 @@ pub struct Project {
 }
 
 /// One shot. Scenes play back to back in a render.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Scene {
     pub name: String,
     /// Seconds.
@@ -53,7 +58,7 @@ pub struct Scene {
 }
 
 /// What a layer draws.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum Kind {
     Rect,
@@ -105,7 +110,9 @@ pub enum Kind {
 }
 
 /// Text line alignment.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum Align {
     Left,
@@ -115,7 +122,9 @@ pub enum Align {
 }
 
 /// A duplicator's copy.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum Shape {
     #[default]
@@ -126,7 +135,9 @@ pub enum Shape {
 }
 
 /// Where a duplicator's copies go, centred on the layer's origin.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum Layout {
     /// `columns` wide, `spacing_x` by `spacing_y` apart.
@@ -159,7 +170,7 @@ fn is_yes(v: &bool) -> bool {
 /// One layer. Every property is either a plain value or a list of keys; `x`
 /// and `y` are the layer's centre, which is also its rotation and scale pivot.
 /// A property left out is its default, and a save leaves defaults out.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Layer {
     pub id: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -422,40 +433,55 @@ impl Layer {
 ///
 /// Loading sorts keys by time and refuses an empty list or a non-finite
 /// number, wherever the property sits (a layer, an animator, a deformer).
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, schemars::JsonSchema)]
 #[serde(untagged)]
+#[schemars(rename = "Anim_{T}")]
 pub enum Anim<T> {
     Value(T),
     Keys(Vec<Key<T>>),
 }
 
-impl<'de, T: Tween + Deserialize<'de>> Deserialize<'de> for Anim<T> {
+impl<'de, T: Tween + serde::de::DeserializeOwned> Deserialize<'de> for Anim<T> {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         use serde::de::Error;
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum Raw<T> {
-            Value(T),
-            Keys(Vec<Key<T>>),
-        }
-        let a = match Raw::<T>::deserialize(d)? {
-            Raw::Value(v) if !v.finite() => return Err(D::Error::custom("a non-finite value")),
-            Raw::Value(v) => Self::Value(v),
-            Raw::Keys(k) if k.is_empty() => return Err(D::Error::custom("an empty key list")),
-            Raw::Keys(mut k) => {
-                if k.iter().any(|k| {
-                    !k.t.is_finite()
-                        || !k.v.finite()
-                        || k.in_
+        // Through a JSON value rather than an untagged enum, so a mistake
+        // says which key and what is wrong with it, not "no variant matched".
+        let raw = serde_json::Value::deserialize(d)?;
+        let a = match raw {
+            serde_json::Value::Array(keys) => {
+                if keys.is_empty() {
+                    return Err(D::Error::custom("an empty key list"));
+                }
+                let mut k = Vec::with_capacity(keys.len());
+                for (i, key) in keys.into_iter().enumerate() {
+                    let key: Key<T> = serde_json::from_value(key)
+                        .map_err(|e| D::Error::custom(format!("key [{i}]: {e}")))?;
+                    let finite = key.t.is_finite()
+                        && key.v.finite()
+                        && key
+                            .in_
                             .into_iter()
-                            .chain(k.out)
+                            .chain(key.out)
                             .flatten()
-                            .any(|x| !x.is_finite())
-                }) {
-                    return Err(D::Error::custom("a non-finite key"));
+                            .all(f64::is_finite);
+                    if !finite {
+                        return Err(D::Error::custom(format!("key [{i}]: a non-finite number")));
+                    }
+                    k.push(key);
                 }
                 k.sort_by(|a, b| a.t.total_cmp(&b.t));
                 Self::Keys(k)
+            }
+            v => {
+                let v: T = serde_json::from_value(v).map_err(|e| {
+                    D::Error::custom(format!(
+                        "expected a value or a list of keys [{{\"t\": .., \"v\": ..}}]: {e}"
+                    ))
+                })?;
+                if !v.finite() {
+                    return Err(D::Error::custom("a non-finite value"));
+                }
+                Self::Value(v)
             }
         };
         Ok(a)
@@ -463,7 +489,9 @@ impl<'de, T: Tween + Deserialize<'de>> Deserialize<'de> for Anim<T> {
 }
 
 /// How the segment *leaving* a key gets to the next one.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum Interp {
     /// Stay on this key's value until the next key, then cut.
@@ -479,7 +507,8 @@ pub enum Interp {
 /// backward (seconds <= 0). A missing handle is a third of the segment, flat:
 /// an ease. Handle times are clamped inside their segment, which keeps time
 /// monotone however they are dragged.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(rename = "Key_{T}")]
 pub struct Key<T> {
     pub t: f64,
     pub v: T,
@@ -498,6 +527,18 @@ pub struct Rgba(pub [u8; 4]);
 impl Rgba {
     fn bg() -> Self {
         Self([16, 16, 20, 255])
+    }
+}
+impl schemars::JsonSchema for Rgba {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "Rgba".into()
+    }
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "description": "`#rrggbb` or `#rrggbbaa`, straight sRGB.",
+            "type": "string",
+            "pattern": "^#?([0-9a-fA-F]{6}|[0-9a-fA-F]{8})$"
+        })
     }
 }
 impl TryFrom<String> for Rgba {
@@ -755,27 +796,48 @@ impl Project {
     /// Parse and check a project: keys sorted by time, no empty key lists,
     /// finite numbers, positive size, fps and durations, unique layer ids,
     /// path data that parses.
+    ///
+    /// Every error starts with the JSON path it is about
+    /// (`scenes[0].layers[2].x: key [1]: ...`), then serde's line and column
+    /// where there is one.
     pub fn load(json: &str) -> Result<Self, String> {
-        let mut p: Self = serde_json::from_str(json).map_err(|e| e.to_string())?;
+        let de = &mut serde_json::Deserializer::from_str(json);
+        let p: Self = serde_path_to_error::deserialize(de).map_err(|e| {
+            let path = e.path().to_string();
+            if path == "." {
+                e.into_inner().to_string()
+            } else {
+                format!("{path}: {}", e.into_inner())
+            }
+        })?;
         if p.size[0] == 0 || p.size[1] == 0 || p.size[0] > 8192 || p.size[1] > 8192 {
-            return Err("size must be 1..=8192 pixels each way".into());
+            return Err("size: must be 1..=8192 pixels each way".into());
         }
         if !(p.fps.is_finite() && p.fps > 0. && p.fps <= 240.) {
-            return Err("fps must be in (0, 240]".into());
+            return Err("fps: must be in (0, 240]".into());
         }
-        for s in &mut p.scenes {
+        for (si, s) in p.scenes.iter().enumerate() {
             if !(s.duration.is_finite() && s.duration > 0.) {
-                return Err(format!("scene `{}`: duration must be > 0", s.name));
+                return Err(format!(
+                    "scenes[{si}].duration: scene `{}`: duration must be > 0",
+                    s.name
+                ));
             }
             let mut ids = std::collections::HashSet::new();
-            for l in &mut s.layers {
+            for (li, l) in s.layers.iter().enumerate() {
+                let at = format!("scenes[{si}].layers[{li}]");
                 if !ids.insert(l.id.clone()) {
-                    return Err(format!("scene `{}`: duplicate layer id `{}`", s.name, l.id));
+                    return Err(format!(
+                        "{at}.id: scene `{}`: duplicate layer id `{}`",
+                        s.name, l.id
+                    ));
                 }
                 let id = &l.id;
                 let bad = |what: &str, d: &str| -> Result<(), String> {
                     if !d.is_empty() && mui_vello::kurbo::BezPath::from_svg(d).is_err() {
-                        return Err(format!("layer `{id}`: `{what}` is not SVG path data"));
+                        return Err(format!(
+                            "{at}.{what}: layer `{id}`: `{what}` is not SVG path data"
+                        ));
                     }
                     Ok(())
                 };
@@ -786,13 +848,19 @@ impl Project {
                         bad("along", along)?;
                     }
                     Kind::Lottie { speed, .. } if !speed.is_finite() => {
-                        return Err(format!("layer `{id}`: `speed` must be finite"));
+                        return Err(format!("{at}.speed: layer `{id}`: `speed` must be finite"));
                     }
                     _ => {}
                 }
             }
         }
         Ok(p)
+    }
+
+    /// The project file's JSON Schema, generated from these types: what
+    /// `mui-cut schema` prints and a file's `$schema` points at.
+    pub fn json_schema() -> serde_json::Value {
+        schemars::schema_for!(Project).to_value()
     }
     /// Pretty JSON in the struct's field order, one keyframe a line, so a
     /// save diffs cleanly and reads like the hand-written examples.
