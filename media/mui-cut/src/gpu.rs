@@ -282,6 +282,7 @@ mod offline {
     use super::{Engine, GpuCanvas};
     use crate::Frame;
     use crate::render::Assets;
+    use crate::yuv::Yuv;
 
     /// Staging buffers in flight: the GPU can be two frames ahead of the
     /// frame being read back.
@@ -309,6 +310,17 @@ mod offline {
         ring: Vec<wgpu::Buffer>,
         pending: VecDeque<(usize, wgpu::SubmissionIndex, Mapped)>,
         next: usize,
+        yuv: Option<YuvPass>,
+    }
+
+    /// The compute pass from the float sum to 4:2:0 planes.
+    struct YuvPass {
+        yuv: Yuv,
+        pipeline: wgpu::ComputePipeline,
+        bind: wgpu::BindGroup,
+        planes: wgpu::Buffer,
+        /// Bytes per row of either plane.
+        stride: u32,
     }
 
     fn texture(
@@ -361,13 +373,103 @@ mod offline {
         pass.draw(0..3, 0..1);
     }
 
-    impl Offline {
-        /// A headless device, the high-performance adapter if there are two.
-        pub fn new(size: [u32; 2], engine: Engine) -> Result<Self, String> {
-            pollster::block_on(Self::open(size, engine))
+    impl YuvPass {
+        fn new(device: &wgpu::Device, yuv: Yuv, [w, h]: [u32; 2], acc: &wgpu::TextureView) -> Self {
+            let stride = match yuv {
+                Yuv::Nv12 => w.next_multiple_of(4),
+                Yuv::P010 => w * 2,
+            };
+            let planes = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("mui-cut yuv"),
+                size: u64::from(stride) * u64::from(h + h / 2),
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            });
+            let cfg = wgpu::util::DeviceExt::create_buffer_init(
+                device,
+                &wgpu::util::BufferInitDescriptor {
+                    label: Some("mui-cut yuv cfg"),
+                    contents: &[w, h, stride, 0].map(u32::to_le_bytes).concat(),
+                    usage: wgpu::BufferUsages::UNIFORM,
+                },
+            );
+            let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("mui-cut yuv"),
+                source: wgpu::ShaderSource::Wgsl(include_str!("yuv.wgsl").into()),
+            });
+            let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("mui-cut yuv"),
+                layout: None,
+                module: &module,
+                entry_point: Some(match yuv {
+                    Yuv::Nv12 => "nv12",
+                    Yuv::P010 => "p010",
+                }),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
+            });
+            let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None,
+                layout: &pipeline.get_bind_group_layout(0),
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(acc),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: planes.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: cfg.as_entire_binding(),
+                    },
+                ],
+            });
+            Self {
+                yuv,
+                pipeline,
+                bind,
+                planes,
+                stride,
+            }
         }
 
-        async fn open(size: [u32; 2], engine: Engine) -> Result<Self, String> {
+        /// Convert the float sum and copy the planes to `readback`.
+        fn encode(
+            &self,
+            enc: &mut wgpu::CommandEncoder,
+            [w, h]: [u32; 2],
+            readback: &wgpu::Buffer,
+        ) {
+            let across = match self.yuv {
+                Yuv::Nv12 => w.div_ceil(4),
+                Yuv::P010 => w.div_ceil(2),
+            };
+            {
+                let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
+                pass.set_pipeline(&self.pipeline);
+                pass.set_bind_group(0, &self.bind, &[]);
+                pass.dispatch_workgroups(across.div_ceil(8), h.div_ceil(2).div_ceil(8), 1);
+            }
+            enc.copy_buffer_to_buffer(&self.planes, 0, readback, 0, self.planes.size());
+        }
+    }
+
+    impl Offline {
+        /// A headless device, the high-performance adapter if there are two;
+        /// frames come back as straight-alpha RGBA.
+        pub fn new(size: [u32; 2], engine: Engine) -> Result<Self, String> {
+            pollster::block_on(Self::open(size, engine, None))
+        }
+
+        /// Frames come back as `yuv` planes, converted on the GPU from the
+        /// float sum: what an encoder takes, at 1.5 (or 3) bytes a pixel.
+        pub fn with_yuv(size: [u32; 2], engine: Engine, yuv: Yuv) -> Result<Self, String> {
+            pollster::block_on(Self::open(size, engine, Some(yuv)))
+        }
+
+        async fn open(size: [u32; 2], engine: Engine, yuv: Option<Yuv>) -> Result<Self, String> {
             use wgpu::TextureFormat as F;
             use wgpu::TextureUsages as U;
             let instance = wgpu::Instance::default();
@@ -505,11 +607,15 @@ mod offline {
             let (sub_bind, acc_bind) = (bind(&sub), bind(&acc));
             // Rows padded to 256 bytes, as a texture-to-buffer copy wants.
             let stride = (size[0] * 4).next_multiple_of(256);
+            let yuv = yuv.map(|y| YuvPass::new(&device, y, size, &acc));
+            let bytes = yuv
+                .as_ref()
+                .map_or(u64::from(stride) * u64::from(size[1]), |y| y.planes.size());
             let ring = (0..RING)
                 .map(|_| {
                     device.create_buffer(&wgpu::BufferDescriptor {
                         label: Some("mui-cut readback"),
-                        size: u64::from(stride) * u64::from(size[1]),
+                        size: bytes,
                         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
                         mapped_at_creation: false,
                     })
@@ -533,6 +639,7 @@ mod offline {
                 ring,
                 pending: VecDeque::new(),
                 next: 0,
+                yuv,
             })
         }
 
@@ -569,31 +676,35 @@ mod offline {
                 queue.submit([enc.finish()]);
             }
             let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-            let clear = wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT);
-            pass(
-                &mut enc,
-                &self.resolve,
-                &self.acc_bind,
-                &self.out_view,
-                clear,
-            );
             let slot = self.next;
-            enc.copy_texture_to_buffer(
-                self.out.as_image_copy(),
-                wgpu::TexelCopyBufferInfo {
-                    buffer: &self.ring[slot],
-                    layout: wgpu::TexelCopyBufferLayout {
-                        offset: 0,
-                        bytes_per_row: Some(self.stride),
-                        rows_per_image: Some(self.size[1]),
+            if let Some(y) = &self.yuv {
+                y.encode(&mut enc, self.size, &self.ring[slot]);
+            } else {
+                let clear = wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT);
+                pass(
+                    &mut enc,
+                    &self.resolve,
+                    &self.acc_bind,
+                    &self.out_view,
+                    clear,
+                );
+                enc.copy_texture_to_buffer(
+                    self.out.as_image_copy(),
+                    wgpu::TexelCopyBufferInfo {
+                        buffer: &self.ring[slot],
+                        layout: wgpu::TexelCopyBufferLayout {
+                            offset: 0,
+                            bytes_per_row: Some(self.stride),
+                            rows_per_image: Some(self.size[1]),
+                        },
                     },
-                },
-                wgpu::Extent3d {
-                    width: self.size[0],
-                    height: self.size[1],
-                    depth_or_array_layers: 1,
-                },
-            );
+                    wgpu::Extent3d {
+                        width: self.size[0],
+                        height: self.size[1],
+                        depth_or_array_layers: 1,
+                    },
+                );
+            }
             let index = queue.submit([enc.finish()]);
             let (send, recv) = mpsc::sync_channel(1);
             self.ring[slot]
@@ -629,17 +740,26 @@ mod offline {
                 .map_err(|e| e.to_string())?
                 .map_err(|e| e.to_string())?;
             let buf = &self.ring[slot];
-            let row = self.size[0] as usize * 4;
-            let mut px = Vec::with_capacity(row * self.size[1] as usize);
+            // RGBA rows, or the rows of both planes (Y, then half as many UV).
+            let (row, stride, rows) = match &self.yuv {
+                Some(y) => (
+                    y.yuv.frame_bytes(self.size) / (self.size[1] as usize * 3 / 2),
+                    y.stride,
+                    self.size[1] as usize * 3 / 2,
+                ),
+                None => (
+                    self.size[0] as usize * 4,
+                    self.stride,
+                    self.size[1] as usize,
+                ),
+            };
+            let mut px = Vec::with_capacity(row * rows);
             {
                 let view = buf
                     .slice(..)
                     .get_mapped_range()
                     .map_err(|e| e.to_string())?;
-                for r in view
-                    .chunks(self.stride as usize)
-                    .take(self.size[1] as usize)
-                {
+                for r in view.chunks(stride as usize).take(rows) {
                     px.extend_from_slice(&r[..row]);
                 }
             }

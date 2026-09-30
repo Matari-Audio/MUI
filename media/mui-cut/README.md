@@ -27,6 +27,9 @@ cargo run --manifest-path media/Cargo.toml -p mui-cut -- \
 ```sh
 mui-cut render PROJECT -o out.mp4|null [--scene NAME] [--mb N] [--size WxH]
                       [--renderer classic|gpu|cpu] [--threads N] [--stats]
+                      [--codec h264|h265|av1] [--encoder auto|vaapi|software]
+                      [--crf N | --bitrate 12M [--maxrate 20M]] [--preset P]
+                      [--pix-fmt yuv420p|yuv420p10le] [--container mp4|mkv|mov]
 mui-cut still  PROJECT --t 1.5 -o f.png [--scene NAME] [--size WxH] [--renderer R]
 mui-cut eval   PROJECT --t 1.5 [--scene NAME]     # every layer's values, JSON
 mui-cut fmt    PROJECT                            # rewrite in canonical form
@@ -36,7 +39,21 @@ mui-cut schema | check | sheet | strip | diff | gen | mcp
 ```
 
 - `render` plays every scene back to back (or just `--scene`), pipes frames
-  to `ffmpeg` (H.264, CRF 16) and needs it on `PATH`. `--mb N` renders N
+  to `ffmpeg` and needs it on `PATH`. The GPU converts each frame to BT.709
+  limited-range 4:2:0 (NV12, or P010 for `yuv420p10le`, straight from the
+  float shutter) in a compute pass, so the readback is 1.5 (3) bytes a pixel
+  and ffmpeg converts nothing; the stream is tagged BT.709.
+- Encoders: `--encoder auto` (the default) runs a 0.1 s trial encode on
+  VAAPI (`/dev/dri/renderD128`) for the codec and bit depth asked for and
+  uses it if it works, else software: `libx264`, `libx265`, `libsvtav1`.
+  `vaapi` fails instead of falling back, `software` (or `x264`) skips the
+  trial. Quality: `--crf` (software CRF, VAAPI constant QP; default 16 for
+  H.264, 18 H.265, 26 AV1) or `--bitrate` with an optional `--maxrate`;
+  `--preset` goes to software encoders. The container is `--container` or
+  the output's extension (AV1 is refused in mov).
+- A project can keep these in `"render": {"codec": "h265", "crf": 18,
+  "pix_fmt": "yuv420p10le", "mb": 8, ...}` (the flag names, `pix_fmt` with
+  an underscore); flags override it. `--mb N` renders N
   subframes across a 180-degree shutter and averages them in linear light
   (mui-reel's shutter). `--size` scales the whole frame. `-o null` renders
   without writing a file (ffmpeg's null muxer), for benchmarks.

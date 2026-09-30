@@ -62,6 +62,78 @@ fn render_writes_every_frame_of_the_scene() {
     assert!((dur - 2.5).abs() < 0.05, "{dur}");
 }
 
+fn probe(file: &Path) -> String {
+    let out = Command::new("ffprobe")
+        .args(["-v", "error", "-count_frames", "-select_streams", "v:0"])
+        .args([
+            "-show_entries",
+            "stream=codec_name,pix_fmt,color_space,color_range,nb_read_frames:format=format_name",
+        ])
+        .args(["-of", "default=nw=1"])
+        .arg(file)
+        .output()
+        .unwrap();
+    String::from_utf8(out.stdout).unwrap()
+}
+
+/// Every codec, both bit depths and each container, in software (and on
+/// VAAPI when `auto` finds it): the stream is what was asked for, tagged
+/// BT.709 limited range, every frame there.
+#[test]
+fn render_encodes_each_codec_depth_and_container() {
+    if !has("ffmpeg") || !has("ffprobe") {
+        eprintln!("skipped: no ffmpeg/ffprobe");
+        return;
+    }
+    let dir = scratch("codecs");
+    for (codec, pix, container, encoder, name) in [
+        ("h264", "yuv420p", "mov", "software", "h264"),
+        ("h265", "yuv420p10le", "mkv", "software", "hevc"),
+        ("av1", "yuv420p", "mp4", "software", "av1"),
+        ("h264", "yuv420p", "mp4", "auto", "h264"),
+        ("h265", "yuv420p10le", "mp4", "auto", "hevc"),
+    ] {
+        let out = dir.join(format!("{codec}-{pix}-{encoder}.{container}"));
+        let st = Command::new(BIN)
+            .args([
+                "render", DEMO, "--scene", "outro", "--size", "320x180", "--mb", "2",
+            ])
+            .args([
+                "--codec",
+                codec,
+                "--pix-fmt",
+                pix,
+                "--encoder",
+                encoder,
+                "-o",
+            ])
+            .arg(&out)
+            .status()
+            .unwrap();
+        assert!(st.success(), "{codec} {pix} {container}");
+        let text = probe(&out);
+        let want = [
+            format!("codec_name={name}"),
+            format!("pix_fmt={pix}"),
+            "color_space=bt709".into(),
+            "color_range=tv".into(),
+            // outro is 2 s at 30 fps.
+            "nb_read_frames=60".into(),
+        ];
+        for w in want {
+            assert!(
+                text.contains(&w),
+                "{codec} {pix} {container}: no {w} in {text}"
+            );
+        }
+        assert_eq!(
+            text.contains("format_name=matroska"),
+            container == "mkv",
+            "{text}"
+        );
+    }
+}
+
 #[test]
 fn still_writes_a_png_at_the_asked_size() {
     let out = scratch("still").join("f.png");

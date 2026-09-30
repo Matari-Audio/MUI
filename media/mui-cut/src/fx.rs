@@ -13,7 +13,7 @@ use crate::{Anim, Rgba};
 pub(crate) mod gpu;
 
 /// One effect in a stack, as the file has it.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Effect {
     #[serde(rename = "type")]
     pub kind: String,
@@ -23,7 +23,7 @@ pub struct Effect {
 }
 
 /// A parameter: a number or a colour, plain or keyed.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(untagged)]
 pub enum Prop {
     Num(Anim<f64>),
@@ -170,9 +170,9 @@ pub fn def(kind: &str) -> Option<(usize, &'static Def)> {
     EFFECTS.iter().enumerate().find(|(_, d)| d.name == kind)
 }
 
-/// Sort keys, and refuse unknown effects or parameters, the wrong type, empty
-/// key lists and non-finite numbers.
-pub(crate) fn check(stack: &mut [Effect], owner: &str) -> Result<(), String> {
+/// Refuse unknown effects or parameters, the wrong type, empty key lists
+/// and non-finite numbers.
+pub(crate) fn check(stack: &[Effect], owner: &str) -> Result<(), String> {
     for e in stack {
         let (_, d) = def(&e.kind).ok_or_else(|| {
             let known: Vec<_> = EFFECTS.iter().map(|d| d.name).collect();
@@ -182,7 +182,7 @@ pub(crate) fn check(stack: &mut [Effect], owner: &str) -> Result<(), String> {
                 known.join(", ")
             )
         })?;
-        for (name, p) in &mut e.params {
+        for (name, p) in &e.params {
             let bad = |why: &str| format!("{owner}: effect `{}` `{name}` {why}", e.kind);
             let ty = d
                 .params
@@ -191,26 +191,24 @@ pub(crate) fn check(stack: &mut [Effect], owner: &str) -> Result<(), String> {
                 .ok_or_else(|| bad("is not a parameter"))?
                 .ty;
             match (p, ty) {
-                (Prop::Num(a), Ty::Num { .. }) => {
-                    match a {
-                        Anim::Keys(k) if k.is_empty() => return Err(bad("has an empty key list")),
-                        Anim::Value(v) if !v.is_finite() => return Err(bad("is not finite")),
-                        Anim::Keys(k)
-                            if k.iter().any(|k| {
-                                !k.t.is_finite()
-                                    || !k.v.is_finite()
-                                    || k.in_
-                                        .into_iter()
-                                        .chain(k.out)
-                                        .flatten()
-                                        .any(|x| !x.is_finite())
-                            }) =>
-                        {
-                            return Err(bad("has a non-finite key"));
-                        }
-                        _ => {}
+                (Prop::Num(a), Ty::Num { .. }) => match a {
+                    Anim::Keys(k) if k.is_empty() => return Err(bad("has an empty key list")),
+                    Anim::Value(v) if !v.is_finite() => return Err(bad("is not finite")),
+                    Anim::Keys(k)
+                        if k.iter().any(|k| {
+                            !k.t.is_finite()
+                                || !k.v.is_finite()
+                                || k.in_
+                                    .into_iter()
+                                    .chain(k.out)
+                                    .flatten()
+                                    .any(|x| !x.is_finite())
+                        }) =>
+                    {
+                        return Err(bad("has a non-finite key"));
                     }
-                }
+                    _ => {}
+                },
                 (Prop::Color(a), Ty::Color { .. }) => {
                     if matches!(a, Anim::Keys(k) if k.is_empty()) {
                         return Err(bad("has an empty key list"));

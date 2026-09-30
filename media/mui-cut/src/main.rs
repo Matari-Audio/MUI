@@ -7,6 +7,7 @@
 //!     mui-cut serve  demo.cut.json [--port 8740] [--web DIR]
 #![forbid(unsafe_code)]
 
+mod encode;
 mod mcp;
 mod script;
 mod serve;
@@ -16,12 +17,16 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use mui_cut::{Assets, CpuPool, Engine, Frame, Offline, Project, Scene, eval};
+use mui_cut::yuv::{self, Yuv};
+use mui_cut::{Assets, CpuPool, Engine, Frame, Offline, Project, Render, Scene, eval};
 
 type Result<T> = std::result::Result<T, String>;
 
 const USAGE: &str = "usage:
   mui-cut render PROJECT -o OUT.mp4|null [--scene NAME] [--mb N] [--size WxH] [--renderer R] [--threads N] [--stats]
+                 [--codec h264|h265|av1] [--encoder auto|vaapi|software]
+                 [--crf N | --bitrate 12M [--maxrate 20M]] [--preset P]
+                 [--pix-fmt yuv420p|yuv420p10le] [--container mp4|mkv|mov]
   mui-cut still  PROJECT --t SECONDS -o OUT.png [--scene NAME] [--size WxH] [--renderer R]
     R: classic (default; Vello compute on the GPU), gpu (vello_gpu), cpu (Vello CPU);
     --cpu is --renderer cpu. --threads: CPU frames drawn at once (default: one per core).
@@ -205,16 +210,24 @@ fn load_assets(p: &Project, project: &Path, assets: &mut Assets) -> Vec<String> 
 
 /// Where frames are drawn: a Vello engine on the GPU (classic by default),
 /// or Vello CPU with `--renderer cpu` or when no GPU adapter opens.
+/// Frames come back as straight RGBA, or as `Yuv` planes for an encoder.
 enum Backend {
-    Cpu(CpuPool),
+    /// With the planes an encoder wants, and the frame size.
+    Cpu(CpuPool, Option<(Yuv, [u32; 2])>),
     Gpu(Box<Offline>),
 }
 
 impl Backend {
     /// `workers` CPU frames at once; a lone frame rasterises on every core
     /// instead.
-    fn open(p: &Project, args: &Args, size: (u16, u16), workers: usize) -> Result<Self> {
-        Self::open_at(p, &args.project, renderer(args), size, workers)
+    fn open(
+        p: &Project,
+        args: &Args,
+        size: (u16, u16),
+        workers: usize,
+        yuv: Option<Yuv>,
+    ) -> Result<Self> {
+        Self::open_at(p, &args.project, renderer(args), size, workers, yuv)
     }
     /// [`Backend::open`] without the command line: `renderer` is
     /// `classic` (the default), `gpu` or `cpu`.
@@ -224,6 +237,7 @@ impl Backend {
         renderer: Option<&str>,
         (w, h): (u16, u16),
         workers: usize,
+        yuv: Option<Yuv>,
     ) -> Result<Self> {
         let cores = std::thread::available_parallelism().map_or(1, usize::from);
         let engine = match renderer {
@@ -237,7 +251,12 @@ impl Backend {
             eprintln!("mui-cut: {e} (an image draws as its fill, the rest as nothing)");
         }
         if let Some(engine) = engine {
-            match Offline::new([w.into(), h.into()], engine) {
+            let size = [w.into(), h.into()];
+            let gpu = match yuv {
+                Some(y) => Offline::with_yuv(size, engine, y),
+                None => Offline::new(size, engine),
+            };
+            match gpu {
                 Ok(mut g) => {
                     g.assets = assets;
                     return Ok(Self::Gpu(Box::new(g)));
@@ -254,11 +273,14 @@ impl Backend {
         let workers = workers.clamp(1, cores);
         let threads = if workers == 1 { cores - 1 } else { 0 };
         let threads = u16::try_from(threads).unwrap_or(u16::MAX);
-        Ok(Self::Cpu(CpuPool::new(w, h, workers, threads, &assets)))
+        Ok(Self::Cpu(
+            CpuPool::new(w, h, workers, threads, &assets),
+            yuv.map(|y| (y, [w.into(), h.into()])),
+        ))
     }
     fn name(&self) -> String {
         match self {
-            Self::Cpu(_) => "cpu (vello_cpu)".into(),
+            Self::Cpu(..) => "cpu (vello_cpu)".into(),
             Self::Gpu(g) => format!("gpu ({})", g.adapter),
         }
     }
@@ -267,14 +289,26 @@ impl Backend {
     fn push(&mut self, subs: Vec<Frame>) -> Result<Option<Vec<u8>>> {
         match self {
             Self::Gpu(g) => g.push(&subs),
-            Self::Cpu(pool) => pool.push(subs),
+            Self::Cpu(pool, yuv) => Ok(pool.push(subs)?.map(|px| to_yuv(px, *yuv))),
         }
     }
     fn finish(&mut self) -> Result<Vec<Vec<u8>>> {
         match self {
             Self::Gpu(g) => g.finish(),
-            Self::Cpu(pool) => pool.finish(),
+            Self::Cpu(pool, yuv) => {
+                let yuv = *yuv;
+                let px = pool.finish()?;
+                Ok(px.into_iter().map(|px| to_yuv(px, yuv)).collect())
+            }
         }
+    }
+}
+
+/// A CPU frame as `yuv` planes, if an encoder wants them.
+fn to_yuv(rgba: Vec<u8>, yuv: Option<(Yuv, [u32; 2])>) -> Vec<u8> {
+    match yuv {
+        Some((y, size)) => yuv::from_rgba(&rgba, size, y),
+        None => rgba,
     }
 }
 
@@ -283,7 +317,7 @@ fn still(args: &Args) -> Result<()> {
     let s = scene(&p, args)?;
     let out = args.get("o").ok_or("still needs -o OUT.png")?;
     let (w, h) = size(&p, args)?;
-    let mut b = Backend::open(&p, args, (w, h), 1)?;
+    let mut b = Backend::open(&p, args, (w, h), 1, None)?;
     let f = eval(&p, s, args.num("t", 0.)?);
     let px = match b.push(vec![f])? {
         Some(px) => px,
@@ -302,6 +336,32 @@ fn still(args: &Args) -> Result<()> {
 /// The fraction of a frame the shutter is open: 180 degrees.
 const SHUTTER: f64 = 0.5;
 
+/// Encoder settings from the flags, over the project's `render`.
+fn settings(p: &Project, args: &Args) -> Result<Render> {
+    let s = |k: &str| args.get(k).map(str::to_owned);
+    let flags = Render {
+        codec: s("codec"),
+        encoder: s("encoder"),
+        crf: args.get("crf").map(|_| args.num("crf", 0)).transpose()?,
+        bitrate: s("bitrate"),
+        maxrate: s("maxrate"),
+        preset: s("preset"),
+        pix_fmt: s("pix-fmt"),
+        container: s("container"),
+        mb: args.get("mb").map(|_| args.num("mb", 1)).transpose()?,
+    };
+    let mut r = p.render.clone().unwrap_or_default().with(&flags);
+    // A bitrate flag replaces a CRF from the file, and the other way round.
+    if flags.bitrate.is_some() && flags.crf.is_none() {
+        r.crf = None;
+    }
+    if flags.crf.is_some() && flags.bitrate.is_none() {
+        r.bitrate = None;
+    }
+    r.check()?;
+    Ok(r)
+}
+
 fn render(args: &Args) -> Result<()> {
     let p = load(&args.project)?;
     let out = args.get("o").ok_or("render needs -o OUT.mp4")?;
@@ -310,35 +370,30 @@ fn render(args: &Args) -> Result<()> {
         None => p.scenes.iter().collect(),
     };
     let (w, h) = size(&p, args)?;
-    let mb: usize = args.num("mb", 1)?;
-    let mb = mb.clamp(1, 64);
-    let cores = std::thread::available_parallelism().map_or(1, usize::from);
-    let mut b = Backend::open(&p, args, (w, h), args.num("threads", cores)?)?;
-    let mut ff = Command::new("ffmpeg");
-    ff.args([
-        "-y",
-        "-loglevel",
-        "error",
-        "-f",
-        "rawvideo",
-        "-pix_fmt",
-        "rgba",
-    ])
-    .args([
-        "-s",
-        &format!("{w}x{h}"),
-        "-r",
-        &p.fps.to_string(),
-        "-i",
-        "-",
-    ]);
-    // `-o null` renders and discards: the renderer's speed without x264's.
-    if out == "null" {
-        ff.args(["-f", "null", "-"]);
+    let r = settings(&p, args)?;
+    let mb = r.mb.unwrap_or(1).clamp(1, 64);
+    // `-o null` renders and discards: the renderer's speed without an encoder's.
+    let plan = if out == "null" {
+        None
     } else {
-        ff.args(["-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "16"])
-            .args(["-movflags", "+faststart", out]);
-    }
+        Some(encode::plan(&r, out)?)
+    };
+    let yuv = plan.as_ref().map_or(Yuv::Nv12, |p| p.yuv);
+    let cores = std::thread::available_parallelism().map_or(1, usize::from);
+    let mut b = Backend::open(&p, args, (w, h), args.num("threads", cores)?, Some(yuv))?;
+    let mut ff = Command::new("ffmpeg");
+    // SVT-AV1 prints its banner through its own logger.
+    ff.env("SVT_LOG", "1").args(["-y", "-loglevel", "error"]);
+    match &plan {
+        Some(plan) => ff
+            .args(plan.input((w, h), p.fps))
+            .args(plan.output())
+            .arg(out),
+        None => ff
+            .args(["-f", "rawvideo", "-pix_fmt", yuv.pix_fmt()])
+            .args(["-s", &format!("{w}x{h}"), "-r", &p.fps.to_string()])
+            .args(["-i", "-", "-f", "null", "-"]),
+    };
     let mut ff = ff
         .stdin(Stdio::piped())
         .spawn()
@@ -379,9 +434,11 @@ fn render(args: &Args) -> Result<()> {
     }
     let secs = start.elapsed().as_secs_f64();
     println!(
-        "wrote {out}: {frames} frames, {w}x{h} at {} fps, mb {mb}, {} in {secs:.2} s = {:.1} frames/s",
+        "wrote {out}: {frames} frames, {w}x{h} at {} fps, mb {mb}, {}, {} in {secs:.2} s = {:.1} frames/s",
         p.fps,
         b.name(),
+        plan.as_ref()
+            .map_or_else(|| "no encoder".into(), encode::Plan::describe),
         frames as f64 / secs
     );
     if args.has("stats") {

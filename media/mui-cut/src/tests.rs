@@ -689,7 +689,10 @@ fn gpu_frames(frames: &[Vec<Frame>]) -> Option<Vec<Vec<u8>>> {
     let sparse = run(Engine::Sparse)?;
     for (c, s) in classic.iter().zip(&sparse) {
         let off = c.iter().zip(s).filter(|(a, b)| a.abs_diff(**b) > 8).count();
-        assert!(off < c.len() / 100, "the engines disagree on {off} channels");
+        assert!(
+            off < c.len() / 100,
+            "the engines disagree on {off} channels"
+        );
     }
     Some(classic)
 }
@@ -834,4 +837,98 @@ fn grain_is_seeded_by_frame_and_survives_motion_blur() {
         mid > 180 && (30..mid - 40).contains(&edge),
         "edge {edge} mid {mid}"
     );
+}
+
+/// The GPU's 4:2:0 planes are the CPU reference's, from the same pixels,
+/// within a step of rounding (the GPU converts before rounding to bytes).
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn gpu_yuv_matches_the_reference() {
+    use crate::yuv::{Yuv, from_rgba};
+    let p = Project::load(DEMO).unwrap();
+    let s = p.scene("shapes").unwrap();
+    // 162 wide: rows that are not a multiple of 4 bytes get padded and cut.
+    let size = [162, 90];
+    let subs: Vec<Frame> = (0..3)
+        .map(|k| eval(&p, s, 0.6 + f64::from(k) * 0.02))
+        .collect();
+    let run = |yuv: Option<Yuv>| -> Option<Vec<u8>> {
+        let mut g = match yuv.map_or_else(
+            || Offline::new(size, Engine::Sparse),
+            |y| Offline::with_yuv(size, Engine::Sparse, y),
+        ) {
+            Ok(g) => g,
+            Err(e) => {
+                eprintln!("skipped: no GPU ({e})");
+                return None;
+            }
+        };
+        let mut out: Vec<Vec<u8>> = g.push(&subs).unwrap().into_iter().collect();
+        out.extend(g.finish().unwrap());
+        out.pop()
+    };
+    let Some(rgba) = run(None) else { return };
+    for yuv in [Yuv::Nv12, Yuv::P010] {
+        let gpu = run(Some(yuv)).unwrap();
+        let want = from_rgba(&rgba, size, yuv);
+        assert_eq!(gpu.len(), yuv.frame_bytes(size));
+        assert_eq!(gpu.len(), want.len());
+        // Compare samples: bytes for NV12, 10-bit values for P010, where
+        // one 8-bit step of the RGBA reference is four.
+        let (got, exp, tol): (Vec<i32>, Vec<i32>, i32) = match yuv {
+            Yuv::Nv12 => (
+                gpu.iter().map(|&v| i32::from(v)).collect(),
+                want.iter().map(|&v| i32::from(v)).collect(),
+                1,
+            ),
+            Yuv::P010 => {
+                let s = |b: &[u8]| {
+                    b.chunks(2)
+                        .map(|c| i32::from(u16::from_le_bytes([c[0], c[1]]) >> 6))
+                        .collect()
+                };
+                (s(&gpu), s(&want), 5)
+            }
+        };
+        let worst = got
+            .iter()
+            .zip(&exp)
+            .map(|(a, b)| (a - b).abs())
+            .max()
+            .unwrap();
+        assert!(worst <= tol, "{yuv:?}: off by {worst}");
+    }
+    // Known values: BT.709 limited range.
+    let white = from_rgba(&[255; 16], [2, 2], Yuv::Nv12);
+    assert_eq!(white, [235, 235, 235, 235, 128, 128]);
+    let red = from_rgba(&[255, 0, 0, 255].repeat(4), [2, 2], Yuv::Nv12);
+    assert_eq!(red, [63, 63, 63, 63, 102, 240]);
+}
+
+#[test]
+fn render_settings_load_check_and_layer() {
+    let p = Project::load(
+        r#"{"size":[64,64],"fps":30,"scenes":[],"render":{"codec":"h265","crf":20,"mb":4}}"#,
+    )
+    .unwrap();
+    let file = p.render.clone().unwrap();
+    let flags = Render {
+        crf: Some(12),
+        container: Some("mkv".into()),
+        ..Render::default()
+    };
+    let r = file.with(&flags);
+    assert_eq!(
+        (r.codec.as_deref(), r.crf, r.mb, r.container.as_deref()),
+        (Some("h265"), Some(12), Some(4), Some("mkv"))
+    );
+    assert!(Project::load(&p.to_json()).is_ok(), "round trips");
+    for bad in [
+        r#"{"codec":"vp9"}"#,
+        r#"{"pix_fmt":"rgb24"}"#,
+        r#"{"container":"avi"}"#,
+    ] {
+        let json = format!(r#"{{"size":[64,64],"fps":30,"scenes":[],"render":{bad}}}"#);
+        assert!(Project::load(&json).is_err(), "accepted {bad}");
+    }
 }

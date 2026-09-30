@@ -832,6 +832,9 @@ fn contrast_at(r: &mut Renderer, f: &Frame, i: usize, b: Bbox) -> Option<(f64, b
         background: f.background,
         layers: f.layers[..i].to_vec(),
         view: None,
+        effects: f.effects.clone(),
+        t: f.t,
+        seed: f.seed,
     };
     let (px, _) = r.draw(&below).ok()?;
     let (rw, rh) = r.size();

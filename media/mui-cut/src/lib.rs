@@ -21,6 +21,7 @@ mod three;
 mod vector;
 #[cfg(target_arch = "wasm32")]
 mod web;
+pub mod yuv;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use gpu::Offline;
@@ -46,6 +47,76 @@ pub struct Project {
     pub size: [u32; 2],
     pub fps: f64,
     pub scenes: Vec<Scene>,
+    /// Encoder settings for `mui-cut render`; its flags override them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub render: Option<Render>,
+}
+
+/// How `render` encodes, all optional (the CLI's defaults): see the README.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Render {
+    /// `h264`, `h265` or `av1`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codec: Option<String>,
+    /// `auto` (hardware when a trial encode works), `vaapi` or `software`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encoder: Option<String>,
+    /// Constant quality (x264/x265/SVT-AV1 CRF, VAAPI QP).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crf: Option<u32>,
+    /// Average bitrate, ffmpeg style (`12M`); replaces `crf`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bitrate: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maxrate: Option<String>,
+    /// The software encoder's preset (`slow`, SVT-AV1's `6`, ...).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preset: Option<String>,
+    /// `yuv420p` or `yuv420p10le`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pix_fmt: Option<String>,
+    /// `mp4`, `mkv` or `mov`; by default the output's extension.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub container: Option<String>,
+    /// Motion-blur subframes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mb: Option<usize>,
+}
+
+impl Render {
+    /// `self` with every setting `over` has replacing its own.
+    pub fn with(&self, over: &Render) -> Render {
+        let pick = |a: &Option<String>, b: &Option<String>| b.clone().or_else(|| a.clone());
+        Render {
+            codec: pick(&self.codec, &over.codec),
+            encoder: pick(&self.encoder, &over.encoder),
+            crf: over.crf.or(self.crf),
+            bitrate: pick(&self.bitrate, &over.bitrate),
+            maxrate: pick(&self.maxrate, &over.maxrate),
+            preset: pick(&self.preset, &over.preset),
+            pix_fmt: pick(&self.pix_fmt, &over.pix_fmt),
+            container: pick(&self.container, &over.container),
+            mb: over.mb.or(self.mb),
+        }
+    }
+    /// Refuse values the encoder table has no row for.
+    pub fn check(&self) -> Result<(), String> {
+        let one_of = |what: &str, v: &Option<String>, ok: &[&str]| match v {
+            Some(v) if !ok.contains(&v.as_str()) => Err(format!(
+                "render.{what}: `{v}` is not one of {}",
+                ok.join(", ")
+            )),
+            _ => Ok(()),
+        };
+        one_of("codec", &self.codec, &["h264", "h265", "av1"])?;
+        one_of(
+            "encoder",
+            &self.encoder,
+            &["auto", "vaapi", "software", "x264"],
+        )?;
+        one_of("pix_fmt", &self.pix_fmt, &["yuv420p", "yuv420p10le"])?;
+        one_of("container", &self.container, &["mp4", "mkv", "mov"])
+    }
 }
 
 /// One shot. Scenes play back to back in a render.
@@ -1092,6 +1163,9 @@ impl Project {
         if !(p.fps.is_finite() && p.fps > 0. && p.fps <= 240.) {
             return Err("fps: must be in (0, 240]".into());
         }
+        if let Some(r) = &p.render {
+            r.check().map_err(|e| format!("render: {e}"))?;
+        }
         for (si, s) in p.scenes.iter().enumerate() {
             if !(s.duration.is_finite() && s.duration > 0.) {
                 return Err(format!(
@@ -1129,7 +1203,7 @@ impl Project {
                     }
                     _ => {}
                 }
-                fx::check(&mut l.effects, &format!("layer `{id}`"))?;
+                fx::check(&l.effects, &format!("{at}.effects: layer `{id}`"))?;
             }
             for l in &s.layers {
                 if let Kind::Camera { look_at, .. } = &l.kind
@@ -1142,7 +1216,7 @@ impl Project {
                     ));
                 }
             }
-            fx::check(&mut s.effects, &format!("scene `{}`", s.name))?;
+            fx::check(&s.effects, &format!("scenes[{si}].effects: scene `{}`", s.name))?;
         }
         Ok(p)
     }
