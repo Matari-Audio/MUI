@@ -1,0 +1,654 @@
+{
+  "size": [1280, 720],
+  "fps": 30.0,
+  "scenes": [
+    {
+      "name": "stage",
+      "duration": 6.0,
+      "background": "#0e0f14",
+      "layers": [
+        {
+          "id": "cam",
+          "kind": "camera",
+          "x": 640.0,
+          "y": 420.0,
+          "rx": [
+            { "t": 0.0, "v": 4.0, "interp": "bezier" },
+            { "t": 3.0, "v": 20.0, "interp": "bezier" },
+            { "t": 6.0, "v": 16.0, "interp": "bezier" }
+          ],
+          "ry": [
+            { "t": 0.0, "v": -4.0, "interp": "bezier" },
+            { "t": 6.0, "v": 34.0, "interp": "bezier" }
+          ],
+          "distance": [
+            { "t": 0.0, "v": 1250.0, "interp": "bezier" },
+            { "t": 6.0, "v": 1550.0, "interp": "bezier" }
+          ],
+          "fov": 38.0,
+          "aperture": 3.0
+        },
+        {
+          "id": "sun",
+          "kind": "light",
+          "fill": "#fff1dc",
+          "rx": 52.0,
+          "ry": [
+            { "t": 0.0, "v": -70.0, "interp": "bezier" },
+            { "t": 6.0, "v": 50.0, "interp": "bezier" }
+          ],
+          "intensity": 1.15,
+          "softness": 2.0
+        },
+        {
+          "id": "sky",
+          "kind": "light",
+          "type": "ambient",
+          "fill": "#a4acff",
+          "intensity": 0.32
+        },
+        {
+          "id": "spot",
+          "kind": "light",
+          "type": "spot",
+          "x": 640.0,
+          "y": 60.0,
+          "fill": "#ff7ad9",
+          "z": 260.0,
+          "rx": 78.0,
+          "intensity": 0.9,
+          "cone": 22.0,
+          "range": 1400.0
+        },
+        {
+          "id": "knot",
+          "kind": "model",
+          "path": "knot.glb",
+          "x": 640.0,
+          "y": 470.0,
+          "height": 220.0,
+          "z": 280.0,
+          "rx": [
+            { "t": 0.0, "v": -10.0, "interp": "bezier" },
+            { "t": 6.0, "v": 20.0, "interp": "bezier" }
+          ],
+          "ry": [
+            { "t": 0.0, "v": 0.0, "interp": "bezier" },
+            { "t": 6.0, "v": 300.0, "interp": "bezier" }
+          ]
+        },
+        {
+          "id": "card0",
+          "kind": "rect",
+          "x": [
+            { "t": 0.0, "v": 300.0, "interp": "bezier" },
+            { "t": 0.6, "v": 300.0, "interp": "bezier" },
+            { "t": 2.2, "v": 180.0, "interp": "bezier" },
+            { "t": 6.0, "v": 186.0, "interp": "bezier" }
+          ],
+          "y": [
+            { "t": 0.0, "v": 300.0, "interp": "bezier" },
+            { "t": 0.6, "v": 300.0, "interp": "bezier" },
+            { "t": 2.2, "v": 230.0, "interp": "bezier" },
+            { "t": 6.0, "v": 220.0, "interp": "bezier" }
+          ],
+          "rotation": [
+            { "t": 0.0, "v": 0.0, "interp": "bezier" },
+            { "t": 0.6, "v": 0.0, "interp": "bezier" },
+            { "t": 2.2, "v": -8.0, "interp": "bezier" },
+            { "t": 6.0, "v": -8.0, "interp": "bezier" }
+          ],
+          "width": 300.0,
+          "height": 180.0,
+          "radius": 22.0,
+          "fill": "#7c6cff",
+          "z": [
+            { "t": 0.0, "v": 0.0, "interp": "bezier" },
+            { "t": 0.6, "v": 0.0, "interp": "bezier" },
+            { "t": 2.2, "v": -220.0, "interp": "bezier" },
+            { "t": 6.0, "v": -250.0, "interp": "bezier" }
+          ],
+          "rx": [
+            { "t": 0.0, "v": 0.0, "interp": "bezier" },
+            { "t": 0.6, "v": 0.0, "interp": "bezier" },
+            { "t": 2.2, "v": -18.0, "interp": "bezier" },
+            { "t": 6.0, "v": -14.0, "interp": "bezier" }
+          ],
+          "ry": [
+            { "t": 0.0, "v": 0.0, "interp": "bezier" },
+            { "t": 0.6, "v": 0.0, "interp": "bezier" },
+            { "t": 2.2, "v": -34.0, "interp": "bezier" },
+            { "t": 6.0, "v": -40.0, "interp": "bezier" }
+          ],
+          "extrude": 16.0,
+          "edge": "#2a2b36"
+        },
+        {
+          "id": "label0",
+          "kind": "text",
+          "text": "Timeline",
+          "x": [
+            { "t": 0.0, "v": 300.0, "interp": "bezier" },
+            { "t": 0.6, "v": 300.0, "interp": "bezier" },
+            { "t": 2.2, "v": 180.0, "interp": "bezier" },
+            { "t": 6.0, "v": 186.0, "interp": "bezier" }
+          ],
+          "y": [
+            { "t": 0.0, "v": 300.0, "interp": "bezier" },
+            { "t": 0.6, "v": 300.0, "interp": "bezier" },
+            { "t": 2.2, "v": 230.0, "interp": "bezier" },
+            { "t": 6.0, "v": 220.0, "interp": "bezier" }
+          ],
+          "rotation": [
+            { "t": 0.0, "v": 0.0, "interp": "bezier" },
+            { "t": 0.6, "v": 0.0, "interp": "bezier" },
+            { "t": 2.2, "v": -8.0, "interp": "bezier" },
+            { "t": 6.0, "v": -8.0, "interp": "bezier" }
+          ],
+          "font_size": 40.0,
+          "z": [
+            { "t": 0.0, "v": -3.0, "interp": "bezier" },
+            { "t": 0.6, "v": -3.0, "interp": "bezier" },
+            { "t": 2.2, "v": -223.0, "interp": "bezier" },
+            { "t": 6.0, "v": -253.0, "interp": "bezier" }
+          ],
+          "rx": [
+            { "t": 0.0, "v": 0.0, "interp": "bezier" },
+            { "t": 0.6, "v": 0.0, "interp": "bezier" },
+            { "t": 2.2, "v": -18.0, "interp": "bezier" },
+            { "t": 6.0, "v": -14.0, "interp": "bezier" }
+          ],
+          "ry": [
+            { "t": 0.0, "v": 0.0, "interp": "bezier" },
+            { "t": 0.6, "v": 0.0, "interp": "bezier" },
+            { "t": 2.2, "v": -34.0, "interp": "bezier" },
+            { "t": 6.0, "v": -40.0, "interp": "bezier" }
+          ],
+          "cast_shadows": false
+        },
+        {
+          "id": "card1",
+          "kind": "rect",
+          "x": [
+            { "t": 0.0, "v": 640.0, "interp": "bezier" },
+            { "t": 0.6799999999999999, "v": 640.0, "interp": "bezier" },
+            { "t": 2.28, "v": 640.0, "interp": "bezier" },
+            { "t": 6.0, "v": 646.0, "interp": "bezier" }
+          ],
+          "y": [
+            { "t": 0.0, "v": 300.0, "interp": "bezier" },
+            { "t": 0.6799999999999999, "v": 300.0, "interp": "bezier" },
+            { "t": 2.28, "v": 150.0, "interp": "bezier" },
+            { "t": 6.0, "v": 140.0, "interp": "bezier" }
+          ],
+          "rotation": [
+            { "t": 0.0, "v": 0.0, "interp": "bezier" },
+            { "t": 0.6799999999999999, "v": 0.0, "interp": "bezier" },
+            { "t": 2.28, "v": 4.0, "interp": "bezier" },
+            { "t": 6.0, "v": 4.0, "interp": "bezier" }
+          ],
+          "width": 300.0,
+          "height": 180.0,
+          "radius": 22.0,
+          "fill": "#ff6a88",
+          "z": [
+            { "t": 0.0, "v": 0.0, "interp": "bezier" },
+            { "t": 0.6799999999999999, "v": 0.0, "interp": "bezier" },
+            { "t": 2.28, "v": 260.0, "interp": "bezier" },
+            { "t": 6.0, "v": 230.0, "interp": "bezier" }
+          ],
+          "rx": [
+            { "t": 0.0, "v": 0.0, "interp": "bezier" },
+            { "t": 0.6799999999999999, "v": 0.0, "interp": "bezier" },
+            { "t": 2.28, "v": 24.0, "interp": "bezier" },
+            { "t": 6.0, "v": 28.0, "interp": "bezier" }
+          ],
+          "ry": [
+            { "t": 0.0, "v": 0.0, "interp": "bezier" },
+            { "t": 0.6799999999999999, "v": 0.0, "interp": "bezier" },
+            { "t": 2.28, "v": 6.0, "interp": "bezier" },
+            { "t": 6.0, "v": 0.0, "interp": "bezier" }
+          ],
+          "extrude": 16.0,
+          "edge": "#2a2b36"
+        },
+        {
+          "id": "label1",
+          "kind": "text",
+          "text": "Graph",
+          "x": [
+            { "t": 0.0, "v": 640.0, "interp": "bezier" },
+            { "t": 0.6799999999999999, "v": 640.0, "interp": "bezier" },
+            { "t": 2.28, "v": 640.0, "interp": "bezier" },
+            { "t": 6.0, "v": 646.0, "interp": "bezier" }
+          ],
+          "y": [
+            { "t": 0.0, "v": 300.0, "interp": "bezier" },
+            { "t": 0.6799999999999999, "v": 300.0, "interp": "bezier" },
+            { "t": 2.28, "v": 150.0, "interp": "bezier" },
+            { "t": 6.0, "v": 140.0, "interp": "bezier" }
+          ],
+          "rotation": [
+            { "t": 0.0, "v": 0.0, "interp": "bezier" },
+            { "t": 0.6799999999999999, "v": 0.0, "interp": "bezier" },
+            { "t": 2.28, "v": 4.0, "interp": "bezier" },
+            { "t": 6.0, "v": 4.0, "interp": "bezier" }
+          ],
+          "font_size": 40.0,
+          "z": [
+            { "t": 0.0, "v": -3.0, "interp": "bezier" },
+            { "t": 0.6799999999999999, "v": -3.0, "interp": "bezier" },
+            { "t": 2.28, "v": 257.0, "interp": "bezier" },
+            { "t": 6.0, "v": 227.0, "interp": "bezier" }
+          ],
+          "rx": [
+            { "t": 0.0, "v": 0.0, "interp": "bezier" },
+            { "t": 0.6799999999999999, "v": 0.0, "interp": "bezier" },
+            { "t": 2.28, "v": 24.0, "interp": "bezier" },
+            { "t": 6.0, "v": 28.0, "interp": "bezier" }
+          ],
+          "ry": [
+            { "t": 0.0, "v": 0.0, "interp": "bezier" },
+            { "t": 0.6799999999999999, "v": 0.0, "interp": "bezier" },
+            { "t": 2.28, "v": 6.0, "interp": "bezier" },
+            { "t": 6.0, "v": 0.0, "interp": "bezier" }
+          ],
+          "cast_shadows": false
+        },
+        {
+          "id": "card2",
+          "kind": "rect",
+          "x": [
+            { "t": 0.0, "v": 980.0, "interp": "bezier" },
+            { "t": 0.76, "v": 980.0, "interp": "bezier" },
+            { "t": 2.3600000000000003, "v": 1110.0, "interp": "bezier" },
+            { "t": 6.0, "v": 1116.0, "interp": "bezier" }
+          ],
+          "y": [
+            { "t": 0.0, "v": 300.0, "interp": "bezier" },
+            { "t": 0.76, "v": 300.0, "interp": "bezier" },
+            { "t": 2.3600000000000003, "v": 240.0, "interp": "bezier" },
+            { "t": 6.0, "v": 230.0, "interp": "bezier" }
+          ],
+          "rotation": [
+            { "t": 0.0, "v": 0.0, "interp": "bezier" },
+            { "t": 0.76, "v": 0.0, "interp": "bezier" },
+            { "t": 2.3600000000000003, "v": 10.0, "interp": "bezier" },
+            { "t": 6.0, "v": 10.0, "interp": "bezier" }
+          ],
+          "width": 300.0,
+          "height": 180.0,
+          "radius": 22.0,
+          "fill": "#3ec7a8",
+          "z": [
+            { "t": 0.0, "v": 0.0, "interp": "bezier" },
+            { "t": 0.76, "v": 0.0, "interp": "bezier" },
+            { "t": 2.3600000000000003, "v": -120.0, "interp": "bezier" },
+            { "t": 6.0, "v": -150.0, "interp": "bezier" }
+          ],
+          "rx": [
+            { "t": 0.0, "v": 0.0, "interp": "bezier" },
+            { "t": 0.76, "v": 0.0, "interp": "bezier" },
+            { "t": 2.3600000000000003, "v": -12.0, "interp": "bezier" },
+            { "t": 6.0, "v": -8.0, "interp": "bezier" }
+          ],
+          "ry": [
+            { "t": 0.0, "v": 0.0, "interp": "bezier" },
+            { "t": 0.76, "v": 0.0, "interp": "bezier" },
+            { "t": 2.3600000000000003, "v": 38.0, "interp": "bezier" },
+            { "t": 6.0, "v": 32.0, "interp": "bezier" }
+          ],
+          "extrude": 16.0,
+          "edge": "#2a2b36"
+        },
+        {
+          "id": "label2",
+          "kind": "text",
+          "text": "Inspector",
+          "x": [
+            { "t": 0.0, "v": 980.0, "interp": "bezier" },
+            { "t": 0.76, "v": 980.0, "interp": "bezier" },
+            { "t": 2.3600000000000003, "v": 1110.0, "interp": "bezier" },
+            { "t": 6.0, "v": 1116.0, "interp": "bezier" }
+          ],
+          "y": [
+            { "t": 0.0, "v": 300.0, "interp": "bezier" },
+            { "t": 0.76, "v": 300.0, "interp": "bezier" },
+            { "t": 2.3600000000000003, "v": 240.0, "interp": "bezier" },
+            { "t": 6.0, "v": 230.0, "interp": "bezier" }
+          ],
+          "rotation": [
+            { "t": 0.0, "v": 0.0, "interp": "bezier" },
+            { "t": 0.76, "v": 0.0, "interp": "bezier" },
+            { "t": 2.3600000000000003, "v": 10.0, "interp": "bezier" },
+            { "t": 6.0, "v": 10.0, "interp": "bezier" }
+          ],
+          "fill": "#0e2a24",
+          "font_size": 40.0,
+          "z": [
+            { "t": 0.0, "v": -3.0, "interp": "bezier" },
+            { "t": 0.76, "v": -3.0, "interp": "bezier" },
+            { "t": 2.3600000000000003, "v": -123.0, "interp": "bezier" },
+            { "t": 6.0, "v": -153.0, "interp": "bezier" }
+          ],
+          "rx": [
+            { "t": 0.0, "v": 0.0, "interp": "bezier" },
+            { "t": 0.76, "v": 0.0, "interp": "bezier" },
+            { "t": 2.3600000000000003, "v": -12.0, "interp": "bezier" },
+            { "t": 6.0, "v": -8.0, "interp": "bezier" }
+          ],
+          "ry": [
+            { "t": 0.0, "v": 0.0, "interp": "bezier" },
+            { "t": 0.76, "v": 0.0, "interp": "bezier" },
+            { "t": 2.3600000000000003, "v": 38.0, "interp": "bezier" },
+            { "t": 6.0, "v": 32.0, "interp": "bezier" }
+          ],
+          "cast_shadows": false
+        },
+        {
+          "id": "card3",
+          "kind": "rect",
+          "x": [
+            { "t": 0.0, "v": 300.0, "interp": "bezier" },
+            { "t": 0.84, "v": 300.0, "interp": "bezier" },
+            { "t": 2.44, "v": 230.0, "interp": "bezier" },
+            { "t": 6.0, "v": 236.0, "interp": "bezier" }
+          ],
+          "y": [
+            { "t": 0.0, "v": 500.0, "interp": "bezier" },
+            { "t": 0.84, "v": 500.0, "interp": "bezier" },
+            { "t": 2.44, "v": 470.0, "interp": "bezier" },
+            { "t": 6.0, "v": 460.0, "interp": "bezier" }
+          ],
+          "rotation": [
+            { "t": 0.0, "v": 0.0, "interp": "bezier" },
+            { "t": 0.84, "v": 0.0, "interp": "bezier" },
+            { "t": 2.44, "v": 6.0, "interp": "bezier" },
+            { "t": 6.0, "v": 6.0, "interp": "bezier" }
+          ],
+          "width": 300.0,
+          "height": 180.0,
+          "radius": 22.0,
+          "fill": "#ffb347",
+          "z": [
+            { "t": 0.0, "v": 0.0, "interp": "bezier" },
+            { "t": 0.84, "v": 0.0, "interp": "bezier" },
+            { "t": 2.44, "v": 120.0, "interp": "bezier" },
+            { "t": 6.0, "v": 90.0, "interp": "bezier" }
+          ],
+          "rx": [
+            { "t": 0.0, "v": 0.0, "interp": "bezier" },
+            { "t": 0.84, "v": 0.0, "interp": "bezier" },
+            { "t": 2.44, "v": 20.0, "interp": "bezier" },
+            { "t": 6.0, "v": 24.0, "interp": "bezier" }
+          ],
+          "ry": [
+            { "t": 0.0, "v": 0.0, "interp": "bezier" },
+            { "t": 0.84, "v": 0.0, "interp": "bezier" },
+            { "t": 2.44, "v": -22.0, "interp": "bezier" },
+            { "t": 6.0, "v": -28.0, "interp": "bezier" }
+          ],
+          "extrude": 16.0,
+          "edge": "#2a2b36"
+        },
+        {
+          "id": "label3",
+          "kind": "text",
+          "text": "Layers",
+          "x": [
+            { "t": 0.0, "v": 300.0, "interp": "bezier" },
+            { "t": 0.84, "v": 300.0, "interp": "bezier" },
+            { "t": 2.44, "v": 230.0, "interp": "bezier" },
+            { "t": 6.0, "v": 236.0, "interp": "bezier" }
+          ],
+          "y": [
+            { "t": 0.0, "v": 500.0, "interp": "bezier" },
+            { "t": 0.84, "v": 500.0, "interp": "bezier" },
+            { "t": 2.44, "v": 470.0, "interp": "bezier" },
+            { "t": 6.0, "v": 460.0, "interp": "bezier" }
+          ],
+          "rotation": [
+            { "t": 0.0, "v": 0.0, "interp": "bezier" },
+            { "t": 0.84, "v": 0.0, "interp": "bezier" },
+            { "t": 2.44, "v": 6.0, "interp": "bezier" },
+            { "t": 6.0, "v": 6.0, "interp": "bezier" }
+          ],
+          "fill": "#2a1a00",
+          "font_size": 40.0,
+          "z": [
+            { "t": 0.0, "v": -3.0, "interp": "bezier" },
+            { "t": 0.84, "v": -3.0, "interp": "bezier" },
+            { "t": 2.44, "v": 117.0, "interp": "bezier" },
+            { "t": 6.0, "v": 87.0, "interp": "bezier" }
+          ],
+          "rx": [
+            { "t": 0.0, "v": 0.0, "interp": "bezier" },
+            { "t": 0.84, "v": 0.0, "interp": "bezier" },
+            { "t": 2.44, "v": 20.0, "interp": "bezier" },
+            { "t": 6.0, "v": 24.0, "interp": "bezier" }
+          ],
+          "ry": [
+            { "t": 0.0, "v": 0.0, "interp": "bezier" },
+            { "t": 0.84, "v": 0.0, "interp": "bezier" },
+            { "t": 2.44, "v": -22.0, "interp": "bezier" },
+            { "t": 6.0, "v": -28.0, "interp": "bezier" }
+          ],
+          "cast_shadows": false
+        },
+        {
+          "id": "card4",
+          "kind": "rect",
+          "x": [
+            { "t": 0.0, "v": 640.0, "interp": "bezier" },
+            { "t": 0.92, "v": 640.0, "interp": "bezier" },
+            { "t": 2.52, "v": 700.0, "interp": "bezier" },
+            { "t": 6.0, "v": 706.0, "interp": "bezier" }
+          ],
+          "y": [
+            { "t": 0.0, "v": 500.0, "interp": "bezier" },
+            { "t": 0.92, "v": 500.0, "interp": "bezier" },
+            { "t": 2.52, "v": 520.0, "interp": "bezier" },
+            { "t": 6.0, "v": 510.0, "interp": "bezier" }
+          ],
+          "rotation": [
+            { "t": 0.0, "v": 0.0, "interp": "bezier" },
+            { "t": 0.92, "v": 0.0, "interp": "bezier" },
+            { "t": 2.52, "v": -6.0, "interp": "bezier" },
+            { "t": 6.0, "v": -6.0, "interp": "bezier" }
+          ],
+          "width": 300.0,
+          "height": 180.0,
+          "radius": 22.0,
+          "fill": "#4aa3ff",
+          "z": [
+            { "t": 0.0, "v": 0.0, "interp": "bezier" },
+            { "t": 0.92, "v": 0.0, "interp": "bezier" },
+            { "t": 2.52, "v": -300.0, "interp": "bezier" },
+            { "t": 6.0, "v": -330.0, "interp": "bezier" }
+          ],
+          "rx": [
+            { "t": 0.0, "v": 0.0, "interp": "bezier" },
+            { "t": 0.92, "v": 0.0, "interp": "bezier" },
+            { "t": 2.52, "v": -26.0, "interp": "bezier" },
+            { "t": 6.0, "v": -22.0, "interp": "bezier" }
+          ],
+          "ry": [
+            { "t": 0.0, "v": 0.0, "interp": "bezier" },
+            { "t": 0.92, "v": 0.0, "interp": "bezier" },
+            { "t": 2.52, "v": 14.0, "interp": "bezier" },
+            { "t": 6.0, "v": 8.0, "interp": "bezier" }
+          ],
+          "extrude": 16.0,
+          "edge": "#2a2b36"
+        },
+        {
+          "id": "label4",
+          "kind": "text",
+          "text": "Render",
+          "x": [
+            { "t": 0.0, "v": 640.0, "interp": "bezier" },
+            { "t": 0.92, "v": 640.0, "interp": "bezier" },
+            { "t": 2.52, "v": 700.0, "interp": "bezier" },
+            { "t": 6.0, "v": 706.0, "interp": "bezier" }
+          ],
+          "y": [
+            { "t": 0.0, "v": 500.0, "interp": "bezier" },
+            { "t": 0.92, "v": 500.0, "interp": "bezier" },
+            { "t": 2.52, "v": 520.0, "interp": "bezier" },
+            { "t": 6.0, "v": 510.0, "interp": "bezier" }
+          ],
+          "rotation": [
+            { "t": 0.0, "v": 0.0, "interp": "bezier" },
+            { "t": 0.92, "v": 0.0, "interp": "bezier" },
+            { "t": 2.52, "v": -6.0, "interp": "bezier" },
+            { "t": 6.0, "v": -6.0, "interp": "bezier" }
+          ],
+          "font_size": 40.0,
+          "z": [
+            { "t": 0.0, "v": -3.0, "interp": "bezier" },
+            { "t": 0.92, "v": -3.0, "interp": "bezier" },
+            { "t": 2.52, "v": -303.0, "interp": "bezier" },
+            { "t": 6.0, "v": -333.0, "interp": "bezier" }
+          ],
+          "rx": [
+            { "t": 0.0, "v": 0.0, "interp": "bezier" },
+            { "t": 0.92, "v": 0.0, "interp": "bezier" },
+            { "t": 2.52, "v": -26.0, "interp": "bezier" },
+            { "t": 6.0, "v": -22.0, "interp": "bezier" }
+          ],
+          "ry": [
+            { "t": 0.0, "v": 0.0, "interp": "bezier" },
+            { "t": 0.92, "v": 0.0, "interp": "bezier" },
+            { "t": 2.52, "v": 14.0, "interp": "bezier" },
+            { "t": 6.0, "v": 8.0, "interp": "bezier" }
+          ],
+          "cast_shadows": false
+        },
+        {
+          "id": "card5",
+          "kind": "rect",
+          "x": [
+            { "t": 0.0, "v": 980.0, "interp": "bezier" },
+            { "t": 1.0, "v": 980.0, "interp": "bezier" },
+            { "t": 2.6, "v": 1080.0, "interp": "bezier" },
+            { "t": 6.0, "v": 1086.0, "interp": "bezier" }
+          ],
+          "y": [
+            { "t": 0.0, "v": 500.0, "interp": "bezier" },
+            { "t": 1.0, "v": 500.0, "interp": "bezier" },
+            { "t": 2.6, "v": 470.0, "interp": "bezier" },
+            { "t": 6.0, "v": 460.0, "interp": "bezier" }
+          ],
+          "rotation": [
+            { "t": 0.0, "v": 0.0, "interp": "bezier" },
+            { "t": 1.0, "v": 0.0, "interp": "bezier" },
+            { "t": 2.6, "v": -12.0, "interp": "bezier" },
+            { "t": 6.0, "v": -12.0, "interp": "bezier" }
+          ],
+          "width": 300.0,
+          "height": 180.0,
+          "radius": 22.0,
+          "fill": "#e2e4f0",
+          "z": [
+            { "t": 0.0, "v": 0.0, "interp": "bezier" },
+            { "t": 1.0, "v": 0.0, "interp": "bezier" },
+            { "t": 2.6, "v": 300.0, "interp": "bezier" },
+            { "t": 6.0, "v": 270.0, "interp": "bezier" }
+          ],
+          "rx": [
+            { "t": 0.0, "v": 0.0, "interp": "bezier" },
+            { "t": 1.0, "v": 0.0, "interp": "bezier" },
+            { "t": 2.6, "v": 16.0, "interp": "bezier" },
+            { "t": 6.0, "v": 20.0, "interp": "bezier" }
+          ],
+          "ry": [
+            { "t": 0.0, "v": 0.0, "interp": "bezier" },
+            { "t": 1.0, "v": 0.0, "interp": "bezier" },
+            { "t": 2.6, "v": 30.0, "interp": "bezier" },
+            { "t": 6.0, "v": 24.0, "interp": "bezier" }
+          ],
+          "extrude": 16.0,
+          "edge": "#2a2b36"
+        },
+        {
+          "id": "label5",
+          "kind": "text",
+          "text": "Camera",
+          "x": [
+            { "t": 0.0, "v": 980.0, "interp": "bezier" },
+            { "t": 1.0, "v": 980.0, "interp": "bezier" },
+            { "t": 2.6, "v": 1080.0, "interp": "bezier" },
+            { "t": 6.0, "v": 1086.0, "interp": "bezier" }
+          ],
+          "y": [
+            { "t": 0.0, "v": 500.0, "interp": "bezier" },
+            { "t": 1.0, "v": 500.0, "interp": "bezier" },
+            { "t": 2.6, "v": 470.0, "interp": "bezier" },
+            { "t": 6.0, "v": 460.0, "interp": "bezier" }
+          ],
+          "rotation": [
+            { "t": 0.0, "v": 0.0, "interp": "bezier" },
+            { "t": 1.0, "v": 0.0, "interp": "bezier" },
+            { "t": 2.6, "v": -12.0, "interp": "bezier" },
+            { "t": 6.0, "v": -12.0, "interp": "bezier" }
+          ],
+          "fill": "#1a1b22",
+          "font_size": 40.0,
+          "z": [
+            { "t": 0.0, "v": -3.0, "interp": "bezier" },
+            { "t": 1.0, "v": -3.0, "interp": "bezier" },
+            { "t": 2.6, "v": 297.0, "interp": "bezier" },
+            { "t": 6.0, "v": 267.0, "interp": "bezier" }
+          ],
+          "rx": [
+            { "t": 0.0, "v": 0.0, "interp": "bezier" },
+            { "t": 1.0, "v": 0.0, "interp": "bezier" },
+            { "t": 2.6, "v": 16.0, "interp": "bezier" },
+            { "t": 6.0, "v": 20.0, "interp": "bezier" }
+          ],
+          "ry": [
+            { "t": 0.0, "v": 0.0, "interp": "bezier" },
+            { "t": 1.0, "v": 0.0, "interp": "bezier" },
+            { "t": 2.6, "v": 30.0, "interp": "bezier" },
+            { "t": 6.0, "v": 24.0, "interp": "bezier" }
+          ],
+          "cast_shadows": false
+        },
+        {
+          "id": "title",
+          "kind": "text",
+          "text": "mui-cut 3D",
+          "x": 640.0,
+          "y": 70.0,
+          "opacity": [
+            { "t": 0.0, "v": 0.0, "interp": "bezier" },
+            { "t": 0.8, "v": 0.0, "interp": "bezier" },
+            { "t": 1.6, "v": 1.0, "interp": "bezier" }
+          ],
+          "fill": "#f4f5fb",
+          "font_size": 84.0,
+          "weight": 800.0,
+          "z": [
+            { "t": 0.0, "v": -120.0, "interp": "bezier" },
+            { "t": 6.0, "v": -60.0, "interp": "bezier" }
+          ],
+          "extrude": 14.0,
+          "edge": "#5b4fd6"
+        }
+      ],
+      "mode": "3d",
+      "ground": {
+        "y": 620.0,
+        "color": "#20212b",
+        "radius": 2600.0,
+        "reflect": 0.0,
+        "contact": 0.7
+      },
+      "fog": {
+        "color": "#0e0f14",
+        "near": 1800.0,
+        "far": 4200.0
+      }
+    }
+  ]
+}

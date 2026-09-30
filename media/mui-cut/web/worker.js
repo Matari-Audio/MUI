@@ -40,6 +40,8 @@ self.onmessage = async ({ data: m }) => {
       self.postMessage({ type: 'ready', backend, adapter: gpu ? gpu.adapter() : '', engine: gpu ? gpu.engine() : 'vello_cpu' });
     } else if (m.type === 'load') {
       (gpu ?? cpu).load(m.json);
+    } else if (m.type === 'orbit') {
+      if (gpu) { if (m.on) gpu.set_orbit(m.yaw, m.pitch, m.zoom); else gpu.clear_orbit(); }
     } else if (m.type === 'asset') {
       (gpu ?? cpu).add_asset(m.path, m.bytes);
     } else if (m.type === 'draw') {
@@ -52,7 +54,8 @@ self.onmessage = async ({ data: m }) => {
         ctx.putImageData(new ImageData(new Uint8ClampedArray(px.buffer, px.byteOffset, px.length), m.w, m.h), 0, 0);
         quads = cpu.quads();
       }
-      self.postMessage({ type: 'drawn', quads, ms: performance.now() - start });
+      const notice = gpu ? gpu.notice() : cpu.notice(m.si);
+      self.postMessage({ type: 'drawn', quads, notice, ms: performance.now() - start });
     }
   } catch (e) {
     self.postMessage({ type: m.type === 'draw' ? 'drawn' : 'error', error: String(e) });

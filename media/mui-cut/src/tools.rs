@@ -142,6 +142,7 @@ fn headed(
         size,
         background: mui_cut::Rgba([0, 0, 0, 255]),
         layers: caption(l, f64::from(size[0]), scale).into(),
+        view: None,
     }));
     let mut heads = draw_all(b, &batch)?;
     let tiles: Vec<Vec<u8>> = heads.drain(..frames.len()).chain(tiles).collect();

@@ -186,6 +186,29 @@ try {
   check(typed.animators.length === 2 && typed.animators[1].stagger === 0.04, 'a preset animator lands in the file');
   await js(`document.querySelector('#right').scrollTop = 1e6`); await sleep(200);
   await shot('editor-animators.png');
+
+  // A 3D scene: the camera's properties are keyable like any other, the
+  // viewport draws the shot (flat with a notice where there is no 3D pass),
+  // and the orbit preview moves the view without touching the file.
+  copyFileSync(join(here, '../examples/knot.glb'), join(out, 'knot.glb'));
+  writeFileSync(file, readFileSync(join(here, '../examples/stage3d.cut.json'), 'utf8'));
+  await sleep(1500);
+  await click('#scenes button:nth-child(1)'); await sleep(800);
+  await js(`document.querySelector('#layers button:last-child').click()`); await sleep(400);
+  check(await js(`[...document.querySelector('#graph-prop').options].some(o => o.value === 'distance')`), 'the camera\'s distance is in the graph');
+  const notice = await js(`document.querySelector('#notice').hidden ? '' : document.querySelector('#notice').textContent`);
+  check(backend === 'WebGPU' ? notice === '' : /flat/.test(notice), `3D draws ${notice || 'in 3D'}`);
+  await shot('editor-3d.png');
+  if (backend === 'WebGPU') {
+    const before = readFileSync(file, 'utf8'), d3 = await draws();
+    await click('#orbit');
+    check(await js(`document.querySelector('#orbit').getAttribute('aria-pressed')`) === 'true', 'the orbit preview turns on');
+    const [qx, qy] = await rect('#overlay');
+    await drag(qx + 400, qy + 250, qx + 600, qy + 300);
+    check(await draws() > d3 && readFileSync(file, 'utf8') === before, 'orbiting redraws and leaves the file alone');
+    await shot('editor-3d-orbit.png');
+    await click('#orbit');
+  }
   check(errors.length === 0, 'no page exceptions ' + errors.join('; '));
   ws.close();
 } catch (e) {

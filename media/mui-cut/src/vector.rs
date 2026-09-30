@@ -191,6 +191,29 @@ fn slots(l: &Drawn, layout: Layout, along: &str, orient: bool) -> Vec<(KPoint, f
     }
 }
 
+/// How far the point `frac` (0..1) of the way along path data `d` is from
+/// its start; `None` for no path.
+pub fn along(d: &str, frac: f64) -> Option<(f64, f64)> {
+    let path = parse(d);
+    let segs: Vec<PathSeg> = path.segments().collect();
+    let lens: Vec<f64> = segs.iter().map(|s| s.arclen(ACCURACY)).collect();
+    let total: f64 = lens.iter().sum();
+    let first = segs.first()?;
+    let (p, _) = at_length(&segs, &lens, frac.clamp(0., 1.) * total);
+    let o = first.eval(0.);
+    Some((p.x - o.x, p.y - o.y))
+}
+
+/// The filled pieces' outlines as one path, `corner` moved to the origin:
+/// the walls of an extruded vector layer.
+pub fn outline(pieces: &[Piece], corner: KPoint) -> Path {
+    let mut all = BezPath::new();
+    for p in pieces.iter().filter(|p| p.fill.is_some()) {
+        all.extend(p.path.iter());
+    }
+    mui_path(&all, -corner.to_vec2())
+}
+
 /// The point and direction `s` pixels along `segs`.
 fn at_length(segs: &[PathSeg], lens: &[f64], mut s: f64) -> (KPoint, kurbo::Vec2) {
     for (seg, &len) in segs.iter().zip(lens) {

@@ -35,9 +35,12 @@ impl Engine {
 }
 
 enum Inner {
-    /// With the background scene of the last frame (it only changes with
-    /// the scene).
-    Classic(Box<GpuRenderer>, Option<(Rgba, [u32; 2], ResolvedScene)>),
+    /// With the base scene of the last frame: the background, or a clear
+    /// one for the 3D atlas (it only changes with the scene).
+    Classic(
+        Box<GpuRenderer>,
+        Option<(Option<Rgba>, [u32; 2], ResolvedScene)>,
+    ),
     Sparse(Box<Sparse>),
 }
 
@@ -47,6 +50,14 @@ pub struct GpuCanvas {
     pub queue: wgpu::Queue,
     inner: Inner,
     size: [u32; 2],
+    format: wgpu::TextureFormat,
+    /// The size the Vello engine is set up for: the target's, or the 3D
+    /// atlas's.
+    vello_size: [u32; 2],
+    /// 3D scenes in 3D; off, they draw flat (see [`GpuCanvas::notice`]).
+    pub three_d: bool,
+    space: Option<Box<crate::gpu3d::Space>>,
+    notice: String,
 }
 
 impl GpuCanvas {
@@ -74,6 +85,11 @@ impl GpuCanvas {
             queue: queue.clone(),
             inner,
             size,
+            format,
+            vello_size: size,
+            three_d: true,
+            space: None,
+            notice: String::new(),
         })
     }
     pub fn engine(&self) -> Engine {
@@ -87,10 +103,12 @@ impl GpuCanvas {
     }
     pub fn resize(&mut self, size: [u32; 2]) -> Result<(), String> {
         self.size = size;
-        match &mut self.inner {
-            Inner::Classic(r, _) => r.resize(size).map_err(|e| e.to_string()),
-            Inner::Sparse(s) => s.resize(&self.device, size),
-        }
+        self.space = None;
+        Ok(())
+    }
+    /// Why the last 3D frame was drawn flat, or empty.
+    pub fn notice(&self) -> &str {
+        &self.notice
     }
     /// `frame` scaled to fill `target` (at [`GpuCanvas::size`]); the layers'
     /// quads in project pixels. Submits its own work.
@@ -100,23 +118,78 @@ impl GpuCanvas {
         frame: &Frame,
         target: &wgpu::TextureView,
     ) -> Result<Vec<Quad>, String> {
+        // A failed 3D pass keeps its reason for as long as it draws flat.
+        if frame.view.is_none() || self.three_d {
+            self.notice.clear();
+        }
+        if let Some(view) = &frame.view {
+            if self.three_d {
+                match self.draw_3d(assets, frame, view, target) {
+                    Ok(quads) => return Ok(quads),
+                    Err(e) => {
+                        self.three_d = false;
+                        self.space = None;
+                        self.notice = format!("3D unavailable, drawn flat: {e}");
+                    }
+                }
+            } else if self.notice.is_empty() {
+                "3D scenes draw flat on this renderer".clone_into(&mut self.notice);
+            }
+        }
         let [fw, fh] = frame.size.map(f64::from);
         let view =
             Affine::scale_non_uniform(f64::from(self.size[0]) / fw, f64::from(self.size[1]) / fh);
         let layers = assets.layers(frame)?;
+        let placed: Vec<(&ResolvedScene, Affine)> =
+            layers.scenes.iter().map(|(s, p)| (s, view * *p)).collect();
+        self.paint(
+            assets,
+            &placed,
+            Some((frame.background, [fw, fh], view)),
+            self.size,
+            target,
+        )?;
+        Ok(layers.quads)
+    }
+
+    /// Paint `scenes` into `target`, `size` pixels, over `background` (a
+    /// colour filling `[w, h]` under an affine) or over nothing.
+    pub(crate) fn paint(
+        &mut self,
+        assets: &Assets,
+        scenes: &[(&ResolvedScene, Affine)],
+        background: Option<(Rgba, [f64; 2], Affine)>,
+        size: [u32; 2],
+        target: &wgpu::TextureView,
+    ) -> Result<(), String> {
+        if self.vello_size != size {
+            match &mut self.inner {
+                Inner::Classic(r, _) => r.resize(size).map_err(|e| e.to_string())?,
+                Inner::Sparse(s) => s.resize(&self.device, size)?,
+            }
+            self.vello_size = size;
+        }
         let mut failed = None;
         let mut paint = |c: &mut dyn FnMut(&ResolvedScene, Affine) -> Result<(), String>| {
-            for (scene, place) in &layers.scenes {
-                if let Err(e) = c(scene, view * *place) {
+            for (scene, place) in scenes {
+                if let Err(e) = c(scene, *place) {
                     failed = Some(e);
                 }
             }
         };
         match &mut self.inner {
             Inner::Classic(renderer, base) => {
-                let key = (frame.background, frame.size);
+                let (colour, [fw, fh], view) = match background {
+                    Some((c, wh, v)) => (Some(c), wh, v),
+                    None => (None, size.map(f64::from), Affine::IDENTITY),
+                };
+                let key = (colour, [fw as u32, fh as u32]);
                 if base.as_ref().is_none_or(|b| (b.0, b.1) != key) {
-                    let bg = block(fw, fh).radius(0.).fill(color(frame.background));
+                    let bg = block(fw, fh).radius(0.);
+                    let bg = match colour {
+                        Some(c) => bg.fill(color(c)),
+                        None => bg,
+                    };
                     let scene = resolve(&SceneSpec::new(bg)).map_err(|e| e.to_string())?;
                     *base = Some((key.0, key.1, scene));
                 }
@@ -132,12 +205,14 @@ impl GpuCanvas {
             Inner::Sparse(sparse) => {
                 sparse.upload(&self.device, &self.queue, assets.images());
                 sparse.scene.reset();
-                sparse.scene.set_transform(view);
-                let [r, g, b, a] = frame.background.0;
-                sparse
-                    .scene
-                    .set_paint(mui_vello::peniko::Color::from_rgba8(r, g, b, a));
-                sparse.scene.fill_rect(&Rect::new(0., 0., fw, fh));
+                if let Some((bg, [fw, fh], view)) = background {
+                    sparse.scene.set_transform(view);
+                    let [r, g, b, a] = bg.0;
+                    sparse
+                        .scene
+                        .set_paint(mui_vello::peniko::Color::from_rgba8(r, g, b, a));
+                    sparse.scene.fill_rect(&Rect::new(0., 0., fw, fh));
+                }
                 let mut c = sparse.canvas();
                 paint(&mut |s, t| {
                     mui_vello::paint(&mut c, s, t).map_err(|e| format!("paint: {e:?}"))
@@ -145,7 +220,31 @@ impl GpuCanvas {
                 sparse.render(&self.device, &self.queue, target)?;
             }
         }
-        failed.map_or(Ok(layers.quads), Err)
+        failed.map_or(Ok(()), Err)
+    }
+
+    fn draw_3d(
+        &mut self,
+        assets: &Assets,
+        frame: &Frame,
+        view: &crate::View,
+        target: &wgpu::TextureView,
+    ) -> Result<Vec<Quad>, String> {
+        if self.space.is_none() {
+            let stage = mui_stage::Stage::with_device(
+                self.device.clone(),
+                self.queue.clone(),
+                self.size[0],
+                self.size[1],
+            )
+            .map_err(|e| e.to_string())?;
+            self.space = Some(Box::new(crate::gpu3d::Space::new(stage)));
+        }
+        let mut space = self.space.take().expect("made above");
+        let format = self.format;
+        let out = space.draw(self, assets, frame, view, target, format);
+        self.space = Some(space);
+        out
     }
 }
 
@@ -170,7 +269,7 @@ mod offline {
     /// Offline frames on the GPU: subframes averaged in linear light, one
     /// readback per output frame through a ring of staging buffers.
     pub struct Offline {
-        canvas: GpuCanvas,
+        pub(crate) canvas: GpuCanvas,
         pub assets: Assets,
         pub adapter: String,
         size: [u32; 2],
@@ -432,6 +531,10 @@ mod offline {
             );
             for (i, f) in subframes.iter().enumerate() {
                 self.canvas.draw(&self.assets, f, &self.sub)?;
+                // An export never quietly flattens a 3D shot.
+                if f.view.is_some() && !self.canvas.notice().is_empty() {
+                    return Err(self.canvas.notice().to_owned());
+                }
                 let mut enc =
                     device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
                 let load = if i == 0 {

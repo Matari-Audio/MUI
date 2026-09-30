@@ -707,7 +707,7 @@ impl Server {
                             }
                         }
                         let mut animated = serde_json::Map::new();
-                        for (name, prop) in l.props() {
+                        for (name, prop) in l.props_in(true) {
                             let times: Vec<f64> = match prop {
                                 mui_cut::Prop::Num(mui_cut::Anim::Keys(k)) => k.iter().map(|k| k.t).collect(),
                                 mui_cut::Prop::Color(mui_cut::Anim::Keys(k)) => k.iter().map(|k| k.t).collect(),

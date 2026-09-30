@@ -2,6 +2,17 @@
 // reflects them, then depth of field, bloom, aberration, vignette, tonemap
 // and grain. All colour here is linear light until `fs_final` encodes it.
 
+// pos: xyz, w kind (0 none, 1 directional, 2 point, 3 spot); dir: the way
+// the light travels, w cos(outer cone); color: rgb times intensity,
+// w cos(inner cone); extra: range (0 none), shadow layer (-1 none),
+// softness in texels, depth bias.
+struct Light {
+    pos: vec4f,
+    dir: vec4f,
+    color: vec4f,
+    extra: vec4f,
+};
+
 struct Globals {
     view_proj: mat4x4f,
     eye: vec4f,
@@ -9,6 +20,18 @@ struct Globals {
     time_res: vec4f,
     // The floor's colour, linear.
     floor: vec4f,
+    // A solid background, linear; a: on.
+    clear: vec4f,
+    // Fog colour, linear; a: on. fog_range: near, far.
+    fog: vec4f,
+    fog_range: vec4f,
+    // Summed ambient light; a: 1 when the shot has lights at all.
+    ambient: vec4f,
+    lights: array<Light, 4>,
+    // One per light, then the floor's top-down contact view.
+    shadow_vp: array<mat4x4f, 5>,
+    // x: contact shadow strength.
+    contact: vec4f,
 };
 @group(0) @binding(0) var<uniform> g: Globals;
 
@@ -21,6 +44,10 @@ struct Draw {
     // Reflected draws: x floor height, y strength, z height falloff,
     // w floor radius (0 = not a reflection).
     mirror: vec4f,
+    // The layer texture's part on the face: u0, v0, u1, v1.
+    uv: vec4f,
+    // x: receives shadows; models: y metallic, z roughness.
+    flags: vec4f,
 };
 @group(1) @binding(0) var<uniform> d: Draw;
 
@@ -49,8 +76,101 @@ struct Out {
 };
 fn out(c: vec4f, world: vec3f) -> Out {
     var o: Out;
+    let dist = length(world - g.eye.xyz);
     o.color = c;
-    o.dist = vec4f(length(world - g.eye.xyz), 0., 0., 1.);
+    if (g.fog.a > 0.5) {
+        let f = smoothstep(g.fog_range.x, g.fog_range.y, dist);
+        o.color = vec4f(mix(c.rgb, g.fog.rgb * c.a, f), c.a);
+    }
+    o.dist = vec4f(dist, 0., 0., 1.);
+    return o;
+}
+
+@group(3) @binding(0) var shadow_map: texture_depth_2d_array;
+@group(3) @binding(1) var shadow_cmp: sampler_comparison;
+
+fn lit_shot() -> bool { return g.ambient.a > 0.5; }
+
+// How much of light `k` reaches `world` past its shadow map: a 5x5 PCF
+// of hardware-filtered compares, `soft` texels apart.
+fn shadow(k: i32, world: vec3f, n: vec3f, soft: f32, bias: f32) -> f32 {
+    if (k < 0) { return 1.; }
+    // Nudged off the surface along its normal, against shadow acne.
+    let p = g.shadow_vp[k] * vec4f(world + n * 1.5, 1.);
+    let q = p.xyz / p.w;
+    let uv = vec2f(q.x * 0.5 + 0.5, 0.5 - q.y * 0.5);
+    if (p.w <= 0. || any(uv < vec2f(0.)) || any(uv > vec2f(1.)) || q.z > 1.) { return 1.; }
+    let texel = soft / f32(textureDimensions(shadow_map).x);
+    var s = 0.;
+    for (var y = -2; y <= 2; y++) {
+        for (var x = -2; x <= 2; x++) {
+            s += textureSampleCompareLevel(shadow_map, shadow_cmp,
+                uv + vec2f(f32(x), f32(y)) * texel, k, q.z - bias);
+        }
+    }
+    return s / 25.;
+}
+
+// The floor's contact shadow: 1 open, less under what stands close above.
+fn contact(world: vec3f) -> f32 {
+    if (g.contact.x <= 0.) { return 1.; }
+    let p = g.shadow_vp[4] * vec4f(world, 1.);
+    let uv = vec2f(p.x * 0.5 + 0.5, 0.5 - p.y * 0.5);
+    let size = vec2f(textureDimensions(shadow_map));
+    var occ = 0.;
+    for (var k = 0; k < 24; k++) {
+        let r = sqrt((f32(k) + 0.5) / 24.) * 20.;
+        let a = f32(k) * 2.39996;
+        let at = clamp(vec2i(uv * size + vec2f(cos(a), sin(a)) * r), vec2i(0), vec2i(size) - 1);
+        // Depth 1 is the floor, 0 the top of the contact range: the nearer
+        // the floor, the darker.
+        let z = textureLoad(shadow_map, at, 4, 0);
+        occ += select(0., z * z, z < 0.999);
+    }
+    return 1. - g.contact.x * occ / 24.;
+}
+
+struct Shade {
+    diffuse: vec3f,
+    spec: vec3f,
+};
+// Every light at `world` on a surface facing `n`, seen from the eye; `shine`
+// is a Blinn-Phong exponent (0: no highlight).
+fn shade(world: vec3f, n: vec3f, receive: f32, shine: f32) -> Shade {
+    var o: Shade;
+    o.diffuse = g.ambient.rgb;
+    o.spec = vec3f(0.);
+    let v = normalize(g.eye.xyz - world);
+    for (var i = 0; i < 4; i++) {
+        let li = g.lights[i];
+        if (li.pos.w < 0.5) { continue; }
+        var l = -li.dir.xyz;
+        var att = 1.;
+        if (li.pos.w > 1.5) {
+            let to = li.pos.xyz - world;
+            let d = length(to);
+            l = to / max(d, 1e-4);
+            if (li.extra.x > 0.) {
+                let f = clamp(1. - d / li.extra.x, 0., 1.);
+                att = f * f;
+            }
+            if (li.pos.w > 2.5) {
+                att *= smoothstep(li.dir.w, max(li.color.w, li.dir.w + 1e-4), dot(-l, li.dir.xyz));
+            }
+        }
+        let ndl = max(dot(n, l), 0.);
+        if (ndl * att <= 0.) { continue; }
+        var sh = 1.;
+        if (receive > 0.5) {
+            sh = shadow(i32(li.extra.y), world, n, li.extra.z, li.extra.w);
+        }
+        let c = li.color.rgb * att * sh;
+        o.diffuse += c * ndl;
+        if (shine > 0.) {
+            let h = normalize(l + v);
+            o.spec += c * pow(max(dot(n, h), 0.), shine) * ndl;
+        }
+    }
     return o;
 }
 
@@ -98,7 +218,7 @@ struct Full {
 
 @fragment fn fs_bg(i: Full) -> Out {
     var o: Out;
-    o.color = vec4f(background(i.uv, g.time_res.x), 1.);
+    o.color = vec4f(select(background(i.uv, g.time_res.x), g.clear.rgb, g.clear.a > 0.5), 1.);
     o.dist = vec4f(60000., 0., 0., 1.);
     return o;
 }
@@ -120,9 +240,14 @@ fn cap(i: u32, z: f32) -> Cap {
     let world = d.model * local;
     var o: Cap;
     o.pos = g.view_proj * world;
-    o.uv = uv;
+    o.uv = mix(d.uv.xy, d.uv.zw, uv);
     o.world = world.xyz;
     return o;
+}
+// The face's normal, toward whoever sees it.
+fn face_normal(world: vec3f) -> vec3f {
+    let n = normalize((d.model * vec4f(0., 0., 1., 0.)).xyz);
+    return select(-n, n, dot(n, g.eye.xyz - world) > 0.);
 }
 @vertex fn vs_front(@builtin(vertex_index) i: u32) -> Cap { return cap(i, 0.); }
 @vertex fn vs_back(@builtin(vertex_index) i: u32) -> Cap { return cap(i, -d.size.z); }
@@ -141,14 +266,21 @@ fn mirrored(c: vec4f, world: vec3f) -> vec4f {
 }
 
 @fragment fn fs_front(i: Cap) -> Out {
-    let c = textureSample(tex, samp, i.uv);
+    var c = textureSample(tex, samp, i.uv);
+    if (lit_shot()) {
+        c = vec4f(c.rgb * shade(i.world, face_normal(i.world), d.flags.x, 0.).diffuse, c.a);
+    }
     let o = mirrored(vec4f(c.rgb * d.size.w, c.a) * d.edge.a, i.world);
     if (o.a < 0.004) { discard; }
     return out(o, i.world);
 }
 @fragment fn fs_back(i: Cap) -> Out {
     let a = textureSample(tex, samp, i.uv).a;
-    let o = mirrored(vec4f(d.edge.rgb * 0.3, 1.) * a * d.edge.a, i.world);
+    var rgb = d.edge.rgb * 0.3;
+    if (lit_shot()) {
+        rgb = d.edge.rgb * shade(i.world, face_normal(i.world), d.flags.x, 0.).diffuse;
+    }
+    let o = mirrored(vec4f(rgb, 1.) * a * d.edge.a, i.world);
     if (o.a < 0.004) { discard; }
     return out(o, i.world);
 }
@@ -168,6 +300,13 @@ struct Wall {
 }
 @fragment fn fs_wall(i: Wall) -> Out {
     let n = normalize(i.normal);
+    if (lit_shot()) {
+        let s = shade(i.world, n, d.flags.x, 48.);
+        let c = d.edge.rgb * s.diffuse + s.spec * 0.3;
+        let o = mirrored(vec4f(c, 1.) * d.edge.a, i.world);
+        if (o.a < 0.004) { discard; }
+        return out(o, i.world);
+    }
     let l = normalize(vec3f(-0.4, 0.6, 0.7));
     let v = normalize(g.eye.xyz - i.world);
     let h = normalize(l + v);
@@ -196,7 +335,61 @@ struct Wall {
 @fragment fn fs_floor(i: Cap) -> Out {
     let r = length(i.world.xz) / d.size.x;
     let a = exp(-r * r) * d.edge.a;
-    return out(vec4f(d.edge.rgb * a, a), i.world);
+    var c = d.edge.rgb * contact(i.world);
+    if (lit_shot()) {
+        c *= shade(i.world, vec3f(0., 1., 0.), 1., 0.).diffuse;
+    }
+    return out(vec4f(c * a, a), i.world);
+}
+
+// A model: base colour, metallic and roughness, lit by the shot's lights
+// or, in an unlit shot, by the walls' fixed key light.
+@fragment fn fs_mesh(i: Wall) -> Out {
+    var n = normalize(i.normal);
+    if (dot(n, g.eye.xyz - i.world) < 0.) { n = -n; }
+    let base = d.edge.rgb;
+    let metal = d.flags.y;
+    let rough = d.flags.z;
+    let shine = 2. / max(rough * rough * rough * rough, 1e-3) - 2.;
+    let f0 = mix(vec3f(0.04), base, metal);
+    var c: vec3f;
+    if (lit_shot()) {
+        let s = shade(i.world, n, d.flags.x, shine);
+        // The ambient light stands in for the environment a metal mirrors.
+        c = base * (1. - metal) * s.diffuse + f0 * (s.spec * (shine + 8.) / 25. + g.ambient.rgb);
+    } else {
+        let l = normalize(vec3f(-0.4, 0.6, 0.7));
+        let v = normalize(g.eye.xyz - i.world);
+        let h = normalize(l + v);
+        let ndl = max(dot(n, l), 0.);
+        c = base * (1. - metal) * (0.3 + 0.7 * ndl)
+            + f0 * pow(max(dot(n, h), 0.), shine) * ndl * (shine + 8.) / 25.;
+    }
+    let o = mirrored(vec4f(c, 1.) * d.edge.a, i.world);
+    if (o.a < 0.004) { discard; }
+    return out(o, i.world);
+}
+
+// --- shadow maps ------------------------------------------------------------
+
+// The instance index is the shadow map layer, and so the light's matrix.
+struct ShadowCap {
+    @builtin(position) pos: vec4f,
+    @location(0) uv: vec2f,
+};
+@vertex fn vs_shadow_face(@builtin(vertex_index) i: u32, @builtin(instance_index) k: u32) -> ShadowCap {
+    let c = cap(i, 0.);
+    var o: ShadowCap;
+    o.pos = g.shadow_vp[k] * vec4f(c.world, 1.);
+    o.uv = c.uv;
+    return o;
+}
+// A face casts the shape of its pixels, not of its rectangle.
+@fragment fn fs_shadow_face(i: ShadowCap) {
+    if (textureSample(tex, samp, i.uv).a * d.edge.a < 0.5) { discard; }
+}
+@vertex fn vs_shadow_solid(@location(0) p: vec3f, @location(1) n: vec3f, @builtin(instance_index) k: u32) -> @builtin(position) vec4f {
+    return g.shadow_vp[k] * d.model * vec4f(p, 1.);
 }
 
 // --- layers ---------------------------------------------------------------

@@ -7,7 +7,7 @@
 import init, { Cut } from './pkg/mui_cut.js';
 
 const $ = s => document.querySelector(s);
-const KIND_ICON = { rect: '▭', ellipse: '◯', text: 'T', image: '▣', path: '〰', duplicator: '⁂', svg: 'S', lottie: 'L' };
+const KIND_ICON = { rect: '▭', ellipse: '◯', text: 'T', image: '▣', path: '〰', duplicator: '⁂', svg: 'S', lottie: 'L', camera: '⌖', light: '☀', model: '◈' };
 const VECTOR = ['text', 'path', 'duplicator', 'svg', 'lottie'];
 // Graphite, as in style.css: greys only, state by value, weight and shape.
 const C = {
@@ -140,10 +140,10 @@ async function pull(why) {
   await loadAssets();
   status(why); refresh();
 }
-// The files image, SVG and Lottie layers name, each sent to the viewport once.
+// The files image, SVG, Lottie and model layers name, each sent to the viewport once.
 async function loadAssets() {
   for (const l of doc.scenes.flatMap(s => s.layers)) {
-    if (!['image', 'svg', 'lottie'].includes(l.kind) || !l.path || assets.has(l.path)) continue;
+    if (!['image', 'svg', 'lottie', 'model'].includes(l.kind) || !l.path || assets.has(l.path)) continue;
     assets.add(l.path);
     try {
       const r = await fetch('/asset/' + l.path);
@@ -190,6 +190,9 @@ document.querySelectorAll('[data-add]').forEach(b => b.onclick = () => edit(() =
   if (kind === 'text') Object.assign(l, { text: 'Text' });
   else if (kind === 'path') Object.assign(l, { d: 'M -150 0 C -75 -120 75 120 150 0', fill: '#00000000', stroke: '#8b7cff', stroke_width: 6 });
   else if (kind === 'duplicator') Object.assign(l, { width: 40, height: 40, radius: 8, fill: '#8b7cff', count: 12, spacing_x: 60, spacing_y: 60 });
+  else if (kind === 'camera') Object.assign(l, { distance: Math.round(h / 2 / Math.tan(20 * Math.PI / 180)) });
+  else if (kind === 'light') Object.assign(l, { rx: 50, ry: -30 });
+  else if (kind === 'model') Object.assign(l, { path: 'model.glb', height: 200, fill: '#ffffff' });
   else Object.assign(l, { width: 200, height: 200, fill: '#8b7cff' });
   ls.push(l); sel = l.id;
 }));
@@ -240,12 +243,17 @@ function kindFields(l) {
     field('text', input(l.text, v => edit(() => { l.text = v; }), 'area'));
     field('align', choice(l.align ?? 'center', ['left', 'center', 'right'], v => set('align', v, 'center')));
   }
-  if (['image', 'svg', 'lottie'].includes(l.kind)) field('path', input(l.path, v => edit(() => { l.path = v; loadAssets(); })));
+  if (['image', 'svg', 'lottie', 'model'].includes(l.kind)) field('path', input(l.path, v => edit(() => { l.path = v; loadAssets(); })));
   if (l.kind === 'lottie') {
     field('speed', input(l.speed ?? 1, v => set('speed', Number(v), 1), 'number'));
     field('loop', choice(l.loop ?? true, ['true', 'false'], v => set('loop', v === 'true', true)));
   }
   if (l.kind === 'path') field('d', input(l.d, v => edit(() => { l.d = v; }), 'area'));
+  if (l.kind === 'camera') {
+    field('look_at', choice(l.look_at ?? '', ['', ...scene().layers.filter(o => o !== l).map(o => o.id)], v => set('look_at', v, '')));
+    field('path', input(l.path ?? '', v => set('path', v, ''), 'area'));
+  }
+  if (l.kind === 'light') field('type', choice(l.type ?? 'directional', ['directional', 'spot', 'point', 'ambient'], v => set('type', v, 'directional')));
   if (l.kind === 'duplicator') {
     field('shape', choice(l.shape ?? 'rect', ['rect', 'ellipse', 'path'], v => set('shape', v, 'rect')));
     if (l.shape === 'path') field('d', input(l.d ?? '', v => set('d', v, ''), 'area'));
@@ -359,6 +367,8 @@ worker.onmessage = ({ data: m }) => {
   view.dataset.draws = +(view.dataset.draws ?? 0) + 1;   // e2e counts these
   view.dataset.ms = +(view.dataset.ms ?? 0) + (m.ms ?? 0);  // and times them
   if (m.error) showError(m.error); else quads = JSON.parse(m.quads);
+  $('#notice').hidden = !m.notice; $('#notice').textContent = m.notice ?? '';
+  $('#orbit').hidden = scene()?.mode !== '3d' || !!m.notice;
   drawOverlay();
 };
 let hover = null, drag = null;
@@ -416,7 +426,21 @@ function inside([x, y], pts) {
   return !(pos && neg);
 }
 const hit = p => [...quads].reverse().find(q => inside(p, q.pts))?.id ?? null;
+// The orbit preview swings the shot camera about its target; the project
+// never sees it.
+const orbit = { on: false, yaw: 0, pitch: 0, zoom: 1, from: null };
+const sendOrbit = () => { worker.postMessage({ type: 'orbit', ...orbit, from: undefined }); need = true; };
+$('#orbit').onclick = () => {
+  Object.assign(orbit, { on: !orbit.on, yaw: 0, pitch: 0, zoom: 1 });
+  $('#orbit').setAttribute('aria-pressed', orbit.on); $('#orbit').classList.toggle('on', orbit.on);
+  sendOrbit();
+};
+over.addEventListener('wheel', e => {
+  if (!orbit.on) return;
+  e.preventDefault(); orbit.zoom = Math.min(8, Math.max(0.1, orbit.zoom * Math.exp(e.deltaY * 0.001))); sendOrbit();
+}, { passive: false });
 over.onpointerdown = e => {
+  if (orbit.on) { orbit.from = [e.clientX, e.clientY, orbit.yaw, orbit.pitch]; over.setPointerCapture(e.pointerId); return; }
   const p = toProject(e), id = hit(p);
   select(id);
   if (!id) return;
@@ -426,13 +450,19 @@ over.onpointerdown = e => {
   begin();
 };
 over.onpointermove = e => {
+  if (orbit.on) {
+    if (!orbit.from) return;
+    const [x0, y0, yaw, pitch] = orbit.from;
+    orbit.yaw = yaw - (e.clientX - x0) * 0.4; orbit.pitch = Math.max(-89, Math.min(89, pitch + (e.clientY - y0) * 0.4)); sendOrbit();
+    return;
+  }
   const p = toProject(e);
   if (!drag) { const h = hit(p); if (h !== hover) { hover = h; need = true; } over.style.cursor = h ? 'move' : 'default'; return; }
   setValue(drag.l, 'x', round(drag.x0 + p[0] - drag.p[0]));
   setValue(drag.l, 'y', round(drag.y0 + p[1] - drag.p[1]));
   changed();
 };
-over.onpointerup = () => { drag = null; end(); };
+over.onpointerup = () => { if (orbit.on) { orbit.from = null; return; } drag = null; end(); };
 
 // ---------- timeline
 const tl = $('#timeline'), tctx = tl.getContext('2d');
