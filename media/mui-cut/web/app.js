@@ -11,6 +11,14 @@ const PROPS = ['x', 'y', 'scale', 'rotation', 'opacity', 'width', 'height', 'rad
 const KEYABLE = [...PROPS, 'fill'];
 const DEFAULTS = { x: 0, y: 0, scale: 1, rotation: 0, opacity: 1, width: 100, height: 100, radius: 0, font_size: 64, weight: 600, fill: '#ffffff' };
 const KIND_ICON = { rect: '▭', ellipse: '◯', text: 'T', image: '▣' };
+// Graphite, as in style.css: greys only, state by value, weight and shape.
+const C = {
+  text: '#8a8a8a', textOn: '#e6e6e6', grid: '#262626', gridText: '#666666',
+  tick: '#3a3a3a', row: '#181818', rowAlt: '#1c1c1c', rowOn: '#262626',
+  curve: '#d4d4d4', key: '#b0b0b0', layerKey: '#6a6a6a', handle: '#7a7a7a',
+  handleLine: '#ffffff30', picked: '#ffffff', pickedLine: '#ffffffa0',
+  playhead: '#f2f2f2', hover: '#ffffff70', sel: '#ffffff', halo: '#000000a0',
+};
 
 await init();
 const cut = new Cut();
@@ -275,12 +283,20 @@ function drawViewport() {
 function drawOverlay() {
   const k = over.width / doc.size[0];
   octx.clearRect(0, 0, over.width, over.height);
-  for (const [id, width, color] of [[hover, 1, '#ffffff88'], [sel, 2, '#8b7cff']]) {
+  const dpr = devicePixelRatio;
+  for (const [id, width, color] of [[hover, 1, C.hover], [sel, 1.5, C.sel]]) {
     const q = quads.find(q => q.id === id);
     if (!q) continue;
     octx.beginPath();
     q.pts.forEach(([x, y], i) => i ? octx.lineTo(x * k, y * k) : octx.moveTo(x * k, y * k));
-    octx.closePath(); octx.lineWidth = width * devicePixelRatio; octx.strokeStyle = color; octx.stroke();
+    octx.closePath();
+    // A dark hairline under the light one keeps it legible on light scenes.
+    octx.lineWidth = (width + 2) * dpr; octx.strokeStyle = C.halo; octx.stroke();
+    octx.lineWidth = width * dpr; octx.strokeStyle = color; octx.stroke();
+    if (id === sel) for (const [x, y] of q.pts) { // corner squares mark the selection
+      octx.fillStyle = C.halo; octx.fillRect(x * k - 4 * dpr, y * k - 4 * dpr, 8 * dpr, 8 * dpr);
+      octx.fillStyle = C.sel; octx.fillRect(x * k - 3 * dpr, y * k - 3 * dpr, 6 * dpr, 6 * dpr);
+    }
   }
 }
 function toProject(e) {
@@ -335,9 +351,15 @@ function rowKeys(r) {
   const ps = r.p ? [r.p] : KEYABLE.filter(p => isKeys(r.l[p]));
   return ps.flatMap(p => r.l[p].map(k => ({ l: r.l, p, k })));
 }
-function diamond(c, x, y, s, fill) {
+function diamond(c, x, y, s, fill, ring = false) {
   c.beginPath(); c.moveTo(x, y - s); c.lineTo(x + s, y); c.lineTo(x, y + s); c.lineTo(x - s, y); c.closePath();
   c.fillStyle = fill; c.fill();
+  if (ring) { c.lineWidth = 1; c.strokeStyle = C.halo; c.stroke(); }
+}
+// Playhead: a hairline with a flag on the ruler, like Blender's.
+function playhead(c, x, h) {
+  c.fillStyle = C.playhead; c.fillRect(Math.round(x), 0, 1, h);
+  c.beginPath(); c.moveTo(x - 5, 0); c.lineTo(x + 6, 0); c.lineTo(x + 6, 6); c.lineTo(x + .5, 11); c.lineTo(x - 5, 6); c.closePath(); c.fill();
 }
 function drawTimeline() {
   tlRows = rows();
@@ -350,23 +372,23 @@ function drawTimeline() {
   // Ruler: a tick every tenth, a label every second.
   for (let i = 0; i <= Math.round(dur * 10); i++) {
     const x = tlX(i / 10), whole = i % 10 === 0;
-    c.fillStyle = whole ? '#8d8aa3' : '#3a3d4a';
+    c.fillStyle = whole ? C.text : C.tick;
     c.fillRect(x, whole ? 4 : 14, 1, whole ? 18 : 8);
     if (whole) c.fillText(`${i / 10}s`, x + 3, 9);
   }
   tlRows.forEach((r, i) => {
     const y = RULER + i * ROW;
     const on = r.l.id === sel && (r.p ? r.p === prop : false);
-    c.fillStyle = i % 2 ? '#17181f' : '#1a1b23'; c.fillRect(0, y, w, ROW);
-    if (on) { c.fillStyle = '#8b7cff22'; c.fillRect(0, y, w, ROW); }
-    c.fillStyle = r.l.id === sel && !r.p ? '#eceaf6' : '#8d8aa3';
+    c.fillStyle = on ? C.rowOn : i % 2 ? C.rowAlt : C.row; c.fillRect(0, y, w, ROW);
+    if (on) { c.fillStyle = C.textOn; c.fillRect(0, y, 2, ROW); }
+    c.fillStyle = r.l.id === sel && (!r.p || on) ? C.textOn : C.text;
     c.fillText(r.p ? `   ${r.p}` : `${KIND_ICON[r.l.kind] ?? ''} ${r.l.name || r.l.id}`, 8, y + ROW / 2);
     for (const key of rowKeys(r)) {
       const picked = selKey && selKey.k === key.k;
-      diamond(c, tlX(key.k.t), y + ROW / 2, r.p ? 5 : 4, picked ? '#ffffff' : r.p ? '#ffcf5a' : '#b8a86a');
+      diamond(c, tlX(key.k.t), y + ROW / 2, picked ? 6 : r.p ? 5 : 4, picked ? C.picked : r.p ? C.key : C.layerKey, picked);
     }
   });
-  c.fillStyle = '#ff5a7a'; c.fillRect(tlX(t), 0, 1.5, h);
+  playhead(c, tlX(t), h);
 }
 function tlHit(e) {
   const r = tl.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
@@ -428,7 +450,7 @@ function drawGraph() {
     sel0.dataset.for = (l?.id ?? '') + prop;
     sel0.replaceChildren(...PROPS.map(p => new Option(p + (l && isKeys(l[p]) ? ' ◆' : ''), p, false, p === prop)));
   }
-  if (!l) { c.fillStyle = '#8d8aa3'; c.fillText('Select a layer to see its curves.', LABEL, h / 2); return; }
+  if (!l) { c.fillStyle = C.text; c.fillText('Select a layer to see its curves.', LABEL, h / 2); return; }
   const dur = scene().duration, n = Math.max(2, Math.round(w - LABEL - 12));
   const samples = cut.sample(si, l.id, prop, 0, dur, n);
   const keys = gKeys();
@@ -444,31 +466,33 @@ function drawGraph() {
   const gx = time => LABEL + time / dur * (w - LABEL - 12);
   const gy = v => 10 + (range[1] - v) / (range[1] - range[0]) * (h - 20);
   // Grid: seconds, and four value lines with their numbers.
-  c.fillStyle = '#23252f';
+  c.fillStyle = C.grid;
   for (let s = 0; s <= dur + 1e-9; s += 0.5) c.fillRect(gx(s), 0, 1, h);
   for (let i = 0; i <= 4; i++) {
     const v = range[0] + (range[1] - range[0]) * i / 4;
-    c.fillStyle = '#23252f'; c.fillRect(LABEL, gy(v), w - LABEL - 12, 1);
-    c.fillStyle = '#6d6a83'; c.fillText(Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(2), 8, gy(v));
+    c.fillStyle = C.grid; c.fillRect(LABEL, gy(v), w - LABEL - 12, 1);
+    c.fillStyle = C.gridText; c.fillText(Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(2), 8, gy(v));
   }
   c.beginPath();
   samples.forEach((v, i) => { const x = gx(i / (n - 1) * dur); i ? c.lineTo(x, gy(v)) : c.moveTo(x, gy(v)); });
-  c.strokeStyle = '#8b7cff'; c.lineWidth = 2; c.stroke();
-  if (!keys) { c.fillStyle = '#8d8aa3'; c.fillText(`${prop} is a plain value: press ◆ in the inspector to animate it.`, LABEL + 8, 14); }
+  c.strokeStyle = C.curve; c.lineWidth = 1.5; c.stroke();
+  if (!keys) { c.fillStyle = C.text; c.fillText(`${prop} is a plain value: press ◆ in the inspector to animate it.`, LABEL + 8, 14); }
   keys?.forEach((k, i) => {
     const picked = selKey && selKey.k === k;
     for (const hd of handles(keys, i)) {
       c.beginPath(); c.moveTo(gx(k.t), gy(k.v)); c.lineTo(gx(hd.t), gy(hd.v));
-      c.strokeStyle = picked ? '#ffffffaa' : '#ffcf5a66'; c.lineWidth = 1; c.stroke();
-      c.beginPath(); c.arc(gx(hd.t), gy(hd.v), 4, 0, 7); c.fillStyle = picked ? '#fff' : '#ffcf5a'; c.fill();
+      c.strokeStyle = picked ? C.pickedLine : C.handleLine; c.lineWidth = 1; c.stroke();
+      // Handles are round, keys square: shape, not colour, tells them apart.
+      c.beginPath(); c.arc(gx(hd.t), gy(hd.v), picked ? 4 : 3, 0, 7); c.fillStyle = picked ? C.picked : C.handle; c.fill();
     }
   });
   keys?.forEach(k => {
     const picked = selKey && selKey.k === k;
-    c.fillStyle = picked ? '#ffffff' : '#ffcf5a';
-    c.fillRect(gx(k.t) - 4, gy(k.v) - 4, 8, 8);
+    const s = picked ? 5 : 4;
+    c.fillStyle = C.halo; c.fillRect(gx(k.t) - s - 1, gy(k.v) - s - 1, 2 * s + 2, 2 * s + 2);
+    c.fillStyle = picked ? C.picked : C.key; c.fillRect(gx(k.t) - s, gy(k.v) - s, 2 * s, 2 * s);
   });
-  c.fillStyle = '#ff5a7a'; c.fillRect(gx(t), 0, 1.5, h);
+  playhead(c, gx(t), h);
   gr._map = { gx, gy, tOf: x => (x - LABEL) / (w - LABEL - 12) * dur, vOf: y => range[1] - (y - 10) / (h - 20) * (range[1] - range[0]) };
 }
 function grHit(e) {
