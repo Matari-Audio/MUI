@@ -411,18 +411,19 @@ try {
   await js(`(() => { document.querySelector('#pl-bin').value = ${JSON.stringify(synth)}; document.querySelector('#pl-id').value = 'synth'; document.querySelector('#pl-add').click(); })()`);
   await sleep(800);
   check(read().sources?.some(s => s.id === 'synth' && s.kind === 'plugin' && s.source.bin === synth), 'the plugin dialog adds a plugin source');
-  const srcTree = () => js(`[...document.querySelectorAll('#sources [data-source="synth"][data-part]')].map(r => r.dataset.part)`);
+  // Top-level parts (panels); a selected control has unfolded its panel.
+  const srcTree = () => js(`[...document.querySelectorAll('#sources [data-source="synth"][data-part]')].map(r => r.dataset.part).filter(p => !p.includes('/'))`);
   let nodes = [];
   for (let i = 0; i < 150 && nodes.length < 5; i++) { await sleep(200); nodes = await srcTree(); }
   check(nodes.length === 5 && nodes.includes('osc'), `the plugin opens as a folder of its parts (${nodes})`);
-  check(await js(`document.querySelectorAll('#sources [data-source="synth"][data-part] img.thumb').length`) === 5, 'each part has its captured thumbnail');
+  check(await js(`[...document.querySelectorAll('#sources [data-source="synth"][data-part]')].every(r => r.querySelector('img.thumb'))`), 'each part has its captured thumbnail');
   const twist = '#sources [data-source="synth"]:not([data-part]) .twist';
   await js(`document.querySelector('${twist}').click()`); await sleep(200);
   check((await srcTree()).length === 0, 'its folder collapses');
   await js(`document.querySelector('${twist}').click()`); await sleep(200);
   check((await srcTree()).length === 5 && await js(`document.querySelector('${twist}').getAttribute('aria-expanded')`) === 'true', 'and expands again');
   // A panel opens onto its controls, from the same tree as `cutParts`.
-  await js(`document.querySelector('#sources [data-source="synth"][data-part="filter"] .twist').click()`); await sleep(200);
+  await js(`(b => b.getAttribute('aria-expanded') === 'true' || b.click())(document.querySelector('#sources [data-source="synth"][data-part="filter"] .twist'))`); await sleep(200);
   const ctl = '#sources [data-source="synth"][data-part="filter/filter-cutoff"]';
   check(await js(`!!document.querySelector('${ctl} img.thumb') && parseFloat(document.querySelector('${ctl}').style.paddingLeft) > parseFloat(document.querySelector('#sources [data-part="filter"]').style.paddingLeft)`),
     'a panel unfolds onto its controls, indented, with thumbnails');
