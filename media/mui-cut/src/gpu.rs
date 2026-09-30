@@ -556,6 +556,22 @@ mod offline {
             self.read_back(done)
         }
 
+        /// The web viewport's Beauty preview offline: `frame` refined by
+        /// `n` running-mean samples ([`Shutter::expose_sample`]).
+        #[cfg(test)]
+        pub(crate) fn push_refined(
+            &mut self,
+            frame: &Frame,
+            n: u32,
+        ) -> Result<Option<Vec<u8>>, String> {
+            let done = self.make_room()?;
+            for i in 0..n {
+                self.shutter
+                    .expose_sample(&mut self.canvas, &self.assets, frame, i)?;
+            }
+            self.read_back(done)
+        }
+
         /// The oldest frame, once the ring is full.
         fn make_room(&mut self) -> Result<Option<Vec<u8>>, String> {
             if self.pending.len() == RING {

@@ -257,6 +257,41 @@ fn shadowed_3d_frames_are_deterministic_and_drawn() {
     assert!(off < engines[0].len() / 200, "{off} channels differ");
 }
 
+/// Beauty is the mean of jittered samples, and the preview's running mean
+/// of them lands where the export's does.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_refined_preview_is_the_beauty_export() {
+    let mut p = Project::load(STAGE3D).unwrap();
+    p.size = [480, 270];
+    let f = eval(&p, &p.scenes[0], 3.);
+    let Some(mut g) = offline(&p, Engine::Classic) else {
+        return;
+    };
+    let plain = frame(&mut g, &[f.clone(), f.clone()]);
+    g.beauty = true;
+    let export = frame(&mut g, &vec![f.clone(); 16]);
+    let preview = match g.push_refined(&f, 16).unwrap() {
+        Some(px) => px,
+        None => g.finish().unwrap().pop().unwrap(),
+    };
+    let off = |a: &[u8], b: &[u8], by: u8| {
+        a.iter()
+            .zip(b)
+            .filter(|(a, b)| a.abs_diff(**b) > by)
+            .count()
+    };
+    assert!(
+        off(&plain, &export, 8) > plain.len() / 100,
+        "beauty changes the frame"
+    );
+    assert!(
+        off(&preview, &export, 3) < export.len() / 1000,
+        "{} channels off",
+        off(&preview, &export, 3)
+    );
+}
+
 #[test]
 fn the_orbit_preview_swings_about_the_target_and_keeps_zero_as_is() {
     let cam = Cam {
