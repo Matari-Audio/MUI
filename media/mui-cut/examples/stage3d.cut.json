@@ -648,7 +648,14 @@
         "color": "#0e0f14",
         "near": 1800.0,
         "far": 4200.0
-      }
+      },
+      "effects": [
+        {
+          "type": "grain",
+          "amount": 0.05,
+          "size": 1.2
+        }
+      ]
     }
   ]
 }

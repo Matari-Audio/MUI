@@ -22,6 +22,7 @@ pub enum Mode {
 /// frame's centre, mirroring the layers by `reflect` (0..1) and darkening
 /// under what stands on it by `contact` (0..1).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(transform = crate::vars::bindable)]
 pub struct Ground {
     pub y: f64,
     #[serde(default = "ground_color")]
@@ -45,6 +46,7 @@ fn contact() -> f64 {
 
 /// Surfaces fade into `color` from `near` to `far` pixels from the camera.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(transform = crate::vars::bindable)]
 pub struct Fog {
     pub color: Rgba,
     pub near: f64,

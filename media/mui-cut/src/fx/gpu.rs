@@ -323,6 +323,48 @@ impl Passes {
         canvas.queue.submit([enc.finish()]);
     }
 
+    /// Targets and uniform slots for `passes` passes; the frame's header.
+    fn begin(&mut self, canvas: &GpuCanvas, frame: &Frame, passes: u64) -> Header {
+        let size = canvas.size();
+        self.prepare(&canvas.device, size, passes);
+        self.staged.clear();
+        self.written = 0;
+        Header {
+            res: size.map(|v| v as f32),
+            time: frame.t as f32,
+            scale: size[0] as f32 / frame.size[0].max(1) as f32,
+            seed: frame.seed,
+        }
+    }
+
+    /// The scene's stack over `A`, then the result into `target`.
+    fn finish(&mut self, canvas: &GpuCanvas, h: Header, stack: &[Fx], target: &wgpu::TextureView) {
+        let mut enc = canvas
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        let out = self.chain(&mut enc, h, A, stack);
+        let offset = self.stage(h, 0, &[]);
+        self.pass(&mut enc, &self.copy, out, target, offset, true);
+        self.submit(canvas, enc);
+    }
+
+    /// A 3D `frame` (the stage's pass into `A`) with the scene's effects
+    /// into `target`; its quads.
+    pub(crate) fn draw_3d(
+        &mut self,
+        canvas: &mut GpuCanvas,
+        assets: &Assets,
+        frame: &Frame,
+        view: &crate::View,
+        target: &wgpu::TextureView,
+    ) -> Result<Vec<Quad>, String> {
+        let h = self.begin(canvas, frame, passes(&frame.effects) + 1);
+        let a = self.targets.as_ref().expect("prepared").views[A].clone();
+        let quads = canvas.draw_3d(assets, frame, view, &a)?;
+        self.finish(canvas, h, &frame.effects, target);
+        Ok(quads)
+    }
+
     /// `frame` with its effects into `target`; its quads.
     pub(crate) fn draw(
         &mut self,
@@ -331,13 +373,6 @@ impl Passes {
         frame: &Frame,
         target: &wgpu::TextureView,
     ) -> Result<Vec<Quad>, String> {
-        let size = canvas.size();
-        let passes = |s: &[Fx]| -> u64 {
-            s.iter()
-                .filter_map(|f| super::def(&f.kind))
-                .map(|(_, d)| u64::from(d.passes))
-                .sum()
-        };
         let total = passes(&frame.effects)
             + frame
                 .layers
@@ -345,15 +380,7 @@ impl Passes {
                 .map(|l| passes(&l.effects) + 2)
                 .sum::<u64>()
             + 2;
-        self.prepare(&canvas.device, size, total);
-        self.staged.clear();
-        self.written = 0;
-        let h = Header {
-            res: size.map(|v| v as f32),
-            time: frame.t as f32,
-            scale: size[0] as f32 / frame.size[0].max(1) as f32,
-            seed: frame.seed,
-        };
+        let h = self.begin(canvas, frame, total);
         let view = |i: usize| self.targets.as_ref().expect("prepared").views[i].clone();
         let (lv, av) = (view(L), view(A));
         let clear = Rgba([0; 4]);
@@ -403,13 +430,18 @@ impl Passes {
         if !plain.is_empty() || first {
             quads.extend(flush(self, canvas, &mut plain, &mut first)?);
         }
-        let mut enc = encoder(canvas);
-        let out = self.chain(&mut enc, h, A, &frame.effects);
-        let offset = self.stage(h, 0, &[]);
-        self.pass(&mut enc, &self.copy, out, target, offset, true);
-        self.submit(canvas, enc);
+        self.finish(canvas, h, &frame.effects, target);
         Ok(quads)
     }
+}
+
+/// Full-frame passes `stack` takes.
+fn passes(stack: &[Fx]) -> u64 {
+    stack
+        .iter()
+        .filter_map(|f| super::def(&f.kind))
+        .map(|(_, d)| u64::from(d.passes))
+        .sum()
 }
 
 fn uniforms(device: &wgpu::Device, slots: u64) -> wgpu::Buffer {

@@ -520,3 +520,55 @@ fn gen_is_deterministic_and_merges_layers_into_a_scene() {
         .count();
     assert_eq!(dots, 30);
 }
+
+/// Every example project, and what every example script writes, fits
+/// `mui-cut schema` (variable bindings included) and `check`s without an
+/// error.
+#[test]
+fn every_example_fits_the_schema_and_checks_clean() {
+    let (ok, text) = run(&["schema"]);
+    assert!(ok, "{text}");
+    let schema: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let v = jsonschema::validator_for(&schema).unwrap();
+    let d = scratch("examples");
+    let ex = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples");
+    let mut files: Vec<PathBuf> = Vec::new();
+    for e in std::fs::read_dir(&ex).unwrap() {
+        let p = e.unwrap().path();
+        if p.to_str().unwrap().ends_with(".cut.json") {
+            files.push(p);
+        }
+    }
+    for e in std::fs::read_dir(ex.join("gen")).unwrap() {
+        let script = e.unwrap().path();
+        let out = d
+            .join(script.file_stem().unwrap())
+            .with_extension("cut.json");
+        let (ok, text) = run(&["gen", script.to_str().unwrap(), "-o", out.to_str().unwrap()]);
+        assert!(ok, "{}: {text}", script.display());
+        files.push(out);
+    }
+    files.sort();
+    let names: Vec<_> = files.iter().map(|f| f.file_name().unwrap()).collect();
+    for want in [
+        "variants.cut.json",
+        "stage3d.cut.json",
+        "effects.cut.json",
+        "grid.cut.json",
+    ] {
+        assert!(names.iter().any(|n| *n == want), "{want} in {names:?}");
+    }
+    for f in &files {
+        let doc: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(f).unwrap()).unwrap();
+        let errs: Vec<String> = v
+            .iter_errors(&doc)
+            .map(|e| format!("{} at {}", e, e.instance_path()))
+            .collect();
+        assert!(errs.is_empty(), "{}: {errs:#?}", f.display());
+        let (ok, text) = run(&["check", f.to_str().unwrap(), "--json"]);
+        let json: serde_json::Value =
+            serde_json::from_str(text.split("\nmui-cut:").next().unwrap()).unwrap();
+        assert!(ok && json["errors"] == 0, "{}: {text}", f.display());
+    }
+}
