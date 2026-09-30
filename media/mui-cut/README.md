@@ -25,8 +25,9 @@ cargo run --manifest-path media/Cargo.toml -p mui-cut -- \
 ## Commands
 
 ```sh
-mui-cut render PROJECT -o out.mp4|null [--scene NAME] [--mb N] [--size WxH] [--cpu]
-mui-cut still  PROJECT --t 1.5 -o f.png [--scene NAME] [--size WxH] [--cpu]
+mui-cut render PROJECT -o out.mp4|null [--scene NAME] [--mb N] [--size WxH]
+                      [--renderer classic|gpu|cpu] [--threads N] [--stats]
+mui-cut still  PROJECT --t 1.5 -o f.png [--scene NAME] [--size WxH] [--renderer R]
 mui-cut eval   PROJECT --t 1.5 [--scene NAME]     # every layer's values, JSON
 mui-cut fmt    PROJECT                            # rewrite in canonical form
 mui-cut serve  PROJECT [--port 8740] [--web DIR]
@@ -37,13 +38,31 @@ mui-cut serve  PROJECT [--port 8740] [--web DIR]
   subframes across a 180-degree shutter and averages them in linear light
   (mui-reel's shutter). `--size` scales the whole frame. `-o null` renders
   without writing a file (ffmpeg's null muxer), for benchmarks.
-- `render` and `still` draw on the GPU by default: MUI's Vello GPU renderer,
-  kept alive across frames. Motion blur adds each subframe into an
-  `Rgba16Float` texture (`src/shutter.wgsl`), one readback per output frame
-  through a ring of three staging buffers, so the GPU draws the next frame
-  while the last goes to ffmpeg. `--cpu` (or no GPU adapter) uses Vello CPU.
-  1920x1080 `--mb 8` on an RX 6600: about 45 frames/s on the GPU against
-  1.7 on the CPU.
+- `--renderer` picks what draws: `classic` (the default: MUI's
+  `GpuRenderer`, classic Vello in compute shaders), `gpu` (`vello_gpu`,
+  Vello's sparse-strips renderer: strips built on the CPU, raster in plain
+  render passes) or `cpu` (Vello CPU; `--cpu` is the same). No GPU adapter
+  falls back to the CPU. Both GPU engines stay alive across frames; motion
+  blur adds each subframe into an `Rgba16Float` texture
+  (`src/shutter.wgsl`), one readback per output frame through a ring of
+  three staging buffers, so the GPU draws the next frame while the last
+  goes to ffmpeg. The CPU renders `--threads` output frames at once (default
+  one per core), each on its own single-threaded Vello CPU, handed to ffmpeg
+  in order; a `still` rasterises one frame on every core instead.
+  `--stats` prints wall time per frame (p50/p95/max, the slowest frames).
+- The demo at 1920x1080, `-o null`, RX 6600 + 16 threads, best of three
+  while other builds loaded the box (load 20-34), frames/s:
+
+  | renderer | `--mb 1` | `--mb 8` |
+  | --- | --- | --- |
+  | classic (default) | 302 | 204 |
+  | gpu (`vello_gpu`) | 289 | 180 |
+  | cpu, frame pool (default) | 274 | 41 |
+  | cpu, one frame on 16 threads (`--threads 1`) | 159 | 7.6 |
+  | cpu before this pool (serial) | 98 | 2.2 |
+
+  `--mb 1` on the GPU is bound by the pipe to ffmpeg. The first GPU frames
+  carry pipeline creation (classic: up to 1.6 s under load).
 - `still` is the agent's eyes: one PNG of one scene at one time, seconds from
   the scene's start.
 - `eval` prints what the evaluator computes at a time, for checking numbers
@@ -222,8 +241,15 @@ last frame. Both are centred on the layer's `x`, `y` at their own size;
 ## The web editor
 
 - **Viewport**: the scene at the playhead, drawn in a worker on an
-  `OffscreenCanvas`: MUI's Vello GPU renderer on WebGPU when the browser has
-  it, Vello CPU otherwise. The header names the one in use (`WebGPU`/`CPU`).
+  `OffscreenCanvas`, by the first that opens of: WebGPU (classic Vello),
+  WebGL2 (`vello_gpu`; classic Vello needs compute shaders), Vello CPU (a
+  SIMD128 build). The header names the API (`WebGPU`/`WebGL2`/`CPU`), its
+  tooltip the engine. `?renderer=classic|gpu|webgl2|cpu` forces one.
+- **Playback** runs on a monotonic clock from the moment play (or a seek)
+  started, sampled for when the frame will be shown, so a slow draw drops
+  frames rather than slowing time; only the newest frame is ever drawn.
+  **fps lock** plays only the project's frame grid; **HUD** shows delivered
+  frames/s, dropped frames and frame time p50/p95.
   Click a layer to select it (outlined),
   drag to move it: an animated `x`/`y` gets a key at the playhead, a plain one
   changes its value.
@@ -265,16 +291,24 @@ announces edits made by someone else.
   `block`, a `canvas` ellipse, a `text`, an image `block`) resolved by
   mui-scene and painted by `mui_vello::paint` on Vello CPU under the layer's
   affine, since MUI trees have no rotation.
-- `src/gpu.rs`, `src/shutter.wgsl`: the same layers on MUI's `GpuRenderer`
-  (`GpuCanvas`, shared with the web), plus `Offline`: the float shutter and
+- `src/gpu.rs`, `src/shutter.wgsl`: the same layers on a GPU engine behind
+  `GpuCanvas` (shared with the web), plus `Offline`: the float shutter and
   readback ring behind `render`/`still`.
+- `src/sparse.rs`: `mui_vello::Canvas` over `vello_gpu`. It comes from
+  Vello git main (crates.io still ships it as `vello_hybrid` on wgpu 29)
+  with its own `vello_common`: mui-vello cannot move to git main's without
+  source changes, and kurbo/peniko are shared, so only brushes and image ids
+  are converted.
+- `src/pool.rs`: the frame-parallel CPU export.
 - `src/web.rs`: the wasm-bindgen handles: `Cut` (validation, samples, CPU
-  frames) and `GpuView` (the WebGPU viewport).
+  frames) and `GpuView` (the WebGPU/WebGL2 viewport).
 - `src/main.rs`, `src/serve.rs`: the native CLI and the std-only local server.
 - `web/`: the editor shell (HTML/CSS/JS panels around the WASM viewport);
   `worker.js` draws the viewport, one frame in flight at a time.
-- `web/e2e.mjs`: the editor in headless Chrome over CDP; `E2E_BACKEND=cpu`
-  runs it without WebGPU.
+- `web/e2e.mjs`: the editor in headless Chrome over CDP, and its playback
+  pacing (frame gap mean and deviation, free and fps-locked).
+  `E2E_BACKEND=webgl2|cpu` runs it without WebGPU, `E2E_RENDERER` forces
+  the renderer, `E2E_PORT`/`E2E_CDP_PORT` move it off 8790/9339.
 
 The keyframe curves are not `mui_motion::curve::Curve`: that type is a
 normalized `0..1` phase/value shaper that clamps values, while a property
@@ -296,3 +330,9 @@ snapshots in the editor rather than `CurveHistory`, for the same reason.
 - A text layer whose glyphs are all hidden has an empty outline in the
   viewport, so it cannot be clicked there (pick it in the layer list).
 - Last writer wins if the person and an agent edit the same moment.
+- `vello_gpu` draws MUI's backdrop blur sharp (no filter layer wired yet).
+  It is pinned to Vello 9dfe53e; moving to newer main means following
+  #1942 (`pop_clip_path` renamed) and #1944 (fallible glyph drawing) in
+  `src/sparse.rs`.
+- The browser CPU fallback is single-threaded: wasm threads need
+  cross-origin isolation, which `serve` does not set up.

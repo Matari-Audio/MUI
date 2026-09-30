@@ -1,7 +1,7 @@
 //! `mui-cut`: render, look at, tidy and serve a `*.cut.json` project.
 //!
-//!     mui-cut render demo.cut.json -o out.mp4 [--scene NAME] [--mb N] [--size WxH] [--cpu]
-//!     mui-cut still  demo.cut.json --t 1.5 -o f.png [--scene NAME] [--size WxH] [--cpu]
+//!     mui-cut render demo.cut.json -o out.mp4 [--scene NAME] [--mb N] [--size WxH] [--renderer R]
+//!     mui-cut still  demo.cut.json --t 1.5 -o f.png [--scene NAME] [--size WxH] [--renderer R]
 //!     mui-cut eval   demo.cut.json --t 1.5 [--scene NAME]
 //!     mui-cut fmt    demo.cut.json
 //!     mui-cut serve  demo.cut.json [--port 8740] [--web DIR]
@@ -13,13 +13,16 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use mui_cut::{Frame, Offline, Project, Renderer, Scene, eval};
+use mui_cut::{Assets, CpuPool, Engine, Frame, Offline, Project, Scene, eval};
 
 type Result<T> = std::result::Result<T, String>;
 
 const USAGE: &str = "usage:
-  mui-cut render PROJECT -o OUT.mp4|null [--scene NAME] [--mb N] [--size WxH] [--cpu]
-  mui-cut still  PROJECT --t SECONDS -o OUT.png [--scene NAME] [--size WxH] [--cpu]
+  mui-cut render PROJECT -o OUT.mp4|null [--scene NAME] [--mb N] [--size WxH] [--renderer R] [--threads N] [--stats]
+  mui-cut still  PROJECT --t SECONDS -o OUT.png [--scene NAME] [--size WxH] [--renderer R]
+    R: classic (default; Vello compute on the GPU), gpu (vello_gpu), cpu (Vello CPU);
+    --cpu is --renderer cpu. --threads: CPU frames drawn at once (default: one per core).
+    --stats: per-frame wall time (evaluate, draw, hand to ffmpeg) p50/p95/max
   mui-cut eval   PROJECT --t SECONDS [--scene NAME]
   mui-cut fmt    PROJECT
   mui-cut serve  PROJECT [--port 8740] [--web DIR]";
@@ -67,7 +70,7 @@ fn run(argv: &[String]) -> Result<()> {
             .or_else(|| (k == "-o").then_some("o"))
             .ok_or_else(|| format!("unexpected `{k}`\n{USAGE}"))?;
         // The switches take no value.
-        if name == "cpu" {
+        if name == "cpu" || name == "stats" {
             flags.push((name.to_owned(), String::new()));
             continue;
         }
@@ -144,31 +147,27 @@ fn size(p: &Project, args: &Args) -> Result<(u16, u16)> {
     Ok((even(w)?, even(h)?))
 }
 
-/// Where frames are drawn: MUI's GPU renderer by default, Vello CPU with
-/// `--cpu` or when no GPU adapter opens.
+/// Where frames are drawn: a Vello engine on the GPU (classic by default),
+/// or Vello CPU with `--renderer cpu` or when no GPU adapter opens.
 enum Backend {
-    Cpu(Box<Renderer>, Vec<f32>),
+    Cpu(CpuPool),
     Gpu(Box<Offline>),
 }
 
 impl Backend {
-    fn open(p: &Project, project: &Path, (w, h): (u16, u16), cpu: bool) -> Self {
-        let mut b = if cpu {
-            Self::Cpu(Box::new(Renderer::new(w, h)), Vec::new())
-        } else {
-            match Offline::new([w.into(), h.into()]) {
-                Ok(g) => Self::Gpu(Box::new(g)),
-                Err(e) => {
-                    eprintln!("mui-cut: GPU unavailable ({e}); rendering on the CPU");
-                    Self::Cpu(Box::new(Renderer::new(w, h)), Vec::new())
-                }
-            }
+    /// `workers` CPU frames at once; a lone frame rasterises on every core
+    /// instead.
+    fn open(p: &Project, args: &Args, (w, h): (u16, u16), workers: usize) -> Result<Self> {
+        let cores = std::thread::available_parallelism().map_or(1, usize::from);
+        let engine = match args.get("renderer") {
+            _ if args.has("cpu") => None,
+            None | Some("classic") => Some(Engine::Classic),
+            Some("gpu") => Some(Engine::Sparse),
+            Some("cpu") => None,
+            Some(r) => return Err(format!("--renderer: `{r}` is not classic, gpu or cpu")),
         };
-        let assets = match &mut b {
-            Self::Cpu(r, _) => &mut r.assets,
-            Self::Gpu(g) => &mut g.assets,
-        };
-        let dir = project.parent().unwrap_or(Path::new("."));
+        let mut assets = Assets::default();
+        let dir = args.project.parent().unwrap_or(Path::new("."));
         for l in p.scenes.iter().flat_map(|s| &s.layers) {
             if let Some(path) = l.asset() {
                 let loaded = std::fs::read(dir.join(path))
@@ -181,36 +180,38 @@ impl Backend {
                 }
             }
         }
-        b
+        if let Some(engine) = engine {
+            match Offline::new([w.into(), h.into()], engine) {
+                Ok(mut g) => {
+                    g.assets = assets;
+                    return Ok(Self::Gpu(Box::new(g)));
+                }
+                Err(e) => eprintln!("mui-cut: GPU unavailable ({e}); rendering on the CPU"),
+            }
+        }
+        let workers = workers.clamp(1, cores);
+        let threads = if workers == 1 { cores - 1 } else { 0 };
+        let threads = u16::try_from(threads).unwrap_or(u16::MAX);
+        Ok(Self::Cpu(CpuPool::new(w, h, workers, threads, &assets)))
     }
     fn name(&self) -> String {
         match self {
-            Self::Cpu(..) => "cpu (vello_cpu)".into(),
+            Self::Cpu(_) => "cpu (vello_cpu)".into(),
             Self::Gpu(g) => format!("gpu ({})", g.adapter),
         }
     }
-    /// One output frame from its subframes; the GPU hands frames back a few
-    /// behind, the CPU at once.
-    fn push(&mut self, subs: &[Frame]) -> Result<Option<Vec<u8>>> {
+    /// One output frame from its subframes; frames come back a few behind,
+    /// in order.
+    fn push(&mut self, subs: Vec<Frame>) -> Result<Option<Vec<u8>>> {
         match self {
-            Self::Gpu(g) => g.push(subs),
-            Self::Cpu(r, _) if subs.len() == 1 => Ok(Some(r.draw(&subs[0])?.0)),
-            Self::Cpu(r, acc) => {
-                // mui-reel's shutter: subframes averaged in linear light.
-                let (w, h) = r.size();
-                acc.clear();
-                acc.resize(usize::from(w) * usize::from(h) * 4, 0.);
-                for f in subs {
-                    mui_reel::accumulate(acc, &r.draw(f)?.0);
-                }
-                Ok(Some(mui_reel::resolve(acc, subs.len())))
-            }
+            Self::Gpu(g) => g.push(&subs),
+            Self::Cpu(pool) => pool.push(subs),
         }
     }
     fn finish(&mut self) -> Result<Vec<Vec<u8>>> {
         match self {
             Self::Gpu(g) => g.finish(),
-            Self::Cpu(..) => Ok(Vec::new()),
+            Self::Cpu(pool) => pool.finish(),
         }
     }
 }
@@ -220,9 +221,9 @@ fn still(args: &Args) -> Result<()> {
     let s = scene(&p, args)?;
     let out = args.get("o").ok_or("still needs -o OUT.png")?;
     let (w, h) = size(&p, args)?;
-    let mut b = Backend::open(&p, &args.project, (w, h), args.has("cpu"));
+    let mut b = Backend::open(&p, args, (w, h), 1)?;
     let f = eval(&p, s, args.num("t", 0.)?);
-    let px = match b.push(std::slice::from_ref(&f))? {
+    let px = match b.push(vec![f])? {
         Some(px) => px,
         None => b.finish()?.pop().ok_or("no frame came back")?,
     };
@@ -249,7 +250,8 @@ fn render(args: &Args) -> Result<()> {
     let (w, h) = size(&p, args)?;
     let mb: usize = args.num("mb", 1)?;
     let mb = mb.clamp(1, 64);
-    let mut b = Backend::open(&p, &args.project, (w, h), args.has("cpu"));
+    let cores = std::thread::available_parallelism().map_or(1, usize::from);
+    let mut b = Backend::open(&p, args, (w, h), args.num("threads", cores)?)?;
     let mut ff = Command::new("ffmpeg");
     ff.args([
         "-y",
@@ -287,17 +289,22 @@ fn render(args: &Args) -> Result<()> {
     };
     let start = std::time::Instant::now();
     let mut frames = 0usize;
+    // Wall time per loop pass: a stall anywhere (a readback, a full pipe)
+    // shows up as a tail.
+    let mut times = Vec::new();
     for s in scenes {
         let n = (s.duration * p.fps).round().max(1.) as usize;
         for i in 0..n {
+            let pass = std::time::Instant::now();
             let t = i as f64 / p.fps;
             let subs: Vec<Frame> = (0..mb)
                 .map(|k| eval(&p, s, t + SHUTTER / p.fps * k as f64 / mb as f64))
                 .collect();
-            if let Some(px) = b.push(&subs)? {
+            if let Some(px) = b.push(subs)? {
                 write(&px)?;
             }
             frames += 1;
+            times.push(pass.elapsed().as_secs_f64() * 1e3);
         }
     }
     for px in b.finish()? {
@@ -315,5 +322,22 @@ fn render(args: &Args) -> Result<()> {
         b.name(),
         frames as f64 / secs
     );
+    if args.has("stats") {
+        let mut slow: Vec<(usize, f64)> = times.iter().copied().enumerate().collect();
+        slow.sort_by(|a, b| b.1.total_cmp(&a.1));
+        let q = |f: f64| slow[((slow.len() - 1) as f64 * (1. - f)) as usize].1;
+        let worst: Vec<String> = slow
+            .iter()
+            .take(3)
+            .map(|(i, ms)| format!("#{i} {ms:.1}"))
+            .collect();
+        println!(
+            "frame time: p50 {:.2} ms, p95 {:.2} ms, max {:.2} ms; slowest {}",
+            q(0.5),
+            q(0.95),
+            q(1.),
+            worst.join(", ")
+        );
+    }
     Ok(())
 }

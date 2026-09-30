@@ -5,7 +5,7 @@
 use wasm_bindgen::prelude::*;
 
 use crate::render::Assets;
-use crate::{GpuCanvas, Project, Renderer, eval};
+use crate::{Engine, GpuCanvas, Project, Renderer, eval};
 
 #[wasm_bindgen]
 pub struct Cut {
@@ -128,8 +128,8 @@ impl Cut {
     }
 }
 
-/// The viewport on WebGPU: MUI's GPU renderer drawing straight into an
-/// `OffscreenCanvas` (the editor's worker owns it).
+/// The viewport on the GPU: MUI's Vello renderers drawing straight into an
+/// `OffscreenCanvas` (the editor's worker owns it), on WebGPU or WebGL2.
 #[wasm_bindgen]
 pub struct GpuView {
     canvas: GpuCanvas,
@@ -142,24 +142,50 @@ pub struct GpuView {
 
 #[wasm_bindgen]
 impl GpuView {
-    /// Fails, leaving `canvas` untouched (a 2D context still works), when
-    /// there is no WebGPU adapter or device.
-    pub async fn create(canvas: web_sys::OffscreenCanvas) -> Result<GpuView, String> {
-        let instance = wgpu::Instance::default();
+    /// `api` is `webgpu` or `webgl2`, `engine` `classic` or `gpu`
+    /// (vello_gpu); WebGL2 has no compute shaders, so it always gets
+    /// vello_gpu. Fails when there is no such adapter or device; the canvas
+    /// then holds that API's context, so probe before calling.
+    pub async fn create(
+        canvas: web_sys::OffscreenCanvas,
+        api: &str,
+        engine: &str,
+    ) -> Result<GpuView, String> {
+        let (backends, engine) = match (api, engine) {
+            ("webgl2", _) => (wgpu::Backends::GL, Engine::Sparse),
+            ("webgpu", "gpu") => (wgpu::Backends::BROWSER_WEBGPU, Engine::Sparse),
+            ("webgpu", "classic") => (wgpu::Backends::BROWSER_WEBGPU, Engine::Classic),
+            _ => return Err(format!("no GPU view for {api} with {engine}")),
+        };
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends,
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
+        });
+        let (w, h) = (canvas.width().max(1), canvas.height().max(1));
+        // A WebGL adapter comes from the canvas's context, so the surface
+        // goes first.
+        let surface = instance
+            .create_surface(wgpu::SurfaceTarget::OffscreenCanvas(canvas))
+            .map_err(|e| e.to_string())?;
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,
+                compatible_surface: Some(&surface),
                 ..Default::default()
             })
             .await
-            .map_err(|e| format!("no WebGPU adapter: {e}"))?;
+            .map_err(|e| format!("no {api} adapter: {e}"))?;
+        let required_limits = if backends == wgpu::Backends::GL {
+            wgpu::Limits::downlevel_webgl2_defaults().using_resolution(adapter.limits())
+        } else {
+            wgpu::Limits::default()
+        };
         let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor::default())
+            .request_device(&wgpu::DeviceDescriptor {
+                required_limits,
+                ..Default::default()
+            })
             .await
-            .map_err(|e| e.to_string())?;
-        let (w, h) = (canvas.width().max(1), canvas.height().max(1));
-        let surface = instance
-            .create_surface(wgpu::SurfaceTarget::OffscreenCanvas(canvas))
             .map_err(|e| e.to_string())?;
         let caps = surface.get_capabilities(&adapter);
         let format =
@@ -172,7 +198,7 @@ impl GpuView {
                 .ok_or("canvas not supported by the adapter")?
         };
         surface.configure(&device, &config);
-        let canvas = GpuCanvas::new(&device, &queue, format, [w, h]).await?;
+        let canvas = GpuCanvas::new(&device, &queue, format, [w, h], engine).await?;
         Ok(Self {
             canvas,
             surface,
@@ -181,6 +207,10 @@ impl GpuView {
             assets: Assets::default(),
             adapter: adapter.get_info().name,
         })
+    }
+    /// `classic` or `vello_gpu`.
+    pub fn engine(&self) -> String {
+        self.canvas.engine().name().into()
     }
     pub fn adapter(&self) -> String {
         self.adapter.clone()

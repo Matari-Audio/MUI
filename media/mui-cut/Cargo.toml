@@ -23,6 +23,15 @@ mui-scene = { path = "../../crates/mui-scene" }
 mui-vello = { workspace = true, features = ["cpu", "gpu-effects"] }
 pollster.workspace = true
 vello_cpu = { version = "0.2", default-features = false, features = ["std", "u8_pipeline", "text"] }
+# The ImageId mui-vello's brushes carry.
+vello_common = { version = "0.2", default-features = false, features = ["std"] }
+# Vello's sparse-strips GPU renderer (ex `vello_hybrid`), the `gpu` engine.
+# Git main: crates.io still has it as `vello_hybrid` on wgpu 29. It brings a
+# second, git `vello_common`; mui-vello stays on the crates.io one (patching
+# it to git breaks mui-vello), and kurbo/peniko are shared, so only brushes
+# and image ids cross over (src/sparse.rs).
+vello_gpu = { git = "https://github.com/linebender/vello", rev = "9dfe53e9d7c42ceaa169eec99b611920b270e6c3", default-features = false, features = ["wgpu", "text"] }
+glifo = { git = "https://github.com/linebender/vello", rev = "9dfe53e9d7c42ceaa169eec99b611920b270e6c3", default-features = false, features = ["std"] }
 png.workspace = true
 ttf-inter = { version = "0.1", default-features = false, features = ["v"] }
 mui-text.workspace = true
@@ -38,11 +47,15 @@ velato = { version = "0.12", default-features = false }
 wasm-bindgen = "0.2.128"
 wasm-bindgen-futures = "0.4"
 web-sys = { version = "0.3", features = ["OffscreenCanvas"] }
-wgpu = { workspace = true, features = ["webgpu", "wgsl"] }
+# WebGL2 for browsers without WebGPU, drawn by vello_gpu.
+wgpu = { workspace = true, features = ["webgpu", "webgl", "wgsl"] }
 
 # Sub-frame shutter averaging comes from mui-reel.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 mui-reel = { path = "../mui-reel" }
+# A still or a preview frame rasterises on several threads; export runs
+# several frames at once instead (src/pool.rs).
+vello_cpu = { version = "0.2", default-features = false, features = ["multithreading"] }
 wgpu = { workspace = true, features = ["default"] }
 
 [dev-dependencies]

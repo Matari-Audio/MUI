@@ -1036,12 +1036,19 @@ fn aim(cam: &mut [Spring; 3], to: [f64; 3], spring: Spring) {
 
 /// sRGB byte to linear light.
 fn linear(b: u8) -> f32 {
-    let c = f32::from(b) / 255.0;
-    if c <= 0.04045 {
-        c / 12.92
-    } else {
-        ((c + 0.055) / 1.055).powf(2.4)
-    }
+    // A table: a 1080p subframe is six million lookups, and `powf` each
+    // time was most of a CPU motion-blur frame.
+    static TABLE: std::sync::LazyLock<[f32; 256]> = std::sync::LazyLock::new(|| {
+        std::array::from_fn(|i| {
+            let c = i as f32 / 255.0;
+            if c <= 0.04045 {
+                c / 12.92
+            } else {
+                ((c + 0.055) / 1.055).powf(2.4)
+            }
+        })
+    });
+    TABLE[usize::from(b)]
 }
 
 /// Add one straight-alpha sRGB subframe to `acc` as premultiplied linear
