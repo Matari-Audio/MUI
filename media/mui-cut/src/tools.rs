@@ -378,8 +378,10 @@ pub fn strip(
 fn difference(a: &[u8], b: &[u8]) -> (f64, Vec<u8>) {
     let mut changed = 0usize;
     let heat = a
-        .chunks_exact(4)
-        .zip(b.chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(b.as_chunks::<4>().0)
         .flat_map(|(a, b)| {
             let d = (0..3).map(|c| a[c].abs_diff(b[c])).max().unwrap_or(0);
             if d > 8 {

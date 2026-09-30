@@ -660,12 +660,12 @@ impl Server {
     }
 
     fn open(&mut self, a: Open) -> Result<Vec<Value>> {
-        let path = PathBuf::from(&a.path);
+        let path = PathBuf::from(a.path);
         if !path.exists() {
             if !a.create {
                 return Err(format!(
                     "{}: no such file (pass create: true to start one)",
-                    a.path
+                    path.display()
                 ));
             }
             let fresh = json!({ "size": [1920, 1080], "fps": 30, "scenes": [{ "name": "main", "duration": 3, "layers": [] }] });

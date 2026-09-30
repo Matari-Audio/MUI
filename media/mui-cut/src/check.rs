@@ -538,8 +538,7 @@ fn overshoot(
         let v = a.at(when);
         let clamped = match last {
             "opacity" => !(0. ..=1.).contains(&v),
-            "scale" => v < 0.,
-            "width" | "height" | "radius" | "stroke_width" | "font_size" => v < 0.,
+            "scale" | "width" | "height" | "radius" | "stroke_width" | "font_size" => v < 0.,
             _ => false,
         };
         out.add(

@@ -170,9 +170,9 @@ impl Mcp {
         use std::io::BufRead as _;
         self.next += 1;
         let id = self.next;
-        self.send(
-            &serde_json::json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}),
-        );
+        let mut msg = serde_json::json!({"jsonrpc": "2.0", "id": id, "method": method});
+        msg["params"] = params;
+        self.send(&msg);
         let mut line = String::new();
         self.out.read_line(&mut line).unwrap();
         let v: serde_json::Value = serde_json::from_str(&line).unwrap();
@@ -181,10 +181,9 @@ impl Mcp {
     }
     /// A tool's content, and whether it was an error.
     fn call(&mut self, name: &str, args: serde_json::Value) -> (Vec<serde_json::Value>, bool) {
-        let v = self.request(
-            "tools/call",
-            serde_json::json!({"name": name, "arguments": args}),
-        );
+        let mut params = serde_json::json!({ "name": name });
+        params["arguments"] = args;
+        let v = self.request("tools/call", params);
         let r = &v["result"];
         (
             r["content"].as_array().unwrap().clone(),
