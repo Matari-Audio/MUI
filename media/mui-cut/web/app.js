@@ -47,6 +47,7 @@ const clock = { at: 0, t: 0 };
 // the project frame it showed; frames the playhead passed without drawing.
 const pacing = { shown: [], dropped: 0, last: -1, pending: -1 };
 globalThis.pacing = pacing;
+globalThis.cutQuads = () => quads; // the e2e aims at plugin parts with these
 const undo = [], redo = [];
 let base = null;         // the document before the gesture in progress
 const assets = new Set();
