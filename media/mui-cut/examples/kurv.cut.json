@@ -50,7 +50,10 @@
           "name": "KURV (live plugin, playing)",
           "kind": "plugin",
           "source": {
-            "bin": "../../tools/kurv-live/bin/kurv-cut-live"
+            "plugin": "../../../../KURV",
+            "features": [
+              "process-lab"
+            ]
           },
           "explode_levels": 2,
           "explode_stagger": 0.7,

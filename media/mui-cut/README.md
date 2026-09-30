@@ -626,8 +626,12 @@ keys or any Web MIDI input, and records what it plays into the layer's
 it plays.
 
 The adapter's protocol, for writing one for another plugin, is in
-`HOST-PROTOCOL.md`. KURV's adapter is `media/tools/kurv-live`
-(`build.py --kurv <checkout>` builds `bin/kurv-cut-live`); `examples/kurv.cut.json` explodes KURV two
+`HOST-PROTOCOL.md`. A moose plugin's generated adapter runs its real DSP
+too: the host's notes on the sample clock, meters and transport shared with
+the editor, and a `patch` of the parameters off their defaults and the notes
+held. A plugin source's `features` turn on the plugin crate's Cargo features
+for it (KURV sounds in its `process-lab` build). `examples/kurv.cut.json`
+(KURV checked out beside this repository) explodes KURV two
 levels deep in 3D while it plays a melody, resizes it, and shows its
 patch.
 
@@ -904,8 +908,11 @@ snapshots in the editor rather than `CurveHistory`, for the same reason.
   plugin must build as a bridge live adapter. A 3D scene composites
   a translucent capture in linear light, so its soft edges read slightly
   brighter than in 2D.
-- Sound: the patch's modulation routes show 0 for their live values (KURV
-  does not report them yet). `serve` opens the device at the project's
+- Sound: only moose plugins (and hand-written adapters) sound; truce,
+  nice-plug and plain MUI adapters are silent. A generated adapter's patch
+  lists parameters and held notes, not modulation routes (no framework
+  API names them), and a plugin's keyboard does not light the notes the
+  host plays unless the plugin draws them from its DSP. `serve` opens the device at the project's
   rate when it starts; a rate change needs a restart. The live view's old
   images are not freed in the viewport worker. `plugin_play` to an mp4
   renders the whole scene and trims it. The web export has no sound.

@@ -7,7 +7,10 @@ implements everything below around three callbacks: `audio` (the DSP), `edit`
 (parameters) and `frame` (the editor and its capture). Working adapters:
 
 - `media/mui-cut/examples/synth.rs` is a small self-contained one, used by the tests.
-- `media/tools/kurv-live/bridge.rs` is KURV's real editor and real `PluginLogic::process`.
+- `media/mui-cut/src/adapter/moose.rs` is the generated adapter for any moose
+  plugin (`{"plugin": folder}` sources, `mui-cut add`): its real editor,
+  headless, and its real DSP, through `mui_motion_bridge::run_headless_with`.
+  KURV runs through it.
 
 Protocol version: `hello.version` = 1.
 

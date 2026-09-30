@@ -861,6 +861,11 @@ fn add_builds_a_git_mui_plugin_against_this_tree_and_lists_its_parts() {
     let r: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(r["framework"], "mui");
     assert_eq!(r["id"], "fixture-plain");
+    assert!(
+        Path::new(r["adapter"].as_str().unwrap()).is_file(),
+        "the report names the built adapter: {}",
+        r["adapter"]
+    );
     let parts = r["parts"].to_string();
     assert!(
         parts.contains("tone-color") && parts.contains("space-mix"),
@@ -901,5 +906,65 @@ fn add_builds_a_git_mui_plugin_against_this_tree_and_lists_its_parts() {
         check.status.success(),
         "{}",
         String::from_utf8_lossy(&check.stdout)
+    );
+    // A keyed view size reflows the generated adapter's editor, as a
+    // window resize would: the panels grow into the wider view.
+    let source = src["source"].clone();
+    let mut p = p;
+    p["scenes"][0]["layers"] = serde_json::json!([{
+        "id": "k", "kind": "plugin", "source": source,
+        "view_width": [{"t": 0, "v": 400, "interp": "hold"}, {"t": 0.5, "v": 700, "interp": "hold"}],
+        "view_height": 300,
+    }]);
+    std::fs::write(&project, p.to_string()).unwrap();
+    let capture = Command::new(BIN)
+        .arg("capture")
+        .arg(&project)
+        .env("MUI_CUT_CACHE", dir.join("cache"))
+        .output()
+        .unwrap();
+    assert!(
+        capture.status.success(),
+        "{}",
+        String::from_utf8_lossy(&capture.stderr)
+    );
+    let at = |t: &str| -> serde_json::Value {
+        let out = Command::new(BIN)
+            .args(["eval"])
+            .arg(&project)
+            .args(["--t", t])
+            .output()
+            .unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        let state = v["layers"][0]["plugin"]["state"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        serde_json::from_str(
+            &std::fs::read_to_string(dir.join(".cut-cache").join(state + ".json")).unwrap(),
+        )
+        .unwrap()
+    };
+    let (narrow, wide) = (at("0.2"), at("0.8"));
+    assert_eq!(
+        (narrow["width"].as_f64(), wide["width"].as_f64()),
+        (Some(400.), Some(700.))
+    );
+    // The second panel's knob moves right as the first panel grows.
+    let x = |m: &serde_json::Value| {
+        m["parts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["id"] == "space-size")
+            .unwrap()["frame"][0]
+            .as_f64()
+            .unwrap()
+    };
+    assert!(
+        x(&wide) > x(&narrow) + 100.,
+        "{} vs {}",
+        x(&wide),
+        x(&narrow)
     );
 }

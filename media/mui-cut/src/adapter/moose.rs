@@ -2,8 +2,7 @@
 //! editor as a host would, on a headless window, and its real DSP renders
 //! the host's notes on the bridge's sample clock. Editor and DSP share the
 //! parameters, meters and transport, so the capture shows what it plays.
-//!
-//! `--channel N` (0..15, default 0): the MIDI channel notes arrive on.
+//! Notes arrive on MIDI channel 1 (0 on the wire).
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -47,12 +46,7 @@ impl Held {
 }
 
 fn run() -> Result<(), String> {
-    let args: Vec<String> = std::env::args().collect();
-    let channel: u8 = args
-        .iter()
-        .position(|a| a == "--channel")
-        .and_then(|i| args.get(i + 1))
-        .map_or(Ok(0), |c| c.parse().ok().filter(|c| *c < 16).ok_or("--channel is 0..15"))?;
+    let channel = 0;
     let name = <plugin::ENTRY as PluginRuntime>::info().name;
     mui_motion_bridge::mui::host::headless::claim();
     let mut plugin = <plugin::ENTRY as PluginExport>::create();

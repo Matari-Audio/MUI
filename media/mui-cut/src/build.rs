@@ -835,6 +835,10 @@ pub fn add(project: &Path, from: &str, base: &Path, id: Option<&str>) -> Result<
     report["id"] = entry["id"].clone();
     report["source"] = entry["source"].clone();
     report["parts"] = parts(&p, project, entry["id"].as_str().unwrap_or(""))?;
+    // Built by now: its path, for a wall-clock host (tools/film).
+    let source: mui_cut::plugin::Source =
+        serde_json::from_value(entry["source"].clone()).map_err(|e| e.to_string())?;
+    report["adapter"] = json!(crate::host::executable(&source, dir)?.0);
     Ok(report)
 }
 
