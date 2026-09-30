@@ -333,6 +333,8 @@ fn content(l: &Drawn) -> Drawn {
             edge: l.space.edge,
             ..three::Space::default()
         },
+        // Effects are not drawn here (see `render`).
+        effects: Vec::new(),
         ..l.clone()
     }
 }
@@ -702,6 +704,17 @@ pub fn render(
     let mut pngs = Vec::with_capacity(jobs.len());
     for group in jobs.chunk_by(|a, b| std::ptr::eq(a.0, b.0)) {
         let times: Vec<f64> = group.iter().map(|j| j.1).collect();
+        // ponytail: effect stacks are left out; upload each Blender frame
+        // into the fx chain's input texture if they are wanted here.
+        let s = group[0].0;
+        let fx = s.effects.len() + s.layers.iter().map(|l| l.effects.len()).sum::<usize>();
+        if fx > 0 {
+            eprintln!(
+                "mui-cut: --renderer blender skips effects ({fx} in scene `{}`); \
+                 classic and gpu draw them",
+                s.name
+            );
+        }
         let (desc, textures) = describe(p, group[0].0, &times, assets, dir, o)?;
         for t in textures {
             let path = tex.join(&t.name);
