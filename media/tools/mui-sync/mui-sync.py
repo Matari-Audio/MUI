@@ -94,13 +94,23 @@ def git(repo, *args):
 
 
 def mui_packages(lock):
-    names = []
-    for block in lock.split('[[package]]'):
-        if f'source = "git+{MUI_GIT}' in block:
-            m = re.search(r'name = "([^"]+)"', block)
-            if m and m.group(1) not in names:
-                names.append(m.group(1))
-    return names
+    """The `cargo update` specs of the MUI git packages in a lock: the name,
+    or `name@version` when crates.io has a package of that name in it too."""
+    blocks = [b for b in lock.split('[[package]]')]
+    count = {}
+    for b in blocks:
+        m = re.search(r'name = "([^"]+)"', b)
+        if m:
+            count[m.group(1)] = count.get(m.group(1), 0) + 1
+    specs = []
+    for b in blocks:
+        if f'source = "git+{MUI_GIT}' in b:
+            name = re.search(r'name = "([^"]+)"', b).group(1)
+            version = re.search(r'version = "([^"]+)"', b).group(1)
+            spec = f'{name}@{version}' if count[name] > 1 else name
+            if spec not in specs:
+                specs.append(spec)
+    return specs
 
 
 def errors(stderr, limit=40):

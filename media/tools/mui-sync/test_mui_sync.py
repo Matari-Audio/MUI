@@ -62,3 +62,21 @@ class Sync(unittest.TestCase):
             made = sync.siblings(d / 'repos/KURV', wt)
             self.assertEqual(made, [d / 'work/Access'])
             self.assertEqual((d / 'work/Access').resolve(), (d / 'repos/Access').resolve())
+
+    def test_names_a_mui_package_by_version_when_crates_io_has_one_too(self):
+        lock = '''[[package]]
+name = "mui"
+version = "0.1.0"
+source = "git+https://github.com/Matari-Audio/MUI#abc"
+
+[[package]]
+name = "vello_encoding"
+version = "0.6.0"
+source = "git+https://github.com/Matari-Audio/MUI#abc"
+
+[[package]]
+name = "vello_encoding"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+'''
+        self.assertEqual(sync.mui_packages(lock), ['mui', 'vello_encoding@0.6.0'])
