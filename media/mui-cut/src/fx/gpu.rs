@@ -420,3 +420,31 @@ fn uniforms(device: &wgpu::Device, slots: u64) -> wgpu::Buffer {
         mapped_at_creation: false,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    /// WebGL2 (no `BUFFER_BINDINGS_NOT_16_BYTE_ALIGNED`) refuses a uniform
+    /// whose size is not a multiple of 16: every effect's `U` must be one,
+    /// and fit its slot.
+    #[test]
+    fn every_effect_uniform_suits_webgl2() {
+        for def in crate::fx::EFFECTS {
+            let wgsl = super::source(def.name).expect("a shader per effect");
+            let m =
+                naga::front::wgsl::parse_str(wgsl).unwrap_or_else(|e| panic!("{}: {e}", def.name));
+            let mut layout = naga::proc::Layouter::default();
+            layout.update(m.to_ctx()).unwrap();
+            let (_, u) = m
+                .global_variables
+                .iter()
+                .find(|(_, g)| g.binding.as_ref().is_some_and(|b| b.binding == 2))
+                .expect("the uniform");
+            let size = layout[u.ty].size;
+            assert!(
+                size % 16 == 0 && u64::from(size) <= super::SLOT,
+                "{}: U is {size} bytes",
+                def.name
+            );
+        }
+    }
+}

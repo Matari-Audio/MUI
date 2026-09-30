@@ -69,6 +69,11 @@ function setp(o, p, v) {
 }
 // The engine says which properties a layer has and what they are at the
 // playhead: `[{p, v}]`, v a number or a colour string.
+// The evaluated frame at the playhead: scene values (a bound background,
+// effect stacks) that props() does not cover.
+// Once per inspector pass: every effect field reads it.
+let framed;
+const frameNow = () => framed ??= JSON.parse(cut.frame(si, t) || 'null');
 const propsOf = (l, time = t) => l ? JSON.parse(cut.props(si, l.id, time)) : [];
 const keyPaths = l => propsOf(l, 0).map(r => r.p);
 const numPaths = l => propsOf(l, 0).filter(r => typeof r.v === 'number').map(r => r.p);
@@ -127,7 +132,7 @@ function noticeEffects() {
   if (b.dataset.backend !== 'CPU') return;
   const any = doc.scenes.some(s => s.effects?.length || s.layers.some(l => l.effects?.length));
   b.textContent = any ? 'CPU · effects off' : 'CPU';
-  b.title = any ? 'This browser has no WebGPU: the viewport draws without effects' : b.title;
+  b.title = any ? 'The CPU renderer draws the viewport without effects' : b.title;
 }
 function restore(text) {
   doc = JSON.parse(text); selKey = null;
@@ -348,6 +353,7 @@ function variablesSection() {
   }
 }
 function refreshInspector() {
+  framed = undefined;
   const box = $('#inspector'); box.replaceChildren();
   const l = layer();
   if (!l) {
@@ -355,12 +361,12 @@ function refreshInspector() {
     $('#insp-title').textContent = 'Scene';
     field('name', input(s.name, v => edit(() => { s.name = v; })));
     field('duration', lock(input(R.scenes[si].duration, v => edit(() => { s.duration = Math.max(0.05, Number(v) || 1); }), 'number'), s.duration));
-    const bg = lock(input(frame?.background ?? s.background ?? '#101014', v => edit(() => { s.background = v; })), s.background);
+    const bg = lock(input(frameNow()?.background ?? s.background ?? '#101014', v => edit(() => { s.background = v; })), s.background);
     bg.dataset.bg = '';
     field('background', bg);
     field('project', input(`${R.size[0]}×${R.size[1]} @ ${R.fps} fps`, () => {}));
     variablesSection();
-    fxSection(s, () => frame?.effects ?? []);
+    fxSection(s, () => frameNow()?.effects ?? []);
     return;
   }
   $('#insp-title').textContent = `Layer · ${l.kind}`;
@@ -386,7 +392,7 @@ function refreshInspector() {
     (l.animators ??= []).push(a);
   }));
   if (VECTOR.includes(l.kind)) adder('+ deformer', ['noise', 'twist', 'bend', 'wave'], v => edit(() => { (l.deformers ??= []).push({ kind: v }); }));
-  fxSection(l, () => frame?.layers.find(d => d.id === l.id)?.effects ?? []);
+  fxSection(l, () => frameNow()?.layers.find(d => d.id === l.id)?.effects ?? []);
   updateInspector();
 }
 // An effect stack (a layer's or the scene's): each effect's parameters are
@@ -427,10 +433,11 @@ function fxSection(owner, live) {
 }
 // Values follow the playhead without rebuilding the panel.
 function updateInspector() {
+  framed = undefined;
   const l = layer();
   if (!l) {
     const bg = $('#inspector [data-bg]');
-    if (bg?.disabled && frame) bg.value = frame.background;
+    if (bg?.disabled) bg.value = frameNow()?.background ?? bg.value;
     updateFx(); return;
   }
   const vals = Object.fromEntries(propsOf(l).map(r => [r.p, r.v]));

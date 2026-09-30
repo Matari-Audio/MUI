@@ -28,6 +28,7 @@ const check = (ok, what) => { if (!ok) throw new Error('FAILED: ' + what); conso
 
 const mode = process.env.E2E_BACKEND ?? 'webgpu';
 const expected = { cpu: 'CPU', webgl2: 'WebGL2' }[mode] ?? 'WebGPU';
+const cpu = expected === 'CPU';
 const angle = ['--enable-features=Vulkan', '--use-angle=vulkan', '--ignore-gpu-blocklist'];
 const gpuFlags = { cpu: ['--disable-features=WebGPU'], webgl2: ['--disable-features=WebGPU,Vulkan', '--use-angle=vulkan', '--ignore-gpu-blocklist'] }[mode]
   ?? ['--enable-unsafe-webgpu', ...angle];
@@ -172,7 +173,7 @@ try {
   check(read().scenes[1].effects[0].saturation === 0, 'an effect parameter is saved');
   const grey = pixel(Buffer.from((await send('Page.captureScreenshot', { format: 'png', clip })).data, 'base64'));
   if (cpu) check(await js(`document.querySelector('#backend').textContent`) === 'CPU · effects off', 'the CPU viewport says effects are off');
-  else check(Math.abs(grey[0] - grey[1]) <= 2 && Math.abs(grey[1] - grey[2]) <= 2 && grey[0] > 0x10, `the viewport draws the effect (${grey})`);
+  else check(Math.abs(grey[0] - grey[1]) <= 2 && Math.abs(grey[1] - grey[2]) <= 2 && grey[0] > 0x10, `the viewport draws the effect (${grey}) ${await js(`document.querySelector('#error').textContent`)}`);
   await shot('editor-effect.png');
   // Export: WebCodecs H.264 in the worker, muxed to MP4, every frame of
   // every scene; a cancel stops a second run.
@@ -282,7 +283,8 @@ try {
   const light = pixel(Buffer.from((await send('Page.captureScreenshot', { format: 'png', clip: { x: lx + 4, y: ly + 4, width: 1, height: 1, scale: 1 } })).data, 'base64'));
   check(Math.abs(light[0] - 0xf4) <= 2 && Math.abs(light[2] - 0xea) <= 2, `the viewport draws the variant's theme (${light})`);
   await shot('editor-variant.png');
-  check(await js(`(i => i.disabled && i.value)(document.querySelector('[data-bg]'))`) === '#f4f1ea', 'a bound background shows the variant\'s value, read-only');
+  const bgv = await js(`(i => i ? [i.disabled, i.value] : 'none')(document.querySelector('[data-bg]'))`);
+  check(bgv[0] === true && bgv[1] === '#f4f1ea', `a bound background shows the variant's value, read-only (${bgv})`);
   await js(`(() => { const i = document.querySelector('[data-var="headline"]'); i.value = 'Hello'; i.onchange(); })()`);
   await sleep(1200);
   const saved = read();

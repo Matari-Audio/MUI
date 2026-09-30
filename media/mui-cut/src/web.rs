@@ -7,6 +7,22 @@ use wasm_bindgen::prelude::*;
 use crate::render::Assets;
 use crate::{Engine, GpuCanvas, Project, Renderer, Shutter, eval, subframes};
 
+thread_local! {
+    static PANIC: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
+}
+
+/// The message of the last panic ("" when none): wasm only throws
+/// `unreachable`, and a panicked object refuses every later call.
+#[wasm_bindgen(js_name = lastPanic)]
+pub fn last_panic() -> String {
+    PANIC.with_borrow(Clone::clone)
+}
+
+#[wasm_bindgen(start)]
+fn start() {
+    std::panic::set_hook(Box::new(|info| PANIC.set(info.to_string())));
+}
+
 fn load(json: &str, variant: Option<String>) -> Result<Project, String> {
     let p = Project::load(json)?;
     match variant.filter(|v| !v.is_empty()) {

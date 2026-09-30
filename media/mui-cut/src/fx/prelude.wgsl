@@ -16,7 +16,9 @@ struct U {
     pass_index: u32,
     _pad0: u32,
     _pad1: u32,
-    p: Params,
+    // The rest of the 256-byte slot: WebGL2 wants uniforms in 16-byte
+    // multiples, and this is one whatever the effect's Params.
+    @size(224) p: Params,
 }
 
 @group(0) @binding(0) var src: texture_2d<f32>;

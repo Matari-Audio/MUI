@@ -8,7 +8,7 @@
 // Exports run here too: every frame of every scene drawn at project size
 // (on WebGPU with the motion-blur shutter, else on the CPU), encoded by a
 // WebCodecs VideoEncoder and muxed to MP4 by mp4.js.
-import init, { Cut, GpuView } from './pkg/mui_cut.js';
+import init, { Cut, GpuView, lastPanic } from './pkg/mui_cut.js';
 import { Mp4 } from './mp4.js';
 
 // The WebGPU default, from the benchmark in the README.
@@ -141,6 +141,7 @@ self.onmessage = async ({ data: m }) => {
       self.postMessage({ type: 'drawn', quads, notice, ms: performance.now() - start });
     }
   } catch (e) {
-    self.postMessage({ type: m.type === 'draw' ? 'drawn' : 'error', error: String(e) });
+    const why = lastPanic();
+    self.postMessage({ type: m.type === 'draw' ? 'drawn' : 'error', error: why ? `${e}: ${why}` : String(e) });
   }
 };
