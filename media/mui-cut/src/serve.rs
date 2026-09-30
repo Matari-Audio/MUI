@@ -24,6 +24,9 @@ struct Shared {
     /// from this is somebody else's edit.
     known: Mutex<String>,
     listeners: Mutex<Vec<TcpStream>>,
+    /// The open editor's last reported state (scene, playhead, selection)
+    /// and when it came: what `mui-cut mcp` shows an agent.
+    state: Mutex<(String, Option<std::time::Instant>)>,
 }
 
 pub fn serve(project: &Path, port: u16, web: PathBuf) -> Result<()> {
@@ -41,6 +44,7 @@ pub fn serve(project: &Path, port: u16, web: PathBuf) -> Result<()> {
         web,
         known: Mutex::new(known),
         listeners: Mutex::new(Vec::new()),
+        state: Mutex::new(("null".into(), None)),
     });
     let listener =
         TcpListener::bind(("127.0.0.1", port)).map_err(|e| format!("port {port}: {e}"))?;
@@ -111,12 +115,13 @@ impl Shared {
             }
             *known = now;
         }
+        self.broadcast(b"data: changed\n\n");
+    }
+
+    /// One SSE message to every open editor, dropping the gone ones.
+    fn broadcast(&self, msg: &[u8]) {
         let mut ls = self.listeners.lock().expect("no panic holds it");
-        ls.retain_mut(|s| {
-            s.write_all(b"data: changed\n\n")
-                .and_then(|()| s.flush())
-                .is_ok()
-        });
+        ls.retain_mut(|s| s.write_all(msg).and_then(|()| s.flush()).is_ok());
     }
 
     fn handle(&self, stream: &TcpStream) -> Result<()> {
@@ -164,6 +169,42 @@ impl Shared {
                         respond(stream, "400 Bad Request", "text/plain", e.as_bytes()).map_err(io)
                     }
                 }
+            }
+            // The editor reports its state; an agent reads it.
+            ("PUT", "/state") | ("POST", "/control") => {
+                if length > 64 << 10 {
+                    return respond(stream, "413 Payload Too Large", "text/plain", b"too large")
+                        .map_err(io);
+                }
+                let mut body = vec![0; length];
+                r.read_exact(&mut body).map_err(io)?;
+                let Ok(v) = serde_json::from_slice::<serde_json::Value>(&body) else {
+                    return respond(stream, "400 Bad Request", "text/plain", b"not JSON")
+                        .map_err(io);
+                };
+                // Compact, so it is one SSE data line.
+                let one = v.to_string();
+                if method == "PUT" {
+                    *self.state.lock().expect("no panic holds it") =
+                        (one, Some(std::time::Instant::now()));
+                } else {
+                    self.broadcast(format!("event: control\ndata: {one}\n\n").as_bytes());
+                    let editors = self.listeners.lock().expect("no panic holds it").len();
+                    let reply = format!("{{\"editors\": {editors}}}");
+                    return respond(stream, "200 OK", "application/json", reply.as_bytes())
+                        .map_err(io);
+                }
+                respond(stream, "200 OK", "application/json", b"{}").map_err(io)
+            }
+            ("GET", "/state") => {
+                let (state, at) = self.state.lock().expect("no panic holds it").clone();
+                let age = at.map_or_else(|| "null".into(), |a| a.elapsed().as_millis().to_string());
+                let editors = self.listeners.lock().expect("no panic holds it").len();
+                let body = format!(
+                    "{{\"project\": {}, \"editors\": {editors}, \"age_ms\": {age}, \"state\": {state}}}",
+                    serde_json::Value::from(self.project.to_string_lossy()),
+                );
+                respond(stream, "200 OK", "application/json", body.as_bytes()).map_err(io)
             }
             ("GET", "/name") => {
                 let name = self

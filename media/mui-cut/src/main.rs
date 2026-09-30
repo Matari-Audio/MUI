@@ -7,6 +7,7 @@
 //!     mui-cut serve  demo.cut.json [--port 8740] [--web DIR]
 #![forbid(unsafe_code)]
 
+mod mcp;
 mod serve;
 mod tools;
 
@@ -27,6 +28,7 @@ const USAGE: &str = "usage:
   mui-cut eval   PROJECT --t SECONDS [--scene NAME]
   mui-cut fmt    PROJECT
   mui-cut schema                                   # the project JSON Schema
+  mui-cut mcp    [PROJECT]                         # MCP server on stdio
   mui-cut check  PROJECT [--json]
   mui-cut sheet  PROJECT [-o OUT.png] [--scene NAME] [--n 8] [--times 0,1.5] [--width 1600] [--cols 4] [--cpu]
   mui-cut strip  PROJECT --layer ID [-o OUT.png] [--scene NAME] [--n 8] [--width 1600] [--cpu]
@@ -70,6 +72,9 @@ fn run(argv: &[String]) -> Result<()> {
             serde_json::to_string_pretty(&Project::json_schema()).map_err(|e| e.to_string())?;
         println!("{schema}");
         return Ok(());
+    }
+    if argv.first().map(String::as_str) == Some("mcp") {
+        return mcp::serve(argv.get(1).map(String::as_str));
     }
     let (Some(cmd), Some(project)) = (argv.first(), argv.get(1)) else {
         return Err(USAGE.into());

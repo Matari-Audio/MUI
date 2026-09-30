@@ -68,7 +68,7 @@ use mui_cut::{Drawn, Frame, Layer, Scene, eval};
 use crate::Backend;
 
 /// Every frame through `b`, in order (the GPU hands them back late).
-fn draw_all(b: &mut Backend, frames: &[Frame]) -> Result<Vec<Vec<u8>>> {
+pub fn draw_all(b: &mut Backend, frames: &[Frame]) -> Result<Vec<Vec<u8>>> {
     let mut out = Vec::with_capacity(frames.len());
     for f in frames {
         if let Some(px) = b.push(std::slice::from_ref(f))? {

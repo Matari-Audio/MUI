@@ -103,6 +103,21 @@ pub fn check(src: &str, r: &mut Renderer, exists: &dyn Fn(&str) -> bool) -> Vec<
     out.done()
 }
 
+/// Only the field lints (and a load error): what is cheap enough to run
+/// on every edit, and what an edit must not introduce, since a save drops
+/// unknown fields.
+pub fn lint_fields(src: &str) -> Vec<Issue> {
+    let p = match Project::load(src) {
+        Ok(p) => p,
+        Err(e) => return vec![load_issue(&e)],
+    };
+    let mut out = Issues::default();
+    if let Ok(raw) = serde_json::from_str::<Value>(src) {
+        fields(&raw, &p, &mut out);
+    }
+    out.done()
+}
+
 /// A load error as an issue, its path split off the message.
 pub fn load_issue(e: &str) -> Issue {
     let (path, msg) = match e.split_once(": ") {
