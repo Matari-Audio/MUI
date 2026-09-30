@@ -545,6 +545,19 @@ fn overshoot(
 
 // ---------------------------------------------------------------- pixels
 
+/// The time of every key of every property of `l`, unsorted.
+pub fn key_times(l: &crate::Layer) -> Vec<f64> {
+    let mut ts = Vec::new();
+    for (_, prop) in l.props() {
+        match prop {
+            Prop::Num(Anim::Keys(k)) => ts.extend(k.iter().map(|k| k.t)),
+            Prop::Color(Anim::Keys(k)) => ts.extend(k.iter().map(|k| k.t)),
+            _ => {}
+        }
+    }
+    ts
+}
+
 /// An axis-aligned box: `[x0, y0, x1, y1]`.
 type Bbox = [f64; 4];
 
@@ -572,13 +585,7 @@ fn sample_times(p: &Project, s: &Scene) -> Vec<f64> {
     let end = (s.duration - 1. / p.fps).max(0.);
     let mut ts: Vec<f64> = (0..=12).map(|i| end * f64::from(i) / 12.).collect();
     for l in &s.layers {
-        for (_, prop) in l.props() {
-            match prop {
-                Prop::Num(Anim::Keys(k)) => ts.extend(k.iter().map(|k| k.t)),
-                Prop::Color(Anim::Keys(k)) => ts.extend(k.iter().map(|k| k.t)),
-                _ => {}
-            }
-        }
+        ts.extend(key_times(l));
     }
     ts.retain(|t| (0. ..=end).contains(t));
     ts.sort_by(f64::total_cmp);
