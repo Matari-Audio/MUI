@@ -255,6 +255,7 @@ try {
   await sleep(1500);
   await click('#scenes button:nth-child(1)'); await sleep(800);
   // Its environment and occlusion show on the scene and switch off and on.
+  for (let i = 0; i < 50 && !(await js(`!!document.querySelector('[data-look="ao"]')`)); i++) await sleep(100);
   check(await js(`document.querySelector('[data-look="environment"]')?.checked && document.querySelector('[data-look="ao"]')?.checked`), 'the scene shows its environment and occlusion');
   await js(`(c => { c.checked = false; c.dispatchEvent(new Event('change')); })(document.querySelector('[data-look="ao"]'))`); await sleep(800);
   check(!read().scenes[0].ao && read().scenes[0].environment, 'occlusion switches off in the file');
