@@ -626,3 +626,74 @@ fn a_change_under_a_backdrop_renders_everything() {
     assert_eq!(stats.rendered_pixels, AREA);
     same_pixels(&part, &whole);
 }
+
+/// The present writes premultiplied alpha by default and straight alpha
+/// for a surface that composites it (`PostMultiplied`): half-clear red is
+/// `[128, 0, 0, 128]` one way and `[255, 0, 0, 128]` the other.
+#[test]
+fn the_present_writes_premultiplied_or_straight_alpha() {
+    let Some((device, queue)) = device() else {
+        return;
+    };
+    let out = readable(&device);
+    let view = out.create_view(&wgpu::TextureViewDescriptor::default());
+    let mut r = pollster::block_on(hybrid(&device, &queue));
+    let root = block(320., 200.).fill(Fill::Color(Color::srgba(1., 0., 0., 0.5)));
+    let scene = resolve(&SceneSpec::new(root).offered(Size::new(320., 200.))).unwrap();
+    // Vello keeps straight alpha in 8 bits: un-premultiplying rounds.
+    let near = |a: [u8; 4], b: [u8; 4]| a.iter().zip(b).all(|(a, b)| a.abs_diff(b) <= 3);
+    r.render(&scene, Affine::IDENTITY, &view).unwrap();
+    let premultiplied = at(&pixels(&device, &queue, &out), 160, 100);
+    assert!(near(premultiplied, [128, 0, 0, 128]), "{premultiplied:?}");
+    r.set_straight_alpha(true);
+    r.render(&scene, Affine::IDENTITY, &view).unwrap();
+    let straight = at(&pixels(&device, &queue, &out), 160, 100);
+    assert!(near(straight, [255, 0, 0, 128]), "{straight:?}");
+}
+
+/// Past the frame, the present writes clear. The renderer's texture only
+/// grows, so a window dragged smaller once showed the larger frame's
+/// pixels there, wherever the swapchain is larger than the frame (Linux
+/// steps it) and the window is translucent.
+#[test]
+fn past_the_frame_the_present_writes_clear() {
+    let Some((device, queue)) = device() else {
+        return;
+    };
+    let out = readable(&device);
+    let view = out.create_view(&wgpu::TextureViewDescriptor::default());
+    let mut r = pollster::block_on(hybrid(&device, &queue));
+    let root = block(320., 200.).fill(Fill::Color(Color::srgb(1., 0., 0.)));
+    let scene = resolve(&SceneSpec::new(root).offered(Size::new(320., 200.))).unwrap();
+    r.render(&scene, Affine::IDENTITY, &view).unwrap();
+    r.resize([100, 80]).unwrap();
+    r.render(&scene, Affine::IDENTITY, &view).unwrap();
+    let p = pixels(&device, &queue, &out);
+    assert_eq!(at(&p, 50, 40), [255, 0, 0, 255], "the frame");
+    assert_eq!(at(&p, 200, 150), [0, 0, 0, 0], "past the frame");
+    assert_eq!(at(&p, 50, 150), [0, 0, 0, 0], "below the frame");
+}
+
+/// A frosted fill over nothing keeps its alpha: the backdrop blurs clear
+/// into clear, so a translucent window shows the desktop through it rather
+/// than black or a darkened tint.
+#[test]
+fn a_backdrop_over_nothing_stays_translucent() {
+    let Some((device, queue)) = device() else {
+        return;
+    };
+    let out = readable(&device);
+    let view = out.create_view(&wgpu::TextureViewDescriptor::default());
+    let mut r = pollster::block_on(hybrid(&device, &queue));
+    let root = block(320., 200.)
+        .fill(Fill::Color(Color::srgba(0., 0., 1., 0.5)))
+        .backdrop_blur(8.)
+        .id("glass");
+    let scene = resolve(&SceneSpec::new(root).offered(Size::new(320., 200.))).unwrap();
+    r.render(&scene, Affine::IDENTITY, &view).unwrap();
+    let px = at(&pixels(&device, &queue, &out), 160, 100);
+    assert!(
+        px[0] == 0 && px[1] == 0 && px[2].abs_diff(128) <= 1 && px[3].abs_diff(128) <= 1,
+        "{px:?}"
+    );
+}

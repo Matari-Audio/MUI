@@ -348,7 +348,10 @@ DAW down instead of being caught at the FFI edge.
 - `mui-truce`: truce's `Editor` over that window, plus the `Bridge` from widget
   ids to truce parameters.
 - `mui-vello::host`: bring your own window and surface; `Host` presents a
-  resolved scene to it.
+  resolved scene to it. `Host::with_transparency(.., Transparency::Translucent)`
+  composites with alpha where the surface offers it (`Host::translucent` says
+  whether it did): paint a faded root, `Role::Surface.alpha(0.7)`, over an OS
+  blur for frosted glass.
 
 ## Motion
 

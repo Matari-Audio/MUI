@@ -57,6 +57,8 @@ pub struct GpuRenderer {
     stale: bool,
     /// The view the target was last presented to.
     presented: Option<wgpu::TextureView>,
+    /// The present writes straight alpha: see [`GpuRenderer::set_straight_alpha`].
+    straight: bool,
 }
 
 /// Vello's output: compute shaders write only a storage texture, so the
@@ -76,8 +78,10 @@ struct Passes {
     layout: wgpu::BindGroupLayout,
     blur: wgpu::RenderPipeline,
     present: wgpu::RenderPipeline,
-    /// The present pass reads no uniform, but shares the layout.
-    idle: wgpu::Buffer,
+    /// The present for a surface that composites straight alpha.
+    present_straight: wgpu::RenderPipeline,
+    /// The present's uniform: only its frame size is read.
+    frame: wgpu::Buffer,
 }
 
 /// One backdrop's textures: Vello renders what is under it into `prefix`,
@@ -227,7 +231,8 @@ impl Passes {
         Self {
             blur: pipeline("fs_blur", wgpu::TextureFormat::Rgba8Unorm),
             present: pipeline("fs_present", format),
-            idle: uniform(device),
+            present_straight: pipeline("fs_present_straight", format),
+            frame: uniform(device),
             layout,
         }
     }
@@ -376,7 +381,8 @@ impl GpuRenderer {
         budget: Budget,
     ) -> Result<Self, Error> {
         checked_size(device, size)?;
-        // What leaves the present pass is sRGB-encoded and premultiplied; an
+        // What leaves the present pass is sRGB-encoded (and premultiplied,
+        // unless `set_straight_alpha`); an
         // sRGB attachment would encode it a second time on store.
         if format.is_srgb() {
             return Err(Error::Unsupported("target must be a non-sRGB format"));
@@ -395,7 +401,7 @@ impl GpuRenderer {
         .map_err(|e| Error::Device(e.to_string()))?;
         let passes = Passes::new(device, format);
         let target = Self::target(device, &passes, size);
-        Ok(Self {
+        let renderer = Self {
             device: device.clone(),
             queue: queue.clone(),
             vello,
@@ -420,7 +426,28 @@ impl GpuRenderer {
             patch: None,
             stale: false,
             presented: None,
-        })
+            straight: false,
+        };
+        renderer.write_frame();
+        Ok(renderer)
+    }
+
+    /// Tell the present pass the frame's size: past it, it writes clear.
+    fn write_frame(&self) {
+        let mut bytes = [0u8; 32];
+        bytes[24..28].copy_from_slice(&self.size[0].to_le_bytes());
+        bytes[28..32].copy_from_slice(&self.size[1].to_le_bytes());
+        self.queue.write_buffer(&self.passes.frame, 0, &bytes);
+    }
+
+    /// Present straight alpha rather than premultiplied: for a surface
+    /// configured `CompositeAlphaMode::PostMultiplied`, which composites
+    /// its colour as it stands. Off by default.
+    pub fn set_straight_alpha(&mut self, straight: bool) {
+        if straight != self.straight {
+            self.straight = straight;
+            self.presented = None;
+        }
     }
 
     fn target(device: &wgpu::Device, passes: &Passes, size: [u32; 2]) -> Target {
@@ -433,7 +460,7 @@ impl GpuRenderer {
         );
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         Target {
-            bind: bind(device, &passes.layout, &view, &passes.idle),
+            bind: bind(device, &passes.layout, &view, &passes.frame),
             texture,
             view,
             size,
@@ -449,6 +476,7 @@ impl GpuRenderer {
                 let grown = [size[0].max(have[0]), size[1].max(have[1])];
                 self.target = Self::target(&self.device, &self.passes, grown);
             }
+            self.write_frame();
             self.invalidate();
         }
         Ok(())
@@ -733,12 +761,13 @@ impl GpuRenderer {
                     },
                 );
             }
-            self.passes.draw(
-                &mut encoder,
-                &self.passes.present,
-                &self.target.bind,
-                target,
-            );
+            let present = if self.straight {
+                &self.passes.present_straight
+            } else {
+                &self.passes.present
+            };
+            self.passes
+                .draw(&mut encoder, present, &self.target.bind, target);
             self.queue.submit([encoder.finish()]);
             if self.valid {
                 self.presented = Some(target.clone());

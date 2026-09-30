@@ -68,6 +68,41 @@ fn surface_extent(v: u32, limit: u32) -> u32 {
     }
 }
 
+/// Whether a window shows what is behind it where the scene is not opaque.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Transparency {
+    /// The surface's default: opaque wherever the platform offers that.
+    #[default]
+    Opaque,
+    /// Composite with alpha, for a window over an OS blur (frosted glass)
+    /// or with no backdrop at all. Falls back to [`Transparency::Opaque`]
+    /// on a surface that cannot: see [`Host::translucent`].
+    Translucent,
+}
+
+/// The alpha mode a surface offering `offered` is configured with for
+/// `want`: premultiplied (what MUI paints) or else straight alpha when
+/// translucent, and `Auto` -- opaque where offered -- otherwise.
+pub fn alpha_mode(
+    offered: &[wgpu::CompositeAlphaMode],
+    want: Transparency,
+) -> wgpu::CompositeAlphaMode {
+    use wgpu::CompositeAlphaMode as A;
+    let translucent = [A::PreMultiplied, A::PostMultiplied]
+        .into_iter()
+        .find(|m| offered.contains(m));
+    match want {
+        Transparency::Translucent => translucent.unwrap_or(A::Auto),
+        Transparency::Opaque => A::Auto,
+    }
+}
+
+/// Whether a surface configured `mode` composites with alpha.
+fn is_translucent(mode: wgpu::CompositeAlphaMode) -> bool {
+    use wgpu::CompositeAlphaMode as A;
+    matches!(mode, A::PreMultiplied | A::PostMultiplied)
+}
+
 /// What one [`Host::present`] did.
 #[derive(Debug)]
 pub enum Frame {
@@ -136,6 +171,7 @@ impl OnDevice {
         instance: &wgpu::Instance,
         surface: Option<&wgpu::Surface<'_>>,
         size: (u32, u32),
+        transparency: Transparency,
     ) -> Result<Self, HostError> {
         // A desktop with an iGPU enumerates it first; paint on the card.
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
@@ -166,6 +202,7 @@ impl OnDevice {
                 let config = wgpu::SurfaceConfiguration {
                     format,
                     present_mode: present_mode(&caps.present_modes),
+                    alpha_mode: alpha_mode(&caps.alpha_modes, transparency),
                     desired_maximum_frame_latency: 1,
                     ..surface
                         .get_default_config(&adapter, sw, sh)
@@ -187,7 +224,7 @@ impl OnDevice {
                 color_space: wgpu::SurfaceColorSpace::Auto,
             },
         };
-        let renderer = pollster::block_on(GpuRenderer::new(
+        let mut renderer = pollster::block_on(GpuRenderer::new(
             &device,
             &queue,
             config.format,
@@ -195,6 +232,7 @@ impl OnDevice {
             Budget::default(),
         ))
         .map_err(HostError::Render)?;
+        renderer.set_straight_alpha(config.alpha_mode == wgpu::CompositeAlphaMode::PostMultiplied);
         Ok(Self {
             device,
             queue,
@@ -229,6 +267,8 @@ pub struct Host {
     retry_at: Option<Instant>,
     /// Bumped on every device rebuild: what lives on the old device is gone.
     generation: u64,
+    /// What the caller asked for; a rebuilt device asks again.
+    transparency: Transparency,
 }
 
 impl Host {
@@ -239,7 +279,20 @@ impl Host {
         surface: wgpu::Surface<'static>,
         size: (u32, u32),
     ) -> Result<Self, HostError> {
-        let gpu = OnDevice::open(&instance, Some(&surface), size)?;
+        Self::with_transparency(instance, surface, size, Transparency::Opaque)
+    }
+
+    /// [`Host::new`] for a window that is `transparency`: a translucent
+    /// one shows what the scene leaves uncovered or part-covered. The
+    /// window itself must be able to (an ARGB visual on X11, a non-opaque
+    /// layer on macOS, DirectComposition on Windows' DX12).
+    pub fn with_transparency(
+        instance: wgpu::Instance,
+        surface: wgpu::Surface<'static>,
+        size: (u32, u32),
+        transparency: Transparency,
+    ) -> Result<Self, HostError> {
+        let gpu = OnDevice::open(&instance, Some(&surface), size, transparency)?;
         Ok(Self {
             instance,
             surface,
@@ -247,7 +300,14 @@ impl Host {
             wanted: target_size(size.0, size.1),
             retry_at: None,
             generation: 0,
+            transparency,
         })
+    }
+
+    /// The surface composites with alpha: [`Transparency::Translucent`]
+    /// was asked for and the surface offered a way to.
+    pub fn translucent(&self) -> bool {
+        is_translucent(self.gpu.config.alpha_mode)
     }
 
     /// The instance the surface came from, for making a replacement.
@@ -359,7 +419,7 @@ impl Host {
             if self.retry_at.is_some_and(|at| now < at) {
                 return Ok(Frame::Skipped);
             }
-            match OnDevice::open(&self.instance, Some(&self.surface), size) {
+            match OnDevice::open(&self.instance, Some(&self.surface), size, self.transparency) {
                 Ok(gpu) => {
                     self.gpu = gpu;
                     self.generation += 1;
@@ -428,6 +488,27 @@ mod tests {
         assert_eq!(surface_format(&[F::Rgba8UnormSrgb]), None);
     }
 
+    /// Translucent takes premultiplied, else straight alpha, else stays
+    /// opaque; opaque is wgpu's `Auto` as it always was, even where a
+    /// translucent mode is on offer.
+    #[test]
+    fn the_alpha_mode_follows_what_the_surface_offers() {
+        use Transparency::*;
+        use wgpu::CompositeAlphaMode as A;
+        let vulkan_x11 = [A::PreMultiplied, A::Inherit];
+        let metal = [A::Opaque, A::PostMultiplied];
+        let dx12_hwnd = [A::Opaque];
+        assert_eq!(alpha_mode(&vulkan_x11, Translucent), A::PreMultiplied);
+        assert_eq!(alpha_mode(&metal, Translucent), A::PostMultiplied);
+        assert_eq!(alpha_mode(&dx12_hwnd, Translucent), A::Auto);
+        for offered in [&vulkan_x11[..], &metal, &dx12_hwnd] {
+            assert_eq!(alpha_mode(offered, Opaque), A::Auto, "{offered:?}");
+        }
+        assert!(is_translucent(A::PreMultiplied) && is_translucent(A::PostMultiplied));
+        assert!(!is_translucent(A::Auto) && !is_translucent(A::Inherit));
+        assert_eq!(Transparency::default(), Opaque);
+    }
+
     #[test]
     fn present_mode_and_swapchain_steps_follow_the_platform() {
         use wgpu::PresentMode as P;
@@ -451,14 +532,14 @@ mod tests {
     fn a_destroyed_device_is_seen_and_a_new_one_renders() {
         let instance =
             wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-        let gpu = match OnDevice::open(&instance, None, (16, 16)) {
+        let gpu = match OnDevice::open(&instance, None, (16, 16), Transparency::Opaque) {
             Ok(gpu) => gpu,
             Err(e) => return eprintln!("SKIPPED: no wgpu device ({e})"),
         };
         assert!(!gpu.lost());
         gpu.device.destroy();
         assert!(gpu.poll_lost(), "loss unseen");
-        let mut gpu2 = OnDevice::open(&instance, None, (16, 16)).unwrap();
+        let mut gpu2 = OnDevice::open(&instance, None, (16, 16), Transparency::Opaque).unwrap();
         assert_ne!(gpu2.device, gpu.device);
         let target = gpu2.device.create_texture(&wgpu::TextureDescriptor {
             label: None,
