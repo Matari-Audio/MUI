@@ -402,4 +402,131 @@ fn render_segments_reuse_unchanged_spans_and_splice_losslessly() {
         let d = mean_diff(&cpu[i], &straight[i]);
         assert!(d < 1.5, "CPU frame {i} differs from the GPU by {d:.2}");
     }
+/// `examples/plugin.cut.json` pointed at the built synth adapter (plain
+/// `cargo test` builds the examples) in a fresh scratch dir.
+fn plugin_project(name: &str) -> PathBuf {
+    let synth = Path::new(BIN).parent().unwrap().join("examples/synth");
+    assert!(
+        synth.is_file(),
+        "{} is missing: run the whole `cargo test -p mui-cut` (it builds the examples) or `cargo build -p mui-cut --example synth`",
+        synth.display()
+    );
+    let dir = scratch(name);
+    let src = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/examples/plugin.cut.json"
+    ))
+    .unwrap();
+    let mut v: serde_json::Value = serde_json::from_str(&src).unwrap();
+    let source = &mut v["scenes"][0]["layers"][0]["source"];
+    assert_eq!(source["example"], "synth");
+    *source = serde_json::json!({ "bin": synth });
+    let project = dir.join("plugin.cut.json");
+    std::fs::write(&project, v.to_string()).unwrap();
+    project
+}
+
+fn still(project: &Path, t: &str, out: &Path) -> String {
+    let o = Command::new(BIN)
+        .args(["still"])
+        .arg(project)
+        .args(["--t", t, "--size", "480x270", "--renderer", "cpu", "-o"])
+        .arg(out)
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&o.stderr).into_owned();
+    assert!(o.status.success(), "{err}");
+    err
+}
+
+#[test]
+fn plugin_layers_capture_the_real_ui_once_and_draw_it() {
+    let project = plugin_project("plugin");
+    let dir = project.parent().unwrap();
+    let a = dir.join("a.png");
+    let first = still(&project, "5.8", &a);
+    assert!(first.contains("capturing plugin layer `synth`"), "{first}");
+    // One manifest per state the scene shows, content-named images shared.
+    let cache = dir.join(".cut-cache");
+    let manifests = std::fs::read_dir(&cache)
+        .unwrap()
+        .filter(|e| e.as_ref().unwrap().path().extension() == Some("json".as_ref()))
+        .count();
+    let p = mui_cut::Project::load(&std::fs::read_to_string(&project).unwrap()).unwrap();
+    let steps = p.scenes[0].layers[0].plugin_track(p.fps, 240);
+    assert_eq!(manifests, steps.len());
+    // The real UI split into its named panels.
+    let cap: mui_cut::Capture = serde_json::from_slice(
+        &std::fs::read(cache.join(format!("{}.json", steps[0].key))).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(cap.parts(), ["head", "osc", "filter", "env", "out"]);
+    assert!(cap.surfaces.iter().any(|s| s.id == "filter-cutoff"));
+    // The keyed cutoff turns the real knob: its part's pixels differ.
+    let cutoff = |i: usize| {
+        let c: mui_cut::Capture = serde_json::from_slice(
+            &std::fs::read(cache.join(format!("{}.json", steps[i].key))).unwrap(),
+        )
+        .unwrap();
+        let f = c.fragments.iter().find(|f| f.group == "filter").unwrap();
+        f.src.clone()
+    };
+    assert_ne!(cutoff(0), cutoff(steps.len() / 2));
+    // Cached now: no adapter, the same pixels.
+    let b = dir.join("b.png");
+    let again = still(&project, "5.8", &b);
+    assert!(!again.contains("capturing"), "{again}");
+    assert_eq!(std::fs::read(&a).unwrap(), std::fs::read(&b).unwrap());
+    // And it is not an empty frame: most of the middle is the plugin.
+    let dec = png::Decoder::new(std::io::BufReader::new(std::fs::File::open(&a).unwrap()));
+    let mut reader = dec.read_info().unwrap();
+    let mut px = vec![0; reader.output_buffer_size().unwrap()];
+    reader.next_frame(&mut px).unwrap();
+    let bg = [0x0e, 0x0e, 0x10];
+    let lit = px.chunks(4).filter(|p| p[..3] != bg).count();
+    assert!(lit > 480 * 270 / 4, "{lit} pixels drawn");
+}
+
+#[test]
+fn serve_captures_plugin_states_and_tells_the_editor() {
+    let project = plugin_project("serve-plugin");
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let mut server = Command::new(BIN)
+        .args(["serve"])
+        .arg(&project)
+        .args(["--port", &port.to_string()])
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let start = Instant::now();
+    let mut events = loop {
+        if let Ok(s) = TcpStream::connect(("127.0.0.1", port)) {
+            break s;
+        }
+        assert!(start.elapsed() < Duration::from_secs(10), "no server");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    events.write_all(b"GET /events HTTP/1.1\r\n\r\n").unwrap();
+    events
+        .set_read_timeout(Some(Duration::from_secs(60)))
+        .unwrap();
+    let mut lines = BufReader::new(events);
+    let mut l = String::new();
+    while !l.starts_with("event: plugin") {
+        l.clear();
+        assert!(lines.read_line(&mut l).unwrap() > 0, "events closed");
+    }
+    let p = mui_cut::Project::load(&std::fs::read_to_string(&project).unwrap()).unwrap();
+    let key = &p.scenes[0].layers[0].plugin_track(p.fps, 0)[0].key;
+    let got = http(
+        port,
+        &format!("GET /asset/.cut-cache/{key}.json HTTP/1.1\r\n\r\n"),
+    );
+    assert!(got.starts_with("HTTP/1.1 200") && got.contains("\"filter\""), "{got}");
+    let _ = server.kill();
+    let _ = server.wait();
 }

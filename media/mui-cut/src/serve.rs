@@ -10,7 +10,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use mui_cut::Project;
+use mui_cut::{Kind, Project};
 
 use crate::{Result, write_atomic};
 
@@ -27,6 +27,8 @@ struct Shared {
     /// The open editor's last reported state (scene, playhead, selection)
     /// and when it came: what `mui-cut mcp` shows an agent.
     state: Mutex<(String, Option<std::time::Instant>)>,
+    /// The project text whose plugin states were last captured.
+    captured: Mutex<String>,
 }
 
 pub fn serve(project: &Path, port: u16, web: PathBuf) -> Result<()> {
@@ -45,6 +47,7 @@ pub fn serve(project: &Path, port: u16, web: PathBuf) -> Result<()> {
         known: Mutex::new(known),
         listeners: Mutex::new(Vec::new()),
         state: Mutex::new(("null".into(), None)),
+        captured: Mutex::new(String::new()),
     });
     let listener =
         TcpListener::bind(("127.0.0.1", port)).map_err(|e| format!("port {port}: {e}"))?;
@@ -55,6 +58,7 @@ pub fn serve(project: &Path, port: u16, web: PathBuf) -> Result<()> {
     let watch = shared.clone();
     std::thread::spawn(move || {
         loop {
+            watch.capture();
             std::thread::sleep(POLL);
             watch.poll();
         }
@@ -116,6 +120,31 @@ impl Shared {
             *known = now;
         }
         self.broadcast(b"data: changed\n\n");
+    }
+
+    /// Capture the plugin states the project as last read or saved shows
+    /// and the cache lacks (on the watcher's thread: a capture holds up
+    /// noticing outside edits, not the editor), then tell the editors.
+    fn capture(&self) {
+        let text = self.known.lock().expect("no panic holds it").clone();
+        {
+            let mut done = self.captured.lock().expect("no panic holds it");
+            if *done == text {
+                return;
+            }
+            done.clone_from(&text);
+        }
+        let Ok(p) = Project::load(&text) else {
+            return;
+        };
+        let mut layers = p.scenes.iter().flat_map(|s| &s.layers);
+        if !layers.any(|l| matches!(l.kind, Kind::Plugin { .. })) {
+            return;
+        }
+        for e in crate::host::capture_missing(&p, &self.project) {
+            eprintln!("mui-cut: {e}");
+        }
+        self.broadcast(b"event: plugin\ndata: ready\n\n");
     }
 
     /// One SSE message to every open editor, dropping the gone ones.
