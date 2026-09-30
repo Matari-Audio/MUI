@@ -1,5 +1,6 @@
 use super::*;
 use crate::motion;
+use mui_vello::kurbo::Shape as _;
 
 const DEMO: &str = include_str!("../examples/demo.cut.json");
 
@@ -333,7 +334,6 @@ fn trim_keeps_the_asked_part_of_each_contour() {
         stroke: None,
     };
     let bounds = |p: &[vector::Piece]| {
-        use mui_vello::kurbo::Shape as _;
         let b = p[0].path.bounding_box();
         (b.x0.round(), b.x1.round())
     };
@@ -415,7 +415,6 @@ fn duplicators_lay_copies_out_and_stagger_them() {
     let d = p.scenes[0].layers[0].at(0.);
     assert_eq!((d.count, d.fx.len()), (6, 6));
     let pieces = vector::duplicator(&d, Shape::Rect, "", Layout::Grid, "", false);
-    use mui_vello::kurbo::Shape as _;
     let centres: Vec<(f64, f64)> = pieces
         .iter()
         .map(|p| {
