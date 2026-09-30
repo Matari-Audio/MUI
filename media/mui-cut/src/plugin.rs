@@ -49,14 +49,19 @@ pub struct Source {
     /// Arguments for the adapter.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub args: Vec<String>,
+    /// A plugin crate's folder (relative to the project) or git URL: its
+    /// own editor, hosted headless by an adapter mui-cut generates and
+    /// builds against its MUI (`mui-cut add`). No code in the plugin.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub plugin: String,
 }
 
 impl Source {
     pub(crate) fn check(&self) -> Result<(), String> {
-        match (self.cargo.is_empty(), self.bin.is_empty(), self.example.is_empty()) {
-            (true, false, true) => Ok(()),
-            (false, b, e) if b != e => Ok(()),
-            _ => Err("`source` is {\"bin\": path}, or {\"cargo\": Cargo.toml, \"example\" or \"bin\": name}".into()),
+        match (self.cargo.is_empty(), self.bin.is_empty(), self.example.is_empty(), self.plugin.is_empty()) {
+            (true, false, true, true) | (true, true, true, false) => Ok(()),
+            (false, b, e, true) if b != e => Ok(()),
+            _ => Err("`source` is {\"plugin\": folder or git URL}, {\"bin\": path}, or {\"cargo\": Cargo.toml, \"example\" or \"bin\": name}".into()),
         }
     }
 }

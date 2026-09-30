@@ -144,7 +144,9 @@ fn capture(jobs: Vec<(String, &Source, Vec<mui_cut::Step>)>, project: &Path) -> 
 /// The adapter to run and its build stamp (size and modification time),
 /// building it first when the source is a Cargo target.
 fn executable(src: &Source, dir: &Path) -> Result<(PathBuf, String)> {
-    let exe = if src.cargo.is_empty() {
+    let exe = if !src.plugin.is_empty() {
+        crate::build::adapter(&src.plugin, dir)?
+    } else if src.cargo.is_empty() {
         dir.join(&src.bin)
     } else {
         let (flag, name) = if src.example.is_empty() {

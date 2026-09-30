@@ -7,8 +7,10 @@
 //!     mui-cut eval   demo.cut.json --t 1.5 [--scene NAME]
 //!     mui-cut fmt    demo.cut.json
 //!     mui-cut serve  demo.cut.json [--port 8740] [--web DIR]
+//!     mui-cut add    ../KORREKT [--project demo.cut.json]
 #![forbid(unsafe_code)]
 
+mod build;
 mod encode;
 mod host;
 mod mcp;
@@ -45,6 +47,8 @@ const USAGE: &str = "usage:
     --stats: per-frame wall time (evaluate, draw, hand to ffmpeg) p50/p95/max
   mui-cut eval   PROJECT --t SECONDS [--scene NAME] [--variant NAME]
   mui-cut fmt    PROJECT
+  mui-cut add    PLUGIN-FOLDER|GIT-URL [--project P] [--id NAME] [--json]
+                                                   # a MUI plugin into the sources, zero config
   mui-cut schema                                   # the project JSON Schema
   mui-cut mcp    [PROJECT]                         # MCP server on stdio
   mui-cut gen    SCRIPT.rhai [-o OUT.cut.json] [--seed N] [--into PROJECT [--scene NAME]]
@@ -91,6 +95,9 @@ fn run(argv: &[String]) -> Result<()> {
             serde_json::to_string_pretty(&Project::json_schema()).map_err(|e| e.to_string())?;
         println!("{schema}");
         return Ok(());
+    }
+    if argv.first().map(String::as_str) == Some("add") {
+        return add(&argv[1..]);
     }
     if argv.first().map(String::as_str) == Some("mcp") {
         return mcp::serve(argv.get(1).map(String::as_str));
@@ -168,6 +175,74 @@ fn load_variant(args: &Args) -> Result<Project> {
         Some(v) => p.variant(v),
         None => Ok(p),
     }
+}
+
+/// `mui-cut add PLUGIN [--project P] [--id NAME] [--json]`: a plugin crate's
+/// folder or git URL into the project's sources, built and captured.
+fn add(argv: &[String]) -> Result<()> {
+    let mut from = None;
+    let (mut project, mut id, mut as_json) = (None, None, false);
+    let mut it = argv.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--project" => project = it.next().map(PathBuf::from),
+            "--id" => id = it.next().cloned(),
+            "--json" => as_json = true,
+            _ if from.is_none() && !a.starts_with("--") => from = Some(a.clone()),
+            _ => return Err(format!("unexpected `{a}`\n{USAGE}")),
+        }
+    }
+    let from = from.ok_or_else(|| format!("add needs a plugin folder or git URL\n{USAGE}"))?;
+    let project = match project {
+        Some(p) => p,
+        // The one project in this folder.
+        None => {
+            let found: Vec<PathBuf> = std::fs::read_dir(".")
+                .map_err(|e| e.to_string())?
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| p.to_string_lossy().ends_with(".cut.json"))
+                .collect();
+            match &found[..] {
+                [one] => one.clone(),
+                _ => return Err("which project? --project P.cut.json".into()),
+            }
+        }
+    };
+    let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+    let r = build::add(&project, &from, &cwd, id.as_deref())?;
+    if as_json {
+        println!("{}", serde_json::to_string_pretty(&r).map_err(|e| e.to_string())?);
+        return Ok(());
+    }
+    let list = |k: &str| {
+        r[k].as_array()
+            .map(|a| a.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join(", "))
+            .unwrap_or_default()
+    };
+    println!(
+        "added `{}` ({}) to {} as source `{}`",
+        r["package"].as_str().unwrap_or(""),
+        r["framework"].as_str().unwrap_or(""),
+        project.display(),
+        r["id"].as_str().unwrap_or("")
+    );
+    if let Some(e) = r["editor"].as_str() {
+        println!("  editor: {e}");
+    }
+    println!("  MUI crates, built from {}: {}", build::mui_root().display(), list("mui"));
+    if !list("pinned").is_empty() {
+        println!("  pinned to an old MUI `rev` (tools/mui-sync unpins): {}", list("pinned"));
+    }
+    fn walk(parts: &serde_json::Value, depth: usize) {
+        for p in parts.as_array().into_iter().flatten() {
+            println!("  {}{}", "  ".repeat(depth), p["id"].as_str().unwrap_or(""));
+            walk(&p["children"], depth + 1);
+        }
+    }
+    println!("  parts:");
+    walk(&r["parts"], 1);
+    Ok(())
 }
 
 /// Write through a sibling temp file, so a reader never sees half a project.
