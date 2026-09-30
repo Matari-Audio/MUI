@@ -415,6 +415,20 @@ try {
   await sleep(1200);
   check(existsSync(join(out, 'media/badge.svg')) && read().sources?.some(s => s.kind === 'svg' && s.path === 'media/badge.svg'), 'a dropped file is imported as a source');
   check(await js(`!!document.querySelector('#sources [data-source="badge.svg"] img.thumb')`), 'with its thumbnail');
+  // A font is a source too; dragged in, it makes a text layer set in it.
+  const ttf = readFileSync(join(here, '../../../crates/mui-text/fonts/MaterialSymbolsOutlined-subset.ttf')).toString('base64');
+  await js(`(() => { globalThis.e2eDrag = new DataTransfer(); e2eDrag.items.add(new File([Uint8Array.from(atob('${ttf}'), c => c.charCodeAt(0))], 'icons.ttf')); })()`);
+  await fire('#sources', ['dragover', 'drop']);
+  await sleep(1200);
+  check(read().sources?.some(s => s.id === 'icons.ttf' && s.kind === 'font' && s.path === 'media/icons.ttf'), 'a dropped font is imported as a source');
+  await js(`globalThis.e2eDrag = new DataTransfer()`);
+  await fire('#sources [data-source="icons.ttf"]', ['dragstart']);
+  await fire('#layers', ['dragover', 'drop']);
+  await sleep(800);
+  const typed2 = read().scenes[0].layers.find(l => l.font === 'icons.ttf');
+  check(typed2?.kind === 'text', `a dragged font makes a text layer in it (${JSON.stringify(typed2)})`);
+  check(await js(`document.querySelector('[data-font]')?.value`) === 'icons.ttf', 'the inspector picks the font');
+  await js(`document.querySelector('#layer-del').click()`); await sleep(400);
   await click('#add-plugin');
   await js(`(() => { document.querySelector('#pl-bin').value = ${JSON.stringify(synth)}; document.querySelector('#pl-id').value = 'synth'; document.querySelector('#pl-add').click(); })()`);
   await sleep(800);

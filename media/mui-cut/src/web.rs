@@ -31,6 +31,26 @@ fn load(json: &str, variant: Option<String>) -> Result<Project, String> {
     }
 }
 
+/// [`crate::place::rewrite`] on project text.
+fn rewrite(
+    doc: &str,
+    scene: usize,
+    op: &dyn Fn(&Project, &crate::Scene) -> Result<crate::Scene, String>,
+) -> Result<String, String> {
+    let root = serde_json::from_str(doc).map_err(|e| e.to_string())?;
+    let out = crate::place::rewrite(&root, scene, op)?;
+    serde_json::to_string(&out).map_err(|e| e.to_string())
+}
+
+/// `s` with its layer of `l`'s id replaced by `l`.
+fn with(s: &crate::Scene, l: crate::Layer) -> crate::Scene {
+    let mut s = s.clone();
+    if let Some(o) = s.layers.iter_mut().find(|o| o.id == l.id) {
+        *o = l;
+    }
+    s
+}
+
 #[wasm_bindgen]
 pub struct Cut {
     project: Option<Project>,
@@ -248,32 +268,41 @@ impl Cut {
             |c| crate::plugin::home_tree(c, key).to_string(),
         )
     }
-    /// Layer `id` of scene `scene` parented to `parent` ("" detaches it),
-    /// kept where it is on screen at `t`: the rewritten layer as JSON.
-    pub fn reparent(&self, scene: usize, id: &str, parent: &str, t: f64) -> Result<String, String> {
-        let p = self.project.as_ref().ok_or("no project loaded")?;
-        let s = p.scenes.get(scene).ok_or("no such scene")?;
-        let l = crate::place::reparent(p, s, id, Some(parent), t)?;
-        serde_json::to_string(&l).map_err(|e| e.to_string())
+    /// Layer `id` of scene `scene` of the project text `doc` parented to
+    /// `parent` ("" detaches it), kept where it is on screen at `t` in
+    /// every variant: the new project text ([`crate::place::rewrite`]).
+    pub fn reparent(
+        &self,
+        doc: &str,
+        scene: usize,
+        id: &str,
+        parent: &str,
+        t: f64,
+    ) -> Result<String, String> {
+        rewrite(doc, scene, &|p, s| {
+            let l = crate::place::reparent(p, s, id, Some(parent), t)?;
+            Ok(with(s, l))
+        })
     }
-    /// Layer `id` of scene `scene` back to its default layout, as JSON.
-    pub fn reset(&self, scene: usize, id: &str) -> Result<String, String> {
-        let p = self.project.as_ref().ok_or("no project loaded")?;
-        let mut l = p
-            .scenes
-            .get(scene)
-            .and_then(|s| s.layers.iter().find(|l| l.id == id))
-            .ok_or("no such layer")?
-            .clone();
-        l.reset(p.size);
-        serde_json::to_string(&l).map_err(|e| e.to_string())
+    /// Layer `id` of scene `scene` of `doc` back to its default layout in
+    /// every variant: the new project text.
+    pub fn reset(&self, doc: &str, scene: usize, id: &str) -> Result<String, String> {
+        rewrite(doc, scene, &|p, s| {
+            let mut l = s
+                .layers
+                .iter()
+                .find(|l| l.id == id)
+                .ok_or("no such layer")?
+                .clone();
+            l.reset(p.size);
+            Ok(with(s, l))
+        })
     }
-    /// Scene `scene` taken flat, as its 3D shot shows it at `t` (see
-    /// [`crate::place::flatten`]), as JSON.
-    pub fn flatten(&self, scene: usize, t: f64) -> Result<String, String> {
-        let p = self.project.as_ref().ok_or("no project loaded")?;
-        let s = p.scenes.get(scene).ok_or("no such scene")?;
-        serde_json::to_string(&crate::place::flatten(p, s, t)).map_err(|e| e.to_string())
+    /// Scene `scene` of `doc` taken flat, as its 3D shot shows it at `t`
+    /// in every variant (see [`crate::place::flatten`]): the new project
+    /// text.
+    pub fn flatten(&self, doc: &str, scene: usize, t: f64) -> Result<String, String> {
+        rewrite(doc, scene, &|p, s| Ok(crate::place::flatten(p, s, t)))
     }
     /// The evaluated frame as JSON: what the inspector shows at the playhead.
     pub fn frame(&self, scene: usize, t: f64) -> String {

@@ -420,12 +420,15 @@ frame on an RX 6600, plus Blender's startup.
 ### Sources
 
 `sources` lists what was imported into the project, for the editor's
-Sources panel: files (`image`, `svg`, `lottie`, `model`, `path` relative to
-the project) and plugins (`source` as a plugin layer names it).
+Sources panel: files (`image`, `svg`, `lottie`, `model`, `font`, `path`
+relative to the project) and plugins (`source` as a plugin layer names it).
+A text layer's `font` names a font source by id (or a `.ttf`/`.otf` path);
+left out, it is Inter. Every renderer draws it, Blender's textures too.
 
 ```json
 "sources": [
   { "id": "logo", "kind": "svg", "path": "media/logo.svg" },
+  { "id": "Serif", "kind": "font", "path": "media/Serif.otf" },
   { "id": "synth", "kind": "plugin", "source": { "cargo": "../Cargo.toml", "example": "synth" } }
 ]
 ```
@@ -435,20 +438,29 @@ The panel also shows the files and plugins layers use without listing them
 levels deep (`plugin::home`, which `serve` captures): panels, and the
 controls in them under their panel, the same tree `plugin_parts` and
 `cutParts` return. A bare plugin layer added from the panel starts in that
-capture (`explode_levels` 2). Audio and fonts are not sources:
-nothing plays or sets them yet.
+capture (`explode_levels` 2). Audio is not a source: nothing plays it
+yet.
 
 ### Parenting
 
 `"parent": "card"` attaches a layer to another in its scene, Cavalry and
 After Effects style: its `x`, `y` (and `z` in 3D) are offsets in the
 parent's space, turned and scaled with it; rotation and scale add up and
-opacity multiplies. `eval` composes it, so every renderer (2D, 3D,
+opacity multiplies. In 3D the parent's space is its slab's: moved, turned
+by `ry`, `rx` and `rotation`, scaled, with its face `anchor_z` in front of
+the pivot, so a child rides a tilted parent (its world `rx`, `ry` and
+`rotation` are the composed turn split back out; a light or camera's aim
+turns with its parent). `eval` composes it, so every renderer (2D, 3D,
 Blender), `check` and the editor see world values. A parent that is
 missing, or a chain that loops, is a load error. Reparenting in the
 editor or with MCP `layer_parent` keeps the layer where it is on screen at
-the playhead by rewriting its local keys through both parents' transforms.
-3D turns (`rx`, `ry`) are not inherited.
+the playhead by rewriting its local keys through both parents' transforms,
+tilts included. Where the change mixes axes (a turned parent moves x into
+y), tracks keyed at different times are keyed at all of them first, so
+every key stays exact. Reparent, reset and the 2D switch run in every
+variant: what they change is written resolved (into the file, and into a
+variant's `scene/layer` override where its result differs), and bindings
+they do not touch stay.
 
 ### Plugin layers
 
@@ -545,11 +557,12 @@ explodes two levels in 3D: panels, then their controls.
   drag to move it: an animated `x`/`y` gets a key at the playhead, a plain one
   changes its value.
 - **Sources** (left, collapsible): every source the project uses or has
-  imported, with thumbnails. **Import** (or drop PNG, SVG, Lottie JSON or
-  `.glb` files on the left panel) copies files to `media/` beside the
+  imported, with thumbnails. **Import** (or drop PNG, SVG, Lottie JSON,
+  `.glb` or `.ttf`/`.otf` files on the left panel) copies files to `media/` beside the
   project; **+ Plugin** adds a Cargo example/bin or a prebuilt adapter. A
   plugin opens (▸) into its part tree. Drag a source, or any part, onto
-  the viewport or the layer list to make a layer; a part becomes a
+  the viewport or the layer list to make a layer (a font makes a text
+  layer in it; the inspector's `font` picks one); a part becomes a
   component layer (`show`) at its spot in the plugin (on the scene's
   whole plugin layer, if there is one). Clicking a row selects the layer
   or part that shows it, and selecting in the viewport highlights the row.
@@ -779,12 +792,12 @@ snapshots in the editor rather than `CurveHistory`, for the same reason.
   textured from the shared atlas, and the effect passes are full-frame, so
   a layer stack would need its own padded texture per layer (a blur or
   displacement spills past the atlas slot's gutter). A scene's stack runs.
-- Sources and parenting: parenting inherits `z` but not 3D turns; a
-  reparent through a turning parent keeps keyed positions exact only when
-  `x` and `y` are keyed at the same times (a plain one is solved at the
-  playhead). Back to 2D drops `rx`/`ry` foreshortening. Reset, reparent
-  and the 2D switch refuse layers with variable bindings (edit those in
-  the file).
+- Sources and parenting: a reparent through a turn keeps every key exact,
+  but a key baked into a bezier segment splits it into two eases, so the
+  curve between keys can drift. A tilted child edge on (`rx` ±90) puts
+  its whole roll in `ry`. Back to 2D drops `rx`/`ry` foreshortening. A
+  rewrite in a project with variants replaces a changed binding with
+  resolved values (per variant), so it no longer follows its variable.
 - Plugin layers: the web editor shows the captures `serve` made, not the
   plugin running in WASM. A new state (a param or pointer edit) appears
   once `serve` has captured it, which takes a few seconds for a Cargo

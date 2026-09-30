@@ -187,7 +187,10 @@ async function pull(why) {
 async function loadAssets() {
   const files = doc.scenes.flatMap(s => s.layers)
     .filter(l => ['image', 'svg', 'lottie', 'model'].includes(l.kind)).map(l => l.path)
-    .concat(doc.scenes.map(s => s.environment?.hdri));
+    .concat(doc.scenes.map(s => s.environment?.hdri))
+    // Fonts: every font source, and text layers' fonts named by path.
+    .concat((doc.sources ?? []).filter(m => m.kind === 'font').map(m => m.path))
+    .concat(doc.scenes.flatMap(s => s.layers).filter(l => l.kind === 'text' && l.font && !doc.sources?.some(m => m.id === l.font)).map(l => l.font));
   for (const path of files) {
     if (!path || typeof path !== 'string' || assets.has(path)) continue;
     assets.add(path);
@@ -290,19 +293,18 @@ $('#layers').ondrop = e => {
   const id = e.dataTransfer.getData(DRAG_LAYER);
   if (id) parentTo(id, ''); else dropSource(e);
 };
-// Attach `id` to `parent` ('' detaches), kept where it is on screen: the
-// engine rewrites its local transform (`Cut.reparent`).
+// Attach `id` to `parent` ('' detaches), kept where it is on screen in
+// every variant: the engine rewrites its local transform (`Cut.reparent`).
 function parentTo(id, parent) {
   const ls = scene().layers, i = ls.findIndex(l => l.id === id);
   if (i < 0 || (ls[i].parent ?? '') === parent) return;
-  if (JSON.stringify(ls[i]).includes('"var"')) { showError(`${id} has variable bindings: set its parent in the file`); return; }
   let json;
-  try { json = cut.reparent(si, id, parent, t); } catch (e) { showError(String(e)); return; }
-  edit(() => { ls[i] = JSON.parse(json); sel = id; selPart = null; });
+  try { json = cut.reparent(JSON.stringify(doc), si, id, parent, t); } catch (e) { showError(String(e)); return; }
+  edit(() => { doc = JSON.parse(json); sel = id; selPart = null; selKey = null; });
 }
 
 // ---------- sources: imported files and plugins, a plugin a folder of its parts
-const SOURCE_ICON = { image: '▣', svg: 'S', lottie: 'L', model: '◈', plugin: '⧉' };
+const SOURCE_ICON = { image: '▣', svg: 'S', lottie: 'L', model: '◈', plugin: '⧉', font: 'Aa' };
 const sameSource = (m, rl) => m.kind === rl.kind && (m.kind === 'plugin'
   ? JSON.stringify(m.source) === JSON.stringify(rl.source) : m.path === rl.path);
 // The source and part a layer shows: what the tree highlights for it.
@@ -406,6 +408,10 @@ function layerFrom(m, part, at) {
     // once, and its controls are parts too.
     if (!whole) l.explode_levels = 2;
     if (part) { l.show = [part]; l.name = part; }
+  } else if (m.kind === 'font') {
+    // A font makes a text layer in it, by the source's id once imported.
+    const font = doc.sources?.some(s => s.id === m.id) ? m.id : m.path;
+    Object.assign(l, { kind: 'text', text: 'Text', font, x: round(at?.[0] ?? w / 2), y: round(at?.[1] ?? h / 2) });
   } else {
     l.path = m.path;
     Object.assign(l, { x: round(at?.[0] ?? w / 2), y: round(at?.[1] ?? h / 2) });
@@ -425,11 +431,11 @@ function dropSource(e, at) {
 }
 // Import: files from the button or dropped on the left panel are written
 // beside the project (`media/`) and listed as sources.
-const IMPORT_KIND = { png: 'image', svg: 'svg', json: 'lottie', glb: 'model' };
+const IMPORT_KIND = { png: 'image', svg: 'svg', json: 'lottie', glb: 'model', ttf: 'font', otf: 'font' };
 async function importFiles(files) {
   for (const f of files) {
     const kind = IMPORT_KIND[f.name.split('.').pop().toLowerCase()];
-    if (!kind) { status(`${f.name}: import PNG, SVG, Lottie JSON or glTF (.glb) files`, true); continue; }
+    if (!kind) { status(`${f.name}: import PNG, SVG, Lottie JSON, glTF (.glb) or font (.ttf, .otf) files`, true); continue; }
     const name = f.name.replace(/[^\w.-]+/g, '_'), path = 'media/' + name;
     const r = await fetch('/asset/' + path, { method: 'PUT', body: f });
     if (!r.ok) { status(`${f.name}: ${await r.text()}`, true); continue; }
@@ -528,11 +534,14 @@ $('#layer-down').onclick = () => moveLayer(-1);
 $('#layer-del').onclick = () => {
   const l = layer();
   if (!l) return;
-  const kids = scene().layers.filter(o => o.parent === l.id).map(o => {
-    try { return JSON.parse(cut.reparent(si, o.id, l.parent ?? '', t)); } catch { return { ...o, parent: l.parent }; }
-  });
+  let next = structuredClone(doc);
+  for (const o of scene().layers.filter(o => o.parent === l.id)) {
+    try { next = JSON.parse(cut.reparent(JSON.stringify(next), si, o.id, l.parent ?? '', t)); }
+    catch { const k = next.scenes[si].layers.find(k => k.id === o.id); if (l.parent) k.parent = l.parent; else delete k.parent; }
+  }
   edit(() => {
-    scene().layers = scene().layers.filter(o => o.id !== l.id).map(o => kids.find(k => k.id === o.id) ?? o);
+    doc = next;
+    scene().layers = scene().layers.filter(o => o.id !== l.id);
     sel = null; selKey = null;
   });
 };
@@ -574,6 +583,12 @@ function kindFields(l) {
   if (l.kind === 'text') {
     field('text', input(l.text, v => edit(() => { l.text = v; }), 'area'));
     field('align', choice(l.align ?? 'center', ['left', 'center', 'right'], v => set('align', v, 'center')));
+    // '' is Inter; the rest are the font sources, by id.
+    const fonts = ['', ...(doc.sources ?? []).filter(m => m.kind === 'font').map(m => m.id)];
+    if (l.font && !fonts.includes(l.font)) fonts.push(l.font);
+    const f = choice(l.font ?? '', fonts, v => { set('font', v, ''); loadAssets(); });
+    f.options[0].textContent = 'Inter'; f.dataset.font = ''; f.title = 'The font: Inter, or a font source';
+    field('font', f);
   }
   if (['image', 'svg', 'lottie', 'model'].includes(l.kind)) field('path', input(l.path, v => edit(() => { l.path = v; loadAssets(); })));
   if (l.kind === 'lottie') {
@@ -805,11 +820,9 @@ function resetSelected() {
   const l = layer();
   if (!l) return;
   if (selPart) { edit(() => { (l.parts ??= {})[selPart] = {}; selKey = null; }); return; }
-  if (JSON.stringify(l).includes('"var"')) { showError(`${l.id} has variable bindings: reset it in the file`); return; }
   let json;
-  try { json = cut.reset(si, l.id); } catch (e) { showError(String(e)); return; }
-  const ls = scene().layers;
-  edit(() => { ls[ls.indexOf(l)] = JSON.parse(json); selKey = null; });
+  try { json = cut.reset(JSON.stringify(doc), si, l.id); } catch (e) { showError(String(e)); return; }
+  edit(() => { doc = JSON.parse(json); selKey = null; });
 }
 // The scene's 2D/3D switch. Into 3D nothing moves: the default camera sees
 // the z = 0 plane as the 2D frame. Out of 3D, layers go where the camera
@@ -818,10 +831,9 @@ function setMode(v) {
   const s = scene();
   if ((s.mode ?? '2d') === v) return;
   if (v === '3d') { edit(() => { s.mode = '3d'; }); return; }
-  if (JSON.stringify(s).includes('"var"')) { edit(() => { delete s.mode; }); return; }
   let json;
-  try { json = cut.flatten(si, t); } catch (e) { showError(String(e)); return; }
-  edit(() => { doc.scenes[si] = JSON.parse(json); });
+  try { json = cut.flatten(JSON.stringify(doc), si, t); } catch (e) { showError(String(e)); return; }
+  edit(() => { doc = JSON.parse(json); selKey = null; });
 }
 // Values follow the playhead without rebuilding the panel.
 function updateInspector() {

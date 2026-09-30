@@ -183,11 +183,15 @@ pub struct Scene {
 pub enum Kind {
     Rect,
     Ellipse,
-    /// Inter, one line per `\n`, drawn as outlines so each glyph can move.
+    /// One line per `\n`, drawn as outlines so each glyph can move, in
+    /// `font`: a font source's id (or a `.ttf`/`.otf` path relative to the
+    /// project); left out, Inter.
     Text {
         text: String,
         #[serde(default, skip_serializing_if = "is_default")]
         align: Align,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        font: String,
     },
     /// A PNG, path relative to the project file.
     Image {
@@ -1171,6 +1175,11 @@ pub fn eval(project: &Project, scene: &Scene, t: f64) -> Frame {
         .map(|l| l.eval_at(t, project.fps))
         .collect();
     place::compose(scene, &mut layers);
+    for d in &mut layers {
+        if let Kind::Text { font, .. } = &mut d.kind {
+            *font = project.font(font).to_owned();
+        }
+    }
     let view = (scene.mode == Mode::ThreeD).then(|| three::view(project.size, scene, t, &layers));
     Frame {
         size: project.size,
