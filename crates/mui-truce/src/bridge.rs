@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use mui::layout::Id;
 use mui::scene::{El, IntoEl};
+use mui::widgets::{self, Control};
 use mui::{Edit, Ui};
 use truce_core::editor::PluginContext;
 use truce_params::{ParamFlags, ParamInfo, ParamRange, Params};
@@ -23,6 +24,9 @@ pub struct Bridge<P: ?Sized = dyn Params> {
     params: Arc<P>,
     context: Option<PluginContext<P>>,
     infos: Box<[ParamInfo]>,
+    /// Formatted domain samples, shaped by MUI in the active font. Shared
+    /// across builds so a parameter view does not allocate its reserve again.
+    readouts: Box<[Arc<[String]>]>,
     meters: Box<[u32]>,
     /// Open gestures: the id, the value the control holds, and the value
     /// last sent. The control reads its own value back, not the store, so a
@@ -41,12 +45,17 @@ impl<P: Params + ?Sized> Bridge<P> {
     /// Reads the parameter table once; no host until [`Bridge::attach`].
     pub fn new(params: Arc<P>) -> Self {
         let infos = params.param_infos().into_boxed_slice();
+        let readouts = infos
+            .iter()
+            .map(|info| readout_samples(&*params, info))
+            .collect();
         let meters = params.meter_ids().into_boxed_slice();
         let seen = vec![u64::MAX; infos.len() + meters.len()].into_boxed_slice();
         Self {
             params,
             context: None,
             infos,
+            readouts,
             meters,
             open: Vec::new(),
             bound: Vec::new(),
@@ -128,6 +137,98 @@ impl<P: Params + ?Sized> Bridge<P> {
             .unwrap_or_default()
     }
 
+    /// Build a parameter knob with its derived id, metadata name, normalized
+    /// mapping, discrete keyboard step, formatted value and measured readout.
+    /// Styling stays available: `bridge.knob(ui, P::Gain).size(S)`.
+    /// Host gestures follow the same protocol as [`Bridge::bind`].
+    /// Unknown/read-only parameters draw disabled. Numeric accessibility
+    /// actions use normalized 0..1, with the formatted plain value as text.
+    pub fn knob(&mut self, ui: &mut Ui, param: impl Into<u32>) -> Control {
+        self.number(ui, param.into(), true)
+    }
+
+    /// The slider counterpart of [`Bridge::knob`].
+    pub fn slider(&mut self, ui: &mut Ui, param: impl Into<u32>) -> Control {
+        self.number(ui, param.into(), false)
+    }
+
+    /// A switch with its name and id taken from parameter metadata. Intended
+    /// for boolean parameters; like [`Bridge::bind_bool`], it writes 0 or 1.
+    pub fn toggle(&mut self, ui: &mut Ui, param: impl Into<u32>) -> Control {
+        let id = param.into();
+        let name = self.info(id).map_or("Unknown parameter", |info| info.name);
+        let disabled = self
+            .info(id)
+            .is_none_or(|info| info.flags.contains(ParamFlags::READONLY));
+        self.edit(ui, id, widget_id(id), |ui, widget, value| {
+            let mut on = *value >= 0.5;
+            let control = widgets::toggle(ui, widget, name, &mut on).el;
+            *value = f64::from(u8::from(on));
+            if disabled {
+                control.disabled()
+            } else {
+                control
+            }
+        })
+    }
+
+    /// Replace a parameter's reserve samples once, when the editor is built.
+    /// Returns false for an unknown parameter. Samples are measured using the
+    /// actual font/axes at layout time and never clip an unexpectedly wide value.
+    ///
+    /// By default every discrete value is sampled up to 256 intervals;
+    /// larger or continuous ranges sample their endpoints and default. An
+    /// arbitrary formatter may have wider interior values or switch units:
+    /// supply those here for a stable readout across its complete domain.
+    pub fn reserve_readout(
+        &mut self,
+        param: impl Into<u32>,
+        samples: impl Into<Arc<[String]>>,
+    ) -> bool {
+        let id = param.into();
+        let Some(index) = self.infos.iter().position(|info| info.id == id) else {
+            return false;
+        };
+        self.readouts[index] = samples.into();
+        true
+    }
+
+    fn number(&mut self, ui: &mut Ui, id: u32, knob: bool) -> Control {
+        let info = self.info(id);
+        let name = info.map_or("Unknown parameter", |info| info.name);
+        let range = info.map(|info| info.range);
+        let disabled = info.is_none_or(|info| info.flags.contains(ParamFlags::READONLY));
+        let samples = self
+            .infos
+            .iter()
+            .position(|info| info.id == id)
+            .map(|index| self.readouts[index].clone());
+        let params = self.params.clone();
+        self.edit(ui, id, widget_id(id), |ui, widget, value| {
+            let mut control = if knob {
+                widgets::knob(ui, widget, name, value, 0.0..=1.0).el
+            } else {
+                widgets::slider(ui, widget, name, value, 0.0..=1.0).el
+            };
+            if let Some(range) = range {
+                if let Some(steps) = range.step_count() {
+                    control = control.step(1.0 / f64::from(steps.get()));
+                }
+                if let Some(text) = params.format_value(id, range.denormalize(*value)) {
+                    control = control.value_text(text);
+                }
+            }
+            if let Some(samples) = samples {
+                control = control.value_reserve_all(samples);
+            }
+            if disabled {
+                control.disabled()
+            } else {
+                control
+            }
+        })
+    }
+
     /// A meter the audio thread published, `0` while closed.
     pub fn meter(&self, id: impl Into<u32>) -> f32 {
         self.context.as_ref().map_or(0.0, |c| c.get_meter(id))
@@ -202,7 +303,20 @@ impl<P: Params + ?Sized> Bridge<P> {
         widget: Id,
         control: impl FnOnce(&mut Ui, Id, &mut f64) -> R,
     ) -> El {
-        let id = param.into();
+        self.edit(ui, param.into(), widget, |ui, widget, value| {
+            control(ui, widget, value).into_el()
+        })
+    }
+
+    // Preserve the control's concrete builder while sharing bind_as's edit
+    // protocol. Existing bind/bind_as still return El, unchanged.
+    fn edit<R>(
+        &mut self,
+        ui: &mut Ui,
+        id: u32,
+        widget: Id,
+        control: impl FnOnce(&mut Ui, Id, &mut f64) -> R,
+    ) -> R {
         self.bound.push(id);
         let before = self.value(id);
         let mut value = before;
@@ -211,7 +325,7 @@ impl<P: Params + ?Sized> Bridge<P> {
             .filter(|info| !info.flags.contains(ParamFlags::READONLY))
             .map(|info| info.range)
         else {
-            return control(ui, widget, &mut value).into_el();
+            return control(ui, widget, &mut value);
         };
         // At most a cancel's End, an End and a Begin reach one id per frame.
         let mut edges = [None; 4];
@@ -236,14 +350,13 @@ impl<P: Params + ?Sized> Bridge<P> {
                 }
             }
         }
-        let el = control(ui, widget, &mut value).into_el();
+        let el = control(ui, widget, &mut value);
         if value.to_bits() != before.to_bits() && value.is_finite() {
             if self.is_open(id) {
                 self.set(id, range, value);
             } else if quantize(range, value).to_bits() != quantize(range, before).to_bits() {
-                // ponytail: a key step smaller than a discrete parameter's
-                // step is dropped here; widgets step by a hundredth of the
-                // range, so stepping a 1..8 switch needs its own step size.
+                // A custom bind may still choose a sub-quantum key step.
+                // Metadata controls declare the discrete quantum themselves.
                 self.begin(id);
                 self.set(id, range, value);
                 self.end(id);
@@ -330,3 +443,30 @@ impl<P: Params + ?Sized> Bridge<P> {
 fn quantize(range: ParamRange, normalized: f64) -> f64 {
     range.normalize(range.denormalize(normalized.clamp(0.0, 1.0)))
 }
+
+/// Bounded setup work, never an unbounded walk of an integer parameter range.
+fn readout_samples<P: Params + ?Sized>(params: &P, info: &ParamInfo) -> Arc<[String]> {
+    let mut samples = Vec::new();
+    let mut add = |plain| {
+        if let Some(text) = params.format_value(info.id, plain)
+            && !samples.contains(&text)
+        {
+            samples.push(text);
+        }
+    };
+    if let Some(steps) = info.range.step_count().filter(|n| n.get() <= 256) {
+        for i in 0..=steps.get() {
+            add(info
+                .range
+                .denormalize(f64::from(i) / f64::from(steps.get())));
+        }
+    } else {
+        add(info.range.denormalize(0.0));
+        add(info.range.denormalize(1.0));
+        add(info.default_plain);
+    }
+    samples.into()
+}
+
+#[cfg(test)]
+mod tests;

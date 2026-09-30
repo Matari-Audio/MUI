@@ -388,6 +388,12 @@ pub(super) fn layout_key(e: &Element, th: &Theme, scale: Option<f64>, out: &mut 
         Some(r) => bytes(r.as_bytes()),
         None => out.extend_from_slice(&u64::MAX.to_le_bytes()),
     }
+    let samples = e.extras().reserve_all.as_deref().unwrap_or(&[]);
+    out.extend_from_slice(&samples.len().to_le_bytes());
+    for sample in samples {
+        out.extend_from_slice(&sample.len().to_le_bytes());
+        out.extend_from_slice(sample.as_bytes());
+    }
     // Four-byte tags, so the count is all the framing they need.
     out.extend_from_slice(&e.axes.iter().count().to_le_bytes());
     for (tag, value) in e.axes.iter() {
@@ -428,6 +434,11 @@ pub(super) fn fit(runs: &mut Runs, th: &Theme, e: &crate::Element, room: Option<
     // the same line at the same size, and a longer value still measures long.
     if let Some(r) = &e.extras().reserve {
         fit.width = fit.width.max(runs.measure(r, face).width);
+    }
+    if let Some(samples) = &e.extras().reserve_all {
+        for sample in &**samples {
+            fit.width = fit.width.max(runs.measure(sample, face).width);
+        }
     }
     Intrinsic {
         size: fit,

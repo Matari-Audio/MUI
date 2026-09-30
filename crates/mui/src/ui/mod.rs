@@ -520,6 +520,9 @@ impl Ui {
     pub fn get(&self, id: impl Into<Id>) -> Response {
         let id: Id = id.into();
         let id = id.as_str();
+        if self.disabled_target(id) {
+            return Response::default();
+        }
         let mut response = self.interaction.get(id);
         response.double_clicked = self.double.as_deref() == Some(id);
         response.key_activated = self
@@ -616,7 +619,10 @@ impl Ui {
                         _ => None,
                     })
                     .unwrap_or(value);
-                let step = crate::widgets::step(&(min..=max)) * sign;
+                let step = surface.numeric_step.map_or_else(
+                    || crate::widgets::step(&(min..=max)),
+                    |step| step.copysign(max - min),
+                ) * sign;
                 self.request_action(SemanticAction::SetValue {
                     id,
                     value: value + step,

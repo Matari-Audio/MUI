@@ -87,12 +87,22 @@ impl Ui {
         self.focus = Some(id.into().as_str().to_owned());
         self.focus_visible = true;
     }
+    // The presented tree can have disabled a target after input was matched
+    // against the preceding hit map. Do not deliver that stale input to the
+    // next build; its End edit is still delivered separately to the host.
+    pub(super) fn disabled_target(&self, id: &str) -> bool {
+        self.scene
+            .as_ref()
+            .and_then(|scene| scene.surface(id))
+            .is_some_and(|surface| surface.disabled)
+    }
+
     /// The keys this frame, if `id` is focused. Empty otherwise, so a widget
     /// may loop over it unconditionally.
     pub fn keys(&self, id: impl Into<Id>) -> &[KeyPress] {
         let id: Id = id.into();
         let id = id.as_str();
-        if self.focused(Id::runtime(id)) {
+        if self.focused(Id::runtime(id)) && !self.disabled_target(id) {
             &self.keys
         } else {
             &[]
@@ -479,7 +489,7 @@ impl Ui {
     ) -> bool {
         let id: Id = id.into();
         let id = id.as_str();
-        if !(range.start().is_finite() && range.end().is_finite()) {
+        if self.disabled_target(id) || !(range.start().is_finite() && range.end().is_finite()) {
             return false;
         }
         if let Some(value_from_action) = self.actions.iter().rev().find_map(|a| match a {
