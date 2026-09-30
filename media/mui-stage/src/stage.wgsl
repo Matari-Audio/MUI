@@ -101,7 +101,14 @@ fn out(c: vec4f, world: vec3f) -> Out {
         let f = smoothstep(g.fog_range.x, g.fog_range.y, dist);
         o.color = vec4f(mix(c.rgb, g.fog.rgb * c.a, f), c.a);
     }
-    o.dist = vec4f(dist, 0., 0., 1.);
+    // g: the distance to the surface itself, which occlusion reads: a
+    // reflection is the floor where the eye ray meets it, not the mirror
+    // image's virtual depth below it (a hole to GTAO).
+    var surf = dist;
+    if (d.mirror.w > 0.) {
+        surf = dist * clamp((g.eye.y - d.mirror.x) / max(g.eye.y - world.y, 1e-4), 0., 1.);
+    }
+    o.dist = vec4f(dist, surf, 0., 1.);
     return o;
 }
 
@@ -286,7 +293,7 @@ fn eye_ray(uv: vec2f) -> vec3f {
     if (env_on() && g.env2.x > 0.5) {
         o.color = vec4f(env_radiance(eye_ray(i.uv), 0.), 1.);
     }
-    o.dist = vec4f(60000., 0., 0., 1.);
+    o.dist = vec4f(60000., 60000., 0., 1.);
     return o;
 }
 
@@ -562,7 +569,7 @@ const HALF_PI: f32 = 1.5707964;
 fn ao_point(p: vec2i) -> vec4f {
     let size = vec2i(g.time_res.yz);
     let q = clamp(p, vec2i(0), size - 1);
-    let dist = textureLoad(tex, q, 0).r;
+    let dist = textureLoad(tex, q, 0).g;
     let uv = (vec2f(q) + 0.5) / g.time_res.yz;
     return vec4f(g.eye.xyz + eye_ray(uv) * dist, dist);
 }
@@ -645,7 +652,7 @@ fn nearer(c: vec3f, a: vec3f, b: vec3f) -> vec3f {
 @fragment fn fs_ao_apply(i: Full) -> @location(0) vec4f {
     let px = vec2i(i.pos.xy);
     let c = textureLoad(tex, px, 0);
-    let d0 = textureLoad(aux2, px, 0).r;
+    let d0 = textureLoad(aux2, px, 0).g;
     if (d0 > 50000.) { return c; }
     let hs = vec2i(textureDimensions(aux)) - 1;
     let base = px / 2;

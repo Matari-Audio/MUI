@@ -581,10 +581,10 @@ fn ambient_occlusion_darkens_a_contact_crease_not_an_open_floor() {
         fov: 40.,
         roll: 0.,
     };
-    let shot = |ao: Option<Ao>| {
+    let shot = |ao: Option<Ao>, reflect: f32| {
         let mut floor = Floor::at(0.);
         floor.color = [0.5; 3];
-        floor.reflect = 0.;
+        floor.reflect = reflect;
         Shot {
             models: vec![Model {
                 mesh: "cube".into(),
@@ -603,30 +603,13 @@ fn ambient_occlusion_darkens_a_contact_crease_not_an_open_floor() {
             ..Shot::new(camera)
         }
     };
-    let luma = |stage: &mut Stage, ao| stage.render(0., 0., 1, &|_| shot(ao)).unwrap().rgba;
-    if let Some(dir) = std::env::var_os("STAGE_DEBUG_PNG") {
-        for (name, ao) in [
-            ("plain", None),
-            (
-                "ao",
-                Some(Ao {
-                    strength: 1.,
-                    radius: 40.,
-                }),
-            ),
-        ] {
-            let f = stage.render(0., 0., 1, &|_| shot(ao)).unwrap();
-            let file =
-                std::fs::File::create(std::path::Path::new(&dir).join(format!("{name}.png")))
-                    .unwrap();
-            let mut e = png::Encoder::new(file, w, h);
-            e.set_color(png::ColorType::Rgba);
-            e.write_header()
-                .unwrap()
-                .write_image_data(&f.rgba8())
-                .unwrap();
-        }
-    }
+    let render = |stage: &mut Stage, ao, reflect| {
+        stage
+            .render(0., 0., 1, &|_| shot(ao, reflect))
+            .unwrap()
+            .rgba
+    };
+    let luma = |stage: &mut Stage, ao| render(stage, ao, 0.);
     let plain = luma(&mut stage, None);
     let ao = Some(Ao {
         strength: 1.,
@@ -664,4 +647,14 @@ fn ambient_occlusion_darkens_a_contact_crease_not_an_open_floor() {
         plain[open],
         a[open]
     );
+    // A mirror image lies below the floor; seen as depth it would be a pit
+    // whose rim the floor around it is occluded by. It darkens no more
+    // than a matte floor does.
+    let dark = |plain: &[f32], a: &[f32]| -> f32 { plain.iter().zip(a).map(|(p, a)| p - a).sum() };
+    let matte = dark(&plain, &a);
+    let shiny = dark(
+        &render(&mut stage, None, 0.35),
+        &render(&mut stage, ao, 0.35),
+    );
+    assert!(shiny < matte * 1.015, "matte {matte}, reflective {shiny}");
 }
