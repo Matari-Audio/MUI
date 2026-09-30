@@ -6,6 +6,8 @@ mod capture;
 pub use capture::{CaptureStream, capture, capture_frame, discover_parts, discover_tree};
 mod editor;
 pub use editor::Editor;
+mod headless;
+pub use headless::{ParamSet, describe, param_set, run_headless};
 use serde_json::{Value, json};
 use std::io::{BufRead, Write};
 use std::sync::{
