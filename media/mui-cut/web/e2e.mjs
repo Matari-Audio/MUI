@@ -33,7 +33,7 @@ const gpuFlags = { cpu: ['--disable-features=WebGPU'], webgl2: ['--disable-featu
   ?? ['--enable-unsafe-webgpu', ...angle];
 // Headless Chrome keeps WebGL2 in workers whatever the switches say, so the
 // CPU run asks the editor for its CPU renderer.
-const renderer = process.env.E2E_RENDERER ?? (mode === 'cpu' ? 'cpu' : '');
+const renderer = process.env.E2E_RENDERER || (mode === 'cpu' ? 'cpu' : '');
 const query = renderer ? `?renderer=${renderer}` : '';
 // E2E_PORT / E2E_CDP_PORT move them when another run holds the defaults.
 const port = +(process.env.E2E_PORT ?? 8790), cdpPort = +(process.env.E2E_CDP_PORT ?? 9339);
