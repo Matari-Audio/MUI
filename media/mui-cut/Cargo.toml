@@ -71,6 +71,10 @@ vello_cpu = { version = "0.2", default-features = false, features = ["multithrea
 base64 = "0.22"
 rhai = { version = "1.26", features = ["serde", "no_time", "no_module"] }
 wgpu = { workspace = true, features = ["default"] }
+# `mui-cut midi`: Standard MIDI Files into a plugin layer's notes.
+midly = { version = "0.5", default-features = false, features = ["std"] }
+# `serve` plays the project's sound live (a null clock when there is no device).
+cpal = "0.17"
 
 [dev-dependencies]
 # `examples/synth.rs`: a small plugin editor behind the bridge's live
