@@ -33,7 +33,8 @@ const USAGE: &str = "usage:
                  [--variant NAME | --variants all|NAME,NAME -o out/{name}.mp4]
                  [--segment SECONDS] [--range 3.2s-5.0s]   (the segment cache)
   mui-cut still  PROJECT --t SECONDS -o OUT.png [--scene NAME] [--size WxH] [--renderer R] [--variant NAME]
-    R: classic (default; Vello compute on the GPU), gpu (vello_gpu), cpu (Vello CPU);
+    R: classic (default; Vello compute on the GPU), gpu (vello_gpu), cpu (Vello CPU),
+       blender (3D scenes through Blender: [--engine eevee|cycles] [--samples N]);
     --cpu is --renderer cpu. --threads: CPU frames drawn at once (default: one per core).
     --stats: per-frame wall time (evaluate, draw, hand to ffmpeg) p50/p95/max
   mui-cut eval   PROJECT --t SECONDS [--scene NAME] [--variant NAME]
@@ -224,12 +225,28 @@ fn load_assets(p: &Project, project: &Path, assets: &mut Assets) -> Vec<String> 
 }
 
 /// Where frames are drawn: a Vello engine on the GPU (classic by default),
-/// or Vello CPU with `--renderer cpu` or when no GPU adapter opens.
-/// Frames come back as straight RGBA, or as `Yuv` planes for an encoder.
+/// or Vello CPU with `--renderer cpu` or when no GPU adapter opens, or
+/// Blender. Frames come back as straight RGBA, or as `Yuv` planes for an
+/// encoder.
 enum Backend {
     /// With the planes an encoder wants, and the frame size.
     Cpu(CpuPool, Option<(Yuv, [u32; 2])>),
     Gpu(Box<Offline>),
+    Blender(Box<Baked>),
+}
+
+/// Frames Blender rendered ahead, by [`frame_key`] of the instant they show.
+struct Baked {
+    pngs: std::collections::HashMap<String, PathBuf>,
+    yuv: Option<(Yuv, [u32; 2])>,
+    name: String,
+}
+
+/// What identifies an instant's picture: the evaluated frame.
+fn frame_key(f: &Frame) -> String {
+    let mut h = mui_cut::Fnv::default();
+    let _ = serde_json::to_writer(&mut h, f);
+    h.hex()
 }
 
 impl Backend {
@@ -258,7 +275,12 @@ impl Backend {
             None | Some("classic") => Some(Engine::Classic),
             Some("gpu") => Some(Engine::Sparse),
             Some("cpu") => None,
-            Some(r) => return Err(format!("--renderer: `{r}` is not classic, gpu or cpu")),
+            Some("blender") => return Err("--renderer blender works with render and still".into()),
+            Some(r) => {
+                return Err(format!(
+                    "--renderer: `{r}` is not classic, gpu, cpu or blender"
+                ));
+            }
         };
         let assets = read_assets(p, project);
         if let Some(engine) = engine {
@@ -276,6 +298,43 @@ impl Backend {
             }
         }
         Ok(Self::cpu(p, (w, h), workers, yuv, &assets))
+    }
+    /// Every `(scene, t)` of `jobs` rendered by Blender first (only what
+    /// its cache lacks), then handed out as frames.
+    fn blender(
+        p: &Project,
+        args: &Args,
+        jobs: &[(&Scene, f64)],
+        (w, h): (u16, u16),
+        mb: usize,
+        yuv: Option<Yuv>,
+    ) -> Result<Self> {
+        let samples = args
+            .get("samples")
+            .map(|_| args.num("samples", 0))
+            .transpose()?;
+        let size = [w.into(), h.into()];
+        let o = mui_cut::blender::Options::new(args.get("engine"), samples, mb, size)?;
+        let dir = args.project.parent().unwrap_or(Path::new(""));
+        let assets = read_assets(p, &args.project);
+        let cache = dir.join(".mui-cut-cache").join("blender");
+        let start = std::time::Instant::now();
+        let pngs = mui_cut::blender::render(p, jobs, &assets, dir, &cache, &o)?;
+        eprintln!(
+            "mui-cut: blender frames ready in {:.2} s",
+            start.elapsed().as_secs_f64()
+        );
+        let pngs = jobs
+            .iter()
+            .zip(pngs)
+            .map(|((s, t), png)| (frame_key(&eval(p, s, *t)), png))
+            .collect();
+        let engine = if o.engine == "CYCLES" { "cycles" } else { "eevee" };
+        Ok(Self::Blender(Box::new(Baked {
+            pngs,
+            yuv: yuv.map(|y| (y, size)),
+            name: format!("blender ({engine}, {} samples)", o.samples),
+        })))
     }
     /// `workers` Vello CPU renderers.
     fn cpu(
@@ -316,6 +375,7 @@ impl Backend {
                 g.assets = assets;
             }
             Self::Cpu(..) => *self = Self::cpu(p, (w, h), threads(args)?, yuv, &assets),
+            Self::Blender(_) => return Err("a Blender backend is opened per render".into()),
         }
         Ok(())
     }
@@ -323,6 +383,7 @@ impl Backend {
         match self {
             Self::Cpu(..) => "cpu (vello_cpu)".into(),
             Self::Gpu(g) => format!("gpu ({})", g.adapter),
+            Self::Blender(b) => b.name.clone(),
         }
     }
     /// One output frame from its subframes; frames come back a few behind,
@@ -331,6 +392,15 @@ impl Backend {
         match self {
             Self::Gpu(g) => g.push(&subs),
             Self::Cpu(pool, yuv) => Ok(pool.push(subs)?.map(|px| to_yuv(px, *yuv))),
+            Self::Blender(b) => {
+                let first = subs.first().ok_or("no subframes")?;
+                let png = b
+                    .pngs
+                    .get(&frame_key(first))
+                    .ok_or("a frame Blender was not asked for")?;
+                let (rgba, _) = mui_cut::blender::read_png(png)?;
+                Ok(Some(to_yuv(rgba, b.yuv)))
+            }
         }
     }
     fn finish(&mut self) -> Result<Vec<Vec<u8>>> {
@@ -341,6 +411,7 @@ impl Backend {
                 let px = pool.finish()?;
                 Ok(px.into_iter().map(|px| to_yuv(px, yuv)).collect())
             }
+            Self::Blender(_) => Ok(Vec::new()),
         }
     }
 }
@@ -375,8 +446,13 @@ fn still(args: &Args) -> Result<()> {
     let s = scene(&p, args)?;
     let out = args.get("o").ok_or("still needs -o OUT.png")?;
     let (w, h) = size(&p, args)?;
-    let mut b = Backend::open(&p, args, (w, h), 1, None)?;
-    let f = eval(&p, s, args.num("t", 0.)?);
+    let t = args.num("t", 0.)?;
+    let mut b = if renderer(args) == Some("blender") {
+        Backend::blender(&p, args, &[(s, t)], (w, h), 1, None)?
+    } else {
+        Backend::open(&p, args, (w, h), 1, None)?
+    };
+    let f = eval(&p, s, t);
     let px = match b.push(vec![f])? {
         Some(px) => px,
         None => b.finish()?.pop().ok_or("no frame came back")?,
@@ -479,13 +555,6 @@ fn render_one(
         Some(encode::plan(&r, out)?)
     };
     let yuv = plan.as_ref().map_or(Yuv::Nv12, |p| p.yuv);
-    let b = match backend {
-        Some(b) => {
-            b.retarget(p, args, (w, h), Some(yuv))?;
-            b
-        }
-        None => backend.insert(Backend::open(p, args, (w, h), threads(args)?, Some(yuv))?),
-    };
     // Every output frame, scenes back to back.
     let jobs: Vec<(&Scene, f64)> = scenes
         .iter()
@@ -494,6 +563,16 @@ fn render_one(
             (0..n).map(move |i| (*s, i as f64 / p.fps))
         })
         .collect();
+    let b = match backend {
+        _ if renderer(args) == Some("blender") => {
+            backend.insert(Backend::blender(p, args, &jobs, (w, h), mb, Some(yuv))?)
+        }
+        Some(b) => {
+            b.retarget(p, args, (w, h), Some(yuv))?;
+            b
+        }
+        None => backend.insert(Backend::open(p, args, (w, h), threads(args)?, Some(yuv))?),
+    };
     let segment = match args.get("segment") {
         Some(_) => Some(args.num("segment", 1.)?),
         None => args.has("range").then_some(1.),
