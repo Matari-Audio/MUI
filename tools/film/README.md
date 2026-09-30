@@ -15,9 +15,9 @@ Open the page and click **Connect & enable audio**. Play notes, drag the actual 
 Kurv uses the same host, browser, input mapping, discovery, and recording path:
 
 ```sh
-# Initialize the isolated export checkout first: videos/kurv-unfold/README.md.
-CARGO_TARGET_DIR=/tmp/kurv-motion-target python3 media/tools/kurv-live/build.py --build-dir /tmp/kurv-motion-build
-python3 tools/film/server.py --binary /tmp/kurv-motion-target/debug/kurv-motion-live --port 3020
+# Builds KURV (read-only checkout) against this MUI into media/tools/kurv-live/bin/.
+python3 media/tools/kurv-live/build.py --kurv ../KURV
+python3 tools/film/server.py --binary media/tools/kurv-live/bin/kurv-cut-live --port 3020
 ```
 
 Its working source checkout is never patched. The adapter supplies advancing host transport, the real Truce meter store, and a real LFO-to-oscillator-level route. Native LFO playheads and modulation displays consume the processor's telemetry. The independent Tone instrument demonstrates the same live-editor contract with a native knob and DSP-driven tremolo phase.

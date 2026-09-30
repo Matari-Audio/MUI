@@ -107,7 +107,8 @@ def main():
         if not target.exists():
             target.symlink_to(path.resolve(), target_is_directory=path.is_dir())
     overlay(dst)
-    cmd = ['cargo', 'check' if a.check else 'build', '--no-default-features', '--features', 'gallery', '--bin', BIN]
+    # KURV's `process-lab` feature: a local lab build, not a product one.
+    cmd = ['cargo', 'check' if a.check else 'build', '--no-default-features', '--features', 'gallery,process-lab', '--bin', BIN]
     if not a.check:
         cmd += ['--message-format=json-render-diagnostics']
     env = dict(os.environ)
