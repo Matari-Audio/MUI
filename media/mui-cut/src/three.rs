@@ -110,6 +110,114 @@ fn ao_radius() -> f64 {
     60.
 }
 
+/// 3D: how a layer's surface meets light, after Blender's Principled BSDF
+/// and glTF's PBR materials. Every field is keyable; one left out is a
+/// slab's default (a rough dielectric), or on a model its glTF material's.
+/// `transmission` above zero makes glass, which reflects and refracts what
+/// is behind it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(transform = crate::vars::bindable)]
+pub struct Material {
+    /// 0 a dielectric, 1 a metal (tinted by the layer's colour).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metallic: Option<Anim<f64>>,
+    /// 0 a mirror, 1 matte. Slabs default to 0.42.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub roughness: Option<Anim<f64>>,
+    /// 0 opaque, 1 glass: all light not reflected passes through, tinted
+    /// by the layer's colour.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transmission: Option<Anim<f64>>,
+    /// Index of refraction (glass 1.5, water 1.33, diamond 2.42).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ior: Option<Anim<f64>>,
+    /// Pixels light crosses inside; 0 on a slab is its `extrude`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thickness: Option<Anim<f64>>,
+    /// How much the index changes with colour: 20 / the Abbe number
+    /// (glTF's `KHR_materials_dispersion`). 0 none, flint glass 0.6.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dispersion: Option<Anim<f64>>,
+    /// The colour white light keeps after `thickness` inside (absorption).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tint: Option<Anim<Rgba>>,
+}
+
+/// A [`Material`] at one time: the fields it sets.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
+pub struct Surface {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metallic: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub roughness: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transmission: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ior: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thickness: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dispersion: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tint: Option<Rgba>,
+}
+
+impl Material {
+    /// Its keyable fields by path (`material.roughness`), those it sets.
+    pub fn props(&self) -> Vec<(String, crate::Prop<'_>)> {
+        use crate::Prop::{Color, Num};
+        let mut out: Vec<(String, crate::Prop<'_>)> = [
+            ("metallic", &self.metallic),
+            ("roughness", &self.roughness),
+            ("transmission", &self.transmission),
+            ("ior", &self.ior),
+            ("thickness", &self.thickness),
+            ("dispersion", &self.dispersion),
+        ]
+        .into_iter()
+        .filter_map(|(n, a)| a.as_ref().map(|a| (format!("material.{n}"), Num(a))))
+        .collect();
+        if let Some(a) = &self.tint {
+            out.push(("material.tint".into(), Color(a)));
+        }
+        out
+    }
+
+    pub fn at(&self, t: f64) -> Surface {
+        let num = |a: &Option<Anim<f64>>| a.as_ref().map(|a| a.at(t));
+        Surface {
+            metallic: num(&self.metallic).map(|v| v.clamp(0., 1.)),
+            roughness: num(&self.roughness).map(|v| v.clamp(0., 1.)),
+            transmission: num(&self.transmission).map(|v| v.clamp(0., 1.)),
+            ior: num(&self.ior).map(|v| v.clamp(1., 4.)),
+            thickness: num(&self.thickness).map(|v| v.max(0.)),
+            dispersion: num(&self.dispersion).map(|v| v.max(0.)),
+            tint: self.tint.as_ref().map(|a| a.at(t)),
+        }
+    }
+}
+
+impl Surface {
+    /// `base` with the fields this sets replaced.
+    pub fn over(&self, base: mui_stage::Material) -> mui_stage::Material {
+        let f = |v: Option<f64>, b: f32| v.map_or(b, |v| v as f32);
+        mui_stage::Material {
+            metallic: f(self.metallic, base.metallic),
+            roughness: f(self.roughness, base.roughness),
+            transmission: f(self.transmission, base.transmission),
+            ior: f(self.ior, base.ior),
+            thickness: f(self.thickness, base.thickness),
+            dispersion: f(self.dispersion, base.dispersion),
+            tint: self.tint.map_or(base.tint, crate::gpu3d::linear),
+        }
+    }
+    /// Drawn as glass.
+    pub fn glass(&self) -> bool {
+        self.transmission.is_some_and(|t| t > 0.)
+    }
+}
+
 /// A layer's 3D properties at one time (see [`crate::Layer`]).
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Space {
@@ -131,6 +239,8 @@ pub struct Space {
     pub feather: f64,
     pub range: f64,
     pub softness: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub material: Option<Surface>,
 }
 impl Default for Space {
     fn default() -> Self {
@@ -153,6 +263,7 @@ impl Default for Space {
             feather: 0.3,
             range: 0.,
             softness: 1.5,
+            material: None,
         }
     }
 }
@@ -367,15 +478,47 @@ pub fn camera(size: [u32; 2], layers: &[Drawn]) -> Cam {
 }
 
 /// One glTF primitive in model space (y up): a position and a normal per
-/// vertex, triangles, and its material's base colour (linear RGBA),
-/// metallic and roughness.
+/// vertex, triangles, and its material: base colour (linear RGBA), metallic,
+/// roughness, and glass from `KHR_materials_transmission`, `_ior`, `_volume`
+/// (thickness in model units) and `_dispersion` where it has them.
 #[derive(Clone, Debug)]
 pub struct Part {
     pub vertices: Vec<[f32; 6]>,
     pub indices: Vec<u32>,
     pub color: [f32; 4],
-    pub metallic: f32,
-    pub roughness: f32,
+    pub material: mui_stage::Material,
+}
+
+/// A glTF material as mui-stage draws it.
+fn gltf_material(m: &gltf::Material<'_>) -> mui_stage::Material {
+    let pbr = m.pbr_metallic_roughness();
+    let volume = m.volume();
+    let thickness = volume.as_ref().map_or(0., gltf::material::Volume::thickness_factor);
+    // Attenuation colour is what is left after `attenuationDistance`; the
+    // tint is what is left after the thickness.
+    let tint = volume.as_ref().map_or([1.; 3], |v| {
+        let d = v.attenuation_distance();
+        let k = if d.is_finite() && d > 0. && thickness > 0. {
+            thickness / d
+        } else {
+            0.
+        };
+        v.attenuation_color().map(|c| c.clamp(0., 1.).powf(k))
+    });
+    mui_stage::Material {
+        metallic: pbr.metallic_factor(),
+        roughness: pbr.roughness_factor(),
+        transmission: m
+            .transmission()
+            .map_or(0., |t| t.transmission_factor()),
+        ior: m.ior().unwrap_or(1.5),
+        thickness,
+        dispersion: m
+            .extension_value("KHR_materials_dispersion")
+            .and_then(|v| v["dispersion"].as_f64())
+            .map_or(0., |v| v as f32),
+        tint,
+    }
 }
 
 /// A model file's triangles, node transforms applied, and their bounds.
@@ -464,7 +607,7 @@ pub fn glb(bytes: &[u8]) -> Result<Mesh, String> {
                 }
                 acc.into_iter().map(unit).collect()
             };
-            let pbr = prim.material().pbr_metallic_roughness();
+            let material = prim.material();
             parts.push(Part {
                 vertices: pos
                     .iter()
@@ -472,9 +615,8 @@ pub fn glb(bytes: &[u8]) -> Result<Mesh, String> {
                     .map(|(p, n)| [p[0], p[1], p[2], n[0], n[1], n[2]])
                     .collect(),
                 indices,
-                color: pbr.base_color_factor(),
-                metallic: pbr.metallic_factor(),
-                roughness: pbr.roughness_factor(),
+                color: material.pbr_metallic_roughness().base_color_factor(),
+                material: gltf_material(&material),
             });
         }
     }

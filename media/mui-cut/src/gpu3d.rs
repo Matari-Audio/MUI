@@ -4,7 +4,8 @@
 //! the target. The atlas is repainted only when some layer's content (not
 //! its placement) changes, so a card flying about costs no Vello work.
 use mui_stage::{
-    Ao, Environment, Floor, Fog, Light, LightKind, Mat4, Model, Plane, Post, STUDIO, Shot, Stage,
+    Ao, Environment, Floor, Fog, Light, LightKind, Mat4, Material, Model, Plane, Post, STUDIO,
+    Shot, Stage,
 };
 use mui_vello::kurbo::Affine;
 
@@ -247,6 +248,11 @@ impl Space {
                     let tint = linear(l.fill);
                     for (i, part) in mesh.parts.iter().enumerate() {
                         let id = format!("{path}#{i}");
+                        // The glTF's thickness is in model units.
+                        let own = Material {
+                            thickness: part.material.thickness * k,
+                            ..part.material
+                        };
                         if !self.stage.has_mesh(&id) {
                             self.stage.mesh(&id, &part.vertices, &part.indices);
                         }
@@ -259,8 +265,7 @@ impl Space {
                                 part.color[2] * tint[2],
                                 part.color[3] * l.opacity as f32,
                             ],
-                            metallic: part.metallic,
-                            roughness: part.roughness,
+                            material: s.material.map_or(own, |m| m.over(own)),
                             cast: s.cast_shadows,
                             receive: s.receive_shadows,
                         });
@@ -303,6 +308,9 @@ impl Space {
                     plane.position = w([l.x, l.y, s.z]);
                     plane.cast = s.cast_shadows;
                     plane.receive = s.receive_shadows;
+                    if let Some(m) = &s.material {
+                        plane.material = m.over(Material::SLAB);
+                    }
                     if s.extrude > 0.
                         && let Some(o) = assets.outline(l, size, corner)
                     {

@@ -49,8 +49,8 @@ velato = { version = "0.12", default-features = false }
 # 3D scenes: layers on lit slabs with shadows, models, on the same device
 # (the GPU engines pick wgpu's backends).
 mui-stage = { path = "../mui-stage", default-features = false }
-# Model layers: glTF binaries, meshes and their base-colour materials only.
-gltf = { version = "1.4", default-features = false, features = ["utils"] }
+# Model layers: glTF binaries, meshes and their PBR and glass materials.
+gltf = { version = "1.4", default-features = false, features = ["utils", "extensions", "KHR_materials_transmission", "KHR_materials_ior", "KHR_materials_volume"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2.128"

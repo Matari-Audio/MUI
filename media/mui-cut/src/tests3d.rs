@@ -144,7 +144,7 @@ fn the_stage_example_loads_round_trips_and_its_model_parses() {
     assert_eq!(mesh.parts.len(), 1);
     let part = &mesh.parts[0];
     assert!(part.indices.len() > 1000 && part.indices.len().is_multiple_of(3));
-    assert!(part.metallic > 0.5 && part.color[0] > part.color[2]);
+    assert!(part.material.metallic > 0.5 && part.color[0] > part.color[2]);
     assert!(mesh.max[1] > mesh.min[1]);
     // Its triangles wind counter-clockwise about their normals, as glTF
     // says: Blender shades a clockwise one from the inside (black in Cycles).
