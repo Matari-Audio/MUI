@@ -1240,4 +1240,96 @@ fn captured_parts_become_movable_layers() {
     assert!(quads.iter().any(|q| q.id == "syn#b"));
     let red = |x: usize, y: usize| px[(y * 400 + x) * 4] > 200 && px[(y * 400 + x) * 4 + 2] < 60;
     assert!(red(125, 80), "part a's left half is red");
+    assert!(red(100, 50), "a fragment keeps its corners");
+}
+
+/// In a 3D scene every part is its own slab: where the 2D drawing puts it
+/// (turns and all), `explode` towards the viewer plus its own `z`.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn plugin_parts_are_slabs_at_their_depth_in_3d() {
+    let doc = |extra: &str| {
+        one_layer(&format!(
+            r#"{{"id":"syn","kind":"plugin","source":{{"bin":"x"}},"x":200,"y":100,
+                "z":30,"scale":2,"rotation":90{extra}}}"#
+        ))
+    };
+    let centre = |q: &Quad| {
+        let [a, _, c, _] = q.pts;
+        [(a[0] + c[0]) / 2., (a[1] + c[1]) / 2.]
+    };
+    let p = doc(r#","explode":0.5,"parts":{"a":{"x":5,"z":40,"rotation":10,"highlight":1}}"#);
+    let assets = capture_assets(&p);
+    let d = &eval(&p, &p.scenes[0], 0.).layers[0];
+    let flat = assets.layers(&eval(&p, &p.scenes[0], 0.)).unwrap();
+    let slabs = assets.slabs(d);
+    let ids: Vec<&str> = slabs.iter().map(|s| s.id.as_str()).collect();
+    assert_eq!(
+        ids,
+        ["syn", "syn#a", "syn#a", "syn#b"],
+        "backdrop, a's plate, a, b"
+    );
+    let a = &slabs[2];
+    assert!(a.plugin.is_none() && matches!(a.kind, Kind::Image { .. }));
+    // Across the screen, exactly where the 2D drawing puts it.
+    let want = centre(&flat.parts[0]);
+    assert!(
+        (a.x - want[0]).abs() < 1e-3 && (a.y - want[1]).abs() < 1e-3,
+        "{:?} vs {want:?}",
+        [a.x, a.y]
+    );
+    assert_eq!((a.scale, a.rotation), (2., 100.));
+    // In depth: half of EXPLODE_DEPTH towards the viewer, 40 back, in the
+    // layer's (doubled) pixels, from the layer's own z.
+    let z = 30. - (0.5 * plugin::EXPLODE_DEPTH - 40.) * 2.;
+    assert!((a.space.z - z).abs() < 1e-3, "{} vs {z}", a.space.z);
+    assert!(
+        slabs[1].space.z > a.space.z,
+        "the highlight plate is behind"
+    );
+    assert!(
+        (slabs[0].space.z - 30.).abs() < 1e-3,
+        "the backdrop stays put"
+    );
+    // Other layers pass through; a plugin with no capture is its placeholder.
+    let rect = one_layer(r#"{"id":"r","kind":"rect"}"#);
+    let r = &eval(&rect, &rect.scenes[0], 0.).layers[0];
+    assert_eq!(assets.slabs(r), [r.clone()]);
+    let none = Assets::default().slabs(d);
+    assert_eq!(none.len(), 1);
+    assert!(matches!(none[0].kind, Kind::Rect));
+}
+
+/// And mui-stage draws them: an unexploded plugin in a 3D scene looks like
+/// its 2D self (it drew nothing before it was split into slabs).
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_plugin_in_a_3d_scene_draws_like_its_2d_self() {
+    let mut p = one_layer(r#"{"id":"syn","kind":"plugin","source":{"bin":"x"},"x":200,"y":100}"#);
+    let flat = eval(&p, &p.scenes[0], 0.);
+    p.scenes[0].mode = Mode::ThreeD;
+    let deep = eval(&p, &p.scenes[0], 0.);
+    let mut g = match Offline::new(p.size, Engine::Classic) {
+        Ok(g) => g,
+        Err(e) => return eprintln!("skipped: no GPU ({e})"),
+    };
+    g.assets = capture_assets(&p);
+    let mut shot = |f: &Frame| match g.push(std::slice::from_ref(f)).unwrap() {
+        Some(px) => px,
+        None => g.finish().unwrap().pop().unwrap(),
+    };
+    let (a, b) = (shot(&flat), shot(&deep));
+    // Opaque red where the 2D frame has it (the 3D pass blends the test
+    // image's translucent half in linear light, so that half differs).
+    let red: fn(&[u8]) -> Vec<bool> = |px| {
+        px.as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| c[0] > 200 && c[2] < 60)
+            .collect()
+    };
+    let (ra, rb) = (red(&a), red(&b));
+    assert!(ra.iter().filter(|r| **r).count() > 5_000);
+    let off = ra.iter().zip(&rb).filter(|(a, b)| a != b).count();
+    assert!(off < ra.len() / 100, "{off} pixels differ");
 }

@@ -1122,7 +1122,11 @@ pub const MAX_COPIES: usize = 10_000;
 /// Scene `scene` at `t` seconds: a pure function of its arguments, so any
 /// time can be sought in any order.
 pub fn eval(project: &Project, scene: &Scene, t: f64) -> Frame {
-    let layers: Vec<Drawn> = scene.layers.iter().map(|l| l.eval_at(t, project.fps)).collect();
+    let layers: Vec<Drawn> = scene
+        .layers
+        .iter()
+        .map(|l| l.eval_at(t, project.fps))
+        .collect();
     let view = (scene.mode == Mode::ThreeD).then(|| three::view(project.size, scene, &layers));
     Frame {
         size: project.size,

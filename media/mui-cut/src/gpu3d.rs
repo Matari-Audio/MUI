@@ -85,6 +85,8 @@ impl Space {
     ) -> Result<Vec<Quad>, String> {
         let [fw, fh] = frame.size.map(f64::from);
         let out = f64::from(canvas.size()[1]) / fh;
+        // A plugin layer is a slab per part.
+        let layers: Vec<Drawn> = frame.layers.iter().flat_map(|l| assets.slabs(l)).collect();
         let w = |p: [f64; 3]| crate::three::world(frame.size, p);
         let wd = |d: [f64; 3]| [d[0] as f32, -d[1] as f32, -d[2] as f32];
 
@@ -96,8 +98,7 @@ impl Space {
             ) && l.opacity > 0.
                 && l.scale != 0.
         };
-        let contents: Vec<Drawn> = frame
-            .layers
+        let contents: Vec<Drawn> = layers
             .iter()
             .filter(shown)
             .map(|l| Drawn {
@@ -118,8 +119,7 @@ impl Space {
         // closer camera, and more for a scaled-up layer (in octaves, so an
         // animated scale does not repaint every frame).
         let base = (out * 1.5).clamp(0.5, 4.);
-        let scales: Vec<f64> = frame
-            .layers
+        let scales: Vec<f64> = layers
             .iter()
             .filter(shown)
             .map(|l| 2f64.powf(l.scale.abs().log2().ceil().clamp(-2., 2.)))
@@ -176,7 +176,7 @@ impl Space {
         let [aw, ah] = self.atlas.map(|v| v as f32);
         let mut planes = Vec::new();
         let mut shown_i = 0;
-        let mut quads = Vec::with_capacity(frame.layers.len());
+        let mut quads = Vec::with_capacity(layers.len());
         let cam = &view.camera;
         let camera = crate::three::stage_camera(frame.size, cam);
         let vp = camera.view_proj((fw / fh) as f32);
@@ -202,7 +202,7 @@ impl Space {
             }
         };
         let mut models = Vec::new();
-        for l in &frame.layers {
+        for l in &layers {
             let s = &l.space;
             let pose = |offset: Mat4| {
                 Mat4::translate(w([l.x, l.y, s.z]))

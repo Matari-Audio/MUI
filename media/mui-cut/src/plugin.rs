@@ -23,7 +23,8 @@ use crate::{Anim, Layer, is_one, is_zero, one, zero};
 pub const CACHE: &str = ".cut-cache";
 
 /// How far an exploded part comes towards the viewer at `explode` 1, in the
-/// plugin's pixels: for a 3D stage. The 2D renderer ignores depth.
+/// plugin's pixels. Only a 3D scene (`"mode": "3d"`) shows depth; there
+/// every part is its own slab (see `Assets::slabs`).
 pub const EXPLODE_DEPTH: f64 = 160.;
 
 /// Where the plugin editor comes from: an adapter executable, or one built
@@ -75,6 +76,10 @@ pub struct Part {
     pub x: Anim<f64>,
     #[serde(default = "zero", skip_serializing_if = "is_zero")]
     pub y: Anim<f64>,
+    /// Depth from the UI's face, larger is farther, as a layer's `z`: 3D
+    /// scenes only.
+    #[serde(default = "zero", skip_serializing_if = "is_zero")]
+    pub z: Anim<f64>,
     #[serde(default = "one", skip_serializing_if = "is_one")]
     pub scale: Anim<f64>,
     /// Degrees, clockwise, about the part's centre.
@@ -89,10 +94,11 @@ pub struct Part {
 
 impl Part {
     /// Its keyable numbers, by name, in inspector order.
-    pub fn nums(&self) -> [(&'static str, &Anim<f64>); 6] {
+    pub fn nums(&self) -> [(&'static str, &Anim<f64>); 7] {
         [
             ("x", &self.x),
             ("y", &self.y),
+            ("z", &self.z),
             ("scale", &self.scale),
             ("rotation", &self.rotation),
             ("opacity", &self.opacity),
@@ -119,6 +125,7 @@ pub struct PartAt {
     pub id: String,
     pub x: f64,
     pub y: f64,
+    pub z: f64,
     pub scale: f64,
     pub rotation: f64,
     pub opacity: f64,
@@ -243,6 +250,7 @@ impl Layer {
                     id: id.clone(),
                     x: p.x.at(t),
                     y: p.y.at(t),
+                    z: p.z.at(t),
                     scale: p.scale.at(t),
                     rotation: p.rotation.at(t),
                     opacity: p.opacity.at(t).clamp(0., 1.),
