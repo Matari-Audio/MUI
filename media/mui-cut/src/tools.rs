@@ -121,6 +121,37 @@ fn caption(text: &str, fw: f64, scale: f64) -> [Drawn; 2] {
     ]
 }
 
+/// Rows of caption above each tile, in tile pixels.
+const HEAD: u32 = 22;
+
+/// Each tile with its caption stacked above it (drawn through `b`, whose
+/// frames are `size` project pixels at `tw` wide), so no caption covers
+/// the frame. The tiles come back `HEAD` rows taller.
+fn headed(
+    b: &mut Backend,
+    size: [u32; 2],
+    tiles: Vec<Vec<u8>>,
+    labels: &[String],
+    tw: u32,
+) -> Result<Vec<Vec<u8>>> {
+    let scale = f64::from(tw) / f64::from(size[0]);
+    let frames: Vec<Frame> = labels
+        .iter()
+        .map(|l| Frame {
+            size,
+            background: mui_cut::Rgba([0, 0, 0, 255]),
+            layers: caption(l, f64::from(size[0]), scale).into(),
+        })
+        .collect();
+    let heads = draw_all(b, &frames)?;
+    let row = (tw * 4) as usize;
+    Ok(heads
+        .into_iter()
+        .zip(tiles)
+        .map(|(h, t)| [&h[..row * HEAD as usize], &t[..]].concat())
+        .collect())
+}
+
 /// Tiles `tw` x `th` in rows of `cols`, `gap` apart on a grey that is
 /// neither black nor white, so the frame edges show.
 fn compose(tiles: &[Vec<u8>], (tw, th): (u32, u32), cols: usize) -> (Vec<u8>, u32, u32) {
@@ -200,30 +231,25 @@ pub fn sheet(path: &Path, o: &SheetOpts) -> Result<Picture> {
         &p,
         (o.width.saturating_sub(6) / cols as u32).saturating_sub(6),
     );
-    let scale = f64::from(tw) / f64::from(p.size[0]);
-    let mut frames = Vec::new();
-    let mut labels = Vec::new();
+    let mut shots = Vec::new();
     for s in scenes {
         let ts = o
             .times
             .clone()
             .unwrap_or_else(|| review_times(&p, s, o.per_scene));
         for t in ts {
-            let mut f = eval(&p, s, t);
             let label = format!("{} · {t:.2}s · f{}", s.name, (t * p.fps).round());
-            f.layers
-                .extend(caption(&label, f64::from(p.size[0]), scale));
-            frames.push(f);
-            labels.push(label);
+            shots.push((eval(&p, s, t), label));
         }
     }
-    if frames.is_empty() {
+    if shots.is_empty() {
         return Err("no frames to show".into());
     }
-    let frames = thin(frames, 64);
+    let (frames, labels): (Vec<Frame>, Vec<String>) = thin(shots, 64).into_iter().unzip();
     let mut b = Backend::open(&p, path, (tw, th), o.cpu);
     let tiles = draw_all(&mut b, &frames)?;
-    let (px, w, h) = compose(&tiles, (tw.into(), th.into()), cols);
+    let tiles = headed(&mut b, p.size, tiles, &labels, tw.into())?;
+    let (px, w, h) = compose(&tiles, (tw.into(), u32::from(th) + HEAD), cols);
     Ok(Picture {
         png: png_bytes(w, h, &px)?,
         w,
@@ -231,7 +257,7 @@ pub fn sheet(path: &Path, o: &SheetOpts) -> Result<Picture> {
         note: format!(
             "{} frames, {cols} across, {w}x{h}: {}",
             tiles.len(),
-            thin(labels, 64).join(", ")
+            labels.join(", ")
         ),
     })
 }
@@ -372,7 +398,6 @@ fn difference(a: &[u8], b: &[u8]) -> (f64, Vec<u8>) {
 pub fn diff(a_path: &Path, b_path: &Path, n: usize, width: u32, cpu: bool) -> Result<Picture> {
     let (a, b) = (crate::load(a_path)?, crate::load(b_path)?);
     let (tw, th) = tile(&a, (width.saturating_sub(6) / 3).saturating_sub(6));
-    let scale = f64::from(tw) / f64::from(a.size[0]);
     let mut notes = Vec::new();
     let mut at: Vec<(String, f64)> = Vec::new();
     let (mut fa, mut fb) = (Vec::new(), Vec::new());
@@ -435,30 +460,24 @@ pub fn diff(a_path: &Path, b_path: &Path, n: usize, width: u32, cpu: bool) -> Re
             note: notes.join("\n"),
         });
     }
-    // Captioned copies of just the changed frames.
-    let fw = f64::from(a.size[0]);
-    let cap = |f: &Frame, text: String| {
-        let mut f = f.clone();
-        f.layers.extend(caption(&text, fw, scale));
-        f
-    };
-    let ca: Vec<Frame> = changed
-        .iter()
-        .map(|(i, _, _)| cap(&fa[*i], format!("A · {} · {:.2}s", at[*i].0, at[*i].1)))
-        .collect();
-    let cb: Vec<Frame> = changed
-        .iter()
-        .map(|(i, d, _)| cap(&fb[*i], format!("B · {:.1}% changed", d * 100.)))
-        .collect();
-    let la = draw_all(&mut Backend::open(&a, a_path, (tw, th), cpu), &ca)?;
-    let lb = draw_all(&mut Backend::open(&b, b_path, (tw, th), cpu), &cb)?;
     let mut tiles = Vec::new();
-    for (k, (_, _, heat)) in changed.into_iter().enumerate() {
-        tiles.push(la[k].clone());
-        tiles.push(lb[k].clone());
-        tiles.push(heat);
+    let mut labels = Vec::new();
+    for (i, d, heat) in changed {
+        tiles.extend([pa[i].clone(), pb[i].clone(), heat]);
+        labels.extend([
+            format!("A · {} · {:.2}s", at[i].0, at[i].1),
+            "B".to_owned(),
+            format!("changed: {:.1}% of pixels", d * 100.),
+        ]);
     }
-    let (px, w, h) = compose(&tiles, (tw.into(), th.into()), 3);
+    let tiles = headed(
+        &mut Backend::open(&a, a_path, (tw, th), cpu),
+        a.size,
+        tiles,
+        &labels,
+        tw.into(),
+    )?;
+    let (px, w, h) = compose(&tiles, (tw.into(), u32::from(th) + HEAD), 3);
     Ok(Picture {
         png: png_bytes(w, h, &px)?,
         w,

@@ -8,6 +8,7 @@
 #![forbid(unsafe_code)]
 
 mod mcp;
+mod script;
 mod serve;
 mod tools;
 
@@ -29,6 +30,7 @@ const USAGE: &str = "usage:
   mui-cut fmt    PROJECT
   mui-cut schema                                   # the project JSON Schema
   mui-cut mcp    [PROJECT]                         # MCP server on stdio
+  mui-cut gen    SCRIPT.rhai [-o OUT.cut.json] [--seed N] [--into PROJECT [--scene NAME]]
   mui-cut check  PROJECT [--json]
   mui-cut sheet  PROJECT [-o OUT.png] [--scene NAME] [--n 8] [--times 0,1.5] [--width 1600] [--cols 4] [--cpu]
   mui-cut strip  PROJECT --layer ID [-o OUT.png] [--scene NAME] [--n 8] [--width 1600] [--cpu]
@@ -107,6 +109,7 @@ fn run(argv: &[String]) -> Result<()> {
         "render" => render(&args),
         "still" => still(&args),
         "check" => tools::check(&args),
+        "gen" => script::cmd(&args),
         "sheet" => tools::sheet_cmd(&args),
         "strip" => tools::strip_cmd(&args),
         "diff" => tools::diff_cmd(&args),

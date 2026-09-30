@@ -81,7 +81,7 @@ fn sheet_strip_and_diff_write_pictures_of_the_right_size() {
     ]);
     assert!(ok, "{text}");
     // Two 392x220 tiles (1600 wide / 4 columns), 6 px gaps round them.
-    assert_eq!(png_size(&sheet), (6 + 2 * 398, 6 + 226), "{text}");
+    assert_eq!(png_size(&sheet), (6 + 2 * 398, 6 + 220 + 22 + 6), "{text}");
     let (ok, text) = run(&[
         "sheet",
         DEMO,
@@ -129,7 +129,11 @@ fn sheet_strip_and_diff_write_pictures_of_the_right_size() {
     assert!(ok, "{text}");
     assert_eq!(text.matches("% of pixels changed").count(), 2, "{text}");
     let (w, h) = png_size(&out);
-    assert_eq!((w, h), (6 + 3 * (524 + 6), 6 + 2 * (294 + 6)), "{text}");
+    assert_eq!(
+        (w, h),
+        (6 + 3 * (524 + 6), 6 + 2 * (294 + 22 + 6)),
+        "{text}"
+    );
     let (ok, text) = run(&["diff", DEMO, DEMO, "-o", out.to_str().unwrap()]);
     assert!(ok && text.contains("no visible differences"), "{text}");
 }
@@ -453,4 +457,50 @@ fn mcp_sees_and_steers_the_open_editor() {
     }
     let _ = server.kill();
     let _ = server.wait();
+}
+
+#[test]
+fn gen_is_deterministic_and_merges_layers_into_a_scene() {
+    let d = scratch("gen");
+    let script = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/gen/grid.rhai");
+    let (a, b) = (d.join("a.cut.json"), d.join("b.cut.json"));
+    for out in [&a, &b] {
+        let (ok, text) = run(&["gen", script, "--seed", "5", "-o", out.to_str().unwrap()]);
+        assert!(ok, "{text}");
+    }
+    assert_eq!(std::fs::read(&a).unwrap(), std::fs::read(&b).unwrap());
+    let (ok, text) = run(&["check", a.to_str().unwrap()]);
+    assert!(ok, "{text}");
+
+    // Layers from a script land in an existing scene; a rerun replaces them.
+    let project = d.join("p.cut.json");
+    std::fs::copy(DEMO, &project).unwrap();
+    let layers = d.join("dots.rhai");
+    std::fs::write(&layers, r#"let l = []; for i in 0..30 { l.push(#{ id: `dot${i}`, kind: "ellipse", x: rand(0.0, 1280.0), y: 60, width: 8, height: 8 }) } l"#).unwrap();
+    for _ in 0..2 {
+        let (ok, text) = run(&[
+            "gen",
+            layers.to_str().unwrap(),
+            "--into",
+            project.to_str().unwrap(),
+            "--scene",
+            "shapes",
+        ]);
+        assert!(ok, "{text}");
+    }
+    let p: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&project).unwrap()).unwrap();
+    let shapes = p["scenes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["name"] == "shapes")
+        .unwrap();
+    let dots = shapes["layers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|l| l["id"].as_str().unwrap().starts_with("dot"))
+        .count();
+    assert_eq!(dots, 30);
 }

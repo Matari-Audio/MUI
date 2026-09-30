@@ -230,6 +230,18 @@ struct Diff {
 }
 
 #[derive(Deserialize, JsonSchema)]
+struct Gen {
+    /// A Rhai script file (see `mui-cut gen`). Returning a project map
+    /// replaces the open project; returning an array of layers merges them
+    /// into `scene` by id (reruns replace their own layers).
+    script: String,
+    #[serde(default)]
+    seed: Option<u64>,
+    #[serde(default)]
+    scene: Option<String>,
+}
+
+#[derive(Deserialize, JsonSchema)]
 struct Render {
     /// Output video path (`.mp4`), or `null` to only time it.
     output: String,
@@ -337,6 +349,10 @@ fn tools() -> Vec<Value> {
         tool::<Diff>(
             "diff",
             "Compare against another version of the project: the most-changed frames as A | B | heat map rows.",
+        ),
+        tool::<Gen>(
+            "gen",
+            "Run a sandboxed, seeded Rhai script that generates a whole project or a scene's layers (hundreds of layers from a loop), validated and written to the open project.",
         ),
         tool::<Render>(
             "render",
@@ -558,6 +574,21 @@ impl Server {
                     a.width.unwrap_or(1600),
                     false,
                 )?)
+            }
+            "gen" => {
+                let a: Gen = parse(args)?;
+                let script =
+                    std::fs::read_to_string(&a.script).map_err(|e| format!("{}: {e}", a.script))?;
+                let path = self.path()?;
+                let json = crate::script::generate(
+                    &script,
+                    a.seed.unwrap_or(0),
+                    Some((&path, a.scene.as_deref())),
+                )?;
+                self.edit(|raw| {
+                    *raw = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+                    Ok(())
+                })
             }
             "render" => self.render(parse(args)?),
             "render_status" => {
