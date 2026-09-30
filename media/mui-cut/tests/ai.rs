@@ -92,6 +92,23 @@ fn sheet_strip_and_diff_write_pictures_of_the_right_size() {
     ]);
     assert!(ok, "{text}");
     assert_eq!(png_size(&sheet).0, 6 + 4 * (192 + 6), "{text}");
+    // Every engine draws the same sheet shape (the CPU one on every core).
+    for r in ["classic", "gpu", "cpu"] {
+        let (ok, text) = run(&[
+            "sheet",
+            DEMO,
+            "--scene",
+            "title",
+            "--times",
+            "0,1",
+            "--renderer",
+            r,
+            "-o",
+            sheet.to_str().unwrap(),
+        ]);
+        assert!(ok, "{r}: {text}");
+        assert_eq!(png_size(&sheet), (6 + 2 * 398, 6 + 220 + 22 + 6), "{r}");
+    }
 
     let strip = d.join("t.png");
     let (ok, text) = run(&[

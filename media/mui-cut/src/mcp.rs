@@ -186,8 +186,10 @@ struct Still {
     /// Pixels wide (default 960).
     #[serde(default)]
     width: Option<u32>,
+    /// `classic` (default), `gpu` (vello_gpu) or `cpu`.
+    #[serde(default)]
+    renderer: Option<String>,
 }
-
 #[derive(Deserialize, JsonSchema)]
 struct Sheet {
     #[serde(default)]
@@ -204,8 +206,10 @@ struct Sheet {
     width: Option<u32>,
     #[serde(default)]
     cols: Option<usize>,
+    /// `classic` (default), `gpu` (vello_gpu) or `cpu`.
+    #[serde(default)]
+    renderer: Option<String>,
 }
-
 #[derive(Deserialize, JsonSchema)]
 struct Strip {
     layer: String,
@@ -216,8 +220,10 @@ struct Strip {
     n: Option<usize>,
     #[serde(default)]
     width: Option<u32>,
+    /// `classic` (default), `gpu` (vello_gpu) or `cpu`.
+    #[serde(default)]
+    renderer: Option<String>,
 }
-
 #[derive(Deserialize, JsonSchema)]
 struct Diff {
     /// The other version of the project (a copy, or `git show REV:file > f`).
@@ -227,8 +233,10 @@ struct Diff {
     n: Option<usize>,
     #[serde(default)]
     width: Option<u32>,
+    /// `classic` (default), `gpu` (vello_gpu) or `cpu`.
+    #[serde(default)]
+    renderer: Option<String>,
 }
-
 #[derive(Deserialize, JsonSchema)]
 struct Gen {
     /// A Rhai script file (see `mui-cut gen`). Returning a project map
@@ -253,8 +261,10 @@ struct Render {
     /// `WxH`.
     #[serde(default)]
     size: Option<String>,
+    /// `classic` (default), `gpu` (vello_gpu) or `cpu`.
+    #[serde(default)]
+    renderer: Option<String>,
 }
-
 #[derive(Deserialize, JsonSchema)]
 struct JobArg {
     /// The id `render` returned.
@@ -528,7 +538,7 @@ impl Server {
                     .max(2)
                     & !1;
                 let (w, h) = (w as u16, h.min(4096) as u16);
-                let mut b = Backend::open(&p, &path, (w, h), false);
+                let mut b = Backend::open_at(&p, &path, a.renderer.as_deref(), (w, h), 1)?;
                 let px = tools::draw_all(&mut b, &[eval(&p, s, a.t)])?
                     .pop()
                     .ok_or("no frame came back")?;
@@ -550,7 +560,7 @@ impl Server {
                         per_scene: a.n.unwrap_or(8),
                         width: a.width.unwrap_or(1600),
                         cols: a.cols,
-                        cpu: false,
+                        renderer: a.renderer,
                     },
                 )?)
             }
@@ -562,7 +572,7 @@ impl Server {
                     a.scene.as_deref(),
                     a.n.unwrap_or(8),
                     a.width.unwrap_or(1600),
-                    false,
+                    a.renderer.as_deref(),
                 )?)
             }
             "diff" => {
@@ -572,7 +582,7 @@ impl Server {
                     Path::new(&a.against),
                     a.n.unwrap_or(6),
                     a.width.unwrap_or(1600),
-                    false,
+                    a.renderer.as_deref(),
                 )?)
             }
             "gen" => {
@@ -788,6 +798,9 @@ impl Server {
         }
         if let Some(s) = &a.size {
             cmd.args(["--size", s]);
+        }
+        if let Some(r) = &a.renderer {
+            cmd.args(["--renderer", r]);
         }
         let mut child = cmd
             .stdin(Stdio::null())

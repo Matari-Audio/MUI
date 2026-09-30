@@ -71,7 +71,7 @@ use crate::Backend;
 pub fn draw_all(b: &mut Backend, frames: &[Frame]) -> Result<Vec<Vec<u8>>> {
     let mut out = Vec::with_capacity(frames.len());
     for f in frames {
-        if let Some(px) = b.push(std::slice::from_ref(f))? {
+        if let Some(px) = b.push(vec![f.clone()])? {
             out.push(px);
         }
     }
@@ -124,26 +124,27 @@ fn caption(text: &str, fw: f64, scale: f64) -> [Drawn; 2] {
 /// Rows of caption above each tile, in tile pixels.
 const HEAD: u32 = 22;
 
-/// Each tile with its caption stacked above it (drawn through `b`, whose
-/// frames are `size` project pixels at `tw` wide), so no caption covers
-/// the frame. The tiles come back `HEAD` rows taller.
+/// `frames` drawn through `b` (frames of `size` project pixels at `tw`
+/// wide), then those and `tiles`, each with its caption stacked above it
+/// so no caption covers the frame: tiles `HEAD` rows taller. One batch,
+/// since a backend finishes once.
 fn headed(
     b: &mut Backend,
     size: [u32; 2],
+    frames: &[Frame],
     tiles: Vec<Vec<u8>>,
     labels: &[String],
     tw: u32,
 ) -> Result<Vec<Vec<u8>>> {
     let scale = f64::from(tw) / f64::from(size[0]);
-    let frames: Vec<Frame> = labels
-        .iter()
-        .map(|l| Frame {
-            size,
-            background: mui_cut::Rgba([0, 0, 0, 255]),
-            layers: caption(l, f64::from(size[0]), scale).into(),
-        })
-        .collect();
-    let heads = draw_all(b, &frames)?;
+    let mut batch = frames.to_vec();
+    batch.extend(labels.iter().map(|l| Frame {
+        size,
+        background: mui_cut::Rgba([0, 0, 0, 255]),
+        layers: caption(l, f64::from(size[0]), scale).into(),
+    }));
+    let mut heads = draw_all(b, &batch)?;
+    let tiles: Vec<Vec<u8>> = heads.drain(..frames.len()).chain(tiles).collect();
     let row = (tw * 4) as usize;
     Ok(heads
         .into_iter()
@@ -215,7 +216,8 @@ pub struct SheetOpts {
     pub per_scene: usize,
     pub width: u32,
     pub cols: Option<usize>,
-    pub cpu: bool,
+    /// `classic` (default), `gpu` or `cpu`.
+    pub renderer: Option<String>,
 }
 
 /// A contact sheet: frames of one or every scene in a grid, each captioned
@@ -246,9 +248,8 @@ pub fn sheet(path: &Path, o: &SheetOpts) -> Result<Picture> {
         return Err("no frames to show".into());
     }
     let (frames, labels): (Vec<Frame>, Vec<String>) = thin(shots, 64).into_iter().unzip();
-    let mut b = Backend::open(&p, path, (tw, th), o.cpu);
-    let tiles = draw_all(&mut b, &frames)?;
-    let tiles = headed(&mut b, p.size, tiles, &labels, tw.into())?;
+    let mut b = Backend::open_at(&p, path, o.renderer.as_deref(), (tw, th), usize::MAX)?;
+    let tiles = headed(&mut b, p.size, &frames, Vec::new(), &labels, tw.into())?;
     let (px, w, h) = compose(&tiles, (tw.into(), u32::from(th) + HEAD), cols);
     Ok(Picture {
         png: png_bytes(w, h, &px)?,
@@ -271,7 +272,7 @@ pub fn strip(
     scene: Option<&str>,
     n: usize,
     width: u32,
-    cpu: bool,
+    renderer: Option<&str>,
 ) -> Result<Picture> {
     let p = crate::load(path)?;
     let s = match scene {
@@ -331,15 +332,18 @@ pub fn strip(
         "fill": "#00000000", "stroke": "#ffd400", "stroke_width": line
     })));
     // Time labels only where they will not pile up on each other.
-    let mut labelled: Option<(f64, f64)> = None;
+    let mut labelled: Vec<(f64, f64)> = Vec::new();
     for &t in &ts {
         let (x, y) = (l.x.at(t), l.y.at(t));
         layers.push(drawn(serde_json::json!({
             "id": "~dot", "kind": "ellipse", "x": x, "y": y,
             "width": 4. * line, "height": 4. * line, "fill": "#ffd400"
         })));
-        if labelled.is_none_or(|(lx, ly)| (x - lx).hypot(y - ly) > 48. / scale) {
-            labelled = Some((x, y));
+        if labelled
+            .iter()
+            .all(|&(lx, ly)| (x - lx).hypot(y - ly) > 48. / scale)
+        {
+            labelled.push((x, y));
             layers.push(drawn(serde_json::json!({
                 "id": "~t", "kind": "text", "text": format!("{t:.2}s"), "x": x, "y": y - 6. * line,
                 "font_size": 12. / scale, "weight": 700, "fill": "#ffd400",
@@ -353,7 +357,7 @@ pub fn strip(
     );
     layers.extend(caption(&label, f64::from(p.size[0]), scale));
     f.layers = layers;
-    let mut b = Backend::open(&p, path, (tw, th), cpu);
+    let mut b = Backend::open_at(&p, path, renderer, (tw, th), 1)?;
     let px = draw_all(&mut b, std::slice::from_ref(&f))?
         .pop()
         .ok_or("no frame came back")?;
@@ -397,7 +401,13 @@ fn difference(a: &[u8], b: &[u8]) -> (f64, Vec<u8>) {
 
 /// What looks different between two versions of a project: for the frames
 /// that changed most (scenes matched by name), rows of A | B | heat map.
-pub fn diff(a_path: &Path, b_path: &Path, n: usize, width: u32, cpu: bool) -> Result<Picture> {
+pub fn diff(
+    a_path: &Path,
+    b_path: &Path,
+    n: usize,
+    width: u32,
+    renderer: Option<&str>,
+) -> Result<Picture> {
     let (a, b) = (crate::load(a_path)?, crate::load(b_path)?);
     let (tw, th) = tile(&a, (width.saturating_sub(6) / 3).saturating_sub(6));
     let mut notes = Vec::new();
@@ -429,8 +439,14 @@ pub fn diff(a_path: &Path, b_path: &Path, n: usize, width: u32, cpu: bool) -> Re
             a.size, a.fps, b.size, b.fps
         ));
     }
-    let pa = draw_all(&mut Backend::open(&a, a_path, (tw, th), cpu), &fa)?;
-    let pb = draw_all(&mut Backend::open(&b, b_path, (tw, th), cpu), &fb)?;
+    let pa = draw_all(
+        &mut Backend::open_at(&a, a_path, renderer, (tw, th), usize::MAX)?,
+        &fa,
+    )?;
+    let pb = draw_all(
+        &mut Backend::open_at(&b, b_path, renderer, (tw, th), usize::MAX)?,
+        &fb,
+    )?;
     let mut changed: Vec<(usize, f64, Vec<u8>)> = pa
         .iter()
         .zip(&pb)
@@ -473,8 +489,9 @@ pub fn diff(a_path: &Path, b_path: &Path, n: usize, width: u32, cpu: bool) -> Re
         ]);
     }
     let tiles = headed(
-        &mut Backend::open(&a, a_path, (tw, th), cpu),
+        &mut Backend::open_at(&a, a_path, renderer, (tw, th), usize::MAX)?,
         a.size,
+        &[],
         tiles,
         &labels,
         tw.into(),
@@ -539,7 +556,7 @@ pub fn sheet_cmd(args: &Args) -> Result<()> {
             .map(str::parse)
             .transpose()
             .map_err(|_| "--cols: not a number")?,
-        cpu: args.has("cpu"),
+        renderer: crate::renderer(args).map(Into::into),
     };
     save(&sheet(&args.project, &o)?, &out_path(args, "sheet.png"))
 }
@@ -552,7 +569,7 @@ pub fn strip_cmd(args: &Args) -> Result<()> {
         args.get("scene"),
         args.num("n", 8)?,
         args.num("width", 1600)?,
-        args.has("cpu"),
+        crate::renderer(args),
     )?;
     save(&pic, &out_path(args, &format!("{layer}.strip.png")))
 }
@@ -564,7 +581,7 @@ pub fn diff_cmd(args: &Args) -> Result<()> {
         Path::new(other),
         args.num("n", 6)?,
         args.num("width", 1600)?,
-        args.has("cpu"),
+        crate::renderer(args),
     )?;
     save(&pic, &out_path(args, "diff.png"))
 }

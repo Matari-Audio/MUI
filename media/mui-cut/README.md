@@ -31,6 +31,8 @@ mui-cut still  PROJECT --t 1.5 -o f.png [--scene NAME] [--size WxH] [--renderer 
 mui-cut eval   PROJECT --t 1.5 [--scene NAME]     # every layer's values, JSON
 mui-cut fmt    PROJECT                            # rewrite in canonical form
 mui-cut serve  PROJECT [--port 8740] [--web DIR]
+# for agents, see "Using mui-cut from an AI agent"
+mui-cut schema | check | sheet | strip | diff | gen | mcp
 ```
 
 - `render` plays every scene back to back (or just `--scene`), pipes frames
@@ -303,12 +305,99 @@ announces edits made by someone else.
 - `src/web.rs`: the wasm-bindgen handles: `Cut` (validation, samples, CPU
   frames) and `GpuView` (the WebGPU/WebGL2 viewport).
 - `src/main.rs`, `src/serve.rs`: the native CLI and the std-only local server.
+- `src/check.rs`: `check`'s lints, pure apart from a CPU `Renderer` for
+  contrast (so the web editor could run them too).
+- `src/tools.rs`, `src/mcp.rs`, `src/script.rs`: the agent's CLI pictures
+  (`sheet`, `strip`, `diff`), the MCP server and `gen`'s Rhai sandbox.
 - `web/`: the editor shell (HTML/CSS/JS panels around the WASM viewport);
   `worker.js` draws the viewport, one frame in flight at a time.
 - `web/e2e.mjs`: the editor in headless Chrome over CDP, and its playback
   pacing (frame gap mean and deviation, free and fps-locked).
   `E2E_BACKEND=webgl2|cpu` runs it without WebGPU, `E2E_RENDERER` forces
   the renderer, `E2E_PORT`/`E2E_CDP_PORT` move it off 8790/9339.
+
+## Using mui-cut from an AI agent
+
+The project is plain JSON, so an agent can edit it with any tool; these make
+it fast to get right and to see.
+
+```sh
+mui-cut schema > cut.schema.json    # JSON Schema from the Rust types, doc comments included
+mui-cut check  PROJECT [--json]     # lints, each with a JSON path, times and a fix; exit 1 on errors
+mui-cut sheet  PROJECT [-o OUT.png] [--scene NAME] [--n 8] [--times 0,1.5] [--width 1600] [--cols 4]
+mui-cut strip  PROJECT --layer ID [-o OUT.png] [--scene NAME] [--n 8] [--width 1600]
+mui-cut diff   A B [-o OUT.png] [--n 6] [--width 1600]
+mui-cut gen    SCRIPT.rhai [-o OUT.cut.json] [--seed N] [--into PROJECT [--scene NAME]]
+mui-cut mcp    [PROJECT]            # Model Context Protocol server on stdio
+```
+
+The pictures take `--renderer classic|gpu|cpu` like `still`, default to
+`PROJECT` with `.sheet.png` / `.ID.strip.png` / `.diff.png` next to it, and
+are sized to be read by a model (1600 px wide).
+
+- **Schema and load errors.** A file may say `"$schema": "./cut.schema.json"`
+  (kept by saves) so editors validate as you type. Load errors lead with the
+  JSON path: `scenes[0].layers[1].y: key [1]: invalid type: string "oops",
+  expected f64 at line 12 column 30`.
+- **`check`** finds what loading lets through: `unknown_field` (a typo that
+  a save would silently drop, with "did you mean"), `wrong_kind` /
+  `ignored_prop` (a field this layer's kind ignores), `duplicate_key`,
+  `key_outside_scene`, `overshoot` (a bezier leaving its keys' range; a
+  warning where the value is clamped, like opacity), `missing_asset`,
+  `never_visible`, `clipped` (at rest, mostly outside the frame),
+  `text_overlap` (two text layers at rest), `low_contrast` (text against the
+  pixels actually rendered behind it, under 3:1), `fast_motion` (faster than
+  8% of the frame a frame: it strobes), `empty_frame` (nothing visible
+  between things that are), `short_scene`, `empty_scene`. "At rest" means
+  not moving or fading, so entrances and exits do not count. `--json` gives
+  `{errors, warnings, infos, issues: [{severity, code, path, scene, layer,
+  t: [from, to], message, fix}]}`.
+- **`sheet`** is a contact sheet: frames at every scene boundary and key
+  (thinned to `--n` per scene) or at `--times`, each captioned with scene,
+  time and frame above it. **`strip`** shows one layer's move in a single
+  frame: the scene faded, the layer as ghosts from faint (early) to solid,
+  its path as a yellow trail with timed dots. **`diff`** compares two
+  versions (e.g. `git show HEAD:p.cut.json > old.cut.json`) and shows the
+  most-changed frames as rows of A, B and a heat map, with the share of
+  pixels changed.
+- **`gen`** runs a [Rhai](https://rhai.rs) script: no clock, no files, no
+  modules, bounded operations, and randomness only from a seed, so a script
+  and `--seed` always write the same file. It returns a project map, or an
+  array of layers merged by id into a scene of `--into PROJECT` (reruns
+  replace their own layers). Helpers: `rand()`, `rand(a, b)`,
+  `rand_int(a, b)`, `pick(arr)`, `seed(n)`, `noise(x, y)` (Perlin),
+  `hsl(h, s, l)`, `rgb`/`rgba` (0..1) to hex, `key(t, v[, interp])`,
+  `lerp`, `clamp`; plus Rhai's maths (`PI()`, `sin`, ...; integer `/`
+  truncates, so write `2.0`). Results are validated like a load, and
+  unknown fields are errors. See `examples/gen/burst.rhai` (400 sparks) and
+  `examples/gen/grid.rhai` (a 144-tile wave).
+
+### The MCP server
+
+```sh
+claude mcp add mui-cut -- /path/to/mui-cut mcp            # Claude Code
+claude mcp add mui-cut -- /path/to/mui-cut mcp demo.cut.json
+```
+
+Tools: `open` (with `create`), `schema`, `list` (scenes, layers, animated
+properties with key times), `get` (a JSON Pointer), `patch` (RFC 6902, all
+or nothing), `set`, `key`, `add_layer`, `remove_layer`, `eval`, `check`,
+`still`, `sheet`, `strip`, `diff` (images come back as PNG image content),
+`gen`, `render` + `render_status` (a background job), `editor_state`,
+`editor_goto`. Pointers may name scenes and layers by name/id:
+`/scenes/intro/layers/title/x`.
+
+Every tool reads the file and every edit writes it: validated, refused if a
+save would drop a field (a typo), canonical and atomic, followed by a
+`check` summary. An open `mui-cut serve` on the same file reloads it at
+once, and the person's edits are in the file for the next tool call.
+
+The editor reports its scene, playhead, selection, graphed property and
+play state to the server (`PUT /state`); `editor_state` reads it (with
+`same_project` and how old it is), so the agent sees what the person is
+looking at. `editor_goto` moves the editor there (`POST /control`, relayed
+to open editors as an SSE `control` event) to show the person something.
+The server is found on `editor_port` from `open` (default 8740).
 
 The keyframe curves are not `mui_motion::curve::Curve`: that type is a
 normalized `0..1` phase/value shaper that clamps values, while a property
@@ -330,6 +419,11 @@ snapshots in the editor rather than `CurveHistory`, for the same reason.
 - A text layer whose glyphs are all hidden has an empty outline in the
   viewport, so it cannot be clicked there (pick it in the layer list).
 - Last writer wins if the person and an agent edit the same moment.
+- `check`'s bounds are layer boxes, not outlines: rotated or sparse shapes
+  (a ring of copies) overlap and clip by their box. Contrast is averaged
+  over the text's box, so a busy image behind text can pass on average.
+- The MCP server has no resources or prompts, and `diff` needs the other
+  version as a file (no git revision argument yet).
 - `vello_gpu` draws MUI's backdrop blur sharp (no filter layer wired yet).
   It is pinned to Vello 9dfe53e; moving to newer main means following
   #1942 (`pop_clip_path` renamed) and #1944 (fallible glyph drawing) in

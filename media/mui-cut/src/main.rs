@@ -32,9 +32,9 @@ const USAGE: &str = "usage:
   mui-cut mcp    [PROJECT]                         # MCP server on stdio
   mui-cut gen    SCRIPT.rhai [-o OUT.cut.json] [--seed N] [--into PROJECT [--scene NAME]]
   mui-cut check  PROJECT [--json]
-  mui-cut sheet  PROJECT [-o OUT.png] [--scene NAME] [--n 8] [--times 0,1.5] [--width 1600] [--cols 4] [--cpu]
-  mui-cut strip  PROJECT --layer ID [-o OUT.png] [--scene NAME] [--n 8] [--width 1600] [--cpu]
-  mui-cut diff   A B [-o OUT.png] [--n 6] [--width 1600] [--cpu]
+  mui-cut sheet  PROJECT [-o OUT.png] [--scene NAME] [--n 8] [--times 0,1.5] [--width 1600] [--cols 4] [--renderer R]
+  mui-cut strip  PROJECT --layer ID [-o OUT.png] [--scene NAME] [--n 8] [--width 1600] [--renderer R]
+  mui-cut diff   A B [-o OUT.png] [--n 6] [--width 1600] [--renderer R]
   mui-cut serve  PROJECT [--port 8740] [--web DIR]";
 
 /// `--name value` pairs after the command and project path.
