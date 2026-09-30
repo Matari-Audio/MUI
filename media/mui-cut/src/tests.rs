@@ -1060,6 +1060,8 @@ fn variables_reject_what_does_not_fit() {
             "scenes": [{{"name": "a", "duration": {{"var": "s"}}, "layers": []}}]}}"#
     );
     assert!(Project::load(&json).is_err());
+}
+
 const PLUGIN: &str = r#"{"id":"syn","kind":"plugin","source":{"bin":"adapter"},
     "x":200,"y":100,
     "params":[{"id":"filter","field":"cutoff","value":[{"t":0.5,"v":0.2,"interp":"linear"},{"t":1.0,"v":0.8,"interp":"hold"}]}],

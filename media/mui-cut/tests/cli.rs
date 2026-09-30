@@ -402,6 +402,8 @@ fn render_segments_reuse_unchanged_spans_and_splice_losslessly() {
         let d = mean_diff(&cpu[i], &straight[i]);
         assert!(d < 1.5, "CPU frame {i} differs from the GPU by {d:.2}");
     }
+}
+
 /// `examples/plugin.cut.json` pointed at the built synth adapter (plain
 /// `cargo test` builds the examples) in a fresh scratch dir.
 fn plugin_project(name: &str) -> PathBuf {
@@ -532,4 +534,43 @@ fn serve_captures_plugin_states_and_tells_the_editor() {
     );
     let _ = server.kill();
     let _ = server.wait();
+}
+
+/// A rebuilt adapter redraws a plugin with the same state keys; segment
+/// re-renders must see the new captures, not reuse the old spans.
+#[test]
+fn render_segments_redraw_when_a_plugin_capture_changes() {
+    if !has("ffmpeg") || !has("ffprobe") {
+        eprintln!("skipped: no ffmpeg/ffprobe");
+        return;
+    }
+    let project = plugin_project("plugin-segments");
+    let render = || {
+        let o = Command::new(BIN)
+            .arg("render")
+            .arg(&project)
+            .args(["--size", "320x180", "--segment", "4", "-o"])
+            .arg(project.with_file_name("out.mp4"))
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8_lossy(&o.stdout).into_owned()
+    };
+    assert!(render().contains("2 rendered, 0 cached"));
+    assert!(render().contains("0 rendered, 2 cached"));
+    // Same keys, other pixels: nudge every captured fragment.
+    let cache = project.with_file_name(".cut-cache");
+    for e in std::fs::read_dir(&cache).unwrap() {
+        let path = e.unwrap().path();
+        if path.extension().is_some_and(|x| x == "json") {
+            let mut v: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            for f in v["layers"].as_array_mut().unwrap() {
+                f["rect"][0] = (f["rect"][0].as_f64().unwrap() + 1.).into();
+            }
+            std::fs::write(&path, v.to_string()).unwrap();
+        }
+    }
+    let log = render();
+    assert!(log.contains("2 rendered, 0 cached"), "{log}");
 }

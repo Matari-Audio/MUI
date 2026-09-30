@@ -352,8 +352,8 @@ try {
   await js(`[...document.querySelectorAll('#layers button:not(.part)')].pop().click()`);
   await sleep(250);
   await click('[data-explode]');
-  const ex = read().scenes[0].layers[0].explode;
-  check(Array.isArray(ex) && ex.some(e => Math.abs(e.t - 2) < 0.02 && e.v === 0.5), `explode is keyed at the playhead (${JSON.stringify(ex)})`);
+  const burst = read().scenes[0].layers[0].explode;
+  check(Array.isArray(burst) && burst.some(e => Math.abs(e.t - 2) < 0.02 && e.v === 0.5), `explode is keyed at the playhead (${JSON.stringify(burst)})`);
   await sleep(600);
   await shot('editor-plugin.png');
   check(errors.length === 0, 'no page exceptions ' + errors.join('; '));
