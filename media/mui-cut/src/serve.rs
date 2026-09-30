@@ -228,6 +228,36 @@ impl Shared {
                 }
                 respond(stream, "200 OK", "application/json", b"{}").map_err(io)
             }
+            // The Add plugin dialog: a plugin folder (relative to the
+            // project) or git URL, detected; the editor adds the entry.
+            ("POST", "/plugin") => {
+                if length > 64 << 10 {
+                    return respond(stream, "413 Payload Too Large", "text/plain", b"too large")
+                        .map_err(io);
+                }
+                let mut body = vec![0; length];
+                r.read_exact(&mut body).map_err(io)?;
+                let v: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
+                let dir = self.project.parent().unwrap_or(Path::new("."));
+                let taken: Vec<String> = std::fs::read_to_string(&self.project)
+                    .ok()
+                    .and_then(|t| Project::load(&t).ok())
+                    .map(|p| p.all_sources().into_iter().map(|m| m.id).collect())
+                    .unwrap_or_default();
+                let taken: Vec<&str> = taken.iter().map(String::as_str).collect();
+                let from = v["from"].as_str().unwrap_or("").trim();
+                let id = v["id"].as_str().map(str::trim).filter(|s| !s.is_empty());
+                match crate::build::onboard(from, dir, dir, id, &taken) {
+                    Ok((entry, report)) => {
+                        let body = serde_json::json!({"entry": entry, "report": report});
+                        respond(stream, "200 OK", "application/json", body.to_string().as_bytes())
+                            .map_err(io)
+                    }
+                    Err(e) => {
+                        respond(stream, "400 Bad Request", "text/plain", e.as_bytes()).map_err(io)
+                    }
+                }
+            }
             ("GET", "/state") => {
                 let (state, at) = self.state.lock().expect("no panic holds it").clone();
                 let age = at.map_or_else(|| "null".into(), |a| a.elapsed().as_millis().to_string());

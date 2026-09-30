@@ -14,7 +14,7 @@ fn main() {
 }
 
 fn run() -> Result<(), String> {
-    mui::host::headless::claim();
+    mui_motion_bridge::mui::host::headless::claim();
     let plugin = <plugin::ENTRY as PluginExport>::create();
     let params = plugin.params_arc();
     let meters = plugin.meter_store();
@@ -38,7 +38,7 @@ fn run() -> Result<(), String> {
         transport: Box::new(|| None),
     };
     editor.open(RawWindowHandle::X11(0), PluginContext::from_closures(bridge, all.clone()));
-    let view = mui::host::headless::take().ok_or("NAME's editor opened no MUI window")?;
+    let view = mui_motion_bridge::mui::host::headless::take().ok_or("NAME's editor opened no MUI window")?;
     let infos = all.param_infos();
     let edit = move |c: &serde_json::Value| {
         let s = mui_motion_bridge::param_set(c, |n| {

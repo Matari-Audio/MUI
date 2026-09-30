@@ -35,13 +35,13 @@ fn main() {
 }
 
 fn run() -> Result<(), String> {
-    mui::host::headless::claim();
+    mui_motion_bridge::mui::host::headless::claim();
     let mut plugin = plugin::ENTRY::default();
     let params = plugin.params().param_map();
     let executor = AsyncExecutor::new(Arc::new(|_| {}), Arc::new(|_| {}));
     let editor = plugin.editor(executor).ok_or("NAME has no editor")?;
     let window = editor.spawn(ParentWindowHandle::X11Window(0), Arc::new(Host));
-    let view = mui::host::headless::take().ok_or("NAME's editor opened no MUI window")?;
+    let view = mui_motion_bridge::mui::host::headless::take().ok_or("NAME's editor opened no MUI window")?;
     let edit = move |c: &serde_json::Value| {
         // nice-plug parameters have string ids: numbers index them.
         let s = mui_motion_bridge::param_set(c, |n| {

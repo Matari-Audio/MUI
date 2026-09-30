@@ -88,11 +88,15 @@
   <dialog id="plugin-dialog">
     <form method="dialog" id="plugin-form">
       <h2>Add a plugin</h2>
-      <label>Cargo.toml <input id="pl-cargo" placeholder="../Cargo.toml"></label>
-      <label>Example <input id="pl-example" placeholder="synth"></label>
-      <label>Binary <input id="pl-bin" placeholder="bin name, or an adapter path"></label>
-      <label>Name <input id="pl-id" placeholder="synth"></label>
-      <p class="muted">A Cargo.toml with an example (or a bin name), or just a prebuilt adapter executable. Paths are relative to the project.</p>
+      <label>Folder or git URL <input id="pl-from" placeholder="../KORREKT or https://github.com/…"></label>
+      <label>Name <input id="pl-id" placeholder="its package name"></label>
+      <p class="muted">A MUI plugin crate (moose, truce, nice-plug or plain MUI): mui-cut finds its editor and builds it against this MUI. Folders are relative to the project.</p>
+      <details id="pl-advanced">
+        <summary>A Cargo target or an adapter instead</summary>
+        <label>Cargo.toml <input id="pl-cargo" placeholder="../Cargo.toml"></label>
+        <label>Example <input id="pl-example" placeholder="synth"></label>
+        <label>Binary <input id="pl-bin" placeholder="bin name, or an adapter path"></label>
+      </details>
       <p id="pl-error" role="status"></p>
       <div class="row">
         <button id="pl-add" type="button">Add</button>

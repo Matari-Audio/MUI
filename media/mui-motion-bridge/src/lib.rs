@@ -7,6 +7,9 @@ pub use capture::{CaptureStream, capture, capture_frame, discover_parts, discove
 mod editor;
 pub use editor::Editor;
 mod headless;
+/// The MUI this bridge is built on: a generated adapter names it here, so
+/// Cargo loads it as the bridge's path dependency.
+pub use mui;
 pub use headless::{ParamSet, describe, param_set, run_headless};
 use serde_json::{Value, json};
 use std::io::{BufRead, Write};

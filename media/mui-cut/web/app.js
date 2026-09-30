@@ -463,21 +463,32 @@ $('#sources-fold').onclick = () => {
   b.setAttribute('aria-expanded', open); b.textContent = open ? '▾' : '▸';
   $('#sources').hidden = !open;
 };
-// The plugin dialog: a Cargo target (example or bin) or a prebuilt adapter.
+// The plugin dialog: a plugin crate's folder or git URL (detected by the
+// server), or a Cargo target (example or bin), or a prebuilt adapter.
 $('#add-plugin').onclick = () => { $('#pl-error').textContent = ''; $('#plugin-dialog').showModal(); };
 $('#pl-cancel').onclick = () => $('#plugin-dialog').close();
-$('#pl-add').onclick = () => {
-  const v = s => $(s).value.trim(), cargo = v('#pl-cargo'), example = v('#pl-example'), bin = v('#pl-bin');
-  const source = cargo ? (example ? { cargo, example } : { cargo, bin }) : { bin };
-  if (cargo ? !example === !bin : !bin) { $('#pl-error').textContent = 'A Cargo.toml with an example or a bin name, or a binary alone.'; return; }
-  const list = doc.sources ?? [];
-  let id = v('#pl-id') || example || bin.split('/').pop() || 'plugin', n = 2;
-  const base = id;
+function addSource(id, source) {
+  const list = doc.sources ?? [], base = id;
+  let n = 2;
   while (list.some(s => s.id === id)) id = `${base} ${n++}`;
   edit(() => { (doc.sources ??= []).push({ id, kind: 'plugin', source }); });
   unfolded.add(id);
   $('#plugin-dialog').close();
   refreshSources();
+}
+$('#pl-add').onclick = async () => {
+  const v = s => $(s).value.trim(), from = v('#pl-from'), cargo = v('#pl-cargo'), example = v('#pl-example'), bin = v('#pl-bin');
+  const err = t => { $('#pl-error').textContent = t; };
+  if (from) {
+    err('Looking at the plugin…');
+    const r = await fetch('/plugin', { method: 'POST', body: JSON.stringify({ from, id: v('#pl-id') }) });
+    if (!r.ok) return err(await r.text());
+    const { entry } = await r.json();
+    return addSource(entry.id, entry.source);
+  }
+  const source = cargo ? (example ? { cargo, example } : { cargo, bin }) : { bin };
+  if (cargo ? !example === !bin : !bin) return err('A plugin folder or git URL; or a Cargo.toml with an example or a bin name; or a binary alone.');
+  addSource(v('#pl-id') || example || bin.split('/').pop() || 'plugin', source);
 };
 
 // `id` is a layer id, or `layer#part` for a plugin's part: selecting a
