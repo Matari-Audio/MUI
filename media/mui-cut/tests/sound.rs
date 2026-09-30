@@ -176,3 +176,18 @@ fn a_keyed_view_size_reflows_the_ui_and_captures_carry_the_patch() {
     assert_eq!(cutoff["value"], 0.2);
     assert_eq!(a.patch["plugin"], "MUI Synth");
 }
+
+/// A `bin` relative to a project named by a relative path, from another
+/// directory: the adapter still starts (it runs in the project's directory).
+#[test]
+fn a_relative_adapter_path_resolves_from_the_project() {
+    let dir = scratch("sound-relative");
+    std::os::unix::fs::symlink(synth(), dir.join("adapter")).unwrap();
+    std::fs::create_dir(dir.join("sub")).unwrap();
+    let p = json!({"size": [64, 64], "fps": 30.0, "scenes": [{"name": "s", "duration": 0.1,
+        "layers": [{"id": "synth", "kind": "plugin", "source": {"bin": "../adapter"}}]}]});
+    std::fs::write(dir.join("sub/p.cut.json"), p.to_string()).unwrap();
+    let o = Command::new(BIN).current_dir(&dir).args(["capture", "sub/p.cut.json"]).output().unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    assert!(dir.join("sub/.cut-cache").read_dir().unwrap().count() > 1);
+}

@@ -216,7 +216,9 @@ pub fn executable(src: &Source, dir: &Path) -> Result<(PathBuf, String)> {
     let exe = if !src.plugin.is_empty() {
         crate::build::adapter(&src.plugin, dir)?
     } else if src.cargo.is_empty() {
-        dir.join(&src.bin)
+        // Absolute: the adapter starts in `dir`, where a path relative to
+        // mui-cut's own directory means something else.
+        std::path::absolute(dir.join(&src.bin)).map_err(|e| format!("{}: {e}", src.bin))?
     } else {
         let (flag, name) = if src.example.is_empty() {
             ("--bin", &src.bin)

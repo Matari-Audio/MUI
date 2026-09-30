@@ -28,7 +28,7 @@ fn cut_hold(note: u8, on: bool) {
 }
 
 /// `kurv-cut-live [--story NAME] [--scale S]`: the story seeds the patch
-/// (default `showcase`: a routed LFO, a warp, noise and an envelope).
+/// (default `routed`: two LFOs routed, one to an oscillator's level).
 #[expect(clippy::too_many_lines, reason = "one adapter, read top to bottom")]
 pub fn cut_live() -> Result<(), String> {
     use moose::prelude::*;
@@ -41,7 +41,7 @@ pub fn cut_live() -> Result<(), String> {
             .and_then(|i| args.get(i + 1))
             .cloned()
     };
-    let story = arg("--story").unwrap_or_else(|| "showcase".into());
+    let story = arg("--story").unwrap_or_else(|| "routed".into());
     let scale: f64 = arg("--scale").and_then(|s| s.parse().ok()).unwrap_or(1.0);
     let rate = mui_motion_bridge::sample_rate();
 
@@ -72,16 +72,16 @@ pub fn cut_live() -> Result<(), String> {
             match *event {
                 N::On { note, velocity } => {
                     cut_hold(note, true);
-                    events.push(Event::new(0, EventBody::NoteOn { group: 0, channel: 0, note, velocity }));
+                    events.push(Event::new(0, EventBody::NoteOn { group: 0, channel: 1, note, velocity }));
                 }
                 N::Off { note } => {
                     cut_hold(note, false);
-                    events.push(Event::new(0, EventBody::NoteOff { group: 0, channel: 0, note, velocity: 0 }));
+                    events.push(Event::new(0, EventBody::NoteOff { group: 0, channel: 1, note, velocity: 0 }));
                 }
                 N::Panic => {
                     for note in 0..128 {
                         cut_hold(note, false);
-                        events.push(Event::new(0, EventBody::NoteOff { group: 0, channel: 0, note, velocity: 0 }));
+                        events.push(Event::new(0, EventBody::NoteOff { group: 0, channel: 1, note, velocity: 0 }));
                     }
                 }
             }
