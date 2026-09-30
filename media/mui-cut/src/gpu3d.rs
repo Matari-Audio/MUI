@@ -166,7 +166,7 @@ impl Space {
                     )
                 })
                 .collect();
-            canvas.paint(assets, &placed, None, self.atlas, &view)?;
+            canvas.paint_scenes(assets, &placed, None, self.atlas, &view)?;
             self.stage.layer_done("atlas").map_err(|e| e.to_string())?;
             self.painted = Some(key);
         }

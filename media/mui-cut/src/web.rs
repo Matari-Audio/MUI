@@ -5,7 +5,31 @@
 use wasm_bindgen::prelude::*;
 
 use crate::render::Assets;
-use crate::{Engine, GpuCanvas, Project, Renderer, eval};
+use crate::{Engine, GpuCanvas, Project, Renderer, Shutter, eval, subframes};
+
+thread_local! {
+    static PANIC: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
+}
+
+/// The message of the last panic ("" when none): wasm only throws
+/// `unreachable`, and a panicked object refuses every later call.
+#[wasm_bindgen(js_name = lastPanic)]
+pub fn last_panic() -> String {
+    PANIC.with_borrow(Clone::clone)
+}
+
+#[wasm_bindgen(start)]
+fn start() {
+    std::panic::set_hook(Box::new(|info| PANIC.set(info.to_string())));
+}
+
+fn load(json: &str, variant: Option<String>) -> Result<Project, String> {
+    let p = Project::load(json)?;
+    match variant.filter(|v| !v.is_empty()) {
+        Some(v) => p.variant(&v),
+        None => Ok(p),
+    }
+}
 
 #[wasm_bindgen]
 pub struct Cut {
@@ -30,10 +54,19 @@ impl Cut {
             quads: "[]".into(),
         }
     }
-    /// Parse and keep `json`. On error the last good project stays loaded.
-    pub fn load(&mut self, json: &str) -> Result<(), String> {
-        self.project = Some(Project::load(json)?);
+    /// Parse and keep `json`, as `variant` makes it if one is named. On
+    /// error the last good project stays loaded.
+    pub fn load(&mut self, json: &str, variant: Option<String>) -> Result<(), String> {
+        self.project = Some(load(json, variant)?);
         Ok(())
+    }
+    /// The project as loaded, every binding resolved: the size, fps and
+    /// durations the editor lays out with.
+    pub fn resolved(&self) -> String {
+        self.project
+            .as_ref()
+            .and_then(|p| serde_json::to_string(p).ok())
+            .unwrap_or_default()
     }
     /// The project as a save writes it.
     pub fn canonical(&self) -> String {
@@ -69,6 +102,11 @@ impl Cut {
             }
             _ => String::new(),
         }
+    }
+    /// The effect schema as JSON: `[{name, about, passes, params: [{name,
+    /// default, min?, max?}]}]`, a string default being a colour.
+    pub fn effects() -> String {
+        serde_json::to_string(crate::fx::EFFECTS).unwrap_or_default()
     }
     /// JSON `[{id, pts: [[x, y] x4]}]` from the last render.
     pub fn quads(&self) -> String {
@@ -150,6 +188,8 @@ pub struct GpuView {
     adapter: String,
     /// The orbit preview's yaw, pitch and zoom; never saved.
     orbit: Option<[f64; 3]>,
+    /// For exports with motion blur, made on the first one.
+    shutter: Option<Shutter>,
 }
 
 #[wasm_bindgen]
@@ -222,6 +262,7 @@ impl GpuView {
             assets: Assets::default(),
             adapter: adapter.get_info().name,
             orbit: None,
+            shutter: None,
         })
     }
     /// `classic` or `vello_gpu`.
@@ -231,8 +272,8 @@ impl GpuView {
     pub fn adapter(&self) -> String {
         self.adapter.clone()
     }
-    pub fn load(&mut self, json: &str) -> Result<(), String> {
-        self.project = Some(Project::load(json)?);
+    pub fn load(&mut self, json: &str, variant: Option<String>) -> Result<(), String> {
+        self.project = Some(load(json, variant)?);
         Ok(())
     }
     /// Why the last frame drew differently from the export, or empty.
@@ -250,6 +291,39 @@ impl GpuView {
     }
     pub fn add_asset(&mut self, path: &str, bytes: &[u8]) -> Result<(), String> {
         self.assets.add_asset(path, bytes)
+    }
+    /// An export frame: scene `scene`'s output frame at `t`, `mb` subframes
+    /// averaged by the shutter (as `mui-cut render --mb`), presented at the
+    /// canvas's size for a `VideoFrame` to take.
+    pub fn draw_frame(&mut self, scene: usize, t: f64, mb: usize) -> Result<(), String> {
+        use wgpu::CurrentSurfaceTexture as Acquired;
+        let p = self.project.as_ref().ok_or("no project loaded")?;
+        let s = p.scenes.get(scene).ok_or("no such scene")?;
+        let size = [self.config.width, self.config.height];
+        if self.canvas.size() != size {
+            self.canvas.resize(size)?;
+        }
+        if self.shutter.as_ref().is_none_or(|sh| sh.size() != size) {
+            let f = self.config.format;
+            self.shutter = Some(Shutter::new(&self.canvas.device, size, f, f));
+        }
+        let shutter = self.shutter.as_ref().expect("made above");
+        shutter.expose(&mut self.canvas, &self.assets, &subframes(p, s, t, mb))?;
+        let frame = match self.surface.get_current_texture() {
+            Acquired::Success(f) | Acquired::Suboptimal(f) => f,
+            other => return Err(format!("no canvas texture: {other:?}")),
+        };
+        let view = frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let mut enc = self
+            .canvas
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        shutter.resolve(&mut enc, &view);
+        self.canvas.queue.submit([enc.finish()]);
+        self.canvas.queue.present(frame);
+        Ok(())
     }
     /// Scene `scene` at `t` presented at `w` by `h`; the layers' quads as
     /// JSON `[{id, pts}]` in project pixels.

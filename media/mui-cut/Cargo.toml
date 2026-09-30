@@ -73,6 +73,8 @@ wgpu = { workspace = true, features = ["default"] }
 [dev-dependencies]
 # Checks the generated schema accepts the examples (no network resolving).
 jsonschema = { version = "0.58", default-features = false }
+# The effects' WGSL, checked for WebGL2's uniform layout rules.
+naga = { version = "30", features = ["wgsl-in"] }
 serde_json.workspace = true
 png.workspace = true
 

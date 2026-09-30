@@ -1319,6 +1319,7 @@ dependencies = [
  "mui-stage",
  "mui-text",
  "mui-vello",
+ "naga 30.0.1",
  "noise",
  "png",
  "pollster",

@@ -16,6 +16,8 @@
     <span id="notice" class="muted" hidden></span>
     <button id="orbit" title="Orbit preview: drag to swing the camera, wheel to zoom; not saved" aria-pressed="false" hidden>Orbit</button>
     <span id="backend" class="muted mono" title="Viewport renderer"></span>
+    <select id="variant" aria-label="Variant to preview" title="Variant to preview" hidden></select>
+    <button id="export" title="Render the project to an MP4 in the browser">Export</button>
     <button id="undo" title="Undo (Ctrl+Z)">Undo</button>
     <button id="redo" title="Redo (Ctrl+Shift+Z)">Redo</button>
   </header>
@@ -24,7 +26,7 @@
     <div id="scenes" class="list"></div>
     <h2>Layers
       <span>
-        <button data-add="rect" title="Add a rectangle">▭</button><button data-add="ellipse" title="Add an ellipse">◯</button><button data-add="text" title="Add text">T</button><button data-add="path" title="Add a path">〰</button><button data-add="duplicator" title="Add a duplicator">⁂</button><button data-add="camera" title="Add a camera (3D scenes)">⌖</button><button data-add="light" title="Add a light (3D scenes)">☀</button><button data-add="model" title="Add a glTF model (3D scenes)">◈</button>
+        <button data-add="rect" title="Add a rectangle">▭</button><button data-add="ellipse" title="Add an ellipse">◯</button><button data-add="text" title="Add text">T</button><button data-add="path" title="Add a path">〰</button><button data-add="duplicator" title="Add a duplicator">⁂</button><button data-add="camera" title="Add a camera (3D scenes)">⌖</button><button data-add="light" title="Add a light (3D scenes)">☀</button><button data-add="model" title="Add a glTF model (3D scenes)">◈</button><button data-add="shader" title="Add a shader layer (a plasma generator)">✦</button>
       </span>
     </h2>
     <div id="layers" class="list"></div>
@@ -61,6 +63,21 @@
     </div>
     <canvas id="graph"></canvas>
   </section>
+  <dialog id="export-dialog">
+    <form method="dialog" id="export-form">
+      <h2>Export MP4</h2>
+      <label>Codec <select id="ex-codec"></select></label>
+      <label>Bitrate (Mbit/s) <input id="ex-bitrate" type="number" min="0.5" max="200" step="0.5"></label>
+      <label>Motion blur samples <input id="ex-mb" type="number" min="1" max="64" step="1" value="1"></label>
+      <p id="ex-note" class="muted"></p>
+      <progress id="ex-progress" max="1" value="0" hidden></progress>
+      <p id="ex-status" role="status" aria-live="polite"></p>
+      <div class="row">
+        <button id="ex-start" value="" type="button">Render</button>
+        <button id="ex-cancel" type="button">Close</button>
+      </div>
+    </form>
+  </dialog>
   <script type="module" src="app.js"></script>
 </body>
 </html>

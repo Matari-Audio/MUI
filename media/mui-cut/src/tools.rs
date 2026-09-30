@@ -143,6 +143,9 @@ fn headed(
         background: mui_cut::Rgba([0, 0, 0, 255]),
         layers: caption(l, f64::from(size[0]), scale).into(),
         view: None,
+        effects: Vec::new(),
+        t: 0.,
+        seed: 0,
     }));
     let mut heads = draw_all(b, &batch)?;
     let tiles: Vec<Vec<u8>> = heads.drain(..frames.len()).chain(tiles).collect();
@@ -249,7 +252,7 @@ pub fn sheet(path: &Path, o: &SheetOpts) -> Result<Picture> {
         return Err("no frames to show".into());
     }
     let (frames, labels): (Vec<Frame>, Vec<String>) = thin(shots, 64).into_iter().unzip();
-    let mut b = Backend::open_at(&p, path, o.renderer.as_deref(), (tw, th), usize::MAX)?;
+    let mut b = Backend::open_at(&p, path, o.renderer.as_deref(), (tw, th), usize::MAX, None)?;
     let tiles = headed(&mut b, p.size, &frames, Vec::new(), &labels, tw.into())?;
     let (px, w, h) = compose(&tiles, (tw.into(), u32::from(th) + HEAD), cols);
     Ok(Picture {
@@ -358,7 +361,7 @@ pub fn strip(
     );
     layers.extend(caption(&label, f64::from(p.size[0]), scale));
     f.layers = layers;
-    let mut b = Backend::open_at(&p, path, renderer, (tw, th), 1)?;
+    let mut b = Backend::open_at(&p, path, renderer, (tw, th), 1, None)?;
     let px = draw_all(&mut b, std::slice::from_ref(&f))?
         .pop()
         .ok_or("no frame came back")?;
@@ -441,11 +444,11 @@ pub fn diff(
         ));
     }
     let pa = draw_all(
-        &mut Backend::open_at(&a, a_path, renderer, (tw, th), usize::MAX)?,
+        &mut Backend::open_at(&a, a_path, renderer, (tw, th), usize::MAX, None)?,
         &fa,
     )?;
     let pb = draw_all(
-        &mut Backend::open_at(&b, b_path, renderer, (tw, th), usize::MAX)?,
+        &mut Backend::open_at(&b, b_path, renderer, (tw, th), usize::MAX, None)?,
         &fb,
     )?;
     let mut changed: Vec<(usize, f64, Vec<u8>)> = pa
@@ -490,7 +493,7 @@ pub fn diff(
         ]);
     }
     let tiles = headed(
-        &mut Backend::open_at(&a, a_path, renderer, (tw, th), usize::MAX)?,
+        &mut Backend::open_at(&a, a_path, renderer, (tw, th), usize::MAX, None)?,
         a.size,
         &[],
         tiles,

@@ -538,7 +538,7 @@ impl Server {
                     .max(2)
                     & !1;
                 let (w, h) = (w as u16, h.min(4096) as u16);
-                let mut b = Backend::open_at(&p, &path, a.renderer.as_deref(), (w, h), 1)?;
+                let mut b = Backend::open_at(&p, &path, a.renderer.as_deref(), (w, h), 1, None)?;
                 let px = tools::draw_all(&mut b, &[eval(&p, s, a.t)])?
                     .pop()
                     .ok_or("no frame came back")?;

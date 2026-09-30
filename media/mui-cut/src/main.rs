@@ -2,13 +2,16 @@
 //!
 //!     mui-cut render demo.cut.json -o out.mp4 [--scene NAME] [--mb N] [--size WxH] [--renderer R]
 //!     mui-cut still  demo.cut.json --t 1.5 -o f.png [--scene NAME] [--size WxH] [--renderer R]
+//!     mui-cut render promo.cut.json -o out/{name}.mp4 --variants all
 //!     mui-cut eval   demo.cut.json --t 1.5 [--scene NAME]
 //!     mui-cut fmt    demo.cut.json
 //!     mui-cut serve  demo.cut.json [--port 8740] [--web DIR]
 #![forbid(unsafe_code)]
 
+mod encode;
 mod mcp;
 mod script;
+mod segments;
 mod serve;
 mod tools;
 
@@ -16,17 +19,23 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use mui_cut::{Assets, CpuPool, Engine, Frame, Offline, Project, Scene, eval};
+use mui_cut::yuv::{self, Yuv};
+use mui_cut::{Assets, CpuPool, Engine, Frame, Offline, Project, Render, Scene, eval, subframes};
 
 type Result<T> = std::result::Result<T, String>;
 
 const USAGE: &str = "usage:
   mui-cut render PROJECT -o OUT.mp4|null [--scene NAME] [--mb N] [--size WxH] [--renderer R] [--threads N] [--stats]
-  mui-cut still  PROJECT --t SECONDS -o OUT.png [--scene NAME] [--size WxH] [--renderer R]
+                 [--codec h264|h265|av1] [--encoder auto|vaapi|software]
+                 [--crf N | --bitrate 12M [--maxrate 20M]] [--preset P]
+                 [--pix-fmt yuv420p|yuv420p10le] [--container mp4|mkv|mov]
+                 [--variant NAME | --variants all|NAME,NAME -o out/{name}.mp4]
+                 [--segment SECONDS] [--range 3.2s-5.0s]   (the segment cache)
+  mui-cut still  PROJECT --t SECONDS -o OUT.png [--scene NAME] [--size WxH] [--renderer R] [--variant NAME]
     R: classic (default; Vello compute on the GPU), gpu (vello_gpu), cpu (Vello CPU);
     --cpu is --renderer cpu. --threads: CPU frames drawn at once (default: one per core).
     --stats: per-frame wall time (evaluate, draw, hand to ffmpeg) p50/p95/max
-  mui-cut eval   PROJECT --t SECONDS [--scene NAME]
+  mui-cut eval   PROJECT --t SECONDS [--scene NAME] [--variant NAME]
   mui-cut fmt    PROJECT
   mui-cut schema                                   # the project JSON Schema
   mui-cut mcp    [PROJECT]                         # MCP server on stdio
@@ -114,7 +123,7 @@ fn run(argv: &[String]) -> Result<()> {
         "strip" => tools::strip_cmd(&args),
         "diff" => tools::diff_cmd(&args),
         "eval" => {
-            let p = load(&args.project)?;
+            let p = load_variant(&args)?;
             let s = scene(&p, &args)?;
             let f = eval(&p, s, args.num("t", 0.)?);
             println!(
@@ -142,6 +151,15 @@ fn run(argv: &[String]) -> Result<()> {
 fn load(path: &Path) -> Result<Project> {
     let src = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
     Project::load(&src).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// The project, as `--variant` makes it.
+fn load_variant(args: &Args) -> Result<Project> {
+    let p = load(&args.project)?;
+    match args.get("variant") {
+        Some(v) => p.variant(v),
+        None => Ok(p),
+    }
 }
 
 /// Write through a sibling temp file, so a reader never sees half a project.
@@ -205,16 +223,24 @@ fn load_assets(p: &Project, project: &Path, assets: &mut Assets) -> Vec<String> 
 
 /// Where frames are drawn: a Vello engine on the GPU (classic by default),
 /// or Vello CPU with `--renderer cpu` or when no GPU adapter opens.
+/// Frames come back as straight RGBA, or as `Yuv` planes for an encoder.
 enum Backend {
-    Cpu(CpuPool),
+    /// With the planes an encoder wants, and the frame size.
+    Cpu(CpuPool, Option<(Yuv, [u32; 2])>),
     Gpu(Box<Offline>),
 }
 
 impl Backend {
     /// `workers` CPU frames at once; a lone frame rasterises on every core
     /// instead.
-    fn open(p: &Project, args: &Args, size: (u16, u16), workers: usize) -> Result<Self> {
-        Self::open_at(p, &args.project, renderer(args), size, workers)
+    fn open(
+        p: &Project,
+        args: &Args,
+        size: (u16, u16),
+        workers: usize,
+        yuv: Option<Yuv>,
+    ) -> Result<Self> {
+        Self::open_at(p, &args.project, renderer(args), size, workers, yuv)
     }
     /// [`Backend::open`] without the command line: `renderer` is
     /// `classic` (the default), `gpu` or `cpu`.
@@ -224,20 +250,22 @@ impl Backend {
         renderer: Option<&str>,
         (w, h): (u16, u16),
         workers: usize,
+        yuv: Option<Yuv>,
     ) -> Result<Self> {
-        let cores = std::thread::available_parallelism().map_or(1, usize::from);
         let engine = match renderer {
             None | Some("classic") => Some(Engine::Classic),
             Some("gpu") => Some(Engine::Sparse),
             Some("cpu") => None,
             Some(r) => return Err(format!("--renderer: `{r}` is not classic, gpu or cpu")),
         };
-        let mut assets = Assets::default();
-        for e in load_assets(p, project, &mut assets) {
-            eprintln!("mui-cut: {e} (an image draws as its fill, the rest as nothing)");
-        }
+        let assets = read_assets(p, project);
         if let Some(engine) = engine {
-            match Offline::new([w.into(), h.into()], engine) {
+            let size = [w.into(), h.into()];
+            let gpu = match yuv {
+                Some(y) => Offline::with_yuv(size, engine, y),
+                None => Offline::new(size, engine),
+            };
+            match gpu {
                 Ok(mut g) => {
                     g.assets = assets;
                     return Ok(Self::Gpu(Box::new(g)));
@@ -245,17 +273,53 @@ impl Backend {
                 Err(e) => eprintln!("mui-cut: GPU unavailable ({e}); rendering on the CPU"),
             }
         }
+        Ok(Self::cpu(p, (w, h), workers, yuv, &assets))
+    }
+    /// `workers` Vello CPU renderers.
+    fn cpu(
+        p: &Project,
+        (w, h): (u16, u16),
+        workers: usize,
+        yuv: Option<Yuv>,
+        assets: &Assets,
+    ) -> Self {
         if p.scenes.iter().any(|s| s.mode == mui_cut::Mode::ThreeD) {
             eprintln!("mui-cut: the CPU renderer has no 3D pass; 3D scenes draw flat");
         }
+        if p.has_effects() {
+            eprintln!("mui-cut: effects need the GPU; the CPU renderer draws without them");
+        }
+        let cores = std::thread::available_parallelism().map_or(1, usize::from);
         let workers = workers.clamp(1, cores);
         let threads = if workers == 1 { cores - 1 } else { 0 };
         let threads = u16::try_from(threads).unwrap_or(u16::MAX);
-        Ok(Self::Cpu(CpuPool::new(w, h, workers, threads, &assets)))
+        Self::Cpu(
+            CpuPool::new(w, h, workers, threads, assets),
+            yuv.map(|y| (y, [w.into(), h.into()])),
+        )
+    }
+    /// The next variant: its size and assets, on the same GPU device (or a
+    /// fresh CPU pool). Nothing may be in flight.
+    fn retarget(
+        &mut self,
+        p: &Project,
+        args: &Args,
+        (w, h): (u16, u16),
+        yuv: Option<Yuv>,
+    ) -> Result<()> {
+        let assets = read_assets(p, &args.project);
+        match self {
+            Self::Gpu(g) => {
+                g.resize([w.into(), h.into()], yuv)?;
+                g.assets = assets;
+            }
+            Self::Cpu(..) => *self = Self::cpu(p, (w, h), threads(args)?, yuv, &assets),
+        }
+        Ok(())
     }
     fn name(&self) -> String {
         match self {
-            Self::Cpu(_) => "cpu (vello_cpu)".into(),
+            Self::Cpu(..) => "cpu (vello_cpu)".into(),
             Self::Gpu(g) => format!("gpu ({})", g.adapter),
         }
     }
@@ -264,23 +328,52 @@ impl Backend {
     fn push(&mut self, subs: Vec<Frame>) -> Result<Option<Vec<u8>>> {
         match self {
             Self::Gpu(g) => g.push(&subs),
-            Self::Cpu(pool) => pool.push(subs),
+            Self::Cpu(pool, yuv) => Ok(pool.push(subs)?.map(|px| to_yuv(px, *yuv))),
         }
     }
     fn finish(&mut self) -> Result<Vec<Vec<u8>>> {
         match self {
             Self::Gpu(g) => g.finish(),
-            Self::Cpu(pool) => pool.finish(),
+            Self::Cpu(pool, yuv) => {
+                let yuv = *yuv;
+                let px = pool.finish()?;
+                Ok(px.into_iter().map(|px| to_yuv(px, yuv)).collect())
+            }
         }
     }
 }
 
+/// [`load_assets`], saying what failed.
+fn read_assets(p: &Project, project: &Path) -> Assets {
+    let mut assets = Assets::default();
+    for e in load_assets(p, project, &mut assets) {
+        eprintln!("mui-cut: {e} (an image draws as its fill, the rest as nothing)");
+    }
+    assets
+}
+
+/// `--threads`: CPU frames drawn at once, one per core by default.
+fn threads(args: &Args) -> Result<usize> {
+    args.num(
+        "threads",
+        std::thread::available_parallelism().map_or(1, usize::from),
+    )
+}
+
+/// A CPU frame as `yuv` planes, if an encoder wants them.
+fn to_yuv(rgba: Vec<u8>, yuv: Option<(Yuv, [u32; 2])>) -> Vec<u8> {
+    match yuv {
+        Some((y, size)) => yuv::from_rgba(&rgba, size, y),
+        None => rgba,
+    }
+}
+
 fn still(args: &Args) -> Result<()> {
-    let p = load(&args.project)?;
+    let p = load_variant(args)?;
     let s = scene(&p, args)?;
     let out = args.get("o").ok_or("still needs -o OUT.png")?;
     let (w, h) = size(&p, args)?;
-    let mut b = Backend::open(&p, args, (w, h), 1)?;
+    let mut b = Backend::open(&p, args, (w, h), 1, None)?;
     let f = eval(&p, s, args.num("t", 0.)?);
     let px = match b.push(vec![f])? {
         Some(px) => px,
@@ -296,92 +389,160 @@ fn still(args: &Args) -> Result<()> {
     Ok(())
 }
 
-/// The fraction of a frame the shutter is open: 180 degrees.
-const SHUTTER: f64 = 0.5;
+/// Encoder settings from the flags, over the project's `render`.
+fn settings(p: &Project, args: &Args) -> Result<Render> {
+    let s = |k: &str| args.get(k).map(str::to_owned);
+    let flags = Render {
+        codec: s("codec"),
+        encoder: s("encoder"),
+        crf: args.get("crf").map(|_| args.num("crf", 0)).transpose()?,
+        bitrate: s("bitrate"),
+        maxrate: s("maxrate"),
+        preset: s("preset"),
+        pix_fmt: s("pix-fmt"),
+        container: s("container"),
+        mb: args.get("mb").map(|_| args.num("mb", 1)).transpose()?,
+    };
+    let mut r = p.render.clone().unwrap_or_default().with(&flags);
+    // A bitrate flag replaces a CRF from the file, and the other way round.
+    if flags.bitrate.is_some() && flags.crf.is_none() {
+        r.crf = None;
+    }
+    if flags.crf.is_some() && flags.bitrate.is_none() {
+        r.bitrate = None;
+    }
+    r.check()?;
+    Ok(r)
+}
 
+/// `--variants all|a,b` renders each variant to `-o` with `{name}` filled
+/// in, on one GPU device; else one render, of `--variant` if given.
 fn render(args: &Args) -> Result<()> {
-    let p = load(&args.project)?;
     let out = args.get("o").ok_or("render needs -o OUT.mp4")?;
+    let Some(list) = args.get("variants") else {
+        return render_one(
+            &load_variant(args)?,
+            args,
+            out,
+            args.get("variant"),
+            &mut None,
+        );
+    };
+    let base = load(&args.project)?;
+    let names: Vec<&str> = match list {
+        "all" => base.variants.iter().map(|v| v.name.as_str()).collect(),
+        l => l.split(',').map(str::trim).collect(),
+    };
+    if names.is_empty() {
+        return Err("the project has no variants".into());
+    }
+    if names.len() > 1 && !out.contains("{name}") {
+        return Err("several variants need `{name}` in -o, e.g. out/{name}.mp4".into());
+    }
+    let mut b = None;
+    for n in names {
+        let p = base.variant(n)?;
+        let path = out.replace("{name}", n);
+        if let Some(dir) = Path::new(&path)
+            .parent()
+            .filter(|d| !d.as_os_str().is_empty())
+        {
+            std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        }
+        render_one(&p, args, &path, Some(n), &mut b)?;
+    }
+    Ok(())
+}
+
+/// Render `p` to `out`, on `backend` if one is open (else it opens one).
+/// `--segment S` (or `--range`) renders through the segment cache.
+fn render_one(
+    p: &Project,
+    args: &Args,
+    out: &str,
+    variant: Option<&str>,
+    backend: &mut Option<Backend>,
+) -> Result<()> {
     let scenes: Vec<&Scene> = match args.get("scene") {
-        Some(_) => vec![scene(&p, args)?],
+        Some(_) => vec![scene(p, args)?],
         None => p.scenes.iter().collect(),
     };
-    let (w, h) = size(&p, args)?;
-    let mb: usize = args.num("mb", 1)?;
-    let mb = mb.clamp(1, 64);
-    let cores = std::thread::available_parallelism().map_or(1, usize::from);
-    let mut b = Backend::open(&p, args, (w, h), args.num("threads", cores)?)?;
-    let mut ff = Command::new("ffmpeg");
-    ff.args([
-        "-y",
-        "-loglevel",
-        "error",
-        "-f",
-        "rawvideo",
-        "-pix_fmt",
-        "rgba",
-    ])
-    .args([
-        "-s",
-        &format!("{w}x{h}"),
-        "-r",
-        &p.fps.to_string(),
-        "-i",
-        "-",
-    ]);
-    // `-o null` renders and discards: the renderer's speed without x264's.
-    if out == "null" {
-        ff.args(["-f", "null", "-"]);
+    let (w, h) = size(p, args)?;
+    let r = settings(p, args)?;
+    let mb = r.mb.unwrap_or(1).clamp(1, 64);
+    // `-o null` renders and discards: the renderer's speed without an encoder's.
+    let plan = if out == "null" {
+        None
     } else {
-        ff.args(["-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "16"])
-            .args(["-movflags", "+faststart", out]);
-    }
-    let mut ff = ff
-        .stdin(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("ffmpeg: {e} (is it on PATH?)"))?;
-    let stdin = ff.stdin.as_mut().ok_or("ffmpeg stdin")?;
-    let mut write = |px: &[u8]| {
-        stdin
-            .write_all(px)
-            .map_err(|e| format!("ffmpeg stdin: {e}"))
+        Some(encode::plan(&r, out)?)
+    };
+    let yuv = plan.as_ref().map_or(Yuv::Nv12, |p| p.yuv);
+    let b = match backend {
+        Some(b) => {
+            b.retarget(p, args, (w, h), Some(yuv))?;
+            b
+        }
+        None => backend.insert(Backend::open(p, args, (w, h), threads(args)?, Some(yuv))?),
+    };
+    // Every output frame, scenes back to back.
+    let jobs: Vec<(&Scene, f64)> = scenes
+        .iter()
+        .flat_map(|s| {
+            let n = (s.duration * p.fps).round().max(1.) as usize;
+            (0..n).map(move |i| (*s, i as f64 / p.fps))
+        })
+        .collect();
+    let segment = match args.get("segment") {
+        Some(_) => Some(args.num("segment", 1.)?),
+        None => args.has("range").then_some(1.),
     };
     let start = std::time::Instant::now();
-    let mut frames = 0usize;
-    // Wall time per loop pass: a stall anywhere (a readback, a full pipe)
-    // shows up as a tail.
+    // Wall time per drawn frame: a stall anywhere (a readback, a full pipe)
+    // shows up as a tail. Cache hits draw nothing and add none.
     let mut times = Vec::new();
-    for s in scenes {
-        let n = (s.duration * p.fps).round().max(1.) as usize;
-        for i in 0..n {
-            let pass = std::time::Instant::now();
-            let t = i as f64 / p.fps;
-            let subs: Vec<Frame> = (0..mb)
-                .map(|k| eval(&p, s, t + SHUTTER / p.fps * k as f64 / mb as f64))
-                .collect();
-            if let Some(px) = b.push(subs)? {
-                write(&px)?;
-            }
-            frames += 1;
-            times.push(pass.elapsed().as_secs_f64() * 1e3);
+    let cache = match (segment, &plan) {
+        (Some(_), None) => return Err("--segment and --range need a file, not null".into()),
+        (Some(seg), Some(plan)) => {
+            let cut = Cut {
+                p,
+                args,
+                variant,
+                plan,
+                size: (w, h),
+                mb,
+            };
+            cut.render(b, &jobs, seg, out, &mut times)?
         }
-    }
-    for px in b.finish()? {
-        write(&px)?;
-    }
-    drop(ff.stdin.take());
-    let ok = ff.wait().map_err(|e| e.to_string())?.success();
-    if !ok {
-        return Err(format!("ffmpeg failed writing {out}"));
-    }
+        (None, _) => {
+            let mut a: Vec<String> = match &plan {
+                Some(plan) => plan.input((w, h), p.fps),
+                None => ["-f", "rawvideo", "-pix_fmt", yuv.pix_fmt(), "-s"]
+                    .map(String::from)
+                    .into_iter()
+                    .chain([format!("{w}x{h}"), "-r".into(), p.fps.to_string()])
+                    .chain(["-i", "-"].map(String::from))
+                    .collect(),
+            };
+            match &plan {
+                Some(plan) => a.extend(plan.output().into_iter().chain([out.to_owned()])),
+                None => a.extend(["-f", "null", "-"].map(String::from)),
+            }
+            let frames = jobs.iter().map(|(s, t)| subframes(p, s, *t, mb));
+            encode(b, frames, &a, out, &mut times)?;
+            String::new()
+        }
+    };
     let secs = start.elapsed().as_secs_f64();
+    let frames = jobs.len();
     println!(
-        "wrote {out}: {frames} frames, {w}x{h} at {} fps, mb {mb}, {} in {secs:.2} s = {:.1} frames/s",
+        "wrote {out}: {frames} frames, {w}x{h} at {} fps, mb {mb}, {}, {}{cache} in {secs:.2} s = {:.1} frames/s",
         p.fps,
         b.name(),
+        plan.as_ref()
+            .map_or_else(|| "no encoder".into(), encode::Plan::describe),
         frames as f64 / secs
     );
-    if args.has("stats") {
+    if args.has("stats") && !times.is_empty() {
         let mut slow: Vec<(usize, f64)> = times.iter().copied().enumerate().collect();
         slow.sort_by(|a, b| b.1.total_cmp(&a.1));
         let q = |f: f64| slow[((slow.len() - 1) as f64 * (1. - f)) as usize].1;
@@ -399,4 +560,147 @@ fn render(args: &Args) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// ffmpeg with `args`, quiet.
+fn ffmpeg(args: &[String]) -> Command {
+    let mut ff = Command::new("ffmpeg");
+    // SVT-AV1 prints its banner through its own logger.
+    ff.env("SVT_LOG", "1")
+        .args(["-y", "-loglevel", "error"])
+        .args(args);
+    ff
+}
+
+/// Draw `frames` (each its subframes) on `b` into an ffmpeg reading raw
+/// frames with `args`, and wait for it to finish writing `out`.
+fn encode(
+    b: &mut Backend,
+    frames: impl IntoIterator<Item = Vec<Frame>>,
+    args: &[String],
+    out: &str,
+    times: &mut Vec<f64>,
+) -> Result<()> {
+    let mut ff = ffmpeg(args)
+        .stdin(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("ffmpeg: {e} (is it on PATH?)"))?;
+    let stdin = ff.stdin.as_mut().ok_or("ffmpeg stdin")?;
+    let mut write = |px: &[u8]| {
+        stdin
+            .write_all(px)
+            .map_err(|e| format!("ffmpeg stdin: {e}"))
+    };
+    // Timed from before `next()`: a lazy `frames` evaluates in there.
+    let mut frames = frames.into_iter();
+    loop {
+        let pass = std::time::Instant::now();
+        let Some(subs) = frames.next() else { break };
+        if let Some(px) = b.push(subs)? {
+            write(&px)?;
+        }
+        times.push(pass.elapsed().as_secs_f64() * 1e3);
+    }
+    for px in b.finish()? {
+        write(&px)?;
+    }
+    drop(ff.stdin.take());
+    if ff.wait().map_err(|e| e.to_string())?.success() {
+        Ok(())
+    } else {
+        Err(format!("ffmpeg failed writing {out}"))
+    }
+}
+
+/// One render through the segment cache.
+struct Cut<'a> {
+    p: &'a Project,
+    args: &'a Args,
+    variant: Option<&'a str>,
+    plan: &'a encode::Plan,
+    size: (u16, u16),
+    mb: usize,
+}
+
+impl Cut<'_> {
+    /// Encode the spans of `seg` seconds not in the cache (or in
+    /// `--range`), then splice every chunk into `out`. Says what it reused.
+    fn render(
+        &self,
+        b: &mut Backend,
+        jobs: &[(&Scene, f64)],
+        seg: f64,
+        out: &str,
+        times: &mut Vec<f64>,
+    ) -> Result<String> {
+        let (p, plan) = (self.p, self.plan);
+        if !(seg.is_finite() && seg > 0.) {
+            return Err("--segment must be > 0 seconds".into());
+        }
+        let n = ((seg * p.fps).round() as usize).max(1);
+        let force = self.args.get("range").map(segments::range).transpose()?;
+        let dir = segments::dir(&self.args.project, self.variant);
+        std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        let input = plan.input(self.size, p.fps);
+        let output = plan.output();
+        let base = segments::base_key(
+            p,
+            &self.args.project,
+            &format!(
+                "{}|{:?}|{}|{input:?}|{output:?}",
+                b.name(),
+                self.size,
+                self.mb
+            ),
+        );
+        let ext = plan.container;
+        let (mut hits, mut misses) = (0, 0);
+        let mut chunks = Vec::new();
+        for (k, span) in jobs.chunks(n).enumerate() {
+            let frames: Vec<Vec<Frame>> = span
+                .iter()
+                .map(|(s, t)| subframes(p, s, *t, self.mb))
+                .collect();
+            let name = format!("{}.{ext}", segments::span_key(&base, &frames));
+            let path = dir.join(&name);
+            let (t0, t1) = ((k * n) as f64 / p.fps, (k * n + span.len()) as f64 / p.fps);
+            let forced = force.is_some_and(|(a, z)| a < t1 && t0 < z.max(a + 1e-9));
+            if path.exists() && !forced {
+                hits += 1;
+            } else {
+                let tmp = dir.join(format!("{}.part.{ext}", std::process::id()));
+                let tmp_s = tmp.display().to_string();
+                let args: Vec<String> = input
+                    .iter()
+                    .chain(&output)
+                    .cloned()
+                    .chain([tmp_s.clone()])
+                    .collect();
+                encode(b, frames, &args, &tmp_s, times)?;
+                std::fs::rename(&tmp, &path).map_err(|e| format!("{}: {e}", path.display()))?;
+                misses += 1;
+            }
+            chunks.push(PathBuf::from(name));
+        }
+        // Chunk names in the list resolve against the list's own directory.
+        let list = dir.join(format!("concat-{}.txt", std::process::id()));
+        std::fs::write(&list, segments::list(&chunks))
+            .map_err(|e| format!("{}: {e}", list.display()))?;
+        let args: Vec<String> = ["-f", "concat", "-safe", "0", "-i"]
+            .map(String::from)
+            .into_iter()
+            .chain([list.display().to_string()])
+            .chain(["-c", "copy"].map(String::from))
+            .chain(plan.mux())
+            .chain([out.to_owned()])
+            .collect();
+        let ok = ffmpeg(&args).status().map_err(|e| format!("ffmpeg: {e}"))?;
+        let _ = std::fs::remove_file(&list);
+        if !ok.success() {
+            return Err(format!("ffmpeg failed splicing {out}"));
+        }
+        Ok(format!(
+            ", segments of {n} frames: {misses} rendered, {hits} cached"
+        ))
+    }
 }

@@ -599,3 +599,465 @@ fn svg_and_lottie_layers_draw_their_files() {
     assert!(r.add_asset("bad.json", b"{").is_err());
     assert!(r.add_asset("bad.svg", b"<nope").is_err());
 }
+
+const FX: &str = include_str!("../examples/effects.cut.json");
+
+#[test]
+fn effects_load_default_clamp_and_round_trip() {
+    let p = Project::load(FX).unwrap();
+    assert_eq!(p.to_json(), FX);
+    assert!(p.has_effects() && !Project::load(DEMO).unwrap().has_effects());
+    let s = p.scene("broadcast").unwrap();
+    let f = eval(&p, s, 0.75);
+    let card = f.layers.iter().find(|l| l.id == "card").unwrap();
+    // A keyed parameter evaluates like any property.
+    assert_eq!(card.effects[0].values["radius"], fx::Val::Num(7.));
+    // Left-out parameters are the schema's defaults.
+    assert_eq!(f.effects[2].values["size"], fx::Val::Num(1.5));
+    assert_eq!(f.seed, 22, "0.75 s at 30 fps is frame 22");
+    // Subframes of one output frame share the seed.
+    assert_eq!(eval(&p, s, 22. / 30. + 0.5 / 30. * 0.99).seed, 22);
+    let clamped = Project::load(
+        r#"{"size":[64,64],"fps":30,"scenes":[{"name":"a","duration":1,"effects":[{"type":"blur","radius":1000}]}]}"#,
+    )
+    .unwrap();
+    let f = eval(&clamped, &clamped.scenes[0], 0.);
+    assert_eq!(f.effects[0].values["radius"], fx::Val::Num(64.));
+    for bad in [
+        r#"{"type":"sparkle"}"#,
+        r##"{"type":"blur","radius":"#ff0000"}"##,
+        r#"{"type":"blur","sigma":2}"#,
+        r#"{"type":"levels","tint":3}"#,
+        r#"{"type":"blur","radius":[]}"#,
+    ] {
+        let json = format!(
+            r#"{{"size":[64,64],"fps":30,"scenes":[{{"name":"a","duration":1,"layers":[{{"id":"r","kind":"rect","effects":[{bad}]}}]}}]}}"#
+        );
+        assert!(Project::load(&json).is_err(), "accepted {bad}");
+    }
+    // Every shader's Params can be packed: colours first, then numbers.
+    for d in fx::EFFECTS {
+        let first_num = d
+            .params
+            .iter()
+            .position(|p| matches!(p.ty, fx::Ty::Num { .. }));
+        assert!(
+            d.params
+                .iter()
+                .skip(first_num.unwrap_or(d.params.len()))
+                .all(|p| matches!(p.ty, fx::Ty::Num { .. })),
+            "{}: colours must come first",
+            d.name
+        );
+    }
+}
+
+/// A 160x90 frame: black, a white 40-pixel square in the middle carrying
+/// `layer` effects, and `scene` effects, at `t`.
+#[cfg(not(target_arch = "wasm32"))]
+fn square(layer: &str, scene: &str, t: f64) -> (Project, Frame) {
+    let json = format!(
+        r##"{{"size":[160,90],"fps":30,"scenes":[{{"name":"a","duration":2,"background":"#000000",
+        "layers":[{{"id":"sq","kind":"rect","x":80,"y":45,"width":40,"height":40,"effects":[{layer}]}}],
+        "effects":[{scene}]}}]}}"##
+    );
+    let p = Project::load(&json).unwrap();
+    let f = eval(&p, &p.scenes[0], t);
+    (p, f)
+}
+
+/// Straight RGBA of each output frame (a list of subframes) on the GPU, on
+/// both engines: they must agree (edges aside), so effects hold on each.
+#[cfg(not(target_arch = "wasm32"))]
+fn gpu_frames(frames: &[Vec<Frame>]) -> Option<Vec<Vec<u8>>> {
+    let run = |engine| {
+        let mut g = match Offline::new([160, 90], engine) {
+            Ok(g) => g,
+            Err(e) => {
+                eprintln!("skipped: no GPU ({e})");
+                return None;
+            }
+        };
+        let mut out = Vec::new();
+        for subs in frames {
+            out.extend(g.push(subs).unwrap());
+        }
+        out.extend(g.finish().unwrap());
+        Some(out)
+    };
+    let classic = run(Engine::Classic)?;
+    let sparse = run(Engine::Sparse)?;
+    for (c, s) in classic.iter().zip(&sparse) {
+        let off = c.iter().zip(s).filter(|(a, b)| a.abs_diff(**b) > 8).count();
+        assert!(
+            off < c.len() / 100,
+            "the engines disagree on {off} channels"
+        );
+    }
+    Some(classic)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn px(img: &[u8], x: usize, y: usize) -> [u8; 4] {
+    img[(y * 160 + x) * 4..][..4].try_into().unwrap()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn near(a: [u8; 4], b: [u8; 4], tol: u8) -> bool {
+    a.iter().zip(b).all(|(x, y)| x.abs_diff(y) <= tol)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn effects_draw_what_they_say() {
+    let one = |layer: &str, scene: &str| {
+        let (_, f) = square(layer, scene, 0.5);
+        gpu_frames(&[vec![f]]).map(|mut v| v.remove(0))
+    };
+    let Some(plain) = one("", "") else { return };
+    assert_eq!(px(&plain, 80, 45), [255; 4]);
+    assert_eq!(px(&plain, 10, 10), [0, 0, 0, 255]);
+
+    // Levels: a full red tint by luminance turns white red, black stays.
+    let red = one(
+        "",
+        r##"{"type":"levels","tint":"#ff0000","tint_amount":1}"##,
+    )
+    .unwrap();
+    assert!(
+        near(px(&red, 80, 45), [255, 0, 0, 255], 2),
+        "{:?}",
+        px(&red, 80, 45)
+    );
+    assert_eq!(px(&red, 10, 10), [0, 0, 0, 255]);
+
+    // Blur on the layer: the middle stays white, the edge goes half way,
+    // far outside stays clear.
+    let blur = one(r#"{"type":"blur","radius":4}"#, "").unwrap();
+    assert!(near(px(&blur, 80, 45), [255; 4], 1));
+    let edge = px(&blur, 60, 45)[0];
+    assert!((90..170).contains(&edge), "edge {edge}");
+    assert_eq!(px(&blur, 40, 45), [0, 0, 0, 255]);
+
+    // Chromatic aberration: red magnified and blue shrunk about the centre,
+    // so a red fringe just outside both edges and no blue just inside.
+    let ca = one("", r#"{"type":"chromatic","amount":8}"#).unwrap();
+    for x in [58, 101] {
+        let p = px(&ca, x, 45);
+        assert!(p[0] > 150 && p[1] < 10 && p[2] < 10, "outside {x}: {p:?}");
+    }
+    for x in [61, 98] {
+        let p = px(&ca, x, 45);
+        assert!(p[0] > 250 && p[1] > 250 && p[2] < 100, "inside {x}: {p:?}");
+    }
+
+    // CRT: the corners fall off the curved screen, scanlines darken rows.
+    let crt = one(
+        "",
+        r#"{"type":"crt","curvature":0.3,"scanlines":0.8,"line":4,"vignette":0}"#,
+    )
+    .unwrap();
+    assert_eq!(px(&crt, 0, 0)[3], 0);
+    let rows: Vec<u8> = (35..55).map(|y| px(&crt, 80, y)[0]).collect();
+    let (lo, hi) = (*rows.iter().min().unwrap(), *rows.iter().max().unwrap());
+    assert!(hi > 200 && lo < 120, "scanlines {rows:?}");
+
+    // Plasma fills the square's shape and nothing else, and is not flat.
+    let pl = one(r#"{"type":"plasma"}"#, "").unwrap();
+    assert_eq!(px(&pl, 10, 10), [0, 0, 0, 255]);
+    let inside: std::collections::HashSet<[u8; 4]> =
+        (62..98).step_by(5).map(|x| px(&pl, x, 45)).collect();
+    assert!(inside.len() > 3, "{inside:?}");
+    assert!(
+        inside
+            .iter()
+            .all(|p| *p != [255; 4] && *p != [0, 0, 0, 255])
+    );
+
+    // Displacement moves pixels, and the same frame displaces the same way.
+    let d = one(r#"{"type":"displace","amount":6,"scale":10}"#, "").unwrap();
+    assert_ne!(d, plain);
+    assert_eq!(
+        d,
+        one(r#"{"type":"displace","amount":6,"scale":10}"#, "").unwrap()
+    );
+
+    let db = one(r#"{"type":"directional_blur","length":20,"angle":90}"#, "").unwrap();
+    assert!(near(px(&db, 80, 45), [255; 4], 1));
+    assert!(
+        px(&db, 80, 30)[0] < 250 && px(&db, 80, 30)[0] > 10,
+        "smeared down"
+    );
+    assert_eq!(px(&db, 50, 45), [0, 0, 0, 255], "not across");
+}
+
+/// Grain is deterministic: the same frame is the same pixels in two renders,
+/// a new frame is new grain, and a motion-blurred frame's subframes share
+/// it, so blur accumulates the effect instead of averaging it away.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn grain_is_seeded_by_frame_and_survives_motion_blur() {
+    let grain = r#"{"type":"grain","amount":0.3}"#;
+    let at = |t: f64| square("", grain, t).1;
+    let Some(a) = gpu_frames(&[vec![at(0.5)], vec![at(0.5)], vec![at(0.6)]]) else {
+        return;
+    };
+    assert_eq!(a[0], a[1], "two renders of one frame");
+    assert_ne!(a[0], a[2], "the next frame has new grain");
+    assert_ne!(a[0], {
+        let (_, f) = square("", "", 0.5);
+        gpu_frames(&[vec![f]]).unwrap().remove(0)
+    });
+    // Four subframes inside frame 15 (0.5 s): the same grain as no blur.
+    let subs: Vec<Frame> = (0..4).map(|k| at(0.5 + f64::from(k) * 0.004)).collect();
+    let blurred = gpu_frames(&[subs]).unwrap().remove(0);
+    let off = blurred
+        .iter()
+        .zip(&a[0])
+        .filter(|(x, y)| x.abs_diff(**y) > 2)
+        .count();
+    assert_eq!(off, 0, "{off} channels differ");
+
+    // A moving square under a red tint: the blur smears red, per subframe.
+    let moving = |t: f64| {
+        let json = r##"{"size":[160,90],"fps":30,"scenes":[{"name":"a","duration":2,"background":"#000000",
+            "layers":[{"id":"sq","kind":"rect","x":[{"t":0,"v":40,"interp":"linear"},{"t":1,"v":120}],"y":45,"width":20,"height":20,
+            "effects":[{"type":"levels","tint":"#ff0000","tint_amount":1}]}]}]}"##;
+        let p = Project::load(json).unwrap();
+        eval(&p, &p.scenes[0], t)
+    };
+    let subs: Vec<Frame> = (0..8).map(|k| moving(0.5 + f64::from(k) * 0.05)).collect();
+    let smear = gpu_frames(&[subs]).unwrap().remove(0);
+    // The square sweeps x 70..118 over the shutter: a red smear, densest in
+    // the middle, fading to its ends, nothing white.
+    let row: Vec<[u8; 4]> = (60..128).map(|x| px(&smear, x, 45)).collect();
+    assert!(row.iter().all(|p| p[1] < 5 && p[2] < 5), "only red");
+    let (edge, mid) = (px(&smear, 72, 45)[0], px(&smear, 94, 45)[0]);
+    assert!(
+        mid > 180 && (30..mid - 40).contains(&edge),
+        "edge {edge} mid {mid}"
+    );
+}
+
+/// The GPU's 4:2:0 planes are the CPU reference's, from the same pixels,
+/// within a step of rounding (the GPU converts before rounding to bytes).
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn gpu_yuv_matches_the_reference() {
+    use crate::yuv::{Yuv, from_rgba};
+    let p = Project::load(DEMO).unwrap();
+    let s = p.scene("shapes").unwrap();
+    // 162 wide: rows that are not a multiple of 4 bytes get padded and cut.
+    let size = [162, 90];
+    let subs: Vec<Frame> = (0..3)
+        .map(|k| eval(&p, s, 0.6 + f64::from(k) * 0.02))
+        .collect();
+    let run = |yuv: Option<Yuv>| -> Option<Vec<u8>> {
+        let mut g = match yuv.map_or_else(
+            || Offline::new(size, Engine::Sparse),
+            |y| Offline::with_yuv(size, Engine::Sparse, y),
+        ) {
+            Ok(g) => g,
+            Err(e) => {
+                eprintln!("skipped: no GPU ({e})");
+                return None;
+            }
+        };
+        let mut out: Vec<Vec<u8>> = g.push(&subs).unwrap().into_iter().collect();
+        out.extend(g.finish().unwrap());
+        out.pop()
+    };
+    let Some(rgba) = run(None) else { return };
+    for yuv in [Yuv::Nv12, Yuv::P010] {
+        let gpu = run(Some(yuv)).unwrap();
+        let want = from_rgba(&rgba, size, yuv);
+        assert_eq!(gpu.len(), yuv.frame_bytes(size));
+        assert_eq!(gpu.len(), want.len());
+        // Compare samples: bytes for NV12, 10-bit values for P010, where
+        // one 8-bit step of the RGBA reference is four.
+        let (got, exp, tol): (Vec<i32>, Vec<i32>, i32) = match yuv {
+            Yuv::Nv12 => (
+                gpu.iter().map(|&v| i32::from(v)).collect(),
+                want.iter().map(|&v| i32::from(v)).collect(),
+                1,
+            ),
+            Yuv::P010 => {
+                let s = |b: &[u8]| {
+                    b.chunks(2)
+                        .map(|c| i32::from(u16::from_le_bytes([c[0], c[1]]) >> 6))
+                        .collect()
+                };
+                (s(&gpu), s(&want), 5)
+            }
+        };
+        let worst = got
+            .iter()
+            .zip(&exp)
+            .map(|(a, b)| (a - b).abs())
+            .max()
+            .unwrap();
+        assert!(worst <= tol, "{yuv:?}: off by {worst}");
+    }
+    // Known values: BT.709 limited range.
+    let white = from_rgba(&[255; 16], [2, 2], Yuv::Nv12);
+    assert_eq!(white, [235, 235, 235, 235, 128, 128]);
+    let red = from_rgba(&[255, 0, 0, 255].repeat(4), [2, 2], Yuv::Nv12);
+    assert_eq!(red, [63, 63, 63, 63, 102, 240]);
+}
+
+#[test]
+fn render_settings_load_check_and_layer() {
+    let p = Project::load(
+        r#"{"size":[64,64],"fps":30,"scenes":[],"render":{"codec":"h265","crf":20,"mb":4}}"#,
+    )
+    .unwrap();
+    let file = p.render.clone().unwrap();
+    let flags = Render {
+        crf: Some(12),
+        container: Some("mkv".into()),
+        ..Render::default()
+    };
+    let r = file.with(&flags);
+    assert_eq!(
+        (r.codec.as_deref(), r.crf, r.mb, r.container.as_deref()),
+        (Some("h265"), Some(12), Some(4), Some("mkv"))
+    );
+    assert!(Project::load(&p.to_json()).is_ok(), "round trips");
+    for bad in [
+        r#"{"codec":"vp9"}"#,
+        r#"{"pix_fmt":"rgb24"}"#,
+        r#"{"container":"avi"}"#,
+    ] {
+        let json = format!(r#"{{"size":[64,64],"fps":30,"scenes":[],"render":{bad}}}"#);
+        assert!(Project::load(&json).is_err(), "accepted {bad}");
+    }
+}
+
+const VARIANTS: &str = include_str!("../examples/variants.cut.json");
+
+fn drawn<'a>(f: &'a Frame, id: &str) -> &'a Drawn {
+    f.layers.iter().find(|d| d.id == id).unwrap()
+}
+
+#[test]
+fn variables_bind_and_variants_resolve() {
+    let p = Project::load(VARIANTS).unwrap();
+    // The defaults: dark, 1920x1080.
+    let f = eval(&p, &p.scenes[0], 1.5);
+    assert_eq!(f.size, [1920, 1080]);
+    assert_eq!(f.background, Rgba::try_from("#0e0f14".to_owned()).unwrap());
+    let card = drawn(&f, "card");
+    assert_eq!(
+        (card.x, card.y, card.width, card.radius),
+        (960., 540., 1152., 32.)
+    );
+    assert!(matches!(&drawn(&f, "title").kind, Kind::Text { text, .. } if text == "Ship it"));
+    assert_eq!(drawn(&f, "badge").opacity, 1.);
+    assert_eq!(drawn(&f, "badge").x, 1780.);
+    // A keyframe value binds too: W * -0.3 at t = 0.
+    assert_eq!(drawn(&eval(&p, &p.scenes[0], 0.), "card").x, -576.);
+
+    let v = p.variant("light-tall").unwrap();
+    let f = eval(&v, &v.scenes[0], 1.5);
+    assert_eq!(f.size, [1080, 1920]);
+    assert_eq!(f.background, Rgba::try_from("#f4f1ea".to_owned()).unwrap());
+    let card = drawn(&f, "card");
+    assert_eq!((card.x, card.y, card.width), (540., 960., 648.));
+    assert_eq!(card.fill, Rgba::try_from("#e4572e".to_owned()).unwrap());
+    let title = drawn(&f, "title");
+    // The override replaces the binding outright.
+    assert_eq!(title.font_size, 96.);
+    assert!(matches!(&title.kind, Kind::Text { text, .. } if text == "Ship it, tall"));
+    assert_eq!(drawn(&f, "badge").opacity, 0.);
+    assert!(p.variant("nope").is_err());
+
+    // Saving keeps the bindings, the variants and the key order.
+    assert_eq!(p.to_json(), VARIANTS);
+    assert_eq!(v.to_json(), VARIANTS);
+}
+
+#[test]
+fn variables_bind_duplicator_animator_and_deformer_params() {
+    // A number binds anywhere a number goes, even deep in a stack.
+    let json = r#"{"size": [64, 64], "fps": 30,
+        "variables": {"n": {"type": "number", "value": 3}, "gap": {"type": "number", "value": 10}},
+        "variants": [{"name": "big", "vars": {"n": 6, "gap": 20}}],
+        "scenes": [{"name": "a", "duration": 1, "layers": [
+            {"id": "row", "kind": "duplicator", "count": {"var": "n"},
+             "spacing_x": {"var": "gap"}, "spacing_y": {"var": "gap", "mul": 2}},
+            {"id": "word", "kind": "text", "text": "hi",
+             "animators": [{"stagger": {"var": "gap", "mul": 0.01}, "x": {"var": "gap"}}],
+             "deformers": [{"kind": "twist", "angle": {"var": "gap"}, "radius": {"var": "n", "mul": 10}}]}
+        ]}]}"#;
+    let check = |p: &Project, n: usize, gap: f64| {
+        let f = eval(p, &p.scenes[0], 0.5);
+        let row = drawn(&f, "row");
+        assert_eq!((row.count, row.spacing), (n, [gap, gap * 2.]));
+        let word = &p.scenes[0].layers[1];
+        assert!((word.animators[0].stagger.at(0.) - gap * 0.01).abs() < 1e-12);
+        assert_eq!(word.animators[0].x.at(0.), gap);
+        assert_eq!(
+            drawn(&f, "word").deformers,
+            vec![Deform::Twist {
+                angle: gap,
+                radius: n as f64 * 10.
+            }]
+        );
+    };
+    let p = Project::load(json).unwrap();
+    check(&p, 3, 10.);
+    check(&p.variant("big").unwrap(), 6, 20.);
+}
+
+#[test]
+fn variables_reject_what_does_not_fit() {
+    let with = |vars: &str, variants: &str, bg: &str| {
+        let json = format!(
+            r#"{{"size": [64, 64], "fps": 30, "variables": {vars}, "variants": {variants},
+                "scenes": [{{"name": "a", "duration": 1, "background": {bg}, "layers": []}}]}}"#
+        );
+        Project::load(&json)
+    };
+    let theme = r#"{"theme": {"type": "enum", "options": ["dark", "light"], "value": "dark"}}"#;
+    let bg = r##"{"var": "theme", "map": {"dark": "#000000", "light": "#ffffff"}}"##;
+    assert!(with(theme, "[]", bg).is_ok());
+    // An enum value outside its options, in a variant.
+    let e = with(theme, r#"[{"name": "x", "vars": {"theme": "blue"}}]"#, bg).unwrap_err();
+    assert!(e.contains("not one of"), "{e}");
+    // A variant setting an undeclared variable.
+    assert!(with(theme, r#"[{"name": "x", "vars": {"nope": 1}}]"#, bg).is_err());
+    // A binding to nothing, and a map missing a value.
+    assert!(with(theme, "[]", r#"{"var": "nope"}"#).is_err());
+    assert!(
+        with(
+            theme,
+            "[]",
+            r##"{"var": "theme", "map": {"light": "#ffffff"}}"##
+        )
+        .is_err()
+    );
+    // A colour variable holding no colour; an override that hits nothing.
+    assert!(
+        with(
+            r#"{"c": {"type": "color", "value": 3}}"#,
+            "[]",
+            r##""#000000""##
+        )
+        .is_err()
+    );
+    assert!(
+        with(
+            theme,
+            r#"[{"name": "x", "overrides": {"a/ghost": {"x": 1}}}]"#,
+            bg
+        )
+        .is_err()
+    );
+    // A bound number that resolves to text fails the document's own check.
+    let s = r#"{"s": {"type": "string", "value": "hi"}}"#;
+    let json = format!(
+        r#"{{"size": [64, 64], "fps": 30, "variables": {s},
+            "scenes": [{{"name": "a", "duration": {{"var": "s"}}, "layers": []}}]}}"#
+    );
+    assert!(Project::load(&json).is_err());
+}

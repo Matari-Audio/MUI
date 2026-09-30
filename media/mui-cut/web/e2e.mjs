@@ -9,7 +9,7 @@
 // E2E_BACKEND=webgl2 without WebGPU and expects WebGL2 (vello_gpu); the
 // default expects the viewport on WebGPU. E2E_RENDERER=classic|gpu|...
 // forces the editor's `?renderer=`.
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { inflateSync } from 'node:zlib';
 import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -28,6 +28,7 @@ const check = (ok, what) => { if (!ok) throw new Error('FAILED: ' + what); conso
 
 const mode = process.env.E2E_BACKEND ?? 'webgpu';
 const expected = { cpu: 'CPU', webgl2: 'WebGL2' }[mode] ?? 'WebGPU';
+const cpu = expected === 'CPU';
 const angle = ['--enable-features=Vulkan', '--use-angle=vulkan', '--ignore-gpu-blocklist'];
 const gpuFlags = { cpu: ['--disable-features=WebGPU'], webgl2: ['--disable-features=WebGPU,Vulkan', '--use-angle=vulkan', '--ignore-gpu-blocklist'] }[mode]
   ?? ['--enable-unsafe-webgpu', ...angle];
@@ -161,6 +162,65 @@ try {
   check(px[0] === 0x40 && px[1] === 0x10, `the viewport shows it (${px})`);
   await shot('editor-reloaded.png');
 
+  // A scene effect from the inspector: levels with no saturation greys the
+  // frame on WebGPU; the CPU viewport says it draws without effects.
+  await mouse('mousePressed', ox + 4, oy + 4); await mouse('mouseReleased', ox + 4, oy + 4); await sleep(300);
+  await js(`(() => { const s = document.querySelector('#add-effect'); s.value = 'levels'; s.onchange(); })()`);
+  await sleep(1000);
+  check(read().scenes[1].effects?.[0]?.type === 'levels', 'adding an effect writes it to the file');
+  await js(`(() => { const i = document.querySelector('[data-fx="0.saturation"]'); i.value = '0'; i.onchange(); })()`);
+  await sleep(1200);
+  check(read().scenes[1].effects[0].saturation === 0, 'an effect parameter is saved');
+  const grey = pixel(Buffer.from((await send('Page.captureScreenshot', { format: 'png', clip })).data, 'base64'));
+  if (cpu) check(await js(`document.querySelector('#backend').textContent`) === 'CPU · effects off', 'the CPU viewport says effects are off');
+  else check(Math.abs(grey[0] - grey[1]) <= 2 && Math.abs(grey[1] - grey[2]) <= 2 && grey[0] > 0x10, `the viewport draws the effect (${grey}) ${await js(`document.querySelector('#error').textContent`)}`);
+  await shot('editor-effect.png');
+  // Export: WebCodecs H.264 in the worker, muxed to MP4, every frame of
+  // every scene; a cancel stops a second run.
+  await send('Page.setDownloadBehavior', { behavior: 'deny' });
+  await js(`document.querySelector('#export').click()`);
+  for (let i = 0; i < 50 && await js(`!document.querySelector('#export-dialog').open || document.querySelector('#ex-start').disabled`); i++) await sleep(100);
+  await js(`(() => { document.querySelector('#ex-codec').value = 'avc1.640028'; document.querySelector('#ex-mb').value = '${cpu ? 1 : 4}'; document.querySelector('#ex-start').click(); })()`);
+  const t0 = Date.now();
+  let ex = null;
+  for (let i = 0; i < 600 && !ex; i++) {
+    await sleep(100);
+    ex = await js(`window.lastExport ? { frames: lastExport.frames, size: lastExport.blob.size, hardware: lastExport.hardware } : null`);
+    const st = await js(`document.querySelector('#ex-status').textContent`);
+    if (st.startsWith('failed')) throw new Error('export ' + st);
+  }
+  check(ex && ex.frames === 225, `export renders every frame (${ex?.frames}, ${((Date.now() - t0) / 1000).toFixed(1)} s, ${ex?.hardware})`);
+  await shot('editor-export.png');
+  const b64 = await js(`lastExport.blob.arrayBuffer().then(b => { let s = ''; const u = new Uint8Array(b); for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode(...u.subarray(i, i + 0x8000)); return btoa(s); })`);
+  const mp4 = join(out, 'export.mp4');
+  writeFileSync(mp4, Buffer.from(b64, 'base64'));
+  const probe = spawnSync('ffprobe', ['-v', 'error', '-count_frames', '-select_streams', 'v:0', '-show_entries', 'stream=codec_name,width,height,nb_read_frames:format=duration', '-of', 'default=nw=1', mp4], { encoding: 'utf8' });
+  check(probe.status === 0 && /codec_name=h264/.test(probe.stdout) && /nb_read_frames=225/.test(probe.stdout) && /width=1280/.test(probe.stdout), `ffprobe reads the export (${probe.stdout.replace(/\n/g, ' ')}${probe.stderr})`);
+  const dur = +/duration=([\d.]+)/.exec(probe.stdout)?.[1];
+  check(Math.abs(dur - 7.5) < 0.05, `the export lasts 7.5 s (${dur})`);
+  // The other codecs this browser encodes, gated by isConfigSupported.
+  const others = await js(`[...document.querySelectorAll('#ex-codec option')].filter(o => !o.disabled && o.value !== 'avc1.640028').map(o => o.value)`);
+  console.log(`    browser also encodes: ${others.join(', ') || 'nothing else'}`);
+  for (const codec of others) {
+    await js(`(() => { window.lastExport = null; document.querySelector('#ex-codec').value = '${codec}'; document.querySelector('#ex-mb').value = '1'; document.querySelector('#ex-start').click(); })()`);
+    let done = null;
+    for (let i = 0; i < 1200 && !done; i++) { await sleep(100); done = await js(`window.lastExport?.frames ?? (document.querySelector('#ex-status').textContent.startsWith('failed') ? -1 : null)`); }
+    const file = join(out, `export-${codec}.mp4`);
+    writeFileSync(file, Buffer.from(await js(`lastExport.blob.arrayBuffer().then(b => { let s = ''; const u = new Uint8Array(b); for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode(...u.subarray(i, i + 0x8000)); return btoa(s); })`), 'base64'));
+    const p = spawnSync('ffprobe', ['-v', 'error', '-count_frames', '-select_streams', 'v:0', '-show_entries', 'stream=codec_name,nb_read_frames', '-of', 'default=nw=1', file], { encoding: 'utf8' });
+    const name = { av01: 'av1', hvc1: 'hevc' }[codec.slice(0, 4)];
+    check(done === 225 && p.stdout.includes(`codec_name=${name}`) && p.stdout.includes('nb_read_frames=225'), `a ${codec} export plays (${p.stdout.replace(/\n/g, ' ')}${p.stderr})`);
+  }
+
+  // A slow run (32 subframes a frame) to cancel part way.
+  await js(`(() => { window.lastExport = null; document.querySelector('#ex-mb').value = '32'; document.querySelector('#ex-start').click(); })()`);
+  await sleep(300);
+  await js(`document.querySelector('#ex-cancel').click()`);
+  for (let i = 0; i < 100 && await js(`document.querySelector('#ex-status').textContent`) !== 'cancelled'; i++) await sleep(100);
+  const st = await js(`document.querySelector('#ex-status').textContent`);
+  check(st === 'cancelled' && !(await js(`window.lastExport`)), `cancel stops an export (${st})`);
+  await js(`document.querySelector('#ex-cancel').click()`);
+
   // The showcase: SVG and Lottie files reach the viewport, and the inspector
   // edits animators.
   writeFileSync(file, readFileSync(join(here, '../examples/showcase.cut.json'), 'utf8'));
@@ -199,6 +259,16 @@ try {
   const notice = await js(`document.querySelector('#notice').hidden ? '' : document.querySelector('#notice').textContent`);
   check(backend === 'WebGPU' ? notice === '' : /flat/.test(notice), `3D draws ${notice || 'in 3D'}`);
   await shot('editor-3d.png');
+  if (cpu) {
+    // An export never quietly flattens a 3D shot.
+    await js(`document.querySelector('#export').click()`);
+    for (let i = 0; i < 50 && await js(`!document.querySelector('#export-dialog').open || document.querySelector('#ex-start').disabled`); i++) await sleep(100);
+    await js(`(() => { window.lastExport = null; document.querySelector('#ex-mb').value = '1'; document.querySelector('#ex-start').click(); })()`);
+    let st = '';
+    for (let i = 0; i < 100 && !st.startsWith('failed'); i++) { await sleep(100); st = await js(`document.querySelector('#ex-status').textContent`); }
+    check(/failed: .*3D/.test(st) && !(await js(`window.lastExport`)), `the CPU refuses to export a 3D shot flat (${st})`);
+    await js(`document.querySelector('#ex-cancel').click()`);
+  }
   if (backend === 'WebGPU') {
     const before = readFileSync(file, 'utf8'), d3 = await draws();
     await click('#orbit');
@@ -209,6 +279,30 @@ try {
     await shot('editor-3d-orbit.png');
     await click('#orbit');
   }
+  // Variables and variants: an agent writes a project with them; the header
+  // previews a tall variant, the panel edits that variant's value, and the
+  // file keeps its bindings.
+  writeFileSync(file, readFileSync(join(here, '../examples/variants.cut.json'), 'utf8'));
+  await sleep(1500);
+  check(await js(`!document.querySelector('#variant').hidden`), 'a project with variants shows the switcher');
+  await js(`(() => { const s = document.querySelector('#variant'); s.value = 'light-tall'; s.onchange(); })()`);
+  await sleep(800);
+  const [tw, th] = await js(`(r => [r.width, r.height])(document.querySelector('#view').getBoundingClientRect())`);
+  check(th > tw * 1.5, `the viewport takes the variant's 1080x1920 (${tw}x${th})`);
+  const [lx, ly] = await rect('#view');
+  const light = pixel(Buffer.from((await send('Page.captureScreenshot', { format: 'png', clip: { x: lx + 4, y: ly + 4, width: 1, height: 1, scale: 1 } })).data, 'base64'));
+  check(Math.abs(light[0] - 0xf4) <= 2 && Math.abs(light[2] - 0xea) <= 2, `the viewport draws the variant's theme (${light})`);
+  await shot('editor-variant.png');
+  const bgv = await js(`(i => i ? [i.disabled, i.value] : 'none')(document.querySelector('[data-bg]'))`);
+  check(bgv[0] === true && bgv[1] === '#f4f1ea', `a bound background shows the variant's value, read-only (${bgv})`);
+  await js(`(() => { const i = document.querySelector('[data-var="headline"]'); i.value = 'Hello'; i.onchange(); })()`);
+  await sleep(1200);
+  const saved = read();
+  check(saved.variants.find(v => v.name === 'light-tall').vars.headline === 'Hello' && saved.variables.headline.value === 'Ship it', 'a variable edit goes to the chosen variant');
+  check(saved.scenes[0].background.var === 'theme' && saved.scenes[0].layers[0].width.var === 'W', 'the file keeps its bindings');
+  await click('#layers button:nth-child(3)');
+  check(await js(`document.querySelector('[data-prop="width"]').disabled`), 'a bound property is read-only');
+
   check(errors.length === 0, 'no page exceptions ' + errors.join('; '));
   ws.close();
 } catch (e) {

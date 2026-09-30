@@ -9,17 +9,21 @@
 #![forbid(unsafe_code)]
 
 pub mod check;
+pub mod fx;
 mod gpu;
 mod gpu3d;
 mod motion;
 #[cfg(not(target_arch = "wasm32"))]
 mod pool;
 mod render;
+mod shutter;
 mod sparse;
 mod three;
+pub mod vars;
 mod vector;
 #[cfg(target_arch = "wasm32")]
 mod web;
+pub mod yuv;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use gpu::Offline;
@@ -30,6 +34,7 @@ pub use motion::{
 #[cfg(not(target_arch = "wasm32"))]
 pub use pool::{CpuPool, shutter};
 pub use render::{Assets, Layers, Quad, Renderer};
+pub use shutter::Shutter;
 pub use three::{Cam, Fog, Ground, Lamp, Mode, View};
 
 use serde::{Deserialize, Serialize};
@@ -45,6 +50,85 @@ pub struct Project {
     pub size: [u32; 2],
     pub fps: f64,
     pub scenes: Vec<Scene>,
+    /// Encoder settings for `mui-cut render`; its flags override them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub render: Option<Render>,
+    /// Typed values anything under `scenes` can bind to (see `vars`).
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub variables: std::collections::BTreeMap<String, vars::Var>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub variants: Vec<vars::Variant>,
+    /// The text of a project with variables: this struct is one variant of
+    /// it resolved, so it saves as the text.
+    #[serde(skip)]
+    pub source: Option<String>,
+}
+
+/// How `render` encodes, all optional (the CLI's defaults): see the README.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Render {
+    /// `h264`, `h265` or `av1`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codec: Option<String>,
+    /// `auto` (hardware when a trial encode works), `vaapi` or `software`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encoder: Option<String>,
+    /// Constant quality (x264/x265/SVT-AV1 CRF, VAAPI QP).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crf: Option<u32>,
+    /// Average bitrate, ffmpeg style (`12M`); replaces `crf`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bitrate: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maxrate: Option<String>,
+    /// The software encoder's preset (`slow`, SVT-AV1's `6`, ...).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preset: Option<String>,
+    /// `yuv420p` or `yuv420p10le`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pix_fmt: Option<String>,
+    /// `mp4`, `mkv` or `mov`; by default the output's extension.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub container: Option<String>,
+    /// Motion-blur subframes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mb: Option<usize>,
+}
+
+impl Render {
+    /// `self` with every setting `over` has replacing its own.
+    pub fn with(&self, over: &Render) -> Render {
+        let pick = |a: &Option<String>, b: &Option<String>| b.clone().or_else(|| a.clone());
+        Render {
+            codec: pick(&self.codec, &over.codec),
+            encoder: pick(&self.encoder, &over.encoder),
+            crf: over.crf.or(self.crf),
+            bitrate: pick(&self.bitrate, &over.bitrate),
+            maxrate: pick(&self.maxrate, &over.maxrate),
+            preset: pick(&self.preset, &over.preset),
+            pix_fmt: pick(&self.pix_fmt, &over.pix_fmt),
+            container: pick(&self.container, &over.container),
+            mb: over.mb.or(self.mb),
+        }
+    }
+    /// Refuse values the encoder table has no row for.
+    pub fn check(&self) -> Result<(), String> {
+        let one_of = |what: &str, v: &Option<String>, ok: &[&str]| match v {
+            Some(v) if !ok.contains(&v.as_str()) => Err(format!(
+                "render.{what}: `{v}` is not one of {}",
+                ok.join(", ")
+            )),
+            _ => Ok(()),
+        };
+        one_of("codec", &self.codec, &["h264", "h265", "av1"])?;
+        one_of(
+            "encoder",
+            &self.encoder,
+            &["auto", "vaapi", "software", "x264"],
+        )?;
+        one_of("pix_fmt", &self.pix_fmt, &["yuv420p", "yuv420p10le"])?;
+        one_of("container", &self.container, &["mp4", "mkv", "mov"])
+    }
 }
 
 /// One shot. Scenes play back to back in a render.
@@ -68,6 +152,9 @@ pub struct Scene {
     /// 3D: distance fog.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fog: Option<Fog>,
+    /// Run over the whole frame, after every layer.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub effects: Vec<fx::Effect>,
 }
 
 /// What a layer draws.
@@ -342,6 +429,9 @@ pub struct Layer {
     pub range: Anim<f64>,
     #[serde(default = "softness", skip_serializing_if = "is_softness")]
     pub softness: Anim<f64>,
+    /// Run over this layer's pixels alone, before it is composited.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub effects: Vec<fx::Effect>,
 }
 
 fn edge() -> Anim<Rgba> {
@@ -937,6 +1027,8 @@ pub struct Drawn {
     /// The 3D properties, left out while they are all their defaults.
     #[serde(skip_serializing_if = "three::Space::is_flat")]
     pub space: three::Space,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub effects: Vec<fx::Fx>,
 }
 
 /// Everything a renderer needs for one instant of one scene.
@@ -948,6 +1040,20 @@ pub struct Frame {
     /// A 3D scene's camera, lights, ground and fog; `None` in 2D.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub view: Option<View>,
+    /// Seconds into the scene: effects that move read it.
+    pub t: f64,
+    /// The output frame `t` falls in: grain and other per-frame noise is
+    /// seeded by it, so every subframe of a motion-blurred frame agrees.
+    pub seed: u32,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub effects: Vec<fx::Fx>,
+}
+
+impl Frame {
+    /// Any effect on the scene or on a layer.
+    pub fn has_effects(&self) -> bool {
+        !self.effects.is_empty() || self.layers.iter().any(|l| !l.effects.is_empty())
+    }
 }
 
 /// Most copies a duplicator makes.
@@ -963,6 +1069,10 @@ pub fn eval(project: &Project, scene: &Scene, t: f64) -> Frame {
         background: scene.background,
         layers,
         view,
+        t,
+        // A hair over, so a frame's own time never floors to the frame before.
+        seed: (t * project.fps + 1e-6).floor().max(0.) as u32,
+        effects: fx::eval(&scene.effects, t),
     }
 }
 
@@ -1036,8 +1146,43 @@ impl Layer {
                 range: self.range.at(t).max(0.),
                 softness: self.softness.at(t).max(0.),
             },
+            effects: fx::eval(&self.effects, t),
         }
     }
+}
+
+/// The fraction of a frame the shutter is open: 180 degrees.
+pub const SHUTTER: f64 = 0.5;
+
+/// The `mb` subframes of the output frame at `t`, spread over the open
+/// shutter; one is the frame itself.
+pub fn subframes(project: &Project, scene: &Scene, t: f64, mb: usize) -> Vec<Frame> {
+    let mb = mb.max(1);
+    (0..mb)
+        .map(|k| {
+            eval(
+                project,
+                scene,
+                t + SHUTTER / project.fps * k as f64 / mb as f64,
+            )
+        })
+        .collect()
+}
+
+/// A project from `de`; an error starts with the JSON path it is about,
+/// then serde's line and column where there is one.
+fn from_path<'de, D: serde::Deserializer<'de>>(de: D) -> Result<Project, String>
+where
+    D::Error: std::fmt::Display,
+{
+    serde_path_to_error::deserialize(de).map_err(|e| {
+        let path = e.path().to_string();
+        if path == "." {
+            e.into_inner().to_string()
+        } else {
+            format!("{path}: {}", e.into_inner())
+        }
+    })
 }
 
 impl Project {
@@ -1048,21 +1193,54 @@ impl Project {
     /// Every error starts with the JSON path it is about
     /// (`scenes[0].layers[2].x: key [1]: ...`), then serde's line and column
     /// where there is one.
+    /// With variables, every variant must resolve and check, and the result
+    /// is the default one (see [`Project::variant`]).
     pub fn load(json: &str) -> Result<Self, String> {
-        let de = &mut serde_json::Deserializer::from_str(json);
-        let p: Self = serde_path_to_error::deserialize(de).map_err(|e| {
-            let path = e.path().to_string();
-            if path == "." {
-                e.into_inner().to_string()
-            } else {
-                format!("{path}: {}", e.into_inner())
+        if json.contains("\"variables\"") || json.contains("\"variants\"") {
+            let root: serde_json::Value = serde_json::from_str(json).map_err(|e| e.to_string())?;
+            if vars::uses_vars(&root) {
+                let base = Self::check(from_path(vars::resolve(&root, None)?)?)?;
+                for v in &base.variants {
+                    Self::from_root(&root, Some(&v.name))
+                        .map_err(|e| format!("variant `{}`: {e}", v.name))?;
+                }
+                return Ok(Self {
+                    source: Some(json.to_owned()),
+                    ..base
+                });
             }
-        })?;
+        }
+        Self::check(from_path(&mut serde_json::Deserializer::from_str(json))?)
+    }
+
+    fn from_root(root: &serde_json::Value, variant: Option<&str>) -> Result<Self, String> {
+        let v = vars::resolve(root, variant)?;
+        Self::check(from_path(v)?)
+    }
+
+    /// Variant `name` of a project with variables, resolved and checked; it
+    /// saves as the whole project, like this one.
+    pub fn variant(&self, name: &str) -> Result<Self, String> {
+        let src = self
+            .source
+            .as_deref()
+            .ok_or("the project has no variants")?;
+        let root = serde_json::from_str(src).map_err(|e| e.to_string())?;
+        Ok(Self {
+            source: self.source.clone(),
+            ..Self::from_root(&root, Some(name))?
+        })
+    }
+
+    fn check(p: Self) -> Result<Self, String> {
         if p.size[0] == 0 || p.size[1] == 0 || p.size[0] > 8192 || p.size[1] > 8192 {
             return Err("size: must be 1..=8192 pixels each way".into());
         }
         if !(p.fps.is_finite() && p.fps > 0. && p.fps <= 240.) {
             return Err("fps: must be in (0, 240]".into());
+        }
+        if let Some(r) = &p.render {
+            r.check().map_err(|e| format!("render: {e}"))?;
         }
         for (si, s) in p.scenes.iter().enumerate() {
             if !(s.duration.is_finite() && s.duration > 0.) {
@@ -1101,6 +1279,7 @@ impl Project {
                     }
                     _ => {}
                 }
+                fx::check(&l.effects, &format!("{at}.effects: layer `{id}`"))?;
             }
             for l in &s.layers {
                 if let Kind::Camera { look_at, .. } = &l.kind
@@ -1113,6 +1292,10 @@ impl Project {
                     ));
                 }
             }
+            fx::check(
+                &s.effects,
+                &format!("scenes[{si}].effects: scene `{}`", s.name),
+            )?;
         }
         Ok(p)
     }
@@ -1125,9 +1308,20 @@ impl Project {
     /// Pretty JSON in the struct's field order, one keyframe a line, so a
     /// save diffs cleanly and reads like the hand-written examples.
     pub fn to_json(&self) -> String {
+        if let Some(src) = &self.source {
+            let mut s = tidy(&vars::pretty(src));
+            s.push('\n');
+            return s;
+        }
         let mut s = tidy(&serde_json::to_string_pretty(self).expect("a project serialises"));
         s.push('\n');
         s
+    }
+    /// Any effect anywhere: the CPU renderer skips them.
+    pub fn has_effects(&self) -> bool {
+        self.scenes
+            .iter()
+            .any(|s| !s.effects.is_empty() || s.layers.iter().any(|l| !l.effects.is_empty()))
     }
     pub fn scene(&self, name: &str) -> Option<&Scene> {
         self.scenes.iter().find(|s| s.name == name)
@@ -1161,17 +1355,11 @@ fn tidy(pretty: &str) -> String {
                     continue;
                 };
                 let body = &out[start..];
-                let key = c == '}'
-                    && body
-                        .trim_start_matches(['{', ' ', '\n'])
-                        .starts_with("\"t\":");
-                // A keyframe's own `in`/`out` arrays were collapsed already;
-                // they still mark it nested, so allow exactly those.
-                let flat = if key {
-                    !body[1..].contains('{')
-                } else {
-                    c == ']' && !nested
-                };
+                let head = body.trim_start_matches(['{', ' ', '\n']);
+                // Keyframes and variable bindings: whatever they hold (arrays,
+                // a binding, a binding's map) was collapsed already.
+                let key = c == '}' && (head.starts_with("\"t\":") || head.starts_with("\"var\":"));
+                let flat = key || (c == ']' && !nested);
                 if flat && body.contains('\n') {
                     let mut one = String::with_capacity(body.len());
                     let mut ws = false;
