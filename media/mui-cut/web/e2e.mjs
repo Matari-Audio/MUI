@@ -259,6 +259,16 @@ try {
   const notice = await js(`document.querySelector('#notice').hidden ? '' : document.querySelector('#notice').textContent`);
   check(backend === 'WebGPU' ? notice === '' : /flat/.test(notice), `3D draws ${notice || 'in 3D'}`);
   await shot('editor-3d.png');
+  if (cpu) {
+    // An export never quietly flattens a 3D shot.
+    await js(`document.querySelector('#export').click()`);
+    for (let i = 0; i < 50 && await js(`!document.querySelector('#export-dialog').open || document.querySelector('#ex-start').disabled`); i++) await sleep(100);
+    await js(`(() => { window.lastExport = null; document.querySelector('#ex-mb').value = '1'; document.querySelector('#ex-start').click(); })()`);
+    let st = '';
+    for (let i = 0; i < 100 && !st.startsWith('failed'); i++) { await sleep(100); st = await js(`document.querySelector('#ex-status').textContent`); }
+    check(/failed: .*3D/.test(st) && !(await js(`window.lastExport`)), `the CPU refuses to export a 3D shot flat (${st})`);
+    await js(`document.querySelector('#ex-cancel').click()`);
+  }
   if (backend === 'WebGPU') {
     const before = readFileSync(file, 'utf8'), d3 = await draws();
     await click('#orbit');

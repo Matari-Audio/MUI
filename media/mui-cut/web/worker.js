@@ -76,6 +76,10 @@ async function exportVideo(m) {
   let n = 0;
   try {
     for (const [si, s] of m.scenes.entries()) {
+      // An export never quietly flattens a 3D shot (the GPU view refuses
+      // in draw_frame when its 3D pass fails).
+      const flat = cut?.notice(si);
+      if (flat) throw new Error(flat);
       const count = Math.max(1, Math.round(s.duration * m.fps));
       for (let i = 0; i < count; i++) {
         if (job.cancelled) throw new Error('cancelled');
