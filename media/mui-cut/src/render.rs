@@ -465,7 +465,9 @@ impl Assets {
                 (q.x, q.y, q.z, q.scale, q.rotation, q.opacity, q.highlight)
             });
             let c = [c[0] + ex + dx, c[1] + ey + dy];
-            let depth = ez - dz;
+            // A pixel proud of the backdrop even when collapsed: coplanar
+            // slabs shadow each other in speckles.
+            let depth = ez - dz + 1.;
             if hl > 0. {
                 let b = 2. / l.scale.abs().max(0.05) / ps.abs().max(0.05);
                 let [r0, g0, b0, _] = HIGHLIGHT.0;

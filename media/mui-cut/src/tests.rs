@@ -1281,9 +1281,10 @@ fn plugin_parts_are_slabs_at_their_depth_in_3d() {
         [a.x, a.y]
     );
     assert_eq!((a.scale, a.rotation), (2., 100.));
-    // In depth: half of EXPLODE_DEPTH towards the viewer, 40 back, in the
-    // layer's (doubled) pixels, from the layer's own z.
-    let z = 30. - (0.5 * plugin::EXPLODE_DEPTH - 40.) * 2.;
+    // In depth: half of EXPLODE_DEPTH towards the viewer, 40 back (and the
+    // pixel every part stands proud), in the layer's (doubled) pixels, from
+    // the layer's own z.
+    let z = 30. - (0.5 * plugin::EXPLODE_DEPTH - 40. + 1.) * 2.;
     assert!((a.space.z - z).abs() < 1e-3, "{} vs {z}", a.space.z);
     assert!(
         slabs[1].space.z > a.space.z,
