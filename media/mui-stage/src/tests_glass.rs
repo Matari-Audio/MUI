@@ -18,8 +18,12 @@ fn solid(stage: &mut Stage, id: &str, size: f64, c: Color) {
 /// Left half white, right half black, square.
 fn halves(stage: &mut Stage, id: &str, size: f64) {
     let root = row([
-        block(size / 2., size).radius(0.).fill(Color::srgb(1., 1., 1.)),
-        block(size / 2., size).radius(0.).fill(Color::srgb(0., 0., 0.)),
+        block(size / 2., size)
+            .radius(0.)
+            .fill(Color::srgb(1., 1., 1.)),
+        block(size / 2., size)
+            .radius(0.)
+            .fill(Color::srgb(0., 0., 0.)),
     ]);
     let scene = resolve(&SceneSpec::new(root)).expect("resolves");
     stage.layer(id, &scene, Size::new(size, size), 16.).unwrap();
@@ -185,7 +189,10 @@ fn glass_shifts_what_is_behind_it_by_its_index_and_thickness() {
     };
     let bare = Pane::edge(&pane.row(None, None)[1]);
     let flat = Pane::edge(&pane.row(Some(glass(1., 80.)), None)[1]);
-    assert!((flat - bare).abs() < 0.5, "an index of 1 bends nothing: {flat} {bare}");
+    assert!(
+        (flat - bare).abs() < 0.5,
+        "an index of 1 bends nothing: {flat} {bare}"
+    );
     for (n, thick) in [(1.5, 80.), (1.5, 40.), (1.9, 80.)] {
         let moved = Pane::edge(&pane.row(Some(glass(n, thick)), None)[1]) - bare;
         let want = Pane::expected(n, thick);

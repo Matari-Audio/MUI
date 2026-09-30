@@ -386,7 +386,10 @@ fn a_material_round_trips_keys_binds_and_fits_the_schema() {
     assert_eq!(again.scenes, Project::load(&plain).unwrap().scenes);
     assert!(again.to_json().contains("\"material\""));
     let l = &p.scenes[0].layers[0];
-    assert!(matches!(l.prop("material.transmission"), Some(Anim::Keys(_))));
+    assert!(matches!(
+        l.prop("material.transmission"),
+        Some(Anim::Keys(_))
+    ));
     assert!(l.props_in(true).iter().any(|(n, _)| n == "material.tint"));
     let m = eval(&p, &p.scenes[0], 1.).layers[0].space.material.unwrap();
     assert_eq!(m.roughness, Some(0.3), "bound");
@@ -453,7 +456,11 @@ fn a_gltf_glass_material_reads_its_extensions() {
     assert_eq!((g.transmission, g.ior, g.thickness), (1., 1.7, 2.));
     assert_eq!((g.dispersion, g.roughness), (0.5, 0.1));
     // Half the attenuation distance keeps the square root of its colour.
-    assert!((g.tint[0] - 0.5).abs() < 1e-5 && g.tint[1] == 1., "{:?}", g.tint);
+    assert!(
+        (g.tint[0] - 0.5).abs() < 1e-5 && g.tint[1] == 1.,
+        "{:?}",
+        g.tint
+    );
     // Without them it is opaque, the stage's defaults.
     let plain = three::glb(&glb_with("")).unwrap().parts[0].material;
     assert_eq!((plain.transmission, plain.ior), (0., 1.5));

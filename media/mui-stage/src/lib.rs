@@ -2143,7 +2143,10 @@ impl Stage {
                 .filter(|(_, i)| *i < n)
                 .map(|(_, i)| {
                     let l = planes[*i].layer.as_str();
-                    (l, self.tex_group3(&view(&self.layers[l].texture), &chain, &chain))
+                    (
+                        l,
+                        self.tex_group3(&view(&self.layers[l].texture), &chain, &chain),
+                    )
                 })
                 .collect();
             let solid = self.tex_group(&chain, &chain);

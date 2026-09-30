@@ -493,7 +493,9 @@ pub struct Part {
 fn gltf_material(m: &gltf::Material<'_>) -> mui_stage::Material {
     let pbr = m.pbr_metallic_roughness();
     let volume = m.volume();
-    let thickness = volume.as_ref().map_or(0., gltf::material::Volume::thickness_factor);
+    let thickness = volume
+        .as_ref()
+        .map_or(0., gltf::material::Volume::thickness_factor);
     // Attenuation colour is what is left after `attenuationDistance`; the
     // tint is what is left after the thickness.
     let tint = volume.as_ref().map_or([1.; 3], |v| {
@@ -508,9 +510,7 @@ fn gltf_material(m: &gltf::Material<'_>) -> mui_stage::Material {
     mui_stage::Material {
         metallic: pbr.metallic_factor(),
         roughness: pbr.roughness_factor(),
-        transmission: m
-            .transmission()
-            .map_or(0., |t| t.transmission_factor()),
+        transmission: m.transmission().map_or(0., |t| t.transmission_factor()),
         ior: m.ior().unwrap_or(1.5),
         thickness,
         dispersion: m
