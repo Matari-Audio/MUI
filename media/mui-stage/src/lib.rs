@@ -1902,11 +1902,12 @@ impl Stage {
         });
         let mut walls = Vec::new();
         for (i, p) in planes.iter().enumerate() {
+            // In the plane's own units, as its walls: scaled with it.
             let thick = if p.material.thickness > 0. {
                 p.material.thickness
             } else {
                 p.depth
-            };
+            } * p.scale.abs();
             let [a, b, c] = material(&p.material, p.receive, thick, true);
             let rows = |mirror| {
                 [

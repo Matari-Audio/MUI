@@ -204,6 +204,39 @@ fn glass_shifts_what_is_behind_it_by_its_index_and_thickness() {
 }
 
 #[test]
+fn a_scaled_pane_is_as_thick_as_it_looks() {
+    let Some(mut pane) = Pane::new() else {
+        return;
+    };
+    let thick = Pane::edge(&pane.row(Some(glass(1.5, 80.)), None)[1]);
+    let row = |pane: &mut Pane, scale: f32| {
+        let shot = Shot {
+            planes: vec![
+                Plane::new("edge", 900., 900.).at(0., 0., -Pane::BEHIND),
+                Plane::new("clear", 120., 100.)
+                    .scale(scale)
+                    .rotate(0., Pane::TURN, 0.)
+                    .material(glass(1.5, 40.)),
+            ],
+            clear: Some([0.; 3]),
+            post: Post::NONE,
+            ..Shot::new(Pane::camera())
+        };
+        let f = pane.stage.render(0., 0., 1, &|_| shot.clone()).unwrap();
+        let y = Pane::H / 2;
+        let g: Vec<f32> = (0..Pane::W)
+            .map(|x| f.rgba[(y * Pane::W + x) * 4 + 1])
+            .collect();
+        Pane::edge(&g)
+    };
+    let doubled = row(&mut pane, 2.);
+    assert!(
+        (doubled - thick).abs() < 0.5,
+        "40 thick at twice the size is 80: {doubled} {thick}"
+    );
+}
+
+#[test]
 fn dispersion_splits_red_from_blue_at_an_edge() {
     let Some(mut pane) = Pane::new() else {
         return;
