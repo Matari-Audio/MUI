@@ -120,9 +120,7 @@ impl GpuCanvas {
     ) -> Result<Vec<Quad>, String> {
         self.notice.clear();
         if let Some(view) = &frame.view {
-            if !self.three_d {
-                "3D scenes draw flat on this renderer".clone_into(&mut self.notice);
-            } else {
+            if self.three_d {
                 match self.draw_3d(assets, frame, view, target) {
                     Ok(quads) => return Ok(quads),
                     Err(e) => {
@@ -131,6 +129,8 @@ impl GpuCanvas {
                         self.notice = format!("3D unavailable, drawn flat: {e}");
                     }
                 }
+            } else {
+                "3D scenes draw flat on this renderer".clone_into(&mut self.notice);
             }
         }
         let [fw, fh] = frame.size.map(f64::from);

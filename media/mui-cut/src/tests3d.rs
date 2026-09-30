@@ -143,7 +143,7 @@ fn the_stage_example_loads_round_trips_and_its_model_parses() {
     let mesh = three::glb(include_bytes!("../examples/knot.glb")).unwrap();
     assert_eq!(mesh.parts.len(), 1);
     let part = &mesh.parts[0];
-    assert!(part.indices.len() > 1000 && part.indices.len() % 3 == 0);
+    assert!(part.indices.len() > 1000 && part.indices.len().is_multiple_of(3));
     assert!(part.metallic > 0.5 && part.color[0] > part.color[2]);
     assert!(mesh.max[1] > mesh.min[1]);
     assert!(three::glb(b"not a model").is_err());
@@ -220,7 +220,9 @@ fn shadowed_3d_frames_are_deterministic_and_drawn() {
         assert_eq!(a, b, "{engine:?}");
         let bg = p.scenes[0].background.0;
         let drawn = a
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|px| px[..3].iter().zip(&bg).any(|(a, b)| a.abs_diff(*b) > 30))
             .count();
         assert!(drawn > a.len() / 4 / 10, "{engine:?}: {drawn} pixels drawn");

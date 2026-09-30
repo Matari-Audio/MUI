@@ -342,27 +342,26 @@ pub fn glb(bytes: &[u8]) -> Result<Mesh, String> {
             if indices.iter().any(|&i| i as usize >= pos.len()) {
                 return Err("an index past the vertices".into());
             }
-            let normals: Vec<[f32; 3]> = match reader.read_normals() {
-                Some(n) => n.map(|n| unit(at(n, 0.))).collect(),
-                None => {
-                    // Smooth normals from the faces around each vertex.
-                    let mut acc = vec![[0f32; 3]; pos.len()];
-                    for t in indices.chunks_exact(3) {
-                        let [a, b, c] = [0, 1, 2].map(|k| pos[t[k] as usize]);
-                        let (u, v) = (sub(b, a), sub(c, a));
-                        let n = [
-                            u[1] * v[2] - u[2] * v[1],
-                            u[2] * v[0] - u[0] * v[2],
-                            u[0] * v[1] - u[1] * v[0],
-                        ];
-                        for &i in t {
-                            for k in 0..3 {
-                                acc[i as usize][k] += n[k];
-                            }
+            let normals: Vec<[f32; 3]> = if let Some(n) = reader.read_normals() {
+                n.map(|n| unit(at(n, 0.))).collect()
+            } else {
+                // Smooth normals from the faces around each vertex.
+                let mut acc = vec![[0f32; 3]; pos.len()];
+                for t in indices.as_chunks::<3>().0 {
+                    let [a, b, c] = [0, 1, 2].map(|k| pos[t[k] as usize]);
+                    let (u, v) = (sub(b, a), sub(c, a));
+                    let n = [
+                        u[1] * v[2] - u[2] * v[1],
+                        u[2] * v[0] - u[0] * v[2],
+                        u[0] * v[1] - u[1] * v[0],
+                    ];
+                    for &i in t {
+                        for k in 0..3 {
+                            acc[i as usize][k] += n[k];
                         }
                     }
-                    acc.into_iter().map(unit).collect()
                 }
+                acc.into_iter().map(unit).collect()
             };
             let pbr = prim.material().pbr_metallic_roughness();
             parts.push(Part {
