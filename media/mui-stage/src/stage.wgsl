@@ -45,6 +45,9 @@ struct Globals {
     ao: vec4f,
     // The environment's irradiance, nine SH coefficients (see env.rs).
     sh: array<vec4f, 9>,
+    // A beauty sample: xy its shift in clip space (eye rays undo it), zw
+    // the turn of the occlusion's slices and steps.
+    jitter: vec4f,
 };
 @group(0) @binding(0) var<uniform> g: Globals;
 // The environment's GGX mip chain (equirectangular) and the split-sum LUT.
@@ -283,7 +286,7 @@ struct Full {
 
 // The eye's ray through `uv` (0..1, y down).
 fn eye_ray(uv: vec2f) -> vec3f {
-    let q = vec2f(uv.x * 2. - 1., 1. - uv.y * 2.);
+    let q = vec2f(uv.x * 2. - 1., 1. - uv.y * 2.) - g.jitter.xy;
     return normalize(g.cam_fwd.xyz + q.x * g.cam_right.w * g.cam_right.xyz + q.y * g.cam_up.w * g.cam_up.xyz);
 }
 
@@ -600,8 +603,10 @@ fn nearer(c: vec3f, a: vec3f, b: vec3f) -> vec3f {
     let view_z = max(dot(c - g.eye.xyz, g.cam_fwd.xyz), 1.);
     let reach = clamp(radius * g.time_res.z * 0.5 / (g.cam_up.w * view_z), 4., g.time_res.z * 0.25);
     // Interleaved gradient noise turns the slices and staggers the steps.
-    let noise = fract(52.982918 * fract(dot(vec2f(half), vec2f(0.06711056, 0.00583715))));
-    let jitter = fract(noise * 7.13 + 0.37);
+    // A beauty sample turns both further, so the mean of many converges.
+    let ign = fract(52.982918 * fract(dot(vec2f(half), vec2f(0.06711056, 0.00583715))));
+    let noise = fract(ign + g.jitter.z);
+    let jitter = fract(ign * 7.13 + 0.37 + g.jitter.w);
     let fall_range = 0.615 * radius;
     let fall_mul = -1. / fall_range;
     let fall_add = (radius - fall_range) / fall_range + 1.;

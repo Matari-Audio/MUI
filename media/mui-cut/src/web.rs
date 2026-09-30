@@ -417,7 +417,12 @@ impl GpuView {
             self.shutter = Some(Shutter::new(&self.canvas.device, size, f, f));
         }
         let shutter = self.shutter.as_ref().expect("made above");
-        shutter.expose(&mut self.canvas, &self.assets, &subframes(p, s, t, mb))?;
+        shutter.expose(
+            &mut self.canvas,
+            &self.assets,
+            &subframes(p, s, t, mb),
+            false,
+        )?;
         let frame = match self.surface.get_current_texture() {
             Acquired::Success(f) | Acquired::Suboptimal(f) => f,
             other => return Err(format!("no canvas texture: {other:?}")),
@@ -436,7 +441,17 @@ impl GpuView {
     }
     /// Scene `scene` at `t` presented at `w` by `h`; the layers' quads as
     /// JSON `[{id, pts}]` in project pixels.
-    pub fn draw(&mut self, scene: usize, t: f64, w: u32, h: u32) -> Result<String, String> {
+    /// With `sample`, a 3D frame is beauty sample `sample` folded into the
+    /// mean of the ones before it (0 starts afresh): the paused viewport
+    /// refines while the editor keeps asking for the next.
+    pub fn draw(
+        &mut self,
+        scene: usize,
+        t: f64,
+        w: u32,
+        h: u32,
+        sample: Option<u32>,
+    ) -> Result<String, String> {
         use wgpu::CurrentSurfaceTexture as Acquired;
         let p = self.project.as_ref().ok_or("no project loaded")?;
         let s = p.scenes.get(scene).ok_or("no such scene")?;
@@ -461,7 +476,24 @@ impl GpuView {
         if let (Some(v), Some([yaw, pitch, zoom])) = (f.view.as_mut(), self.orbit) {
             v.camera = v.camera.orbit(yaw, pitch, zoom);
         }
-        let quads = self.canvas.draw(&self.assets, &f, &view)?;
+        let quads = match sample {
+            None => self.canvas.draw(&self.assets, &f, &view)?,
+            Some(i) => {
+                let format = self.config.format;
+                if self.shutter.as_ref().is_none_or(|sh| sh.size() != [w, h]) {
+                    self.shutter = Some(Shutter::new(&self.canvas.device, [w, h], format, format));
+                }
+                let shutter = self.shutter.as_ref().expect("made above");
+                let quads = shutter.expose_sample(&mut self.canvas, &self.assets, &f, i)?;
+                let mut enc = self
+                    .canvas
+                    .device
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+                shutter.resolve(&mut enc, &view);
+                self.canvas.queue.submit([enc.finish()]);
+                quads
+            }
+        };
         self.canvas.queue.present(frame);
         serde_json::to_string(&quads).map_err(|e| e.to_string())
     }

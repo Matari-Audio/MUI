@@ -2,6 +2,7 @@
 //!
 //!     mui-cut render demo.cut.json -o out.mp4 [--scene NAME] [--mb N] [--size WxH] [--renderer R]
 //!     mui-cut still  demo.cut.json --t 1.5 -o f.png [--scene NAME] [--size WxH] [--renderer R]
+//!     mui-cut still  stage3d.cut.json --t 3 -o f.png --quality beauty [--samples 64]
 //!     mui-cut render promo.cut.json -o out/{name}.mp4 --variants all
 //!     mui-cut eval   demo.cut.json --t 1.5 [--scene NAME]
 //!     mui-cut fmt    demo.cut.json
@@ -33,8 +34,13 @@ const USAGE: &str = "usage:
                  [--variant NAME | --variants all|NAME,NAME -o out/{name}.mp4]
                  [--segment SECONDS] [--range 3.2s-5.0s]   (the segment cache)
   mui-cut still  PROJECT --t SECONDS -o OUT.png [--scene NAME] [--size WxH] [--renderer R] [--variant NAME]
+    render and still: [--quality normal|beauty] [--samples N]
     R: classic (default; Vello compute on the GPU), gpu (vello_gpu), cpu (Vello CPU),
        blender (3D scenes through Blender: [--engine eevee|cycles] [--samples N]);
+    --quality beauty (or --samples N) on a GPU renderer: 3D frames are the mean of N
+       samples (64 by default), each with its own pixel offset, lens point (depth of
+       field), area-light position (soft shadows) and occlusion turn; motion blur
+       spreads them across the shutter.
     --cpu is --renderer cpu. --threads: CPU frames drawn at once (default: one per core).
     --stats: per-frame wall time (evaluate, draw, hand to ffmpeg) p50/p95/max
   mui-cut eval   PROJECT --t SECONDS [--scene NAME] [--variant NAME]
@@ -272,7 +278,14 @@ impl Backend {
         workers: usize,
         yuv: Option<Yuv>,
     ) -> Result<Self> {
-        Self::open_at(p, &args.project, renderer(args), size, workers, yuv)
+        let mut b = Self::open_at(p, &args.project, renderer(args), size, workers, yuv)?;
+        if beauty(args)?.is_some() {
+            match &mut b {
+                Self::Gpu(g) => g.beauty = true,
+                _ => eprintln!("mui-cut: beauty needs a GPU renderer; drawing normal frames"),
+            }
+        }
+        Ok(b)
     }
     /// [`Backend::open`] without the command line: `renderer` is
     /// `classic` (the default), `gpu` or `cpu`.
@@ -412,6 +425,7 @@ impl Backend {
     fn name(&self) -> String {
         match self {
             Self::Cpu(..) => "cpu (vello_cpu)".into(),
+            Self::Gpu(g) if g.beauty => format!("gpu ({}), beauty", g.adapter),
             Self::Gpu(g) => format!("gpu ({})", g.adapter),
             Self::Blender(b) => b.name.clone(),
         }
@@ -488,8 +502,7 @@ fn still(args: &Args) -> Result<()> {
     } else {
         Backend::open(&p, args, (w, h), 1, None)?
     };
-    let f = eval(&p, s, t);
-    let px = match b.push(vec![f])? {
+    let px = match b.push(shots(&p, s, t, 1, beauty(args)?))? {
         Some(px) => px,
         None => b.finish()?.pop().ok_or("no frame came back")?,
     };
@@ -501,6 +514,35 @@ fn still(args: &Args) -> Result<()> {
         .map_err(|e| format!("{out}: {e}"))?;
     println!("wrote {out} ({})", b.name());
     Ok(())
+}
+
+/// Beauty samples per frame: `--quality beauty` (64 unless `--samples`),
+/// or `--samples N` alone. Blender takes `--samples` itself.
+fn beauty(args: &Args) -> Result<Option<usize>> {
+    if renderer(args) == Some("blender") {
+        return Ok(None);
+    }
+    let n = match (args.get("quality"), args.has("samples")) {
+        (None | Some("normal"), false) => return Ok(None),
+        (None | Some("beauty"), _) => args.num("samples", 64)?,
+        (Some("normal"), true) => return Err("--samples is for --quality beauty".into()),
+        (Some(q), _) => return Err(format!("--quality: `{q}` is not normal or beauty")),
+    };
+    if !(1..=4096).contains(&n) {
+        return Err(format!("--samples: {n} is not 1..=4096"));
+    }
+    Ok(Some(n))
+}
+
+/// What one output frame is drawn from: its `mb` subframes across the
+/// shutter, or with `beauty` samples that many, spread across the shutter
+/// when there is motion blur and all at `t` when there is none.
+fn shots(p: &Project, s: &Scene, t: f64, mb: usize, beauty: Option<usize>) -> Vec<Frame> {
+    match beauty {
+        Some(n) if mb > 1 => subframes(p, s, t, n.max(mb)),
+        Some(n) => vec![eval(p, s, t); n],
+        None => subframes(p, s, t, mb),
+    }
 }
 
 /// Encoder settings from the flags, over the project's `render`.
@@ -644,7 +686,8 @@ fn render_one(
                 Some(plan) => a.extend(plan.output().into_iter().chain([out.to_owned()])),
                 None => a.extend(["-f", "null", "-"].map(String::from)),
             }
-            let frames = jobs.iter().map(|(s, t)| subframes(p, s, *t, mb));
+            let n = beauty(args)?;
+            let frames = jobs.iter().map(|(s, t)| shots(p, s, *t, mb, n));
             encode(b, frames, &a, out, &mut times)?;
             String::new()
         }
@@ -774,9 +817,10 @@ impl Cut<'_> {
         let (mut hits, mut misses) = (0, 0);
         let mut chunks = Vec::new();
         for (k, span) in jobs.chunks(n).enumerate() {
+            let samples = beauty(self.args)?;
             let frames: Vec<Vec<Frame>> = span
                 .iter()
-                .map(|(s, t)| subframes(p, s, *t, self.mb))
+                .map(|(s, t)| shots(p, s, *t, self.mb, samples))
                 .collect();
             let name = format!("{}.{ext}", segments::span_key(&base, &frames));
             let path = dir.join(&name);

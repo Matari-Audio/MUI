@@ -890,6 +890,8 @@ worker.onmessage = ({ data: m }) => {
   }
   $('#notice').hidden = !m.notice; $('#notice').textContent = m.notice ?? '';
   $('#orbit').hidden = scene()?.mode !== '3d' || !!m.notice;
+  $('#beauty').hidden = $('#orbit').hidden;
+  view.dataset.samples = beauty.n;   // the e2e watches it climb
   drawOverlay();
 };
 let hover = null, drag = null;
@@ -909,7 +911,9 @@ function drawViewport() {
   drawOverlay();
   if (drawing) return false;
   drawing = true;
-  worker.postMessage({ type: 'draw', si, t, w: vw, h: vh });
+  // A refining Beauty draw is the next sample; any other starts over.
+  const sample = refining() ? beauty.n++ : undefined;
+  worker.postMessage({ type: 'draw', si, t, w: vw, h: vh, sample });
   pacing.pending = playing ? Math.floor(t * R.fps + 1e-6) : -1;
   return true;
 }
@@ -951,6 +955,17 @@ const hit = p => [...quads].reverse().find(q => inside(p, q.pts))?.id ?? null;
 // The orbit preview swings the shot camera about its target; the project
 // never sees it.
 const orbit = { on: false, yaw: 0, pitch: 0, zoom: 1, from: null };
+// The Beauty preview: while paused on a 3D scene, each finished draw asks
+// for the next sample, folded into the mean of the ones before, up to
+// BEAUTY_MAX; any change of what is shown starts again from sample 0.
+const BEAUTY_MAX = 256;
+const beauty = { on: false, n: 0 };
+const refining = () => beauty.on && !playing && !$('#beauty').hidden;
+$('#beauty').onclick = () => {
+  beauty.on = !beauty.on;
+  $('#beauty').setAttribute('aria-pressed', beauty.on); $('#beauty').classList.toggle('on', beauty.on);
+  need = true;
+};
 const sendOrbit = () => { worker.postMessage({ type: 'orbit', ...orbit, from: undefined }); need = true; };
 $('#orbit').onclick = () => {
   Object.assign(orbit, { on: !orbit.on, yaw: 0, pitch: 0, zoom: 1 });
@@ -1404,10 +1419,12 @@ function loop(ms) {
   if (!$('#hud').hidden) drawHud();
   if (need && doc) {
     need = false;
+    beauty.n = 0;
     if (!drawViewport()) need = true;
     drawTimeline(); drawGraph(); updateInspector();
     $('#time').textContent = `${t.toFixed(2)} s  ·  f${Math.round(t * R.fps)}`;
   }
+  else if (doc && !drawing && beauty.n > 0 && beauty.n < BEAUTY_MAX && refining()) drawViewport();
   report(ms);
   requestAnimationFrame(loop);
 }

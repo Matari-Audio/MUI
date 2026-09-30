@@ -36,6 +36,18 @@ fn pass(
     view: &wgpu::TextureView,
     load: wgpu::LoadOp<wgpu::Color>,
 ) {
+    blend_pass(encoder, pipeline, bind, view, load, 1.);
+}
+
+/// [`pass`] with a blend constant.
+fn blend_pass(
+    encoder: &mut wgpu::CommandEncoder,
+    pipeline: &wgpu::RenderPipeline,
+    bind: &wgpu::BindGroup,
+    view: &wgpu::TextureView,
+    load: wgpu::LoadOp<wgpu::Color>,
+    k: f64,
+) {
     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
         label: Some("mui-cut shutter"),
         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -54,6 +66,12 @@ fn pass(
     });
     pass.set_pipeline(pipeline);
     pass.set_bind_group(0, bind, &[]);
+    pass.set_blend_constant(wgpu::Color {
+        r: k,
+        g: k,
+        b: k,
+        a: k,
+    });
     pass.draw(0..3, 0..1);
 }
 
@@ -62,6 +80,8 @@ pub struct Shutter {
     sub: wgpu::TextureView,
     acc: wgpu::TextureView,
     accumulate: wgpu::RenderPipeline,
+    /// A running mean: the sum moves `k` of the way to the new sample.
+    average: wgpu::RenderPipeline,
     resolve: wgpu::RenderPipeline,
     sub_bind: wgpu::BindGroup,
     acc_bind: wgpu::BindGroup,
@@ -157,6 +177,19 @@ impl Shutter {
                 alpha: add,
             }),
         );
+        let mean = wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::Constant,
+            dst_factor: wgpu::BlendFactor::OneMinusConstant,
+            operation: wgpu::BlendOperation::Add,
+        };
+        let average = pipeline(
+            "accumulate",
+            F::Rgba16Float,
+            Some(wgpu::BlendState {
+                color: mean,
+                alpha: mean,
+            }),
+        );
         let resolve = pipeline("resolve", out_format, None);
         let weight = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("mui-cut shutter weight"),
@@ -186,6 +219,7 @@ impl Shutter {
             sub,
             acc,
             accumulate,
+            average,
             resolve,
             sub_bind,
             acc_bind,
@@ -202,12 +236,15 @@ impl Shutter {
         &self.acc
     }
 
-    /// Draw every subframe through `canvas` into the sum. Submits.
+    /// Draw every subframe through `canvas` into the sum; with `beauty`,
+    /// subframe `i` is also beauty sample `i` of a 3D scene (jittered
+    /// pixel, lens, area lights). Submits.
     pub fn expose(
         &self,
         canvas: &mut GpuCanvas,
         assets: &Assets,
         subframes: &[Frame],
+        beauty: bool,
     ) -> Result<(), String> {
         let (device, queue) = (canvas.device.clone(), canvas.queue.clone());
         let k = 1. / subframes.len().max(1) as f32;
@@ -217,7 +254,10 @@ impl Shutter {
             &[k, 0., 0., 0.].map(f32::to_le_bytes).concat(),
         );
         for (i, f) in subframes.iter().enumerate() {
-            canvas.draw(assets, f, &self.sub)?;
+            canvas.sample = beauty.then_some(i as u32);
+            let drawn = canvas.draw(assets, f, &self.sub);
+            canvas.sample = None;
+            drawn?;
             // An export never quietly flattens a 3D shot.
             if f.view.is_some() && !canvas.notice().is_empty() {
                 return Err(canvas.notice().to_owned());
@@ -232,6 +272,38 @@ impl Shutter {
             queue.submit([enc.finish()]);
         }
         Ok(())
+    }
+
+    /// Beauty sample `i` of `frame` into a running mean of the ones before
+    /// (sample 0 starts it): a paused viewport refining. Submits.
+    pub fn expose_sample(
+        &self,
+        canvas: &mut GpuCanvas,
+        assets: &Assets,
+        frame: &Frame,
+        i: u32,
+    ) -> Result<Vec<crate::Quad>, String> {
+        canvas.sample = Some(i);
+        let quads = canvas.draw(assets, frame, &self.sub);
+        canvas.sample = None;
+        let quads = quads?;
+        canvas.queue.write_buffer(
+            &self.weight,
+            0,
+            &[1f32, 0., 0., 0.].map(f32::to_le_bytes).concat(),
+        );
+        let mut enc = canvas
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        let load = if i == 0 {
+            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
+        } else {
+            wgpu::LoadOp::Load
+        };
+        let k = 1. / f64::from(i + 1);
+        blend_pass(&mut enc, &self.average, &self.sub_bind, &self.acc, load, k);
+        canvas.queue.submit([enc.finish()]);
+        Ok(quads)
     }
 
     /// [`Shutter::expose`] of one picture rendered elsewhere, `frame`'s
