@@ -262,8 +262,9 @@ pub fn discover_parts(scene: &mui_scene::ResolvedScene, width: f64, height: f64)
     let candidates: Vec<_> = surfaces
         .iter()
         .filter(|s| {
-            s.parent.is_some()
-                && s.frame.size.width >= 50.
+            // No named ancestor is fine (a plugin whose root is anonymous):
+            // the size cap keeps the whole UI out.
+            s.frame.size.width >= 50.
                 && s.frame.size.height >= 35.
                 && s.frame.size.width * s.frame.size.height <= width * height * 0.3
         })
@@ -509,6 +510,21 @@ mod tests {
         let changed = stream.frame(&make(140.), 300, 200, 1., &roots).unwrap();
         assert!(!changed["images"].as_object().unwrap().is_empty());
         assert_ne!(first["scene"]["layers"], changed["scene"]["layers"]);
+    }
+
+    /// A UI whose root and wrappers are anonymous (as plugins' often are)
+    /// still splits into its named panels.
+    #[test]
+    fn parts_need_no_named_root() {
+        let scene = resolve(&SceneSpec::new(
+            col([col([
+                block(100., 60.).fill(Role::Ink).id("about"),
+                block(120., 60.).fill(Role::Ink).id("settings"),
+            ])])
+            .size(300., 200.),
+        ))
+        .unwrap();
+        assert_eq!(discover_parts(&scene, 300., 200.), ["about", "settings"]);
     }
 
     /// Two levels: panels, then the controls in them, addressed by path;
