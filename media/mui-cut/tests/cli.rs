@@ -651,7 +651,7 @@ fn a_cargo_source_builds_with_its_own_toolchain() {
         std::fs::read_to_string(&log).unwrap().trim(),
         format!("{}|", env!("CARGO_MANIFEST_DIR"))
     );
-||||||| parent of 02f7daf (mui-cut: tests for the Blender renderer)
+}
 
 const STAGE3D: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/stage3d.cut.json");
 
