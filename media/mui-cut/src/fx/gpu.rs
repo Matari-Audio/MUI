@@ -47,6 +47,8 @@ fn source(name: &str) -> Option<&'static str> {
 
 struct Targets {
     size: [u32; 2],
+    /// `A`'s texture, which a plate is written into.
+    a: wgpu::Texture,
     views: [wgpu::TextureView; 4],
     binds: [wgpu::BindGroup; 4],
 }
@@ -190,25 +192,27 @@ impl Passes {
         if !grow && self.targets.as_ref().is_some_and(|t| t.size == size) {
             return;
         }
-        let views = [0; 4].map(|_| {
-            device
-                .create_texture(&wgpu::TextureDescriptor {
-                    label: Some("mui-cut fx"),
-                    size: wgpu::Extent3d {
-                        width: size[0],
-                        height: size[1],
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format: self.format,
-                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                        | wgpu::TextureUsages::TEXTURE_BINDING,
-                    view_formats: &[],
-                })
-                .create_view(&wgpu::TextureViewDescriptor::default())
+        let textures = [0; 4].map(|_| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("mui-cut fx"),
+                size: wgpu::Extent3d {
+                    width: size[0],
+                    height: size[1],
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: self.format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            })
         });
+        let views = textures
+            .each_ref()
+            .map(|t| t.create_view(&wgpu::TextureViewDescriptor::default()));
         let binds = std::array::from_fn(|i| {
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: None,
@@ -233,7 +237,13 @@ impl Passes {
                 ],
             })
         });
-        self.targets = Some(Targets { size, views, binds });
+        let a = textures[A].clone();
+        self.targets = Some(Targets {
+            size,
+            a,
+            views,
+            binds,
+        });
     }
 
     /// Stage one pass's uniform; its dynamic offset.
@@ -363,6 +373,38 @@ impl Passes {
         let quads = canvas.draw_3d(assets, frame, view, &a)?;
         self.finish(canvas, h, &frame.effects, target);
         Ok(quads)
+    }
+
+    /// `frame`'s scene effects over `rgba`, a picture already rendered at
+    /// the canvas's size (a Blender frame), into `target`.
+    pub(crate) fn plate(
+        &mut self,
+        canvas: &GpuCanvas,
+        frame: &Frame,
+        rgba: &[u8],
+        target: &wgpu::TextureView,
+    ) -> Result<(), String> {
+        let [w, h] = canvas.size();
+        if rgba.len() != w as usize * h as usize * 4 {
+            return Err(format!(
+                "a plate of {} bytes is not {w}x{h} RGBA",
+                rgba.len()
+            ));
+        }
+        let hd = self.begin(canvas, frame, passes(&frame.effects) + 1);
+        let a = &self.targets.as_ref().expect("prepared").a;
+        canvas.queue.write_texture(
+            a.as_image_copy(),
+            rgba,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(w * 4),
+                rows_per_image: Some(h),
+            },
+            a.size(),
+        );
+        self.finish(canvas, hd, &frame.effects, target);
+        Ok(())
     }
 
     /// `frame` with its effects into `target`; its quads.
