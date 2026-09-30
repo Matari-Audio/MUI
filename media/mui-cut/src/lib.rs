@@ -37,7 +37,7 @@ pub use motion::{
     ANIMATOR_PROPS, Animator, Deform, Deformer, Ease, Falloff, Fx, Order, Unit, text_units,
 };
 pub use plugin::{
-    Capture, Fragment, Param, Part, PartAt, PartInfo, PluginAt, Pose, Source, Step, Surface,
+    Capture, Fragment, Note, Param, Part, PartAt, PartInfo, PluginAt, Pose, Source, Step, Surface,
 };
 #[cfg(not(target_arch = "wasm32"))]
 pub use pool::{CpuPool, shutter};
@@ -57,6 +57,10 @@ pub struct Project {
     /// Output pixels, `[width, height]`; layer coordinates are in these.
     pub size: [u32; 2],
     pub fps: f64,
+    /// Audio samples a second: plugin layers render at it and `render`
+    /// mixes the soundtrack at it.
+    #[serde(default = "sample_rate", skip_serializing_if = "is_sample_rate")]
+    pub sample_rate: u32,
     /// Every file and plugin imported into the project: the editor's
     /// Sources panel, and what `source_add` writes. Layers may use files
     /// this does not list; [`Project::all_sources`] adds those.
@@ -280,6 +284,23 @@ pub enum Kind {
         /// component layer. Empty draws the whole UI.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         show: Vec<String>,
+        /// Notes played into the plugin, seconds from the scene's start:
+        /// its DSP renders them into the soundtrack (at the layer's
+        /// `volume`), and its UI is captured following what it plays.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        notes: Vec<Note>,
+    },
+    /// An audio file (relative to the project), `time` seconds into it at
+    /// the scene's start (keyable: keys remap time), at `volume`. It draws
+    /// nothing; `render` mixes it into the soundtrack and `serve` plays it.
+    Audio {
+        path: String,
+    },
+    /// Plugin layer `of`'s patch as it plays: the parameters off their
+    /// defaults and the modulation routes with their live values, a
+    /// graphite panel `width` x `height`.
+    Patch {
+        of: String,
     },
 }
 
@@ -344,6 +365,12 @@ pub enum Layout {
 
 fn is_default<T: Default + PartialEq>(v: &T) -> bool {
     *v == T::default()
+}
+fn sample_rate() -> u32 {
+    48_000
+}
+fn is_sample_rate(r: &u32) -> bool {
+    *r == 48_000
 }
 fn one_level() -> u32 {
     1
@@ -455,6 +482,9 @@ pub struct Layer {
     pub pointer_y: Anim<f64>,
     #[serde(default = "zero", skip_serializing_if = "is_zero")]
     pub pointer_down: Anim<f64>,
+    /// Audio and plugin layers: the gain their sound is mixed at, 1 as is.
+    #[serde(default = "one", skip_serializing_if = "is_one")]
+    pub volume: Anim<f64>,
     /// Text glyphs and duplicator copies, applied in order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub animators: Vec<Animator>,
@@ -691,6 +721,11 @@ impl Layer {
                 out.push(("fill".into(), Color(&self.fill)));
                 return out;
             }
+            Kind::Audio { .. } => {
+                num("time", &self.time);
+                num("volume", &self.volume);
+                return out;
+            }
             Kind::Model { .. } => {
                 for (n, a) in [
                     ("x", &self.x),
@@ -747,12 +782,17 @@ impl Layer {
         if let Kind::Lottie { .. } = self.kind {
             num("time", &self.time);
         }
+        if let Kind::Patch { .. } = self.kind {
+            num("width", &self.width);
+            num("height", &self.height);
+        }
         if let Kind::Plugin { params, parts, .. } = &self.kind {
             num("explode", &self.explode);
             num("backdrop", &self.backdrop);
             num("pointer_x", &self.pointer_x);
             num("pointer_y", &self.pointer_y);
             num("pointer_down", &self.pointer_down);
+            num("volume", &self.volume);
             for (i, p) in params.iter().enumerate() {
                 num(&format!("params.{i}.value"), &p.value);
             }
@@ -763,7 +803,7 @@ impl Layer {
         let vector = self.vector();
         let own_paint = matches!(
             self.kind,
-            Kind::Svg { .. } | Kind::Lottie { .. } | Kind::Plugin { .. }
+            Kind::Svg { .. } | Kind::Lottie { .. } | Kind::Plugin { .. } | Kind::Patch { .. }
         );
         if vector && !own_paint {
             num("stroke_width", &self.stroke_width);
@@ -830,6 +870,8 @@ impl Layer {
                 | Kind::Light { .. }
                 | Kind::Model { .. }
                 | Kind::Plugin { .. }
+                | Kind::Audio { .. }
+                | Kind::Patch { .. }
         )
     }
 
@@ -839,7 +881,8 @@ impl Layer {
             Kind::Image { path }
             | Kind::Svg { path }
             | Kind::Lottie { path, .. }
-            | Kind::Model { path } => Some(path),
+            | Kind::Model { path }
+            | Kind::Audio { path } => Some(path),
             _ => None,
         }
     }
@@ -1141,6 +1184,10 @@ pub struct Drawn {
     /// Plugin layers: the capture to show and the parts' motion.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub plugin: Option<PluginAt>,
+    /// Patch layers: the capture of the plugin layer they show, as its
+    /// `plugin.state`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub patch: Option<String>,
 }
 
 /// Everything a renderer needs for one instant of one scene.
@@ -1177,12 +1224,22 @@ pub fn eval(project: &Project, scene: &Scene, t: f64) -> Frame {
     let mut layers: Vec<Drawn> = scene
         .layers
         .iter()
-        .map(|l| l.eval_at(t, project.fps))
+        .map(|l| l.eval_at(t, project.fps, project.sample_rate))
         .collect();
     place::compose(scene, &mut layers);
     for d in &mut layers {
         if let Kind::Text { font, .. } = &mut d.kind {
             *font = project.font(font).to_owned();
+        }
+    }
+    // A patch layer reads the state its plugin layer shows.
+    for i in 0..layers.len() {
+        if let Kind::Patch { of } = &layers[i].kind {
+            layers[i].patch = layers
+                .iter()
+                .find(|l| &l.id == of)
+                .and_then(|l| l.plugin.as_ref())
+                .map(|p| p.state.clone());
         }
     }
     let view = (scene.mode == Mode::ThreeD).then(|| three::view(project.size, scene, t, &layers));
@@ -1201,9 +1258,9 @@ pub fn eval(project: &Project, scene: &Scene, t: f64) -> Frame {
 impl Layer {
     /// Every property at `t` in a project running at `fps` (a plugin layer
     /// reads its state on that frame grid).
-    pub fn eval_at(&self, t: f64, fps: f64) -> Drawn {
+    pub fn eval_at(&self, t: f64, fps: f64, rate: u32) -> Drawn {
         Drawn {
-            plugin: self.plugin_at(t, fps),
+            plugin: self.plugin_at(t, fps, rate),
             ..self.at(t)
         }
     }
@@ -1281,6 +1338,7 @@ impl Layer {
             },
             effects: fx::eval(&self.effects, t),
             plugin: None,
+            patch: None,
         }
     }
 }
@@ -1376,6 +1434,12 @@ impl Project {
         if let Some(r) = &p.render {
             r.check().map_err(|e| format!("render: {e}"))?;
         }
+        if !(8_000..=192_000).contains(&p.sample_rate) {
+            return Err(format!(
+                "sample_rate: {} is not 8000..192000 samples a second",
+                p.sample_rate
+            ));
+        }
         sources::check(&p.sources)?;
         for (si, s) in p.scenes.iter().enumerate() {
             if !(s.duration.is_finite() && s.duration > 0.) {
@@ -1417,8 +1481,11 @@ impl Project {
                         parts,
                         explode_levels,
                         explode_stagger,
+                        notes,
                         ..
                     } => {
+                        plugin::check_notes(notes)
+                            .map_err(|e| format!("{at}.notes: layer `{id}`: {e}"))?;
                         source
                             .check()
                             .map_err(|e| format!("{at}.source: layer `{id}`: {e}"))?;
@@ -1449,6 +1516,17 @@ impl Project {
                 format!("scenes[{si}].layers[{li}].parent: scene `{}`: {e}", s.name)
             })?;
             for l in &s.layers {
+                if let Kind::Patch { of } = &l.kind
+                    && !s
+                        .layers
+                        .iter()
+                        .any(|o| &o.id == of && matches!(o.kind, Kind::Plugin { .. }))
+                {
+                    return Err(format!(
+                        "scene `{}`: patch `{}` shows no plugin layer `{of}`",
+                        s.name, l.id
+                    ));
+                }
                 if let Kind::Camera { look_at, .. } = &l.kind
                     && !look_at.is_empty()
                     && !ids.contains(look_at)
@@ -1492,6 +1570,17 @@ impl Project {
             .iter()
             .any(|s| !s.effects.is_empty() || s.layers.iter().any(|l| !l.effects.is_empty()))
     }
+    /// Output frames scene `s` renders: its duration on the frame grid,
+    /// at least one.
+    pub fn frames(&self, s: &Scene) -> usize {
+        (s.duration * self.fps).round().max(1.) as usize
+    }
+
+    /// Soundtrack samples scene `s` takes: as long as its frames.
+    pub fn samples(&self, s: &Scene) -> u64 {
+        plugin::sample_at(self.frames(s) as f64 / self.fps, self.sample_rate)
+    }
+
     pub fn scene(&self, name: &str) -> Option<&Scene> {
         self.scenes.iter().find(|s| s.name == name)
     }

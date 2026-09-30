@@ -55,7 +55,7 @@ impl Editor {
             &std::collections::BTreeMap<String, Size>,
         ) -> Result<(), String>,
     ) -> Result<(), String> {
-        let dt = (sample_frame.saturating_sub(self.sample_frame) as f64 / 48_000.).min(1.);
+        let dt = (sample_frame.saturating_sub(self.sample_frame) as f64 / f64::from(crate::sample_rate())).min(1.);
         self.sample_frame = sample_frame;
         for command in commands {
             if command["kind"] == "select" {

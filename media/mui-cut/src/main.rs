@@ -10,6 +10,7 @@
 //!     mui-cut add    ../KORREKT [--project demo.cut.json]
 #![forbid(unsafe_code)]
 
+mod audio;
 mod build;
 mod encode;
 mod host;
@@ -318,6 +319,8 @@ fn load_assets(p: &Project, project: &Path, assets: &mut Assets) -> Vec<String> 
         .scenes
         .iter()
         .flat_map(|s| &s.layers)
+        // Sound is read by the mix, not drawn.
+        .filter(|l| !matches!(l.kind, mui_cut::Kind::Audio { .. }))
         .filter_map(|l| p.asset_of(l))
         .chain(hdris)
     {
@@ -783,6 +786,13 @@ fn render_one(
             String::new()
         }
     };
+    let mut cache = cache;
+    if let Some(plan) = &plan
+        && let Some(pcm) = audio::mix(p, &args.project, &scenes)?
+    {
+        audio::mux(plan, out, &pcm, p.sample_rate)?;
+        cache.push_str(&format!(", {} s of sound at {} Hz", pcm.len() / 2 / p.sample_rate as usize, p.sample_rate));
+    }
     let secs = start.elapsed().as_secs_f64();
     let frames = jobs.len();
     println!(

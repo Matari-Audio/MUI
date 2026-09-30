@@ -77,6 +77,75 @@ pub struct Param {
     pub value: Anim<f64>,
 }
 
+/// A note played into a plugin layer: `t` seconds from the scene's start,
+/// held `dur` seconds, MIDI `pitch` (60 is middle C) at velocity `vel`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Note {
+    pub t: f64,
+    pub dur: f64,
+    pub pitch: u8,
+    #[serde(default = "vel", skip_serializing_if = "is_vel")]
+    pub vel: u8,
+}
+fn vel() -> u8 {
+    100
+}
+fn is_vel(v: &u8) -> bool {
+    *v == 100
+}
+
+/// Times finite and not negative, lengths above zero, MIDI numbers.
+pub(crate) fn check_notes(notes: &[Note]) -> Result<(), String> {
+    for (i, n) in notes.iter().enumerate() {
+        if !(n.t.is_finite() && n.t >= 0.) {
+            return Err(format!("[{i}].t: seconds, 0 or more"));
+        }
+        if !(n.dur.is_finite() && n.dur > 0.) {
+            return Err(format!("[{i}].dur: seconds, more than 0"));
+        }
+        if n.pitch > 127 {
+            return Err(format!("[{i}].pitch: 0..127, not {}", n.pitch));
+        }
+        if !(1..=127).contains(&n.vel) {
+            return Err(format!("[{i}].vel: 1..127, not {}", n.vel));
+        }
+    }
+    Ok(())
+}
+
+/// The sample a time falls on at `rate`.
+pub fn sample_at(t: f64, rate: u32) -> u64 {
+    (t * f64::from(rate)).round().max(0.) as u64
+}
+
+/// The notes as the bridge's timed events, `(sample, command)`, in the
+/// order they play: by sample, a note's end before a new start.
+pub fn note_events(notes: &[Note], rate: u32) -> Vec<(u64, Value)> {
+    let mut ev: Vec<(u64, u8, Value)> = notes
+        .iter()
+        .flat_map(|n| {
+            let on = sample_at(n.t, rate);
+            let off = sample_at(n.t + n.dur, rate).max(on + 1);
+            [
+                (on, 1, json!({"at": on, "op": "note_on", "note": n.pitch, "velocity": n.vel})),
+                (off, 0, json!({"at": off, "op": "note_off", "note": n.pitch})),
+            ]
+        })
+        .collect();
+    ev.sort_by_key(|e| (e.0, e.1));
+    ev.into_iter().map(|(s, _, v)| (s, v)).collect()
+}
+
+/// `{"op": "advance"}` to sample `to` with the events in `[from, to)`.
+pub fn advance(events: &[(u64, Value)], from: u64, to: u64) -> Value {
+    let notes: Vec<&Value> = events
+        .iter()
+        .filter(|e| (from..to).contains(&e.0))
+        .map(|e| &e.1)
+        .collect();
+    json!({"op": "advance", "to": to, "notes": notes})
+}
+
 /// A part of the plugin's UI (a surface id the capture split out), moved
 /// on its own: offsets from where the UI puts it, in the plugin's pixels.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -244,7 +313,12 @@ impl Layer {
     /// other kinds.
     // ponytail: eval walks the grid from 0 for every time (O(frames) per
     // eval); memoise per layer if long scenes make eval show up in a profile.
-    pub fn plugin_track(&self, fps: f64, last: usize) -> Vec<Step> {
+    ///
+    /// A layer with notes runs on the adapter's sample clock: every frame
+    /// first advances it to the frame's sample (at `rate`), playing the
+    /// notes that fall before it, so each frame is a state of its own and
+    /// the UI shows what the sound is doing.
+    pub fn plugin_track(&self, fps: f64, rate: u32, last: usize) -> Vec<Step> {
         let crate::Kind::Plugin {
             source,
             select,
@@ -252,6 +326,7 @@ impl Layer {
             parts,
             explode_levels,
             show,
+            notes,
             ..
         } = &self.kind
         else {
@@ -271,9 +346,16 @@ impl Layer {
         let mut steps = Vec::new();
         let mut last_params: Vec<f64> = Vec::new();
         let mut last_pointer = NO_POINTER;
+        let events = note_events(notes, rate);
+        let mut clock = 0;
         for f in 0..=last {
             let t = f as f64 / fps;
             let mut commands = Vec::new();
+            if !notes.is_empty() && f > 0 {
+                let to = sample_at(t, rate);
+                commands.push(advance(&events, clock, to));
+                clock = to;
+            }
             if f == 0 && depth > 1 {
                 commands
                     .push(json!({"op": "input", "kind": "select", "ids": select, "depth": depth}));
@@ -309,6 +391,29 @@ impl Layer {
         steps
     }
 
+    /// A plugin layer with notes: its soundtrack's cache key, and the last
+    /// advance, to `samples`, that finishes it after `track` (its steps,
+    /// as the capture replays them). `None` for a silent layer.
+    pub fn plugin_audio(
+        &self,
+        track: &[Step],
+        fps: f64,
+        rate: u32,
+        samples: u64,
+    ) -> Option<(String, Value)> {
+        let crate::Kind::Plugin { notes, .. } = &self.kind else {
+            return None;
+        };
+        let step = track.last().filter(|_| !notes.is_empty())?;
+        let from = sample_at(step.frame as f64 / fps, rate);
+        let tail = advance(&note_events(notes, rate), from, samples.max(from));
+        let h = fnv(
+            fnv(FNV_OFFSET, step.key.as_bytes()),
+            tail.to_string().as_bytes(),
+        );
+        Some((format!("{h:016x}"), tail))
+    }
+
     /// `[x, y, down]`, x and y to a hundredth of a pixel, down 0 or 1.
     fn pointer_at(&self, t: f64) -> [f64; 3] {
         [
@@ -319,7 +424,7 @@ impl Layer {
     }
 
     /// A plugin layer at `t`; `None` for other kinds.
-    pub(crate) fn plugin_at(&self, t: f64, fps: f64) -> Option<PluginAt> {
+    pub(crate) fn plugin_at(&self, t: f64, fps: f64, rate: u32) -> Option<PluginAt> {
         let crate::Kind::Plugin {
             parts,
             explode_levels,
@@ -332,7 +437,7 @@ impl Layer {
         };
         let f = frame_at(t, fps);
         let state = self
-            .plugin_track(fps, f)
+            .plugin_track(fps, rate, f)
             .pop()
             .map(|s| s.key)
             .unwrap_or_default();
@@ -397,6 +502,10 @@ pub struct Capture {
     /// The adapter build this came from; a rebuilt adapter recaptures.
     #[serde(default)]
     pub stamp: String,
+    /// What the plugin says its patch is (parameters, modulation routes),
+    /// for a patch layer; null when it says nothing.
+    #[serde(default, skip_serializing_if = "Value::is_null")]
+    pub patch: Value,
 }
 
 /// A resolved surface of the plugin's UI.

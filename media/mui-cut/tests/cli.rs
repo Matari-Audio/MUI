@@ -476,7 +476,7 @@ fn a_two_level_capture_of_the_real_ui_names_controls_by_path() {
     let err = String::from_utf8_lossy(&o.stderr);
     assert!(o.status.success() && !err.contains("No such file"), "{err}");
     let p = mui_cut::Project::load(&std::fs::read_to_string(&project).unwrap()).unwrap();
-    let key = &p.scenes[0].layers[0].plugin_track(p.fps, 0)[0].key;
+    let key = &p.scenes[0].layers[0].plugin_track(p.fps, p.sample_rate, 0)[0].key;
     let cap: mui_cut::Capture = serde_json::from_slice(
         &std::fs::read(dir.join(".cut-cache").join(format!("{key}.json"))).unwrap(),
     )
@@ -515,9 +515,9 @@ fn plugin_layers_capture_the_real_ui_once_and_draw_it() {
         .filter(|e| e.as_ref().unwrap().path().extension() == Some("json".as_ref()))
         .count();
     let p = mui_cut::Project::load(&std::fs::read_to_string(&project).unwrap()).unwrap();
-    let steps = p.scenes[0].layers[0].plugin_track(p.fps, 240);
+    let steps = p.scenes[0].layers[0].plugin_track(p.fps, p.sample_rate, 240);
     // And the 3D scene's layer, told nothing, is one more.
-    let deck = p.scenes[1].layers[3].plugin_track(p.fps, 180);
+    let deck = p.scenes[1].layers[3].plugin_track(p.fps, p.sample_rate, 180);
     assert_eq!(deck.len(), 1);
     assert_eq!(manifests, steps.len() + 1);
     // The real UI split into its named panels.
@@ -587,7 +587,7 @@ fn serve_captures_plugin_states_and_tells_the_editor() {
         assert!(lines.read_line(&mut l).unwrap() > 0, "events closed");
     }
     let p = mui_cut::Project::load(&std::fs::read_to_string(&project).unwrap()).unwrap();
-    let key = &p.scenes[0].layers[0].plugin_track(p.fps, 0)[0].key;
+    let key = &p.scenes[0].layers[0].plugin_track(p.fps, p.sample_rate, 0)[0].key;
     let got = http(
         port,
         &format!("GET /asset/.cut-cache/{key}.json HTTP/1.1\r\n\r\n"),

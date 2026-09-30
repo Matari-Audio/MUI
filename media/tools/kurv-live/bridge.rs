@@ -1,99 +1,244 @@
-// Kurv adapter only; common capture/transport/clock live in mui-motion-bridge.
-pub fn motion_live() -> Result<(), String> {
-    use truce::prelude::*;
-    use serde_json::{Value,json};
 
-    let meters=truce_core::meters::MeterStore::new();
-    let transport_slot=truce_core::transport::TransportSlot::new();
-    let context=motion_context(Arc::clone(&meters),Arc::clone(&transport_slot));let params=Arc::clone(context.params());
-    // A real routed LFO: DSP publishes the phase/value consumed by the native card.
-    let lfo_index=super::cards::modulator::add(&context,crate::modulators::state::SourceKind::Lfo).ok_or("no free LFO slot")?;
-    {
-        let index=lfo_index;
-        let mut config=params.modulator_rack.config(index);config.rate_hz=1.;params.modulator_rack.set_config(index,config);
-        use crate::modulators::routing::{ModulationRouteTarget as T,OscillatorControl as C,ResolvedRouteSource as S};
-        if let Some((module,slot))=super::binding::oscillator_slot(&params,0) {
-            crate::modulation::edit::assign(&context,S::Rack(index as u8),T::oscillator(module,slot,C::Level),0.7);
-        }
-    }
-    params.voice_mode.set_value(8);params.oversampling.set_value(1);params.set_sample_rate(48_000.);params.snap_smoothers();
-    let mut state=<crate::Kurv as PluginLogic>::init(&params,&InitContext::new(None));
-    <crate::Kurv as PluginLogic>::reset(&mut state,&params,&AudioConfig::new(48_000.,mui_motion_bridge::BLOCK_FRAMES));
-    let mut sample_position=0i64;
-    let audio=move |notes:&[mui_motion_bridge::NoteEvent], samples:&mut [[f32;2]]| {
-        let mut events=EventList::with_capacity(128);
-        for event in notes {match *event {
-            mui_motion_bridge::NoteEvent::On{note,velocity}=>events.push(Event::new(0,EventBody::NoteOn{group:0,channel:1,note,velocity})),
-            mui_motion_bridge::NoteEvent::Off{note}=>events.push(Event::new(0,EventBody::NoteOff{group:0,channel:1,note,velocity:0})),
-            mui_motion_bridge::NoteEvent::Panic=>{for note in 0..128 {events.push(Event::new(0,EventBody::NoteOff{group:0,channel:1,note,velocity:0}));}},
-        }}
-        let mut left=vec![0.;samples.len()];let mut right=vec![0.;samples.len()];let mut outputs:[&mut[f32];2]=[&mut left,&mut right];
-        let mut buffer=AudioBuffer::from_slices_checked(&[],&mut outputs,samples.len());let mut out=EventList::with_capacity(0);let transport=TransportInfo {playing:true,tempo:120.,time_sig_num:4,time_sig_den:4,position_samples:sample_position,position_seconds:sample_position as f64/48_000.,position_beats:sample_position as f64/24_000.,..TransportInfo::default()};transport_slot.write(&transport);sample_position+=samples.len() as i64;
-        let meter_sink=|id,value|meters.write(id,value);
-        let mut ctx=ProcessContext::new(&transport,48_000.,samples.len(),&mut out).with_meters(&meter_sink);
-        <crate::Kurv as PluginLogic>::process(&mut state,&params,&mut buffer,&events,&mut ctx);
-        for (i,s) in samples.iter_mut().enumerate(){*s=[left[i],right[i]];}
-    };
-    let mut editor=mui_motion_bridge::Editor::new(theme::ui(theme::skin()));
-    let mut racks=Racks::new(context.clone());
-    let mut capture=mui_motion_bridge::CaptureStream::default();
-    let view_context=context.clone();
-    let snapshot=move |_revision:u64,frame:u64,commands:&[Value]|->Result<Value,String>{
-        editor.advance(commands,frame,|ui,input,dt,sizes| {
-            let tree=mui_motion_bridge::Editor::layout(racks.tree(ui,&input),sizes)?;
-            ui.frame(tree,Some(SIZE),input,dt).map_err(|e|format!("{e:?}"))?;
-            racks.after(ui);Ok(())
-        })?;
-        let ui=&editor.ui;
-        let scene=ui.scene().ok_or("empty scene")?;
-        let roots=editor.roots(SIZE.width,SIZE.height);
-        let mut value=capture.frame(scene,900,622,0.6,&roots)?;
-        let patch=view_context.generator_stack.snapshot();
-        let modules:Vec<Value>=patch.groups().iter().flat_map(|g|g.modules().iter()).map(|m|{
-            if let Some(slot)=m.oscillator_slot(){let mut c=view_context.generator_stack.oscillator_config(slot);
-                for (bank,target) in view_context.params().host_automation_targets.snapshot().into_iter().enumerate() {
-                    if let Some(crate::modulators::routing::ModulationRouteTarget::Oscillator{module_id,slot:bound,control})=target {
-                        if module_id==m.id().get()&&bound==slot&&control.supports_engine(c.engine){control.apply_normalized(&mut c,view_context.params().host_automation_normalized(bank) as f32);}
-                    }
-                }
-                json!({"id":m.id().get(),"part":format!("osc/{}",slot.index()),"kind":format!("{:?}",c.engine),"level":c.level,"shape":c.shape,"transpose":c.transpose,"parameters":[{"id":"level","label":"Level","min":0,"max":2,"step":0.01,"value":c.level},{"id":"shape","label":"Wave shape","min":0,"max":3,"step":0.01,"value":c.shape},{"id":"transpose","label":"Transpose","min":-24,"max":24,"step":1,"value":c.transpose}]})}
-            else {json!({"id":m.id().get(),"kind":format!("{:?}",m.kind())})}
-        }).collect();
-        value["modules"]=json!(modules);
-        value["telemetry"]=json!({"lfo":view_context.params().modulator_rack.ui_snapshot(lfo_index)});
-        Ok(value)
-    };
-    let edit=|command:&Value|->Result<(),String>{
-            let op=command["op"].as_str().ok_or("missing operation")?;
-            if op=="snapshot" {return Ok(());}
-            let patch=context.generator_stack.snapshot();
-            let group=patch.groups().first().ok_or("no group")?;
-            if op=="add" {
-                if group.modules().len()>=4{return Err("This motion proof supports at most four modules.".into());}
-                let action=match command["kind"].as_str(){Some("va")=>GeneratorAddAction::Oscillator,Some("noise")=>GeneratorAddAction::Noise,Some("filter")=>GeneratorAddAction::Filter,_=>return Err("unknown module kind".into())};
-                add(&context,0,action);
-            } else {
-                let id=command["id"].as_u64().ok_or("missing module id")?;
-                let (index,module)=group.modules().iter().enumerate().find(|(_,m)|m.id().get()==id).ok_or("unknown module")?;
-                match op {
-                    "delete"=>{admission::remove_module(&context,module.id());},
-                    "move"=>{let direction=command["direction"].as_i64().ok_or("missing direction")?;let next=(index as i64+direction).clamp(0,group.modules().len() as i64-1) as usize;context.generator_stack.try_edit(|p|p.move_module(module.id(),group.id(),next)).map_err(|e|format!("{e:?}"))?;},
-                    "set"=>{
-                        let slot=module.oscillator_slot().ok_or("select an oscillator")?;let mut config=context.generator_stack.oscillator_config(slot);
-                        let value=command["value"].as_f64().filter(|v|v.is_finite()).ok_or("invalid value")? as f32;
-                        match command["field"].as_str(){Some("level") if (0.0..=2.).contains(&value)=>config.level=value,Some("shape") if (0.0..=3.).contains(&value)=>config.shape=value,Some("transpose") if (-24.0..=24.).contains(&value)=>config.transpose=value,_=>return Err("invalid parameter or range".into())};
-                        context.set_oscillator_config(slot,config).map_err(|e|format!("{e:?}"))?;
-                    },
-                    _=>return Err("unknown operation".into())
-                }
-                context.params().ensure_host_automation();
-            }
-            Ok(())
-    };
-    mui_motion_bridge::run_live(json!({"name":"Kurv","notes":true,"addKinds":[{"id":"va","label":"VA oscillator"},{"id":"noise","label":"Noise"},{"id":"filter","label":"Filter"}],"move":true,"delete":true}),audio,edit,snapshot)
+// ---- mui-cut live adapter: appended to gallery.rs by media/tools/kurv-live/build.py ----
+// KURV's real editor and its real `PluginLogic::process`, in one process,
+// behind mui-motion-bridge's live protocol. The DSP and the editor share one
+// `KurvParams` and one meter store, so the captured UI shows what the sound
+// is doing: meters, envelopes and LFO playheads, modulated knobs, and the
+// keys the host holds lit on the keyboard.
+
+/// The notes the host holds, lit on the floating keyboard (keys.rs reads it
+/// through [`cut_held`]).
+static CUT_HELD: [std::sync::atomic::AtomicU64; 2] =
+    [std::sync::atomic::AtomicU64::new(0), std::sync::atomic::AtomicU64::new(0)];
+
+/// Whether the host holds `note`.
+pub(crate) fn cut_held(note: u8) -> bool {
+    let word = CUT_HELD[usize::from(note / 64)].load(std::sync::atomic::Ordering::Relaxed);
+    word >> (note % 64) & 1 == 1
 }
 
-fn motion_context(meters:Arc<truce_core::meters::MeterStore>,transport:Arc<truce_core::transport::TransportSlot>) -> PluginContext<KurvParams> {
+fn cut_hold(note: u8, on: bool) {
+    let bit = 1u64 << (note % 64);
+    let word = &CUT_HELD[usize::from(note / 64)];
+    if on {
+        word.fetch_or(bit, std::sync::atomic::Ordering::Relaxed);
+    } else {
+        word.fetch_and(!bit, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// `kurv-cut-live [--story NAME] [--scale S]`: the story seeds the patch
+/// (default `showcase`: a routed LFO, a warp, noise and an envelope).
+#[expect(clippy::too_many_lines, reason = "one adapter, read top to bottom")]
+pub fn cut_live() -> Result<(), String> {
+    use moose::prelude::*;
+    use serde_json::{Value, json};
+
+    let args: Vec<String> = std::env::args().collect();
+    let arg = |name: &str| {
+        args.iter()
+            .position(|a| a == name)
+            .and_then(|i| args.get(i + 1))
+            .cloned()
+    };
+    let story = arg("--story").unwrap_or_else(|| "showcase".into());
+    let scale: f64 = arg("--scale").and_then(|s| s.parse().ok()).unwrap_or(1.0);
+    let rate = mui_motion_bridge::sample_rate();
+
+    let meters = moose_core::meters::MeterStore::new();
+    let transport_slot = moose_core::transport::TransportSlot::new();
+    let context = cut_context(Arc::clone(&meters), Arc::clone(&transport_slot));
+    let params = Arc::clone(context.params());
+    let pointer = script(&story, &context)?;
+    params.set_sample_rate(f64::from(rate));
+    params.snap_smoothers();
+
+    let mut state = <crate::Kurv as PluginLogic>::init(&params, &InitContext::new(None));
+    <crate::Kurv as PluginLogic>::reset(
+        &mut state,
+        &params,
+        &AudioConfig::new(f64::from(rate), mui_motion_bridge::BLOCK_FRAMES),
+    );
+    let dsp_params = Arc::clone(&params);
+    let dsp_meters = Arc::clone(&meters);
+    let mut position = 0i64;
+    let mut left = vec![0.0f32; mui_motion_bridge::BLOCK_FRAMES];
+    let mut right = vec![0.0f32; mui_motion_bridge::BLOCK_FRAMES];
+    let mut events = EventList::with_capacity(256);
+    let audio = move |notes: &[mui_motion_bridge::NoteEvent], samples: &mut [[f32; 2]]| {
+        use mui_motion_bridge::NoteEvent as N;
+        events.clear();
+        for event in notes {
+            match *event {
+                N::On { note, velocity } => {
+                    cut_hold(note, true);
+                    events.push(Event::new(0, EventBody::NoteOn { group: 0, channel: 0, note, velocity }));
+                }
+                N::Off { note } => {
+                    cut_hold(note, false);
+                    events.push(Event::new(0, EventBody::NoteOff { group: 0, channel: 0, note, velocity: 0 }));
+                }
+                N::Panic => {
+                    for note in 0..128 {
+                        cut_hold(note, false);
+                        events.push(Event::new(0, EventBody::NoteOff { group: 0, channel: 0, note, velocity: 0 }));
+                    }
+                }
+            }
+        }
+        let n = samples.len();
+        if n == 0 {
+            return;
+        }
+        let (l, r) = (&mut left[..n], &mut right[..n]);
+        l.fill(0.);
+        r.fill(0.);
+        let inputs: [&[f32]; 0] = [];
+        let mut outputs: [&mut [f32]; 2] = [l, r];
+        let mut buffer = AudioBuffer::from_slices_checked(&inputs, &mut outputs, n);
+        let mut out = EventList::with_capacity(0);
+        let seconds = position as f64 / f64::from(rate);
+        let transport = TransportInfo {
+            playing: true,
+            tempo: 120.,
+            time_sig_num: 4,
+            time_sig_den: 4,
+            position_samples: position,
+            position_seconds: seconds,
+            position_beats: seconds * 2.,
+            ..TransportInfo::default()
+        };
+        transport_slot.write(&transport);
+        position += n as i64;
+        let sink = |id, value| dsp_meters.write(id, value);
+        let mut ctx = ProcessContext::new(&transport, f64::from(rate), n, &mut out).with_meters(&sink);
+        let _ = <crate::Kurv as PluginLogic>::process(&mut state, &dsp_params, &mut buffer, &events, &mut ctx);
+        for (i, s) in samples.iter_mut().enumerate() {
+            *s = [left[i], right[i]];
+        }
+    };
+
+    let skin = theme::skin_for(
+        &params.editor_state.lock().unwrap_or_else(std::sync::PoisonError::into_inner),
+    );
+    let mut ui = theme::ui(skin);
+    ui.set_scale(Some(scale));
+    let mut editor = mui_motion_bridge::Editor::new(ui);
+    let mut racks = Racks::new(context.clone());
+    let mut capture = mui_motion_bridge::CaptureStream::default();
+    let view = context.clone();
+    let mut booted = false;
+    #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "a window fits u16")]
+    let (width, height) = ((SIZE.width * scale).round() as u16, (SIZE.height * scale).round() as u16);
+    let frame = move |_revision: u64, clock: u64, commands: &[Value]| -> Result<Value, String> {
+        let mut step = |ui: &mut mui2::prelude::Ui, input: Input, dt: f64, sizes: &std::collections::BTreeMap<String, Size>| -> Result<(), String> {
+            let tree = mui_motion_bridge::Editor::layout(racks.tree(ui, &input), sizes)?;
+            ui.frame(tree, Some(SIZE), input, dt).map_err(|e| format!("{e:?}"))?;
+            racks.after(ui);
+            Ok(())
+        };
+        if !booted {
+            // Open the floating keyboard (it starts collapsed) and let the
+            // springs settle, the way the `keys` story clicks it.
+            booted = true;
+            let ui = &mut editor.ui;
+            step(ui, Input { pointer, ..Input::default() }, 0., &Default::default())?;
+            if let Some(f) = ui.scene().and_then(|s| s.surface(super::keys::TOGGLE)).map(|s| s.frame) {
+                let at = Point::new(f.x + f.size.width * 0.5, f.y + f.size.height * 0.5);
+                for down in [true, false] {
+                    let mut input = Input::default();
+                    input.pointer.pos = Some(at);
+                    input.pointer.buttons = mui2::prelude::Buttons::default().set(mui2::prelude::Button::Primary, down);
+                    step(ui, input, 0., &Default::default())?;
+                }
+            }
+            for _ in 0..SETTLE * 4 {
+                step(ui, Input::default(), 1. / 30., &Default::default())?;
+            }
+        }
+        editor.advance(commands, clock, &mut step)?;
+        let scene = editor.ui.scene().ok_or("empty scene")?;
+        let roots = editor.roots(SIZE.width, SIZE.height);
+        let mut value = capture.frame(scene, width, height, scale, &roots)?;
+        value["patch"] = cut_patch(&view);
+        Ok(value)
+    };
+    let edit_context = context.clone();
+    let edit = move |command: &Value| -> Result<(), String> {
+        if command["op"] != "set" {
+            return Err("KURV takes `set` (and notes)".into());
+        }
+        let value = command["value"].as_f64().filter(|v| v.is_finite()).ok_or("invalid value")?;
+        let params = edit_context.params();
+        // A host parameter by name or id: `value` is plain, `norm` 0..1.
+        let info = params.param_infos().into_iter().find(|i| {
+            command["id"].as_u64() == Some(u64::from(i.id))
+                || command["id"].as_str().is_some_and(|s| s.eq_ignore_ascii_case(i.name) || s.eq_ignore_ascii_case(i.short_name))
+        });
+        let info = info.ok_or_else(|| format!("no KURV parameter {}", command["id"]))?;
+        match command["field"].as_str() {
+            Some("norm") if (0.0..=1.0).contains(&value) => params.set_normalized(info.id, value),
+            Some("value" | "plain") => params.set_plain(info.id, value),
+            _ => return Err("field is `value` (plain) or `norm` (0..1)".into()),
+        }
+        Ok(())
+    };
+    mui_motion_bridge::run_live(
+        json!({"name": "KURV", "notes": true, "patch": true, "addKinds": [], "move": false, "delete": false}),
+        audio,
+        edit,
+        frame,
+    )
+}
+
+/// What the patch is right now: every parameter off its default (plain,
+/// formatted, normalised) and every modulation route with its live source
+/// value, for mui-cut's patch view.
+fn cut_patch(context: &PluginContext<KurvParams>) -> serde_json::Value {
+    use serde_json::json;
+    let params = context.params();
+    let mut changed = Vec::new();
+    for info in params.param_infos() {
+        let Some(plain) = params.get_plain(info.id) else { continue };
+        if (plain - info.default_plain).abs() <= 1e-6 || changed.len() >= 96 {
+            continue;
+        }
+        changed.push(json!({
+            "id": info.id,
+            "name": info.name,
+            "group": info.group,
+            "value": plain,
+            "text": params.format_value(info.id, plain).unwrap_or_default(),
+            "norm": params.get_normalized(info.id).unwrap_or_default(),
+        }));
+    }
+    let routes: Vec<_> = crate::modulation::RouteGraph::capture(context)
+        .iter()
+        .map(|r| {
+            let source = match r.source {
+                crate::modulators::routing::ResolvedRouteSource::Rack(i) => format!(
+                    "{} {:02}",
+                    params.modulator_rack.config(usize::from(i)).kind.label(),
+                    i + 1
+                ),
+                other => format!("{other:?}"),
+            };
+            json!({
+                "source": source,
+                "target": crate::modulation::target::label(context, r.target),
+                "depth": r.amount,
+                "live": crate::modulation::live::source_value(context, r.source),
+            })
+        })
+        .collect();
+    let held: Vec<u8> = (0..128).filter(|&n| cut_held(n)).collect();
+    json!({"plugin": "KURV", "params": changed, "routes": routes, "held": held})
+}
+
+fn cut_context(
+    meters: Arc<moose_core::meters::MeterStore>,
+    transport: Arc<moose_core::transport::TransportSlot>,
+) -> PluginContext<KurvParams> {
     let params = Arc::new(KurvParams::default());
     let (set, get, plain, format) = (
         Arc::clone(&params),

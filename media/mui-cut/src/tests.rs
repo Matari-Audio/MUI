@@ -1072,7 +1072,7 @@ const PLUGIN: &str = r#"{"id":"syn","kind":"plugin","source":{"bin":"adapter"},
 fn plugin_state_keys_follow_what_the_adapter_was_told() {
     let p = one_layer(PLUGIN);
     let l = &p.scenes[0].layers[0];
-    let steps = l.plugin_track(p.fps, 60);
+    let steps = l.plugin_track(p.fps, p.sample_rate, 60);
     // Frame 0 sets the parameter; it moves on frames 16..=30 (0.5 s to 1 s,
     // linear) and the pointer arrives on frame 45. Nothing else is a step.
     let frames: Vec<usize> = steps.iter().map(|s| s.frame).collect();
@@ -1091,14 +1091,14 @@ fn plugin_state_keys_follow_what_the_adapter_was_told() {
     // Deterministic: the same document gives the same keys, all distinct.
     assert_eq!(
         steps,
-        one_layer(PLUGIN).scenes[0].layers[0].plugin_track(30., 60)
+        one_layer(PLUGIN).scenes[0].layers[0].plugin_track(30., 48_000, 60)
     );
     let keys: std::collections::HashSet<_> = steps.iter().map(|s| &s.key).collect();
     assert_eq!(keys.len(), steps.len());
     // A key hashes the source too: another adapter is another capture.
     let other = one_layer(&PLUGIN.replace("\"adapter\"", "\"other\""));
     assert_ne!(
-        other.scenes[0].layers[0].plugin_track(30., 0)[0].key,
+        other.scenes[0].layers[0].plugin_track(30., 48_000, 0)[0].key,
         steps[0].key
     );
     // Coming back to a value is still a new state: the history differs.
@@ -1106,7 +1106,7 @@ fn plugin_state_keys_follow_what_the_adapter_was_told() {
         r#"{"t":1.0,"v":0.8,"interp":"hold"}"#,
         r#"{"t":1.0,"v":0.8,"interp":"linear"},{"t":1.5,"v":0.2,"interp":"hold"}"#,
     ));
-    let back = back.scenes[0].layers[0].plugin_track(30., 60);
+    let back = back.scenes[0].layers[0].plugin_track(30., 48_000, 60);
     assert_eq!(back[0].key, steps[0].key);
     assert_ne!(back.last().unwrap().key, steps[0].key);
 }
@@ -1123,7 +1123,7 @@ fn plugin_eval_is_pure_and_reads_the_frame_grid() {
     assert_eq!(state(0.52), state(0.5));
     assert_eq!(state(0.1), state(0.4));
     assert_ne!(state(0.5), state(0.6));
-    let steps = s.layers[0].plugin_track(30., 59);
+    let steps = s.layers[0].plugin_track(30., 48_000, 59);
     assert_eq!(state(1.9), steps.last().unwrap().key);
     // Other kinds have no plugin state.
     let rect = one_layer(r#"{"id":"r","kind":"rect"}"#);
@@ -1439,7 +1439,7 @@ fn deeper_parts_ask_the_adapter_for_more_levels() {
         let p = one_layer(&format!(
             r#"{{"id":"p","kind":"plugin","source":{{"bin":"a"}}{extra}}}"#
         ));
-        p.scenes[0].layers[0].plugin_track(30., 0)[0]
+        p.scenes[0].layers[0].plugin_track(30., 48_000, 0)[0]
             .commands
             .clone()
     };

@@ -804,7 +804,7 @@ fn slabs(assets: &Assets, f: &Frame) -> Vec<(String, Drawn)> {
         .filter(|l| {
             !matches!(
                 l.kind,
-                Kind::Camera { .. } | Kind::Light { .. } | Kind::Model { .. }
+                Kind::Camera { .. } | Kind::Light { .. } | Kind::Model { .. } | Kind::Audio { .. }
             )
         })
         .flat_map(|l| assets.slabs(l))

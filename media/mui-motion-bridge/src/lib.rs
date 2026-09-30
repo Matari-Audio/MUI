@@ -23,6 +23,45 @@ use std::time::{Duration, Instant};
 pub const SAMPLE_RATE: u32 = 48_000;
 pub const BLOCK_FRAMES: usize = 480;
 
+/// The clock a host asked for in `MUI_BRIDGE_CLOCK` when it started the
+/// adapter: `manual:<rate>` hands the sample clock to the host, which moves
+/// it with `{"op": "advance", "to": sample, "notes": [..]}` and gets every
+/// sample up to there back before `{"type": "advanced"}`. No blocks run on
+/// their own and the editor draws only when asked, so the same commands
+/// give the same audio and frames every time. Unset (or anything else) is
+/// the wall clock at [`SAMPLE_RATE`].
+fn manual_clock() -> Option<u32> {
+    static CLOCK: std::sync::OnceLock<Option<u32>> = std::sync::OnceLock::new();
+    *CLOCK.get_or_init(|| {
+        std::env::var("MUI_BRIDGE_CLOCK")
+            .ok()?
+            .strip_prefix("manual:")?
+            .parse()
+            .ok()
+            .filter(|r| (8_000..=384_000).contains(r))
+    })
+}
+
+/// The sample rate the audio callback renders at: the host's manual clock's
+/// rate, else [`SAMPLE_RATE`]. Read it when setting up the DSP.
+pub fn sample_rate() -> u32 {
+    manual_clock().unwrap_or(SAMPLE_RATE)
+}
+
+/// `{"op": "advance"}`'s notes, each at its absolute sample, in order.
+fn advance_notes(v: &Value) -> Result<Vec<(u64, Value, NoteEvent)>, String> {
+    let mut out = Vec::new();
+    for n in v["notes"].as_array().map_or(&[][..], Vec::as_slice) {
+        let at = n["at"].as_u64().ok_or("a note needs its sample `at`")?;
+        out.push((at, n.clone(), note_event(n)?));
+    }
+    if out.len() > 4096 {
+        return Err("at most 4096 notes an advance".into());
+    }
+    out.sort_by_key(|n| n.0);
+    Ok(out)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum NoteEvent {
     On { note: u8, velocity: u8 },
@@ -116,6 +155,8 @@ fn host(
         }
     });
     let (notes, note_rx) = mpsc::channel::<(Value, NoteEvent)>();
+    let (advances, advance_rx) = mpsc::channel::<(u64, Vec<(u64, Value, NoteEvent)>)>();
+    let manual = manual_clock().is_some();
     let (commands, command_rx) = mpsc::channel::<Value>();
     let reader_wire = wire.clone();
     let reading = Arc::clone(&running);
@@ -132,6 +173,16 @@ fn host(
                 if matches!(v["op"].as_str(), Some("note_on" | "note_off" | "panic")) {
                     let event = note_event(&v)?;
                     notes.send((v, event)).map_err(|e| e.to_string())
+                } else if v["op"] == "advance" {
+                    // Straight to the audio thread: a slow editor frame on
+                    // the main thread never holds the sound up.
+                    if !manual {
+                        return Err("advance needs MUI_BRIDGE_CLOCK=manual:<rate>".into());
+                    }
+                    let to = v["to"].as_u64().ok_or("advance needs `to`, a sample")?;
+                    advances
+                        .send((to, advance_notes(&v)?))
+                        .map_err(|e| e.to_string())
                 } else {
                     commands.send(v).map_err(|e| e.to_string())
                 }
@@ -150,37 +201,19 @@ fn host(
     let audio_clock = Arc::clone(&clock);
     std::thread::spawn(move || {
         let started = Instant::now();
+        let rate = sample_rate();
         let mut frame = 0u64;
         let mut samples = vec![[0.; 2]; BLOCK_FRAMES];
         let mut active = std::collections::BTreeSet::new();
-        while playing.load(Ordering::Acquire) {
-            let mut events = Vec::new();
-            for (command, event) in note_rx.try_iter() {
-                match event {
-                    NoteEvent::On { note, .. } => {
-                        if active.remove(&note) {
-                            events.push(NoteEvent::Off { note });
-                        }
-                        active.insert(note);
-                    }
-                    NoteEvent::Off { note } => {
-                        active.remove(&note);
-                    }
-                    NoteEvent::Panic => active.clear(),
-                }
-                events.push(event);
-                let _ = audio_wire.send((
-                    b'J',
-                    json!({"type":"note","frame":frame,"command":command,"active":active})
-                        .to_string()
-                        .into_bytes(),
-                ));
-            }
+        let mut queue: Vec<(u64, Value, NoteEvent)> = Vec::new();
+        // Renders `n` samples with `events` at their start, and sends them.
+        let mut block = |frame: u64, n: usize, events: &[NoteEvent]| {
+            let samples = &mut samples[..n];
             samples.fill([0.; 2]);
-            audio(&events, &mut samples);
+            audio(events, samples);
             // ponytail: local development host uses a bounded allocating wire;
             // keep allocation-free transport in the plugin's production host.
-            let mut bytes = Vec::with_capacity(8 + BLOCK_FRAMES * 8);
+            let mut bytes = Vec::with_capacity(8 + n * 8);
             bytes.extend_from_slice(&frame.to_le_bytes());
             for sample in samples.iter().flatten() {
                 bytes.extend_from_slice(
@@ -192,14 +225,80 @@ fn host(
                     .to_le_bytes(),
                 );
             }
-            if audio_wire.send((b'A', bytes)).is_err() {
+            audio_wire.send((b'A', bytes)).is_ok()
+        };
+        // Tracks held notes (a retrigger releases first) and tells the host.
+        let note = |active: &mut std::collections::BTreeSet<u8>,
+                    events: &mut Vec<NoteEvent>,
+                    frame: u64,
+                    command: Value,
+                    event: NoteEvent| {
+            match event {
+                NoteEvent::On { note, .. } => {
+                    if active.remove(&note) {
+                        events.push(NoteEvent::Off { note });
+                    }
+                    active.insert(note);
+                }
+                NoteEvent::Off { note } => {
+                    active.remove(&note);
+                }
+                NoteEvent::Panic => active.clear(),
+            }
+            events.push(event);
+            let _ = audio_wire.send((
+                b'J',
+                json!({"type":"note","frame":frame,"command":command,"active":active})
+                    .to_string()
+                    .into_bytes(),
+            ));
+        };
+        while playing.load(Ordering::Acquire) {
+            if manual {
+                // The host moves the clock: render exactly up to `to`,
+                // splitting blocks where notes land.
+                let Ok((to, timed)) = advance_rx.recv() else {
+                    break;
+                };
+                // Played notes land now, timed ones at their sample; same
+                // sample keeps the order sent. Past `to` waits.
+                queue.extend(note_rx.try_iter().map(|(c, e)| (frame, c, e)));
+                queue.extend(timed);
+                queue.sort_by_key(|n| n.0);
+                let mut events = Vec::new();
+                while frame < to {
+                    let due = queue.partition_point(|n| n.0 <= frame);
+                    for (_, command, event) in queue.drain(..due) {
+                        note(&mut active, &mut events, frame, command, event);
+                    }
+                    let next = queue.first().map_or(to, |n| n.0.min(to));
+                    let n = (next - frame).min(BLOCK_FRAMES as u64) as usize;
+                    if !block(frame, n, &events) {
+                        return;
+                    }
+                    events.clear();
+                    frame += n as u64;
+                    audio_clock.store(frame, Ordering::Release);
+                }
+                let _ = audio_wire.send((
+                    b'J',
+                    json!({"type":"advanced","frame":frame})
+                        .to_string()
+                        .into_bytes(),
+                ));
+                continue;
+            }
+            let mut events = Vec::new();
+            for (command, event) in note_rx.try_iter() {
+                note(&mut active, &mut events, frame, command, event);
+            }
+            if !block(frame, BLOCK_FRAMES, &events) {
                 break;
             }
             frame += BLOCK_FRAMES as u64;
             audio_clock.store(frame, Ordering::Release);
-            if let Some(wait) = (started
-                + Duration::from_secs_f64(frame as f64 / f64::from(SAMPLE_RATE)))
-            .checked_duration_since(Instant::now())
+            if let Some(wait) = (started + Duration::from_secs_f64(frame as f64 / f64::from(rate)))
+                .checked_duration_since(Instant::now())
             {
                 std::thread::sleep(wait);
             }
@@ -210,13 +309,13 @@ fn host(
             .map_err(|e| e.to_string())
     };
     send(
-        json!({"type":"hello","version":1,"sampleRate":SAMPLE_RATE,"blockFrames":BLOCK_FRAMES,"plugin":describe}),
+        json!({"type":"hello","version":1,"sampleRate":sample_rate(),"manualClock":manual,"blockFrames":BLOCK_FRAMES,"plugin":describe}),
     )?;
     let mut revision = 0;
     let mut pending = Vec::new();
     let mut deadline = Instant::now();
     while running.load(Ordering::Acquire) {
-        let timeout = if live {
+        let timeout = if live && !manual {
             deadline.saturating_duration_since(Instant::now())
         } else {
             Duration::from_millis(100)
@@ -255,7 +354,7 @@ fn host(
                 }
             }
         }
-        if dirty || (live && Instant::now() >= deadline) {
+        if dirty || (live && !manual && Instant::now() >= deadline) {
             let frame = clock.load(Ordering::Acquire);
             match snapshot(revision, frame, &pending) {
                 Ok(mut value) => {
