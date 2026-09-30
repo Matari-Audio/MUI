@@ -269,3 +269,34 @@ fn an_export_refuses_to_draw_a_3d_shot_flat() {
     assert!(g.push(&[f]).is_err());
     assert!(g.canvas.notice().contains("flat"));
 }
+
+/// A 3D scene's effect stack runs on the 3D pass's output, on both
+/// engines and under motion blur: levels with no saturation greys a red
+/// card the 3D pass drew.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_3d_scene_runs_its_effects_on_the_3d_pass() {
+    let card = r##"{"id":"card","kind":"rect","x":320,"y":180,"width":300,"height":200,
+        "ry":20,"fill":"#e03020"}"##;
+    let plain = scene3d(card);
+    let mut fx = plain.clone();
+    fx.scenes[0].effects =
+        serde_json::from_str(r#"[{"type": "levels", "saturation": 0}]"#).unwrap();
+    let centre = (180 * 640 + 320) * 4;
+    for engine in [Engine::Classic, Engine::Sparse] {
+        let Some(mut g) = offline(&plain, engine) else {
+            return;
+        };
+        let subs = |p: &Project| [0., 0.01].map(|t| eval(p, &p.scenes[0], t));
+        let a = frame(&mut g, &subs(&plain));
+        let b = frame(&mut g, &subs(&fx));
+        assert!(g.canvas.notice().is_empty(), "{}", g.canvas.notice());
+        let [r, gr, bl] = [0, 1, 2].map(|i| i32::from(a[centre + i]));
+        assert!(r > gr + 80 && r > bl + 80, "{engine:?}: the card is red: {r} {gr} {bl}");
+        let [r, gr, bl] = [0, 1, 2].map(|i| i32::from(b[centre + i]));
+        assert!(
+            (r - gr).abs() <= 3 && (gr - bl).abs() <= 3 && r > 20,
+            "{engine:?}: the effect greyed it: {r} {gr} {bl}"
+        );
+    }
+}

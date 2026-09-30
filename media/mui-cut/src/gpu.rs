@@ -127,7 +127,14 @@ impl GpuCanvas {
         }
         if let Some(view) = &frame.view {
             if self.three_d {
-                match self.draw_3d(assets, frame, view, target) {
+                // The scene's stack runs on the 3D pass's output. Layer
+                // stacks do not: a layer is a slab textured from the atlas.
+                let drawn = if frame.effects.is_empty() {
+                    self.draw_3d(assets, frame, view, target)
+                } else {
+                    self.with_fx(|fx, canvas| fx.draw_3d(canvas, assets, frame, view, target))
+                };
+                match drawn {
                     Ok(quads) => return Ok(quads),
                     Err(e) => {
                         self.three_d = false;
@@ -142,13 +149,21 @@ impl GpuCanvas {
         if !frame.has_effects() {
             return self.paint(assets, frame, target);
         }
+        self.with_fx(|fx, canvas| fx.draw(canvas, assets, frame, target))
+    }
+
+    /// `f` with the effect passes, made the first time.
+    fn with_fx<R>(
+        &mut self,
+        f: impl FnOnce(&mut crate::fx::gpu::Passes, &mut Self) -> Result<R, String>,
+    ) -> Result<R, String> {
         let mut fx = match self.fx.take() {
             Some(fx) => fx,
             None => Box::new(crate::fx::gpu::Passes::new(&self.device, self.format)?),
         };
-        let quads = fx.draw(self, assets, frame, target);
+        let out = f(&mut fx, self);
         self.fx = Some(fx);
-        quads
+        out
     }
 
     /// The effects' hook: `frame`'s layers and background as the renderer
@@ -246,7 +261,7 @@ impl GpuCanvas {
         failed.map_or(Ok(()), Err)
     }
 
-    fn draw_3d(
+    pub(crate) fn draw_3d(
         &mut self,
         assets: &Assets,
         frame: &Frame,

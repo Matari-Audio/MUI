@@ -232,7 +232,8 @@ project (`examples/variants.cut.json`):
 ```
 
 - Any value under `scenes` (a plain value, a key's `v`, a background, an
-  effect parameter, a duration) can be a binding: `{"var": "accent"}`,
+  effect parameter, a duration) can be a binding, and `mui-cut schema`
+  says so: `{"var": "accent"}`,
   `{"var": "W", "mul": 0.5, "add": 20}` (numbers; a bool is 1 or 0) or
   `{"var": "theme", "map": {"dark": "#0e0f14", "light": "#f4f1ea"}}`.
   Strings interpolate: `"text": "{headline}"`.
@@ -370,6 +371,9 @@ mesh. Scenes without it render exactly as before.
   roughness.
 - Scene `ground` (`y`, `color`, `radius`, `reflect`, `contact` shadow
   strength) and `fog` (`color`, `near`, `far`); `background` is the clear.
+- A scene's `effects` run on the 3D pass's output, per subframe, before
+  motion blur averages them, as in 2D. A layer's own `effects` do not run
+  in 3D (see Limits).
 - Motion blur re-renders the 3D pass per subframe. The web editor draws
   3D on WebGPU; WebGL2 and the CPU draw 3D scenes flat with a notice, and
   an export refuses to. **Orbit** in the header swings the preview camera
@@ -595,6 +599,9 @@ snapshots in the editor rather than `CurveHistory`, for the same reason.
   material factors (no textures, skins or animation); a 3D scene has no 2D
   overlay layer; walls of extruded layers are rebuilt every subframe;
   `look_at` ignores the camera's own x/y/z; `check`'s pixel lints skip
-  3D scenes.
+  3D scenes. A layer's `effects` are skipped in 3D: a layer is a slab
+  textured from the shared atlas, and the effect passes are full-frame, so
+  a layer stack would need its own padded texture per layer (a blur or
+  displacement spills past the atlas slot's gutter). A scene's stack runs.
 - The browser CPU fallback is single-threaded: wasm threads need
   cross-origin isolation, which `serve` does not set up.
