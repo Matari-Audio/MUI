@@ -47,8 +47,14 @@ fn project(name: &str, duration: f64, layer: &Value) -> PathBuf {
     file
 }
 
+/// Adapters build into one cache the tests share (a moose build is long).
 fn run(project: &Path, args: &[&str]) -> String {
-    let o = Command::new(BIN).args(args).arg(project).output().unwrap();
+    let o = Command::new(BIN)
+        .args(args)
+        .arg(project)
+        .env("MUI_CUT_CACHE", Path::new(env!("CARGO_TARGET_TMPDIR")).join("adapters"))
+        .output()
+        .unwrap();
     let err = String::from_utf8_lossy(&o.stderr).into_owned();
     assert!(o.status.success(), "{err}");
     err
@@ -371,4 +377,92 @@ fn serve_plays_the_sound_in_time_with_the_playhead() {
     std::thread::sleep(std::time::Duration::from_millis(200));
     let e = http(port, "GET", "/transport", "");
     assert_eq!(d["t"], e["t"], "paused, the clock stands");
+}
+
+/// A fixture plugin mui-cut builds an adapter for (`tests/fixtures/<name>`).
+fn fixture(name: &str) -> Value {
+    json!({"plugin": Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(name)})
+}
+
+/// The left channel's frequency, from its upward zero crossings, and its peak.
+fn tone(stereo: &[f32]) -> (f64, f32) {
+    let left: Vec<f32> = stereo.iter().step_by(2).copied().collect();
+    let ups: Vec<usize> = (1..left.len())
+        .filter(|&i| left[i - 1] < 0. && left[i] >= 0.)
+        .collect();
+    let (first, last) = (ups[0], ups[ups.len() - 1]);
+    let hz = (ups.len() - 1) as f64 * f64::from(RATE) / (last - first) as f64;
+    (hz, left.iter().fold(0f32, |m, v| m.max(v.abs())))
+}
+
+/// A moose state envelope (`moose::core::state::serialize_state`) for the
+/// plugin `clap_id`: its parameter values, no custom or persisted state.
+fn moose_state(clap_id: &str, values: &[(u32, f64)]) -> Vec<u8> {
+    let hash = clap_id.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| {
+        (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
+    });
+    let mut d = b"OAST".to_vec();
+    d.extend(1u32.to_le_bytes());
+    d.extend(hash.to_le_bytes());
+    d.extend((values.len() as u32).to_le_bytes());
+    for (id, v) in values {
+        d.extend(id.to_le_bytes());
+        d.extend(v.to_le_bytes());
+    }
+    d.extend(0u64.to_le_bytes());
+    d.extend(0u64.to_le_bytes());
+    d
+}
+
+/// A moose plugin plays its tone through the adapter, loads a preset
+/// before anything else (a host's saved state of plain values, or one
+/// wrapped in the plugin's own file of normalized values), and its patch
+/// names each parameter as the plugin shows it, marks what the layer
+/// automates and what a route modulates, lists the routes and the notes
+/// held.
+#[test]
+fn a_moose_plugin_plays_loads_a_preset_and_reports_its_patch() {
+    let id = "com.mui-cut.tone";
+    // Level 0.25, Mod 1: Lfo -> Pitch at 0.5, the `Host 1` slot at 0.3.
+    let plain = moose_state(id, &[(0, 0.25), (2, 1.), (3, 1.), (4, 0.5), (5, 0.3)]);
+    let mut wrapped = b"TRPS\x01\x00some metadata".to_vec();
+    wrapped.extend(moose_state(id, &[(0, 0.25), (2, 1.), (3, 1.), (4, 0.75), (5, 0.3)]));
+    for (name, preset) in [("moose-state", plain), ("moose-preset", wrapped)] {
+        let layer = json!({
+            "source": fixture("moose-tone"),
+            "preset": "tone.preset",
+            "notes": [{"t": 0.1, "dur": 0.8, "pitch": 60}],
+            "params": [{"id": "Pitch", "field": "value", "value": 880.0}],
+        });
+        let project = project(name, 1.0, &layer);
+        std::fs::write(project.parent().unwrap().join("tone.preset"), preset).unwrap();
+        run(&project, &["capture"]);
+        let (hz, peak) = tone(&soundtrack(&project));
+        assert!((hz - 880.).abs() < 2., "{name}: {hz} Hz");
+        assert!((peak - 0.25).abs() < 0.01, "{name}: the preset's level, peak {peak}");
+        let patch = capture(&project, 0.5).patch;
+        let param = |n: &str| {
+            patch["params"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|p| p["name"] == n)
+                .unwrap_or_else(|| panic!("{name}: no {n} in {patch}"))
+                .clone()
+        };
+        assert_eq!(param("Level")["value"], 0.25, "{name}");
+        assert_eq!(param("Drive")["value"], 0.3, "{name}: the slot's shown name");
+        let pitch = param("Pitch");
+        assert_eq!(
+            (&pitch["automated"], &pitch["modulated"]),
+            (&json!(true), &json!(true)),
+            "{name}"
+        );
+        assert_eq!(
+            patch["routes"],
+            json!([{"source": "Lfo", "target": "Pitch", "depth": 0.5}]),
+            "{name}"
+        );
+        assert_eq!(patch["held"], json!([60]), "{name}");
+    }
 }

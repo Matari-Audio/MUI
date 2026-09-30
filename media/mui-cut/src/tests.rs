@@ -1088,6 +1088,15 @@ fn plugin_state_keys_follow_what_the_adapter_was_told() {
         [serde_json::json!({"op": "set", "id": "filter", "field": "cutoff", "value": 0.2})]
     );
     assert_eq!(steps.last().unwrap().commands[0]["kind"], "pointer");
+    // A preset loads on frame 0, before the layer's own values.
+    let preset = one_layer(&PLUGIN.replace("\"x\":200", "\"preset\":\"a.kurvy\",\"x\":200"));
+    assert_eq!(
+        preset.scenes[0].layers[0].plugin_track(30., 48_000, 0)[0].commands,
+        [
+            serde_json::json!({"op": "preset", "path": "a.kurvy"}),
+            serde_json::json!({"op": "set", "id": "filter", "field": "cutoff", "value": 0.2}),
+        ]
+    );
     // Deterministic: the same document gives the same keys, all distinct.
     assert_eq!(
         steps,

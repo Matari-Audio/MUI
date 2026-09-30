@@ -54,6 +54,8 @@ fn run() -> Result<(), String> {
     let meters = plugin.meter_store();
     let slot = TransportSlot::new();
     let mut editor = plugin.editor_builder()(Arc::clone(&params)).ok_or("NAME has no editor")?;
+    // The concrete store: a state load validates its `#[persist]` part.
+    let store = Arc::clone(&params);
     let all: Arc<dyn Params> = params;
     let (set, get, plain, text) = (all.clone(), all.clone(), all.clone(), all.clone());
     let transport = Arc::clone(&slot);
@@ -82,6 +84,15 @@ fn run() -> Result<(), String> {
     let block = mui_motion_bridge::BLOCK_FRAMES;
     plugin.init();
     plugin.reset(&AudioConfig::new(rate, block));
+    // A preset or saved state (`{"op": "preset", "path": ..}`): the moose
+    // state envelope in the file (a plugin's own preset format may wrap
+    // it), its values and `#[persist]` state now, its custom state on the
+    // audio thread before the next block, as a host's state load does.
+    let pending_extra = Arc::new(std::sync::Mutex::new(None::<Vec<u8>>));
+    let dsp_extra = Arc::clone(&pending_extra);
+    // Parameters the host has set: automated, so the patch lists them.
+    let automated = Arc::new(std::sync::Mutex::new(std::collections::BTreeSet::<u32>::new()));
+    let patch_automated = Arc::clone(&automated);
     let held = Arc::new(Held::default());
     let dsp_held = Arc::clone(&held);
     let (mut left, mut right) = (vec![S::default(); block], vec![S::default(); block]);
@@ -89,6 +100,10 @@ fn run() -> Result<(), String> {
     let mut out_events = EventList::with_capacity(64);
     let mut position = 0i64;
     let audio = move |notes: &[NoteEvent], samples: &mut [[f32; 2]]| {
+        // ponytail: a lock per block; this host renders offline, never live.
+        if let Some(extra) = dsp_extra.lock().ok().and_then(|mut x| x.take()) {
+            let _ = plugin.load_state(&extra);
+        }
         events.clear();
         let mut note = |note, on, velocity| {
             dsp_held.set(note, on);
@@ -138,34 +153,109 @@ fn run() -> Result<(), String> {
         }
     };
 
-    // The patch: every parameter off its default, and the notes held.
+
+    // The patch: every parameter off its default, automated or modulated,
+    // by the name the plugin shows (its presentation, when it renames a
+    // slot), the modulation routes its `<X> Source` / `<X> Target` /
+    // `<X> Amount` parameters hold, and the notes held.
     let patched = all.clone();
     let patch = move || {
-        let params: Vec<_> = patched
-            .param_infos()
-            .into_iter()
+        let infos = patched.param_infos();
+        let named = |i: &FRAMEWORK::params::ParamInfo| {
+            let shown = patched.parameter_presentation(i.id);
+            let name = shown.as_ref().map_or(i.name, |s| s.name.as_str()).to_owned();
+            let group = shown.as_ref().map_or(i.group, |s| s.group.as_str()).to_owned();
+            (name, group, shown.is_some_and(|s| s.hidden || !s.available))
+        };
+        let text = |id, v| patched.format_value(id, v).unwrap_or_default();
+        let value = |i: &FRAMEWORK::params::ParamInfo| patched.get_plain(i.id).unwrap_or(i.default_plain);
+        let find = |n: String| infos.iter().find(|i| i.name == n);
+        let mut routes = Vec::new();
+        for src in infos.iter().filter(|i| i.name.ends_with(" Source")) {
+            let stem = &src.name[..src.name.len() - " Source".len()];
+            let (Some(target), Some(amount)) = (find(format!("{stem} Target")), find(format!("{stem} Amount"))) else {
+                continue;
+            };
+            let depth = value(amount);
+            if (value(src) - src.default_plain).abs() < 1e-6 || depth.abs() < 1e-6 {
+                continue;
+            }
+            routes.push(serde_json::json!({
+                "source": text(src.id, value(src)), "target": text(target.id, value(target)),
+                "depth": depth, "ids": [src.id, target.id, amount.id],
+            }));
+        }
+        let modulated: Vec<String> = routes.iter().filter_map(|r| r["target"].as_str().map(str::to_owned)).collect();
+        let route_ids: Vec<u64> = routes.iter().flat_map(|r| r["ids"].as_array().cloned().unwrap_or_default()).filter_map(|v| v.as_u64()).collect();
+        let automated = patch_automated.lock().map(|a| a.clone()).unwrap_or_default();
+        let params: Vec<_> = infos
+            .iter()
+            .filter(|i| !route_ids.contains(&u64::from(i.id)))
             .filter_map(|i| {
                 let v = patched.get_plain(i.id)?;
-                ((v - i.default_plain).abs() > 1e-6).then(|| {
+                let (name, group, inactive) = named(i);
+                let off = (v - i.default_plain).abs() > 1e-6;
+                let auto = automated.contains(&i.id);
+                let modded = modulated.iter().any(|t| *t == name);
+                ((off || auto || modded) && !inactive).then(|| {
                     serde_json::json!({
-                        "id": i.id, "name": i.name, "group": i.group, "value": v,
-                        "text": patched.format_value(i.id, v).unwrap_or_default(),
+                        "id": i.id, "name": name, "group": group, "value": v,
+                        "text": text(i.id, v),
                         "norm": patched.get_normalized(i.id).unwrap_or_default(),
+                        "automated": auto, "modulated": modded,
                     })
                 })
             })
             .take(96)
             .collect();
-        serde_json::json!({"plugin": name, "params": params, "routes": [], "held": held.notes()})
+        let routes: Vec<_> = routes
+            .into_iter()
+            .map(|mut r| {
+                r.as_object_mut().map(|o| o.remove("ids"));
+                r
+            })
+            .collect();
+        serde_json::json!({"plugin": name, "params": params, "routes": routes, "held": held.notes()})
     };
 
     let infos = all.param_infos();
     let edit = move |c: &serde_json::Value| {
+        if c["op"] == "preset" {
+            let path = c["path"].as_str().ok_or("a preset needs its `path`")?;
+            let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+            let id = FRAMEWORK::core::state::hash_plugin_id(<plugin::ENTRY as PluginRuntime>::info().clap_id);
+            let (at, state) = (0..bytes.len().saturating_sub(3))
+                .filter(|&i| &bytes[i..i + 4] == b"OAST")
+                .find_map(|i| Some((i, FRAMEWORK::core::state::deserialize_state(&bytes[i..], id)?)))
+                .ok_or_else(|| format!("{path}: no NAME state in it"))?;
+            if at == 0 {
+                // A host's saved state: plain values.
+                FRAMEWORK::core::state::apply_params(&*store, &state);
+            } else {
+                // Inside a plugin's own preset file: saved by its editor,
+                // through the host context, so normalized values.
+                if !<plugin::ENTRY as PluginExport>::Params::validate_persist(&state.persist) {
+                    return Err(format!("{path}: NAME rejects its saved patch"));
+                }
+                for &(p, v) in &state.params {
+                    all.set_normalized(p, v);
+                }
+                all.load_persist(&state.persist);
+                all.snap_smoothers();
+            }
+            if let Ok(mut extra) = pending_extra.lock() {
+                *extra = state.extra;
+            }
+            return Ok(());
+        }
         let s = mui_motion_bridge::param_set(c, |n| {
             infos.iter().find(|i| i.name == n || i.short_name == n).map(|i| i.id)
         })?;
         let info = infos.iter().find(|i| i.id == s.id).ok_or("no such parameter")?;
         all.set_normalized(s.id, if s.norm { s.value } else { info.range.normalize(s.value) });
+        if let Ok(mut a) = automated.lock() {
+            a.insert(s.id);
+        }
         Ok(())
     };
     let mut describe = mui_motion_bridge::describe(name);

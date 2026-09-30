@@ -86,6 +86,19 @@ name/short name, with `field` either `value`/`plain` (plain units) or `norm`
 name, with a 0..1 value. The command is acked with `edit`, or answered with
 `error`.
 
+### Presets
+
+```json
+{"op": "preset", "path": "presets/Everything.kurvy"}
+```
+
+Loads a preset or saved state (a path relative to the project) as a host's
+state load does. The moose adapter finds the moose state envelope (`OAST`) in
+the file: at its start it is a host's saved state (plain values); inside a
+plugin's own preset format (a `.kurvy` wraps it) its values are normalized,
+as the editor saved them. Values and `#[persist]` state apply at once, custom
+state before the next audio block. An adapter without presets answers `error`.
+
 ### Editor input
 
 These are queued (at most 256) and all applied, in order, at the next
@@ -135,13 +148,14 @@ only lists changed ones.
 
 ```json
 {"plugin": "KURV",
- "params": [{"id": 12, "name": "Cutoff", "group": "Filter", "value": 1200.0, "text": "1.20 kHz", "norm": 0.61}],
+ "params": [{"id": 12, "name": "Cutoff", "group": "Filter", "value": 1200.0, "text": "1.20 kHz", "norm": 0.61,
+             "automated": true, "modulated": false}],
  "routes": [{"source": "LFO 01", "target": "Cutoff", "depth": 0.4, "live": 0.13}],
  "held": [60, 64]}
 ```
 
-- `params` lists the parameters off their defaults.
-- `routes` are the modulation routes: `depth` is signed and `live` is the source's current value.
+- `params` lists the parameters off their defaults, set by the host (`automated`) or modulated by a route (`modulated`), under the names the plugin shows (moose: `Params::parameter_presentation`, so a `Host 36` slot reads as what it drives).
+- `routes` are the modulation routes: `depth` is signed and `live` (optional) is the source's current value. The moose adapter reads them from `<X> Source` / `<X> Target` / `<X> Amount` parameter triplets (source off its default, amount not 0). Routes a plugin keeps only in its private state are not visible to a host.
 - `held` is the notes held.
 
 mui-cut stores it with the capture and draws it in `patch` layers.
@@ -150,7 +164,7 @@ mui-cut stores it with the capture and draws it in `patch` layers.
 
 `Layer::plugin_track` (`src/plugin.rs`) builds one command list per frame on
 the project's frame grid. At frame 0 it sends `select` (with the depth that
-explode and parts need). On every frame f > 0 of a layer with notes it sends
+explode and parts need), then the layer's `preset`. On every frame f > 0 of a layer with notes it sends
 `advance` to `round(f / fps * rate)` with that span's notes. It then sends a
 `view` when the keyed `view_width`/`view_height` changed (whole pixels), a
 `set` for each param whose keyed value changed (rounded to 1e-6), and a

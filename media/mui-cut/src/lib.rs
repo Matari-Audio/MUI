@@ -261,6 +261,10 @@ pub enum Kind {
     /// move its pieces; `explode` pulls them apart. See `src/plugin.rs`.
     Plugin {
         source: Box<Source>,
+        /// A preset or saved-state file (relative to the project) the
+        /// plugin loads before anything else: its patch from the start.
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        preset: String,
         /// Surface ids to split out as parts; empty lets the bridge's
         /// `discover_parts` choose.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
