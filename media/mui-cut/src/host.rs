@@ -16,6 +16,7 @@ use std::time::Duration;
 
 use base64::Engine as _;
 use mui_cut::plugin::{CACHE, Capture, FNV_OFFSET, Fragment, Image, fnv, frame_at};
+use mui_cut::sources::MediaKind;
 use mui_cut::{Assets, Kind, Layer, Project, Source};
 use serde_json::{Value, json};
 
@@ -85,17 +86,43 @@ pub fn load(p: &Project, project: &Path, assets: &mut Assets) -> Vec<String> {
 /// Run the adapters of the plugin layers whose states are not all cached
 /// (or were captured from another build of the adapter). What failed.
 pub fn capture_missing(p: &Project, project: &Path) -> Vec<String> {
+    let jobs = plugins(p)
+        .into_iter()
+        .map(|(l, steps)| (format!("layer `{}`", l.id), source(l), steps))
+        .collect();
+    capture(jobs, project)
+}
+
+/// Capture every plugin source's fresh state ([`mui_cut::plugin::home`]),
+/// whose manifest lists its parts for the Sources panel. What failed.
+pub fn capture_sources(p: &Project, project: &Path) -> Vec<String> {
+    let all = p.all_sources();
+    let jobs = all
+        .iter()
+        .filter_map(|m| match &m.kind {
+            MediaKind::Plugin { source } => Some((
+                format!("source `{}`", m.id),
+                source,
+                vec![mui_cut::plugin::home_step(source)],
+            )),
+            _ => None,
+        })
+        .collect();
+    capture(jobs, project)
+}
+
+/// Replay each `(what, source, steps)` whose states are not all cached.
+fn capture(jobs: Vec<(String, &Source, Vec<mui_cut::Step>)>, project: &Path) -> Vec<String> {
     let dir = project.parent().unwrap_or(Path::new("."));
     let mut built: HashMap<&Source, std::result::Result<(PathBuf, String), String>> =
         HashMap::new();
     let mut errs = Vec::new();
-    for (l, steps) in plugins(p) {
-        let src = source(l);
+    for (what, src, steps) in jobs {
         let exe = built.entry(src).or_insert_with(|| executable(src, dir));
         let (exe, stamp) = match exe {
             Ok(e) => e.clone(),
             Err(e) => {
-                errs.push(format!("layer `{}`: {e}", l.id));
+                errs.push(format!("{what}: {e}"));
                 continue;
             }
         };
@@ -103,13 +130,12 @@ pub fn capture_missing(p: &Project, project: &Path) -> Vec<String> {
             continue;
         }
         eprintln!(
-            "mui-cut: capturing plugin layer `{}` ({} states) from {}",
-            l.id,
+            "mui-cut: capturing plugin {what} ({} states) from {}",
             steps.len(),
             exe.display()
         );
         if let Err(e) = replay(&exe, &src.args, dir, &steps, &stamp, &mut errs) {
-            errs.push(format!("layer `{}`: {e}", l.id));
+            errs.push(format!("{what}: {e}"));
         }
     }
     errs

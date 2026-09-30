@@ -15,11 +15,13 @@ pub mod fx;
 mod gpu;
 mod gpu3d;
 mod motion;
+pub mod place;
 pub mod plugin;
 #[cfg(not(target_arch = "wasm32"))]
 mod pool;
 mod render;
 mod shutter;
+pub mod sources;
 mod sparse;
 mod three;
 pub mod vars;
@@ -55,6 +57,11 @@ pub struct Project {
     /// Output pixels, `[width, height]`; layer coordinates are in these.
     pub size: [u32; 2],
     pub fps: f64,
+    /// Every file and plugin imported into the project: the editor's
+    /// Sources panel, and what `source_add` writes. Layers may use files
+    /// this does not list; [`Project::all_sources`] adds those.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<sources::Media>,
     pub scenes: Vec<Scene>,
     /// Encoder settings for `mui-cut render`; its flags override them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -264,6 +271,11 @@ pub enum Kind {
         /// Seconds each level's explode runs behind the one above it.
         #[serde(default, skip_serializing_if = "is_default")]
         explode_stagger: f64,
+        /// Draw only these parts, and the parts nested under them
+        /// (`panel/knob` under `panel`), without the rest of the UI: a
+        /// component layer. Empty draws the whole UI.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        show: Vec<String>,
     },
 }
 
@@ -357,6 +369,12 @@ pub struct Layer {
     pub id: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub name: String,
+    /// The id of another layer in the scene this one is attached to: its
+    /// `x`, `y` (and `z`) are then offsets in the parent's space, turned and
+    /// scaled with it, and its opacity multiplies the parent's (Cavalry and
+    /// After Effects parenting). See `src/place.rs`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub parent: String,
     #[serde(flatten)]
     pub kind: Kind,
     #[serde(default = "zero", skip_serializing_if = "is_zero")]
@@ -1147,11 +1165,12 @@ pub const MAX_COPIES: usize = 10_000;
 /// Scene `scene` at `t` seconds: a pure function of its arguments, so any
 /// time can be sought in any order.
 pub fn eval(project: &Project, scene: &Scene, t: f64) -> Frame {
-    let layers: Vec<Drawn> = scene
+    let mut layers: Vec<Drawn> = scene
         .layers
         .iter()
         .map(|l| l.eval_at(t, project.fps))
         .collect();
+    place::compose(scene, &mut layers);
     let view = (scene.mode == Mode::ThreeD).then(|| three::view(project.size, scene, t, &layers));
     Frame {
         size: project.size,
@@ -1342,6 +1361,7 @@ impl Project {
         if let Some(r) = &p.render {
             r.check().map_err(|e| format!("render: {e}"))?;
         }
+        sources::check(&p.sources)?;
         for (si, s) in p.scenes.iter().enumerate() {
             if !(s.duration.is_finite() && s.duration > 0.) {
                 return Err(format!(
@@ -1410,6 +1430,9 @@ impl Project {
                 }
                 fx::check(&l.effects, &format!("{at}.effects: layer `{id}`"))?;
             }
+            place::check(s).map_err(|(li, e)| {
+                format!("scenes[{si}].layers[{li}].parent: scene `{}`: {e}", s.name)
+            })?;
             for l in &s.layers {
                 if let Kind::Camera { look_at, .. } = &l.kind
                     && !look_at.is_empty()
@@ -1554,3 +1577,5 @@ fn tidy(pretty: &str) -> String {
 mod tests;
 #[cfg(test)]
 mod tests3d;
+#[cfg(test)]
+mod tests_place;

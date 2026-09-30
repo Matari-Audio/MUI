@@ -182,8 +182,11 @@ impl Cut {
                     .iter()
                     .flat_map(move |l| l.plugin_track(p.fps, last))
             })
-            .map(|s| format!("{}/{}.json", crate::plugin::CACHE, s.key))
+            .map(|s| s.key)
+            .chain(p.all_sources().iter().filter_map(|m| m.state()))
+            .map(|k| format!("{}/{k}.json", crate::plugin::CACHE))
             .collect();
+        paths.sort();
         paths.dedup();
         serde_json::to_string(&paths).unwrap_or_default()
     }
@@ -207,6 +210,67 @@ impl Cut {
                 Some(crate::plugin::tree_json(cap, &at).to_string())
             })
             .unwrap_or_default()
+    }
+    /// Every source (see [`Project::all_sources`]) as JSON, a plugin's
+    /// with `state`: the manifest path of its fresh capture, which holds
+    /// its parts.
+    pub fn sources(&self) -> String {
+        let Some(p) = &self.project else {
+            return "[]".into();
+        };
+        let rows: Vec<serde_json::Value> = p
+            .all_sources()
+            .iter()
+            .map(|m| {
+                let mut v = serde_json::to_value(m).unwrap_or_default();
+                if let Some(k) = m.state() {
+                    v["state"] = format!("{}/{k}.json", crate::plugin::CACHE).into();
+                }
+                v
+            })
+            .collect();
+        serde_json::to_string(&rows).unwrap_or_default()
+    }
+    /// A plugin source's parts as [`crate::plugin::home_tree`], from its
+    /// home capture (`state`, as [`Cut::sources`] names it) once added:
+    /// the nodes `cutParts` has, nothing moved; `"[]"` before.
+    pub fn source_parts(&self, state: &str) -> String {
+        let key = state
+            .trim_start_matches(crate::plugin::CACHE)
+            .trim_start_matches('/')
+            .trim_end_matches(".json");
+        self.renderer
+            .assets
+            .capture(key)
+            .map(|c| crate::plugin::home_tree(c, key).to_string())
+            .unwrap_or_else(|| "[]".into())
+    }
+    /// Layer `id` of scene `scene` parented to `parent` ("" detaches it),
+    /// kept where it is on screen at `t`: the rewritten layer as JSON.
+    pub fn reparent(&self, scene: usize, id: &str, parent: &str, t: f64) -> Result<String, String> {
+        let p = self.project.as_ref().ok_or("no project loaded")?;
+        let s = p.scenes.get(scene).ok_or("no such scene")?;
+        let l = crate::place::reparent(p, s, id, Some(parent), t)?;
+        serde_json::to_string(&l).map_err(|e| e.to_string())
+    }
+    /// Layer `id` of scene `scene` back to its default layout, as JSON.
+    pub fn reset(&self, scene: usize, id: &str) -> Result<String, String> {
+        let p = self.project.as_ref().ok_or("no project loaded")?;
+        let mut l = p
+            .scenes
+            .get(scene)
+            .and_then(|s| s.layers.iter().find(|l| l.id == id))
+            .ok_or("no such layer")?
+            .clone();
+        l.reset(p.size);
+        serde_json::to_string(&l).map_err(|e| e.to_string())
+    }
+    /// Scene `scene` taken flat, as its 3D shot shows it at `t` (see
+    /// [`crate::place::flatten`]), as JSON.
+    pub fn flatten(&self, scene: usize, t: f64) -> Result<String, String> {
+        let p = self.project.as_ref().ok_or("no project loaded")?;
+        let s = p.scenes.get(scene).ok_or("no such scene")?;
+        serde_json::to_string(&crate::place::flatten(p, s, t)).map_err(|e| e.to_string())
     }
     /// The evaluated frame as JSON: what the inspector shows at the playhead.
     pub fn frame(&self, scene: usize, t: f64) -> String {
