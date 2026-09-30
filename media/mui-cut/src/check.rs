@@ -332,6 +332,8 @@ fn fields(raw: &Value, p: &Project, out: &mut Issues) {
                         "id" | "name" | "kind" | "animators" | "deformers"
                     )
                     && !(three && matches!(k.as_str(), "cast_shadows" | "receive_shadows"))
+                    // Every kind runs its own effect stack in 2D; 3D skips it.
+                    && !(!three && k == "effects")
                 {
                     out.add(
                         Severity::Info,
@@ -1029,6 +1031,27 @@ mod tests {
         let e = i.iter().find(|i| i.code == "empty_frame").unwrap();
         let [a, b] = e.t.unwrap();
         assert!(a >= 0.25 && b < 0.5, "{e}");
+    }
+
+    #[test]
+    fn layer_effects_are_used_in_2d_and_ignored_in_3d() {
+        let effects = serde_json::json!([{"type": "blur", "radius": 4}]);
+        let doc = |mode: &str| {
+            serde_json::json!({"size": [320, 180], "fps": 30, "scenes": [{
+            "name": "s", "duration": 1, "mode": mode, "layers": [
+                {"id": "t", "kind": "text", "text": "HI", "x": 160, "y": 90, "effects": effects},
+                {"id": "r", "kind": "rect", "x": 160, "y": 90, "effects": effects}
+            ]}]})
+            .to_string()
+        };
+        let ignored = |mode: &str| {
+            check(&doc(mode), &mut Renderer::new(320, 180), &|_| true)
+                .into_iter()
+                .filter(|i| i.code == "ignored_prop" && i.path.ends_with(".effects"))
+                .count()
+        };
+        assert_eq!(ignored("2d"), 0);
+        assert_eq!(ignored("3d"), 2);
     }
 
     #[test]
