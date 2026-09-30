@@ -375,20 +375,42 @@ pub fn describe(
                 .collect()
         })
         .collect();
-    let all = || frames.iter().flatten();
+    let slabbed: Vec<Vec<Vec<(String, Drawn)>>> = frames
+        .iter()
+        .map(|subs| subs.iter().map(|f| slabs(assets, f)).collect())
+        .collect();
 
-    // Content layers: each distinct look, the most it is scaled, and which
-    // one every instant shows.
+    // Content slabs by name: each distinct look, the most it is scaled.
+    let mut layers: Vec<LayerD> = Vec::new();
+    let mut index: HashMap<String, usize> = HashMap::new();
+    // Per slab: its looks' numbers by key, and each look's content and the
+    // most it is scaled.
+    let mut looks: Vec<HashMap<String, usize>> = Vec::new();
+    let mut firsts: Vec<Vec<(Drawn, f64)>> = Vec::new();
+    for (name, d) in slabbed.iter().flatten().flatten() {
+        let j = *index.entry(name.clone()).or_insert_with(|| {
+            layers.push(LayerD {
+                id: name.clone(),
+                shadow: d.space.cast_shadows,
+                variants: Vec::new(),
+            });
+            looks.push(HashMap::new());
+            firsts.push(Vec::new());
+            layers.len() - 1
+        });
+        let c = content(d);
+        let key = serde_json::to_string(&c).map_err(|e| e.to_string())?;
+        let n = *looks[j].entry(key).or_insert_with(|| {
+            firsts[j].push((c, 0.));
+            firsts[j].len() - 1
+        });
+        firsts[j][n].1 = firsts[j][n].1.max(d.scale.abs());
+    }
+
     let mut lights = Vec::new();
-    let mut layers = Vec::new();
     let mut models = Vec::new();
-    // Per layer index: its looks' numbers by key, and each look's content
-    // and the most it is scaled.
-    let mut looks: Vec<HashMap<String, usize>> = vec![HashMap::new(); scene.layers.len()];
-    let mut firsts: Vec<Vec<(Drawn, f64)>> = vec![Vec::new(); scene.layers.len()];
     for (i, l) in scene.layers.iter().enumerate() {
         match &l.kind {
-            Kind::Camera { .. } => {}
             Kind::Light { light } => {
                 let kind = match light {
                     LightType::Ambient => continue,
@@ -421,34 +443,15 @@ pub fn describe(
                     },
                 ));
             }
-            _ => {
-                for f in all() {
-                    let d = &f.layers[i];
-                    let c = content(d);
-                    let key = serde_json::to_string(&c).map_err(|e| e.to_string())?;
-                    let n = *looks[i].entry(key).or_insert_with(|| {
-                        firsts[i].push((c, 0.));
-                        firsts[i].len() - 1
-                    });
-                    firsts[i][n].1 = firsts[i][n].1.max(d.scale.abs());
-                }
-                layers.push((
-                    i,
-                    LayerD {
-                        id: l.id.clone(),
-                        shadow: l.cast_shadows,
-                        variants: Vec::new(),
-                    },
-                ));
-            }
+            _ => {}
         }
     }
 
     // Paint each look once; keep its box to place it by.
     let mut textures: Vec<Texture> = Vec::new();
     let mut boxes: HashMap<(usize, usize), (f64, f64, [f64; 2])> = HashMap::new();
-    for (i, layer) in &mut layers {
-        for (n, (c, most)) in firsts[*i].iter().enumerate() {
+    for (j, layer) in layers.iter_mut().enumerate() {
+        for (n, (c, most)) in firsts[j].iter().enumerate() {
             let k = density(o.size, size[1], *most);
             let (rgba, [tw, th], bx, corner) = assets.paint(c, k)?;
             let mut h = Fnv::default();
@@ -476,7 +479,7 @@ pub fn describe(
                 bevel: r((depth * 0.15).min(2.)),
                 edge: r3(linear(c.space.edge)),
             });
-            boxes.insert((*i, n), (w, hgt, [corner.x, corner.y]));
+            boxes.insert((j, n), (w, hgt, [corner.x, corner.y]));
             if !textures.iter().any(|t| t.name == name) {
                 textures.push(Texture {
                     name,
@@ -487,7 +490,7 @@ pub fn describe(
         }
     }
 
-    let state = |f: &Frame| -> Result<State, String> {
+    let state = |f: &Frame, shown: &[(String, Drawn)]| -> Result<State, String> {
         let view = f.view.as_ref().ok_or("a 3D frame has a view")?;
         let (camera, target) = camera(size, &view.camera);
         let mut ambient = [0f32; 3];
@@ -502,13 +505,21 @@ pub fn describe(
                 }
             }
         }
+        let here: HashMap<&str, &Drawn> = shown.iter().map(|(n, d)| (n.as_str(), d)).collect();
         let layer_states: Vec<LayerS> = layers
             .iter()
-            .map(|(i, _)| {
-                let d = &f.layers[*i];
+            .enumerate()
+            .map(|(j, layer)| {
+                let Some(d) = here.get(layer.id.as_str()) else {
+                    return Ok(LayerS {
+                        m: placed(Mat4::IDENTITY),
+                        v: -1,
+                        a: 0.,
+                    });
+                };
                 let key = serde_json::to_string(&content(d)).map_err(|e| e.to_string())?;
-                let n = looks[*i][&key];
-                let (w, h, corner) = boxes[&(*i, n)];
+                let n = looks[j][&key];
+                let (w, h, corner) = boxes[&(j, n)];
                 let offset = [
                     (corner[0] + w / 2.) as f32,
                     -(corner[1] + h / 2.) as f32,
@@ -614,7 +625,13 @@ pub fn describe(
     };
     let states = frames
         .iter()
-        .map(|subs| subs.iter().map(state).collect::<Result<Vec<_>, _>>())
+        .zip(&slabbed)
+        .map(|(subs, slabs)| {
+            subs.iter()
+                .zip(slabs)
+                .map(|(f, s)| state(f, s))
+                .collect::<Result<Vec<_>, _>>()
+        })
         .collect::<Result<Vec<_>, _>>()?;
 
     let px = f64::from(METRES);
@@ -635,11 +652,37 @@ pub fn describe(
             depth: r((f.far - f.near).max(1.) * px),
         }),
         lights: lights.into_iter().map(|(_, l)| l).collect(),
-        layers: layers.into_iter().map(|(_, l)| l).collect(),
+        layers,
         models: models.into_iter().map(|(_, m)| m).collect(),
         frames: states,
     };
     Ok((desc, textures))
+}
+
+/// A frame's content layers as slabs (a plugin layer is several; see
+/// [`Assets::slabs`]), each named uniquely within the frame.
+fn slabs(assets: &Assets, f: &Frame) -> Vec<(String, Drawn)> {
+    let mut seen: HashMap<String, usize> = HashMap::new();
+    f.layers
+        .iter()
+        .filter(|l| {
+            !matches!(
+                l.kind,
+                Kind::Camera { .. } | Kind::Light { .. } | Kind::Model { .. }
+            )
+        })
+        .flat_map(|l| assets.slabs(l))
+        .map(|d| {
+            let n = seen.entry(d.id.clone()).or_default();
+            let name = if *n == 0 {
+                d.id.clone()
+            } else {
+                format!("{}~{n}", d.id)
+            };
+            *n += 1;
+            (name, d)
+        })
+        .collect()
 }
 
 /// An outline (or, with none, the `w` by `h` box) as closed rings in the
@@ -1036,6 +1079,30 @@ mod tests {
         assert_eq!(k[0], k[1]);
         assert_eq!(tex.len(), 1);
         assert_eq!(tex[0].size, [40, 20]);
+    }
+
+    /// A plugin layer is its slabs, as mui-stage draws it: the backdrop,
+    /// each part where the 2D drawing puts it, and a highlight plate.
+    #[test]
+    fn plugin_parts_become_their_own_slabs() {
+        let p = Project::load(
+            r#"{"size":[400,200],"fps":30,"scenes":[{"name":"a","duration":2,"mode":"3d",
+                "layers":[{"id":"syn","kind":"plugin","source":{"bin":"x"},"x":200,"y":100,
+                "explode":0.5,"parts":{"a":{"highlight":1}}}]}]}"#,
+        )
+        .unwrap();
+        let assets = crate::tests::capture_assets(&p);
+        let o = Options::new(None, Some(4), 1, [400, 200]).unwrap();
+        let (d, tex) = describe(&p, &p.scenes[0], &[0.], &assets, Path::new(""), &o).unwrap();
+        let ids: Vec<&str> = d.layers.iter().map(|l| l.id.as_str()).collect();
+        assert_eq!(ids, ["syn", "syn#a", "syn#a~1", "syn#b"]);
+        assert!(tex.len() >= 2, "the backdrop and part images");
+        let slabs = assets.slabs(&eval(&p, &p.scenes[0], 0.).layers[0]);
+        for (s, st) in slabs.iter().zip(&d.frames[0][0].layers) {
+            assert_eq!(st.v, 0);
+            let want = at(p.size, [s.x, s.y, s.space.z]);
+            assert!(near(col(&st.m, 3), want, 1e-3), "{}", s.id);
+        }
     }
 
     #[test]
