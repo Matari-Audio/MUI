@@ -1060,4 +1060,158 @@ fn variables_reject_what_does_not_fit() {
             "scenes": [{{"name": "a", "duration": {{"var": "s"}}, "layers": []}}]}}"#
     );
     assert!(Project::load(&json).is_err());
+const PLUGIN: &str = r#"{"id":"syn","kind":"plugin","source":{"bin":"adapter"},
+    "x":200,"y":100,
+    "params":[{"id":"filter","field":"cutoff","value":[{"t":0.5,"v":0.2,"interp":"linear"},{"t":1.0,"v":0.8,"interp":"hold"}]}],
+    "pointer_x":[{"t":0,"v":-1,"interp":"hold"},{"t":1.5,"v":10,"interp":"hold"}],
+    "pointer_y":[{"t":0,"v":-1,"interp":"hold"},{"t":1.5,"v":20,"interp":"hold"}]}"#;
+
+#[test]
+fn plugin_state_keys_follow_what_the_adapter_was_told() {
+    let p = one_layer(PLUGIN);
+    let l = &p.scenes[0].layers[0];
+    let steps = l.plugin_track(p.fps, 60);
+    // Frame 0 sets the parameter; it moves on frames 16..=30 (0.5 s to 1 s,
+    // linear) and the pointer arrives on frame 45. Nothing else is a step.
+    let frames: Vec<usize> = steps.iter().map(|s| s.frame).collect();
+    assert_eq!(frames, [0].into_iter().chain(16..=30).chain([45]).collect::<Vec<_>>());
+    assert_eq!(
+        steps[0].commands,
+        [serde_json::json!({"op": "set", "id": "filter", "field": "cutoff", "value": 0.2})]
+    );
+    assert_eq!(steps.last().unwrap().commands[0]["kind"], "pointer");
+    // Deterministic: the same document gives the same keys, all distinct.
+    assert_eq!(steps, one_layer(PLUGIN).scenes[0].layers[0].plugin_track(30., 60));
+    let keys: std::collections::HashSet<_> = steps.iter().map(|s| &s.key).collect();
+    assert_eq!(keys.len(), steps.len());
+    // A key hashes the source too: another adapter is another capture.
+    let other = one_layer(&PLUGIN.replace("\"adapter\"", "\"other\""));
+    assert_ne!(other.scenes[0].layers[0].plugin_track(30., 0)[0].key, steps[0].key);
+    // Coming back to a value is still a new state: the history differs.
+    let back = one_layer(&PLUGIN.replace(
+        r#"{"t":1.0,"v":0.8,"interp":"hold"}"#,
+        r#"{"t":1.0,"v":0.8,"interp":"linear"},{"t":1.5,"v":0.2,"interp":"hold"}"#,
+    ));
+    let back = back.scenes[0].layers[0].plugin_track(30., 60);
+    assert_eq!(back[0].key, steps[0].key);
+    assert_ne!(back.last().unwrap().key, steps[0].key);
+}
+
+#[test]
+fn plugin_eval_is_pure_and_reads_the_frame_grid() {
+    let p = one_layer(PLUGIN);
+    let s = &p.scenes[0];
+    let state = |t: f64| eval(&p, s, t).layers[0].plugin.clone().unwrap().state;
+    let forward: Vec<String> = (0..60).map(|f| state(f as f64 / 30.)).collect();
+    let backward: Vec<String> = (0..60).rev().map(|f| state(f as f64 / 30.)).collect();
+    assert_eq!(forward, backward.into_iter().rev().collect::<Vec<_>>());
+    // Between grid frames the state is the frame's; a static stretch shares one.
+    assert_eq!(state(0.52), state(0.5));
+    assert_eq!(state(0.1), state(0.4));
+    assert_ne!(state(0.5), state(0.6));
+    let steps = s.layers[0].plugin_track(30., 59);
+    assert_eq!(state(1.9), steps.last().unwrap().key);
+    // Other kinds have no plugin state.
+    let rect = one_layer(r#"{"id":"r","kind":"rect"}"#);
+    assert!(eval(&rect, &rect.scenes[0], 0.).layers[0].plugin.is_none());
+}
+
+#[test]
+fn explode_pulls_parts_away_from_the_centre() {
+    assert_eq!(plugin::explode([100., 100.], [150., 80.], 0.), [0., 0., 0.]);
+    assert_eq!(
+        plugin::explode([100., 100.], [150., 80.], 0.5),
+        [25., -10., 0.5 * plugin::EXPLODE_DEPTH]
+    );
+    // A part on the centre stays put in the plane.
+    assert_eq!(plugin::explode([10., 10.], [10., 10.], 1.)[..2], [0., 0.]);
+}
+
+#[test]
+fn plugin_layers_are_checked_and_list_their_part_tracks() {
+    for bad in [
+        r#"{"id":"p","kind":"plugin","source":{}}"#,
+        r#"{"id":"p","kind":"plugin","source":{"bin":"a","example":"b"}}"#,
+        r#"{"id":"p","kind":"plugin","source":{"cargo":"C.toml"}}"#,
+        r#"{"id":"p","kind":"plugin","source":{"bin":"a"},"parts":{"a.b":{}}}"#,
+    ] {
+        let json = format!(
+            r#"{{"size":[400,200],"fps":30,"scenes":[{{"name":"a","duration":2,"layers":[{bad}]}}]}}"#
+        );
+        assert!(Project::load(&json).is_err(), "accepted {bad}");
+    }
+    let p = one_layer(
+        r#"{"id":"p","kind":"plugin","source":{"cargo":"C.toml","example":"s"},
+            "params":[{"id":1,"field":"level","value":0.5}],
+            "parts":{"osc":{"x":[{"t":0,"v":0},{"t":1,"v":50}],"highlight":1}}}"#,
+    );
+    let l = &p.scenes[0].layers[0];
+    let names: Vec<String> = l.props().into_iter().map(|(n, _)| n).collect();
+    for n in ["explode", "backdrop", "pointer_x", "params.0.value", "parts.osc.x", "parts.osc.highlight"] {
+        assert!(names.iter().any(|m| m == n), "{n} not in {names:?}");
+    }
+    assert!(!names.iter().any(|m| m == "stroke" || m == "width"));
+    assert!((l.prop("parts.osc.x").unwrap().at(0.5) - 25.).abs() < 1e-6);
+    // A save keeps it as written.
+    assert_eq!(Project::load(&p.to_json()).unwrap(), p);
+}
+
+/// A capture of a 200x100 UI: a background and two parts, `a` left, `b` right.
+#[cfg(not(target_arch = "wasm32"))]
+fn capture_assets(p: &Project) -> Assets {
+    let key = eval(p, &p.scenes[0], 0.).layers[0].plugin.clone().unwrap().state;
+    let cap = serde_json::json!({"width": 200, "height": 100, "layers": [
+        {"group": "background", "rect": [0, 0, 200, 100], "src": "img/bg.png"},
+        {"group": "a", "rect": [20, 20, 40, 20], "src": "img/a.png"},
+        {"group": "b", "rect": [140, 60, 40, 20], "src": "img/a.png"},
+    ]});
+    let mut a = Assets::default();
+    a.add_asset(&format!("{}/{key}.json", plugin::CACHE), cap.to_string().as_bytes())
+        .unwrap();
+    for img in ["img/bg.png", "img/a.png"] {
+        a.add_asset(&format!("{}/{img}", plugin::CACHE), &test_png())
+            .unwrap();
+    }
+    a
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn captured_parts_become_movable_layers() {
+    let doc = |extra: &str| {
+        one_layer(&format!(
+            r#"{{"id":"syn","kind":"plugin","source":{{"bin":"x"}},"x":200,"y":100{extra}}}"#
+        ))
+    };
+    let at = |p: &Project, a: &Assets| a.layers(&eval(p, &p.scenes[0], 0.)).unwrap();
+    let plain = doc("");
+    let assets = capture_assets(&plain);
+    let l = at(&plain, &assets);
+    // The UI is centred on the layer: its quad, then one quad per part.
+    assert_eq!(l.quads[0].pts[0], [100., 50.]);
+    let ids: Vec<&str> = l.parts.iter().map(|q| q.id.as_str()).collect();
+    assert_eq!(ids, ["syn#a", "syn#b"]);
+    assert_eq!(l.parts[0].pts[0], [120., 70.]);
+    assert_eq!(l.scenes.len(), 3, "background and two parts");
+    // Exploded, `a` (centre 40,30 of a 200x100 UI centred on 100,50) moves
+    // by its offset from the centre; its own track adds on top.
+    let moved = doc(r#","explode":1,"parts":{"a":{"x":5,"highlight":1}}"#);
+    let assets = capture_assets(&moved);
+    let l = at(&moved, &assets);
+    assert_eq!(l.parts[0].pts[0], [120. - 60. + 5., 70. - 20.]);
+    assert_eq!(l.parts[1].pts[0], [240. + 60., 110. + 20.]);
+    assert_eq!(l.scenes.len(), 4, "the highlight is one more tree");
+    // No capture yet: the plugin draws a placeholder and no parts.
+    let l = Assets::default()
+        .layers(&eval(&plain, &plain.scenes[0], 0.))
+        .unwrap();
+    assert!(l.parts.is_empty());
+    assert_eq!(l.scenes.len(), 1);
+    // And the pixels: a part's red lands where its quad says.
+    let mut r = Renderer::new(400, 200);
+    r.assets = capture_assets(&plain);
+    let (px, quads) = r.draw(&eval(&plain, &plain.scenes[0], 0.)).unwrap();
+    assert!(quads.iter().any(|q| q.id == "syn#b"));
+    let red = |x: usize, y: usize| px[(y * 400 + x) * 4] > 200 && px[(y * 400 + x) * 4 + 2] < 60;
+    assert!(red(125, 80), "part a's left half is red");
 }
