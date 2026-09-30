@@ -458,9 +458,9 @@ mod offline {
             use wgpu::TextureFormat as F;
             use wgpu::TextureUsages as U;
             let canvas = GpuCanvas::new(device, queue, F::Rgba8Unorm, size, engine).await?;
-            let shutter = Shutter::new(&device, size, F::Rgba8Unorm, F::Rgba8Unorm);
+            let shutter = Shutter::new(device, size, F::Rgba8Unorm, F::Rgba8Unorm);
             let out = texture(
-                &device,
+                device,
                 size,
                 F::Rgba8Unorm,
                 U::RENDER_ATTACHMENT | U::COPY_SRC,
@@ -468,7 +468,7 @@ mod offline {
             let out_view = out.create_view(&wgpu::TextureViewDescriptor::default());
             // Rows padded to 256 bytes, as a texture-to-buffer copy wants.
             let stride = (size[0] * 4).next_multiple_of(256);
-            let yuv = yuv.map(|y| YuvPass::new(&device, y, size, shutter.sum()));
+            let yuv = yuv.map(|y| YuvPass::new(device, y, size, shutter.sum()));
             let bytes = yuv
                 .as_ref()
                 .map_or(u64::from(stride) * u64::from(size[1]), |y| y.planes.size());
