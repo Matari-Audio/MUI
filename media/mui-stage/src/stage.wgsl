@@ -32,8 +32,25 @@ struct Globals {
     shadow_vp: array<mat4x4f, 5>,
     // x: contact shadow strength.
     contact: vec4f,
+    // The environment: intensity, cos and sin of its turn about y, on.
+    env: vec4f,
+    // x: the camera sees it; y: the chain's last mip level.
+    env2: vec4f,
+    // The view's axes; right.w and up.w: tan of the half field across and
+    // up.
+    cam_right: vec4f,
+    cam_up: vec4f,
+    cam_fwd: vec4f,
+    // Ambient occlusion: strength, radius in world units, on.
+    ao: vec4f,
+    // The environment's irradiance, nine SH coefficients (see env.rs).
+    sh: array<vec4f, 9>,
 };
 @group(0) @binding(0) var<uniform> g: Globals;
+// The environment's GGX mip chain (equirectangular) and the split-sum LUT.
+@group(0) @binding(1) var env_map: texture_2d<f32>;
+@group(0) @binding(2) var env_samp: sampler;
+@group(0) @binding(3) var brdf_lut: texture_2d<f32>;
 
 struct Draw {
     model: mat4x4f,
@@ -68,6 +85,8 @@ struct Post {
 // Bloom for `fs_final`, view distance for `fs_dof`, raw Vello pixels for
 // `fs_linearize`.
 @group(2) @binding(3) var aux: texture_2d<f32>;
+// The eye distances, for `fs_ao_apply`.
+@group(2) @binding(4) var aux2: texture_2d<f32>;
 
 // Colour, and the distance from the eye for depth of field.
 struct Out {
@@ -130,6 +149,44 @@ fn contact(world: vec3f) -> f32 {
     return 1. - g.contact.x * occ / 24.;
 }
 
+// --- the environment --------------------------------------------------
+
+fn env_on() -> bool { return g.env.w > 0.5; }
+// A world direction as the image sees it, turned by the rotation.
+fn env_dir(d: vec3f) -> vec3f {
+    return vec3f(g.env.y * d.x - g.env.z * d.z, d.y, g.env.z * d.x + g.env.y * d.z);
+}
+fn env_uv(d: vec3f) -> vec2f {
+    return vec2f(0.5 + atan2(d.z, d.x) * 0.15915494, 0.5 - asin(clamp(d.y, -1., 1.)) * 0.31830989);
+}
+// Light arriving along -d, blurred for `rough`.
+fn env_radiance(d: vec3f, rough: f32) -> vec3f {
+    let lod = clamp(rough, 0., 1.) * g.env2.y;
+    return textureSampleLevel(env_map, env_samp, env_uv(env_dir(d)), lod).rgb * g.env.x;
+}
+// What a white Lambertian surface facing `n` reflects of the environment.
+fn env_irradiance(n: vec3f) -> vec3f {
+    let d = env_dir(n);
+    let x = d.x;
+    let y = d.y;
+    let z = d.z;
+    let e = g.sh[0].rgb * 0.282095
+        + (g.sh[1].rgb * y + g.sh[2].rgb * z + g.sh[3].rgb * x) * 0.488603
+        + (g.sh[4].rgb * x * y + g.sh[5].rgb * y * z + g.sh[7].rgb * x * z) * 1.092548
+        + g.sh[6].rgb * 0.315392 * (3. * z * z - 1.)
+        + g.sh[8].rgb * 0.546274 * (x * x - y * y);
+    return max(e, vec3f(0.)) * g.env.x;
+}
+// Split-sum specular: the prefiltered reflection times F0's scale and bias.
+fn env_spec(n: vec3f, v: vec3f, rough: f32, f0: vec3f) -> vec3f {
+    if (!env_on()) { return vec3f(0.); }
+    let nv = clamp(dot(n, v), 1e-3, 1.);
+    let ab = textureSampleLevel(brdf_lut, samp, vec2f(nv, rough), 0.).rg;
+    return env_radiance(reflect(-v, n), rough) * (f0 * ab.x + ab.y);
+}
+// Faces, walls and backs: a plain dielectric.
+const SLAB_ROUGH: f32 = 0.42;
+
 struct Shade {
     diffuse: vec3f,
     spec: vec3f,
@@ -139,6 +196,7 @@ struct Shade {
 fn shade(world: vec3f, n: vec3f, receive: f32, shine: f32) -> Shade {
     var o: Shade;
     o.diffuse = g.ambient.rgb;
+    if (env_on()) { o.diffuse += env_irradiance(n); }
     o.spec = vec3f(0.);
     let v = normalize(g.eye.xyz - world);
     for (var i = 0; i < 4; i++) {
@@ -216,9 +274,18 @@ struct Full {
     return o;
 }
 
+// The eye's ray through `uv` (0..1, y down).
+fn eye_ray(uv: vec2f) -> vec3f {
+    let q = vec2f(uv.x * 2. - 1., 1. - uv.y * 2.);
+    return normalize(g.cam_fwd.xyz + q.x * g.cam_right.w * g.cam_right.xyz + q.y * g.cam_up.w * g.cam_up.xyz);
+}
+
 @fragment fn fs_bg(i: Full) -> Out {
     var o: Out;
     o.color = vec4f(select(background(i.uv, g.time_res.x), g.clear.rgb, g.clear.a > 0.5), 1.);
+    if (env_on() && g.env2.x > 0.5) {
+        o.color = vec4f(env_radiance(eye_ray(i.uv), 0.), 1.);
+    }
     o.dist = vec4f(60000., 0., 0., 1.);
     return o;
 }
@@ -268,7 +335,10 @@ fn mirrored(c: vec4f, world: vec3f) -> vec4f {
 @fragment fn fs_front(i: Cap) -> Out {
     var c = textureSample(tex, samp, i.uv);
     if (lit_shot()) {
-        c = vec4f(c.rgb * shade(i.world, face_normal(i.world), d.flags.x, 0.).diffuse, c.a);
+        let n = face_normal(i.world);
+        let v = normalize(g.eye.xyz - i.world);
+        c = vec4f(c.rgb * shade(i.world, n, d.flags.x, 0.).diffuse
+            + env_spec(n, v, SLAB_ROUGH, vec3f(0.04)) * c.a, c.a);
     }
     let o = mirrored(vec4f(c.rgb * d.size.w, c.a) * d.edge.a, i.world);
     if (o.a < 0.004) { discard; }
@@ -278,7 +348,9 @@ fn mirrored(c: vec4f, world: vec3f) -> vec4f {
     let a = textureSample(tex, samp, i.uv).a;
     var rgb = d.edge.rgb * 0.3;
     if (lit_shot()) {
-        rgb = d.edge.rgb * shade(i.world, face_normal(i.world), d.flags.x, 0.).diffuse;
+        let n = face_normal(i.world);
+        rgb = d.edge.rgb * shade(i.world, n, d.flags.x, 0.).diffuse
+            + env_spec(n, normalize(g.eye.xyz - i.world), SLAB_ROUGH, vec3f(0.04));
     }
     let o = mirrored(vec4f(rgb, 1.) * a * d.edge.a, i.world);
     if (o.a < 0.004) { discard; }
@@ -302,7 +374,8 @@ struct Wall {
     let n = normalize(i.normal);
     if (lit_shot()) {
         let s = shade(i.world, n, d.flags.x, 48.);
-        let c = d.edge.rgb * s.diffuse + s.spec * 0.3;
+        let v = normalize(g.eye.xyz - i.world);
+        let c = d.edge.rgb * s.diffuse + s.spec * 0.3 + env_spec(n, v, SLAB_ROUGH, vec3f(0.04));
         let o = mirrored(vec4f(c, 1.) * d.edge.a, i.world);
         if (o.a < 0.004) { discard; }
         return out(o, i.world);
@@ -355,8 +428,13 @@ struct Wall {
     var c: vec3f;
     if (lit_shot()) {
         let s = shade(i.world, n, d.flags.x, shine);
-        // The ambient light stands in for the environment a metal mirrors.
-        c = base * (1. - metal) * s.diffuse + f0 * (s.spec * (shine + 8.) / 25. + g.ambient.rgb);
+        c = base * (1. - metal) * s.diffuse + f0 * s.spec * (shine + 8.) / 25.;
+        if (env_on()) {
+            c += env_spec(n, normalize(g.eye.xyz - i.world), rough, f0);
+        } else {
+            // The ambient light stands in for the environment a metal mirrors.
+            c += f0 * g.ambient.rgb;
+        }
     } else {
         let l = normalize(vec3f(-0.4, 0.6, 0.7));
         let v = normalize(g.eye.xyz - i.world);
@@ -468,6 +546,121 @@ fn coc(dist: f32) -> f32 {
     c += textureSampleLevel(tex, samp, i.uv + vec2f(-t.x, t.y), 0.);
     c += textureSampleLevel(tex, samp, i.uv + vec2f(t.x, t.y), 0.);
     return vec4f(c.rgb / 16., 1.);
+}
+
+// --- ambient occlusion ----------------------------------------------------
+
+// Ground-truth ambient occlusion (Jimenez et al. 2016, after XeGTAO) at half
+// resolution: per pixel, three slices through the view vector, each marched
+// both ways in screen space for the highest horizon within the radius, and
+// the cosine-weighted visible arc between them integrated in closed form.
+const AO_SLICES: i32 = 3;
+const AO_STEPS: i32 = 6;
+const HALF_PI: f32 = 1.5707964;
+
+// The world point at full-resolution pixel `p`, and its eye distance in w.
+fn ao_point(p: vec2i) -> vec4f {
+    let size = vec2i(g.time_res.yz);
+    let q = clamp(p, vec2i(0), size - 1);
+    let dist = textureLoad(tex, q, 0).r;
+    let uv = (vec2f(q) + 0.5) / g.time_res.yz;
+    return vec4f(g.eye.xyz + eye_ray(uv) * dist, dist);
+}
+fn inside(p: vec2i) -> bool {
+    return all(p >= vec2i(0)) && all(p < vec2i(g.time_res.yz));
+}
+// The smaller of two differences: across an edge the other side is not the
+// surface. At the frame's edge one side is the pixel itself.
+fn nearer(c: vec3f, a: vec3f, b: vec3f) -> vec3f {
+    let da = c - a;
+    let db = b - c;
+    let la = dot(da, da);
+    let lb = dot(db, db);
+    return select(db, da, lb < 1e-8 || (la > 1e-8 && la < lb));
+}
+@fragment fn fs_gtao(i: Full) -> @location(0) vec4f {
+    let half = vec2i(i.pos.xy);
+    let p = half * 2;
+    let c4 = ao_point(p);
+    if (c4.w > 50000.) { return vec4f(1., c4.w, 0., 1.); }
+    let c = c4.xyz;
+    let dx = nearer(c, ao_point(p - vec2i(2, 0)).xyz, ao_point(p + vec2i(2, 0)).xyz);
+    let dy = nearer(c, ao_point(p - vec2i(0, 2)).xyz, ao_point(p + vec2i(0, 2)).xyz);
+    let v = normalize(g.eye.xyz - c);
+    var n = normalize(cross(dx, dy));
+    if (dot(n, v) < 0.) { n = -n; }
+    let radius = g.ao.y;
+    let view_z = max(dot(c - g.eye.xyz, g.cam_fwd.xyz), 1.);
+    let reach = clamp(radius * g.time_res.z * 0.5 / (g.cam_up.w * view_z), 4., g.time_res.z * 0.25);
+    // Interleaved gradient noise turns the slices and staggers the steps.
+    let noise = fract(52.982918 * fract(dot(vec2f(half), vec2f(0.06711056, 0.00583715))));
+    let jitter = fract(noise * 7.13 + 0.37);
+    let fall_range = 0.615 * radius;
+    let fall_mul = -1. / fall_range;
+    let fall_add = (radius - fall_range) / fall_range + 1.;
+    var vis = 0.;
+    for (var k = 0; k < AO_SLICES; k++) {
+        let phi = (f32(k) + noise) * 3.14159265 / f32(AO_SLICES);
+        let omega = vec2f(cos(phi), -sin(phi));
+        let dir = normalize(g.cam_right.xyz * cos(phi) + g.cam_up.xyz * sin(phi));
+        let ortho = dir - v * dot(dir, v);
+        let axis = normalize(cross(ortho, v));
+        let pn = n - axis * dot(n, axis);
+        let pn_len = length(pn);
+        let cos_n = clamp(dot(pn, v) / max(pn_len, 1e-5), 0., 1.);
+        let nang = sign(dot(ortho, pn)) * acos(cos_n);
+        let low0 = cos(nang + HALF_PI);
+        let low1 = cos(nang - HALF_PI);
+        var h0 = low0;
+        var h1 = low1;
+        for (var j = 0; j < AO_STEPS; j++) {
+            var t = (f32(j) + jitter) / f32(AO_STEPS);
+            t = t * t;
+            let off = vec2i(round(omega * max(t * reach, 2. + f32(j))));
+            let q0 = p + off;
+            let q1 = p - off;
+            let s0 = ao_point(q0).xyz - c;
+            let s1 = ao_point(q1).xyz - c;
+            let l0 = length(s0);
+            let l1 = length(s1);
+            // Past the frame's edge there is nothing to see: no horizon.
+            let w0 = select(0., clamp(l0 * fall_mul + fall_add, 0., 1.), inside(q0) && l0 > 1e-3);
+            let w1 = select(0., clamp(l1 * fall_mul + fall_add, 0., 1.), inside(q1) && l1 > 1e-3);
+            h0 = max(h0, mix(low0, dot(s0 / max(l0, 1e-4), v), w0));
+            h1 = max(h1, mix(low1, dot(s1 / max(l1, 1e-4), v), w1));
+        }
+        var a0 = -acos(clamp(h1, -1., 1.));
+        var a1 = acos(clamp(h0, -1., 1.));
+        a0 = nang + clamp(a0 - nang, -HALF_PI, HALF_PI);
+        a1 = nang + clamp(a1 - nang, -HALF_PI, HALF_PI);
+        let arc0 = (cos_n + 2. * a0 * sin(nang) - cos(2. * a0 - nang)) * 0.25;
+        let arc1 = (cos_n + 2. * a1 * sin(nang) - cos(2. * a1 - nang)) * 0.25;
+        vis += pn_len * (arc0 + arc1);
+    }
+    return vec4f(clamp(vis / f32(AO_SLICES), 0., 1.), c4.w, 0., 1.);
+}
+// The half-resolution occlusion upsampled by a 3x3 gather weighted by how
+// close each sample's eye distance is to this pixel's, which also smooths
+// its noise, then laid on the frame.
+@fragment fn fs_ao_apply(i: Full) -> @location(0) vec4f {
+    let px = vec2i(i.pos.xy);
+    let c = textureLoad(tex, px, 0);
+    let d0 = textureLoad(aux2, px, 0).r;
+    if (d0 > 50000.) { return c; }
+    let hs = vec2i(textureDimensions(aux)) - 1;
+    let base = px / 2;
+    var sum = 0.;
+    var w = 0.;
+    for (var y = -1; y <= 1; y++) {
+        for (var x = -1; x <= 1; x++) {
+            let s = textureLoad(aux, clamp(base + vec2i(x, y), vec2i(0), hs), 0);
+            let wk = exp(-abs(s.g - d0) / (0.02 * d0)) * select(0.5, 1., x == 0 && y == 0) + 1e-4;
+            sum += s.r * wk;
+            w += wk;
+        }
+    }
+    let ao = pow(clamp(sum / w, 0., 1.), g.ao.x);
+    return vec4f(c.rgb * ao, c.a);
 }
 
 fn aces(x: vec3f) -> vec3f {
