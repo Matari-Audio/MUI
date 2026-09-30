@@ -337,9 +337,9 @@ fn part_tree(scene: &mui_scene::ResolvedScene, roots: &[String]) -> Vec<PartNode
 /// prefixes; where a named part sits among them comes from the surfaces'
 /// order (a node's surface before its children's). Each unnamed member with
 /// the part that adopts it, and each such part's widget frame.
-// ponytail: a named part that ends its widget (nothing unnamed after it
-// inside) cannot be placed and keeps its own frame; a scene that recorded
-// named surfaces' tree paths would not need the guess.
+// ponytail: where a named part sits is inferred (surface order, and frames
+// when it ends its container); a scene that recorded named surfaces' tree
+// paths would not need the guess.
 #[expect(clippy::type_complexity, reason = "two plain maps")]
 fn widgets(
     scene: &mui_scene::ResolvedScene,
@@ -367,16 +367,31 @@ fn widgets(
             continue;
         };
         let scope = list[i].parent.as_deref();
-        // The first surface after the part and its own: where it is.
-        let Some(next) = list[i + 1..].iter().find(|s| !under(&s.key, root)) else {
-            continue;
+        // Where it is: inside the unnamed containers whose paths prefix the
+        // first surface after it (and its own), or, when that one is named
+        // or outside (the part ends its container), those prefixing the
+        // surface before it that also frame it.
+        let next = list[i + 1..]
+            .iter()
+            .find(|s| !under(&s.key, root))
+            .filter(|s| !named(&s.key));
+        let prev = list[..i].last().filter(|s| !named(&s.key));
+        let own = list[i].frame;
+        let holds = |u: &mui_scene::ResolvedSurface| {
+            let inside = |k: &str| k.starts_with(&format!("{}/", u.key));
+            let f = u.frame;
+            next.is_some_and(|n| inside(&n.key))
+                || prev.is_some_and(|p| {
+                    (p.key == u.key || inside(&p.key))
+                        && f.x <= own.x
+                        && f.y <= own.y
+                        && own.x + own.size.width <= f.x + f.size.width
+                        && own.y + own.size.height <= f.y + f.size.height
+                })
         };
-        if named(&next.key) {
-            continue;
-        }
         let mut widget = None;
         for u in list[..i].iter().rev() {
-            if named(&u.key) || !next.key.starts_with(&format!("{}/", u.key)) {
+            if named(&u.key) || !holds(u) {
                 continue;
             }
             if u.parent.as_deref() != scope {
@@ -384,7 +399,11 @@ fn widgets(
             }
             let inside = |s: &str| s.starts_with(&format!("{}/", u.key));
             let start = list.iter().position(|s| s.key == u.key).unwrap_or(0);
-            let end = list.iter().rposition(|s| inside(&s.key)).unwrap_or(start);
+            let end = list
+                .iter()
+                .rposition(|s| inside(&s.key))
+                .unwrap_or(start)
+                .max(i);
             let crowded = list[start..=end]
                 .iter()
                 .any(|s| named(&s.key) && !under(&s.key, root));
@@ -565,7 +584,10 @@ mod tests {
             .find(|p| p["path"] == "a/a-1")
             .unwrap();
         // (The panel row stretches the column to its height.)
-        assert_eq!(knob["frame"][2..], [30., 60.]);
+        assert_eq!(
+            (&knob["frame"][2], &knob["frame"][3]),
+            (&30.0.into(), &60.0.into())
+        );
         let a1 = layer("a/a-1");
         assert_eq!(a1["rect"][3], 38.);
         assert_eq!(layer("a/a-1")["parent"], "a");
@@ -622,5 +644,42 @@ mod tests {
             .unwrap()["rect"]
             .clone();
         assert!(rect[3].as_f64().unwrap() > 30., "{rect}");
+    }
+
+    /// A slider named on its track, last in its column, takes the label
+    /// row above it too.
+    #[test]
+    fn a_control_that_ends_its_widget_still_takes_it() {
+        let fader = |id: &str| {
+            col([
+                row([
+                    block(20., 8.).fill(Role::Dim),
+                    block(10., 8.).fill(Role::Dim),
+                ]),
+                block(100., 12.).fill(Role::Primary).id(id),
+            ])
+        };
+        let scene = resolve(&SceneSpec::new(
+            col([col([fader("s1"), fader("s2")])
+                .size(160., 80.)
+                .fill(Role::Ink)
+                .id("p")])
+            .size(300., 200.)
+            .id("root"),
+        ))
+        .unwrap();
+        let roots = discover_tree(&scene, 300., 200., 2);
+        assert_eq!(roots, ["p", "s1", "s2"]);
+        let m = &capture_frame(&scene, 300, 200, 1., &roots).unwrap()["scene"];
+        for id in ["s1", "s2"] {
+            let part = m["parts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|p| p["id"] == id)
+                .unwrap()
+                .clone();
+            assert_eq!(part["frame"][3], 20., "{part}");
+        }
     }
 }
