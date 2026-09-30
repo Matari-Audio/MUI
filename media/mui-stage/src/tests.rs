@@ -300,3 +300,95 @@ fn a_lost_device_is_an_error_not_a_panic() {
         Err(Error::DeviceLost)
     ));
 }
+
+#[test]
+fn a_lit_card_casts_a_shadow_on_the_floor_the_same_every_time() {
+    let Some(mut stage) = stage(160, 90) else {
+        return;
+    };
+    let size = Size::new(80., 45.);
+    stage.layer("l", &halves(size), size, 1.).unwrap();
+    let shot = |shadows: bool, contact: f32| {
+        let mut floor = Floor::at(-40.);
+        floor.color = [0.5; 3];
+        floor.reflect = 0.;
+        floor.contact = contact;
+        let mut sun = Light::new(LightKind::Directional);
+        sun.direction = [0.6, -1., -0.3];
+        sun.shadows = shadows;
+        let mut ambient = Light::new(LightKind::Ambient);
+        ambient.color = [0.2; 3];
+        Shot {
+            planes: vec![Plane::new("l", 80., 45.).at(0., -15., 0.).depth(4.)],
+            lights: vec![ambient, sun],
+            floor: Some(floor),
+            clear: Some([0.; 3]),
+            post: Post::NONE,
+            ..Shot::new(Camera::front(90., 30.).orbit(0., 25.))
+        }
+    };
+    let render = |stage: &mut Stage, shadows, contact| {
+        stage
+            .render(0., 0., 1, &|_| shot(shadows, contact))
+            .unwrap()
+            .rgba
+    };
+    let lit = render(&mut stage, false, 0.);
+    let a = render(&mut stage, true, 0.);
+    let b = render(&mut stage, true, 0.);
+    assert_eq!(a, b, "a shadow map renders the same every time");
+    let darker = |x: &[f32]| {
+        x.as_chunks::<4>()
+            .0
+            .iter()
+            .zip(lit.as_chunks::<4>().0)
+            .filter(|(s, l)| l[1] - s[1] > 0.1)
+            .count()
+    };
+    assert!(darker(&a) > 40, "the card shadows the floor: {}", darker(&a));
+    let contact = render(&mut stage, false, 1.);
+    assert!(darker(&contact) > 40, "contact shadow: {}", darker(&contact));
+}
+
+#[test]
+fn a_model_draws_and_lights_from_its_mesh() {
+    let Some(mut stage) = stage(64, 64) else {
+        return;
+    };
+    // One triangle facing the viewer.
+    let n = [0., 0., 1.];
+    let v = |x: f32, y: f32| [x, y, 0., n[0], n[1], n[2]];
+    stage.mesh("tri", &[v(-20., -20.), v(20., -20.), v(0., 20.)], &[0, 1, 2]);
+    let shot = |lights: Vec<Light>| Shot {
+        models: vec![Model {
+            mesh: "tri".into(),
+            transform: Mat4::IDENTITY,
+            color: [1., 0., 0., 1.],
+            metallic: 0.,
+            roughness: 1.,
+            cast: true,
+            receive: true,
+        }],
+        lights,
+        clear: Some([0.; 3]),
+        post: Post::NONE,
+        ..Shot::new(Camera::front(64., 30.))
+    };
+    let mut key = Light::new(LightKind::Directional);
+    key.direction = [0., 0., -1.];
+    let f = stage.render(0., 0., 1, &|_| shot(vec![key])).unwrap();
+    let centre = &f.rgba[(32 * 64 + 32) * 4..][..4];
+    assert!(centre[0] > 0.9 && centre[1] < 0.05, "{centre:?}");
+    let dark = stage.render(0., 0., 1, &|_| shot(vec![Light::new(LightKind::Ambient)]));
+    assert!(dark.is_ok());
+    assert!(matches!(
+        stage.render(0., 0., 1, &|_| Shot {
+            models: vec![Model {
+                mesh: "nope".into(),
+                ..shot(vec![]).models[0].clone()
+            }],
+            ..shot(vec![])
+        }),
+        Err(Error::MissingMesh(_))
+    ));
+}

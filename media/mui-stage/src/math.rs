@@ -44,6 +44,18 @@ impl Mat4 {
             0., 0., r * near, 0.,
         ])
     }
+    /// An orthographic box looking down -z, `near..far` in front of it
+    /// mapped to depth 0..1.
+    #[rustfmt::skip]
+    pub fn orthographic(half_w: f32, half_h: f32, near: f32, far: f32) -> Self {
+        let r = 1. / (near - far);
+        Self([
+            1. / half_w, 0., 0., 0.,
+            0., 1. / half_h, 0., 0.,
+            0., 0., r, 0.,
+            0., 0., near * r, 1.,
+        ])
+    }
     pub fn look_at(eye: [f32; 3], target: [f32; 3], up: [f32; 3]) -> Self {
         let norm = |v: [f32; 3]| {
             let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt().max(1e-12);
@@ -120,6 +132,14 @@ mod tests {
             * Mat4::look_at(c.eye, c.target, [0., 1., 0.]);
         let p = vp.project([-160., 90., 0.]);
         assert!(p[0].abs() < 1e-5 && p[1].abs() < 1e-5);
+    }
+
+    #[test]
+    fn an_orthographic_box_maps_near_and_far_to_zero_and_one() {
+        let m = Mat4::orthographic(100., 50., 10., 110.);
+        assert_eq!(m.project([100., -50., -10.]), [1., -1., 0.]);
+        let far = m.project([0., 0., -110.]);
+        assert!((far[2] - 1.).abs() < 1e-6, "{far:?}");
     }
 
     #[test]
