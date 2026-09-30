@@ -654,3 +654,45 @@ fn a_font_source_draws_its_own_glyphs() {
         assert_ne!(plain, font, "Blender's texture");
     }
 }
+
+/// Under a tilted, scaled glass parent a child keeps its own material,
+/// in the stage's frame and in Blender's; only its pose comes from above.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_child_keeps_its_own_material_under_a_tilted_parent() {
+    let p = scene(
+        "3d",
+        r##"{"id":"dad","kind":"rect","x":200,"y":100,"rx":25,"ry":-40,"scale":2,"extrude":6,
+             "width":80,"height":60,"material":{"transmission":1,"ior":1.7}},
+            {"id":"kid","kind":"rect","parent":"dad","x":10,"y":5,"z":3,"extrude":4,
+             "width":20,"height":10,"material":{"metallic":1,"roughness":0.2}}"##,
+    );
+    let (dad, kid) = (world(&p, "dad", 0.), world(&p, "kid", 0.));
+    assert!(kid.space.rx != 0. && kid.scale == 2., "posed by its parent");
+    let own = kid.space.material.unwrap();
+    assert_eq!(
+        (own.metallic, own.roughness, own.transmission),
+        (Some(1.), Some(0.2), None),
+        "not the parent's glass"
+    );
+    assert_eq!(dad.space.material.unwrap().ior, Some(1.7));
+    let o = crate::blender::Options::new(None, None, 1, p.size).unwrap();
+    let (d, _) = crate::blender::describe(
+        &p,
+        &p.scenes[0],
+        &[0.],
+        &Assets::default(),
+        std::path::Path::new("."),
+        &o,
+    )
+    .unwrap();
+    let mat = |id: &str| {
+        let i = d.layers.iter().position(|l| l.id == id).unwrap();
+        d.frames[0][0].layers[i].mat.clone()
+    };
+    let (m, top) = (mat("kid"), mat("dad"));
+    assert_eq!((m.metallic, m.transmission), (Some(1.), Some(0.)));
+    // Object units: the object's scale (the parent's 2) makes it 8 px.
+    assert_eq!(m.thickness, Some(4.));
+    assert_eq!((top.transmission, top.ior), (Some(1.), Some(1.7)));
+}
