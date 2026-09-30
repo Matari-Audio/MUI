@@ -30,8 +30,9 @@ mui-cut render PROJECT -o out.mp4|null [--scene NAME] [--mb N] [--size WxH]
                       [--codec h264|h265|av1] [--encoder auto|vaapi|software]
                       [--crf N | --bitrate 12M [--maxrate 20M]] [--preset P]
                       [--pix-fmt yuv420p|yuv420p10le] [--container mp4|mkv|mov]
-mui-cut still  PROJECT --t 1.5 -o f.png [--scene NAME] [--size WxH] [--renderer R]
-mui-cut eval   PROJECT --t 1.5 [--scene NAME]     # every layer's values, JSON
+                      [--variant NAME | --variants all|NAME,NAME -o out/{name}.mp4]
+mui-cut still  PROJECT --t 1.5 -o f.png [--scene NAME] [--size WxH] [--renderer R] [--variant NAME]
+mui-cut eval   PROJECT --t 1.5 [--scene NAME] [--variant NAME]   # every layer's values, JSON
 mui-cut fmt    PROJECT                            # rewrite in canonical form
 mui-cut serve  PROJECT [--port 8740] [--web DIR]
 # for agents, see "Using mui-cut from an AI agent"
@@ -198,6 +199,42 @@ left out, it is the default. Lengths are project pixels.
 - The CPU renderer (`--cpu`, or a browser without WebGPU) draws without
   effects and says so.
 - `examples/effects.cut.json` uses every one.
+
+### Variables and variants
+
+`variables` declares typed values; `variants` are named versions of the
+project (`examples/variants.cut.json`):
+
+```json
+"variables": {
+  "theme":  {"type": "enum", "options": ["dark", "light"], "value": "dark"},
+  "accent": {"type": "color", "value": "#7c6cff"},
+  "headline": {"type": "string", "value": "Ship it"},
+  "badge":  {"type": "bool", "value": true},
+  "corner": {"type": "number", "value": 32}
+},
+"variants": [
+  {"name": "dark-wide"},
+  {"name": "light-tall", "size": [1080, 1920], "vars": {"theme": "light"},
+   "overrides": {"promo/title": {"font_size": 96}}}
+]
+```
+
+- Any value under `scenes` (a plain value, a key's `v`, a background, an
+  effect parameter, a duration) can be a binding: `{"var": "accent"}`,
+  `{"var": "W", "mul": 0.5, "add": 20}` (numbers; a bool is 1 or 0) or
+  `{"var": "theme", "map": {"dark": "#0e0f14", "light": "#f4f1ea"}}`.
+  Strings interpolate: `"text": "{headline}"`.
+- `W` and `H` are the frame size, so one layout serves every aspect:
+  `"x": {"var": "W", "mul": 0.5}` centres at any size.
+- A variant sets `size`, `fps`, variable values (`vars`, type-checked) and
+  `overrides`: JSON merged into a scene (`"promo"`), a layer
+  (`"promo/title"`), or every scene or layer (`"*"`, `"*/title"`), before
+  bindings resolve. An override that matches nothing is an error.
+- Loading checks the defaults and every variant. `fmt` and the editor keep
+  the file as written: bindings, key order and all.
+- `render --variants all -o out/{name}.mp4` renders each variant in one run,
+  on one GPU device resized between them.
 
 ### Keys and tangents
 
@@ -368,6 +405,12 @@ See `examples/stage3d.cut.json`.
   H.265 or AV1, whichever `isConfigSupported` accepts at the project's size,
   hardware preferred) and `web/mp4.js`, a ~100-line muxer, writes ftyp, moov
   first, then one mdat. Progress and Cancel in the dialog. No audio.
+- **Variants** (header): with `variants` in the file, a switcher previews any
+  of them at its size. The scene inspector lists the variables as the chosen
+  variant sets them (a select for an enum, a checkbox for a bool); an edit
+  goes to that variant's `vars`, or to the declared value under "defaults".
+  A bound property shows its value, read-only, and names the variable.
+  Export renders the variant on screen.
 - Keys: Space play/pause, K toggle a key on the graphed property, Delete the
   selected key, arrows step a frame, Ctrl+Z / Ctrl+Shift+Z undo / redo.
 
@@ -403,6 +446,9 @@ announces edits made by someone else.
 - `src/fx.rs`, `src/fx/`: the effect schema (`EFFECTS`), evaluation, and
   the GPU passes: one WGSL file per effect after a shared `prelude.wgsl`,
   ping-ponged between textures behind `GpuCanvas::draw`.
+- `src/vars.rs`: variables, variants and binding resolution, on the JSON
+  before it becomes a `Project`.
+- `src/encode.rs`: the ffmpeg encoder plan (codec, VAAPI trial, container).
 - `src/web.rs`: the wasm-bindgen handles: `Cut` (validation, samples, CPU
   frames) and `GpuView` (the WebGPU/WebGL2 viewport).
 - `src/main.rs`, `src/serve.rs`: the native CLI and the std-only local server.
@@ -521,6 +567,8 @@ snapshots in the editor rather than `CurveHistory`, for the same reason.
   non-zero).
 - A text layer whose glyphs are all hidden has an empty outline in the
   viewport, so it cannot be clicked there (pick it in the layer list).
+- Bound keyframe values do not draw in the graph editor; edit them in the
+  file.
 - Last writer wins if the person and an agent edit the same moment.
 - `check`'s bounds are layer boxes, not outlines: rotated or sparse shapes
   (a ring of copies) overlap and clip by their box. Contrast is averaged

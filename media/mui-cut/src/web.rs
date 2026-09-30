@@ -7,6 +7,14 @@ use wasm_bindgen::prelude::*;
 use crate::render::Assets;
 use crate::{Engine, GpuCanvas, Project, Renderer, Shutter, eval, subframes};
 
+fn load(json: &str, variant: Option<String>) -> Result<Project, String> {
+    let p = Project::load(json)?;
+    match variant.filter(|v| !v.is_empty()) {
+        Some(v) => p.variant(&v),
+        None => Ok(p),
+    }
+}
+
 #[wasm_bindgen]
 pub struct Cut {
     project: Option<Project>,
@@ -30,10 +38,19 @@ impl Cut {
             quads: "[]".into(),
         }
     }
-    /// Parse and keep `json`. On error the last good project stays loaded.
-    pub fn load(&mut self, json: &str) -> Result<(), String> {
-        self.project = Some(Project::load(json)?);
+    /// Parse and keep `json`, as `variant` makes it if one is named. On
+    /// error the last good project stays loaded.
+    pub fn load(&mut self, json: &str, variant: Option<String>) -> Result<(), String> {
+        self.project = Some(load(json, variant)?);
         Ok(())
+    }
+    /// The project as loaded, every binding resolved: the size, fps and
+    /// durations the editor lays out with.
+    pub fn resolved(&self) -> String {
+        self.project
+            .as_ref()
+            .and_then(|p| serde_json::to_string(p).ok())
+            .unwrap_or_default()
     }
     /// The project as a save writes it.
     pub fn canonical(&self) -> String {
@@ -239,8 +256,8 @@ impl GpuView {
     pub fn adapter(&self) -> String {
         self.adapter.clone()
     }
-    pub fn load(&mut self, json: &str) -> Result<(), String> {
-        self.project = Some(Project::load(json)?);
+    pub fn load(&mut self, json: &str, variant: Option<String>) -> Result<(), String> {
+        self.project = Some(load(json, variant)?);
         Ok(())
     }
     /// Why the last frame drew differently from the export, or empty.

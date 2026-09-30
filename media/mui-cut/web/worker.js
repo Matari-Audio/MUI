@@ -16,7 +16,7 @@ const WEBGPU_ENGINE = 'classic';
 
 let gpu = null, cpu = null, ctx = null, canvas = null;
 let gpuKind = null;     // [api, engine] the viewport opened with; exports use the same
-let json = null;
+let json = null, variant = '';
 const assets = new Map();   // every asset file, for export renderers
 let exporting = null;   // { cancelled }
 // The export renderer, kept across exports of one size: a new WebGPU
@@ -57,10 +57,10 @@ async function exportVideo(m) {
       exportGpu = { view: await GpuView.create(c, ...gpuKind), out: c, w: m.w, h: m.h };
     }
     ({ view, out } = exportGpu);
-    view.load(json);
+    view.load(json, variant || undefined);
     for (const [path, bytes] of assets) view.add_asset(path, bytes);
   } else {
-    cut = new Cut(); cut.load(json);
+    cut = new Cut(); cut.load(json, variant || undefined);
     for (const [path, bytes] of assets) cut.add_asset(path, bytes);
   }
   const mux = new Mp4({ codec: m.codec, width: m.w, height: m.h, fps: m.fps });
@@ -116,8 +116,8 @@ self.onmessage = async ({ data: m }) => {
       const backend = await open(m.canvas, m.renderer);
       self.postMessage({ type: 'ready', backend, adapter: gpu ? gpu.adapter() : '', engine: gpu ? gpu.engine() : 'vello_cpu' });
     } else if (m.type === 'load') {
-      json = m.json;
-      (gpu ?? cpu).load(m.json);
+      ({ json, variant } = m);
+      (gpu ?? cpu).load(json, variant || undefined);
     } else if (m.type === 'orbit') {
       if (gpu) { if (m.on) gpu.set_orbit(m.yaw, m.pitch, m.zoom); else gpu.clear_orbit(); }
     } else if (m.type === 'asset') {
