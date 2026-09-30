@@ -59,3 +59,27 @@ pub fn mui_editor() -> (Ui, (u32, u32), Knobs) {
     ui.set_font(Font::new(ttf_inter::REGULAR).ok());
     (ui, (480, 220), Knobs { values: [0.3, 0.6, 0.5, 0.2] })
 }
+
+/// mui-cut's convention for its sound: a sine at 660 Hz, 0.4 loud, while
+/// any note is held (`(key, velocity)`, velocity 0 a note off).
+pub fn mui_audio(rate: f32) -> impl FnMut(&[(u8, u8)], &mut [[f32; 2]]) + Send + 'static {
+    let (mut held, mut phase) = (0u32, 0f32);
+    move |notes, frames| {
+        for &(_, velocity) in notes {
+            held = if velocity > 0 {
+                held + 1
+            } else {
+                held.saturating_sub(1)
+            };
+        }
+        for f in frames {
+            let s = if held > 0 {
+                0.4 * (phase * std::f32::consts::TAU).sin()
+            } else {
+                0.
+            };
+            phase = (phase + 660. / rate).fract();
+            *f = [s, s];
+        }
+    }
+}

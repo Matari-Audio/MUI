@@ -342,6 +342,7 @@ impl Layer {
             explode_levels,
             show,
             notes,
+            preset,
             ..
         } = &self.kind
         else {
@@ -377,6 +378,11 @@ impl Layer {
                     .push(json!({"op": "input", "kind": "select", "ids": select, "depth": depth}));
             } else if f == 0 && !select.is_empty() {
                 commands.push(json!({"op": "input", "kind": "select", "ids": select}));
+            }
+            // ponytail: the key hashes the preset's path, not its bytes; an
+            // edited preset file needs `.cut-cache` cleared to re-capture.
+            if f == 0 && !preset.is_empty() {
+                commands.push(json!({"op": "preset", "path": preset}));
             }
             let values: Vec<f64> = params.iter().map(|p| round(p.value.at(t), 1e6)).collect();
             for (i, (p, v)) in params.iter().zip(&values).enumerate() {

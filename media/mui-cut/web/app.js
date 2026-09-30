@@ -1381,13 +1381,14 @@ function exportMessage(m) {
   $('#ex-start').disabled = false; $('#ex-cancel').textContent = 'Close';
   if (m.type === 'export-error') { $('#ex-status').textContent = m.error === 'cancelled' ? 'cancelled' : 'failed: ' + m.error; return; }
   const blob = new Blob([m.bytes], { type: 'video/mp4' });
-  window.lastExport = { blob, frames: m.frames, codec: m.codec, hardware: m.hardware };   // e2e reads it
+  window.lastExport = { blob, frames: m.frames, codec: m.codec, sound: m.sound, hardware: m.hardware };   // e2e reads it
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = ($('#file').textContent || 'cut').replace(/\.cut\.json$|\.json$/, '') + '.mp4';
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 60_000);
-  $('#ex-status').textContent = `${m.frames} frames, ${(blob.size / 1e6).toFixed(1)} MB in ${secs} s`;
+  const sound = { 'mp4a.40.2': ', AAC sound', opus: ', Opus sound' }[m.sound] ?? '';
+  $('#ex-status').textContent = `${m.frames} frames${sound}, ${(blob.size / 1e6).toFixed(1)} MB in ${secs} s`;
 }
 
 // ---------- transport, keys, loop

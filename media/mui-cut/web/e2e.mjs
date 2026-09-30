@@ -191,7 +191,18 @@ try {
   else check(Math.abs(grey[0] - grey[1]) <= 2 && Math.abs(grey[1] - grey[2]) <= 2 && grey[0] > 0x10, `the viewport draws the effect (${grey}) ${await js(`document.querySelector('#error').textContent`)}`);
   await shot('editor-effect.png');
   // Export: WebCodecs H.264 in the worker, muxed to MP4, every frame of
-  // every scene; a cancel stops a second run.
+  // every scene, with the server's mix of the sound (a tone on an audio
+  // layer here); a cancel stops a second run.
+  const tone = Buffer.alloc(44 + 2 * 96000);
+  tone.write('RIFF', 0); tone.writeUInt32LE(36 + 2 * 96000, 4); tone.write('WAVEfmt ', 8);
+  tone.writeUInt32LE(16, 16); tone.writeUInt16LE(1, 20); tone.writeUInt16LE(1, 22); tone.writeUInt32LE(48000, 24);
+  tone.writeUInt32LE(96000, 28); tone.writeUInt16LE(2, 32); tone.writeUInt16LE(16, 34); tone.write('data', 36); tone.writeUInt32LE(2 * 96000, 40);
+  for (let i = 0; i < 96000; i++) tone.writeInt16LE(Math.round(12000 * Math.sin(2 * Math.PI * 440 * i / 48000)), 44 + 2 * i);
+  writeFileSync(join(out, 'tone.wav'), tone);
+  const withTone = read();
+  withTone.scenes[0].layers.push({ id: 'tone', kind: 'audio', path: 'tone.wav' });
+  writeFileSync(file, JSON.stringify(withTone, null, 2));
+  await sleep(1200);
   await send('Page.setDownloadBehavior', { behavior: 'deny' });
   await js(`document.querySelector('#export').click()`);
   for (let i = 0; i < 50 && await js(`!document.querySelector('#export-dialog').open || document.querySelector('#ex-start').disabled`); i++) await sleep(100);
@@ -200,7 +211,7 @@ try {
   let ex = null;
   for (let i = 0; i < 600 && !ex; i++) {
     await sleep(100);
-    ex = await js(`window.lastExport ? { frames: lastExport.frames, size: lastExport.blob.size, hardware: lastExport.hardware } : null`);
+    ex = await js(`window.lastExport ? { frames: lastExport.frames, size: lastExport.blob.size, sound: lastExport.sound, hardware: lastExport.hardware } : null`);
     const st = await js(`document.querySelector('#ex-status').textContent`);
     if (st.startsWith('failed')) throw new Error('export ' + st);
   }
@@ -213,6 +224,13 @@ try {
   check(probe.status === 0 && /codec_name=h264/.test(probe.stdout) && /nb_read_frames=225/.test(probe.stdout) && /width=1280/.test(probe.stdout), `ffprobe reads the export (${probe.stdout.replace(/\n/g, ' ')}${probe.stderr})`);
   const dur = +/duration=([\d.]+)/.exec(probe.stdout)?.[1];
   check(Math.abs(dur - 7.5) < 0.05, `the export lasts 7.5 s (${dur})`);
+  const aprobe = spawnSync('ffprobe', ['-v', 'error', '-select_streams', 'a:0', '-show_entries', 'stream=codec_name,channels,duration', '-of', 'default=nw=1', mp4], { encoding: 'utf8' });
+  const adur = +/duration=([\d.]+)/.exec(aprobe.stdout)?.[1];
+  check(/codec_name=(aac|opus)/.test(aprobe.stdout) && /channels=2/.test(aprobe.stdout) && Math.abs(adur - 7.5) < 0.1,
+    `the export carries the sound, 7.5 s long (${ex.sound}: ${aprobe.stdout.replace(/\n/g, ' ')}${aprobe.stderr})`);
+  const vol = spawnSync('ffmpeg', ['-v', 'info', '-i', mp4, '-af', 'volumedetect', '-vn', '-f', 'null', '-'], { encoding: 'utf8' });
+  const peak = +/max_volume: (-?[\d.]+) dB/.exec(vol.stderr)?.[1];
+  check(peak > -20, `the export's sound is the tone, not silence (max ${peak} dB)`);
   // The other codecs this browser encodes, gated by isConfigSupported.
   const others = await js(`[...document.querySelectorAll('#ex-codec option')].filter(o => !o.disabled && o.value !== 'avc1.640028').map(o => o.value)`);
   console.log(`    browser also encodes: ${others.join(', ') || 'nothing else'}`);

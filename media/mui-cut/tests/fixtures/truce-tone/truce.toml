@@ -1,0 +1,15 @@
+[vendor]
+name = "mui-cut"
+id = "com.mui-cut"
+url = "https://github.com/Matari-Audio/MUI"
+au_manufacturer = "Mcut"
+
+[[plugin]]
+name = "Tone"
+bundle_id = "truce-tone"
+crate = "fixture-truce-tone"
+description = "A sine for mui-cut's tests."
+category = "instrument"
+fourcc = "TTon"
+au_tag = "Synthesizer"
+vst3_subcategory = "Synth"

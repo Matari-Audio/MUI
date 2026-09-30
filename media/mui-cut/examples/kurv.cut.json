@@ -51,10 +51,16 @@
           "kind": "plugin",
           "source": {
             "plugin": "../../../../KURV",
-            "features": [
-              "process-lab"
-            ]
+            "features": ["process-lab"]
           },
+          "preset": "../../../../KURV/assets/presets/Template/Everything.kurvy",
+          "params": [
+            {
+              "id": "Output",
+              "field": "value",
+              "value": -12.0
+            }
+          ],
           "explode_levels": 2,
           "explode_stagger": 0.7,
           "notes": [

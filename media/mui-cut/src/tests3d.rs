@@ -465,3 +465,72 @@ fn a_gltf_glass_material_reads_its_extensions() {
     let plain = three::glb(&glb_with("")).unwrap().parts[0].material;
     assert_eq!((plain.transmission, plain.ior), (0., 1.5));
 }
+
+/// A solid `w` x `h` PNG of `rgba`.
+#[cfg(not(target_arch = "wasm32"))]
+fn solid_png(w: u32, h: u32, rgba: [u8; 4]) -> Vec<u8> {
+    let px: Vec<u8> = (0..w * h).flat_map(|_| rgba).collect();
+    let mut out = Vec::new();
+    let mut enc = png::Encoder::new(&mut out, w, h);
+    enc.set_color(png::ColorType::Rgba);
+    enc.write_header().unwrap().write_image_data(&px).unwrap();
+    out
+}
+
+/// A 3D plugin layer whose one part is dark (opaque or see-through) over a
+/// dark backdrop, exploded, extruded and lit as the KURV example is:
+/// nothing behind the part may show through lighter than the part is.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn nothing_lighter_shows_behind_a_dark_exploded_part() {
+    for (alpha, name) in [(255u8, "opaque"), (140, "translucent")] {
+        let p = scene3d(
+            r##"{"id":"key","kind":"light","fill":"#f2f2f2","rx":48,"ry":-35,"softness":2},
+               {"id":"fill","kind":"light","type":"ambient","fill":"#c8c8d0","intensity":0.45},
+               {"id":"syn","kind":"plugin","source":{"bin":"x"},"x":320,"y":180,"scale":2,
+                "ry":20,"rx":8,"explode":0.5,"backdrop":0.35,"extrude":4}"##,
+        );
+        let key = eval(&p, &p.scenes[0], 0.).layers[2]
+            .plugin
+            .clone()
+            .unwrap()
+            .state;
+        let cap = serde_json::json!({"width": 200, "height": 100,
+        "parts": [{"path": "a", "id": "a", "frame": [10, 10, 180, 80]}],
+        "layers": [
+            {"group": "background", "rect": [0, 0, 200, 100], "src": "img/bg.png"},
+            {"group": "a", "rect": [10, 10, 180, 80], "src": "img/a.png"},
+        ]});
+        let Some(mut g) = offline(&p, Engine::Classic) else {
+            return;
+        };
+        g.assets
+            .add_asset(
+                &format!("{}/{key}.json", plugin::CACHE),
+                cap.to_string().as_bytes(),
+            )
+            .unwrap();
+        g.assets
+            .add_asset(
+                &format!("{}/img/bg.png", plugin::CACHE),
+                &solid_png(200, 100, [18, 18, 20, 255]),
+            )
+            .unwrap();
+        g.assets
+            .add_asset(
+                &format!("{}/img/a.png", plugin::CACHE),
+                &solid_png(180, 80, [40, 40, 46, alpha]),
+            )
+            .unwrap();
+        let px = frame(&mut g, &[eval(&p, &p.scenes[0], 0.)]);
+        // Lit, the part reads a little lighter than its 40; the backdrop
+        // is darker still. A plate, a slab body or a light edge would not.
+        let lightest = px
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| c[0].max(c[1]).max(c[2]))
+            .max();
+        assert!(lightest < Some(72), "{name}: {lightest:?}");
+    }
+}
