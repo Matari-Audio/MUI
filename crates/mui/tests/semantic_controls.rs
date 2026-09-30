@@ -124,6 +124,14 @@ fn interrupted_disabled_and_secondary_actions_never_activate() {
         true,
     );
     assert_eq!(calls, 0, "disable while held");
+    assert!(
+        ui.get("save").released,
+        "custom controls still see the closing release"
+    );
+    assert!(
+        !ui.get("save").activated(),
+        "a disabled release cannot activate"
+    );
     assert!(!ui.request_action(SemanticAction::activate("save")));
     ui.focus("save");
     action_frame(&mut ui, &mut calls, key(Key::Enter), true);

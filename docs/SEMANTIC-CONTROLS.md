@@ -27,8 +27,9 @@ promise to deduplicate multiple constructions of the same widget. Build each
 stable id once per frame. The runtime already coalesces pointer/key/semantic
 activation to one boolean per control per frame; new tests cover all routes,
 repeated keys, duplicate semantic requests, idle frames and interruption.
-A target disabled in the presented tree no longer delivers a release/drag/key
-left over from the preceding hit map; its host `End` edit is still delivered.
+A target disabled in the presented tree no longer activates from a release or
+applies drag/key input left over from the preceding hit map. A completed release
+remains observable for custom bookkeeping, and its host `End` edit is still delivered.
 
 `crates/mui/examples/compact_controls.rs` contains the compiling explicit and
 compact forms. Count the same decisions in each, excluding the identical action

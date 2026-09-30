@@ -520,10 +520,17 @@ impl Ui {
     pub fn get(&self, id: impl Into<Id>) -> Response {
         let id: Id = id.into();
         let id = id.as_str();
-        if self.disabled_target(id) {
-            return Response::default();
-        }
         let mut response = self.interaction.get(id);
+        if self.disabled_target(id) {
+            // A release may close a custom control's bookkeeping even when
+            // the target was disabled on that frame. Never turn it into an
+            // activation or expose stale motion/keys.
+            return Response {
+                released: response.released,
+                button: response.button.filter(|_| response.released),
+                ..Response::default()
+            };
+        }
         response.double_clicked = self.double.as_deref() == Some(id);
         response.key_activated = self
             .keys(id)
