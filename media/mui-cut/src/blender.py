@@ -146,23 +146,7 @@ def world():
     nt.links.new(amb.outputs[0], mix.inputs[1])
     nt.links.new(bg.outputs[0], mix.inputs[2])
     nt.links.new(mix.outputs[0], out.inputs["Surface"])
-    # The ambient light, brighter from above than below (1 +- 0.6) with the
-    # same average, so metals and glossy faces catch a horizon.
-    rgb = nt.nodes.new("ShaderNodeRGB")
-    tc = nt.nodes.new("ShaderNodeTexCoord")
-    sep = nt.nodes.new("ShaderNodeSeparateXYZ")
-    sky = nt.nodes.new("ShaderNodeMath")
-    sky.operation = "MULTIPLY_ADD"
-    sky.inputs[1].default_value = 0.6
-    sky.inputs[2].default_value = 1
-    lit = nt.nodes.new("ShaderNodeVectorMath")
-    lit.operation = "SCALE"
-    nt.links.new(tc.outputs["Generated"], sep.inputs[0])
-    nt.links.new(sep.outputs["Z"], sky.inputs[0])
-    nt.links.new(rgb.outputs[0], lit.inputs[0])
-    nt.links.new(sky.outputs[0], lit.inputs["Scale"])
-    nt.links.new(lit.outputs[0], amb.inputs["Color"])
-    key_socket(rgb.outputs[0], ((t, (*s["ambient"], 1)) for t, s in states()))
+    key_socket(amb.inputs["Color"], ((t, (*s["ambient"], 1)) for t, s in states()))
 
 
 def camera():
@@ -223,6 +207,7 @@ def ground():
     bsdf = N["Principled BSDF"]
     bsdf.inputs["Base Color"].default_value = (*g["color"], 1)
     bsdf.inputs["Roughness"].default_value = g["roughness"]
+    bsdf.inputs["Specular IOR Level"].default_value = g["specular"]
     # Melts into the background, by 1/e at `radius`: exp(-(r/radius)^2)
     # of the lit floor over the background colour (no alpha, no dither).
     tc = N.new("ShaderNodeTexCoord")

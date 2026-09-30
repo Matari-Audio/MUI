@@ -102,6 +102,8 @@ pub struct GroundD {
     /// Fades by 1/e this far from the frame's centre, metres.
     pub radius: f32,
     pub roughness: f32,
+    /// Principled "Specular IOR Level": 0 is matte, 0.5 plain dielectric.
+    pub specular: f32,
 }
 
 /// Mist: surfaces fade into `color` from `start` metres over `depth`.
@@ -500,41 +502,7 @@ pub fn describe(
                 }
             }
         }
-        let lights = lights
-            .iter()
-            .map(|(i, ld)| {
-                let d = &f.layers[*i];
-                let s = &d.space;
-                let pos = at(size, [d.x, d.y, s.z]);
-                let dir = three::aim(s.rx, s.ry);
-                let dir = axes([dir[0] as f32, -dir[1] as f32, -dir[2] as f32]);
-                let k = s.intensity * d.opacity;
-                // Blender's sun of π W/m² lights white to 1; a point or
-                // spot gives P/(4π²d²). ponytail: lit to `intensity` at the
-                // camera's target, not mui-stage's range fade; a true
-                // falloff model if lights ever sit far from the subject.
-                let reach = sub(pos, target).iter().map(|c| c * c).sum::<f64>().sqrt();
-                let energy = if ld.kind == "SUN" {
-                    k * std::f64::consts::PI
-                } else {
-                    k * 4. * std::f64::consts::PI.powi(2) * reach.max(0.1).powi(2)
-                };
-                LightS {
-                    m: facing(pos, dir),
-                    color: r3(linear(d.fill)),
-                    energy: r(energy),
-                    size: if ld.kind == "SUN" {
-                        r((s.softness * 1.5).to_radians())
-                    } else {
-                        r(s.softness * 8. * f64::from(METRES))
-                    },
-                    spot: r((2. * s.cone).to_radians()),
-                    blend: r(s.feather),
-                    range: r(s.range * f64::from(METRES)),
-                }
-            })
-            .collect();
-        let layer_states = layers
+        let layer_states: Vec<LayerS> = layers
             .iter()
             .map(|(i, _)| {
                 let d = &f.layers[*i];
@@ -559,7 +527,7 @@ pub fn describe(
                 })
             })
             .collect::<Result<_, String>>()?;
-        let model_states = models
+        let model_states: Vec<ModelS> = models
             .iter()
             .map(|(i, _)| {
                 let d = &f.layers[*i];
@@ -576,6 +544,63 @@ pub fn describe(
                 ModelS {
                     m: m.0.map(|v| r(f64::from(v))),
                     show: d.opacity > 0. && d.scale != 0.,
+                }
+            })
+            .collect();
+        // Where the layers and models shown stand: what lamps light.
+        let subjects: Vec<[f64; 3]> = layer_states
+            .iter()
+            .filter(|l| l.v >= 0)
+            .map(|l| l.m)
+            .chain(
+                model_states
+                    .iter()
+                    .filter(|m: &&ModelS| m.show)
+                    .map(|m| m.m),
+            )
+            .map(|m| [12, 13, 14].map(|i| f64::from(m[i])))
+            .collect();
+        let lights = lights
+            .iter()
+            .map(|(i, ld)| {
+                let d = &f.layers[*i];
+                let s = &d.space;
+                let pos = at(size, [d.x, d.y, s.z]);
+                let dir = three::aim(s.rx, s.ry);
+                let dir = axes([dir[0] as f32, -dir[1] as f32, -dir[2] as f32]);
+                let k = s.intensity * d.opacity;
+                // Blender's sun of π W/m² lights white to 1; a point or
+                // spot gives P/(4π²d²). ponytail: lit to `intensity` at the
+                // nearest subject it faces (else the camera's target), and
+                // by the inverse square past it where mui-stage fades
+                // linearly to `range`; Cycles' falloff node if that matters.
+                let dist = |p: [f64; 3]| sub(p, pos).iter().map(|c| c * c).sum::<f64>().sqrt();
+                let facing_it = |p: &[f64; 3]| {
+                    ld.kind == "POINT" || (0..3).map(|a| (p[a] - pos[a]) * dir[a]).sum::<f64>() > 0.
+                };
+                let reach = subjects
+                    .iter()
+                    .filter(|p| facing_it(p))
+                    .map(|p| dist(*p))
+                    .reduce(f64::min)
+                    .unwrap_or_else(|| dist(target));
+                let energy = if ld.kind == "SUN" {
+                    k * std::f64::consts::PI
+                } else {
+                    k * 4. * std::f64::consts::PI.powi(2) * reach.max(0.5).powi(2)
+                };
+                LightS {
+                    m: facing(pos, dir),
+                    color: r3(linear(d.fill)),
+                    energy: r(energy),
+                    size: if ld.kind == "SUN" {
+                        r((s.softness * 1.5).to_radians())
+                    } else {
+                        r(s.softness * 8. * f64::from(METRES))
+                    },
+                    spot: r((2. * s.cone).to_radians()),
+                    blend: r(s.feather),
+                    range: r(s.range * f64::from(METRES)),
                 }
             })
             .collect();
@@ -602,6 +627,7 @@ pub fn describe(
             color: r3(linear(g.color)),
             radius: r(g.radius.max(1.) * px),
             roughness: r(1. - 0.8 * g.reflect.clamp(0., 1.)),
+            specular: r(g.reflect.clamp(0., 1.)),
         }),
         fog: scene.fog.as_ref().map(|f| FogD {
             color: r3(linear(f.color)),
@@ -907,6 +933,26 @@ mod tests {
         assert!(d.models[0].path.ends_with("knot.glb"));
         let g = d.ground.as_ref().unwrap();
         assert!((g.z + 2.6).abs() < 1e-4 && (g.radius - 26.).abs() < 1e-4);
+        // `reflect: 0` is a matte floor: no grazing sheen mui-stage lacks.
+        assert_eq!(g.specular, 0.);
+        // The spot is lit to its intensity at the nearest thing it faces,
+        // not blown out on a card right under it.
+        let near_card = d.frames[0][0]
+            .layers
+            .iter()
+            .filter(|l| l.v >= 0)
+            .map(|l| {
+                let p = col(&l.m, 3);
+                let q = col(&spot.m, 3);
+                (0..3).map(|a| (p[a] - q[a]).powi(2)).sum::<f64>()
+            })
+            .fold(f64::MAX, f64::min);
+        let want = 0.9 * 4. * std::f64::consts::PI.powi(2) * near_card;
+        assert!(
+            (f64::from(spot.energy) - want).abs() / want < 1e-3,
+            "{}",
+            spot.energy
+        );
         let fog = d.fog.as_ref().unwrap();
         assert!((fog.start - 18.).abs() < 1e-4 && (fog.depth - 24.).abs() < 1e-4);
     }
