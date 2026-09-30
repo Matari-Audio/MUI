@@ -145,6 +145,43 @@ mui-cut schema | check | sheet | strip | diff | gen | mcp
 
   A property left out is its default, and a save leaves defaults out.
 
+### Effects
+
+A layer or a scene can carry `"effects": [...]`, run in order on the GPU:
+a layer's over its own pixels before it is composited, a scene's over the
+whole frame after every layer. Every parameter is a property (plain or keys);
+left out, it is the default. Lengths are project pixels.
+
+```json
+"effects": [
+  { "type": "blur", "radius": [{ "t": 0, "v": 0, "interp": "linear" }, { "t": 1, "v": 12 }] },
+  { "type": "levels", "tint": "#ffd9a0", "tint_amount": 0.2 }
+]
+```
+
+| type | parameters (default) |
+| --- | --- |
+| `grain` | `amount` 0.12, `size` 1.5, `seed` 0 |
+| `chromatic` | `amount` 6 (pixels of red/blue split at the corners) |
+| `crt` | `curvature` 0.12, `scanlines` 0.35, `line` 4, `vignette` 0.35 |
+| `displace` | `amount` 16, `scale` 140, `speed` 0.5, `seed` 0 |
+| `blur` | `radius` 8 (gaussian sigma) |
+| `directional_blur` | `length` 40, `angle` 0 (degrees) |
+| `levels` | `tint` #ffffff, `black` 0, `white` 1, `gamma` 1, `saturation` 1, `tint_amount` 0 |
+| `plasma` | `color_a`, `color_b`, `scale` 120, `speed` 1: a generator |
+
+- A **generator** (`plasma`) ignores the colours under it and draws a field
+  from position and time; the layer's shape, antialiasing and opacity are its
+  mask. A "shader layer" (✦ in the editor) is a rect whose stack starts with
+  one.
+- Effects are deterministic: noise is hashed from the pixel, the effect's
+  `seed` and the output frame number, never the clock. The subframes of a
+  motion-blurred frame share their frame's grain; displacement moves with
+  `t`, so it blurs.
+- The CPU renderer (`--cpu`, or a browser without WebGPU) draws without
+  effects and says so.
+- `examples/effects.cut.json` uses every one.
+
 ### Keys and tangents
 
 A key is `{ "t": seconds, "v": value, "interp": ..., "in": [dt, dv], "out": [dt, dv] }`.
@@ -339,6 +376,9 @@ announces edits made by someone else.
 - `src/three.rs`, `src/gpu3d.rs`: 3D scenes: camera and light evaluation
   and glTF import; the atlas and mui-stage shot a frame becomes.
 - `src/pool.rs`: the frame-parallel CPU export.
+- `src/fx.rs`, `src/fx/`: the effect schema (`EFFECTS`), evaluation, and
+  the GPU passes: one WGSL file per effect after a shared `prelude.wgsl`,
+  ping-ponged between textures behind `GpuCanvas::draw`.
 - `src/web.rs`: the wasm-bindgen handles: `Cut` (validation, samples, CPU
   frames) and `GpuView` (the WebGPU/WebGL2 viewport).
 - `src/main.rs`, `src/serve.rs`: the native CLI and the std-only local server.

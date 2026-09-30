@@ -20,6 +20,7 @@ const C = {
 
 await init();
 const cut = new Cut();
+const FX = JSON.parse(Cut.effects());   // the effect schema: [{name, about, params}]
 const worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
 let drawing = false;     // a draw is in flight in the worker
 
@@ -77,8 +78,8 @@ function setValue(l, p, v) {
 }
 // The ◆ button: add a key at the playhead, or remove the one there; the last
 // key removed leaves the property a plain value.
-function toggleKey(l, p) {
-  const cur = getp(l, p), v = now(l, p);
+function toggleKey(l, p, v = now(l, p)) {
+  const cur = getp(l, p);
   if (!isKeys(cur)) { setp(l, p, [{ t: snap(t), v, interp: 'bezier' }]); return; }
   const i = keyAt(cur, snap(t));
   if (i < 0) selKey = { l, p, k: insertKey(cur, { t: snap(t), v, interp: 'bezier' }) };
@@ -106,6 +107,14 @@ function end() {
   refresh();
 }
 function edit(fn) { begin(); fn(); changed(); end(); }
+// The CPU viewport draws without effects: say so rather than look wrong.
+function noticeEffects() {
+  const b = $('#backend');
+  if (b.dataset.backend !== 'CPU') return;
+  const any = doc.scenes.some(s => s.effects?.length || s.layers.some(l => l.effects?.length));
+  b.textContent = any ? 'CPU · effects off' : 'CPU';
+  b.title = any ? 'This browser has no WebGPU: the viewport draws without effects' : b.title;
+}
 function restore(text) {
   doc = JSON.parse(text); selKey = null;
   changed(); save(); refresh();
@@ -183,10 +192,12 @@ $('#add-scene').onclick = () => edit(() => {
   si = doc.scenes.length - 1; sel = null;
 });
 document.querySelectorAll('[data-add]').forEach(b => b.onclick = () => edit(() => {
-  const kind = b.dataset.add, ls = scene().layers;
-  let n = 1; while (ls.some(l => l.id === `${kind}${n}`)) n++;
+  // A shader layer is a rect whose stack starts with a generator: the
+  // rect is its mask.
+  const name = b.dataset.add, kind = name === 'shader' ? 'rect' : name, ls = scene().layers;
+  let n = 1; while (ls.some(l => l.id === `${name}${n}`)) n++;
   const [w, h] = doc.size;
-  const l = { id: `${kind}${n}`, kind, x: w / 2, y: h / 2 };
+  const l = { id: `${name}${n}`, kind, x: w / 2, y: h / 2 };
   if (kind === 'text') Object.assign(l, { text: 'Text' });
   else if (kind === 'path') Object.assign(l, { d: 'M -150 0 C -75 -120 75 120 150 0', fill: '#00000000', stroke: '#8b7cff', stroke_width: 6 });
   else if (kind === 'duplicator') Object.assign(l, { width: 40, height: 40, radius: 8, fill: '#8b7cff', count: 12, spacing_x: 60, spacing_y: 60 });
@@ -194,6 +205,7 @@ document.querySelectorAll('[data-add]').forEach(b => b.onclick = () => edit(() =
   else if (kind === 'light') Object.assign(l, { rx: 50, ry: -30 });
   else if (kind === 'model') Object.assign(l, { path: 'model.glb', height: 200, fill: '#ffffff' });
   else Object.assign(l, { width: 200, height: 200, fill: '#8b7cff' });
+  if (name === 'shader') Object.assign(l, { width: w / 2, height: h / 2, effects: [{ type: 'plasma' }] });
   ls.push(l); sel = l.id;
 }));
 function moveLayer(d) {
@@ -296,6 +308,7 @@ function refreshInspector() {
     field('duration', input(s.duration, v => edit(() => { s.duration = Math.max(0.05, Number(v) || 1); }), 'number'));
     field('background', input(s.background ?? '#101014', v => edit(() => { s.background = v; })));
     field('project', input(`${doc.size[0]}×${doc.size[1]} @ ${doc.fps} fps`, () => {}));
+    fxSection(s, () => frame?.effects ?? []);
     return;
   }
   $('#insp-title').textContent = `Layer · ${l.kind}`;
@@ -320,12 +333,48 @@ function refreshInspector() {
     (l.animators ??= []).push(a);
   }));
   if (VECTOR.includes(l.kind)) adder('+ deformer', ['noise', 'twist', 'bend', 'wave'], v => edit(() => { (l.deformers ??= []).push({ kind: v }); }));
+  fxSection(l, () => frame?.layers.find(d => d.id === l.id)?.effects ?? []);
   updateInspector();
+}
+// An effect stack (a layer's or the scene's): each effect's parameters are
+// properties like any other, typed and keyed from the inspector.
+let fxFields = [];
+function fxSection(owner, live) {
+  const box = $('#inspector');
+  fxFields = [];
+  const head = document.createElement('h3');
+  head.className = 'fx-head'; head.textContent = 'Effects';
+  const add = document.createElement('select');
+  add.id = 'add-effect'; add.setAttribute('aria-label', 'Add an effect');
+  add.append(new Option('+ add', ''), ...FX.map(d => new Option(d.name, d.name)));
+  add.onchange = () => { const type = add.value; if (type) edit(() => { (owner.effects ??= []).push({ type }); }); };
+  box.append(head, add);
+  (owner.effects ?? []).forEach((e, i) => {
+    const def = FX.find(d => d.name === e.type);
+    const title = document.createElement('div');
+    title.className = 'fx-title'; title.textContent = e.type; title.title = def?.about ?? '';
+    const rm = document.createElement('button');
+    rm.className = 'key'; rm.textContent = '✕'; rm.title = 'Remove the effect';
+    rm.onclick = () => edit(() => { owner.effects.splice(i, 1); if (!owner.effects.length) delete owner.effects; });
+    box.append(title, rm);
+    for (const p of def?.params ?? []) {
+      const color = typeof p.default === 'string';
+      const get = () => live()[i]?.[p.name] ?? p.default;
+      const inp = input(color ? get() : round(get()), v => edit(() => setValue(e, p.name, color ? v : Number(v))), color ? 'text' : 'number');
+      inp.dataset.fx = `${i}.${p.name}`;
+      if (!color) { inp.min = p.min; inp.max = p.max; }
+      const k = document.createElement('button');
+      k.className = 'key'; k.textContent = '◆'; k.title = 'Add or remove a key at the playhead';
+      k.onclick = () => edit(() => toggleKey(e, p.name, get()));
+      field(p.name, inp, k);
+      fxFields.push({ inp, k, get, keys: () => e[p.name], color });
+    }
+  });
 }
 // Values follow the playhead without rebuilding the panel.
 function updateInspector() {
   const l = layer();
-  if (!l) return;
+  if (!l) { updateFx(); return; }
   const vals = Object.fromEntries(propsOf(l).map(r => [r.p, r.v]));
   for (const i of document.querySelectorAll('#inspector input[data-prop]')) {
     if (document.activeElement === i) continue;
@@ -335,6 +384,14 @@ function updateInspector() {
   for (const b of document.querySelectorAll('#inspector [data-key]')) {
     const v = getp(l, b.dataset.key);
     b.className = 'key' + (isKeys(v) ? (keyAt(v, snap(t)) >= 0 ? ' here' : ' animated') : '');
+  }
+  updateFx();
+}
+function updateFx() {
+  for (const f of fxFields) {
+    if (document.activeElement !== f.inp) f.inp.value = f.color ? f.get() : round(f.get());
+    const v = f.keys();
+    f.k.className = 'key' + (isKeys(v) ? (keyAt(v, snap(t)) >= 0 ? ' here' : ' animated') : '');
   }
 }
 
@@ -348,6 +405,7 @@ let vw = 2, vh = 2;       // the viewport's pixel size; the worker owns the canv
   worker.postMessage({ type: 'init', canvas, renderer }, [canvas]);
   const { backend, adapter, engine } = await new Promise(ok => { worker.onmessage = e => ok(e.data); });
   $('#backend').textContent = backend;
+  $('#backend').dataset.backend = backend;
   $('#backend').dataset.engine = engine;
   $('#backend').title = backend === 'CPU' ? 'Viewport on the CPU (Vello CPU): no WebGPU or WebGL2'
     : `Viewport on ${backend}, Vello ${engine} (${adapter})`;
@@ -719,7 +777,7 @@ addEventListener('keydown', e => {
   else if ((e.key === 'Delete' || e.key === 'Backspace') && selKey) edit(() => deleteKey(selKey));
   else if (e.key.toLowerCase() === 'k' && layer()) edit(() => toggleKey(layer(), prop));
 });
-function refresh() { refreshLists(); refreshInspector(); range = null; need = true; }
+function refresh() { refreshLists(); refreshInspector(); noticeEffects(); range = null; need = true; }
 // rAF hands every callback of a display frame the same timestamp; the
 // frame drawn now is presented about one display frame later, so that is
 // the time it shows.

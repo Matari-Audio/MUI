@@ -161,6 +161,19 @@ try {
   check(px[0] === 0x40 && px[1] === 0x10, `the viewport shows it (${px})`);
   await shot('editor-reloaded.png');
 
+  // A scene effect from the inspector: levels with no saturation greys the
+  // frame on WebGPU; the CPU viewport says it draws without effects.
+  await mouse('mousePressed', ox + 4, oy + 4); await mouse('mouseReleased', ox + 4, oy + 4); await sleep(300);
+  await js(`(() => { const s = document.querySelector('#add-effect'); s.value = 'levels'; s.onchange(); })()`);
+  await sleep(1000);
+  check(read().scenes[1].effects?.[0]?.type === 'levels', 'adding an effect writes it to the file');
+  await js(`(() => { const i = document.querySelector('[data-fx="0.saturation"]'); i.value = '0'; i.onchange(); })()`);
+  await sleep(1200);
+  check(read().scenes[1].effects[0].saturation === 0, 'an effect parameter is saved');
+  const grey = pixel(Buffer.from((await send('Page.captureScreenshot', { format: 'png', clip })).data, 'base64'));
+  if (cpu) check(await js(`document.querySelector('#backend').textContent`) === 'CPU · effects off', 'the CPU viewport says effects are off');
+  else check(Math.abs(grey[0] - grey[1]) <= 2 && Math.abs(grey[1] - grey[2]) <= 2 && grey[0] > 0x10, `the viewport draws the effect (${grey})`);
+  await shot('editor-effect.png');
   // The showcase: SVG and Lottie files reach the viewport, and the inspector
   // edits animators.
   writeFileSync(file, readFileSync(join(here, '../examples/showcase.cut.json'), 'utf8'));

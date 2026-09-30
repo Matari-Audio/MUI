@@ -70,6 +70,11 @@ impl Cut {
             _ => String::new(),
         }
     }
+    /// The effect schema as JSON: `[{name, about, passes, params: [{name,
+    /// default, min?, max?}]}]`, a string default being a colour.
+    pub fn effects() -> String {
+        serde_json::to_string(crate::fx::EFFECTS).unwrap_or_default()
+    }
     /// JSON `[{id, pts: [[x, y] x4]}]` from the last render.
     pub fn quads(&self) -> String {
         self.quads.clone()
