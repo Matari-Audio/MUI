@@ -472,14 +472,18 @@ included, is only read.
 |---|---|---|
 | moose, truce | `moose::plugin!` / `truce::plugin!` (its `crate::Plugin`); `editor()` opens a `MuiEditor` | nothing |
 | nice-plug | the type `nice_export_clap!(T)` names | `T` public at the crate root (`pub use …::T;`) |
-| plain MUI | `pub fn mui_editor() -> (Ui, (u32, u32), impl mui::host::View + Send + 'static)` | that one function |
+| plain MUI | `pub fn mui_editor() -> (Ui, (u32, u32), impl mui::host::View + Send + 'static)` | that one function; for sound, `pub fn mui_audio(sample_rate: f32) -> impl FnMut(&[(u8, u8)], &mut [[f32; 2]]) + Send + 'static` (a span's notes, `(key, velocity)` with velocity 0 a note off, at its start; it fills stereo frames) |
 
 Every framework's editor opens its window through `mui_baseview::open`,
 which hands the view to a claiming headless host instead. A library that
 is not `rlib`, a missing `plugin!`, a private nice-plug type or a missing
 `mui_editor` is reported as the exact line to add. Params are `set` by
 parameter id or name, `field` `norm` (0..1) or `value` (plain units). The
-plugin's DSP does not run. A git source is pulled to its latest by `add`.
+plugin's DSP runs as a host runs it (moose and truce `process`, nice-plug
+`activate` then `process`, a plain crate's `mui_audio`), on the manual
+clock, so every generated adapter sounds. A layer's `preset` (a moose
+host state, or a plugin preset file wrapping one, like KURV's `.kurvy`)
+loads on frame 0. A git source is pulled to its latest by `add`.
 
 Plugins follow MUI's main branch. `media/tools/mui-sync` unpins MUI in a
 plugin repo, updates it, checks it and opens a "Follow MUI main" PR;
@@ -697,9 +701,10 @@ explodes two levels in 3D: panels, then their controls.
   as `render --mb` (motion-blur samples in the dialog), effects included; on
   the CPU, no effects or blur. A WebCodecs `VideoEncoder` encodes it (H.264,
   H.265 or AV1, whichever `isConfigSupported` accepts at the project's size,
-  hardware preferred) and `web/mp4.js`, a ~100-line muxer, writes ftyp, moov
-  first, then one mdat. Progress and Cancel in the dialog. No audio: the
-  browser export is picture only; `render` muxes the sound.
+  hardware preferred) and `web/mp4.js`, a small muxer, writes ftyp, moov
+  first, then one mdat. The sound is `serve`'s mix (`GET /mix.wav`, plugin
+  layers captured first), encoded by an `AudioEncoder` (AAC, else Opus) into
+  a second track. Progress and Cancel in the dialog.
 - **Variants** (header): with `variants` in the file, a switcher previews any
   of them at its size. The scene inspector lists the variables as the chosen
   variant sets them (a select for an enum, a checkbox for a bool); an edit
@@ -908,14 +913,19 @@ snapshots in the editor rather than `CurveHistory`, for the same reason.
   plugin must build as a bridge live adapter. A 3D scene composites
   a translucent capture in linear light, so its soft edges read slightly
   brighter than in 2D.
-- Sound: only moose plugins (and hand-written adapters) sound; truce,
-  nice-plug and plain MUI adapters are silent. A generated adapter's patch
-  lists parameters and held notes, not modulation routes (no framework
-  API names them), and a plugin's keyboard does not light the notes the
-  host plays unless the plugin draws them from its DSP. `serve` opens the device at the project's
+- Sound: a generated adapter's patch reads modulation routes only from
+  `<X> Source` / `<X> Target` / `<X> Amount` parameters (moose, truce);
+  routes a plugin keeps in its private state (KURV's) are not visible to a
+  host, and nice-plug and plain crates report none. `preset` is moose
+  only. A plugin's keyboard does not light the notes the host plays unless
+  the plugin draws them from its DSP (KURV lights its pointer's key only);
+  the patch lists them. `serve` opens the device at the project's
   rate when it starts; a rate change needs a restart. The live view's old
   images are not freed in the viewport worker. `plugin_play` to an mp4
-  renders the whole scene and trims it. The web export has no sound.
+  renders the whole scene and trims it. The web export gets its sound
+  from `serve` (`GET /mix.wav`): opened without it, it exports silent;
+  it encodes AAC where the browser can (Chrome on Linux: Opus), with the
+  encoder's priming samples left in (a few ms).
 - `--renderer blender`: scene and layer `effects` are skipped (it says so);
   a model's `fill` tint is ignored; frames are 8-bit PNG; point and spot
   light strength is matched to mui-stage at the nearest subject the light

@@ -1,10 +1,8 @@
-//! A sine at `Pitch` while any note is held, `Level` loud; a modulation
-//! route bank (`Mod 1 Source/Target/Amount`) and a host slot the plugin
-//! shows under another name: what mui-cut's patch view reads.
-use moose::mui::MuiEditor;
-use moose::mui::mui::prelude::*;
-use moose::params::ParameterPresentation;
-use moose::prelude::*;
+//! A sine at `Pitch` while any note is held, `Level` loud, and a
+//! modulation route bank (`Mod 1 Source/Target/Amount`).
+use mui::prelude::*;
+use mui_truce::MuiEditor;
+use truce::prelude::*;
 
 #[derive(ParamEnum)]
 pub enum Source {
@@ -19,7 +17,6 @@ pub enum Target {
 }
 
 #[derive(Params)]
-#[params(presentation = "shown")]
 pub struct ToneParams {
     #[param(id = 0, name = "Level", range = "linear(0, 1)", default = 0.5)]
     pub level: FloatParam,
@@ -37,18 +34,6 @@ pub struct ToneParams {
     pub target: EnumParam<Target>,
     #[param(id = 4, name = "Mod 1 Amount", range = "linear(-1, 1)", default = 0.0)]
     pub amount: FloatParam,
-    #[param(id = 5, name = "Host 1", range = "linear(0, 1)", default = 0.0)]
-    pub host1: FloatParam,
-}
-
-impl ToneParams {
-    fn shown(&self, id: u32) -> Option<ParameterPresentation> {
-        (id == 5).then(|| ParameterPresentation {
-            name: "Drive".into(),
-            group: "Tone".into(),
-            ..ParameterPresentation::default()
-        })
-    }
 }
 
 #[derive(Default)]
@@ -118,4 +103,4 @@ impl PluginLogic for Tone {
     }
 }
 
-moose::plugin! { logic: Tone, params: ToneParams }
+truce::plugin! { logic: Tone, params: ToneParams }

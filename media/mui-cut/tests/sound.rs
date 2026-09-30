@@ -52,7 +52,10 @@ fn run(project: &Path, args: &[&str]) -> String {
     let o = Command::new(BIN)
         .args(args)
         .arg(project)
-        .env("MUI_CUT_CACHE", Path::new(env!("CARGO_TARGET_TMPDIR")).join("adapters"))
+        .env(
+            "MUI_CUT_CACHE",
+            Path::new(env!("CARGO_TARGET_TMPDIR")).join("adapters"),
+        )
         .output()
         .unwrap();
     let err = String::from_utf8_lossy(&o.stderr).into_owned();
@@ -426,7 +429,10 @@ fn a_moose_plugin_plays_loads_a_preset_and_reports_its_patch() {
     // Level 0.25, Mod 1: Lfo -> Pitch at 0.5, the `Host 1` slot at 0.3.
     let plain = moose_state(id, &[(0, 0.25), (2, 1.), (3, 1.), (4, 0.5), (5, 0.3)]);
     let mut wrapped = b"TRPS\x01\x00some metadata".to_vec();
-    wrapped.extend(moose_state(id, &[(0, 0.25), (2, 1.), (3, 1.), (4, 0.75), (5, 0.3)]));
+    wrapped.extend(moose_state(
+        id,
+        &[(0, 0.25), (2, 1.), (3, 1.), (4, 0.75), (5, 0.3)],
+    ));
     for (name, preset) in [("moose-state", plain), ("moose-preset", wrapped)] {
         let layer = json!({
             "source": fixture("moose-tone"),
@@ -439,7 +445,10 @@ fn a_moose_plugin_plays_loads_a_preset_and_reports_its_patch() {
         run(&project, &["capture"]);
         let (hz, peak) = tone(&soundtrack(&project));
         assert!((hz - 880.).abs() < 2., "{name}: {hz} Hz");
-        assert!((peak - 0.25).abs() < 0.01, "{name}: the preset's level, peak {peak}");
+        assert!(
+            (peak - 0.25).abs() < 0.01,
+            "{name}: the preset's level, peak {peak}"
+        );
         let patch = capture(&project, 0.5).patch;
         let param = |n: &str| {
             patch["params"]
@@ -451,7 +460,11 @@ fn a_moose_plugin_plays_loads_a_preset_and_reports_its_patch() {
                 .clone()
         };
         assert_eq!(param("Level")["value"], 0.25, "{name}");
-        assert_eq!(param("Drive")["value"], 0.3, "{name}: the slot's shown name");
+        assert_eq!(
+            param("Drive")["value"],
+            0.3,
+            "{name}: the slot's shown name"
+        );
         let pitch = param("Pitch");
         assert_eq!(
             (&pitch["automated"], &pitch["modulated"]),
@@ -465,4 +478,64 @@ fn a_moose_plugin_plays_loads_a_preset_and_reports_its_patch() {
         );
         assert_eq!(patch["held"], json!([60]), "{name}");
     }
+}
+
+/// A generic adapter's tone: the fixture's sine at its pitch and level,
+/// silent before the note, and the note held in the patch.
+fn plays_its_tone(name: &str, plugin: &str, layer: Value, hz: f64, level: f32) -> PathBuf {
+    let mut l = json!({"source": fixture(plugin), "notes": [{"t": 0.1, "dur": 0.8, "pitch": 60}]});
+    for (k, v) in layer.as_object().unwrap() {
+        l[k] = v.clone();
+    }
+    let project = project(name, 1.0, &l);
+    run(&project, &["capture"]);
+    let sound = soundtrack(&project);
+    let on = mui_cut::plugin::sample_at(0.1, RATE) as usize;
+    assert!(
+        sound[..2 * on].iter().all(|v| *v == 0.),
+        "{name}: sound before the note"
+    );
+    let (got, peak) = tone(&sound);
+    assert!((got - hz).abs() < 2., "{name}: {got} Hz");
+    assert!((peak - level).abs() < 0.01, "{name}: peak {peak}");
+    assert_eq!(capture(&project, 0.5).patch["held"], json!([60]), "{name}");
+    project
+}
+
+/// A nice-plug plugin plays through its `process`, set by the layer.
+#[test]
+fn a_nice_plug_plugin_plays_its_tone() {
+    let pitch = json!({"params": [{"id": "Pitch", "field": "value", "value": 880.0}]});
+    plays_its_tone("nice-tone", "nice-tone", pitch, 880., 0.5);
+}
+
+/// A plain MUI crate plays through its `mui_audio`.
+#[test]
+fn a_plain_mui_crate_plays_its_tone() {
+    plays_its_tone("plain-tone", "plain", json!({}), 660., 0.4);
+}
+
+/// A truce plugin plays through its `process`, and its patch lists the
+/// route its `Mod 1` parameters hold.
+#[test]
+fn a_truce_plugin_plays_its_tone_and_reports_its_routes() {
+    let set = |id: &str, value: f64| json!({"id": id, "field": "value", "value": value});
+    let params = json!({"params": [set("Pitch", 880.), set("Mod 1 Source", 1.), set("Mod 1 Target", 1.), set("Mod 1 Amount", 0.5)]});
+    let project = plays_its_tone("truce-tone", "truce-tone", params, 880., 0.5);
+    let patch = capture(&project, 0.5).patch;
+    assert_eq!(
+        patch["routes"],
+        json!([{"source": "Lfo", "target": "Pitch", "depth": 0.5}])
+    );
+    let pitch = patch["params"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["name"] == "Pitch")
+        .cloned();
+    assert_eq!(
+        pitch.map(|p| p["modulated"].clone()),
+        Some(json!(true)),
+        "{patch}"
+    );
 }
