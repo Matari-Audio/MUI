@@ -92,6 +92,7 @@ impl Setting {
     ) -> Response<C, El> {
         let group_id = self.id.field("setting");
         let Response { mut el, changed } = make(ui, self.id, &self.label);
+        el = el.hide_matching_adjustment_label(&self.label);
         let mut labels = vec![body(self.label.clone())];
         if let Some(description) = self.description {
             el = el.described(description.clone());

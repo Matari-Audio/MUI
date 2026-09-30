@@ -143,6 +143,7 @@ pub struct Control {
     px: Option<f64>,
     kind: Kind,
     disabled: bool,
+    label_visible: bool,
 }
 
 /// Which control, with what it read from the runtime: the tree waits for
@@ -229,7 +230,18 @@ impl Control {
             px: None,
             kind,
             disabled: false,
+            label_visible: true,
         }
+    }
+
+    pub(crate) fn hide_matching_adjustment_label(mut self, setting_label: &str) -> Self {
+        if matches!(
+            &self.kind,
+            Kind::Slider(_, label, _) | Kind::Knob(_, label, _) if label.as_ref() == setting_label
+        ) {
+            self.label_visible = false;
+        }
+        self
     }
     /// How solid this control looks.
     ///
@@ -348,9 +360,10 @@ impl Control {
         };
         self.look.px = self.px.unwrap_or(self.look.px * steps);
         let look = &self.look;
+        let label_visible = self.label_visible;
         let el = match self.kind {
-            Kind::Slider(id, label, d) => slider_el(look, id, label, d),
-            Kind::Knob(id, label, d) => knob_el(look, id, label, d),
+            Kind::Slider(id, label, d) => slider_el(look, id, label, d, label_visible),
+            Kind::Knob(id, label, d) => knob_el(look, id, label, d, label_visible),
             Kind::Button(id, label) => button_el(look, id, label),
             Kind::Toggle(id, label, on) => toggle_el(look, id, label, on),
             Kind::Drag(id, label, d) => drag_el(look, id, label, d),
@@ -520,7 +533,7 @@ pub fn slider(
     }
 }
 
-fn slider_el(look: &Look, id: Id, label: Arc<str>, d: Dial) -> El {
+fn slider_el(look: &Look, id: Id, label: Arc<str>, d: Dial, label_visible: bool) -> El {
     // The rail is a fraction of the control's height, so one size token
     // moves the track, the thumb and the row together.
     let (track, thumb, lane) = (look.px * 0.15, look.px * THUMB, look.px * LANE);
@@ -528,13 +541,18 @@ fn slider_el(look: &Look, id: Id, label: Arc<str>, d: Dial) -> El {
     let grip = block(thumb + 2.0 * h, thumb + 2.0 * h)
         .pill()
         .fill(look.role);
-    col([
+    let header = (if label_visible {
         row([
             text(label.clone()),
             spacer(),
             d.readout(look).fill(Role::Dim),
         ])
-        .gap(S),
+    } else {
+        row([spacer(), d.readout(look).fill(Role::Dim)])
+    })
+    .gap(S);
+    col([
+        header,
         look.describe(
             stack([
                 row([
@@ -596,46 +614,48 @@ pub fn knob(
     }
 }
 
-fn knob_el(look: &Look, id: Id, label: Arc<str>, d: Dial) -> El {
+fn knob_el(look: &Look, id: Id, label: Arc<str>, d: Dial, label_visible: bool) -> El {
     // A dial reads bigger than a button of the same size token: the
     // label sits under it rather than inside it.
     let size = look.px * 1.8;
     let a = (135.0 + 270.0 * d.t).to_radians();
     let r = size / 2.0 - size / 12.0;
-    let caption: Arc<str> = look
-        .text
-        .as_deref()
-        .map_or_else(|| label.clone(), Arc::from);
-    col([
-        stack([
-            look.describe(
-                block(size, size)
-                    .pill()
-                    .preset(look.face(Role::Raised))
-                    .shell(size / 24.0 + 1.0 * d.hover, Role::Field)
-                    .a11y(d.a11y())
-                    .named(label)
-                    .focusable()
-                    .cursor(Cursor::ResizeV)
-                    .on(State::FocusVisible, focus_ring)
-                    .id(id),
-                true,
-            ),
-            // The pointer is the reading, so it keeps the role at full
-            // strength whatever the variant does to the face.
-            block(size / 12.0, size / 12.0)
+    let caption = match look.text.as_deref() {
+        Some(text) => Some(Arc::<str>::from(text)),
+        None if label_visible => Some(label.clone()),
+        None => None,
+    };
+    let mut content = vec![stack([
+        look.describe(
+            block(size, size)
                 .pill()
-                .fill(look.role)
-                .centered_at(r * a.cos(), r * a.sin()),
-        ]),
-        match &look.reserve {
-            Some(samples) => text(caption).reserve_all(samples.clone()),
-            None => text(caption),
-        }
-        .fill(Role::Dim),
-    ])
-    .gap(Xs)
-    .align(Align::Center)
+                .preset(look.face(Role::Raised))
+                .shell(size / 24.0 + 1.0 * d.hover, Role::Field)
+                .a11y(d.a11y())
+                .named(label)
+                .focusable()
+                .cursor(Cursor::ResizeV)
+                .on(State::FocusVisible, focus_ring)
+                .id(id),
+            true,
+        ),
+        // The pointer is the reading, so it keeps the role at full
+        // strength whatever the variant does to the face.
+        block(size / 12.0, size / 12.0)
+            .pill()
+            .fill(look.role)
+            .centered_at(r * a.cos(), r * a.sin()),
+    ])];
+    if let Some(caption) = caption {
+        content.push(
+            match &look.reserve {
+                Some(samples) => text(caption).reserve_all(samples.clone()),
+                None => text(caption),
+            }
+            .fill(Role::Dim),
+        );
+    }
+    col(content).gap(Xs).align(Align::Center)
 }
 
 /// A labelled action. Returns the control and whether it was clicked last

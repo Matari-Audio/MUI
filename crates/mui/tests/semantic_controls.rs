@@ -419,6 +419,48 @@ fn settings_attach_help_to_nested_knob_and_slider_targets() {
 }
 
 #[test]
+fn setting_does_not_repeat_builtin_knob_or_slider_labels() {
+    for (is_knob, control_label, expected_text_layers) in [
+        (true, "Value", 1),
+        (false, "Value", 2),
+        (true, "Fine", 2),
+        (false, "Fine", 3),
+    ] {
+        let mut ui = Ui::default().font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
+        let mut value = 0.5;
+        let response = setting("value", "Value").control(&mut ui, |ui, id, setting_label| {
+            let label = if control_label == "Value" {
+                setting_label
+            } else {
+                control_label
+            };
+            if is_knob {
+                knob(ui, id, label, &mut value, 0.0..=1.0)
+            } else {
+                slider(ui, id, label, &mut value, 0.0..=1.0)
+            }
+        });
+        ui.frame(response.into_el(), None, Input::default(), 0.016)
+            .unwrap();
+        let scene = ui.scene().unwrap();
+        let input = scene.surface("value").unwrap();
+        assert_eq!(
+            input.semantics.as_ref().unwrap().label.as_deref(),
+            Some(control_label)
+        );
+        let text_layers = scene
+            .paint
+            .iter()
+            .filter(|paint| paint.layer == Layer::Text)
+            .count();
+        assert_eq!(
+            text_layers, expected_text_layers,
+            "matching built-in labels should be hidden without dropping distinct labels or slider readouts"
+        );
+    }
+}
+
+#[test]
 fn a_slider_reserve_holds_its_lane_and_neighbour_without_a_fixed_width() {
     let mut ui = Ui::default().font(Font::new(ttf_inter::REGULAR).unwrap());
     let samples: Arc<[String]> = vec!["iiiiiiii".into(), "WWWW".into()].into();
