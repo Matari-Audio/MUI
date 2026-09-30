@@ -205,19 +205,30 @@ fn renderer(args: &Args) -> Option<&str> {
     }
 }
 
-/// Every file the project's layers name, read relative to the project;
+/// Every file the project's layers and environments name, read relative
+/// to the project;
 /// what failed, as messages.
 fn load_assets(p: &Project, project: &Path, assets: &mut Assets) -> Vec<String> {
     let dir = project.parent().unwrap_or(Path::new("."));
     let mut errs = Vec::new();
-    for l in p.scenes.iter().flat_map(|s| &s.layers) {
-        if let Some(path) = l.asset() {
-            let loaded = std::fs::read(dir.join(path))
-                .map_err(|e| e.to_string())
-                .and_then(|b| assets.add_asset(path, &b));
-            if let Err(e) = loaded {
-                errs.push(format!("`{path}`: {e}"));
-            }
+    let hdris = p
+        .scenes
+        .iter()
+        .filter_map(|s| s.environment.as_ref())
+        .map(|e| e.hdri.as_str())
+        .filter(|h| !h.is_empty());
+    for path in p
+        .scenes
+        .iter()
+        .flat_map(|s| &s.layers)
+        .filter_map(mui_cut::Layer::asset)
+        .chain(hdris)
+    {
+        let loaded = std::fs::read(dir.join(path))
+            .map_err(|e| e.to_string())
+            .and_then(|b| assets.add_asset(path, &b));
+        if let Err(e) = loaded {
+            errs.push(format!("`{path}`: {e}"));
         }
     }
     errs.extend(host::load(p, project, assets));

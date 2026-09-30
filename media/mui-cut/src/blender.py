@@ -129,8 +129,8 @@ def build():
 
 
 def world():
-    """The camera sees the background; everything else is lit by the
-    ambient light."""
+    """The camera sees the background (or the environment); everything else
+    is lit by the ambient light plus the environment."""
     w = bpy.data.worlds.new("world")
     scene.world = w
     setp(w, "use_nodes", True)
@@ -143,10 +143,31 @@ def world():
     mix = nt.nodes.new("ShaderNodeMixShader")
     out = nt.nodes.new("ShaderNodeOutputWorld")
     nt.links.new(path.outputs["Is Camera Ray"], mix.inputs[0])
-    nt.links.new(amb.outputs[0], mix.inputs[1])
-    nt.links.new(bg.outputs[0], mix.inputs[2])
     nt.links.new(mix.outputs[0], out.inputs["Surface"])
     key_socket(amb.inputs["Color"], ((t, (*s["ambient"], 1)) for t, s in states()))
+    W = D["world"]
+    if not W:
+        nt.links.new(amb.outputs[0], mix.inputs[1])
+        nt.links.new(bg.outputs[0], mix.inputs[2])
+        return
+    # The environment image on the view direction, turned about z.
+    tc = nt.nodes.new("ShaderNodeTexCoord")
+    mp = nt.nodes.new("ShaderNodeMapping")
+    mp.vector_type = "POINT"
+    img = nt.nodes.new("ShaderNodeTexEnvironment")
+    img.image = bpy.data.images.load(os.path.join(job["tex"], W["image"]), check_existing=True)
+    img.projection = "EQUIRECTANGULAR"
+    nt.links.new(tc.outputs["Generated"], mp.inputs["Vector"])
+    nt.links.new(mp.outputs["Vector"], img.inputs["Vector"])
+    env = nt.nodes.new("ShaderNodeBackground")
+    nt.links.new(img.outputs["Color"], env.inputs["Color"])
+    key_socket(env.inputs["Strength"], ((t, s["env"][0]) for t, s in states()))
+    key_socket(mp.inputs["Rotation"], ((t, (0, 0, s["env"][1])) for t, s in states()))
+    lit = nt.nodes.new("ShaderNodeAddShader")
+    nt.links.new(amb.outputs[0], lit.inputs[0])
+    nt.links.new(env.outputs[0], lit.inputs[1])
+    nt.links.new(lit.outputs[0], mix.inputs[1])
+    nt.links.new((env if W["background"] else bg).outputs[0], mix.inputs[2])
 
 
 def camera():

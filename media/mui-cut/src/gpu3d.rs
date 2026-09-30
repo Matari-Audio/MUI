@@ -3,7 +3,9 @@
 //! slab in the lit scene the frame's [`View`] describes and draws it into
 //! the target. The atlas is repainted only when some layer's content (not
 //! its placement) changes, so a card flying about costs no Vello work.
-use mui_stage::{Floor, Fog, Light, LightKind, Mat4, Model, Plane, Post, Shot, Stage};
+use mui_stage::{
+    Ao, Environment, Floor, Fog, Light, LightKind, Mat4, Model, Plane, Post, STUDIO, Shot, Stage,
+};
 use mui_vello::kurbo::Affine;
 
 use crate::render::Assets;
@@ -346,6 +348,29 @@ impl Space {
             near: f.near as f32,
             far: f.far as f32,
         });
+        // An HDRI not loaded (yet) lights as the studio does.
+        let environment = view.environment.as_ref().map(|e| {
+            let loaded = !e.hdri.is_empty()
+                && (self.stage.has_environment(&e.hdri)
+                    || assets.env(&e.hdri).is_some_and(|img| {
+                        self.stage.environment(&e.hdri, img);
+                        true
+                    }));
+            Environment {
+                map: if loaded {
+                    e.hdri.clone()
+                } else {
+                    STUDIO.into()
+                },
+                intensity: e.intensity as f32,
+                rotation: e.rotation as f32,
+                background: e.background,
+            }
+        });
+        let ao = view.ao.as_ref().map(|a| Ao {
+            strength: a.strength.max(0.) as f32,
+            radius: a.radius.max(0.) as f32,
+        });
         let blur = (cam.aperture * out).min(64.) as f32;
         let shot = Shot {
             planes,
@@ -354,6 +379,8 @@ impl Space {
             floor,
             fog,
             clear: Some(linear(frame.background)),
+            environment,
+            ao,
             post: Post {
                 focus: cam.focus as f32,
                 aperture: blur,

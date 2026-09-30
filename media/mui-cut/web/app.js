@@ -177,15 +177,19 @@ async function pull(why) {
   await loadAssets();
   status(why); refresh();
 }
-// The files image, SVG, Lottie and model layers name, each sent to the viewport once.
+// The files image, SVG, Lottie and model layers and 3D environments name,
+// each sent to the viewport once.
 async function loadAssets() {
-  for (const l of doc.scenes.flatMap(s => s.layers)) {
-    if (!['image', 'svg', 'lottie', 'model'].includes(l.kind) || !l.path || assets.has(l.path)) continue;
-    assets.add(l.path);
+  const files = doc.scenes.flatMap(s => s.layers)
+    .filter(l => ['image', 'svg', 'lottie', 'model'].includes(l.kind)).map(l => l.path)
+    .concat(doc.scenes.map(s => s.environment?.hdri));
+  for (const path of files) {
+    if (!path || typeof path !== 'string' || assets.has(path)) continue;
+    assets.add(path);
     try {
-      const r = await fetch('/asset/' + l.path);
-      if (r.ok) worker.postMessage({ type: 'asset', path: l.path, bytes: new Uint8Array(await r.arrayBuffer()) });
-    } catch (e) { console.warn(l.path, e); }
+      const r = await fetch('/asset/' + path);
+      if (r.ok) worker.postMessage({ type: 'asset', path, bytes: new Uint8Array(await r.arrayBuffer()) });
+    } catch (e) { console.warn(path, e); }
   }
   // Plugin captures: every state the project shows, each manifest with
   // the images it names. A missing one is not captured yet; `serve` sends

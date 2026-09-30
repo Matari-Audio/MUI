@@ -146,6 +146,26 @@ fn the_stage_example_loads_round_trips_and_its_model_parses() {
     assert!(part.indices.len() > 1000 && part.indices.len().is_multiple_of(3));
     assert!(part.metallic > 0.5 && part.color[0] > part.color[2]);
     assert!(mesh.max[1] > mesh.min[1]);
+    // Its triangles wind counter-clockwise about their normals, as glTF
+    // says: Blender shades a clockwise one from the inside (black in Cycles).
+    let v = |i: u32| part.vertices[i as usize];
+    let sub = |a: [f32; 6], b: [f32; 6]| [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+    let outward = part
+        .indices
+        .chunks(3)
+        .filter(|t| {
+            let (a, b, c) = (v(t[0]), v(t[1]), v(t[2]));
+            let (e, f) = (sub(b, a), sub(c, a));
+            let n = [
+                e[1] * f[2] - e[2] * f[1],
+                e[2] * f[0] - e[0] * f[2],
+                e[0] * f[1] - e[1] * f[0],
+            ];
+            n[0] * (a[3] + b[3] + c[3]) + n[1] * (a[4] + b[4] + c[4]) + n[2] * (a[5] + b[5] + c[5])
+                > 0.
+        })
+        .count();
+    assert_eq!(outward, part.indices.len() / 3);
     assert!(three::glb(b"not a model").is_err());
 }
 

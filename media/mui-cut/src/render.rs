@@ -39,6 +39,7 @@ pub struct Assets {
     svgs: HashMap<String, Arc<Vec<vector::Piece>>>,
     lotties: HashMap<String, Arc<velato::Composition>>,
     models: HashMap<String, Arc<crate::three::Mesh>>,
+    envs: HashMap<String, Arc<mui_stage::EnvImage>>,
     captures: HashMap<String, Arc<Capture>>,
 }
 
@@ -165,6 +166,11 @@ impl Assets {
                 let pieces =
                     vector::svg(bytes, ttf_inter::REGULAR).map_err(|e| format!("{path}: {e}"))?;
                 self.svgs.insert(path.to_owned(), Arc::new(pieces));
+                Ok(())
+            }
+            "hdr" | "exr" => {
+                let img = mui_stage::EnvImage::decode(path, bytes)?;
+                self.envs.insert(path.to_owned(), Arc::new(img));
                 Ok(())
             }
             "glb" => {
@@ -315,6 +321,9 @@ impl Assets {
     /// A model layer's mesh, once its file is loaded.
     pub(crate) fn model(&self, path: &str) -> Option<&Arc<crate::three::Mesh>> {
         self.models.get(path)
+    }
+    pub(crate) fn env(&self, path: &str) -> Option<&Arc<mui_stage::EnvImage>> {
+        self.envs.get(path)
     }
 
     /// The outline an extruded layer's walls follow, in its own y-down

@@ -456,6 +456,23 @@ fn keys_and_assets(
             None,
         );
     }
+    if let Some(e) = &s.environment
+        && !e.hdri.is_empty()
+        && !exists(&e.hdri)
+    {
+        out.add(
+            Severity::Error,
+            "missing_asset",
+            &format!("{sp}.environment.hdri"),
+            Some((s, "")),
+            None,
+            format!(
+                "`{}` is not there (paths are relative to the project file)",
+                e.hdri
+            ),
+            Some("fix the path or add the file; left out, the built-in studio lights".into()),
+        );
+    }
     let dt = 1. / p.fps;
     for (li, l) in s.layers.iter().enumerate() {
         let lp = format!("{sp}.layers[{li}]");
@@ -931,6 +948,7 @@ mod tests {
           "size": [1280, 720], "fps": 30,
           "scenes": [{
             "name": "s", "duration": 2, "background": "#ffffff",
+            "environment": { "hdri": "missing.hdr" },
             "layers": [
               { "id": "gone", "kind": "rect", "x": 5000, "y": 360 },
               { "id": "edge", "kind": "rect", "x": 1270, "y": 360, "width": 200, "height": 200, "fill": "#ff0000" },
@@ -943,7 +961,9 @@ mod tests {
             ]
           }]
         }"##;
-        let issues = check(src, &mut Renderer::new(320, 180), &|p| p != "missing.png");
+        let issues = check(src, &mut Renderer::new(320, 180), &|p| {
+            !p.starts_with("missing")
+        });
         let text: Vec<String> = issues.iter().map(ToString::to_string).collect();
         let text = text.join("\n");
         let has = |code: &str, path: &str| {
@@ -965,6 +985,7 @@ mod tests {
         has("duplicate_key", "scenes[0].layers[5].opacity[2]");
         has("key_outside_scene", "scenes[0].layers[5].opacity[3]");
         has("missing_asset", "scenes[0].layers[6].path");
+        has("missing_asset", "scenes[0].environment.hdri");
         // The dark text on white reads fine.
         assert!(
             !issues
