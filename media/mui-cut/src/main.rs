@@ -329,7 +329,11 @@ impl Backend {
             .zip(pngs)
             .map(|((s, t), png)| (frame_key(&eval(p, s, *t)), png))
             .collect();
-        let engine = if o.engine == "CYCLES" { "cycles" } else { "eevee" };
+        let engine = if o.engine == "CYCLES" {
+            "cycles"
+        } else {
+            "eevee"
+        };
         Ok(Self::Blender(Box::new(Baked {
             pngs,
             yuv: yuv.map(|y| (y, size)),

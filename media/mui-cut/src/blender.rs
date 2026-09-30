@@ -17,7 +17,9 @@ use mui_stage::Mat4;
 use serde::Serialize;
 
 use crate::gpu3d::linear;
-use crate::{Assets, Drawn, Fnv, Frame, Kind, LightType, Mode, Project, SHUTTER, Scene, eval, three};
+use crate::{
+    Assets, Drawn, Fnv, Frame, Kind, LightType, Mode, Project, SHUTTER, Scene, eval, three,
+};
 
 /// Metres per project pixel: a 1280-pixel frame is a 12.8 m set.
 pub const METRES: f32 = 0.01;
@@ -230,7 +232,9 @@ const FROM_BLENDER: Mat4 = Mat4([
 
 /// A stage-world placement as a Blender world matrix, in metres.
 fn placed(m: Mat4) -> [f32; 16] {
-    (TO_BLENDER * Mat4::scale(METRES) * m).0.map(|v| r(f64::from(v)))
+    (TO_BLENDER * Mat4::scale(METRES) * m)
+        .0
+        .map(|v| r(f64::from(v)))
 }
 
 /// A stage-world point or direction in Blender's axes.
@@ -402,8 +406,8 @@ pub fn describe(
                     eprintln!("mui-cut: model `{path}` not loaded; left out");
                     continue;
                 }
-                let abs = std::path::absolute(dir.join(path))
-                    .map_err(|e| format!("{path}: {e}"))?;
+                let abs =
+                    std::path::absolute(dir.join(path)).map_err(|e| format!("{path}: {e}"))?;
                 models.push((
                     i,
                     ModelD {
@@ -540,7 +544,11 @@ pub fn describe(
                     -(corner[1] + h / 2.) as f32,
                     d.space.anchor_z as f32,
                 ];
-                let m = three::pose(size, d, Mat4::scale(d.scale as f32) * Mat4::translate(offset));
+                let m = three::pose(
+                    size,
+                    d,
+                    Mat4::scale(d.scale as f32) * Mat4::translate(offset),
+                );
                 let shown = d.opacity > 0. && d.scale != 0.;
                 Ok(LayerS {
                     m: placed(m),
@@ -611,9 +619,14 @@ pub fn describe(
 fn ring_list(outline: Option<mui_geometry::Path>, w: f64, h: f64) -> Vec<Vec<[f32; 2]>> {
     let Some(o) = outline else {
         return vec![
-            [[-w / 2., -h / 2.], [w / 2., -h / 2.], [w / 2., h / 2.], [-w / 2., h / 2.]]
-                .map(|[x, y]| [r(x), r(y)])
-                .to_vec(),
+            [
+                [-w / 2., -h / 2.],
+                [w / 2., -h / 2.],
+                [w / 2., h / 2.],
+                [-w / 2., h / 2.],
+            ]
+            .map(|[x, y]| [r(x), r(y)])
+            .to_vec(),
         ];
     };
     o.flatten(0.25, 1 << 16)
@@ -728,7 +741,14 @@ pub fn render(
 /// the script's progress lines go to stderr.
 fn run(bin: &Path, script: &Path, job: &Path) -> Result<(), String> {
     let o = Command::new(bin)
-        .args(["-b", "--factory-startup", "-noaudio", "--python-exit-code", "1", "--python"])
+        .args([
+            "-b",
+            "--factory-startup",
+            "-noaudio",
+            "--python-exit-code",
+            "1",
+            "--python",
+        ])
         .arg(script)
         .arg("--")
         .arg(job)
@@ -796,7 +816,9 @@ mod tests {
         assets.add_asset("knot.glb", KNOT).unwrap();
         let o = Options::new(None, None, mb, [1280, 720]).unwrap();
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples");
-        describe(&p, &p.scenes[0], times, &assets, &dir, &o).unwrap().0
+        describe(&p, &p.scenes[0], times, &assets, &dir, &o)
+            .unwrap()
+            .0
     }
 
     fn col(m: &[f32; 16], c: usize) -> [f64; 3] {
@@ -855,7 +877,11 @@ mod tests {
         assert!(layer("label0").variants[0].rings.is_empty());
         assert!(!layer("label0").shadow);
         let title = &layer("title").variants[0];
-        assert!(title.depth == 14. && title.rings.len() >= 8, "{}", title.rings.len());
+        assert!(
+            title.depth == 14. && title.rings.len() >= 8,
+            "{}",
+            title.rings.len()
+        );
         // A flat card at the frame centre's height, 1 cm per pixel.
         let c0 = &d.frames[0][0].layers[0];
         assert!(near(col(&c0.m, 3), at(p.size, [300., 300., 0.]), 1e-3));
@@ -892,7 +918,9 @@ mod tests {
         let job = serde_json::json!({"desc": d, "tex": "", "blend": "", "render": []});
         let text = job.to_string();
         let mut missing = Vec::new();
-        for owner in ["D", "O", "job", "s", "c", "l", "L", "v", "g", "f", "M", "ls", "ms"] {
+        for owner in [
+            "D", "O", "job", "s", "c", "l", "L", "v", "g", "f", "M", "ls", "ms",
+        ] {
             let pat = format!("{owner}[\"");
             for (i, _) in SCRIPT.match_indices(&pat) {
                 let before = SCRIPT[..i].chars().last();
@@ -936,8 +964,15 @@ mod tests {
         )
         .unwrap();
         let o = Options::new(None, Some(4), 1, [64, 36]).unwrap();
-        let (d, tex) = describe(&p, &p.scenes[0], &[0., 0.5], &Assets::default(), Path::new(""), &o)
-            .unwrap();
+        let (d, tex) = describe(
+            &p,
+            &p.scenes[0],
+            &[0., 0.5],
+            &Assets::default(),
+            Path::new(""),
+            &o,
+        )
+        .unwrap();
         let k = d.keys().1;
         assert_eq!(k[0], k[1]);
         assert_eq!(tex.len(), 1);
@@ -948,10 +983,20 @@ mod tests {
     fn a_2d_scene_or_an_unknown_engine_is_a_clear_error() {
         let p = Project::load(include_str!("../examples/demo.cut.json")).unwrap();
         let o = Options::new(None, None, 1, [64, 36]).unwrap();
-        let e = describe(&p, &p.scenes[0], &[0.], &Assets::default(), Path::new(""), &o)
-            .err()
-            .unwrap();
-        assert!(e.contains("is 2D") && e.contains("classic, gpu or cpu"), "{e}");
+        let e = describe(
+            &p,
+            &p.scenes[0],
+            &[0.],
+            &Assets::default(),
+            Path::new(""),
+            &o,
+        )
+        .err()
+        .unwrap();
+        assert!(
+            e.contains("is 2D") && e.contains("classic, gpu or cpu"),
+            "{e}"
+        );
         let e = Options::new(Some("workbench"), None, 1, [64, 36]).unwrap_err();
         assert!(e.contains("eevee or cycles"), "{e}");
     }

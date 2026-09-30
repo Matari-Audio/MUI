@@ -692,13 +692,27 @@ fn blender_renders_a_small_3d_still_and_then_reuses_it() {
         Command::new(BIN)
             .args(["still"])
             .arg(&project)
-            .args(["--renderer", "blender", "--samples", "4", "--t", "3", "--size", "160x90", "-o"])
+            .args([
+                "--renderer",
+                "blender",
+                "--samples",
+                "4",
+                "--t",
+                "3",
+                "--size",
+                "160x90",
+                "-o",
+            ])
             .arg(&out)
             .output()
             .unwrap()
     };
     let first = still();
-    assert!(first.status.success(), "{}", String::from_utf8_lossy(&first.stderr));
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
     let dec = png::Decoder::new(std::io::BufReader::new(std::fs::File::open(&out).unwrap()));
     let mut r = dec.read_info().unwrap();
     assert_eq!((r.info().width, r.info().height), (160, 90));
@@ -735,5 +749,8 @@ fn blender_refuses_2d_scenes_and_says_when_it_is_missing() {
         .output()
         .unwrap();
     let err = String::from_utf8_lossy(&o.stderr);
-    assert!(!o.status.success() && err.contains("MUI_CUT_BLENDER"), "{err}");
+    assert!(
+        !o.status.success() && err.contains("MUI_CUT_BLENDER"),
+        "{err}"
+    );
 }
