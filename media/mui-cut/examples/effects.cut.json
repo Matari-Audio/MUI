@@ -1,0 +1,129 @@
+{
+  "size": [1280, 720],
+  "fps": 30.0,
+  "scenes": [
+    {
+      "name": "broadcast",
+      "duration": 3.0,
+      "background": "#0b0c12",
+      "layers": [
+        {
+          "id": "field",
+          "kind": "rect",
+          "x": 640.0,
+          "y": 360.0,
+          "rotation": [
+            { "t": 0.0, "v": -8.0, "interp": "linear" },
+            { "t": 3.0, "v": 8.0, "interp": "bezier" }
+          ],
+          "width": 900.0,
+          "height": 460.0,
+          "radius": 36.0,
+          "effects": [
+            {
+              "type": "plasma",
+              "color_a": "#ff3cac",
+              "color_b": "#2b86c5",
+              "scale": 90.0,
+              "speed": 1.5
+            }
+          ]
+        },
+        {
+          "id": "card",
+          "kind": "rect",
+          "x": [
+            { "t": 0.0, "v": 200.0, "interp": "bezier", "out": [0.6, 0.0] },
+            { "t": 1.5, "v": 1080.0, "interp": "bezier" },
+            { "t": 3.0, "v": 640.0, "interp": "hold" }
+          ],
+          "y": 360.0,
+          "width": 220.0,
+          "height": 220.0,
+          "radius": 24.0,
+          "fill": "#f5f0e6",
+          "effects": [
+            {
+              "type": "blur",
+              "radius": [
+                { "t": 0.0, "v": 0.0, "interp": "linear" },
+                { "t": 1.5, "v": 14.0, "interp": "linear" },
+                { "t": 3.0, "v": 0.0, "interp": "bezier" }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "title",
+          "kind": "text",
+          "text": "SIGNAL",
+          "x": 640.0,
+          "y": 610.0,
+          "font_size": 96.0,
+          "weight": 800.0,
+          "effects": [
+            {
+              "type": "chromatic",
+              "amount": 18.0
+            }
+          ]
+        }
+      ],
+      "effects": [
+        {
+          "type": "levels",
+          "gamma": 1.1,
+          "saturation": 1.2,
+          "tint": "#ffd9a0",
+          "tint_amount": 0.15
+        },
+        {
+          "type": "crt",
+          "curvature": 0.1,
+          "line": 4.0,
+          "scanlines": 0.3,
+          "vignette": 0.4
+        },
+        {
+          "type": "grain",
+          "amount": 0.1
+        }
+      ]
+    },
+    {
+      "name": "melt",
+      "duration": 2.0,
+      "background": "#1a1030",
+      "layers": [
+        {
+          "id": "word",
+          "kind": "text",
+          "text": "melt",
+          "x": [
+            { "t": 0.0, "v": 300.0, "interp": "linear" },
+            { "t": 2.0, "v": 980.0, "interp": "bezier" }
+          ],
+          "y": 360.0,
+          "fill": "#ffe45c",
+          "font_size": 220.0,
+          "weight": 900.0,
+          "effects": [
+            {
+              "type": "displace",
+              "amount": [
+                { "t": 0.0, "v": 0.0, "interp": "linear" },
+                { "t": 2.0, "v": 40.0, "interp": "bezier" }
+              ],
+              "scale": 90.0,
+              "speed": 1.0
+            },
+            {
+              "type": "directional_blur",
+              "length": 50.0
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

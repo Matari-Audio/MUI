@@ -599,3 +599,239 @@ fn svg_and_lottie_layers_draw_their_files() {
     assert!(r.add_asset("bad.json", b"{").is_err());
     assert!(r.add_asset("bad.svg", b"<nope").is_err());
 }
+
+const FX: &str = include_str!("../examples/effects.cut.json");
+
+#[test]
+fn effects_load_default_clamp_and_round_trip() {
+    let p = Project::load(FX).unwrap();
+    assert_eq!(p.to_json(), FX);
+    assert!(p.has_effects() && !Project::load(DEMO).unwrap().has_effects());
+    let s = p.scene("broadcast").unwrap();
+    let f = eval(&p, s, 0.75);
+    let card = f.layers.iter().find(|l| l.id == "card").unwrap();
+    // A keyed parameter evaluates like any property.
+    assert_eq!(card.effects[0].values["radius"], fx::Val::Num(7.));
+    // Left-out parameters are the schema's defaults.
+    assert_eq!(f.effects[2].values["size"], fx::Val::Num(1.5));
+    assert_eq!(f.seed, 22, "0.75 s at 30 fps is frame 22");
+    // Subframes of one output frame share the seed.
+    assert_eq!(eval(&p, s, 22. / 30. + 0.5 / 30. * 0.99).seed, 22);
+    let clamped = Project::load(
+        r#"{"size":[64,64],"fps":30,"scenes":[{"name":"a","duration":1,"effects":[{"type":"blur","radius":1000}]}]}"#,
+    )
+    .unwrap();
+    let f = eval(&clamped, &clamped.scenes[0], 0.);
+    assert_eq!(f.effects[0].values["radius"], fx::Val::Num(64.));
+    for bad in [
+        r#"{"type":"sparkle"}"#,
+        r##"{"type":"blur","radius":"#ff0000"}"##,
+        r#"{"type":"blur","sigma":2}"#,
+        r#"{"type":"levels","tint":3}"#,
+        r#"{"type":"blur","radius":[]}"#,
+    ] {
+        let json = format!(
+            r#"{{"size":[64,64],"fps":30,"scenes":[{{"name":"a","duration":1,"layers":[{{"id":"r","kind":"rect","effects":[{bad}]}}]}}]}}"#
+        );
+        assert!(Project::load(&json).is_err(), "accepted {bad}");
+    }
+    // Every shader's Params can be packed: colours first, then numbers.
+    for d in fx::EFFECTS {
+        let first_num = d
+            .params
+            .iter()
+            .position(|p| matches!(p.ty, fx::Ty::Num { .. }));
+        assert!(
+            d.params
+                .iter()
+                .skip(first_num.unwrap_or(d.params.len()))
+                .all(|p| matches!(p.ty, fx::Ty::Num { .. })),
+            "{}: colours must come first",
+            d.name
+        );
+    }
+}
+
+/// A 160x90 frame: black, a white 40-pixel square in the middle carrying
+/// `layer` effects, and `scene` effects, at `t`.
+#[cfg(not(target_arch = "wasm32"))]
+fn square(layer: &str, scene: &str, t: f64) -> (Project, Frame) {
+    let json = format!(
+        r##"{{"size":[160,90],"fps":30,"scenes":[{{"name":"a","duration":2,"background":"#000000",
+        "layers":[{{"id":"sq","kind":"rect","x":80,"y":45,"width":40,"height":40,"effects":[{layer}]}}],
+        "effects":[{scene}]}}]}}"##
+    );
+    let p = Project::load(&json).unwrap();
+    let f = eval(&p, &p.scenes[0], t);
+    (p, f)
+}
+
+/// Straight RGBA of each output frame (a list of subframes) on the GPU, on
+/// both engines: they must agree (edges aside), so effects hold on each.
+#[cfg(not(target_arch = "wasm32"))]
+fn gpu_frames(frames: &[Vec<Frame>]) -> Option<Vec<Vec<u8>>> {
+    let run = |engine| {
+        let mut g = match Offline::new([160, 90], engine) {
+            Ok(g) => g,
+            Err(e) => {
+                eprintln!("skipped: no GPU ({e})");
+                return None;
+            }
+        };
+        let mut out = Vec::new();
+        for subs in frames {
+            out.extend(g.push(subs).unwrap());
+        }
+        out.extend(g.finish().unwrap());
+        Some(out)
+    };
+    let classic = run(Engine::Classic)?;
+    let sparse = run(Engine::Sparse)?;
+    for (c, s) in classic.iter().zip(&sparse) {
+        let off = c.iter().zip(s).filter(|(a, b)| a.abs_diff(**b) > 8).count();
+        assert!(off < c.len() / 100, "the engines disagree on {off} channels");
+    }
+    Some(classic)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn px(img: &[u8], x: usize, y: usize) -> [u8; 4] {
+    img[(y * 160 + x) * 4..][..4].try_into().unwrap()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn near(a: [u8; 4], b: [u8; 4], tol: u8) -> bool {
+    a.iter().zip(b).all(|(x, y)| x.abs_diff(y) <= tol)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn effects_draw_what_they_say() {
+    let one = |layer: &str, scene: &str| {
+        let (_, f) = square(layer, scene, 0.5);
+        gpu_frames(&[vec![f]]).map(|mut v| v.remove(0))
+    };
+    let Some(plain) = one("", "") else { return };
+    assert_eq!(px(&plain, 80, 45), [255; 4]);
+    assert_eq!(px(&plain, 10, 10), [0, 0, 0, 255]);
+
+    // Levels: a full red tint by luminance turns white red, black stays.
+    let red = one(
+        "",
+        r##"{"type":"levels","tint":"#ff0000","tint_amount":1}"##,
+    )
+    .unwrap();
+    assert!(
+        near(px(&red, 80, 45), [255, 0, 0, 255], 2),
+        "{:?}",
+        px(&red, 80, 45)
+    );
+    assert_eq!(px(&red, 10, 10), [0, 0, 0, 255]);
+
+    // Blur on the layer: the middle stays white, the edge goes half way,
+    // far outside stays clear.
+    let blur = one(r#"{"type":"blur","radius":4}"#, "").unwrap();
+    assert!(near(px(&blur, 80, 45), [255; 4], 1));
+    let edge = px(&blur, 60, 45)[0];
+    assert!((90..170).contains(&edge), "edge {edge}");
+    assert_eq!(px(&blur, 40, 45), [0, 0, 0, 255]);
+
+    // Chromatic aberration: red magnified and blue shrunk about the centre,
+    // so a red fringe just outside both edges and no blue just inside.
+    let ca = one("", r#"{"type":"chromatic","amount":8}"#).unwrap();
+    for x in [58, 101] {
+        let p = px(&ca, x, 45);
+        assert!(p[0] > 150 && p[1] < 10 && p[2] < 10, "outside {x}: {p:?}");
+    }
+    for x in [61, 98] {
+        let p = px(&ca, x, 45);
+        assert!(p[0] > 250 && p[1] > 250 && p[2] < 100, "inside {x}: {p:?}");
+    }
+
+    // CRT: the corners fall off the curved screen, scanlines darken rows.
+    let crt = one(
+        "",
+        r#"{"type":"crt","curvature":0.3,"scanlines":0.8,"line":4,"vignette":0}"#,
+    )
+    .unwrap();
+    assert_eq!(px(&crt, 0, 0)[3], 0);
+    let rows: Vec<u8> = (35..55).map(|y| px(&crt, 80, y)[0]).collect();
+    let (lo, hi) = (*rows.iter().min().unwrap(), *rows.iter().max().unwrap());
+    assert!(hi > 200 && lo < 120, "scanlines {rows:?}");
+
+    // Plasma fills the square's shape and nothing else, and is not flat.
+    let pl = one(r#"{"type":"plasma"}"#, "").unwrap();
+    assert_eq!(px(&pl, 10, 10), [0, 0, 0, 255]);
+    let inside: std::collections::HashSet<[u8; 4]> =
+        (62..98).step_by(5).map(|x| px(&pl, x, 45)).collect();
+    assert!(inside.len() > 3, "{inside:?}");
+    assert!(
+        inside
+            .iter()
+            .all(|p| *p != [255; 4] && *p != [0, 0, 0, 255])
+    );
+
+    // Displacement moves pixels, and the same frame displaces the same way.
+    let d = one(r#"{"type":"displace","amount":6,"scale":10}"#, "").unwrap();
+    assert_ne!(d, plain);
+    assert_eq!(
+        d,
+        one(r#"{"type":"displace","amount":6,"scale":10}"#, "").unwrap()
+    );
+
+    let db = one(r#"{"type":"directional_blur","length":20,"angle":90}"#, "").unwrap();
+    assert!(near(px(&db, 80, 45), [255; 4], 1));
+    assert!(
+        px(&db, 80, 30)[0] < 250 && px(&db, 80, 30)[0] > 10,
+        "smeared down"
+    );
+    assert_eq!(px(&db, 50, 45), [0, 0, 0, 255], "not across");
+}
+
+/// Grain is deterministic: the same frame is the same pixels in two renders,
+/// a new frame is new grain, and a motion-blurred frame's subframes share
+/// it, so blur accumulates the effect instead of averaging it away.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn grain_is_seeded_by_frame_and_survives_motion_blur() {
+    let grain = r#"{"type":"grain","amount":0.3}"#;
+    let at = |t: f64| square("", grain, t).1;
+    let Some(a) = gpu_frames(&[vec![at(0.5)], vec![at(0.5)], vec![at(0.6)]]) else {
+        return;
+    };
+    assert_eq!(a[0], a[1], "two renders of one frame");
+    assert_ne!(a[0], a[2], "the next frame has new grain");
+    assert_ne!(a[0], {
+        let (_, f) = square("", "", 0.5);
+        gpu_frames(&[vec![f]]).unwrap().remove(0)
+    });
+    // Four subframes inside frame 15 (0.5 s): the same grain as no blur.
+    let subs: Vec<Frame> = (0..4).map(|k| at(0.5 + f64::from(k) * 0.004)).collect();
+    let blurred = gpu_frames(&[subs]).unwrap().remove(0);
+    let off = blurred
+        .iter()
+        .zip(&a[0])
+        .filter(|(x, y)| x.abs_diff(**y) > 2)
+        .count();
+    assert_eq!(off, 0, "{off} channels differ");
+
+    // A moving square under a red tint: the blur smears red, per subframe.
+    let moving = |t: f64| {
+        let json = r##"{"size":[160,90],"fps":30,"scenes":[{"name":"a","duration":2,"background":"#000000",
+            "layers":[{"id":"sq","kind":"rect","x":[{"t":0,"v":40,"interp":"linear"},{"t":1,"v":120}],"y":45,"width":20,"height":20,
+            "effects":[{"type":"levels","tint":"#ff0000","tint_amount":1}]}]}]}"##;
+        let p = Project::load(json).unwrap();
+        eval(&p, &p.scenes[0], t)
+    };
+    let subs: Vec<Frame> = (0..8).map(|k| moving(0.5 + f64::from(k) * 0.05)).collect();
+    let smear = gpu_frames(&[subs]).unwrap().remove(0);
+    // The square sweeps x 70..118 over the shutter: a red smear, densest in
+    // the middle, fading to its ends, nothing white.
+    let row: Vec<[u8; 4]> = (60..128).map(|x| px(&smear, x, 45)).collect();
+    assert!(row.iter().all(|p| p[1] < 5 && p[2] < 5), "only red");
+    let (edge, mid) = (px(&smear, 72, 45)[0], px(&smear, 94, 45)[0]);
+    assert!(
+        mid > 180 && (30..mid - 40).contains(&edge),
+        "edge {edge} mid {mid}"
+    );
+}

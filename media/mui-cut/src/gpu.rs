@@ -49,8 +49,8 @@ pub struct GpuCanvas {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
     inner: Inner,
-    size: [u32; 2],
     format: wgpu::TextureFormat,
+    size: [u32; 2],
     /// The size the Vello engine is set up for: the target's, or the 3D
     /// atlas's.
     vello_size: [u32; 2],
@@ -58,6 +58,8 @@ pub struct GpuCanvas {
     pub three_d: bool,
     space: Option<Box<crate::gpu3d::Space>>,
     notice: String,
+    /// Effect passes, made the first time a frame has effects.
+    fx: Option<Box<crate::fx::gpu::Passes>>,
 }
 
 impl GpuCanvas {
@@ -84,12 +86,13 @@ impl GpuCanvas {
             device: device.clone(),
             queue: queue.clone(),
             inner,
-            size,
             format,
+            size,
             vello_size: size,
             three_d: true,
             space: None,
             notice: String::new(),
+            fx: None,
         })
     }
     pub fn engine(&self) -> Engine {
@@ -110,8 +113,8 @@ impl GpuCanvas {
     pub fn notice(&self) -> &str {
         &self.notice
     }
-    /// `frame` scaled to fill `target` (at [`GpuCanvas::size`]); the layers'
-    /// quads in project pixels. Submits its own work.
+    /// `frame` scaled to fill `target` (at [`GpuCanvas::size`]), effects and
+    /// all; the layers' quads in project pixels. Submits its own work.
     pub fn draw(
         &mut self,
         assets: &Assets,
@@ -136,13 +139,33 @@ impl GpuCanvas {
                 "3D scenes draw flat on this renderer".clone_into(&mut self.notice);
             }
         }
+        if !frame.has_effects() {
+            return self.paint(assets, frame, target);
+        }
+        let mut fx = match self.fx.take() {
+            Some(fx) => fx,
+            None => Box::new(crate::fx::gpu::Passes::new(&self.device, self.format)?),
+        };
+        let quads = fx.draw(self, assets, frame, target);
+        self.fx = Some(fx);
+        quads
+    }
+
+    /// The effects' hook: `frame`'s layers and background as the renderer
+    /// draws them, ignoring effects.
+    pub(crate) fn paint(
+        &mut self,
+        assets: &Assets,
+        frame: &Frame,
+        target: &wgpu::TextureView,
+    ) -> Result<Vec<Quad>, String> {
         let [fw, fh] = frame.size.map(f64::from);
         let view =
             Affine::scale_non_uniform(f64::from(self.size[0]) / fw, f64::from(self.size[1]) / fh);
         let layers = assets.layers(frame)?;
         let placed: Vec<(&ResolvedScene, Affine)> =
             layers.scenes.iter().map(|(s, p)| (s, view * *p)).collect();
-        self.paint(
+        self.paint_scenes(
             assets,
             &placed,
             Some((frame.background, [fw, fh], view)),
@@ -154,7 +177,7 @@ impl GpuCanvas {
 
     /// Paint `scenes` into `target`, `size` pixels, over `background` (a
     /// colour filling `[w, h]` under an affine) or over nothing.
-    pub(crate) fn paint(
+    pub(crate) fn paint_scenes(
         &mut self,
         assets: &Assets,
         scenes: &[(&ResolvedScene, Affine)],

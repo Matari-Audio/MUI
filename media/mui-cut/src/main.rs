@@ -248,6 +248,9 @@ impl Backend {
         if p.scenes.iter().any(|s| s.mode == mui_cut::Mode::ThreeD) {
             eprintln!("mui-cut: the CPU renderer has no 3D pass; 3D scenes draw flat");
         }
+        if p.has_effects() {
+            eprintln!("mui-cut: effects need the GPU; the CPU renderer draws without them");
+        }
         let workers = workers.clamp(1, cores);
         let threads = if workers == 1 { cores - 1 } else { 0 };
         let threads = u16::try_from(threads).unwrap_or(u16::MAX);

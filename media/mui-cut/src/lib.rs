@@ -9,6 +9,7 @@
 #![forbid(unsafe_code)]
 
 pub mod check;
+pub mod fx;
 mod gpu;
 mod gpu3d;
 mod motion;
@@ -68,6 +69,9 @@ pub struct Scene {
     /// 3D: distance fog.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fog: Option<Fog>,
+    /// Run over the whole frame, after every layer.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub effects: Vec<fx::Effect>,
 }
 
 /// What a layer draws.
@@ -342,6 +346,9 @@ pub struct Layer {
     pub range: Anim<f64>,
     #[serde(default = "softness", skip_serializing_if = "is_softness")]
     pub softness: Anim<f64>,
+    /// Run over this layer's pixels alone, before it is composited.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub effects: Vec<fx::Effect>,
 }
 
 fn edge() -> Anim<Rgba> {
@@ -937,6 +944,8 @@ pub struct Drawn {
     /// The 3D properties, left out while they are all their defaults.
     #[serde(skip_serializing_if = "three::Space::is_flat")]
     pub space: three::Space,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub effects: Vec<fx::Fx>,
 }
 
 /// Everything a renderer needs for one instant of one scene.
@@ -948,6 +957,20 @@ pub struct Frame {
     /// A 3D scene's camera, lights, ground and fog; `None` in 2D.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub view: Option<View>,
+    /// Seconds into the scene: effects that move read it.
+    pub t: f64,
+    /// The output frame `t` falls in: grain and other per-frame noise is
+    /// seeded by it, so every subframe of a motion-blurred frame agrees.
+    pub seed: u32,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub effects: Vec<fx::Fx>,
+}
+
+impl Frame {
+    /// Any effect on the scene or on a layer.
+    pub fn has_effects(&self) -> bool {
+        !self.effects.is_empty() || self.layers.iter().any(|l| !l.effects.is_empty())
+    }
 }
 
 /// Most copies a duplicator makes.
@@ -963,6 +986,10 @@ pub fn eval(project: &Project, scene: &Scene, t: f64) -> Frame {
         background: scene.background,
         layers,
         view,
+        t,
+        // A hair over, so a frame's own time never floors to the frame before.
+        seed: (t * project.fps + 1e-6).floor().max(0.) as u32,
+        effects: fx::eval(&scene.effects, t),
     }
 }
 
@@ -1036,6 +1063,7 @@ impl Layer {
                 range: self.range.at(t).max(0.),
                 softness: self.softness.at(t).max(0.),
             },
+            effects: fx::eval(&self.effects, t),
         }
     }
 }
@@ -1101,6 +1129,7 @@ impl Project {
                     }
                     _ => {}
                 }
+                fx::check(&mut l.effects, &format!("layer `{id}`"))?;
             }
             for l in &s.layers {
                 if let Kind::Camera { look_at, .. } = &l.kind
@@ -1113,6 +1142,7 @@ impl Project {
                     ));
                 }
             }
+            fx::check(&mut s.effects, &format!("scene `{}`", s.name))?;
         }
         Ok(p)
     }
@@ -1128,6 +1158,12 @@ impl Project {
         let mut s = tidy(&serde_json::to_string_pretty(self).expect("a project serialises"));
         s.push('\n');
         s
+    }
+    /// Any effect anywhere: the CPU renderer skips them.
+    pub fn has_effects(&self) -> bool {
+        self.scenes
+            .iter()
+            .any(|s| !s.effects.is_empty() || s.layers.iter().any(|l| !l.effects.is_empty()))
     }
     pub fn scene(&self, name: &str) -> Option<&Scene> {
         self.scenes.iter().find(|s| s.name == name)
