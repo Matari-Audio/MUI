@@ -426,15 +426,22 @@ parts you can move, key, highlight and explode.
   whenever they change on the frame grid. `pointer_x`/`pointer_y` (UI
   pixels; -1 is off the UI) and `pointer_down` (>= 0.5 is pressed) drive
   the pointer, so a keyed drag turns a knob the way a hand would. `select`
-  names the surface ids to split into parts; empty lets the bridge's
-  `discover_parts` choose.
-- `parts.<id>`: each part's own `x`, `y`, `scale`, `rotation`, `opacity`
-  and `highlight` (a flat light outline), in the UI's pixels, plus `z`
-  (depth, larger is farther). All of them are keyable, as `parts.<id>.x`
-  etc.
-- `explode` (0..1) pulls every part away from the UI's centre by that
+  names the surface ids to split into parts; empty lets the bridge
+  discover them, `explode_levels` deep.
+- Parts form a tree: a panel's controls are its children, addressed by
+  path, `panel/control`. A control takes its whole widget (dial, caption,
+  value). A panel keeps the paint its children leave behind, whole, and a
+  child moved off its panel draws free of the panel's clip.
+- `parts.<path>`: each part's own `x`, `y`, `scale`, `rotation`,
+  `opacity` and `highlight` (a flat light outline), in the UI's pixels,
+  plus `z` (depth, larger is farther), relative to its parent part. All
+  of them are keyable, as `parts.filter/filter-cutoff.x` etc.
+- `explode` (0..1) pulls every part away from its parent's centre by that
   fraction of its distance, and `explode × 160` UI pixels towards the
-  viewer. `backdrop` fades what is not a part.
+  viewer. `explode_levels` (1..8, default 1) is how many levels come
+  apart; level n runs `explode_stagger` seconds behind level n-1, so
+  panels separate first and their controls after. `backdrop` fades what
+  is not a part.
 - Depth only shows in a 3D scene (`"mode": "3d"`). There, each part is its
   own slab, placed where the 2D drawing puts it and turned with the layer,
   at `explode` depth plus its `z`. `extrude` on the layer gives every part
@@ -452,15 +459,22 @@ parts you can move, key, highlight and explode.
 - `mui-cut serve` captures missing states when the file changes and tells
   the editor (SSE `plugin`), which reloads them. In the web editor a
   plugin layer lists its parts as child layers. Pick one (in the list or
-  the viewport) to inspect, drag and key it. **Explode / collapse** keys
-  `explode` at the playhead.
-- MCP `plugin_parts` captures a state and lists its parts (rects and
-  motion) and every surface with its frame, for aiming the pointer and
-  `select`.
+  the viewport) to inspect, drag and key it; nested parts sit indented
+  under their panel. **Explode / collapse** keys `explode` at the
+  playhead, and the inspector sets `explode levels` and `level stagger`.
+  **Interact** (2D scenes) turns viewport clicks into the UI's pointer:
+  a drag keys `pointer_x`/`pointer_y`/`pointer_down` from the playhead,
+  so it turns the knob instead of moving the part.
+- MCP `plugin_parts` (and `cutParts(layer)` in the editor, `plugin_parts`
+  on the WASM `Cut`) returns the part tree: each part's `id` (its path),
+  `surface`, `level`, `frame`, `rects`, `thumb` image, `motion` and
+  `children`, plus every surface with its frame, for aiming the pointer
+  and `select`.
 
 See `examples/plugin.cut.json`: a flat scene (a keyed knob, a knob dragged
 by a keyed pointer, then exploded and highlighted) and a 3D one (the UI
-exploded into depth under an orbiting camera).
+exploded into depth under an orbiting camera). `examples/deep.cut.json`
+explodes two levels in 3D: panels, then their controls.
 
 ## The web editor
 
@@ -691,8 +705,7 @@ snapshots in the editor rather than `CurveHistory`, for the same reason.
 - Plugin layers: the web editor shows the captures `serve` made, not the
   plugin running in WASM. A new state (a param or pointer edit) appears
   once `serve` has captured it, which takes a few seconds for a Cargo
-  source; clicking the UI in the viewport moves parts rather than turning
-  knobs (key the pointer to do that). The adapter runs natively, so a
+  source. Interact needs a 2D scene; in 3D, clicks move parts. The adapter runs natively, so a
   plugin must build as a bridge live adapter. KURV and the Modern theme are
   not wired in yet: KURV's `media/tools/kurv-live` adapter needs its pinned
   isolated build, and would then be `{"bin": path}`. A 3D scene composites
