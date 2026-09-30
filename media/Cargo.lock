@@ -627,6 +627,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "mui-cut"
+version = "0.4.0"
+dependencies = [
+ "mui-reel",
+ "mui-scene",
+ "mui-vello",
+ "png",
+ "serde",
+ "serde_json",
+ "ttf-inter",
+ "vello_cpu",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "mui-geometry"
 version = "0.4.0"
 dependencies = [
@@ -1163,6 +1178,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4148590afebada386688f18773da617792bf2ef03ffc1e4cbd2b1d45b023e0ba"
 dependencies = [
  "serde_core",
+ "serde_derive",
 ]
 
 [[package]]
@@ -1307,6 +1323,12 @@ dependencies = [
  "quote",
  "syn 3.0.6",
 ]
+
+[[package]]
+name = "ttf-inter"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e9534e06e2c84c1eba866fadc5a21425822386c94bbff295b0341b05e69c064a"
 
 [[package]]
 name = "unicode-bidi"

@@ -1,0 +1,36 @@
+[package]
+name = "mui-cut"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "A small keyframe motion editor on MUI: a plain-text *.cut.json project, a pure evaluator, a headless render CLI and a WASM web editor."
+
+# The library (document, evaluator, MUI/Vello CPU renderer) builds for
+# wasm32-unknown-unknown; the CLI and its local server are native only.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "mui-cut"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json.workspace = true
+mui-scene = { path = "../../crates/mui-scene" }
+mui-vello = { workspace = true, features = ["cpu"] }
+vello_cpu = { version = "0.2", default-features = false, features = ["std", "u8_pipeline", "text"] }
+png.workspace = true
+ttf-inter = { version = "0.1", default-features = false, features = ["v"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2.128"
+
+# Sub-frame shutter averaging comes from mui-reel.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+mui-reel = { path = "../mui-reel" }
+
+[lints]
+workspace = true
