@@ -368,7 +368,7 @@ worker.onmessage = ({ data: m }) => {
   view.dataset.ms = +(view.dataset.ms ?? 0) + (m.ms ?? 0);  // and times them
   if (m.error) showError(m.error); else quads = JSON.parse(m.quads);
   $('#notice').hidden = !m.notice; $('#notice').textContent = m.notice ?? '';
-  $('#orbit').hidden = scene()?.mode !== '3d';
+  $('#orbit').hidden = scene()?.mode !== '3d' || !!m.notice;
   drawOverlay();
 };
 let hover = null, drag = null;
