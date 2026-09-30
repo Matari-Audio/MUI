@@ -425,7 +425,7 @@ fn tools() -> Vec<Value> {
         ),
         tool::<LayerParent>(
             "layer_parent",
-            "Parent a layer to another (or detach it), keeping it where it is on screen at `t`: its local x, y, z, rotation and scale keys are rewritten into the new parent's space. Children inherit position, rotation, scale, z and multiply opacity.",
+            "Parent a layer to another (or detach it), keeping it where it is on screen at `t` in every variant: its local x, y, z, turns (rx, ry, rotation) and scale keys are rewritten into the new parent's space; a changed binding is written resolved per variant. Children inherit position, turns (tilts too, in 3D), scale, z and multiply opacity.",
         ),
         tool::<EditorState>(
             "editor_state",

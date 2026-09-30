@@ -273,6 +273,7 @@ pub(crate) fn check(s: &Scene) -> Result<(), (usize, String)> {
 }
 
 /// How a layer's turn changes when its space does.
+#[derive(Clone, Copy)]
 enum Turn<'a> {
     /// `rotation` shifted by these degrees; `rx`, `ry` unchanged.
     Z(f64),
