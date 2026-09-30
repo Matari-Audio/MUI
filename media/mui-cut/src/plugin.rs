@@ -32,6 +32,7 @@ pub const EXPLODE_DEPTH: f64 = 160.;
 #[derive(
     Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema,
 )]
+#[schemars(transform = crate::vars::bindable)]
 pub struct Source {
     /// A prebuilt adapter executable (relative to the project); with
     /// `cargo`, the package binary to build instead.
@@ -61,6 +62,7 @@ impl Source {
 /// One of the plugin's parameters, keyed: sent to the adapter as
 /// `{"op": "set", "id": .., "field": .., "value": ..}` whenever it changes.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(transform = crate::vars::bindable)]
 pub struct Param {
     /// The adapter's module id (a number or a string, as it names them).
     pub id: Value,
@@ -71,6 +73,7 @@ pub struct Param {
 /// A part of the plugin's UI (a surface id the capture split out), moved
 /// on its own: offsets from where the UI puts it, in the plugin's pixels.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(transform = crate::vars::bindable)]
 pub struct Part {
     #[serde(default = "zero", skip_serializing_if = "is_zero")]
     pub x: Anim<f64>,

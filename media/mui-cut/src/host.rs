@@ -135,11 +135,15 @@ fn executable(src: &Source, dir: &Path) -> Result<(PathBuf, String)> {
             ])
             .arg(&manifest)
             .args([flag, name])
-            .stderr(Stdio::inherit())
+            .stderr(Stdio::piped())
             .output()
             .map_err(|e| format!("cargo: {e}"))?;
         if !out.status.success() {
-            return Err(format!("cargo build {flag} {name} failed"));
+            // Quiet unless it fails: `check --json` and friends stay clean.
+            return Err(format!(
+                "cargo build {flag} {name} failed:\n{}",
+                String::from_utf8_lossy(&out.stderr)
+            ));
         }
         String::from_utf8_lossy(&out.stdout)
             .lines()
