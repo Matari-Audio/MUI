@@ -129,7 +129,10 @@ have no meaning for a colour).
 
 ## The web editor
 
-- **Viewport**: the scene at the playhead. Click a layer to select it (outlined),
+- **Viewport**: the scene at the playhead, drawn in a worker on an
+  `OffscreenCanvas`: MUI's Vello GPU renderer on WebGPU when the browser has
+  it, Vello CPU otherwise. The header names the one in use (`WebGPU`/`CPU`).
+  Click a layer to select it (outlined),
   drag to move it: an animated `x`/`y` gets a key at the playhead, a plain one
   changes its value.
 - **Scenes / Layers** (left): switch scene, add a scene, add a rect, ellipse
@@ -164,9 +167,13 @@ announces edits made by someone else.
 - `src/gpu.rs`, `src/shutter.wgsl`: the same layers on MUI's `GpuRenderer`
   (`GpuCanvas`, shared with the web), plus `Offline`: the float shutter and
   readback ring behind `render`/`still`.
-- `src/web.rs`: the wasm-bindgen handle (`Cut`).
+- `src/web.rs`: the wasm-bindgen handles: `Cut` (validation, samples, CPU
+  frames) and `GpuView` (the WebGPU viewport).
 - `src/main.rs`, `src/serve.rs`: the native CLI and the std-only local server.
-- `web/`: the editor shell (HTML/CSS/JS panels around the WASM viewport).
+- `web/`: the editor shell (HTML/CSS/JS panels around the WASM viewport);
+  `worker.js` draws the viewport, one frame in flight at a time.
+- `web/e2e.mjs`: the editor in headless Chrome over CDP; `E2E_BACKEND=cpu`
+  runs it without WebGPU.
 
 The keyframe curves are not `mui_motion::curve::Curve`: that type is a
 normalized `0..1` phase/value shaper that clamps values, while a property

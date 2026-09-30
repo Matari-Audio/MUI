@@ -4,7 +4,11 @@
 //
 //   media/mui-cut/web/build.sh
 //   node media/mui-cut/web/e2e.mjs <path/to/mui-cut binary> <OUT_DIR>
+//
+// E2E_BACKEND=cpu runs Chrome without WebGPU and expects the CPU fallback;
+// the default expects the viewport on WebGPU.
 import { spawn } from 'node:child_process';
+import { inflateSync } from 'node:zlib';
 import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -19,11 +23,24 @@ const read = () => JSON.parse(readFileSync(file, 'utf8'));
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const check = (ok, what) => { if (!ok) throw new Error('FAILED: ' + what); console.log('ok  ' + what); };
 
+const cpu = process.env.E2E_BACKEND === 'cpu';
+const gpuFlags = cpu ? ['--disable-features=WebGPU'] : ['--enable-unsafe-webgpu', '--enable-features=Vulkan', '--use-angle=vulkan', '--ignore-gpu-blocklist'];
 const port = 8790, cdpPort = 9339;
+
+// The one pixel of a 1x1 PNG screenshot (8-bit RGB or RGBA, one IDAT run).
+function pixel(png) {
+  const idat = [];
+  for (let o = 8; o < png.length;) {
+    const n = png.readUInt32BE(o), type = png.toString('ascii', o + 4, o + 8);
+    if (type === 'IDAT') idat.push(png.subarray(o + 8, o + 8 + n));
+    o += 12 + n;
+  }
+  return [...inflateSync(Buffer.concat(idat)).subarray(1, 4)];
+}
 const server = spawn(bin, ['serve', file, '--port', String(port)], { stdio: 'inherit' });
 const chrome = spawn(process.env.CHROME ?? 'google-chrome-stable', [
   '--headless=new', `--remote-debugging-port=${cdpPort}`, `--user-data-dir=${join(out, 'chrome-profile')}`,
-  '--no-first-run', '--window-size=1600,1000', 'about:blank'], { stdio: 'ignore' });
+  '--no-first-run', '--window-size=1600,1000', ...gpuFlags, 'about:blank'], { stdio: 'ignore' });
 let failed = false;
 try {
   let targets;
@@ -59,7 +76,16 @@ try {
   await send('Page.navigate', { url: `http://127.0.0.1:${port}/` });
   for (let i = 0; i < 100 && (await js(`document.querySelector('#status')?.textContent`)) !== 'loaded'; i++) await sleep(100);
   check(await js(`document.querySelector('#status').textContent`) === 'loaded', 'the editor loads the project');
+  const backend = await js(`document.querySelector('#backend').textContent`);
+  check(backend === (cpu ? 'CPU' : 'WebGPU'), `the viewport draws on ${backend}`);
   await shot('editor-title.png');
+
+  // Playback: frames the worker finished in two seconds.
+  const draws = () => js(`+document.querySelector('#view').dataset.draws`);
+  const d0 = await draws();
+  await click('#play'); await sleep(2000); const d1 = await draws(); await click('#play'); await key('Home', 'Home');
+  console.log(`    playback: ${((d1 - d0) / 2).toFixed(0)} frames/s on ${backend}`);
+  check(d1 - d0 > 20, 'playback keeps drawing');
 
   // The shapes scene, its card selected from the layer list and dragged.
   await click('#scenes button:nth-child(2)');
@@ -92,7 +118,9 @@ try {
   writeFileSync(file, readFileSync(file, 'utf8').replace('"background": "#12131a"', '"background": "#401010"'));
   await sleep(1200);
   check(await js(`document.querySelector('#status').textContent`) === 'reloaded from disk', 'an outside edit reloads the editor');
-  const px = await js(`Array.from(document.querySelector('#view').getContext('2d').getImageData(4, 4, 1, 1).data)`);
+  const [ox, oy] = await rect('#view');
+  const clip = { x: ox + 4, y: oy + 4, width: 1, height: 1, scale: 1 };
+  const px = pixel(Buffer.from((await send('Page.captureScreenshot', { format: 'png', clip })).data, 'base64'));
   check(px[0] === 0x40 && px[1] === 0x10, `the viewport shows it (${px})`);
   await shot('editor-reloaded.png');
   check(errors.length === 0, 'no page exceptions ' + errors.join('; '));

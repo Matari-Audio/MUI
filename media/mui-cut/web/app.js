@@ -1,8 +1,9 @@
 // mui-cut web editor. The project lives here as plain JSON; every edit goes
 // through the WASM engine (`Cut.load`), which also draws the viewport and
 // samples the graph editor's curves, so what you see is what `mui-cut render`
-// writes. ponytail: the engine runs on the main thread, not a worker; move it
-// to a worker if big projects make scrubbing stutter.
+// writes. The viewport draws in worker.js (WebGPU when the browser has it,
+// else Vello CPU); this thread keeps a `Cut` for validation, the inspector
+// and the graph's samples.
 import init, { Cut } from './pkg/mui_cut.js';
 
 const $ = s => document.querySelector(s);
@@ -13,6 +14,8 @@ const KIND_ICON = { rect: '▭', ellipse: '◯', text: 'T', image: '▣' };
 
 await init();
 const cut = new Cut();
+const worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
+let drawing = false;     // a draw is in flight in the worker
 
 let doc = null;          // the project, as JSON data
 let saved = '';          // the file's text as last loaded or saved
@@ -69,7 +72,8 @@ function deleteKey({ l, p, k }) {
 // ---------- edits, undo, save
 function begin() { if (base === null) base = JSON.stringify(doc); }
 function changed() {
-  try { cut.load(JSON.stringify(doc)); showError(''); } catch (e) { showError(String(e)); }
+  const json = JSON.stringify(doc);
+  try { cut.load(json); worker.postMessage({ type: 'load', json }); showError(''); } catch (e) { showError(String(e)); }
   need = true;
 }
 function end() {
@@ -105,7 +109,7 @@ function showError(s) { $('#error').hidden = !s; $('#error').textContent = s; }
 async function pull(why) {
   const text = await (await fetch('/project')).text();
   if (text === saved) return;
-  try { cut.load(text); } catch (e) { status('the file on disk has an error: ' + e, true); return; }
+  try { cut.load(text); worker.postMessage({ type: 'load', json: text }); } catch (e) { status('the file on disk has an error: ' + e, true); return; }
   if (doc) { undo.push(JSON.stringify(doc)); redo.length = 0; }
   doc = JSON.parse(text); saved = text; selKey = null;
   si = Math.min(si, doc.scenes.length - 1);
@@ -119,7 +123,7 @@ async function loadImages() {
     images.add(l.path);
     try {
       const r = await fetch('/asset/' + l.path);
-      if (r.ok) cut.add_png(l.path, new Uint8Array(await r.arrayBuffer()));
+      if (r.ok) worker.postMessage({ type: 'png', path: l.path, bytes: new Uint8Array(await r.arrayBuffer()) });
     } catch (e) { console.warn(l.path, e); }
   }
 }
@@ -232,25 +236,43 @@ function updateInspector() {
 
 // ---------- viewport
 const view = $('#view'), over = $('#overlay');
-const vctx = view.getContext('2d'), octx = over.getContext('2d');
+const octx = over.getContext('2d');
+let vw = 2, vh = 2;       // the viewport's pixel size; the worker owns the canvas
+{
+  const canvas = view.transferControlToOffscreen();
+  worker.postMessage({ type: 'init', canvas }, [canvas]);
+  const { backend, adapter } = await new Promise(ok => { worker.onmessage = e => ok(e.data); });
+  $('#backend').textContent = backend;
+  $('#backend').title = backend === 'WebGPU' ? `Viewport on WebGPU (${adapter})` : 'Viewport on the CPU: this browser has no WebGPU';
+}
+worker.onmessage = ({ data: m }) => {
+  if (m.type !== 'drawn') { if (m.error) showError(m.error); return; }
+  drawing = false;
+  view.dataset.draws = +(view.dataset.draws ?? 0) + 1;   // e2e counts these
+  if (m.error) showError(m.error); else quads = JSON.parse(m.quads);
+  drawOverlay();
+};
 let hover = null, drag = null;
 function layoutViewport() {
   const box = $('#stage').getBoundingClientRect(), [pw, ph] = doc.size;
   const k = Math.min((box.width - 32) / pw, (box.height - 32) / ph);
   const cw = Math.max(1, Math.floor(pw * k)), ch = Math.max(1, Math.floor(ph * k));
   $('#frame').style.width = cw + 'px'; $('#frame').style.height = ch + 'px';
-  const w = Math.max(2, Math.round(Math.min(pw, cw * devicePixelRatio))), h = Math.max(2, Math.round(w * ph / pw));
-  if (view.width !== w || view.height !== h) { view.width = w; view.height = h; }
+  vw = Math.max(2, Math.round(Math.min(pw, cw * devicePixelRatio))); vh = Math.max(2, Math.round(vw * ph / pw));
   const ow = Math.round(cw * devicePixelRatio), oh = Math.round(ch * devicePixelRatio);
   if (over.width !== ow || over.height !== oh) { over.width = ow; over.height = oh; }
 }
+// False while the worker is still busy: the loop asks again next frame, so
+// only the newest playhead is ever drawn.
 function drawViewport() {
   layoutViewport();
-  try {
-    const px = cut.render(si, t, view.width, view.height);
-    vctx.putImageData(new ImageData(new Uint8ClampedArray(px.buffer, px.byteOffset, px.length), view.width, view.height), 0, 0);
-    quads = JSON.parse(cut.quads());
-  } catch (e) { showError(String(e)); }
+  drawOverlay();
+  if (drawing) return false;
+  drawing = true;
+  worker.postMessage({ type: 'draw', si, t, w: vw, h: vh });
+  return true;
+}
+function drawOverlay() {
   const k = over.width / doc.size[0];
   octx.clearRect(0, 0, over.width, over.height);
   for (const [id, width, color] of [[hover, 1, '#ffffff88'], [sel, 2, '#8b7cff']]) {
@@ -534,7 +556,8 @@ function loop(ms) {
   if (need && doc) {
     need = false;
     frame = JSON.parse(cut.frame(si, t) || 'null');
-    drawViewport(); drawTimeline(); drawGraph(); updateInspector();
+    if (!drawViewport()) need = true;
+    drawTimeline(); drawGraph(); updateInspector();
     $('#time').textContent = `${t.toFixed(2)} s  ·  f${Math.round(t * doc.fps)}`;
   }
   requestAnimationFrame(loop);

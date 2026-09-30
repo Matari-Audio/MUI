@@ -1,9 +1,11 @@
 //! The browser's handle on the engine: the web editor keeps the project as
 //! JSON, hands every edit to [`Cut::load`], and draws the viewport with
-//! [`Cut::render`] -- the same evaluator and renderer the CLI uses.
+//! [`GpuView`] on WebGPU or [`Cut::render`] on the CPU -- the same evaluator
+//! and renderers the CLI uses.
 use wasm_bindgen::prelude::*;
 
-use crate::{Project, Renderer, eval};
+use crate::render::Assets;
+use crate::{GpuCanvas, Project, Renderer, eval};
 
 #[wasm_bindgen]
 pub struct Cut {
@@ -93,5 +95,98 @@ impl Cut {
             .and_then(|p| Some(eval(p, p.scenes.get(scene)?, t)))
             .and_then(|f| serde_json::to_string(&f).ok())
             .unwrap_or_default()
+    }
+}
+
+/// The viewport on WebGPU: MUI's GPU renderer drawing straight into an
+/// `OffscreenCanvas` (the editor's worker owns it).
+#[wasm_bindgen]
+pub struct GpuView {
+    canvas: GpuCanvas,
+    surface: wgpu::Surface<'static>,
+    config: wgpu::SurfaceConfiguration,
+    project: Option<Project>,
+    assets: Assets,
+    adapter: String,
+}
+
+#[wasm_bindgen]
+impl GpuView {
+    /// Fails, leaving `canvas` untouched (a 2D context still works), when
+    /// there is no WebGPU adapter or device.
+    pub async fn create(canvas: web_sys::OffscreenCanvas) -> Result<GpuView, String> {
+        let instance = wgpu::Instance::default();
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                ..Default::default()
+            })
+            .await
+            .map_err(|e| format!("no WebGPU adapter: {e}"))?;
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor::default())
+            .await
+            .map_err(|e| e.to_string())?;
+        let (w, h) = (canvas.width().max(1), canvas.height().max(1));
+        let surface = instance
+            .create_surface(wgpu::SurfaceTarget::OffscreenCanvas(canvas))
+            .map_err(|e| e.to_string())?;
+        let caps = surface.get_capabilities(&adapter);
+        let format =
+            mui_vello::host::surface_format(&caps.formats).ok_or("no non-sRGB canvas format")?;
+        let config = wgpu::SurfaceConfiguration {
+            format,
+            view_formats: Vec::new(),
+            ..surface
+                .get_default_config(&adapter, w, h)
+                .ok_or("canvas not supported by the adapter")?
+        };
+        surface.configure(&device, &config);
+        let canvas = GpuCanvas::new(&device, &queue, format, [w, h]).await?;
+        Ok(Self {
+            canvas,
+            surface,
+            config,
+            project: None,
+            assets: Assets::default(),
+            adapter: adapter.get_info().name,
+        })
+    }
+    pub fn adapter(&self) -> String {
+        self.adapter.clone()
+    }
+    pub fn load(&mut self, json: &str) -> Result<(), String> {
+        self.project = Some(Project::load(json)?);
+        Ok(())
+    }
+    pub fn add_png(&mut self, path: &str, bytes: &[u8]) -> Result<(), String> {
+        self.assets.add_png(path, bytes)
+    }
+    /// Scene `scene` at `t` presented at `w` by `h`; the layers' quads as
+    /// JSON `[{id, pts}]` in project pixels.
+    pub fn draw(&mut self, scene: usize, t: f64, w: u32, h: u32) -> Result<String, String> {
+        use wgpu::CurrentSurfaceTexture as Acquired;
+        let p = self.project.as_ref().ok_or("no project loaded")?;
+        let s = p.scenes.get(scene).ok_or("no such scene")?;
+        let (w, h) = (w.max(1), h.max(1));
+        if (self.config.width, self.config.height) != (w, h) {
+            (self.config.width, self.config.height) = (w, h);
+            self.surface.configure(&self.canvas.device, &self.config);
+            self.canvas.resize([w, h])?;
+        }
+        let frame = match self.surface.get_current_texture() {
+            Acquired::Success(f) | Acquired::Suboptimal(f) => f,
+            Acquired::Outdated | Acquired::Lost => {
+                self.surface.configure(&self.canvas.device, &self.config);
+                return Err("canvas surface reset; draw again".into());
+            }
+            other => return Err(format!("no canvas texture: {other:?}")),
+        };
+        let view = frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let quads = self.canvas.draw(&self.assets, &eval(p, s, t), &view)?;
+        self.canvas.queue.present(frame);
+        serde_json::to_string(&quads).map_err(|e| e.to_string())
     }
 }
