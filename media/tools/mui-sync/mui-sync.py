@@ -108,10 +108,30 @@ def errors(stderr, limit=40):
     lines = stderr.splitlines()
     out = []
     for i, l in enumerate(lines):
-        if l.startswith('error'):
+        if l.startswith('error') or ': error' in l:
             out.append(l)
             out += [x for x in lines[i + 1:i + 3] if x.strip().startswith('-->')]
     return out[:limit] or lines[-limit:]
+
+
+PATH_DEP = re.compile(r'path\s*=\s*"([^"]+)"')
+
+
+def siblings(src, wt):
+    """Link the path dependencies that live beside the repository (`../X`)
+    beside the worktree too, so they resolve there; returns the links made."""
+    made = []
+    for m in manifests(wt):
+        for rel in PATH_DEP.findall(m.read_text()):
+            at = Path(os.path.normpath(m.parent / rel))
+            if at.exists() or at.is_symlink() or at.is_relative_to(wt):
+                continue
+            real = Path(os.path.normpath(src / m.parent.relative_to(wt) / rel))
+            if real.exists():
+                at.parent.mkdir(parents=True, exist_ok=True)
+                at.symlink_to(real)
+                made.append(at)
+    return made
 
 
 def sync(target, work, dry):
@@ -130,7 +150,7 @@ def sync(target, work, dry):
     remote = top and run(['git', '-C', str(top), 'remote', 'get-url', 'origin'], top).returncode == 0
     if remote:
         git(top, 'fetch', '-q', 'origin', 'main')
-        git(top, 'worktree', 'add', '-q', '-B', BRANCH, str(wt), 'origin/main')
+        git(top, 'worktree', 'add', '-q', '--detach', str(wt), 'origin/main')
         res['base'] = 'origin/main'
     elif top:
         git(top, 'worktree', 'add', '-q', '--detach', str(wt), 'HEAD')
@@ -139,6 +159,7 @@ def sync(target, work, dry):
         shutil.copytree(target, wt, ignore=shutil.ignore_patterns(*SKIP))
         res['base'] = 'a copy (not a git repository: no PR)'
     crate = wt / target.relative_to(top) if top else wt
+    links = siblings(top or target, wt)
     ws = crate
     while not (ws / 'Cargo.lock').exists() and ws != wt:
         ws = ws.parent
@@ -172,11 +193,13 @@ def sync(target, work, dry):
             return res
         git(wt, 'add', '-A')
         git(wt, 'commit', '-q', '-m', f'{TITLE}\n\nUnpin MUI and update it to main; cargo check passes.\n\n{TRAILER}')
-        git(wt, 'push', '-q', '-f', '-u', 'origin', BRANCH)
+        git(wt, 'push', '-q', '-f', 'origin', f'HEAD:refs/heads/{BRANCH}')
         pr = run(['gh', 'pr', 'create', '--title', TITLE, '--body', PR_BODY, '--head', BRANCH, '--base', 'main'], wt)
         res['pr'] = pr.stdout.strip() or pr.stderr.strip()
         return res
     finally:
+        for link in links:
+            link.unlink()
         if top:
             run(['git', '-C', str(top), 'worktree', 'remove', '--force', str(wt)], top)
         else:

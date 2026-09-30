@@ -41,3 +41,24 @@ class Guard(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class Sync(unittest.TestCase):
+    def test_reports_short_format_errors_with_their_location(self):
+        out = 'warning: x\nsrc/gui/host.rs:3:5: error[E0412]: cannot find type `WindowHandle`\nerror: could not compile `p`\n'
+        self.assertEqual(sync.errors(out), [
+            'src/gui/host.rs:3:5: error[E0412]: cannot find type `WindowHandle`',
+            'error: could not compile `p`',
+        ])
+
+    def test_links_path_dependencies_beside_the_repo_into_the_worktree(self):
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            (d / 'repos/Access').mkdir(parents=True)
+            (d / 'repos/KURV').mkdir()
+            wt = d / 'work/sync-KURV'
+            wt.mkdir(parents=True)
+            (wt / 'Cargo.toml').write_text('[dependencies]\na = { path = "../Access" }\nb = { path = "crates/b" }\n')
+            made = sync.siblings(d / 'repos/KURV', wt)
+            self.assertEqual(made, [d / 'work/Access'])
+            self.assertEqual((d / 'work/Access').resolve(), (d / 'repos/Access').resolve())
