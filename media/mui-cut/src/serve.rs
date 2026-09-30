@@ -327,6 +327,32 @@ impl Shared {
                 );
                 respond(stream, "200 OK", "application/json", body.as_bytes()).map_err(io)
             }
+            // The soundtrack a browser export muxes in: every scene's mix
+            // (plugin sound captured first) as a WAV; 204 when none sounds.
+            ("GET", "/mix.wav") => {
+                let text = std::fs::read_to_string(&self.project).map_err(io)?;
+                let p = Project::load(&text)?;
+                for e in crate::host::capture_missing(&p, &self.project) {
+                    eprintln!("mui-cut: {e}");
+                }
+                let scenes: Vec<_> = p.scenes.iter().collect();
+                match crate::audio::mix(&p, &self.project, &scenes) {
+                    Ok(Some(pcm)) => respond(
+                        stream,
+                        "200 OK",
+                        "audio/wav",
+                        &crate::audio::wav(&pcm, p.sample_rate),
+                    ),
+                    Ok(None) => respond(stream, "204 No Content", "text/plain", b""),
+                    Err(e) => respond(
+                        stream,
+                        "500 Internal Server Error",
+                        "text/plain",
+                        e.as_bytes(),
+                    ),
+                }
+                .map_err(io)
+            }
             ("GET", "/name") => {
                 let name = self
                     .project

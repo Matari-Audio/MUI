@@ -7,7 +7,8 @@
 //
 // Exports run here too: every frame of every scene drawn at project size
 // (on WebGPU with the motion-blur shutter, else on the CPU), encoded by a
-// WebCodecs VideoEncoder and muxed to MP4 by mp4.js.
+// WebCodecs VideoEncoder and muxed to MP4 by mp4.js, with the server's mix
+// of the soundtrack (plugin sound included) encoded by an AudioEncoder.
 import init, { Cut, GpuView, lastPanic } from './pkg/mui_cut.js';
 import { Mp4 } from './mp4.js';
 
@@ -46,6 +47,39 @@ async function open(c, renderer) {
 
 const tick = () => new Promise(r => setTimeout(r, 0));
 
+// The soundtrack into `mux`: `mui-cut serve`'s mix of every scene (its
+// WAV: a 44-byte header, then stereo f32), as AAC where this browser
+// encodes it, else Opus. `null` when nothing sounds or no server mixes.
+async function soundtrack(mux) {
+  const r = await fetch('/mix.wav').catch(() => null);
+  if (r?.status !== 200) return null;
+  if (!('AudioEncoder' in self)) throw new Error('this browser has no AudioEncoder for the sound');
+  const wav = await r.arrayBuffer();
+  const rate = new DataView(wav).getUint32(24, true), pcm = new Float32Array(wav, 44);
+  let config = null;
+  for (const codec of ['mp4a.40.2', 'opus']) {
+    const c = { codec, sampleRate: rate, numberOfChannels: 2, bitrate: 192_000 };
+    if ((await AudioEncoder.isConfigSupported(c).catch(() => ({}))).supported) { config = c; break; }
+  }
+  if (!config) throw new Error(`this browser encodes neither AAC nor Opus at ${rate} Hz`);
+  mux.sound({ codec: config.codec, rate, channels: 2 });
+  let failed = null;
+  const encoder = new AudioEncoder({ output: (c, meta) => mux.addAudio(c, meta), error: e => { failed = e; } });
+  encoder.configure(config);
+  const frames = pcm.length / 2;
+  for (let f = 0; f < frames; f += rate) {
+    const n = Math.min(rate, frames - f);
+    const data = new AudioData({ format: 'f32', sampleRate: rate, numberOfFrames: n, numberOfChannels: 2,
+      timestamp: Math.round(f * 1e6 / rate), data: pcm.subarray(2 * f, 2 * (f + n)) });
+    encoder.encode(data);
+    data.close();
+  }
+  await encoder.flush();
+  encoder.close();
+  if (failed) throw failed;
+  return config.codec;
+}
+
 // m: { w, h, fps, mb, codec, bitrate, scenes: [{ duration }] }
 async function exportVideo(m) {
   const job = exporting = { cancelled: false };
@@ -64,7 +98,7 @@ async function exportVideo(m) {
     for (const [path, bytes] of assets) cut.add_asset(path, bytes);
   }
   const mux = new Mp4({ codec: m.codec, width: m.w, height: m.h, fps: m.fps });
-  let failed = null;
+  let failed = null, sound = null;
   const encoder = new VideoEncoder({ output: (c, meta) => mux.add(c, meta), error: e => { failed = e; } });
   const config = { codec: m.codec, width: m.w, height: m.h, bitrate: m.bitrate, framerate: m.fps, hardwareAcceleration: 'prefer-hardware' };
   if (m.codec.startsWith('avc1')) config.avc = { format: 'avc' };
@@ -75,6 +109,7 @@ async function exportVideo(m) {
   const dur = Math.round(1e6 / m.fps);
   let n = 0;
   try {
+    sound = await soundtrack(mux);
     for (const [si, s] of m.scenes.entries()) {
       // An export never quietly flattens a 3D shot (the GPU view refuses
       // in draw_frame when its 3D pass fails).
@@ -104,7 +139,7 @@ async function exportVideo(m) {
     await encoder.flush();
     if (failed) throw failed;
     const bytes = mux.finish();
-    self.postMessage({ type: 'exported', bytes, frames: n, codec: m.codec, hardware: config.hardwareAcceleration }, [bytes.buffer]);
+    self.postMessage({ type: 'exported', bytes, frames: n, codec: m.codec, sound, hardware: config.hardwareAcceleration }, [bytes.buffer]);
   } catch (e) {
     self.postMessage({ type: 'export-error', error: String(e?.message ?? e) });
   } finally {

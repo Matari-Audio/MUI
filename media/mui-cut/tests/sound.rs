@@ -482,7 +482,7 @@ fn a_moose_plugin_plays_loads_a_preset_and_reports_its_patch() {
 
 /// A generic adapter's tone: the fixture's sine at its pitch and level,
 /// silent before the note, and the note held in the patch.
-fn plays_its_tone(name: &str, plugin: &str, layer: Value, hz: f64, level: f32) -> PathBuf {
+fn plays_its_tone(name: &str, plugin: &str, layer: &Value, hz: f64, level: f32) -> PathBuf {
     let mut l = json!({"source": fixture(plugin), "notes": [{"t": 0.1, "dur": 0.8, "pitch": 60}]});
     for (k, v) in layer.as_object().unwrap() {
         l[k] = v.clone();
@@ -506,13 +506,13 @@ fn plays_its_tone(name: &str, plugin: &str, layer: Value, hz: f64, level: f32) -
 #[test]
 fn a_nice_plug_plugin_plays_its_tone() {
     let pitch = json!({"params": [{"id": "Pitch", "field": "value", "value": 880.0}]});
-    plays_its_tone("nice-tone", "nice-tone", pitch, 880., 0.5);
+    plays_its_tone("nice-tone", "nice-tone", &pitch, 880., 0.5);
 }
 
 /// A plain MUI crate plays through its `mui_audio`.
 #[test]
 fn a_plain_mui_crate_plays_its_tone() {
-    plays_its_tone("plain-tone", "plain", json!({}), 660., 0.4);
+    plays_its_tone("plain-tone", "plain", &json!({}), 660., 0.4);
 }
 
 /// A truce plugin plays through its `process`, and its patch lists the
@@ -521,7 +521,7 @@ fn a_plain_mui_crate_plays_its_tone() {
 fn a_truce_plugin_plays_its_tone_and_reports_its_routes() {
     let set = |id: &str, value: f64| json!({"id": id, "field": "value", "value": value});
     let params = json!({"params": [set("Pitch", 880.), set("Mod 1 Source", 1.), set("Mod 1 Target", 1.), set("Mod 1 Amount", 0.5)]});
-    let project = plays_its_tone("truce-tone", "truce-tone", params, 880., 0.5);
+    let project = plays_its_tone("truce-tone", "truce-tone", &params, 880., 0.5);
     let patch = capture(&project, 0.5).patch;
     assert_eq!(
         patch["routes"],
