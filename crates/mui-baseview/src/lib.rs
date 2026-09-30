@@ -67,6 +67,8 @@ impl Requests {
 /// window's scale factor (the host's content scale); `None` follows the OS.
 /// `None` back when the parent handle is unusable or the window could not be
 /// made; the reason goes to [`View::log`]. Dropping the window closes it.
+/// `None` too when the process hosts editors headless
+/// ([`mui::host::headless`]): the view went there instead.
 pub fn open<V: View + Send + 'static>(
     parent: &impl HasWindowHandle,
     title: &str,
@@ -75,6 +77,10 @@ pub fn open<V: View + Send + 'static>(
     shared: Arc<Mutex<Shared<V>>>,
     requests: Arc<Requests>,
 ) -> Option<Window> {
+    // A headless host (mui-cut's adapter) takes the view instead.
+    if mui::host::headless::offer(&shared, size) {
+        return None;
+    }
     // baseview panics on a handle it cannot read.
     if let Err(e) = parent.window_handle() {
         log(&shared, &format!("mui-baseview: no parent window ({e})"));
