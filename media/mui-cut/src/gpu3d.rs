@@ -381,6 +381,7 @@ impl Space {
             clear: Some(linear(frame.background)),
             environment,
             ao,
+            sample: canvas.sample,
             post: Post {
                 focus: cam.focus as f32,
                 aperture: blur,

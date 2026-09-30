@@ -285,6 +285,14 @@ try {
     check(await draws() > d3 && readFileSync(file, 'utf8') === before, 'orbiting redraws and leaves the file alone');
     await shot('editor-3d-orbit.png');
     await click('#orbit');
+    // Beauty refines a paused 3D frame sample by sample, and stops at
+    // any change to start over.
+    await click('#beauty');
+    let n = 0;
+    for (let i = 0; i < 100 && n < 32; i++) { await sleep(100); n = +(await js(`document.querySelector('#view').dataset.samples`)); }
+    check(n >= 32 && readFileSync(file, 'utf8') === before, `the Beauty preview accumulates samples (${n})`);
+    await shot('editor-3d-beauty.png');
+    await click('#beauty');
   }
   // A 3D scene's effects run on the 3D pass: levels with no saturation
   // greys a red card on WebGPU (in 3D) and WebGL2 (flat, as before); the

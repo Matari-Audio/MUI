@@ -60,6 +60,9 @@ pub struct GpuCanvas {
     notice: String,
     /// Effect passes, made the first time a frame has effects.
     fx: Option<Box<crate::fx::gpu::Passes>>,
+    /// The beauty sample 3D frames draw as ([`mui_stage::Shot::sample`]);
+    /// the shutter sets it per subframe.
+    pub(crate) sample: Option<u32>,
 }
 
 impl GpuCanvas {
@@ -93,6 +96,7 @@ impl GpuCanvas {
             space: None,
             notice: String::new(),
             fx: None,
+            sample: None,
         })
     }
     pub fn engine(&self) -> Engine {
@@ -333,6 +337,8 @@ mod offline {
         pending: VecDeque<(usize, wgpu::SubmissionIndex, Mapped)>,
         next: usize,
         yuv: Option<YuvPass>,
+        /// Subframes are beauty samples too (see [`Shutter::expose`]).
+        pub beauty: bool,
     }
 
     /// The compute pass from the float sum to 4:2:0 planes.
@@ -471,6 +477,7 @@ mod offline {
             let mut o = pollster::block_on(Self::build(&device, &queue, size, engine, yuv))?;
             o.assets = std::mem::take(&mut self.assets);
             o.adapter = std::mem::take(&mut self.adapter);
+            o.beauty = self.beauty;
             *self = o;
             Ok(())
         }
@@ -522,6 +529,7 @@ mod offline {
                 pending: VecDeque::new(),
                 next: 0,
                 yuv,
+                beauty: false,
             })
         }
 
@@ -531,7 +539,7 @@ mod offline {
         pub fn push(&mut self, subframes: &[Frame]) -> Result<Option<Vec<u8>>, String> {
             let done = self.make_room()?;
             self.shutter
-                .expose(&mut self.canvas, &self.assets, subframes)?;
+                .expose(&mut self.canvas, &self.assets, subframes, self.beauty)?;
             self.read_back(done)
         }
 

@@ -134,7 +134,7 @@ self.onmessage = async ({ data: m }) => {
     } else if (m.type === 'draw') {
       const start = performance.now();
       let quads;
-      if (gpu) quads = gpu.draw(m.si, m.t, m.w, m.h);
+      if (gpu) quads = gpu.draw(m.si, m.t, m.w, m.h, m.sample);
       else {
         if (canvas.width !== m.w || canvas.height !== m.h) { canvas.width = m.w; canvas.height = m.h; }
         const px = cpu.render(m.si, m.t, m.w, m.h);
