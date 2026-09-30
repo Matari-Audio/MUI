@@ -56,6 +56,11 @@ let interact = false;    // viewport clicks drive the plugin, keyed at the playh
 const undo = [], redo = [];
 let base = null;         // the document before the gesture in progress
 const assets = new Set();
+const manifests = new Map(); // plugin capture manifests by path
+const unfolded = new Set();  // open folders in the Sources tree: `id`, `id/part`
+const sizes = new Map();     // imported images' natural sizes, by path
+let sourceList = [];         // the Sources panel's rows: `Cut.sources()`
+globalThis.cutSources = () => sourceList; // the e2e reads a plugin's capture path
 
 // ---------- document helpers
 const scene = () => doc.scenes[si];
@@ -200,8 +205,10 @@ async function loadAssets() {
       const r = await fetch('/asset/' + path);
       if (!r.ok) continue;
       const bytes = new Uint8Array(await r.arrayBuffer());
-      cut.add_asset(path, bytes); // for the part tree (`cutParts`)
-      for (const img of JSON.parse(new TextDecoder().decode(bytes)).layers
+      cut.add_asset(path, bytes); // for the part trees (`cutParts`, the Sources panel)
+      const man = JSON.parse(new TextDecoder().decode(bytes));
+      manifests.set(path, man);
+      for (const img of man.layers
         .flatMap(f => [f.src, f.free?.src]).filter(Boolean).map(s => '.cut-cache/' + s)) {
         if (assets.has(img)) continue;
         const ri = await fetch('/asset/' + img);
@@ -213,6 +220,7 @@ async function loadAssets() {
       worker.postMessage({ type: 'asset', path, bytes });
     } catch (e) { console.warn(path, e); }
   }
+  if (doc) refreshSources();
   need = true;
 }
 
@@ -221,21 +229,37 @@ function refreshLists() {
   $('#scenes').replaceChildren(...doc.scenes.map((s, i) => {
     const b = document.createElement('button');
     const d = R.scenes[i].duration;
-    b.textContent = `${s.name}  ·  ${d}s`;
+    b.textContent = `${s.name}  ·  ${d}s${s.mode === '3d' ? '  ·  3D' : ''}`;
     b.className = i === si ? 'on' : '';
     b.onclick = () => { si = i; sel = null; selKey = null; t = Math.min(t, d); refresh(); };
     return b;
   }));
-  $('#layers').replaceChildren(...[...scene().layers].reverse().map(l => {
+  // Children under their parents, top of the paint order first.
+  const ls = scene().layers;
+  const rowsUnder = (parent, depth) => [...ls].reverse().filter(l => (l.parent ?? '') === parent).flatMap(l => {
     const b = document.createElement('button');
     b.innerHTML = `<span class="kind">${KIND_ICON[l.kind] ?? '?'}</span>`;
     b.append(l.name || l.id);
     b.className = l.id === sel && !selPart ? 'on' : '';
+    b.dataset.layer = l.id;
+    b.style.paddingLeft = `${7 + depth * 14}px`;
     b.onclick = () => select(l.id);
+    b.draggable = true;
+    b.ondragstart = e => { e.dataTransfer.setData(DRAG_LAYER, l.id); e.dataTransfer.effectAllowed = 'move'; };
+    b.ondragover = e => { if (dragged(e)) { e.preventDefault(); b.classList.add('drop-on'); } };
+    b.ondragleave = () => b.classList.remove('drop-on');
+    b.ondrop = e => {
+      b.classList.remove('drop-on');
+      const id = e.dataTransfer.getData(DRAG_LAYER);
+      if (!id && !e.dataTransfer.getData(DRAG_SOURCE)) return;
+      e.preventDefault(); e.stopPropagation();
+      if (id) { if (id !== l.id) parentTo(id, l.id); return; }
+      dropSource(e);
+    };
     // A plugin's parts, as the last frame drew them: child layers, nested
     // by path (`osc`, then `osc/osc-shape` under it), parents first.
     const parts = [...new Set(quads.filter(q => q.id.startsWith(l.id + '#')).map(q => q.id.slice(l.id.length + 1)))];
-    const depth = part => parts.filter(o => part.startsWith(o + '/')).length;
+    const partDepth = part => parts.filter(o => part.startsWith(o + '/')).length;
     // Under its parent, in the order the capture has them.
     const chain = part => [...parts.filter(o => part.startsWith(o + '/')), part].map(o => parts.indexOf(o));
     const cmp = (a, b) => { const x = chain(a), y = chain(b); for (let i = 0; i < Math.min(x.length, y.length); i++) if (x[i] !== y[i]) return x[i] - y[i]; return x.length - y.length; };
@@ -243,16 +267,213 @@ function refreshLists() {
     return [b, ...parts.map(part => {
       const c = document.createElement('button');
       c.className = 'part' + (l.id === sel && part === selPart ? ' on' : '');
-      c.dataset.part = part; c.dataset.depth = depth(part);
-      c.style.paddingLeft = `${20 + 14 * depth(part)}px`;
+      c.dataset.part = part; c.dataset.depth = partDepth(part);
+      c.style.paddingLeft = `${20 + 14 * (depth + partDepth(part))}px`;
       c.innerHTML = '<span class="kind">└</span>';
       c.append(part.slice(part.lastIndexOf('/') + 1));
       c.title = part;
       c.onclick = () => select(`${l.id}#${part}`);
       return c;
-    })];
-  }).flat());
+    }), ...rowsUnder(l.id, depth + 1)];
+  });
+  $('#layers').replaceChildren(...rowsUnder('', 0));
+  refreshSources();
 }
+// Drags within the editor: a source row, or a layer row.
+const DRAG_SOURCE = 'application/x-cut-source', DRAG_LAYER = 'application/x-cut-layer';
+const dragged = e => e.dataTransfer.types.includes(DRAG_SOURCE) || e.dataTransfer.types.includes(DRAG_LAYER);
+// The layer list's empty space: a layer dropped there leaves its parent;
+// a source dropped anywhere on the list becomes a layer.
+$('#layers').ondragover = e => { if (dragged(e)) e.preventDefault(); };
+$('#layers').ondrop = e => {
+  e.preventDefault();
+  const id = e.dataTransfer.getData(DRAG_LAYER);
+  if (id) parentTo(id, ''); else dropSource(e);
+};
+// Attach `id` to `parent` ('' detaches), kept where it is on screen: the
+// engine rewrites its local transform (`Cut.reparent`).
+function parentTo(id, parent) {
+  const ls = scene().layers, i = ls.findIndex(l => l.id === id);
+  if (i < 0 || (ls[i].parent ?? '') === parent) return;
+  if (JSON.stringify(ls[i]).includes('"var"')) { showError(`${id} has variable bindings: set its parent in the file`); return; }
+  let json;
+  try { json = cut.reparent(si, id, parent, t); } catch (e) { showError(String(e)); return; }
+  edit(() => { ls[i] = JSON.parse(json); sel = id; selPart = null; });
+}
+
+// ---------- sources: imported files and plugins, a plugin a folder of its parts
+const SOURCE_ICON = { image: '▣', svg: 'S', lottie: 'L', model: '◈', plugin: '⧉' };
+const sameSource = (m, rl) => m.kind === rl.kind && (m.kind === 'plugin'
+  ? JSON.stringify(m.source) === JSON.stringify(rl.source) : m.path === rl.path);
+// The source and part a layer shows: what the tree highlights for it.
+function sourceOf(l) {
+  const rl = R.scenes[si]?.layers.find(o => o.id === l.id);
+  const m = rl && sourceList.find(m => sameSource(m, rl));
+  if (!m) return null;
+  return { m, part: selPart ?? (l.show?.length === 1 ? l.show[0] : null) };
+}
+function refreshSources() {
+  sourceList = JSON.parse(cut.sources() || '[]');
+  const cur = layer() && sourceOf(layer());
+  const rows = [];
+  const row = (m, node, depth) => {
+    const part = node?.id ?? null, key = part ? `${m.id}/${part}` : m.id;
+    const r = document.createElement('div');
+    r.className = 'src-row' + (part ? ' part' : '') + (cur && cur.m.id === m.id && cur.part === part ? ' on' : '');
+    r.style.paddingLeft = `${depth * 14}px`;
+    r.draggable = true;
+    r.dataset.source = m.id;
+    if (part) r.dataset.part = part;
+    r.title = part ? `${part}: drag onto the viewport or the layers to add just this part` : `${m.kind}: drag onto the viewport or the layers to add it`;
+    const twist = document.createElement('button');
+    twist.className = 'twist';
+    const folder = m.kind === 'plugin' && (!node || node.children?.length);
+    if (folder) {
+      twist.textContent = unfolded.has(key) ? '▾' : '▸';
+      twist.setAttribute('aria-expanded', unfolded.has(key));
+      twist.title = unfolded.has(key) ? 'Collapse' : 'Expand';
+      twist.onclick = e => { e.stopPropagation(); if (!unfolded.delete(key)) unfolded.add(key); refreshSources(); };
+    }
+    r.append(twist, thumb(m, node), label(part ? part.split('/').pop() : m.name ?? m.id, !m.listed && !part));
+    r.onclick = () => pickSource(m, part);
+    r.ondragstart = e => { e.dataTransfer.setData(DRAG_SOURCE, JSON.stringify({ id: m.id, part })); e.dataTransfer.effectAllowed = 'copy'; };
+    rows.push(r);
+    if (!folder || !unfolded.has(key)) return;
+    // A plugin's home capture as `cutParts` has it: nodes id, thumb, children.
+    const kids = node ? node.children : manifests.has(m.state) ? JSON.parse(cut.source_parts(m.state)) : null;
+    if (!kids) {
+      const n = document.createElement('div'); n.className = 'empty'; n.textContent = 'capturing its parts…'; rows.push(n); return;
+    }
+    if (!kids.length) { const n = document.createElement('div'); n.className = 'empty'; n.textContent = 'no parts'; rows.push(n); }
+    for (const k of kids) row(m, k, depth + 1);
+  };
+  for (const m of sourceList) row({ ...m, listed: doc.sources?.some(s => s.id === m.id) }, null, 0);
+  if (!sourceList.length) { const n = document.createElement('div'); n.className = 'empty'; n.textContent = 'Import files or add a plugin.'; rows.push(n); }
+  $('#sources').replaceChildren(...rows);
+}
+function label(text, dim) {
+  const s = document.createElement('span'); s.className = 'label' + (dim ? ' dim' : ''); s.textContent = text;
+  if (dim) s.title = 'Used by a layer, not imported';
+  return s;
+}
+// A source's thumbnail: the file itself, or the plugin's capture (the whole
+// UI's backdrop, or the part tree node's own thumb).
+function thumb(m, node) {
+  let src = null;
+  if (m.kind === 'image' || m.kind === 'svg') src = '/asset/' + m.path;
+  else if (node?.thumb) src = '/asset/' + node.thumb;
+  else if (m.kind === 'plugin' && !node) {
+    const f = manifests.get(m.state)?.layers.find(f => f.group === 'background');
+    if (f) src = '/asset/.cut-cache/' + f.src;
+  }
+  if (!src) { const s = document.createElement('span'); s.className = 'thumb'; s.textContent = SOURCE_ICON[m.kind] ?? '?'; return s; }
+  const i = document.createElement('img'); i.className = 'thumb'; i.alt = ''; i.draggable = false; i.src = src;
+  if (m.kind === 'image') i.onload = () => sizes.set(m.path, [i.naturalWidth, i.naturalHeight]);
+  return i;
+}
+// Clicking a tree row selects what shows it: a component layer of that part,
+// else the part on its whole plugin layer, else a layer of the file.
+function pickSource(m, part) {
+  const ls = scene().layers, rls = R.scenes[si].layers;
+  const using = ls.filter((l, i) => sameSource(m, rls[i]));
+  if (part) {
+    const comp = using.find(l => l.show?.length === 1 && l.show[0] === part);
+    if (comp) { select(comp.id); return; }
+    const whole = using.find(l => !l.show?.length);
+    if (whole) { select(`${whole.id}#${part}`); return; }
+  }
+  const l = using.find(l => !l.show?.length) ?? using[0];
+  if (l) select(l.id);
+}
+// A layer from a dragged source (or one of a plugin's parts), dropped at
+// project point `at`. A part is a plugin layer showing just it, where the
+// whole plugin puts it (on the scene's whole plugin layer, if there is one).
+function layerFrom(m, part, at) {
+  const ls = scene().layers, [w, h] = R.size;
+  const base = ((part ?? m.id).split('/').pop().replace(/\.\w+$/, '').replace(/[^\w-]+/g, '_')) || 'layer';
+  let id = base, n = 2;
+  while (ls.some(l => l.id === id)) id = `${base}${n++}`;
+  const l = { id, kind: m.kind };
+  if (m.kind === 'plugin') {
+    l.source = m.source;
+    const rls = R.scenes[si].layers;
+    const whole = ls.find((o, i) => !o.show?.length && sameSource(m, rls[i]));
+    if (whole) {
+      for (const p of ['x', 'y', 'scale', 'rotation']) l[p] = round(now(whole, p));
+      if (whole.parent) l.parent = whole.parent;
+    } else Object.assign(l, { x: w / 2, y: h / 2 });
+    // Two levels deep, like the Sources panel's capture: it draws at
+    // once, and its controls are parts too.
+    if (!whole) l.explode_levels = 2;
+    if (part) { l.show = [part]; l.name = part; }
+  } else {
+    l.path = m.path;
+    Object.assign(l, { x: round(at?.[0] ?? w / 2), y: round(at?.[1] ?? h / 2) });
+    if (m.kind === 'image') { const [iw, ih] = sizes.get(m.path) ?? [200, 200]; Object.assign(l, { width: iw, height: ih }); }
+    if (m.kind === 'model') Object.assign(l, { height: 200, fill: '#ffffff' });
+  }
+  edit(() => { ls.push(l); sel = l.id; selPart = null; selKey = null; });
+  loadAssets();
+  return l;
+}
+function dropSource(e, at) {
+  const raw = e.dataTransfer.getData(DRAG_SOURCE);
+  if (!raw) return;
+  const { id, part } = JSON.parse(raw);
+  const m = sourceList.find(m => m.id === id);
+  if (m) layerFrom(m, part, at);
+}
+// Import: files from the button or dropped on the left panel are written
+// beside the project (`media/`) and listed as sources.
+const IMPORT_KIND = { png: 'image', svg: 'svg', json: 'lottie', glb: 'model' };
+async function importFiles(files) {
+  for (const f of files) {
+    const kind = IMPORT_KIND[f.name.split('.').pop().toLowerCase()];
+    if (!kind) { status(`${f.name}: import PNG, SVG, Lottie JSON or glTF (.glb) files`, true); continue; }
+    const name = f.name.replace(/[^\w.-]+/g, '_'), path = 'media/' + name;
+    const r = await fetch('/asset/' + path, { method: 'PUT', body: f });
+    if (!r.ok) { status(`${f.name}: ${await r.text()}`, true); continue; }
+    edit(() => {
+      const list = doc.sources ??= [];
+      if (list.some(s => s.path === path)) return;
+      let id = name, n = 2;
+      while (list.some(s => s.id === id)) id = `${name} ${n++}`;
+      list.push({ id, kind, path });
+    });
+    status('imported ' + name);
+  }
+}
+$('#import').onclick = () => $('#import-file').click();
+$('#import-file').onchange = e => { importFiles([...e.target.files]); e.target.value = ''; };
+const left = $('#left');
+left.addEventListener('dragover', e => { if (e.dataTransfer.types.includes('Files')) { e.preventDefault(); left.classList.add('drop'); } });
+left.addEventListener('dragleave', e => { if (!left.contains(e.relatedTarget)) left.classList.remove('drop'); });
+left.addEventListener('drop', e => { left.classList.remove('drop'); if (e.dataTransfer.files.length) { e.preventDefault(); importFiles([...e.dataTransfer.files]); } });
+// A file dropped anywhere else does not navigate away from the editor.
+addEventListener('dragover', e => { if (e.dataTransfer.types.includes('Files')) e.preventDefault(); });
+addEventListener('drop', e => e.preventDefault());
+$('#sources-fold').onclick = () => {
+  const b = $('#sources-fold'), open = b.getAttribute('aria-expanded') !== 'true';
+  b.setAttribute('aria-expanded', open); b.textContent = open ? '▾' : '▸';
+  $('#sources').hidden = !open;
+};
+// The plugin dialog: a Cargo target (example or bin) or a prebuilt adapter.
+$('#add-plugin').onclick = () => { $('#pl-error').textContent = ''; $('#plugin-dialog').showModal(); };
+$('#pl-cancel').onclick = () => $('#plugin-dialog').close();
+$('#pl-add').onclick = () => {
+  const v = s => $(s).value.trim(), cargo = v('#pl-cargo'), example = v('#pl-example'), bin = v('#pl-bin');
+  const source = cargo ? (example ? { cargo, example } : { cargo, bin }) : { bin };
+  if (cargo ? !example === !bin : !bin) { $('#pl-error').textContent = 'A Cargo.toml with an example or a bin name, or a binary alone.'; return; }
+  const list = doc.sources ?? [];
+  let id = v('#pl-id') || example || bin.split('/').pop() || 'plugin', n = 2;
+  const base = id;
+  while (list.some(s => s.id === id)) id = `${base} ${n++}`;
+  edit(() => { (doc.sources ??= []).push({ id, kind: 'plugin', source }); });
+  unfolded.add(id);
+  $('#plugin-dialog').close();
+  refreshSources();
+};
+
 // `id` is a layer id, or `layer#part` for a plugin's part: selecting a
 // part tracks it (an empty `parts` entry), so it can be moved and keyed.
 function select(id) {
@@ -266,6 +487,13 @@ function select(id) {
   if (l && selPart) prop = nums.includes(prop) ? prop : `parts.${selPart}.x`;
   else if (l && !nums.includes(prop)) prop = 'x';
   if (l && !isKeys(getp(l, prop))) prop = nums.find(p => isKeys(getp(l, p))) ?? prop;
+  // The Sources tree opens down to what is selected.
+  const cur = l && sourceOf(l);
+  if (cur) {
+    unfolded.add(cur.m.id);
+    const steps = cur.part?.split('/') ?? [];
+    for (let i = 1; i < steps.length; i++) unfolded.add(`${cur.m.id}/${steps.slice(0, i).join('/')}`);
+  }
   refresh();
 }
 $('#add-scene').onclick = () => edit(() => {
@@ -296,7 +524,18 @@ function moveLayer(d) {
 }
 $('#layer-up').onclick = () => moveLayer(1);
 $('#layer-down').onclick = () => moveLayer(-1);
-$('#layer-del').onclick = () => { if (layer()) edit(() => { scene().layers = scene().layers.filter(l => l.id !== sel); sel = null; selKey = null; }); };
+// Deleting a parent hands its children to its own parent, where they are.
+$('#layer-del').onclick = () => {
+  const l = layer();
+  if (!l) return;
+  const kids = scene().layers.filter(o => o.parent === l.id).map(o => {
+    try { return JSON.parse(cut.reparent(si, o.id, l.parent ?? '', t)); } catch { return { ...o, parent: l.parent }; }
+  });
+  edit(() => {
+    scene().layers = scene().layers.filter(o => o.id !== l.id).map(o => kids.find(k => k.id === o.id) ?? o);
+    sel = null; selKey = null;
+  });
+};
 
 // ---------- inspector
 function field(label, input, keyBtn) {
@@ -468,6 +707,9 @@ function refreshInspector() {
     const bg = lock(input(frameNow()?.background ?? s.background ?? '#101014', v => edit(() => { s.background = v; })), s.background);
     bg.dataset.bg = '';
     field('background', bg);
+    const mode = choice(s.mode ?? '2d', ['2d', '3d'], setMode);
+    mode.dataset.mode = ''; mode.title = '3D keeps the layout (its default camera sees the 2D frame); back to 2D, layers go where the camera showed them';
+    field('mode', mode);
     field('project', input(`${R.size[0]}×${R.size[1]} @ ${R.fps} fps`, () => {}));
     if (s.mode === '3d') sceneLook(s);
     variablesSection();
@@ -476,9 +718,21 @@ function refreshInspector() {
   }
   $('#insp-title').textContent = selPart ? `Part · ${selPart}` : `Layer · ${l.kind}`;
   if (!selPart) {
-    field('id', input(l.id, v => { if (v && !scene().layers.some(o => o.id === v)) edit(() => { l.id = v; sel = v; }); }));
+    field('id', input(l.id, v => { if (v && !scene().layers.some(o => o.id === v)) edit(() => {
+      for (const o of scene().layers) if (o.parent === l.id) o.parent = v;
+      l.id = v; sel = v;
+    }); }));
+    const others = scene().layers.filter(o => o !== l).map(o => o.id);
+    const par = choice(l.parent ?? '', ['', ...others], v => parentTo(l.id, v));
+    par.dataset.parent = ''; par.title = 'Attach to another layer: it follows the parent, and keeps its place on screen now';
+    field('parent', par);
     kindFields(l);
   }
+  const reset = document.createElement('button');
+  reset.textContent = 'Reset to default'; reset.dataset.reset = '';
+  reset.title = selPart ? 'Back to where the plugin puts this part: its offsets and keys cleared' : 'Back to where it was placed: transform keys and offsets cleared';
+  reset.onclick = () => resetSelected();
+  field('layout', reset);
   let group = '';
   // A plugin's part rows show when that part is selected, and only then.
   const mine = p => selPart ? p.startsWith(`parts.${selPart}.`) : !p.startsWith('parts.');
@@ -544,6 +798,30 @@ function fxSection(owner, live) {
       fxFields.push({ inp, k, get, keys: () => e[p.name], color });
     }
   });
+}
+// Reset to default: a part back where the plugin puts it, a layer back to
+// its captured layout (`Cut.reset`).
+function resetSelected() {
+  const l = layer();
+  if (!l) return;
+  if (selPart) { edit(() => { (l.parts ??= {})[selPart] = {}; selKey = null; }); return; }
+  if (JSON.stringify(l).includes('"var"')) { showError(`${l.id} has variable bindings: reset it in the file`); return; }
+  let json;
+  try { json = cut.reset(si, l.id); } catch (e) { showError(String(e)); return; }
+  const ls = scene().layers;
+  edit(() => { ls[ls.indexOf(l)] = JSON.parse(json); selKey = null; });
+}
+// The scene's 2D/3D switch. Into 3D nothing moves: the default camera sees
+// the z = 0 plane as the 2D frame. Out of 3D, layers go where the camera
+// shows them at the playhead (`Cut.flatten`).
+function setMode(v) {
+  const s = scene();
+  if ((s.mode ?? '2d') === v) return;
+  if (v === '3d') { edit(() => { s.mode = '3d'; }); return; }
+  if (JSON.stringify(s).includes('"var"')) { edit(() => { delete s.mode; }); return; }
+  let json;
+  try { json = cut.flatten(si, t); } catch (e) { showError(String(e)); return; }
+  edit(() => { doc.scenes[si] = JSON.parse(json); });
 }
 // Values follow the playhead without rebuilding the panel.
 function updateInspector() {
@@ -767,6 +1045,9 @@ over.onpointerup = () => {
   }
   drag = null; end();
 };
+// A source dragged from the Sources panel lands where it is dropped.
+over.addEventListener('dragover', e => { if (e.dataTransfer.types.includes(DRAG_SOURCE)) e.preventDefault(); });
+over.addEventListener('drop', e => { e.preventDefault(); dropSource(e, toProject(e)); });
 
 // ---------- timeline
 const tl = $('#timeline'), tctx = tl.getContext('2d');

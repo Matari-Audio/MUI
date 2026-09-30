@@ -11,7 +11,7 @@
 // forces the editor's `?renderer=`.
 import { spawn, spawnSync } from 'node:child_process';
 import { inflateSync } from 'node:zlib';
-import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -394,6 +394,90 @@ try {
   check(syn.pointer_down.some(e => e.t > 2 && e.t < 2.2 && e.v === 0) && syn.pointer_y.some(e => e.t > 2 && e.t < 2.2 && e.v < uy - 10),
     `the drag and release are keyed just after (${JSON.stringify(syn.pointer_y.slice(0, 5))})`);
   check(syn.parts['filter/filter-cutoff']?.x === undefined, 'interact does not move the part');
+  // Sources: a file dropped on the panel is imported, the plugin is added
+  // through its dialog and opened as a folder of its parts, a part dragged
+  // onto the layers becomes a component layer at its spot, which is
+  // parented, moved and reset.
+  const dt = 'globalThis.e2eDrag ??= new DataTransfer()';
+  const fire = (sel, types) => js(`(() => { const dt = ${dt}; const el = document.querySelector(${JSON.stringify(sel)});
+    for (const t of ${JSON.stringify(types)}) el.dispatchEvent(new DragEvent(t, { dataTransfer: dt, bubbles: true, cancelable: true })); })()`);
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"><rect width="40" height="40" fill="#fff"/></svg>';
+  await js(`(() => { globalThis.e2eDrag = new DataTransfer(); e2eDrag.items.add(new File([${JSON.stringify(svg)}], 'badge.svg', { type: 'image/svg+xml' })); })()`);
+  await fire('#sources', ['dragover', 'drop']);
+  await sleep(1200);
+  check(existsSync(join(out, 'media/badge.svg')) && read().sources?.some(s => s.kind === 'svg' && s.path === 'media/badge.svg'), 'a dropped file is imported as a source');
+  check(await js(`!!document.querySelector('#sources [data-source="badge.svg"] img.thumb')`), 'with its thumbnail');
+  await click('#add-plugin');
+  await js(`(() => { document.querySelector('#pl-bin').value = ${JSON.stringify(synth)}; document.querySelector('#pl-id').value = 'synth'; document.querySelector('#pl-add').click(); })()`);
+  await sleep(800);
+  check(read().sources?.some(s => s.id === 'synth' && s.kind === 'plugin' && s.source.bin === synth), 'the plugin dialog adds a plugin source');
+  const srcTree = () => js(`[...document.querySelectorAll('#sources [data-source="synth"][data-part]')].map(r => r.dataset.part)`);
+  let nodes = [];
+  for (let i = 0; i < 150 && nodes.length < 5; i++) { await sleep(200); nodes = await srcTree(); }
+  check(nodes.length === 5 && nodes.includes('osc'), `the plugin opens as a folder of its parts (${nodes})`);
+  check(await js(`document.querySelectorAll('#sources [data-source="synth"][data-part] img.thumb').length`) === 5, 'each part has its captured thumbnail');
+  const twist = '#sources [data-source="synth"]:not([data-part]) .twist';
+  await js(`document.querySelector('${twist}').click()`); await sleep(200);
+  check((await srcTree()).length === 0, 'its folder collapses');
+  await js(`document.querySelector('${twist}').click()`); await sleep(200);
+  check((await srcTree()).length === 5 && await js(`document.querySelector('${twist}').getAttribute('aria-expanded')`) === 'true', 'and expands again');
+  // A panel opens onto its controls, from the same tree as `cutParts`.
+  await js(`document.querySelector('#sources [data-source="synth"][data-part="filter"] .twist').click()`); await sleep(200);
+  const ctl = '#sources [data-source="synth"][data-part="filter/filter-cutoff"]';
+  check(await js(`!!document.querySelector('${ctl} img.thumb') && parseFloat(document.querySelector('${ctl}').style.paddingLeft) > parseFloat(document.querySelector('#sources [data-part="filter"]').style.paddingLeft)`),
+    'a panel unfolds onto its controls, indented, with thumbnails');
+  check(await js(`document.querySelector('${ctl} .label').textContent`) === 'filter-cutoff', 'named by the part');
+  await shot('editor-sources.png');
+  // Drag the `osc` part onto the layer list.
+  await js(`globalThis.e2eDrag = new DataTransfer()`);
+  await fire('#sources [data-source="synth"][data-part="osc"]', ['dragstart']);
+  await fire('#layers', ['dragover', 'drop']);
+  await sleep(1500);
+  const comp = read().scenes[0].layers.find(l => l.show);
+  check(comp?.show?.[0] === 'osc' && comp.source.bin === synth && comp.name === 'osc', `a dragged part becomes a component layer (${JSON.stringify(comp)})`);
+  const home = await js(`cutSources().find(s => s.id === 'synth').state`);
+  const man = await (await fetch(`http://127.0.0.1:${port}/asset/${home}`)).json();
+  const [rx, ry] = man.layers.find(f => f.group === 'osc').rect;
+  let cq = null;
+  for (let i = 0; i < 50 && !cq; i++) { await sleep(100); cq = await js(`cutQuads().find(q => q.id === ${JSON.stringify(comp.id)})?.pts`); }
+  const want = [comp.x + comp.scale * (rx - man.width / 2), comp.y + comp.scale * (ry - man.height / 2)];
+  check(cq && Math.hypot(cq[0][0] - want[0], cq[0][1] - want[1]) < 0.5, `it shows just that part, at its spot in the plugin (${cq?.[0]} vs ${want})`);
+  check(await js(`document.querySelector('#sources [data-source="synth"][data-part="osc"]').classList.contains('on')`), 'the tree highlights the selected component');
+  // Parent it to the caption by dragging its row onto the caption's.
+  await js(`globalThis.e2eDrag = new DataTransfer()`);
+  await fire(`#layers button[data-layer="${comp.id}"]`, ['dragstart']);
+  await fire('#layers button[data-layer="caption"]', ['dragover', 'drop']);
+  await sleep(1200);
+  const kid = read().scenes[0].layers.find(l => l.id === comp.id);
+  check(kid.parent === 'caption' && Math.abs(kid.y - (comp.y - 1040)) < 1e-6, `dropping a layer on another parents it (${JSON.stringify({ parent: kid.parent, x: kid.x, y: kid.y })})`);
+  const cq2 = await js(`cutQuads().find(q => q.id === ${JSON.stringify(comp.id)})?.pts`);
+  check(Math.hypot(cq2[0][0] - cq[0][0], cq2[0][1] - cq[0][1]) < 0.5, `parenting keeps it where it was (${cq2[0]})`);
+  const pads = await js(`['caption', ${JSON.stringify(comp.id)}].map(id => parseFloat(document.querySelector('#layers button[data-layer="' + id + '"]').style.paddingLeft))`);
+  check(pads[1] > pads[0], 'the layer list nests it under its parent');
+  // Move it in the viewport (its part), then reset it.
+  const oq = await js(`cutQuads().find(q => q.id === ${JSON.stringify(comp.id + '#osc')}).pts`);
+  const [ax, ay] = await rect('#overlay');
+  const [aw] = await js(`(r => [r.width])(document.querySelector('#overlay').getBoundingClientRect())`);
+  const kk = aw / 1920, cx0 = ax + (oq[0][0] + oq[2][0]) / 2 * kk, cy0 = ay + (oq[0][1] + oq[2][1]) / 2 * kk;
+  await drag(cx0, cy0, cx0 + 60, cy0);
+  const movedPart = read().scenes[0].layers.find(l => l.id === comp.id).parts?.osc;
+  check(movedPart && Math.abs(movedPart.x - 60 / kk / comp.scale) < 3, `dragging it moves it (${JSON.stringify(movedPart)})`);
+  check(await js(`document.querySelector('#insp-title').textContent`) === 'Part · osc', 'the viewport selects the part');
+  await click('[data-reset]');
+  const back = read().scenes[0].layers.find(l => l.id === comp.id).parts?.osc ?? {};
+  check(!('x' in back) && !('y' in back), `reset puts the part back (${JSON.stringify(back)})`);
+  await js(`document.querySelector('#layers button[data-layer="${comp.id}"]').click()`); await sleep(300);
+  await js(`(() => { const i = document.querySelector('[data-prop="rotation"]'); i.value = '25'; i.onchange(); })()`); await sleep(600);
+  check(read().scenes[0].layers.find(l => l.id === comp.id).rotation === 25, 'the component layer turns');
+  await click('[data-reset]');
+  const reset = read().scenes[0].layers.find(l => l.id === comp.id);
+  check(reset.rotation === undefined && (reset.x ?? 0) === 0 && (reset.y ?? 0) === 0 && reset.parent === 'caption', `reset clears the layer's transform, onto its parent (${JSON.stringify(reset)})`);
+  await key('z', 'KeyZ', 2);
+  check(read().scenes[0].layers.find(l => l.id === comp.id).rotation === 25, 'and undo brings it back');
+  // The tree selects: a part of the whole plugin, on that layer.
+  await click('#sources [data-source="synth"][data-part="env"]');
+  check(await js(`document.querySelector('#insp-title').textContent`) === 'Part · env', 'clicking a part in the tree selects it');
+  await shot('editor-sources-parented.png');
   check(errors.length === 0, 'no page exceptions ' + errors.join('; '));
   ws.close();
 } catch (e) {

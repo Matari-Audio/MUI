@@ -23,6 +23,11 @@
     <button id="redo" title="Redo (Ctrl+Shift+Z)">Redo</button>
   </header>
   <aside id="left">
+    <h2><button id="sources-fold" class="twist" aria-expanded="true" title="Show or hide the sources">▾</button><span class="grow">Sources</span>
+      <span><button id="import" title="Import PNG, SVG, Lottie or glTF files (or drop them on this panel)">Import</button><button id="add-plugin" title="Add a MUI plugin as a source">+ Plugin</button></span>
+    </h2>
+    <div id="sources" class="list tree" aria-label="Sources: drag one, or any part of a plugin, onto the viewport or the layers"></div>
+    <input id="import-file" type="file" multiple hidden accept=".png,.svg,.json,.glb">
     <h2>Scenes <button id="add-scene" title="Add a scene">+</button></h2>
     <div id="scenes" class="list"></div>
     <h2>Layers
@@ -30,7 +35,7 @@
         <button data-add="rect" title="Add a rectangle">▭</button><button data-add="ellipse" title="Add an ellipse">◯</button><button data-add="text" title="Add text">T</button><button data-add="path" title="Add a path">〰</button><button data-add="duplicator" title="Add a duplicator">⁂</button><button data-add="camera" title="Add a camera (3D scenes)">⌖</button><button data-add="light" title="Add a light (3D scenes)">☀</button><button data-add="model" title="Add a glTF model (3D scenes)">◈</button><button data-add="shader" title="Add a shader layer (a plasma generator)">✦</button>
       </span>
     </h2>
-    <div id="layers" class="list"></div>
+    <div id="layers" class="list" title="Drag a layer onto another to parent it, onto the empty space below to unparent it"></div>
     <div class="row">
       <button id="layer-up" title="Move the layer up (paints later)">▲</button>
       <button id="layer-down" title="Move the layer down">▼</button>
@@ -76,6 +81,21 @@
       <div class="row">
         <button id="ex-start" value="" type="button">Render</button>
         <button id="ex-cancel" type="button">Close</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog id="plugin-dialog">
+    <form method="dialog" id="plugin-form">
+      <h2>Add a plugin</h2>
+      <label>Cargo.toml <input id="pl-cargo" placeholder="../Cargo.toml"></label>
+      <label>Example <input id="pl-example" placeholder="synth"></label>
+      <label>Binary <input id="pl-bin" placeholder="bin name, or an adapter path"></label>
+      <label>Name <input id="pl-id" placeholder="synth"></label>
+      <p class="muted">A Cargo.toml with an example (or a bin name), or just a prebuilt adapter executable. Paths are relative to the project.</p>
+      <p id="pl-error" role="status"></p>
+      <div class="row">
+        <button id="pl-add" type="button">Add</button>
+        <button id="pl-cancel" type="button">Cancel</button>
       </div>
     </form>
   </dialog>

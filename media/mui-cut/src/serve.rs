@@ -95,6 +95,7 @@ fn kind(path: &Path) -> &'static str {
         Some("wasm") => "application/wasm",
         Some("json") => "application/json",
         Some("png") => "image/png",
+        Some("svg") => "image/svg+xml",
         _ => "application/octet-stream",
     }
 }

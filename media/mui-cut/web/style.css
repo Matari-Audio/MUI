@@ -16,7 +16,7 @@
 html, body { height: 100%; margin: 0; }
 body {
   background: var(--bg); color: var(--ink); overflow: hidden;
-  display: grid; grid-template: 40px minmax(0, 1fr) 380px / 190px minmax(0, 1fr) 270px;
+  display: grid; grid-template: 40px minmax(0, 1fr) 380px / 240px minmax(0, 1fr) 270px;
   grid-template-areas: "top top top" "left stage right" "bottom bottom bottom";
 }
 header { grid-area: top; display: flex; align-items: center; gap: 10px; padding: 0 12px; border-bottom: 1px solid var(--line); background: var(--panel); }
@@ -74,12 +74,33 @@ aside { padding: 0 10px 10px; background: var(--panel); overflow: auto; }
 #graph { height: 190px; }
 #orbit.on, #interact.on { background: var(--raised); border-color: var(--strong); color: var(--hi); }
 
-#export-dialog { background: var(--raised); color: inherit; border: 1px solid var(--line); border-radius: 6px; padding: 16px 18px; min-width: 320px; }
-#export-dialog::backdrop { background: #0008; }
-#export-form { display: grid; gap: 10px; }
-#export-form h2 { margin: 0 0 4px; }
-#export-form label { display: grid; grid-template-columns: 1fr 140px; align-items: center; gap: 8px; }
+#export-dialog, #plugin-dialog { background: var(--raised); color: inherit; border: 1px solid var(--line); border-radius: 6px; padding: 16px 18px; min-width: 320px; }
+#export-dialog::backdrop, #plugin-dialog::backdrop { background: #0008; }
+#export-form, #plugin-form { display: grid; gap: 10px; }
+#export-form h2, #plugin-form h2 { margin: 0 0 4px; }
+#export-form label, #plugin-form label { display: grid; grid-template-columns: 1fr 140px; align-items: center; gap: 8px; }
 #export-form progress { width: 100%; }
 #export-form p { margin: 0; min-height: 1em; }
 .list button.part { padding-left: 20px; color: var(--muted); }
 .list button.part.on { color: var(--hi); }
+#plugin-form label { grid-template-columns: 90px 220px; }
+#plugin-form p { margin: 0; max-width: 320px; }
+
+/* Sources: a flat tree. A plugin is a folder of its parts. */
+h2 .twist { border: 0; background: transparent; padding: 0 4px 0 0; color: var(--muted); }
+.tree { gap: 0; }
+.tree [hidden] { display: none; }
+.src-row { display: flex; align-items: center; gap: 5px; height: 24px; padding-right: 4px; border: 1px solid transparent; border-radius: 3px; cursor: grab; white-space: nowrap; }
+.src-row:hover { border-color: var(--line); }
+.src-row.on { background: var(--raised); border-color: var(--strong); color: var(--hi); }
+.src-row .twist { flex: 0 0 14px; width: 14px; padding: 0; border: 0; background: transparent; color: var(--muted); text-align: center; }
+.src-row .twist:empty { visibility: hidden; }
+.src-row .thumb { flex: 0 0 26px; width: 26px; height: 18px; object-fit: contain; background: var(--bg); border: 1px solid var(--line); border-radius: 2px; display: grid; place-items: center; color: var(--muted); font-size: 10px; }
+.src-row .label { overflow: hidden; text-overflow: ellipsis; }
+.src-row .label.dim { color: var(--muted); }
+.src-row.part .label { color: var(--muted); }
+.src-row.part.on .label { color: var(--hi); }
+.tree .empty { color: var(--muted); padding: 2px 4px 6px 20px; }
+#left.drop { box-shadow: inset 0 0 0 1px var(--muted); }
+.list button.drop-on { border-color: var(--muted); }
+#layers { min-height: 40px; padding-bottom: 16px; }
