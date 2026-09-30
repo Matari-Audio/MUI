@@ -5,6 +5,8 @@ struct CachedFragment {
     key: (u16, u16, f64),
     paint: Vec<mui_scene::Painted>,
     raster: Raster,
+    /// The part pulled out of its ancestors' clips, when that differs.
+    free: Raster,
 }
 pub fn capture_frame(
     scene: &mui_scene::ResolvedScene,
@@ -83,6 +85,8 @@ fn capture_cached(
     let mut images = serde_json::Map::new();
     let refs: Vec<&str> = roots.iter().map(String::as_str).collect();
     let surfaces: Vec<_> = scene.surfaces().map(|s| serde_json::json!({"id":s.key.as_ref(),"parent":s.parent.as_deref(),"frame":[s.frame.x,s.frame.y,s.frame.size.width,s.frame.size.height]})).collect();
+    let tree = part_tree(scene, roots);
+    let path_of = |id: &str| tree.iter().find(|p| p.id == id).map(|p| p.path.clone());
     let mut layers = Vec::new();
     let mut fragment_count = 0;
     for (index, fragment) in scene
@@ -92,21 +96,28 @@ fn capture_cached(
         .enumerate()
     {
         fragment_count = index + 1;
+        let free = fragment.free();
         let id = fragment.part.as_ref();
         let isolated = fragment.scene;
         let key = (width, height, scale);
         let cached = cache
             .get(index)
             .filter(|c| c.key == key && c.paint == isolated.paint);
-        let data = if let Some(c) = cached {
-            c.raster.clone()
+        let (data, loose) = if let Some(c) = cached {
+            (c.raster.clone(), c.free.clone())
         } else {
-            raster(&isolated, width, height, scale)?
+            let data = raster(&isolated, width, height, scale)?;
+            let loose = match free {
+                Some(f) => raster(&f, width, height, scale)?.filter(|f| Some(f) != data.as_ref()),
+                None => None,
+            };
+            (data, loose)
         };
         let entry = CachedFragment {
             key,
             paint: isolated.paint,
             raster: data.clone(),
+            free: loose.clone(),
         };
         if index < cache.len() {
             cache[index] = entry;
@@ -130,10 +141,37 @@ fn capture_cached(
                 ]
             },
         );
-        layers.push(serde_json::json!({"id":format!("fragment-{index}"),"group":id.map_or("background",String::as_str),"origin":origin,"src":name,"rect":[x0 as f64/scale,y0 as f64/scale,(x1-x0) as f64/scale,(y1-y0) as f64/scale]}));
+        let rect = |[x0, y0, x1, y1]: [usize; 4]| {
+            [
+                x0 as f64 / scale,
+                y0 as f64 / scale,
+                (x1 - x0) as f64 / scale,
+                (y1 - y0) as f64 / scale,
+            ]
+        };
+        let node = id.and_then(|id| tree.iter().find(|p| &p.id == id));
+        let mut layer = serde_json::json!({"id":format!("fragment-{index}"),"group":node.map_or("background",|n| n.path.as_str()),"origin":origin,"src":name,"rect":rect([x0,y0,x1,y1])});
+        if let Some(n) = node {
+            layer["part"] = n.id.clone().into();
+            layer["parent"] = n.parent.as_deref().and_then(path_of).into();
+        }
+        if let Some((r, data)) = loose {
+            let name = format!("layer-{index:02}-free.png");
+            images.insert(name.clone(), serde_json::Value::String(data));
+            layer["free"] = serde_json::json!({"src": name, "rect": rect(r)});
+        }
+        layers.push(layer);
     }
     cache.truncate(fragment_count);
-    let manifest = serde_json::json!({"version":1,"width":f64::from(width)/scale,"height":f64::from(height)/scale,"scale":scale,"layers":layers,"groups":roots,"surfaces":surfaces});
+    let parts: Vec<_> = tree
+        .iter()
+        .map(|p| {
+            let f = scene.surface(&p.id).map(|s| s.frame);
+            serde_json::json!({"path": p.path, "id": p.id, "parent": p.parent.as_deref().and_then(path_of),
+                "frame": f.map(|f| [f.x, f.y, f.size.width, f.size.height])})
+        })
+        .collect();
+    let manifest = serde_json::json!({"version":1,"width":f64::from(width)/scale,"height":f64::from(height)/scale,"scale":scale,"layers":layers,"groups":roots,"parts":parts,"surfaces":surfaces});
     Ok(serde_json::json!({"scene":manifest,"images":images}))
 }
 
@@ -183,8 +221,8 @@ impl CaptureStream {
         let source = frame["images"].take();
         let mut images = serde_json::Map::new();
         let mut current = std::collections::HashSet::new();
-        for layer in frame["scene"]["layers"].as_array_mut().unwrap() {
-            let data = source[layer["src"].as_str().unwrap()].as_str().unwrap();
+        let mut rename = |src: &mut serde_json::Value| {
+            let data = source[src.as_str().unwrap()].as_str().unwrap();
             // ponytail: 64-bit std hash, not a digest; a collision in one
             // session would reuse a stale texture. Names never leave the session.
             let mut hash = DefaultHasher::new();
@@ -194,7 +232,13 @@ impl CaptureStream {
                 images.insert(name.clone(), serde_json::Value::String(data.into()));
             }
             current.insert(name.clone());
-            layer["src"] = serde_json::Value::String(name);
+            *src = serde_json::Value::String(name);
+        };
+        for layer in frame["scene"]["layers"].as_array_mut().unwrap() {
+            rename(&mut layer["src"]);
+            if layer["free"].is_object() {
+                rename(&mut layer["free"]["src"]);
+            }
         }
         self.previous = current;
         frame["images"] = serde_json::Value::Object(images);
@@ -238,6 +282,107 @@ pub fn discover_parts(scene: &mui_scene::ResolvedScene, width: f64, height: f64)
         .collect()
 }
 
+/// One selected root: its surface id, its selected parent's id, and its
+/// path, the ids from the outermost selected ancestor down joined by `/`.
+struct PartNode {
+    id: String,
+    parent: Option<String>,
+    path: String,
+}
+
+/// The selected roots as a tree, parents before children (then in the
+/// order given).
+fn part_tree(scene: &mui_scene::ResolvedScene, roots: &[String]) -> Vec<PartNode> {
+    let mut nodes: Vec<(usize, PartNode)> = Vec::new();
+    for (i, root) in roots.iter().enumerate() {
+        if nodes.iter().any(|(_, n)| &n.id == root) {
+            continue;
+        }
+        let mut chain = vec![root.clone()];
+        let mut up = scene.surface(root).and_then(|s| s.parent.as_deref());
+        while let Some(id) = up {
+            if roots.iter().any(|r| r == id) {
+                chain.push(id.to_owned());
+            }
+            up = scene.surface(id).and_then(|s| s.parent.as_deref());
+            if chain.len() > roots.len() {
+                break; // a cycle; capture_layers reports it
+            }
+        }
+        chain.reverse();
+        let depth = chain.len();
+        let parent = (depth > 1).then(|| chain[depth - 2].clone());
+        nodes.push((
+            depth * roots.len() + i,
+            PartNode {
+                id: root.clone(),
+                parent,
+                path: chain.join("/"),
+            },
+        ));
+    }
+    nodes.sort_by_key(|(k, _)| *k);
+    nodes.into_iter().map(|(_, n)| n).collect()
+}
+
+/// [`discover_parts`], then `depth - 1` more levels inside each part: its
+/// topmost named descendants that are control-sized (at least 12 px each
+/// way, at most 60% of it) and can be taken out whole. Parents come first.
+pub fn discover_tree(
+    scene: &mui_scene::ResolvedScene,
+    width: f64,
+    height: f64,
+    depth: usize,
+) -> Vec<String> {
+    let mut all = discover_parts(scene, width, height);
+    let mut level = all.clone();
+    for _ in 1..depth {
+        let mut next = Vec::new();
+        for part in &level {
+            let Some(area) = scene
+                .surface(part)
+                .map(|s| s.frame.size.width * s.frame.size.height)
+            else {
+                continue;
+            };
+            let under = |id: &str, top: &str| {
+                let mut up = scene.surface(id).and_then(|s| s.parent.as_deref());
+                while let Some(p) = up {
+                    if p == top {
+                        return true;
+                    }
+                    up = scene.surface(p).and_then(|s| s.parent.as_deref());
+                }
+                false
+            };
+            let candidates: Vec<&str> = scene
+                .surfaces()
+                .filter(|s| {
+                    mui_scene::Id::is_named(&s.key)
+                        && s.frame.size.width >= 12.
+                        && s.frame.size.height >= 12.
+                        && s.frame.size.width * s.frame.size.height <= area * 0.6
+                        && under(&s.key, part)
+                        && scene.isolate(&[&s.key]).is_ok()
+                })
+                .map(|s| s.key.as_ref())
+                .collect();
+            next.extend(
+                candidates
+                    .iter()
+                    .filter(|c| !candidates.iter().any(|o| o != *c && under(c, o)))
+                    .map(|c| (*c).to_owned()),
+            );
+        }
+        if next.is_empty() {
+            break;
+        }
+        all.extend(next.iter().cloned());
+        level = next;
+    }
+    all
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -264,5 +409,68 @@ mod tests {
         let changed = stream.frame(&make(140.), 300, 200, 1., &roots).unwrap();
         assert!(!changed["images"].as_object().unwrap().is_empty());
         assert_ne!(first["scene"]["layers"], changed["scene"]["layers"]);
+    }
+
+    /// Two levels: panels, then the controls in them, addressed by path;
+    /// a control that overflows its clipped panel also comes free of it.
+    #[test]
+    fn a_two_level_tree_names_controls_by_path_and_frees_them() {
+        let knob = |id: &str| block(30., 30.).fill(Role::Primary).id(id);
+        let scene = resolve(&SceneSpec::new(
+            row![
+                row![knob("a-1"), knob("a-2"), text("A")]
+                    .size(120., 60.)
+                    .fill(Role::Ink)
+                    .id("a"),
+                // `b`'s bar is wider than `b`, which clips it.
+                stack([block(160., 20.).fill(Role::Danger).id("b-bar")])
+                    .size(120., 60.)
+                    .fill(Role::Ink)
+                    .clip()
+                    .id("b"),
+            ]
+            .size(300., 200.)
+            .id("root"),
+        ))
+        .unwrap();
+        assert_eq!(discover_tree(&scene, 300., 200., 1), ["a", "b"]);
+        let roots = discover_tree(&scene, 300., 200., 2);
+        assert_eq!(roots, ["a", "b", "a-1", "a-2", "b-bar"]);
+        let frame = capture_frame(&scene, 300, 200, 1., &roots).unwrap();
+        let m = &frame["scene"];
+        let paths: Vec<(&str, Option<&str>)> = m["parts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| (p["path"].as_str().unwrap(), p["parent"].as_str()))
+            .collect();
+        assert_eq!(
+            paths,
+            [
+                ("a", None),
+                ("b", None),
+                ("a/a-1", Some("a")),
+                ("a/a-2", Some("a")),
+                ("b/b-bar", Some("b"))
+            ]
+        );
+        let layer = |g: &str| {
+            m["layers"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|l| l["group"] == g)
+                .unwrap()
+                .clone()
+        };
+        assert_eq!(layer("a/a-1")["part"], "a-1");
+        assert_eq!(layer("a/a-1")["parent"], "a");
+        // The bar's clipped raster is `b`'s width; freed, it is its own.
+        let bar = layer("b/b-bar");
+        assert_eq!(bar["rect"][2], 120.);
+        assert_eq!(bar["free"]["rect"][2], 160.);
+        assert!(frame["images"][bar["free"]["src"].as_str().unwrap()].is_string());
+        // A knob no clip cuts needs no second image.
+        assert!(layer("a/a-1").get("free").is_none());
     }
 }

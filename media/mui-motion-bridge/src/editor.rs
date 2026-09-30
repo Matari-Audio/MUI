@@ -7,6 +7,9 @@ pub struct Editor {
     pointer: PointerInput,
     sample_frame: u64,
     pub selection: Vec<String>,
+    /// How many levels of parts [`Editor::roots`] discovers when nothing is
+    /// selected: 1 is panels, 2 panels and their controls, and so on.
+    pub depth: usize,
     sizes: std::collections::BTreeMap<String, Size>,
 }
 impl Editor {
@@ -25,7 +28,18 @@ impl Editor {
             pointer: PointerInput::default(),
             sample_frame: 0,
             selection: Vec::new(),
+            depth: 1,
             sizes: std::collections::BTreeMap::default(),
+        }
+    }
+    /// The surfaces to capture as parts: the selection, or when there is
+    /// none, [`discover_tree`](crate::discover_tree) `depth` levels deep.
+    pub fn roots(&self, width: f64, height: f64) -> Vec<String> {
+        match self.ui.scene() {
+            Some(scene) if self.selection.is_empty() => {
+                crate::discover_tree(scene, width, height, self.depth)
+            }
+            _ => self.selection.clone(),
         }
     }
     /// Run every input edge in order, then a neutral frame to consume edits.
@@ -64,6 +78,12 @@ impl Editor {
                         .map_err(|e| e.to_string())?;
                 }
                 self.selection = selection;
+                if let Some(d) = command.get("depth") {
+                    self.depth = d
+                        .as_u64()
+                        .filter(|d| (1..=8).contains(d))
+                        .ok_or("Depth must be 1..8")? as usize;
+                }
                 continue;
             }
             if command["kind"] == "resize" {
@@ -191,5 +211,15 @@ mod tests {
                 Ok(())
             })
             .unwrap();
+    }
+    #[test]
+    fn select_asks_for_a_discovery_depth() {
+        let mut editor = Editor::new(Ui::default());
+        let pick = |e: &mut Editor, v| e.advance(&[v], 0, |_, _, _, _| Ok(()));
+        pick(&mut editor, json!({"kind":"select","ids":[],"depth":2})).unwrap();
+        assert_eq!(editor.depth, 2);
+        assert!(pick(&mut editor, json!({"kind":"select","ids":[],"depth":0})).is_err());
+        pick(&mut editor, json!({"kind":"select","ids":[]})).unwrap();
+        assert_eq!(editor.depth, 2, "a select without a depth keeps it");
     }
 }
