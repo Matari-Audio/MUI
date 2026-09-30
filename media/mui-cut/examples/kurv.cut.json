@@ -105,7 +105,7 @@
           "name": "KURV patch",
           "kind": "patch",
           "of": "kurv",
-          "x": 1600.0,
+          "x": 1540.0,
           "y": 560.0,
           "opacity": [
             { "t": 0.0, "v": 0.0, "interp": "bezier" },
