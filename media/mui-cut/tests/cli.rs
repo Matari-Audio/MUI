@@ -67,13 +67,53 @@ fn probe(file: &Path) -> String {
         .args(["-v", "error", "-count_frames", "-select_streams", "v:0"])
         .args([
             "-show_entries",
-            "stream=codec_name,pix_fmt,color_space,color_range,nb_read_frames:format=format_name",
+            "stream=codec_name,pix_fmt,color_space,color_range,nb_read_frames,width,height:format=format_name",
         ])
         .args(["-of", "default=nw=1"])
         .arg(file)
         .output()
         .unwrap();
     String::from_utf8(out.stdout).unwrap()
+}
+
+/// `--variants` renders each named variant at its own size, one file each;
+/// several variants without `{name}` in the path would overwrite, so fail.
+#[test]
+fn render_writes_each_variant() {
+    if !has("ffmpeg") || !has("ffprobe") {
+        eprintln!("skipped: no ffmpeg/ffprobe");
+        return;
+    }
+    let project = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/variants.cut.json");
+    let dir = scratch("variants");
+    let st = Command::new(BIN)
+        .args([
+            "render",
+            project,
+            "--variants",
+            "dark-wide,light-tall",
+            "-o",
+        ])
+        .arg(dir.join("out/{name}.mp4"))
+        .status()
+        .unwrap();
+    assert!(st.success());
+    for (name, w, h) in [("dark-wide", 1920, 1080), ("light-tall", 1080, 1920)] {
+        let text = probe(&dir.join(format!("out/{name}.mp4")));
+        assert!(
+            text.contains(&format!("width={w}\nheight={h}")),
+            "{name}: {text}"
+        );
+        assert!(text.contains("nb_read_frames=60"), "{name}: {text}");
+    }
+    assert!(!dir.join("out/dark-tall.mp4").exists());
+    let bad = Command::new(BIN)
+        .args(["render", project, "--variants", "all", "-o"])
+        .arg(dir.join("one.mp4"))
+        .output()
+        .unwrap();
+    assert!(!bad.status.success());
+    assert!(String::from_utf8_lossy(&bad.stderr).contains("{name}"));
 }
 
 /// Every codec, both bit depths and each container, in software (and on

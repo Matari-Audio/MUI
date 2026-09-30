@@ -932,3 +932,99 @@ fn render_settings_load_check_and_layer() {
         assert!(Project::load(&json).is_err(), "accepted {bad}");
     }
 }
+
+const VARIANTS: &str = include_str!("../examples/variants.cut.json");
+
+fn drawn<'a>(f: &'a Frame, id: &str) -> &'a Drawn {
+    f.layers.iter().find(|d| d.id == id).unwrap()
+}
+
+#[test]
+fn variables_bind_and_variants_resolve() {
+    let p = Project::load(VARIANTS).unwrap();
+    // The defaults: dark, 1920x1080.
+    let f = eval(&p, &p.scenes[0], 1.5);
+    assert_eq!(f.size, [1920, 1080]);
+    assert_eq!(f.background, Rgba::try_from("#0e0f14".to_owned()).unwrap());
+    let card = drawn(&f, "card");
+    assert_eq!(
+        (card.x, card.y, card.width, card.radius),
+        (960., 540., 1152., 32.)
+    );
+    assert!(matches!(&drawn(&f, "title").kind, Kind::Text { text, .. } if text == "Ship it"));
+    assert_eq!(drawn(&f, "badge").opacity, 1.);
+    assert_eq!(drawn(&f, "badge").x, 1780.);
+    // A keyframe value binds too: W * -0.3 at t = 0.
+    assert_eq!(drawn(&eval(&p, &p.scenes[0], 0.), "card").x, -576.);
+
+    let v = p.variant("light-tall").unwrap();
+    let f = eval(&v, &v.scenes[0], 1.5);
+    assert_eq!(f.size, [1080, 1920]);
+    assert_eq!(f.background, Rgba::try_from("#f4f1ea".to_owned()).unwrap());
+    let card = drawn(&f, "card");
+    assert_eq!((card.x, card.y, card.width), (540., 960., 648.));
+    assert_eq!(card.fill, Rgba::try_from("#e4572e".to_owned()).unwrap());
+    let title = drawn(&f, "title");
+    // The override replaces the binding outright.
+    assert_eq!(title.font_size, 96.);
+    assert!(matches!(&title.kind, Kind::Text { text, .. } if text == "Ship it, tall"));
+    assert_eq!(drawn(&f, "badge").opacity, 0.);
+    assert!(p.variant("nope").is_err());
+
+    // Saving keeps the bindings, the variants and the key order.
+    assert_eq!(p.to_json(), VARIANTS);
+    assert_eq!(v.to_json(), VARIANTS);
+}
+
+#[test]
+fn variables_reject_what_does_not_fit() {
+    let with = |vars: &str, variants: &str, bg: &str| {
+        let json = format!(
+            r#"{{"size": [64, 64], "fps": 30, "variables": {vars}, "variants": {variants},
+                "scenes": [{{"name": "a", "duration": 1, "background": {bg}, "layers": []}}]}}"#
+        );
+        Project::load(&json)
+    };
+    let theme = r#"{"theme": {"type": "enum", "options": ["dark", "light"], "value": "dark"}}"#;
+    let bg = r##"{"var": "theme", "map": {"dark": "#000000", "light": "#ffffff"}}"##;
+    assert!(with(theme, "[]", bg).is_ok());
+    // An enum value outside its options, in a variant.
+    let e = with(theme, r#"[{"name": "x", "vars": {"theme": "blue"}}]"#, bg).unwrap_err();
+    assert!(e.contains("not one of"), "{e}");
+    // A variant setting an undeclared variable.
+    assert!(with(theme, r#"[{"name": "x", "vars": {"nope": 1}}]"#, bg).is_err());
+    // A binding to nothing, and a map missing a value.
+    assert!(with(theme, "[]", r#"{"var": "nope"}"#).is_err());
+    assert!(
+        with(
+            theme,
+            "[]",
+            r##"{"var": "theme", "map": {"light": "#ffffff"}}"##
+        )
+        .is_err()
+    );
+    // A colour variable holding no colour; an override that hits nothing.
+    assert!(
+        with(
+            r#"{"c": {"type": "color", "value": 3}}"#,
+            "[]",
+            r##""#000000""##
+        )
+        .is_err()
+    );
+    assert!(
+        with(
+            theme,
+            r#"[{"name": "x", "overrides": {"a/ghost": {"x": 1}}}]"#,
+            bg
+        )
+        .is_err()
+    );
+    // A bound number that resolves to text fails the document's own check.
+    let s = r#"{"s": {"type": "string", "value": "hi"}}"#;
+    let json = format!(
+        r#"{{"size": [64, 64], "fps": 30, "variables": {s},
+            "scenes": [{{"name": "a", "duration": {{"var": "s"}}, "layers": []}}]}}"#
+    );
+    assert!(Project::load(&json).is_err());
+}

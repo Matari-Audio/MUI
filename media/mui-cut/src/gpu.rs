@@ -415,8 +415,6 @@ mod offline {
         }
 
         async fn open(size: [u32; 2], engine: Engine, yuv: Option<Yuv>) -> Result<Self, String> {
-            use wgpu::TextureFormat as F;
-            use wgpu::TextureUsages as U;
             let instance = wgpu::Instance::default();
             let adapter = instance
                 .request_adapter(&wgpu::RequestAdapterOptions {
@@ -430,7 +428,36 @@ mod offline {
                 .request_device(&wgpu::DeviceDescriptor::default())
                 .await
                 .map_err(|e| e.to_string())?;
-            let canvas = GpuCanvas::new(&device, &queue, F::Rgba8Unorm, size, engine).await?;
+            let mut o = Self::build(&device, &queue, size, engine, yuv).await?;
+            o.adapter = format!("{}, {} ({:?})", engine.name(), info.name, info.backend);
+            Ok(o)
+        }
+
+        /// Frames of another size (or pixel format) on the same device, its
+        /// assets kept: a render of several variants opens one GPU.
+        pub fn resize(&mut self, size: [u32; 2], yuv: Option<Yuv>) -> Result<(), String> {
+            if !self.pending.is_empty() {
+                return Err("resize with frames in flight: finish() first".into());
+            }
+            let (device, queue) = (self.canvas.device.clone(), self.canvas.queue.clone());
+            let engine = self.canvas.engine();
+            let mut o = pollster::block_on(Self::build(&device, &queue, size, engine, yuv))?;
+            o.assets = std::mem::take(&mut self.assets);
+            o.adapter = std::mem::take(&mut self.adapter);
+            *self = o;
+            Ok(())
+        }
+
+        async fn build(
+            device: &wgpu::Device,
+            queue: &wgpu::Queue,
+            size: [u32; 2],
+            engine: Engine,
+            yuv: Option<Yuv>,
+        ) -> Result<Self, String> {
+            use wgpu::TextureFormat as F;
+            use wgpu::TextureUsages as U;
+            let canvas = GpuCanvas::new(device, queue, F::Rgba8Unorm, size, engine).await?;
             let shutter = Shutter::new(&device, size, F::Rgba8Unorm, F::Rgba8Unorm);
             let out = texture(
                 &device,
@@ -458,7 +485,7 @@ mod offline {
             Ok(Self {
                 canvas,
                 assets: Assets::default(),
-                adapter: format!("{}, {} ({:?})", engine.name(), info.name, info.backend),
+                adapter: String::new(),
                 size,
                 stride,
                 shutter,

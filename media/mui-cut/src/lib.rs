@@ -19,6 +19,7 @@ mod render;
 mod shutter;
 mod sparse;
 mod three;
+pub mod vars;
 mod vector;
 #[cfg(target_arch = "wasm32")]
 mod web;
@@ -52,6 +53,15 @@ pub struct Project {
     /// Encoder settings for `mui-cut render`; its flags override them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub render: Option<Render>,
+    /// Typed values anything under `scenes` can bind to (see `vars`).
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub variables: std::collections::BTreeMap<String, vars::Var>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub variants: Vec<vars::Variant>,
+    /// The text of a project with variables: this struct is one variant of
+    /// it resolved, so it saves as the text.
+    #[serde(skip)]
+    pub source: Option<String>,
 }
 
 /// How `render` encodes, all optional (the CLI's defaults): see the README.
@@ -1159,6 +1169,22 @@ pub fn subframes(project: &Project, scene: &Scene, t: f64, mb: usize) -> Vec<Fra
         .collect()
 }
 
+/// A project from `de`; an error starts with the JSON path it is about,
+/// then serde's line and column where there is one.
+fn from_path<'de, D: serde::Deserializer<'de>>(de: D) -> Result<Project, String>
+where
+    D::Error: std::fmt::Display,
+{
+    serde_path_to_error::deserialize(de).map_err(|e| {
+        let path = e.path().to_string();
+        if path == "." {
+            e.into_inner().to_string()
+        } else {
+            format!("{path}: {}", e.into_inner())
+        }
+    })
+}
+
 impl Project {
     /// Parse and check a project: keys sorted by time, no empty key lists,
     /// finite numbers, positive size, fps and durations, unique layer ids,
@@ -1167,16 +1193,46 @@ impl Project {
     /// Every error starts with the JSON path it is about
     /// (`scenes[0].layers[2].x: key [1]: ...`), then serde's line and column
     /// where there is one.
+    /// With variables, every variant must resolve and check, and the result
+    /// is the default one (see [`Project::variant`]).
     pub fn load(json: &str) -> Result<Self, String> {
-        let de = &mut serde_json::Deserializer::from_str(json);
-        let p: Self = serde_path_to_error::deserialize(de).map_err(|e| {
-            let path = e.path().to_string();
-            if path == "." {
-                e.into_inner().to_string()
-            } else {
-                format!("{path}: {}", e.into_inner())
+        if json.contains("\"variables\"") || json.contains("\"variants\"") {
+            let root: serde_json::Value = serde_json::from_str(json).map_err(|e| e.to_string())?;
+            if vars::uses_vars(&root) {
+                let base = Self::check(from_path(vars::resolve(&root, None)?)?)?;
+                for v in &base.variants {
+                    Self::from_root(&root, Some(&v.name))
+                        .map_err(|e| format!("variant `{}`: {e}", v.name))?;
+                }
+                return Ok(Self {
+                    source: Some(json.to_owned()),
+                    ..base
+                });
             }
-        })?;
+        }
+        Self::check(from_path(&mut serde_json::Deserializer::from_str(json))?)
+    }
+
+    fn from_root(root: &serde_json::Value, variant: Option<&str>) -> Result<Self, String> {
+        let v = vars::resolve(root, variant)?;
+        Self::check(from_path(v)?)
+    }
+
+    /// Variant `name` of a project with variables, resolved and checked; it
+    /// saves as the whole project, like this one.
+    pub fn variant(&self, name: &str) -> Result<Self, String> {
+        let src = self
+            .source
+            .as_deref()
+            .ok_or("the project has no variants")?;
+        let root = serde_json::from_str(src).map_err(|e| e.to_string())?;
+        Ok(Self {
+            source: self.source.clone(),
+            ..Self::from_root(&root, Some(name))?
+        })
+    }
+
+    fn check(p: Self) -> Result<Self, String> {
         if p.size[0] == 0 || p.size[1] == 0 || p.size[0] > 8192 || p.size[1] > 8192 {
             return Err("size: must be 1..=8192 pixels each way".into());
         }
@@ -1249,6 +1305,11 @@ impl Project {
     /// Pretty JSON in the struct's field order, one keyframe a line, so a
     /// save diffs cleanly and reads like the hand-written examples.
     pub fn to_json(&self) -> String {
+        if let Some(src) = &self.source {
+            let mut s = tidy(&vars::pretty(src));
+            s.push('\n');
+            return s;
+        }
         let mut s = tidy(&serde_json::to_string_pretty(self).expect("a project serialises"));
         s.push('\n');
         s
@@ -1291,17 +1352,11 @@ fn tidy(pretty: &str) -> String {
                     continue;
                 };
                 let body = &out[start..];
-                let key = c == '}'
-                    && body
-                        .trim_start_matches(['{', ' ', '\n'])
-                        .starts_with("\"t\":");
-                // A keyframe's own `in`/`out` arrays were collapsed already;
-                // they still mark it nested, so allow exactly those.
-                let flat = if key {
-                    !body[1..].contains('{')
-                } else {
-                    c == ']' && !nested
-                };
+                let head = body.trim_start_matches(['{', ' ', '\n']);
+                // Keyframes and variable bindings: whatever they hold (arrays,
+                // a binding, a binding's map) was collapsed already.
+                let key = c == '}' && (head.starts_with("\"t\":") || head.starts_with("\"var\":"));
+                let flat = key || (c == ']' && !nested);
                 if flat && body.contains('\n') {
                     let mut one = String::with_capacity(body.len());
                     let mut ws = false;

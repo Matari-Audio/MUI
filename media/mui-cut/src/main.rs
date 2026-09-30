@@ -2,6 +2,7 @@
 //!
 //!     mui-cut render demo.cut.json -o out.mp4 [--scene NAME] [--mb N] [--size WxH] [--renderer R]
 //!     mui-cut still  demo.cut.json --t 1.5 -o f.png [--scene NAME] [--size WxH] [--renderer R]
+//!     mui-cut render promo.cut.json -o out/{name}.mp4 --variants all
 //!     mui-cut eval   demo.cut.json --t 1.5 [--scene NAME]
 //!     mui-cut fmt    demo.cut.json
 //!     mui-cut serve  demo.cut.json [--port 8740] [--web DIR]
@@ -27,11 +28,12 @@ const USAGE: &str = "usage:
                  [--codec h264|h265|av1] [--encoder auto|vaapi|software]
                  [--crf N | --bitrate 12M [--maxrate 20M]] [--preset P]
                  [--pix-fmt yuv420p|yuv420p10le] [--container mp4|mkv|mov]
-  mui-cut still  PROJECT --t SECONDS -o OUT.png [--scene NAME] [--size WxH] [--renderer R]
+                 [--variant NAME | --variants all|NAME,NAME -o out/{name}.mp4]
+  mui-cut still  PROJECT --t SECONDS -o OUT.png [--scene NAME] [--size WxH] [--renderer R] [--variant NAME]
     R: classic (default; Vello compute on the GPU), gpu (vello_gpu), cpu (Vello CPU);
     --cpu is --renderer cpu. --threads: CPU frames drawn at once (default: one per core).
     --stats: per-frame wall time (evaluate, draw, hand to ffmpeg) p50/p95/max
-  mui-cut eval   PROJECT --t SECONDS [--scene NAME]
+  mui-cut eval   PROJECT --t SECONDS [--scene NAME] [--variant NAME]
   mui-cut fmt    PROJECT
   mui-cut schema                                   # the project JSON Schema
   mui-cut mcp    [PROJECT]                         # MCP server on stdio
@@ -119,7 +121,7 @@ fn run(argv: &[String]) -> Result<()> {
         "strip" => tools::strip_cmd(&args),
         "diff" => tools::diff_cmd(&args),
         "eval" => {
-            let p = load(&args.project)?;
+            let p = load_variant(&args)?;
             let s = scene(&p, &args)?;
             let f = eval(&p, s, args.num("t", 0.)?);
             println!(
@@ -147,6 +149,15 @@ fn run(argv: &[String]) -> Result<()> {
 fn load(path: &Path) -> Result<Project> {
     let src = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
     Project::load(&src).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// The project, as `--variant` makes it.
+fn load_variant(args: &Args) -> Result<Project> {
+    let p = load(&args.project)?;
+    match args.get("variant") {
+        Some(v) => p.variant(v),
+        None => Ok(p),
+    }
 }
 
 /// Write through a sibling temp file, so a reader never sees half a project.
@@ -239,17 +250,13 @@ impl Backend {
         workers: usize,
         yuv: Option<Yuv>,
     ) -> Result<Self> {
-        let cores = std::thread::available_parallelism().map_or(1, usize::from);
         let engine = match renderer {
             None | Some("classic") => Some(Engine::Classic),
             Some("gpu") => Some(Engine::Sparse),
             Some("cpu") => None,
             Some(r) => return Err(format!("--renderer: `{r}` is not classic, gpu or cpu")),
         };
-        let mut assets = Assets::default();
-        for e in load_assets(p, project, &mut assets) {
-            eprintln!("mui-cut: {e} (an image draws as its fill, the rest as nothing)");
-        }
+        let assets = read_assets(p, project);
         if let Some(engine) = engine {
             let size = [w.into(), h.into()];
             let gpu = match yuv {
@@ -264,19 +271,49 @@ impl Backend {
                 Err(e) => eprintln!("mui-cut: GPU unavailable ({e}); rendering on the CPU"),
             }
         }
+        Ok(Self::cpu(p, (w, h), workers, yuv, &assets))
+    }
+    /// `workers` Vello CPU renderers.
+    fn cpu(
+        p: &Project,
+        (w, h): (u16, u16),
+        workers: usize,
+        yuv: Option<Yuv>,
+        assets: &Assets,
+    ) -> Self {
         if p.scenes.iter().any(|s| s.mode == mui_cut::Mode::ThreeD) {
             eprintln!("mui-cut: the CPU renderer has no 3D pass; 3D scenes draw flat");
         }
         if p.has_effects() {
             eprintln!("mui-cut: effects need the GPU; the CPU renderer draws without them");
         }
+        let cores = std::thread::available_parallelism().map_or(1, usize::from);
         let workers = workers.clamp(1, cores);
         let threads = if workers == 1 { cores - 1 } else { 0 };
         let threads = u16::try_from(threads).unwrap_or(u16::MAX);
-        Ok(Self::Cpu(
-            CpuPool::new(w, h, workers, threads, &assets),
+        Self::Cpu(
+            CpuPool::new(w, h, workers, threads, assets),
             yuv.map(|y| (y, [w.into(), h.into()])),
-        ))
+        )
+    }
+    /// The next variant: its size and assets, on the same GPU device (or a
+    /// fresh CPU pool). Nothing may be in flight.
+    fn retarget(
+        &mut self,
+        p: &Project,
+        args: &Args,
+        (w, h): (u16, u16),
+        yuv: Option<Yuv>,
+    ) -> Result<()> {
+        let assets = read_assets(p, &args.project);
+        match self {
+            Self::Gpu(g) => {
+                g.resize([w.into(), h.into()], yuv)?;
+                g.assets = assets;
+            }
+            Self::Cpu(..) => *self = Self::cpu(p, (w, h), threads(args)?, yuv, &assets),
+        }
+        Ok(())
     }
     fn name(&self) -> String {
         match self {
@@ -304,6 +341,23 @@ impl Backend {
     }
 }
 
+/// [`load_assets`], saying what failed.
+fn read_assets(p: &Project, project: &Path) -> Assets {
+    let mut assets = Assets::default();
+    for e in load_assets(p, project, &mut assets) {
+        eprintln!("mui-cut: {e} (an image draws as its fill, the rest as nothing)");
+    }
+    assets
+}
+
+/// `--threads`: CPU frames drawn at once, one per core by default.
+fn threads(args: &Args) -> Result<usize> {
+    args.num(
+        "threads",
+        std::thread::available_parallelism().map_or(1, usize::from),
+    )
+}
+
 /// A CPU frame as `yuv` planes, if an encoder wants them.
 fn to_yuv(rgba: Vec<u8>, yuv: Option<(Yuv, [u32; 2])>) -> Vec<u8> {
     match yuv {
@@ -313,7 +367,7 @@ fn to_yuv(rgba: Vec<u8>, yuv: Option<(Yuv, [u32; 2])>) -> Vec<u8> {
 }
 
 fn still(args: &Args) -> Result<()> {
-    let p = load(&args.project)?;
+    let p = load_variant(args)?;
     let s = scene(&p, args)?;
     let out = args.get("o").ok_or("still needs -o OUT.png")?;
     let (w, h) = size(&p, args)?;
@@ -359,15 +413,47 @@ fn settings(p: &Project, args: &Args) -> Result<Render> {
     Ok(r)
 }
 
+/// `--variants all|a,b` renders each variant to `-o` with `{name}` filled
+/// in, on one GPU device; else one render, of `--variant` if given.
 fn render(args: &Args) -> Result<()> {
-    let p = load(&args.project)?;
     let out = args.get("o").ok_or("render needs -o OUT.mp4")?;
+    let Some(list) = args.get("variants") else {
+        return render_one(&load_variant(args)?, args, out, &mut None);
+    };
+    let base = load(&args.project)?;
+    let names: Vec<&str> = match list {
+        "all" => base.variants.iter().map(|v| v.name.as_str()).collect(),
+        l => l.split(',').map(str::trim).collect(),
+    };
+    if names.is_empty() {
+        return Err("the project has no variants".into());
+    }
+    if names.len() > 1 && !out.contains("{name}") {
+        return Err("several variants need `{name}` in -o, e.g. out/{name}.mp4".into());
+    }
+    let mut b = None;
+    for n in names {
+        let p = base.variant(n)?;
+        let path = out.replace("{name}", n);
+        if let Some(dir) = Path::new(&path)
+            .parent()
+            .filter(|d| !d.as_os_str().is_empty())
+        {
+            std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        }
+        render_one(&p, args, &path, &mut b)?;
+    }
+    Ok(())
+}
+
+/// Render `p` to `out`, on `backend` if one is open (else it opens one).
+fn render_one(p: &Project, args: &Args, out: &str, backend: &mut Option<Backend>) -> Result<()> {
     let scenes: Vec<&Scene> = match args.get("scene") {
-        Some(_) => vec![scene(&p, args)?],
+        Some(_) => vec![scene(p, args)?],
         None => p.scenes.iter().collect(),
     };
-    let (w, h) = size(&p, args)?;
-    let r = settings(&p, args)?;
+    let (w, h) = size(p, args)?;
+    let r = settings(p, args)?;
     let mb = r.mb.unwrap_or(1).clamp(1, 64);
     // `-o null` renders and discards: the renderer's speed without an encoder's.
     let plan = if out == "null" {
@@ -376,8 +462,13 @@ fn render(args: &Args) -> Result<()> {
         Some(encode::plan(&r, out)?)
     };
     let yuv = plan.as_ref().map_or(Yuv::Nv12, |p| p.yuv);
-    let cores = std::thread::available_parallelism().map_or(1, usize::from);
-    let mut b = Backend::open(&p, args, (w, h), args.num("threads", cores)?, Some(yuv))?;
+    let b = match backend {
+        Some(b) => {
+            b.retarget(p, args, (w, h), Some(yuv))?;
+            b
+        }
+        None => backend.insert(Backend::open(p, args, (w, h), threads(args)?, Some(yuv))?),
+    };
     let mut ff = Command::new("ffmpeg");
     // SVT-AV1 prints its banner through its own logger.
     ff.env("SVT_LOG", "1").args(["-y", "-loglevel", "error"]);
@@ -411,7 +502,7 @@ fn render(args: &Args) -> Result<()> {
         for i in 0..n {
             let pass = std::time::Instant::now();
             let t = i as f64 / p.fps;
-            let subs = subframes(&p, s, t, mb);
+            let subs = subframes(p, s, t, mb);
             if let Some(px) = b.push(subs)? {
                 write(&px)?;
             }
