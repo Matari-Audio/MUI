@@ -32,7 +32,9 @@ use mui_vello::effects::{Budget, GpuRenderer};
 use mui_vello::kurbo::Affine;
 use wgpu::util::DeviceExt;
 
+pub mod env;
 mod math;
+pub use env::EnvImage;
 pub use math::Mat4;
 
 /// Why the stage could not render.
@@ -47,6 +49,8 @@ pub enum Error {
     MissingLayer(String),
     /// A shot names a mesh [`Stage::mesh`] never uploaded.
     MissingMesh(String),
+    /// A shot names an environment [`Stage::environment`] never uploaded.
+    MissingEnvironment(String),
     /// Vello could not paint a layer.
     Render(mui_vello::effects::Error),
     Text(mui_text::Error),
@@ -60,6 +64,10 @@ impl std::fmt::Display for Error {
             Self::DeviceLost => f.write_str("stage GPU: device lost; make a new Stage"),
             Self::MissingLayer(s) => write!(f, "no layer {s:?}: paint it with Stage::layer first"),
             Self::MissingMesh(s) => write!(f, "no mesh {s:?}: upload it with Stage::mesh first"),
+            Self::MissingEnvironment(s) => write!(
+                f,
+                "no environment {s:?}: upload it with Stage::environment first"
+            ),
             Self::Render(e) => write!(f, "stage layer: {e}"),
             Self::Text(e) => write!(f, "stage text: {e}"),
             Self::Geometry(e) => write!(f, "stage geometry: {e}"),
@@ -119,7 +127,10 @@ pub const MAX_LIGHTS: usize = 4;
 /// floor.
 const SLOTS: usize = 2 * (MAX_PLANES + MAX_MODELS) + 1;
 /// `Globals` in `stage.wgsl`, in floats.
-const GLOBALS: usize = 192;
+const GLOBALS: usize = 252;
+/// The environment a shot may name without uploading it: the built-in
+/// neutral studio ([`EnvImage::studio`]).
+pub const STUDIO: &str = "studio";
 /// Shadow map side, texels; one array layer per light, and one more for the
 /// floor's contact shadow.
 const SHADOW: u32 = 2048;
@@ -195,6 +206,12 @@ impl Camera {
     }
     /// World to clip space for a frame `aspect` wide per unit high.
     pub fn view_proj(&self, aspect: f32) -> Mat4 {
+        let [_, up, _] = self.basis();
+        Mat4::perspective(self.fov.to_radians(), aspect, 1., 100_000.)
+            * Mat4::look_at(self.eye, self.target, up)
+    }
+    /// The view's right, up and forward unit vectors in the world.
+    pub fn basis(&self) -> [[f32; 3]; 3] {
         // Rolled about the view axis: straight on, up leans left by `roll`.
         let f: [f32; 3] = std::array::from_fn(|i| self.target[i] - self.eye[i]);
         let f = normalize(f);
@@ -215,8 +232,8 @@ impl Camera {
         ];
         let (sin, cos) = self.roll.to_radians().sin_cos();
         let up: [f32; 3] = std::array::from_fn(|i| u[i] * cos - s[i] * sin);
-        Mat4::perspective(self.fov.to_radians(), aspect, 1., 100_000.)
-            * Mat4::look_at(self.eye, self.target, up)
+        let right: [f32; 3] = std::array::from_fn(|i| s[i] * cos + u[i] * sin);
+        [right, up, f]
     }
 }
 
@@ -490,6 +507,41 @@ pub struct Fog {
     pub far: f32,
 }
 
+/// Image-based light from an environment [`Stage::environment`] uploaded
+/// (or [`STUDIO`]): diffuse from its irradiance, and reflections a metal's
+/// roughness blurs. A shot with one is lit even with no [`Light`]s.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Environment {
+    pub map: String,
+    /// Multiplies the image's light.
+    pub intensity: f32,
+    /// Degrees about the world's y axis.
+    pub rotation: f32,
+    /// The camera sees the environment behind everything, instead of the
+    /// background or [`Shot::clear`].
+    pub background: bool,
+}
+impl Environment {
+    /// The built-in studio at intensity 1.
+    pub fn studio() -> Self {
+        Self {
+            map: STUDIO.into(),
+            intensity: 1.,
+            rotation: 0.,
+            background: false,
+        }
+    }
+}
+
+/// Ground-truth ambient occlusion: a half-resolution screen-space pass
+/// that darkens creases and contacts within `radius` world units.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Ao {
+    /// 0 none, 1 the full occlusion; above 1 deepens it.
+    pub strength: f32,
+    pub radius: f32,
+}
+
 /// Everything in front of the camera at one instant.
 #[derive(Clone, Debug)]
 pub struct Shot {
@@ -504,6 +556,8 @@ pub struct Shot {
     pub fog: Option<Fog>,
     /// A solid background (linear RGB) instead of the WGSL one.
     pub clear: Option<[f32; 3]>,
+    pub environment: Option<Environment>,
+    pub ao: Option<Ao>,
     pub post: Post,
 }
 impl Shot {
@@ -516,6 +570,8 @@ impl Shot {
             floor: None,
             fog: None,
             clear: None,
+            environment: None,
+            ao: None,
             post: Post::default(),
         }
     }
@@ -566,6 +622,9 @@ struct Pipelines {
     linearize: wgpu::RenderPipeline,
     mip: wgpu::RenderPipeline,
     dof: wgpu::RenderPipeline,
+    /// Ambient occlusion at half resolution, then upsampled onto the frame.
+    gtao: wgpu::RenderPipeline,
+    ao_apply: wgpu::RenderPipeline,
     /// `fs_final` into [`Stage::draw`]'s target format.
     present: wgpu::RenderPipeline,
     mesh: wgpu::RenderPipeline,
@@ -593,7 +652,14 @@ pub struct Stage {
     globals: wgpu::Buffer,
     draws: wgpu::Buffer,
     post: wgpu::Buffer,
+    /// The globals and the shot's environment; one per environment, and
+    /// one with none.
     group0: wgpu::BindGroup,
+    l0: wgpu::BindGroupLayout,
+    env_sampler: wgpu::Sampler,
+    lut: wgpu::TextureView,
+    no_env: wgpu::BindGroup,
+    envs: HashMap<String, (wgpu::BindGroup, [[f32; 3]; 9])>,
     group1: wgpu::BindGroup,
     tex_layout: wgpu::BindGroupLayout,
     layout: wgpu::PipelineLayout,
@@ -606,6 +672,10 @@ pub struct Stage {
     dof: wgpu::TextureView,
     depth: wgpu::TextureView,
     hdr: wgpu::TextureView,
+    /// Where the occlusion pass writes the frame; then it and `hdr` swap.
+    lit: wgpu::TextureView,
+    /// Half-resolution occlusion, and the eye distance it was found at.
+    ao: wgpu::TextureView,
     accum: wgpu::TextureView,
     bloom: Vec<wgpu::TextureView>,
     layers: HashMap<String, Layer>,
@@ -756,9 +826,15 @@ impl Stage {
             view_dimension: wgpu::TextureViewDimension::D2,
             multisampled: false,
         };
+        let filtering = wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering);
         let l0 = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: None,
-            entries: &[entry(0, buffer(false))],
+            entries: &[
+                entry(0, buffer(false)),
+                entry(1, texture),
+                entry(2, filtering),
+                entry(3, texture),
+            ],
         });
         let l1 = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: None,
@@ -774,6 +850,7 @@ impl Stage {
                 ),
                 entry(2, buffer(false)),
                 entry(3, texture),
+                entry(4, texture),
             ],
         });
         let shadow_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -810,14 +887,26 @@ impl Stage {
             ..Default::default()
         });
         let no_shadows = shadow_group(&device, &shadow_layout, &shadow_sampler, 1, 1).1;
-        let group0 = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: None,
-            layout: &l0,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: globals.as_entire_binding(),
-            }],
+        // The environment wraps round in u and stops at the poles.
+        let env_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            address_mode_u: wgpu::AddressMode::Repeat,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
+            ..Default::default()
         });
+        let lut = env::brdf_lut()
+            .into_iter()
+            .map(|[a, b]| [a, b, 0., 1.])
+            .collect::<Vec<_>>();
+        let lut = view(&float_texture(
+            &device,
+            &queue,
+            &[(env::LUT, env::LUT, &lut)],
+        ));
+        let black = view(&float_texture(&device, &queue, &[(1, 1, &[[0.; 4]])]));
+        let no_env = env_group(&device, &l0, &globals, &black, &env_sampler, &lut);
+        let group0 = no_env.clone();
         let group1 = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
             layout: &l1,
@@ -867,6 +956,15 @@ impl Stage {
         let dist = view(&target(&device, width, height, HDR, 1, RT));
         let dof = view(&target(&device, width, height, HDR, 1, RT));
         let hdr = view(&target(&device, width, height, HDR, 1, RT));
+        let lit = view(&target(&device, width, height, HDR, 1, RT));
+        let ao = view(&target(
+            &device,
+            width.div_ceil(2),
+            height.div_ceil(2),
+            HDR,
+            1,
+            RT,
+        ));
         let accum = view(&target(&device, width, height, HDR, 1, RT));
         let bloom = (1..=BLOOM_LEVELS as u32)
             .map(|i| view(&target(&device, width >> i, height >> i, HDR, 1, RT)))
@@ -880,6 +978,11 @@ impl Stage {
             draws,
             post,
             group0,
+            l0,
+            env_sampler,
+            lut,
+            no_env,
+            envs: HashMap::new(),
             group1,
             tex_layout,
             layout,
@@ -891,6 +994,8 @@ impl Stage {
             dof,
             depth,
             hdr,
+            lit,
+            ao,
             accum,
             bloom,
             layers: HashMap::new(),
@@ -1115,6 +1220,15 @@ impl Stage {
     }
 
     fn tex_group(&self, tex: &wgpu::TextureView, bloom: &wgpu::TextureView) -> wgpu::BindGroup {
+        self.tex_group3(tex, bloom, bloom)
+    }
+    /// With a third texture, `aux2`.
+    fn tex_group3(
+        &self,
+        tex: &wgpu::TextureView,
+        bloom: &wgpu::TextureView,
+        aux2: &wgpu::TextureView,
+    ) -> wgpu::BindGroup {
         self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
             layout: &self.tex_layout,
@@ -1135,8 +1249,44 @@ impl Stage {
                     binding: 3,
                     resource: wgpu::BindingResource::TextureView(bloom),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(aux2),
+                },
             ],
         })
+    }
+
+    /// Prefilter `image` (see [`env`]) and keep it as environment `id`,
+    /// replacing any before. Costs a fraction of a second: once per image.
+    pub fn environment(&mut self, id: &str, image: &EnvImage) {
+        let pre = env::prefilter(image);
+        let px: Vec<Vec<[f32; 4]>> = pre
+            .levels
+            .iter()
+            .map(|l| l.rgb.iter().map(|&[r, g, b]| [r, g, b, 1.]).collect())
+            .collect();
+        let levels: Vec<(u32, u32, &[[f32; 4]])> = pre
+            .levels
+            .iter()
+            .zip(&px)
+            .map(|(l, p)| (l.width, l.height, p.as_slice()))
+            .collect();
+        let tex = view(&float_texture(&self.device, &self.queue, &levels));
+        let group = env_group(
+            &self.device,
+            &self.l0,
+            &self.globals,
+            &tex,
+            &self.env_sampler,
+            &self.lut,
+        );
+        self.envs.insert(id.into(), (group, pre.sh));
+    }
+
+    /// Whether [`Stage::environment`] made `id`.
+    pub fn has_environment(&self, id: &str) -> bool {
+        self.envs.contains_key(id)
     }
 
     /// The frame at `t` seconds: `subframes` shots spread evenly over
@@ -1387,6 +1537,38 @@ impl Stage {
             g[188] = f.contact.min(1.);
             maps.push(CONTACT_LAYER);
         }
+        // The view's axes and half-extents, for rays from the eye.
+        let [right, up, fwd] = s.camera.basis();
+        let ty = (s.camera.fov.to_radians() * 0.5).tan();
+        g[200..203].copy_from_slice(&right);
+        g[203] = ty * aspect;
+        g[204..207].copy_from_slice(&up);
+        g[207] = ty;
+        g[208..211].copy_from_slice(&fwd);
+        self.group0 = self.no_env.clone();
+        if let Some(e) = &s.environment {
+            if e.map == STUDIO && !self.envs.contains_key(STUDIO) {
+                self.environment(STUDIO, &EnvImage::studio());
+            }
+            let (group, sh) = self
+                .envs
+                .get(&e.map)
+                .ok_or_else(|| Error::MissingEnvironment(e.map.clone()))?;
+            let (sin, cos) = e.rotation.to_radians().sin_cos();
+            g[192..196].copy_from_slice(&[e.intensity.max(0.), cos, sin, 1.]);
+            g[196] = f32::from(u8::from(e.background));
+            g[197] = (env::LEVELS - 1) as f32;
+            for (k, c) in sh.iter().enumerate() {
+                g[216 + 4 * k..][..3].copy_from_slice(c);
+            }
+            // An environment lights the shot.
+            g[43] = 1.;
+            self.group0 = group.clone();
+        }
+        let ao = s.ao.filter(|a| a.strength > 0. && a.radius > 0.);
+        if let Some(a) = ao {
+            g[212..215].copy_from_slice(&[a.strength, a.radius, 1.]);
+        }
         self.queue
             .write_buffer(&self.globals, 0, bytemuck::cast_slice(&g));
 
@@ -1590,7 +1772,27 @@ impl Stage {
             let mut pass = self.scene_pass(&mut enc, &none, false, true);
             draw(&mut pass, 0);
         }
+        if ao.is_some() {
+            // Occlusion from the eye distances at half resolution, then a
+            // depth-aware upsample that darkens the frame into `lit`.
+            let group = self.tex_group(&self.dist, &self.dist);
+            let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                color_attachments: &[Some(attach(&self.ao, Some(wgpu::Color::WHITE)))],
+                ..Default::default()
+            });
+            self.full(&mut rp, &self.pipes.gtao, &group);
+            drop(rp);
+            let group = self.tex_group3(&self.hdr, &self.ao, &self.dist);
+            let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                color_attachments: &[Some(attach(&self.lit, Some(wgpu::Color::BLACK)))],
+                ..Default::default()
+            });
+            self.full(&mut rp, &self.pipes.ao_apply, &group);
+        }
         self.queue.submit([enc.finish()]);
+        if ao.is_some() {
+            std::mem::swap(&mut self.hdr, &mut self.lit);
+        }
         Ok(())
     }
 
@@ -1747,6 +1949,89 @@ impl Stage {
         });
         self.full(&mut rp, fin, &group);
     }
+}
+
+/// An `Rgba16Float` texture from linear RGBA levels, largest first.
+fn float_texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    levels: &[(u32, u32, &[[f32; 4]])],
+) -> wgpu::Texture {
+    let (w, h, _) = levels[0];
+    let tex = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("mui-stage environment"),
+        size: wgpu::Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: levels.len() as u32,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: HDR,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    for (m, &(w, h, px)) in levels.iter().enumerate() {
+        let bytes: Vec<u8> = px
+            .iter()
+            .flatten()
+            .flat_map(|&v| half::f16::from_f32(v).to_le_bytes())
+            .collect();
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &tex,
+                mip_level: m as u32,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &bytes,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(w * 8),
+                rows_per_image: None,
+            },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+    tex
+}
+
+/// Group 0: the globals, an environment's chain and the BRDF LUT.
+fn env_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    globals: &wgpu::Buffer,
+    env: &wgpu::TextureView,
+    sampler: &wgpu::Sampler,
+    lut: &wgpu::TextureView,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: None,
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: globals.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(env),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::Sampler(sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::TextureView(lut),
+            },
+        ],
+    })
 }
 
 /// Shadow maps `size` texels square, `layers` deep, and their bind group.
@@ -2120,6 +2405,8 @@ fn pipelines(
         linearize: make("vs_full", "fs_linearize", HDR, None, false, false, &[]),
         mip: make("vs_full", "fs_copy", HDR, None, false, false, &[]),
         dof: make("vs_full", "fs_dof", HDR, None, false, false, &[]),
+        gtao: make("vs_full", "fs_gtao", HDR, None, false, false, &[]),
+        ao_apply: make("vs_full", "fs_ao_apply", HDR, None, false, false, &[]),
         present: make("vs_full", "fs_final", present, None, false, false, &[]),
         mesh: make(
             "vs_wall",

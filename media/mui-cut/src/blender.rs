@@ -86,6 +86,8 @@ pub struct Desc {
     pub background: [f32; 3],
     pub ground: Option<GroundD>,
     pub fog: Option<FogD>,
+    /// The environment the world is lit by (see [`State::env`]).
+    pub world: Option<WorldD>,
     pub lights: Vec<LightD>,
     pub layers: Vec<LayerD>,
     pub models: Vec<ModelD>,
@@ -104,6 +106,17 @@ pub struct GroundD {
     pub roughness: f32,
     /// Principled "Specular IOR Level": 0 is matte, 0.5 plain dielectric.
     pub specular: f32,
+}
+
+/// The world's environment image: a file in the texture directory (the
+/// built-in studio, baked) or an absolute path, and the hash of its bytes,
+/// so the cache follows an edited file.
+#[derive(Clone, Debug, Serialize)]
+pub struct WorldD {
+    pub image: String,
+    pub hash: String,
+    /// The camera sees it, not the background colour.
+    pub background: bool,
 }
 
 /// Mist: surfaces fade into `color` from `start` metres over `depth`.
@@ -164,6 +177,10 @@ pub struct State {
     pub camera: CamS,
     /// World light, linear RGB.
     pub ambient: [f32; 3],
+    /// The environment's strength and its turn about the world's z, in
+    /// radians, as the Mapping node takes it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub env: Option<[f32; 2]>,
     pub lights: Vec<LightS>,
     pub layers: Vec<LayerS>,
     pub models: Vec<ModelS>,
@@ -206,6 +223,19 @@ pub struct LayerS {
 pub struct ModelS {
     pub m: [f32; 16],
     pub show: bool,
+}
+
+/// mui-stage's built-in studio as an OpenEXR file, named by its content.
+pub fn studio_exr() -> &'static (String, Vec<u8>) {
+    static STUDIO: std::sync::OnceLock<(String, Vec<u8>)> = std::sync::OnceLock::new();
+    STUDIO.get_or_init(|| {
+        let bytes = mui_stage::EnvImage::studio()
+            .to_exr()
+            .expect("an in-memory EXR writes");
+        let mut h = Fnv::default();
+        let _ = h.write_all(&bytes);
+        (format!("studio-{}.exr", h.hex()), bytes)
+    })
 }
 
 /// A layer texture to write: file name, straight RGBA, pixel size.
@@ -615,9 +645,16 @@ pub fn describe(
                 }
             })
             .collect();
+        // The stage turns its lookup by -rotation about y (y up); in
+        // Blender's z-up world that is the same turn about z.
+        let env = view
+            .environment
+            .as_ref()
+            .map(|e| [r(e.intensity), r(-e.rotation.to_radians())]);
         Ok(State {
             camera,
             ambient: r3(ambient),
+            env,
             lights,
             layers: layer_states,
             models: model_states,
@@ -634,6 +671,33 @@ pub fn describe(
         })
         .collect::<Result<Vec<_>, _>>()?;
 
+    let world = scene.environment.as_ref().map(|e| {
+        let file = (!e.hdri.is_empty()).then(|| dir.join(&e.hdri));
+        let read = file
+            .as_ref()
+            .map(|f| (std::path::absolute(f), std::fs::read(f)));
+        let (image, hash) = match read {
+            Some((Ok(abs), Ok(bytes))) => {
+                let mut h = Fnv::default();
+                let _ = h.write_all(&bytes);
+                (abs.display().to_string(), h.hex())
+            }
+            other => {
+                if other.is_some() {
+                    eprintln!(
+                        "mui-cut: environment `{}` not read; the studio lights",
+                        e.hdri
+                    );
+                }
+                (studio_exr().0.clone(), String::new())
+            }
+        };
+        WorldD {
+            image,
+            hash,
+            background: e.background,
+        }
+    });
     let px = f64::from(METRES);
     let h = f64::from(size[1]);
     let desc = Desc {
@@ -651,6 +715,7 @@ pub fn describe(
             start: r(f.near * px),
             depth: r((f.far - f.near).max(1.) * px),
         }),
+        world,
         lights: lights.into_iter().map(|(_, l)| l).collect(),
         layers,
         models: models.into_iter().map(|(_, m)| m).collect(),
@@ -773,18 +838,15 @@ pub fn render(
     let mut pngs = Vec::with_capacity(jobs.len());
     for group in jobs.chunk_by(|a, b| std::ptr::eq(a.0, b.0)) {
         let times: Vec<f64> = group.iter().map(|j| j.1).collect();
-        // ponytail: effect stacks are left out; upload each Blender frame
-        // into the fx chain's input texture if they are wanted here.
-        let s = group[0].0;
-        let fx = s.effects.len() + s.layers.iter().map(|l| l.effects.len()).sum::<usize>();
-        if fx > 0 {
-            eprintln!(
-                "mui-cut: --renderer blender skips effects ({fx} in scene `{}`); \
-                 classic and gpu draw them",
-                s.name
-            );
-        }
         let (desc, textures) = describe(p, group[0].0, &times, assets, dir, o)?;
+        let (studio, bytes) = studio_exr();
+        let baked = tex.join(studio);
+        if desc.world.as_ref().is_some_and(|w| &w.image == studio) && !baked.exists() {
+            let part = baked.with_extension("part");
+            std::fs::write(&part, bytes)
+                .and_then(|()| std::fs::rename(&part, &baked))
+                .map_err(|e| io(&baked, e))?;
+        }
         for t in textures {
             let path = tex.join(&t.name);
             if !path.exists() {
@@ -974,6 +1036,11 @@ mod tests {
         assert_eq!(d.frames[1][0].layers[ti].v, 0);
 
         assert!(d.models[0].path.ends_with("knot.glb"));
+        // No HDRI given: the world is the studio mui-stage lights with,
+        // turned and scaled per frame as the scene keys them.
+        let w = d.world.as_ref().unwrap();
+        assert!(w.image == studio_exr().0 && !w.background);
+        assert_eq!(d.frames[0][0].env, Some([0.45, 0.3491]));
         let g = d.ground.as_ref().unwrap();
         assert!((g.z + 2.6).abs() < 1e-4 && (g.radius - 26.).abs() < 1e-4);
         // `reflect: 0` is a matte floor: no grazing sheen mui-stage lacks.
@@ -1021,7 +1088,7 @@ mod tests {
         let text = job.to_string();
         let mut missing = Vec::new();
         for owner in [
-            "D", "O", "job", "s", "c", "l", "L", "v", "g", "f", "M", "ls", "ms",
+            "D", "O", "job", "s", "c", "l", "L", "v", "g", "f", "M", "ls", "ms", "W",
         ] {
             let pat = format!("{owner}[\"");
             for (i, _) in SCRIPT.match_indices(&pat) {

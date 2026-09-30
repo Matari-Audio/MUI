@@ -205,19 +205,30 @@ fn renderer(args: &Args) -> Option<&str> {
     }
 }
 
-/// Every file the project's layers name, read relative to the project;
+/// Every file the project's layers and environments name, read relative
+/// to the project;
 /// what failed, as messages.
 fn load_assets(p: &Project, project: &Path, assets: &mut Assets) -> Vec<String> {
     let dir = project.parent().unwrap_or(Path::new("."));
     let mut errs = Vec::new();
-    for l in p.scenes.iter().flat_map(|s| &s.layers) {
-        if let Some(path) = l.asset() {
-            let loaded = std::fs::read(dir.join(path))
-                .map_err(|e| e.to_string())
-                .and_then(|b| assets.add_asset(path, &b));
-            if let Err(e) = loaded {
-                errs.push(format!("`{path}`: {e}"));
-            }
+    let hdris = p
+        .scenes
+        .iter()
+        .filter_map(|s| s.environment.as_ref())
+        .map(|e| e.hdri.as_str())
+        .filter(|h| !h.is_empty());
+    for path in p
+        .scenes
+        .iter()
+        .flat_map(|s| &s.layers)
+        .filter_map(mui_cut::Layer::asset)
+        .chain(hdris)
+    {
+        let loaded = std::fs::read(dir.join(path))
+            .map_err(|e| e.to_string())
+            .and_then(|b| assets.add_asset(path, &b));
+        if let Err(e) = loaded {
+            errs.push(format!("`{path}`: {e}"));
         }
     }
     errs.extend(host::load(p, project, assets));
@@ -240,6 +251,8 @@ struct Baked {
     pngs: std::collections::HashMap<String, PathBuf>,
     yuv: Option<(Yuv, [u32; 2])>,
     name: String,
+    /// Runs the scene effects over each frame, when a scene has some.
+    fx: Option<Offline>,
 }
 
 /// What identifies an instant's picture: the evaluated frame.
@@ -334,8 +347,21 @@ impl Backend {
         } else {
             "eevee"
         };
+        let fx = if jobs.iter().any(|(s, _)| !s.effects.is_empty()) {
+            let gpu = match yuv {
+                Some(y) => Offline::with_yuv(size, Engine::Classic, y),
+                None => Offline::new(size, Engine::Classic),
+            };
+            gpu.map_err(|e| {
+                eprintln!("mui-cut: effects need the GPU ({e}); Blender frames go without them");
+            })
+            .ok()
+        } else {
+            None
+        };
         Ok(Self::Blender(Box::new(Baked {
             pngs,
+            fx,
             yuv: yuv.map(|y| (y, size)),
             name: format!("blender ({engine}, {} samples)", o.samples),
         })))
@@ -403,7 +429,10 @@ impl Backend {
                     .get(&frame_key(first))
                     .ok_or("a frame Blender was not asked for")?;
                 let (rgba, _) = mui_cut::blender::read_png(png)?;
-                Ok(Some(to_yuv(rgba, b.yuv)))
+                match &mut b.fx {
+                    Some(g) => Ok(g.push_plate(first, &rgba)?),
+                    None => Ok(Some(to_yuv(rgba, b.yuv))),
+                }
             }
         }
     }
@@ -415,7 +444,10 @@ impl Backend {
                 let px = pool.finish()?;
                 Ok(px.into_iter().map(|px| to_yuv(px, yuv)).collect())
             }
-            Self::Blender(_) => Ok(Vec::new()),
+            Self::Blender(b) => match &mut b.fx {
+                Some(g) => Ok(g.finish()?),
+                None => Ok(Vec::new()),
+            },
         }
     }
 }

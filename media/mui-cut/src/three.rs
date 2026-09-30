@@ -4,7 +4,7 @@
 //! Pure maths, the same on the web; `gpu3d.rs` hands it to mui-stage.
 use serde::{Deserialize, Serialize};
 
-use crate::{Drawn, Kind, LightType, Rgba, Scene, vector};
+use crate::{Anim, Drawn, Kind, LightType, Rgba, Scene, vector};
 
 /// Flat composite, or layers in a lit 3D space.
 #[derive(
@@ -51,6 +51,63 @@ pub struct Fog {
     pub color: Rgba,
     pub near: f64,
     pub far: f64,
+}
+
+/// Image-based light: an equirectangular `.hdr` or `.exr` (relative to the
+/// project; left out, a built-in neutral studio) lighting every surface
+/// and mirrored by metals, `intensity` times, turned `rotation` degrees
+/// about the vertical. With `background` the camera sees it behind
+/// everything instead of the scene's background colour.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(transform = crate::vars::bindable)]
+pub struct Environment {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub hdri: String,
+    #[serde(default = "one", skip_serializing_if = "is_one")]
+    pub intensity: Anim<f64>,
+    #[serde(default = "zero", skip_serializing_if = "is_zero")]
+    pub rotation: Anim<f64>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub background: bool,
+}
+fn one() -> Anim<f64> {
+    Anim::Value(1.)
+}
+fn is_one(a: &Anim<f64>) -> bool {
+    *a == one()
+}
+fn zero() -> Anim<f64> {
+    Anim::Value(0.)
+}
+fn is_zero(a: &Anim<f64>) -> bool {
+    *a == zero()
+}
+
+/// The environment at one time.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Env {
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub hdri: String,
+    pub intensity: f64,
+    pub rotation: f64,
+    pub background: bool,
+}
+
+/// Ambient occlusion: creases and contacts within `radius` pixels darken,
+/// by `strength` (1 the full occlusion).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(transform = crate::vars::bindable)]
+pub struct Ao {
+    #[serde(default = "ao_strength")]
+    pub strength: f64,
+    #[serde(default = "ao_radius")]
+    pub radius: f64,
+}
+fn ao_strength() -> f64 {
+    1.
+}
+fn ao_radius() -> f64 {
+    60.
 }
 
 /// A layer's 3D properties at one time (see [`crate::Layer`]).
@@ -164,6 +221,10 @@ pub struct View {
     pub ground: Option<Ground>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fog: Option<Fog>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub environment: Option<Env>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ao: Option<Ao>,
 }
 
 /// A project point (x right, y down, z deeper) in mui-stage's world
@@ -208,9 +269,9 @@ pub fn aim(pitch: f64, yaw: f64) -> [f64; 3] {
     [y.sin() * p.cos(), p.sin(), y.cos() * p.cos()]
 }
 
-/// The camera, lights, ground and fog of `scene` whose layers evaluated to
-/// `layers`.
-pub fn view(size: [u32; 2], scene: &Scene, layers: &[Drawn]) -> View {
+/// The camera, lights, ground, fog, environment and occlusion of `scene`
+/// at `t`, whose layers evaluated to `layers`.
+pub fn view(size: [u32; 2], scene: &Scene, t: f64, layers: &[Drawn]) -> View {
     View {
         camera: camera(size, layers),
         lights: layers
@@ -234,6 +295,13 @@ pub fn view(size: [u32; 2], scene: &Scene, layers: &[Drawn]) -> View {
             .collect(),
         ground: scene.ground.clone(),
         fog: scene.fog.clone(),
+        environment: scene.environment.as_ref().map(|e| Env {
+            hdri: e.hdri.clone(),
+            intensity: e.intensity.at(t).max(0.),
+            rotation: e.rotation.at(t),
+            background: e.background,
+        }),
+        ao: scene.ao.clone(),
     }
 }
 

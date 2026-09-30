@@ -234,6 +234,30 @@ impl Shutter {
         Ok(())
     }
 
+    /// [`Shutter::expose`] of one picture rendered elsewhere, `frame`'s
+    /// scene effects over it. Submits.
+    pub fn expose_plate(
+        &self,
+        canvas: &mut GpuCanvas,
+        frame: &Frame,
+        rgba: &[u8],
+    ) -> Result<(), String> {
+        let queue = canvas.queue.clone();
+        queue.write_buffer(
+            &self.weight,
+            0,
+            &[1f32, 0., 0., 0.].map(f32::to_le_bytes).concat(),
+        );
+        canvas.draw_plate(frame, rgba, &self.sub)?;
+        let mut enc = canvas
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        let clear = wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT);
+        pass(&mut enc, &self.accumulate, &self.sub_bind, &self.acc, clear);
+        queue.submit([enc.finish()]);
+        Ok(())
+    }
+
     /// The sum as straight-alpha sRGB into `target`.
     pub fn resolve(&self, enc: &mut wgpu::CommandEncoder, target: &wgpu::TextureView) {
         let clear = wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT);

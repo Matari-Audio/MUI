@@ -649,6 +649,20 @@
         "near": 1800.0,
         "far": 4200.0
       },
+      "environment": {
+        "intensity": [
+          { "t": 0.0, "v": 0.45, "interp": "bezier" },
+          { "t": 6.0, "v": 0.6, "interp": "bezier" }
+        ],
+        "rotation": [
+          { "t": 0.0, "v": -20.0, "interp": "bezier" },
+          { "t": 6.0, "v": 40.0, "interp": "bezier" }
+        ]
+      },
+      "ao": {
+        "strength": 1.0,
+        "radius": 60.0
+      },
       "effects": [
         {
           "type": "grain",

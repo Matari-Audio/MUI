@@ -404,3 +404,257 @@ fn a_model_draws_and_lights_from_its_mesh() {
         Err(Error::MissingMesh(_))
     ));
 }
+
+#[test]
+fn the_irradiance_of_a_constant_environment_is_that_constant() {
+    let grey = EnvImage::from_fn(64, 32, |_| [0.7, 0.2, 1.5]);
+    let sh = env::sh9(&grey);
+    for n in [
+        [0., 1., 0.],
+        [0., -1., 0.],
+        [1., 0., 0.],
+        [0., 0., -1.],
+        [0.6, 0.48, -0.64],
+    ] {
+        let e = env::irradiance(&sh, n);
+        for (got, want) in e.into_iter().zip([0.7, 0.2, 1.5]) {
+            assert!((got - want).abs() < want * 0.01, "{n:?}: {e:?}");
+        }
+    }
+    // A sky lit from above only: the ground-facing side gets none of it,
+    // the top all but the band limit.
+    let sky = EnvImage::from_fn(64, 32, |d| [f32::from(u8::from(d[1] > 0.)); 3]);
+    let sh = env::sh9(&sky);
+    let (up, down) = (
+        env::irradiance(&sh, [0., 1., 0.]),
+        env::irradiance(&sh, [0., -1., 0.]),
+    );
+    assert!(up[0] > 0.9 && down[0] < 0.1, "{up:?} {down:?}");
+}
+
+#[test]
+fn roughness_maps_linearly_onto_the_mip_chain() {
+    let last = (env::LEVELS - 1) as f32;
+    assert_eq!(env::mip_of_roughness(0.), 0.);
+    assert_eq!(env::mip_of_roughness(1.), last);
+    assert_eq!(env::mip_of_roughness(7.), last, "clamped");
+    for m in 0..env::LEVELS {
+        assert!((env::mip_of_roughness(env::roughness_of_mip(m)) - m as f32).abs() < 1e-6);
+    }
+    // Directions and texel coordinates round-trip, +z at u = 3/4.
+    for d in [[0.6, 0.48, -0.64], [0., 0.8, 0.6], [-1., 0., 0.]] {
+        let back = env::dir_of(env::uv_of(d));
+        assert!(
+            (0..3).all(|i| (back[i] - d[i]).abs() < 1e-5),
+            "{d:?} {back:?}"
+        );
+    }
+    assert!((env::uv_of([0., 0., 1.])[0] - 0.75).abs() < 1e-6);
+    // The LUT: a smooth mirror seen head on reflects F0 whole; a rough
+    // one at grazing loses most of it.
+    let lut = env::brdf_lut();
+    let n = env::LUT as usize;
+    let [a, b] = lut[n - 1];
+    assert!(a + b > 0.9 && a + b < 1.05, "{a} {b}");
+    let [a, b] = lut[n * n - 1];
+    assert!(a + b < 0.5, "{a} {b}");
+}
+
+/// An environment that is bright only to the viewer's +z side, whose
+/// light a flat mirror facing the viewer throws back.
+fn front_light(d: [f32; 3]) -> [f32; 3] {
+    [if d[2] > 0.5 { 1. } else { 0.02 }; 3]
+}
+
+fn quad(stage: &mut Stage) {
+    let n = [0., 0., 1.];
+    let v = |x: f32, y: f32| [x, y, 0., n[0], n[1], n[2]];
+    stage.mesh(
+        "quad",
+        &[v(-30., -30.), v(30., -30.), v(30., 30.), v(-30., 30.)],
+        &[0, 1, 2, 0, 2, 3],
+    );
+}
+
+#[test]
+fn a_metal_lit_only_by_the_environment_mirrors_it() {
+    let Some(mut stage) = stage(64, 64) else {
+        return;
+    };
+    quad(&mut stage);
+    stage.environment("front", &EnvImage::from_fn(128, 64, front_light));
+    let shot = |env: Option<Environment>| Shot {
+        models: vec![Model {
+            mesh: "quad".into(),
+            transform: Mat4::IDENTITY,
+            color: [1., 0.8, 0.4, 1.],
+            metallic: 1.,
+            roughness: 0.2,
+            cast: false,
+            receive: false,
+        }],
+        // Ambient only, so without the environment the metal is lit.
+        lights: vec![Light {
+            color: [0.1; 3],
+            ..Light::new(LightKind::Ambient)
+        }],
+        environment: env,
+        clear: Some([0.; 3]),
+        post: Post::NONE,
+        ..Shot::new(Camera::front(64., 30.))
+    };
+    let mut centre = |env: Option<Environment>| {
+        let f = stage.render(0., 0., 1, &|_| shot(env.clone())).unwrap();
+        f.rgba[(32 * 64 + 32) * 4..][..3].to_vec()
+    };
+    let bare = centre(None);
+    let env = Environment {
+        map: "front".into(),
+        ..Environment::studio()
+    };
+    let lit = centre(Some(env.clone()));
+    let turned = centre(Some(Environment {
+        rotation: 180.,
+        ..env.clone()
+    }));
+    // It mirrors the bright side, tinted by its colour, and turning the
+    // environment away takes it back.
+    assert!(
+        lit[0] > bare[0] + 0.3 && lit[0] > lit[2] + 0.1,
+        "{lit:?} vs {bare:?}"
+    );
+    assert!(turned[0] < lit[0] - 0.3, "{turned:?} vs {lit:?}");
+    // Intensity scales it; the studio needs no upload.
+    let dim = centre(Some(Environment {
+        intensity: 0.25,
+        ..env
+    }));
+    assert!(dim[0] < lit[0] - 0.1, "{dim:?}");
+    assert!(
+        stage
+            .render(0., 0., 1, &|_| shot(Some(Environment::studio())))
+            .is_ok()
+    );
+    assert!(matches!(
+        stage.render(0., 0., 1, &|_| shot(Some(Environment {
+            map: "nope".into(),
+            ..Environment::studio()
+        }))),
+        Err(Error::MissingEnvironment(_))
+    ));
+}
+
+/// A 40-unit cube standing on the floor at the origin.
+fn cube(stage: &mut Stage) {
+    let mut v = Vec::new();
+    let mut idx = Vec::new();
+    for axis in 0..3 {
+        for side in [-1f32, 1.] {
+            let mut n = [0.; 3];
+            n[axis] = side;
+            let (a, b) = ((axis + 1) % 3, (axis + 2) % 3);
+            let base = v.len() as u32;
+            for (s, t) in [(-1., -1.), (1., -1.), (1., 1.), (-1., 1.)] {
+                let mut p = [0f32; 3];
+                p[axis] = side * 20.;
+                p[a] = s * 20.;
+                p[b] = t * 20.;
+                p[1] += 20.;
+                v.push([p[0], p[1], p[2], n[0], n[1], n[2]]);
+            }
+            idx.extend([0, 1, 2, 0, 2, 3].map(|k| base + k));
+        }
+    }
+    stage.mesh("cube", &v, &idx);
+}
+
+#[test]
+fn ambient_occlusion_darkens_a_contact_crease_not_an_open_floor() {
+    let (w, h) = (160u32, 120u32);
+    let Some(mut stage) = stage(w, h) else {
+        return;
+    };
+    cube(&mut stage);
+    let camera = Camera {
+        eye: [60., 140., 220.],
+        target: [0., 10., 0.],
+        fov: 40.,
+        roll: 0.,
+    };
+    let shot = |ao: Option<Ao>, reflect: f32| {
+        let mut floor = Floor::at(0.);
+        floor.color = [0.5; 3];
+        floor.reflect = reflect;
+        Shot {
+            models: vec![Model {
+                mesh: "cube".into(),
+                transform: Mat4::IDENTITY,
+                color: [0.5, 0.5, 0.5, 1.],
+                metallic: 0.,
+                roughness: 1.,
+                cast: false,
+                receive: false,
+            }],
+            lights: vec![Light::new(LightKind::Ambient)],
+            floor: Some(floor),
+            clear: Some([0.; 3]),
+            ao,
+            post: Post::NONE,
+            ..Shot::new(camera)
+        }
+    };
+    let render = |stage: &mut Stage, ao, reflect| {
+        stage
+            .render(0., 0., 1, &|_| shot(ao, reflect))
+            .unwrap()
+            .rgba
+    };
+    let luma = |stage: &mut Stage, ao| render(stage, ao, 0.);
+    let plain = luma(&mut stage, None);
+    let ao = Some(Ao {
+        strength: 1.,
+        radius: 40.,
+    });
+    let a = luma(&mut stage, ao);
+    assert_eq!(a, luma(&mut stage, ao), "the same every time");
+    let vp = camera.view_proj(w as f32 / h as f32);
+    let px = |p: [f32; 3]| {
+        let q = vp.project(p);
+        let (x, y) = (
+            ((q[0] + 1.) * 0.5 * w as f32) as usize,
+            ((1. - q[1]) * 0.5 * h as f32) as usize,
+        );
+        (y * w as usize + x) * 4
+    };
+    // On the floor just in front of the cube's foot, and well clear of it.
+    let crease = px([0., 0., 23.]);
+    let open = px([-70., 0., 60.]);
+    assert!(
+        plain[crease] > 0.2 && (plain[crease] - plain[open]).abs() < 0.05,
+        "flat light: {} {}",
+        plain[crease],
+        plain[open]
+    );
+    assert!(
+        a[crease] < plain[crease] * 0.9,
+        "the crease darkens: {} -> {}",
+        plain[crease],
+        a[crease]
+    );
+    assert!(
+        (a[open] - plain[open]).abs() < plain[open] * 0.03,
+        "the open floor does not: {} -> {}",
+        plain[open],
+        a[open]
+    );
+    // A mirror image lies below the floor; seen as depth it would be a pit
+    // whose rim the floor around it is occluded by. It darkens no more
+    // than a matte floor does.
+    let dark = |plain: &[f32], a: &[f32]| -> f32 { plain.iter().zip(a).map(|(p, a)| p - a).sum() };
+    let matte = dark(&plain, &a);
+    let shiny = dark(
+        &render(&mut stage, None, 0.35),
+        &render(&mut stage, ao, 0.35),
+    );
+    assert!(shiny < matte * 1.015, "matte {matte}, reflective {shiny}");
+}

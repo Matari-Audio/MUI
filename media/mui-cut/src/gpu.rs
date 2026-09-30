@@ -152,6 +152,18 @@ impl GpuCanvas {
         self.with_fx(|fx, canvas| fx.draw(canvas, assets, frame, target))
     }
 
+    /// `frame`'s scene effects over `rgba`, a straight-RGBA picture at
+    /// [`GpuCanvas::size`] rendered elsewhere (a Blender frame), into
+    /// `target`. Submits its own work.
+    pub fn draw_plate(
+        &mut self,
+        frame: &Frame,
+        rgba: &[u8],
+        target: &wgpu::TextureView,
+    ) -> Result<(), String> {
+        self.with_fx(|fx, canvas| fx.plate(canvas, frame, rgba, target))
+    }
+
     /// `f` with the effect passes, made the first time.
     fn with_fx<R>(
         &mut self,
@@ -517,13 +529,36 @@ mod offline {
         /// pixels that come back are an earlier frame's, straight-alpha
         /// RGBA, once the ring is full; [`Offline::finish`] drains the rest.
         pub fn push(&mut self, subframes: &[Frame]) -> Result<Option<Vec<u8>>, String> {
-            let done = if self.pending.len() == RING {
-                Some(self.read_oldest()?)
-            } else {
-                None
-            };
+            let done = self.make_room()?;
             self.shutter
                 .expose(&mut self.canvas, &self.assets, subframes)?;
+            self.read_back(done)
+        }
+
+        /// [`Offline::push`] for a picture rendered elsewhere (a Blender
+        /// frame, straight RGBA at this size): `frame`'s scene effects run
+        /// over it.
+        pub fn push_plate(
+            &mut self,
+            frame: &Frame,
+            rgba: &[u8],
+        ) -> Result<Option<Vec<u8>>, String> {
+            let done = self.make_room()?;
+            self.shutter.expose_plate(&mut self.canvas, frame, rgba)?;
+            self.read_back(done)
+        }
+
+        /// The oldest frame, once the ring is full.
+        fn make_room(&mut self) -> Result<Option<Vec<u8>>, String> {
+            if self.pending.len() == RING {
+                self.read_oldest().map(Some)
+            } else {
+                Ok(None)
+            }
+        }
+
+        /// The sum on its way back; `done` passed through.
+        fn read_back(&mut self, done: Option<Vec<u8>>) -> Result<Option<Vec<u8>>, String> {
             let (device, queue) = (&self.canvas.device, &self.canvas.queue);
             let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
             let slot = self.next;

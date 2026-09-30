@@ -254,6 +254,13 @@ try {
   writeFileSync(file, readFileSync(join(here, '../examples/stage3d.cut.json'), 'utf8'));
   await sleep(1500);
   await click('#scenes button:nth-child(1)'); await sleep(800);
+  // Its environment and occlusion show on the scene and switch off and on.
+  for (let i = 0; i < 50 && !(await js(`!!document.querySelector('[data-look="ao"]')`)); i++) await sleep(100);
+  check(await js(`document.querySelector('[data-look="environment"]')?.checked && document.querySelector('[data-look="ao"]')?.checked`), 'the scene shows its environment and occlusion');
+  await js(`(c => { c.checked = false; c.dispatchEvent(new Event('change')); })(document.querySelector('[data-look="ao"]'))`); await sleep(800);
+  check(!read().scenes[0].ao && read().scenes[0].environment, 'occlusion switches off in the file');
+  await js(`(c => { c.checked = true; c.dispatchEvent(new Event('change')); })(document.querySelector('[data-look="ao"]'))`); await sleep(800);
+  check(read().scenes[0].ao, 'and back on');
   await js(`document.querySelector('#layers button:last-child').click()`); await sleep(400);
   check(await js(`[...document.querySelector('#graph-prop').options].some(o => o.value === 'distance')`), 'the camera\'s distance is in the graph');
   const notice = await js(`document.querySelector('#notice').hidden ? '' : document.querySelector('#notice').textContent`);

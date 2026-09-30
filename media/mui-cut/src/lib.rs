@@ -41,7 +41,7 @@ pub use plugin::{
 pub use pool::{CpuPool, shutter};
 pub use render::{Assets, Layers, Quad, Renderer};
 pub use shutter::Shutter;
-pub use three::{Cam, Fog, Ground, Lamp, Mode, View};
+pub use three::{Ao, Cam, Env, Environment, Fog, Ground, Lamp, Mode, View};
 
 use serde::{Deserialize, Serialize};
 
@@ -159,6 +159,12 @@ pub struct Scene {
     /// 3D: distance fog.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fog: Option<Fog>,
+    /// 3D: image-based light, and reflections for metals.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment: Option<Environment>,
+    /// 3D: ambient occlusion, for contact depth.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ao: Option<Ao>,
     /// Run over the whole frame, after every layer.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub effects: Vec<fx::Effect>,
@@ -1146,7 +1152,7 @@ pub fn eval(project: &Project, scene: &Scene, t: f64) -> Frame {
         .iter()
         .map(|l| l.eval_at(t, project.fps))
         .collect();
-    let view = (scene.mode == Mode::ThreeD).then(|| three::view(project.size, scene, &layers));
+    let view = (scene.mode == Mode::ThreeD).then(|| three::view(project.size, scene, t, &layers));
     Frame {
         size: project.size,
         background: scene.background,

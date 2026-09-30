@@ -784,6 +784,25 @@ fn blender_renders_a_small_3d_still_and_then_reuses_it() {
     assert!(!String::from_utf8_lossy(&again.stderr).contains("blender frame 1/1"));
     assert_eq!(count(&cache.join("frames"), "png"), 1);
     assert_eq!(count(&cache, "blend"), 1);
+    // The scene's grain runs over Blender's frame: without it, the same
+    // cached frame comes out untouched.
+    let grained = std::fs::read(&out).unwrap();
+    let json = std::fs::read_to_string(&project).unwrap();
+    let grain = "\"type\": \"grain\",\n          \"amount\": 0.05";
+    assert!(json.contains(grain));
+    std::fs::write(
+        &project,
+        json.replace(grain, "\"type\": \"grain\",\n          \"amount\": 0.0"),
+    )
+    .unwrap();
+    let plain = still();
+    assert!(
+        plain.status.success(),
+        "{}",
+        String::from_utf8_lossy(&plain.stderr)
+    );
+    assert_eq!(count(&cache.join("frames"), "png"), 1);
+    assert_ne!(grained, std::fs::read(&out).unwrap());
 }
 
 #[test]
