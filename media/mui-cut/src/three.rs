@@ -116,6 +116,23 @@ pub struct Cam {
     pub aperture: f64,
 }
 
+impl Cam {
+    /// The editor's orbit preview: this camera swung `yaw` degrees right and
+    /// `pitch` degrees down about its target, its distance times `zoom`.
+    pub fn orbit(&self, yaw: f64, pitch: f64, zoom: f64) -> Cam {
+        let d: [f64; 3] = std::array::from_fn(|i| self.target[i] - self.eye[i]);
+        let r = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt().max(1e-9);
+        let p0 = (d[1] / r).clamp(-1.0, 1.0).asin().to_degrees();
+        let y0 = d[0].atan2(d[2]).to_degrees();
+        let f = aim((p0 + pitch).clamp(-89.0, 89.0), y0 + yaw);
+        let r = r * zoom.max(0.01);
+        Cam {
+            eye: std::array::from_fn(|i| self.target[i] - f[i] * r),
+            ..self.clone()
+        }
+    }
+}
+
 /// A light at one time, project coordinates.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Lamp {

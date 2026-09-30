@@ -118,7 +118,10 @@ impl GpuCanvas {
         frame: &Frame,
         target: &wgpu::TextureView,
     ) -> Result<Vec<Quad>, String> {
-        self.notice.clear();
+        // A failed 3D pass keeps its reason for as long as it draws flat.
+        if frame.view.is_none() || self.three_d {
+            self.notice.clear();
+        }
         if let Some(view) = &frame.view {
             if self.three_d {
                 match self.draw_3d(assets, frame, view, target) {
@@ -129,7 +132,7 @@ impl GpuCanvas {
                         self.notice = format!("3D unavailable, drawn flat: {e}");
                     }
                 }
-            } else {
+            } else if self.notice.is_empty() {
                 "3D scenes draw flat on this renderer".clone_into(&mut self.notice);
             }
         }

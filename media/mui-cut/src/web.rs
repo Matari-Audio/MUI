@@ -60,6 +60,16 @@ impl Cut {
         self.quads = serde_json::to_string(&quads).map_err(|e| e.to_string())?;
         Ok(px)
     }
+    /// Why the CPU view draws `scene` differently, or empty: it has no 3D
+    /// pass, so 3D scenes draw flat.
+    pub fn notice(&self, scene: usize) -> String {
+        match self.project.as_ref().and_then(|p| p.scenes.get(scene)) {
+            Some(s) if s.mode == crate::Mode::ThreeD => {
+                "3D scenes draw flat on the CPU renderer".into()
+            }
+            _ => String::new(),
+        }
+    }
     /// JSON `[{id, pts: [[x, y] x4]}]` from the last render.
     pub fn quads(&self) -> String {
         self.quads.clone()
@@ -93,16 +103,16 @@ impl Cut {
     /// `[{"p": path, "v": number or "#rrggbb"}]`: the inspector's rows,
     /// the timeline's and the graph's choices.
     pub fn props(&self, scene: usize, layer: &str, t: f64) -> String {
-        let Some(l) = self
+        let Some((s, l)) = self
             .project
             .as_ref()
             .and_then(|p| p.scenes.get(scene))
-            .and_then(|s| s.layers.iter().find(|l| l.id == layer))
+            .and_then(|s| Some((s, s.layers.iter().find(|l| l.id == layer)?)))
         else {
             return "[]".into();
         };
         let rows: Vec<serde_json::Value> = l
-            .props()
+            .props_in(s.mode == crate::Mode::ThreeD)
             .into_iter()
             .map(|(p, a)| match a {
                 crate::Prop::Num(a) => serde_json::json!({ "p": p, "v": a.at(t) }),
@@ -138,6 +148,8 @@ pub struct GpuView {
     project: Option<Project>,
     assets: Assets,
     adapter: String,
+    /// The orbit preview's yaw, pitch and zoom; never saved.
+    orbit: Option<[f64; 3]>,
 }
 
 #[wasm_bindgen]
@@ -198,7 +210,10 @@ impl GpuView {
                 .ok_or("canvas not supported by the adapter")?
         };
         surface.configure(&device, &config);
-        let canvas = GpuCanvas::new(&device, &queue, format, [w, h], engine).await?;
+        let mut canvas = GpuCanvas::new(&device, &queue, format, [w, h], engine).await?;
+        // WebGL2 lacks the storage and depth-array features the 3D pass
+        // needs; 3D scenes draw flat there with a notice.
+        canvas.three_d = api != "webgl2";
         Ok(Self {
             canvas,
             surface,
@@ -206,6 +221,7 @@ impl GpuView {
             project: None,
             assets: Assets::default(),
             adapter: adapter.get_info().name,
+            orbit: None,
         })
     }
     /// `classic` or `vello_gpu`.
@@ -218,6 +234,19 @@ impl GpuView {
     pub fn load(&mut self, json: &str) -> Result<(), String> {
         self.project = Some(Project::load(json)?);
         Ok(())
+    }
+    /// Why the last frame drew differently from the export, or empty.
+    pub fn notice(&self) -> String {
+        self.canvas.notice().into()
+    }
+    /// Look at 3D scenes from the shot camera swung `yaw` and `pitch`
+    /// degrees about its target, `zoom` times as far; the project is
+    /// untouched.
+    pub fn set_orbit(&mut self, yaw: f64, pitch: f64, zoom: f64) {
+        self.orbit = Some([yaw, pitch, zoom]);
+    }
+    pub fn clear_orbit(&mut self) {
+        self.orbit = None;
     }
     pub fn add_asset(&mut self, path: &str, bytes: &[u8]) -> Result<(), String> {
         self.assets.add_asset(path, bytes)
@@ -245,7 +274,11 @@ impl GpuView {
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
-        let quads = self.canvas.draw(&self.assets, &eval(p, s, t), &view)?;
+        let mut f = eval(p, s, t);
+        if let (Some(v), Some([yaw, pitch, zoom])) = (f.view.as_mut(), self.orbit) {
+            v.camera = v.camera.orbit(yaw, pitch, zoom);
+        }
+        let quads = self.canvas.draw(&self.assets, &f, &view)?;
         self.canvas.queue.present(frame);
         serde_json::to_string(&quads).map_err(|e| e.to_string())
     }

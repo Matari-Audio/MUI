@@ -13,6 +13,8 @@
     <span id="file" class="muted"></span>
     <span class="grow"></span>
     <span id="status" role="status" aria-live="polite">loading engine</span>
+    <span id="notice" class="muted" hidden></span>
+    <button id="orbit" title="Orbit preview: drag to swing the camera, wheel to zoom; not saved" aria-pressed="false" hidden>Orbit</button>
     <span id="backend" class="muted mono" title="Viewport renderer"></span>
     <button id="undo" title="Undo (Ctrl+Z)">Undo</button>
     <button id="redo" title="Redo (Ctrl+Shift+Z)">Redo</button>
@@ -22,7 +24,7 @@
     <div id="scenes" class="list"></div>
     <h2>Layers
       <span>
-        <button data-add="rect" title="Add a rectangle">▭</button><button data-add="ellipse" title="Add an ellipse">◯</button><button data-add="text" title="Add text">T</button><button data-add="path" title="Add a path">〰</button><button data-add="duplicator" title="Add a duplicator">⁂</button>
+        <button data-add="rect" title="Add a rectangle">▭</button><button data-add="ellipse" title="Add an ellipse">◯</button><button data-add="text" title="Add text">T</button><button data-add="path" title="Add a path">〰</button><button data-add="duplicator" title="Add a duplicator">⁂</button><button data-add="camera" title="Add a camera (3D scenes)">⌖</button><button data-add="light" title="Add a light (3D scenes)">☀</button><button data-add="model" title="Add a glTF model (3D scenes)">◈</button>
       </span>
     </h2>
     <div id="layers" class="list"></div>

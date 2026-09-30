@@ -236,3 +236,21 @@ fn shadowed_3d_frames_are_deterministic_and_drawn() {
         .count();
     assert!(off < engines[0].len() / 200, "{off} channels differ");
 }
+
+#[test]
+fn the_orbit_preview_swings_about_the_target_and_keeps_zero_as_is() {
+    let cam = Cam {
+        eye: [0.0, 0.0, -1000.0],
+        target: [0.0, 0.0, 0.0],
+        fov: 40.0,
+        roll: 0.0,
+        focus: 0.0,
+        aperture: 0.0,
+    };
+    assert!(close(cam.orbit(0.0, 0.0, 1.0).eye, cam.eye));
+    // A quarter turn right puts the eye on the left, looking +x.
+    assert!(close(cam.orbit(90.0, 0.0, 1.0).eye, [-1000.0, 0.0, 0.0]));
+    // Pitching down lifts the eye (y up is negative in project space).
+    let up = cam.orbit(0.0, 30.0, 2.0).eye;
+    assert!(up[1] < 0.0 && (up.iter().map(|v| v * v).sum::<f64>().sqrt() - 2000.0).abs() < 1e-6);
+}

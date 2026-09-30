@@ -69,3 +69,4 @@ aside { padding: 0 10px 10px; background: var(--panel); overflow: auto; }
 #tl-wrap { overflow-y: auto; overflow-x: hidden; min-height: 0; }
 #timeline, #graph { display: block; width: 100%; }
 #graph { height: 190px; }
+#orbit.on { background: var(--raised); border-color: var(--strong); color: var(--hi); }
