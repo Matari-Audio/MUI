@@ -899,6 +899,7 @@ mod tests {
     const DEMO: &str = include_str!("../examples/demo.cut.json");
     const SHOWCASE: &str = include_str!("../examples/showcase.cut.json");
     const STAGE3D: &str = include_str!("../examples/stage3d.cut.json");
+    const PLUGIN: &str = include_str!("../examples/plugin.cut.json");
 
     fn run(src: &str) -> Vec<Issue> {
         let mut r = Renderer::new(320, 180);
@@ -912,7 +913,7 @@ mod tests {
 
     #[test]
     fn the_examples_have_no_warnings() {
-        for src in [DEMO, SHOWCASE, STAGE3D] {
+        for src in [DEMO, SHOWCASE, STAGE3D, PLUGIN] {
             let bad: Vec<String> = run(src)
                 .iter()
                 .filter(|i| i.severity >= Severity::Warning)
@@ -1035,7 +1036,7 @@ mod tests {
         let schema = Project::json_schema();
         let v = jsonschema::validator_for(&schema).unwrap();
         let effects = include_str!("../examples/effects.cut.json");
-        for src in [DEMO, SHOWCASE, effects] {
+        for src in [DEMO, SHOWCASE, effects, PLUGIN] {
             let doc: Value = serde_json::from_str(src).unwrap();
             let errs: Vec<String> = v.iter_errors(&doc).map(|e| e.to_string()).collect();
             assert!(errs.is_empty(), "{errs:?}");

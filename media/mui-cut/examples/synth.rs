@@ -51,7 +51,9 @@ fn main() -> Result<(), String> {
         Ok(())
     };
     let mut ui = Ui::default();
-    ui.set_font(Some(Font::new(ttf_inter::REGULAR).map_err(|e| e.to_string())?));
+    ui.set_font(Some(
+        Font::new(ttf_inter::REGULAR).map_err(|e| e.to_string())?,
+    ));
     let mut editor = mui_motion_bridge::Editor::new(ui);
     let mut capture = mui_motion_bridge::CaptureStream::default();
     let frame = move |_rev: u64, clock: u64, inputs: &[Value]| {
@@ -164,14 +166,10 @@ fn view(ui: &mut Ui, m: &mut Model) -> El {
     .radius(12.)
     .fill(Role::Surface)
     .id("head");
-    col([
-        head,
-        row([osc, filter]).gap(12.),
-        row([env, out]).gap(12.),
-    ])
-    .gap(12.)
-    .pad(16.)
-    .size(W, H)
-    .fill(Role::Background)
-    .id("root")
+    col([head, row([osc, filter]).gap(12.), row([env, out]).gap(12.)])
+        .gap(12.)
+        .pad(16.)
+        .size(W, H)
+        .fill(Role::Background)
+        .id("root")
 }

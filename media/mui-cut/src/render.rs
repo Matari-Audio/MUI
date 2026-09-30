@@ -380,14 +380,21 @@ impl Assets {
         out.quads.push(quad(l.id.clone(), place, w, h));
         let drawn = l.opacity > 0. && l.scale != 0.;
         let mut push = |el: El, at: Affine| -> Result<(), String> {
-            let scene = resolve(&SceneSpec::new(el)).map_err(|e| format!("layer `{}`: {e}", l.id))?;
+            let scene =
+                resolve(&SceneSpec::new(el)).map_err(|e| format!("layer `{}`: {e}", l.id))?;
             out.scenes.push((scene, at));
             Ok(())
         };
         let Some(cap) = cap else {
             if drawn {
                 let faint = Rgba([l.fill.0[0], l.fill.0[1], l.fill.0[2], l.fill.0[3] / 8]);
-                push(block(w, h).radius(8.).fill(color(faint)).opacity(l.opacity as f32), place)?;
+                push(
+                    block(w, h)
+                        .radius(8.)
+                        .fill(color(faint))
+                        .opacity(l.opacity as f32),
+                    place,
+                )?;
             }
             return Ok(());
         };
@@ -418,7 +425,9 @@ impl Assets {
             }
             let fill = Fill::Image(img.clone(), Fit::Fill);
             push(
-                block(rw, rh).fill(fill).opacity((l.opacity * opacity) as f32),
+                block(rw, rh)
+                    .fill(fill)
+                    .opacity((l.opacity * opacity) as f32),
                 place * at,
             )?;
             if highlight > 0. {

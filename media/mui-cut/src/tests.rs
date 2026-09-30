@@ -1074,19 +1074,31 @@ fn plugin_state_keys_follow_what_the_adapter_was_told() {
     // Frame 0 sets the parameter; it moves on frames 16..=30 (0.5 s to 1 s,
     // linear) and the pointer arrives on frame 45. Nothing else is a step.
     let frames: Vec<usize> = steps.iter().map(|s| s.frame).collect();
-    assert_eq!(frames, [0].into_iter().chain(16..=30).chain([45]).collect::<Vec<_>>());
+    assert_eq!(
+        frames,
+        [0].into_iter()
+            .chain(16..=30)
+            .chain([45])
+            .collect::<Vec<_>>()
+    );
     assert_eq!(
         steps[0].commands,
         [serde_json::json!({"op": "set", "id": "filter", "field": "cutoff", "value": 0.2})]
     );
     assert_eq!(steps.last().unwrap().commands[0]["kind"], "pointer");
     // Deterministic: the same document gives the same keys, all distinct.
-    assert_eq!(steps, one_layer(PLUGIN).scenes[0].layers[0].plugin_track(30., 60));
+    assert_eq!(
+        steps,
+        one_layer(PLUGIN).scenes[0].layers[0].plugin_track(30., 60)
+    );
     let keys: std::collections::HashSet<_> = steps.iter().map(|s| &s.key).collect();
     assert_eq!(keys.len(), steps.len());
     // A key hashes the source too: another adapter is another capture.
     let other = one_layer(&PLUGIN.replace("\"adapter\"", "\"other\""));
-    assert_ne!(other.scenes[0].layers[0].plugin_track(30., 0)[0].key, steps[0].key);
+    assert_ne!(
+        other.scenes[0].layers[0].plugin_track(30., 0)[0].key,
+        steps[0].key
+    );
     // Coming back to a value is still a new state: the history differs.
     let back = one_layer(&PLUGIN.replace(
         r#"{"t":1.0,"v":0.8,"interp":"hold"}"#,
@@ -1147,7 +1159,14 @@ fn plugin_layers_are_checked_and_list_their_part_tracks() {
     );
     let l = &p.scenes[0].layers[0];
     let names: Vec<String> = l.props().into_iter().map(|(n, _)| n).collect();
-    for n in ["explode", "backdrop", "pointer_x", "params.0.value", "parts.osc.x", "parts.osc.highlight"] {
+    for n in [
+        "explode",
+        "backdrop",
+        "pointer_x",
+        "params.0.value",
+        "parts.osc.x",
+        "parts.osc.highlight",
+    ] {
         assert!(names.iter().any(|m| m == n), "{n} not in {names:?}");
     }
     assert!(!names.iter().any(|m| m == "stroke" || m == "width"));
@@ -1159,15 +1178,22 @@ fn plugin_layers_are_checked_and_list_their_part_tracks() {
 /// A capture of a 200x100 UI: a background and two parts, `a` left, `b` right.
 #[cfg(not(target_arch = "wasm32"))]
 fn capture_assets(p: &Project) -> Assets {
-    let key = eval(p, &p.scenes[0], 0.).layers[0].plugin.clone().unwrap().state;
+    let key = eval(p, &p.scenes[0], 0.).layers[0]
+        .plugin
+        .clone()
+        .unwrap()
+        .state;
     let cap = serde_json::json!({"width": 200, "height": 100, "layers": [
         {"group": "background", "rect": [0, 0, 200, 100], "src": "img/bg.png"},
         {"group": "a", "rect": [20, 20, 40, 20], "src": "img/a.png"},
         {"group": "b", "rect": [140, 60, 40, 20], "src": "img/a.png"},
     ]});
     let mut a = Assets::default();
-    a.add_asset(&format!("{}/{key}.json", plugin::CACHE), cap.to_string().as_bytes())
-        .unwrap();
+    a.add_asset(
+        &format!("{}/{key}.json", plugin::CACHE),
+        cap.to_string().as_bytes(),
+    )
+    .unwrap();
     for img in ["img/bg.png", "img/a.png"] {
         a.add_asset(&format!("{}/{img}", plugin::CACHE), &test_png())
             .unwrap();

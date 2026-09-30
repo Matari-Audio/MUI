@@ -526,7 +526,10 @@ fn serve_captures_plugin_states_and_tells_the_editor() {
         port,
         &format!("GET /asset/.cut-cache/{key}.json HTTP/1.1\r\n\r\n"),
     );
-    assert!(got.starts_with("HTTP/1.1 200") && got.contains("\"filter\""), "{got}");
+    assert!(
+        got.starts_with("HTTP/1.1 200") && got.contains("\"filter\""),
+        "{got}"
+    );
     let _ = server.kill();
     let _ = server.wait();
 }

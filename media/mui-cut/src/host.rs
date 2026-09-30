@@ -123,7 +123,11 @@ fn executable(src: &Source, dir: &Path) -> Result<(PathBuf, String)> {
             ("--example", &src.example)
         };
         let out = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
-            .args(["build", "--message-format=json-render-diagnostics", "--manifest-path"])
+            .args([
+                "build",
+                "--message-format=json-render-diagnostics",
+                "--manifest-path",
+            ])
             .arg(dir.join(&src.cargo))
             .args([flag, name])
             .stderr(Stdio::inherit())
@@ -226,7 +230,9 @@ impl Session {
         loop {
             let v = match self.packets.recv_timeout(PATIENCE) {
                 Ok(v) => v,
-                Err(RecvTimeoutError::Timeout) => return Err("the adapter stopped answering".into()),
+                Err(RecvTimeoutError::Timeout) => {
+                    return Err("the adapter stopped answering".into());
+                }
                 Err(RecvTimeoutError::Disconnected) => return Err("the adapter exited".into()),
             };
             match v["type"].as_str() {
@@ -299,7 +305,10 @@ fn save(
 ) -> Result<()> {
     let num = |v: &Value| v.as_f64().ok_or("a capture without its size");
     let mut fragments = Vec::new();
-    for l in manifest["layers"].as_array().ok_or("a capture without layers")? {
+    for l in manifest["layers"]
+        .as_array()
+        .ok_or("a capture without layers")?
+    {
         let name = l["src"].as_str().unwrap_or("");
         let data = textures
             .get(name)

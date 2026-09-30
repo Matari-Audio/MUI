@@ -32,9 +32,9 @@ pub use gpu::{Engine, GpuCanvas};
 pub use motion::{
     ANIMATOR_PROPS, Animator, Deform, Deformer, Ease, Falloff, Fx, Order, Unit, text_units,
 };
+pub use plugin::{Capture, Fragment, Param, Part, PartAt, PluginAt, Source, Step, Surface};
 #[cfg(not(target_arch = "wasm32"))]
 pub use pool::{CpuPool, shutter};
-pub use plugin::{Capture, Fragment, Param, Part, PartAt, PluginAt, Source, Step, Surface};
 pub use render::{Assets, Layers, Quad, Renderer};
 pub use shutter::Shutter;
 pub use three::{Cam, Fog, Ground, Lamp, Mode, View};
