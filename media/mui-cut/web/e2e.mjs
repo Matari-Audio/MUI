@@ -282,17 +282,17 @@ try {
   // A 3D scene's effects run on the 3D pass: levels with no saturation
   // greys a red card on WebGPU (in 3D) and WebGL2 (flat, as before); the
   // CPU draws it red, without effects.
-  const card = fx => JSON.stringify({ size: [1280, 720], fps: 30, scenes: [{ name: 'fx3d', duration: 1, mode: '3d', background: '#101014',
+  const redCard = fx => JSON.stringify({ size: [1280, 720], fps: 30, scenes: [{ name: 'fx3d', duration: 1, mode: '3d', background: '#101014',
     layers: [{ id: 'card', kind: 'rect', x: 640, y: 360, width: 900, height: 560, ry: 12, fill: '#e03020' }], ...(fx ? { effects: [{ type: 'levels', saturation: 0 }] } : {}) }] });
   const mid = async () => {
     const [vx, vy, vw, vh] = await js(`(r => [r.left, r.top, r.width, r.height])(document.querySelector('#view').getBoundingClientRect())`);
     const clip = { x: vx + vw / 2, y: vy + vh / 2, width: 1, height: 1, scale: 1 };
     return pixel(Buffer.from((await send('Page.captureScreenshot', { format: 'png', clip })).data, 'base64'));
   };
-  writeFileSync(file, card(false)); await sleep(1500);
+  writeFileSync(file, redCard(false)); await sleep(1500);
   const red = await mid();
   check(red[0] > red[1] + 80, `the 3D card is red (${red})`);
-  writeFileSync(file, card(true)); await sleep(1500);
+  writeFileSync(file, redCard(true)); await sleep(1500);
   const fx3 = await mid();
   const greyed = Math.abs(fx3[0] - fx3[1]) <= 3 && Math.abs(fx3[1] - fx3[2]) <= 3 && fx3[0] > 0x20;
   if (cpu) check(!greyed, `the CPU draws the 3D card without effects (${fx3})`);
