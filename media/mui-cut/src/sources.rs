@@ -40,6 +40,11 @@ pub enum MediaKind {
     Model {
         path: String,
     },
+    /// A TrueType or OpenType font (`.ttf`, `.otf`) text layers pick by
+    /// its id.
+    Font {
+        path: String,
+    },
 }
 
 impl Media {
@@ -68,6 +73,7 @@ impl Media {
             Kind::Svg { path } => MediaKind::Svg { path: path.clone() },
             Kind::Lottie { path, .. } => MediaKind::Lottie { path: path.clone() },
             Kind::Model { path } => MediaKind::Model { path: path.clone() },
+            Kind::Text { font, .. } if !font.is_empty() => MediaKind::Font { path: font.clone() },
             _ => return None,
         })
     }
@@ -106,7 +112,9 @@ impl Project {
             let Some(kind) = Media::of(&l.kind) else {
                 continue;
             };
-            if out.iter().any(|m| m.kind == kind) {
+            // A text layer's font names a source by id, or a file.
+            let named = |m: &Media| matches!(kind, MediaKind::Font { .. }) && m.id == kind.path();
+            if out.iter().any(|m| m.kind == kind || named(m)) {
                 continue;
             }
             let stem = match &kind {
@@ -140,7 +148,31 @@ impl MediaKind {
             MediaKind::Image { path }
             | MediaKind::Svg { path }
             | MediaKind::Lottie { path }
-            | MediaKind::Model { path } => path,
+            | MediaKind::Model { path }
+            | MediaKind::Font { path } => path,
+        }
+    }
+}
+
+impl Project {
+    /// The file a text layer's `font` names: a font source's path by its
+    /// id, else `font` itself (a path, or empty for Inter).
+    pub fn font<'a>(&'a self, font: &'a str) -> &'a str {
+        self.sources
+            .iter()
+            .find_map(|m| match &m.kind {
+                MediaKind::Font { path } if m.id == font => Some(path.as_str()),
+                _ => None,
+            })
+            .unwrap_or(font)
+    }
+
+    /// The file layer `l` draws: [`Layer::asset`](crate::Layer::asset), or
+    /// a text layer's font file.
+    pub fn asset_of<'a>(&'a self, l: &'a crate::Layer) -> Option<&'a str> {
+        match &l.kind {
+            Kind::Text { font, .. } => Some(self.font(font)).filter(|f| !f.is_empty()),
+            _ => l.asset(),
         }
     }
 }

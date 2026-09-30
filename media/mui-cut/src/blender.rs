@@ -263,7 +263,7 @@ const FROM_BLENDER: Mat4 = Mat4([
 ]);
 
 /// A stage-world placement as a Blender world matrix, in metres.
-fn placed(m: Mat4) -> [f32; 16] {
+pub(crate) fn placed(m: Mat4) -> [f32; 16] {
     (TO_BLENDER * Mat4::scale(METRES) * m)
         .0
         .map(|v| r(f64::from(v)))

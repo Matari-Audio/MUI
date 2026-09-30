@@ -11,14 +11,19 @@ use mui_cut::{Frame, Kind, Project};
 pub use mui_cut::Fnv;
 
 /// The key every span of one render shares: the encode settings, the
-/// renderer and the bytes of every image the project draws.
+/// renderer and the bytes of every image and font the project draws.
 pub fn base_key(p: &Project, project: &Path, settings: &str) -> Fnv {
     let mut h = Fnv::default();
     let _ = write!(h, "{}|{settings}|", env!("CARGO_PKG_VERSION"));
     let dir = project.parent().unwrap_or(Path::new("."));
     for s in &p.scenes {
         for l in &s.layers {
-            if let Kind::Image { path } = &l.kind {
+            let file = match &l.kind {
+                Kind::Image { path } => Some(path.as_str()),
+                Kind::Text { .. } => p.asset_of(l),
+                _ => None,
+            };
+            if let Some(path) = file {
                 let _ = write!(h, "{path}:");
                 let _ = h.write_all(&std::fs::read(dir.join(path)).unwrap_or_default());
             }

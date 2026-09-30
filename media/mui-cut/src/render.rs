@@ -41,6 +41,7 @@ pub struct Assets {
     models: HashMap<String, Arc<crate::three::Mesh>>,
     envs: HashMap<String, Arc<mui_stage::EnvImage>>,
     captures: HashMap<String, Arc<Capture>>,
+    fonts: HashMap<String, Font>,
 }
 
 /// One frame's layers, ready to paint: each resolved tree with where it goes
@@ -168,6 +169,11 @@ impl Assets {
                 self.svgs.insert(path.to_owned(), Arc::new(pieces));
                 Ok(())
             }
+            "ttf" | "otf" => {
+                let font = Font::new(bytes.to_vec()).map_err(|e| format!("{path}: {e:?}"))?;
+                self.fonts.insert(path.to_owned(), font);
+                Ok(())
+            }
             "hdr" | "exr" => {
                 let img = mui_stage::EnvImage::decode(path, bytes)?;
                 self.envs.insert(path.to_owned(), Arc::new(img));
@@ -220,7 +226,11 @@ impl Assets {
     /// A vector layer's pieces: built, trimmed and deformed.
     fn pieces(&self, l: &Drawn) -> Result<Vec<vector::Piece>, String> {
         let mut pieces = match &l.kind {
-            Kind::Text { text, align } => vector::text(l, text, *align, &INTER)?,
+            // A font not loaded (yet) draws in Inter.
+            Kind::Text { text, align, font } => {
+                let face = self.fonts.get(font).unwrap_or(&INTER);
+                vector::text(l, text, *align, face)?
+            }
             Kind::Path { d } => vector::path(l, d),
             Kind::Duplicator {
                 shape,

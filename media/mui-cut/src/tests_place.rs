@@ -398,3 +398,259 @@ fn parented_layers_render_in_3d_and_blender_where_they_sit() {
     };
     assert_eq!(desc(&a), desc(&b), "Blender objects");
 }
+
+/// Two placements agree to `tol` in every entry.
+fn same(a: [f32; 16], b: [f32; 16], tol: f32) -> bool {
+    a.iter().zip(&b).all(|(x, y)| (x - y).abs() <= tol)
+}
+
+/// A layer's pose as mui-stage and Blender place it: [`three::pose`] with
+/// its scale (the rects here are centred, so no other offset).
+fn posed(size: [u32; 2], d: &Drawn) -> mui_stage::Mat4 {
+    three::pose(size, d, mui_stage::Mat4::scale(d.scale as f32))
+}
+
+/// In 3D a child rides its parent's whole transform, tilt and anchor
+/// included: its slab (the stage's quad and plane) and its Blender object
+/// sit where the parent's slab matrix carries its local one.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_child_rides_its_tilted_parent_in_the_stage_and_blender() {
+    use mui_stage::{Mat4, Plane};
+    let p = scene(
+        "3d",
+        r#"{"id":"dad","kind":"rect","x":300,"y":50,"z":40,"rotation":30,"rx":25,"ry":-40,"scale":2,"anchor_z":6},
+           {"id":"kid","kind":"rect","parent":"dad","x":10,"y":5,"z":3,"rotation":15,"rx":10,"ry":20,"scale":0.5,"width":20,"height":10}"#,
+    );
+    let size = p.size;
+    let f = eval(&p, &p.scenes[0], 0.);
+    let (dad, kid) = (&f.layers[0], &f.layers[1]);
+    let deg = |v: f64| v.to_radians() as f32;
+    // The parent's space as its slab is posed, its face 6 px in front of
+    // its pivot; the child's local pose in it (stage axes: y up, z out).
+    let parent = three::pose(size, dad, Mat4::scale(2.) * Mat4::translate([0., 0., 6.]));
+    let local = Mat4::translate([10., -5., -3.])
+        * Mat4::rotate_y(deg(20.))
+        * Mat4::rotate_x(deg(-10.))
+        * Mat4::rotate_z(deg(-15.))
+        * Mat4::scale(0.5);
+    let want = (parent * local).0;
+    assert!(
+        kid.space.rx != 10. && kid.space.ry != 20.,
+        "the tilt is inherited"
+    );
+    assert!(same(posed(size, kid).0, want, 1e-3), "the stage's quad");
+    let mut plane = Plane::new("atlas", 20., 10.)
+        .scale(kid.scale as f32)
+        .rotate(
+            -kid.space.rx as f32,
+            kid.space.ry as f32,
+            -kid.rotation as f32,
+        );
+    plane.position = three::world(size, [kid.x, kid.y, kid.space.z]);
+    assert!(same(plane.model().0, want, 1e-3), "the stage's slab");
+    let o = crate::blender::Options::new(None, None, 1, size).unwrap();
+    let (d, _) = crate::blender::describe(
+        &p,
+        &p.scenes[0],
+        &[0.],
+        &Assets::default(),
+        std::path::Path::new("."),
+        &o,
+    )
+    .unwrap();
+    let m = d.frames[0][0].layers[1].m;
+    let b = crate::blender::placed(Mat4(want));
+    assert!(same(m, b, 1e-3), "Blender: {m:?} vs {b:?}");
+}
+
+/// Reparenting between tilted parents in 3D keeps the whole world matrix
+/// (turns included) at every key, and coming back gives the local tracks
+/// back.
+#[test]
+fn reparenting_between_tilted_parents_keeps_the_world_matrix() {
+    let p = scene(
+        "3d",
+        r#"{"id":"dad","kind":"rect","x":300,"y":50,"z":40,"rotation":30,"rx":25,"ry":-40,"scale":2,"anchor_z":6},
+           {"id":"mom","kind":"rect","x":100,"y":150,"z":-20,"rotation":-70,"rx":-35,"ry":15,"scale":0.8},
+           {"id":"kid","kind":"rect","parent":"dad","width":20,"height":10,
+            "x":[{"t":0,"v":10,"interp":"linear"},{"t":2,"v":40}],"y":5,"z":3,
+            "rx":[{"t":0,"v":0},{"t":2,"v":60}],"ry":20,"rotation":[{"t":0.5,"v":15},{"t":1.5,"v":-45}],
+            "scale":0.5}"#,
+    );
+    // Every turn key's time (the position moves linearly, so is exact
+    // throughout).
+    let times = [0., 0.5, 1.5, 2.];
+    let pose_at = |p: &Project, t: f64| posed(p.size, &world(p, "kid", t)).0;
+    let before: Vec<_> = times.iter().map(|&t| pose_at(&p, t)).collect();
+    let step = |p: &Project, to: Option<&str>| {
+        let l = reparent(p, &p.scenes[0], "kid", to, 0.7).unwrap();
+        let mut q = p.clone();
+        q.scenes[0].layers[2] = l;
+        Project::load(&q.to_json()).unwrap()
+    };
+    let mut q = p.clone();
+    for to in [Some("mom"), None, Some("dad")] {
+        q = step(&q, to);
+        for (&t, b) in times.iter().zip(&before) {
+            let a = pose_at(&q, t);
+            assert!(same(a, *b, 1e-3), "under {to:?} at {t}: {a:?} vs {b:?}");
+        }
+    }
+    let (a, b) = (&q.scenes[0].layers[2], &p.scenes[0].layers[2]);
+    for t in times {
+        for (x, y) in [
+            (&a.x, &b.x),
+            (&a.rx, &b.rx),
+            (&a.ry, &b.ry),
+            (&a.rotation, &b.rotation),
+        ] {
+            assert!(
+                near(x.at(t), y.at(t)) || (x.at(t) - y.at(t)).abs() < 1e-6,
+                "at {t}"
+            );
+        }
+    }
+}
+
+/// Under a turned parent x and y mix, so a layer keyed at different times
+/// on each gets keyed at all of them: every key stays where it was.
+#[test]
+fn reparenting_under_a_turned_parent_unions_the_key_times() {
+    let p = scene(
+        "2d",
+        r#"{"id":"top","kind":"rect","x":200,"y":100,"rotation":90,"scale":1.5},
+           {"id":"kid","kind":"rect",
+            "x":[{"t":0,"v":50},{"t":1,"v":150,"interp":"linear"}],
+            "y":[{"t":0.5,"v":40,"interp":"linear"},{"t":2,"v":90}]}"#,
+    );
+    let times = [0., 0.5, 1., 2.];
+    let before: Vec<Drawn> = times.iter().map(|&t| world(&p, "kid", t)).collect();
+    let kid = reparent(&p, &p.scenes[0], "kid", Some("top"), 0.3).unwrap();
+    let keyed = |a: &Anim<f64>| match a {
+        Anim::Keys(k) => k.iter().map(|k| k.t).collect::<Vec<_>>(),
+        Anim::Value(_) => Vec::new(),
+    };
+    assert_eq!(keyed(&kid.x), times, "x keyed at every time");
+    assert_eq!(keyed(&kid.y), times, "y keyed at every time");
+    let mut q = p.clone();
+    q.scenes[0].layers[1] = kid;
+    for (&t, b) in times.iter().zip(&before) {
+        let a = world(&q, "kid", t);
+        assert!(
+            near(a.x, b.x) && near(a.y, b.y),
+            "at {t}: {:?} vs {:?}",
+            [a.x, a.y],
+            [b.x, b.y]
+        );
+    }
+}
+
+/// A layer bound to variables reparents in every variant: each keeps its
+/// world position, untouched bindings stay, and a variant whose result
+/// differs from the file's gets its own override.
+#[test]
+fn reparenting_a_var_bound_layer_keeps_every_variant_in_place() {
+    let text = r#"{"size":[400,200],"fps":30,
+      "variables":{"gap":{"type":"number","value":10}},
+      "variants":[{"name":"wide","size":[800,200]},{"name":"far","vars":{"gap":40}}],
+      "scenes":[{"name":"a","duration":2,"layers":[
+        {"id":"top","kind":"rect","x":{"var":"W","mul":0.25},"y":100,"rotation":90,"scale":2},
+        {"id":"kid","kind":"rect","x":{"var":"W","mul":0.5},"y":{"var":"gap","add":50},
+         "width":{"var":"gap","mul":2},"height":10}]}]}"#;
+    let root: serde_json::Value = serde_json::from_str(text).unwrap();
+    let p = Project::load(text).unwrap();
+    let variants = [None, Some("wide"), Some("far")];
+    let get = |p: &Project, v: Option<&str>| match v {
+        Some(n) => p.variant(n).unwrap(),
+        None => p.clone(),
+    };
+    let before: Vec<Drawn> = variants
+        .iter()
+        .map(|&v| world(&get(&p, v), "kid", 0.))
+        .collect();
+    let out = crate::place::rewrite(&root, 0, &|p, s| {
+        let l = reparent(p, s, "kid", Some("top"), 0.)?;
+        let mut s = s.clone();
+        s.layers[1] = l;
+        Ok(s)
+    })
+    .unwrap();
+    let kid = &out["scenes"][0]["layers"][1];
+    assert_eq!(kid["parent"], "top");
+    assert_eq!(kid["width"]["var"], "gap", "an untouched binding stays");
+    assert!(
+        out["variants"][0]["overrides"]["a/kid"].is_object(),
+        "{}",
+        out["variants"]
+    );
+    let q = Project::load(&out.to_string()).unwrap();
+    for (&v, b) in variants.iter().zip(&before) {
+        let a = world(&get(&q, v), "kid", 0.);
+        assert!(
+            near(a.x, b.x)
+                && near(a.y, b.y)
+                && near(a.rotation, b.rotation)
+                && near(a.scale, b.scale),
+            "{v:?}: {:?} vs {:?}",
+            [a.x, a.y, a.rotation, a.scale],
+            [b.x, b.y, b.rotation, b.scale]
+        );
+    }
+    // Reset and taking flat run through the same rewrite.
+    let reset = crate::place::rewrite(&out, 0, &|p, s| {
+        let mut s = s.clone();
+        s.layers[1].reset(p.size);
+        Ok(s)
+    })
+    .unwrap();
+    let q = Project::load(&reset.to_string()).unwrap();
+    for v in variants {
+        let a = world(&get(&q, v), "kid", 0.);
+        assert!(
+            near(a.x, get(&q, v).size[0] as f64 / 4.) && near(a.y, 100.),
+            "{v:?} on its parent"
+        );
+    }
+}
+
+/// A font file is a source; a text layer that picks it by id draws its
+/// glyphs, on the canvas and in the textures Blender and the stage use.
+#[test]
+fn a_font_source_draws_its_own_glyphs() {
+    const ICONS: &[u8] =
+        include_bytes!("../../../crates/mui-text/fonts/MaterialSymbolsOutlined-subset.ttf");
+    let p = Project::load(
+        r##"{"size":[64,64],"fps":30,
+          "sources":[{"id":"icons","kind":"font","path":"fonts/icons.ttf"}],
+          "scenes":[{"name":"a","duration":1,"layers":[
+            {"id":"t","kind":"text","text":"","font":"icons","x":32,"y":32,"font_size":40,"fill":"#ffffff"}]}]}"##,
+    )
+    .unwrap();
+    let listed: Vec<_> = p.all_sources().into_iter().map(|m| m.id).collect();
+    assert_eq!(
+        listed,
+        ["icons"],
+        "the layer's font is the source, not another"
+    );
+    let f = eval(&p, &p.scenes[0], 0.);
+    assert!(
+        matches!(&f.layers[0].kind, Kind::Text { font, .. } if font == "fonts/icons.ttf"),
+        "the id resolves to the file"
+    );
+    let ink = |px: &[u8]| px.chunks(4).filter(|c| c[0] > 128).count();
+    let mut r = Renderer::new(64, 64);
+    let (inter, _) = r.draw(&f).unwrap();
+    r.add_asset("fonts/icons.ttf", ICONS).unwrap();
+    let (icons, _) = r.draw(&f).unwrap();
+    assert!(ink(&inter) > 20 && ink(&icons) > 20, "both draw");
+    assert_ne!(inter, icons, "the font's own glyph, not Inter's");
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let mut a = Assets::default();
+        let (plain, ..) = a.paint(&f.layers[0], 1.).unwrap();
+        a.add_asset("fonts/icons.ttf", ICONS).unwrap();
+        let (font, ..) = a.paint(&f.layers[0], 1.).unwrap();
+        assert_ne!(plain, font, "Blender's texture");
+    }
+}

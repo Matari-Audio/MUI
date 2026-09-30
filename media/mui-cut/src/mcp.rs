@@ -739,23 +739,17 @@ impl Server {
             }
             "layer_parent" => {
                 let a: LayerParent = parse(args)?;
-                let p = self.load()?;
                 let si = self.scene_index(a.scene.as_deref())?;
-                let l = mui_cut::place::reparent(
-                    &p,
-                    &p.scenes[si],
-                    &a.layer,
-                    a.parent.as_deref(),
-                    a.t,
-                )?;
-                let new = serde_json::to_value(&l).map_err(|e| e.to_string())?;
-                let ptr = format!("/scenes/{si}/layers/{}", escape(&a.layer));
                 self.edit(|raw| {
-                    let tokens = resolve(raw, &ptr)?;
-                    if at(raw, &tokens).is_some_and(|v| v.to_string().contains("\"var\"")) {
-                        return Err("the layer has variable bindings: set `parent` with `set` and place it by hand".into());
-                    }
-                    apply(raw, &json!({ "op": "replace", "path": ptr, "value": new }))
+                    *raw = mui_cut::place::rewrite(raw, si, &|p, s| {
+                        let l = mui_cut::place::reparent(p, s, &a.layer, a.parent.as_deref(), a.t)?;
+                        let mut s = s.clone();
+                        if let Some(o) = s.layers.iter_mut().find(|o| o.id == l.id) {
+                            *o = l;
+                        }
+                        Ok(s)
+                    })?;
+                    Ok(())
                 })
             }
             "render" => self.render(parse(args)?),

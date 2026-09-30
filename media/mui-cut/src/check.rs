@@ -477,13 +477,18 @@ fn keys_and_assets(
     for (li, l) in s.layers.iter().enumerate() {
         let lp = format!("{sp}.layers[{li}]");
         let at = Some((s, l.id.as_str()));
-        if let Some(a) = l.asset()
+        if let Some(a) = p.asset_of(l)
             && !exists(a)
         {
+            let field = if matches!(l.kind, Kind::Text { .. }) {
+                "font"
+            } else {
+                "path"
+            };
             out.add(
                 Severity::Error,
                 "missing_asset",
-                &format!("{lp}.path"),
+                &format!("{lp}.{field}"),
                 at,
                 None,
                 format!("`{a}` is not there (paths are relative to the project file)"),

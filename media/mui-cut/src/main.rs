@@ -227,7 +227,7 @@ fn load_assets(p: &Project, project: &Path, assets: &mut Assets) -> Vec<String> 
         .scenes
         .iter()
         .flat_map(|s| &s.layers)
-        .filter_map(mui_cut::Layer::asset)
+        .filter_map(|l| p.asset_of(l))
         .chain(hdris)
     {
         let loaded = std::fs::read(dir.join(path))
