@@ -243,11 +243,10 @@ impl Cut {
             .trim_start_matches(crate::plugin::CACHE)
             .trim_start_matches('/')
             .trim_end_matches(".json");
-        self.renderer
-            .assets
-            .capture(key)
-            .map(|c| crate::plugin::home_tree(c, key).to_string())
-            .unwrap_or_else(|| "[]".into())
+        self.renderer.assets.capture(key).map_or_else(
+            || "[]".into(),
+            |c| crate::plugin::home_tree(c, key).to_string(),
+        )
     }
     /// Layer `id` of scene `scene` parented to `parent` ("" detaches it),
     /// kept where it is on screen at `t`: the rewritten layer as JSON.

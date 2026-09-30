@@ -416,9 +416,11 @@ the project) and plugins (`source` as a plugin layer names it).
 ```
 
 The panel also shows the files and plugins layers use without listing them
-(greyed). A plugin is a folder of its parts, from its fresh capture (the
-source told nothing, `plugin::home`), which `serve` captures; nested part
-ids (`panel/knob`) nest in the tree. Audio and fonts are not sources:
+(greyed). A plugin is a folder of its parts, from its fresh capture two
+levels deep (`plugin::home`, which `serve` captures): panels, and the
+controls in them under their panel, the same tree `plugin_parts` and
+`cutParts` return. A bare plugin layer added from the panel starts in that
+capture (`explode_levels` 2). Audio and fonts are not sources:
 nothing plays or sets them yet.
 
 ### Parenting
@@ -767,8 +769,7 @@ snapshots in the editor rather than `CurveHistory`, for the same reason.
   `x` and `y` are keyed at the same times (a plain one is solved at the
   playhead). Back to 2D drops `rx`/`ry` foreshortening. Reset, reparent
   and the 2D switch refuse layers with variable bindings (edit those in
-  the file). The part tree is flat until nested part discovery lands;
-  its code already nests `panel/child` ids.
+  the file).
 - Plugin layers: the web editor shows the captures `serve` made, not the
   plugin running in WASM. A new state (a param or pointer edit) appears
   once `serve` has captured it, which takes a few seconds for a Cargo
