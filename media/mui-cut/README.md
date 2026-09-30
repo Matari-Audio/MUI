@@ -308,7 +308,7 @@ announces edits made by someone else.
 - `web/e2e.mjs`: the editor in headless Chrome over CDP, and its playback
   pacing (frame gap mean and deviation, free and fps-locked).
   `E2E_BACKEND=webgl2|cpu` runs it without WebGPU, `E2E_RENDERER` forces
-  the renderer, `E2E_PORT` moves it off 8790.
+  the renderer, `E2E_PORT`/`E2E_CDP_PORT` move it off 8790/9339.
 
 The keyframe curves are not `mui_motion::curve::Curve`: that type is a
 normalized `0..1` phase/value shaper that clamps values, while a property
