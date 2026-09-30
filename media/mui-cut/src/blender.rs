@@ -778,3 +778,181 @@ pub fn read_png(path: &Path) -> Result<(Vec<u8>, [u32; 2]), String> {
     };
     Ok((rgba, [info.width, info.height]))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const STAGE3D: &str = include_str!("../examples/stage3d.cut.json");
+    const KNOT: &[u8] = include_bytes!("../examples/knot.glb");
+    const GOLDEN: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/golden/stage3d-blender-t0.json"
+    );
+
+    fn stage(times: &[f64], mb: usize) -> Desc {
+        let p = Project::load(STAGE3D).unwrap();
+        let mut assets = Assets::default();
+        assets.add_asset("knot.glb", KNOT).unwrap();
+        let o = Options::new(None, None, mb, [1280, 720]).unwrap();
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples");
+        describe(&p, &p.scenes[0], times, &assets, &dir, &o).unwrap().0
+    }
+
+    fn col(m: &[f32; 16], c: usize) -> [f64; 3] {
+        std::array::from_fn(|k| f64::from(m[c * 4 + k]))
+    }
+    fn near(a: [f64; 3], b: [f64; 3], eps: f64) -> bool {
+        (0..3).all(|i| (a[i] - b[i]).abs() < eps)
+    }
+
+    #[test]
+    fn stage3d_maps_onto_blender_objects() {
+        let d = stage(&[0., 3.], 1);
+        let p = Project::load(STAGE3D).unwrap();
+        let f = eval(&p, &p.scenes[0], 0.);
+        let view = f.view.as_ref().unwrap();
+
+        // Camera: at the eye, looking down -z at the target, a vertical
+        // 38° field on a 24 mm sensor, focused on its target.
+        let cam = &d.frames[0][0].camera;
+        let eye = at(p.size, view.camera.eye);
+        let target = at(p.size, view.camera.target);
+        assert!(near(col(&cam.m, 3), eye, 1e-3));
+        let back = norm(sub(eye, target));
+        assert!(near(col(&cam.m, 2), back, 1e-3), "{:?}", col(&cam.m, 2));
+        assert!((cam.lens - 34.8501).abs() < 1e-3, "{}", cam.lens);
+        let reach = sub(eye, target).iter().map(|c| c * c).sum::<f64>().sqrt();
+        assert!((f64::from(cam.focus) - reach).abs() < 1e-3);
+        assert!(cam.fstop > 0.1 && cam.fstop < 2., "{}", cam.fstop);
+
+        // The ambient light is the world; sun and spot are objects.
+        let kinds: Vec<_> = d.lights.iter().map(|l| (l.id.as_str(), l.kind)).collect();
+        assert_eq!(kinds, [("sun", "SUN"), ("spot", "SPOT")]);
+        let sky = linear(crate::Rgba([0xa4, 0xac, 0xff, 255])).map(|c| c * 0.32);
+        assert!(near(
+            d.frames[0][0].ambient.map(f64::from),
+            sky.map(f64::from),
+            1e-4
+        ));
+        let sun = &d.frames[0][0].lights[0];
+        assert!((f64::from(sun.energy) - 1.15 * std::f64::consts::PI).abs() < 1e-3);
+        let dir = three::aim(52., -70.);
+        let travel = axes([dir[0] as f32, -dir[1] as f32, -dir[2] as f32]);
+        assert!(near(col(&sun.m, 2), travel.map(|c| -c), 1e-3));
+        let spot = &d.frames[0][0].lights[1];
+        assert!((f64::from(spot.spot) - 44f64.to_radians()).abs() < 1e-3);
+        assert!((spot.range - 14.).abs() < 1e-3);
+
+        // Cards are bevelled slabs, labels flat cards, the title a slab of
+        // its glyphs; each shows one look throughout.
+        let layer = |id: &str| d.layers.iter().find(|l| l.id == id).unwrap();
+        assert_eq!(d.layers.len(), 13);
+        assert!(d.layers.iter().all(|l| l.variants.len() == 1));
+        let card = &layer("card0").variants[0];
+        assert_eq!((card.size, card.depth, card.bevel), ([300., 180.], 16., 2.));
+        assert!(card.rings.len() == 1 && card.rings[0].len() > 8);
+        assert!(layer("label0").variants[0].rings.is_empty());
+        assert!(!layer("label0").shadow);
+        let title = &layer("title").variants[0];
+        assert!(title.depth == 14. && title.rings.len() >= 8, "{}", title.rings.len());
+        // A flat card at the frame centre's height, 1 cm per pixel.
+        let c0 = &d.frames[0][0].layers[0];
+        assert!(near(col(&c0.m, 3), at(p.size, [300., 300., 0.]), 1e-3));
+        assert!((c0.m[0] - METRES).abs() < 1e-6 && c0.v == 0 && c0.a == 1.);
+        // The title fades in: hidden at 0, shown by 3.
+        let ti = d.layers.iter().position(|l| l.id == "title").unwrap();
+        assert_eq!(d.frames[0][0].layers[ti].v, -1);
+        assert_eq!(d.frames[1][0].layers[ti].v, 0);
+
+        assert!(d.models[0].path.ends_with("knot.glb"));
+        let g = d.ground.as_ref().unwrap();
+        assert!((g.z + 2.6).abs() < 1e-4 && (g.radius - 26.).abs() < 1e-4);
+        let fog = d.fog.as_ref().unwrap();
+        assert!((fog.start - 18.).abs() < 1e-4 && (fog.depth - 24.).abs() < 1e-4);
+    }
+
+    /// The whole first instant, against the checked-in golden file
+    /// (`UPDATE_GOLDEN=1` rewrites it).
+    #[test]
+    fn stage3d_at_0_matches_its_golden_state() {
+        let got = serde_json::to_string_pretty(&stage(&[0.], 1).frames[0][0]).unwrap() + "\n";
+        if std::env::var_os("UPDATE_GOLDEN").is_some() {
+            std::fs::create_dir_all(Path::new(GOLDEN).parent().unwrap()).unwrap();
+            std::fs::write(GOLDEN, &got).unwrap();
+        }
+        let want = std::fs::read_to_string(GOLDEN).expect("run with UPDATE_GOLDEN=1 once");
+        assert!(got == want, "the Blender state drifted from {GOLDEN}");
+    }
+
+    /// Every key the script reads from the job is one mui-cut writes.
+    #[test]
+    fn the_script_reads_only_keys_the_description_has() {
+        let d = stage(&[0.], 2);
+        let job = serde_json::json!({"desc": d, "tex": "", "blend": "", "render": []});
+        let text = job.to_string();
+        let mut missing = Vec::new();
+        for owner in ["D", "O", "job", "s", "c", "l", "L", "v", "g", "f", "M", "ls", "ms"] {
+            let pat = format!("{owner}[\"");
+            for (i, _) in SCRIPT.match_indices(&pat) {
+                let before = SCRIPT[..i].chars().last();
+                if before.is_some_and(|c| c.is_alphanumeric() || c == '_') {
+                    continue;
+                }
+                let rest = &SCRIPT[i + pat.len()..];
+                let key = &rest[..rest.find('"').unwrap()];
+                if !text.contains(&format!("\"{key}\":")) {
+                    missing.push(format!("{owner}[{key}]"));
+                }
+            }
+        }
+        assert!(missing.is_empty(), "{missing:?}");
+        // Motion blur: each frame carries its shutter, open to closed.
+        assert_eq!(d.frames[0].len(), 3);
+    }
+
+    #[test]
+    fn cache_keys_are_deterministic_and_follow_content() {
+        let (a, b) = (stage(&[0., 1., 3.], 1), stage(&[0., 1., 3.], 1));
+        assert_eq!(a.keys(), b.keys());
+        let (base, frames) = a.keys();
+        assert_eq!(frames.len(), 3);
+        assert!(frames[0] != frames[1] && frames[1] != frames[2]);
+        // Frame keys depend on the instant, not on what else is rendered.
+        assert_eq!(stage(&[1.], 1).keys().1[0], frames[1]);
+        // A new look changes every frame's key and the scene's.
+        let mut c = a.clone();
+        c.layers[0].variants[0].tex = "other.png".into();
+        let (cb, cf) = c.keys();
+        assert!(cb != base && cf.iter().zip(&frames).all(|(x, y)| x != y));
+        // So do the render settings.
+        let mut s = a.clone();
+        s.options.samples += 1;
+        assert!(s.keys().1[0] != frames[0]);
+        // A still scene draws the same frame at every instant.
+        let p = Project::load(
+            r#"{"size":[64,36],"fps":10,"scenes":[{"name":"a","duration":1,"mode":"3d",
+                "layers":[{"id":"r","kind":"rect","width":20,"height":10,"extrude":4}]}]}"#,
+        )
+        .unwrap();
+        let o = Options::new(None, Some(4), 1, [64, 36]).unwrap();
+        let (d, tex) = describe(&p, &p.scenes[0], &[0., 0.5], &Assets::default(), Path::new(""), &o)
+            .unwrap();
+        let k = d.keys().1;
+        assert_eq!(k[0], k[1]);
+        assert_eq!(tex.len(), 1);
+        assert_eq!(tex[0].size, [40, 20]);
+    }
+
+    #[test]
+    fn a_2d_scene_or_an_unknown_engine_is_a_clear_error() {
+        let p = Project::load(include_str!("../examples/demo.cut.json")).unwrap();
+        let o = Options::new(None, None, 1, [64, 36]).unwrap();
+        let e = describe(&p, &p.scenes[0], &[0.], &Assets::default(), Path::new(""), &o)
+            .err()
+            .unwrap();
+        assert!(e.contains("is 2D") && e.contains("classic, gpu or cpu"), "{e}");
+        let e = Options::new(Some("workbench"), None, 1, [64, 36]).unwrap_err();
+        assert!(e.contains("eevee or cycles"), "{e}");
+    }
+}
