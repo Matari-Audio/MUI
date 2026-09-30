@@ -180,16 +180,23 @@ impl Plan {
         if self.encoder == "libx265" {
             push(&["-x265-params", "log-level=error"]);
         }
+        push(&TAGS);
+        a.extend(self.mux());
+        a
+    }
+
+    /// The container: also what a lossless splice of chunks writes.
+    pub fn mux(&self) -> Vec<String> {
+        let mut a: Vec<&str> = Vec::new();
         if self.codec == "h265" && self.container != "mkv" {
             // What QuickTime and browsers look for.
-            push(&["-tag:v", "hvc1"]);
+            a.extend(["-tag:v", "hvc1"]);
         }
-        push(&TAGS);
         match self.container {
-            "mkv" => push(&["-f", "matroska"]),
-            c => push(&["-f", c, "-movflags", "+faststart"]),
+            "mkv" => a.extend(["-f", "matroska"]),
+            c => a.extend(["-f", c, "-movflags", "+faststart"]),
         }
-        a
+        a.into_iter().map(String::from).collect()
     }
 
     /// For the summary line: `h264_vaapi (nv12, mp4)`.

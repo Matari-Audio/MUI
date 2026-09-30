@@ -276,3 +276,107 @@ fn serve_saves_canonical_json_and_pushes_outside_edits() {
     let _ = server.kill();
     let _ = server.wait();
 }
+
+/// Every frame of `file` as 8-bit luma planes.
+fn luma(file: &Path, (w, h): (usize, usize)) -> Vec<Vec<u8>> {
+    let out = Command::new("ffmpeg")
+        .args(["-v", "error", "-i"])
+        .arg(file)
+        .args(["-f", "rawvideo", "-pix_fmt", "gray", "-"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success() && out.stderr.is_empty(),
+        "{file:?} decodes cleanly: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    out.stdout.chunks(w * h).map(<[u8]>::to_vec).collect()
+}
+
+fn mean_diff(a: &[u8], b: &[u8]) -> f64 {
+    a.iter()
+        .zip(b)
+        .map(|(x, y)| f64::from(x.abs_diff(*y)))
+        .sum::<f64>()
+        / a.len() as f64
+}
+
+/// The segment cache: moving one key re-encodes only the spans it touches,
+/// and the spliced file plays, has every frame and the exact duration, and
+/// matches a straight render of the edited project.
+#[test]
+fn render_segments_reuse_unchanged_spans_and_splice_losslessly() {
+    if !has("ffmpeg") || !has("ffprobe") {
+        eprintln!("skipped: no ffmpeg/ffprobe");
+        return;
+    }
+    let dir = scratch("segments");
+    let project = dir.join("demo.cut.json");
+    let text = std::fs::read_to_string(DEMO).unwrap();
+    std::fs::write(&project, &text).unwrap();
+    let render = |out: &str, extra: &[&str]| {
+        let o = Command::new(BIN)
+            .arg("render")
+            .arg(&project)
+            .args(["--size", "320x180", "-o"])
+            .arg(dir.join(out))
+            .args(extra)
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&o.stdout).into_owned();
+        assert!(
+            o.status.success(),
+            "{stdout}{}",
+            String::from_utf8_lossy(&o.stderr)
+        );
+        stdout
+    };
+    let seg = ["--segment", "1"];
+    assert!(render("first.mp4", &seg).contains("8 rendered, 0 cached"));
+    assert!(render("again.mp4", &seg).contains("0 rendered, 8 cached"));
+
+    // The ball's middle key in `shapes` (2.5 s in): it bends 2.5 s..4.0 s,
+    // frames 75..119, which lie in the 1 s spans 2 and 3.
+    let edited = text.replacen("\"t\": 0.75, \"v\": 360.0", "\"t\": 0.75, \"v\": 250.0", 1);
+    assert_ne!(edited, text, "the demo's key moved");
+    std::fs::write(&project, &edited).unwrap();
+    let log = render("spliced.mp4", &seg);
+    assert!(log.contains("2 rendered, 6 cached"), "{log}");
+    render("straight.mp4", &[]);
+
+    let probe = Command::new("ffprobe")
+        .args(["-v", "error", "-count_frames", "-select_streams", "v:0"])
+        .args(["-show_entries", "stream=nb_read_frames:format=duration"])
+        .args(["-of", "default=nw=1"])
+        .arg(dir.join("spliced.mp4"))
+        .output()
+        .unwrap();
+    let text = String::from_utf8(probe.stdout).unwrap();
+    assert!(text.contains("nb_read_frames=225"), "{text}");
+    assert!(text.contains("duration=7.500000"), "{text}");
+
+    let size = (320, 180);
+    let (spliced, straight, before) = (
+        luma(&dir.join("spliced.mp4"), size),
+        luma(&dir.join("straight.mp4"), size),
+        luma(&dir.join("first.mp4"), size),
+    );
+    assert_eq!((spliced.len(), straight.len()), (225, 225));
+    for (i, (a, b)) in spliced.iter().zip(&straight).enumerate() {
+        let d = mean_diff(a, b);
+        assert!(
+            d < 1.5,
+            "frame {i} differs from a straight render by {d:.2}"
+        );
+    }
+    // The edit is in the splice: the ball sits higher at the key.
+    assert!(mean_diff(&spliced[97], &before[97]) > 0.2);
+    assert!(
+        mean_diff(&spliced[30], &before[30]) < 0.01,
+        "an untouched span is the cached chunk"
+    );
+
+    // --range forces a span back through the encoder.
+    let log = render("forced.mp4", &["--segment", "1", "--range", "0.2s-0.4s"]);
+    assert!(log.contains("1 rendered, 7 cached"), "{log}");
+}

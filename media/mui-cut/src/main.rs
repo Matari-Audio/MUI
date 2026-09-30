@@ -11,6 +11,7 @@
 mod encode;
 mod mcp;
 mod script;
+mod segments;
 mod serve;
 mod tools;
 
@@ -29,6 +30,7 @@ const USAGE: &str = "usage:
                  [--crf N | --bitrate 12M [--maxrate 20M]] [--preset P]
                  [--pix-fmt yuv420p|yuv420p10le] [--container mp4|mkv|mov]
                  [--variant NAME | --variants all|NAME,NAME -o out/{name}.mp4]
+                 [--segment SECONDS] [--range 3.2s-5.0s]   (the segment cache)
   mui-cut still  PROJECT --t SECONDS -o OUT.png [--scene NAME] [--size WxH] [--renderer R] [--variant NAME]
     R: classic (default; Vello compute on the GPU), gpu (vello_gpu), cpu (Vello CPU);
     --cpu is --renderer cpu. --threads: CPU frames drawn at once (default: one per core).
@@ -418,7 +420,13 @@ fn settings(p: &Project, args: &Args) -> Result<Render> {
 fn render(args: &Args) -> Result<()> {
     let out = args.get("o").ok_or("render needs -o OUT.mp4")?;
     let Some(list) = args.get("variants") else {
-        return render_one(&load_variant(args)?, args, out, &mut None);
+        return render_one(
+            &load_variant(args)?,
+            args,
+            out,
+            args.get("variant"),
+            &mut None,
+        );
     };
     let base = load(&args.project)?;
     let names: Vec<&str> = match list {
@@ -441,13 +449,20 @@ fn render(args: &Args) -> Result<()> {
         {
             std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         }
-        render_one(&p, args, &path, &mut b)?;
+        render_one(&p, args, &path, Some(n), &mut b)?;
     }
     Ok(())
 }
 
 /// Render `p` to `out`, on `backend` if one is open (else it opens one).
-fn render_one(p: &Project, args: &Args, out: &str, backend: &mut Option<Backend>) -> Result<()> {
+/// `--segment S` (or `--range`) renders through the segment cache.
+fn render_one(
+    p: &Project,
+    args: &Args,
+    out: &str,
+    variant: Option<&str>,
+    backend: &mut Option<Backend>,
+) -> Result<()> {
     let scenes: Vec<&Scene> = match args.get("scene") {
         Some(_) => vec![scene(p, args)?],
         None => p.scenes.iter().collect(),
@@ -469,65 +484,65 @@ fn render_one(p: &Project, args: &Args, out: &str, backend: &mut Option<Backend>
         }
         None => backend.insert(Backend::open(p, args, (w, h), threads(args)?, Some(yuv))?),
     };
-    let mut ff = Command::new("ffmpeg");
-    // SVT-AV1 prints its banner through its own logger.
-    ff.env("SVT_LOG", "1").args(["-y", "-loglevel", "error"]);
-    match &plan {
-        Some(plan) => ff
-            .args(plan.input((w, h), p.fps))
-            .args(plan.output())
-            .arg(out),
-        None => ff
-            .args(["-f", "rawvideo", "-pix_fmt", yuv.pix_fmt()])
-            .args(["-s", &format!("{w}x{h}"), "-r", &p.fps.to_string()])
-            .args(["-i", "-", "-f", "null", "-"]),
-    };
-    let mut ff = ff
-        .stdin(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("ffmpeg: {e} (is it on PATH?)"))?;
-    let stdin = ff.stdin.as_mut().ok_or("ffmpeg stdin")?;
-    let mut write = |px: &[u8]| {
-        stdin
-            .write_all(px)
-            .map_err(|e| format!("ffmpeg stdin: {e}"))
+    // Every output frame, scenes back to back.
+    let jobs: Vec<(&Scene, f64)> = scenes
+        .iter()
+        .flat_map(|s| {
+            let n = (s.duration * p.fps).round().max(1.) as usize;
+            (0..n).map(move |i| (*s, i as f64 / p.fps))
+        })
+        .collect();
+    let segment = match args.get("segment") {
+        Some(_) => Some(args.num("segment", 1.)?),
+        None => args.has("range").then_some(1.),
     };
     let start = std::time::Instant::now();
-    let mut frames = 0usize;
-    // Wall time per loop pass: a stall anywhere (a readback, a full pipe)
-    // shows up as a tail.
+    // Wall time per drawn frame: a stall anywhere (a readback, a full pipe)
+    // shows up as a tail. Cache hits draw nothing and add none.
     let mut times = Vec::new();
-    for s in scenes {
-        let n = (s.duration * p.fps).round().max(1.) as usize;
-        for i in 0..n {
-            let pass = std::time::Instant::now();
-            let t = i as f64 / p.fps;
-            let subs = subframes(p, s, t, mb);
-            if let Some(px) = b.push(subs)? {
-                write(&px)?;
-            }
-            frames += 1;
-            times.push(pass.elapsed().as_secs_f64() * 1e3);
+    let cache = match (segment, &plan) {
+        (Some(_), None) => return Err("--segment and --range need a file, not null".into()),
+        (Some(seg), Some(plan)) => {
+            let cut = Cut {
+                p,
+                args,
+                variant,
+                plan,
+                size: (w, h),
+                mb,
+            };
+            cut.render(b, &jobs, seg, out, &mut times)?
         }
-    }
-    for px in b.finish()? {
-        write(&px)?;
-    }
-    drop(ff.stdin.take());
-    let ok = ff.wait().map_err(|e| e.to_string())?.success();
-    if !ok {
-        return Err(format!("ffmpeg failed writing {out}"));
-    }
+        (None, _) => {
+            let mut a: Vec<String> = match &plan {
+                Some(plan) => plan.input((w, h), p.fps),
+                None => ["-f", "rawvideo", "-pix_fmt", yuv.pix_fmt(), "-s"]
+                    .map(String::from)
+                    .into_iter()
+                    .chain([format!("{w}x{h}"), "-r".into(), p.fps.to_string()])
+                    .chain(["-i", "-"].map(String::from))
+                    .collect(),
+            };
+            match &plan {
+                Some(plan) => a.extend(plan.output().into_iter().chain([out.to_owned()])),
+                None => a.extend(["-f", "null", "-"].map(String::from)),
+            }
+            let frames = jobs.iter().map(|(s, t)| subframes(p, s, *t, mb));
+            encode(b, frames, &a, out, &mut times)?;
+            String::new()
+        }
+    };
     let secs = start.elapsed().as_secs_f64();
+    let frames = jobs.len();
     println!(
-        "wrote {out}: {frames} frames, {w}x{h} at {} fps, mb {mb}, {}, {} in {secs:.2} s = {:.1} frames/s",
+        "wrote {out}: {frames} frames, {w}x{h} at {} fps, mb {mb}, {}, {}{cache} in {secs:.2} s = {:.1} frames/s",
         p.fps,
         b.name(),
         plan.as_ref()
             .map_or_else(|| "no encoder".into(), encode::Plan::describe),
         frames as f64 / secs
     );
-    if args.has("stats") {
+    if args.has("stats") && !times.is_empty() {
         let mut slow: Vec<(usize, f64)> = times.iter().copied().enumerate().collect();
         slow.sort_by(|a, b| b.1.total_cmp(&a.1));
         let q = |f: f64| slow[((slow.len() - 1) as f64 * (1. - f)) as usize].1;
@@ -545,4 +560,147 @@ fn render_one(p: &Project, args: &Args, out: &str, backend: &mut Option<Backend>
         );
     }
     Ok(())
+}
+
+/// ffmpeg with `args`, quiet.
+fn ffmpeg(args: &[String]) -> Command {
+    let mut ff = Command::new("ffmpeg");
+    // SVT-AV1 prints its banner through its own logger.
+    ff.env("SVT_LOG", "1")
+        .args(["-y", "-loglevel", "error"])
+        .args(args);
+    ff
+}
+
+/// Draw `frames` (each its subframes) on `b` into an ffmpeg reading raw
+/// frames with `args`, and wait for it to finish writing `out`.
+fn encode(
+    b: &mut Backend,
+    frames: impl IntoIterator<Item = Vec<Frame>>,
+    args: &[String],
+    out: &str,
+    times: &mut Vec<f64>,
+) -> Result<()> {
+    let mut ff = ffmpeg(args)
+        .stdin(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("ffmpeg: {e} (is it on PATH?)"))?;
+    let stdin = ff.stdin.as_mut().ok_or("ffmpeg stdin")?;
+    let mut write = |px: &[u8]| {
+        stdin
+            .write_all(px)
+            .map_err(|e| format!("ffmpeg stdin: {e}"))
+    };
+    // Timed from before `next()`: a lazy `frames` evaluates in there.
+    let mut frames = frames.into_iter();
+    loop {
+        let pass = std::time::Instant::now();
+        let Some(subs) = frames.next() else { break };
+        if let Some(px) = b.push(subs)? {
+            write(&px)?;
+        }
+        times.push(pass.elapsed().as_secs_f64() * 1e3);
+    }
+    for px in b.finish()? {
+        write(&px)?;
+    }
+    drop(ff.stdin.take());
+    if ff.wait().map_err(|e| e.to_string())?.success() {
+        Ok(())
+    } else {
+        Err(format!("ffmpeg failed writing {out}"))
+    }
+}
+
+/// One render through the segment cache.
+struct Cut<'a> {
+    p: &'a Project,
+    args: &'a Args,
+    variant: Option<&'a str>,
+    plan: &'a encode::Plan,
+    size: (u16, u16),
+    mb: usize,
+}
+
+impl Cut<'_> {
+    /// Encode the spans of `seg` seconds not in the cache (or in
+    /// `--range`), then splice every chunk into `out`. Says what it reused.
+    fn render(
+        &self,
+        b: &mut Backend,
+        jobs: &[(&Scene, f64)],
+        seg: f64,
+        out: &str,
+        times: &mut Vec<f64>,
+    ) -> Result<String> {
+        let (p, plan) = (self.p, self.plan);
+        if !(seg.is_finite() && seg > 0.) {
+            return Err("--segment must be > 0 seconds".into());
+        }
+        let n = ((seg * p.fps).round() as usize).max(1);
+        let force = self.args.get("range").map(segments::range).transpose()?;
+        let dir = segments::dir(&self.args.project, self.variant);
+        std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        let input = plan.input(self.size, p.fps);
+        let output = plan.output();
+        let base = segments::base_key(
+            p,
+            &self.args.project,
+            &format!(
+                "{}|{:?}|{}|{input:?}|{output:?}",
+                b.name(),
+                self.size,
+                self.mb
+            ),
+        );
+        let ext = plan.container;
+        let (mut hits, mut misses) = (0, 0);
+        let mut chunks = Vec::new();
+        for (k, span) in jobs.chunks(n).enumerate() {
+            let frames: Vec<Vec<Frame>> = span
+                .iter()
+                .map(|(s, t)| subframes(p, s, *t, self.mb))
+                .collect();
+            let name = format!("{}.{ext}", segments::span_key(&base, &frames));
+            let path = dir.join(&name);
+            let (t0, t1) = ((k * n) as f64 / p.fps, (k * n + span.len()) as f64 / p.fps);
+            let forced = force.is_some_and(|(a, z)| a < t1 && t0 < z.max(a + 1e-9));
+            if path.exists() && !forced {
+                hits += 1;
+            } else {
+                let tmp = dir.join(format!("{}.part.{ext}", std::process::id()));
+                let tmp_s = tmp.display().to_string();
+                let args: Vec<String> = input
+                    .iter()
+                    .chain(&output)
+                    .cloned()
+                    .chain([tmp_s.clone()])
+                    .collect();
+                encode(b, frames, &args, &tmp_s, times)?;
+                std::fs::rename(&tmp, &path).map_err(|e| format!("{}: {e}", path.display()))?;
+                misses += 1;
+            }
+            chunks.push(PathBuf::from(name));
+        }
+        // Chunk names in the list resolve against the list's own directory.
+        let list = dir.join(format!("concat-{}.txt", std::process::id()));
+        std::fs::write(&list, segments::list(&chunks))
+            .map_err(|e| format!("{}: {e}", list.display()))?;
+        let args: Vec<String> = ["-f", "concat", "-safe", "0", "-i"]
+            .map(String::from)
+            .into_iter()
+            .chain([list.display().to_string()])
+            .chain(["-c", "copy"].map(String::from))
+            .chain(plan.mux())
+            .chain([out.to_owned()])
+            .collect();
+        let ok = ffmpeg(&args).status().map_err(|e| format!("ffmpeg: {e}"))?;
+        let _ = std::fs::remove_file(&list);
+        if !ok.success() {
+            return Err(format!("ffmpeg failed splicing {out}"));
+        }
+        Ok(format!(
+            ", segments of {n} frames: {misses} rendered, {hits} cached"
+        ))
+    }
 }

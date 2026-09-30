@@ -6,3 +6,4 @@ __pycache__/
 
 /playground/pkg/
 /media/mui-cut/web/pkg/
+.mui-cut-cache/

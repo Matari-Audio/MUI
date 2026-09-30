@@ -31,6 +31,7 @@ mui-cut render PROJECT -o out.mp4|null [--scene NAME] [--mb N] [--size WxH]
                       [--crf N | --bitrate 12M [--maxrate 20M]] [--preset P]
                       [--pix-fmt yuv420p|yuv420p10le] [--container mp4|mkv|mov]
                       [--variant NAME | --variants all|NAME,NAME -o out/{name}.mp4]
+                      [--segment SECONDS] [--range 3.2s-5.0s]
 mui-cut still  PROJECT --t 1.5 -o f.png [--scene NAME] [--size WxH] [--renderer R] [--variant NAME]
 mui-cut eval   PROJECT --t 1.5 [--scene NAME] [--variant NAME]   # every layer's values, JSON
 mui-cut fmt    PROJECT                            # rewrite in canonical form
@@ -52,6 +53,16 @@ mui-cut schema | check | sheet | strip | diff | gen | mcp
   H.264, 18 H.265, 26 AV1) or `--bitrate` with an optional `--maxrate`;
   `--preset` goes to software encoders. The container is `--container` or
   the output's extension (AV1 is refused in mov).
+- Segment cache: `--segment 1` renders in 1 s spans, each encoded on its own
+  (so it opens on a key frame and no frame refers outside it) and kept in
+  `.mui-cut-cache/<variant>/` beside the project, named by a hash of the
+  span's evaluated subframes, the encode settings, the renderer and the
+  image bytes. A re-render encodes only spans whose hash changed and splices
+  every chunk with ffmpeg's concat demuxer and `-c copy`; the summary says
+  how many were rendered and how many cached. `--range 3.2s-5.0s` (which
+  implies `--segment 1`) forces the spans it touches. Spans run across scene
+  boundaries on the output timeline. Old chunks are never evicted: delete
+  the directory to reclaim the space.
 - A project can keep these in `"render": {"codec": "h265", "crf": 18,
   "pix_fmt": "yuv420p10le", "mb": 8, ...}` (the flag names, `pix_fmt` with
   an underscore); flags override it. `--mb N` renders N
@@ -449,6 +460,7 @@ announces edits made by someone else.
 - `src/vars.rs`: variables, variants and binding resolution, on the JSON
   before it becomes a `Project`.
 - `src/encode.rs`: the ffmpeg encoder plan (codec, VAAPI trial, container).
+- `src/segments.rs`: the segment cache's keys, range and concat list.
 - `src/web.rs`: the wasm-bindgen handles: `Cut` (validation, samples, CPU
   frames) and `GpuView` (the WebGPU/WebGL2 viewport).
 - `src/main.rs`, `src/serve.rs`: the native CLI and the std-only local server.
