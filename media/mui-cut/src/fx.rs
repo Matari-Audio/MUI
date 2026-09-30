@@ -14,6 +14,7 @@ pub(crate) mod gpu;
 
 /// One effect in a stack, as the file has it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(transform = crate::vars::bindable)]
 pub struct Effect {
     #[serde(rename = "type")]
     pub kind: String,

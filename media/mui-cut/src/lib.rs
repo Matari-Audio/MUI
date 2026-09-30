@@ -133,6 +133,7 @@ impl Render {
 
 /// One shot. Scenes play back to back in a render.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(transform = crate::vars::bindable)]
 pub struct Scene {
     pub name: String,
     /// Seconds.
@@ -309,6 +310,7 @@ fn is_yes(v: &bool) -> bool {
 /// and `y` are the layer's centre, which is also its rotation and scale pivot.
 /// A property left out is its default, and a save leaves defaults out.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(transform = crate::vars::bindable)]
 pub struct Layer {
     pub id: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -818,6 +820,7 @@ pub enum Interp {
 /// monotone however they are dragged.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[schemars(rename = "Key_{T}")]
+#[schemars(transform = crate::vars::bindable)]
 pub struct Key<T> {
     pub t: f64,
     pub v: T,
@@ -1303,7 +1306,9 @@ impl Project {
     /// The project file's JSON Schema, generated from these types: what
     /// `mui-cut schema` prints and a file's `$schema` points at.
     pub fn json_schema() -> serde_json::Value {
-        schemars::schema_for!(Project).to_value()
+        let mut g = schemars::SchemaGenerator::default();
+        g.subschema_for::<vars::Binding>();
+        g.into_root_schema_for::<Project>().to_value()
     }
     /// Pretty JSON in the struct's field order, one keyframe a line, so a
     /// save diffs cleanly and reads like the hand-written examples.

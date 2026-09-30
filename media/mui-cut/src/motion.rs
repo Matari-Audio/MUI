@@ -95,6 +95,7 @@ fn is_default<T: Default + PartialEq>(v: &T) -> bool {
 /// time `t - rank * stagger`. `start`, `end` and `offset` are fractions of
 /// the units, 0..1: the range is `[start + offset, end + offset]`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(transform = crate::vars::bindable)]
 pub struct Animator {
     #[serde(default, skip_serializing_if = "is_default")]
     pub by: Unit,
@@ -384,6 +385,7 @@ pub fn text_units(text: &str, by: Unit) -> Vec<usize> {
 /// are subdivided first, so even a rectangle bends.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "lowercase")]
+#[schemars(transform = crate::vars::bindable)]
 pub enum Deformer {
     /// Seeded gradient noise: each point moves up to `amount` pixels;
     /// `frequency` is features per pixel, `speed` how fast the field drifts

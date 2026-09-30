@@ -43,6 +43,61 @@ pub struct Variant {
     pub overrides: BTreeMap<String, Value>,
 }
 
+/// A binding, as the schema describes it: `{"var": "accent"}`, `{"var":
+/// "W", "mul": 0.5, "add": 20}` or `{"var": "theme", "map": {"dark":
+/// "#000000"}}`. It stands in for any value under `scenes`.
+#[derive(schemars::JsonSchema)]
+#[schemars(deny_unknown_fields)]
+#[expect(dead_code, reason = "the schema's; `eval` reads the JSON")]
+pub struct Binding {
+    /// A declared variable, or `W`/`H`: the variant's frame size.
+    var: String,
+    /// A number (a bool is 0 or 1) times `mul` plus `add`.
+    #[serde(default)]
+    mul: Option<f64>,
+    #[serde(default)]
+    add: Option<f64>,
+    /// The value for each of the variable's values: an enum's options.
+    #[serde(default)]
+    map: Option<BTreeMap<String, Value>>,
+}
+
+/// A type's schema transform: each of its properties (a flattened enum's
+/// too, and a map's values) may also be a [`Binding`]. Tags (`const`) stay
+/// as they are; the root schema adds `Binding` to `$defs`.
+pub(crate) fn bindable(schema: &mut schemars::Schema) {
+    fn wrap(p: &mut Value) {
+        let b = serde_json::json!({ "$ref": "#/$defs/Binding" });
+        if p.get("const").is_some() || p["anyOf"].as_array().is_some_and(|a| a.contains(&b)) {
+            return;
+        }
+        *p = serde_json::json!({ "anyOf": [p.take(), b] });
+    }
+    fn walk(s: &mut Map<String, Value>) {
+        for p in s
+            .get_mut("properties")
+            .and_then(Value::as_object_mut)
+            .into_iter()
+            .flat_map(|m| m.values_mut())
+        {
+            wrap(p);
+        }
+        if let Some(extra) = s.get_mut("additionalProperties").filter(|v| v.is_object()) {
+            wrap(extra);
+        }
+        for k in ["oneOf", "anyOf", "allOf"] {
+            for m in s.get_mut(k).and_then(Value::as_array_mut).into_iter().flatten() {
+                if let Some(m) = m.as_object_mut() {
+                    walk(m);
+                }
+            }
+        }
+    }
+    if let Some(s) = schema.as_object_mut() {
+        walk(s);
+    }
+}
+
 impl Var {
     /// `v` as this variable's type, or why not.
     fn accept(&self, name: &str, v: &Value) -> Result<Value, String> {
@@ -193,11 +248,10 @@ fn merge(into: &mut Value, patch: &Value) {
     }
 }
 
-/// A binding object: `var` and nothing but `mul`, `add` and `map`.
+/// A binding object: one with `var`. Other fields than `mul`, `add` and
+/// `map` are ignored like any unknown field (`check` names them).
 fn binding(m: &Map<String, Value>) -> bool {
     m.contains_key("var")
-        && m.keys()
-            .all(|k| matches!(k.as_str(), "var" | "mul" | "add" | "map"))
 }
 
 fn bind(v: &mut Value, values: &BTreeMap<String, Value>) -> Result<(), String> {

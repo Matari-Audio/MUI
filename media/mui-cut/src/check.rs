@@ -280,6 +280,7 @@ fn fields(raw: &Value, p: &Project, out: &mut Issues) {
     let schema = Project::json_schema();
     let def = |n: &str| schema["$defs"][n].clone();
     unknown(out, raw, &props_of(&schema), "", None);
+    binding_fields(out, &raw["scenes"], &props_of(&def("Binding")), "scenes");
     let (scene, layer, animator, deformer) =
         (def("Scene"), def("Layer"), def("Animator"), def("Deformer"));
     let key = props_of(&def("Key_double"));
@@ -367,6 +368,24 @@ fn fields(raw: &Value, p: &Project, out: &mut Issues) {
                 }
             }
         }
+    }
+}
+
+/// Unknown fields inside every binding (an object with `var`) under `v`.
+fn binding_fields(out: &mut Issues, v: &Value, known: &BTreeSet<String>, path: &str) {
+    match v {
+        Value::Object(m) if m.contains_key("var") => unknown(out, v, known, path, None),
+        Value::Object(m) => {
+            for (k, x) in m {
+                binding_fields(out, x, known, &format!("{path}.{k}"));
+            }
+        }
+        Value::Array(a) => {
+            for (i, x) in a.iter().enumerate() {
+                binding_fields(out, x, known, &format!("{path}[{i}]"));
+            }
+        }
+        _ => {}
     }
 }
 
@@ -952,6 +971,29 @@ mod tests {
         );
         let json = serde_json::to_value(&issues).unwrap();
         assert!(json[0]["fix"].is_string(), "{json}");
+    }
+
+    #[test]
+    fn typos_in_and_around_bindings_are_named() {
+        let i = run(r#"{"size": [200, 100], "fps": 30,
+            "variables": {"k": {"type": "number", "value": 2}},
+            "scenes": [{"name": "s", "duration": 1, "layers": [{"id": "a", "kind": "rect",
+                "x": {"var": "W", "mull": 0.5}, "widh": {"var": "k"},
+                "y": [{"t": 0, "v": {"var": "H", "ad": 1}}]}]}]}"#);
+        let text: Vec<String> = i.iter().map(ToString::to_string).collect();
+        let text = text.join("\n");
+        assert!(!i.iter().any(|i| i.code == "load"), "{text}");
+        for (path, fix) in [
+            ("scenes[0].layers[0].x.mull", "`mul`"),
+            ("scenes[0].layers[0].widh", "`width`"),
+            ("scenes[0].layers[0].y[0].v.ad", "`add`"),
+        ] {
+            let hit = i
+                .iter()
+                .find(|i| i.code == "unknown_field" && i.path == path)
+                .unwrap_or_else(|| panic!("no unknown_field at {path}:\n{text}"));
+            assert!(hit.fix.as_ref().unwrap().contains(fix), "{hit}");
+        }
     }
 
     #[test]
