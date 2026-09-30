@@ -738,7 +738,9 @@ fn patch_panel(patch: &serde_json::Value, w: f64, h: f64) -> El {
             a.iter()
                 .filter_map(serde_json::Value::as_u64)
                 .map(|n| {
-                    const NAMES: [&str; 12] = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+                    const NAMES: [&str; 12] = [
+                        "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
+                    ];
                     format!("{}{}", NAMES[(n % 12) as usize], n as i64 / 12 - 1)
                 })
                 .collect()
@@ -747,7 +749,9 @@ fn patch_panel(patch: &serde_json::Value, w: f64, h: f64) -> El {
     let name = patch["plugin"].as_str().unwrap_or("PLUGIN").to_uppercase();
     let mut rows = vec![
         row([
-            text(format!("{name}  ·  PATCH")).text_size(13.).fill(color(INK)),
+            text(format!("{name}  ·  PATCH"))
+                .text_size(13.)
+                .fill(color(INK)),
             spacer(),
             text(held.join(" ")).text_size(13.).fill(color(LIGHT)),
         ])
@@ -766,7 +770,10 @@ fn patch_panel(patch: &serde_json::Value, w: f64, h: f64) -> El {
                     text("→".to_owned()).text_size(12.).fill(color(DIM)),
                     text(str_of(&r["target"])).text_size(12.).fill(color(INK)),
                     spacer(),
-                    bar(num(&r["depth"]) * (0.25 + 0.75 * num(&r["live"]).abs()), true),
+                    bar(
+                        num(&r["depth"]) * (0.25 + 0.75 * num(&r["live"]).abs()),
+                        true,
+                    ),
                 ])
                 .gap(8.)
                 .w(inner),

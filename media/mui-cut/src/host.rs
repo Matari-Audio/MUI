@@ -55,12 +55,20 @@ pub fn audio_file(key: &str) -> String {
 
 /// Plugin layer `l`'s soundtrack in scene `s`, stereo interleaved, once
 /// [`capture_missing`] has rendered it; `None` for a layer without notes.
-pub fn layer_audio(p: &Project, project: &Path, s: &mui_cut::Scene, l: &Layer) -> Result<Option<Vec<f32>>> {
+pub fn layer_audio(
+    p: &Project,
+    project: &Path,
+    s: &mui_cut::Scene,
+    l: &Layer,
+) -> Result<Option<Vec<f32>>> {
     let steps = l.plugin_track(p.fps, p.sample_rate, frame_at(s.duration, p.fps));
     let Some((key, _)) = l.plugin_audio(&steps, p.fps, p.sample_rate, p.samples(s)) else {
         return Ok(None);
     };
-    let file = project.parent().unwrap_or(Path::new(".")).join(audio_file(&key));
+    let file = project
+        .parent()
+        .unwrap_or(Path::new("."))
+        .join(audio_file(&key));
     let bytes = std::fs::read(&file)
         .map_err(|e| format!("layer `{}`: its audio {}: {e}", l.id, file.display()))?;
     Ok(Some(
@@ -191,7 +199,10 @@ fn capture(jobs: Vec<Job>, project: &Path, rate: u32) -> Vec<String> {
             steps.len(),
             exe.display()
         );
-        let clock = Clock { rate, audio: audio.as_ref() };
+        let clock = Clock {
+            rate,
+            audio: audio.as_ref(),
+        };
         if let Err(e) = replay(&exe, &src.args, dir, &steps, &stamp, clock, &mut errs) {
             errs.push(format!("{what}: {e}"));
         }

@@ -791,7 +791,11 @@ fn render_one(
         && let Some(pcm) = audio::mix(p, &args.project, &scenes)?
     {
         audio::mux(plan, out, &pcm, p.sample_rate)?;
-        cache.push_str(&format!(", {} s of sound at {} Hz", pcm.len() / 2 / p.sample_rate as usize, p.sample_rate));
+        cache.push_str(&format!(
+            ", {} s of sound at {} Hz",
+            pcm.len() / 2 / p.sample_rate as usize,
+            p.sample_rate
+        ));
     }
     let secs = start.elapsed().as_secs_f64();
     let frames = jobs.len();

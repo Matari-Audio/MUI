@@ -482,6 +482,13 @@ pub struct Layer {
     pub pointer_y: Anim<f64>,
     #[serde(default = "zero", skip_serializing_if = "is_zero")]
     pub pointer_down: Anim<f64>,
+    /// Plugin: the size its editor is laid out at, in its pixels (whole
+    /// pixels, each above 8), the UI reflowing as a host window resize
+    /// would; 0 is the plugin's own size.
+    #[serde(default = "zero", skip_serializing_if = "is_zero")]
+    pub view_width: Anim<f64>,
+    #[serde(default = "zero", skip_serializing_if = "is_zero")]
+    pub view_height: Anim<f64>,
     /// Audio and plugin layers: the gain their sound is mixed at, 1 as is.
     #[serde(default = "one", skip_serializing_if = "is_one")]
     pub volume: Anim<f64>,
@@ -792,6 +799,8 @@ impl Layer {
             num("pointer_x", &self.pointer_x);
             num("pointer_y", &self.pointer_y);
             num("pointer_down", &self.pointer_down);
+            num("view_width", &self.view_width);
+            num("view_height", &self.view_height);
             num("volume", &self.volume);
             for (i, p) in params.iter().enumerate() {
                 num(&format!("params.{i}.value"), &p.value);

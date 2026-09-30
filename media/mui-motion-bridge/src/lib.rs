@@ -5,7 +5,7 @@
 mod capture;
 pub use capture::{CaptureStream, capture, capture_frame, discover_parts, discover_tree};
 mod editor;
-pub use editor::Editor;
+pub use editor::{Editor, VIEW};
 mod headless;
 pub use headless::{ParamSet, describe, param_set, run_headless};
 /// The MUI this bridge is built on: a generated adapter names it here, so

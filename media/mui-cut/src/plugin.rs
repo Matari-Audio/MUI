@@ -127,8 +127,16 @@ pub fn note_events(notes: &[Note], rate: u32) -> Vec<(u64, Value)> {
             let on = sample_at(n.t, rate);
             let off = sample_at(n.t + n.dur, rate).max(on + 1);
             [
-                (on, 1, json!({"at": on, "op": "note_on", "note": n.pitch, "velocity": n.vel})),
-                (off, 0, json!({"at": off, "op": "note_off", "note": n.pitch})),
+                (
+                    on,
+                    1,
+                    json!({"at": on, "op": "note_on", "note": n.pitch, "velocity": n.vel}),
+                ),
+                (
+                    off,
+                    0,
+                    json!({"at": off, "op": "note_off", "note": n.pitch}),
+                ),
             ]
         })
         .collect();
@@ -346,6 +354,7 @@ impl Layer {
         let mut steps = Vec::new();
         let mut last_params: Vec<f64> = Vec::new();
         let mut last_pointer = NO_POINTER;
+        let mut last_view = [0.; 2];
         let events = note_events(notes, rate);
         let mut clock = 0;
         for f in 0..=last {
@@ -369,6 +378,13 @@ impl Layer {
                 }
             }
             last_params = values;
+            let view = self.view_at(t);
+            if view != last_view {
+                commands.push(
+                    json!({"op": "input", "kind": "view", "width": view[0], "height": view[1]}),
+                );
+                last_view = view;
+            }
             let pointer = self.pointer_at(t);
             if pointer != last_pointer {
                 commands.push(json!({
@@ -412,6 +428,20 @@ impl Layer {
             tail.to_string().as_bytes(),
         );
         Some((format!("{h:016x}"), tail))
+    }
+
+    /// `[width, height]` the editor is laid out at, whole pixels; `[0, 0]`
+    /// (either at 0 or less) is the plugin's own size.
+    fn view_at(&self, t: f64) -> [f64; 2] {
+        let [w, h] = [
+            self.view_width.at(t).round(),
+            self.view_height.at(t).round(),
+        ];
+        if w > 0. && h > 0. {
+            [w.max(8.), h.max(8.)]
+        } else {
+            [0., 0.]
+        }
     }
 
     /// `[x, y, down]`, x and y to a hundredth of a pixel, down 0 or 1.

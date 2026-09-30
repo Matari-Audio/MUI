@@ -20,7 +20,12 @@ pub struct Files(HashMap<String, std::sync::Arc<Vec<f32>>>);
 impl Files {
     /// `path` (relative to the project) decoded by ffmpeg to stereo f32
     /// at `rate`.
-    pub fn get(&mut self, project: &Path, path: &str, rate: u32) -> Result<std::sync::Arc<Vec<f32>>> {
+    pub fn get(
+        &mut self,
+        project: &Path,
+        path: &str,
+        rate: u32,
+    ) -> Result<std::sync::Arc<Vec<f32>>> {
         if let Some(a) = self.0.get(path) {
             return Ok(a.clone());
         }
@@ -51,16 +56,25 @@ impl Files {
 
 /// Whether anything in `scenes` makes a sound.
 pub fn sounds(scenes: &[&Scene]) -> bool {
-    scenes.iter().flat_map(|s| &s.layers).any(|l| match &l.kind {
-        Kind::Plugin { notes, .. } => !notes.is_empty(),
-        Kind::Audio { .. } => true,
-        _ => false,
-    })
+    scenes
+        .iter()
+        .flat_map(|s| &s.layers)
+        .any(|l| match &l.kind {
+            Kind::Plugin { notes, .. } => !notes.is_empty(),
+            Kind::Audio { .. } => true,
+            _ => false,
+        })
 }
 
 /// Add `src` (stereo, sample 0 at the scene's start) into `out` from scene
 /// sample `from`, at the layer's volume.
-pub fn add(out: &mut [f32], from: usize, rate: u32, l: &Layer, src: impl Fn(usize, f64) -> [f32; 2]) {
+pub fn add(
+    out: &mut [f32],
+    from: usize,
+    rate: u32,
+    l: &Layer,
+    src: impl Fn(usize, f64) -> [f32; 2],
+) {
     let frames = out.len() / 2;
     for b in (0..frames).step_by(BLOCK) {
         let t = (from + b) as f64 / f64::from(rate);
@@ -155,12 +169,16 @@ pub fn mux(plan: &crate::encode::Plan, out: &str, pcm: &[f32], rate: u32) -> Res
     std::fs::write(&wav_file, wav(pcm, rate)).map_err(|e| format!("{wav_file}: {e}"))?;
     let args: Vec<String> = ["-i", out, "-i", &wav_file]
         .into_iter()
-        .chain(["-map", "0:v", "-map", "1:a", "-c:v", "copy", "-c:a", "aac", "-b:a", "256k"])
+        .chain([
+            "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-c:a", "aac", "-b:a", "256k",
+        ])
         .map(String::from)
         .chain(plan.mux())
         .chain([tmp.clone()])
         .collect();
-    let ok = crate::ffmpeg(&args).status().map_err(|e| format!("ffmpeg: {e}"))?;
+    let ok = crate::ffmpeg(&args)
+        .status()
+        .map_err(|e| format!("ffmpeg: {e}"))?;
     let _ = std::fs::remove_file(&wav_file);
     if !ok.success() {
         let _ = std::fs::remove_file(&tmp);

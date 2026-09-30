@@ -10,14 +10,19 @@ pub struct Editor {
     /// How many levels of parts [`Editor::roots`] discovers when nothing is
     /// selected: 1 is panels, 2 panels and their controls, and so on.
     pub depth: usize,
+    /// Resized surfaces by id, and under [`VIEW`] the size the host lays
+    /// the whole editor out at (`view` input), as a window resize would.
     sizes: std::collections::BTreeMap<String, Size>,
 }
+/// The key of the whole editor's size in the sizes an adapter's frame gets
+/// (no surface is named ""): read it with [`Editor::viewport`].
+pub const VIEW: &str = "";
 impl Editor {
     pub fn layout(
         mut tree: El,
         sizes: &std::collections::BTreeMap<String, Size>,
     ) -> Result<El, String> {
-        for (id, size) in sizes {
+        for (id, size) in sizes.iter().filter(|(id, _)| id.as_str() != VIEW) {
             tree = mui::material::resize_capture(&tree, id, *size).map_err(|e| e.to_string())?;
         }
         Ok(tree)
@@ -31,6 +36,15 @@ impl Editor {
             depth: 1,
             sizes: std::collections::BTreeMap::default(),
         }
+    }
+    /// The size to lay the editor out and capture at, from the sizes a
+    /// frame gets: the host's `view`, else the plugin's own `size`.
+    pub fn viewport(sizes: &std::collections::BTreeMap<String, Size>, size: Size) -> Size {
+        sizes.get(VIEW).copied().unwrap_or(size)
+    }
+    /// [`Editor::viewport`] now, for sizing the capture after a frame.
+    pub fn view(&self, size: Size) -> Size {
+        Self::viewport(&self.sizes, size)
     }
     /// The surfaces to capture as parts: the selection, or when there is
     /// none, [`discover_tree`](crate::discover_tree) `depth` levels deep.
@@ -55,7 +69,9 @@ impl Editor {
             &std::collections::BTreeMap<String, Size>,
         ) -> Result<(), String>,
     ) -> Result<(), String> {
-        let dt = (sample_frame.saturating_sub(self.sample_frame) as f64 / f64::from(crate::sample_rate())).min(1.);
+        let dt = (sample_frame.saturating_sub(self.sample_frame) as f64
+            / f64::from(crate::sample_rate()))
+        .min(1.);
         self.sample_frame = sample_frame;
         for command in commands {
             if command["kind"] == "select" {
@@ -105,6 +121,18 @@ impl Editor {
                     }
                     self.sizes.insert(id.to_owned(), size);
                 }
+                continue;
+            }
+            if command["kind"] == "view" {
+                let size = Size::new(
+                    number(command, "width", 16384.)?,
+                    number(command, "height", 16384.)?,
+                );
+                match (size.width, size.height) {
+                    (w, h) if w <= 0. || h <= 0. => self.sizes.remove(VIEW),
+                    (w, h) if w >= 8. && h >= 8. => self.sizes.insert(VIEW.into(), size),
+                    _ => return Err("A view is at least 8 x 8, or 0 for the plugin's own".into()),
+                };
                 continue;
             }
             if command["kind"] == "cancel" {

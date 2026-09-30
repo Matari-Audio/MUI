@@ -128,12 +128,11 @@ pub fn cut_live() -> Result<(), String> {
     let mut capture = mui_motion_bridge::CaptureStream::default();
     let view = context.clone();
     let mut booted = false;
-    #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "a window fits u16")]
-    let (width, height) = ((SIZE.width * scale).round() as u16, (SIZE.height * scale).round() as u16);
     let frame = move |_revision: u64, clock: u64, commands: &[Value]| -> Result<Value, String> {
         let mut step = |ui: &mut mui2::prelude::Ui, input: Input, dt: f64, sizes: &std::collections::BTreeMap<String, Size>| -> Result<(), String> {
             let tree = mui_motion_bridge::Editor::layout(racks.tree(ui, &input), sizes)?;
-            ui.frame(tree, Some(SIZE), input, dt).map_err(|e| format!("{e:?}"))?;
+            let view = mui_motion_bridge::Editor::viewport(sizes, SIZE);
+            ui.frame(tree, Some(view), input, dt).map_err(|e| format!("{e:?}"))?;
             racks.after(ui);
             Ok(())
         };
@@ -158,7 +157,10 @@ pub fn cut_live() -> Result<(), String> {
         }
         editor.advance(commands, clock, &mut step)?;
         let scene = editor.ui.scene().ok_or("empty scene")?;
-        let roots = editor.roots(SIZE.width, SIZE.height);
+        let view_size = editor.view(SIZE);
+        let roots = editor.roots(view_size.width, view_size.height);
+        #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "a window fits u16")]
+        let (width, height) = ((view_size.width * scale).round() as u16, (view_size.height * scale).round() as u16);
         let mut value = capture.frame(scene, width, height, scale, &roots)?;
         value["patch"] = cut_patch(&view);
         Ok(value)
