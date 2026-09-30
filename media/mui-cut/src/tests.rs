@@ -1516,3 +1516,67 @@ fn each_level_stacks_deeper_in_3d() {
     assert!((z("syn#a") + step).abs() < 1e-6, "{}", z("syn#a"));
     assert!((z("syn#a/k") + 2. * step).abs() < 1e-6, "{}", z("syn#a/k"));
 }
+
+/// Notes land on their own samples at the project's rate: an end before a
+/// start on the same sample, a length never below a sample, and each
+/// frame's advance carries exactly the notes in its span.
+#[test]
+fn notes_are_scheduled_to_sample_offsets() {
+    let notes = [
+        Note { t: 0.5, dur: 0.25, pitch: 60, vel: 100 },
+        Note { t: 0.75, dur: 1e-9, pitch: 60, vel: 90 },
+    ];
+    let ev = plugin::note_events(&notes, 44_100);
+    let at: Vec<(u64, &str)> = ev.iter().map(|(s, v)| (*s, v["op"].as_str().unwrap())).collect();
+    assert_eq!(
+        at,
+        [(22_050, "note_on"), (33_075, "note_off"), (33_075, "note_on"), (33_076, "note_off")]
+    );
+    assert_eq!(ev[0].1["at"], 22_050);
+    let p = one_layer(
+        r#"{"id":"syn","kind":"plugin","source":{"bin":"adapter"},"notes":[{"t":0.5,"dur":0.25,"pitch":60}]}"#,
+    );
+    let steps = p.scenes[0].layers[0].plugin_track(30., 48_000, 30);
+    // Every frame after the first advances to its own sample.
+    assert_eq!(steps.len(), 31);
+    assert_eq!(steps[15].commands[0], serde_json::json!({"op": "advance", "to": 24_000, "notes": []}));
+    // The note at 0.5 s is sample 24000: in frame 16's span [24000, 25600).
+    assert_eq!(steps[16].commands[0]["to"], 25_600);
+    assert_eq!(steps[16].commands[0]["notes"][0]["at"], 24_000);
+}
+
+/// A capture state, and so a render segment, names the notes played: other
+/// notes are other states and other frames.
+#[test]
+fn segment_keys_change_with_the_notes() {
+    let with = |pitch: u8| {
+        one_layer(&format!(
+            r#"{{"id":"syn","kind":"plugin","source":{{"bin":"adapter"}},"notes":[{{"t":0.2,"dur":0.5,"pitch":{pitch}}}]}}"#
+        ))
+    };
+    let (a, b) = (with(60), with(62));
+    let frame = |p: &Project| serde_json::to_string(&eval(p, &p.scenes[0], 1.)).unwrap();
+    assert_ne!(frame(&a), frame(&b));
+    // Before the notes differ in anything played, the state is shared.
+    let state = |p: &Project, t| eval(p, &p.scenes[0], t).layers[0].plugin.clone().unwrap().state;
+    assert_eq!(state(&a, 0.1), state(&b, 0.1));
+    assert_ne!(state(&a, 0.3), state(&b, 0.3));
+}
+
+/// A keyed view size is sent as `view` input when it changes, in whole
+/// pixels; 0 is the plugin's own size and sends nothing at the start.
+#[test]
+fn a_keyed_view_size_is_sent_when_it_changes() {
+    let p = one_layer(
+        r#"{"id":"syn","kind":"plugin","source":{"bin":"adapter"},
+        "view_width":[{"t":0,"v":0,"interp":"hold"},{"t":1,"v":900.4,"interp":"hold"}],
+        "view_height":600}"#,
+    );
+    let steps = p.scenes[0].layers[0].plugin_track(30., 48_000, 45);
+    assert_eq!(steps.iter().map(|s| s.frame).collect::<Vec<_>>(), [0, 30]);
+    assert!(steps[0].commands.is_empty());
+    assert_eq!(
+        steps[1].commands,
+        [serde_json::json!({"op": "input", "kind": "view", "width": 900.0, "height": 600.0})]
+    );
+}
