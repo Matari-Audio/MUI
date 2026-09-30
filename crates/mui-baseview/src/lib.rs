@@ -25,7 +25,9 @@ use baseview::{
     ScrollDelta, Window, WindowContext, WindowEvent, WindowHandler, WindowSettings, WindowSize,
 };
 use keyboard_types::{Key as HostKey, KeyState, KeyboardEvent, Modifiers, NamedKey};
-use mui::host::{Driver, KeyEvent, Modifier, NativeKey, Wheel};
+/// What a [`KeyHook`] is handed.
+pub use mui::host::KeyEvent;
+use mui::host::{Driver, Modifier, NativeKey, Wheel};
 pub use mui::host::{Shared, View, lock};
 use mui::prelude::{Button, Cursor, Key, Mods, Point};
 use mui::vello::host::{Frame, Host, target_size};
@@ -34,6 +36,12 @@ use raw_window_handle::HasWindowHandle;
 
 const GPU_RETRY: Duration = Duration::from_millis(500);
 
+/// An app's look at every key event, down and up, before MUI routes it:
+/// `true` takes the key, and neither MUI nor the host sees it. MUI hands a
+/// view key presses only; a computer keyboard that plays notes has to hear
+/// the key come up. Runs on the window's thread with the last frame's `Ui`.
+pub type KeyHook = Arc<Mutex<dyn FnMut(&mui::Ui, &KeyEvent) -> bool + Send>>;
+
 /// Requests from the host's thread, applied by the window's next tick,
 /// which is the only place baseview's `WindowContext` can be touched.
 #[derive(Default)]
@@ -41,9 +49,17 @@ pub struct Requests {
     size: AtomicU64,
     scale: AtomicU64,
     redraw: AtomicBool,
+    keys: Mutex<Option<KeyHook>>,
 }
 
 impl Requests {
+    /// Hand every key event to `hook` first; see [`KeyHook`].
+    pub fn on_key(&self, hook: KeyHook) {
+        *self
+            .keys
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(hook);
+    }
     /// Resize the child window to `width` x `height` logical points.
     pub fn resize(&self, width: u32, height: u32) {
         self.size.store(
@@ -350,7 +366,17 @@ impl<V: View> Handler<V> {
         let d = &mut self.driver;
         match event {
             Event::Keyboard(key) => {
-                let kept = d.key(&lock(&self.shared), &key_event(key));
+                let event = key_event(key);
+                let hook = self.requests.keys.lock().ok().and_then(|h| h.clone());
+                if let Some(hook) = hook {
+                    let mut hook = hook
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    if hook(&lock(&self.shared).ui, &event) {
+                        return EventStatus::Captured;
+                    }
+                }
+                let kept = d.key(&lock(&self.shared), &event);
                 return if kept {
                     EventStatus::Captured
                 } else {

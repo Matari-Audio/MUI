@@ -101,3 +101,51 @@ fn a_redraw_request_from_the_host_thread_is_a_frame() {
     h.requests.redraw();
     assert!(h.step());
 }
+
+#[test]
+fn a_key_hook_hears_downs_and_ups_first_and_can_take_them() {
+    let mut h = handler((400, 300), 1.0);
+    let heard = Arc::new(Mutex::new(Vec::new()));
+    let log = Arc::clone(&heard);
+    h.requests
+        .on_key(Arc::new(Mutex::new(move |_: &Ui, e: &KeyEvent| {
+            log.lock().unwrap().push((e.key.clone(), e.down));
+            // Takes "a" only.
+            e.key == NativeKey::Text("a".into())
+        })));
+    h.step();
+    let a = |state| {
+        key(
+            HostKey::Character("a".into()),
+            Code::KeyA,
+            state,
+            Modifiers::default(),
+        )
+    };
+    assert_eq!(h.on_event_inner(&a(KeyState::Down)), EventStatus::Captured);
+    assert_eq!(h.on_event_inner(&a(KeyState::Up)), EventStatus::Captured);
+    // Not taken: MUI routes it as before, and the knob claims Escape.
+    let escape = key(
+        HostKey::Named(NamedKey::Escape),
+        Code::Escape,
+        KeyState::Down,
+        Modifiers::default(),
+    );
+    assert_eq!(h.on_event_inner(&escape), EventStatus::Captured);
+    let space = key(
+        HostKey::Character(" ".into()),
+        Code::Space,
+        KeyState::Down,
+        Modifiers::default(),
+    );
+    assert_eq!(h.on_event_inner(&space), EventStatus::Ignored);
+    assert_eq!(
+        *heard.lock().unwrap(),
+        [
+            (NativeKey::Text("a".into()), true),
+            (NativeKey::Text("a".into()), false),
+            (NativeKey::Named(Key::Escape), true),
+            (NativeKey::Text(" ".into()), true),
+        ]
+    );
+}
