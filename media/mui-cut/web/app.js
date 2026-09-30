@@ -48,6 +48,11 @@ const clock = { at: 0, t: 0 };
 const pacing = { shown: [], dropped: 0, last: -1, pending: -1 };
 globalThis.pacing = pacing;
 globalThis.cutQuads = () => quads; // the e2e aims at plugin parts with these
+// A plugin layer's part tree at the playhead (plugin::tree_json): id (the
+// path keyed as `parts.<id>.x`), surface, level, frame, rects, thumb (an
+// asset path), motion, children. Null before its capture has loaded.
+globalThis.cutParts = id => { const j = cut.plugin_parts(si, t, id); return j ? JSON.parse(j) : null; };
+let interact = false;    // viewport clicks drive the plugin, keyed at the playhead
 const undo = [], redo = [];
 let base = null;         // the document before the gesture in progress
 const assets = new Set();
@@ -191,8 +196,9 @@ async function loadAssets() {
       const r = await fetch('/asset/' + path);
       if (!r.ok) continue;
       const bytes = new Uint8Array(await r.arrayBuffer());
-      for (const f of JSON.parse(new TextDecoder().decode(bytes)).layers) {
-        const img = '.cut-cache/' + f.src;
+      cut.add_asset(path, bytes); // for the part tree (`cutParts`)
+      for (const img of JSON.parse(new TextDecoder().decode(bytes)).layers
+        .flatMap(f => [f.src, f.free?.src]).filter(Boolean).map(s => '.cut-cache/' + s)) {
         if (assets.has(img)) continue;
         const ri = await fetch('/asset/' + img);
         if (!ri.ok) continue;
@@ -222,14 +228,22 @@ function refreshLists() {
     b.append(l.name || l.id);
     b.className = l.id === sel && !selPart ? 'on' : '';
     b.onclick = () => select(l.id);
-    // A plugin's parts, as the last frame drew them: child layers.
-    const parts = quads.filter(q => q.id.startsWith(l.id + '#')).map(q => q.id.slice(l.id.length + 1));
-    return [b, ...[...new Set(parts)].map(part => {
+    // A plugin's parts, as the last frame drew them: child layers, nested
+    // by path (`osc`, then `osc/osc-shape` under it), parents first.
+    const parts = [...new Set(quads.filter(q => q.id.startsWith(l.id + '#')).map(q => q.id.slice(l.id.length + 1)))];
+    const depth = part => parts.filter(o => part.startsWith(o + '/')).length;
+    // Under its parent, in the order the capture has them.
+    const chain = part => [...parts.filter(o => part.startsWith(o + '/')), part].map(o => parts.indexOf(o));
+    const cmp = (a, b) => { const x = chain(a), y = chain(b); for (let i = 0; i < Math.min(x.length, y.length); i++) if (x[i] !== y[i]) return x[i] - y[i]; return x.length - y.length; };
+    parts.sort(cmp);
+    return [b, ...parts.map(part => {
       const c = document.createElement('button');
       c.className = 'part' + (l.id === sel && part === selPart ? ' on' : '');
-      c.dataset.part = part;
+      c.dataset.part = part; c.dataset.depth = depth(part);
+      c.style.paddingLeft = `${20 + 14 * depth(part)}px`;
       c.innerHTML = '<span class="kind">└</span>';
-      c.append(part);
+      c.append(part.slice(part.lastIndexOf('/') + 1));
+      c.title = part;
       c.onclick = () => select(`${l.id}#${part}`);
       return c;
     })];
@@ -338,6 +352,13 @@ function kindFields(l) {
     b.title = 'Key explode at the playhead: 0.5 when collapsed, 0 when exploded';
     b.onclick = () => edit(() => setValue(l, 'explode', (now(l, 'explode') ?? 0) > 0.01 ? 0 : 0.5));
     field('parts', b);
+    const lv = input(l.explode_levels ?? 1, v => set('explode_levels', Math.min(8, Math.max(1, Math.round(Number(v)) || 1)), 1), 'number');
+    lv.dataset.levels = ''; lv.min = 1; lv.max = 8; lv.step = 1;
+    lv.title = 'Explode levels: 1 the panels, 2 the panels and then their controls (captured this deep)';
+    field('explode levels', lv);
+    const st = input(l.explode_stagger ?? 0, v => set('explode_stagger', Math.max(0, Number(v) || 0), 0), 'number');
+    st.title = 'Seconds each level of explode runs behind the one above';
+    field('level stagger', st);
   }
   if (l.kind === 'duplicator') {
     field('shape', choice(l.shape ?? 'rect', ['rect', 'ellipse', 'path'], v => set('shape', v, 'rect')));
@@ -629,15 +650,56 @@ over.addEventListener('wheel', e => {
   if (!orbit.on) return;
   e.preventDefault(); orbit.zoom = Math.min(8, Math.max(0.1, orbit.zoom * Math.exp(e.deltaY * 0.001))); sendOrbit();
 }, { passive: false });
+// A 2x2 linear map [a, b, c, d] (x' = a x + c y) inverted, applied to v.
+const unmap = ([a, b, c, d], [x, y]) => { const k = a * d - b * c || 1; return [(d * x - c * y) / k, (a * y - b * x) / k]; };
+// A project point in a plugin's own pixels, through the quad it hit (a
+// moved part maps back to where the UI has it).
+const toUi = (q, [x, y]) => unmap(q.ui, [x - q.ui[4], y - q.ui[5]]);
+// Interact: the pointer, keyed as the plugin's `pointer_*` (hold keys) so
+// the adapter turns the knob or drags the slider under it. Down at the
+// playhead, moves a frame on (at least), up a frame after the last move.
+function holdKey(l, p, time, v) {
+  let cur = getp(l, p);
+  if (!isKeys(cur)) { cur = [{ t: 0, v: cur ?? (p === 'pointer_down' ? 0 : -1), interp: 'hold' }]; setp(l, p, cur); }
+  const i = keyAt(cur, time);
+  if (i >= 0) Object.assign(cur[i], { v, interp: 'hold' }); else insertKey(cur, { t: time, v, interp: 'hold' });
+}
+function pointerKeys(l, time, [x, y], down) {
+  holdKey(l, 'pointer_x', time, round(x)); holdKey(l, 'pointer_y', time, round(y));
+  if (down !== undefined) holdKey(l, 'pointer_down', time, down);
+}
+$('#interact').onclick = () => {
+  interact = !interact;
+  $('#interact').setAttribute('aria-pressed', interact); $('#interact').classList.toggle('on', interact);
+};
 over.onpointerdown = e => {
   if (orbit.on) { orbit.from = [e.clientX, e.clientY, orbit.yaw, orbit.pitch]; over.setPointerCapture(e.pointerId); return; }
   const p = toProject(e), id = hit(p);
+  if (interact) {
+    const q = [...quads].reverse().find(q => q.ui && inside(p, q.pts));
+    const l = q && scene().layers.find(l => l.id === q.id.split('#')[0]);
+    if (!l || l.kind !== 'plugin') return;
+    const t0 = snap(t);
+    begin(); pointerKeys(l, t0, toUi(q, p), 1); changed();
+    drag = { interact: true, l, q, t0, last: t0 };
+    over.setPointerCapture(e.pointerId);
+    return;
+  }
   select(id);
   if (!id) return;
   const l = layer();
-  // A part moves in its plugin's pixels: the layer's scale divides.
-  const px = selPart ? `parts.${selPart}.` : '', k = selPart ? now(l, 'scale') || 1 : 1;
-  drag = { p, l, px, k, x0: now(l, px + 'x'), y0: now(l, px + 'y') };
+  // A part moves in its parent's frame (the plugin's, at the top): the
+  // parent quad's map from UI pixels to project pixels, inverted.
+  const px = selPart ? `parts.${selPart}.` : '';
+  let lin = [1, 0, 0, 1];
+  if (selPart) {
+    const mine = quads.filter(q => q.id.startsWith(sel + '#')).map(q => q.id.slice(sel.length + 1));
+    const parent = mine.filter(o => selPart.startsWith(o + '/')).sort((a, b) => b.length - a.length)[0];
+    const pq = quads.find(q => q.id === (parent ? `${sel}#${parent}` : sel));
+    const k = now(l, 'scale') || 1;
+    lin = pq?.ui ? pq.ui.slice(0, 4) : [k, 0, 0, k];
+  }
+  drag = { p, l, px, lin, x0: now(l, px + 'x'), y0: now(l, px + 'y') };
   over.setPointerCapture(e.pointerId);
   begin();
 };
@@ -649,12 +711,29 @@ over.onpointermove = e => {
     return;
   }
   const p = toProject(e);
-  if (!drag) { const h = hit(p); if (h !== hover) { hover = h; need = true; } over.style.cursor = h ? 'move' : 'default'; return; }
-  setValue(drag.l, drag.px + 'x', round(drag.x0 + (p[0] - drag.p[0]) / drag.k));
-  setValue(drag.l, drag.px + 'y', round(drag.y0 + (p[1] - drag.p[1]) / drag.k));
+  if (!drag) {
+    const h = hit(p); if (h !== hover) { hover = h; need = true; }
+    over.style.cursor = h ? (interact ? 'pointer' : 'move') : 'default'; return;
+  }
+  if (drag.interact) {
+    drag.last = Math.max(snap(t), drag.t0 + 1 / R.fps);
+    pointerKeys(drag.l, drag.last, toUi(drag.q, p));
+    changed(); return;
+  }
+  const [dx, dy] = unmap(drag.lin, [p[0] - drag.p[0], p[1] - drag.p[1]]);
+  setValue(drag.l, drag.px + 'x', round(drag.x0 + dx));
+  setValue(drag.l, drag.px + 'y', round(drag.y0 + dy));
   changed();
 };
-over.onpointerup = () => { if (orbit.on) { orbit.from = null; return; } drag = null; end(); };
+over.onpointerup = () => {
+  if (orbit.on) { orbit.from = null; return; }
+  if (drag?.interact) {
+    const l = drag.l, up = Math.max(snap(t), drag.last + 1 / R.fps);
+    holdKey(l, 'pointer_down', up, 0);
+    changed();
+  }
+  drag = null; end();
+};
 
 // ---------- timeline
 const tl = $('#timeline'), tctx = tl.getContext('2d');

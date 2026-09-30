@@ -71,11 +71,7 @@ fn main() -> Result<(), String> {
             Ok(())
         })?;
         let scene = editor.ui.scene().ok_or("no scene yet")?;
-        let roots = if editor.selection.is_empty() {
-            mui_motion_bridge::discover_parts(scene, W, H)
-        } else {
-            editor.selection.clone()
-        };
+        let roots = editor.roots(W, H);
         capture.frame(scene, (W * SCALE) as u16, (H * SCALE) as u16, SCALE, &roots)
     };
     mui_motion_bridge::run_live(

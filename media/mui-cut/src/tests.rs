@@ -1336,3 +1336,183 @@ fn a_plugin_in_a_3d_scene_draws_like_its_2d_self() {
     let off = ra.iter().zip(&rb).filter(|(a, b)| a != b).count();
     assert!(off < ra.len() / 100, "{off} pixels differ");
 }
+
+/// A capture of a 200x100 UI as a two-level tree: panel `a` (its frame
+/// 20,20 80x40) holding control `a/k` (30,30 20x20), and panel `b`. The
+/// control has a free image, wider than its clipped one.
+#[cfg(not(target_arch = "wasm32"))]
+fn tree_assets(p: &Project) -> Assets {
+    let key = eval(p, &p.scenes[0], 0.).layers[0]
+        .plugin
+        .clone()
+        .unwrap()
+        .state;
+    let cap = serde_json::json!({"width": 200, "height": 100,
+    "parts": [
+        {"path": "a", "id": "a", "frame": [20, 20, 80, 40]},
+        {"path": "b", "id": "b", "frame": [140, 60, 40, 20]},
+        {"path": "a/k", "id": "k", "parent": "a", "frame": [30, 30, 20, 20]},
+    ],
+    "layers": [
+        {"group": "background", "rect": [0, 0, 200, 100], "src": "img/bg.png"},
+        {"group": "a", "rect": [20, 20, 80, 40], "src": "img/a.png"},
+        {"group": "a/k", "rect": [30, 30, 20, 20], "src": "img/a.png",
+         "free": {"src": "img/free.png", "rect": [26, 30, 28, 20]}},
+        {"group": "b", "rect": [140, 60, 40, 20], "src": "img/a.png"},
+    ]});
+    let mut a = Assets::default();
+    a.add_asset(
+        &format!("{}/{key}.json", plugin::CACHE),
+        cap.to_string().as_bytes(),
+    )
+    .unwrap();
+    for img in ["img/bg.png", "img/a.png", "img/free.png"] {
+        a.add_asset(&format!("{}/{img}", plugin::CACHE), &test_png())
+            .unwrap();
+    }
+    a
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn tree_doc(extra: &str) -> Project {
+    one_layer(&format!(
+        r#"{{"id":"syn","kind":"plugin","source":{{"bin":"x"}},"x":200,"y":100{extra}}}"#
+    ))
+}
+
+/// `explode_levels` limits how deep explode reaches: at 1 a control rides
+/// with its panel, at 2 it also moves away from the panel's centre; its
+/// own tracks, keyed by path, move it in its panel.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn explode_levels_separate_panels_then_their_controls() {
+    let quads = |extra: &str| {
+        let p = tree_doc(extra);
+        let a = tree_assets(&p);
+        let l = a.layers(&eval(&p, &p.scenes[0], 0.)).unwrap();
+        let at = |id: &str| l.parts.iter().find(|q| q.id == id).unwrap().pts[0];
+        (
+            at("syn#a"),
+            at("syn#a/k"),
+            l.parts.iter().map(|q| q.id.clone()).collect::<Vec<_>>(),
+        )
+    };
+    // Parents first, children after: a child wins a hit.
+    let (a0, k0, ids) = quads("");
+    assert_eq!(ids, ["syn#a", "syn#b", "syn#a/k"]);
+    // The UI (200x100) is centred on 200,100: its origin is 100,50.
+    assert_eq!((a0, k0), ([120., 70.], [130., 80.]));
+    // One level: `a` (centre 60,40) moves by its offset from the UI's
+    // centre (100,50), and `k` rides with it.
+    let (a1, k1, _) = quads(r#","explode":1"#);
+    assert_eq!(a1, [120. - 40., 70. - 10.]);
+    assert_eq!([k1[0] - a1[0], k1[1] - a1[1]], [10., 10.]);
+    // Two: `k` (centre 40,40) also moves off `a`'s centre (60,40).
+    let (a2, k2, _) = quads(r#","explode":1,"explode_levels":2"#);
+    assert_eq!(a2, a1);
+    assert_eq!([k2[0] - a2[0], k2[1] - a2[1]], [10. - 20., 10.]);
+    // A control's own track, by path, adds on top, in its panel.
+    let (_, k3, _) = quads(r#","explode":1,"parts":{"a/k":{"y":7}}"#);
+    assert_eq!(k3, [k1[0], k1[1] + 7.]);
+    // Staggered: the second level runs behind the first.
+    let p = tree_doc(
+        r#","explode_levels":2,"explode_stagger":0.5,
+        "explode":[{"t":0,"v":0,"interp":"linear"},{"t":1,"v":1,"interp":"linear"}]"#,
+    );
+    let e = eval(&p, &p.scenes[0], 0.75).layers[0]
+        .plugin
+        .clone()
+        .unwrap()
+        .explode;
+    assert!(
+        (e[0] - 0.75).abs() < 1e-9 && (e[1] - 0.25).abs() < 1e-9,
+        "{e:?}"
+    );
+}
+
+/// A control keyed or exploded deeper than the panels asks the adapter
+/// for that many levels of parts; panels alone ask nothing new (so their
+/// captures keep their keys).
+#[test]
+fn deeper_parts_ask_the_adapter_for_more_levels() {
+    let first = |extra: &str| {
+        let p = one_layer(&format!(
+            r#"{{"id":"p","kind":"plugin","source":{{"bin":"a"}}{extra}}}"#
+        ));
+        p.scenes[0].layers[0].plugin_track(30., 0)[0]
+            .commands
+            .clone()
+    };
+    assert!(first("").is_empty());
+    assert!(first(r#","parts":{"osc":{"x":1}}"#).is_empty());
+    let depth = |extra: &str| first(extra)[0]["depth"].clone();
+    assert_eq!(depth(r#","explode_levels":2"#), 2);
+    assert_eq!(depth(r#","parts":{"osc/osc-shape":{"x":1}}"#), 2);
+    assert_eq!(
+        first(r#","explode_levels":3,"select":["a"]"#)[0]["ids"],
+        serde_json::json!(["a"])
+    );
+    for bad in [
+        r#","explode_levels":0"#,
+        r#","explode_levels":9"#,
+        r#","explode_stagger":-1"#,
+        r#","parts":{"a//b":{}}"#,
+        r#","parts":{"/a":{}}"#,
+    ] {
+        let json = format!(
+            r#"{{"size":[400,200],"fps":30,"scenes":[{{"name":"a","duration":2,"layers":[{{"id":"p","kind":"plugin","source":{{"bin":"a"}}{bad}}}]}}]}}"#
+        );
+        assert!(Project::load(&json).is_err(), "accepted {bad}");
+    }
+}
+
+/// At rest a control draws its clipped image (the UI as it is); moved, its
+/// free one, uncut by the panel it left.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_moved_control_draws_free_of_its_panels_clip() {
+    let images = |extra: &str| {
+        let p = tree_doc(extra);
+        let a = tree_assets(&p);
+        let d = &eval(&p, &p.scenes[0], 0.).layers[0];
+        let slabs: Vec<String> = a
+            .slabs(d)
+            .into_iter()
+            .filter(|s| s.id == "syn#a/k")
+            .filter_map(|s| match s.kind {
+                Kind::Image { path } => Some(path),
+                _ => None,
+            })
+            .collect();
+        let widths: Vec<f64> = a
+            .slabs(d)
+            .iter()
+            .filter(|s| s.id == "syn#a/k")
+            .map(|s| s.width)
+            .collect();
+        (slabs, widths)
+    };
+    let (rest, w) = images("");
+    assert_eq!(rest, [format!("{}/img/a.png", plugin::CACHE)]);
+    assert_eq!(w, [20.]);
+    let (moved, w) = images(r#","explode":0.5,"explode_levels":2"#);
+    assert_eq!(moved, [format!("{}/img/free.png", plugin::CACHE)]);
+    assert_eq!(w, [28.]);
+    // Its panel moving takes it out of the UI too.
+    assert_eq!(images(r#","parts":{"a":{"x":3}}"#).0, moved);
+}
+
+/// In 3D each level stacks in front of the one above it.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn each_level_stacks_deeper_in_3d() {
+    let p = tree_doc(r#","explode":0.5,"explode_levels":2"#);
+    let a = tree_assets(&p);
+    let slabs = a.slabs(&eval(&p, &p.scenes[0], 0.).layers[0]);
+    let z = |id: &str| slabs.iter().find(|s| s.id == id).unwrap().space.z;
+    // Larger z is farther: the backdrop, then the panel, then its control.
+    let step = 0.5 * plugin::EXPLODE_DEPTH + 1.;
+    assert!((z("syn") - 0.).abs() < 1e-6);
+    assert!((z("syn#a") + step).abs() < 1e-6, "{}", z("syn#a"));
+    assert!((z("syn#a/k") + 2. * step).abs() < 1e-6, "{}", z("syn#a/k"));
+}

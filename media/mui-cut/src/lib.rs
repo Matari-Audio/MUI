@@ -34,7 +34,9 @@ pub use gpu::{Engine, GpuCanvas};
 pub use motion::{
     ANIMATOR_PROPS, Animator, Deform, Deformer, Ease, Falloff, Fx, Order, Unit, text_units,
 };
-pub use plugin::{Capture, Fragment, Param, Part, PartAt, PluginAt, Source, Step, Surface};
+pub use plugin::{
+    Capture, Fragment, Param, Part, PartAt, PartInfo, PluginAt, Pose, Source, Step, Surface,
+};
 #[cfg(not(target_arch = "wasm32"))]
 pub use pool::{CpuPool, shutter};
 pub use render::{Assets, Layers, Quad, Renderer};
@@ -244,9 +246,18 @@ pub enum Kind {
         select: Vec<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         params: Vec<Param>,
-        /// Per part id, its own motion.
+        /// Per part path, its own motion: `osc` is a panel, `osc/osc-shape`
+        /// a control inside it (a part moves with its parent).
         #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
         parts: std::collections::BTreeMap<String, Part>,
+        /// How many levels of parts `explode` pulls apart: 1 the panels,
+        /// 2 the panels and then the controls in them, and so on. Parts
+        /// are captured this deep (or as deep as a keyed part's path).
+        #[serde(default = "one_level", skip_serializing_if = "is_one_level")]
+        explode_levels: u32,
+        /// Seconds each level's explode runs behind the one above it.
+        #[serde(default, skip_serializing_if = "is_default")]
+        explode_stagger: f64,
     },
 }
 
@@ -311,6 +322,12 @@ pub enum Layout {
 
 fn is_default<T: Default + PartialEq>(v: &T) -> bool {
     *v == T::default()
+}
+fn one_level() -> u32 {
+    1
+}
+fn is_one_level(v: &u32) -> bool {
+    *v == 1
 }
 fn one_f() -> f64 {
     1.
@@ -1354,13 +1371,32 @@ impl Project {
                     Kind::Lottie { speed, .. } if !speed.is_finite() => {
                         return Err(format!("{at}.speed: layer `{id}`: `speed` must be finite"));
                     }
-                    Kind::Plugin { source, parts, .. } => {
+                    Kind::Plugin {
+                        source,
+                        parts,
+                        explode_levels,
+                        explode_stagger,
+                        ..
+                    } => {
                         source
                             .check()
                             .map_err(|e| format!("{at}.source: layer `{id}`: {e}"))?;
-                        if let Some(p) = parts.keys().find(|p| p.is_empty() || p.contains('.')) {
+                        if !(1..=8).contains(explode_levels) {
                             return Err(format!(
-                                "{at}.parts: layer `{id}`: part id `{p}` must be non-empty, without `.`"
+                                "{at}.explode_levels: layer `{id}`: 1..8 levels, not {explode_levels}"
+                            ));
+                        }
+                        if !(explode_stagger.is_finite() && *explode_stagger >= 0.) {
+                            return Err(format!(
+                                "{at}.explode_stagger: layer `{id}`: seconds, 0 or more"
+                            ));
+                        }
+                        if let Some(p) = parts
+                            .keys()
+                            .find(|p| p.contains('.') || p.split('/').any(str::is_empty))
+                        {
+                            return Err(format!(
+                                "{at}.parts: layer `{id}`: part path `{p}` must be surface ids joined by `/`, without `.`"
                             ));
                         }
                     }

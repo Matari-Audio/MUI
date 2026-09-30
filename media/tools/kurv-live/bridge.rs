@@ -46,7 +46,7 @@ pub fn motion_live() -> Result<(), String> {
         })?;
         let ui=&editor.ui;
         let scene=ui.scene().ok_or("empty scene")?;
-        let roots=if editor.selection.is_empty(){mui_motion_bridge::discover_parts(scene,SIZE.width,SIZE.height)}else{editor.selection.clone()};
+        let roots=editor.roots(SIZE.width,SIZE.height);
         let mut value=capture.frame(scene,900,622,0.6,&roots)?;
         let patch=view_context.generator_stack.snapshot();
         let modules:Vec<Value>=patch.groups().iter().flat_map(|g|g.modules().iter()).map(|m|{

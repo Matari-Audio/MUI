@@ -16,6 +16,8 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use mui_vello::kurbo::Affine;
+
 use crate::{Anim, Layer, is_one, is_zero, one, zero};
 
 /// The capture cache, relative to the project file. A state's manifest is
@@ -116,7 +118,9 @@ impl Part {
 pub struct PluginAt {
     /// The capture to show: `CACHE/<state>.json`.
     pub state: String,
-    pub explode: f64,
+    /// `explode` for each level of parts, panels first: the layer's
+    /// `explode`, each level `explode_stagger` seconds behind the last.
+    pub explode: Vec<f64>,
     pub backdrop: f64,
     /// `[x, y, down]` in the plugin's pixels.
     pub pointer: [f64; 3],
@@ -175,11 +179,22 @@ impl Layer {
             source,
             select,
             params,
+            parts,
+            explode_levels,
             ..
         } = &self.kind
         else {
             return Vec::new();
         };
+        // Parts come as deep as explode reaches, or a keyed part's path.
+        // ponytail: a surface id with a `/` in it counts as deeper; that only
+        // captures a level more than needed.
+        let depth = parts
+            .keys()
+            .map(|k| k.split('/').count())
+            .chain([*explode_levels as usize])
+            .max()
+            .unwrap_or(1);
         let src = serde_json::to_string(source).expect("a source serialises");
         let mut h = fnv(FNV_OFFSET, src.as_bytes());
         let mut steps = Vec::new();
@@ -188,7 +203,10 @@ impl Layer {
         for f in 0..=last {
             let t = f as f64 / fps;
             let mut commands = Vec::new();
-            if f == 0 && !select.is_empty() {
+            if f == 0 && depth > 1 {
+                commands
+                    .push(json!({"op": "input", "kind": "select", "ids": select, "depth": depth}));
+            } else if f == 0 && !select.is_empty() {
                 commands.push(json!({"op": "input", "kind": "select", "ids": select}));
             }
             let values: Vec<f64> = params.iter().map(|p| round(p.value.at(t), 1e6)).collect();
@@ -231,7 +249,13 @@ impl Layer {
 
     /// A plugin layer at `t`; `None` for other kinds.
     pub(crate) fn plugin_at(&self, t: f64, fps: f64) -> Option<PluginAt> {
-        let crate::Kind::Plugin { parts, .. } = &self.kind else {
+        let crate::Kind::Plugin {
+            parts,
+            explode_levels,
+            explode_stagger,
+            ..
+        } = &self.kind
+        else {
             return None;
         };
         let f = frame_at(t, fps);
@@ -244,7 +268,9 @@ impl Layer {
         let tq = f as f64 / fps;
         Some(PluginAt {
             state,
-            explode: self.explode.at(t),
+            explode: (0..*explode_levels)
+                .map(|i| self.explode.at(t - f64::from(i) * explode_stagger))
+                .collect(),
             backdrop: self.backdrop.at(t).clamp(0., 1.),
             pointer: self.pointer_at(tq),
             parts: parts
@@ -291,6 +317,10 @@ pub struct Capture {
     /// Every surface of the UI: what `select` and the pointer can aim at.
     #[serde(default)]
     pub surfaces: Vec<Surface>,
+    /// The parts as a tree, parents first. Older captures lack it: then
+    /// each fragment's group is a part of its own (see [`Capture::tree`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parts: Vec<PartInfo>,
     /// The adapter build this came from; a rebuilt adapter recaptures.
     #[serde(default)]
     pub stamp: String,
@@ -308,23 +338,198 @@ pub struct Surface {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Fragment {
+    /// The part's path (`panel/knob`), or `background`.
     pub group: String,
     /// `[x, y, w, h]` in the UI's pixels.
     pub rect: [f64; 4],
     /// Relative to [`CACHE`].
     pub src: String,
+    /// The same paint pulled out of its ancestors' clips, when a clip cut
+    /// it: drawn instead once the part moves.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub free: Option<Image>,
+}
+
+/// A captured image and where it sits, `[x, y, w, h]` in the UI's pixels.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Image {
+    pub src: String,
+    pub rect: [f64; 4],
+}
+
+/// A part of the UI: a surface split out, its path the part ids from the
+/// outermost down joined by `/` (`osc`, `osc/osc-shape`), keyed as
+/// `parts.<path>.x`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PartInfo {
+    pub path: String,
+    /// Its surface id.
+    pub id: String,
+    /// Its parent part's path; none at the top level.
+    #[serde(default)]
+    pub parent: Option<String>,
+    /// `[x, y, w, h]` in the UI's pixels: its surface's frame.
+    pub frame: [f64; 4],
 }
 
 impl Capture {
-    /// Its parts' ids, in paint order, once each.
-    pub fn parts(&self) -> Vec<&str> {
-        let mut out: Vec<&str> = Vec::new();
-        for f in &self.fragments {
-            if f.group != "background" && !out.contains(&f.group.as_str()) {
-                out.push(&f.group);
+    /// The parts, parents first: the manifest's tree, or for an older
+    /// capture one top-level part per group, framed by its fragments.
+    pub fn tree(&self) -> Vec<PartInfo> {
+        if !self.parts.is_empty() {
+            return self.parts.clone();
+        }
+        let mut out: Vec<PartInfo> = Vec::new();
+        for f in self.fragments.iter().filter(|f| f.group != "background") {
+            let [x, y, w, h] = f.rect;
+            match out.iter_mut().find(|p| p.path == f.group) {
+                Some(p) => {
+                    let [px, py, pw, ph] = p.frame;
+                    let (x0, y0) = (px.min(x), py.min(y));
+                    let (x1, y1) = ((px + pw).max(x + w), (py + ph).max(y + h));
+                    p.frame = [x0, y0, x1 - x0, y1 - y0];
+                }
+                None => out.push(PartInfo {
+                    path: f.group.clone(),
+                    id: f.group.clone(),
+                    parent: None,
+                    frame: f.rect,
+                }),
             }
         }
         out
+    }
+}
+
+/// Where a part is at one time, as the renderers draw it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Pose {
+    /// From the UI's pixels to where this part puts them (in the UI's
+    /// pixels): its parents' motion, then its own.
+    pub at: Affine,
+    /// Its and its parents' turns, degrees, and scales.
+    pub rotation: f64,
+    pub scale: f64,
+    pub opacity: f64,
+    /// Towards the viewer from the UI's face, in the UI's pixels: every
+    /// level a pixel and its explode's depth in front of its parent.
+    pub depth: f64,
+    pub highlight: f64,
+    /// 1 for panels, 2 for their controls, ...
+    pub level: usize,
+    /// Off where the UI put it (it or a parent moved): drawn free of its
+    /// ancestors' clips.
+    pub moved: bool,
+}
+
+/// Every part's pose, parents first. A part moves with its parent; at its
+/// level `explode` pulls it away from its parent's centre (the UI's, at the
+/// top) and towards the viewer, then its own tracks move it about its
+/// centre. Deeper than `explode` reaches, a part rides with its parent.
+pub fn poses(cap: &Capture, p: &PluginAt) -> Vec<(PartInfo, Pose)> {
+    let root = Pose {
+        at: Affine::IDENTITY,
+        rotation: 0.,
+        scale: 1.,
+        opacity: 1.,
+        depth: 0.,
+        highlight: 0.,
+        level: 0,
+        moved: false,
+    };
+    let centre = |f: [f64; 4]| [f[0] + f[2] / 2., f[1] + f[3] / 2.];
+    let mut out: Vec<(PartInfo, Pose)> = Vec::new();
+    for info in cap.tree() {
+        let (parent, pc) = match info
+            .parent
+            .as_ref()
+            .and_then(|q| out.iter().find(|(i, _)| &i.path == q))
+        {
+            Some((i, pose)) => (pose.clone(), centre(i.frame)),
+            None => (root.clone(), [cap.width / 2., cap.height / 2.]),
+        };
+        let level = parent.level + 1;
+        let amount = p.explode.get(level - 1).copied().unwrap_or(0.);
+        let c = centre(info.frame);
+        let [ex, ey, ez] = explode(pc, c, amount);
+        let own = p.parts.iter().find(|q| q.id == info.path);
+        let (dx, dy, dz, s, r, o, hl) = own.map_or((0., 0., 0., 1., 0., 1., 0.), |q| {
+            (q.x, q.y, q.z, q.scale, q.rotation, q.opacity, q.highlight)
+        });
+        let local = Affine::translate((c[0] + ex + dx, c[1] + ey + dy))
+            * Affine::rotate(r.to_radians())
+            * Affine::scale(s)
+            * Affine::translate((-c[0], -c[1]));
+        let moved = parent.moved || amount != 0. || [dx, dy, r] != [0., 0., 0.] || s != 1.;
+        let pose = Pose {
+            at: parent.at * local,
+            rotation: parent.rotation + r,
+            scale: parent.scale * s,
+            opacity: parent.opacity * o,
+            // A pixel proud of its parent even when collapsed: coplanar
+            // slabs shadow each other in speckles.
+            depth: parent.depth + ez - dz + 1.,
+            highlight: hl,
+            level,
+            moved,
+        };
+        out.push((info, pose));
+    }
+    out
+}
+
+/// A plugin layer's parts at one time as a JSON tree, the one shape the
+/// editor, the MCP `plugin_parts` tool and a sources panel read: per part
+/// `id` (its path, keyed as `parts.<id>.x`), `surface`, `level`, `frame`
+/// and `rects` (UI pixels), `thumb` (its largest image, a project asset
+/// path), `motion` (its own tracks at the time) and `children`.
+pub fn tree_json(cap: &Capture, at: &PluginAt) -> Value {
+    fn nodes(
+        tree: &[PartInfo],
+        cap: &Capture,
+        at: &PluginAt,
+        parent: Option<&str>,
+        level: usize,
+    ) -> Vec<Value> {
+        tree.iter()
+            .filter(|p| p.parent.as_deref() == parent)
+            .map(|p| {
+                let own: Vec<&Fragment> =
+                    cap.fragments.iter().filter(|f| f.group == p.path).collect();
+                let thumb = own
+                    .iter()
+                    .max_by(|a, b| (a.rect[2] * a.rect[3]).total_cmp(&(b.rect[2] * b.rect[3])))
+                    .map(|f| format!("{CACHE}/{}", f.src));
+                json!({
+                    "id": p.path,
+                    "surface": p.id,
+                    "level": level,
+                    "frame": p.frame,
+                    "rects": own.iter().map(|f| f.rect).collect::<Vec<_>>(),
+                    "thumb": thumb,
+                    "motion": at.parts.iter().find(|q| q.id == p.path),
+                    "children": nodes(tree, cap, at, Some(&p.path), level + 1),
+                })
+            })
+            .collect()
+    }
+    json!({
+        "state": at.state,
+        "size": [cap.width, cap.height],
+        "explode": at.explode,
+        "pointer": at.pointer,
+        "parts": nodes(&cap.tree(), cap, at, None, 1),
+        "surfaces": cap.surfaces,
+    })
+}
+
+impl Fragment {
+    /// The image to draw and where, for a part posed `moved` or not.
+    pub fn image(&self, moved: bool) -> (&str, [f64; 4]) {
+        match &self.free {
+            Some(f) if moved => (&f.src, f.rect),
+            _ => (&self.src, self.rect),
+        }
     }
 }
 

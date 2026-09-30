@@ -3,7 +3,7 @@
 //! This is not a DAW audio backend. Plugins retain ownership of DSP and models.
 #![deny(unsafe_code)]
 mod capture;
-pub use capture::{CaptureStream, capture, capture_frame, discover_parts};
+pub use capture::{CaptureStream, capture, capture_frame, discover_parts, discover_tree};
 mod editor;
 pub use editor::Editor;
 use serde_json::{Value, json};

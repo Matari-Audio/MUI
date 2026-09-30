@@ -356,6 +356,37 @@ try {
   check(Array.isArray(burst) && burst.some(e => Math.abs(e.t - 2) < 0.02 && e.v === 0.5), `explode is keyed at the playhead (${JSON.stringify(burst)})`);
   await sleep(600);
   await shot('editor-plugin.png');
+  // Two levels: `serve` recaptures, the controls nest under their panels,
+  // and the part tree reads the same.
+  await js(`(i => { i.value = 2; i.dispatchEvent(new Event('change')); })(document.querySelector('[data-levels]'))`);
+  await sleep(600);
+  check(read().scenes[0].layers[0].explode_levels === 2, 'explode levels are saved');
+  const nested = 'button.part[data-part="filter/filter-cutoff"]';
+  for (let i = 0; i < 150 && !(await js(`!!document.querySelector('${nested}')`)); i++) await sleep(200);
+  check(await js(`document.querySelector('${nested}')?.dataset.depth`) === '1', 'a control nests one level under its panel');
+  const tree = await js(`cutParts('synth')`);
+  const filter = tree?.parts.find(p => p.id === 'filter');
+  check(filter?.children.map(c => c.id).join() === 'filter/filter-cutoff,filter/filter-res,filter/filter-drive' && filter.children[0].thumb?.startsWith('.cut-cache/img/'),
+    `the part tree has the controls with thumbnails (${JSON.stringify(filter?.children.map(c => c.id))})`);
+  await click(nested);
+  check(await js(`document.querySelector('#insp-title').textContent`) === 'Part · filter/filter-cutoff', 'selecting a control inspects it');
+  await sleep(400);
+  await shot('editor-plugin-levels.png');
+  // Interact: a drag on the cutoff knob keys the plugin's pointer at the
+  // playhead, in the UI's pixels, instead of moving the part.
+  await click('#interact');
+  const kq = await js(`cutQuads().find(q => q.id === 'synth#filter/filter-cutoff').pts`);
+  const kx = px0 + (kq[0][0] + kq[2][0]) / 2 * k, ky = py0 + (kq[0][1] + kq[2][1]) / 2 * k;
+  await drag(kx, ky, kx, ky - 40);
+  await click('#interact');
+  const syn = read().scenes[0].layers[0];
+  const at2 = keys => keys.find(e => Math.abs(e.t - 2) < 0.02);
+  const f = filter.children[0].frame, ux = at2(syn.pointer_x)?.v, uy = at2(syn.pointer_y)?.v;
+  check(at2(syn.pointer_down)?.v === 1 && ux > f[0] && ux < f[0] + f[2] && uy > f[1] && uy < f[1] + f[3],
+    `interact presses the pointer on the knob at the playhead (${ux}, ${uy} in ${f})`);
+  check(syn.pointer_down.some(e => e.t > 2 && e.t < 2.2 && e.v === 0) && syn.pointer_y.some(e => e.t > 2 && e.t < 2.2 && e.v < uy - 10),
+    `the drag and release are keyed just after (${JSON.stringify(syn.pointer_y.slice(0, 5))})`);
+  check(syn.parts['filter/filter-cutoff']?.x === undefined, 'interact does not move the part');
   check(errors.length === 0, 'no page exceptions ' + errors.join('; '));
   ws.close();
 } catch (e) {

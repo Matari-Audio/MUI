@@ -34,7 +34,8 @@ reloads it. Look with `still` (one frame), `sheet` (a grid of frames at every ke
 (one layer's motion); verify with `check` (lints with JSON paths, times and fixes) and `eval` \
 (numbers). `editor_state` shows what the person in the web editor is looking at, `editor_goto` \
 moves their playhead or selection. `plugin_parts` captures a plugin layer's live UI and lists its \
-parts (animate them as `parts.<id>.x` etc.) and surfaces (aim `pointer_x`/`pointer_y` at their frames). \
+parts as a tree (animate them as `parts.<path>.x` etc.; a control in a panel is `parts.osc/osc-shape.x`; \
+`explode_levels` 2 captures and explodes panels, then their controls) and surfaces (aim `pointer_x`/`pointer_y` at their frames). \
 `schema` has every field.";
 
 pub fn serve(project: Option<&str>) -> Result<()> {
@@ -385,7 +386,7 @@ fn tools() -> Vec<Value> {
         tool::<JobArg>("render_status", "A render job's state and output."),
         tool::<PluginParts>(
             "plugin_parts",
-            "A plugin layer at a time: runs its adapter if that state is not captured yet, then lists its parts (id, rect in the UI's pixels, its own motion), every surface (id, parent, frame: what `select` and the pointer can aim at), the UI size, explode and pointer.",
+            "A plugin layer at a time: runs its adapter if that state is not captured yet, then lists its parts as a tree (id: the path to key as `parts.<id>.x`, e.g. `osc/osc-shape`; its surface, frame and fragment rects in the UI's pixels, its own motion, children), as deep as the layer's `explode_levels` or its deepest keyed part; every surface (id, parent, frame: what `select` and the pointer can aim at), the UI size, explode and pointer.",
         ),
         tool::<EditorState>(
             "editor_state",
@@ -643,23 +644,7 @@ impl Server {
                     .map_err(|e| e.to_string())
                     .and_then(|t| serde_json::from_str(&t).map_err(|e| e.to_string()))
                     .map_err(|e| format!("{}: {e}", manifest.display()))?;
-                let parts: Vec<Value> = cap
-                    .fragments
-                    .iter()
-                    .filter(|f| f.group != "background")
-                    .map(|f| {
-                        let own = at.parts.iter().find(|q| q.id == f.group);
-                        json!({ "id": f.group, "rect": f.rect, "motion": own })
-                    })
-                    .collect();
-                Ok(vec![text(&pretty(&json!({
-                    "state": at.state,
-                    "size": [cap.width, cap.height],
-                    "explode": at.explode,
-                    "pointer": at.pointer,
-                    "parts": parts,
-                    "surfaces": cap.surfaces,
-                })))])
+                Ok(vec![text(&pretty(&mui_cut::plugin::tree_json(&cap, &at)))])
             }
             "render" => self.render(parse(args)?),
             "render_status" => {

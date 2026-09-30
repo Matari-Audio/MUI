@@ -598,6 +598,7 @@ fn mcp_lists_a_plugin_layers_parts_and_surfaces() {
     {
         l["source"] = serde_json::json!({ "bin": synth });
     }
+    v["scenes"][0]["layers"][0]["explode_levels"] = 2.into();
     let project = d.join("p.cut.json");
     std::fs::write(&project, v.to_string()).unwrap();
     let mut m = Mcp::start();
@@ -619,6 +620,29 @@ fn mcp_lists_a_plugin_layers_parts_and_surfaces() {
     let filter = &got["parts"][2]["motion"];
     assert_eq!(filter["y"], -40.0);
     assert!(filter["highlight"].as_f64().unwrap() > 0.99);
+    // Two levels: each panel's controls nest under it, by path, each with
+    // a thumbnail on disk.
+    let kids: Vec<&str> = got["parts"][2]["children"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        kids,
+        [
+            "filter/filter-cutoff",
+            "filter/filter-res",
+            "filter/filter-drive"
+        ]
+    );
+    let cutoff = &got["parts"][2]["children"][0];
+    assert_eq!(
+        (cutoff["surface"].as_str(), cutoff["level"].as_u64()),
+        (Some("filter-cutoff"), Some(2))
+    );
+    assert!(d.join(cutoff["thumb"].as_str().unwrap()).is_file());
+    assert_eq!(got["explode"].as_array().unwrap().len(), 2);
     let surfaces = got["surfaces"].as_array().unwrap();
     assert!(
         surfaces.iter().any(|s| s["id"] == "out-level"),
