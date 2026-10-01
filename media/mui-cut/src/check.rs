@@ -775,6 +775,13 @@ fn visual(p: &Project, si: usize, s: &Scene, r: &mut Renderer, out: &mut Issues)
             }
             let frac = on / area(b);
             let background = on > 0.9 * fw * fh;
+            // The box is only a first look: a rotated or sparse shape's
+            // box sticks out where its ink does not.
+            let frac = if still[i] && frac < 0.6 && on > 0. && !background {
+                ink_inside(r, &f, i, b, screen).unwrap_or(frac)
+            } else {
+                frac
+            };
             if still[i] && frac < 0.6 && on > 0. && !background {
                 out.add(
                     Severity::Warning,
@@ -800,7 +807,8 @@ fn visual(p: &Project, si: usize, s: &Scene, r: &mut Renderer, out: &mut Issues)
                     continue;
                 }
                 let o = area(meet(b, boxes[j]));
-                if o > 0.15 * area(b).min(area(boxes[j])) {
+                if o > 0.15 * area(b).min(area(boxes[j])) && inks_overlap(r, &f, i, j, b, boxes[j])
+                {
                     out.add(
                         Severity::Warning,
                         "text_overlap",
@@ -881,9 +889,100 @@ fn visual(p: &Project, si: usize, s: &Scene, r: &mut Renderer, out: &mut Issues)
     }
 }
 
+/// Layer `i` of `f` drawn alone over nothing, with `region` of the frame
+/// stretched over the renderer: its coverage, 0..1 a pixel, row by row.
+/// The real outline, where the quad is only its box.
+fn mask(r: &mut Renderer, f: &Frame, i: usize, region: Bbox) -> Option<Vec<f32>> {
+    let (x0, y0) = (region[0].floor(), region[1].floor());
+    let size = [region[2] - x0, region[3] - y0].map(|v| v.ceil().max(1.) as u32);
+    let mut l = f.layers[i].clone();
+    l.x -= x0;
+    l.y -= y0;
+    let alone = Frame {
+        size,
+        background: Rgba([0, 0, 0, 0]),
+        layers: vec![l],
+        view: None,
+        effects: Vec::new(),
+        t: f.t,
+        seed: f.seed,
+    };
+    let (px, _) = r.draw(&alone).ok()?;
+    Some(
+        px.as_chunks::<4>()
+            .0
+            .iter()
+            .map(|p| f32::from(p[3]) / 255.)
+            .collect(),
+    )
+}
+
+/// The share of layer `i`'s ink (box `b`) inside `screen`.
+fn ink_inside(r: &mut Renderer, f: &Frame, i: usize, b: Bbox, screen: Bbox) -> Option<f64> {
+    let u = [
+        b[0].min(screen[0]),
+        b[1].min(screen[1]),
+        b[2].max(screen[2]),
+        b[3].max(screen[3]),
+    ];
+    let m = mask(r, f, i, u)?;
+    let (rw, rh) = r.size();
+    let (rw, rh) = (usize::from(rw), usize::from(rh));
+    let (x0, y0) = (u[0].floor(), u[1].floor());
+    let (sx, sy) = (
+        rw as f64 / (u[2] - x0).ceil().max(1.),
+        rh as f64 / (u[3] - y0).ceil().max(1.),
+    );
+    let px = |v: f64, k: f64, n: usize| ((v * k).round().max(0.) as usize).min(n);
+    let (ax, bx) = (px(screen[0] - x0, sx, rw), px(screen[2] - x0, sx, rw));
+    let (ay, by) = (px(screen[1] - y0, sy, rh), px(screen[3] - y0, sy, rh));
+    let total: f64 = m.iter().map(|&a| f64::from(a)).sum();
+    let inside: f64 = (ay..by)
+        .flat_map(|y| m[y * rw + ax..y * rw + bx].iter())
+        .map(|&a| f64::from(a))
+        .sum();
+    (total > 0.).then(|| inside / total)
+}
+
+/// Whether text layers `i` and `j` (boxes `a`, `b`) really collide: over a
+/// tenth of the smaller one's ink lies on or within a pixel of the other's.
+fn inks_overlap(r: &mut Renderer, f: &Frame, i: usize, j: usize, a: Bbox, b: Bbox) -> bool {
+    let u = [
+        a[0].min(b[0]),
+        a[1].min(b[1]),
+        a[2].max(b[2]),
+        a[3].max(b[3]),
+    ];
+    let (Some(mi), Some(mj)) = (mask(r, f, i, u), mask(r, f, j, u)) else {
+        return true;
+    };
+    let (rw, rh) = r.size();
+    let (rw, rh) = (usize::from(rw) as isize, usize::from(rh) as isize);
+    // Within a pixel: the other's coverage, grown by one.
+    let near = |m: &[f32], x: isize, y: isize| {
+        (-1..=1)
+            .flat_map(|dy| (-1..=1).map(move |dx| (x + dx, y + dy)))
+            .filter(|&(x, y)| x >= 0 && y >= 0 && x < rw && y < rh)
+            .any(|(x, y)| m[(y * rw + x) as usize] > 0.3)
+    };
+    let (ink_i, ink_j) = (
+        mi.iter().filter(|&&v| v > 0.3).count(),
+        mj.iter().filter(|&&v| v > 0.3).count(),
+    );
+    let both = (0..rh)
+        .flat_map(|y| (0..rw).map(move |x| (x, y)))
+        .filter(|&(x, y)| mi[(y * rw + x) as usize] > 0.3 && near(&mj, x, y))
+        .count();
+    ink_i.min(ink_j) > 0 && both * 10 > ink_i.min(ink_j)
+}
+
 /// Text layer `i`'s contrast against the frame drawn without it and
-/// everything above it, averaged over its box; and whether that is dark.
+/// everything above it, averaged under its glyphs (weighted by their
+/// coverage, so the gaps between letters and lines do not count); and
+/// whether that is dark.
 fn contrast_at(r: &mut Renderer, f: &Frame, i: usize, b: Bbox) -> Option<(f64, bool)> {
+    let [fw, fh] = f.size.map(f64::from);
+    let glyphs = mask(r, f, i, [0., 0., fw, fh])?;
     let below = Frame {
         size: f.size,
         background: f.background,
@@ -909,11 +1008,12 @@ fn contrast_at(r: &mut Renderer, f: &Frame, i: usize, b: Bbox) -> Option<(f64, b
     let mut count = 0f64;
     for y in y0..y1 {
         for x in x0..x1 {
+            let w = f64::from(glyphs[y * usize::from(rw) + x]);
             let o = (y * usize::from(rw) + x) * 4;
             for c in 0..3 {
-                sum[c] += f64::from(px[o + c]) / 255.;
+                sum[c] += w * f64::from(px[o + c]) / 255.;
             }
-            count += 1.;
+            count += w;
         }
     }
     if count == 0. {
@@ -1014,6 +1114,41 @@ mod tests {
         );
         let json = serde_json::to_value(&issues).unwrap();
         assert!(json[0]["fix"].is_string(), "{json}");
+    }
+
+    #[test]
+    fn outlines_not_boxes_decide_clipped_overlap_and_contrast() {
+        // A thin bar on the diagonal: its box is under 60% in frame, its
+        // ink about 73%. A two-line text with blank lines between, and a
+        // word in the gap: the boxes overlap, the letters do not. Grey
+        // text whose box is a third over a black band, its letters all on
+        // white: the box averages to grey, the glyphs read.
+        let src = r##"{
+          "size": [1280, 720], "fps": 30,
+          "scenes": [{
+            "name": "a", "duration": 1,
+            "layers": [
+              { "id": "bar", "kind": "rect", "x": 1180, "y": 620, "width": 600, "height": 8, "rotation": 45, "fill": "#ffffff" },
+              { "id": "ends", "kind": "text", "text": "TOP\n\n\n\nBOTTOM", "x": 400, "y": 360, "font_size": 40, "fill": "#ffffff" },
+              { "id": "mid", "kind": "text", "text": "MID", "x": 400, "y": 360, "font_size": 40, "fill": "#ffffff" }
+            ]
+          }, {
+            "name": "b", "duration": 1, "background": "#ffffff",
+            "layers": [
+              { "id": "band", "kind": "rect", "x": 640, "y": 360, "width": 600, "height": 100, "fill": "#000000" },
+              { "id": "grey", "kind": "text", "text": "TOP\n\n\n\nBOTTOM", "x": 640, "y": 360, "font_size": 40, "fill": "#777777" }
+            ]
+          }]
+        }"##;
+        let issues = run(src);
+        let text: Vec<String> = issues.iter().map(ToString::to_string).collect();
+        for code in ["clipped", "text_overlap", "low_contrast"] {
+            assert!(
+                !issues.iter().any(|i| i.code == code),
+                "{code}:\n{}",
+                text.join("\n")
+            );
+        }
     }
 
     #[test]

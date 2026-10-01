@@ -60,7 +60,7 @@ const USAGE: &str = "usage:
   mui-cut check  PROJECT [--json]
   mui-cut sheet  PROJECT [-o OUT.png] [--scene NAME] [--n 8] [--times 0,1.5] [--width 1600] [--cols 4] [--renderer R]
   mui-cut strip  PROJECT --layer ID [-o OUT.png] [--scene NAME] [--n 8] [--width 1600] [--renderer R]
-  mui-cut diff   A B [-o OUT.png] [--n 6] [--width 1600] [--renderer R]
+  mui-cut diff   A B | PROJECT@REV | PROJECT --rev REV [-o OUT.png] [--n 6] [--width 1600] [--renderer R]
   mui-cut serve  PROJECT [--port 8740] [--web DIR]   (MUI_CUT_AUDIO=null: no audio device)
   mui-cut capture PROJECT                          # run plugin adapters: captures and soundtracks
   mui-cut midi   PROJECT --file SONG.mid --layer ID [--scene NAME] [--track N] [--at SECONDS]";
@@ -114,9 +114,12 @@ fn run(argv: &[String]) -> Result<()> {
     };
     let mut flags = Vec::new();
     let mut rest = argv[2..].iter();
-    // `diff A B`: the second project is positional.
-    if cmd == "diff" {
-        let b = rest.next().ok_or("diff needs two projects: diff A B")?;
+    // `diff A B`: the second project is positional (`diff P@REV` and
+    // `diff P --rev REV` have none).
+    if cmd == "diff"
+        && let Some(b) = argv.get(2).filter(|b| !b.starts_with('-'))
+    {
+        rest.next();
         flags.push(("against".to_owned(), b.clone()));
     }
     while let Some(k) = rest.next() {

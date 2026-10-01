@@ -10,9 +10,9 @@ It has two users working on the same file:
 - **an agent** editing the plain-text `*.cut.json` project and checking its
   work with `mui-cut still` / `mui-cut eval` / `mui-cut render`.
 
-The editor saves into the file and reloads when the file changes on disk, so
-an agent's edit shows up live in an open editor and the person's edits land
-in the file.
+Both edit at once: `serve` keeps the project at a revision and merges edits
+field by field, so an agent's edit shows up live in an open editor (even
+mid-drag) and the person's edits land in the file. See "Editing together".
 
 ```sh
 # from the repo root
@@ -572,9 +572,12 @@ parts you can move, key, highlight and explode.
   the viewport) to inspect, drag and key it; nested parts sit indented
   under their panel. **Explode / collapse** keys `explode` at the
   playhead, and the inspector sets `explode levels` and `level stagger`.
-  **Interact** (2D scenes) turns viewport clicks into the UI's pointer:
-  a drag keys `pointer_x`/`pointer_y`/`pointer_down` from the playhead,
-  so it turns the knob instead of moving the part.
+  **Interact** turns viewport clicks into the UI's pointer: a drag keys
+  `pointer_x`/`pointer_y`/`pointer_down` from the playhead, so it turns
+  the knob instead of moving the part. In a 3D scene the pointer's ray
+  from the camera (the orbit preview's, when on) meets the nearest part
+  slab as drawn, tilted, parented and exploded (`pick` on the WASM `Cut`,
+  `src/pick.rs`), and a drag stays on that slab's plane past its edge.
 - MCP `plugin_parts` (and `cutParts(layer)` in the editor, `plugin_parts`
   on the WASM `Cut`) returns the part tree: each part's `id` (its path),
   `surface`, `level`, `frame`, `rects`, `thumb` image, `motion` and
@@ -803,9 +806,9 @@ are sized to be read by a model (1600 px wide).
   `ignored_prop` (a field this layer's kind ignores), `duplicate_key`,
   `key_outside_scene`, `overshoot` (a bezier leaving its keys' range; a
   warning where the value is clamped, like opacity), `missing_asset`,
-  `never_visible`, `clipped` (at rest, mostly outside the frame),
-  `text_overlap` (two text layers at rest), `low_contrast` (text against the
-  pixels actually rendered behind it, under 3:1), `fast_motion` (faster than
+  `never_visible`, `clipped` (at rest, most of its ink outside the frame),
+  `text_overlap` (two text layers at rest whose glyphs touch), `low_contrast`
+  (text against the pixels actually rendered behind its glyphs, under 3:1), `fast_motion` (faster than
   8% of the frame a frame: it strobes), `empty_frame` (nothing visible
   between things that are), `short_scene`, `empty_scene`. "At rest" means
   not moving or fading, so entrances and exits do not count. `--json` gives
@@ -816,9 +819,11 @@ are sized to be read by a model (1600 px wide).
   time and frame above it. **`strip`** shows one layer's move in a single
   frame: the scene faded, the layer as ghosts from faint (early) to solid,
   its path as a yellow trail with timed dots. **`diff`** compares two
-  versions (e.g. `git show HEAD:p.cut.json > old.cut.json`) and shows the
-  most-changed frames as rows of A, B and a heat map, with the share of
-  pixels changed.
+  versions and shows the most-changed frames as rows of A, B and a heat map,
+  with the share of pixels changed. `diff P@REV` (or `diff P --rev REV`)
+  compares a git revision (A) with the file as it is (B): the project and
+  the assets it names are read with `git show` into a scratch folder beside
+  the project, removed afterwards.
 - **`gen`** runs a [Rhai](https://rhai.rs) script: no clock, no files, no
   modules, bounded operations, and randomness only from a seed, so a script
   and `--seed` always write the same file. It returns a project map, or an
@@ -860,21 +865,52 @@ there gets a "did you mean".
 
 Every tool reads the file and every edit writes it: validated, refused if a
 save would drop a field (a typo), canonical and atomic, followed by a
-`check` summary. An open `mui-cut serve` on the same file reloads it at
-once, and the person's edits are in the file for the next tool call.
+`check` summary. With a `mui-cut serve` open on the same file, an edit goes
+through it instead, merged with the person's (see "Editing together"), and
+the person's edits are in the file for the next tool call.
+
+Resources: `mui-cut://schema`, `mui-cut://project` (the open file),
+`mui-cut://examples/NAME` (every example project and `gen` script) and
+`mui-cut://host-protocol` (HOST-PROTOCOL.md). Prompts: `promo_from_plugin`
+(`plugin`, `seconds`, `project`: onboard a plugin and make a promo of it)
+and `review_cut` (`project`, `rev`): each walks the agent through `check`,
+`sheet`, fixing and checking again.
+
+### Editing together
+
+`serve` holds the project at a revision. An edit is a list of JSON Pointer
+operations made against the revision its author last saw (`POST /patch
+{base, ops, by}`; layers, scenes and sources are addressed by id or name,
+so a reorder elsewhere does not move them). The server applies them to its
+newest revision, validates, writes the file and pushes the merged document
+to every open editor (SSE `doc`: `{rev, by, conflicts, doc}`). So edits to
+different fields both land, whoever made them; where both sides changed
+the same field the later edit wins and is listed in `conflicts`, which the
+editor shows as a short notice. The editor applies a new revision onto its
+own document in place, so a drag in progress keeps going on top of it, and
+its undo replays only its own gestures, skipping fields somebody has
+changed since. The MCP tools, the editor and an outside write to the file
+(a new revision `by: "disk"`) all go through this. `GET /doc` is the newest
+`{rev, project, doc}`; `PUT /project` still takes a whole document, as the
+patch from the newest revision to it.
 
 The editor reports its scene, playhead, selection, graphed property and
 play state to the server (`PUT /state`); `editor_state` reads it (with
 `same_project` and how old it is), so the agent sees what the person is
 looking at. `editor_goto` moves the editor there (`POST /control`, relayed
 to open editors as an SSE `control` event) to show the person something.
-The server is found on `editor_port` from `open` (default 8740).
+`serve` writes `.NAME.serve` (`{"port", "pid"}`) next to the project
+`NAME` while it runs and removes it when it exits (Ctrl+C and SIGTERM
+too), so the MCP server finds the editor on the open project by itself;
+`editor_port` on `open` or `port` on a tool overrides it, and with
+neither and no file it tries 8740.
 
 The keyframe curves are not `mui_motion::curve::Curve`: that type is a
 normalized `0..1` phase/value shaper that clamps values, while a property
 track needs unbounded values and absolute times. The `Ease::Cubic` of
-`mui_motion::Keys` is the same normalized CSS form. Undo is whole-document
-snapshots in the editor rather than `CurveHistory`, for the same reason.
+`mui_motion::Keys` is the same normalized CSS form. Undo is per gesture,
+document before and after, in the editor rather than `CurveHistory`, for the
+same reason.
 
 ## Known gaps
 
@@ -891,12 +927,18 @@ snapshots in the editor rather than `CurveHistory`, for the same reason.
   viewport, so it cannot be clicked there (pick it in the layer list).
 - Bound keyframe values do not draw in the graph editor; edit them in the
   file.
-- Last writer wins if the person and an agent edit the same moment.
-- `check`'s bounds are layer boxes, not outlines: rotated or sparse shapes
-  (a ring of copies) overlap and clip by their box. Contrast is averaged
-  over the text's box, so a busy image behind text can pass on average.
-- The MCP server has no resources or prompts, and `diff` needs the other
-  version as a file (no git revision argument yet).
+- `check` measures outlines (each layer drawn alone, its alpha mask) only
+  where a box says clipped or two text boxes overlap: a shape whose box
+  is inside but whose ink is mostly out is not caught, and
+  `never_visible` / `empty_frame` still go by boxes.
+- An edit made against a revision more than 64 old still applies but
+  reports no conflicts. An item added to an array lands at its index in
+  the author's view, so a layer added while another was too can sit one
+  place off in the paint order.
+- `diff P@REV` takes assets inside the project's folder from the revision
+  (a `../` path is left out) and shares the plugin capture cache (on
+  Unix; elsewhere a revision's plugin layers draw as placeholders unless
+  captured).
 - `vello_gpu` draws MUI's backdrop blur sharp (no filter layer wired yet).
   It is pinned to Vello 9dfe53e; moving to newer main means following
   #1942 (`pop_clip_path` renamed) and #1944 (fallible glyph drawing) in
@@ -918,7 +960,7 @@ snapshots in the editor rather than `CurveHistory`, for the same reason.
 - Plugin layers: the web editor shows the captures `serve` made, not the
   plugin running in WASM. A new state (a param or pointer edit) appears
   once `serve` has captured it, which takes a few seconds for a Cargo
-  source. Interact needs a 2D scene; in 3D, clicks move parts. The adapter runs natively, so a
+  source. The adapter runs natively, so a
   plugin must build as a bridge live adapter. A 3D scene composites
   a translucent capture in linear light, so its soft edges read slightly
   brighter than in 2D.

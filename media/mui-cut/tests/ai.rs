@@ -155,6 +155,77 @@ fn sheet_strip_and_diff_write_pictures_of_the_right_size() {
     assert!(ok && text.contains("no visible differences"), "{text}");
 }
 
+#[test]
+fn diff_reads_a_git_revision_and_its_assets() {
+    let d = scratch("diff-rev");
+    let git = |args: &[&str]| {
+        let o = Command::new("git")
+            .args([
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "commit.gpgsign=false",
+            ])
+            // No user hooks in a scratch repo.
+            .args([
+                "-c",
+                "core.hooksPath=/dev/null",
+                "-c",
+                "init.defaultBranch=work",
+            ])
+            .args(args)
+            .current_dir(&d)
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    };
+    let svg = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/mark.svg");
+    std::fs::create_dir_all(d.join("art")).unwrap();
+    std::fs::copy(svg, d.join("art/mark.svg")).unwrap();
+    let project = d.join("p.cut.json");
+    std::fs::write(
+        &project,
+        r##"{"size": [640, 360], "fps": 30, "scenes": [{"name": "s", "duration": 1, "layers": [
+            {"id": "m", "kind": "svg", "path": "art/mark.svg", "x": 320, "y": 180, "width": 240, "height": 240}
+        ]}]}"##,
+    )
+    .unwrap();
+    git(&["init", "-q"]);
+    git(&["add", "."]);
+    git(&["commit", "-qm", "one"]);
+    // Only the asset changes: the project file is the same at HEAD.
+    let red = std::fs::read_to_string(svg)
+        .unwrap()
+        .replace("#ffcf5c", "#ff0000");
+    std::fs::write(d.join("art/mark.svg"), red).unwrap();
+    let out = d.join("d.png");
+    for args in [
+        vec!["diff", "p.cut.json@HEAD"],
+        vec!["diff", "p.cut.json", "--rev", "HEAD"],
+    ] {
+        let o = Command::new(BIN)
+            .args(&args)
+            .args(["--n", "1", "-o", out.to_str().unwrap()])
+            .current_dir(&d)
+            .output()
+            .unwrap();
+        let text =
+            String::from_utf8_lossy(&o.stdout).into_owned() + &String::from_utf8_lossy(&o.stderr);
+        assert!(o.status.success(), "{args:?}: {text}");
+        assert!(text.contains("% of pixels changed"), "{args:?}: {text}");
+    }
+    let left: Vec<_> = std::fs::read_dir(&d)
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|e| e.file_name().to_string_lossy().starts_with(".mui-cut-rev"))
+        .collect();
+    assert!(left.is_empty(), "the revision's copy is left behind");
+    let (ok, text) = run(&["diff", project.to_str().unwrap(), "--rev", "nope"]);
+    assert!(!ok && text.contains("nope"), "{text}");
+}
+
 /// `mui-cut mcp` driven like an MCP client: one JSON-RPC message a line.
 struct Mcp {
     child: std::process::Child,
@@ -537,17 +608,132 @@ fn mcp_sees_and_steers_the_open_editor() {
         serde_json::json!({"scene": "title", "t": 0.5, "select": "bar"})
     );
 
-    // An agent's edit reaches the editor as a reload.
-    m.text(
+    // An agent's edit goes through the editor's server and reaches the
+    // editor as the merged document.
+    let said = m.text(
         "set",
         serde_json::json!({"scene": "title", "layer": "bar", "prop": "y", "value": 450}),
     );
-    loop {
+    assert!(
+        said.contains(&format!("through the editor on port {port}")),
+        "{said}"
+    );
+    let doc = loop {
         l.clear();
         lines.read_line(&mut l).unwrap();
-        if l.starts_with("data: changed") {
-            break;
+        if let Some(d) = l.trim().strip_prefix("data: {") {
+            let v: serde_json::Value = serde_json::from_str(&format!("{{{d}")).unwrap();
+            if v["by"] == "agent" {
+                break v;
+            }
         }
+    };
+    assert_eq!(doc["by"], "agent", "{doc}");
+    let title = doc["doc"]["scenes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["name"] == "title")
+        .unwrap();
+    let bar = title["layers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|l| l["id"] == "bar")
+        .unwrap();
+    assert_eq!(bar["y"], 450.0, "{bar}");
+
+    // The person, still on the revision before it, moves `bar` (x and y):
+    // x merges, y was the agent's too and the later edit (theirs) wins.
+    let base = doc["rev"].as_u64().unwrap() - 1;
+    let patch = serde_json::json!({"base": base, "by": "editor", "ops": [
+        {"op": "replace", "path": "/scenes/title/layers/bar/x", "value": 77.0},
+        {"op": "replace", "path": "/scenes/title/layers/bar/y", "value": 88.0},
+    ]})
+    .to_string();
+    let got = http(
+        port,
+        &format!(
+            "POST /patch HTTP/1.1\r\nContent-Length: {}\r\n\r\n{patch}",
+            patch.len()
+        ),
+    );
+    let reply: serde_json::Value =
+        serde_json::from_str(got.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+    assert_eq!(
+        reply["conflicts"],
+        serde_json::json!(["/scenes/title/layers/bar/y"]),
+        "{reply}"
+    );
+    let file: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&project).unwrap()).unwrap();
+    let title = file["scenes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["name"] == "title")
+        .unwrap();
+    let bar = title["layers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|l| l["id"] == "bar")
+        .unwrap();
+    assert_eq!(
+        (bar["x"].as_f64(), bar["y"].as_f64()),
+        (Some(77.0), Some(88.0)),
+        "{bar}"
+    );
+    let _ = server.kill();
+    let _ = server.wait();
+}
+
+#[test]
+fn mcp_finds_the_editor_by_its_discovery_file() {
+    let d = scratch("mcp-discovery");
+    let project = d.join("p.cut.json");
+    std::fs::copy(DEMO, &project).unwrap();
+    let found = d.join(".p.cut.json.serve");
+    let port = free_port();
+    let mut server = Command::new(BIN)
+        .arg("serve")
+        .arg(&project)
+        .args(["--port", &port.to_string()])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let start = std::time::Instant::now();
+    while std::net::TcpStream::connect(("127.0.0.1", port)).is_err() || !found.exists() {
+        assert!(start.elapsed().as_secs() < 10, "server never came up");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let v: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&found).unwrap()).unwrap();
+    assert_eq!(v["port"], port, "{v}");
+    assert_eq!(v["pid"], server.id(), "{v}");
+
+    // Not on 8740, and `open` is not told the port.
+    let mut m = Mcp::start();
+    m.request(
+        "initialize",
+        serde_json::json!({"protocolVersion": "2025-06-18"}),
+    );
+    m.text("open", serde_json::json!({"path": project}));
+    let seen: serde_json::Value =
+        serde_json::from_str(&m.text("editor_state", serde_json::json!({}))).unwrap();
+    assert_eq!(seen["same_project"], true, "{seen}");
+
+    // SIGTERM: the file goes with the editor.
+    #[cfg(unix)]
+    {
+        let ok = Command::new("kill")
+            .args(["-TERM", &server.id().to_string()])
+            .status()
+            .unwrap();
+        assert!(ok.success());
+        let _ = server.wait();
+        assert!(!found.exists(), "the discovery file outlived the editor");
     }
     let _ = server.kill();
     let _ = server.wait();

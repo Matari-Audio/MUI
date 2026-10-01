@@ -1,9 +1,17 @@
 //! `mui-cut serve`: the web editor's only backend. Serves the built app,
-//! GETs and PUTs the project file, and tells open editors over SSE when the
-//! file changed on disk, so an agent's edit shows up live.
+//! keeps the project at a revision and merges edits into it, and pushes
+//! every new revision to open editors over SSE.
+//!
+//! Edits are field-level: JSON Pointer operations made against a base
+//! revision (`POST /patch`). The server applies them to the newest
+//! revision, so a person's and an agent's edits to different fields both
+//! land; where both changed the same field the later edit wins and the
+//! reply names it. The editor, `mui-cut mcp` and outside writes to the
+//! file all go through it.
 //!
 //! std only, a thread a connection: one person and a few agents on
 //! localhost, not a web server.
+use std::collections::VecDeque;
 use std::io::{BufRead as _, BufReader, Read as _, Write as _};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Component, Path, PathBuf};
@@ -11,6 +19,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use mui_cut::Project;
+use serde_json::{Value, json};
 
 use crate::{Result, write_atomic};
 
@@ -20,9 +29,8 @@ const POLL: Duration = Duration::from_millis(250);
 struct Shared {
     project: PathBuf,
     web: PathBuf,
-    /// The file's contents as this server last read or wrote them: a change
-    /// from this is somebody else's edit.
-    known: Mutex<String>,
+    /// The project as this server last read or wrote it.
+    doc: Mutex<Doc>,
     listeners: Mutex<Vec<TcpStream>>,
     /// The open editor's last reported state (scene, playhead, selection)
     /// and when it came: what `mui-cut mcp` shows an agent.
@@ -48,7 +56,7 @@ pub fn serve(project: &Path, port: u16, web: PathBuf) -> Result<()> {
     let shared = Arc::new(Shared {
         project: project.to_owned(),
         web,
-        known: Mutex::new(known),
+        doc: Mutex::new(Doc::new(known)),
         listeners: Mutex::new(Vec::new()),
         state: Mutex::new(("null".into(), None)),
         captured: Mutex::new(String::new()),
@@ -66,6 +74,8 @@ pub fn serve(project: &Path, port: u16, web: PathBuf) -> Result<()> {
         }));
     let listener =
         TcpListener::bind(("127.0.0.1", port)).map_err(|e| format!("port {port}: {e}"))?;
+    let port = listener.local_addr().map_or(port, |a| a.port());
+    let _found = Discovery::write(project, port)?;
     println!(
         "mui-cut: editing {} at http://127.0.0.1:{port}/",
         project.display()
@@ -91,6 +101,209 @@ pub fn serve(project: &Path, port: u16, web: PathBuf) -> Result<()> {
         });
     }
     Ok(())
+}
+
+/// The file beside the project that tells `mui-cut mcp` which port this
+/// editor listens on: `.NAME.serve` next to `NAME`.
+pub fn discovery_path(project: &Path) -> PathBuf {
+    let name = project.file_name().unwrap_or_default().to_string_lossy();
+    project.with_file_name(format!(".{name}.serve"))
+}
+
+/// What the discovery file says: the editor's port and process.
+#[derive(serde::Serialize, serde::Deserialize, Debug, PartialEq, Eq)]
+pub struct Found {
+    pub port: u16,
+    pub pid: u32,
+}
+
+/// The discovery file, written while serving and removed on the way out:
+/// on drop, and on Ctrl+C or SIGTERM.
+struct Discovery(PathBuf);
+
+impl Discovery {
+    fn write(project: &Path, port: u16) -> Result<Self> {
+        let path = discovery_path(project);
+        let found = Found {
+            port,
+            pid: std::process::id(),
+        };
+        let text = serde_json::to_string(&found).map_err(|e| e.to_string())?;
+        std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))?;
+        let gone = path.clone();
+        // Only the first handler takes: one `serve` a process.
+        let _ = ctrlc::set_handler(move || {
+            let _ = std::fs::remove_file(&gone);
+            std::process::exit(130);
+        });
+        Ok(Self(path))
+    }
+}
+
+impl Drop for Discovery {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+/// The editor serving `project`, from its discovery file, if one says so.
+pub fn discover(project: &Path) -> Option<Found> {
+    let text = std::fs::read_to_string(discovery_path(project)).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+/// Revisions merges look back over: an edit made against an older one
+/// still applies, it just cannot tell what it overwrote.
+const HISTORY: usize = 64;
+
+/// The project at its newest revision, and the revisions before it.
+struct Doc {
+    rev: u64,
+    /// The file's text as last read or written: a change from this is an
+    /// outside edit.
+    text: String,
+    history: VecDeque<(u64, Value)>,
+}
+
+impl Doc {
+    fn new(text: String) -> Self {
+        let value = serde_json::from_str(&text).unwrap_or(Value::Null);
+        Self {
+            rev: 1,
+            text,
+            history: VecDeque::from([(1, value)]),
+        }
+    }
+    fn value(&self) -> &Value {
+        &self.history.back().expect("never empty").1
+    }
+    fn push(&mut self, text: String, value: Value) {
+        self.rev += 1;
+        self.text = text;
+        self.history.push_back((self.rev, value));
+        if self.history.len() > HISTORY {
+            self.history.pop_front();
+        }
+    }
+    /// The SSE message for the newest revision.
+    fn event(&self, by: &str, conflicts: &[String]) -> String {
+        let msg = json!({ "rev": self.rev, "by": by, "conflicts": conflicts, "doc": self.value() });
+        format!("event: doc\ndata: {msg}\n\n")
+    }
+}
+
+/// Item keys for an array whose items all carry a distinct `id` (layers,
+/// sources) or `name` (scenes, variants), usable as pointer tokens.
+fn item_keys(items: &[Value]) -> Option<Vec<&str>> {
+    let field = ["id", "name"]
+        .into_iter()
+        .find(|f| items.iter().all(|v| v[*f].is_string()))?;
+    let keys: Vec<&str> = items
+        .iter()
+        .map(|v| v[field].as_str().unwrap_or(""))
+        .collect();
+    let numeric = |k: &&str| *k == "-" || k.parse::<usize>().is_ok();
+    let mut seen = std::collections::HashSet::new();
+    keys.iter()
+        .all(|k| !numeric(k) && seen.insert(*k))
+        .then_some(keys)
+}
+
+fn token(s: &str) -> String {
+    s.replace('~', "~0").replace('/', "~1")
+}
+
+/// The operations that turn `a` into `b`, field by field: objects key by
+/// key; arrays of layers, scenes and sources item by item, addressed by
+/// id or name (so they still land after a reorder elsewhere); any other
+/// change replaces the value.
+pub fn diff(a: &Value, b: &Value) -> Vec<Value> {
+    fn walk(a: &Value, b: &Value, path: &str, out: &mut Vec<Value>) {
+        if a == b {
+            return;
+        }
+        match (a, b) {
+            (Value::Object(x), Value::Object(y)) => {
+                for (k, va) in x {
+                    let p = format!("{path}/{}", token(k));
+                    match y.get(k) {
+                        Some(vb) => walk(va, vb, &p, out),
+                        None => out.push(json!({ "op": "remove", "path": p })),
+                    }
+                }
+                for (k, vb) in y.iter().filter(|(k, _)| !x.contains_key(*k)) {
+                    out.push(
+                        json!({ "op": "add", "path": format!("{path}/{}", token(k)), "value": vb }),
+                    );
+                }
+            }
+            (Value::Array(x), Value::Array(y)) => {
+                if let (Some(kx), Some(ky)) = (item_keys(x), item_keys(y)) {
+                    let both: Vec<&str> = kx.iter().copied().filter(|k| ky.contains(k)).collect();
+                    let order: Vec<&str> = ky.iter().copied().filter(|k| kx.contains(k)).collect();
+                    if both == order {
+                        for k in kx.iter().filter(|k| !ky.contains(k)) {
+                            out.push(
+                                json!({ "op": "remove", "path": format!("{path}/{}", token(k)) }),
+                            );
+                        }
+                        for (i, k) in kx.iter().enumerate() {
+                            if let Some(j) = ky.iter().position(|o| o == k) {
+                                walk(&x[i], &y[j], &format!("{path}/{}", token(k)), out);
+                            }
+                        }
+                        for (j, _) in ky.iter().enumerate().filter(|(_, k)| !kx.contains(k)) {
+                            out.push(json!({ "op": "add", "path": format!("{path}/{j}"), "value": y[j] }));
+                        }
+                        return;
+                    }
+                }
+                out.push(json!({ "op": "replace", "path": path, "value": b }));
+            }
+            _ => out.push(json!({ "op": "replace", "path": path, "value": b })),
+        }
+    }
+    let mut out = Vec::new();
+    walk(a, b, "", &mut out);
+    out
+}
+
+/// Whether two pointers touch: one is the other or inside it.
+fn touch(a: &str, b: &str) -> bool {
+    let inside = |a: &str, b: &str| a == b || a.starts_with(&format!("{b}/")) || b.is_empty();
+    inside(a, b) || inside(b, a)
+}
+
+/// `ops`, made against `base`, applied to `current`: the merged document,
+/// the paths where they overwrote a change made since `base` (the later
+/// edit, these ops, wins), and the ops that no longer apply (their layer
+/// is gone, say) with why. Without `base` (too old) nothing counts as a
+/// conflict.
+pub fn merge(
+    base: Option<&Value>,
+    current: &Value,
+    ops: &[Value],
+) -> (Value, Vec<String>, Vec<String>) {
+    let theirs: Vec<String> = base
+        .map(|b| diff(b, current))
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|o| o["path"].as_str().map(str::to_owned))
+        .collect();
+    let mut out = current.clone();
+    let (mut conflicts, mut skipped) = (Vec::new(), Vec::new());
+    for op in ops {
+        let path = op["path"].as_str().unwrap_or("");
+        match crate::mcp::apply(&mut out, op) {
+            Ok(()) => {
+                if theirs.iter().any(|t| touch(t, path)) && !conflicts.iter().any(|c| c == path) {
+                    conflicts.push(path.to_owned());
+                }
+            }
+            Err(e) => skipped.push(format!("{path}: {e}")),
+        }
+    }
+    (out, conflicts, skipped)
 }
 
 fn respond(mut s: &TcpStream, status: &str, kind: &str, body: &[u8]) -> std::io::Result<()> {
@@ -124,25 +337,51 @@ fn under(root: &Path, rel: &str) -> Option<PathBuf> {
 }
 
 impl Shared {
+    /// An outside write to the file (a text editor, an agent without the
+    /// server) becomes the next revision. One that is not JSON is only
+    /// announced, for the editor to show the error.
     fn poll(&self) {
         let Ok(now) = std::fs::read_to_string(&self.project) else {
             return;
         };
-        {
-            let mut known = self.known.lock().expect("no panic holds it");
-            if *known == now {
-                return;
-            }
-            *known = now;
+        let mut d = self.doc.lock().expect("no panic holds it");
+        if d.text == now {
+            return;
         }
-        self.broadcast(b"data: changed\n\n");
+        if let Ok(v) = serde_json::from_str::<Value>(&now) {
+            d.push(now, v);
+            let msg = d.event("disk", &[]);
+            self.broadcast(msg.as_bytes());
+        } else {
+            d.text = now;
+            self.broadcast(b"data: changed\n\n");
+        }
+    }
+
+    /// Merge `ops` made against revision `base` into the newest, validate,
+    /// write it and tell every editor. The reply: `{rev, doc, conflicts,
+    /// skipped}`.
+    fn commit(&self, base: u64, ops: &[Value], by: &str) -> Result<Value> {
+        let mut d = self.doc.lock().expect("no panic holds it");
+        let then = d.history.iter().find(|(r, _)| *r == base).map(|(_, v)| v);
+        let (merged, conflicts, skipped) = merge(then, d.value(), ops);
+        let p = Project::load(&merged.to_string())?;
+        let json = p.to_json();
+        if json != d.text {
+            let value = serde_json::from_str(&json).map_err(|e| e.to_string())?;
+            write_atomic(&self.project, &json)?;
+            d.push(json, value);
+            let msg = d.event(by, &conflicts);
+            self.broadcast(msg.as_bytes());
+        }
+        Ok(json!({ "rev": d.rev, "doc": d.value(), "conflicts": conflicts, "skipped": skipped }))
     }
 
     /// Capture the plugin states the project as last read or saved shows
     /// and the cache lacks (on the watcher's thread: a capture holds up
     /// noticing outside edits, not the editor), then tell the editors.
     fn capture(&self) {
-        let text = self.known.lock().expect("no panic holds it").clone();
+        let text = self.doc.lock().expect("no panic holds it").text.clone();
         {
             let mut done = self.captured.lock().expect("no panic holds it");
             if *done == text {
@@ -204,18 +443,64 @@ impl Shared {
                 let mut body = vec![0; length];
                 r.read_exact(&mut body).map_err(io)?;
                 let text = String::from_utf8_lossy(&body);
-                match Project::load(&text) {
-                    Ok(p) => {
-                        let json = p.to_json();
-                        // Known first: the watcher must not echo our own save.
-                        *self.known.lock().expect("no panic holds it") = json.clone();
-                        write_atomic(&self.project, &json)?;
+                // A whole document: the difference from the newest
+                // revision, merged like any patch.
+                let saved = Project::load(&text).and_then(|p| {
+                    let new: Value =
+                        serde_json::from_str(&p.to_json()).map_err(|e| e.to_string())?;
+                    let (rev, ops) = {
+                        let d = self.doc.lock().expect("no panic holds it");
+                        (d.rev, diff(d.value(), &new))
+                    };
+                    self.commit(rev, &ops, "put")
+                });
+                match saved {
+                    Ok(_) => {
+                        let json = self.doc.lock().expect("no panic holds it").text.clone();
                         respond(stream, "200 OK", "application/json", json.as_bytes()).map_err(io)
                     }
                     Err(e) => {
                         respond(stream, "400 Bad Request", "text/plain", e.as_bytes()).map_err(io)
                     }
                 }
+            }
+            // The project at its newest revision.
+            ("GET", "/doc") => {
+                let body = {
+                    let d = self.doc.lock().expect("no panic holds it");
+                    json!({ "rev": d.rev, "project": self.project.to_string_lossy(), "doc": d.value() })
+                };
+                respond(
+                    stream,
+                    "200 OK",
+                    "application/json",
+                    body.to_string().as_bytes(),
+                )
+                .map_err(io)
+            }
+            // A field-level edit: `{base, ops, by}`, merged.
+            ("POST", "/patch") => {
+                if length > 16 << 20 {
+                    return respond(stream, "413 Payload Too Large", "text/plain", b"too large")
+                        .map_err(io);
+                }
+                let mut body = vec![0; length];
+                r.read_exact(&mut body).map_err(io)?;
+                let v: Value = serde_json::from_slice(&body).unwrap_or_default();
+                let (Some(base), Some(ops)) = (v["base"].as_u64(), v["ops"].as_array()) else {
+                    return respond(stream, "400 Bad Request", "text/plain", b"want {base, ops}")
+                        .map_err(io);
+                };
+                match self.commit(base, ops, v["by"].as_str().unwrap_or("")) {
+                    Ok(reply) => respond(
+                        stream,
+                        "200 OK",
+                        "application/json",
+                        reply.to_string().as_bytes(),
+                    ),
+                    Err(e) => respond(stream, "400 Bad Request", "text/plain", e.as_bytes()),
+                }
+                .map_err(io)
             }
             // The editor reports its state; an agent reads it.
             ("PUT", "/state") | ("POST", "/control") => {
@@ -414,5 +699,84 @@ impl Shared {
             }
             _ => respond(stream, "405 Method Not Allowed", "text/plain", b"no").map_err(io),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn base() -> Value {
+        json!({"scenes": [{"name": "s", "layers": [
+            {"id": "card", "x": 1, "y": 2, "fill": "#000000"},
+            {"id": "bar", "name": "card2", "x": 5, "fill": "#111111"}
+        ]}]})
+    }
+
+    #[test]
+    fn diff_addresses_layers_by_id_and_round_trips() {
+        let a = base();
+        let mut b = a.clone();
+        b["scenes"][0]["layers"][1]["x"] = json!(9);
+        b["scenes"][0]["layers"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"id": "new"}));
+        let ops = diff(&a, &b);
+        assert_eq!(
+            ops,
+            vec![
+                json!({"op": "replace", "path": "/scenes/s/layers/bar/x", "value": 9}),
+                json!({"op": "add", "path": "/scenes/s/layers/2", "value": {"id": "new"}}),
+            ]
+        );
+        let mut c = a.clone();
+        for op in &ops {
+            crate::mcp::apply(&mut c, op).unwrap();
+        }
+        assert_eq!(c, b);
+    }
+
+    #[test]
+    fn disjoint_edits_both_land_and_the_same_field_is_a_conflict() {
+        let b = base();
+        // The agent recolours `bar` and puts a layer at the bottom...
+        let mut agent = b.clone();
+        agent["scenes"][0]["layers"][1]["fill"] = json!("#00ff00");
+        agent["scenes"][0]["layers"]
+            .as_array_mut()
+            .unwrap()
+            .insert(0, json!({"id": "under"}));
+        // ...while the person, from the older revision, drags `card` and
+        // also recolours `bar`.
+        let mut person = b.clone();
+        person["scenes"][0]["layers"][0]["x"] = json!(100);
+        let (m, conflicts, skipped) = merge(Some(&b), &agent, &diff(&b, &person));
+        assert_eq!(m["scenes"][0]["layers"][1]["x"], 100, "{m}");
+        assert_eq!(m["scenes"][0]["layers"][2]["fill"], "#00ff00", "{m}");
+        assert!(conflicts.is_empty() && skipped.is_empty());
+
+        person["scenes"][0]["layers"][1]["fill"] = json!("#ff0000");
+        let (m, conflicts, _) = merge(Some(&b), &agent, &diff(&b, &person));
+        assert_eq!(
+            m["scenes"][0]["layers"][2]["fill"], "#ff0000",
+            "the later edit wins"
+        );
+        assert_eq!(conflicts, ["/scenes/s/layers/bar/fill"]);
+    }
+
+    #[test]
+    fn an_edit_to_a_layer_since_deleted_is_skipped() {
+        let b = base();
+        let mut agent = b.clone();
+        agent["scenes"][0]["layers"]
+            .as_array_mut()
+            .unwrap()
+            .remove(0);
+        let mut person = b.clone();
+        person["scenes"][0]["layers"][0]["y"] = json!(50);
+        let (m, _, skipped) = merge(Some(&b), &agent, &diff(&b, &person));
+        assert_eq!(m, agent);
+        assert_eq!(skipped.len(), 1, "{skipped:?}");
     }
 }

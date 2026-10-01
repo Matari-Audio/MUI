@@ -15,6 +15,7 @@ pub mod fx;
 mod gpu;
 mod gpu3d;
 mod motion;
+pub mod pick;
 pub mod place;
 pub mod plugin;
 #[cfg(not(target_arch = "wasm32"))]

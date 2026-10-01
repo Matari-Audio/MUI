@@ -13,6 +13,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { inflateSync } from 'node:zlib';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 
 const [bin, out] = process.argv.slice(2);
@@ -176,6 +177,46 @@ try {
   const px = pixel(Buffer.from((await send('Page.captureScreenshot', { format: 'png', clip })).data, 'base64'));
   check(px[0] === 0x40 && px[1] === 0x10, `the viewport shows it (${px})`);
   await shot('editor-reloaded.png');
+
+  // An agent (`mui-cut mcp`, finding this editor by its discovery file)
+  // edits while the person drags the card: its edit to another layer
+  // merges, its edit to the dragged field is noticed and the drag, later,
+  // wins; undo takes back only the drag.
+  const agent = spawn(bin, ['mcp'], { stdio: ['pipe', 'pipe', 'inherit'], env: { ...process.env, MUI_CUT_AUDIO: 'null' } });
+  const replies = createInterface({ input: agent.stdout })[Symbol.asyncIterator]();
+  let rpc = 0;
+  const mcp = async (name, args) => {
+    agent.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: ++rpc, method: 'tools/call', params: { name, arguments: args } }) + '\n');
+    const r = JSON.parse((await replies.next()).value).result;
+    if (r.isError) throw new Error(`mcp ${name}: ${r.content[0].text}`);
+    return r.content[0].text;
+  };
+  agent.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: ++rpc, method: 'initialize', params: { protocolVersion: '2025-06-18' } }) + '\n');
+  await replies.next();
+  await mcp('open', { path: file });
+  const y0 = read().scenes[1].layers.find(l => l.id === 'card').y;
+  const [dx0, dy0] = [vx + 240 / 1280 * vw, vy + y0 / 720 * vh];
+  await mouse('mousePressed', dx0, dy0);
+  for (let i = 1; i <= 4; i++) { await mouse('mouseMoved', dx0, dy0 + i * 10); await sleep(20); }
+  const rev0 = await js('cutRev()');
+  const said = await mcp('set', { scene: 'shapes', layer: 'ball', prop: 'fill', value: '#00ff00' });
+  check(/through the editor on port/.test(said), `an agent's edit goes through the editor's server (${said.split('\n')[0]})`);
+  await mcp('set', { scene: 'shapes', layer: 'card', prop: 'y', value: 123 });
+  await sleep(500);
+  check(await js('cutRev()') >= rev0 + 2, 'the editor takes both of the agent\'s edits mid-drag');
+  const note = await js(`document.querySelector('#merge').hidden ? '' : document.querySelector('#merge').textContent`);
+  check(/card\/y/.test(note) && /later edit wins/.test(note), `it notices the field both changed (${note})`);
+  for (let i = 5; i <= 8; i++) { await mouse('mouseMoved', dx0, dy0 + i * 10); await sleep(20); }
+  await mouse('mouseReleased', dx0, dy0 + 80); await sleep(800);
+  let both = read().scenes[1].layers;
+  const dragged = both.find(l => l.id === 'card').y;
+  check(both.find(l => l.id === 'ball').fill === '#00ff00', 'the agent\'s edit to another layer survives the drag');
+  check(Math.abs(dragged - (y0 + 80 / vh * 720)) < 2, `the drag, the later edit, wins its field (${y0} -> ${dragged})`);
+  await key('z', 'KeyZ', 2);
+  both = read().scenes[1].layers;
+  check(both.find(l => l.id === 'card').y === 123 && both.find(l => l.id === 'ball').fill === '#00ff00',
+    `undo takes back the drag only (${both.find(l => l.id === 'card').y}, ${both.find(l => l.id === 'ball').fill})`);
+  agent.stdin.end(); agent.kill();
 
   // A scene effect from the inspector: levels with no saturation greys the
   // frame on WebGPU; the CPU viewport says it draws without effects.
@@ -373,7 +414,8 @@ try {
 
   // A plugin layer: the synth example's real UI, captured by `serve`, its
   // parts in the layer list, one selected and dragged, then exploded.
-  const synth = join(dirname(bin), 'examples/synth');
+  // `bin` may be the hashed deps/ copy of the binary; examples sit beside debug/.
+  const synth = join(dirname(bin).replace(/\/deps$/, ''), 'examples/synth');
   const plug = JSON.parse(readFileSync(join(here, '../examples/plugin.cut.json'), 'utf8'));
   for (const l of plug.scenes.flatMap(s => s.layers)) if (l.source) l.source = { bin: synth };
   writeFileSync(file, JSON.stringify(plug));
@@ -459,7 +501,7 @@ try {
   await fire('#layers', ['dragover', 'drop']);
   await sleep(800);
   const typed2 = read().scenes[0].layers.find(l => l.font === 'icons.ttf');
-  check(typed2?.kind === 'text', `a dragged font makes a text layer in it (${JSON.stringify(typed2)})`);
+  check(typed2?.kind === 'text', `a dragged font makes a text layer in it (${JSON.stringify(typed2)}; ${await js(`document.querySelector('#status').textContent + ' | ' + cutRev() + ' | ' + JSON.stringify(cutSources().map(m => m.id)) + ' | ' + document.querySelector('#layers').textContent.slice(0, 200)`)})`);
   check(await js(`document.querySelector('[data-font]')?.value`) === 'icons.ttf', 'the inspector picks the font');
   await js(`document.querySelector('#layer-del').click()`); await sleep(400);
   await click('#add-plugin');

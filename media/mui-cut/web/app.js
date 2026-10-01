@@ -27,7 +27,10 @@ let drawing = false;     // a draw is in flight in the worker
 let doc = null;          // the project, as JSON data (bindings and all)
 let R = null;            // the project as the engine resolved it: sizes, fps, durations
 let variant = '';        // the variant the viewport previews, '' for the defaults
-let saved = '';          // the file's text as last loaded or saved
+let server = null;       // the project at revision `rev`, as `serve` last sent it
+let rev = 0;
+// Who this editor is in the server's merge reports.
+const me = 'editor-' + Math.random().toString(36).slice(2, 10);
 let si = 0;              // scene index
 let t = 0;               // playhead, seconds into the scene
 let sel = null;          // selected layer id
@@ -53,6 +56,9 @@ globalThis.cutQuads = () => quads; // the e2e aims at plugin parts with these
 // asset path), motion, children. Null before its capture has loaded.
 globalThis.cutParts = id => { const j = cut.plugin_parts(si, t, id); return j ? JSON.parse(j) : null; };
 let interact = false;    // viewport clicks drive the plugin, keyed at the playhead
+// Gestures, as the document before and after (JSON): undo replays the
+// difference backwards, only where the field still holds this editor's
+// value, so it never takes back an agent's edit.
 const undo = [], redo = [];
 let base = null;         // the document before the gesture in progress
 const assets = new Set();
@@ -119,6 +125,99 @@ function deleteKey({ l, p, k }) {
   selKey = null;
 }
 
+// ---------- field-level patches: JSON Pointer ops that address layers,
+// scenes and sources by id or name, as `serve` merges them (serve.rs).
+const clone = v => v === undefined ? undefined : structuredClone(v);
+const plain = v => JSON.parse(JSON.stringify(v));
+const obj = v => v !== null && typeof v === 'object' && !Array.isArray(v);
+function same(a, b) {
+  if (a === b) return true;
+  if (Array.isArray(a)) return Array.isArray(b) && a.length === b.length && a.every((v, i) => same(v, b[i]));
+  if (!obj(a) || !obj(b)) return false;
+  const ka = Object.keys(a);
+  return ka.length === Object.keys(b).length && ka.every(k => k in b && same(a[k], b[k]));
+}
+const esc = k => String(k).replace(/~/g, '~0').replace(/\//g, '~1');
+function itemKeys(a) {
+  const f = ['id', 'name'].find(f => a.every(v => typeof v?.[f] === 'string'));
+  const ks = f && a.map(v => v[f]);
+  return ks && ks.every(k => k !== '-' && !/^\d+$/.test(k)) && new Set(ks).size === ks.length ? ks : null;
+}
+function diff(a, b, path = '', out = []) {
+  if (same(a, b)) return out;
+  if (obj(a) && obj(b)) {
+    for (const k in a) {
+      if (k in b) diff(a[k], b[k], `${path}/${esc(k)}`, out); else out.push({ op: 'remove', path: `${path}/${esc(k)}` });
+    }
+    for (const k in b) if (!(k in a)) out.push({ op: 'add', path: `${path}/${esc(k)}`, value: b[k] });
+    return out;
+  }
+  const ka = Array.isArray(a) && Array.isArray(b) && itemKeys(a), kb = ka && itemKeys(b);
+  if (kb && ka.filter(k => kb.includes(k)).join('\0') === kb.filter(k => ka.includes(k)).join('\0')) {
+    for (const k of ka) if (!kb.includes(k)) out.push({ op: 'remove', path: `${path}/${esc(k)}` });
+    ka.forEach((k, i) => { const j = kb.indexOf(k); if (j >= 0) diff(a[i], b[j], `${path}/${esc(k)}`, out); });
+    kb.forEach((k, j) => { if (!ka.includes(k)) out.push({ op: 'add', path: `${path}/${j}`, value: b[j] }); });
+    return out;
+  }
+  out.push({ op: 'replace', path, value: b });
+  return out;
+}
+// A pointer's tokens, items named by id (first) or name turned into indices.
+function resolve(root, path) {
+  if (path === '') return [];
+  let node = root;
+  return path.slice(1).split('/').map(raw => {
+    let tok = raw.replace(/~1/g, '/').replace(/~0/g, '~');
+    if (Array.isArray(node) && tok !== '-' && !/^\d+$/.test(tok)) {
+      let i = node.findIndex(v => v?.id === tok);
+      if (i < 0) i = node.findIndex(v => v?.name === tok);
+      if (i < 0) throw new Error(`nothing named ${tok}`);
+      tok = String(i);
+    }
+    node = node?.[tok];
+    return tok;
+  });
+}
+const at = (root, path) => { try { return resolve(root, path).reduce((o, k) => o?.[k], root); } catch { return undefined; } };
+// One op, in place (objects off its path keep their identity, so a drag in
+// progress keeps writing into the layer it holds).
+function applyOp(root, { op, path, value }) {
+  const ts = resolve(root, path), last = ts.pop(), parent = ts.reduce((o, k) => o?.[k], root);
+  if (last === undefined || !parent || typeof parent !== 'object') throw new Error('no place for ' + path);
+  value = clone(value);
+  if (Array.isArray(parent)) {
+    const i = last === '-' ? parent.length : +last;
+    if (op === 'add' ? i > parent.length : i >= parent.length) throw new Error('nothing at ' + path);
+    // An item added by id (or name) that is there already, e.g. our own
+    // in-flight add back in the server's doc, replaces it: never twice.
+    const k = op === 'add' && ['id', 'name'].find(f => typeof value?.[f] === 'string');
+    const j = k ? parent.findIndex(v => v?.[k] === value[k]) : -1;
+    if (j >= 0) { parent[j] = value; return; }
+    if (op === 'add') parent.splice(i, 0, value); else if (op === 'remove') parent.splice(i, 1); else parent[i] = value;
+  } else {
+    if (op !== 'add' && !(last in parent)) throw new Error('nothing at ' + path);
+    if (op === 'remove') delete parent[last]; else parent[last] = value;
+  }
+}
+// Every op that still applies; the paths of the ones that do not.
+function applyAll(root, ops) {
+  const failed = [];
+  for (const o of ops) try { applyOp(root, o); } catch { failed.push(o.path); }
+  return failed;
+}
+const touch = (a, b) => a === b || a.startsWith(b + '/') || b.startsWith(a + '/');
+const who = by => by === 'disk' ? 'the file on disk' : by?.startsWith('editor-') ? 'another editor' : 'the agent';
+const where = paths => [...new Set(paths)].map(p => p.replace(/^\/scenes\//, '')).join(', ');
+// A short notice of a merge, cleared after a while.
+let noticeTimer = 0;
+function notice(text) {
+  const n = $('#merge');
+  n.textContent = text; n.hidden = !text;
+  clearTimeout(noticeTimer);
+  if (text) noticeTimer = setTimeout(() => { n.hidden = true; }, 8000);
+}
+globalThis.cutRev = () => rev; // the e2e waits for a merge with it
+
 // ---------- edits, undo, save
 function begin() { if (base === null) base = JSON.stringify(doc); }
 function changed() {
@@ -134,7 +233,8 @@ function load(json) {
 }
 function end() {
   if (base === null) return;
-  if (JSON.stringify(doc) !== base) { undo.push(base); redo.length = 0; save(); }
+  const now = JSON.stringify(doc);
+  if (now !== base) { undo.push({ a: base, b: now }); redo.length = 0; save(); }
   base = null;
   refresh();
 }
@@ -147,41 +247,81 @@ function noticeEffects() {
   b.textContent = any ? 'CPU · effects off' : 'CPU';
   b.title = any ? 'The CPU renderer draws the viewport without effects' : b.title;
 }
-function restore(text) {
-  doc = JSON.parse(text); selKey = null;
+// Replay the step from `from` to `to` (documents) onto the current one,
+// skipping fields somebody else has changed since.
+function step(from, to) {
+  const kept = [];
+  for (const o of diff(from, to)) {
+    if (o.op !== 'add' && !same(at(doc, o.path), at(from, o.path))) kept.push(o.path);
+    else if (applyAll(doc, [o]).length) kept.push(o.path);
+  }
+  if (kept.length) notice(`changed since, left as is: ${where(kept)}`);
+  selKey = null;
   changed(); save(); refresh();
 }
-$('#undo').onclick = () => { if (undo.length) { redo.push(JSON.stringify(doc)); restore(undo.pop()); } };
-$('#redo').onclick = () => { if (redo.length) { undo.push(JSON.stringify(doc)); restore(redo.pop()); } };
+$('#undo').onclick = () => { const e = undo.pop(); if (e) { redo.push(e); step(JSON.parse(e.b), JSON.parse(e.a)); } };
+$('#redo').onclick = () => { const e = redo.pop(); if (e) { undo.push(e); step(JSON.parse(e.a), JSON.parse(e.b)); } };
 
-let saveTimer = 0;
+// Saving sends what changed since the server's revision as a patch; the
+// reply is the merged revision, adopted like any other.
+let saveTimer = 0, sending = false, again = false;
 function save() {
   clearTimeout(saveTimer);
   status('unsaved');
-  saveTimer = setTimeout(async () => {
-    const r = await fetch('/project', { method: 'PUT', body: JSON.stringify(doc) });
-    const text = await r.text();
-    if (!r.ok) { status('not saved: ' + text, true); return; }
-    saved = text;
-    status('saved');
-  }, 200);
+  saveTimer = setTimeout(send, 200);
+}
+async function send() {
+  if (sending) { again = true; return; }
+  const ops = diff(server, plain(doc));
+  if (!ops.length) { status('saved'); return; }
+  sending = true;
+  try {
+    const r = await fetch('/patch', { method: 'POST', body: JSON.stringify({ base: rev, ops, by: me }) });
+    if (!r.ok) { status('not saved: ' + await r.text(), true); return; }
+    await adopt({ ...await r.json(), by: me });
+    status(diff(server, plain(doc)).length ? 'unsaved' : 'saved');
+  } catch (e) {
+    status('not saved: ' + e, true);
+  } finally {
+    sending = false;
+    if (again) { again = false; send(); }
+  }
 }
 function status(s, bad = false) { $('#status').textContent = s; $('#status').classList.toggle('bad', bad); }
 function showError(s) { $('#error').hidden = !s; $('#error').textContent = s; }
 
-// The file changed: an agent (or you, in a text editor) saved it.
-async function pull(why) {
-  const text = await (await fetch('/project')).text();
-  if (text === saved) return;
+// A new revision from the server: an agent's edit, an outside write to the
+// file, another editor's, or ours (its event or the reply, whichever
+// comes first). This editor's edits not in it yet (a drag in progress, a
+// save in flight) stay on top of it, and the difference is applied to the
+// document in place, so a drag keeps the layer it holds. A field both
+// changed is noticed.
+async function adopt(m, why) {
+  if (m.rev <= rev) return;
   const was = variant;
-  if (!JSON.parse(text).variants?.some(v => v.name === variant)) variant = '';
-  try { load(text); } catch (e) { variant = was; status('the file on disk has an error: ' + e, true); return; }
-  if (doc) { undo.push(JSON.stringify(doc)); redo.length = 0; }
-  doc = JSON.parse(text); saved = text; selKey = null;
+  if (!m.doc.variants?.some(v => v.name === variant)) variant = '';
+  const mine = doc ? diff(server, plain(doc)) : [];
+  const next = clone(m.doc);
+  applyAll(next, mine);
+  try { load(JSON.stringify(next)); } catch (e) { variant = was; status('the file on disk has an error: ' + e, true); return; }
+  const both = [...(m.conflicts ?? [])];
+  if (doc && m.by !== me) {
+    const paths = mine.map(o => o.path);
+    both.push(...diff(server, m.doc).map(o => o.path).filter(p => paths.some(q => touch(p, q))));
+  }
+  if (doc) {
+    applyAll(doc, diff(plain(doc), next));
+    if (base !== null) { const b = clone(m.doc); applyAll(b, diff(server, JSON.parse(base))); base = JSON.stringify(b); }
+  } else doc = next;
+  server = m.doc; rev = m.rev;
+  if (both.length) notice(m.by === me ? `your edit replaced a newer change to ${where(both)}` : `${who(m.by)} changed ${where(both)} too; the later edit wins`);
   si = Math.min(si, doc.scenes.length - 1);
   if (!layer()) sel = null;
+  if (selKey && !(scene().layers.includes(selKey.l) && getp(selKey.l, selKey.p)?.includes?.(selKey.k))) selKey = null;
+  need = true;
   await loadAssets();
-  status(why); refresh();
+  if (why) status(why);
+  if (base === null) refresh();
 }
 // The files image, SVG, Lottie and model layers and 3D environments name,
 // each sent to the viewport once.
@@ -1013,6 +1153,14 @@ const unmap = ([a, b, c, d], [x, y]) => { const k = a * d - b * c || 1; return [
 // A project point in a plugin's own pixels, through the quad it hit (a
 // moved part maps back to where the UI has it).
 const toUi = (q, [x, y]) => unmap(q.ui, [x - q.ui[4], y - q.ui[5]]);
+// In 3D: the plugin layer and UI point the pointer's ray meets, through
+// the camera the viewport shows (`only`: stay on the slab a drag began on).
+function pick3d([x, y], only) {
+  if (scene()?.mode !== '3d') return null;
+  const j = cut.pick(si, t, x, y, new Float64Array(orbit.on ? [orbit.yaw, orbit.pitch, orbit.zoom] : []), only ?? '');
+  return j ? JSON.parse(j) : null;
+}
+globalThis.cutPick = (x, y) => pick3d([x, y]);
 // Interact: the pointer, keyed as the plugin's `pointer_*` (hold keys) so
 // the adapter turns the knob or drags the slider under it. Down at the
 // playhead, moves a frame on (at least), up a frame after the last move.
@@ -1034,12 +1182,14 @@ over.onpointerdown = e => {
   if (orbit.on) { orbit.from = [e.clientX, e.clientY, orbit.yaw, orbit.pitch]; over.setPointerCapture(e.pointerId); return; }
   const p = toProject(e), id = hit(p);
   if (interact) {
+    // A 2D quad maps to the UI itself; a 3D slab is found by its ray.
     const q = [...quads].reverse().find(q => q.ui && inside(p, q.pts));
-    const l = q && scene().layers.find(l => l.id === q.id.split('#')[0]);
+    const h = q ? null : pick3d(p);
+    const l = scene().layers.find(l => l.id === (q ? q.id.split('#')[0] : h?.layer));
     if (!l || l.kind !== 'plugin') return;
     const t0 = snap(t);
-    begin(); pointerKeys(l, t0, toUi(q, p), 1); changed();
-    drag = { interact: true, l, q, t0, last: t0 };
+    begin(); pointerKeys(l, t0, q ? toUi(q, p) : h.ui, 1); changed();
+    drag = { interact: true, l, q, slab: h?.slab, ui: h?.ui, t0, last: t0 };
     over.setPointerCapture(e.pointerId);
     return;
   }
@@ -1075,7 +1225,8 @@ over.onpointermove = e => {
   }
   if (drag.interact) {
     drag.last = Math.max(snap(t), drag.t0 + 1 / R.fps);
-    pointerKeys(drag.l, drag.last, toUi(drag.q, p));
+    if (!drag.q) drag.ui = pick3d(p, drag.slab)?.ui ?? drag.ui;
+    pointerKeys(drag.l, drag.last, drag.q ? toUi(drag.q, p) : drag.ui);
     changed(); return;
   }
   const [dx, dy] = unmap(drag.lin, [p[0] - drag.p[0], p[1] - drag.p[1]]);
@@ -1640,9 +1791,17 @@ function control(m) {
 addEventListener('resize', () => { need = true; });
 
 $('#file').textContent = await (await fetch('/name')).text();
-await pull('loaded');
+await adopt(await (await fetch('/doc')).json(), 'loaded');
 const events = new EventSource('/events');
-events.onmessage = () => pull('reloaded from disk');
+events.addEventListener('doc', e => {
+  const m = JSON.parse(e.data);
+  adopt(m, m.by === me ? null : m.by === 'disk' ? 'reloaded from disk' : `merged ${who(m.by)}'s edit`);
+});
+// The file on disk is not JSON: say so, keep the last good revision.
+events.onmessage = async () => {
+  const text = await (await fetch('/project')).text();
+  try { JSON.parse(text); } catch (e) { status('the file on disk has an error: ' + e, true); }
+};
 events.addEventListener('control', e => control(JSON.parse(e.data)));
 // `serve` finished capturing plugin states: fetch the new ones.
 events.addEventListener('plugin', () => loadAssets());
