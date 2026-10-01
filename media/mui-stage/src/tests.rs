@@ -418,7 +418,8 @@ fn a_models_maps_colour_and_bend_its_surface() {
     let flat = px(Default::default(), 32)[0];
     let leant = px([None, Some("lean".into()), None], 32)[0];
     assert!(
-        leant < 0.85 * flat && leant > 0.5 * flat,
+        // cos 45 = 0.707 of the light, 0.858 once sRGB-encoded.
+        (leant - 0.858 * flat).abs() < 0.03,
         "normal map: {leant} of {flat}"
     );
 }
