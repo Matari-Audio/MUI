@@ -868,7 +868,11 @@ play state to the server (`PUT /state`); `editor_state` reads it (with
 `same_project` and how old it is), so the agent sees what the person is
 looking at. `editor_goto` moves the editor there (`POST /control`, relayed
 to open editors as an SSE `control` event) to show the person something.
-The server is found on `editor_port` from `open` (default 8740).
+`serve` writes `.NAME.serve` (`{"port", "pid"}`) next to the project
+`NAME` while it runs and removes it when it exits (Ctrl+C and SIGTERM
+too), so the MCP server finds the editor on the open project by itself;
+`editor_port` on `open` or `port` on a tool overrides it, and with
+neither and no file it tries 8740.
 
 The keyframe curves are not `mui_motion::curve::Curve`: that type is a
 normalized `0..1` phase/value shaper that clamps values, while a property

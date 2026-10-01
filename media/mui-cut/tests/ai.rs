@@ -554,6 +554,57 @@ fn mcp_sees_and_steers_the_open_editor() {
 }
 
 #[test]
+fn mcp_finds_the_editor_by_its_discovery_file() {
+    let d = scratch("mcp-discovery");
+    let project = d.join("p.cut.json");
+    std::fs::copy(DEMO, &project).unwrap();
+    let found = d.join(".p.cut.json.serve");
+    let port = free_port();
+    let mut server = Command::new(BIN)
+        .arg("serve")
+        .arg(&project)
+        .args(["--port", &port.to_string()])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let start = std::time::Instant::now();
+    while std::net::TcpStream::connect(("127.0.0.1", port)).is_err() || !found.exists() {
+        assert!(start.elapsed().as_secs() < 10, "server never came up");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let v: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&found).unwrap()).unwrap();
+    assert_eq!(v["port"], port, "{v}");
+    assert_eq!(v["pid"], server.id(), "{v}");
+
+    // Not on 8740, and `open` is not told the port.
+    let mut m = Mcp::start();
+    m.request(
+        "initialize",
+        serde_json::json!({"protocolVersion": "2025-06-18"}),
+    );
+    m.text("open", serde_json::json!({"path": project}));
+    let seen: serde_json::Value =
+        serde_json::from_str(&m.text("editor_state", serde_json::json!({}))).unwrap();
+    assert_eq!(seen["same_project"], true, "{seen}");
+
+    // SIGTERM: the file goes with the editor.
+    #[cfg(unix)]
+    {
+        let ok = Command::new("kill")
+            .args(["-TERM", &server.id().to_string()])
+            .status()
+            .unwrap();
+        assert!(ok.success());
+        let _ = server.wait();
+        assert!(!found.exists(), "the discovery file outlived the editor");
+    }
+    let _ = server.kill();
+    let _ = server.wait();
+}
+
+#[test]
 fn gen_is_deterministic_and_merges_layers_into_a_scene() {
     let d = scratch("gen");
     let script = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/gen/grid.rhai");

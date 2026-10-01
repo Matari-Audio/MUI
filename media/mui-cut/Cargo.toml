@@ -75,6 +75,8 @@ wgpu = { workspace = true, features = ["default"] }
 midly = { version = "0.5", default-features = false, features = ["std"] }
 # `serve` plays the project's sound live (a null clock when there is no device).
 cpal = "0.17"
+# `serve` removes its discovery file when Ctrl+C or SIGTERM ends it.
+ctrlc = { version = "3.4", features = ["termination"] }
 
 [dev-dependencies]
 # `examples/synth.rs`: a small plugin editor behind the bridge's live

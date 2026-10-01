@@ -88,7 +88,8 @@ struct Open {
     /// Write a new one-scene project there if there is no file.
     #[serde(default)]
     create: bool,
-    /// Port of a `mui-cut serve` on this project (default 8740).
+    /// Port of a `mui-cut serve` on this project (default: the one its
+    /// discovery file names, else 8740).
     #[serde(default)]
     editor_port: Option<u16>,
     /// With `create`: the new project's `[width, height]` (default
@@ -1002,7 +1003,7 @@ impl Server {
             }
             "editor_state" => {
                 let a: EditorState = parse(args)?;
-                let port = a.port.or(self.port).unwrap_or(8740);
+                let port = self.editor_port(a.port);
                 let body = http(port, "GET", "/state", "")?;
                 let mut v: Value = serde_json::from_str(&body).map_err(|e| e.to_string())?;
                 if let (Ok(mine), Some(theirs)) = (self.path(), v["project"].as_str()) {
@@ -1014,7 +1015,7 @@ impl Server {
             }
             "editor_goto" => {
                 let a: EditorGoto = parse(args)?;
-                let port = a.port.or(self.port).unwrap_or(8740);
+                let port = self.editor_port(a.port);
                 let mut m = json!({});
                 if let Some(s) = a.scene {
                     m["scene"] = s.into();
@@ -1047,6 +1048,14 @@ impl Server {
         self.project
             .clone()
             .ok_or_else(|| "no project open: call `open` first".into())
+    }
+    /// The editor's port: asked for, given to `open`, else the one the
+    /// open project's discovery file names (`serve` writes it), else 8740.
+    fn editor_port(&self, asked: Option<u16>) -> u16 {
+        asked
+            .or(self.port)
+            .or_else(|| crate::serve::discover(&self.path().ok()?).map(|f| f.port))
+            .unwrap_or(8740)
     }
     fn raw(&self) -> Result<Value> {
         let path = self.path()?;

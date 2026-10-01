@@ -66,6 +66,8 @@ pub fn serve(project: &Path, port: u16, web: PathBuf) -> Result<()> {
         }));
     let listener =
         TcpListener::bind(("127.0.0.1", port)).map_err(|e| format!("port {port}: {e}"))?;
+    let port = listener.local_addr().map_or(port, |a| a.port());
+    let _found = Discovery::write(project, port)?;
     println!(
         "mui-cut: editing {} at http://127.0.0.1:{port}/",
         project.display()
@@ -91,6 +93,55 @@ pub fn serve(project: &Path, port: u16, web: PathBuf) -> Result<()> {
         });
     }
     Ok(())
+}
+
+/// The file beside the project that tells `mui-cut mcp` which port this
+/// editor listens on: `.NAME.serve` next to `NAME`.
+pub fn discovery_path(project: &Path) -> PathBuf {
+    let name = project.file_name().unwrap_or_default().to_string_lossy();
+    project.with_file_name(format!(".{name}.serve"))
+}
+
+/// What the discovery file says: the editor's port and process.
+#[derive(serde::Serialize, serde::Deserialize, Debug, PartialEq, Eq)]
+pub struct Found {
+    pub port: u16,
+    pub pid: u32,
+}
+
+/// The discovery file, written while serving and removed on the way out:
+/// on drop, and on Ctrl+C or SIGTERM.
+struct Discovery(PathBuf);
+
+impl Discovery {
+    fn write(project: &Path, port: u16) -> Result<Self> {
+        let path = discovery_path(project);
+        let found = Found {
+            port,
+            pid: std::process::id(),
+        };
+        let text = serde_json::to_string(&found).map_err(|e| e.to_string())?;
+        std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))?;
+        let gone = path.clone();
+        // Only the first handler takes: one `serve` a process.
+        let _ = ctrlc::set_handler(move || {
+            let _ = std::fs::remove_file(&gone);
+            std::process::exit(130);
+        });
+        Ok(Self(path))
+    }
+}
+
+impl Drop for Discovery {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+/// The editor serving `project`, from its discovery file, if one says so.
+pub fn discover(project: &Path) -> Option<Found> {
+    let text = std::fs::read_to_string(discovery_path(project)).ok()?;
+    serde_json::from_str(&text).ok()
 }
 
 fn respond(mut s: &TcpStream, status: &str, kind: &str, body: &[u8]) -> std::io::Result<()> {
