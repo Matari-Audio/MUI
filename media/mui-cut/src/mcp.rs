@@ -327,8 +327,14 @@ struct Strip {
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct Diff {
-    /// The other version of the project (a copy, or `git show REV:file > f`).
-    against: String,
+    /// The other version of the project, a copy (it is B; the open project
+    /// is A).
+    #[serde(default)]
+    against: Option<String>,
+    /// Or a git revision of the open project (`HEAD`, `HEAD~2`, a branch):
+    /// it is A, the file as it is now B.
+    #[serde(default)]
+    rev: Option<String>,
     /// Changed frames to show (default 6).
     #[serde(default)]
     n: Option<usize>,
@@ -559,7 +565,7 @@ fn tools() -> Vec<Value> {
         ),
         tool::<Diff>(
             "diff",
-            "Compare against another version of the project: the most-changed frames as A | B | heat map rows.",
+            "Compare against another version of the project (a copy, or a git revision with `rev`): the most-changed frames as A | B | heat map rows.",
         ),
         tool::<Gen>(
             "gen",
@@ -821,9 +827,20 @@ impl Server {
             }
             "diff" => {
                 let a: Diff = parse(args)?;
+                let path = self.path()?;
+                let old = a
+                    .rev
+                    .as_deref()
+                    .map(|r| tools::at_rev(&path, r))
+                    .transpose()?;
+                let (x, y) = match (&old, &a.against) {
+                    (Some(old), _) => (old.path.clone(), path),
+                    (None, Some(b)) => (path, PathBuf::from(b)),
+                    (None, None) => return Err("diff needs `against` or `rev`".into()),
+                };
                 image(&tools::diff(
-                    &self.path()?,
-                    Path::new(&a.against),
+                    &x,
+                    &y,
                     a.n.unwrap_or(6),
                     a.width.unwrap_or(1600),
                     a.renderer.as_deref(),

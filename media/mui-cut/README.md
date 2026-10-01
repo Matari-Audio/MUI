@@ -816,9 +816,11 @@ are sized to be read by a model (1600 px wide).
   time and frame above it. **`strip`** shows one layer's move in a single
   frame: the scene faded, the layer as ghosts from faint (early) to solid,
   its path as a yellow trail with timed dots. **`diff`** compares two
-  versions (e.g. `git show HEAD:p.cut.json > old.cut.json`) and shows the
-  most-changed frames as rows of A, B and a heat map, with the share of
-  pixels changed.
+  versions and shows the most-changed frames as rows of A, B and a heat map,
+  with the share of pixels changed. `diff P@REV` (or `diff P --rev REV`)
+  compares a git revision (A) with the file as it is (B): the project and
+  the assets it names are read with `git show` into a scratch folder beside
+  the project, removed afterwards.
 - **`gen`** runs a [Rhai](https://rhai.rs) script: no clock, no files, no
   modules, bounded operations, and randomness only from a seed, so a script
   and `--seed` always write the same file. It returns a project map, or an

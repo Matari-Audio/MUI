@@ -155,6 +155,77 @@ fn sheet_strip_and_diff_write_pictures_of_the_right_size() {
     assert!(ok && text.contains("no visible differences"), "{text}");
 }
 
+#[test]
+fn diff_reads_a_git_revision_and_its_assets() {
+    let d = scratch("diff-rev");
+    let git = |args: &[&str]| {
+        let o = Command::new("git")
+            .args([
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "commit.gpgsign=false",
+            ])
+            // No user hooks in a scratch repo.
+            .args([
+                "-c",
+                "core.hooksPath=/dev/null",
+                "-c",
+                "init.defaultBranch=work",
+            ])
+            .args(args)
+            .current_dir(&d)
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    };
+    let svg = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/mark.svg");
+    std::fs::create_dir_all(d.join("art")).unwrap();
+    std::fs::copy(svg, d.join("art/mark.svg")).unwrap();
+    let project = d.join("p.cut.json");
+    std::fs::write(
+        &project,
+        r##"{"size": [640, 360], "fps": 30, "scenes": [{"name": "s", "duration": 1, "layers": [
+            {"id": "m", "kind": "svg", "path": "art/mark.svg", "x": 320, "y": 180, "width": 240, "height": 240}
+        ]}]}"##,
+    )
+    .unwrap();
+    git(&["init", "-q"]);
+    git(&["add", "."]);
+    git(&["commit", "-qm", "one"]);
+    // Only the asset changes: the project file is the same at HEAD.
+    let red = std::fs::read_to_string(svg)
+        .unwrap()
+        .replace("#ffcf5c", "#ff0000");
+    std::fs::write(d.join("art/mark.svg"), red).unwrap();
+    let out = d.join("d.png");
+    for args in [
+        vec!["diff", "p.cut.json@HEAD"],
+        vec!["diff", "p.cut.json", "--rev", "HEAD"],
+    ] {
+        let o = Command::new(BIN)
+            .args(&args)
+            .args(["--n", "1", "-o", out.to_str().unwrap()])
+            .current_dir(&d)
+            .output()
+            .unwrap();
+        let text =
+            String::from_utf8_lossy(&o.stdout).into_owned() + &String::from_utf8_lossy(&o.stderr);
+        assert!(o.status.success(), "{args:?}: {text}");
+        assert!(text.contains("% of pixels changed"), "{args:?}: {text}");
+    }
+    let left: Vec<_> = std::fs::read_dir(&d)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_name().to_string_lossy().starts_with(".mui-cut-rev"))
+        .collect();
+    assert!(left.is_empty(), "the revision's copy is left behind");
+    let (ok, text) = run(&["diff", project.to_str().unwrap(), "--rev", "nope"]);
+    assert!(!ok && text.contains("nope"), "{text}");
+}
+
 /// `mui-cut mcp` driven like an MCP client: one JSON-RPC message a line.
 struct Mcp {
     child: std::process::Child,

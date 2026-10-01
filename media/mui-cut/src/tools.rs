@@ -579,13 +579,124 @@ pub fn strip_cmd(args: &Args) -> Result<()> {
 }
 
 pub fn diff_cmd(args: &Args) -> Result<()> {
-    let other = args.get("against").ok_or("diff needs a second project")?;
+    // `P@REV` (when no file has that name) or `--rev REV` against the
+    // working copy: the revision is A, the file as it is now B.
+    let spec = args.project.to_string_lossy().into_owned();
+    let (project, rev) = match spec.rsplit_once('@') {
+        Some((p, r)) if !args.project.exists() && Path::new(p).is_file() => {
+            (Path::new(p).to_owned(), Some(r.to_owned()))
+        }
+        _ => (args.project.clone(), args.get("rev").map(Into::into)),
+    };
+    let old = rev.as_deref().map(|r| at_rev(&project, r)).transpose()?;
+    let (a, b) = match (&old, args.get("against")) {
+        (Some(old), _) => (old.path.clone(), project.clone()),
+        (None, Some(other)) => (project.clone(), other.into()),
+        (None, None) => return Err("diff needs a second project, P@REV or --rev REV".into()),
+    };
     let pic = diff(
-        &args.project,
-        Path::new(other),
+        &a,
+        &b,
         args.num("n", 6)?,
         args.num("width", 1600)?,
         crate::renderer(args),
     )?;
-    save(&pic, &out_path(args, "diff.png"))
+    let args = Args {
+        project,
+        flags: args.flags.clone(),
+    };
+    save(&pic, &out_path(&args, "diff.png"))
+}
+
+/// A project as git has it at a revision: the file and the assets it
+/// names, read with `git show`, in a scratch folder beside the project
+/// (removed on drop), so relative paths resolve as they did then. Plugin
+/// captures are content-addressed, so the folder shares the project's
+/// capture cache. An asset git does not have at that revision is taken
+/// from the working copy.
+pub struct AtRev {
+    pub path: std::path::PathBuf,
+    dir: std::path::PathBuf,
+}
+
+impl Drop for AtRev {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+pub fn at_rev(project: &Path, rev: &str) -> Result<AtRev> {
+    use std::path::Component;
+    let here = project
+        .parent()
+        .filter(|d| !d.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let name = project.file_name().ok_or("the project has no file name")?;
+    let show = |rel: &str| -> Result<Vec<u8>> {
+        let o = std::process::Command::new("git")
+            .arg("show")
+            .arg(format!("{rev}:./{rel}"))
+            .current_dir(here)
+            .output()
+            .map_err(|e| format!("git: {e}"))?;
+        if !o.status.success() {
+            return Err(format!(
+                "git show {rev}:{rel}: {}",
+                String::from_utf8_lossy(&o.stderr).trim()
+            ));
+        }
+        Ok(o.stdout)
+    };
+    let text = show(&name.to_string_lossy())?;
+    let dir = here.join(format!(".mui-cut-rev-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let out = AtRev {
+        path: dir.join(name),
+        dir: dir.clone(),
+    };
+    std::fs::write(&out.path, &text).map_err(|e| format!("{}: {e}", out.path.display()))?;
+    let p = Project::load(&String::from_utf8_lossy(&text))
+        .map_err(|e| format!("{}@{rev}: {e}", project.display()))?;
+    let hdris = p
+        .scenes
+        .iter()
+        .filter_map(|s| s.environment.as_ref())
+        .map(|e| e.hdri.as_str());
+    let assets = p
+        .scenes
+        .iter()
+        .flat_map(|s| &s.layers)
+        .filter_map(|l| p.asset_of(l))
+        .chain(hdris);
+    for rel in assets {
+        // Only paths inside the project's folder: the copy must not write
+        // outside its own.
+        if rel.is_empty()
+            || !Path::new(rel)
+                .components()
+                .all(|c| matches!(c, Component::Normal(_)))
+        {
+            continue;
+        }
+        let bytes = show(rel).or_else(|_| std::fs::read(here.join(rel)).map_err(|e| e.to_string()));
+        if let Ok(bytes) = bytes {
+            let to = dir.join(rel);
+            if let Some(d) = to.parent() {
+                std::fs::create_dir_all(d).map_err(|e| format!("{}: {e}", d.display()))?;
+            }
+            std::fs::write(&to, bytes).map_err(|e| format!("{}: {e}", to.display()))?;
+        }
+    }
+    #[cfg(unix)]
+    {
+        let cache = here.join(mui_cut::plugin::CACHE);
+        if cache.is_dir() {
+            let _ = std::os::unix::fs::symlink(
+                std::fs::canonicalize(&cache).unwrap_or(cache),
+                dir.join(mui_cut::plugin::CACHE),
+            );
+        }
+    }
+    Ok(out)
 }
