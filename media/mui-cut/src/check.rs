@@ -331,10 +331,11 @@ fn fields(raw: &Value, p: &Project, out: &mut Issues) {
                         k.as_str(),
                         "id" | "name" | "parent" | "kind" | "animators" | "deformers"
                     )
-                    && !(three && matches!(k.as_str(), "cast_shadows" | "receive_shadows"))
+                    && !(three
+                        && matches!(k.as_str(), "cast_shadows" | "receive_shadows" | "overlay"))
                     && !(k == "material" && used.iter().any(|u| u.starts_with("material.")))
-                    // Every kind runs its own effect stack in 2D; 3D skips it.
-                    && !(!three && k == "effects")
+                    // Every kind runs its own effect stack, 2D or 3D.
+                    && k != "effects"
                 {
                     out.add(
                         Severity::Info,
@@ -1209,7 +1210,7 @@ mod tests {
     }
 
     #[test]
-    fn layer_effects_are_used_in_2d_and_ignored_in_3d() {
+    fn layer_effects_are_used_in_2d_and_3d() {
         let effects = serde_json::json!([{"type": "blur", "radius": 4}]);
         let doc = |mode: &str| {
             serde_json::json!({"size": [320, 180], "fps": 30, "scenes": [{
@@ -1226,7 +1227,7 @@ mod tests {
                 .count()
         };
         assert_eq!(ignored("2d"), 0);
-        assert_eq!(ignored("3d"), 2);
+        assert_eq!(ignored("3d"), 0);
     }
 
     #[test]

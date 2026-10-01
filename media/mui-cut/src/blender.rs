@@ -276,6 +276,9 @@ impl MatS {
 pub struct ModelS {
     pub m: [f32; 16],
     pub show: bool,
+    /// Seconds into its glTF's animation, if it has one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub at: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mat: Option<MatS>,
 }
@@ -650,6 +653,7 @@ pub fn describe(
                 ModelS {
                     m: m.0.map(|v| r(f64::from(v))),
                     show: d.opacity > 0. && d.scale != 0.,
+                    at: mesh.animated().then_some(d.time as f32),
                     // Pixels to the model's own units, as its glTF's.
                     mat: d
                         .space
@@ -801,11 +805,16 @@ fn slabs(assets: &Assets, f: &Frame) -> Vec<(String, Drawn)> {
     let mut seen: HashMap<String, usize> = HashMap::new();
     f.layers
         .iter()
+        // Overlays go over Blender's frame flat, as over the stage's.
         .filter(|l| {
-            !matches!(
-                l.kind,
-                Kind::Camera { .. } | Kind::Light { .. } | Kind::Model { .. } | Kind::Audio { .. }
-            )
+            !l.space.overlay
+                && !matches!(
+                    l.kind,
+                    Kind::Camera { .. }
+                        | Kind::Light { .. }
+                        | Kind::Model { .. }
+                        | Kind::Audio { .. }
+                )
         })
         .flat_map(|l| assets.slabs(l))
         .map(|d| {

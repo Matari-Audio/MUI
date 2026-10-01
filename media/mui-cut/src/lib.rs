@@ -182,6 +182,14 @@ pub struct Scene {
     pub effects: Vec<fx::Effect>,
 }
 
+impl Scene {
+    /// Whether mui-cut draws over the frames Blender renders of it: the
+    /// scene's effects, or a flat overlay layer.
+    pub fn composites_over_blender(&self) -> bool {
+        !self.effects.is_empty() || self.layers.iter().any(|l| l.overlay)
+    }
+}
+
 /// What a layer draws.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "lowercase")]
@@ -236,11 +244,12 @@ pub enum Kind {
         #[serde(default = "yes", rename = "loop", skip_serializing_if = "is_yes")]
         looped: bool,
     },
-    /// 3D scenes: the camera. It orbits its target (`x`, `y`, `z`, or the
-    /// layer `look_at`) by `ry` (yaw) and `rx` (pitch) at `distance`, rolls
-    /// by `rotation`, and moves along `path` (SVG path data seen from
-    /// above: x across, y into depth) by `path_offset`. The last camera
-    /// with some opacity is the one that shoots.
+    /// 3D scenes: the camera. It orbits its target (`x`, `y`, `z`) by `ry`
+    /// (yaw) and `rx` (pitch) at `distance`; with `look_at` it stands at
+    /// its own `x`, `y`, `z` and aims at that layer instead. It rolls by
+    /// `rotation` and moves along `path` (SVG path data seen from above: x
+    /// across, y into depth) by `path_offset`. The last camera with some
+    /// opacity is the one that shoots.
     Camera {
         #[serde(default, skip_serializing_if = "String::is_empty")]
         look_at: String,
@@ -320,7 +329,7 @@ pub enum LightType {
     Directional,
     /// From its position, a cone along `rx`/`ry`, with a shadow.
     Spot,
-    /// From its position every way, no shadow.
+    /// From its position every way, with a shadow.
     Point,
     /// Everywhere, no shadow.
     Ambient,
@@ -470,7 +479,7 @@ pub struct Layer {
     pub ring_radius: Anim<f64>,
     #[serde(default = "zero", skip_serializing_if = "is_zero")]
     pub path_offset: Anim<f64>,
-    /// Lottie: seconds into the animation at the scene's start.
+    /// Lottie, model: seconds into the animation at the scene's start.
     #[serde(default = "zero", skip_serializing_if = "is_zero")]
     pub time: Anim<f64>,
     /// Plugin: 0..1 pulls the parts away from the UI's centre (1: twice as
@@ -525,6 +534,10 @@ pub struct Layer {
     pub cast_shadows: bool,
     #[serde(default = "yes", skip_serializing_if = "is_yes")]
     pub receive_shadows: bool,
+    /// 3D: drawn flat in screen space over the 3D pass and the scene's
+    /// effects, as in 2D: a caption or a logo over the shot.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub overlay: bool,
     /// 3D: the surface (metal, roughness, glass); see [`three::Material`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub material: Option<three::Material>,
@@ -749,6 +762,7 @@ impl Layer {
                     ("scale", &self.scale),
                     ("height", &self.height),
                     ("opacity", &self.opacity),
+                    ("time", &self.time),
                 ] {
                     num(n, a);
                 }
@@ -1183,7 +1197,7 @@ pub struct Drawn {
     pub spacing: [f64; 2],
     pub ring_radius: f64,
     pub path_offset: f64,
-    /// Lottie: seconds into the animation.
+    /// Lottie, model: seconds into the animation.
     pub time: f64,
     /// Per glyph (text, newlines skipped) or per copy (duplicator).
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -1226,6 +1240,22 @@ impl Frame {
     /// Any effect on the scene or on a layer.
     pub fn has_effects(&self) -> bool {
         !self.effects.is_empty() || self.layers.iter().any(|l| !l.effects.is_empty())
+    }
+
+    /// Its layers bottom first; a 3D frame drawn flat puts its overlays
+    /// on top.
+    pub fn drawing_order(&self) -> impl Iterator<Item = &Drawn> {
+        let lifted = |l: &&Drawn| self.view.is_some() && l.space.overlay;
+        let (base, top) = (
+            self.layers.iter().filter(move |l| !lifted(l)),
+            self.layers.iter().filter(lifted),
+        );
+        base.chain(top)
+    }
+
+    /// A 3D frame with layers drawn flat over the 3D pass.
+    pub fn has_overlays(&self) -> bool {
+        self.view.is_some() && self.layers.iter().any(|l| l.space.overlay)
     }
 }
 
@@ -1296,6 +1326,7 @@ impl Layer {
         };
         let time = match self.kind {
             Kind::Lottie { speed, .. } => self.time.at(t) + t * speed,
+            Kind::Model { .. } => self.time.at(t) + t,
             _ => 0.,
         };
         Drawn {
@@ -1338,6 +1369,7 @@ impl Layer {
                 edge: self.edge.at(t),
                 cast_shadows: self.cast_shadows,
                 receive_shadows: self.receive_shadows,
+                overlay: self.overlay,
                 distance: self.distance.at(t).max(0.),
                 fov: self.fov.at(t).clamp(1., 170.),
                 dolly: self.dolly.at(t),

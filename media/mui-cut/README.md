@@ -357,26 +357,36 @@ mesh. Scenes without it render exactly as before.
   viewer. `rx`/`ry` pitch and yaw in degrees, `rotation` is the roll (`rz`).
   `anchor_z` moves the pivot; `extrude` gives a layer depth with its sides
   in `edge`. `cast_shadows` / `receive_shadows` (default true).
+- `"overlay": true` on a layer draws it flat in screen space after the 3D
+  pass and the scene's effects, as in 2D (its own effects run): captions,
+  a logo. Beauty and Blender frames get it too, composited after; the
+  editor's inspector ticks it. Where 3D draws flat, overlays go on top.
 - `camera` layer (the last visible one shoots): orbits its target by `rx`,
   `ry` at `distance`, `fov` (vertical degrees), `rotation` rolls it, `dolly`
   moves it toward the target, `path` (SVG path data, moved along by
-  `path_offset`) carries it in x/z, `look_at` aims it at a layer, `focus` and
+  `path_offset`) carries it in x/z, `look_at` aims it at a layer from where
+  its own `x`, `y`, `z` put it (no orbit), `focus` and
   `aperture` add depth of field. Without one, the default camera sees the
   z=0 plane as the 2D frame. Every property is keyable like any other.
 - `light` layers, `"type"`: `directional` (default), `spot`, `point`,
   `ambient`; `fill` is the colour, `intensity` times `opacity` the strength,
   `rx`/`ry` aim it, `cone`/`feather` shape a spot, `range` fades point and
   spot lights, `softness` widens the shadow filter. Directional and spot
-  lights cast PCF shadow maps. With no light at all a 3D scene is unlit and
+  lights cast PCF shadow maps, point lights a cube of six. With no light at all a 3D scene is unlit and
   faces show their exact pixels.
-- `model` layers: a `.glb` file (`path`), fitted to `height` times `scale`,
-  tinted by `fill`, lit with its materials' base colour, metallic and
-  roughness.
+- `model` layers: a `.glb` file (`path`), fitted to `height` times `scale`
+  (its rest pose), tinted by `fill`, lit with its materials' base colour,
+  metallic and roughness and their PNG maps (base colour, normal,
+  metallic-roughness). Its first animation (node transforms and skins)
+  plays at `time + t` seconds, held before its first key and after its
+  last; key `time` to scrub it. See `examples/stage3d-overlay.cut.json`.
 - Scene `ground` (`y`, `color`, `radius`, `reflect`, `contact` shadow
   strength) and `fog` (`color`, `near`, `far`); `background` is the clear.
 - A scene's `effects` run on the 3D pass's output, per subframe, before
-  motion blur averages them, as in 2D. A layer's own `effects` do not run
-  in 3D (see Limits).
+  motion blur averages them, as in 2D. A layer's own `effects` run on its
+  slab: its box in the atlas gets room each side for what the stack
+  spreads (3 x a blur's radius, half a directional blur, a displacement or
+  chromatic amount), runs the stack there, and the slab grows to show it.
 - Motion blur re-renders the 3D pass per subframe. The web editor draws
   3D on WebGPU; WebGL2 and the CPU draw 3D scenes flat with a notice, and
   an export refuses to. **Orbit** in the header swings the preview camera
@@ -412,7 +422,9 @@ Frames go through the usual encode path (codecs, segments, `--stats`).
 
 It maps the camera (DOF, `look_at`, `path`), sun/spot/point lights,
 ambient as the world, layers and plugin parts as PNG-textured extruded
-slabs, `.glb` models through Blender's glTF importer, the ground as a plane
+slabs, `.glb` models through Blender's glTF importer (their maps as it
+reads them, their first animation's NLA strip driven to each frame's
+`time + t`), the ground as a plane
 and fog as a mist pass. Layer textures, the `.blend` and every frame are
 cached by content hash under `.mui-cut-cache/blender/` next to the project;
 a re-run renders only frames whose content changed. A 2D scene or a
@@ -943,14 +955,11 @@ same reason.
   It is pinned to Vello 9dfe53e; moving to newer main means following
   #1942 (`pop_clip_path` renamed) and #1944 (fallible glyph drawing) in
   `src/sparse.rs`.
-- 3D: point lights cast no shadows; glTF is `.glb` only, triangles and
-  material factors (no textures, skins or animation); a 3D scene has no 2D
-  overlay layer; walls of extruded layers are rebuilt every subframe;
-  `look_at` ignores the camera's own x/y/z; `check`'s pixel lints skip
-  3D scenes. A layer's `effects` are skipped in 3D: a layer is a slab
-  textured from the shared atlas, and the effect passes are full-frame, so
-  a layer stack would need its own padded texture per layer (a blur or
-  displacement spills past the atlas slot's gutter). A scene's stack runs.
+- 3D: glTF is `.glb` only: triangles, material factors and PNG maps (a
+  JPEG map is skipped: no decoder here), the first animation, skins on
+  the CPU; no morph targets, cameras or lights from the file, maps
+  without mips; `check`'s pixel lints skip 3D scenes. A layer's effects in 3D run in its own texture, so
+  `chromatic` pulls towards the layer's centre, not the frame's.
 - Sources and parenting: a reparent through a turn keeps every key exact,
   but a key baked into a bezier segment splits it into two eases, so the
   curve between keys can drift. A tilted child edge on (`rx` ±90) puts
@@ -977,7 +986,8 @@ same reason.
   from `serve` (`GET /mix.wav`): opened without it, it exports silent;
   it encodes AAC where the browser can (Chrome on Linux: Opus), with the
   encoder's priming samples left in (a few ms).
-- `--renderer blender`: scene and layer `effects` are skipped (it says so);
+- `--renderer blender`: layer `effects` are skipped; scene `effects` and
+  `overlay` layers are drawn by mui-cut over Blender's frames (on the GPU);
   a model's `fill` tint is ignored; frames are 8-bit PNG; point and spot
   light strength is matched to mui-stage at the nearest subject the light
   faces, so inverse-square falloff differs elsewhere; metals mirror the

@@ -358,6 +358,72 @@ fn a_lit_card_casts_a_shadow_on_the_floor_the_same_every_time() {
     );
 }
 
+/// A model's base-colour map shows over its UVs, and a normal map tilts
+/// its light.
+#[test]
+fn a_models_maps_colour_and_bend_its_surface() {
+    let Some(mut stage) = stage(64, 64) else {
+        return;
+    };
+    let v = |x: f32, y: f32| [x, y, 0., 0., 0., 1.];
+    stage.mesh_uv(
+        "quad",
+        &[v(-30., -30.), v(30., -30.), v(30., 30.), v(-30., 30.)],
+        &[[0., 1.], [1., 1.], [1., 0.], [0., 0.]],
+        &[0, 1, 2, 0, 2, 3],
+    );
+    // Left red, right green (two texels each, so a repeating filter does
+    // not wrap one into the other); a normal leaning 45 degrees along +u.
+    let rg: Vec<u8> = [
+        [255, 0, 0, 255],
+        [255, 0, 0, 255],
+        [0, 255, 0, 255],
+        [0, 255, 0, 255],
+    ]
+    .concat();
+    stage.texture("rg", &rg, [4, 1], true);
+    stage.texture("lean", &[218, 128, 218, 255], [1, 1], false);
+    let shot = |maps: [Option<String>; 3]| Shot {
+        models: vec![Model {
+            mesh: "quad".into(),
+            transform: Mat4::IDENTITY,
+            color: [1.; 4],
+            material: Material {
+                metallic: 0.,
+                roughness: 1.,
+                ..Material::SLAB
+            },
+            cast: false,
+            receive: false,
+            maps,
+        }],
+        lights: vec![Light {
+            direction: [0., 0., -1.],
+            ..Light::new(LightKind::Directional)
+        }],
+        clear: Some([0.; 3]),
+        post: Post::NONE,
+        ..Shot::new(Camera::front(64., 30.))
+    };
+    let mut px = |maps: [Option<String>; 3], x: usize| {
+        let f = stage.render(0., 0., 1, &|_| shot(maps.clone())).unwrap();
+        <[f32; 4]>::try_from(&f.rgba[(32 * 64 + x) * 4..][..4]).unwrap()
+    };
+    let (left, right) = (
+        px([Some("rg".into()), None, None], 18),
+        px([Some("rg".into()), None, None], 46),
+    );
+    assert!(left[0] > 0.8 && left[1] < 0.1, "left {left:?}");
+    assert!(right[1] > 0.8 && right[0] < 0.1, "right {right:?}");
+    let flat = px(Default::default(), 32)[0];
+    let leant = px([None, Some("lean".into()), None], 32)[0];
+    assert!(
+        // cos 45 = 0.707 of the light, 0.858 once sRGB-encoded.
+        (leant - 0.858 * flat).abs() < 0.03,
+        "normal map: {leant} of {flat}"
+    );
+}
+
 #[test]
 fn a_model_draws_and_lights_from_its_mesh() {
     let Some(mut stage) = stage(64, 64) else {
@@ -383,6 +449,7 @@ fn a_model_draws_and_lights_from_its_mesh() {
             },
             cast: true,
             receive: true,
+            maps: Default::default(),
         }],
         lights,
         clear: Some([0.; 3]),
@@ -498,6 +565,7 @@ fn a_metal_lit_only_by_the_environment_mirrors_it() {
             },
             cast: false,
             receive: false,
+            maps: Default::default(),
         }],
         // Ambient only, so without the environment the metal is lit.
         lights: vec![Light {
@@ -603,6 +671,7 @@ fn ambient_occlusion_darkens_a_contact_crease_not_an_open_floor() {
                 },
                 cast: false,
                 receive: false,
+                maps: Default::default(),
             }],
             lights: vec![Light::new(LightKind::Ambient)],
             floor: Some(floor),
@@ -891,4 +960,103 @@ fn beauty_samples_antialias_an_edge_past_msaa() {
     // And the same every time.
     let a = stage.beauty(0., 0., 16, &shot).unwrap().rgba;
     assert_eq!(a, stage.beauty(0., 0., 16, &shot).unwrap().rgba);
+}
+
+#[test]
+fn a_slabs_walls_are_built_once_while_its_size_depth_and_outline_hold() {
+    let Some(mut stage) = stage(160, 90) else {
+        return;
+    };
+    let size = Size::new(80., 45.);
+    stage.layer("l", &halves(size), size, 1.).unwrap();
+    // A fresh outline every subframe, as mui-cut makes one: equal content
+    // is the same walls.
+    let shot = |depth: f32| {
+        move |t: f64| {
+            let ring = mui_geometry::Path::polyline(
+                [(0., 0.), (80., 0.), (80., 45.), (0., 45.)]
+                    .map(|(x, y)| mui_geometry::Point::new(x, y)),
+                true,
+            );
+            Shot {
+                planes: vec![
+                    Plane::new("l", 80., 45.)
+                        .rotate(0., 30. + t as f32 * 40., 0.)
+                        .depth(depth)
+                        .outline(Arc::new(ring)),
+                ],
+                post: Post::NONE,
+                ..Shot::new(Camera::front(45., 30.))
+            }
+        }
+    };
+    stage.render(0.5, 0.1, 4, &shot(20.)).unwrap();
+    stage.render(0.6, 0.1, 4, &shot(20.)).unwrap();
+    assert_eq!(stage.walls_built, 1, "eight subframes, one set of walls");
+    stage.render(0.7, 0.1, 2, &shot(30.)).unwrap();
+    assert_eq!(stage.walls_built, 2, "a new depth builds new walls");
+    assert_eq!(stage.walls.len(), 1, "the old ones are dropped");
+}
+
+#[test]
+fn a_point_light_casts_soft_shadows_from_its_cube() {
+    let Some(mut stage) = stage(128, 128) else {
+        return;
+    };
+    stage
+        .layer("l", &white(Size::new(64., 64.)), Size::new(64., 64.), 1.)
+        .unwrap();
+    // A lamp 200 units up at x = -60, a card covering x < 0 halfway down:
+    // the shadow's edge falls on the floor at x = 60, which the camera
+    // looking down sees right of the card.
+    let shot = |shadows: bool, softness: f32| {
+        let mut floor = Floor::at(0.);
+        floor.color = [0.5; 3];
+        floor.reflect = 0.;
+        let mut lamp = Light::new(LightKind::Point);
+        lamp.position = [-60., 200., 0.];
+        lamp.shadows = shadows;
+        lamp.softness = softness;
+        Shot {
+            planes: vec![
+                Plane::new("l", 400., 400.)
+                    .rotate(-90., 0., 0.)
+                    .at(-200., 100., 0.),
+            ],
+            lights: vec![lamp],
+            floor: Some(floor),
+            clear: Some([0.; 3]),
+            post: Post::NONE,
+            ..Shot::new(Camera {
+                eye: [0., 400., 0.],
+                target: [0., 0., 0.],
+                fov: 30.,
+                roll: 0.,
+            })
+        }
+    };
+    let row =
+        |f: &Frame| -> Vec<f32> { (0..128).map(|x| f.rgba[(64 * 128 + x) * 4 + 1]).collect() };
+    let lit = stage.render(0., 0., 1, &|_| shot(false, 1.)).unwrap();
+    let a = stage.render(0., 0., 1, &|_| shot(true, 1.)).unwrap();
+    let b = stage.render(0., 0., 1, &|_| shot(true, 1.)).unwrap();
+    assert_eq!(a.rgba, b.rgba, "the cube renders the same every time");
+    let (lit, a) = (row(&lit), row(&a));
+    // Left of the edge (x 60, pixel 100) is shadowed, right of it lit as
+    // with no shadow at all.
+    assert!(a[80] < lit[80] * 0.2, "shadowed: {} of {}", a[80], lit[80]);
+    assert!(
+        (a[120] - lit[120]).abs() < lit[120] * 0.05,
+        "lit: {} of {}",
+        a[120],
+        lit[120]
+    );
+    // Beauty moves the lamp across its area: a wider light, a wider edge.
+    let mut penumbra = |softness: f32| {
+        let f = stage.beauty(0., 0., 32, &|_| shot(true, softness)).unwrap();
+        ramp(&row(&f)[70..128])
+    };
+    let (hard, soft) = (penumbra(0.5), penumbra(6.));
+    assert!(hard <= 4, "a small lamp is nearly hard: {hard} px");
+    assert!(soft >= 6 && soft >= 2 * hard, "{hard} px -> {soft} px");
 }

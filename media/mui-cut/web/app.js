@@ -785,6 +785,14 @@ function kindFields(l) {
     if (l.layout === 'path') field('along', input(l.along ?? '', v => set('along', v, ''), 'area'));
     field('orient', choice(l.orient ?? false, ['false', 'true'], v => set('orient', v === 'true', false)));
   }
+  // 3D: drawn flat over the shot and its effects (a caption, a logo).
+  if (scene().mode === '3d' && !['camera', 'light', 'model', 'audio'].includes(l.kind)) {
+    const c = document.createElement('input'); c.type = 'checkbox';
+    c.checked = !!l.overlay; c.dataset.overlay = '';
+    c.title = 'Draw flat over the 3D shot and its effects, as in 2D: a caption or a logo';
+    c.onchange = () => set('overlay', c.checked, false);
+    field('overlay', c);
+  }
 }
 function groupHeader(l, group, i) {
   const list = l[group], item = list[i];

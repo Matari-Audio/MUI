@@ -810,6 +810,70 @@ fn blender_renders_a_small_3d_still_and_then_reuses_it() {
     assert_ne!(grained, std::fs::read(&out).unwrap());
 }
 
+/// Blender plays a model's glTF animation at the frame's time, as
+/// mui-stage does: the toy's knee is straight at 0 s and bent at 1 s, and
+/// the caption overlay is drawn over both.
+#[test]
+fn blender_plays_a_models_animation_at_the_frames_time() {
+    let ok = Command::new("blender")
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if !ok {
+        eprintln!("skipped: no blender on PATH");
+        return;
+    }
+    let d = scratch("blender-toy");
+    let ex = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples");
+    std::fs::copy(ex.join("toy.glb"), d.join("toy.glb")).unwrap();
+    // The camera held still: only the model moves.
+    let mut doc: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(ex.join("stage3d-overlay.cut.json")).unwrap(),
+    )
+    .unwrap();
+    doc["scenes"][0]["layers"][0]["x"] = serde_json::json!(600.0);
+    std::fs::write(d.join("stage3d-overlay.cut.json"), doc.to_string()).unwrap();
+    let still = |t: &str| {
+        let out = d.join(format!("f{t}.png"));
+        let o = Command::new(BIN)
+            .arg("still")
+            .arg(d.join("stage3d-overlay.cut.json"))
+            .args([
+                "--renderer",
+                "blender",
+                "--samples",
+                "4",
+                "--size",
+                "320x180",
+            ])
+            .args(["--t", t, "-o"])
+            .arg(&out)
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        let dec = png::Decoder::new(std::io::BufReader::new(std::fs::File::open(&out).unwrap()));
+        let mut r = dec.read_info().unwrap();
+        assert_eq!(r.info().color_type, png::ColorType::Rgba);
+        let mut buf = vec![0; r.output_buffer_size().unwrap()];
+        r.next_frame(&mut buf).unwrap();
+        buf
+    };
+    let (a, b) = (still("0"), still("1"));
+    let px = |buf: &[u8], x: usize, y: usize| {
+        let i = (y * 320 + x) * 4;
+        [buf[i], buf[i + 1], buf[i + 2]]
+    };
+    let moved = a
+        .iter()
+        .zip(&b)
+        .filter(|(x, y)| x.abs_diff(**y) > 40)
+        .count();
+    assert!(moved > 300, "{moved} channels moved");
+    // The caption: white text on the dark plate, low in the middle.
+    let white = |buf: &[u8]| (150..170).any(|y| (110..210).any(|x| px(buf, x, y)[0] > 200));
+    assert!(white(&a) && white(&b));
+}
+
 #[test]
 fn blender_refuses_2d_scenes_and_says_when_it_is_missing() {
     let out = scratch("blender-errors").join("f.png");

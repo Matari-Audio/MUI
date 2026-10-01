@@ -135,6 +135,10 @@ pub const STUDIO: &str = "studio";
 /// floor's contact shadow.
 const SHADOW: u32 = 2048;
 const CONTACT_LAYER: u32 = MAX_LIGHTS as u32;
+/// A point light's six cube faces' side, texels: one array layer per face,
+/// six per light. A light's shadow index past this is a point light's.
+const CUBE: u32 = 1024;
+const CUBE_BASE: u32 = 8;
 const BLOOM_LEVELS: usize = 6;
 
 /// Where the camera is and what it sees. World units are logical pixels,
@@ -488,7 +492,7 @@ pub enum LightKind {
     Ambient,
     /// Parallel rays along `direction` (the sun).
     Directional,
-    /// From `position` every way; no shadow.
+    /// From `position` every way; a cube of shadow maps.
     Point,
     /// From `position` along `direction`, in a cone.
     Spot,
@@ -510,8 +514,8 @@ pub struct Light {
     /// fades (0 hard edge, 1 all soft).
     pub cone: f32,
     pub feather: f32,
-    /// Directional and spot: cast a shadow map, softened by `softness`
-    /// shadow texels.
+    /// Cast a shadow map (a cube of six for a point light), softened by
+    /// `softness` shadow texels.
     pub shadows: bool,
     pub softness: f32,
 }
@@ -541,6 +545,10 @@ pub struct Model {
     pub material: Material,
     pub cast: bool,
     pub receive: bool,
+    /// Images [`Stage::texture`] uploaded, over the mesh's UVs: base colour
+    /// (times `color`), a tangent-space normal map, and metallic (blue) and
+    /// roughness (green) times the material's, as glTF has them.
+    pub maps: [Option<String>; 3],
 }
 
 /// Distance fog: surfaces fade into `color` between `near` and `far` units
@@ -699,8 +707,19 @@ struct Pipelines {
     glass_solid: wgpu::RenderPipeline,
 }
 
+/// A slab's walls, uploaded: kept while a plane of the same size, depth
+/// and outline is drawn.
+struct Walls {
+    size: [f32; 2],
+    depth: f32,
+    outline: Option<Arc<Path>>,
+    buf: Option<(wgpu::Buffer, u32)>,
+    used: bool,
+}
+
 struct Mesh {
     vertices: wgpu::Buffer,
+    uvs: wgpu::Buffer,
     indices: wgpu::Buffer,
     count: u32,
     /// Local bounds.
@@ -752,6 +771,17 @@ pub struct Stage {
     bloom: Vec<wgpu::TextureView>,
     layers: HashMap<String, Layer>,
     meshes: HashMap<String, Mesh>,
+    /// Models' images ([`Stage::texture`]), the white and flat-normal
+    /// stand-ins for a map a model has not, the repeating sampler they
+    /// take, and a bind group per set of maps in use.
+    images: HashMap<String, wgpu::TextureView>,
+    blank: [wgpu::TextureView; 2],
+    repeat: wgpu::Sampler,
+    map_groups: HashMap<[Option<String>; 3], wgpu::BindGroup>,
+    /// Extruded planes' walls from the last subframe.
+    walls: Vec<Walls>,
+    /// How many wall meshes were ever built (the cache's test reads it).
+    walls_built: u64,
     /// One Vello pipeline set for every layer, resized to each in turn;
     /// made by the first [`Stage::layer`] (a caller painting its own
     /// layers through [`Stage::layer_target`] never needs it).
@@ -763,9 +793,10 @@ pub struct Stage {
     present_format: wgpu::TextureFormat,
     shadow_layout: wgpu::BindGroupLayout,
     shadow_sampler: wgpu::Sampler,
-    /// The shadow maps and their bind group, made by the first lit shot
-    /// that casts a shadow.
-    shadows: Option<(wgpu::Texture, wgpu::BindGroup)>,
+    /// The shadow maps, the point lights' cube faces (made by the first
+    /// point light that casts a shadow) and their bind group, made by the
+    /// first lit shot that casts a shadow.
+    shadows: Option<Shadows>,
     /// Bound where no shadow map is (or while one is being drawn).
     no_shadows: wgpu::BindGroup,
     /// Set by the device-lost callback of a device [`Stage::new`] opened.
@@ -798,6 +829,40 @@ fn target(
         view_formats: &[],
     })
 }
+/// A model's image, uploaded (no mips).
+fn image(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    rgba: &[u8],
+    [w, h]: [u32; 2],
+    srgb: bool,
+) -> wgpu::Texture {
+    use wgpu::util::DeviceExt;
+    device.create_texture_with_data(
+        queue,
+        &wgpu::TextureDescriptor {
+            label: Some("mui-stage model map"),
+            size: wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: if srgb {
+                wgpu::TextureFormat::Rgba8UnormSrgb
+            } else {
+                wgpu::TextureFormat::Rgba8Unorm
+            },
+            usage: wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        },
+        wgpu::util::TextureDataOrder::LayerMajor,
+        rgba,
+    )
+}
+
 fn view(t: &wgpu::Texture) -> wgpu::TextureView {
     t.create_view(&wgpu::TextureViewDescriptor::default())
 }
@@ -940,6 +1005,14 @@ impl Stage {
                     1,
                     wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
                 ),
+                entry(
+                    2,
+                    wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::D2Array,
+                        multisampled: false,
+                    },
+                ),
             ],
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -958,7 +1031,8 @@ impl Stage {
             compare: Some(wgpu::CompareFunction::LessEqual),
             ..Default::default()
         });
-        let no_shadows = shadow_group(&device, &shadow_layout, &shadow_sampler, 1, 1).1;
+        let none = depth_array(&device, 1, 1);
+        let no_shadows = shadow_group(&device, &shadow_layout, &shadow_sampler, &none, &none);
         // The environment wraps round in u and stops at the poles.
         let env_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             address_mode_u: wgpu::AddressMode::Repeat,
@@ -994,6 +1068,15 @@ impl Stage {
             anisotropy_clamp: 16,
             ..Default::default()
         });
+        let repeat = device.create_sampler(&wgpu::SamplerDescriptor {
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let blank = [[255, 255, 255, 255], [128, 128, 255, 255]]
+            .map(|px| view(&image(&device, &queue, &px, [1, 1], false)));
         let present_format = wgpu::TextureFormat::Rgba8Unorm;
         let pipes = pipelines(&device, &layout, DEFAULT_BACKGROUND, present_format)?;
 
@@ -1099,6 +1182,12 @@ impl Stage {
             bloom,
             layers: HashMap::new(),
             meshes: HashMap::new(),
+            images: HashMap::new(),
+            blank,
+            repeat,
+            map_groups: HashMap::new(),
+            walls: Vec::new(),
+            walls_built: 0,
             renderer: None,
             readout: None,
             background_src: DEFAULT_BACKGROUND.into(),
@@ -1125,6 +1214,12 @@ impl Stage {
     /// Upload a triangle mesh as `id`: per vertex a position and a normal
     /// (y up, logical units), three indices per triangle.
     pub fn mesh(&mut self, id: &str, vertices: &[[f32; 6]], indices: &[u32]) {
+        self.mesh_uv(id, vertices, &[], indices);
+    }
+
+    /// [`Stage::mesh`] with a texture coordinate per vertex, which a
+    /// [`Model`]'s maps are sampled at (none: all at 0, 0).
+    pub fn mesh_uv(&mut self, id: &str, vertices: &[[f32; 6]], uvs: &[[f32; 2]], indices: &[u32]) {
         let init = |contents: &[u8], usage| {
             self.device
                 .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -1141,14 +1236,79 @@ impl Stage {
                 max[i] = max[i].max(v[i]);
             }
         }
+        let zeros;
+        let uvs = if uvs.len() == vertices.len() {
+            uvs
+        } else {
+            zeros = vec![[0f32; 2]; vertices.len()];
+            &zeros
+        };
         let mesh = Mesh {
             vertices: init(bytemuck::cast_slice(vertices), wgpu::BufferUsages::VERTEX),
+            uvs: init(bytemuck::cast_slice(uvs), wgpu::BufferUsages::VERTEX),
             indices: init(bytemuck::cast_slice(indices), wgpu::BufferUsages::INDEX),
             count: indices.len() as u32,
             min,
             max,
         };
         self.meshes.insert(id.into(), mesh);
+    }
+
+    /// Keep straight RGBA `rgba`, `size` pixels, as image `id` for a
+    /// [`Model`]'s maps, replacing any before; `srgb` for a colour (base
+    /// colour), not for data (normals, metallic-roughness).
+    pub fn texture(&mut self, id: &str, rgba: &[u8], size: [u32; 2], srgb: bool) {
+        let t = image(&self.device, &self.queue, rgba, size, srgb);
+        self.images.insert(id.into(), view(&t));
+        self.map_groups
+            .retain(|k, _| !k.iter().flatten().any(|m| m == id));
+    }
+
+    /// Whether [`Stage::texture`] uploaded `id`.
+    pub fn has_texture(&self, id: &str) -> bool {
+        self.images.contains_key(id)
+    }
+
+    /// The bind group of a model's maps, a stand-in for each it has not.
+    fn maps_group(&mut self, maps: &[Option<String>; 3]) -> wgpu::BindGroup {
+        if let Some(g) = self.map_groups.get(maps) {
+            return g.clone();
+        }
+        let pick = |i: usize, blank: usize| {
+            maps[i]
+                .as_ref()
+                .and_then(|m| self.images.get(m))
+                .unwrap_or(&self.blank[blank])
+        };
+        let (base, normal, mr) = (pick(0, 0), pick(1, 1), pick(2, 0));
+        let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("mui-stage model maps"),
+            layout: &self.tex_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(base),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.repeat),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.post.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(normal),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(mr),
+                },
+            ],
+        });
+        self.map_groups.insert(maps.clone(), group.clone());
+        group
     }
 
     /// Whether [`Stage::mesh`] uploaded `id`.
@@ -1171,7 +1331,8 @@ impl Stage {
             (size.width * supersample).ceil().clamp(1., 8192.) as u32,
             (size.height * supersample).ceil().clamp(1., 8192.) as u32,
         );
-        let target = self.layer_target(id, [w, h], wgpu::TextureFormat::Rgba8Unorm, u32::MAX)?;
+        let target =
+            view(&self.layer_target(id, [w, h], wgpu::TextureFormat::Rgba8Unorm, u32::MAX)?);
         let renderer = match &mut self.renderer {
             Some(r) => r,
             none => none.insert(pollster::block_on(GpuRenderer::new(
@@ -1193,14 +1354,15 @@ impl Stage {
     /// 8-bit one), for the caller to paint premultiplied sRGB into, as
     /// Vello does; then [`Stage::layer_done`]. It is kept while the size and
     /// format are. `mips` caps the mip chain: an atlas of many layers wants
-    /// few, so a far-off one does not bleed into its neighbours.
+    /// few, so a far-off one does not bleed into its neighbours. It can be
+    /// copied to and from, so a caller can post-process part of it.
     pub fn layer_target(
         &mut self,
         id: &str,
         size: [u32; 2],
         format: wgpu::TextureFormat,
         mips: u32,
-    ) -> Result<wgpu::TextureView, Error> {
+    ) -> Result<wgpu::Texture, Error> {
         let [w, h] = size.map(|v| v.clamp(1, 8192));
         let stale = self.layers.get(id).is_none_or(|l| {
             let s = l.raw.size();
@@ -1219,7 +1381,7 @@ impl Stage {
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format,
-                usage: RT,
+                usage: RT | wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             });
             // A slab seen far off or edge-on samples a mip, not a shimmer.
@@ -1243,7 +1405,7 @@ impl Stage {
                 },
             );
         }
-        Ok(view(&self.layers[id].raw))
+        Ok(self.layers[id].raw.clone())
     }
 
     /// Linearise and mipmap what was painted into [`Stage::layer_target`].
@@ -1701,11 +1863,26 @@ impl Stage {
         Ok(())
     }
 
-    /// The shadow maps, made on first use.
-    fn shadow_maps(&mut self) -> &(wgpu::Texture, wgpu::BindGroup) {
+    /// The shadow maps, made on first use, and with `cube` the point
+    /// lights' faces too.
+    fn shadow_maps(&mut self, cube: bool) -> &Shadows {
         let (device, layout, sampler) = (&self.device, &self.shadow_layout, &self.shadow_sampler);
-        self.shadows
-            .get_or_insert_with(|| shadow_group(device, layout, sampler, SHADOW, CONTACT_LAYER + 1))
+        let s = self.shadows.get_or_insert_with(|| {
+            let flat = depth_array(device, SHADOW, CONTACT_LAYER + 1);
+            let none = depth_array(device, 1, 1);
+            let group = shadow_group(device, layout, sampler, &flat, &none);
+            Shadows {
+                flat,
+                cube: None,
+                group,
+            }
+        });
+        if cube && s.cube.is_none() {
+            let c = depth_array(device, CUBE, 6 * MAX_LIGHTS as u32);
+            s.group = shadow_group(device, layout, sampler, &s.flat, &c);
+            s.cube = Some(c);
+        }
+        s
     }
 
     /// One subframe into `self.hdr`.
@@ -1754,6 +1931,7 @@ impl Stage {
         // Lights, and a shadow map layer for each that casts one.
         let bounds = caster_bounds(&planes, &models, &self.meshes);
         let mut maps = Vec::new();
+        let mut cubes = Vec::new();
         if !s.lights.is_empty() {
             g[43] = 1.;
         }
@@ -1786,12 +1964,25 @@ impl Stage {
             g[o + 12] = l.range.max(0.);
             g[o + 13] = -1.;
             g[o + 14] = l.softness.max(0.);
-            if let (true, Some(b)) = (l.shadows && l.kind != LightKind::Point, bounds) {
-                let (m, bias) = shadow_view(l, dir, b);
-                g[108 + slot * 16..][..16].copy_from_slice(&m.0);
-                g[o + 13] = slot as f32;
-                g[o + 15] = bias;
-                maps.push(slot as u32);
+            if let (true, Some((lo, hi))) = (l.shadows, bounds) {
+                if l.kind == LightKind::Point {
+                    // Six faces around it, as far as the light or the
+                    // casters reach.
+                    let c: [f32; 3] = std::array::from_fn(|i| (lo[i] + hi[i]) * 0.5);
+                    let r = (0..3).map(|i| (hi[i] - lo[i]).powi(2)).sum::<f32>().sqrt() * 0.5;
+                    let p = l.position;
+                    let reach = (0..3).map(|i| (p[i] - c[i]).powi(2)).sum::<f32>().sqrt() + r;
+                    g[o + 7] = if l.range > 0. { l.range } else { reach }.max(8.);
+                    g[o + 13] = (CUBE_BASE as usize + slot) as f32;
+                    g[o + 15] = 0.;
+                    cubes.push(slot as u32);
+                } else {
+                    let (m, bias) = shadow_view(l, dir, (lo, hi));
+                    g[108 + slot * 16..][..16].copy_from_slice(&m.0);
+                    g[o + 13] = slot as f32;
+                    g[o + 15] = bias;
+                    maps.push(slot as u32);
+                }
             }
             slot += 1;
         }
@@ -1924,25 +2115,31 @@ impl Stage {
             if let Some((flip, mirror)) = flip {
                 put(k + i, flip * p.model(), rows(mirror));
             }
-            walls.push(if p.depth > 0. {
-                let v = wall_mesh(p);
-                (!v.is_empty()).then(|| {
-                    let buf = self
-                        .device
-                        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                            label: Some("mui-stage walls"),
-                            contents: bytemuck::cast_slice(&v),
-                            usage: wgpu::BufferUsages::VERTEX,
-                        });
-                    (buf, (v.len() / 6) as u32)
-                })
-            } else {
-                None
-            });
+            walls.push(if p.depth > 0. { self.walls_of(p) } else { None });
         }
+        self.walls.retain_mut(|w| std::mem::take(&mut w.used));
         for (i, m) in models.iter().enumerate() {
             let [a, b, c] = material(&m.material, m.receive, m.material.thickness, false);
-            let rows = |mirror| [[0., 0., 0., 1.], m.color, mirror, [0., 0., 1., 1.], a, b, c];
+            // `size.x`: it has a normal map.
+            let bumped = if m.maps[1]
+                .as_ref()
+                .is_some_and(|n| self.images.contains_key(n))
+            {
+                1.
+            } else {
+                0.
+            };
+            let rows = |mirror| {
+                [
+                    [bumped, 0., 0., 1.],
+                    m.color,
+                    mirror,
+                    [0., 0., 1., 1.],
+                    a,
+                    b,
+                    c,
+                ]
+            };
             put(n + i, m.transform, rows([0.; 4]));
             if let Some((flip, mirror)) = flip {
                 put(k + n + i, flip * m.transform, rows(mirror));
@@ -1973,10 +2170,21 @@ impl Stage {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
         // Glass lets most light through: it casts no shadow map.
         let casts = |m: &Material| m.transmission < 0.5;
-        if !maps.is_empty() {
-            let shadow = self.shadow_maps().0.clone();
-            for &layer in &maps {
-                let target = shadow.create_view(&wgpu::TextureViewDescriptor {
+        if !maps.is_empty() || !cubes.is_empty() {
+            let shadows = self.shadow_maps(!cubes.is_empty());
+            let (flat, cube) = (shadows.flat.clone(), shadows.cube.clone());
+            // Each map: its texture, its layer, and the instance index the
+            // shaders read its view from (a cube face's past CUBE_BASE).
+            let targets = maps
+                .iter()
+                .map(|&l| (&flat, l, l))
+                .chain(cube.iter().flat_map(|c| {
+                    cubes.iter().flat_map(move |&s| {
+                        (0..6).map(move |f| (c, s * 6 + f, CUBE_BASE + s * 6 + f))
+                    })
+                }));
+            for (tex, layer, k) in targets {
+                let target = tex.create_view(&wgpu::TextureViewDescriptor {
                     dimension: Some(wgpu::TextureViewDimension::D2),
                     base_array_layer: layer,
                     array_layer_count: Some(1),
@@ -1997,7 +2205,7 @@ impl Stage {
                 pass.set_bind_group(2, &none, &[]);
                 pass.set_bind_group(3, &self.no_shadows, &[]);
                 // The instance index picks the light's matrix.
-                let inst = layer..layer + 1;
+                let inst = k..k + 1;
                 for (i, p) in planes
                     .iter()
                     .enumerate()
@@ -2096,12 +2304,18 @@ impl Stage {
             });
         }
         glass.sort_by(|a, b| b.0.total_cmp(&a.0));
+        let map_groups: Vec<wgpu::BindGroup> = opaque
+            .iter()
+            .map(|&i| self.maps_group(&models[i].maps))
+            .collect();
         let draw = |pass: &mut wgpu::RenderPass<'_>, base: usize| {
             pass.set_pipeline(&self.pipes.mesh);
-            for &i in &opaque {
+            for (&i, maps) in opaque.iter().zip(&map_groups) {
                 let mesh = &self.meshes[&models[i].mesh];
                 pass.set_bind_group(1, &self.group1, &[((base + n + i) as u64 * SLOT) as u32]);
+                pass.set_bind_group(2, maps, &[]);
                 pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+                pass.set_vertex_buffer(1, mesh.uvs.slice(..));
                 pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
                 pass.draw_indexed(0..mesh.count, 0, 0..1);
             }
@@ -2225,7 +2439,7 @@ impl Stage {
                 ..Default::default()
             });
             pass.set_bind_group(0, &self.group0, &[]);
-            let shadows = self.shadows.as_ref().map_or(&self.no_shadows, |s| &s.1);
+            let shadows = self.shadows.as_ref().map_or(&self.no_shadows, |s| &s.group);
             pass.set_bind_group(3, shadows, &[]);
             for &(_, i) in &glass {
                 pass.set_bind_group(1, &self.group1, &[(i as u64 * SLOT) as u32]);
@@ -2257,6 +2471,44 @@ impl Stage {
         }
         self.queue.submit([enc.finish()]);
         Ok(())
+    }
+
+    /// Plane `p`'s walls: the ones last built for its size, depth and
+    /// outline, or new ones.
+    fn walls_of(&mut self, p: &Plane) -> Option<(wgpu::Buffer, u32)> {
+        let same = |w: &Walls| {
+            w.size == p.size
+                && w.depth == p.depth
+                && match (&w.outline, &p.outline) {
+                    (Some(a), Some(b)) => Arc::ptr_eq(a, b) || a == b,
+                    (None, None) => true,
+                    _ => false,
+                }
+        };
+        if let Some(w) = self.walls.iter_mut().find(|w| same(w)) {
+            w.used = true;
+            return w.buf.clone();
+        }
+        let v = wall_mesh(p);
+        let buf = (!v.is_empty()).then(|| {
+            let buf = self
+                .device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("mui-stage walls"),
+                    contents: bytemuck::cast_slice(&v),
+                    usage: wgpu::BufferUsages::VERTEX,
+                });
+            (buf, (v.len() / 6) as u32)
+        });
+        self.walls_built += 1;
+        self.walls.push(Walls {
+            size: p.size,
+            depth: p.depth,
+            outline: p.outline.clone(),
+            buf: buf.clone(),
+            used: true,
+        });
+        buf
     }
 
     /// The frame so far and its distances into the chain, then halved down
@@ -2351,7 +2603,7 @@ impl Stage {
         pass.set_bind_group(0, &self.group0, &[]);
         pass.set_bind_group(1, &self.group1, &[0]);
         pass.set_bind_group(2, none, &[]);
-        let shadows = self.shadows.as_ref().map_or(&self.no_shadows, |s| &s.1);
+        let shadows = self.shadows.as_ref().map_or(&self.no_shadows, |s| &s.group);
         pass.set_bind_group(3, shadows, &[]);
         pass
     }
@@ -2623,15 +2875,9 @@ fn env_group(
     })
 }
 
-/// Shadow maps `size` texels square, `layers` deep, and their bind group.
-fn shadow_group(
-    device: &wgpu::Device,
-    layout: &wgpu::BindGroupLayout,
-    sampler: &wgpu::Sampler,
-    size: u32,
-    layers: u32,
-) -> (wgpu::Texture, wgpu::BindGroup) {
-    let tex = device.create_texture(&wgpu::TextureDescriptor {
+/// Depth maps `size` texels square, `layers` deep.
+fn depth_array(device: &wgpu::Device, size: u32, layers: u32) -> wgpu::Texture {
+    device.create_texture(&wgpu::TextureDescriptor {
         label: Some("mui-stage shadows"),
         size: wgpu::Extent3d {
             width: size,
@@ -2644,26 +2890,50 @@ fn shadow_group(
         format: DEPTH,
         usage: RT,
         view_formats: &[],
-    });
-    let all = tex.create_view(&wgpu::TextureViewDescriptor {
-        dimension: Some(wgpu::TextureViewDimension::D2Array),
-        ..Default::default()
-    });
-    let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+    })
+}
+
+/// The shadow maps a shot draws into and samples.
+struct Shadows {
+    /// A layer per directional or spot light, and the floor's contact view.
+    flat: wgpu::Texture,
+    /// Six faces per point light.
+    cube: Option<wgpu::Texture>,
+    group: wgpu::BindGroup,
+}
+
+/// Group 3: the flat maps, the comparison sampler and the cube faces.
+fn shadow_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    sampler: &wgpu::Sampler,
+    flat: &wgpu::Texture,
+    cube: &wgpu::Texture,
+) -> wgpu::BindGroup {
+    let all = |t: &wgpu::Texture| {
+        t.create_view(&wgpu::TextureViewDescriptor {
+            dimension: Some(wgpu::TextureViewDimension::D2Array),
+            ..Default::default()
+        })
+    };
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: None,
         layout,
         entries: &[
             wgpu::BindGroupEntry {
                 binding: 0,
-                resource: wgpu::BindingResource::TextureView(&all),
+                resource: wgpu::BindingResource::TextureView(&all(flat)),
             },
             wgpu::BindGroupEntry {
                 binding: 1,
                 resource: wgpu::BindingResource::Sampler(sampler),
             },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::TextureView(&all(cube)),
+            },
         ],
-    });
-    (tex, group)
+    })
 }
 
 fn normalize(v: [f32; 3]) -> [f32; 3] {
@@ -2890,6 +3160,15 @@ fn pipelines(
         step_mode: wgpu::VertexStepMode::Vertex,
         attributes: &wall_attrs,
     })];
+    let uv_attrs = wgpu::vertex_attr_array![2 => Float32x2];
+    let mesh_buf = [
+        wall_buf[0].clone(),
+        Some(wgpu::VertexBufferLayout {
+            array_stride: 8,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &uv_attrs,
+        }),
+    ];
     // `scene`: into the multisampled HDR target with depth.
     let make = |vs: &str,
                 fs: &str,
@@ -3013,13 +3292,13 @@ fn pipelines(
         ao_apply: make("vs_full", "fs_ao_apply", HDR, None, false, false, &[]),
         present: make("vs_full", "fs_final", present, None, false, false, &[]),
         mesh: make(
-            "vs_wall",
+            "vs_mesh",
             "fs_mesh",
             HDR,
             Some(premul),
             true,
             true,
-            &wall_buf,
+            &mesh_buf,
         ),
         shadow_face: shadow("vs_shadow_face", Some("fs_shadow_face"), &[]),
         shadow_solid: shadow("vs_shadow_solid", None, &wall_buf),

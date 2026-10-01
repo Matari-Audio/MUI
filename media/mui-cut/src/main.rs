@@ -503,13 +503,15 @@ impl Backend {
         } else {
             "eevee"
         };
-        let fx = if jobs.iter().any(|(s, _)| !s.effects.is_empty()) {
+        let fx = if jobs.iter().any(|(s, _)| s.composites_over_blender()) {
             let gpu = match yuv {
                 Some(y) => Offline::with_yuv(size, Engine::Classic, y),
                 None => Offline::new(size, Engine::Classic),
             };
             gpu.map_err(|e| {
-                eprintln!("mui-cut: effects need the GPU ({e}); Blender frames go without them");
+                eprintln!(
+                    "mui-cut: effects and overlays need the GPU ({e}); Blender frames go without them"
+                );
             })
             .ok()
         } else {

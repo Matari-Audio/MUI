@@ -252,6 +252,26 @@ pub(crate) fn eval(stack: &[Effect], t: f64) -> Vec<Fx> {
         .collect()
 }
 
+/// How far, in project pixels, `stack` spreads a layer past its edges.
+pub(crate) fn reach(stack: &[Fx]) -> f64 {
+    stack
+        .iter()
+        .map(|f| {
+            let v = |k: &str| match f.values.get(k) {
+                Some(Val::Num(v)) => v.abs(),
+                _ => 0.,
+            };
+            match f.kind.as_str() {
+                // Three deviations hold all but a trace of a gaussian.
+                "blur" => 3. * v("radius"),
+                "directional_blur" => v("length") / 2.,
+                "displace" | "chromatic" => v("amount"),
+                _ => 0.,
+            }
+        })
+        .sum()
+}
+
 impl Fx {
     /// The shader's `Params`, in schema order: a colour is four floats
     /// (straight sRGB, 0..1), a number one.

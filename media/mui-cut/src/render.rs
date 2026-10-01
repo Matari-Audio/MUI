@@ -215,24 +215,8 @@ impl Assets {
 
     /// Decode a PNG for image layers naming `path`.
     pub fn add_png(&mut self, path: &str, bytes: &[u8]) -> Result<(), String> {
-        let err = |e: png::DecodingError| format!("{path}: {e}");
-        let mut dec = png::Decoder::new(std::io::Cursor::new(bytes));
-        dec.set_transformations(png::Transformations::normalize_to_color8());
-        let mut reader = dec.read_info().map_err(err)?;
-        let mut buf = vec![0; reader.output_buffer_size().ok_or("png too large")?];
-        let info = reader.next_frame(&mut buf).map_err(err)?;
-        let px = &buf[..info.buffer_size()];
-        let rgba: Vec<u8> = match info.color_type {
-            png::ColorType::Rgba => px.to_vec(),
-            png::ColorType::Rgb => px.chunks(3).flat_map(|p| [p[0], p[1], p[2], 255]).collect(),
-            png::ColorType::GrayscaleAlpha => px
-                .chunks(2)
-                .flat_map(|p| [p[0], p[0], p[0], p[1]])
-                .collect(),
-            png::ColorType::Grayscale => px.iter().flat_map(|&g| [g, g, g, 255]).collect(),
-            png::ColorType::Indexed => return Err(format!("{path}: indexed png not expanded")),
-        };
-        let image = Image::rgba(info.width, info.height, rgba).ok_or("empty png")?;
+        let (rgba, [w, h]) = png_rgba(bytes).map_err(|e| format!("{path}: {e}"))?;
+        let image = Image::rgba(w, h, rgba).ok_or("empty png")?;
         self.images.insert(path.to_owned(), Arc::new(image));
         Ok(())
     }
@@ -396,7 +380,7 @@ impl Assets {
             quads: Vec::with_capacity(frame.layers.len()),
             parts: Vec::new(),
         };
-        for l in &frame.layers {
+        for l in frame.drawing_order() {
             if let Kind::Audio { .. } = l.kind {
                 continue;
             }
@@ -808,4 +792,26 @@ fn patch_panel(patch: &serde_json::Value, w: f64, h: f64) -> El {
         .h(h)
         .radius(14.)
         .fill(color(PANEL))
+}
+
+/// A PNG as straight RGBA and its size.
+pub(crate) fn png_rgba(bytes: &[u8]) -> Result<(Vec<u8>, [u32; 2]), String> {
+    let err = |e: png::DecodingError| e.to_string();
+    let mut dec = png::Decoder::new(std::io::Cursor::new(bytes));
+    dec.set_transformations(png::Transformations::normalize_to_color8());
+    let mut reader = dec.read_info().map_err(err)?;
+    let mut buf = vec![0; reader.output_buffer_size().ok_or("png too large")?];
+    let info = reader.next_frame(&mut buf).map_err(err)?;
+    let px = &buf[..info.buffer_size()];
+    let rgba: Vec<u8> = match info.color_type {
+        png::ColorType::Rgba => px.to_vec(),
+        png::ColorType::Rgb => px.chunks(3).flat_map(|p| [p[0], p[1], p[2], 255]).collect(),
+        png::ColorType::GrayscaleAlpha => px
+            .chunks(2)
+            .flat_map(|p| [p[0], p[0], p[0], p[1]])
+            .collect(),
+        png::ColorType::Grayscale => px.iter().flat_map(|&g| [g, g, g, 255]).collect(),
+        png::ColorType::Indexed => return Err("indexed png not expanded".into()),
+    };
+    Ok((rgba, [info.width, info.height]))
 }
