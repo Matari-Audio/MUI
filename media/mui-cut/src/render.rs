@@ -496,35 +496,40 @@ impl Assets {
             (l.x + x, l.y - y, s.z - z)
         };
         let mut out = Vec::new();
-        let mut slab = |id: String,
-                        kind: Kind,
-                        c: [f64; 2],
-                        depth,
-                        size: [f64; 2],
-                        look: (f64, f64, f64, Rgba)| {
-            let (scale, rotation, opacity, fill) = look;
-            let (x, y, z) = place(c, depth);
-            out.push(Drawn {
-                id,
-                kind,
-                x,
-                y,
-                scale: l.scale * scale,
-                rotation: l.rotation + rotation,
-                opacity: l.opacity * opacity,
-                width: size[0],
-                height: size[1],
-                radius: 0.,
-                fill,
-                plugin: None,
-                space: crate::three::Space {
-                    z,
-                    anchor_z: 0.,
-                    ..s.clone()
-                },
-                ..l.clone()
-            });
-        };
+        let mut slab =
+            |id: String,
+             kind: Kind,
+             c: [f64; 2],
+             depth,
+             size: [f64; 2],
+             look: (f64, f64, f64, Rgba, Option<crate::three::Surface>)| {
+                let (scale, rotation, opacity, fill, part) = look;
+                let (x, y, z) = place(c, depth);
+                out.push(Drawn {
+                    id,
+                    kind,
+                    x,
+                    y,
+                    scale: l.scale * scale,
+                    rotation: l.rotation + rotation,
+                    opacity: l.opacity * opacity,
+                    width: size[0],
+                    height: size[1],
+                    radius: 0.,
+                    fill,
+                    plugin: None,
+                    space: crate::three::Space {
+                        z,
+                        anchor_z: 0.,
+                        material: match (part, s.material) {
+                            (Some(p), Some(l)) => Some(p.or(&l)),
+                            (p, l) => p.or(l),
+                        },
+                        ..s.clone()
+                    },
+                    ..l.clone()
+                });
+            };
         let posed = poses(cap, p);
         let mut plated = std::collections::HashSet::new();
         for f in &cap.fragments {
@@ -543,14 +548,14 @@ impl Assets {
                     c,
                     0.,
                     [rw, rh],
-                    (1., 0., p.backdrop, l.fill),
+                    (1., 0., p.backdrop, l.fill, None),
                 );
                 continue;
             }
             let Some((info, pose)) = posed.iter().find(|(i, _)| i.path == f.group) else {
                 continue;
             };
-            let look = |fill| (pose.scale, pose.rotation, pose.opacity, fill);
+            let look = |fill| (pose.scale, pose.rotation, pose.opacity, fill, pose.material);
             let centre = |r: [f64; 4]| {
                 let c = pose.at * KPoint::new(r[0] + r[2] / 2., r[1] + r[3] / 2.);
                 [c.x, c.y]

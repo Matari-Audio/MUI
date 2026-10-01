@@ -174,6 +174,9 @@ pub struct Scene {
     /// 3D: image-based light, and reflections for metals.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub environment: Option<Environment>,
+    /// 3D: a sunlit sky with drifting clouds behind everything.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sky: Option<three::Sky>,
     /// 3D: ambient occlusion, for contact depth.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ao: Option<Ao>,
@@ -705,6 +708,7 @@ impl Layer {
     pub fn props_in(&self, three: bool) -> Vec<(String, Prop<'_>)> {
         use Prop::{Color, Num};
         let mut out: Vec<(String, Prop<'_>)> = Vec::new();
+        let mut colors = Vec::new();
         let mut num = |n: &str, a| out.push((n.to_owned(), Num(a)));
         match self.kind {
             Kind::Camera { .. } => {
@@ -825,7 +829,11 @@ impl Layer {
                 num(&format!("params.{i}.value"), &p.value);
             }
             for (n, a) in plugin::part_props(parts) {
-                num(&n, a);
+                match a {
+                    Prop::Num(a) => num(&n, a),
+                    // A part's `material.tint`.
+                    Prop::Color(a) => colors.push((n, a)),
+                }
             }
         }
         let vector = self.vector();
@@ -876,6 +884,7 @@ impl Layer {
             out.push(("edge".into(), Color(&self.edge)));
             out.extend(self.material.iter().flat_map(three::Material::props));
         }
+        out.extend(colors.into_iter().map(|(n, a)| (n, Color(a))));
         out
     }
 

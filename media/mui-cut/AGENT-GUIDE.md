@@ -71,7 +71,12 @@ with the keys already there: an exit after an entrance keeps both.
   clear; roughness 0.2 and up is frosted. A model is tinted by its
   `fill`, so set `"fill": "#ffffff"` for clear glass on a coloured glTF.
   `still` with `samples` gives the beauty frame (soft shadows, depth of
-  field) the final render will have.
+  field) the final render will have. A flat pane does not bend a far
+  sky (rightly): give it `bevel` for rims that do. A dark UI turned to
+  glass wants `print: 1` (its dark goes clear, its light stays as ink);
+  key `transmission` from 0, which crossfades, and per part
+  (`parts.<id>.material`) for a sweep. A scene's `sky` puts a sunlit,
+  clouded sky behind it all for glass to refract (mui-stage only).
 - **Plugins:** import once with `source_add`, then a plugin layer's
   `source` may be that id (it is written out in full). Parameters are
   `{"id": "filter", "field": "cutoff"}`; `patch_get` reports the same one

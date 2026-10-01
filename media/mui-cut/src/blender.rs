@@ -746,6 +746,10 @@ pub fn describe(
         })
         .collect::<Result<Vec<_>, _>>()?;
 
+    if scene.sky.is_some() {
+        // ponytail: no sky in Blender yet; a Sky Texture world would match it.
+        eprintln!("mui-cut: Blender draws no `sky`; the background colour shows behind");
+    }
     let world = scene.environment.as_ref().map(|e| {
         let file = (!e.hdri.is_empty()).then(|| dir.join(&e.hdri));
         let read = file

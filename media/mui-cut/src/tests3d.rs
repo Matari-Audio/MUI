@@ -1007,3 +1007,40 @@ fn a_gltf_model_shows_its_maps_and_animates() {
         assert!(moved > 2000, "{engine:?}: {moved} channels moved");
     }
 }
+
+/// A scene's `sky`: it fits the schema, puts the sun where `elevation` and
+/// `azimuth` say, drifts its clouds with `wind`, and is what the camera
+/// sees behind the layers instead of the background colour.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_sky_is_seen_behind_a_3d_scene() {
+    let src = r##"{"size":[320,180],"fps":30,"scenes":[{"name":"a","duration":2,"mode":"3d",
+        "background":"#000000","layers":[{"id":"cam","kind":"camera","rx":-20}],
+        "sky":{"elevation":[{"t":0,"v":90},{"t":1,"v":30}],"azimuth":90,"cover":0.5,"wind":0.25}}]}"##;
+    let doc: serde_json::Value = serde_json::from_str(src).unwrap();
+    let schema = Project::json_schema();
+    let v = jsonschema::validator_for(&schema).unwrap();
+    let errs: Vec<String> = v.iter_errors(&doc).map(|e| e.to_string()).collect();
+    assert!(errs.is_empty(), "{errs:?}");
+    let p = Project::load(src).unwrap();
+    assert_eq!(Project::load(&p.to_json()).unwrap().scenes, p.scenes);
+    let sky = |t: f64| eval(&p, &p.scenes[0], t).view.unwrap().sky.unwrap();
+    let up = sky(0.).sun;
+    assert!(up[1] > 0.999, "straight up at 90: {up:?}");
+    // 30 degrees up, 90 right of straight into the scene: world +x.
+    let s = sky(1.);
+    assert!((s.sun[0] - 0.866).abs() < 1e-3 && (s.sun[1] - 0.5).abs() < 1e-3);
+    assert!(s.sun[2].abs() < 1e-3);
+    assert_eq!(s.drift, [0.25, 0.]);
+    let Some(mut g) = offline(&p, Engine::Classic) else {
+        return;
+    };
+    let px = frame(&mut g, &[eval(&p, &p.scenes[0], 1.)]);
+    // Looking up into it: blue sky and cloud, not the black background.
+    let at = |x: usize, y: usize| &px[(y * 320 + x) * 4..][..3];
+    let top = at(160, 10);
+    assert!(top[2] > 60 && top[2] >= top[0], "sky up top: {top:?}");
+    let lit = (0..320).map(|x| at(x, 60)[1]).collect::<Vec<_>>();
+    let (lo, hi) = (lit.iter().min().unwrap(), lit.iter().max().unwrap());
+    assert!(hi - lo > 20, "clouds across it: {lo}..{hi}");
+}
