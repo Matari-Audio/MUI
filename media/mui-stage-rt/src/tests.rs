@@ -344,12 +344,12 @@ fn an_adapter_without_ray_queries_falls_back() {
 
 #[test]
 fn the_shaders_have_the_stage_sky_and_validate() {
+    use wgpu::naga::{front::wgsl, valid};
     let (tracer, filter, composite) = sources().unwrap();
     assert!(tracer.contains("fn sky_seen(") && !tracer.contains("{{SKY}}"));
     assert!(filter.contains("fn denoise(") && composite.contains("fn fs_composite("));
     // Every module parses and validates, with no GPU: CI checks the WGSL
     // the ray-query tests cannot run there.
-    use wgpu::naga::{front::wgsl, valid};
     for src in [&tracer, &filter, &composite] {
         let module = wgsl::parse_str(src).unwrap_or_else(|e| panic!("{}", e.emit_to_string(src)));
         valid::Validator::new(valid::ValidationFlags::all(), valid::Capabilities::all())
