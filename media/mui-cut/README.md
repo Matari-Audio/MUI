@@ -360,7 +360,8 @@ mesh. Scenes without it render exactly as before.
 - `camera` layer (the last visible one shoots): orbits its target by `rx`,
   `ry` at `distance`, `fov` (vertical degrees), `rotation` rolls it, `dolly`
   moves it toward the target, `path` (SVG path data, moved along by
-  `path_offset`) carries it in x/z, `look_at` aims it at a layer, `focus` and
+  `path_offset`) carries it in x/z, `look_at` aims it at a layer from where
+  its own `x`, `y`, `z` put it (no orbit), `focus` and
   `aperture` add depth of field. Without one, the default camera sees the
   z=0 plane as the 2D frame. Every property is keyable like any other.
 - `light` layers, `"type"`: `directional` (default), `spot`, `point`,
@@ -945,8 +946,7 @@ same reason.
   `src/sparse.rs`.
 - 3D: point lights cast no shadows; glTF is `.glb` only, triangles and
   material factors (no textures, skins or animation); a 3D scene has no 2D
-  overlay layer; walls of extruded layers are rebuilt every subframe;
-  `look_at` ignores the camera's own x/y/z; `check`'s pixel lints skip
+  overlay layer; `check`'s pixel lints skip
   3D scenes. A layer's `effects` are skipped in 3D: a layer is a slab
   textured from the shared atlas, and the effect passes are full-frame, so
   a layer stack would need its own padded texture per layer (a blur or

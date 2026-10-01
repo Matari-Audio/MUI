@@ -699,6 +699,16 @@ struct Pipelines {
     glass_solid: wgpu::RenderPipeline,
 }
 
+/// A slab's walls, uploaded: kept while a plane of the same size, depth
+/// and outline is drawn.
+struct Walls {
+    size: [f32; 2],
+    depth: f32,
+    outline: Option<Arc<Path>>,
+    buf: Option<(wgpu::Buffer, u32)>,
+    used: bool,
+}
+
 struct Mesh {
     vertices: wgpu::Buffer,
     indices: wgpu::Buffer,
@@ -752,6 +762,10 @@ pub struct Stage {
     bloom: Vec<wgpu::TextureView>,
     layers: HashMap<String, Layer>,
     meshes: HashMap<String, Mesh>,
+    /// Extruded planes' walls from the last subframe.
+    walls: Vec<Walls>,
+    /// How many wall meshes were ever built (the cache's test reads it).
+    walls_built: u64,
     /// One Vello pipeline set for every layer, resized to each in turn;
     /// made by the first [`Stage::layer`] (a caller painting its own
     /// layers through [`Stage::layer_target`] never needs it).
@@ -1099,6 +1113,8 @@ impl Stage {
             bloom,
             layers: HashMap::new(),
             meshes: HashMap::new(),
+            walls: Vec::new(),
+            walls_built: 0,
             renderer: None,
             readout: None,
             background_src: DEFAULT_BACKGROUND.into(),
@@ -1925,21 +1941,12 @@ impl Stage {
                 put(k + i, flip * p.model(), rows(mirror));
             }
             walls.push(if p.depth > 0. {
-                let v = wall_mesh(p);
-                (!v.is_empty()).then(|| {
-                    let buf = self
-                        .device
-                        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                            label: Some("mui-stage walls"),
-                            contents: bytemuck::cast_slice(&v),
-                            usage: wgpu::BufferUsages::VERTEX,
-                        });
-                    (buf, (v.len() / 6) as u32)
-                })
+                self.walls_of(p)
             } else {
                 None
             });
         }
+        self.walls.retain_mut(|w| std::mem::take(&mut w.used));
         for (i, m) in models.iter().enumerate() {
             let [a, b, c] = material(&m.material, m.receive, m.material.thickness, false);
             let rows = |mirror| [[0., 0., 0., 1.], m.color, mirror, [0., 0., 1., 1.], a, b, c];
@@ -2257,6 +2264,44 @@ impl Stage {
         }
         self.queue.submit([enc.finish()]);
         Ok(())
+    }
+
+    /// Plane `p`'s walls: the ones last built for its size, depth and
+    /// outline, or new ones.
+    fn walls_of(&mut self, p: &Plane) -> Option<(wgpu::Buffer, u32)> {
+        let same = |w: &Walls| {
+            w.size == p.size
+                && w.depth == p.depth
+                && match (&w.outline, &p.outline) {
+                    (Some(a), Some(b)) => Arc::ptr_eq(a, b) || a == b,
+                    (None, None) => true,
+                    _ => false,
+                }
+        };
+        if let Some(w) = self.walls.iter_mut().find(|w| same(w)) {
+            w.used = true;
+            return w.buf.clone();
+        }
+        let v = wall_mesh(p);
+        let buf = (!v.is_empty()).then(|| {
+            let buf = self
+                .device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("mui-stage walls"),
+                    contents: bytemuck::cast_slice(&v),
+                    usage: wgpu::BufferUsages::VERTEX,
+                });
+            (buf, (v.len() / 6) as u32)
+        });
+        self.walls_built += 1;
+        self.walls.push(Walls {
+            size: p.size,
+            depth: p.depth,
+            outline: p.outline.clone(),
+            buf: buf.clone(),
+            used: true,
+        });
+        buf
     }
 
     /// The frame so far and its distances into the chain, then halved down

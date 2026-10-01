@@ -892,3 +892,39 @@ fn beauty_samples_antialias_an_edge_past_msaa() {
     let a = stage.beauty(0., 0., 16, &shot).unwrap().rgba;
     assert_eq!(a, stage.beauty(0., 0., 16, &shot).unwrap().rgba);
 }
+
+#[test]
+fn a_slabs_walls_are_built_once_while_its_size_depth_and_outline_hold() {
+    let Some(mut stage) = stage(160, 90) else {
+        return;
+    };
+    let size = Size::new(80., 45.);
+    stage.layer("l", &halves(size), size, 1.).unwrap();
+    // A fresh outline every subframe, as mui-cut makes one: equal content
+    // is the same walls.
+    let shot = |depth: f32| {
+        move |t: f64| {
+            let ring = mui_geometry::Path::polyline(
+                [(0., 0.), (80., 0.), (80., 45.), (0., 45.)]
+                    .map(|(x, y)| mui_geometry::Point::new(x, y)),
+                true,
+            );
+            Shot {
+                planes: vec![
+                    Plane::new("l", 80., 45.)
+                        .rotate(0., 30. + t as f32 * 40., 0.)
+                        .depth(depth)
+                        .outline(Arc::new(ring)),
+                ],
+                post: Post::NONE,
+                ..Shot::new(Camera::front(45., 30.))
+            }
+        }
+    };
+    stage.render(0.5, 0.1, 4, &shot(20.)).unwrap();
+    stage.render(0.6, 0.1, 4, &shot(20.)).unwrap();
+    assert_eq!(stage.walls_built, 1, "eight subframes, one set of walls");
+    stage.render(0.7, 0.1, 2, &shot(30.)).unwrap();
+    assert_eq!(stage.walls_built, 2, "a new depth builds new walls");
+    assert_eq!(stage.walls.len(), 1, "the old ones are dropped");
+}
