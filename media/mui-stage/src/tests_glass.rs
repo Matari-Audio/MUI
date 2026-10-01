@@ -97,7 +97,12 @@ impl Pane {
     /// The middle row, red, green and blue, through glass of `m` (none:
     /// no glass).
     fn row(&mut self, m: Option<Material>, sample: Option<u32>) -> [Vec<f32>; 3] {
-        let mut planes = vec![Plane::new("edge", 900., 900.).at(0., 0., -Self::BEHIND)];
+        let back = Plane::new("edge", 900., 900.).at(0., 0., -Self::BEHIND);
+        self.row_over(back, m, sample)
+    }
+    /// The same over `back` instead of the edge.
+    fn row_over(&mut self, back: Plane, m: Option<Material>, sample: Option<u32>) -> [Vec<f32>; 3] {
+        let mut planes = vec![back];
         if let Some(m) = m {
             planes.push(
                 Plane::new("clear", 240., 200.)
@@ -200,6 +205,36 @@ fn glass_shifts_what_is_behind_it_by_its_index_and_thickness() {
             (moved.abs() - want).abs() < 1.,
             "ior {n}, {thick} thick: moved {moved} px, expected {want}"
         );
+    }
+}
+
+/// A white card hanging in the void, its edge behind the pane: either side
+/// of the edge the frame behind lies at another depth (the card, or nothing
+/// at all), and the edge still moves by the slab's offset, whichever way.
+#[test]
+fn an_edge_over_the_void_shifts_by_the_slabs_offset() {
+    let Some(mut pane) = Pane::new() else {
+        return;
+    };
+    for side in [-1f32, 1.] {
+        let edge = |pane: &mut Pane, m: Option<Material>| {
+            let card = Plane::new("clear", 450., 900.).at(side * 225., 0., -Pane::BEHIND);
+            let mut row = pane.row_over(card, m, None)[1].clone();
+            // The card on the right: its light on the right of the edge.
+            if side > 0. {
+                row.iter_mut().for_each(|v| *v = 1. - *v);
+            }
+            Pane::edge(&row)
+        };
+        let bare = edge(&mut pane, None);
+        for (n, thick) in [(1.5, 80.), (1.9, 80.)] {
+            let moved = edge(&mut pane, Some(glass(n, thick))) - bare;
+            let want = Pane::expected(n, thick);
+            assert!(
+                (moved.abs() - want).abs() < 1.,
+                "card on side {side}, ior {n}, {thick} thick: moved {moved} px, expected {want}"
+            );
+        }
     }
 }
 
@@ -339,6 +374,74 @@ fn a_beauty_frame_converges_rough_glass() {
         "converged: {} vs one sample {}",
         noise(&row),
         noise(&one)
+    );
+}
+
+/// A clear pane facing a light that shines from the eye: its middle
+/// mirrors the light back, a highlight over the black behind it; its
+/// corners, turned away from the mirror angle, stay dark.
+#[test]
+fn a_light_leaves_a_highlight_on_glass() {
+    let Some(mut pane) = Pane::new() else {
+        return;
+    };
+    let shot = Shot {
+        planes: vec![Plane::new("clear", 240., 200.).material(Material {
+            roughness: 0.3,
+            ..glass(1.5, 20.)
+        })],
+        lights: vec![Light {
+            direction: [0., 0., -1.],
+            ..Light::new(LightKind::Directional)
+        }],
+        clear: Some([0.; 3]),
+        post: Post::NONE,
+        ..Shot::new(Pane::camera())
+    };
+    let f = pane.stage.render(0., 0., 1, &|_| shot.clone()).unwrap();
+    let at = |x: usize, y: usize| f.rgba[(y * Pane::W + x) * 4 + 1];
+    let (middle, corner) = (
+        at(Pane::W / 2, Pane::H / 2),
+        at(Pane::W / 2 + 110, Pane::H / 2 + 90),
+    );
+    assert!(
+        middle > corner + 0.15,
+        "the highlight {middle}, a corner {corner}"
+    );
+}
+
+/// Glass behind glass: through a clear pane the red pane behind it shows,
+/// as it does beside it, instead of the black the opaque frame has there.
+#[test]
+fn glass_shows_the_glass_behind_it() {
+    let Some(mut pane) = Pane::new() else {
+        return;
+    };
+    solid(&mut pane.stage, "red", 64., Color::srgb(1., 0., 0.));
+    let red = Material {
+        transmission: 0.5,
+        ..glass(1.5, 20.)
+    };
+    let shot = Shot {
+        planes: vec![
+            Plane::new("red", 300., 200.)
+                .at(0., 0., -100.)
+                .material(red),
+            // Index 1: nothing bends, so what is behind shows where it is.
+            Plane::new("clear", 120., 120.).material(glass(1., 20.)),
+        ],
+        lights: vec![Light::new(LightKind::Ambient)],
+        clear: Some([0.; 3]),
+        post: Post::NONE,
+        ..Shot::new(Pane::camera())
+    };
+    let f = pane.stage.render(0., 0., 1, &|_| shot.clone()).unwrap();
+    let at = |x: usize| f.rgba[(Pane::H / 2 * Pane::W + x) * 4];
+    let (through, beside) = (at(Pane::W / 2), at(Pane::W / 2 + 100));
+    assert!(beside > 0.2, "the red pane: {beside}");
+    assert!(
+        through > beside * 0.8,
+        "through the clear pane {through}, beside it {beside}"
     );
 }
 
