@@ -1605,6 +1605,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "mui-stage-rt"
+version = "0.4.0"
+dependencies = [
+ "bytemuck",
+ "mui-geometry",
+ "mui-scene",
+ "mui-stage",
+ "png",
+ "pollster",
+ "wgpu",
+]
+
+[[package]]
 name = "mui-style"
 version = "0.4.0"
 dependencies = [
