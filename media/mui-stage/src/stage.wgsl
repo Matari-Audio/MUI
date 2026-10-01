@@ -307,7 +307,7 @@ fn spec_weight(n: vec3f, v: vec3f, rough: f32, f0: vec3f) -> vec3f {
 // ambient light standing in for it.
 fn spec_fallback(r: vec3f, rough: f32) -> vec3f {
     if (env_on()) { return env_radiance(r, rough); }
-    if (sky_on()) { return sky(r); }
+    if (sky_on()) { return sky_spec(r, rough); }
     return g.ambient.rgb;
 }
 // Walls and backs: a plain dielectric.
@@ -403,11 +403,20 @@ fn cloud_density(p: vec2f) -> f32 {
     let w = vec2f(cloud_fbm(p * 0.45 + 4.3), cloud_fbm(p * 0.45 + vec2f(-2.7, 8.1)));
     let n = cloud_fbm(p + 1.8 * w);
     let cut = mix(0.66, 0.3, g.sky1.w);
-    return smoothstep(cut, cut + 0.22, n);
+    return smoothstep(cut, cut + 0.16, n);
 }
 // Radiance along `d`: the gradient, the sun, and the clouds on a layer
 // above (a sea of them below the horizon), lit from the sun.
-fn sky(d: vec3f) -> vec3f {
+fn sky(d: vec3f) -> vec3f { return sky_seen(d, 1.); }
+// The sky reflected by a surface `rough`: no hard sun disc off anything
+// but a mirror, and toward the sky's mean as the lobe widens.
+fn sky_spec(d: vec3f, rough: f32) -> vec3f {
+    let sharp = sky_seen(d, 1. - smoothstep(0.02, 0.1, rough));
+    let mean = (g.sky1.rgb + g.sky2.rgb) * 0.5 + g.sky3.rgb * 0.08 * max(dot(d, g.sky0.xyz), 0.);
+    return mix(sharp, mean, smoothstep(0.05, 0.6, rough));
+}
+// `sky` with `disc` of the sun's disc.
+fn sky_seen(d: vec3f, disc: f32) -> vec3f {
     let sun = g.sky0.xyz;
     let sunc = g.sky3.rgb;
     let up = d.y;
@@ -416,27 +425,29 @@ fn sky(d: vec3f) -> vec3f {
     var c = mix(g.sky1.rgb, g.sky2.rgb, pow(h, 6.));
     // Below the horizon the haze darkens toward the ground.
     c = select(c, mix(g.sky2.rgb, g.sky2.rgb * 0.55 + g.sky1.rgb * 0.15, smoothstep(0., 0.5, -up)), up < 0.);
-    c += sunc * (0.06 * pow(mu, 4.) + 0.35 * pow(mu, 64.));
-    // The layer: farther toward the horizon, so smaller and hazier there.
-    let y = max(abs(up), 0.035);
+    c += sunc * (0.06 * pow(mu, 4.) + 0.12 * pow(mu, 16.) * h + 0.35 * pow(mu, 64.));
+    // The layer, curved over like the sky's dome: farther toward the
+    // horizon, so smaller and hazier there, but not flattened to streaks.
+    let y = abs(up) * 0.8 + 0.15;
     let below = up < 0.;
     let drift = vec2f(g.sky2.w, g.sky3.w);
-    let p = d.xz / y * select(0.55, 0.4, below) + drift + select(vec2f(0.), vec2f(17.3, -41.9), below);
+    let p = d.xz / y * select(0.5, 0.4, below) + drift + select(vec2f(0.), vec2f(17.3, -41.9), below);
     let dens = cloud_density(p);
     if (dens > 0.001) {
         // Thinner toward the sun: march a little that way through the layer.
         let toward = normalize(vec2f(sun.x, sun.z) + vec2f(1e-4)) * 0.18;
         let shadow = cloud_density(p + toward) * 0.6 + cloud_density(p + 2. * toward) * 0.4;
-        let lit = exp(-2.2 * shadow) * select(1., 1.3, below);
-        let amb = g.sky1.rgb * 0.75 + g.sky2.rgb * 0.35;
+        let lit = exp(-3. * shadow) * select(1., 1.15, below);
+        // Undersides: the sky's blue, greyed.
+        let amb = g.sky1.rgb * 0.55 + g.sky2.rgb * 0.3;
         // Bright edges against the sun, as droplets scatter it forward.
         let silver = 1. + 2.5 * pow(mu, 10.) * (1. - dens);
-        let cloud = amb * (0.55 + 0.45 * dens) + sunc * 0.42 * lit * silver;
-        let fade = smoothstep(0.035, 0.16, abs(up));
+        let cloud = amb * (0.5 + 0.3 * dens) + sunc * 0.4 * lit * silver;
+        let fade = smoothstep(0., 0.12, abs(up));
         c = mix(c, cloud, dens * fade);
     }
     // The disc, over the clouds only where they are thin.
-    c += sunc * 30. * smoothstep(0.99985, 0.99995, mu) * (1. - dens);
+    c += sunc * 30. * disc * smoothstep(0.99996, 0.99999, mu) * (1. - dens);
     return c;
 }
 

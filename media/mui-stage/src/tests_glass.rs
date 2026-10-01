@@ -784,3 +784,40 @@ fn glass_bends_the_sky_in_from_beyond_the_frame() {
         "the sun bent in from beyond: {through} against the edge's {edge}"
     );
 }
+
+#[test]
+fn only_a_mirror_shows_the_sun_disc_in_the_sky() {
+    let Some(mut stage) = stage(320, 240) else {
+        return;
+    };
+    solid(&mut stage, "clear", 64., Color::srgb(1., 1., 1.));
+    // The sun behind the camera, so a metal facing it mirrors the disc.
+    let sky = Sky {
+        sun: [0.08, 0.06, 1.],
+        cover: 0.,
+        ..cloudy(0.)
+    };
+    let hottest = |stage: &mut Stage, roughness: f32| {
+        let shot = Shot {
+            planes: vec![Plane::new("clear", 600., 600.).material(Material {
+                metallic: 1.,
+                roughness,
+                ..Material::SLAB
+            })],
+            lights: vec![Light::new(LightKind::Ambient)],
+            sky: Some(sky),
+            clear: Some([0.; 3]),
+            post: Post::NONE,
+            ssr: false,
+            ..Shot::new(Camera::front(240., 30.))
+        };
+        let f = stage.render(0., 0., 1, &|_| shot.clone()).unwrap();
+        f.rgba
+            .chunks(4)
+            .map(|p| p[0].min(p[1]).min(p[2]))
+            .fold(0f32, f32::max)
+    };
+    let (mirror, rough) = (hottest(&mut stage, 0.02), hottest(&mut stage, 0.5));
+    assert!(mirror > 0.99, "a mirror shows the disc: {mirror}");
+    assert!(rough < 0.9, "a rough face spreads it: {rough}");
+}
