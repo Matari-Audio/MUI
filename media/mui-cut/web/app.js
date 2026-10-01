@@ -1152,7 +1152,7 @@ const toUi = (q, [x, y]) => unmap(q.ui, [x - q.ui[4], y - q.ui[5]]);
 // the camera the viewport shows (`only`: stay on the slab a drag began on).
 function pick3d([x, y], only) {
   if (scene()?.mode !== '3d') return null;
-  const j = cut.pick(si, t, x, y, orbit.on ? [orbit.yaw, orbit.pitch, orbit.zoom] : undefined, only);
+  const j = cut.pick(si, t, x, y, new Float64Array(orbit.on ? [orbit.yaw, orbit.pitch, orbit.zoom] : []), only ?? '');
   return j ? JSON.parse(j) : null;
 }
 globalThis.cutPick = (x, y) => pick3d([x, y]);

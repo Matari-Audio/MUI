@@ -1474,7 +1474,7 @@ impl Server {
         let v: Value = serde_json::from_str(&http(port, "GET", "/doc", "").ok()?).ok()?;
         let same = std::fs::canonicalize(self.path().ok()?).ok()
             == std::fs::canonicalize(v["project"].as_str()?).ok();
-        Some((port, v["rev"].as_u64()?, v["doc"].clone())).filter(|_| same)
+        same.then_some((port, v["rev"].as_u64()?, v["doc"].clone()))
     }
 
     /// Change the project's JSON with `f`; refuse (and leave it alone) if

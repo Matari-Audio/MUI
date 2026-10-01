@@ -908,7 +908,13 @@ fn mask(r: &mut Renderer, f: &Frame, i: usize, region: Bbox) -> Option<Vec<f32>>
         seed: f.seed,
     };
     let (px, _) = r.draw(&alone).ok()?;
-    Some(px.chunks_exact(4).map(|p| f32::from(p[3]) / 255.).collect())
+    Some(
+        px.as_chunks::<4>()
+            .0
+            .iter()
+            .map(|p| f32::from(p[3]) / 255.)
+            .collect(),
+    )
 }
 
 /// The share of layer `i`'s ink (box `b`) inside `screen`.

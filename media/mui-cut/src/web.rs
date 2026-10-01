@@ -217,17 +217,9 @@ impl Cut {
     /// Interact in 3D ([`crate::pick::pick`]): the plugin layer and the
     /// point of its UI under project point `(x, y)` of `scene` at `t`, seen
     /// from the orbit preview's camera when `orbit` is `[yaw, pitch,
-    /// zoom]`, as JSON `{layer, slab, ui}`; `""` when none. `only` keeps a
-    /// drag on the slab it started on.
-    pub fn pick(
-        &self,
-        scene: usize,
-        t: f64,
-        x: f64,
-        y: f64,
-        orbit: Option<Vec<f64>>,
-        only: Option<String>,
-    ) -> String {
+    /// zoom]` (empty: the scene camera), as JSON `{layer, slab, ui}`; `""`
+    /// when none. `only` (empty: any) keeps a drag on the slab it started on.
+    pub fn pick(&self, scene: usize, t: f64, x: f64, y: f64, orbit: &[f64], only: &str) -> String {
         let Some(s) = self
             .project
             .as_ref()
@@ -236,12 +228,18 @@ impl Cut {
             return String::new();
         };
         let mut f = eval(s.0, s.1, t);
-        if let (Some(v), Some([yaw, pitch, zoom])) = (f.view.as_mut(), orbit.as_deref()) {
+        if let (Some(v), [yaw, pitch, zoom]) = (f.view.as_mut(), orbit) {
             v.camera = v.camera.orbit(*yaw, *pitch, *zoom);
         }
-        crate::pick::pick(&self.renderer.assets, &f, x, y, only.as_deref())
-            .and_then(|h| serde_json::to_string(&h).ok())
-            .unwrap_or_default()
+        crate::pick::pick(
+            &self.renderer.assets,
+            &f,
+            x,
+            y,
+            (!only.is_empty()).then_some(only),
+        )
+        .and_then(|h| serde_json::to_string(&h).ok())
+        .unwrap_or_default()
     }
     /// A plugin layer's parts at `t` as [`tree_json`](crate::plugin::tree_json),
     /// once its capture (`.cut-cache/<state>.json`) has been added; `""`

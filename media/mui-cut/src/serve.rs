@@ -348,16 +348,13 @@ impl Shared {
         if d.text == now {
             return;
         }
-        match serde_json::from_str::<Value>(&now) {
-            Ok(v) => {
-                d.push(now, v);
-                let msg = d.event("disk", &[]);
-                self.broadcast(msg.as_bytes());
-            }
-            Err(_) => {
-                d.text = now;
-                self.broadcast(b"data: changed\n\n");
-            }
+        if let Ok(v) = serde_json::from_str::<Value>(&now) {
+            d.push(now, v);
+            let msg = d.event("disk", &[]);
+            self.broadcast(msg.as_bytes());
+        } else {
+            d.text = now;
+            self.broadcast(b"data: changed\n\n");
         }
     }
 

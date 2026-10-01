@@ -218,7 +218,7 @@ fn diff_reads_a_git_revision_and_its_assets() {
     }
     let left: Vec<_> = std::fs::read_dir(&d)
         .unwrap()
-        .filter_map(|e| e.ok())
+        .filter_map(Result::ok)
         .filter(|e| e.file_name().to_string_lossy().starts_with(".mui-cut-rev"))
         .collect();
     assert!(left.is_empty(), "the revision's copy is left behind");
