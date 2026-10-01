@@ -126,19 +126,22 @@ fn a_slab_moves_an_edge_by_the_analytic_amount() {
     };
     let bg = edge(&mut stage, &mut rt);
     let (d, deg, n) = (100., 30f32, 1.5);
-    let row = |rt: &mut Rt, stage: &mut Stage, n: f32| {
-        let s = shot(vec![bg.clone(), slab(d, deg, glass(n))]);
-        crossing(&rt.render(stage, &s, 64).unwrap(), 100, 1)
-    };
-    // Glass of index 1 bends nothing: that is where the edge is.
-    let moved = row(&mut rt, &mut stage, n) - row(&mut rt, &mut stage, 1.);
-    let want = shift(d, deg.to_radians(), n) * px_per_unit(-600.);
-    assert!(
-        (moved.abs() - want).abs() < 0.15,
-        "moved {moved} px, Snell says {want} px"
-    );
+    // Path traced (64 paths a pixel) and the deterministic trace (0).
+    for spp in [64, 0] {
+        let row = |rt: &mut Rt, stage: &mut Stage, n: f32| {
+            let s = shot(vec![bg.clone(), slab(d, deg, glass(n))]);
+            crossing(&rt.render(stage, &s, spp).unwrap(), 100, 1)
+        };
+        // Glass of index 1 bends nothing: that is where the edge is.
+        let moved = row(&mut rt, &mut stage, n) - row(&mut rt, &mut stage, 1.);
+        let want = shift(d, deg.to_radians(), n) * px_per_unit(-600.);
+        assert!(
+            (moved.abs() - want).abs() < 0.15,
+            "{spp} spp: moved {moved} px, Snell says {want} px"
+        );
+    }
     // The raster glass cannot: it guesses along the screen.
-    assert!(want > 10.);
+    assert!(shift(d, deg.to_radians(), n) * px_per_unit(-600.) > 10.);
 }
 
 #[test]
@@ -340,10 +343,19 @@ fn an_adapter_without_ray_queries_falls_back() {
 }
 
 #[test]
-fn the_shaders_have_the_stage_sky() {
+fn the_shaders_have_the_stage_sky_and_validate() {
     let (tracer, filter, composite) = sources().unwrap();
     assert!(tracer.contains("fn sky_seen(") && !tracer.contains("{{SKY}}"));
     assert!(filter.contains("fn denoise(") && composite.contains("fn fs_composite("));
+    // Every module parses and validates, with no GPU: CI checks the WGSL
+    // the ray-query tests cannot run there.
+    use wgpu::naga::{front::wgsl, valid};
+    for src in [&tracer, &filter, &composite] {
+        let module = wgsl::parse_str(src).unwrap_or_else(|e| panic!("{}", e.emit_to_string(src)));
+        valid::Validator::new(valid::ValidationFlags::all(), valid::Capabilities::all())
+            .validate(&module)
+            .unwrap_or_else(|e| panic!("{}", e.emit_to_string(src)));
+    }
 }
 
 #[test]
@@ -449,4 +461,32 @@ fn steep_reeds_lose_no_light() {
         .map(|x| f.rgba[((row * W + x) * 4) as usize + 1])
         .fold(1f32, f32::min);
     assert!(mean > 0.97 && min > 0.99, "mean {mean} min {min}");
+}
+
+#[test]
+fn the_deterministic_trace_is_the_same_every_run_and_has_no_noise() {
+    let Some((mut stage, mut rt)) = rig() else {
+        return;
+    };
+    let bg = edge(&mut stage, &mut rt);
+    let m = Material {
+        dispersion: 1.,
+        ribbed: mui_stage::Relief {
+            strength: 0.2,
+            scale: 40.,
+        },
+        ..glass(1.5)
+    };
+    let s = shot(vec![bg, slab(100., 30., m)]);
+    let a = rt.render(&mut stage, &s, 0).unwrap();
+    let b = rt.render(&mut stage, &s, 0).unwrap();
+    assert!(a.rgba == b.rgba, "two runs differ");
+    // No noise: through the glass, well right of the edge, the white
+    // changes only as smoothly as the reeds turn the Fresnel share.
+    let px = |x: u32, y: u32| a.rgba[((y * W + x) * 4) as usize + 1];
+    let smooth = (300..380).all(|x| (px(x, 100) - px(x + 1, 100)).abs() < 0.02);
+    assert!(smooth, "the glass has noise");
+    // And the glass is there: it bends the edge, which the frame below it
+    // shows straight.
+    assert!((0..W).any(|x| px(x, 100) != px(x, 300)));
 }

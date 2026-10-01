@@ -44,7 +44,7 @@ struct Globals {
     res: vec4f,
     // A solid background, linear; a: on.
     clear: vec4f,
-    // Summed ambient light.
+    // Summed ambient light; w 1 for the deterministic (Whitted) trace.
     ambient: vec4f,
     // The floor: colour, w on; y, reflect, falloff, radius.
     floor: vec4f,
@@ -100,6 +100,11 @@ struct Inst {
 @group(0) @binding(9) var tex1: texture_2d<f32>;
 @group(0) @binding(10) var tex2: texture_2d<f32>;
 @group(0) @binding(11) var tex3: texture_2d<f32>;
+// The sky baked by direction (equirectangular), each mip a blurrier sky
+// for rougher glass; and where `bake_sky` writes it.
+@group(0) @binding(12) var sky_map: texture_2d<f32>;
+@group(0) @binding(13) var sky_samp: sampler;
+@group(0) @binding(14) var sky_out: texture_storage_2d<rgba16float, write>;
 
 const PI: f32 = 3.14159265;
 const BIG: f32 = 1e7;
@@ -120,6 +125,9 @@ fn rand() -> f32 {
     return f32(rng >> 8u) / 16777216.;
 }
 fn rand2() -> vec2f { return vec2f(rand(), rand()); }
+// The deterministic trace: no random numbers anywhere, one ray per pixel
+// (per wavelength), the same image every run and clean on its first frame.
+fn det() -> bool { return g.ambient.w > 0.5; }
 // This sample's place in the spectrum, 0..1.
 var<private> hero: f32;
 // The instance the path is inside, or NONE. Its layer says where light
@@ -179,6 +187,7 @@ fn solid(c: RayIntersection, o: vec3f, d: vec3f) -> bool {
         let local = c.world_to_object * vec4f(o + d * c.t, 1.);
         a *= layer(inst.kind.y, face_uv(inst, local)).a;
     }
+    if (det()) { return a >= 0.5; }
     return a >= 1. || (a > 0.004 && rand() < a);
 }
 
@@ -379,8 +388,9 @@ fn light_at(i: u32, p: vec3f, ng: vec3f, receive: bool) -> LightSample {
     let side = select(vec3f(1., 0., 0.), vec3f(0., 1., 0.), abs(dir.y) < 0.9);
     let t = normalize(cross(dir, side));
     let u = cross(dir, t);
-    let r = sqrt(rand());
-    let a = 2. * PI * rand();
+    // The deterministic trace aims at the light's middle.
+    let r = select(sqrt(rand()), 0., det());
+    let a = select(2. * PI * rand(), 0., det());
     let disc = (t * cos(a) + u * sin(a)) * r * li.extra.z;
     var l = -normalize(dir + disc);
     o.mid = -dir;
@@ -429,15 +439,39 @@ fn shade(p: vec3f, n: vec3f, v: vec3f, receive: bool, shine: f32) -> Shade {
 }
 
 fn sky_is_on() -> bool { return g.sky0.w > 0.5; }
+
+// Where direction `d` sits in the baked sky, and back.
+fn sky_uv(d: vec3f) -> vec2f {
+    return vec2f(atan2(d.x, -d.z) / (2. * PI) + 0.5, acos(clamp(d.y, -1., 1.)) / PI);
+}
+fn sky_dir(uv: vec2f) -> vec3f {
+    let phi = (uv.x - 0.5) * 2. * PI;
+    let theta = uv.y * PI;
+    return vec3f(sin(theta) * sin(phi), cos(theta), -sin(theta) * cos(phi));
+}
+// The baked sky toward `d`, blurred as glass `rough` blurs it: a texture
+// read instead of the clouds' noise per ray.
+fn sky_at(d: vec3f, rough: f32) -> vec3f {
+    let lod = clamp(rough * 10., 0., f32(textureNumLevels(sky_map) - 1u));
+    return textureSampleLevel(sky_map, sky_samp, sky_uv(d), lod).rgb;
+}
+@compute @workgroup_size(8, 8)
+fn bake_sky(@builtin(global_invocation_id) id: vec3u) {
+    let size = textureDimensions(sky_out);
+    if (id.x >= size.x || id.y >= size.y) { return; }
+    let d = sky_dir((vec2f(id.xy) + 0.5) / vec2f(size));
+    textureStore(sky_out, id.xy, vec4f(sky(d), 1.));
+}
+
 // What a ray that meets nothing sees.
 fn background(d: vec3f) -> vec3f {
-    if (sky_is_on()) { return sky(d); }
+    if (sky_is_on()) { return sky_at(d, 0.); }
     return select(vec3f(0.), g.clear.rgb, g.clear.a > 0.5);
 }
 // What a reflection leaving the scene brings, as mui-stage's
 // `spec_fallback`.
 fn spec_fallback(r: vec3f, rough: f32) -> vec3f {
-    if (sky_is_on()) { return sky_spec(r, rough); }
+    if (sky_is_on()) { return sky_at(r, rough); }
     return g.ambient.rgb;
 }
 
@@ -553,6 +587,8 @@ struct Path {
     // The first surface's normal and distance.
     n: vec3f,
     t: f32,
+    // The deterministic trace met dispersive glass: trace it again per colour.
+    dispersive: bool,
 };
 
 fn luminance(c: vec3f) -> f32 { return dot(c, vec3f(0.2126, 0.7152, 0.0722)); }
@@ -568,12 +604,13 @@ fn tame(c: vec3f, bounce: u32) -> vec3f {
     return c * (TAME / m);
 }
 
-fn trace_path(o0: vec3f, d0: vec3f) -> Path {
+fn trace_path(o0: vec3f, d0: vec3f, wavelength: f32) -> Path {
     var out: Path;
     out.l = vec3f(0.);
     out.glass = 0.;
     out.n = vec3f(0.);
     out.t = BIG;
+    out.dispersive = false;
     var o = o0;
     var d = d0;
     var thr = vec3f(1.);
@@ -586,11 +623,16 @@ fn trace_path(o0: vec3f, d0: vec3f) -> Path {
     var reach = 0.;
     // A floor reflection fades with its height above the floor.
     var fade = 0.;
+    // The deterministic trace: how rough what the path came through was,
+    // for the blur of what it finds behind it.
+    var spread = 0.;
     let bounces = u32(g.res.z);
     for (var bounce = 0u; bounce < bounces; bounce++) {
         let h = closest(o, d);
         if (!h.hit) {
-            out.l += tame(thr * background(d) * select(1., 0., fade > 0.), bounce);
+            var bg = background(d);
+            if (det() && spread > 0.02) { bg = spec_fallback(d, min(spread, 1.)); }
+            out.l += tame(thr * bg * select(1., 0., fade > 0.), bounce);
             break;
         }
         if (inside && reach > 0.) { thr *= pow(max(tint, vec3f(1e-4)), vec3f(h.t / reach)); }
@@ -609,7 +651,13 @@ fn trace_path(o0: vec3f, d0: vec3f) -> Path {
             // The floor: fades into the background toward its rim, mirrors
             // `reflect` of what stands on it.
             let r = length(s.p.xz) / g.floor2.w;
-            if (rand() > exp(-r * r)) {
+            if (det()) {
+                // The floor's share, not a coin toss: what passes it is
+                // what lies beyond, the background.
+                let w = exp(-r * r);
+                out.l += thr * (1. - w) * background(d);
+                thr *= w;
+            } else if (rand() > exp(-r * r)) {
                 o = s.p + d * 0.05;
                 continue;
             }
@@ -638,8 +686,13 @@ fn trace_path(o0: vec3f, d0: vec3f) -> Path {
         thr *= 1. - inst.mat.x;
         let k = inst.mat2.y;
         if (k > 0. && nm == 0.) {
-            nm = 380. + 320. * hero;
-            thr *= band(nm);
+            if (det()) {
+                nm = wavelength;
+                out.dispersive = true;
+            } else {
+                nm = 380. + 320. * hero;
+                thr *= band(nm);
+            }
         }
         let ior = select(max(inst.mat.w, 1.), ior_at(max(inst.mat.w, 1.), k, nm), k > 0.);
         let entering = dot(d, s.ng) < 0.;
@@ -648,7 +701,7 @@ fn trace_path(o0: vec3f, d0: vec3f) -> Path {
         let eta = select(1. / ior, ior, entering);
         let alpha = max(inst.mat.y * inst.mat.y, 0.);
         var m = nf;
-        if (alpha > 4e-4) { m = ggx_sample(nf, alpha, rand2()); }
+        if (alpha > 4e-4 && !det()) { m = ggx_sample(nf, alpha, rand2()); }
         // A face pressed or bevelled steeply can turn its normal from the
         // eye, or send light back through itself: there the flat face
         // stands in, as mui-stage's glass has it, instead of losing it.
@@ -685,7 +738,31 @@ fn trace_path(o0: vec3f, d0: vec3f) -> Path {
             }
         }
         var next: vec3f;
-        if (rand() < f) {
+        if (det() && f < 1.) {
+            // Whitted: the reflection by direction from the sky, blurred by
+            // the roughness; the path goes on through.
+            out.l += tame(thr * f * spec_fallback(reflect(d, m), max(alpha, spread)), bounce);
+            thr *= 1. - f;
+            spread += alpha;
+            if (card) {
+                next = d;
+                thr *= stain * inst.tint.rgb;
+            } else {
+                next = refract(d, m, 1. / eta);
+                if (dot(next, next) < 1e-6 || dot(next, ngf) >= 0.) { next = refract(d, ngf, 1. / eta); }
+                if (entering) {
+                    thr *= stain;
+                    inside = true;
+                    body = s.inst;
+                    tint = inst.tint.rgb;
+                    reach = inst.mat2.x;
+                    if (reach <= 0.) { thr *= tint; }
+                } else {
+                    inside = false;
+                    body = NONE;
+                }
+            }
+        } else if (rand() < f) {
             next = reflect(d, m);
             if (dot(next, ngf) <= 0.) { next = reflect(d, ngf); }
         } else if (card) {
@@ -712,7 +789,7 @@ fn trace_path(o0: vec3f, d0: vec3f) -> Path {
             }
             }
         }
-        if (alpha > 4e-4) {
+        if (alpha > 4e-4 && !det()) {
             // Walter eq. 41: |i.m| G / (|i.n| |m.n|), with the Fresnel and
             // the Jacobian cancelled by sampling.
             let w = abs(dot(v, m)) * ggx_g1(v, m, nf, alpha) * ggx_g1(next, m, nf, alpha)
@@ -742,6 +819,20 @@ fn trace(@builtin(global_invocation_id) id: vec3u) {
     let n = u32(g.fwd.w);
     var sum = vec4f(0.);
     var first: Path;
+    if (det()) {
+        // One ray through the pixel's middle; through dispersive glass, one
+        // per colour at its own index (the middles of mui-stage's bands).
+        let d = eye_ray(vec2f(id.xy) + 0.5);
+        first = trace_path(g.eye.xyz, d, 535.);
+        var l = first.l;
+        if (first.dispersive) {
+            l.r = trace_path(g.eye.xyz, d, 640.).l.r;
+            l.b = trace_path(g.eye.xyz, d, 445.).l.b;
+        }
+        accum[i] = vec4f(l * first.glass, first.glass);
+        guide[i] = vec4f(first.n, first.t);
+        return;
+    }
     for (var k = 0u; k < n; k++) {
         // The pixel's offset and wavelength step through R2 and golden-
         // ratio sequences (shifted per pixel), so every run of samples
@@ -751,7 +842,7 @@ fn trace(@builtin(global_invocation_id) id: vec3u) {
         let r2 = fract(shift.xy + j * vec2f(0.7548777, 0.5698403));
         hero = fract(shift.z + j * 0.618034);
         rng = pcg(i * 9781u + pcg(done + k) * 6271u);
-        let p = trace_path(g.eye.xyz, eye_ray(vec2f(id.xy) + r2));
+        let p = trace_path(g.eye.xyz, eye_ray(vec2f(id.xy) + r2), 0.);
         sum += vec4f(p.l * p.glass, p.glass);
         if (k == 0u) { first = p; }
     }
@@ -774,6 +865,18 @@ struct Filter {
 @group(0) @binding(2) var<storage, read> f_guide: array<vec4f>;
 @group(0) @binding(3) var<storage, read> f_src: array<vec4f>;
 @group(0) @binding(4) var<storage, read_write> f_dst: array<vec4f>;
+// The baked sky's next mip from the one above: a 2x2 box.
+@group(0) @binding(10) var down_src: texture_2d<f32>;
+@group(0) @binding(11) var down_dst: texture_storage_2d<rgba16float, write>;
+@compute @workgroup_size(8, 8)
+fn sky_down(@builtin(global_invocation_id) id: vec3u) {
+    let size = textureDimensions(down_dst);
+    if (id.x >= size.x || id.y >= size.y) { return; }
+    let p = vec2i(id.xy) * 2;
+    let c = textureLoad(down_src, p, 0) + textureLoad(down_src, p + vec2i(1, 0), 0)
+        + textureLoad(down_src, p + vec2i(0, 1), 0) + textureLoad(down_src, p + vec2i(1, 1), 0);
+    textureStore(down_dst, id.xy, c * 0.25);
+}
 
 // The mean: rgb the glass's own colour (not times coverage), a coverage.
 fn mean_at(i: u32) -> vec4f {

@@ -111,12 +111,13 @@ pub struct Render {
     /// Motion-blur subframes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mb: Option<usize>,
-    /// How 3D glass is drawn: `raster` (the default) or `rt`, path traced on
-    /// a GPU with hardware ray queries; where there is none, raster glass,
-    /// and `mui-cut check` says so.
+    /// How 3D glass is drawn: `raster` (the default); `rt`, ray traced on a
+    /// GPU with hardware ray queries, deterministic and real time; or
+    /// `rt-path`, path traced, converging over `glass_samples`. Where there
+    /// are no ray queries, raster glass, and `mui-cut check` says so.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub glass: Option<Glass>,
-    /// `rt` glass: paths per pixel each drawn subframe traces (default 16).
+    /// `rt-path` glass: paths per pixel each drawn subframe traces (default 16).
     /// A still frame adds them up across subframes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub glass_samples: Option<u32>,
@@ -126,14 +127,18 @@ pub struct Render {
 #[derive(
     Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
 )]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "kebab-case")]
 pub enum Glass {
     /// Screen-space refraction of the frame, and the sky by direction.
     #[default]
     Raster,
-    /// Path traced: light bent off screen, inside thick glass, through
-    /// glass behind glass; dispersion and rough transmission.
+    /// Ray traced, one ray per pixel (per colour through dispersive glass),
+    /// no noise: light bent off screen, inside thick glass, through glass
+    /// behind glass; the sky reflected by direction.
     Rt,
+    /// Path traced: as `rt`, with rough transmission, glints and light
+    /// between surfaces sampled, converging over `glass_samples`.
+    RtPath,
 }
 
 impl Render {
@@ -178,10 +183,14 @@ impl Render {
             _ => Ok(()),
         }
     }
-    /// The ray-traced glass's paths per pixel per subframe, if the project
-    /// asks for ray-traced glass.
+    /// The ray-traced glass's paths per pixel per subframe if the project
+    /// asks for ray-traced glass: 0 the deterministic trace.
     pub fn rt_glass(&self) -> Option<u32> {
-        (self.glass == Some(Glass::Rt)).then(|| self.glass_samples.unwrap_or(16).clamp(1, 4096))
+        match self.glass? {
+            Glass::Raster => None,
+            Glass::Rt => Some(0),
+            Glass::RtPath => Some(self.glass_samples.unwrap_or(16).clamp(1, 4096)),
+        }
     }
 }
 

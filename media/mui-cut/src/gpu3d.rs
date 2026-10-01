@@ -527,6 +527,15 @@ impl Space {
         if let (Some(rt), Some(spp)) = (&mut self.rt, canvas.glass) {
             rt.draw(&mut self.stage, &shot, 0., spp, target, format)
                 .map_err(|e| e.to_string())?;
+            // Profiling: the tracer's GPU time per pass, each frame (waits).
+            if std::env::var_os("MUI_RT_TIMES").is_some()
+                && let Some(g) = rt.gpu_times()
+            {
+                eprintln!(
+                    "mui-stage-rt: sky+tlas {:.2} ms, trace {:.2} ms, filter {:.2} ms, composite {:.2} ms",
+                    g.tlas, g.trace, g.filter, g.composite
+                );
+            }
             return Ok(quads);
         }
         self.stage

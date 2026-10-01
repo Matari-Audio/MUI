@@ -5,8 +5,7 @@
   ],
   "fps": 60.0,
   "render": {
-    "glass": "rt",
-    "glass_samples": 32
+    "glass": "rt"
   },
   "scenes": [
     {

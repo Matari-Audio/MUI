@@ -41,15 +41,16 @@ const USAGE: &str = "usage:
                  [--variant NAME | --variants all|NAME,NAME -o out/{name}.mp4]
                  [--segment SECONDS] [--range 3.2s-5.0s]   (the segment cache)
   mui-cut still  PROJECT --t SECONDS -o OUT.png [--scene NAME] [--size WxH] [--renderer R] [--variant NAME]
-    render and still: [--quality normal|beauty] [--samples N] [--glass raster|rt [--glass-samples N]]
+    render and still: [--quality normal|beauty] [--samples N] [--glass raster|rt|rt-path [--glass-samples N]]
     R: classic (default; Vello compute on the GPU), gpu (vello_gpu), cpu (Vello CPU),
        blender (3D scenes through Blender: [--engine eevee|cycles] [--samples N]);
     --quality beauty (or --samples N) on a GPU renderer: 3D frames are the mean of N
        samples (64 by default), each with its own pixel offset, lens point (depth of
        field), area-light position (soft shadows) and occlusion turn; motion blur
        spreads them across the shutter.
-    --glass rt: 3D glass path traced on a GPU with hardware ray queries (else raster
-       glass, with a warning), N paths per pixel per subframe (16; render.glass in the file).
+    --glass rt: 3D glass ray traced on a GPU with hardware ray queries (else raster
+       glass, with a warning), deterministic; rt-path: path traced, N paths per pixel
+       per subframe (16) (render.glass in the file).
     --cpu is --renderer cpu. --threads: CPU frames drawn at once (default: one per core).
     --stats: per-frame wall time (evaluate, draw, hand to ffmpeg) p50/p95/max
   mui-cut eval   PROJECT --t SECONDS [--scene NAME] [--variant NAME]
@@ -231,8 +232,9 @@ fn load_variant(args: &Args) -> Result<Project> {
     let glass = match args.get("glass") {
         None => None,
         Some("rt") => Some(mui_cut::Glass::Rt),
+        Some("rt-path") => Some(mui_cut::Glass::RtPath),
         Some("raster") => Some(mui_cut::Glass::Raster),
-        Some(g) => return Err(format!("--glass: `{g}` is not raster or rt")),
+        Some(g) => return Err(format!("--glass: `{g}` is not raster, rt or rt-path")),
     };
     let glass_samples = args
         .get("glass-samples")

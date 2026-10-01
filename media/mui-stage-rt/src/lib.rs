@@ -33,6 +33,9 @@ mod geom;
 
 /// The device features the tracer needs.
 pub const FEATURES: wgpu::Features = wgpu::Features::EXPERIMENTAL_RAY_QUERY;
+/// What [`Rt::gpu_times`] needs.
+const TIMERS: wgpu::Features =
+    wgpu::Features::TIMESTAMP_QUERY.union(wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS);
 
 const SHADER: &str = include_str!("rt.wgsl");
 /// The stage's sky, spliced in so a ray bent off screen sees the same sky.
@@ -43,6 +46,8 @@ const MAX_INSTANCES: u32 = (mui_stage::MAX_PLANES + mui_stage::MAX_MODELS + 1) a
 /// Bounces a path makes at most: enough for light to cross thick glass,
 /// reflect inside it and leave.
 pub const BOUNCES: u32 = 12;
+/// Most surfaces the deterministic trace follows a ray through.
+pub const WHITTED_BOUNCES: u32 = 8;
 /// Samples per pixel per submission.
 const CHUNK: u32 = 4;
 /// Below this many samples the filter cleans the mean.
@@ -90,7 +95,8 @@ pub fn device_descriptor(adapter: &wgpu::Adapter) -> wgpu::DeviceDescriptor<'sta
     }
     wgpu::DeviceDescriptor {
         label: Some("mui-stage-rt"),
-        required_features: FEATURES,
+        // Timestamps too where there are any, for `Rt::gpu_times`.
+        required_features: FEATURES | (adapter.features() & TIMERS),
         required_limits: wgpu::Limits::default()
             .using_minimum_supported_acceleration_structure_values(),
         // SAFETY: ray queries are behind wgpu's experimental token. The
@@ -204,12 +210,113 @@ pub struct Rt {
     out: usize,
     bounces: u32,
     denoise: bool,
+    sky: Sky,
+    /// The last trace was the deterministic one.
+    whitted: bool,
     timer: Option<Timer>,
+}
+
+/// The sky baked by direction each frame it is on, with blurrier mips for
+/// rougher glass: a ray reads a texel instead of the clouds' noise.
+struct Sky {
+    view: wgpu::TextureView,
+    mips: Vec<wgpu::TextureView>,
+    sampler: wgpu::Sampler,
+    bake: wgpu::ComputePipeline,
+    down: wgpu::ComputePipeline,
+}
+
+/// The baked sky's size: 0.35 degrees a texel.
+const SKY: [u32; 2] = [1024, 512];
+const SKY_MIPS: u32 = 6;
+
+impl Sky {
+    fn new(
+        device: &wgpu::Device,
+        bake: wgpu::ComputePipeline,
+        down: wgpu::ComputePipeline,
+    ) -> Self {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("mui-stage-rt sky"),
+            size: wgpu::Extent3d {
+                width: SKY[0],
+                height: SKY[1],
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: SKY_MIPS,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba16Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING,
+            view_formats: &[],
+        });
+        let mips = (0..SKY_MIPS)
+            .map(|m| {
+                texture.create_view(&wgpu::TextureViewDescriptor {
+                    base_mip_level: m,
+                    mip_level_count: Some(1),
+                    ..Default::default()
+                })
+            })
+            .collect();
+        Self {
+            view: texture.create_view(&wgpu::TextureViewDescriptor::default()),
+            mips,
+            sampler: device.create_sampler(&wgpu::SamplerDescriptor {
+                address_mode_u: wgpu::AddressMode::Repeat,
+                mag_filter: wgpu::FilterMode::Linear,
+                min_filter: wgpu::FilterMode::Linear,
+                mipmap_filter: wgpu::MipmapFilterMode::Linear,
+                ..Default::default()
+            }),
+            bake,
+            down,
+        }
+    }
+
+    /// Bake the sky the globals describe, then each mip from the last.
+    fn encode(
+        &self,
+        device: &wgpu::Device,
+        globals: &wgpu::Buffer,
+        enc: &mut wgpu::CommandEncoder,
+    ) {
+        let group = |pipe: &wgpu::ComputePipeline, entries: &[wgpu::BindGroupEntry<'_>]| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("mui-stage-rt sky"),
+                layout: &pipe.get_bind_group_layout(0),
+                entries,
+            })
+        };
+        let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
+        let bake = group(
+            &self.bake,
+            &[
+                entry(0, globals.as_entire_binding()),
+                entry(14, wgpu::BindingResource::TextureView(&self.mips[0])),
+            ],
+        );
+        pass.set_pipeline(&self.bake);
+        pass.set_bind_group(0, &bake, &[]);
+        pass.dispatch_workgroups(SKY[0].div_ceil(8), SKY[1].div_ceil(8), 1);
+        pass.set_pipeline(&self.down);
+        for m in 1..SKY_MIPS as usize {
+            let down = group(
+                &self.down,
+                &[
+                    entry(10, wgpu::BindingResource::TextureView(&self.mips[m - 1])),
+                    entry(11, wgpu::BindingResource::TextureView(&self.mips[m])),
+                ],
+            );
+            pass.set_bind_group(0, &down, &[]);
+            pass.dispatch_workgroups((SKY[0] >> m).div_ceil(8), (SKY[1] >> m).div_ceil(8), 1);
+        }
+    }
 }
 
 /// GPU timestamps around the tracer's passes, on a device with
 /// [`wgpu::Features::TIMESTAMP_QUERY`] and `TIMESTAMP_QUERY_INSIDE_ENCODERS`:
-/// 0..1 the scene's TLAS build, 1..2 the trace, 2..3 the filter, 4..5 the
+/// 0..1 the sky's bake and the scene's TLAS build, 1..2 the trace, 2..3 the filter, 4..5 the
 /// composite.
 struct Timer {
     set: wgpu::QuerySet,
@@ -264,6 +371,8 @@ impl Rt {
         };
         let trace = compute(&trace_module, "trace");
         let filter = compute(&filter_module, "denoise");
+        let bake = compute(&trace_module, "bake_sky");
+        let down = compute(&filter_module, "sky_down");
         if let Some(e) = pollster::block_on(scope.pop()) {
             return Err(Error::Gpu(e.to_string()));
         }
@@ -326,6 +435,7 @@ impl Rt {
                 ..Default::default()
             }),
             white,
+            sky: Sky::new(device, bake, down),
             tlas: device.create_tlas(&wgpu::CreateTlasDescriptor {
                 label: Some("mui-stage-rt scene"),
                 max_instances: MAX_INSTANCES,
@@ -350,29 +460,24 @@ impl Rt {
             out: 0,
             bounces: BOUNCES,
             denoise: true,
-            timer: device
-                .features()
-                .contains(
-                    wgpu::Features::TIMESTAMP_QUERY
-                        | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS,
-                )
-                .then(|| Timer {
-                    set: device.create_query_set(&wgpu::QuerySetDescriptor {
-                        label: Some("mui-stage-rt timer"),
-                        ty: wgpu::QueryType::Timestamp,
-                        count: 6,
-                    }),
-                    resolve: buffer(
-                        "mui-stage-rt timer",
-                        48,
-                        wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
-                    ),
-                    read: buffer(
-                        "mui-stage-rt timer read",
-                        48,
-                        wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-                    ),
+            whitted: false,
+            timer: device.features().contains(TIMERS).then(|| Timer {
+                set: device.create_query_set(&wgpu::QuerySetDescriptor {
+                    label: Some("mui-stage-rt timer"),
+                    ty: wgpu::QueryType::Timestamp,
+                    count: 6,
                 }),
+                resolve: buffer(
+                    "mui-stage-rt timer",
+                    48,
+                    wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
+                ),
+                read: buffer(
+                    "mui-stage-rt timer read",
+                    48,
+                    wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                ),
+            }),
         })
     }
 
@@ -557,9 +662,15 @@ impl Rt {
     /// Add `spp` samples per pixel of `shot`'s glass at `t` seconds (what
     /// ripples run by) to the sum, after starting it again if the shot is
     /// not the one summed so far.
+    ///
+    /// `spp` 0 is the deterministic trace instead: one ray per pixel (one
+    /// per colour through dispersive glass), Fresnel-weighted reflections
+    /// of the sky by direction, roughness as blur. No noise, no sum: each
+    /// call is the whole image.
     pub fn trace(&mut self, shot: &Shot, t: f64, spp: u32) -> Result<(), Error> {
         let key = key_of(shot, t);
-        if key != self.key {
+        self.whitted = spp == 0;
+        if key != self.key || self.whitted {
             self.key = key;
             self.reset();
         }
@@ -712,6 +823,8 @@ impl Rt {
             entry(5, self.accum.as_entire_binding()),
             entry(6, self.guide.as_entire_binding()),
             entry(7, wgpu::BindingResource::Sampler(&self.sampler)),
+            entry(12, wgpu::BindingResource::TextureView(&self.sky.view)),
+            entry(13, wgpu::BindingResource::Sampler(&self.sky.sampler)),
         ];
         for (i, v) in views.iter().enumerate() {
             entries.push(entry(8 + i as u32, wgpu::BindingResource::TextureView(v)));
@@ -727,25 +840,33 @@ impl Rt {
         let mut build = true;
         while left > 0 {
             let n = left.min(CHUNK);
-            self.queue.write_buffer(
-                &self.globals,
-                0,
-                bytemuck::cast_slice(&globals(
-                    shot,
-                    t,
-                    self.width,
-                    self.height,
-                    self.samples,
-                    n,
-                    self.bounces,
-                )),
+            let mut g = globals(
+                shot,
+                t,
+                self.width,
+                self.height,
+                self.samples,
+                n,
+                self.bounces.min(if self.whitted {
+                    WHITTED_BOUNCES
+                } else {
+                    u32::MAX
+                }),
             );
+            if self.whitted {
+                g[27] = 1.;
+            }
+            self.queue
+                .write_buffer(&self.globals, 0, bytemuck::cast_slice(&g));
             let mut enc = self
                 .device
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
             let first = std::mem::take(&mut build);
             if first {
                 stamp(self.timer.as_ref(), &mut enc, 0);
+                if shot.sky.is_some() {
+                    self.sky.encode(&self.device, &self.globals, &mut enc);
+                }
                 enc.build_acceleration_structures(std::iter::empty(), std::iter::once(&self.tlas));
                 stamp(self.timer.as_ref(), &mut enc, 1);
             }
@@ -770,7 +891,7 @@ impl Rt {
     /// The mean into a ping buffer, then while few samples are in, three
     /// a-trous passes 1, 2 and 4 pixels apart.
     fn filter_into(&mut self, enc: &mut wgpu::CommandEncoder) {
-        let steps: &[f32] = if self.denoise && self.samples < FILTER_UNTIL {
+        let steps: &[f32] = if self.denoise && !self.whitted && self.samples < FILTER_UNTIL {
             &[0., 1., 2., 4.]
         } else {
             &[0.]

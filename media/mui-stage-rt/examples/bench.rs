@@ -1,22 +1,29 @@
 //! Milliseconds per pass of the hybrid frame at 1080p: the stage's raster
-//! frame, one traced sample per pixel (with the filter), and the glass
+//! frame, the glass traced (deterministic, or N paths a pixel with the filter), and the glass
 //! composited over it. 64 printed glass slabs under a sky, as a glassified
 //! plugin UI is; the camera moves every frame, so no frame is helped by
 //! the ones before it.
 //!
-//!     cargo run --release -p mui-stage-rt --example bench [-- FRAMES]
+//!     cargo run --release -p mui-stage-rt --example bench [-- FRAMES [SPP]]
+//!
+//! SPP 0 (the default) is the deterministic trace.
 use mui_stage::{Camera, Light, LightKind, Material, Plane, Post, Shot, Sky};
 use std::time::Instant;
 
 fn main() {
     const ROWS: [&str; 6] = [
         "raster (bracketed)",
-        "TLAS build",
-        "trace 1 spp",
+        "sky bake + TLAS",
+        "trace",
         "filter",
         "composite",
         "frame (CPU wall)",
     ];
+    // Paths a pixel; 0 the deterministic trace.
+    let spp: u32 = std::env::args()
+        .nth(2)
+        .and_then(|a| a.parse().ok())
+        .unwrap_or(0);
     let frames: usize = std::env::args()
         .nth(1)
         .and_then(|a| a.parse().ok())
@@ -80,7 +87,7 @@ fn main() {
         transmission: 1.,
         ior: 1.5,
         roughness: 0.04,
-        dispersion: 0.3,
+        dispersion: 0.,
         print: 1.,
         bevel: 6.,
         ..Material::SLAB
@@ -122,7 +129,7 @@ fn main() {
         stamp(0);
         stage.draw(&shot, 0., &view, format).unwrap();
         stamp(1);
-        rt.trace(&shot, 0., 1).unwrap();
+        rt.trace(&shot, 0., spp).unwrap();
         rt.composite(&shot, &view, format);
         let g = rt.gpu_times().expect("timestamp queries");
         let wall = t0.elapsed().as_secs_f64() * 1e3;

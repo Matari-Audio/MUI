@@ -941,14 +941,16 @@ fn ray_traced_glass_is_asked_for_by_name_with_a_sample_count() {
         ))
     };
     let rt = |render: &str| load(render).unwrap().render.unwrap().rt_glass();
-    assert_eq!(rt(r#"{"glass":"rt"}"#), Some(16));
-    assert_eq!(rt(r#"{"glass":"rt","glass_samples":64}"#), Some(64));
+    assert_eq!(rt(r#"{"glass":"rt"}"#), Some(0));
+    assert_eq!(rt(r#"{"glass":"rt","glass_samples":64}"#), Some(0));
+    assert_eq!(rt(r#"{"glass":"rt-path"}"#), Some(16));
+    assert_eq!(rt(r#"{"glass":"rt-path","glass_samples":64}"#), Some(64));
     assert_eq!(rt(r#"{"glass":"raster","glass_samples":64}"#), None);
     assert_eq!(rt("{}"), None);
-    // A flag over the file: `--glass rt` turns it on, the file's count stays.
+    // A flag over the file: `--glass rt-path` turns it on, the file's count stays.
     let file = load(r#"{"glass_samples":8}"#).unwrap().render.unwrap();
     let flags = Render {
-        glass: Some(Glass::Rt),
+        glass: Some(Glass::RtPath),
         ..Render::default()
     };
     assert_eq!(file.with(&flags).rt_glass(), Some(8));

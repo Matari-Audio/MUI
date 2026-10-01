@@ -63,8 +63,9 @@ pub struct GpuCanvas {
     /// The beauty sample 3D frames draw as ([`mui_stage::Shot::sample`]);
     /// the shutter sets it per subframe.
     pub(crate) sample: Option<u32>,
-    /// 3D glass path traced, these many paths per pixel per draw; `None`
-    /// is raster glass. Set only on a device with ray queries.
+    /// 3D glass ray traced: 0 the deterministic trace, else path traced,
+    /// these many paths per pixel per draw; `None` is raster glass. Set
+    /// only on a device with ray queries.
     #[cfg_attr(
         target_arch = "wasm32",
         expect(dead_code, reason = "the web has no ray-traced glass")
