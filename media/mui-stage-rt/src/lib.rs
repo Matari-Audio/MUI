@@ -202,6 +202,26 @@ pub struct Rt {
     out: usize,
     bounces: u32,
     denoise: bool,
+    timer: Option<Timer>,
+}
+
+/// GPU timestamps around the tracer's passes, on a device with
+/// [`wgpu::Features::TIMESTAMP_QUERY`] and `TIMESTAMP_QUERY_INSIDE_ENCODERS`:
+/// 0..1 the scene's TLAS build, 1..2 the trace, 2..3 the filter, 4..5 the
+/// composite.
+struct Timer {
+    set: wgpu::QuerySet,
+    resolve: wgpu::Buffer,
+    read: wgpu::Buffer,
+}
+
+/// Milliseconds of GPU time in the last frame's passes.
+#[derive(Clone, Copy, Debug)]
+pub struct GpuTimes {
+    pub tlas: f64,
+    pub trace: f64,
+    pub filter: f64,
+    pub composite: f64,
 }
 
 impl Rt {
@@ -328,6 +348,29 @@ impl Rt {
             out: 0,
             bounces: BOUNCES,
             denoise: true,
+            timer: device
+                .features()
+                .contains(
+                    wgpu::Features::TIMESTAMP_QUERY
+                        | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS,
+                )
+                .then(|| Timer {
+                    set: device.create_query_set(&wgpu::QuerySetDescriptor {
+                        label: Some("mui-stage-rt timer"),
+                        ty: wgpu::QueryType::Timestamp,
+                        count: 6,
+                    }),
+                    resolve: buffer(
+                        "mui-stage-rt timer",
+                        48,
+                        wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
+                    ),
+                    read: buffer(
+                        "mui-stage-rt timer read",
+                        48,
+                        wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                    ),
+                }),
         })
     }
 
@@ -690,8 +733,11 @@ impl Rt {
             let mut enc = self
                 .device
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-            if std::mem::take(&mut build) {
+            let first = std::mem::take(&mut build);
+            if first {
+                stamp(self.timer.as_ref(), &mut enc, 0);
                 enc.build_acceleration_structures(std::iter::empty(), std::iter::once(&self.tlas));
+                stamp(self.timer.as_ref(), &mut enc, 1);
             }
             {
                 let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
@@ -702,7 +748,9 @@ impl Rt {
             self.samples += n;
             left -= n;
             if left == 0 {
+                stamp(self.timer.as_ref(), &mut enc, 2);
                 self.filter_into(&mut enc);
+                stamp(self.timer.as_ref(), &mut enc, 3);
             }
             self.queue.submit([enc.finish()]);
         }
@@ -817,6 +865,7 @@ impl Rt {
         let mut enc = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        stamp(self.timer.as_ref(), &mut enc, 4);
         {
             let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -834,7 +883,34 @@ impl Rt {
             pass.set_bind_group(0, &group, &[]);
             pass.draw(0..3, 0..1);
         }
+        stamp(self.timer.as_ref(), &mut enc, 5);
+        if let Some(t) = &self.timer {
+            enc.resolve_query_set(&t.set, 0..6, &t.resolve, 0);
+            enc.copy_buffer_to_buffer(&t.resolve, 0, &t.read, 0, 48);
+        }
         self.queue.submit([enc.finish()]);
+    }
+
+    /// The last composited frame's GPU time per pass, waiting for it; `None`
+    /// on a device without timestamp queries (see [`Timer`]). With more
+    /// than [`CHUNK`] samples a frame, the trace includes the gaps between
+    /// its submissions.
+    pub fn gpu_times(&self) -> Option<GpuTimes> {
+        let t = self.timer.as_ref()?;
+        let slice = t.read.slice(..);
+        slice.map_async(wgpu::MapMode::Read, |_| {});
+        self.device.poll(wgpu::PollType::wait_indefinitely()).ok()?;
+        let s: Vec<u64> = bytemuck::cast_slice(&slice.get_mapped_range().ok()?).to_vec();
+        t.read.unmap();
+        let ms = |a: usize, b: usize| {
+            s[b].saturating_sub(s[a]) as f64 * f64::from(self.queue.get_timestamp_period()) * 1e-6
+        };
+        Some(GpuTimes {
+            tlas: ms(0, 1),
+            trace: ms(1, 2),
+            filter: ms(2, 3),
+            composite: ms(4, 5),
+        })
     }
 
     /// The hybrid frame: `stage` draws `shot` into `target`, `spp` more
@@ -952,6 +1028,12 @@ impl Rt {
             .poll(wgpu::PollType::wait_indefinitely())
             .map(|_| ())
             .map_err(gpu)
+    }
+}
+
+fn stamp(timer: Option<&Timer>, enc: &mut wgpu::CommandEncoder, i: u32) {
+    if let Some(t) = timer {
+        enc.write_timestamp(&t.set, i);
     }
 }
 

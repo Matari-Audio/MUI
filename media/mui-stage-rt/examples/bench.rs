@@ -14,7 +14,41 @@ fn main() {
         .and_then(|a| a.parse().ok())
         .unwrap_or(120);
     let (w, h) = (1920, 1080);
-    let (mut stage, mut rt) = mui_stage_rt::open(w, h).expect("a ray-query adapter");
+    let adapter = mui_stage_rt::probe().expect("a ray-query adapter");
+    // GPU timestamps between the passes, so a busy CPU does not count.
+    let stamps = wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS;
+    let mut desc = mui_stage_rt::device_descriptor(&adapter);
+    desc.required_features |= stamps;
+    let (device, queue) = pollster::block_on(adapter.request_device(&desc)).unwrap();
+    let mut rt = mui_stage_rt::Rt::new(&device, &queue, w, h).unwrap();
+    let mut stage = mui_stage::Stage::with_device(device.clone(), queue.clone(), w, h).unwrap();
+    let set = device.create_query_set(&wgpu::QuerySetDescriptor {
+        label: None,
+        ty: wgpu::QueryType::Timestamp,
+        count: 2,
+    });
+    let resolve = device.create_buffer(&wgpu::BufferDescriptor {
+        label: None,
+        size: 16,
+        usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
+        mapped_at_creation: false,
+    });
+    let read = device.create_buffer(&wgpu::BufferDescriptor {
+        label: None,
+        size: 16,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let period = f64::from(queue.get_timestamp_period()) * 1e-6;
+    let stamp = |i: u32| {
+        let mut enc = device.create_command_encoder(&Default::default());
+        enc.write_timestamp(&set, i);
+        if i == 1 {
+            enc.resolve_query_set(&set, 0..2, &resolve, 0);
+            enc.copy_buffer_to_buffer(&resolve, 0, &read, 0, 16);
+        }
+        queue.submit([enc.finish()]);
+    };
     // Glyph-like ink: thin light strokes on clear, over a faint fill.
     let size = [1024u32, 1024];
     let tex = stage
@@ -66,7 +100,15 @@ fn main() {
     let target = stage_target(&rt, w, h);
     let view = target.create_view(&wgpu::TextureViewDescriptor::default());
     let format = wgpu::TextureFormat::Rgba8Unorm;
-    let mut ms = [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
+    const ROWS: [&str; 6] = [
+        "raster (bracketed)",
+        "TLAS build",
+        "trace 1 spp",
+        "filter",
+        "composite",
+        "frame (CPU wall)",
+    ];
+    let mut ms: [Vec<f64>; 6] = Default::default();
     for f in 0..frames + 10 {
         let yaw = (f as f32 * 0.2).sin() * 12.;
         let shot = Shot {
@@ -77,37 +119,50 @@ fn main() {
             ..Shot::new(Camera::front(1100., 40.).orbit(yaw, 8.))
         };
         let t0 = Instant::now();
+        stamp(0);
         stage.draw(&shot, 0., &view, format).unwrap();
-        rt.finish().unwrap();
-        let t1 = Instant::now();
+        stamp(1);
         rt.trace(&shot, 1).unwrap();
-        rt.finish().unwrap();
-        let t2 = Instant::now();
         rt.composite(&shot, &view, format);
+        let g = rt.gpu_times().expect("timestamp queries");
+        let wall = t0.elapsed().as_secs_f64() * 1e3;
+        read.slice(..).map_async(wgpu::MapMode::Read, |_| {});
         rt.finish().unwrap();
-        let t3 = Instant::now();
+        let t: Vec<u64> =
+            bytemuck::cast_slice(&read.slice(..).get_mapped_range().unwrap()).to_vec();
+        read.unmap();
         if f >= 10 {
-            for (k, d) in [t1 - t0, t2 - t1, t3 - t2, t3 - t0].into_iter().enumerate() {
-                ms[k].push(d.as_secs_f64() * 1e3);
+            let row = [
+                (t[1] - t[0]) as f64 * period,
+                g.tlas,
+                g.trace,
+                g.filter,
+                g.composite,
+                wall,
+            ];
+            for (v, x) in ms.iter_mut().zip(row) {
+                v.push(x);
             }
         }
     }
-    for (name, v) in ["raster", "trace 1 spp + filter", "composite", "frame"]
-        .iter()
-        .zip(&mut ms)
-    {
+    let mut p50 = [0.; 6];
+    for (k, v) in ms.iter_mut().enumerate() {
         v.sort_by(f64::total_cmp);
+        p50[k] = v[v.len() / 2];
         println!(
-            "{name:>22}: p50 {:6.2} ms  p95 {:6.2} ms",
-            v[v.len() / 2],
+            "{:>20}: p50 {:6.2} ms  p95 {:6.2} ms",
+            ROWS[k],
+            p50[k],
             v[v.len() * 95 / 100]
         );
     }
-    let p50 = ms[3][ms[3].len() / 2];
+    let gpu: f64 = p50[..5].iter().sum();
     println!(
-        "{:>22}: {:.1} fps at p50, {w}x{h}, {frames} frames",
-        "hybrid",
-        1e3 / p50
+        "{w}x{h}, {frames} frames: {gpu:.1} ms GPU a frame at p50, {:.0} fps",
+        1e3 / gpu
+    );
+    println!(
+        "(the raster row is timestamps either side of Stage::draw's submissions: CPU gaps between them count)"
     );
 }
 
