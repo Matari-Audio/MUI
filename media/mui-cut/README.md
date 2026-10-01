@@ -803,9 +803,9 @@ are sized to be read by a model (1600 px wide).
   `ignored_prop` (a field this layer's kind ignores), `duplicate_key`,
   `key_outside_scene`, `overshoot` (a bezier leaving its keys' range; a
   warning where the value is clamped, like opacity), `missing_asset`,
-  `never_visible`, `clipped` (at rest, mostly outside the frame),
-  `text_overlap` (two text layers at rest), `low_contrast` (text against the
-  pixels actually rendered behind it, under 3:1), `fast_motion` (faster than
+  `never_visible`, `clipped` (at rest, most of its ink outside the frame),
+  `text_overlap` (two text layers at rest whose glyphs touch), `low_contrast`
+  (text against the pixels actually rendered behind its glyphs, under 3:1), `fast_motion` (faster than
   8% of the frame a frame: it strobes), `empty_frame` (nothing visible
   between things that are), `short_scene`, `empty_scene`. "At rest" means
   not moving or fading, so entrances and exits do not count. `--json` gives
