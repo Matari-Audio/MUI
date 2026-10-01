@@ -140,10 +140,10 @@ EXPLODE += [key(HIT_T, OPEN), key(HIT_T + 0.75, REST)]
 EXPLODE[-2]["out"] = [0.1, -0.7 * (OPEN - REST)]  # snaps shut on the hit, then settles
 
 # Controls the hand touches, lit while touched.
-P_WAVE = "group-frame/0/osc/0/panel/wave/osc/0/wave"
-P_VOICES = "group-frame/0/osc/0/panel/unison/osc/0/voices"
-P_EDITOR = "group-frame/0/osc/0/panel/wave/osc/0/wave-editor"
-P_UNISON = "group-frame/0/osc/0/panel/unison/osc/0/unison"
+P_WAVE = "osc/0/osc/0/panel/wave/osc/0/wave"
+P_VOICES = "osc/0/osc/0/panel/unison/osc/0/voices"
+P_EDITOR = "osc/0/osc/0/panel/wave/osc/0/wave-editor"
+P_UNISON = "osc/0/osc/0/panel/unison/osc/0/unison"
 
 
 def lit(t0, t1):
@@ -152,7 +152,6 @@ def lit(t0, t1):
     return keys((t0 - 0.15, 0.0), (t0, 1.0), (t1 - 0.12, 1.0), (t1, 0.0))
 
 
-GLASS_T = (5.3, 8.2)
 kurv_parts = {
     "masthead": {"opacity": 0.0},  # its light-grey plate reads as a slab in 3D
     P_WAVE: {"highlight": lit(2.0, 4.7)},
@@ -195,16 +194,16 @@ E = 1.0 / FPS  # a shot's last key: the frame before its cut
 def camera():
     # (t, target u, v, z, distance, rx, ry, fov, aperture) per waypoint.
     shots = [
-        (0.0, 360, 292, -45, 1060, 9, -40, 24, 18),  # 1: macro across the wave
-        (2.0 - E, 520, 300, -45, 900, 6, -28, 24, 18),
-        (2.0, 440, 332, -50, 1000, 3, 24, 26, 13),  # 2: the hand on WAVE
-        (4.0 - E, 452, 336, -50, 900, 2, 15, 26, 13),
-        (4.0, 640, 330, -40, 1380, 13, -28, 28, 8),  # 3: the oscillator, 3/4
-        (5.0, 655, 332, -60, 1300, 12, -22, 28, 7),
-        (6.2, 600, 330, -200, 1500, 14, -38, 30, 6),  # 4: the explode, orbiting
-        (8.0, 610, 340, -180, 1400, 8, 34, 30, 5),
-        (9.3, 640, 500, 0, 1800, 6, -12, 30, 3),  # 5: the hero
-        (10.0, 640, 502, 0, 1770, 6, -13, 30, 3),
+        (0.0, 360, 292, -45, 1060, -4, -40, 24, 18),  # 1: macro across the wave
+        (2.0 - E, 520, 300, -45, 900, -6, -28, 24, 18),
+        (2.0, 440, 332, -50, 1000, -3, 24, 26, 13),  # 2: the hand on WAVE
+        (4.0 - E, 452, 336, -50, 900, -4, 15, 26, 13),
+        (4.0, 640, 330, -40, 1380, -9, -28, 28, 8),  # 3: the oscillator, 3/4, the sky behind
+        (5.0, 655, 332, -60, 1300, -10, -22, 28, 7),
+        (6.2, 600, 330, -200, 1500, -12, -38, 30, 6),  # 4: the explode, orbiting, glass
+        (8.0, 610, 340, -180, 1400, -6, 34, 30, 5),
+        (9.3, 640, 500, 0, 1800, -5, -12, 30, 3),  # 5: the hero
+        (10.0, 640, 502, 0, 1770, -5, -13, 30, 3),
     ]
     col = lambda i: [(w[0], w[i]) for w in shots]
     xy = [(w[0], ui(w[1], w[2])) for w in shots]
@@ -223,23 +222,37 @@ def camera():
 
 
 def lights():
+    on = lambda v: keys((0, 0.0), (1.5, v), (9.4, v), (10.0, 0.0))
     return [
         {
-            # One cool key, raking across the panel as it comes up.
+            # A soft key from the front left, raking across the panel as it
+            # comes up: the sky's light on the face the camera sees.
             "id": "key",
             "kind": "light",
-            "fill": "#cfdbee",
+            "fill": "#f4f1ea",
             "rx": 38.0,
             "ry": keys((0, -78.0), (2.0, -40.0)),
-            "intensity": keys((0, 0.0), (1.5, 2.4), (9.4, 2.4), (10.0, 0.0)),
+            "intensity": on(2.2),
             "softness": 3.0,
+        },
+        {
+            # The sun itself, low and to the left, out of the frame: warm
+            # rims (it travels from the sky's sun, 22 degrees down, from 70
+            # left of straight ahead).
+            "id": "sun",
+            "kind": "light",
+            "fill": "#ffe2b8",
+            "rx": 22.0,
+            "ry": 110.0,
+            "intensity": on(1.6),
+            "softness": 2.0,
         },
         {
             "id": "fill",
             "kind": "light",
             "type": "ambient",
-            "fill": "#a9b3c6",
-            "intensity": keys((0, 0.0), (1.5, 0.16), (9.4, 0.16), (10.0, 0.0)),
+            "fill": "#b4c6dc",
+            "intensity": on(0.3),
         },
     ]
 
@@ -249,6 +262,9 @@ BACKDROP = keys((0, 1.0), (5.2, 1.0), (6.0, 0.0), (HIT_T, 0.0), (HIT_T + 0.6, 1.
 
 
 def kurv():
+    parts = swept_parts()
+    for pid, p in kurv_parts.items():
+        parts[pid] = {**parts.get(pid, {}), **p}
     return {
         "id": "kurv",
         "name": "KURV",
@@ -256,33 +272,81 @@ def kurv():
         "volume": VOLUME,
         "explode": EXPLODE,
         "backdrop": BACKDROP,
-        "parts": kurv_parts,
+        "parts": parts,
+        "material": GLASS,
     }
 
 
-def glass():
-    """The displays turn to glass through the explode: component layers of
-    the same plugin (the same commands, so the same captures), silent."""
-    fade = keys((GLASS_T[0], 0.0), (GLASS_T[0] + 0.4, 1.0), (GLASS_T[1] - 0.4, 1.0), (GLASS_T[1], 0.0))
-    # Always in front of what it copies: glass passing through the parts
-    # would swap them between the opaque and glass passes, a flash a frame.
-    lift = {"z": -140.0}
-    clear = {"transmission": 0.96, "roughness": 0.03, "ior": 1.52, "dispersion": 0.7, "thickness": 14.0}
-    frost = {"transmission": 0.92, "roughness": 0.38, "ior": 1.45, "thickness": 10.0}
-    out = []
-    for gid, show, mat in [("glass-clear", [P_EDITOR], clear), ("glass-frost", [P_UNISON], frost)]:
-        out.append(
-            {
-                "id": gid,
-                **common,
-                "volume": 0.0,
-                "explode": EXPLODE,
-                "show": show,
-                "opacity": fade,
-                "parts": {p: lift for p in show},
-                "material": mat,
-            }
-        )
+# ---------------------------------------------------------------- glass
+# On the V's downbeat (6.0 s) KURV turns to glass, rippling out from the
+# oscillator the hand plays to its racks in under half a second; the explode opens through it
+# and the hit (8.0 s) snaps it shut, all glass. Its dark UI turns clear
+# (`print`), its light marks stay as ink; bevelled rims bend the clouds.
+GLASS_AT = 6.0
+SWEEP = 0.4  # the middle to the racks
+MIDDLE = 0.47
+TURN = 0.3  # one panel, opaque to clear
+# KURV's panels and their controls (two levels of parts; a part's glass
+# keys its children too) and where their middles sit across the UI, 0..1.
+# The racks' ids have dots, which part paths cannot: they turn with the
+# layer, last.
+PANELS = {
+    "osc/0": 0.47,
+    "warp/0": 0.47,
+    "group/0": 0.47,
+    "osc/0/osc/0/input-tab": 0.21,
+    "osc/0/osc/0/title/well": 0.36,
+    "osc/0/osc/0/title/above": 0.25,
+    "osc/0/osc/0/title/material": 0.25,
+    "osc/0/osc/0/title/below": 0.25,
+    "osc/0/osc/0/panel/wave": 0.38,
+    "osc/0/osc/0/panel/unison": 0.6,
+    "osc/0/osc/0/output-tab": 0.74,
+    "warp/0/warp/0/rail": 0.26,
+    "warp/0/warp/0/response": 0.5,
+    "warp/0/warp/0/type/prev": 0.3,
+    "warp/0/warp/0/type": 0.33,
+    "warp/0/warp/0/type/next": 0.36,
+    "warp/0/warp/0/CUTOFF": 0.42,
+    "warp/0/warp/0/RESONANCE": 0.5,
+    "warp/0/warp/0/DB/OCT": 0.59,
+    "warp/0/warp/0/MORPH": 0.67,
+    "group/0/group/0/power": 0.21,
+    "group/0/group/0/title": 0.26,
+    "group/0/group/0/envelope": 0.4,
+    "group/0/group/0/gain": 0.52,
+    "group/0/group/0/pan": 0.56,
+    "group/0/group/0/pitch": 0.6,
+    "group/0/group/0/routing": 0.68,
+    "group/0/group/0/remove": 0.73,
+    "group/0/group/0/collapse": 0.73,
+}
+
+
+def turn(t0):
+    """Opaque to glass from t0, over TURN seconds."""
+    return {
+        "transmission": keys((t0, 0.0), (t0 + TURN, 1.0)),
+        "roughness": keys((t0, 0.42), (t0 + TURN, 0.04)),
+        "bevel": keys((t0, 0.0), (t0 + TURN, 9.0)),
+    }
+
+
+GLASS = {
+    # The backdrop and the racks: the end of the ripple.
+    **turn(GLASS_AT + SWEEP),
+    "print": 1.0,
+    "ior": 1.5,
+    "thickness": 14.0,
+    "dispersion": 0.55,
+    "tint": "#f4f8ff",
+}
+
+
+def swept_parts():
+    out = {}
+    for pid, u in PANELS.items():
+        out[pid] = {"material": turn(GLASS_AT + SWEEP * min(abs(u - MIDDLE) / 0.4, 1.0))}
     return out
 
 
@@ -309,12 +373,21 @@ project = {
         {
             "name": "kurv",
             "duration": DUR,
-            "background": "#060709",
+            "background": "#9fb6cf",
             "mode": "3d",
-            "layers": [camera(), *lights(), kurv(), *glass(), wordmark()],
-            "ground": {"y": FLOOR, "color": "#0c0d10", "radius": 5000.0, "reflect": 0.32, "contact": 0.75},
-            "fog": {"color": "#060709", "near": 1400.0, "far": 5200.0},
-            "environment": {"intensity": keys((0, 0.0), (1.6, 0.35), (9.3, 0.35), (10.0, 0.0)), "rotation": -30.0},
+            "layers": [camera(), *lights(), kurv(), wordmark()],
+            # Late afternoon above the clouds: the sun low on the left, out
+            # of the frame, warming the clouds; they drift right.
+            "sky": {
+                "elevation": 22.0,
+                "azimuth": -70.0,
+                "cover": 0.44,
+                "wind": 0.05,
+                "zenith": "#1d4c96",
+                "horizon": "#a8c1dd",
+                "sun": "#ffe7c6",
+                "intensity": keys((0, 0.0), (0.9, 1.0), (9.4, 1.0), (10.0, 0.0)),
+            },
             "ao": {"strength": 1.0, "radius": 50.0},
             "effects": [
                 {"type": "grain", "amount": 0.035, "size": 1.2},
