@@ -182,6 +182,14 @@ pub struct Scene {
     pub effects: Vec<fx::Effect>,
 }
 
+impl Scene {
+    /// Whether mui-cut draws over the frames Blender renders of it: the
+    /// scene's effects, or a flat overlay layer.
+    pub fn composites_over_blender(&self) -> bool {
+        !self.effects.is_empty() || self.layers.iter().any(|l| l.overlay)
+    }
+}
+
 /// What a layer draws.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "lowercase")]

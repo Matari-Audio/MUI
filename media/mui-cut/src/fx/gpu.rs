@@ -47,8 +47,7 @@ fn source(name: &str) -> Option<&'static str> {
 
 struct Targets {
     size: [u32; 2],
-    /// `A`'s texture, which a plate is written into.
-    a: wgpu::Texture,
+    textures: [wgpu::Texture; 4],
     views: [wgpu::TextureView; 4],
     binds: [wgpu::BindGroup; 4],
 }
@@ -206,6 +205,7 @@ impl Passes {
                 format: self.format,
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                     | wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_SRC
                     | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             })
@@ -237,10 +237,9 @@ impl Passes {
                 ],
             })
         });
-        let a = textures[A].clone();
         self.targets = Some(Targets {
             size,
-            a,
+            textures,
             views,
             binds,
         });
@@ -487,7 +486,7 @@ impl Passes {
             frame,
             passes(&frame.effects) + 2 + layer_passes(&overlays),
         );
-        let a = &self.targets.as_ref().expect("prepared").a;
+        let a = &self.targets.as_ref().expect("prepared").textures[A];
         canvas.queue.write_texture(
             a.as_image_copy(),
             rgba,
@@ -500,6 +499,89 @@ impl Passes {
         );
         self.finish(canvas, assets, frame, hd, &overlays, target)?;
         Ok(())
+    }
+
+    /// Each box of `atlas` through its stack, in place: a 3D frame's layer
+    /// with effects, painted with room around it for what they spread. A
+    /// box is its corner, size, and pixels per project pixel.
+    pub(crate) fn boxes(
+        &mut self,
+        canvas: &GpuCanvas,
+        frame: &Frame,
+        atlas: &wgpu::Texture,
+        boxes: &[([u32; 2], [u32; 2], f64, &[Fx])],
+    ) {
+        // One size for all (grown, never shrunk), each box at its centre,
+        // so a scene of several does not reallocate per box.
+        let mut size = self.targets.as_ref().map_or([1, 1], |t| t.size);
+        for (_, px, _, _) in boxes {
+            size = [size[0].max(px[0]), size[1].max(px[1])];
+        }
+        let n = boxes.iter().map(|b| passes(b.3)).sum::<u64>() + 1;
+        self.prepare(&canvas.device, size, n);
+        self.staged.clear();
+        self.written = 0;
+        let mut enc = encoder(canvas);
+        let copy = |enc: &mut wgpu::CommandEncoder,
+                    from: &wgpu::Texture,
+                    a: [u32; 2],
+                    to: &wgpu::Texture,
+                    b: [u32; 2],
+                    px: [u32; 2]| {
+            let (mut src, mut dst) = (from.as_image_copy(), to.as_image_copy());
+            src.origin = wgpu::Origin3d {
+                x: a[0],
+                y: a[1],
+                z: 0,
+            };
+            dst.origin = wgpu::Origin3d {
+                x: b[0],
+                y: b[1],
+                z: 0,
+            };
+            enc.copy_texture_to_texture(
+                src,
+                dst,
+                wgpu::Extent3d {
+                    width: px[0],
+                    height: px[1],
+                    depth_or_array_layers: 1,
+                },
+            );
+        };
+        for &(at, px, k, stack) in boxes {
+            let t = self.targets.as_ref().expect("prepared");
+            let mid = [(size[0] - px[0]) / 2, (size[1] - px[1]) / 2];
+            // `L` clear but for the box: what the stack reads past it is
+            // transparent, as round a flat layer.
+            drop(enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("mui-cut fx clear"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &t.views[L],
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            }));
+            copy(&mut enc, atlas, at, &t.textures[L], mid, px);
+            let h = Header {
+                res: size.map(|v| v as f32),
+                time: frame.t as f32,
+                scale: k as f32,
+                seed: frame.seed,
+            };
+            let out = self.chain(&mut enc, h, L, stack);
+            let t = self.targets.as_ref().expect("prepared");
+            copy(&mut enc, &t.textures[out], mid, atlas, at, px);
+        }
+        self.submit(canvas, enc);
     }
 
     /// `frame` with its effects into `target`; its quads.

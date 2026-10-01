@@ -380,8 +380,10 @@ mesh. Scenes without it render exactly as before.
 - Scene `ground` (`y`, `color`, `radius`, `reflect`, `contact` shadow
   strength) and `fog` (`color`, `near`, `far`); `background` is the clear.
 - A scene's `effects` run on the 3D pass's output, per subframe, before
-  motion blur averages them, as in 2D. A layer's own `effects` do not run
-  in 3D (see Limits).
+  motion blur averages them, as in 2D. A layer's own `effects` run on its
+  slab: its box in the atlas gets room each side for what the stack
+  spreads (3 x a blur's radius, half a directional blur, a displacement or
+  chromatic amount), runs the stack there, and the slab grows to show it.
 - Motion blur re-renders the 3D pass per subframe. The web editor draws
   3D on WebGPU; WebGL2 and the CPU draw 3D scenes flat with a notice, and
   an export refuses to. **Orbit** in the header swings the preview camera
@@ -980,7 +982,8 @@ same reason.
   from `serve` (`GET /mix.wav`): opened without it, it exports silent;
   it encodes AAC where the browser can (Chrome on Linux: Opus), with the
   encoder's priming samples left in (a few ms).
-- `--renderer blender`: scene and layer `effects` are skipped (it says so);
+- `--renderer blender`: layer `effects` are skipped; scene `effects` and
+  `overlay` layers are drawn by mui-cut over Blender's frames (on the GPU);
   a model's `fill` tint is ignored; frames are 8-bit PNG; point and spot
   light strength is matched to mui-stage at the nearest subject the light
   faces, so inverse-square falloff differs elsewhere; metals mirror the

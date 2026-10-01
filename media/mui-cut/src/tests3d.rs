@@ -452,6 +452,66 @@ fn an_overlay_draws_flat_over_the_3d_pass_and_its_effects() {
     .unwrap();
     let ids: Vec<&str> = desc.layers.iter().map(|l| l.id.as_str()).collect();
     assert_eq!(ids, ["card"], "Blender leaves the overlay to mui-cut");
+    assert!(
+        p.scenes[0].composites_over_blender() && !under.scenes[0].effects.is_empty(),
+        "mui-cut composites over Blender's frames"
+    );
+    under.scenes[0].effects.clear();
+    assert!(!under.scenes[0].composites_over_blender());
+    p.scenes[0].effects.clear();
+    assert!(
+        p.scenes[0].composites_over_blender(),
+        "an overlay alone still needs the GPU pass over Blender"
+    );
+}
+
+/// A layer's own effects run in 3D, on its slab: levels greys a red card
+/// and a blur spreads it past its edge, onto room the slab grows for it,
+/// in plain frames and beauty samples. The others stay sharp.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_layers_effects_run_on_its_slab_with_room_to_spread() {
+    let p = scene3d(
+        r##"{"id":"card","kind":"rect","x":200,"y":180,"width":200,"height":160,
+            "fill":"#e03020","effects":[{"type":"levels","saturation":0},
+            {"type":"blur","radius":6}]},
+           {"id":"plain","kind":"rect","x":480,"y":180,"width":120,"height":120,
+            "fill":"#e03020"}"##,
+    );
+    let at = |x: usize, y: usize| (y * 640 + x) * 4;
+    let rgb = |px: &[u8], i: usize| [0, 1, 2].map(|k| i32::from(px[i + k]));
+    for engine in [Engine::Classic, Engine::Sparse] {
+        let Some(mut g) = offline(&p, engine) else {
+            return;
+        };
+        let f = eval(&p, &p.scenes[0], 0.);
+        for beauty in [false, true] {
+            g.beauty = beauty;
+            let px = frame(&mut g, &vec![f.clone(); if beauty { 4 } else { 1 }]);
+            assert!(g.canvas.notice().is_empty(), "{}", g.canvas.notice());
+            let [r, gr, b] = rgb(&px, at(200, 180));
+            assert!(
+                (r - gr).abs() <= 3 && (gr - b).abs() <= 3 && r > 20,
+                "{engine:?} {beauty}: levels greyed the card: {r} {gr} {b}"
+            );
+            let bg = rgb(&px, at(630, 10))[0];
+            // The card ends at x 300: blurred, it fades out past it.
+            let (inside, edge, out) = (
+                rgb(&px, at(290, 180))[0],
+                rgb(&px, at(300, 180))[0],
+                rgb(&px, at(308, 180))[0],
+            );
+            assert!(
+                inside > edge && edge > out && out > bg + 6,
+                "{engine:?} {beauty}: blur spreads: {inside} {edge} {out}"
+            );
+            // The plain card's edge (x 540) stays sharp and red.
+            let [r, gr, _] = rgb(&px, at(536, 180));
+            assert!(r > gr + 80, "{engine:?} {beauty}: plain card {r} {gr}");
+            let past = rgb(&px, at(546, 180))[0];
+            assert!(past <= bg + 2, "{engine:?} {beauty}: sharp: {past} on {bg}");
+        }
+    }
 }
 
 #[test]

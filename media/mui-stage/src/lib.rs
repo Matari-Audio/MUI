@@ -1201,7 +1201,8 @@ impl Stage {
             (size.width * supersample).ceil().clamp(1., 8192.) as u32,
             (size.height * supersample).ceil().clamp(1., 8192.) as u32,
         );
-        let target = self.layer_target(id, [w, h], wgpu::TextureFormat::Rgba8Unorm, u32::MAX)?;
+        let target =
+            view(&self.layer_target(id, [w, h], wgpu::TextureFormat::Rgba8Unorm, u32::MAX)?);
         let renderer = match &mut self.renderer {
             Some(r) => r,
             none => none.insert(pollster::block_on(GpuRenderer::new(
@@ -1223,14 +1224,15 @@ impl Stage {
     /// 8-bit one), for the caller to paint premultiplied sRGB into, as
     /// Vello does; then [`Stage::layer_done`]. It is kept while the size and
     /// format are. `mips` caps the mip chain: an atlas of many layers wants
-    /// few, so a far-off one does not bleed into its neighbours.
+    /// few, so a far-off one does not bleed into its neighbours. It can be
+    /// copied to and from, so a caller can post-process part of it.
     pub fn layer_target(
         &mut self,
         id: &str,
         size: [u32; 2],
         format: wgpu::TextureFormat,
         mips: u32,
-    ) -> Result<wgpu::TextureView, Error> {
+    ) -> Result<wgpu::Texture, Error> {
         let [w, h] = size.map(|v| v.clamp(1, 8192));
         let stale = self.layers.get(id).is_none_or(|l| {
             let s = l.raw.size();
@@ -1249,7 +1251,7 @@ impl Stage {
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format,
-                usage: RT,
+                usage: RT | wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             });
             // A slab seen far off or edge-on samples a mip, not a shimmer.
@@ -1273,7 +1275,7 @@ impl Stage {
                 },
             );
         }
-        Ok(view(&self.layers[id].raw))
+        Ok(self.layers[id].raw.clone())
     }
 
     /// Linearise and mipmap what was painted into [`Stage::layer_target`].
