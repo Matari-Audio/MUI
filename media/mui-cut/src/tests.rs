@@ -946,6 +946,10 @@ fn ray_traced_glass_is_asked_for_by_name_with_a_sample_count() {
     assert_eq!(rt(r#"{"glass":"rt-path"}"#), Some(16));
     assert_eq!(rt(r#"{"glass":"rt-path","glass_samples":64}"#), Some(64));
     assert_eq!(rt(r#"{"glass":"raster","glass_samples":64}"#), None);
+    // Traced glass needs no ray queries: it is not `rt`.
+    assert_eq!(rt(r#"{"glass":"trace"}"#), None);
+    let trace = load(r#"{"glass":"trace"}"#).unwrap().render.unwrap();
+    assert_eq!(trace.glass, Some(Glass::Trace));
     assert_eq!(rt("{}"), None);
     // A flag over the file: `--glass rt-path` turns it on, the file's count stays.
     let file = load(r#"{"glass_samples":8}"#).unwrap().render.unwrap();

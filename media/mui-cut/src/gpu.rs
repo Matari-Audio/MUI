@@ -71,6 +71,8 @@ pub struct GpuCanvas {
         expect(dead_code, reason = "the web has no ray-traced glass")
     )]
     pub(crate) glass: Option<u32>,
+    /// 3D glass traced through the slabs (`render.glass` `trace`).
+    pub(crate) trace: bool,
 }
 
 impl GpuCanvas {
@@ -106,6 +108,7 @@ impl GpuCanvas {
             fx: None,
             sample: None,
             glass: None,
+            trace: false,
         })
     }
     pub fn engine(&self) -> Engine {
@@ -498,7 +501,12 @@ mod offline {
                 wgpu::DeviceDescriptor::default()
             };
             let (device, queue) = adapter
-                .request_device(&desc)
+                .request_device(&wgpu::DeviceDescriptor {
+                    // `MUI_STAGE_TIMING` reads the stage's GPU time.
+                    required_features: desc.required_features
+                        | (adapter.features() & mui_stage::TIMESTAMPS),
+                    ..desc
+                })
                 .await
                 .map_err(|e| e.to_string())?;
             let mut o = Self::build(&device, &queue, size, engine, yuv).await?;
@@ -508,6 +516,11 @@ mod offline {
                 o.adapter.push_str(", ray-traced glass");
             }
             Ok(o)
+        }
+
+        /// 3D glass traced through the slabs instead of on screen.
+        pub fn trace_glass(&mut self, on: bool) {
+            self.canvas.trace = on;
         }
 
         /// Frames of another size (or pixel format) on the same device, its
@@ -523,6 +536,7 @@ mod offline {
             o.adapter = std::mem::take(&mut self.adapter);
             o.beauty = self.beauty;
             o.canvas.glass = self.canvas.glass;
+            o.canvas.trace = self.canvas.trace;
             *self = o;
             Ok(())
         }

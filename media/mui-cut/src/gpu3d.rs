@@ -506,6 +506,7 @@ impl Space {
             sky: view.sky,
             ao,
             sample: canvas.sample,
+            trace: canvas.trace,
             post: Post {
                 focus: cam.focus as f32,
                 aperture: blur,
