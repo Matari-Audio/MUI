@@ -395,12 +395,14 @@ fn eye_ray(uv: vec2f) -> vec3f {
     return normalize(g.cam_fwd.xyz + q.x * g.cam_right.w * g.cam_right.xyz + q.y * g.cam_up.w * g.cam_up.xyz);
 }
 
+// The background at `uv`: the shader, the clear colour or the environment.
+fn backdrop(uv: vec2f) -> vec3f {
+    if (env_on() && g.env2.x > 0.5) { return env_radiance(eye_ray(uv), 0.); }
+    return select(background(uv, g.time_res.x), g.clear.rgb, g.clear.a > 0.5);
+}
 @fragment fn fs_bg(i: Full) -> Out {
     var o: Out;
-    o.color = vec4f(select(background(i.uv, g.time_res.x), g.clear.rgb, g.clear.a > 0.5), 1.);
-    if (env_on() && g.env2.x > 0.5) {
-        o.color = vec4f(env_radiance(eye_ray(i.uv), 0.), 1.);
-    }
+    o.color = vec4f(backdrop(i.uv), 1.);
     o.dist = vec4f(60000., 60000., 0., 1.);
     return o;
 }
@@ -857,47 +859,77 @@ fn ggx_normal(n: vec3f, rough: f32, u: vec2f) -> vec3f {
 
 const SSR_STEPS: i32 = 48;
 const SSR_REACH: f32 = 4000.;
-// March from `p` along unit `r` against the opaque depths: the uv of the
-// first surface it passes behind (within a thickness), the hit's
-// confidence (0 missed; fading toward the frame's edge and the reach) and
-// the pixels travelled on screen.
-fn trace(p: vec3f, r: vec3f, jitter: f32) -> vec4f {
-    let w0 = dot(p - g.eye.xyz, g.cam_fwd.xyz);
-    let dw = dot(r, g.cam_fwd.xyz);
-    var reach = SSR_REACH;
-    if (dw < 0.) { reach = min(reach, (w0 - 2.) / -dw); }
-    if (reach <= 1.) { return vec4f(0.); }
-    let a = screen(p);
+// March from `p` along unit `r` against the opaque depths: how far along
+// it first passes behind a surface (within a thickness), bisected to the
+// crossing; -1 if it leaves the frame or the reach first.
+fn march(p: vec3f, r: vec3f, jitter: f32, reach: f32) -> f32 {
     var prev = 0.;
+    var front = true;
     for (var k = 0; k < SSR_STEPS; k++) {
         var s = (f32(k) + jitter) / f32(SSR_STEPS);
         s = s * s;
         let t = reach * s;
         let q = p + r * t;
         let uv = screen(q);
-        if (any(uv.xy < vec2f(0.)) || any(uv.xy > vec2f(1.))) { return vec4f(0.); }
+        if (any(uv.xy < vec2f(0.)) || any(uv.xy > vec2f(1.))) { return -1.; }
         let ray = length(q - g.eye.xyz);
         let surf = scene_dist(uv.xy);
         let behind = ray - surf;
-        let thick = max(30., (t - prev) * 2.);
-        if (behind > 0.5 + surf * 0.002 && behind < thick && surf < 50000.) {
-            // Bisect to the crossing.
+        // It went behind, from in front: however far a step overshoots a
+        // surface seen edge-on. Behind something already (passing behind
+        // a ball), it hits nothing until it is out in front again.
+        let past = behind > 0.5 + surf * 0.002;
+        if (past && front && surf < 50000.) {
             var lo = prev;
             var hi = t;
-            for (var j = 0; j < 5; j++) {
+            for (var j = 0; j < 6; j++) {
                 let m = 0.5 * (lo + hi);
                 let qm = p + r * m;
                 let um = screen(qm);
                 if (length(qm - g.eye.xyz) > scene_dist(um.xy)) { hi = m; } else { lo = m; }
             }
-            let hit = screen(p + r * hi).xy;
-            let edge = max(abs(hit.x * 2. - 1.), abs(hit.y * 2. - 1.));
-            let conf = (1. - smoothstep(0.85, 1., edge)) * (1. - smoothstep(0.7, 1., hi / reach));
-            return vec4f(hit, conf, length((hit - a.xy) * g.time_res.yz));
+            // A crossing closes on the surface; a ray that only slipped
+            // behind a silhouette (from the void beside a card to behind
+            // its edge) stays as far behind as it was: march on.
+            let qh = p + r * hi;
+            let gap = length(qh - g.eye.xyz) - scene_dist(screen(qh).xy);
+            if (gap < max(3., (t - prev) * 0.125) + surf * 0.002) { return hi; }
         }
         prev = t;
+        front = !past;
     }
-    return vec4f(0.);
+    return -1.;
+}
+// Where a march's steps fall at pixel `px`: in the middle of each, so
+// neighbours agree and a reflection's outline is a clean line; a beauty
+// sample offsets them per pixel and per sample, which the mean smooths.
+fn march_jitter(px: vec2f) -> f32 {
+    if (!beauty()) { return 0.5; }
+    let ign = fract(52.982918 * fract(dot(px, vec2f(0.06711056, 0.00583715))));
+    return fract(ign + rand2(px).x);
+}
+// The furthest a ray from `p` along `r` is traced: the reach, or short of
+// the eye's near side.
+fn reach_of(p: vec3f, r: vec3f) -> f32 {
+    let w0 = dot(p - g.eye.xyz, g.cam_fwd.xyz);
+    let dw = dot(r, g.cam_fwd.xyz);
+    var reach = SSR_REACH;
+    if (dw < 0.) { reach = min(reach, (w0 - 2.) / -dw); }
+    return reach;
+}
+// `march`, as a reflection sees it: the hit's uv, its confidence (0
+// missed; fading toward the frame's edge and the reach) and the pixels
+// travelled on screen.
+fn trace(p: vec3f, r: vec3f, jitter: f32) -> vec4f {
+    let reach = reach_of(p, r);
+    if (reach <= 1.) { return vec4f(0.); }
+    let t = march(p, r, jitter, reach);
+    if (t < 0.) { return vec4f(0.); }
+    let a = screen(p);
+    let hit = screen(p + r * t).xy;
+    let edge = max(abs(hit.x * 2. - 1.), abs(hit.y * 2. - 1.));
+    let conf = (1. - smoothstep(0.85, 1., edge)) * (1. - smoothstep(0.7, 1., t / reach));
+    return vec4f(hit, conf, length((hit - a.xy) * g.time_res.yz));
 }
 // The mip that blurs a lookup by a cone `rough` wide over `px` pixels.
 fn rough_lod(rough: f32, px: f32) -> f32 {
@@ -937,8 +969,7 @@ fn reflection(p: vec3f, n: vec3f, r: vec3f, rough: f32, jitter: f32) -> vec3f {
     if (beauty() && rough > 0.02) { m = ggx_normal(n, rough, u); }
     var r = reflect(ray, m);
     if (dot(r, n) <= 0.) { r = reflect(ray, n); }
-    let ign = fract(52.982918 * fract(dot(vec2f(px), vec2f(0.06711056, 0.00583715))));
-    let c = reflection(p, n, r, rough, select(ign, fract(ign + u.x), beauty()));
+    let c = reflection(p, n, r, rough, march_jitter(vec2f(px)));
     return vec4f(s.rgb * (c - spec_fallback(r, rough)), 0.);
 }
 
@@ -956,7 +987,7 @@ fn ior_at(ior: f32, k: f32, nm: f32) -> f32 {
 // (a slab sends it on parallel to how it came, a solid along the refracted
 // ray) and find the opaque surface it meets. xy its uv, z the path inside,
 // w the pixels of the blur footprint per unit of roughness.
-fn refracted(p: vec3f, n: vec3f, m: vec3f, ray: vec3f, eta: f32, thick: f32, slab: bool) -> vec4f {
+fn refracted(p: vec3f, n: vec3f, m: vec3f, ray: vec3f, eta: f32, thick: f32, slab: bool, jitter: f32) -> vec4f {
     var t = refract(ray, m, 1. / eta);
     if (dot(t, t) < 1e-6) { t = ray; }
     let path = thick / max(abs(dot(t, n)), 0.2);
@@ -968,16 +999,25 @@ fn refracted(p: vec3f, n: vec3f, m: vec3f, ray: vec3f, eta: f32, thick: f32, sla
         dir = refract(t, n, eta);
         if (dot(dir, dir) < 1e-6) { dir = ray; }
     }
-    // How far behind the glass the opaque surface lies, refined twice.
-    var along = max(scene_dist(screen(p).xy) - length(p - g.eye.xyz), 0.);
-    var uv = screen(exit + dir * along);
-    for (var k = 0; k < 2; k++) {
-        let q = exit + dir * along;
-        along = max(along + scene_dist(uv.xy) - length(q - g.eye.xyz), 0.);
-        uv = screen(exit + dir * along);
+    // March to the opaque surface the ray meets: the depths behind glass
+    // jump (a letter, then the void round it), so no guess from the depth
+    // straight behind holds. Missing everything, it meets the background
+    // where the ray points (w -1), which the frame may hide behind a
+    // nearer surface there.
+    let along = march(exit, dir, jitter, reach_of(exit, dir));
+    if (along < 0.) {
+        return vec4f(clamp(screen(exit + dir * 1e6).xy, vec2f(0.), vec2f(1.)), path, -1.);
     }
+    let uv = screen(exit + dir * along);
     let behind = min(along, 3000.) / px_size(uv.z);
     return vec4f(clamp(uv.xy, vec2f(0.), vec2f(1.)), path, behind);
+}
+// What `refracted` found: the frame there, blurred by roughness, or the
+// background. ponytail: a missed ray sees the background unblurred; blur
+// it with the environment's mips if rough glass over the void bands.
+fn seen_through(h: vec4f, rough: f32) -> vec3f {
+    if (h.w < 0.) { return backdrop(h.xy); }
+    return textureSampleLevel(aux, samp, h.xy, rough_lod(rough, h.w)).rgb;
 }
 
 // A transmissive surface: Fresnel-weighted reflection of the frame (or
@@ -985,8 +1025,9 @@ fn refracted(p: vec3f, n: vec3f, m: vec3f, ray: vec3f, eta: f32, thick: f32, sla
 // and absorbed along the path inside, blurred by roughness; dispersion
 // sends red, green and blue through their own indices (wavelengths
 // jittered within each band per beauty sample). `base` is the surface
-// colour, `body` its lit opaque share (1 - transmission of it shows).
-fn glass(p: vec3f, n: vec3f, base: vec3f, body: vec3f, px: vec2f) -> vec3f {
+// colour; lit, its opaque share (1 - transmission) is diffuse, and every
+// light leaves a highlight on the surface as on any polished dielectric.
+fn glass(p: vec3f, n: vec3f, base: vec3f, px: vec2f) -> vec3f {
     let trans = d.glass.x;
     let ior = max(d.glass.y, 1.);
     let thick = max(d.glass.z, 0.);
@@ -1003,10 +1044,18 @@ fn glass(p: vec3f, n: vec3f, base: vec3f, body: vec3f, px: vec2f) -> vec3f {
     let fr = f0 + (1. - f0) * pow(1. - clamp(dot(m, v), 0., 1.), 5.);
     var r = reflect(ray, m);
     if (dot(r, n) <= 0.) { r = reflect(ray, n); }
+    var body = base;
+    var glint = vec3f(0.);
+    if (lit_shot()) {
+        let shine = 2. / max(rough * rough * rough * rough, 1e-3) - 2.;
+        let s = shade(p, n, d.flags.x, shine);
+        body = base * s.diffuse;
+        glint = f0 * s.spec * (shine + 8.) / 25.;
+    }
     // Opaque, drawn after glass it stands in front of: nothing to see through.
-    if (trans <= 0.) { return (1. - fr) * body + fr * spec_fallback(r, rough); }
-    let ign = fract(52.982918 * fract(dot(px, vec2f(0.06711056, 0.00583715))));
-    let refl = reflection(p, n, r, rough, select(ign, fract(ign + u.x), beauty()));
+    if (trans <= 0.) { return (1. - fr) * body + fr * spec_fallback(r, rough) + glint; }
+    let jit = march_jitter(px);
+    let refl = reflection(p, n, r, rough, jit);
     // Beauty: one wavelength per band, anywhere in it; else its middle.
     let w = select(vec3f(0.5), fract(vec3f(u.x, u.y, u.x + u.y) + g.jitter.zwz), beauty());
     let nm = vec3f(580., 490., 400.) + w * vec3f(120., 90., 90.);
@@ -1014,20 +1063,19 @@ fn glass(p: vec3f, n: vec3f, base: vec3f, body: vec3f, px: vec2f) -> vec3f {
     var path = vec3f(thick);
     if (k > 0.) {
         for (var c = 0; c < 3; c++) {
-            let h = refracted(p, n, m, ray, ior_at(ior, k, nm[c]), thick, slab);
-            let lod = rough_lod(rough, h.w);
-            seen[c] = textureSampleLevel(aux, samp, h.xy, lod)[c];
+            let h = refracted(p, n, m, ray, ior_at(ior, k, nm[c]), thick, slab, jit);
+            seen[c] = seen_through(h, rough)[c];
             path[c] = h.z;
         }
     } else {
-        let h = refracted(p, n, m, ray, ior, thick, slab);
-        seen = textureSampleLevel(aux, samp, h.xy, rough_lod(rough, h.w)).rgb;
+        let h = refracted(p, n, m, ray, ior, thick, slab, jit);
+        seen = seen_through(h, rough);
         path = vec3f(h.z);
     }
     // Beer-Lambert: `tint` is what is left after `thickness`.
     let absorb = select(d.tint.rgb, pow(max(d.tint.rgb, vec3f(1e-4)), path / max(thick, 1e-3)), thick > 0.);
     let through = seen * base * absorb * (1. - metal);
-    return (1. - fr) * mix(body, through, trans) + fr * refl;
+    return (1. - fr) * mix(body, through, trans) + fr * refl + glint;
 }
 
 // A glass face: its layer is the base colour and coverage.
@@ -1037,19 +1085,14 @@ fn glass(p: vec3f, n: vec3f, base: vec3f, body: vec3f, px: vec2f) -> vec3f {
     if (a < 0.004) { discard; }
     let base = c.rgb / max(c.a, 1e-4);
     let n = face_normal(i.world);
-    var body = base;
-    if (lit_shot()) { body = base * shade(i.world, n, d.flags.x, 0.).diffuse; }
-    let rgb = glass(i.world, n, base, body, i.pos.xy) * d.size.w;
+    let rgb = glass(i.world, n, base, i.pos.xy) * d.size.w;
     return out(vec4f(rgb * a, a), i.world);
 }
 // A glass wall or model: its colour is the base.
 @fragment fn fs_glass_solid(i: Wall) -> Out {
     var n = normalize(i.normal);
     if (dot(n, g.eye.xyz - i.world) < 0.) { n = -n; }
-    let base = d.edge.rgb;
-    var body = base;
-    if (lit_shot()) { body = base * shade(i.world, n, d.flags.x, 0.).diffuse; }
-    let rgb = glass(i.world, n, base, body, i.pos.xy);
+    let rgb = glass(i.world, n, d.edge.rgb, i.pos.xy);
     return out(vec4f(rgb, 1.) * d.edge.a, i.world);
 }
 

@@ -2394,7 +2394,6 @@ impl Stage {
             self.full(&mut rp, &self.pipes.ssr, &group);
         }
         if !glass.is_empty() {
-            self.build_chain(&mut enc);
             let groups: HashMap<&str, wgpu::BindGroup> = glass
                 .iter()
                 .filter(|(_, i)| *i < n)
@@ -2407,9 +2406,8 @@ impl Stage {
                 })
                 .collect();
             let solid = self.tex_group(&chain, &chain);
-            // The glass alone into `lit` (laid over the frame after), its
-            // distances over the opaque ones.
-            let resolve = |view, target, load: bool| wgpu::RenderPassColorAttachment {
+            let over = self.tex_group(&self.lit, &self.lit);
+            let resolve = |view, target, load: bool, store: bool| wgpu::RenderPassColorAttachment {
                 view,
                 depth_slice: None,
                 resolve_target: target,
@@ -2419,29 +2417,45 @@ impl Stage {
                     } else {
                         wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
                     },
-                    store: wgpu::StoreOp::Discard,
+                    store: if store {
+                        wgpu::StoreOp::Store
+                    } else {
+                        wgpu::StoreOp::Discard
+                    },
                 },
             };
-            let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
-                color_attachments: &[
-                    Some(resolve(&self.msaa, Some(&self.lit), false)),
-                    Some(resolve(&self.msaa_dist, Some(&self.dist), true)),
-                    Some(resolve(&self.msaa_spec, None, false)),
-                ],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.depth,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Discard,
+            // Far to near, each over the frame so far: the chain each one
+            // refracts and reflects holds the glass behind it too. The
+            // glass alone into `lit` (laid over the frame after), its
+            // distances over those before. ponytail: a chain per glass
+            // surface; batch the ones that overlap nothing nearer if many
+            // panes get slow.
+            for (k, &(_, i)) in glass.iter().enumerate() {
+                let more = k + 1 < glass.len();
+                self.build_chain(&mut enc);
+                let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    color_attachments: &[
+                        Some(resolve(&self.msaa, Some(&self.lit), false, false)),
+                        Some(resolve(&self.msaa_dist, Some(&self.dist), true, more)),
+                        Some(resolve(&self.msaa_spec, None, false, false)),
+                    ],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: &self.depth,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: if more {
+                                wgpu::StoreOp::Store
+                            } else {
+                                wgpu::StoreOp::Discard
+                            },
+                        }),
+                        stencil_ops: None,
                     }),
-                    stencil_ops: None,
-                }),
-                ..Default::default()
-            });
-            pass.set_bind_group(0, &self.group0, &[]);
-            let shadows = self.shadows.as_ref().map_or(&self.no_shadows, |s| &s.group);
-            pass.set_bind_group(3, shadows, &[]);
-            for &(_, i) in &glass {
+                    ..Default::default()
+                });
+                pass.set_bind_group(0, &self.group0, &[]);
+                let shadows = self.shadows.as_ref().map_or(&self.no_shadows, |s| &s.group);
+                pass.set_bind_group(3, shadows, &[]);
                 pass.set_bind_group(1, &self.group1, &[(i as u64 * SLOT) as u32]);
                 if i < n {
                     pass.set_bind_group(2, &groups[planes[i].layer.as_str()], &[]);
@@ -2460,14 +2474,13 @@ impl Stage {
                     pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
                     pass.draw_indexed(0..mesh.count, 0, 0..1);
                 }
+                drop(pass);
+                let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    color_attachments: &[Some(attach(&self.hdr, None))],
+                    ..Default::default()
+                });
+                self.full(&mut rp, &self.pipes.over, &over);
             }
-            drop(pass);
-            let group = self.tex_group(&self.lit, &self.lit);
-            let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
-                color_attachments: &[Some(attach(&self.hdr, None))],
-                ..Default::default()
-            });
-            self.full(&mut rp, &self.pipes.over, &group);
         }
         self.queue.submit([enc.finish()]);
         Ok(())

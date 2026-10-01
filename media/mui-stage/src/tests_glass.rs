@@ -97,7 +97,12 @@ impl Pane {
     /// The middle row, red, green and blue, through glass of `m` (none:
     /// no glass).
     fn row(&mut self, m: Option<Material>, sample: Option<u32>) -> [Vec<f32>; 3] {
-        let mut planes = vec![Plane::new("edge", 900., 900.).at(0., 0., -Self::BEHIND)];
+        let back = Plane::new("edge", 900., 900.).at(0., 0., -Self::BEHIND);
+        self.row_over(back, m, sample)
+    }
+    /// The same over `back` instead of the edge.
+    fn row_over(&mut self, back: Plane, m: Option<Material>, sample: Option<u32>) -> [Vec<f32>; 3] {
+        let mut planes = vec![back];
         if let Some(m) = m {
             planes.push(
                 Plane::new("clear", 240., 200.)
@@ -200,6 +205,36 @@ fn glass_shifts_what_is_behind_it_by_its_index_and_thickness() {
             (moved.abs() - want).abs() < 1.,
             "ior {n}, {thick} thick: moved {moved} px, expected {want}"
         );
+    }
+}
+
+/// A white card hanging in the void, its edge behind the pane: either side
+/// of the edge the frame behind lies at another depth (the card, or nothing
+/// at all), and the edge still moves by the slab's offset, whichever way.
+#[test]
+fn an_edge_over_the_void_shifts_by_the_slabs_offset() {
+    let Some(mut pane) = Pane::new() else {
+        return;
+    };
+    for side in [-1f32, 1.] {
+        let edge = |pane: &mut Pane, m: Option<Material>| {
+            let card = Plane::new("clear", 450., 900.).at(side * 225., 0., -Pane::BEHIND);
+            let mut row = pane.row_over(card, m, None)[1].clone();
+            // The card on the right: its light on the right of the edge.
+            if side > 0. {
+                row.iter_mut().for_each(|v| *v = 1. - *v);
+            }
+            Pane::edge(&row)
+        };
+        let bare = edge(&mut pane, None);
+        for (n, thick) in [(1.5, 80.), (1.9, 80.)] {
+            let moved = edge(&mut pane, Some(glass(n, thick))) - bare;
+            let want = Pane::expected(n, thick);
+            assert!(
+                (moved.abs() - want).abs() < 1.,
+                "card on side {side}, ior {n}, {thick} thick: moved {moved} px, expected {want}"
+            );
+        }
     }
 }
 
@@ -342,6 +377,74 @@ fn a_beauty_frame_converges_rough_glass() {
     );
 }
 
+/// A clear pane facing a light that shines from the eye: its middle
+/// mirrors the light back, a highlight over the black behind it; its
+/// corners, turned away from the mirror angle, stay dark.
+#[test]
+fn a_light_leaves_a_highlight_on_glass() {
+    let Some(mut pane) = Pane::new() else {
+        return;
+    };
+    let shot = Shot {
+        planes: vec![Plane::new("clear", 240., 200.).material(Material {
+            roughness: 0.3,
+            ..glass(1.5, 20.)
+        })],
+        lights: vec![Light {
+            direction: [0., 0., -1.],
+            ..Light::new(LightKind::Directional)
+        }],
+        clear: Some([0.; 3]),
+        post: Post::NONE,
+        ..Shot::new(Pane::camera())
+    };
+    let f = pane.stage.render(0., 0., 1, &|_| shot.clone()).unwrap();
+    let at = |x: usize, y: usize| f.rgba[(y * Pane::W + x) * 4 + 1];
+    let (middle, corner) = (
+        at(Pane::W / 2, Pane::H / 2),
+        at(Pane::W / 2 + 110, Pane::H / 2 + 90),
+    );
+    assert!(
+        middle > corner + 0.15,
+        "the highlight {middle}, a corner {corner}"
+    );
+}
+
+/// Glass behind glass: through a clear pane the red pane behind it shows,
+/// as it does beside it, instead of the black the opaque frame has there.
+#[test]
+fn glass_shows_the_glass_behind_it() {
+    let Some(mut pane) = Pane::new() else {
+        return;
+    };
+    solid(&mut pane.stage, "red", 64., Color::srgb(1., 0., 0.));
+    let red = Material {
+        transmission: 0.5,
+        ..glass(1.5, 20.)
+    };
+    let shot = Shot {
+        planes: vec![
+            Plane::new("red", 300., 200.)
+                .at(0., 0., -100.)
+                .material(red),
+            // Index 1: nothing bends, so what is behind shows where it is.
+            Plane::new("clear", 120., 120.).material(glass(1., 20.)),
+        ],
+        lights: vec![Light::new(LightKind::Ambient)],
+        clear: Some([0.; 3]),
+        post: Post::NONE,
+        ..Shot::new(Pane::camera())
+    };
+    let f = pane.stage.render(0., 0., 1, &|_| shot.clone()).unwrap();
+    let at = |x: usize| f.rgba[(Pane::H / 2 * Pane::W + x) * 4];
+    let (through, beside) = (at(Pane::W / 2), at(Pane::W / 2 + 100));
+    assert!(beside > 0.2, "the red pane: {beside}");
+    assert!(
+        through > beside * 0.8,
+        "through the clear pane {through}, beside it {beside}"
+    );
+}
+
 /// A white label in front of frosted glass over black: the glass does not
 /// see it behind itself, so no blurred halo grows round it.
 #[test]
@@ -376,4 +479,103 @@ fn a_label_in_front_of_frosted_glass_leaves_no_halo() {
         (near - far).abs() < 0.03,
         "beside the label {near}, far from it {far}"
     );
+}
+
+/// A sphere `r` across, smooth-shaded, as `Stage::mesh` takes it.
+fn sphere(r: f32) -> (Vec<[f32; 6]>, Vec<u32>) {
+    let (rings, segs) = (48u32, 96u32);
+    let mut v = Vec::new();
+    for i in 0..=rings {
+        let th = std::f32::consts::PI * i as f32 / rings as f32;
+        for j in 0..=segs {
+            let ph = std::f32::consts::TAU * j as f32 / segs as f32;
+            let n = [th.sin() * ph.cos(), th.cos(), th.sin() * ph.sin()];
+            v.push([n[0] * r, n[1] * r, n[2] * r, n[0], n[1], n[2]]);
+        }
+    }
+    let mut idx = Vec::new();
+    for i in 0..rings {
+        for j in 0..segs {
+            let a = i * (segs + 1) + j;
+            let b = a + segs + 1;
+            idx.extend([a, b, a + 1, a + 1, b, b + 1]);
+        }
+    }
+    (v, idx)
+}
+
+/// A polished metal ball over a plain orange floor, seen from just above:
+/// its lower half mirrors the floor. A smooth ball's reflection of a plain
+/// floor is smooth, out to the clean line where the floor it would see is
+/// hidden behind the ball; a march that hits on one pixel and misses on the
+/// next speckles it, which the mean squared Laplacian measures.
+#[test]
+fn a_metal_balls_reflection_is_smooth() {
+    const W: usize = 320;
+    const H: usize = 240;
+    let Some(mut stage) = stage(W as u32, H as u32) else {
+        return;
+    };
+    solid(&mut stage, "orange", 64., Color::srgb(1., 0.4, 0.1));
+    let (v, idx) = sphere(60.);
+    stage.mesh("ball", &v, &idx);
+    let camera = Camera::front(H as f32, 30.).orbit(0., 10.);
+    let shot = Shot {
+        planes: vec![
+            Plane::new("orange", 2000., 2000.)
+                .rotate(-90., 0., 0.)
+                .at(0., -80., 0.),
+        ],
+        models: vec![Model {
+            mesh: "ball".into(),
+            transform: Mat4::IDENTITY,
+            color: [1., 1., 1., 1.],
+            material: Material {
+                metallic: 1.,
+                roughness: 0.05,
+                ..Material::SLAB
+            },
+            cast: false,
+            receive: false,
+            maps: Default::default(),
+        }],
+        lights: vec![Light {
+            color: [0.2; 3],
+            ..Light::new(LightKind::Ambient)
+        }],
+        clear: Some([0.; 3]),
+        post: Post::NONE,
+        ..Shot::new(camera)
+    };
+    let one = stage.render(0., 0., 1, &|_| shot.clone()).unwrap();
+    // A beauty frame jitters each sample's march; the mean is as smooth.
+    let mean = stage.beauty(0., 0., 16, &|_| shot.clone()).unwrap();
+    // The ball's lower half, inside its rim.
+    let [cx, cy, _] = camera.view_proj(W as f32 / H as f32).project([0., 0., 0.]);
+    let (cx, cy) = (
+        ((cx + 1.) * 0.5 * W as f32) as usize,
+        ((1. - cy) * 0.5 * H as f32) as usize,
+    );
+    for f in [one, mean] {
+        let px = |x: usize, y: usize| f.rgba[(y * W + x) * 4];
+        let mean = |c: usize| {
+            let n = (cy + 44..cy + 52).flat_map(|y| (cx - 10..cx + 10).map(move |x| (x, y)));
+            n.map(|(x, y)| f.rgba[(y * W + x) * 4 + c]).sum::<f32>() / 160.
+        };
+        let (red, blue) = (mean(0), mean(2));
+        assert!(
+            red > 2. * blue,
+            "the ball mirrors the orange floor: {red} {blue}"
+        );
+        let (mut e, mut k) = (0f32, 0f32);
+        for y in cy + 5..cy + 55 {
+            for x in cx - 40..cx + 40 {
+                let l = 4. * px(x, y) - px(x - 1, y) - px(x + 1, y) - px(x, y - 1) - px(x, y + 1);
+                e += l * l;
+                k += 1.;
+            }
+        }
+        // A speckled march measures 9e-5 here, a clean one under 2e-5.
+        assert!(e / k < 4e-5, "speckle energy {}", e / k);
+    }
 }
