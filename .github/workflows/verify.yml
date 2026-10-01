@@ -82,7 +82,8 @@ jobs:
         run: cargo fetch --manifest-path media/Cargo.toml
       # The same gate as local, one section of it.
       - run: ./tools/verify.sh ${{ matrix.section }}
-      - if: matrix.section == 'media-test' && (github.ref == 'refs/heads/main' || github.ref == 'refs/pull/94/merge')
+      # A failing test leaves the adapter builds good.
+      - if: "!cancelled() && matrix.section == 'media-test' && (github.ref == 'refs/heads/main' || github.ref == 'refs/pull/94/merge')"
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: media/target/tmp/adapters/target

@@ -951,12 +951,15 @@ fn beauty_samples_antialias_an_edge_past_msaa() {
             .collect();
         v.sort_unstable();
         v.dedup();
-        v.len()
+        v
     };
     let msaa = levels(stage.render(0., 0., 1, &shot).unwrap());
     let beauty = levels(stage.beauty(0., 0., 16, &shot).unwrap());
-    assert!(msaa <= 3, "4x MSAA alone: {msaa} edge levels");
-    assert!(beauty >= 8, "16 jittered samples: {beauty} edge levels");
+    assert!(msaa.len() <= 3, "4x MSAA alone: edge levels {msaa:?}");
+    assert!(
+        beauty.len() >= 8,
+        "16 jittered samples: edge levels {beauty:?}"
+    );
     // And the same every time.
     let a = stage.beauty(0., 0., 16, &shot).unwrap().rgba;
     assert_eq!(a, stage.beauty(0., 0., 16, &shot).unwrap().rgba);
