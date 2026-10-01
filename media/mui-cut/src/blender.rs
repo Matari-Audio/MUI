@@ -750,6 +750,14 @@ pub fn describe(
         // ponytail: no sky in Blender yet; a Sky Texture world would match it.
         eprintln!("mui-cut: Blender draws no `sky`; the background colour shows behind");
     }
+    if scene
+        .layers
+        .iter()
+        .any(|l| l.material.as_ref().is_some_and(|m| m.texture.is_some()))
+    {
+        // ponytail: no relief in Blender yet; a Bump node would match it.
+        eprintln!("mui-cut: Blender draws no glass `texture`; its faces stay smooth");
+    }
     let world = scene.environment.as_ref().map(|e| {
         let file = (!e.hdri.is_empty()).then(|| dir.join(&e.hdri));
         let read = file

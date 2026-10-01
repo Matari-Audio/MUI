@@ -821,3 +821,113 @@ fn only_a_mirror_shows_the_sun_disc_in_the_sky() {
     assert!(mirror > 0.99, "a mirror shows the disc: {mirror}");
     assert!(rough < 0.9, "a rough face spreads it: {rough}");
 }
+
+/// Clear glass pressed with `r` of `kind` (0 reeds, 1 dimples, 2 ripples).
+fn pressed(kind: usize, strength: f32, dispersion: f32) -> Material {
+    let r = Relief {
+        strength,
+        scale: 24.,
+    };
+    let mut m = Material {
+        dispersion,
+        ior: 1.8,
+        ..clear(1., 0.)
+    };
+    *[&mut m.ribbed, &mut m.hammered, &mut m.ripple][kind] = r;
+    m
+}
+
+#[test]
+fn pressed_glass_bends_the_sky_and_fringes_it_in_colour() {
+    let Some(mut stage) = stage(320, 240) else {
+        return;
+    };
+    solid(&mut stage, "dark", 64., Color::srgb(0.06, 0.06, 0.07));
+    let (w, h) = (320, 240);
+    let print = |m: Material| Material { print: 1., ..m };
+    let frame = |stage: &mut Stage, m: Material| sky_frame(stage, Some(("dark", print(m))), 0.);
+    let bare = sky_frame(&mut stage, None, 0.);
+    // The pane's middle, where every pane covers the sky.
+    let middle = |f: &[f32], c: usize| {
+        (h / 2 - 30..h / 2 + 30)
+            .flat_map(|y| (w / 2 - 30..w / 2 + 30).map(move |x| (x, y)))
+            .map(|(x, y)| f[(y * w + x) * 4 + c])
+            .collect::<Vec<_>>()
+    };
+    let moved = |a: &[f32], b: &[f32]| {
+        let (a, b) = (middle(a, 1), middle(b, 1));
+        a.iter().zip(&b).map(|(a, b)| (a - b).abs()).sum::<f32>() / a.len() as f32
+    };
+    let flat = moved(&bare, &frame(&mut stage, clear(1., 0.)));
+    for (kind, name) in ["reeds", "dimples", "ripples"].iter().enumerate() {
+        let bent = moved(&bare, &frame(&mut stage, pressed(kind, 0.8, 0.)));
+        assert!(
+            bent > 4. * flat && bent > 0.01,
+            "{name} bend the sky: {bent} against flat {flat}"
+        );
+    }
+    // Dispersion through a flat pane leaves no colour (its faces are
+    // parallel); through reeds it splits red from blue.
+    let split = |stage: &mut Stage, m: Material, k: f32| {
+        let (a, b) = (
+            frame(stage, m),
+            frame(stage, Material { dispersion: k, ..m }),
+        );
+        let rb = |f: &[f32]| {
+            let (r, b) = (middle(f, 0), middle(f, 2));
+            r.iter().zip(b).map(|(r, b)| r - b).collect::<Vec<_>>()
+        };
+        let (a, b) = (rb(&a), rb(&b));
+        a.iter().zip(&b).map(|(a, b)| (a - b).abs()).sum::<f32>() / a.len() as f32
+    };
+    let plain = split(&mut stage, clear(1., 0.), 3.);
+    let reeds = split(&mut stage, pressed(0, 0.8, 0.), 3.);
+    assert!(
+        reeds > 4. * plain && reeds > 0.01,
+        "reeds fringe the sky: {reeds} against flat {plain}"
+    );
+}
+
+#[test]
+fn reeds_break_a_highlight_into_stripes() {
+    let Some(mut pane) = Pane::new() else {
+        return;
+    };
+    let lit = |pane: &mut Pane, m: Material| {
+        let shot = Shot {
+            planes: vec![Plane::new("clear", 240., 200.).material(Material {
+                roughness: 0.3,
+                ..m
+            })],
+            lights: vec![Light {
+                direction: [0., 0., -1.],
+                ..Light::new(LightKind::Directional)
+            }],
+            clear: Some([0.; 3]),
+            post: Post::NONE,
+            ..Shot::new(Pane::camera())
+        };
+        let f = pane.stage.render(0., 0., 1, &|_| shot.clone()).unwrap();
+        // The spread of the middle row's green across the pane's middle.
+        let row: Vec<f32> = (Pane::W / 2 - 60..Pane::W / 2 + 60)
+            .map(|x| f.rgba[(Pane::H / 2 * Pane::W + x) * 4 + 1])
+            .collect();
+        let mean = row.iter().sum::<f32>() / row.len() as f32;
+        (row.iter().map(|v| (v - mean).powi(2)).sum::<f32>() / row.len() as f32).sqrt()
+    };
+    let flat = lit(&mut pane, glass(1.5, 20.));
+    let reeds = lit(
+        &mut pane,
+        Material {
+            ribbed: Relief {
+                strength: 0.8,
+                scale: 24.,
+            },
+            ..glass(1.5, 20.)
+        },
+    );
+    assert!(
+        reeds > 3. * flat && reeds > 0.02,
+        "striped {reeds} against flat {flat}"
+    );
+}

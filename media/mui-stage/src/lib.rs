@@ -115,9 +115,9 @@ const HDR: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const OUT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Float;
 const DEPTH: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 const SAMPLES: u32 = 4;
-/// Per-draw uniform slot: `Draw` is 192 bytes, dynamic offsets align to 256.
+/// Per-draw uniform slot: `Draw` is 224 bytes, dynamic offsets align to 256.
 const SLOT: u64 = 256;
-const DRAW: u64 = 192;
+const DRAW: u64 = 224;
 /// Most planes and most models a shot draws. A plugin exploded four levels
 /// deep is ~90 slabs, each with a highlight plate.
 pub const MAX_PLANES: usize = 256;
@@ -268,6 +268,27 @@ pub struct Material {
     /// its rim bends what is behind it as thick bevelled glass does (a flat
     /// pane leaves the far away where it is). 0 square edges.
     pub bevel: f32,
+    /// Glass pressed with a pattern that tilts its face, bending, mirroring
+    /// and catching light by it: reeds running up the face, hammered dimples,
+    /// rippled water. Several mix.
+    pub ribbed: Relief,
+    pub hammered: Relief,
+    pub ripple: Relief,
+}
+
+/// A pattern pressed into a glass face (see [`Material::ribbed`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Relief {
+    /// The steepest slope of the face it makes: 0 flat, 1 is 45 degrees.
+    pub strength: f32,
+    /// World units across one reed, dimple or wave.
+    pub scale: f32,
+}
+impl Relief {
+    pub const NONE: Self = Self {
+        strength: 0.,
+        scale: 0.,
+    };
 }
 impl Material {
     /// A slab's face: a plain, fairly rough dielectric.
@@ -281,6 +302,9 @@ impl Material {
         tint: [1.; 3],
         print: 0.,
         bevel: 0.,
+        ribbed: Relief::NONE,
+        hammered: Relief::NONE,
+        ripple: Relief::NONE,
     };
     /// Whether it is drawn as glass.
     pub fn glass(&self) -> bool {
@@ -2145,8 +2169,8 @@ impl Stage {
         // Slots: planes 0..n, models n..k, their reflections k..2k, the
         // floor at 2k.
         let mut slots = vec![0u8; SLOT as usize * SLOTS];
-        let mut put = |slot: usize, model: Mat4, rows: [[f32; 4]; 8]| {
-            let mut d = [0f32; 48];
+        let mut put = |slot: usize, model: Mat4, rows: [[f32; 4]; 10]| {
+            let mut d = [0f32; 56];
             d[..16].copy_from_slice(&model.0);
             for (i, r) in rows.iter().enumerate() {
                 d[16 + i * 4..][..4].copy_from_slice(r);
@@ -2156,6 +2180,7 @@ impl Stage {
         };
         // A material's rows: receives shadows, metallic, roughness, the lift; the
         // glass; the tint, and whether light leaves a slab as it came.
+        let relief = |r: Relief| if r.scale > 0. { r.strength.max(0.) } else { 0. };
         let material = |m: &Material, receive: bool, thickness: f32, slab: bool, lift: f32| {
             [
                 [
@@ -2177,6 +2202,14 @@ impl Stage {
                     f32::from(u8::from(slab)),
                 ],
                 [m.print.clamp(0., 1.), m.bevel.max(0.), 0., 0.],
+                // A relief with no size is none.
+                [relief(m.ribbed), relief(m.hammered), relief(m.ripple), 0.],
+                [
+                    m.ribbed.scale.max(1e-3),
+                    m.hammered.scale.max(1e-3),
+                    m.ripple.scale.max(1e-3),
+                    0.,
+                ],
             ]
         };
         let flip = reflect.map(|f| {
@@ -2195,7 +2228,7 @@ impl Stage {
             } else {
                 p.depth
             } * p.scale.abs();
-            let [a, b, c, e] = material(&p.material, p.receive, thick, true, lift[i]);
+            let [a, b, c, e, f, h] = material(&p.material, p.receive, thick, true, lift[i]);
             let rows = |mirror| {
                 [
                     [p.size[0], p.size[1], p.depth, p.glow],
@@ -2206,6 +2239,8 @@ impl Stage {
                     b,
                     c,
                     e,
+                    f,
+                    h,
                 ]
             };
             put(i, p.model(), rows([0.; 4]));
@@ -2216,7 +2251,8 @@ impl Stage {
         }
         self.walls.retain_mut(|w| std::mem::take(&mut w.used));
         for (i, m) in models.iter().enumerate() {
-            let [a, b, c, e] = material(&m.material, m.receive, m.material.thickness, false, 0.);
+            let [a, b, c, e, f, h] =
+                material(&m.material, m.receive, m.material.thickness, false, 0.);
             // `size.x`: it has a normal map.
             let bumped = if m.maps[1]
                 .as_ref()
@@ -2236,6 +2272,8 @@ impl Stage {
                     b,
                     c,
                     e,
+                    f,
+                    h,
                 ]
             };
             put(n + i, m.transform, rows([0.; 4]));
@@ -2255,6 +2293,8 @@ impl Stage {
                     [1., 0., 0.5, 0.],
                     [0., 1.5, 0., 0.],
                     [1., 1., 1., 0.],
+                    [0.; 4],
+                    [0.; 4],
                     [0.; 4],
                 ],
             );
