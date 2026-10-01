@@ -6,6 +6,8 @@ use mui_scene::prelude::*;
 const W: usize = 400;
 const H: usize = 240;
 const TURN: f32 = 40.;
+/// The edge behind the panes of the glass-behind-glass test.
+const BEHIND: f32 = -600.;
 /// What a traced plane's face shows: the left or right half of the atlas.
 const LEFT: [f32; 4] = [0., 0., 0.5, 1.];
 const RIGHT: [f32; 4] = [0.5, 0., 1., 1.];
@@ -126,7 +128,6 @@ fn traced_glass_behind_glass_bends_along_the_front_panes_ray() {
     let Some(mut stage) = stage(None) else {
         return;
     };
-    const BEHIND: f32 = -600.;
     let back = Plane::new("atlas", 1800., 900.).uv(LEFT).at(0., 0., BEHIND);
     let pane = |z: f32| {
         Plane::new("atlas", 400., 200.)
