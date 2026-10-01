@@ -50,6 +50,12 @@ struct Globals {
     // A beauty sample: xy its shift in clip space (eye rays undo it), zw
     // the turn of the occlusion's slices and steps.
     jitter: vec4f,
+    // The sky (`Shot::sky`): toward the sun, w on; zenith, w cloud cover;
+    // horizon, w drift x; sunlight, w drift z.
+    sky0: vec4f,
+    sky1: vec4f,
+    sky2: vec4f,
+    sky3: vec4f,
 };
 // env2.z: 1 in a beauty sample (rays jitter per sample); env2.w: the last
 // mip level of the scene colour chain (`aux` in the SSR and glass passes).
@@ -71,13 +77,17 @@ struct Draw {
     mirror: vec4f,
     // The layer texture's part on the face: u0, v0, u1, v1.
     uv: vec4f,
-    // x: receives shadows; y metallic, z roughness.
+    // x: receives shadows; y metallic, z roughness; w lift: how many
+    // overlapping faces in its plane it is drawn in front of.
     flags: vec4f,
     // Glass: transmission, ior, thickness (world units), dispersion (20 / Abbe).
     glass: vec4f,
     // rgb: what is left of white light after `thickness` inside, linear;
     // a: 1 on a slab (light leaves parallel to how it came), 0 on a solid.
     tint: vec4f,
+    // Glass: x print (the layer's dark is clear, its light is ink), y the
+    // bevel in world units.
+    glass2: vec4f,
 };
 @group(1) @binding(0) var<uniform> d: Draw;
 
@@ -297,6 +307,7 @@ fn spec_weight(n: vec3f, v: vec3f, rough: f32, f0: vec3f) -> vec3f {
 // ambient light standing in for it.
 fn spec_fallback(r: vec3f, rough: f32) -> vec3f {
     if (env_on()) { return env_radiance(r, rough); }
+    if (sky_on()) { return sky_spec(r, rough); }
     return g.ambient.rgb;
 }
 // Walls and backs: a plain dielectric.
@@ -371,6 +382,75 @@ fn fbm(p: vec2f) -> f32 {
     return v;
 }
 
+// --- the sky: `Shot::sky` ---------------------------------------------------
+
+fn sky_on() -> bool { return g.sky0.w > 0.5; }
+// Value noise turned a little each octave, so no axis shows through.
+fn cloud_fbm(p: vec2f) -> f32 {
+    let r = mat2x2f(0.8, 0.6, -0.6, 0.8);
+    var v = 0.;
+    var a = 0.5;
+    var q = p;
+    for (var i = 0; i < 6; i++) {
+        v += a * noise(q);
+        q = r * q * 2.03 + vec2f(3.1, 1.7);
+        a *= 0.5;
+    }
+    return v;
+}
+// Cloud at `p` on the layer: domain-warped fbm, billowed, cut at the cover.
+fn cloud_density(p: vec2f) -> f32 {
+    let w = vec2f(cloud_fbm(p * 0.45 + 4.3), cloud_fbm(p * 0.45 + vec2f(-2.7, 8.1)));
+    let n = cloud_fbm(p + 1.8 * w);
+    let cut = mix(0.66, 0.3, g.sky1.w);
+    return smoothstep(cut, cut + 0.16, n);
+}
+// Radiance along `d`: the gradient, the sun, and the clouds on a layer
+// above (a sea of them below the horizon), lit from the sun.
+fn sky(d: vec3f) -> vec3f { return sky_seen(d, 1.); }
+// The sky reflected by a surface `rough`: no hard sun disc off anything
+// but a mirror, and toward the sky's mean as the lobe widens.
+fn sky_spec(d: vec3f, rough: f32) -> vec3f {
+    let sharp = sky_seen(d, 1. - smoothstep(0.02, 0.1, rough));
+    let mean = (g.sky1.rgb + g.sky2.rgb) * 0.5 + g.sky3.rgb * 0.08 * max(dot(d, g.sky0.xyz), 0.);
+    return mix(sharp, mean, smoothstep(0.05, 0.6, rough));
+}
+// `sky` with `disc` of the sun's disc.
+fn sky_seen(d: vec3f, disc: f32) -> vec3f {
+    let sun = g.sky0.xyz;
+    let sunc = g.sky3.rgb;
+    let up = d.y;
+    let h = 1. - clamp(abs(up), 0., 1.);
+    let mu = max(dot(d, sun), 0.);
+    var c = mix(g.sky1.rgb, g.sky2.rgb, pow(h, 6.));
+    // Below the horizon the haze darkens toward the ground.
+    c = select(c, mix(g.sky2.rgb, g.sky2.rgb * 0.55 + g.sky1.rgb * 0.15, smoothstep(0., 0.5, -up)), up < 0.);
+    c += sunc * (0.06 * pow(mu, 4.) + 0.12 * pow(mu, 16.) * h + 0.35 * pow(mu, 64.));
+    // The layer, curved over like the sky's dome: farther toward the
+    // horizon, so smaller and hazier there, but not flattened to streaks.
+    let y = abs(up) * 0.8 + 0.15;
+    let below = up < 0.;
+    let drift = vec2f(g.sky2.w, g.sky3.w);
+    let p = d.xz / y * select(0.5, 0.4, below) + drift + select(vec2f(0.), vec2f(17.3, -41.9), below);
+    let dens = cloud_density(p);
+    if (dens > 0.001) {
+        // Thinner toward the sun: march a little that way through the layer.
+        let toward = normalize(vec2f(sun.x, sun.z) + vec2f(1e-4)) * 0.18;
+        let shadow = cloud_density(p + toward) * 0.6 + cloud_density(p + 2. * toward) * 0.4;
+        let lit = exp(-3. * shadow) * select(1., 1.15, below);
+        // Undersides: the sky's blue, greyed.
+        let amb = g.sky1.rgb * 0.55 + g.sky2.rgb * 0.3;
+        // Bright edges against the sun, as droplets scatter it forward.
+        let silver = 1. + 2.5 * pow(mu, 10.) * (1. - dens);
+        let cloud = amb * (0.5 + 0.3 * dens) + sunc * 0.4 * lit * silver;
+        let fade = smoothstep(0., 0.12, abs(up));
+        c = mix(c, cloud, dens * fade);
+    }
+    // The disc, over the clouds only where they are thin.
+    c += sunc * 30. * disc * smoothstep(0.99996, 0.99999, mu) * (1. - dens);
+    return c;
+}
+
 // --- the background: `Stage::background` splices its function in below ---
 
 {{BACKGROUND}}
@@ -396,9 +476,15 @@ fn eye_ray(uv: vec2f) -> vec3f {
 }
 
 // The background at `uv`: the shader, the clear colour or the environment.
-fn backdrop(uv: vec2f) -> vec3f {
-    if (env_on() && g.env2.x > 0.5) { return env_radiance(eye_ray(uv), 0.); }
-    return select(background(uv, g.time_res.x), g.clear.rgb, g.clear.a > 0.5);
+fn backdrop(uv: vec2f) -> vec3f { return backdrop_along(eye_ray(uv), uv); }
+// The background along `d`, which leaves the frame at `uv`: the
+// environment and the sky by direction (a ray bent out of the frame sees
+// on round them), the screen's own background at the frame's edge.
+fn backdrop_along(d: vec3f, uv: vec2f) -> vec3f {
+    if (env_on() && g.env2.x > 0.5) { return env_radiance(d, 0.); }
+    if (sky_on()) { return sky(d); }
+    let e = clamp(uv, vec2f(0.), vec2f(1.));
+    return select(background(e, g.time_res.x), g.clear.rgb, g.clear.a > 0.5);
 }
 @fragment fn fs_bg(i: Full) -> Out {
     var o: Out;
@@ -424,6 +510,8 @@ fn cap(i: u32, z: f32) -> Cap {
     let world = d.model * local;
     var o: Cap;
     o.pos = g.view_proj * world;
+    // A few ulps of depth per lift win the tie with a coplanar face.
+    o.pos.z -= d.flags.w * 5e-7 * o.pos.w;
     o.uv = mix(d.uv.xy, d.uv.zw, uv);
     o.world = world.xyz;
     return o;
@@ -613,9 +701,16 @@ struct ShadowCap {
     o.uv = c.uv;
     return o;
 }
+// Where a caster's cover (a pixel's alpha times its opacity) falls below
+// this, it casts nothing. Each beauty sample cuts at its own level, so the
+// mean shadow fades with a fading face instead of dropping out at half.
+fn shadow_cut() -> f32 { return select(0.5, g.fog_range.z, beauty()); }
 // A face casts the shape of its pixels, not of its rectangle.
 @fragment fn fs_shadow_face(i: ShadowCap) {
-    if (textureSample(tex, samp, i.uv).a * d.edge.a < 0.5) { discard; }
+    if (textureSample(tex, samp, i.uv).a * d.edge.a * (1. - d.glass.x) <= shadow_cut()) { discard; }
+}
+@fragment fn fs_shadow_solid() {
+    if (d.edge.a * (1. - d.glass.x) <= shadow_cut()) { discard; }
 }
 @vertex fn vs_shadow_solid(@location(0) p: vec3f, @location(1) n: vec3f, @builtin(instance_index) k: u32) -> @builtin(position) vec4f {
     return shadow_clip(k, (d.model * vec4f(p, 1.)).xyz);
@@ -986,8 +1081,13 @@ fn ior_at(ior: f32, k: f32, nm: f32) -> f32 {
 // eye ray `ray`) for index `eta`: refract in, cross `thick` inside, leave
 // (a slab sends it on parallel to how it came, a solid along the refracted
 // ray) and find the opaque surface it meets. xy its uv, z the path inside,
-// w the pixels of the blur footprint per unit of roughness.
-fn refracted(p: vec3f, n: vec3f, m: vec3f, ray: vec3f, eta: f32, thick: f32, slab: bool, jitter: f32) -> vec4f {
+// w the pixels of the blur footprint per unit of roughness; and the way
+// it leaves.
+struct Through {
+    h: vec4f,
+    dir: vec3f,
+};
+fn refracted(p: vec3f, n: vec3f, m: vec3f, ray: vec3f, eta: f32, thick: f32, slab: bool, jitter: f32) -> Through {
     var t = refract(ray, m, 1. / eta);
     if (dot(t, t) < 1e-6) { t = ray; }
     let path = thick / max(abs(dot(t, n)), 0.2);
@@ -1006,18 +1106,18 @@ fn refracted(p: vec3f, n: vec3f, m: vec3f, ray: vec3f, eta: f32, thick: f32, sla
     // nearer surface there.
     let along = march(exit, dir, jitter, reach_of(exit, dir));
     if (along < 0.) {
-        return vec4f(clamp(screen(exit + dir * 1e6).xy, vec2f(0.), vec2f(1.)), path, -1.);
+        return Through(vec4f(screen(exit + dir * 1e6).xy, path, -1.), dir);
     }
     let uv = screen(exit + dir * along);
     let behind = min(along, 3000.) / px_size(uv.z);
-    return vec4f(clamp(uv.xy, vec2f(0.), vec2f(1.)), path, behind);
+    return Through(vec4f(clamp(uv.xy, vec2f(0.), vec2f(1.)), path, behind), dir);
 }
 // What `refracted` found: the frame there, blurred by roughness, or the
 // background. ponytail: a missed ray sees the background unblurred; blur
 // it with the environment's mips if rough glass over the void bands.
-fn seen_through(h: vec4f, rough: f32) -> vec3f {
-    if (h.w < 0.) { return backdrop(h.xy); }
-    return textureSampleLevel(aux, samp, h.xy, rough_lod(rough, h.w)).rgb;
+fn seen_through(t: Through, rough: f32) -> vec3f {
+    if (t.h.w < 0.) { return backdrop_along(t.dir, t.h.xy); }
+    return textureSampleLevel(aux, samp, t.h.xy, rough_lod(rough, t.h.w)).rgb;
 }
 
 // A transmissive surface: Fresnel-weighted reflection of the frame (or
@@ -1027,7 +1127,7 @@ fn seen_through(h: vec4f, rough: f32) -> vec3f {
 // jittered within each band per beauty sample). `base` is the surface
 // colour; lit, its opaque share (1 - transmission) is diffuse, and every
 // light leaves a highlight on the surface as on any polished dielectric.
-fn glass(p: vec3f, n: vec3f, base: vec3f, px: vec2f) -> vec3f {
+fn glass(p: vec3f, n: vec3f, tilt: vec3f, base: vec3f, px: vec2f) -> vec3f {
     let trans = d.glass.x;
     let ior = max(d.glass.y, 1.);
     let thick = max(d.glass.z, 0.);
@@ -1038,8 +1138,10 @@ fn glass(p: vec3f, n: vec3f, base: vec3f, px: vec2f) -> vec3f {
     let ray = normalize(p - g.eye.xyz);
     let v = -ray;
     let u = rand2(px);
-    var m = n;
-    if (beauty() && rough > 0.02) { m = ggx_normal(n, rough, u); }
+    // A bevel tilts the face light enters by; it leaves by the flat back.
+    let nb = normalize(n + tilt);
+    var m = nb;
+    if (beauty() && rough > 0.02) { m = ggx_normal(nb, rough, u); }
     let f0 = mix(vec3f(pow((ior - 1.) / (ior + 1.), 2.)), base, metal);
     let fr = f0 + (1. - f0) * pow(1. - clamp(dot(m, v), 0., 1.), 5.);
     var r = reflect(ray, m);
@@ -1065,19 +1167,43 @@ fn glass(p: vec3f, n: vec3f, base: vec3f, px: vec2f) -> vec3f {
         for (var c = 0; c < 3; c++) {
             let h = refracted(p, n, m, ray, ior_at(ior, k, nm[c]), thick, slab, jit);
             seen[c] = seen_through(h, rough)[c];
-            path[c] = h.z;
+            path[c] = h.h.z;
         }
     } else {
         let h = refracted(p, n, m, ray, ior, thick, slab, jit);
         seen = seen_through(h, rough);
-        path = vec3f(h.z);
+        path = vec3f(h.h.z);
     }
     // Beer-Lambert: `tint` is what is left after `thickness`.
     let absorb = select(d.tint.rgb, pow(max(d.tint.rgb, vec3f(1e-4)), path / max(thick, 1e-3)), thick > 0.);
-    let through = seen * base * absorb * (1. - metal);
-    return (1. - fr) * mix(body, through, trans) + fr * refl + glint;
+    // Printed: the layer's dark is clear glass, its light marks ink on it.
+    let print = d.glass2.x;
+    let ink = print * smoothstep(0.02, 0.25, dot(base, vec3f(0.2126, 0.7152, 0.0722)));
+    let through = seen * mix(base, vec3f(1.), print) * absorb * (1. - metal);
+    let clear = (1. - fr) * mix(body, through, trans * (1. - ink)) + fr * refl + glint;
+    // Barely glass is shaded as `fs_front` shades the opaque face, so
+    // keying transmission up from 0 crossfades instead of popping.
+    var opaque = base;
+    if (lit_shot()) {
+        let w = spec_weight(n, v, rough, mix(vec3f(0.04), base, metal));
+        opaque = base * (1. - metal) * shade(p, n, d.flags.x, 0.).diffuse + w * spec_fallback(ray - 2. * dot(ray, n) * n, rough);
+    }
+    return mix(opaque, clear, smoothstep(0., 0.3, trans));
 }
 
+// The bevel's tilt of a face's normal at `uv`: out toward the nearer
+// edges within `glass2.y` of them, a quarter round.
+fn bevel_tilt(uv: vec2f) -> vec3f {
+    let r = min(d.glass2.y, 0.5 * min(d.size.x, d.size.y));
+    if (r <= 0.) { return vec3f(0.); }
+    // From the middle, in the layer's y-down units.
+    let q = ((uv - d.uv.xy) / (d.uv.zw - d.uv.xy) - 0.5) * d.size.xy;
+    let t = 1. - clamp((d.size.xy * 0.5 - abs(q)) / r, vec2f(0.), vec2f(1.));
+    let slope = t / sqrt(max(1. - t * t, vec2f(0.04)));
+    let ax = normalize((d.model * vec4f(1., 0., 0., 0.)).xyz);
+    let ay = normalize((d.model * vec4f(0., 1., 0., 0.)).xyz);
+    return ax * sign(q.x) * slope.x - ay * sign(q.y) * slope.y;
+}
 // A glass face: its layer is the base colour and coverage.
 @fragment fn fs_glass(i: Cap) -> Out {
     let c = textureSample(tex, samp, i.uv);
@@ -1085,14 +1211,14 @@ fn glass(p: vec3f, n: vec3f, base: vec3f, px: vec2f) -> vec3f {
     if (a < 0.004) { discard; }
     let base = c.rgb / max(c.a, 1e-4);
     let n = face_normal(i.world);
-    let rgb = glass(i.world, n, base, i.pos.xy) * d.size.w;
+    let rgb = glass(i.world, n, bevel_tilt(i.uv), base, i.pos.xy) * d.size.w;
     return out(vec4f(rgb * a, a), i.world);
 }
 // A glass wall or model: its colour is the base.
 @fragment fn fs_glass_solid(i: Wall) -> Out {
     var n = normalize(i.normal);
     if (dot(n, g.eye.xyz - i.world) < 0.) { n = -n; }
-    let rgb = glass(i.world, n, d.edge.rgb, i.pos.xy);
+    let rgb = glass(i.world, n, vec3f(0.), d.edge.rgb, i.pos.xy);
     return out(vec4f(rgb, 1.) * d.edge.a, i.world);
 }
 

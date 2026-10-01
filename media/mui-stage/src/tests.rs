@@ -1060,3 +1060,103 @@ fn a_point_light_casts_soft_shadows_from_its_cube() {
     assert!(hard <= 4, "a small lamp is nearly hard: {hard} px");
     assert!(soft >= 6 && soft >= 2 * hard, "{hard} px -> {soft} px");
 }
+
+#[test]
+fn a_shot_draws_more_than_64_planes() {
+    // A plugin exploded four levels deep is ~90 slabs; the cap used to be 64
+    // and silently dropped the rest.
+    let Some(mut stage) = stage(100, 100) else {
+        return;
+    };
+    let white = block(10., 10.).radius(0.).fill(Color::srgb(1., 1., 1.));
+    let white = resolve(&SceneSpec::new(white)).expect("resolves");
+    stage.layer("w", &white, Size::new(10., 10.), 1.).unwrap();
+    let f = stage
+        .render(0., 0., 1, &|_| Shot {
+            planes: (0..100)
+                .map(|i| {
+                    let mut p = Plane::new("w", 10., 10.);
+                    p.position = [(i % 10) as f32 * 10. - 45., 45. - (i / 10) as f32 * 10., 0.];
+                    p
+                })
+                .collect(),
+            post: Post::NONE,
+            ..Shot::new(Camera::front(100., 30.))
+        })
+        .unwrap();
+    // The last plane, bottom right.
+    let px = f.rgba[(95 * 100 + 95) * 4];
+    assert!(px > 0.9, "plane 100 is drawn: {px}");
+}
+
+#[test]
+fn coplanar_planes_keep_their_order_under_a_tilted_camera() {
+    // Sibling parts of a plugin share a plane: the one submitted later is
+    // painted later in 2D and must stay on top when the camera tilts, not
+    // lose to whichever centre happens to be nearer.
+    let Some(mut stage) = stage(100, 100) else {
+        return;
+    };
+    for (name, rgb) in [("g", (0., 1., 0.)), ("r", (1., 0., 0.))] {
+        let b = block(10., 10.)
+            .radius(0.)
+            .fill(Color::srgb(rgb.0, rgb.1, rgb.2));
+        let b = resolve(&SceneSpec::new(b)).expect("resolves");
+        stage.layer(name, &b, Size::new(10., 10.), 1.).unwrap();
+    }
+    let f = stage
+        .render(0., 0., 1, &|_| Shot {
+            // Green first and nearer to the camera below, red second and
+            // farther; they overlap about the origin.
+            planes: vec![
+                Plane::new("g", 60., 40.).at(0., 15., 0.),
+                Plane::new("r", 60., 40.).at(0., -15., 0.),
+            ],
+            post: Post::NONE,
+            ..Shot::new(Camera::front(100., 30.).orbit(0., -50.))
+        })
+        .unwrap();
+    let px = &f.rgba[(50 * 100 + 50) * 4..][..3];
+    assert!(px[0] > px[1], "the later plane is on top: {px:?}");
+}
+
+#[test]
+fn a_fading_face_fades_its_shadow() {
+    // A backdrop fading out cast its whole shadow down to half opacity and
+    // none below: the floor under it jumped a stop in one frame. Across a
+    // beauty frame's samples the shadow now fades with the face.
+    let Some(mut stage) = stage(100, 100) else {
+        return;
+    };
+    let white = block(10., 10.).radius(0.).fill(Color::srgb(1., 1., 1.));
+    let white = resolve(&SceneSpec::new(white)).expect("resolves");
+    stage.layer("w", &white, Size::new(10., 10.), 1.).unwrap();
+    let mut key = Light::new(LightKind::Directional);
+    key.direction = [1., 0., -1.];
+    key.softness = 0.;
+    // The wall at x 0..20 in the shade of a card at x -30..-10, 30 in front.
+    let mut shade = |card: Option<f32>| {
+        let f = stage
+            .beauty(0., 0., 16, &|_| {
+                let mut planes = vec![Plane::new("w", 100., 100.)];
+                if let Some(o) = card {
+                    planes.push(Plane::new("w", 20., 20.).at(-20., 0., 30.).opacity(o));
+                }
+                Shot {
+                    planes,
+                    lights: vec![key],
+                    post: Post::NONE,
+                    ..Shot::new(Camera::front(100., 30.))
+                }
+            })
+            .unwrap();
+        f.rgba[(50 * 100 + 60) * 4]
+    };
+    let (lit, dark, half) = (shade(None), shade(Some(1.)), shade(Some(0.4)));
+    assert!(lit - dark > 0.1, "the card casts a shadow: {lit} {dark}");
+    let f = (lit - half) / (lit - dark);
+    assert!(
+        (0.2..0.6).contains(&f),
+        "a 0.4 card casts {f} of its shadow"
+    );
+}

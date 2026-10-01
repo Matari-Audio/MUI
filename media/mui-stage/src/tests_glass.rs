@@ -579,3 +579,245 @@ fn a_metal_balls_reflection_is_smooth() {
         assert!(e / k < 4e-5, "speckle energy {}", e / k);
     }
 }
+
+/// A sunlit sky with half its area clouded, the sun up ahead and right.
+fn cloudy(drift: f32) -> Sky {
+    Sky {
+        sun: [0.4, 0.35, -1.],
+        zenith: [0.08, 0.2, 0.55],
+        horizon: [0.6, 0.72, 0.85],
+        sun_color: [2.6, 2.4, 2.1],
+        cover: 0.5,
+        drift: [drift, 0.],
+    }
+}
+
+/// Clear glass `t` transmissive, its rim rounded over `bevel`.
+fn clear(t: f32, bevel: f32) -> Material {
+    Material {
+        transmission: t,
+        roughness: 0.,
+        thickness: 60.,
+        bevel,
+        ..Material::SLAB
+    }
+}
+
+/// Looking 15 degrees up into [`cloudy`], through layer `id` as a pane of
+/// `m` turned 40 degrees, or with none: the frame, red, green and blue.
+fn sky_frame(stage: &mut Stage, pane: Option<(&str, Material)>, drift: f32) -> Vec<f32> {
+    let planes = pane
+        .map(|(id, m)| Plane::new(id, 200., 160.).rotate(0., 40., 0.).material(m))
+        .into_iter()
+        .collect();
+    let shot = Shot {
+        planes,
+        sky: Some(cloudy(drift)),
+        clear: Some([0.; 3]),
+        post: Post::NONE,
+        ..Shot::new(Camera::front(240., 40.).orbit(0., -15.))
+    };
+    stage.render(0., 0., 1, &|_| shot.clone()).unwrap().rgba
+}
+
+#[test]
+fn a_sky_has_clouds_that_drift_and_glass_bends_them() {
+    let Some(mut stage) = stage(320, 240) else {
+        return;
+    };
+    solid(&mut stage, "clear", 64., Color::srgb(1., 1., 1.));
+    solid(&mut stage, "dark", 64., Color::srgb(0.06, 0.06, 0.07));
+    let (w, h) = (320, 240);
+    let luma = |f: &[f32], x: usize, y: usize| {
+        let p = &f[(y * w + x) * 4..];
+        0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2]
+    };
+    let bare = sky_frame(&mut stage, None, 0.);
+    // Blue overhead: the gradient is there under the clouds.
+    let top = &bare[(4 * w + 4) * 4..];
+    assert!(top[2] > top[0], "blue overhead: {:?}", &top[..3]);
+    // Clouds, not a gradient and not noise: the upper half's luma spreads
+    // widely, yet neighbours are nearly alike (large soft shapes).
+    let ls: Vec<f32> = (10..h / 2)
+        .flat_map(|y| (0..w).map(move |x| (x, y)))
+        .map(|(x, y)| luma(&bare, x, y))
+        .collect();
+    let mean = ls.iter().sum::<f32>() / ls.len() as f32;
+    let sd = (ls.iter().map(|l| (l - mean).powi(2)).sum::<f32>() / ls.len() as f32).sqrt();
+    let step = (10..h / 2)
+        .flat_map(|y| (0..w - 1).map(move |x| (x, y)))
+        .map(|(x, y)| (luma(&bare, x, y) - luma(&bare, x + 1, y)).abs())
+        .sum::<f32>()
+        / ((h / 2 - 10) * (w - 1)) as f32;
+    assert!(sd > 0.05, "clouds vary the sky: sd {sd}");
+    assert!(
+        step < sd * 0.2,
+        "soft shapes, not noise: step {step}, sd {sd}"
+    );
+    // Drift moves them.
+    let moved = sky_frame(&mut stage, None, 0.6);
+    let diff = (0..w * h)
+        .map(|i| (bare[i * 4] - moved[i * 4]).abs())
+        .sum::<f32>()
+        / (w * h) as f32;
+    assert!(diff > 0.02, "drift moves the clouds: {diff}");
+    let all = |f: &[f32]| {
+        (0..w * h)
+            .map(|i| luma(f, i % w, i / w))
+            .collect::<Vec<_>>()
+    };
+    let mean_diff = |a: &[f32], b: &[f32]| {
+        a.iter().zip(b).map(|(a, c)| (a - c).abs()).sum::<f32>() / a.len() as f32
+    };
+    let b = all(&bare);
+    // A flat pane leaves the far sky where it is; a bevelled one bends it
+    // round its rim, and its middle shows the clouds, not darkened.
+    let flat = all(&sky_frame(&mut stage, Some(("clear", clear(1., 0.))), 0.));
+    let round = all(&sky_frame(&mut stage, Some(("clear", clear(1., 40.))), 0.));
+    let (bent, moved) = (mean_diff(&b, &round), mean_diff(&b, &flat));
+    assert!(
+        bent > 2. * moved && bent > 0.004,
+        "the rim bends the sky: {bent} against flat {moved}"
+    );
+    let mid = |f: &[f32]| {
+        (h / 2 - 10..h / 2 + 10)
+            .map(|y| f[y * w + w / 2])
+            .sum::<f32>()
+            / 20.
+    };
+    assert!(
+        mid(&round) > 0.6 * mid(&b),
+        "the clouds show through: {} against {}",
+        mid(&round),
+        mid(&b)
+    );
+    // Printed, a dark layer is clear and a light one stays ink; stained,
+    // the dark layer darkens the sky.
+    let print = |t| Material {
+        print: 1.,
+        ..clear(t, 0.)
+    };
+    let dark_print = all(&sky_frame(&mut stage, Some(("dark", print(1.))), 0.));
+    let dark_stain = all(&sky_frame(&mut stage, Some(("dark", clear(1., 0.))), 0.));
+    let white_print = all(&sky_frame(&mut stage, Some(("clear", print(1.))), 0.));
+    assert!(
+        mid(&dark_print) > 0.8 * mid(&b),
+        "printed dark is clear: {} against {}",
+        mid(&dark_print),
+        mid(&b)
+    );
+    assert!(
+        mid(&dark_stain) < 0.3 * mid(&b),
+        "stained dark darkens: {}",
+        mid(&dark_stain)
+    );
+    let opaque_white = all(&sky_frame(&mut stage, Some(("clear", clear(0., 0.))), 0.));
+    assert!(
+        (mid(&white_print) - mid(&opaque_white)).abs() < 0.05,
+        "printed light is ink: {} against {}",
+        mid(&white_print),
+        mid(&opaque_white)
+    );
+    // Turning to glass starts where opaque ends.
+    let faint = all(&sky_frame(&mut stage, Some(("dark", print(0.002))), 0.));
+    let opaque = all(&sky_frame(&mut stage, Some(("dark", print(0.))), 0.));
+    let pop = b
+        .iter()
+        .enumerate()
+        .map(|(i, _)| (faint[i] - opaque[i]).abs())
+        .fold(0f32, f32::max);
+    assert!(pop < 0.02, "no pop into glass: {pop}");
+}
+
+#[test]
+fn glass_bends_the_sky_in_from_beyond_the_frame() {
+    let Some(mut stage) = stage(320, 240) else {
+        return;
+    };
+    solid(&mut stage, "clear", 64., Color::srgb(1., 1., 1.));
+    // No clouds, the sun low and just out of the frame to the left.
+    let sky = Sky {
+        sun: [-0.62, 0.08, -0.78],
+        zenith: [0.01, 0.02, 0.05],
+        horizon: [0.03, 0.035, 0.04],
+        sun_color: [1.; 3],
+        cover: 0.,
+        drift: [0.; 2],
+    };
+    let camera = Camera::front(240., 40.);
+    let render = |stage: &mut Stage, glass: bool| {
+        // A domed pane straddling the left edge: its rim bends rays on
+        // out past the frame, toward the sun.
+        let planes = if glass {
+            vec![
+                Plane::new("clear", 220., 220.)
+                    .at(-170., 0., 0.)
+                    .material(clear(1., 110.)),
+            ]
+        } else {
+            vec![]
+        };
+        let shot = Shot {
+            planes,
+            sky: Some(sky),
+            clear: Some([0.; 3]),
+            post: Post::NONE,
+            ..Shot::new(camera)
+        };
+        stage.render(0., 0., 1, &|_| shot.clone()).unwrap().rgba
+    };
+    let (bare, glass) = (render(&mut stage, false), render(&mut stage, true));
+    let w = 320;
+    let luma = |f: &[f32], x: usize, y: usize| {
+        let p = &f[(y * w + x) * 4..];
+        0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2]
+    };
+    // The brightest the frame's edge gets: all a ray clamped to the frame
+    // could find.
+    let edge = (0..240).map(|y| luma(&bare, 0, y)).fold(0f32, f32::max);
+    let through = (0..240)
+        .flat_map(|y| (0..40).map(move |x| (x, y)))
+        .map(|(x, y)| luma(&glass, x, y))
+        .fold(0f32, f32::max);
+    assert!(
+        through > edge * 1.3,
+        "the sun bent in from beyond: {through} against the edge's {edge}"
+    );
+}
+
+#[test]
+fn only_a_mirror_shows_the_sun_disc_in_the_sky() {
+    let Some(mut stage) = stage(320, 240) else {
+        return;
+    };
+    solid(&mut stage, "clear", 64., Color::srgb(1., 1., 1.));
+    // The sun behind the camera, so a metal facing it mirrors the disc.
+    let sky = Sky {
+        sun: [0.08, 0.06, 1.],
+        cover: 0.,
+        ..cloudy(0.)
+    };
+    let hottest = |stage: &mut Stage, roughness: f32| {
+        let shot = Shot {
+            planes: vec![Plane::new("clear", 600., 600.).material(Material {
+                metallic: 1.,
+                roughness,
+                ..Material::SLAB
+            })],
+            lights: vec![Light::new(LightKind::Ambient)],
+            sky: Some(sky),
+            clear: Some([0.; 3]),
+            post: Post::NONE,
+            ssr: false,
+            ..Shot::new(Camera::front(240., 30.))
+        };
+        let f = stage.render(0., 0., 1, &|_| shot.clone()).unwrap();
+        f.rgba
+            .chunks(4)
+            .map(|p| p[0].min(p[1]).min(p[2]))
+            .fold(0f32, f32::max)
+    };
+    let (mirror, rough) = (hottest(&mut stage, 0.02), hottest(&mut stage, 0.5));
+    assert!(mirror > 0.99, "a mirror shows the disc: {mirror}");
+    assert!(rough < 0.9, "a rough face spreads it: {rough}");
+}

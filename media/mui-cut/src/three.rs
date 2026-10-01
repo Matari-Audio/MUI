@@ -83,6 +83,75 @@ fn is_zero(a: &Anim<f64>) -> bool {
     *a == zero()
 }
 
+/// A sunlit sky behind everything (over the scene's background, under an
+/// environment shown as the background): a gradient from `horizon` to
+/// `zenith`, the sun `elevation` degrees up and `azimuth` degrees right of
+/// straight into the scene, and procedural clouds over `cover` (0..1) of
+/// it, a layer overhead and a sea below the horizon, lit from the sun and
+/// drifting right `wind` cloud widths a second. Glass refracts and reflects
+/// it. `intensity` scales all its light. mui-stage only: Blender shows the
+/// background colour.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(transform = crate::vars::bindable)]
+pub struct Sky {
+    #[serde(default = "elevation")]
+    pub elevation: Anim<f64>,
+    #[serde(default = "zero", skip_serializing_if = "is_zero")]
+    pub azimuth: Anim<f64>,
+    #[serde(default = "cover")]
+    pub cover: Anim<f64>,
+    #[serde(default = "wind")]
+    pub wind: f64,
+    #[serde(default = "zenith")]
+    pub zenith: Anim<Rgba>,
+    #[serde(default = "horizon")]
+    pub horizon: Anim<Rgba>,
+    #[serde(default = "sun")]
+    pub sun: Anim<Rgba>,
+    #[serde(default = "one", skip_serializing_if = "is_one")]
+    pub intensity: Anim<f64>,
+}
+fn elevation() -> Anim<f64> {
+    Anim::Value(25.)
+}
+fn cover() -> Anim<f64> {
+    Anim::Value(0.45)
+}
+fn wind() -> f64 {
+    0.04
+}
+fn zenith() -> Anim<Rgba> {
+    Anim::Value(Rgba([0x3a, 0x6c, 0xb8, 255]))
+}
+fn horizon() -> Anim<Rgba> {
+    Anim::Value(Rgba([0xcf, 0xdf, 0xee, 255]))
+}
+fn sun() -> Anim<Rgba> {
+    Anim::Value(Rgba([0xff, 0xf1, 0xdc, 255]))
+}
+
+impl Sky {
+    /// The sky at `t`, as mui-stage takes it.
+    pub fn at(&self, t: f64) -> mui_stage::Sky {
+        let k = self.intensity.at(t).max(0.) as f32;
+        let lin = |a: &Anim<Rgba>| crate::gpu3d::linear(a.at(t)).map(|c| c * k);
+        let (el, az) = (
+            self.elevation.at(t).to_radians(),
+            self.azimuth.at(t).to_radians(),
+        );
+        mui_stage::Sky {
+            sun: [az.sin() * el.cos(), el.sin(), -az.cos() * el.cos()].map(|v| v as f32),
+            zenith: lin(&self.zenith),
+            horizon: lin(&self.horizon),
+            // Sunlight is brighter than any sky: the disc and lit cloud.
+            sun_color: lin(&self.sun).map(|c| c * 2.6),
+            cover: self.cover.at(t).clamp(0., 1.) as f32,
+            drift: [(self.wind * t) as f32, 0.],
+        }
+    }
+}
+
 /// The environment at one time.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Env {
@@ -142,6 +211,15 @@ pub struct Material {
     /// The colour white light keeps after `thickness` inside (absorption).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tint: Option<Anim<Rgba>>,
+    /// Glass: 0 the layer's colour stains the light through it; 1 the layer
+    /// is printed on clear glass, its dark clear and its light marks ink (a
+    /// dark UI turned to glass).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub print: Option<Anim<f64>>,
+    /// Glass: pixels in from a slab's edge its face rounds over, so its rim
+    /// bends what is behind it (a flat pane leaves a far sky in place).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bevel: Option<Anim<f64>>,
 }
 
 /// A [`Material`] at one time: the fields it sets.
@@ -161,6 +239,10 @@ pub struct Surface {
     pub dispersion: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tint: Option<Rgba>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub print: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bevel: Option<f64>,
 }
 
 impl Material {
@@ -174,6 +256,8 @@ impl Material {
             ("ior", &self.ior),
             ("thickness", &self.thickness),
             ("dispersion", &self.dispersion),
+            ("print", &self.print),
+            ("bevel", &self.bevel),
         ]
         .into_iter()
         .filter_map(|(n, a)| a.as_ref().map(|a| (format!("material.{n}"), Num(a))))
@@ -194,6 +278,8 @@ impl Material {
             thickness: num(&self.thickness).map(|v| v.max(0.)),
             dispersion: num(&self.dispersion).map(|v| v.max(0.)),
             tint: self.tint.as_ref().map(|a| a.at(t)),
+            print: num(&self.print).map(|v| v.clamp(0., 1.)),
+            bevel: num(&self.bevel).map(|v| v.max(0.)),
         }
     }
 }
@@ -210,6 +296,23 @@ impl Surface {
             thickness: f(self.thickness, base.thickness),
             dispersion: f(self.dispersion, base.dispersion),
             tint: self.tint.map_or(base.tint, crate::gpu3d::linear),
+            print: f(self.print, base.print),
+            bevel: f(self.bevel, base.bevel),
+        }
+    }
+    /// `under` with the fields this sets replaced: a part's surface over
+    /// its layer's.
+    pub fn or(&self, under: &Surface) -> Surface {
+        Surface {
+            metallic: self.metallic.or(under.metallic),
+            roughness: self.roughness.or(under.roughness),
+            transmission: self.transmission.or(under.transmission),
+            ior: self.ior.or(under.ior),
+            thickness: self.thickness.or(under.thickness),
+            dispersion: self.dispersion.or(under.dispersion),
+            tint: self.tint.or(under.tint),
+            print: self.print.or(under.print),
+            bevel: self.bevel.or(under.bevel),
         }
     }
     /// Drawn as glass.
@@ -337,6 +440,9 @@ pub struct View {
     pub fog: Option<Fog>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub environment: Option<Env>,
+    /// Handed to mui-stage as is.
+    #[serde(skip)]
+    pub sky: Option<mui_stage::Sky>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ao: Option<Ao>,
 }
@@ -415,6 +521,7 @@ pub fn view(size: [u32; 2], scene: &Scene, t: f64, layers: &[Drawn]) -> View {
             rotation: e.rotation.at(t),
             background: e.background,
         }),
+        sky: scene.sky.as_ref().map(|k| k.at(t)),
         ao: scene.ao.clone(),
     }
 }
@@ -570,6 +677,8 @@ fn gltf_material(m: &gltf::Material<'_>) -> mui_stage::Material {
             .and_then(|v| v["dispersion"].as_f64())
             .map_or(0., |v| v as f32),
         tint,
+        print: 0.,
+        bevel: 0.,
     }
 }
 

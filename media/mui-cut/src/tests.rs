@@ -1254,6 +1254,55 @@ fn captured_parts_become_movable_layers() {
     assert!(red(100, 50), "a fragment keeps its corners");
 }
 
+/// A part's `material` keys over its layer's, field by field, so a plugin
+/// turns to glass part by part; and it lists, keys and fits the schema.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_part_keys_its_own_glass_over_its_layers_material() {
+    let src = r#"{"size":[400,200],"fps":30,"scenes":[{"name":"a","duration":2,"mode":"3d",
+        "layers":[{"id":"syn","kind":"plugin","source":{"bin":"x"},"x":200,"y":100,
+        "material":{"roughness":0.1,"print":1,"bevel":6},
+        "parts":{"a":{"material":{"transmission":[{"t":0,"v":0,"interp":"linear"},{"t":1,"v":1}]}}}}]}]}"#;
+    let doc: serde_json::Value = serde_json::from_str(src).unwrap();
+    let schema = Project::json_schema();
+    let v = jsonschema::validator_for(&schema).unwrap();
+    let errs: Vec<String> = v.iter_errors(&doc).map(|e| e.to_string()).collect();
+    assert!(errs.is_empty(), "{errs:?}");
+    let p = Project::load(src).unwrap();
+    let l = &p.scenes[0].layers[0];
+    assert!(
+        l.props_in(true)
+            .iter()
+            .any(|(n, _)| n == "parts.a.material.transmission"),
+        "a part's material is keyable by path"
+    );
+    let assets = capture_assets(&p);
+    let at = |t: f64| {
+        let d = &eval(&p, &p.scenes[0], t).layers[0];
+        assets
+            .slabs(d)
+            .into_iter()
+            .map(|s| (s.id.clone(), s.space.material))
+            .collect::<Vec<_>>()
+    };
+    let half = at(0.5);
+    let get = |id: &str| half.iter().find(|(i, _)| i == id).unwrap().1.unwrap();
+    let (a, b) = (get("syn#a"), get("syn#b"));
+    assert!((a.transmission.unwrap() - 0.5).abs() < 1e-9, "keyed: {a:?}");
+    assert_eq!(
+        (a.roughness, a.print, a.bevel),
+        (Some(0.1), Some(1.), Some(6.)),
+        "the layer's under it"
+    );
+    assert_eq!(
+        (b.transmission, b.roughness),
+        (None, Some(0.1)),
+        "b keeps the layer's"
+    );
+    let m = a.over(mui_stage::Material::SLAB);
+    assert_eq!((m.transmission, m.print, m.bevel), (0.5, 1., 6.));
+}
+
 /// In a 3D scene every part is its own slab: where the 2D drawing puts it
 /// (turns and all), `explode` towards the viewer plus its own `z`.
 #[cfg(not(target_arch = "wasm32"))]
@@ -1457,6 +1506,12 @@ fn deeper_parts_ask_the_adapter_for_more_levels() {
     let depth = |extra: &str| first(extra)[0]["depth"].clone();
     assert_eq!(depth(r#","explode_levels":2"#), 2);
     assert_eq!(depth(r#","parts":{"osc/osc-shape":{"x":1}}"#), 2);
+    // Surface ids have slashes of their own: a deep path must not ask for
+    // more levels than the adapter serves (1..8), or the capture fails.
+    assert_eq!(
+        depth(r#","parts":{"group-frame/0/osc/0/panel/wave/osc/0/wave":{"x":1}}"#),
+        8
+    );
     assert_eq!(
         first(r#","explode_levels":3,"select":["a"]"#)[0]["ids"],
         serde_json::json!(["a"])

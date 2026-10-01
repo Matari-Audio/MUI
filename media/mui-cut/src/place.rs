@@ -523,7 +523,7 @@ pub fn flatten(project: &Project, scene: &Scene, t: f64) -> Scene {
         [(nx + 1.) / 2. * w, (1. - ny) / 2. * h, 0.]
     };
     let mut out = scene.clone();
-    (out.mode, out.ground, out.fog) = (Mode::TwoD, None, None);
+    (out.mode, out.ground, out.fog, out.sky) = (Mode::TwoD, None, None, None);
     for (l, d) in out.layers.iter_mut().zip(&f.layers) {
         let flat = matches!(l.kind, Kind::Camera { .. } | Kind::Light { .. });
         if l.parent.is_empty() && !flat {

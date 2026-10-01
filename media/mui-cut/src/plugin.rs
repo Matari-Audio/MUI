@@ -184,6 +184,11 @@ pub struct Part {
     /// 0..1: a flat outline around the part.
     #[serde(default = "zero", skip_serializing_if = "is_zero")]
     pub highlight: Anim<f64>,
+    /// 3D: the part's surface (and its children's), field by field over
+    /// the layer's `material`: key `transmission` part by part to turn a
+    /// plugin to glass in a sweep.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub material: Option<crate::three::Material>,
 }
 
 impl Part {
@@ -241,6 +246,8 @@ pub struct PartAt {
     pub rotation: f64,
     pub opacity: f64,
     pub highlight: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub material: Option<crate::three::Surface>,
 }
 
 /// A frame of the grid where the adapter is sent something, and the state
@@ -350,14 +357,15 @@ impl Layer {
         };
         // Parts come as deep as explode reaches, or a keyed part's path.
         // ponytail: a surface id with a `/` in it counts as deeper; that only
-        // captures a level more than needed.
+        // captures a level more than needed, up to the 8 an adapter serves.
         let depth = parts
             .keys()
             .chain(show)
             .map(|k| k.split('/').count())
             .chain([*explode_levels as usize])
             .max()
-            .unwrap_or(1);
+            .unwrap_or(1)
+            .min(8);
         let mut h = home_hash(source);
         let mut steps = Vec::new();
         let mut last_params: Vec<f64> = Vec::new();
@@ -505,6 +513,7 @@ impl Layer {
                     rotation: p.rotation.at(t),
                     opacity: p.opacity.at(t).clamp(0., 1.),
                     highlight: p.highlight.at(t).clamp(0., 1.),
+                    material: p.material.as_ref().map(|m| m.at(t)),
                 })
                 .collect(),
         })
@@ -640,6 +649,8 @@ pub struct Pose {
     /// level a pixel and its explode's depth in front of its parent.
     pub depth: f64,
     pub highlight: f64,
+    /// Its own and its parents' `material`, over the layer's.
+    pub material: Option<crate::three::Surface>,
     /// 1 for panels, 2 for their controls, ...
     pub level: usize,
     /// Off where the UI put it (it or a parent moved): drawn free of its
@@ -661,6 +672,7 @@ pub fn poses(cap: &Capture, p: &PluginAt) -> Vec<(PartInfo, Pose)> {
         highlight: 0.,
         level: 0,
         moved: false,
+        material: None,
     };
     let centre = |f: [f64; 4]| [f[0] + f[2] / 2., f[1] + f[3] / 2.];
     let mut out: Vec<(PartInfo, Pose)> = Vec::new();
@@ -697,6 +709,10 @@ pub fn poses(cap: &Capture, p: &PluginAt) -> Vec<(PartInfo, Pose)> {
             highlight: hl,
             level,
             moved,
+            material: match (own.and_then(|q| q.material), parent.material) {
+                (Some(m), Some(up)) => Some(m.or(&up)),
+                (m, up) => m.or(up),
+            },
         };
         out.push((info, pose));
     }
@@ -759,12 +775,16 @@ impl Fragment {
 }
 
 /// The part tracks keyed by path, as [`Layer::props`] lists them.
-pub(crate) fn part_props(parts: &BTreeMap<String, Part>) -> Vec<(String, &Anim<f64>)> {
+pub(crate) fn part_props(parts: &BTreeMap<String, Part>) -> Vec<(String, crate::Prop<'_>)> {
     parts
         .iter()
         .flat_map(|(id, p)| {
-            p.nums()
+            let own = p
+                .nums()
                 .into_iter()
+                .map(|(n, a)| (n.to_owned(), crate::Prop::Num(a)));
+            let mat = p.material.iter().flat_map(crate::three::Material::props);
+            own.chain(mat)
                 .map(move |(n, a)| (format!("parts.{id}.{n}"), a))
         })
         .collect()

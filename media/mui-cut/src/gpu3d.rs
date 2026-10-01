@@ -470,6 +470,7 @@ impl Space {
             fog,
             clear: Some(linear(frame.background)),
             environment,
+            sky: view.sky,
             ao,
             sample: canvas.sample,
             post: Post {
