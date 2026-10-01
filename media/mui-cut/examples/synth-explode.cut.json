@@ -1,0 +1,172 @@
+{
+  "size": [1280, 720],
+  "fps": 30.0,
+  "sources": [
+    {
+      "id": "synth",
+      "kind": "plugin",
+      "source": {
+        "cargo": "../Cargo.toml",
+        "example": "synth"
+      }
+    }
+  ],
+  "scenes": [
+    {
+      "name": "boom",
+      "duration": 8.0,
+      "background": "#121216",
+      "layers": [
+        {
+          "id": "loud",
+          "kind": "text",
+          "text": "LOUDER",
+          "x": 640.0,
+          "y": 380.0,
+          "scale": [
+            { "t": 1.95, "v": 0.0, "interp": "bezier", "out": [0.036, 0.9000349121093749] },
+            { "t": 2.145, "v": 1.08004189453125, "interp": "bezier" },
+            { "t": 2.25, "v": 1.0000387912326387, "interp": "bezier" },
+            { "t": 7.0, "v": 1.12, "interp": "bezier" }
+          ],
+          "fill": "#2a2a33",
+          "font_size": 200.0,
+          "weight": 900.0
+        },
+        {
+          "id": "syn",
+          "kind": "plugin",
+          "source": {
+            "cargo": "../Cargo.toml",
+            "example": "synth"
+          },
+          "params": [
+            {
+              "id": "filter",
+              "field": "cutoff",
+              "value": [
+                { "t": 0.0, "v": 0.15, "interp": "bezier" },
+                { "t": 2.0, "v": 0.9, "interp": "bezier" },
+                { "t": 3.5, "v": 0.3, "interp": "bezier" },
+                { "t": 5.5, "v": 1.0, "interp": "bezier" },
+                { "t": 6.0, "v": 0.5, "interp": "bezier" }
+              ]
+            },
+            {
+              "id": "filter",
+              "field": "res",
+              "value": [
+                { "t": 0.0, "v": 0.2, "interp": "bezier" },
+                { "t": 4.0, "v": 0.75, "interp": "bezier" },
+                { "t": 6.0, "v": 0.3, "interp": "bezier" }
+              ]
+            },
+            {
+              "id": "osc",
+              "field": "detune",
+              "value": [
+                { "t": 2.0, "v": 0.2, "interp": "bezier" },
+                { "t": 2.6, "v": 0.7, "interp": "bezier" },
+                { "t": 6.0, "v": 0.2, "interp": "bezier" }
+              ]
+            }
+          ],
+          "parts": {
+            "env": {
+              "rotation": [
+                { "t": 2.0, "v": 0.0, "interp": "bezier" },
+                { "t": 3.0, "v": 4.0, "interp": "bezier" },
+                { "t": 6.0, "v": 4.0, "interp": "bezier" },
+                { "t": 7.0, "v": 0.0, "interp": "bezier" }
+              ]
+            },
+            "filter": {
+              "rotation": [
+                { "t": 2.0, "v": 0.0, "interp": "bezier" },
+                { "t": 3.0, "v": -6.0, "interp": "bezier" },
+                { "t": 6.0, "v": -6.0, "interp": "bezier" },
+                { "t": 7.0, "v": 0.0, "interp": "bezier" }
+              ],
+              "highlight": [
+                { "t": 3.4, "v": 0.0, "interp": "bezier" },
+                { "t": 3.6, "v": 1.0, "interp": "bezier" },
+                { "t": 5.6, "v": 1.0, "interp": "bezier" },
+                { "t": 5.9, "v": 0.0, "interp": "bezier" }
+              ]
+            },
+            "filter/filter-cutoff": {
+              "scale": [
+                { "t": 3.4, "v": 1.0, "interp": "bezier" },
+                { "t": 3.7, "v": 1.6, "interp": "bezier" },
+                { "t": 5.6, "v": 1.6, "interp": "bezier" },
+                { "t": 6.0, "v": 1.0, "interp": "bezier" }
+              ]
+            },
+            "osc": {
+              "rotation": [
+                { "t": 2.0, "v": 0.0, "interp": "bezier" },
+                { "t": 3.0, "v": 5.0, "interp": "bezier" },
+                { "t": 6.0, "v": 5.0, "interp": "bezier" },
+                { "t": 7.0, "v": 0.0, "interp": "bezier" }
+              ]
+            },
+            "out": {
+              "scale": [
+                { "t": 2.0, "v": 1.0, "interp": "bezier" },
+                { "t": 2.1, "v": 1.2, "interp": "bezier" },
+                { "t": 2.4, "v": 1.0, "interp": "bezier" },
+                { "t": 6.0, "v": 1.0, "interp": "bezier" },
+                { "t": 6.1, "v": 1.2, "interp": "bezier" },
+                { "t": 6.4, "v": 1.0, "interp": "bezier" }
+              ]
+            }
+          },
+          "explode_levels": 2,
+          "notes": [
+            { "t": 0.0, "dur": 0.4, "pitch": 48 },
+            { "t": 0.5, "dur": 0.4, "pitch": 55 },
+            { "t": 1.0, "dur": 0.4, "pitch": 60 },
+            { "t": 1.5, "dur": 0.4, "pitch": 63 },
+            { "t": 2.0, "dur": 1.0, "pitch": 36, "vel": 127 },
+            { "t": 2.0, "dur": 1.0, "pitch": 60, "vel": 120 },
+            { "t": 2.0, "dur": 1.0, "pitch": 67, "vel": 120 },
+            { "t": 3.5, "dur": 0.25, "pitch": 72 },
+            { "t": 3.75, "dur": 0.25, "pitch": 70 },
+            { "t": 4.0, "dur": 0.25, "pitch": 67 },
+            { "t": 4.25, "dur": 0.25, "pitch": 63 },
+            { "t": 4.5, "dur": 0.25, "pitch": 60 },
+            { "t": 4.75, "dur": 0.25, "pitch": 63 },
+            { "t": 5.0, "dur": 0.5, "pitch": 67 },
+            { "t": 6.0, "dur": 1.5, "pitch": 48, "vel": 110 },
+            { "t": 6.0, "dur": 1.5, "pitch": 55, "vel": 110 },
+            { "t": 6.0, "dur": 1.5, "pitch": 60, "vel": 110 }
+          ],
+          "x": 640.0,
+          "y": 360.0,
+          "scale": [
+            { "t": 0.0, "v": 0.6, "interp": "bezier" },
+            { "t": 0.6, "v": 0.85, "interp": "bezier" },
+            { "t": 2.0, "v": 0.9, "interp": "bezier" },
+            { "t": 2.15, "v": 0.8, "interp": "bezier" }
+          ],
+          "opacity": [
+            { "t": 0.0, "v": 0.0, "interp": "bezier", "out": [0.064, 1.0] },
+            { "t": 0.4, "v": 1.0, "interp": "bezier", "in": [-0.27999999999999997, 0.0] }
+          ],
+          "explode": [
+            { "t": 2.0, "v": 0.0, "interp": "bezier" },
+            { "t": 3.0, "v": 0.6, "interp": "bezier" },
+            { "t": 6.0, "v": 0.6, "interp": "bezier" },
+            { "t": 7.0, "v": 0.0, "interp": "bezier" }
+          ],
+          "backdrop": [
+            { "t": 2.0, "v": 1.0, "interp": "bezier" },
+            { "t": 2.8, "v": 0.0, "interp": "bezier" },
+            { "t": 6.2, "v": 0.0, "interp": "bezier" },
+            { "t": 7.0, "v": 1.0, "interp": "bezier" }
+          ]
+        }
+      ]
+    }
+  ]
+}

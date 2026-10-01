@@ -634,6 +634,9 @@ fn every_example_fits_the_schema_and_checks_clean() {
         "glass.cut.json",
         "effects.cut.json",
         "grid.cut.json",
+        "graphite-title.cut.json",
+        "glass-orbit.cut.json",
+        "synth-explode.cut.json",
     ] {
         assert!(names.iter().any(|n| *n == want), "{want} in {names:?}");
     }
