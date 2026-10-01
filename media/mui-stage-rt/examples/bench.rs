@@ -9,6 +9,14 @@ use mui_stage::{Camera, Light, LightKind, Material, Plane, Post, Shot, Sky};
 use std::time::Instant;
 
 fn main() {
+    const ROWS: [&str; 6] = [
+        "raster (bracketed)",
+        "TLAS build",
+        "trace 1 spp",
+        "filter",
+        "composite",
+        "frame (CPU wall)",
+    ];
     let frames: usize = std::env::args()
         .nth(1)
         .and_then(|a| a.parse().ok())
@@ -41,7 +49,7 @@ fn main() {
     });
     let period = f64::from(queue.get_timestamp_period()) * 1e-6;
     let stamp = |i: u32| {
-        let mut enc = device.create_command_encoder(&Default::default());
+        let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
         enc.write_timestamp(&set, i);
         if i == 1 {
             enc.resolve_query_set(&set, 0..2, &resolve, 0);
@@ -100,14 +108,6 @@ fn main() {
     let target = stage_target(&rt, w, h);
     let view = target.create_view(&wgpu::TextureViewDescriptor::default());
     let format = wgpu::TextureFormat::Rgba8Unorm;
-    const ROWS: [&str; 6] = [
-        "raster (bracketed)",
-        "TLAS build",
-        "trace 1 spp",
-        "filter",
-        "composite",
-        "frame (CPU wall)",
-    ];
     let mut ms: [Vec<f64>; 6] = Default::default();
     for f in 0..frames + 10 {
         let yaw = (f as f32 * 0.2).sin() * 12.;

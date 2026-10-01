@@ -248,13 +248,14 @@ impl Rt {
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
-        let mut enc = self.device.create_command_encoder(&Default::default());
+        let mut enc = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
         enc.copy_buffer_to_buffer(&self.ping[self.out], 0, &rb, 0, size);
         self.queue.submit([enc.finish()]);
         rb.slice(..).map_async(wgpu::MapMode::Read, |_| {});
         self.finish().unwrap();
-        let v = bytemuck::cast_slice(&rb.slice(..).get_mapped_range().unwrap()).to_vec();
-        v
+        bytemuck::cast_slice(&rb.slice(..).get_mapped_range().unwrap()).to_vec()
     }
 }
 
@@ -318,7 +319,9 @@ fn an_adapter_without_ray_queries_falls_back() {
         backends: wgpu::Backends::GL,
         ..wgpu::InstanceDescriptor::new_without_display_handle()
     });
-    let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
+    let Ok(adapter) =
+        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+    else {
         eprintln!("skipped: no GL adapter");
         return;
     };

@@ -65,6 +65,10 @@ pub struct GpuCanvas {
     pub(crate) sample: Option<u32>,
     /// 3D glass path traced, these many paths per pixel per draw; `None`
     /// is raster glass. Set only on a device with ray queries.
+    #[cfg_attr(
+        target_arch = "wasm32",
+        expect(dead_code, reason = "the web has no ray-traced glass")
+    )]
     pub(crate) glass: Option<u32>,
 }
 
