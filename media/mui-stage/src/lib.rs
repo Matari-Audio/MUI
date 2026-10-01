@@ -115,9 +115,9 @@ const HDR: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const OUT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Float;
 const DEPTH: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 const SAMPLES: u32 = 4;
-/// Per-draw uniform slot: `Draw` is 176 bytes, dynamic offsets align to 256.
+/// Per-draw uniform slot: `Draw` is 192 bytes, dynamic offsets align to 256.
 const SLOT: u64 = 256;
-const DRAW: u64 = 176;
+const DRAW: u64 = 192;
 /// Most planes and most models a shot draws. A plugin exploded four levels
 /// deep is ~90 slabs, each with a highlight plate.
 pub const MAX_PLANES: usize = 256;
@@ -128,7 +128,7 @@ pub const MAX_LIGHTS: usize = 4;
 /// floor.
 const SLOTS: usize = 2 * (MAX_PLANES + MAX_MODELS) + 1;
 /// `Globals` in `stage.wgsl`, in floats.
-const GLOBALS: usize = 256;
+const GLOBALS: usize = 272;
 /// The environment a shot may name without uploading it: the built-in
 /// neutral studio ([`EnvImage::studio`]).
 pub const STUDIO: &str = "studio";
@@ -260,6 +260,14 @@ pub struct Material {
     pub dispersion: f32,
     /// Linear RGB left of white light after `thickness` inside.
     pub tint: [f32; 3],
+    /// 0 the layer's colour stains the light through it; 1 the layer is
+    /// printed on clear glass: its dark stays clear, its light marks stay
+    /// as ink (a dark UI turned to glass).
+    pub print: f32,
+    /// World units in from a plane's edge that its face rounds over, so
+    /// its rim bends what is behind it as thick bevelled glass does (a flat
+    /// pane leaves the far away where it is). 0 square edges.
+    pub bevel: f32,
 }
 impl Material {
     /// A slab's face: a plain, fairly rough dielectric.
@@ -271,6 +279,8 @@ impl Material {
         thickness: 0.,
         dispersion: 0.,
         tint: [1.; 3],
+        print: 0.,
+        bevel: 0.,
     };
     /// Whether it is drawn as glass.
     pub fn glass(&self) -> bool {
@@ -588,6 +598,26 @@ impl Environment {
     }
 }
 
+/// A sunlit sky behind everything, instead of the background or
+/// [`Shot::clear`]: a gradient from `horizon` to `zenith`, the sun, and
+/// procedural clouds on a layer above (and a sea of them below the
+/// horizon), lit from the sun. Glass refracts it and reflects it, as it
+/// does any background.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Sky {
+    /// Toward the sun, world (y up, z toward the viewer); normalised.
+    pub sun: [f32; 3],
+    /// Linear RGB radiance straight up and at the horizon.
+    pub zenith: [f32; 3],
+    pub horizon: [f32; 3],
+    /// Linear RGB radiance of sunlight: the disc, its glow, lit cloud.
+    pub sun_color: [f32; 3],
+    /// How much of the sky the clouds cover, 0..1.
+    pub cover: f32,
+    /// How far the clouds have drifted, in cloud widths (x, z).
+    pub drift: [f32; 2],
+}
+
 /// Ground-truth ambient occlusion: a half-resolution screen-space pass
 /// that darkens creases and contacts within `radius` world units.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -612,6 +642,9 @@ pub struct Shot {
     /// A solid background (linear RGB) instead of the WGSL one.
     pub clear: Option<[f32; 3]>,
     pub environment: Option<Environment>,
+    /// A sunlit, clouded sky behind everything (an environment shown as
+    /// the background still wins).
+    pub sky: Option<Sky>,
     pub ao: Option<Ao>,
     pub post: Post,
     /// One sample of a beauty frame ([`Stage::beauty`]): the pixel, the
@@ -635,6 +668,7 @@ impl Shot {
             fog: None,
             clear: None,
             environment: None,
+            sky: None,
             ao: None,
             post: Post::default(),
             sample: None,
@@ -2029,6 +2063,16 @@ impl Stage {
             g[43] = 1.;
             self.group0 = group.clone();
         }
+        if let Some(k) = &s.sky {
+            g[256..259].copy_from_slice(&normalize(k.sun));
+            g[259] = 1.;
+            g[260..263].copy_from_slice(&k.zenith);
+            g[263] = k.cover.clamp(0., 1.);
+            g[264..267].copy_from_slice(&k.horizon);
+            g[267] = k.drift[0];
+            g[268..271].copy_from_slice(&k.sun_color);
+            g[271] = k.drift[1];
+        }
         let ao = s.ao.filter(|a| a.strength > 0. && a.radius > 0.);
         if let Some(a) = ao {
             g[212..215].copy_from_slice(&[a.strength, a.radius, 1.]);
@@ -2101,8 +2145,8 @@ impl Stage {
         // Slots: planes 0..n, models n..k, their reflections k..2k, the
         // floor at 2k.
         let mut slots = vec![0u8; SLOT as usize * SLOTS];
-        let mut put = |slot: usize, model: Mat4, rows: [[f32; 4]; 7]| {
-            let mut d = [0f32; 44];
+        let mut put = |slot: usize, model: Mat4, rows: [[f32; 4]; 8]| {
+            let mut d = [0f32; 48];
             d[..16].copy_from_slice(&model.0);
             for (i, r) in rows.iter().enumerate() {
                 d[16 + i * 4..][..4].copy_from_slice(r);
@@ -2132,6 +2176,7 @@ impl Stage {
                     m.tint[2].clamp(0., 1.),
                     f32::from(u8::from(slab)),
                 ],
+                [m.print.clamp(0., 1.), m.bevel.max(0.), 0., 0.],
             ]
         };
         let flip = reflect.map(|f| {
@@ -2150,7 +2195,7 @@ impl Stage {
             } else {
                 p.depth
             } * p.scale.abs();
-            let [a, b, c] = material(&p.material, p.receive, thick, true, lift[i]);
+            let [a, b, c, e] = material(&p.material, p.receive, thick, true, lift[i]);
             let rows = |mirror| {
                 [
                     [p.size[0], p.size[1], p.depth, p.glow],
@@ -2160,6 +2205,7 @@ impl Stage {
                     a,
                     b,
                     c,
+                    e,
                 ]
             };
             put(i, p.model(), rows([0.; 4]));
@@ -2170,7 +2216,7 @@ impl Stage {
         }
         self.walls.retain_mut(|w| std::mem::take(&mut w.used));
         for (i, m) in models.iter().enumerate() {
-            let [a, b, c] = material(&m.material, m.receive, m.material.thickness, false, 0.);
+            let [a, b, c, e] = material(&m.material, m.receive, m.material.thickness, false, 0.);
             // `size.x`: it has a normal map.
             let bumped = if m.maps[1]
                 .as_ref()
@@ -2189,6 +2235,7 @@ impl Stage {
                     a,
                     b,
                     c,
+                    e,
                 ]
             };
             put(n + i, m.transform, rows([0.; 4]));
@@ -2208,6 +2255,7 @@ impl Stage {
                     [1., 0., 0.5, 0.],
                     [0., 1.5, 0., 0.],
                     [1., 1., 1., 0.],
+                    [0.; 4],
                 ],
             );
         }
@@ -2219,8 +2267,9 @@ impl Stage {
         let mut enc = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-        // Glass lets most light through: it casts no shadow map.
-        let casts = |m: &Material| m.transmission < 0.5;
+        // Glass casts the share of light it stops (`fs_shadow_*` cut its
+        // cover by its transmission); clear glass none.
+        let casts = |m: &Material| m.transmission < 1.;
         if !maps.is_empty() || !cubes.is_empty() {
             let shadows = self.shadow_maps(!cubes.is_empty());
             let (flat, cube) = (shadows.flat.clone(), shadows.cube.clone());
