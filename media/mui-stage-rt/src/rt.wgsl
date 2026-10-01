@@ -117,6 +117,10 @@ fn rand() -> f32 {
 fn rand2() -> vec2f { return vec2f(rand(), rand()); }
 // This sample's place in the spectrum, 0..1.
 var<private> hero: f32;
+// The instance the path is inside, or NONE. Its layer says where light
+// gets in; once in, every face of it is glass, so the way out is too.
+const NONE: u32 = 0xFFFFFFFFu;
+var<private> body: u32 = NONE;
 
 // --- the sky: spliced from mui-stage's stage.wgsl at build time -----------
 
@@ -162,6 +166,7 @@ struct Hit {
 // out by its layer's coverage and everything by its opacity, each as a
 // coin toss, so partial cover converges to its fraction.
 fn solid(c: RayIntersection, o: vec3f, d: vec3f) -> bool {
+    if (c.instance_custom_data == body) { return true; }
     let inst = insts[c.instance_custom_data];
     if (inst.kind.x == KIND_FLOOR) { return true; }
     var a = inst.edge.a;
@@ -523,6 +528,7 @@ fn trace_path(o0: vec3f, d0: vec3f) -> Path {
     var nm = 0.;
     // The glass the path is inside: what it absorbs over how far.
     var inside = false;
+    body = NONE;
     var tint = vec3f(1.);
     var reach = 0.;
     // A floor reflection fades with its height above the floor.
@@ -635,12 +641,14 @@ fn trace_path(o0: vec3f, d0: vec3f) -> Path {
             if (entering) {
                 thr *= stain;
                 inside = true;
+                body = s.inst;
                 tint = inst.tint.rgb;
                 reach = inst.mat2.x;
                 // No length to measure the tint over: it is the crossing's.
                 if (reach <= 0.) { thr *= tint; }
             } else {
                 inside = false;
+                body = NONE;
             }
         }
         if (alpha > 4e-4) {

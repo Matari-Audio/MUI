@@ -323,3 +323,32 @@ fn the_shaders_have_the_stage_sky() {
     assert!(filter.contains("fn denoise(") && composite.contains("fn fs_composite("));
 }
 
+
+#[test]
+fn light_leaves_a_slab_by_its_back_face_wherever_the_print_is() {
+    let Some((mut stage, mut rt)) = rig() else {
+        return;
+    };
+    // White behind; the slab's layer covers only thin upright stripes, as
+    // a value's glyphs do. Light that went in through a stripe comes out
+    // of the back face well to the side of it, where the layer is clear.
+    paint(&mut stage, &mut rt, "white", [4, 4], |_, _| [255; 4]);
+    paint(&mut stage, &mut rt, "pane", [70, 4], |x, _| {
+        if x % 7 == 0 { [255; 4] } else { [0; 4] }
+    });
+    let bg = Plane::new("white", 2400., 2400.).at(0., 0., -600.);
+    let m = Material {
+        tint: [0.5; 3],
+        thickness: 100.,
+        ..glass(1.5)
+    };
+    let s = shot(vec![bg, slab(100., 30., m)]);
+    let f = rt.render(&mut stage, &s, 64).unwrap();
+    let row = 100;
+    let darkest = (20..W - 20)
+        .map(|x| f.rgba[((row * W + x) * 4) as usize + 1])
+        .fold(1f32, f32::min);
+    // Half the light is left after one thickness, less the two faces'
+    // reflections; not what is left after the 600 units to the backdrop.
+    assert!(darkest > 0.3, "darkest {darkest}");
+}
