@@ -418,6 +418,11 @@ fn damaged_at(
 }
 
 fn same_pixels(part: &[u8], whole: &[u8]) {
+    near_pixels(part, whole, 0);
+}
+
+/// No channel of `part` more than `within` levels from `whole`.
+fn near_pixels(part: &[u8], whole: &[u8], within: u8) {
     let off = part.iter().zip(whole).filter(|(a, b)| a != b).count();
     let worst = part
         .iter()
@@ -425,8 +430,8 @@ fn same_pixels(part: &[u8], whole: &[u8]) {
         .map(|(a, b)| a.abs_diff(*b))
         .max()
         .unwrap_or(0);
-    assert_eq!(
-        off, 0,
+    assert!(
+        worst <= within,
         "{off} channels differ from a whole render, by up to {worst}"
     );
 }
@@ -452,8 +457,11 @@ fn a_hover_renders_only_its_box_and_matches_a_whole_render() {
             "{}",
             stats.rendered_pixels
         );
-        eprintln!("diag: xf {xf:?}");
-        same_pixels(&part, &whole);
+        // A part is drawn moved by whole tiles. At a fractional scale the
+        // moved f32 edges and gradient positions round apart from the
+        // whole frame's: Metal lands 96 channels one level off. A seam or
+        // a missed entry is far more than one level.
+        near_pixels(&part, &whole, u8::from(xf != Affine::IDENTITY));
     }
 }
 
