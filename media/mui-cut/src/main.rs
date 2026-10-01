@@ -41,14 +41,15 @@ const USAGE: &str = "usage:
                  [--variant NAME | --variants all|NAME,NAME -o out/{name}.mp4]
                  [--segment SECONDS] [--range 3.2s-5.0s]   (the segment cache)
   mui-cut still  PROJECT --t SECONDS -o OUT.png [--scene NAME] [--size WxH] [--renderer R] [--variant NAME]
-    render and still: [--quality normal|beauty] [--samples N] [--glass raster|rt|rt-path [--glass-samples N]]
+    render and still: [--quality normal|beauty] [--samples N] [--glass raster|trace|rt|rt-path [--glass-samples N]]
     R: classic (default; Vello compute on the GPU), gpu (vello_gpu), cpu (Vello CPU),
        blender (3D scenes through Blender: [--engine eevee|cycles] [--samples N]);
     --quality beauty (or --samples N) on a GPU renderer: 3D frames are the mean of N
        samples (64 by default), each with its own pixel offset, lens point (depth of
        field), area-light position (soft shadows) and occlusion turn; motion blur
        spreads them across the shutter.
-    --glass rt: 3D glass ray traced on a GPU with hardware ray queries (else raster
+    --glass trace: 3D glass traced in closed form through the layers' slabs, any GPU;
+       rt: 3D glass ray traced on a GPU with hardware ray queries (else raster
        glass, with a warning), deterministic; rt-path: path traced, N paths per pixel
        per subframe (16) (render.glass in the file).
     --cpu is --renderer cpu. --threads: CPU frames drawn at once (default: one per core).
@@ -234,7 +235,12 @@ fn load_variant(args: &Args) -> Result<Project> {
         Some("rt") => Some(mui_cut::Glass::Rt),
         Some("rt-path") => Some(mui_cut::Glass::RtPath),
         Some("raster") => Some(mui_cut::Glass::Raster),
-        Some(g) => return Err(format!("--glass: `{g}` is not raster, rt or rt-path")),
+        Some("trace") => Some(mui_cut::Glass::Trace),
+        Some(g) => {
+            return Err(format!(
+                "--glass: `{g}` is not raster, trace, rt or rt-path"
+            ));
+        }
     };
     let glass_samples = args
         .get("glass-samples")
@@ -485,6 +491,8 @@ impl Backend {
             match gpu {
                 Ok(mut g) => {
                     g.assets = assets;
+                    let trace = p.render.as_ref().and_then(|r| r.glass);
+                    g.trace_glass(trace == Some(mui_cut::Glass::Trace));
                     return Ok(Self::Gpu(Box::new(g)));
                 }
                 Err(e) => eprintln!("mui-cut: GPU unavailable ({e}); rendering on the CPU"),

@@ -111,10 +111,11 @@ pub struct Render {
     /// Motion-blur subframes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mb: Option<usize>,
-    /// How 3D glass is drawn: `raster` (the default); `rt`, ray traced on a
-    /// GPU with hardware ray queries, deterministic and real time; or
+    /// How 3D glass is drawn: `raster` (the default); `trace`, traced in
+    /// closed form through the layers' slabs on any GPU; `rt`, ray traced
+    /// on a GPU with hardware ray queries, deterministic and real time; or
     /// `rt-path`, path traced, converging over `glass_samples`. Where there
-    /// are no ray queries, raster glass, and `mui-cut check` says so.
+    /// are no ray queries, `rt` is raster glass, and `mui-cut check` says so.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub glass: Option<Glass>,
     /// `rt-path` glass: paths per pixel each drawn subframe traces (default 16).
@@ -139,6 +140,11 @@ pub enum Glass {
     /// Path traced: as `rt`, with rough transmission, glints and light
     /// between surfaces sampled, converging over `glass_samples`.
     RtPath,
+    /// Traced in closed form through every layer's slab (no ray queries, no
+    /// BVH): one ray per pixel, no noise; glass behind glass bends along
+    /// the front pane's ray and mirrors show what is off screen. Models and
+    /// the floor are still found on screen.
+    Trace,
 }
 
 impl Render {
@@ -187,7 +193,7 @@ impl Render {
     /// asks for ray-traced glass: 0 the deterministic trace.
     pub fn rt_glass(&self) -> Option<u32> {
         match self.glass? {
-            Glass::Raster => None,
+            Glass::Raster | Glass::Trace => None,
             Glass::Rt => Some(0),
             Glass::RtPath => Some(self.glass_samples.unwrap_or(16).clamp(1, 4096)),
         }
@@ -228,10 +234,6 @@ pub struct Scene {
     /// 3D: what is brighter than white glows (mui-stage only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bloom: Option<three::Bloom>,
-    /// 3D: `trace` traces glass through the slabs instead of the screen
-    /// (mui-stage only).
-    #[serde(default, skip_serializing_if = "is_default")]
-    pub glass: three::Glass,
     /// Run over the whole frame, after every layer.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub effects: Vec<fx::Effect>,

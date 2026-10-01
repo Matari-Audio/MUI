@@ -71,6 +71,8 @@ pub struct GpuCanvas {
         expect(dead_code, reason = "the web has no ray-traced glass")
     )]
     pub(crate) glass: Option<u32>,
+    /// 3D glass traced through the slabs (`render.glass` `trace`).
+    pub(crate) trace: bool,
 }
 
 impl GpuCanvas {
@@ -106,6 +108,7 @@ impl GpuCanvas {
             fx: None,
             sample: None,
             glass: None,
+            trace: false,
         })
     }
     pub fn engine(&self) -> Engine {
@@ -515,6 +518,11 @@ mod offline {
             Ok(o)
         }
 
+        /// 3D glass traced through the slabs instead of on screen.
+        pub fn trace_glass(&mut self, on: bool) {
+            self.canvas.trace = on;
+        }
+
         /// Frames of another size (or pixel format) on the same device, its
         /// assets kept: a render of several variants opens one GPU.
         pub fn resize(&mut self, size: [u32; 2], yuv: Option<Yuv>) -> Result<(), String> {
@@ -528,6 +536,7 @@ mod offline {
             o.adapter = std::mem::take(&mut self.adapter);
             o.beauty = self.beauty;
             o.canvas.glass = self.canvas.glass;
+            o.canvas.trace = self.canvas.trace;
             *self = o;
             Ok(())
         }

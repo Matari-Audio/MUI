@@ -83,8 +83,8 @@ with the keys already there: an exit after an entrance keeps both.
   dimple); a high `ior` (1.8 to 2.4) and `dispersion` 2 to 4 fringe the
   reeds in rainbows. Key one pattern's strength down while another's
   goes up to melt one into the other. A scene's `bloom` makes glints and
-  an in-frame sun glow. A scene's `"glass": "trace"` traces glass through
-  the layers' slabs instead of the screen: glass behind glass bends
+  an in-frame sun glow. `render.glass` `trace` (or `--glass trace`) traces
+  glass through the layers' slabs on any GPU: glass behind glass bends
   right and mirrors show what is off screen, at one ray per pixel.
 - **Plugins:** import once with `source_add`, then a plugin layer's
   `source` may be that id (it is written out in full). Parameters are
