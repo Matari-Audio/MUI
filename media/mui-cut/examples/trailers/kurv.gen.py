@@ -386,6 +386,8 @@ def wordmark():
 project = {
     "size": [1920, 1080],
     "fps": FPS,
+    # The glass path traced where the GPU has ray queries (raster elsewhere).
+    "render": {"glass": "rt", "glass_samples": 32},
     "scenes": [
         {
             "name": "kurv",
