@@ -445,9 +445,13 @@ pub fn camera(size: [u32; 2], layers: &[Drawn]) -> Cam {
         front_distance(h, s.fov)
     };
     // The camera turns right by `ry` and tips down by `rx`, circling its
-    // target: a positive pitch lifts it to look down.
+    // target: a positive pitch lifts it to look down. Looking at a layer,
+    // it stands at its own x/y/z instead and only aims.
     let forward = aim(s.rx, s.ry);
-    let mut eye: [f64; 3] = std::array::from_fn(|i| target[i] - forward[i] * dist);
+    let mut eye: [f64; 3] = match looked {
+        Some(_) => [c.x, c.y, s.z],
+        None => std::array::from_fn(|i| target[i] - forward[i] * dist),
+    };
     for i in 0..3 {
         eye[i] += (target[i] - eye[i]) * s.dolly;
     }

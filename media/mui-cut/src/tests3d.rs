@@ -53,7 +53,7 @@ fn the_camera_orbits_dollies_rolls_and_looks_at_a_layer() {
            {"id":"up","kind":"camera","x":0,"y":0,"rx":30,"distance":200,"dolly":0.5,
             "aperture":8,"focus":10,"opacity":[{"t":0,"v":0,"interp":"hold"},{"t":1,"v":1}]},
            {"id":"card","kind":"rect","x":300,"y":200,"z":50},
-           {"id":"look","kind":"camera","look_at":"card","distance":100,
+           {"id":"look","kind":"camera","x":10,"y":20,"z":-300,"look_at":"card","distance":100,"ry":40,
             "path":"M 0 0 L 100 0","path_offset":0.5,"opacity":[{"t":0,"v":0,"interp":"hold"},{"t":1.5,"v":1}]}"#,
     );
     let s = &p.scenes[0];
@@ -73,10 +73,11 @@ fn the_camera_orbits_dollies_rolls_and_looks_at_a_layer() {
         "focus past the target: {}",
         c.focus
     );
-    // Looking at a layer while the path carries the eye 50 px across.
+    // Looking at a layer it stands at its own x/y/z, the path carrying it
+    // 50 px across; distance and ry do not move it.
     let c = eval(&p, s, 1.5).view.unwrap().camera;
     assert!(close(c.target, [300., 200., 50.]), "{c:?}");
-    assert!(close(c.eye, [350., 200., -50.]), "{c:?}");
+    assert!(close(c.eye, [60., 20., -300.]), "{c:?}");
     // What it looks at lands mid-frame, rolled or not.
     for roll in [0., 30.] {
         let cam = Cam { roll, ..c.clone() };

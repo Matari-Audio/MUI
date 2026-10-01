@@ -236,11 +236,12 @@ pub enum Kind {
         #[serde(default = "yes", rename = "loop", skip_serializing_if = "is_yes")]
         looped: bool,
     },
-    /// 3D scenes: the camera. It orbits its target (`x`, `y`, `z`, or the
-    /// layer `look_at`) by `ry` (yaw) and `rx` (pitch) at `distance`, rolls
-    /// by `rotation`, and moves along `path` (SVG path data seen from
-    /// above: x across, y into depth) by `path_offset`. The last camera
-    /// with some opacity is the one that shoots.
+    /// 3D scenes: the camera. It orbits its target (`x`, `y`, `z`) by `ry`
+    /// (yaw) and `rx` (pitch) at `distance`; with `look_at` it stands at
+    /// its own `x`, `y`, `z` and aims at that layer instead. It rolls by
+    /// `rotation` and moves along `path` (SVG path data seen from above: x
+    /// across, y into depth) by `path_offset`. The last camera with some
+    /// opacity is the one that shoots.
     Camera {
         #[serde(default, skip_serializing_if = "String::is_empty")]
         look_at: String,
