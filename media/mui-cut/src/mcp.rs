@@ -39,6 +39,8 @@ parts as a tree (animate them as `parts.<path>.x` etc.; a control in a panel is 
 `explode_levels` 2 captures and explodes panels, then their controls) and surfaces (aim `pointer_x`/`pointer_y` at their frames). \
 `sources_list` lists the project's sources (files and plugins, a plugin with its part tree), \
 `source_add` imports one (`plugin_add` onboards a plugin crate by folder or git URL, zero config); drag a part in as a layer with a plugin layer's `show: [part]`. \
+Resources: the schema, the open project, the examples and HOST-PROTOCOL.md; prompts \
+`promo_from_plugin` and `review_cut` walk through a whole job. \
 `layer_parent` parents a layer to another (Cavalry style: it inherits position, rotation, scale, \
 z and opacity) keeping it where it is on screen. `schema` has every field.";
 
@@ -623,6 +625,167 @@ fn tools() -> Vec<Value> {
     ]
 }
 
+// ---------------------------------------------------------------- resources
+
+/// The examples folder of this checkout (the binary is built from it).
+const EXAMPLES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/examples");
+const HOST_PROTOCOL: &str = include_str!("../HOST-PROTOCOL.md");
+
+/// Example projects and generator scripts: `(name, path)`.
+fn examples() -> Vec<(String, PathBuf)> {
+    let mut out = Vec::new();
+    for dir in [PathBuf::from(EXAMPLES), Path::new(EXAMPLES).join("gen")] {
+        for e in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if name.ends_with(".cut.json") || name.ends_with(".rhai") {
+                let rel = e
+                    .path()
+                    .strip_prefix(EXAMPLES)
+                    .map_or(name, |r| r.to_string_lossy().into_owned());
+                out.push((rel, e.path()));
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+impl Server {
+    fn resources(&self) -> Vec<Value> {
+        let mut out = vec![
+            json!({ "uri": "mui-cut://schema", "name": "schema", "mimeType": "application/json",
+                "description": "The project file's JSON Schema: every field, its type, default and meaning." }),
+            json!({ "uri": "mui-cut://host-protocol", "name": "HOST-PROTOCOL.md", "mimeType": "text/markdown",
+                "description": "How mui-cut drives a plugin adapter: the capture and live protocol, parts, surfaces, pointer." }),
+        ];
+        if let Ok(p) = self.path() {
+            out.push(json!({ "uri": "mui-cut://project", "name": p.file_name().map(|n| n.to_string_lossy()),
+                "mimeType": "application/json", "description": format!("The open project, {}", p.display()) }));
+        }
+        for (name, _) in examples() {
+            let mime = if name.ends_with(".rhai") {
+                "text/plain"
+            } else {
+                "application/json"
+            };
+            out.push(
+                json!({ "uri": format!("mui-cut://examples/{name}"), "name": name, "mimeType": mime,
+                "description": "An example: a starting point and a reference for the format." }),
+            );
+        }
+        out
+    }
+
+    fn read_resource(&self, uri: &str) -> Result<(&'static str, String)> {
+        match uri {
+            "mui-cut://schema" => Ok(("application/json", pretty(&Project::json_schema()))),
+            "mui-cut://host-protocol" => Ok(("text/markdown", HOST_PROTOCOL.to_owned())),
+            "mui-cut://project" => {
+                let p = self.path()?;
+                let text =
+                    std::fs::read_to_string(&p).map_err(|e| format!("{}: {e}", p.display()))?;
+                Ok(("application/json", text))
+            }
+            _ => {
+                let name = uri
+                    .strip_prefix("mui-cut://examples/")
+                    .ok_or_else(|| format!("no resource `{uri}`"))?;
+                let (_, path) = examples()
+                    .into_iter()
+                    .find(|(n, _)| n == name)
+                    .ok_or_else(|| format!("no example `{name}`"))?;
+                let text = std::fs::read_to_string(&path)
+                    .map_err(|e| format!("{}: {e}", path.display()))?;
+                let mime = if name.ends_with(".rhai") {
+                    "text/plain"
+                } else {
+                    "application/json"
+                };
+                Ok((mime, text))
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------- prompts
+
+fn prompts() -> Vec<Value> {
+    vec![
+        json!({ "name": "promo_from_plugin", "title": "Make a promo from this plugin",
+            "description": "A short promo video of a MUI plugin: onboard it, show its parts, animate, check, look, fix, render.",
+            "arguments": [
+                { "name": "plugin", "description": "The plugin's crate folder or git URL.", "required": true },
+                { "name": "seconds", "description": "Length (default 10).", "required": false },
+                { "name": "project", "description": "Where to write the project (default promo.cut.json).", "required": false },
+            ] }),
+        json!({ "name": "review_cut", "title": "Review this cut",
+            "description": "Review the open (or given) project: check, look at it frame by frame, fix what is wrong, and report.",
+            "arguments": [
+                { "name": "project", "description": "The project (default: the open one).", "required": false },
+                { "name": "rev", "description": "A git revision to compare against (e.g. HEAD).", "required": false },
+            ] }),
+    ]
+}
+
+fn prompt(name: &str, args: &Value) -> Result<Value> {
+    let arg = |k: &str| args[k].as_str().map(str::trim).filter(|s| !s.is_empty());
+    let (description, text) = match name {
+        "promo_from_plugin" => {
+            let plugin = arg("plugin").ok_or("`plugin` is required")?;
+            let secs = arg("seconds").unwrap_or("10");
+            let project = arg("project").unwrap_or("promo.cut.json");
+            (
+                "Make a promo from this plugin",
+                format!(
+                    "Make a {secs} s promo video of the MUI plugin at `{plugin}` with the mui-cut tools.\n\n\
+1. `open` `{project}` with `create: true` (1920x1080, 30 fps), then read the `mui-cut://schema` resource \
+and an example (`mui-cut://examples/plugin.cut.json`) for the format.\n\
+2. `plugin_add` with `from: {plugin}`. It onboards the plugin and returns its part tree; if it fails, \
+the error says what the plugin lacks: report that and stop.\n\
+3. Plan the cut in 3-4 scenes adding up to {secs} s: a title, the whole UI arriving, a close look at two or \
+three parts (exploded or shown alone with a component layer's `show`), and an end card. Use `add_layer` \
+for a plugin layer of the source, `plugin_parts` for part ids, and `key`/`set`/`patch` to animate \
+`explode`, `parts.<id>.x` etc. Give it sound: `notes_set` a short phrase on the plugin layer and \
+`plugin_play` it to hear the peak is sane.\n\
+4. `check` and fix every warning (each has a JSON path and a fix).\n\
+5. `sheet` the whole thing and look at it: framing, legibility, rhythm. `strip` any layer whose motion \
+looks off. Fix with `patch`, then `check` and `sheet` again until it reads well.\n\
+6. `render` to `{}` and poll `render_status`. Report what you made, scene by scene.",
+                    project.replace(".cut.json", ".mp4")
+                ),
+            )
+        }
+        "review_cut" => {
+            let target = arg("project").map_or_else(
+                || "the open project".to_owned(),
+                |p| format!("`{p}` (`open` it first)"),
+            );
+            let compare = arg("rev").map_or_else(String::new, |r| {
+                format!(" Then `diff` with `rev: {r}` and say what changed visibly since then.")
+            });
+            (
+                "Review this cut",
+                format!(
+                    "Review {target} as an editor would, then fix what is wrong.\n\n\
+1. `list` for the outline, `editor_state` to see what the person is looking at (if an editor is open).\n\
+2. `check`: every error and warning, with its path, time and fix.{compare}\n\
+3. `sheet` every scene and look at each frame: framing, overlap, legibility, contrast, empty frames, \
+whether the motion has a clear lead. `strip` the layers that move the most.\n\
+4. Fix the real problems with `patch`/`set`/`key` (the person may be editing too: edits merge field by \
+field, and you are told when you changed a field they did). Leave taste calls you are unsure of alone and \
+list them instead.\n\
+5. `check` and `sheet` again to confirm. Report: what you fixed (paths), what is left, and why."
+                ),
+            )
+        }
+        _ => return Err(format!("no prompt `{name}`")),
+    };
+    Ok(json!({
+        "description": description,
+        "messages": [{ "role": "user", "content": { "type": "text", "text": text } }],
+    }))
+}
+
 // ---------------------------------------------------------------- protocol
 
 impl Server {
@@ -642,13 +805,35 @@ impl Server {
                 let version = if asked <= PROTOCOL { asked } else { PROTOCOL };
                 json!({
                     "protocolVersion": version,
-                    "capabilities": { "tools": { "listChanged": false } },
+                    "capabilities": {
+                        "tools": { "listChanged": false },
+                        "resources": { "listChanged": false },
+                        "prompts": { "listChanged": false },
+                    },
                     "serverInfo": { "name": "mui-cut", "version": env!("CARGO_PKG_VERSION") },
                     "instructions": INSTRUCTIONS,
                 })
             }
             "ping" => json!({}),
             "tools/list" => json!({ "tools": tools() }),
+            "resources/list" => json!({ "resources": self.resources() }),
+            "resources/read" => {
+                let uri = params["uri"].as_str().unwrap_or("");
+                match self.read_resource(uri) {
+                    Ok((mime, text)) => {
+                        json!({ "contents": [{ "uri": uri, "mimeType": mime, "text": text }] })
+                    }
+                    Err(e) => return Some(error(&id, -32002, &e)),
+                }
+            }
+            "prompts/list" => json!({ "prompts": prompts() }),
+            "prompts/get" => {
+                let name = params["name"].as_str().unwrap_or("");
+                match prompt(name, &params["arguments"]) {
+                    Ok(v) => v,
+                    Err(e) => return Some(error(&id, -32602, &e)),
+                }
+            }
             "tools/call" => {
                 let name = params["name"].as_str().unwrap_or("");
                 let args = params
