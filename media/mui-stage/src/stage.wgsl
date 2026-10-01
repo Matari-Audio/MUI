@@ -1131,14 +1131,14 @@ fn seen_through(t: Through, rough: f32) -> vec3f {
 // jittered within each band per beauty sample). `base` is the surface
 // colour; lit, its opaque share (1 - transmission) is diffuse, and every
 // light leaves a highlight on the surface as on any polished dielectric.
-fn glass(p: vec3f, n: vec3f, tilt: vec3f, base: vec3f, px: vec2f) -> vec3f {
-    let trans = d.glass.x;
-    let ior = max(d.glass.y, 1.);
-    let thick = max(d.glass.z, 0.);
-    let k = max(d.glass.w, 0.);
-    let slab = d.tint.a > 0.5;
-    let rough = d.flags.z;
-    let metal = d.flags.y;
+fn glass(dd: Draw, slab_i: i32, p: vec3f, n: vec3f, tilt: vec3f, base: vec3f, px: vec2f) -> vec3f {
+    let trans = dd.glass.x;
+    let ior = max(dd.glass.y, 1.);
+    let thick = max(dd.glass.z, 0.);
+    let k = max(dd.glass.w, 0.);
+    let slab = dd.tint.a > 0.5;
+    let rough = dd.flags.z;
+    let metal = dd.flags.y;
     let ray = normalize(p - g.eye.xyz);
     let v = -ray;
     let u = rand2(px);
@@ -1154,14 +1154,21 @@ fn glass(p: vec3f, n: vec3f, tilt: vec3f, base: vec3f, px: vec2f) -> vec3f {
     var glint = vec3f(0.);
     if (lit_shot()) {
         let shine = 2. / max(rough * rough * rough * rough, 1e-3) - 2.;
-        let s = shade(p, nb, d.flags.x, shine);
+        let s = shade(p, nb, dd.flags.x, shine);
         body = base * s.diffuse;
         glint = f0 * s.spec * (shine + 8.) / 25.;
     }
     // Opaque, drawn after glass it stands in front of: nothing to see through.
     if (trans <= 0.) { return (1. - fr) * body + fr * spec_fallback(r, rough) + glint; }
     let jit = march_jitter(px);
-    let refl = reflection(p, n, r, rough, jit);
+    // Traced (`slab_i`, the slab this is): the ray meets the slabs in
+    // closed form; else the frame on screen.
+    var refl: vec3f;
+    if (slab_i >= 0) {
+        refl = traced(p + n * 0.01, r, rough, slab_i, 587.6);
+    } else {
+        refl = reflection(p, n, r, rough, jit);
+    }
     // Beauty: one wavelength per band, anywhere in it; else its middle.
     let w = select(vec3f(0.5), fract(vec3f(u.x, u.y, u.x + u.y) + g.jitter.zwz), beauty());
     let nm = vec3f(580., 490., 400.) + w * vec3f(120., 90., 90.);
@@ -1169,19 +1176,19 @@ fn glass(p: vec3f, n: vec3f, tilt: vec3f, base: vec3f, px: vec2f) -> vec3f {
     var path = vec3f(thick);
     if (k > 0.) {
         for (var c = 0; c < 3; c++) {
-            let h = refracted(p, n, m, ray, ior_at(ior, k, nm[c]), thick, slab, jit);
-            seen[c] = seen_through(h, rough)[c];
-            path[c] = h.h.z;
+            let h = seen_past(dd, slab_i, p, n, m, ray, ior_at(ior, k, nm[c]), slab, rough, jit, nm[c]);
+            seen[c] = h[c];
+            path[c] = h.w;
         }
     } else {
-        let h = refracted(p, n, m, ray, ior, thick, slab, jit);
-        seen = seen_through(h, rough);
-        path = vec3f(h.h.z);
+        let h = seen_past(dd, slab_i, p, n, m, ray, ior, slab, rough, jit, 587.6);
+        seen = h.rgb;
+        path = vec3f(h.w);
     }
     // Beer-Lambert: `tint` is what is left after `thickness`.
-    let absorb = select(d.tint.rgb, pow(max(d.tint.rgb, vec3f(1e-4)), path / max(thick, 1e-3)), thick > 0.);
+    let absorb = select(dd.tint.rgb, pow(max(dd.tint.rgb, vec3f(1e-4)), path / max(thick, 1e-3)), thick > 0.);
     // Printed: the layer's dark is clear glass, its light marks ink on it.
-    let print = d.glass2.x;
+    let print = dd.glass2.x;
     let ink = print * smoothstep(0.02, 0.25, dot(base, vec3f(0.2126, 0.7152, 0.0722)));
     let through = seen * mix(base, vec3f(1.), print) * absorb * (1. - metal);
     let clear = (1. - fr) * mix(body, through, trans * (1. - ink)) + fr * refl + glint;
@@ -1190,7 +1197,7 @@ fn glass(p: vec3f, n: vec3f, tilt: vec3f, base: vec3f, px: vec2f) -> vec3f {
     var opaque = base;
     if (lit_shot()) {
         let w = spec_weight(n, v, rough, mix(vec3f(0.04), base, metal));
-        opaque = base * (1. - metal) * shade(p, n, d.flags.x, 0.).diffuse + w * spec_fallback(ray - 2. * dot(ray, n) * n, rough);
+        opaque = base * (1. - metal) * shade(p, n, dd.flags.x, 0.).diffuse + w * spec_fallback(ray - 2. * dot(ray, n) * n, rough);
     }
     return mix(opaque, clear, smoothstep(0., 0.3, trans));
 }
@@ -1198,15 +1205,15 @@ fn glass(p: vec3f, n: vec3f, tilt: vec3f, base: vec3f, px: vec2f) -> vec3f {
 // How a face's normal at `uv` is tilted: by its bevel, out toward the
 // nearer edges within `glass2.y` of them, a quarter round; and by its
 // relief.
-fn face_tilt(uv: vec2f) -> vec3f {
+fn face_tilt(dd: Draw, uv: vec2f) -> vec3f {
     // From the middle, in the layer's y-down units.
-    let q = ((uv - d.uv.xy) / (d.uv.zw - d.uv.xy) - 0.5) * d.size.xy;
-    let ax = normalize((d.model * vec4f(1., 0., 0., 0.)).xyz);
-    let ay = normalize((d.model * vec4f(0., 1., 0., 0.)).xyz);
-    var slope = -relief(q);
-    let r = min(d.glass2.y, 0.5 * min(d.size.x, d.size.y));
+    let q = ((uv - dd.uv.xy) / (dd.uv.zw - dd.uv.xy) - 0.5) * dd.size.xy;
+    let ax = normalize((dd.model * vec4f(1., 0., 0., 0.)).xyz);
+    let ay = normalize((dd.model * vec4f(0., 1., 0., 0.)).xyz);
+    var slope = -relief(dd, q);
+    let r = min(dd.glass2.y, 0.5 * min(dd.size.x, dd.size.y));
     if (r > 0.) {
-        let t = 1. - clamp((d.size.xy * 0.5 - abs(q)) / r, vec2f(0.), vec2f(1.));
+        let t = 1. - clamp((dd.size.xy * 0.5 - abs(q)) / r, vec2f(0.), vec2f(1.));
         slope += sign(q) * t / sqrt(max(1. - t * t, vec2f(0.04)));
     }
     return ax * slope.x - ay * slope.y;
@@ -1216,13 +1223,13 @@ fn hash22(p: vec2f) -> vec2f { return vec2f(hash2(p), hash2(p + vec2f(19.19, 7.3
 // at `q`: reeds up the face, each a cylindrical lens across it; hammered
 // dimples, each a bowl round the nearest of jittered points; and three
 // crossing ripples that run with time.
-fn relief(q: vec2f) -> vec2f {
+fn relief(dd: Draw, q: vec2f) -> vec2f {
     var s = vec2f(0.);
-    if (d.glass3.x > 0.) {
-        s.x += d.glass3.x * (2. * fract(q.x / d.glass4.x) - 1.);
+    if (dd.glass3.x > 0.) {
+        s.x += dd.glass3.x * (2. * fract(q.x / dd.glass4.x) - 1.);
     }
-    if (d.glass3.y > 0.) {
-        let p = q / d.glass4.y;
+    if (dd.glass3.y > 0.) {
+        let p = q / dd.glass4.y;
         let i = floor(p);
         var near = vec2f(9.);
         for (var y = -1; y <= 1; y++) {
@@ -1233,17 +1240,17 @@ fn relief(q: vec2f) -> vec2f {
             }
         }
         let b = near / 0.75;
-        s += d.glass3.y * b / max(1., length(b));
+        s += dd.glass3.y * b / max(1., length(b));
     }
-    if (d.glass3.z > 0.) {
-        let p = q / d.glass4.z * 6.2831853;
+    if (dd.glass3.z > 0.) {
+        let p = q / dd.glass4.z * 6.2831853;
         let t = g.time_res.x;
         let k0 = vec2f(1., 0.);
         let k1 = vec2f(-0.5, 0.866) * 1.23;
         let k2 = vec2f(-0.5, -0.866) * 0.81;
         let w = cos(dot(p, k0) + t * 1.3) * k0 + cos(dot(p, k1) - t * 1.1) * k1 / 1.23
             + cos(dot(p, k2) + t * 0.9) * k2 / 0.81;
-        s += d.glass3.z * w / 3.;
+        s += dd.glass3.z * w / 3.;
     }
     return s;
 }
@@ -1254,7 +1261,7 @@ fn relief(q: vec2f) -> vec2f {
     if (a < 0.004) { discard; }
     let base = c.rgb / max(c.a, 1e-4);
     let n = face_normal(i.world);
-    let rgb = glass(i.world, n, face_tilt(i.uv), base, i.pos.xy) * d.size.w;
+    let rgb = glass(d, -1, i.world, n, face_tilt(d, i.uv), base, i.pos.xy) * d.size.w;
     var o = out(vec4f(rgb * a, a), i.world);
     o.dist.w = a;
     return o;
@@ -1264,10 +1271,301 @@ fn relief(q: vec2f) -> vec2f {
     var n = normalize(i.normal);
     if (dot(n, g.eye.xyz - i.world) < 0.) { n = -n; }
     // A solid's relief is pressed along the world's x and y.
-    let s = relief(vec2f(i.world.x, -i.world.y));
-    let rgb = glass(i.world, n, vec3f(-s.x, s.y, 0.), d.edge.rgb, i.pos.xy);
+    let s = relief(d, vec2f(i.world.x, -i.world.y));
+    let rgb = glass(d, -1, i.world, n, vec3f(-s.x, s.y, 0.), d.edge.rgb, i.pos.xy);
     var o = out(vec4f(rgb, 1.) * d.edge.a, i.world);
     o.dist.w = d.edge.a;
+    return o;
+}
+
+// What glass at `p` sees through itself for index `eta`, and in w the
+// path inside: refracted through the frame on screen, or (`slab_i` set)
+// traced through the slabs.
+fn seen_past(dd: Draw, slab_i: i32, p: vec3f, n: vec3f, m: vec3f, ray: vec3f, eta: f32, slab: bool, rough: f32, jit: f32, nm: f32) -> vec4f {
+    if (slab_i < 0) {
+        let h = refracted(p, n, m, ray, eta, max(dd.glass.z, 0.), slab, jit);
+        return vec4f(seen_through(h, rough), h.h.z);
+    }
+    let c = crossed(dd, p, n, m, ray, eta);
+    return vec4f(traced(c.exit, c.dir, rough, slab_i, nm), c.path);
+}
+
+// --- the analytic tracer: `Shot::trace` ------------------------------------
+//
+// Every plane is a box: its layer's rectangle, `size.z` deep behind its
+// face. A ray meets each in closed form (no BVH, no triangles), so glass
+// behind glass bends along the ray the front pane refracted, mirrors show
+// what is off screen, and one ray per pixel has no noise. The layer's
+// alpha cuts each face to its shape; rough glass blurs by mips (the
+// layer's, the sky's, the environment's), never by samples.
+
+// The draw slots, read as storage: planes 0..contact.y are the slabs.
+struct Slab {
+    d: Draw,
+    pad: array<vec4f, 2>,
+};
+@group(1) @binding(1) var<storage, read> slabs: array<Slab>;
+// Panes deep a traced ray goes through before it takes the sky.
+const TRACE_DEPTH: i32 = 4;
+
+// Where a ray meets a slab: how far along, which slab, the face (0 the
+// front, 1 the back, 2 a wall), its normal toward the ray, the layer's uv
+// there and the face's cover.
+struct Hit {
+    t: f32,
+    i: i32,
+    face: u32,
+    n: vec3f,
+    uv: vec2f,
+    a: f32,
+};
+// World to slab space: the model's columns are a turn times one scale.
+fn to_local(m: mat4x4f, v: vec3f) -> vec3f {
+    let x = m[0].xyz;
+    let y = m[1].xyz;
+    let z = m[2].xyz;
+    return vec3f(dot(v, x) / dot(x, x), dot(v, y) / dot(y, y), dot(v, z) / dot(z, z));
+}
+fn safe_dir(v: vec3f) -> vec3f { return select(v, vec3f(1e-9), abs(v) < vec3f(1e-9)); }
+// The unit axis a box's face lies across, from the times its slabs
+// were crossed: the latest (`late`) or the earliest.
+fn face_axis(t: vec3f, late: bool) -> vec3f {
+    if (late) {
+        if (t.x >= t.y && t.x >= t.z) { return vec3f(1., 0., 0.); }
+        if (t.y >= t.z) { return vec3f(0., 1., 0.); }
+    } else {
+        if (t.x <= t.y && t.x <= t.z) { return vec3f(1., 0., 0.); }
+        if (t.y <= t.z) { return vec3f(0., 1., 0.); }
+    }
+    return vec3f(0., 0., 1.);
+}
+// The layer's uv at slab-space `l`, held `inset` of the way in from the rim.
+fn slab_uv(uv: vec4f, size: vec2f, l: vec2f, inset: f32) -> vec2f {
+    let f = clamp(vec2f(l.x / size.x + 0.5, 0.5 - l.y / size.y), vec2f(inset), vec2f(1. - inset));
+    return mix(uv.xy, uv.zw, f);
+}
+// Where the ray from `o` along `r` enters slab `i`; t -1 if it does not.
+fn slab_hit(i: i32, o: vec3f, r: vec3f) -> Hit {
+    var h: Hit;
+    h.t = -1.;
+    h.i = i;
+    let m = slabs[i].d.model;
+    let size = slabs[i].d.size;
+    let lo3 = to_local(m, o - m[3].xyz);
+    let lr = safe_dir(to_local(m, r));
+    let hi = vec3f(size.xy * 0.5, 0.);
+    let lo = vec3f(-hi.xy, -size.z);
+    let a = (lo - lo3) / lr;
+    let b = (hi - lo3) / lr;
+    let near = min(a, b);
+    let far = max(a, b);
+    let t0 = max(near.x, max(near.y, near.z));
+    let t1 = min(far.x, min(far.y, far.z));
+    if (t1 < t0 || t0 <= 1e-3) { return h; }
+    let axis = face_axis(near, true);
+    let l = lo3 + lr * t0;
+    h.t = t0;
+    h.n = normalize((m * vec4f(-sign(lr) * axis, 0.)).xyz);
+    if (axis.z > 0.5) {
+        h.face = select(1u, 0u, lr.z < 0.);
+        h.uv = slab_uv(slabs[i].d.uv, size.xy, l.xy, 0.);
+    } else {
+        // A wall stands where the face's rim is covered.
+        h.face = 2u;
+        h.uv = slab_uv(slabs[i].d.uv, size.xy, l.xy, 0.01);
+    }
+    return h;
+}
+// How much of slab `dd`'s face is there at `uv`: its layer's alpha (a
+// slab on another layer than the bound one is its whole rectangle).
+fn cover(dd: Draw, uv: vec2f) -> f32 {
+    if (dd.glass2.z < 0.5) { return dd.edge.a; }
+    return textureSampleLevel(tex, samp, uv, 0.).a * dd.edge.a;
+}
+// The first slab the ray meets, past `skip`, whose cover there reaches
+// `cut`; only glass for the eye's look (the frame holds the rest).
+fn first_hit(o: vec3f, r: vec3f, skip: i32, glass_only: bool, cut: f32) -> Hit {
+    var best: Hit;
+    best.t = 1e30;
+    best.i = -1;
+    let count = i32(g.contact.y);
+    for (var i = 0; i < count; i++) {
+        if (i == skip || (glass_only && slabs[i].d.glass.x <= 0.)) { continue; }
+        var h = slab_hit(i, o, r);
+        // Coplanar parts tie: the later paints over, as in 2D.
+        if (h.t < 0. || h.t > best.t + 0.05) { continue; }
+        h.a = cover(slabs[i].d, h.uv);
+        if (h.a >= cut) { best = h; }
+    }
+    return best;
+}
+// What an opaque slab sends back along -r where `h` met it, shaded as
+// `fs_front`, `fs_back` and `fs_wall` shade it; its face blurred by
+// `rough` over the way the ray came.
+fn slab_light(h: Hit, o: vec3f, r: vec3f, rough: f32) -> vec3f {
+    let dd = slabs[h.i].d;
+    let p = o + r * h.t;
+    let v = -r;
+    let n = h.n;
+    if (h.face == 0u) {
+        if (dd.glass2.z < 0.5) {
+            // ponytail: one layer is bound; a face on another shows the
+            // frame where it lies on screen. An atlas of every layer if
+            // shots mix layers behind glass.
+            return textureSampleLevel(aux, samp, screen(p).xy, 0.).rgb;
+        }
+        let texel = length(dd.model[0].xyz) * dd.size.x
+            / max(abs(dd.uv.z - dd.uv.x) * f32(textureDimensions(tex).x), 1e-6);
+        let lod = log2(max(rough * rough * h.t / texel, 1.));
+        let c = textureSampleLevel(tex, samp, h.uv, lod);
+        let base = c.rgb / max(c.a, 1e-4);
+        var rgb = base;
+        if (lit_shot()) {
+            let metal = dd.flags.y;
+            let sr = dd.flags.z;
+            let w = spec_weight(n, v, sr, mix(vec3f(0.04), base, metal));
+            rgb = base * (1. - metal) * shade(p, n, dd.flags.x, 0.).diffuse + w * spec_fallback(reflect(r, n), sr);
+        }
+        return rgb * dd.size.w;
+    }
+    if (!lit_shot()) { return dd.edge.rgb * 0.6; }
+    let s = shade(p, n, dd.flags.x, select(0., 48., h.face == 2u));
+    return dd.edge.rgb * s.diffuse + s.spec * 0.3 + env_spec(n, v, SLAB_ROUGH, vec3f(0.04));
+}
+// Where a ray that met no slab ends: a model or the floor (only the
+// frame holds those), else the environment, the sky or the background,
+// blurred by `rough`.
+fn trace_miss(o: vec3f, r: vec3f, rough: f32) -> vec3f {
+    if (g.contact.z > 0.5) {
+        let along = march(o, r, 0.5, reach_of(o, r));
+        if (along >= 0.) {
+            let uv = screen(o + r * along);
+            return textureSampleLevel(aux, samp, uv.xy, rough_lod(rough, min(along, 3000.) / px_size(uv.z))).rgb;
+        }
+    }
+    if (env_on() && g.env2.x > 0.5) { return env_radiance(r, rough); }
+    if (sky_on()) { return sky_spec(r, rough); }
+    return backdrop_along(r, screen(o + r * 1e6).xy);
+}
+struct Cross {
+    exit: vec3f,
+    dir: vec3f,
+    path: f32,
+};
+// Through slab `dd` entered at `p` (its face's normal `n` toward the
+// ray, `m` tilted by bevel and relief) along `r` for index `eta`:
+// refracted in, across to the face it reaches (the back or a wall) and
+// out. Past the critical angle a face mirrors it inside, on to the next.
+fn crossed(dd: Draw, p: vec3f, n: vec3f, m: vec3f, r: vec3f, eta: f32) -> Cross {
+    var t = refract(r, m, 1. / eta);
+    if (dot(t, n) > -1e-4) { t = refract(r, n, 1. / eta); }
+    if (dd.size.z <= 0.) {
+        // A card: as thick as its glass, light leaving as it came.
+        let path = max(dd.glass.z, 0.) / max(abs(dot(t, n)), 0.2);
+        var dir = refract(t, n, eta);
+        if (dot(dir, dir) < 1e-6) { dir = r; }
+        return Cross(p + t * path, dir, path);
+    }
+    let mm = dd.model;
+    let hi = vec3f(dd.size.xy * 0.5, 0.);
+    let lo = vec3f(-hi.xy, -dd.size.z);
+    var q = p;
+    var path = 0.;
+    for (var k = 0; k < 3; k++) {
+        let lq = to_local(mm, q - mm[3].xyz);
+        let lt = safe_dir(to_local(mm, t));
+        let far = max((lo - lq) / lt, (hi - lq) / lt);
+        let s = max(min(far.x, min(far.y, far.z)), 0.);
+        let face = normalize((mm * vec4f(sign(lt) * face_axis(far, false), 0.)).xyz);
+        q += t * s;
+        path += s;
+        let leave = refract(t, -face, eta);
+        if (dot(leave, leave) > 1e-6) { return Cross(q, leave, path); }
+        t = reflect(t, face);
+    }
+    return Cross(q, t, path);
+}
+// The light arriving at `o` back along `r`, traced through the slabs in
+// closed form: each pane on the way mirrors its Fresnel share of the sky
+// and passes the rest on, refracted and absorbed, to the first opaque
+// face, or to what `trace_miss` finds. `nm`: the wavelength glass bends
+// it by; `skip`: the slab it leaves.
+fn traced(o0: vec3f, r0: vec3f, rough0: f32, skip0: i32, nm: f32) -> vec3f {
+    var o = o0;
+    var r = r0;
+    var skip = skip0;
+    var rough = rough0;
+    var thru = vec3f(1.);
+    var acc = vec3f(0.);
+    for (var b = 0; b < TRACE_DEPTH; b++) {
+        let h = first_hit(o, r, skip, false, 0.5);
+        if (h.i < 0) { return acc + thru * trace_miss(o, r, rough); }
+        let dd = slabs[h.i].d;
+        if (dd.glass.x <= 0.) { return acc + thru * slab_light(h, o, r, rough); }
+        let p = o + r * h.t;
+        var base = dd.edge.rgb;
+        var tilt = vec3f(0.);
+        if (h.face < 2u) {
+            if (dd.glass2.z > 0.5) {
+                let c = textureSampleLevel(tex, samp, h.uv, 0.);
+                base = c.rgb / max(c.a, 1e-4);
+            }
+            tilt = face_tilt(dd, h.uv);
+        }
+        let m = normalize(h.n + tilt);
+        let ior = ior_at(max(dd.glass.y, 1.), max(dd.glass.w, 0.), nm);
+        let f0 = pow((ior - 1.) / (ior + 1.), 2.);
+        let fr = f0 + (1. - f0) * pow(1. - clamp(dot(m, -r), 0., 1.), 5.);
+        rough = max(rough, dd.flags.z);
+        acc += thru * fr * spec_fallback(reflect(r, m), dd.flags.z);
+        let c = crossed(dd, p, h.n, m, r, ior);
+        let thick = max(dd.glass.z, 0.);
+        let absorb = select(dd.tint.rgb, pow(max(dd.tint.rgb, vec3f(1e-4)), vec3f(c.path / max(thick, 1e-3))), thick > 0.);
+        let print = dd.glass2.x;
+        let ink = print * smoothstep(0.02, 0.25, dot(base, vec3f(0.2126, 0.7152, 0.0722)));
+        let clear = dd.glass.x * (1. - ink);
+        var body = base;
+        if (lit_shot()) { body = base * shade(p, m, dd.flags.x, 0.).diffuse; }
+        acc += thru * (1. - fr) * (1. - clear) * body;
+        thru *= (1. - fr) * clear * mix(base, vec3f(1.), print) * absorb * (1. - dd.flags.y);
+        o = c.exit;
+        r = c.dir;
+        skip = h.i;
+    }
+    return acc + thru * trace_miss(o, r, rough);
+}
+// The traced glass over the frame: each pixel's eye ray against the glass
+// slabs; where one is nearer than the opaque frame (the chain's alpha),
+// it is shaded by `glass` with its rays traced, laid over by its cover,
+// and its distance laid over the frame's.
+struct Traced {
+    @location(0) color: vec4f,
+    @location(1) dist: vec4f,
+};
+@fragment fn fs_trace(i: Full) -> Traced {
+    let px = vec2i(i.pos.xy);
+    let ray = eye_ray(i.uv);
+    let h = first_hit(g.eye.xyz, ray, -1, true, 0.004);
+    if (h.i < 0 || h.t >= textureLoad(aux, px, 0).a) { discard; }
+    let dd = slabs[h.i].d;
+    let p = g.eye.xyz + ray * h.t;
+    var base = dd.edge.rgb;
+    var tilt = vec3f(0.);
+    if (h.face < 2u) {
+        if (dd.glass2.z > 0.5) {
+            let c = textureSampleLevel(tex, samp, h.uv, 0.);
+            base = c.rgb / max(c.a, 1e-4);
+        }
+        tilt = face_tilt(dd, h.uv);
+    }
+    var rgb = glass(dd, h.i, p, h.n, tilt, base, i.pos.xy) * dd.size.w;
+    if (g.fog.a > 0.5) {
+        rgb = mix(rgb, g.fog.rgb, smoothstep(g.fog_range.x, g.fog_range.y, h.t));
+    }
+    var o: Traced;
+    o.color = vec4f(rgb * h.a, h.a);
+    // As `fs_glass` blends it: the alpha is its cover, not a normal.
+    o.dist = vec4f(h.t, h.t, 0., h.a);
     return o;
 }
 
