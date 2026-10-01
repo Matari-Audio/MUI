@@ -1255,7 +1255,9 @@ fn relief(q: vec2f) -> vec2f {
     let base = c.rgb / max(c.a, 1e-4);
     let n = face_normal(i.world);
     let rgb = glass(i.world, n, face_tilt(i.uv), base, i.pos.xy) * d.size.w;
-    return out(vec4f(rgb * a, a), i.world);
+    var o = out(vec4f(rgb * a, a), i.world);
+    o.dist.w = a;
+    return o;
 }
 // A glass wall or model: its colour is the base.
 @fragment fn fs_glass_solid(i: Wall) -> Out {
@@ -1264,7 +1266,9 @@ fn relief(q: vec2f) -> vec2f {
     // A solid's relief is pressed along the world's x and y.
     let s = relief(vec2f(i.world.x, -i.world.y));
     let rgb = glass(i.world, n, vec3f(-s.x, s.y, 0.), d.edge.rgb, i.pos.xy);
-    return out(vec4f(rgb, 1.) * d.edge.a, i.world);
+    var o = out(vec4f(rgb, 1.) * d.edge.a, i.world);
+    o.dist.w = d.edge.a;
+    return o;
 }
 
 fn aces(x: vec3f) -> vec3f {

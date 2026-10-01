@@ -931,3 +931,58 @@ fn reeds_break_a_highlight_into_stripes() {
         "striped {reeds} against flat {flat}"
     );
 }
+
+/// A glass card fading in behind a pane: at its first faint frame what the
+/// pane refracts barely changes, rather than jumping to the card.
+#[test]
+fn a_faint_card_behind_glass_does_not_jump_into_it() {
+    let Some(mut stage) = stage(320, 240) else {
+        return;
+    };
+    solid(&mut stage, "dark", 64., Color::srgb(0.06, 0.06, 0.07));
+    let (w, h) = (320, 240);
+    let frame = |stage: &mut Stage, card: Option<f32>| {
+        let mut planes: Vec<Plane> = card
+            .map(|o| {
+                Plane::new("dark", 600., 500.)
+                    .at(0., 0., -200.)
+                    .material(Material {
+                        print: 1.,
+                        ..clear(1., 0.)
+                    })
+                    .opacity(o)
+            })
+            .into_iter()
+            .collect();
+        planes.push(
+            Plane::new("dark", 200., 160.)
+                .rotate(0., 40., 0.)
+                .material(Material {
+                    print: 1.,
+                    ..pressed(0, 0.8, 0.)
+                }),
+        );
+        let shot = Shot {
+            planes,
+            sky: Some(cloudy(0.)),
+            clear: Some([0.; 3]),
+            post: Post::NONE,
+            ..Shot::new(Camera::front(240., 40.).orbit(0., -15.))
+        };
+        stage.render(0., 0., 1, &|_| shot.clone()).unwrap().rgba
+    };
+    let middle = |f: &[f32]| {
+        (h / 2 - 30..h / 2 + 30)
+            .flat_map(|y| (w / 2 - 30..w / 2 + 30).map(move |x| (x, y)))
+            .map(|(x, y)| f[(y * w + x) * 4 + 1])
+            .collect::<Vec<_>>()
+    };
+    let diff = |a: &[f32], b: &[f32]| {
+        let (a, b) = (middle(a), middle(b));
+        a.iter().zip(&b).map(|(a, b)| (a - b).abs()).sum::<f32>() / a.len() as f32
+    };
+    let none = frame(&mut stage, None);
+    let faint = diff(&none, &frame(&mut stage, Some(0.02)));
+    let there = diff(&none, &frame(&mut stage, Some(1.)));
+    assert!(faint < 0.15 * there, "faint {faint} against there {there}");
+}

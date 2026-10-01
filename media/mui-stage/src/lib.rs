@@ -3327,6 +3327,9 @@ fn pipelines(
                 // A scene draw also writes its eye distance and normal and
                 // its reflection's weight, unblended: the nearest
                 // opaque-enough surface is what depth of field and SSR see.
+                // Glass blends its distance by its coverage, so a pane
+                // fading in does not jump into what the glass in front of
+                // it refracts at its first faint frame.
                 targets: &[
                     Some(wgpu::ColorTargetState {
                         format,
@@ -3335,7 +3338,9 @@ fn pipelines(
                     }),
                     scene.then_some(wgpu::ColorTargetState {
                         format: HDR,
-                        blend: None,
+                        blend: fs
+                            .starts_with("fs_glass")
+                            .then_some(wgpu::BlendState::ALPHA_BLENDING),
                         write_mask: wgpu::ColorWrites::ALL,
                     }),
                     scene.then_some(wgpu::ColorTargetState {
