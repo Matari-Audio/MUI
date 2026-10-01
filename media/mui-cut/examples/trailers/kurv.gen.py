@@ -202,8 +202,8 @@ def camera():
         (5.0, 655, 332, -60, 1300, -10, -22, 28, 7),
         (6.2, 600, 330, -200, 1500, -12, -38, 30, 6),  # 4: the explode, orbiting, glass
         (8.0, 610, 340, -180, 1400, -6, 34, 30, 5),
-        (9.3, 640, 500, 0, 1800, -5, -12, 30, 3),  # 5: the hero
-        (10.0, 640, 502, 0, 1770, -5, -13, 30, 3),
+        (9.3, 640, 500, 0, 1800, -9, -12, 30, 3),  # 5: the hero
+        (10.0, 640, 502, 0, 1770, -9, -13, 30, 3),
     ]
     col = lambda i: [(w[0], w[i]) for w in shots]
     xy = [(w[0], ui(w[1], w[2])) for w in shots]
@@ -281,7 +281,9 @@ def kurv():
 # On the V's downbeat (6.0 s) KURV turns to glass, rippling out from the
 # oscillator the hand plays to its racks in under half a second; the explode opens through it
 # and the hit (8.0 s) snaps it shut, all glass. Its dark UI turns clear
-# (`print`), its light marks stay as ink; bevelled rims bend the clouds.
+# (`print`), its light marks stay as ink; the glass is pressed with reeds
+# that warp the clouds and fringe them in colour, and through the hero
+# hold the reeds melt into hammered dimples.
 GLASS_AT = 6.0
 SWEEP = 0.4  # the middle to the racks
 MIDDLE = 0.47
@@ -323,12 +325,27 @@ PANELS = {
 }
 
 
+MELT = (8.5, 9.6)  # reeds into dimples, through the hero hold
+REED = 0.75  # the reeds' steepest slope
+
+
 def turn(t0):
-    """Opaque to glass from t0, over TURN seconds."""
+    """Opaque to glass from t0, over TURN seconds, pressed with reeds that
+    melt into dimples through the hero hold."""
     return {
         "transmission": keys((t0, 0.0), (t0 + TURN, 1.0)),
-        "roughness": keys((t0, 0.42), (t0 + TURN, 0.04)),
-        "bevel": keys((t0, 0.0), (t0 + TURN, 9.0)),
+        "roughness": keys((t0, 0.42), (t0 + TURN, 0.03)),
+        "bevel": keys((t0, 0.0), (t0 + TURN, 12.0)),
+        "texture": {
+            "ribbed": {
+                "strength": keys((t0, 0.0), (t0 + TURN, REED), (MELT[0], REED), (MELT[1], 0.15)),
+                "scale": 44.0,
+            },
+            "hammered": {
+                "strength": keys((t0, 0.0), (MELT[0], 0.0), (MELT[1], 0.3)),
+                "scale": 60.0,
+            },
+        },
     }
 
 
@@ -336,9 +353,9 @@ GLASS = {
     # The backdrop and the racks: the end of the ripple.
     **turn(GLASS_AT + SWEEP),
     "print": 1.0,
-    "ior": 1.5,
-    "thickness": 14.0,
-    "dispersion": 0.55,
+    "ior": 1.9,
+    "thickness": 30.0,
+    "dispersion": 4.0,
     "tint": "#f4f8ff",
 }
 
@@ -381,7 +398,7 @@ project = {
             "sky": {
                 "elevation": 22.0,
                 "azimuth": -70.0,
-                "cover": 0.44,
+                "cover": 0.58,
                 "wind": 0.05,
                 "zenith": "#1d4c96",
                 "horizon": "#a8c1dd",
@@ -389,6 +406,7 @@ project = {
                 "intensity": keys((0, 0.0), (0.9, 1.0), (9.4, 1.0), (10.0, 0.0)),
             },
             "ao": {"strength": 1.0, "radius": 50.0},
+            "bloom": {"strength": 0.45, "threshold": 1.0},
             "effects": [
                 {"type": "grain", "amount": 0.035, "size": 1.2},
                 {"type": "crt", "curvature": 0.0, "scanlines": 0.0, "vignette": 0.45},

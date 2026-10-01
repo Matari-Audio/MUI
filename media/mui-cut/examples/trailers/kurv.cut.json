@@ -265,12 +265,12 @@
             },
             {
               "t": 9.3,
-              "v": -5,
+              "v": -9,
               "interp": "bezier"
             },
             {
               "t": 10.0,
-              "v": -5,
+              "v": -9,
               "interp": "bezier"
             }
           ],
@@ -1458,7 +1458,7 @@
                   },
                   {
                     "t": 6.3,
-                    "v": 0.04,
+                    "v": 0.03,
                     "interp": "bezier"
                   }
                 ],
@@ -1470,10 +1470,57 @@
                   },
                   {
                     "t": 6.3,
-                    "v": 9.0,
+                    "v": 12.0,
                     "interp": "bezier"
                   }
-                ]
+                ],
+                "texture": {
+                  "ribbed": {
+                    "strength": [
+                      {
+                        "t": 6.0,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 6.3,
+                        "v": 0.75,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 8.5,
+                        "v": 0.75,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 9.6,
+                        "v": 0.15,
+                        "interp": "bezier"
+                      }
+                    ],
+                    "scale": 44.0
+                  },
+                  "hammered": {
+                    "strength": [
+                      {
+                        "t": 6.0,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 8.5,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 9.6,
+                        "v": 0.3,
+                        "interp": "bezier"
+                      }
+                    ],
+                    "scale": 60.0
+                  }
+                }
               }
             },
             "warp/0": {
@@ -1498,7 +1545,7 @@
                   },
                   {
                     "t": 6.3,
-                    "v": 0.04,
+                    "v": 0.03,
                     "interp": "bezier"
                   }
                 ],
@@ -1510,10 +1557,57 @@
                   },
                   {
                     "t": 6.3,
-                    "v": 9.0,
+                    "v": 12.0,
                     "interp": "bezier"
                   }
-                ]
+                ],
+                "texture": {
+                  "ribbed": {
+                    "strength": [
+                      {
+                        "t": 6.0,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 6.3,
+                        "v": 0.75,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 8.5,
+                        "v": 0.75,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 9.6,
+                        "v": 0.15,
+                        "interp": "bezier"
+                      }
+                    ],
+                    "scale": 44.0
+                  },
+                  "hammered": {
+                    "strength": [
+                      {
+                        "t": 6.0,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 8.5,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 9.6,
+                        "v": 0.3,
+                        "interp": "bezier"
+                      }
+                    ],
+                    "scale": 60.0
+                  }
+                }
               }
             },
             "group/0": {
@@ -1538,7 +1632,7 @@
                   },
                   {
                     "t": 6.3,
-                    "v": 0.04,
+                    "v": 0.03,
                     "interp": "bezier"
                   }
                 ],
@@ -1550,10 +1644,57 @@
                   },
                   {
                     "t": 6.3,
-                    "v": 9.0,
+                    "v": 12.0,
                     "interp": "bezier"
                   }
-                ]
+                ],
+                "texture": {
+                  "ribbed": {
+                    "strength": [
+                      {
+                        "t": 6.0,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 6.3,
+                        "v": 0.75,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 8.5,
+                        "v": 0.75,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 9.6,
+                        "v": 0.15,
+                        "interp": "bezier"
+                      }
+                    ],
+                    "scale": 44.0
+                  },
+                  "hammered": {
+                    "strength": [
+                      {
+                        "t": 6.0,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 8.5,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 9.6,
+                        "v": 0.3,
+                        "interp": "bezier"
+                      }
+                    ],
+                    "scale": 60.0
+                  }
+                }
               }
             },
             "osc/0/osc/0/input-tab": {
@@ -1578,7 +1719,7 @@
                   },
                   {
                     "t": 6.56,
-                    "v": 0.04,
+                    "v": 0.03,
                     "interp": "bezier"
                   }
                 ],
@@ -1590,10 +1731,57 @@
                   },
                   {
                     "t": 6.56,
-                    "v": 9.0,
+                    "v": 12.0,
                     "interp": "bezier"
                   }
-                ]
+                ],
+                "texture": {
+                  "ribbed": {
+                    "strength": [
+                      {
+                        "t": 6.26,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 6.56,
+                        "v": 0.75,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 8.5,
+                        "v": 0.75,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 9.6,
+                        "v": 0.15,
+                        "interp": "bezier"
+                      }
+                    ],
+                    "scale": 44.0
+                  },
+                  "hammered": {
+                    "strength": [
+                      {
+                        "t": 6.26,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 8.5,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 9.6,
+                        "v": 0.3,
+                        "interp": "bezier"
+                      }
+                    ],
+                    "scale": 60.0
+                  }
+                }
               }
             },
             "osc/0/osc/0/title/well": {
@@ -1618,7 +1806,7 @@
                   },
                   {
                     "t": 6.41,
-                    "v": 0.04,
+                    "v": 0.03,
                     "interp": "bezier"
                   }
                 ],
@@ -1630,10 +1818,57 @@
                   },
                   {
                     "t": 6.41,
-                    "v": 9.0,
+                    "v": 12.0,
                     "interp": "bezier"
                   }
-                ]
+                ],
+                "texture": {
+                  "ribbed": {
+                    "strength": [
+                      {
+                        "t": 6.11,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 6.41,
+                        "v": 0.75,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 8.5,
+                        "v": 0.75,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 9.6,
+                        "v": 0.15,
+                        "interp": "bezier"
+                      }
+                    ],
+                    "scale": 44.0
+                  },
+                  "hammered": {
+                    "strength": [
+                      {
+                        "t": 6.11,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 8.5,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 9.6,
+                        "v": 0.3,
+                        "interp": "bezier"
+                      }
+                    ],
+                    "scale": 60.0
+                  }
+                }
               }
             },
             "osc/0/osc/0/title/above": {
@@ -1658,7 +1893,7 @@
                   },
                   {
                     "t": 6.52,
-                    "v": 0.04,
+                    "v": 0.03,
                     "interp": "bezier"
                   }
                 ],
@@ -1670,10 +1905,57 @@
                   },
                   {
                     "t": 6.52,
-                    "v": 9.0,
+                    "v": 12.0,
                     "interp": "bezier"
                   }
-                ]
+                ],
+                "texture": {
+                  "ribbed": {
+                    "strength": [
+                      {
+                        "t": 6.22,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 6.52,
+                        "v": 0.75,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 8.5,
+                        "v": 0.75,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 9.6,
+                        "v": 0.15,
+                        "interp": "bezier"
+                      }
+                    ],
+                    "scale": 44.0
+                  },
+                  "hammered": {
+                    "strength": [
+                      {
+                        "t": 6.22,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 8.5,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 9.6,
+                        "v": 0.3,
+                        "interp": "bezier"
+                      }
+                    ],
+                    "scale": 60.0
+                  }
+                }
               }
             },
             "osc/0/osc/0/title/material": {
@@ -1698,7 +1980,7 @@
                   },
                   {
                     "t": 6.52,
-                    "v": 0.04,
+                    "v": 0.03,
                     "interp": "bezier"
                   }
                 ],
@@ -1710,10 +1992,57 @@
                   },
                   {
                     "t": 6.52,
-                    "v": 9.0,
+                    "v": 12.0,
                     "interp": "bezier"
                   }
-                ]
+                ],
+                "texture": {
+                  "ribbed": {
+                    "strength": [
+                      {
+                        "t": 6.22,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 6.52,
+                        "v": 0.75,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 8.5,
+                        "v": 0.75,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 9.6,
+                        "v": 0.15,
+                        "interp": "bezier"
+                      }
+                    ],
+                    "scale": 44.0
+                  },
+                  "hammered": {
+                    "strength": [
+                      {
+                        "t": 6.22,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 8.5,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 9.6,
+                        "v": 0.3,
+                        "interp": "bezier"
+                      }
+                    ],
+                    "scale": 60.0
+                  }
+                }
               }
             },
             "osc/0/osc/0/title/below": {
@@ -1738,7 +2067,7 @@
                   },
                   {
                     "t": 6.52,
-                    "v": 0.04,
+                    "v": 0.03,
                     "interp": "bezier"
                   }
                 ],
@@ -1750,10 +2079,57 @@
                   },
                   {
                     "t": 6.52,
-                    "v": 9.0,
+                    "v": 12.0,
                     "interp": "bezier"
                   }
-                ]
+                ],
+                "texture": {
+                  "ribbed": {
+                    "strength": [
+                      {
+                        "t": 6.22,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 6.52,
+                        "v": 0.75,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 8.5,
+                        "v": 0.75,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 9.6,
+                        "v": 0.15,
+                        "interp": "bezier"
+                      }
+                    ],
+                    "scale": 44.0
+                  },
+                  "hammered": {
+                    "strength": [
+                      {
+                        "t": 6.22,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 8.5,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 9.6,
+                        "v": 0.3,
+                        "interp": "bezier"
+                      }
+                    ],
+                    "scale": 60.0
+                  }
+                }
               }
             },
             "osc/0/osc/0/panel/wave": {
@@ -1778,7 +2154,7 @@
                   },
                   {
                     "t": 6.39,
-                    "v": 0.04,
+                    "v": 0.03,
                     "interp": "bezier"
                   }
                 ],
@@ -1790,10 +2166,57 @@
                   },
                   {
                     "t": 6.39,
-                    "v": 9.0,
+                    "v": 12.0,
                     "interp": "bezier"
                   }
-                ]
+                ],
+                "texture": {
+                  "ribbed": {
+                    "strength": [
+                      {
+                        "t": 6.09,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 6.39,
+                        "v": 0.75,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 8.5,
+                        "v": 0.75,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 9.6,
+                        "v": 0.15,
+                        "interp": "bezier"
+                      }
+                    ],
+                    "scale": 44.0
+                  },
+                  "hammered": {
+                    "strength": [
+                      {
+                        "t": 6.09,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 8.5,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 9.6,
+                        "v": 0.3,
+                        "interp": "bezier"
+                      }
+                    ],
+                    "scale": 60.0
+                  }
+                }
               }
             },
             "osc/0/osc/0/panel/unison": {
@@ -1818,7 +2241,7 @@
                   },
                   {
                     "t": 6.43,
-                    "v": 0.04,
+                    "v": 0.03,
                     "interp": "bezier"
                   }
                 ],
@@ -1830,10 +2253,57 @@
                   },
                   {
                     "t": 6.43,
-                    "v": 9.0,
+                    "v": 12.0,
                     "interp": "bezier"
                   }
-                ]
+                ],
+                "texture": {
+                  "ribbed": {
+                    "strength": [
+                      {
+                        "t": 6.13,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 6.43,
+                        "v": 0.75,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 8.5,
+                        "v": 0.75,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 9.6,
+                        "v": 0.15,
+                        "interp": "bezier"
+                      }
+                    ],
+                    "scale": 44.0
+                  },
+                  "hammered": {
+                    "strength": [
+                      {
+                        "t": 6.13,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 8.5,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 9.6,
+                        "v": 0.3,
+                        "interp": "bezier"
+                      }
+                    ],
+                    "scale": 60.0
+                  }
+                }
               }
             },
             "osc/0/osc/0/output-tab": {
@@ -1858,7 +2328,7 @@
                   },
                   {
                     "t": 6.57,
-                    "v": 0.04,
+                    "v": 0.03,
                     "interp": "bezier"
                   }
                 ],
@@ -1870,10 +2340,57 @@
                   },
                   {
                     "t": 6.57,
-                    "v": 9.0,
+                    "v": 12.0,
                     "interp": "bezier"
                   }
-                ]
+                ],
+                "texture": {
+                  "ribbed": {
+                    "strength": [
+                      {
+                        "t": 6.27,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 6.57,
+                        "v": 0.75,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 8.5,
+                        "v": 0.75,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 9.6,
+                        "v": 0.15,
+                        "interp": "bezier"
+                      }
+                    ],
+                    "scale": 44.0
+                  },
+                  "hammered": {
+                    "strength": [
+                      {
+                        "t": 6.27,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 8.5,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 9.6,
+                        "v": 0.3,
+                        "interp": "bezier"
+                      }
+                    ],
+                    "scale": 60.0
+                  }
+                }
               }
             },
             "warp/0/warp/0/rail": {
@@ -1898,7 +2415,7 @@
                   },
                   {
                     "t": 6.51,
-                    "v": 0.04,
+                    "v": 0.03,
                     "interp": "bezier"
                   }
                 ],
@@ -1910,10 +2427,57 @@
                   },
                   {
                     "t": 6.51,
-                    "v": 9.0,
+                    "v": 12.0,
                     "interp": "bezier"
                   }
-                ]
+                ],
+                "texture": {
+                  "ribbed": {
+                    "strength": [
+                      {
+                        "t": 6.21,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 6.51,
+                        "v": 0.75,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 8.5,
+                        "v": 0.75,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 9.6,
+                        "v": 0.15,
+                        "interp": "bezier"
+                      }
+                    ],
+                    "scale": 44.0
+                  },
+                  "hammered": {
+                    "strength": [
+                      {
+                        "t": 6.21,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 8.5,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 9.6,
+                        "v": 0.3,
+                        "interp": "bezier"
+                      }
+                    ],
+                    "scale": 60.0
+                  }
+                }
               }
             },
             "warp/0/warp/0/response": {
@@ -1938,7 +2502,7 @@
                   },
                   {
                     "t": 6.33,
-                    "v": 0.04,
+                    "v": 0.03,
                     "interp": "bezier"
                   }
                 ],
@@ -1950,10 +2514,57 @@
                   },
                   {
                     "t": 6.33,
-                    "v": 9.0,
+                    "v": 12.0,
                     "interp": "bezier"
                   }
-                ]
+                ],
+                "texture": {
+                  "ribbed": {
+                    "strength": [
+                      {
+                        "t": 6.03,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 6.33,
+                        "v": 0.75,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 8.5,
+                        "v": 0.75,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 9.6,
+                        "v": 0.15,
+                        "interp": "bezier"
+                      }
+                    ],
+                    "scale": 44.0
+                  },
+                  "hammered": {
+                    "strength": [
+                      {
+                        "t": 6.03,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 8.5,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 9.6,
+                        "v": 0.3,
+                        "interp": "bezier"
+                      }
+                    ],
+                    "scale": 60.0
+                  }
+                }
               }
             },
             "warp/0/warp/0/type/prev": {
@@ -1978,7 +2589,7 @@
                   },
                   {
                     "t": 6.47,
-                    "v": 0.04,
+                    "v": 0.03,
                     "interp": "bezier"
                   }
                 ],
@@ -1990,10 +2601,57 @@
                   },
                   {
                     "t": 6.47,
-                    "v": 9.0,
+                    "v": 12.0,
                     "interp": "bezier"
                   }
-                ]
+                ],
+                "texture": {
+                  "ribbed": {
+                    "strength": [
+                      {
+                        "t": 6.17,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 6.47,
+                        "v": 0.75,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 8.5,
+                        "v": 0.75,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 9.6,
+                        "v": 0.15,
+                        "interp": "bezier"
+                      }
+                    ],
+                    "scale": 44.0
+                  },
+                  "hammered": {
+                    "strength": [
+                      {
+                        "t": 6.17,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 8.5,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 9.6,
+                        "v": 0.3,
+                        "interp": "bezier"
+                      }
+                    ],
+                    "scale": 60.0
+                  }
+                }
               }
             },
             "warp/0/warp/0/type": {
@@ -2018,7 +2676,7 @@
                   },
                   {
                     "t": 6.44,
-                    "v": 0.04,
+                    "v": 0.03,
                     "interp": "bezier"
                   }
                 ],
@@ -2030,10 +2688,57 @@
                   },
                   {
                     "t": 6.44,
-                    "v": 9.0,
+                    "v": 12.0,
                     "interp": "bezier"
                   }
-                ]
+                ],
+                "texture": {
+                  "ribbed": {
+                    "strength": [
+                      {
+                        "t": 6.14,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 6.44,
+                        "v": 0.75,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 8.5,
+                        "v": 0.75,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 9.6,
+                        "v": 0.15,
+                        "interp": "bezier"
+                      }
+                    ],
+                    "scale": 44.0
+                  },
+                  "hammered": {
+                    "strength": [
+                      {
+                        "t": 6.14,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 8.5,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 9.6,
+                        "v": 0.3,
+                        "interp": "bezier"
+                      }
+                    ],
+                    "scale": 60.0
+                  }
+                }
               }
             },
             "warp/0/warp/0/type/next": {
@@ -2058,7 +2763,7 @@
                   },
                   {
                     "t": 6.41,
-                    "v": 0.04,
+                    "v": 0.03,
                     "interp": "bezier"
                   }
                 ],
@@ -2070,10 +2775,57 @@
                   },
                   {
                     "t": 6.41,
-                    "v": 9.0,
+                    "v": 12.0,
                     "interp": "bezier"
                   }
-                ]
+                ],
+                "texture": {
+                  "ribbed": {
+                    "strength": [
+                      {
+                        "t": 6.11,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 6.41,
+                        "v": 0.75,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 8.5,
+                        "v": 0.75,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 9.6,
+                        "v": 0.15,
+                        "interp": "bezier"
+                      }
+                    ],
+                    "scale": 44.0
+                  },
+                  "hammered": {
+                    "strength": [
+                      {
+                        "t": 6.11,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 8.5,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 9.6,
+                        "v": 0.3,
+                        "interp": "bezier"
+                      }
+                    ],
+                    "scale": 60.0
+                  }
+                }
               }
             },
             "warp/0/warp/0/CUTOFF": {
@@ -2098,7 +2850,7 @@
                   },
                   {
                     "t": 6.35,
-                    "v": 0.04,
+                    "v": 0.03,
                     "interp": "bezier"
                   }
                 ],
@@ -2110,10 +2862,57 @@
                   },
                   {
                     "t": 6.35,
-                    "v": 9.0,
+                    "v": 12.0,
                     "interp": "bezier"
                   }
-                ]
+                ],
+                "texture": {
+                  "ribbed": {
+                    "strength": [
+                      {
+                        "t": 6.05,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 6.35,
+                        "v": 0.75,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 8.5,
+                        "v": 0.75,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 9.6,
+                        "v": 0.15,
+                        "interp": "bezier"
+                      }
+                    ],
+                    "scale": 44.0
+                  },
+                  "hammered": {
+                    "strength": [
+                      {
+                        "t": 6.05,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 8.5,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 9.6,
+                        "v": 0.3,
+                        "interp": "bezier"
+                      }
+                    ],
+                    "scale": 60.0
+                  }
+                }
               }
             },
             "warp/0/warp/0/RESONANCE": {
@@ -2138,7 +2937,7 @@
                   },
                   {
                     "t": 6.33,
-                    "v": 0.04,
+                    "v": 0.03,
                     "interp": "bezier"
                   }
                 ],
@@ -2150,10 +2949,57 @@
                   },
                   {
                     "t": 6.33,
-                    "v": 9.0,
+                    "v": 12.0,
                     "interp": "bezier"
                   }
-                ]
+                ],
+                "texture": {
+                  "ribbed": {
+                    "strength": [
+                      {
+                        "t": 6.03,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 6.33,
+                        "v": 0.75,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 8.5,
+                        "v": 0.75,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 9.6,
+                        "v": 0.15,
+                        "interp": "bezier"
+                      }
+                    ],
+                    "scale": 44.0
+                  },
+                  "hammered": {
+                    "strength": [
+                      {
+                        "t": 6.03,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 8.5,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 9.6,
+                        "v": 0.3,
+                        "interp": "bezier"
+                      }
+                    ],
+                    "scale": 60.0
+                  }
+                }
               }
             },
             "warp/0/warp/0/DB/OCT": {
@@ -2178,7 +3024,7 @@
                   },
                   {
                     "t": 6.42,
-                    "v": 0.04,
+                    "v": 0.03,
                     "interp": "bezier"
                   }
                 ],
@@ -2190,10 +3036,57 @@
                   },
                   {
                     "t": 6.42,
-                    "v": 9.0,
+                    "v": 12.0,
                     "interp": "bezier"
                   }
-                ]
+                ],
+                "texture": {
+                  "ribbed": {
+                    "strength": [
+                      {
+                        "t": 6.12,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 6.42,
+                        "v": 0.75,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 8.5,
+                        "v": 0.75,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 9.6,
+                        "v": 0.15,
+                        "interp": "bezier"
+                      }
+                    ],
+                    "scale": 44.0
+                  },
+                  "hammered": {
+                    "strength": [
+                      {
+                        "t": 6.12,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 8.5,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 9.6,
+                        "v": 0.3,
+                        "interp": "bezier"
+                      }
+                    ],
+                    "scale": 60.0
+                  }
+                }
               }
             },
             "warp/0/warp/0/MORPH": {
@@ -2218,7 +3111,7 @@
                   },
                   {
                     "t": 6.5,
-                    "v": 0.04,
+                    "v": 0.03,
                     "interp": "bezier"
                   }
                 ],
@@ -2230,10 +3123,57 @@
                   },
                   {
                     "t": 6.5,
-                    "v": 9.0,
+                    "v": 12.0,
                     "interp": "bezier"
                   }
-                ]
+                ],
+                "texture": {
+                  "ribbed": {
+                    "strength": [
+                      {
+                        "t": 6.2,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 6.5,
+                        "v": 0.75,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 8.5,
+                        "v": 0.75,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 9.6,
+                        "v": 0.15,
+                        "interp": "bezier"
+                      }
+                    ],
+                    "scale": 44.0
+                  },
+                  "hammered": {
+                    "strength": [
+                      {
+                        "t": 6.2,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 8.5,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 9.6,
+                        "v": 0.3,
+                        "interp": "bezier"
+                      }
+                    ],
+                    "scale": 60.0
+                  }
+                }
               }
             },
             "group/0/group/0/power": {
@@ -2258,7 +3198,7 @@
                   },
                   {
                     "t": 6.56,
-                    "v": 0.04,
+                    "v": 0.03,
                     "interp": "bezier"
                   }
                 ],
@@ -2270,10 +3210,57 @@
                   },
                   {
                     "t": 6.56,
-                    "v": 9.0,
+                    "v": 12.0,
                     "interp": "bezier"
                   }
-                ]
+                ],
+                "texture": {
+                  "ribbed": {
+                    "strength": [
+                      {
+                        "t": 6.26,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 6.56,
+                        "v": 0.75,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 8.5,
+                        "v": 0.75,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 9.6,
+                        "v": 0.15,
+                        "interp": "bezier"
+                      }
+                    ],
+                    "scale": 44.0
+                  },
+                  "hammered": {
+                    "strength": [
+                      {
+                        "t": 6.26,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 8.5,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 9.6,
+                        "v": 0.3,
+                        "interp": "bezier"
+                      }
+                    ],
+                    "scale": 60.0
+                  }
+                }
               }
             },
             "group/0/group/0/title": {
@@ -2298,7 +3285,7 @@
                   },
                   {
                     "t": 6.51,
-                    "v": 0.04,
+                    "v": 0.03,
                     "interp": "bezier"
                   }
                 ],
@@ -2310,10 +3297,57 @@
                   },
                   {
                     "t": 6.51,
-                    "v": 9.0,
+                    "v": 12.0,
                     "interp": "bezier"
                   }
-                ]
+                ],
+                "texture": {
+                  "ribbed": {
+                    "strength": [
+                      {
+                        "t": 6.21,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 6.51,
+                        "v": 0.75,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 8.5,
+                        "v": 0.75,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 9.6,
+                        "v": 0.15,
+                        "interp": "bezier"
+                      }
+                    ],
+                    "scale": 44.0
+                  },
+                  "hammered": {
+                    "strength": [
+                      {
+                        "t": 6.21,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 8.5,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 9.6,
+                        "v": 0.3,
+                        "interp": "bezier"
+                      }
+                    ],
+                    "scale": 60.0
+                  }
+                }
               }
             },
             "group/0/group/0/envelope": {
@@ -2338,7 +3372,7 @@
                   },
                   {
                     "t": 6.37,
-                    "v": 0.04,
+                    "v": 0.03,
                     "interp": "bezier"
                   }
                 ],
@@ -2350,10 +3384,57 @@
                   },
                   {
                     "t": 6.37,
-                    "v": 9.0,
+                    "v": 12.0,
                     "interp": "bezier"
                   }
-                ]
+                ],
+                "texture": {
+                  "ribbed": {
+                    "strength": [
+                      {
+                        "t": 6.07,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 6.37,
+                        "v": 0.75,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 8.5,
+                        "v": 0.75,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 9.6,
+                        "v": 0.15,
+                        "interp": "bezier"
+                      }
+                    ],
+                    "scale": 44.0
+                  },
+                  "hammered": {
+                    "strength": [
+                      {
+                        "t": 6.07,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 8.5,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 9.6,
+                        "v": 0.3,
+                        "interp": "bezier"
+                      }
+                    ],
+                    "scale": 60.0
+                  }
+                }
               }
             },
             "group/0/group/0/gain": {
@@ -2378,7 +3459,7 @@
                   },
                   {
                     "t": 6.35,
-                    "v": 0.04,
+                    "v": 0.03,
                     "interp": "bezier"
                   }
                 ],
@@ -2390,10 +3471,57 @@
                   },
                   {
                     "t": 6.35,
-                    "v": 9.0,
+                    "v": 12.0,
                     "interp": "bezier"
                   }
-                ]
+                ],
+                "texture": {
+                  "ribbed": {
+                    "strength": [
+                      {
+                        "t": 6.05,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 6.35,
+                        "v": 0.75,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 8.5,
+                        "v": 0.75,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 9.6,
+                        "v": 0.15,
+                        "interp": "bezier"
+                      }
+                    ],
+                    "scale": 44.0
+                  },
+                  "hammered": {
+                    "strength": [
+                      {
+                        "t": 6.05,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 8.5,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 9.6,
+                        "v": 0.3,
+                        "interp": "bezier"
+                      }
+                    ],
+                    "scale": 60.0
+                  }
+                }
               }
             },
             "group/0/group/0/pan": {
@@ -2418,7 +3546,7 @@
                   },
                   {
                     "t": 6.39,
-                    "v": 0.04,
+                    "v": 0.03,
                     "interp": "bezier"
                   }
                 ],
@@ -2430,10 +3558,57 @@
                   },
                   {
                     "t": 6.39,
-                    "v": 9.0,
+                    "v": 12.0,
                     "interp": "bezier"
                   }
-                ]
+                ],
+                "texture": {
+                  "ribbed": {
+                    "strength": [
+                      {
+                        "t": 6.09,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 6.39,
+                        "v": 0.75,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 8.5,
+                        "v": 0.75,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 9.6,
+                        "v": 0.15,
+                        "interp": "bezier"
+                      }
+                    ],
+                    "scale": 44.0
+                  },
+                  "hammered": {
+                    "strength": [
+                      {
+                        "t": 6.09,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 8.5,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 9.6,
+                        "v": 0.3,
+                        "interp": "bezier"
+                      }
+                    ],
+                    "scale": 60.0
+                  }
+                }
               }
             },
             "group/0/group/0/pitch": {
@@ -2458,7 +3633,7 @@
                   },
                   {
                     "t": 6.43,
-                    "v": 0.04,
+                    "v": 0.03,
                     "interp": "bezier"
                   }
                 ],
@@ -2470,10 +3645,57 @@
                   },
                   {
                     "t": 6.43,
-                    "v": 9.0,
+                    "v": 12.0,
                     "interp": "bezier"
                   }
-                ]
+                ],
+                "texture": {
+                  "ribbed": {
+                    "strength": [
+                      {
+                        "t": 6.13,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 6.43,
+                        "v": 0.75,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 8.5,
+                        "v": 0.75,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 9.6,
+                        "v": 0.15,
+                        "interp": "bezier"
+                      }
+                    ],
+                    "scale": 44.0
+                  },
+                  "hammered": {
+                    "strength": [
+                      {
+                        "t": 6.13,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 8.5,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 9.6,
+                        "v": 0.3,
+                        "interp": "bezier"
+                      }
+                    ],
+                    "scale": 60.0
+                  }
+                }
               }
             },
             "group/0/group/0/routing": {
@@ -2498,7 +3720,7 @@
                   },
                   {
                     "t": 6.51,
-                    "v": 0.04,
+                    "v": 0.03,
                     "interp": "bezier"
                   }
                 ],
@@ -2510,10 +3732,57 @@
                   },
                   {
                     "t": 6.51,
-                    "v": 9.0,
+                    "v": 12.0,
                     "interp": "bezier"
                   }
-                ]
+                ],
+                "texture": {
+                  "ribbed": {
+                    "strength": [
+                      {
+                        "t": 6.21,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 6.51,
+                        "v": 0.75,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 8.5,
+                        "v": 0.75,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 9.6,
+                        "v": 0.15,
+                        "interp": "bezier"
+                      }
+                    ],
+                    "scale": 44.0
+                  },
+                  "hammered": {
+                    "strength": [
+                      {
+                        "t": 6.21,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 8.5,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 9.6,
+                        "v": 0.3,
+                        "interp": "bezier"
+                      }
+                    ],
+                    "scale": 60.0
+                  }
+                }
               }
             },
             "group/0/group/0/remove": {
@@ -2538,7 +3807,7 @@
                   },
                   {
                     "t": 6.56,
-                    "v": 0.04,
+                    "v": 0.03,
                     "interp": "bezier"
                   }
                 ],
@@ -2550,10 +3819,57 @@
                   },
                   {
                     "t": 6.56,
-                    "v": 9.0,
+                    "v": 12.0,
                     "interp": "bezier"
                   }
-                ]
+                ],
+                "texture": {
+                  "ribbed": {
+                    "strength": [
+                      {
+                        "t": 6.26,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 6.56,
+                        "v": 0.75,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 8.5,
+                        "v": 0.75,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 9.6,
+                        "v": 0.15,
+                        "interp": "bezier"
+                      }
+                    ],
+                    "scale": 44.0
+                  },
+                  "hammered": {
+                    "strength": [
+                      {
+                        "t": 6.26,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 8.5,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 9.6,
+                        "v": 0.3,
+                        "interp": "bezier"
+                      }
+                    ],
+                    "scale": 60.0
+                  }
+                }
               }
             },
             "group/0/group/0/collapse": {
@@ -2578,7 +3894,7 @@
                   },
                   {
                     "t": 6.56,
-                    "v": 0.04,
+                    "v": 0.03,
                     "interp": "bezier"
                   }
                 ],
@@ -2590,10 +3906,57 @@
                   },
                   {
                     "t": 6.56,
-                    "v": 9.0,
+                    "v": 12.0,
                     "interp": "bezier"
                   }
-                ]
+                ],
+                "texture": {
+                  "ribbed": {
+                    "strength": [
+                      {
+                        "t": 6.26,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 6.56,
+                        "v": 0.75,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 8.5,
+                        "v": 0.75,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 9.6,
+                        "v": 0.15,
+                        "interp": "bezier"
+                      }
+                    ],
+                    "scale": 44.0
+                  },
+                  "hammered": {
+                    "strength": [
+                      {
+                        "t": 6.26,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 8.5,
+                        "v": 0.0,
+                        "interp": "bezier"
+                      },
+                      {
+                        "t": 9.6,
+                        "v": 0.3,
+                        "interp": "bezier"
+                      }
+                    ],
+                    "scale": 60.0
+                  }
+                }
               }
             },
             "masthead": {
@@ -2669,7 +4032,7 @@
               },
               {
                 "t": 6.7,
-                "v": 0.04,
+                "v": 0.03,
                 "interp": "bezier"
               }
             ],
@@ -2681,14 +4044,61 @@
               },
               {
                 "t": 6.7,
-                "v": 9.0,
+                "v": 12.0,
                 "interp": "bezier"
               }
             ],
+            "texture": {
+              "ribbed": {
+                "strength": [
+                  {
+                    "t": 6.4,
+                    "v": 0.0,
+                    "interp": "bezier"
+                  },
+                  {
+                    "t": 6.7,
+                    "v": 0.75,
+                    "interp": "bezier"
+                  },
+                  {
+                    "t": 8.5,
+                    "v": 0.75,
+                    "interp": "bezier"
+                  },
+                  {
+                    "t": 9.6,
+                    "v": 0.15,
+                    "interp": "bezier"
+                  }
+                ],
+                "scale": 44.0
+              },
+              "hammered": {
+                "strength": [
+                  {
+                    "t": 6.4,
+                    "v": 0.0,
+                    "interp": "bezier"
+                  },
+                  {
+                    "t": 8.5,
+                    "v": 0.0,
+                    "interp": "bezier"
+                  },
+                  {
+                    "t": 9.6,
+                    "v": 0.3,
+                    "interp": "bezier"
+                  }
+                ],
+                "scale": 60.0
+              }
+            },
             "print": 1.0,
-            "ior": 1.5,
-            "thickness": 14.0,
-            "dispersion": 0.55,
+            "ior": 1.9,
+            "thickness": 30.0,
+            "dispersion": 4.0,
             "tint": "#f4f8ff"
           }
         },
@@ -2736,7 +4146,7 @@
       "sky": {
         "elevation": 22.0,
         "azimuth": -70.0,
-        "cover": 0.44,
+        "cover": 0.58,
         "wind": 0.05,
         "zenith": "#1d4c96",
         "horizon": "#a8c1dd",
@@ -2767,6 +4177,10 @@
       "ao": {
         "strength": 1.0,
         "radius": 50.0
+      },
+      "bloom": {
+        "strength": 0.45,
+        "threshold": 1.0
       },
       "effects": [
         {
