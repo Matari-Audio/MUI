@@ -188,6 +188,11 @@ function applyOp(root, { op, path, value }) {
   if (Array.isArray(parent)) {
     const i = last === '-' ? parent.length : +last;
     if (op === 'add' ? i > parent.length : i >= parent.length) throw new Error('nothing at ' + path);
+    // An item added by id (or name) that is there already, e.g. our own
+    // in-flight add back in the server's doc, replaces it: never twice.
+    const k = op === 'add' && ['id', 'name'].find(f => typeof value?.[f] === 'string');
+    const j = k ? parent.findIndex(v => v?.[k] === value[k]) : -1;
+    if (j >= 0) { parent[j] = value; return; }
     if (op === 'add') parent.splice(i, 0, value); else if (op === 'remove') parent.splice(i, 1); else parent[i] = value;
   } else {
     if (op !== 'add' && !(last in parent)) throw new Error('nothing at ' + path);

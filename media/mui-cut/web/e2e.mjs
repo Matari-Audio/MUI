@@ -414,7 +414,8 @@ try {
 
   // A plugin layer: the synth example's real UI, captured by `serve`, its
   // parts in the layer list, one selected and dragged, then exploded.
-  const synth = join(dirname(bin), 'examples/synth');
+  // `bin` may be the hashed deps/ copy of the binary; examples sit beside debug/.
+  const synth = join(dirname(bin).replace(/\/deps$/, ''), 'examples/synth');
   const plug = JSON.parse(readFileSync(join(here, '../examples/plugin.cut.json'), 'utf8'));
   for (const l of plug.scenes.flatMap(s => s.layers)) if (l.source) l.source = { bin: synth };
   writeFileSync(file, JSON.stringify(plug));
@@ -500,7 +501,7 @@ try {
   await fire('#layers', ['dragover', 'drop']);
   await sleep(800);
   const typed2 = read().scenes[0].layers.find(l => l.font === 'icons.ttf');
-  check(typed2?.kind === 'text', `a dragged font makes a text layer in it (${JSON.stringify(typed2)})`);
+  check(typed2?.kind === 'text', `a dragged font makes a text layer in it (${JSON.stringify(typed2)}; ${await js(`document.querySelector('#status').textContent + ' | ' + cutRev() + ' | ' + JSON.stringify(cutSources().map(m => m.id)) + ' | ' + document.querySelector('#layers').textContent.slice(0, 200)`)})`);
   check(await js(`document.querySelector('[data-font]')?.value`) === 'icons.ttf', 'the inspector picks the font');
   await js(`document.querySelector('#layer-del').click()`); await sleep(400);
   await click('#add-plugin');
