@@ -49,7 +49,8 @@ struct Globals {
     // The floor: colour, w on; y, reflect, falloff, radius.
     floor: vec4f,
     floor2: vec4f,
-    // 1 / the mean of each colour's spectral weight over 380..700 nm.
+    // 1 / the mean of each colour's spectral weight over 380..700 nm;
+    // w the time in seconds, which ripples run by.
     spec: vec4f,
     // The sky, packed as mui-stage packs it (its `sky_seen` reads these).
     sky0: vec4f,
@@ -78,6 +79,10 @@ struct Inst {
     mat2: vec4f,
     // What is left of white light after mat2.x inside; w receives shadows.
     tint: vec4f,
+    // Pressed glass: the steepest slope of its reeds, hammered dimples and
+    // ripples; and their sizes.
+    relief: vec4f,
+    relief_scale: vec4f,
 };
 
 @group(0) @binding(0) var<uniform> g: Globals;
@@ -217,17 +222,59 @@ fn to_world_n(w2o: mat4x3f, n: vec3f) -> vec3f {
 
 // A face's bevel: its normal in local space, tipped out toward the nearer
 // edges within `bevel` of them, a quarter round (mui-stage's `bevel_tilt`).
-fn bevel_normal(inst: Inst, local: vec3f) -> vec3f {
-    let r = min(inst.mat2.w, 0.5 * min(inst.size.x, inst.size.y));
-    if (r <= 0.) { return vec3f(0., 0., 1.); }
-    let t = 1. - clamp((inst.size.xy * 0.5 - abs(local.xy)) / r, vec2f(0.), vec2f(1.));
-    let slope = t / sqrt(max(1. - t * t, vec2f(0.04)));
-    return normalize(vec3f(sign(local.x) * slope.x, sign(local.y) * slope.y, 1.));
+// A face's shading normal at `local` (y up, centred, layer units), in
+// local space, tilted as mui-stage's `face_tilt` tilts it: out toward the
+// nearer edges within the bevel, a quarter round, and by the relief.
+fn face_normal(inst: Inst, local: vec3f) -> vec3f {
+    // mui-stage's relief runs y down.
+    let r = relief(inst, vec2f(local.x, -local.y));
+    var slope = vec2f(-r.x, r.y);
+    let b = min(inst.mat2.w, 0.5 * min(inst.size.x, inst.size.y));
+    if (b > 0.) {
+        let t = 1. - clamp((inst.size.xy * 0.5 - abs(local.xy)) / b, vec2f(0.), vec2f(1.));
+        slope += sign(local.xy) * t / sqrt(max(1. - t * t, vec2f(0.04)));
+    }
+    return normalize(vec3f(slope, 1.));
 }
 
-// The hook textured glass plugs its relief into: the outward shading
-// normal of a face at `local` (y up, centred, layer units), in local space.
-fn relief(inst: Inst, local: vec3f, n: vec3f) -> vec3f { return n; }
+fn hash22(p: vec2f) -> vec2f { return vec2f(hash2(p), hash2(p + vec2f(19.19, 7.31))); }
+// The slope (rise along x and along y, y down) glass is pressed to at `q`,
+// as mui-stage's `relief` has it: reeds up the face, each a cylindrical
+// lens across it; hammered dimples, each a bowl round the nearest of
+// jittered points; and three crossing ripples that run with time.
+fn relief(inst: Inst, q: vec2f) -> vec2f {
+    var s = vec2f(0.);
+    let k = inst.relief;
+    let size = inst.relief_scale;
+    if (k.x > 0.) {
+        s.x += k.x * (2. * fract(q.x / size.x) - 1.);
+    }
+    if (k.y > 0.) {
+        let p = q / size.y;
+        let i = floor(p);
+        var near = vec2f(9.);
+        for (var y = -1; y <= 1; y++) {
+            for (var x = -1; x <= 1; x++) {
+                let o = i + vec2f(f32(x), f32(y));
+                let r = p - (o + 0.15 + 0.7 * hash22(o));
+                if (dot(r, r) < dot(near, near)) { near = r; }
+            }
+        }
+        let b = near / 0.75;
+        s += k.y * b / max(1., length(b));
+    }
+    if (k.z > 0.) {
+        let p = q / size.z * 6.2831853;
+        let t = g.spec.w;
+        let k0 = vec2f(1., 0.);
+        let k1 = vec2f(-0.5, 0.866) * 1.23;
+        let k2 = vec2f(-0.5, -0.866) * 0.81;
+        let w = cos(dot(p, k0) + t * 1.3) * k0 + cos(dot(p, k1) - t * 1.1) * k1 / 1.23
+            + cos(dot(p, k2) + t * 0.9) * k2 / 0.81;
+        s += k.z * w / 3.;
+    }
+    return s;
+}
 
 fn vertex_normal(i: u32) -> vec3f {
     return vec3f(vertices[i * 6u + 3u], vertices[i * 6u + 4u], vertices[i * 6u + 5u]);
@@ -252,7 +299,7 @@ fn surface(h: Hit, o: vec3f, d: vec3f) -> Surf {
         let c = layer(inst.kind.y, face_uv(inst, local));
         if (h.geom == 0u) {
             ng = vec3f(0., 0., 1.);
-            n = relief(inst, local, bevel_normal(inst, local));
+            n = face_normal(inst, local);
             s.base = c.rgb;
         } else {
             ng = vec3f(0., 0., -1.);
@@ -275,6 +322,12 @@ fn surface(h: Hit, o: vec3f, d: vec3f) -> Surf {
     }
     s.n = to_world_n(h.w2o, n);
     s.ng = to_world_n(h.w2o, ng);
+    if (s.part == 2u || s.part == 3u) {
+        // A wall's or solid's relief is pressed along the world's x and y,
+        // as mui-stage presses it.
+        let r = relief(inst, vec2f(s.p.x, -s.p.y));
+        s.n = normalize(s.n + vec3f(-r.x, r.y, 0.));
+    }
     return s;
 }
 

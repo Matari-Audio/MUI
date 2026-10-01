@@ -122,7 +122,7 @@ fn main() {
         stamp(0);
         stage.draw(&shot, 0., &view, format).unwrap();
         stamp(1);
-        rt.trace(&shot, 1).unwrap();
+        rt.trace(&shot, 0., 1).unwrap();
         rt.composite(&shot, &view, format);
         let g = rt.gpu_times().expect("timestamp queries");
         let wall = t0.elapsed().as_secs_f64() * 1e3;

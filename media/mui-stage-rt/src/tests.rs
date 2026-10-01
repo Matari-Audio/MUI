@@ -274,7 +274,7 @@ fn the_mean_converges_as_samples_come_in() {
     let run = |rt: &mut Rt, n: u32| {
         rt.reset();
         for _ in 0..n.div_ceil(16) {
-            rt.trace(&s, n.min(16)).unwrap();
+            rt.trace(&s, 0., n.min(16)).unwrap();
         }
         rt.glass_now()
     };
@@ -304,11 +304,11 @@ fn the_mean_converges_as_samples_come_in() {
     rt.denoise(true);
     assert!(err(&mut rt, 1) < e[0] * 0.8, "the filter does not help");
     // The same shot adds to the sum; a moved one starts again.
-    rt.trace(&s, 1).unwrap();
+    rt.trace(&s, 0., 1).unwrap();
     assert_eq!(rt.samples(), 2);
     let mut moved = s.clone();
     moved.camera = moved.camera.orbit(1., 0.);
-    rt.trace(&moved, 1).unwrap();
+    rt.trace(&moved, 0., 1).unwrap();
     assert_eq!(rt.samples(), 1);
 }
 
@@ -373,4 +373,44 @@ fn light_leaves_a_slab_by_its_back_face_wherever_the_print_is() {
     // Half the light is left after one thickness, less the two faces'
     // reflections; not what is left after the 600 units to the backdrop.
     assert!(darkest > 0.3, "darkest {darkest}");
+}
+
+#[test]
+fn reeds_move_an_edge_by_where_it_falls_across_them() {
+    let Some((mut stage, mut rt)) = rig() else {
+        return;
+    };
+    let bg = edge(&mut stage, &mut rt);
+    let reed = 40.;
+    let at = |rt: &mut Rt, stage: &mut Stage, o: f32, k: f32| {
+        let m = Material {
+            ribbed: mui_stage::Relief {
+                strength: k,
+                scale: reed,
+            },
+            ..glass(1.5)
+        };
+        let pane = Plane::new("pane", 700., 190.)
+            .at(o, 100., 0.)
+            .offset([0., 0., 10.])
+            .depth(20.)
+            .material(m);
+        crossing(
+            &rt.render(stage, &shot(vec![bg.clone(), pane]), 64).unwrap(),
+            100,
+            1,
+        )
+    };
+    // Flat glass square on: the edge stays where it is however the pane
+    // slides. Reeds bend it by where in a reed it falls, a reed apart
+    // the same again.
+    let flat = at(&mut rt, &mut stage, 0., 0.);
+    assert!((at(&mut rt, &mut stage, reed / 4., 0.) - flat).abs() < 0.2);
+    let (a, b, c) = (
+        at(&mut rt, &mut stage, 0., 0.03),
+        at(&mut rt, &mut stage, reed / 4., 0.03),
+        at(&mut rt, &mut stage, reed, 0.03),
+    );
+    assert!((a - b).abs() > 2., "a quarter reed over: {a} vs {b}");
+    assert!((a - c).abs() < 0.3, "a reed over: {a} vs {c}");
 }

@@ -163,6 +163,8 @@ struct Inst {
     mat: [f32; 4],
     mat2: [f32; 4],
     tint: [f32; 4],
+    relief: [f32; 4],
+    relief_scale: [f32; 4],
 }
 
 /// The tracer. One per stage size; it keeps the shapes it has built and
@@ -552,10 +554,11 @@ impl Rt {
         self.indices = storage("mui-stage-rt indices", bytemuck::cast_slice(&ix));
     }
 
-    /// Add `spp` samples per pixel of `shot`'s glass to the sum, after
-    /// starting it again if the shot is not the one summed so far.
-    pub fn trace(&mut self, shot: &Shot, spp: u32) -> Result<(), Error> {
-        let key = key_of(shot);
+    /// Add `spp` samples per pixel of `shot`'s glass at `t` seconds (what
+    /// ripples run by) to the sum, after starting it again if the shot is
+    /// not the one summed so far.
+    pub fn trace(&mut self, shot: &Shot, t: f64, spp: u32) -> Result<(), Error> {
+        let key = key_of(shot, t);
         if key != self.key {
             self.key = key;
             self.reset();
@@ -615,6 +618,8 @@ impl Rt {
                     m.bevel.max(0.),
                 ],
                 tint: tint(m, p.receive),
+                relief: relief(m),
+                relief_scale: relief_scale(m),
             });
             placed.push((si, p.model()));
         }
@@ -638,6 +643,8 @@ impl Rt {
                     0.,
                 ],
                 tint: tint(m, model.receive),
+                relief: relief(m),
+                relief_scale: relief_scale(m),
             });
             models.push((&model.mesh, model.transform));
         }
@@ -652,6 +659,8 @@ impl Rt {
                 mat: [0., 1., 0., 1.5],
                 mat2: [0.; 4],
                 tint: [1., 1., 1., 1.],
+                relief: [0.; 4],
+                relief_scale: [1.; 4],
             });
         }
         for (i, (si, m)) in placed.iter().enumerate() {
@@ -723,6 +732,7 @@ impl Rt {
                 0,
                 bytemuck::cast_slice(&globals(
                     shot,
+                    t,
                     self.width,
                     self.height,
                     self.samples,
@@ -925,7 +935,7 @@ impl Rt {
         format: wgpu::TextureFormat,
     ) -> Result<(), Error> {
         stage.draw(shot, t, target, format)?;
-        self.trace(shot, spp)?;
+        self.trace(shot, t, spp)?;
         self.composite(shot, target, format);
         Ok(())
     }
@@ -1070,8 +1080,17 @@ fn rows(m: &Mat4) -> [f32; 12] {
 
 /// What the samples are of: everything the tracer reads from the shot
 /// (not its post, nor which beauty sample it is).
-fn key_of(s: &Shot) -> u64 {
+fn key_of(s: &Shot, t: f64) -> u64 {
     let mut h = std::hash::DefaultHasher::new();
+    // Ripples run with time: a shot with any is another at another time.
+    let ripples = s
+        .planes
+        .iter()
+        .map(|p| &p.material)
+        .chain(s.models.iter().map(|m| &m.material));
+    if ripples.into_iter().any(|m| relief(m)[2] > 0.) {
+        t.to_bits().hash(&mut h);
+    }
     format!(
         "{:?}{:?}{:?}{:?}{:?}{:?}{:?}{:?}",
         s.camera, s.planes, s.models, s.lights, s.floor, s.clear, s.sky, s.environment
@@ -1080,8 +1099,18 @@ fn key_of(s: &Shot) -> u64 {
     h.finish()
 }
 
+/// A material's pressed relief as mui-stage packs it: the steepest slope
+/// of its reeds, dimples and ripples (none without a size), and their sizes.
+fn relief(m: &mui_stage::Material) -> [f32; 4] {
+    let r = |r: mui_stage::Relief| if r.scale > 0. { r.strength.max(0.) } else { 0. };
+    [r(m.ribbed), r(m.hammered), r(m.ripple), 0.]
+}
+fn relief_scale(m: &mui_stage::Material) -> [f32; 4] {
+    [m.ribbed.scale, m.hammered.scale, m.ripple.scale, 0.].map(|v| v.max(1e-3))
+}
+
 /// The shader's globals (see `Globals` in rt.wgsl).
-fn globals(s: &Shot, w: u32, h: u32, done: u32, spp: u32, bounces: u32) -> [f32; 120] {
+fn globals(s: &Shot, t: f64, w: u32, h: u32, done: u32, spp: u32, bounces: u32) -> [f32; 120] {
     let mut g = [0f32; 120];
     let cam = &s.camera;
     let [right, up, fwd] = cam.basis();
@@ -1148,6 +1177,7 @@ fn globals(s: &Shot, w: u32, h: u32, done: u32, spp: u32, bounces: u32) -> [f32;
     }
     let norm = band_norm();
     g[36..39].copy_from_slice(&norm);
+    g[39] = t as f32;
     if let Some(k) = &s.sky {
         g[40..43].copy_from_slice(&normalize(k.sun));
         g[43] = 1.;
