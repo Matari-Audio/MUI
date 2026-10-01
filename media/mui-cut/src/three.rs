@@ -18,6 +18,20 @@ pub enum Mode {
     ThreeD,
 }
 
+/// How 3D glass finds what it refracts and mirrors (mui-stage only).
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum Glass {
+    /// In the frame on screen.
+    #[default]
+    Screen,
+    /// Traced in closed form through every layer's slab: glass behind
+    /// glass bends right, mirrors show what is off screen, no noise.
+    Trace,
+}
+
 /// A floor at `y` project pixels, fading out `radius` pixels from the
 /// frame's centre, mirroring the layers by `reflect` (0..1) and darkening
 /// under what stands on it by `contact` (0..1).
@@ -548,6 +562,8 @@ pub struct View {
     pub ao: Option<Ao>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bloom: Option<Bloom>,
+    #[serde(skip)]
+    pub glass: Glass,
 }
 
 /// A project point (x right, y down, z deeper) in mui-stage's world
@@ -627,6 +643,7 @@ pub fn view(size: [u32; 2], scene: &Scene, t: f64, layers: &[Drawn]) -> View {
         sky: scene.sky.as_ref().map(|k| k.at(t)),
         ao: scene.ao.clone(),
         bloom: scene.bloom.clone(),
+        glass: scene.glass,
     }
 }
 

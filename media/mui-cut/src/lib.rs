@@ -228,6 +228,10 @@ pub struct Scene {
     /// 3D: what is brighter than white glows (mui-stage only).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bloom: Option<three::Bloom>,
+    /// 3D: `trace` traces glass through the slabs instead of the screen
+    /// (mui-stage only).
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub glass: three::Glass,
     /// Run over the whole frame, after every layer.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub effects: Vec<fx::Effect>,

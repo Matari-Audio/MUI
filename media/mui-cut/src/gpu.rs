@@ -498,7 +498,12 @@ mod offline {
                 wgpu::DeviceDescriptor::default()
             };
             let (device, queue) = adapter
-                .request_device(&desc)
+                .request_device(&wgpu::DeviceDescriptor {
+                    // `MUI_STAGE_TIMING` reads the stage's GPU time.
+                    required_features: desc.required_features
+                        | (adapter.features() & mui_stage::TIMESTAMPS),
+                    ..desc
+                })
                 .await
                 .map_err(|e| e.to_string())?;
             let mut o = Self::build(&device, &queue, size, engine, yuv).await?;

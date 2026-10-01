@@ -101,6 +101,21 @@ fn gpu(e: impl std::fmt::Display) -> Error {
 }
 
 const SHADER: &str = include_str!("stage.wgsl");
+/// What `MUI_STAGE_TIMING` needs of the device; [`Stage::new`] asks for
+/// it where the adapter has it.
+pub const TIMESTAMPS: wgpu::Features =
+    wgpu::Features::TIMESTAMP_QUERY.union(wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS);
+
+/// `MUI_STAGE_TIMING=1` on a device with [`TIMESTAMPS`]: each
+/// [`Stage::draw`]'s GPU time on stderr, whole and by stage (the opaque
+/// scene with shadows, occlusion and SSR; the glass; post).
+/// ponytail: a probe that waits on the GPU every frame, so off by default.
+struct Timer {
+    set: wgpu::QuerySet,
+    resolve: wgpu::Buffer,
+    read: wgpu::Buffer,
+    period: f32,
+}
 /// Drifting light over a dark floor: something to see through the glass
 /// before a custom background is set.
 pub const DEFAULT_BACKGROUND: &str = r#"
@@ -874,6 +889,7 @@ pub struct Stage {
     /// The first GPU error no scope caught since the last call, which
     /// wgpu would otherwise panic on. Only on a device the stage opened.
     uncaptured: Arc<Mutex<Option<String>>>,
+    timer: Option<Timer>,
 }
 
 fn target(
@@ -965,9 +981,11 @@ impl Stage {
                 adapter.get_info().name
             )));
         }
-        let (device, queue) =
-            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
-                .map_err(gpu)?;
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            required_features: adapter.features() & TIMESTAMPS,
+            ..Default::default()
+        }))
+        .map_err(gpu)?;
         // The device is the stage's own, so loss and stray errors are too:
         // reported by the next call as an `Error`, not a panic.
         let stage = Self::with_device(device, queue, width, height)?;
@@ -1231,6 +1249,28 @@ impl Stage {
             view_formats: &[],
         });
         let dof = view(&target(&device, width, height, HDR, 1, RT));
+        let timer = (std::env::var_os("MUI_STAGE_TIMING").is_some()
+            && device.features().contains(TIMESTAMPS))
+        .then(|| {
+            let buffer = |usage| {
+                device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("mui-stage timing"),
+                    size: 32,
+                    usage,
+                    mapped_at_creation: false,
+                })
+            };
+            Timer {
+                set: device.create_query_set(&wgpu::QuerySetDescriptor {
+                    label: None,
+                    ty: wgpu::QueryType::Timestamp,
+                    count: 4,
+                }),
+                resolve: buffer(wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC),
+                read: buffer(wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ),
+                period: queue.get_timestamp_period(),
+            }
+        });
         let hdr = view(&target(&device, width, height, HDR, 1, RT));
         let lit = view(&target(&device, width, height, HDR, 1, RT));
         let ao = view(&target(
@@ -1295,6 +1335,7 @@ impl Stage {
             no_shadows,
             lost: Arc::default(),
             uncaptured: Arc::default(),
+            timer,
         })
     }
 
@@ -1956,8 +1997,39 @@ impl Stage {
             target,
             &self.pipes.present,
         );
+        self.stamp(&mut enc, 3);
+        if let Some(t) = &self.timer {
+            enc.resolve_query_set(&t.set, 0..4, &t.resolve, 0);
+            enc.copy_buffer_to_buffer(&t.resolve, 0, &t.read, 0, 32);
+        }
         self.queue.submit([enc.finish()]);
+        if let Some(t) = &self.timer {
+            let slice = t.read.slice(..);
+            slice.map_async(wgpu::MapMode::Read, |_| {});
+            self.device
+                .poll(wgpu::PollType::wait_indefinitely())
+                .map_err(gpu)?;
+            let v: Vec<u64> =
+                bytemuck::cast_slice(&slice.get_mapped_range().map_err(gpu)?).to_vec();
+            t.read.unmap();
+            let ms =
+                |a: usize, b: usize| v[b].wrapping_sub(v[a]) as f64 * f64::from(t.period) / 1e6;
+            eprintln!(
+                "mui-stage: gpu {:.3} ms: scene {:.3}, glass {:.3}, post {:.3}",
+                ms(0, 3),
+                ms(0, 1),
+                ms(1, 2),
+                ms(2, 3)
+            );
+        }
         Ok(())
+    }
+
+    /// Timestamp `i` of [`Timer`], when timing.
+    fn stamp(&self, enc: &mut wgpu::CommandEncoder, i: u32) {
+        if let Some(t) = &self.timer {
+            enc.write_timestamp(&t.set, i);
+        }
     }
 
     /// The shadow maps, made on first use, and with `cube` the point
@@ -2358,6 +2430,7 @@ impl Stage {
         let mut enc = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        self.stamp(&mut enc, 0);
         // Glass casts the share of light it stops (`fs_shadow_*` cut its
         // cover by its transmission); clear glass none.
         let casts = |m: &Material| m.transmission < 1.;
@@ -2499,13 +2572,24 @@ impl Stage {
                         return None;
                     }
                     let q = m.project(l);
-                    b = [b[0].min(q[0]), b[1].min(q[1]), b[2].max(q[0]), b[3].max(q[1])];
+                    b = [
+                        b[0].min(q[0]),
+                        b[1].min(q[1]),
+                        b[2].max(q[0]),
+                        b[3].max(q[1]),
+                    ];
                 }
             }
             let (w, h) = (self.width as f32, self.height as f32);
             let px = |v: f32, size: f32| v.clamp(0., size) as u32;
-            let (x0, x1) = (px(((b[0] + 1.) * 0.5 * w - 1.).floor(), w), px(((b[2] + 1.) * 0.5 * w + 1.).ceil(), w));
-            let (y0, y1) = (px(((1. - b[3]) * 0.5 * h - 1.).floor(), h), px(((1. - b[1]) * 0.5 * h + 1.).ceil(), h));
+            let (x0, x1) = (
+                px(((b[0] + 1.) * 0.5 * w - 1.).floor(), w),
+                px(((b[2] + 1.) * 0.5 * w + 1.).ceil(), w),
+            );
+            let (y0, y1) = (
+                px(((1. - b[3]) * 0.5 * h - 1.).floor(), h),
+                px(((1. - b[1]) * 0.5 * h + 1.).ceil(), h),
+            );
             Some([x0, y0, x1.saturating_sub(x0), y1.saturating_sub(y0)])
         });
         let map_groups: Vec<wgpu::BindGroup> = opaque
@@ -2597,6 +2681,7 @@ impl Stage {
             });
             self.full(&mut rp, &self.pipes.ssr, &group);
         }
+        self.stamp(&mut enc, 1);
         if let (Some(layer), Some(rect)) = (&trace_layer, traced_box)
             && rect.is_none_or(|r| r[2] > 0 && r[3] > 0)
         {
@@ -2605,7 +2690,10 @@ impl Stage {
             self.build_chain(&mut enc);
             let group = self.tex_group3(&view(&self.layers[layer].texture), &chain, &chain);
             let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
-                color_attachments: &[Some(attach(&self.hdr, None)), Some(attach(&self.dist, None))],
+                color_attachments: &[
+                    Some(attach(&self.hdr, None)),
+                    Some(attach(&self.dist, None)),
+                ],
                 ..Default::default()
             });
             pass.set_pipeline(&self.pipes.trace);
@@ -2708,6 +2796,7 @@ impl Stage {
                 self.full(&mut rp, &self.pipes.over, &over);
             }
         }
+        self.stamp(&mut enc, 2);
         self.queue.submit([enc.finish()]);
         Ok(())
     }
