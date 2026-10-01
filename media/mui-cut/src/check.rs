@@ -220,7 +220,7 @@ fn variant(node: &Value, kind: &str) -> BTreeSet<String> {
 }
 
 /// The closest known name, if it is close enough to be a typo.
-fn nearest<'a>(name: &str, known: impl IntoIterator<Item = &'a String>) -> Option<&'a String> {
+pub fn nearest<'a>(name: &str, known: impl IntoIterator<Item = &'a String>) -> Option<&'a String> {
     known
         .into_iter()
         .map(|k| (distance(name, k), k))

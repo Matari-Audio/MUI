@@ -169,7 +169,7 @@ impl Animator {
 
     /// A classic setup as JSON-ready data, keyed over `[t0, t0 + dur]`:
     /// `typewriter` (characters appear one by one), `cascade` (characters
-    /// rise and fade in, one after another) or `pop` (copies or glyphs scale
+    /// rise and fade in, one after another), `cascade_out` (its exit) or `pop` (copies or glyphs scale
     /// up from nothing in a random order).
     pub fn preset(name: &str, t0: f64, dur: f64) -> Option<Self> {
         use crate::{Interp, Key};
@@ -183,7 +183,8 @@ impl Animator {
                     out: None,
                 },
                 Key {
-                    t: t0 + dur,
+                    // On a microsecond grid: no 0.8999999999999999 in the file.
+                    t: ((t0 + dur) * 1e6).round() / 1e6,
                     v: b,
                     interp: Interp::Hold,
                     in_: None,
@@ -204,6 +205,14 @@ impl Animator {
                 amount: keys(1., 0., Interp::Bezier),
                 stagger: Anim::Value(0.04),
                 y: Anim::Value(40.),
+                opacity: z(),
+                ..Self::default()
+            },
+            // The cascade's exit: each glyph rises away and fades out.
+            "cascade_out" => Self {
+                amount: keys(0., 1., Interp::Bezier),
+                stagger: Anim::Value(0.03),
+                y: Anim::Value(-40.),
                 opacity: z(),
                 ..Self::default()
             },
