@@ -452,6 +452,7 @@ fn a_hover_renders_only_its_box_and_matches_a_whole_render() {
             "{}",
             stats.rendered_pixels
         );
+        eprintln!("diag: xf {xf:?}");
         same_pixels(&part, &whole);
     }
 }
