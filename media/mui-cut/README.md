@@ -776,7 +776,9 @@ announces edits made by someone else.
 ## Using mui-cut from an AI agent
 
 The project is plain JSON, so an agent can edit it with any tool; these make
-it fast to get right and to see.
+it fast to get right and to see. [AGENT-GUIDE.md](AGENT-GUIDE.md) is the
+short version for an agent: the loop, a cheat sheet, the gotchas and the
+friction log they came from.
 
 ```sh
 mui-cut schema > cut.schema.json    # JSON Schema from the Rust types, doc comments included
@@ -836,10 +838,15 @@ claude mcp add mui-cut -- /path/to/mui-cut mcp            # Claude Code
 claude mcp add mui-cut -- /path/to/mui-cut mcp demo.cut.json
 ```
 
-Tools: `open` (with `create`), `schema`, `list` (scenes, layers, animated
-properties with key times), `get` (a JSON Pointer), `patch` (RFC 6902, all
-or nothing), `set`, `key`, `add_layer`, `remove_layer`, `eval`, `check`,
-`still`, `sheet`, `strip`, `diff` (images come back as PNG image content),
+Tools: `open` (with `create` and the new project's size, fps, scene,
+duration, mode and background), `schema` (or one definition with `def`),
+`list` (scenes, layers, animated properties with key times), `get` (a JSON
+Pointer), `patch` (RFC 6902, all or nothing), `set`, `key`, `motion` (named
+entrances and exits: fade, rise, slide and pop in and out, and per glyph
+typewriter, cascade, cascade_out, pop), `batch` (several edit calls, all
+or nothing, one write and one check), `add_layer`, `remove_layer`, `eval`,
+`check`, `still` (with `samples` for a 3D beauty frame), `sheet`, `strip`,
+`diff` (images come back as PNG image content),
 `gen`, `render` + `render_status` (a background job), `plugin_parts`,
 `sources_list` (sources with the layers using them and a plugin's part
 tree), `source_add`, `notes_set`/`notes_add` (a plugin layer's notes),
@@ -847,7 +854,9 @@ tree), `source_add`, `notes_set`/`notes_add` (a plugin layer's notes),
 mp4, and says its length and peak), `patch_get` (the plugin's patch at a
 time), `layer_parent` (parent or detach, keeping the screen
 position), `editor_state`, `editor_goto`. Pointers may name scenes and layers by name/id:
-`/scenes/intro/layers/title/x`.
+`/scenes/intro/layers/title/x`. A plugin layer's `source` may name an
+imported source by id. A layer, scene, tool, preset or argument that is not
+there gets a "did you mean".
 
 Every tool reads the file and every edit writes it: validated, refused if a
 save would drop a field (a typo), canonical and atomic, followed by a
