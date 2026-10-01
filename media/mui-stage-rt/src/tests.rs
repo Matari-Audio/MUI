@@ -414,3 +414,39 @@ fn reeds_move_an_edge_by_where_it_falls_across_them() {
     assert!((a - b).abs() > 2., "a quarter reed over: {a} vs {b}");
     assert!((a - c).abs() < 0.3, "a reed over: {a} vs {c}");
 }
+
+#[test]
+fn steep_reeds_lose_no_light() {
+    let Some((mut stage, mut rt)) = rig() else {
+        return;
+    };
+    paint(&mut stage, &mut rt, "pane", [4, 4], |_, _| [255; 4]);
+    // Clear glass before white everywhere: every path ends in the white,
+    // however steeply the reeds turn it, so the pane is white too.
+    let m = Material {
+        ribbed: mui_stage::Relief {
+            strength: 2.,
+            scale: 40.,
+        },
+        ..glass(1.5)
+    };
+    let pane = Plane::new("pane", 700., 190.)
+        .at(0., 100., 0.)
+        .offset([0., 0., 10.])
+        .depth(20.)
+        .material(m);
+    let s = Shot {
+        clear: Some([1.; 3]),
+        ..shot(vec![pane])
+    };
+    let f = rt.render(&mut stage, &s, 64).unwrap();
+    let row = 100;
+    let mean = (20..W - 20)
+        .map(|x| f.rgba[((row * W + x) * 4) as usize + 1])
+        .sum::<f32>()
+        / (W - 40) as f32;
+    let min = (20..W - 20)
+        .map(|x| f.rgba[((row * W + x) * 4) as usize + 1])
+        .fold(1f32, f32::min);
+    assert!(mean > 0.97 && min > 0.99, "mean {mean} min {min}");
+}

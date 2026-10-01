@@ -649,8 +649,11 @@ fn trace_path(o0: vec3f, d0: vec3f) -> Path {
         let alpha = max(inst.mat.y * inst.mat.y, 0.);
         var m = nf;
         if (alpha > 4e-4) { m = ggx_sample(nf, alpha, rand2()); }
+        // A face pressed or bevelled steeply can turn its normal from the
+        // eye, or send light back through itself: there the flat face
+        // stands in, as mui-stage's glass has it, instead of losing it.
+        if (dot(v, m) <= 0.) { m = ngf; }
         let cos_i = dot(v, m);
-        if (cos_i <= 0.) { break; }
         // The layer's colour stains what passes its face, unless printed;
         // a mesh's base colour stains what passes it, as glTF has it.
         let stain = select(vec3f(1.), mix(s.base, vec3f(1.), print), s.part == 0u || s.part == 3u);
@@ -684,13 +687,17 @@ fn trace_path(o0: vec3f, d0: vec3f) -> Path {
         var next: vec3f;
         if (rand() < f) {
             next = reflect(d, m);
-            if (dot(next, ngf) <= 0.) { break; }
+            if (dot(next, ngf) <= 0.) { next = reflect(d, ngf); }
         } else if (card) {
             next = d;
             thr *= stain * inst.tint.rgb;
         } else {
             next = refract(d, m, 1. / eta);
-            if (dot(next, next) < 1e-6 || dot(next, ngf) >= 0.) { break; }
+            if (dot(next, next) < 1e-6 || dot(next, ngf) >= 0.) { next = refract(d, ngf, 1. / eta); }
+            // Past the critical angle even flat: it stays inside.
+            if (dot(next, next) < 1e-6) {
+                next = reflect(d, ngf);
+            } else {
             if (entering) {
                 thr *= stain;
                 inside = true;
@@ -702,6 +709,7 @@ fn trace_path(o0: vec3f, d0: vec3f) -> Path {
             } else {
                 inside = false;
                 body = NONE;
+            }
             }
         }
         if (alpha > 4e-4) {
