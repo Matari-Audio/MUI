@@ -3693,3 +3693,5 @@ fn pipelines(
 mod tests;
 #[cfg(test)]
 mod tests_glass;
+#[cfg(test)]
+mod tests_trace;
