@@ -10,9 +10,9 @@ It has two users working on the same file:
 - **an agent** editing the plain-text `*.cut.json` project and checking its
   work with `mui-cut still` / `mui-cut eval` / `mui-cut render`.
 
-The editor saves into the file and reloads when the file changes on disk, so
-an agent's edit shows up live in an open editor and the person's edits land
-in the file.
+Both edit at once: `serve` keeps the project at a revision and merges edits
+field by field, so an agent's edit shows up live in an open editor (even
+mid-drag) and the person's edits land in the file. See "Editing together".
 
 ```sh
 # from the repo root
@@ -860,8 +860,34 @@ there gets a "did you mean".
 
 Every tool reads the file and every edit writes it: validated, refused if a
 save would drop a field (a typo), canonical and atomic, followed by a
-`check` summary. An open `mui-cut serve` on the same file reloads it at
-once, and the person's edits are in the file for the next tool call.
+`check` summary. With a `mui-cut serve` open on the same file, an edit goes
+through it instead, merged with the person's (see "Editing together"), and
+the person's edits are in the file for the next tool call.
+
+Resources: `mui-cut://schema`, `mui-cut://project` (the open file),
+`mui-cut://examples/NAME` (every example project and `gen` script) and
+`mui-cut://host-protocol` (HOST-PROTOCOL.md). Prompts: `promo_from_plugin`
+(`plugin`, `seconds`, `project`: onboard a plugin and make a promo of it)
+and `review_cut` (`project`, `rev`): each walks the agent through `check`,
+`sheet`, fixing and checking again.
+
+### Editing together
+
+`serve` holds the project at a revision. An edit is a list of JSON Pointer
+operations made against the revision its author last saw (`POST /patch
+{base, ops, by}`; layers, scenes and sources are addressed by id or name,
+so a reorder elsewhere does not move them). The server applies them to its
+newest revision, validates, writes the file and pushes the merged document
+to every open editor (SSE `doc`: `{rev, by, conflicts, doc}`). So edits to
+different fields both land, whoever made them; where both sides changed
+the same field the later edit wins and is listed in `conflicts`, which the
+editor shows as a short notice. The editor applies a new revision onto its
+own document in place, so a drag in progress keeps going on top of it, and
+its undo replays only its own gestures, skipping fields somebody has
+changed since. The MCP tools, the editor and an outside write to the file
+(a new revision `by: "disk"`) all go through this. `GET /doc` is the newest
+`{rev, project, doc}`; `PUT /project` still takes a whole document, as the
+patch from the newest revision to it.
 
 The editor reports its scene, playhead, selection, graphed property and
 play state to the server (`PUT /state`); `editor_state` reads it (with
@@ -877,8 +903,9 @@ neither and no file it tries 8740.
 The keyframe curves are not `mui_motion::curve::Curve`: that type is a
 normalized `0..1` phase/value shaper that clamps values, while a property
 track needs unbounded values and absolute times. The `Ease::Cubic` of
-`mui_motion::Keys` is the same normalized CSS form. Undo is whole-document
-snapshots in the editor rather than `CurveHistory`, for the same reason.
+`mui_motion::Keys` is the same normalized CSS form. Undo is per gesture,
+document before and after, in the editor rather than `CurveHistory`, for the
+same reason.
 
 ## Known gaps
 
@@ -895,12 +922,18 @@ snapshots in the editor rather than `CurveHistory`, for the same reason.
   viewport, so it cannot be clicked there (pick it in the layer list).
 - Bound keyframe values do not draw in the graph editor; edit them in the
   file.
-- Last writer wins if the person and an agent edit the same moment.
-- `check`'s bounds are layer boxes, not outlines: rotated or sparse shapes
-  (a ring of copies) overlap and clip by their box. Contrast is averaged
-  over the text's box, so a busy image behind text can pass on average.
-- The MCP server has no resources or prompts, and `diff` needs the other
-  version as a file (no git revision argument yet).
+- `check` measures outlines (each layer drawn alone, its alpha mask) only
+  where a box says clipped or two text boxes overlap: a shape whose box
+  is inside but whose ink is mostly out is not caught, and
+  `never_visible` / `empty_frame` still go by boxes.
+- An edit made against a revision more than 64 old still applies but
+  reports no conflicts. An item added to an array lands at its index in
+  the author's view, so a layer added while another was too can sit one
+  place off in the paint order.
+- `diff P@REV` takes assets inside the project's folder from the revision
+  (a `../` path is left out) and shares the plugin capture cache (on
+  Unix; elsewhere a revision's plugin layers draw as placeholders unless
+  captured).
 - `vello_gpu` draws MUI's backdrop blur sharp (no filter layer wired yet).
   It is pinned to Vello 9dfe53e; moving to newer main means following
   #1942 (`pop_clip_path` renamed) and #1944 (fallible glyph drawing) in

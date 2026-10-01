@@ -1265,11 +1265,29 @@ impl Server {
         }
     }
 
-    /// Change the file's JSON with `f`; refuse (and leave the file alone)
-    /// if the result does not load or has fields a save would drop.
+    /// The open project's editor, when one serves it: its port, revision
+    /// and document.
+    fn editor_doc(&self) -> Option<(u16, u64, Value)> {
+        let port = self.editor_port(None);
+        let v: Value = serde_json::from_str(&http(port, "GET", "/doc", "").ok()?).ok()?;
+        let same = std::fs::canonicalize(self.path().ok()?).ok()
+            == std::fs::canonicalize(v["project"].as_str()?).ok();
+        Some((port, v["rev"].as_u64()?, v["doc"].clone())).filter(|_| same)
+    }
+
+    /// Change the project's JSON with `f`; refuse (and leave it alone) if
+    /// the result does not load or has fields a save would drop. With an
+    /// editor open on it the change goes to the editor's server as a
+    /// field-level patch, merged with the person's edits like theirs are
+    /// with ours; else straight to the file.
     fn edit(&self, f: impl FnOnce(&mut Value) -> Result<()>) -> Result<Vec<Value>> {
         let path = self.path()?;
-        let mut raw = self.raw()?;
+        let editor = self.editor_doc();
+        let before = match &editor {
+            Some((_, _, doc)) => doc.clone(),
+            None => self.raw()?,
+        };
+        let mut raw = before.clone();
         f(&mut raw)?;
         inline_sources(&mut raw)?;
         let src = raw.to_string();
@@ -1283,10 +1301,32 @@ impl Server {
             return Err(format!("not written:\n{}", why.join("\n")));
         }
         let p = Project::load(&src)?;
-        write_atomic(&path, &p.to_json())?;
+        let mut how = String::new();
+        if let Some((port, rev, _)) = editor {
+            let ops = crate::serve::diff(&before, &raw);
+            let body = json!({ "base": rev, "ops": ops, "by": "agent" });
+            let reply: Value =
+                serde_json::from_str(&http(port, "POST", "/patch", &body.to_string())?)
+                    .map_err(|e| e.to_string())?;
+            how = format!(" through the editor on port {port} (rev {})", reply["rev"]);
+            for (k, why) in [
+                (
+                    "conflicts",
+                    "the person changed these too; yours replaced theirs",
+                ),
+                ("skipped", "not applied"),
+            ] {
+                if let Some(list) = reply[k].as_array().filter(|l| !l.is_empty()) {
+                    let list: Vec<&str> = list.iter().filter_map(Value::as_str).collect();
+                    how.push_str(&format!("\n{why}: {}", list.join(", ")));
+                }
+            }
+        } else {
+            write_atomic(&path, &p.to_json())?;
+        }
         let issues = tools::check_file(&path)?;
         Ok(vec![text(&format!(
-            "written {}.\n{}",
+            "written {}{how}.\n{}",
             path.display(),
             summary(&issues, 8)
         ))])
@@ -1714,7 +1754,10 @@ fn http(port: u16, method: &str, path: &str, body: &str) -> Result<String> {
     s.read_to_string(&mut reply).map_err(|e| e.to_string())?;
     let (head, body) = reply.split_once("\r\n\r\n").unwrap_or((&reply, ""));
     if !head.starts_with("HTTP/1.1 200") {
-        return Err(format!("editor: {}", head.lines().next().unwrap_or("")));
+        return Err(format!(
+            "editor: {} {body}",
+            head.lines().next().unwrap_or("")
+        ));
     }
     Ok(body.to_owned())
 }
@@ -1739,9 +1782,11 @@ fn resolve(root: &Value, pointer: &str) -> Result<Vec<String>> {
     for raw in rest.split('/') {
         let tok = raw.replace("~1", "/").replace("~0", "~");
         let tok = match node {
+            // An `id` first: a layer's `name` may be another layer's id.
             Some(Value::Array(items)) if tok != "-" && tok.parse::<usize>().is_err() => items
                 .iter()
-                .position(|v| v["id"].as_str() == Some(&tok) || v["name"].as_str() == Some(&tok))
+                .position(|v| v["id"].as_str() == Some(&tok))
+                .or_else(|| items.iter().position(|v| v["name"].as_str() == Some(&tok)))
                 .ok_or_else(|| {
                     let names = items
                         .iter()
@@ -1829,7 +1874,7 @@ fn remove(root: &mut Value, tokens: &[String]) -> Result<Value> {
 }
 
 /// One RFC 6902 operation.
-fn apply(root: &mut Value, op: &Value) -> Result<()> {
+pub(crate) fn apply(root: &mut Value, op: &Value) -> Result<()> {
     let path = op["path"].as_str().ok_or("no `path`")?;
     let tokens = resolve(root, path)?;
     let value = || op.get("value").cloned().ok_or("no `value`");

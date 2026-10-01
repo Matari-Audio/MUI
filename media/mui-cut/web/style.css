@@ -27,6 +27,8 @@ header { grid-area: top; display: flex; align-items: center; gap: 10px; padding:
 .mono { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
 #status.bad { color: var(--hi); font-weight: 650; }
 #status.bad::before { content: '⚠ '; }
+#merge { color: var(--hi); font-weight: 650; }
+#merge::before { content: '⇄ '; }
 #backend { font-size: 10px; padding: 1px 5px; border: 1px solid var(--line); border-radius: 3px; }
 #backend:empty { display: none; }
 button, select, input, textarea { font: inherit; color: inherit; background: var(--raised); border: 1px solid var(--line); border-radius: 4px; padding: 3px 7px; }

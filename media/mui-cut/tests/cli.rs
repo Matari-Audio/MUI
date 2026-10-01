@@ -269,7 +269,12 @@ fn serve_saves_canonical_json_and_pushes_outside_edits() {
     loop {
         l.clear();
         lines.read_line(&mut l).unwrap();
-        if l.starts_with("data: changed") {
+        if l.starts_with("data: {") {
+            let v: serde_json::Value = serde_json::from_str(&l[6..]).unwrap();
+            assert!(
+                v["by"] == "disk" && v["doc"].to_string().contains("\"duration\":1.0"),
+                "{l}"
+            );
             break;
         }
     }

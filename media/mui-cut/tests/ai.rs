@@ -537,18 +537,82 @@ fn mcp_sees_and_steers_the_open_editor() {
         serde_json::json!({"scene": "title", "t": 0.5, "select": "bar"})
     );
 
-    // An agent's edit reaches the editor as a reload.
-    m.text(
+    // An agent's edit goes through the editor's server and reaches the
+    // editor as the merged document.
+    let said = m.text(
         "set",
         serde_json::json!({"scene": "title", "layer": "bar", "prop": "y", "value": 450}),
     );
-    loop {
+    assert!(
+        said.contains(&format!("through the editor on port {port}")),
+        "{said}"
+    );
+    let doc = loop {
         l.clear();
         lines.read_line(&mut l).unwrap();
-        if l.starts_with("data: changed") {
-            break;
+        if let Some(d) = l.trim().strip_prefix("data: {") {
+            let v: serde_json::Value = serde_json::from_str(&format!("{{{d}")).unwrap();
+            if v["by"] == "agent" {
+                break v;
+            }
         }
-    }
+    };
+    assert_eq!(doc["by"], "agent", "{doc}");
+    let title = doc["doc"]["scenes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["name"] == "title")
+        .unwrap();
+    let bar = title["layers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|l| l["id"] == "bar")
+        .unwrap();
+    assert_eq!(bar["y"], 450.0, "{bar}");
+
+    // The person, still on the revision before it, moves `bar` (x and y):
+    // x merges, y was the agent's too and the later edit (theirs) wins.
+    let base = doc["rev"].as_u64().unwrap() - 1;
+    let patch = serde_json::json!({"base": base, "by": "editor", "ops": [
+        {"op": "replace", "path": "/scenes/title/layers/bar/x", "value": 77.0},
+        {"op": "replace", "path": "/scenes/title/layers/bar/y", "value": 88.0},
+    ]})
+    .to_string();
+    let got = http(
+        port,
+        &format!(
+            "POST /patch HTTP/1.1\r\nContent-Length: {}\r\n\r\n{patch}",
+            patch.len()
+        ),
+    );
+    let reply: serde_json::Value =
+        serde_json::from_str(got.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+    assert_eq!(
+        reply["conflicts"],
+        serde_json::json!(["/scenes/title/layers/bar/y"]),
+        "{reply}"
+    );
+    let file: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&project).unwrap()).unwrap();
+    let title = file["scenes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["name"] == "title")
+        .unwrap();
+    let bar = title["layers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|l| l["id"] == "bar")
+        .unwrap();
+    assert_eq!(
+        (bar["x"].as_f64(), bar["y"].as_f64()),
+        (Some(77.0), Some(88.0)),
+        "{bar}"
+    );
     let _ = server.kill();
     let _ = server.wait();
 }
