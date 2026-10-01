@@ -728,3 +728,59 @@ fn a_sky_has_clouds_that_drift_and_glass_bends_them() {
         .fold(0f32, f32::max);
     assert!(pop < 0.02, "no pop into glass: {pop}");
 }
+
+#[test]
+fn glass_bends_the_sky_in_from_beyond_the_frame() {
+    let Some(mut stage) = stage(320, 240) else {
+        return;
+    };
+    solid(&mut stage, "clear", 64., Color::srgb(1., 1., 1.));
+    // No clouds, the sun low and just out of the frame to the left.
+    let sky = Sky {
+        sun: [-0.62, 0.08, -0.78],
+        zenith: [0.01, 0.02, 0.05],
+        horizon: [0.03, 0.035, 0.04],
+        sun_color: [1.; 3],
+        cover: 0.,
+        drift: [0.; 2],
+    };
+    let camera = Camera::front(240., 40.);
+    let render = |stage: &mut Stage, glass: bool| {
+        // A domed pane straddling the left edge: its rim bends rays on
+        // out past the frame, toward the sun.
+        let planes = if glass {
+            vec![
+                Plane::new("clear", 220., 220.)
+                    .at(-170., 0., 0.)
+                    .material(clear(1., 110.)),
+            ]
+        } else {
+            vec![]
+        };
+        let shot = Shot {
+            planes,
+            sky: Some(sky),
+            clear: Some([0.; 3]),
+            post: Post::NONE,
+            ..Shot::new(camera)
+        };
+        stage.render(0., 0., 1, &|_| shot.clone()).unwrap().rgba
+    };
+    let (bare, glass) = (render(&mut stage, false), render(&mut stage, true));
+    let w = 320;
+    let luma = |f: &[f32], x: usize, y: usize| {
+        let p = &f[(y * w + x) * 4..];
+        0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2]
+    };
+    // The brightest the frame's edge gets: all a ray clamped to the frame
+    // could find.
+    let edge = (0..240).map(|y| luma(&bare, 0, y)).fold(0f32, f32::max);
+    let through = (0..240)
+        .flat_map(|y| (0..40).map(move |x| (x, y)))
+        .map(|(x, y)| luma(&glass, x, y))
+        .fold(0f32, f32::max);
+    assert!(
+        through > edge * 1.3,
+        "the sun bent in from beyond: {through} against the edge's {edge}"
+    );
+}

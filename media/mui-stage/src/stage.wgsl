@@ -465,10 +465,15 @@ fn eye_ray(uv: vec2f) -> vec3f {
 }
 
 // The background at `uv`: the shader, the clear colour or the environment.
-fn backdrop(uv: vec2f) -> vec3f {
-    if (env_on() && g.env2.x > 0.5) { return env_radiance(eye_ray(uv), 0.); }
-    if (sky_on()) { return sky(eye_ray(uv)); }
-    return select(background(uv, g.time_res.x), g.clear.rgb, g.clear.a > 0.5);
+fn backdrop(uv: vec2f) -> vec3f { return backdrop_along(eye_ray(uv), uv); }
+// The background along `d`, which leaves the frame at `uv`: the
+// environment and the sky by direction (a ray bent out of the frame sees
+// on round them), the screen's own background at the frame's edge.
+fn backdrop_along(d: vec3f, uv: vec2f) -> vec3f {
+    if (env_on() && g.env2.x > 0.5) { return env_radiance(d, 0.); }
+    if (sky_on()) { return sky(d); }
+    let e = clamp(uv, vec2f(0.), vec2f(1.));
+    return select(background(e, g.time_res.x), g.clear.rgb, g.clear.a > 0.5);
 }
 @fragment fn fs_bg(i: Full) -> Out {
     var o: Out;
@@ -1065,8 +1070,13 @@ fn ior_at(ior: f32, k: f32, nm: f32) -> f32 {
 // eye ray `ray`) for index `eta`: refract in, cross `thick` inside, leave
 // (a slab sends it on parallel to how it came, a solid along the refracted
 // ray) and find the opaque surface it meets. xy its uv, z the path inside,
-// w the pixels of the blur footprint per unit of roughness.
-fn refracted(p: vec3f, n: vec3f, m: vec3f, ray: vec3f, eta: f32, thick: f32, slab: bool, jitter: f32) -> vec4f {
+// w the pixels of the blur footprint per unit of roughness; and the way
+// it leaves.
+struct Through {
+    h: vec4f,
+    dir: vec3f,
+};
+fn refracted(p: vec3f, n: vec3f, m: vec3f, ray: vec3f, eta: f32, thick: f32, slab: bool, jitter: f32) -> Through {
     var t = refract(ray, m, 1. / eta);
     if (dot(t, t) < 1e-6) { t = ray; }
     let path = thick / max(abs(dot(t, n)), 0.2);
@@ -1085,18 +1095,18 @@ fn refracted(p: vec3f, n: vec3f, m: vec3f, ray: vec3f, eta: f32, thick: f32, sla
     // nearer surface there.
     let along = march(exit, dir, jitter, reach_of(exit, dir));
     if (along < 0.) {
-        return vec4f(clamp(screen(exit + dir * 1e6).xy, vec2f(0.), vec2f(1.)), path, -1.);
+        return Through(vec4f(screen(exit + dir * 1e6).xy, path, -1.), dir);
     }
     let uv = screen(exit + dir * along);
     let behind = min(along, 3000.) / px_size(uv.z);
-    return vec4f(clamp(uv.xy, vec2f(0.), vec2f(1.)), path, behind);
+    return Through(vec4f(clamp(uv.xy, vec2f(0.), vec2f(1.)), path, behind), dir);
 }
 // What `refracted` found: the frame there, blurred by roughness, or the
 // background. ponytail: a missed ray sees the background unblurred; blur
 // it with the environment's mips if rough glass over the void bands.
-fn seen_through(h: vec4f, rough: f32) -> vec3f {
-    if (h.w < 0.) { return backdrop(h.xy); }
-    return textureSampleLevel(aux, samp, h.xy, rough_lod(rough, h.w)).rgb;
+fn seen_through(t: Through, rough: f32) -> vec3f {
+    if (t.h.w < 0.) { return backdrop_along(t.dir, t.h.xy); }
+    return textureSampleLevel(aux, samp, t.h.xy, rough_lod(rough, t.h.w)).rgb;
 }
 
 // A transmissive surface: Fresnel-weighted reflection of the frame (or
@@ -1146,12 +1156,12 @@ fn glass(p: vec3f, n: vec3f, tilt: vec3f, base: vec3f, px: vec2f) -> vec3f {
         for (var c = 0; c < 3; c++) {
             let h = refracted(p, n, m, ray, ior_at(ior, k, nm[c]), thick, slab, jit);
             seen[c] = seen_through(h, rough)[c];
-            path[c] = h.z;
+            path[c] = h.h.z;
         }
     } else {
         let h = refracted(p, n, m, ray, ior, thick, slab, jit);
         seen = seen_through(h, rough);
-        path = vec3f(h.z);
+        path = vec3f(h.h.z);
     }
     // Beer-Lambert: `tint` is what is left after `thickness`.
     let absorb = select(d.tint.rgb, pow(max(d.tint.rgb, vec3f(1e-4)), path / max(thick, 1e-3)), thick > 0.);
