@@ -396,7 +396,7 @@ impl Assets {
             quads: Vec::with_capacity(frame.layers.len()),
             parts: Vec::new(),
         };
-        for l in &frame.layers {
+        for l in frame.drawing_order() {
             if let Kind::Audio { .. } = l.kind {
                 continue;
             }

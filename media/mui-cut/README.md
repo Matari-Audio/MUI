@@ -357,6 +357,10 @@ mesh. Scenes without it render exactly as before.
   viewer. `rx`/`ry` pitch and yaw in degrees, `rotation` is the roll (`rz`).
   `anchor_z` moves the pivot; `extrude` gives a layer depth with its sides
   in `edge`. `cast_shadows` / `receive_shadows` (default true).
+- `"overlay": true` on a layer draws it flat in screen space after the 3D
+  pass and the scene's effects, as in 2D (its own effects run): captions,
+  a logo. Beauty and Blender frames get it too, composited after; the
+  editor's inspector ticks it. Where 3D draws flat, overlays go on top.
 - `camera` layer (the last visible one shoots): orbits its target by `rx`,
   `ry` at `distance`, `fov` (vertical degrees), `rotation` rolls it, `dolly`
   moves it toward the target, `path` (SVG path data, moved along by
@@ -945,8 +949,7 @@ same reason.
   #1942 (`pop_clip_path` renamed) and #1944 (fallible glyph drawing) in
   `src/sparse.rs`.
 - 3D: glTF is `.glb` only, triangles and
-  material factors (no textures, skins or animation); a 3D scene has no 2D
-  overlay layer; `check`'s pixel lints skip
+  material factors (no textures, skins or animation); `check`'s pixel lints skip
   3D scenes. A layer's `effects` are skipped in 3D: a layer is a slab
   textured from the shared atlas, and the effect passes are full-frame, so
   a layer stack would need its own padded texture per layer (a blur or

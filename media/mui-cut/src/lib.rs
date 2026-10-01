@@ -526,6 +526,10 @@ pub struct Layer {
     pub cast_shadows: bool,
     #[serde(default = "yes", skip_serializing_if = "is_yes")]
     pub receive_shadows: bool,
+    /// 3D: drawn flat in screen space over the 3D pass and the scene's
+    /// effects, as in 2D: a caption or a logo over the shot.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub overlay: bool,
     /// 3D: the surface (metal, roughness, glass); see [`three::Material`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub material: Option<three::Material>,
@@ -1228,6 +1232,22 @@ impl Frame {
     pub fn has_effects(&self) -> bool {
         !self.effects.is_empty() || self.layers.iter().any(|l| !l.effects.is_empty())
     }
+
+    /// Its layers bottom first; a 3D frame drawn flat puts its overlays
+    /// on top.
+    pub fn drawing_order(&self) -> impl Iterator<Item = &Drawn> {
+        let lifted = |l: &&Drawn| self.view.is_some() && l.space.overlay;
+        let (base, top) = (
+            self.layers.iter().filter(move |l| !lifted(l)),
+            self.layers.iter().filter(lifted),
+        );
+        base.chain(top)
+    }
+
+    /// A 3D frame with layers drawn flat over the 3D pass.
+    pub fn has_overlays(&self) -> bool {
+        self.view.is_some() && self.layers.iter().any(|l| l.space.overlay)
+    }
 }
 
 /// Most copies a duplicator makes.
@@ -1339,6 +1359,7 @@ impl Layer {
                 edge: self.edge.at(t),
                 cast_shadows: self.cast_shadows,
                 receive_shadows: self.receive_shadows,
+                overlay: self.overlay,
                 distance: self.distance.at(t).max(0.),
                 fov: self.fov.at(t).clamp(1., 170.),
                 dolly: self.dolly.at(t),

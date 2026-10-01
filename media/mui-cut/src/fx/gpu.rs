@@ -347,82 +347,51 @@ impl Passes {
         }
     }
 
-    /// The scene's stack over `A`, then the result into `target`.
-    fn finish(&mut self, canvas: &GpuCanvas, h: Header, stack: &[Fx], target: &wgpu::TextureView) {
-        let mut enc = canvas
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-        let out = self.chain(&mut enc, h, A, stack);
+    /// The scene's stack over `A`, then `overlays` over that (a 3D frame's
+    /// flat layers), then the result into `target`; the overlays' quads.
+    fn finish(
+        &mut self,
+        canvas: &mut GpuCanvas,
+        assets: &Assets,
+        frame: &Frame,
+        h: Header,
+        overlays: &[&Drawn],
+        target: &wgpu::TextureView,
+    ) -> Result<Vec<Quad>, String> {
+        let mut enc = encoder(canvas);
+        let mut out = self.chain(&mut enc, h, A, &frame.effects);
+        let mut quads = Vec::new();
+        if !overlays.is_empty() {
+            // Back into `A`: an overlay's own stack ping-pongs `P` and `Q`.
+            if out != A {
+                let offset = self.stage(h, 0, &[]);
+                let a = self.targets.as_ref().expect("prepared").views[A].clone();
+                self.pass(&mut enc, &self.copy, out, &a, offset, true);
+                out = A;
+            }
+            self.submit(canvas, enc);
+            quads = self.composite(canvas, assets, frame, h, overlays, false)?;
+            enc = encoder(canvas);
+        }
         let offset = self.stage(h, 0, &[]);
         self.pass(&mut enc, &self.copy, out, target, offset, true);
         self.submit(canvas, enc);
-    }
-
-    /// A 3D `frame` (the stage's pass into `A`) with the scene's effects
-    /// into `target`; its quads.
-    pub(crate) fn draw_3d(
-        &mut self,
-        canvas: &mut GpuCanvas,
-        assets: &Assets,
-        frame: &Frame,
-        view: &crate::View,
-        target: &wgpu::TextureView,
-    ) -> Result<Vec<Quad>, String> {
-        let h = self.begin(canvas, frame, passes(&frame.effects) + 1);
-        let a = self.targets.as_ref().expect("prepared").views[A].clone();
-        let quads = canvas.draw_3d(assets, frame, view, &a)?;
-        self.finish(canvas, h, &frame.effects, target);
         Ok(quads)
     }
 
-    /// `frame`'s scene effects over `rgba`, a picture already rendered at
-    /// the canvas's size (a Blender frame), into `target`.
-    pub(crate) fn plate(
-        &mut self,
-        canvas: &GpuCanvas,
-        frame: &Frame,
-        rgba: &[u8],
-        target: &wgpu::TextureView,
-    ) -> Result<(), String> {
-        let [w, h] = canvas.size();
-        if rgba.len() != w as usize * h as usize * 4 {
-            return Err(format!(
-                "a plate of {} bytes is not {w}x{h} RGBA",
-                rgba.len()
-            ));
-        }
-        let hd = self.begin(canvas, frame, passes(&frame.effects) + 1);
-        let a = &self.targets.as_ref().expect("prepared").a;
-        canvas.queue.write_texture(
-            a.as_image_copy(),
-            rgba,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(w * 4),
-                rows_per_image: Some(h),
-            },
-            a.size(),
-        );
-        self.finish(canvas, hd, &frame.effects, target);
-        Ok(())
-    }
-
-    /// `frame` with its effects into `target`; its quads.
-    pub(crate) fn draw(
+    /// `layers` over `A`: runs of plain layers painted together, a layer
+    /// with effects alone through its stack. `first` paints the frame's
+    /// background under the first run and replaces `A`; else they go over
+    /// what `A` holds. Their quads.
+    fn composite(
         &mut self,
         canvas: &mut GpuCanvas,
         assets: &Assets,
         frame: &Frame,
-        target: &wgpu::TextureView,
+        h: Header,
+        layers: &[&Drawn],
+        mut first: bool,
     ) -> Result<Vec<Quad>, String> {
-        let total = passes(&frame.effects)
-            + frame
-                .layers
-                .iter()
-                .map(|l| passes(&l.effects) + 2)
-                .sum::<u64>()
-            + 2;
-        let h = self.begin(canvas, frame, total);
         let view = |i: usize| self.targets.as_ref().expect("prepared").views[i].clone();
         let (lv, av) = (view(L), view(A));
         let clear = Rgba([0; 4]);
@@ -430,15 +399,12 @@ impl Passes {
             background,
             layers,
             effects: Vec::new(),
+            // Painted flat: a 3D frame's overlays are 2D layers.
+            view: None,
             ..frame.clone()
         };
-        let mut quads = Vec::with_capacity(frame.layers.len());
+        let mut quads = Vec::with_capacity(layers.len());
         let mut plain: Vec<Drawn> = Vec::new();
-        let mut first = true;
-        let encoder = |c: &GpuCanvas| {
-            c.device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor::default())
-        };
         // A run of plain layers (the first also draws the background) over A.
         let flush = |this: &mut Self,
                      canvas: &mut GpuCanvas,
@@ -454,7 +420,7 @@ impl Passes {
             *first = false;
             Ok(q)
         };
-        for l in &frame.layers {
+        for &l in layers {
             if l.effects.is_empty() || l.opacity <= 0. || l.scale == 0. {
                 plain.push(l.clone());
                 continue;
@@ -472,9 +438,103 @@ impl Passes {
         if !plain.is_empty() || first {
             quads.extend(flush(self, canvas, &mut plain, &mut first)?);
         }
-        self.finish(canvas, h, &frame.effects, target);
         Ok(quads)
     }
+
+    /// A 3D `frame` (the stage's pass into `A`) with the scene's effects,
+    /// then its overlay layers flat over that, into `target`; its quads.
+    pub(crate) fn draw_3d(
+        &mut self,
+        canvas: &mut GpuCanvas,
+        assets: &Assets,
+        frame: &Frame,
+        view: &crate::View,
+        target: &wgpu::TextureView,
+    ) -> Result<Vec<Quad>, String> {
+        let overlays: Vec<&Drawn> = frame.layers.iter().filter(|l| l.space.overlay).collect();
+        let h = self.begin(
+            canvas,
+            frame,
+            passes(&frame.effects) + 2 + layer_passes(&overlays),
+        );
+        let a = self.targets.as_ref().expect("prepared").views[A].clone();
+        let mut quads = canvas.draw_3d(assets, frame, view, &a)?;
+        quads.extend(self.finish(canvas, assets, frame, h, &overlays, target)?);
+        Ok(quads)
+    }
+
+    /// `frame`'s scene effects over `rgba`, a picture already rendered at
+    /// the canvas's size (a Blender frame), then its overlay layers, into
+    /// `target`.
+    pub(crate) fn plate(
+        &mut self,
+        canvas: &mut GpuCanvas,
+        assets: &Assets,
+        frame: &Frame,
+        rgba: &[u8],
+        target: &wgpu::TextureView,
+    ) -> Result<(), String> {
+        let [w, h] = canvas.size();
+        if rgba.len() != w as usize * h as usize * 4 {
+            return Err(format!(
+                "a plate of {} bytes is not {w}x{h} RGBA",
+                rgba.len()
+            ));
+        }
+        let overlays: Vec<&Drawn> = frame.layers.iter().filter(|l| l.space.overlay).collect();
+        let hd = self.begin(
+            canvas,
+            frame,
+            passes(&frame.effects) + 2 + layer_passes(&overlays),
+        );
+        let a = &self.targets.as_ref().expect("prepared").a;
+        canvas.queue.write_texture(
+            a.as_image_copy(),
+            rgba,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(w * 4),
+                rows_per_image: Some(h),
+            },
+            a.size(),
+        );
+        self.finish(canvas, assets, frame, hd, &overlays, target)?;
+        Ok(())
+    }
+
+    /// `frame` with its effects into `target`; its quads.
+    pub(crate) fn draw(
+        &mut self,
+        canvas: &mut GpuCanvas,
+        assets: &Assets,
+        frame: &Frame,
+        target: &wgpu::TextureView,
+    ) -> Result<Vec<Quad>, String> {
+        // A 3D frame drawn flat keeps its overlays over the scene's stack.
+        let (top, base): (Vec<&Drawn>, Vec<&Drawn>) = frame
+            .layers
+            .iter()
+            .partition(|l| frame.view.is_some() && l.space.overlay);
+        let h = self.begin(
+            canvas,
+            frame,
+            passes(&frame.effects) + 2 + layer_passes(&base) + layer_passes(&top),
+        );
+        let mut quads = self.composite(canvas, assets, frame, h, &base, true)?;
+        quads.extend(self.finish(canvas, assets, frame, h, &top, target)?);
+        Ok(quads)
+    }
+}
+
+fn encoder(c: &GpuCanvas) -> wgpu::CommandEncoder {
+    c.device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor::default())
+}
+
+/// Uniform slots compositing `layers` takes: each one's stack and its
+/// composite, and a run's.
+fn layer_passes(layers: &[&Drawn]) -> u64 {
+    layers.iter().map(|l| passes(&l.effects) + 2).sum::<u64>() + 2
 }
 
 /// Full-frame passes `stack` takes.

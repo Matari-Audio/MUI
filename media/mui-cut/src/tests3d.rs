@@ -360,6 +360,100 @@ fn a_3d_scene_runs_its_effects_on_the_3d_pass() {
     }
 }
 
+/// An overlay layer is drawn flat after the 3D pass and the scene's
+/// effects: a green caption over a red card greyed by levels stays green,
+/// in plain frames, beauty samples and over a Blender plate, and a tilted
+/// one is not foreshortened. Blender's description leaves it out.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn an_overlay_draws_flat_over_the_3d_pass_and_its_effects() {
+    let layers = |overlay: bool| {
+        format!(
+            r##"{{"id":"card","kind":"rect","x":320,"y":180,"width":300,"height":200,
+                "ry":20,"fill":"#e03020"}},
+               {{"id":"cap","kind":"rect","x":320,"y":180,"width":120,"height":60,
+                "ry":60,"fill":"#20d040","overlay":{overlay}}}"##
+        )
+    };
+    let mut p = scene3d(&layers(true));
+    p.scenes[0].effects = serde_json::from_str(r#"[{"type": "levels", "saturation": 0}]"#).unwrap();
+    assert!(
+        Project::load(&p.to_json()).unwrap() == p,
+        "overlay round-trips"
+    );
+    let mut under = p.clone();
+    under.scenes[0].layers[1].overlay = false;
+    let at = |x: usize, y: usize| (y * 640 + x) * 4;
+    let rgb = |px: &[u8], i: usize| [0, 1, 2].map(|k| i32::from(px[i + k]));
+    let green = |c: [i32; 3]| c[1] > c[0] + 80 && c[1] > c[2] + 80;
+    let grey = |c: [i32; 3]| (c[0] - c[1]).abs() <= 3 && (c[1] - c[2]).abs() <= 3 && c[0] > 20;
+    // `ry` 60 would squeeze it to half its width in 3D: flat, it spans
+    // x 260..380.
+    let edge = at(372, 180);
+    for engine in [Engine::Classic, Engine::Sparse] {
+        let Some(mut g) = offline(&p, engine) else {
+            return;
+        };
+        let f = eval(&p, &p.scenes[0], 0.);
+        for beauty in [false, true] {
+            g.beauty = beauty;
+            let px = frame(&mut g, &vec![f.clone(); if beauty { 4 } else { 1 }]);
+            assert!(g.canvas.notice().is_empty(), "{}", g.canvas.notice());
+            assert!(
+                green(rgb(&px, at(320, 180))),
+                "{engine:?} {beauty}: {:?}",
+                rgb(&px, at(320, 180))
+            );
+            assert!(
+                green(rgb(&px, edge)),
+                "{engine:?} {beauty}: flat {:?}",
+                rgb(&px, edge)
+            );
+            assert!(
+                grey(rgb(&px, at(200, 180))),
+                "{engine:?} {beauty}: card {:?}",
+                rgb(&px, at(200, 180))
+            );
+        }
+        g.beauty = false;
+        // Not an overlay, the caption is a slab the effect greys.
+        let px = frame(&mut g, &[eval(&under, &under.scenes[0], 0.)]);
+        assert!(
+            grey(rgb(&px, at(320, 180))),
+            "{engine:?}: {:?}",
+            rgb(&px, at(320, 180))
+        );
+        // Over a Blender frame: a blue plate, greyed, the caption on it.
+        let plate: Vec<u8> = [40u8, 60, 220, 255].repeat(640 * 360);
+        let px = match g.push_plate(&f, &plate).unwrap() {
+            Some(px) => px,
+            None => g.finish().unwrap().pop().unwrap(),
+        };
+        assert!(
+            green(rgb(&px, at(320, 180))),
+            "{engine:?} plate: {:?}",
+            rgb(&px, at(320, 180))
+        );
+        assert!(
+            grey(rgb(&px, at(40, 40))),
+            "{engine:?} plate: {:?}",
+            rgb(&px, at(40, 40))
+        );
+    }
+    let o = crate::blender::Options::new(None, None, 1, p.size).unwrap();
+    let (desc, _) = crate::blender::describe(
+        &p,
+        &p.scenes[0],
+        &[0.],
+        &Assets::default(),
+        std::path::Path::new("."),
+        &o,
+    )
+    .unwrap();
+    let ids: Vec<&str> = desc.layers.iter().map(|l| l.id.as_str()).collect();
+    assert_eq!(ids, ["card"], "Blender leaves the overlay to mui-cut");
+}
+
 #[test]
 fn a_material_round_trips_keys_binds_and_fits_the_schema() {
     let layer = |roughness: &str| {

@@ -131,9 +131,9 @@ impl GpuCanvas {
         }
         if let Some(view) = &frame.view {
             if self.three_d {
-                // The scene's stack runs on the 3D pass's output. Layer
-                // stacks do not: a layer is a slab textured from the atlas.
-                let drawn = if frame.effects.is_empty() {
+                // The scene's stack runs on the 3D pass's output, then the
+                // overlay layers go over it flat.
+                let drawn = if frame.effects.is_empty() && !frame.has_overlays() {
                     self.draw_3d(assets, frame, view, target)
                 } else {
                     self.with_fx(|fx, canvas| fx.draw_3d(canvas, assets, frame, view, target))
@@ -157,15 +157,16 @@ impl GpuCanvas {
     }
 
     /// `frame`'s scene effects over `rgba`, a straight-RGBA picture at
-    /// [`GpuCanvas::size`] rendered elsewhere (a Blender frame), into
-    /// `target`. Submits its own work.
+    /// [`GpuCanvas::size`] rendered elsewhere (a Blender frame), and its
+    /// overlay layers over that, into `target`. Submits its own work.
     pub fn draw_plate(
         &mut self,
+        assets: &Assets,
         frame: &Frame,
         rgba: &[u8],
         target: &wgpu::TextureView,
     ) -> Result<(), String> {
-        self.with_fx(|fx, canvas| fx.plate(canvas, frame, rgba, target))
+        self.with_fx(|fx, canvas| fx.plate(canvas, assets, frame, rgba, target))
     }
 
     /// `f` with the effect passes, made the first time.
@@ -552,7 +553,8 @@ mod offline {
             rgba: &[u8],
         ) -> Result<Option<Vec<u8>>, String> {
             let done = self.make_room()?;
-            self.shutter.expose_plate(&mut self.canvas, frame, rgba)?;
+            self.shutter
+                .expose_plate(&mut self.canvas, &self.assets, frame, rgba)?;
             self.read_back(done)
         }
 

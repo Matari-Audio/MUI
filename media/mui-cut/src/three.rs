@@ -229,6 +229,8 @@ pub struct Space {
     pub edge: Rgba,
     pub cast_shadows: bool,
     pub receive_shadows: bool,
+    /// Drawn flat over the 3D pass (see [`crate::Layer::overlay`]).
+    pub overlay: bool,
     pub distance: f64,
     pub fov: f64,
     pub dolly: f64,
@@ -253,6 +255,7 @@ impl Default for Space {
             edge: Rgba([40, 41, 50, 255]),
             cast_shadows: true,
             receive_shadows: true,
+            overlay: false,
             distance: 0.,
             fov: 40.,
             dolly: 0.,

@@ -387,6 +387,21 @@ try {
   if (cpu) check(!greyed, `the CPU draws the 3D card without effects (${fx3})`);
   else check(greyed, `a 3D scene's effect runs on ${backend} (${fx3})`);
   await shot('editor-3d-effect.png');
+  // An overlay layer goes over the 3D shot after its effects: a green
+  // caption mid-frame stays green over the greyed card everywhere, and
+  // unticked in the inspector it is a 3D layer the effect greys.
+  const capped = JSON.parse(redCard(true));
+  capped.scenes[0].layers.push({ id: 'cap', kind: 'rect', x: 640, y: 360, width: 240, height: 120, fill: '#20d040', overlay: true });
+  writeFileSync(file, JSON.stringify(capped)); await sleep(1500);
+  const cap = await mid();
+  check(cap[1] > cap[0] + 80, `the overlay is drawn after the 3D pass and its effects (${cap})`);
+  await click('#layers [data-layer="cap"]');
+  for (let i = 0; i < 50 && !(await js(`!!document.querySelector('[data-overlay]')`)); i++) await sleep(100);
+  await js(`(c => { c.checked = false; c.dispatchEvent(new Event('change')); })(document.querySelector('[data-overlay]'))`); await sleep(1500);
+  check(!read().scenes[0].layers[1].overlay, 'unticking overlay writes it to the file');
+  const flat = await mid();
+  if (!cpu) check(Math.abs(flat[0] - flat[1]) <= 3, `a 3D layer goes under the effect (${flat})`);
+  await shot('editor-3d-overlay.png');
   // Variables and variants: an agent writes a project with them; the header
   // previews a tall variant, the panel edits that variant's value, and the
   // file keeps its bindings.

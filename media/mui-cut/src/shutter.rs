@@ -307,10 +307,11 @@ impl Shutter {
     }
 
     /// [`Shutter::expose`] of one picture rendered elsewhere, `frame`'s
-    /// scene effects over it. Submits.
+    /// scene effects and overlays over it. Submits.
     pub fn expose_plate(
         &self,
         canvas: &mut GpuCanvas,
+        assets: &Assets,
         frame: &Frame,
         rgba: &[u8],
     ) -> Result<(), String> {
@@ -320,7 +321,7 @@ impl Shutter {
             0,
             &[1f32, 0., 0., 0.].map(f32::to_le_bytes).concat(),
         );
-        canvas.draw_plate(frame, rgba, &self.sub)?;
+        canvas.draw_plate(assets, frame, rgba, &self.sub)?;
         let mut enc = canvas
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());

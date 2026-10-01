@@ -331,7 +331,8 @@ fn fields(raw: &Value, p: &Project, out: &mut Issues) {
                         k.as_str(),
                         "id" | "name" | "parent" | "kind" | "animators" | "deformers"
                     )
-                    && !(three && matches!(k.as_str(), "cast_shadows" | "receive_shadows"))
+                    && !(three
+                        && matches!(k.as_str(), "cast_shadows" | "receive_shadows" | "overlay"))
                     && !(k == "material" && used.iter().any(|u| u.starts_with("material.")))
                     // Every kind runs its own effect stack in 2D; 3D skips it.
                     && !(!three && k == "effects")

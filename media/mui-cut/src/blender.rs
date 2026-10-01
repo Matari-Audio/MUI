@@ -801,11 +801,16 @@ fn slabs(assets: &Assets, f: &Frame) -> Vec<(String, Drawn)> {
     let mut seen: HashMap<String, usize> = HashMap::new();
     f.layers
         .iter()
+        // Overlays go over Blender's frame flat, as over the stage's.
         .filter(|l| {
-            !matches!(
-                l.kind,
-                Kind::Camera { .. } | Kind::Light { .. } | Kind::Model { .. } | Kind::Audio { .. }
-            )
+            !l.space.overlay
+                && !matches!(
+                    l.kind,
+                    Kind::Camera { .. }
+                        | Kind::Light { .. }
+                        | Kind::Model { .. }
+                        | Kind::Audio { .. }
+                )
         })
         .flat_map(|l| assets.slabs(l))
         .map(|d| {

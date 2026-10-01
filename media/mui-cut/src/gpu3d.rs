@@ -88,8 +88,13 @@ impl Space {
     ) -> Result<Vec<Quad>, String> {
         let [fw, fh] = frame.size.map(f64::from);
         let out = f64::from(canvas.size()[1]) / fh;
-        // A plugin layer is a slab per part.
-        let layers: Vec<Drawn> = frame.layers.iter().flat_map(|l| assets.slabs(l)).collect();
+        // A plugin layer is a slab per part; overlays are drawn flat after.
+        let layers: Vec<Drawn> = frame
+            .layers
+            .iter()
+            .filter(|l| !l.space.overlay)
+            .flat_map(|l| assets.slabs(l))
+            .collect();
         let w = |p: [f64; 3]| crate::three::world(frame.size, p);
         let wd = |d: [f64; 3]| [d[0] as f32, -d[1] as f32, -d[2] as f32];
 
