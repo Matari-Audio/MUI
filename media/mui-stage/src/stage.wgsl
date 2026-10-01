@@ -864,6 +864,7 @@ const SSR_REACH: f32 = 4000.;
 // crossing; -1 if it leaves the frame or the reach first.
 fn march(p: vec3f, r: vec3f, jitter: f32, reach: f32) -> f32 {
     var prev = 0.;
+    var front = true;
     for (var k = 0; k < SSR_STEPS; k++) {
         var s = (f32(k) + jitter) / f32(SSR_STEPS);
         s = s * s;
@@ -874,8 +875,11 @@ fn march(p: vec3f, r: vec3f, jitter: f32, reach: f32) -> f32 {
         let ray = length(q - g.eye.xyz);
         let surf = scene_dist(uv.xy);
         let behind = ray - surf;
-        let thick = max(30., (t - prev) * 2.);
-        if (behind > 0.5 + surf * 0.002 && behind < thick && surf < 50000.) {
+        // It went behind, from in front: however far a step overshoots a
+        // surface seen edge-on. Behind something already (passing behind
+        // a ball), it hits nothing until it is out in front again.
+        let past = behind > 0.5 + surf * 0.002;
+        if (past && front && surf < 50000.) {
             var lo = prev;
             var hi = t;
             for (var j = 0; j < 6; j++) {
@@ -892,8 +896,17 @@ fn march(p: vec3f, r: vec3f, jitter: f32, reach: f32) -> f32 {
             if (gap < max(3., (t - prev) * 0.125) + surf * 0.002) { return hi; }
         }
         prev = t;
+        front = !past;
     }
     return -1.;
+}
+// Where a march's steps fall at pixel `px`: in the middle of each, so
+// neighbours agree and a reflection's outline is a clean line; a beauty
+// sample offsets them per pixel and per sample, which the mean smooths.
+fn march_jitter(px: vec2f) -> f32 {
+    if (!beauty()) { return 0.5; }
+    let ign = fract(52.982918 * fract(dot(px, vec2f(0.06711056, 0.00583715))));
+    return fract(ign + rand2(px).x);
 }
 // The furthest a ray from `p` along `r` is traced: the reach, or short of
 // the eye's near side.
@@ -956,8 +969,7 @@ fn reflection(p: vec3f, n: vec3f, r: vec3f, rough: f32, jitter: f32) -> vec3f {
     if (beauty() && rough > 0.02) { m = ggx_normal(n, rough, u); }
     var r = reflect(ray, m);
     if (dot(r, n) <= 0.) { r = reflect(ray, n); }
-    let ign = fract(52.982918 * fract(dot(vec2f(px), vec2f(0.06711056, 0.00583715))));
-    let c = reflection(p, n, r, rough, select(ign, fract(ign + u.x), beauty()));
+    let c = reflection(p, n, r, rough, march_jitter(vec2f(px)));
     return vec4f(s.rgb * (c - spec_fallback(r, rough)), 0.);
 }
 
@@ -1042,8 +1054,7 @@ fn glass(p: vec3f, n: vec3f, base: vec3f, px: vec2f) -> vec3f {
     }
     // Opaque, drawn after glass it stands in front of: nothing to see through.
     if (trans <= 0.) { return (1. - fr) * body + fr * spec_fallback(r, rough) + glint; }
-    let ign = fract(52.982918 * fract(dot(px, vec2f(0.06711056, 0.00583715))));
-    let jit = select(ign, fract(ign + u.x), beauty());
+    let jit = march_jitter(px);
     let refl = reflection(p, n, r, rough, jit);
     // Beauty: one wavelength per band, anywhere in it; else its middle.
     let w = select(vec3f(0.5), fract(vec3f(u.x, u.y, u.x + u.y) + g.jitter.zwz), beauty());

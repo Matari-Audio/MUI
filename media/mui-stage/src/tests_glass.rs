@@ -480,3 +480,102 @@ fn a_label_in_front_of_frosted_glass_leaves_no_halo() {
         "beside the label {near}, far from it {far}"
     );
 }
+
+/// A sphere `r` across, smooth-shaded, as `Stage::mesh` takes it.
+fn sphere(r: f32) -> (Vec<[f32; 6]>, Vec<u32>) {
+    let (rings, segs) = (48u32, 96u32);
+    let mut v = Vec::new();
+    for i in 0..=rings {
+        let th = std::f32::consts::PI * i as f32 / rings as f32;
+        for j in 0..=segs {
+            let ph = std::f32::consts::TAU * j as f32 / segs as f32;
+            let n = [th.sin() * ph.cos(), th.cos(), th.sin() * ph.sin()];
+            v.push([n[0] * r, n[1] * r, n[2] * r, n[0], n[1], n[2]]);
+        }
+    }
+    let mut idx = Vec::new();
+    for i in 0..rings {
+        for j in 0..segs {
+            let a = i * (segs + 1) + j;
+            let b = a + segs + 1;
+            idx.extend([a, b, a + 1, a + 1, b, b + 1]);
+        }
+    }
+    (v, idx)
+}
+
+/// A polished metal ball over a plain orange floor, seen from just above:
+/// its lower half mirrors the floor. A smooth ball's reflection of a plain
+/// floor is smooth, out to the clean line where the floor it would see is
+/// hidden behind the ball; a march that hits on one pixel and misses on the
+/// next speckles it, which the mean squared Laplacian measures.
+#[test]
+fn a_metal_balls_reflection_is_smooth() {
+    const W: usize = 320;
+    const H: usize = 240;
+    let Some(mut stage) = stage(W as u32, H as u32) else {
+        return;
+    };
+    solid(&mut stage, "orange", 64., Color::srgb(1., 0.4, 0.1));
+    let (v, idx) = sphere(60.);
+    stage.mesh("ball", &v, &idx);
+    let camera = Camera::front(H as f32, 30.).orbit(0., 10.);
+    let shot = Shot {
+        planes: vec![
+            Plane::new("orange", 2000., 2000.)
+                .rotate(-90., 0., 0.)
+                .at(0., -80., 0.),
+        ],
+        models: vec![Model {
+            mesh: "ball".into(),
+            transform: Mat4::IDENTITY,
+            color: [1., 1., 1., 1.],
+            material: Material {
+                metallic: 1.,
+                roughness: 0.05,
+                ..Material::SLAB
+            },
+            cast: false,
+            receive: false,
+            maps: Default::default(),
+        }],
+        lights: vec![Light {
+            color: [0.2; 3],
+            ..Light::new(LightKind::Ambient)
+        }],
+        clear: Some([0.; 3]),
+        post: Post::NONE,
+        ..Shot::new(camera)
+    };
+    let one = stage.render(0., 0., 1, &|_| shot.clone()).unwrap();
+    // A beauty frame jitters each sample's march; the mean is as smooth.
+    let mean = stage.beauty(0., 0., 16, &|_| shot.clone()).unwrap();
+    // The ball's lower half, inside its rim.
+    let [cx, cy, _] = camera.view_proj(W as f32 / H as f32).project([0., 0., 0.]);
+    let (cx, cy) = (
+        ((cx + 1.) * 0.5 * W as f32) as usize,
+        ((1. - cy) * 0.5 * H as f32) as usize,
+    );
+    for f in [one, mean] {
+        let px = |x: usize, y: usize| f.rgba[(y * W + x) * 4];
+        let mean = |c: usize| {
+            let n = (cy + 44..cy + 52).flat_map(|y| (cx - 10..cx + 10).map(move |x| (x, y)));
+            n.map(|(x, y)| f.rgba[(y * W + x) * 4 + c]).sum::<f32>() / 160.
+        };
+        let (red, blue) = (mean(0), mean(2));
+        assert!(
+            red > 2. * blue,
+            "the ball mirrors the orange floor: {red} {blue}"
+        );
+        let (mut e, mut k) = (0f32, 0f32);
+        for y in cy + 5..cy + 55 {
+            for x in cx - 40..cx + 40 {
+                let l = 4. * px(x, y) - px(x - 1, y) - px(x + 1, y) - px(x, y - 1) - px(x, y + 1);
+                e += l * l;
+                k += 1.;
+            }
+        }
+        // A speckled march measures 9e-5 here, a clean one under 2e-5.
+        assert!(e / k < 4e-5, "speckle energy {}", e / k);
+    }
+}
