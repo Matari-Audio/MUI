@@ -572,9 +572,12 @@ parts you can move, key, highlight and explode.
   the viewport) to inspect, drag and key it; nested parts sit indented
   under their panel. **Explode / collapse** keys `explode` at the
   playhead, and the inspector sets `explode levels` and `level stagger`.
-  **Interact** (2D scenes) turns viewport clicks into the UI's pointer:
-  a drag keys `pointer_x`/`pointer_y`/`pointer_down` from the playhead,
-  so it turns the knob instead of moving the part.
+  **Interact** turns viewport clicks into the UI's pointer: a drag keys
+  `pointer_x`/`pointer_y`/`pointer_down` from the playhead, so it turns
+  the knob instead of moving the part. In a 3D scene the pointer's ray
+  from the camera (the orbit preview's, when on) meets the nearest part
+  slab as drawn, tilted, parented and exploded (`pick` on the WASM `Cut`,
+  `src/pick.rs`), and a drag stays on that slab's plane past its edge.
 - MCP `plugin_parts` (and `cutParts(layer)` in the editor, `plugin_parts`
   on the WASM `Cut`) returns the part tree: each part's `id` (its path),
   `surface`, `level`, `frame`, `rects`, `thumb` image, `motion` and
@@ -957,7 +960,7 @@ same reason.
 - Plugin layers: the web editor shows the captures `serve` made, not the
   plugin running in WASM. A new state (a param or pointer edit) appears
   once `serve` has captured it, which takes a few seconds for a Cargo
-  source. Interact needs a 2D scene; in 3D, clicks move parts. The adapter runs natively, so a
+  source. The adapter runs natively, so a
   plugin must build as a bridge live adapter. A 3D scene composites
   a translucent capture in linear light, so its soft edges read slightly
   brighter than in 2D.

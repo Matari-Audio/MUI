@@ -1148,6 +1148,14 @@ const unmap = ([a, b, c, d], [x, y]) => { const k = a * d - b * c || 1; return [
 // A project point in a plugin's own pixels, through the quad it hit (a
 // moved part maps back to where the UI has it).
 const toUi = (q, [x, y]) => unmap(q.ui, [x - q.ui[4], y - q.ui[5]]);
+// In 3D: the plugin layer and UI point the pointer's ray meets, through
+// the camera the viewport shows (`only`: stay on the slab a drag began on).
+function pick3d([x, y], only) {
+  if (scene()?.mode !== '3d') return null;
+  const j = cut.pick(si, t, x, y, orbit.on ? [orbit.yaw, orbit.pitch, orbit.zoom] : undefined, only);
+  return j ? JSON.parse(j) : null;
+}
+globalThis.cutPick = (x, y) => pick3d([x, y]);
 // Interact: the pointer, keyed as the plugin's `pointer_*` (hold keys) so
 // the adapter turns the knob or drags the slider under it. Down at the
 // playhead, moves a frame on (at least), up a frame after the last move.
@@ -1169,12 +1177,14 @@ over.onpointerdown = e => {
   if (orbit.on) { orbit.from = [e.clientX, e.clientY, orbit.yaw, orbit.pitch]; over.setPointerCapture(e.pointerId); return; }
   const p = toProject(e), id = hit(p);
   if (interact) {
+    // A 2D quad maps to the UI itself; a 3D slab is found by its ray.
     const q = [...quads].reverse().find(q => q.ui && inside(p, q.pts));
-    const l = q && scene().layers.find(l => l.id === q.id.split('#')[0]);
+    const h = q ? null : pick3d(p);
+    const l = scene().layers.find(l => l.id === (q ? q.id.split('#')[0] : h?.layer));
     if (!l || l.kind !== 'plugin') return;
     const t0 = snap(t);
-    begin(); pointerKeys(l, t0, toUi(q, p), 1); changed();
-    drag = { interact: true, l, q, t0, last: t0 };
+    begin(); pointerKeys(l, t0, q ? toUi(q, p) : h.ui, 1); changed();
+    drag = { interact: true, l, q, slab: h?.slab, ui: h?.ui, t0, last: t0 };
     over.setPointerCapture(e.pointerId);
     return;
   }
@@ -1210,7 +1220,8 @@ over.onpointermove = e => {
   }
   if (drag.interact) {
     drag.last = Math.max(snap(t), drag.t0 + 1 / R.fps);
-    pointerKeys(drag.l, drag.last, toUi(drag.q, p));
+    if (!drag.q) drag.ui = pick3d(p, drag.slab)?.ui ?? drag.ui;
+    pointerKeys(drag.l, drag.last, drag.q ? toUi(drag.q, p) : drag.ui);
     changed(); return;
   }
   const [dx, dy] = unmap(drag.lin, [p[0] - drag.p[0], p[1] - drag.p[1]]);
