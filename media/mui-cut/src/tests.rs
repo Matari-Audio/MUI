@@ -933,6 +933,34 @@ fn render_settings_load_check_and_layer() {
     }
 }
 
+#[test]
+fn ray_traced_glass_is_asked_for_by_name_with_a_sample_count() {
+    let load = |render: &str| {
+        Project::load(&format!(
+            r#"{{"size":[64,64],"fps":30,"scenes":[],"render":{render}}}"#
+        ))
+    };
+    let rt = |render: &str| load(render).unwrap().render.unwrap().rt_glass();
+    assert_eq!(rt(r#"{"glass":"rt"}"#), Some(16));
+    assert_eq!(rt(r#"{"glass":"rt","glass_samples":64}"#), Some(64));
+    assert_eq!(rt(r#"{"glass":"raster","glass_samples":64}"#), None);
+    assert_eq!(rt("{}"), None);
+    // A flag over the file: `--glass rt` turns it on, the file's count stays.
+    let file = load(r#"{"glass_samples":8}"#).unwrap().render.unwrap();
+    let flags = Render {
+        glass: Some(Glass::Rt),
+        ..Render::default()
+    };
+    assert_eq!(file.with(&flags).rt_glass(), Some(8));
+    for bad in [
+        r#"{"glass":"cycles"}"#,
+        r#"{"glass_samples":0}"#,
+        r#"{"glass_samples":5000}"#,
+    ] {
+        assert!(load(bad).is_err(), "accepted {bad}");
+    }
+}
+
 const VARIANTS: &str = include_str!("../examples/variants.cut.json");
 
 fn drawn<'a>(f: &'a Frame, id: &str) -> &'a Drawn {

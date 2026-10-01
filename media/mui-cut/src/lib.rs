@@ -123,7 +123,9 @@ pub struct Render {
 }
 
 /// How 3D glass is drawn.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum Glass {
     /// Screen-space refraction of the frame, and the sky by direction.

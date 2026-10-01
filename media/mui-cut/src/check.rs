@@ -107,6 +107,26 @@ pub fn check(src: &str, r: &mut Renderer, exists: &dyn Fn(&str) -> bool) -> Vec<
     out.done()
 }
 
+/// A note when `src` asks for ray-traced glass and `ray_queries` says
+/// this machine cannot trace it: the render will draw raster glass.
+pub fn rt_glass(src: &str, ray_queries: Result<(), String>) -> Option<Issue> {
+    let p = Project::load(src).ok()?;
+    p.render.as_ref()?.rt_glass()?;
+    let why = ray_queries.err()?;
+    Some(Issue {
+        severity: Severity::Info,
+        code: "rt_glass_unavailable",
+        path: "render.glass".into(),
+        scene: None,
+        layer: None,
+        t: None,
+        message: format!(
+            "ray-traced glass was asked for, but {why}; renders here draw raster glass"
+        ),
+        fix: Some("render on a GPU with hardware ray queries (Vulkan, Metal or DX12)".into()),
+    })
+}
+
 /// Only the field lints (and a load error): what is cheap enough to run
 /// on every edit, and what an edit must not introduce, since a save drops
 /// unknown fields.
@@ -1048,6 +1068,24 @@ mod tests {
             r.add_asset(f, &bytes).unwrap();
         }
         check(src, &mut r, &|_| true)
+    }
+
+    #[test]
+    fn ray_traced_glass_without_ray_queries_is_noted() {
+        let rt = r#"{"size":[64,64],"fps":30,"render":{"glass":"rt"},"scenes":[]}"#;
+        let raster = r#"{"size":[64,64],"fps":30,"scenes":[]}"#;
+        let none = || Err("no adapter has ray queries".to_owned());
+        let note = rt_glass(rt, none()).expect("a note");
+        assert_eq!(
+            (note.severity, note.code, &*note.path),
+            (Severity::Info, "rt_glass_unavailable", "render.glass")
+        );
+        assert!(
+            note.message.contains("no adapter has ray queries"),
+            "{note}"
+        );
+        assert_eq!(rt_glass(rt, Ok(())), None);
+        assert_eq!(rt_glass(raster, none()), None);
     }
 
     #[test]

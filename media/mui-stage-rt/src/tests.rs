@@ -19,7 +19,13 @@ fn rig() -> Option<(Stage, Rt)> {
 
 /// A layer `size` pixels from `f(x, y)`, painted into the stage and handed
 /// to the tracer.
-fn paint(stage: &mut Stage, rt: &mut Rt, id: &str, size: [u32; 2], f: impl Fn(u32, u32) -> [u8; 4]) {
+fn paint(
+    stage: &mut Stage,
+    rt: &mut Rt,
+    id: &str,
+    size: [u32; 2],
+    f: impl Fn(u32, u32) -> [u8; 4],
+) {
     let tex = stage
         .layer_target(id, size, wgpu::TextureFormat::Rgba8Unorm, 1)
         .unwrap();
@@ -153,9 +159,15 @@ fn dispersion_splits_red_from_blue() {
     };
     let none = split(&mut rt, &mut stage, 0.);
     let some = split(&mut rt, &mut stage, 1.);
-    assert!(none.abs() < 0.25, "no dispersion, yet red and blue {none} px apart");
+    assert!(
+        none.abs() < 0.25,
+        "no dispersion, yet red and blue {none} px apart"
+    );
     // Abbe 20: the bands' indices differ by about 0.025, about 2 px here.
-    assert!(some.abs() > 1., "dispersion 1 split red and blue only {some} px");
+    assert!(
+        some.abs() > 1.,
+        "dispersion 1 split red and blue only {some} px"
+    );
 }
 
 /// A right-angle prism: its leg faces the camera at z = 0, its hypotenuse
@@ -198,7 +210,9 @@ fn total_internal_reflection_turns_light_in_a_prism() {
     rt.mesh("prism", &v, &ix);
     stage.mesh("prism", &v, &ix);
     // Red off to the right, facing back at the prism; blue far behind.
-    let red = Plane::new("red", 4000., 4000.).at(1500., 0., -120.).rotate(0., -90., 0.);
+    let red = Plane::new("red", 4000., 4000.)
+        .at(1500., 0., -120.)
+        .rotate(0., -90., 0.);
     let blue = Plane::new("blue", 20000., 20000.).at(0., 0., -3000.);
     let mut at = |ior: f32| {
         let mut s = shot(vec![red.clone(), blue.clone()]);
@@ -280,7 +294,10 @@ fn the_mean_converges_as_samples_come_in() {
     let e = [1, 16, 256].map(|n| err(&mut rt, n));
     // Monte Carlo halves the error per four times the samples; the even
     // sequences do better.
-    assert!(e[1] < e[0] * 0.35 && e[2] < e[1] * 0.35, "error does not fall with samples: {e:?}");
+    assert!(
+        e[1] < e[0] * 0.35 && e[2] < e[1] * 0.35,
+        "error does not fall with samples: {e:?}"
+    );
     // The filter cleans the first samples: one filtered sample is nearer
     // the truth than one plain one.
     rt.denoise(true);
@@ -307,7 +324,10 @@ fn an_adapter_without_ray_queries_falls_back() {
     };
     assert!(!supported(&adapter));
     // The descriptor asks for nothing it cannot have.
-    assert_eq!(device_descriptor(&adapter).required_features, wgpu::Features::empty());
+    assert_eq!(
+        device_descriptor(&adapter).required_features,
+        wgpu::Features::empty()
+    );
     let (device, queue) =
         pollster::block_on(adapter.request_device(&device_descriptor(&adapter))).unwrap();
     assert!(matches!(
@@ -322,7 +342,6 @@ fn the_shaders_have_the_stage_sky() {
     assert!(tracer.contains("fn sky_seen(") && !tracer.contains("{{SKY}}"));
     assert!(filter.contains("fn denoise(") && composite.contains("fn fs_composite("));
 }
-
 
 #[test]
 fn light_leaves_a_slab_by_its_back_face_wherever_the_print_is() {

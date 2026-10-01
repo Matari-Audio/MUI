@@ -497,7 +497,11 @@ impl Rt {
             self.device
                 .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some(label),
-                    contents: if contents.is_empty() { &[0; 16] } else { contents },
+                    contents: if contents.is_empty() {
+                        &[0; 16]
+                    } else {
+                        contents
+                    },
                     usage: wgpu::BufferUsages::STORAGE,
                 })
         };
@@ -521,7 +525,11 @@ impl Rt {
         if let Some(f) = shot.floor {
             // The stage draws its floor three radii out; so does this.
             let r = f.radius.max(1.) * 3.;
-            if self.floor.as_ref().is_none_or(|s| s.tris.vertices[1][0] != r) {
+            if self
+                .floor
+                .as_ref()
+                .is_none_or(|s| s.tris.vertices[1][0] != r)
+            {
                 let shape = self.shape(geom::floor(0., r), "mui-stage-rt floor");
                 self.floor = Some(shape);
             }
@@ -545,7 +553,11 @@ impl Rt {
                 },
             };
             let m = &p.material;
-            let thick = if m.thickness > 0. { m.thickness } else { p.depth } * p.scale.abs();
+            let thick = if m.thickness > 0. {
+                m.thickness
+            } else {
+                p.depth
+            } * p.scale.abs();
             let s = &self.slabs[si].shape;
             insts.push(Inst {
                 kind: [0, slot, s.first(2), s.vbase],
@@ -553,7 +565,12 @@ impl Rt {
                 size: [p.size[0], p.size[1], p.depth, p.glow],
                 edge: [p.edge[0], p.edge[1], p.edge[2], p.opacity.clamp(0., 1.)],
                 mat: material(m),
-                mat2: [thick, m.dispersion.max(0.), m.print.clamp(0., 1.), m.bevel.max(0.)],
+                mat2: [
+                    thick,
+                    m.dispersion.max(0.),
+                    m.print.clamp(0., 1.),
+                    m.bevel.max(0.),
+                ],
                 tint: tint(m, p.receive),
             });
             placed.push((si, p.model()));
@@ -571,7 +588,12 @@ impl Rt {
                 size: [0., 0., 0., 1.],
                 edge: [c[0], c[1], c[2], c[3].clamp(0., 1.)],
                 mat: material(m),
-                mat2: [m.thickness.max(0.), m.dispersion.max(0.), m.print.clamp(0., 1.), 0.],
+                mat2: [
+                    m.thickness.max(0.),
+                    m.dispersion.max(0.),
+                    m.print.clamp(0., 1.),
+                    0.,
+                ],
                 tint: tint(m, model.receive),
             });
             models.push((&model.mesh, model.transform));
@@ -726,7 +748,12 @@ impl Rt {
     /// The glass traced so far over `target` (a frame the stage drew into
     /// a `format` view the tracer's size), encoded as the stage encodes
     /// with `shot`'s post: exposure, vignette and tonemap.
-    pub fn composite(&mut self, shot: &Shot, target: &wgpu::TextureView, format: wgpu::TextureFormat) {
+    pub fn composite(
+        &mut self,
+        shot: &Shot,
+        target: &wgpu::TextureView,
+        format: wgpu::TextureFormat,
+    ) {
         let p = &shot.post;
         self.queue.write_buffer(
             &self.post,
@@ -894,7 +921,11 @@ impl Rt {
             .map_err(gpu)?;
         let stride = self.width as usize * 4;
         let mut rgba = Vec::with_capacity(stride * self.height as usize);
-        for line in slice.get_mapped_range().map_err(gpu)?.chunks_exact(row as usize) {
+        for line in slice
+            .get_mapped_range()
+            .map_err(gpu)?
+            .chunks_exact(row as usize)
+        {
             rgba.extend(line[..stride].iter().map(|&b| f32::from(b) / 255.));
         }
         readback.unmap();
@@ -903,6 +934,16 @@ impl Rt {
             height: self.height,
             rgba,
         })
+    }
+
+    /// The device it traces on, which the stage shares.
+    pub fn device(&self) -> &wgpu::Device {
+        &self.device
+    }
+
+    /// The device's queue: for writing layers the stage hands over.
+    pub fn queue(&self) -> &wgpu::Queue {
+        &self.queue
     }
 
     /// Wait for the GPU: for timing a pass.
@@ -1057,7 +1098,11 @@ fn band_norm() -> [f32; 3] {
 
 fn normalize(v: [f32; 3]) -> [f32; 3] {
     let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
-    if l > 0. { v.map(|c| c / l) } else { [0., -1., 0.] }
+    if l > 0. {
+        v.map(|c| c / l)
+    } else {
+        [0., -1., 0.]
+    }
 }
 
 /// The three shader modules: the tracer with the stage's sky spliced in,

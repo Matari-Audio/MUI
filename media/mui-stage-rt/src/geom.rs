@@ -26,9 +26,8 @@ impl Tris {
 /// draws it. A card (no depth) is its front face alone.
 pub(crate) fn plane(p: &Plane) -> Tris {
     let [w, h] = p.size.map(|v| v * 0.5);
-    let quad = |z: f32, n: f32| {
-        [[-w, -h], [w, -h], [w, h], [-w, h]].map(|[x, y]| [x, y, z, 0., 0., n])
-    };
+    let quad =
+        |z: f32, n: f32| [[-w, -h], [w, -h], [w, h], [-w, h]].map(|[x, y]| [x, y, z, 0., 0., n]);
     let mut t = Tris::default();
     t.part(&quad(0., 1.), &[0, 1, 2, 0, 2, 3]);
     if p.depth > 0. {
@@ -68,7 +67,8 @@ fn walls(p: &Plane) -> Vec<[f32; 6]> {
         &**o
     } else {
         rect = Path::polyline(
-            [(0., 0.), (w, 0.), (w, h), (0., h)].map(|(x, y)| Point::new(f64::from(x), f64::from(y))),
+            [(0., 0.), (w, 0.), (w, h), (0., h)]
+                .map(|(x, y)| Point::new(f64::from(x), f64::from(y))),
             true,
         );
         &rect
@@ -161,7 +161,10 @@ mod tests {
         assert_eq!(walls.len(), 4 * 6);
         // Square corners keep their crease: every wall normal is an axis.
         for v in walls {
-            assert!((v[3].abs() - 1.).abs() < 1e-5 || (v[4].abs() - 1.).abs() < 1e-5, "{v:?}");
+            assert!(
+                (v[3].abs() - 1.).abs() < 1e-5 || (v[4].abs() - 1.).abs() < 1e-5,
+                "{v:?}"
+            );
         }
         // Outward: the right wall's normal points +x.
         assert!(walls.iter().any(|v| v[0] > 49. && v[3] > 0.99));
@@ -176,7 +179,11 @@ mod tests {
             }),
             true,
         );
-        let t = plane(&Plane::new("a", 100., 100.).depth(10.).outline(std::sync::Arc::new(circle)));
+        let t = plane(
+            &Plane::new("a", 100., 100.)
+                .depth(10.)
+                .outline(std::sync::Arc::new(circle)),
+        );
         // On a circle the normal at each vertex is its radius.
         for v in &t.vertices[8..] {
             let r = v[0].hypot(v[1]);
