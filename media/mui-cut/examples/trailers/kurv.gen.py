@@ -4,6 +4,7 @@ curves are generated here so the music and the motion share one beat grid.
 
     python3 kurv.gen.py [--fps N]   # then: mui-cut check kurv.cut.json
 """
+import os
 import json
 import sys
 from pathlib import Path
@@ -146,7 +147,9 @@ P_UNISON = "group-frame/0/osc/0/panel/unison/osc/0/unison"
 
 
 def lit(t0, t1):
-    return keys((t0 - 0.15, 0.0), (t0, 1.0), (t1, 1.0), (t1 + 0.3, 0.0))
+    # Out by the release: a control drops its pressed fill as it lets go,
+    # and a plate still lit behind it would flash through.
+    return keys((t0 - 0.15, 0.0), (t0, 1.0), (t1 - 0.12, 1.0), (t1, 0.0))
 
 
 GLASS_T = (5.3, 8.2)
@@ -157,9 +160,11 @@ kurv_parts = {
 }
 
 source = {"plugin": "../../../../../KURV", "features": ["process-lab"]}
+PRESET = os.environ.get("KURV_PRESET", "Arp/Pulse Step")
 common = {
     "kind": "plugin",
     "source": source,
+    "preset": f"../../../../../KURV/assets/presets/{PRESET}.kurvy",
     "notes": notes,
     "params": plugin_params(),
     "explode_levels": 4,
@@ -259,7 +264,9 @@ def glass():
     """The displays turn to glass through the explode: component layers of
     the same plugin (the same commands, so the same captures), silent."""
     fade = keys((GLASS_T[0], 0.0), (GLASS_T[0] + 0.4, 1.0), (GLASS_T[1] - 0.4, 1.0), (GLASS_T[1], 0.0))
-    lift = {"z": keys((GLASS_T[0], 0.0), (6.2, -140.0), (GLASS_T[1] - 0.3, -140.0), (GLASS_T[1], 0.0))}
+    # Always in front of what it copies: glass passing through the parts
+    # would swap them between the opaque and glass passes, a flash a frame.
+    lift = {"z": -140.0}
     clear = {"transmission": 0.96, "roughness": 0.03, "ior": 1.52, "dispersion": 0.7, "thickness": 14.0}
     frost = {"transmission": 0.92, "roughness": 0.38, "ior": 1.45, "thickness": 10.0}
     out = []

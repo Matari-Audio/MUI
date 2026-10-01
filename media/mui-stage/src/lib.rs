@@ -2071,7 +2071,9 @@ impl Stage {
         // over in 2D. ponytail: O(n²) over at most MAX_PLANES.
         let face = |p: &Plane| {
             let m = p.model().0;
-            let l = (m[8] * m[8] + m[9] * m[9] + m[10] * m[10]).sqrt().max(1e-12);
+            let l = (m[8] * m[8] + m[9] * m[9] + m[10] * m[10])
+                .sqrt()
+                .max(1e-12);
             let n = [m[8] / l, m[9] / l, m[10] / l];
             (n, n[0] * m[12] + n[1] * m[13] + n[2] * m[14])
         };
@@ -2086,7 +2088,8 @@ impl Stage {
                 let ((m, e), Some(c)) = (faces[j], boxes[j]) else {
                     continue;
                 };
-                let coplanar = n[0] * m[0] + n[1] * m[1] + n[2] * m[2] > 1. - 1e-5 && (d - e).abs() < 0.05;
+                let coplanar =
+                    n[0] * m[0] + n[1] * m[1] + n[2] * m[2] > 1. - 1e-5 && (d - e).abs() < 0.05;
                 let over = b[0] < c[2] && c[0] < b[2] && b[1] < c[3] && c[1] < b[3];
                 if coplanar && over {
                     lift[i] = lift[i].max(lift[j] + 1.);

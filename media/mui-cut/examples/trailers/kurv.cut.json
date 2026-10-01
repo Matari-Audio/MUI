@@ -510,6 +510,7 @@
               "process-lab"
             ]
           },
+          "preset": "../../../../../KURV/assets/presets/Arp/Pulse Step.kurvy",
           "notes": [
             {
               "t": 0.0,
@@ -1421,12 +1422,12 @@
                   "interp": "bezier"
                 },
                 {
-                  "t": 4.7,
+                  "t": 4.58,
                   "v": 1.0,
                   "interp": "bezier"
                 },
                 {
-                  "t": 5.0,
+                  "t": 4.7,
                   "v": 0.0,
                   "interp": "bezier"
                 }
@@ -1445,12 +1446,12 @@
                   "interp": "bezier"
                 },
                 {
-                  "t": 5.35,
+                  "t": 5.23,
                   "v": 1.0,
                   "interp": "bezier"
                 },
                 {
-                  "t": 5.65,
+                  "t": 5.35,
                   "v": 0.0,
                   "interp": "bezier"
                 }
@@ -1467,6 +1468,7 @@
               "process-lab"
             ]
           },
+          "preset": "../../../../../KURV/assets/presets/Arp/Pulse Step.kurvy",
           "notes": [
             {
               "t": 0.0,
@@ -2336,28 +2338,7 @@
           ],
           "parts": {
             "group-frame/0/osc/0/panel/wave/osc/0/wave-editor": {
-              "z": [
-                {
-                  "t": 5.3,
-                  "v": 0.0,
-                  "interp": "bezier"
-                },
-                {
-                  "t": 6.2,
-                  "v": -140.0,
-                  "interp": "bezier"
-                },
-                {
-                  "t": 7.9,
-                  "v": -140.0,
-                  "interp": "bezier"
-                },
-                {
-                  "t": 8.2,
-                  "v": 0.0,
-                  "interp": "bezier"
-                }
-              ]
+              "z": -140.0
             }
           },
           "material": {
@@ -2377,6 +2358,7 @@
               "process-lab"
             ]
           },
+          "preset": "../../../../../KURV/assets/presets/Arp/Pulse Step.kurvy",
           "notes": [
             {
               "t": 0.0,
@@ -3246,28 +3228,7 @@
           ],
           "parts": {
             "group-frame/0/osc/0/panel/unison/osc/0/unison": {
-              "z": [
-                {
-                  "t": 5.3,
-                  "v": 0.0,
-                  "interp": "bezier"
-                },
-                {
-                  "t": 6.2,
-                  "v": -140.0,
-                  "interp": "bezier"
-                },
-                {
-                  "t": 7.9,
-                  "v": -140.0,
-                  "interp": "bezier"
-                },
-                {
-                  "t": 8.2,
-                  "v": 0.0,
-                  "interp": "bezier"
-                }
-              ]
+              "z": -140.0
             }
           },
           "material": {

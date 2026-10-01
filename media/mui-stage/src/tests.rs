@@ -1098,7 +1098,9 @@ fn coplanar_planes_keep_their_order_under_a_tilted_camera() {
         return;
     };
     for (name, rgb) in [("g", (0., 1., 0.)), ("r", (1., 0., 0.))] {
-        let b = block(10., 10.).radius(0.).fill(Color::srgb(rgb.0, rgb.1, rgb.2));
+        let b = block(10., 10.)
+            .radius(0.)
+            .fill(Color::srgb(rgb.0, rgb.1, rgb.2));
         let b = resolve(&SceneSpec::new(b)).expect("resolves");
         stage.layer(name, &b, Size::new(10., 10.), 1.).unwrap();
     }
@@ -1153,5 +1155,8 @@ fn a_fading_face_fades_its_shadow() {
     let (lit, dark, half) = (shade(None), shade(Some(1.)), shade(Some(0.4)));
     assert!(lit - dark > 0.1, "the card casts a shadow: {lit} {dark}");
     let f = (lit - half) / (lit - dark);
-    assert!((0.2..0.6).contains(&f), "a 0.4 card casts {f} of its shadow");
+    assert!(
+        (0.2..0.6).contains(&f),
+        "a 0.4 card casts {f} of its shadow"
+    );
 }
