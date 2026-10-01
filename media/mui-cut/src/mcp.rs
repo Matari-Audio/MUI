@@ -27,10 +27,11 @@ use crate::{Backend, Result, write_atomic};
 const PROTOCOL: &str = "2025-06-18";
 
 const INSTRUCTIONS: &str = "mui-cut edits *.cut.json motion projects (scenes of keyframed layers). \
-Start with `open`, then `list` to see scenes and layers. Edit with `patch` (RFC 6902 JSON Patch; \
-pointers may name scenes and layers by name/id, e.g. /scenes/intro/layers/title/x), `set`, `key`, \
-`add_layer`, `remove_layer`; every edit is validated and written to the file, and an open editor \
-reloads it. Look with `still` (one frame), `sheet` (a grid of frames at every key) and `strip` \
+Start with `open` (create: true with size/duration/mode/background for a new one), then `list` to see scenes and layers. \
+Edit with `patch` (RFC 6902 JSON Patch; pointers may name scenes and layers by name/id, e.g. \
+/scenes/intro/layers/title/x), `set`, `key`, `motion` (named entrances and exits), `add_layer`, \
+`remove_layer`, and `batch` to send many of them in one call (one write, one check); every edit is \
+validated and written to the file, and an open editor reloads it. Look with `still` (one frame), `sheet` (a grid of frames at every key) and `strip` \
 (one layer's motion); verify with `check` (lints with JSON paths, times and fixes) and `eval` \
 (numbers). `editor_state` shows what the person in the web editor is looking at, `editor_goto` \
 moves their playhead or selection. `plugin_parts` captures a plugin layer's live UI and lists its \
@@ -80,6 +81,7 @@ struct Server {
 
 /// Open a project (and make it the one the other tools use).
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct Open {
     /// Path to a `*.cut.json`.
     path: String,
@@ -89,16 +91,93 @@ struct Open {
     /// Port of a `mui-cut serve` on this project (default 8740).
     #[serde(default)]
     editor_port: Option<u16>,
+    /// With `create`: the new project's `[width, height]` (default
+    /// `[1920, 1080]`), `fps` (30), and its scene's `scene` name ("main"),
+    /// `duration` (3 s), `mode` ("2d" or "3d") and `background` colour.
+    #[serde(default)]
+    size: Option<[u32; 2]>,
+    #[serde(default)]
+    fps: Option<f64>,
+    #[serde(default)]
+    scene: Option<String>,
+    #[serde(default)]
+    duration: Option<f64>,
+    #[serde(default)]
+    mode: Option<String>,
+    #[serde(default)]
+    background: Option<String>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct SchemaArgs {
+    /// Just one definition, e.g. `Layer`, `Animator`, `Material`, `Scene`
+    /// (the full schema is ~85 KB); its `$ref`s name others to ask for.
+    #[serde(default)]
+    def: Option<String>,
+}
+
+/// Several edits in one call: applied in order to one copy of the file,
+/// all or nothing, written once (one reload, one undo step in the editor)
+/// and checked once.
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct Batch {
+    /// `[{"tool": "key", "args": {...}}, ...]`; tools: `patch`, `set`,
+    /// `key`, `motion`, `add_layer`, `remove_layer`, `notes_set`,
+    /// `notes_add`, `source_add`, `layer_parent`.
+    calls: Vec<BatchCall>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct BatchCall {
+    tool: String,
+    #[serde(default)]
+    args: Value,
+}
+
+/// A named motion keyed onto a layer from `t` for `dur` seconds, merged
+/// with its other keys (keys inside that span are replaced).
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct Motion {
+    #[serde(default)]
+    scene: Option<String>,
+    layer: String,
+    /// Whole layer, from and back to its own values: `fade_in`,
+    /// `fade_out`, `rise_in` / `rise_out` (fade while moving up by
+    /// `distance`), `slide_in` / `slide_out` (from / to `dir`), `pop_in` /
+    /// `pop_out` (scale with a little overshoot). Per glyph (text) or copy
+    /// (duplicator), as an animator: `typewriter`, `cascade` (rise in one
+    /// after another), `cascade_out`, `pop` (random order).
+    preset: String,
+    /// Start, seconds into the scene.
+    t: f64,
+    /// Seconds (default 0.6; per glyph for the per-glyph ones).
+    #[serde(default)]
+    dur: Option<f64>,
+    /// slide: `left` (default in), `right` (default out), `up`, `down`.
+    #[serde(default)]
+    dir: Option<String>,
+    /// Pixels moved by rise and slide (default 40 and 160).
+    #[serde(default)]
+    distance: Option<f64>,
+    /// Seconds between glyphs/copies for the per-glyph ones.
+    #[serde(default)]
+    stagger: Option<f64>,
 }
 
 /// Optionally a scene by name (default: every scene, or the first).
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct SceneArg {
     #[serde(default)]
     scene: Option<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct Get {
     /// JSON Pointer into the file; array items can be named by their `id`
     /// or `name`: `/scenes/intro/layers/title/x`. Empty for the whole file.
@@ -107,6 +186,7 @@ struct Get {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct Patch {
     /// RFC 6902 operations, applied all or nothing:
     /// `{"op": "add"|"remove"|"replace"|"move"|"copy"|"test", "path": "/scenes/0/layers/-", "value": ..., "from": ...}`.
@@ -115,6 +195,7 @@ struct Patch {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct Set {
     #[serde(default)]
     scene: Option<String>,
@@ -128,6 +209,7 @@ struct Set {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct KeyArgs {
     #[serde(default)]
     scene: Option<String>,
@@ -149,6 +231,7 @@ struct KeyArgs {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct AddLayer {
     #[serde(default)]
     scene: Option<String>,
@@ -160,6 +243,7 @@ struct AddLayer {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct RemoveLayer {
     #[serde(default)]
     scene: Option<String>,
@@ -167,6 +251,7 @@ struct RemoveLayer {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct Eval {
     #[serde(default)]
     scene: Option<String>,
@@ -178,6 +263,7 @@ struct Eval {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct Check {
     /// Leave out `info` notes.
     #[serde(default)]
@@ -185,6 +271,7 @@ struct Check {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct Still {
     #[serde(default)]
     scene: Option<String>,
@@ -195,8 +282,13 @@ struct Still {
     /// `classic` (default), `gpu` (vello_gpu) or `cpu`.
     #[serde(default)]
     renderer: Option<String>,
+    /// 3D beauty: the mean of this many jittered samples (soft shadows,
+    /// depth of field, clean glass); 64 is final quality.
+    #[serde(default)]
+    samples: Option<usize>,
 }
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct Sheet {
     #[serde(default)]
     scene: Option<String>,
@@ -217,6 +309,7 @@ struct Sheet {
     renderer: Option<String>,
 }
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct Strip {
     layer: String,
     #[serde(default)]
@@ -231,6 +324,7 @@ struct Strip {
     renderer: Option<String>,
 }
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct Diff {
     /// The other version of the project (a copy, or `git show REV:file > f`).
     against: String,
@@ -244,6 +338,7 @@ struct Diff {
     renderer: Option<String>,
 }
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct Gen {
     /// A Rhai script file (see `mui-cut gen`). Returning a project map
     /// replaces the open project; returning an array of layers merges them
@@ -256,6 +351,7 @@ struct Gen {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct Render {
     /// Output video path (`.mp4`), or `null` to only time it.
     output: String,
@@ -272,18 +368,21 @@ struct Render {
     renderer: Option<String>,
 }
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct JobArg {
     /// The id `render` returned.
     job: usize,
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct EditorState {
     #[serde(default)]
     port: Option<u16>,
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct EditorGoto {
     /// Scene name.
     #[serde(default)]
@@ -304,6 +403,7 @@ struct EditorGoto {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct PluginParts {
     /// The plugin layer's id.
     layer: String,
@@ -316,6 +416,7 @@ struct PluginParts {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct NotesArgs {
     /// The plugin layer's id.
     layer: String,
@@ -328,6 +429,7 @@ struct NotesArgs {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct PluginPlay {
     #[serde(default)]
     scene: Option<String>,
@@ -344,6 +446,7 @@ struct PluginPlay {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct SourceAdd {
     /// The source: a file `{"id": "logo", "kind": "svg", "path": "logo.svg"}`
     /// (`image`, `svg`, `lottie`, `model`; the path relative to the project)
@@ -353,6 +456,7 @@ struct SourceAdd {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct PluginAdd {
     /// A MUI plugin crate's folder (relative to the project, or absolute)
     /// or git URL.
@@ -363,6 +467,7 @@ struct PluginAdd {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct LayerParent {
     #[serde(default)]
     scene: Option<String>,
@@ -378,6 +483,7 @@ struct LayerParent {
 }
 
 #[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 struct Nothing {}
 
 fn tool<T: JsonSchema>(name: &str, description: &str) -> Value {
@@ -396,9 +502,9 @@ fn tools() -> Vec<Value> {
             "open",
             "Open (or with create, start) a *.cut.json project; returns its outline.",
         ),
-        tool::<Nothing>(
+        tool::<SchemaArgs>(
             "schema",
-            "The project file's JSON Schema: every field, its type, default and meaning.",
+            "The project file's JSON Schema: every field, its type, default and meaning; `def` for one definition (Layer, Animator, Material...).",
         ),
         tool::<SceneArg>(
             "list",
@@ -417,7 +523,18 @@ fn tools() -> Vec<Value> {
             "Set one property of a layer to a plain value or a key list.",
         ),
         tool::<KeyArgs>("key", "Add or replace one keyframe on a layer property."),
-        tool::<AddLayer>("add_layer", "Insert a layer into a scene (default on top)."),
+        tool::<Motion>(
+            "motion",
+            "Key a named motion onto a layer: fade_in/out, rise_in/out, slide_in/out, pop_in/out (the whole layer, eased, back to its own values) or typewriter, cascade, cascade_out, pop (per glyph or copy).",
+        ),
+        tool::<Batch>(
+            "batch",
+            "Several edits (patch, set, key, motion, add_layer, remove_layer, notes_*, source_add, layer_parent) in one call: all or nothing, one write, one check.",
+        ),
+        tool::<AddLayer>(
+            "add_layer",
+            "Insert a layer into a scene (default on top); keys inline (`\"x\": [{\"t\": 0, \"v\": 100}, ...]`). A plugin layer's `source` may name an imported source by id.",
+        ),
         tool::<RemoveLayer>("remove_layer", "Delete a layer by id."),
         tool::<Eval>(
             "eval",
@@ -427,7 +544,10 @@ fn tools() -> Vec<Value> {
             "check",
             "Lint the project: unknown fields, key mistakes, overshoot, missing assets, off-frame/clipped layers, text overlap, low contrast, fast motion, empty frames. Each with a JSON path, times and a fix.",
         ),
-        tool::<Still>("still", "One rendered frame as a PNG image."),
+        tool::<Still>(
+            "still",
+            "One rendered frame as a PNG image, with how long it took; `samples` for a 3D beauty frame.",
+        ),
         tool::<Sheet>(
             "sheet",
             "A contact sheet PNG: captioned frames at every key and scene boundary (or given times).",
@@ -543,11 +663,55 @@ impl Server {
             serde_json::from_value(v).map_err(|e| format!("arguments: {e}"))
         }
         match name {
+            n if EDITS.contains(&n) => self.edit(|raw| self.edit_in(n, args, raw)),
+            "batch" => {
+                let a: Batch = parse(args)?;
+                self.edit(|raw| {
+                    for (i, c) in a.calls.into_iter().enumerate() {
+                        if !EDITS.contains(&c.tool.as_str()) {
+                            return Err(format!(
+                                "calls[{i}]: `{}` is not an edit tool; batch takes {}",
+                                c.tool,
+                                EDITS.join(", ")
+                            ));
+                        }
+                        let args = if c.args.is_null() { json!({}) } else { c.args };
+                        self.edit_in(&c.tool, args, raw)
+                            .map_err(|e| format!("calls[{i}] ({}): {e}", c.tool))?;
+                    }
+                    Ok(())
+                })
+            }
             "open" => self.open(parse(args)?),
-            "schema" => Ok(vec![text(&pretty(&Project::json_schema()))]),
+            "schema" => {
+                let a: SchemaArgs = parse(args)?;
+                let schema = Project::json_schema();
+                let Some(def) = a.def else {
+                    return Ok(vec![text(&pretty(&schema))]);
+                };
+                let defs = schema["$defs"].as_object().ok_or("no $defs")?;
+                let v = match def.as_str() {
+                    "Project" | "" => {
+                        let mut top = schema.clone();
+                        if let Some(o) = top.as_object_mut() {
+                            o.remove("$defs");
+                        }
+                        top
+                    }
+                    d => defs.get(d).cloned().ok_or_else(|| {
+                        format!(
+                            "no definition `{d}`{}",
+                            hint(d, defs.keys().map(String::as_str))
+                        )
+                    })?,
+                };
+                Ok(vec![text(&pretty(&v))])
+            }
             "list" => {
                 let a: SceneArg = parse(args)?;
-                Ok(vec![text(&pretty(&self.outline(a.scene.as_deref())?))])
+                Ok(vec![text(&pretty(&tidy(
+                    self.outline(a.scene.as_deref())?,
+                )))])
             }
             "get" => {
                 let a: Get = parse(args)?;
@@ -556,68 +720,6 @@ impl Server {
                 let v = at(&raw, &tokens).ok_or("nothing there")?;
                 Ok(vec![text(&pretty(v))])
             }
-            "patch" => {
-                let a: Patch = parse(args)?;
-                self.edit(|raw| {
-                    for (i, op) in a.ops.iter().enumerate() {
-                        apply(raw, op).map_err(|e| format!("ops[{i}]: {e}"))?;
-                    }
-                    Ok(())
-                })
-            }
-            "set" => {
-                let a: Set = parse(args)?;
-                let ptr = self.prop_pointer(a.scene.as_deref(), &a.layer, &a.prop)?;
-                self.edit(|raw| apply(raw, &json!({ "op": "add", "path": ptr, "value": a.value })))
-            }
-            "key" => {
-                let a: KeyArgs = parse(args)?;
-                let ptr = self.prop_pointer(a.scene.as_deref(), &a.layer, &a.prop)?;
-                let fps = self.load()?.fps;
-                let mut key = json!({ "t": a.t, "v": a.v });
-                if let Some(i) = a.interp {
-                    key["interp"] = i.into();
-                }
-                if let Some(h) = a.in_ {
-                    key["in"] = json!(h);
-                }
-                if let Some(h) = a.out {
-                    key["out"] = json!(h);
-                }
-                self.edit(|raw| {
-                    let tokens = resolve(raw, &ptr)?;
-                    let (last, parent) = tokens.split_last().ok_or("no property")?;
-                    let obj = at_mut(raw, parent)
-                        .and_then(Value::as_object_mut)
-                        .ok_or("no such layer")?;
-                    let mut keys = match obj.remove(last.as_str()) {
-                        Some(Value::Array(k)) => k,
-                        _ => Vec::new(),
-                    };
-                    keys.retain(|k| (k["t"].as_f64().unwrap_or(f64::NAN) - a.t).abs() >= 0.5 / fps);
-                    keys.push(key.clone());
-                    keys.sort_by(|x, y| {
-                        x["t"]
-                            .as_f64()
-                            .partial_cmp(&y["t"].as_f64())
-                            .unwrap_or(std::cmp::Ordering::Equal)
-                    });
-                    obj.insert(last.clone(), Value::Array(keys));
-                    Ok(())
-                })
-            }
-            "add_layer" => {
-                let a: AddLayer = parse(args)?;
-                let si = self.scene_index(a.scene.as_deref())?;
-                let at = a.index.map_or_else(|| "-".to_owned(), |i| i.to_string());
-                self.edit(|raw| apply(raw, &json!({ "op": "add", "path": format!("/scenes/{si}/layers/{at}"), "value": a.layer })))
-            }
-            "remove_layer" => {
-                let a: RemoveLayer = parse(args)?;
-                let si = self.scene_index(a.scene.as_deref())?;
-                let path = format!("/scenes/{si}/layers/{}", escape(&a.id));
-                self.edit(|raw| apply(raw, &json!({ "op": "remove", "path": path })))
-            }
             "eval" => {
                 let a: Eval = parse(args)?;
                 let p = self.load()?;
@@ -625,15 +727,17 @@ impl Server {
                 let f = eval(&p, s, a.t);
                 let v = match a.layer {
                     Some(id) => serde_json::to_value(
-                        f.layers
-                            .iter()
-                            .find(|l| l.id == id)
-                            .ok_or_else(|| format!("no layer `{id}`"))?,
+                        f.layers.iter().find(|l| l.id == id).ok_or_else(|| {
+                            format!(
+                                "no layer `{id}`{}",
+                                hint(&id, f.layers.iter().map(|l| l.id.as_str()))
+                            )
+                        })?,
                     ),
                     None => serde_json::to_value(&f),
                 }
                 .map_err(|e| e.to_string())?;
-                Ok(vec![text(&pretty(&v))])
+                Ok(vec![text(&pretty(&tidy(v)))])
             }
             "check" => {
                 let a: Check = parse(args)?;
@@ -654,21 +758,42 @@ impl Server {
                     .max(2)
                     & !1;
                 let (w, h) = (w as u16, h.min(4096) as u16);
+                let start = std::time::Instant::now();
                 let mut b = Backend::open_at(&p, &path, a.renderer.as_deref(), (w, h), 1, None)?;
-                let px = tools::draw_all(&mut b, &[eval(&p, s, a.t)])?
-                    .pop()
-                    .ok_or("no frame came back")?;
+                let n = match a.samples {
+                    None => 1,
+                    Some(n @ 1..=4096) => {
+                        match &mut b {
+                            Backend::Gpu(g) => g.beauty = true,
+                            _ => return Err("`samples` needs a GPU renderer".into()),
+                        }
+                        n
+                    }
+                    Some(n) => return Err(format!("`samples`: {n} is not 1..=4096")),
+                };
+                let frame = eval(&p, s, a.t);
+                let px = match b.push(vec![frame; n])? {
+                    Some(px) => px,
+                    None => b.finish()?.pop().ok_or("no frame came back")?,
+                };
                 let (w, h) = (u32::from(w), u32::from(h));
                 image(&Picture {
                     png: tools::png_bytes(w, h, &px)?,
                     w,
                     h,
-                    note: format!("{} at {:.2}s ({w}x{h}, {})", s.name, a.t, b.name()),
+                    note: format!(
+                        "{} at {:.2}s ({w}x{h}, {}) in {} ms",
+                        s.name,
+                        a.t,
+                        b.name(),
+                        start.elapsed().as_millis()
+                    ),
                 })
             }
             "sheet" => {
                 let a: Sheet = parse(args)?;
-                image(&tools::sheet(
+                let start = std::time::Instant::now();
+                let mut pic = tools::sheet(
                     &self.path()?,
                     &tools::SheetOpts {
                         scene: a.scene,
@@ -678,7 +803,9 @@ impl Server {
                         cols: a.cols,
                         renderer: a.renderer,
                     },
-                )?)
+                )?;
+                pic.note += &format!(" (in {} ms)", start.elapsed().as_millis());
+                image(&pic)
             }
             "strip" => {
                 let a: Strip = parse(args)?;
@@ -741,26 +868,9 @@ impl Server {
                     .map_err(|e| e.to_string())
                     .and_then(|t| serde_json::from_str(&t).map_err(|e| e.to_string()))
                     .map_err(|e| format!("{}: {e}", manifest.display()))?;
-                Ok(vec![text(&pretty(&mui_cut::plugin::tree_json(&cap, &at)))])
-            }
-            "notes_set" | "notes_add" => {
-                let a: NotesArgs = parse(args)?;
-                let ptr = self.prop_pointer(a.scene.as_deref(), &a.layer, "notes")?;
-                let add = name == "notes_add";
-                self.edit(|raw| {
-                    let mut notes = a.notes.clone();
-                    if add {
-                        let old = resolve(raw, &ptr)
-                            .ok()
-                            .and_then(|t| at_mut(raw, &t).cloned())
-                            .unwrap_or(json!([]));
-                        let old: Vec<mui_cut::Note> =
-                            serde_json::from_value(old).map_err(|e| e.to_string())?;
-                        notes.splice(0..0, old);
-                    }
-                    notes.sort_by(|x, y| x.t.total_cmp(&y.t).then(x.pitch.cmp(&y.pitch)));
-                    apply(raw, &json!({ "op": "add", "path": ptr, "value": notes }))
-                })
+                Ok(vec![text(&pretty(&tidy(mui_cut::plugin::tree_json(
+                    &cap, &at,
+                ))))])
             }
             "patch_get" => {
                 let a: PluginParts = parse(args)?;
@@ -864,23 +974,9 @@ impl Server {
                         v
                     })
                     .collect();
-                Ok(vec![text(&pretty(
-                    &json!({ "sources": rows, "errors": errs }),
-                ))])
-            }
-            "source_add" => {
-                let a: SourceAdd = parse(args)?;
-                self.edit(|raw| {
-                    let list = raw
-                        .as_object_mut()
-                        .ok_or("the project is not an object")?
-                        .entry("sources")
-                        .or_insert_with(|| json!([]));
-                    list.as_array_mut()
-                        .ok_or("`sources` is not a list")?
-                        .push(a.source);
-                    Ok(())
-                })
+                Ok(vec![text(&pretty(&tidy(
+                    json!({ "sources": rows, "errors": errs }),
+                )))])
             }
             "plugin_add" => {
                 let a: PluginAdd = parse(args)?;
@@ -888,21 +984,6 @@ impl Server {
                 let dir = path.parent().unwrap_or(Path::new("."));
                 let r = crate::build::add(&path, &a.from, dir, a.id.as_deref())?;
                 Ok(vec![text(&pretty(&r))])
-            }
-            "layer_parent" => {
-                let a: LayerParent = parse(args)?;
-                let si = self.scene_index(a.scene.as_deref())?;
-                self.edit(|raw| {
-                    *raw = mui_cut::place::rewrite(raw, si, &|p, s| {
-                        let l = mui_cut::place::reparent(p, s, &a.layer, a.parent.as_deref(), a.t)?;
-                        let mut s = s.clone();
-                        if let Some(o) = s.layers.iter_mut().find(|o| o.id == l.id) {
-                            *o = l;
-                        }
-                        Ok(s)
-                    })?;
-                    Ok(())
-                })
             }
             "render" => self.render(parse(args)?),
             "render_status" => {
@@ -953,7 +1034,10 @@ impl Server {
                 let reply = http(port, "POST", "/control", &m.to_string())?;
                 Ok(vec![text(&format!("sent {m} to the editor: {reply}"))])
             }
-            _ => Err(format!("no tool `{name}`")),
+            _ => Err(format!(
+                "no tool `{name}`{}",
+                hint(name, tools().iter().filter_map(|t| t["name"].as_str()))
+            )),
         }
     }
 
@@ -982,7 +1066,22 @@ impl Server {
                     path.display()
                 ));
             }
-            let fresh = json!({ "size": [1920, 1080], "fps": 30, "scenes": [{ "name": "main", "duration": 3, "layers": [] }] });
+            let mut scene = json!({
+                "name": a.scene.as_deref().unwrap_or("main"),
+                "duration": a.duration.unwrap_or(3.),
+                "layers": [],
+            });
+            if let Some(m) = a.mode {
+                scene["mode"] = m.into();
+            }
+            if let Some(b) = a.background {
+                scene["background"] = b.into();
+            }
+            let fresh = json!({
+                "size": a.size.unwrap_or([1920, 1080]),
+                "fps": a.fps.unwrap_or(30.),
+                "scenes": [scene],
+            });
             let p = Project::load(&fresh.to_string())?;
             write_atomic(&path, &p.to_json())?;
         }
@@ -1042,36 +1141,128 @@ impl Server {
         Ok(json!({ "project": self.path()?, "size": p.size, "fps": p.fps, "scenes": scenes }))
     }
 
-    fn scene_index(&self, scene: Option<&str>) -> Result<usize> {
-        let p = self.load()?;
-        match scene {
-            None if p.scenes.is_empty() => Err("the project has no scenes".into()),
-            None => Ok(0),
-            Some(n) => p
-                .scenes
-                .iter()
-                .position(|s| s.name == n)
-                .ok_or_else(|| format!("no scene `{n}`")),
+    /// One edit tool's change, made to `raw` (the file's JSON, or a batch's
+    /// copy of it): everything is resolved against `raw` itself, so a
+    /// batch's later calls see its earlier ones.
+    fn edit_in(&self, name: &str, args: Value, raw: &mut Value) -> Result<()> {
+        fn parse<T: serde::de::DeserializeOwned>(v: Value) -> Result<T> {
+            serde_json::from_value(v).map_err(|e| format!("arguments: {e}"))
         }
-    }
-
-    /// `/scenes/I/layers/ID/animators/0/x` for a dotted property path.
-    fn prop_pointer(&self, scene: Option<&str>, layer: &str, prop: &str) -> Result<String> {
-        let si = self.scene_index(scene)?;
-        let rest: Vec<String> = prop.split('.').map(escape).collect();
-        Ok(format!(
-            "/scenes/{si}/layers/{}/{}",
-            escape(layer),
-            rest.join("/")
-        ))
+        match name {
+            "patch" => {
+                let a: Patch = parse(args)?;
+                for (i, op) in a.ops.iter().enumerate() {
+                    apply(raw, op).map_err(|e| format!("ops[{i}]: {e}"))?;
+                }
+                Ok(())
+            }
+            "set" => {
+                let a: Set = parse(args)?;
+                let ptr = prop_pointer(raw, a.scene.as_deref(), &a.layer, &a.prop)?;
+                apply(raw, &json!({ "op": "add", "path": ptr, "value": a.value }))
+            }
+            "key" => {
+                let a: KeyArgs = parse(args)?;
+                let ptr = prop_pointer(raw, a.scene.as_deref(), &a.layer, &a.prop)?;
+                let mut key = json!({ "t": a.t, "v": a.v });
+                if let Some(i) = a.interp {
+                    key["interp"] = i.into();
+                }
+                if let Some(h) = a.in_ {
+                    key["in"] = json!(h);
+                }
+                if let Some(h) = a.out {
+                    key["out"] = json!(h);
+                }
+                let fps = fps(raw);
+                let tokens = resolve(raw, &ptr)?;
+                let (last, parent) = tokens.split_last().ok_or("no property")?;
+                let obj = at_mut(raw, parent)
+                    .and_then(Value::as_object_mut)
+                    .ok_or("no such layer")?;
+                put_keys(obj, last, vec![key], fps);
+                Ok(())
+            }
+            "motion" => {
+                let a: Motion = parse(args)?;
+                let si = scene_index(raw, a.scene.as_deref())?;
+                let fps = fps(raw);
+                let tokens = resolve(raw, &format!("/scenes/{si}/layers/{}", escape(&a.layer)))?;
+                let layer = at_mut(raw, &tokens)
+                    .and_then(Value::as_object_mut)
+                    .ok_or_else(|| format!("no layer `{}`", a.layer))?;
+                motion(layer, &a, fps)
+            }
+            "add_layer" => {
+                let a: AddLayer = parse(args)?;
+                let si = scene_index(raw, a.scene.as_deref())?;
+                let at = a.index.map_or_else(|| "-".to_owned(), |i| i.to_string());
+                apply(
+                    raw,
+                    &json!({ "op": "add", "path": format!("/scenes/{si}/layers/{at}"), "value": a.layer }),
+                )
+            }
+            "remove_layer" => {
+                let a: RemoveLayer = parse(args)?;
+                let si = scene_index(raw, a.scene.as_deref())?;
+                let path = format!("/scenes/{si}/layers/{}", escape(&a.id));
+                apply(raw, &json!({ "op": "remove", "path": path }))
+            }
+            "notes_set" | "notes_add" => {
+                let a: NotesArgs = parse(args)?;
+                let ptr = prop_pointer(raw, a.scene.as_deref(), &a.layer, "notes")?;
+                let mut notes = a.notes;
+                if name == "notes_add" {
+                    let old = resolve(raw, &ptr)
+                        .ok()
+                        .and_then(|t| at(raw, &t).cloned())
+                        .unwrap_or(json!([]));
+                    let old: Vec<mui_cut::Note> =
+                        serde_json::from_value(old).map_err(|e| e.to_string())?;
+                    notes.splice(0..0, old);
+                }
+                notes.sort_by(|x, y| x.t.total_cmp(&y.t).then(x.pitch.cmp(&y.pitch)));
+                apply(raw, &json!({ "op": "add", "path": ptr, "value": notes }))
+            }
+            "source_add" => {
+                let a: SourceAdd = parse(args)?;
+                let list = raw
+                    .as_object_mut()
+                    .ok_or("the project is not an object")?
+                    .entry("sources")
+                    .or_insert_with(|| json!([]));
+                list.as_array_mut()
+                    .ok_or("`sources` is not a list")?
+                    .push(a.source);
+                Ok(())
+            }
+            "layer_parent" => {
+                let a: LayerParent = parse(args)?;
+                let si = scene_index(raw, a.scene.as_deref())?;
+                // The rewrite works on loaded scenes: plugin sources named by
+                // id are filled in first.
+                inline_sources(raw)?;
+                *raw = mui_cut::place::rewrite(raw, si, &|p, s| {
+                    let l = mui_cut::place::reparent(p, s, &a.layer, a.parent.as_deref(), a.t)?;
+                    let mut s = s.clone();
+                    if let Some(o) = s.layers.iter_mut().find(|o| o.id == l.id) {
+                        *o = l;
+                    }
+                    Ok(s)
+                })?;
+                Ok(())
+            }
+            _ => Err(format!("`{name}` is not an edit tool")),
+        }
     }
 
     /// Change the file's JSON with `f`; refuse (and leave the file alone)
     /// if the result does not load or has fields a save would drop.
-    fn edit(&mut self, f: impl FnOnce(&mut Value) -> Result<()>) -> Result<Vec<Value>> {
+    fn edit(&self, f: impl FnOnce(&mut Value) -> Result<()>) -> Result<Vec<Value>> {
         let path = self.path()?;
         let mut raw = self.raw()?;
         f(&mut raw)?;
+        inline_sources(&mut raw)?;
         let src = raw.to_string();
         let lint = check::lint_fields(&src);
         let refused: Vec<&Issue> = lint
@@ -1151,11 +1342,296 @@ impl Server {
 
 fn pick<'a>(p: &'a Project, scene: Option<&str>) -> Result<&'a mui_cut::Scene> {
     match scene {
-        Some(n) => p.scene(n).ok_or_else(|| format!("no scene `{n}`")),
+        Some(n) => p.scene(n).ok_or_else(|| {
+            format!(
+                "no scene `{n}`{}",
+                hint(n, p.scenes.iter().map(|s| s.name.as_str()))
+            )
+        }),
         None => p
             .scenes
             .first()
             .ok_or_else(|| "the project has no scenes".into()),
+    }
+}
+
+/// The tools that change the file, which `batch` can run.
+const EDITS: [&str; 10] = [
+    "patch",
+    "set",
+    "key",
+    "motion",
+    "add_layer",
+    "remove_layer",
+    "notes_set",
+    "notes_add",
+    "source_add",
+    "layer_parent",
+];
+
+/// `; did you mean `x`?` for the nearest of `known`, else the names to pick
+/// from (at most 20).
+fn hint<'a>(name: &str, known: impl IntoIterator<Item = &'a str>) -> String {
+    let known: Vec<String> = known.into_iter().map(str::to_owned).collect();
+    if let Some(n) = check::nearest(name, &known) {
+        return format!("; did you mean `{n}`?");
+    }
+    if known.is_empty() {
+        return String::new();
+    }
+    let more = if known.len() > 20 { ", ..." } else { "" };
+    format!(
+        ": there is {}{more}",
+        known[..known.len().min(20)].join(", ")
+    )
+}
+
+fn fps(raw: &Value) -> f64 {
+    raw["fps"].as_f64().filter(|f| *f > 0.).unwrap_or(30.)
+}
+
+/// A scene's index in the JSON by name, or the first.
+fn scene_index(raw: &Value, scene: Option<&str>) -> Result<usize> {
+    let scenes = raw["scenes"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    match scene {
+        None if scenes.is_empty() => Err("the project has no scenes".into()),
+        None => Ok(0),
+        Some(n) => scenes
+            .iter()
+            .position(|s| s["name"].as_str() == Some(n))
+            .ok_or_else(|| {
+                format!(
+                    "no scene `{n}`{}",
+                    hint(n, scenes.iter().filter_map(|s| s["name"].as_str()))
+                )
+            }),
+    }
+}
+
+/// `/scenes/I/layers/ID/animators/0/x` for a dotted property path.
+fn prop_pointer(raw: &Value, scene: Option<&str>, layer: &str, prop: &str) -> Result<String> {
+    let si = scene_index(raw, scene)?;
+    let rest: Vec<String> = prop.split('.').map(escape).collect();
+    Ok(format!(
+        "/scenes/{si}/layers/{}/{}",
+        escape(layer),
+        rest.join("/")
+    ))
+}
+
+/// Merge `keys` into `obj[prop]`: a plain value or nothing becomes the key
+/// list; existing keys within half a frame of the new ones' span go.
+fn put_keys(obj: &mut serde_json::Map<String, Value>, prop: &str, keys: Vec<Value>, fps: f64) {
+    let t = |k: &Value| k["t"].as_f64().unwrap_or(f64::NAN);
+    let (lo, hi) = keys
+        .iter()
+        .map(t)
+        .fold((f64::MAX, f64::MIN), |(a, b), x| (a.min(x), b.max(x)));
+    let mut all = match obj.remove(prop) {
+        Some(Value::Array(k)) => k,
+        _ => Vec::new(),
+    };
+    all.retain(|k| !(t(k) > lo - 0.5 / fps && t(k) < hi + 0.5 / fps));
+    all.extend(keys);
+    all.sort_by(|x, y| t(x).total_cmp(&t(y)));
+    obj.insert(prop.to_owned(), Value::Array(all));
+}
+
+/// A layer's `prop` at `t` as the file has it (its default if unset).
+fn value_at(
+    layer: &serde_json::Map<String, Value>,
+    prop: &str,
+    t: f64,
+    default: f64,
+) -> Result<f64> {
+    match layer.get(prop) {
+        None => Ok(default),
+        Some(v) => serde_json::from_value::<mui_cut::Anim<f64>>(v.clone())
+            .map(|a| a.at(t))
+            .map_err(|e| format!("`{prop}` cannot take a motion ({e})")),
+    }
+}
+
+/// Key `m.preset` onto a layer (see [`Motion`]).
+fn motion(layer: &mut serde_json::Map<String, Value>, m: &Motion, fps: f64) -> Result<()> {
+    let (t0, d) = (m.t, m.dur.unwrap_or(0.6).max(1. / fps));
+    // Key times on a microsecond grid: no 0.8999999999999999 in the file.
+    let grid = |t: f64| (t * 1e6).round() / 1e6;
+    let t1 = grid(t0 + d);
+    let name = m.preset.as_str();
+    // Per glyph / per copy: an animator, as the editor's presets.
+    if matches!(name, "typewriter" | "cascade" | "cascade_out" | "pop") {
+        let kind = layer.get("kind").and_then(Value::as_str).unwrap_or("");
+        if !matches!(kind, "text" | "duplicator") {
+            return Err(format!(
+                "`{name}` moves glyphs or copies: the layer is a {kind}, not text or a duplicator"
+            ));
+        }
+        let mut a = mui_cut::Animator::preset(name, t0, d).ok_or("no such preset")?;
+        if let Some(s) = m.stagger {
+            a.stagger = mui_cut::Anim::Value(s);
+        }
+        let a = serde_json::to_value(a).map_err(|e| e.to_string())?;
+        let list = layer.entry("animators").or_insert_with(|| json!([]));
+        list.as_array_mut()
+            .ok_or("`animators` is not a list")?
+            .push(a);
+        return Ok(());
+    }
+    let entering = name.ends_with("_in");
+    // Entrances land on the layer's own value at the end, exits leave from
+    // it at the start. Eased like CSS's expo out (in) and in (out).
+    let rest_t = if entering { t1 } else { t0 };
+    let ease = |a: f64, b: f64| -> Vec<Value> {
+        if entering {
+            vec![
+                json!({ "t": t0, "v": a, "out": [0.16 * d, b - a] }),
+                json!({ "t": t1, "v": b, "in": [-0.7 * d, 0.] }),
+            ]
+        } else {
+            vec![
+                json!({ "t": t0, "v": a, "out": [0.7 * d, 0.] }),
+                json!({ "t": t1, "v": b, "in": [-0.16 * d, a - b] }),
+            ]
+        }
+    };
+    // From `away` to `rest` coming in, the other way going out.
+    let span = |away: f64, rest: f64| {
+        if entering {
+            ease(away, rest)
+        } else {
+            ease(rest, away)
+        }
+    };
+    let mut keys: Vec<(&str, Vec<Value>)> = Vec::new();
+    let opacity = value_at(layer, "opacity", rest_t, 1.)?;
+    let fade = |keys: &mut Vec<(&str, Vec<Value>)>| keys.push(("opacity", span(0., opacity)));
+    match name {
+        "fade_in" | "fade_out" => fade(&mut keys),
+        "rise_in" | "rise_out" => {
+            let y = value_at(layer, "y", rest_t, 0.)?;
+            let dy = m.distance.unwrap_or(40.);
+            fade(&mut keys);
+            keys.push(("y", span(if entering { y + dy } else { y - dy }, y)));
+        }
+        "slide_in" | "slide_out" => {
+            let dir = m
+                .dir
+                .as_deref()
+                .unwrap_or(if entering { "left" } else { "right" });
+            let dist = m.distance.unwrap_or(160.);
+            let (prop, sign) = match dir {
+                "left" => ("x", -1.),
+                "right" => ("x", 1.),
+                "up" => ("y", -1.),
+                "down" => ("y", 1.),
+                d => return Err(format!("`dir`: `{d}` is not left, right, up or down")),
+            };
+            let v = value_at(layer, prop, rest_t, 0.)?;
+            fade(&mut keys);
+            keys.push((prop, span(v + sign * dist, v)));
+        }
+        "pop_in" | "pop_out" => {
+            let s = value_at(layer, "scale", rest_t, 1.)?;
+            let peak = grid(if entering {
+                t0 + 0.65 * d
+            } else {
+                t0 + 0.35 * d
+            });
+            let k = if entering {
+                vec![
+                    json!({ "t": t0, "v": 0., "out": [0.12 * d, 0.9 * s] }),
+                    json!({ "t": peak, "v": 1.08 * s }),
+                    json!({ "t": t1, "v": s }),
+                ]
+            } else {
+                vec![
+                    json!({ "t": t0, "v": s }),
+                    json!({ "t": peak, "v": 1.08 * s }),
+                    json!({ "t": t1, "v": 0., "in": [-0.12 * d, 0.9 * s] }),
+                ]
+            };
+            keys.push(("scale", k));
+        }
+        p => {
+            return Err(format!(
+                "no preset `{p}`{}",
+                hint(
+                    p,
+                    [
+                        "fade_in",
+                        "fade_out",
+                        "rise_in",
+                        "rise_out",
+                        "slide_in",
+                        "slide_out",
+                        "pop_in",
+                        "pop_out",
+                        "typewriter",
+                        "cascade",
+                        "cascade_out",
+                        "pop"
+                    ]
+                )
+            ));
+        }
+    }
+    for (prop, k) in keys {
+        put_keys(layer, prop, k, fps);
+    }
+    Ok(())
+}
+
+/// Plugin layers whose `source` names an imported source by id get that
+/// source's spec, as the file stores it.
+fn inline_sources(raw: &mut Value) -> Result<()> {
+    let sources: Vec<(String, Value)> = raw["sources"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|s| s["kind"] == "plugin")
+        .filter_map(|s| Some((s["id"].as_str()?.to_owned(), s["source"].clone())))
+        .collect();
+    for layer in raw["scenes"]
+        .as_array_mut()
+        .into_iter()
+        .flatten()
+        .filter_map(|s| s["layers"].as_array_mut())
+        .flatten()
+    {
+        let Some(id) = layer["source"].as_str().map(str::to_owned) else {
+            continue;
+        };
+        let spec = sources
+            .iter()
+            .find(|(s, _)| *s == id)
+            .map(|(_, v)| v.clone())
+            .ok_or_else(|| {
+                format!(
+                    "layer `{}`: no plugin source `{id}` in `sources`{}",
+                    layer["id"].as_str().unwrap_or(""),
+                    hint(&id, sources.iter().map(|(s, _)| s.as_str()))
+                )
+            })?;
+        layer["source"] = spec;
+    }
+    Ok(())
+}
+
+/// Numbers rounded to 0.01 for reading: capture rects and evaluated values
+/// come out of float maths with 16 digits.
+fn tidy(v: Value) -> Value {
+    match v {
+        Value::Number(n) if n.is_f64() => {
+            let x = n.as_f64().unwrap_or_default();
+            json!((x * 100.).round() / 100.)
+        }
+        Value::Array(a) => Value::Array(a.into_iter().map(tidy).collect()),
+        Value::Object(o) => Value::Object(o.into_iter().map(|(k, v)| (k, tidy(v))).collect()),
+        v => v,
     }
 }
 
@@ -1257,7 +1733,16 @@ fn resolve(root: &Value, pointer: &str) -> Result<Vec<String>> {
             Some(Value::Array(items)) if tok != "-" && tok.parse::<usize>().is_err() => items
                 .iter()
                 .position(|v| v["id"].as_str() == Some(&tok) || v["name"].as_str() == Some(&tok))
-                .ok_or_else(|| format!("nothing with id or name `{tok}` at {}", show(&out)))?
+                .ok_or_else(|| {
+                    let names = items
+                        .iter()
+                        .filter_map(|v| v["id"].as_str().or_else(|| v["name"].as_str()));
+                    format!(
+                        "nothing with id or name `{tok}` at {}{}",
+                        show(&out),
+                        hint(&tok, names)
+                    )
+                })?
                 .to_string(),
             _ => tok,
         };
@@ -1443,5 +1928,130 @@ mod tests {
             .unwrap_err()
             .contains("`nope`")
         );
+    }
+
+    fn layer(v: Value) -> serde_json::Map<String, Value> {
+        match v {
+            Value::Object(o) => o,
+            _ => panic!("not a layer"),
+        }
+    }
+    fn mo(preset: &str, t: f64, dur: f64) -> Motion {
+        serde_json::from_value(json!({"layer": "l", "preset": preset, "t": t, "dur": dur})).unwrap()
+    }
+    fn ts(keys: &Value) -> Vec<f64> {
+        keys.as_array()
+            .unwrap()
+            .iter()
+            .map(|k| k["t"].as_f64().unwrap())
+            .collect()
+    }
+
+    /// Presets key from and back to the layer's own values, eased, and
+    /// merge with the keys it has: an exit after an entrance keeps both.
+    #[test]
+    fn motion_presets_land_on_the_layers_own_values_and_merge() {
+        let mut l = layer(json!({"id": "l", "kind": "rect", "y": 300, "opacity": 0.8}));
+        motion(&mut l, &mo("rise_in", 1., 0.5), 30.).unwrap();
+        assert_eq!(ts(&l["y"]), [1., 1.5]);
+        assert_eq!(
+            (l["y"][0]["v"].as_f64(), l["y"][1]["v"].as_f64()),
+            (Some(340.), Some(300.))
+        );
+        assert_eq!(
+            (l["opacity"][0]["v"].as_f64(), l["opacity"][1]["v"].as_f64()),
+            (Some(0.), Some(0.8))
+        );
+        // An ease out: the first handle carries the whole change early.
+        assert_eq!(l["y"][0]["out"], json!([0.08, -40.]));
+        motion(&mut l, &mo("fade_out", 4., 0.5), 30.).unwrap();
+        assert_eq!(ts(&l["opacity"]), [1., 1.5, 4., 4.5]);
+        assert_eq!(l["opacity"][2]["v"], 0.8);
+        assert_eq!(l["opacity"][3]["v"], 0.);
+        // Re-keying the same span replaces it rather than piling up.
+        motion(&mut l, &mo("fade_out", 4., 0.5), 30.).unwrap();
+        assert_eq!(ts(&l["opacity"]).len(), 4);
+        // The result loads: keys sorted, handles inside their segments.
+        let doc = json!({"size": [320, 180], "fps": 30, "scenes": [{"name": "s", "duration": 5, "layers": [Value::Object(l)]}]});
+        Project::load(&doc.to_string()).unwrap();
+
+        let mut l = layer(json!({"id": "l", "kind": "rect", "x": 100, "scale": 2}));
+        motion(&mut l, &mo("pop_in", 0., 0.3), 30.).unwrap();
+        let v: Vec<f64> = l["scale"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|k| k["v"].as_f64().unwrap())
+            .collect();
+        assert_eq!(v, [0., 2.16, 2.]);
+        let mut m = mo("slide_in", 0., 0.4);
+        m.dir = Some("right".into());
+        motion(&mut l, &m, 30.).unwrap();
+        assert_eq!(l["x"][0]["v"], 260.);
+        // Float noise stays out of the file.
+        let mut l = layer(json!({"id": "l", "kind": "text", "text": "hi"}));
+        motion(&mut l, &mo("cascade", 0.2, 0.7), 30.).unwrap();
+        assert_eq!(l["animators"][0]["amount"][1]["t"], 0.9);
+    }
+
+    #[test]
+    fn motion_errors_say_what_would_work() {
+        let mut l = layer(json!({"id": "l", "kind": "rect"}));
+        let e = motion(&mut l, &mo("cascade", 0., 1.), 30.).unwrap_err();
+        assert!(e.contains("not text or a duplicator"), "{e}");
+        let e = motion(&mut l, &mo("fade_inn", 0., 1.), 30.).unwrap_err();
+        assert!(e.contains("did you mean `fade_in`"), "{e}");
+        let mut m = mo("slide_in", 0., 1.);
+        m.dir = Some("sideways".into());
+        assert!(
+            motion(&mut l, &m, 30.)
+                .unwrap_err()
+                .contains("left, right, up or down")
+        );
+    }
+
+    #[test]
+    fn misses_suggest_the_nearest_name_or_list_them() {
+        let v = json!({"scenes": [{"name": "intro", "layers": [{"id": "title"}, {"id": "logo"}]}]});
+        let e = resolve(&v, "/scenes/intro/layers/titel/x").unwrap_err();
+        assert!(e.contains("did you mean `title`"), "{e}");
+        let e = resolve(&v, "/scenes/intro/layers/zzzzzzzz").unwrap_err();
+        assert!(e.contains("there is title, logo"), "{e}");
+        let e = scene_index(&v, Some("intor")).unwrap_err();
+        assert!(e.contains("did you mean `intro`"), "{e}");
+        let mut s = Server::default();
+        let e = s.call("stil", json!({})).unwrap_err();
+        assert!(e.contains("did you mean `still`"), "{e}");
+        // Arguments are checked by name too, not silently dropped.
+        let e = s.call("still", json!({"time": 1})).unwrap_err();
+        assert!(e.contains("unknown field `time`"), "{e}");
+    }
+
+    #[test]
+    fn plugin_layers_may_name_an_imported_source() {
+        let spec = json!({"cargo": "../Cargo.toml", "example": "synth"});
+        let mut v = json!({"sources": [{"id": "synth", "kind": "plugin", "source": spec}],
+            "scenes": [{"layers": [{"id": "a", "kind": "plugin", "source": "synth"}, {"id": "b", "kind": "rect"}]}]});
+        inline_sources(&mut v).unwrap();
+        assert_eq!(v["scenes"][0]["layers"][0]["source"], spec);
+        v["scenes"][0]["layers"][0]["source"] = "synht".into();
+        let e = inline_sources(&mut v).unwrap_err();
+        assert!(e.contains("did you mean `synth`"), "{e}");
+    }
+
+    #[test]
+    fn tidy_rounds_floats_and_keeps_the_rest() {
+        let v = tidy(json!({"a": [125.56818199157716, 3, "x"], "b": {"c": 0.30000000000000004}}));
+        assert_eq!(v, json!({"a": [125.57, 3, "x"], "b": {"c": 0.3}}));
+    }
+
+    #[test]
+    fn schema_gives_one_definition_on_request() {
+        let mut s = Server::default();
+        let c = s.call("schema", json!({"def": "Animator"})).unwrap();
+        let v: Value = serde_json::from_str(c[0]["text"].as_str().unwrap()).unwrap();
+        assert!(v["properties"]["stagger"].is_object(), "{v}");
+        let e = s.call("schema", json!({"def": "Animater"})).unwrap_err();
+        assert!(e.contains("did you mean `Animator`"), "{e}");
     }
 }

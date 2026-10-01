@@ -378,6 +378,84 @@ fn mcp_opens_edits_checks_and_looks_at_a_project() {
     assert!(check.starts_with("check: 0 errors"), "{check}");
 }
 
+/// An agent builds a scene in two calls: `open` creates it at its size and
+/// length, and one `batch` adds layers, keys and named motions, written
+/// once. A bad call anywhere leaves the file as it was.
+#[test]
+fn mcp_batches_edits_and_motions_into_one_write() {
+    let d = scratch("mcp-batch");
+    let project = d.join("p.cut.json");
+    let mut m = Mcp::start();
+    let out = m.text(
+        "open",
+        serde_json::json!({"path": project, "create": true, "size": [640, 360],
+            "scene": "intro", "duration": 4, "background": "#202024"}),
+    );
+    assert!(out.contains("\"intro\""), "{out}");
+    let said = m.text(
+        "batch",
+        serde_json::json!({"calls": [
+            {"tool": "add_layer", "args": {"layer": {"id": "title", "kind": "text", "text": "Hi", "x": 320, "y": 180, "font_size": 60}}},
+            {"tool": "motion", "args": {"scene": "intro", "layer": "title", "preset": "rise_in", "t": 0.2, "dur": 0.5}},
+            {"tool": "motion", "args": {"layer": "title", "preset": "fade_out", "t": 3, "dur": 0.5}},
+            {"tool": "add_layer", "args": {"layer": {"id": "dot", "kind": "ellipse", "x": 100, "y": 100, "width": 20, "height": 20}}},
+            {"tool": "key", "args": {"layer": "dot", "prop": "x", "t": 1, "v": 540}},
+            {"tool": "set", "args": {"layer": "dot", "prop": "fill", "value": "#ff5a36"}}
+        ]}),
+    );
+    assert_eq!(said.matches("written").count(), 1, "{said}");
+    let saved = std::fs::read_to_string(&project).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&saved).unwrap();
+    let s = &v["scenes"][0];
+    assert_eq!(
+        (s["name"].as_str(), s["duration"].as_f64()),
+        (Some("intro"), Some(4.))
+    );
+    assert_eq!(v["size"], serde_json::json!([640, 360]));
+    let title = &s["layers"][0];
+    assert_eq!(title["opacity"].as_array().unwrap().len(), 4, "{title}");
+    assert_eq!(title["y"][0]["v"], 220.0);
+    assert_eq!(s["layers"][1]["x"].as_array().unwrap().len(), 1);
+    assert_eq!(s["layers"][1]["fill"], "#ff5a36");
+
+    // All or nothing: the third call fails, so the first two never land.
+    let (c, err) = m.call(
+        "batch",
+        serde_json::json!({"calls": [
+            {"tool": "set", "args": {"layer": "dot", "prop": "y", "value": 300}},
+            {"tool": "remove_layer", "args": {"id": "title"}},
+            {"tool": "key", "args": {"layer": "dott", "prop": "x", "t": 2, "v": 0}}
+        ]}),
+    );
+    let e = c[0]["text"].as_str().unwrap();
+    assert!(
+        err && e.contains("calls[2] (key)") && e.contains("did you mean `dot`"),
+        "{e}"
+    );
+    assert_eq!(std::fs::read_to_string(&project).unwrap(), saved);
+    // Only edit tools batch.
+    let (c, err) = m.call(
+        "batch",
+        serde_json::json!({"calls": [{"tool": "still", "args": {"t": 0}}]}),
+    );
+    assert!(err && c[0]["text"].as_str().unwrap().contains("not an edit tool"));
+
+    // A beauty still says so, with its time; a bad sample count is refused.
+    let (c, err) = m.call(
+        "still",
+        serde_json::json!({"t": 1, "width": 320, "samples": 0}),
+    );
+    assert!(
+        err && c[0]["text"].as_str().unwrap().contains("1..=4096"),
+        "{c:?}"
+    );
+    let (c, err) = m.call("still", serde_json::json!({"t": 1, "width": 320}));
+    assert!(
+        !err && c[1]["text"].as_str().unwrap().contains(" ms"),
+        "{c:?}"
+    );
+}
+
 #[test]
 fn mcp_sees_and_steers_the_open_editor() {
     use std::io::{BufRead as _, Write as _};
