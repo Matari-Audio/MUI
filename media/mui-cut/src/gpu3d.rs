@@ -477,6 +477,15 @@ impl Space {
                 focus: cam.focus as f32,
                 aperture: blur,
                 max_blur: blur,
+                bloom: view
+                    .bloom
+                    .as_ref()
+                    .map_or(0., |b| b.strength.max(0.) as f32),
+                threshold: view
+                    .bloom
+                    .as_ref()
+                    .map_or(1., |b| b.threshold.max(0.) as f32),
+                knee: 0.5,
                 ..Post::NONE
             },
             ..Shot::new(camera)

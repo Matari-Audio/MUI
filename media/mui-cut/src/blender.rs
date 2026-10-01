@@ -750,6 +750,10 @@ pub fn describe(
         // ponytail: no sky in Blender yet; a Sky Texture world would match it.
         eprintln!("mui-cut: Blender draws no `sky`; the background colour shows behind");
     }
+    if scene.bloom.is_some() {
+        // ponytail: Blender's own glare node would match it.
+        eprintln!("mui-cut: Blender draws no `bloom`");
+    }
     if scene
         .layers
         .iter()

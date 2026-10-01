@@ -162,6 +162,24 @@ pub struct Env {
     pub background: bool,
 }
 
+/// Light brighter than `threshold` (1 is white) glows into what is round
+/// it, by `strength`, as through a lens: a sun in frame, glints off glass.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(transform = crate::vars::bindable)]
+pub struct Bloom {
+    #[serde(default = "bloom_strength")]
+    pub strength: f64,
+    #[serde(default = "bloom_threshold")]
+    pub threshold: f64,
+}
+fn bloom_strength() -> f64 {
+    0.5
+}
+fn bloom_threshold() -> f64 {
+    1.
+}
+
 /// Ambient occlusion: creases and contacts within `radius` pixels darken,
 /// by `strength` (1 the full occlusion).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -528,6 +546,8 @@ pub struct View {
     pub sky: Option<mui_stage::Sky>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ao: Option<Ao>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bloom: Option<Bloom>,
 }
 
 /// A project point (x right, y down, z deeper) in mui-stage's world
@@ -606,6 +626,7 @@ pub fn view(size: [u32; 2], scene: &Scene, t: f64, layers: &[Drawn]) -> View {
         }),
         sky: scene.sky.as_ref().map(|k| k.at(t)),
         ao: scene.ao.clone(),
+        bloom: scene.bloom.clone(),
     }
 }
 
