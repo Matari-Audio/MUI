@@ -41,13 +41,15 @@ const USAGE: &str = "usage:
                  [--variant NAME | --variants all|NAME,NAME -o out/{name}.mp4]
                  [--segment SECONDS] [--range 3.2s-5.0s]   (the segment cache)
   mui-cut still  PROJECT --t SECONDS -o OUT.png [--scene NAME] [--size WxH] [--renderer R] [--variant NAME]
-    render and still: [--quality normal|beauty] [--samples N]
+    render and still: [--quality normal|beauty] [--samples N] [--glass raster|rt [--glass-samples N]]
     R: classic (default; Vello compute on the GPU), gpu (vello_gpu), cpu (Vello CPU),
        blender (3D scenes through Blender: [--engine eevee|cycles] [--samples N]);
     --quality beauty (or --samples N) on a GPU renderer: 3D frames are the mean of N
        samples (64 by default), each with its own pixel offset, lens point (depth of
        field), area-light position (soft shadows) and occlusion turn; motion blur
        spreads them across the shutter.
+    --glass rt: 3D glass path traced on a GPU with hardware ray queries (else raster
+       glass, with a warning), N paths per pixel per subframe (16; render.glass in the file).
     --cpu is --renderer cpu. --threads: CPU frames drawn at once (default: one per core).
     --stats: per-frame wall time (evaluate, draw, hand to ffmpeg) p50/p95/max
   mui-cut eval   PROJECT --t SECONDS [--scene NAME] [--variant NAME]
@@ -221,10 +223,32 @@ fn load(path: &Path) -> Result<Project> {
 /// The project, as `--variant` makes it.
 fn load_variant(args: &Args) -> Result<Project> {
     let p = load(&args.project)?;
-    match args.get("variant") {
-        Some(v) => p.variant(v),
-        None => Ok(p),
+    let mut p = match args.get("variant") {
+        Some(v) => p.variant(v)?,
+        None => p,
+    };
+    // `--glass` and `--glass-samples` over the file's `render`.
+    let glass = match args.get("glass") {
+        None => None,
+        Some("rt") => Some(mui_cut::Glass::Rt),
+        Some("raster") => Some(mui_cut::Glass::Raster),
+        Some(g) => return Err(format!("--glass: `{g}` is not raster or rt")),
+    };
+    let glass_samples = args
+        .get("glass-samples")
+        .map(|_| args.num("glass-samples", 16))
+        .transpose()?;
+    if glass.is_some() || glass_samples.is_some() {
+        let over = Render {
+            glass,
+            glass_samples,
+            ..Render::default()
+        };
+        let r = p.render.clone().unwrap_or_default().with(&over);
+        r.check()?;
+        p.render = Some(r);
     }
+    Ok(p)
 }
 
 /// `mui-cut add PLUGIN [--project P] [--id NAME] [--json]`: a plugin crate's
@@ -454,10 +478,8 @@ impl Backend {
         let assets = read_assets(p, project);
         if let Some(engine) = engine {
             let size = [w.into(), h.into()];
-            let gpu = match yuv {
-                Some(y) => Offline::with_yuv(size, engine, y),
-                None => Offline::new(size, engine),
-            };
+            let rt = p.render.as_ref().and_then(Render::rt_glass);
+            let gpu = Offline::open_with(size, engine, yuv, rt);
             match gpu {
                 Ok(mut g) => {
                     g.assets = assets;
@@ -703,6 +725,7 @@ fn settings(p: &Project, args: &Args) -> Result<Render> {
         pix_fmt: s("pix-fmt"),
         container: s("container"),
         mb: args.get("mb").map(|_| args.num("mb", 1)).transpose()?,
+        ..Render::default()
     };
     let mut r = p.render.clone().unwrap_or_default().with(&flags);
     // A bitrate flag replaces a CRF from the file, and the other way round.

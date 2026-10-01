@@ -306,6 +306,8 @@ fn transmittance(p: vec3f, l: vec3f, dist: f32) -> vec3f {
 struct LightSample {
     l: vec3f,
     c: vec3f,
+    // Toward the light's middle, unjittered.
+    mid: vec3f,
 };
 // Light `i` reaching `p` (direction toward it and radiance), shadowed when
 // `receive`; a soft light is sampled over its disc (mui-stage's `area`).
@@ -323,10 +325,12 @@ fn light_at(i: u32, p: vec3f, ng: vec3f, receive: bool) -> LightSample {
     let a = 2. * PI * rand();
     let disc = (t * cos(a) + u * sin(a)) * r * li.extra.z;
     var l = -normalize(dir + disc);
+    o.mid = -dir;
     var dist = BIG;
     var att = 1.;
     if (li.pos.w > 1.5) {
         let to = li.pos.xyz + disc - p;
+        o.mid = normalize(li.pos.xyz - p);
         dist = length(to);
         l = to / max(dist, 1e-4);
         if (li.extra.x > 0.) {
@@ -495,6 +499,17 @@ struct Path {
 
 fn luminance(c: vec3f) -> f32 { return dot(c, vec3f(0.2126, 0.7152, 0.0722)); }
 
+// Light found after the first bounce, its brightness capped: a rare path
+// through a rough lobe onto a highlight is a firefly hundreds of samples
+// do not average away. Biased (a little dimmer), as every real-time path
+// tracer's clamp is.
+const TAME: f32 = 8.;
+fn tame(c: vec3f, bounce: u32) -> vec3f {
+    let m = max(c.x, max(c.y, c.z));
+    if (bounce == 0u || m <= TAME) { return c; }
+    return c * (TAME / m);
+}
+
 fn trace_path(o0: vec3f, d0: vec3f) -> Path {
     var out: Path;
     out.l = vec3f(0.);
@@ -516,7 +531,7 @@ fn trace_path(o0: vec3f, d0: vec3f) -> Path {
     for (var bounce = 0u; bounce < bounces; bounce++) {
         let h = closest(o, d);
         if (!h.hit) {
-            out.l += thr * background(d) * select(1., 0., fade > 0.);
+            out.l += tame(thr * background(d) * select(1., 0., fade > 0.), bounce);
             break;
         }
         if (inside && reach > 0.) { thr *= pow(max(tint, vec3f(1e-4)), vec3f(h.t / reach)); }
@@ -539,7 +554,7 @@ fn trace_path(o0: vec3f, d0: vec3f) -> Path {
                 o = s.p + d * 0.05;
                 continue;
             }
-            out.l += thr * opaque(s, v);
+            out.l += tame(thr * opaque(s, v), bounce);
             thr *= g.floor2.y;
             fade = g.floor2.z;
             d = reflect(d, vec3f(0., 1., 0.));
@@ -547,16 +562,19 @@ fn trace_path(o0: vec3f, d0: vec3f) -> Path {
             continue;
         }
         if (!glass) {
-            out.l += thr * opaque(s, v);
+            out.l += tame(thr * opaque(s, v), bounce);
             break;
         }
         // Printed glass: the layer's light marks are ink on it.
         let print = inst.mat2.z;
         let ink = print * smoothstep(0.02, 0.25, luminance(s.base));
         let through = smoothstep(0., 0.3, trans) * trans * (1. - ink);
-        if (rand() >= through) {
-            out.l += thr * opaque(s, v);
-            break;
+        // The opaque share is shaded here, not drawn by lot: a bright
+        // print against dark glass would be noise for hundreds of samples.
+        if (through < 1.) {
+            out.l += tame(thr * (1. - through) * opaque(s, v), bounce);
+            if (through <= 0.) { break; }
+            thr *= through;
         }
         thr *= 1. - inst.mat.x;
         let k = inst.mat2.y;
@@ -574,8 +592,9 @@ fn trace_path(o0: vec3f, d0: vec3f) -> Path {
         if (alpha > 4e-4) { m = ggx_sample(nf, alpha, rand2()); }
         let cos_i = dot(v, m);
         if (cos_i <= 0.) { break; }
-        // The layer's colour stains what passes its face, unless printed.
-        let stain = select(vec3f(1.), mix(s.base, vec3f(1.), print), s.part == 0u);
+        // The layer's colour stains what passes its face, unless printed;
+        // a mesh's base colour stains what passes it, as glTF has it.
+        let stain = select(vec3f(1.), mix(s.base, vec3f(1.), print), s.part == 0u || s.part == 3u);
         let card = inst.kind.x == KIND_PLANE && inst.size.z <= 0.;
         var f = fresnel(cos_i, eta);
         if (card) {
@@ -583,19 +602,24 @@ fn trace_path(o0: vec3f, d0: vec3f) -> Path {
             // reflection summed; the light goes on as it came.
             f = f + (1. - f) * (1. - f) * f / max(1. - f * f, 1e-4);
         }
-        // Lights glint off the surface (a GGX lobe a little wider than
-        // the surface, as a light is not a point).
-        if (g.res.w > 0.5) {
-            let a = max(alpha, 0.02);
+        // Lights glint off the surface: the GGX lobe toward each light's
+        // middle, at least as wide as a small lamp (a sharp lobe against
+        // a jittered disc is all fireflies), shadowed by the disc sample.
+        // Only off the outside: from inside, light reaches the eye by
+        // refraction, which these lobes are not.
+        if (g.res.w > 0.5 && entering) {
+            let a = max(alpha, 0.06);
             for (var i = 0u; i < 4u; i++) {
                 let ls = light_at(i, s.p, ngf, inst.tint.w > 0.5);
                 if (dot(ls.c, ls.c) <= 0.) { continue; }
-                let hv = normalize(ls.l + v);
-                let nl = max(dot(nf, ls.l), 0.);
+                let l = ls.mid;
+                let nl = dot(nf, l);
+                if (nl <= 0.) { continue; }
+                let hv = normalize(l + v);
                 let nv = max(dot(nf, v), 1e-3);
-                let spec = ggx_d(hv, nf, a) * ggx_g1(v, hv, nf, a) * ggx_g1(ls.l, hv, nf, a)
+                let spec = ggx_d(hv, nf, a) * ggx_g1(v, hv, nf, a) * ggx_g1(l, hv, nf, a)
                     * fresnel(dot(v, hv), eta) / (4. * nv);
-                out.l += thr * ls.c * min(spec, 50.) * select(1., 0., nl <= 0.);
+                out.l += tame(thr * ls.c * spec, bounce);
             }
         }
         var next: vec3f;

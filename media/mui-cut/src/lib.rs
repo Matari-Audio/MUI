@@ -111,6 +111,27 @@ pub struct Render {
     /// Motion-blur subframes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mb: Option<usize>,
+    /// How 3D glass is drawn: `raster` (the default) or `rt`, path traced on
+    /// a GPU with hardware ray queries; where there is none, raster glass,
+    /// and `mui-cut check` says so.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub glass: Option<Glass>,
+    /// `rt` glass: paths per pixel each drawn subframe traces (default 16).
+    /// A still frame adds them up across subframes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub glass_samples: Option<u32>,
+}
+
+/// How 3D glass is drawn.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum Glass {
+    /// Screen-space refraction of the frame, and the sky by direction.
+    #[default]
+    Raster,
+    /// Path traced: light bent off screen, inside thick glass, through
+    /// glass behind glass; dispersion and rough transmission.
+    Rt,
 }
 
 impl Render {
@@ -127,6 +148,8 @@ impl Render {
             pix_fmt: pick(&self.pix_fmt, &over.pix_fmt),
             container: pick(&self.container, &over.container),
             mb: over.mb.or(self.mb),
+            glass: over.glass.or(self.glass),
+            glass_samples: over.glass_samples.or(self.glass_samples),
         }
     }
     /// Refuse values the encoder table has no row for.
@@ -145,7 +168,18 @@ impl Render {
             &["auto", "vaapi", "software", "x264"],
         )?;
         one_of("pix_fmt", &self.pix_fmt, &["yuv420p", "yuv420p10le"])?;
-        one_of("container", &self.container, &["mp4", "mkv", "mov"])
+        one_of("container", &self.container, &["mp4", "mkv", "mov"])?;
+        match self.glass_samples {
+            Some(n) if !(1..=4096).contains(&n) => {
+                Err(format!("render.glass_samples: {n} is not 1..=4096"))
+            }
+            _ => Ok(()),
+        }
+    }
+    /// The ray-traced glass's paths per pixel per subframe, if the project
+    /// asks for ray-traced glass.
+    pub fn rt_glass(&self) -> Option<u32> {
+        (self.glass == Some(Glass::Rt)).then(|| self.glass_samples.unwrap_or(16).clamp(1, 4096))
     }
 }
 

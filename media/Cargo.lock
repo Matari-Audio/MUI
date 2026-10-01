@@ -1489,6 +1489,7 @@ dependencies = [
  "mui-reel",
  "mui-scene",
  "mui-stage",
+ "mui-stage-rt",
  "mui-text",
  "mui-vello",
  "naga 30.0.1",

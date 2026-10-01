@@ -47,6 +47,11 @@ pub(crate) struct Space {
     /// Skinned parts' meshes, by id, and the animation time they are bent
     /// to.
     skinned: std::collections::HashMap<String, f64>,
+    /// The ray-traced glass ([`GpuCanvas::glass`]), made by the first
+    /// frame that wants it, and the atlas it samples.
+    #[cfg(not(target_arch = "wasm32"))]
+    rt: Option<mui_stage_rt::Rt>,
+    atlas_tex: Option<wgpu::Texture>,
 }
 
 /// sRGB bytes to linear light.
@@ -88,6 +93,9 @@ impl Space {
             painted: None,
             fx: None,
             skinned: std::collections::HashMap::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            rt: None,
+            atlas_tex: None,
         }
     }
 
@@ -102,6 +110,16 @@ impl Space {
     ) -> Result<Vec<Quad>, String> {
         let [fw, fh] = frame.size.map(f64::from);
         let out = f64::from(canvas.size()[1]) / fh;
+        #[cfg(not(target_arch = "wasm32"))]
+        if canvas.glass.is_some() && self.rt.is_none() {
+            let [w, h] = canvas.size();
+            let mut rt = mui_stage_rt::Rt::new(&canvas.device, &canvas.queue, w, h)
+                .map_err(|e| e.to_string())?;
+            if let Some(atlas) = &self.atlas_tex {
+                rt.layer("atlas", atlas);
+            }
+            self.rt = Some(rt);
+        }
         // A plugin layer is a slab per part; overlays are drawn flat after.
         let layers: Vec<Drawn> = frame
             .layers
@@ -227,6 +245,11 @@ impl Space {
                 fx.boxes(canvas, frame, &atlas, &boxes);
             }
             self.stage.layer_done("atlas").map_err(|e| e.to_string())?;
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(rt) = &mut self.rt {
+                rt.layer("atlas", &atlas);
+            }
+            self.atlas_tex = Some(atlas);
             self.painted = Some(key);
         }
         let slots = &self.painted.as_ref().expect("painted above").1;
@@ -315,11 +338,21 @@ impl Space {
                             id = format!("{id}@{}", l.id);
                             if self.skinned.get(&id) != Some(&l.time) {
                                 self.stage.mesh_uv(&id, &bent, &part.uvs, &part.indices);
+                                #[cfg(not(target_arch = "wasm32"))]
+                                if let Some(rt) = &mut self.rt {
+                                    rt.mesh(&id, &bent, &part.indices);
+                                }
                                 self.skinned.insert(id.clone(), l.time);
                             }
                         } else if !self.stage.has_mesh(&id) {
                             self.stage
                                 .mesh_uv(&id, &part.vertices, &part.uvs, &part.indices);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        if let Some(rt) = &mut self.rt
+                            && !rt.has_mesh(&id)
+                        {
+                            rt.mesh(&id, &part.vertices, &part.indices);
                         }
                         let maps = std::array::from_fn(|k| {
                             let img = part.maps[k]?;
@@ -490,6 +523,12 @@ impl Space {
             },
             ..Shot::new(camera)
         };
+        #[cfg(not(target_arch = "wasm32"))]
+        if let (Some(rt), Some(spp)) = (&mut self.rt, canvas.glass) {
+            rt.draw(&mut self.stage, &shot, 0., spp, target, format)
+                .map_err(|e| e.to_string())?;
+            return Ok(quads);
+        }
         self.stage
             .draw(&shot, 0., target, format)
             .map_err(|e| e.to_string())?;

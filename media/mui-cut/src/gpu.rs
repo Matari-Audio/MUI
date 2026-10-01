@@ -63,6 +63,9 @@ pub struct GpuCanvas {
     /// The beauty sample 3D frames draw as ([`mui_stage::Shot::sample`]);
     /// the shutter sets it per subframe.
     pub(crate) sample: Option<u32>,
+    /// 3D glass path traced, these many paths per pixel per draw; `None`
+    /// is raster glass. Set only on a device with ray queries.
+    pub(crate) glass: Option<u32>,
 }
 
 impl GpuCanvas {
@@ -97,6 +100,7 @@ impl GpuCanvas {
             notice: String::new(),
             fx: None,
             sample: None,
+            glass: None,
         })
     }
     pub fn engine(&self) -> Engine {
@@ -439,16 +443,34 @@ mod offline {
         /// A headless device, the high-performance adapter if there are two;
         /// frames come back as straight-alpha RGBA.
         pub fn new(size: [u32; 2], engine: Engine) -> Result<Self, String> {
-            pollster::block_on(Self::open(size, engine, None))
+            pollster::block_on(Self::open(size, engine, None, None))
+        }
+
+        /// [`Offline::new`] or [`Offline::with_yuv`], and with `glass`
+        /// 3D glass path traced at that many paths per pixel per subframe
+        /// (see [`GpuCanvas::glass`]) when the adapter has hardware ray
+        /// queries; when it has none, raster glass and a warning.
+        pub fn open_with(
+            size: [u32; 2],
+            engine: Engine,
+            yuv: Option<Yuv>,
+            glass: Option<u32>,
+        ) -> Result<Self, String> {
+            pollster::block_on(Self::open(size, engine, yuv, glass))
         }
 
         /// Frames come back as `yuv` planes, converted on the GPU from the
         /// float sum: what an encoder takes, at 1.5 (or 3) bytes a pixel.
         pub fn with_yuv(size: [u32; 2], engine: Engine, yuv: Yuv) -> Result<Self, String> {
-            pollster::block_on(Self::open(size, engine, Some(yuv)))
+            pollster::block_on(Self::open(size, engine, Some(yuv), None))
         }
 
-        async fn open(size: [u32; 2], engine: Engine, yuv: Option<Yuv>) -> Result<Self, String> {
+        async fn open(
+            size: [u32; 2],
+            engine: Engine,
+            yuv: Option<Yuv>,
+            glass: Option<u32>,
+        ) -> Result<Self, String> {
             let instance = wgpu::Instance::default();
             let adapter = instance
                 .request_adapter(&wgpu::RequestAdapterOptions {
@@ -458,12 +480,28 @@ mod offline {
                 .await
                 .map_err(|e| format!("no GPU adapter: {e}"))?;
             let info = adapter.get_info();
+            let rt = glass.is_some() && mui_stage_rt::supported(&adapter);
+            if glass.is_some() && !rt {
+                eprintln!(
+                    "mui-cut: {} has no hardware ray queries; drawing raster glass",
+                    info.name
+                );
+            }
+            let desc = if rt {
+                mui_stage_rt::device_descriptor(&adapter)
+            } else {
+                wgpu::DeviceDescriptor::default()
+            };
             let (device, queue) = adapter
-                .request_device(&wgpu::DeviceDescriptor::default())
+                .request_device(&desc)
                 .await
                 .map_err(|e| e.to_string())?;
             let mut o = Self::build(&device, &queue, size, engine, yuv).await?;
+            o.canvas.glass = glass.filter(|_| rt);
             o.adapter = format!("{}, {} ({:?})", engine.name(), info.name, info.backend);
+            if rt {
+                o.adapter.push_str(", ray-traced glass");
+            }
             Ok(o)
         }
 
@@ -479,6 +517,7 @@ mod offline {
             o.assets = std::mem::take(&mut self.assets);
             o.adapter = std::mem::take(&mut self.adapter);
             o.beauty = self.beauty;
+            o.canvas.glass = self.canvas.glass;
             *self = o;
             Ok(())
         }

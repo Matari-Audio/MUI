@@ -43,6 +43,8 @@ const MAX_INSTANCES: u32 = (mui_stage::MAX_PLANES + mui_stage::MAX_MODELS + 1) a
 /// Bounces a path makes at most: enough for light to cross thick glass,
 /// reflect inside it and leave.
 pub const BOUNCES: u32 = 12;
+/// Samples per pixel per submission.
+const CHUNK: u32 = 4;
 /// Below this many samples the filter cleans the mean.
 const FILTER_UNTIL: u32 = 64;
 
@@ -623,12 +625,6 @@ impl Rt {
         }
         self.queue
             .write_buffer(&self.insts, 0, bytemuck::cast_slice(&insts));
-        self.queue.write_buffer(
-            &self.globals,
-            0,
-            bytemuck::cast_slice(&globals(shot, self.width, self.height, self.samples, spp, self.bounces)),
-        );
-
         while views.len() < LAYERS {
             views.push(self.white.clone());
         }
@@ -651,19 +647,43 @@ impl Rt {
             layout: &layout,
             entries: &entries,
         });
-        let mut enc = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-        enc.build_acceleration_structures(std::iter::empty(), std::iter::once(&self.tlas));
-        {
-            let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
-            pass.set_pipeline(&self.trace);
-            pass.set_bind_group(0, &group, &[]);
-            pass.dispatch_workgroups(self.width.div_ceil(8), self.height.div_ceil(8), 1);
+        // A few samples per submission: one long dispatch would trip the
+        // driver's GPU timeout.
+        let mut left = spp.max(1);
+        let mut build = true;
+        while left > 0 {
+            let n = left.min(CHUNK);
+            self.queue.write_buffer(
+                &self.globals,
+                0,
+                bytemuck::cast_slice(&globals(
+                    shot,
+                    self.width,
+                    self.height,
+                    self.samples,
+                    n,
+                    self.bounces,
+                )),
+            );
+            let mut enc = self
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+            if std::mem::take(&mut build) {
+                enc.build_acceleration_structures(std::iter::empty(), std::iter::once(&self.tlas));
+            }
+            {
+                let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
+                pass.set_pipeline(&self.trace);
+                pass.set_bind_group(0, &group, &[]);
+                pass.dispatch_workgroups(self.width.div_ceil(8), self.height.div_ceil(8), 1);
+            }
+            self.samples += n;
+            left -= n;
+            if left == 0 {
+                self.filter_into(&mut enc);
+            }
+            self.queue.submit([enc.finish()]);
         }
-        self.samples += spp.max(1);
-        self.filter_into(&mut enc);
-        self.queue.submit([enc.finish()]);
         Ok(())
     }
 
