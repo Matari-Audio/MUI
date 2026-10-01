@@ -4,6 +4,9 @@
     1080
   ],
   "fps": 60.0,
+  "render": {
+    "glass": "rt"
+  },
   "scenes": [
     {
       "name": "kurv",

@@ -1489,6 +1489,7 @@ dependencies = [
  "mui-reel",
  "mui-scene",
  "mui-stage",
+ "mui-stage-rt",
  "mui-text",
  "mui-vello",
  "naga 30.0.1",
@@ -1599,6 +1600,19 @@ dependencies = [
  "mui-scene",
  "mui-text",
  "mui-vello",
+ "png",
+ "pollster",
+ "wgpu",
+]
+
+[[package]]
+name = "mui-stage-rt"
+version = "0.4.0"
+dependencies = [
+ "bytemuck",
+ "mui-geometry",
+ "mui-scene",
+ "mui-stage",
  "png",
  "pollster",
  "wgpu",

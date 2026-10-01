@@ -1,0 +1,25 @@
+[package]
+name = "mui-stage-rt"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Hardware ray-traced glass for mui-stage: a wgpu ray-query path tracer for dielectrics, with temporal accumulation and a raster fallback."
+
+[features]
+default = ["backends"]
+backends = ["mui-stage/backends"]
+
+[dependencies]
+mui-stage = { path = "../mui-stage", default-features = false }
+mui-geometry.workspace = true
+wgpu = { workspace = true, features = ["wgsl"] }
+pollster.workspace = true
+bytemuck = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+mui-scene.workspace = true
+png.workspace = true
+
+[lints]
+workspace = true

@@ -27,9 +27,19 @@ pub fn check_file(path: &Path) -> Result<Vec<Issue>> {
     let mut r = Renderer::new(w, h);
     let _ = load_assets(&p, path, &mut r.assets);
     let dir = path.parent().unwrap_or(Path::new("."));
-    Ok(mui_cut::check::check(&src, &mut r, &|a| {
-        dir.join(a).is_file()
-    }))
+    let mut issues = mui_cut::check::check(&src, &mut r, &|a| dir.join(a).is_file());
+    if p.render
+        .as_ref()
+        .and_then(mui_cut::Render::rt_glass)
+        .is_some()
+    {
+        let probe = mui_stage_rt::probe().map(|_| ()).map_err(|e| match e {
+            mui_stage_rt::Error::Unavailable(why) => why,
+            e => e.to_string(),
+        });
+        issues.extend(mui_cut::check::rt_glass(&src, probe));
+    }
+    Ok(issues)
 }
 
 pub fn check(args: &Args) -> Result<()> {
