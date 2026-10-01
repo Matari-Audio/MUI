@@ -321,7 +321,7 @@ pub enum LightType {
     Directional,
     /// From its position, a cone along `rx`/`ry`, with a shadow.
     Spot,
-    /// From its position every way, no shadow.
+    /// From its position every way, with a shadow.
     Point,
     /// Everywhere, no shadow.
     Ambient,

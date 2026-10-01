@@ -368,7 +368,7 @@ mesh. Scenes without it render exactly as before.
   `ambient`; `fill` is the colour, `intensity` times `opacity` the strength,
   `rx`/`ry` aim it, `cone`/`feather` shape a spot, `range` fades point and
   spot lights, `softness` widens the shadow filter. Directional and spot
-  lights cast PCF shadow maps. With no light at all a 3D scene is unlit and
+  lights cast PCF shadow maps, point lights a cube of six. With no light at all a 3D scene is unlit and
   faces show their exact pixels.
 - `model` layers: a `.glb` file (`path`), fitted to `height` times `scale`,
   tinted by `fill`, lit with its materials' base colour, metallic and
@@ -944,7 +944,7 @@ same reason.
   It is pinned to Vello 9dfe53e; moving to newer main means following
   #1942 (`pop_clip_path` renamed) and #1944 (fallible glyph drawing) in
   `src/sparse.rs`.
-- 3D: point lights cast no shadows; glTF is `.glb` only, triangles and
+- 3D: glTF is `.glb` only, triangles and
   material factors (no textures, skins or animation); a 3D scene has no 2D
   overlay layer; `check`'s pixel lints skip
   3D scenes. A layer's `effects` are skipped in 3D: a layer is a slab

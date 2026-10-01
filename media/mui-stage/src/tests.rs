@@ -928,3 +928,66 @@ fn a_slabs_walls_are_built_once_while_its_size_depth_and_outline_hold() {
     assert_eq!(stage.walls_built, 2, "a new depth builds new walls");
     assert_eq!(stage.walls.len(), 1, "the old ones are dropped");
 }
+
+#[test]
+fn a_point_light_casts_soft_shadows_from_its_cube() {
+    let Some(mut stage) = stage(128, 128) else {
+        return;
+    };
+    stage
+        .layer("l", &white(Size::new(64., 64.)), Size::new(64., 64.), 1.)
+        .unwrap();
+    // A lamp 200 units up at x = -60, a card covering x < 0 halfway down:
+    // the shadow's edge falls on the floor at x = 60, which the camera
+    // looking down sees right of the card.
+    let shot = |shadows: bool, softness: f32| {
+        let mut floor = Floor::at(0.);
+        floor.color = [0.5; 3];
+        floor.reflect = 0.;
+        let mut lamp = Light::new(LightKind::Point);
+        lamp.position = [-60., 200., 0.];
+        lamp.shadows = shadows;
+        lamp.softness = softness;
+        Shot {
+            planes: vec![
+                Plane::new("l", 400., 400.)
+                    .rotate(-90., 0., 0.)
+                    .at(-200., 100., 0.),
+            ],
+            lights: vec![lamp],
+            floor: Some(floor),
+            clear: Some([0.; 3]),
+            post: Post::NONE,
+            ..Shot::new(Camera {
+                eye: [0., 400., 0.],
+                target: [0., 0., 0.],
+                fov: 30.,
+                roll: 0.,
+            })
+        }
+    };
+    let row =
+        |f: &Frame| -> Vec<f32> { (0..128).map(|x| f.rgba[(64 * 128 + x) * 4 + 1]).collect() };
+    let lit = stage.render(0., 0., 1, &|_| shot(false, 1.)).unwrap();
+    let a = stage.render(0., 0., 1, &|_| shot(true, 1.)).unwrap();
+    let b = stage.render(0., 0., 1, &|_| shot(true, 1.)).unwrap();
+    assert_eq!(a.rgba, b.rgba, "the cube renders the same every time");
+    let (lit, a) = (row(&lit), row(&a));
+    // Left of the edge (x 60, pixel 100) is shadowed, right of it lit as
+    // with no shadow at all.
+    assert!(a[80] < lit[80] * 0.2, "shadowed: {} of {}", a[80], lit[80]);
+    assert!(
+        (a[120] - lit[120]).abs() < lit[120] * 0.05,
+        "lit: {} of {}",
+        a[120],
+        lit[120]
+    );
+    // Beauty moves the lamp across its area: a wider light, a wider edge.
+    let mut penumbra = |softness: f32| {
+        let f = stage.beauty(0., 0., 32, &|_| shot(true, softness)).unwrap();
+        ramp(&row(&f)[70..128])
+    };
+    let (hard, soft) = (penumbra(0.5), penumbra(6.));
+    assert!(hard <= 4, "a small lamp is nearly hard: {hard} px");
+    assert!(soft >= 6 && soft >= 2 * hard, "{hard} px -> {soft} px");
+}

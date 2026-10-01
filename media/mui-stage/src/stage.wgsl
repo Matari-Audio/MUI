@@ -4,7 +4,8 @@
 
 // pos: xyz, w kind (0 none, 1 directional, 2 point, 3 spot); dir: the way
 // the light travels, w cos(outer cone); color: rgb times intensity,
-// w cos(inner cone); extra: range (0 none), shadow layer (-1 none),
+// w cos(inner cone); extra: range (0 none), shadow layer (-1 none; 8 + n
+// light n's cube of point shadows, whose far reach is then dir.w),
 // softness in texels, depth bias.
 struct Light {
     pos: vec4f,
@@ -150,6 +151,41 @@ fn oct_decode(e: vec2f) -> vec3f {
 
 @group(3) @binding(0) var shadow_map: texture_depth_2d_array;
 @group(3) @binding(1) var shadow_cmp: sampler_comparison;
+// Point lights' shadows: six faces per light, +x -x +y -y +z -z.
+@group(3) @binding(2) var cube_map: texture_depth_2d_array;
+
+// Each face sees a hair past 90 degrees, so the filter stays on it.
+const CUBE_SPAN: f32 = 1.03;
+// The face of a point light's cube that direction `v` from it falls on.
+fn cube_face(v: vec3f) -> u32 {
+    let a = abs(v);
+    if (a.x >= a.y && a.x >= a.z) { return select(1u, 0u, v.x > 0.); }
+    if (a.y >= a.z) { return select(3u, 2u, v.y > 0.); }
+    return select(5u, 4u, v.z > 0.);
+}
+// `world` in clip space as face `f` of light `li`'s cube sees it: across
+// and up the face over its axis, depth from 4 units out to `dir.w`.
+fn cube_clip(li: Light, f: u32, world: vec3f) -> vec4f {
+    let v = world - li.pos.xyz;
+    var q: vec3f;
+    switch f {
+        case 0u: { q = vec3f(-v.z, v.y, v.x); }
+        case 1u: { q = vec3f(v.z, v.y, -v.x); }
+        case 2u: { q = vec3f(v.x, -v.z, v.y); }
+        case 3u: { q = vec3f(v.x, v.z, -v.y); }
+        case 4u: { q = vec3f(v.x, v.y, v.z); }
+        default: { q = vec3f(-v.x, v.y, -v.z); }
+    }
+    let near = 4.;
+    let far = max(li.dir.w, near + 1.);
+    return vec4f(q.xy / CUBE_SPAN, (q.z - near) * far / (far - near), q.z);
+}
+// Shadow map `k`'s clip space: a light's matrix, or a cube face's.
+fn shadow_clip(k: u32, world: vec3f) -> vec4f {
+    if (k < 8u) { return g.shadow_vp[k] * vec4f(world, 1.); }
+    let c = k - 8u;
+    return cube_clip(g.lights[c / 6u], c % 6u, world);
+}
 
 fn lit_shot() -> bool { return g.ambient.a > 0.5; }
 
@@ -157,6 +193,7 @@ fn lit_shot() -> bool { return g.ambient.a > 0.5; }
 // of hardware-filtered compares, `soft` texels apart.
 fn shadow(k: i32, world: vec3f, n: vec3f, soft: f32, bias: f32) -> f32 {
     if (k < 0) { return 1.; }
+    if (k >= 8) { return point_shadow(k - 8, world + n * 1.5, soft); }
     // Nudged off the surface along its normal, against shadow acne.
     let p = g.shadow_vp[k] * vec4f(world + n * 1.5, 1.);
     let q = p.xyz / p.w;
@@ -168,6 +205,27 @@ fn shadow(k: i32, world: vec3f, n: vec3f, soft: f32, bias: f32) -> f32 {
         for (var x = -2; x <= 2; x++) {
             s += textureSampleCompareLevel(shadow_map, shadow_cmp,
                 uv + vec2f(f32(x), f32(y)) * texel, k, q.z - bias);
+        }
+    }
+    return s / 25.;
+}
+
+// `shadow` for point light `i`: the cube face `world` is seen on, filtered
+// the same way.
+fn point_shadow(i: i32, world: vec3f, soft: f32) -> f32 {
+    let li = g.lights[i];
+    let f = cube_face(world - li.pos.xyz);
+    let p = cube_clip(li, f, world);
+    let q = p.xyz / p.w;
+    if (p.w <= 0. || q.z > 1.) { return 1.; }
+    let uv = vec2f(q.x * 0.5 + 0.5, 0.5 - q.y * 0.5);
+    let texel = soft / f32(textureDimensions(cube_map).x);
+    let layer = i * 6 + i32(f);
+    var s = 0.;
+    for (var y = -2; y <= 2; y++) {
+        for (var x = -2; x <= 2; x++) {
+            s += textureSampleCompareLevel(cube_map, shadow_cmp,
+                uv + vec2f(f32(x), f32(y)) * texel, layer, q.z);
         }
     }
     return s / 25.;
@@ -520,7 +578,7 @@ struct ShadowCap {
 @vertex fn vs_shadow_face(@builtin(vertex_index) i: u32, @builtin(instance_index) k: u32) -> ShadowCap {
     let c = cap(i, 0.);
     var o: ShadowCap;
-    o.pos = g.shadow_vp[k] * vec4f(c.world, 1.);
+    o.pos = shadow_clip(k, c.world);
     o.uv = c.uv;
     return o;
 }
@@ -529,7 +587,7 @@ struct ShadowCap {
     if (textureSample(tex, samp, i.uv).a * d.edge.a < 0.5) { discard; }
 }
 @vertex fn vs_shadow_solid(@location(0) p: vec3f, @location(1) n: vec3f, @builtin(instance_index) k: u32) -> @builtin(position) vec4f {
-    return g.shadow_vp[k] * d.model * vec4f(p, 1.);
+    return shadow_clip(k, (d.model * vec4f(p, 1.)).xyz);
 }
 
 // --- layers ---------------------------------------------------------------
