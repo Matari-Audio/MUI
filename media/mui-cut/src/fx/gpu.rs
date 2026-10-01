@@ -509,7 +509,7 @@ impl Passes {
         canvas: &GpuCanvas,
         frame: &Frame,
         atlas: &wgpu::Texture,
-        boxes: &[([u32; 2], [u32; 2], f64, &[Fx])],
+        boxes: &[AtlasBox<'_>],
     ) {
         // One size for all (grown, never shrunk), each box at its centre,
         // so a scene of several does not reallocate per box.
@@ -607,6 +607,10 @@ impl Passes {
         Ok(quads)
     }
 }
+
+/// A box of the atlas to run a stack over: corner, size, pixels per
+/// project pixel, and the stack.
+pub(crate) type AtlasBox<'a> = ([u32; 2], [u32; 2], f64, &'a [Fx]);
 
 fn encoder(c: &GpuCanvas) -> wgpu::CommandEncoder {
     c.device

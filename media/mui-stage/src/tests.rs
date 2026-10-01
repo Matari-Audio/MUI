@@ -374,8 +374,13 @@ fn a_models_maps_colour_and_bend_its_surface() {
     );
     // Left red, right green (two texels each, so a repeating filter does
     // not wrap one into the other); a normal leaning 45 degrees along +u.
-    let rg: Vec<u8> = [[255, 0, 0, 255], [255, 0, 0, 255], [0, 255, 0, 255], [0, 255, 0, 255]]
-        .concat();
+    let rg: Vec<u8> = [
+        [255, 0, 0, 255],
+        [255, 0, 0, 255],
+        [0, 255, 0, 255],
+        [0, 255, 0, 255],
+    ]
+    .concat();
     stage.texture("rg", &rg, [4, 1], true);
     stage.texture("lean", &[218, 128, 218, 255], [1, 1], false);
     let shot = |maps: [Option<String>; 3]| Shot {

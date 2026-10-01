@@ -696,19 +696,6 @@ fn nothing_lighter_shows_behind_a_dark_exploded_part() {
 /// and back. Tiny, built here so the example's model has a source.
 fn toy_glb() -> Vec<u8> {
     use serde_json::{Value, json};
-    let png = |w: u32, h: u32, px: Vec<u8>| {
-        let mut out = Vec::new();
-        let mut enc = png::Encoder::new(&mut out, w, h);
-        enc.set_color(png::ColorType::Rgba);
-        enc.write_header().unwrap().write_image_data(&px).unwrap();
-        out
-    };
-    let checker = |n: u32, a: [u8; 4], b: [u8; 4]| {
-        let px = (0..n * n)
-            .flat_map(|i| if (i % n + i / n) % 2 == 0 { a } else { b })
-            .collect();
-        png(n, n, px)
-    };
     #[derive(Default)]
     struct Gb {
         bin: Vec<u8>,
@@ -717,7 +704,7 @@ fn toy_glb() -> Vec<u8> {
     }
     impl Gb {
         fn view(&mut self, bytes: &[u8]) -> usize {
-            while self.bin.len() % 4 != 0 {
+            while !self.bin.len().is_multiple_of(4) {
                 self.bin.push(0);
             }
             self.views.push(
@@ -755,6 +742,25 @@ fn toy_glb() -> Vec<u8> {
             a
         }
     }
+    let png = |w: u32, h: u32, px: Vec<u8>| {
+        let mut out = Vec::new();
+        let mut enc = png::Encoder::new(&mut out, w, h);
+        enc.set_color(png::ColorType::Rgba);
+        enc.write_header().unwrap().write_image_data(&px).unwrap();
+        out
+    };
+    let checker = |n: u32, a: [u8; 4], b: [u8; 4]| {
+        let px = (0..n * n)
+            .flat_map(|i| {
+                if (i % n + i / n).is_multiple_of(2) {
+                    a
+                } else {
+                    b
+                }
+            })
+            .collect();
+        png(n, n, px)
+    };
     let mut gb = Gb::default();
     // The cube: four corners per face, wound counter-clockwise outward.
     let (mut pos, mut nor, mut uv, mut idx) = (vec![], vec![], vec![], vec![]);
@@ -856,7 +862,7 @@ fn toy_glb() -> Vec<u8> {
         views,
         accessors,
     } = gb;
-    while bin.len() % 4 != 0 {
+    while !bin.len().is_multiple_of(4) {
         bin.push(0);
     }
     let doc = json!({
@@ -897,7 +903,7 @@ fn toy_glb() -> Vec<u8> {
         "buffers": [{"byteLength": bin.len()}]
     });
     let mut text = serde_json::to_vec(&doc).unwrap();
-    while text.len() % 4 != 0 {
+    while !text.len().is_multiple_of(4) {
         text.push(b' ');
     }
     let total = 12 + 8 + text.len() + 8 + bin.len();

@@ -502,8 +502,11 @@ pub struct Part {
     pub node: usize,
     /// Skinned: its skin, and each vertex's four joints and weights. Its
     /// vertices are then in the skin's bind space, the node ignored.
-    pub skin: Option<(usize, Vec<([u16; 4], [f32; 4])>)>,
+    pub skin: Option<(usize, Vec<Weights>)>,
 }
+
+/// A vertex's four joints and their weights.
+pub type Weights = ([u16; 4], [f32; 4]);
 
 /// An image a part maps: straight RGBA.
 #[derive(Clone, Debug)]
@@ -692,6 +695,25 @@ impl Channel {
     }
 }
 
+/// Node `i`'s model-space matrix, its parents' resolved into `out` first.
+fn node_world(
+    i: usize,
+    nodes: &[Node],
+    trs: &[([f32; 3], [f32; 4], [f32; 3])],
+    out: &mut [Option<M4>],
+) -> M4 {
+    if let Some(m) = out[i] {
+        return m;
+    }
+    let local = trs_matrix(trs[i]);
+    let m = match nodes[i].parent {
+        Some(p) => mul(&node_world(p, nodes, trs, out), &local),
+        None => local,
+    };
+    out[i] = Some(m);
+    m
+}
+
 impl Mesh {
     /// Whether it moves: an animation, which [`Mesh::pose`] plays.
     pub fn animated(&self) -> bool {
@@ -715,25 +737,8 @@ impl Mesh {
         }
         // Parents come first: glTF does not promise it, so resolve lazily.
         let mut out: Vec<Option<M4>> = vec![None; self.nodes.len()];
-        fn world(
-            i: usize,
-            nodes: &[Node],
-            trs: &[([f32; 3], [f32; 4], [f32; 3])],
-            out: &mut [Option<M4>],
-        ) -> M4 {
-            if let Some(m) = out[i] {
-                return m;
-            }
-            let local = trs_matrix(trs[i]);
-            let m = match nodes[i].parent {
-                Some(p) => mul(&world(p, nodes, trs, out), &local),
-                None => local,
-            };
-            out[i] = Some(m);
-            m
-        }
         (0..self.nodes.len())
-            .map(|i| world(i, &self.nodes, &trs, &mut out))
+            .map(|i| node_world(i, &self.nodes, &trs, &mut out))
             .collect()
     }
 
@@ -819,7 +824,10 @@ pub fn glb(bytes: &[u8]) -> Result<Mesh, String> {
     let images: Vec<Picture> = g
         .images()
         .map(|im| match im.source() {
-            gltf::image::Source::View { view, mime_type } if mime_type == "image/png" => {
+            gltf::image::Source::View {
+                view,
+                mime_type: "image/png",
+            } => {
                 let data = get(view.buffer())?;
                 let bytes = data.get(view.offset()..view.offset() + view.length())?;
                 let (rgba, size) = crate::render::png_rgba(bytes).ok()?;

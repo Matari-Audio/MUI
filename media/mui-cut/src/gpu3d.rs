@@ -33,13 +33,15 @@ struct Slot {
     reach: u32,
 }
 
+type Painted = (Vec<Drawn>, Vec<Slot>, [u32; 2], (f64, u32));
+
 pub(crate) struct Space {
     stage: Stage,
     atlas: [u32; 2],
     /// What the atlas holds: each layer's content with its placement
     /// zeroed, where it is, and the frame's time and seed if an effect
     /// moves with them.
-    painted: Option<(Vec<Drawn>, Vec<Slot>, [u32; 2], (f64, u32))>,
+    painted: Option<Painted>,
     /// Layer effects, run over boxes of the atlas.
     fx: Option<crate::fx::gpu::Passes>,
     /// Skinned parts' meshes, by id, and the animation time they are bent
