@@ -1,14 +1,21 @@
 name: Verify
-# PRs get the full gate on Linux. Windows and macOS (wgpu backends, baseview
-# embedding, truce wrappers) build and test only after a merge to main, from
-# the merge queue, on demand, or on a PR labelled `ci:all-platforms`.
+# PRs get the full gate on Linux, as parallel jobs. Windows and macOS (wgpu
+# backends, baseview embedding, truce wrappers) build and test only after a
+# merge to main, from the merge queue, on demand, or on a PR labelled
+# `ci:all-platforms`.
 on:
   pull_request:
     types: [opened, synchronize, reopened, labeled]
   push:
     branches: [main]
   merge_group:
+  # `gh workflow run verify.yml --ref <branch> [-f platforms=false]`
   workflow_dispatch:
+    inputs:
+      platforms:
+        description: Also build and test on Windows and macOS
+        type: boolean
+        default: true
 permissions:
   contents: read
 concurrency:
@@ -19,8 +26,14 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
 jobs:
-  linux:
+  # tools/verify.sh in four parallel sections, each with its own cache.
+  gate:
     if: github.event.action != 'labeled'
+    strategy:
+      fail-fast: false
+      matrix:
+        section: [root-lint, root-test, media-lint, media-test]
+    name: ${{ matrix.section }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -35,21 +48,61 @@ jobs:
             libxcb1-dev libxcb-icccm4-dev libxcb-dri2-0-dev libxcb-xkb-dev \
             libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
             libxcb-randr0-dev libxcb-sync-dev libxkbcommon-dev libxkbcommon-x11-dev \
-            libwayland-dev libvulkan-dev libfontconfig1-dev libclang-dev libssl-dev libzstd-dev
+            libwayland-dev libvulkan-dev libfontconfig1-dev libclang-dev libssl-dev libzstd-dev \
+            $GPU
+        env:
+          # Test sections get lavapipe, a software Vulkan device, so the wgpu
+          # tests run instead of skipping for want of an adapter.
+          GPU: ${{ endsWith(matrix.section, '-test') && 'mesa-vulkan-drivers vulkan-tools' || '' }}
+      - if: endsWith(matrix.section, '-test')
+        name: Vulkan device
+        run: |
+          vulkaninfo --summary
+          vulkaninfo 2>/dev/null | grep -E 'VK_KHR_(ray_query|acceleration_structure)' || echo 'no VK_KHR_ray_query on this lavapipe'
       # rust-toolchain.toml pins the toolchain, rustfmt, clippy and the wasm target.
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
+          key: ${{ matrix.section }}
+          # media/ is its own workspace with its own target dir.
+          workspaces: ${{ startsWith(matrix.section, 'media') && 'media -> target' || '. -> target' }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: cargo fetch --locked
-      # media/ is its own workspace with its own lock; verify.sh runs it offline too.
-      - run: cargo fetch --manifest-path media/Cargo.toml
-      # fmt, test, clippy and the wasm library check: the same gate as local.
-      - run: ./tools/verify.sh
+      # mui-cut's sound tests build plugin adapters (moose, truce, nice-plug)
+      # into their own target dir, which rust-cache prunes: kept here.
+      - if: matrix.section == 'media-test'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: media/target/tmp/adapters/target
+          key: mui-cut-adapters-${{ hashFiles('Cargo.lock', 'media/Cargo.lock', 'media/mui-cut/tests/fixtures/**') }}
+          restore-keys: mui-cut-adapters-
+      - if: startsWith(matrix.section, 'root')
+        run: cargo fetch --locked
+      # verify.sh runs media/ offline too, against its own lock.
+      - if: startsWith(matrix.section, 'media')
+        run: cargo fetch --manifest-path media/Cargo.toml
+      # The same gate as local, one section of it.
+      - run: ./tools/verify.sh ${{ matrix.section }}
+      # A failing test leaves the adapter builds good.
+      - if: "!cancelled() && matrix.section == 'media-test' && github.ref == 'refs/heads/main'"
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: media/target/tmp/adapters/target
+          key: mui-cut-adapters-${{ hashFiles('Cargo.lock', 'media/Cargo.lock', 'media/mui-cut/tests/fixtures/**') }}
+
+  # The one check to require: green only when every section is.
+  linux:
+    if: always() && github.event.action != 'labeled'
+    needs: gate
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          RESULT: ${{ needs.gate.result }}
+        run: test "$RESULT" = success
 
   platforms:
     if: >-
-      github.event_name != 'pull_request' ||
+      (github.event_name != 'pull_request' && github.event_name != 'workflow_dispatch') ||
+      (github.event_name == 'workflow_dispatch' && inputs.platforms) ||
       (github.event.action == 'labeled' && github.event.label.name == 'ci:all-platforms') ||
       (github.event.action != 'labeled' && contains(github.event.pull_request.labels.*.name, 'ci:all-platforms'))
     strategy:

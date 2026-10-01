@@ -3,10 +3,24 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
+# One gate, four sections CI runs as parallel jobs: `./tools/verify.sh
+# [root-lint|root-test|media-lint|media-test|all]`, all by default.
+section="${1:-all}"
+case "$section" in
+  root-lint | root-test | media-lint | media-test | all) ;;
+  *) echo "usage: $0 [root-lint|root-test|media-lint|media-test|all]" >&2; exit 2 ;;
+esac
+on() { [ "$section" = all ] || [ "$section" = "$1" ]; }
+
+if on root-lint; then
 cargo fmt --all -- --check
+fi
 # Every workspace feature is additive (mui-vello's cpu/gpu-effects backends and
 # their facade forwards), so one all-features surface covers test, lint and wasm.
+if on root-test; then
 cargo test --workspace --all-features --locked --offline
+fi
+if on root-lint; then
 cargo clippy --workspace --all-features --all-targets --locked --offline -- -D warnings
 # --all-features hides a cfg that only breaks with a feature off: mui-vello's
 # backends each compile alone and with none.
@@ -22,6 +36,7 @@ cargo clippy -p mui-vello --no-default-features --features gpu-effects --all-tar
 # mui-baseview is a native window (baseview + a wgpu surface): no wasm either.
 # mui-truce itself stays in: its window/GPU half is cfg'd out on wasm32.
 cargo check --workspace --all-features --exclude mui-preview --exclude mui-gain-plugin --exclude mui-baseview --target wasm32-unknown-unknown --locked --offline
+fi
 
 # ---------------------------------------------------------------------------
 # media/: its own workspace (mui-stage, mui-reel, mui-motion-bridge, mui-cut), kept out
@@ -33,10 +48,16 @@ cargo check --workspace --all-features --exclude mui-preview --exclude mui-gain-
 # dependencies, so --locked would fail on every root dependency change; the
 # gate refreshes it instead and git status shows the diff.
 # ---------------------------------------------------------------------------
+if on media-lint; then
 cargo fmt --manifest-path media/Cargo.toml -p mui-stage -p mui-reel -p mui-motion-bridge -p mui-cut -- --check
+fi
+if on media-test; then
 cargo test --manifest-path media/Cargo.toml --workspace --all-features --offline
+fi
+if on media-lint; then
 cargo clippy --manifest-path media/Cargo.toml --workspace --all-features --all-targets --offline -- -D warnings
 cargo check --manifest-path media/Cargo.toml -p mui-stage --no-default-features --offline
 cargo clippy --manifest-path media/Cargo.toml -p mui-cut --lib --target wasm32-unknown-unknown --offline -- -D warnings
 # The plugin rev-pin guard (media/tools/mui-sync).
 python3 -m unittest discover -s media/tools/mui-sync
+fi

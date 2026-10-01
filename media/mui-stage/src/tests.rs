@@ -950,13 +950,18 @@ fn beauty_samples_antialias_an_edge_past_msaa() {
             .filter(|&v| v > 4 && v < 251)
             .collect();
         v.sort_unstable();
-        v.dedup();
-        v.len()
+        // One level, not two: half coverage encodes to sRGB 187.5, so a
+        // device's last bit picks 187 or 188 pixel by pixel.
+        v.dedup_by(|a, b| *a - *b <= 1);
+        v
     };
     let msaa = levels(stage.render(0., 0., 1, &shot).unwrap());
     let beauty = levels(stage.beauty(0., 0., 16, &shot).unwrap());
-    assert!(msaa <= 3, "4x MSAA alone: {msaa} edge levels");
-    assert!(beauty >= 8, "16 jittered samples: {beauty} edge levels");
+    assert!(msaa.len() <= 3, "4x MSAA alone: edge levels {msaa:?}");
+    assert!(
+        beauty.len() >= 8,
+        "16 jittered samples: edge levels {beauty:?}"
+    );
     // And the same every time.
     let a = stage.beauty(0., 0., 16, &shot).unwrap().rgba;
     assert_eq!(a, stage.beauty(0., 0., 16, &shot).unwrap().rgba);

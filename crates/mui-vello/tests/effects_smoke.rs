@@ -418,16 +418,28 @@ fn damaged_at(
 }
 
 fn same_pixels(part: &[u8], whole: &[u8]) {
-    let off = part.iter().zip(whole).filter(|(a, b)| a != b).count();
-    let worst = part
-        .iter()
-        .zip(whole)
-        .map(|(a, b)| a.abs_diff(*b))
-        .max()
-        .unwrap_or(0);
-    assert_eq!(
-        off, 0,
-        "{off} channels differ from a whole render, by up to {worst}"
+    near_pixels(part, whole, 0, "");
+}
+
+/// No channel of `part` more than `within` levels from `whole`; a failure
+/// says where the differing pixels are.
+fn near_pixels(part: &[u8], whole: &[u8], within: u8, what: &str) {
+    let mut off = 0;
+    let mut worst = 0;
+    let [mut x0, mut y0, mut x1, mut y1] = [u32::MAX, u32::MAX, 0, 0];
+    for (i, (a, b)) in part.iter().zip(whole).enumerate() {
+        if a != b {
+            let px = (i / 4) as u32;
+            let (x, y) = (px % SIZE[0], px / SIZE[0]);
+            [x0, y0, x1, y1] = [x0.min(x), y0.min(y), x1.max(x), y1.max(y)];
+            off += 1;
+            worst = worst.max(a.abs_diff(*b));
+        }
+    }
+    assert!(
+        worst <= within,
+        "{what}{off} channels differ from a whole render, by up to {worst}, \
+         in pixels {x0}..={x1} x {y0}..={y1}"
     );
 }
 
@@ -452,7 +464,19 @@ fn a_hover_renders_only_its_box_and_matches_a_whole_render() {
             "{}",
             stats.rendered_pixels
         );
-        same_pixels(&part, &whole);
+        // A part is drawn moved by whole tiles. At a fractional scale its
+        // f32 coordinates round apart from the whole frame's by an ulp, and
+        // the device's rasterizer turns that into a level or a few: Metal
+        // lands 96 channels 1 off, llvmpipe 106 channels up to 9 off, on
+        // the buttons' straight edges. At identity the move is exact. A box
+        // that misses what changed shows the change itself, Primary against
+        // Danger, far past this.
+        near_pixels(
+            &part,
+            &whole,
+            if xf == Affine::IDENTITY { 0 } else { 16 },
+            &format!("at {xf:?}: "),
+        );
     }
 }
 

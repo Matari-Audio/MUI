@@ -893,6 +893,8 @@ impl GpuRenderer {
         // A part renders its box alone, moved to the origin by whole
         // pixels (and whole 16 px tiles): Vello's cost follows the target's
         // extent, so a box near the far corner must not render the frame.
+        // At a fractional scale, moved f32 coordinates round apart from the
+        // frame's by an ulp: an edge may land a level or a few off.
         let (size, cull, draw) = match part.map(|r| r.map(f64::from)) {
             Some([x, y, w, h]) => (
                 [w as u32, h as u32],
