@@ -180,6 +180,9 @@ pub struct Scene {
     /// 3D: ambient occlusion, for contact depth.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ao: Option<Ao>,
+    /// 3D: what is brighter than white glows (mui-stage only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bloom: Option<three::Bloom>,
     /// Run over the whole frame, after every layer.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub effects: Vec<fx::Effect>,

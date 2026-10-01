@@ -1671,3 +1671,54 @@ fn a_keyed_view_size_is_sent_when_it_changes() {
         [serde_json::json!({"op": "input", "kind": "view", "width": 900.0, "height": 600.0})]
     );
 }
+
+/// Glass `texture`: its patterns key, list by path, fit the schema, merge
+/// a part's over its layer's, and reach the stage.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_glass_texture_keys_and_reaches_the_stage() {
+    let src = r#"{"size":[400,200],"fps":30,"scenes":[{"name":"a","duration":2,"mode":"3d",
+        "layers":[{"id":"syn","kind":"plugin","source":{"bin":"x"},"x":200,"y":100,
+        "material":{"transmission":1,"texture":{"ribbed":{"strength":[{"t":0,"v":0,"interp":"linear"},{"t":1,"v":1}],"scale":30}}},
+        "parts":{"a":{"material":{"texture":{"hammered":{"strength":0.5}}}}}}]}]}"#;
+    let doc: serde_json::Value = serde_json::from_str(src).unwrap();
+    let schema = Project::json_schema();
+    let v = jsonschema::validator_for(&schema).unwrap();
+    let errs: Vec<String> = v.iter_errors(&doc).map(|e| e.to_string()).collect();
+    assert!(errs.is_empty(), "{errs:?}");
+    let p = Project::load(src).unwrap();
+    let l = &p.scenes[0].layers[0];
+    let props: Vec<String> = l.props_in(true).into_iter().map(|(n, _)| n).collect();
+    for path in [
+        "material.texture.ribbed.strength",
+        "material.texture.ribbed.scale",
+        "parts.a.material.texture.hammered.strength",
+    ] {
+        assert!(props.iter().any(|n| n == path), "{path} in {props:?}");
+    }
+    let m = l.material.as_ref().unwrap().at(0.25);
+    assert_eq!(m.ribbed, Some([0.25, 30.]), "keyed");
+    let assets = capture_assets(&p);
+    let d = &eval(&p, &p.scenes[0], 0.5).layers[0];
+    let slabs = assets.slabs(d);
+    let get = |id: &str| {
+        let s = slabs.iter().find(|s| s.id == id).unwrap();
+        s.space.material.unwrap().over(mui_stage::Material::SLAB)
+    };
+    let (a, b) = (get("syn#a"), get("syn#b"));
+    assert_eq!(
+        (
+            a.ribbed.strength,
+            a.ribbed.scale,
+            a.hammered.strength,
+            a.hammered.scale
+        ),
+        (0.5, 30., 0.5, 24.),
+        "a's dimples over the layer's reeds, at the default size"
+    );
+    assert_eq!(
+        (b.ribbed.strength, b.hammered.strength),
+        (0.5, 0.),
+        "b has the layer's"
+    );
+}

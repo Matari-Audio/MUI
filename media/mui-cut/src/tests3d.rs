@@ -1044,3 +1044,42 @@ fn a_sky_is_seen_behind_a_3d_scene() {
     let (lo, hi) = (lit.iter().min().unwrap(), lit.iter().max().unwrap());
     assert!(hi - lo > 20, "clouds across it: {lo}..{hi}");
 }
+
+/// A scene's `bloom`: the sun in frame glows into the sky round it.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn bloom_makes_a_sun_in_frame_glow() {
+    let src = |bloom: &str| {
+        format!(
+            r##"{{"size":[320,180],"fps":30,"scenes":[{{"name":"a","duration":1,"mode":"3d",
+            "layers":[{{"id":"cam","kind":"camera","rx":-20}}],
+            "sky":{{"elevation":20,"azimuth":0,"cover":0}}{bloom}}}]}}"##
+        )
+    };
+    let glow = |bloom: &str| {
+        let p = Project::load(&src(bloom)).unwrap();
+        let mut g = offline(&p, Engine::Classic)?;
+        let px = frame(&mut g, &[eval(&p, &p.scenes[0], 0.)]);
+        // Round the sun at the frame's middle, out where the sky is not white.
+        let at = |x: usize, y: usize| u32::from(px[(y * 320 + x) * 4 + 1]);
+        Some(
+            [(0, 90), (310, 90), (160, 0), (40, 20)]
+                .map(|(x, y)| at(x, y))
+                .iter()
+                .sum::<u32>(),
+        )
+    };
+    let doc: serde_json::Value =
+        serde_json::from_str(&src(r#","bloom":{"strength":1,"threshold":0.8}"#)).unwrap();
+    let v = jsonschema::validator_for(&Project::json_schema()).unwrap();
+    assert!(v.is_valid(&doc));
+    let (Some(plain), Some(bloomed)) =
+        (glow(""), glow(r#","bloom":{"strength":1,"threshold":0.8}"#))
+    else {
+        return;
+    };
+    assert!(
+        bloomed > plain + 40,
+        "glow round the sun: {bloomed} against {plain}"
+    );
+}

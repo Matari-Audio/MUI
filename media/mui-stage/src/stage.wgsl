@@ -88,6 +88,10 @@ struct Draw {
     // Glass: x print (the layer's dark is clear, its light is ink), y the
     // bevel in world units.
     glass2: vec4f,
+    // Glass pressed with a relief: the steepest slope of its reeds,
+    // hammered dimples and ripples, and (`glass4`) their sizes.
+    glass3: vec4f,
+    glass4: vec4f,
 };
 @group(1) @binding(0) var<uniform> d: Draw;
 
@@ -1150,7 +1154,7 @@ fn glass(p: vec3f, n: vec3f, tilt: vec3f, base: vec3f, px: vec2f) -> vec3f {
     var glint = vec3f(0.);
     if (lit_shot()) {
         let shine = 2. / max(rough * rough * rough * rough, 1e-3) - 2.;
-        let s = shade(p, n, d.flags.x, shine);
+        let s = shade(p, nb, d.flags.x, shine);
         body = base * s.diffuse;
         glint = f0 * s.spec * (shine + 8.) / 25.;
     }
@@ -1191,18 +1195,57 @@ fn glass(p: vec3f, n: vec3f, tilt: vec3f, base: vec3f, px: vec2f) -> vec3f {
     return mix(opaque, clear, smoothstep(0., 0.3, trans));
 }
 
-// The bevel's tilt of a face's normal at `uv`: out toward the nearer
-// edges within `glass2.y` of them, a quarter round.
-fn bevel_tilt(uv: vec2f) -> vec3f {
-    let r = min(d.glass2.y, 0.5 * min(d.size.x, d.size.y));
-    if (r <= 0.) { return vec3f(0.); }
+// How a face's normal at `uv` is tilted: by its bevel, out toward the
+// nearer edges within `glass2.y` of them, a quarter round; and by its
+// relief.
+fn face_tilt(uv: vec2f) -> vec3f {
     // From the middle, in the layer's y-down units.
     let q = ((uv - d.uv.xy) / (d.uv.zw - d.uv.xy) - 0.5) * d.size.xy;
-    let t = 1. - clamp((d.size.xy * 0.5 - abs(q)) / r, vec2f(0.), vec2f(1.));
-    let slope = t / sqrt(max(1. - t * t, vec2f(0.04)));
     let ax = normalize((d.model * vec4f(1., 0., 0., 0.)).xyz);
     let ay = normalize((d.model * vec4f(0., 1., 0., 0.)).xyz);
-    return ax * sign(q.x) * slope.x - ay * sign(q.y) * slope.y;
+    var slope = -relief(q);
+    let r = min(d.glass2.y, 0.5 * min(d.size.x, d.size.y));
+    if (r > 0.) {
+        let t = 1. - clamp((d.size.xy * 0.5 - abs(q)) / r, vec2f(0.), vec2f(1.));
+        slope += sign(q) * t / sqrt(max(1. - t * t, vec2f(0.04)));
+    }
+    return ax * slope.x - ay * slope.y;
+}
+fn hash22(p: vec2f) -> vec2f { return vec2f(hash2(p), hash2(p + vec2f(19.19, 7.31))); }
+// The slope (rise along x and along y, y down) a glass face is pressed to
+// at `q`: reeds up the face, each a cylindrical lens across it; hammered
+// dimples, each a bowl round the nearest of jittered points; and three
+// crossing ripples that run with time.
+fn relief(q: vec2f) -> vec2f {
+    var s = vec2f(0.);
+    if (d.glass3.x > 0.) {
+        s.x += d.glass3.x * (2. * fract(q.x / d.glass4.x) - 1.);
+    }
+    if (d.glass3.y > 0.) {
+        let p = q / d.glass4.y;
+        let i = floor(p);
+        var near = vec2f(9.);
+        for (var y = -1; y <= 1; y++) {
+            for (var x = -1; x <= 1; x++) {
+                let o = i + vec2f(f32(x), f32(y));
+                let r = p - (o + 0.15 + 0.7 * hash22(o));
+                if (dot(r, r) < dot(near, near)) { near = r; }
+            }
+        }
+        let b = near / 0.75;
+        s += d.glass3.y * b / max(1., length(b));
+    }
+    if (d.glass3.z > 0.) {
+        let p = q / d.glass4.z * 6.2831853;
+        let t = g.time_res.x;
+        let k0 = vec2f(1., 0.);
+        let k1 = vec2f(-0.5, 0.866) * 1.23;
+        let k2 = vec2f(-0.5, -0.866) * 0.81;
+        let w = cos(dot(p, k0) + t * 1.3) * k0 + cos(dot(p, k1) - t * 1.1) * k1 / 1.23
+            + cos(dot(p, k2) + t * 0.9) * k2 / 0.81;
+        s += d.glass3.z * w / 3.;
+    }
+    return s;
 }
 // A glass face: its layer is the base colour and coverage.
 @fragment fn fs_glass(i: Cap) -> Out {
@@ -1211,15 +1254,21 @@ fn bevel_tilt(uv: vec2f) -> vec3f {
     if (a < 0.004) { discard; }
     let base = c.rgb / max(c.a, 1e-4);
     let n = face_normal(i.world);
-    let rgb = glass(i.world, n, bevel_tilt(i.uv), base, i.pos.xy) * d.size.w;
-    return out(vec4f(rgb * a, a), i.world);
+    let rgb = glass(i.world, n, face_tilt(i.uv), base, i.pos.xy) * d.size.w;
+    var o = out(vec4f(rgb * a, a), i.world);
+    o.dist.w = a;
+    return o;
 }
 // A glass wall or model: its colour is the base.
 @fragment fn fs_glass_solid(i: Wall) -> Out {
     var n = normalize(i.normal);
     if (dot(n, g.eye.xyz - i.world) < 0.) { n = -n; }
-    let rgb = glass(i.world, n, vec3f(0.), d.edge.rgb, i.pos.xy);
-    return out(vec4f(rgb, 1.) * d.edge.a, i.world);
+    // A solid's relief is pressed along the world's x and y.
+    let s = relief(vec2f(i.world.x, -i.world.y));
+    let rgb = glass(i.world, n, vec3f(-s.x, s.y, 0.), d.edge.rgb, i.pos.xy);
+    var o = out(vec4f(rgb, 1.) * d.edge.a, i.world);
+    o.dist.w = d.edge.a;
+    return o;
 }
 
 fn aces(x: vec3f) -> vec3f {

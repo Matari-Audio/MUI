@@ -162,6 +162,24 @@ pub struct Env {
     pub background: bool,
 }
 
+/// Light brighter than `threshold` (1 is white) glows into what is round
+/// it, by `strength`, as through a lens: a sun in frame, glints off glass.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(transform = crate::vars::bindable)]
+pub struct Bloom {
+    #[serde(default = "bloom_strength")]
+    pub strength: f64,
+    #[serde(default = "bloom_threshold")]
+    pub threshold: f64,
+}
+fn bloom_strength() -> f64 {
+    0.5
+}
+fn bloom_threshold() -> f64 {
+    1.
+}
+
 /// Ambient occlusion: creases and contacts within `radius` pixels darken,
 /// by `strength` (1 the full occlusion).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -220,6 +238,42 @@ pub struct Material {
     /// bends what is behind it (a flat pane leaves a far sky in place).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bevel: Option<Anim<f64>>,
+    /// Glass pressed with a pattern that tilts its face, so it bends,
+    /// mirrors and catches light by it. Several mix; key their `strength`
+    /// to crossfade one into another.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub texture: Option<Texture>,
+}
+
+/// Patterns pressed into a glass face (see [`Material::texture`]).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(transform = crate::vars::bindable)]
+pub struct Texture {
+    /// Reeds running up the face, each a lens across it (fluted glass).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ribbed: Option<Relief>,
+    /// Hammered dimples.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hammered: Option<Relief>,
+    /// Three crossing ripples that run with time, like water.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ripple: Option<Relief>,
+}
+
+/// One pattern of a [`Texture`].
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(transform = crate::vars::bindable)]
+pub struct Relief {
+    /// The steepest slope it presses the face to: 0 flat, 1 is 45 degrees.
+    pub strength: Anim<f64>,
+    /// Pixels across one reed, dimple or wave.
+    #[serde(default = "relief_scale")]
+    pub scale: Anim<f64>,
+}
+fn relief_scale() -> Anim<f64> {
+    Anim::Value(24.)
 }
 
 /// A [`Material`] at one time: the fields it sets.
@@ -243,6 +297,13 @@ pub struct Surface {
     pub print: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bevel: Option<f64>,
+    /// [`Texture`]'s patterns: strength and scale.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ribbed: Option<[f64; 2]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hammered: Option<[f64; 2]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ripple: Option<[f64; 2]>,
 }
 
 impl Material {
@@ -265,7 +326,22 @@ impl Material {
         if let Some(a) = &self.tint {
             out.push(("material.tint".into(), Color(a)));
         }
+        for (n, r) in self.reliefs() {
+            if let Some(r) = r {
+                out.push((format!("material.texture.{n}.strength"), Num(&r.strength)));
+                out.push((format!("material.texture.{n}.scale"), Num(&r.scale)));
+            }
+        }
         out
+    }
+
+    fn reliefs(&self) -> [(&'static str, Option<&Relief>); 3] {
+        let t = self.texture.as_ref();
+        [
+            ("ribbed", t.and_then(|t| t.ribbed.as_ref())),
+            ("hammered", t.and_then(|t| t.hammered.as_ref())),
+            ("ripple", t.and_then(|t| t.ripple.as_ref())),
+        ]
     }
 
     pub fn at(&self, t: f64) -> Surface {
@@ -280,6 +356,19 @@ impl Material {
             tint: self.tint.as_ref().map(|a| a.at(t)),
             print: num(&self.print).map(|v| v.clamp(0., 1.)),
             bevel: num(&self.bevel).map(|v| v.max(0.)),
+            ..self.reliefs_at(t)
+        }
+    }
+
+    fn reliefs_at(&self, t: f64) -> Surface {
+        let [a, b, c] = self
+            .reliefs()
+            .map(|(_, r)| r.map(|r| [r.strength.at(t).max(0.), r.scale.at(t).max(0.)]));
+        Surface {
+            ribbed: a,
+            hammered: b,
+            ripple: c,
+            ..Surface::default()
         }
     }
 }
@@ -288,6 +377,12 @@ impl Surface {
     /// `base` with the fields this sets replaced.
     pub fn over(&self, base: mui_stage::Material) -> mui_stage::Material {
         let f = |v: Option<f64>, b: f32| v.map_or(b, |v| v as f32);
+        let relief = |v: Option<[f64; 2]>, b| {
+            v.map_or(b, |[s, k]| mui_stage::Relief {
+                strength: s as f32,
+                scale: k as f32,
+            })
+        };
         mui_stage::Material {
             metallic: f(self.metallic, base.metallic),
             roughness: f(self.roughness, base.roughness),
@@ -298,6 +393,9 @@ impl Surface {
             tint: self.tint.map_or(base.tint, crate::gpu3d::linear),
             print: f(self.print, base.print),
             bevel: f(self.bevel, base.bevel),
+            ribbed: relief(self.ribbed, base.ribbed),
+            hammered: relief(self.hammered, base.hammered),
+            ripple: relief(self.ripple, base.ripple),
         }
     }
     /// `under` with the fields this sets replaced: a part's surface over
@@ -313,6 +411,9 @@ impl Surface {
             tint: self.tint.or(under.tint),
             print: self.print.or(under.print),
             bevel: self.bevel.or(under.bevel),
+            ribbed: self.ribbed.or(under.ribbed),
+            hammered: self.hammered.or(under.hammered),
+            ripple: self.ripple.or(under.ripple),
         }
     }
     /// Drawn as glass.
@@ -445,6 +546,8 @@ pub struct View {
     pub sky: Option<mui_stage::Sky>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ao: Option<Ao>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bloom: Option<Bloom>,
 }
 
 /// A project point (x right, y down, z deeper) in mui-stage's world
@@ -523,6 +626,7 @@ pub fn view(size: [u32; 2], scene: &Scene, t: f64, layers: &[Drawn]) -> View {
         }),
         sky: scene.sky.as_ref().map(|k| k.at(t)),
         ao: scene.ao.clone(),
+        bloom: scene.bloom.clone(),
     }
 }
 
@@ -679,6 +783,7 @@ fn gltf_material(m: &gltf::Material<'_>) -> mui_stage::Material {
         tint,
         print: 0.,
         bevel: 0.,
+        ..mui_stage::Material::SLAB
     }
 }
 

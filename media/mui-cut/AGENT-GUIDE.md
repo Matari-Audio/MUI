@@ -77,6 +77,13 @@ with the keys already there: an exit after an entrance keeps both.
   key `transmission` from 0, which crossfades, and per part
   (`parts.<id>.material`) for a sweep. A scene's `sky` puts a sunlit,
   clouded sky behind it all for glass to refract (mui-stage only).
+  For glass that warps it hard, press it: `material.texture` takes
+  `ribbed` (reeds), `hammered` (dimples) and `ripple`, each a keyable
+  `strength` (0.3 subtle, 1 wild) and `scale` (pixels per reed or
+  dimple); a high `ior` (1.8 to 2.4) and `dispersion` 2 to 4 fringe the
+  reeds in rainbows. Key one pattern's strength down while another's
+  goes up to melt one into the other. A scene's `bloom` makes glints and
+  an in-frame sun glow.
 - **Plugins:** import once with `source_add`, then a plugin layer's
   `source` may be that id (it is written out in full). Parameters are
   `{"id": "filter", "field": "cutoff"}`; `patch_get` reports the same one
