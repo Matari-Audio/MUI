@@ -950,7 +950,9 @@ fn beauty_samples_antialias_an_edge_past_msaa() {
             .filter(|&v| v > 4 && v < 251)
             .collect();
         v.sort_unstable();
-        v.dedup();
+        // One level, not two: half coverage encodes to sRGB 187.5, so a
+        // device's last bit picks 187 or 188 pixel by pixel.
+        v.dedup_by(|a, b| *a - *b <= 1);
         v
     };
     let msaa = levels(stage.render(0., 0., 1, &shot).unwrap());

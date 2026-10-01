@@ -464,14 +464,17 @@ fn a_hover_renders_only_its_box_and_matches_a_whole_render() {
             "{}",
             stats.rendered_pixels
         );
-        // A part is drawn moved by whole tiles. At a fractional scale the
-        // moved f32 edges and gradient positions round apart from the
-        // whole frame's: Metal lands 96 channels one level off. A seam or
-        // a missed entry is far more than one level.
+        // A part is drawn moved by whole tiles. At a fractional scale its
+        // f32 coordinates round apart from the whole frame's by an ulp, and
+        // the device's rasterizer turns that into a level or a few: Metal
+        // lands 96 channels 1 off, llvmpipe 106 channels up to 9 off, on
+        // the buttons' straight edges. At identity the move is exact. A box
+        // that misses what changed shows the change itself, Primary against
+        // Danger, far past this.
         near_pixels(
             &part,
             &whole,
-            u8::from(xf != Affine::IDENTITY),
+            if xf == Affine::IDENTITY { 0 } else { 16 },
             &format!("at {xf:?}: "),
         );
     }
