@@ -479,7 +479,7 @@ pub struct Layer {
     pub ring_radius: Anim<f64>,
     #[serde(default = "zero", skip_serializing_if = "is_zero")]
     pub path_offset: Anim<f64>,
-    /// Lottie: seconds into the animation at the scene's start.
+    /// Lottie, model: seconds into the animation at the scene's start.
     #[serde(default = "zero", skip_serializing_if = "is_zero")]
     pub time: Anim<f64>,
     /// Plugin: 0..1 pulls the parts away from the UI's centre (1: twice as
@@ -762,6 +762,7 @@ impl Layer {
                     ("scale", &self.scale),
                     ("height", &self.height),
                     ("opacity", &self.opacity),
+                    ("time", &self.time),
                 ] {
                     num(n, a);
                 }
@@ -1196,7 +1197,7 @@ pub struct Drawn {
     pub spacing: [f64; 2],
     pub ring_radius: f64,
     pub path_offset: f64,
-    /// Lottie: seconds into the animation.
+    /// Lottie, model: seconds into the animation.
     pub time: f64,
     /// Per glyph (text, newlines skipped) or per copy (duplicator).
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -1325,6 +1326,7 @@ impl Layer {
         };
         let time = match self.kind {
             Kind::Lottie { speed, .. } => self.time.at(t) + t * speed,
+            Kind::Model { .. } => self.time.at(t) + t,
             _ => 0.,
         };
         Drawn {

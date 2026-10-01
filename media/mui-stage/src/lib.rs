@@ -545,6 +545,10 @@ pub struct Model {
     pub material: Material,
     pub cast: bool,
     pub receive: bool,
+    /// Images [`Stage::texture`] uploaded, over the mesh's UVs: base colour
+    /// (times `color`), a tangent-space normal map, and metallic (blue) and
+    /// roughness (green) times the material's, as glTF has them.
+    pub maps: [Option<String>; 3],
 }
 
 /// Distance fog: surfaces fade into `color` between `near` and `far` units
@@ -715,6 +719,7 @@ struct Walls {
 
 struct Mesh {
     vertices: wgpu::Buffer,
+    uvs: wgpu::Buffer,
     indices: wgpu::Buffer,
     count: u32,
     /// Local bounds.
@@ -766,6 +771,13 @@ pub struct Stage {
     bloom: Vec<wgpu::TextureView>,
     layers: HashMap<String, Layer>,
     meshes: HashMap<String, Mesh>,
+    /// Models' images ([`Stage::texture`]), the white and flat-normal
+    /// stand-ins for a map a model has not, the repeating sampler they
+    /// take, and a bind group per set of maps in use.
+    images: HashMap<String, wgpu::TextureView>,
+    blank: [wgpu::TextureView; 2],
+    repeat: wgpu::Sampler,
+    map_groups: HashMap<[Option<String>; 3], wgpu::BindGroup>,
     /// Extruded planes' walls from the last subframe.
     walls: Vec<Walls>,
     /// How many wall meshes were ever built (the cache's test reads it).
@@ -817,6 +829,40 @@ fn target(
         view_formats: &[],
     })
 }
+/// A model's image, uploaded (no mips).
+fn image(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    rgba: &[u8],
+    [w, h]: [u32; 2],
+    srgb: bool,
+) -> wgpu::Texture {
+    use wgpu::util::DeviceExt;
+    device.create_texture_with_data(
+        queue,
+        &wgpu::TextureDescriptor {
+            label: Some("mui-stage model map"),
+            size: wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: if srgb {
+                wgpu::TextureFormat::Rgba8UnormSrgb
+            } else {
+                wgpu::TextureFormat::Rgba8Unorm
+            },
+            usage: wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        },
+        wgpu::util::TextureDataOrder::LayerMajor,
+        rgba,
+    )
+}
+
 fn view(t: &wgpu::Texture) -> wgpu::TextureView {
     t.create_view(&wgpu::TextureViewDescriptor::default())
 }
@@ -1022,6 +1068,15 @@ impl Stage {
             anisotropy_clamp: 16,
             ..Default::default()
         });
+        let repeat = device.create_sampler(&wgpu::SamplerDescriptor {
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let blank = [[255, 255, 255, 255], [128, 128, 255, 255]]
+            .map(|px| view(&image(&device, &queue, &px, [1, 1], false)));
         let present_format = wgpu::TextureFormat::Rgba8Unorm;
         let pipes = pipelines(&device, &layout, DEFAULT_BACKGROUND, present_format)?;
 
@@ -1127,6 +1182,10 @@ impl Stage {
             bloom,
             layers: HashMap::new(),
             meshes: HashMap::new(),
+            images: HashMap::new(),
+            blank,
+            repeat,
+            map_groups: HashMap::new(),
             walls: Vec::new(),
             walls_built: 0,
             renderer: None,
@@ -1155,6 +1214,12 @@ impl Stage {
     /// Upload a triangle mesh as `id`: per vertex a position and a normal
     /// (y up, logical units), three indices per triangle.
     pub fn mesh(&mut self, id: &str, vertices: &[[f32; 6]], indices: &[u32]) {
+        self.mesh_uv(id, vertices, &[], indices);
+    }
+
+    /// [`Stage::mesh`] with a texture coordinate per vertex, which a
+    /// [`Model`]'s maps are sampled at (none: all at 0, 0).
+    pub fn mesh_uv(&mut self, id: &str, vertices: &[[f32; 6]], uvs: &[[f32; 2]], indices: &[u32]) {
         let init = |contents: &[u8], usage| {
             self.device
                 .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -1171,14 +1236,79 @@ impl Stage {
                 max[i] = max[i].max(v[i]);
             }
         }
+        let zeros;
+        let uvs = if uvs.len() == vertices.len() {
+            uvs
+        } else {
+            zeros = vec![[0f32; 2]; vertices.len()];
+            &zeros
+        };
         let mesh = Mesh {
             vertices: init(bytemuck::cast_slice(vertices), wgpu::BufferUsages::VERTEX),
+            uvs: init(bytemuck::cast_slice(uvs), wgpu::BufferUsages::VERTEX),
             indices: init(bytemuck::cast_slice(indices), wgpu::BufferUsages::INDEX),
             count: indices.len() as u32,
             min,
             max,
         };
         self.meshes.insert(id.into(), mesh);
+    }
+
+    /// Keep straight RGBA `rgba`, `size` pixels, as image `id` for a
+    /// [`Model`]'s maps, replacing any before; `srgb` for a colour (base
+    /// colour), not for data (normals, metallic-roughness).
+    pub fn texture(&mut self, id: &str, rgba: &[u8], size: [u32; 2], srgb: bool) {
+        let t = image(&self.device, &self.queue, rgba, size, srgb);
+        self.images.insert(id.into(), view(&t));
+        self.map_groups
+            .retain(|k, _| !k.iter().flatten().any(|m| m == id));
+    }
+
+    /// Whether [`Stage::texture`] uploaded `id`.
+    pub fn has_texture(&self, id: &str) -> bool {
+        self.images.contains_key(id)
+    }
+
+    /// The bind group of a model's maps, a stand-in for each it has not.
+    fn maps_group(&mut self, maps: &[Option<String>; 3]) -> wgpu::BindGroup {
+        if let Some(g) = self.map_groups.get(maps) {
+            return g.clone();
+        }
+        let pick = |i: usize, blank: usize| {
+            maps[i]
+                .as_ref()
+                .and_then(|m| self.images.get(m))
+                .unwrap_or(&self.blank[blank])
+        };
+        let (base, normal, mr) = (pick(0, 0), pick(1, 1), pick(2, 0));
+        let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("mui-stage model maps"),
+            layout: &self.tex_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(base),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.repeat),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.post.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(normal),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(mr),
+                },
+            ],
+        });
+        self.map_groups.insert(maps.clone(), group.clone());
+        group
     }
 
     /// Whether [`Stage::mesh`] uploaded `id`.
@@ -1990,7 +2120,26 @@ impl Stage {
         self.walls.retain_mut(|w| std::mem::take(&mut w.used));
         for (i, m) in models.iter().enumerate() {
             let [a, b, c] = material(&m.material, m.receive, m.material.thickness, false);
-            let rows = |mirror| [[0., 0., 0., 1.], m.color, mirror, [0., 0., 1., 1.], a, b, c];
+            // `size.x`: it has a normal map.
+            let bumped = if m.maps[1]
+                .as_ref()
+                .is_some_and(|n| self.images.contains_key(n))
+            {
+                1.
+            } else {
+                0.
+            };
+            let rows = |mirror| {
+                [
+                    [bumped, 0., 0., 1.],
+                    m.color,
+                    mirror,
+                    [0., 0., 1., 1.],
+                    a,
+                    b,
+                    c,
+                ]
+            };
             put(n + i, m.transform, rows([0.; 4]));
             if let Some((flip, mirror)) = flip {
                 put(k + n + i, flip * m.transform, rows(mirror));
@@ -2155,12 +2304,18 @@ impl Stage {
             });
         }
         glass.sort_by(|a, b| b.0.total_cmp(&a.0));
+        let map_groups: Vec<wgpu::BindGroup> = opaque
+            .iter()
+            .map(|&i| self.maps_group(&models[i].maps))
+            .collect();
         let draw = |pass: &mut wgpu::RenderPass<'_>, base: usize| {
             pass.set_pipeline(&self.pipes.mesh);
-            for &i in &opaque {
+            for (&i, maps) in opaque.iter().zip(&map_groups) {
                 let mesh = &self.meshes[&models[i].mesh];
                 pass.set_bind_group(1, &self.group1, &[((base + n + i) as u64 * SLOT) as u32]);
+                pass.set_bind_group(2, maps, &[]);
                 pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+                pass.set_vertex_buffer(1, mesh.uvs.slice(..));
                 pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
                 pass.draw_indexed(0..mesh.count, 0, 0..1);
             }
@@ -3005,6 +3160,15 @@ fn pipelines(
         step_mode: wgpu::VertexStepMode::Vertex,
         attributes: &wall_attrs,
     })];
+    let uv_attrs = wgpu::vertex_attr_array![2 => Float32x2];
+    let mesh_buf = [
+        wall_buf[0].clone(),
+        Some(wgpu::VertexBufferLayout {
+            array_stride: 8,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &uv_attrs,
+        }),
+    ];
     // `scene`: into the multisampled HDR target with depth.
     let make = |vs: &str,
                 fs: &str,
@@ -3128,13 +3292,13 @@ fn pipelines(
         ao_apply: make("vs_full", "fs_ao_apply", HDR, None, false, false, &[]),
         present: make("vs_full", "fs_final", present, None, false, false, &[]),
         mesh: make(
-            "vs_wall",
+            "vs_mesh",
             "fs_mesh",
             HDR,
             Some(premul),
             true,
             true,
-            &wall_buf,
+            &mesh_buf,
         ),
         shadow_face: shadow("vs_shadow_face", Some("fs_shadow_face"), &[]),
         shadow_solid: shadow("vs_shadow_solid", None, &wall_buf),

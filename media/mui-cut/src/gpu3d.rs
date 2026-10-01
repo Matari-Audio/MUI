@@ -42,6 +42,9 @@ pub(crate) struct Space {
     painted: Option<(Vec<Drawn>, Vec<Slot>, [u32; 2], (f64, u32))>,
     /// Layer effects, run over boxes of the atlas.
     fx: Option<crate::fx::gpu::Passes>,
+    /// Skinned parts' meshes, by id, and the animation time they are bent
+    /// to.
+    skinned: std::collections::HashMap<String, f64>,
 }
 
 /// sRGB bytes to linear light.
@@ -82,6 +85,7 @@ impl Space {
             atlas: [ATLAS, 256],
             painted: None,
             fx: None,
+            skinned: std::collections::HashMap::new(),
         }
     }
 
@@ -296,19 +300,38 @@ impl Space {
                         ],
                     });
                     let tint = linear(l.fill);
+                    let pose = mesh.pose(mesh.animated().then_some(l.time));
                     for (i, part) in mesh.parts.iter().enumerate() {
-                        let id = format!("{path}#{i}");
+                        let mut id = format!("{path}#{i}");
                         // The glTF's thickness is in model units.
                         let own = Material {
                             thickness: part.material.thickness * k,
                             ..part.material
                         };
-                        if !self.stage.has_mesh(&id) {
-                            self.stage.mesh(&id, &part.vertices, &part.indices);
+                        if let Some(bent) = mesh.skinned(part, &pose) {
+                            // Bent per layer, re-uploaded as its time moves.
+                            id = format!("{id}@{}", l.id);
+                            if self.skinned.get(&id) != Some(&l.time) {
+                                self.stage.mesh_uv(&id, &bent, &part.uvs, &part.indices);
+                                self.skinned.insert(id.clone(), l.time);
+                            }
+                        } else if !self.stage.has_mesh(&id) {
+                            self.stage
+                                .mesh_uv(&id, &part.vertices, &part.uvs, &part.indices);
                         }
+                        let maps = std::array::from_fn(|k| {
+                            let img = part.maps[k]?;
+                            let pic = &mesh.images[img];
+                            let tid = format!("{path}@{img}:{}", k == 0);
+                            if !self.stage.has_texture(&tid) {
+                                self.stage.texture(&tid, &pic.rgba, pic.size, k == 0);
+                            }
+                            Some(tid)
+                        });
                         models.push(Model {
                             mesh: id,
-                            transform: m,
+                            maps,
+                            transform: m * mesh.place(part, &pose),
                             color: [
                                 part.color[0] * tint[0],
                                 part.color[1] * tint[1],

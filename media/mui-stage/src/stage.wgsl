@@ -537,12 +537,41 @@ struct Wall {
 
 // A model: base colour, metallic and roughness, lit by the shot's lights
 // or, in an unlit shot, by the walls' fixed key light.
-@fragment fn fs_mesh(i: Wall) -> Out {
+// A model: a wall's attributes and its texture coordinate. Its maps are
+// group 2: base colour `tex`, normal `aux`, metallic-roughness `aux2`.
+struct MeshV {
+    @builtin(position) pos: vec4f,
+    @location(0) world: vec3f,
+    @location(1) normal: vec3f,
+    @location(2) uv: vec2f,
+};
+@vertex fn vs_mesh(@location(0) p: vec3f, @location(1) n: vec3f, @location(2) uv: vec2f) -> MeshV {
+    let world = d.model * vec4f(p, 1.);
+    return MeshV(g.view_proj * world, world.xyz, normalize((d.model * vec4f(n, 0.)).xyz), uv);
+}
+@fragment fn fs_mesh(i: MeshV) -> Out {
+    // Derivatives first, in uniform control flow.
+    let dp = array<vec3f, 2>(dpdx(i.world), dpdy(i.world));
+    let duv = array<vec2f, 2>(dpdx(i.uv), dpdy(i.uv));
+    let albedo = textureSample(tex, samp, i.uv);
+    let bump = textureSample(aux, samp, i.uv).xyz * 2. - 1.;
+    let mr = textureSample(aux2, samp, i.uv);
     var n = normalize(i.normal);
     if (dot(n, g.eye.xyz - i.world) < 0.) { n = -n; }
-    let base = d.edge.rgb;
-    let metal = d.flags.y;
-    let rough = d.flags.z;
+    if (d.size.x > 0.5) {
+        // No tangents in the mesh: the frame from the screen derivatives
+        // (Schüler's cotangent frame).
+        let a = cross(dp[1], n);
+        let b = cross(n, dp[0]);
+        let t = a * duv[0].x + b * duv[1].x;
+        let bt = a * duv[0].y + b * duv[1].y;
+        let k = inverseSqrt(max(max(dot(t, t), dot(bt, bt)), 1e-20));
+        let m = normalize(t * k * bump.x + bt * k * bump.y + n * bump.z);
+        n = select(n, m, all(m == m));
+    }
+    let base = d.edge.rgb * albedo.rgb;
+    let metal = d.flags.y * mr.b;
+    let rough = d.flags.z * mr.g;
     let shine = 2. / max(rough * rough * rough * rough, 1e-3) - 2.;
     let f0 = mix(vec3f(0.04), base, metal);
     var c: vec3f;
@@ -563,7 +592,7 @@ struct Wall {
         c = base * (1. - metal) * (0.3 + 0.7 * ndl)
             + f0 * pow(max(dot(n, h), 0.), shine) * ndl * (shine + 8.) / 25.;
     }
-    let o = mirrored(vec4f(c, 1.) * d.edge.a, i.world);
+    let o = mirrored(vec4f(c, 1.) * d.edge.a * albedo.a, i.world);
     if (o.a < 0.004) { discard; }
     return out_spec(o, i.world, n, weight, rough);
 }

@@ -426,8 +426,10 @@ def layers():
 def models():
     for n, M in enumerate(D["models"]):
         before = set(bpy.data.objects)
+        fps = scene.render.fps / scene.render.fps_base
         bpy.ops.import_scene.gltf(filepath=M["path"])
         parts = [o for o in bpy.data.objects if o not in before]
+        animate(parts, n, fps)
         root = link(bpy.data.objects.new(M["id"], None))
         over = [(t, s["models"][n]["mat"]) for t, s in states() if "mat" in s["models"][n]]
         done = {}
@@ -446,6 +448,34 @@ def models():
             for o in parts:
                 o.hide_render = not ms["show"]
                 o.keyframe_insert("hide_render", frame=t)
+
+
+def animate(parts, n, fps):
+    """Play model n's first glTF animation at each state's `at` seconds, as
+    mui-stage does: the importer leaves it the active action (keyed in
+    frames at `fps`) and a muted NLA track; drive that track's strip time
+    instead, across every frame rendered."""
+    at = [(t, s["models"][n].get("at")) for t, s in states()]
+    if any(a is None for _, a in at):
+        return
+    for o in parts:
+        ad = o.animation_data
+        if ad is None or ad.action is None:
+            continue
+        first = ad.action
+        ad.action = None
+        for tr in ad.nla_tracks:
+            for st in tr.strips:
+                if st.action != first:
+                    continue
+                tr.mute = False
+                st.frame_start_ui = -1
+                st.frame_end_ui = len(D["frames"]) + 1
+                st.extrapolation = "HOLD"
+                st.use_animated_time = True
+                fc = st.fcurves.find("strip_time")
+                for t, a in at:
+                    fc.keyframe_points.insert(t, a * fps).interpolation = "LINEAR"
 
 
 def fog():

@@ -358,6 +358,66 @@ fn a_lit_card_casts_a_shadow_on_the_floor_the_same_every_time() {
     );
 }
 
+/// A model's base-colour map shows over its UVs, and a normal map tilts
+/// its light.
+#[test]
+fn a_models_maps_colour_and_bend_its_surface() {
+    let Some(mut stage) = stage(64, 64) else {
+        return;
+    };
+    let v = |x: f32, y: f32| [x, y, 0., 0., 0., 1.];
+    stage.mesh_uv(
+        "quad",
+        &[v(-30., -30.), v(30., -30.), v(30., 30.), v(-30., 30.)],
+        &[[0., 1.], [1., 1.], [1., 0.], [0., 0.]],
+        &[0, 1, 2, 0, 2, 3],
+    );
+    // Left red, right green (two texels each, so a repeating filter does
+    // not wrap one into the other); a normal leaning 45 degrees along +u.
+    let rg: Vec<u8> = [[255, 0, 0, 255], [255, 0, 0, 255], [0, 255, 0, 255], [0, 255, 0, 255]]
+        .concat();
+    stage.texture("rg", &rg, [4, 1], true);
+    stage.texture("lean", &[218, 128, 218, 255], [1, 1], false);
+    let shot = |maps: [Option<String>; 3]| Shot {
+        models: vec![Model {
+            mesh: "quad".into(),
+            transform: Mat4::IDENTITY,
+            color: [1.; 4],
+            material: Material {
+                metallic: 0.,
+                roughness: 1.,
+                ..Material::SLAB
+            },
+            cast: false,
+            receive: false,
+            maps,
+        }],
+        lights: vec![Light {
+            direction: [0., 0., -1.],
+            ..Light::new(LightKind::Directional)
+        }],
+        clear: Some([0.; 3]),
+        post: Post::NONE,
+        ..Shot::new(Camera::front(64., 30.))
+    };
+    let mut px = |maps: [Option<String>; 3], x: usize| {
+        let f = stage.render(0., 0., 1, &|_| shot(maps.clone())).unwrap();
+        <[f32; 4]>::try_from(&f.rgba[(32 * 64 + x) * 4..][..4]).unwrap()
+    };
+    let (left, right) = (
+        px([Some("rg".into()), None, None], 18),
+        px([Some("rg".into()), None, None], 46),
+    );
+    assert!(left[0] > 0.8 && left[1] < 0.1, "left {left:?}");
+    assert!(right[1] > 0.8 && right[0] < 0.1, "right {right:?}");
+    let flat = px(Default::default(), 32)[0];
+    let leant = px([None, Some("lean".into()), None], 32)[0];
+    assert!(
+        leant < 0.85 * flat && leant > 0.5 * flat,
+        "normal map: {leant} of {flat}"
+    );
+}
+
 #[test]
 fn a_model_draws_and_lights_from_its_mesh() {
     let Some(mut stage) = stage(64, 64) else {
@@ -383,6 +443,7 @@ fn a_model_draws_and_lights_from_its_mesh() {
             },
             cast: true,
             receive: true,
+            maps: Default::default(),
         }],
         lights,
         clear: Some([0.; 3]),
@@ -498,6 +559,7 @@ fn a_metal_lit_only_by_the_environment_mirrors_it() {
             },
             cast: false,
             receive: false,
+            maps: Default::default(),
         }],
         // Ambient only, so without the environment the metal is lit.
         lights: vec![Light {
@@ -603,6 +665,7 @@ fn ambient_occlusion_darkens_a_contact_crease_not_an_open_floor() {
                 },
                 cast: false,
                 receive: false,
+                maps: Default::default(),
             }],
             lights: vec![Light::new(LightKind::Ambient)],
             floor: Some(floor),

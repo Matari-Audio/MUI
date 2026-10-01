@@ -374,9 +374,12 @@ mesh. Scenes without it render exactly as before.
   spot lights, `softness` widens the shadow filter. Directional and spot
   lights cast PCF shadow maps, point lights a cube of six. With no light at all a 3D scene is unlit and
   faces show their exact pixels.
-- `model` layers: a `.glb` file (`path`), fitted to `height` times `scale`,
-  tinted by `fill`, lit with its materials' base colour, metallic and
-  roughness.
+- `model` layers: a `.glb` file (`path`), fitted to `height` times `scale`
+  (its rest pose), tinted by `fill`, lit with its materials' base colour,
+  metallic and roughness and their PNG maps (base colour, normal,
+  metallic-roughness). Its first animation (node transforms and skins)
+  plays at `time + t` seconds, held before its first key and after its
+  last; key `time` to scrub it. See `examples/stage3d-overlay.cut.json`.
 - Scene `ground` (`y`, `color`, `radius`, `reflect`, `contact` shadow
   strength) and `fog` (`color`, `near`, `far`); `background` is the clear.
 - A scene's `effects` run on the 3D pass's output, per subframe, before
@@ -419,7 +422,9 @@ Frames go through the usual encode path (codecs, segments, `--stats`).
 
 It maps the camera (DOF, `look_at`, `path`), sun/spot/point lights,
 ambient as the world, layers and plugin parts as PNG-textured extruded
-slabs, `.glb` models through Blender's glTF importer, the ground as a plane
+slabs, `.glb` models through Blender's glTF importer (their maps as it
+reads them, their first animation's NLA strip driven to each frame's
+`time + t`), the ground as a plane
 and fog as a mist pass. Layer textures, the `.blend` and every frame are
 cached by content hash under `.mui-cut-cache/blender/` next to the project;
 a re-run renders only frames whose content changed. A 2D scene or a
@@ -950,12 +955,11 @@ same reason.
   It is pinned to Vello 9dfe53e; moving to newer main means following
   #1942 (`pop_clip_path` renamed) and #1944 (fallible glyph drawing) in
   `src/sparse.rs`.
-- 3D: glTF is `.glb` only, triangles and
-  material factors (no textures, skins or animation); `check`'s pixel lints skip
-  3D scenes. A layer's `effects` are skipped in 3D: a layer is a slab
-  textured from the shared atlas, and the effect passes are full-frame, so
-  a layer stack would need its own padded texture per layer (a blur or
-  displacement spills past the atlas slot's gutter). A scene's stack runs.
+- 3D: glTF is `.glb` only: triangles, material factors and PNG maps (a
+  JPEG map is skipped: no decoder here), the first animation, skins on
+  the CPU; no morph targets, cameras or lights from the file, maps
+  without mips; `check`'s pixel lints skip 3D scenes. A layer's effects in 3D run in its own texture, so
+  `chromatic` pulls towards the layer's centre, not the frame's.
 - Sources and parenting: a reparent through a turn keeps every key exact,
   but a key baked into a bezier segment splits it into two eases, so the
   curve between keys can drift. A tilted child edge on (`rx` ±90) puts
