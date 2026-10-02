@@ -3,11 +3,14 @@
 //! This is not a DAW audio backend. Plugins retain ownership of DSP and models.
 #![deny(unsafe_code)]
 mod capture;
-pub use capture::{CaptureStream, capture, capture_frame, discover_parts, discover_tree};
+pub use capture::{
+    CaptureStream, Vector, VectorStream, bounds, capture, capture_frame, discover_parts,
+    discover_tree, shifted,
+};
 mod editor;
 pub use editor::{Editor, VIEW};
 mod headless;
-pub use headless::{ParamSet, describe, param_set, run_headless, run_headless_with};
+pub use headless::{Live, ParamSet, describe, param_set, run_headless, run_headless_with};
 /// The MUI this bridge is built on: a generated adapter names it here, so
 /// Cargo loads it as the bridge's path dependency.
 pub use mui;
@@ -88,6 +91,72 @@ pub fn note_event(v: &Value) -> Result<NoteEvent, String> {
         }),
         Some("note_off") => Ok(NoteEvent::Off { note }),
         _ => Err("unknown note operation".into()),
+    }
+}
+
+/// The sample clock: where it stands, the notes waiting for their sample,
+/// and the notes held.
+#[derive(Default)]
+pub(crate) struct Manual {
+    pub frame: u64,
+    queue: Vec<(u64, Value, NoteEvent)>,
+    pub active: std::collections::BTreeSet<u8>,
+}
+
+impl Manual {
+    /// `event` lands: track what is held (a retrigger releases first) and
+    /// add it to the block's `events`.
+    pub fn hold(&mut self, events: &mut Vec<NoteEvent>, event: NoteEvent) {
+        match event {
+            NoteEvent::On { note, .. } => {
+                if self.active.remove(&note) {
+                    events.push(NoteEvent::Off { note });
+                }
+                self.active.insert(note);
+            }
+            NoteEvent::Off { note } => {
+                self.active.remove(&note);
+            }
+            NoteEvent::Panic => self.active.clear(),
+        }
+        events.push(event);
+    }
+
+    /// Render exactly up to `to`, splitting blocks where notes land:
+    /// `played` notes now, `timed` ones at their sample (the same sample
+    /// keeps the order sent; past `to` waits). `render` gets each block's
+    /// first sample, length and notes (false stops: then this is false);
+    /// `told` each note as it lands, with what is held.
+    pub fn run_to(
+        &mut self,
+        to: u64,
+        played: Vec<(Value, NoteEvent)>,
+        timed: Vec<(u64, Value, NoteEvent)>,
+        mut render: impl FnMut(u64, usize, &[NoteEvent]) -> bool,
+        mut told: impl FnMut(u64, Value, &std::collections::BTreeSet<u8>),
+    ) -> bool {
+        let now = self.frame;
+        self.queue
+            .extend(played.into_iter().map(|(c, e)| (now, c, e)));
+        self.queue.extend(timed);
+        self.queue.sort_by_key(|n| n.0);
+        let mut events = Vec::new();
+        while self.frame < to {
+            let due = self.queue.partition_point(|n| n.0 <= self.frame);
+            let landed: Vec<_> = self.queue.drain(..due).collect();
+            for (_, command, event) in landed {
+                self.hold(&mut events, event);
+                told(self.frame, command, &self.active);
+            }
+            let next = self.queue.first().map_or(to, |n| n.0.min(to));
+            let n = (next - self.frame).min(BLOCK_FRAMES as u64) as usize;
+            if !render(self.frame, n, &events) {
+                return false;
+            }
+            events.clear();
+            self.frame += n as u64;
+        }
+        true
     }
 }
 
@@ -202,10 +271,8 @@ fn host(
     std::thread::spawn(move || {
         let started = Instant::now();
         let rate = sample_rate();
-        let mut frame = 0u64;
+        let mut clock = Manual::default();
         let mut samples = vec![[0.; 2]; BLOCK_FRAMES];
-        let mut active = std::collections::BTreeSet::new();
-        let mut queue: Vec<(u64, Value, NoteEvent)> = Vec::new();
         // Renders `n` samples with `events` at their start, and sends them.
         let mut block = |frame: u64, n: usize, events: &[NoteEvent]| {
             let samples = &mut samples[..n];
@@ -227,25 +294,8 @@ fn host(
             }
             audio_wire.send((b'A', bytes)).is_ok()
         };
-        // Tracks held notes (a retrigger releases first) and tells the host.
-        let note = |active: &mut std::collections::BTreeSet<u8>,
-                    events: &mut Vec<NoteEvent>,
-                    frame: u64,
-                    command: Value,
-                    event: NoteEvent| {
-            match event {
-                NoteEvent::On { note, .. } => {
-                    if active.remove(&note) {
-                        events.push(NoteEvent::Off { note });
-                    }
-                    active.insert(note);
-                }
-                NoteEvent::Off { note } => {
-                    active.remove(&note);
-                }
-                NoteEvent::Panic => active.clear(),
-            }
-            events.push(event);
+        // Tells the host a note landed and what is held.
+        let told = |frame: u64, command: Value, active: &std::collections::BTreeSet<u8>| {
             let _ = audio_wire.send((
                 b'J',
                 json!({"type":"note","frame":frame,"command":command,"active":active})
@@ -255,34 +305,28 @@ fn host(
         };
         while playing.load(Ordering::Acquire) {
             if manual {
-                // The host moves the clock: render exactly up to `to`,
-                // splitting blocks where notes land.
+                // The host moves the clock.
                 let Ok((to, timed)) = advance_rx.recv() else {
                     break;
                 };
-                // Played notes land now, timed ones at their sample; same
-                // sample keeps the order sent. Past `to` waits.
-                queue.extend(note_rx.try_iter().map(|(c, e)| (frame, c, e)));
-                queue.extend(timed);
-                queue.sort_by_key(|n| n.0);
-                let mut events = Vec::new();
-                while frame < to {
-                    let due = queue.partition_point(|n| n.0 <= frame);
-                    for (_, command, event) in queue.drain(..due) {
-                        note(&mut active, &mut events, frame, command, event);
-                    }
-                    let next = queue.first().map_or(to, |n| n.0.min(to));
-                    let n = (next - frame).min(BLOCK_FRAMES as u64) as usize;
-                    if !block(frame, n, &events) {
-                        return;
-                    }
-                    events.clear();
-                    frame += n as u64;
-                    audio_clock.store(frame, Ordering::Release);
+                let played = note_rx.try_iter().collect::<Vec<_>>();
+                let ran = clock.run_to(
+                    to,
+                    played,
+                    timed,
+                    |frame, n, events| {
+                        let ok = block(frame, n, events);
+                        audio_clock.store(frame + n as u64, Ordering::Release);
+                        ok
+                    },
+                    told,
+                );
+                if !ran {
+                    return;
                 }
                 let _ = audio_wire.send((
                     b'J',
-                    json!({"type":"advanced","frame":frame})
+                    json!({"type":"advanced","frame":clock.frame})
                         .to_string()
                         .into_bytes(),
                 ));
@@ -290,15 +334,17 @@ fn host(
             }
             let mut events = Vec::new();
             for (command, event) in note_rx.try_iter() {
-                note(&mut active, &mut events, frame, command, event);
+                clock.hold(&mut events, event);
+                told(clock.frame, command, &clock.active);
             }
-            if !block(frame, BLOCK_FRAMES, &events) {
+            if !block(clock.frame, BLOCK_FRAMES, &events) {
                 break;
             }
-            frame += BLOCK_FRAMES as u64;
-            audio_clock.store(frame, Ordering::Release);
-            if let Some(wait) = (started + Duration::from_secs_f64(frame as f64 / f64::from(rate)))
-                .checked_duration_since(Instant::now())
+            clock.frame += BLOCK_FRAMES as u64;
+            audio_clock.store(clock.frame, Ordering::Release);
+            if let Some(wait) = (started
+                + Duration::from_secs_f64(clock.frame as f64 / f64::from(rate)))
+            .checked_duration_since(Instant::now())
             {
                 std::thread::sleep(wait);
             }

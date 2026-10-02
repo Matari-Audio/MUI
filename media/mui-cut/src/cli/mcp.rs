@@ -13,14 +13,14 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 
-use mui_cut::check::{self, Issue, Severity};
-use mui_cut::{Project, eval};
+use crate::check::{self, Issue, Severity};
+use crate::{Project, eval};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::tools::{self, Picture};
-use crate::{Backend, Result, write_atomic};
+use crate::cli::tools::{self, Picture};
+use crate::cli::{Backend, Result, write_atomic};
 
 /// The newest protocol revision this server speaks; older clients get
 /// their own echoed back (the tool surface is the same).
@@ -47,7 +47,7 @@ z and opacity) keeping it where it is on screen. `schema` has every field.";
 pub fn serve(project: Option<&str>) -> Result<()> {
     let mut server = Server::default();
     if let Some(p) = project {
-        crate::load(Path::new(p))?;
+        crate::cli::load(Path::new(p))?;
         server.project = Some(p.into());
     }
     let stdin = std::io::stdin();
@@ -434,7 +434,7 @@ struct NotesArgs {
     /// Notes, seconds from the scene's start: `{"t": 0.5, "dur": 0.25,
     /// "pitch": 60, "vel": 100}` (MIDI pitch, 60 is middle C; vel 1..127,
     /// default 100).
-    notes: Vec<mui_cut::Note>,
+    notes: Vec<crate::Note>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -629,7 +629,7 @@ fn tools() -> Vec<Value> {
 
 /// The examples folder of this checkout (the binary is built from it).
 const EXAMPLES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/examples");
-const HOST_PROTOCOL: &str = include_str!("../HOST-PROTOCOL.md");
+const HOST_PROTOCOL: &str = include_str!("../../HOST-PROTOCOL.md");
 
 /// Example projects and generator scripts: `(name, path)`.
 fn examples() -> Vec<(String, PathBuf)> {
@@ -942,7 +942,7 @@ impl Server {
             "still" => {
                 let a: Still = parse(args)?;
                 let path = self.path()?;
-                let p = crate::load(&path)?;
+                let p = crate::cli::load(&path)?;
                 let s = pick(&p, a.scene.as_deref())?;
                 let w = a.width.unwrap_or(960).clamp(16, 4096) & !1;
                 let h = ((f64::from(w) * f64::from(p.size[1]) / f64::from(p.size[0])).round()
@@ -1036,7 +1036,7 @@ impl Server {
                 let script =
                     std::fs::read_to_string(&a.script).map_err(|e| format!("{}: {e}", a.script))?;
                 let path = self.path()?;
-                let json = crate::script::generate(
+                let json = crate::cli::script::generate(
                     &script,
                     a.seed.unwrap_or(0),
                     Some((&path, a.scene.as_deref())),
@@ -1049,7 +1049,7 @@ impl Server {
             "plugin_parts" => {
                 let a: PluginParts = parse(args)?;
                 let path = self.path()?;
-                let p = crate::load(&path)?;
+                let p = crate::cli::load(&path)?;
                 let s = pick(&p, a.scene.as_deref())?;
                 let at = eval(&p, s, a.t)
                     .layers
@@ -1058,27 +1058,27 @@ impl Server {
                     .ok_or_else(|| format!("no layer `{}`", a.layer))?
                     .plugin
                     .ok_or_else(|| format!("layer `{}` is not a plugin", a.layer))?;
-                let errs = crate::host::capture_missing(&p, &path);
+                let errs = crate::cli::host::capture_missing(&p, &path);
                 if !errs.is_empty() {
                     return Err(errs.join("\n"));
                 }
                 let manifest = path
                     .parent()
                     .unwrap_or(Path::new("."))
-                    .join(mui_cut::plugin::CACHE)
+                    .join(crate::plugin::CACHE)
                     .join(format!("{}.json", at.state));
-                let cap: mui_cut::Capture = std::fs::read_to_string(&manifest)
+                let cap: crate::Capture = std::fs::read_to_string(&manifest)
                     .map_err(|e| e.to_string())
                     .and_then(|t| serde_json::from_str(&t).map_err(|e| e.to_string()))
                     .map_err(|e| format!("{}: {e}", manifest.display()))?;
-                Ok(vec![text(&pretty(&tidy(mui_cut::plugin::tree_json(
+                Ok(vec![text(&pretty(&tidy(crate::plugin::tree_json(
                     &cap, &at,
                 ))))])
             }
             "patch_get" => {
                 let a: PluginParts = parse(args)?;
                 let path = self.path()?;
-                let p = crate::load(&path)?;
+                let p = crate::cli::load(&path)?;
                 let s = pick(&p, a.scene.as_deref())?;
                 let at = eval(&p, s, a.t)
                     .layers
@@ -1086,16 +1086,16 @@ impl Server {
                     .find(|l| l.id == a.layer)
                     .and_then(|l| l.plugin)
                     .ok_or_else(|| format!("no plugin layer `{}`", a.layer))?;
-                let errs = crate::host::capture_missing(&p, &path);
+                let errs = crate::cli::host::capture_missing(&p, &path);
                 if !errs.is_empty() {
                     return Err(errs.join("\n"));
                 }
                 let manifest = path
                     .parent()
                     .unwrap_or(Path::new("."))
-                    .join(mui_cut::plugin::CACHE)
+                    .join(crate::plugin::CACHE)
                     .join(format!("{}.json", at.state));
-                let cap: mui_cut::Capture = std::fs::read(&manifest)
+                let cap: crate::Capture = std::fs::read(&manifest)
                     .map_err(|e| e.to_string())
                     .and_then(|b| serde_json::from_slice(&b).map_err(|e| e.to_string()))
                     .map_err(|e| format!("{}: {e}", manifest.display()))?;
@@ -1107,19 +1107,19 @@ impl Server {
             "plugin_play" => {
                 let a: PluginPlay = parse(args)?;
                 let path = self.path()?;
-                let p = crate::load(&path)?;
+                let p = crate::cli::load(&path)?;
                 let s = pick(&p, a.scene.as_deref())?;
                 let dir = path.parent().unwrap_or(Path::new("."));
                 let out = a.out.map_or_else(
-                    || dir.join(mui_cut::plugin::CACHE).join("preview.wav"),
+                    || dir.join(crate::plugin::CACHE).join("preview.wav"),
                     std::path::PathBuf::from,
                 );
-                let errs = crate::host::capture_missing(&p, &path);
+                let errs = crate::cli::host::capture_missing(&p, &path);
                 if !errs.is_empty() {
                     return Err(errs.join("\n"));
                 }
-                let pcm =
-                    crate::audio::mix(&p, &path, &[s])?.ok_or("nothing in the scene sounds")?;
+                let pcm = crate::cli::audio::mix(&p, &path, &[s])?
+                    .ok_or("nothing in the scene sounds")?;
                 let (from, to) = (a.from.max(0.), a.to.unwrap_or(s.duration).min(s.duration));
                 if to <= from {
                     return Err("`to` must come after `from`".into());
@@ -1127,12 +1127,12 @@ impl Server {
                 let r = f64::from(p.sample_rate);
                 let slice = &pcm[2 * (from * r) as usize..(2 * (to * r) as usize).min(pcm.len())];
                 if out.extension().is_some_and(|e| e == "mp4") {
-                    crate::audio::clip(&path, &s.name, from, to, &out)?;
+                    crate::cli::audio::clip(&path, &s.name, from, to, &out)?;
                 } else {
                     if let Some(d) = out.parent() {
                         std::fs::create_dir_all(d).map_err(|e| e.to_string())?;
                     }
-                    std::fs::write(&out, crate::audio::wav(slice, p.sample_rate))
+                    std::fs::write(&out, crate::cli::audio::wav(slice, p.sample_rate))
                         .map_err(|e| format!("{}: {e}", out.display()))?;
                 }
                 let peak = slice.iter().fold(0f32, |m, v| m.max(v.abs()));
@@ -1145,12 +1145,12 @@ impl Server {
             }
             "sources_list" => {
                 let path = self.path()?;
-                let p = crate::load(&path)?;
-                let errs = crate::host::capture_sources(&p, &path);
+                let p = crate::cli::load(&path)?;
+                let errs = crate::cli::host::capture_sources(&p, &path);
                 let cache = path
                     .parent()
                     .unwrap_or(Path::new("."))
-                    .join(mui_cut::plugin::CACHE);
+                    .join(crate::plugin::CACHE);
                 let rows: Vec<Value> = p
                     .all_sources()
                     .iter()
@@ -1162,17 +1162,17 @@ impl Server {
                             .iter()
                             .flat_map(|s| s.layers.iter().map(move |l| (s, l)))
                             .filter(|(_, l)| {
-                                mui_cut::sources::Media::of(&l.kind).as_ref() == Some(&m.kind)
+                                crate::sources::Media::of(&l.kind).as_ref() == Some(&m.kind)
                             })
                             .map(|(s, l)| format!("{}/{}", s.name, l.id))
                             .collect();
                         v["used_by"] = json!(users);
                         if let Some((k, cap)) = m.state().and_then(|k| {
                             let b = std::fs::read(cache.join(format!("{k}.json"))).ok()?;
-                            Some((k, serde_json::from_slice::<mui_cut::Capture>(&b).ok()?))
+                            Some((k, serde_json::from_slice::<crate::Capture>(&b).ok()?))
                         }) {
                             v["size"] = json!([cap.width, cap.height]);
-                            v["parts"] = mui_cut::plugin::home_tree(&cap, &k);
+                            v["parts"] = crate::plugin::home_tree(&cap, &k);
                         }
                         v
                     })
@@ -1185,7 +1185,7 @@ impl Server {
                 let a: PluginAdd = parse(args)?;
                 let path = self.path()?;
                 let dir = path.parent().unwrap_or(Path::new("."));
-                let r = crate::build::add(&path, &a.from, dir, a.id.as_deref())?;
+                let r = crate::cli::build::add(&path, &a.from, dir, a.id.as_deref())?;
                 Ok(vec![text(&pretty(&r))])
             }
             "render" => self.render(parse(args)?),
@@ -1256,7 +1256,7 @@ impl Server {
     fn editor_port(&self, asked: Option<u16>) -> u16 {
         asked
             .or(self.port)
-            .or_else(|| crate::serve::discover(&self.path().ok()?).map(|f| f.port))
+            .or_else(|| crate::cli::serve::discover(&self.path().ok()?).map(|f| f.port))
             .unwrap_or(8740)
     }
     fn raw(&self) -> Result<Value> {
@@ -1265,7 +1265,7 @@ impl Server {
         serde_json::from_str(&src).map_err(|e| format!("{}: {e}", path.display()))
     }
     fn load(&self) -> Result<Project> {
-        crate::load(&self.path()?)
+        crate::cli::load(&self.path()?)
     }
 
     fn open(&mut self, a: Open) -> Result<Vec<Value>> {
@@ -1296,7 +1296,7 @@ impl Server {
             let p = Project::load(&fresh.to_string())?;
             write_atomic(&path, &p.to_json())?;
         }
-        crate::load(&path)?;
+        crate::cli::load(&path)?;
         self.project = Some(path);
         self.port = a.editor_port.or(self.port);
         Ok(vec![text(&pretty(&self.outline(None)?))])
@@ -1326,8 +1326,8 @@ impl Server {
                         let mut animated = serde_json::Map::new();
                         for (name, prop) in l.props_in(true) {
                             let times: Vec<f64> = match prop {
-                                mui_cut::Prop::Num(mui_cut::Anim::Keys(k)) => k.iter().map(|k| k.t).collect(),
-                                mui_cut::Prop::Color(mui_cut::Anim::Keys(k)) => k.iter().map(|k| k.t).collect(),
+                                crate::Prop::Num(crate::Anim::Keys(k)) => k.iter().map(|k| k.t).collect(),
+                                crate::Prop::Color(crate::Anim::Keys(k)) => k.iter().map(|k| k.t).collect(),
                                 _ => continue,
                             };
                             animated.insert(name, json!(times));
@@ -1428,7 +1428,7 @@ impl Server {
                         .ok()
                         .and_then(|t| at(raw, &t).cloned())
                         .unwrap_or(json!([]));
-                    let old: Vec<mui_cut::Note> =
+                    let old: Vec<crate::Note> =
                         serde_json::from_value(old).map_err(|e| e.to_string())?;
                     notes.splice(0..0, old);
                 }
@@ -1453,8 +1453,8 @@ impl Server {
                 // The rewrite works on loaded scenes: plugin sources named by
                 // id are filled in first.
                 inline_sources(raw)?;
-                *raw = mui_cut::place::rewrite(raw, si, &|p, s| {
-                    let l = mui_cut::place::reparent(p, s, &a.layer, a.parent.as_deref(), a.t)?;
+                *raw = crate::place::rewrite(raw, si, &|p, s| {
+                    let l = crate::place::reparent(p, s, &a.layer, a.parent.as_deref(), a.t)?;
                     let mut s = s.clone();
                     if let Some(o) = s.layers.iter_mut().find(|o| o.id == l.id) {
                         *o = l;
@@ -1505,7 +1505,7 @@ impl Server {
         let p = Project::load(&src)?;
         let mut how = String::new();
         if let Some((port, rev, _)) = editor {
-            let ops = crate::serve::diff(&before, &raw);
+            let ops = crate::cli::serve::diff(&before, &raw);
             let body = json!({ "base": rev, "ops": ops, "by": "agent" });
             let reply: Value =
                 serde_json::from_str(&http(port, "POST", "/patch", &body.to_string())?)
@@ -1591,7 +1591,7 @@ impl Server {
     }
 }
 
-fn pick<'a>(p: &'a Project, scene: Option<&str>) -> Result<&'a mui_cut::Scene> {
+fn pick<'a>(p: &'a Project, scene: Option<&str>) -> Result<&'a crate::Scene> {
     match scene {
         Some(n) => p.scene(n).ok_or_else(|| {
             format!(
@@ -1700,7 +1700,7 @@ fn value_at(
 ) -> Result<f64> {
     match layer.get(prop) {
         None => Ok(default),
-        Some(v) => serde_json::from_value::<mui_cut::Anim<f64>>(v.clone())
+        Some(v) => serde_json::from_value::<crate::Anim<f64>>(v.clone())
             .map(|a| a.at(t))
             .map_err(|e| format!("`{prop}` cannot take a motion ({e})")),
     }
@@ -1721,9 +1721,9 @@ fn motion(layer: &mut serde_json::Map<String, Value>, m: &Motion, fps: f64) -> R
                 "`{name}` moves glyphs or copies: the layer is a {kind}, not text or a duplicator"
             ));
         }
-        let mut a = mui_cut::Animator::preset(name, t0, d).ok_or("no such preset")?;
+        let mut a = crate::Animator::preset(name, t0, d).ok_or("no such preset")?;
         if let Some(s) = m.stagger {
-            a.stagger = mui_cut::Anim::Value(s);
+            a.stagger = crate::Anim::Value(s);
         }
         let a = serde_json::to_value(a).map_err(|e| e.to_string())?;
         let list = layer.entry("animators").or_insert_with(|| json!([]));

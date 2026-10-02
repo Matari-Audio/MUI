@@ -578,6 +578,16 @@ parts you can move, key, highlight and explode.
   deterministic and fast. A rebuilt adapter (another size or mtime)
   recaptures. The segment cache hashes the manifests, so a recapture
   re-renders the spans it touches.
+- In process: `render` and `still` of a project with a plugin built from
+  source (`{"plugin": ...}`) build its adapter with the bridge's `cut`
+  feature and run the whole command inside it (`mui_cut::inproc`). The
+  first layer of that plugin replays its states on the sample clock right
+  there, and its parts draw from the editor's paint as vectors, at
+  whatever size the camera needs: nothing is captured, no PNGs, about 40
+  times faster. A headless editor animates on that clock
+  (`mui::host::headless::time`), not the wall's. `MUI_CUT_CAPTURE=1` keeps
+  the capture path; `serve` and the web editor always capture (a browser
+  cannot link the plugin).
 - `mui-cut serve` captures missing states when the file changes and tells
   the editor (SSE `plugin`), which reloads them. In the web editor a
   plugin layer lists its parts as child layers. Pick one (in the list or

@@ -11,9 +11,13 @@
 #[cfg(not(target_arch = "wasm32"))]
 pub mod blender;
 pub mod check;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod cli;
 pub mod fx;
 mod gpu;
 mod gpu3d;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod inproc;
 mod motion;
 pub mod pick;
 pub mod place;
@@ -1608,12 +1612,9 @@ impl Project {
                                 "{at}.explode_stagger: layer `{id}`: seconds, 0 or more"
                             ));
                         }
-                        if let Some(p) = parts
-                            .keys()
-                            .find(|p| p.contains('.') || p.split('/').any(str::is_empty))
-                        {
+                        if let Some(p) = parts.keys().find(|p| p.split('/').any(str::is_empty)) {
                             return Err(format!(
-                                "{at}.parts: layer `{id}`: part path `{p}` must be surface ids joined by `/`, without `.`"
+                                "{at}.parts: layer `{id}`: part path `{p}` must be surface ids joined by `/`"
                             ));
                         }
                     }

@@ -227,7 +227,11 @@ impl Camera {
     /// World to clip space for a frame `aspect` wide per unit high.
     pub fn view_proj(&self, aspect: f32) -> Mat4 {
         let [_, up, _] = self.basis();
-        Mat4::perspective(self.fov.to_radians(), aspect, 1., 100_000.)
+        // Standard-Z depth resolves about near/z² per ulp: at near 1 a
+        // part and its plate 0.6 apart fought at 2000 units. Scenes are in
+        // pixels, so nothing comes within 10 of the eye.
+        // ponytail: reversed-Z if a scene ever needs near < 10.
+        Mat4::perspective(self.fov.to_radians(), aspect, 10., 100_000.)
             * Mat4::look_at(self.eye, self.target, up)
     }
     /// The view's right, up and forward unit vectors in the world.
@@ -2507,8 +2511,32 @@ impl Stage {
             // Clip-space w of the local origin: its distance along the view.
             (vp * m).0[15]
         };
+        // Parallel planes (one layer's parts) are ranked at one point of
+        // theirs: where each meets the normal through the first one's
+        // centre. Their centres can sit far apart along the face, so ranked
+        // by centre a plate just behind a part passes in front of it as the
+        // camera turns, for a frame.
+        let rank: Vec<f32> = (0..n)
+            .map(|i| {
+                let (ni, di) = faces[i];
+                let Some(r) = (0..i).find(|&j| {
+                    let (nj, _) = faces[j];
+                    ni[0] * nj[0] + ni[1] * nj[1] + ni[2] * nj[2] > 1. - 1e-5
+                }) else {
+                    return depth(planes[i].model());
+                };
+                let c = planes[r].model().0;
+                let c = [c[12], c[13], c[14]];
+                let s = di - (ni[0] * c[0] + ni[1] * c[1] + ni[2] * c[2]);
+                depth(Mat4::translate([
+                    c[0] + ni[0] * s,
+                    c[1] + ni[1] * s,
+                    c[2] + ni[2] * s,
+                ]))
+            })
+            .collect();
         let mut order: Vec<usize> = (0..n).filter(|&i| !planes[i].material.glass()).collect();
-        order.sort_by(|&a, &b| depth(planes[b].model()).total_cmp(&depth(planes[a].model())));
+        order.sort_by(|&a, &b| rank[b].total_cmp(&rank[a]));
         let opaque: Vec<usize> = (0..models.len())
             .filter(|&i| !models[i].material.glass())
             .collect();

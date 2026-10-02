@@ -41,6 +41,9 @@ pub struct Assets {
     models: HashMap<String, Arc<crate::three::Mesh>>,
     envs: HashMap<String, Arc<mui_stage::EnvImage>>,
     captures: HashMap<String, Arc<Capture>>,
+    /// Plugin parts drawn from the editor's paint ([`crate::inproc`]),
+    /// by the path a fragment names, each at its rect's origin.
+    vectors: HashMap<String, Arc<ResolvedScene>>,
     fonts: HashMap<String, Font>,
     /// Plugin layers shown live (`serve` playing): layer id to the state
     /// drawn instead of the one the time names. See [`Assets::add_asset`].
@@ -75,6 +78,45 @@ pub(crate) fn color(c: Rgba) -> Color {
 }
 
 /// Four cubics, the usual kappa: exact enough to be indistinguishable.
+/// The bounds of everything `scene` paints, and the corner radius of the
+/// rounded rectangle that fills them, if one does (else square).
+fn ink(scene: &ResolvedScene) -> Option<(Rect, f64)> {
+    use mui_geometry::PathCommand as C;
+    let mut all: Option<Rect> = None;
+    for p in &scene.paint {
+        let pad = p.width / 2. + p.blur;
+        for c in &p.path.commands {
+            let pts: &[KPoint] = match c {
+                C::MoveTo(a) | C::LineTo(a) => &[*a],
+                C::CubicTo(a, b, e) => &[*a, *b, *e],
+                C::ArcTo(a) => &[
+                    KPoint::new(a.center.x - a.radius, a.center.y - a.radius),
+                    KPoint::new(a.center.x + a.radius, a.center.y + a.radius),
+                ],
+                C::Close => &[],
+            };
+            for q in pts {
+                let q = *q + p.offset.to_vec2();
+                let r = Rect::new(q.x - pad, q.y - pad, q.x + pad, q.y + pad);
+                all = Some(all.map_or(r, |a| a.union(r)));
+            }
+        }
+    }
+    let all = all?;
+    let radius = scene
+        .paint
+        .iter()
+        .filter_map(|p| {
+            let rr = p.rect?;
+            let b = rr.bounds() + p.offset.to_vec2();
+            let near = |a: f64, b: f64| (a - b).abs() < 1.5;
+            (near(b.x0, all.x0) && near(b.y0, all.y0) && near(b.x1, all.x1) && near(b.y1, all.y1))
+                .then(|| rr.radius())
+        })
+        .fold(0., f64::max);
+    Some((all, radius))
+}
+
 fn ellipse(size: Size) -> Path {
     let (rx, ry) = (size.width / 2., size.height / 2.);
     let k = 0.5522847498;
@@ -154,6 +196,18 @@ impl Renderer {
 }
 
 impl Assets {
+    /// A capture made in this process, under the path a file of it would
+    /// have.
+    pub fn add_capture(&mut self, path: &str, capture: Capture) {
+        self.captures.insert(path.to_owned(), Arc::new(capture));
+    }
+
+    /// A plugin fragment's paint, under the path its capture names (see
+    /// [`crate::inproc`]); kept once.
+    pub fn add_vector(&mut self, path: &str, scene: Arc<ResolvedScene>) {
+        self.vectors.entry(path.to_owned()).or_insert(scene);
+    }
+
     /// A file a layer names, by its extension: `.png` for image layers,
     /// `.svg` for SVG layers, `.json` for Lottie layers; a `.json` under
     /// [`CACHE`] is a plugin capture (its images are PNGs under it too).
@@ -274,6 +328,11 @@ impl Assets {
             Kind::Ellipse => canvas(move |size| vec![Draw::fill(ellipse(size), fill)])
                 .w(l.width)
                 .h(l.height),
+            Kind::Image { path } if self.vectors.contains_key(path) => {
+                let scene = (*self.vectors[path]).clone();
+                let size = Size::new(l.width, l.height);
+                return Ok((faded(scene, l.opacity as f32), size, centred(size)));
+            }
             Kind::Image { path } => {
                 let paint: Fill = match self.images.get(path) {
                     Some(i) => Fill::Image(i.clone(), Fit::Cover),
@@ -352,9 +411,8 @@ impl Assets {
     /// pixels from the top left of its [`Assets::element`] box; `None` is
     /// that box.
     pub(crate) fn outline(&self, l: &Drawn, size: Size, corner: KPoint) -> Option<Path> {
-        let rounded = |r: f64| {
-            let p =
-                mui_vello::kurbo::RoundedRect::new(0., 0., size.width, size.height, r).to_path(0.1);
+        let rounded_in = |b: Rect, r: f64| {
+            let p = mui_vello::kurbo::RoundedRect::from_rect(b, r).to_path(0.1);
             vector::outline(
                 &[vector::Piece {
                     path: p,
@@ -364,7 +422,16 @@ impl Assets {
                 KPoint::ZERO,
             )
         };
+        let rounded = |r: f64| rounded_in(Rect::new(0., 0., size.width, size.height), r);
         match &l.kind {
+            // A plugin's fragment spans its part's whole frame but may draw
+            // a pill in one corner of it: extruded as its frame, the slab's
+            // walls stand lit round nothing. It extrudes as what it inks.
+            Kind::Image { path } if let Some(v) = self.vectors.get(path) => {
+                let (b, r) = ink(v)?;
+                let b = b.intersect(Rect::new(0., 0., size.width, size.height));
+                (b.area() > 0.).then(|| rounded_in(b, r))
+            }
             Kind::Rect | Kind::Image { .. } if l.radius > 0. => Some(rounded(l.radius)),
             Kind::Rect | Kind::Image { .. } => None,
             Kind::Ellipse => Some(ellipse(size)),
@@ -621,7 +688,7 @@ impl Assets {
             ..outline
         });
         let drawn = l.opacity > 0. && l.scale != 0.;
-        let mut push = |el: El, at: Affine| -> Result<(), String> {
+        let push = |out: &mut Layers, el: El, at: Affine| -> Result<(), String> {
             let scene =
                 resolve(&SceneSpec::new(el)).map_err(|e| format!("layer `{}`: {e}", l.id))?;
             out.scenes.push((scene, at));
@@ -631,6 +698,7 @@ impl Assets {
             if drawn {
                 let faint = Rgba([l.fill.0[0], l.fill.0[1], l.fill.0[2], l.fill.0[3] / 8]);
                 push(
+                    out,
                     block(w, h)
                         .radius(8.)
                         .fill(color(faint))
@@ -651,7 +719,16 @@ impl Assets {
                 let (src, rect) = f.image(pose.moved);
                 (src, rect, pose.at, pose.opacity)
             };
-            let Some(img) = self.images.get(&format!("{CACHE}/{src}")) else {
+            let path = format!("{CACHE}/{src}");
+            if let Some(v) = self.vectors.get(&path) {
+                if drawn && opacity > 0. {
+                    let scene = faded((**v).clone(), (l.opacity * opacity) as f32);
+                    out.scenes
+                        .push((scene, place * at * Affine::translate((rx, ry))));
+                }
+                continue;
+            }
+            let Some(img) = self.images.get(&path) else {
                 continue;
             };
             if !drawn || opacity <= 0. {
@@ -659,6 +736,7 @@ impl Assets {
             }
             let fill = Fill::Image(img.clone(), Fit::Fill);
             push(
+                out,
                 // Square: a capture's pixels are its corners.
                 block(rw, rh)
                     .radius(0.)
@@ -684,11 +762,38 @@ impl Assets {
                     .no_fill()
                     .stroke(color(Rgba([r, g, b, a])))
                     .stroke_width(2. / (l.scale * pose.scale).abs().max(0.05));
-                push(line, at)?;
+                push(out, line, at)?;
             }
         }
         Ok(())
     }
+}
+
+/// `scene` at `opacity`, composited as one layer (a part fading out does
+/// not show its own overlaps).
+fn faded(mut scene: ResolvedScene, opacity: f32) -> ResolvedScene {
+    if opacity >= 1. || scene.paint.is_empty() {
+        return scene;
+    }
+    let mark = |layer| mui_scene::Painted {
+        layer,
+        path: Arc::default(),
+        rect: None,
+        text: None,
+        width: 0.,
+        blur: 0.,
+        ..scene.paint[0].clone()
+    };
+    let (open, close) = (
+        mark(mui_scene::Layer::Blend {
+            mix: mui_scene::Mix::Normal,
+            opacity,
+        }),
+        mark(mui_scene::Layer::Unblend),
+    );
+    scene.paint.insert(0, open);
+    scene.paint.push(close);
+    scene
 }
 
 /// A patch layer: the plugin's parameters off their defaults and its
@@ -819,4 +924,23 @@ pub(crate) fn png_rgba(bytes: &[u8]) -> Result<(Vec<u8>, [u32; 2]), String> {
         png::ColorType::Indexed => return Err("indexed png not expanded".into()),
     };
     Ok((rgba, [info.width, info.height]))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_pill_inks_its_own_bounds_and_radius() {
+        let pill = block(120., 40.)
+            .radius(20.)
+            .fill(color(Rgba([255, 0, 0, 255])));
+        let scene = resolve(&SceneSpec::new(pill)).unwrap();
+        let (b, r) = ink(&scene).unwrap();
+        assert!(
+            (b.width() - 120.).abs() < 1. && (b.height() - 40.).abs() < 1.,
+            "{b:?}"
+        );
+        assert!((r - 20.).abs() < 1e-6, "{r}");
+    }
 }

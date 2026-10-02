@@ -7,8 +7,9 @@
 //! instead of making a window, and the adapter [`take`]s it: the plugin's
 //! own `Ui`, its view (build closure, parameter bridge) and its size, to
 //! frame and capture off screen.
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 
 use mui_input::{Input, Key, Mods};
 use mui_scene::prelude::{El, Point, Size};
@@ -30,6 +31,23 @@ pub struct Headless {
 /// From now on, editors this process opens are headless.
 pub fn claim() {
     CLAIMED.store(true, Ordering::Release);
+}
+
+/// Seconds on the host's clock, as `f64` bits.
+static TIME: AtomicU64 = AtomicU64::new(0);
+
+/// The host's clock, which a headless editor animates by in place of the
+/// wall's: frames stay the same however fast or slow they are made.
+pub fn set_time(seconds: f64) {
+    TIME.store(seconds.max(0.).to_bits(), Ordering::Release);
+}
+
+/// The time since the host's clock started, once [`claim`]ed (zero until
+/// it first sets one); `None` in a windowed process, which keeps the wall's.
+pub fn time() -> Option<Duration> {
+    CLAIMED
+        .load(Ordering::Acquire)
+        .then(|| Duration::from_secs_f64(f64::from_bits(TIME.load(Ordering::Acquire))))
 }
 
 /// A window crate's `open`, first: `true` when the process [`claim`]ed

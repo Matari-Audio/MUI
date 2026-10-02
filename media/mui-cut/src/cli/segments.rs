@@ -6,9 +6,9 @@
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
-use mui_cut::{Frame, Kind, Project};
+use crate::{Frame, Kind, Project};
 
-pub use mui_cut::Fnv;
+pub use crate::Fnv;
 
 /// The key every span of one render shares: the encode settings, the
 /// renderer and the bytes of every image and font the project draws.
@@ -16,6 +16,13 @@ pub fn base_key(p: &Project, project: &Path, settings: &str) -> Fnv {
     let mut h = Fnv::default();
     let _ = write!(h, "{}|{settings}|", env!("CARGO_PKG_VERSION"));
     let dir = project.parent().unwrap_or(Path::new("."));
+    // In a plugin's adapter, its layer draws from this build, not from
+    // manifests: the build's stamp stands for what it draws.
+    if crate::inproc::here()
+        && let Some(m) = std::env::current_exe().and_then(std::fs::metadata).ok()
+    {
+        let _ = write!(h, "{}|{:?}|", m.len(), m.modified().ok());
+    }
     for s in &p.scenes {
         for l in &s.layers {
             let file = match &l.kind {
@@ -29,10 +36,10 @@ pub fn base_key(p: &Project, project: &Path, settings: &str) -> Fnv {
             }
             // A plugin's states name what it was told, not what it drew:
             // its manifests (content-named images, the adapter's stamp) do.
-            let last = mui_cut::plugin::frame_at(s.duration, p.fps);
+            let last = crate::plugin::frame_at(s.duration, p.fps);
             for step in l.plugin_track(p.fps, p.sample_rate, last) {
                 let manifest = dir
-                    .join(mui_cut::plugin::CACHE)
+                    .join(crate::plugin::CACHE)
                     .join(format!("{}.json", step.key));
                 let _ = h.write_all(&std::fs::read(manifest).unwrap_or_default());
             }

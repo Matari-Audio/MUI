@@ -539,3 +539,60 @@ fn a_truce_plugin_plays_its_tone_and_reports_its_routes() {
         "{patch}"
     );
 }
+
+/// `still` of a plugin built from source runs inside its adapter: the
+/// editor draws from its paint (no capture written), plays the same
+/// soundtrack, and looks as its capture does.
+#[test]
+fn a_plugin_from_source_renders_in_process() {
+    let layer = json!({"source": fixture("plain"), "notes": [{"t": 0.1, "dur": 0.8, "pitch": 60}]});
+    let project = project("plain-inproc", 1.0, &layer);
+    let dir = project.parent().unwrap();
+    let still = |name: &str, capture: bool| {
+        let out = dir.join(name);
+        let mut c = Command::new(BIN);
+        c.arg("still")
+            .arg(&project)
+            .args(["--t", "0.5", "-o"])
+            .arg(&out)
+            .env(
+                "MUI_CUT_CACHE",
+                Path::new(env!("CARGO_TARGET_TMPDIR")).join("adapters"),
+            );
+        if capture {
+            c.env("MUI_CUT_CAPTURE", "1");
+        }
+        let o = c.output().unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        let mut r = png::Decoder::new(std::io::BufReader::new(std::fs::File::open(out).unwrap()))
+            .read_info()
+            .unwrap();
+        let mut px = vec![0; r.output_buffer_size().unwrap()];
+        r.next_frame(&mut px).unwrap();
+        px
+    };
+    let vector = still("vector.png", false);
+    let key = load(&project).scenes[0].layers[0]
+        .plugin_track(
+            load(&project).fps,
+            RATE,
+            mui_cut::plugin::frame_at(0.5, 30.),
+        )
+        .pop()
+        .unwrap()
+        .key;
+    assert!(
+        !dir.join(".cut-cache").join(format!("{key}.json")).exists(),
+        "in process, nothing is captured"
+    );
+    let (hz, _) = tone(&soundtrack(&project));
+    assert!((hz - 660.).abs() < 2., "{hz} Hz");
+    let raster = still("raster.png", true);
+    let off = vector
+        .iter()
+        .zip(&raster)
+        .map(|(a, b)| f64::from(a.abs_diff(*b)))
+        .sum::<f64>()
+        / vector.len() as f64;
+    assert!(off < 2., "vector and capture differ by {off} a channel");
+}

@@ -4,8 +4,8 @@
 //! software encoders at most repack the chroma.
 use std::process::{Command, Stdio};
 
-use mui_cut::Render;
-use mui_cut::yuv::Yuv;
+use crate::Render;
+use crate::yuv::Yuv;
 
 /// The render node VAAPI encodes on.
 pub const VAAPI_DEVICE: &str = "/dev/dri/renderD128";

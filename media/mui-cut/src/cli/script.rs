@@ -15,12 +15,12 @@ use std::cell::Cell;
 use std::path::Path;
 use std::rc::Rc;
 
-use mui_cut::Project;
+use crate::Project;
 use noise::NoiseFn as _;
 use rhai::{Array, Dynamic, Engine, FLOAT, INT, Map};
 use serde_json::Value;
 
-use crate::{Args, Result, write_atomic};
+use crate::cli::{Args, Result, write_atomic};
 
 /// splitmix64: small, good enough for art, and the same everywhere.
 fn next(state: &Cell<u64>) -> u64 {
@@ -159,7 +159,7 @@ pub fn generate(script: &str, seed: u64, into: Option<(&Path, Option<&str>)>) ->
         (_, _) => return Err("the script must return a project map #{ size, fps, scenes } (or, with --into, an array of layers)".into()),
     };
     let src = doc.to_string();
-    let bad: Vec<String> = mui_cut::check::lint_fields(&src)
+    let bad: Vec<String> = crate::check::lint_fields(&src)
         .iter()
         .filter(|i| matches!(i.code, "load" | "unknown_field"))
         .map(ToString::to_string)

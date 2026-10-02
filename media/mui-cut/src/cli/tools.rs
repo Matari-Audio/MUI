@@ -4,20 +4,18 @@
 //! versions, as pictures). The MCP server calls the same functions.
 use std::path::Path;
 
-use mui_cut::check::{Issue, Severity};
-use mui_cut::{Project, Renderer};
+use crate::check::{Issue, Severity};
+use crate::{Project, Renderer};
 
-use crate::{Args, Result, load_assets};
+use crate::cli::{Args, Result, load_assets};
 
 /// Check the file at `path`: its load error, or every lint.
 pub fn check_file(path: &Path) -> Result<Vec<Issue>> {
     let src = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let Ok(p) = Project::load(&src) else {
-        return Ok(mui_cut::check::check(
-            &src,
-            &mut Renderer::new(2, 2),
-            &|_| true,
-        ));
+        return Ok(crate::check::check(&src, &mut Renderer::new(2, 2), &|_| {
+            true
+        }));
     };
     // Contrast is sampled small: an average over a box needs few pixels.
     let w = 480u16;
@@ -27,17 +25,17 @@ pub fn check_file(path: &Path) -> Result<Vec<Issue>> {
     let mut r = Renderer::new(w, h);
     let _ = load_assets(&p, path, &mut r.assets);
     let dir = path.parent().unwrap_or(Path::new("."));
-    let mut issues = mui_cut::check::check(&src, &mut r, &|a| dir.join(a).is_file());
+    let mut issues = crate::check::check(&src, &mut r, &|a| dir.join(a).is_file());
     if p.render
         .as_ref()
-        .and_then(mui_cut::Render::rt_glass)
+        .and_then(crate::Render::rt_glass)
         .is_some()
     {
         let probe = mui_stage_rt::probe().map(|_| ()).map_err(|e| match e {
             mui_stage_rt::Error::Unavailable(why) => why,
             e => e.to_string(),
         });
-        issues.extend(mui_cut::check::rt_glass(&src, probe));
+        issues.extend(crate::check::rt_glass(&src, probe));
     }
     Ok(issues)
 }
@@ -73,9 +71,9 @@ pub fn check(args: &Args) -> Result<()> {
 
 // ---------------------------------------------------------------- pictures
 
-use mui_cut::{Drawn, Frame, Layer, Scene, eval};
+use crate::{Drawn, Frame, Layer, Scene, eval};
 
-use crate::Backend;
+use crate::cli::Backend;
 
 /// Every frame through `b`, in order (the GPU hands them back late).
 pub fn draw_all(b: &mut Backend, frames: &[Frame]) -> Result<Vec<Vec<u8>>> {
@@ -150,7 +148,7 @@ fn headed(
     let mut batch = frames.to_vec();
     batch.extend(labels.iter().map(|l| Frame {
         size,
-        background: mui_cut::Rgba([0, 0, 0, 255]),
+        background: crate::Rgba([0, 0, 0, 255]),
         layers: caption(l, f64::from(size[0]), scale).into(),
         view: None,
         effects: Vec::new(),
@@ -204,7 +202,7 @@ pub fn review_times(p: &Project, s: &Scene, max: usize) -> Vec<f64> {
     let end = (s.duration - 1. / p.fps).max(0.);
     let mut ts: Vec<f64> = (0..6).map(|i| end * f64::from(i) / 5.).collect();
     for l in &s.layers {
-        ts.extend(mui_cut::check::key_times(l));
+        ts.extend(crate::check::key_times(l));
     }
     ts.retain(|t| (0. ..=end).contains(t));
     ts.sort_by(f64::total_cmp);
@@ -237,7 +235,7 @@ pub struct SheetOpts {
 /// A contact sheet: frames of one or every scene in a grid, each captioned
 /// with its scene, time and frame number.
 pub fn sheet(path: &Path, o: &SheetOpts) -> Result<Picture> {
-    let p = crate::load(path)?;
+    let p = crate::cli::load(path)?;
     let scenes: Vec<&Scene> = match &o.scene {
         Some(n) => vec![p.scene(n).ok_or_else(|| format!("no scene `{n}`"))?],
         None => p.scenes.iter().collect(),
@@ -288,7 +286,7 @@ pub fn strip(
     width: u32,
     renderer: Option<&str>,
 ) -> Result<Picture> {
-    let p = crate::load(path)?;
+    let p = crate::cli::load(path)?;
     let s = match scene {
         Some(name) => p.scene(name).ok_or_else(|| format!("no scene `{name}`"))?,
         None => p
@@ -303,7 +301,7 @@ pub fn strip(
         .enumerate()
         .find(|(_, l)| l.id == layer)
         .ok_or_else(|| format!("no layer `{layer}` in scene `{}`", s.name))?;
-    let mut keys = mui_cut::check::key_times(l);
+    let mut keys = crate::check::key_times(l);
     keys.sort_by(f64::total_cmp);
     let end = (s.duration - 1. / p.fps).max(0.);
     let (t0, t1) = match (keys.first(), keys.last()) {
@@ -422,7 +420,7 @@ pub fn diff(
     width: u32,
     renderer: Option<&str>,
 ) -> Result<Picture> {
-    let (a, b) = (crate::load(a_path)?, crate::load(b_path)?);
+    let (a, b) = (crate::cli::load(a_path)?, crate::cli::load(b_path)?);
     let (tw, th) = tile(&a, (width.saturating_sub(6) / 3).saturating_sub(6));
     let mut notes = Vec::new();
     let mut at: Vec<(String, f64)> = Vec::new();
@@ -570,7 +568,7 @@ pub fn sheet_cmd(args: &Args) -> Result<()> {
             .map(str::parse)
             .transpose()
             .map_err(|_| "--cols: not a number")?,
-        renderer: crate::renderer(args).map(Into::into),
+        renderer: crate::cli::renderer(args).map(Into::into),
     };
     save(&sheet(&args.project, &o)?, &out_path(args, "sheet.png"))
 }
@@ -583,7 +581,7 @@ pub fn strip_cmd(args: &Args) -> Result<()> {
         args.get("scene"),
         args.num("n", 8)?,
         args.num("width", 1600)?,
-        crate::renderer(args),
+        crate::cli::renderer(args),
     )?;
     save(&pic, &out_path(args, &format!("{layer}.strip.png")))
 }
@@ -609,7 +607,7 @@ pub fn diff_cmd(args: &Args) -> Result<()> {
         &b,
         args.num("n", 6)?,
         args.num("width", 1600)?,
-        crate::renderer(args),
+        crate::cli::renderer(args),
     )?;
     let args = Args {
         project,
@@ -700,11 +698,11 @@ pub fn at_rev(project: &Path, rev: &str) -> Result<AtRev> {
     }
     #[cfg(unix)]
     {
-        let cache = here.join(mui_cut::plugin::CACHE);
+        let cache = here.join(crate::plugin::CACHE);
         if cache.is_dir() {
             let _ = std::os::unix::fs::symlink(
                 std::fs::canonicalize(&cache).unwrap_or(cache),
-                dir.join(mui_cut::plugin::CACHE),
+                dir.join(crate::plugin::CACHE),
             );
         }
     }

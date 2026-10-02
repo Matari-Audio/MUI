@@ -16,11 +16,11 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use mui_cut::plugin::{CACHE, Step, frame_at, note_events, sample_at};
-use mui_cut::{Kind, Project};
+use crate::plugin::{CACHE, Step, frame_at, note_events, sample_at};
+use crate::{Kind, Project};
 use serde_json::{Value, json};
 
-use crate::host::{Session, Sound, Writer};
+use crate::cli::host::{Session, Sound, Writer};
 
 /// Frames rendered per adapter advance.
 const CHUNK: usize = 256;
@@ -170,7 +170,7 @@ impl Live {
 
     fn duration(&self) -> f64 {
         let i = self.state.lock().expect("no panic holds it").scene;
-        crate::load(&self.project)
+        crate::cli::load(&self.project)
             .ok()
             .and_then(|p| p.scenes.get(i).map(|s| s.duration))
             .unwrap_or(1.)
@@ -342,7 +342,7 @@ impl Live {
                     let saved = {
                         let mut s = session.lock().expect("no panic holds it");
                         s.snapshot(&mut errs).and_then(|packet| {
-                            crate::host::save(&cache, &key, "live", &packet, &s.textures)
+                            crate::cli::host::save(&cache, &key, "live", &packet, &s.textures)
                         })
                     };
                     match saved {
@@ -387,7 +387,7 @@ struct Voice {
     steps: Vec<Step>,
     /// The last grid frame whose commands were sent.
     frame: usize,
-    gain: mui_cut::Layer,
+    gain: crate::Layer,
 }
 
 #[derive(Default)]
@@ -395,7 +395,7 @@ struct Mix {
     project: Option<Project>,
     scene: usize,
     voices: Vec<Voice>,
-    files: crate::audio::Files,
+    files: crate::cli::audio::Files,
     /// The project file (audio paths are relative to it).
     path: PathBuf,
     /// The scene sample the next chunk starts at.
@@ -425,7 +425,7 @@ impl Mix {
             let v = if let Some(i) = old.iter().position(|v| v.layer == l.id && v.source == key) {
                 old.swap_remove(i)
             } else {
-                let (exe, _) = crate::host::executable(source, dir)?;
+                let (exe, _) = crate::cli::host::executable(source, dir)?;
                 let mut session = Session::open(&exe, &source.args, dir, p.sample_rate)?;
                 let sound = session.sound.take().ok_or("no sound")?;
                 Voice {
@@ -457,7 +457,7 @@ impl Mix {
 
     fn panic(&mut self) {
         for v in &self.voices {
-            let _ = crate::host::write(&v.writer, &json!({"op": "panic"}));
+            let _ = crate::cli::host::write(&v.writer, &json!({"op": "panic"}));
         }
     }
 
@@ -475,7 +475,7 @@ impl Mix {
             v.frame = f;
             for step in v.steps.iter().filter(|s| s.frame <= f) {
                 for c in step.commands.iter().filter(|c| c["op"] != "advance") {
-                    crate::host::write(&v.writer, c)?;
+                    crate::cli::host::write(&v.writer, c)?;
                 }
             }
         }
@@ -504,7 +504,7 @@ impl Mix {
                     .filter(|s| s.frame > v.frame.min(f) && s.frame <= f)
                 {
                     for c in step.commands.iter().filter(|c| c["op"] != "advance") {
-                        crate::host::write(&v.writer, c)?;
+                        crate::cli::host::write(&v.writer, c)?;
                     }
                 }
                 v.frame = f;
@@ -526,7 +526,7 @@ impl Mix {
                 });
             }
             let target = v.offset + to;
-            crate::host::write(
+            crate::cli::host::write(
                 &v.writer,
                 &json!({"op": "advance", "to": target, "notes": notes}),
             )?;
@@ -544,7 +544,7 @@ impl Mix {
                 }
             }
             v.clock = target;
-            crate::audio::add(&mut out, from as usize, rate, &v.gain, |i, _| {
+            crate::cli::audio::add(&mut out, from as usize, rate, &v.gain, |i, _| {
                 let i = i - from as usize;
                 [
                     pcm.get(2 * i).copied().unwrap_or(0.),
@@ -556,8 +556,8 @@ impl Mix {
             if let Kind::Audio { path } = &l.kind {
                 let pcm = self.files.get(&self.path, path, rate).ok();
                 if let Some(pcm) = pcm {
-                    crate::audio::add(&mut out, from as usize, rate, l, |i, t| {
-                        crate::audio::file_at(&pcm, l, rate, i, t)
+                    crate::cli::audio::add(&mut out, from as usize, rate, l, |i, t| {
+                        crate::cli::audio::file_at(&pcm, l, rate, i, t)
                     });
                 }
             }

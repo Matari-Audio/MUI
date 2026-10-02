@@ -53,7 +53,7 @@ mui-stage = { path = "../mui-stage", default-features = false }
 gltf = { version = "1.4", default-features = false, features = ["utils", "extensions", "KHR_materials_transmission", "KHR_materials_ior", "KHR_materials_volume"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-wasm-bindgen = "0.2.128"
+wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 web-sys = { version = "0.3", features = ["OffscreenCanvas"] }
 # WebGL2 for browsers without WebGPU, drawn by vello_gpu.

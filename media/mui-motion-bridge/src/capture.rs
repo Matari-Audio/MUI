@@ -1,12 +1,15 @@
 use base64::Engine;
 use mui::material::Capture;
 type Raster = Option<([usize; 4], String)>;
-struct CachedFragment {
+/// A fragment as made (a PNG, or its paint as a scene) and its rect
+/// `[x, y, w, h]` in the UI's points.
+type Made<T> = Option<([f64; 4], T)>;
+struct CachedFragment<T> {
     key: (u16, u16, f64),
     paint: Vec<mui_scene::Painted>,
-    raster: Raster,
+    made: Made<T>,
     /// The part pulled out of its ancestors' clips, when that differs.
-    free: Raster,
+    free: Made<T>,
 }
 pub fn capture_frame(
     scene: &mui_scene::ResolvedScene,
@@ -77,12 +80,58 @@ fn capture_cached(
     height: u16,
     scale: f64,
     roots: &[String],
-    cache: &mut Vec<CachedFragment>,
+    cache: &mut Vec<CachedFragment<String>>,
 ) -> Result<serde_json::Value, String> {
     if width == 0 || height == 0 || !scale.is_finite() || scale <= 0. {
         return Err("capture dimensions and scale must be positive and finite".into());
     }
     let mut images = serde_json::Map::new();
+    let size = [f64::from(width) / scale, f64::from(height) / scale];
+    let manifest = capture_parts(
+        scene,
+        size,
+        scale,
+        (width, height, scale),
+        roots,
+        cache,
+        |s| {
+            Ok(
+                raster(s, width, height, scale)?.map(|([x0, y0, x1, y1], data)| {
+                    let px = |v: usize| v as f64 / scale;
+                    ([px(x0), px(y0), px(x1 - x0), px(y1 - y0)], data)
+                }),
+            )
+        },
+        |index, free, data| {
+            let name = if free {
+                format!("layer-{index:02}-free.png")
+            } else {
+                format!("layer-{index:02}.png")
+            };
+            images.insert(name.clone(), serde_json::Value::String(data.clone()));
+            name
+        },
+    )?;
+    Ok(serde_json::json!({"scene":manifest,"images":images}))
+}
+
+/// The capture manifest of `scene` split at `roots`: every fragment made
+/// by `make` (unless `cache` has its paint already) and named by `name`
+/// (its index, whether it is the free copy, what `make` made).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one body for both kinds of capture"
+)]
+fn capture_parts<T: Clone + PartialEq>(
+    scene: &mui_scene::ResolvedScene,
+    size: [f64; 2],
+    scale: f64,
+    key: (u16, u16, f64),
+    roots: &[String],
+    cache: &mut Vec<CachedFragment<T>>,
+    mut make: impl FnMut(&mui_scene::ResolvedScene) -> Result<Made<T>, String>,
+    mut name: impl FnMut(usize, bool, &T) -> String,
+) -> Result<serde_json::Value, String> {
     let refs: Vec<&str> = roots.iter().map(String::as_str).collect();
     let surfaces: Vec<_> = scene.surfaces().map(|s| serde_json::json!({"id":s.key.as_ref(),"parent":s.parent.as_deref(),"frame":[s.frame.x,s.frame.y,s.frame.size.width,s.frame.size.height]})).collect();
     let tree = part_tree(scene, roots);
@@ -104,16 +153,15 @@ fn capture_cached(
         let free = fragment.free();
         let id = fragment.part.as_ref();
         let isolated = fragment.scene;
-        let key = (width, height, scale);
         let cached = cache
             .get(index)
             .filter(|c| c.key == key && c.paint == isolated.paint);
         let (data, loose) = if let Some(c) = cached {
-            (c.raster.clone(), c.free.clone())
+            (c.made.clone(), c.free.clone())
         } else {
-            let data = raster(&isolated, width, height, scale)?;
+            let data = make(&isolated)?;
             let loose = match free {
-                Some(f) => raster(&f, width, height, scale)?.filter(|f| Some(f) != data.as_ref()),
+                Some(f) => make(&f)?.filter(|f| Some(f) != data.as_ref()),
                 None => None,
             };
             (data, loose)
@@ -121,7 +169,7 @@ fn capture_cached(
         let entry = CachedFragment {
             key,
             paint: isolated.paint,
-            raster: data.clone(),
+            made: data.clone(),
             free: loose.clone(),
         };
         if index < cache.len() {
@@ -129,41 +177,26 @@ fn capture_cached(
         } else {
             cache.push(entry);
         }
-        let Some(([x0, y0, x1, y1], data)) = data else {
+        let Some((rect, data)) = data else {
             continue;
         };
-        let name = format!("layer-{index:02}.png");
-        images.insert(name.clone(), serde_json::Value::String(data));
-        let origin = id.and_then(|id| scene.surface(id)).map_or(
-            [
-                f64::from(width) / scale / 2.,
-                f64::from(height) / scale / 2.,
-            ],
-            |s| {
-                [
-                    s.frame.x + s.frame.size.width / 2.,
-                    s.frame.y + s.frame.size.height / 2.,
-                ]
-            },
-        );
-        let rect = |[x0, y0, x1, y1]: [usize; 4]| {
-            [
-                x0 as f64 / scale,
-                y0 as f64 / scale,
-                (x1 - x0) as f64 / scale,
-                (y1 - y0) as f64 / scale,
-            ]
-        };
+        let src = name(index, false, &data);
+        let origin =
+            id.and_then(|id| scene.surface(id))
+                .map_or([size[0] / 2., size[1] / 2.], |s| {
+                    [
+                        s.frame.x + s.frame.size.width / 2.,
+                        s.frame.y + s.frame.size.height / 2.,
+                    ]
+                });
         let node = id.and_then(|id| tree.iter().find(|p| &p.id == id));
-        let mut layer = serde_json::json!({"id":format!("fragment-{index}"),"group":node.map_or("background",|n| n.path.as_str()),"origin":origin,"src":name,"rect":rect([x0,y0,x1,y1])});
+        let mut layer = serde_json::json!({"id":format!("fragment-{index}"),"group":node.map_or("background",|n| n.path.as_str()),"origin":origin,"src":src,"rect":rect});
         if let Some(n) = node {
             layer["part"] = n.id.clone().into();
             layer["parent"] = n.parent.as_deref().and_then(path_of).into();
         }
         if let Some((r, data)) = loose {
-            let name = format!("layer-{index:02}-free.png");
-            images.insert(name.clone(), serde_json::Value::String(data));
-            layer["free"] = serde_json::json!({"src": name, "rect": rect(r)});
+            layer["free"] = serde_json::json!({"src": name(index, true, &data), "rect": r});
         }
         layers.push(layer);
     }
@@ -176,8 +209,9 @@ fn capture_cached(
                 "frame": f.map(|f| [f.x, f.y, f.size.width, f.size.height])})
         })
         .collect();
-    let manifest = serde_json::json!({"version":1,"width":f64::from(width)/scale,"height":f64::from(height)/scale,"scale":scale,"layers":layers,"groups":roots,"parts":parts,"surfaces":surfaces});
-    Ok(serde_json::json!({"scene":manifest,"images":images}))
+    Ok(
+        serde_json::json!({"version":1,"width":size[0],"height":size[1],"scale":scale,"layers":layers,"groups":roots,"parts":parts,"surfaces":surfaces}),
+    )
 }
 
 /// Offline capture uses exactly the same pixels as the live in-memory stream.
@@ -210,7 +244,7 @@ pub fn capture(
 #[derive(Default)]
 pub struct CaptureStream {
     previous: std::collections::HashSet<String>,
-    cache: Vec<CachedFragment>,
+    cache: Vec<CachedFragment<String>>,
 }
 impl CaptureStream {
     pub fn frame(
@@ -249,6 +283,153 @@ impl CaptureStream {
         frame["images"] = serde_json::Value::Object(images);
         Ok(frame)
     }
+}
+
+/// A fragment's paint as a scene drawn at its rect's origin, and the name
+/// it was given when made. Equal by paint alone.
+#[derive(Clone, Debug)]
+pub struct Vector {
+    pub scene: std::sync::Arc<mui_scene::ResolvedScene>,
+    id: u64,
+}
+impl PartialEq for Vector {
+    fn eq(&self, o: &Self) -> bool {
+        self.scene == o.scene
+    }
+}
+impl Vector {
+    /// `v<id>.mui`: made once, so a part whose paint did not change keeps
+    /// its name (and a renderer its texture).
+    pub fn name(&self) -> String {
+        format!("v{}.mui", self.id)
+    }
+}
+
+/// [`CaptureStream`] without pixels: each fragment is its paint, moved to
+/// its rect's origin, for a renderer in the same process to draw at
+/// whatever size it needs.
+#[derive(Default)]
+pub struct VectorStream {
+    cache: Vec<CachedFragment<Vector>>,
+    made: u64,
+}
+impl VectorStream {
+    /// The manifest of `scene`, `size` points, split at `roots` (as
+    /// [`capture_frame`]'s `scene`, `src` naming a [`Vector`]), and every
+    /// fragment it names.
+    pub fn frame(
+        &mut self,
+        scene: &mui_scene::ResolvedScene,
+        size: mui_scene::Size,
+        roots: &[String],
+    ) -> Result<(serde_json::Value, Vec<Vector>), String> {
+        let made = &mut self.made;
+        let mut used = Vec::new();
+        let manifest = capture_parts(
+            scene,
+            [size.width, size.height],
+            1.,
+            (0, 0, 1.),
+            roots,
+            &mut self.cache,
+            |s| {
+                Ok(bounds(s).map(|r| {
+                    *made += 1;
+                    let scene = std::sync::Arc::new(shifted(s.clone(), -r.origin().to_vec2()));
+                    (
+                        [r.x0, r.y0, r.width(), r.height()],
+                        Vector { scene, id: *made },
+                    )
+                }))
+            },
+            |_, _, v| {
+                used.push(v.clone());
+                v.name()
+            },
+        )?;
+        Ok((manifest, used))
+    }
+}
+
+/// Where `scene` paints, clipped as it clips: every outline (strokes and
+/// blurs grown by their reach, glyph runs by their size), each cut to the
+/// clips open around it. `None` paints nothing.
+pub fn bounds(scene: &mui_scene::ResolvedScene) -> Option<mui_geometry::Rect> {
+    use mui_geometry::PathCommand as C;
+    use mui_geometry::Rect;
+    use mui_scene::Layer;
+    let outline = |p: &mui_scene::Painted| {
+        let o = p.offset.to_vec2();
+        let pts = p.path.commands.iter().flat_map(|c| match *c {
+            C::MoveTo(a) | C::LineTo(a) => vec![a],
+            C::CubicTo(a, b, c) => vec![a, b, c],
+            C::ArcTo(a) => {
+                let r = mui_geometry::Vec2::new(a.radius, a.radius);
+                vec![a.center - r, a.center + r]
+            }
+            C::Close => vec![],
+        });
+        mui_geometry::bounds(pts.map(|q| q + o))
+    };
+    let mut clips: Vec<Option<Rect>> = Vec::new();
+    let mut out: Option<Rect> = None;
+    for p in &scene.paint {
+        let open = clips.last().copied().flatten();
+        match p.layer {
+            Layer::Clip => {
+                let b = outline(p).unwrap_or(Rect::ZERO);
+                clips.push(Some(open.map_or(b, |c| c.intersect(b))));
+                continue;
+            }
+            Layer::Unclip => {
+                clips.pop();
+                continue;
+            }
+            Layer::Blend { .. } | Layer::Unblend => continue,
+            _ => {}
+        }
+        let b = match &p.text {
+            Some(t) => {
+                let size = f64::from(t.size);
+                mui_geometry::bounds(t.glyphs.iter().flat_map(|g| {
+                    let at = t.origin + mui_geometry::Vec2::new(f64::from(g.x), f64::from(g.y));
+                    [
+                        at + mui_geometry::Vec2::new(-size * 0.2, -size * 1.2),
+                        at + mui_geometry::Vec2::new(size * 1.2, size * 0.4),
+                    ]
+                }))
+            }
+            None => outline(p),
+        };
+        let Some(b) = b else { continue };
+        // A stroke reaches half its width out, a blur about three radii;
+        // a pixel more for anti-aliasing.
+        let reach = p.width / 2. + 3. * p.blur + 1.;
+        let mut b = b.inflate(reach, reach);
+        if let Some(c) = open {
+            b = b.intersect(c);
+        }
+        if b.width() <= 0. || b.height() <= 0. {
+            continue;
+        }
+        out = Some(out.map_or(b, |o| o.union(b)));
+    }
+    out
+}
+
+/// `scene` moved by `d`: every entry's offset, and a glyph run's origin
+/// (which stands in scene space with the offset at zero).
+pub fn shifted(
+    mut scene: mui_scene::ResolvedScene,
+    d: mui_geometry::Vec2,
+) -> mui_scene::ResolvedScene {
+    for p in &mut scene.paint {
+        match &mut p.text {
+            Some(t) => t.origin += d,
+            None => p.offset += d,
+        }
+    }
+    scene
 }
 
 /// Discover a useful non-overlapping partition without plugin-specific names.
