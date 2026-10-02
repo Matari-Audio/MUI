@@ -526,9 +526,10 @@ pub fn adapter(plugin: &str, features: &[String], project_dir: &Path) -> Result<
     for c in &config {
         cmd.args(["--config", c]);
     }
-    if std::env::var_os("CARGO_TARGET_DIR").is_none() {
-        cmd.arg("--target-dir").arg(cache().join("target"));
-    }
+    // Never the caller's CARGO_TARGET_DIR: mui-cut is a cdylib too, so
+    // its rlib has no hash in its name and a workspace building another
+    // mui-cut there overwrites the adapter's (E0053, two serde_jsons).
+    cmd.arg("--target-dir").arg(cache().join("target"));
     eprintln!(
         "mui-cut: building the adapter for `{}` against {}",
         p.package,

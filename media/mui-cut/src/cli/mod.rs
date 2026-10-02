@@ -67,7 +67,8 @@ const USAGE: &str = "usage:
   mui-cut strip  PROJECT --layer ID [-o OUT.png] [--scene NAME] [--n 8] [--width 1600] [--renderer R]
   mui-cut diff   A B | PROJECT@REV | PROJECT --rev REV [-o OUT.png] [--n 6] [--width 1600] [--renderer R]
   mui-cut serve  PROJECT [--port 8740] [--web DIR]   (MUI_CUT_AUDIO=null: no audio device)
-  mui-cut capture PROJECT                          # run plugin adapters: captures and soundtracks
+  mui-cut capture PROJECT [--json]                 # run plugin adapters: captures and soundtracks
+                                                   # (--json: each batch written, a JSON line)
   mui-cut midi   PROJECT --file SONG.mid --layer ID [--scene NAME] [--track N] [--at SECONDS]";
 
 /// `--name value` pairs after the command and project path.
@@ -144,7 +145,7 @@ pub(crate) fn run(argv: &[String]) -> Result<()> {
         project: project.into(),
         flags,
     };
-    if matches!(cmd.as_str(), "render" | "still")
+    if matches!(cmd.as_str(), "render" | "still" | "capture")
         && let Some(code) = host::hand_off(argv, &load_variant(&args)?, &args.project)?
     {
         std::process::exit(code);
@@ -169,7 +170,7 @@ pub(crate) fn run(argv: &[String]) -> Result<()> {
         }
         "capture" => {
             let p = load(&args.project)?;
-            let errs = host::capture_missing(&p, &args.project);
+            let errs = host::capture_all(&p, &args.project, args.has("json"));
             if errs.is_empty() {
                 Ok(())
             } else {
