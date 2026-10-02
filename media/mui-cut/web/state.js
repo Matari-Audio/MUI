@@ -7,7 +7,7 @@
 import init, { Cut } from './pkg/mui_cut.js';
 
 export const $ = s => document.querySelector(s);
-export const KIND_ICON = { rect: '▭', ellipse: '◯', text: 'T', image: '▣', path: '〰', duplicator: '⁂', svg: 'S', lottie: 'L', camera: '⌖', light: '☀', model: '◈', plugin: '⧉', audio: '♪', patch: '☰' };
+export const KIND_ICON = { rect: '▭', ellipse: '◯', text: 'T', image: '▣', path: '〰', duplicator: '⁂', svg: 'S', lottie: 'L', camera: '⌖', light: '☀', model: '◈', plugin: '⧉', audio: '♪', patch: '☰', group: '▤', comp: '⧈' };
 export const VECTOR = ['text', 'path', 'duplicator', 'svg', 'lottie'];
 // Graphite, as in style.css: greys only, state by value, weight and shape.
 export const C = {
