@@ -1,9 +1,9 @@
 //! `mui-cut midi`: a Standard MIDI File's notes as a plugin layer's
 //! `notes`, in seconds through the file's tempo map.
 use midly::{MetaMessage, MidiMessage, Smf, Timing, TrackEventKind};
-use mui_cut::Note;
+use crate::Note;
 
-use crate::Result;
+use crate::cli::Result;
 
 /// Every note in `bytes` (or in `track` alone), `at` seconds later, by start.
 pub fn notes(bytes: &[u8], track: Option<usize>, at: f64) -> Result<Vec<Note>> {

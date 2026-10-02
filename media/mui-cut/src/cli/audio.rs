@@ -6,9 +6,9 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-use mui_cut::{Kind, Layer, Project, Scene};
+use crate::{Kind, Layer, Project, Scene};
 
-use crate::Result;
+use crate::cli::Result;
 
 /// Volume and time are read once a block this long (samples).
 const BLOCK: usize = 64;
@@ -104,7 +104,7 @@ pub fn file_at(pcm: &[f32], l: &Layer, rate: u32, n: usize, t: f64) -> [f32; 2] 
 }
 
 /// The mix of `scenes` back to back, `None` when nothing sounds. Plugin
-/// soundtracks must be rendered ([`crate::host::capture_missing`]).
+/// soundtracks must be rendered ([`crate::cli::host::capture_missing`]).
 pub fn mix(p: &Project, project: &Path, scenes: &[&Scene]) -> Result<Option<Vec<f32>>> {
     if !sounds(scenes) {
         return Ok(None);
@@ -117,7 +117,7 @@ pub fn mix(p: &Project, project: &Path, scenes: &[&Scene]) -> Result<Option<Vec<
         for l in &s.layers {
             match &l.kind {
                 Kind::Plugin { .. } => {
-                    if let Some(pcm) = crate::host::layer_audio(p, project, s, l)? {
+                    if let Some(pcm) = crate::cli::host::layer_audio(p, project, s, l)? {
                         add(&mut part, 0, rate, l, |n, _| {
                             [
                                 pcm.get(2 * n).copied().unwrap_or(0.),
@@ -165,7 +165,7 @@ pub fn wav(pcm: &[f32], rate: u32) -> Vec<u8> {
 
 /// Put `pcm` into the finished video `out` as an AAC track, the video
 /// stream copied as it is.
-pub fn mux(plan: &crate::encode::Plan, out: &str, pcm: &[f32], rate: u32) -> Result<()> {
+pub fn mux(plan: &crate::cli::encode::Plan, out: &str, pcm: &[f32], rate: u32) -> Result<()> {
     let wav_file = format!("{out}.mix.wav");
     let tmp = format!("{out}.mux.tmp");
     std::fs::write(&wav_file, wav(pcm, rate)).map_err(|e| format!("{wav_file}: {e}"))?;
@@ -178,7 +178,7 @@ pub fn mux(plan: &crate::encode::Plan, out: &str, pcm: &[f32], rate: u32) -> Res
         .chain(plan.mux())
         .chain([tmp.clone()])
         .collect();
-    let ok = crate::ffmpeg(&args)
+    let ok = crate::cli::ffmpeg(&args)
         .status()
         .map_err(|e| format!("ffmpeg: {e}"))?;
     let _ = std::fs::remove_file(&wav_file);
@@ -224,7 +224,7 @@ pub fn clip(project: &Path, scene: &str, from: f64, to: f64, out: &Path) -> Resu
     )
     .chain([out.display().to_string()])
     .collect();
-    let ok = crate::ffmpeg(&args)
+    let ok = crate::cli::ffmpeg(&args)
         .status()
         .map_err(|e| format!("ffmpeg: {e}"))?;
     let _ = std::fs::remove_file(&full);

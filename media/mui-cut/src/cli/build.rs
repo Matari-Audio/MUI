@@ -12,7 +12,7 @@
 //! uses. The plugin's checkout, `Cargo.lock` included, is only read.
 //!
 //! Frameworks: moose and truce plugins (`moose::plugin!` / `truce::plugin!`
-//! make `crate::Plugin`), nice-plug (the type `nice_export_clap!` names,
+//! make `crate::cli::Plugin`), nice-plug (the type `nice_export_clap!` names,
 //! public at the crate root), and plain MUI crates, which export
 //! `pub fn mui_editor() -> (mui::Ui, (u32, u32), impl mui::host::View + Send + 'static)`
 //! and, for sound, `pub fn mui_audio(sample_rate: f32) -> impl FnMut(&[(u8, u8)], &mut [[f32; 2]]) + Send + 'static`.
@@ -22,7 +22,7 @@ use std::process::{Command, Stdio};
 
 use serde_json::{Value, json};
 
-use crate::Result;
+use crate::cli::Result;
 
 /// MUI's git URL, as plugins depend on it.
 pub const MUI_GIT: &str = "https://github.com/Matari-Audio/MUI";
@@ -336,7 +336,7 @@ fn entry(
                     let last = ty.rsplit("::").next().unwrap_or(&ty).to_owned();
                     missing.push(format!(
                         "make the plugin type public at the crate root: `pub use {}{ty};` in src/lib.rs",
-                        if ty.starts_with("crate::") { "" } else { "crate::" },
+                        if ty.starts_with("crate::cli::") { "" } else { "crate::cli::" },
                     ));
                     last
                 }
@@ -452,7 +452,7 @@ pub fn checkout(url: &str, update: bool) -> Result<PathBuf> {
         .unwrap_or("plugin");
     let dir = cache().join("src").join(format!(
         "{name}-{:08x}",
-        mui_cut::plugin::fnv(mui_cut::plugin::FNV_OFFSET, url.as_bytes()) as u32
+        crate::plugin::fnv(crate::plugin::FNV_OFFSET, url.as_bytes()) as u32
     ));
     let git = |args: &[&str], cwd: &Path| -> Result<()> {
         let out = Command::new("git")
@@ -564,8 +564,8 @@ fn cargo(dir: &Path) -> Command {
 /// The adapter's package, binary and directory name: one per plugin
 /// folder, so adapters sharing a target directory never overwrite another.
 fn adapter_name(p: &Plugin) -> String {
-    let hash = mui_cut::plugin::fnv(
-        mui_cut::plugin::FNV_OFFSET,
+    let hash = crate::plugin::fnv(
+        crate::plugin::FNV_OFFSET,
         p.dir.to_string_lossy().as_bytes(),
     );
     format!("adapter-{}-{:08x}", p.package, hash as u32)
@@ -841,7 +841,7 @@ pub fn add(project: &Path, from: &str, base: &Path, id: Option<&str>) -> Result<
         .parent()
         .filter(|d| !d.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
-    let p = mui_cut::Project::load(&text)?;
+    let p = crate::Project::load(&text)?;
     let all = p.all_sources();
     let taken: Vec<&str> = all.iter().map(|m| m.id.as_str()).collect();
     let (entry, mut report) = onboard(from, base, dir, id, &taken)?;
@@ -852,21 +852,21 @@ pub fn add(project: &Path, from: &str, base: &Path, id: Option<&str>) -> Result<
         .as_array_mut()
         .ok_or("`sources` is not a list")?
         .push(entry.clone());
-    let p = mui_cut::Project::load(&raw.to_string())?;
-    crate::write_atomic(project, &p.to_json())?;
+    let p = crate::Project::load(&raw.to_string())?;
+    crate::cli::write_atomic(project, &p.to_json())?;
     report["id"] = entry["id"].clone();
     report["source"] = entry["source"].clone();
     report["parts"] = parts(&p, project, entry["id"].as_str().unwrap_or(""))?;
     // Built by now: its path, for a wall-clock host (tools/film).
-    let source: mui_cut::plugin::Source =
+    let source: crate::plugin::Source =
         serde_json::from_value(entry["source"].clone()).map_err(|e| e.to_string())?;
-    report["adapter"] = json!(crate::host::executable(&source, dir)?.0);
+    report["adapter"] = json!(crate::cli::host::executable(&source, dir)?.0);
     Ok(report)
 }
 
 /// A plugin source's part tree, capturing it first if needed.
-pub fn parts(p: &mui_cut::Project, project: &Path, id: &str) -> Result<Value> {
-    let errs = crate::host::capture_sources(p, project);
+pub fn parts(p: &crate::Project, project: &Path, id: &str) -> Result<Value> {
+    let errs = crate::cli::host::capture_sources(p, project);
     let all = p.all_sources();
     let m = all
         .iter()
@@ -876,13 +876,13 @@ pub fn parts(p: &mui_cut::Project, project: &Path, id: &str) -> Result<Value> {
     let file = project
         .parent()
         .unwrap_or(Path::new("."))
-        .join(mui_cut::plugin::CACHE)
+        .join(crate::plugin::CACHE)
         .join(format!("{state}.json"));
-    let cap: mui_cut::Capture = std::fs::read(&file)
+    let cap: crate::Capture = std::fs::read(&file)
         .ok()
         .and_then(|b| serde_json::from_slice(&b).ok())
         .ok_or_else(|| format!("`{id}` was added but not captured:\n{}", errs.join("\n")))?;
-    Ok(mui_cut::plugin::home_tree(&cap, &state))
+    Ok(crate::plugin::home_tree(&cap, &state))
 }
 
 #[cfg(test)]
@@ -963,7 +963,7 @@ mui-truce = { git = "https://github.com/Matari-Audio/MUI", branch = "revamp" }
         assert_eq!(
             p.missing,
             [
-                "make the plugin type public at the crate root: `pub use crate::synth::Synth;` in src/lib.rs"
+                "make the plugin type public at the crate root: `pub use crate::cli::synth::Synth;` in src/lib.rs"
             ]
         );
         let p = detect(&fixture("plain-bare")).unwrap();

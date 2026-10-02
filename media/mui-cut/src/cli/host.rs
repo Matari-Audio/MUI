@@ -20,19 +20,19 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::Duration;
 
 use base64::Engine as _;
-use mui_cut::plugin::{CACHE, Capture, FNV_OFFSET, Fragment, Image, fnv, frame_at};
-use mui_cut::sources::MediaKind;
-use mui_cut::{Assets, Kind, Layer, Project, Source};
+use crate::plugin::{CACHE, Capture, FNV_OFFSET, Fragment, Image, fnv, frame_at};
+use crate::sources::MediaKind;
+use crate::{Assets, Kind, Layer, Project, Source};
 use serde_json::{Value, json};
 
-use crate::Result;
+use crate::cli::Result;
 
 /// How long one capture may take before the adapter counts as hung.
 const PATIENCE: Duration = Duration::from_secs(60);
 
 /// Every plugin layer's steps in every scene, and its soundtrack's key
 /// and last advance when it plays notes: `(layer, steps, audio)`.
-type Plugin<'a> = (&'a Layer, Vec<mui_cut::Step>, Option<(String, Value)>);
+type Plugin<'a> = (&'a Layer, Vec<crate::Step>, Option<(String, Value)>);
 
 fn plugins(p: &Project) -> Vec<Plugin<'_>> {
     p.scenes
@@ -60,7 +60,7 @@ pub fn audio_file(key: &str) -> String {
 pub fn layer_audio(
     p: &Project,
     project: &Path,
-    s: &mui_cut::Scene,
+    s: &crate::Scene,
     l: &Layer,
 ) -> Result<Option<Vec<f32>>> {
     let steps = l.plugin_track(p.fps, p.sample_rate, frame_at(s.duration, p.fps));
@@ -143,7 +143,7 @@ pub fn capture_missing(p: &Project, project: &Path) -> Vec<String> {
     capture(jobs, project, p.sample_rate)
 }
 
-/// Capture every plugin source's fresh state ([`mui_cut::plugin::home`]),
+/// Capture every plugin source's fresh state ([`crate::plugin::home`]),
 /// whose manifest lists its parts for the Sources panel. What failed.
 pub fn capture_sources(p: &Project, project: &Path) -> Vec<String> {
     let all = p.all_sources();
@@ -153,7 +153,7 @@ pub fn capture_sources(p: &Project, project: &Path) -> Vec<String> {
             MediaKind::Plugin { source } => Some(Job {
                 what: format!("source `{}`", m.id),
                 source,
-                steps: vec![mui_cut::plugin::home_step(source)],
+                steps: vec![crate::plugin::home_step(source)],
                 audio: None,
             }),
             _ => None,
@@ -167,7 +167,7 @@ pub fn capture_sources(p: &Project, project: &Path) -> Vec<String> {
 struct Job<'a> {
     what: String,
     source: &'a Source,
-    steps: Vec<mui_cut::Step>,
+    steps: Vec<crate::Step>,
     audio: Option<(String, Value)>,
 }
 
@@ -218,7 +218,7 @@ fn capture(jobs: Vec<Job>, project: &Path, rate: u32) -> Vec<String> {
 /// building it first when the source is a Cargo target.
 pub fn executable(src: &Source, dir: &Path) -> Result<(PathBuf, String)> {
     let exe = if !src.plugin.is_empty() {
-        crate::build::adapter(&src.plugin, &src.features, dir)?
+        crate::cli::build::adapter(&src.plugin, &src.features, dir)?
     } else if src.cargo.is_empty() {
         // Absolute: the adapter starts in `dir`, where a path relative to
         // mui-cut's own directory means something else.
@@ -468,7 +468,7 @@ fn replay(
     exe: &Path,
     args: &[String],
     dir: &Path,
-    steps: &[mui_cut::Step],
+    steps: &[crate::Step],
     stamp: &str,
     clock: Clock,
     errs: &mut Vec<String>,

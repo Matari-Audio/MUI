@@ -18,10 +18,10 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use mui_cut::Project;
+use crate::Project;
 use serde_json::{Value, json};
 
-use crate::{Result, write_atomic};
+use crate::cli::{Result, write_atomic};
 
 /// How often the project file is re-read for outside edits.
 const POLL: Duration = Duration::from_millis(250);
@@ -38,7 +38,7 @@ struct Shared {
     /// The project text whose plugin states were last captured.
     captured: Mutex<String>,
     /// The sound, played as the editor plays (`/transport`).
-    live: std::sync::OnceLock<Arc<crate::live::Live>>,
+    live: std::sync::OnceLock<Arc<crate::cli::live::Live>>,
 }
 
 pub fn serve(project: &Path, port: u16, web: PathBuf) -> Result<()> {
@@ -67,7 +67,7 @@ pub fn serve(project: &Path, port: u16, web: PathBuf) -> Result<()> {
     // started; restart serve after changing `sample_rate`.
     let _ = shared
         .live
-        .set(crate::live::Live::new(project, rate, move |msg| {
+        .set(crate::cli::live::Live::new(project, rate, move |msg| {
             if let Some(s) = weak.upgrade() {
                 s.broadcast(format!("event: live\ndata: {msg}\n\n").as_bytes());
             }
@@ -294,7 +294,7 @@ pub fn merge(
     let (mut conflicts, mut skipped) = (Vec::new(), Vec::new());
     for op in ops {
         let path = op["path"].as_str().unwrap_or("");
-        match crate::mcp::apply(&mut out, op) {
+        match crate::cli::mcp::apply(&mut out, op) {
             Ok(()) => {
                 if theirs.iter().any(|t| touch(t, path)) && !conflicts.iter().any(|c| c == path) {
                     conflicts.push(path.to_owned());
@@ -396,8 +396,8 @@ impl Shared {
         if !all.iter().any(|m| m.state().is_some()) {
             return;
         }
-        let mut errs = crate::host::capture_missing(&p, &self.project);
-        errs.extend(crate::host::capture_sources(&p, &self.project));
+        let mut errs = crate::cli::host::capture_missing(&p, &self.project);
+        errs.extend(crate::cli::host::capture_sources(&p, &self.project));
         for e in errs {
             eprintln!("mui-cut: {e}");
         }
@@ -547,7 +547,7 @@ impl Shared {
                 let taken: Vec<&str> = taken.iter().map(String::as_str).collect();
                 let from = v["from"].as_str().unwrap_or("").trim();
                 let id = v["id"].as_str().map(str::trim).filter(|s| !s.is_empty());
-                match crate::build::onboard(from, dir, dir, id, &taken) {
+                match crate::cli::build::onboard(from, dir, dir, id, &taken) {
                     Ok((entry, report)) => {
                         let body = serde_json::json!({"entry": entry, "report": report});
                         respond(
@@ -617,16 +617,16 @@ impl Shared {
             ("GET", "/mix.wav") => {
                 let text = std::fs::read_to_string(&self.project).map_err(io)?;
                 let p = Project::load(&text)?;
-                for e in crate::host::capture_missing(&p, &self.project) {
+                for e in crate::cli::host::capture_missing(&p, &self.project) {
                     eprintln!("mui-cut: {e}");
                 }
                 let scenes: Vec<_> = p.scenes.iter().collect();
-                match crate::audio::mix(&p, &self.project, &scenes) {
+                match crate::cli::audio::mix(&p, &self.project, &scenes) {
                     Ok(Some(pcm)) => respond(
                         stream,
                         "200 OK",
                         "audio/wav",
-                        &crate::audio::wav(&pcm, p.sample_rate),
+                        &crate::cli::audio::wav(&pcm, p.sample_rate),
                     ),
                     Ok(None) => respond(stream, "204 No Content", "text/plain", b""),
                     Err(e) => respond(
@@ -732,7 +732,7 @@ mod tests {
         );
         let mut c = a.clone();
         for op in &ops {
-            crate::mcp::apply(&mut c, op).unwrap();
+            crate::cli::mcp::apply(&mut c, op).unwrap();
         }
         assert_eq!(c, b);
     }
