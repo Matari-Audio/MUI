@@ -39,8 +39,8 @@ pub mod yuv;
 pub use gpu::Offline;
 pub use gpu::{Engine, GpuCanvas};
 pub use motion::{
-    ANIMATOR_PROPS, Animator, Deform, Deformer, Ease, Effector, Falloff, Field, Fx, Order, Unit,
-    text_units,
+    ANIMATOR_PROPS, Animator, Behaviour, Deform, Deformer, Ease, Effector, Falloff, Field, Fx,
+    Order, Unit, text_units,
 };
 pub use plugin::{
     Capture, Fragment, Note, Param, Part, PartAt, PartInfo, PluginAt, Pose, Source, Step, Surface,
@@ -619,6 +619,9 @@ pub struct Layer {
     /// Vector kinds, applied in order after everything else.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub deformers: Vec<Deformer>,
+    /// Any kind: wiggles and oscillations added on top of the keys.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub behaviours: Vec<motion::Behaviour>,
     /// 3D: depth in pixels (larger is farther), turns in degrees (`rx`
     /// tips the top away, `ry` turns the right side away; `rotation` is
     /// the turn about z), the pivot's depth behind the face, and the slab
@@ -810,6 +813,13 @@ impl Layer {
     /// when the layer is in a 3D scene. Cameras, lights and models always
     /// list theirs.
     pub fn props_in(&self, three: bool) -> Vec<(String, Prop<'_>)> {
+        let mut out = self.kind_props(three);
+        out.extend(motion::behaviour_props(&self.behaviours));
+        out
+    }
+
+    /// [`Layer::props_in`] but the behaviours'.
+    fn kind_props(&self, three: bool) -> Vec<(String, Prop<'_>)> {
         use Prop::{Color, Num};
         let mut out: Vec<(String, Prop<'_>)> = Vec::new();
         let mut colors = Vec::new();
@@ -1599,6 +1609,7 @@ impl Layer {
             let n = d.count;
             d.fx = motion::apply_to(&self.animators, n, &|_| fill, t, |_| (0..n).collect(), &pos);
         }
+        motion::behave(self, &mut d, t);
         d
     }
 }
@@ -1738,6 +1749,7 @@ impl Project {
                     }
                     Ok(())
                 };
+                motion::check_behaviours(l).map_err(|e| format!("{at}.{e}"))?;
                 match &l.kind {
                     Kind::Path { d } => bad("d", d)?,
                     Kind::Duplicator { d, along, .. } => {

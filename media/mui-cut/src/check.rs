@@ -349,7 +349,12 @@ fn fields(raw: &Value, p: &Project, out: &mut Issues) {
                     && !used.contains(k)
                     && !matches!(
                         k.as_str(),
-                        "id" | "name" | "parent" | "kind" | "animators" | "deformers"
+                        "id" | "name"
+                            | "parent"
+                            | "kind"
+                            | "animators"
+                            | "deformers"
+                            | "behaviours"
                     )
                     && !(three
                         && matches!(k.as_str(), "cast_shadows" | "receive_shadows" | "overlay"))
@@ -394,6 +399,18 @@ fn fields(raw: &Value, p: &Project, out: &mut Issues) {
                 unknown(out, ra, &props_of(&animator), &ap, at);
                 for (k, v) in ra.as_object().into_iter().flatten() {
                     keys_fields(out, v, &key, &format!("{ap}.{k}"), at);
+                }
+            }
+            for (bi, rb) in rl["behaviours"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .enumerate()
+            {
+                let bp = format!("{lp}.behaviours[{bi}]");
+                unknown(out, rb, &props_of(&def("Behaviour")), &bp, at);
+                for (k, v) in rb.as_object().into_iter().flatten() {
+                    keys_fields(out, v, &key, &format!("{bp}.{k}"), at);
                 }
             }
             for (di, rd) in rl["deformers"].as_array().into_iter().flatten().enumerate() {

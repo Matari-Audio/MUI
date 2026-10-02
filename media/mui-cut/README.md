@@ -369,6 +369,27 @@ copies nest), never the duplicator itself. The copies paint unpicked; the
 duplicator's outline is their bounds. In 3D they lie flat on the
 duplicator's plane, as a comp's layers do.
 
+### Behaviours
+
+`"behaviours": [...]` on any layer adds motion on top of a property's keys
+(or plain value), every frame, as a pure function of time:
+
+```json
+{ "prop": "rotation", "kind": "wiggle", "amount": 10, "freq": 1, "seed": 0, "phase": 0 }
+```
+
+- `kind` `wiggle` is smooth seeded noise (Catmull-Rom through a random
+  value every `1 / freq` s), up to `amount` either way; the curve is fixed
+  by `seed` and the property's name, so wiggling `x` and `y` with one seed
+  still wanders. `oscillate` is `amount * sin(2π (freq t + phase))`.
+- `prop` is one of `x`, `y`, `z`, `scale`, `rotation`, `rx`, `ry`,
+  `opacity` (kept in 0..1; a layer that is off stays off), `width`,
+  `height`, `radius`, `font_size`, `tracking`, `stroke_width`,
+  `path_offset`, `ring_radius`; loading refuses another.
+- `amount`, `freq` and `phase` are keyable (`behaviours.0.amount`): key
+  `amount` to fade a wiggle in. Behaviours apply in the layer's own space
+  before parenting, so children follow a wiggling parent.
+
 ### Deformers
 
 `"deformers": [...]` on any vector kind moves every point of the finished

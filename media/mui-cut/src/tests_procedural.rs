@@ -283,3 +283,56 @@ fn the_group_presets_build_and_round_trip() {
         Order::Distance
     );
 }
+
+#[test]
+fn behaviours_wiggle_and_oscillate_on_top_of_keys() {
+    let p = scene_of(
+        r##"{"id":"r","kind":"rect","width":20,"height":20,
+             "x":[{"t":0,"v":100,"interp":"linear"},{"t":2,"v":300}],"y":100,
+             "behaviours":[{"prop":"y","kind":"oscillate","amount":50,"freq":1,"phase":0.25},
+                           {"prop":"rotation","amount":30,"freq":4,"seed":7},
+                           {"prop":"opacity","kind":"oscillate","amount":2}]}"##,
+    );
+    let l = &p.scenes[0].layers[0];
+    // Oscillate: a sine from `phase`, on top of y's value; x keeps its keys.
+    let d = l.at(0.);
+    assert!((d.y - 150.).abs() < 1e-9 && d.x == 100.);
+    assert!((l.at(0.5).y - 50.).abs() < 1e-9);
+    assert_eq!(l.at(1.).x, 200.);
+    // Opacity stays in 0..1.
+    assert!((0..60).all(|i| (0. ..=1.).contains(&l.at(f64::from(i) / 30.).opacity)));
+    // Wiggle: bounded, smooth frame to frame, not still, the same every run.
+    let rot: Vec<f64> = (0..120)
+        .map(|i| l.at(f64::from(i) / 60.).rotation)
+        .collect();
+    assert!(rot.iter().all(|r| r.abs() <= 30.));
+    assert!(rot.windows(2).all(|w| (w[1] - w[0]).abs() < 6.), "{rot:?}");
+    assert!(rot.iter().any(|r| r.abs() > 5.));
+    assert_eq!(
+        rot,
+        (0..120)
+            .map(|i| l.at(f64::from(i) / 60.).rotation)
+            .collect::<Vec<_>>()
+    );
+    // Another property with the same seed wiggles another way.
+    let other = scene_of(
+        r#"{"id":"r","kind":"rect","behaviours":[{"prop":"x","amount":30,"freq":4,"seed":7}]}"#,
+    );
+    let x: Vec<f64> = (0..120)
+        .map(|i| other.scenes[0].layers[0].at(f64::from(i) / 60.).x)
+        .collect();
+    assert_ne!(x, rot);
+    // Drawn where the behaviour puts it: at 0.5 s y is 50.
+    assert_eq!(at(&px(&p, 0.5), 200, 50)[3], 255);
+    // A property it cannot move is refused; its numbers are keyable props.
+    let e = Project::load(
+        r#"{"size":[400,200],"fps":30,"scenes":[{"name":"a","duration":2,"layers":[
+            {"id":"r","kind":"rect","behaviours":[{"prop":"fill"}]}]}]}"#,
+    )
+    .unwrap_err();
+    assert!(
+        e.contains("behaviours[0].prop") && e.contains("`fill` is not one of"),
+        "{e}"
+    );
+    assert!(l.prop("behaviours.1.amount").is_some());
+}

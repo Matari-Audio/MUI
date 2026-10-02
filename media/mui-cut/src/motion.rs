@@ -1065,3 +1065,181 @@ pub(crate) fn group_units(scene: &crate::Scene, layers: &mut [crate::Drawn], t: 
         }
     }
 }
+
+/// How a [`Behaviour`] moves its property.
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum Wave {
+    /// Smooth seeded noise, up to `amount` either way.
+    #[default]
+    Wiggle,
+    /// A sine of `amount`, `freq` cycles per second, from `phase`.
+    Oscillate,
+}
+
+/// Motion added on top of a layer property's keys, every frame: a wiggle
+/// or an oscillation of `amount` around its keyed value.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(transform = crate::vars::bindable)]
+pub struct Behaviour {
+    /// The property moved: one of [`BEHAVIOUR_PROPS`].
+    pub prop: String,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub kind: Wave,
+    #[serde(default = "ten", skip_serializing_if = "is_ten")]
+    pub amount: Anim<f64>,
+    /// Cycles (oscillate) or features (wiggle) per second.
+    #[serde(default = "o", skip_serializing_if = "is_o")]
+    pub freq: Anim<f64>,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub seed: u32,
+    /// Cycles (or noise features) to start in at 0 s.
+    #[serde(default = "z", skip_serializing_if = "is_z")]
+    pub phase: Anim<f64>,
+}
+
+fn ten() -> Anim<f64> {
+    Anim::Value(10.)
+}
+fn is_ten(a: &Anim<f64>) -> bool {
+    *a == ten()
+}
+
+/// What a behaviour can move.
+pub const BEHAVIOUR_PROPS: [&str; 16] = [
+    "x",
+    "y",
+    "z",
+    "scale",
+    "rotation",
+    "rx",
+    "ry",
+    "opacity",
+    "width",
+    "height",
+    "radius",
+    "font_size",
+    "tracking",
+    "stroke_width",
+    "path_offset",
+    "ring_radius",
+];
+
+impl Behaviour {
+    /// Its numeric properties, by JSON name.
+    pub const PROPS: [&str; 3] = ["amount", "freq", "phase"];
+
+    pub fn num(&self, name: &str) -> Option<&Anim<f64>> {
+        Some(match name {
+            "amount" => &self.amount,
+            "freq" => &self.freq,
+            "phase" => &self.phase,
+            _ => return None,
+        })
+    }
+
+    /// The offset at `t`.
+    pub fn at(&self, t: f64) -> f64 {
+        let x = self.freq.at(t) * t + self.phase.at(t);
+        let a = self.amount.at(t);
+        match self.kind {
+            Wave::Oscillate => a * (std::f64::consts::TAU * x).sin(),
+            Wave::Wiggle => {
+                // A different curve per property, from one seed.
+                let seed = self.prop.bytes().fold(self.seed, |h, b| {
+                    h.wrapping_mul(31).wrapping_add(u32::from(b))
+                });
+                a * wiggle(seed, x)
+            }
+        }
+    }
+}
+
+/// Smooth value noise in -1..1: seeded values at whole `x`, joined by
+/// Catmull-Rom (so it moves through them, never flat at them).
+fn wiggle(seed: u32, x: f64) -> f64 {
+    let i = x.floor();
+    let f = x - i;
+    let v = |k: f64| {
+        let n = (i + k) as i64 as u64;
+        (hash(seed, n) >> 11) as f64 / (1u64 << 52) as f64 - 1.
+    };
+    let (p0, p1, p2, p3) = (v(-1.), v(0.), v(1.), v(2.));
+    let c = 0.5
+        * (2. * p1
+            + (-p0 + p2) * f
+            + (2. * p0 - 5. * p1 + 4. * p2 - p3) * f * f
+            + (-p0 + 3. * p1 - 3. * p2 + p3) * f * f * f);
+    c.clamp(-1., 1.)
+}
+
+/// Every behaviour property by path (`behaviours.0.amount`).
+pub(crate) fn behaviour_props(bs: &[Behaviour]) -> Vec<(String, crate::Prop<'_>)> {
+    bs.iter()
+        .enumerate()
+        .flat_map(|(i, b)| {
+            Behaviour::PROPS.iter().map(move |&n| {
+                let a = b.num(n).expect("PROPS are props");
+                (format!("behaviours.{i}.{n}"), crate::Prop::Num(a))
+            })
+        })
+        .collect()
+}
+
+/// `d`'s evaluated property `prop`, to move.
+fn slot<'a>(d: &'a mut crate::Drawn, prop: &str) -> Option<&'a mut f64> {
+    Some(match prop {
+        "x" => &mut d.x,
+        "y" => &mut d.y,
+        "z" => &mut d.space.z,
+        "scale" => &mut d.scale,
+        "rotation" => &mut d.rotation,
+        "rx" => &mut d.space.rx,
+        "ry" => &mut d.space.ry,
+        "opacity" => &mut d.opacity,
+        "width" => &mut d.width,
+        "height" => &mut d.height,
+        "radius" => &mut d.radius,
+        "font_size" => &mut d.font_size,
+        "tracking" => &mut d.tracking,
+        "stroke_width" => &mut d.stroke_width,
+        "path_offset" => &mut d.path_offset,
+        "ring_radius" => &mut d.ring_radius,
+        _ => return None,
+    })
+}
+
+/// Layer `l`'s behaviours added to its evaluated values at `t`, kept in
+/// range (opacity 0..1, sizes not below 0).
+pub(crate) fn behave(l: &crate::Layer, d: &mut crate::Drawn, t: f64) {
+    for b in &l.behaviours {
+        let on = l.on(t);
+        if let Some(v) = slot(d, &b.prop) {
+            *v += b.at(t);
+            match b.prop.as_str() {
+                // Off stays off.
+                "opacity" => *v = if on { v.clamp(0., 1.) } else { 0. },
+                "width" | "height" | "radius" | "stroke_width" | "ring_radius" => *v = v.max(0.),
+                "font_size" => *v = v.max(1.),
+                _ => {}
+            }
+        }
+    }
+}
+
+/// Every behaviour of `l` names a property it can move.
+pub(crate) fn check_behaviours(l: &crate::Layer) -> Result<(), String> {
+    for (i, b) in l.behaviours.iter().enumerate() {
+        if !BEHAVIOUR_PROPS.contains(&b.prop.as_str()) {
+            return Err(format!(
+                "behaviours[{i}].prop: layer `{}`: `{}` is not one of {}",
+                l.id,
+                b.prop,
+                BEHAVIOUR_PROPS.join(", ")
+            ));
+        }
+    }
+    Ok(())
+}
