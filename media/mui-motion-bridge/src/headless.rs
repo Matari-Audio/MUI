@@ -83,6 +83,7 @@ fn draw(
     inputs: &[Value],
     clock: u64,
 ) -> Result<(), String> {
+    mui::host::headless::set_time(clock as f64 / f64::from(crate::sample_rate()));
     editor.advance(inputs, clock, |ui, input, _dt, sizes| {
         let window = Editor::viewport(sizes, window);
         let zoom = view.zoom(window);
@@ -147,7 +148,9 @@ where
     /// `to` and return the sound up to it, stereo interleaved, as the
     /// wire's audio packets carry it.
     pub fn advance(&mut self, command: &Value) -> Result<Vec<f32>, String> {
-        let to = command["to"].as_u64().ok_or("advance needs `to`, a sample")?;
+        let to = command["to"]
+            .as_u64()
+            .ok_or("advance needs `to`, a sample")?;
         let timed = advance_notes(command)?;
         let mut out = Vec::new();
         let mut samples = [[0.; 2]; BLOCK_FRAMES];
@@ -161,13 +164,11 @@ where
                 let s = &mut samples[..n];
                 s.fill([0.; 2]);
                 audio(events, s);
-                out.extend(s.iter().flatten().map(|v| {
-                    if v.is_finite() {
-                        v.clamp(-1., 1.)
-                    } else {
-                        0.
-                    }
-                }));
+                out.extend(
+                    s.iter()
+                        .flatten()
+                        .map(|v| if v.is_finite() { v.clamp(-1., 1.) } else { 0. }),
+                );
                 true
             },
             |_, _, _| {},
@@ -228,7 +229,13 @@ where
     }
     fn frame(
         &mut self,
-    ) -> Result<(Value, Vec<(String, std::sync::Arc<mui_scene::ResolvedScene>)>), String> {
+    ) -> Result<
+        (
+            Value,
+            Vec<(String, std::sync::Arc<mui_scene::ResolvedScene>)>,
+        ),
+        String,
+    > {
         let (manifest, vectors) = Live::frame(self)?;
         Ok((
             manifest,

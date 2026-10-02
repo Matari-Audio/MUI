@@ -342,9 +342,9 @@ fn host(
             }
             clock.frame += BLOCK_FRAMES as u64;
             audio_clock.store(clock.frame, Ordering::Release);
-            if let Some(wait) =
-                (started + Duration::from_secs_f64(clock.frame as f64 / f64::from(rate)))
-                .checked_duration_since(Instant::now())
+            if let Some(wait) = (started
+                + Duration::from_secs_f64(clock.frame as f64 / f64::from(rate)))
+            .checked_duration_since(Instant::now())
             {
                 std::thread::sleep(wait);
             }

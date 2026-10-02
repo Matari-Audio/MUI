@@ -95,10 +95,12 @@ fn capture_cached(
         roots,
         cache,
         |s| {
-            Ok(raster(s, width, height, scale)?.map(|([x0, y0, x1, y1], data)| {
-                let px = |v: usize| v as f64 / scale;
-                ([px(x0), px(y0), px(x1 - x0), px(y1 - y0)], data)
-            }))
+            Ok(
+                raster(s, width, height, scale)?.map(|([x0, y0, x1, y1], data)| {
+                    let px = |v: usize| v as f64 / scale;
+                    ([px(x0), px(y0), px(x1 - x0), px(y1 - y0)], data)
+                }),
+            )
         },
         |index, free, data| {
             let name = if free {
@@ -116,7 +118,10 @@ fn capture_cached(
 /// The capture manifest of `scene` split at `roots`: every fragment made
 /// by `make` (unless `cache` has its paint already) and named by `name`
 /// (its index, whether it is the free copy, what `make` made).
-#[expect(clippy::too_many_arguments, reason = "one body for both kinds of capture")]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one body for both kinds of capture"
+)]
 fn capture_parts<T: Clone + PartialEq>(
     scene: &mui_scene::ResolvedScene,
     size: [f64; 2],
@@ -176,15 +181,14 @@ fn capture_parts<T: Clone + PartialEq>(
             continue;
         };
         let src = name(index, false, &data);
-        let origin = id.and_then(|id| scene.surface(id)).map_or(
-            [size[0] / 2., size[1] / 2.],
-            |s| {
-                [
-                    s.frame.x + s.frame.size.width / 2.,
-                    s.frame.y + s.frame.size.height / 2.,
-                ]
-            },
-        );
+        let origin =
+            id.and_then(|id| scene.surface(id))
+                .map_or([size[0] / 2., size[1] / 2.], |s| {
+                    [
+                        s.frame.x + s.frame.size.width / 2.,
+                        s.frame.y + s.frame.size.height / 2.,
+                    ]
+                });
         let node = id.and_then(|id| tree.iter().find(|p| &p.id == id));
         let mut layer = serde_json::json!({"id":format!("fragment-{index}"),"group":node.map_or("background",|n| n.path.as_str()),"origin":origin,"src":src,"rect":rect});
         if let Some(n) = node {
@@ -205,7 +209,9 @@ fn capture_parts<T: Clone + PartialEq>(
                 "frame": f.map(|f| [f.x, f.y, f.size.width, f.size.height])})
         })
         .collect();
-    Ok(serde_json::json!({"version":1,"width":size[0],"height":size[1],"scale":scale,"layers":layers,"groups":roots,"parts":parts,"surfaces":surfaces}))
+    Ok(
+        serde_json::json!({"version":1,"width":size[0],"height":size[1],"scale":scale,"layers":layers,"groups":roots,"parts":parts,"surfaces":surfaces}),
+    )
 }
 
 /// Offline capture uses exactly the same pixels as the live in-memory stream.
@@ -330,7 +336,10 @@ impl VectorStream {
                 Ok(bounds(s).map(|r| {
                     *made += 1;
                     let scene = std::sync::Arc::new(shifted(s.clone(), -r.origin().to_vec2()));
-                    ([r.x0, r.y0, r.width(), r.height()], Vector { scene, id: *made })
+                    (
+                        [r.x0, r.y0, r.width(), r.height()],
+                        Vector { scene, id: *made },
+                    )
                 }))
             },
             |_, _, v| {
@@ -384,7 +393,10 @@ pub fn bounds(scene: &mui_scene::ResolvedScene) -> Option<mui_geometry::Rect> {
                 let size = f64::from(t.size);
                 mui_geometry::bounds(t.glyphs.iter().flat_map(|g| {
                     let at = t.origin + mui_geometry::Vec2::new(f64::from(g.x), f64::from(g.y));
-                    [at + mui_geometry::Vec2::new(-size * 0.2, -size * 1.2), at + mui_geometry::Vec2::new(size * 1.2, size * 0.4)]
+                    [
+                        at + mui_geometry::Vec2::new(-size * 0.2, -size * 1.2),
+                        at + mui_geometry::Vec2::new(size * 1.2, size * 0.4),
+                    ]
                 }))
             }
             None => outline(p),
@@ -407,7 +419,10 @@ pub fn bounds(scene: &mui_scene::ResolvedScene) -> Option<mui_geometry::Rect> {
 
 /// `scene` moved by `d`: every entry's offset, and a glyph run's origin
 /// (which stands in scene space with the offset at zero).
-pub fn shifted(mut scene: mui_scene::ResolvedScene, d: mui_geometry::Vec2) -> mui_scene::ResolvedScene {
+pub fn shifted(
+    mut scene: mui_scene::ResolvedScene,
+    d: mui_geometry::Vec2,
+) -> mui_scene::ResolvedScene {
     for p in &mut scene.paint {
         match &mut p.text {
             Some(t) => t.origin += d,
