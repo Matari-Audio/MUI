@@ -395,6 +395,14 @@ pub enum Kind {
     /// that is hidden, faded out or outside its `start`..`end` takes its
     /// whole subtree with it.
     Group,
+    /// Another scene of the project drawn as one layer (a precomp): its
+    /// frame centred on `x`, `y`, moved, turned, scaled and faded like any
+    /// layer, its effects run over it, on a clear ground. It plays from the
+    /// layer's `start`, offset by `time` (keyable). A scene some scene
+    /// comps is not a shot of its own: `render` skips it. See the README.
+    Comp {
+        scene: String,
+    },
 }
 
 /// What a light layer is.
@@ -501,8 +509,8 @@ pub struct Layer {
     pub parent: String,
     /// Scene seconds the layer (and everything parented under it) shows
     /// from, and stops showing at: it draws for `start <= t < end`. Keys
-    /// stay in scene time; only what plays (a Lottie, model or audio)
-    /// starts its own clock at `start`. Left out, the whole scene.
+    /// stay in scene time; only what plays (a comp, Lottie, model or
+    /// audio) starts its own clock at `start`. Left out, the whole scene.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub start: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -843,7 +851,7 @@ impl Layer {
                 num("volume", &self.volume);
                 return out;
             }
-            Kind::Group => {
+            Kind::Group | Kind::Comp { .. } => {
                 for (n, a) in [
                     ("x", &self.x),
                     ("y", &self.y),
@@ -852,6 +860,9 @@ impl Layer {
                     ("opacity", &self.opacity),
                 ] {
                     num(n, a);
+                }
+                if let Kind::Comp { .. } = self.kind {
+                    num("time", &self.time);
                 }
                 if three {
                     for (n, a) in [("z", &self.z), ("rx", &self.rx), ("ry", &self.ry)] {
@@ -1015,6 +1026,7 @@ impl Layer {
                 | Kind::Audio { .. }
                 | Kind::Patch { .. }
                 | Kind::Group
+                | Kind::Comp { .. }
         )
     }
 
@@ -1324,7 +1336,7 @@ pub struct Drawn {
     pub spacing: [f64; 2],
     pub ring_radius: f64,
     pub path_offset: f64,
-    /// Lottie, model: seconds into the animation.
+    /// Lottie, model, comp: seconds into the animation (a comp's scene).
     pub time: f64,
     /// Per glyph (text, newlines skipped) or per copy (duplicator).
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -1343,6 +1355,11 @@ pub struct Drawn {
     /// `plugin.state`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub patch: Option<String>,
+    /// Comp layers: the scene's layers that draw (no camera, light,
+    /// model, audio or group), placed in this frame through the comp
+    /// (ids `comp/layer`), bottom first; empty while the comp is off.
+    #[serde(skip)]
+    pub comp: Vec<Drawn>,
 }
 
 /// Everything a renderer needs for one instant of one scene.
@@ -1364,7 +1381,8 @@ pub struct Frame {
 }
 
 impl Frame {
-    /// Any effect on the scene or on a layer.
+    /// Any effect on the scene or on a layer (a comp's own layers' do not
+    /// run).
     pub fn has_effects(&self) -> bool {
         !self.effects.is_empty() || self.layers.iter().any(|l| !l.effects.is_empty())
     }
@@ -1392,6 +1410,15 @@ pub const MAX_COPIES: usize = 10_000;
 /// Scene `scene` at `t` seconds: a pure function of its arguments, so any
 /// time can be sought in any order.
 pub fn eval(project: &Project, scene: &Scene, t: f64) -> Frame {
+    eval_in(project, scene, t, 0)
+}
+
+/// Deepest a comp nests in a comp (loading refuses cycles; this stops a
+/// hand-built one).
+const MAX_NESTING: usize = 16;
+
+/// [`eval`] of a scene `depth` comps down.
+fn eval_in(project: &Project, scene: &Scene, t: f64, depth: usize) -> Frame {
     let mut layers: Vec<Drawn> = scene
         .layers
         .iter()
@@ -1413,7 +1440,39 @@ pub fn eval(project: &Project, scene: &Scene, t: f64) -> Frame {
                 .map(|p| p.state.clone());
         }
     }
-    let view = (scene.mode == Mode::ThreeD).then(|| three::view(project.size, scene, t, &layers));
+    let three = scene.mode == Mode::ThreeD;
+    for d in &mut layers {
+        let Kind::Comp { scene: name } = &d.kind else {
+            continue;
+        };
+        let Some(inner) = project.scene(name) else {
+            continue;
+        };
+        if d.opacity <= 0. || depth >= MAX_NESTING {
+            continue;
+        }
+        let at = place::Xf::of(d, three);
+        let kids = eval_in(project, inner, d.time, depth + 1).layers;
+        d.comp = kids
+            .into_iter()
+            .filter(|k| {
+                !matches!(
+                    k.kind,
+                    Kind::Camera { .. }
+                        | Kind::Light { .. }
+                        | Kind::Model { .. }
+                        | Kind::Audio { .. }
+                        | Kind::Group
+                )
+            })
+            .map(|mut k| {
+                place::into(&mut k, &at, project.size, three);
+                k.id = format!("{}/{}", d.id, k.id);
+                k
+            })
+            .collect();
+    }
+    let view = three.then(|| three::view(project.size, scene, t, &layers));
     Frame {
         size: project.size,
         background: scene.background,
@@ -1453,7 +1512,7 @@ impl Layer {
         };
         let time = match self.kind {
             Kind::Lottie { speed, .. } => self.time.at(t) + self.clock(t) * speed,
-            Kind::Model { .. } => self.time.at(t) + self.clock(t),
+            Kind::Model { .. } | Kind::Comp { .. } => self.time.at(t) + self.clock(t),
             _ => 0.,
         };
         Drawn {
@@ -1518,6 +1577,7 @@ impl Layer {
             effects: fx::eval(&self.effects, t),
             plugin: None,
             patch: None,
+            comp: Vec::new(),
         }
     }
 }
@@ -1725,6 +1785,7 @@ impl Project {
                     ));
                 }
             }
+            comps(&p, si)?;
             fx::check(
                 &s.effects,
                 &format!("scenes[{si}].effects: scene `{}`", s.name),
@@ -1772,6 +1833,46 @@ impl Project {
     pub fn scene(&self, name: &str) -> Option<&Scene> {
         self.scenes.iter().find(|s| s.name == name)
     }
+
+    /// The scenes a render plays back to back: every one no scene comps.
+    pub fn shots(&self) -> Vec<&Scene> {
+        let comped = |s: &Scene| {
+            self.scenes
+                .iter()
+                .flat_map(|o| &o.layers)
+                .any(|l| matches!(&l.kind, Kind::Comp { scene } if *scene == s.name))
+        };
+        self.scenes.iter().filter(|s| !comped(s)).collect()
+    }
+}
+
+/// Every comp layer of scene `si` names a scene of `p`, and no chain of
+/// comps comes back round to a scene it passed through.
+fn comps(p: &Project, si: usize) -> Result<(), String> {
+    fn walk<'a>(p: &'a Project, s: &'a Scene, chain: &mut Vec<&'a str>) -> Result<(), String> {
+        chain.push(&s.name);
+        for l in &s.layers {
+            let Kind::Comp { scene } = &l.kind else {
+                continue;
+            };
+            let Some(inner) = p.scene(scene) else {
+                return Err(format!("layer `{}`: no scene `{scene}` to comp", l.id));
+            };
+            if chain.contains(&scene.as_str()) {
+                chain.push(scene);
+                return Err(format!(
+                    "layer `{}`: a comp cycle ({})",
+                    l.id,
+                    chain.join(" -> ")
+                ));
+            }
+            walk(p, inner, chain)?;
+        }
+        chain.pop();
+        Ok(())
+    }
+    let s = &p.scenes[si];
+    walk(p, s, &mut Vec::new()).map_err(|e| format!("scenes[{si}]: scene `{}`: {e}", s.name))
 }
 
 /// FNV-1a, 64 bits: stable across builds and platforms, unlike std's

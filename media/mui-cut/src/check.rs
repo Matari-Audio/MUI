@@ -914,11 +914,14 @@ fn visual(p: &Project, si: usize, s: &Scene, r: &mut Renderer, out: &mut Issues)
 /// stretched over the renderer: its coverage, 0..1 a pixel, row by row.
 /// The real outline, where the quad is only its box.
 fn mask(r: &mut Renderer, f: &Frame, i: usize, region: Bbox) -> Option<Vec<f32>> {
+    fn nudge(d: &mut crate::Drawn, dx: f64, dy: f64) {
+        (d.x, d.y) = (d.x - dx, d.y - dy);
+        d.comp.iter_mut().for_each(|k| nudge(k, dx, dy));
+    }
     let (x0, y0) = (region[0].floor(), region[1].floor());
     let size = [region[2] - x0, region[3] - y0].map(|v| v.ceil().max(1.) as u32);
     let mut l = f.layers[i].clone();
-    l.x -= x0;
-    l.y -= y0;
+    nudge(&mut l, x0, y0);
     let alone = Frame {
         size,
         background: Rgba([0, 0, 0, 0]),

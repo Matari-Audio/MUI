@@ -312,7 +312,8 @@ impl Assets {
             | Kind::Plugin { .. }
             | Kind::Audio { .. }
             | Kind::Patch { .. }
-            | Kind::Group => Vec::new(),
+            | Kind::Group
+            | Kind::Comp { .. } => Vec::new(),
         };
         vector::trim(&mut pieces, l.trim);
         vector::deform(&mut pieces, &l.deformers);
@@ -449,44 +450,54 @@ impl Assets {
             parts: Vec::new(),
         };
         for l in frame.drawing_order() {
-            if let Kind::Audio { .. } = l.kind {
-                continue;
-            }
-            if let Kind::Group = l.kind {
-                // No ink, but a quad (a point at its pivot), so quads stay
-                // one per drawn layer.
-                out.quads
-                    .push(quad(l.id.clone(), Affine::translate((l.x, l.y)), 0., 0.));
-                continue;
-            }
-            if let Some(p) = &l.plugin {
-                self.plugin(l, p, &mut out)?;
-                continue;
-            }
-            let (scene, size, corner) = self.element(l)?;
-            let place = Affine::translate((l.x, l.y))
-                * Affine::rotate(l.rotation.to_radians())
-                * Affine::scale(l.scale)
-                * Affine::translate(corner.to_vec2());
-            let corners = [
-                (0., 0.),
-                (size.width, 0.),
-                (size.width, size.height),
-                (0., size.height),
-            ];
-            out.quads.push(Quad {
-                id: l.id.clone(),
-                ui: None,
-                pts: corners.map(|(x, y)| {
-                    let p = place * KPoint::new(x, y);
-                    [p.x, p.y]
-                }),
-            });
-            if l.opacity > 0. && l.scale != 0. {
-                out.scenes.push((scene, place));
-            }
+            self.layer(l, frame.size, &mut out)?;
         }
         Ok(out)
+    }
+
+    /// One layer of [`Assets::layers`] into `out`; `size` the frame's.
+    fn layer(&self, l: &Drawn, size: [u32; 2], out: &mut Layers) -> Result<(), String> {
+        let at = Affine::translate((l.x, l.y))
+            * Affine::rotate(l.rotation.to_radians())
+            * Affine::scale(l.scale);
+        match &l.kind {
+            Kind::Audio { .. } => return Ok(()),
+            // No ink, but a quad (a point at its pivot), so quads stay
+            // one per drawn layer.
+            Kind::Group => {
+                out.quads.push(quad(l.id.clone(), at, 0., 0.));
+                return Ok(());
+            }
+            // Its scene's frame is its quad; its layers paint, unpicked.
+            // ponytail: not clipped to that frame; a clip layer would.
+            Kind::Comp { .. } => {
+                let [w, h] = size.map(f64::from);
+                let place = at * Affine::translate((-w / 2., -h / 2.));
+                out.quads.push(quad(l.id.clone(), place, w, h));
+                let mut inner = Layers {
+                    scenes: Vec::new(),
+                    quads: Vec::new(),
+                    parts: Vec::new(),
+                };
+                for k in &l.comp {
+                    self.layer(k, size, &mut inner)?;
+                }
+                out.scenes.extend(inner.scenes);
+                return Ok(());
+            }
+            _ => {}
+        }
+        if let Some(p) = &l.plugin {
+            return self.plugin(l, p, out);
+        }
+        let (scene, wh, corner) = self.element(l)?;
+        let place = at * Affine::translate(corner.to_vec2());
+        out.quads
+            .push(quad(l.id.clone(), place, wh.width, wh.height));
+        if l.opacity > 0. && l.scale != 0. {
+            out.scenes.push((scene, place));
+        }
+        Ok(())
     }
 }
 
@@ -535,11 +546,14 @@ impl Assets {
     /// [`EXPLODE_DEPTH`](crate::plugin::EXPLODE_DEPTH) towards the viewer
     /// plus its own `z`, all turned with the layer. A highlight is a flat
     /// plate just behind its part (with the part's id too). A group is no
-    /// slab; other layers come back as they are.
+    /// slab, a comp its layers' slabs (on its plane, its effects not run);
+    /// other layers come back as they are.
     pub(crate) fn slabs(&self, l: &Drawn) -> Vec<Drawn> {
         use mui_stage::Mat4;
-        if let Kind::Group = l.kind {
-            return Vec::new();
+        match &l.kind {
+            Kind::Group => return Vec::new(),
+            Kind::Comp { .. } => return l.comp.iter().flat_map(|k| self.slabs(k)).collect(),
+            _ => {}
         }
         let Some(p) = &l.plugin else {
             return vec![l.clone()];

@@ -797,3 +797,112 @@ fn markers_round_trip() {
     );
     assert_eq!(Project::load(&saved).unwrap().to_json(), saved);
 }
+
+/// Two scenes of a 400x200 project: `main` with `layers`, and `inner`,
+/// a green ground under a red 20-pixel square moving right from (100,
+/// 50) at 100 px a second.
+fn comped(layers: &str) -> Project {
+    Project::load(&format!(
+        r##"{{"size":[400,200],"fps":30,"scenes":[
+            {{"name":"main","duration":2,"layers":[{layers}]}},
+            {{"name":"inner","duration":2,"background":"#00ff00","layers":[
+              {{"id":"sq","kind":"rect","width":20,"height":20,"y":50,"fill":"#ff0000",
+                "x":[{{"t":0,"v":100,"interp":"linear"}},{{"t":2,"v":300}}]}},
+              {{"id":"cam","kind":"camera"}}]}}]}}"##
+    ))
+    .unwrap()
+}
+
+fn kid<'a>(f: &'a Frame, id: &str) -> &'a Drawn {
+    f.layers
+        .iter()
+        .flat_map(|l| &l.comp)
+        .find(|k| k.id == id)
+        .unwrap()
+}
+
+/// A comp draws its scene as a layer: the scene's middle on its pivot,
+/// through its transform and opacity, on its own clock from `start`.
+#[test]
+fn comps_place_and_time_their_scene() {
+    let p = comped(
+        r#"{"id":"c","kind":"comp","scene":"inner","x":300,"y":100,"scale":0.5,
+            "opacity":0.5,"start":1,"time":0.5}"#,
+    );
+    let f = eval(&p, &p.scenes[0], 1.5);
+    let sq = kid(&f, "c/sq");
+    // Inner time 1.5 - 1 + 0.5 = 1: the square is at (200, 50).
+    assert!(near(sq.x, 300.) && near(sq.y, 75.), "{} {}", sq.x, sq.y);
+    assert!(near(sq.scale, 0.5) && near(sq.opacity, 0.5));
+    assert_eq!(f.layers[0].comp.len(), 1, "no camera");
+    assert!(
+        eval(&p, &p.scenes[0], 0.5).layers[0].comp.is_empty(),
+        "off before start"
+    );
+    // In 3D its layers are slabs on its plane.
+    let mut d3 = p.clone();
+    d3.scenes[0].mode = Mode::ThreeD;
+    (d3.scenes[0].layers[0].z, d3.scenes[0].layers[0].ry) = (Anim::Value(50.), Anim::Value(30.));
+    let f3 = eval(&d3, &d3.scenes[0], 1.5);
+    let slabs = Assets::default().slabs(&f3.layers[0]);
+    assert_eq!(slabs.len(), 1);
+    assert!(
+        near(slabs[0].space.ry, 30.) && near(slabs[0].space.z, 50.),
+        "posed with it"
+    );
+    // A comped scene is no shot of its own.
+    let shots: Vec<&str> = p.shots().iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(shots, ["main"]);
+    // Nested: a comp of a scene comping `inner`, through both transforms.
+    let mut n = p.clone();
+    n.scenes[0].layers[0] =
+        serde_json::from_str(r#"{"id":"top","kind":"comp","scene":"mid","x":100,"y":100}"#)
+            .unwrap();
+    let mut mid = p.scenes[0].clone();
+    mid.name = "mid".into();
+    n.scenes.push(mid);
+    let n = Project::load(&n.to_json()).unwrap();
+    let f = eval(&n, &n.scenes[0], 1.5);
+    let sq = &f.layers[0].comp[0].comp[0];
+    assert_eq!(sq.id, "c/sq");
+    assert!(near(sq.x, 200.) && near(sq.y, 75.), "{} {}", sq.x, sq.y);
+}
+
+/// Pixels: the comp's layers draw where it puts them, without the
+/// scene's background; a comp faded out draws nothing.
+#[test]
+fn comps_draw_their_scene_on_a_clear_ground() {
+    let p = comped(r#"{"id":"c","kind":"comp","scene":"inner","x":300,"y":100}"#);
+    let mut r = Renderer::new(400, 200);
+    let (px, quads) = r.draw(&eval(&p, &p.scenes[0], 0.)).unwrap();
+    let at = |x: usize, y: usize| -> [u8; 4] { px[(y * 400 + x) * 4..][..4].try_into().unwrap() };
+    // The square: inner (100, 50) moved by (300 - 200, 100 - 100).
+    assert_eq!(at(200, 50), [255, 0, 0, 255]);
+    assert_eq!(at(300, 100), [16, 16, 20, 255], "no green ground");
+    assert_eq!(quads.len(), 1);
+    assert_eq!(quads[0].pts[0], [100., 0.], "the comp's frame");
+    let off = comped(r#"{"id":"c","kind":"comp","scene":"inner","x":300,"y":100,"hidden":true}"#);
+    let (px, _) = r.draw(&eval(&off, &off.scenes[0], 0.)).unwrap();
+    assert_eq!(px[..4], [16, 16, 20, 255]);
+    assert!(px.chunks(4).all(|c| c == [16, 16, 20, 255]));
+}
+
+/// Comps name a scene there is, and never come back round.
+#[test]
+fn comp_cycles_are_refused() {
+    let load = |a: &str, b: &str| {
+        Project::load(&format!(
+            r#"{{"size":[40,20],"fps":30,"scenes":[
+                {{"name":"a","duration":1,"layers":[{a}]}},
+                {{"name":"b","duration":1,"layers":[{b}]}}]}}"#
+        ))
+    };
+    let comp = |s: &str| format!(r#"{{"id":"to_{s}","kind":"comp","scene":"{s}"}}"#);
+    assert!(load(&comp("b"), "").is_ok());
+    let e = load(&comp("b"), &comp("a")).unwrap_err();
+    assert!(e.contains("a comp cycle (a -> b -> a)"), "{e}");
+    let e = load(&comp("a"), "").unwrap_err();
+    assert!(e.contains("a comp cycle (a -> a)"), "{e}");
+    let e = load(&comp("nope"), "").unwrap_err();
+    assert!(e.contains("no scene `nope`"), "{e}");
+}
