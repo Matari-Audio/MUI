@@ -227,7 +227,11 @@ impl Camera {
     /// World to clip space for a frame `aspect` wide per unit high.
     pub fn view_proj(&self, aspect: f32) -> Mat4 {
         let [_, up, _] = self.basis();
-        Mat4::perspective(self.fov.to_radians(), aspect, 1., 100_000.)
+        // Standard-Z depth resolves about near/z² per ulp: at near 1 a
+        // part and its plate 0.6 apart fought at 2000 units. Scenes are in
+        // pixels, so nothing comes within 10 of the eye.
+        // ponytail: reversed-Z if a scene ever needs near < 10.
+        Mat4::perspective(self.fov.to_radians(), aspect, 10., 100_000.)
             * Mat4::look_at(self.eye, self.target, up)
     }
     /// The view's right, up and forward unit vectors in the world.
