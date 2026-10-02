@@ -536,7 +536,8 @@ any parent's does, layer by layer: overlapping children each fade, they
 are not flattened first), so a group at opacity 0 hides its subtree. Its
 properties are `x`, `y`, `scale`, `rotation`, `opacity` (and `z`, `rx`,
 `ry` in 3D). To group layers in the editor, add a group layer and
-reparent each child to it (`Cut.reparent`), which keeps them in place.
+reparent each child to it (`Cut.reparent`), which keeps them in place;
+the editor's Ctrl+G does both.
 
 ### In and out points
 
@@ -776,11 +777,29 @@ explodes two levels in 3D: panels, then their controls.
   component layer (`show`) at its spot in the plugin (on the scene's
   whole plugin layer, if there is one). Clicking a row selects the layer
   or part that shows it, and selecting in the viewport highlights the row.
-- **Scenes / Layers** (left): switch scene, add a scene, add a rect, ellipse
-  or text, reorder or delete layers. Children nest under their parents:
-  drag a layer onto another to parent it, onto the list's empty space to
-  unparent it (or pick `parent` in the inspector); either keeps it where
-  it is. Deleting a parent hands its children to its own parent.
+- **Scenes / Layers** (left): switch scene, add a scene, add a layer of
+  any kind, reorder or delete layers. The layers are a tree, children
+  under their parents: ▾/▸ folds a branch (kept per project in the
+  browser, and shared with the timeline), the eye hides a layer and its
+  subtree (`hidden`). Drag a layer onto another's middle to parent it,
+  onto its top or bottom edge to put it (with its subtree) above or below
+  it among that layer's siblings, onto the list's empty space to unparent
+  it (or pick `parent` in the inspector); all keep it where it is.
+  Ctrl+G groups the selection: a `group` at the middle of their outlines,
+  under their common parent, the layers moved into it where they are;
+  Ctrl+Shift+G ungroups (the children go to the group's parent, the
+  group goes). Deleting a parent hands its children to its own parent.
+- **Comps**: Ctrl+Shift+C precomposes the selection: the selected layers
+  (with their subtrees) move into a new scene of the same length, named
+  after the topmost, and one `comp` layer of it, centred, takes their
+  place in the paint order, so nothing moves or retimes (a layer whose
+  parent stays behind is detached where it is first). **+ comp** (Layers
+  header) adds a comp of any scene this one may comp (none that comps it
+  back). Double-click a comp (in the list, the timeline or the viewport)
+  to open its scene. The scene list marks comped scenes, which render and
+  Export skip as shots. The inspector picks a comp's `scene` (only scenes
+  that do not comp it back); renaming a scene renames it in the comps
+  that play it. A group's inspector has Ungroup.
 - **Reset to default** (inspector): a part back where the plugin puts it;
   a layer's transform keys and offsets cleared (to the frame's middle, or
   onto its parent), and a plugin's explode and part offsets. Undoable.
@@ -795,15 +814,50 @@ explodes two levels in 3D: panels, then their controls.
   "+ deformer" add one. Type a value to set it (same rule as dragging). ◆ adds a key at the playhead, or removes the one
   there; removing the last key turns the property back into a plain value.
   Yellow ◆ = animated, filled = a key sits at the playhead.
-- **Timeline**: drag the ruler to scrub; a row per layer, and for the selected
-  layer a row per animated property. Drag diamonds in time (snapped to frames);
-  a layer-row diamond moves every key of the layer at that time.
-- **Graph**: the selected property's value over time, sampled from the WASM
-  evaluator itself. Drag keys (time and value) and their handles; the
-  opposite handle follows to keep the tangent smooth unless Alt is held.
-  Double-click to add a key. Hold / Linear / Bezier / Reset handles act on the
-  selected key.
-- **Export** (header): renders every scene at project size in the viewport's
+- **Timeline**: one canvas, only the rows in sight drawn, so hundreds of
+  layers scroll and scrub at the display's rate. Rows follow the layer
+  tree (its folds, fold triangles and eyes too); each selected layer opens
+  onto a row per key list (`x`, `a1 offset`, `fx1 radius`, ...). Each layer
+  has a bar over the span it shows, `[start, end)` or the whole scene:
+  drag its body to slide it (`start`, `end` and every key and note of the
+  layer move together, one undo step, so it plays the same, later; keys
+  are in scene time, so a slide must carry them), its ends to trim
+  (`start`/`end` only; trimmed ends show brighter). Alt+[ / Alt+] trim the
+  selected layers' in or out point to the playhead. Several selected bars
+  slide and trim together. Drag the ruler to scrub.
+  **Keys**: click a diamond to pick it (a layer-row diamond stands for
+  every key of the layer at that time), Shift/Ctrl-click to add or take
+  out, Shift/Ctrl-click a key list's name for all its keys, or drag a box
+  from empty track across any rows. Dragging a picked key moves every
+  picked key; Alt held at the press scales their timing about the
+  playhead instead. Ctrl+C copies the picked keys, Ctrl+V pastes them at
+  the playhead (onto the selected layer when they came from one layer and
+  it has those properties, else back on their own layers). F9 eases the
+  picked keys (bezier, flat handles; a linear key before one turns bezier
+  along its line). Delete removes them.
+  Everything dragged keeps to the frame grid and snaps, within 6 px, to
+  the playhead, markers, the scene's ends, other keys and other layers'
+  in and out points (hold Ctrl, or switch **Snap** off, to keep to frames only).
+  Ctrl+wheel (or a pinch) zooms about the pointer, Shift+wheel or a
+  sideways swipe pans, the wheel scrolls the rows, a middle-button drag
+  pans; F fits the picked keys (else the scene).
+  **Markers** (`scene.markers`) are flags on the ruler: M adds one at the
+  playhead, drag one to move it, double-click it to name it, click it and
+  Delete to remove it; drags of anything snap to them too. The ruler's ticks follow the zoom, down to
+  single frames (`1s 12f`). The graph editor below shares the same time
+  view, so its keys line up with the timeline's.
+- **Graph**: the graphed property's value over time, sampled from the WASM
+  evaluator itself, plus the curve of every key list a picked key is on,
+  each in its own colour with a legend (several curves are each fitted to
+  the height; the numbers are the first's). Drag keys (time and value) and
+  their handles (every key's with one curve, the picked keys' with
+  several); the opposite handle follows to keep the tangent smooth unless
+  Alt is held. Click picks a key, Shift/Ctrl-click takes one out.
+  Double-click adds a key to the graphed property. Hold / Linear / Bezier /
+  Reset handles act on every picked key.
+- **Inspector, any layer**: `in` / `out` (`start` / `end`, empty for the
+  scene's start or end) and `hidden`.
+- **Export** (header): renders every scene but the comped ones at project size in the viewport's
   worker and saves an MP4. On WebGPU each frame goes through the same shutter
   as `render --mb` (motion-blur samples in the dialog), effects included; on
   the CPU, no effects or blur. A WebCodecs `VideoEncoder` encodes it (H.264,
@@ -819,9 +873,13 @@ explodes two levels in 3D: panels, then their controls.
   A bound property shows its value, read-only, and names the variable.
   Export renders the variant on screen.
 - Keys: Space play/pause, K toggle a key on the graphed property, Delete the
-  selected key (else the selected layers), arrows step a frame, Ctrl+Z /
-  Ctrl+Shift+Z undo / redo, Ctrl+A select all, Ctrl+D duplicate, Esc
-  deselect, Alt+A/H/D/W/V/S align, Alt+Shift+H/V distribute.
+  picked marker, else the picked keys, else the selected layers, arrows
+  step a frame, Ctrl+Z / Ctrl+Shift+Z undo / redo, Ctrl+A select all,
+  Ctrl+D duplicate, Esc deselect, Alt+A/H/D/W/V/S align, Alt+Shift+H/V
+  distribute; Ctrl+G group, Ctrl+Shift+G ungroup, Ctrl+Shift+C precompose;
+  M marker, Alt+[ / Alt+] trim to the playhead, F fit, F9 easy ease,
+  Ctrl+C / Ctrl+V copy / paste keys; Ctrl+wheel zoom, Shift+wheel or
+  middle-drag pan.
 
 Every finished gesture is PUT to the server, which validates it, writes the
 canonical JSON atomically and remembers what it wrote, so the watcher only
@@ -1026,7 +1084,7 @@ same reason.
 
 - The panels are HTML/canvas 2D, not MUI widgets; only the viewport is drawn
   by MUI/Vello.
-- No zoom or pan in the timeline and graph; one property at a time in the graph.
+- The graph has no box select; pick keys in the timeline for that.
 - Images are PNG only; text is Inter only, and breaks only at `\n` (no wrap
   to `width`).
 - SVG and Lottie keep solid fills and strokes, group opacity and transforms;

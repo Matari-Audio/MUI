@@ -7,6 +7,7 @@ import { $, C, S } from './state.js';
 
 let on = true;
 $('#snap').onclick = () => { on = !on; $('#snap').setAttribute('aria-pressed', on); };
+export const snapOn = () => on;
 // The lines caught on last: project x's and y's.
 export const guides = { x: [], y: [] };
 const box = pts => {

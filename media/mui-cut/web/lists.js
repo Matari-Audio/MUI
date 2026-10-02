@@ -4,38 +4,67 @@ import { keyLayer } from './sound.js';
 import { dropSource, refreshSources, sourceOf } from './sources.js';
 import { $, KIND_ICON, S, cut, unfolded } from './state.js';
 import { refresh } from './transport.js';
+import { addComp, compable, comped, isFolded, moveLayer, openComp, setFolded, treeRows } from './tree.js';
+
+const EYE = '<svg viewBox="0 0 14 14" aria-hidden="true"><path d="M1 7c1.6-2.8 3.6-4.2 6-4.2s4.4 1.4 6 4.2c-1.6 2.8-3.6 4.2-6 4.2S2.6 9.8 1 7z"/><circle cx="7" cy="7" r="1.8"/></svg>';
+const EYE_OFF = '<svg viewBox="0 0 14 14" aria-hidden="true"><path d="M1 7c1.6 2.8 3.6 4.2 6 4.2s4.4-1.4 6-4.2"/></svg>';
 
 // ---------- scene and layer lists
 export function refreshLists() {
+  const inComp = comped();
   $('#scenes').replaceChildren(...S.doc.scenes.map((s, i) => {
     const b = document.createElement('button');
     const d = S.R.scenes[i].duration;
-    b.textContent = `${s.name}  ·  ${d}s${s.mode === '3d' ? '  ·  3D' : ''}`;
+    b.textContent = `${s.name}  ·  ${d}s${s.mode === '3d' ? '  ·  3D' : ''}${inComp.has(s.name) ? '  ·  comp' : ''}`;
+    if (inComp.has(s.name)) b.title = 'Comped by another scene: render and export skip it as a shot';
     b.className = i === S.si ? 'on' : '';
     b.onclick = () => { S.si = i; S.sel = null; S.selKey = null; S.t = Math.min(S.t, d); refresh(); };
     return b;
   }));
-  // Children under their parents, top of the paint order first.
-  const ls = scene().layers;
-  const rowsUnder = (parent, depth) => [...ls].reverse().filter(l => (l.parent ?? '') === parent).flatMap(l => {
+  // The tree: children under their parents, top of the paint order first,
+  // folded branches left out. A row's ▸ folds it, its eye hides it.
+  const rows = treeRows().flatMap(({ l, depth, kids }) => {
     const b = document.createElement('button');
-    b.innerHTML = `<span class="kind">${KIND_ICON[l.kind] ?? '?'}</span>`;
-    b.append(l.name || l.id);
-    b.className = S.selection.includes(l.id) ? 'on' : '';
+    const twist = kids ? `<span class="twist" data-twist title="Fold or unfold">${isFolded(l.id) ? '▸' : '▾'}</span>` : '<span class="twist"></span>';
+    b.innerHTML = `${twist}<span class="kind">${KIND_ICON[l.kind] ?? '?'}</span>`;
+    const name = document.createElement('span');
+    name.className = 'name'; name.textContent = l.name || l.id;
+    b.append(name);
+    const eye = document.createElement('span');
+    eye.className = 'eye'; eye.dataset.eye = ''; eye.innerHTML = l.hidden ? EYE_OFF : EYE;
+    eye.title = l.hidden ? 'Hidden: click to show' : 'Click to hide (it and its children)';
+    b.append(eye);
+    b.className = (S.selection.includes(l.id) ? 'on' : '') + (l.hidden ? ' off' : '');
     b.dataset.layer = l.id;
     b.style.paddingLeft = `${7 + depth * 14}px`;
-    b.onclick = e => select(l.id, picking(e));
+    b.onclick = e => {
+      if (e.target.closest('[data-twist]')) { setFolded(l.id, !isFolded(l.id)); refreshLists(); return; }
+      if (e.target.closest('[data-eye]')) { edit(() => { if (l.hidden) delete l.hidden; else l.hidden = true; }); return; }
+      select(l.id, picking(e));
+    };
+    b.ondblclick = e => { if (!e.target.closest('[data-twist], [data-eye]') && openComp(l)) refresh(); };
+    if (l.kind === 'comp') b.title = `Comp of scene “${l.scene}”: double-click to open it`;
     b.draggable = true;
     b.ondragstart = e => { e.dataTransfer.setData(DRAG_LAYER, l.id); e.dataTransfer.effectAllowed = 'move'; };
-    b.ondragover = e => { if (dragged(e)) { e.preventDefault(); b.classList.add('drop-on'); } };
-    b.ondragleave = () => b.classList.remove('drop-on');
+    // Over a row's top or bottom quarter, a layer goes above or below it;
+    // over its middle (or for a source), into it.
+    const zone = e => {
+      if (!e.dataTransfer.types.includes(DRAG_LAYER)) return 'drop-on';
+      const r = b.getBoundingClientRect(), f = (e.clientY - r.top) / r.height;
+      return f < 0.25 ? 'drop-above' : f > 0.75 ? 'drop-below' : 'drop-on';
+    };
+    const clear = () => b.classList.remove('drop-on', 'drop-above', 'drop-below');
+    b.ondragover = e => { if (dragged(e)) { e.preventDefault(); clear(); b.classList.add(zone(e)); } };
+    b.ondragleave = clear;
     b.ondrop = e => {
-      b.classList.remove('drop-on');
+      const z = zone(e);
+      clear();
       const id = e.dataTransfer.getData(DRAG_LAYER);
       if (!id && !e.dataTransfer.getData(DRAG_SOURCE)) return;
       e.preventDefault(); e.stopPropagation();
-      if (id) { if (id !== l.id) parentTo(id, l.id); return; }
-      dropSource(e);
+      if (!id) { dropSource(e); return; }
+      if (id === l.id) return;
+      if (z === 'drop-on') parentTo(id, l.id); else moveLayer(id, l.id, z === 'drop-above' ? 'above' : 'below');
     };
     // A plugin's parts, as the last frame drew them: child layers, nested
     // by path (`osc`, then `osc/osc-shape` under it), parents first.
@@ -45,6 +74,7 @@ export function refreshLists() {
     const chain = part => [...parts.filter(o => part.startsWith(o + '/')), part].map(o => parts.indexOf(o));
     const cmp = (a, b) => { const x = chain(a), y = chain(b); for (let i = 0; i < Math.min(x.length, y.length); i++) if (x[i] !== y[i]) return x[i] - y[i]; return x.length - y.length; };
     parts.sort(cmp);
+    if (kids && isFolded(l.id)) return [b];
     return [b, ...parts.map(part => {
       const c = document.createElement('button');
       c.className = 'part' + (S.selection.includes(`${l.id}#${part}`) ? ' on' : '');
@@ -55,9 +85,13 @@ export function refreshLists() {
       c.title = part;
       c.onclick = e => select(`${l.id}#${part}`, picking(e));
       return c;
-    }), ...rowsUnder(l.id, depth + 1)];
+    })];
   });
-  $('#layers').replaceChildren(...rowsUnder('', 0));
+  $('#layers').replaceChildren(...rows);
+  // + comp: the scenes this one may comp (no cycles).
+  const can = compable(scene().name);
+  $('#add-comp').replaceChildren(new Option('+ comp', ''), ...can.map(n => new Option(n, n)));
+  $('#add-comp').disabled = !can.length;
   refreshSources();
 }
 // Drags within the editor: a source row, or a layer row.
@@ -111,6 +145,7 @@ export function setSelection(ids) {
   }
   refresh();
 }
+$('#add-comp').onchange = e => { const of = e.target.value; e.target.value = ''; if (of) addComp(of); };
 $('#add-scene').onclick = () => edit(() => {
   S.doc.scenes.push({ name: `scene ${S.doc.scenes.length + 1}`, duration: 2, layers: [] });
   S.si = S.doc.scenes.length - 1; S.sel = null;
@@ -133,7 +168,7 @@ document.querySelectorAll('[data-add]').forEach(b => b.onclick = () => edit(() =
     if (!of) { status('A patch view shows a plugin layer: add one first', true); return; }
     Object.assign(l, { of: of.id, width: 420, height: 520 });
   }
-  else Object.assign(l, { width: 200, height: 200, fill: '#8b7cff' });
+  else if (kind !== 'group') Object.assign(l, { width: 200, height: 200, fill: '#8b7cff' });
   if (name === 'shader') Object.assign(l, { width: w / 2, height: h / 2, effects: [{ type: 'plasma' }] });
   ls.push(l); S.sel = l.id;
 }));

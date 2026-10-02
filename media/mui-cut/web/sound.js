@@ -1,7 +1,7 @@
 import { layer, round, scene } from './doc.js';
 import { edit, status } from './edit.js';
 import { $, C, S, assets, clock, worker } from './state.js';
-import { ROW, tlT, tlX } from './timeline.js';
+import { LABEL, ROW, tlT, tlX } from './timeline.js';
 import { toggle } from './transport.js';
 
 // ---------- sound: `serve` plays it, the playhead follows the device
@@ -146,7 +146,8 @@ export function drawSound(c, l, y) {
     if (!peaks) return;
     const off = typeof l.time === 'number' ? l.time : 0;
     c.fillStyle = C.tick;
-    for (let x = tlX(0); x < tlX(S.R.scenes[S.si].duration); x++) {
+    const x1 = Math.min(c.canvas.clientWidth, tlX(S.R.scenes[S.si].duration));
+    for (let x = Math.max(LABEL, tlX(0)); x < x1; x++) {
       const p = peaks[Math.floor((tlT(x) + off) * 100)] ?? 0;
       c.fillRect(x, y + ROW / 2 - p * ROW / 2, 1, Math.max(1, p * ROW));
     }

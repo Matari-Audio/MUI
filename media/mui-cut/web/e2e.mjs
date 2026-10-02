@@ -498,8 +498,11 @@ try {
   // onto the layers becomes a component layer at its spot, which is
   // parented, moved and reset.
   const dt = 'globalThis.e2eDrag ??= new DataTransfer()';
-  const fire = (sel, types) => js(`(() => { const dt = ${dt}; const el = document.querySelector(${JSON.stringify(sel)});
-    for (const t of ${JSON.stringify(types)}) el.dispatchEvent(new DragEvent(t, { dataTransfer: dt, bubbles: true, cancelable: true })); })()`);
+  // At `fy` of the element's height (a layer row's middle parents, its
+  // top or bottom quarter reorders).
+  const fire = (sel, types, fy = 0.5) => js(`(() => { const dt = ${dt}; const el = document.querySelector(${JSON.stringify(sel)});
+    const r = el.getBoundingClientRect(), at = { clientX: r.left + r.width / 2, clientY: r.top + r.height * ${fy} };
+    for (const t of ${JSON.stringify(types)}) el.dispatchEvent(new DragEvent(t, { dataTransfer: dt, bubbles: true, cancelable: true, ...at })); })()`);
   const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"><rect width="40" height="40" fill="#fff"/></svg>';
   await js(`(() => { globalThis.e2eDrag = new DataTransfer(); e2eDrag.items.add(new File([${JSON.stringify(svg)}], 'badge.svg', { type: 'image/svg+xml' })); })()`);
   await fire('#sources', ['dragover', 'drop']);
@@ -693,6 +696,96 @@ try {
     await shot('editor-panels.png');
     await js(`document.querySelector('[data-gutter="left"]').dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`); await sleep(300);
     check(await js(`document.querySelector('#left').getBoundingClientRect().width`) === 240 && await js(`localStorage.getItem('mui-cut.panels')`) === '{}', 'double-clicking the gutter resets it');
+  }
+
+  // The layer tree, comps, the timeline's bars, zoom, markers and keys.
+  {
+    const doc = { size: [1280, 720], fps: 30, scenes: [{ name: 'main', duration: 4, background: '#101014', layers: [
+      { id: 'a', kind: 'rect', x: 200, y: 200, width: 100, height: 80, fill: '#e03020', rotation: [{ t: 0.5, v: 0 }, { t: 2.5, v: 90 }] },
+      { id: 'b', kind: 'rect', x: [{ t: 1, v: 500 }, { t: 2, v: 700 }], y: 300, width: 160, height: 60, fill: '#20d040' },
+      { id: 'c', kind: 'rect', x: 900, y: 420, width: 60, height: 120, fill: '#2040e0' }] }] };
+    writeFileSync(file, JSON.stringify(doc)); await sleep(1500);
+    const lay = (id, si = 0) => read().scenes[si].layers.find(l => l.id === id);
+    const row = id => `#layers button[data-layer="${id}"]`;
+    const pick = async (...ids) => { await js(`document.querySelector('${row(ids[0])}').click()`); for (const id of ids.slice(1)) await js(`document.querySelector('${row(id)}').dispatchEvent(new MouseEvent('click', { bubbles: true, shiftKey: true }))`); await sleep(300); };
+    const quadOf = id => js(`cutQuads().find(q => q.id === '${id}')?.pts`);
+    // Group: Ctrl+G puts a and b in a group where they are.
+    const qa = await quadOf('a');
+    await pick('a', 'b'); await key('g', 'KeyG', 2);
+    const g = read().scenes[0].layers.find(l => l.kind === 'group');
+    check(g && lay('a').parent === g.id && lay('b').parent === g.id, `Ctrl+G groups the selection (${g?.id})`);
+    await sleep(300);
+    const qa2 = await quadOf('a');
+    check(Math.hypot(qa2[0][0] - qa[0][0], qa2[0][1] - qa[0][1]) < 0.5, 'grouping keeps the layers where they are');
+    const pad = id => js(`parseFloat(document.querySelector('${row(id)}').style.paddingLeft)`);
+    check(await pad('a') > await pad(g.id), 'the layer tree nests them under the group');
+    // Fold: the twist hides the children, and stays folded over a reload.
+    await js(`document.querySelector('${row(g.id)} [data-twist]').click()`); await sleep(300);
+    check(!await js(`!!document.querySelector('${row('a')}')`), 'folding the group hides its children');
+    await send('Page.reload');
+    for (let i = 0; i < 100 && (await js(`document.querySelector('#status')?.textContent`)) !== 'loaded'; i++) await sleep(100);
+    check(!await js(`!!document.querySelector('${row('a')}')`) && /main\/group/.test(await js(`JSON.stringify(Object.entries(localStorage))`)), 'the fold is kept over a reload');
+    await js(`document.querySelector('${row(g.id)} [data-twist]').click()`); await sleep(300);
+    check(await js(`!!document.querySelector('${row('a')}')`), 'unfolding shows them again');
+    // Reorder: c dropped on a's top quarter goes above a, inside the group.
+    await js(`globalThis.e2eDrag = new DataTransfer()`);
+    await fire(row('c'), ['dragstart']);
+    await fire(row('a'), ['dragover', 'drop'], 0.1);
+    await sleep(1000);
+    const ids = () => read().scenes[0].layers.map(l => l.id);
+    check(lay('c').parent === g.id && ids().indexOf('c') === ids().indexOf('a') + 1, `dropping on a row's top edge puts it above, among its siblings (${ids()})`);
+    // Ungroup hands the children back, where they are.
+    await pick(g.id); await key('G', 'KeyG', 2 | 8);
+    check(!lay(g.id) && !lay('a').parent && !lay('c').parent, 'Ctrl+Shift+G ungroups');
+    const qa3 = await quadOf('a');
+    check(Math.hypot(qa3[0][0] - qa[0][0], qa3[0][1] - qa[0][1]) < 0.5, 'and they stay where they are');
+    // Precompose c: a new scene with c in it, a comp of it in its place.
+    await pick('c'); await key('C', 'KeyC', 2 | 8);
+    const pre = read(), inner = pre.scenes.find(s => s.name === 'c comp'), comp = pre.scenes[0].layers.find(l => l.kind === 'comp');
+    check(inner?.layers.some(l => l.id === 'c') && comp?.scene === 'c comp' && !lay('c'), `Ctrl+Shift+C precomposes (${comp?.id} of ${comp?.scene})`);
+    check(await js(`[...document.querySelectorAll('#scenes button')].some(b => b.title.startsWith('Comped'))`), 'the scene list marks the comped scene');
+    await key('z', 'KeyZ', 2);
+    check(lay('c') && read().scenes.length === 1, 'undo takes the precompose back in one step');
+
+    // The timeline: b's bar slides with its keys, its start trims.
+    const T = async (t, id, p) => js(`(r => { const m = document.querySelector('#timeline')._map; return [r.left + m.x(${t}), r.top + m.y(${JSON.stringify(id)}, ${JSON.stringify(p ?? null)})]; })(document.querySelector('#timeline').getBoundingClientRect())`);
+    await pick('b'); await sleep(200);
+    const [bx0, by] = await T(0.5, 'b'), [bx1] = await T(1, 'b');
+    await drag(bx0, by, bx1, by, true);
+    check(lay('b').start === 0.5 && lay('b').end === undefined && lay('b').x.map(k => k.t).join() === '1.5,2.5', `sliding a bar moves its in point and keys (${JSON.stringify({ start: lay('b').start, keys: lay('b').x.map(k => k.t) })})`);
+    await key('z', 'KeyZ', 2);
+    check(lay('b').start === undefined && lay('b').x[0].t === 1, 'one undo takes the slide back');
+    await key('y', 'KeyY', 2);
+    const [sx0] = await T(0.5, 'b'), [sx1] = await T(0.8, 'b');
+    await drag(sx0, by, sx1, by, true);
+    check(Math.abs(lay('b').start - 0.8) < 1e-6 && lay('b').x[0].t === 1.5, `dragging a bar's edge trims it, keys stay (${lay('b').start})`);
+    await js(`import('/transport.js').then(m => m.seek(1))`);
+    await key('[', 'BracketLeft', 1);
+    check(lay('b').start === 1, `Alt+[ trims the in point to the playhead (${lay('b').start})`);
+    // Zoom: Ctrl+wheel keeps the time under the pointer.
+    const [zx, zy] = await T(2, 'b');
+    const at = () => js(`(m => m.x(2))(document.querySelector('#timeline')._map)`), span = () => js(`import('/state.js').then(m => m.S.view.t1 - m.S.view.t0)`);
+    const [x2, w0] = [await at(), await span()];
+    await send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: zx, y: zy, deltaX: 0, deltaY: -240, modifiers: 2 }); await sleep(300);
+    check(await span() < w0 * 0.9 && Math.abs(await at() - x2) < 0.5, `Ctrl+wheel zooms about the pointer (${(await span()).toFixed(3)} s in view)`);
+    await key('f', 'KeyF');
+    // Markers: M at the playhead, dragged to 1.5 s.
+    await key('m', 'KeyM');
+    check(JSON.stringify(read().scenes[0].markers) === '[{"t":1}]', `M adds a marker at the playhead (${JSON.stringify(read().scenes[0].markers)})`);
+    const [mx0] = await T(1, 'b'), [mx1] = await T(1.5, 'b'), rulerY = (await rect('#timeline'))[1] + 12;
+    await drag(mx0, rulerY, mx1, rulerY, true);
+    check(read().scenes[0].markers?.[0]?.t === 1.5, `dragging a marker moves it (${JSON.stringify(read().scenes[0].markers)})`);
+    // Keys: a box over a's and b's key rows picks the keys from 1.2 s to
+    // 2.8 s; dragging one moves them all.
+    await pick('a', 'b'); await sleep(300);
+    const [k0, ky0] = await T(1.2, 'a', 'rotation'), [k1, ky1] = await T(2.8, 'b', 'x');
+    await drag(k0, ky0, k1, ky1);
+    const nk = await js(`import('/state.js').then(m => m.S.selKeys.map(s => s.l.id + ':' + s.k.t).sort().join())`);
+    check(nk === 'a:2.5,b:1.5,b:2.5', `a box picks the keys inside it (${nk})`);
+    const [dx0, dy] = await T(1.5, 'b', 'x'), [dx1] = await T(2, 'b', 'x');
+    await drag(dx0, dy, dx1, dy, true);
+    check(lay('b').x.map(k => k.t).join() === '2,3' && lay('a').rotation.map(k => k.t).join() === '0.5,3', `dragging a picked key moves every picked key (${lay('b').x.map(k => k.t)} / ${lay('a').rotation.map(k => k.t)})`);
+    await shot('editor-timeline.png');
   }
   check(errors.length === 0, 'no page exceptions ' + errors.join('; '));
   ws.close();

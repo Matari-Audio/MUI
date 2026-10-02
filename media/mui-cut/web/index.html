@@ -35,10 +35,10 @@
     <div id="scenes" class="list"></div>
     <h2>Layers
       <span>
-        <button data-add="rect" title="Add a rectangle">▭</button><button data-add="ellipse" title="Add an ellipse">◯</button><button data-add="text" title="Add text">T</button><button data-add="path" title="Add a path">〰</button><button data-add="duplicator" title="Add a duplicator">⁂</button><button data-add="camera" title="Add a camera (3D scenes)">⌖</button><button data-add="light" title="Add a light (3D scenes)">☀</button><button data-add="model" title="Add a glTF model (3D scenes)">◈</button><button data-add="shader" title="Add a shader layer (a plasma generator)">✦</button><button data-add="patch" title="Add a patch view: a plugin layer's parameters and modulation as it plays">☰</button>
+        <button data-add="rect" title="Add a rectangle">▭</button><button data-add="ellipse" title="Add an ellipse">◯</button><button data-add="text" title="Add text">T</button><button data-add="path" title="Add a path">〰</button><button data-add="duplicator" title="Add a duplicator">⁂</button><button data-add="camera" title="Add a camera (3D scenes)">⌖</button><button data-add="light" title="Add a light (3D scenes)">☀</button><button data-add="model" title="Add a glTF model (3D scenes)">◈</button><button data-add="shader" title="Add a shader layer (a plasma generator)">✦</button><button data-add="patch" title="Add a patch view: a plugin layer's parameters and modulation as it plays">☰</button><button data-add="group" title="Add an empty group (Ctrl+G groups the selection)">▤</button><select id="add-comp" aria-label="Add a comp of another scene" title="Add a comp: another scene as one layer (Ctrl+Shift+C precomposes the selection)"></select>
       </span>
     </h2>
-    <div id="layers" class="list" title="Drag a layer onto another to parent it, onto the empty space below to unparent it"></div>
+    <div id="layers" class="list" title="Drag a layer onto another's middle to parent it, onto its top or bottom edge to put it above or below, onto the empty space below to unparent it"></div>
     <div class="row">
       <button id="layer-up" title="Move the layer up (paints later)">▲</button>
       <button id="layer-down" title="Move the layer down">▼</button>
@@ -62,14 +62,14 @@
       <button id="keys-toggle" aria-pressed="false" title="Play the plugin layer: on-screen keys, the computer keyboard (A W S E D F T G Y H U J K, Z/X octave) and MIDI input; while playing, what you play is recorded into its notes">Keys</button>
       <span id="keys" hidden></span>
       <span id="audio-state" class="muted mono" title="The live sound: device and latency"></span>
-      <span id="hint" class="muted" title="◆ key at playhead · K toggle key · Del delete key, else the selected layers · ←/→ frame · double-click graph to add a key · Alt breaks tangents · Shift/Ctrl-click or a marquee adds to the selection · gizmo: Shift keeps proportions (15° turns), Alt from the middle · hold Ctrl while dragging to skip snapping · Ctrl+A select all · Ctrl+D duplicate · Esc deselect · Alt+A/H/D align left/centre/right, Alt+W/V/S top/middle/bottom, Alt+Shift+H/V distribute">◆ key at playhead · K toggle key · Del delete key, else the selected layers · ←/→ frame · double-click graph to add a key · Alt breaks tangents · Shift/Ctrl-click or a marquee adds to the selection · gizmo: Shift keeps proportions (15° turns), Alt from the middle · hold Ctrl while dragging to skip snapping · Ctrl+A select all · Ctrl+D duplicate · Esc deselect · Alt+A/H/D align left/centre/right, Alt+W/V/S top/middle/bottom, Alt+Shift+H/V distribute</span>
+      <span id="hint" class="muted" title="Ctrl+wheel zoom · Shift+wheel or middle-drag pan · F fit · M marker · drag a bar to slide, its ends to trim · Alt+[ / Alt+] trim to playhead · box-drag picks keys · Alt-drag scales key timing about the playhead · Ctrl+C / Ctrl+V copy / paste keys · F9 easy ease · Ctrl+G group · Ctrl+Shift+G ungroup · Ctrl+Shift+C precompose · double-click a comp to open it · ◆ key at playhead · K toggle key · Del delete keys, marker, else the selected layers · ←/→ frame · double-click graph to add a key · Alt breaks tangents · Shift/Ctrl-click or a marquee adds to the selection · gizmo: Shift keeps proportions (15° turns), Alt from the middle · hold Ctrl while dragging to skip snapping · Ctrl+A select all · Ctrl+D duplicate · Esc deselect · Alt+A/H/D align left/centre/right, Alt+W/V/S top/middle/bottom, Alt+Shift+H/V distribute">Ctrl+wheel zoom · Shift+wheel or middle-drag pan · F fit · M marker · drag a bar to slide, its ends to trim · Alt+[ / Alt+] trim to playhead · box-drag picks keys · Alt-drag scales key timing about the playhead · Ctrl+C / Ctrl+V copy / paste keys · F9 easy ease · Ctrl+G group · Ctrl+Shift+G ungroup · Ctrl+Shift+C precompose · double-click a comp to open it · ◆ key at playhead · K toggle key · Del delete keys, marker, else the selected layers · ←/→ frame · double-click graph to add a key · Alt breaks tangents · Shift/Ctrl-click or a marquee adds to the selection · gizmo: Shift keeps proportions (15° turns), Alt from the middle · hold Ctrl while dragging to skip snapping · Ctrl+A select all · Ctrl+D duplicate · Esc deselect · Alt+A/H/D align left/centre/right, Alt+W/V/S top/middle/bottom, Alt+Shift+H/V distribute</span>
     </div>
     <div id="tl-wrap"><canvas id="timeline"></canvas></div>
     <div class="graph-bar">
       <span>Graph</span>
       <select id="graph-prop" aria-label="Graph property"></select>
       <span class="grow"></span>
-      <span class="muted">selected key:</span>
+      <span class="muted">selected keys:</span>
       <button data-interp="hold">Hold</button><button data-interp="linear">Linear</button><button data-interp="bezier">Bezier</button>
       <button id="reset-handles" title="Back to default ease handles">Reset handles</button>
     </div>

@@ -13,8 +13,9 @@ export const VECTOR = ['text', 'path', 'duplicator', 'svg', 'lottie'];
 export const C = {
   text: '#8a8a8a', textOn: '#e6e6e6', grid: '#262626', gridText: '#666666',
   tick: '#3a3a3a', row: '#181818', rowAlt: '#1c1c1c', rowOn: '#262626',
-  curve: '#d4d4d4', key: '#b0b0b0', layerKey: '#6a6a6a', handle: '#7a7a7a',
+  curve: '#d4d4d4', curves: ['#e6e6e6', '#e8806f', '#79c47f', '#6fa8e0', '#e2c76b', '#c590dc', '#6fd0c8'], key: '#b0b0b0', layerKey: '#6a6a6a', handle: '#7a7a7a',
   handleLine: '#ffffff30', picked: '#ffffff', pickedLine: '#ffffffa0',
+  bar: '#2a2a2a', barOn: '#3a3a3a', barLine: '#444444', barEdge: '#9a9a9a', ruler: '#151515', outside: '#0000004d',
   playhead: '#f2f2f2', hover: '#ffffff70', sel: '#ffffff', halo: '#000000a0', marquee: '#ffffff14', guide: '#ffffffd0',
 };
 
@@ -43,7 +44,11 @@ export const S = {
   get selPart() { const id = this.selection.at(-1), i = id?.indexOf('#') ?? -1; return i < 0 ? null : id.slice(i + 1); },
   set selPart(part) { const l = this.sel; if (l != null) this.selection = [...this.selection.slice(0, -1), part ? `${l}#${part}` : l]; },
   prop: 'x',          // property shown in the graph editor
-  selKey: null,       // { l, p, k }: the selected key object
+  // The selected keys, `{ l, p, k }` (layer, property path, the key object),
+  // in the order picked; the last is the primary.
+  selKeys: [],
+  get selKey() { return this.selKeys.at(-1) ?? null; },
+  set selKey(k) { this.selKeys = k ? [k] : []; },
   quads: [],          // layer outlines from the last render, project px
   playing: false,
   need: true,
@@ -53,6 +58,10 @@ export const S = {
   sourceList: [],     // the Sources panel's rows: `Cut.sources()`
   framed: undefined,  // the frame at the playhead, once per inspector pass
   range: null,        // the graph's value range
+  // The time view the timeline and the graph share: seconds at the left
+  // and right of their track areas, for scene `si`.
+  view: { t0: 0, t1: 1, si: -1 },
+  tlNeed: false,      // the timeline and graph (only) need a redraw
 };
 
 // Who this editor is in the server's merge reports.

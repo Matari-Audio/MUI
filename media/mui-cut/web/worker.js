@@ -80,7 +80,7 @@ async function soundtrack(mux) {
   return config.codec;
 }
 
-// m: { w, h, fps, mb, codec, bitrate, scenes: [{ duration }] }
+// m: { w, h, fps, mb, codec, bitrate, scenes: [{ si, duration }] }
 async function exportVideo(m) {
   const job = exporting = { cancelled: false };
   let view = null, out = null, cut = null;
@@ -110,7 +110,7 @@ async function exportVideo(m) {
   let n = 0;
   try {
     sound = await soundtrack(mux);
-    for (const [si, s] of m.scenes.entries()) {
+    for (const { si, ...s } of m.scenes) {
       // An export never quietly flattens a 3D shot (the GPU view refuses
       // in draw_frame when its 3D pass fails).
       const flat = cut?.notice(si);

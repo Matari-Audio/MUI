@@ -1,8 +1,9 @@
-import { frameNow, getp, isBind, isKeys, keyAt, layer, now, propsOf, round, scene, selectedLayers, setValue, snap, toggleKey } from './doc.js';
+import { frameNow, getp, isBind, isKeys, keyAt, layer, now, propsOf, round, scene, selectedLayers, setValue, snap, tidy, toggleKey } from './doc.js';
 import { edit, loadAssets, showError } from './edit.js';
 import { parentTo } from './lists.js';
 import { $, FX, S, VECTOR, cut } from './state.js';
 import { refresh } from './transport.js';
+import { compable, ungroupSelected } from './tree.js';
 
 // ---------- inspector
 function field(label, input, keyBtn) {
@@ -47,6 +48,19 @@ function kindFields(l) {
     const f = choice(l.font ?? '', fonts, v => { set('font', v, ''); loadAssets(); });
     f.options[0].textContent = 'Inter'; f.dataset.font = ''; f.title = 'The font: Inter, or a font source';
     field('font', f);
+  }
+  if (l.kind === 'comp') {
+    // Only scenes that do not comp this one, so no cycle can be picked.
+    const ok = compable(scene().name);
+    const c = choice(l.scene, ok.includes(l.scene) ? ok : [l.scene, ...ok], v => edit(() => { l.scene = v; }));
+    c.dataset.compScene = ''; c.title = 'The scene this layer plays (double-click the layer to open it)';
+    field('scene', c);
+  }
+  if (l.kind === 'group') {
+    const b = document.createElement('button'); b.textContent = 'Ungroup'; b.dataset.ungroup = '';
+    b.title = 'Hand the children to the parent where they are (Ctrl+Shift+G)';
+    b.onclick = ungroupSelected;
+    field('children', b);
   }
   if (l.kind === 'patch') field('of', input(l.of, v => edit(() => { l.of = v; })));
   if (['image', 'svg', 'lottie', 'model', 'audio'].includes(l.kind)) field('path', input(l.path, v => edit(() => { l.path = v; loadAssets(); })));
@@ -184,7 +198,11 @@ export function refreshInspector() {
   if (!l) {
     const s = scene();
     $('#insp-title').textContent = 'Scene';
-    field('name', input(s.name, v => edit(() => { s.name = v; })));
+    // A rename carries the comps that play this scene along.
+    field('name', input(s.name, v => { if (v && !S.doc.scenes.some(o => o.name === v)) edit(() => {
+      for (const c of S.doc.scenes.flatMap(o => o.layers)) if (c.kind === 'comp' && c.scene === s.name) c.scene = v;
+      s.name = v;
+    }); }));
     field('duration', lock(input(S.R.scenes[S.si].duration, v => edit(() => { s.duration = Math.max(0.05, Number(v) || 1); }), 'number'), s.duration));
     const bg = lock(input(frameNow()?.background ?? s.background ?? '#101014', v => edit(() => { s.background = v; })), s.background);
     bg.dataset.bg = '';
@@ -210,6 +228,18 @@ export function refreshInspector() {
     const par = choice(l.parent ?? '', ['', ...others], v => parentTo(l.id, v));
     par.dataset.parent = ''; par.title = 'Attach to another layer: it follows the parent, and keeps its place on screen now';
     field('parent', par);
+    // In and out points, in scene time: empty is the scene's start or end.
+    const dur = S.R.scenes[S.si].duration, fr = 1 / S.R.fps;
+    const span = (k, lo, hi) => {
+      const i = input(l[k] ?? '', v => edit(() => { if (v === '') delete l[k]; else l[k] = tidy(Math.max(lo(), Math.min(hi(), Number(v) || 0))); }), 'number');
+      i.placeholder = k === 'start' ? '0' : String(round(dur)); i.dataset.span = k;
+      return i;
+    };
+    field('in', span('start', () => -Infinity, () => (l.end ?? dur) - fr));
+    field('out', span('end', () => (l.start ?? 0) + fr, () => Infinity));
+    const hid = document.createElement('input'); hid.type = 'checkbox'; hid.checked = !!l.hidden; hid.dataset.hidden = '';
+    hid.onchange = () => edit(() => { if (hid.checked) l.hidden = true; else delete l.hidden; });
+    field('hidden', hid);
     kindFields(l);
   }
   const reset = document.createElement('button');
