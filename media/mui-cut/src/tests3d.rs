@@ -1045,6 +1045,89 @@ fn a_sky_is_seen_behind_a_3d_scene() {
     assert!(hi - lo > 20, "clouds across it: {lo}..{hi}");
 }
 
+/// A `physical` sky: it fits the schema and round-trips, its sun keyed
+/// from below the horizon to noon, and draws a sunrise as one is: orange
+/// low toward the sun at dawn, blue overhead by day.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_physical_sky_draws_a_sunrise() {
+    let src = r##"{"size":[320,180],"fps":30,"scenes":[{"name":"a","duration":2,"mode":"3d",
+        "background":"#000000","layers":[{"id":"cam","kind":"camera","rx":-8}],
+        "sky":{"model":"physical","elevation":[{"t":0,"v":1},{"t":1,"v":60}],
+        "cover":0,"turbidity":2.5,"ozone":1,"ground_albedo":0.2,"altitude":300}}]}"##;
+    let doc: serde_json::Value = serde_json::from_str(src).unwrap();
+    let v = jsonschema::validator_for(&Project::json_schema()).unwrap();
+    let errs: Vec<String> = v.iter_errors(&doc).map(|e| e.to_string()).collect();
+    assert!(errs.is_empty(), "{errs:?}");
+    let p = Project::load(src).unwrap();
+    assert_eq!(Project::load(&p.to_json()).unwrap().scenes, p.scenes);
+    let sky = |t: f64| eval(&p, &p.scenes[0], t).view.unwrap().sky.unwrap();
+    let a = sky(0.).atmosphere.expect("physical");
+    assert!((a.turbidity - 2.5).abs() < 1e-6 && (a.altitude - 300.).abs() < 1e-3);
+    // The sun's light reddens toward the horizon.
+    let (dawn, noon) = (sky(0.).sun_color, sky(1.).sun_color);
+    assert!(
+        dawn[0] / dawn[2] > 3. * noon[0] / noon[2],
+        "{dawn:?} {noon:?}"
+    );
+    let Some(mut g) = offline(&p, Engine::Classic) else {
+        return;
+    };
+    let at =
+        |px: &[u8], x: usize, y: usize| [0, 1, 2].map(|c| i32::from(px[(y * 320 + x) * 4 + c]));
+    // Dawn: the camera looks into the scene, toward the rising sun.
+    let px = frame(&mut g, &[eval(&p, &p.scenes[0], 0.)]);
+    let low = at(&px, 40, 120);
+    assert!(low[0] > low[2] + 30, "orange toward the dawn: {low:?}");
+    let px = frame(&mut g, &[eval(&p, &p.scenes[0], 1.)]);
+    let top = at(&px, 160, 5);
+    assert!(top[2] > top[0] + 30, "blue overhead by day: {top:?}");
+}
+
+/// A sky's `sun_light`: a shadowing directional lamp along the sun, by
+/// default for the physical sky only, coloured as the sky's sunlight and
+/// gone once the sun has set; `light` defaults with it.
+#[test]
+fn a_physical_skys_sun_is_a_lamp() {
+    let src = |sky: &str| {
+        format!(
+            r##"{{"size":[320,180],"fps":30,"scenes":[{{"name":"a","duration":2,"mode":"3d",
+            "layers":[{{"id":"cam","kind":"camera"}}],"sky":{sky}}}]}}"##
+        )
+    };
+    let view = |sky: &str, t: f64| {
+        let p = Project::load(&src(sky)).unwrap();
+        eval(&p, &p.scenes[0], t).view.unwrap()
+    };
+    let keyed = r#"{"model":"physical","elevation":[{"t":0,"v":30},{"t":1,"v":-5}],"azimuth":0}"#;
+    let v = view(keyed, 0.);
+    assert!(v.sky.unwrap().light, "a physical sky lights");
+    let sun = &v.lights[0];
+    assert_eq!(sun.kind, LightType::Directional);
+    assert!(sun.shadows);
+    // Down from ahead, toward the camera (project y down, z deeper).
+    let d = sun.direction;
+    assert!(
+        (d[1] - 0.5).abs() < 1e-3 && (d[2] + 0.866).abs() < 1e-3,
+        "{d:?}"
+    );
+    assert!(
+        sun.intensity > 0.5 && sun.color.0[2] < sun.color.0[0],
+        "{sun:?}"
+    );
+    assert!(view(keyed, 1.).lights.is_empty(), "set: no sun");
+    let off = r#"{"model":"physical","sun_light":false,"light":false}"#;
+    let v = view(off, 0.);
+    assert!(v.lights.is_empty() && !v.sky.unwrap().light);
+    let v = view(r#"{"elevation":30}"#, 0.);
+    assert!(
+        v.lights.is_empty() && !v.sky.unwrap().light,
+        "the gradient as before"
+    );
+    let v = view(r#"{"elevation":30,"sun_light":true}"#, 0.);
+    assert_eq!(v.lights.len(), 1);
+}
+
 /// A scene's `bloom`: the sun in frame glows into the sky round it.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
@@ -1082,4 +1165,57 @@ fn bloom_makes_a_sun_in_frame_glow() {
         bloomed > plain + 40,
         "glow round the sun: {bloomed} against {plain}"
     );
+}
+
+/// `material.emission`: a face in the dark gives off its own colour, and
+/// past 1 brighter than it (a model as well).
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn an_emissive_face_glows_in_the_dark() {
+    let px = |emission: &str| {
+        let p = scene3d(&format!(
+            r##"{{"id":"amb","kind":"light","light":"ambient","intensity":0.02}},
+            {{"id":"r","kind":"rect","x":320,"y":180,"width":200,"height":120,"fill":"#4080c0",
+              "material":{{"roughness":1{emission}}}}}"##
+        ));
+        let mut g = offline(&p, Engine::Classic)?;
+        let f = frame(&mut g, &[eval(&p, &p.scenes[0], 0.)]);
+        let i = (180 * 640 + 320) * 4;
+        Some([f[i], f[i + 1], f[i + 2]])
+    };
+    let (Some(dark), Some(lit), Some(hot)) =
+        (px(""), px(r#","emission":1"#), px(r#","emission":4"#))
+    else {
+        return;
+    };
+    assert!(dark.iter().all(|&c| c < 30), "{dark:?}");
+    // Its own sRGB colour, give or take the dim ambient on top.
+    assert!(
+        lit.iter()
+            .zip([0x40, 0x80, 0xc0])
+            .all(|(&c, w)| c >= w && c < w + 24),
+        "{lit:?}"
+    );
+    assert!(hot[2] == 255 && hot[0] > lit[0] + 40, "{hot:?}");
+}
+
+/// `examples/sky.cut.json`: valid, checks clean, and its sun rises from
+/// below the horizon (twilight, no sun lamp) to high noon (a lit sun lamp).
+#[test]
+fn the_sky_example_sweeps_a_sunrise() {
+    const SKY: &str = include_str!("../examples/sky.cut.json");
+    let doc: serde_json::Value = serde_json::from_str(SKY).unwrap();
+    let v = jsonschema::validator_for(&Project::json_schema()).unwrap();
+    assert!(v.is_valid(&doc));
+    let issues = check::check(SKY, &mut Renderer::new(64, 36), &|_| true);
+    assert!(
+        issues.iter().all(|i| i.severity != check::Severity::Error),
+        "{issues:?}"
+    );
+    let p = Project::load(SKY).unwrap();
+    let view = |t: f64| eval(&p, &p.scenes[0], t).view.unwrap();
+    let (dawn, noon) = (view(0.), view(10.));
+    assert!(dawn.sky.as_ref().unwrap().sun[1] < 0. && noon.sky.as_ref().unwrap().sun[1] > 0.9);
+    let sun = |v: &three::View| v.lights.iter().any(|l| l.kind == LightType::Directional);
+    assert!(!sun(&dawn) && sun(&noon));
 }

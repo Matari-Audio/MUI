@@ -34,6 +34,7 @@ use wgpu::util::DeviceExt;
 
 pub mod env;
 mod math;
+pub mod sky;
 pub use env::EnvImage;
 pub use math::{Mat4, disc, halton, sample};
 
@@ -143,10 +144,15 @@ pub const MAX_LIGHTS: usize = 4;
 /// floor.
 const SLOTS: usize = 2 * (MAX_PLANES + MAX_MODELS) + 1;
 /// `Globals` in `stage.wgsl`, in floats.
-const GLOBALS: usize = 272;
+const GLOBALS: usize = 280;
 /// The environment a shot may name without uploading it: the built-in
 /// neutral studio ([`EnvImage::studio`]).
 pub const STUDIO: &str = "studio";
+/// The environment a [`Sky::light`] is baked into.
+const SKY_LIGHT: &str = "\u{0}sky";
+/// Width of the sky's light as baked on the CPU; the prefilter resamples
+/// it to [`env::WIDTH`].
+const SKY_BAKE: u32 = 128;
 /// Shadow map side, texels; one array layer per light, and one more for the
 /// floor's contact shadow.
 const SHADOW: u32 = 2048;
@@ -293,6 +299,10 @@ pub struct Material {
     pub ribbed: Relief,
     pub hammered: Relief,
     pub ripple: Relief,
+    /// The surface gives off its own colour, this times as bright as white
+    /// light on it would leave it, lit or in the dark: above 1 it feeds the
+    /// bloom. Opaque faces and models; glass ignores it.
+    pub emission: f32,
 }
 
 /// A pattern pressed into a glass face (see [`Material::ribbed`]).
@@ -324,6 +334,7 @@ impl Material {
         ribbed: Relief::NONE,
         hammered: Relief::NONE,
         ripple: Relief::NONE,
+        emission: 0.,
     };
     /// Whether it is drawn as glass.
     pub fn glass(&self) -> bool {
@@ -659,6 +670,55 @@ pub struct Sky {
     pub cover: f32,
     /// How far the clouds have drifted, in cloud widths (x, z).
     pub drift: [f32; 2],
+    /// A physical sky: this air scatters the sun's light (see [`sky`]),
+    /// and `zenith`, `horizon` and `sun_color` only light the clouds
+    /// ([`Sky::physical`] sets them from it). `None` is the gradient.
+    pub atmosphere: Option<Atmosphere>,
+    /// The sky lights the shot (image-based, as an [`Environment`] does)
+    /// when no environment does.
+    pub light: bool,
+}
+impl Default for Sky {
+    /// The gradient: a clear blue day, the sun 25 degrees up ahead.
+    fn default() -> Self {
+        Self {
+            sun: [0., 0.42, -0.91],
+            zenith: [0.04, 0.15, 0.48],
+            horizon: [0.62, 0.74, 0.85],
+            sun_color: [2.6, 2.3, 1.9],
+            cover: 0.,
+            drift: [0.; 2],
+            atmosphere: None,
+            light: false,
+        }
+    }
+}
+
+/// The air of a physical [`Sky`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Atmosphere {
+    /// Haze: 1 pure air, 2 a clear day (Blender's dust density 1), 10 a
+    /// hazy one.
+    pub turbidity: f32,
+    /// Ozone density, 1 the earth's: it takes orange out of twilight.
+    pub ozone: f32,
+    /// The eye's height above sea level, metres.
+    pub altitude: f32,
+    /// How much light the ground reflects, 0..1.
+    pub ground_albedo: f32,
+    /// Times the sun's light ([`sky::SUN`]).
+    pub intensity: f32,
+}
+impl Default for Atmosphere {
+    fn default() -> Self {
+        Self {
+            turbidity: 2.,
+            ozone: 1.,
+            altitude: 0.,
+            ground_albedo: 0.3,
+            intensity: 1.,
+        }
+    }
 }
 
 /// Ground-truth ambient occlusion: a half-resolution screen-space pass
@@ -833,6 +893,9 @@ pub struct Stage {
     lut: wgpu::TextureView,
     no_env: wgpu::BindGroup,
     envs: HashMap<String, (wgpu::BindGroup, [[f32; 3]; 9])>,
+    /// The sky last baked as the shot's light (under [`SKY_LIGHT`]), its
+    /// clouds' drift zeroed: baked again only when it changes.
+    sky_baked: Option<Sky>,
     group1: wgpu::BindGroup,
     tex_layout: wgpu::BindGroupLayout,
     layout: wgpu::PipelineLayout,
@@ -1303,6 +1366,7 @@ impl Stage {
             lut,
             no_env,
             envs: HashMap::new(),
+            sky_baked: None,
             group1,
             tex_layout,
             layout,
@@ -2201,6 +2265,28 @@ impl Stage {
             g[43] = 1.;
             self.group0 = group.clone();
         }
+        if let Some(k) = s.sky.filter(|k| k.light && s.environment.is_none()) {
+            // The sky lights the shot as an environment does, baked again
+            // when the sun or the air has changed (drifting clouds aside).
+            let key = Sky {
+                drift: [0.; 2],
+                ..k
+            };
+            if self.sky_baked != Some(key) {
+                self.environment(SKY_LIGHT, &sky::bake(&key, SKY_BAKE));
+                self.sky_baked = Some(key);
+            }
+            let (group, sh) = &self.envs[SKY_LIGHT];
+            // On at 2: `sky_lights` in the shader, sharp reflections from
+            // the sky itself.
+            g[192..196].copy_from_slice(&[1., 1., 0., 2.]);
+            g[197] = (env::LEVELS - 1) as f32;
+            for (k, c) in sh.iter().enumerate() {
+                g[216 + 4 * k..][..3].copy_from_slice(c);
+            }
+            g[43] = 1.;
+            self.group0 = group.clone();
+        }
         if let Some(k) = &s.sky {
             g[256..259].copy_from_slice(&normalize(k.sun));
             g[259] = 1.;
@@ -2210,6 +2296,11 @@ impl Stage {
             g[267] = k.drift[0];
             g[268..271].copy_from_slice(&k.sun_color);
             g[271] = k.drift[1];
+            if let Some(a) = &k.atmosphere {
+                g[259] = 2.;
+                g[272..276].copy_from_slice(&a.uniform());
+                g[276] = sky::SUN * a.intensity;
+            }
         }
         let ao = s.ao.filter(|a| a.strength > 0. && a.radius > 0.);
         if let Some(a) = ao {
@@ -2326,7 +2417,12 @@ impl Stage {
                     m.tint[2].clamp(0., 1.),
                     f32::from(u8::from(slab)),
                 ],
-                [m.print.clamp(0., 1.), m.bevel.max(0.), 0., 0.],
+                [
+                    m.print.clamp(0., 1.),
+                    m.bevel.max(0.),
+                    0.,
+                    m.emission.max(0.),
+                ],
                 // A relief with no size is none.
                 [relief(m.ribbed), relief(m.hammered), relief(m.ripple), 0.],
                 [
@@ -2698,7 +2794,8 @@ impl Stage {
             std::mem::swap(&mut self.hdr, &mut self.lit);
         }
         // Only a lit shot has any reflection to trace.
-        let ssr = s.ssr && (!s.lights.is_empty() || s.environment.is_some());
+        let ssr = s.ssr
+            && (!s.lights.is_empty() || s.environment.is_some() || s.sky.is_some_and(|k| k.light));
         let chain = view(&self.chain);
         if ssr {
             self.build_chain(&mut enc);

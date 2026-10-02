@@ -88,6 +88,10 @@ pub struct Desc {
     pub fog: Option<FogD>,
     /// The environment the world is lit by (see [`State::env`]).
     pub world: Option<WorldD>,
+    /// A physical sky: Blender's multiple-scattering Sky Texture (see
+    /// [`State::sky`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sky: Option<SkyD>,
     pub lights: Vec<LightD>,
     pub layers: Vec<LayerD>,
     pub models: Vec<ModelD>,
@@ -118,6 +122,24 @@ pub struct WorldD {
     /// The camera sees it, not the background colour.
     pub background: bool,
 }
+
+/// The air of a physical sky, as the Sky Texture node takes it.
+#[derive(Clone, Debug, Serialize)]
+pub struct SkyD {
+    /// Aerosol (Blender's dust) and ozone density; the eye's height, metres.
+    pub dust: f32,
+    pub ozone: f32,
+    pub altitude: f32,
+    /// The sky lights the scene, not only the camera.
+    pub light: bool,
+    /// Its sun is a Sun lamp (the last of [`Desc::lights`]), so the world
+    /// lights without the sun's disc while the camera still sees it.
+    pub sun_lamp: bool,
+}
+
+/// mui-stage's physical sky over Blender's at strength 1, by its zenith
+/// and horizon; calibrated against Cycles' multiple-scattering sky.
+const SKY_STRENGTH: f64 = 1. / 32.;
 
 /// Mist: surfaces fade into `color` from `start` metres over `depth`.
 #[derive(Clone, Debug, Serialize)]
@@ -181,6 +203,10 @@ pub struct State {
     /// radians, as the Mapping node takes it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub env: Option<[f32; 2]>,
+    /// The sky's sun elevation and rotation about z (radians, as the Sky
+    /// Texture takes them) and its strength.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sky: Option<[f32; 3]>,
     pub lights: Vec<LightS>,
     pub layers: Vec<LayerS>,
     pub models: Vec<ModelS>,
@@ -535,6 +561,22 @@ pub fn describe(
         }
     }
 
+    let physical = scene
+        .sky
+        .as_ref()
+        .filter(|k| k.model == three::SkyModel::Physical);
+    let sun_lamp = physical.is_some_and(|k| k.sun_light.unwrap_or(true));
+    if sun_lamp {
+        lights.push((
+            usize::MAX,
+            LightD {
+                id: "sky sun".into(),
+                kind: "SUN",
+                shadow: true,
+            },
+        ));
+    }
+
     // Paint each look once; keep its box to place it by.
     let mut textures: Vec<Texture> = Vec::new();
     let mut boxes: HashMap<(usize, usize), (f64, f64, [f64; 2])> = HashMap::new();
@@ -679,6 +721,9 @@ pub fn describe(
         let lights = lights
             .iter()
             .map(|(i, ld)| {
+                if let (usize::MAX, Some(k)) = (*i, physical) {
+                    return sky_sun(k, f.t, target);
+                }
                 let d = &f.layers[*i];
                 let s = &d.space;
                 let pos = at(size, [d.x, d.y, s.z]);
@@ -726,10 +771,20 @@ pub fn describe(
             .environment
             .as_ref()
             .map(|e| [r(e.intensity), r(-e.rotation.to_radians())]);
+        // The sun's turn about z: Blender's sun at rotation 0 is into the
+        // frame (+y) and turns toward +x, as the stage's azimuth does.
+        let sky = physical.map(|k| {
+            [
+                r(k.elevation.at(f.t).to_radians()),
+                r(k.azimuth.at(f.t).to_radians()),
+                r(k.intensity.at(f.t).max(0.) * SKY_STRENGTH),
+            ]
+        });
         Ok(State {
             camera,
             ambient: r3(ambient),
             env,
+            sky,
             lights,
             layers: layer_states,
             models: model_states,
@@ -746,9 +801,10 @@ pub fn describe(
         })
         .collect::<Result<Vec<_>, _>>()?;
 
-    if scene.sky.is_some() {
-        // ponytail: no sky in Blender yet; a Sky Texture world would match it.
-        eprintln!("mui-cut: Blender draws no `sky`; the background colour shows behind");
+    if scene.sky.is_some() && physical.is_none() {
+        // ponytail: only the physical sky maps onto Blender's Sky Texture; a
+        // Gradient Texture world would match the gradient.
+        eprintln!("mui-cut: Blender draws no gradient `sky`; the background colour shows behind");
     }
     if scene.bloom.is_some() {
         // ponytail: Blender's own glare node would match it.
@@ -807,12 +863,41 @@ pub fn describe(
             depth: r((f.far - f.near).max(1.) * px),
         }),
         world,
+        sky: physical.map(|k| {
+            let a = k.air(0.);
+            SkyD {
+                dust: r(f64::from(a.dust())),
+                ozone: r(f64::from(a.ozone)),
+                altitude: r(f64::from(a.altitude)),
+                light: k.light.unwrap_or(true),
+                sun_lamp,
+            }
+        }),
         lights: lights.into_iter().map(|(_, l)| l).collect(),
         layers,
         models: models.into_iter().map(|(_, m)| m).collect(),
         frames: states,
     };
     Ok((desc, textures))
+}
+
+/// The sky's sun as a Sun lamp at `t`: along the sun, coloured by its
+/// light through the air; dark once it has set.
+fn sky_sun(k: &three::Sky, t: f64, target: [f64; 3]) -> LightS {
+    let lamp = k.sun_lamp(t);
+    let travel = lamp.as_ref().map_or([0., 1., 0.], |l| l.direction);
+    let dir = axes([travel[0] as f32, -travel[1] as f32, -travel[2] as f32]);
+    LightS {
+        m: facing(target, dir),
+        color: lamp.as_ref().map_or([1.; 3], |l| r3(linear(l.color))),
+        energy: r(lamp
+            .as_ref()
+            .map_or(0., |l| l.intensity * std::f64::consts::PI)),
+        size: r((0.7 * 1.5f64).to_radians()),
+        spot: 0.,
+        blend: 0.,
+        range: 0.,
+    }
 }
 
 /// A frame's content layers as slabs (a plugin layer is several; see
@@ -1239,10 +1324,10 @@ mod tests {
     fn the_script_reads_only_keys_the_description_has() {
         let d = stage(&[0.], 2);
         let job = serde_json::json!({"desc": d, "tex": "", "blend": "", "render": []});
-        let text = job.to_string();
+        let text = job.to_string() + serde_json::to_string(&sunrise(&[0.])).unwrap().as_str();
         let mut missing = Vec::new();
         for owner in [
-            "D", "O", "job", "s", "c", "l", "L", "v", "g", "f", "M", "ls", "ms", "W",
+            "D", "O", "job", "s", "c", "l", "L", "v", "g", "f", "M", "ls", "ms", "W", "S",
         ] {
             let pat = format!("{owner}[\"");
             for (i, _) in SCRIPT.match_indices(&pat) {
@@ -1260,6 +1345,75 @@ mod tests {
         assert!(missing.is_empty(), "{missing:?}");
         // Motion blur: each frame carries its shutter, open to closed.
         assert_eq!(d.frames[0].len(), 3);
+    }
+
+    /// A physical sky whose sun rises from below the horizon to noon.
+    fn sunrise(times: &[f64]) -> Desc {
+        let p = Project::load(
+            r#"{"size":[64,36],"fps":10,"scenes":[{"name":"a","duration":2,"mode":"3d",
+                "sky":{"model":"physical","azimuth":30,"turbidity":3,
+                    "elevation":[{"t":0,"v":-5},{"t":2,"v":60}]},
+                "layers":[{"id":"r","kind":"rect","width":20,"height":10,"extrude":4}]}]}"#,
+        )
+        .unwrap();
+        let o = Options::new(None, Some(4), 1, [64, 36]).unwrap();
+        describe(
+            &p,
+            &p.scenes[0],
+            times,
+            &Assets::default(),
+            Path::new(""),
+            &o,
+        )
+        .unwrap()
+        .0
+    }
+
+    #[test]
+    fn a_physical_sky_is_blenders_sky_texture_and_its_sun_a_lamp() {
+        let d = sunrise(&[0., 2.]);
+        let k = d.sky.as_ref().expect("a sky texture");
+        assert!((k.dust - 2.).abs() < 1e-6 && k.light && k.sun_lamp);
+        let sun = d.lights.last().unwrap();
+        assert_eq!(
+            (sun.id.as_str(), sun.kind, sun.shadow),
+            ("sky sun", "SUN", true)
+        );
+        let [dawn, noon] = [&d.frames[0][0], &d.frames[1][0]];
+        // The texture's sun follows the stage's elevation and azimuth.
+        assert_eq!(
+            dawn.sky.unwrap()[..2],
+            [r(-5f64.to_radians()), r(30f64.to_radians())]
+        );
+        assert_eq!(noon.sky.unwrap()[0], r(60f64.to_radians()));
+        // Below the horizon the lamp is dark; at noon it shines down from
+        // the sun the texture draws: Blender's sun at rotation ρ, elevation
+        // ε sits toward (sin ρ cos ε, cos ρ cos ε, sin ε) (checked against a
+        // render: its disc and the lamp's shadows agree with mui-stage's).
+        assert_eq!(dawn.lights.last().unwrap().energy, 0.);
+        let lamp = noon.lights.last().unwrap();
+        assert!(lamp.energy > 1.);
+        let (e, rot) = (60f64.to_radians(), 30f64.to_radians());
+        let toward = [rot.sin() * e.cos(), rot.cos() * e.cos(), e.sin()];
+        assert!(near(col(&lamp.m, 2), toward, 1e-3), "{:?}", col(&lamp.m, 2));
+        // A gradient sky has no Blender counterpart.
+        let p = Project::load(
+            r#"{"size":[64,36],"fps":10,"scenes":[{"name":"a","duration":1,"mode":"3d",
+                "sky":{},"layers":[]}]}"#,
+        )
+        .unwrap();
+        let o = Options::new(None, Some(4), 1, [64, 36]).unwrap();
+        let g = describe(
+            &p,
+            &p.scenes[0],
+            &[0.],
+            &Assets::default(),
+            Path::new(""),
+            &o,
+        )
+        .unwrap()
+        .0;
+        assert!(g.sky.is_none() && g.lights.is_empty());
     }
 
     #[test]

@@ -337,7 +337,9 @@ try {
   await js(`(c => { c.checked = true; c.dispatchEvent(new Event('change')); })(document.querySelector('[data-look="ao"]'))`); await sleep(800);
   check(read().scenes[0].ao, 'and back on');
   await js(`document.querySelector('#layers button:last-child').click()`); await sleep(400);
-  check(await js(`[...document.querySelector('#graph-prop').options].some(o => o.value === 'distance')`), 'the camera\'s distance is in the graph');
+  const hasDistance = () => js(`[...document.querySelector('#graph-prop').options].some(o => o.value === 'distance')`);
+  for (let i = 0; i < 50 && !(await hasDistance()); i++) await sleep(100);
+  check(await hasDistance(), 'the camera\'s distance is in the graph');
   const notice = await js(`document.querySelector('#notice').hidden ? '' : document.querySelector('#notice').textContent`);
   check(backend === 'WebGPU' ? notice === '' : /flat/.test(notice), `3D draws ${notice || 'in 3D'}`);
   await shot('editor-3d.png');
@@ -369,6 +371,38 @@ try {
     await shot('editor-3d-beauty.png');
     await click('#beauty');
   }
+  // The scene's Look: a physical sky turned on, its sun dragged on the
+  // dial, the sky lighting the scene in place of the environment, and the
+  // project's glass mode; a slab takes a glass material from its preset.
+  const set = async (sel, v) => { await js(`(s => { s.value = ${JSON.stringify(v)}; s.dispatchEvent(new Event('change')); })(document.querySelector(${JSON.stringify(sel)}))`); await sleep(800); };
+  const tick = async (sel, on) => { await js(`(c => { c.checked = ${on}; c.dispatchEvent(new Event('change')); })(document.querySelector(${JSON.stringify(sel)}))`); await sleep(800); };
+  await click('#scenes button:nth-child(1)'); await sleep(500);
+  if (read().scenes[0].sky) await tick('[data-look="sky"]', false);
+  await tick('[data-look="sky"]', true);
+  check(read().scenes[0].sky?.model === 'physical', 'the Look section adds a physical sky');
+  await js(`document.querySelector('[data-sun-dial]').scrollIntoView({ block: 'center' })`); await sleep(200);
+  const [dx, dy, dw] = await js(`(r => [r.left, r.top, r.width])(document.querySelector('[data-sun-dial]').getBoundingClientRect())`);
+  // From overhead out to the right on the horizon ring: the sun sets due right.
+  await drag(dx + dw / 2, dy + dw / 2, dx + dw / 2 + dw * 0.4, dy + dw / 2);
+  const sky = read().scenes[0].sky;
+  check(Math.abs(sky.elevation) <= 3 && Math.abs(sky.azimuth - 90) <= 3, `the sun dial sets the sun (${sky.elevation}°, ${sky.azimuth}°)`);
+  await set('[data-look="lit"]', 'sky');
+  check(!read().scenes[0].environment && read().scenes[0].sky, 'the sky lights the scene in place of the environment');
+  await set('[data-look="glass"]', 'rt-path');
+  await set('[data-look="glass_samples"]', '64');
+  check(read().render?.glass === 'rt-path' && read().render.glass_samples === 64, 'the project\'s glass mode and samples');
+  await shot('editor-3d-look.png');
+  await set('[data-look="glass"]', 'raster');
+  check(!read().render, 'raster glass leaves the file as it was');
+  const slab = read().scenes[0].layers.find(l => ['rect', 'ellipse', 'text'].includes(l.kind) && !l.material);
+  await click(`#layers [data-layer="${slab.id}"]`);
+  for (let i = 0; i < 50 && !(await js(`!!document.querySelector('[data-adder="+ material"]')`)); i++) await sleep(100);
+  await set('[data-adder="+ material"]', 'frosted glass');
+  const mat = read().scenes[0].layers.find(l => l.id === slab.id).material;
+  check(mat?.transmission === 1 && mat.roughness === 0.35, 'a slab takes a frosted glass material');
+  check(await js(`[...document.querySelectorAll('#inspector .section span')].some(s => s.textContent === 'Material') && !!document.querySelector('[data-prop="material.roughness"]')`), 'its material shows as keyable rows');
+  await js(`document.querySelector('#right').scrollTop = 1e6`); await sleep(200);
+  await shot('editor-3d-material.png');
   // A 3D scene's effects run on the 3D pass: levels with no saturation
   // greys a red card on WebGPU (in 3D) and WebGL2 (flat, as before); the
   // CPU draws it red, without effects.

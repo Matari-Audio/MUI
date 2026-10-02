@@ -111,6 +111,7 @@ fn main() {
         sun_color: [2.6, 2.5, 2.3],
         cover: 0.5,
         drift: [0., 0.],
+        ..Sky::default()
     };
     let target = stage_target(&rt, w, h);
     let view = target.create_view(&wgpu::TextureViewDescriptor::default());

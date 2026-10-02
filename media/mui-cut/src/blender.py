@@ -147,7 +147,17 @@ def world():
     nt.links.new(path.outputs["Is Camera Ray"], mix.inputs[0])
     nt.links.new(mix.outputs[0], out.inputs["Surface"])
     key_socket(amb.inputs["Color"], ((t, (*s["ambient"], 1)) for t, s in states()))
-    W = D["world"]
+    W, S = D["world"], D.get("sky")
+    if S:
+        # The camera sees the sky with its sun; the scene is lit by it
+        # without the disc when a Sun lamp stands in for that.
+        seen = sky(nt, True)
+        if S["light"]:
+            lit = nt.nodes.new("ShaderNodeAddShader")
+            nt.links.new(amb.outputs[0], lit.inputs[0])
+            nt.links.new(sky(nt, False).outputs[0] if S["sun_lamp"] else seen.outputs[0], lit.inputs[1])
+            amb = lit
+        bg = seen
     if not W:
         nt.links.new(amb.outputs[0], mix.inputs[1])
         nt.links.new(bg.outputs[0], mix.inputs[2])
@@ -170,6 +180,34 @@ def world():
     nt.links.new(env.outputs[0], lit.inputs[1])
     nt.links.new(lit.outputs[0], mix.inputs[1])
     nt.links.new((env if W["background"] else bg).outputs[0], mix.inputs[2])
+
+
+def sky(nt, disc):
+    """The physical sky: Blender's multiple-scattering Sky Texture (Nishita
+    before 5.0), its sun keyed to the stage's."""
+    S = D["sky"]
+    n = nt.nodes.new("ShaderNodeTexSky")
+    for kind in ("MULTIPLE_SCATTERING", "NISHITA"):
+        try:
+            n.sky_type = kind
+            break
+        except TypeError:
+            pass
+    setp(n, "sun_disc", disc)
+    for name in ("aerosol_density", "dust_density"):
+        setp(n, name, S["dust"])
+    setp(n, "ozone_density", S["ozone"])
+    setp(n, "altitude", S["altitude"])
+    for i, name in enumerate(("sun_elevation", "sun_rotation")):
+        values = [(t, s["sky"][i]) for t, s in states()]
+        setattr(n, name, values[0][1])
+        if any(v != values[0][1] for _, v in values):
+            for t, v in values:
+                key(n, name, v, t)
+    b = nt.nodes.new("ShaderNodeBackground")
+    nt.links.new(n.outputs["Color"], b.inputs["Color"])
+    key_socket(b.inputs["Strength"], ((t, s["sky"][2]) for t, s in states()))
+    return b
 
 
 def camera():
@@ -352,6 +390,7 @@ SOCKETS = (
     ("transmission", "Transmission Weight"),
     ("ior", "IOR"),
     ("dispersion", "Dispersion"),  # not in Blender 5.2's Principled BSDF
+    ("emission", "Emission Strength"),
 )
 
 
@@ -373,6 +412,13 @@ def surface(m, mats, slab):
     for k, name in SOCKETS:
         if k in first and name in bsdf.inputs:
             key_socket(bsdf.inputs[name], ((t, v[k]) for t, v in mats))
+    if "emission" in first and "Emission Color" in bsdf.inputs:
+        # It gives off its own colour.
+        base = bsdf.inputs["Base Color"]
+        if base.is_linked:
+            Lk.new(base.links[0].from_socket, bsdf.inputs["Emission Color"])
+        else:
+            bsdf.inputs["Emission Color"].default_value = base.default_value
     if "tint" in first:
         mix = N.new("ShaderNodeMix")
         mix.data_type = "RGBA"
