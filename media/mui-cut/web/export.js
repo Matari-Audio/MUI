@@ -1,4 +1,5 @@
 import { $, S, worker } from './state.js';
+import { comped } from './tree.js';
 
 // ---------- export: WebCodecs in the worker, MP4 by mp4.js
 // Codec strings by what the frame needs: level 4.x up to 1080p, 5.x above.
@@ -25,7 +26,7 @@ async function openExport() {
   const gpu = $('#backend').dataset.backend === 'WebGPU';
   $('#ex-mb').value = gpu ? (S.doc.render?.mb ?? 1) : 1;
   $('#ex-mb').disabled = !gpu;
-  $('#ex-note').textContent = `${w}×${h} at ${S.R.fps} fps, every scene` + (gpu ? '' : ' · CPU: no effects or motion blur');
+  $('#ex-note').textContent = `${w}×${h} at ${S.R.fps} fps, every scene but the comped ones` + (gpu ? '' : ' · CPU: no effects or motion blur');
   $('#ex-status').textContent = ''; $('#ex-progress').hidden = true;
   $('#ex-start').disabled = !sel.value;
   if (!sel.value) $('#ex-status').textContent = 'This browser encodes none of these codecs.';
@@ -43,7 +44,9 @@ $('#ex-start').onclick = () => {
     type: 'export', codec, w: S.R.size[0], h: S.R.size[1], fps: S.R.fps,
     mb: Math.max(1, Math.min(64, Math.round(+$('#ex-mb').value || 1))),
     bitrate: Math.round((+$('#ex-bitrate').value || 8) * 1e6),
-    scenes: S.R.scenes.map(s => ({ duration: s.duration })),
+    // A scene another scene comps is a part, not a shot: left out, as
+    // `render` and `/mix.wav` leave it out.
+    scenes: S.R.scenes.map((s, si) => ({ si, duration: s.duration })).filter(s => !comped().has(S.doc.scenes[s.si].name)),
   });
 };
 $('#ex-cancel').onclick = () => { if (exportRun) worker.postMessage({ type: 'cancel' }); else $('#export-dialog').close(); };

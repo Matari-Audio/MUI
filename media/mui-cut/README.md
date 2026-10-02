@@ -797,7 +797,9 @@ explodes two levels in 3D: panels, then their controls.
   header) adds a comp of any scene this one may comp (none that comps it
   back). Double-click a comp (in the list, the timeline or the viewport)
   to open its scene. The scene list marks comped scenes, which render and
-  Export skip as shots.
+  Export skip as shots. The inspector picks a comp's `scene` (only scenes
+  that do not comp it back); renaming a scene renames it in the comps
+  that play it. A group's inspector has Ungroup.
 - **Reset to default** (inspector): a part back where the plugin puts it;
   a layer's transform keys and offsets cleared (to the frame's middle, or
   onto its parent), and a plugin's explode and part offsets. Undoable.
@@ -853,7 +855,9 @@ explodes two levels in 3D: panels, then their controls.
   Alt is held. Click picks a key, Shift/Ctrl-click takes one out.
   Double-click adds a key to the graphed property. Hold / Linear / Bezier /
   Reset handles act on every picked key.
-- **Export** (header): renders every scene at project size in the viewport's
+- **Inspector, any layer**: `in` / `out` (`start` / `end`, empty for the
+  scene's start or end) and `hidden`.
+- **Export** (header): renders every scene but the comped ones at project size in the viewport's
   worker and saves an MP4. On WebGPU each frame goes through the same shutter
   as `render --mb` (motion-blur samples in the dialog), effects included; on
   the CPU, no effects or blur. A WebCodecs `VideoEncoder` encodes it (H.264,
@@ -869,9 +873,13 @@ explodes two levels in 3D: panels, then their controls.
   A bound property shows its value, read-only, and names the variable.
   Export renders the variant on screen.
 - Keys: Space play/pause, K toggle a key on the graphed property, Delete the
-  selected key (else the selected layers), arrows step a frame, Ctrl+Z /
-  Ctrl+Shift+Z undo / redo, Ctrl+A select all, Ctrl+D duplicate, Esc
-  deselect, Alt+A/H/D/W/V/S align, Alt+Shift+H/V distribute.
+  picked marker, else the picked keys, else the selected layers, arrows
+  step a frame, Ctrl+Z / Ctrl+Shift+Z undo / redo, Ctrl+A select all,
+  Ctrl+D duplicate, Esc deselect, Alt+A/H/D/W/V/S align, Alt+Shift+H/V
+  distribute; Ctrl+G group, Ctrl+Shift+G ungroup, Ctrl+Shift+C precompose;
+  M marker, Alt+[ / Alt+] trim to the playhead, F fit, F9 easy ease,
+  Ctrl+C / Ctrl+V copy / paste keys; Ctrl+wheel zoom, Shift+wheel or
+  middle-drag pan.
 
 Every finished gesture is PUT to the server, which validates it, writes the
 canonical JSON atomically and remembers what it wrote, so the watcher only
