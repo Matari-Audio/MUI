@@ -74,9 +74,10 @@ try {
   const rect = s => js(`(r => [r.left, r.top])(document.querySelector(${JSON.stringify(s)}).getBoundingClientRect())`);
   const mouse = (type, x, y, modifiers = 0) => send('Input.dispatchMouseEvent', { type, x, y, button: 'left', buttons: type === 'mouseReleased' ? 0 : 1, clickCount: 1, modifiers });
   const click = async s => { const [x, y] = await rect(s); await mouse('mousePressed', x + 12, y + 8); await mouse('mouseReleased', x + 12, y + 8); await sleep(250); };
-  const drag = async (x0, y0, x1, y1) => {
+  // `free` holds Ctrl once moving: no snapping, for exact distances.
+  const drag = async (x0, y0, x1, y1, free = false) => {
     await mouse('mousePressed', x0, y0);
-    for (let i = 1; i <= 8; i++) { await mouse('mouseMoved', x0 + (x1 - x0) * i / 8, y0 + (y1 - y0) * i / 8); await sleep(20); }
+    for (let i = 1; i <= 8; i++) { await mouse('mouseMoved', x0 + (x1 - x0) * i / 8, y0 + (y1 - y0) * i / 8, free ? 2 : 0); await sleep(20); }
     await mouse('mouseReleased', x1, y1); await sleep(600);
   };
   const key = async (key, code, modifiers = 0) => {
@@ -197,7 +198,7 @@ try {
   const y0 = read().scenes[1].layers.find(l => l.id === 'card').y;
   const [dx0, dy0] = [vx + 240 / 1280 * vw, vy + y0 / 720 * vh];
   await mouse('mousePressed', dx0, dy0);
-  for (let i = 1; i <= 4; i++) { await mouse('mouseMoved', dx0, dy0 + i * 10); await sleep(20); }
+  for (let i = 1; i <= 4; i++) { await mouse('mouseMoved', dx0, dy0 + i * 10, 2); await sleep(20); }
   const rev0 = await js('cutRev()');
   const said = await mcp('set', { scene: 'shapes', layer: 'ball', prop: 'fill', value: '#00ff00' });
   check(/through the editor on port/.test(said), `an agent's edit goes through the editor's server (${said.split('\n')[0]})`);
@@ -206,7 +207,7 @@ try {
   check(await js('cutRev()') >= rev0 + 2, 'the editor takes both of the agent\'s edits mid-drag');
   const note = await js(`document.querySelector('#merge').hidden ? '' : document.querySelector('#merge').textContent`);
   check(/card\/y/.test(note) && /later edit wins/.test(note), `it notices the field both changed (${note})`);
-  for (let i = 5; i <= 8; i++) { await mouse('mouseMoved', dx0, dy0 + i * 10); await sleep(20); }
+  for (let i = 5; i <= 8; i++) { await mouse('mouseMoved', dx0, dy0 + i * 10, 2); await sleep(20); }
   await mouse('mouseReleased', dx0, dy0 + 80); await sleep(800);
   let both = read().scenes[1].layers;
   const dragged = both.find(l => l.id === 'card').y;
@@ -450,7 +451,7 @@ try {
   const sx = px0 + (q[0][0] + 24 * 1.5) * k, sy = py0 + (q[0][1] + 21 * 1.5) * k;
   const lit = pixel(Buffer.from((await send('Page.captureScreenshot', { format: 'png', clip: { x: sx, y: sy, width: 1, height: 1, scale: 1 } })).data, 'base64'));
   check(lit.every(c => c > 0x18), `the captured part is drawn where its quad is (${lit})`);
-  await drag(mx, my, mx + 90 * k * 1.5, my);
+  await drag(mx, my, mx + 90 * k * 1.5, my, true);
   const osc = read().scenes[0].layers[0].parts.osc;
   check(typeof osc.x === 'number' && Math.abs(osc.x - 90) < 3, `dragging a part moves it in plugin pixels (${JSON.stringify(osc)})`);
   // The layer's own inspector (not the part's) has the explode button.
@@ -585,7 +586,7 @@ try {
   const [ax, ay] = await rect('#overlay');
   const [aw] = await js(`(r => [r.width])(document.querySelector('#overlay').getBoundingClientRect())`);
   const kk = aw / 1920, cx0 = ax + (oq[0][0] + oq[2][0]) / 2 * kk, cy0 = ay + (oq[0][1] + oq[2][1]) / 2 * kk;
-  await drag(cx0, cy0, cx0 + 60, cy0);
+  await drag(cx0, cy0, cx0 + 60, cy0, true);
   const movedPart = read().scenes[0].layers.find(l => l.id === comp.id).parts?.osc;
   check(movedPart && Math.abs(movedPart.x - 60 / kk / comp.scale) < 3, `dragging it moves it (${JSON.stringify(movedPart)})`);
   check(await js(`document.querySelector('#insp-title').textContent`) === 'Part · osc', 'the viewport selects the part');
@@ -604,6 +605,95 @@ try {
   await click('#sources [data-source="synth"][data-part="env"]');
   check(await js(`document.querySelector('#insp-title').textContent`) === 'Part · env', 'clicking a part in the tree selects it');
   await shot('editor-sources-parented.png');
+
+  // Selection, align, the gizmo, snapping and the panels, on rects (and a
+  // child of a parent turned a quarter).
+  {
+    const shapes = { size: [1280, 720], fps: 30, scenes: [{ name: 'sel', duration: 2, background: '#101014', layers: [
+      { id: 'a', kind: 'rect', x: 200, y: 200, width: 100, height: 80, fill: '#e03020' },
+      { id: 'b', kind: 'rect', x: 520, y: 280, width: 160, height: 60, fill: '#20d040' },
+      { id: 'c', kind: 'rect', x: 900, y: 420, width: 60, height: 120, fill: '#2040e0' },
+      { id: 'p', kind: 'rect', x: 640, y: 600, width: 40, height: 40, rotation: 90, fill: '#808080' },
+      { id: 'k', kind: 'rect', parent: 'p', x: 0, y: -100, width: 30, height: 30, fill: '#ffffff' }] }] };
+    writeFileSync(file, JSON.stringify(shapes)); await sleep(1500);
+    const lay = id => read().scenes[0].layers.find(l => l.id === id);
+    const [ex, ey] = await rect('#overlay');
+    const [ew] = await js(`(r => [r.width])(document.querySelector('#overlay').getBoundingClientRect())`);
+    const sk = ew / 1280, at2d = (x, y) => [ex + x * sk, ey + y * sk];
+    const quad = id => js(`(q => q && [Math.min(...q.pts.map(p => p[0])), Math.min(...q.pts.map(p => p[1])), Math.max(...q.pts.map(p => p[0])), Math.max(...q.pts.map(p => p[1]))])(cutQuads().find(q => q.id === '${id}'))`);
+    const tap = async ([x, y], modifiers = 0) => { await mouse('mousePressed', x, y, modifiers); await mouse('mouseReleased', x, y, modifiers); await sleep(300); };
+    // Modifiers held once moving: at the press, Ctrl or Shift would pick.
+    const pull = async ([x0, y0], [x1, y1], modifiers = 0) => {
+      await mouse('mousePressed', x0, y0);
+      for (let i = 1; i <= 8; i++) { await mouse('mouseMoved', x0 + (x1 - x0) * i / 8, y0 + (y1 - y0) * i / 8, modifiers); await sleep(20); }
+      await mouse('mouseReleased', x1, y1, modifiers); await sleep(700);
+    };
+    const picked = () => js(`[...document.querySelectorAll('#layers button.on')].map(b => b.dataset.layer).sort().join()`);
+    await click('#layers [data-layer="a"]');
+    await tap(at2d(520, 280), 8);
+    check(await picked() === 'a,b' && await js(`document.querySelector('#insp-title').textContent`) === '2 layers', `Shift-click in the viewport adds to the selection (${await picked()})`);
+    await pull(at2d(5, 5), at2d(1000, 500));
+    check(await picked() === 'a,b,c', `a marquee selects what it touches (${await picked()})`);
+    check(await js(`document.querySelector('[data-prop="x"]').placeholder`) === 'mixed', 'the inspector shows a value they differ in as mixed');
+    await js(`(i => { i.value = '0.5'; i.onchange(); })(document.querySelector('[data-prop="opacity"]'))`); await sleep(800);
+    check(['a', 'b', 'c'].every(id => lay(id).opacity === 0.5), 'an inspector edit sets every selected layer');
+    await click('[data-align="left"]'); await sleep(400);
+    check(lay('a').x === 200 && lay('b').x === 230 && lay('c').x === 180, `align left lines up their left edges (${['a', 'b', 'c'].map(id => lay(id).x)})`);
+    await key('V', 'KeyV', 1 | 8);
+    check(lay('b').y === 300 && lay('a').y === 200 && lay('c').y === 420, `Alt+Shift+V evens the gaps down (${['a', 'b', 'c'].map(id => lay(id).y)})`);
+    await shot('editor-align.png');
+    // Snapping: b's middle 3 px off the canvas's catches it; with Ctrl, not.
+    await click('#layers [data-layer="b"]');
+    await pull(at2d(230, 300), at2d(230, 363));
+    check(lay('b').y === 360, `a move snaps onto the canvas's middle (${lay('b').y})`);
+    await key('z', 'KeyZ', 2);
+    check(lay('b').y === 300, 'undo takes the move back in one step');
+    await mouse('mousePressed', ...at2d(230, 300));
+    for (let i = 1; i <= 8; i++) { await mouse('mouseMoved', ...at2d(230, 300 + 63 * i / 8)); await sleep(20); }
+    check(await js(`import('/snap.js').then(m => m.guides.y.join())`) === '360', 'a guide marks the line it caught on');
+    await shot('editor-snap.png');
+    await mouse('mouseReleased', ...at2d(230, 363)); await sleep(600);
+    await key('z', 'KeyZ', 2);
+    await pull(at2d(230, 300), at2d(230, 363), 2);
+    check(Math.abs(lay('b').y - 363) < 1.5 && lay('b').y !== 360, `holding Ctrl drags freely (${lay('b').y})`);
+    await key('z', 'KeyZ', 2);
+    // Ctrl+D copies the selection in place; Delete takes it away.
+    await key('d', 'KeyD', 2);
+    check(lay('b2')?.y === 300 && await picked() === 'b2', 'Ctrl+D duplicates the selection and selects the copy');
+    await key('Delete', 'Delete');
+    check(!lay('b2') && lay('b'), 'Delete removes the selected layer');
+    // The gizmo: a's bottom right handle stretches it from its top left
+    // corner; Shift on the knob turns it a quarter exactly.
+    await click('#layers [data-layer="a"]');
+    const [qa] = [await quad('a')];
+    await pull(at2d(qa[2], qa[3]), [at2d(qa[2], qa[3])[0] + 50, at2d(qa[2], qa[3])[1] + 30], 2);
+    const a1 = lay('a'), dw = 50 / sk, dh = 30 / sk;
+    check(Math.abs(a1.width - (100 + dw)) < 1.5 && Math.abs(a1.height - (80 + dh)) < 1.5, `a corner handle scales it (${a1.width} x ${a1.height})`);
+    check(Math.abs(a1.x - a1.width / 2 - 150) < 0.01 && Math.abs(a1.y - a1.height / 2 - 160) < 0.01, `about the opposite corner (${a1.x}, ${a1.y})`);
+    const qa2 = await quad('a'), [mx2, my2] = [(qa2[0] + qa2[2]) / 2, (qa2[1] + qa2[3]) / 2];
+    await pull([at2d(mx2, qa2[1])[0], at2d(mx2, qa2[1])[1] - 24], at2d(mx2 + 200, my2), 8);
+    check(lay('a').rotation === 90, `the knob turns it, Shift in 15° steps (${lay('a').rotation})`);
+    await shot('editor-gizmo.png');
+    // A child of a turned parent moves where it is dragged.
+    await click('#layers [data-layer="k"]');
+    const qk = await quad('k'), [kx, ky] = [(qk[0] + qk[2]) / 2, (qk[1] + qk[3]) / 2];
+    await pull(at2d(kx, ky), [at2d(kx, ky)[0] + 60, at2d(kx, ky)[1]], 2);
+    const qk2 = await quad('k'), D = 60 / sk;
+    check(Math.abs(qk2[0] - qk[0] - D) < 1 && Math.abs(qk2[1] - qk[1]) < 1 && Math.abs(lay('k').y - (-100 - D)) < 0.5,
+      `a child of a turned parent moves with the pointer (${lay('k').x}, ${lay('k').y})`);
+    // Panels: a dragged gutter's size is kept over a reload; a double-click
+    // puts it back.
+    const [gx0, gy0] = await rect('[data-gutter="left"]');
+    await pull([gx0 + 3, gy0 + 200], [gx0 + 83, gy0 + 200]);
+    const wide = await js(`document.querySelector('#left').getBoundingClientRect().width`);
+    check(Math.abs(wide - 320) < 2, `dragging a gutter resizes the panel (${wide})`);
+    await send('Page.reload');
+    for (let i = 0; i < 100 && (await js(`document.querySelector('#status')?.textContent`)) !== 'loaded'; i++) await sleep(100);
+    check(await js(`document.querySelector('#left').getBoundingClientRect().width`) === wide, 'the panel size is kept over a reload');
+    await shot('editor-panels.png');
+    await js(`document.querySelector('[data-gutter="left"]').dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`); await sleep(300);
+    check(await js(`document.querySelector('#left').getBoundingClientRect().width`) === 240 && await js(`localStorage.getItem('mui-cut.panels')`) === '{}', 'double-clicking the gutter resets it');
+  }
   check(errors.length === 0, 'no page exceptions ' + errors.join('; '));
   ws.close();
 } catch (e) {
