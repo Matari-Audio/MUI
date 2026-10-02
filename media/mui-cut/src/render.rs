@@ -932,10 +932,15 @@ mod tests {
 
     #[test]
     fn a_pill_inks_its_own_bounds_and_radius() {
-        let pill = block(120., 40.).radius(20.).fill(color(Rgba([255, 0, 0, 255])));
+        let pill = block(120., 40.)
+            .radius(20.)
+            .fill(color(Rgba([255, 0, 0, 255])));
         let scene = resolve(&SceneSpec::new(pill)).unwrap();
         let (b, r) = ink(&scene).unwrap();
-        assert!((b.width() - 120.).abs() < 1. && (b.height() - 40.).abs() < 1., "{b:?}");
+        assert!(
+            (b.width() - 120.).abs() < 1. && (b.height() - 40.).abs() < 1.,
+            "{b:?}"
+        );
         assert!((r - 20.).abs() < 1e-6, "{r}");
     }
 }

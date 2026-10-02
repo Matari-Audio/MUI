@@ -1218,7 +1218,7 @@ fn plugin_layers_are_checked_and_list_their_part_tracks() {
     assert!((l.prop("parts.osc.x").unwrap().at(0.5) - 25.).abs() < 1e-6);
     // A save keeps it as written.
     assert_eq!(Project::load(&p.to_json()).unwrap(), p);
-    // Surface ids may have dots (BUFFR's `tl.audio`); `/` still nests.
+    // Surface ids may have dots (`tl.audio`); `/` still nests.
     let p = one_layer(
         r#"{"id":"p","kind":"plugin","source":{"bin":"a"},"parts":{"tl.audio/tl.audio.plot":{"z":-60}}}"#,
     );

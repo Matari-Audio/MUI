@@ -184,7 +184,11 @@ impl Space {
                     })
                     .into_iter()
                     .fold(0., f64::max);
-                let seen = if seen.is_finite() { seen } else { l.scale.abs() };
+                let seen = if seen.is_finite() {
+                    seen
+                } else {
+                    l.scale.abs()
+                };
                 2f64.powf(seen.max(1e-3).log2().ceil().clamp(-2., 2.))
             })
             .collect();

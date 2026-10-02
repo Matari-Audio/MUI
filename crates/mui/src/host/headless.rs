@@ -8,8 +8,8 @@
 //! own `Ui`, its view (build closure, parameter bridge) and its size, to
 //! frame and capture off screen.
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::time::Duration;
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 
 use mui_input::{Input, Key, Mods};
 use mui_scene::prelude::{El, Point, Size};
