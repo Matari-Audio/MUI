@@ -69,7 +69,8 @@ pub fn sounds(scenes: &[&Scene]) -> bool {
 }
 
 /// Add `src` (stereo, sample 0 at the scene's start) into `out` from scene
-/// sample `from`, at the layer's volume.
+/// sample `from`, at the layer's volume; silent where it is off
+/// ([`Layer::on`]).
 pub fn add(
     out: &mut [f32],
     from: usize,
@@ -85,6 +86,9 @@ pub fn add(
             continue;
         }
         for i in b..(b + BLOCK).min(frames) {
+            if !l.on((from + i) as f64 / f64::from(rate)) {
+                continue;
+            }
             let [a, c] = src(from + i, t);
             out[2 * i] += a * gain;
             out[2 * i + 1] += c * gain;
@@ -93,9 +97,9 @@ pub fn add(
 }
 
 /// The frame of an audio layer's file sounding at scene sample `n`
-/// (`t` its block's time): `time` seconds in at the scene's start.
+/// (`t` its block's time): `time` seconds in at the layer's `start`.
 pub fn file_at(pcm: &[f32], l: &Layer, rate: u32, n: usize, t: f64) -> [f32; 2] {
-    let start = l.time.at(t) * f64::from(rate);
+    let start = (l.time.at(t) - l.start.unwrap_or(0.)) * f64::from(rate);
     let i = start.round() as i64 + n as i64;
     match usize::try_from(i) {
         Ok(i) if 2 * i + 1 < pcm.len() => [pcm[2 * i], pcm[2 * i + 1]],
@@ -232,5 +236,24 @@ pub fn clip(project: &Path, scene: &str, from: f64, to: f64, out: &Path) -> Resu
         Ok(())
     } else {
         Err(format!("ffmpeg failed cutting {}", out.display()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// An audio layer plays from its `start` and is silent outside it.
+    #[test]
+    fn audio_starts_at_its_start() {
+        let l: crate::Layer = serde_json::from_str(
+            r#"{"id":"a","kind":"audio","path":"a.wav","start":0.5,"end":1.5,"time":2}"#,
+        )
+        .unwrap();
+        let pcm: Vec<f32> = (0..200).map(|i| i as f32).collect();
+        // 10 frames a second: at 1 s, 0.5 s past its start, 2.5 s in.
+        assert_eq!(super::file_at(&pcm, &l, 10, 10, 1.), [50., 51.]);
+        let mut out = vec![0f32; 40];
+        super::add(&mut out, 0, 10, &l, |_, _| [1., 1.]);
+        let at = |i: usize| out[2 * i];
+        assert_eq!((at(4), at(5), at(14), at(15)), (0., 1., 1., 0.));
     }
 }

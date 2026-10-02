@@ -224,6 +224,30 @@ pub fn compose(scene: &Scene, layers: &mut [Drawn]) {
     }
 }
 
+/// Layer `d` of a comp's scene (placed in that scene's frame, of `size`)
+/// moved into the frame the comp layer draws in, `at` its transform: the
+/// scene's middle onto the comp's pivot, flat on its plane (the scene's
+/// own 3D placement dropped). `three`: the frame around is 3D. The layer's
+/// own comp layers go with it.
+pub(crate) fn into(d: &mut Drawn, at: &Xf, size: [u32; 2], three: bool) {
+    let local = Xf {
+        x: d.x - f64::from(size[0]) / 2.,
+        y: d.y - f64::from(size[1]) / 2.,
+        ..Xf::of(d, false)
+    };
+    let w = at.then(&Xf { z: 0., ..local });
+    (d.x, d.y, d.space.z) = (w.x, w.y, w.z);
+    (d.rotation, d.scale, d.opacity) = (w.rotation, w.scale, w.opacity);
+    (d.space.rx, d.space.ry, d.space.anchor_z) = if three {
+        (w.rx, w.ry, 0.)
+    } else {
+        (0., 0., 0.)
+    };
+    for k in &mut d.comp {
+        into(k, at, size, three);
+    }
+}
+
 /// Layer `i`'s world transform, its parents' first, memoised in `world`.
 fn resolve(
     i: usize,

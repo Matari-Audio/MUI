@@ -671,7 +671,7 @@ impl Shared {
                 );
                 respond(stream, "200 OK", "application/json", body.as_bytes()).map_err(io)
             }
-            // The soundtrack a browser export muxes in: every scene's mix
+            // The soundtrack a browser export muxes in: every shot's mix
             // (plugin sound captured first) as a WAV; 204 when none sounds.
             ("GET", "/mix.wav") => {
                 let text = std::fs::read_to_string(&self.project).map_err(io)?;
@@ -679,7 +679,7 @@ impl Shared {
                 for e in crate::cli::host::capture_missing(&p, &self.project) {
                     eprintln!("mui-cut: {e}");
                 }
-                let scenes: Vec<_> = p.scenes.iter().collect();
+                let scenes = p.shots();
                 match crate::cli::audio::mix(&p, &self.project, &scenes) {
                     Ok(Some(pcm)) => respond(
                         stream,
