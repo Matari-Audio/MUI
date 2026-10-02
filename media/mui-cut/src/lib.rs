@@ -295,7 +295,7 @@ pub enum Kind {
         path: String,
     },
     /// A Lottie JSON file (relative to the project), centred. It plays at
-    /// `speed` from the layer's `time` (seconds into the animation, a
+    /// `speed` from its `start`, from the layer's `time` (seconds into the animation, a
     /// keyable property, so keys on it remap time), looping unless
     /// `"loop": false`.
     Lottie {
@@ -366,7 +366,7 @@ pub enum Kind {
         notes: Vec<Note>,
     },
     /// An audio file (relative to the project), `time` seconds into it at
-    /// the scene's start (keyable: keys remap time), at `volume`. It draws
+    /// the layer's `start` (keyable: keys remap time), at `volume`. It draws
     /// nothing; `render` mixes it into the soundtrack and `serve` plays it.
     Audio {
         path: String,
@@ -486,6 +486,17 @@ pub struct Layer {
     /// After Effects parenting). See `src/place.rs`.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub parent: String,
+    /// Scene seconds the layer (and everything parented under it) shows
+    /// from, and stops showing at: it draws for `start <= t < end`. Keys
+    /// stay in scene time; only what plays (a Lottie, model or audio)
+    /// starts its own clock at `start`. Left out, the whole scene.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end: Option<f64>,
+    /// Off, with everything parented under it (the editor's eye).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
     #[serde(flatten)]
     pub kind: Kind,
     #[serde(default = "zero", skip_serializing_if = "is_zero")]
@@ -545,7 +556,8 @@ pub struct Layer {
     pub ring_radius: Anim<f64>,
     #[serde(default = "zero", skip_serializing_if = "is_zero")]
     pub path_offset: Anim<f64>,
-    /// Lottie, model: seconds into the animation at the scene's start.
+    /// Lottie, model, audio: seconds into the animation at the layer's
+    /// `start` (the scene's, without one).
     #[serde(default = "zero", skip_serializing_if = "is_zero")]
     pub time: Anim<f64>,
     /// Plugin: 0..1 pulls the parts away from the UI's centre (1: twice as
@@ -993,6 +1005,18 @@ impl Layer {
         )
     }
 
+    /// Whether the layer itself shows at scene time `t`: not hidden, and
+    /// inside `start..end`. (Its parents can still hide it.)
+    pub fn on(&self, t: f64) -> bool {
+        !self.hidden && self.start.is_none_or(|s| t >= s) && self.end.is_none_or(|e| t < e)
+    }
+
+    /// Seconds since the layer's `start` at scene time `t`: the clock what
+    /// it plays runs on.
+    pub fn clock(&self, t: f64) -> f64 {
+        t - self.start.unwrap_or(0.)
+    }
+
     /// The file this layer draws, relative to the project.
     pub fn asset(&self) -> Option<&str> {
         match &self.kind {
@@ -1415,8 +1439,8 @@ impl Layer {
             _ => Vec::new(),
         };
         let time = match self.kind {
-            Kind::Lottie { speed, .. } => self.time.at(t) + t * speed,
-            Kind::Model { .. } => self.time.at(t) + t,
+            Kind::Lottie { speed, .. } => self.time.at(t) + self.clock(t) * speed,
+            Kind::Model { .. } => self.time.at(t) + self.clock(t),
             _ => 0.,
         };
         Drawn {
@@ -1426,7 +1450,13 @@ impl Layer {
             y: self.y.at(t),
             scale: self.scale.at(t),
             rotation: self.rotation.at(t),
-            opacity: self.opacity.at(t).clamp(0., 1.),
+            // Off is no opacity, which `place::compose` hands down to
+            // every layer parented under it.
+            opacity: if self.on(t) {
+                self.opacity.at(t).clamp(0., 1.)
+            } else {
+                0.
+            },
             width: self.width.at(t).max(0.),
             height: self.height.at(t).max(0.),
             radius: self.radius.at(t).max(0.),
@@ -1594,6 +1624,18 @@ impl Project {
                     ));
                 }
                 let id = &l.id;
+                for (what, v) in [("start", l.start), ("end", l.end)] {
+                    if v.is_some_and(|v| !v.is_finite()) {
+                        return Err(format!("{at}.{what}: layer `{id}`: seconds, finite"));
+                    }
+                }
+                if let (Some(a), Some(b)) = (l.start, l.end)
+                    && b <= a
+                {
+                    return Err(format!(
+                        "{at}.end: layer `{id}`: `end` {b} is not after `start` {a}"
+                    ));
+                }
                 let bad = |what: &str, d: &str| -> Result<(), String> {
                     if !d.is_empty() && mui_vello::kurbo::BezPath::from_svg(d).is_err() {
                         return Err(format!(

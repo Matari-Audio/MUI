@@ -744,3 +744,37 @@ fn groups_draw_nothing_and_carry_their_subtree() {
     let f = eval(&three, &three.scenes[0], 0.);
     assert!(Assets::default().slabs(&f.layers[0]).is_empty());
 }
+
+/// `start`/`end` and `hidden` switch a layer and its subtree off; keys
+/// stay in scene time while what plays starts at `start`.
+#[test]
+fn layers_show_between_start_and_end() {
+    let p = scene(
+        "2d",
+        r##"{"id":"g","kind":"group","start":1,"end":1.5,"x":200,"y":100},
+            {"id":"dot","kind":"rect","parent":"g","fill":"#ff0000",
+             "x":[{"t":0,"v":0,"interp":"linear"},{"t":2,"v":20}]},
+            {"id":"anim","kind":"lottie","path":"a.json","start":0.5,"time":2},
+            {"id":"off","kind":"rect","hidden":true}"##,
+    );
+    let on = |id: &str, t: f64| world(&p, id, t).opacity > 0.;
+    assert!(!on("dot", 0.99) && on("dot", 1.) && on("dot", 1.49) && !on("dot", 1.5));
+    assert!(!on("g", 0.5) && !on("off", 1.));
+    assert!(near(world(&p, "dot", 1.).x, 210.), "keys in scene time");
+    assert_eq!(centre_px(&p, 0.5), [16, 16, 20, 255]);
+    assert!(centre_px(&p, 1.2)[0] > 200);
+    assert!(
+        near(world(&p, "anim", 1.).time, 2.5),
+        "plays from its start"
+    );
+    // Saved as written; refused back to front.
+    let back = Project::load(&p.to_json()).unwrap();
+    assert_eq!(back, p);
+    assert!(p.to_json().contains(r#""start": 1.0,"#));
+    for bad in [r#""start":2,"end":1"#, r#""start":1,"end":1"#] {
+        let json = format!(
+            r#"{{"size":[400,200],"fps":30,"scenes":[{{"name":"a","duration":2,"layers":[{{"id":"r","kind":"rect",{bad}}}]}}]}}"#
+        );
+        assert!(Project::load(&json).unwrap_err().contains("end"), "{bad}");
+    }
+}

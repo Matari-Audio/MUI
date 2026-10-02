@@ -174,7 +174,7 @@ mui-cut schema | check | sheet | strip | diff | gen | mcp
   | `spacing_x`, `spacing_y` | 120 | duplicator grid and line |
   | `ring_radius` | 200 | duplicator radial |
   | `path_offset` | 0 | duplicator along a path, 0..1 of its length |
-  | `time` | 0 | lottie: seconds into the file at the scene's start |
+  | `time` | 0 | lottie, model, audio: seconds into the file at the layer's `start` |
 
   A property left out is its default, and a save leaves defaults out.
 
@@ -534,6 +534,21 @@ are not flattened first), so a group at opacity 0 hides its subtree. Its
 properties are `x`, `y`, `scale`, `rotation`, `opacity` (and `z`, `rx`,
 `ry` in 3D). To group layers in the editor, add a group layer and
 reparent each child to it (`Cut.reparent`), which keeps them in place.
+
+### In and out points
+
+`"start": 1.5, "end": 4` shows a layer only for scene times
+`start <= t < end` (either left out: from the scene's start, to its end);
+`"hidden": true` switches it off altogether (the editor's eye). Off, a
+layer draws nothing and counts as opacity 0, so everything parented under
+it (a group's subtree) is off too; an audio layer is silent. These are the
+only rules:
+
+- Keys stay in scene time. Moving `start` trims the layer; it does not
+  slide its keys (move those with the keys, as the timeline does).
+- What plays runs on its own clock from `start`: a Lottie, a model's
+  animation and an audio file begin at their first
+  frame at `start` (plus `time`, which still offsets and remaps them).
 
 ### Plugin layers
 

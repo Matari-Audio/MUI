@@ -720,7 +720,7 @@ fn visual(p: &Project, si: usize, s: &Scene, r: &mut Renderer, out: &mut Issues)
             let now = (l.x.at(t), l.y.at(t));
             let v = (now.0 - last.0).hypot(now.1 - last.1);
             last = now;
-            if v > limit && l.opacity.at(t) > 0.01 {
+            if v > limit && l.on(t) && l.opacity.at(t) > 0.01 {
                 out.add(
                     Severity::Warning,
                     "fast_motion",
